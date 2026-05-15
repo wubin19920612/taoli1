@@ -1,0 +1,167 @@
+{
+  "generated_at_hk": "2026-05-15 08:33:22",
+  "hk_symbol": "2513.HK",
+  "hk_long_name": "Knowledge Atlas Tech Joint",
+  "hk_currency": "HKD",
+  "gate_contract": "ZHIPU_USDT",
+  "contract": {
+    "last_price": "139.99",
+    "mark_price": "139.99",
+    "index_price": "138.916",
+    "funding_rate": "0",
+    "funding_rate_indicative": "0",
+    "funding_interval_seconds": 28800,
+    "funding_next_apply_hk": "2026-05-15 16:00:00",
+    "max_leverage": "25",
+    "maker_fee_rate": "-0.0001",
+    "taker_fee_rate": "0.00075",
+    "quanto_multiplier": "0.01"
+  },
+  "periods_hk": [
+    {
+      "start": "2026-05-08 09:30",
+      "end": "2026-05-08 16:10"
+    },
+    {
+      "start": "2026-05-11 09:30",
+      "end": "2026-05-11 16:10"
+    },
+    {
+      "start": "2026-05-12 09:30",
+      "end": "2026-05-12 16:10"
+    },
+    {
+      "start": "2026-05-13 09:30",
+      "end": "2026-05-13 16:10"
+    },
+    {
+      "start": "2026-05-14 09:30",
+      "end": "2026-05-14 16:10"
+    }
+  ],
+  "data_window": {
+    "requested_start_hk": "2026-05-08 09:30:00",
+    "gate_effective_start_hk": "2026-05-08 09:54:12",
+    "end_hk": "2026-05-15 08:33:12",
+    "note": "Gate 1m futures candles are limited to the most recent 10000 points; older requested minutes are omitted."
+  },
+  "rows": {
+    "hk_raw_non_null": 1608,
+    "gate_candles": 10000,
+    "aligned_hk_open_minutes": 1584,
+    "after_close_minutes": 984,
+    "closed_minutes": 8028,
+    "closed_segments": 5,
+    "funding_rows": 21
+  },
+  "spread": {
+    "mean_pct": 0.44703866983817436,
+    "median_pct": 0.1906741247058779,
+    "min_pct": -11.065782142510532,
+    "max_pct": 8.482353907343171,
+    "last_pct": -0.15295144177358863,
+    "last_spread_usdt": -0.21285158791695835,
+    "last_hk_close_hkd": 1090.0,
+    "last_hk_close_usdt": 139.16285158791695,
+    "last_gate_close": 138.95,
+    "max_premium_time": "2026-05-12 13:13",
+    "max_discount_time": "2026-05-13 15:29"
+  },
+  "after_close": {
+    "start_time": "2026-05-14 16:10",
+    "end_time": "2026-05-15 08:33",
+    "start_price": 138.95,
+    "last_price": 139.99,
+    "change_pct": 0.7484706729039337,
+    "min_change_pct": -3.2097876934148784,
+    "max_change_pct": 1.4753508456279318,
+    "high_time": "2026-05-14 21:43",
+    "low_time": "2026-05-15 04:31"
+  },
+  "closed_segments": [
+    {
+      "segment": "2026-05-08 16:10 -> 2026-05-11 09:30",
+      "minutes": 3921,
+      "start_time": "2026-05-08 16:10",
+      "end_time": "2026-05-11 09:30",
+      "start_price": 118.0,
+      "end_price": 120.3,
+      "change_pct": 1.9491525423728895,
+      "min_price": 117.13,
+      "min_change_pct": -0.7372881355932281,
+      "min_time": "2026-05-09 11:09",
+      "max_price": 121.22,
+      "max_change_pct": 2.728813559322041,
+      "max_time": "2026-05-11 09:12"
+    },
+    {
+      "segment": "2026-05-11 16:10 -> 2026-05-12 09:30",
+      "minutes": 1041,
+      "start_time": "2026-05-11 16:10",
+      "end_time": "2026-05-12 09:30",
+      "start_price": 117.13,
+      "end_price": 116.07,
+      "change_pct": -0.9049773755656076,
+      "min_price": 111.36,
+      "min_change_pct": -4.926150431144882,
+      "min_time": "2026-05-12 02:26",
+      "max_price": 118.64,
+      "max_change_pct": 1.2891658840604503,
+      "max_time": "2026-05-12 02:22"
+    },
+    {
+      "segment": "2026-05-12 16:10 -> 2026-05-13 09:30",
+      "minutes": 1041,
+      "start_time": "2026-05-12 16:10",
+      "end_time": "2026-05-13 09:30",
+      "start_price": 110.0,
+      "end_price": 105.78,
+      "change_pct": -3.8363636363636378,
+      "min_price": 104.98,
+      "min_change_pct": -4.563636363636359,
+      "min_time": "2026-05-13 02:13",
+      "max_price": 110.88,
+      "max_change_pct": 0.8000000000000007,
+      "max_time": "2026-05-12 19:29"
+    },
+    {
+      "segment": "2026-05-13 16:10 -> 2026-05-14 09:30",
+      "minutes": 1041,
+      "start_time": "2026-05-13 16:10",
+      "end_time": "2026-05-14 09:30",
+      "start_price": 132.89,
+      "end_price": 141.8,
+      "change_pct": 6.704793438181977,
+      "min_price": 132.89,
+      "min_change_pct": 0.0,
+      "min_time": "2026-05-13 16:10",
+      "max_price": 161.59,
+      "max_change_pct": 21.596809391225836,
+      "max_time": "2026-05-14 03:18"
+    },
+    {
+      "segment": "2026-05-14 16:10 -> 2026-05-15 08:33",
+      "minutes": 984,
+      "start_time": "2026-05-14 16:10",
+      "end_time": "2026-05-15 08:33",
+      "start_price": 138.95,
+      "end_price": 139.99,
+      "change_pct": 0.7484706729039337,
+      "min_price": 134.49,
+      "min_change_pct": -3.2097876934148784,
+      "min_time": "2026-05-15 04:31",
+      "max_price": 141.0,
+      "max_change_pct": 1.4753508456279318,
+      "max_time": "2026-05-14 21:43"
+    }
+  ],
+  "files": [
+    "output\\zhipu_minute_spread_hk_open.csv",
+    "output\\zhipu_gate_after_hk_close.csv",
+    "output\\zhipu_gate_closed_minutes.csv",
+    "output\\zhipu_gate_closed_segments_summary.csv",
+    "output\\zhipu_gate_funding_rates.csv",
+    "output\\zhipu_daily_summary.csv",
+    "output\\zhipu_analysis_summary.json"
+  ]
+}

@@ -1,0 +1,31 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    environment:
+      APP_NAME: ${APP_NAME:-Arbitrage Radar}
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      DATABASE_URL: ${DATABASE_URL:-sqlite:////data/radar.db}
+      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-8}
+      FUNDING_POLL_INTERVAL_SECONDS: ${FUNDING_POLL_INTERVAL_SECONDS:-120}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}
+      FEISHU_WEBHOOK_URL: ${FEISHU_WEBHOOK_URL:-}
+      FEISHU_SECRET: ${FEISHU_SECRET:-}
+    volumes:
+      - radar-data:/data
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+
+  frontend:
+    build:
+      context: ./frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+
+volumes:
+  radar-data:
