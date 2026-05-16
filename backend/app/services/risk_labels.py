@@ -4,6 +4,22 @@ from app.models.market import MarketType
 from app.models.opportunity import Opportunity
 from app.models.settings import RiskSettings
 
+NON_ACTIONABLE_RISK_LABELS = frozenset(
+    {
+        "LOW_VOLUME",
+        "STALE_DATA",
+        "HUGE_SPREAD_VERIFY",
+        "WIDE_SPREAD",
+        "SAME_TICKER_RISK",
+        "MARK_INDEX_DEVIATION",
+        "MISSING_FUNDING",
+    }
+)
+
+
+def has_non_actionable_risk(opportunity: Opportunity) -> bool:
+    return bool(NON_ACTIONABLE_RISK_LABELS.intersection(opportunity.risk_labels))
+
 
 def apply_risk_labels(
     opportunity: Opportunity,

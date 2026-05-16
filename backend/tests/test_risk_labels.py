@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 from app.models.market import MarketType
 from app.models.opportunity import Opportunity, OpportunityType
 from app.models.settings import RiskSettings
-from app.services.risk_labels import apply_risk_labels
+from app.services.risk_labels import apply_risk_labels, has_non_actionable_risk
 
 
 def opportunity(**overrides) -> Opportunity:
@@ -80,3 +80,18 @@ def test_clean_opportunity_has_no_labels() -> None:
     )
 
     assert labeled.risk_labels == []
+
+
+def test_non_actionable_filter_blocks_obvious_bad_opportunities() -> None:
+    assert has_non_actionable_risk(
+        opportunity(risk_labels=["HUGE_SPREAD_VERIFY"])
+    )
+    assert has_non_actionable_risk(
+        opportunity(risk_labels=["LOW_VOLUME", "FUNDING_AGAINST"])
+    )
+    assert has_non_actionable_risk(
+        opportunity(risk_labels=["SAME_TICKER_RISK"])
+    )
+    assert not has_non_actionable_risk(
+        opportunity(risk_labels=["FUNDING_AGAINST"])
+    )

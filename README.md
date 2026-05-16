@@ -7,6 +7,7 @@
 - 现货/永续盘口快照采集，不需要交易所私钥。
 - `SF`、`FF`、`SS` 开仓价差、平仓价差、费用后净估算、资金费率展示。
 - 风险标签：低成交额、数据过期、异常大价差、价差宽、同名币风险、资金费率逆风、标记/指数偏离、缺失资金费率。
+- 默认隐藏不可行动机会：低成交额、数据过期、异常大价差、价差宽、同名币风险、标记/指数偏离、缺失资金费率；需要排查原始信号时可在面板打开“显示排查项”。
 - Web 面板：实时机会、筛选、风险参数、告警规则、告警历史。
 - 飞书自定义机器人告警，支持 webhook secret 签名。
 - Docker Compose 一键部署。
@@ -63,7 +64,7 @@ docker compose up -d --build
 ## API
 
 - `GET /api/health`
-- `GET /api/opportunities?type=FF&symbol=BTC&exchange=okx&min_open_spread_pct=0.5`
+- `GET /api/opportunities?type=FF&symbol=BTC&exchange=okx&min_open_spread_pct=0.5&include_risky=false`
 - `GET /api/markets`
 - `GET /api/settings/risk`
 - `PUT /api/settings/risk`

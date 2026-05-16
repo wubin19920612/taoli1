@@ -11,6 +11,17 @@ class AlertSeverity(StrEnum):
     CRITICAL = "critical"
 
 
+DEFAULT_EXCLUDED_RISK_LABELS = [
+    "LOW_VOLUME",
+    "STALE_DATA",
+    "HUGE_SPREAD_VERIFY",
+    "WIDE_SPREAD",
+    "SAME_TICKER_RISK",
+    "MARK_INDEX_DEVIATION",
+    "MISSING_FUNDING",
+]
+
+
 class AlertRule(BaseModel):
     id: str = Field(default_factory=lambda: uuid4().hex)
     name: str
@@ -24,7 +35,7 @@ class AlertRule(BaseModel):
     min_fee_adjusted_open_pct: float = 0.0
     min_volume_24h_usdt: float = 0.0
     max_data_age_seconds: int = 600
-    excluded_risk_labels: list[str] = Field(default_factory=list)
+    excluded_risk_labels: list[str] = Field(default_factory=lambda: DEFAULT_EXCLUDED_RISK_LABELS.copy())
     consecutive_hits: int = Field(default=3, ge=1)
     cooldown_seconds: int = Field(default=300, ge=0)
     severity: AlertSeverity = AlertSeverity.INFO

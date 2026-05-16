@@ -37,7 +37,15 @@ const defaultRule: AlertRule = {
   min_fee_adjusted_open_pct: 0.25,
   min_volume_24h_usdt: 1000000,
   max_data_age_seconds: 600,
-  excluded_risk_labels: ["HUGE_SPREAD_VERIFY", "STALE_DATA"],
+  excluded_risk_labels: [
+    "LOW_VOLUME",
+    "STALE_DATA",
+    "HUGE_SPREAD_VERIFY",
+    "WIDE_SPREAD",
+    "SAME_TICKER_RISK",
+    "MARK_INDEX_DEVIATION",
+    "MISSING_FUNDING"
+  ],
   consecutive_hits: 3,
   cooldown_seconds: 300,
   severity: "warning"

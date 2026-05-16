@@ -7,7 +7,7 @@ import { TopFilters } from "../components/TopFilters";
 import { useRadarStore } from "../state/useRadarStore";
 
 export function DashboardPage() {
-  const [filters, setFilters] = useState<OpportunityFilters>({ include_risky: true });
+  const [filters, setFilters] = useState<OpportunityFilters>({ include_risky: false });
   const { opportunities, health, loading, error, refresh } = useRadarStore(filters);
   const errors = health?.exchange_errors ?? {};
 

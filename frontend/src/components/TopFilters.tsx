@@ -54,10 +54,10 @@ export function TopFilters({ filters, loading, onChange, onRefresh }: TopFilters
         />
         <Space size={6}>
           <Switch
-            checked={filters.include_risky ?? true}
+            checked={filters.include_risky ?? false}
             onChange={(checked) => patch({ include_risky: checked })}
           />
-          <span>风险项</span>
+          <span>显示排查项</span>
         </Space>
       </Space>
       <Tooltip title="刷新">

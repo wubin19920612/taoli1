@@ -5,3 +5,4 @@
 - [CEX 套利雷达设计](docs/superpowers/specs/2026-05-15-arbitrage-radar-design.md) — 监控告警版，直接采集交易所公开 API，飞书告警。
 - [CEX 套利雷达实施计划](docs/superpowers/plans/2026-05-15-arbitrage-radar.md) — 后端、前端、告警、部署和验证任务拆分。
 - [CEX 套利雷达首版实现](README.md) — FastAPI + React/Vite + SQLite + Docker Compose，支持规则告警和飞书 webhook。
+- [CEX 套利雷达风险过滤](README.md) — 默认隐藏低成交额、过期、异常大价差、同名币等不可行动机会。

@@ -2,6 +2,7 @@ from fastapi import APIRouter, Query, Request
 
 from app.models.market import MarketType
 from app.models.opportunity import Opportunity
+from app.services.risk_labels import has_non_actionable_risk
 
 router = APIRouter()
 
@@ -13,7 +14,7 @@ async def list_opportunities(
     symbol: str | None = Query(default=None),
     exchange: str | None = Query(default=None),
     min_open_spread_pct: float | None = Query(default=None),
-    include_risky: bool = Query(default=True),
+    include_risky: bool = Query(default=False),
 ) -> list[Opportunity]:
     opportunities = request.app.state.snapshot_store.get_opportunities()
     if type:
@@ -34,7 +35,7 @@ async def list_opportunities(
             item for item in opportunities if item.open_spread_pct >= min_open_spread_pct
         ]
     if not include_risky:
-        opportunities = [item for item in opportunities if not item.risk_labels]
+        opportunities = [item for item in opportunities if not has_non_actionable_risk(item)]
     return opportunities
 
 

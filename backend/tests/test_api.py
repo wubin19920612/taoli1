@@ -57,3 +57,39 @@ def test_opportunities_endpoint_returns_seeded_rows() -> None:
 
     assert response.status_code == 200
     assert response.json()[0]["symbol"] == "BTCUSDT"
+
+
+def test_opportunities_endpoint_hides_non_actionable_rows_by_default() -> None:
+    clean = make_opportunity().model_copy(update={"id": "clean", "symbol": "BTCUSDT"})
+    funding_warning = make_opportunity().model_copy(
+        update={
+            "id": "funding-warning",
+            "symbol": "ETHUSDT",
+            "risk_labels": ["FUNDING_AGAINST"],
+        }
+    )
+    obvious_bad = make_opportunity().model_copy(
+        update={
+            "id": "bad",
+            "symbol": "EDGEUSDT",
+            "risk_labels": ["HUGE_SPREAD_VERIFY", "LOW_VOLUME"],
+        }
+    )
+    store = SnapshotStore()
+    store.set_opportunities([obvious_bad, clean, funding_warning])
+    app = create_app(snapshot_store=store)
+    client = TestClient(app)
+
+    response = client.get("/api/opportunities")
+
+    assert response.status_code == 200
+    assert [item["symbol"] for item in response.json()] == ["BTCUSDT", "ETHUSDT"]
+
+    response = client.get("/api/opportunities?include_risky=true")
+
+    assert response.status_code == 200
+    assert [item["symbol"] for item in response.json()] == [
+        "EDGEUSDT",
+        "BTCUSDT",
+        "ETHUSDT",
+    ]
