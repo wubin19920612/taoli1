@@ -69,6 +69,14 @@ class MarketCollector:
             markets.extend(adapter_markets)
             errors.update(adapter_errors)
 
+        if not markets and self.store.get_markets():
+            self.store.set_exchange_errors(errors)
+            return CollectionResult(
+                markets=self.store.get_markets(),
+                opportunities=self.store.get_opportunities(),
+                exchange_errors=errors,
+            )
+
         opportunities = self._build_labeled_opportunities(markets)
         self.store.set_markets(markets)
         self.store.set_opportunities(opportunities)

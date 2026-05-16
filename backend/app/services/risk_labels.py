@@ -17,8 +17,12 @@ NON_ACTIONABLE_RISK_LABELS = frozenset(
 )
 
 
-def has_non_actionable_risk(opportunity: Opportunity) -> bool:
-    return bool(NON_ACTIONABLE_RISK_LABELS.intersection(opportunity.risk_labels))
+def has_non_actionable_risk(
+    opportunity: Opportunity,
+    hidden_labels: set[str] | frozenset[str] | None = None,
+) -> bool:
+    labels = hidden_labels if hidden_labels is not None else NON_ACTIONABLE_RISK_LABELS
+    return bool(labels.intersection(opportunity.risk_labels))
 
 
 def apply_risk_labels(

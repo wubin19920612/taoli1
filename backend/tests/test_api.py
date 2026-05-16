@@ -93,3 +93,57 @@ def test_opportunities_endpoint_hides_non_actionable_rows_by_default() -> None:
         "BTCUSDT",
         "ETHUSDT",
     ]
+
+
+def test_opportunities_endpoint_allows_selecting_hidden_risk_labels() -> None:
+    huge_spread = make_opportunity().model_copy(
+        update={
+            "id": "huge",
+            "symbol": "EDGEUSDT",
+            "risk_labels": ["HUGE_SPREAD_VERIFY"],
+        }
+    )
+    low_volume = make_opportunity().model_copy(
+        update={
+            "id": "low",
+            "symbol": "LOWUSDT",
+            "risk_labels": ["LOW_VOLUME"],
+        }
+    )
+    store = SnapshotStore()
+    store.set_opportunities([huge_spread, low_volume])
+    app = create_app(snapshot_store=store)
+    client = TestClient(app)
+
+    response = client.get("/api/opportunities?hidden_risk_labels=LOW_VOLUME")
+
+    assert response.status_code == 200
+    assert [item["symbol"] for item in response.json()] == ["EDGEUSDT"]
+
+
+def test_opportunities_endpoint_filters_min_volume_in_k_units() -> None:
+    liquid = make_opportunity().model_copy(
+        update={
+            "id": "liquid",
+            "symbol": "BTCUSDT",
+            "buy_volume_24h_usdt": 2_000_000,
+            "sell_volume_24h_usdt": 3_000_000,
+        }
+    )
+    illiquid = make_opportunity().model_copy(
+        update={
+            "id": "illiquid",
+            "symbol": "MICROUSDT",
+            "buy_volume_24h_usdt": 900_000,
+            "sell_volume_24h_usdt": 3_000_000,
+        }
+    )
+    store = SnapshotStore()
+    store.set_opportunities([illiquid, liquid])
+    app = create_app(snapshot_store=store)
+    client = TestClient(app)
+
+    response = client.get("/api/opportunities?include_risky=true&min_volume_24h_k=1000")
+
+    assert response.status_code == 200
+    assert [item["symbol"] for item in response.json()] == ["BTCUSDT"]

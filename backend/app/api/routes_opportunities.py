@@ -2,9 +2,16 @@ from fastapi import APIRouter, Query, Request
 
 from app.models.market import MarketType
 from app.models.opportunity import Opportunity
+from app.models.settings import DEFAULT_HIDDEN_RISK_LABELS
 from app.services.risk_labels import has_non_actionable_risk
 
 router = APIRouter()
+
+
+def _parse_csv(value: str | None, default: list[str]) -> list[str]:
+    if value is None:
+        return default
+    return [item.strip() for item in value.split(",") if item.strip()]
 
 
 @router.get("/opportunities", response_model=list[Opportunity])
@@ -15,6 +22,8 @@ async def list_opportunities(
     exchange: str | None = Query(default=None),
     min_open_spread_pct: float | None = Query(default=None),
     include_risky: bool = Query(default=False),
+    hidden_risk_labels: str | None = Query(default=None),
+    min_volume_24h_k: float | None = Query(default=None, ge=0),
 ) -> list[Opportunity]:
     opportunities = request.app.state.snapshot_store.get_opportunities()
     if type:
@@ -34,8 +43,19 @@ async def list_opportunities(
         opportunities = [
             item for item in opportunities if item.open_spread_pct >= min_open_spread_pct
         ]
+    if min_volume_24h_k is not None and min_volume_24h_k > 0:
+        min_volume = min_volume_24h_k * 1000
+        opportunities = [
+            item
+            for item in opportunities
+            if min(item.buy_volume_24h_usdt or 0, item.sell_volume_24h_usdt or 0)
+            >= min_volume
+        ]
     if not include_risky:
-        opportunities = [item for item in opportunities if not has_non_actionable_risk(item)]
+        hidden_labels = set(_parse_csv(hidden_risk_labels, DEFAULT_HIDDEN_RISK_LABELS))
+        opportunities = [
+            item for item in opportunities if not has_non_actionable_risk(item, hidden_labels)
+        ]
     return opportunities
 
 

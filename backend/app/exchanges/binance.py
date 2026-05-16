@@ -6,12 +6,12 @@ class BinanceAdapter(ExchangeAdapter):
     name = "binance"
 
     async def fetch_spot_tickers(self) -> list[MarketSnapshot]:
-        data = (await self.client.get("https://api.binance.com/api/v3/ticker/bookTicker")).json()
+        data = await self.get_json("https://api.binance.com/api/v3/ticker/bookTicker")
         return self._parse_book_tickers(data, MarketType.SPOT)
 
     async def fetch_future_tickers(self) -> list[MarketSnapshot]:
-        book = (await self.client.get("https://fapi.binance.com/fapi/v1/ticker/bookTicker")).json()
-        premium = (await self.client.get("https://fapi.binance.com/fapi/v1/premiumIndex")).json()
+        book = await self.get_json("https://fapi.binance.com/fapi/v1/ticker/bookTicker")
+        premium = await self.get_json("https://fapi.binance.com/fapi/v1/premiumIndex")
         premium_by_symbol = {item["symbol"]: item for item in premium if item.get("symbol")}
         snapshots = self._parse_book_tickers(book, MarketType.FUTURE)
         enriched = []

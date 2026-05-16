@@ -76,6 +76,15 @@ body {
   width: 180px;
 }
 
+.volume-input {
+  width: 150px;
+}
+
+.risk-select {
+  min-width: 260px;
+  max-width: 420px;
+}
+
 .metric-row {
   padding: 12px;
   background: #ffffff;
@@ -139,6 +148,11 @@ body {
   .symbol-input,
   .exchange-select,
   .spread-input {
+    width: 100%;
+  }
+
+  .volume-input,
+  .risk-select {
     width: 100%;
   }
 }

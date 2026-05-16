@@ -6,8 +6,22 @@ import { OpportunityTable } from "../components/OpportunityTable";
 import { TopFilters } from "../components/TopFilters";
 import { useRadarStore } from "../state/useRadarStore";
 
+const DEFAULT_HIDDEN_RISK_LABELS = [
+  "LOW_VOLUME",
+  "STALE_DATA",
+  "HUGE_SPREAD_VERIFY",
+  "WIDE_SPREAD",
+  "SAME_TICKER_RISK",
+  "MARK_INDEX_DEVIATION",
+  "MISSING_FUNDING"
+];
+
 export function DashboardPage() {
-  const [filters, setFilters] = useState<OpportunityFilters>({ include_risky: false });
+  const [filters, setFilters] = useState<OpportunityFilters>({
+    include_risky: false,
+    hidden_risk_labels: DEFAULT_HIDDEN_RISK_LABELS,
+    min_volume_24h_k: 1000
+  });
   const { opportunities, health, loading, error, refresh } = useRadarStore(filters);
   const errors = health?.exchange_errors ?? {};
 

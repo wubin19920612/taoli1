@@ -1,3 +1,5 @@
+import asyncio
+
 from app.exchanges.base import ExchangeAdapter, normalize_usdt_symbol, parse_float, utc_now
 from app.models.market import MarketSnapshot, MarketType
 
@@ -6,23 +8,16 @@ class OKXAdapter(ExchangeAdapter):
     name = "okx"
 
     async def fetch_spot_tickers(self) -> list[MarketSnapshot]:
-        payload = (await self.client.get("https://www.okx.com/api/v5/market/tickers?instType=SPOT")).json()
+        payload = await self.get_json("https://www.okx.com/api/v5/market/tickers?instType=SPOT")
         return self._parse_tickers(payload.get("data", []), MarketType.SPOT)
 
     async def fetch_future_tickers(self) -> list[MarketSnapshot]:
-        payload = (await self.client.get("https://www.okx.com/api/v5/market/tickers?instType=SWAP")).json()
+        payload = await self.get_json("https://www.okx.com/api/v5/market/tickers?instType=SWAP")
         tickers = self._parse_tickers(payload.get("data", []), MarketType.FUTURE)
-        funding_payload = (await self.client.get("https://www.okx.com/api/v5/public/funding-rate?instType=SWAP")).json()
-        funding_by_symbol = {}
-        for item in funding_payload.get("data", []):
-            try:
-                symbol, _, _ = normalize_usdt_symbol(item.get("instId", ""))
-            except ValueError:
-                continue
-            funding_by_symbol[symbol] = item
-        enriched = []
+        funding_by_symbol = await self._fetch_funding_by_symbol(tickers)
+        enriched: list[MarketSnapshot] = []
         for row in tickers:
-            item = funding_by_symbol.get(row.symbol, {})
+            item = funding_by_symbol.get(row.raw_symbol, {})
             funding = parse_float(item.get("fundingRate"))
             enriched.append(
                 row.model_copy(
@@ -33,6 +28,30 @@ class OKXAdapter(ExchangeAdapter):
                 )
             )
         return enriched
+
+    async def _fetch_funding_by_symbol(
+        self,
+        tickers: list[MarketSnapshot],
+        limit: int = 120,
+    ) -> dict[str, dict]:
+        semaphore = asyncio.Semaphore(8)
+
+        async def fetch_one(raw_symbol: str) -> tuple[str, dict | None]:
+            async with semaphore:
+                try:
+                    payload = await self.get_json(
+                        f"https://www.okx.com/api/v5/public/funding-rate?instId={raw_symbol}"
+                    )
+                except Exception:
+                    return raw_symbol, None
+                rows = payload.get("data", [])
+                return raw_symbol, rows[0] if rows else None
+
+        results = await asyncio.gather(
+            *(fetch_one(row.raw_symbol) for row in tickers[:limit]),
+            return_exceptions=False,
+        )
+        return {symbol: item for symbol, item in results if item is not None}
 
     def _parse_tickers(self, data: list[dict], market_type: MarketType) -> list[MarketSnapshot]:
         rows: list[MarketSnapshot] = []

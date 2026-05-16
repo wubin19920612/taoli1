@@ -11,6 +11,16 @@ interface TopFiltersProps {
 }
 
 const exchanges = ["binance", "okx", "bybit", "gate", "bitget", "htx", "aster"];
+const riskLabelOptions = [
+  "LOW_VOLUME",
+  "STALE_DATA",
+  "HUGE_SPREAD_VERIFY",
+  "WIDE_SPREAD",
+  "SAME_TICKER_RISK",
+  "MARK_INDEX_DEVIATION",
+  "MISSING_FUNDING",
+  "FUNDING_AGAINST"
+].map((item) => ({ label: item, value: item }));
 
 export function TopFilters({ filters, loading, onChange, onRefresh }: TopFiltersProps) {
   const patch = (next: Partial<OpportunityFilters>) => onChange({ ...filters, ...next });
@@ -51,6 +61,26 @@ export function TopFilters({ filters, loading, onChange, onRefresh }: TopFilters
           suffix="%"
           value={filters.min_open_spread_pct}
           onChange={(value) => patch({ min_open_spread_pct: value ?? undefined })}
+        />
+        <InputNumber
+          className="volume-input"
+          min={0}
+          step={100}
+          placeholder="成交额 K"
+          suffix="K"
+          value={filters.min_volume_24h_k}
+          onChange={(value) => patch({ min_volume_24h_k: value ?? undefined })}
+        />
+        <Select
+          mode="multiple"
+          allowClear
+          className="risk-select"
+          placeholder="隐藏风险"
+          maxTagCount="responsive"
+          options={riskLabelOptions}
+          value={filters.hidden_risk_labels}
+          onChange={(value) => patch({ hidden_risk_labels: value })}
+          disabled={filters.include_risky ?? false}
         />
         <Space size={6}>
           <Switch

@@ -35,4 +35,19 @@ describe("DashboardPage", () => {
       );
     });
   });
+
+  it("sends adjustable hidden risk labels and min volume in K", async () => {
+    render(<DashboardPage />);
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining("hidden_risk_labels=LOW_VOLUME%2CSTALE_DATA%2CHUGE_SPREAD_VERIFY"),
+        expect.anything()
+      );
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining("min_volume_24h_k=1000"),
+        expect.anything()
+      );
+    });
+  });
 });

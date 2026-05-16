@@ -11,9 +11,15 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "/api";
 
 function buildUrl(path: string, params?: object) {
   const url = new URL(`${API_BASE}${path}`, window.location.origin);
-  Object.entries((params ?? {}) as Record<string, string | number | boolean | undefined>).forEach(([key, value]) => {
+  Object.entries((params ?? {}) as Record<string, string | number | boolean | string[] | undefined>).forEach(([key, value]) => {
     if (value !== undefined && value !== "") {
-      url.searchParams.set(key, String(value));
+      if (Array.isArray(value)) {
+        if (value.length > 0) {
+          url.searchParams.set(key, value.join(","));
+        }
+      } else {
+        url.searchParams.set(key, String(value));
+      }
     }
   });
   return url.toString();

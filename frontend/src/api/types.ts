@@ -81,4 +81,6 @@ export interface OpportunityFilters {
   exchange?: string;
   min_open_spread_pct?: number;
   include_risky?: boolean;
+  hidden_risk_labels?: string[];
+  min_volume_24h_k?: number;
 }
