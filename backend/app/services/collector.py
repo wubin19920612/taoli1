@@ -47,11 +47,13 @@ class MarketCollector:
         store: SnapshotStore,
         risk_settings: RiskSettings | None = None,
         fee_settings: FeeSettings | None = None,
+        risk_settings_loader=None,
     ) -> None:
         self.adapters = adapters
         self.store = store
         self.risk_settings = risk_settings or RiskSettings()
         self.fee_settings = fee_settings or FeeSettings()
+        self.risk_settings_loader = risk_settings_loader
 
     async def collect_once(self) -> CollectionResult:
         markets: list[MarketSnapshot] = []
@@ -76,6 +78,9 @@ class MarketCollector:
                 opportunities=self.store.get_opportunities(),
                 exchange_errors=errors,
             )
+
+        if self.risk_settings_loader is not None:
+            self.risk_settings = await self.risk_settings_loader()
 
         opportunities = self._build_labeled_opportunities(markets)
         self.store.set_markets(markets)

@@ -1,3 +1,4 @@
+import asyncio
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime
 from typing import Any
@@ -7,7 +8,8 @@ import httpx
 from app.models.market import MarketSnapshot
 
 DEFAULT_HEADERS = {"User-Agent": "taoli1-radar/0.1"}
-DEFAULT_TIMEOUT = httpx.Timeout(6.0, connect=2.5, read=5.0, write=5.0, pool=2.0)
+DEFAULT_TIMEOUT = httpx.Timeout(8.0, connect=2.5, read=6.0, write=5.0, pool=5.0)
+DEFAULT_LIMITS = httpx.Limits(max_connections=40, max_keepalive_connections=16, keepalive_expiry=15.0)
 
 
 def parse_float(value: Any) -> float | None:
@@ -40,6 +42,7 @@ class ExchangeAdapter(ABC):
     def __init__(self, client: httpx.AsyncClient | None = None):
         self.client = client or httpx.AsyncClient(
             timeout=DEFAULT_TIMEOUT,
+            limits=DEFAULT_LIMITS,
             headers=DEFAULT_HEADERS,
             follow_redirects=True,
         )
@@ -53,6 +56,7 @@ class ExchangeAdapter(ABC):
                 return response.json()
             except (httpx.TimeoutException, httpx.TransportError) as exc:
                 last_error = exc
+                await asyncio.sleep(0.2)
         if last_error is not None:
             raise last_error
         raise RuntimeError(f"Failed to request {url}")

@@ -59,4 +59,5 @@ def test_exchange_adapter_uses_short_timeout_and_headers() -> None:
 
     assert isinstance(adapter, ExchangeAdapter)
     assert adapter.client.timeout.connect <= 3
+    assert adapter.client.timeout.pool >= 5
     assert adapter.client.headers["User-Agent"].startswith("taoli1-radar")

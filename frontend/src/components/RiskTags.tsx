@@ -1,5 +1,7 @@
 import { CheckCircleOutlined, ExclamationCircleOutlined } from "@ant-design/icons";
-import { Space, Tag } from "antd";
+import { Space, Tag, Tooltip } from "antd";
+
+import { riskLabelDescription, riskLabelName } from "../constants/riskLabels";
 
 interface RiskTagsProps {
   labels: string[];
@@ -27,9 +29,11 @@ export function RiskTags({ labels }: RiskTagsProps) {
   return (
     <Space size={[4, 4]} wrap>
       {labels.map((label) => (
-        <Tag key={label} icon={<ExclamationCircleOutlined />} color={severityColors[label] ?? "default"}>
-          {label}
-        </Tag>
+        <Tooltip key={label} title={riskLabelDescription.get(label)}>
+          <Tag icon={<ExclamationCircleOutlined />} color={severityColors[label] ?? "default"}>
+            {riskLabelName.has(label) ? `${riskLabelName.get(label)} (${label})` : label}
+          </Tag>
+        </Tooltip>
       ))}
     </Space>
   );

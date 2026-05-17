@@ -92,7 +92,11 @@ def create_app(
         tasks: list[asyncio.Task] = []
         collector: MarketCollector | None = None
         if start_collector:
-            collector = MarketCollector(default_exchange_adapters(), store)
+            collector = MarketCollector(
+                default_exchange_adapters(),
+                store,
+                risk_settings_loader=app.state.settings_repo.get_risk_settings,
+            )
             tasks.append(
                 asyncio.create_task(
                     run_collector_loop(collector, app_settings.poll_interval_seconds, stop_event)

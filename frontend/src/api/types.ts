@@ -38,6 +38,7 @@ export interface HealthStatus {
 
 export interface RiskSettings {
   min_volume_24h_usdt: number;
+  min_volume_24h_k?: number;
   stale_after_seconds: number;
   huge_spread_pct: number;
   wide_spread_pct: number;

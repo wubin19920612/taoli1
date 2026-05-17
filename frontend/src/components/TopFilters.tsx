@@ -2,6 +2,7 @@ import { FilterOutlined, ReloadOutlined } from "@ant-design/icons";
 import { Button, Input, InputNumber, Segmented, Select, Space, Switch, Tooltip } from "antd";
 
 import type { OpportunityFilters, OpportunityType } from "../api/types";
+import { riskLabelOptions } from "../constants/riskLabels";
 
 interface TopFiltersProps {
   filters: OpportunityFilters;
@@ -11,17 +12,6 @@ interface TopFiltersProps {
 }
 
 const exchanges = ["binance", "okx", "bybit", "gate", "bitget", "htx", "aster"];
-const riskLabelOptions = [
-  "LOW_VOLUME",
-  "STALE_DATA",
-  "HUGE_SPREAD_VERIFY",
-  "WIDE_SPREAD",
-  "SAME_TICKER_RISK",
-  "MARK_INDEX_DEVIATION",
-  "MISSING_FUNDING",
-  "FUNDING_AGAINST"
-].map((item) => ({ label: item, value: item }));
-
 export function TopFilters({ filters, loading, onChange, onRefresh }: TopFiltersProps) {
   const patch = (next: Partial<OpportunityFilters>) => onChange({ ...filters, ...next });
   return (
@@ -77,7 +67,10 @@ export function TopFilters({ filters, loading, onChange, onRefresh }: TopFilters
           className="risk-select"
           placeholder="隐藏风险"
           maxTagCount="responsive"
-          options={riskLabelOptions}
+          options={riskLabelOptions.map((item) => ({
+            value: item.value,
+            label: `${item.label} (${item.value})`
+          }))}
           value={filters.hidden_risk_labels}
           onChange={(value) => patch({ hidden_risk_labels: value })}
           disabled={filters.include_risky ?? false}

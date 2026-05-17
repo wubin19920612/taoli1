@@ -24,6 +24,7 @@ import {
   updateRiskSettings
 } from "../api/client";
 import type { AlertRule, RiskSettings } from "../api/types";
+import { defaultHiddenRiskLabels, riskLabelOptions } from "../constants/riskLabels";
 
 const defaultRule: AlertRule = {
   name: "",
@@ -37,15 +38,7 @@ const defaultRule: AlertRule = {
   min_fee_adjusted_open_pct: 0.25,
   min_volume_24h_usdt: 1000000,
   max_data_age_seconds: 600,
-  excluded_risk_labels: [
-    "LOW_VOLUME",
-    "STALE_DATA",
-    "HUGE_SPREAD_VERIFY",
-    "WIDE_SPREAD",
-    "SAME_TICKER_RISK",
-    "MARK_INDEX_DEVIATION",
-    "MISSING_FUNDING"
-  ],
+  excluded_risk_labels: defaultHiddenRiskLabels,
   consecutive_hits: 3,
   cooldown_seconds: 300,
   severity: "warning"
@@ -55,6 +48,24 @@ const exchangeOptions = ["binance", "okx", "bybit", "gate", "bitget", "htx", "as
   label: item,
   value: item
 }));
+const riskSelectOptions = riskLabelOptions.map((item) => ({
+  label: `${item.label} (${item.value})`,
+  value: item.value
+}));
+
+function riskToForm(settings: RiskSettings): RiskSettings {
+  return {
+    ...settings,
+    min_volume_24h_k: Math.round(settings.min_volume_24h_usdt / 1000)
+  };
+}
+
+function riskFromForm(values: RiskSettings): RiskSettings {
+  return {
+    ...values,
+    min_volume_24h_usdt: (values.min_volume_24h_k ?? 0) * 1000
+  };
+}
 
 export function SettingsPage() {
   const [riskForm] = Form.useForm<RiskSettings>();
@@ -68,7 +79,7 @@ export function SettingsPage() {
     setError("");
     try {
       const [risk, nextRules] = await Promise.all([getRiskSettings(), listAlertRules()]);
-      riskForm.setFieldsValue(risk);
+      riskForm.setFieldsValue(riskToForm(risk));
       setRules(nextRules);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
@@ -84,8 +95,8 @@ export function SettingsPage() {
 
   const saveRisk = async () => {
     const values = await riskForm.validateFields();
-    const saved = await updateRiskSettings(values);
-    riskForm.setFieldsValue(saved);
+    const saved = await updateRiskSettings(riskFromForm(values));
+    riskForm.setFieldsValue(riskToForm(saved));
     message.success("已保存");
   };
 
@@ -139,26 +150,33 @@ export function SettingsPage() {
         <Typography.Title level={4}>风险参数</Typography.Title>
         <Form form={riskForm} layout="vertical" disabled={loading} onFinish={saveRisk}>
           <div className="form-grid">
-            <Form.Item label="最低24h成交额" name="min_volume_24h_usdt" rules={[{ required: true }]}>
-              <InputNumber min={0} className="wide-input" />
+            <Form.Item label="低成交额阈值 (LOW_VOLUME)" name="min_volume_24h_k" rules={[{ required: true }]}>
+              <InputNumber min={0} step={100} suffix="K" className="wide-input" />
             </Form.Item>
-            <Form.Item label="数据过期秒数" name="stale_after_seconds" rules={[{ required: true }]}>
+            <Form.Item label="数据过期秒数 (STALE_DATA)" name="stale_after_seconds" rules={[{ required: true }]}>
               <InputNumber min={5} className="wide-input" />
             </Form.Item>
-            <Form.Item label="异常大价差" name="huge_spread_pct" rules={[{ required: true }]}>
+            <Form.Item label="异常大价差阈值 (HUGE_SPREAD_VERIFY)" name="huge_spread_pct" rules={[{ required: true }]}>
               <InputNumber min={0} step={0.1} suffix="%" className="wide-input" />
             </Form.Item>
-            <Form.Item label="价差宽度" name="wide_spread_pct" rules={[{ required: true }]}>
+            <Form.Item label="WIDE_SPREAD 开平价差宽度" name="wide_spread_pct" rules={[{ required: true }]}>
               <InputNumber min={0} step={0.1} suffix="%" className="wide-input" />
             </Form.Item>
-            <Form.Item label="标记指数偏离" name="mark_index_deviation_pct" rules={[{ required: true }]}>
+            <Form.Item label="标记/指数偏离阈值 (MARK_INDEX_DEVIATION)" name="mark_index_deviation_pct" rules={[{ required: true }]}>
               <InputNumber min={0} step={0.1} suffix="%" className="wide-input" />
             </Form.Item>
-            <Form.Item label="资金费率逆风" name="funding_against_pct" rules={[{ required: true }]}>
+            <Form.Item label="资金费率逆风阈值 (FUNDING_AGAINST)" name="funding_against_pct" rules={[{ required: true }]}>
               <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
             </Form.Item>
           </div>
-          <Form.Item label="同名风险标的" name="ticker_collision_symbols">
+          <div className="risk-help">
+            {riskLabelOptions.map((item) => (
+              <Typography.Text key={item.value} type="secondary">
+                {item.label} ({item.value})：{item.description}
+              </Typography.Text>
+            ))}
+          </div>
+          <Form.Item label="同名风险标的 (SAME_TICKER_RISK)" name="ticker_collision_symbols">
             <Select mode="tags" tokenSeparators={[",", " "]} />
           </Form.Item>
           <Button type="primary" htmlType="submit" icon={<SaveOutlined />}>
@@ -211,7 +229,7 @@ export function SettingsPage() {
             </Form.Item>
           </div>
           <Form.Item label="排除风险标签" name="excluded_risk_labels">
-            <Select mode="tags" tokenSeparators={[",", " "]} />
+            <Select mode="multiple" options={riskSelectOptions} />
           </Form.Item>
           <Button type="primary" htmlType="submit">
             新增规则

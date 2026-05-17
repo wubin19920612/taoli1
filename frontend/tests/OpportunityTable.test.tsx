@@ -39,6 +39,6 @@ describe("OpportunityTable", () => {
     expect(screen.getByText("binance future")).toBeTruthy();
     expect(screen.getByText("okx future")).toBeTruthy();
     expect(screen.getByText("0.620%")).toBeTruthy();
-    expect(screen.getByText("FUNDING_AGAINST")).toBeTruthy();
+    expect(screen.getByText("资金费率逆风 (FUNDING_AGAINST)")).toBeTruthy();
   });
 });

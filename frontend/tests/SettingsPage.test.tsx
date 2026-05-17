@@ -38,7 +38,11 @@ describe("SettingsPage", () => {
   it("loads risk settings and can submit an alert rule", async () => {
     render(<SettingsPage />);
 
-    expect(await screen.findByDisplayValue("1000000")).toBeTruthy();
+    expect(await screen.findByDisplayValue("1000")).toBeTruthy();
+    expect(screen.getAllByText(/低成交额.*LOW_VOLUME/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/数据过期.*STALE_DATA/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/异常大价差.*HUGE_SPREAD_VERIFY/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/开平价差宽/).length).toBeGreaterThan(0);
     await userEvent.type(screen.getByLabelText("规则名称"), "FF 价差");
     await userEvent.clear(screen.getByLabelText("开仓阈值"));
     await userEvent.type(screen.getByLabelText("开仓阈值"), "0.5");
@@ -48,6 +52,25 @@ describe("SettingsPage", () => {
       expect(fetch).toHaveBeenCalledWith(
         expect.stringContaining("/alerts/rules"),
         expect.objectContaining({ method: "POST" })
+      );
+    });
+  });
+
+  it("saves editable risk thresholds and converts K volume back to USDT", async () => {
+    render(<SettingsPage />);
+
+    const volumeInput = await screen.findByDisplayValue("1000");
+    await userEvent.clear(volumeInput);
+    await userEvent.type(volumeInput, "2500");
+    await userEvent.click(screen.getByRole("button", { name: /保存风险参数/ }));
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/settings/risk"),
+        expect.objectContaining({
+          method: "PUT",
+          body: expect.stringContaining('"min_volume_24h_usdt":2500000')
+        })
       );
     });
   });
