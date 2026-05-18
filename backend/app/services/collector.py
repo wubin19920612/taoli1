@@ -55,6 +55,12 @@ class MarketCollector:
         self.fee_settings = fee_settings or FeeSettings()
         self.risk_settings_loader = risk_settings_loader
 
+    async def _reset_exchange_clients(self) -> None:
+        for adapter in self.adapters:
+            reset = getattr(adapter, "reset_client", None)
+            if reset is not None:
+                await reset()
+
     async def collect_once(self) -> CollectionResult:
         markets: list[MarketSnapshot] = []
         errors: dict[str, str] = {}
@@ -78,6 +84,23 @@ class MarketCollector:
                 opportunities=self.store.get_opportunities(),
                 exchange_errors=errors,
             )
+
+        if not markets and errors:
+            await self._reset_exchange_clients()
+            retry_results = await asyncio.gather(
+                *(self._fetch_adapter(adapter) for adapter in self.adapters),
+                return_exceptions=True,
+            )
+            errors = {}
+            markets = []
+            for adapter, result in zip(self.adapters, retry_results, strict=True):
+                if isinstance(result, Exception):
+                    errors[adapter.name] = str(result)
+                    logger.warning("exchange adapter retry failed: %s", adapter.name, exc_info=result)
+                    continue
+                adapter_markets, adapter_errors = result
+                markets.extend(adapter_markets)
+                errors.update(adapter_errors)
 
         if self.risk_settings_loader is not None:
             self.risk_settings = await self.risk_settings_loader()

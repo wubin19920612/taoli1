@@ -47,6 +47,17 @@ class ExchangeAdapter(ABC):
             follow_redirects=True,
         )
 
+    async def reset_client(self) -> None:
+        client = getattr(self, "client", None)
+        if client is not None and not client.is_closed:
+            await client.aclose()
+        self.client = httpx.AsyncClient(
+            timeout=DEFAULT_TIMEOUT,
+            limits=DEFAULT_LIMITS,
+            headers=DEFAULT_HEADERS,
+            follow_redirects=True,
+        )
+
     async def get_json(self, url: str) -> Any:
         last_error: Exception | None = None
         for _ in range(2):
