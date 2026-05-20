@@ -6,11 +6,11 @@ class AsterAdapter(ExchangeAdapter):
     name = "aster"
 
     async def fetch_spot_tickers(self) -> list[MarketSnapshot]:
-        data = (await self.client.get("https://www.asterdex.com/api/v1/ticker/bookTicker")).json()
+        data = await self.get_json("https://www.asterdex.com/api/v1/ticker/bookTicker")
         return self._parse_book(data if isinstance(data, list) else [], MarketType.SPOT)
 
     async def fetch_future_tickers(self) -> list[MarketSnapshot]:
-        data = (await self.client.get("https://fapi.asterdex.com/fapi/v1/ticker/bookTicker")).json()
+        data = await self.get_json("https://fapi.asterdex.com/fapi/v1/ticker/bookTicker")
         return self._parse_book(data if isinstance(data, list) else [], MarketType.FUTURE)
 
     def _parse_book(self, data: list[dict], market_type: MarketType) -> list[MarketSnapshot]:

@@ -8,15 +8,23 @@ from typing import AsyncIterator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import routes_alerts, routes_health, routes_opportunities, routes_settings, stream
+from app.api import routes_alerts, routes_health, routes_history, routes_opportunities, routes_settings, stream
 from app.core.config import Settings, get_settings
 from app.db.database import connect_database
-from app.db.repositories import AlertEventRepository, AlertRuleRepository, SettingsRepository
+from app.db.repositories import (
+    AlertEventRepository,
+    AlertRuleRepository,
+    OpportunityHistoryRepository,
+    SettingsRepository,
+)
 from app.db.schema import initialize_schema
 from app.models.alert import AlertEvent
+from app.models.settings import RiskSettings
 from app.services.alert_engine import AlertEngine
 from app.services.collector import MarketCollector, default_exchange_adapters, run_collector_loop
+from app.services.data_filters import filter_opportunities
 from app.services.feishu import FeishuConfig, FeishuNotifier
+from app.services.history import OpportunityHistoryRecorder
 from app.services.snapshot_store import SnapshotStore
 
 logger = logging.getLogger(__name__)
@@ -39,8 +47,10 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
         try:
             repo: AlertRuleRepository = app.state.alert_rule_repo
             event_repo: AlertEventRepository = app.state.alert_event_repo
+            settings_repo: SettingsRepository | None = getattr(app.state, "settings_repo", None)
             rules = await repo.list()
-            opportunities = app.state.snapshot_store.get_opportunities()
+            settings = await settings_repo.get_risk_settings() if settings_repo is not None else RiskSettings()
+            opportunities = filter_opportunities(app.state.snapshot_store.get_opportunities(), settings)
             matches = app.state.alert_engine.evaluate(opportunities, rules)
             for match in matches:
                 status = "sent"
@@ -89,13 +99,19 @@ def create_app(
         app.state.alert_rule_repo = AlertRuleRepository(db)
         app.state.alert_event_repo = AlertEventRepository(db)
         app.state.settings_repo = SettingsRepository(db)
+        app.state.history_repo = OpportunityHistoryRepository(db)
         tasks: list[asyncio.Task] = []
         collector: MarketCollector | None = None
         if start_collector:
+            history_recorder = OpportunityHistoryRecorder(
+                app.state.history_repo,
+                app_settings.history_settings,
+            )
             collector = MarketCollector(
                 default_exchange_adapters(),
                 store,
                 risk_settings_loader=app.state.settings_repo.get_risk_settings,
+                history_recorder=history_recorder,
             )
             tasks.append(
                 asyncio.create_task(
@@ -140,6 +156,7 @@ def create_app(
     )
     app.include_router(routes_health.router, prefix="/api")
     app.include_router(routes_opportunities.router, prefix="/api")
+    app.include_router(routes_history.router, prefix="/api")
     app.include_router(routes_alerts.router, prefix="/api")
     app.include_router(routes_settings.router, prefix="/api")
     app.include_router(stream.router, prefix="/api")

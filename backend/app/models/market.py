@@ -21,6 +21,7 @@ class MarketSnapshot(BaseModel):
     ask_size: float | None = None
     volume_24h_usdt: float | None = None
     funding_rate_pct: float | None = None
+    funding_next_rate_pct: float | None = None
     funding_interval_hours: int | None = None
     funding_next_time: datetime | None = None
     mark_price: float | None = None

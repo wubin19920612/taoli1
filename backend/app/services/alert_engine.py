@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 
 from app.models.alert import AlertRule
 from app.models.opportunity import Opportunity
+from app.services.risk_labels import known_volume_24h_usdt
 
 
 @dataclass(frozen=True)
@@ -65,8 +66,8 @@ class AlertEngine:
             return False
         if opportunity.fee_adjusted_open_pct < rule.min_fee_adjusted_open_pct:
             return False
-        min_volume = min(opportunity.buy_volume_24h_usdt or 0, opportunity.sell_volume_24h_usdt or 0)
-        if min_volume < rule.min_volume_24h_usdt:
+        min_volume = known_volume_24h_usdt(opportunity)
+        if min_volume is not None and min_volume < rule.min_volume_24h_usdt:
             return False
         if (now - opportunity.last_seen_at).total_seconds() > rule.max_data_age_seconds:
             return False

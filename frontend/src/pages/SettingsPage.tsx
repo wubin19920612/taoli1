@@ -26,6 +26,10 @@ import {
 import type { AlertRule, RiskSettings } from "../api/types";
 import { defaultHiddenRiskLabels, riskLabelOptions } from "../constants/riskLabels";
 
+type AlertRuleFormValues = AlertRule & {
+  min_volume_24h_k?: number;
+};
+
 const defaultRule: AlertRule = {
   name: "",
   enabled: true,
@@ -44,7 +48,30 @@ const defaultRule: AlertRule = {
   severity: "warning"
 };
 
-const exchangeOptions = ["binance", "okx", "bybit", "gate", "bitget", "htx", "aster"].map((item) => ({
+function ruleDefaultsForRisk(settings: RiskSettings): AlertRule {
+  return {
+    ...defaultRule,
+    min_volume_24h_usdt: settings.min_volume_24h_usdt
+  };
+}
+
+function ruleToForm(rule: AlertRule): AlertRuleFormValues {
+  return {
+    ...rule,
+    min_volume_24h_k: Math.round(rule.min_volume_24h_usdt / 1000)
+  };
+}
+
+function ruleFromForm(values: AlertRuleFormValues, defaults: AlertRule): AlertRule {
+  const { min_volume_24h_k: minVolumeK, ...rule } = values;
+  return {
+    ...defaults,
+    ...rule,
+    min_volume_24h_usdt: (minVolumeK ?? 0) * 1000
+  };
+}
+
+const exchangeOptions = ["binance", "okx", "bybit", "gate", "bitget", "htx", "aster", "hyperliquid"].map((item) => ({
   label: item,
   value: item
 }));
@@ -56,30 +83,37 @@ const riskSelectOptions = riskLabelOptions.map((item) => ({
 function riskToForm(settings: RiskSettings): RiskSettings {
   return {
     ...settings,
-    min_volume_24h_k: Math.round(settings.min_volume_24h_usdt / 1000)
+    min_volume_24h_k: Math.round(settings.min_volume_24h_usdt / 1000),
+    excluded_symbols: settings.excluded_symbols ?? [],
+    ignored_exchanges: settings.ignored_exchanges ?? []
   };
 }
 
 function riskFromForm(values: RiskSettings): RiskSettings {
+  const { min_volume_24h_k: minVolumeK, ...settings } = values;
   return {
-    ...values,
-    min_volume_24h_usdt: (values.min_volume_24h_k ?? 0) * 1000
+    ...settings,
+    min_volume_24h_usdt: (minVolumeK ?? 0) * 1000
   };
 }
 
 export function SettingsPage() {
   const [riskForm] = Form.useForm<RiskSettings>();
-  const [ruleForm] = Form.useForm<AlertRule>();
+  const [ruleForm] = Form.useForm<AlertRuleFormValues>();
   const [rules, setRules] = useState<AlertRule[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [ruleDefaults, setRuleDefaults] = useState<AlertRule>(defaultRule);
 
   const load = async () => {
     setLoading(true);
     setError("");
     try {
       const [risk, nextRules] = await Promise.all([getRiskSettings(), listAlertRules()]);
+      const nextRuleDefaults = ruleDefaultsForRisk(risk);
       riskForm.setFieldsValue(riskToForm(risk));
+      ruleForm.setFieldsValue(ruleToForm(nextRuleDefaults));
+      setRuleDefaults(nextRuleDefaults);
       setRules(nextRules);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
@@ -89,22 +123,25 @@ export function SettingsPage() {
   };
 
   useEffect(() => {
-    ruleForm.setFieldsValue(defaultRule);
+    ruleForm.setFieldsValue(ruleToForm(defaultRule));
     void load();
   }, []);
 
   const saveRisk = async () => {
     const values = await riskForm.validateFields();
     const saved = await updateRiskSettings(riskFromForm(values));
+    const nextRuleDefaults = ruleDefaultsForRisk(saved);
     riskForm.setFieldsValue(riskToForm(saved));
+    ruleForm.setFieldsValue(ruleToForm(nextRuleDefaults));
+    setRuleDefaults(nextRuleDefaults);
     message.success("已保存");
   };
 
   const createRule = async () => {
     const values = await ruleForm.validateFields();
-    const saved = await createAlertRule({ ...defaultRule, ...values });
+    const saved = await createAlertRule(ruleFromForm(values, ruleDefaults));
     setRules((current) => [saved, ...current]);
-    ruleForm.setFieldsValue(defaultRule);
+    ruleForm.setFieldsValue(ruleToForm(ruleDefaults));
     message.success("已新增");
   };
 
@@ -179,6 +216,12 @@ export function SettingsPage() {
           <Form.Item label="同名风险标的 (SAME_TICKER_RISK)" name="ticker_collision_symbols">
             <Select mode="tags" tokenSeparators={[",", " "]} />
           </Form.Item>
+          <Form.Item label="黑名单标的" name="excluded_symbols">
+            <Select mode="tags" tokenSeparators={[",", " "]} placeholder="TRADOORUSDT" />
+          </Form.Item>
+          <Form.Item label="忽略交易所" name="ignored_exchanges">
+            <Select mode="multiple" allowClear options={exchangeOptions} />
+          </Form.Item>
           <Button type="primary" htmlType="submit" icon={<SaveOutlined />}>
             保存风险参数
           </Button>
@@ -186,7 +229,13 @@ export function SettingsPage() {
       </section>
       <section className="panel">
         <Typography.Title level={4}>新增告警规则</Typography.Title>
-        <Form form={ruleForm} layout="vertical" initialValues={defaultRule} onFinish={createRule}>
+        <Form
+          form={ruleForm}
+          layout="vertical"
+          disabled={loading}
+          initialValues={ruleToForm(ruleDefaults)}
+          onFinish={createRule}
+        >
           <div className="form-grid">
             <Form.Item label="规则名称" name="name" rules={[{ required: true }]}>
               <Input />
@@ -209,8 +258,8 @@ export function SettingsPage() {
             <Form.Item label="净估算阈值" name="min_fee_adjusted_open_pct" rules={[{ required: true }]}>
               <InputNumber min={0} step={0.1} suffix="%" className="wide-input" />
             </Form.Item>
-            <Form.Item label="最低成交额" name="min_volume_24h_usdt" rules={[{ required: true }]}>
-              <InputNumber min={0} className="wide-input" />
+            <Form.Item label="最低成交额 (K)" name="min_volume_24h_k" rules={[{ required: true }]}>
+              <InputNumber min={0} step={100} suffix="K" className="wide-input" />
             </Form.Item>
             <Form.Item label="连续命中" name="consecutive_hits" rules={[{ required: true }]}>
               <InputNumber min={1} className="wide-input" />

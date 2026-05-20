@@ -1,6 +1,7 @@
 import asyncio
 from abc import ABC, abstractmethod
-from datetime import UTC, datetime
+from contextlib import suppress
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -36,6 +37,29 @@ def utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+def parse_datetime_ms(value: Any) -> datetime | None:
+    parsed = parse_float(value)
+    if parsed is None:
+        return None
+    return datetime.fromtimestamp(parsed / 1000, tz=UTC)
+
+
+def parse_datetime_seconds(value: Any) -> datetime | None:
+    parsed = parse_float(value)
+    if parsed is None:
+        return None
+    return datetime.fromtimestamp(parsed, tz=UTC)
+
+
+def next_aligned_funding_time(now: datetime, interval_hours: int) -> datetime | None:
+    if interval_hours <= 0:
+        return None
+    current = now.astimezone(UTC).replace(minute=0, second=0, microsecond=0)
+    next_hour = ((current.hour // interval_hours) + 1) * interval_hours
+    day_offset, hour = divmod(next_hour, 24)
+    return (current + timedelta(days=day_offset)).replace(hour=hour)
+
+
 class ExchangeAdapter(ABC):
     name: str
 
@@ -58,19 +82,31 @@ class ExchangeAdapter(ABC):
             follow_redirects=True,
         )
 
-    async def get_json(self, url: str) -> Any:
+    async def _request_json(self, request_factory) -> Any:
         last_error: Exception | None = None
-        for _ in range(2):
+        for attempt in range(2):
+            response = None
             try:
-                response = await self.client.get(url)
+                response = await request_factory()
                 response.raise_for_status()
                 return response.json()
-            except (httpx.TimeoutException, httpx.TransportError) as exc:
+            except (httpx.TimeoutException, httpx.TransportError, httpx.HTTPStatusError, ValueError) as exc:
                 last_error = exc
-                await asyncio.sleep(0.2)
+                if attempt == 0:
+                    await asyncio.sleep(0.2)
+            finally:
+                if response is not None:
+                    with suppress(Exception):
+                        await response.aclose()
         if last_error is not None:
             raise last_error
-        raise RuntimeError(f"Failed to request {url}")
+        raise RuntimeError("Failed to request JSON")
+
+    async def get_json(self, url: str) -> Any:
+        return await self._request_json(lambda: self.client.get(url))
+
+    async def post_json(self, url: str, body: dict[str, Any]) -> Any:
+        return await self._request_json(lambda: self.client.post(url, json=body))
 
     @abstractmethod
     async def fetch_spot_tickers(self) -> list[MarketSnapshot]:

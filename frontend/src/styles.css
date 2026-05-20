@@ -12,6 +12,10 @@ body {
   min-height: 100vh;
 }
 
+.app-shell .ant-layout {
+  min-width: 0;
+}
+
 .app-sider {
   background: #20302d;
 }
@@ -43,7 +47,9 @@ body {
 }
 
 .app-content {
+  min-width: 0;
   padding: 16px;
+  overflow: hidden;
 }
 
 .page {
@@ -55,13 +61,22 @@ body {
 .toolbar {
   width: 100%;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
   padding: 10px 12px;
   background: #ffffff;
   border: 1px solid #dce4e1;
   border-radius: 6px;
+}
+
+.toolbar-controls {
+  flex: 1;
+  min-width: 0;
+}
+
+.toolbar-actions {
+  flex: 0 0 auto;
 }
 
 .symbol-input {
@@ -96,10 +111,98 @@ body {
   border-radius: 6px;
 }
 
+.blocked-strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 12px;
+  background: #ffffff;
+  border: 1px solid #dce4e1;
+  border-radius: 6px;
+}
+
+.blocked-strip-title {
+  flex: 0 0 auto;
+  color: #66736f;
+  font-size: 13px;
+}
+
+.blocked-strip-list {
+  min-width: 0;
+}
+
 .opportunity-table {
   background: #ffffff;
   border: 1px solid #dce4e1;
   border-radius: 6px;
+  overflow: hidden;
+}
+
+.opportunity-table .ant-table-cell {
+  vertical-align: top;
+}
+
+.opportunity-table .ant-table-thead > tr > th {
+  white-space: nowrap;
+}
+
+.symbol-cell,
+.leg-cell,
+.funding-cell {
+  min-width: 0;
+}
+
+.symbol-cell .ant-tag {
+  width: fit-content;
+}
+
+.leg-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.leg-tag {
+  flex: 0 0 auto;
+  padding-inline: 4px;
+  margin-inline-end: 0;
+  font-size: 11px;
+  line-height: 18px;
+}
+
+.leg-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.funding-cell {
+  display: grid;
+  gap: 3px;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.funding-row {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+}
+
+.funding-label {
+  color: #66736f;
+  white-space: nowrap;
+}
+
+.funding-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .settings-grid {
@@ -149,6 +252,17 @@ body {
 
   .toolbar {
     align-items: stretch;
+    flex-direction: column;
+  }
+
+  .toolbar-controls,
+  .toolbar-actions,
+  .toolbar-actions .ant-btn {
+    width: 100%;
+  }
+
+  .blocked-strip {
+    align-items: flex-start;
     flex-direction: column;
   }
 

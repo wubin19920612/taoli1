@@ -33,6 +33,25 @@ async def test_alert_rule_crud_roundtrip() -> None:
 
 
 @pytest.mark.asyncio
+async def test_schema_migrates_legacy_mark_index_alert_exclusions() -> None:
+    db = await connect_database(":memory:")
+    await initialize_schema(db)
+    repo = AlertRuleRepository(db)
+
+    legacy_rule = AlertRule(
+        name="legacy rule",
+        excluded_risk_labels=["LOW_VOLUME", "MARK_INDEX_DEVIATION"],
+    )
+    await repo.create(legacy_rule)
+
+    await initialize_schema(db)
+    loaded = await repo.get(legacy_rule.id)
+
+    assert loaded is not None
+    assert loaded.excluded_risk_labels == ["LOW_VOLUME"]
+
+
+@pytest.mark.asyncio
 async def test_settings_repository_defaults() -> None:
     db = await connect_database(":memory:")
     await initialize_schema(db)

@@ -22,7 +22,18 @@ export interface Opportunity {
   sell_volume_24h_usdt: number | null;
   funding_rate_buy_pct: number | null;
   funding_rate_sell_pct: number | null;
+  funding_next_rate_buy_pct: number | null;
+  funding_next_rate_sell_pct: number | null;
+  funding_next_time_buy: string | null;
+  funding_next_time_sell: string | null;
   net_funding_pct: number | null;
+  net_funding_next_pct: number | null;
+  buy_funding_interval_hours: number | null;
+  sell_funding_interval_hours: number | null;
+  net_funding_hourly_pct: number | null;
+  net_funding_daily_pct: number | null;
+  net_funding_next_hourly_pct: number | null;
+  net_funding_next_daily_pct: number | null;
   mark_index_diff_buy_pct: number | null;
   mark_index_diff_sell_pct: number | null;
   risk_labels: string[];
@@ -45,6 +56,8 @@ export interface RiskSettings {
   mark_index_deviation_pct: number;
   funding_against_pct: number;
   ticker_collision_symbols: string[];
+  excluded_symbols: string[];
+  ignored_exchanges: string[];
 }
 
 export interface AlertRule {

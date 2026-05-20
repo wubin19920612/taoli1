@@ -2,8 +2,9 @@ from fastapi import APIRouter, Query, Request
 
 from app.models.market import MarketType
 from app.models.opportunity import Opportunity
-from app.models.settings import DEFAULT_HIDDEN_RISK_LABELS
-from app.services.risk_labels import has_non_actionable_risk
+from app.models.settings import DEFAULT_HIDDEN_RISK_LABELS, RiskSettings
+from app.services.data_filters import filter_markets, filter_opportunities
+from app.services.risk_labels import has_non_actionable_risk, known_volume_24h_usdt
 
 router = APIRouter()
 
@@ -12,6 +13,13 @@ def _parse_csv(value: str | None, default: list[str]) -> list[str]:
     if value is None:
         return default
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+async def _risk_settings(request: Request) -> RiskSettings:
+    repo = getattr(request.app.state, "settings_repo", None)
+    if repo is None:
+        return RiskSettings()
+    return await repo.get_risk_settings()
 
 
 @router.get("/opportunities", response_model=list[Opportunity])
@@ -25,7 +33,11 @@ async def list_opportunities(
     hidden_risk_labels: str | None = Query(default=None),
     min_volume_24h_k: float | None = Query(default=None, ge=0),
 ) -> list[Opportunity]:
-    opportunities = request.app.state.snapshot_store.get_opportunities()
+    settings = await _risk_settings(request)
+    opportunities = filter_opportunities(
+        request.app.state.snapshot_store.get_opportunities(),
+        settings,
+    )
     if type:
         opportunities = [item for item in opportunities if item.type == type]
     if symbol:
@@ -45,11 +57,15 @@ async def list_opportunities(
         ]
     if min_volume_24h_k is not None and min_volume_24h_k > 0:
         min_volume = min_volume_24h_k * 1000
+
+        def has_enough_known_volume(item: Opportunity) -> bool:
+            known_volume = known_volume_24h_usdt(item)
+            return known_volume is None or known_volume >= min_volume
+
         opportunities = [
             item
             for item in opportunities
-            if min(item.buy_volume_24h_usdt or 0, item.sell_volume_24h_usdt or 0)
-            >= min_volume
+            if has_enough_known_volume(item)
         ]
     if not include_risky:
         hidden_labels = set(_parse_csv(hidden_risk_labels, DEFAULT_HIDDEN_RISK_LABELS))
@@ -66,7 +82,8 @@ async def list_markets(
     exchange: str | None = Query(default=None),
     symbol: str | None = Query(default=None),
 ) -> list[dict]:
-    markets = request.app.state.snapshot_store.get_markets()
+    settings = await _risk_settings(request)
+    markets = filter_markets(request.app.state.snapshot_store.get_markets(), settings)
     if market_type:
         markets = [item for item in markets if item.market_type == market_type]
     if exchange:

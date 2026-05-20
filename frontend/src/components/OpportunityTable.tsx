@@ -1,5 +1,5 @@
-import { ArrowDownOutlined, ArrowUpOutlined } from "@ant-design/icons";
-import { Space, Table, Tag, Typography } from "antd";
+import { ArrowDownOutlined, ArrowUpOutlined, EyeInvisibleOutlined, EyeOutlined } from "@ant-design/icons";
+import { Button, Space, Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
 
@@ -9,10 +9,21 @@ import { RiskTags } from "./RiskTags";
 interface OpportunityTableProps {
   opportunities: Opportunity[];
   loading: boolean;
+  blockedSymbols?: string[];
+  actionLoadingSymbol?: string | null;
+  onToggleSymbol?: (symbol: string, block: boolean) => void;
 }
 
 function pct(value: number | null | undefined): string {
   return typeof value === "number" ? `${value.toFixed(3)}%` : "-";
+}
+
+function nextTime(value: string | null | undefined): string {
+  return value ? dayjs(value).format("HH:mm") : "-";
+}
+
+function interval(value: number | null | undefined): string {
+  return typeof value === "number" ? `${value}h` : "-";
 }
 
 function money(value: number | null | undefined): string {
@@ -31,104 +42,207 @@ function money(value: number | null | undefined): string {
   return value.toFixed(2);
 }
 
+const EXCHANGE_CODES: Record<string, string> = {
+  aster: "as",
+  binance: "bn",
+  bitget: "bg",
+  bybit: "bb",
+  gate: "gt",
+  htx: "ht",
+  hyperliquid: "hl",
+  okx: "ok"
+};
+
+function exchangeCode(exchange: string): string {
+  const normalized = exchange.trim().toLowerCase();
+  if (EXCHANGE_CODES[normalized]) {
+    return EXCHANGE_CODES[normalized];
+  }
+  const compact = normalized.replace(/[^a-z0-9]/g, "");
+  return compact ? compact.slice(0, 4) : exchange;
+}
+
 function leg(exchange: string, marketType: string, side: "buy" | "sell") {
   const icon = side === "buy" ? <ArrowDownOutlined /> : <ArrowUpOutlined />;
   const color = side === "buy" ? "green" : "red";
+  const fullName = `${exchange} ${marketType}`;
   return (
-    <Space size={6}>
-      <Tag color={color} icon={icon}>
+    <div className="leg-cell">
+      <Tag color={color} icon={icon} className="leg-tag">
         {side.toUpperCase()}
       </Tag>
-      <Typography.Text>{`${exchange} ${marketType}`}</Typography.Text>
-    </Space>
+      <Typography.Text className="leg-text" title={fullName}>
+        {exchangeCode(exchange)}
+      </Typography.Text>
+    </div>
   );
 }
 
-const columns: ColumnsType<Opportunity> = [
-  {
-    title: "标的",
-    dataIndex: "symbol",
-    fixed: "left",
-    width: 150,
-    render: (_, row) => (
-      <Space direction="vertical" size={0}>
-        <Typography.Text strong>{row.symbol}</Typography.Text>
-        <Tag>{row.type}</Tag>
-      </Space>
-    )
-  },
-  {
-    title: "买入腿",
-    width: 180,
-    render: (_, row) => leg(row.buy_exchange, row.buy_market_type, "buy")
-  },
-  {
-    title: "卖出腿",
-    width: 180,
-    render: (_, row) => leg(row.sell_exchange, row.sell_market_type, "sell")
-  },
-  {
-    title: "开仓价差",
-    dataIndex: "open_spread_pct",
-    sorter: (a, b) => a.open_spread_pct - b.open_spread_pct,
-    defaultSortOrder: "descend",
-    render: (value: number) => <Typography.Text strong>{pct(value)}</Typography.Text>
-  },
-  {
-    title: "净估算",
-    dataIndex: "fee_adjusted_open_pct",
-    sorter: (a, b) => a.fee_adjusted_open_pct - b.fee_adjusted_open_pct,
-    render: (value: number) => (
-      <Typography.Text type={value >= 0 ? "success" : "danger"}>{pct(value)}</Typography.Text>
-    )
-  },
-  {
-    title: "平仓价差",
-    dataIndex: "close_spread_pct",
-    render: (value: number) => pct(value)
-  },
-  {
-    title: "资金费率",
-    width: 170,
-    render: (_, row) => (
-      <Space direction="vertical" size={0}>
-        <span>{`${pct(row.funding_rate_buy_pct)} / ${pct(row.funding_rate_sell_pct)}`}</span>
-        <Typography.Text type={row.net_funding_pct && row.net_funding_pct < 0 ? "danger" : "secondary"}>
-          {`net ${pct(row.net_funding_pct)}`}
-        </Typography.Text>
-      </Space>
-    )
-  },
-  {
-    title: "24h成交额",
-    width: 160,
-    render: (_, row) => `${money(row.buy_volume_24h_usdt)} / ${money(row.sell_volume_24h_usdt)}`
-  },
-  {
-    title: "风险",
-    dataIndex: "risk_labels",
-    width: 250,
-    render: (labels: string[]) => <RiskTags labels={labels} />
-  },
-  {
-    title: "更新时间",
-    dataIndex: "last_seen_at",
-    width: 150,
-    render: (value: string) => dayjs(value).format("HH:mm:ss")
-  }
-];
+function fundingPair(left: number | null | undefined, right: number | null | undefined): string {
+  return `${pct(left)} / ${pct(right)}`;
+}
 
-export function OpportunityTable({ opportunities, loading }: OpportunityTableProps) {
+function normalizeSymbol(value: string): string {
+  return value.toUpperCase().replace(/[-_]/g, "");
+}
+
+function isBlocked(symbol: string, blockedSymbols: string[] | undefined): boolean {
+  const normalized = normalizeSymbol(symbol);
+  return (blockedSymbols ?? []).some((item) => normalizeSymbol(item) === normalized);
+}
+
+function FundingCell({ row }: { row: Opportunity }) {
+  const hourlyType =
+    typeof row.net_funding_hourly_pct === "number" && row.net_funding_hourly_pct < 0
+      ? "danger"
+      : "secondary";
+  return (
+    <div className="funding-cell">
+      <div className="funding-row">
+        <span className="funding-label">当前</span>
+        <Typography.Text className="funding-value">
+          {fundingPair(row.funding_rate_buy_pct, row.funding_rate_sell_pct)}
+        </Typography.Text>
+      </div>
+      <div className="funding-row">
+        <span className="funding-label">预测</span>
+        <Typography.Text className="funding-value">
+          {fundingPair(row.funding_next_rate_buy_pct, row.funding_next_rate_sell_pct)}
+        </Typography.Text>
+      </div>
+      <div className="funding-row">
+        <span className="funding-label">小时 / 日</span>
+        <Typography.Text className="funding-value" type={hourlyType}>
+          {fundingPair(row.net_funding_hourly_pct, row.net_funding_daily_pct)}
+        </Typography.Text>
+      </div>
+      <div className="funding-row">
+        <span className="funding-label">结算</span>
+        <Typography.Text className="funding-value" type="secondary">
+          {`${nextTime(row.funding_next_time_buy)} / ${nextTime(row.funding_next_time_sell)} · ${interval(row.buy_funding_interval_hours)} / ${interval(row.sell_funding_interval_hours)}`}
+        </Typography.Text>
+      </div>
+    </div>
+  );
+}
+
+function buildColumns(
+  blockedSymbols: string[] | undefined,
+  actionLoadingSymbol: string | null | undefined,
+  onToggleSymbol: ((symbol: string, block: boolean) => void) | undefined
+): ColumnsType<Opportunity> {
+  return [
+    {
+      title: "",
+      fixed: "left",
+      width: 44,
+      render: (_, row) => {
+        const blocked = isBlocked(row.symbol, blockedSymbols);
+        const normalized = normalizeSymbol(row.symbol);
+        return onToggleSymbol ? (
+          <Button
+            type="text"
+            size="small"
+            icon={blocked ? <EyeOutlined /> : <EyeInvisibleOutlined />}
+            aria-label={`${blocked ? "取消屏蔽" : "屏蔽"} ${row.symbol}`}
+            loading={actionLoadingSymbol === normalized}
+            onClick={() => onToggleSymbol(row.symbol, !blocked)}
+          />
+        ) : null;
+      }
+    },
+    {
+      title: "标的",
+      dataIndex: "symbol",
+      fixed: "left",
+      width: 118,
+      render: (_, row) => (
+        <Space direction="vertical" size={2} className="symbol-cell">
+          <Typography.Text strong>{row.symbol}</Typography.Text>
+          <Tag>{row.type}</Tag>
+        </Space>
+      )
+    },
+    {
+      title: "买入腿",
+      width: 88,
+      render: (_, row) => leg(row.buy_exchange, row.buy_market_type, "buy")
+    },
+    {
+      title: "卖出腿",
+      width: 88,
+      render: (_, row) => leg(row.sell_exchange, row.sell_market_type, "sell")
+    },
+    {
+      title: "开仓价差",
+      dataIndex: "open_spread_pct",
+      width: 108,
+      align: "right",
+      sorter: (a, b) => a.open_spread_pct - b.open_spread_pct,
+      defaultSortOrder: "descend",
+      render: (value: number) => <Typography.Text strong>{pct(value)}</Typography.Text>
+    },
+    {
+      title: "净估算",
+      dataIndex: "fee_adjusted_open_pct",
+      width: 104,
+      align: "right",
+      sorter: (a, b) => a.fee_adjusted_open_pct - b.fee_adjusted_open_pct,
+      render: (value: number) => (
+        <Typography.Text type={value >= 0 ? "success" : "danger"}>{pct(value)}</Typography.Text>
+      )
+    },
+    {
+      title: "平仓价差",
+      dataIndex: "close_spread_pct",
+      width: 104,
+      align: "right",
+      render: (value: number) => pct(value)
+    },
+    {
+      title: "资金费率",
+      width: 276,
+      render: (_, row) => <FundingCell row={row} />
+    },
+    {
+      title: "24h成交额",
+      width: 134,
+      align: "right",
+      render: (_, row) => `${money(row.buy_volume_24h_usdt)} / ${money(row.sell_volume_24h_usdt)}`
+    },
+    {
+      title: "风险",
+      dataIndex: "risk_labels",
+      width: 224,
+      render: (labels: string[]) => <RiskTags labels={labels} />
+    },
+    {
+      title: "更新时间",
+      dataIndex: "last_seen_at",
+      width: 104,
+      render: (value: string) => dayjs(value).format("HH:mm:ss")
+    }
+  ];
+}
+
+export function OpportunityTable({
+  opportunities,
+  loading,
+  blockedSymbols,
+  actionLoadingSymbol,
+  onToggleSymbol
+}: OpportunityTableProps) {
   return (
     <Table
       className="opportunity-table"
-      columns={columns}
+      columns={buildColumns(blockedSymbols, actionLoadingSymbol, onToggleSymbol)}
       dataSource={opportunities}
       loading={loading}
       rowKey="id"
       pagination={{ pageSize: 50, showSizeChanger: true }}
-      scroll={{ x: 1320 }}
-      size="middle"
+      scroll={{ x: 1392 }}
+      size="small"
+      tableLayout="fixed"
     />
   );
 }

@@ -11,12 +11,12 @@ interface TopFiltersProps {
   onRefresh: () => void;
 }
 
-const exchanges = ["binance", "okx", "bybit", "gate", "bitget", "htx", "aster"];
+const exchanges = ["binance", "okx", "bybit", "gate", "bitget", "htx", "aster", "hyperliquid"];
 export function TopFilters({ filters, loading, onChange, onRefresh }: TopFiltersProps) {
   const patch = (next: Partial<OpportunityFilters>) => onChange({ ...filters, ...next });
   return (
     <div className="toolbar">
-      <Space size={10} wrap>
+      <Space size={10} wrap className="toolbar-controls">
         <Segmented
           options={[
             { label: "全部", value: "" },
@@ -83,9 +83,11 @@ export function TopFilters({ filters, loading, onChange, onRefresh }: TopFilters
           <span>显示排查项</span>
         </Space>
       </Space>
-      <Tooltip title="刷新">
-        <Button icon={<ReloadOutlined />} loading={loading} onClick={onRefresh} />
-      </Tooltip>
+      <div className="toolbar-actions">
+        <Tooltip title="刷新">
+          <Button icon={<ReloadOutlined />} loading={loading} onClick={onRefresh} />
+        </Tooltip>
+      </div>
     </div>
   );
 }

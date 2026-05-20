@@ -52,6 +52,5 @@ export const defaultHiddenRiskLabels = [
   "HUGE_SPREAD_VERIFY",
   "WIDE_SPREAD",
   "SAME_TICKER_RISK",
-  "MARK_INDEX_DEVIATION",
   "MISSING_FUNDING"
 ];

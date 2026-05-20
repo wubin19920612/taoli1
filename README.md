@@ -1,13 +1,15 @@
 # CEX Arbitrage Radar
 
-自托管的 CEX 价差监控面板，用公开 API 拉取 Binance、OKX、Bybit、Gate、Bitget、HTX、Aster 的 USDT 现货/永续行情，计算 `SF`、`FF`、`SS` 机会并按规则发送飞书告警。
+自托管的 CEX 价差监控面板，用公开 API 拉取 Binance、OKX、Bybit、Gate、Bitget、HTX、Aster、Hyperliquid 的 USDT 现货/永续行情，计算 `SF`、`FF`、`SS` 机会并按规则发送飞书告警。
 
 ## 功能
 
 - 现货/永续盘口快照采集，不需要交易所私钥。
+- Hyperliquid 使用公开 `info` 接口接入；其现货/永续价格按 midpoint 映射为 bid/ask，USDC 现货对在面板内归一到 USDT 符号，并通过 `perpDexs` 纳入股票、指数、商品等 builder-deployed 永续标的。
 - `SF`、`FF`、`SS` 开仓价差、平仓价差、费用后净估算、资金费率展示。
 - 风险标签：低成交额、数据过期、异常大价差、价差宽、同名币风险、资金费率逆风、标记/指数偏离、缺失资金费率。
-- 默认隐藏不可行动机会：低成交额、数据过期、异常大价差、价差宽、同名币风险、标记/指数偏离、缺失资金费率；实时面板可自行选择隐藏哪些风险标签，并用 K 为单位设置双边最低 24h 成交额。
+- 默认隐藏不可行动机会：低成交额、数据过期、异常大价差、价差宽、同名币风险、缺失资金费率；标记/指数偏离默认显示，实时面板可自行选择隐藏哪些风险标签，并用 K 为单位设置双边最低 24h 成交额。
+- 小硬盘友好的轻量历史：默认每 120 秒只记录价差达到 0.5%、成交额达到 100K 的 Top 100 机会，保留 3 天并定期清理 SQLite 空间。
 - Web 面板：实时机会、筛选、风险参数、告警规则、告警历史。
 - 飞书自定义机器人告警，支持 webhook secret 签名。
 - Docker Compose 一键部署。
@@ -63,11 +65,11 @@ docker compose up -d --build
 
 ## 风险标签和可调参数
 
-这些标签都可以在实时面板的“隐藏风险”里选择隐藏/显示；阈值在“参数与告警 -> 风险参数”里修改并保存。成交额输入用 `K`，例如 `1000K = 1,000,000 USDT`。
+这些标签都可以在实时面板的“隐藏风险”里选择隐藏/显示；阈值在“参数与告警 -> 风险参数”里修改并保存。成交额输入用 `K`，例如 `1000K = 1,000,000 USDT`。同一页还可以设置黑名单标的和忽略交易所，保存后会同步影响实时列表、健康统计和告警。
 
 | 标签 | 中文含义 | 触发逻辑 | 可调位置 |
 | --- | --- | --- | --- |
-| `LOW_VOLUME` | 低成交额 | 买入侧和卖出侧取较小的 24h 成交额，低于低成交额阈值 | 低成交额阈值，单位 K |
+| `LOW_VOLUME` | 低成交额 | 只对已知的 24h 成交额判断；任一已知侧低于低成交额阈值都会触发，两侧都缺失成交额时不触发 | 低成交额阈值，单位 K |
 | `STALE_DATA` | 数据过期 | 当前时间减去行情最后更新时间，超过数据过期秒数 | 数据过期秒数 |
 | `HUGE_SPREAD_VERIFY` | 异常大价差 | 开仓价差高于异常大价差阈值，需要人工复核盘口、同名币、停充提等问题 | 异常大价差阈值 |
 | `WIDE_SPREAD` | 开平价差宽 | `abs(平仓价差 - 开仓价差)` 高于开平价差宽度阈值，说明进出场估算差异大 | 开平价差宽度 |
@@ -76,13 +78,33 @@ docker compose up -d --build
 | `MARK_INDEX_DEVIATION` | 标记/指数偏离 | 合约标记价与指数价的偏离绝对值高于阈值 | 标记/指数偏离阈值 |
 | `MISSING_FUNDING` | 缺资金费率 | 至少一侧永续合约没有资金费率数据 | 暂无阈值，可在隐藏风险中显示/隐藏 |
 
-保存风险参数后，后端采集器会在下一轮行情采集时重新加载阈值并重新打标签；实时面板筛选里的“成交额 K”和“隐藏风险”会立即作用于当前列表请求。
+保存风险参数后，后端采集器会在下一轮行情采集时重新加载阈值并重新打标签；实时面板筛选里的“成交额 K”和“隐藏风险”会立即作用于当前列表请求。打开实时面板时，“成交额 K”默认跟随已保存的低成交额阈值；新增告警规则里的“最低成交额 (K)”也默认跟随该阈值，前端用 K 展示，接口和数据库仍按 USDT 保存。
+黑名单标的会被从机会列表、健康统计、告警和采集结果中排除；忽略交易所会跳过对应交易所的采集请求，并从健康统计和告警评估中剔除。
+
+## 轻量历史
+
+为避免 Linux 小硬盘被历史数据打满，历史记录默认是 compact 模式，不保存全量行情 JSON，只保存回溯判断需要的摘要字段：标的、买卖交易所、开平价差、扣费后价差、资金费率差、双边成交额和风险标签位图。价差和资金费率按整数缩放入库，风险标签用 bitmask，减少每行体积。
+
+默认参数：
+
+```env
+HISTORY_ENABLED=true
+HISTORY_SAMPLE_SECONDS=120
+HISTORY_RETENTION_DAYS=3
+HISTORY_KEEP_TOP_N=100
+HISTORY_MIN_OPEN_SPREAD_PCT=0.5
+HISTORY_MIN_VOLUME_24H_K=100
+HISTORY_VACUUM_INTERVAL_SECONDS=86400
+```
+
+这表示每 120 秒最多记录 100 条候选机会，只保留最近 3 天。保留期外数据会删除，并按 `HISTORY_VACUUM_INTERVAL_SECONDS` 定期执行 SQLite `VACUUM` 回收文件空间，避免数据库文件长期只增不减。
 
 ## API
 
 - `GET /api/health`
 - `GET /api/opportunities?type=FF&symbol=BTC&exchange=okx&min_open_spread_pct=0.5&include_risky=false&hidden_risk_labels=LOW_VOLUME,HUGE_SPREAD_VERIFY&min_volume_24h_k=1000`
 - `GET /api/markets`
+- `GET /api/history/opportunities?symbol=BTCUSDT&hours=24&limit=1000`
 - `GET /api/settings/risk`
 - `PUT /api/settings/risk`
 - `GET /api/alerts/rules`

@@ -1,13 +1,15 @@
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from app.models.market import MarketType
 from app.models.opportunity import Opportunity, OpportunityType
-from app.models.settings import RiskSettings
+from app.models.alert import DEFAULT_EXCLUDED_RISK_LABELS
+from app.models.settings import DEFAULT_HIDDEN_RISK_LABELS, RiskSettings
 from app.services.risk_labels import apply_risk_labels, has_non_actionable_risk
 
 
 def opportunity(**overrides) -> Opportunity:
-    base = dict(
+    base: dict[str, Any] = dict(
         id="abc",
         type=OpportunityType.FF,
         symbol="AIUSDT",
@@ -28,13 +30,15 @@ def opportunity(**overrides) -> Opportunity:
         funding_rate_buy_pct=0.05,
         funding_rate_sell_pct=-0.02,
         net_funding_pct=-0.07,
+        buy_funding_interval_hours=8,
+        sell_funding_interval_hours=1,
         mark_index_diff_buy_pct=0.1,
         mark_index_diff_sell_pct=1.1,
         risk_labels=[],
         last_seen_at=datetime.now(UTC) - timedelta(seconds=90),
     )
     base.update(overrides)
-    return Opportunity(**base)
+    return Opportunity.model_validate(base)
 
 
 def test_applies_expected_risk_labels() -> None:
@@ -71,6 +75,8 @@ def test_clean_opportunity_has_no_labels() -> None:
             funding_rate_buy_pct=0.0,
             funding_rate_sell_pct=0.02,
             net_funding_pct=0.02,
+            buy_funding_interval_hours=8,
+            sell_funding_interval_hours=8,
             mark_index_diff_buy_pct=0.01,
             mark_index_diff_sell_pct=0.02,
             last_seen_at=datetime.now(UTC),
@@ -80,6 +86,58 @@ def test_clean_opportunity_has_no_labels() -> None:
     )
 
     assert labeled.risk_labels == []
+
+
+def test_missing_volume_alone_does_not_trigger_low_volume() -> None:
+    settings = RiskSettings(min_volume_24h_usdt=100_000, ticker_collision_symbols=[])
+    labeled = apply_risk_labels(
+        opportunity(
+            buy_volume_24h_usdt=None,
+            sell_volume_24h_usdt=None,
+            symbol="BTCUSDT",
+            open_spread_pct=0.4,
+            close_spread_pct=0.5,
+            spread_width_pct=0.1,
+            funding_rate_buy_pct=0.0,
+            funding_rate_sell_pct=0.02,
+            net_funding_pct=0.02,
+            buy_funding_interval_hours=8,
+            sell_funding_interval_hours=8,
+            mark_index_diff_buy_pct=0.01,
+            mark_index_diff_sell_pct=0.02,
+            last_seen_at=datetime.now(UTC),
+        ),
+        settings=settings,
+        now=datetime.now(UTC),
+    )
+
+    assert "LOW_VOLUME" not in labeled.risk_labels
+
+
+def test_known_zero_volume_triggers_low_volume_even_when_other_side_is_missing() -> None:
+    settings = RiskSettings(min_volume_24h_usdt=100_000, ticker_collision_symbols=[])
+    labeled = apply_risk_labels(
+        opportunity(
+            buy_volume_24h_usdt=0.0,
+            sell_volume_24h_usdt=None,
+            symbol="METAUSDT",
+            open_spread_pct=0.4,
+            close_spread_pct=0.5,
+            spread_width_pct=0.1,
+            funding_rate_buy_pct=0.0,
+            funding_rate_sell_pct=0.02,
+            net_funding_pct=0.02,
+            buy_funding_interval_hours=8,
+            sell_funding_interval_hours=8,
+            mark_index_diff_buy_pct=0.01,
+            mark_index_diff_sell_pct=0.02,
+            last_seen_at=datetime.now(UTC),
+        ),
+        settings=settings,
+        now=datetime.now(UTC),
+    )
+
+    assert "LOW_VOLUME" in labeled.risk_labels
 
 
 def test_non_actionable_filter_blocks_obvious_bad_opportunities() -> None:
@@ -95,3 +153,27 @@ def test_non_actionable_filter_blocks_obvious_bad_opportunities() -> None:
     assert not has_non_actionable_risk(
         opportunity(risk_labels=["FUNDING_AGAINST"])
     )
+
+
+def test_funding_against_uses_hourly_normalization() -> None:
+    settings = RiskSettings(funding_against_pct=0.01, ticker_collision_symbols=[])
+    labeled = apply_risk_labels(
+        opportunity(
+            symbol="BTCUSDT",
+            funding_rate_buy_pct=0.08,
+            funding_rate_sell_pct=-0.02,
+            buy_funding_interval_hours=8,
+            sell_funding_interval_hours=1,
+            net_funding_pct=-0.1,
+            last_seen_at=datetime.now(UTC),
+        ),
+        settings=settings,
+        now=datetime.now(UTC),
+    )
+
+    assert "FUNDING_AGAINST" in labeled.risk_labels
+
+
+def test_mark_index_deviation_is_visible_by_default() -> None:
+    assert "MARK_INDEX_DEVIATION" not in DEFAULT_HIDDEN_RISK_LABELS
+    assert "MARK_INDEX_DEVIATION" not in DEFAULT_EXCLUDED_RISK_LABELS

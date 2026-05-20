@@ -24,7 +24,18 @@ const row: Opportunity = {
   sell_volume_24h_usdt: 12000000,
   funding_rate_buy_pct: 0.01,
   funding_rate_sell_pct: -0.02,
+  funding_next_rate_buy_pct: 0.015,
+  funding_next_rate_sell_pct: 0.025,
+  funding_next_time_buy: "2026-05-15T08:00:00Z",
+  funding_next_time_sell: "2026-05-15T08:00:00Z",
   net_funding_pct: -0.03,
+  net_funding_next_pct: 0.01,
+  buy_funding_interval_hours: 8,
+  sell_funding_interval_hours: 8,
+  net_funding_hourly_pct: -0.00375,
+  net_funding_daily_pct: -0.09,
+  net_funding_next_hourly_pct: 0.00125,
+  net_funding_next_daily_pct: 0.03,
   mark_index_diff_buy_pct: 0.01,
   mark_index_diff_sell_pct: 0.02,
   risk_labels: ["FUNDING_AGAINST"],
@@ -32,13 +43,21 @@ const row: Opportunity = {
 };
 
 describe("OpportunityTable", () => {
-  it("renders spread legs, net estimate and risk labels", () => {
+  it("renders spread legs, funding previews and risk labels", () => {
     render(<OpportunityTable opportunities={[row]} loading={false} />);
 
     expect(screen.getByText("BTCUSDT")).toBeTruthy();
-    expect(screen.getByText("binance future")).toBeTruthy();
-    expect(screen.getByText("okx future")).toBeTruthy();
+    expect(screen.getByText("bn")).toBeTruthy();
+    expect(screen.getByText("ok")).toBeTruthy();
+    expect(screen.getByTitle("binance future")).toBeTruthy();
+    expect(screen.getByTitle("okx future")).toBeTruthy();
+    expect(screen.queryByText("binance future")).toBeNull();
+    expect(screen.queryByText("okx future")).toBeNull();
     expect(screen.getByText("0.620%")).toBeTruthy();
-    expect(screen.getByText("资金费率逆风 (FUNDING_AGAINST)")).toBeTruthy();
+    expect(screen.getByText("当前")).toBeTruthy();
+    expect(screen.getByText("预测")).toBeTruthy();
+    expect(screen.getByText("小时 / 日")).toBeTruthy();
+    expect(screen.getByText("0.015% / 0.025%")).toBeTruthy();
+    expect(screen.getByText("-0.004% / -0.090%")).toBeTruthy();
   });
 });

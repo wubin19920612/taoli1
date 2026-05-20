@@ -1,4 +1,11 @@
-from app.exchanges.base import ExchangeAdapter, normalize_usdt_symbol, parse_float, utc_now
+from app.exchanges.base import (
+    ExchangeAdapter,
+    next_aligned_funding_time,
+    normalize_usdt_symbol,
+    parse_datetime_ms,
+    parse_float,
+    utc_now,
+)
 from app.models.market import MarketSnapshot, MarketType
 
 
@@ -14,15 +21,22 @@ class BinanceAdapter(ExchangeAdapter):
         premium = await self.get_json("https://fapi.binance.com/fapi/v1/premiumIndex")
         premium_by_symbol = {item["symbol"]: item for item in premium if item.get("symbol")}
         snapshots = self._parse_book_tickers(book, MarketType.FUTURE)
+        now = utc_now()
         enriched = []
         for snapshot in snapshots:
             item = premium_by_symbol.get(snapshot.raw_symbol, {})
             funding = parse_float(item.get("lastFundingRate"))
+            next_time = parse_datetime_ms(item.get("nextFundingTime")) or next_aligned_funding_time(
+                now,
+                8,
+            )
             enriched.append(
                 snapshot.model_copy(
                     update={
                         "funding_rate_pct": funding * 100 if funding is not None else None,
+                        "funding_next_rate_pct": None,
                         "funding_interval_hours": 8,
+                        "funding_next_time": next_time,
                         "mark_price": parse_float(item.get("markPrice")),
                         "index_price": parse_float(item.get("indexPrice")),
                     }

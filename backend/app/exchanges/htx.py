@@ -6,7 +6,7 @@ class HTXAdapter(ExchangeAdapter):
     name = "htx"
 
     async def fetch_spot_tickers(self) -> list[MarketSnapshot]:
-        payload = (await self.client.get("https://api.huobi.pro/market/tickers")).json()
+        payload = await self.get_json("https://api.huobi.pro/market/tickers")
         rows: list[MarketSnapshot] = []
         now = utc_now()
         for item in payload.get("data", []):
@@ -36,7 +36,7 @@ class HTXAdapter(ExchangeAdapter):
 
     async def fetch_future_tickers(self) -> list[MarketSnapshot]:
         url = "https://api.hbdm.com/linear-swap-ex/market/detail/batch_merged"
-        payload = (await self.client.get(url)).json()
+        payload = await self.get_json(url)
         rows: list[MarketSnapshot] = []
         now = utc_now()
         for item in payload.get("ticks", []):

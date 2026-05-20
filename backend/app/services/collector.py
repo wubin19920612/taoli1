@@ -9,11 +9,17 @@ from app.exchanges.binance import BinanceAdapter
 from app.exchanges.bitget import BitgetAdapter
 from app.exchanges.bybit import BybitAdapter
 from app.exchanges.gate import GateAdapter
+from app.exchanges.hyperliquid import HyperliquidAdapter
 from app.exchanges.htx import HTXAdapter
 from app.exchanges.okx import OKXAdapter
 from app.models.market import MarketSnapshot
 from app.models.opportunity import Opportunity
 from app.models.settings import FeeSettings, RiskSettings
+from app.services.data_filters import (
+    filter_markets,
+    filter_opportunities,
+    ignored_exchange_set,
+)
 from app.services.risk_labels import apply_risk_labels
 from app.services.snapshot_store import SnapshotStore
 from app.services.spread_engine import build_opportunities
@@ -37,6 +43,7 @@ def default_exchange_adapters() -> list[ExchangeAdapter]:
         BitgetAdapter(),
         HTXAdapter(),
         AsterAdapter(),
+        HyperliquidAdapter(),
     ]
 
 
@@ -48,12 +55,14 @@ class MarketCollector:
         risk_settings: RiskSettings | None = None,
         fee_settings: FeeSettings | None = None,
         risk_settings_loader=None,
+        history_recorder=None,
     ) -> None:
         self.adapters = adapters
         self.store = store
         self.risk_settings = risk_settings or RiskSettings()
         self.fee_settings = fee_settings or FeeSettings()
         self.risk_settings_loader = risk_settings_loader
+        self.history_recorder = history_recorder
 
     async def _reset_exchange_clients(self) -> None:
         for adapter in self.adapters:
@@ -62,13 +71,26 @@ class MarketCollector:
                 await reset()
 
     async def collect_once(self) -> CollectionResult:
+        if self.risk_settings_loader is not None:
+            self.risk_settings = await self.risk_settings_loader()
+
+        ignored_exchanges = ignored_exchange_set(self.risk_settings)
+        active_adapters = [
+            adapter for adapter in self.adapters if adapter.name.lower() not in ignored_exchanges
+        ]
+        if not active_adapters:
+            self.store.set_markets([])
+            self.store.set_opportunities([])
+            self.store.set_exchange_errors({})
+            return CollectionResult(markets=[], opportunities=[], exchange_errors={})
+
         markets: list[MarketSnapshot] = []
         errors: dict[str, str] = {}
         results = await asyncio.gather(
-            *(self._fetch_adapter(adapter) for adapter in self.adapters),
+            *(self._fetch_adapter(adapter) for adapter in active_adapters),
             return_exceptions=True,
         )
-        for adapter, result in zip(self.adapters, results, strict=True):
+        for adapter, result in zip(active_adapters, results, strict=True):
             if isinstance(result, Exception):
                 errors[adapter.name] = str(result)
                 logger.warning("exchange adapter failed: %s", adapter.name, exc_info=result)
@@ -77,23 +99,15 @@ class MarketCollector:
             markets.extend(adapter_markets)
             errors.update(adapter_errors)
 
-        if not markets and self.store.get_markets():
-            self.store.set_exchange_errors(errors)
-            return CollectionResult(
-                markets=self.store.get_markets(),
-                opportunities=self.store.get_opportunities(),
-                exchange_errors=errors,
-            )
-
         if not markets and errors:
             await self._reset_exchange_clients()
             retry_results = await asyncio.gather(
-                *(self._fetch_adapter(adapter) for adapter in self.adapters),
+                *(self._fetch_adapter(adapter) for adapter in active_adapters),
                 return_exceptions=True,
             )
             errors = {}
             markets = []
-            for adapter, result in zip(self.adapters, retry_results, strict=True):
+            for adapter, result in zip(active_adapters, retry_results, strict=True):
                 if isinstance(result, Exception):
                     errors[adapter.name] = str(result)
                     logger.warning("exchange adapter retry failed: %s", adapter.name, exc_info=result)
@@ -102,14 +116,34 @@ class MarketCollector:
                 markets.extend(adapter_markets)
                 errors.update(adapter_errors)
 
-        if self.risk_settings_loader is not None:
-            self.risk_settings = await self.risk_settings_loader()
+        filtered_markets = filter_markets(markets, self.risk_settings)
+        if not markets and self.store.get_markets():
+            filtered_stored_markets = filter_markets(self.store.get_markets(), self.risk_settings)
+            filtered_stored_opportunities = filter_opportunities(
+                self.store.get_opportunities(),
+                self.risk_settings,
+            )
+            self.store.set_markets(filtered_stored_markets)
+            self.store.set_opportunities(filtered_stored_opportunities)
+            self.store.set_exchange_errors(errors)
+            return CollectionResult(
+                markets=filtered_stored_markets,
+                opportunities=filtered_stored_opportunities,
+                exchange_errors=errors,
+            )
 
-        opportunities = self._build_labeled_opportunities(markets)
-        self.store.set_markets(markets)
-        self.store.set_opportunities(opportunities)
+        opportunities = self._build_labeled_opportunities(filtered_markets)
+        filtered_opportunities = filter_opportunities(opportunities, self.risk_settings)
+        self.store.set_markets(filtered_markets)
+        self.store.set_opportunities(filtered_opportunities)
         self.store.set_exchange_errors(errors)
-        return CollectionResult(markets=markets, opportunities=opportunities, exchange_errors=errors)
+        if self.history_recorder is not None:
+            await self.history_recorder.record(filtered_opportunities)
+        return CollectionResult(
+            markets=filtered_markets,
+            opportunities=filtered_opportunities,
+            exchange_errors=errors,
+        )
 
     async def _fetch_adapter(
         self,

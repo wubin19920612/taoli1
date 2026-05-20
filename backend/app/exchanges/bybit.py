@@ -1,4 +1,10 @@
-from app.exchanges.base import ExchangeAdapter, normalize_usdt_symbol, parse_float, utc_now
+from app.exchanges.base import (
+    ExchangeAdapter,
+    normalize_usdt_symbol,
+    parse_datetime_ms,
+    parse_float,
+    utc_now,
+)
 from app.models.market import MarketSnapshot, MarketType
 
 
@@ -6,11 +12,11 @@ class BybitAdapter(ExchangeAdapter):
     name = "bybit"
 
     async def fetch_spot_tickers(self) -> list[MarketSnapshot]:
-        payload = (await self.client.get("https://api.bybit.com/v5/market/tickers?category=spot")).json()
+        payload = await self.get_json("https://api.bybit.com/v5/market/tickers?category=spot")
         return self._parse(payload.get("result", {}).get("list", []), MarketType.SPOT)
 
     async def fetch_future_tickers(self) -> list[MarketSnapshot]:
-        payload = (await self.client.get("https://api.bybit.com/v5/market/tickers?category=linear")).json()
+        payload = await self.get_json("https://api.bybit.com/v5/market/tickers?category=linear")
         return self._parse(payload.get("result", {}).get("list", []), MarketType.FUTURE)
 
     def _parse(self, data: list[dict], market_type: MarketType) -> list[MarketSnapshot]:
@@ -26,6 +32,7 @@ class BybitAdapter(ExchangeAdapter):
                 continue
             symbol, base, quote = normalize_usdt_symbol(raw)
             funding = parse_float(item.get("fundingRate"))
+            interval = parse_float(item.get("fundingIntervalHour"))
             turnover = parse_float(item.get("turnover24h"))
             rows.append(
                 MarketSnapshot(
@@ -40,7 +47,8 @@ class BybitAdapter(ExchangeAdapter):
                     ask_size=parse_float(item.get("ask1Size")),
                     volume_24h_usdt=turnover,
                     funding_rate_pct=funding * 100 if funding is not None else None,
-                    funding_interval_hours=8 if market_type == MarketType.FUTURE else None,
+                    funding_interval_hours=int(interval) if interval is not None and market_type == MarketType.FUTURE else None,
+                    funding_next_time=parse_datetime_ms(item.get("nextFundingTime")),
                     mark_price=parse_float(item.get("markPrice")),
                     index_price=parse_float(item.get("indexPrice")),
                     timestamp=now,

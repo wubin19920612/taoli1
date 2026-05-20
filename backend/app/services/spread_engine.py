@@ -8,6 +8,22 @@ from app.models.opportunity import Opportunity, OpportunityType
 Mode = Literal["SF", "FF", "SS"]
 
 
+def _normalized_hourly_rate(snapshot: MarketSnapshot) -> float | None:
+    if snapshot.funding_rate_pct is None or snapshot.funding_interval_hours is None:
+        return None
+    if snapshot.funding_interval_hours <= 0:
+        return None
+    return snapshot.funding_rate_pct / snapshot.funding_interval_hours
+
+
+def _normalized_next_rate(snapshot: MarketSnapshot) -> float | None:
+    if snapshot.funding_next_rate_pct is None or snapshot.funding_interval_hours is None:
+        return None
+    if snapshot.funding_interval_hours <= 0:
+        return None
+    return snapshot.funding_next_rate_pct / snapshot.funding_interval_hours
+
+
 def midpoint_spread_pct(buy_leg: MarketSnapshot, sell_leg: MarketSnapshot) -> tuple[float, float]:
     open_spread = 2 * (sell_leg.bid - buy_leg.ask) / (buy_leg.ask + sell_leg.bid) * 100
     close_spread = 2 * (sell_leg.ask - buy_leg.bid) / (buy_leg.bid + sell_leg.ask) * 100
@@ -94,6 +110,28 @@ def build_opportunities(
                 net_funding = None
                 if buy_leg.funding_rate_pct is not None and sell_leg.funding_rate_pct is not None:
                     net_funding = sell_leg.funding_rate_pct - buy_leg.funding_rate_pct
+                net_funding_next = None
+                if (
+                    buy_leg.funding_next_rate_pct is not None
+                    and sell_leg.funding_next_rate_pct is not None
+                ):
+                    net_funding_next = sell_leg.funding_next_rate_pct - buy_leg.funding_next_rate_pct
+                buy_hourly = _normalized_hourly_rate(buy_leg)
+                sell_hourly = _normalized_hourly_rate(sell_leg)
+                net_funding_hourly = None
+                if buy_hourly is not None and sell_hourly is not None:
+                    net_funding_hourly = sell_hourly - buy_hourly
+                buy_next_hourly = _normalized_next_rate(buy_leg)
+                sell_next_hourly = _normalized_next_rate(sell_leg)
+                net_funding_next_hourly = None
+                if buy_next_hourly is not None and sell_next_hourly is not None:
+                    net_funding_next_hourly = sell_next_hourly - buy_next_hourly
+                net_funding_daily = None
+                if net_funding_hourly is not None:
+                    net_funding_daily = net_funding_hourly * 24
+                net_funding_next_daily = None
+                if net_funding_next_hourly is not None:
+                    net_funding_next_daily = net_funding_next_hourly * 24
 
                 opportunities.append(
                     Opportunity(
@@ -116,7 +154,18 @@ def build_opportunities(
                         sell_volume_24h_usdt=sell_leg.volume_24h_usdt,
                         funding_rate_buy_pct=buy_leg.funding_rate_pct,
                         funding_rate_sell_pct=sell_leg.funding_rate_pct,
+                        funding_next_rate_buy_pct=buy_leg.funding_next_rate_pct,
+                        funding_next_rate_sell_pct=sell_leg.funding_next_rate_pct,
+                        funding_next_time_buy=buy_leg.funding_next_time,
+                        funding_next_time_sell=sell_leg.funding_next_time,
                         net_funding_pct=net_funding,
+                        net_funding_next_pct=net_funding_next,
+                        buy_funding_interval_hours=buy_leg.funding_interval_hours,
+                        sell_funding_interval_hours=sell_leg.funding_interval_hours,
+                        net_funding_hourly_pct=net_funding_hourly,
+                        net_funding_daily_pct=net_funding_daily,
+                        net_funding_next_hourly_pct=net_funding_next_hourly,
+                        net_funding_next_daily_pct=net_funding_next_daily,
                         mark_index_diff_buy_pct=mark_index_diff_pct(buy_leg),
                         mark_index_diff_sell_pct=mark_index_diff_pct(sell_leg),
                         risk_labels=[],

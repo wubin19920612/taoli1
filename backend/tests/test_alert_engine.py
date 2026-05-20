@@ -88,3 +88,43 @@ def test_excluded_risk_label_blocks_alert() -> None:
     opp = opp.model_copy(update={"risk_labels": ["HUGE_SPREAD_VERIFY"]})
 
     assert engine.evaluate([opp], [rule], now=datetime.now(UTC)) == []
+
+
+def test_all_missing_volume_does_not_block_alert_when_rule_requires_volume() -> None:
+    engine = AlertEngine()
+    rule = AlertRule(
+        name="volume aware",
+        types=["FF"],
+        min_open_spread_pct=0.5,
+        min_fee_adjusted_open_pct=0.3,
+        min_volume_24h_usdt=1_000_000,
+        consecutive_hits=1,
+    )
+    opp = opportunity().model_copy(
+        update={
+            "buy_volume_24h_usdt": None,
+            "sell_volume_24h_usdt": None,
+        }
+    )
+
+    assert len(engine.evaluate([opp], [rule], now=datetime.now(UTC))) == 1
+
+
+def test_known_low_volume_blocks_alert_when_other_side_is_missing() -> None:
+    engine = AlertEngine()
+    rule = AlertRule(
+        name="volume aware",
+        types=["FF"],
+        min_open_spread_pct=0.5,
+        min_fee_adjusted_open_pct=0.3,
+        min_volume_24h_usdt=1_000_000,
+        consecutive_hits=1,
+    )
+    opp = opportunity().model_copy(
+        update={
+            "buy_volume_24h_usdt": 0.0,
+            "sell_volume_24h_usdt": None,
+        }
+    )
+
+    assert engine.evaluate([opp], [rule], now=datetime.now(UTC)) == []

@@ -11,10 +11,35 @@ NON_ACTIONABLE_RISK_LABELS = frozenset(
         "HUGE_SPREAD_VERIFY",
         "WIDE_SPREAD",
         "SAME_TICKER_RISK",
-        "MARK_INDEX_DEVIATION",
         "MISSING_FUNDING",
     }
 )
+
+
+def known_volume_24h_usdt(opportunity: Opportunity) -> float | None:
+    known_volumes = [
+        volume
+        for volume in [opportunity.buy_volume_24h_usdt, opportunity.sell_volume_24h_usdt]
+        if volume is not None
+    ]
+    if not known_volumes:
+        return None
+    return min(known_volumes)
+
+
+def normalized_funding_hourly_pct(opportunity: Opportunity) -> float | None:
+    buy = opportunity.buy_funding_interval_hours
+    sell = opportunity.sell_funding_interval_hours
+    if (
+        opportunity.funding_rate_buy_pct is None
+        or opportunity.funding_rate_sell_pct is None
+        or buy is None
+        or sell is None
+        or buy <= 0
+        or sell <= 0
+    ):
+        return None
+    return (opportunity.funding_rate_sell_pct / sell) - (opportunity.funding_rate_buy_pct / buy)
 
 
 def has_non_actionable_risk(
@@ -33,11 +58,8 @@ def apply_risk_labels(
     current = now or datetime.now(UTC)
     labels: list[str] = []
 
-    min_volume = min(
-        opportunity.buy_volume_24h_usdt or 0,
-        opportunity.sell_volume_24h_usdt or 0,
-    )
-    if min_volume < settings.min_volume_24h_usdt:
+    min_volume = known_volume_24h_usdt(opportunity)
+    if min_volume is not None and min_volume < settings.min_volume_24h_usdt:
         labels.append("LOW_VOLUME")
 
     age_seconds = (current - opportunity.last_seen_at).total_seconds()
@@ -53,10 +75,8 @@ def apply_risk_labels(
     if opportunity.symbol.upper() in {item.upper() for item in settings.ticker_collision_symbols}:
         labels.append("SAME_TICKER_RISK")
 
-    if (
-        opportunity.net_funding_pct is not None
-        and opportunity.net_funding_pct < -settings.funding_against_pct
-    ):
+    normalized_funding = normalized_funding_hourly_pct(opportunity)
+    if normalized_funding is not None and normalized_funding < -settings.funding_against_pct:
         labels.append("FUNDING_AGAINST")
 
     mark_diffs = [

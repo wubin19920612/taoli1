@@ -1,4 +1,13 @@
-import { vi } from "vitest";
+import { act, cleanup } from "@testing-library/react";
+import { message } from "antd";
+import { afterEach, vi } from "vitest";
+
+afterEach(() => {
+  cleanup();
+  act(() => {
+    message.destroy();
+  });
+});
 
 Object.defineProperty(window, "matchMedia", {
   writable: true,

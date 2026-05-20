@@ -6,7 +6,6 @@ DEFAULT_HIDDEN_RISK_LABELS = [
     "HUGE_SPREAD_VERIFY",
     "WIDE_SPREAD",
     "SAME_TICKER_RISK",
-    "MARK_INDEX_DEVIATION",
     "MISSING_FUNDING",
 ]
 
@@ -19,6 +18,8 @@ class RiskSettings(BaseModel):
     mark_index_deviation_pct: float = Field(default=1.0, ge=0)
     funding_against_pct: float = Field(default=0.01, ge=0)
     ticker_collision_symbols: list[str] = Field(default_factory=lambda: ["AIUSDT", "UPUSDT", "LABUSDT"])
+    excluded_symbols: list[str] = Field(default_factory=list)
+    ignored_exchanges: list[str] = Field(default_factory=list)
 
 
 class OpportunityFilterSettings(BaseModel):
@@ -35,3 +36,17 @@ class FeeSettings(BaseModel):
     spot_fee_pct: float = 0.1
     future_fee_pct: float = 0.05
     safety_slippage_pct: float = 0.05
+
+
+class HistorySettings(BaseModel):
+    enabled: bool = True
+    sample_seconds: int = Field(default=120, ge=10)
+    retention_days: int = Field(default=3, ge=1)
+    keep_top_n: int = Field(default=100, ge=1)
+    min_open_spread_pct: float = Field(default=0.5, ge=0)
+    min_volume_24h_k: float = Field(default=100, ge=0)
+    vacuum_interval_seconds: int = Field(default=86_400, ge=60)
+
+    @property
+    def min_volume_24h_usdt(self) -> float:
+        return self.min_volume_24h_k * 1000

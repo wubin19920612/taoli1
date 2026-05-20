@@ -1,6 +1,11 @@
-import asyncio
-
-from app.exchanges.base import ExchangeAdapter, normalize_usdt_symbol, parse_float, utc_now
+from app.exchanges.base import (
+    ExchangeAdapter,
+    next_aligned_funding_time,
+    normalize_usdt_symbol,
+    parse_datetime_ms,
+    parse_float,
+    utc_now,
+)
 from app.models.market import MarketSnapshot, MarketType
 
 
@@ -19,11 +24,18 @@ class OKXAdapter(ExchangeAdapter):
         for row in tickers:
             item = funding_by_symbol.get(row.raw_symbol, {})
             funding = parse_float(item.get("fundingRate"))
+            next_time = parse_datetime_ms(item.get("nextFundingTime")) or parse_datetime_ms(
+                item.get("fundingTime")
+            ) or next_aligned_funding_time(utc_now(), 8)
             enriched.append(
                 row.model_copy(
                     update={
                         "funding_rate_pct": funding * 100 if funding is not None else None,
+                        "funding_next_rate_pct": parse_float(item.get("nextFundingRate")) * 100
+                        if parse_float(item.get("nextFundingRate")) is not None
+                        else None,
                         "funding_interval_hours": 8,
+                        "funding_next_time": next_time,
                     }
                 )
             )
@@ -32,26 +44,21 @@ class OKXAdapter(ExchangeAdapter):
     async def _fetch_funding_by_symbol(
         self,
         tickers: list[MarketSnapshot],
-        limit: int = 120,
     ) -> dict[str, dict]:
-        semaphore = asyncio.Semaphore(8)
-
-        async def fetch_one(raw_symbol: str) -> tuple[str, dict | None]:
-            async with semaphore:
-                try:
-                    payload = await self.get_json(
-                        f"https://www.okx.com/api/v5/public/funding-rate?instId={raw_symbol}"
-                    )
-                except Exception:
-                    return raw_symbol, None
-                rows = payload.get("data", [])
-                return raw_symbol, rows[0] if rows else None
-
-        results = await asyncio.gather(
-            *(fetch_one(row.raw_symbol) for row in tickers[:limit]),
-            return_exceptions=False,
-        )
-        return {symbol: item for symbol, item in results if item is not None}
+        if not tickers:
+            return {}
+        try:
+            payload = await self.get_json(
+                "https://www.okx.com/api/v5/public/funding-rate?instId=ANY"
+            )
+        except Exception:
+            return {}
+        rows = payload.get("data", [])
+        return {
+            item.get("instId", ""): item
+            for item in rows
+            if item.get("instId")
+        }
 
     def _parse_tickers(self, data: list[dict], market_type: MarketType) -> list[MarketSnapshot]:
         rows: list[MarketSnapshot] = []

@@ -1,5 +1,7 @@
 from datetime import UTC, datetime
 
+import pytest
+
 from app.models.market import MarketSnapshot, MarketType
 from app.services.spread_engine import build_opportunities, midpoint_spread_pct
 
@@ -13,6 +15,9 @@ def snapshot(exchange: str, market_type: MarketType, bid: float, ask: float) -> 
         market_type=market_type,
         bid=bid,
         ask=ask,
+        funding_rate_pct=None,
+        funding_next_rate_pct=None,
+        funding_interval_hours=None,
         volume_24h_usdt=10_000_000,
         timestamp=datetime(2026, 5, 15, tzinfo=UTC),
         raw_symbol="BTCUSDT",
@@ -65,3 +70,35 @@ def test_skips_symbols_without_two_matching_markets() -> None:
     )
 
     assert opportunities == []
+
+
+def test_builds_ff_opportunity_with_predicted_and_normalized_funding() -> None:
+    buy = snapshot("binance", MarketType.FUTURE, bid=99, ask=100).model_copy(
+        update={
+            "funding_rate_pct": 0.08,
+            "funding_next_rate_pct": 0.09,
+            "funding_interval_hours": 8,
+        }
+    )
+    sell = snapshot("okx", MarketType.FUTURE, bid=102, ask=103).model_copy(
+        update={
+            "funding_rate_pct": 0.02,
+            "funding_next_rate_pct": 0.05,
+            "funding_interval_hours": 1,
+        }
+    )
+
+    opportunities = build_opportunities([buy, sell], mode="FF")
+
+    assert len(opportunities) == 1
+    item = opportunities[0]
+    assert item.funding_rate_buy_pct == 0.08
+    assert item.funding_rate_sell_pct == 0.02
+    assert item.funding_next_rate_buy_pct == 0.09
+    assert item.funding_next_rate_sell_pct == 0.05
+    assert item.buy_funding_interval_hours == 8
+    assert item.sell_funding_interval_hours == 1
+    assert item.net_funding_pct == pytest.approx(-0.06)
+    assert item.net_funding_next_pct == pytest.approx(-0.04)
+    assert item.net_funding_hourly_pct == pytest.approx(0.01)
+    assert item.net_funding_daily_pct == pytest.approx(0.24)
