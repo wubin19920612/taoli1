@@ -24,6 +24,7 @@ import {
   updateRiskSettings
 } from "../api/client";
 import type { AlertRule, RiskSettings } from "../api/types";
+import { alertRuleFieldHelp, alertRuleGuide, alertSeverityOptions, alertTypeOptions } from "../constants/alertRules";
 import { defaultHiddenRiskLabels, riskLabelOptions } from "../constants/riskLabels";
 
 type AlertRuleFormValues = AlertRule & {
@@ -229,6 +230,7 @@ export function SettingsPage() {
       </section>
       <section className="panel">
         <Typography.Title level={4}>新增告警规则</Typography.Title>
+        <Alert className="rule-guide" type="info" showIcon message="规则说明" description={alertRuleGuide} />
         <Form
           form={ruleForm}
           layout="vertical"
@@ -237,44 +239,85 @@ export function SettingsPage() {
           onFinish={createRule}
         >
           <div className="form-grid">
-            <Form.Item label="规则名称" name="name" rules={[{ required: true }]}>
+            <Form.Item label="规则名称" name="name" rules={[{ required: true }]} help={alertRuleFieldHelp.name}>
               <Input />
             </Form.Item>
-            <Form.Item label="启用" name="enabled" valuePropName="checked">
+            <Form.Item label="启用" name="enabled" valuePropName="checked" help={alertRuleFieldHelp.enabled}>
               <Switch />
             </Form.Item>
-            <Form.Item label="套利类型" name="types" rules={[{ required: true }]}>
-              <Select
-                mode="multiple"
-                options={["SF", "FF", "SS"].map((item) => ({ label: item, value: item }))}
-              />
+            <Form.Item label="套利类型" name="types" rules={[{ required: true }]} help={alertRuleFieldHelp.types}>
+              <Select mode="multiple" options={alertTypeOptions} />
             </Form.Item>
-            <Form.Item label="包含交易所" name="include_exchanges">
+            <Form.Item
+              label="包含交易所"
+              name="include_exchanges"
+              help={alertRuleFieldHelp.include_exchanges}
+            >
               <Select mode="multiple" allowClear options={exchangeOptions} />
             </Form.Item>
-            <Form.Item label="开仓阈值" name="min_open_spread_pct" rules={[{ required: true }]}>
+            <Form.Item
+              label="排除交易所"
+              name="exclude_exchanges"
+              help={alertRuleFieldHelp.exclude_exchanges}
+            >
+              <Select mode="multiple" allowClear options={exchangeOptions} />
+            </Form.Item>
+            <Form.Item
+              label="包含标的"
+              name="include_symbols"
+              help={alertRuleFieldHelp.include_symbols}
+            >
+              <Select mode="tags" tokenSeparators={[",", " "]} placeholder="BTCUSDT, ETHUSDT" />
+            </Form.Item>
+            <Form.Item
+              label="排除标的"
+              name="exclude_symbols"
+              help={alertRuleFieldHelp.exclude_symbols}
+            >
+              <Select mode="tags" tokenSeparators={[",", " "]} placeholder="TRADOORUSDT" />
+            </Form.Item>
+            <Form.Item
+              label="开仓阈值"
+              name="min_open_spread_pct"
+              rules={[{ required: true }]}
+              help={alertRuleFieldHelp.min_open_spread_pct}
+            >
               <InputNumber min={0} step={0.1} suffix="%" className="wide-input" />
             </Form.Item>
-            <Form.Item label="净估算阈值" name="min_fee_adjusted_open_pct" rules={[{ required: true }]}>
+            <Form.Item
+              label="净估算阈值"
+              name="min_fee_adjusted_open_pct"
+              rules={[{ required: true }]}
+              help={alertRuleFieldHelp.min_fee_adjusted_open_pct}
+            >
               <InputNumber min={0} step={0.1} suffix="%" className="wide-input" />
             </Form.Item>
-            <Form.Item label="最低成交额 (K)" name="min_volume_24h_k" rules={[{ required: true }]}>
+            <Form.Item
+              label="最低成交额 (K)"
+              name="min_volume_24h_k"
+              rules={[{ required: true }]}
+              help={alertRuleFieldHelp.min_volume_24h_usdt}
+            >
               <InputNumber min={0} step={100} suffix="K" className="wide-input" />
             </Form.Item>
-            <Form.Item label="连续命中" name="consecutive_hits" rules={[{ required: true }]}>
+            <Form.Item
+              label="连续命中"
+              name="consecutive_hits"
+              rules={[{ required: true }]}
+              help={alertRuleFieldHelp.consecutive_hits}
+            >
               <InputNumber min={1} className="wide-input" />
             </Form.Item>
-            <Form.Item label="冷却秒数" name="cooldown_seconds" rules={[{ required: true }]}>
+            <Form.Item
+              label="冷却秒数"
+              name="cooldown_seconds"
+              rules={[{ required: true }]}
+              help={alertRuleFieldHelp.cooldown_seconds}
+            >
               <InputNumber min={0} className="wide-input" />
             </Form.Item>
-            <Form.Item label="等级" name="severity" rules={[{ required: true }]}>
-              <Select
-                options={[
-                  { label: "info", value: "info" },
-                  { label: "warning", value: "warning" },
-                  { label: "critical", value: "critical" }
-                ]}
-              />
+            <Form.Item label="等级" name="severity" rules={[{ required: true }]} help={alertRuleFieldHelp.severity}>
+              <Select options={alertSeverityOptions} />
             </Form.Item>
           </div>
           <Form.Item label="排除风险标签" name="excluded_risk_labels">

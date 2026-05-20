@@ -222,6 +222,10 @@ body {
   margin-top: 0;
 }
 
+.rule-guide {
+  margin-bottom: 12px;
+}
+
 .panel-wide {
   grid-column: 1 / -1;
 }

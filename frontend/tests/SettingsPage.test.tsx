@@ -45,6 +45,12 @@ describe("SettingsPage", () => {
     expect(screen.getAllByText(/数据过期.*STALE_DATA/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/异常大价差.*HUGE_SPREAD_VERIFY/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/开平价差宽/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/SF=现货买入 \/ 永续卖出/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/info=仅记录，warning=普通告警，critical=强提醒/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/同一机会需要连续满足多少轮才触发/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/同一机会触发后，多少秒内不重复发送/).length).toBeGreaterThan(0);
+    expect(screen.getByText("包含标的")).toBeTruthy();
+    expect(screen.getByText("排除标的")).toBeTruthy();
     await userEvent.type(screen.getByLabelText("规则名称"), "FF 价差");
     await userEvent.clear(screen.getByLabelText("开仓阈值"));
     await userEvent.type(screen.getByLabelText("开仓阈值"), "0.5");
