@@ -102,3 +102,23 @@ def test_builds_ff_opportunity_with_predicted_and_normalized_funding() -> None:
     assert item.net_funding_next_pct == pytest.approx(-0.04)
     assert item.net_funding_hourly_pct == pytest.approx(0.01)
     assert item.net_funding_daily_pct == pytest.approx(0.24)
+
+
+def test_builds_sf_opportunity_treats_spot_funding_as_zero() -> None:
+    buy = snapshot("binance", MarketType.SPOT, bid=99, ask=100)
+    sell = snapshot("okx", MarketType.FUTURE, bid=102, ask=103).model_copy(
+        update={
+            "funding_rate_pct": 0.03,
+            "funding_next_rate_pct": 0.05,
+            "funding_interval_hours": 8,
+        }
+    )
+
+    opportunities = build_opportunities([buy, sell], mode="SF")
+
+    assert len(opportunities) == 1
+    item = opportunities[0]
+    assert item.net_funding_pct == pytest.approx(0.03)
+    assert item.net_funding_next_pct == pytest.approx(0.05)
+    assert item.net_funding_hourly_pct == pytest.approx(0.00375)
+    assert item.net_funding_daily_pct == pytest.approx(0.09)

@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 
 import aiosqlite
 
@@ -6,7 +7,7 @@ from app.models.alert import AlertEvent, AlertRule
 from app.models.history import OpportunityHistoryRow
 from app.models.market import MarketType
 from app.models.opportunity import Opportunity, OpportunityType
-from app.models.settings import RiskSettings
+from app.models.settings import AlertMessageTemplateSettings, RiskSettings
 
 PERCENT_SCALE = 10_000
 RISK_LABEL_BITS = {
@@ -168,6 +169,31 @@ class SettingsRepository:
         await self.db.commit()
         return settings
 
+    async def get_alert_message_template(self) -> AlertMessageTemplateSettings:
+        cursor = await self.db.execute(
+            "SELECT payload FROM app_settings WHERE key = ?",
+            ("alert_message_template",),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return AlertMessageTemplateSettings()
+        return AlertMessageTemplateSettings.model_validate(json.loads(row["payload"]))
+
+    async def set_alert_message_template(
+        self,
+        settings: AlertMessageTemplateSettings,
+    ) -> AlertMessageTemplateSettings:
+        await self.db.execute(
+            """
+            INSERT INTO app_settings (key, payload)
+            VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
+            """,
+            ("alert_message_template", settings.model_dump_json()),
+        )
+        await self.db.commit()
+        return settings
+
 
 class OpportunityHistoryRepository:
     def __init__(self, db: aiosqlite.Connection):
@@ -301,6 +327,24 @@ class OpportunityHistoryRepository:
             LIMIT ?
             """,
             params,
+        )
+        rows = await cursor.fetchall()
+        return [self._row_from_db(row) for row in rows]
+
+    async def list_before(
+        self,
+        opportunity_id: str,
+        before: datetime,
+        limit: int = 1,
+    ) -> "list[OpportunityHistoryRow]":
+        cursor = await self.db.execute(
+            """
+            SELECT * FROM opportunity_history
+            WHERE opportunity_id = ? AND observed_at <= ?
+            ORDER BY observed_at DESC, open_spread_scaled DESC
+            LIMIT ?
+            """,
+            (opportunity_id, before.isoformat(), limit),
         )
         rows = await cursor.fetchall()
         return [self._row_from_db(row) for row in rows]

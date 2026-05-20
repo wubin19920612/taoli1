@@ -22,7 +22,8 @@ function normalizeSymbols(values: string[] | undefined): string[] {
 export function DashboardPage() {
   const [filters, setFilters] = useState<OpportunityFilters>({
     include_risky: false,
-    hidden_risk_labels: defaultHiddenRiskLabels
+    hidden_risk_labels: defaultHiddenRiskLabels,
+    exclude_types: []
   });
   const [riskSettings, setRiskSettings] = useState<RiskSettings | null>(null);
   const [savingSymbol, setSavingSymbol] = useState<string | null>(null);
@@ -120,7 +121,7 @@ export function DashboardPage() {
       ) : null}
       <Row gutter={[12, 12]} className="metric-row">
         <Col xs={12} md={6}>
-          <Statistic title="机会数" value={health?.opportunities ?? opportunities.length} />
+          <Statistic title="机会数" value={opportunities.length} />
         </Col>
         <Col xs={12} md={6}>
           <Statistic title="市场快照" value={health?.markets ?? 0} />

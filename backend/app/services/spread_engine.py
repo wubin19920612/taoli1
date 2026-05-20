@@ -9,6 +9,8 @@ Mode = Literal["SF", "FF", "SS"]
 
 
 def _normalized_hourly_rate(snapshot: MarketSnapshot) -> float | None:
+    if snapshot.market_type == MarketType.SPOT:
+        return 0.0
     if snapshot.funding_rate_pct is None or snapshot.funding_interval_hours is None:
         return None
     if snapshot.funding_interval_hours <= 0:
@@ -17,11 +19,25 @@ def _normalized_hourly_rate(snapshot: MarketSnapshot) -> float | None:
 
 
 def _normalized_next_rate(snapshot: MarketSnapshot) -> float | None:
+    if snapshot.market_type == MarketType.SPOT:
+        return 0.0
     if snapshot.funding_next_rate_pct is None or snapshot.funding_interval_hours is None:
         return None
     if snapshot.funding_interval_hours <= 0:
         return None
     return snapshot.funding_next_rate_pct / snapshot.funding_interval_hours
+
+
+def _funding_rate(snapshot: MarketSnapshot) -> float | None:
+    if snapshot.market_type == MarketType.SPOT:
+        return 0.0
+    return snapshot.funding_rate_pct
+
+
+def _funding_next_rate(snapshot: MarketSnapshot) -> float | None:
+    if snapshot.market_type == MarketType.SPOT:
+        return 0.0
+    return snapshot.funding_next_rate_pct
 
 
 def midpoint_spread_pct(buy_leg: MarketSnapshot, sell_leg: MarketSnapshot) -> tuple[float, float]:
@@ -107,15 +123,16 @@ def build_opportunities(
                     continue
 
                 fee_adjusted = open_spread_pct - buy_fee_pct - sell_fee_pct - safety_slippage_pct
+                buy_funding = _funding_rate(buy_leg)
+                sell_funding = _funding_rate(sell_leg)
                 net_funding = None
-                if buy_leg.funding_rate_pct is not None and sell_leg.funding_rate_pct is not None:
-                    net_funding = sell_leg.funding_rate_pct - buy_leg.funding_rate_pct
+                if buy_funding is not None and sell_funding is not None:
+                    net_funding = sell_funding - buy_funding
+                buy_next_funding = _funding_next_rate(buy_leg)
+                sell_next_funding = _funding_next_rate(sell_leg)
                 net_funding_next = None
-                if (
-                    buy_leg.funding_next_rate_pct is not None
-                    and sell_leg.funding_next_rate_pct is not None
-                ):
-                    net_funding_next = sell_leg.funding_next_rate_pct - buy_leg.funding_next_rate_pct
+                if buy_next_funding is not None and sell_next_funding is not None:
+                    net_funding_next = sell_next_funding - buy_next_funding
                 buy_hourly = _normalized_hourly_rate(buy_leg)
                 sell_hourly = _normalized_hourly_rate(sell_leg)
                 net_funding_hourly = None

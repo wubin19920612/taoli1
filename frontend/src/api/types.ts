@@ -60,6 +60,19 @@ export interface RiskSettings {
   ignored_exchanges: string[];
 }
 
+export interface AlertMessageTemplateSettings {
+  include_trigger_summary: boolean;
+  include_rule_details: boolean;
+  include_pair: boolean;
+  include_spread: boolean;
+  include_funding: boolean;
+  include_volume: boolean;
+  include_risk: boolean;
+  include_observations: boolean;
+  include_dashboard_link: boolean;
+  observation_limit: number;
+}
+
 export interface AlertRule {
   id?: string;
   name: string;
@@ -89,8 +102,32 @@ export interface AlertEvent {
   created_at: string;
 }
 
+export interface ServiceControlDetail {
+  name: string;
+  available: boolean;
+  container_id: string | null;
+  container_name: string | null;
+  state: string | null;
+  status: string | null;
+}
+
+export interface ServiceControlStatus {
+  enabled: boolean;
+  environment: string;
+  services: string[];
+  details: ServiceControlDetail[];
+  message: string | null;
+}
+
+export interface ServiceRestartResult {
+  service: string;
+  status: string;
+  message: string | null;
+}
+
 export interface OpportunityFilters {
   type?: OpportunityType;
+  exclude_types?: OpportunityType[];
   symbol?: string;
   exchange?: string;
   min_open_spread_pct?: number;

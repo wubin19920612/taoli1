@@ -27,6 +27,25 @@ export function TopFilters({ filters, loading, onChange, onRefresh }: TopFilters
           value={filters.type ?? ""}
           onChange={(value) => patch({ type: (value || undefined) as OpportunityType | undefined })}
         />
+        <Select
+          mode="multiple"
+          allowClear
+          className="type-exclude-select"
+          placeholder="屏蔽类型"
+          aria-label="屏蔽类型"
+          maxTagCount="responsive"
+          options={[
+            { label: "SF", value: "SF" },
+            { label: "FF", value: "FF" },
+            { label: "SS", value: "SS" }
+          ]}
+          value={filters.exclude_types}
+          onChange={(value) =>
+            patch({
+              exclude_types: value.length > 0 ? (value as OpportunityType[]) : undefined
+            })
+          }
+        />
         <Input
           allowClear
           className="symbol-input"

@@ -1,5 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from app.models.alert import AlertRule
 from app.models.market import MarketType
 from app.models.opportunity import Opportunity, OpportunityType
@@ -57,6 +59,54 @@ def test_requires_consecutive_hits_before_firing() -> None:
     assert fired[0].opportunity.id == "opp-1"
 
 
+def test_match_includes_recent_observations_for_consecutive_hits() -> None:
+    engine = AlertEngine()
+    rule = AlertRule(
+        name="ff spread",
+        types=["FF"],
+        min_open_spread_pct=0.3,
+        min_fee_adjusted_open_pct=0.2,
+        min_volume_24h_usdt=1_000_000,
+        consecutive_hits=3,
+        cooldown_seconds=300,
+    )
+    now = datetime.now(UTC)
+
+    assert engine.evaluate(
+        [
+            opportunity(spread=0.55).model_copy(
+                update={"fee_adjusted_open_pct": 0.35, "net_funding_next_pct": 0.01}
+            )
+        ],
+        [rule],
+        now=now,
+    ) == []
+    assert engine.evaluate(
+        [
+            opportunity(spread=0.65).model_copy(
+                update={"fee_adjusted_open_pct": 0.45, "net_funding_next_pct": 0.02}
+            )
+        ],
+        [rule],
+        now=now + timedelta(seconds=8),
+    ) == []
+    fired = engine.evaluate(
+        [
+            opportunity(spread=0.75).model_copy(
+                update={"fee_adjusted_open_pct": 0.55, "net_funding_next_pct": 0.03}
+            )
+        ],
+        [rule],
+        now=now + timedelta(seconds=16),
+    )
+
+    assert len(fired) == 1
+    observations = fired[0].observations
+    assert [item.open_spread_pct for item in observations] == [0.55, 0.65, 0.75]
+    assert [item.funding_edge_pct for item in observations] == [0.01, 0.02, 0.03]
+    assert [item.combined_open_edge_pct for item in observations] == pytest.approx([0.36, 0.47, 0.58])
+
+
 def test_cooldown_suppresses_repeated_alerts() -> None:
     engine = AlertEngine()
     rule = AlertRule(
@@ -88,6 +138,96 @@ def test_excluded_risk_label_blocks_alert() -> None:
     opp = opp.model_copy(update={"risk_labels": ["HUGE_SPREAD_VERIFY"]})
 
     assert engine.evaluate([opp], [rule], now=datetime.now(UTC)) == []
+
+
+def test_rule_exclude_symbols_do_not_block_alerts() -> None:
+    engine = AlertEngine()
+    rule = AlertRule(
+        name="inherit hidden blacklist",
+        types=["FF"],
+        min_open_spread_pct=0.5,
+        min_fee_adjusted_open_pct=0.3,
+        min_volume_24h_usdt=1_000_000,
+        exclude_symbols=["BTCUSDT"],
+        consecutive_hits=1,
+    )
+
+    fired = engine.evaluate([opportunity()], [rule], now=datetime.now(UTC))
+
+    assert len(fired) == 1
+
+
+def test_positive_funding_can_lift_fee_adjusted_edge_over_threshold() -> None:
+    engine = AlertEngine()
+    rule = AlertRule(
+        name="funding adjusted",
+        types=["SF"],
+        min_open_spread_pct=0.3,
+        min_fee_adjusted_open_pct=0.25,
+        min_volume_24h_usdt=1_000_000,
+        consecutive_hits=1,
+    )
+    opp = opportunity(spread=0.45).model_copy(
+        update={
+            "type": OpportunityType.SF,
+            "buy_market_type": MarketType.SPOT,
+            "fee_adjusted_open_pct": 0.20,
+            "net_funding_pct": 0.08,
+            "net_funding_next_pct": 0.10,
+        }
+    )
+
+    fired = engine.evaluate([opp], [rule], now=datetime.now(UTC))
+
+    assert len(fired) == 1
+
+
+def test_negative_funding_can_block_fee_adjusted_edge_under_threshold() -> None:
+    engine = AlertEngine()
+    rule = AlertRule(
+        name="funding adjusted",
+        types=["SF"],
+        min_open_spread_pct=0.3,
+        min_fee_adjusted_open_pct=0.25,
+        min_volume_24h_usdt=1_000_000,
+        consecutive_hits=1,
+    )
+    opp = opportunity(spread=0.65).model_copy(
+        update={
+            "type": OpportunityType.SF,
+            "buy_market_type": MarketType.SPOT,
+            "fee_adjusted_open_pct": 0.40,
+            "net_funding_pct": -0.05,
+            "net_funding_next_pct": -0.30,
+        }
+    )
+
+    assert engine.evaluate([opp], [rule], now=datetime.now(UTC)) == []
+
+
+def test_large_price_edge_can_cover_negative_funding() -> None:
+    engine = AlertEngine()
+    rule = AlertRule(
+        name="funding adjusted",
+        types=["SF"],
+        min_open_spread_pct=0.3,
+        min_fee_adjusted_open_pct=0.25,
+        min_volume_24h_usdt=1_000_000,
+        consecutive_hits=1,
+    )
+    opp = opportunity(spread=0.95).model_copy(
+        update={
+            "type": OpportunityType.SF,
+            "buy_market_type": MarketType.SPOT,
+            "fee_adjusted_open_pct": 0.70,
+            "net_funding_pct": -0.20,
+            "net_funding_next_pct": -0.30,
+        }
+    )
+
+    fired = engine.evaluate([opp], [rule], now=datetime.now(UTC))
+
+    assert len(fired) == 1
 
 
 def test_all_missing_volume_does_not_block_alert_when_rule_requires_volume() -> None:

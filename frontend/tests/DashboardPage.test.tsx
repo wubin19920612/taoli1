@@ -2,6 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { listOpportunities } from "../src/api/client";
 import { DashboardPage } from "../src/pages/DashboardPage";
 import type { Opportunity } from "../src/api/types";
 
@@ -102,6 +103,22 @@ describe("DashboardPage", () => {
         expect.anything()
       );
     });
+  });
+
+  it("sends excluded opportunity types to the opportunities query", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        calls.push(String(input));
+        return Response.json([]);
+      })
+    );
+
+    await listOpportunities({ exclude_types: ["SF", "SS"] });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain("exclude_types=SF%2CSS");
   });
 
   it("waits for risk settings before requesting opportunities", async () => {

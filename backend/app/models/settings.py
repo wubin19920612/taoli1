@@ -22,6 +22,19 @@ class RiskSettings(BaseModel):
     ignored_exchanges: list[str] = Field(default_factory=list)
 
 
+class AlertMessageTemplateSettings(BaseModel):
+    include_trigger_summary: bool = True
+    include_rule_details: bool = True
+    include_pair: bool = True
+    include_spread: bool = True
+    include_funding: bool = True
+    include_volume: bool = True
+    include_risk: bool = True
+    include_observations: bool = True
+    include_dashboard_link: bool = True
+    observation_limit: int = Field(default=5, ge=1, le=20)
+
+
 class OpportunityFilterSettings(BaseModel):
     include_risky: bool = False
     hidden_risk_labels: list[str] = Field(default_factory=lambda: DEFAULT_HIDDEN_RISK_LABELS.copy())

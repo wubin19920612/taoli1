@@ -48,6 +48,13 @@ docker compose up -d --build
 
 建议在服务器上用 Nginx/Caddy 配 HTTPS，并限制后台访问来源。设置 `DASHBOARD_PASSWORD` 后，前端“参数与告警”页输入同一个密码即可保存风险参数和告警规则。
 
+如果你想在本地测试环境打开“重启前端 / 重启后端”按钮，使用：
+```bash
+docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
+```
+然后把 `DASHBOARD_PASSWORD` 设成你自己的面板密码。默认的 `docker-compose.yml` 不会挂载 Docker socket，也不会开启服务控制；只有叠加 `docker-compose.local.yml` 时才会打开 `frontend/backend` 的重启能力。
+如果你用 `docker compose -p <name>` 指定了别的项目名，记得把 `COMPOSE_PROJECT_NAME` 设成同一个值。
+
 ## 飞书告警
 
 在 `.env` 中填写：
@@ -107,6 +114,8 @@ HISTORY_VACUUM_INTERVAL_SECONDS=86400
 - `GET /api/history/opportunities?symbol=BTCUSDT&hours=24&limit=1000`
 - `GET /api/settings/risk`
 - `PUT /api/settings/risk`
+- `GET /api/admin/service-control`
+- `POST /api/admin/service-control/{service}/restart`
 - `GET /api/alerts/rules`
 - `POST /api/alerts/rules`
 - `DELETE /api/alerts/rules/{rule_id}`

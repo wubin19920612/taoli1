@@ -1,10 +1,13 @@
 import type {
   AlertEvent,
+  AlertMessageTemplateSettings,
   AlertRule,
   HealthStatus,
   Opportunity,
   OpportunityFilters,
-  RiskSettings
+  RiskSettings,
+  ServiceControlStatus,
+  ServiceRestartResult
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "/api";
@@ -30,6 +33,21 @@ function authHeaders(): HeadersInit {
   return password ? { "X-Dashboard-Password": password } : {};
 }
 
+function extractErrorMessage(text: string, status: number): string {
+  if (!text) {
+    return `Request failed: ${status}`;
+  }
+  try {
+    const parsed = JSON.parse(text) as { detail?: unknown };
+    if (parsed && typeof parsed.detail === "string" && parsed.detail.trim()) {
+      return parsed.detail;
+    }
+  } catch {
+    // Fall through to raw text.
+  }
+  return text;
+}
+
 async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(buildUrl(path), {
     ...options,
@@ -41,7 +59,7 @@ async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T>
   });
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(text || `Request failed: ${response.status}`);
+    throw new Error(extractErrorMessage(text, response.status));
   }
   return response.json() as Promise<T>;
 }
@@ -71,6 +89,19 @@ export async function updateRiskSettings(settings: RiskSettings): Promise<RiskSe
   });
 }
 
+export async function getAlertMessageTemplate(): Promise<AlertMessageTemplateSettings> {
+  return fetchJson<AlertMessageTemplateSettings>("/settings/alert-message-template");
+}
+
+export async function updateAlertMessageTemplate(
+  settings: AlertMessageTemplateSettings
+): Promise<AlertMessageTemplateSettings> {
+  return fetchJson<AlertMessageTemplateSettings>("/settings/alert-message-template", {
+    method: "PUT",
+    body: JSON.stringify(settings)
+  });
+}
+
 export async function listAlertRules(): Promise<AlertRule[]> {
   return fetchJson<AlertRule[]>("/alerts/rules");
 }
@@ -95,6 +126,17 @@ export async function deleteAlertRule(id: string): Promise<void> {
 
 export async function listAlertEvents(limit = 100): Promise<AlertEvent[]> {
   return fetchJson<AlertEvent[]>(`/alerts/events?limit=${limit}`);
+}
+
+export async function getServiceControlStatus(): Promise<ServiceControlStatus> {
+  return fetchJson<ServiceControlStatus>("/admin/service-control");
+}
+
+export async function restartServiceControl(service: "backend" | "frontend"): Promise<ServiceRestartResult> {
+  return fetchJson<ServiceRestartResult>(`/admin/service-control/${service}/restart`, {
+    method: "POST",
+    body: JSON.stringify({})
+  });
 }
 
 export function saveDashboardPassword(password: string): void {

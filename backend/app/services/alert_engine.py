@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 
 from app.models.alert import AlertRule
 from app.models.opportunity import Opportunity
+from app.services.alert_metrics import AlertObservation, combined_open_edge_pct, observe_alert_metrics
 from app.services.risk_labels import known_volume_24h_usdt
 
 
@@ -10,12 +11,14 @@ from app.services.risk_labels import known_volume_24h_usdt
 class AlertMatch:
     rule: AlertRule
     opportunity: Opportunity
+    observations: list[AlertObservation]
 
 
 class AlertEngine:
     def __init__(self) -> None:
         self._hits: dict[str, tuple[int, datetime]] = {}
         self._last_sent: dict[str, datetime] = {}
+        self._observations: dict[str, list[AlertObservation]] = {}
 
     def evaluate(
         self,
@@ -34,6 +37,11 @@ class AlertEngine:
                 if not self._matches(rule, opportunity, current):
                     continue
                 active_keys.add(key)
+                observations = self._observations.setdefault(key, [])
+                observations.append(observe_alert_metrics(opportunity, current))
+                keep_count = max(rule.consecutive_hits, 1)
+                if len(observations) > keep_count:
+                    del observations[: len(observations) - keep_count]
                 previous_count, _ = self._hits.get(key, (0, current))
                 count = previous_count + 1
                 self._hits[key] = (count, current)
@@ -43,10 +51,17 @@ class AlertEngine:
                 if last_sent and (current - last_sent).total_seconds() < rule.cooldown_seconds:
                     continue
                 self._last_sent[key] = current
-                matches.append(AlertMatch(rule=rule, opportunity=opportunity))
+                matches.append(
+                    AlertMatch(
+                        rule=rule,
+                        opportunity=opportunity,
+                        observations=list(observations),
+                    )
+                )
         for key in list(self._hits):
             if key not in active_keys:
                 self._hits.pop(key, None)
+                self._observations.pop(key, None)
         return matches
 
     def _matches(self, rule: AlertRule, opportunity: Opportunity, now: datetime) -> bool:
@@ -60,11 +75,9 @@ class AlertEngine:
             return False
         if rule.include_symbols and opportunity.symbol not in rule.include_symbols:
             return False
-        if opportunity.symbol in rule.exclude_symbols:
-            return False
         if opportunity.open_spread_pct < rule.min_open_spread_pct:
             return False
-        if opportunity.fee_adjusted_open_pct < rule.min_fee_adjusted_open_pct:
+        if combined_open_edge_pct(opportunity) < rule.min_fee_adjusted_open_pct:
             return False
         min_volume = known_volume_24h_usdt(opportunity)
         if min_volume is not None and min_volume < rule.min_volume_24h_usdt:

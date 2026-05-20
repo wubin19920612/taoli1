@@ -1,6 +1,9 @@
 import os
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
+
+from dotenv import find_dotenv, load_dotenv
 
 from app.models.settings import HistorySettings
 
@@ -23,6 +26,10 @@ class Settings:
     history_min_open_spread_pct: float = 0.5
     history_min_volume_24h_k: float = 100
     history_vacuum_interval_seconds: int = 86_400
+    service_control_enabled: bool = False
+    service_control_restart_delay_seconds: float = 1.0
+    service_control_docker_socket_path: str = "/var/run/docker.sock"
+    compose_project_name: str = ""
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -45,19 +52,64 @@ class Settings:
         )
 
 
+def _is_running_in_container() -> bool:
+    return Path("/.dockerenv").exists()
+
+
+def _resolve_sqlite_database_url(database_url: str, dotenv_path: str | None) -> str:
+    if not database_url.startswith("sqlite:///"):
+        return database_url
+
+    sqlite_path = database_url.removeprefix("sqlite:///")
+    if not sqlite_path.startswith("/data/"):
+        return database_url
+
+    if _is_running_in_container():
+        return database_url
+
+    base_dir = (
+        Path(dotenv_path).resolve().parent
+        if dotenv_path
+        else Path(__file__).resolve().parents[3]
+    )
+    candidates = [
+        base_dir / "backend" / sqlite_path.lstrip("/"),
+        base_dir / sqlite_path.lstrip("/"),
+    ]
+    existing_candidates = [candidate for candidate in candidates if candidate.exists()]
+    if not existing_candidates:
+        return database_url
+
+    best_candidate = max(
+        existing_candidates,
+        key=lambda candidate: (candidate.stat().st_size, candidate.stat().st_mtime),
+    )
+    return f"sqlite:///{best_candidate.as_posix()}"
+
+
 @lru_cache
 def get_settings() -> Settings:
+    dotenv_path = find_dotenv(usecwd=True)
+    if dotenv_path:
+        load_dotenv(dotenv_path, override=False)
+
     def bool_env(name: str, default: bool) -> bool:
         value = os.getenv(name)
-        if value is None:
+        if value is None or not value.strip():
             return default
         return value.strip().lower() in {"1", "true", "yes", "on"}
 
+    environment = os.getenv("ENVIRONMENT", "development")
+    database_url = _resolve_sqlite_database_url(
+        os.getenv("DATABASE_URL", "sqlite:///./data/radar.db"),
+        dotenv_path or None,
+    )
+
     return Settings(
         app_name=os.getenv("APP_NAME", "Arbitrage Radar"),
-        environment=os.getenv("ENVIRONMENT", "development"),
+        environment=environment,
         cors_origins=os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"),
-        database_url=os.getenv("DATABASE_URL", "sqlite:///./data/radar.db"),
+        database_url=database_url,
         poll_interval_seconds=float(os.getenv("POLL_INTERVAL_SECONDS", "8")),
         funding_poll_interval_seconds=float(os.getenv("FUNDING_POLL_INTERVAL_SECONDS", "120")),
         feishu_webhook_url=os.getenv("FEISHU_WEBHOOK_URL", ""),
@@ -70,4 +122,16 @@ def get_settings() -> Settings:
         history_min_open_spread_pct=float(os.getenv("HISTORY_MIN_OPEN_SPREAD_PCT", "0.5")),
         history_min_volume_24h_k=float(os.getenv("HISTORY_MIN_VOLUME_24H_K", "100")),
         history_vacuum_interval_seconds=int(os.getenv("HISTORY_VACUUM_INTERVAL_SECONDS", "86400")),
+        service_control_enabled=bool_env(
+            "SERVICE_CONTROL_ENABLED",
+            environment.strip().lower() in {"development", "local", "test"},
+        ),
+        service_control_restart_delay_seconds=float(
+            os.getenv("SERVICE_CONTROL_RESTART_DELAY_SECONDS", "1")
+        ),
+        service_control_docker_socket_path=os.getenv(
+            "SERVICE_CONTROL_DOCKER_SOCKET_PATH",
+            "/var/run/docker.sock",
+        ),
+        compose_project_name=os.getenv("COMPOSE_PROJECT_NAME", "").strip(),
     )

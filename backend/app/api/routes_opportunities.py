@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Query, Request
 
 from app.models.market import MarketType
-from app.models.opportunity import Opportunity
+from app.models.opportunity import Opportunity, OpportunityType
 from app.models.settings import DEFAULT_HIDDEN_RISK_LABELS, RiskSettings
 from app.services.data_filters import filter_markets, filter_opportunities
 from app.services.risk_labels import has_non_actionable_risk, known_volume_24h_usdt
@@ -26,6 +26,7 @@ async def _risk_settings(request: Request) -> RiskSettings:
 async def list_opportunities(
     request: Request,
     type: str | None = Query(default=None),
+    exclude_types: str | None = Query(default=None),
     symbol: str | None = Query(default=None),
     exchange: str | None = Query(default=None),
     min_open_spread_pct: float | None = Query(default=None),
@@ -40,6 +41,16 @@ async def list_opportunities(
     )
     if type:
         opportunities = [item for item in opportunities if item.type == type]
+    allowed_types = {item.value for item in OpportunityType}
+    excluded_types = {
+        item.upper()
+        for item in _parse_csv(exclude_types, [])
+        if item.upper() in allowed_types
+    }
+    if excluded_types:
+        opportunities = [
+            item for item in opportunities if item.type.value not in excluded_types
+        ]
     if symbol:
         wanted = symbol.upper().replace("-", "").replace("_", "")
         opportunities = [item for item in opportunities if wanted in item.symbol]

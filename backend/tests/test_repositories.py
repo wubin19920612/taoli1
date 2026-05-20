@@ -60,3 +60,33 @@ async def test_settings_repository_defaults() -> None:
     settings = await repo.get_risk_settings()
 
     assert settings.min_volume_24h_usdt == 1_000_000
+
+
+@pytest.mark.asyncio
+async def test_alert_message_template_repository_defaults_and_roundtrip() -> None:
+    db = await connect_database(":memory:")
+    try:
+        await initialize_schema(db)
+        repo = SettingsRepository(db)
+
+        template = await repo.get_alert_message_template()
+
+        assert template.include_trigger_summary is True
+        assert template.include_observations is True
+
+        saved = await repo.set_alert_message_template(
+            template.model_copy(
+                update={
+                    "include_rule_details": False,
+                    "include_observations": False,
+                    "observation_limit": 2,
+                }
+            )
+        )
+        loaded = await repo.get_alert_message_template()
+
+        assert saved.include_rule_details is False
+        assert loaded.include_observations is False
+        assert loaded.observation_limit == 2
+    finally:
+        await db.close()

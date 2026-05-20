@@ -8,7 +8,15 @@ from typing import AsyncIterator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import routes_alerts, routes_health, routes_history, routes_opportunities, routes_settings, stream
+from app.api import (
+    routes_admin,
+    routes_alerts,
+    routes_health,
+    routes_history,
+    routes_opportunities,
+    routes_settings,
+    stream,
+)
 from app.core.config import Settings, get_settings
 from app.db.database import connect_database
 from app.db.repositories import (
@@ -19,13 +27,15 @@ from app.db.repositories import (
 )
 from app.db.schema import initialize_schema
 from app.models.alert import AlertEvent
-from app.models.settings import RiskSettings
+from app.models.settings import AlertMessageTemplateSettings, RiskSettings
 from app.services.alert_engine import AlertEngine
+from app.services.alert_messages import build_alert_message
 from app.services.collector import MarketCollector, default_exchange_adapters, run_collector_loop
 from app.services.data_filters import filter_opportunities
 from app.services.feishu import FeishuConfig, FeishuNotifier
 from app.services.history import OpportunityHistoryRecorder
 from app.services.snapshot_store import SnapshotStore
+from app.services.service_control import DockerServiceController, ServiceControlConfig
 
 logger = logging.getLogger(__name__)
 
@@ -50,19 +60,31 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
             settings_repo: SettingsRepository | None = getattr(app.state, "settings_repo", None)
             rules = await repo.list()
             settings = await settings_repo.get_risk_settings() if settings_repo is not None else RiskSettings()
+            alert_template = (
+                await settings_repo.get_alert_message_template()
+                if settings_repo is not None
+                else AlertMessageTemplateSettings()
+            )
             opportunities = filter_opportunities(app.state.snapshot_store.get_opportunities(), settings)
             matches = app.state.alert_engine.evaluate(opportunities, rules)
             for match in matches:
                 status = "sent"
-                message = (
-                    f"{match.opportunity.symbol} {match.opportunity.type} "
-                    f"{match.opportunity.open_spread_pct:.3f}%"
+                message = build_alert_message(
+                    match.rule,
+                    match.opportunity,
+                    observations=match.observations,
+                    template=alert_template,
                 )
                 try:
-                    await app.state.feishu_notifier.send_alert(match.rule, match.opportunity)
+                    await app.state.feishu_notifier.send_alert(
+                        match.rule,
+                        match.opportunity,
+                        observations=match.observations,
+                        template=alert_template,
+                    )
                 except Exception as exc:  # noqa: BLE001 - preserve event even when webhook fails.
                     status = "failed"
-                    message = f"{message}; Feishu failed: {exc}"
+                    message = f"{message}\n\n飞书发送失败：{exc}"
                 await event_repo.create(
                     AlertEvent(
                         rule_id=match.rule.id,
@@ -134,6 +156,11 @@ def create_app(
                     await task
             if collector is not None:
                 await collector.close()
+            service_controller = getattr(app.state, "service_controller", None)
+            if service_controller is not None:
+                close = getattr(service_controller, "aclose", None)
+                if close is not None:
+                    await close()
             await app.state.feishu_notifier.client.aclose()
             await db.close()
 
@@ -141,6 +168,15 @@ def create_app(
     app.state.settings = app_settings
     app.state.snapshot_store = store
     app.state.alert_engine = AlertEngine()
+    app.state.service_controller = DockerServiceController(
+        ServiceControlConfig(
+            enabled=app_settings.service_control_enabled,
+            environment=app_settings.environment,
+            compose_project_name=app_settings.compose_project_name,
+            docker_socket_path=app_settings.service_control_docker_socket_path,
+            restart_delay_seconds=app_settings.service_control_restart_delay_seconds,
+        )
+    )
     app.state.feishu_notifier = FeishuNotifier(
         FeishuConfig(
             webhook_url=app_settings.feishu_webhook_url,
@@ -159,6 +195,7 @@ def create_app(
     app.include_router(routes_history.router, prefix="/api")
     app.include_router(routes_alerts.router, prefix="/api")
     app.include_router(routes_settings.router, prefix="/api")
+    app.include_router(routes_admin.router, prefix="/api")
     app.include_router(stream.router, prefix="/api")
     return app
 

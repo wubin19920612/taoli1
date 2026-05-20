@@ -1,7 +1,8 @@
-import { DeleteOutlined, SaveOutlined } from "@ant-design/icons";
+import { DeleteOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
 import {
   Alert,
   Button,
+  Checkbox,
   Form,
   Input,
   InputNumber,
@@ -18,18 +19,24 @@ import { useEffect, useState } from "react";
 import {
   createAlertRule,
   deleteAlertRule,
+  getAlertMessageTemplate,
   getRiskSettings,
+  getServiceControlStatus,
   listAlertRules,
+  restartServiceControl,
   saveDashboardPassword,
+  updateAlertMessageTemplate,
   updateRiskSettings
 } from "../api/client";
-import type { AlertRule, RiskSettings } from "../api/types";
+import type { AlertMessageTemplateSettings, AlertRule, RiskSettings, ServiceControlStatus } from "../api/types";
 import { alertRuleFieldHelp, alertRuleGuide, alertSeverityOptions, alertTypeOptions } from "../constants/alertRules";
 import { defaultHiddenRiskLabels, riskLabelOptions } from "../constants/riskLabels";
 
 type AlertRuleFormValues = AlertRule & {
   min_volume_24h_k?: number;
 };
+
+type ServiceName = "frontend" | "backend";
 
 const defaultRule: AlertRule = {
   name: "",
@@ -48,6 +55,35 @@ const defaultRule: AlertRule = {
   cooldown_seconds: 300,
   severity: "warning"
 };
+
+const defaultAlertMessageTemplate: AlertMessageTemplateSettings = {
+  include_trigger_summary: true,
+  include_rule_details: true,
+  include_pair: true,
+  include_spread: true,
+  include_funding: true,
+  include_volume: true,
+  include_risk: true,
+  include_observations: true,
+  include_dashboard_link: true,
+  observation_limit: 5
+};
+
+const alertTemplateOptions: Array<{
+  name: Exclude<keyof AlertMessageTemplateSettings, "observation_limit">;
+  label: string;
+  description: string;
+}> = [
+  { name: "include_trigger_summary", label: "触发摘要", description: "规则名、等级和触发提示" },
+  { name: "include_rule_details", label: "规则参数", description: "阈值、交易所、标的和冷却参数" },
+  { name: "include_pair", label: "价差对", description: "标的、买卖方向和两侧交易所" },
+  { name: "include_spread", label: "价差信息", description: "开仓、平仓、净估算和综合开仓" },
+  { name: "include_funding", label: "资金费率", description: "当前、预测资金费率和下一次结算时间" },
+  { name: "include_volume", label: "成交额", description: "买入侧和卖出侧 24h 成交额" },
+  { name: "include_risk", label: "风险标签", description: "过滤命中的风险标签" },
+  { name: "include_observations", label: "连续监测", description: "最近几轮命中的价差和资金费率差" },
+  { name: "include_dashboard_link", label: "Dashboard 链接", description: "消息末尾追加面板地址" }
+];
 
 function ruleDefaultsForRisk(settings: RiskSettings): AlertRule {
   return {
@@ -68,6 +104,7 @@ function ruleFromForm(values: AlertRuleFormValues, defaults: AlertRule): AlertRu
   return {
     ...defaults,
     ...rule,
+    exclude_symbols: [],
     min_volume_24h_usdt: (minVolumeK ?? 0) * 1000
   };
 }
@@ -76,10 +113,26 @@ const exchangeOptions = ["binance", "okx", "bybit", "gate", "bitget", "htx", "as
   label: item,
   value: item
 }));
+const serviceNames: ServiceName[] = ["frontend", "backend"];
+const serviceLabels: Record<ServiceName, string> = {
+  frontend: "前端",
+  backend: "后端"
+};
 const riskSelectOptions = riskLabelOptions.map((item) => ({
   label: `${item.label} (${item.value})`,
   value: item.value
 }));
+
+function serviceCanRestart(status: ServiceControlStatus | null, service: ServiceName): boolean {
+  if (!status?.enabled) {
+    return false;
+  }
+  const detail = (status.details ?? []).find((item) => item.name === service);
+  if (detail) {
+    return detail.available;
+  }
+  return (status.services ?? []).includes(service);
+}
 
 function riskToForm(settings: RiskSettings): RiskSettings {
   return {
@@ -98,24 +151,93 @@ function riskFromForm(values: RiskSettings): RiskSettings {
   };
 }
 
+function normalizeAlertTemplate(values?: Partial<AlertMessageTemplateSettings>): AlertMessageTemplateSettings {
+  return {
+    ...defaultAlertMessageTemplate,
+    ...(values ?? {})
+  };
+}
+
+function buildAlertTemplatePreview(template: AlertMessageTemplateSettings): string {
+  const blocks: string[] = [];
+  if (template.include_trigger_summary) {
+    blocks.push("【告警触发】\n规则：FF 价差\n等级：warning（普通告警）");
+  }
+  if (template.include_rule_details) {
+    blocks.push("【规则参数】\n套利类型：FF\n开仓阈值：>= 0.500%\n综合开仓阈值：>= 0.250%");
+  }
+  const snapshotLines: string[] = [];
+  if (template.include_pair) {
+    snapshotLines.push(
+      "标的：BTCUSDT / FF",
+      "价差对：BTCUSDT | binance future -> okx future",
+      "方向：买入 binance future BTCUSDT，卖出 okx future BTCUSDT"
+    );
+  }
+  if (template.include_spread) {
+    snapshotLines.push("价差：开仓 0.800% / 平仓 0.500%", "净估算：0.600%", "综合开仓：0.610%");
+  }
+  if (template.include_funding) {
+    snapshotLines.push("资金费率差：当前 -0.03% / 预测 0.01%", "下一次结算：08:00 / 08:00");
+  }
+  if (template.include_volume) {
+    snapshotLines.push("成交额：买入侧 10000K USDT / 卖出侧 12000K USDT");
+  }
+  if (template.include_risk) {
+    snapshotLines.push("风险：FUNDING_AGAINST");
+  }
+  if (snapshotLines.length > 0) {
+    blocks.push(`【行情快照】\n${snapshotLines.join("\n")}`);
+  }
+  if (template.include_observations) {
+    blocks.push(
+      `【连续监测】\n1. 01:59:44 | 价差 0.720% | 净估算 0.520% | 资金差 0.01% | 综合 0.530%\n最多显示 ${template.observation_limit} 轮`
+    );
+  }
+  if (template.include_dashboard_link) {
+    blocks.push("Dashboard: https://your-domain.example");
+  }
+  return blocks.join("\n\n") || "至少保留一个字段，避免告警内容为空。";
+}
+
 export function SettingsPage() {
   const [riskForm] = Form.useForm<RiskSettings>();
   const [ruleForm] = Form.useForm<AlertRuleFormValues>();
+  const [templateForm] = Form.useForm<AlertMessageTemplateSettings>();
   const [rules, setRules] = useState<AlertRule[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [ruleDefaults, setRuleDefaults] = useState<AlertRule>(defaultRule);
+  const [alertTemplatePreview, setAlertTemplatePreview] =
+    useState<AlertMessageTemplateSettings>(defaultAlertMessageTemplate);
+  const [serviceControl, setServiceControl] = useState<ServiceControlStatus | null>(null);
+  const [serviceControlError, setServiceControlError] = useState("");
+  const [restartingService, setRestartingService] = useState<ServiceName | null>(null);
 
   const load = async () => {
     setLoading(true);
     setError("");
+    setServiceControlError("");
     try {
-      const [risk, nextRules] = await Promise.all([getRiskSettings(), listAlertRules()]);
+      const serviceControlRequest = getServiceControlStatus().catch((exc) => {
+        setServiceControlError(exc instanceof Error ? exc.message : String(exc));
+        return null;
+      });
+      const [risk, nextRules, nextServiceControl, alertTemplate] = await Promise.all([
+        getRiskSettings(),
+        listAlertRules(),
+        serviceControlRequest,
+        getAlertMessageTemplate()
+      ]);
       const nextRuleDefaults = ruleDefaultsForRisk(risk);
+      const nextAlertTemplate = normalizeAlertTemplate(alertTemplate);
       riskForm.setFieldsValue(riskToForm(risk));
       ruleForm.setFieldsValue(ruleToForm(nextRuleDefaults));
+      templateForm.setFieldsValue(nextAlertTemplate);
       setRuleDefaults(nextRuleDefaults);
+      setAlertTemplatePreview(nextAlertTemplate);
       setRules(nextRules);
+      setServiceControl(nextServiceControl);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
     } finally {
@@ -125,6 +247,7 @@ export function SettingsPage() {
 
   useEffect(() => {
     ruleForm.setFieldsValue(ruleToForm(defaultRule));
+    templateForm.setFieldsValue(defaultAlertMessageTemplate);
     void load();
   }, []);
 
@@ -136,6 +259,14 @@ export function SettingsPage() {
     ruleForm.setFieldsValue(ruleToForm(nextRuleDefaults));
     setRuleDefaults(nextRuleDefaults);
     message.success("已保存");
+  };
+
+  const saveAlertTemplate = async () => {
+    const values = normalizeAlertTemplate(await templateForm.validateFields());
+    const saved = normalizeAlertTemplate(await updateAlertMessageTemplate(values));
+    templateForm.setFieldsValue(saved);
+    setAlertTemplatePreview(saved);
+    message.success("告警模板已保存");
   };
 
   const createRule = async () => {
@@ -154,10 +285,23 @@ export function SettingsPage() {
     setRules((current) => current.filter((item) => item.id !== rule.id));
   };
 
+  const restartService = async (service: ServiceName) => {
+    setRestartingService(service);
+    try {
+      const result = await restartServiceControl(service);
+      message.success(result.message ?? `${serviceLabels[service]}重启已提交`);
+    } catch (exc) {
+      message.error(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setRestartingService(null);
+    }
+  };
+
   const columns: ColumnsType<AlertRule> = [
     { title: "规则", dataIndex: "name" },
     { title: "类型", dataIndex: "types", render: (types: string[]) => types.join(",") },
     { title: "开仓阈值", dataIndex: "min_open_spread_pct", render: (value: number) => `${value}%` },
+    { title: "综合阈值", dataIndex: "min_fee_adjusted_open_pct", render: (value: number) => `${value}%` },
     { title: "连续命中", dataIndex: "consecutive_hits" },
     { title: "冷却", dataIndex: "cooldown_seconds", render: (value: number) => `${value}s` },
     {
@@ -183,6 +327,42 @@ export function SettingsPage() {
             应用
           </Button>
         </Space.Compact>
+        <div className="service-control">
+          <Typography.Title level={5}>服务控制</Typography.Title>
+          <Alert
+            type={serviceControl?.enabled ? "info" : "warning"}
+            showIcon
+            message={serviceControl?.enabled ? "当前环境允许重启前端和后端服务" : "服务控制未启用"}
+            description={
+              serviceControlError ||
+              serviceControl?.message ||
+              "仅建议在本地测试环境或受控网络中开启。"
+            }
+          />
+          <Space wrap className="service-control-actions">
+            {serviceNames.map((service) => (
+              <Button
+                key={service}
+                danger
+                icon={<ReloadOutlined />}
+                aria-label={`重启${serviceLabels[service]}`}
+                onClick={() => void restartService(service)}
+                disabled={!serviceCanRestart(serviceControl, service)}
+                loading={restartingService === service}
+              >
+                重启{serviceLabels[service]}
+              </Button>
+            ))}
+          </Space>
+          <div className="service-control-list">
+            {(serviceControl?.details ?? []).map((item) => (
+              <Typography.Text key={item.name} type="secondary">
+                {serviceLabels[item.name as ServiceName] ?? item.name}：
+                {item.available ? item.container_name ?? item.container_id ?? item.state ?? "可用" : "不可用"}
+              </Typography.Text>
+            ))}
+          </div>
+        </div>
       </section>
       <section className="panel">
         <Typography.Title level={4}>风险参数</Typography.Title>
@@ -228,6 +408,56 @@ export function SettingsPage() {
           </Button>
         </Form>
       </section>
+      <section className="panel panel-wide">
+        <Typography.Title level={4}>告警内容模板</Typography.Title>
+        <Alert
+          className="rule-guide"
+          type="info"
+          showIcon
+          message="全局模板"
+          description="这里控制飞书告警和新告警历史里展示哪些内容。告警规则仍然只负责判断什么时候触发。"
+        />
+        <Form
+          form={templateForm}
+          layout="vertical"
+          disabled={loading}
+          onFinish={saveAlertTemplate}
+          onValuesChange={(_, values) => setAlertTemplatePreview(normalizeAlertTemplate(values))}
+        >
+          <div className="template-grid">
+            <div className="template-options">
+              {alertTemplateOptions.map((option) => (
+                <Form.Item
+                  key={option.name}
+                  name={option.name}
+                  valuePropName="checked"
+                  className="template-option"
+                >
+                  <Checkbox aria-label={option.label}>
+                    <span className="template-option-label">{option.label}</span>
+                    <span className="template-option-desc">{option.description}</span>
+                  </Checkbox>
+                </Form.Item>
+              ))}
+              <Form.Item
+                label="连续监测最多显示轮数"
+                name="observation_limit"
+                rules={[{ required: true }]}
+                className="template-limit"
+              >
+                <InputNumber min={1} max={20} className="wide-input" />
+              </Form.Item>
+            </div>
+            <div className="template-preview">
+              <Typography.Text strong>消息预览</Typography.Text>
+              <pre>{buildAlertTemplatePreview(alertTemplatePreview)}</pre>
+            </div>
+          </div>
+          <Button type="primary" htmlType="submit" icon={<SaveOutlined />}>
+            保存告警模板
+          </Button>
+        </Form>
+      </section>
       <section className="panel">
         <Typography.Title level={4}>新增告警规则</Typography.Title>
         <Alert className="rule-guide" type="info" showIcon message="规则说明" description={alertRuleGuide} />
@@ -269,13 +499,7 @@ export function SettingsPage() {
             >
               <Select mode="tags" tokenSeparators={[",", " "]} placeholder="BTCUSDT, ETHUSDT" />
             </Form.Item>
-            <Form.Item
-              label="排除标的"
-              name="exclude_symbols"
-              help={alertRuleFieldHelp.exclude_symbols}
-            >
-              <Select mode="tags" tokenSeparators={[",", " "]} placeholder="TRADOORUSDT" />
-            </Form.Item>
+            <div className="rule-note">{alertRuleFieldHelp.exclude_symbols}</div>
             <Form.Item
               label="开仓阈值"
               name="min_open_spread_pct"
@@ -285,7 +509,7 @@ export function SettingsPage() {
               <InputNumber min={0} step={0.1} suffix="%" className="wide-input" />
             </Form.Item>
             <Form.Item
-              label="净估算阈值"
+              label="综合开仓阈值"
               name="min_fee_adjusted_open_pct"
               rules={[{ required: true }]}
               help={alertRuleFieldHelp.min_fee_adjusted_open_pct}

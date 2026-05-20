@@ -5,6 +5,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from app.core.security import dashboard_password_header, verify_dashboard_password
 from app.db.repositories import AlertEventRepository, AlertRuleRepository
 from app.models.alert import AlertEvent, AlertRule
+from app.models.settings import AlertMessageTemplateSettings
+from app.services.alert_metrics import observe_alert_metrics
+from app.services.alert_messages import build_alert_message
 
 router = APIRouter(prefix="/alerts")
 
@@ -25,6 +28,46 @@ def _event_repo(request: Request) -> AlertEventRepository:
     if repo is None:
         raise HTTPException(status_code=503, detail="Alert event repository is not ready")
     return repo
+
+
+def _history_repo(request: Request):
+    repo = getattr(request.app.state, "history_repo", None)
+    if repo is None:
+        raise HTTPException(status_code=503, detail="Opportunity history repository is not ready")
+    return repo
+
+
+async def _alert_message_template(request: Request) -> AlertMessageTemplateSettings:
+    repo = getattr(request.app.state, "settings_repo", None)
+    if repo is None:
+        return AlertMessageTemplateSettings()
+    return await repo.get_alert_message_template()
+
+
+async def _resolve_event_message(request: Request, event: AlertEvent) -> str:
+    if event.message.startswith("【告警触发】"):
+        return event.message
+
+    rule = await _rule_repo(request).get(event.rule_id)
+    if rule is None:
+        return event.message
+
+    history_repo = _history_repo(request)
+    rows = await history_repo.list_before(
+        opportunity_id=event.opportunity_id,
+        before=event.created_at,
+        limit=max(rule.consecutive_hits, 1),
+    )
+    if not rows:
+        return event.message
+
+    observations = [observe_alert_metrics(row, row.observed_at) for row in reversed(rows)]
+    return build_alert_message(
+        rule,
+        rows[0],
+        observations=observations,
+        template=await _alert_message_template(request),
+    )
 
 
 @router.get("/rules", response_model=list[AlertRule])
@@ -67,7 +110,12 @@ async def delete_rule(
 
 @router.get("/events", response_model=list[AlertEvent])
 async def list_events(request: Request, limit: int = 100) -> list[AlertEvent]:
-    return await _event_repo(request).list(limit=limit)
+    events = await _event_repo(request).list(limit=limit)
+    resolved: list[AlertEvent] = []
+    for event in events:
+        resolved_message = await _resolve_event_message(request, event)
+        resolved.append(event.model_copy(update={"message": resolved_message}))
+    return resolved
 
 
 @router.post("/test", response_model=AlertEvent)

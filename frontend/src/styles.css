@@ -87,6 +87,10 @@ body {
   width: 150px;
 }
 
+.type-exclude-select {
+  width: 160px;
+}
+
 .spread-input {
   width: 180px;
 }
@@ -243,14 +247,114 @@ body {
   gap: 0 12px;
 }
 
+.rule-note {
+  grid-column: 1 / -1;
+  margin: -6px 0 10px;
+  color: #66736f;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.template-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.9fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.template-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 12px;
+}
+
+.template-option {
+  margin-bottom: 0;
+  padding: 8px;
+  border: 1px solid #dce4e1;
+  border-radius: 6px;
+}
+
+.template-option .ant-checkbox-wrapper {
+  width: 100%;
+  align-items: flex-start;
+}
+
+.template-option-label,
+.template-option-desc {
+  display: block;
+  line-height: 1.35;
+}
+
+.template-option-label {
+  font-weight: 600;
+}
+
+.template-option-desc {
+  margin-top: 2px;
+  color: #66736f;
+  font-size: 12px;
+}
+
+.template-limit {
+  margin-bottom: 0;
+}
+
+.template-preview {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.template-preview pre {
+  min-height: 240px;
+  max-height: 420px;
+  margin: 0 0 12px;
+  padding: 12px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #172026;
+  background: #f7faf9;
+  border: 1px solid #dce4e1;
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 .wide-input,
 .password-row {
   width: 100%;
 }
 
+.service-control {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.service-control .ant-typography {
+  margin-bottom: 0;
+}
+
+.service-control-actions {
+  width: 100%;
+}
+
+.service-control-list {
+  display: grid;
+  gap: 4px;
+  color: #66736f;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 @media (max-width: 900px) {
   .settings-grid,
-  .form-grid {
+  .form-grid,
+  .template-grid,
+  .template-options {
     grid-template-columns: 1fr;
   }
 
@@ -272,6 +376,7 @@ body {
 
   .symbol-input,
   .exchange-select,
+  .type-exclude-select,
   .spread-input {
     width: 100%;
   }

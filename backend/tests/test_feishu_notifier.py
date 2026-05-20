@@ -1,8 +1,11 @@
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 from app.models.alert import AlertRule, AlertSeverity
 from app.models.market import MarketType
 from app.models.opportunity import Opportunity, OpportunityType
+from app.models.settings import AlertMessageTemplateSettings
+from app.services.alert_messages import build_alert_message
 from app.services.feishu import FeishuConfig, FeishuNotifier
 
 
@@ -65,8 +68,35 @@ def test_build_payload_explains_rule_parameters() -> None:
     )
     notifier = FeishuNotifier(FeishuConfig(webhook_url=""))
 
-    payload = notifier._build_payload(rule, make_opportunity(), "https://example.com")
+    observations = [
+        SimpleNamespace(
+            observed_at=datetime(2026, 5, 15, 1, 59, 44, tzinfo=UTC),
+            open_spread_pct=0.72,
+            fee_adjusted_open_pct=0.52,
+            funding_edge_pct=0.01,
+            combined_open_edge_pct=0.53,
+            net_funding_pct=-0.03,
+            net_funding_next_pct=0.01,
+        ),
+        SimpleNamespace(
+            observed_at=datetime(2026, 5, 15, 1, 59, 52, tzinfo=UTC),
+            open_spread_pct=0.80,
+            fee_adjusted_open_pct=0.60,
+            funding_edge_pct=0.01,
+            combined_open_edge_pct=0.61,
+            net_funding_pct=-0.03,
+            net_funding_next_pct=0.01,
+        ),
+    ]
+
+    payload = notifier._build_payload(
+        rule,
+        make_opportunity(),
+        "https://example.com",
+        observations=observations,
+    )
     text = payload["content"]["text"]
+    assert text == build_alert_message(rule, make_opportunity(), "https://example.com", observations=observations)
 
     assert "【告警触发】" in text
     assert "规则：FF 价差" in text
@@ -75,9 +105,9 @@ def test_build_payload_explains_rule_parameters() -> None:
     assert "包含交易所：binance" in text
     assert "排除交易所：gate" in text
     assert "包含标的：BTCUSDT" in text
-    assert "排除标的：BADUSDT" in text
+    assert "排除标的：继承实时机会页隐藏黑名单" in text
     assert "开仓阈值：>= 0.500%" in text
-    assert "净估算阈值：>= 0.250%" in text
+    assert "综合开仓阈值：>= 0.250%" in text
     assert "最低成交额：>= 1000K USDT" in text
     assert "数据时效：<= 600s" in text
     assert "排除风险：LOW_VOLUME" in text
@@ -86,5 +116,64 @@ def test_build_payload_explains_rule_parameters() -> None:
     assert "【行情快照】" in text
     assert "买入腿：binance future" in text
     assert "卖出腿：okx future" in text
+    assert "价差对：BTCUSDT | binance future -> okx future" in text
+    assert "方向：买入 binance future BTCUSDT，卖出 okx future BTCUSDT" in text
+    assert "价差：开仓 0.800% / 平仓 0.500%" in text
+    assert "资金费率差：当前 -0.03% / 预测 0.01%" in text
+    assert "综合开仓：0.610%" in text
     assert "资金费率：0.01% / -0.02%" in text
+    assert "【连续监测】" in text
+    assert "1. 01:59:44 | 价差 0.720% | 净估算 0.520% | 资金差 0.01% | 综合 0.530%" in text
+    assert "2. 01:59:52 | 价差 0.800% | 净估算 0.600% | 资金差 0.01% | 综合 0.610%" in text
     assert "风险：FUNDING_AGAINST" in text
+
+
+def test_build_payload_honors_alert_message_template_blocks() -> None:
+    rule = AlertRule(
+        name="compact alert",
+        severity=AlertSeverity.WARNING,
+        types=["FF"],
+        min_open_spread_pct=0.5,
+        min_fee_adjusted_open_pct=0.25,
+        min_volume_24h_usdt=1_000_000,
+    )
+    template = AlertMessageTemplateSettings(
+        include_rule_details=False,
+        include_funding=False,
+        include_volume=False,
+        include_risk=False,
+        include_observations=False,
+        include_dashboard_link=False,
+    )
+    observations = [
+        SimpleNamespace(
+            observed_at=datetime(2026, 5, 15, 1, 59, 44, tzinfo=UTC),
+            open_spread_pct=0.72,
+            fee_adjusted_open_pct=0.52,
+            funding_edge_pct=0.01,
+            combined_open_edge_pct=0.53,
+            net_funding_pct=-0.03,
+            net_funding_next_pct=0.01,
+        )
+    ]
+    notifier = FeishuNotifier(FeishuConfig(webhook_url=""))
+
+    payload = notifier._build_payload(
+        rule,
+        make_opportunity(),
+        "https://example.com",
+        observations=observations,
+        template=template,
+    )
+
+    text = payload["content"]["text"]
+    assert "【告警触发】" in text
+    assert "compact alert" in text
+    assert "价差对：BTCUSDT | binance future -> okx future" in text
+    assert "开仓 0.800%" in text
+    assert "【规则参数】" not in text
+    assert "资金费率" not in text
+    assert "成交额" not in text
+    assert "风险" not in text
+    assert "【连续监测】" not in text
+    assert "Dashboard" not in text

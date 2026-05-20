@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.core.security import dashboard_password_header, verify_dashboard_password
 from app.db.repositories import SettingsRepository
-from app.models.settings import RiskSettings
+from app.models.settings import AlertMessageTemplateSettings, RiskSettings
 
 router = APIRouter(prefix="/settings")
 
@@ -27,3 +27,18 @@ async def update_risk_settings(
 ) -> RiskSettings:
     verify_dashboard_password(request.app.state.settings.dashboard_password, password)
     return await _settings_repo(request).set_risk_settings(settings)
+
+
+@router.get("/alert-message-template", response_model=AlertMessageTemplateSettings)
+async def get_alert_message_template(request: Request) -> AlertMessageTemplateSettings:
+    return await _settings_repo(request).get_alert_message_template()
+
+
+@router.put("/alert-message-template", response_model=AlertMessageTemplateSettings)
+async def update_alert_message_template(
+    settings: AlertMessageTemplateSettings,
+    request: Request,
+    password: str | None = Depends(dashboard_password_header),
+) -> AlertMessageTemplateSettings:
+    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
+    return await _settings_repo(request).set_alert_message_template(settings)

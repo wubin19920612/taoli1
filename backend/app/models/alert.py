@@ -51,11 +51,14 @@ class AlertRule(BaseModel):
         default_factory=list,
         description="只匹配这些标的，留空表示不限制。",
     )
-    exclude_symbols: list[str] = Field(default_factory=list, description="这些标的会被排除。")
+    exclude_symbols: list[str] = Field(
+        default_factory=list,
+        description="兼容字段，实际筛选以实时机会页隐藏黑名单为准。",
+    )
     min_open_spread_pct: float = Field(default=0.0, description="开仓价差达到这个百分比才算命中。")
     min_fee_adjusted_open_pct: float = Field(
         default=0.0,
-        description="扣除手续费和滑点后的净开仓价差阈值。",
+        description="扣除手续费、滑点并叠加资金费率差后的综合开仓阈值。",
     )
     min_volume_24h_usdt: float = Field(
         default=0.0,
