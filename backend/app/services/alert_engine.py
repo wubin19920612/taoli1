@@ -3,8 +3,12 @@ from datetime import UTC, datetime
 
 from app.models.alert import AlertRule
 from app.models.opportunity import Opportunity
+from app.models.settings import RiskSettings
 from app.services.alert_metrics import AlertObservation, combined_open_edge_pct, observe_alert_metrics
-from app.services.risk_labels import known_volume_24h_usdt
+from app.services.risk_labels import effective_open_edge_pct, known_volume_24h_usdt
+
+MAX_ALERTS_PER_SYMBOL = 3
+EPSILON = 1e-9
 
 
 @dataclass(frozen=True)
@@ -25,8 +29,10 @@ class AlertEngine:
         opportunities: list[Opportunity],
         rules: list[AlertRule],
         now: datetime | None = None,
+        risk_settings: RiskSettings | None = None,
     ) -> list[AlertMatch]:
         current = now or datetime.now(UTC)
+        settings = risk_settings or RiskSettings()
         matches: list[AlertMatch] = []
         active_keys: set[str] = set()
         for rule in rules:
@@ -34,7 +40,7 @@ class AlertEngine:
                 continue
             for opportunity in opportunities:
                 key = f"{rule.id}:{opportunity.id}"
-                if not self._matches(rule, opportunity, current):
+                if not self._matches(rule, opportunity, current, settings):
                     continue
                 active_keys.add(key)
                 observations = self._observations.setdefault(key, [])
@@ -46,6 +52,8 @@ class AlertEngine:
                 count = previous_count + 1
                 self._hits[key] = (count, current)
                 if count < rule.consecutive_hits:
+                    continue
+                if not observations_are_stable(observations, settings):
                     continue
                 last_sent = self._last_sent.get(key)
                 if last_sent and (current - last_sent).total_seconds() < rule.cooldown_seconds:
@@ -62,9 +70,15 @@ class AlertEngine:
             if key not in active_keys:
                 self._hits.pop(key, None)
                 self._observations.pop(key, None)
-        return matches
+        return _limit_matches_per_symbol(matches)
 
-    def _matches(self, rule: AlertRule, opportunity: Opportunity, now: datetime) -> bool:
+    def _matches(
+        self,
+        rule: AlertRule,
+        opportunity: Opportunity,
+        now: datetime,
+        settings: RiskSettings,
+    ) -> bool:
         if opportunity.type not in rule.types:
             return False
         if rule.include_exchanges:
@@ -77,7 +91,9 @@ class AlertEngine:
             return False
         if opportunity.open_spread_pct < rule.min_open_spread_pct:
             return False
-        if combined_open_edge_pct(opportunity) < rule.min_fee_adjusted_open_pct:
+        if effective_open_edge_pct(opportunity, settings) + EPSILON < rule.min_fee_adjusted_open_pct:
+            return False
+        if effective_open_edge_pct(opportunity, settings) + EPSILON < settings.min_effective_open_pct:
             return False
         min_volume = known_volume_24h_usdt(opportunity)
         if min_volume is not None and min_volume < rule.min_volume_24h_usdt:
@@ -87,3 +103,41 @@ class AlertEngine:
         if set(opportunity.risk_labels).intersection(rule.excluded_risk_labels):
             return False
         return True
+
+
+def observations_are_stable(observations: list[AlertObservation], settings: RiskSettings) -> bool:
+    if len(observations) < 2:
+        return True
+    if settings.max_open_spread_decay_pct >= 100:
+        return True
+    peak = max(item.open_spread_pct for item in observations)
+    if peak <= 0:
+        return True
+    latest = observations[-1].open_spread_pct
+    minimum_retained = peak * (1 - settings.max_open_spread_decay_pct / 100)
+    return latest + EPSILON >= minimum_retained
+
+
+def _alert_rank(match: AlertMatch) -> tuple[float, float, float, float]:
+    opportunity = match.opportunity
+    min_volume = known_volume_24h_usdt(opportunity) or 0.0
+    volume_millions = min_volume / 1_000_000
+    return (
+        combined_open_edge_pct(opportunity),
+        opportunity.open_spread_pct,
+        volume_millions,
+        opportunity.spread_width_pct * -1,
+    )
+
+
+def _limit_matches_per_symbol(matches: list[AlertMatch]) -> list[AlertMatch]:
+    grouped: dict[str, list[AlertMatch]] = {}
+    for match in matches:
+        grouped.setdefault(match.opportunity.symbol.upper(), []).append(match)
+
+    limited: list[AlertMatch] = []
+    for symbol_matches in grouped.values():
+        limited.extend(
+            sorted(symbol_matches, key=_alert_rank, reverse=True)[:MAX_ALERTS_PER_SYMBOL]
+        )
+    return sorted(limited, key=_alert_rank, reverse=True)

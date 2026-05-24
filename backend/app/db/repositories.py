@@ -7,7 +7,7 @@ from app.models.alert import AlertEvent, AlertRule
 from app.models.history import OpportunityHistoryRow
 from app.models.market import MarketType
 from app.models.opportunity import Opportunity, OpportunityType
-from app.models.settings import AlertMessageTemplateSettings, RiskSettings
+from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, RiskSettings
 
 PERCENT_SCALE = 10_000
 RISK_LABEL_BITS = {
@@ -19,6 +19,9 @@ RISK_LABEL_BITS = {
     "FUNDING_AGAINST": 1 << 5,
     "MARK_INDEX_DEVIATION": 1 << 6,
     "MISSING_FUNDING": 1 << 7,
+    "THIN_ORDER_BOOK": 1 << 8,
+    "EDGE_AFTER_SLIPPAGE_TOO_SMALL": 1 << 9,
+    "TRANSIENT_SIGNAL": 1 << 10,
 }
 RISK_LABELS_BY_BIT = {value: key for key, value in RISK_LABEL_BITS.items()}
 
@@ -190,6 +193,35 @@ class SettingsRepository:
             ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
             """,
             ("alert_message_template", settings.model_dump_json()),
+        )
+        await self.db.commit()
+        return settings
+
+    async def get_astro_card_settings(self) -> AstroCardSettings:
+        settings = await self.find_astro_card_settings()
+        return settings or AstroCardSettings()
+
+    async def find_astro_card_settings(self) -> AstroCardSettings | None:
+        cursor = await self.db.execute(
+            "SELECT payload FROM app_settings WHERE key = ?",
+            ("astro_card",),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        return AstroCardSettings.model_validate(json.loads(row["payload"]))
+
+    async def set_astro_card_settings(
+        self,
+        settings: AstroCardSettings,
+    ) -> AstroCardSettings:
+        await self.db.execute(
+            """
+            INSERT INTO app_settings (key, payload)
+            VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
+            """,
+            ("astro_card", settings.model_dump_json()),
         )
         await self.db.commit()
         return settings

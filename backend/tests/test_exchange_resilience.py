@@ -3,6 +3,7 @@ import pytest
 
 from app.exchanges.aster import AsterAdapter
 from app.exchanges.base import ExchangeAdapter
+from app.exchanges.binance import BinanceAdapter
 from app.exchanges.bitget import BitgetAdapter
 from app.exchanges.bybit import BybitAdapter
 from app.exchanges.gate import GateAdapter
@@ -62,6 +63,31 @@ class FakeClient:
                 }
             )
         raise AssertionError(f"unexpected url: {url}")
+
+
+class FundingIntervalClient:
+    def __init__(self, responses: dict[str, object]):
+        self.responses = responses
+        self.urls: list[str] = []
+
+    async def get(self, url: str):
+        self.urls.append(url)
+        for fragment, payload in self.responses.items():
+            if fragment in url:
+                return FakeResponse(payload)
+        raise AssertionError(f"unexpected url: {url}")
+
+
+class FailingFragmentClient(FundingIntervalClient):
+    def __init__(self, responses: dict[str, object], failing_fragment: str):
+        super().__init__(responses)
+        self.failing_fragment = failing_fragment
+
+    async def get(self, url: str):
+        if self.failing_fragment in url:
+            self.urls.append(url)
+            raise httpx.TimeoutException("funding interval timeout")
+        return await super().get(url)
 
 
 class FailingFundingClient(FakeClient):
@@ -136,6 +162,30 @@ class FakePostClient:
         raise AssertionError(f"unexpected body: {json}")
 
 
+class ConcurrencyPostClient:
+    def __init__(self, payloads: dict[object, object]):
+        self.payloads = payloads
+        self.current = 0
+        self.max_seen = 0
+
+    async def post(self, url: str, json: dict):
+        import asyncio
+
+        self.current += 1
+        self.max_seen = max(self.max_seen, self.current)
+        try:
+            await asyncio.sleep(0.01)
+            key = (json["type"], json.get("dex"))
+            if key in self.payloads:
+                return FakeResponse(self.payloads[key])
+            response_type = json["type"]
+            if response_type in self.payloads:
+                return FakeResponse(self.payloads[response_type])
+            raise AssertionError(f"unexpected body: {json}")
+        finally:
+            self.current -= 1
+
+
 @pytest.mark.asyncio
 async def test_okx_fetches_all_funding_rates_in_one_request() -> None:
     client = FakeClient()
@@ -146,9 +196,168 @@ async def test_okx_fetches_all_funding_rates_in_one_request() -> None:
     assert rows[0].symbol == "BTCUSDT"
     assert rows[0].funding_rate_pct == 0.01
     assert rows[0].funding_next_rate_pct == 0.02
+    assert rows[0].funding_interval_hours == 4
     assert any("funding-rate?instId=ANY" in url for url in client.urls)
     assert not any("funding-rate?instType=SWAP" in url for url in client.urls)
     assert not any("funding-rate?instId=BTC-USDT-SWAP" in url for url in client.urls)
+
+
+@pytest.mark.asyncio
+async def test_binance_uses_funding_info_interval_over_default() -> None:
+    client = FundingIntervalClient(
+        {
+            "ticker/bookTicker": [
+                {
+                    "symbol": "LPTUSDT",
+                    "bidPrice": "10",
+                    "askPrice": "10.1",
+                    "bidQty": "1",
+                    "askQty": "1",
+                }
+            ],
+            "premiumIndex": [
+                {
+                    "symbol": "LPTUSDT",
+                    "lastFundingRate": "0.0001",
+                    "nextFundingTime": "1779206400000",
+                    "markPrice": "10",
+                    "indexPrice": "10",
+                }
+            ],
+            "fundingInfo": [
+                {
+                    "symbol": "LPTUSDT",
+                    "fundingIntervalHours": 4,
+                }
+            ],
+        }
+    )
+    adapter = BinanceAdapter(client=client)
+
+    rows = await adapter.fetch_future_tickers()
+
+    assert rows[0].funding_interval_hours == 4
+    assert any("fundingInfo" in url for url in client.urls)
+
+
+@pytest.mark.asyncio
+async def test_aster_uses_funding_info_interval_over_default() -> None:
+    client = FundingIntervalClient(
+        {
+            "ticker/bookTicker": [
+                {
+                    "symbol": "SBETUSDT",
+                    "bidPrice": "1",
+                    "askPrice": "1.01",
+                    "bidQty": "1",
+                    "askQty": "1",
+                }
+            ],
+            "fundingInfo": [
+                {
+                    "symbol": "SBETUSDT",
+                    "fundingIntervalHours": 4,
+                }
+            ],
+        }
+    )
+    adapter = AsterAdapter(client=client)
+
+    rows = await adapter.fetch_future_tickers()
+
+    assert rows[0].funding_interval_hours == 4
+    assert any("fundingInfo" in url for url in client.urls)
+
+
+@pytest.mark.asyncio
+async def test_aster_leaves_interval_unknown_when_funding_info_fails() -> None:
+    client = FailingFragmentClient(
+        {
+            "ticker/bookTicker": [
+                {
+                    "symbol": "SBETUSDT",
+                    "bidPrice": "1",
+                    "askPrice": "1.01",
+                    "bidQty": "1",
+                    "askQty": "1",
+                }
+            ],
+        },
+        failing_fragment="fundingInfo",
+    )
+    adapter = AsterAdapter(client=client)
+
+    rows = await adapter.fetch_future_tickers()
+
+    assert rows[0].funding_interval_hours is None
+
+
+@pytest.mark.asyncio
+async def test_gate_uses_contract_funding_interval_when_ticker_omits_it() -> None:
+    client = FundingIntervalClient(
+        {
+            "futures/usdt/tickers": [
+                {
+                    "contract": "2Z_USDT",
+                    "highest_bid": "0.1",
+                    "lowest_ask": "0.101",
+                    "funding_rate": "-0.000154",
+                    "funding_rate_indicative": "-0.0001",
+                    "funding_next_apply": "1779364800",
+                    "volume_24h_quote": "1000000",
+                }
+            ],
+            "futures/usdt/contracts": [
+                {
+                    "name": "2Z_USDT",
+                    "funding_interval": 14400,
+                }
+            ],
+        }
+    )
+    adapter = GateAdapter(client=client)
+
+    rows = await adapter.fetch_future_tickers()
+
+    assert rows[0].funding_interval_hours == 4
+    assert any("futures/usdt/contracts" in url for url in client.urls)
+
+
+@pytest.mark.asyncio
+async def test_htx_uses_contract_info_settlement_period_over_default() -> None:
+    client = FundingIntervalClient(
+        {
+            "batch_merged": {
+                "ticks": [
+                    {
+                        "contract_code": "MASK-USDT",
+                        "tick": {
+                            "bid": [1.0],
+                            "ask": [1.01],
+                            "amount": "1000000",
+                        },
+                    }
+                ]
+            },
+            "swap_contract_info": {
+                "status": "ok",
+                "data": [
+                    {
+                        "contract_code": "MASK-USDT",
+                        "settlement_period": "4",
+                        "settlement_date": "1779364800000",
+                    }
+                ],
+            },
+        }
+    )
+    adapter = HTXAdapter(client=client)
+
+    rows = await adapter.fetch_future_tickers()
+
+    assert rows[0].funding_interval_hours == 4
+    assert rows[0].funding_next_time is not None
+    assert any("swap_contract_info" in url for url in client.urls)
 
 
 @pytest.mark.asyncio
@@ -312,6 +521,24 @@ async def test_hyperliquid_fetches_stock_perp_dexes_and_keeps_best_symbol() -> N
 
 
 @pytest.mark.asyncio
+async def test_hyperliquid_limits_perp_dex_request_concurrency() -> None:
+    dex_names = [f"dex{i}" for i in range(10)]
+    payloads: dict[object, object] = {
+        ("perpDexs", None): [{"name": name} for name in dex_names],
+        ("metaAndAssetCtxs", None): [{"universe": []}, []],
+        ("predictedFundings", None): [],
+    }
+    for name in dex_names:
+        payloads[("metaAndAssetCtxs", name)] = [{"universe": []}, []]
+    client = ConcurrencyPostClient(payloads)
+    adapter = HyperliquidAdapter(client=client)
+
+    await adapter.fetch_future_tickers()
+
+    assert client.max_seen <= adapter.perp_dex_concurrency
+
+
+@pytest.mark.asyncio
 async def test_hyperliquid_parses_canonical_spot_usdc_pairs_as_usdt_symbols() -> None:
     client = FakePostClient(
         {
@@ -432,5 +659,12 @@ def test_exchange_adapters_use_shared_get_json(adapter_cls, monkeypatch) -> None
     asyncio.run(adapter.fetch_spot_tickers())
     asyncio.run(adapter.fetch_future_tickers())
 
-    expected_calls = 3 if adapter_cls is BitgetAdapter else 2
+    expected_calls_by_adapter = {
+        AsterAdapter: 3,
+        BitgetAdapter: 3,
+        BybitAdapter: 2,
+        GateAdapter: 3,
+        HTXAdapter: 3,
+    }
+    expected_calls = expected_calls_by_adapter[adapter_cls]
     assert len(called_urls) == expected_calls

@@ -5,6 +5,7 @@ import pytest
 from app.models.alert import AlertRule
 from app.models.market import MarketType
 from app.models.opportunity import Opportunity, OpportunityType
+from app.models.settings import RiskSettings
 from app.services.alert_engine import AlertEngine
 
 
@@ -125,6 +126,78 @@ def test_cooldown_suppresses_repeated_alerts() -> None:
     assert len(engine.evaluate([opportunity()], [rule], now=now + timedelta(seconds=301))) == 1
 
 
+def test_decaying_signal_is_suppressed_after_consecutive_hits() -> None:
+    engine = AlertEngine()
+    rule = AlertRule(
+        name="avoid fading edge",
+        types=["FF"],
+        min_open_spread_pct=0.3,
+        min_fee_adjusted_open_pct=0.2,
+        min_volume_24h_usdt=1_000_000,
+        consecutive_hits=3,
+        cooldown_seconds=300,
+    )
+    settings = RiskSettings(max_open_spread_decay_pct=40, ticker_collision_symbols=[])
+    now = datetime.now(UTC)
+
+    assert engine.evaluate(
+        [opportunity(spread=1.20).model_copy(update={"fee_adjusted_open_pct": 1.00})],
+        [rule],
+        now=now,
+        risk_settings=settings,
+    ) == []
+    assert engine.evaluate(
+        [opportunity(spread=0.90).model_copy(update={"fee_adjusted_open_pct": 0.70})],
+        [rule],
+        now=now + timedelta(seconds=8),
+        risk_settings=settings,
+    ) == []
+    fired = engine.evaluate(
+        [opportunity(spread=0.55).model_copy(update={"fee_adjusted_open_pct": 0.35})],
+        [rule],
+        now=now + timedelta(seconds=16),
+        risk_settings=settings,
+    )
+
+    assert fired == []
+
+
+def test_stable_signal_survives_decay_guard() -> None:
+    engine = AlertEngine()
+    rule = AlertRule(
+        name="stable edge",
+        types=["FF"],
+        min_open_spread_pct=0.3,
+        min_fee_adjusted_open_pct=0.2,
+        min_volume_24h_usdt=1_000_000,
+        consecutive_hits=3,
+        cooldown_seconds=300,
+    )
+    settings = RiskSettings(max_open_spread_decay_pct=40, ticker_collision_symbols=[])
+    now = datetime.now(UTC)
+
+    assert engine.evaluate(
+        [opportunity(spread=1.00).model_copy(update={"fee_adjusted_open_pct": 0.80})],
+        [rule],
+        now=now,
+        risk_settings=settings,
+    ) == []
+    assert engine.evaluate(
+        [opportunity(spread=0.92).model_copy(update={"fee_adjusted_open_pct": 0.72})],
+        [rule],
+        now=now + timedelta(seconds=8),
+        risk_settings=settings,
+    ) == []
+    fired = engine.evaluate(
+        [opportunity(spread=0.88).model_copy(update={"fee_adjusted_open_pct": 0.68})],
+        [rule],
+        now=now + timedelta(seconds=16),
+        risk_settings=settings,
+    )
+
+    assert len(fired) == 1
+
+
 def test_excluded_risk_label_blocks_alert() -> None:
     engine = AlertEngine()
     rule = AlertRule(
@@ -180,6 +253,40 @@ def test_positive_funding_can_lift_fee_adjusted_edge_over_threshold() -> None:
     fired = engine.evaluate([opp], [rule], now=datetime.now(UTC))
 
     assert len(fired) == 1
+
+
+def test_funding_adjustment_uses_settlement_cycle_normalized_daily_edge() -> None:
+    engine = AlertEngine()
+    rule = AlertRule(
+        name="funding interval adjusted",
+        types=["FF"],
+        min_open_spread_pct=0.3,
+        min_fee_adjusted_open_pct=0.25,
+        min_volume_24h_usdt=1_000_000,
+        consecutive_hits=1,
+    )
+    opp = opportunity(spread=0.45).model_copy(
+        update={
+            "fee_adjusted_open_pct": 0.20,
+            "funding_rate_buy_pct": 0.08,
+            "funding_rate_sell_pct": 0.02,
+            "funding_next_rate_buy_pct": None,
+            "funding_next_rate_sell_pct": None,
+            "net_funding_pct": -0.06,
+            "net_funding_next_pct": None,
+            "buy_funding_interval_hours": 8,
+            "sell_funding_interval_hours": 1,
+            "net_funding_hourly_pct": 0.01,
+            "net_funding_daily_pct": 0.24,
+            "net_funding_next_hourly_pct": None,
+            "net_funding_next_daily_pct": None,
+        }
+    )
+
+    fired = engine.evaluate([opp], [rule], now=datetime.now(UTC))
+
+    assert len(fired) == 1
+    assert fired[0].observations[0].funding_edge_pct == pytest.approx(0.24)
 
 
 def test_negative_funding_can_block_fee_adjusted_edge_under_threshold() -> None:
@@ -268,3 +375,72 @@ def test_known_low_volume_blocks_alert_when_other_side_is_missing() -> None:
     )
 
     assert engine.evaluate([opp], [rule], now=datetime.now(UTC)) == []
+
+
+def test_same_symbol_alerts_are_limited_to_top_three_arbitrage_candidates() -> None:
+    engine = AlertEngine()
+    rule = AlertRule(
+        name="best btc routes",
+        types=["FF"],
+        min_open_spread_pct=0.3,
+        min_fee_adjusted_open_pct=0.2,
+        min_volume_24h_usdt=1_000_000,
+        consecutive_hits=1,
+        cooldown_seconds=300,
+    )
+    base_time = datetime.now(UTC)
+    candidates = [
+        opportunity(spread=0.90).model_copy(
+            update={
+                "id": "low-volume",
+                "fee_adjusted_open_pct": 0.70,
+                "net_funding_next_daily_pct": 0.02,
+                "buy_volume_24h_usdt": 1_000_000,
+                "sell_volume_24h_usdt": 1_000_000,
+            }
+        ),
+        opportunity(spread=1.10).model_copy(
+            update={
+                "id": "best-edge",
+                "fee_adjusted_open_pct": 0.90,
+                "net_funding_next_daily_pct": 0.08,
+                "buy_volume_24h_usdt": 20_000_000,
+                "sell_volume_24h_usdt": 22_000_000,
+            }
+        ),
+        opportunity(spread=1.00).model_copy(
+            update={
+                "id": "best-funding",
+                "fee_adjusted_open_pct": 0.78,
+                "net_funding_next_daily_pct": 0.15,
+                "buy_volume_24h_usdt": 18_000_000,
+                "sell_volume_24h_usdt": 18_000_000,
+            }
+        ),
+        opportunity(spread=0.85).model_copy(
+            update={
+                "id": "medium",
+                "fee_adjusted_open_pct": 0.62,
+                "net_funding_next_daily_pct": 0.03,
+                "buy_volume_24h_usdt": 8_000_000,
+                "sell_volume_24h_usdt": 8_000_000,
+            }
+        ),
+        opportunity(spread=1.05).model_copy(
+            update={
+                "id": "best-liquidity",
+                "fee_adjusted_open_pct": 0.76,
+                "net_funding_next_daily_pct": 0.05,
+                "buy_volume_24h_usdt": 100_000_000,
+                "sell_volume_24h_usdt": 90_000_000,
+            }
+        ),
+    ]
+
+    fired = engine.evaluate(candidates, [rule], now=base_time)
+
+    assert [match.opportunity.id for match in fired] == [
+        "best-edge",
+        "best-funding",
+        "best-liquidity",
+    ]

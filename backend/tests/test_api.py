@@ -10,7 +10,9 @@ from app.models.history import OpportunityHistoryRow
 from app.models.market import MarketSnapshot, MarketType
 from app.models.opportunity import Opportunity, OpportunityType
 from app.models.alert import AlertEvent, AlertRule
-from app.models.settings import AlertMessageTemplateSettings, RiskSettings
+from app.models.orderbook import DepthValidationResult
+from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, RiskSettings
+from app.services.astro_alerts import AstroAlertService
 from app.services.service_control import DockerServiceController, ServiceControlConfig, ServiceControlError
 from app.services.snapshot_store import SnapshotStore
 
@@ -20,15 +22,27 @@ class FakeSettingsRepository:
         self,
         settings: RiskSettings,
         alert_template: AlertMessageTemplateSettings | None = None,
+        astro_card_settings: AstroCardSettings | None = None,
     ):
         self.settings = settings
         self.alert_template = alert_template or AlertMessageTemplateSettings()
+        self.astro_card_settings = astro_card_settings
 
     async def get_risk_settings(self) -> RiskSettings:
         return self.settings
 
     async def get_alert_message_template(self) -> AlertMessageTemplateSettings:
         return self.alert_template
+
+    async def get_astro_card_settings(self) -> AstroCardSettings:
+        return self.astro_card_settings or AstroCardSettings()
+
+    async def find_astro_card_settings(self) -> AstroCardSettings | None:
+        return self.astro_card_settings
+
+    async def set_astro_card_settings(self, settings: AstroCardSettings) -> AstroCardSettings:
+        self.astro_card_settings = settings
+        return settings
 
 
 class FakeHistoryRepository:
@@ -77,6 +91,86 @@ class FakeServiceControl:
         return {"service": service, "status": "queued"}
 
 
+class FakeCollector:
+    def exchange_states(self) -> dict[str, dict[str, object]]:
+        return {
+            "binance": {
+                "status": "healthy",
+                "last_success_at": datetime(2026, 5, 21, 12, 0, tzinfo=UTC),
+                "last_error_at": None,
+                "consecutive_failures": 0,
+                "cooldown_until": None,
+                "next_due_at": datetime(2026, 5, 21, 12, 0, 8, tzinfo=UTC),
+            },
+            "gate": {
+                "status": "cooling_down",
+                "last_success_at": datetime(2026, 5, 21, 11, 59, tzinfo=UTC),
+                "last_error_at": datetime(2026, 5, 21, 12, 0, tzinfo=UTC),
+                "consecutive_failures": 1,
+                "cooldown_until": datetime(2026, 5, 21, 12, 0, 15, tzinfo=UTC),
+                "next_due_at": datetime(2026, 5, 21, 12, 0, 15, tzinfo=UTC),
+            },
+        }
+
+
+class FakeAstroSubmitService:
+    def __init__(self):
+        self.calls: list[Opportunity] = []
+        self.requests: list[object] = []
+
+    async def handle_manual_create(self, opportunity: Opportunity, card_request=None):
+        self.calls.append(opportunity)
+        self.requests.append(card_request)
+        from app.models.astro import AstroAlertActionResult
+
+        return AstroAlertActionResult(
+            enabled=True,
+            status="created",
+            action="add",
+            message="已创建暂停卡片 BTC FF binance->okx，禁开=true",
+            pair_name="BTC",
+            pair_type="FF",
+        )
+
+
+class FakeOrderBookValidator:
+    def __init__(self, result: DepthValidationResult):
+        self.result = result
+        self.calls: list[dict[str, object]] = []
+
+    async def validate(
+        self,
+        opportunity: Opportunity,
+        risk_settings: RiskSettings,
+        card_settings: AstroCardSettings | None = None,
+        override_notional_usdt: float | None = None,
+    ) -> DepthValidationResult:
+        self.calls.append(
+            {
+                "opportunity": opportunity,
+                "risk_settings": risk_settings,
+                "card_settings": card_settings,
+                "override_notional_usdt": override_notional_usdt,
+            }
+        )
+        return self.result
+
+
+class FakeAstroPairClient:
+    def __init__(self):
+        self.added: list[dict] = []
+
+    async def list_pairs(self) -> list[dict]:
+        return []
+
+    async def add_pair(self, pair: dict) -> dict:
+        self.added.append(pair)
+        return {"code": 0}
+
+    async def update_pair(self, pair: dict) -> dict:
+        raise AssertionError("update_pair should not be called")
+
+
 def make_opportunity() -> Opportunity:
     return Opportunity(
         id="opp",
@@ -87,7 +181,7 @@ def make_opportunity() -> Opportunity:
         sell_exchange="okx",
         sell_market_type=MarketType.FUTURE,
         open_spread_pct=0.5,
-        close_spread_pct=0.6,
+        close_spread_pct=0.4,
         fee_adjusted_open_pct=0.3,
         spread_width_pct=0.1,
         buy_bid=99,
@@ -354,6 +448,22 @@ def test_health_endpoint_applies_global_symbol_and_exchange_exclusions() -> None
     assert response.json()["exchange_errors"] == {"binance:spot": "timeout"}
 
 
+def test_health_endpoint_reports_exchange_poll_states() -> None:
+    app = create_app()
+    app.state.market_collector = FakeCollector()
+    app.state.settings_repo = FakeSettingsRepository(RiskSettings(ignored_exchanges=["gate"]))
+    client = TestClient(app)
+
+    response = client.get("/api/health")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert list(payload["exchange_states"]) == ["binance"]
+    assert payload["exchange_states"]["binance"]["status"] == "healthy"
+    assert payload["exchange_states"]["binance"]["last_success_at"] == "2026-05-21T12:00:00Z"
+    assert payload["exchange_states"]["binance"]["cooldown_until"] is None
+
+
 def test_history_endpoint_returns_compact_spread_and_funding_rows() -> None:
     app = create_app()
     row = OpportunityHistoryRow(
@@ -418,6 +528,46 @@ def test_alert_message_template_settings_endpoint_roundtrips() -> None:
         reloaded = client.get("/api/settings/alert-message-template")
         assert reloaded.status_code == 200
         assert reloaded.json()["include_observations"] is False
+
+
+def test_astro_card_settings_endpoint_roundtrips() -> None:
+    app = create_app(settings=Settings(dashboard_password="secret", database_url="sqlite:///:memory:"))
+
+    with TestClient(app) as client:
+        response = client.get("/api/settings/astro-card")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["max_trade_usdt"] == 10
+        assert payload["leverage"] == 1
+        assert payload["close_position_buffer_pct"] == 0.1
+        assert payload["unfavorable_funding_weight"] == 1
+        assert payload["close_position_floor_pct"] == 0
+
+        payload["max_trade_usdt"] = 75
+        payload["leverage"] = 4
+        payload["max_notional"] = 75
+        payload["close_position_buffer_pct"] = 0.2
+        payload["unfavorable_funding_weight"] = 1.5
+        payload["close_position_floor_pct"] = 0.01
+
+        unauthenticated = client.put("/api/settings/astro-card", json=payload)
+        assert unauthenticated.status_code == 401
+
+        saved = client.put(
+            "/api/settings/astro-card",
+            headers={"X-Dashboard-Password": "secret"},
+            json=payload,
+        )
+        assert saved.status_code == 200
+        assert saved.json()["max_trade_usdt"] == 75
+        assert saved.json()["leverage"] == 4
+        assert saved.json()["close_position_buffer_pct"] == 0.2
+
+        reloaded = client.get("/api/settings/astro-card")
+        assert reloaded.status_code == 200
+        assert reloaded.json()["max_notional"] == 75
+        assert reloaded.json()["unfavorable_funding_weight"] == 1.5
+        assert reloaded.json()["close_position_floor_pct"] == 0.01
 
 
 def test_alert_history_endpoint_enriches_legacy_short_messages() -> None:
@@ -550,8 +700,78 @@ def test_alert_history_endpoint_enriches_legacy_short_messages() -> None:
     assert "【告警触发】" in text
     assert "价差对：BTCUSDT | binance future -> okx future" in text
     assert "【连续监测】" in text
-    assert "1. 12:38:53 | 价差 0.863% | 净估算 0.663% | 资金差 0.01% | 综合 0.673%" in text
-    assert "3. 12:39:17 | 价差 1.007% | 净估算 0.807% | 资金差 0.01% | 综合 0.817%" in text
+    assert "1. 20:38:53 | 价差 0.863% | 净估算 0.663% | 资金差（日化） 0.03% | 综合 0.693%" in text
+    assert "3. 20:39:17 | 价差 1.007% | 净估算 0.807% | 资金差（日化） 0.03% | 综合 0.837%" in text
+
+
+def test_alert_history_endpoint_rebuilds_stored_full_messages_with_utc_plus_8() -> None:
+    app = create_app()
+    rule = AlertRule(
+        id="rule-1",
+        name="FF 价差",
+        types=["FF"],
+        min_open_spread_pct=0.5,
+        min_fee_adjusted_open_pct=0.25,
+        min_volume_24h_usdt=1_000_000,
+        consecutive_hits=1,
+    )
+    stored_event = AlertEvent(
+        id="evt-1",
+        rule_id="rule-1",
+        opportunity_id="opp-1",
+        symbol="BTCUSDT",
+        status="sent",
+        message=(
+            "【告警触发】\n"
+            "规则：FF 价差\n\n"
+            "【连续监测】\n"
+            "1. 12:39:17 | 价差 1.007% | 净估算 0.807% | 资金差 0.01% | 综合 0.817%"
+        ),
+        created_at=datetime(2026, 5, 20, 12, 39, 17, tzinfo=UTC),
+    )
+    history_row = OpportunityHistoryRow(
+        observed_at=datetime(2026, 5, 20, 12, 39, 17, tzinfo=UTC),
+        opportunity_id="opp-1",
+        type=OpportunityType.FF,
+        symbol="BTCUSDT",
+        buy_exchange="binance",
+        buy_market_type=MarketType.FUTURE,
+        sell_exchange="okx",
+        sell_market_type=MarketType.FUTURE,
+        open_spread_pct=1.007,
+        close_spread_pct=0.644,
+        fee_adjusted_open_pct=0.807,
+        spread_width_pct=0.363,
+        funding_rate_buy_pct=0.01,
+        funding_rate_sell_pct=-0.02,
+        funding_next_rate_buy_pct=0.015,
+        funding_next_rate_sell_pct=0.025,
+        funding_next_time_buy=datetime(2026, 5, 20, 16, 0, tzinfo=UTC),
+        funding_next_time_sell=datetime(2026, 5, 20, 16, 0, tzinfo=UTC),
+        net_funding_pct=-0.03,
+        net_funding_next_pct=0.01,
+        buy_funding_interval_hours=8,
+        sell_funding_interval_hours=8,
+        net_funding_hourly_pct=-0.00375,
+        net_funding_daily_pct=-0.09,
+        net_funding_next_hourly_pct=0.00125,
+        net_funding_next_daily_pct=0.03,
+        buy_volume_24h_usdt=10_000_000,
+        sell_volume_24h_usdt=12_000_000,
+        risk_labels=["FUNDING_AGAINST"],
+    )
+    app.state.alert_rule_repo = FakeAlertRuleRepository(rule)
+    app.state.alert_event_repo = FakeAlertEventRepository([stored_event])
+    app.state.history_repo = FakeHistoryRepository([history_row])
+    client = TestClient(app)
+
+    response = client.get("/api/alerts/events")
+
+    assert response.status_code == 200
+    text = response.json()[0]["message"]
+    assert "1. 20:39:17 | 价差 1.007% | 净估算 0.807%" in text
+    assert "1. 12:39:17 |" not in text
+    assert "资金差（日化） 0.03%" in text
 
 
 def test_alert_history_endpoint_applies_global_message_template() -> None:
@@ -660,6 +880,344 @@ def test_service_control_endpoints_require_password_even_when_dashboard_password
     restart_response = client.post("/api/admin/service-control/backend/restart")
     assert restart_response.status_code == 403
     assert controller.calls == []
+
+
+def test_astro_preview_endpoint_returns_dry_run_pair_for_seeded_opportunity() -> None:
+    store = SnapshotStore()
+    store.set_opportunities([make_opportunity()])
+    app = create_app(snapshot_store=store)
+    client = TestClient(app)
+
+    response = client.get("/api/astro/preview/opp")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["mode"] == "dry_run"
+    assert payload["can_submit"] is True
+    assert payload["pair"]["name"] == "BTC"
+    assert payload["pair"]["type"] == "FF"
+    assert payload["pair"]["openPosition"] == "0.005000"
+    assert payload["sdk_payload"]["action"] == "add"
+    assert any(item["field"] == "openPosition" for item in payload["assumptions"])
+
+
+def test_astro_preview_endpoint_uses_saved_card_defaults() -> None:
+    store = SnapshotStore()
+    store.set_opportunities([make_opportunity()])
+    app = create_app(
+        snapshot_store=store,
+        settings=Settings(dashboard_password="secret", database_url="sqlite:///:memory:"),
+    )
+
+    with TestClient(app) as client:
+        saved = client.put(
+            "/api/settings/astro-card",
+            headers={"X-Dashboard-Password": "secret"},
+            json={
+                "max_trade_usdt": 55,
+                "leverage": 3,
+                "min_notional": 11,
+                "max_notional": 55,
+                "close_position_buffer_pct": 0.2,
+                "unfavorable_funding_weight": 1,
+                "close_position_floor_pct": 0,
+            },
+        )
+        assert saved.status_code == 200
+
+        response = client.get("/api/astro/preview/opp")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["pair"]["maxTradeUSDT"] == "55"
+    assert payload["pair"]["leverage"] == "3"
+    assert payload["pair"]["minNotional"] == "11"
+    assert payload["pair"]["maxNotional"] == "55"
+
+
+def test_astro_preview_endpoint_uses_env_defaults_before_settings_are_saved() -> None:
+    store = SnapshotStore()
+    store.set_opportunities([make_opportunity()])
+    app = create_app(
+        snapshot_store=store,
+        settings=Settings(
+            database_url="sqlite:///:memory:",
+            astro_default_max_trade_usdt=44,
+            astro_default_leverage=5,
+            astro_default_min_notional=13,
+            astro_default_max_notional=44,
+        ),
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/api/astro/preview/opp")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["pair"]["maxTradeUSDT"] == "44"
+    assert payload["pair"]["leverage"] == "5"
+    assert payload["pair"]["minNotional"] == "13"
+    assert payload["pair"]["maxNotional"] == "44"
+
+
+def test_astro_preview_endpoint_uses_saved_defaults_even_when_they_match_model_defaults() -> None:
+    store = SnapshotStore()
+    store.set_opportunities([make_opportunity()])
+    app = create_app(
+        snapshot_store=store,
+        settings=Settings(
+            dashboard_password="secret",
+            database_url="sqlite:///:memory:",
+            astro_default_max_trade_usdt=44,
+            astro_default_leverage=5,
+            astro_default_min_notional=13,
+            astro_default_max_notional=44,
+        ),
+    )
+
+    with TestClient(app) as client:
+        saved = client.put(
+            "/api/settings/astro-card",
+            headers={"X-Dashboard-Password": "secret"},
+            json={
+                "max_trade_usdt": 10,
+                "leverage": 1,
+                "min_notional": 10,
+                "max_notional": 10,
+                "close_position_buffer_pct": 0.1,
+                "unfavorable_funding_weight": 1,
+                "close_position_floor_pct": 0,
+            },
+        )
+        assert saved.status_code == 200
+
+        response = client.get("/api/astro/preview/opp")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["pair"]["maxTradeUSDT"] == "10"
+    assert payload["pair"]["leverage"] == "1"
+    assert payload["pair"]["minNotional"] == "10"
+    assert payload["pair"]["maxNotional"] == "10"
+
+
+def test_astro_preview_endpoint_returns_404_for_missing_opportunity() -> None:
+    app = create_app()
+    client = TestClient(app)
+
+    response = client.get("/api/astro/preview/missing")
+
+    assert response.status_code == 404
+
+
+def test_astro_status_endpoint_reports_dry_run_configuration() -> None:
+    app = create_app(
+        settings=Settings(
+            astro_sdk_base_url="https://127.0.0.1:8443",
+            astro_admin_prefix="admin",
+            astro_api_key="secret",
+            astro_dry_run_only=True,
+        )
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/astro/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["configured"] is True
+    assert payload["dry_run_only"] is True
+    assert payload["api_key_configured"] is True
+    assert payload["pair_path"] == "/admin/api/config/sdk-update-pair"
+    assert payload["message_path"] == "/admin/api/config/sdk-send-message"
+
+
+def test_astro_manual_card_create_endpoint_returns_action_result_for_seeded_opportunity() -> None:
+    store = SnapshotStore()
+    store.set_opportunities([make_opportunity()])
+    app = create_app(
+        snapshot_store=store,
+        settings=Settings(dashboard_password="secret", astro_manual_card_create=True),
+    )
+    service = FakeAstroSubmitService()
+    app.state.astro_alert_service = service
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/astro/opportunities/opp/card",
+        headers={"X-Dashboard-Password": "secret"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "created"
+    assert payload["action"] == "add"
+    assert payload["pair_name"] == "BTC"
+    assert service.calls[0].id == "opp"
+    assert service.requests[0] is None
+
+
+def test_astro_manual_card_create_endpoint_forwards_overrides_and_saves_defaults() -> None:
+    store = SnapshotStore()
+    store.set_opportunities([make_opportunity()])
+    app = create_app(
+        snapshot_store=store,
+        settings=Settings(
+            dashboard_password="secret",
+            database_url="sqlite:///:memory:",
+            astro_manual_card_create=True,
+        ),
+    )
+    service = FakeAstroSubmitService()
+    app.state.astro_alert_service = service
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/astro/opportunities/opp/card",
+            headers={"X-Dashboard-Password": "secret"},
+            json={
+                "max_trade_usdt": 88,
+                "leverage": 2,
+                "min_notional": 12,
+                "max_notional": 88,
+                "save_as_default": True,
+            },
+        )
+        assert response.status_code == 200
+
+        saved = client.get("/api/settings/astro-card")
+
+    assert service.requests[0] is not None
+    assert service.requests[0].max_trade_usdt == 88
+    assert service.requests[0].leverage == 2
+    assert service.requests[0].min_notional == 12
+    assert service.requests[0].max_notional == 88
+    assert service.requests[0].save_as_default is True
+    assert saved.status_code == 200
+    assert saved.json()["max_trade_usdt"] == 88
+    assert saved.json()["leverage"] == 2
+    assert saved.json()["min_notional"] == 12
+    assert saved.json()["max_notional"] == 88
+
+
+def test_astro_manual_card_create_endpoint_skips_when_order_book_validation_fails() -> None:
+    store = SnapshotStore()
+    store.set_opportunities([make_opportunity()])
+    app = create_app(
+        snapshot_store=store,
+        settings=Settings(
+            dashboard_password="secret",
+            database_url="sqlite:///:memory:",
+            astro_manual_card_create=True,
+        ),
+    )
+    service = FakeAstroSubmitService()
+    validator = FakeOrderBookValidator(
+        DepthValidationResult(
+            passed=False,
+            target_notional_usdt=1000,
+            buy_filled_usdt=500,
+            sell_filled_usdt=1000,
+            buy_vwap=100,
+            sell_vwap=100.5,
+            quoted_open_pct=0.5,
+            executable_open_pct=0.1,
+            effective_executable_edge_pct=-0.05,
+            slippage_loss_pct=0.4,
+            blockers=["buy side depth filled 500.00/1000.00 USDT"],
+            warnings=[],
+        )
+    )
+    app.state.astro_alert_service = service
+    app.state.orderbook_validator = validator
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/astro/opportunities/opp/card",
+            headers={"X-Dashboard-Password": "secret"},
+            json={"max_trade_usdt": 80, "max_notional": 80},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "skipped"
+    assert payload["action"] == "order_book_validation"
+    assert "buy side depth filled" in payload["message"]
+    assert service.calls == []
+    assert validator.calls[0]["override_notional_usdt"] == 80
+    card_settings = validator.calls[0]["card_settings"]
+    assert isinstance(card_settings, AstroCardSettings)
+    assert card_settings.max_trade_usdt == 80
+
+
+def test_astro_manual_card_create_endpoint_uses_saved_defaults_with_real_service() -> None:
+    store = SnapshotStore()
+    store.set_opportunities([make_opportunity()])
+    app = create_app(
+        snapshot_store=store,
+        settings=Settings(
+            dashboard_password="secret",
+            database_url="sqlite:///:memory:",
+            astro_manual_card_create=True,
+            astro_dry_run_only=False,
+        ),
+    )
+    client_backend = FakeAstroPairClient()
+    app.state.astro_alert_service = AstroAlertService(
+        client_backend,
+        app.state.settings,
+        add_restart_delay_seconds=0,
+    )
+
+    with TestClient(app) as client:
+        saved = client.put(
+            "/api/settings/astro-card",
+            headers={"X-Dashboard-Password": "secret"},
+            json={
+                "max_trade_usdt": 77,
+                "leverage": 3,
+                "min_notional": 14,
+                "max_notional": 77,
+                "close_position_buffer_pct": 0.1,
+                "unfavorable_funding_weight": 1,
+                "close_position_floor_pct": 0,
+            },
+        )
+        assert saved.status_code == 200
+
+        response = client.post(
+            "/api/astro/opportunities/opp/card",
+            headers={"X-Dashboard-Password": "secret"},
+        )
+
+    assert response.status_code == 200
+    assert client_backend.added[0]["maxTradeUSDT"] == "77"
+    assert client_backend.added[0]["leverage"] == "3"
+    assert client_backend.added[0]["minNotional"] == "14"
+    assert client_backend.added[0]["maxNotional"] == "77"
+
+
+def test_astro_manual_card_create_endpoint_requires_dashboard_password() -> None:
+    store = SnapshotStore()
+    store.set_opportunities([make_opportunity()])
+    app = create_app(snapshot_store=store, settings=Settings(dashboard_password="secret"))
+    client = TestClient(app)
+
+    response = client.post("/api/astro/opportunities/opp/card")
+
+    assert response.status_code == 401
+
+
+def test_astro_manual_card_create_endpoint_returns_404_for_missing_opportunity() -> None:
+    app = create_app(settings=Settings(dashboard_password="secret"))
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/astro/opportunities/missing/card",
+        headers={"X-Dashboard-Password": "secret"},
+    )
+
+    assert response.status_code == 404
 
 
 @pytest.mark.asyncio

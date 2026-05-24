@@ -247,6 +247,19 @@ body {
   gap: 0 12px;
 }
 
+.form-grid-heading {
+  grid-column: 1 / -1;
+  margin-top: 4px;
+}
+
+.form-grid-wide {
+  grid-column: 1 / -1;
+}
+
+.form-grid-heading .ant-typography {
+  margin-bottom: 12px;
+}
+
 .rule-note {
   grid-column: 1 / -1;
   margin: -6px 0 10px;

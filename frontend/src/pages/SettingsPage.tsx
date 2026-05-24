@@ -20,15 +20,23 @@ import {
   createAlertRule,
   deleteAlertRule,
   getAlertMessageTemplate,
+  getAstroCardSettings,
   getRiskSettings,
   getServiceControlStatus,
   listAlertRules,
   restartServiceControl,
   saveDashboardPassword,
   updateAlertMessageTemplate,
+  updateAstroCardSettings,
   updateRiskSettings
 } from "../api/client";
-import type { AlertMessageTemplateSettings, AlertRule, RiskSettings, ServiceControlStatus } from "../api/types";
+import type {
+  AlertMessageTemplateSettings,
+  AlertRule,
+  AstroCardSettings,
+  RiskSettings,
+  ServiceControlStatus
+} from "../api/types";
 import { alertRuleFieldHelp, alertRuleGuide, alertSeverityOptions, alertTypeOptions } from "../constants/alertRules";
 import { defaultHiddenRiskLabels, riskLabelOptions } from "../constants/riskLabels";
 
@@ -69,6 +77,25 @@ const defaultAlertMessageTemplate: AlertMessageTemplateSettings = {
   observation_limit: 5
 };
 
+const defaultRiskSettings: RiskSettings = {
+  min_volume_24h_usdt: 1_000_000,
+  stale_after_seconds: 30,
+  huge_spread_pct: 10,
+  wide_spread_pct: 3,
+  mark_index_deviation_pct: 1,
+  funding_against_pct: 0.01,
+  signal_slippage_buffer_pct: 0.05,
+  min_effective_open_pct: 0.05,
+  max_open_spread_decay_pct: 60,
+  signal_validation_notional_usdt: 1000,
+  orderbook_depth_safety_multiple: 2,
+  min_top_of_book_depth_usdt: 0,
+  signal_strategy_notes: "",
+  ticker_collision_symbols: ["AIUSDT", "UPUSDT", "LABUSDT"],
+  excluded_symbols: [],
+  ignored_exchanges: []
+};
+
 const alertTemplateOptions: Array<{
   name: Exclude<keyof AlertMessageTemplateSettings, "observation_limit">;
   label: string;
@@ -78,10 +105,10 @@ const alertTemplateOptions: Array<{
   { name: "include_rule_details", label: "规则参数", description: "阈值、交易所、标的和冷却参数" },
   { name: "include_pair", label: "价差对", description: "标的、买卖方向和两侧交易所" },
   { name: "include_spread", label: "价差信息", description: "开仓、平仓、净估算和综合开仓" },
-  { name: "include_funding", label: "资金费率", description: "当前、预测资金费率和下一次结算时间" },
+  { name: "include_funding", label: "资金费率", description: "当前、预测资金费率、日化净差和结算周期" },
   { name: "include_volume", label: "成交额", description: "买入侧和卖出侧 24h 成交额" },
   { name: "include_risk", label: "风险标签", description: "过滤命中的风险标签" },
-  { name: "include_observations", label: "连续监测", description: "最近几轮命中的价差和资金费率差" },
+  { name: "include_observations", label: "连续监测", description: "最近几轮命中的价差和日化资金费差" },
   { name: "include_dashboard_link", label: "Dashboard 链接", description: "消息末尾追加面板地址" }
 ];
 
@@ -135,17 +162,22 @@ function serviceCanRestart(status: ServiceControlStatus | null, service: Service
 }
 
 function riskToForm(settings: RiskSettings): RiskSettings {
+  const normalized = {
+    ...defaultRiskSettings,
+    ...settings
+  };
   return {
-    ...settings,
-    min_volume_24h_k: Math.round(settings.min_volume_24h_usdt / 1000),
-    excluded_symbols: settings.excluded_symbols ?? [],
-    ignored_exchanges: settings.ignored_exchanges ?? []
+    ...normalized,
+    min_volume_24h_k: Math.round(normalized.min_volume_24h_usdt / 1000),
+    excluded_symbols: normalized.excluded_symbols ?? [],
+    ignored_exchanges: normalized.ignored_exchanges ?? []
   };
 }
 
 function riskFromForm(values: RiskSettings): RiskSettings {
   const { min_volume_24h_k: minVolumeK, ...settings } = values;
   return {
+    ...defaultRiskSettings,
     ...settings,
     min_volume_24h_usdt: (minVolumeK ?? 0) * 1000
   };
@@ -178,7 +210,11 @@ function buildAlertTemplatePreview(template: AlertMessageTemplateSettings): stri
     snapshotLines.push("价差：开仓 0.800% / 平仓 0.500%", "净估算：0.600%", "综合开仓：0.610%");
   }
   if (template.include_funding) {
-    snapshotLines.push("资金费率差：当前 -0.03% / 预测 0.01%", "下一次结算：08:00 / 08:00");
+    snapshotLines.push(
+      "资金费率差（日化）：当前 -0.09% / 预测 0.03%",
+      "下一次结算：08:00 / 08:00",
+      "结算周期：8h / 8h"
+    );
   }
   if (template.include_volume) {
     snapshotLines.push("成交额：买入侧 10000K USDT / 卖出侧 12000K USDT");
@@ -191,7 +227,7 @@ function buildAlertTemplatePreview(template: AlertMessageTemplateSettings): stri
   }
   if (template.include_observations) {
     blocks.push(
-      `【连续监测】\n1. 01:59:44 | 价差 0.720% | 净估算 0.520% | 资金差 0.01% | 综合 0.530%\n最多显示 ${template.observation_limit} 轮`
+      `【连续监测】\n1. 01:59:44 | 价差 0.720% | 净估算 0.520% | 资金差（日化） 0.03% | 综合 0.550%\n最多显示 ${template.observation_limit} 轮`
     );
   }
   if (template.include_dashboard_link) {
@@ -204,6 +240,7 @@ export function SettingsPage() {
   const [riskForm] = Form.useForm<RiskSettings>();
   const [ruleForm] = Form.useForm<AlertRuleFormValues>();
   const [templateForm] = Form.useForm<AlertMessageTemplateSettings>();
+  const [astroCardForm] = Form.useForm<AstroCardSettings>();
   const [rules, setRules] = useState<AlertRule[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -223,17 +260,19 @@ export function SettingsPage() {
         setServiceControlError(exc instanceof Error ? exc.message : String(exc));
         return null;
       });
-      const [risk, nextRules, nextServiceControl, alertTemplate] = await Promise.all([
+      const [risk, nextRules, nextServiceControl, alertTemplate, astroCard] = await Promise.all([
         getRiskSettings(),
         listAlertRules(),
         serviceControlRequest,
-        getAlertMessageTemplate()
+        getAlertMessageTemplate(),
+        getAstroCardSettings()
       ]);
       const nextRuleDefaults = ruleDefaultsForRisk(risk);
       const nextAlertTemplate = normalizeAlertTemplate(alertTemplate);
       riskForm.setFieldsValue(riskToForm(risk));
       ruleForm.setFieldsValue(ruleToForm(nextRuleDefaults));
       templateForm.setFieldsValue(nextAlertTemplate);
+      astroCardForm.setFieldsValue(astroCard);
       setRuleDefaults(nextRuleDefaults);
       setAlertTemplatePreview(nextAlertTemplate);
       setRules(nextRules);
@@ -267,6 +306,13 @@ export function SettingsPage() {
     templateForm.setFieldsValue(saved);
     setAlertTemplatePreview(saved);
     message.success("告警模板已保存");
+  };
+
+  const saveAstroCardDefaults = async () => {
+    const values = await astroCardForm.validateFields();
+    const saved = await updateAstroCardSettings(values);
+    astroCardForm.setFieldsValue(saved);
+    message.success("Astro card defaults saved");
   };
 
   const createRule = async () => {
@@ -386,6 +432,30 @@ export function SettingsPage() {
             <Form.Item label="资金费率逆风阈值 (FUNDING_AGAINST)" name="funding_against_pct" rules={[{ required: true }]}>
               <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
             </Form.Item>
+            <div className="form-grid-heading">
+              <Typography.Title level={5}>Signal strategy</Typography.Title>
+            </div>
+            <Form.Item label="Signal slippage buffer pct" name="signal_slippage_buffer_pct" rules={[{ required: true }]}>
+              <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
+            </Form.Item>
+            <Form.Item label="Minimum effective open pct" name="min_effective_open_pct" rules={[{ required: true }]}>
+              <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
+            </Form.Item>
+            <Form.Item label="Max open spread decay pct" name="max_open_spread_decay_pct" rules={[{ required: true }]}>
+              <InputNumber min={0} max={100} step={1} suffix="%" className="wide-input" />
+            </Form.Item>
+            <Form.Item label="Minimum validation notional USDT" name="signal_validation_notional_usdt" rules={[{ required: true }]}>
+              <InputNumber min={0} step={1} className="wide-input" />
+            </Form.Item>
+            <Form.Item label="Depth safety multiple" name="orderbook_depth_safety_multiple" rules={[{ required: true }]}>
+              <InputNumber min={0} step={0.5} className="wide-input" />
+            </Form.Item>
+            <Form.Item label="Minimum top-of-book depth USDT" name="min_top_of_book_depth_usdt" rules={[{ required: true }]}>
+              <InputNumber min={0} step={10} className="wide-input" />
+            </Form.Item>
+            <Form.Item label="Signal strategy notes" name="signal_strategy_notes" className="form-grid-wide">
+              <Input.TextArea rows={4} />
+            </Form.Item>
           </div>
           <div className="risk-help">
             {riskLabelOptions.map((item) => (
@@ -405,6 +475,37 @@ export function SettingsPage() {
           </Form.Item>
           <Button type="primary" htmlType="submit" icon={<SaveOutlined />}>
             保存风险参数
+          </Button>
+        </Form>
+      </section>
+      <section className="panel">
+        <Typography.Title level={4}>Astro card defaults</Typography.Title>
+        <Form form={astroCardForm} layout="vertical" disabled={loading} onFinish={saveAstroCardDefaults}>
+          <div className="form-grid">
+            <Form.Item label="Position value USDT" name="max_trade_usdt" rules={[{ required: true }]}>
+              <InputNumber min={0.01} step={1} className="wide-input" />
+            </Form.Item>
+            <Form.Item label="Leverage" name="leverage" rules={[{ required: true }]}>
+              <InputNumber min={1} step={1} className="wide-input" />
+            </Form.Item>
+            <Form.Item label="Minimum notional USDT" name="min_notional" rules={[{ required: true }]}>
+              <InputNumber min={0} step={1} className="wide-input" />
+            </Form.Item>
+            <Form.Item label="Maximum notional USDT" name="max_notional" rules={[{ required: true }]}>
+              <InputNumber min={0.01} step={1} className="wide-input" />
+            </Form.Item>
+            <Form.Item label="Close buffer pct" name="close_position_buffer_pct" rules={[{ required: true }]}>
+              <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
+            </Form.Item>
+            <Form.Item label="Unfavorable funding weight" name="unfavorable_funding_weight" rules={[{ required: true }]}>
+              <InputNumber min={0} step={0.1} className="wide-input" />
+            </Form.Item>
+            <Form.Item label="Close floor pct" name="close_position_floor_pct" rules={[{ required: true }]}>
+              <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
+            </Form.Item>
+          </div>
+          <Button type="primary" htmlType="submit" icon={<SaveOutlined />}>
+            Save Astro card defaults
           </Button>
         </Form>
       </section>

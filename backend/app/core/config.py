@@ -5,7 +5,7 @@ from pathlib import Path
 
 from dotenv import find_dotenv, load_dotenv
 
-from app.models.settings import HistorySettings
+from app.models.settings import AstroCardSettings, HistorySettings
 
 
 @dataclass(frozen=True)
@@ -30,6 +30,19 @@ class Settings:
     service_control_restart_delay_seconds: float = 1.0
     service_control_docker_socket_path: str = "/var/run/docker.sock"
     compose_project_name: str = ""
+    astro_sdk_base_url: str = ""
+    astro_admin_prefix: str = ""
+    astro_api_key: str = ""
+    astro_verify_tls: bool = True
+    astro_dry_run_only: bool = True
+    astro_alert_auto_create: bool = False
+    astro_manual_card_create: bool = False
+    astro_default_max_trade_usdt: float = 10.0
+    astro_default_leverage: int = 1
+    astro_default_min_notional: float = 10.0
+    astro_default_max_notional: float = 10.0
+    astro_default_close_position_buffer_pct: float = 0.1
+    astro_request_timeout_seconds: float = 10.0
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -49,6 +62,16 @@ class Settings:
             min_open_spread_pct=self.history_min_open_spread_pct,
             min_volume_24h_k=self.history_min_volume_24h_k,
             vacuum_interval_seconds=self.history_vacuum_interval_seconds,
+        )
+
+    @property
+    def astro_card_settings(self) -> AstroCardSettings:
+        return AstroCardSettings(
+            max_trade_usdt=self.astro_default_max_trade_usdt,
+            leverage=self.astro_default_leverage,
+            min_notional=self.astro_default_min_notional,
+            max_notional=self.astro_default_max_notional,
+            close_position_buffer_pct=self.astro_default_close_position_buffer_pct,
         )
 
 
@@ -134,4 +157,19 @@ def get_settings() -> Settings:
             "/var/run/docker.sock",
         ),
         compose_project_name=os.getenv("COMPOSE_PROJECT_NAME", "").strip(),
+        astro_sdk_base_url=os.getenv("ASTRO_SDK_BASE_URL", "").strip(),
+        astro_admin_prefix=os.getenv("ASTRO_ADMIN_PREFIX", "").strip(),
+        astro_api_key=os.getenv("ASTRO_API_KEY", "").strip(),
+        astro_verify_tls=bool_env("ASTRO_VERIFY_TLS", True),
+        astro_dry_run_only=bool_env("ASTRO_DRY_RUN_ONLY", True),
+        astro_alert_auto_create=bool_env("ASTRO_ALERT_AUTO_CREATE", False),
+        astro_manual_card_create=bool_env("ASTRO_MANUAL_CARD_CREATE", False),
+        astro_default_max_trade_usdt=float(os.getenv("ASTRO_DEFAULT_MAX_TRADE_USDT", "10")),
+        astro_default_leverage=int(os.getenv("ASTRO_DEFAULT_LEVERAGE", "1")),
+        astro_default_min_notional=float(os.getenv("ASTRO_DEFAULT_MIN_NOTIONAL", "10")),
+        astro_default_max_notional=float(os.getenv("ASTRO_DEFAULT_MAX_NOTIONAL", "10")),
+        astro_default_close_position_buffer_pct=float(
+            os.getenv("ASTRO_DEFAULT_CLOSE_POSITION_BUFFER_PCT", "0.1")
+        ),
+        astro_request_timeout_seconds=float(os.getenv("ASTRO_REQUEST_TIMEOUT_SECONDS", "10")),
     )

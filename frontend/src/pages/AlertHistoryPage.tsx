@@ -2,10 +2,13 @@ import { ReloadOutlined } from "@ant-design/icons";
 import { Button, Space, Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
+import utc from "dayjs/plugin/utc";
 import { useEffect, useState } from "react";
 
 import { listAlertEvents } from "../api/client";
 import type { AlertEvent } from "../api/types";
+
+dayjs.extend(utc);
 
 const messageCellStyle = {
   lineHeight: 1.5,
@@ -13,8 +16,12 @@ const messageCellStyle = {
   wordBreak: "break-word" as const
 };
 
+function formatUtcPlus8(value: string): string {
+  return dayjs.utc(value).utcOffset(8).format("MM-DD HH:mm:ss");
+}
+
 const columns: ColumnsType<AlertEvent> = [
-  { title: "时间", dataIndex: "created_at", width: 132, render: (value: string) => dayjs(value).format("MM-DD HH:mm:ss") },
+  { title: "时间(UTC+8)", dataIndex: "created_at", width: 132, render: formatUtcPlus8 },
   { title: "标的", dataIndex: "symbol", width: 120 },
   { title: "状态", dataIndex: "status", width: 96, render: (value: string) => <Tag color={value === "sent" ? "green" : "red"}>{value}</Tag> },
   {

@@ -20,9 +20,9 @@ describe("AlertHistoryPage", () => {
               message:
                 "价差对：BTCUSDT | binance future -> okx future\n" +
                 "价差：开仓 0.800% / 平仓 0.500%\n" +
-                "资金费率差：当前 -0.03% / 预测 0.01%\n" +
+                "资金费率差（日化）：当前 -0.09% / 预测 0.03%\n" +
                 "【连续监测】\n" +
-                "1. 01:59:44 | 价差 0.720% | 净估算 0.520% | 资金差 0.01% | 综合 0.530%",
+                "1. 01:59:44 | 价差 0.720% | 净估算 0.520% | 资金差（日化） 0.03% | 综合 0.550%",
               created_at: "2026-05-15T02:00:00Z"
             }
           ]);
@@ -38,5 +38,11 @@ describe("AlertHistoryPage", () => {
     const message = await screen.findByText(/价差对：BTCUSDT/);
     expect(message.textContent).toContain("\n");
     expect(message.getAttribute("style")).toContain("white-space: pre-wrap");
+  });
+
+  it("renders alert event creation time in UTC+8", async () => {
+    render(<AlertHistoryPage />);
+
+    expect(await screen.findByText("05-15 10:00:00")).toBeTruthy();
   });
 });

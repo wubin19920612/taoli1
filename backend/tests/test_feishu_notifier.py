@@ -73,8 +73,8 @@ def test_build_payload_explains_rule_parameters() -> None:
             observed_at=datetime(2026, 5, 15, 1, 59, 44, tzinfo=UTC),
             open_spread_pct=0.72,
             fee_adjusted_open_pct=0.52,
-            funding_edge_pct=0.01,
-            combined_open_edge_pct=0.53,
+            funding_edge_pct=0.03,
+            combined_open_edge_pct=0.55,
             net_funding_pct=-0.03,
             net_funding_next_pct=0.01,
         ),
@@ -82,8 +82,8 @@ def test_build_payload_explains_rule_parameters() -> None:
             observed_at=datetime(2026, 5, 15, 1, 59, 52, tzinfo=UTC),
             open_spread_pct=0.80,
             fee_adjusted_open_pct=0.60,
-            funding_edge_pct=0.01,
-            combined_open_edge_pct=0.61,
+            funding_edge_pct=0.03,
+            combined_open_edge_pct=0.63,
             net_funding_pct=-0.03,
             net_funding_next_pct=0.01,
         ),
@@ -119,13 +119,78 @@ def test_build_payload_explains_rule_parameters() -> None:
     assert "价差对：BTCUSDT | binance future -> okx future" in text
     assert "方向：买入 binance future BTCUSDT，卖出 okx future BTCUSDT" in text
     assert "价差：开仓 0.800% / 平仓 0.500%" in text
-    assert "资金费率差：当前 -0.03% / 预测 0.01%" in text
-    assert "综合开仓：0.610%" in text
+    assert "资金费率差（日化）：当前 -0.09% / 预测 0.03%" in text
+    assert "结算周期：8h / 8h" in text
+    assert "综合开仓：0.630%" in text
     assert "资金费率：0.01% / -0.02%" in text
     assert "【连续监测】" in text
-    assert "1. 01:59:44 | 价差 0.720% | 净估算 0.520% | 资金差 0.01% | 综合 0.530%" in text
-    assert "2. 01:59:52 | 价差 0.800% | 净估算 0.600% | 资金差 0.01% | 综合 0.610%" in text
+    assert "1. 09:59:44 | 价差 0.720% | 净估算 0.520% | 资金差（日化） 0.03% | 综合 0.550%" in text
+    assert "2. 09:59:52 | 价差 0.800% | 净估算 0.600% | 资金差（日化） 0.03% | 综合 0.630%" in text
     assert "风险：FUNDING_AGAINST" in text
+
+
+def test_build_payload_can_use_prebuilt_alert_text() -> None:
+    rule = AlertRule(name="FF spread")
+    notifier = FeishuNotifier(FeishuConfig(webhook_url=""))
+
+    payload = notifier._build_payload(
+        rule,
+        make_opportunity(),
+        "",
+        prebuilt_text="custom alert\n\nAstro: 已创建暂停卡片 BTC FF binance->okx，禁开=true",
+    )
+
+    assert payload["content"]["text"] == (
+        "custom alert\n\nAstro: 已创建暂停卡片 BTC FF binance->okx，禁开=true"
+    )
+
+
+def test_alert_message_shows_settlement_cycle_adjusted_funding_difference() -> None:
+    rule = AlertRule(name="interval adjusted")
+    opportunity = make_opportunity().model_copy(
+        update={
+            "funding_rate_buy_pct": 0.08,
+            "funding_rate_sell_pct": 0.02,
+            "funding_next_rate_buy_pct": None,
+            "funding_next_rate_sell_pct": None,
+            "net_funding_pct": -0.06,
+            "net_funding_next_pct": None,
+            "buy_funding_interval_hours": 8,
+            "sell_funding_interval_hours": 1,
+            "net_funding_hourly_pct": 0.01,
+            "net_funding_daily_pct": 0.24,
+            "net_funding_next_hourly_pct": None,
+            "net_funding_next_daily_pct": None,
+        }
+    )
+
+    text = build_alert_message(rule, opportunity)
+
+    assert "资金费率差（日化）：当前 0.24% / 预测 -" in text
+    assert "结算周期：8h / 1h" in text
+    assert "资金费率差：当前 -0.06%" not in text
+
+
+def test_alert_message_formats_market_times_in_utc_plus_8() -> None:
+    rule = AlertRule(name="local time alert")
+    observations = [
+        SimpleNamespace(
+            observed_at=datetime(2026, 5, 15, 1, 59, 44, tzinfo=UTC),
+            open_spread_pct=0.72,
+            fee_adjusted_open_pct=0.52,
+            funding_edge_pct=0.03,
+            combined_open_edge_pct=0.55,
+            net_funding_pct=-0.03,
+            net_funding_next_pct=0.01,
+        )
+    ]
+
+    text = build_alert_message(rule, make_opportunity(), observations=observations)
+
+    assert "下一次结算：16:00 / 16:00" in text
+    assert "1. 09:59:44 |" in text
+    assert "下一次结算：08:00 / 08:00" not in text
+    assert "1. 01:59:44 |" not in text
 
 
 def test_build_payload_honors_alert_message_template_blocks() -> None:

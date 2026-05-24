@@ -1,11 +1,14 @@
 from app.exchanges.base import (
     ExchangeAdapter,
+    compact_usdt_symbol,
     normalize_usdt_symbol,
+    order_book_snapshot,
     parse_datetime_ms,
     parse_float,
     utc_now,
 )
 from app.models.market import MarketSnapshot, MarketType
+from app.models.orderbook import OrderBookSnapshot
 
 
 class BybitAdapter(ExchangeAdapter):
@@ -18,6 +21,28 @@ class BybitAdapter(ExchangeAdapter):
     async def fetch_future_tickers(self) -> list[MarketSnapshot]:
         payload = await self.get_json("https://api.bybit.com/v5/market/tickers?category=linear")
         return self._parse(payload.get("result", {}).get("list", []), MarketType.FUTURE)
+
+    async def fetch_order_book(
+        self,
+        symbol: str,
+        market_type: MarketType,
+        raw_symbol: str,
+        limit: int = 20,
+    ) -> OrderBookSnapshot | None:
+        raw = compact_usdt_symbol(symbol, raw_symbol)
+        category = "spot" if market_type == MarketType.SPOT else "linear"
+        payload = await self.get_json(
+            f"https://api.bybit.com/v5/market/orderbook?category={category}&symbol={raw}&limit={limit}"
+        )
+        result = payload.get("result", {}) if isinstance(payload, dict) else {}
+        return order_book_snapshot(
+            exchange=self.name,
+            market_type=market_type,
+            symbol=symbol,
+            raw_symbol=raw,
+            bids=result.get("b", []) if isinstance(result, dict) else [],
+            asks=result.get("a", []) if isinstance(result, dict) else [],
+        )
 
     def _parse(self, data: list[dict], market_type: MarketType) -> list[MarketSnapshot]:
         rows: list[MarketSnapshot] = []

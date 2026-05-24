@@ -4,13 +4,22 @@ import asyncio
 from collections.abc import Iterable
 from datetime import datetime
 
-from app.exchanges.base import ExchangeAdapter, normalize_usdt_symbol, parse_datetime_ms, parse_float, utc_now
+from app.exchanges.base import (
+    ExchangeAdapter,
+    normalize_usdt_symbol,
+    order_book_snapshot,
+    parse_datetime_ms,
+    parse_float,
+    utc_now,
+)
 from app.models.market import MarketSnapshot, MarketType
+from app.models.orderbook import OrderBookSnapshot
 
 
 class HyperliquidAdapter(ExchangeAdapter):
     name = "hyperliquid"
     info_url = "https://api.hyperliquid.xyz/info"
+    perp_dex_concurrency = 3
 
     async def fetch_spot_tickers(self) -> list[MarketSnapshot]:
         payload = await self.post_json(self.info_url, {"type": "spotMetaAndAssetCtxs"})
@@ -25,8 +34,14 @@ class HyperliquidAdapter(ExchangeAdapter):
         predicted_fundings = await self._fetch_predicted_fundings()
 
         if perp_dex_names:
+            semaphore = asyncio.Semaphore(self.perp_dex_concurrency)
+
+            async def fetch_limited(dex_name: str) -> list[MarketSnapshot]:
+                async with semaphore:
+                    return await self._fetch_perp_dex_rows(dex_name)
+
             dex_results = await asyncio.gather(
-                *(self._fetch_perp_dex_rows(dex_name) for dex_name in perp_dex_names),
+                *(fetch_limited(dex_name) for dex_name in perp_dex_names),
                 return_exceptions=True,
             )
             for result in dex_results:
@@ -36,6 +51,32 @@ class HyperliquidAdapter(ExchangeAdapter):
 
         return self._best_perp_rows_by_symbol(
             self._attach_predicted_fundings(rows, predicted_fundings)
+        )
+
+    async def fetch_order_book(
+        self,
+        symbol: str,
+        market_type: MarketType,
+        raw_symbol: str,
+        limit: int = 20,
+    ) -> OrderBookSnapshot | None:
+        coin = self._l2_book_coin(symbol, raw_symbol, market_type)
+        if coin is None:
+            return None
+        payload = await self.post_json(self.info_url, {"type": "l2Book", "coin": coin})
+        if not isinstance(payload, dict):
+            return None
+        levels = payload.get("levels")
+        if not isinstance(levels, list) or len(levels) < 2:
+            return None
+        return order_book_snapshot(
+            exchange=self.name,
+            market_type=market_type,
+            symbol=symbol,
+            raw_symbol=coin,
+            bids=levels[0],
+            asks=levels[1],
+            timestamp=parse_datetime_ms(payload.get("time")),
         )
 
     async def _fetch_perp_dex_names(self) -> list[str]:
@@ -57,6 +98,16 @@ class HyperliquidAdapter(ExchangeAdapter):
             names.append(name)
             seen.add(name)
         return names
+
+    def _l2_book_coin(self, symbol: str, raw_symbol: str, market_type: MarketType) -> str | None:
+        candidate = raw_symbol.strip()
+        if candidate and candidate.upper() != symbol.upper():
+            return candidate
+        try:
+            _, base, _ = normalize_usdt_symbol(symbol)
+        except ValueError:
+            return None
+        return base if market_type == MarketType.FUTURE else f"{base}/USDC"
 
     async def _fetch_perp_dex_rows(self, dex_name: str) -> list[MarketSnapshot]:
         payload = await self.post_json(self.info_url, {"type": "metaAndAssetCtxs", "dex": dex_name})

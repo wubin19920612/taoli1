@@ -28,6 +28,11 @@ class Opportunity(BaseModel):
     buy_ask: float
     sell_bid: float
     sell_ask: float
+    buy_bid_depth_usdt: float | None = None
+    buy_ask_depth_usdt: float | None = None
+    sell_bid_depth_usdt: float | None = None
+    sell_ask_depth_usdt: float | None = None
+    min_open_depth_usdt: float | None = None
     buy_volume_24h_usdt: float | None
     sell_volume_24h_usdt: float | None
     funding_rate_buy_pct: float | None = None

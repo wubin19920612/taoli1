@@ -18,6 +18,11 @@ export interface Opportunity {
   buy_ask: number;
   sell_bid: number;
   sell_ask: number;
+  buy_bid_depth_usdt?: number | null;
+  buy_ask_depth_usdt?: number | null;
+  sell_bid_depth_usdt?: number | null;
+  sell_ask_depth_usdt?: number | null;
+  min_open_depth_usdt?: number | null;
   buy_volume_24h_usdt: number | null;
   sell_volume_24h_usdt: number | null;
   funding_rate_buy_pct: number | null;
@@ -40,11 +45,22 @@ export interface Opportunity {
   last_seen_at: string;
 }
 
+export interface ExchangePollState {
+  status: "healthy" | "degraded" | "cooling_down";
+  last_success_at: string | null;
+  last_error_at: string | null;
+  consecutive_failures: number;
+  cooldown_until: string | null;
+  next_due_at: string | null;
+  in_flight: boolean;
+}
+
 export interface HealthStatus {
   status: string;
   markets: number;
   opportunities: number;
   exchange_errors: Record<string, string>;
+  exchange_states: Record<string, ExchangePollState>;
 }
 
 export interface RiskSettings {
@@ -55,6 +71,13 @@ export interface RiskSettings {
   wide_spread_pct: number;
   mark_index_deviation_pct: number;
   funding_against_pct: number;
+  signal_slippage_buffer_pct: number;
+  min_effective_open_pct: number;
+  max_open_spread_decay_pct: number;
+  signal_validation_notional_usdt: number;
+  orderbook_depth_safety_multiple: number;
+  min_top_of_book_depth_usdt: number;
+  signal_strategy_notes: string;
   ticker_collision_symbols: string[];
   excluded_symbols: string[];
   ignored_exchanges: string[];
@@ -100,6 +123,65 @@ export interface AlertEvent {
   status: string;
   message: string;
   created_at: string;
+}
+
+export interface AstroCardSettings {
+  max_trade_usdt: number;
+  leverage: number;
+  min_notional: number;
+  max_notional: number;
+  close_position_buffer_pct: number;
+  unfavorable_funding_weight: number;
+  close_position_floor_pct: number;
+}
+
+export interface AstroCardCreateRequest {
+  max_trade_usdt?: number;
+  leverage?: number;
+  min_notional?: number;
+  max_notional?: number;
+  save_as_default?: boolean;
+}
+
+export interface AstroFieldAssumption {
+  field: string;
+  source: string;
+  assumed_value: string;
+  note: string;
+  needs_verification: boolean;
+}
+
+export interface AstroPairPlan {
+  opportunity_id: string;
+  symbol: string;
+  mode: "dry_run";
+  can_submit: boolean;
+  pair: Record<string, unknown> | null;
+  sdk_payload: Record<string, unknown> | null;
+  blockers: string[];
+  warnings: string[];
+  assumptions: AstroFieldAssumption[];
+}
+
+export interface AstroActionResult {
+  enabled: boolean;
+  status: "disabled" | "skipped" | "created" | "updated" | "failed";
+  action: string;
+  message: string;
+  pair_name: string | null;
+  pair_type: string | null;
+}
+
+export interface AstroSdkStatus {
+  configured: boolean;
+  dry_run_only: boolean;
+  base_url: string;
+  admin_prefix: string;
+  api_key_configured: boolean;
+  list_path: string;
+  pair_path: string;
+  message_path: string;
+  message: string | null;
 }
 
 export interface ServiceControlDetail {

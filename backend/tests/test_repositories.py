@@ -4,6 +4,7 @@ from app.db.database import connect_database
 from app.db.repositories import AlertRuleRepository, SettingsRepository
 from app.db.schema import initialize_schema
 from app.models.alert import AlertRule, AlertSeverity
+from app.models.settings import AstroCardSettings
 
 
 @pytest.mark.asyncio
@@ -88,5 +89,44 @@ async def test_alert_message_template_repository_defaults_and_roundtrip() -> Non
         assert saved.include_rule_details is False
         assert loaded.include_observations is False
         assert loaded.observation_limit == 2
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_astro_card_settings_round_trip() -> None:
+    db = await connect_database(":memory:")
+    try:
+        await initialize_schema(db)
+        repo = SettingsRepository(db)
+
+        defaults = await repo.get_astro_card_settings()
+
+        assert defaults.max_trade_usdt == 10
+        assert defaults.leverage == 1
+        assert defaults.close_position_buffer_pct == 0.1
+        assert defaults.unfavorable_funding_weight == 1
+        assert defaults.close_position_floor_pct == 0
+
+        saved = await repo.set_astro_card_settings(
+            AstroCardSettings(
+                max_trade_usdt=50,
+                leverage=3,
+                min_notional=10,
+                max_notional=50,
+                close_position_buffer_pct=0.2,
+                unfavorable_funding_weight=1.5,
+                close_position_floor_pct=0.01,
+            )
+        )
+        loaded = await repo.get_astro_card_settings()
+
+        assert saved.max_trade_usdt == 50
+        assert loaded.max_trade_usdt == 50
+        assert loaded.leverage == 3
+        assert loaded.max_notional == 50
+        assert loaded.close_position_buffer_pct == 0.2
+        assert loaded.unfavorable_funding_weight == 1.5
+        assert loaded.close_position_floor_pct == 0.01
     finally:
         await db.close()

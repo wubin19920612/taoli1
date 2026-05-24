@@ -1,12 +1,16 @@
+from datetime import datetime
+
 from app.exchanges.base import (
     ExchangeAdapter,
     next_aligned_funding_time,
     normalize_usdt_symbol,
+    order_book_snapshot,
     parse_datetime_ms,
     parse_float,
     utc_now,
 )
 from app.models.market import MarketSnapshot, MarketType
+from app.models.orderbook import OrderBookSnapshot
 
 
 class OKXAdapter(ExchangeAdapter):
@@ -24,9 +28,10 @@ class OKXAdapter(ExchangeAdapter):
         for row in tickers:
             item = funding_by_symbol.get(row.raw_symbol, {})
             funding = parse_float(item.get("fundingRate"))
-            next_time = parse_datetime_ms(item.get("nextFundingTime")) or parse_datetime_ms(
-                item.get("fundingTime")
-            ) or next_aligned_funding_time(utc_now(), 8)
+            funding_time = parse_datetime_ms(item.get("fundingTime"))
+            next_time = parse_datetime_ms(item.get("nextFundingTime")) or funding_time
+            interval_hours = _funding_interval_hours(funding_time, next_time) or 8
+            next_time = next_time or next_aligned_funding_time(utc_now(), interval_hours)
             enriched.append(
                 row.model_copy(
                     update={
@@ -34,12 +39,38 @@ class OKXAdapter(ExchangeAdapter):
                         "funding_next_rate_pct": parse_float(item.get("nextFundingRate")) * 100
                         if parse_float(item.get("nextFundingRate")) is not None
                         else None,
-                        "funding_interval_hours": 8,
+                        "funding_interval_hours": interval_hours,
                         "funding_next_time": next_time,
                     }
                 )
             )
         return enriched
+
+    async def fetch_order_book(
+        self,
+        symbol: str,
+        market_type: MarketType,
+        raw_symbol: str,
+        limit: int = 20,
+    ) -> OrderBookSnapshot | None:
+        inst_id = _inst_id(symbol, raw_symbol, market_type)
+        payload = await self.get_json(
+            f"https://www.okx.com/api/v5/market/books?instId={inst_id}&sz={limit}"
+        )
+        rows = payload.get("data", []) if isinstance(payload, dict) else []
+        if not rows:
+            return None
+        row = rows[0]
+        timestamp = parse_datetime_ms(row.get("ts")) if isinstance(row, dict) else None
+        return order_book_snapshot(
+            exchange=self.name,
+            market_type=market_type,
+            symbol=symbol,
+            raw_symbol=inst_id,
+            bids=row.get("bids", []) if isinstance(row, dict) else [],
+            asks=row.get("asks", []) if isinstance(row, dict) else [],
+            timestamp=timestamp,
+        )
 
     async def _fetch_funding_by_symbol(
         self,
@@ -92,3 +123,26 @@ class OKXAdapter(ExchangeAdapter):
                 )
             )
         return rows
+
+
+def _funding_interval_hours(funding_time: datetime | None, next_funding_time: datetime | None) -> int | None:
+    if funding_time is None or next_funding_time is None:
+        return None
+    seconds = (next_funding_time - funding_time).total_seconds()
+    if seconds <= 0:
+        return None
+    hours = seconds / 3600
+    rounded = round(hours)
+    if rounded <= 0:
+        return None
+    return rounded
+
+
+def _inst_id(symbol: str, raw_symbol: str, market_type: MarketType) -> str:
+    candidate = raw_symbol.upper()
+    if "-" in candidate and "USDT" in candidate:
+        return candidate
+    _, base, quote = normalize_usdt_symbol(symbol)
+    if market_type == MarketType.FUTURE:
+        return f"{base}-{quote}-SWAP"
+    return f"{base}-{quote}"

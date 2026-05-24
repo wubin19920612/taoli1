@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.core.security import dashboard_password_header, verify_dashboard_password
 from app.db.repositories import SettingsRepository
-from app.models.settings import AlertMessageTemplateSettings, RiskSettings
+from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, RiskSettings
 
 router = APIRouter(prefix="/settings")
 
@@ -42,3 +42,23 @@ async def update_alert_message_template(
 ) -> AlertMessageTemplateSettings:
     verify_dashboard_password(request.app.state.settings.dashboard_password, password)
     return await _settings_repo(request).set_alert_message_template(settings)
+
+
+@router.get("/astro-card", response_model=AstroCardSettings)
+async def get_astro_card_settings(request: Request) -> AstroCardSettings:
+    repo = _settings_repo(request)
+    find_settings = getattr(repo, "find_astro_card_settings", None)
+    stored = await find_settings() if find_settings is not None else await repo.get_astro_card_settings()
+    if stored is None:
+        return request.app.state.settings.astro_card_settings
+    return stored
+
+
+@router.put("/astro-card", response_model=AstroCardSettings)
+async def update_astro_card_settings(
+    settings: AstroCardSettings,
+    request: Request,
+    password: str | None = Depends(dashboard_password_header),
+) -> AstroCardSettings:
+    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
+    return await _settings_repo(request).set_astro_card_settings(settings)

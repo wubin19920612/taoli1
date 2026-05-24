@@ -6,7 +6,8 @@ from typing import Any
 
 import httpx
 
-from app.models.market import MarketSnapshot
+from app.models.market import MarketSnapshot, MarketType
+from app.models.orderbook import OrderBookLevel, OrderBookSnapshot
 
 DEFAULT_HEADERS = {"User-Agent": "taoli1-radar/0.1"}
 DEFAULT_TIMEOUT = httpx.Timeout(8.0, connect=2.5, read=6.0, write=5.0, pool=5.0)
@@ -49,6 +50,66 @@ def parse_datetime_seconds(value: Any) -> datetime | None:
     if parsed is None:
         return None
     return datetime.fromtimestamp(parsed, tz=UTC)
+
+
+def _first_float(item: dict[str, Any], keys: tuple[str, ...]) -> float | None:
+    for key in keys:
+        parsed = parse_float(item.get(key))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def parse_order_book_levels(levels: Any) -> list[OrderBookLevel]:
+    parsed: list[OrderBookLevel] = []
+    rows = levels if isinstance(levels, list) else []
+    for item in rows:
+        price: float | None = None
+        size: float | None = None
+        if isinstance(item, (list, tuple)) and len(item) >= 2:
+            price = parse_float(item[0])
+            size = parse_float(item[1])
+        elif isinstance(item, dict):
+            price = _first_float(item, ("price", "p", "px"))
+            size = _first_float(item, ("size", "s", "sz", "amount", "qty"))
+        if price is None or size is None or price <= 0 or size <= 0:
+            continue
+        parsed.append(OrderBookLevel(price=price, size=size))
+    return parsed
+
+
+def compact_usdt_symbol(symbol: str, raw_symbol: str | None = None) -> str:
+    candidate = raw_symbol or symbol
+    compact, _, _ = normalize_usdt_symbol(candidate)
+    return compact
+
+
+def separated_usdt_symbol(symbol: str, separator: str, raw_symbol: str | None = None) -> str:
+    compact, base, quote = normalize_usdt_symbol(raw_symbol or symbol)
+    if separator == "":
+        return compact
+    return f"{base}{separator}{quote}"
+
+
+def order_book_snapshot(
+    *,
+    exchange: str,
+    market_type: MarketType,
+    symbol: str,
+    raw_symbol: str,
+    bids: Any,
+    asks: Any,
+    timestamp: datetime | None = None,
+) -> OrderBookSnapshot:
+    return OrderBookSnapshot(
+        exchange=exchange,
+        market_type=market_type,
+        symbol=compact_usdt_symbol(symbol),
+        raw_symbol=raw_symbol,
+        bids=parse_order_book_levels(bids),
+        asks=parse_order_book_levels(asks),
+        timestamp=timestamp or utc_now(),
+    )
 
 
 def next_aligned_funding_time(now: datetime, interval_hours: int) -> datetime | None:
@@ -115,3 +176,12 @@ class ExchangeAdapter(ABC):
     @abstractmethod
     async def fetch_future_tickers(self) -> list[MarketSnapshot]:
         raise NotImplementedError
+
+    async def fetch_order_book(
+        self,
+        symbol: str,
+        market_type: MarketType,
+        raw_symbol: str,
+        limit: int = 20,
+    ) -> OrderBookSnapshot | None:
+        return None

@@ -8,6 +8,10 @@ from app.models.settings import DEFAULT_HIDDEN_RISK_LABELS, RiskSettings
 from app.services.risk_labels import apply_risk_labels, has_non_actionable_risk
 
 
+def test_signal_validation_notional_defaults_to_1000_usdt() -> None:
+    assert RiskSettings().signal_validation_notional_usdt == 1000
+
+
 def opportunity(**overrides) -> Opportunity:
     base: dict[str, Any] = dict(
         id="abc",
@@ -112,6 +116,74 @@ def test_missing_volume_alone_does_not_trigger_low_volume() -> None:
     )
 
     assert "LOW_VOLUME" not in labeled.risk_labels
+
+
+def test_thin_top_of_book_depth_is_non_actionable() -> None:
+    settings = RiskSettings(
+        signal_validation_notional_usdt=100,
+        orderbook_depth_safety_multiple=3,
+        min_top_of_book_depth_usdt=250,
+        ticker_collision_symbols=[],
+    )
+    labeled = apply_risk_labels(
+        opportunity(
+            symbol="BTCUSDT",
+            open_spread_pct=0.6,
+            close_spread_pct=0.2,
+            fee_adjusted_open_pct=0.4,
+            spread_width_pct=0.4,
+            buy_volume_24h_usdt=100_000_000,
+            sell_volume_24h_usdt=100_000_000,
+            funding_rate_buy_pct=0.0,
+            funding_rate_sell_pct=0.02,
+            net_funding_pct=0.02,
+            buy_funding_interval_hours=8,
+            sell_funding_interval_hours=8,
+            buy_ask_depth_usdt=220,
+            sell_bid_depth_usdt=2_000,
+            min_open_depth_usdt=220,
+            mark_index_diff_buy_pct=0.01,
+            mark_index_diff_sell_pct=0.02,
+            last_seen_at=datetime.now(UTC),
+        ),
+        settings=settings,
+        now=datetime.now(UTC),
+    )
+
+    assert "THIN_ORDER_BOOK" in labeled.risk_labels
+    assert has_non_actionable_risk(labeled)
+
+
+def test_slippage_buffer_can_mark_small_effective_edge_non_actionable() -> None:
+    settings = RiskSettings(
+        signal_slippage_buffer_pct=0.10,
+        min_effective_open_pct=0.05,
+        ticker_collision_symbols=[],
+    )
+    labeled = apply_risk_labels(
+        opportunity(
+            symbol="BTCUSDT",
+            open_spread_pct=0.32,
+            close_spread_pct=0.10,
+            fee_adjusted_open_pct=0.12,
+            spread_width_pct=0.22,
+            buy_volume_24h_usdt=100_000_000,
+            sell_volume_24h_usdt=100_000_000,
+            funding_rate_buy_pct=0.0,
+            funding_rate_sell_pct=0.02,
+            net_funding_pct=0.02,
+            buy_funding_interval_hours=8,
+            sell_funding_interval_hours=8,
+            mark_index_diff_buy_pct=0.01,
+            mark_index_diff_sell_pct=0.02,
+            last_seen_at=datetime.now(UTC),
+        ),
+        settings=settings,
+        now=datetime.now(UTC),
+    )
+
+    assert "EDGE_AFTER_SLIPPAGE_TOO_SMALL" in labeled.risk_labels
+    assert has_non_actionable_risk(labeled)
 
 
 def test_known_zero_volume_triggers_low_volume_even_when_other_side_is_missing() -> None:

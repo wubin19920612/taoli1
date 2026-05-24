@@ -7,6 +7,9 @@ DEFAULT_HIDDEN_RISK_LABELS = [
     "WIDE_SPREAD",
     "SAME_TICKER_RISK",
     "MISSING_FUNDING",
+    "THIN_ORDER_BOOK",
+    "EDGE_AFTER_SLIPPAGE_TOO_SMALL",
+    "TRANSIENT_SIGNAL",
 ]
 
 
@@ -17,6 +20,13 @@ class RiskSettings(BaseModel):
     wide_spread_pct: float = Field(default=3.0, ge=0)
     mark_index_deviation_pct: float = Field(default=1.0, ge=0)
     funding_against_pct: float = Field(default=0.01, ge=0)
+    signal_slippage_buffer_pct: float = Field(default=0.05, ge=0)
+    min_effective_open_pct: float = Field(default=0.05, ge=0)
+    max_open_spread_decay_pct: float = Field(default=60.0, ge=0, le=100)
+    signal_validation_notional_usdt: float = Field(default=1000, ge=0)
+    orderbook_depth_safety_multiple: float = Field(default=2, ge=0)
+    min_top_of_book_depth_usdt: float = Field(default=0, ge=0)
+    signal_strategy_notes: str = ""
     ticker_collision_symbols: list[str] = Field(default_factory=lambda: ["AIUSDT", "UPUSDT", "LABUSDT"])
     excluded_symbols: list[str] = Field(default_factory=list)
     ignored_exchanges: list[str] = Field(default_factory=list)
@@ -33,6 +43,16 @@ class AlertMessageTemplateSettings(BaseModel):
     include_observations: bool = True
     include_dashboard_link: bool = True
     observation_limit: int = Field(default=5, ge=1, le=20)
+
+
+class AstroCardSettings(BaseModel):
+    max_trade_usdt: float = Field(default=10, gt=0)
+    leverage: int = Field(default=1, ge=1)
+    min_notional: float = Field(default=10, ge=0)
+    max_notional: float = Field(default=10, gt=0)
+    close_position_buffer_pct: float = Field(default=0.1, ge=0)
+    unfavorable_funding_weight: float = Field(default=1, ge=0)
+    close_position_floor_pct: float = Field(default=0, ge=0)
 
 
 class OpportunityFilterSettings(BaseModel):

@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import (
+    routes_astro,
     routes_admin,
     routes_alerts,
     routes_health,
@@ -27,13 +28,19 @@ from app.db.repositories import (
 )
 from app.db.schema import initialize_schema
 from app.models.alert import AlertEvent
-from app.models.settings import AlertMessageTemplateSettings, RiskSettings
-from app.services.alert_engine import AlertEngine
+from app.models.orderbook import DepthValidationResult
+from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, RiskSettings
+from app.services.alert_engine import AlertEngine, AlertMatch, observations_are_stable
 from app.services.alert_messages import build_alert_message
+from app.services.alert_metrics import observe_alert_metrics
+from app.services.astro_alerts import AstroAlertService
+from app.services.astro_client import AstroSdkClient, AstroSdkConfig
 from app.services.collector import MarketCollector, default_exchange_adapters, run_collector_loop
 from app.services.data_filters import filter_opportunities
 from app.services.feishu import FeishuConfig, FeishuNotifier
 from app.services.history import OpportunityHistoryRecorder
+from app.services.orderbook_validator import OrderBookDepthValidator
+from app.services.risk_labels import effective_open_edge_pct, known_volume_24h_usdt
 from app.services.snapshot_store import SnapshotStore
 from app.services.service_control import DockerServiceController, ServiceControlConfig
 
@@ -52,6 +59,105 @@ def _ensure_database_parent(path: str) -> None:
         os.makedirs(parent, exist_ok=True)
 
 
+async def _refresh_astro_card_settings(app: FastAPI, settings_repo: SettingsRepository | None) -> None:
+    astro_alert_service: AstroAlertService | None = getattr(
+        app.state,
+        "astro_alert_service",
+        None,
+    )
+    if astro_alert_service is None:
+        return
+    if not hasattr(astro_alert_service, "card_settings"):
+        return
+    fallback_settings = getattr(
+        getattr(app.state, "settings", None),
+        "astro_card_settings",
+        getattr(astro_alert_service, "card_settings", None),
+    )
+    if settings_repo is None:
+        astro_alert_service.card_settings = fallback_settings
+        return
+    find_settings = getattr(settings_repo, "find_astro_card_settings", None)
+    stored = await find_settings() if find_settings is not None else None
+    astro_alert_service.card_settings = stored or fallback_settings
+
+
+def _find_latest_opportunity(app: FastAPI, opportunity_id: str):
+    store = getattr(app.state, "snapshot_store", None)
+    if store is None:
+        return None
+    return next((item for item in store.get_opportunities() if item.id == opportunity_id), None)
+
+
+def _latest_signal_validation_failure(
+    match: AlertMatch,
+    latest,
+    settings: RiskSettings,
+    now: datetime,
+) -> str | None:
+    if latest is None:
+        return "opportunity disappeared from the latest snapshot"
+    if latest.open_spread_pct + 1e-9 < match.rule.min_open_spread_pct:
+        return (
+            f"open spread {latest.open_spread_pct:.3f}% is below rule threshold "
+            f"{match.rule.min_open_spread_pct:.3f}%"
+        )
+    effective_edge = effective_open_edge_pct(latest, settings)
+    required_edge = max(match.rule.min_fee_adjusted_open_pct, settings.min_effective_open_pct)
+    if effective_edge + 1e-9 < required_edge:
+        return (
+            f"effective edge after slippage {effective_edge:.3f}% is below "
+            f"{required_edge:.3f}%"
+        )
+    min_volume = known_volume_24h_usdt(latest)
+    if min_volume is not None and min_volume < match.rule.min_volume_24h_usdt:
+        return (
+            f"24h volume {min_volume:.0f} USDT is below rule threshold "
+            f"{match.rule.min_volume_24h_usdt:.0f} USDT"
+        )
+    if (now - latest.last_seen_at).total_seconds() > match.rule.max_data_age_seconds:
+        return "latest market data is stale"
+    excluded_labels = set(latest.risk_labels).intersection(match.rule.excluded_risk_labels)
+    if excluded_labels:
+        return f"latest opportunity has excluded risk labels: {', '.join(sorted(excluded_labels))}"
+
+    observations = list(match.observations)
+    if not observations or observations[-1].open_spread_pct != latest.open_spread_pct:
+        observations.append(observe_alert_metrics(latest, now))
+    if not observations_are_stable(observations, settings):
+        return "open spread decayed too quickly across recent observations"
+    return None
+
+
+def _format_order_book_validation_failure(result: DepthValidationResult) -> str:
+    details = "; ".join(result.blockers) if result.blockers else "depth validation failed"
+    metrics: list[str] = [f"target {result.target_notional_usdt:.2f} USDT"]
+    if result.executable_open_pct is not None:
+        metrics.append(f"executable open {result.executable_open_pct:.3f}%")
+    if result.effective_executable_edge_pct is not None:
+        metrics.append(f"effective edge {result.effective_executable_edge_pct:.3f}%")
+    return f"{details} ({', '.join(metrics)})"
+
+
+async def _order_book_validation_failure(
+    app: FastAPI,
+    opportunity,
+    risk_settings: RiskSettings,
+    card_settings: AstroCardSettings | None,
+) -> str | None:
+    validator = getattr(app.state, "orderbook_validator", None)
+    if validator is None:
+        return None
+    result = await validator.validate(
+        opportunity,
+        risk_settings=risk_settings,
+        card_settings=card_settings,
+    )
+    if result.passed:
+        return None
+    return _format_order_book_validation_failure(result)
+
+
 async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asyncio.Event) -> None:
     while not stop_event.is_set():
         try:
@@ -65,8 +171,9 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                 if settings_repo is not None
                 else AlertMessageTemplateSettings()
             )
+            await _refresh_astro_card_settings(app, settings_repo)
             opportunities = filter_opportunities(app.state.snapshot_store.get_opportunities(), settings)
-            matches = app.state.alert_engine.evaluate(opportunities, rules)
+            matches = app.state.alert_engine.evaluate(opportunities, rules, risk_settings=settings)
             for match in matches:
                 status = "sent"
                 message = build_alert_message(
@@ -75,12 +182,51 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                     observations=match.observations,
                     template=alert_template,
                 )
+                astro_alert_service: AstroAlertService | None = getattr(
+                    app.state,
+                    "astro_alert_service",
+                    None,
+                )
+                if astro_alert_service is not None:
+                    try:
+                        latest_opportunity = _find_latest_opportunity(app, match.opportunity.id)
+                        validation_failure = _latest_signal_validation_failure(
+                            match,
+                            latest_opportunity,
+                            settings,
+                            datetime.now(UTC),
+                        )
+                        if validation_failure is not None:
+                            message = (
+                                f"{message}\n\n"
+                                f"Astro: skipped latest signal validation: {validation_failure}"
+                            )
+                        else:
+                            card_settings = getattr(astro_alert_service, "card_settings", None)
+                            order_book_failure = await _order_book_validation_failure(
+                                app,
+                                latest_opportunity,
+                                settings,
+                                card_settings,
+                            )
+                            if order_book_failure is not None:
+                                message = (
+                                    f"{message}\n\n"
+                                    f"Astro: skipped order book validation: {order_book_failure}"
+                                )
+                            else:
+                                astro_result = await astro_alert_service.handle_alert(latest_opportunity)
+                                message = f"{message}\n\n{astro_result.format_message()}"
+                    except Exception as exc:  # noqa: BLE001 - keep alert delivery independent.
+                        logger.exception("astro alert follow-up failed")
+                        message = f"{message}\n\nAstro: 处理失败，{exc}"
                 try:
                     await app.state.feishu_notifier.send_alert(
                         match.rule,
                         match.opportunity,
                         observations=match.observations,
                         template=alert_template,
+                        prebuilt_text=message,
                     )
                 except Exception as exc:  # noqa: BLE001 - preserve event even when webhook fails.
                     status = "failed"
@@ -125,16 +271,20 @@ def create_app(
         tasks: list[asyncio.Task] = []
         collector: MarketCollector | None = None
         if start_collector:
+            exchange_adapters = default_exchange_adapters()
             history_recorder = OpportunityHistoryRecorder(
                 app.state.history_repo,
                 app_settings.history_settings,
             )
             collector = MarketCollector(
-                default_exchange_adapters(),
+                exchange_adapters,
                 store,
                 risk_settings_loader=app.state.settings_repo.get_risk_settings,
                 history_recorder=history_recorder,
+                poll_interval_seconds=app_settings.poll_interval_seconds,
             )
+            app.state.market_collector = collector
+            app.state.orderbook_validator = OrderBookDepthValidator(exchange_adapters)
             tasks.append(
                 asyncio.create_task(
                     run_collector_loop(collector, app_settings.poll_interval_seconds, stop_event)
@@ -156,6 +306,9 @@ def create_app(
                     await task
             if collector is not None:
                 await collector.close()
+            astro_client = getattr(app.state, "astro_client", None)
+            if astro_client is not None:
+                await astro_client.aclose()
             service_controller = getattr(app.state, "service_controller", None)
             if service_controller is not None:
                 close = getattr(service_controller, "aclose", None)
@@ -167,7 +320,19 @@ def create_app(
     app = FastAPI(title=app_settings.app_name, lifespan=lifespan)
     app.state.settings = app_settings
     app.state.snapshot_store = store
+    app.state.market_collector = None
+    app.state.orderbook_validator = None
     app.state.alert_engine = AlertEngine()
+    app.state.astro_client = AstroSdkClient(
+        AstroSdkConfig(
+            base_url=app_settings.astro_sdk_base_url,
+            admin_prefix=app_settings.astro_admin_prefix,
+            api_key=app_settings.astro_api_key,
+            verify_tls=app_settings.astro_verify_tls,
+            timeout_seconds=app_settings.astro_request_timeout_seconds,
+        )
+    )
+    app.state.astro_alert_service = AstroAlertService(app.state.astro_client, app_settings)
     app.state.service_controller = DockerServiceController(
         ServiceControlConfig(
             enabled=app_settings.service_control_enabled,
@@ -191,6 +356,7 @@ def create_app(
         allow_headers=["*"],
     )
     app.include_router(routes_health.router, prefix="/api")
+    app.include_router(routes_astro.router, prefix="/api")
     app.include_router(routes_opportunities.router, prefix="/api")
     app.include_router(routes_history.router, prefix="/api")
     app.include_router(routes_alerts.router, prefix="/api")

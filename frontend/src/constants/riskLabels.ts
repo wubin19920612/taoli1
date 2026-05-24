@@ -27,7 +27,7 @@ export const riskLabelOptions = [
   {
     value: "FUNDING_AGAINST",
     label: "资金费率逆风",
-    description: "净资金费率 = 卖出侧资金费率 - 买入侧资金费率，低于负的逆风阈值"
+    description: "净资金费率按两侧结算周期折算到小时口径后比较，低于负的逆风阈值"
   },
   {
     value: "MARK_INDEX_DEVIATION",
@@ -38,6 +38,21 @@ export const riskLabelOptions = [
     value: "MISSING_FUNDING",
     label: "缺资金费率",
     description: "至少一侧永续合约缺少资金费率数据"
+  },
+  {
+    value: "THIN_ORDER_BOOK",
+    label: "Thin order book",
+    description: "Top-of-book depth is below the configured validation notional and safety multiple."
+  },
+  {
+    value: "EDGE_AFTER_SLIPPAGE_TOO_SMALL",
+    label: "Small effective edge",
+    description: "Combined open edge is too small after the additional signal slippage buffer."
+  },
+  {
+    value: "TRANSIENT_SIGNAL",
+    label: "Transient signal",
+    description: "Recent observations show the open spread decaying too quickly."
   }
 ];
 
@@ -52,5 +67,8 @@ export const defaultHiddenRiskLabels = [
   "HUGE_SPREAD_VERIFY",
   "WIDE_SPREAD",
   "SAME_TICKER_RISK",
-  "MISSING_FUNDING"
+  "MISSING_FUNDING",
+  "THIN_ORDER_BOOK",
+  "EDGE_AFTER_SLIPPAGE_TOO_SMALL",
+  "TRANSIENT_SIGNAL"
 ];

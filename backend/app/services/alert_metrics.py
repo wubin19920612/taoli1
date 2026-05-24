@@ -17,6 +17,14 @@ class AlertObservation:
 
 
 def funding_edge_pct(opportunity: Opportunity) -> float:
+    if opportunity.net_funding_next_daily_pct is not None:
+        return opportunity.net_funding_next_daily_pct
+    if opportunity.net_funding_daily_pct is not None:
+        return opportunity.net_funding_daily_pct
+    if opportunity.net_funding_next_hourly_pct is not None:
+        return opportunity.net_funding_next_hourly_pct * 24
+    if opportunity.net_funding_hourly_pct is not None:
+        return opportunity.net_funding_hourly_pct * 24
     if opportunity.net_funding_next_pct is not None:
         return opportunity.net_funding_next_pct
     if opportunity.net_funding_pct is not None:

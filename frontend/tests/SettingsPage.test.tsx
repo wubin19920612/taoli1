@@ -43,6 +43,20 @@ describe("SettingsPage", () => {
             observation_limit: 5
           });
         }
+        if (url.includes("/settings/astro-card") && init?.method === "PUT") {
+          return Response.json(JSON.parse(String(init.body)));
+        }
+        if (url.includes("/settings/astro-card")) {
+          return Response.json({
+            max_trade_usdt: 25,
+            leverage: 2,
+            min_notional: 10,
+            max_notional: 25,
+            close_position_buffer_pct: 0.1,
+            unfavorable_funding_weight: 1,
+            close_position_floor_pct: 0
+          });
+        }
         if (url.includes("/alerts/rules") && init?.method === "POST") {
           return Response.json(JSON.parse(String(init.body)));
         }
@@ -118,6 +132,28 @@ describe("SettingsPage", () => {
     expect(preview).not.toBeNull();
     expect(preview?.textContent).toContain("价差对：BTCUSDT | binance future -> okx future");
     expect(preview?.textContent).not.toContain("资金费率差");
+  }, 15000);
+
+  it("loads and saves Astro card defaults", async () => {
+    render(<SettingsPage />);
+
+    expect(await screen.findByText("Astro card defaults")).toBeTruthy();
+    const positionValueInput = await screen.findByLabelText("Position value USDT");
+    expect((positionValueInput as HTMLInputElement).value).toBe("25");
+
+    await userEvent.clear(positionValueInput);
+    await userEvent.type(positionValueInput, "80");
+    await userEvent.click(screen.getByRole("button", { name: /Save Astro card defaults/ }));
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/settings/astro-card"),
+        expect.objectContaining({
+          method: "PUT",
+          body: expect.stringContaining('"max_trade_usdt":80')
+        })
+      );
+    });
   }, 15000);
 
   it("uses saved risk volume as the default alert rule volume", async () => {
@@ -198,6 +234,57 @@ describe("SettingsPage", () => {
         return init?.method === "PUT" && String(init.body).includes("min_volume_24h_k");
       })
     ).toBe(false);
+  }, 15000);
+
+  it("saves signal validity risk settings", async () => {
+    render(<SettingsPage />);
+
+    const slippageInput = await screen.findByLabelText("Signal slippage buffer pct");
+    await userEvent.clear(slippageInput);
+    await userEvent.type(slippageInput, "0.2");
+    await userEvent.click(screen.getByRole("button", { name: /保存风险参数/ }));
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/settings/risk"),
+        expect.objectContaining({
+          method: "PUT",
+          body: expect.stringContaining('"signal_slippage_buffer_pct":0.2')
+        })
+      );
+    });
+  }, 15000);
+
+  it("shows signal strategy minimum notional default and saves it", async () => {
+    render(<SettingsPage />);
+
+    expect(await screen.findByText("Signal strategy")).toBeTruthy();
+    const minimumInput = await screen.findByLabelText("Minimum validation notional USDT");
+    const strategyNotes = await screen.findByLabelText("Signal strategy notes");
+    expect((minimumInput as HTMLInputElement).value).toBe("1000");
+
+    await userEvent.clear(minimumInput);
+    await userEvent.type(minimumInput, "1500");
+    await userEvent.type(strategyNotes, "Depth must survive the intended card size.");
+    await userEvent.click(screen.getByRole("button", { name: /保存风险参数/ }));
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/settings/risk"),
+        expect.objectContaining({
+          method: "PUT",
+          body: expect.stringContaining('"signal_validation_notional_usdt":1500')
+        })
+      );
+    });
+    expect(
+      vi.mocked(fetch).mock.calls.some(([, init]) => {
+        return (
+          init?.method === "PUT" &&
+          String(init.body).includes('"signal_strategy_notes":"Depth must survive the intended card size."')
+        );
+      })
+    ).toBe(true);
   }, 15000);
 
   it("saves symbol blacklist and ignored exchanges in risk settings", async () => {

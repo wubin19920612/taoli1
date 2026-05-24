@@ -1,9 +1,11 @@
-from datetime import datetime
+from datetime import UTC, datetime, timedelta, timezone
 
 from app.models.alert import ALERT_SEVERITY_DESCRIPTIONS, ALERT_TYPE_DESCRIPTIONS, AlertRule
 from app.models.opportunity import Opportunity
 from app.models.settings import AlertMessageTemplateSettings
 from app.services.alert_metrics import AlertObservation, combined_open_edge_pct
+
+ALERT_DISPLAY_TIMEZONE = timezone(timedelta(hours=8), "UTC+8")
 
 
 def build_alert_message(
@@ -87,26 +89,31 @@ def build_alert_message(
         snapshot_lines.extend(
             [
                 (
-                    "资金费率差："
-                    f"当前 {_format_percent(opportunity.net_funding_pct, digits=2)} / "
-                    f"预测 {_format_percent(opportunity.net_funding_next_pct, digits=2)}"
+                    "资金费率差（日化）："
+                    f"当前 {_format_percent(_current_funding_daily_pct(opportunity), digits=2)} / "
+                    f"预测 {_format_percent(_next_funding_daily_pct(opportunity), digits=2)}"
                 ),
                 (
                     "资金费率："
                     f"{_format_percent(opportunity.funding_rate_buy_pct, digits=2)} / "
                     f"{_format_percent(opportunity.funding_rate_sell_pct, digits=2)}"
-                    f"（净：{_format_percent(opportunity.net_funding_pct, digits=2)}）"
+                    f"（日化净：{_format_percent(_current_funding_daily_pct(opportunity), digits=2)}）"
                 ),
                 (
                     "预测资金费率："
                     f"{_format_percent(opportunity.funding_next_rate_buy_pct, digits=2)} / "
                     f"{_format_percent(opportunity.funding_next_rate_sell_pct, digits=2)}"
-                    f"（净：{_format_percent(opportunity.net_funding_next_pct, digits=2)}）"
+                    f"（日化净：{_format_percent(_next_funding_daily_pct(opportunity), digits=2)}）"
                 ),
                 (
                     "下一次结算："
                     f"{_format_time(opportunity.funding_next_time_buy)} / "
                     f"{_format_time(opportunity.funding_next_time_sell)}"
+                ),
+                (
+                    "结算周期："
+                    f"{_format_interval(opportunity.buy_funding_interval_hours)} / "
+                    f"{_format_interval(opportunity.sell_funding_interval_hours)}"
                 ),
             ]
         )
@@ -130,7 +137,7 @@ def build_alert_message(
                 f"{index}. {_format_time_with_seconds(item.observed_at)} | "
                 f"价差 {_format_percent(item.open_spread_pct)} | "
                 f"净估算 {_format_percent(item.fee_adjusted_open_pct)} | "
-                f"资金差 {_format_percent(item.funding_edge_pct, digits=2)} | "
+                f"资金差（日化） {_format_percent(item.funding_edge_pct, digits=2)} | "
                 f"综合 {_format_percent(item.combined_open_edge_pct)}"
             )
         _append_block(lines, "【连续监测】", observation_lines)
@@ -167,13 +174,25 @@ def _format_volume_k(value: float | None) -> str:
 def _format_time(value: datetime | None) -> str:
     if value is None:
         return "-"
-    return value.strftime("%H:%M")
+    return _to_alert_display_timezone(value).strftime("%H:%M")
+
+
+def _format_interval(value: int | None) -> str:
+    if value is None:
+        return "-"
+    return f"{value}h"
 
 
 def _format_time_with_seconds(value: datetime | None) -> str:
     if value is None:
         return "-"
-    return value.strftime("%H:%M:%S")
+    return _to_alert_display_timezone(value).strftime("%H:%M:%S")
+
+
+def _to_alert_display_timezone(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(ALERT_DISPLAY_TIMEZONE)
 
 
 def _describe_values(values: list[str], empty: str = "全部") -> str:
@@ -187,3 +206,19 @@ def _describe_types(values: list[str]) -> str:
     for item in values:
         items.append(f"{item}（{ALERT_TYPE_DESCRIPTIONS.get(item, item)}）")
     return ", ".join(items)
+
+
+def _current_funding_daily_pct(opportunity: Opportunity) -> float | None:
+    if opportunity.net_funding_daily_pct is not None:
+        return opportunity.net_funding_daily_pct
+    if opportunity.net_funding_hourly_pct is not None:
+        return opportunity.net_funding_hourly_pct * 24
+    return opportunity.net_funding_pct
+
+
+def _next_funding_daily_pct(opportunity: Opportunity) -> float | None:
+    if opportunity.net_funding_next_daily_pct is not None:
+        return opportunity.net_funding_next_daily_pct
+    if opportunity.net_funding_next_hourly_pct is not None:
+        return opportunity.net_funding_next_hourly_pct * 24
+    return opportunity.net_funding_next_pct

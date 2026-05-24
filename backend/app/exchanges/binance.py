@@ -1,12 +1,15 @@
 from app.exchanges.base import (
     ExchangeAdapter,
+    compact_usdt_symbol,
     next_aligned_funding_time,
     normalize_usdt_symbol,
+    order_book_snapshot,
     parse_datetime_ms,
     parse_float,
     utc_now,
 )
 from app.models.market import MarketSnapshot, MarketType
+from app.models.orderbook import OrderBookSnapshot
 
 
 class BinanceAdapter(ExchangeAdapter):
@@ -19,6 +22,7 @@ class BinanceAdapter(ExchangeAdapter):
     async def fetch_future_tickers(self) -> list[MarketSnapshot]:
         book = await self.get_json("https://fapi.binance.com/fapi/v1/ticker/bookTicker")
         premium = await self.get_json("https://fapi.binance.com/fapi/v1/premiumIndex")
+        interval_by_symbol = await self._fetch_funding_intervals()
         premium_by_symbol = {item["symbol"]: item for item in premium if item.get("symbol")}
         snapshots = self._parse_book_tickers(book, MarketType.FUTURE)
         now = utc_now()
@@ -26,16 +30,17 @@ class BinanceAdapter(ExchangeAdapter):
         for snapshot in snapshots:
             item = premium_by_symbol.get(snapshot.raw_symbol, {})
             funding = parse_float(item.get("lastFundingRate"))
+            interval_hours = interval_by_symbol.get(snapshot.raw_symbol, 8)
             next_time = parse_datetime_ms(item.get("nextFundingTime")) or next_aligned_funding_time(
                 now,
-                8,
+                interval_hours,
             )
             enriched.append(
                 snapshot.model_copy(
                     update={
                         "funding_rate_pct": funding * 100 if funding is not None else None,
                         "funding_next_rate_pct": None,
-                        "funding_interval_hours": 8,
+                        "funding_interval_hours": interval_hours,
                         "funding_next_time": next_time,
                         "mark_price": parse_float(item.get("markPrice")),
                         "index_price": parse_float(item.get("indexPrice")),
@@ -43,6 +48,41 @@ class BinanceAdapter(ExchangeAdapter):
                 )
             )
         return enriched
+
+    async def fetch_order_book(
+        self,
+        symbol: str,
+        market_type: MarketType,
+        raw_symbol: str,
+        limit: int = 20,
+    ) -> OrderBookSnapshot | None:
+        raw = compact_usdt_symbol(symbol, raw_symbol)
+        if market_type == MarketType.SPOT:
+            url = f"https://api.binance.com/api/v3/depth?symbol={raw}&limit={limit}"
+        else:
+            url = f"https://fapi.binance.com/fapi/v1/depth?symbol={raw}&limit={limit}"
+        payload = await self.get_json(url)
+        return order_book_snapshot(
+            exchange=self.name,
+            market_type=market_type,
+            symbol=symbol,
+            raw_symbol=raw,
+            bids=payload.get("bids", []) if isinstance(payload, dict) else [],
+            asks=payload.get("asks", []) if isinstance(payload, dict) else [],
+        )
+
+    async def _fetch_funding_intervals(self) -> dict[str, int]:
+        try:
+            rows = await self.get_json("https://fapi.binance.com/fapi/v1/fundingInfo")
+        except Exception:
+            return {}
+        intervals: dict[str, int] = {}
+        for item in rows if isinstance(rows, list) else []:
+            symbol = item.get("symbol")
+            interval = parse_float(item.get("fundingIntervalHours"))
+            if symbol and interval is not None and interval > 0:
+                intervals[symbol] = int(interval)
+        return intervals
 
     def _parse_book_tickers(self, data: list[dict], market_type: MarketType) -> list[MarketSnapshot]:
         rows: list[MarketSnapshot] = []

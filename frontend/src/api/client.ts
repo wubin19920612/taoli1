@@ -2,6 +2,11 @@ import type {
   AlertEvent,
   AlertMessageTemplateSettings,
   AlertRule,
+  AstroActionResult,
+  AstroCardCreateRequest,
+  AstroCardSettings,
+  AstroPairPlan,
+  AstroSdkStatus,
   HealthStatus,
   Opportunity,
   OpportunityFilters,
@@ -102,6 +107,17 @@ export async function updateAlertMessageTemplate(
   });
 }
 
+export async function getAstroCardSettings(): Promise<AstroCardSettings> {
+  return fetchJson<AstroCardSettings>("/settings/astro-card");
+}
+
+export async function updateAstroCardSettings(settings: AstroCardSettings): Promise<AstroCardSettings> {
+  return fetchJson<AstroCardSettings>("/settings/astro-card", {
+    method: "PUT",
+    body: JSON.stringify(settings)
+  });
+}
+
 export async function listAlertRules(): Promise<AlertRule[]> {
   return fetchJson<AlertRule[]>("/alerts/rules");
 }
@@ -137,6 +153,28 @@ export async function restartServiceControl(service: "backend" | "frontend"): Pr
     method: "POST",
     body: JSON.stringify({})
   });
+}
+
+export async function getAstroStatus(): Promise<AstroSdkStatus> {
+  return fetchJson<AstroSdkStatus>("/astro/status");
+}
+
+export async function previewAstroPair(opportunityId: string): Promise<AstroPairPlan> {
+  return fetchJson<AstroPairPlan>(`/astro/preview/${opportunityId}`);
+}
+
+export async function createAstroCard(
+  opportunityId: string,
+  request: AstroCardCreateRequest = {}
+): Promise<AstroActionResult> {
+  return fetchJson<AstroActionResult>(`/astro/opportunities/${opportunityId}/card`, {
+    method: "POST",
+    body: JSON.stringify(request)
+  });
+}
+
+export async function listAstroPairs(): Promise<Record<string, unknown>[]> {
+  return fetchJson<Record<string, unknown>[]>("/astro/pairs");
 }
 
 export function saveDashboardPassword(password: string): void {

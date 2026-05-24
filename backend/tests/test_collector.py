@@ -1,4 +1,5 @@
-from datetime import UTC, datetime
+import asyncio
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -7,6 +8,17 @@ from app.models.market import MarketSnapshot, MarketType
 from app.models.settings import RiskSettings
 from app.services.collector import MarketCollector, default_exchange_adapters
 from app.services.snapshot_store import SnapshotStore
+
+
+class FakeClock:
+    def __init__(self) -> None:
+        self.current = datetime(2026, 5, 21, 12, 0, tzinfo=UTC)
+
+    def now(self) -> datetime:
+        return self.current
+
+    def advance(self, seconds: float) -> None:
+        self.current += timedelta(seconds=seconds)
 
 
 class FixedAdapter(ExchangeAdapter):
@@ -35,6 +47,109 @@ class FixedAdapter(ExchangeAdapter):
         if self.exc:
             raise self.exc
         return []
+
+
+class MutableAdapter(ExchangeAdapter):
+    def __init__(self, name: str, symbol: str):
+        self.name = name
+        self.symbol = symbol
+        self.spot_calls = 0
+        self.future_calls = 0
+
+    async def fetch_spot_tickers(self):
+        self.spot_calls += 1
+        return [market_on(self.name, self.symbol)]
+
+    async def fetch_future_tickers(self):
+        self.future_calls += 1
+        return []
+
+
+class SwitchablePoolTimeoutAdapter(ExchangeAdapter):
+    def __init__(self, name: str, symbol: str):
+        self.name = name
+        self.symbol = symbol
+        self.fail = False
+        self.spot_calls = 0
+        self.future_calls = 0
+        self.reset_calls = 0
+
+    async def fetch_spot_tickers(self):
+        self.spot_calls += 1
+        if self.fail:
+            raise TimeoutError("PoolTimeout")
+        return [market_on(self.name, self.symbol)]
+
+    async def fetch_future_tickers(self):
+        self.future_calls += 1
+        return []
+
+    async def reset_client(self) -> None:
+        self.reset_calls += 1
+
+
+class PartialConnectTimeoutAdapter(ExchangeAdapter):
+    def __init__(self, name: str, symbol: str):
+        self.name = name
+        self.symbol = symbol
+        self.fail_spot = False
+        self.future_symbol = f"{symbol}F"
+        self.spot_calls = 0
+        self.future_calls = 0
+
+    async def fetch_spot_tickers(self):
+        self.spot_calls += 1
+        if self.fail_spot:
+            raise TimeoutError("ConnectTimeout")
+        return [market_on(self.name, self.symbol)]
+
+    async def fetch_future_tickers(self):
+        self.future_calls += 1
+        return [market_on(self.name, self.future_symbol).model_copy(update={"market_type": MarketType.FUTURE})]
+
+
+class BlockingAdapter(ExchangeAdapter):
+    name = "slow"
+
+    def __init__(self):
+        self.spot_calls = 0
+        self.future_calls = 0
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def fetch_spot_tickers(self):
+        self.spot_calls += 1
+        self.started.set()
+        await self.release.wait()
+        return [market_on(self.name, "BTCUSDT")]
+
+    async def fetch_future_tickers(self):
+        self.future_calls += 1
+        return []
+
+
+class PartiallyRecoveringAdapter(ExchangeAdapter):
+    name = "partial"
+
+    def __init__(self):
+        self.spot_calls = 0
+        self.future_calls = 0
+        self.reset_calls = 0
+        self.recovered = False
+
+    async def fetch_spot_tickers(self):
+        self.spot_calls += 1
+        if not self.recovered:
+            raise TimeoutError("PoolTimeout")
+        return [market("ETHUSDT")]
+
+    async def fetch_future_tickers(self):
+        self.future_calls += 1
+        return []
+
+    async def reset_client(self) -> None:
+        self.reset_calls += 1
+        self.recovered = True
 
 
 class FlakyAdapter(ExchangeAdapter):
@@ -133,6 +248,190 @@ async def test_collector_retries_pool_timeout_before_reusing_stale_snapshot() ->
     assert result.exchange_errors == {}
     assert flaky.calls == 2
     assert flaky.reset_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_collector_resets_partial_pool_timeout_adapter_while_keeping_other_markets() -> None:
+    store = SnapshotStore()
+    stable = FixedAdapter([market("BTCUSDT")], name="stable")
+    recovering = PartiallyRecoveringAdapter()
+    collector = MarketCollector([stable, recovering], store)
+
+    result = await collector.collect_once()
+
+    assert result.exchange_errors == {}
+    assert {row.symbol for row in result.markets} == {"BTCUSDT", "ETHUSDT"}
+    assert recovering.reset_calls == 1
+    assert recovering.spot_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_collector_refreshes_due_exchanges_while_failed_exchange_cools_down() -> None:
+    clock = FakeClock()
+    store = SnapshotStore()
+    stable = MutableAdapter("stable", "BTCUSDT")
+    flaky = SwitchablePoolTimeoutAdapter("flaky", "ETHUSDT")
+    collector = MarketCollector(
+        [stable, flaky],
+        store,
+        poll_interval_seconds=8,
+        now_fn=clock.now,
+    )
+    await collector.collect_once()
+
+    stable.symbol = "SOLUSDT"
+    flaky.fail = True
+    clock.advance(8)
+    result = await collector.collect_once()
+
+    assert {row.symbol for row in result.markets} == {"SOLUSDT", "ETHUSDT"}
+    assert stable.spot_calls == 2
+    assert flaky.spot_calls == 3
+    assert flaky.reset_calls == 1
+    assert result.exchange_errors["flaky:spot"] == "PoolTimeout"
+    states = collector.exchange_states()
+    assert states["stable"]["status"] == "healthy"
+    assert states["flaky"]["status"] == "cooling_down"
+    assert states["flaky"]["consecutive_failures"] == 1
+    assert states["flaky"]["cooldown_until"] == datetime(2026, 5, 21, 12, 0, 23, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+async def test_collector_skips_cooling_exchange_and_reuses_last_snapshot() -> None:
+    clock = FakeClock()
+    store = SnapshotStore()
+    stable = MutableAdapter("stable", "BTCUSDT")
+    flaky = SwitchablePoolTimeoutAdapter("flaky", "ETHUSDT")
+    collector = MarketCollector(
+        [stable, flaky],
+        store,
+        poll_interval_seconds=8,
+        now_fn=clock.now,
+    )
+    await collector.collect_once()
+    flaky.fail = True
+    clock.advance(8)
+    await collector.collect_once()
+    flaky_spot_calls_after_failure = flaky.spot_calls
+    stable.symbol = "XRPUSDT"
+
+    clock.advance(8)
+    result = await collector.collect_once()
+
+    assert {row.symbol for row in result.markets} == {"XRPUSDT", "ETHUSDT"}
+    assert stable.spot_calls == 3
+    assert flaky.spot_calls == flaky_spot_calls_after_failure
+    assert result.exchange_errors["flaky:spot"] == "PoolTimeout"
+
+
+@pytest.mark.asyncio
+async def test_collector_cools_down_partial_connect_timeout_even_with_markets() -> None:
+    clock = FakeClock()
+    store = SnapshotStore()
+    adapter = PartialConnectTimeoutAdapter("partial-timeout", "ETHUSDT")
+    collector = MarketCollector(
+        [adapter],
+        store,
+        poll_interval_seconds=8,
+        now_fn=clock.now,
+    )
+    await collector.collect_once()
+
+    adapter.fail_spot = True
+    adapter.future_symbol = "SOLUSDT"
+    clock.advance(8)
+    result = await collector.collect_once()
+
+    assert {row.symbol for row in result.markets} == {"ETHUSDT", "ETHUSDTF"}
+    assert result.exchange_errors["partial-timeout:spot"] == "ConnectTimeout"
+    state = collector.exchange_states()["partial-timeout"]
+    assert state["status"] == "cooling_down"
+    assert state["consecutive_failures"] == 1
+    assert state["cooldown_until"] == datetime(2026, 5, 21, 12, 0, 23, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+async def test_collector_does_not_start_duplicate_poll_when_exchange_is_in_flight() -> None:
+    store = SnapshotStore()
+    store.set_markets([market_on("slow", "ETHUSDT")])
+    adapter = BlockingAdapter()
+    collector = MarketCollector([adapter], store)
+
+    first_collect = asyncio.create_task(collector.collect_once())
+    await adapter.started.wait()
+    overlapping_result = await collector.collect_once()
+
+    assert [row.symbol for row in overlapping_result.markets] == ["ETHUSDT"]
+    assert adapter.spot_calls == 1
+
+    adapter.release.set()
+    completed_result = await first_collect
+
+    assert [row.symbol for row in completed_result.markets] == ["BTCUSDT"]
+    assert adapter.spot_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_collector_applies_per_exchange_backoff_for_consecutive_failures() -> None:
+    clock = FakeClock()
+    store = SnapshotStore()
+    flaky = SwitchablePoolTimeoutAdapter("flaky", "ETHUSDT")
+    collector = MarketCollector(
+        [flaky],
+        store,
+        poll_interval_seconds=8,
+        now_fn=clock.now,
+    )
+    await collector.collect_once()
+    flaky.fail = True
+
+    clock.advance(8)
+    await collector.collect_once()
+    assert collector.exchange_states()["flaky"]["cooldown_until"] == datetime(
+        2026, 5, 21, 12, 0, 23, tzinfo=UTC
+    )
+
+    clock.advance(15)
+    await collector.collect_once()
+    assert collector.exchange_states()["flaky"]["cooldown_until"] == datetime(
+        2026, 5, 21, 12, 0, 53, tzinfo=UTC
+    )
+
+    clock.advance(30)
+    await collector.collect_once()
+    state = collector.exchange_states()["flaky"]
+    assert state["consecutive_failures"] == 3
+    assert state["cooldown_until"] == datetime(2026, 5, 21, 12, 1, 53, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+async def test_collector_restores_exchange_to_healthy_after_cooldown_success() -> None:
+    clock = FakeClock()
+    store = SnapshotStore()
+    flaky = SwitchablePoolTimeoutAdapter("flaky", "ETHUSDT")
+    collector = MarketCollector(
+        [flaky],
+        store,
+        poll_interval_seconds=8,
+        now_fn=clock.now,
+    )
+    await collector.collect_once()
+    flaky.fail = True
+    clock.advance(8)
+    await collector.collect_once()
+
+    flaky.fail = False
+    flaky.symbol = "SOLUSDT"
+    clock.advance(15)
+    result = await collector.collect_once()
+
+    assert [row.symbol for row in result.markets] == ["SOLUSDT"]
+    assert result.exchange_errors == {}
+    state = collector.exchange_states()["flaky"]
+    assert state["status"] == "healthy"
+    assert state["consecutive_failures"] == 0
+    assert state["cooldown_until"] is None
+    assert state["last_success_at"] == datetime(2026, 5, 21, 12, 0, 23, tzinfo=UTC)
 
 
 @pytest.mark.asyncio

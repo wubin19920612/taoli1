@@ -55,6 +55,8 @@ docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
 然后把 `DASHBOARD_PASSWORD` 设成你自己的面板密码。默认的 `docker-compose.yml` 不会挂载 Docker socket，也不会开启服务控制；只有叠加 `docker-compose.local.yml` 时才会打开 `frontend/backend` 的重启能力。
 如果你用 `docker compose -p <name>` 指定了别的项目名，记得把 `COMPOSE_PROJECT_NAME` 设成同一个值。
 
+如果页面显示 `exchange_errors` 且内容是 `PoolTimeout`，通常不是某个交易所业务接口返回错误，而是本机到公开 API 的 HTTP 连接池/网络请求积压。系统会对发生 `PoolTimeout` 的交易所适配器单独重建连接池并快速重试一次；连续失败时只让该交易所进入 15/30/60 秒退避，其他交易所继续按 `POLL_INTERVAL_SECONDS` 刷新。`GET /api/health` 会返回 `exchange_states`，用于查看每个交易所的 `healthy`、`degraded`、`cooling_down` 状态以及最近成功/失败和冷却时间。
+
 ## 飞书告警
 
 在 `.env` 中填写：
@@ -108,6 +110,9 @@ HISTORY_VACUUM_INTERVAL_SECONDS=86400
 
 ## API
 
+- `GET /api/astro/status`
+- `GET /api/astro/preview/{opportunity_id}`
+- `GET /api/astro/pairs`
 - `GET /api/health`
 - `GET /api/opportunities?type=FF&symbol=BTC&exchange=okx&min_open_spread_pct=0.5&include_risky=false&hidden_risk_labels=LOW_VOLUME,HUGE_SPREAD_VERIFY&min_volume_24h_k=1000`
 - `GET /api/markets`
@@ -121,6 +126,34 @@ HISTORY_VACUUM_INTERVAL_SECONDS=86400
 - `DELETE /api/alerts/rules/{rule_id}`
 - `GET /api/alerts/events`
 - `GET /api/stream`
+
+## Astro SDK integration
+
+This integration is deliberately safe by default. It can show local opportunities as an Astro `pair` draft, list the current Astro pairs with the SDK `list` action, and show the exact payload assumptions for review. Alert follow-up can also create or update Astro cards, but only after explicit opt-in and only as paused cards with `disableOpen=true`.
+
+Configure these optional variables in `.env` only when you want to verify against your own Astro instance:
+
+```env
+ASTRO_SDK_BASE_URL=https://127.0.0.1:12345
+ASTRO_ADMIN_PREFIX=your-admin-prefix
+ASTRO_API_KEY=your-sdk-api-key
+ASTRO_VERIFY_TLS=true
+ASTRO_DRY_RUN_ONLY=true
+ASTRO_ALERT_AUTO_CREATE=false
+ASTRO_MANUAL_CARD_CREATE=false
+ASTRO_DEFAULT_MAX_TRADE_USDT=10
+ASTRO_DEFAULT_LEVERAGE=1
+ASTRO_DEFAULT_MIN_NOTIONAL=10
+ASTRO_DEFAULT_MAX_NOTIONAL=10
+ASTRO_DEFAULT_CLOSE_POSITION_BUFFER_PCT=0.1
+ASTRO_REQUEST_TIMEOUT_SECONDS=10
+```
+
+To let alerts create/update paused Astro cards, set both `ASTRO_DRY_RUN_ONLY=false` and `ASTRO_ALERT_AUTO_CREATE=true`. To allow manual card creation from the realtime opportunities preview modal without enabling alert automation, set `ASTRO_DRY_RUN_ONLY=false` and `ASTRO_MANUAL_CARD_CREATE=true`. The backend still forces `status=false` and `disableOpen=true`; it will not enable automatic trading. Before submitting, it calls SDK `list`: no same-name pair means `add`, same `name/type/buyEx/sellEx` means `update`, and same-name conflicts are skipped instead of overwritten.
+
+If the live close spread is not lower than the open spread, the Astro payload uses `openPosition - ASTRO_DEFAULT_CLOSE_POSITION_BUFFER_PCT` for `closePosition` so the card satisfies Astro's `openPosition > closePosition` rule. The preview modal shows a warning when this adjustment happens.
+
+The integration currently treats `SF` and `FF` as candidate pair types. `SS` is blocked because the Astro SDK document lists `SF`, `FF`, `SR`, `FR`, and `FS`, but not `SS`. The most important fields to verify before any future live version are `name` (currently base symbol such as `BTC`), `openPosition`/`closePosition` (currently local percent divided by 100), and `buyEx`/`sellEx` (currently local exchange ids).
 
 ## 安全边界
 

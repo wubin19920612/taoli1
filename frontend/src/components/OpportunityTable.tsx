@@ -1,5 +1,11 @@
-import { ArrowDownOutlined, ArrowUpOutlined, EyeInvisibleOutlined, EyeOutlined } from "@ant-design/icons";
-import { Button, Space, Table, Tag, Typography } from "antd";
+import {
+  ArrowDownOutlined,
+  ArrowUpOutlined,
+  EyeInvisibleOutlined,
+  EyeOutlined,
+  ExperimentOutlined
+} from "@ant-design/icons";
+import { Button, Space, Table, Tag, Tooltip, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
 
@@ -11,7 +17,9 @@ interface OpportunityTableProps {
   loading: boolean;
   blockedSymbols?: string[];
   actionLoadingSymbol?: string | null;
+  previewLoadingSymbol?: string | null;
   onToggleSymbol?: (symbol: string, block: boolean) => void;
+  onPreviewAstro?: (opportunity: Opportunity) => void;
 }
 
 function pct(value: number | null | undefined): string {
@@ -99,27 +107,27 @@ function FundingCell({ row }: { row: Opportunity }) {
   return (
     <div className="funding-cell">
       <div className="funding-row">
-        <span className="funding-label">当前</span>
+        <span className="funding-label">{"\u5f53\u524d"}</span>
         <Typography.Text className="funding-value">
           {fundingPair(row.funding_rate_buy_pct, row.funding_rate_sell_pct)}
         </Typography.Text>
       </div>
       <div className="funding-row">
-        <span className="funding-label">预测</span>
+        <span className="funding-label">{"\u9884\u6d4b"}</span>
         <Typography.Text className="funding-value">
           {fundingPair(row.funding_next_rate_buy_pct, row.funding_next_rate_sell_pct)}
         </Typography.Text>
       </div>
       <div className="funding-row">
-        <span className="funding-label">小时 / 日</span>
+        <span className="funding-label">{"\u5c0f\u65f6 / \u65e5"}</span>
         <Typography.Text className="funding-value" type={hourlyType}>
           {fundingPair(row.net_funding_hourly_pct, row.net_funding_daily_pct)}
         </Typography.Text>
       </div>
       <div className="funding-row">
-        <span className="funding-label">结算</span>
+        <span className="funding-label">{"\u7ed3\u7b97"}</span>
         <Typography.Text className="funding-value" type="secondary">
-          {`${nextTime(row.funding_next_time_buy)} / ${nextTime(row.funding_next_time_sell)} · ${interval(row.buy_funding_interval_hours)} / ${interval(row.sell_funding_interval_hours)}`}
+          {`${nextTime(row.funding_next_time_buy)} / ${nextTime(row.funding_next_time_sell)} | ${interval(row.buy_funding_interval_hours)} / ${interval(row.sell_funding_interval_hours)}`}
         </Typography.Text>
       </div>
     </div>
@@ -129,7 +137,9 @@ function FundingCell({ row }: { row: Opportunity }) {
 function buildColumns(
   blockedSymbols: string[] | undefined,
   actionLoadingSymbol: string | null | undefined,
-  onToggleSymbol: ((symbol: string, block: boolean) => void) | undefined
+  previewLoadingSymbol: string | null | undefined,
+  onToggleSymbol: ((symbol: string, block: boolean) => void) | undefined,
+  onPreviewAstro: ((opportunity: Opportunity) => void) | undefined
 ): ColumnsType<Opportunity> {
   return [
     {
@@ -144,7 +154,7 @@ function buildColumns(
             type="text"
             size="small"
             icon={blocked ? <EyeOutlined /> : <EyeInvisibleOutlined />}
-            aria-label={`${blocked ? "取消屏蔽" : "屏蔽"} ${row.symbol}`}
+            aria-label={`${blocked ? "\u53d6\u6d88\u5c4f\u853d" : "\u5c4f\u853d"} ${row.symbol}`}
             loading={actionLoadingSymbol === normalized}
             onClick={() => onToggleSymbol(row.symbol, !blocked)}
           />
@@ -152,7 +162,27 @@ function buildColumns(
       }
     },
     {
-      title: "标的",
+      title: "",
+      fixed: "left",
+      width: 44,
+      render: (_, row) => {
+        const normalized = normalizeSymbol(row.symbol);
+        return onPreviewAstro ? (
+          <Tooltip title="Astro dry-run">
+            <Button
+              type="text"
+              size="small"
+              icon={<ExperimentOutlined />}
+              aria-label={`Astro ${row.symbol}`}
+              loading={previewLoadingSymbol === normalized}
+              onClick={() => onPreviewAstro(row)}
+            />
+          </Tooltip>
+        ) : null;
+      }
+    },
+    {
+      title: "Symbol",
       dataIndex: "symbol",
       fixed: "left",
       width: 118,
@@ -164,17 +194,17 @@ function buildColumns(
       )
     },
     {
-      title: "买入腿",
+      title: "Buy leg",
       width: 88,
       render: (_, row) => leg(row.buy_exchange, row.buy_market_type, "buy")
     },
     {
-      title: "卖出腿",
+      title: "Sell leg",
       width: 88,
       render: (_, row) => leg(row.sell_exchange, row.sell_market_type, "sell")
     },
     {
-      title: "开仓价差",
+      title: "Open spread",
       dataIndex: "open_spread_pct",
       width: 108,
       align: "right",
@@ -183,7 +213,7 @@ function buildColumns(
       render: (value: number) => <Typography.Text strong>{pct(value)}</Typography.Text>
     },
     {
-      title: "净估算",
+      title: "Net fee adj.",
       dataIndex: "fee_adjusted_open_pct",
       width: 104,
       align: "right",
@@ -193,31 +223,31 @@ function buildColumns(
       )
     },
     {
-      title: "平仓价差",
+      title: "Close spread",
       dataIndex: "close_spread_pct",
       width: 104,
       align: "right",
       render: (value: number) => pct(value)
     },
     {
-      title: "资金费率",
+      title: "Funding",
       width: 276,
       render: (_, row) => <FundingCell row={row} />
     },
     {
-      title: "24h成交额",
+      title: "24h volume",
       width: 134,
       align: "right",
       render: (_, row) => `${money(row.buy_volume_24h_usdt)} / ${money(row.sell_volume_24h_usdt)}`
     },
     {
-      title: "风险",
+      title: "Risk",
       dataIndex: "risk_labels",
       width: 224,
       render: (labels: string[]) => <RiskTags labels={labels} />
     },
     {
-      title: "更新时间",
+      title: "Updated",
       dataIndex: "last_seen_at",
       width: 104,
       render: (value: string) => dayjs(value).format("HH:mm:ss")
@@ -230,17 +260,25 @@ export function OpportunityTable({
   loading,
   blockedSymbols,
   actionLoadingSymbol,
-  onToggleSymbol
+  previewLoadingSymbol,
+  onToggleSymbol,
+  onPreviewAstro
 }: OpportunityTableProps) {
   return (
     <Table
       className="opportunity-table"
-      columns={buildColumns(blockedSymbols, actionLoadingSymbol, onToggleSymbol)}
+      columns={buildColumns(
+        blockedSymbols,
+        actionLoadingSymbol,
+        previewLoadingSymbol,
+        onToggleSymbol,
+        onPreviewAstro
+      )}
       dataSource={opportunities}
       loading={loading}
       rowKey="id"
       pagination={{ pageSize: 50, showSizeChanger: true }}
-      scroll={{ x: 1392 }}
+      scroll={{ x: 1436 }}
       size="small"
       tableLayout="fixed"
     />

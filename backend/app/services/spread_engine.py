@@ -52,6 +52,19 @@ def mark_index_diff_pct(snapshot: MarketSnapshot) -> float | None:
     return (snapshot.mark_price - snapshot.index_price) / snapshot.index_price * 100
 
 
+def _depth_notional_usdt(price: float, size: float | None) -> float | None:
+    if size is None or size <= 0:
+        return None
+    return price * size
+
+
+def _min_known_depth(*values: float | None) -> float | None:
+    known = [value for value in values if value is not None]
+    if not known:
+        return None
+    return min(known)
+
+
 def opportunity_id(mode: Mode, symbol: str, buy_leg: MarketSnapshot, sell_leg: MarketSnapshot) -> str:
     value = (
         f"{mode}:{symbol}:{buy_leg.exchange}:{buy_leg.market_type}:"
@@ -149,6 +162,10 @@ def build_opportunities(
                 net_funding_next_daily = None
                 if net_funding_next_hourly is not None:
                     net_funding_next_daily = net_funding_next_hourly * 24
+                buy_bid_depth = _depth_notional_usdt(buy_leg.bid, buy_leg.bid_size)
+                buy_ask_depth = _depth_notional_usdt(buy_leg.ask, buy_leg.ask_size)
+                sell_bid_depth = _depth_notional_usdt(sell_leg.bid, sell_leg.bid_size)
+                sell_ask_depth = _depth_notional_usdt(sell_leg.ask, sell_leg.ask_size)
 
                 opportunities.append(
                     Opportunity(
@@ -167,6 +184,11 @@ def build_opportunities(
                         buy_ask=buy_leg.ask,
                         sell_bid=sell_leg.bid,
                         sell_ask=sell_leg.ask,
+                        buy_bid_depth_usdt=buy_bid_depth,
+                        buy_ask_depth_usdt=buy_ask_depth,
+                        sell_bid_depth_usdt=sell_bid_depth,
+                        sell_ask_depth_usdt=sell_ask_depth,
+                        min_open_depth_usdt=_min_known_depth(buy_ask_depth, sell_bid_depth),
                         buy_volume_24h_usdt=buy_leg.volume_24h_usdt,
                         sell_volume_24h_usdt=sell_leg.volume_24h_usdt,
                         funding_rate_buy_pct=buy_leg.funding_rate_pct,

@@ -45,9 +45,6 @@ async def _alert_message_template(request: Request) -> AlertMessageTemplateSetti
 
 
 async def _resolve_event_message(request: Request, event: AlertEvent) -> str:
-    if event.message.startswith("【告警触发】"):
-        return event.message
-
     rule = await _rule_repo(request).get(event.rule_id)
     if rule is None:
         return event.message

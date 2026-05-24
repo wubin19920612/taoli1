@@ -1,11 +1,14 @@
 from app.exchanges.base import (
     ExchangeAdapter,
+    compact_usdt_symbol,
     normalize_usdt_symbol,
+    order_book_snapshot,
     parse_datetime_ms,
     parse_float,
     utc_now,
 )
 from app.models.market import MarketSnapshot, MarketType
+from app.models.orderbook import OrderBookSnapshot
 
 
 class BitgetAdapter(ExchangeAdapter):
@@ -37,6 +40,32 @@ class BitgetAdapter(ExchangeAdapter):
                 )
             )
         return enriched
+
+    async def fetch_order_book(
+        self,
+        symbol: str,
+        market_type: MarketType,
+        raw_symbol: str,
+        limit: int = 20,
+    ) -> OrderBookSnapshot | None:
+        raw = compact_usdt_symbol(symbol, raw_symbol)
+        if market_type == MarketType.SPOT:
+            url = f"https://api.bitget.com/api/v2/spot/market/orderbook?symbol={raw}&type=step0&limit={limit}"
+        else:
+            url = (
+                "https://api.bitget.com/api/v2/mix/market/orderbook"
+                f"?symbol={raw}&productType=USDT-FUTURES&limit={limit}"
+            )
+        payload = await self.get_json(url)
+        data = payload.get("data", {}) if isinstance(payload, dict) else {}
+        return order_book_snapshot(
+            exchange=self.name,
+            market_type=market_type,
+            symbol=symbol,
+            raw_symbol=raw,
+            bids=data.get("bids", []) if isinstance(data, dict) else [],
+            asks=data.get("asks", []) if isinstance(data, dict) else [],
+        )
 
     async def _fetch_funding_rates(self) -> dict[str, dict]:
         payload = await self.get_json(

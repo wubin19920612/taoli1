@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -46,6 +46,7 @@ const baseOpportunity: Opportunity = {
 
 describe("DashboardPage", () => {
   beforeEach(() => {
+    window.localStorage.clear();
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
@@ -119,6 +120,62 @@ describe("DashboardPage", () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]).toContain("exclude_types=SF%2CSS");
+  });
+
+  it("keeps excluded opportunity types after the dashboard remounts", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        calls.push(url);
+        if (url.includes("/settings/risk")) {
+          return Response.json({
+            min_volume_24h_usdt: 100000,
+            stale_after_seconds: 30,
+            huge_spread_pct: 10,
+            wide_spread_pct: 3,
+            mark_index_deviation_pct: 1,
+            funding_against_pct: 0.01,
+            ticker_collision_symbols: [],
+            excluded_symbols: [],
+            ignored_exchanges: []
+          });
+        }
+        if (url.includes("/health")) {
+          return Response.json({
+            status: "ok",
+            markets: 0,
+            opportunities: 0,
+            exchange_errors: {}
+          });
+        }
+        if (url.includes("/opportunities")) {
+          return Response.json([]);
+        }
+        return Response.json({});
+      })
+    );
+
+    const firstRender = render(<DashboardPage />);
+
+    const typeExcludeSelector = document.querySelector(".type-exclude-select .ant-select-selector");
+    expect(typeExcludeSelector).not.toBeNull();
+    fireEvent.mouseDown(typeExcludeSelector as Element);
+    const ssOptions = await screen.findAllByText("SS");
+    await userEvent.click(ssOptions[ssOptions.length - 1]);
+    await waitFor(() => {
+      expect(calls.some((url) => url.includes("exclude_types=SS"))).toBe(true);
+    });
+
+    firstRender.unmount();
+    calls.length = 0;
+
+    render(<DashboardPage />);
+
+    await waitFor(() => {
+      expect(calls.some((url) => url.includes("exclude_types=SS"))).toBe(true);
+    });
   });
 
   it("waits for risk settings before requesting opportunities", async () => {
@@ -264,5 +321,376 @@ describe("DashboardPage", () => {
         })
       );
     });
+  });
+
+  it("opens an Astro dry-run preview for a selected opportunity", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/settings/risk")) {
+          return Response.json({
+            min_volume_24h_usdt: 100000,
+            stale_after_seconds: 30,
+            huge_spread_pct: 10,
+            wide_spread_pct: 3,
+            mark_index_deviation_pct: 1,
+            funding_against_pct: 0.01,
+            ticker_collision_symbols: [],
+            excluded_symbols: [],
+            ignored_exchanges: []
+          });
+        }
+        if (url.includes("/health")) {
+          return Response.json({
+            status: "ok",
+            markets: 0,
+            opportunities: 1,
+            exchange_errors: {}
+          });
+        }
+        if (url.includes("/astro/preview/opp-1")) {
+          return Response.json({
+            opportunity_id: "opp-1",
+            symbol: "BTCUSDT",
+            mode: "dry_run",
+            can_submit: true,
+            pair: {
+              name: "BTC",
+              type: "FF",
+              status: false,
+              disableOpen: true,
+              disableClose: false,
+              openPosition: "0.007800",
+              closePosition: "0.004200",
+              maxTradeUSDT: "10",
+              leverage: "1",
+              buyEx: "binance",
+              sellEx: "okx"
+            },
+            sdk_payload: {
+              action: "add",
+              pair: {
+                name: "BTC",
+                type: "FF",
+                openPosition: "0.007800"
+              }
+            },
+            blockers: [],
+            warnings: ["Dry-run only"],
+            assumptions: [
+              {
+                field: "openPosition",
+                source: "open_spread_pct=0.78",
+                assumed_value: "0.007800",
+                note: "percent / 100",
+                needs_verification: true
+              }
+            ]
+          });
+        }
+        if (url.includes("/opportunities")) {
+          return Response.json([baseOpportunity]);
+        }
+        return Response.json({});
+      })
+    );
+
+    render(<DashboardPage />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Astro BTCUSDT" }));
+
+    expect((await screen.findAllByText("Astro dry-run")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/openPosition/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/0.007800/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/Dry-run only/)).toBeTruthy();
+  }, 15000);
+
+  it("creates a paused Astro card from the preview modal", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/settings/risk")) {
+          return Response.json({
+            min_volume_24h_usdt: 100000,
+            stale_after_seconds: 30,
+            huge_spread_pct: 10,
+            wide_spread_pct: 3,
+            mark_index_deviation_pct: 1,
+            funding_against_pct: 0.01,
+            ticker_collision_symbols: [],
+            excluded_symbols: [],
+            ignored_exchanges: []
+          });
+        }
+        if (url.includes("/health")) {
+          return Response.json({
+            status: "ok",
+            markets: 0,
+            opportunities: 1,
+            exchange_errors: {}
+          });
+        }
+        if (url.includes("/astro/opportunities/opp-1/card") && init?.method === "POST") {
+          return Response.json({
+            enabled: true,
+            status: "created",
+            action: "add",
+            message: "已创建暂停卡片 BTC FF binance->okx，禁开=true",
+            pair_name: "BTC",
+            pair_type: "FF"
+          });
+        }
+        if (url.includes("/astro/preview/opp-1")) {
+          return Response.json({
+            opportunity_id: "opp-1",
+            symbol: "BTCUSDT",
+            mode: "dry_run",
+            can_submit: true,
+            pair: {
+              name: "BTC",
+              type: "FF",
+              status: false,
+              disableOpen: true,
+              openPosition: "0.007800",
+              closePosition: "0.004200",
+              buyEx: "binance",
+              sellEx: "okx"
+            },
+            sdk_payload: { action: "add", pair: { name: "BTC" } },
+            blockers: [],
+            warnings: [],
+            assumptions: []
+          });
+        }
+        if (url.includes("/opportunities")) {
+          return Response.json([baseOpportunity]);
+        }
+        return Response.json({});
+      })
+    );
+
+    render(<DashboardPage />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Astro BTCUSDT" }));
+    await userEvent.click(await screen.findByRole("button", { name: "创建/更新暂停卡片" }));
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/astro/opportunities/opp-1/card"),
+        expect.objectContaining({ method: "POST" })
+      );
+    });
+    expect((await screen.findAllByText(/已创建暂停卡片 BTC FF/)).length).toBeGreaterThan(0);
+  }, 15000);
+
+  it("sends edited Astro sizing values and can save them as defaults", async () => {
+    const createBodies: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/settings/risk")) {
+          return Response.json({
+            min_volume_24h_usdt: 100000,
+            stale_after_seconds: 30,
+            huge_spread_pct: 10,
+            wide_spread_pct: 3,
+            mark_index_deviation_pct: 1,
+            funding_against_pct: 0.01,
+            ticker_collision_symbols: [],
+            excluded_symbols: [],
+            ignored_exchanges: []
+          });
+        }
+        if (url.includes("/health")) {
+          return Response.json({
+            status: "ok",
+            markets: 0,
+            opportunities: 1,
+            exchange_errors: {}
+          });
+        }
+        if (url.includes("/astro/opportunities/opp-1/card") && init?.method === "POST") {
+          createBodies.push(String(init.body));
+          return Response.json({
+            enabled: true,
+            status: "created",
+            action: "add",
+            message: "created paused card",
+            pair_name: "BTC",
+            pair_type: "FF"
+          });
+        }
+        if (url.includes("/astro/preview/opp-1")) {
+          return Response.json({
+            opportunity_id: "opp-1",
+            symbol: "BTCUSDT",
+            mode: "dry_run",
+            can_submit: true,
+            pair: {
+              name: "BTC",
+              type: "FF",
+              status: false,
+              disableOpen: true,
+              openPosition: "0.007800",
+              closePosition: "0.000000",
+              maxTradeUSDT: "25",
+              leverage: "2",
+              minNotional: "10",
+              maxNotional: "25",
+              buyEx: "binance",
+              sellEx: "okx"
+            },
+            sdk_payload: { action: "add", pair: { name: "BTC" } },
+            blockers: [],
+            warnings: [],
+            assumptions: []
+          });
+        }
+        if (url.includes("/opportunities")) {
+          return Response.json([baseOpportunity]);
+        }
+        return Response.json({});
+      })
+    );
+
+    render(<DashboardPage />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Astro BTCUSDT" }));
+    const positionInput = await screen.findByLabelText("Position value USDT");
+    expect((positionInput as HTMLInputElement).value).toBe("25");
+    expect(screen.getByText("Generated openPosition")).toBeTruthy();
+    expect(screen.getByText("0.007800")).toBeTruthy();
+    expect(screen.getByText("Generated closePosition")).toBeTruthy();
+    expect(screen.getByText("0.000000")).toBeTruthy();
+
+    await userEvent.clear(positionInput);
+    await userEvent.type(positionInput, "80");
+    await userEvent.click(screen.getByLabelText("Save sizing as global default"));
+    await userEvent.click(screen.getByRole("button", { name: /暂停卡片/ }));
+
+    await waitFor(() => {
+      expect(createBodies).toHaveLength(1);
+    });
+    expect(createBodies[0]).toContain('"max_trade_usdt":80');
+    expect(createBodies[0]).toContain('"leverage":2');
+    expect(createBodies[0]).toContain('"min_notional":10');
+    expect(createBodies[0]).toContain('"max_notional":25');
+    expect(createBodies[0]).toContain('"save_as_default":true');
+  }, 15000);
+
+  it("renders exchange states from the health payload", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/settings/risk")) {
+          return Response.json({
+            min_volume_24h_usdt: 100000,
+            stale_after_seconds: 30,
+            huge_spread_pct: 10,
+            wide_spread_pct: 3,
+            mark_index_deviation_pct: 1,
+            funding_against_pct: 0.01,
+            ticker_collision_symbols: [],
+            excluded_symbols: [],
+            ignored_exchanges: []
+          });
+        }
+        if (url.includes("/health")) {
+          return Response.json({
+            status: "ok",
+            markets: 2,
+            opportunities: 1,
+            exchange_errors: {},
+            exchange_states: {
+              binance: {
+                status: "healthy",
+                last_success_at: "2026-05-21T04:00:00Z",
+                last_error_at: null,
+                consecutive_failures: 0,
+                cooldown_until: null,
+                next_due_at: "2026-05-21T04:00:08Z",
+                in_flight: false
+              },
+              gate: {
+                status: "cooling_down",
+                last_success_at: "2026-05-21T03:59:00Z",
+                last_error_at: "2026-05-21T04:00:00Z",
+                consecutive_failures: 2,
+                cooldown_until: "2026-05-21T04:01:00Z",
+                next_due_at: "2026-05-21T04:01:00Z",
+                in_flight: false
+              }
+            }
+          });
+        }
+        if (url.includes("/opportunities")) {
+          return Response.json([baseOpportunity]);
+        }
+        return Response.json({});
+      })
+    );
+
+    render(<DashboardPage />);
+
+    expect(await screen.findByText("Exchange states")).toBeTruthy();
+    expect(screen.getByText("binance")).toBeTruthy();
+    expect(screen.getByText("gate")).toBeTruthy();
+    expect(screen.getByText("cooling_down")).toBeTruthy();
+    expect(screen.getAllByText("05-21 04:00:00 UTC").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("05-21 04:01:00 UTC").length).toBeGreaterThan(0);
+  });
+
+  it("does not turn partial exchange states into healthy-looking values", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/settings/risk")) {
+          return Response.json({
+            min_volume_24h_usdt: 100000,
+            stale_after_seconds: 30,
+            huge_spread_pct: 10,
+            wide_spread_pct: 3,
+            mark_index_deviation_pct: 1,
+            funding_against_pct: 0.01,
+            ticker_collision_symbols: [],
+            excluded_symbols: [],
+            ignored_exchanges: []
+          });
+        }
+        if (url.includes("/health")) {
+          return Response.json({
+            status: "ok",
+            markets: 0,
+            opportunities: 0,
+            exchange_errors: {},
+            exchange_states: {
+              stale: {
+                last_success_at: null,
+                last_error_at: null,
+                consecutive_failures: null,
+                cooldown_until: null,
+                next_due_at: null
+              }
+            }
+          });
+        }
+        if (url.includes("/opportunities")) {
+          return Response.json([]);
+        }
+        return Response.json({});
+      })
+    );
+
+    render(<DashboardPage />);
+
+    expect(await screen.findByText("stale")).toBeTruthy();
+    expect(screen.getAllByText("unknown").length).toBeGreaterThan(0);
+    expect(screen.getByText("n/a")).toBeTruthy();
+    expect(screen.queryByText("no")).toBeNull();
   });
 });

@@ -104,6 +104,23 @@ def test_builds_ff_opportunity_with_predicted_and_normalized_funding() -> None:
     assert item.net_funding_daily_pct == pytest.approx(0.24)
 
 
+def test_builds_open_depth_from_top_of_book_sizes() -> None:
+    buy = snapshot("binance", MarketType.FUTURE, bid=99, ask=100).model_copy(
+        update={"bid_size": 3.0, "ask_size": 2.0}
+    )
+    sell = snapshot("okx", MarketType.FUTURE, bid=102, ask=103).model_copy(
+        update={"bid_size": 5.0, "ask_size": 4.0}
+    )
+
+    opportunities = build_opportunities([buy, sell], mode="FF")
+
+    assert len(opportunities) == 1
+    item = opportunities[0]
+    assert item.buy_ask_depth_usdt == pytest.approx(200.0)
+    assert item.sell_bid_depth_usdt == pytest.approx(510.0)
+    assert item.min_open_depth_usdt == pytest.approx(200.0)
+
+
 def test_builds_sf_opportunity_treats_spot_funding_as_zero() -> None:
     buy = snapshot("binance", MarketType.SPOT, bid=99, ask=100)
     sell = snapshot("okx", MarketType.FUTURE, bid=102, ask=103).model_copy(

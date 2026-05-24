@@ -31,6 +31,7 @@ class FeishuNotifier:
         dashboard_url: str = "",
         observations: list[AlertObservation] | None = None,
         template: AlertMessageTemplateSettings | None = None,
+        prebuilt_text: str | None = None,
     ) -> None:
         if not self.config.webhook_url:
             return
@@ -40,6 +41,7 @@ class FeishuNotifier:
             dashboard_url,
             observations=observations,
             template=template,
+            prebuilt_text=prebuilt_text,
         )
         response = await self.client.post(self.config.webhook_url, json=payload)
         response.raise_for_status()
@@ -51,17 +53,19 @@ class FeishuNotifier:
         dashboard_url: str,
         observations: list[AlertObservation] | None = None,
         template: AlertMessageTemplateSettings | None = None,
+        prebuilt_text: str | None = None,
     ) -> dict:
+        text = prebuilt_text or build_alert_message(
+            rule,
+            opportunity,
+            dashboard_url,
+            observations=observations,
+            template=template,
+        )
         payload: dict = {
             "msg_type": "text",
             "content": {
-                "text": build_alert_message(
-                    rule,
-                    opportunity,
-                    dashboard_url,
-                    observations=observations,
-                    template=template,
-                )
+                "text": text
             },
         }
         if self.config.secret:
