@@ -1,6 +1,7 @@
 import {
   ArrowDownOutlined,
   ArrowUpOutlined,
+  AreaChartOutlined,
   EyeInvisibleOutlined,
   EyeOutlined,
   ExperimentOutlined
@@ -20,6 +21,7 @@ interface OpportunityTableProps {
   previewLoadingSymbol?: string | null;
   onToggleSymbol?: (symbol: string, block: boolean) => void;
   onPreviewAstro?: (opportunity: Opportunity) => void;
+  onOpenHistory?: (opportunity: Opportunity) => void;
 }
 
 function pct(value: number | null | undefined): string {
@@ -172,7 +174,8 @@ function buildColumns(
   actionLoadingSymbol: string | null | undefined,
   previewLoadingSymbol: string | null | undefined,
   onToggleSymbol: ((symbol: string, block: boolean) => void) | undefined,
-  onPreviewAstro: ((opportunity: Opportunity) => void) | undefined
+  onPreviewAstro: ((opportunity: Opportunity) => void) | undefined,
+  onOpenHistory: ((opportunity: Opportunity) => void) | undefined
 ): ColumnsType<Opportunity> {
   return [
     {
@@ -213,6 +216,23 @@ function buildColumns(
           </Tooltip>
         ) : null;
       }
+    },
+    {
+      title: "",
+      fixed: "left",
+      width: 44,
+      render: (_, row) =>
+        onOpenHistory ? (
+          <Tooltip title="价差历史统计">
+            <Button
+              type="text"
+              size="small"
+              icon={<AreaChartOutlined />}
+              aria-label={`价差历史 ${row.symbol}`}
+              onClick={() => onOpenHistory(row)}
+            />
+          </Tooltip>
+        ) : null
     },
     {
       title: "Symbol",
@@ -295,7 +315,8 @@ export function OpportunityTable({
   actionLoadingSymbol,
   previewLoadingSymbol,
   onToggleSymbol,
-  onPreviewAstro
+  onPreviewAstro,
+  onOpenHistory
 }: OpportunityTableProps) {
   return (
     <Table
@@ -305,13 +326,14 @@ export function OpportunityTable({
         actionLoadingSymbol,
         previewLoadingSymbol,
         onToggleSymbol,
-        onPreviewAstro
+        onPreviewAstro,
+        onOpenHistory
       )}
       dataSource={opportunities}
       loading={loading}
       rowKey="id"
       pagination={{ pageSize: 50, showSizeChanger: true }}
-      scroll={{ x: 1436 }}
+      scroll={{ x: 1480 }}
       size="small"
       tableLayout="fixed"
     />

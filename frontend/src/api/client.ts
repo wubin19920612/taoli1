@@ -8,6 +8,8 @@ import type {
   AstroPairPlan,
   AstroSdkStatus,
   HealthStatus,
+  OpportunityHistoryStats,
+  OpportunityHistoryStatsQuery,
   LivePilotPreview,
   LivePilotSettings,
   Opportunity,
@@ -159,6 +161,18 @@ export async function deleteAlertRule(id: string): Promise<void> {
 
 export async function listAlertEvents(limit = 100): Promise<AlertEvent[]> {
   return fetchJson<AlertEvent[]>(`/alerts/events?limit=${limit}`);
+}
+
+export async function getOpportunityHistoryStats(
+  query: OpportunityHistoryStatsQuery
+): Promise<OpportunityHistoryStats> {
+  const url = buildUrl("/history/opportunities/stats", query);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    return response.json() as Promise<OpportunityHistoryStats>;
+  });
 }
 
 export async function createTestAlertEvent(): Promise<AlertEvent> {

@@ -406,6 +406,140 @@ describe("DashboardPage", () => {
     expect(screen.getByText(/Dry-run only/)).toBeTruthy();
   }, 15000);
 
+  it("opens spread history stats for a selected opportunity", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        calls.push(url);
+        if (url.includes("/settings/risk")) {
+          return Response.json({
+            min_volume_24h_usdt: 100000,
+            stale_after_seconds: 30,
+            huge_spread_pct: 10,
+            wide_spread_pct: 3,
+            mark_index_deviation_pct: 1,
+            funding_against_pct: 0.01,
+            ticker_collision_symbols: [],
+            excluded_symbols: [],
+            ignored_exchanges: []
+          });
+        }
+        if (url.includes("/health")) {
+          return Response.json({
+            status: "ok",
+            markets: 0,
+            opportunities: 1,
+            exchange_errors: {}
+          });
+        }
+        if (url.includes("/history/opportunities/stats")) {
+          return Response.json({
+            symbol: "BTCUSDT",
+            opportunity_id: "opp-1",
+            type: "FF",
+            count: 4,
+            first_seen_at: "2026-05-19T01:00:00Z",
+            last_seen_at: "2026-05-19T01:03:00Z",
+            latest: {
+              ...baseOpportunity,
+              observed_at: "2026-05-19T01:03:00Z"
+            },
+            open_spread_pct: {
+              min: 0.1,
+              max: 0.9,
+              mean: 0.4,
+              median: 0.3,
+              p05: 0.115,
+              p95: 0.825,
+              current: 0.9,
+              z_score: 1.51
+            },
+            close_spread_pct: {
+              min: -0.1,
+              max: 0.7,
+              mean: 0.2,
+              median: 0.1,
+              p05: -0.085,
+              p95: 0.625,
+              current: 0.7,
+              z_score: 1.51
+            },
+            fee_adjusted_open_pct: {
+              min: 0,
+              max: 0.8,
+              mean: 0.3,
+              median: 0.2,
+              p05: 0.015,
+              p95: 0.725,
+              current: 0.8,
+              z_score: 1.51
+            },
+            net_funding_pct: {
+              min: 0.01,
+              max: 0.01,
+              mean: 0.01,
+              median: 0.01,
+              p05: 0.01,
+              p95: 0.01,
+              current: 0.01,
+              z_score: null
+            },
+            net_funding_next_pct: {
+              min: 0.01,
+              max: 0.04,
+              mean: 0.023333,
+              median: 0.02,
+              p05: 0.011,
+              p95: 0.038,
+              current: 0.04,
+              z_score: 1.34
+            },
+            points: [
+              {
+                observed_at: "2026-05-19T01:00:00Z",
+                open_spread_pct: 0.1,
+                close_spread_pct: -0.1,
+                fee_adjusted_open_pct: 0,
+                net_funding_pct: 0.01,
+                net_funding_next_pct: null
+              },
+              {
+                observed_at: "2026-05-19T01:03:00Z",
+                open_spread_pct: 0.9,
+                close_spread_pct: 0.7,
+                fee_adjusted_open_pct: 0.8,
+                net_funding_pct: 0.01,
+                net_funding_next_pct: 0.04
+              }
+            ]
+          });
+        }
+        if (url.includes("/opportunities")) {
+          return Response.json([baseOpportunity]);
+        }
+        return Response.json({});
+      })
+    );
+
+    render(<DashboardPage />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "价差历史 BTCUSDT" }));
+
+    expect((await screen.findAllByText("价差历史统计")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("BTCUSDT").length).toBeGreaterThan(0);
+    expect(screen.getByText("样本数")).toBeTruthy();
+    expect(screen.getByText("4")).toBeTruthy();
+    expect(screen.getByText("当前开仓差")).toBeTruthy();
+    expect(screen.getByText("0.900%")).toBeTruthy();
+    expect(screen.getAllByText("p95上边界").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("0.825%").length).toBeGreaterThan(0);
+    expect(screen.getByTestId("spread-history-chart")).toBeTruthy();
+    expect(calls.some((url) => url.includes("opportunity_id=opp-1"))).toBe(true);
+    expect(calls.some((url) => url.includes("type=FF"))).toBe(true);
+  }, 15000);
+
   it("creates a paused Astro card from the preview modal", async () => {
     vi.stubGlobal(
       "fetch",

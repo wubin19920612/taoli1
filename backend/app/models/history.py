@@ -36,3 +36,39 @@ class OpportunityHistoryRow(BaseModel):
     buy_volume_24h_usdt: float | None = None
     sell_volume_24h_usdt: float | None = None
     risk_labels: list[str] = []
+
+
+class OpportunitySpreadStats(BaseModel):
+    min: float | None = None
+    max: float | None = None
+    mean: float | None = None
+    median: float | None = None
+    p05: float | None = None
+    p95: float | None = None
+    current: float | None = None
+    z_score: float | None = None
+
+
+class OpportunityHistoryPoint(BaseModel):
+    observed_at: datetime
+    open_spread_pct: float
+    close_spread_pct: float
+    fee_adjusted_open_pct: float
+    net_funding_pct: float | None = None
+    net_funding_next_pct: float | None = None
+
+
+class OpportunityHistoryStats(BaseModel):
+    symbol: str | None = None
+    opportunity_id: str | None = None
+    type: OpportunityType | None = None
+    count: int
+    first_seen_at: datetime | None = None
+    last_seen_at: datetime | None = None
+    latest: OpportunityHistoryRow | None = None
+    open_spread_pct: OpportunitySpreadStats
+    close_spread_pct: OpportunitySpreadStats
+    fee_adjusted_open_pct: OpportunitySpreadStats
+    net_funding_pct: OpportunitySpreadStats
+    net_funding_next_pct: OpportunitySpreadStats
+    points: list[OpportunityHistoryPoint]

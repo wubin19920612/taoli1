@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
 
 import { OpportunityTable } from "../src/components/OpportunityTable";
 import type { Opportunity } from "../src/api/types";
@@ -78,5 +79,21 @@ describe("OpportunityTable", () => {
 
     expect(screen.getByText("0.110%")).toBeTruthy();
     expect(screen.queryByText("-9.870%")).toBeNull();
+  });
+
+  it("opens spread history from a row action", async () => {
+    const onOpenHistory = vi.fn();
+
+    render(
+      <OpportunityTable
+        opportunities={[row]}
+        loading={false}
+        onOpenHistory={onOpenHistory}
+      />
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "价差历史 BTCUSDT" }));
+
+    expect(onOpenHistory).toHaveBeenCalledWith(row);
   });
 });

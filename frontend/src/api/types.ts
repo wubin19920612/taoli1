@@ -125,6 +125,82 @@ export interface AlertEvent {
   created_at: string;
 }
 
+export interface OpportunityHistoryRow {
+  observed_at: string;
+  opportunity_id: string;
+  type: OpportunityType;
+  symbol: string;
+  buy_exchange: string;
+  buy_market_type: MarketType;
+  sell_exchange: string;
+  sell_market_type: MarketType;
+  open_spread_pct: number;
+  close_spread_pct: number;
+  fee_adjusted_open_pct: number;
+  spread_width_pct: number;
+  funding_rate_buy_pct: number | null;
+  funding_rate_sell_pct: number | null;
+  funding_next_rate_buy_pct: number | null;
+  funding_next_rate_sell_pct: number | null;
+  funding_next_time_buy: string | null;
+  funding_next_time_sell: string | null;
+  net_funding_pct: number | null;
+  net_funding_next_pct: number | null;
+  buy_funding_interval_hours: number | null;
+  sell_funding_interval_hours: number | null;
+  net_funding_hourly_pct: number | null;
+  net_funding_daily_pct: number | null;
+  net_funding_next_hourly_pct: number | null;
+  net_funding_next_daily_pct: number | null;
+  buy_volume_24h_usdt: number | null;
+  sell_volume_24h_usdt: number | null;
+  risk_labels: string[];
+}
+
+export interface OpportunitySpreadStats {
+  min: number | null;
+  max: number | null;
+  mean: number | null;
+  median: number | null;
+  p05: number | null;
+  p95: number | null;
+  current: number | null;
+  z_score: number | null;
+}
+
+export interface OpportunityHistoryPoint {
+  observed_at: string;
+  open_spread_pct: number;
+  close_spread_pct: number;
+  fee_adjusted_open_pct: number;
+  net_funding_pct: number | null;
+  net_funding_next_pct: number | null;
+}
+
+export interface OpportunityHistoryStats {
+  symbol: string | null;
+  opportunity_id: string | null;
+  type: OpportunityType | null;
+  count: number;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+  latest: OpportunityHistoryRow | null;
+  open_spread_pct: OpportunitySpreadStats;
+  close_spread_pct: OpportunitySpreadStats;
+  fee_adjusted_open_pct: OpportunitySpreadStats;
+  net_funding_pct: OpportunitySpreadStats;
+  net_funding_next_pct: OpportunitySpreadStats;
+  points: OpportunityHistoryPoint[];
+}
+
+export interface OpportunityHistoryStatsQuery {
+  symbol?: string;
+  opportunity_id?: string;
+  type?: OpportunityType;
+  hours?: number;
+  point_limit?: number;
+}
+
 export interface AstroCardSettings {
   max_trade_usdt: number;
   leverage: number;

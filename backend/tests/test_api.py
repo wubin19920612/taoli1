@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 from fastapi.testclient import TestClient
@@ -517,6 +517,73 @@ def test_history_endpoint_returns_compact_spread_and_funding_rows() -> None:
     assert response.json()[0]["net_funding_pct"] == 0.02
     assert history_repo.calls[0]["symbol"] == "BTCUSDT"
     assert history_repo.calls[0]["limit"] == 50
+
+
+def test_history_stats_endpoint_returns_spread_distribution_and_chart_points() -> None:
+    app = create_app()
+    base_time = datetime(2026, 5, 19, 1, 0, tzinfo=UTC)
+
+    def row(index: int, open_spread_pct: float, next_funding_pct: float | None):
+        observed_at = base_time + timedelta(minutes=index)
+        return OpportunityHistoryRow(
+            observed_at=observed_at,
+            opportunity_id="opp-stats",
+            type=OpportunityType.FF,
+            symbol="BTCUSDT",
+            buy_exchange="binance",
+            buy_market_type=MarketType.FUTURE,
+            sell_exchange="okx",
+            sell_market_type=MarketType.FUTURE,
+            open_spread_pct=open_spread_pct,
+            close_spread_pct=open_spread_pct - 0.2,
+            fee_adjusted_open_pct=open_spread_pct - 0.1,
+            spread_width_pct=0.2,
+            funding_rate_buy_pct=0.01,
+            funding_rate_sell_pct=0.02,
+            funding_next_rate_buy_pct=0.01,
+            funding_next_rate_sell_pct=0.01 + (next_funding_pct or 0),
+            net_funding_pct=0.01,
+            net_funding_next_pct=next_funding_pct,
+            buy_volume_24h_usdt=10_000_000,
+            sell_volume_24h_usdt=11_000_000,
+            risk_labels=[],
+        )
+
+    chronological_rows = [
+        row(0, 0.1, None),
+        row(1, 0.2, 0.01),
+        row(2, 0.4, 0.02),
+        row(3, 0.9, 0.04),
+    ]
+    history_repo = FakeHistoryRepository(list(reversed(chronological_rows)))
+    app.state.history_repo = history_repo
+    client = TestClient(app)
+
+    response = client.get(
+        "/api/history/opportunities/stats?"
+        "symbol=btc-usdt&opportunity_id=opp-stats&type=ff&hours=12&point_limit=3"
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["count"] == 4
+    assert payload["symbol"] == "BTCUSDT"
+    assert payload["opportunity_id"] == "opp-stats"
+    assert payload["type"] == "FF"
+    assert payload["first_seen_at"] == "2026-05-19T01:00:00Z"
+    assert payload["last_seen_at"] == "2026-05-19T01:03:00Z"
+    assert payload["latest"]["open_spread_pct"] == 0.9
+    assert payload["open_spread_pct"]["current"] == 0.9
+    assert payload["open_spread_pct"]["mean"] == pytest.approx(0.4)
+    assert payload["open_spread_pct"]["median"] == pytest.approx(0.3)
+    assert payload["open_spread_pct"]["p05"] == pytest.approx(0.115)
+    assert payload["open_spread_pct"]["p95"] == pytest.approx(0.825)
+    assert payload["net_funding_next_pct"]["mean"] == pytest.approx(0.023333333)
+    assert [point["open_spread_pct"] for point in payload["points"]] == [0.1, 0.4, 0.9]
+    assert history_repo.calls[0]["symbol"] == "BTCUSDT"
+    assert history_repo.calls[0]["opportunity_id"] == "opp-stats"
+    assert history_repo.calls[0]["type"] == "FF"
+    assert history_repo.calls[0]["limit"] == 10000
 
 
 def test_alert_message_template_settings_endpoint_roundtrips() -> None:

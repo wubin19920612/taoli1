@@ -395,6 +395,151 @@ body {
   line-height: 1.45;
 }
 
+.spread-history-panel {
+  width: 100%;
+}
+
+.spread-history-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.spread-history-stats {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.spread-stat-tile {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  background: #f7faf9;
+  border: 1px solid #dce4e1;
+  border-radius: 6px;
+  min-width: 0;
+}
+
+.spread-stat-tile .ant-typography {
+  margin: 0;
+}
+
+.spread-history-chart-wrap {
+  display: grid;
+  gap: 8px;
+}
+
+.spread-history-chart {
+  width: 100%;
+  height: auto;
+  background: #f7faf9;
+  border: 1px solid #dce4e1;
+  border-radius: 6px;
+}
+
+.spread-history-chart rect {
+  fill: #ffffff;
+  stroke: #dce4e1;
+}
+
+.spread-grid-line {
+  stroke: #e5ece9;
+  stroke-width: 1;
+}
+
+.spread-reference-line {
+  stroke-width: 1.2;
+  stroke-dasharray: 5 4;
+  opacity: 0.9;
+}
+
+.spread-line {
+  fill: none;
+  stroke-width: 2.25;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.spread-line-open {
+  stroke: #0f766e;
+}
+
+.spread-line-close {
+  stroke: #2563eb;
+}
+
+.spread-line-fee {
+  stroke: #b45309;
+}
+
+.spread-current-point {
+  fill: #dc2626;
+  stroke: #ffffff;
+  stroke-width: 1.5;
+}
+
+.spread-axis-label {
+  fill: #66736f;
+  font-size: 11px;
+}
+
+.spread-reference-label {
+  fill: #475569;
+  font-size: 11px;
+}
+
+.spread-chart-legend {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  color: #66736f;
+  font-size: 12px;
+}
+
+.spread-chart-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.spread-chart-legend span::before {
+  content: "";
+  width: 12px;
+  height: 2px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.legend-open {
+  color: #0f766e;
+}
+
+.legend-close {
+  color: #2563eb;
+}
+
+.legend-fee {
+  color: #b45309;
+}
+
+.spread-history-descriptions {
+  background: #ffffff;
+}
+
+.spread-history-descriptions .ant-descriptions-item-label {
+  white-space: nowrap;
+}
+
+.spread-history-empty {
+  padding: 18px;
+  color: #66736f;
+  background: #f7faf9;
+  border: 1px dashed #dce4e1;
+  border-radius: 6px;
+}
+
 @media (max-width: 900px) {
   .settings-grid,
   .form-grid,
@@ -430,5 +575,13 @@ body {
   .volume-input,
   .risk-select {
     width: 100%;
+  }
+
+  .spread-history-head {
+    flex-direction: column;
+  }
+
+  .spread-history-stats {
+    grid-template-columns: 1fr;
   }
 }
