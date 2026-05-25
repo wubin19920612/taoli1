@@ -6,7 +6,7 @@ import pytest
 from app.core.config import Settings
 from app.models.market import MarketType
 from app.models.opportunity import Opportunity, OpportunityType
-from app.models.settings import AstroCardSettings
+from app.models.settings import AstroCardSettings, LivePilotSettings
 from app.services.astro_alerts import AstroAlertService
 from app.services.astro_client import AstroClientError
 
@@ -181,14 +181,13 @@ async def test_invalid_open_close_position_order_is_adjusted_before_create() -> 
 
     result = await service.handle_alert(
         opportunity().model_copy(
-            update={
-                "open_spread_pct": 0.88,
-                "close_spread_pct": 0.94,
-                "net_funding_next_hourly_pct": -0.2,
-                "net_funding_next_daily_pct": -4.8,
-            }
+                update={
+                    "open_spread_pct": 0.88,
+                    "close_spread_pct": 0.94,
+                    "net_funding_next_pct": -1.6,
+                }
+            )
         )
-    )
 
     assert result.status == "created"
     assert result.action == "add"
@@ -243,6 +242,39 @@ async def test_alert_create_uses_supplied_astro_card_settings() -> None:
     assert client.added[0]["leverage"] == "2"
     assert client.added[0]["minNotional"] == "12"
     assert client.added[0]["maxNotional"] == "66"
+
+
+@pytest.mark.asyncio
+async def test_live_pilot_alert_create_uses_pilot_notional_and_enabled_card() -> None:
+    client = FakeAstroClient()
+    service = AstroAlertService(
+        client,
+        Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
+        card_settings=AstroCardSettings(
+            max_trade_usdt=10,
+            leverage=1,
+            min_notional=10,
+            max_notional=10,
+            close_position_buffer_pct=0.1,
+            unfavorable_funding_weight=1,
+            close_position_floor_pct=0,
+        ),
+        live_pilot_settings=LivePilotSettings(
+            enabled=True,
+            notional_per_symbol_usdt=100,
+            create_cards_enabled=True,
+        ),
+        add_restart_delay_seconds=0,
+    )
+
+    result = await service.handle_alert(opportunity())
+
+    assert result.status == "created"
+    assert "已创建开启卡片 BTC FF binance->okx，禁开=false" in result.message
+    assert client.added[0]["status"] is True
+    assert client.added[0]["disableOpen"] is False
+    assert client.added[0]["maxTradeUSDT"] == "100"
+    assert client.added[0]["maxNotional"] == "100"
 
 
 @pytest.mark.asyncio

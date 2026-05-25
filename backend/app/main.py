@@ -29,7 +29,7 @@ from app.db.repositories import (
 from app.db.schema import initialize_schema
 from app.models.alert import AlertEvent
 from app.models.orderbook import DepthValidationResult
-from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, RiskSettings
+from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, LivePilotSettings, RiskSettings
 from app.services.alert_engine import AlertEngine, AlertMatch, observations_are_stable
 from app.services.alert_messages import build_alert_message
 from app.services.alert_metrics import observe_alert_metrics
@@ -39,6 +39,11 @@ from app.services.collector import MarketCollector, default_exchange_adapters, r
 from app.services.data_filters import filter_opportunities
 from app.services.feishu import FeishuConfig, FeishuNotifier
 from app.services.history import OpportunityHistoryRecorder
+from app.services.live_pilot import (
+    filter_opportunities_by_alert_rules,
+    select_live_pilot_matches,
+    select_live_pilot_opportunities,
+)
 from app.services.orderbook_validator import OrderBookDepthValidator
 from app.services.risk_labels import effective_open_edge_pct, known_volume_24h_usdt
 from app.services.snapshot_store import SnapshotStore
@@ -59,7 +64,7 @@ def _ensure_database_parent(path: str) -> None:
         os.makedirs(parent, exist_ok=True)
 
 
-async def _refresh_astro_card_settings(app: FastAPI, settings_repo: SettingsRepository | None) -> None:
+async def _refresh_astro_runtime_settings(app: FastAPI, settings_repo: SettingsRepository | None) -> None:
     astro_alert_service: AstroAlertService | None = getattr(
         app.state,
         "astro_alert_service",
@@ -76,10 +81,17 @@ async def _refresh_astro_card_settings(app: FastAPI, settings_repo: SettingsRepo
     )
     if settings_repo is None:
         astro_alert_service.card_settings = fallback_settings
+        astro_alert_service.live_pilot_settings = LivePilotSettings()
         return
     find_settings = getattr(settings_repo, "find_astro_card_settings", None)
     stored = await find_settings() if find_settings is not None else None
     astro_alert_service.card_settings = stored or fallback_settings
+    get_live_pilot_settings = getattr(settings_repo, "get_live_pilot_settings", None)
+    astro_alert_service.live_pilot_settings = (
+        await get_live_pilot_settings()
+        if get_live_pilot_settings is not None
+        else LivePilotSettings()
+    )
 
 
 def _find_latest_opportunity(app: FastAPI, opportunity_id: str):
@@ -144,6 +156,7 @@ async def _order_book_validation_failure(
     opportunity,
     risk_settings: RiskSettings,
     card_settings: AstroCardSettings | None,
+    override_notional_usdt: float | None = None,
 ) -> str | None:
     validator = getattr(app.state, "orderbook_validator", None)
     if validator is None:
@@ -152,6 +165,7 @@ async def _order_book_validation_failure(
         opportunity,
         risk_settings=risk_settings,
         card_settings=card_settings,
+        override_notional_usdt=override_notional_usdt,
     )
     if result.passed:
         return None
@@ -171,9 +185,25 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                 if settings_repo is not None
                 else AlertMessageTemplateSettings()
             )
-            await _refresh_astro_card_settings(app, settings_repo)
+            live_pilot_settings = (
+                await settings_repo.get_live_pilot_settings()
+                if settings_repo is not None
+                else LivePilotSettings()
+            )
+            await _refresh_astro_runtime_settings(app, settings_repo)
             opportunities = filter_opportunities(app.state.snapshot_store.get_opportunities(), settings)
+            opportunities = filter_opportunities_by_alert_rules(
+                opportunities,
+                rules,
+                settings,
+            )
+            opportunities = select_live_pilot_opportunities(
+                opportunities,
+                live_pilot_settings,
+                settings,
+            )
             matches = app.state.alert_engine.evaluate(opportunities, rules, risk_settings=settings)
+            matches = select_live_pilot_matches(matches, live_pilot_settings, settings)
             for match in matches:
                 status = "sent"
                 message = build_alert_message(
@@ -203,11 +233,17 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                             )
                         else:
                             card_settings = getattr(astro_alert_service, "card_settings", None)
+                            validation_notional = (
+                                live_pilot_settings.notional_per_symbol_usdt
+                                if live_pilot_settings.enabled
+                                else None
+                            )
                             order_book_failure = await _order_book_validation_failure(
                                 app,
                                 latest_opportunity,
                                 settings,
                                 card_settings,
+                                validation_notional,
                             )
                             if order_book_failure is not None:
                                 message = (

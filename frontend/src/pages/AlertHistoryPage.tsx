@@ -1,11 +1,11 @@
-import { ReloadOutlined } from "@ant-design/icons";
-import { Button, Space, Table, Tag, Typography } from "antd";
+import { ExperimentOutlined, ReloadOutlined } from "@ant-design/icons";
+import { Button, Space, Table, Tag, Typography, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 import { useEffect, useState } from "react";
 
-import { listAlertEvents } from "../api/client";
+import { createTestAlertEvent, listAlertEvents } from "../api/client";
 import type { AlertEvent } from "../api/types";
 
 dayjs.extend(utc);
@@ -34,6 +34,7 @@ const columns: ColumnsType<AlertEvent> = [
 export function AlertHistoryPage() {
   const [events, setEvents] = useState<AlertEvent[]>([]);
   const [loading, setLoading] = useState(false);
+  const [testing, setTesting] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -48,13 +49,31 @@ export function AlertHistoryPage() {
     void load();
   }, []);
 
+  const createTestEvent = async () => {
+    setTesting(true);
+    try {
+      const event = await createTestAlertEvent();
+      setEvents((current) => [event, ...current.filter((item) => item.id !== event.id)]);
+      message.success("测试告警已创建");
+    } catch (exc) {
+      message.error(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setTesting(false);
+    }
+  };
+
   return (
     <div className="page">
       <div className="toolbar">
         <Space>
           <Typography.Title level={4}>告警历史</Typography.Title>
         </Space>
-        <Button icon={<ReloadOutlined />} onClick={() => void load()} loading={loading} />
+        <Space>
+          <Button icon={<ExperimentOutlined />} onClick={() => void createTestEvent()} loading={testing}>
+            测试告警
+          </Button>
+          <Button icon={<ReloadOutlined />} onClick={() => void load()} loading={loading} />
+        </Space>
       </div>
       <Table columns={columns} dataSource={events} rowKey="id" loading={loading} size="middle" tableLayout="fixed" />
     </div>

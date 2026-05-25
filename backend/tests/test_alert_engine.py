@@ -255,7 +255,7 @@ def test_positive_funding_can_lift_fee_adjusted_edge_over_threshold() -> None:
     assert len(fired) == 1
 
 
-def test_funding_adjustment_uses_settlement_cycle_normalized_daily_edge() -> None:
+def test_funding_adjustment_uses_single_cycle_edge_without_daily_normalization() -> None:
     engine = AlertEngine()
     rule = AlertRule(
         name="funding interval adjusted",
@@ -268,11 +268,11 @@ def test_funding_adjustment_uses_settlement_cycle_normalized_daily_edge() -> Non
     opp = opportunity(spread=0.45).model_copy(
         update={
             "fee_adjusted_open_pct": 0.20,
-            "funding_rate_buy_pct": 0.08,
-            "funding_rate_sell_pct": 0.02,
+            "funding_rate_buy_pct": 0.02,
+            "funding_rate_sell_pct": 0.12,
             "funding_next_rate_buy_pct": None,
             "funding_next_rate_sell_pct": None,
-            "net_funding_pct": -0.06,
+            "net_funding_pct": 0.10,
             "net_funding_next_pct": None,
             "buy_funding_interval_hours": 8,
             "sell_funding_interval_hours": 1,
@@ -280,13 +280,15 @@ def test_funding_adjustment_uses_settlement_cycle_normalized_daily_edge() -> Non
             "net_funding_daily_pct": 0.24,
             "net_funding_next_hourly_pct": None,
             "net_funding_next_daily_pct": None,
+            "mark_index_diff_buy_pct": None,
+            "mark_index_diff_sell_pct": None,
         }
     )
 
     fired = engine.evaluate([opp], [rule], now=datetime.now(UTC))
 
     assert len(fired) == 1
-    assert fired[0].observations[0].funding_edge_pct == pytest.approx(0.24)
+    assert fired[0].observations[0].funding_edge_pct == pytest.approx(0.10)
 
 
 def test_negative_funding_can_block_fee_adjusted_edge_under_threshold() -> None:

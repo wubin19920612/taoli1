@@ -268,6 +268,38 @@ body {
   line-height: 1.5;
 }
 
+.live-pilot-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0 0 14px;
+}
+
+.live-pilot-metrics > div {
+  min-width: 0;
+  padding: 10px 12px;
+  background: #f7faf9;
+  border: 1px solid #dce4e1;
+  border-radius: 6px;
+}
+
+.live-pilot-metrics .ant-typography {
+  margin: 0;
+}
+
+.live-pilot-preview {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 14px;
+}
+
+.live-pilot-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .template-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(320px, 0.9fr);
@@ -366,6 +398,7 @@ body {
 @media (max-width: 900px) {
   .settings-grid,
   .form-grid,
+  .live-pilot-metrics,
   .template-grid,
   .template-options {
     grid-template-columns: 1fr;

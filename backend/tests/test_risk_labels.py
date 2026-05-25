@@ -36,8 +36,8 @@ def opportunity(**overrides) -> Opportunity:
         net_funding_pct=-0.07,
         buy_funding_interval_hours=8,
         sell_funding_interval_hours=1,
-        mark_index_diff_buy_pct=0.1,
-        mark_index_diff_sell_pct=1.1,
+        mark_index_diff_buy_pct=1.1,
+        mark_index_diff_sell_pct=0.1,
         risk_labels=[],
         last_seen_at=datetime.now(UTC) - timedelta(seconds=90),
     )
@@ -227,16 +227,21 @@ def test_non_actionable_filter_blocks_obvious_bad_opportunities() -> None:
     )
 
 
-def test_funding_against_uses_hourly_normalization() -> None:
+def test_funding_against_uses_single_cycle_edge_without_hourly_normalization() -> None:
     settings = RiskSettings(funding_against_pct=0.01, ticker_collision_symbols=[])
     labeled = apply_risk_labels(
         opportunity(
             symbol="BTCUSDT",
             funding_rate_buy_pct=0.08,
-            funding_rate_sell_pct=-0.02,
+            funding_rate_sell_pct=0.02,
             buy_funding_interval_hours=8,
             sell_funding_interval_hours=1,
-            net_funding_pct=-0.1,
+            net_funding_pct=-0.06,
+            funding_next_rate_buy_pct=None,
+            funding_next_rate_sell_pct=None,
+            net_funding_next_pct=None,
+            mark_index_diff_buy_pct=None,
+            mark_index_diff_sell_pct=None,
             last_seen_at=datetime.now(UTC),
         ),
         settings=settings,

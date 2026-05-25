@@ -4,6 +4,7 @@ from app.models.market import MarketType
 from app.models.opportunity import Opportunity
 from app.models.settings import RiskSettings
 from app.services.alert_metrics import combined_open_edge_pct
+from app.services.funding_edge import next_cycle_funding_edge_pct
 
 NON_ACTIONABLE_RISK_LABELS = frozenset(
     {
@@ -103,8 +104,8 @@ def apply_risk_labels(
     if opportunity.symbol.upper() in {item.upper() for item in settings.ticker_collision_symbols}:
         labels.append("SAME_TICKER_RISK")
 
-    normalized_funding = normalized_funding_hourly_pct(opportunity)
-    if normalized_funding is not None and normalized_funding < -settings.funding_against_pct:
+    next_cycle_funding = next_cycle_funding_edge_pct(opportunity)
+    if next_cycle_funding is not None and next_cycle_funding < -settings.funding_against_pct:
         labels.append("FUNDING_AGAINST")
 
     mark_diffs = [

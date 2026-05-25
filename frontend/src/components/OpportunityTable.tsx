@@ -90,6 +90,40 @@ function fundingPair(left: number | null | undefined, right: number | null | und
   return `${pct(left)} / ${pct(right)}`;
 }
 
+function sideNextCycleFundingRate(
+  marketType: string,
+  nextRate: number | null | undefined,
+  currentRate: number | null | undefined
+): number | null {
+  if (marketType === "spot") {
+    return 0;
+  }
+  if (typeof nextRate === "number") {
+    return nextRate;
+  }
+  return typeof currentRate === "number" ? currentRate : null;
+}
+
+function nextCycleFundingEdge(row: Opportunity): number | null {
+  if (typeof row.net_funding_next_pct === "number") {
+    return row.net_funding_next_pct;
+  }
+  const buyRate = sideNextCycleFundingRate(
+    row.buy_market_type,
+    row.funding_next_rate_buy_pct,
+    row.funding_rate_buy_pct
+  );
+  const sellRate = sideNextCycleFundingRate(
+    row.sell_market_type,
+    row.funding_next_rate_sell_pct,
+    row.funding_rate_sell_pct
+  );
+  if (typeof buyRate === "number" && typeof sellRate === "number") {
+    return sellRate - buyRate;
+  }
+  return row.net_funding_pct;
+}
+
 function normalizeSymbol(value: string): string {
   return value.toUpperCase().replace(/[-_]/g, "");
 }
@@ -100,10 +134,9 @@ function isBlocked(symbol: string, blockedSymbols: string[] | undefined): boolea
 }
 
 function FundingCell({ row }: { row: Opportunity }) {
-  const hourlyType =
-    typeof row.net_funding_hourly_pct === "number" && row.net_funding_hourly_pct < 0
-      ? "danger"
-      : "secondary";
+  const cycleFundingEdge = nextCycleFundingEdge(row);
+  const cycleType =
+    typeof cycleFundingEdge === "number" && cycleFundingEdge < 0 ? "danger" : "secondary";
   return (
     <div className="funding-cell">
       <div className="funding-row">
@@ -119,9 +152,9 @@ function FundingCell({ row }: { row: Opportunity }) {
         </Typography.Text>
       </div>
       <div className="funding-row">
-        <span className="funding-label">{"\u5c0f\u65f6 / \u65e5"}</span>
-        <Typography.Text className="funding-value" type={hourlyType}>
-          {fundingPair(row.net_funding_hourly_pct, row.net_funding_daily_pct)}
+        <span className="funding-label">{"\u5468\u671f\u51c0"}</span>
+        <Typography.Text className="funding-value" type={cycleType}>
+          {pct(cycleFundingEdge)}
         </Typography.Text>
       </div>
       <div className="funding-row">

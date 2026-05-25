@@ -5,6 +5,7 @@ from app.models.astro import AstroFieldAssumption, AstroPairPlan
 from app.models.market import MarketType
 from app.models.opportunity import Opportunity, OpportunityType
 from app.models.settings import AstroCardSettings
+from app.services.funding_edge import current_cycle_funding_edge_pct, next_cycle_funding_edge_pct
 
 
 SUPPORTED_ASTRO_TYPES = {OpportunityType.SF, OpportunityType.FF}
@@ -64,83 +65,45 @@ def _compact_number(value: float | int) -> str:
     return format(decimal, "f")
 
 
-def _normalized_net_hourly_pct(
-    sell_rate_pct: float | None,
-    sell_interval_hours: int | None,
-    buy_rate_pct: float | None,
-    buy_interval_hours: int | None,
-) -> float | None:
-    if (
-        sell_rate_pct is None
-        or buy_rate_pct is None
-        or sell_interval_hours is None
-        or buy_interval_hours is None
-        or sell_interval_hours <= 0
-        or buy_interval_hours <= 0
-    ):
-        return None
-    return (sell_rate_pct / sell_interval_hours) - (buy_rate_pct / buy_interval_hours)
-
-
-def _funding_window_hours(buy_interval_hours: int | None, sell_interval_hours: int | None) -> int | None:
-    intervals = [
-        interval
-        for interval in (buy_interval_hours, sell_interval_hours)
-        if interval is not None and interval > 0
-    ]
-    if not intervals:
-        return None
-    return min(intervals)
-
-
-def _funding_signal(opportunity: Opportunity) -> tuple[str, float | None, int | None, str]:
-    next_hourly = opportunity.net_funding_next_hourly_pct
-    if next_hourly is None:
-        next_hourly = _normalized_net_hourly_pct(
-            opportunity.funding_next_rate_sell_pct,
-            opportunity.sell_funding_interval_hours,
+def _has_next_cycle_inputs(opportunity: Opportunity) -> bool:
+    return any(
+        value is not None
+        for value in (
+            opportunity.net_funding_next_pct,
             opportunity.funding_next_rate_buy_pct,
-            opportunity.buy_funding_interval_hours,
+            opportunity.funding_next_rate_sell_pct,
+            opportunity.mark_index_diff_buy_pct,
+            opportunity.mark_index_diff_sell_pct,
         )
-    if next_hourly is not None:
+    )
+
+
+def _funding_signal(opportunity: Opportunity) -> tuple[str, float | None, str]:
+    next_cycle = next_cycle_funding_edge_pct(opportunity)
+    if next_cycle is not None and _has_next_cycle_inputs(opportunity):
         return (
             "predicted",
-            next_hourly,
-            _funding_window_hours(
-                opportunity.buy_funding_interval_hours,
-                opportunity.sell_funding_interval_hours,
-            ),
+            next_cycle,
             (
-                f"predicted funding hourly={next_hourly:.6f}%, "
+                f"predicted funding cycle={next_cycle:.6f}%, "
                 f"buy interval={opportunity.buy_funding_interval_hours}h, "
                 f"sell interval={opportunity.sell_funding_interval_hours}h"
             ),
         )
 
-    current_hourly = opportunity.net_funding_hourly_pct
-    if current_hourly is None:
-        current_hourly = _normalized_net_hourly_pct(
-            opportunity.funding_rate_sell_pct,
-            opportunity.sell_funding_interval_hours,
-            opportunity.funding_rate_buy_pct,
-            opportunity.buy_funding_interval_hours,
-        )
-    if current_hourly is not None:
+    current_cycle = current_cycle_funding_edge_pct(opportunity)
+    if current_cycle is not None:
         return (
             "current",
-            current_hourly,
-            _funding_window_hours(
-                opportunity.buy_funding_interval_hours,
-                opportunity.sell_funding_interval_hours,
-            ),
+            current_cycle,
             (
-                f"current funding hourly={current_hourly:.6f}%, "
+                f"current funding cycle={current_cycle:.6f}%, "
                 f"buy interval={opportunity.buy_funding_interval_hours}h, "
                 f"sell interval={opportunity.sell_funding_interval_hours}h"
             ),
         )
 
-    return "unknown", None, None, "funding data is unavailable"
+    return "unknown", None, "funding data is unavailable"
 
 
 def _astro_close_decision(
@@ -148,16 +111,16 @@ def _astro_close_decision(
     config: AstroPlannerConfig,
 ) -> ClosePositionDecision:
     close_spread_pct = config.default_close_position_floor_pct
-    source, net_hourly_pct, window_hours, funding_note = _funding_signal(opportunity)
-    if net_hourly_pct is None:
+    source, net_cycle_pct, funding_note = _funding_signal(opportunity)
+    if net_cycle_pct is None:
         note = f"Uses spread-disappearance floor because {funding_note}."
-    elif net_hourly_pct >= 0:
+    elif net_cycle_pct >= 0:
         note = (
             f"Uses spread-disappearance floor because {source} funding is favorable or neutral; "
             f"{funding_note}."
         )
     else:
-        funding_cost_pct = abs(net_hourly_pct) * (window_hours or 1)
+        funding_cost_pct = abs(net_cycle_pct)
         close_spread_pct += funding_cost_pct * config.default_unfavorable_funding_weight
         note = (
             f"Raised above spread-disappearance floor because unfavorable {source} funding "

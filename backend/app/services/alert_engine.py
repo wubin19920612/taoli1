@@ -79,30 +79,39 @@ class AlertEngine:
         now: datetime,
         settings: RiskSettings,
     ) -> bool:
-        if opportunity.type not in rule.types:
+        return opportunity_matches_rule(rule, opportunity, now, settings)
+
+
+def opportunity_matches_rule(
+    rule: AlertRule,
+    opportunity: Opportunity,
+    now: datetime,
+    settings: RiskSettings,
+) -> bool:
+    if opportunity.type not in rule.types:
+        return False
+    if rule.include_exchanges:
+        exchanges = {opportunity.buy_exchange, opportunity.sell_exchange}
+        if not exchanges.intersection(set(rule.include_exchanges)):
             return False
-        if rule.include_exchanges:
-            exchanges = {opportunity.buy_exchange, opportunity.sell_exchange}
-            if not exchanges.intersection(set(rule.include_exchanges)):
-                return False
-        if opportunity.buy_exchange in rule.exclude_exchanges or opportunity.sell_exchange in rule.exclude_exchanges:
-            return False
-        if rule.include_symbols and opportunity.symbol not in rule.include_symbols:
-            return False
-        if opportunity.open_spread_pct < rule.min_open_spread_pct:
-            return False
-        if effective_open_edge_pct(opportunity, settings) + EPSILON < rule.min_fee_adjusted_open_pct:
-            return False
-        if effective_open_edge_pct(opportunity, settings) + EPSILON < settings.min_effective_open_pct:
-            return False
-        min_volume = known_volume_24h_usdt(opportunity)
-        if min_volume is not None and min_volume < rule.min_volume_24h_usdt:
-            return False
-        if (now - opportunity.last_seen_at).total_seconds() > rule.max_data_age_seconds:
-            return False
-        if set(opportunity.risk_labels).intersection(rule.excluded_risk_labels):
-            return False
-        return True
+    if opportunity.buy_exchange in rule.exclude_exchanges or opportunity.sell_exchange in rule.exclude_exchanges:
+        return False
+    if rule.include_symbols and opportunity.symbol not in rule.include_symbols:
+        return False
+    if opportunity.open_spread_pct < rule.min_open_spread_pct:
+        return False
+    if effective_open_edge_pct(opportunity, settings) + EPSILON < rule.min_fee_adjusted_open_pct:
+        return False
+    if effective_open_edge_pct(opportunity, settings) + EPSILON < settings.min_effective_open_pct:
+        return False
+    min_volume = known_volume_24h_usdt(opportunity)
+    if min_volume is not None and min_volume < rule.min_volume_24h_usdt:
+        return False
+    if (now - opportunity.last_seen_at).total_seconds() > rule.max_data_age_seconds:
+        return False
+    if set(opportunity.risk_labels).intersection(rule.excluded_risk_labels):
+        return False
+    return True
 
 
 def observations_are_stable(observations: list[AlertObservation], settings: RiskSettings) -> bool:

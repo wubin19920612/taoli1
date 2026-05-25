@@ -135,6 +135,45 @@ export interface AstroCardSettings {
   close_position_floor_pct: number;
 }
 
+export interface LivePilotSettings {
+  enabled: boolean;
+  max_symbols: number;
+  notional_per_symbol_usdt: number;
+  min_next_funding_edge_pct: number;
+  prefer_hyperliquid: boolean;
+  exclude_ss: boolean;
+  create_cards_enabled: boolean;
+}
+
+export interface LivePilotPreviewItem {
+  opportunity_id: string;
+  symbol: string;
+  type: OpportunityType;
+  route: string;
+  buy_exchange: string;
+  sell_exchange: string;
+  uses_hyperliquid: boolean;
+  open_spread_pct: number;
+  fee_adjusted_open_pct: number;
+  next_funding_edge_pct: number;
+  combined_open_edge_pct: number;
+  volume_24h_usdt: number | null;
+  notional_usdt: number;
+  risk_labels: string[];
+}
+
+export interface LivePilotPreview {
+  settings: LivePilotSettings;
+  total_opportunities: number;
+  eligible_symbols: number;
+  selected_symbols: number;
+  skipped_negative_funding: number;
+  skipped_type: number;
+  skipped_risk: number;
+  budget_usdt: number;
+  items: LivePilotPreviewItem[];
+}
+
 export interface AstroCardCreateRequest {
   max_trade_usdt?: number;
   leverage?: number;

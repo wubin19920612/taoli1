@@ -56,8 +56,27 @@ describe("OpportunityTable", () => {
     expect(screen.getByText("0.620%")).toBeTruthy();
     expect(screen.getByText("当前")).toBeTruthy();
     expect(screen.getByText("预测")).toBeTruthy();
-    expect(screen.getByText("小时 / 日")).toBeTruthy();
+    expect(screen.getByText("周期净")).toBeTruthy();
     expect(screen.getByText("0.015% / 0.025%")).toBeTruthy();
-    expect(screen.getByText("-0.004% / -0.090%")).toBeTruthy();
+    expect(screen.getByText("0.010%")).toBeTruthy();
+  });
+
+  it("does not use mark-index premium as the next-cycle funding edge", () => {
+    const missingNextFunding: Opportunity = {
+      ...row,
+      id: "opp-mark-index",
+      funding_next_rate_buy_pct: null,
+      funding_next_rate_sell_pct: 0.12,
+      net_funding_next_pct: null,
+      mark_index_diff_buy_pct: 9.99,
+      mark_index_diff_sell_pct: 0.01,
+      funding_rate_buy_pct: 0.01,
+      funding_rate_sell_pct: 0.02
+    };
+
+    render(<OpportunityTable opportunities={[missingNextFunding]} loading={false} />);
+
+    expect(screen.getByText("0.110%")).toBeTruthy();
+    expect(screen.queryByText("-9.870%")).toBeNull();
   });
 });

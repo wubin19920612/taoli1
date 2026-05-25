@@ -58,11 +58,11 @@ def _target_notional(
     card_settings: AstroCardSettings | None,
     override_notional_usdt: float | None,
 ) -> float:
+    if override_notional_usdt is not None:
+        return override_notional_usdt
     candidates = [risk_settings.signal_validation_notional_usdt]
     if card_settings is not None:
         candidates.append(card_settings.max_trade_usdt)
-    if override_notional_usdt is not None:
-        candidates.append(override_notional_usdt)
     return max(candidates)
 
 

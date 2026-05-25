@@ -119,13 +119,13 @@ def test_build_payload_explains_rule_parameters() -> None:
     assert "价差对：BTCUSDT | binance future -> okx future" in text
     assert "方向：买入 binance future BTCUSDT，卖出 okx future BTCUSDT" in text
     assert "价差：开仓 0.800% / 平仓 0.500%" in text
-    assert "资金费率差（日化）：当前 -0.09% / 预测 0.03%" in text
+    assert "资金费率差（周期）：当前 -0.03% / 预测 0.01%" in text
     assert "结算周期：8h / 8h" in text
-    assert "综合开仓：0.630%" in text
+    assert "综合开仓：0.610%" in text
     assert "资金费率：0.01% / -0.02%" in text
     assert "【连续监测】" in text
-    assert "1. 09:59:44 | 价差 0.720% | 净估算 0.520% | 资金差（日化） 0.03% | 综合 0.550%" in text
-    assert "2. 09:59:52 | 价差 0.800% | 净估算 0.600% | 资金差（日化） 0.03% | 综合 0.630%" in text
+    assert "1. 09:59:44 | 价差 0.720% | 净估算 0.520% | 资金差（周期） 0.03% | 综合 0.550%" in text
+    assert "2. 09:59:52 | 价差 0.800% | 净估算 0.600% | 资金差（周期） 0.03% | 综合 0.630%" in text
     assert "风险：FUNDING_AGAINST" in text
 
 
@@ -145,7 +145,7 @@ def test_build_payload_can_use_prebuilt_alert_text() -> None:
     )
 
 
-def test_alert_message_shows_settlement_cycle_adjusted_funding_difference() -> None:
+def test_alert_message_falls_back_to_current_cycle_when_next_funding_is_missing() -> None:
     rule = AlertRule(name="interval adjusted")
     opportunity = make_opportunity().model_copy(
         update={
@@ -166,9 +166,9 @@ def test_alert_message_shows_settlement_cycle_adjusted_funding_difference() -> N
 
     text = build_alert_message(rule, opportunity)
 
-    assert "资金费率差（日化）：当前 0.24% / 预测 -" in text
+    assert "资金费率差（周期）：当前 -0.06% / 预测 -0.06%" in text
     assert "结算周期：8h / 1h" in text
-    assert "资金费率差：当前 -0.06%" not in text
+    assert "资金费率差（日化）" not in text
 
 
 def test_alert_message_formats_market_times_in_utc_plus_8() -> None:

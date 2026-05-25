@@ -4,6 +4,7 @@ from app.models.alert import ALERT_SEVERITY_DESCRIPTIONS, ALERT_TYPE_DESCRIPTION
 from app.models.opportunity import Opportunity
 from app.models.settings import AlertMessageTemplateSettings
 from app.services.alert_metrics import AlertObservation, combined_open_edge_pct
+from app.services.funding_edge import current_cycle_funding_edge_pct, next_cycle_funding_edge_pct
 
 ALERT_DISPLAY_TIMEZONE = timezone(timedelta(hours=8), "UTC+8")
 
@@ -89,21 +90,21 @@ def build_alert_message(
         snapshot_lines.extend(
             [
                 (
-                    "资金费率差（日化）："
-                    f"当前 {_format_percent(_current_funding_daily_pct(opportunity), digits=2)} / "
-                    f"预测 {_format_percent(_next_funding_daily_pct(opportunity), digits=2)}"
+                    "资金费率差（周期）："
+                    f"当前 {_format_percent(_current_funding_cycle_pct(opportunity), digits=2)} / "
+                    f"预测 {_format_percent(_next_funding_cycle_pct(opportunity), digits=2)}"
                 ),
                 (
                     "资金费率："
                     f"{_format_percent(opportunity.funding_rate_buy_pct, digits=2)} / "
                     f"{_format_percent(opportunity.funding_rate_sell_pct, digits=2)}"
-                    f"（日化净：{_format_percent(_current_funding_daily_pct(opportunity), digits=2)}）"
+                    f"（周期净：{_format_percent(_current_funding_cycle_pct(opportunity), digits=2)}）"
                 ),
                 (
                     "预测资金费率："
                     f"{_format_percent(opportunity.funding_next_rate_buy_pct, digits=2)} / "
                     f"{_format_percent(opportunity.funding_next_rate_sell_pct, digits=2)}"
-                    f"（日化净：{_format_percent(_next_funding_daily_pct(opportunity), digits=2)}）"
+                    f"（周期净：{_format_percent(_next_funding_cycle_pct(opportunity), digits=2)}）"
                 ),
                 (
                     "下一次结算："
@@ -137,7 +138,7 @@ def build_alert_message(
                 f"{index}. {_format_time_with_seconds(item.observed_at)} | "
                 f"价差 {_format_percent(item.open_spread_pct)} | "
                 f"净估算 {_format_percent(item.fee_adjusted_open_pct)} | "
-                f"资金差（日化） {_format_percent(item.funding_edge_pct, digits=2)} | "
+                f"资金差（周期） {_format_percent(item.funding_edge_pct, digits=2)} | "
                 f"综合 {_format_percent(item.combined_open_edge_pct)}"
             )
         _append_block(lines, "【连续监测】", observation_lines)
@@ -208,17 +209,9 @@ def _describe_types(values: list[str]) -> str:
     return ", ".join(items)
 
 
-def _current_funding_daily_pct(opportunity: Opportunity) -> float | None:
-    if opportunity.net_funding_daily_pct is not None:
-        return opportunity.net_funding_daily_pct
-    if opportunity.net_funding_hourly_pct is not None:
-        return opportunity.net_funding_hourly_pct * 24
-    return opportunity.net_funding_pct
+def _current_funding_cycle_pct(opportunity: Opportunity) -> float | None:
+    return current_cycle_funding_edge_pct(opportunity)
 
 
-def _next_funding_daily_pct(opportunity: Opportunity) -> float | None:
-    if opportunity.net_funding_next_daily_pct is not None:
-        return opportunity.net_funding_next_daily_pct
-    if opportunity.net_funding_next_hourly_pct is not None:
-        return opportunity.net_funding_next_hourly_pct * 24
-    return opportunity.net_funding_next_pct
+def _next_funding_cycle_pct(opportunity: Opportunity) -> float | None:
+    return next_cycle_funding_edge_pct(opportunity)

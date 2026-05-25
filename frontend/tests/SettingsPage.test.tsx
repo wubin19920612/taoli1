@@ -57,6 +57,87 @@ describe("SettingsPage", () => {
             close_position_floor_pct: 0
           });
         }
+        if (url.includes("/settings/live-pilot") && init?.method === "PUT") {
+          return Response.json(JSON.parse(String(init.body)));
+        }
+        if (url.includes("/settings/live-pilot/preview")) {
+          return Response.json({
+            settings: {
+              enabled: false,
+              max_symbols: 10,
+              notional_per_symbol_usdt: 100,
+              min_next_funding_edge_pct: -0.05,
+              prefer_hyperliquid: true,
+              exclude_ss: true,
+              create_cards_enabled: true
+            },
+            total_opportunities: 3,
+            eligible_symbols: 2,
+            selected_symbols: 2,
+            skipped_negative_funding: 1,
+            skipped_type: 1,
+            skipped_risk: 4,
+            budget_usdt: 200,
+            items: [
+              {
+                opportunity_id: "btc-hyper",
+                symbol: "BTCUSDT",
+                type: "FF",
+                route: "hyperliquid future -> okx future",
+                buy_exchange: "hyperliquid",
+                sell_exchange: "okx",
+                uses_hyperliquid: true,
+                open_spread_pct: 0.5,
+                fee_adjusted_open_pct: 0.35,
+                next_funding_edge_pct: 0.02,
+                combined_open_edge_pct: 0.37,
+                volume_24h_usdt: 10000000,
+                notional_usdt: 100,
+                risk_labels: []
+              },
+              {
+                opportunity_id: "eth",
+                symbol: "ETHUSDT",
+                type: "FF",
+                route: "binance future -> okx future",
+                buy_exchange: "binance",
+                sell_exchange: "okx",
+                uses_hyperliquid: false,
+                open_spread_pct: 0.4,
+                fee_adjusted_open_pct: 0.2,
+                next_funding_edge_pct: -0.01,
+                combined_open_edge_pct: 0.19,
+                volume_24h_usdt: 8000000,
+                notional_usdt: 100,
+                risk_labels: ["FUNDING_AGAINST"]
+              }
+            ]
+          });
+        }
+        if (url.includes("/settings/live-pilot")) {
+          return Response.json({
+            enabled: false,
+            max_symbols: 10,
+            notional_per_symbol_usdt: 100,
+            min_next_funding_edge_pct: -0.05,
+            prefer_hyperliquid: true,
+            exclude_ss: true,
+            create_cards_enabled: true
+          });
+        }
+        if (url.includes("/astro/status")) {
+          return Response.json({
+            configured: true,
+            dry_run_only: true,
+            base_url: "http://astro.local",
+            admin_prefix: "",
+            api_key_configured: true,
+            list_path: "/pairs",
+            pair_path: "/pairs",
+            message_path: "/message",
+            message: null
+          });
+        }
         if (url.includes("/alerts/rules") && init?.method === "POST") {
           return Response.json(JSON.parse(String(init.body)));
         }
@@ -156,6 +237,59 @@ describe("SettingsPage", () => {
     });
   }, 15000);
 
+  it("loads and saves Live Pilot settings", async () => {
+    render(<SettingsPage />);
+
+    expect(await screen.findByText("实盘灰度")).toBeTruthy();
+    expect(screen.getByText("1000 USDT")).toBeTruthy();
+    expect(await screen.findByText("当前候选 2/2")).toBeTruthy();
+    expect(screen.getByText("BTCUSDT")).toBeTruthy();
+    expect(screen.getAllByText("FF 合约-合约").length).toBeGreaterThan(0);
+    expect(screen.getByText("hyperliquid future -> okx future")).toBeTruthy();
+    expect(screen.getByText("Hyper")).toBeTruthy();
+    expect(screen.getByText("强负资金跳过 1")).toBeTruthy();
+    expect(screen.getByText("类型跳过 1")).toBeTruthy();
+    expect(screen.getByText("风险跳过 4")).toBeTruthy();
+    expect(screen.getByText(/Astro dry-run 当前开启/)).toBeTruthy();
+
+    await userEvent.click(screen.getByLabelText("启用实盘灰度"));
+    const symbolLimit = screen.getByLabelText("最多标的数");
+    await userEvent.clear(symbolLimit);
+    await userEvent.type(symbolLimit, "7");
+    const notional = screen.getByLabelText("每标的资金 USDT");
+    await userEvent.clear(notional);
+    await userEvent.type(notional, "125");
+    const fundingFloor = screen.getByLabelText("强负资金跳过阈值");
+    await userEvent.clear(fundingFloor);
+    await userEvent.type(fundingFloor, "-0.03");
+    await userEvent.click(screen.getByRole("button", { name: /保存实盘灰度/ }));
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/settings/live-pilot"),
+        expect.objectContaining({
+          method: "PUT",
+          body: expect.stringContaining('"notional_per_symbol_usdt":125')
+        })
+      );
+    });
+    expect(
+      vi.mocked(fetch).mock.calls.some(([, init]) => {
+        return init?.method === "PUT" && String(init.body).includes('"enabled":true');
+      })
+    ).toBe(true);
+    expect(
+      vi.mocked(fetch).mock.calls.some(([, init]) => {
+        return init?.method === "PUT" && String(init.body).includes('"min_next_funding_edge_pct":-0.03');
+      })
+    ).toBe(true);
+    expect(
+      vi.mocked(fetch).mock.calls.some(([, init]) => {
+        return init?.method === "PUT" && String(init.body).includes('"exclude_ss":true');
+      })
+    ).toBe(true);
+  }, 15000);
+
   it("uses saved risk volume as the default alert rule volume", async () => {
     const posts: string[] = [];
     vi.stubGlobal(
@@ -239,7 +373,7 @@ describe("SettingsPage", () => {
   it("saves signal validity risk settings", async () => {
     render(<SettingsPage />);
 
-    const slippageInput = await screen.findByLabelText("Signal slippage buffer pct");
+    const slippageInput = await screen.findByLabelText(/Signal slippage buffer pct/);
     await userEvent.clear(slippageInput);
     await userEvent.type(slippageInput, "0.2");
     await userEvent.click(screen.getByRole("button", { name: /保存风险参数/ }));
@@ -258,9 +392,12 @@ describe("SettingsPage", () => {
   it("shows signal strategy minimum notional default and saves it", async () => {
     render(<SettingsPage />);
 
-    expect(await screen.findByText("Signal strategy")).toBeTruthy();
-    const minimumInput = await screen.findByLabelText("Minimum validation notional USDT");
-    const strategyNotes = await screen.findByLabelText("Signal strategy notes");
+    expect(await screen.findByText("Signal strategy（信号策略）")).toBeTruthy();
+    expect(screen.getByText(/信号策略用于判断告警机会是否真的适合创建 Astro 卡片/)).toBeTruthy();
+    expect(screen.getByText(/系统会在创建卡片前拉取两边交易所的多档 order book/)).toBeTruthy();
+    expect(screen.getByText(/默认 1000 USDT/)).toBeTruthy();
+    const minimumInput = await screen.findByLabelText("最小盘口验证金额 USDT (Minimum validation notional USDT)");
+    const strategyNotes = await screen.findByLabelText("信号策略备注 / 后续自定义规则 (Signal strategy notes)");
     expect((minimumInput as HTMLInputElement).value).toBe("1000");
 
     await userEvent.clear(minimumInput);

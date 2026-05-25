@@ -55,6 +55,45 @@ class AstroCardSettings(BaseModel):
     close_position_floor_pct: float = Field(default=0, ge=0)
 
 
+class LivePilotSettings(BaseModel):
+    enabled: bool = False
+    max_symbols: int = Field(default=10, ge=1, le=100)
+    notional_per_symbol_usdt: float = Field(default=100, gt=0)
+    min_next_funding_edge_pct: float = Field(default=-0.05)
+    prefer_hyperliquid: bool = True
+    exclude_ss: bool = True
+    create_cards_enabled: bool = True
+
+
+class LivePilotPreviewItem(BaseModel):
+    opportunity_id: str
+    symbol: str
+    type: str
+    route: str
+    buy_exchange: str
+    sell_exchange: str
+    uses_hyperliquid: bool
+    open_spread_pct: float
+    fee_adjusted_open_pct: float
+    next_funding_edge_pct: float
+    combined_open_edge_pct: float
+    volume_24h_usdt: float | None
+    notional_usdt: float
+    risk_labels: list[str]
+
+
+class LivePilotPreview(BaseModel):
+    settings: LivePilotSettings
+    total_opportunities: int
+    eligible_symbols: int
+    selected_symbols: int
+    skipped_negative_funding: int
+    skipped_type: int = 0
+    skipped_risk: int = 0
+    budget_usdt: float
+    items: list[LivePilotPreviewItem]
+
+
 class OpportunityFilterSettings(BaseModel):
     include_risky: bool = False
     hidden_risk_labels: list[str] = Field(default_factory=lambda: DEFAULT_HIDDEN_RISK_LABELS.copy())

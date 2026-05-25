@@ -10,7 +10,7 @@ from app.models.astro import AstroAlertActionResult
 from app.models.market import MarketType
 from app.models.opportunity import Opportunity, OpportunityType
 from app.models.orderbook import DepthValidationResult
-from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, RiskSettings
+from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, LivePilotSettings, RiskSettings
 from app.services.alert_engine import AlertMatch
 from app.services.snapshot_store import SnapshotStore
 
@@ -77,8 +77,13 @@ class CountingEventRepo:
 
 
 class FakeSettingsRepo:
-    def __init__(self, astro_card_settings: AstroCardSettings | None = None):
+    def __init__(
+        self,
+        astro_card_settings: AstroCardSettings | None = None,
+        live_pilot_settings: LivePilotSettings | None = None,
+    ):
         self.astro_card_settings = astro_card_settings
+        self.live_pilot_settings = live_pilot_settings or LivePilotSettings()
 
     async def get_risk_settings(self) -> RiskSettings:
         return RiskSettings()
@@ -89,12 +94,17 @@ class FakeSettingsRepo:
     async def find_astro_card_settings(self) -> AstroCardSettings | None:
         return self.astro_card_settings
 
+    async def get_live_pilot_settings(self) -> LivePilotSettings:
+        return self.live_pilot_settings
+
 
 class FakeAlertEngine:
     def __init__(self, match: AlertMatch):
         self.match = match
+        self.seen_opportunity_ids: list[str] = []
 
     def evaluate(self, opportunities: list[Opportunity], rules: list[AlertRule], **kwargs) -> list[AlertMatch]:
+        self.seen_opportunity_ids = [item.id for item in opportunities]
         return [self.match]
 
 
@@ -128,6 +138,7 @@ class FakeFeishuNotifier:
 class FakeAstroAlertService:
     def __init__(self):
         self.card_settings: AstroCardSettings | None = None
+        self.live_pilot_settings = LivePilotSettings()
         self.calls: list[str] = []
 
     async def handle_alert(self, opportunity: Opportunity) -> AstroAlertActionResult:
@@ -145,7 +156,7 @@ class FakeAstroAlertService:
 class FakeOrderBookValidator:
     def __init__(self, result: DepthValidationResult):
         self.result = result
-        self.calls: list[tuple[Opportunity, RiskSettings, AstroCardSettings | None]] = []
+        self.calls: list[tuple[Opportunity, RiskSettings, AstroCardSettings | None, float | None]] = []
 
     async def validate(
         self,
@@ -154,13 +165,63 @@ class FakeOrderBookValidator:
         card_settings: AstroCardSettings | None = None,
         override_notional_usdt: float | None = None,
     ) -> DepthValidationResult:
-        self.calls.append((opportunity, risk_settings, card_settings))
+        self.calls.append((opportunity, risk_settings, card_settings, override_notional_usdt))
         return self.result
 
 
 class FailingAstroAlertService:
     async def handle_alert(self, opportunity: Opportunity) -> AstroAlertActionResult:
         raise RuntimeError("unexpected astro failure")
+
+
+@pytest.mark.asyncio
+async def test_live_pilot_alert_loop_filters_candidates_by_alert_rules_before_selection() -> None:
+    stop_event = asyncio.Event()
+    app = FastAPI()
+    low_edge = opportunity().model_copy(
+        update={
+            "id": "low-edge",
+            "symbol": "LOWEDGEUSDT",
+            "open_spread_pct": 0.40,
+            "fee_adjusted_open_pct": 0.30,
+        }
+    )
+    high_edge = opportunity().model_copy(
+        update={
+            "id": "high-edge",
+            "symbol": "HIGHEDGEUSDT",
+            "open_spread_pct": 0.70,
+            "fee_adjusted_open_pct": 0.60,
+            "net_funding_pct": 0.00,
+        }
+    )
+    store = SnapshotStore()
+    store.set_opportunities([low_edge, high_edge])
+    rule = AlertRule(
+        id="rule-1",
+        name="threshold",
+        types=["FF"],
+        min_open_spread_pct=0.5,
+        min_fee_adjusted_open_pct=0.5,
+        min_volume_24h_usdt=1_000_000,
+        consecutive_hits=1,
+    )
+    event_repo = FakeEventRepo(stop_event)
+    alert_engine = FakeAlertEngine(AlertMatch(rule, high_edge, []))
+
+    app.state.alert_rule_repo = FakeRuleRepo([rule])
+    app.state.alert_event_repo = event_repo
+    app.state.settings_repo = FakeSettingsRepo(
+        live_pilot_settings=LivePilotSettings(enabled=True, max_symbols=10)
+    )
+    app.state.snapshot_store = store
+    app.state.alert_engine = alert_engine
+    app.state.feishu_notifier = FakeFeishuNotifier()
+    app.state.astro_alert_service = FakeAstroAlertService()
+
+    await asyncio.wait_for(_run_alert_loop(app, 60, stop_event), timeout=2)
+
+    assert alert_engine.seen_opportunity_ids == ["high-edge"]
 
 
 @pytest.mark.asyncio
@@ -364,6 +425,65 @@ async def test_alert_loop_skips_astro_create_when_order_book_validation_fails() 
     assert validator.calls[0][2].max_trade_usdt == 50
     assert "Astro: skipped order book validation" in event_repo.events[0].message
     assert "buy side depth filled" in event_repo.events[0].message
+
+
+@pytest.mark.asyncio
+async def test_alert_loop_uses_live_pilot_notional_for_order_book_validation() -> None:
+    stop_event = asyncio.Event()
+    app = FastAPI()
+    rule = AlertRule(
+        id="rule-1",
+        name="FF spread",
+        types=["FF"],
+        min_open_spread_pct=0.5,
+        min_fee_adjusted_open_pct=0.25,
+        min_volume_24h_usdt=1_000_000,
+        consecutive_hits=1,
+    )
+    opp = opportunity()
+    store = SnapshotStore()
+    store.set_opportunities([opp])
+    event_repo = FakeEventRepo(stop_event)
+    service = FakeAstroAlertService()
+    validator = FakeOrderBookValidator(
+        DepthValidationResult(
+            passed=True,
+            target_notional_usdt=100,
+            buy_filled_usdt=100,
+            sell_filled_usdt=100,
+            buy_vwap=100,
+            sell_vwap=100.8,
+            quoted_open_pct=0.8,
+            executable_open_pct=0.8,
+            effective_executable_edge_pct=0.5,
+            slippage_loss_pct=0,
+            blockers=[],
+            warnings=[],
+        )
+    )
+
+    app.state.settings = type(
+        "Settings",
+        (),
+        {"astro_card_settings": AstroCardSettings(max_trade_usdt=10)},
+    )()
+    app.state.alert_rule_repo = FakeRuleRepo([rule])
+    app.state.alert_event_repo = event_repo
+    app.state.settings_repo = FakeSettingsRepo(
+        AstroCardSettings(max_trade_usdt=10),
+        LivePilotSettings(enabled=True, notional_per_symbol_usdt=100),
+    )
+    app.state.snapshot_store = store
+    app.state.alert_engine = FakeAlertEngine(AlertMatch(rule, opp, []))
+    app.state.feishu_notifier = FakeFeishuNotifier()
+    app.state.astro_alert_service = service
+    app.state.orderbook_validator = validator
+
+    await asyncio.wait_for(_run_alert_loop(app, 60, stop_event), timeout=2)
+
+    assert service.calls == ["opp-1"]
+    assert service.live_pilot_settings.enabled is True
+    assert validator.calls[0][3] == 100
 
 
 @pytest.mark.asyncio

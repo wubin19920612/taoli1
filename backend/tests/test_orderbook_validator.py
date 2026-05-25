@@ -93,6 +93,32 @@ async def test_validator_uses_minimum_signal_notional_when_card_size_is_smaller(
 
 
 @pytest.mark.asyncio
+async def test_validator_can_use_explicit_override_notional_for_small_live_pilot() -> None:
+    buy_book = book("binance", bids=[(99, 20)], asks=[(100, 20)])
+    sell_book = book("okx", bids=[(101, 20)], asks=[(102, 20)])
+    validator = OrderBookDepthValidator(
+        [FakeAdapter("binance", buy_book), FakeAdapter("okx", sell_book)]
+    )
+
+    result = await validator.validate(
+        opportunity(),
+        risk_settings=RiskSettings(
+            signal_validation_notional_usdt=1000,
+            signal_slippage_buffer_pct=0.05,
+            min_effective_open_pct=0.1,
+            ticker_collision_symbols=[],
+        ),
+        card_settings=AstroCardSettings(max_trade_usdt=100, max_notional=100),
+        override_notional_usdt=100,
+    )
+
+    assert result.passed is True
+    assert result.target_notional_usdt == 100
+    assert result.buy_filled_usdt == pytest.approx(100)
+    assert result.sell_filled_usdt == pytest.approx(100)
+
+
+@pytest.mark.asyncio
 async def test_validator_blocks_when_multi_level_vwap_erases_edge() -> None:
     buy_book = book(
         "binance",

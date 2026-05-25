@@ -103,8 +103,7 @@ def test_close_position_is_adjusted_below_open_position_for_astro_submission() -
             update={
                 "open_spread_pct": 0.88,
                 "close_spread_pct": 0.94,
-                "net_funding_next_hourly_pct": -0.2,
-                "net_funding_next_daily_pct": -4.8,
+                "net_funding_next_pct": -1.6,
             }
         )
     )
@@ -125,8 +124,7 @@ def test_close_position_adjustment_uses_configured_buffer() -> None:
             update={
                 "open_spread_pct": 0.88,
                 "close_spread_pct": 0.94,
-                "net_funding_next_hourly_pct": -0.2,
-                "net_funding_next_daily_pct": -4.8,
+                "net_funding_next_pct": -1.6,
             }
         )
     )
@@ -142,8 +140,7 @@ def test_unfavorable_predicted_funding_raises_close_position() -> None:
     plan = planner.plan(
         opportunity().model_copy(
             update={
-                "net_funding_next_hourly_pct": -0.0025,
-                "net_funding_next_daily_pct": -0.06,
+                "net_funding_next_pct": -0.02,
                 "buy_funding_interval_hours": 8,
                 "sell_funding_interval_hours": 8,
             }
@@ -159,7 +156,7 @@ def test_unfavorable_predicted_funding_raises_close_position() -> None:
     )
 
 
-def test_funding_normalization_uses_each_side_settlement_interval() -> None:
+def test_same_next_cycle_rates_are_neutral_even_when_intervals_differ() -> None:
     planner = AstroPairPlanner(AstroPlannerConfig())
 
     plan = planner.plan(
@@ -178,10 +175,10 @@ def test_funding_normalization_uses_each_side_settlement_interval() -> None:
 
     assert plan.can_submit is True
     assert plan.pair is not None
-    assert plan.pair["closePosition"] == "0.000200"
+    assert plan.pair["closePosition"] == "0.000000"
     assert any(
         item.field == "closePosition"
-        and "buy interval=4h, sell interval=8h" in item.note
+        and "predicted funding is favorable or neutral" in item.note
         for item in plan.assumptions
     )
 
@@ -197,6 +194,8 @@ def test_current_funding_is_used_when_predicted_funding_is_unavailable() -> None
                 "funding_next_rate_buy_pct": None,
                 "funding_next_rate_sell_pct": None,
                 "net_funding_pct": None,
+                "mark_index_diff_buy_pct": None,
+                "mark_index_diff_sell_pct": None,
                 "net_funding_hourly_pct": None,
                 "net_funding_daily_pct": None,
                 "net_funding_next_pct": None,

@@ -7,7 +7,7 @@ from app.models.alert import AlertEvent, AlertRule
 from app.models.history import OpportunityHistoryRow
 from app.models.market import MarketType
 from app.models.opportunity import Opportunity, OpportunityType
-from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, RiskSettings
+from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, LivePilotSettings, RiskSettings
 
 PERCENT_SCALE = 10_000
 RISK_LABEL_BITS = {
@@ -222,6 +222,31 @@ class SettingsRepository:
             ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
             """,
             ("astro_card", settings.model_dump_json()),
+        )
+        await self.db.commit()
+        return settings
+
+    async def get_live_pilot_settings(self) -> LivePilotSettings:
+        cursor = await self.db.execute(
+            "SELECT payload FROM app_settings WHERE key = ?",
+            ("live_pilot",),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return LivePilotSettings()
+        return LivePilotSettings.model_validate(json.loads(row["payload"]))
+
+    async def set_live_pilot_settings(
+        self,
+        settings: LivePilotSettings,
+    ) -> LivePilotSettings:
+        await self.db.execute(
+            """
+            INSERT INTO app_settings (key, payload)
+            VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
+            """,
+            ("live_pilot", settings.model_dump_json()),
         )
         await self.db.commit()
         return settings

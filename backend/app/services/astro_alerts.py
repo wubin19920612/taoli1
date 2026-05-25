@@ -4,7 +4,7 @@ from typing import Protocol
 from app.core.config import Settings
 from app.models.astro import AstroAlertActionResult, AstroCardCreateRequest
 from app.models.opportunity import Opportunity
-from app.models.settings import AstroCardSettings
+from app.models.settings import AstroCardSettings, LivePilotSettings
 from app.services.astro_client import AstroClientError
 from app.services.astro_planner import AstroPairPlanner, AstroPlannerConfig
 
@@ -29,11 +29,19 @@ def _same_route(existing: dict, planned: dict) -> bool:
     )
 
 
-def _force_safe_pair(pair: dict) -> dict:
-    safe_pair = dict(pair)
-    safe_pair["status"] = False
-    safe_pair["disableOpen"] = True
-    return safe_pair
+def _with_card_enabled(pair: dict, enabled: bool) -> dict:
+    next_pair = dict(pair)
+    next_pair["status"] = enabled
+    next_pair["disableOpen"] = not enabled
+    return next_pair
+
+
+def _card_state_message(enabled: bool) -> str:
+    return "开启卡片" if enabled else "暂停卡片"
+
+
+def _disable_open_message(enabled: bool) -> str:
+    return "禁开=false" if enabled else "禁开=true"
 
 
 def _with_existing_id(pair: dict, existing: dict) -> dict | None:
@@ -66,6 +74,21 @@ def _settings_with_create_overrides(
     return settings.model_copy(update=updates)
 
 
+def _settings_with_live_pilot_overrides(
+    settings: AstroCardSettings,
+    live_pilot_settings: LivePilotSettings,
+) -> AstroCardSettings:
+    if not live_pilot_settings.enabled:
+        return settings
+    notional = live_pilot_settings.notional_per_symbol_usdt
+    return settings.model_copy(
+        update={
+            "max_trade_usdt": notional,
+            "max_notional": notional,
+        }
+    )
+
+
 class AstroAlertService:
     def __init__(
         self,
@@ -73,12 +96,14 @@ class AstroAlertService:
         settings: Settings,
         planner: AstroPairPlanner | None = None,
         card_settings: AstroCardSettings | None = None,
+        live_pilot_settings: LivePilotSettings | None = None,
         add_restart_delay_seconds: float = 3.0,
     ):
         self.client = client
         self.settings = settings
         self.planner = planner
         self.card_settings = card_settings or settings.astro_card_settings
+        self.live_pilot_settings = live_pilot_settings or LivePilotSettings()
         self.add_restart_delay_seconds = add_restart_delay_seconds
 
     async def handle_alert(self, opportunity: Opportunity) -> AstroAlertActionResult:
@@ -86,13 +111,7 @@ class AstroAlertService:
             opportunity,
             enabled=self.settings.astro_alert_auto_create,
             disabled_message="自动创建卡片未开启",
-        )
-
-    async def handle_manual_create(self, opportunity: Opportunity) -> AstroAlertActionResult:
-        return await self._handle(
-            opportunity,
-            enabled=self.settings.astro_manual_card_create,
-            disabled_message="手动创建卡片未开启",
+            live_pilot=self.live_pilot_settings.enabled,
         )
 
     async def handle_manual_create(
@@ -113,6 +132,7 @@ class AstroAlertService:
         enabled: bool,
         disabled_message: str,
         card_request: AstroCardCreateRequest | None = None,
+        live_pilot: bool = False,
     ) -> AstroAlertActionResult:
         if not enabled:
             return AstroAlertActionResult(
@@ -129,10 +149,14 @@ class AstroAlertService:
                 message="dry-run 模式开启，未写入 Astro",
             )
 
-        planner = self.planner or AstroPairPlanner(
-            AstroPlannerConfig.from_card_settings(
-                _settings_with_create_overrides(self.card_settings, card_request)
+        effective_card_settings = _settings_with_create_overrides(self.card_settings, card_request)
+        if live_pilot:
+            effective_card_settings = _settings_with_live_pilot_overrides(
+                effective_card_settings,
+                self.live_pilot_settings,
             )
+        planner = self.planner or AstroPairPlanner(
+            AstroPlannerConfig.from_card_settings(effective_card_settings)
         )
         plan = planner.plan(opportunity)
         if not plan.can_submit or plan.pair is None:
@@ -144,7 +168,8 @@ class AstroAlertService:
                 message=reason,
             )
 
-        pair = _force_safe_pair(plan.pair)
+        pair_enabled = live_pilot and self.live_pilot_settings.create_cards_enabled
+        pair = _with_card_enabled(plan.pair, pair_enabled)
         pair_name = str(pair.get("name", ""))
         pair_type = str(pair.get("type", ""))
         route = f"{pair.get('buyEx')}->{pair.get('sellEx')}"
@@ -180,7 +205,10 @@ class AstroAlertService:
                 enabled=True,
                 status="created",
                 action="add",
-                message=f"已创建暂停卡片 {pair_name} {pair_type} {route}，禁开=true",
+                message=(
+                    f"已创建{_card_state_message(pair_enabled)} "
+                    f"{pair_name} {pair_type} {route}，{_disable_open_message(pair_enabled)}"
+                ),
                 pair_name=pair_name,
                 pair_type=pair_type,
             )
@@ -215,7 +243,10 @@ class AstroAlertService:
                 enabled=True,
                 status="updated",
                 action="update",
-                message=f"已更新暂停卡片 {pair_name} {pair_type} {route}，禁开=true",
+                message=(
+                    f"已更新{_card_state_message(pair_enabled)} "
+                    f"{pair_name} {pair_type} {route}，{_disable_open_message(pair_enabled)}"
+                ),
                 pair_name=pair_name,
                 pair_type=pair_type,
             )

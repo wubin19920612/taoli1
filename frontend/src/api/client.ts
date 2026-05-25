@@ -8,6 +8,8 @@ import type {
   AstroPairPlan,
   AstroSdkStatus,
   HealthStatus,
+  LivePilotPreview,
+  LivePilotSettings,
   Opportunity,
   OpportunityFilters,
   RiskSettings,
@@ -118,6 +120,21 @@ export async function updateAstroCardSettings(settings: AstroCardSettings): Prom
   });
 }
 
+export async function getLivePilotSettings(): Promise<LivePilotSettings> {
+  return fetchJson<LivePilotSettings>("/settings/live-pilot");
+}
+
+export async function getLivePilotPreview(): Promise<LivePilotPreview> {
+  return fetchJson<LivePilotPreview>("/settings/live-pilot/preview");
+}
+
+export async function updateLivePilotSettings(settings: LivePilotSettings): Promise<LivePilotSettings> {
+  return fetchJson<LivePilotSettings>("/settings/live-pilot", {
+    method: "PUT",
+    body: JSON.stringify(settings)
+  });
+}
+
 export async function listAlertRules(): Promise<AlertRule[]> {
   return fetchJson<AlertRule[]>("/alerts/rules");
 }
@@ -142,6 +159,13 @@ export async function deleteAlertRule(id: string): Promise<void> {
 
 export async function listAlertEvents(limit = 100): Promise<AlertEvent[]> {
   return fetchJson<AlertEvent[]>(`/alerts/events?limit=${limit}`);
+}
+
+export async function createTestAlertEvent(): Promise<AlertEvent> {
+  return fetchJson<AlertEvent>("/alerts/test", {
+    method: "POST",
+    body: JSON.stringify({})
+  });
 }
 
 export async function getServiceControlStatus(): Promise<ServiceControlStatus> {

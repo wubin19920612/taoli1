@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from app.models.opportunity import Opportunity
+from app.services.funding_edge import funding_edge_pct
 
 
 @dataclass(frozen=True)
@@ -14,22 +15,6 @@ class AlertObservation:
     combined_open_edge_pct: float
     net_funding_pct: float | None
     net_funding_next_pct: float | None
-
-
-def funding_edge_pct(opportunity: Opportunity) -> float:
-    if opportunity.net_funding_next_daily_pct is not None:
-        return opportunity.net_funding_next_daily_pct
-    if opportunity.net_funding_daily_pct is not None:
-        return opportunity.net_funding_daily_pct
-    if opportunity.net_funding_next_hourly_pct is not None:
-        return opportunity.net_funding_next_hourly_pct * 24
-    if opportunity.net_funding_hourly_pct is not None:
-        return opportunity.net_funding_hourly_pct * 24
-    if opportunity.net_funding_next_pct is not None:
-        return opportunity.net_funding_next_pct
-    if opportunity.net_funding_pct is not None:
-        return opportunity.net_funding_pct
-    return 0.0
 
 
 def combined_open_edge_pct(opportunity: Opportunity) -> float:
