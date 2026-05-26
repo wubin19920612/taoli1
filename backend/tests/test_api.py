@@ -6,6 +6,7 @@ import pytest
 
 from app.core.config import Settings
 from app.main import create_app
+from app.models.funding_arbitrage import FundingArbitrageSettings
 from app.models.history import OpportunityHistoryRow
 from app.models.market import MarketSnapshot, MarketType
 from app.models.opportunity import Opportunity, OpportunityType
@@ -24,11 +25,13 @@ class FakeSettingsRepository:
         alert_template: AlertMessageTemplateSettings | None = None,
         astro_card_settings: AstroCardSettings | None = None,
         live_pilot_settings: LivePilotSettings | None = None,
+        funding_arbitrage_settings: FundingArbitrageSettings | None = None,
     ):
         self.settings = settings
         self.alert_template = alert_template or AlertMessageTemplateSettings()
         self.astro_card_settings = astro_card_settings
         self.live_pilot_settings = live_pilot_settings or LivePilotSettings()
+        self.funding_arbitrage_settings = funding_arbitrage_settings or FundingArbitrageSettings()
 
     async def get_risk_settings(self) -> RiskSettings:
         return self.settings
@@ -51,6 +54,16 @@ class FakeSettingsRepository:
 
     async def set_live_pilot_settings(self, settings: LivePilotSettings) -> LivePilotSettings:
         self.live_pilot_settings = settings
+        return settings
+
+    async def get_funding_arbitrage_settings(self) -> FundingArbitrageSettings:
+        return self.funding_arbitrage_settings
+
+    async def set_funding_arbitrage_settings(
+        self,
+        settings: FundingArbitrageSettings,
+    ) -> FundingArbitrageSettings:
+        self.funding_arbitrage_settings = settings
         return settings
 
 
@@ -255,6 +268,98 @@ def test_opportunities_endpoint_returns_seeded_rows() -> None:
 
     assert response.status_code == 200
     assert response.json()[0]["symbol"] == "BTCUSDT"
+
+
+def test_funding_arbitrage_preview_returns_independent_candidates() -> None:
+    now = datetime.now(UTC)
+    store = SnapshotStore()
+    store.set_markets(
+        [
+            MarketSnapshot(
+                symbol="BTCUSDT",
+                base="BTC",
+                exchange="binance",
+                market_type=MarketType.SPOT,
+                bid=99.9,
+                ask=100.0,
+                volume_24h_usdt=5_000_000,
+                bid_size=200,
+                ask_size=200,
+                timestamp=now,
+                raw_symbol="BTCUSDT",
+            ),
+            MarketSnapshot(
+                symbol="BTCUSDT",
+                base="BTC",
+                exchange="okx",
+                market_type=MarketType.FUTURE,
+                bid=100.25,
+                ask=100.35,
+                volume_24h_usdt=5_000_000,
+                bid_size=200,
+                ask_size=200,
+                funding_next_rate_pct=0.12,
+                funding_interval_hours=8,
+                funding_next_time=now + timedelta(minutes=30),
+                mark_price=100.3,
+                index_price=100.0,
+                timestamp=now,
+                raw_symbol="BTCUSDT",
+            ),
+        ]
+    )
+    app = create_app(snapshot_store=store)
+    app.state.settings_repo = FakeSettingsRepository(
+        RiskSettings(),
+        funding_arbitrage_settings=FundingArbitrageSettings(
+            min_entry_edge_pct=0.01,
+            min_funding_edge_pct=0.01,
+        ),
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/funding-arbitrage/preview")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["displayed_candidates"] == 1
+    assert payload["candidates"][0]["type"] == "SF"
+    assert payload["candidates"][0]["decision"] in {"ENTER", "HOLD", "BLOCKED"}
+    assert "combined_open_edge_pct" not in payload["candidates"][0]
+
+
+def test_funding_arbitrage_settings_round_trip() -> None:
+    app = create_app()
+    app.state.settings_repo = FakeSettingsRepository(RiskSettings())
+    client = TestClient(app)
+
+    response = client.put(
+        "/api/funding-arbitrage/settings",
+        json={
+            "enabled": True,
+            "max_candidates": 20,
+            "min_entry_edge_pct": 0.04,
+            "min_hold_edge_pct": 0.0,
+            "min_exit_edge_pct": 0.0,
+            "min_funding_edge_pct": 0.02,
+            "min_volume_24h_usdt": 1_000_000,
+            "max_mark_index_deviation_pct": 1,
+            "max_basis_width_pct": 3,
+            "slippage_buffer_pct": 0.05,
+            "basis_risk_weight": 1,
+            "confidence_penalty_pct": 0.02,
+            "min_minutes_to_settlement": 5,
+            "max_minutes_to_settlement": 90,
+            "adl_block_score": 80,
+            "leverage": 1,
+            "notional_per_symbol_usdt": 100,
+            "prefer_hyperliquid": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["enabled"] is True
+    assert response.json()["min_entry_edge_pct"] == 0.04
 
 
 def test_opportunities_endpoint_excludes_selected_types() -> None:

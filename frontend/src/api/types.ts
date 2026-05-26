@@ -322,6 +322,78 @@ export interface ServiceRestartResult {
   message: string | null;
 }
 
+export type FundingArbitrageDecision = "ENTER" | "HOLD" | "EXIT_SOON" | "EXIT_NOW" | "BLOCKED";
+export type FundingSource = "predicted" | "fallback_current" | "missing";
+export type AdlRiskLevel = "LOW" | "MEDIUM" | "HIGH" | "BLOCKED";
+
+export interface FundingArbitrageSettings {
+  enabled: boolean;
+  max_candidates: number;
+  min_entry_edge_pct: number;
+  min_hold_edge_pct: number;
+  min_exit_edge_pct: number;
+  min_funding_edge_pct: number;
+  min_volume_24h_usdt: number;
+  max_mark_index_deviation_pct: number;
+  max_basis_width_pct: number;
+  slippage_buffer_pct: number;
+  basis_risk_weight: number;
+  confidence_penalty_pct: number;
+  min_minutes_to_settlement: number;
+  max_minutes_to_settlement: number;
+  adl_block_score: number;
+  leverage: number;
+  notional_per_symbol_usdt: number;
+  prefer_hyperliquid: boolean;
+}
+
+export interface FundingArbitrageCandidate {
+  id: string;
+  symbol: string;
+  type: "SF" | "FF";
+  long_exchange: string;
+  long_market_type: MarketType;
+  short_exchange: string;
+  short_market_type: MarketType;
+  funding_source: FundingSource;
+  current_funding_edge_pct: number | null;
+  next_funding_edge_pct: number | null;
+  minutes_to_settlement: number | null;
+  entry_basis_pct: number;
+  exit_basis_pct: number;
+  basis_width_pct: number;
+  basis_risk_penalty_pct: number;
+  estimated_open_cost_pct: number;
+  estimated_close_cost_pct: number;
+  slippage_buffer_pct: number;
+  confidence_penalty_pct: number;
+  adl_risk_penalty_pct: number;
+  expected_cycle_pnl_pct: number;
+  adl_risk_score: number;
+  adl_risk_level: AdlRiskLevel;
+  decision: FundingArbitrageDecision;
+  decision_reasons: string[];
+  risk_labels: string[];
+  volume_24h_usdt: number | null;
+  depth_usdt: number | null;
+  uses_hyperliquid: boolean;
+}
+
+export interface FundingArbitragePreview {
+  settings: FundingArbitrageSettings;
+  total_pairs_evaluated: number;
+  displayed_candidates: number;
+  blocked_missing_funding: number;
+  blocked_liquidity: number;
+  blocked_adl_risk: number;
+  blocked_expected_pnl: number;
+  enter_count: number;
+  hold_count: number;
+  exit_count: number;
+  blocked_count: number;
+  candidates: FundingArbitrageCandidate[];
+}
+
 export interface OpportunityFilters {
   type?: OpportunityType;
   exclude_types?: OpportunityType[];

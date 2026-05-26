@@ -7,6 +7,7 @@ from app.models.alert import AlertEvent, AlertRule
 from app.models.history import OpportunityHistoryRow
 from app.models.market import MarketType
 from app.models.opportunity import Opportunity, OpportunityType
+from app.models.funding_arbitrage import FundingArbitrageSettings
 from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, LivePilotSettings, RiskSettings
 
 PERCENT_SCALE = 10_000
@@ -247,6 +248,31 @@ class SettingsRepository:
             ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
             """,
             ("live_pilot", settings.model_dump_json()),
+        )
+        await self.db.commit()
+        return settings
+
+    async def get_funding_arbitrage_settings(self) -> FundingArbitrageSettings:
+        cursor = await self.db.execute(
+            "SELECT payload FROM app_settings WHERE key = ?",
+            ("funding_arbitrage",),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return FundingArbitrageSettings()
+        return FundingArbitrageSettings.model_validate(json.loads(row["payload"]))
+
+    async def set_funding_arbitrage_settings(
+        self,
+        settings: FundingArbitrageSettings,
+    ) -> FundingArbitrageSettings:
+        await self.db.execute(
+            """
+            INSERT INTO app_settings (key, payload)
+            VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
+            """,
+            ("funding_arbitrage", settings.model_dump_json()),
         )
         await self.db.commit()
         return settings

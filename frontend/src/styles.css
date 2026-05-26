@@ -287,6 +287,26 @@ body {
   margin: 0;
 }
 
+.funding-metrics {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.funding-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(120px, 1fr));
+  gap: 0 12px;
+}
+
+.funding-page .panel {
+  overflow: hidden;
+}
+
+.funding-table .ant-table-cell {
+  vertical-align: top;
+}
+
 .live-pilot-preview {
   display: grid;
   gap: 8px;
@@ -543,6 +563,8 @@ body {
 @media (max-width: 900px) {
   .settings-grid,
   .form-grid,
+  .funding-metrics,
+  .funding-settings-grid,
   .live-pilot-metrics,
   .template-grid,
   .template-options {

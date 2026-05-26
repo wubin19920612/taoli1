@@ -7,6 +7,8 @@ import type {
   AstroCardSettings,
   AstroPairPlan,
   AstroSdkStatus,
+  FundingArbitragePreview,
+  FundingArbitrageSettings,
   HealthStatus,
   OpportunityHistoryStats,
   OpportunityHistoryStatsQuery,
@@ -135,6 +137,23 @@ export async function updateLivePilotSettings(settings: LivePilotSettings): Prom
     method: "PUT",
     body: JSON.stringify(settings)
   });
+}
+
+export async function getFundingArbitrageSettings(): Promise<FundingArbitrageSettings> {
+  return fetchJson<FundingArbitrageSettings>("/funding-arbitrage/settings");
+}
+
+export async function updateFundingArbitrageSettings(
+  settings: FundingArbitrageSettings
+): Promise<FundingArbitrageSettings> {
+  return fetchJson<FundingArbitrageSettings>("/funding-arbitrage/settings", {
+    method: "PUT",
+    body: JSON.stringify(settings)
+  });
+}
+
+export async function getFundingArbitragePreview(): Promise<FundingArbitragePreview> {
+  return fetchJson<FundingArbitragePreview>("/funding-arbitrage/preview");
 }
 
 export async function listAlertRules(): Promise<AlertRule[]> {

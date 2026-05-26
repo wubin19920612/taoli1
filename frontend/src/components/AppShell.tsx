@@ -2,6 +2,7 @@ import {
   AlertOutlined,
   BellOutlined,
   DashboardOutlined,
+  FundProjectionScreenOutlined,
   SettingOutlined
 } from "@ant-design/icons";
 import { Layout, Menu, Space, Typography } from "antd";
@@ -9,9 +10,10 @@ import { useState } from "react";
 
 import { AlertHistoryPage } from "../pages/AlertHistoryPage";
 import { DashboardPage } from "../pages/DashboardPage";
+import { FundingArbitragePage } from "../pages/FundingArbitragePage";
 import { SettingsPage } from "../pages/SettingsPage";
 
-type PageKey = "dashboard" | "settings" | "history";
+type PageKey = "dashboard" | "funding" | "settings" | "history";
 
 export function AppShell() {
   const [page, setPage] = useState<PageKey>("dashboard");
@@ -21,7 +23,7 @@ export function AppShell() {
         <div className="brand">
           <Space>
             <AlertOutlined />
-            <Typography.Text strong>套利雷达</Typography.Text>
+            <Typography.Text strong>{"\u5957\u5229\u96f7\u8fbe"}</Typography.Text>
           </Space>
         </div>
         <Menu
@@ -30,9 +32,14 @@ export function AppShell() {
           selectedKeys={[page]}
           onClick={(item) => setPage(item.key as PageKey)}
           items={[
-            { key: "dashboard", icon: <DashboardOutlined />, label: "实时机会" },
-            { key: "settings", icon: <SettingOutlined />, label: "参数与告警" },
-            { key: "history", icon: <BellOutlined />, label: "告警历史" }
+            { key: "dashboard", icon: <DashboardOutlined />, label: "\u5b9e\u65f6\u673a\u4f1a" },
+            {
+              key: "funding",
+              icon: <FundProjectionScreenOutlined />,
+              label: "\u8d44\u91d1\u8d39\u7387\u5957\u5229"
+            },
+            { key: "settings", icon: <SettingOutlined />, label: "\u53c2\u6570\u4e0e\u544a\u8b66" },
+            { key: "history", icon: <BellOutlined />, label: "\u544a\u8b66\u5386\u53f2" }
           ]}
         />
       </Layout.Sider>
@@ -42,6 +49,7 @@ export function AppShell() {
         </Layout.Header>
         <Layout.Content className="app-content">
           {page === "dashboard" ? <DashboardPage /> : null}
+          {page === "funding" ? <FundingArbitragePage /> : null}
           {page === "settings" ? <SettingsPage /> : null}
           {page === "history" ? <AlertHistoryPage /> : null}
         </Layout.Content>

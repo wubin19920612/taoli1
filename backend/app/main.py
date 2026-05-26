@@ -12,6 +12,7 @@ from app.api import (
     routes_astro,
     routes_admin,
     routes_alerts,
+    routes_funding_arbitrage,
     routes_health,
     routes_history,
     routes_opportunities,
@@ -401,6 +402,7 @@ def create_app(
     app.include_router(routes_opportunities.router, prefix="/api")
     app.include_router(routes_history.router, prefix="/api")
     app.include_router(routes_alerts.router, prefix="/api")
+    app.include_router(routes_funding_arbitrage.router, prefix="/api")
     app.include_router(routes_settings.router, prefix="/api")
     app.include_router(routes_admin.router, prefix="/api")
     app.include_router(stream.router, prefix="/api")
