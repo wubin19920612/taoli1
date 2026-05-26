@@ -174,6 +174,11 @@ class FailingAstroAlertService:
         raise RuntimeError("unexpected astro failure")
 
 
+class BlankExceptionAstroAlertService:
+    async def handle_alert(self, opportunity: Opportunity) -> AstroAlertActionResult:
+        raise TimeoutError()
+
+
 @pytest.mark.asyncio
 async def test_live_pilot_alert_loop_filters_candidates_by_alert_rules_before_selection() -> None:
     stop_event = asyncio.Event()
@@ -519,3 +524,38 @@ async def test_alert_loop_keeps_alert_when_astro_service_raises() -> None:
     assert "Astro: 处理失败，unexpected astro failure" in event_repo.events[0].message
     assert feishu.sent_texts[0] is not None
     assert "Astro: 处理失败，unexpected astro failure" in feishu.sent_texts[0]
+
+
+@pytest.mark.asyncio
+async def test_alert_loop_includes_exception_type_when_astro_error_text_is_blank() -> None:
+    stop_event = asyncio.Event()
+    app = FastAPI()
+    rule = AlertRule(
+        id="rule-1",
+        name="FF spread",
+        types=["FF"],
+        min_open_spread_pct=0.5,
+        min_fee_adjusted_open_pct=0.25,
+        min_volume_24h_usdt=1_000_000,
+        consecutive_hits=1,
+    )
+    opp = opportunity()
+    store = SnapshotStore()
+    store.set_opportunities([opp])
+    event_repo = FakeEventRepo(stop_event)
+    feishu = FakeFeishuNotifier()
+
+    app.state.alert_rule_repo = FakeRuleRepo([rule])
+    app.state.alert_event_repo = event_repo
+    app.state.settings_repo = FakeSettingsRepo()
+    app.state.snapshot_store = store
+    app.state.alert_engine = FakeAlertEngine(AlertMatch(rule, opp, []))
+    app.state.feishu_notifier = feishu
+    app.state.astro_alert_service = BlankExceptionAstroAlertService()
+
+    await asyncio.wait_for(_run_alert_loop(app, 60, stop_event), timeout=2)
+
+    assert event_repo.events[0].status == "sent"
+    assert "Astro: 处理失败，TimeoutError" in event_repo.events[0].message
+    assert feishu.sent_texts[0] is not None
+    assert "Astro: 处理失败，TimeoutError" in feishu.sent_texts[0]

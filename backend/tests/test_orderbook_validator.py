@@ -53,6 +53,18 @@ class FakeAdapter:
         return self.book
 
 
+class FailingAdapter(FakeAdapter):
+    async def fetch_order_book(
+        self,
+        symbol: str,
+        market_type: MarketType,
+        raw_symbol: str,
+        limit: int = 20,
+    ) -> OrderBookSnapshot | None:
+        self.calls.append((symbol, market_type, raw_symbol, limit))
+        raise TimeoutError()
+
+
 def book(exchange: str, bids: list[tuple[float, float]], asks: list[tuple[float, float]]) -> OrderBookSnapshot:
     return OrderBookSnapshot(
         exchange=exchange,
@@ -150,3 +162,28 @@ async def test_validator_blocks_when_multi_level_vwap_erases_edge() -> None:
     assert result.sell_vwap is not None
     assert result.executable_open_pct < 0.5
     assert "effective executable edge" in " ".join(result.blockers)
+
+
+@pytest.mark.asyncio
+async def test_validator_reports_order_book_request_failures_as_blockers() -> None:
+    sell_book = book("okx", bids=[(101, 20)], asks=[(102, 20)])
+    validator = OrderBookDepthValidator(
+        [FailingAdapter("binance", None), FakeAdapter("okx", sell_book)]
+    )
+
+    try:
+        result = await validator.validate(
+            opportunity(),
+            risk_settings=RiskSettings(ticker_collision_symbols=[]),
+            card_settings=AstroCardSettings(max_trade_usdt=1000, max_notional=1000),
+        )
+    except TimeoutError:
+        pytest.fail("order book request failures should become validation blockers")
+
+    assert result.passed is False
+    assert result.target_notional_usdt == 1000
+    assert result.buy_filled_usdt == 0
+    assert result.sell_filled_usdt == 0
+    assert result.blockers == [
+        "buy side order book request failed for binance future: TimeoutError"
+    ]

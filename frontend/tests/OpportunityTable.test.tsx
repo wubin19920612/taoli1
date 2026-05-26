@@ -62,6 +62,28 @@ describe("OpportunityTable", () => {
     expect(screen.getByText("0.010%")).toBeTruthy();
   });
 
+  it("renders signal validation risk labels in Chinese", () => {
+    render(
+      <OpportunityTable
+        opportunities={[
+          {
+            ...row,
+            risk_labels: [
+              "THIN_ORDER_BOOK",
+              "EDGE_AFTER_SLIPPAGE_TOO_SMALL",
+              "TRANSIENT_SIGNAL"
+            ]
+          }
+        ]}
+        loading={false}
+      />
+    );
+
+    expect(screen.getByText("盘口深度薄 (THIN_ORDER_BOOK)")).toBeTruthy();
+    expect(screen.getByText("有效收益偏小 (EDGE_AFTER_SLIPPAGE_TOO_SMALL)")).toBeTruthy();
+    expect(screen.getByText("信号不稳定 (TRANSIENT_SIGNAL)")).toBeTruthy();
+  });
+
   it("does not use mark-index premium as the next-cycle funding edge", () => {
     const missingNextFunding: Opportunity = {
       ...row,

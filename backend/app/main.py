@@ -151,6 +151,11 @@ def _format_order_book_validation_failure(result: DepthValidationResult) -> str:
     return f"{details} ({', '.join(metrics)})"
 
 
+def _exception_message(exc: BaseException) -> str:
+    text = str(exc).strip()
+    return text if text else exc.__class__.__name__
+
+
 async def _order_book_validation_failure(
     app: FastAPI,
     opportunity,
@@ -255,7 +260,7 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                                 message = f"{message}\n\n{astro_result.format_message()}"
                     except Exception as exc:  # noqa: BLE001 - keep alert delivery independent.
                         logger.exception("astro alert follow-up failed")
-                        message = f"{message}\n\nAstro: 处理失败，{exc}"
+                        message = f"{message}\n\nAstro: 处理失败，{_exception_message(exc)}"
                 try:
                     await app.state.feishu_notifier.send_alert(
                         match.rule,

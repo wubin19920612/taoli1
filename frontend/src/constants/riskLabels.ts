@@ -41,18 +41,18 @@ export const riskLabelOptions = [
   },
   {
     value: "THIN_ORDER_BOOK",
-    label: "Thin order book",
-    description: "Top-of-book depth is below the configured validation notional and safety multiple."
+    label: "盘口深度薄",
+    description: "买入侧 ask 和卖出侧 bid 的顶层盘口深度低于配置的验证金额和安全倍数"
   },
   {
     value: "EDGE_AFTER_SLIPPAGE_TOO_SMALL",
-    label: "Small effective edge",
-    description: "Combined open edge is too small after the additional signal slippage buffer."
+    label: "有效收益偏小",
+    description: "扣除手续费、资金费率和额外信号滑点缓冲后，综合开仓收益低于最低有效开仓收益阈值"
   },
   {
     value: "TRANSIENT_SIGNAL",
-    label: "Transient signal",
-    description: "Recent observations show the open spread decaying too quickly."
+    label: "信号不稳定",
+    description: "近期观测显示开仓价差衰减过快，信号稳定性不足"
   }
 ];
 

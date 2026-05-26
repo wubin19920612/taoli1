@@ -15,14 +15,17 @@ const severityColors: Record<string, string> = {
   SAME_TICKER_RISK: "purple",
   FUNDING_AGAINST: "magenta",
   MARK_INDEX_DEVIATION: "red",
-  MISSING_FUNDING: "cyan"
+  MISSING_FUNDING: "cyan",
+  THIN_ORDER_BOOK: "orange",
+  EDGE_AFTER_SLIPPAGE_TOO_SMALL: "gold",
+  TRANSIENT_SIGNAL: "volcano"
 };
 
 export function RiskTags({ labels }: RiskTagsProps) {
   if (labels.length === 0) {
     return (
       <Tag icon={<CheckCircleOutlined />} color="green">
-        CLEAN
+        无风险
       </Tag>
     );
   }

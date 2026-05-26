@@ -66,6 +66,11 @@ def _target_notional(
     return max(candidates)
 
 
+def _exception_message(exc: BaseException) -> str:
+    text = str(exc).strip()
+    return text if text else exc.__class__.__name__
+
+
 class OrderBookDepthValidator:
     def __init__(self, adapters: list[OrderBookAdapter], limit: int = 20) -> None:
         self.adapters = {adapter.name.lower(): adapter for adapter in adapters}
@@ -90,18 +95,35 @@ class OrderBookDepthValidator:
         if blockers:
             return self._result(opportunity, target, blockers=blockers, warnings=warnings)
 
-        buy_book = await buy_adapter.fetch_order_book(
-            opportunity.symbol,
-            opportunity.buy_market_type,
-            opportunity.symbol,
-            self.limit,
-        )
-        sell_book = await sell_adapter.fetch_order_book(
-            opportunity.symbol,
-            opportunity.sell_market_type,
-            opportunity.symbol,
-            self.limit,
-        )
+        buy_book = None
+        sell_book = None
+        try:
+            buy_book = await buy_adapter.fetch_order_book(
+                opportunity.symbol,
+                opportunity.buy_market_type,
+                opportunity.symbol,
+                self.limit,
+            )
+        except Exception as exc:  # noqa: BLE001 - report validation blocker instead of aborting alert.
+            blockers.append(
+                f"buy side order book request failed for "
+                f"{opportunity.buy_exchange} {opportunity.buy_market_type}: {_exception_message(exc)}"
+            )
+        try:
+            sell_book = await sell_adapter.fetch_order_book(
+                opportunity.symbol,
+                opportunity.sell_market_type,
+                opportunity.symbol,
+                self.limit,
+            )
+        except Exception as exc:  # noqa: BLE001 - report validation blocker instead of aborting alert.
+            blockers.append(
+                f"sell side order book request failed for "
+                f"{opportunity.sell_exchange} {opportunity.sell_market_type}: {_exception_message(exc)}"
+            )
+        if blockers:
+            return self._result(opportunity, target, blockers=blockers, warnings=warnings)
+
         if buy_book is None:
             blockers.append(f"order book unavailable for {opportunity.buy_exchange} {opportunity.buy_market_type}")
         if sell_book is None:
