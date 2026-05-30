@@ -331,13 +331,21 @@ body {
 
 .announcements-settings-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(140px, 1fr));
+  grid-template-columns: repeat(7, minmax(128px, 1fr));
   gap: 0 12px;
   align-items: end;
 }
 
 .announcements-table .ant-table-cell {
   vertical-align: top;
+}
+
+.announcement-title-cell {
+  width: 100%;
+}
+
+.announcement-title-cell .ant-typography {
+  font-size: 12px;
 }
 
 .funding-table .ant-table-cell {

@@ -22,9 +22,15 @@ class ExchangeAnnouncement(BaseModel):
     url: str
     source: str
     category: str | None = None
+    symbols: list[str] = Field(default_factory=list)
+    market_type: str | None = None
+    event_time: datetime | None = None
+    summary: str | None = None
     published_at: datetime
     fetched_at: datetime
     alert_status: str = "pending"
+    event_reminder_status: str = "not_applicable"
+    event_reminder_sent_at: datetime | None = None
 
     @field_validator("exchange", "source")
     @classmethod
@@ -47,6 +53,27 @@ class ExchangeAnnouncement(BaseModel):
         text = value.strip()
         return text or None
 
+    @field_validator("market_type", "summary")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        text = value.strip()
+        return text or None
+
+    @field_validator("symbols")
+    @classmethod
+    def normalize_symbols(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            symbol = item.strip().upper()
+            if not symbol or symbol in seen:
+                continue
+            normalized.append(symbol)
+            seen.add(symbol)
+        return normalized
+
 
 class AnnouncementSettings(BaseModel):
     enabled: bool = True
@@ -56,6 +83,8 @@ class AnnouncementSettings(BaseModel):
     )
     alert_exchanges: list[str] = Field(default_factory=list)
     bootstrap_alerts_enabled: bool = False
+    event_reminders_enabled: bool = True
+    event_reminder_minutes_before: int = Field(default=30, ge=1, le=10_080)
 
     @field_validator("record_exchanges", "alert_exchanges")
     @classmethod

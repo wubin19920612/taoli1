@@ -15,7 +15,11 @@ from app.services.announcements import (
     HyperliquidAnnouncementProvider,
     OKXAnnouncementProvider,
     build_announcement_alert_message,
+    build_announcement_event_reminder_message,
     classify_announcement,
+    extract_event_time,
+    infer_market_type,
+    infer_symbols,
 )
 
 
@@ -40,8 +44,13 @@ def announcement(
         url=url,
         source=source,
         category=category,
+        symbols=["TEST"],
+        market_type="spot",
+        event_time=BASE_TIME.replace(hour=9),
+        summary="listing: symbols=TEST; market=spot; event_time=2026-05-30T09:00:00+00:00",
         published_at=BASE_TIME,
         fetched_at=BASE_TIME,
+        event_reminder_status="pending",
     )
 
 
@@ -52,6 +61,20 @@ def test_classify_announcement_uses_category_and_title_fallbacks() -> None:
     assert classify_announcement("Initial Listing: Gate to List QAIT (QAIT) for Spot", "newspotlistings") == AnnouncementKind.LISTING
     assert classify_announcement("Binance Futures Will Launch QNTXUSDT USDⓈ-Margined Perpetual Contract") == AnnouncementKind.LISTING
     assert classify_announcement("Proof of reserves updated") == AnnouncementKind.OTHER
+
+
+def test_announcement_metadata_parsers_extract_symbols_market_and_time() -> None:
+    title = "Binance Futures Will Launch QNTXUSDT USDⓈ-Margined Perpetual Contract on 2026-05-30 12:00 (UTC)"
+
+    assert infer_symbols(title) == ["QNTXUSDT"]
+    assert infer_market_type(title) == "futures"
+    assert infer_symbols("Binance Alpha Will Remove DIGI, K, SKI") == ["DIGI", "K", "SKI"]
+    assert infer_symbols("Pre-IPO Trading for QNTXUSDT Perpetual Futures (USDT-M)") == ["QNTXUSDT"]
+    assert infer_symbols("Pre-Market Trading for QNTXUSDT Perpetual Futures (QNTX)") == ["QNTXUSDT"]
+    assert infer_market_type("Bitget Spot Cross Margin adds GENIUS/USDT") == "spot margin"
+    assert extract_event_time(title) == datetime(2026, 5, 30, 12, 0, tzinfo=UTC)
+    assert extract_event_time("Trading starts on May 30, 2026 at 12:05 UTC") == datetime(2026, 5, 30, 12, 5, tzinfo=UTC)
+    assert extract_event_time("The subscription period is from 2026-05-11 00:00 UTC to 2026-05-14 00:00 UTC.") is None
 
 
 def test_announcement_alert_message_is_readable() -> None:
@@ -68,10 +91,34 @@ def test_announcement_alert_message_is_readable() -> None:
     assert message == "\n".join(
         [
             "[BYBIT] 下币公告",
-            "时间: 2026-05-30 16:00:00 UTC+8",
+            "公告时间: 2026-05-30 16:00:00 UTC+8",
+            "币种: TEST",
+            "市场: spot",
+            "事件时间: 2026-05-30 17:00:00 UTC+8",
             "标题: Delisting of DOGUSDT Perpetual Contract",
             "分类: delistings",
             "链接: https://announcements.bybit.com/en-US/article/test/",
+        ]
+    )
+
+
+def test_announcement_event_reminder_message_is_readable() -> None:
+    message = build_announcement_event_reminder_message(
+        announcement(),
+        minutes_before=60,
+        now=BASE_TIME,
+    )
+
+    assert message == "\n".join(
+        [
+            "[OKX] 上币快到时间提醒",
+            "提醒窗口: 提前 60 分钟",
+            "事件时间: 2026-05-30 17:00:00 UTC+8",
+            "剩余: 约 60 分钟",
+            "币种: TEST",
+            "市场: spot",
+            "标题: OKX to list TEST for spot trading",
+            "链接: https://www.okx.com/help/test",
         ]
     )
 
@@ -91,6 +138,9 @@ async def test_repository_deduplicates_and_filters_announcements() -> None:
         assert duplicate is None
         rows = await repo.list(exchange="OKX", kind=AnnouncementKind.LISTING, limit=10)
         assert rows == [first]
+        assert rows[0].symbols == ["TEST"]
+        assert rows[0].market_type == "spot"
+        assert rows[0].event_time == BASE_TIME.replace(hour=9)
 
         await repo.update_alert_status(first.id, "sent")
         rows = await repo.list(limit=10)
@@ -116,6 +166,8 @@ async def test_settings_repository_round_trips_announcement_settings() -> None:
             record_exchanges=["OKX", "okx", "bybit"],
             alert_exchanges=["BYBIT"],
             bootstrap_alerts_enabled=True,
+            event_reminders_enabled=False,
+            event_reminder_minutes_before=45,
         )
         saved = await repo.set_announcement_settings(settings)
         loaded = await repo.get_announcement_settings()
@@ -124,6 +176,8 @@ async def test_settings_repository_round_trips_announcement_settings() -> None:
         assert loaded.record_exchanges == ["okx", "bybit"]
         assert loaded.alert_exchanges == ["bybit"]
         assert loaded.bootstrap_alerts_enabled is True
+        assert loaded.event_reminders_enabled is False
+        assert loaded.event_reminder_minutes_before == 45
     finally:
         await db.close()
 
@@ -167,6 +221,37 @@ async def test_monitor_alerts_new_configured_exchange_announcements() -> None:
         assert "[OKX] 上币公告" in alerts[0]
         rows = await repo.list(limit=10)
         assert rows[0].alert_status == "sent"
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_monitor_sends_due_event_reminders_once() -> None:
+    db = await connect_database(":memory:")
+    alerts: list[str] = []
+    try:
+        await initialize_schema(db)
+        repo = AnnouncementRepository(db)
+        monitor = AnnouncementMonitor(repo, alert_sender=alerts.append, now_fn=lambda: BASE_TIME)
+        settings = AnnouncementSettings(
+            record_exchanges=["okx"],
+            alert_exchanges=["okx"],
+            event_reminders_enabled=True,
+            event_reminder_minutes_before=60,
+            bootstrap_alerts_enabled=True,
+        )
+        row = announcement()
+        await monitor.process([row], settings, bootstrap=False)
+
+        reminded = await monitor.process_due_event_reminders(settings)
+        second = await monitor.process_due_event_reminders(settings)
+
+        assert len(reminded) == 1
+        assert second == []
+        assert any("快到时间提醒" in item for item in alerts)
+        rows = await repo.list(limit=10)
+        assert rows[0].event_reminder_status == "sent"
+        assert rows[0].event_reminder_sent_at == BASE_TIME
     finally:
         await db.close()
 
@@ -277,6 +362,8 @@ def test_binance_provider_parses_listing_and_delisting_catalogs() -> None:
 
     assert [row.exchange for row in rows] == ["binance", "binance"]
     assert [row.kind for row in rows] == [AnnouncementKind.LISTING, AnnouncementKind.DELISTING]
+    assert rows[0].symbols == ["QNTXUSDT"]
+    assert rows[0].market_type == "futures"
     assert rows[0].url == "https://www.binance.com/en/support/announcement/3bdaff694bde45ccb443709336c8686d"
     assert rows[0].published_at.isoformat() == "2026-05-29T07:00:06.968000+00:00"
 
@@ -353,7 +440,7 @@ def test_gate_provider_parses_next_data_listing_and_delisting_pages() -> None:
     listing_html = """
     <script id="__NEXT_DATA__" type="application/json" crossorigin="anonymous">
     {"props":{"pageProps":{"listData":{"list":[
-      {"id":51434,"title":"Initial Listing: Gate to List QAIT (QAIT) for Spot and Convert Trading","url":"/announcements/article/51434","release_timestamp":"1779980455"},
+      {"id":51434,"title":"Initial Listing: Gate to List QAIT (QAIT) for Spot and Convert Trading","brief":"QAIT Spot Trading Start Time: May 28, 2026, 15:20 (UTC)","tags":"QAIT","url":"/announcements/article/51434","release_timestamp":"1779980455"},
       {"id":51430,"title":"Gate Launchpool Project #363","url":"/announcements/article/51430","release_timestamp":"1779980000"}
     ]}}}}
     </script>
@@ -373,8 +460,11 @@ def test_gate_provider_parses_next_data_listing_and_delisting_pages() -> None:
 
     assert [row.exchange for row in rows] == ["gate", "gate"]
     assert [row.kind for row in rows] == [AnnouncementKind.LISTING, AnnouncementKind.DELISTING]
+    assert rows[0].symbols == ["QAIT"]
+    assert rows[0].market_type == "spot/convert"
     assert rows[0].url == "https://www.gate.com/announcements/article/51434"
     assert rows[0].published_at.isoformat() == "2026-05-28T15:00:55+00:00"
+    assert rows[0].event_time.isoformat() == "2026-05-28T15:20:00+00:00"
 
 
 @pytest.mark.asyncio

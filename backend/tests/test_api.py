@@ -2272,6 +2272,8 @@ def test_announcement_settings_endpoint_round_trip() -> None:
             "record_exchanges": ["OKX", "bybit", "okx"],
             "alert_exchanges": ["BYBIT"],
             "bootstrap_alerts_enabled": True,
+            "event_reminders_enabled": True,
+            "event_reminder_minutes_before": 45,
         },
     )
 
@@ -2281,6 +2283,8 @@ def test_announcement_settings_endpoint_round_trip() -> None:
     listed = client.get("/api/settings/announcements")
     assert listed.status_code == 200
     assert listed.json()["bootstrap_alerts_enabled"] is True
+    assert listed.json()["event_reminders_enabled"] is True
+    assert listed.json()["event_reminder_minutes_before"] == 45
 
 
 def test_announcements_endpoint_returns_filtered_records() -> None:
@@ -2294,9 +2298,14 @@ def test_announcements_endpoint_returns_filtered_records() -> None:
         url="https://www.okx.com/help/okx-to-list-test",
         source="okx-support-announcements",
         category="announcements-new-listings",
+        symbols=["TEST"],
+        market_type="spot",
+        event_time=datetime(2026, 5, 30, 9, 0, tzinfo=UTC),
+        summary="listing: symbols=TEST; market=spot; event_time=2026-05-30T09:00:00+00:00",
         published_at=datetime(2026, 5, 30, 8, 0, tzinfo=UTC),
         fetched_at=datetime(2026, 5, 30, 8, 1, tzinfo=UTC),
         alert_status="sent",
+        event_reminder_status="pending",
     )
     repo = FakeAnnouncementRepository([row])
     app.state.announcement_repo = repo
@@ -2306,6 +2315,9 @@ def test_announcements_endpoint_returns_filtered_records() -> None:
 
     assert response.status_code == 200
     assert response.json()[0]["title"] == "OKX to list TEST for spot trading"
+    assert response.json()[0]["symbols"] == ["TEST"]
+    assert response.json()[0]["market_type"] == "spot"
+    assert response.json()[0]["event_reminder_status"] == "pending"
     assert repo.calls[0] == {
         "exchange": "okx",
         "kind": "listing",

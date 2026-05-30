@@ -43,6 +43,24 @@ async def _ensure_opportunity_history_columns(db: aiosqlite.Connection) -> None:
         await db.execute(f"ALTER TABLE opportunity_history ADD COLUMN {name} {ddl}")
 
 
+async def _ensure_exchange_announcement_columns(db: aiosqlite.Connection) -> None:
+    cursor = await db.execute("PRAGMA table_info(exchange_announcements)")
+    rows = await cursor.fetchall()
+    existing = {row["name"] for row in rows}
+    columns: dict[str, str] = {
+        "symbols_json": "TEXT NOT NULL DEFAULT '[]'",
+        "market_type": "TEXT",
+        "event_time": "TEXT",
+        "summary": "TEXT",
+        "event_reminder_status": "TEXT NOT NULL DEFAULT 'not_applicable'",
+        "event_reminder_sent_at": "TEXT",
+    }
+    for name, ddl in columns.items():
+        if name in existing:
+            continue
+        await db.execute(f"ALTER TABLE exchange_announcements ADD COLUMN {name} {ddl}")
+
+
 async def initialize_schema(db: aiosqlite.Connection) -> None:
     await db.executescript(
         """
@@ -190,9 +208,15 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
           url TEXT NOT NULL,
           source TEXT NOT NULL,
           category TEXT,
+          symbols_json TEXT NOT NULL DEFAULT '[]',
+          market_type TEXT,
+          event_time TEXT,
+          summary TEXT,
           published_at TEXT NOT NULL,
           fetched_at TEXT NOT NULL,
           alert_status TEXT NOT NULL,
+          event_reminder_status TEXT NOT NULL DEFAULT 'not_applicable',
+          event_reminder_sent_at TEXT,
           UNIQUE(exchange, source, announcement_id)
         );
 
@@ -211,5 +235,6 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
         """
     )
     await _ensure_opportunity_history_columns(db)
+    await _ensure_exchange_announcement_columns(db)
     await _migrate_alert_rule_excluded_labels(db)
     await db.commit()

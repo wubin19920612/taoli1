@@ -25,7 +25,9 @@ const defaultAnnouncementSettings: AnnouncementSettings = {
   poll_interval_seconds: 300,
   record_exchanges: ["binance", "okx", "bybit", "gate", "bitget", "hyperliquid"],
   alert_exchanges: [],
-  bootstrap_alerts_enabled: false
+  bootstrap_alerts_enabled: false,
+  event_reminders_enabled: true,
+  event_reminder_minutes_before: 30
 };
 
 const fallbackExchangeOptions: AnnouncementExchangeOption[] = [
@@ -89,22 +91,82 @@ function alertStatusTag(status: string) {
   return <Tag color={color}>{status}</Tag>;
 }
 
+function reminderStatusTag(status: string) {
+  const labels: Record<string, string> = {
+    pending: "待提醒",
+    sent: "已提醒",
+    failed: "失败",
+    skipped: "跳过",
+    not_applicable: "无事件时间"
+  };
+  const color = status === "sent" ? "green" : status === "failed" ? "red" : status === "pending" ? "orange" : "default";
+  return <Tag color={color}>{labels[status] ?? status}</Tag>;
+}
+
+function marketTypeTag(value?: string | null) {
+  return value ? <Tag color="geekblue">{value}</Tag> : "-";
+}
+
+function symbolTags(values?: string[]) {
+  if (!values || values.length === 0) {
+    return "-";
+  }
+  return (
+    <Space size={[0, 4]} wrap>
+      {values.slice(0, 8).map((symbol) => (
+        <Tag key={symbol} color="purple">
+          {symbol}
+        </Tag>
+      ))}
+      {values.length > 8 ? <Tag>+{values.length - 8}</Tag> : null}
+    </Space>
+  );
+}
+
+function rowSummary(row: ExchangeAnnouncement): string {
+  const pieces: string[] = [];
+  if (row.symbols.length > 0) {
+    pieces.push(`币种 ${row.symbols.slice(0, 8).join(", ")}`);
+  }
+  if (row.market_type) {
+    pieces.push(`市场 ${row.market_type}`);
+  }
+  if (row.event_time) {
+    pieces.push(`事件时间 ${formatUtcPlus8(row.event_time)} UTC+8`);
+  }
+  if (pieces.length === 0) {
+    return row.title;
+  }
+  const action = row.kind === "listing" ? "上币" : row.kind === "delisting" ? "下币" : "公告";
+  return `${action}: ${pieces.join("；")}`;
+}
+
 const columns: ColumnsType<ExchangeAnnouncement> = [
-  { title: "时间(UTC+8)", dataIndex: "published_at", width: 136, render: formatUtcPlus8 },
+  { title: "公告时间(UTC+8)", dataIndex: "published_at", width: 142, render: formatUtcPlus8 },
   { title: "交易所", dataIndex: "exchange", width: 96, render: (value: string) => value.toUpperCase() },
   { title: "类型", dataIndex: "kind", width: 86, render: kindTag },
+  { title: "币种", dataIndex: "symbols", width: 180, render: symbolTags },
+  { title: "市场", dataIndex: "market_type", width: 120, render: marketTypeTag },
+  { title: "事件时间(UTC+8)", dataIndex: "event_time", width: 142, render: (value?: string | null) => (value ? formatUtcPlus8(value) : "-") },
   {
-    title: "标题",
+    title: "公告摘要",
     dataIndex: "title",
     ellipsis: true,
-    render: (value: string, row) => (
-      <a href={row.url} target="_blank" rel="noreferrer">
-        {value}
-      </a>
-    )
+    render: (value: string, row) => {
+      const display = rowSummary(row);
+      return (
+        <Space direction="vertical" size={2} className="announcement-title-cell">
+          <a href={row.url} target="_blank" rel="noreferrer">
+            {display}
+          </a>
+          {display !== value ? <Typography.Text type="secondary">{value}</Typography.Text> : null}
+        </Space>
+      );
+    }
   },
   { title: "分类", dataIndex: "category", width: 180, ellipsis: true, render: (value?: string | null) => value || "-" },
-  { title: "告警", dataIndex: "alert_status", width: 92, render: alertStatusTag }
+  { title: "新公告告警", dataIndex: "alert_status", width: 106, render: alertStatusTag },
+  { title: "到点提醒", dataIndex: "event_reminder_status", width: 112, render: reminderStatusTag }
 ];
 
 export function AnnouncementsPage() {
@@ -206,7 +268,7 @@ export function AnnouncementsPage() {
           type={settingsPreview.enabled ? "info" : "warning"}
           showIcon
           message={settingsPreview.enabled ? "公告轮询已启用" : "公告轮询已关闭"}
-          description="record_exchanges 控制哪些交易所会写入公告记录，alert_exchanges 控制哪些交易所的新公告会发飞书。首次启动默认只记录历史公告，不批量告警。"
+          description="record_exchanges 控制哪些交易所会写入公告记录，alert_exchanges 控制哪些交易所的新公告和事件到点提醒会发飞书。只有能识别出明确上币/下架时间的公告才会触发到点提醒。"
         />
         <Form
           form={form}
@@ -222,8 +284,14 @@ export function AnnouncementsPage() {
             <Form.Item label="首次启动也告警" name="bootstrap_alerts_enabled" valuePropName="checked">
               <Switch />
             </Form.Item>
+            <Form.Item label="事件到点提醒" name="event_reminders_enabled" valuePropName="checked">
+              <Switch />
+            </Form.Item>
             <Form.Item label="轮询间隔" name="poll_interval_seconds" rules={[{ required: true }]}>
               <InputNumber min={30} max={86400} step={30} suffix="s" className="wide-input" />
+            </Form.Item>
+            <Form.Item label="提前提醒" name="event_reminder_minutes_before" rules={[{ required: true }]}>
+              <InputNumber min={1} max={10080} step={5} suffix="min" className="wide-input" />
             </Form.Item>
             <Form.Item label="记录交易所" name="record_exchanges">
               <Select mode="multiple" allowClear options={exchangeOptions} />

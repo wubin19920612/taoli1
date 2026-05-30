@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 from datetime import datetime
 
@@ -530,9 +532,11 @@ class AnnouncementRepository:
             """
             INSERT OR IGNORE INTO exchange_announcements (
               id, exchange, announcement_id, kind, title, url, source, category,
-              published_at, fetched_at, alert_status
+              symbols_json, market_type, event_time, summary,
+              published_at, fetched_at, alert_status, event_reminder_status,
+              event_reminder_sent_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 announcement.id,
@@ -543,20 +547,74 @@ class AnnouncementRepository:
                 announcement.url,
                 announcement.source,
                 announcement.category,
+                json.dumps(announcement.symbols, ensure_ascii=False, sort_keys=True),
+                announcement.market_type,
+                _serialize_datetime(announcement.event_time),
+                announcement.summary,
                 announcement.published_at.isoformat(),
                 announcement.fetched_at.isoformat(),
                 announcement.alert_status,
+                announcement.event_reminder_status,
+                _serialize_datetime(announcement.event_reminder_sent_at),
             ),
         )
         await self.db.commit()
         if cursor.rowcount == 0:
+            await self._enrich_existing_metadata(announcement)
             return None
         return announcement
+
+    async def _enrich_existing_metadata(self, announcement: ExchangeAnnouncement) -> None:
+        symbols_json = json.dumps(announcement.symbols, ensure_ascii=False, sort_keys=True)
+        await self.db.execute(
+            """
+            UPDATE exchange_announcements
+            SET
+              symbols_json = CASE WHEN ? != '[]' THEN ? ELSE symbols_json END,
+              market_type = COALESCE(?, market_type),
+              event_time = COALESCE(?, event_time),
+              summary = COALESCE(?, summary),
+              event_reminder_status = CASE
+                WHEN event_reminder_status = 'not_applicable' AND ? = 'pending' THEN 'pending'
+                ELSE event_reminder_status
+              END
+            WHERE exchange = ? AND source = ? AND announcement_id = ?
+            """,
+            (
+                symbols_json,
+                symbols_json,
+                announcement.market_type,
+                _serialize_datetime(announcement.event_time),
+                announcement.summary,
+                announcement.event_reminder_status,
+                announcement.exchange,
+                announcement.source,
+                announcement.announcement_id,
+            ),
+        )
+        await self.db.commit()
 
     async def update_alert_status(self, announcement_id: str, alert_status: str) -> None:
         await self.db.execute(
             "UPDATE exchange_announcements SET alert_status = ? WHERE id = ?",
             (alert_status, announcement_id),
+        )
+        await self.db.commit()
+
+    async def update_event_reminder_status(
+        self,
+        announcement_id: str,
+        event_reminder_status: str,
+        *,
+        sent_at: datetime | None = None,
+    ) -> None:
+        await self.db.execute(
+            """
+            UPDATE exchange_announcements
+            SET event_reminder_status = ?, event_reminder_sent_at = ?
+            WHERE id = ?
+            """,
+            (event_reminder_status, _serialize_datetime(sent_at), announcement_id),
         )
         await self.db.commit()
 
@@ -619,7 +677,44 @@ class AnnouncementRepository:
         rows = await cursor.fetchall()
         return [self._announcement_from_db(row) for row in rows]
 
+    async def list_due_event_reminders(
+        self,
+        *,
+        exchanges: set[str],
+        reminder_due_before: datetime,
+        now: datetime,
+        limit: int = 100,
+    ) -> list[ExchangeAnnouncement]:
+        if not exchanges:
+            return []
+        placeholders = ",".join("?" for _ in exchanges)
+        params: list[object] = [
+            now.isoformat(),
+            reminder_due_before.isoformat(),
+            *sorted(exchanges),
+            limit,
+        ]
+        cursor = await self.db.execute(
+            f"""
+            SELECT * FROM exchange_announcements
+            WHERE event_time IS NOT NULL
+              AND event_time > ?
+              AND event_time <= ?
+              AND event_reminder_status = 'pending'
+              AND kind IN ('listing', 'delisting')
+              AND exchange IN ({placeholders})
+            ORDER BY event_time ASC, published_at DESC
+            LIMIT ?
+            """,
+            params,
+        )
+        rows = await cursor.fetchall()
+        return [self._announcement_from_db(row) for row in rows]
+
     def _announcement_from_db(self, row: aiosqlite.Row) -> ExchangeAnnouncement:
+        symbols = json.loads(row["symbols_json"]) if "symbols_json" in row.keys() else []
+        if not isinstance(symbols, list):
+            symbols = []
         return ExchangeAnnouncement(
             id=row["id"],
             exchange=row["exchange"],
@@ -629,9 +724,19 @@ class AnnouncementRepository:
             url=row["url"],
             source=row["source"],
             category=row["category"],
+            symbols=symbols,
+            market_type=row["market_type"] if "market_type" in row.keys() else None,
+            event_time=row["event_time"] if "event_time" in row.keys() else None,
+            summary=row["summary"] if "summary" in row.keys() else None,
             published_at=row["published_at"],
             fetched_at=row["fetched_at"],
             alert_status=row["alert_status"],
+            event_reminder_status=(
+                row["event_reminder_status"] if "event_reminder_status" in row.keys() else "not_applicable"
+            ),
+            event_reminder_sent_at=(
+                row["event_reminder_sent_at"] if "event_reminder_sent_at" in row.keys() else None
+            ),
         )
 
 

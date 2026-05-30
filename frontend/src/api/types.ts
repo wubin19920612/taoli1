@@ -261,9 +261,15 @@ export interface ExchangeAnnouncement {
   url: string;
   source: string;
   category?: string | null;
+  symbols: string[];
+  market_type?: string | null;
+  event_time?: string | null;
+  summary?: string | null;
   published_at: string;
   fetched_at: string;
   alert_status: string;
+  event_reminder_status: string;
+  event_reminder_sent_at?: string | null;
 }
 
 export interface AnnouncementSettings {
@@ -272,6 +278,8 @@ export interface AnnouncementSettings {
   record_exchanges: string[];
   alert_exchanges: string[];
   bootstrap_alerts_enabled: boolean;
+  event_reminders_enabled: boolean;
+  event_reminder_minutes_before: number;
 }
 
 export interface AnnouncementFilters {

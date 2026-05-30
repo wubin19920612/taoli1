@@ -20,7 +20,9 @@ describe("AnnouncementsPage", () => {
             poll_interval_seconds: 120,
             record_exchanges: ["binance", "okx", "bybit", "gate", "bitget", "hyperliquid"],
             alert_exchanges: ["bybit"],
-            bootstrap_alerts_enabled: false
+            bootstrap_alerts_enabled: false,
+            event_reminders_enabled: true,
+            event_reminder_minutes_before: 30
           });
         }
         if (url.includes("/announcements/exchanges")) {
@@ -44,9 +46,15 @@ describe("AnnouncementsPage", () => {
               url: "https://announcements.bybit.com/en-US/article/new-listing/",
               source: "bybit-v5-announcements",
               category: "new_crypto",
+              symbols: ["WDCUSDT"],
+              market_type: "futures",
+              event_time: "2026-05-30T09:00:00Z",
+              summary: "listing: symbols=WDCUSDT; market=futures; event_time=2026-05-30T09:00:00Z",
               published_at: "2026-05-30T08:00:00Z",
               fetched_at: "2026-05-30T08:01:00Z",
-              alert_status: "sent"
+              alert_status: "sent",
+              event_reminder_status: "pending",
+              event_reminder_sent_at: null
             }
           ]);
         }
@@ -60,6 +68,9 @@ describe("AnnouncementsPage", () => {
 
     expect(await screen.findByText("上币/下币公告监控")).toBeTruthy();
     expect(await screen.findByText("New listing: WDCUSDT Perpetual Contract")).toBeTruthy();
+    expect(await screen.findByText("WDCUSDT")).toBeTruthy();
+    expect(await screen.findByText("futures")).toBeTruthy();
+    expect(await screen.findByText("待提醒")).toBeTruthy();
     expect(screen.getAllByText("Bybit").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("上币")).toBeTruthy();
     expect(screen.getByText("sent")).toBeTruthy();
@@ -88,7 +99,9 @@ describe("AnnouncementsPage", () => {
         poll_interval_seconds: 120,
         record_exchanges: ["binance", "okx", "bybit", "gate", "bitget", "hyperliquid"],
         alert_exchanges: ["bybit"],
-        bootstrap_alerts_enabled: false
+        bootstrap_alerts_enabled: false,
+        event_reminders_enabled: true,
+        event_reminder_minutes_before: 30
       });
     });
   });
