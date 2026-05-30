@@ -51,7 +51,9 @@ class ExchangeAnnouncement(BaseModel):
 class AnnouncementSettings(BaseModel):
     enabled: bool = True
     poll_interval_seconds: int = Field(default=300, ge=30, le=86_400)
-    record_exchanges: list[str] = Field(default_factory=lambda: ["okx", "bybit", "bitget"])
+    record_exchanges: list[str] = Field(
+        default_factory=lambda: ["binance", "okx", "bybit", "gate", "bitget", "hyperliquid"]
+    )
     alert_exchanges: list[str] = Field(default_factory=list)
     bootstrap_alerts_enabled: bool = False
 

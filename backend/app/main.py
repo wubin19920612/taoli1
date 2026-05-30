@@ -469,7 +469,7 @@ def create_app(
                 app.state.announcement_repo,
                 alert_sender=lambda message: _send_index_component_alert(app, message),
             )
-            announcement_provider = default_announcement_provider()
+            announcement_provider = default_announcement_provider(app.state.announcement_repo)
             app.state.announcement_monitor = announcement_monitor
             app.state.announcement_provider = announcement_provider
             tasks.append(

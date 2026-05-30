@@ -2321,9 +2321,12 @@ def test_announcement_exchange_options_endpoint_returns_supported_providers() ->
 
     assert response.status_code == 200
     assert response.json() == [
+        {"label": "Binance", "value": "binance"},
         {"label": "OKX", "value": "okx"},
         {"label": "Bybit", "value": "bybit"},
+        {"label": "Gate", "value": "gate"},
         {"label": "Bitget", "value": "bitget"},
+        {"label": "Hyperliquid", "value": "hyperliquid"},
     ]
 
 

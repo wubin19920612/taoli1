@@ -565,6 +565,30 @@ class AnnouncementRepository:
         row = await cursor.fetchone()
         return row is not None
 
+    async def get_provider_state(self, key: str) -> dict[str, object] | None:
+        cursor = await self.db.execute(
+            "SELECT payload FROM announcement_provider_state WHERE key = ?",
+            (key,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        payload = json.loads(row["payload"])
+        return payload if isinstance(payload, dict) else None
+
+    async def set_provider_state(self, key: str, payload: dict[str, object]) -> None:
+        await self.db.execute(
+            """
+            INSERT INTO announcement_provider_state (key, payload, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(key) DO UPDATE SET
+              payload = excluded.payload,
+              updated_at = CURRENT_TIMESTAMP
+            """,
+            (key, json.dumps(payload, ensure_ascii=False, sort_keys=True)),
+        )
+        await self.db.commit()
+
     async def list(
         self,
         *,

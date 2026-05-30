@@ -202,6 +202,12 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
           ON exchange_announcements(exchange, published_at DESC);
         CREATE INDEX IF NOT EXISTS idx_exchange_announcements_kind_time
           ON exchange_announcements(kind, published_at DESC);
+
+        CREATE TABLE IF NOT EXISTS announcement_provider_state (
+          key TEXT PRIMARY KEY,
+          payload TEXT NOT NULL,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
         """
     )
     await _ensure_opportunity_history_columns(db)

@@ -8,8 +8,11 @@ from app.db.schema import initialize_schema
 from app.models.announcement import AnnouncementKind, AnnouncementSettings, ExchangeAnnouncement
 from app.services.announcements import (
     AnnouncementMonitor,
+    BinanceAnnouncementProvider,
     BitgetAnnouncementProvider,
     BybitAnnouncementProvider,
+    GateAnnouncementProvider,
+    HyperliquidAnnouncementProvider,
     OKXAnnouncementProvider,
     build_announcement_alert_message,
     classify_announcement,
@@ -46,6 +49,8 @@ def test_classify_announcement_uses_category_and_title_fallbacks() -> None:
     assert classify_announcement("Something ordinary", "announcements-new-listings") == AnnouncementKind.LISTING
     assert classify_announcement("Delisting of DOGUSDT Perpetual Contract") == AnnouncementKind.DELISTING
     assert classify_announcement("Bitget Spot Cross Margin adds GENIUS/USDT") == AnnouncementKind.LISTING
+    assert classify_announcement("Initial Listing: Gate to List QAIT (QAIT) for Spot", "newspotlistings") == AnnouncementKind.LISTING
+    assert classify_announcement("Binance Futures Will Launch QNTXUSDT USDⓈ-Margined Perpetual Contract") == AnnouncementKind.LISTING
     assert classify_announcement("Proof of reserves updated") == AnnouncementKind.OTHER
 
 
@@ -102,7 +107,8 @@ async def test_settings_repository_round_trips_announcement_settings() -> None:
         await initialize_schema(db)
         repo = SettingsRepository(db)
 
-        assert await repo.get_announcement_settings() == AnnouncementSettings()
+        defaults = await repo.get_announcement_settings()
+        assert defaults.record_exchanges == ["binance", "okx", "bybit", "gate", "bitget", "hyperliquid"]
 
         settings = AnnouncementSettings(
             enabled=True,
@@ -227,6 +233,54 @@ def test_okx_provider_parses_listing_and_delisting_payloads() -> None:
     assert rows[0].published_at.isoformat() == "2025-01-19T03:00:02.487000+00:00"
 
 
+def test_binance_provider_parses_listing_and_delisting_catalogs() -> None:
+    provider = BinanceAnnouncementProvider(client=None)
+    listing_payload = {
+        "data": {
+            "catalogs": [
+                {
+                    "catalogName": "New Cryptocurrency Listing",
+                    "articles": [
+                        {
+                            "id": 275489,
+                            "code": "3bdaff694bde45ccb443709336c8686d",
+                            "title": "Binance Futures Will Launch QNTXUSDT USDⓈ-Margined Perpetual Contract",
+                            "releaseDate": 1780038006968,
+                        }
+                    ],
+                }
+            ]
+        }
+    }
+    delisting_payload = {
+        "data": {
+            "catalogs": [
+                {
+                    "catalogName": "Delisting",
+                    "articles": [
+                        {
+                            "id": 275485,
+                            "code": "318ddd21e0ee4e3690633b5ccd5e41d9",
+                            "title": "Binance Alpha Will Remove DIGI, K, SKI",
+                            "releaseDate": 1780037000000,
+                        }
+                    ],
+                }
+            ]
+        }
+    }
+
+    rows = [
+        *provider._parse_payload(listing_payload, "48", "New Cryptocurrency Listing"),
+        *provider._parse_payload(delisting_payload, "161", "Delisting"),
+    ]
+
+    assert [row.exchange for row in rows] == ["binance", "binance"]
+    assert [row.kind for row in rows] == [AnnouncementKind.LISTING, AnnouncementKind.DELISTING]
+    assert rows[0].url == "https://www.binance.com/en/support/announcement/3bdaff694bde45ccb443709336c8686d"
+    assert rows[0].published_at.isoformat() == "2026-05-29T07:00:06.968000+00:00"
+
+
 def test_bybit_provider_parses_announcement_payload() -> None:
     provider = BybitAnnouncementProvider(client=None)
     listing_payload = {
@@ -292,3 +346,69 @@ def test_bitget_provider_parses_and_classifies_payload() -> None:
     assert [row.exchange for row in rows] == ["bitget", "bitget"]
     assert [row.kind for row in rows] == [AnnouncementKind.LISTING, AnnouncementKind.DELISTING]
     assert rows[0].category == "coin_listings:margin"
+
+
+def test_gate_provider_parses_next_data_listing_and_delisting_pages() -> None:
+    provider = GateAnnouncementProvider(client=None)
+    listing_html = """
+    <script id="__NEXT_DATA__" type="application/json" crossorigin="anonymous">
+    {"props":{"pageProps":{"listData":{"list":[
+      {"id":51434,"title":"Initial Listing: Gate to List QAIT (QAIT) for Spot and Convert Trading","url":"/announcements/article/51434","release_timestamp":"1779980455"},
+      {"id":51430,"title":"Gate Launchpool Project #363","url":"/announcements/article/51430","release_timestamp":"1779980000"}
+    ]}}}}
+    </script>
+    """
+    delisting_html = """
+    <script id="__NEXT_DATA__" type="application/json" crossorigin="anonymous">
+    {"props":{"pageProps":{"listData":{"list":[
+      {"id":51413,"title":"Gate Completes Delisting and Buyback of 15 Coins, Including GOVI and MISSION","url":"/announcements/article/51413","release_timestamp":"1779880455"}
+    ]}}}}
+    </script>
+    """
+
+    rows = [
+        *provider._parse_page(listing_html, "newspotlistings"),
+        *provider._parse_page(delisting_html, "delisted"),
+    ]
+
+    assert [row.exchange for row in rows] == ["gate", "gate"]
+    assert [row.kind for row in rows] == [AnnouncementKind.LISTING, AnnouncementKind.DELISTING]
+    assert rows[0].url == "https://www.gate.com/announcements/article/51434"
+    assert rows[0].published_at.isoformat() == "2026-05-28T15:00:55+00:00"
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_provider_records_meta_universe_changes() -> None:
+    db = await connect_database(":memory:")
+    try:
+        await initialize_schema(db)
+        repo = AnnouncementRepository(db)
+        await repo.set_provider_state(
+            "hyperliquid:meta-universe",
+            {"symbols": {"BTC": False, "OLD": False, "DOGE": False}},
+        )
+        provider = HyperliquidAnnouncementProvider(
+            client=None,
+            repository=repo,
+            now_fn=lambda: BASE_TIME,
+        )
+
+        rows = await provider._parse_payload(
+            {
+                "universe": [
+                    {"name": "BTC"},
+                    {"name": "NEW"},
+                    {"name": "DOGE", "isDelisted": True},
+                ]
+            }
+        )
+
+        assert [(row.kind, row.title) for row in rows] == [
+            (AnnouncementKind.LISTING, "Hyperliquid listed NEW perpetual market"),
+            (AnnouncementKind.DELISTING, "Hyperliquid delisted DOGE perpetual market"),
+            (AnnouncementKind.DELISTING, "Hyperliquid delisted OLD perpetual market"),
+        ]
+        state = await repo.get_provider_state("hyperliquid:meta-universe")
+        assert state == {"symbols": {"BTC": False, "DOGE": True, "NEW": False}}
+    finally:
+        await db.close()

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
+from html import unescape
 from inspect import isawaitable
 from urllib.parse import quote_plus
 
@@ -17,11 +19,14 @@ AlertSender = Callable[[str], None | Awaitable[None]]
 SettingsLoader = Callable[[], Awaitable[AnnouncementSettings]]
 logger = logging.getLogger(__name__)
 
-ANNOUNCEMENT_EXCHANGES = ("okx", "bybit", "bitget")
+ANNOUNCEMENT_EXCHANGES = ("binance", "okx", "bybit", "gate", "bitget", "hyperliquid")
 ANNOUNCEMENT_EXCHANGE_OPTIONS = [
+    {"label": "Binance", "value": "binance"},
     {"label": "OKX", "value": "okx"},
     {"label": "Bybit", "value": "bybit"},
+    {"label": "Gate", "value": "gate"},
     {"label": "Bitget", "value": "bitget"},
+    {"label": "Hyperliquid", "value": "hyperliquid"},
 ]
 
 LISTING_KEYWORDS = (
@@ -36,6 +41,8 @@ LISTING_KEYWORDS = (
     "will support",
     "support new",
     "new listing",
+    "initial listing",
+    "will launch",
 )
 DELISTING_KEYWORDS = (
     "delist",
@@ -56,6 +63,15 @@ def _parse_datetime_ms(value: object) -> datetime | None:
         return None
     try:
         return datetime.fromtimestamp(float(value) / 1000, tz=UTC)
+    except (TypeError, ValueError, OSError):
+        return None
+
+
+def _parse_datetime_seconds(value: object) -> datetime | None:
+    if value in (None, ""):
+        return None
+    try:
+        return datetime.fromtimestamp(float(value), tz=UTC)
     except (TypeError, ValueError, OSError):
         return None
 
@@ -81,10 +97,24 @@ def classify_announcement(title: str, category: str | None = None) -> Announceme
         "listing" in category_value
         or "new_crypto" in category_value
         or "coin_listings" in category_value
+        or "newcrytolistings" in category_value
+        or "newspotlistings" in category_value
+        or "newfutureslistings" in category_value
+        or "newconvertlistings" in category_value
         or _contains_keyword(title_value, LISTING_KEYWORDS)
     ):
         return AnnouncementKind.LISTING
     return AnnouncementKind.OTHER
+
+
+def _article_url(base_url: str, url: str, fallback_id: str) -> str:
+    if url.startswith("http://") or url.startswith("https://"):
+        return url
+    if url.startswith("/"):
+        return f"{base_url.rstrip('/')}{url}"
+    if url:
+        return f"{base_url.rstrip('/')}/{url}"
+    return f"{base_url.rstrip('/')}/{fallback_id}"
 
 
 def _display_time(value: datetime) -> str:
@@ -172,6 +202,64 @@ class HttpAnnouncementProvider(AnnouncementProvider):
             published_at=published_at or self._now_fn(),
             fetched_at=self._now_fn(),
         )
+
+
+class BinanceAnnouncementProvider(HttpAnnouncementProvider):
+    exchange = "binance"
+    source = "binance-cms-announcements"
+    base_url = "https://www.binance.com"
+    api_url = "https://www.binance.com/bapi/composite/v1/public/cms/article/list/query"
+    catalogs = (
+        (48, "New Cryptocurrency Listing"),
+        (161, "Delisting"),
+    )
+
+    async def fetch(self) -> list[ExchangeAnnouncement]:
+        announcements: list[ExchangeAnnouncement] = []
+        for catalog_id, category in self.catalogs:
+            query = f"type=1&catalogId={catalog_id}&pageNo=1&pageSize=20"
+            payload = await self._get_json(f"{self.api_url}?{query}")
+            announcements.extend(self._parse_payload(payload, str(catalog_id), category))
+        return announcements
+
+    def _parse_payload(
+        self,
+        payload: object,
+        catalog_id: str,
+        fallback_category: str,
+    ) -> list[ExchangeAnnouncement]:
+        if not isinstance(payload, dict):
+            return []
+        data = payload.get("data")
+        catalogs = data.get("catalogs") if isinstance(data, dict) else None
+        if not isinstance(catalogs, list):
+            return []
+        rows: list[dict] = []
+        category = fallback_category
+        for catalog in catalogs:
+            if not isinstance(catalog, dict):
+                continue
+            category = _clean_text(catalog.get("catalogName")) or fallback_category
+            articles = catalog.get("articles")
+            if isinstance(articles, list):
+                rows.extend(item for item in articles if isinstance(item, dict))
+        announcements: list[ExchangeAnnouncement] = []
+        for row in rows:
+            title = _clean_text(row.get("title"))
+            code = _clean_text(row.get("code"))
+            article_id = _clean_text(row.get("id"))
+            announcement_id = code or article_id
+            url = f"{self.base_url}/en/support/announcement/{code}" if code else ""
+            announcement = self._announcement(
+                announcement_id=announcement_id,
+                title=title,
+                url=url,
+                category=f"{catalog_id}:{category}",
+                published_at=_parse_datetime_ms(row.get("releaseDate") or row.get("publishDate")),
+            )
+            if announcement is not None:
+                announcements.append(announcement)
+        return announcements
 
 
 class OKXAnnouncementProvider(HttpAnnouncementProvider):
@@ -306,6 +394,190 @@ class BitgetAnnouncementProvider(HttpAnnouncementProvider):
         return announcements
 
 
+class GateAnnouncementProvider(HttpAnnouncementProvider):
+    exchange = "gate"
+    source = "gate-next-announcements"
+    base_url = "https://www.gate.com"
+    page_base_url = "https://apim.gateapi.io/announcements"
+    categories = ("newspotlistings", "newfutureslistings", "newconvertlistings", "delisted")
+    listing_title_patterns = (
+        "gate to list",
+        "initial listing",
+        "launches pre-market trading",
+        "new listing",
+    )
+
+    async def fetch(self) -> list[ExchangeAnnouncement]:
+        announcements: list[ExchangeAnnouncement] = []
+        for category in self.categories:
+            response = await self.client.get(f"{self.page_base_url}/{category}")
+            response.raise_for_status()
+            announcements.extend(self._parse_page(response.text, category))
+        return announcements
+
+    def _parse_page(self, html: str, fallback_category: str) -> list[ExchangeAnnouncement]:
+        payload = self._next_data(html)
+        if payload is None:
+            return []
+        page_props = (
+            payload.get("props", {}).get("pageProps", {})
+            if isinstance(payload.get("props"), dict)
+            else {}
+        )
+        list_data = page_props.get("listData") if isinstance(page_props, dict) else None
+        rows = list_data.get("list") if isinstance(list_data, dict) else None
+        if not isinstance(rows, list):
+            return []
+        announcements: list[ExchangeAnnouncement] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            title = _clean_text(row.get("title"))
+            category = fallback_category
+            kind = classify_announcement(title, category)
+            if fallback_category == "delisted" and kind != AnnouncementKind.DELISTING:
+                continue
+            if fallback_category != "delisted" and not self._is_listing_title(title):
+                continue
+            article_id = _clean_text(row.get("id"))
+            url = _article_url(self.base_url, _clean_text(row.get("url")), article_id)
+            announcement = self._announcement(
+                announcement_id=article_id or url,
+                title=title,
+                url=url,
+                category=category,
+                published_at=_parse_datetime_seconds(row.get("release_timestamp") or row.get("created_t")),
+            )
+            if announcement is not None:
+                announcement = announcement.model_copy(update={"kind": kind})
+                announcements.append(announcement)
+        return announcements
+
+    def _is_listing_title(self, title: str) -> bool:
+        normalized = title.strip().lower()
+        return any(pattern in normalized for pattern in self.listing_title_patterns)
+
+    def _next_data(self, html: str) -> dict[str, object] | None:
+        match = re.search(
+            r'<script id="__NEXT_DATA__" type="application/json" crossorigin="anonymous">(.*?)</script>',
+            html,
+            re.S,
+        )
+        if match is None:
+            match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html, re.S)
+        if match is None:
+            return None
+        try:
+            payload = json.loads(unescape(match.group(1)))
+        except (TypeError, ValueError):
+            return None
+        return payload if isinstance(payload, dict) else None
+
+
+class HyperliquidAnnouncementProvider(HttpAnnouncementProvider):
+    exchange = "hyperliquid"
+    source = "hyperliquid-meta-universe"
+    base_url = "https://api.hyperliquid.xyz/info"
+    docs_url = "https://hyperliquid.gitbook.io/hyperliquid-docs"
+
+    def __init__(
+        self,
+        client: httpx.AsyncClient | None = None,
+        *,
+        repository: AnnouncementRepository | None = None,
+        now_fn: Callable[[], datetime] | None = None,
+    ) -> None:
+        super().__init__(client=client, now_fn=now_fn)
+        self.repository = repository
+
+    async def fetch(self) -> list[ExchangeAnnouncement]:
+        response = await self.client.post(self.base_url, json={"type": "meta"})
+        response.raise_for_status()
+        return await self._parse_payload(response.json())
+
+    async def _parse_payload(self, payload: object) -> list[ExchangeAnnouncement]:
+        if not isinstance(payload, dict):
+            return []
+        universe = payload.get("universe")
+        if not isinstance(universe, list):
+            return []
+
+        now = self._now_fn()
+        current: dict[str, bool] = {}
+        for row in universe:
+            if not isinstance(row, dict):
+                continue
+            name = _clean_text(row.get("name")).upper()
+            if not name:
+                continue
+            current[name] = bool(row.get("isDelisted"))
+
+        previous = await self._load_previous_state()
+        await self._save_state(current)
+        if previous is None:
+            return []
+
+        announcements: list[ExchangeAnnouncement] = []
+        previous_delisted = {symbol for symbol, is_delisted in previous.items() if is_delisted}
+        previous_active = set(previous) - previous_delisted
+        current_delisted = {symbol for symbol, is_delisted in current.items() if is_delisted}
+        current_active = set(current) - current_delisted
+
+        for symbol in sorted(current_active - set(previous)):
+            announcements.append(
+                self._synthetic_announcement(
+                    symbol=symbol,
+                    kind=AnnouncementKind.LISTING,
+                    title=f"Hyperliquid listed {symbol} perpetual market",
+                    observed_at=now,
+                )
+            )
+        for symbol in sorted((current_delisted - previous_delisted) | (previous_active - set(current))):
+            announcements.append(
+                self._synthetic_announcement(
+                    symbol=symbol,
+                    kind=AnnouncementKind.DELISTING,
+                    title=f"Hyperliquid delisted {symbol} perpetual market",
+                    observed_at=now,
+                )
+            )
+        return announcements
+
+    def _synthetic_announcement(
+        self,
+        *,
+        symbol: str,
+        kind: AnnouncementKind,
+        title: str,
+        observed_at: datetime,
+    ) -> ExchangeAnnouncement:
+        return ExchangeAnnouncement(
+            exchange=self.exchange,
+            announcement_id=f"{kind.value}:{symbol}:{observed_at.date().isoformat()}",
+            kind=kind,
+            title=title,
+            url=self.docs_url,
+            source=self.source,
+            category="meta-universe",
+            published_at=observed_at,
+            fetched_at=observed_at,
+        )
+
+    async def _load_previous_state(self) -> dict[str, bool] | None:
+        if self.repository is None:
+            return None
+        payload = await self.repository.get_provider_state("hyperliquid:meta-universe")
+        symbols = payload.get("symbols") if isinstance(payload, dict) else None
+        if not isinstance(symbols, dict):
+            return None
+        return {str(symbol).upper(): bool(is_delisted) for symbol, is_delisted in symbols.items()}
+
+    async def _save_state(self, current: dict[str, bool]) -> None:
+        if self.repository is None:
+            return
+        await self.repository.set_provider_state("hyperliquid:meta-universe", {"symbols": current})
+
+
 class MultiAnnouncementProvider:
     def __init__(self, providers: list[AnnouncementProvider]) -> None:
         self.providers = providers
@@ -390,12 +662,17 @@ class AnnouncementMonitor:
         return "sent"
 
 
-def default_announcement_provider() -> MultiAnnouncementProvider:
+def default_announcement_provider(
+    repository: AnnouncementRepository | None = None,
+) -> MultiAnnouncementProvider:
     return MultiAnnouncementProvider(
         [
+            BinanceAnnouncementProvider(),
             OKXAnnouncementProvider(),
             BybitAnnouncementProvider(),
+            GateAnnouncementProvider(),
             BitgetAnnouncementProvider(),
+            HyperliquidAnnouncementProvider(repository=repository),
         ]
     )
 

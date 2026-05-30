@@ -18,16 +18,19 @@ describe("AnnouncementsPage", () => {
           return Response.json({
             enabled: true,
             poll_interval_seconds: 120,
-            record_exchanges: ["okx", "bybit"],
+            record_exchanges: ["binance", "okx", "bybit", "gate", "bitget", "hyperliquid"],
             alert_exchanges: ["bybit"],
             bootstrap_alerts_enabled: false
           });
         }
         if (url.includes("/announcements/exchanges")) {
           return Response.json([
+            { label: "Binance", value: "binance" },
             { label: "OKX", value: "okx" },
             { label: "Bybit", value: "bybit" },
-            { label: "Bitget", value: "bitget" }
+            { label: "Gate", value: "gate" },
+            { label: "Bitget", value: "bitget" },
+            { label: "Hyperliquid", value: "hyperliquid" }
           ]);
         }
         if (url.includes("/announcements")) {
@@ -83,7 +86,7 @@ describe("AnnouncementsPage", () => {
       expect(JSON.parse(String(putCall?.[1]?.body))).toMatchObject({
         enabled: true,
         poll_interval_seconds: 120,
-        record_exchanges: ["okx", "bybit"],
+        record_exchanges: ["binance", "okx", "bybit", "gate", "bitget", "hyperliquid"],
         alert_exchanges: ["bybit"],
         bootstrap_alerts_enabled: false
       });

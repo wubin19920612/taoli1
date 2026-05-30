@@ -23,15 +23,18 @@ dayjs.extend(utc);
 const defaultAnnouncementSettings: AnnouncementSettings = {
   enabled: true,
   poll_interval_seconds: 300,
-  record_exchanges: ["okx", "bybit", "bitget"],
+  record_exchanges: ["binance", "okx", "bybit", "gate", "bitget", "hyperliquid"],
   alert_exchanges: [],
   bootstrap_alerts_enabled: false
 };
 
 const fallbackExchangeOptions: AnnouncementExchangeOption[] = [
+  { label: "Binance", value: "binance" },
   { label: "OKX", value: "okx" },
   { label: "Bybit", value: "bybit" },
-  { label: "Bitget", value: "bitget" }
+  { label: "Gate", value: "gate" },
+  { label: "Bitget", value: "bitget" },
+  { label: "Hyperliquid", value: "hyperliquid" }
 ];
 
 const kindOptions: Array<{ label: string; value: "" | AnnouncementKind }> = [
@@ -48,6 +51,19 @@ function normalizeAnnouncementSettings(values?: Partial<AnnouncementSettings>): 
     record_exchanges: values?.record_exchanges ?? defaultAnnouncementSettings.record_exchanges,
     alert_exchanges: values?.alert_exchanges ?? defaultAnnouncementSettings.alert_exchanges
   };
+}
+
+function friendlyError(exc: unknown): string {
+  const raw = exc instanceof Error ? exc.message : String(exc);
+  try {
+    const parsed = JSON.parse(raw) as { detail?: unknown };
+    if (typeof parsed.detail === "string" && parsed.detail.trim()) {
+      return parsed.detail;
+    }
+  } catch {
+    // Use the raw error text.
+  }
+  return raw;
 }
 
 function formatUtcPlus8(value: string): string {
@@ -114,7 +130,7 @@ export function AnnouncementsPage() {
         })
       );
     } catch (exc) {
-      const text = exc instanceof Error ? exc.message : String(exc);
+      const text = friendlyError(exc);
       setError(text);
       message.error(text);
     } finally {
@@ -134,7 +150,7 @@ export function AnnouncementsPage() {
       setSettingsPreview(normalized);
       form.setFieldsValue(normalized);
     } catch (exc) {
-      const text = exc instanceof Error ? exc.message : String(exc);
+      const text = friendlyError(exc);
       setError(text);
       message.error(text);
     } finally {
@@ -170,7 +186,7 @@ export function AnnouncementsPage() {
           <div>
             <Typography.Title level={4}>上币/下币公告监控</Typography.Title>
             <Typography.Text type="secondary">
-              记录交易所公告并按配置发送飞书告警，当前支持 OKX、Bybit、Bitget 的公开公告接口。
+              记录交易所公告并按配置发送飞书告警，当前支持 Binance、OKX、Bybit、Gate、Bitget、Hyperliquid 的公开数据源。
             </Typography.Text>
           </div>
           <Space wrap>
