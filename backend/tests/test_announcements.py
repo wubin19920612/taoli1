@@ -73,6 +73,8 @@ def test_announcement_metadata_parsers_extract_symbols_market_and_time() -> None
     assert infer_symbols("Pre-IPO Trading for QNTXUSDT Perpetual Futures (USDT-M)") == ["QNTXUSDT"]
     assert infer_symbols("Pre-Market Trading for QNTXUSDT Perpetual Futures (QNTX)") == ["QNTXUSDT"]
     assert infer_market_type("Bitget Spot Cross Margin adds GENIUS/USDT") == "spot margin"
+    assert infer_market_type("Gate to List Irys (IRYS) for Spot and Convert Trading", "newfutureslistings") == "spot/convert"
+    assert infer_market_type("Initial Listing: Gate Stocks Launches Pre-Market Trading for QNTXUSDT Perpetual Futures (USDT-M)") == "futures/pre-market"
     assert extract_event_time(title) == datetime(2026, 5, 30, 12, 0, tzinfo=UTC)
     assert extract_event_time("Trading starts on May 30, 2026 at 12:05 UTC") == datetime(2026, 5, 30, 12, 5, tzinfo=UTC)
     assert extract_event_time("The subscription period is from 2026-05-11 00:00 UTC to 2026-05-14 00:00 UTC.") is None
@@ -413,6 +415,7 @@ def test_bybit_provider_parses_announcement_payload() -> None:
                     "title": "New listing: WDCUSDT Perpetual Contract, with up to 10x leverage",
                     "url": "https://announcements.bybit.com/en-US/article/new-listing/",
                     "publishTime": 1779962014000,
+                    "startDateTimestamp": 1779958110000,
                 }
             ]
         },
@@ -425,6 +428,7 @@ def test_bybit_provider_parses_announcement_payload() -> None:
                     "title": "Delisting of DOGUSDT Perpetual Contract",
                     "url": "https://announcements.bybit.com/en-US/article/delisting/",
                     "publishTime": 1779952014000,
+                    "endDateTimestamp": 1779951114000,
                 },
             ]
         },
@@ -438,6 +442,8 @@ def test_bybit_provider_parses_announcement_payload() -> None:
     assert [row.exchange for row in rows] == ["bybit", "bybit"]
     assert [row.kind for row in rows] == [AnnouncementKind.LISTING, AnnouncementKind.DELISTING]
     assert rows[0].announcement_id == "new-listing"
+    assert rows[0].event_time == datetime(2026, 5, 28, 8, 48, 30, tzinfo=UTC)
+    assert rows[1].event_time == datetime(2026, 5, 28, 6, 51, 54, tzinfo=UTC)
 
 
 def test_bitget_provider_parses_and_classifies_payload() -> None:
@@ -458,7 +464,7 @@ def test_bitget_provider_parses_and_classifies_payload() -> None:
                 "annTitle": "Bitget will delist TEST/USDT",
                 "annUrl": "https://www.bitget.com/en/support/articles/12560603884671",
                 "cTime": "1780052400000",
-                "annType": "latest_news",
+                "annType": "symbol_delisting",
             },
         ],
     }

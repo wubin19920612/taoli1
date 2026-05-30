@@ -97,14 +97,98 @@ function reminderStatusTag(status: string) {
     sent: "已提醒",
     failed: "失败",
     skipped: "跳过",
-    not_applicable: "无事件时间"
+    not_applicable: "无具体时间"
   };
   const color = status === "sent" ? "green" : status === "failed" ? "red" : status === "pending" ? "orange" : "default";
   return <Tag color={color}>{labels[status] ?? status}</Tag>;
 }
 
+const marketTypeLabels: Record<string, string> = {
+  spot: "现货",
+  futures: "合约",
+  "spot margin": "现货杠杆",
+  margin: "杠杆",
+  convert: "闪兑",
+  "pre-market": "盘前",
+  options: "期权",
+  alpha: "Alpha",
+  airdrop: "空投活动"
+};
+
+function marketTypeParts(value?: string | null): string[] {
+  if (!value) {
+    return [];
+  }
+  return value
+    .split("/")
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
 function marketTypeTag(value?: string | null) {
-  return value ? <Tag color="geekblue">{value}</Tag> : "-";
+  const parts = marketTypeParts(value);
+  if (parts.length === 0) {
+    return <Typography.Text type="secondary">未识别</Typography.Text>;
+  }
+  return (
+    <Space size={[0, 4]} wrap>
+      {parts.map((part) => (
+        <Tag key={part} color="geekblue">
+          {marketTypeLabels[part] ?? part}
+        </Tag>
+      ))}
+    </Space>
+  );
+}
+
+function marketTypeText(value?: string | null): string {
+  const parts = marketTypeParts(value);
+  if (parts.length === 0) {
+    return "未识别";
+  }
+  return parts.map((part) => marketTypeLabels[part] ?? part).join(" / ");
+}
+
+function categoryLabel(row: ExchangeAnnouncement): string {
+  const value = (row.category || "").toLowerCase();
+  if (value.includes("baseline")) {
+    return "当前市场基线";
+  }
+  if (value.includes("delist") || row.kind === "delisting") {
+    return "下架公告";
+  }
+  if (value.includes("newfutures") || value.includes("futures")) {
+    return "合约上币";
+  }
+  if (value.includes("newspot") || value.includes("spot")) {
+    return "现货上币";
+  }
+  if (value.includes("convert")) {
+    return "闪兑上币";
+  }
+  if (value.includes("new_crypto") || value.includes("new listings") || value.includes("new cryptocurrency")) {
+    return "新币上架";
+  }
+  if (value.includes("coin_listings")) {
+    return "上币公告";
+  }
+  if (row.kind === "listing") {
+    return "上币公告";
+  }
+  return row.category || "未分类";
+}
+
+function eventTimeText(row: ExchangeAnnouncement): string {
+  if (row.event_time) {
+    return `${formatUtcPlus8(row.event_time)} UTC+8`;
+  }
+  if (row.kind === "listing") {
+    return "公告未给出具体上币时间";
+  }
+  if (row.kind === "delisting") {
+    return "公告未给出具体下币时间";
+  }
+  return "公告未给出具体时间";
 }
 
 function symbolTags(values?: string[]) {
@@ -129,7 +213,7 @@ function rowSummary(row: ExchangeAnnouncement): string {
     pieces.push(`币种 ${row.symbols.slice(0, 8).join(", ")}`);
   }
   if (row.market_type) {
-    pieces.push(`市场 ${row.market_type}`);
+    pieces.push(`市场 ${marketTypeText(row.market_type)}`);
   }
   if (row.event_time) {
     pieces.push(`事件时间 ${formatUtcPlus8(row.event_time)} UTC+8`);
@@ -146,8 +230,8 @@ const columns: ColumnsType<ExchangeAnnouncement> = [
   { title: "交易所", dataIndex: "exchange", width: 96, render: (value: string) => value.toUpperCase() },
   { title: "类型", dataIndex: "kind", width: 86, render: kindTag },
   { title: "币种", dataIndex: "symbols", width: 180, render: symbolTags },
-  { title: "市场", dataIndex: "market_type", width: 120, render: marketTypeTag },
-  { title: "事件时间(UTC+8)", dataIndex: "event_time", width: 142, render: (value?: string | null) => (value ? formatUtcPlus8(value) : "-") },
+  { title: "市场", dataIndex: "market_type", width: 132, render: marketTypeTag },
+  { title: "上/下币时间(UTC+8)", dataIndex: "event_time", width: 168, render: (_value, row) => eventTimeText(row) },
   {
     title: "公告摘要",
     dataIndex: "title",
@@ -164,7 +248,7 @@ const columns: ColumnsType<ExchangeAnnouncement> = [
       );
     }
   },
-  { title: "分类", dataIndex: "category", width: 180, ellipsis: true, render: (value?: string | null) => value || "-" },
+  { title: "分类", dataIndex: "category", width: 128, ellipsis: true, render: (_value, row) => categoryLabel(row) },
   { title: "新公告告警", dataIndex: "alert_status", width: 106, render: alertStatusTag },
   { title: "到点提醒", dataIndex: "event_reminder_status", width: 112, render: reminderStatusTag }
 ];
@@ -172,25 +256,24 @@ const columns: ColumnsType<ExchangeAnnouncement> = [
 function announcementDetails(row: ExchangeAnnouncement) {
   return (
     <div className="announcement-detail">
-      <Descriptions size="small" column={{ xs: 1, sm: 1, md: 2, lg: 3 }} bordered>
-        <Descriptions.Item label="摘要" span={3}>
+      <Descriptions size="small" column={1} bordered>
+        <Descriptions.Item label="摘要">
           {rowSummary(row)}
         </Descriptions.Item>
-        <Descriptions.Item label="完整标题" span={3}>
+        <Descriptions.Item label="完整标题">
           <a href={row.url} target="_blank" rel="noreferrer">
             {row.title}
           </a>
         </Descriptions.Item>
         <Descriptions.Item label="币种">{row.symbols.length > 0 ? row.symbols.join(", ") : "-"}</Descriptions.Item>
-        <Descriptions.Item label="市场">{row.market_type || "-"}</Descriptions.Item>
+        <Descriptions.Item label="市场">{marketTypeText(row.market_type)}</Descriptions.Item>
         <Descriptions.Item label="类型">{kindTag(row.kind)}</Descriptions.Item>
         <Descriptions.Item label="公告时间">{formatUtcPlus8(row.published_at)} UTC+8</Descriptions.Item>
-        <Descriptions.Item label="事件时间">
-          {row.event_time ? `${formatUtcPlus8(row.event_time)} UTC+8` : "-"}
-        </Descriptions.Item>
+        <Descriptions.Item label="上/下币时间">{eventTimeText(row)}</Descriptions.Item>
         <Descriptions.Item label="抓取时间">{formatUtcPlus8(row.fetched_at)} UTC+8</Descriptions.Item>
         <Descriptions.Item label="交易所">{row.exchange.toUpperCase()}</Descriptions.Item>
-        <Descriptions.Item label="分类">{row.category || "-"}</Descriptions.Item>
+        <Descriptions.Item label="分类">{categoryLabel(row)}</Descriptions.Item>
+        <Descriptions.Item label="原始分类">{row.category || "-"}</Descriptions.Item>
         <Descriptions.Item label="来源">{row.source}</Descriptions.Item>
         <Descriptions.Item label="新公告告警">{alertStatusTag(row.alert_status)}</Descriptions.Item>
         <Descriptions.Item label="到点提醒">{reminderStatusTag(row.event_reminder_status)}</Descriptions.Item>
@@ -198,7 +281,7 @@ function announcementDetails(row: ExchangeAnnouncement) {
           {row.event_reminder_sent_at ? `${formatUtcPlus8(row.event_reminder_sent_at)} UTC+8` : "-"}
         </Descriptions.Item>
         {row.summary ? (
-          <Descriptions.Item label="结构化摘要" span={3}>
+          <Descriptions.Item label="结构化摘要">
             {row.summary}
           </Descriptions.Item>
         ) : null}

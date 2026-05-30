@@ -322,11 +322,15 @@ def infer_symbols(title: str) -> list[str]:
 
 
 def infer_market_type(title: str, category: str | None = None) -> str | None:
-    text = f"{category or ''} {title}".lower()
-    matched: list[str] = []
-    for label, patterns in MARKET_TYPE_PATTERNS:
-        if any(pattern in text for pattern in patterns):
-            matched.append(label)
+    def matched_labels(text: str) -> list[str]:
+        normalized = text.lower()
+        return [
+            label
+            for label, patterns in MARKET_TYPE_PATTERNS
+            if any(pattern in normalized for pattern in patterns)
+        ]
+
+    matched = matched_labels(title) or matched_labels(category or "")
     if not matched:
         return None
     primary = []
@@ -402,6 +406,8 @@ def _event_time_from_row(row: dict) -> datetime | None:
         "start_time",
         "startDate",
         "start_date",
+        "startDateTimestamp",
+        "endDateTimestamp",
         "tradingStartTime",
         "trading_start_time",
         "onlineTime",
@@ -758,12 +764,12 @@ class BitgetAnnouncementProvider(HttpAnnouncementProvider):
     exchange = "bitget"
     source = "bitget-public-annoucements"
     base_url = "https://api.bitget.com/api/v2/public/annoucements"
-    ann_types = ("coin_listings", "latest_news")
+    ann_types = ("coin_listings", "symbol_delisting")
 
     async def fetch(self) -> list[ExchangeAnnouncement]:
         announcements: list[ExchangeAnnouncement] = []
         for ann_type in self.ann_types:
-            query = f"language=en_US&annType={quote_plus(ann_type)}&limit=20"
+            query = f"language=en_US&annType={quote_plus(ann_type)}&limit=10"
             payload = await self._get_json(f"{self.base_url}?{query}")
             parsed = self._parse_payload(payload, ann_type)
             announcements.extend(

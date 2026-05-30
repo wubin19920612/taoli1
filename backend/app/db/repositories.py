@@ -575,7 +575,7 @@ class AnnouncementRepository:
               event_time = COALESCE(?, event_time),
               summary = CASE WHEN ? IS NOT NULL THEN ? ELSE summary END,
               event_reminder_status = CASE
-                WHEN event_reminder_status = 'not_applicable' AND ? = 'pending' THEN 'pending'
+                WHEN event_time IS NOT NULL AND ? = 'pending' THEN 'pending'
                 ELSE event_reminder_status
               END
             WHERE exchange = ? AND source = ? AND announcement_id = ?

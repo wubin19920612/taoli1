@@ -69,11 +69,13 @@ describe("AnnouncementsPage", () => {
     expect(await screen.findByText("上币/下币公告监控")).toBeTruthy();
     expect(await screen.findByText("New listing: WDCUSDT Perpetual Contract")).toBeTruthy();
     expect(await screen.findByText("WDCUSDT")).toBeTruthy();
-    expect(await screen.findByText("futures")).toBeTruthy();
+    expect(await screen.findByText("合约")).toBeTruthy();
+    expect(await screen.findByText("新币上架")).toBeTruthy();
     expect(await screen.findByText("待提醒")).toBeTruthy();
     fireEvent.click(screen.getByLabelText("Expand row"));
     expect(await screen.findByText("完整标题")).toBeTruthy();
     expect(await screen.findByText("结构化摘要")).toBeTruthy();
+    expect(await screen.findByText("原始分类")).toBeTruthy();
     expect(screen.getAllByText("listing: symbols=WDCUSDT; market=futures; event_time=2026-05-30T09:00:00Z").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("Bybit").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("上币").length).toBeGreaterThanOrEqual(1);
