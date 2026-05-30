@@ -654,6 +654,7 @@ class AnnouncementRepository:
         exchange: str | None = None,
         kind: AnnouncementKind | str | None = None,
         limit: int = 100,
+        demote_baseline: bool = False,
     ) -> list[ExchangeAnnouncement]:
         clauses: list[str] = []
         params: list[object] = []
@@ -665,12 +666,15 @@ class AnnouncementRepository:
             clauses.append("kind = ?")
             params.append(kind_value)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        baseline_order = (
+            "CASE WHEN category LIKE '%:baseline' THEN 1 ELSE 0 END, " if demote_baseline else ""
+        )
         params.append(limit)
         cursor = await self.db.execute(
             f"""
             SELECT * FROM exchange_announcements
             {where}
-            ORDER BY published_at DESC, fetched_at DESC
+            ORDER BY {baseline_order}published_at DESC, fetched_at DESC
             LIMIT ?
             """,
             params,

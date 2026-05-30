@@ -35,6 +35,7 @@ def announcement(
     url: str = "https://www.okx.com/help/test",
     source: str = "test-source",
     category: str = "announcements-new-listings",
+    published_at: datetime = BASE_TIME,
 ) -> ExchangeAnnouncement:
     return ExchangeAnnouncement(
         exchange=exchange,
@@ -48,7 +49,7 @@ def announcement(
         market_type="spot",
         event_time=BASE_TIME.replace(hour=9),
         summary="listing: symbols=TEST; market=spot; event_time=2026-05-30T09:00:00+00:00",
-        published_at=BASE_TIME,
+        published_at=published_at,
         fetched_at=BASE_TIME,
         event_reminder_status="pending",
     )
@@ -146,6 +147,40 @@ async def test_repository_deduplicates_and_filters_announcements() -> None:
         rows = await repo.list(limit=10)
         assert rows[0].alert_status == "sent"
         assert await repo.has_any() is True
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_repository_demotes_baseline_announcements_in_default_list() -> None:
+    db = await connect_database(":memory:")
+    try:
+        await initialize_schema(db)
+        repo = AnnouncementRepository(db)
+        baseline = announcement(
+            exchange="hyperliquid",
+            announcement_id="baseline:BTC",
+            title="Hyperliquid currently lists BTC perpetual market",
+            source="hyperliquid-meta-universe",
+            category="meta-universe:baseline",
+            published_at=BASE_TIME.replace(hour=10),
+        )
+        real = announcement(
+            exchange="binance",
+            announcement_id="binance-listing",
+            title="Binance Will List TEST",
+            source="binance-announcements",
+            published_at=BASE_TIME.replace(hour=8),
+        )
+
+        await repo.create_if_new(baseline)
+        await repo.create_if_new(real)
+
+        rows = await repo.list(limit=10, demote_baseline=True)
+        assert [row.announcement_id for row in rows] == ["binance-listing", "baseline:BTC"]
+
+        hyperliquid_rows = await repo.list(exchange="hyperliquid", limit=10, demote_baseline=False)
+        assert [row.announcement_id for row in hyperliquid_rows] == ["baseline:BTC"]
     finally:
         await db.close()
 

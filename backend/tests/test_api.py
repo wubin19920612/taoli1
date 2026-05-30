@@ -2322,6 +2322,17 @@ def test_announcements_endpoint_returns_filtered_records() -> None:
         "exchange": "okx",
         "kind": "listing",
         "limit": 25,
+        "demote_baseline": False,
+    }
+
+    default_response = client.get("/api/announcements?limit=25")
+
+    assert default_response.status_code == 200
+    assert repo.calls[1] == {
+        "exchange": None,
+        "kind": None,
+        "limit": 25,
+        "demote_baseline": True,
     }
 
 

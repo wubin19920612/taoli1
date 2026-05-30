@@ -26,10 +26,12 @@ async def list_announcements(
     limit: int = 100,
 ) -> list[ExchangeAnnouncement]:
     bounded_limit = min(max(limit, 1), 500)
+    normalized_exchange = _normalize_exchange(exchange)
     return await _repo(request).list(
-        exchange=_normalize_exchange(exchange),
+        exchange=normalized_exchange,
         kind=kind,
         limit=bounded_limit,
+        demote_baseline=normalized_exchange is None,
     )
 
 
