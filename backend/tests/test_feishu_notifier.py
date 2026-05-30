@@ -1,6 +1,8 @@
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import pytest
+
 from app.models.alert import AlertRule, AlertSeverity
 from app.models.market import MarketType
 from app.models.opportunity import Opportunity, OpportunityType
@@ -242,3 +244,159 @@ def test_build_payload_honors_alert_message_template_blocks() -> None:
     assert "风险" not in text
     assert "【连续监测】" not in text
     assert "Dashboard" not in text
+
+
+class FakeFeishuOpenClient:
+    def __init__(
+        self,
+        token_payload: dict | None = None,
+        message_payload: dict | None = None,
+        urgent_payload: dict | None = None,
+    ):
+        self.requests: list[tuple[str, str, dict | None, dict | None]] = []
+        self.token_payload = token_payload or {
+            "code": 0,
+            "tenant_access_token": "tenant-token",
+            "expire": 7200,
+        }
+        self.message_payload = message_payload or {
+            "code": 0,
+            "data": {"message_id": "om-message-id"},
+        }
+        self.urgent_payload = urgent_payload or {
+            "code": 0,
+            "data": {"invalid_user_id_list": []},
+        }
+
+    async def post(self, url: str, **kwargs):
+        self.requests.append(("POST", url, kwargs.get("json"), kwargs.get("headers")))
+        if url.endswith("/auth/v3/tenant_access_token/internal"):
+            return FakeFeishuResponse(self.token_payload)
+        if "/im/v1/messages" in url:
+            return FakeFeishuResponse(self.message_payload)
+        return FakeFeishuResponse({"code": 0})
+
+    async def patch(self, url: str, **kwargs):
+        self.requests.append(("PATCH", url, kwargs.get("json"), kwargs.get("headers")))
+        return FakeFeishuResponse(self.urgent_payload)
+
+
+class FakeFeishuResponse:
+    def __init__(self, payload: dict):
+        self.payload = payload
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict:
+        return self.payload
+
+
+@pytest.mark.asyncio
+async def test_send_phone_urgent_alert_posts_message_then_phone_urgent() -> None:
+    client = FakeFeishuOpenClient()
+    notifier = FeishuNotifier(
+        FeishuConfig(
+            webhook_url="",
+            app_id="cli_xxx",
+            app_secret="secret",
+            alert_chat_id="oc_chat",
+            phone_user_ids=["ou_user_1", "ou_user_2"],
+            phone_enabled=True,
+        ),
+        client=client,
+    )
+
+    await notifier.send_phone_urgent_text("BTCUSDT reached 110000")
+
+    assert client.requests[0] == (
+        "POST",
+        "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+        {"app_id": "cli_xxx", "app_secret": "secret"},
+        None,
+    )
+    assert client.requests[1][0] == "POST"
+    assert client.requests[1][1] == (
+        "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id"
+    )
+    assert client.requests[1][2] == {
+        "receive_id": "oc_chat",
+        "msg_type": "text",
+        "content": "{\"text\":\"BTCUSDT reached 110000\"}",
+    }
+    assert client.requests[1][3] == {"Authorization": "Bearer tenant-token"}
+    assert client.requests[2] == (
+        "PATCH",
+        "https://open.feishu.cn/open-apis/im/v1/messages/om-message-id/urgent_phone?user_id_type=open_id",
+        {"user_id_list": ["ou_user_1", "ou_user_2"]},
+        {"Authorization": "Bearer tenant-token"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_send_phone_urgent_alert_skips_when_disabled() -> None:
+    client = FakeFeishuOpenClient()
+    notifier = FeishuNotifier(
+        FeishuConfig(
+            webhook_url="",
+            app_id="cli_xxx",
+            app_secret="secret",
+            alert_chat_id="oc_chat",
+            phone_user_ids=["ou_user_1"],
+            phone_enabled=False,
+        ),
+        client=client,
+    )
+
+    await notifier.send_phone_urgent_text("BTCUSDT reached 110000")
+
+    assert client.requests == []
+
+
+@pytest.mark.asyncio
+async def test_send_phone_urgent_alert_raises_on_feishu_business_error() -> None:
+    client = FakeFeishuOpenClient(
+        message_payload={
+            "code": 99991672,
+            "msg": "Access denied",
+            "error": {"log_id": "2026052723345945709A75F6A8ECEFF41B"},
+        }
+    )
+    notifier = FeishuNotifier(
+        FeishuConfig(
+            webhook_url="",
+            app_id="cli_xxx",
+            app_secret="secret",
+            alert_chat_id="oc_chat",
+            phone_user_ids=["ou_user_1"],
+            phone_enabled=True,
+        ),
+        client=client,
+    )
+
+    with pytest.raises(RuntimeError, match="99991672.*Access denied.*2026052723345945709A75F6A8ECEFF41B"):
+        await notifier.send_phone_urgent_text("BTCUSDT reached 110000")
+
+
+@pytest.mark.asyncio
+async def test_send_phone_urgent_alert_raises_on_invalid_phone_user_ids() -> None:
+    client = FakeFeishuOpenClient(
+        urgent_payload={
+            "code": 0,
+            "data": {"invalid_user_id_list": ["ou_bad_user"]},
+        }
+    )
+    notifier = FeishuNotifier(
+        FeishuConfig(
+            webhook_url="",
+            app_id="cli_xxx",
+            app_secret="secret",
+            alert_chat_id="oc_chat",
+            phone_user_ids=["ou_bad_user"],
+            phone_enabled=True,
+        ),
+        client=client,
+    )
+
+    with pytest.raises(RuntimeError, match="invalid phone user IDs.*ou_bad_user"):
+        await notifier.send_phone_urgent_text("BTCUSDT reached 110000")

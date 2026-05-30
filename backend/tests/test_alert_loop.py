@@ -373,9 +373,9 @@ async def test_alert_loop_skips_astro_create_when_latest_signal_collapsed() -> N
     await asyncio.wait_for(_run_alert_loop(app, 60, stop_event), timeout=2)
 
     assert service.calls == []
+    assert event_repo.events[0].status == "muted"
     assert "Astro: skipped latest signal validation" in event_repo.events[0].message
-    assert feishu.sent_texts[0] is not None
-    assert "Astro: skipped latest signal validation" in feishu.sent_texts[0]
+    assert feishu.sent_texts == []
 
 
 @pytest.mark.asyncio

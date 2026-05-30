@@ -5,15 +5,23 @@ from fastapi.testclient import TestClient
 import pytest
 
 from app.core.config import Settings
-from app.main import create_app
+from app.main import _run_alert_loop, create_app
 from app.models.funding_arbitrage import FundingArbitrageSettings
 from app.models.history import OpportunityHistoryRow
+from app.models.index_component import (
+    IndexComponent,
+    IndexComponentChange,
+    IndexComponentSnapshot,
+    IndexComponentWatchItem,
+)
 from app.models.market import MarketSnapshot, MarketType
 from app.models.opportunity import Opportunity, OpportunityType
 from app.models.alert import AlertEvent, AlertRule
 from app.models.orderbook import DepthValidationResult
+from app.models.phone_alert import PhonePriceAlertCondition, PhonePriceAlertEvent, PhonePriceAlertRule
 from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, LivePilotSettings, RiskSettings
 from app.services.astro_alerts import AstroAlertService
+from app.services.index_components import MultiIndexComponentProvider
 from app.services.service_control import DockerServiceController, ServiceControlConfig, ServiceControlError
 from app.services.snapshot_store import SnapshotStore
 
@@ -111,6 +119,94 @@ class FakeAlertEventRepository:
         self.calls.append(limit)
         return self.events
 
+    async def create(self, event: AlertEvent) -> AlertEvent:
+        self.events.append(event)
+        return event
+
+
+class FakeIndexComponentRepository:
+    def __init__(
+        self,
+        changes: list[IndexComponentChange] | None = None,
+        snapshots: list[IndexComponentSnapshot] | None = None,
+    ):
+        self.changes = changes or []
+        self.snapshots = snapshots or []
+        self.watch_items: list[IndexComponentWatchItem] = []
+        self.deleted_watch_ids: list[str] = []
+        self.calls = []
+
+    async def list_changes(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.changes
+
+    async def list_snapshots(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.snapshots
+
+    async def list_watch_items(self):
+        self.calls.append({"method": "list_watch_items"})
+        return self.watch_items
+
+    async def create_watch_item(self, item: IndexComponentWatchItem):
+        self.calls.append({"method": "create_watch_item", "item": item})
+        self.watch_items.append(item)
+        return item
+
+    async def delete_watch_item(self, item_id: str) -> None:
+        self.calls.append({"method": "delete_watch_item", "id": item_id})
+        self.deleted_watch_ids.append(item_id)
+        self.watch_items = [item for item in self.watch_items if item.id != item_id]
+
+
+class FakePhonePriceAlertRuleRepository:
+    def __init__(self, rules: list[PhonePriceAlertRule] | None = None):
+        self.rules = rules or []
+        self.deleted_ids: list[str] = []
+
+    async def list(self) -> list[PhonePriceAlertRule]:
+        return self.rules
+
+    async def create(self, rule: PhonePriceAlertRule) -> PhonePriceAlertRule:
+        self.rules.append(rule)
+        return rule
+
+    async def upsert(self, rule: PhonePriceAlertRule) -> PhonePriceAlertRule:
+        self.rules = [item for item in self.rules if item.id != rule.id]
+        self.rules.append(rule)
+        return rule
+
+    async def delete(self, rule_id: str) -> None:
+        self.deleted_ids.append(rule_id)
+        self.rules = [item for item in self.rules if item.id != rule_id]
+
+
+class FakeExchangeClient:
+    async def aclose(self) -> None:
+        return None
+
+
+class FakeExchangeAdapter:
+    def __init__(self, name: str):
+        self.name = name
+        self.client = FakeExchangeClient()
+
+    async def fetch_spot_tickers(self) -> list[MarketSnapshot]:
+        return []
+
+    async def fetch_future_tickers(self) -> list[MarketSnapshot]:
+        return []
+
+
+class FakePhonePriceAlertEventRepository:
+    def __init__(self, events: list[PhonePriceAlertEvent] | None = None):
+        self.events = events or []
+        self.calls: list[int] = []
+
+    async def list(self, limit: int = 100) -> list[PhonePriceAlertEvent]:
+        self.calls.append(limit)
+        return self.events[:limit]
+
 
 class FakeServiceControl:
     def __init__(self):
@@ -150,6 +246,7 @@ class FakeAstroSubmitService:
     def __init__(self):
         self.calls: list[Opportunity] = []
         self.requests: list[object] = []
+        self.card_settings = AstroCardSettings()
 
     async def handle_manual_create(self, opportunity: Opportunity, card_request=None):
         self.calls.append(opportunity)
@@ -164,6 +261,27 @@ class FakeAstroSubmitService:
             pair_name="BTC",
             pair_type="FF",
         )
+
+    async def handle_alert(self, opportunity: Opportunity):
+        self.calls.append(opportunity)
+        from app.models.astro import AstroAlertActionResult
+
+        return AstroAlertActionResult(
+            enabled=True,
+            status="created",
+            action="add",
+            message="已创建暂停卡片 BTC FF binance->okx，禁开=true",
+            pair_name="BTC",
+            pair_type="FF",
+        )
+
+
+class FakeFeishuNotifier:
+    def __init__(self):
+        self.alerts: list[dict[str, object]] = []
+
+    async def send_alert(self, rule, opportunity, **kwargs) -> None:
+        self.alerts.append({"rule": rule, "opportunity": opportunity, **kwargs})
 
 
 class FakeOrderBookValidator:
@@ -256,6 +374,184 @@ def test_health_endpoint() -> None:
 
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
+
+
+def test_collector_startup_uses_multi_exchange_index_component_provider(monkeypatch) -> None:
+    adapters = [
+        FakeExchangeAdapter("binance"),
+        FakeExchangeAdapter("okx"),
+        FakeExchangeAdapter("bybit"),
+        FakeExchangeAdapter("bitget"),
+        FakeExchangeAdapter("gate"),
+        FakeExchangeAdapter("hyperliquid"),
+    ]
+    monkeypatch.setattr("app.main.default_exchange_adapters", lambda: adapters)
+    monkeypatch.setattr("app.main.run_collector_loop", AsyncMock())
+    monkeypatch.setattr("app.main._run_alert_loop", AsyncMock())
+
+    app = create_app(
+        settings=Settings(database_url="sqlite:///:memory:"),
+        start_collector=True,
+    )
+
+    with TestClient(app):
+        provider = app.state.index_component_provider
+
+    assert isinstance(provider, MultiIndexComponentProvider)
+    assert [item.exchange for item in provider.providers] == [
+        "binance",
+        "okx",
+        "bybit",
+        "bitget",
+        "gate",
+    ]
+
+
+def test_phone_price_alert_rule_endpoints_round_trip() -> None:
+    app = create_app(settings=Settings(dashboard_password="secret"))
+    repo = FakePhonePriceAlertRuleRepository()
+    app.state.phone_price_alert_rule_repo = repo
+    client = TestClient(app)
+    headers = {"X-Dashboard-Password": "secret"}
+
+    create_response = client.post(
+        "/api/phone-alerts/rules",
+        headers=headers,
+        json={
+            "name": "BTC breakout",
+            "enabled": True,
+            "symbol": "btc-usdt",
+            "exchange": "BINANCE",
+            "market_type": "future",
+            "price_field": "mark_price",
+            "condition": "above",
+            "target_price": 110000,
+            "cooldown_seconds": 600,
+        },
+    )
+
+    assert create_response.status_code == 200
+    created = create_response.json()
+    assert created["symbol"] == "BTCUSDT"
+    assert created["exchange"] == "binance"
+
+    list_response = client.get("/api/phone-alerts/rules")
+
+    assert list_response.status_code == 200
+    assert list_response.json()[0]["name"] == "BTC breakout"
+
+    update_response = client.put(
+        f"/api/phone-alerts/rules/{created['id']}",
+        headers=headers,
+        json={**created, "target_price": 111000},
+    )
+
+    assert update_response.status_code == 200
+    assert update_response.json()["target_price"] == 111000
+
+    delete_response = client.delete(f"/api/phone-alerts/rules/{created['id']}", headers=headers)
+
+    assert delete_response.status_code == 200
+    assert repo.deleted_ids == [created["id"]]
+
+
+def test_phone_price_alert_events_endpoint_returns_recent_events() -> None:
+    app = create_app()
+    event = PhonePriceAlertEvent(
+        rule_id="rule-1",
+        symbol="BTCUSDT",
+        exchange="binance",
+        market_type=MarketType.FUTURE,
+        price_field="mark_price",
+        condition=PhonePriceAlertCondition.ABOVE,
+        target_price=110000,
+        observed_price=110050,
+        status="sent",
+        message="BTCUSDT reached 110050",
+        created_at=datetime(2026, 5, 27, 10, 0, tzinfo=UTC),
+    )
+    repo = FakePhonePriceAlertEventRepository([event])
+    app.state.phone_price_alert_event_repo = repo
+    client = TestClient(app)
+
+    response = client.get("/api/phone-alerts/events?limit=10")
+
+    assert response.status_code == 200
+    assert response.json()[0]["observed_price"] == 110050
+    assert repo.calls == [10]
+
+
+def test_phone_price_alert_diagnostics_report_trigger_ready_rule() -> None:
+    store = SnapshotStore()
+    store.set_markets(
+        [
+            MarketSnapshot(
+                symbol="BTCUSDT",
+                base="BTC",
+                exchange="binance",
+                market_type=MarketType.FUTURE,
+                bid=110040,
+                ask=110060,
+                mark_price=110050,
+                index_price=110030,
+                timestamp=datetime(2026, 5, 27, 10, 0, tzinfo=UTC),
+                raw_symbol="BTCUSDT",
+            )
+        ]
+    )
+    rule = PhonePriceAlertRule(
+        id="phone-rule-1",
+        name="BTC breakout",
+        symbol="BTCUSDT",
+        exchange="binance",
+        market_type=MarketType.FUTURE,
+        condition=PhonePriceAlertCondition.ABOVE,
+        target_price=110000,
+    )
+    app = create_app(
+        snapshot_store=store,
+        settings=Settings(feishu_phone_enabled=True),
+    )
+    app.state.phone_price_alert_rule_repo = FakePhonePriceAlertRuleRepository([rule])
+    client = TestClient(app)
+
+    response = client.get("/api/phone-alerts/diagnostics")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["phone_enabled"] is True
+    assert payload["items"][0]["rule_id"] == "phone-rule-1"
+    assert payload["items"][0]["market_found"] is True
+    assert payload["items"][0]["observed_price"] == 110050
+    assert payload["items"][0]["triggered"] is True
+    assert payload["items"][0]["reason"] == "trigger ready"
+
+
+def test_phone_price_alert_diagnostics_report_missing_market_and_exchange_error() -> None:
+    rule = PhonePriceAlertRule(
+        id="phone-rule-1",
+        name="ESPORTS reduce",
+        symbol="ESPORTSUSDT",
+        exchange="binance",
+        market_type=MarketType.FUTURE,
+        condition=PhonePriceAlertCondition.ABOVE,
+        target_price=0.0423,
+    )
+    store = SnapshotStore()
+    store.set_exchange_errors({"binance:future": "Client error '451 '"})
+    app = create_app(snapshot_store=store)
+    app.state.phone_price_alert_rule_repo = FakePhonePriceAlertRuleRepository([rule])
+    client = TestClient(app)
+
+    response = client.get("/api/phone-alerts/diagnostics")
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["market_found"] is False
+    assert item["observed_price"] is None
+    assert item["triggered"] is False
+    assert item["exchange_error"] == "Client error '451 '"
+    assert item["reason"] == "market not found; exchange error: Client error '451 '"
 
 
 def test_opportunities_endpoint_returns_seeded_rows() -> None:
@@ -700,9 +996,11 @@ def test_alert_message_template_settings_endpoint_roundtrips() -> None:
         payload = response.json()
         assert payload["include_trigger_summary"] is True
         assert payload["include_observations"] is True
+        assert payload["suppress_when_card_conditions_fail"] is True
 
         payload["include_funding"] = False
         payload["include_observations"] = False
+        payload["suppress_when_card_conditions_fail"] = False
         payload["observation_limit"] = 2
 
         unauthenticated = client.put("/api/settings/alert-message-template", json=payload)
@@ -715,11 +1013,159 @@ def test_alert_message_template_settings_endpoint_roundtrips() -> None:
         )
         assert saved.status_code == 200
         assert saved.json()["include_funding"] is False
+        assert saved.json()["suppress_when_card_conditions_fail"] is False
         assert saved.json()["observation_limit"] == 2
 
         reloaded = client.get("/api/settings/alert-message-template")
         assert reloaded.status_code == 200
         assert reloaded.json()["include_observations"] is False
+        assert reloaded.json()["suppress_when_card_conditions_fail"] is False
+
+
+def test_alert_loop_mutes_feishu_when_card_conditions_fail() -> None:
+    import asyncio
+
+    opportunity = make_opportunity().model_copy(
+        update={
+            "open_spread_pct": 0.8,
+            "fee_adjusted_open_pct": 0.5,
+            "net_funding_pct": 0,
+            "net_funding_next_pct": 0,
+            "last_seen_at": datetime.now(UTC),
+        }
+    )
+    rule = AlertRule(
+        id="rule-card-conditions",
+        name="FF spread",
+        types=["FF"],
+        min_open_spread_pct=0.5,
+        min_fee_adjusted_open_pct=0.1,
+        min_volume_24h_usdt=1_000_000,
+        consecutive_hits=1,
+        cooldown_seconds=0,
+        excluded_risk_labels=[],
+    )
+    store = SnapshotStore()
+    store.set_opportunities([opportunity])
+    app = create_app(snapshot_store=store)
+    app.state.alert_rule_repo = FakeAlertRulesRepository([rule])
+    event_repo = FakeAlertEventRepository([])
+    app.state.alert_event_repo = event_repo
+    app.state.settings_repo = FakeSettingsRepository(
+        RiskSettings(),
+        AlertMessageTemplateSettings(suppress_when_card_conditions_fail=True),
+    )
+    app.state.astro_alert_service = FakeAstroSubmitService()
+    app.state.orderbook_validator = FakeOrderBookValidator(
+        DepthValidationResult(
+            passed=False,
+            target_notional_usdt=1000,
+            buy_filled_usdt=1000,
+            sell_filled_usdt=228.33,
+            buy_vwap=100,
+            sell_vwap=99.13,
+            quoted_open_pct=0.8,
+            executable_open_pct=-0.87,
+            effective_executable_edge_pct=-1.284,
+            slippage_loss_pct=1.67,
+            blockers=[
+                "sell side depth filled 228.33/1000.00 USDT",
+                "effective executable edge -1.284% is below 0.050%",
+            ],
+            warnings=[],
+        )
+    )
+    notifier = FakeFeishuNotifier()
+    app.state.feishu_notifier = notifier
+
+    async def run_once() -> None:
+        stop_event = asyncio.Event()
+        task = asyncio.create_task(_run_alert_loop(app, 60, stop_event))
+        for _ in range(20):
+            if event_repo.events:
+                break
+            await asyncio.sleep(0.01)
+        stop_event.set()
+        await asyncio.wait_for(task, timeout=1)
+
+    asyncio.run(run_once())
+
+    assert notifier.alerts == []
+    assert len(event_repo.events) == 1
+    assert event_repo.events[0].status == "muted"
+    assert "Astro: skipped order book validation" in event_repo.events[0].message
+    assert "sell side depth filled" in event_repo.events[0].message
+
+
+def test_alert_loop_sends_feishu_when_card_condition_filter_is_disabled() -> None:
+    import asyncio
+
+    opportunity = make_opportunity().model_copy(
+        update={
+            "open_spread_pct": 0.8,
+            "fee_adjusted_open_pct": 0.5,
+            "net_funding_pct": 0,
+            "net_funding_next_pct": 0,
+            "last_seen_at": datetime.now(UTC),
+        }
+    )
+    rule = AlertRule(
+        id="rule-card-conditions-off",
+        name="FF spread",
+        types=["FF"],
+        min_open_spread_pct=0.5,
+        min_fee_adjusted_open_pct=0.1,
+        min_volume_24h_usdt=1_000_000,
+        consecutive_hits=1,
+        cooldown_seconds=0,
+        excluded_risk_labels=[],
+    )
+    store = SnapshotStore()
+    store.set_opportunities([opportunity])
+    app = create_app(snapshot_store=store)
+    app.state.alert_rule_repo = FakeAlertRulesRepository([rule])
+    event_repo = FakeAlertEventRepository([])
+    app.state.alert_event_repo = event_repo
+    app.state.settings_repo = FakeSettingsRepository(
+        RiskSettings(),
+        AlertMessageTemplateSettings(suppress_when_card_conditions_fail=False),
+    )
+    app.state.astro_alert_service = FakeAstroSubmitService()
+    app.state.orderbook_validator = FakeOrderBookValidator(
+        DepthValidationResult(
+            passed=False,
+            target_notional_usdt=1000,
+            buy_filled_usdt=1000,
+            sell_filled_usdt=228.33,
+            buy_vwap=100,
+            sell_vwap=99.13,
+            quoted_open_pct=0.8,
+            executable_open_pct=-0.87,
+            effective_executable_edge_pct=-1.284,
+            slippage_loss_pct=1.67,
+            blockers=["sell side depth filled 228.33/1000.00 USDT"],
+            warnings=[],
+        )
+    )
+    notifier = FakeFeishuNotifier()
+    app.state.feishu_notifier = notifier
+
+    async def run_once() -> None:
+        stop_event = asyncio.Event()
+        task = asyncio.create_task(_run_alert_loop(app, 60, stop_event))
+        for _ in range(20):
+            if event_repo.events:
+                break
+            await asyncio.sleep(0.01)
+        stop_event.set()
+        await asyncio.wait_for(task, timeout=1)
+
+    asyncio.run(run_once())
+
+    assert len(notifier.alerts) == 1
+    assert len(event_repo.events) == 1
+    assert event_repo.events[0].status == "sent"
+    assert "Astro: skipped order book validation" in str(notifier.alerts[0]["prebuilt_text"])
 
 
 def test_astro_card_settings_endpoint_roundtrips() -> None:
@@ -1695,6 +2141,100 @@ def test_astro_manual_card_create_endpoint_returns_404_for_missing_opportunity()
     )
 
     assert response.status_code == 404
+
+
+def test_index_component_changes_endpoint_returns_filtered_records() -> None:
+    app = create_app()
+    change = IndexComponentChange(
+        id="change-1",
+        exchange="binance",
+        symbol="VANRYUSDT",
+        old_hash="old-hash",
+        new_hash="new-hash",
+        old_components=[
+            IndexComponent(source="binance", symbol="VANRYUSDT", weight=0.7),
+            IndexComponent(source="gate", symbol="VANRYUSDT", weight=0.3),
+        ],
+        new_components=[
+            IndexComponent(source="binance", symbol="VANRYUSDT", weight=0.5),
+            IndexComponent(source="bybit", symbol="VANRYUSDT", weight=0.5),
+        ],
+        added_components=[IndexComponent(source="bybit", symbol="VANRYUSDT", weight=0.5)],
+        removed_components=[IndexComponent(source="gate", symbol="VANRYUSDT", weight=0.3)],
+        changed_components=[IndexComponent(source="binance", symbol="VANRYUSDT", weight=0.5)],
+        source="test-provider",
+        alert_status="sent",
+        created_at=datetime(2026, 5, 27, 8, 5, tzinfo=UTC),
+    )
+    repo = FakeIndexComponentRepository([change])
+    app.state.index_component_repo = repo
+    client = TestClient(app)
+
+    response = client.get(
+        "/api/index-components/changes?symbol=vanry&exchange=BINANCE&limit=25"
+    )
+
+    assert response.status_code == 200
+    assert response.json()[0]["symbol"] == "VANRYUSDT"
+    assert response.json()[0]["exchange"] == "binance"
+    assert response.json()[0]["added_components"][0]["source"] == "bybit"
+    assert repo.calls[0] == {
+        "symbol": "VANRY",
+        "exchange": "binance",
+        "limit": 25,
+    }
+
+
+def test_index_component_snapshots_endpoint_supports_symbol_fuzzy_filter() -> None:
+    app = create_app()
+    snapshot = IndexComponentSnapshot.from_components(
+        exchange="binance",
+        symbol="VANRYUSDT",
+        components=[
+            IndexComponent(source="binance", symbol="VANRYUSDT", weight=0.5),
+            IndexComponent(source="bybit", symbol="VANRYUSDT", weight=0.5),
+        ],
+        source="binance-fapi-constituents",
+        observed_at=datetime(2026, 5, 27, 8, 5, tzinfo=UTC),
+    )
+    repo = FakeIndexComponentRepository(snapshots=[snapshot])
+    app.state.index_component_repo = repo
+    client = TestClient(app)
+
+    response = client.get(
+        "/api/index-components/snapshots?symbol=vanry&exchange=BINANCE&limit=25"
+    )
+
+    assert response.status_code == 200
+    assert response.json()[0]["symbol"] == "VANRYUSDT"
+    assert response.json()[0]["components"][0]["source"] == "binance"
+    assert repo.calls[0] == {
+        "symbol": "VANRY",
+        "exchange": "binance",
+        "limit": 25,
+    }
+
+
+def test_index_component_watchlist_endpoints_manage_monitored_symbols() -> None:
+    app = create_app()
+    repo = FakeIndexComponentRepository()
+    app.state.index_component_repo = repo
+    client = TestClient(app)
+
+    created = client.post(
+        "/api/index-components/watchlist",
+        json={"symbol": "vanry", "note": "重点监控"},
+    )
+
+    assert created.status_code == 200
+    assert created.json()["symbol"] == "VANRY"
+    assert created.json()["note"] == "重点监控"
+    listed = client.get("/api/index-components/watchlist")
+    assert listed.status_code == 200
+    assert listed.json()[0]["symbol"] == "VANRY"
+    deleted = client.delete(f"/api/index-components/watchlist/{created.json()['id']}")
+    assert deleted.status_code == 204
+    assert repo.deleted_watch_ids == [created.json()["id"]]
 
 
 @pytest.mark.asyncio

@@ -778,6 +778,52 @@ describe("DashboardPage", () => {
     expect(screen.getAllByText("05-21 04:01:00 UTC").length).toBeGreaterThan(0);
   });
 
+  it("labels exchange errors as external exchange API link failures", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/settings/risk")) {
+          return Response.json({
+            min_volume_24h_usdt: 100000,
+            stale_after_seconds: 30,
+            huge_spread_pct: 10,
+            wide_spread_pct: 3,
+            mark_index_deviation_pct: 1,
+            funding_against_pct: 0.01,
+            ticker_collision_symbols: [],
+            excluded_symbols: [],
+            ignored_exchanges: []
+          });
+        }
+        if (url.includes("/health")) {
+          return Response.json({
+            status: "ok",
+            markets: 1200,
+            opportunities: 12,
+            exchange_errors: {
+              "binance:future":
+                "ExchangeRequestError: GET https://fapi.binance.com/fapi/v1/ticker/bookTicker failed: ConnectTimeout"
+            },
+            exchange_states: {}
+          });
+        }
+        if (url.includes("/opportunities")) {
+          return Response.json([]);
+        }
+        return Response.json({});
+      })
+    );
+
+    render(<DashboardPage />);
+
+    expect(await screen.findByText("交易所链路异常")).toBeTruthy();
+    expect(screen.getByText("交易所外部 API 链路异常")).toBeTruthy();
+    expect(screen.getByText("binance:future")).toBeTruthy();
+    expect(screen.getByText(/fapi\.binance\.com/)).toBeTruthy();
+    expect(screen.queryByText("Exchange errors")).toBeNull();
+  });
+
   it("does not turn partial exchange states into healthy-looking values", async () => {
     vi.stubGlobal(
       "fetch",

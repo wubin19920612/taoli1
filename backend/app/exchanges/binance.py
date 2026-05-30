@@ -14,14 +14,16 @@ from app.models.orderbook import OrderBookSnapshot
 
 class BinanceAdapter(ExchangeAdapter):
     name = "binance"
+    spot_base_url = "https://data-api.binance.vision"
+    futures_base_url = "https://fapi.binance.com"
 
     async def fetch_spot_tickers(self) -> list[MarketSnapshot]:
-        data = await self.get_json("https://api.binance.com/api/v3/ticker/bookTicker")
+        data = await self.get_json(f"{self.spot_base_url}/api/v3/ticker/bookTicker")
         return self._parse_book_tickers(data, MarketType.SPOT)
 
     async def fetch_future_tickers(self) -> list[MarketSnapshot]:
-        book = await self.get_json("https://fapi.binance.com/fapi/v1/ticker/bookTicker")
-        premium = await self.get_json("https://fapi.binance.com/fapi/v1/premiumIndex")
+        book = await self.get_json(f"{self.futures_base_url}/fapi/v1/ticker/bookTicker")
+        premium = await self.get_json(f"{self.futures_base_url}/fapi/v1/premiumIndex")
         interval_by_symbol = await self._fetch_funding_intervals()
         premium_by_symbol = {item["symbol"]: item for item in premium if item.get("symbol")}
         snapshots = self._parse_book_tickers(book, MarketType.FUTURE)
@@ -58,9 +60,9 @@ class BinanceAdapter(ExchangeAdapter):
     ) -> OrderBookSnapshot | None:
         raw = compact_usdt_symbol(symbol, raw_symbol)
         if market_type == MarketType.SPOT:
-            url = f"https://api.binance.com/api/v3/depth?symbol={raw}&limit={limit}"
+            url = f"{self.spot_base_url}/api/v3/depth?symbol={raw}&limit={limit}"
         else:
-            url = f"https://fapi.binance.com/fapi/v1/depth?symbol={raw}&limit={limit}"
+            url = f"{self.futures_base_url}/fapi/v1/depth?symbol={raw}&limit={limit}"
         payload = await self.get_json(url)
         return order_book_snapshot(
             exchange=self.name,
@@ -73,7 +75,7 @@ class BinanceAdapter(ExchangeAdapter):
 
     async def _fetch_funding_intervals(self) -> dict[str, int]:
         try:
-            rows = await self.get_json("https://fapi.binance.com/fapi/v1/fundingInfo")
+            rows = await self.get_json(f"{self.futures_base_url}/fapi/v1/fundingInfo")
         except Exception:
             return {}
         intervals: dict[str, int] = {}

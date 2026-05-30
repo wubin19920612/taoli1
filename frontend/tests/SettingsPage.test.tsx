@@ -40,6 +40,7 @@ describe("SettingsPage", () => {
             include_risk: true,
             include_observations: true,
             include_dashboard_link: true,
+            suppress_when_card_conditions_fail: true,
             observation_limit: 5
           });
         }
@@ -138,6 +139,9 @@ describe("SettingsPage", () => {
             message: null
           });
         }
+        if (url.includes("/phone-alerts/rules")) {
+          return Response.json([]);
+        }
         if (url.includes("/alerts/rules") && init?.method === "POST") {
           return Response.json(JSON.parse(String(init.body)));
         }
@@ -197,6 +201,7 @@ describe("SettingsPage", () => {
     render(<SettingsPage />);
 
     expect(await screen.findByText("告警内容模板")).toBeTruthy();
+    expect(screen.getByLabelText("建卡失败不通知")).toBeTruthy();
     await userEvent.click(screen.getByLabelText("资金费率"));
     await userEvent.click(screen.getByRole("button", { name: /保存告警模板/ }));
 
@@ -209,10 +214,19 @@ describe("SettingsPage", () => {
         })
       );
     });
+    expect(
+      vi.mocked(fetch).mock.calls.some(([, init]) => {
+        return (
+          init?.method === "PUT" &&
+          String(init.body).includes('"suppress_when_card_conditions_fail":true')
+        );
+      })
+    ).toBe(true);
     const preview = document.querySelector(".template-preview pre");
     expect(preview).not.toBeNull();
     expect(preview?.textContent).toContain("价差对：BTCUSDT | binance future -> okx future");
     expect(preview?.textContent).not.toContain("资金费率差");
+    expect(preview?.textContent).toContain("建卡条件过滤");
   }, 15000);
 
   it("loads and saves Astro card defaults", async () => {
@@ -309,9 +323,15 @@ describe("SettingsPage", () => {
             ignored_exchanges: []
           });
         }
+        if (url.includes("/phone-alerts/rules")) {
+          return Response.json([]);
+        }
         if (url.includes("/alerts/rules") && init?.method === "POST") {
           posts.push(String(init.body));
           return Response.json(JSON.parse(String(init.body)));
+        }
+        if (url.includes("/phone-alerts/rules")) {
+          return Response.json([]);
         }
         if (url.includes("/alerts/rules")) {
           return Response.json([]);

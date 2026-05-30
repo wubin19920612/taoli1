@@ -12,13 +12,15 @@ from app.models.orderbook import OrderBookSnapshot
 
 class AsterAdapter(ExchangeAdapter):
     name = "aster"
+    spot_base_url = "https://sapi.asterdex.com"
+    futures_base_url = "https://fapi.asterdex.com"
 
     async def fetch_spot_tickers(self) -> list[MarketSnapshot]:
-        data = await self.get_json("https://www.asterdex.com/api/v1/ticker/bookTicker")
+        data = await self.get_json(f"{self.spot_base_url}/api/v1/ticker/bookTicker")
         return self._parse_book(data if isinstance(data, list) else [], MarketType.SPOT)
 
     async def fetch_future_tickers(self) -> list[MarketSnapshot]:
-        data = await self.get_json("https://fapi.asterdex.com/fapi/v1/ticker/bookTicker")
+        data = await self.get_json(f"{self.futures_base_url}/fapi/v1/ticker/bookTicker")
         intervals = await self._fetch_funding_intervals()
         rows = self._parse_book(data if isinstance(data, list) else [], MarketType.FUTURE)
         return [
@@ -39,9 +41,9 @@ class AsterAdapter(ExchangeAdapter):
     ) -> OrderBookSnapshot | None:
         raw = compact_usdt_symbol(symbol, raw_symbol)
         if market_type == MarketType.SPOT:
-            url = f"https://www.asterdex.com/api/v1/depth?symbol={raw}&limit={limit}"
+            url = f"{self.spot_base_url}/api/v1/depth?symbol={raw}&limit={limit}"
         else:
-            url = f"https://fapi.asterdex.com/fapi/v1/depth?symbol={raw}&limit={limit}"
+            url = f"{self.futures_base_url}/fapi/v1/depth?symbol={raw}&limit={limit}"
         payload = await self.get_json(url)
         return order_book_snapshot(
             exchange=self.name,
@@ -83,7 +85,7 @@ class AsterAdapter(ExchangeAdapter):
 
     async def _fetch_funding_intervals(self) -> dict[str, int]:
         try:
-            rows = await self.get_json("https://fapi.asterdex.com/fapi/v1/fundingInfo")
+            rows = await self.get_json(f"{self.futures_base_url}/fapi/v1/fundingInfo")
         except Exception:
             return {}
         intervals: dict[str, int] = {}

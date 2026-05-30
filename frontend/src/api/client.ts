@@ -10,12 +10,22 @@ import type {
   FundingArbitragePreview,
   FundingArbitrageSettings,
   HealthStatus,
+  IndexComponentChange,
+  IndexComponentChangeFilters,
+  IndexComponentSnapshot,
+  IndexComponentSnapshotFilters,
+  IndexComponentWatchItem,
   OpportunityHistoryStats,
   OpportunityHistoryStatsQuery,
   LivePilotPreview,
   LivePilotSettings,
+  MarketFilters,
+  MarketSnapshot,
   Opportunity,
   OpportunityFilters,
+  PhonePriceAlertDiagnostics,
+  PhonePriceAlertEvent,
+  PhonePriceAlertRule,
   RiskSettings,
   ServiceControlStatus,
   ServiceRestartResult
@@ -82,6 +92,16 @@ export function listOpportunities(filters: OpportunityFilters): Promise<Opportun
       throw new Error(await response.text());
     }
     return response.json() as Promise<Opportunity[]>;
+  });
+}
+
+export function listMarkets(filters: MarketFilters = {}): Promise<MarketSnapshot[]> {
+  const url = buildUrl("/markets", filters);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    return response.json() as Promise<MarketSnapshot[]>;
   });
 }
 
@@ -180,6 +200,82 @@ export async function deleteAlertRule(id: string): Promise<void> {
 
 export async function listAlertEvents(limit = 100): Promise<AlertEvent[]> {
   return fetchJson<AlertEvent[]>(`/alerts/events?limit=${limit}`);
+}
+
+export async function listPhonePriceAlertRules(): Promise<PhonePriceAlertRule[]> {
+  return fetchJson<PhonePriceAlertRule[]>("/phone-alerts/rules");
+}
+
+export async function createPhonePriceAlertRule(
+  rule: PhonePriceAlertRule
+): Promise<PhonePriceAlertRule> {
+  return fetchJson<PhonePriceAlertRule>("/phone-alerts/rules", {
+    method: "POST",
+    body: JSON.stringify(rule)
+  });
+}
+
+export async function updatePhonePriceAlertRule(
+  id: string,
+  rule: PhonePriceAlertRule
+): Promise<PhonePriceAlertRule> {
+  return fetchJson<PhonePriceAlertRule>(`/phone-alerts/rules/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(rule)
+  });
+}
+
+export async function deletePhonePriceAlertRule(id: string): Promise<void> {
+  await fetchJson(`/phone-alerts/rules/${id}`, { method: "DELETE" });
+}
+
+export async function listPhonePriceAlertEvents(limit = 100): Promise<PhonePriceAlertEvent[]> {
+  return fetchJson<PhonePriceAlertEvent[]>(`/phone-alerts/events?limit=${limit}`);
+}
+
+export async function getPhonePriceAlertDiagnostics(): Promise<PhonePriceAlertDiagnostics> {
+  return fetchJson<PhonePriceAlertDiagnostics>("/phone-alerts/diagnostics");
+}
+
+export async function listIndexComponentChanges(
+  filters: IndexComponentChangeFilters = {}
+): Promise<IndexComponentChange[]> {
+  const url = buildUrl("/index-components/changes", { limit: 100, ...filters });
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    return response.json() as Promise<IndexComponentChange[]>;
+  });
+}
+
+export async function listIndexComponentSnapshots(
+  filters: IndexComponentSnapshotFilters = {}
+): Promise<IndexComponentSnapshot[]> {
+  const url = buildUrl("/index-components/snapshots", { limit: 500, ...filters });
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    return response.json() as Promise<IndexComponentSnapshot[]>;
+  });
+}
+
+export async function listIndexComponentWatchlist(): Promise<IndexComponentWatchItem[]> {
+  return fetchJson<IndexComponentWatchItem[]>("/index-components/watchlist");
+}
+
+export async function createIndexComponentWatchItem(
+  item: Pick<IndexComponentWatchItem, "symbol" | "note">
+): Promise<IndexComponentWatchItem> {
+  return fetchJson<IndexComponentWatchItem>("/index-components/watchlist", {
+    method: "POST",
+    body: JSON.stringify(item)
+  });
+}
+
+export async function deleteIndexComponentWatchItem(id: string): Promise<void> {
+  await fetchJson(`/index-components/watchlist/${id}`, { method: "DELETE" });
 }
 
 export async function getOpportunityHistoryStats(

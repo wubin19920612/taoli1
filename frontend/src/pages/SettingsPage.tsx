@@ -48,6 +48,7 @@ import type {
 } from "../api/types";
 import { alertRuleFieldHelp, alertRuleGuide, alertSeverityOptions, alertTypeOptions } from "../constants/alertRules";
 import { defaultHiddenRiskLabels, riskLabelOptions } from "../constants/riskLabels";
+import { PhonePriceAlertsPanel } from "./PhonePriceAlertsPanel";
 
 type AlertRuleFormValues = AlertRule & {
   min_volume_24h_k?: number;
@@ -83,6 +84,7 @@ const defaultAlertMessageTemplate: AlertMessageTemplateSettings = {
   include_risk: true,
   include_observations: true,
   include_dashboard_link: true,
+  suppress_when_card_conditions_fail: true,
   observation_limit: 5
 };
 
@@ -128,7 +130,12 @@ const alertTemplateOptions: Array<{
   { name: "include_volume", label: "成交额", description: "买入侧和卖出侧 24h 成交额" },
   { name: "include_risk", label: "风险标签", description: "过滤命中的风险标签" },
   { name: "include_observations", label: "连续监测", description: "最近几轮命中的价差和周期资金费差" },
-  { name: "include_dashboard_link", label: "Dashboard 链接", description: "消息末尾追加面板地址" }
+  { name: "include_dashboard_link", label: "Dashboard 链接", description: "消息末尾追加面板地址" },
+  {
+    name: "suppress_when_card_conditions_fail",
+    label: "建卡失败不通知",
+    description: "最新信号或盘口深度不满足建卡条件时，只写告警历史，不发飞书"
+  }
 ];
 
 function ruleDefaultsForRisk(settings: RiskSettings): AlertRule {
@@ -280,6 +287,9 @@ function buildAlertTemplatePreview(template: AlertMessageTemplateSettings): stri
   }
   if (template.include_dashboard_link) {
     blocks.push("Dashboard: https://your-domain.example");
+  }
+  if (template.suppress_when_card_conditions_fail) {
+    blocks.push("建卡条件过滤：不满足时仅保留告警历史，不发送飞书。");
   }
   return blocks.join("\n\n") || "至少保留一个字段，避免告警内容为空。";
 }
@@ -903,6 +913,7 @@ export function SettingsPage() {
           size="middle"
         />
       </section>
+      <PhonePriceAlertsPanel />
     </div>
   );
 }

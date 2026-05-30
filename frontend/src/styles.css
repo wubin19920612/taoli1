@@ -115,6 +115,16 @@ body {
   border-radius: 6px;
 }
 
+.exchange-error-list {
+  display: grid;
+  gap: 4px;
+}
+
+.exchange-error-item {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .blocked-strip {
   display: flex;
   align-items: center;
@@ -560,6 +570,197 @@ body {
   border-radius: 6px;
 }
 
+.index-component-diff {
+  display: grid;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.index-component-diff-row {
+  display: grid;
+  grid-template-columns: 68px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.index-component-summary {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.index-component-change-list,
+.index-component-tags {
+  min-width: 0;
+}
+
+.index-component-change-line {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr);
+  gap: 4px;
+  align-items: start;
+  min-width: 0;
+}
+
+.index-component-change-line .ant-typography {
+  min-width: 0;
+  margin: 0;
+  word-break: break-word;
+}
+
+.index-component-change-dot {
+  line-height: 1.45;
+}
+
+.index-component-change-up .index-component-change-dot,
+.index-component-change-up .ant-typography {
+  color: #15803d;
+}
+
+.index-component-change-down .index-component-change-dot,
+.index-component-change-down .ant-typography {
+  color: #b91c1c;
+}
+
+.index-component-tags .ant-tag {
+  max-width: 100%;
+  margin-bottom: 4px;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.index-component-watch-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.index-component-watch-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.index-component-watch-head .ant-typography {
+  margin: 0;
+}
+
+.index-component-watch-add {
+  width: min(420px, 100%);
+}
+
+.index-component-watch-add .ant-input {
+  min-width: 0;
+}
+
+.index-component-watch-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.index-component-watch-tag {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  margin-inline-end: 0;
+  padding: 4px 4px 4px 10px;
+  white-space: normal;
+}
+
+.index-component-market-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.index-component-market-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.index-component-market-head .ant-typography {
+  margin: 0;
+}
+
+.index-component-market-rows {
+  display: grid;
+  gap: 8px;
+}
+
+.index-component-market-row {
+  display: grid;
+  grid-template-columns: 130px minmax(180px, 1fr) 240px minmax(220px, 1.2fr);
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  padding: 9px 10px;
+  background: #f7faf9;
+  border: 1px solid #dce4e1;
+  border-radius: 6px;
+}
+
+.index-component-market-label,
+.index-component-metrics {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.index-component-reference-note {
+  font-size: 12px;
+}
+
+.index-component-reference-detail {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+}
+
+.index-component-market-components .index-component-reference-match {
+  border-color: #0f766e;
+  color: #0f766e;
+  background: #ecfdf5;
+}
+
+.index-component-stack {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  height: 18px;
+  overflow: hidden;
+  background: #e5ece9;
+  border-radius: 4px;
+}
+
+.index-component-stack-segment {
+  flex: 0 0 auto;
+  min-width: 2px;
+}
+
+.index-component-stack-empty {
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  color: #66736f;
+  font-size: 12px;
+}
+
+.index-component-market-components {
+  min-width: 0;
+}
+
+.index-component-market-components .ant-tag {
+  max-width: 100%;
+  margin-bottom: 4px;
+  white-space: normal;
+  word-break: break-word;
+}
+
 @media (max-width: 900px) {
   .settings-grid,
   .form-grid,
@@ -601,6 +802,23 @@ body {
 
   .spread-history-head {
     flex-direction: column;
+  }
+
+  .index-component-watch-head {
+    flex-direction: column;
+  }
+
+  .index-component-watch-add,
+  .index-component-watch-add .ant-btn {
+    width: 100%;
+  }
+
+  .index-component-market-head {
+    flex-direction: column;
+  }
+
+  .index-component-market-row {
+    grid-template-columns: 1fr;
   }
 
   .spread-history-stats {

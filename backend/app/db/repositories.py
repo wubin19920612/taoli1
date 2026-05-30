@@ -5,9 +5,16 @@ import aiosqlite
 
 from app.models.alert import AlertEvent, AlertRule
 from app.models.history import OpportunityHistoryRow
+from app.models.index_component import (
+    IndexComponent,
+    IndexComponentChange,
+    IndexComponentSnapshot,
+    IndexComponentWatchItem,
+)
 from app.models.market import MarketType
 from app.models.opportunity import Opportunity, OpportunityType
 from app.models.funding_arbitrage import FundingArbitrageSettings
+from app.models.phone_alert import PhonePriceAlertEvent, PhonePriceAlertRule
 from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, LivePilotSettings, RiskSettings
 
 PERCENT_SCALE = 10_000
@@ -62,6 +69,26 @@ def _serialize_datetime(value) -> str | None:
 
 def _deserialize_datetime(value) -> str | None:
     return value
+
+
+def _component_json(components: list[IndexComponent]) -> str:
+    return json.dumps(
+        [item.model_dump(mode="json", exclude_none=True) for item in components],
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _components_from_json(value: str) -> list[IndexComponent]:
+    parsed = json.loads(value)
+    if not isinstance(parsed, list):
+        return []
+    return [
+        IndexComponent.model_validate(item)
+        for item in parsed
+        if isinstance(item, dict)
+    ]
 
 
 class AlertRuleRepository:
@@ -148,6 +175,349 @@ class AlertEventRepository:
             )
             for row in rows
         ]
+
+
+class PhonePriceAlertRuleRepository:
+    def __init__(self, db: aiosqlite.Connection):
+        self.db = db
+
+    async def create(self, rule: PhonePriceAlertRule) -> PhonePriceAlertRule:
+        payload = rule.model_dump_json()
+        await self.db.execute(
+            "INSERT INTO phone_price_alert_rules (id, payload) VALUES (?, ?)",
+            (rule.id, payload),
+        )
+        await self.db.commit()
+        return rule
+
+    async def list(self) -> list[PhonePriceAlertRule]:
+        cursor = await self.db.execute(
+            "SELECT payload FROM phone_price_alert_rules ORDER BY created_at"
+        )
+        rows = await cursor.fetchall()
+        return [PhonePriceAlertRule.model_validate_json(row["payload"]) for row in rows]
+
+    async def get(self, rule_id: str) -> PhonePriceAlertRule | None:
+        cursor = await self.db.execute(
+            "SELECT payload FROM phone_price_alert_rules WHERE id = ?",
+            (rule_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        return PhonePriceAlertRule.model_validate_json(row["payload"])
+
+    async def upsert(self, rule: PhonePriceAlertRule) -> PhonePriceAlertRule:
+        payload = rule.model_dump_json()
+        await self.db.execute(
+            """
+            INSERT INTO phone_price_alert_rules (id, payload, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, updated_at = CURRENT_TIMESTAMP
+            """,
+            (rule.id, payload),
+        )
+        await self.db.commit()
+        return rule
+
+    async def delete(self, rule_id: str) -> None:
+        await self.db.execute("DELETE FROM phone_price_alert_rules WHERE id = ?", (rule_id,))
+        await self.db.commit()
+
+
+class PhonePriceAlertEventRepository:
+    def __init__(self, db: aiosqlite.Connection):
+        self.db = db
+
+    async def create(self, event: PhonePriceAlertEvent) -> PhonePriceAlertEvent:
+        await self.db.execute(
+            """
+            INSERT INTO phone_price_alert_events (
+              id, rule_id, symbol, exchange, market_type, price_field, condition,
+              target_price, observed_price, status, message, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event.id,
+                event.rule_id,
+                event.symbol,
+                event.exchange,
+                event.market_type.value,
+                event.price_field.value,
+                event.condition.value,
+                event.target_price,
+                event.observed_price,
+                event.status,
+                event.message,
+                event.created_at.isoformat(),
+            ),
+        )
+        await self.db.commit()
+        return event
+
+    async def list(self, limit: int = 100) -> list[PhonePriceAlertEvent]:
+        cursor = await self.db.execute(
+            "SELECT * FROM phone_price_alert_events ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        )
+        rows = await cursor.fetchall()
+        return [
+            PhonePriceAlertEvent(
+                id=row["id"],
+                rule_id=row["rule_id"],
+                symbol=row["symbol"],
+                exchange=row["exchange"],
+                market_type=MarketType(row["market_type"]),
+                price_field=row["price_field"],
+                condition=row["condition"],
+                target_price=row["target_price"],
+                observed_price=row["observed_price"],
+                status=row["status"],
+                message=row["message"],
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ]
+
+
+class IndexComponentRepository:
+    def __init__(self, db: aiosqlite.Connection):
+        self.db = db
+
+    async def get_snapshot(self, exchange: str, symbol: str) -> IndexComponentSnapshot | None:
+        cursor = await self.db.execute(
+            """
+            SELECT * FROM index_component_snapshots
+            WHERE exchange = ? AND symbol = ?
+            """,
+            (exchange.strip().lower(), symbol.strip().upper()),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        return self._snapshot_from_db(row)
+
+    async def upsert_snapshot(self, snapshot: IndexComponentSnapshot) -> IndexComponentSnapshot:
+        await self.db.execute(
+            """
+            INSERT INTO index_component_snapshots (
+              exchange, symbol, component_hash, components_json, source, observed_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(exchange, symbol) DO UPDATE SET
+              component_hash = excluded.component_hash,
+              components_json = excluded.components_json,
+              source = excluded.source,
+              observed_at = excluded.observed_at,
+              updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                snapshot.exchange,
+                snapshot.symbol,
+                snapshot.component_hash,
+                _component_json(snapshot.components),
+                snapshot.source,
+                snapshot.observed_at.isoformat(),
+            ),
+        )
+        await self.db.commit()
+        return snapshot
+
+    async def create_change(
+        self,
+        *,
+        baseline: IndexComponentSnapshot,
+        current: IndexComponentSnapshot,
+        added_components: list[IndexComponent],
+        removed_components: list[IndexComponent],
+        changed_components: list[IndexComponent],
+        alert_status: str,
+    ) -> IndexComponentChange:
+        change = IndexComponentChange(
+            exchange=current.exchange,
+            symbol=current.symbol,
+            old_hash=baseline.component_hash,
+            new_hash=current.component_hash,
+            old_components=baseline.components,
+            new_components=current.components,
+            added_components=added_components,
+            removed_components=removed_components,
+            changed_components=changed_components,
+            source=current.source,
+            alert_status=alert_status,
+            created_at=current.observed_at,
+        )
+        await self.db.execute(
+            """
+            INSERT INTO index_component_changes (
+              id, exchange, symbol, old_hash, new_hash,
+              old_components_json, new_components_json,
+              added_components_json, removed_components_json, changed_components_json,
+              source, alert_status, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                change.id,
+                change.exchange,
+                change.symbol,
+                change.old_hash,
+                change.new_hash,
+                _component_json(change.old_components),
+                _component_json(change.new_components),
+                _component_json(change.added_components),
+                _component_json(change.removed_components),
+                _component_json(change.changed_components),
+                change.source,
+                change.alert_status,
+                change.created_at.isoformat(),
+            ),
+        )
+        await self.db.commit()
+        return change
+
+    async def update_change_alert_status(self, change_id: str, alert_status: str) -> None:
+        await self.db.execute(
+            "UPDATE index_component_changes SET alert_status = ? WHERE id = ?",
+            (alert_status, change_id),
+        )
+        await self.db.commit()
+
+    async def list_changes(
+        self,
+        *,
+        symbol: str | None = None,
+        exchange: str | None = None,
+        limit: int = 100,
+    ) -> list[IndexComponentChange]:
+        clauses: list[str] = []
+        params: list[object] = []
+        if symbol:
+            clauses.append("symbol LIKE ?")
+            params.append(f"%{symbol.strip().upper()}%")
+        if exchange:
+            clauses.append("exchange = ?")
+            params.append(exchange.strip().lower())
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(limit)
+        cursor = await self.db.execute(
+            f"""
+            SELECT * FROM index_component_changes
+            {where}
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            params,
+        )
+        rows = await cursor.fetchall()
+        return [self._change_from_db(row) for row in rows]
+
+    async def list_snapshots(
+        self,
+        *,
+        symbol: str | None = None,
+        exchange: str | None = None,
+        limit: int = 500,
+    ) -> list[IndexComponentSnapshot]:
+        clauses: list[str] = []
+        params: list[object] = []
+        if symbol:
+            clauses.append("symbol LIKE ?")
+            params.append(f"%{symbol.strip().upper()}%")
+        if exchange:
+            clauses.append("exchange = ?")
+            params.append(exchange.strip().lower())
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(limit)
+        cursor = await self.db.execute(
+            f"""
+            SELECT * FROM index_component_snapshots
+            {where}
+            ORDER BY observed_at DESC
+            LIMIT ?
+            """,
+            params,
+        )
+        rows = await cursor.fetchall()
+        return [self._snapshot_from_db(row) for row in rows]
+
+    async def list_watch_items(self) -> list[IndexComponentWatchItem]:
+        cursor = await self.db.execute(
+            """
+            SELECT * FROM index_component_watchlist
+            ORDER BY created_at DESC
+            """
+        )
+        rows = await cursor.fetchall()
+        return [self._watch_item_from_db(row) for row in rows]
+
+    async def create_watch_item(self, item: IndexComponentWatchItem) -> IndexComponentWatchItem:
+        await self.db.execute(
+            """
+            INSERT INTO index_component_watchlist (id, symbol, note, created_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(symbol) DO UPDATE SET
+              note = excluded.note
+            """,
+            (
+                item.id,
+                item.symbol,
+                item.note,
+                item.created_at.isoformat(),
+            ),
+        )
+        await self.db.commit()
+        return item
+
+    async def delete_watch_item(self, item_id: str) -> None:
+        await self.db.execute(
+            "DELETE FROM index_component_watchlist WHERE id = ?",
+            (item_id,),
+        )
+        await self.db.commit()
+
+    async def is_symbol_watched(self, symbol: str) -> bool:
+        watched_items = await self.list_watch_items()
+        if not watched_items:
+            return False
+        normalized = symbol.strip().upper()
+        return any(normalized.startswith(item.symbol) for item in watched_items)
+
+    def _snapshot_from_db(self, row: aiosqlite.Row) -> IndexComponentSnapshot:
+        return IndexComponentSnapshot(
+            exchange=row["exchange"],
+            symbol=row["symbol"],
+            component_hash=row["component_hash"],
+            components=_components_from_json(row["components_json"]),
+            source=row["source"],
+            observed_at=row["observed_at"],
+        )
+
+    def _change_from_db(self, row: aiosqlite.Row) -> IndexComponentChange:
+        return IndexComponentChange(
+            id=row["id"],
+            exchange=row["exchange"],
+            symbol=row["symbol"],
+            old_hash=row["old_hash"],
+            new_hash=row["new_hash"],
+            old_components=_components_from_json(row["old_components_json"]),
+            new_components=_components_from_json(row["new_components_json"]),
+            added_components=_components_from_json(row["added_components_json"]),
+            removed_components=_components_from_json(row["removed_components_json"]),
+            changed_components=_components_from_json(row["changed_components_json"]),
+            source=row["source"],
+            alert_status=row["alert_status"],
+            created_at=row["created_at"],
+        )
+
+    def _watch_item_from_db(self, row: aiosqlite.Row) -> IndexComponentWatchItem:
+        return IndexComponentWatchItem(
+            id=row["id"],
+            symbol=row["symbol"],
+            note=row["note"],
+            created_at=row["created_at"],
+        )
 
 
 class SettingsRepository:
