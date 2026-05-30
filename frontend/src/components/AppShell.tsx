@@ -3,6 +3,7 @@ import {
   BellOutlined,
   DashboardOutlined,
   FundProjectionScreenOutlined,
+  NotificationOutlined,
   NodeIndexOutlined,
   SettingOutlined
 } from "@ant-design/icons";
@@ -10,12 +11,13 @@ import { Layout, Menu, Space, Typography } from "antd";
 import { useState } from "react";
 
 import { AlertHistoryPage } from "../pages/AlertHistoryPage";
+import { AnnouncementsPage } from "../pages/AnnouncementsPage";
 import { DashboardPage } from "../pages/DashboardPage";
 import { FundingArbitragePage } from "../pages/FundingArbitragePage";
 import { IndexComponentChangesPage } from "../pages/IndexComponentChangesPage";
 import { SettingsPage } from "../pages/SettingsPage";
 
-type PageKey = "dashboard" | "funding" | "index-components" | "settings" | "history";
+type PageKey = "dashboard" | "funding" | "index-components" | "announcements" | "settings" | "history";
 
 export function AppShell() {
   const [page, setPage] = useState<PageKey>("dashboard");
@@ -45,6 +47,11 @@ export function AppShell() {
               icon: <NodeIndexOutlined />,
               label: "指数成分变更"
             },
+            {
+              key: "announcements",
+              icon: <NotificationOutlined />,
+              label: "上/下币公告"
+            },
             { key: "settings", icon: <SettingOutlined />, label: "\u53c2\u6570\u4e0e\u544a\u8b66" },
             { key: "history", icon: <BellOutlined />, label: "\u544a\u8b66\u5386\u53f2" }
           ]}
@@ -58,6 +65,7 @@ export function AppShell() {
           {page === "dashboard" ? <DashboardPage /> : null}
           {page === "funding" ? <FundingArbitragePage /> : null}
           {page === "index-components" ? <IndexComponentChangesPage /> : null}
+          {page === "announcements" ? <AnnouncementsPage /> : null}
           {page === "settings" ? <SettingsPage /> : null}
           {page === "history" ? <AlertHistoryPage /> : null}
         </Layout.Content>

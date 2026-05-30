@@ -3,6 +3,7 @@ export type OpportunityType = "SF" | "FF" | "SS";
 export type AlertSeverity = "info" | "warning" | "critical";
 export type PhonePriceAlertCondition = "above" | "below";
 export type PhonePriceAlertPriceField = "mark_price" | "index_price" | "mid_price" | "bid" | "ask";
+export type AnnouncementKind = "listing" | "delisting" | "other";
 
 export interface Opportunity {
   id: string;
@@ -249,6 +250,39 @@ export interface IndexComponentSnapshotFilters {
   symbol?: string;
   exchange?: string;
   limit?: number;
+}
+
+export interface ExchangeAnnouncement {
+  id: string;
+  exchange: string;
+  announcement_id: string;
+  kind: AnnouncementKind;
+  title: string;
+  url: string;
+  source: string;
+  category?: string | null;
+  published_at: string;
+  fetched_at: string;
+  alert_status: string;
+}
+
+export interface AnnouncementSettings {
+  enabled: boolean;
+  poll_interval_seconds: number;
+  record_exchanges: string[];
+  alert_exchanges: string[];
+  bootstrap_alerts_enabled: boolean;
+}
+
+export interface AnnouncementFilters {
+  exchange?: string;
+  kind?: AnnouncementKind;
+  limit?: number;
+}
+
+export interface AnnouncementExchangeOption {
+  label: string;
+  value: string;
 }
 
 export interface MarketFilters {

@@ -1,17 +1,20 @@
 /// <reference types="vitest" />
 import react from "@vitejs/plugin-react";
-import { defineConfig, type UserConfig } from "vite";
+import { defineConfig, loadEnv, type UserConfig } from "vite";
 import type { InlineConfig } from "vitest";
 
 type ViteConfig = UserConfig & { test: InlineConfig };
 
-export default defineConfig({
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, ".", "");
+  const proxyTarget = env.VITE_PROXY_TARGET ?? "http://127.0.0.1:8000";
+  return {
   plugins: [react()],
   server: {
     port: 3000,
     proxy: {
       "/api": {
-        target: process.env.VITE_PROXY_TARGET ?? "http://127.0.0.1:8000",
+        target: proxyTarget,
         changeOrigin: true
       }
     }
@@ -25,4 +28,5 @@ export default defineConfig({
     setupFiles: ["./tests/setup.ts"],
     css: true
   }
-} as ViteConfig);
+} as ViteConfig;
+});

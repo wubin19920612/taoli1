@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.core.security import dashboard_password_header, verify_dashboard_password
 from app.db.repositories import SettingsRepository
+from app.models.announcement import AnnouncementSettings
 from app.models.settings import (
     AlertMessageTemplateSettings,
     AstroCardSettings,
@@ -150,3 +151,18 @@ async def update_live_pilot_settings(
 ) -> LivePilotSettings:
     verify_dashboard_password(request.app.state.settings.dashboard_password, password)
     return await _settings_repo(request).set_live_pilot_settings(settings)
+
+
+@router.get("/announcements", response_model=AnnouncementSettings)
+async def get_announcement_settings(request: Request) -> AnnouncementSettings:
+    return await _settings_repo(request).get_announcement_settings()
+
+
+@router.put("/announcements", response_model=AnnouncementSettings)
+async def update_announcement_settings(
+    settings: AnnouncementSettings,
+    request: Request,
+    password: str | None = Depends(dashboard_password_header),
+) -> AnnouncementSettings:
+    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
+    return await _settings_repo(request).set_announcement_settings(settings)

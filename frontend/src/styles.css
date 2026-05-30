@@ -313,6 +313,33 @@ body {
   overflow: hidden;
 }
 
+.announcements-settings-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.announcements-settings-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.announcements-settings-head .ant-typography {
+  margin: 0;
+}
+
+.announcements-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(140px, 1fr));
+  gap: 0 12px;
+  align-items: end;
+}
+
+.announcements-table .ant-table-cell {
+  vertical-align: top;
+}
+
 .funding-table .ant-table-cell {
   vertical-align: top;
 }
@@ -766,6 +793,7 @@ body {
   .form-grid,
   .funding-metrics,
   .funding-settings-grid,
+  .announcements-settings-grid,
   .live-pilot-metrics,
   .template-grid,
   .template-options {
@@ -805,6 +833,10 @@ body {
   }
 
   .index-component-watch-head {
+    flex-direction: column;
+  }
+
+  .announcements-settings-head {
     flex-direction: column;
   }
 

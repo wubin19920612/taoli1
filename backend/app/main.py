@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import (
+    routes_announcements,
     routes_astro,
     routes_admin,
     routes_alerts,
@@ -25,6 +26,7 @@ from app.core.config import Settings, get_settings
 from app.db.database import connect_database
 from app.db.repositories import (
     AlertEventRepository,
+    AnnouncementRepository,
     IndexComponentRepository,
     AlertRuleRepository,
     OpportunityHistoryRepository,
@@ -40,6 +42,11 @@ from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings,
 from app.services.alert_engine import AlertEngine, AlertMatch, observations_are_stable
 from app.services.alert_messages import build_alert_message
 from app.services.alert_metrics import observe_alert_metrics
+from app.services.announcements import (
+    AnnouncementMonitor,
+    default_announcement_provider,
+    run_announcement_loop,
+)
 from app.services.astro_alerts import AstroAlertService
 from app.services.astro_client import AstroSdkClient, AstroSdkConfig
 from app.services.collector import MarketCollector, default_exchange_adapters, run_collector_loop
@@ -395,8 +402,10 @@ def create_app(
         app.state.settings_repo = SettingsRepository(db)
         app.state.history_repo = OpportunityHistoryRepository(db)
         app.state.index_component_repo = IndexComponentRepository(db)
+        app.state.announcement_repo = AnnouncementRepository(db)
         tasks: list[asyncio.Task] = []
         collector: MarketCollector | None = None
+        announcement_provider = None
         if start_collector:
             exchange_adapters = default_exchange_adapters()
             history_recorder = OpportunityHistoryRecorder(
@@ -456,6 +465,23 @@ def create_app(
                         )
                     )
                 )
+            announcement_monitor = AnnouncementMonitor(
+                app.state.announcement_repo,
+                alert_sender=lambda message: _send_index_component_alert(app, message),
+            )
+            announcement_provider = default_announcement_provider()
+            app.state.announcement_monitor = announcement_monitor
+            app.state.announcement_provider = announcement_provider
+            tasks.append(
+                asyncio.create_task(
+                    run_announcement_loop(
+                        announcement_provider,
+                        announcement_monitor,
+                        app.state.settings_repo.get_announcement_settings,
+                        stop_event,
+                    )
+                )
+            )
         try:
             yield
         finally:
@@ -467,6 +493,8 @@ def create_app(
                     await task
             if collector is not None:
                 await collector.close()
+            if announcement_provider is not None:
+                await announcement_provider.aclose()
             astro_client = getattr(app.state, "astro_client", None)
             if astro_client is not None:
                 await astro_client.aclose()
@@ -532,6 +560,7 @@ def create_app(
     app.include_router(routes_opportunities.router, prefix="/api")
     app.include_router(routes_history.router, prefix="/api")
     app.include_router(routes_index_components.router, prefix="/api")
+    app.include_router(routes_announcements.router, prefix="/api")
     app.include_router(routes_alerts.router, prefix="/api")
     app.include_router(routes_phone_alerts.router, prefix="/api")
     app.include_router(routes_funding_arbitrage.router, prefix="/api")

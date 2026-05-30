@@ -6,6 +6,7 @@ import pytest
 
 from app.core.config import Settings
 from app.main import _run_alert_loop, create_app
+from app.models.announcement import AnnouncementKind, AnnouncementSettings, ExchangeAnnouncement
 from app.models.funding_arbitrage import FundingArbitrageSettings
 from app.models.history import OpportunityHistoryRow
 from app.models.index_component import (
@@ -34,12 +35,14 @@ class FakeSettingsRepository:
         astro_card_settings: AstroCardSettings | None = None,
         live_pilot_settings: LivePilotSettings | None = None,
         funding_arbitrage_settings: FundingArbitrageSettings | None = None,
+        announcement_settings: AnnouncementSettings | None = None,
     ):
         self.settings = settings
         self.alert_template = alert_template or AlertMessageTemplateSettings()
         self.astro_card_settings = astro_card_settings
         self.live_pilot_settings = live_pilot_settings or LivePilotSettings()
         self.funding_arbitrage_settings = funding_arbitrage_settings or FundingArbitrageSettings()
+        self.announcement_settings = announcement_settings or AnnouncementSettings()
 
     async def get_risk_settings(self) -> RiskSettings:
         return self.settings
@@ -72,6 +75,13 @@ class FakeSettingsRepository:
         settings: FundingArbitrageSettings,
     ) -> FundingArbitrageSettings:
         self.funding_arbitrage_settings = settings
+        return settings
+
+    async def get_announcement_settings(self) -> AnnouncementSettings:
+        return self.announcement_settings
+
+    async def set_announcement_settings(self, settings: AnnouncementSettings) -> AnnouncementSettings:
+        self.announcement_settings = settings
         return settings
 
 
@@ -157,6 +167,16 @@ class FakeIndexComponentRepository:
         self.calls.append({"method": "delete_watch_item", "id": item_id})
         self.deleted_watch_ids.append(item_id)
         self.watch_items = [item for item in self.watch_items if item.id != item_id]
+
+
+class FakeAnnouncementRepository:
+    def __init__(self, rows: list[ExchangeAnnouncement] | None = None):
+        self.rows = rows or []
+        self.calls: list[dict[str, object]] = []
+
+    async def list(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.rows
 
 
 class FakePhonePriceAlertRuleRepository:
@@ -2235,6 +2255,76 @@ def test_index_component_watchlist_endpoints_manage_monitored_symbols() -> None:
     deleted = client.delete(f"/api/index-components/watchlist/{created.json()['id']}")
     assert deleted.status_code == 204
     assert repo.deleted_watch_ids == [created.json()["id"]]
+
+
+def test_announcement_settings_endpoint_round_trip() -> None:
+    app = create_app(settings=Settings(dashboard_password="secret"))
+    repo = FakeSettingsRepository(RiskSettings())
+    app.state.settings_repo = repo
+    client = TestClient(app)
+
+    response = client.put(
+        "/api/settings/announcements",
+        headers={"X-Dashboard-Password": "secret"},
+        json={
+            "enabled": True,
+            "poll_interval_seconds": 120,
+            "record_exchanges": ["OKX", "bybit", "okx"],
+            "alert_exchanges": ["BYBIT"],
+            "bootstrap_alerts_enabled": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["record_exchanges"] == ["okx", "bybit"]
+    assert response.json()["alert_exchanges"] == ["bybit"]
+    listed = client.get("/api/settings/announcements")
+    assert listed.status_code == 200
+    assert listed.json()["bootstrap_alerts_enabled"] is True
+
+
+def test_announcements_endpoint_returns_filtered_records() -> None:
+    app = create_app()
+    row = ExchangeAnnouncement(
+        id="ann-1",
+        exchange="okx",
+        announcement_id="okx-to-list-test",
+        kind=AnnouncementKind.LISTING,
+        title="OKX to list TEST for spot trading",
+        url="https://www.okx.com/help/okx-to-list-test",
+        source="okx-support-announcements",
+        category="announcements-new-listings",
+        published_at=datetime(2026, 5, 30, 8, 0, tzinfo=UTC),
+        fetched_at=datetime(2026, 5, 30, 8, 1, tzinfo=UTC),
+        alert_status="sent",
+    )
+    repo = FakeAnnouncementRepository([row])
+    app.state.announcement_repo = repo
+    client = TestClient(app)
+
+    response = client.get("/api/announcements?exchange=OKX&kind=listing&limit=25")
+
+    assert response.status_code == 200
+    assert response.json()[0]["title"] == "OKX to list TEST for spot trading"
+    assert repo.calls[0] == {
+        "exchange": "okx",
+        "kind": "listing",
+        "limit": 25,
+    }
+
+
+def test_announcement_exchange_options_endpoint_returns_supported_providers() -> None:
+    app = create_app()
+    client = TestClient(app)
+
+    response = client.get("/api/announcements/exchanges")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {"label": "OKX", "value": "okx"},
+        {"label": "Bybit", "value": "bybit"},
+        {"label": "Bitget", "value": "bitget"},
+    ]
 
 
 @pytest.mark.asyncio

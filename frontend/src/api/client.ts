@@ -2,6 +2,9 @@ import type {
   AlertEvent,
   AlertMessageTemplateSettings,
   AlertRule,
+  AnnouncementExchangeOption,
+  AnnouncementFilters,
+  AnnouncementSettings,
   AstroActionResult,
   AstroCardCreateRequest,
   AstroCardSettings,
@@ -10,6 +13,7 @@ import type {
   FundingArbitragePreview,
   FundingArbitrageSettings,
   HealthStatus,
+  ExchangeAnnouncement,
   IndexComponentChange,
   IndexComponentChangeFilters,
   IndexComponentSnapshot,
@@ -157,6 +161,31 @@ export async function updateLivePilotSettings(settings: LivePilotSettings): Prom
     method: "PUT",
     body: JSON.stringify(settings)
   });
+}
+
+export async function getAnnouncementSettings(): Promise<AnnouncementSettings> {
+  return fetchJson<AnnouncementSettings>("/settings/announcements");
+}
+
+export async function updateAnnouncementSettings(settings: AnnouncementSettings): Promise<AnnouncementSettings> {
+  return fetchJson<AnnouncementSettings>("/settings/announcements", {
+    method: "PUT",
+    body: JSON.stringify(settings)
+  });
+}
+
+export async function listAnnouncements(filters: AnnouncementFilters = {}): Promise<ExchangeAnnouncement[]> {
+  const url = buildUrl("/announcements", { limit: 100, ...filters });
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    return response.json() as Promise<ExchangeAnnouncement[]>;
+  });
+}
+
+export async function listAnnouncementExchanges(): Promise<AnnouncementExchangeOption[]> {
+  return fetchJson<AnnouncementExchangeOption[]>("/announcements/exchanges");
 }
 
 export async function getFundingArbitrageSettings(): Promise<FundingArbitrageSettings> {

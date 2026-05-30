@@ -180,6 +180,28 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_index_component_watchlist_symbol
           ON index_component_watchlist(symbol);
+
+        CREATE TABLE IF NOT EXISTS exchange_announcements (
+          id TEXT PRIMARY KEY,
+          exchange TEXT NOT NULL,
+          announcement_id TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          title TEXT NOT NULL,
+          url TEXT NOT NULL,
+          source TEXT NOT NULL,
+          category TEXT,
+          published_at TEXT NOT NULL,
+          fetched_at TEXT NOT NULL,
+          alert_status TEXT NOT NULL,
+          UNIQUE(exchange, source, announcement_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_exchange_announcements_time
+          ON exchange_announcements(published_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_exchange_announcements_exchange_time
+          ON exchange_announcements(exchange, published_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_exchange_announcements_kind_time
+          ON exchange_announcements(kind, published_at DESC);
         """
     )
     await _ensure_opportunity_history_columns(db)

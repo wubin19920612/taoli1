@@ -4,6 +4,7 @@ from datetime import datetime
 import aiosqlite
 
 from app.models.alert import AlertEvent, AlertRule
+from app.models.announcement import AnnouncementKind, AnnouncementSettings, ExchangeAnnouncement
 from app.models.history import OpportunityHistoryRow
 from app.models.index_component import (
     IndexComponent,
@@ -520,6 +521,96 @@ class IndexComponentRepository:
         )
 
 
+class AnnouncementRepository:
+    def __init__(self, db: aiosqlite.Connection):
+        self.db = db
+
+    async def create_if_new(self, announcement: ExchangeAnnouncement) -> ExchangeAnnouncement | None:
+        cursor = await self.db.execute(
+            """
+            INSERT OR IGNORE INTO exchange_announcements (
+              id, exchange, announcement_id, kind, title, url, source, category,
+              published_at, fetched_at, alert_status
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                announcement.id,
+                announcement.exchange,
+                announcement.announcement_id,
+                announcement.kind.value,
+                announcement.title,
+                announcement.url,
+                announcement.source,
+                announcement.category,
+                announcement.published_at.isoformat(),
+                announcement.fetched_at.isoformat(),
+                announcement.alert_status,
+            ),
+        )
+        await self.db.commit()
+        if cursor.rowcount == 0:
+            return None
+        return announcement
+
+    async def update_alert_status(self, announcement_id: str, alert_status: str) -> None:
+        await self.db.execute(
+            "UPDATE exchange_announcements SET alert_status = ? WHERE id = ?",
+            (alert_status, announcement_id),
+        )
+        await self.db.commit()
+
+    async def has_any(self) -> bool:
+        cursor = await self.db.execute("SELECT 1 FROM exchange_announcements LIMIT 1")
+        row = await cursor.fetchone()
+        return row is not None
+
+    async def list(
+        self,
+        *,
+        exchange: str | None = None,
+        kind: AnnouncementKind | str | None = None,
+        limit: int = 100,
+    ) -> list[ExchangeAnnouncement]:
+        clauses: list[str] = []
+        params: list[object] = []
+        if exchange:
+            clauses.append("exchange = ?")
+            params.append(exchange.strip().lower())
+        if kind:
+            kind_value = kind.value if isinstance(kind, AnnouncementKind) else str(kind)
+            clauses.append("kind = ?")
+            params.append(kind_value)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(limit)
+        cursor = await self.db.execute(
+            f"""
+            SELECT * FROM exchange_announcements
+            {where}
+            ORDER BY published_at DESC, fetched_at DESC
+            LIMIT ?
+            """,
+            params,
+        )
+        rows = await cursor.fetchall()
+        return [self._announcement_from_db(row) for row in rows]
+
+    def _announcement_from_db(self, row: aiosqlite.Row) -> ExchangeAnnouncement:
+        return ExchangeAnnouncement(
+            id=row["id"],
+            exchange=row["exchange"],
+            announcement_id=row["announcement_id"],
+            kind=AnnouncementKind(row["kind"]),
+            title=row["title"],
+            url=row["url"],
+            source=row["source"],
+            category=row["category"],
+            published_at=row["published_at"],
+            fetched_at=row["fetched_at"],
+            alert_status=row["alert_status"],
+        )
+
+
 class SettingsRepository:
     def __init__(self, db: aiosqlite.Connection):
         self.db = db
@@ -643,6 +734,31 @@ class SettingsRepository:
             ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
             """,
             ("funding_arbitrage", settings.model_dump_json()),
+        )
+        await self.db.commit()
+        return settings
+
+    async def get_announcement_settings(self) -> AnnouncementSettings:
+        cursor = await self.db.execute(
+            "SELECT payload FROM app_settings WHERE key = ?",
+            ("announcements",),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return AnnouncementSettings()
+        return AnnouncementSettings.model_validate(json.loads(row["payload"]))
+
+    async def set_announcement_settings(
+        self,
+        settings: AnnouncementSettings,
+    ) -> AnnouncementSettings:
+        await self.db.execute(
+            """
+            INSERT INTO app_settings (key, payload)
+            VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
+            """,
+            ("announcements", settings.model_dump_json()),
         )
         await self.db.commit()
         return settings
