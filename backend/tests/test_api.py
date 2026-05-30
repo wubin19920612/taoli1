@@ -963,6 +963,8 @@ def test_history_stats_endpoint_returns_spread_distribution_and_chart_points() -
             funding_rate_sell_pct=0.02,
             funding_next_rate_buy_pct=0.01,
             funding_next_rate_sell_pct=0.01 + (next_funding_pct or 0),
+            funding_next_time_buy=observed_at + timedelta(hours=8),
+            funding_next_time_sell=observed_at + timedelta(hours=8),
             net_funding_pct=0.01,
             net_funding_next_pct=next_funding_pct,
             buy_volume_24h_usdt=10_000_000,
@@ -1001,6 +1003,12 @@ def test_history_stats_endpoint_returns_spread_distribution_and_chart_points() -
     assert payload["open_spread_pct"]["p95"] == pytest.approx(0.825)
     assert payload["net_funding_next_pct"]["mean"] == pytest.approx(0.023333333)
     assert [point["open_spread_pct"] for point in payload["points"]] == [0.1, 0.4, 0.9]
+    assert payload["points"][1]["funding_rate_buy_pct"] == 0.01
+    assert payload["points"][1]["funding_rate_sell_pct"] == 0.02
+    assert payload["points"][1]["funding_next_rate_buy_pct"] == 0.01
+    assert payload["points"][1]["funding_next_rate_sell_pct"] == 0.03
+    assert payload["points"][1]["funding_next_time_buy"] == "2026-05-19T09:02:00Z"
+    assert payload["points"][1]["funding_next_time_sell"] == "2026-05-19T09:02:00Z"
     assert history_repo.calls[0]["symbol"] == "BTCUSDT"
     assert history_repo.calls[0]["opportunity_id"] == "opp-stats"
     assert history_repo.calls[0]["type"] == "FF"

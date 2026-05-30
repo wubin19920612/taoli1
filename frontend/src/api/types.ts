@@ -347,6 +347,12 @@ export interface OpportunityHistoryPoint {
   open_spread_pct: number;
   close_spread_pct: number;
   fee_adjusted_open_pct: number;
+  funding_rate_buy_pct: number | null;
+  funding_rate_sell_pct: number | null;
+  funding_next_rate_buy_pct: number | null;
+  funding_next_rate_sell_pct: number | null;
+  funding_next_time_buy: string | null;
+  funding_next_time_sell: string | null;
   net_funding_pct: number | null;
   net_funding_next_pct: number | null;
 }
@@ -530,8 +536,15 @@ export interface FundingArbitrageCandidate {
   short_exchange: string;
   short_market_type: MarketType;
   funding_source: FundingSource;
+  long_current_funding_pct: number | null;
+  short_current_funding_pct: number | null;
+  long_next_funding_pct: number | null;
+  short_next_funding_pct: number | null;
   current_funding_edge_pct: number | null;
   next_funding_edge_pct: number | null;
+  long_next_settlement_time: string | null;
+  short_next_settlement_time: string | null;
+  next_settlement_time: string | null;
   minutes_to_settlement: number | null;
   entry_basis_pct: number;
   exit_basis_pct: number;

@@ -1,4 +1,5 @@
 from typing import Literal
+from datetime import datetime
 
 from pydantic import BaseModel, Field
 
@@ -38,8 +39,15 @@ class FundingArbitrageCandidate(BaseModel):
     short_exchange: str
     short_market_type: str
     funding_source: FundingSource
+    long_current_funding_pct: float | None = None
+    short_current_funding_pct: float | None = None
+    long_next_funding_pct: float | None = None
+    short_next_funding_pct: float | None = None
     current_funding_edge_pct: float | None = None
     next_funding_edge_pct: float | None = None
+    long_next_settlement_time: datetime | None = None
+    short_next_settlement_time: datetime | None = None
+    next_settlement_time: datetime | None = None
     minutes_to_settlement: float | None = None
     entry_basis_pct: float
     exit_basis_pct: float

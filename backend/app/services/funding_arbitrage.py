@@ -88,6 +88,16 @@ def _minutes_to_settlement(
     short_leg: MarketSnapshot,
     now: datetime,
 ) -> float | None:
+    target = _next_settlement_time(long_leg, short_leg)
+    if target is None:
+        return None
+    return (target - now).total_seconds() / 60
+
+
+def _next_settlement_time(
+    long_leg: MarketSnapshot,
+    short_leg: MarketSnapshot,
+) -> datetime | None:
     times = [
         value
         for value in (long_leg.funding_next_time, short_leg.funding_next_time)
@@ -98,7 +108,7 @@ def _minutes_to_settlement(
     target = min(times)
     if target.tzinfo is None:
         target = target.replace(tzinfo=UTC)
-    return (target - now).total_seconds() / 60
+    return target.astimezone(UTC)
 
 
 def _basis_risk_penalty_pct(
@@ -181,6 +191,7 @@ def _build_candidate(
     volume = _known_volume_24h_usdt(long_leg, short_leg)
     depth = _depth_usdt(long_leg, short_leg)
     minutes_to_settlement = _minutes_to_settlement(long_leg, short_leg, now)
+    next_settlement = _next_settlement_time(long_leg, short_leg)
     confidence_penalty = settings.confidence_penalty_pct if source == "fallback_current" else 0.0
     adl_score = _adl_risk_score(next_edge, basis_width, volume, long_leg, short_leg, settings)
     adl_level = _adl_level(adl_score, settings)
@@ -254,8 +265,15 @@ def _build_candidate(
         short_exchange=short_leg.exchange,
         short_market_type=short_leg.market_type.value,
         funding_source=source,
+        long_current_funding_pct=current_long,
+        short_current_funding_pct=current_short,
+        long_next_funding_pct=long_next,
+        short_next_funding_pct=short_next,
         current_funding_edge_pct=current_edge,
         next_funding_edge_pct=next_edge,
+        long_next_settlement_time=long_leg.funding_next_time,
+        short_next_settlement_time=short_leg.funding_next_time,
+        next_settlement_time=next_settlement,
         minutes_to_settlement=minutes_to_settlement,
         entry_basis_pct=entry_basis,
         exit_basis_pct=exit_basis,

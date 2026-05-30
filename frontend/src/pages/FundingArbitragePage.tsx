@@ -1,9 +1,11 @@
-import { ReloadOutlined, SaveOutlined } from "@ant-design/icons";
+import { AreaChartOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
 import {
   Alert,
   Button,
   Form,
   InputNumber,
+  Modal,
+  Segmented,
   Space,
   Statistic,
   Switch,
@@ -14,8 +16,11 @@ import {
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useCallback, useEffect, useState } from "react";
+import dayjs from "dayjs";
+import utc from "dayjs/plugin/utc";
 
 import {
+  getOpportunityHistoryStats,
   getFundingArbitragePreview,
   getFundingArbitrageSettings,
   updateFundingArbitrageSettings
@@ -26,8 +31,12 @@ import type {
   FundingArbitrageDecision,
   FundingArbitragePreview,
   FundingArbitrageSettings,
-  FundingSource
+  FundingSource,
+  OpportunityHistoryPoint,
+  OpportunityHistoryStats
 } from "../api/types";
+
+dayjs.extend(utc);
 
 const defaultFundingSettings: FundingArbitrageSettings = {
   enabled: false,
@@ -87,6 +96,17 @@ function pct(value: number | null | undefined, digits = 3): string {
   return typeof value === "number" && Number.isFinite(value) ? `${value.toFixed(digits)}%` : "-";
 }
 
+function signedPct(value: number | null | undefined, digits = 3): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "-";
+  }
+  return `${value >= 0 ? "+" : ""}${value.toFixed(digits)}%`;
+}
+
+function settlementTime(value: string | null | undefined): string {
+  return value ? `${dayjs.utc(value).utcOffset(8).format("MM-DD HH:mm")} UTC+8` : "-";
+}
+
 function compactMoney(value: number | null | undefined): string {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return "-";
@@ -102,6 +122,14 @@ function compactMoney(value: number | null | undefined): string {
 
 function leg(exchange: string, marketType: string): string {
   return `${exchange} ${marketType}`;
+}
+
+function fundingPair(left: number | null | undefined, right: number | null | undefined): string {
+  return `${pct(left)} / ${pct(right)}`;
+}
+
+function historyPointKey(value: string): string {
+  return dayjs.utc(value).format("MM-DD HH:mm");
 }
 
 function normalizeSettings(value?: Partial<FundingArbitrageSettings>): FundingArbitrageSettings {
@@ -131,7 +159,10 @@ function settingsFromForm(values: Partial<FundingSettingsForm>): FundingArbitrag
   };
 }
 
-const columns: ColumnsType<FundingArbitrageCandidate> = [
+function buildColumns(
+  onOpenHistory: (candidate: FundingArbitrageCandidate) => void
+): ColumnsType<FundingArbitrageCandidate> {
+  return [
   {
     title: "\u51b3\u7b56",
     dataIndex: "decision",
@@ -161,6 +192,32 @@ const columns: ColumnsType<FundingArbitrageCandidate> = [
     title: "\u7a7a\u5934",
     width: 142,
     render: (_, row) => leg(row.short_exchange, row.short_market_type)
+  },
+  {
+    title: "价差",
+    width: 152,
+    align: "right",
+    render: (_, row) => (
+      <Space direction="vertical" size={0}>
+        <Typography.Text strong>{`开 ${pct(row.entry_basis_pct)}`}</Typography.Text>
+        <Typography.Text type="secondary">{`平 ${pct(row.exit_basis_pct)}`}</Typography.Text>
+        <Typography.Text type="secondary">{`宽 ${pct(row.basis_width_pct)}`}</Typography.Text>
+      </Space>
+    )
+  },
+  {
+    title: "资金费率",
+    width: 180,
+    align: "right",
+    render: (_, row) => (
+      <Space direction="vertical" size={0}>
+        <Typography.Text>{`当前 ${fundingPair(row.long_current_funding_pct, row.short_current_funding_pct)}`}</Typography.Text>
+        <Typography.Text>{`下期 ${fundingPair(row.long_next_funding_pct, row.short_next_funding_pct)}`}</Typography.Text>
+        <Typography.Text type={(row.next_funding_edge_pct ?? 0) >= 0 ? "success" : "danger"}>
+          {`差 ${signedPct(row.next_funding_edge_pct)}`}
+        </Typography.Text>
+      </Space>
+    )
   },
   {
     title: "\u4e0b\u5468\u671f\u8d44\u91d1\u5dee",
@@ -200,10 +257,29 @@ const columns: ColumnsType<FundingArbitrageCandidate> = [
   },
   {
     title: "\u7ed3\u7b97",
-    dataIndex: "minutes_to_settlement",
-    width: 88,
+    width: 164,
     align: "right",
-    render: (value: number | null) => (typeof value === "number" ? `${value.toFixed(0)}m` : "-")
+    render: (_, row) => (
+      <Space direction="vertical" size={0}>
+        <Typography.Text>{settlementTime(row.next_settlement_time)}</Typography.Text>
+        <Typography.Text type="secondary">
+          {typeof row.minutes_to_settlement === "number" ? `${row.minutes_to_settlement.toFixed(0)} 分钟` : "-"}
+        </Typography.Text>
+      </Space>
+    )
+  },
+  {
+    title: "历史",
+    width: 72,
+    render: (_, row) => (
+      <Button
+        type="text"
+        size="small"
+        icon={<AreaChartOutlined />}
+        aria-label={`资金历史 ${row.symbol}`}
+        onClick={() => onOpenHistory(row)}
+      />
+    )
   },
   {
     title: "ADL proxy",
@@ -237,12 +313,48 @@ const columns: ColumnsType<FundingArbitrageCandidate> = [
     dataIndex: "decision_reasons",
     render: (values: string[]) => values.join("; ")
   }
+  ];
+}
+
+const historyColumns: ColumnsType<OpportunityHistoryPoint> = [
+  {
+    title: "时间",
+    dataIndex: "observed_at",
+    width: 118,
+    render: (value: string) => historyPointKey(value)
+  },
+  { title: "开仓价差", dataIndex: "open_spread_pct", align: "right", render: (value: number) => pct(value) },
+  { title: "平仓价差", dataIndex: "close_spread_pct", align: "right", render: (value: number) => pct(value) },
+  {
+    title: "当前资金费率",
+    width: 150,
+    align: "right",
+    render: (_, row) => fundingPair(row.funding_rate_buy_pct, row.funding_rate_sell_pct)
+  },
+  { title: "当前资金差", dataIndex: "net_funding_pct", align: "right", render: (value: number | null) => signedPct(value) },
+  {
+    title: "下期资金费率",
+    width: 150,
+    align: "right",
+    render: (_, row) => fundingPair(row.funding_next_rate_buy_pct, row.funding_next_rate_sell_pct)
+  },
+  { title: "下期资金差", dataIndex: "net_funding_next_pct", align: "right", render: (value: number | null) => signedPct(value) },
+  {
+    title: "结算时间",
+    width: 220,
+    render: (_, row) => `${settlementTime(row.funding_next_time_buy)} / ${settlementTime(row.funding_next_time_sell)}`
+  }
 ];
 
 export function FundingArbitragePage() {
   const [form] = Form.useForm<FundingSettingsForm>();
   const [settings, setSettings] = useState<FundingArbitrageSettings>(defaultFundingSettings);
   const [preview, setPreview] = useState<FundingArbitragePreview | null>(null);
+  const [historyCandidate, setHistoryCandidate] = useState<FundingArbitrageCandidate | null>(null);
+  const [historyStats, setHistoryStats] = useState<OpportunityHistoryStats | null>(null);
+  const [historyHours, setHistoryHours] = useState(168);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -271,6 +383,28 @@ export function FundingArbitragePage() {
     void load();
   }, [form, load]);
 
+  const openHistory = useCallback(async (candidate: FundingArbitrageCandidate, hours = historyHours) => {
+    setHistoryCandidate(candidate);
+    setHistoryStats(null);
+    setHistoryError("");
+    setHistoryLoading(true);
+    try {
+      setHistoryStats(
+        await getOpportunityHistoryStats({
+          symbol: candidate.symbol,
+          opportunity_id: candidate.id,
+          type: candidate.type,
+          hours,
+          point_limit: 240
+        })
+      );
+    } catch (exc) {
+      setHistoryError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [historyHours]);
+
   const save = async () => {
     setSaving(true);
     setError("");
@@ -287,6 +421,23 @@ export function FundingArbitragePage() {
       setSaving(false);
     }
   };
+
+  const closeHistory = () => {
+    setHistoryCandidate(null);
+    setHistoryStats(null);
+    setHistoryError("");
+    setHistoryLoading(false);
+  };
+
+  const changeHistoryRange = (value: string | number) => {
+    const nextHours = Number(value);
+    setHistoryHours(nextHours);
+    if (historyCandidate) {
+      void openHistory(historyCandidate, nextHours);
+    }
+  };
+
+  const columns = buildColumns((candidate) => void openHistory(candidate));
 
   return (
     <div className="page funding-page">
@@ -405,10 +556,63 @@ export function FundingArbitragePage() {
         loading={loading}
         rowKey="id"
         pagination={{ pageSize: 50, showSizeChanger: true }}
-        scroll={{ x: 1560 }}
+        scroll={{ x: 1900 }}
         size="small"
         tableLayout="fixed"
       />
+      <Modal
+        open={historyCandidate !== null}
+        title="资金费率与价差历史"
+        width={1040}
+        onCancel={closeHistory}
+        footer={[
+          <Button key="close" onClick={closeHistory}>
+            关闭
+          </Button>
+        ]}
+        destroyOnHidden
+      >
+        {historyCandidate ? (
+          <Space direction="vertical" size={12} className="funding-history-panel">
+            <div className="funding-history-head">
+              <Space size={8} wrap>
+                <Typography.Title level={4}>{historyCandidate.symbol}</Typography.Title>
+                <Tag>{historyCandidate.type}</Tag>
+                <Tag color="blue">{`${historyCandidate.long_exchange} -> ${historyCandidate.short_exchange}`}</Tag>
+              </Space>
+              <Segmented
+                value={historyHours}
+                options={[
+                  { label: "24h", value: 24 },
+                  { label: "72h", value: 72 },
+                  { label: "7天", value: 168 },
+                  { label: "30天", value: 720 }
+                ]}
+                onChange={changeHistoryRange}
+              />
+            </div>
+            {historyLoading ? <Alert type="info" showIcon message="加载历史资金费率..." /> : null}
+            {historyError ? <Alert type="error" showIcon message={historyError} /> : null}
+            {historyStats ? (
+              <>
+                <div className="funding-history-stats">
+                  <Statistic title="样本数" value={historyStats.count} />
+                  <Statistic title="当前开仓价差" value={historyStats.open_spread_pct.current ?? 0} precision={3} suffix="%" />
+                  <Statistic title="当前资金费率差" value={historyStats.net_funding_pct.current ?? 0} precision={3} suffix="%" />
+                  <Statistic title="下期资金费率差" value={historyStats.net_funding_next_pct.current ?? 0} precision={3} suffix="%" />
+                </div>
+                <Table
+                  size="small"
+                  rowKey={(row) => row.observed_at}
+                  pagination={{ pageSize: 12 }}
+                  dataSource={historyStats.points.slice(0, 80)}
+                  columns={historyColumns}
+                />
+              </>
+            ) : null}
+          </Space>
+        ) : null}
+      </Modal>
     </div>
   );
 }

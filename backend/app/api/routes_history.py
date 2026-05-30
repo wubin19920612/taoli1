@@ -103,6 +103,12 @@ def build_opportunity_history_stats(
             open_spread_pct=row.open_spread_pct,
             close_spread_pct=row.close_spread_pct,
             fee_adjusted_open_pct=row.fee_adjusted_open_pct,
+            funding_rate_buy_pct=row.funding_rate_buy_pct,
+            funding_rate_sell_pct=row.funding_rate_sell_pct,
+            funding_next_rate_buy_pct=row.funding_next_rate_buy_pct,
+            funding_next_rate_sell_pct=row.funding_next_rate_sell_pct,
+            funding_next_time_buy=row.funding_next_time_buy,
+            funding_next_time_sell=row.funding_next_time_sell,
             net_funding_pct=row.net_funding_pct,
             net_funding_next_pct=row.net_funding_next_pct,
         )

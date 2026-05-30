@@ -67,7 +67,14 @@ def test_sf_positive_funding_can_enter_when_basis_and_adl_are_low() -> None:
     assert candidate.decision == "ENTER"
     assert candidate.long_market_type == "spot"
     assert candidate.short_market_type == "future"
+    assert candidate.long_current_funding_pct == 0
+    assert candidate.short_current_funding_pct is None
+    assert candidate.long_next_funding_pct == 0
+    assert candidate.short_next_funding_pct == 0.12
     assert candidate.next_funding_edge_pct == 0.12
+    assert candidate.long_next_settlement_time is None
+    assert candidate.short_next_settlement_time == now + timedelta(minutes=30)
+    assert candidate.next_settlement_time == now + timedelta(minutes=30)
     assert candidate.expected_cycle_pnl_pct > 0
 
 
