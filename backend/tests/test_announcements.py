@@ -477,6 +477,21 @@ async def test_hyperliquid_provider_records_meta_universe_changes() -> None:
             "hyperliquid:meta-universe",
             {"symbols": {"BTC": False, "OLD": False, "DOGE": False}},
         )
+        await repo.create_if_new(
+            ExchangeAnnouncement(
+                exchange="hyperliquid",
+                announcement_id="baseline:BTC",
+                kind=AnnouncementKind.LISTING,
+                title="Hyperliquid currently lists BTC perpetual market",
+                url="https://hyperliquid.gitbook.io/hyperliquid-docs",
+                source="hyperliquid-meta-universe",
+                category="meta-universe:baseline",
+                symbols=["BTC"],
+                market_type="futures",
+                published_at=BASE_TIME,
+                fetched_at=BASE_TIME,
+            )
+        )
         provider = HyperliquidAnnouncementProvider(
             client=None,
             repository=repo,
@@ -500,5 +515,37 @@ async def test_hyperliquid_provider_records_meta_universe_changes() -> None:
         ]
         state = await repo.get_provider_state("hyperliquid:meta-universe")
         assert state == {"symbols": {"BTC": False, "DOGE": True, "NEW": False}}
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_provider_emits_initial_baseline_records() -> None:
+    db = await connect_database(":memory:")
+    try:
+        await initialize_schema(db)
+        repo = AnnouncementRepository(db)
+        provider = HyperliquidAnnouncementProvider(
+            client=None,
+            repository=repo,
+            now_fn=lambda: BASE_TIME,
+        )
+
+        rows = await provider._parse_payload(
+            {
+                "universe": [
+                    {"name": "BTC"},
+                    {"name": "ETH"},
+                    {"name": "OLD", "isDelisted": True},
+                ]
+            }
+        )
+
+        assert [(row.announcement_id, row.title) for row in rows] == [
+            ("baseline:BTC", "Hyperliquid currently lists BTC perpetual market"),
+            ("baseline:ETH", "Hyperliquid currently lists ETH perpetual market"),
+        ]
+        assert all(row.category == "meta-universe:baseline" for row in rows)
+        assert all(row.market_type == "futures" for row in rows)
     finally:
         await db.close()

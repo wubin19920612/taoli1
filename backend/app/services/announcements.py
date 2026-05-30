@@ -925,25 +925,33 @@ class HyperliquidAnnouncementProvider(HttpAnnouncementProvider):
 
         previous = await self._load_previous_state()
         await self._save_state(current)
-        if previous is None:
-            return []
 
         announcements: list[ExchangeAnnouncement] = []
-        previous_delisted = {symbol for symbol, is_delisted in previous.items() if is_delisted}
-        previous_active = set(previous) - previous_delisted
+        previous_delisted = {
+            symbol for symbol, is_delisted in (previous or {}).items() if is_delisted
+        }
+        previous_active = set(previous) - previous_delisted if previous is not None else set()
         current_delisted = {symbol for symbol, is_delisted in current.items() if is_delisted}
         current_active = set(current) - current_delisted
 
-        for symbol in sorted(current_active - set(previous)):
+        should_emit_baseline = previous is None or not await self._has_baseline_records()
+        new_active = current_active if should_emit_baseline else current_active - set(previous or {})
+        for symbol in sorted(new_active):
             announcements.append(
                 self._synthetic_announcement(
                     symbol=symbol,
                     kind=AnnouncementKind.LISTING,
-                    title=f"Hyperliquid listed {symbol} perpetual market",
+                    title=(
+                        f"Hyperliquid currently lists {symbol} perpetual market"
+                        if should_emit_baseline
+                        else f"Hyperliquid listed {symbol} perpetual market"
+                    ),
                     observed_at=now,
+                    baseline=should_emit_baseline,
                 )
             )
-        for symbol in sorted((current_delisted - previous_delisted) | (previous_active - set(current))):
+        delisted_symbols = set() if previous is None else (current_delisted - previous_delisted) | (previous_active - set(current))
+        for symbol in sorted(delisted_symbols):
             announcements.append(
                 self._synthetic_announcement(
                     symbol=symbol,
@@ -961,22 +969,27 @@ class HyperliquidAnnouncementProvider(HttpAnnouncementProvider):
         kind: AnnouncementKind,
         title: str,
         observed_at: datetime,
+        baseline: bool = False,
     ) -> ExchangeAnnouncement:
         return ExchangeAnnouncement(
             exchange=self.exchange,
-            announcement_id=f"{kind.value}:{symbol}:{observed_at.date().isoformat()}",
+            announcement_id=(
+                f"baseline:{symbol}"
+                if baseline
+                else f"{kind.value}:{symbol}:{observed_at.date().isoformat()}"
+            ),
             kind=kind,
             title=title,
             url=self.docs_url,
             source=self.source,
-            category="meta-universe",
+            category="meta-universe:baseline" if baseline else "meta-universe",
             symbols=[symbol],
             market_type="futures",
             summary=_announcement_summary(
                 kind=kind,
                 symbols=[symbol],
                 market_type="futures",
-                event_time=observed_at,
+                event_time=None if baseline else observed_at,
             ),
             published_at=observed_at,
             fetched_at=observed_at,
@@ -995,6 +1008,12 @@ class HyperliquidAnnouncementProvider(HttpAnnouncementProvider):
         if self.repository is None:
             return
         await self.repository.set_provider_state("hyperliquid:meta-universe", {"symbols": current})
+
+    async def _has_baseline_records(self) -> bool:
+        if self.repository is None:
+            return False
+        rows = await self.repository.list(exchange=self.exchange, limit=1)
+        return any(row.source == self.source for row in rows)
 
 
 class MultiAnnouncementProvider:

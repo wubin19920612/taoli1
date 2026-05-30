@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -71,9 +71,13 @@ describe("AnnouncementsPage", () => {
     expect(await screen.findByText("WDCUSDT")).toBeTruthy();
     expect(await screen.findByText("futures")).toBeTruthy();
     expect(await screen.findByText("待提醒")).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("Expand row"));
+    expect(await screen.findByText("完整标题")).toBeTruthy();
+    expect(await screen.findByText("结构化摘要")).toBeTruthy();
+    expect(screen.getAllByText("listing: symbols=WDCUSDT; market=futures; event_time=2026-05-30T09:00:00Z").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("Bybit").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("上币")).toBeTruthy();
-    expect(screen.getByText("sent")).toBeTruthy();
+    expect(screen.getAllByText("上币").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("sent").length).toBeGreaterThanOrEqual(1);
 
     await waitFor(() => {
       const calls = vi.mocked(fetch).mock.calls.map((call) => String(call[0]));

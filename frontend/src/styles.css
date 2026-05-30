@@ -348,6 +348,14 @@ body {
   font-size: 12px;
 }
 
+.announcement-detail {
+  padding: 8px 8px 8px 44px;
+}
+
+.announcement-detail .ant-descriptions-item-content {
+  word-break: break-word;
+}
+
 .funding-table .ant-table-cell {
   vertical-align: top;
 }

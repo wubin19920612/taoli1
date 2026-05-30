@@ -1,5 +1,5 @@
 import { ReloadOutlined, SearchOutlined, SaveOutlined } from "@ant-design/icons";
-import { Alert, Button, Form, InputNumber, Select, Space, Switch, Table, Tag, Typography, message } from "antd";
+import { Alert, Button, Descriptions, Form, InputNumber, Select, Space, Switch, Table, Tag, Typography, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
@@ -168,6 +168,44 @@ const columns: ColumnsType<ExchangeAnnouncement> = [
   { title: "新公告告警", dataIndex: "alert_status", width: 106, render: alertStatusTag },
   { title: "到点提醒", dataIndex: "event_reminder_status", width: 112, render: reminderStatusTag }
 ];
+
+function announcementDetails(row: ExchangeAnnouncement) {
+  return (
+    <div className="announcement-detail">
+      <Descriptions size="small" column={{ xs: 1, sm: 1, md: 2, lg: 3 }} bordered>
+        <Descriptions.Item label="摘要" span={3}>
+          {rowSummary(row)}
+        </Descriptions.Item>
+        <Descriptions.Item label="完整标题" span={3}>
+          <a href={row.url} target="_blank" rel="noreferrer">
+            {row.title}
+          </a>
+        </Descriptions.Item>
+        <Descriptions.Item label="币种">{row.symbols.length > 0 ? row.symbols.join(", ") : "-"}</Descriptions.Item>
+        <Descriptions.Item label="市场">{row.market_type || "-"}</Descriptions.Item>
+        <Descriptions.Item label="类型">{kindTag(row.kind)}</Descriptions.Item>
+        <Descriptions.Item label="公告时间">{formatUtcPlus8(row.published_at)} UTC+8</Descriptions.Item>
+        <Descriptions.Item label="事件时间">
+          {row.event_time ? `${formatUtcPlus8(row.event_time)} UTC+8` : "-"}
+        </Descriptions.Item>
+        <Descriptions.Item label="抓取时间">{formatUtcPlus8(row.fetched_at)} UTC+8</Descriptions.Item>
+        <Descriptions.Item label="交易所">{row.exchange.toUpperCase()}</Descriptions.Item>
+        <Descriptions.Item label="分类">{row.category || "-"}</Descriptions.Item>
+        <Descriptions.Item label="来源">{row.source}</Descriptions.Item>
+        <Descriptions.Item label="新公告告警">{alertStatusTag(row.alert_status)}</Descriptions.Item>
+        <Descriptions.Item label="到点提醒">{reminderStatusTag(row.event_reminder_status)}</Descriptions.Item>
+        <Descriptions.Item label="提醒发送时间">
+          {row.event_reminder_sent_at ? `${formatUtcPlus8(row.event_reminder_sent_at)} UTC+8` : "-"}
+        </Descriptions.Item>
+        {row.summary ? (
+          <Descriptions.Item label="结构化摘要" span={3}>
+            {row.summary}
+          </Descriptions.Item>
+        ) : null}
+      </Descriptions>
+    </div>
+  );
+}
 
 export function AnnouncementsPage() {
   const [form] = Form.useForm<AnnouncementSettings>();
@@ -341,6 +379,10 @@ export function AnnouncementsPage() {
         loading={loading}
         size="middle"
         tableLayout="fixed"
+        expandable={{
+          expandedRowRender: announcementDetails,
+          rowExpandable: () => true
+        }}
       />
     </div>
   );

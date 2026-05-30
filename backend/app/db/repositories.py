@@ -573,7 +573,7 @@ class AnnouncementRepository:
               symbols_json = CASE WHEN ? != '[]' THEN ? ELSE symbols_json END,
               market_type = COALESCE(?, market_type),
               event_time = COALESCE(?, event_time),
-              summary = COALESCE(?, summary),
+              summary = CASE WHEN ? IS NOT NULL THEN ? ELSE summary END,
               event_reminder_status = CASE
                 WHEN event_reminder_status = 'not_applicable' AND ? = 'pending' THEN 'pending'
                 ELSE event_reminder_status
@@ -585,6 +585,7 @@ class AnnouncementRepository:
                 symbols_json,
                 announcement.market_type,
                 _serialize_datetime(announcement.event_time),
+                announcement.summary,
                 announcement.summary,
                 announcement.event_reminder_status,
                 announcement.exchange,
