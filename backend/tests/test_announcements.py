@@ -492,6 +492,31 @@ def test_bybit_provider_parses_announcement_payload() -> None:
     assert rows[1].event_time == datetime(2026, 5, 28, 6, 51, 54, tzinfo=UTC)
 
 
+def test_bybit_provider_tolerates_alternate_article_fields() -> None:
+    provider = BybitAnnouncementProvider(client=None)
+    payload = {
+        "result": {
+            "list": [
+                {
+                    "id": "alt-new",
+                    "name": "Bybit will add support for ALTUSDT Perpetual Contract",
+                    "articleUrl": "https://announcements.bybit.com/en/article/alt-new/",
+                    "dateTimestamp": 1779962014000,
+                    "tag": "new_crypto",
+                }
+            ]
+        }
+    }
+
+    rows = provider._parse_payload(payload, "new_crypto")
+
+    assert len(rows) == 1
+    assert rows[0].kind == AnnouncementKind.LISTING
+    assert rows[0].symbols == ["ALTUSDT"]
+    assert rows[0].market_type == "futures"
+    assert rows[0].url == "https://announcements.bybit.com/en/article/alt-new/"
+
+
 def test_bitget_provider_parses_and_classifies_payload() -> None:
     provider = BitgetAnnouncementProvider(client=None)
     payload = {
@@ -520,6 +545,28 @@ def test_bitget_provider_parses_and_classifies_payload() -> None:
     assert [row.exchange for row in rows] == ["bitget", "bitget"]
     assert [row.kind for row in rows] == [AnnouncementKind.LISTING, AnnouncementKind.DELISTING]
     assert rows[0].category == "coin_listings:margin"
+
+
+def test_bitget_provider_tolerates_alternate_article_fields() -> None:
+    provider = BitgetAnnouncementProvider(client=None)
+    payload = {
+        "data": [
+            {
+                "id": "bitget-alt",
+                "title": "Bitget will add support for BGBUSDT futures trading",
+                "url": "https://www.bitget.com/support/articles/bitget-alt",
+                "publishTime": "1780052400000",
+                "type": "coin_listings",
+            }
+        ]
+    }
+
+    rows = provider._parse_payload(payload, "coin_listings")
+
+    assert len(rows) == 1
+    assert rows[0].kind == AnnouncementKind.LISTING
+    assert rows[0].symbols == ["BGBUSDT"]
+    assert rows[0].market_type == "futures"
 
 
 def test_gate_provider_parses_next_data_listing_and_delisting_pages() -> None:
@@ -552,6 +599,25 @@ def test_gate_provider_parses_next_data_listing_and_delisting_pages() -> None:
     assert rows[0].url == "https://www.gate.com/announcements/article/51434"
     assert rows[0].published_at.isoformat() == "2026-05-28T15:00:55+00:00"
     assert rows[0].event_time.isoformat() == "2026-05-28T15:20:00+00:00"
+
+
+def test_gate_provider_finds_nested_article_lists() -> None:
+    provider = GateAnnouncementProvider(client=None)
+    html = """
+    <script id="__NEXT_DATA__" type="application/json">
+    {"props":{"pageProps":{"fallback":{"articles":[
+      {"id":60001,"title":"Gate New Listing: Gate to List NEST (NEST) for Spot Trading","brief":"NEST Trading Start Time: May 30, 2026, 10:00 (UTC)","url":"/announcements/article/60001","release_timestamp":"1780134000"}
+    ]}}}}
+    </script>
+    """
+
+    rows = provider._parse_page(html, "newspotlistings")
+
+    assert len(rows) == 1
+    assert rows[0].kind == AnnouncementKind.LISTING
+    assert rows[0].symbols == ["NEST"]
+    assert rows[0].market_type == "spot"
+    assert rows[0].event_time == datetime(2026, 5, 30, 10, 0, tzinfo=UTC)
 
 
 @pytest.mark.asyncio

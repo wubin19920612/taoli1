@@ -43,6 +43,13 @@ LISTING_KEYWORDS = (
     "new listing",
     "initial listing",
     "will launch",
+    "will add",
+    "add support",
+    "adds support",
+    "trading will commence",
+    "trading will open",
+    "opens for trading",
+    "available for trading",
     "上线",
     "上線",
     "正式上线",
@@ -229,6 +236,26 @@ def _json_objects_from_text(text: str) -> list[object]:
             continue
         objects.append(value)
     return objects
+
+
+def _find_article_dicts(value: object) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+
+    def walk(node: object) -> None:
+        if isinstance(node, dict):
+            title = node.get("title") or node.get("annTitle") or node.get("name")
+            article_id = node.get("id") or node.get("article_id") or node.get("annId")
+            url = node.get("url") or node.get("link") or node.get("href") or node.get("articleUrl") or node.get("annUrl")
+            if isinstance(title, str) and (article_id is not None or isinstance(url, str)):
+                rows.append(node)
+            for child in node.values():
+                walk(child)
+        elif isinstance(node, list):
+            for child in node:
+                walk(child)
+
+    walk(value)
+    return rows
 
 
 def _contains_keyword(text: str, keywords: tuple[str, ...]) -> bool:
@@ -813,22 +840,11 @@ class OKXAnnouncementProvider(HttpAnnouncementProvider):
         return announcements
 
     def _find_okx_article_dicts(self, value: object) -> list[dict[str, object]]:
-        rows: list[dict[str, object]] = []
-
-        def walk(node: object) -> None:
-            if isinstance(node, dict):
-                title = node.get("title") or node.get("annTitle") or node.get("name")
-                url = node.get("url") or node.get("link") or node.get("href")
-                if isinstance(title, str) and isinstance(url, str) and ("/help/" in url or url.startswith("/help/")):
-                    rows.append(node)
-                for child in node.values():
-                    walk(child)
-            elif isinstance(node, list):
-                for child in node:
-                    walk(child)
-
-        walk(value)
-        return rows
+        return [
+            row
+            for row in _find_article_dicts(value)
+            if "/help/" in _clean_text(row.get("url") or row.get("link") or row.get("href"))
+        ]
 
     def _parse_payload(self, payload: object, fallback_category: str) -> list[ExchangeAnnouncement]:
         if not isinstance(payload, dict):
@@ -882,14 +898,14 @@ class BybitAnnouncementProvider(HttpAnnouncementProvider):
         result = payload.get("result")
         rows = result.get("list") if isinstance(result, dict) else None
         if not isinstance(rows, list):
-            return []
+            rows = _find_article_dicts(payload)
         announcements: list[ExchangeAnnouncement] = []
         for row in rows:
             if not isinstance(row, dict):
                 continue
-            title = _clean_text(row.get("title"))
-            url = _clean_text(row.get("url"))
-            category = _clean_text(row.get("type") or row.get("category")) or fallback_category
+            title = _clean_text(row.get("title") or row.get("name"))
+            url = _clean_text(row.get("url") or row.get("articleUrl") or row.get("link"))
+            category = _clean_text(row.get("type") or row.get("category") or row.get("tag")) or fallback_category
             published_at = _parse_datetime_ms(row.get("publishTime") or row.get("dateTimestamp"))
             announcement_id = _clean_text(row.get("id")) or url.rstrip("/").rsplit("/", 1)[-1]
             announcement = self._announcement(
@@ -933,18 +949,18 @@ class BitgetAnnouncementProvider(HttpAnnouncementProvider):
         for row in rows:
             if not isinstance(row, dict):
                 continue
-            title = _clean_text(row.get("annTitle"))
-            url = _clean_text(row.get("annUrl"))
-            category = _clean_text(row.get("annType")) or fallback_category
+            title = _clean_text(row.get("annTitle") or row.get("title"))
+            url = _clean_text(row.get("annUrl") or row.get("url"))
+            category = _clean_text(row.get("annType") or row.get("type") or row.get("category")) or fallback_category
             sub_type = _clean_text(row.get("annSubType"))
             if sub_type:
                 category = f"{category}:{sub_type}"
             announcement = self._announcement(
-                announcement_id=_clean_text(row.get("annId")),
+                announcement_id=_clean_text(row.get("annId") or row.get("id")),
                 title=title,
                 url=url,
                 category=category,
-                published_at=_parse_datetime_ms(row.get("cTime")),
+                published_at=_parse_datetime_ms(row.get("cTime") or row.get("publishTime")),
                 event_time=_event_time_from_row(row),
             )
             if announcement is not None:
@@ -985,7 +1001,7 @@ class GateAnnouncementProvider(HttpAnnouncementProvider):
         list_data = page_props.get("listData") if isinstance(page_props, dict) else None
         rows = list_data.get("list") if isinstance(list_data, dict) else None
         if not isinstance(rows, list):
-            return []
+            rows = _find_article_dicts(payload)
         announcements: list[ExchangeAnnouncement] = []
         for row in rows:
             if not isinstance(row, dict):
