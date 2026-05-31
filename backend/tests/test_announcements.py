@@ -75,8 +75,13 @@ def test_announcement_metadata_parsers_extract_symbols_market_and_time() -> None
     assert infer_market_type("Bitget Spot Cross Margin adds GENIUS/USDT") == "spot margin"
     assert infer_market_type("Gate to List Irys (IRYS) for Spot and Convert Trading", "newfutureslistings") == "spot/convert"
     assert infer_market_type("Initial Listing: Gate Stocks Launches Pre-Market Trading for QNTXUSDT Perpetual Futures (USDT-M)") == "futures/pre-market"
+    assert infer_symbols("欧易关于 IRYSUSDT X-合约（X-Perp）正式上线的公告") == ["IRYSUSDT"]
+    assert infer_symbols("欧易关于 AMAT、DELL、VRT 股票永续合约正式上线的公告") == ["AMAT", "DELL", "VRT"]
+    assert infer_market_type("欧易关于 IRYSUSDT X-合约（X-Perp）正式上线的公告") == "futures"
+    assert infer_market_type("欧易关于 AMAT、DELL、VRT 股票永续合约正式上线的公告") == "futures/stock perpetual"
     assert extract_event_time(title) == datetime(2026, 5, 30, 12, 0, tzinfo=UTC)
     assert extract_event_time("Trading starts on May 30, 2026 at 12:05 UTC") == datetime(2026, 5, 30, 12, 5, tzinfo=UTC)
+    assert extract_event_time("交易将于 2026 年 5 月 29 日 15:00 (UTC+8) 正式上线") == datetime(2026, 5, 29, 7, 0, tzinfo=UTC)
     assert extract_event_time("The subscription period is from 2026-05-11 00:00 UTC to 2026-05-14 00:00 UTC.") is None
 
 
@@ -353,6 +358,47 @@ def test_okx_provider_parses_listing_and_delisting_payloads() -> None:
     assert [row.exchange for row in rows] == ["okx", "okx"]
     assert [row.kind for row in rows] == [AnnouncementKind.LISTING, AnnouncementKind.DELISTING]
     assert rows[0].published_at.isoformat() == "2025-01-19T03:00:02.487000+00:00"
+
+
+def test_okx_provider_parses_latest_page_contract_announcements() -> None:
+    provider = OKXAnnouncementProvider(client=None, now_fn=lambda: BASE_TIME)
+    html = """
+    <script id="__NEXT_DATA__" type="application/json">
+    {
+      "props": {
+        "pageProps": {
+          "articles": [
+            {
+              "id": "irys-x-perp",
+              "title": "欧易关于 IRYSUSDT X-合约（X-Perp）正式上线的公告",
+              "url": "/zh-hans/help/okx-to-list-irysusdt-x-perp",
+              "pTime": "1780047600000",
+              "summary": "IRYSUSDT X-合约将于 2026 年 5 月 29 日 15:00 (UTC+8) 正式上线"
+            },
+            {
+              "id": "stock-perp",
+              "title": "欧易关于 AMAT、DELL、VRT 股票永续合约正式上线的公告",
+              "url": "/zh-hans/help/okx-to-list-amat-dell-vrt-stock-perpetual",
+              "pTime": "1779961200000",
+              "summary": "AMAT、DELL、VRT 股票永续合约将于 2026 年 5 月 28 日 15:00 (UTC+8) 正式上线"
+            }
+          ]
+        }
+      }
+    }
+    </script>
+    """
+
+    rows = provider._parse_latest_page(html, "announcements-latest")
+
+    assert [row.kind for row in rows] == [AnnouncementKind.LISTING, AnnouncementKind.LISTING]
+    assert rows[0].announcement_id == "irys-x-perp"
+    assert rows[0].symbols == ["IRYSUSDT"]
+    assert rows[0].market_type == "futures"
+    assert rows[0].event_time == datetime(2026, 5, 29, 7, 0, tzinfo=UTC)
+    assert rows[0].url == "https://www.okx.com/zh-hans/help/okx-to-list-irysusdt-x-perp"
+    assert rows[1].symbols == ["AMAT", "DELL", "VRT"]
+    assert rows[1].market_type == "futures/stock perpetual"
 
 
 def test_binance_provider_parses_listing_and_delisting_catalogs() -> None:

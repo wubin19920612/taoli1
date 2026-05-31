@@ -124,6 +124,10 @@ function leg(exchange: string, marketType: string): string {
   return `${exchange} ${marketType}`;
 }
 
+function riskReasonText(values: string[]): string {
+  return values.length > 0 ? values.join("; ") : "-";
+}
+
 function fundingPair(left: number | null | undefined, right: number | null | undefined): string {
   return `${pct(left)} / ${pct(right)}`;
 }
@@ -163,157 +167,140 @@ function buildColumns(
   onOpenHistory: (candidate: FundingArbitrageCandidate) => void
 ): ColumnsType<FundingArbitrageCandidate> {
   return [
-  {
-    title: "\u51b3\u7b56",
-    dataIndex: "decision",
-    fixed: "left",
-    width: 104,
-    render: (value: FundingArbitrageDecision) => <Tag color={decisionColor[value]}>{decisionText[value]}</Tag>
-  },
-  {
-    title: "\u6807\u7684",
-    dataIndex: "symbol",
-    fixed: "left",
-    width: 132,
-    render: (value: string, row) => (
-      <Space size={4} wrap>
-        <Typography.Text strong>{value}</Typography.Text>
-        <Tag>{row.type}</Tag>
-        {row.uses_hyperliquid ? <Tag color="cyan">Hyper</Tag> : null}
-      </Space>
-    )
-  },
-  {
-    title: "\u591a\u5934",
-    width: 142,
-    render: (_, row) => leg(row.long_exchange, row.long_market_type)
-  },
-  {
-    title: "\u7a7a\u5934",
-    width: 142,
-    render: (_, row) => leg(row.short_exchange, row.short_market_type)
-  },
-  {
-    title: "价差",
-    width: 152,
-    align: "right",
-    render: (_, row) => (
-      <Space direction="vertical" size={0}>
-        <Typography.Text strong>{`开 ${pct(row.entry_basis_pct)}`}</Typography.Text>
-        <Typography.Text type="secondary">{`平 ${pct(row.exit_basis_pct)}`}</Typography.Text>
-        <Typography.Text type="secondary">{`宽 ${pct(row.basis_width_pct)}`}</Typography.Text>
-      </Space>
-    )
-  },
-  {
-    title: "资金费率",
-    width: 180,
-    align: "right",
-    render: (_, row) => (
-      <Space direction="vertical" size={0}>
-        <Typography.Text>{`当前 ${fundingPair(row.long_current_funding_pct, row.short_current_funding_pct)}`}</Typography.Text>
-        <Typography.Text>{`下期 ${fundingPair(row.long_next_funding_pct, row.short_next_funding_pct)}`}</Typography.Text>
-        <Typography.Text type={(row.next_funding_edge_pct ?? 0) >= 0 ? "success" : "danger"}>
-          {`差 ${signedPct(row.next_funding_edge_pct)}`}
+    {
+      title: "决策",
+      dataIndex: "decision",
+      fixed: "left",
+      width: 76,
+      render: (value: FundingArbitrageDecision) => <Tag color={decisionColor[value]}>{decisionText[value]}</Tag>
+    },
+    {
+      title: "标的",
+      dataIndex: "symbol",
+      fixed: "left",
+      width: 136,
+      render: (value: string, row) => (
+        <Space size={4} wrap className="funding-symbol-cell">
+          <Typography.Text strong>{value}</Typography.Text>
+          <Tag>{row.type}</Tag>
+          {row.uses_hyperliquid ? <Tag color="cyan">Hyper</Tag> : null}
+        </Space>
+      )
+    },
+    {
+      title: "方向",
+      width: 210,
+      render: (_, row) => (
+        <div className="funding-route-cell">
+          <span>
+            <Tag color="green">多</Tag>
+            {leg(row.long_exchange, row.long_market_type)}
+          </span>
+          <span>
+            <Tag color="red">空</Tag>
+            {leg(row.short_exchange, row.short_market_type)}
+          </span>
+        </div>
+      )
+    },
+    {
+      title: "价差",
+      width: 150,
+      align: "right",
+      render: (_, row) => (
+        <div className="funding-stack-cell">
+          <Typography.Text strong>{`开 ${pct(row.entry_basis_pct)}`}</Typography.Text>
+          <Typography.Text type="secondary">{`平 ${pct(row.exit_basis_pct)} / 宽 ${pct(row.basis_width_pct)}`}</Typography.Text>
+        </div>
+      )
+    },
+    {
+      title: "资金费率",
+      width: 210,
+      align: "right",
+      render: (_, row) => (
+        <div className="funding-stack-cell">
+          <Typography.Text>{`现 ${fundingPair(row.long_current_funding_pct, row.short_current_funding_pct)}`}</Typography.Text>
+          <Typography.Text>{`下 ${fundingPair(row.long_next_funding_pct, row.short_next_funding_pct)}`}</Typography.Text>
+          <Typography.Text type={(row.next_funding_edge_pct ?? 0) >= 0 ? "success" : "danger"}>
+            {`下期差 ${signedPct(row.next_funding_edge_pct)}`}
+          </Typography.Text>
+        </div>
+      )
+    },
+    {
+      title: "综合预期",
+      dataIndex: "expected_cycle_pnl_pct",
+      width: 112,
+      align: "right",
+      defaultSortOrder: "descend",
+      sorter: (a, b) => a.expected_cycle_pnl_pct - b.expected_cycle_pnl_pct,
+      render: (value: number) => (
+        <Typography.Text strong type={value >= 0 ? "success" : "danger"}>
+          {pct(value)}
         </Typography.Text>
-      </Space>
-    )
-  },
-  {
-    title: "\u4e0b\u5468\u671f\u8d44\u91d1\u5dee",
-    dataIndex: "next_funding_edge_pct",
-    width: 126,
-    align: "right",
-    sorter: (a, b) => (a.next_funding_edge_pct ?? -999) - (b.next_funding_edge_pct ?? -999),
-    render: (value: number | null) => (
-      <Typography.Text type={typeof value === "number" && value >= 0 ? "success" : "danger"}>
-        {pct(value)}
-      </Typography.Text>
-    )
-  },
-  {
-    title: "\u7efc\u5408\u9884\u671f",
-    dataIndex: "expected_cycle_pnl_pct",
-    width: 116,
-    align: "right",
-    defaultSortOrder: "descend",
-    sorter: (a, b) => a.expected_cycle_pnl_pct - b.expected_cycle_pnl_pct,
-    render: (value: number) => (
-      <Typography.Text strong type={value >= 0 ? "success" : "danger"}>
-        {pct(value)}
-      </Typography.Text>
-    )
-  },
-  {
-    title: "\u57fa\u5dee\u98ce\u9669",
-    width: 128,
-    align: "right",
-    render: (_, row) => (
-      <Space direction="vertical" size={0}>
-        <Typography.Text>{pct(row.basis_risk_penalty_pct)}</Typography.Text>
-        <Typography.Text type="secondary">{`\u5bbd ${pct(row.basis_width_pct)}`}</Typography.Text>
-      </Space>
-    )
-  },
-  {
-    title: "\u7ed3\u7b97",
-    width: 164,
-    align: "right",
-    render: (_, row) => (
-      <Space direction="vertical" size={0}>
-        <Typography.Text>{settlementTime(row.next_settlement_time)}</Typography.Text>
-        <Typography.Text type="secondary">
-          {typeof row.minutes_to_settlement === "number" ? `${row.minutes_to_settlement.toFixed(0)} 分钟` : "-"}
-        </Typography.Text>
-      </Space>
-    )
-  },
-  {
-    title: "历史",
-    width: 72,
-    render: (_, row) => (
-      <Button
-        type="text"
-        size="small"
-        icon={<AreaChartOutlined />}
-        aria-label={`资金历史 ${row.symbol}`}
-        onClick={() => onOpenHistory(row)}
-      />
-    )
-  },
-  {
-    title: "ADL proxy",
-    width: 116,
-    render: (_, row) => (
-      <Space direction="vertical" size={0}>
-        <Tag color={adlColor[row.adl_risk_level]}>{row.adl_risk_level}</Tag>
-        <Typography.Text type="secondary">{row.adl_risk_score.toFixed(1)}</Typography.Text>
-      </Space>
-    )
-  },
-  {
-    title: "\u8d44\u91d1\u6765\u6e90",
-    dataIndex: "funding_source",
-    width: 112,
-    render: (value: FundingSource) => fundingSourceText[value]
-  },
-  {
-    title: "\u6d41\u52a8\u6027",
-    width: 128,
-    align: "right",
-    render: (_, row) => (
-      <Space direction="vertical" size={0}>
-        <Typography.Text>{compactMoney(row.volume_24h_usdt)}</Typography.Text>
-        <Typography.Text type="secondary">{compactMoney(row.depth_usdt)}</Typography.Text>
-      </Space>
-    )
-  },
-  {
-    title: "\u539f\u56e0",
-    dataIndex: "decision_reasons",
-    render: (values: string[]) => values.join("; ")
-  }
+      )
+    },
+    {
+      title: "结算",
+      width: 150,
+      align: "right",
+      render: (_, row) => (
+        <div className="funding-stack-cell">
+          <Typography.Text>{settlementTime(row.next_settlement_time)}</Typography.Text>
+          <Typography.Text type="secondary">
+            {typeof row.minutes_to_settlement === "number" ? `${row.minutes_to_settlement.toFixed(0)} 分钟` : "-"}
+          </Typography.Text>
+        </div>
+      )
+    },
+    {
+      title: "ADL",
+      width: 104,
+      render: (_, row) => (
+        <div className="funding-stack-cell">
+          <Tag color={adlColor[row.adl_risk_level]}>{row.adl_risk_level}</Tag>
+          <Typography.Text type="secondary">{row.adl_risk_score.toFixed(1)}</Typography.Text>
+        </div>
+      )
+    },
+    {
+      title: "历史",
+      width: 64,
+      render: (_, row) => (
+        <Button
+          type="text"
+          size="small"
+          icon={<AreaChartOutlined />}
+          aria-label={`资金历史 ${row.symbol}`}
+          onClick={() => onOpenHistory(row)}
+        />
+      )
+    }
   ];
+}
+
+function expandedFundingRow(row: FundingArbitrageCandidate) {
+  return (
+    <div className="funding-expanded-row">
+      <div>
+        <Typography.Text type="secondary">资金来源</Typography.Text>
+        <Typography.Text>{fundingSourceText[row.funding_source]}</Typography.Text>
+      </div>
+      <div>
+        <Typography.Text type="secondary">流动性</Typography.Text>
+        <Typography.Text>{`24h ${compactMoney(row.volume_24h_usdt)} / 深度 ${compactMoney(row.depth_usdt)}`}</Typography.Text>
+      </div>
+      <div>
+        <Typography.Text type="secondary">风险成本</Typography.Text>
+        <Typography.Text>{`基差 ${pct(row.basis_risk_penalty_pct)} / 开仓 ${pct(row.estimated_open_cost_pct)} / 平仓 ${pct(row.estimated_close_cost_pct)}`}</Typography.Text>
+      </div>
+      <div className="funding-expanded-reasons">
+        <Typography.Text type="secondary">原因</Typography.Text>
+        <Typography.Text>{riskReasonText(row.decision_reasons)}</Typography.Text>
+      </div>
+    </div>
+  );
 }
 
 const historyColumns: ColumnsType<OpportunityHistoryPoint> = [
@@ -556,9 +543,13 @@ export function FundingArbitragePage() {
         loading={loading}
         rowKey="id"
         pagination={{ pageSize: 50, showSizeChanger: true }}
-        scroll={{ x: 1900 }}
+        scroll={{ x: 1212 }}
         size="small"
         tableLayout="fixed"
+        expandable={{
+          expandedRowRender: expandedFundingRow,
+          rowExpandable: () => true
+        }}
       />
       <Modal
         open={historyCandidate !== null}

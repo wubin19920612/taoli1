@@ -357,7 +357,60 @@ body {
 }
 
 .funding-table .ant-table-cell {
-  vertical-align: top;
+  vertical-align: middle;
+}
+
+.funding-table .ant-table-thead > tr > th,
+.funding-table .ant-table-tbody > tr > td {
+  padding: 8px 10px;
+}
+
+.funding-symbol-cell .ant-tag,
+.funding-route-cell .ant-tag,
+.funding-stack-cell .ant-tag {
+  margin-inline-end: 4px;
+}
+
+.funding-route-cell,
+.funding-stack-cell {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.funding-route-cell span,
+.funding-stack-cell .ant-typography {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.funding-expanded-row {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.7fr) minmax(180px, 0.9fr) minmax(260px, 1.2fr) minmax(320px, 2fr);
+  gap: 12px;
+  padding: 6px 10px 6px 38px;
+  background: #f7faf9;
+}
+
+.funding-expanded-row > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.funding-expanded-row .ant-typography {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.funding-expanded-reasons .ant-typography:last-child {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .live-pilot-preview {
