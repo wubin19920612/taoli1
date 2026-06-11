@@ -1024,7 +1024,7 @@ def test_alert_message_template_settings_endpoint_roundtrips() -> None:
         payload = response.json()
         assert payload["include_trigger_summary"] is True
         assert payload["include_observations"] is True
-        assert payload["suppress_when_card_conditions_fail"] is True
+        assert payload["suppress_when_card_conditions_fail"] is False
 
         payload["include_funding"] = False
         payload["include_observations"] = False
@@ -1205,6 +1205,7 @@ def test_astro_card_settings_endpoint_roundtrips() -> None:
         payload = response.json()
         assert payload["max_trade_usdt"] == 10
         assert payload["leverage"] == 1
+        assert payload["open_enabled"] is False
         assert payload["close_position_buffer_pct"] == 0.1
         assert payload["unfavorable_funding_weight"] == 1
         assert payload["close_position_floor_pct"] == 0
@@ -1212,6 +1213,7 @@ def test_astro_card_settings_endpoint_roundtrips() -> None:
         payload["max_trade_usdt"] = 75
         payload["leverage"] = 4
         payload["max_notional"] = 75
+        payload["open_enabled"] = True
         payload["close_position_buffer_pct"] = 0.2
         payload["unfavorable_funding_weight"] = 1.5
         payload["close_position_floor_pct"] = 0.01
@@ -1227,11 +1229,13 @@ def test_astro_card_settings_endpoint_roundtrips() -> None:
         assert saved.status_code == 200
         assert saved.json()["max_trade_usdt"] == 75
         assert saved.json()["leverage"] == 4
+        assert saved.json()["open_enabled"] is True
         assert saved.json()["close_position_buffer_pct"] == 0.2
 
         reloaded = client.get("/api/settings/astro-card")
         assert reloaded.status_code == 200
         assert reloaded.json()["max_notional"] == 75
+        assert reloaded.json()["open_enabled"] is True
         assert reloaded.json()["unfavorable_funding_weight"] == 1.5
         assert reloaded.json()["close_position_floor_pct"] == 0.01
 
@@ -1804,6 +1808,7 @@ def test_astro_preview_endpoint_uses_saved_card_defaults() -> None:
                 "leverage": 3,
                 "min_notional": 11,
                 "max_notional": 55,
+                "open_enabled": True,
                 "close_position_buffer_pct": 0.2,
                 "unfavorable_funding_weight": 1,
                 "close_position_floor_pct": 0,
@@ -1819,6 +1824,8 @@ def test_astro_preview_endpoint_uses_saved_card_defaults() -> None:
     assert payload["pair"]["leverage"] == "3"
     assert payload["pair"]["minNotional"] == "11"
     assert payload["pair"]["maxNotional"] == "55"
+    assert payload["pair"]["status"] is True
+    assert payload["pair"]["disableOpen"] is False
 
 
 def test_astro_preview_endpoint_uses_env_defaults_before_settings_are_saved() -> None:
@@ -1832,6 +1839,7 @@ def test_astro_preview_endpoint_uses_env_defaults_before_settings_are_saved() ->
             astro_default_leverage=5,
             astro_default_min_notional=13,
             astro_default_max_notional=44,
+            astro_default_open_enabled=True,
         ),
     )
 
@@ -1844,6 +1852,8 @@ def test_astro_preview_endpoint_uses_env_defaults_before_settings_are_saved() ->
     assert payload["pair"]["leverage"] == "5"
     assert payload["pair"]["minNotional"] == "13"
     assert payload["pair"]["maxNotional"] == "44"
+    assert payload["pair"]["status"] is True
+    assert payload["pair"]["disableOpen"] is False
 
 
 def test_astro_preview_endpoint_uses_saved_defaults_even_when_they_match_model_defaults() -> None:
@@ -1858,6 +1868,7 @@ def test_astro_preview_endpoint_uses_saved_defaults_even_when_they_match_model_d
             astro_default_leverage=5,
             astro_default_min_notional=13,
             astro_default_max_notional=44,
+            astro_default_open_enabled=True,
         ),
     )
 
@@ -1870,6 +1881,7 @@ def test_astro_preview_endpoint_uses_saved_defaults_even_when_they_match_model_d
                 "leverage": 1,
                 "min_notional": 10,
                 "max_notional": 10,
+                "open_enabled": False,
                 "close_position_buffer_pct": 0.1,
                 "unfavorable_funding_weight": 1,
                 "close_position_floor_pct": 0,
@@ -1885,6 +1897,8 @@ def test_astro_preview_endpoint_uses_saved_defaults_even_when_they_match_model_d
     assert payload["pair"]["leverage"] == "1"
     assert payload["pair"]["minNotional"] == "10"
     assert payload["pair"]["maxNotional"] == "10"
+    assert payload["pair"]["status"] is False
+    assert payload["pair"]["disableOpen"] is True
 
 
 def test_astro_preview_endpoint_returns_404_for_missing_opportunity() -> None:
@@ -1966,6 +1980,7 @@ def test_astro_manual_card_create_endpoint_forwards_overrides_and_saves_defaults
                 "leverage": 2,
                 "min_notional": 12,
                 "max_notional": 88,
+                "open_enabled": True,
                 "save_as_default": True,
             },
         )
@@ -1978,12 +1993,14 @@ def test_astro_manual_card_create_endpoint_forwards_overrides_and_saves_defaults
     assert service.requests[0].leverage == 2
     assert service.requests[0].min_notional == 12
     assert service.requests[0].max_notional == 88
+    assert service.requests[0].open_enabled is True
     assert service.requests[0].save_as_default is True
     assert saved.status_code == 200
     assert saved.json()["max_trade_usdt"] == 88
     assert saved.json()["leverage"] == 2
     assert saved.json()["min_notional"] == 12
     assert saved.json()["max_notional"] == 88
+    assert saved.json()["open_enabled"] is True
 
 
 def test_astro_manual_card_create_endpoint_skips_when_order_book_validation_fails() -> None:
@@ -2064,6 +2081,7 @@ def test_astro_manual_card_create_endpoint_uses_saved_defaults_with_real_service
                 "leverage": 3,
                 "min_notional": 14,
                 "max_notional": 77,
+                "open_enabled": True,
                 "close_position_buffer_pct": 0.1,
                 "unfavorable_funding_weight": 1,
                 "close_position_floor_pct": 0,
@@ -2081,6 +2099,8 @@ def test_astro_manual_card_create_endpoint_uses_saved_defaults_with_real_service
     assert client_backend.added[0]["leverage"] == "3"
     assert client_backend.added[0]["minNotional"] == "14"
     assert client_backend.added[0]["maxNotional"] == "77"
+    assert client_backend.added[0]["status"] is True
+    assert client_backend.added[0]["disableOpen"] is False
 
 
 def test_live_pilot_auto_create_service_uses_pilot_settings_for_real_service() -> None:

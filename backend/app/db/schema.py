@@ -4,15 +4,16 @@ import aiosqlite
 
 
 async def _migrate_alert_rule_excluded_labels(db: aiosqlite.Connection) -> None:
+    labels_to_allow = {"MARK_INDEX_DEVIATION", "HUGE_SPREAD_VERIFY", "WIDE_SPREAD"}
     cursor = await db.execute("SELECT id, payload FROM alert_rules")
     rows = await cursor.fetchall()
     for row in rows:
         payload = json.loads(row["payload"])
         labels = payload.get("excluded_risk_labels")
-        if not isinstance(labels, list) or "MARK_INDEX_DEVIATION" not in labels:
+        if not isinstance(labels, list) or not labels_to_allow.intersection(labels):
             continue
         payload["excluded_risk_labels"] = [
-            label for label in labels if label != "MARK_INDEX_DEVIATION"
+            label for label in labels if label not in labels_to_allow
         ]
         await db.execute(
             "UPDATE alert_rules SET payload = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",

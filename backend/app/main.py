@@ -52,6 +52,7 @@ from app.services.announcements import (
 )
 from app.services.astro_alerts import AstroAlertService
 from app.services.astro_client import AstroSdkClient, AstroSdkConfig
+from app.services.astro_planner import AstroPairPlanner, AstroPlannerConfig
 from app.services.collector import MarketCollector, default_exchange_adapters, run_collector_loop
 from app.services.data_filters import filter_markets, filter_opportunities
 from app.services.feishu import FeishuConfig, FeishuNotifier
@@ -185,6 +186,18 @@ def _format_order_book_validation_failure(result: DepthValidationResult) -> str:
     return f"{details} ({', '.join(metrics)})"
 
 
+def _astro_plan_validation_failure(
+    opportunity,
+    card_settings: AstroCardSettings | None,
+) -> str | None:
+    plan = AstroPairPlanner(
+        AstroPlannerConfig.from_card_settings(card_settings or AstroCardSettings())
+    ).plan(opportunity)
+    if plan.can_submit:
+        return None
+    return "; ".join(plan.blockers) if plan.blockers else "Astro pair cannot be submitted"
+
+
 def _exception_message(exc: BaseException) -> str:
     text = str(exc).strip()
     return text if text else exc.__class__.__name__
@@ -246,39 +259,51 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
             for match in matches:
                 status = "sent"
                 card_condition_failure = False
+                existing_card_skipped = False
+                signal_condition_failure = False
                 message = build_alert_message(
                     match.rule,
                     match.opportunity,
                     observations=match.observations,
                     template=alert_template,
                 )
+                latest_opportunity = _find_latest_opportunity(app, match.opportunity.id)
+                validation_failure = _latest_signal_validation_failure(
+                    match,
+                    latest_opportunity,
+                    settings,
+                    datetime.now(UTC),
+                )
+                if validation_failure is not None:
+                    signal_condition_failure = True
+                    message = (
+                        f"{message}\n\n"
+                        f"Astro: skipped latest signal validation: {validation_failure}"
+                    )
                 astro_alert_service: AstroAlertService | None = getattr(
                     app.state,
                     "astro_alert_service",
                     None,
                 )
-                if astro_alert_service is not None:
+                if astro_alert_service is not None and not signal_condition_failure:
                     try:
-                        latest_opportunity = _find_latest_opportunity(app, match.opportunity.id)
-                        validation_failure = _latest_signal_validation_failure(
-                            match,
-                            latest_opportunity,
-                            settings,
-                            datetime.now(UTC),
+                        card_settings = getattr(astro_alert_service, "card_settings", None)
+                        validation_notional = (
+                            live_pilot_settings.notional_per_symbol_usdt
+                            if live_pilot_settings.enabled
+                            else None
                         )
-                        if validation_failure is not None:
+                        plan_failure = _astro_plan_validation_failure(
+                            latest_opportunity,
+                            card_settings,
+                        )
+                        if plan_failure is not None:
                             card_condition_failure = True
                             message = (
                                 f"{message}\n\n"
-                                f"Astro: skipped latest signal validation: {validation_failure}"
+                                f"Astro: skipped card validation: {plan_failure}"
                             )
                         else:
-                            card_settings = getattr(astro_alert_service, "card_settings", None)
-                            validation_notional = (
-                                live_pilot_settings.notional_per_symbol_usdt
-                                if live_pilot_settings.enabled
-                                else None
-                            )
                             order_book_failure = await _order_book_validation_failure(
                                 app,
                                 latest_opportunity,
@@ -293,12 +318,23 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                                     f"Astro: skipped order book validation: {order_book_failure}"
                                 )
                             else:
-                                astro_result = await astro_alert_service.handle_alert(latest_opportunity)
+                                astro_result = await astro_alert_service.handle_alert(
+                                    latest_opportunity
+                                )
+                                if astro_result.status == "skipped" and astro_result.action in {
+                                    "unsupported",
+                                    "conflict",
+                                }:
+                                    card_condition_failure = True
+                                if astro_result.status == "skipped" and astro_result.action == "existing":
+                                    existing_card_skipped = True
                                 message = f"{message}\n\n{astro_result.format_message()}"
                     except Exception as exc:  # noqa: BLE001 - keep alert delivery independent.
                         logger.exception("astro alert follow-up failed")
                         message = f"{message}\n\nAstro: 处理失败，{_exception_message(exc)}"
-                if alert_template.suppress_when_card_conditions_fail and card_condition_failure:
+                if signal_condition_failure or existing_card_skipped:
+                    status = "muted"
+                elif alert_template.suppress_when_card_conditions_fail and card_condition_failure:
                     status = "muted"
                 else:
                     try:

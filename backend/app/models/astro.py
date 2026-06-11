@@ -40,6 +40,7 @@ class AstroCardCreateRequest(BaseModel):
     leverage: int | None = Field(default=None, ge=1)
     min_notional: float | None = Field(default=None, ge=0)
     max_notional: float | None = Field(default=None, gt=0)
+    open_enabled: bool | None = None
     save_as_default: bool = False
 
 

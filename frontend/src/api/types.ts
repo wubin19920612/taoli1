@@ -397,6 +397,7 @@ export interface AstroCardSettings {
   leverage: number;
   min_notional: number;
   max_notional: number;
+  open_enabled: boolean;
   close_position_buffer_pct: number;
   unfavorable_funding_weight: number;
   close_position_floor_pct: number;
@@ -446,6 +447,7 @@ export interface AstroCardCreateRequest {
   leverage?: number;
   min_notional?: number;
   max_notional?: number;
+  open_enabled?: boolean;
   save_as_default?: boolean;
 }
 

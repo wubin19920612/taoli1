@@ -81,15 +81,17 @@ class FakeSettingsRepo:
         self,
         astro_card_settings: AstroCardSettings | None = None,
         live_pilot_settings: LivePilotSettings | None = None,
+        alert_template: AlertMessageTemplateSettings | None = None,
     ):
         self.astro_card_settings = astro_card_settings
         self.live_pilot_settings = live_pilot_settings or LivePilotSettings()
+        self.alert_template = alert_template or AlertMessageTemplateSettings()
 
     async def get_risk_settings(self) -> RiskSettings:
         return RiskSettings()
 
     async def get_alert_message_template(self) -> AlertMessageTemplateSettings:
-        return AlertMessageTemplateSettings()
+        return self.alert_template
 
     async def find_astro_card_settings(self) -> AstroCardSettings | None:
         return self.astro_card_settings
@@ -148,6 +150,19 @@ class FakeAstroAlertService:
             status="created",
             action="add",
             message="已创建暂停卡片 BTC FF binance->okx，禁开=true",
+            pair_name="BTC",
+            pair_type="FF",
+        )
+
+
+class ExistingAstroAlertService(FakeAstroAlertService):
+    async def handle_alert(self, opportunity: Opportunity) -> AstroAlertActionResult:
+        self.calls.append(opportunity.id)
+        return AstroAlertActionResult(
+            enabled=True,
+            status="skipped",
+            action="existing",
+            message="已跳过，Astro 已存在卡片 BTC FF binance->okx",
             pair_name="BTC",
             pair_type="FF",
         )
@@ -396,6 +411,7 @@ async def test_alert_loop_skips_astro_create_when_order_book_validation_fails() 
     store.set_opportunities([opp])
     event_repo = FakeEventRepo(stop_event)
     service = FakeAstroAlertService()
+    feishu = FakeFeishuNotifier()
     validator = FakeOrderBookValidator(
         DepthValidationResult(
             passed=False,
@@ -418,7 +434,7 @@ async def test_alert_loop_skips_astro_create_when_order_book_validation_fails() 
     app.state.settings_repo = FakeSettingsRepo(AstroCardSettings(max_trade_usdt=50))
     app.state.snapshot_store = store
     app.state.alert_engine = FakeAlertEngine(AlertMatch(rule, opp, []))
-    app.state.feishu_notifier = FakeFeishuNotifier()
+    app.state.feishu_notifier = feishu
     app.state.astro_alert_service = service
     app.state.orderbook_validator = validator
 
@@ -428,8 +444,92 @@ async def test_alert_loop_skips_astro_create_when_order_book_validation_fails() 
     assert validator.calls[0][0].id == "opp-1"
     assert validator.calls[0][2] is not None
     assert validator.calls[0][2].max_trade_usdt == 50
+    assert event_repo.events[0].status == "sent"
     assert "Astro: skipped order book validation" in event_repo.events[0].message
+    assert feishu.sent_texts[0] is not None
+    assert "Astro: skipped order book validation" in feishu.sent_texts[0]
     assert "buy side depth filled" in event_repo.events[0].message
+
+
+@pytest.mark.asyncio
+async def test_alert_loop_mutes_when_astro_card_already_exists() -> None:
+    stop_event = asyncio.Event()
+    app = FastAPI()
+    rule = AlertRule(
+        id="rule-1",
+        name="FF spread",
+        types=["FF"],
+        min_open_spread_pct=0.5,
+        min_fee_adjusted_open_pct=0.25,
+        min_volume_24h_usdt=1_000_000,
+        consecutive_hits=1,
+    )
+    opp = opportunity()
+    store = SnapshotStore()
+    store.set_opportunities([opp])
+    event_repo = FakeEventRepo(stop_event)
+    service = ExistingAstroAlertService()
+    feishu = FakeFeishuNotifier()
+
+    app.state.alert_rule_repo = FakeRuleRepo([rule])
+    app.state.alert_event_repo = event_repo
+    app.state.settings_repo = FakeSettingsRepo()
+    app.state.snapshot_store = store
+    app.state.alert_engine = FakeAlertEngine(AlertMatch(rule, opp, []))
+    app.state.feishu_notifier = feishu
+    app.state.astro_alert_service = service
+
+    await asyncio.wait_for(_run_alert_loop(app, 60, stop_event), timeout=2)
+
+    assert service.calls == ["opp-1"]
+    assert event_repo.events[0].status == "muted"
+    assert "已存在卡片" in event_repo.events[0].message
+    assert feishu.sent_texts == []
+
+
+@pytest.mark.asyncio
+async def test_alert_loop_mutes_when_astro_plan_cannot_create_card_and_filter_enabled() -> None:
+    stop_event = asyncio.Event()
+    app = FastAPI()
+    rule = AlertRule(
+        id="rule-ss",
+        name="SS spread",
+        types=["SS"],
+        min_open_spread_pct=0.5,
+        min_fee_adjusted_open_pct=0.25,
+        min_volume_24h_usdt=1_000_000,
+        consecutive_hits=1,
+    )
+    opp = opportunity().model_copy(
+        update={
+            "type": OpportunityType.SS,
+            "buy_market_type": MarketType.SPOT,
+            "sell_market_type": MarketType.SPOT,
+        }
+    )
+    store = SnapshotStore()
+    store.set_opportunities([opp])
+    event_repo = FakeEventRepo(stop_event)
+    service = FakeAstroAlertService()
+    feishu = FakeFeishuNotifier()
+
+    app.state.alert_rule_repo = FakeRuleRepo([rule])
+    app.state.alert_event_repo = event_repo
+    app.state.settings_repo = FakeSettingsRepo(
+        alert_template=AlertMessageTemplateSettings(suppress_when_card_conditions_fail=True)
+    )
+    app.state.snapshot_store = store
+    app.state.alert_engine = FakeAlertEngine(AlertMatch(rule, opp, []))
+    app.state.feishu_notifier = feishu
+    app.state.astro_alert_service = service
+
+    await asyncio.wait_for(_run_alert_loop(app, 60, stop_event), timeout=2)
+
+    assert service.calls == []
+    assert event_repo.events[0].status == "muted"
+    assert "Astro: skipped card validation" in event_repo.events[0].message
+    assert "SS" in event_repo.events[0].message
+    assert feishu.sent_texts == []
 
 
 @pytest.mark.asyncio

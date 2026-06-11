@@ -83,14 +83,17 @@ async def test_alert_message_template_repository_defaults_and_roundtrip() -> Non
                 update={
                     "include_rule_details": False,
                     "include_observations": False,
+                    "suppress_when_card_conditions_fail": True,
                     "observation_limit": 2,
                 }
             )
         )
+        await initialize_schema(db)
         loaded = await repo.get_alert_message_template()
 
         assert saved.include_rule_details is False
         assert loaded.include_observations is False
+        assert loaded.suppress_when_card_conditions_fail is True
         assert loaded.observation_limit == 2
     finally:
         await db.close()

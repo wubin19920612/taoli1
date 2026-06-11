@@ -96,7 +96,7 @@ describe("DashboardPage", () => {
 
     await waitFor(() => {
       expect(fetch).toHaveBeenCalledWith(
-        expect.stringContaining("hidden_risk_labels=LOW_VOLUME%2CSTALE_DATA%2CHUGE_SPREAD_VERIFY"),
+        expect.stringContaining("hidden_risk_labels=LOW_VOLUME%2CSTALE_DATA%2CSAME_TICKER_RISK"),
         expect.anything()
       );
       expect(fetch).toHaveBeenCalledWith(
@@ -702,6 +702,7 @@ describe("DashboardPage", () => {
 
     await userEvent.clear(positionInput);
     await userEvent.type(positionInput, "80");
+    await userEvent.click(screen.getByLabelText("Open after create"));
     await userEvent.click(screen.getByLabelText("Save sizing as global default"));
     await userEvent.click(screen.getByRole("button", { name: /暂停卡片/ }));
 
@@ -712,6 +713,7 @@ describe("DashboardPage", () => {
     expect(createBodies[0]).toContain('"leverage":2');
     expect(createBodies[0]).toContain('"min_notional":10');
     expect(createBodies[0]).toContain('"max_notional":25');
+    expect(createBodies[0]).toContain('"open_enabled":true');
     expect(createBodies[0]).toContain('"save_as_default":true');
   }, 15000);
 

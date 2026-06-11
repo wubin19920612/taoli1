@@ -11,6 +11,7 @@ import {
   Segmented,
   Space,
   Statistic,
+  Switch,
   Table,
   Tag,
   Typography,
@@ -433,12 +434,30 @@ function pairString(pair: Record<string, unknown> | null | undefined, key: strin
   return String(value);
 }
 
+function pairBoolean(pair: Record<string, unknown> | null | undefined, key: string): boolean | undefined {
+  const value = pair?.[key];
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true") {
+      return true;
+    }
+    if (normalized === "false") {
+      return false;
+    }
+  }
+  return undefined;
+}
+
 function sizingFromPlan(plan: AstroPairPlan): AstroSizingFormValues {
   return {
     max_trade_usdt: pairNumber(plan.pair, "maxTradeUSDT") ?? 0,
     leverage: pairNumber(plan.pair, "leverage") ?? 1,
     min_notional: pairNumber(plan.pair, "minNotional") ?? 0,
     max_notional: pairNumber(plan.pair, "maxNotional") ?? 0,
+    open_enabled: pairBoolean(plan.pair, "disableOpen") === false,
     save_as_default: false
   };
 }
@@ -955,6 +974,9 @@ export function DashboardPage() {
                         </Form.Item>
                         <Form.Item label="Maximum notional USDT" name="max_notional" rules={[{ required: true }]}>
                           <InputNumber min={0.01} step={1} className="wide-input" />
+                        </Form.Item>
+                        <Form.Item label="Open after create" name="open_enabled" valuePropName="checked">
+                          <Switch checkedChildren="on" unCheckedChildren="off" />
                         </Form.Item>
                       </div>
                       <Form.Item name="save_as_default" valuePropName="checked">

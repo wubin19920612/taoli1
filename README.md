@@ -134,7 +134,7 @@ HISTORY_VACUUM_INTERVAL_SECONDS=86400
 
 ## Astro SDK integration
 
-This integration is deliberately safe by default. It can show local opportunities as an Astro `pair` draft, list the current Astro pairs with the SDK `list` action, and show the exact payload assumptions for review. Alert follow-up can also create or update Astro cards, but only after explicit opt-in and only as paused cards with `disableOpen=true`.
+This integration is deliberately safe by default. It can show local opportunities as an Astro `pair` draft, list the current Astro pairs with the SDK `list` action, and show the exact payload assumptions for review. Alert follow-up can also create or update Astro cards, but only after explicit opt-in. New cards are paused by default with `status=false` and `disableOpen=true`; use the dashboard default or `ASTRO_DEFAULT_OPEN_ENABLED=true` only after verifying live behavior.
 
 Configure these optional variables in `.env` only when you want to verify against your own Astro instance:
 
@@ -150,11 +150,12 @@ ASTRO_DEFAULT_MAX_TRADE_USDT=10
 ASTRO_DEFAULT_LEVERAGE=1
 ASTRO_DEFAULT_MIN_NOTIONAL=10
 ASTRO_DEFAULT_MAX_NOTIONAL=10
+ASTRO_DEFAULT_OPEN_ENABLED=false
 ASTRO_DEFAULT_CLOSE_POSITION_BUFFER_PCT=0.1
 ASTRO_REQUEST_TIMEOUT_SECONDS=10
 ```
 
-To let alerts create/update paused Astro cards, set both `ASTRO_DRY_RUN_ONLY=false` and `ASTRO_ALERT_AUTO_CREATE=true`. To allow manual card creation from the realtime opportunities preview modal without enabling alert automation, set `ASTRO_DRY_RUN_ONLY=false` and `ASTRO_MANUAL_CARD_CREATE=true`. The backend still forces `status=false` and `disableOpen=true`; it will not enable automatic trading. Before submitting, it calls SDK `list`: no same-name pair means `add`, same `name/type/buyEx/sellEx` means `update`, and same-name conflicts are skipped instead of overwritten.
+To let alerts create/update Astro cards, set both `ASTRO_DRY_RUN_ONLY=false` and `ASTRO_ALERT_AUTO_CREATE=true`. To allow manual card creation from the realtime opportunities preview modal without enabling alert automation, set `ASTRO_DRY_RUN_ONLY=false` and `ASTRO_MANUAL_CARD_CREATE=true`. The backend keeps cards paused unless `open_enabled` is enabled in the Astro card defaults or in the manual create request. Before submitting, it calls SDK `list`: no same-name pair means `add`, same `name/type/buyEx/sellEx` means `skip`, and same-name conflicts are skipped instead of overwritten.
 
 If the live close spread is not lower than the open spread, the Astro payload uses `openPosition - ASTRO_DEFAULT_CLOSE_POSITION_BUFFER_PCT` for `closePosition` so the card satisfies Astro's `openPosition > closePosition` rule. The preview modal shows a warning when this adjustment happens.
 

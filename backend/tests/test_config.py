@@ -80,6 +80,7 @@ def test_get_settings_loads_astro_sdk_configuration(
                 "ASTRO_ALERT_AUTO_CREATE=true",
                 "ASTRO_MANUAL_CARD_CREATE=true",
                 "ASTRO_DEFAULT_MAX_TRADE_USDT=25",
+                "ASTRO_DEFAULT_OPEN_ENABLED=true",
                 "ASTRO_DEFAULT_CLOSE_POSITION_BUFFER_PCT=0.2",
             ]
         ),
@@ -95,6 +96,7 @@ def test_get_settings_loads_astro_sdk_configuration(
         "ASTRO_ALERT_AUTO_CREATE",
         "ASTRO_MANUAL_CARD_CREATE",
         "ASTRO_DEFAULT_MAX_TRADE_USDT",
+        "ASTRO_DEFAULT_OPEN_ENABLED",
         "ASTRO_DEFAULT_CLOSE_POSITION_BUFFER_PCT",
     ]:
         monkeypatch.delenv(name, raising=False)
@@ -110,6 +112,8 @@ def test_get_settings_loads_astro_sdk_configuration(
         assert settings.astro_alert_auto_create is True
         assert settings.astro_manual_card_create is True
         assert settings.astro_default_max_trade_usdt == 25
+        assert settings.astro_default_open_enabled is True
+        assert settings.astro_card_settings.open_enabled is True
         assert settings.astro_default_close_position_buffer_pct == 0.2
     finally:
         get_settings.cache_clear()

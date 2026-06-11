@@ -213,6 +213,31 @@ def test_excluded_risk_label_blocks_alert() -> None:
     assert engine.evaluate([opp], [rule], now=datetime.now(UTC)) == []
 
 
+def test_default_rules_allow_large_and_wide_spread_alerts_for_manual_review() -> None:
+    engine = AlertEngine()
+    rule = AlertRule(
+        name="new listing manual review",
+        types=["FF"],
+        min_open_spread_pct=0.5,
+        min_fee_adjusted_open_pct=0.3,
+        min_volume_24h_usdt=1_000_000,
+        consecutive_hits=1,
+    )
+    opp = opportunity(spread=12).model_copy(
+        update={
+            "fee_adjusted_open_pct": 11.8,
+            "close_spread_pct": 16.5,
+            "spread_width_pct": 4.5,
+            "risk_labels": ["HUGE_SPREAD_VERIFY", "WIDE_SPREAD"],
+        }
+    )
+
+    fired = engine.evaluate([opp], [rule], now=datetime.now(UTC))
+
+    assert len(fired) == 1
+    assert fired[0].opportunity.risk_labels == ["HUGE_SPREAD_VERIFY", "WIDE_SPREAD"]
+
+
 def test_rule_exclude_symbols_do_not_block_alerts() -> None:
     engine = AlertEngine()
     rule = AlertRule(
@@ -445,4 +470,45 @@ def test_same_symbol_alerts_are_limited_to_top_three_arbitrage_candidates() -> N
         "best-edge",
         "best-funding",
         "best-liquidity",
+    ]
+
+
+def test_alerts_are_capped_per_evaluation_to_avoid_bursts() -> None:
+    engine = AlertEngine()
+    rule = AlertRule(
+        name="burst guard",
+        types=["FF"],
+        min_open_spread_pct=0.3,
+        min_fee_adjusted_open_pct=0.2,
+        min_volume_24h_usdt=1_000_000,
+        consecutive_hits=1,
+        cooldown_seconds=300,
+    )
+    candidates = [
+        opportunity(spread=0.50 + index * 0.10).model_copy(
+            update={
+                "id": f"opp-{index}",
+                "symbol": f"SYM{index}USDT",
+                "fee_adjusted_open_pct": 0.30 + index * 0.10,
+                "buy_volume_24h_usdt": 10_000_000,
+                "sell_volume_24h_usdt": 10_000_000,
+            }
+        )
+        for index in range(12)
+    ]
+
+    fired = engine.evaluate(candidates, [rule], now=datetime.now(UTC))
+
+    assert len(fired) == 10
+    assert [match.opportunity.id for match in fired] == [
+        "opp-11",
+        "opp-10",
+        "opp-9",
+        "opp-8",
+        "opp-7",
+        "opp-6",
+        "opp-5",
+        "opp-4",
+        "opp-3",
+        "opp-2",
     ]

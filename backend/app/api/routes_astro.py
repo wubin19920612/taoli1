@@ -62,6 +62,7 @@ def _settings_with_create_overrides(
             "leverage": card_request.leverage,
             "min_notional": card_request.min_notional,
             "max_notional": card_request.max_notional,
+            "open_enabled": card_request.open_enabled,
         }.items()
         if value is not None
     }
@@ -167,6 +168,7 @@ async def create_astro_card_from_opportunity(
                 "leverage": effective_settings.leverage,
                 "min_notional": effective_settings.min_notional,
                 "max_notional": effective_settings.max_notional,
+                "open_enabled": effective_settings.open_enabled,
             }
         )
         if settings_repo is not None:

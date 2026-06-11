@@ -64,8 +64,6 @@ export const riskLabelDescription = new Map(
 export const defaultHiddenRiskLabels = [
   "LOW_VOLUME",
   "STALE_DATA",
-  "HUGE_SPREAD_VERIFY",
-  "WIDE_SPREAD",
   "SAME_TICKER_RISK",
   "MISSING_FUNDING",
   "THIN_ORDER_BOOK",
