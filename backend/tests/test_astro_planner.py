@@ -95,6 +95,17 @@ def test_sf_opportunity_maps_spot_to_future() -> None:
     assert plan.pair["maxTradeUSDT"] == "25"
 
 
+def test_open_enabled_config_builds_open_enabled_pair() -> None:
+    planner = AstroPairPlanner(AstroPlannerConfig(default_open_enabled=True))
+
+    plan = planner.plan(opportunity())
+
+    assert plan.can_submit is True
+    assert plan.pair is not None
+    assert plan.pair["status"] is True
+    assert plan.pair["disableOpen"] is False
+
+
 def test_close_position_is_adjusted_below_open_position_for_astro_submission() -> None:
     planner = AstroPairPlanner(AstroPlannerConfig())
 

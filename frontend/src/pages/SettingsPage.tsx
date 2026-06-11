@@ -85,7 +85,7 @@ const defaultAlertMessageTemplate: AlertMessageTemplateSettings = {
   include_risk: true,
   include_observations: true,
   include_dashboard_link: true,
-  suppress_when_card_conditions_fail: true,
+  suppress_when_card_conditions_fail: false,
   observation_limit: 5
 };
 
@@ -712,6 +712,9 @@ export function SettingsPage() {
             </Form.Item>
             <Form.Item label="Maximum notional USDT" name="max_notional" rules={[{ required: true }]}>
               <InputNumber min={0.01} step={1} className="wide-input" />
+            </Form.Item>
+            <Form.Item label="Open after create" name="open_enabled" valuePropName="checked">
+              <Switch checkedChildren="on" unCheckedChildren="off" />
             </Form.Item>
             <Form.Item label="Close buffer pct" name="close_position_buffer_pct" rules={[{ required: true }]}>
               <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />

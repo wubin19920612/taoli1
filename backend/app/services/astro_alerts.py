@@ -44,15 +44,6 @@ def _disable_open_message(enabled: bool) -> str:
     return "禁开=false" if enabled else "禁开=true"
 
 
-def _with_existing_id(pair: dict, existing: dict) -> dict | None:
-    existing_id = existing.get("id")
-    if not existing_id:
-        return None
-    next_pair = dict(pair)
-    next_pair["id"] = existing_id
-    return next_pair
-
-
 def _settings_with_create_overrides(
     settings: AstroCardSettings,
     card_request: AstroCardCreateRequest | None,
@@ -66,6 +57,7 @@ def _settings_with_create_overrides(
             "leverage": card_request.leverage,
             "min_notional": card_request.min_notional,
             "max_notional": card_request.max_notional,
+            "open_enabled": card_request.open_enabled,
         }.items()
         if value is not None
     }
@@ -168,7 +160,11 @@ class AstroAlertService:
                 message=reason,
             )
 
-        pair_enabled = live_pilot and self.live_pilot_settings.create_cards_enabled
+        pair_enabled = (
+            self.live_pilot_settings.create_cards_enabled
+            if live_pilot
+            else effective_card_settings.open_enabled
+        )
         pair = _with_card_enabled(plan.pair, pair_enabled)
         pair_name = str(pair.get("name", ""))
         pair_type = str(pair.get("type", ""))
@@ -218,35 +214,11 @@ class AstroAlertService:
             None,
         )
         if same_route_pair is not None:
-            update_pair = _with_existing_id(pair, same_route_pair)
-            if update_pair is None:
-                return AstroAlertActionResult(
-                    enabled=True,
-                    status="failed",
-                    action="update",
-                    message=f"更新失败，Astro 同名卡片 {pair_name} 缺少 id",
-                    pair_name=pair_name,
-                    pair_type=pair_type,
-                )
-            try:
-                await self.client.update_pair(update_pair)
-            except AstroClientError as exc:
-                return AstroAlertActionResult(
-                    enabled=True,
-                    status="failed",
-                    action="update",
-                    message=f"更新失败，{exc.message}",
-                    pair_name=pair_name,
-                    pair_type=pair_type,
-                )
             return AstroAlertActionResult(
                 enabled=True,
-                status="updated",
-                action="update",
-                message=(
-                    f"已更新{_card_state_message(pair_enabled)} "
-                    f"{pair_name} {pair_type} {route}，{_disable_open_message(pair_enabled)}"
-                ),
+                status="skipped",
+                action="existing",
+                message=f"已跳过，Astro 已存在卡片 {pair_name} {pair_type} {route}",
                 pair_name=pair_name,
                 pair_type=pair_type,
             )

@@ -8,6 +8,7 @@ from app.services.alert_metrics import AlertObservation, combined_open_edge_pct,
 from app.services.risk_labels import effective_open_edge_pct, known_volume_24h_usdt
 
 MAX_ALERTS_PER_SYMBOL = 3
+MAX_ALERTS_PER_EVALUATION = 10
 EPSILON = 1e-9
 
 
@@ -149,4 +150,4 @@ def _limit_matches_per_symbol(matches: list[AlertMatch]) -> list[AlertMatch]:
         limited.extend(
             sorted(symbol_matches, key=_alert_rank, reverse=True)[:MAX_ALERTS_PER_SYMBOL]
         )
-    return sorted(limited, key=_alert_rank, reverse=True)
+    return sorted(limited, key=_alert_rank, reverse=True)[:MAX_ALERTS_PER_EVALUATION]

@@ -17,6 +17,7 @@ class AstroPlannerConfig:
     default_leverage: int = 1
     default_min_notional: float = 10
     default_max_notional: float = 10
+    default_open_enabled: bool = False
     default_close_position_buffer_pct: float = 0.1
     default_unfavorable_funding_weight: float = 1
     default_close_position_floor_pct: float = 0
@@ -28,6 +29,7 @@ class AstroPlannerConfig:
             default_leverage=settings.leverage,
             default_min_notional=settings.min_notional,
             default_max_notional=settings.max_notional,
+            default_open_enabled=settings.open_enabled,
             default_close_position_buffer_pct=settings.close_position_buffer_pct,
             default_unfavorable_funding_weight=settings.unfavorable_funding_weight,
             default_close_position_floor_pct=settings.close_position_floor_pct,
@@ -209,7 +211,7 @@ class AstroPairPlanner:
 
         warnings = [
             "Dry-run only: this plan does not call Astro add/update/delete and cannot open positions.",
-            "Astro SDK add action restarts astro-core; use update or manual pre-created pairs after verification.",
+            "Astro SDK add action restarts astro-core; existing pairs are skipped instead of updated.",
         ]
         if close_decision.adjusted_for_astro:
             warnings.append(
@@ -230,10 +232,10 @@ class AstroPairPlanner:
 
         pair = {
             "name": _base_name(opportunity.symbol),
-            "status": False,
+            "status": self.config.default_open_enabled,
             "type": str(opportunity.type),
             "openPosition": _decimal_position(opportunity.open_spread_pct),
-            "disableOpen": True,
+            "disableOpen": not self.config.default_open_enabled,
             "closePosition": _decimal_position(close_decision.close_spread_pct),
             "disableClose": False,
             "maxTradeUSDT": _compact_number(self.config.default_max_trade_usdt),

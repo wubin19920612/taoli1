@@ -5,8 +5,6 @@ from app.models.market import MarketType
 DEFAULT_HIDDEN_RISK_LABELS = [
     "LOW_VOLUME",
     "STALE_DATA",
-    "HUGE_SPREAD_VERIFY",
-    "WIDE_SPREAD",
     "SAME_TICKER_RISK",
     "MISSING_FUNDING",
     "THIN_ORDER_BOOK",
@@ -85,7 +83,7 @@ class AlertMessageTemplateSettings(BaseModel):
     include_risk: bool = True
     include_observations: bool = True
     include_dashboard_link: bool = True
-    suppress_when_card_conditions_fail: bool = True
+    suppress_when_card_conditions_fail: bool = False
     observation_limit: int = Field(default=5, ge=1, le=20)
 
 
@@ -94,6 +92,7 @@ class AstroCardSettings(BaseModel):
     leverage: int = Field(default=1, ge=1)
     min_notional: float = Field(default=10, ge=0)
     max_notional: float = Field(default=10, gt=0)
+    open_enabled: bool = False
     close_position_buffer_pct: float = Field(default=0.1, ge=0)
     unfavorable_funding_weight: float = Field(default=1, ge=0)
     close_position_floor_pct: float = Field(default=0, ge=0)

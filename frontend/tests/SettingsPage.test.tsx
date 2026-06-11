@@ -61,6 +61,7 @@ describe("SettingsPage", () => {
             leverage: 2,
             min_notional: 10,
             max_notional: 25,
+            open_enabled: false,
             close_position_buffer_pct: 0.1,
             unfavorable_funding_weight: 1,
             close_position_floor_pct: 0
@@ -246,6 +247,7 @@ describe("SettingsPage", () => {
 
     await userEvent.clear(positionValueInput);
     await userEvent.type(positionValueInput, "80");
+    await userEvent.click(screen.getByLabelText("Open after create"));
     await userEvent.click(screen.getByRole("button", { name: /Save Astro card defaults/ }));
 
     await waitFor(() => {
@@ -257,6 +259,13 @@ describe("SettingsPage", () => {
         })
       );
     });
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/settings/astro-card"),
+      expect.objectContaining({
+        method: "PUT",
+        body: expect.stringContaining('"open_enabled":true')
+      })
+    );
   }, 15000);
 
   it("loads and saves symbol aliases with risk settings", async () => {

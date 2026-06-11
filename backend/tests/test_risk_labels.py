@@ -254,3 +254,10 @@ def test_funding_against_uses_single_cycle_edge_without_hourly_normalization() -
 def test_mark_index_deviation_is_visible_by_default() -> None:
     assert "MARK_INDEX_DEVIATION" not in DEFAULT_HIDDEN_RISK_LABELS
     assert "MARK_INDEX_DEVIATION" not in DEFAULT_EXCLUDED_RISK_LABELS
+
+
+def test_large_and_wide_spread_labels_are_visible_and_alertable_by_default() -> None:
+    assert "HUGE_SPREAD_VERIFY" not in DEFAULT_HIDDEN_RISK_LABELS
+    assert "WIDE_SPREAD" not in DEFAULT_HIDDEN_RISK_LABELS
+    assert "HUGE_SPREAD_VERIFY" not in DEFAULT_EXCLUDED_RISK_LABELS
+    assert "WIDE_SPREAD" not in DEFAULT_EXCLUDED_RISK_LABELS

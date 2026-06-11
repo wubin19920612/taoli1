@@ -50,6 +50,7 @@ class Settings:
     astro_default_leverage: int = 1
     astro_default_min_notional: float = 10.0
     astro_default_max_notional: float = 10.0
+    astro_default_open_enabled: bool = False
     astro_default_close_position_buffer_pct: float = 0.1
     astro_request_timeout_seconds: float = 10.0
 
@@ -80,6 +81,7 @@ class Settings:
             leverage=self.astro_default_leverage,
             min_notional=self.astro_default_min_notional,
             max_notional=self.astro_default_max_notional,
+            open_enabled=self.astro_default_open_enabled,
             close_position_buffer_pct=self.astro_default_close_position_buffer_pct,
         )
 
@@ -191,6 +193,7 @@ def get_settings() -> Settings:
         astro_default_leverage=int(os.getenv("ASTRO_DEFAULT_LEVERAGE", "1")),
         astro_default_min_notional=float(os.getenv("ASTRO_DEFAULT_MIN_NOTIONAL", "10")),
         astro_default_max_notional=float(os.getenv("ASTRO_DEFAULT_MAX_NOTIONAL", "10")),
+        astro_default_open_enabled=bool_env("ASTRO_DEFAULT_OPEN_ENABLED", False),
         astro_default_close_position_buffer_pct=float(
             os.getenv("ASTRO_DEFAULT_CLOSE_POSITION_BUFFER_PCT", "0.1")
         ),

@@ -4,6 +4,7 @@ from typing import Any
 import pytest
 
 from app.core.config import Settings
+from app.models.astro import AstroCardCreateRequest
 from app.models.market import MarketType
 from app.models.opportunity import Opportunity, OpportunityType
 from app.models.settings import AstroCardSettings, LivePilotSettings
@@ -153,6 +154,29 @@ async def test_manual_create_uses_manual_switch_instead_of_alert_switch() -> Non
 
 
 @pytest.mark.asyncio
+async def test_manual_create_can_override_open_enabled() -> None:
+    client = FakeAstroClient()
+    service = AstroAlertService(
+        client,
+        Settings(
+            astro_alert_auto_create=False,
+            astro_manual_card_create=True,
+            astro_dry_run_only=False,
+        ),
+        add_restart_delay_seconds=0,
+    )
+
+    result = await service.handle_manual_create(
+        opportunity(),
+        AstroCardCreateRequest(open_enabled=True),
+    )
+
+    assert result.status == "created"
+    assert client.added[0]["status"] is True
+    assert client.added[0]["disableOpen"] is False
+
+
+@pytest.mark.asyncio
 async def test_unsupported_type_is_skipped() -> None:
     client = FakeAstroClient()
     service = AstroAlertService(
@@ -228,6 +252,7 @@ async def test_alert_create_uses_supplied_astro_card_settings() -> None:
             leverage=2,
             min_notional=12,
             max_notional=66,
+            open_enabled=True,
             close_position_buffer_pct=0.2,
             unfavorable_funding_weight=1,
             close_position_floor_pct=0,
@@ -242,6 +267,8 @@ async def test_alert_create_uses_supplied_astro_card_settings() -> None:
     assert client.added[0]["leverage"] == "2"
     assert client.added[0]["minNotional"] == "12"
     assert client.added[0]["maxNotional"] == "66"
+    assert client.added[0]["status"] is True
+    assert client.added[0]["disableOpen"] is False
 
 
 @pytest.mark.asyncio
@@ -278,7 +305,7 @@ async def test_live_pilot_alert_create_uses_pilot_notional_and_enabled_card() ->
 
 
 @pytest.mark.asyncio
-async def test_existing_same_route_pair_updates_paused_disable_open_card() -> None:
+async def test_existing_same_route_pair_is_skipped_without_update() -> None:
     client = FakeAstroClient(
         [
             {
@@ -299,13 +326,11 @@ async def test_existing_same_route_pair_updates_paused_disable_open_card() -> No
 
     result = await service.handle_alert(opportunity())
 
-    assert result.status == "updated"
-    assert result.action == "update"
-    assert client.updated[0]["id"] == "Ab12Cd34Ef"
-    assert client.updated[0]["status"] is False
-    assert client.updated[0]["disableOpen"] is True
-    assert client.updated[0]["openPosition"] == "0.008000"
     assert not client.added
+    assert not client.updated
+    assert result.status == "skipped"
+    assert result.action == "existing"
+    assert "已存在卡片" in result.message
 
 
 @pytest.mark.asyncio
