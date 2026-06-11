@@ -32,7 +32,8 @@ import type {
   PhonePriceAlertRule,
   RiskSettings,
   ServiceControlStatus,
-  ServiceRestartResult
+  ServiceRestartResult,
+  TradfiPerpMonitorPreview
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "/api";
@@ -203,6 +204,42 @@ export async function updateFundingArbitrageSettings(
 
 export async function getFundingArbitragePreview(): Promise<FundingArbitragePreview> {
   return fetchJson<FundingArbitragePreview>("/funding-arbitrage/preview");
+}
+
+export async function getTradfiPerpMonitorPreview(params: {
+  live?: boolean;
+  min_volume_24h_k?: number;
+  max_mark_index_deviation_pct?: number;
+  max_rows?: number;
+} = {}): Promise<TradfiPerpMonitorPreview> {
+  const url = buildUrl("/tradfi-perp-monitor/preview", params);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    return response.json() as Promise<TradfiPerpMonitorPreview>;
+  });
+}
+
+export async function refreshTradfiPerpMonitorPreview(params: {
+  min_volume_24h_k?: number;
+  max_mark_index_deviation_pct?: number;
+  max_rows?: number;
+} = {}): Promise<TradfiPerpMonitorPreview> {
+  const url = buildUrl("/tradfi-perp-monitor/refresh", params);
+  return fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders()
+    },
+    body: JSON.stringify({})
+  }).then(async (response) => {
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    return response.json() as Promise<TradfiPerpMonitorPreview>;
+  });
 }
 
 export async function listAlertRules(): Promise<AlertRule[]> {

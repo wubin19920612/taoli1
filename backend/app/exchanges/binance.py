@@ -25,6 +25,7 @@ class BinanceAdapter(ExchangeAdapter):
         book = await self.get_json(f"{self.futures_base_url}/fapi/v1/ticker/bookTicker")
         premium = await self.get_json(f"{self.futures_base_url}/fapi/v1/premiumIndex")
         interval_by_symbol = await self._fetch_funding_intervals()
+        volume_by_symbol = await self._fetch_future_24h_volumes()
         premium_by_symbol = {item["symbol"]: item for item in premium if item.get("symbol")}
         snapshots = self._parse_book_tickers(book, MarketType.FUTURE)
         now = utc_now()
@@ -46,10 +47,24 @@ class BinanceAdapter(ExchangeAdapter):
                         "funding_next_time": next_time,
                         "mark_price": parse_float(item.get("markPrice")),
                         "index_price": parse_float(item.get("indexPrice")),
+                        "volume_24h_usdt": volume_by_symbol.get(snapshot.raw_symbol),
                     }
                 )
             )
         return enriched
+
+    async def _fetch_future_24h_volumes(self) -> dict[str, float]:
+        try:
+            rows = await self.get_json(f"{self.futures_base_url}/fapi/v1/ticker/24hr")
+        except Exception:
+            return {}
+        volumes: dict[str, float] = {}
+        for item in rows if isinstance(rows, list) else []:
+            symbol = item.get("symbol")
+            volume = parse_float(item.get("quoteVolume"))
+            if symbol and volume is not None:
+                volumes[symbol] = volume
+        return volumes
 
     async def fetch_order_book(
         self,

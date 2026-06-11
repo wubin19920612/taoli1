@@ -21,6 +21,7 @@ from app.api import (
     routes_phone_alerts,
     routes_settings,
     stream,
+    routes_tradfi_perp_monitor,
 )
 from app.core.config import Settings, get_settings
 from app.db.database import connect_database
@@ -503,6 +504,9 @@ def create_app(
                 close = getattr(service_controller, "aclose", None)
                 if close is not None:
                     await close()
+            tradfi_perp_live_fetcher = getattr(app.state, "tradfi_perp_live_fetcher", None)
+            if tradfi_perp_live_fetcher is not None:
+                await tradfi_perp_live_fetcher.aclose()
             await app.state.feishu_notifier.client.aclose()
             await db.close()
 
@@ -564,6 +568,7 @@ def create_app(
     app.include_router(routes_alerts.router, prefix="/api")
     app.include_router(routes_phone_alerts.router, prefix="/api")
     app.include_router(routes_funding_arbitrage.router, prefix="/api")
+    app.include_router(routes_tradfi_perp_monitor.router, prefix="/api")
     app.include_router(routes_settings.router, prefix="/api")
     app.include_router(routes_admin.router, prefix="/api")
     app.include_router(stream.router, prefix="/api")

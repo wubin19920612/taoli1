@@ -3,6 +3,7 @@ import {
   BellOutlined,
   DashboardOutlined,
   FundProjectionScreenOutlined,
+  LineChartOutlined,
   NotificationOutlined,
   NodeIndexOutlined,
   SettingOutlined
@@ -15,9 +16,10 @@ import { AnnouncementsPage } from "../pages/AnnouncementsPage";
 import { DashboardPage } from "../pages/DashboardPage";
 import { FundingArbitragePage } from "../pages/FundingArbitragePage";
 import { IndexComponentChangesPage } from "../pages/IndexComponentChangesPage";
+import { TradfiPerpMonitorPage } from "../pages/TradfiPerpMonitorPage";
 import { SettingsPage } from "../pages/SettingsPage";
 
-type PageKey = "dashboard" | "funding" | "index-components" | "announcements" | "settings" | "history";
+type PageKey = "dashboard" | "funding" | "tradfi-perp" | "index-components" | "announcements" | "settings" | "history";
 
 export function AppShell() {
   const [page, setPage] = useState<PageKey>("dashboard");
@@ -43,6 +45,11 @@ export function AppShell() {
               label: "\u8d44\u91d1\u8d39\u7387\u5957\u5229"
             },
             {
+              key: "tradfi-perp",
+              icon: <LineChartOutlined />,
+              label: "TradFi ??"
+            },
+            {
               key: "index-components",
               icon: <NodeIndexOutlined />,
               label: "指数成分变更"
@@ -64,6 +71,7 @@ export function AppShell() {
         <Layout.Content className="app-content">
           {page === "dashboard" ? <DashboardPage /> : null}
           {page === "funding" ? <FundingArbitragePage /> : null}
+          {page === "tradfi-perp" ? <TradfiPerpMonitorPage /> : null}
           {page === "index-components" ? <IndexComponentChangesPage /> : null}
           {page === "announcements" ? <AnnouncementsPage /> : null}
           {page === "settings" ? <SettingsPage /> : null}

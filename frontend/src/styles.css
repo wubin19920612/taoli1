@@ -413,6 +413,55 @@ body {
   word-break: break-word;
 }
 
+.tradfi-metrics {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.tradfi-table .ant-table-cell {
+  vertical-align: middle;
+}
+
+.tradfi-leg-cell,
+.tradfi-stack-cell {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.tradfi-leg-cell .ant-typography,
+.tradfi-stack-cell .ant-typography {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tradfi-expanded-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(180px, 1fr));
+  gap: 12px;
+  padding: 8px 10px 8px 38px;
+  background: #f7faf9;
+}
+
+.tradfi-expanded-row > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.tradfi-expanded-row .ant-typography {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .live-pilot-preview {
   display: grid;
   gap: 8px;
@@ -861,6 +910,7 @@ body {
   .settings-grid,
   .form-grid,
   .funding-metrics,
+  .tradfi-metrics,
   .funding-settings-grid,
   .announcements-settings-grid,
   .live-pilot-metrics,
@@ -872,6 +922,10 @@ body {
   .toolbar {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .tradfi-expanded-row {
+    grid-template-columns: 1fr;
   }
 
   .toolbar-controls,
