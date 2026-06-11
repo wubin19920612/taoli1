@@ -232,6 +232,108 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
           payload TEXT NOT NULL,
           updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
+
+        CREATE TABLE IF NOT EXISTS funding_research_market_snapshots (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          observed_at TEXT NOT NULL,
+          exchange TEXT NOT NULL,
+          symbol TEXT NOT NULL,
+          market_type TEXT NOT NULL,
+          bid REAL NOT NULL,
+          ask REAL NOT NULL,
+          bid_size REAL,
+          ask_size REAL,
+          volume_24h_usdt REAL,
+          funding_rate_pct REAL,
+          funding_next_rate_pct REAL,
+          funding_interval_hours REAL,
+          funding_next_time TEXT,
+          mark_price REAL,
+          index_price REAL,
+          raw_symbol TEXT NOT NULL,
+          payload TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_funding_research_market_symbol_time
+          ON funding_research_market_snapshots(symbol, observed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_funding_research_market_exchange_time
+          ON funding_research_market_snapshots(exchange, observed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_funding_research_market_time
+          ON funding_research_market_snapshots(observed_at DESC);
+
+        CREATE TABLE IF NOT EXISTS funding_research_opportunity_snapshots (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          observed_at TEXT NOT NULL,
+          symbol TEXT NOT NULL,
+          long_exchange TEXT NOT NULL,
+          short_exchange TEXT NOT NULL,
+          expected_net_funding_pct REAL,
+          expected_basis_change_pct REAL NOT NULL,
+          estimated_cost_pct REAL NOT NULL,
+          risk_buffer_pct REAL NOT NULL,
+          ev_pct REAL,
+          score REAL NOT NULL,
+          decision TEXT NOT NULL,
+          basis_alignment TEXT NOT NULL,
+          basis_diff_pct REAL,
+          long_basis_pct REAL,
+          short_basis_pct REAL,
+          funding_window_hours REAL NOT NULL,
+          next_settlement_time TEXT,
+          minutes_to_settlement REAL,
+          funding_source TEXT NOT NULL,
+          risk_labels_json TEXT NOT NULL,
+          reasons_json TEXT NOT NULL,
+          payload TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_funding_research_opp_symbol_time
+          ON funding_research_opportunity_snapshots(symbol, observed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_funding_research_opp_decision_time
+          ON funding_research_opportunity_snapshots(decision, observed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_funding_research_opp_pair_time
+          ON funding_research_opportunity_snapshots(
+            symbol, long_exchange, short_exchange, observed_at DESC
+          );
+        CREATE INDEX IF NOT EXISTS idx_funding_research_opp_time
+          ON funding_research_opportunity_snapshots(observed_at DESC);
+
+        CREATE TABLE IF NOT EXISTS funding_research_paper_trades (
+          id TEXT PRIMARY KEY,
+          status TEXT NOT NULL,
+          symbol TEXT NOT NULL,
+          long_exchange TEXT NOT NULL,
+          short_exchange TEXT NOT NULL,
+          opened_at TEXT NOT NULL,
+          closed_at TEXT,
+          open_long_basis_pct REAL,
+          open_short_basis_pct REAL,
+          open_basis_diff_pct REAL,
+          close_long_basis_pct REAL,
+          close_short_basis_pct REAL,
+          close_basis_diff_pct REAL,
+          expected_net_funding_pct REAL,
+          expected_basis_change_pct REAL NOT NULL,
+          expected_ev_pct REAL,
+          score REAL NOT NULL,
+          decision TEXT NOT NULL,
+          realized_funding_pct REAL NOT NULL,
+          realized_basis_change_pct REAL NOT NULL,
+          estimated_cost_pct REAL NOT NULL,
+          realized_pnl_pct REAL,
+          max_adverse_ev_pct REAL,
+          exit_reason TEXT,
+          payload TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_funding_research_paper_status_time
+          ON funding_research_paper_trades(status, opened_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_funding_research_paper_symbol_time
+          ON funding_research_paper_trades(symbol, opened_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_funding_research_paper_pair_status
+          ON funding_research_paper_trades(symbol, long_exchange, short_exchange, status);
         """
     )
     await _ensure_opportunity_history_columns(db)

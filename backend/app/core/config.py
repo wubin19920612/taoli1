@@ -16,6 +16,9 @@ class Settings:
     database_url: str = "sqlite:///./data/radar.db"
     poll_interval_seconds: float = 8.0
     funding_poll_interval_seconds: float = 120.0
+    funding_research_enabled: bool = False
+    funding_research_manage_paper_trades: bool = True
+    funding_research_snapshot_retention_hours: float = 72.0
     feishu_webhook_url: str = ""
     feishu_secret: str = ""
     feishu_app_id: str = ""
@@ -141,6 +144,14 @@ def get_settings() -> Settings:
         database_url=database_url,
         poll_interval_seconds=float(os.getenv("POLL_INTERVAL_SECONDS", "8")),
         funding_poll_interval_seconds=float(os.getenv("FUNDING_POLL_INTERVAL_SECONDS", "120")),
+        funding_research_enabled=bool_env("FUNDING_RESEARCH_ENABLED", False),
+        funding_research_manage_paper_trades=bool_env(
+            "FUNDING_RESEARCH_MANAGE_PAPER_TRADES",
+            True,
+        ),
+        funding_research_snapshot_retention_hours=float(
+            os.getenv("FUNDING_RESEARCH_SNAPSHOT_RETENTION_HOURS", "72")
+        ),
         feishu_webhook_url=os.getenv("FEISHU_WEBHOOK_URL", ""),
         feishu_secret=os.getenv("FEISHU_SECRET", ""),
         feishu_app_id=os.getenv("FEISHU_APP_ID", "").strip(),

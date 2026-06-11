@@ -12,6 +12,13 @@ import type {
   AstroSdkStatus,
   FundingArbitragePreview,
   FundingArbitrageSettings,
+  FundingResearchCandidate,
+  FundingResearchCandidateSnapshot,
+  FundingResearchLegacyBacktestQuery,
+  FundingResearchLegacyBacktestSummary,
+  FundingResearchPaperTrade,
+  FundingResearchPaperTradeSummary,
+  FundingResearchRunResult,
   HealthStatus,
   ExchangeAnnouncement,
   IndexComponentChange,
@@ -239,6 +246,85 @@ export async function refreshTradfiPerpMonitorPreview(params: {
       throw new Error(await response.text());
     }
     return response.json() as Promise<TradfiPerpMonitorPreview>;
+  });
+}
+
+export async function runFundingResearch(params: {
+  manage_paper_trades?: boolean;
+  snapshot_retention_hours?: number;
+} = {}): Promise<FundingResearchRunResult> {
+  const url = buildUrl("/funding-research/run", params);
+  return fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders()
+    },
+    body: JSON.stringify({})
+  }).then(async (response) => {
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    return response.json() as Promise<FundingResearchRunResult>;
+  });
+}
+
+export async function listFundingResearchCandidates(params: {
+  symbol?: string;
+  limit?: number;
+} = {}): Promise<FundingResearchCandidate[]> {
+  const url = buildUrl("/funding-research/candidates", params);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    return response.json() as Promise<FundingResearchCandidate[]>;
+  });
+}
+
+export async function listFundingResearchCandidateSnapshots(params: {
+  symbol?: string;
+  long_exchange?: string;
+  short_exchange?: string;
+  limit?: number;
+} = {}): Promise<FundingResearchCandidateSnapshot[]> {
+  const url = buildUrl("/funding-research/candidate-snapshots", params);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    return response.json() as Promise<FundingResearchCandidateSnapshot[]>;
+  });
+}
+
+export async function listFundingResearchPaperTrades(params: {
+  status?: string;
+  limit?: number;
+} = {}): Promise<FundingResearchPaperTrade[]> {
+  const url = buildUrl("/funding-research/paper-trades", params);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    return response.json() as Promise<FundingResearchPaperTrade[]>;
+  });
+}
+
+export async function getFundingResearchPaperTradeSummary(
+  limit = 1000
+): Promise<FundingResearchPaperTradeSummary> {
+  return fetchJson<FundingResearchPaperTradeSummary>(`/funding-research/paper-trades/summary?limit=${limit}`);
+}
+
+export async function getFundingResearchLegacyBacktest(
+  query: FundingResearchLegacyBacktestQuery = {}
+): Promise<FundingResearchLegacyBacktestSummary> {
+  const url = buildUrl("/funding-research/legacy-backtest", query);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    return response.json() as Promise<FundingResearchLegacyBacktestSummary>;
   });
 }
 
