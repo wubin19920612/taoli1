@@ -782,6 +782,122 @@ export interface FundingResearchLegacyBacktestQuery {
   max_hold_observations?: number;
 }
 
+export type GateTwapSide = "sell" | "buy";
+export type GateTwapSliceMode = "initial" | "remaining";
+export type GateTwapActionMode = "ACK" | "RESULT" | "FULL";
+export type GateTwapJobState = "queued" | "running" | "completed" | "failed" | "cancelled";
+
+export interface GateTwapRequest {
+  contract: string;
+  settle: string;
+  side: GateTwapSide;
+  start_at?: string | null;
+  interval_seconds: number;
+  duration_seconds: number;
+  percent: number;
+  slice_mode: GateTwapSliceMode;
+  initial_size?: number | null;
+  last_order_all: boolean;
+  slip_ratio?: number | null;
+  client_prefix: string;
+  action_mode: GateTwapActionMode;
+}
+
+export interface GateTwapRunRequest extends GateTwapRequest {
+  live: boolean;
+  confirm_live: boolean;
+}
+
+export interface GateTwapContractRules {
+  order_size_min: number;
+  order_size_step: number;
+  enable_decimal: boolean;
+  market_order_slip_ratio: number | null;
+  market_order_size_max: number | null;
+  status: string | null;
+}
+
+export interface GateTwapPlanSlice {
+  index: number;
+  scheduled_at: string;
+  raw_size: number;
+  order_size: number;
+  signed_order_size: number;
+  remaining_after: number;
+  skipped_reason: string | null;
+}
+
+export interface GateTwapPlan {
+  request: GateTwapRequest;
+  contract: string;
+  settle: string;
+  side: GateTwapSide;
+  order_count: number;
+  initial_size: number | null;
+  signed_position_size: number | null;
+  has_credentials: boolean;
+  rules: GateTwapContractRules;
+  total_planned_size: number;
+  slices: GateTwapPlanSlice[];
+  warnings: string[];
+}
+
+export interface GateTickerBook {
+  bid: number | null;
+  ask: number | null;
+  bid_size: number | null;
+  ask_size: number | null;
+  mid: number | null;
+  last: number | null;
+  volume_24h_usdt: number | null;
+}
+
+export interface GateTwapMarketSnapshot {
+  contract: string;
+  spot_pair: string;
+  observed_at: string;
+  spot_available: boolean;
+  spot: GateTickerBook | null;
+  future: GateTickerBook | null;
+  mark_price: number | null;
+  index_price: number | null;
+  mark_index_premium_pct: number | null;
+  future_index_premium_pct: number | null;
+  future_spot_premium_pct: number | null;
+  funding_rate_pct: number | null;
+  funding_next_rate_pct: number | null;
+  funding_interval_hours: number | null;
+  funding_next_time: string | null;
+  contract_status: string | null;
+  order_size_min: number | null;
+  order_size_step: number | null;
+  market_order_slip_ratio: number | null;
+}
+
+export interface GateTwapJobEvent {
+  at: string;
+  level: "info" | "warning" | "error";
+  message: string;
+  order: Record<string, unknown> | null;
+  response: Record<string, unknown> | null;
+}
+
+export interface GateTwapJobStatus {
+  job_id: string;
+  state: GateTwapJobState;
+  live: boolean;
+  request: GateTwapRequest;
+  plan: GateTwapPlan | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  completed_orders: number;
+  skipped_orders: number;
+  total_order_size: number;
+  last_error: string | null;
+  events: GateTwapJobEvent[];
+}
+
 export interface OpportunityFilters {
   type?: OpportunityType;
   exclude_types?: OpportunityType[];

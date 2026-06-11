@@ -15,6 +15,7 @@ from app.api import (
     routes_alerts,
     routes_funding_arbitrage,
     routes_funding_research,
+    routes_gate_twap,
     routes_health,
     routes_history,
     routes_index_components,
@@ -59,6 +60,7 @@ from app.services.funding_research import (
     FundingResearchSettings,
     record_funding_research_run,
 )
+from app.services.gate_twap import GateTwapClient, GateTwapJobManager
 from app.services.history import OpportunityHistoryRecorder
 from app.services.index_components import (
     BinanceIndexComponentProvider,
@@ -565,6 +567,9 @@ def create_app(
                 close = getattr(service_controller, "aclose", None)
                 if close is not None:
                     await close()
+            gate_twap_manager = getattr(app.state, "gate_twap_manager", None)
+            if gate_twap_manager is not None:
+                await gate_twap_manager.aclose()
             tradfi_perp_live_fetcher = getattr(app.state, "tradfi_perp_live_fetcher", None)
             if tradfi_perp_live_fetcher is not None:
                 await tradfi_perp_live_fetcher.aclose()
@@ -598,6 +603,7 @@ def create_app(
             restart_delay_seconds=app_settings.service_control_restart_delay_seconds,
         )
     )
+    app.state.gate_twap_manager = GateTwapJobManager(GateTwapClient())
     app.state.feishu_notifier = FeishuNotifier(
         FeishuConfig(
             webhook_url=app_settings.feishu_webhook_url,
@@ -631,6 +637,7 @@ def create_app(
     app.include_router(routes_phone_alerts.router, prefix="/api")
     app.include_router(routes_funding_arbitrage.router, prefix="/api")
     app.include_router(routes_funding_research.router, prefix="/api")
+    app.include_router(routes_gate_twap.router, prefix="/api")
     app.include_router(routes_tradfi_perp_monitor.router, prefix="/api")
     app.include_router(routes_settings.router, prefix="/api")
     app.include_router(routes_admin.router, prefix="/api")
