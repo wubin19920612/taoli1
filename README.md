@@ -34,6 +34,46 @@ npm run dev
 
 打开 `http://127.0.0.1:3000`。前端开发服务器会把 `/api` 代理到 `http://127.0.0.1:8000`。
 
+## 资金费率研究流水线
+
+新的资金费率套利研究模块放在 `backend/app/services/funding_research/`，和旧的实时价差预览保持隔离，但复用同一个 SQLite、交易所适配器、行情模型和 FastAPI 应用。它会记录永续市场快照、资金费率候选、价差趋势和纸面交易，用于持续迭代“是否值得做”的正期望判断。
+
+单次实时扫描：
+
+```bash
+cd backend
+python -m app.services.funding_research.live_run --db data/radar.db --manage-paper-trades --snapshot-retention-hours 72
+```
+
+持续扫描：
+
+```bash
+cd backend
+python -m app.services.funding_research.live_run --db data/radar.db --manage-paper-trades --loop --interval 120 --snapshot-retention-hours 72
+```
+
+也可以让后端启动采集器时自动运行研究循环：
+
+```env
+FUNDING_RESEARCH_ENABLED=true
+FUNDING_RESEARCH_MANAGE_PAPER_TRADES=true
+FUNDING_POLL_INTERVAL_SECONDS=120
+FUNDING_RESEARCH_SNAPSHOT_RETENTION_HOURS=72
+```
+
+历史库可以做近似回测。旧 `opportunity_history` 没有完整盘口、标记价和指数价，所以这里把资金费率收益、开仓价差变化和成本做近似估算，适合先筛参数区间，再用新快照表做更精细的回放：
+
+```bash
+curl "http://127.0.0.1:8000/api/funding-research/legacy-backtest?hours=168&min_entry_edge_pct=1.0&min_next_funding_pct=0.8&cost_pct=0.35&max_hold_observations=2"
+```
+
+也可以直接对本地旧库做参数网格搜索：
+
+```bash
+cd backend
+python -m app.services.funding_research.legacy_grid_search --db data/radar.db --hours 168 --limit 100000 --min-entry-edges 0.4,0.6,0.8,1.0,1.2 --min-next-fundings 0.2,0.4,0.6,0.8 --costs 0.3,0.35,0.4 --max-holds 2,3,4,5 --min-trades 10 --top-n 20
+```
+
 ## Linux 服务器部署
 
 ```bash
