@@ -117,6 +117,11 @@ HISTORY_VACUUM_INTERVAL_SECONDS=86400
 - `GET /api/opportunities?type=FF&symbol=BTC&exchange=okx&min_open_spread_pct=0.5&include_risky=false&hidden_risk_labels=LOW_VOLUME,HUGE_SPREAD_VERIFY&min_volume_24h_k=1000`
 - `GET /api/markets`
 - `GET /api/history/opportunities?symbol=BTCUSDT&hours=24&limit=1000`
+- `POST /api/funding-research/run`
+- `GET /api/funding-research/candidates`
+- `GET /api/funding-research/paper-trades`
+- `GET /api/funding-research/paper-trades/summary`
+- `GET /api/funding-research/legacy-backtest?hours=168&min_entry_edge_pct=1.0&min_next_funding_pct=0.8&cost_pct=0.35&max_hold_observations=2`
 - `GET /api/settings/risk`
 - `PUT /api/settings/risk`
 - `GET /api/admin/service-control`

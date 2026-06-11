@@ -14,6 +14,7 @@ from app.api import (
     routes_admin,
     routes_alerts,
     routes_funding_arbitrage,
+    routes_funding_research,
     routes_health,
     routes_history,
     routes_index_components,
@@ -51,8 +52,13 @@ from app.services.announcements import (
 from app.services.astro_alerts import AstroAlertService
 from app.services.astro_client import AstroSdkClient, AstroSdkConfig
 from app.services.collector import MarketCollector, default_exchange_adapters, run_collector_loop
-from app.services.data_filters import filter_opportunities
+from app.services.data_filters import filter_markets, filter_opportunities
 from app.services.feishu import FeishuConfig, FeishuNotifier
+from app.services.funding_research import (
+    FundingResearchRepository,
+    FundingResearchSettings,
+    record_funding_research_run,
+)
 from app.services.history import OpportunityHistoryRecorder
 from app.services.index_components import (
     BinanceIndexComponentProvider,
@@ -381,6 +387,50 @@ async def _run_phone_price_alert_loop(
             continue
 
 
+async def _run_funding_research_loop(
+    app: FastAPI,
+    interval_seconds: float,
+    stop_event: asyncio.Event,
+) -> None:
+    while not stop_event.is_set():
+        try:
+            repo: FundingResearchRepository | None = getattr(
+                app.state,
+                "funding_research_repo",
+                None,
+            )
+            if repo is not None:
+                settings_repo: SettingsRepository | None = getattr(app.state, "settings_repo", None)
+                risk_settings = (
+                    await settings_repo.get_risk_settings()
+                    if settings_repo is not None
+                    else RiskSettings()
+                )
+                markets = filter_markets(app.state.snapshot_store.get_markets(), risk_settings)
+                result = await record_funding_research_run(
+                    markets=markets,
+                    repo=repo,
+                    settings=FundingResearchSettings(
+                        snapshot_retention_hours=app.state.settings.funding_research_snapshot_retention_hours,
+                    ),
+                    manage_paper_trades=app.state.settings.funding_research_manage_paper_trades,
+                )
+                logger.info(
+                    "funding research scan recorded markets=%s candidates=%s pruned=%s opened=%s closed=%s",
+                    result.market_snapshot_count,
+                    result.candidate_snapshot_count,
+                    result.pruned_snapshot_count,
+                    len(result.opened_paper_trades),
+                    len(result.closed_paper_trades),
+                )
+        except Exception:
+            logger.exception("funding research loop failed")
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
+        except TimeoutError:
+            continue
+
+
 def create_app(
     snapshot_store: SnapshotStore | None = None,
     settings: Settings | None = None,
@@ -402,6 +452,7 @@ def create_app(
         app.state.phone_price_alert_event_repo = PhonePriceAlertEventRepository(db)
         app.state.settings_repo = SettingsRepository(db)
         app.state.history_repo = OpportunityHistoryRepository(db)
+        app.state.funding_research_repo = FundingResearchRepository(db)
         app.state.index_component_repo = IndexComponentRepository(db)
         app.state.announcement_repo = AnnouncementRepository(db)
         tasks: list[asyncio.Task] = []
@@ -466,6 +517,16 @@ def create_app(
                         )
                     )
                 )
+            if app_settings.funding_research_enabled:
+                tasks.append(
+                    asyncio.create_task(
+                        _run_funding_research_loop(
+                            app,
+                            app_settings.funding_poll_interval_seconds,
+                            stop_event,
+                        )
+                    )
+                )
             announcement_monitor = AnnouncementMonitor(
                 app.state.announcement_repo,
                 alert_sender=lambda message: _send_index_component_alert(app, message),
@@ -515,6 +576,7 @@ def create_app(
     app.state.snapshot_store = store
     app.state.market_collector = None
     app.state.orderbook_validator = None
+    app.state.funding_research_repo = None
     app.state.alert_engine = AlertEngine()
     app.state.phone_price_alert_engine = PhonePriceAlertEngine()
     app.state.astro_client = AstroSdkClient(
@@ -568,6 +630,7 @@ def create_app(
     app.include_router(routes_alerts.router, prefix="/api")
     app.include_router(routes_phone_alerts.router, prefix="/api")
     app.include_router(routes_funding_arbitrage.router, prefix="/api")
+    app.include_router(routes_funding_research.router, prefix="/api")
     app.include_router(routes_tradfi_perp_monitor.router, prefix="/api")
     app.include_router(routes_settings.router, prefix="/api")
     app.include_router(routes_admin.router, prefix="/api")

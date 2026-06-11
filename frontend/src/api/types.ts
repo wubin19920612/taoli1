@@ -648,6 +648,140 @@ export interface TradfiPerpMonitorPreview {
   unmatched_binance: TradfiPerpUnmatchedAsset[];
 }
 
+export type FundingResearchDecision = "TRADE" | "SMALL_TRADE" | "WATCH" | "NO_TRADE";
+export type FundingResearchBasisAlignment = "aligned" | "neutral" | "conflicted";
+export type FundingResearchFormulaConfidence =
+  | "formula"
+  | "predicted"
+  | "fallback_current"
+  | "missing"
+  | "uncertain";
+export type FundingResearchPaperTradeStatus = "OPEN" | "CLOSED";
+
+export interface FundingResearchDepthStats {
+  source: string;
+  levels: number;
+  long_entry_depth_usdt: number | null;
+  short_entry_depth_usdt: number | null;
+  min_entry_depth_usdt: number | null;
+  target_notional_usdt: number;
+  long_entry_vwap: number | null;
+  short_entry_vwap: number | null;
+  executable_basis_diff_pct: number | null;
+  slippage_loss_pct: number | null;
+}
+
+export interface FundingResearchCandidate {
+  symbol: string;
+  long_exchange: string;
+  short_exchange: string;
+  long_funding_pct: number | null;
+  short_funding_pct: number | null;
+  expected_net_funding_pct: number | null;
+  expected_basis_change_pct: number;
+  estimated_cost_pct: number;
+  risk_buffer_pct: number;
+  ev_pct: number | null;
+  score: number;
+  decision: FundingResearchDecision;
+  basis_alignment: FundingResearchBasisAlignment;
+  basis_diff_pct: number | null;
+  long_basis_pct: number | null;
+  short_basis_pct: number | null;
+  funding_window_hours: number;
+  next_settlement_time: string | null;
+  minutes_to_settlement: number | null;
+  funding_source: FundingResearchFormulaConfidence;
+  depth_stats: FundingResearchDepthStats | null;
+  risk_labels: string[];
+  reasons: string[];
+}
+
+export interface FundingResearchCandidateSnapshot {
+  observed_at: string;
+  candidate: FundingResearchCandidate;
+}
+
+export interface FundingResearchRunResult {
+  observed_at: string;
+  market_snapshot_count: number;
+  candidate_snapshot_count: number;
+  pruned_snapshot_count: number;
+  candidate_count: number;
+  opened_paper_trade_count: number;
+  closed_paper_trade_count: number;
+  top_candidates: FundingResearchCandidate[];
+}
+
+export interface FundingResearchPaperTrade {
+  id: string;
+  status: FundingResearchPaperTradeStatus;
+  symbol: string;
+  long_exchange: string;
+  short_exchange: string;
+  opened_at: string;
+  closed_at: string | null;
+  open_long_basis_pct: number | null;
+  open_short_basis_pct: number | null;
+  open_basis_diff_pct: number | null;
+  close_long_basis_pct: number | null;
+  close_short_basis_pct: number | null;
+  close_basis_diff_pct: number | null;
+  expected_net_funding_pct: number | null;
+  expected_basis_change_pct: number;
+  expected_ev_pct: number | null;
+  score: number;
+  decision: FundingResearchDecision;
+  realized_funding_pct: number;
+  realized_basis_change_pct: number;
+  estimated_cost_pct: number;
+  realized_pnl_pct: number | null;
+  max_adverse_ev_pct: number | null;
+  exit_reason: string | null;
+  source_candidate: FundingResearchCandidate;
+}
+
+export interface FundingResearchPaperTradeSummary {
+  total_trades: number;
+  open_trades: number;
+  closed_trades: number;
+  winners: number;
+  losers: number;
+  win_rate_pct: number | null;
+  total_realized_pnl_pct: number;
+  average_realized_pnl_pct: number | null;
+  average_expected_ev_pct: number | null;
+  average_realized_funding_pct: number | null;
+  average_realized_basis_change_pct: number | null;
+  max_win_pct: number | null;
+  max_loss_pct: number | null;
+  average_score: number | null;
+}
+
+export interface FundingResearchLegacyBacktestSummary {
+  rows_seen: number;
+  trades: number;
+  winners: number;
+  losers: number;
+  win_rate_pct: number | null;
+  total_pnl_pct: number;
+  average_pnl_pct: number | null;
+  average_entry_edge_pct: number | null;
+  max_win_pct: number | null;
+  max_loss_pct: number | null;
+  notes: string[];
+}
+
+export interface FundingResearchLegacyBacktestQuery {
+  symbol?: string;
+  hours?: number;
+  limit?: number;
+  min_entry_edge_pct?: number;
+  min_next_funding_pct?: number;
+  cost_pct?: number;
+  max_hold_observations?: number;
+}
+
 export interface OpportunityFilters {
   type?: OpportunityType;
   exclude_types?: OpportunityType[];
