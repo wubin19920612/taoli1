@@ -133,3 +133,38 @@ def test_get_settings_disables_astro_alert_auto_create_by_default(tmp_path: Path
         assert settings.astro_manual_card_create is False
     finally:
         get_settings.cache_clear()
+
+
+def test_get_settings_loads_funding_research_flags(tmp_path: Path, monkeypatch) -> None:
+    backend_dir = tmp_path / "backend"
+    backend_dir.mkdir()
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            [
+                "FUNDING_RESEARCH_ENABLED=true",
+                "FUNDING_RESEARCH_MANAGE_PAPER_TRADES=false",
+                "FUNDING_POLL_INTERVAL_SECONDS=45",
+                "FUNDING_RESEARCH_SNAPSHOT_RETENTION_HOURS=24",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(backend_dir)
+    for name in [
+        "FUNDING_RESEARCH_ENABLED",
+        "FUNDING_RESEARCH_MANAGE_PAPER_TRADES",
+        "FUNDING_POLL_INTERVAL_SECONDS",
+        "FUNDING_RESEARCH_SNAPSHOT_RETENTION_HOURS",
+    ]:
+        monkeypatch.delenv(name, raising=False)
+    get_settings.cache_clear()
+
+    try:
+        settings = get_settings()
+
+        assert settings.funding_research_enabled is True
+        assert settings.funding_research_manage_paper_trades is False
+        assert settings.funding_poll_interval_seconds == 45
+        assert settings.funding_research_snapshot_retention_hours == 24
+    finally:
+        get_settings.cache_clear()

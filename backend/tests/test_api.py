@@ -678,6 +678,90 @@ def test_funding_arbitrage_settings_round_trip() -> None:
     assert response.json()["min_entry_edge_pct"] == 0.04
 
 
+def test_funding_research_run_creates_candidates_and_paper_trades() -> None:
+    now = datetime.now(UTC)
+    store = SnapshotStore()
+    store.set_markets(
+        [
+            MarketSnapshot(
+                symbol="LABUSDT",
+                base="LAB",
+                exchange="binance",
+                market_type=MarketType.FUTURE,
+                bid=8.79,
+                ask=8.81,
+                bid_size=2_000,
+                ask_size=2_000,
+                volume_24h_usdt=500_000_000,
+                funding_rate_pct=-1.6,
+                funding_next_rate_pct=-1.6,
+                funding_interval_hours=2,
+                funding_next_time=now + timedelta(minutes=30),
+                mark_price=8.8,
+                index_price=9.5,
+                timestamp=now,
+                raw_symbol="LABUSDT",
+            ),
+            MarketSnapshot(
+                symbol="LABUSDT",
+                base="LAB",
+                exchange="okx",
+                market_type=MarketType.FUTURE,
+                bid=9.39,
+                ask=9.41,
+                bid_size=2_000,
+                ask_size=2_000,
+                volume_24h_usdt=500_000_000,
+                funding_rate_pct=-0.1,
+                funding_next_rate_pct=-0.1,
+                funding_interval_hours=2,
+                funding_next_time=now + timedelta(minutes=30),
+                mark_price=9.4,
+                index_price=9.5,
+                timestamp=now,
+                raw_symbol="LABUSDT",
+            ),
+        ]
+    )
+    app = create_app(
+        snapshot_store=store,
+        settings=Settings(database_url="sqlite:///:memory:"),
+    )
+
+    with TestClient(app) as client:
+        run_response = client.post("/api/funding-research/run")
+        candidates_response = client.get("/api/funding-research/candidates?symbol=lab-usdt")
+        snapshots_response = client.get(
+            "/api/funding-research/candidate-snapshots"
+            "?symbol=lab-usdt&long_exchange=binance&short_exchange=okx"
+        )
+        trades_response = client.get("/api/funding-research/paper-trades?status=open")
+        summary_response = client.get("/api/funding-research/paper-trades/summary")
+
+    assert run_response.status_code == 200
+    run_payload = run_response.json()
+    assert run_payload["market_snapshot_count"] == 2
+    assert run_payload["pruned_snapshot_count"] == 0
+    assert run_payload["candidate_count"] == 1
+    assert run_payload["opened_paper_trade_count"] == 1
+    assert run_payload["top_candidates"][0]["long_exchange"] == "binance"
+    assert run_payload["top_candidates"][0]["short_exchange"] == "okx"
+
+    assert candidates_response.status_code == 200
+    assert candidates_response.json()[0]["symbol"] == "LABUSDT"
+
+    assert snapshots_response.status_code == 200
+    assert snapshots_response.json()[0]["candidate"]["symbol"] == "LABUSDT"
+    assert snapshots_response.json()[0]["candidate"]["long_exchange"] == "binance"
+
+    assert trades_response.status_code == 200
+    assert trades_response.json()[0]["status"] == "OPEN"
+
+    assert summary_response.status_code == 200
+    assert summary_response.json()["total_trades"] == 1
+    assert summary_response.json()["open_trades"] == 1
+
+
 def test_opportunities_endpoint_excludes_selected_types() -> None:
     sf = make_opportunity().model_copy(
         update={
