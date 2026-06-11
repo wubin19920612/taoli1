@@ -107,6 +107,18 @@ function settlementTime(value: string | null | undefined): string {
   return value ? `${dayjs.utc(value).utcOffset(8).format("MM-DD HH:mm")} UTC+8` : "-";
 }
 
+function compactNumber(value: number): string {
+  return Number.isInteger(value) ? value.toFixed(0) : value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function intervalHours(value: number | null | undefined): string {
+  return typeof value === "number" && Number.isFinite(value) ? `${compactNumber(value)}h` : "-";
+}
+
+function fundingIntervalSummary(row: FundingArbitrageCandidate): string {
+  return `${intervalHours(row.long_funding_interval_hours)} / ${intervalHours(row.short_funding_interval_hours)} -> ${intervalHours(row.funding_comparison_interval_hours)}`;
+}
+
 function compactMoney(value: number | null | undefined): string {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return "-";
@@ -215,15 +227,16 @@ function buildColumns(
       )
     },
     {
-      title: "资金费率",
-      width: 210,
+      title: "资金费率/周期",
+      width: 232,
       align: "right",
       render: (_, row) => (
         <div className="funding-stack-cell">
-          <Typography.Text>{`现 ${fundingPair(row.long_current_funding_pct, row.short_current_funding_pct)}`}</Typography.Text>
-          <Typography.Text>{`下 ${fundingPair(row.long_next_funding_pct, row.short_next_funding_pct)}`}</Typography.Text>
+          <Typography.Text type="secondary">{`周期 ${fundingIntervalSummary(row)}`}</Typography.Text>
+          <Typography.Text>{`当前 ${fundingPair(row.long_current_funding_pct, row.short_current_funding_pct)}`}</Typography.Text>
+          <Typography.Text>{`下期 ${fundingPair(row.long_next_funding_pct, row.short_next_funding_pct)}`}</Typography.Text>
           <Typography.Text type={(row.next_funding_edge_pct ?? 0) >= 0 ? "success" : "danger"}>
-            {`下期差 ${signedPct(row.next_funding_edge_pct)}`}
+            {`同周期差 ${signedPct(row.next_funding_edge_pct)}`}
           </Typography.Text>
         </div>
       )
@@ -286,6 +299,10 @@ function expandedFundingRow(row: FundingArbitrageCandidate) {
       <div>
         <Typography.Text type="secondary">资金来源</Typography.Text>
         <Typography.Text>{fundingSourceText[row.funding_source]}</Typography.Text>
+      </div>
+      <div>
+        <Typography.Text type="secondary">资金周期</Typography.Text>
+        <Typography.Text>{fundingIntervalSummary(row)}</Typography.Text>
       </div>
       <div>
         <Typography.Text type="secondary">流动性</Typography.Text>
@@ -543,7 +560,7 @@ export function FundingArbitragePage() {
         loading={loading}
         rowKey="id"
         pagination={{ pageSize: 50, showSizeChanger: true }}
-        scroll={{ x: 1212 }}
+        scroll={{ x: 1240 }}
         size="small"
         tableLayout="fixed"
         expandable={{
