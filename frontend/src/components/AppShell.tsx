@@ -1,6 +1,7 @@
 import {
   AlertOutlined,
   BellOutlined,
+  ClockCircleOutlined,
   DashboardOutlined,
   ExperimentOutlined,
   FundProjectionScreenOutlined,
@@ -17,11 +18,12 @@ import { AnnouncementsPage } from "../pages/AnnouncementsPage";
 import { DashboardPage } from "../pages/DashboardPage";
 import { FundingArbitragePage } from "../pages/FundingArbitragePage";
 import { FundingResearchPage } from "../pages/FundingResearchPage";
+import { GateTwapPage } from "../pages/GateTwapPage";
 import { IndexComponentChangesPage } from "../pages/IndexComponentChangesPage";
 import { TradfiPerpMonitorPage } from "../pages/TradfiPerpMonitorPage";
 import { SettingsPage } from "../pages/SettingsPage";
 
-type PageKey = "dashboard" | "funding" | "funding-research" | "tradfi-perp" | "index-components" | "announcements" | "settings" | "history";
+type PageKey = "dashboard" | "funding" | "funding-research" | "tradfi-perp" | "gate-twap" | "index-components" | "announcements" | "settings" | "history";
 
 export function AppShell() {
   const [page, setPage] = useState<PageKey>("dashboard");
@@ -57,6 +59,11 @@ export function AppShell() {
               label: "TradFi ??"
             },
             {
+              key: "gate-twap",
+              icon: <ClockCircleOutlined />,
+              label: "Gate TWAP"
+            },
+            {
               key: "index-components",
               icon: <NodeIndexOutlined />,
               label: "指数成分变更"
@@ -80,6 +87,7 @@ export function AppShell() {
           {page === "funding" ? <FundingArbitragePage /> : null}
           {page === "funding-research" ? <FundingResearchPage /> : null}
           {page === "tradfi-perp" ? <TradfiPerpMonitorPage /> : null}
+          {page === "gate-twap" ? <GateTwapPage /> : null}
           {page === "index-components" ? <IndexComponentChangesPage /> : null}
           {page === "announcements" ? <AnnouncementsPage /> : null}
           {page === "settings" ? <SettingsPage /> : null}

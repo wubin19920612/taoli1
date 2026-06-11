@@ -19,6 +19,11 @@ import type {
   FundingResearchPaperTrade,
   FundingResearchPaperTradeSummary,
   FundingResearchRunResult,
+  GateTwapJobStatus,
+  GateTwapMarketSnapshot,
+  GateTwapPlan,
+  GateTwapRequest,
+  GateTwapRunRequest,
   HealthStatus,
   ExchangeAnnouncement,
   IndexComponentChange,
@@ -325,6 +330,47 @@ export async function getFundingResearchLegacyBacktest(
       throw new Error(await response.text());
     }
     return response.json() as Promise<FundingResearchLegacyBacktestSummary>;
+  });
+}
+
+export async function getGateTwapMarket(params: {
+  contract?: string;
+  settle?: string;
+} = {}): Promise<GateTwapMarketSnapshot> {
+  const url = buildUrl("/gate-twap/market", params);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    return response.json() as Promise<GateTwapMarketSnapshot>;
+  });
+}
+
+export async function previewGateTwap(request: GateTwapRequest): Promise<GateTwapPlan> {
+  return fetchJson<GateTwapPlan>("/gate-twap/preview", {
+    method: "POST",
+    body: JSON.stringify(request)
+  });
+}
+
+export async function startGateTwapJob(request: GateTwapRunRequest): Promise<GateTwapJobStatus> {
+  return fetchJson<GateTwapJobStatus>("/gate-twap/jobs", {
+    method: "POST",
+    body: JSON.stringify(request)
+  });
+}
+
+export async function listGateTwapJobs(): Promise<GateTwapJobStatus[]> {
+  return fetchJson<GateTwapJobStatus[]>("/gate-twap/jobs");
+}
+
+export async function getGateTwapJob(jobId: string): Promise<GateTwapJobStatus> {
+  return fetchJson<GateTwapJobStatus>(`/gate-twap/jobs/${jobId}`);
+}
+
+export async function cancelGateTwapJob(jobId: string): Promise<GateTwapJobStatus> {
+  return fetchJson<GateTwapJobStatus>(`/gate-twap/jobs/${jobId}`, {
+    method: "DELETE"
   });
 }
 
