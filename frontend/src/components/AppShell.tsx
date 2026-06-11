@@ -20,10 +20,19 @@ import { FundingArbitragePage } from "../pages/FundingArbitragePage";
 import { FundingResearchPage } from "../pages/FundingResearchPage";
 import { GateTwapPage } from "../pages/GateTwapPage";
 import { IndexComponentChangesPage } from "../pages/IndexComponentChangesPage";
-import { TradfiPerpMonitorPage } from "../pages/TradfiPerpMonitorPage";
 import { SettingsPage } from "../pages/SettingsPage";
+import { TradfiPerpMonitorPage } from "../pages/TradfiPerpMonitorPage";
 
-type PageKey = "dashboard" | "funding" | "funding-research" | "tradfi-perp" | "gate-twap" | "index-components" | "announcements" | "settings" | "history";
+type PageKey =
+  | "dashboard"
+  | "funding"
+  | "funding-research"
+  | "tradfi-perp"
+  | "gate-twap"
+  | "index-components"
+  | "announcements"
+  | "settings"
+  | "history";
 
 export function AppShell() {
   const [page, setPage] = useState<PageKey>("dashboard");
@@ -33,7 +42,7 @@ export function AppShell() {
         <div className="brand">
           <Space>
             <AlertOutlined />
-            <Typography.Text strong>{"\u5957\u5229\u96f7\u8fbe"}</Typography.Text>
+            <Typography.Text strong>套利雷达</Typography.Text>
           </Space>
         </div>
         <Menu
@@ -42,26 +51,26 @@ export function AppShell() {
           selectedKeys={[page]}
           onClick={(item) => setPage(item.key as PageKey)}
           items={[
-            { key: "dashboard", icon: <DashboardOutlined />, label: "\u5b9e\u65f6\u673a\u4f1a" },
+            { key: "dashboard", icon: <DashboardOutlined />, label: "实时机会" },
             {
               key: "funding",
               icon: <FundProjectionScreenOutlined />,
-              label: "\u8d44\u91d1\u8d39\u7387\u5957\u5229"
+              label: "资金费率套利"
             },
             {
               key: "funding-research",
               icon: <ExperimentOutlined />,
-              label: "????"
+              label: "资金研究"
             },
             {
               key: "tradfi-perp",
               icon: <LineChartOutlined />,
-              label: "TradFi ??"
+              label: "TradFi 价差"
             },
             {
               key: "gate-twap",
               icon: <ClockCircleOutlined />,
-              label: "Gate TWAP"
+              label: "Gate 定时减仓"
             },
             {
               key: "index-components",
@@ -71,16 +80,16 @@ export function AppShell() {
             {
               key: "announcements",
               icon: <NotificationOutlined />,
-              label: "上/下币公告"
+              label: "上下币公告"
             },
-            { key: "settings", icon: <SettingOutlined />, label: "\u53c2\u6570\u4e0e\u544a\u8b66" },
-            { key: "history", icon: <BellOutlined />, label: "\u544a\u8b66\u5386\u53f2" }
+            { key: "settings", icon: <SettingOutlined />, label: "参数与告警" },
+            { key: "history", icon: <BellOutlined />, label: "告警历史" }
           ]}
         />
       </Layout.Sider>
       <Layout>
         <Layout.Header className="app-header">
-          <Typography.Title level={3}>CEX Arbitrage Radar</Typography.Title>
+          <Typography.Title level={3}>CEX 套利雷达</Typography.Title>
         </Layout.Header>
         <Layout.Content className="app-content">
           {page === "dashboard" ? <DashboardPage /> : null}

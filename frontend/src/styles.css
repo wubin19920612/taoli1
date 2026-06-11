@@ -1215,20 +1215,6 @@ body {
     flex-direction: column;
   }
 
-  .tradfi-expanded-row {
-    grid-template-columns: 1fr;
-  }
-
-  .research-toolbar-grid,
-  .research-panel-head,
-  .research-expanded-row {
-    grid-template-columns: 1fr;
-  }
-
-  .research-panel-head {
-    flex-direction: column;
-  }
-
   .toolbar-controls,
   .toolbar-actions,
   .toolbar-actions .ant-btn {
@@ -1253,6 +1239,17 @@ body {
   }
 
   .spread-history-head {
+    flex-direction: column;
+  }
+
+  .research-toolbar-grid,
+  .research-panel-head,
+  .research-expanded-row,
+  .tradfi-expanded-row {
+    grid-template-columns: 1fr;
+  }
+
+  .research-panel-head {
     flex-direction: column;
   }
 

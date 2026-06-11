@@ -210,7 +210,7 @@ describe("SettingsPage", () => {
     render(<SettingsPage />);
 
     expect(await screen.findByText("告警内容模板")).toBeTruthy();
-    expect(screen.getByLabelText("建卡失败不通知")).toBeTruthy();
+    expect(screen.getByLabelText("只报告可建卡告警")).toBeTruthy();
     await userEvent.click(screen.getByLabelText("资金费率"));
     await userEvent.click(screen.getByRole("button", { name: /保存告警模板/ }));
 
@@ -235,20 +235,20 @@ describe("SettingsPage", () => {
     expect(preview).not.toBeNull();
     expect(preview?.textContent).toContain("价差对：BTCUSDT | binance future -> okx future");
     expect(preview?.textContent).not.toContain("资金费率差");
-    expect(preview?.textContent).toContain("建卡条件过滤");
+    expect(preview?.textContent).toContain("只报告可建卡告警");
   }, 15000);
 
   it("loads and saves Astro card defaults", async () => {
     render(<SettingsPage />);
 
-    expect(await screen.findByText("Astro card defaults")).toBeTruthy();
-    const positionValueInput = await screen.findByLabelText("Position value USDT");
+    expect(await screen.findByText("Astro 卡片默认参数")).toBeTruthy();
+    const positionValueInput = await screen.findByLabelText("仓位金额 USDT");
     expect((positionValueInput as HTMLInputElement).value).toBe("25");
 
     await userEvent.clear(positionValueInput);
     await userEvent.type(positionValueInput, "80");
-    await userEvent.click(screen.getByLabelText("Open after create"));
-    await userEvent.click(screen.getByRole("button", { name: /Save Astro card defaults/ }));
+    await userEvent.click(screen.getByLabelText("创建后允许开仓"));
+    await userEvent.click(screen.getByRole("button", { name: /保存 Astro 卡片默认参数/ }));
 
     await waitFor(() => {
       expect(fetch).toHaveBeenCalledWith(
@@ -275,10 +275,7 @@ describe("SettingsPage", () => {
     expect(await screen.findByDisplayValue("EDGEXUSDT")).toBeTruthy();
     expect(await screen.findByDisplayValue("EDGEUSDT")).toBeTruthy();
 
-    const aliasSection = screen.getByText("Symbol aliases").closest("section");
-    const saveButton = aliasSection?.querySelector('button[type="submit"]');
-    expect(saveButton).toBeTruthy();
-    await userEvent.click(saveButton as HTMLButtonElement);
+    await userEvent.click(screen.getByRole("button", { name: /保存风险参数/ }));
 
     await waitFor(() => {
       expect(fetch).toHaveBeenCalledWith(

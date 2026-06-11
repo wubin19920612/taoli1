@@ -898,7 +898,7 @@ export function DashboardPage() {
             loading={astroSubmitLoading}
             onClick={() => void submitAstroCard()}
           >
-            创建/更新暂停卡片
+            创建卡片
           </Button>
         ]}
         destroyOnHidden
@@ -975,8 +975,8 @@ export function DashboardPage() {
                         <Form.Item label="Maximum notional USDT" name="max_notional" rules={[{ required: true }]}>
                           <InputNumber min={0.01} step={1} className="wide-input" />
                         </Form.Item>
-                        <Form.Item label="Open after create" name="open_enabled" valuePropName="checked">
-                          <Switch checkedChildren="on" unCheckedChildren="off" />
+                        <Form.Item label="创建后允许开仓" name="open_enabled" valuePropName="checked">
+                          <Switch checkedChildren="开启" unCheckedChildren="关闭" />
                         </Form.Item>
                       </div>
                       <Form.Item name="save_as_default" valuePropName="checked">

@@ -142,8 +142,8 @@ const alertTemplateOptions: Array<{
   { name: "include_dashboard_link", label: "Dashboard 链接", description: "消息末尾追加面板地址" },
   {
     name: "suppress_when_card_conditions_fail",
-    label: "建卡失败不通知",
-    description: "最新信号或盘口深度不满足建卡条件时，只写告警历史，不发飞书"
+    label: "只报告可建卡告警",
+    description: "最新信号失效会始终静默；开启后，Astro 支持类型或盘口深度不满足建卡条件时也只写历史"
   }
 ];
 
@@ -322,7 +322,7 @@ function buildAlertTemplatePreview(template: AlertMessageTemplateSettings): stri
     blocks.push("Dashboard: https://your-domain.example");
   }
   if (template.suppress_when_card_conditions_fail) {
-    blocks.push("建卡条件过滤：不满足时仅保留告警历史，不发送飞书。");
+    blocks.push("只报告可建卡告警：不满足建卡条件时仅保留告警历史，不发送飞书。");
   }
   return blocks.join("\n\n") || "至少保留一个字段，避免告警内容为空。";
 }
@@ -423,7 +423,7 @@ export function SettingsPage() {
     const values = await astroCardForm.validateFields();
     const saved = await updateAstroCardSettings(values);
     astroCardForm.setFieldsValue(saved);
-    message.success("Astro card defaults saved");
+    message.success("Astro 卡片默认参数已保存");
   };
 
   const saveLivePilot = async () => {
@@ -643,7 +643,6 @@ export function SettingsPage() {
           <Form.Item label="忽略交易所" name="ignored_exchanges">
             <Select mode="multiple" allowClear options={exchangeOptions} />
           </Form.Item>
-
           <Form.List name="symbol_aliases">
             {(fields, { add, remove }) => (
               <div className="symbol-alias-list">
@@ -659,10 +658,18 @@ export function SettingsPage() {
                 </Space>
                 {fields.map((field) => (
                   <Space key={field.key} align="start" wrap className="symbol-alias-row">
-                    <Form.Item label="Exchange" name={[field.name, "exchange"]} rules={[{ required: true }]}>
+                    <Form.Item
+                      label="Exchange"
+                      name={[field.name, "exchange"]}
+                      rules={[{ required: true }]}
+                    >
                       <Select options={exchangeOptions} className="alias-exchange-input" />
                     </Form.Item>
-                    <Form.Item label="Exchange symbol" name={[field.name, "symbol"]} rules={[{ required: true }]}>
+                    <Form.Item
+                      label="Exchange symbol"
+                      name={[field.name, "symbol"]}
+                      rules={[{ required: true }]}
+                    >
                       <Input placeholder="EDGEXUSDT" className="alias-symbol-input" />
                     </Form.Item>
                     <Form.Item
@@ -698,36 +705,36 @@ export function SettingsPage() {
         </Form>
       </section>
       <section className="panel">
-        <Typography.Title level={4}>Astro card defaults</Typography.Title>
+        <Typography.Title level={4}>Astro 卡片默认参数</Typography.Title>
         <Form form={astroCardForm} layout="vertical" disabled={loading} onFinish={saveAstroCardDefaults}>
           <div className="form-grid">
-            <Form.Item label="Position value USDT" name="max_trade_usdt" rules={[{ required: true }]}>
+            <Form.Item label="仓位金额 USDT" name="max_trade_usdt" rules={[{ required: true }]}>
               <InputNumber min={0.01} step={1} className="wide-input" />
             </Form.Item>
-            <Form.Item label="Leverage" name="leverage" rules={[{ required: true }]}>
+            <Form.Item label="杠杆倍数" name="leverage" rules={[{ required: true }]}>
               <InputNumber min={1} step={1} className="wide-input" />
             </Form.Item>
-            <Form.Item label="Minimum notional USDT" name="min_notional" rules={[{ required: true }]}>
+            <Form.Item label="最小名义金额 USDT" name="min_notional" rules={[{ required: true }]}>
               <InputNumber min={0} step={1} className="wide-input" />
             </Form.Item>
-            <Form.Item label="Maximum notional USDT" name="max_notional" rules={[{ required: true }]}>
+            <Form.Item label="最大名义金额 USDT" name="max_notional" rules={[{ required: true }]}>
               <InputNumber min={0.01} step={1} className="wide-input" />
             </Form.Item>
-            <Form.Item label="Open after create" name="open_enabled" valuePropName="checked">
-              <Switch checkedChildren="on" unCheckedChildren="off" />
+            <Form.Item label="创建后允许开仓" name="open_enabled" valuePropName="checked">
+              <Switch checkedChildren="开启" unCheckedChildren="关闭" />
             </Form.Item>
-            <Form.Item label="Close buffer pct" name="close_position_buffer_pct" rules={[{ required: true }]}>
+            <Form.Item label="平仓缓冲比例" name="close_position_buffer_pct" rules={[{ required: true }]}>
               <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
             </Form.Item>
-            <Form.Item label="Unfavorable funding weight" name="unfavorable_funding_weight" rules={[{ required: true }]}>
+            <Form.Item label="不利资金费权重" name="unfavorable_funding_weight" rules={[{ required: true }]}>
               <InputNumber min={0} step={0.1} className="wide-input" />
             </Form.Item>
-            <Form.Item label="Close floor pct" name="close_position_floor_pct" rules={[{ required: true }]}>
+            <Form.Item label="平仓下限比例" name="close_position_floor_pct" rules={[{ required: true }]}>
               <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
             </Form.Item>
           </div>
           <Button type="primary" htmlType="submit" icon={<SaveOutlined />}>
-            Save Astro card defaults
+            保存 Astro 卡片默认参数
           </Button>
         </Form>
       </section>
