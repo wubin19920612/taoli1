@@ -23,7 +23,15 @@ describe("SettingsPage", () => {
             funding_against_pct: 0.01,
             ticker_collision_symbols: ["AIUSDT"],
             excluded_symbols: [],
-            ignored_exchanges: []
+            ignored_exchanges: [],
+            symbol_aliases: [
+              {
+                exchange: "gate",
+                symbol: "EDGEXUSDT",
+                canonical_symbol: "EDGEUSDT",
+                market_type: null
+              }
+            ]
           });
         }
         if (url.includes("/settings/alert-message-template") && init?.method === "PUT") {
@@ -251,6 +259,29 @@ describe("SettingsPage", () => {
     });
   }, 15000);
 
+  it("loads and saves symbol aliases with risk settings", async () => {
+    render(<SettingsPage />);
+
+    expect(await screen.findByText("Symbol aliases")).toBeTruthy();
+    expect(await screen.findByDisplayValue("EDGEXUSDT")).toBeTruthy();
+    expect(await screen.findByDisplayValue("EDGEUSDT")).toBeTruthy();
+
+    const aliasSection = screen.getByText("Symbol aliases").closest("section");
+    const saveButton = aliasSection?.querySelector('button[type="submit"]');
+    expect(saveButton).toBeTruthy();
+    await userEvent.click(saveButton as HTMLButtonElement);
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/settings/risk"),
+        expect.objectContaining({
+          method: "PUT",
+          body: expect.stringContaining('"symbol_aliases":[{"exchange":"gate","symbol":"EDGEXUSDT","canonical_symbol":"EDGEUSDT","market_type":null}]')
+        })
+      );
+    });
+  }, 15000);
+
   it("loads and saves Live Pilot settings", async () => {
     render(<SettingsPage />);
 
@@ -454,7 +485,8 @@ describe("SettingsPage", () => {
 
     const ignored = await screen.findByLabelText("忽略交易所");
     await userEvent.click(ignored);
-    await userEvent.click(screen.getByText("gate"));
+    const gateOptions = screen.getAllByText("gate");
+    await userEvent.click(gateOptions[gateOptions.length - 1]);
 
     await userEvent.click(screen.getByRole("button", { name: /保存风险参数/ }));
 

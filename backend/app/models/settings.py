@@ -1,4 +1,6 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from app.models.market import MarketType
 
 DEFAULT_HIDDEN_RISK_LABELS = [
     "LOW_VOLUME",
@@ -11,6 +13,46 @@ DEFAULT_HIDDEN_RISK_LABELS = [
     "EDGE_AFTER_SLIPPAGE_TOO_SMALL",
     "TRANSIENT_SIGNAL",
 ]
+
+
+def _normalize_alias_symbol(value: str) -> str:
+    normalized = value.strip().upper().replace("_", "-").replace("/", "-")
+    if normalized.endswith("-SWAP"):
+        normalized = normalized.removesuffix("-SWAP")
+    compact = normalized.replace("-", "")
+    if not compact:
+        raise ValueError("symbol is required")
+    return compact if compact.endswith("USDT") else f"{compact}USDT"
+
+
+class SymbolAlias(BaseModel):
+    exchange: str
+    symbol: str
+    canonical_symbol: str
+    market_type: MarketType | None = None
+
+    @field_validator("exchange")
+    @classmethod
+    def normalize_exchange(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if not normalized:
+            raise ValueError("exchange is required")
+        return normalized
+
+    @field_validator("symbol", "canonical_symbol")
+    @classmethod
+    def normalize_symbol(cls, value: str) -> str:
+        return _normalize_alias_symbol(value)
+
+
+def default_symbol_aliases() -> list[SymbolAlias]:
+    return [
+        SymbolAlias(
+            exchange="gate",
+            symbol="EDGEXUSDT",
+            canonical_symbol="EDGEUSDT",
+        )
+    ]
 
 
 class RiskSettings(BaseModel):
@@ -30,6 +72,7 @@ class RiskSettings(BaseModel):
     ticker_collision_symbols: list[str] = Field(default_factory=lambda: ["AIUSDT", "UPUSDT", "LABUSDT"])
     excluded_symbols: list[str] = Field(default_factory=list)
     ignored_exchanges: list[str] = Field(default_factory=list)
+    symbol_aliases: list[SymbolAlias] = Field(default_factory=default_symbol_aliases)
 
 
 class AlertMessageTemplateSettings(BaseModel):

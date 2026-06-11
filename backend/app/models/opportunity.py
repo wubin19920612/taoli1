@@ -18,8 +18,10 @@ class Opportunity(BaseModel):
     symbol: str
     buy_exchange: str
     buy_market_type: MarketType
+    buy_raw_symbol: str | None = None
     sell_exchange: str
     sell_market_type: MarketType
+    sell_raw_symbol: str | None = None
     open_spread_pct: float
     close_spread_pct: float
     fee_adjusted_open_pct: float

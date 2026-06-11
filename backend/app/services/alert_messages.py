@@ -72,6 +72,7 @@ def build_alert_message(
                 f"卖出腿：{opportunity.sell_exchange} {opportunity.sell_market_type}",
             ]
         )
+        snapshot_lines.extend(_raw_symbol_lines(opportunity))
     if settings.include_spread:
         snapshot_lines.extend(
             [
@@ -188,6 +189,21 @@ def _format_time_with_seconds(value: datetime | None) -> str:
     if value is None:
         return "-"
     return _to_alert_display_timezone(value).strftime("%H:%M:%S")
+
+
+def _normalize_symbol(value: str) -> str:
+    return value.upper().replace("-", "").replace("_", "").replace("/", "")
+
+
+def _raw_symbol_lines(opportunity: Opportunity) -> list[str]:
+    rows: list[str] = []
+    buy_raw = getattr(opportunity, "buy_raw_symbol", None)
+    sell_raw = getattr(opportunity, "sell_raw_symbol", None)
+    if buy_raw and _normalize_symbol(buy_raw) != _normalize_symbol(opportunity.symbol):
+        rows.append(f"Buy raw symbol: {opportunity.buy_exchange} {buy_raw}")
+    if sell_raw and _normalize_symbol(sell_raw) != _normalize_symbol(opportunity.symbol):
+        rows.append(f"Sell raw symbol: {opportunity.sell_exchange} {sell_raw}")
+    return rows
 
 
 def _to_alert_display_timezone(value: datetime) -> datetime:

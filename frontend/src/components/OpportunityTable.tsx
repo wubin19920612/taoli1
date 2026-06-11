@@ -72,10 +72,20 @@ function exchangeCode(exchange: string): string {
   return compact ? compact.slice(0, 4) : exchange;
 }
 
-function leg(exchange: string, marketType: string, side: "buy" | "sell") {
+function leg(
+  exchange: string,
+  marketType: string,
+  side: "buy" | "sell",
+  rawSymbol?: string | null,
+  canonicalSymbol?: string
+) {
   const icon = side === "buy" ? <ArrowDownOutlined /> : <ArrowUpOutlined />;
   const color = side === "buy" ? "green" : "red";
-  const fullName = `${exchange} ${marketType}`;
+  const rawSuffix =
+    rawSymbol && canonicalSymbol && normalizeSymbol(rawSymbol) !== normalizeSymbol(canonicalSymbol)
+      ? ` ${rawSymbol}`
+      : "";
+  const fullName = `${exchange} ${marketType}${rawSuffix}`;
   return (
     <div className="leg-cell">
       <Tag color={color} icon={icon} className="leg-tag">
@@ -127,7 +137,7 @@ function nextCycleFundingEdge(row: Opportunity): number | null {
 }
 
 function normalizeSymbol(value: string): string {
-  return value.toUpperCase().replace(/[-_]/g, "");
+  return value.toUpperCase().replace(/[-_/]/g, "");
 }
 
 function isBlocked(symbol: string, blockedSymbols: string[] | undefined): boolean {
@@ -249,12 +259,12 @@ function buildColumns(
     {
       title: "Buy leg",
       width: 88,
-      render: (_, row) => leg(row.buy_exchange, row.buy_market_type, "buy")
+      render: (_, row) => leg(row.buy_exchange, row.buy_market_type, "buy", row.buy_raw_symbol, row.symbol)
     },
     {
       title: "Sell leg",
       width: 88,
-      render: (_, row) => leg(row.sell_exchange, row.sell_market_type, "sell")
+      render: (_, row) => leg(row.sell_exchange, row.sell_market_type, "sell", row.sell_raw_symbol, row.symbol)
     },
     {
       title: "Open spread",

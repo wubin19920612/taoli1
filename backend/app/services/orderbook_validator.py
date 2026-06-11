@@ -97,11 +97,13 @@ class OrderBookDepthValidator:
 
         buy_book = None
         sell_book = None
+        buy_raw_symbol = opportunity.buy_raw_symbol or opportunity.symbol
+        sell_raw_symbol = opportunity.sell_raw_symbol or opportunity.symbol
         try:
             buy_book = await buy_adapter.fetch_order_book(
                 opportunity.symbol,
                 opportunity.buy_market_type,
-                opportunity.symbol,
+                buy_raw_symbol,
                 self.limit,
             )
         except Exception as exc:  # noqa: BLE001 - report validation blocker instead of aborting alert.
@@ -113,7 +115,7 @@ class OrderBookDepthValidator:
             sell_book = await sell_adapter.fetch_order_book(
                 opportunity.symbol,
                 opportunity.sell_market_type,
-                opportunity.symbol,
+                sell_raw_symbol,
                 self.limit,
             )
         except Exception as exc:  # noqa: BLE001 - report validation blocker instead of aborting alert.
