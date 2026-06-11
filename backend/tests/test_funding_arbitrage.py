@@ -18,6 +18,7 @@ def market(
     volume_24h_usdt: float | None = 5_000_000,
     bid_size: float = 200,
     ask_size: float = 200,
+    funding_interval_hours: int | None = 8,
     next_time: datetime | None = None,
 ) -> MarketSnapshot:
     return MarketSnapshot(
@@ -32,7 +33,9 @@ def market(
         volume_24h_usdt=volume_24h_usdt,
         funding_next_rate_pct=funding_next_rate_pct,
         funding_rate_pct=funding_rate_pct,
-        funding_interval_hours=8 if market_type == MarketType.FUTURE else None,
+        funding_interval_hours=(
+            funding_interval_hours if market_type == MarketType.FUTURE else None
+        ),
         funding_next_time=next_time,
         mark_price=mark_price,
         index_price=index_price,
@@ -72,6 +75,9 @@ def test_sf_positive_funding_can_enter_when_basis_and_adl_are_low() -> None:
     assert candidate.long_next_funding_pct == 0
     assert candidate.short_next_funding_pct == 0.12
     assert candidate.next_funding_edge_pct == 0.12
+    assert candidate.long_funding_interval_hours is None
+    assert candidate.short_funding_interval_hours == 8
+    assert candidate.funding_comparison_interval_hours == 8
     assert candidate.long_next_settlement_time is None
     assert candidate.short_next_settlement_time == now + timedelta(minutes=30)
     assert candidate.next_settlement_time == now + timedelta(minutes=30)
@@ -112,6 +118,77 @@ def test_ff_orients_higher_funding_leg_as_short() -> None:
     assert candidate.long_exchange == "binance"
     assert candidate.short_exchange == "okx"
     assert candidate.next_funding_edge_pct == 0.17
+    assert candidate.long_funding_interval_hours == 8
+    assert candidate.short_funding_interval_hours == 8
+    assert candidate.funding_comparison_interval_hours == 8
+
+
+def test_ff_funding_edge_is_scaled_to_same_comparison_cycle() -> None:
+    now = datetime(2026, 5, 26, 8, 0, tzinfo=UTC)
+    preview = build_funding_arbitrage_preview(
+        [
+            market(
+                "binance",
+                MarketType.FUTURE,
+                bid=100.0,
+                ask=100.1,
+                funding_next_rate_pct=0.03,
+                funding_interval_hours=8,
+                mark_price=100.0,
+                index_price=100.0,
+                next_time=now + timedelta(minutes=20),
+            ),
+            market(
+                "okx",
+                MarketType.FUTURE,
+                bid=100.2,
+                ask=100.3,
+                funding_next_rate_pct=0.02,
+                funding_interval_hours=2,
+                mark_price=100.2,
+                index_price=100.0,
+                next_time=now + timedelta(minutes=20),
+            ),
+        ],
+        FundingArbitrageSettings(min_entry_edge_pct=0.01, min_funding_edge_pct=0.01),
+        now=now,
+    )
+
+    candidate = preview.candidates[0]
+    assert candidate.long_exchange == "binance"
+    assert candidate.short_exchange == "okx"
+    assert candidate.long_next_funding_pct == 0.03
+    assert candidate.short_next_funding_pct == 0.02
+    assert candidate.long_funding_interval_hours == 8
+    assert candidate.short_funding_interval_hours == 2
+    assert candidate.funding_comparison_interval_hours == 8
+    assert candidate.next_funding_edge_pct == 0.05
+
+
+def test_missing_funding_interval_blocks_same_cycle_comparison() -> None:
+    now = datetime(2026, 5, 26, 8, 0, tzinfo=UTC)
+    preview = build_funding_arbitrage_preview(
+        [
+            market("binance", MarketType.SPOT, bid=99.9, ask=100.0),
+            market(
+                "okx",
+                MarketType.FUTURE,
+                bid=100.25,
+                ask=100.35,
+                funding_next_rate_pct=0.12,
+                funding_interval_hours=None,
+                next_time=now + timedelta(minutes=30),
+            ),
+        ],
+        FundingArbitrageSettings(min_entry_edge_pct=0.01, min_funding_edge_pct=0.01),
+        now=now,
+    )
+
+    candidate = preview.candidates[0]
+    assert candidate.decision == "BLOCKED"
+    assert candidate.next_funding_edge_pct is None
+    assert "MISSING_FUNDING_INTERVAL" in candidate.risk_labels
+    assert "same-cycle" in " ".join(candidate.decision_reasons)
 
 
 def test_missing_funding_blocks_futures_candidate() -> None:

@@ -45,6 +45,9 @@ class FundingArbitrageCandidate(BaseModel):
     short_next_funding_pct: float | None = None
     current_funding_edge_pct: float | None = None
     next_funding_edge_pct: float | None = None
+    long_funding_interval_hours: float | None = None
+    short_funding_interval_hours: float | None = None
+    funding_comparison_interval_hours: float | None = None
     long_next_settlement_time: datetime | None = None
     short_next_settlement_time: datetime | None = None
     next_settlement_time: datetime | None = None

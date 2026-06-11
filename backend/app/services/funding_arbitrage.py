@@ -2,6 +2,7 @@ from collections import defaultdict
 from datetime import UTC, datetime
 from hashlib import sha1
 from itertools import combinations
+from math import gcd
 
 from app.models.funding_arbitrage import (
     AdlRiskLevel,
@@ -40,6 +41,50 @@ def _side_current_funding_pct(snapshot: MarketSnapshot) -> float | None:
     if snapshot.market_type == MarketType.SPOT:
         return 0.0
     return snapshot.funding_rate_pct
+
+
+def _funding_interval_hours(snapshot: MarketSnapshot) -> int | None:
+    if snapshot.market_type == MarketType.SPOT:
+        return None
+    if snapshot.funding_interval_hours is None or snapshot.funding_interval_hours <= 0:
+        return None
+    return snapshot.funding_interval_hours
+
+
+def _lcm(left: int, right: int) -> int:
+    return abs(left * right) // gcd(left, right)
+
+
+def _funding_comparison_interval_hours(
+    long_leg: MarketSnapshot,
+    short_leg: MarketSnapshot,
+) -> int | None:
+    intervals = [
+        value
+        for value in (_funding_interval_hours(long_leg), _funding_interval_hours(short_leg))
+        if value is not None
+    ]
+    if not intervals:
+        return None
+    interval = intervals[0]
+    for value in intervals[1:]:
+        interval = _lcm(interval, value)
+    return interval
+
+
+def _funding_pct_for_interval(
+    value: float | None,
+    snapshot: MarketSnapshot,
+    comparison_interval_hours: int | None,
+) -> float | None:
+    if value is None:
+        return None
+    if snapshot.market_type == MarketType.SPOT:
+        return 0.0
+    interval = _funding_interval_hours(snapshot)
+    if interval is None or comparison_interval_hours is None:
+        return None
+    return value * comparison_interval_hours / interval
 
 
 def _funding_source(left: FundingSource, right: FundingSource) -> FundingSource:
@@ -173,16 +218,31 @@ def _build_candidate(
     long_next, long_source = _side_next_funding_pct(long_leg)
     short_next, short_source = _side_next_funding_pct(short_leg)
     source = _funding_source(long_source, short_source)
+    long_interval = _funding_interval_hours(long_leg)
+    short_interval = _funding_interval_hours(short_leg)
+    comparison_interval = _funding_comparison_interval_hours(long_leg, short_leg)
+    long_next_comparable = _funding_pct_for_interval(long_next, long_leg, comparison_interval)
+    short_next_comparable = _funding_pct_for_interval(short_next, short_leg, comparison_interval)
     next_edge = (
-        round(short_next - long_next, 10)
-        if short_next is not None and long_next is not None
+        round(short_next_comparable - long_next_comparable, 10)
+        if short_next_comparable is not None and long_next_comparable is not None
         else None
     )
     current_long = _side_current_funding_pct(long_leg)
     current_short = _side_current_funding_pct(short_leg)
+    current_long_comparable = _funding_pct_for_interval(
+        current_long,
+        long_leg,
+        comparison_interval,
+    )
+    current_short_comparable = _funding_pct_for_interval(
+        current_short,
+        short_leg,
+        comparison_interval,
+    )
     current_edge = (
-        current_short - current_long
-        if current_short is not None and current_long is not None
+        current_short_comparable - current_long_comparable
+        if current_short_comparable is not None and current_long_comparable is not None
         else None
     )
     entry_basis, exit_basis = _basis_pct(long_leg, short_leg)
@@ -211,6 +271,13 @@ def _build_candidate(
     if source == "missing":
         risk_labels.append("MISSING_FUNDING")
         reasons.append("missing funding on a futures leg")
+    if (
+        long_leg.market_type == MarketType.FUTURE and long_interval is None
+    ) or (
+        short_leg.market_type == MarketType.FUTURE and short_interval is None
+    ):
+        risk_labels.append("MISSING_FUNDING_INTERVAL")
+        reasons.append("missing funding interval for same-cycle comparison")
     if volume is None or volume < settings.min_volume_24h_usdt:
         risk_labels.append("LOW_VOLUME")
         reasons.append("24h volume below funding strategy floor")
@@ -229,7 +296,7 @@ def _build_candidate(
         risk_labels.append("ADL_RISK_BLOCKED")
         reasons.append("ADL risk proxy crossed block threshold")
     if next_edge is not None and next_edge < settings.min_funding_edge_pct:
-        reasons.append("raw funding edge below entry floor")
+        reasons.append("same-cycle funding edge below entry floor")
     if minutes_to_settlement is None:
         risk_labels.append("MISSING_SETTLEMENT_TIME")
         reasons.append("missing next settlement time")
@@ -271,6 +338,9 @@ def _build_candidate(
         short_next_funding_pct=short_next,
         current_funding_edge_pct=current_edge,
         next_funding_edge_pct=next_edge,
+        long_funding_interval_hours=long_interval,
+        short_funding_interval_hours=short_interval,
+        funding_comparison_interval_hours=comparison_interval,
         long_next_settlement_time=long_leg.funding_next_time,
         short_next_settlement_time=short_leg.funding_next_time,
         next_settlement_time=next_settlement,
@@ -296,9 +366,12 @@ def _build_candidate(
     )
 
 
-def _future_funding_for_orientation(snapshot: MarketSnapshot) -> float | None:
+def _future_funding_per_hour_for_orientation(snapshot: MarketSnapshot) -> float | None:
     value, _ = _side_next_funding_pct(snapshot)
-    return value
+    interval = _funding_interval_hours(snapshot)
+    if value is None or interval is None:
+        return None
+    return value / interval
 
 
 def _build_candidates_for_symbol(
@@ -316,8 +389,8 @@ def _build_candidates_for_symbol(
             candidates.append(_build_candidate("SF", symbol, spot, future, settings, now))
 
     for first, second in combinations(futures, 2):
-        first_funding = _future_funding_for_orientation(first)
-        second_funding = _future_funding_for_orientation(second)
+        first_funding = _future_funding_per_hour_for_orientation(first)
+        second_funding = _future_funding_per_hour_for_orientation(second)
         if first_funding is None and second_funding is None:
             long_leg, short_leg = first, second
         elif second_funding is None:

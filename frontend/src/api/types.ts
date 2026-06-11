@@ -555,6 +555,9 @@ export interface FundingArbitrageCandidate {
   short_next_funding_pct: number | null;
   current_funding_edge_pct: number | null;
   next_funding_edge_pct: number | null;
+  long_funding_interval_hours: number | null;
+  short_funding_interval_hours: number | null;
+  funding_comparison_interval_hours: number | null;
   long_next_settlement_time: string | null;
   short_next_settlement_time: string | null;
   next_settlement_time: string | null;
