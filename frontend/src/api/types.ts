@@ -581,6 +581,73 @@ export interface FundingArbitragePreview {
   candidates: FundingArbitrageCandidate[];
 }
 
+export type TradfiPerpDirection = "LONG_HL_SHORT_BINANCE" | "LONG_BINANCE_SHORT_HL";
+
+export interface TradfiPerpLeg {
+  exchange: string;
+  symbol: string;
+  raw_symbol: string;
+  base_asset: string;
+  dex?: string | null;
+  bid?: number | null;
+  ask?: number | null;
+  mid?: number | null;
+  mark_price?: number | null;
+  index_price?: number | null;
+  funding_rate_pct?: number | null;
+  funding_rate_hourly_pct?: number | null;
+  funding_interval_hours?: number | null;
+  funding_next_time?: string | null;
+  volume_24h_usdt?: number | null;
+  open_interest?: number | null;
+  timestamp: string;
+}
+
+export interface TradfiPerpMonitorRow {
+  id: string;
+  asset: string;
+  binance_base_asset: string;
+  binance_symbol: string;
+  hl_dex: string;
+  hl_symbol: string;
+  hl_raw_symbol: string;
+  hl: TradfiPerpLeg;
+  binance: TradfiPerpLeg;
+  mid_spread_pct: number | null;
+  mark_spread_pct: number | null;
+  index_spread_pct: number | null;
+  open_long_hl_short_binance_pct: number | null;
+  open_long_binance_short_hl_pct: number | null;
+  best_price_direction: TradfiPerpDirection | null;
+  best_open_edge_pct: number | null;
+  funding_edge_long_hl_short_binance_hourly_pct: number | null;
+  funding_edge_long_binance_short_hl_hourly_pct: number | null;
+  best_funding_direction: TradfiPerpDirection | null;
+  best_funding_edge_hourly_pct: number | null;
+  best_funding_edge_daily_pct: number | null;
+  min_volume_24h_usdt: number | null;
+  risk_labels: string[];
+  observed_at: string;
+}
+
+export interface TradfiPerpUnmatchedAsset {
+  source: "hyperliquid" | "binance";
+  asset: string;
+  raw_symbol?: string | null;
+  dex?: string | null;
+  suggested_alias?: string | null;
+}
+
+export interface TradfiPerpMonitorPreview {
+  observed_at: string;
+  matched_count: number;
+  hyperliquid_asset_count: number;
+  binance_symbol_count: number;
+  rows: TradfiPerpMonitorRow[];
+  unmatched_hyperliquid: TradfiPerpUnmatchedAsset[];
+  unmatched_binance: TradfiPerpUnmatchedAsset[];
+}
+
 export interface OpportunityFilters {
   type?: OpportunityType;
   exclude_types?: OpportunityType[];
