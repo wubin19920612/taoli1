@@ -187,3 +187,30 @@ async def test_validator_reports_order_book_request_failures_as_blockers() -> No
     assert result.blockers == [
         "buy side order book request failed for binance future: TimeoutError"
     ]
+
+
+@pytest.mark.asyncio
+async def test_validator_uses_raw_leg_symbols_for_aliased_markets() -> None:
+    buy_book = book("gate", bids=[(99, 20)], asks=[(100, 20)])
+    sell_book = book("binance", bids=[(101, 20)], asks=[(102, 20)])
+    gate = FakeAdapter("gate", buy_book)
+    binance = FakeAdapter("binance", sell_book)
+    validator = OrderBookDepthValidator([gate, binance])
+    aliased = opportunity().model_copy(
+        update={
+            "symbol": "EDGEUSDT",
+            "buy_exchange": "gate",
+            "buy_raw_symbol": "EDGEX_USDT",
+            "sell_exchange": "binance",
+            "sell_raw_symbol": "EDGEUSDT",
+        }
+    )
+
+    await validator.validate(
+        aliased,
+        risk_settings=RiskSettings(ticker_collision_symbols=[]),
+        card_settings=AstroCardSettings(max_trade_usdt=1000, max_notional=1000),
+    )
+
+    assert gate.calls[0] == ("EDGEUSDT", MarketType.FUTURE, "EDGEX_USDT", 20)
+    assert binance.calls[0] == ("EDGEUSDT", MarketType.FUTURE, "EDGEUSDT", 20)

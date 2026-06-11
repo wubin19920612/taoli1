@@ -118,4 +118,23 @@ describe("OpportunityTable", () => {
 
     expect(onOpenHistory).toHaveBeenCalledWith(row);
   });
+
+  it("shows raw leg symbols for aliased opportunities in leg titles", () => {
+    render(
+      <OpportunityTable
+        opportunities={[
+          {
+            ...row,
+            symbol: "EDGEUSDT",
+            buy_exchange: "gate",
+            buy_raw_symbol: "EDGEX_USDT",
+            sell_raw_symbol: "EDGEUSDT"
+          }
+        ]}
+        loading={false}
+      />
+    );
+
+    expect(screen.getByTitle("gate future EDGEX_USDT")).toBeTruthy();
+  });
 });

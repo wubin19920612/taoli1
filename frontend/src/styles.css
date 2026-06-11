@@ -266,6 +266,31 @@ body {
   grid-column: 1 / -1;
 }
 
+.symbol-alias-list {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.symbol-alias-header {
+  min-height: 32px;
+}
+
+.symbol-alias-header .ant-typography {
+  margin: 0;
+}
+
+.symbol-alias-row {
+  padding: 8px 0;
+  border-bottom: 1px solid #eef3f1;
+}
+
+.alias-exchange-input,
+.alias-symbol-input,
+.alias-market-type-input {
+  width: 160px;
+}
+
 .form-grid-heading .ant-typography {
   margin-bottom: 12px;
 }

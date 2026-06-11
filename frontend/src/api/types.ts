@@ -11,8 +11,10 @@ export interface Opportunity {
   symbol: string;
   buy_exchange: string;
   buy_market_type: MarketType;
+  buy_raw_symbol?: string | null;
   sell_exchange: string;
   sell_market_type: MarketType;
+  sell_raw_symbol?: string | null;
   open_spread_pct: number;
   close_spread_pct: number;
   fee_adjusted_open_pct: number;
@@ -46,6 +48,14 @@ export interface Opportunity {
   mark_index_diff_sell_pct: number | null;
   risk_labels: string[];
   last_seen_at: string;
+}
+
+
+export interface SymbolAlias {
+  exchange: string;
+  symbol: string;
+  canonical_symbol: string;
+  market_type?: MarketType | null;
 }
 
 export interface ExchangePollState {
@@ -105,6 +115,7 @@ export interface RiskSettings {
   ticker_collision_symbols: string[];
   excluded_symbols: string[];
   ignored_exchanges: string[];
+  symbol_aliases: SymbolAlias[];
 }
 
 export interface AlertMessageTemplateSettings {

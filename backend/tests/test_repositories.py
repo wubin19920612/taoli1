@@ -61,6 +61,9 @@ async def test_settings_repository_defaults() -> None:
     settings = await repo.get_risk_settings()
 
     assert settings.min_volume_24h_usdt == 1_000_000
+    assert settings.symbol_aliases[0].exchange == "gate"
+    assert settings.symbol_aliases[0].symbol == "EDGEXUSDT"
+    assert settings.symbol_aliases[0].canonical_symbol == "EDGEUSDT"
 
 
 @pytest.mark.asyncio

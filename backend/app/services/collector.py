@@ -24,6 +24,7 @@ from app.services.data_filters import (
 from app.services.risk_labels import apply_risk_labels
 from app.services.snapshot_store import SnapshotStore
 from app.services.spread_engine import build_opportunities
+from app.services.symbol_aliases import apply_symbol_aliases
 
 logger = logging.getLogger(__name__)
 
@@ -190,7 +191,8 @@ class MarketCollector:
         markets = self._combined_exchange_markets(active_adapters)
         errors = self._combined_exchange_errors(active_adapters)
 
-        filtered_markets = filter_markets(markets, self.risk_settings)
+        aliased_markets = apply_symbol_aliases(markets, self.risk_settings.symbol_aliases)
+        filtered_markets = filter_markets(aliased_markets, self.risk_settings)
 
         opportunities = self._build_labeled_opportunities(filtered_markets)
         filtered_opportunities = filter_opportunities(opportunities, self.risk_settings)

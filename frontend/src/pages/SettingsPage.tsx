@@ -1,4 +1,4 @@
-import { DeleteOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
+import { DeleteOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
 import {
   Alert,
   Button,
@@ -44,7 +44,8 @@ import type {
   LivePilotPreviewItem,
   LivePilotSettings,
   RiskSettings,
-  ServiceControlStatus
+  ServiceControlStatus,
+  SymbolAlias
 } from "../api/types";
 import { alertRuleFieldHelp, alertRuleGuide, alertSeverityOptions, alertTypeOptions } from "../constants/alertRules";
 import { defaultHiddenRiskLabels, riskLabelOptions } from "../constants/riskLabels";
@@ -104,7 +105,15 @@ const defaultRiskSettings: RiskSettings = {
   signal_strategy_notes: "",
   ticker_collision_symbols: ["AIUSDT", "UPUSDT", "LABUSDT"],
   excluded_symbols: [],
-  ignored_exchanges: []
+  ignored_exchanges: [],
+  symbol_aliases: [
+    {
+      exchange: "gate",
+      symbol: "EDGEXUSDT",
+      canonical_symbol: "EDGEUSDT",
+      market_type: null
+    }
+  ]
 };
 
 const defaultLivePilotSettings: LivePilotSettings = {
@@ -166,6 +175,10 @@ const exchangeOptions = ["binance", "okx", "bybit", "gate", "bitget", "htx", "as
   label: item,
   value: item
 }));
+const marketTypeOptions = [
+  { label: "spot", value: "spot" },
+  { label: "future", value: "future" }
+];
 const serviceNames: ServiceName[] = ["frontend", "backend"];
 const serviceLabels: Record<ServiceName, string> = {
   frontend: "前端",
@@ -209,6 +222,24 @@ function serviceCanRestart(status: ServiceControlStatus | null, service: Service
   return (status.services ?? []).includes(service);
 }
 
+function normalizeAliasSymbol(value?: string | null): string {
+  const normalized = (value ?? "").trim().toUpperCase().replace(/[_/]/g, "-");
+  const withoutSwap = normalized.endsWith("-SWAP") ? normalized.slice(0, -5) : normalized;
+  const compact = withoutSwap.replace(/-/g, "");
+  return compact && !compact.endsWith("USDT") ? `${compact}USDT` : compact;
+}
+
+function normalizeSymbolAliases(values?: SymbolAlias[]): SymbolAlias[] {
+  return (values ?? [])
+    .map((item) => ({
+      exchange: (item.exchange ?? "").trim().toLowerCase(),
+      symbol: normalizeAliasSymbol(item.symbol),
+      canonical_symbol: normalizeAliasSymbol(item.canonical_symbol),
+      market_type: item.market_type ?? null
+    }))
+    .filter((item) => item.exchange && item.symbol && item.canonical_symbol);
+}
+
 function riskToForm(settings: RiskSettings): RiskSettings {
   const normalized = {
     ...defaultRiskSettings,
@@ -218,7 +249,8 @@ function riskToForm(settings: RiskSettings): RiskSettings {
     ...normalized,
     min_volume_24h_k: Math.round(normalized.min_volume_24h_usdt / 1000),
     excluded_symbols: normalized.excluded_symbols ?? [],
-    ignored_exchanges: normalized.ignored_exchanges ?? []
+    ignored_exchanges: normalized.ignored_exchanges ?? [],
+    symbol_aliases: normalizeSymbolAliases(normalized.symbol_aliases)
   };
 }
 
@@ -227,7 +259,8 @@ function riskFromForm(values: RiskSettings): RiskSettings {
   return {
     ...defaultRiskSettings,
     ...settings,
-    min_volume_24h_usdt: (minVolumeK ?? 0) * 1000
+    min_volume_24h_usdt: (minVolumeK ?? 0) * 1000,
+    symbol_aliases: normalizeSymbolAliases(settings.symbol_aliases)
   };
 }
 
@@ -610,6 +643,55 @@ export function SettingsPage() {
           <Form.Item label="忽略交易所" name="ignored_exchanges">
             <Select mode="multiple" allowClear options={exchangeOptions} />
           </Form.Item>
+
+          <Form.List name="symbol_aliases">
+            {(fields, { add, remove }) => (
+              <div className="symbol-alias-list">
+                <Space className="symbol-alias-header" align="center" wrap>
+                  <Typography.Title level={5}>Symbol aliases</Typography.Title>
+                  <Button
+                    type="dashed"
+                    icon={<PlusOutlined />}
+                    onClick={() => add({ exchange: "gate", symbol: "", canonical_symbol: "", market_type: null })}
+                  >
+                    Add alias
+                  </Button>
+                </Space>
+                {fields.map((field) => (
+                  <Space key={field.key} align="start" wrap className="symbol-alias-row">
+                    <Form.Item label="Exchange" name={[field.name, "exchange"]} rules={[{ required: true }]}>
+                      <Select options={exchangeOptions} className="alias-exchange-input" />
+                    </Form.Item>
+                    <Form.Item label="Exchange symbol" name={[field.name, "symbol"]} rules={[{ required: true }]}>
+                      <Input placeholder="EDGEXUSDT" className="alias-symbol-input" />
+                    </Form.Item>
+                    <Form.Item
+                      label="Canonical symbol"
+                      name={[field.name, "canonical_symbol"]}
+                      rules={[{ required: true }]}
+                    >
+                      <Input placeholder="EDGEUSDT" className="alias-symbol-input" />
+                    </Form.Item>
+                    <Form.Item label="Market type" name={[field.name, "market_type"]}>
+                      <Select
+                        allowClear
+                        options={marketTypeOptions}
+                        placeholder="all"
+                        className="alias-market-type-input"
+                      />
+                    </Form.Item>
+                    <Button
+                      type="text"
+                      danger
+                      icon={<DeleteOutlined />}
+                      aria-label="Remove alias"
+                      onClick={() => remove(field.name)}
+                    />
+                  </Space>
+                ))}
+              </div>
+            )}
+          </Form.List>
           <Button type="primary" htmlType="submit" icon={<SaveOutlined />}>
             保存风险参数
           </Button>
