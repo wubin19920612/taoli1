@@ -42,6 +42,7 @@ class AlertMessageTemplateSettings(BaseModel):
     include_risk: bool = True
     include_observations: bool = True
     include_dashboard_link: bool = True
+    suppress_when_card_conditions_fail: bool = True
     observation_limit: int = Field(default=5, ge=1, le=20)
 
 

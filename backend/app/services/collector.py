@@ -28,6 +28,8 @@ from app.services.spread_engine import build_opportunities
 logger = logging.getLogger(__name__)
 
 EXCHANGE_COOLDOWN_SECONDS = (15.0, 30.0, 60.0)
+LEGAL_RESTRICTION_COOLDOWN_SECONDS = 3600.0
+DEFAULT_MAX_DUE_ADAPTERS_PER_CYCLE = 3
 
 
 @dataclass(frozen=True)
@@ -64,6 +66,7 @@ class AdapterPollResult:
     markets: list[MarketSnapshot]
     errors: dict[str, str]
     should_cool_down: bool
+    cooldown_seconds: float | None = None
 
 
 def _is_transient_http_timeout(message: str) -> bool:
@@ -83,8 +86,24 @@ def _is_transient_http_timeout(message: str) -> bool:
     )
 
 
+def _is_http_legal_restriction(message: str) -> bool:
+    normalized = message.lower()
+    return "451" in normalized and (
+        "client error" in normalized
+        or "httpstatuserror" in normalized
+        or "status" in normalized
+    )
+
+
 def _error_message(exc: BaseException) -> str:
-    return str(exc) or exc.__class__.__name__
+    text = str(exc).strip()
+    message = f"{exc.__class__.__name__}: {text}" if text else exc.__class__.__name__
+    cause = getattr(exc, "__cause__", None)
+    if cause is None:
+        return message
+    cause_text = str(cause).strip()
+    cause_message = f"{cause.__class__.__name__}: {cause_text}" if cause_text else cause.__class__.__name__
+    return f"{message}; caused by {cause_message}"
 
 
 def default_exchange_adapters() -> list[ExchangeAdapter]:
@@ -109,7 +128,10 @@ class MarketCollector:
         fee_settings: FeeSettings | None = None,
         risk_settings_loader=None,
         history_recorder=None,
+        index_component_provider=None,
+        index_component_monitor=None,
         poll_interval_seconds: float = 8.0,
+        max_due_adapters_per_cycle: int = DEFAULT_MAX_DUE_ADAPTERS_PER_CYCLE,
         now_fn: Callable[[], datetime] | None = None,
     ) -> None:
         self.adapters = adapters
@@ -118,11 +140,15 @@ class MarketCollector:
         self.fee_settings = fee_settings or FeeSettings()
         self.risk_settings_loader = risk_settings_loader
         self.history_recorder = history_recorder
+        self.index_component_provider = index_component_provider
+        self.index_component_monitor = index_component_monitor
         self.poll_interval_seconds = poll_interval_seconds
+        self.max_due_adapters_per_cycle = max(1, max_due_adapters_per_cycle)
         self._now_fn = now_fn or (lambda: datetime.now(UTC))
         self._poll_states: dict[str, ExchangePollState] = {}
         self._exchange_snapshots: dict[str, list[MarketSnapshot]] = {}
         self._exchange_errors: dict[str, dict[str, str]] = {}
+        self._adapter_cursor = 0
         self._scheduler_lock = asyncio.Lock()
 
     def exchange_states(self) -> dict[str, dict[str, object]]:
@@ -173,11 +199,46 @@ class MarketCollector:
         self.store.set_exchange_errors(errors)
         if self.history_recorder is not None:
             await self.history_recorder.record(filtered_opportunities)
+        await self._process_index_components(filtered_markets)
         return CollectionResult(
             markets=filtered_markets,
             opportunities=filtered_opportunities,
             exchange_errors=errors,
         )
+
+    async def _process_index_components(self, markets: list[MarketSnapshot]) -> None:
+        if self.index_component_provider is None or self.index_component_monitor is None:
+            return
+        try:
+            markets = await self._index_component_markets(markets)
+            if not markets:
+                return
+            snapshots = await self.index_component_provider.fetch_components(markets)
+            if snapshots:
+                await self.index_component_monitor.process_snapshots(snapshots)
+        except Exception:
+            logger.exception("index component monitor failed")
+
+    async def _index_component_markets(self, markets: list[MarketSnapshot]) -> list[MarketSnapshot]:
+        watched_symbols = await self._index_component_watched_symbols()
+        if watched_symbols is None:
+            return markets
+        return [
+            market
+            for market in markets
+            if self._index_component_symbol_is_watched(market.symbol, watched_symbols)
+        ]
+
+    async def _index_component_watched_symbols(self) -> set[str] | None:
+        watched_symbols = getattr(self.index_component_monitor, "watched_symbols", None)
+        if watched_symbols is None:
+            return None
+        symbols = await watched_symbols()
+        return {symbol.strip().upper() for symbol in symbols if symbol and symbol.strip()}
+
+    def _index_component_symbol_is_watched(self, symbol: str, watched_symbols: set[str]) -> bool:
+        normalized = symbol.strip().upper()
+        return any(normalized.startswith(watched) for watched in watched_symbols)
 
     def _state_for(self, exchange_name: str) -> ExchangePollState:
         state = self._poll_states.get(exchange_name)
@@ -199,12 +260,22 @@ class MarketCollector:
     ) -> list[ExchangeAdapter]:
         due_adapters: list[ExchangeAdapter] = []
         async with self._scheduler_lock:
-            for adapter in adapters:
+            if not adapters:
+                return []
+            start = self._adapter_cursor % len(adapters)
+            ordered_adapters = adapters[start:] + adapters[:start]
+            last_claimed_index: int | None = None
+            for offset, adapter in enumerate(ordered_adapters):
                 state = self._state_for(adapter.name)
                 if not self._is_due(state, now):
                     continue
                 state.in_flight = True
                 due_adapters.append(adapter)
+                last_claimed_index = (start + offset) % len(adapters)
+                if len(due_adapters) >= self.max_due_adapters_per_cycle:
+                    break
+            if last_claimed_index is not None:
+                self._adapter_cursor = (last_claimed_index + 1) % len(adapters)
         return due_adapters
 
     def _is_due(self, state: ExchangePollState, now: datetime) -> bool:
@@ -244,7 +315,9 @@ class MarketCollector:
             state.last_error_at = now
             state.consecutive_failures += 1
             if result.should_cool_down:
-                cooldown_seconds = self._cooldown_seconds(state.consecutive_failures)
+                cooldown_seconds = result.cooldown_seconds or self._cooldown_seconds(
+                    state.consecutive_failures
+                )
                 state.status = "cooling_down"
                 state.cooldown_until = now + timedelta(seconds=cooldown_seconds)
                 state.next_due_at = state.cooldown_until
@@ -279,7 +352,13 @@ class MarketCollector:
         return AdapterPollResult(
             markets=markets,
             errors=errors,
-            should_cool_down=bool(errors) and (pool_error_seen or self._has_http_timeout(errors) or not markets),
+            should_cool_down=bool(errors)
+            and (pool_error_seen or self._has_http_timeout(errors) or not markets),
+            cooldown_seconds=(
+                LEGAL_RESTRICTION_COOLDOWN_SECONDS
+                if self._has_http_legal_restriction(errors)
+                else None
+            ),
         )
 
     async def _fetch_adapter_result(
@@ -297,6 +376,9 @@ class MarketCollector:
 
     def _has_http_timeout(self, errors: dict[str, str]) -> bool:
         return any(_is_transient_http_timeout(message) for message in errors.values())
+
+    def _has_http_legal_restriction(self, errors: dict[str, str]) -> bool:
+        return any(_is_http_legal_restriction(message) for message in errors.values())
 
     def _combined_exchange_markets(self, adapters: list[ExchangeAdapter]) -> list[MarketSnapshot]:
         markets: list[MarketSnapshot] = []
@@ -323,7 +405,7 @@ class MarketCollector:
             try:
                 markets.extend(await fetcher())
             except Exception as exc:  # noqa: BLE001 - isolate flaky public APIs per market.
-                errors[f"{adapter.name}:{label}"] = str(exc) or exc.__class__.__name__
+                errors[f"{adapter.name}:{label}"] = _error_message(exc)
         return markets, errors
 
     def _build_labeled_opportunities(self, markets: list[MarketSnapshot]) -> list[Opportunity]:

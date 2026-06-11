@@ -1,6 +1,9 @@
 export type MarketType = "spot" | "future";
 export type OpportunityType = "SF" | "FF" | "SS";
 export type AlertSeverity = "info" | "warning" | "critical";
+export type PhonePriceAlertCondition = "above" | "below";
+export type PhonePriceAlertPriceField = "mark_price" | "index_price" | "mid_price" | "bid" | "ask";
+export type AnnouncementKind = "listing" | "delisting" | "other";
 
 export interface Opportunity {
   id: string;
@@ -55,6 +58,27 @@ export interface ExchangePollState {
   in_flight: boolean;
 }
 
+export interface MarketSnapshot {
+  symbol: string;
+  base: string;
+  quote: string;
+  exchange: string;
+  market_type: MarketType;
+  bid: number;
+  ask: number;
+  bid_size?: number | null;
+  ask_size?: number | null;
+  volume_24h_usdt?: number | null;
+  funding_rate_pct?: number | null;
+  funding_next_rate_pct?: number | null;
+  funding_interval_hours?: number | null;
+  funding_next_time?: string | null;
+  mark_price?: number | null;
+  index_price?: number | null;
+  timestamp: string;
+  raw_symbol: string;
+}
+
 export interface HealthStatus {
   status: string;
   markets: number;
@@ -93,6 +117,7 @@ export interface AlertMessageTemplateSettings {
   include_risk: boolean;
   include_observations: boolean;
   include_dashboard_link: boolean;
+  suppress_when_card_conditions_fail: boolean;
   observation_limit: number;
 }
 
@@ -123,6 +148,155 @@ export interface AlertEvent {
   status: string;
   message: string;
   created_at: string;
+}
+
+export interface PhonePriceAlertRule {
+  id?: string;
+  name: string;
+  enabled: boolean;
+  symbol: string;
+  exchange?: string | null;
+  market_type: MarketType;
+  price_field: PhonePriceAlertPriceField;
+  condition: PhonePriceAlertCondition;
+  target_price: number;
+  cooldown_seconds: number;
+}
+
+export interface PhonePriceAlertEvent {
+  id: string;
+  rule_id: string;
+  symbol: string;
+  exchange: string;
+  market_type: MarketType;
+  price_field: PhonePriceAlertPriceField;
+  condition: PhonePriceAlertCondition;
+  target_price: number;
+  observed_price: number;
+  status: string;
+  message: string;
+  created_at: string;
+}
+
+export interface PhonePriceAlertDiagnostic {
+  rule_id: string;
+  rule_name: string;
+  symbol: string;
+  exchange?: string | null;
+  market_type: MarketType;
+  price_field: PhonePriceAlertPriceField;
+  resolved_price_field?: PhonePriceAlertPriceField | null;
+  condition: PhonePriceAlertCondition;
+  target_price: number;
+  market_found: boolean;
+  observed_price?: number | null;
+  triggered: boolean;
+  exchange_error?: string | null;
+  reason: string;
+}
+
+export interface PhonePriceAlertDiagnostics {
+  phone_enabled: boolean;
+  items: PhonePriceAlertDiagnostic[];
+}
+
+export interface IndexComponent {
+  source: string;
+  symbol: string;
+  weight?: number | null;
+  price?: number | null;
+  extra?: Record<string, unknown>;
+}
+
+export interface IndexComponentChange {
+  id: string;
+  exchange: string;
+  symbol: string;
+  old_hash: string;
+  new_hash: string;
+  old_components: IndexComponent[];
+  new_components: IndexComponent[];
+  added_components: IndexComponent[];
+  removed_components: IndexComponent[];
+  changed_components: IndexComponent[];
+  source: string;
+  alert_status: string;
+  created_at: string;
+}
+
+export interface IndexComponentSnapshot {
+  exchange: string;
+  symbol: string;
+  components: IndexComponent[];
+  component_hash: string;
+  source: string;
+  observed_at: string;
+}
+
+export interface IndexComponentWatchItem {
+  id: string;
+  symbol: string;
+  note?: string | null;
+  created_at: string;
+}
+
+export interface IndexComponentChangeFilters {
+  symbol?: string;
+  exchange?: string;
+  limit?: number;
+}
+
+export interface IndexComponentSnapshotFilters {
+  symbol?: string;
+  exchange?: string;
+  limit?: number;
+}
+
+export interface ExchangeAnnouncement {
+  id: string;
+  exchange: string;
+  announcement_id: string;
+  kind: AnnouncementKind;
+  title: string;
+  url: string;
+  source: string;
+  category?: string | null;
+  symbols: string[];
+  market_type?: string | null;
+  event_time?: string | null;
+  summary?: string | null;
+  published_at: string;
+  fetched_at: string;
+  alert_status: string;
+  event_reminder_status: string;
+  event_reminder_sent_at?: string | null;
+}
+
+export interface AnnouncementSettings {
+  enabled: boolean;
+  poll_interval_seconds: number;
+  record_exchanges: string[];
+  alert_exchanges: string[];
+  bootstrap_alerts_enabled: boolean;
+  event_reminders_enabled: boolean;
+  event_reminder_minutes_before: number;
+}
+
+export interface AnnouncementFilters {
+  exchange?: string;
+  kind?: AnnouncementKind;
+  limit?: number;
+}
+
+export interface AnnouncementExchangeOption {
+  label: string;
+  value: string;
+}
+
+export interface MarketFilters {
+  symbol?: string;
+  exchange?: string;
+  market_type?: MarketType;
 }
 
 export interface OpportunityHistoryRow {
@@ -173,6 +347,12 @@ export interface OpportunityHistoryPoint {
   open_spread_pct: number;
   close_spread_pct: number;
   fee_adjusted_open_pct: number;
+  funding_rate_buy_pct: number | null;
+  funding_rate_sell_pct: number | null;
+  funding_next_rate_buy_pct: number | null;
+  funding_next_rate_sell_pct: number | null;
+  funding_next_time_buy: string | null;
+  funding_next_time_sell: string | null;
   net_funding_pct: number | null;
   net_funding_next_pct: number | null;
 }
@@ -320,6 +500,85 @@ export interface ServiceRestartResult {
   service: string;
   status: string;
   message: string | null;
+}
+
+export type FundingArbitrageDecision = "ENTER" | "HOLD" | "EXIT_SOON" | "EXIT_NOW" | "BLOCKED";
+export type FundingSource = "predicted" | "fallback_current" | "missing";
+export type AdlRiskLevel = "LOW" | "MEDIUM" | "HIGH" | "BLOCKED";
+
+export interface FundingArbitrageSettings {
+  enabled: boolean;
+  max_candidates: number;
+  min_entry_edge_pct: number;
+  min_hold_edge_pct: number;
+  min_exit_edge_pct: number;
+  min_funding_edge_pct: number;
+  min_volume_24h_usdt: number;
+  max_mark_index_deviation_pct: number;
+  max_basis_width_pct: number;
+  slippage_buffer_pct: number;
+  basis_risk_weight: number;
+  confidence_penalty_pct: number;
+  min_minutes_to_settlement: number;
+  max_minutes_to_settlement: number;
+  adl_block_score: number;
+  leverage: number;
+  notional_per_symbol_usdt: number;
+  prefer_hyperliquid: boolean;
+}
+
+export interface FundingArbitrageCandidate {
+  id: string;
+  symbol: string;
+  type: "SF" | "FF";
+  long_exchange: string;
+  long_market_type: MarketType;
+  short_exchange: string;
+  short_market_type: MarketType;
+  funding_source: FundingSource;
+  long_current_funding_pct: number | null;
+  short_current_funding_pct: number | null;
+  long_next_funding_pct: number | null;
+  short_next_funding_pct: number | null;
+  current_funding_edge_pct: number | null;
+  next_funding_edge_pct: number | null;
+  long_next_settlement_time: string | null;
+  short_next_settlement_time: string | null;
+  next_settlement_time: string | null;
+  minutes_to_settlement: number | null;
+  entry_basis_pct: number;
+  exit_basis_pct: number;
+  basis_width_pct: number;
+  basis_risk_penalty_pct: number;
+  estimated_open_cost_pct: number;
+  estimated_close_cost_pct: number;
+  slippage_buffer_pct: number;
+  confidence_penalty_pct: number;
+  adl_risk_penalty_pct: number;
+  expected_cycle_pnl_pct: number;
+  adl_risk_score: number;
+  adl_risk_level: AdlRiskLevel;
+  decision: FundingArbitrageDecision;
+  decision_reasons: string[];
+  risk_labels: string[];
+  volume_24h_usdt: number | null;
+  depth_usdt: number | null;
+  uses_hyperliquid: boolean;
+}
+
+export interface FundingArbitragePreview {
+  settings: FundingArbitrageSettings;
+  total_pairs_evaluated: number;
+  displayed_candidates: number;
+  blocked_missing_funding: number;
+  blocked_liquidity: number;
+  blocked_adl_risk: number;
+  blocked_expected_pnl: number;
+  enter_count: number;
+  hold_count: number;
+  exit_count: number;
+  blocked_count: number;
+  candidates: FundingArbitrageCandidate[];
 }
 
 export interface OpportunityFilters {

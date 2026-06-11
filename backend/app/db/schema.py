@@ -43,6 +43,24 @@ async def _ensure_opportunity_history_columns(db: aiosqlite.Connection) -> None:
         await db.execute(f"ALTER TABLE opportunity_history ADD COLUMN {name} {ddl}")
 
 
+async def _ensure_exchange_announcement_columns(db: aiosqlite.Connection) -> None:
+    cursor = await db.execute("PRAGMA table_info(exchange_announcements)")
+    rows = await cursor.fetchall()
+    existing = {row["name"] for row in rows}
+    columns: dict[str, str] = {
+        "symbols_json": "TEXT NOT NULL DEFAULT '[]'",
+        "market_type": "TEXT",
+        "event_time": "TEXT",
+        "summary": "TEXT",
+        "event_reminder_status": "TEXT NOT NULL DEFAULT 'not_applicable'",
+        "event_reminder_sent_at": "TEXT",
+    }
+    for name, ddl in columns.items():
+        if name in existing:
+            continue
+        await db.execute(f"ALTER TABLE exchange_announcements ADD COLUMN {name} {ddl}")
+
+
 async def initialize_schema(db: aiosqlite.Connection) -> None:
     await db.executescript(
         """
@@ -62,6 +80,33 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
           message TEXT NOT NULL,
           created_at TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS phone_price_alert_rules (
+          id TEXT PRIMARY KEY,
+          payload TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS phone_price_alert_events (
+          id TEXT PRIMARY KEY,
+          rule_id TEXT NOT NULL,
+          symbol TEXT NOT NULL,
+          exchange TEXT NOT NULL,
+          market_type TEXT NOT NULL,
+          price_field TEXT NOT NULL,
+          condition TEXT NOT NULL,
+          target_price REAL NOT NULL,
+          observed_price REAL NOT NULL,
+          status TEXT NOT NULL,
+          message TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_phone_price_alert_events_time
+          ON phone_price_alert_events(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_phone_price_alert_events_rule_time
+          ON phone_price_alert_events(rule_id, created_at DESC);
 
         CREATE TABLE IF NOT EXISTS app_settings (
           key TEXT PRIMARY KEY,
@@ -109,8 +154,87 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
           ON opportunity_history(type, observed_at DESC);
         CREATE INDEX IF NOT EXISTS idx_opportunity_history_time
           ON opportunity_history(observed_at DESC);
+
+        CREATE TABLE IF NOT EXISTS index_component_snapshots (
+          exchange TEXT NOT NULL,
+          symbol TEXT NOT NULL,
+          component_hash TEXT NOT NULL,
+          components_json TEXT NOT NULL,
+          source TEXT NOT NULL,
+          observed_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (exchange, symbol)
+        );
+
+        CREATE TABLE IF NOT EXISTS index_component_changes (
+          id TEXT PRIMARY KEY,
+          exchange TEXT NOT NULL,
+          symbol TEXT NOT NULL,
+          old_hash TEXT NOT NULL,
+          new_hash TEXT NOT NULL,
+          old_components_json TEXT NOT NULL,
+          new_components_json TEXT NOT NULL,
+          added_components_json TEXT NOT NULL,
+          removed_components_json TEXT NOT NULL,
+          changed_components_json TEXT NOT NULL,
+          source TEXT NOT NULL,
+          alert_status TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_index_component_changes_symbol_time
+          ON index_component_changes(symbol, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_index_component_changes_exchange_time
+          ON index_component_changes(exchange, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_index_component_changes_time
+          ON index_component_changes(created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS index_component_watchlist (
+          id TEXT PRIMARY KEY,
+          symbol TEXT NOT NULL UNIQUE,
+          note TEXT,
+          created_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_index_component_watchlist_symbol
+          ON index_component_watchlist(symbol);
+
+        CREATE TABLE IF NOT EXISTS exchange_announcements (
+          id TEXT PRIMARY KEY,
+          exchange TEXT NOT NULL,
+          announcement_id TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          title TEXT NOT NULL,
+          url TEXT NOT NULL,
+          source TEXT NOT NULL,
+          category TEXT,
+          symbols_json TEXT NOT NULL DEFAULT '[]',
+          market_type TEXT,
+          event_time TEXT,
+          summary TEXT,
+          published_at TEXT NOT NULL,
+          fetched_at TEXT NOT NULL,
+          alert_status TEXT NOT NULL,
+          event_reminder_status TEXT NOT NULL DEFAULT 'not_applicable',
+          event_reminder_sent_at TEXT,
+          UNIQUE(exchange, source, announcement_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_exchange_announcements_time
+          ON exchange_announcements(published_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_exchange_announcements_exchange_time
+          ON exchange_announcements(exchange, published_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_exchange_announcements_kind_time
+          ON exchange_announcements(kind, published_at DESC);
+
+        CREATE TABLE IF NOT EXISTS announcement_provider_state (
+          key TEXT PRIMARY KEY,
+          payload TEXT NOT NULL,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
         """
     )
     await _ensure_opportunity_history_columns(db)
+    await _ensure_exchange_announcement_columns(db)
     await _migrate_alert_rule_excluded_labels(db)
     await db.commit()

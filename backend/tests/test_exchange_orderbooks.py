@@ -14,6 +14,25 @@ from app.models.market import MarketType
 
 
 @pytest.mark.asyncio
+async def test_binance_fetches_spot_order_book_from_market_data_only_endpoint(monkeypatch) -> None:
+    urls: list[str] = []
+
+    async def fake_get_json(self, url: str):
+        urls.append(url)
+        return {"bids": [["101", "2"]], "asks": [["100", "3"]]}
+
+    monkeypatch.setattr(BinanceAdapter, "get_json", fake_get_json)
+
+    book = await BinanceAdapter().fetch_order_book("BTCUSDT", MarketType.SPOT, "BTCUSDT", limit=20)
+
+    assert urls == ["https://data-api.binance.vision/api/v3/depth?symbol=BTCUSDT&limit=20"]
+    assert book is not None
+    assert book.raw_symbol == "BTCUSDT"
+    assert book.bids[0].price == 101
+    assert book.asks[0].size == 3
+
+
+@pytest.mark.asyncio
 async def test_binance_fetches_future_order_book(monkeypatch) -> None:
     urls: list[str] = []
 
@@ -92,6 +111,13 @@ async def test_okx_fetches_swap_order_book(monkeypatch) -> None:
             "https://api.hbdm.com/linear-swap-ex/market/depth?contract_code=BTC-USDT&type=step0&depth=20",
             {"tick": {"bids": [[101, 2]], "asks": [[100, 3]], "ts": 1779192000000}},
             "BTC-USDT",
+        ),
+        (
+            AsterAdapter,
+            MarketType.SPOT,
+            "https://sapi.asterdex.com/api/v1/depth?symbol=BTCUSDT&limit=20",
+            {"bids": [["101", "2"]], "asks": [["100", "3"]]},
+            "BTCUSDT",
         ),
         (
             AsterAdapter,

@@ -14,6 +14,19 @@ DEFAULT_TIMEOUT = httpx.Timeout(8.0, connect=2.5, read=6.0, write=5.0, pool=5.0)
 DEFAULT_LIMITS = httpx.Limits(max_connections=40, max_keepalive_connections=16, keepalive_expiry=15.0)
 
 
+def _exception_message(exc: BaseException) -> str:
+    text = str(exc).strip()
+    return f"{exc.__class__.__name__}: {text}" if text else exc.__class__.__name__
+
+
+class ExchangeRequestError(RuntimeError):
+    def __init__(self, method: str, url: str, exc: BaseException):
+        self.method = method
+        self.url = url
+        self.original = exc
+        super().__init__(f"{method} {url} failed: {_exception_message(exc)}")
+
+
 def parse_float(value: Any) -> float | None:
     if value in (None, "", "--"):
         return None
@@ -125,25 +138,25 @@ class ExchangeAdapter(ABC):
     name: str
 
     def __init__(self, client: httpx.AsyncClient | None = None):
-        self.client = client or httpx.AsyncClient(
+        self.client = client or self._new_client()
+
+    def _new_client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
             timeout=DEFAULT_TIMEOUT,
-            limits=DEFAULT_LIMITS,
             headers=DEFAULT_HEADERS,
             follow_redirects=True,
+            limits=DEFAULT_LIMITS,
+            http2=False,
+            trust_env=True,
         )
 
     async def reset_client(self) -> None:
         client = getattr(self, "client", None)
         if client is not None and not client.is_closed:
             await client.aclose()
-        self.client = httpx.AsyncClient(
-            timeout=DEFAULT_TIMEOUT,
-            limits=DEFAULT_LIMITS,
-            headers=DEFAULT_HEADERS,
-            follow_redirects=True,
-        )
+        self.client = self._new_client()
 
-    async def _request_json(self, request_factory) -> Any:
+    async def _request_json(self, method: str, url: str, request_factory) -> Any:
         last_error: Exception | None = None
         for attempt in range(2):
             response = None
@@ -160,14 +173,14 @@ class ExchangeAdapter(ABC):
                     with suppress(Exception):
                         await response.aclose()
         if last_error is not None:
-            raise last_error
+            raise ExchangeRequestError(method, url, last_error) from last_error
         raise RuntimeError("Failed to request JSON")
 
     async def get_json(self, url: str) -> Any:
-        return await self._request_json(lambda: self.client.get(url))
+        return await self._request_json("GET", url, lambda: self.client.get(url))
 
     async def post_json(self, url: str, body: dict[str, Any]) -> Any:
-        return await self._request_json(lambda: self.client.post(url, json=body))
+        return await self._request_json("POST", url, lambda: self.client.post(url, json=body))
 
     @abstractmethod
     async def fetch_spot_tickers(self) -> list[MarketSnapshot]:

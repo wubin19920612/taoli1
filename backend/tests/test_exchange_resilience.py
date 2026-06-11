@@ -2,7 +2,7 @@ import httpx
 import pytest
 
 from app.exchanges.aster import AsterAdapter
-from app.exchanges.base import ExchangeAdapter
+from app.exchanges.base import ExchangeAdapter, ExchangeRequestError
 from app.exchanges.binance import BinanceAdapter
 from app.exchanges.bitget import BitgetAdapter
 from app.exchanges.bybit import BybitAdapter
@@ -146,6 +146,16 @@ class ClosingClient:
         return self.responses.pop(0)
 
 
+class AlwaysFailingClient:
+    def __init__(self, exc: Exception):
+        self.exc = exc
+        self.urls: list[str] = []
+
+    async def get(self, url: str):
+        self.urls.append(url)
+        raise self.exc
+
+
 class FakePostClient:
     def __init__(self, payloads: dict[object, object]):
         self.payloads = payloads
@@ -203,6 +213,29 @@ async def test_okx_fetches_all_funding_rates_in_one_request() -> None:
 
 
 @pytest.mark.asyncio
+async def test_binance_spot_uses_market_data_only_endpoint() -> None:
+    client = FundingIntervalClient(
+        {
+            "ticker/bookTicker": [
+                {
+                    "symbol": "BTCUSDT",
+                    "bidPrice": "100",
+                    "askPrice": "101",
+                    "bidQty": "1",
+                    "askQty": "1",
+                }
+            ]
+        }
+    )
+    adapter = BinanceAdapter(client=client)
+
+    rows = await adapter.fetch_spot_tickers()
+
+    assert rows[0].symbol == "BTCUSDT"
+    assert client.urls == ["https://data-api.binance.vision/api/v3/ticker/bookTicker"]
+
+
+@pytest.mark.asyncio
 async def test_binance_uses_funding_info_interval_over_default() -> None:
     client = FundingIntervalClient(
         {
@@ -238,6 +271,29 @@ async def test_binance_uses_funding_info_interval_over_default() -> None:
 
     assert rows[0].funding_interval_hours == 4
     assert any("fundingInfo" in url for url in client.urls)
+
+
+@pytest.mark.asyncio
+async def test_aster_spot_uses_api_base_url() -> None:
+    client = FundingIntervalClient(
+        {
+            "ticker/bookTicker": [
+                {
+                    "symbol": "SBETUSDT",
+                    "bidPrice": "1",
+                    "askPrice": "1.01",
+                    "bidQty": "1",
+                    "askQty": "1",
+                }
+            ],
+        }
+    )
+    adapter = AsterAdapter(client=client)
+
+    rows = await adapter.fetch_spot_tickers()
+
+    assert rows[0].symbol == "SBETUSDT"
+    assert client.urls == ["https://sapi.asterdex.com/api/v1/ticker/bookTicker"]
 
 
 @pytest.mark.asyncio
@@ -381,6 +437,35 @@ def test_exchange_adapter_uses_short_timeout_and_headers() -> None:
     assert adapter.client.headers["User-Agent"].startswith("taoli1-radar")
 
 
+def test_exchange_adapter_respects_system_proxy_settings(monkeypatch) -> None:
+    import app.exchanges.base as base_module
+
+    captured: dict[str, dict] = {}
+
+    class FakeTransport:
+        def __init__(self, **kwargs):
+            captured["transport"] = kwargs
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs):
+            captured["client"] = kwargs
+            self.timeout = kwargs["timeout"]
+            self.headers = kwargs["headers"]
+            self.is_closed = False
+
+        async def aclose(self):
+            self.is_closed = True
+
+    monkeypatch.setattr(base_module.httpx, "AsyncHTTPTransport", FakeTransport)
+    monkeypatch.setattr(base_module.httpx, "AsyncClient", FakeAsyncClient)
+
+    adapter = OKXAdapter()
+
+    assert adapter.client is not None
+    assert "transport" not in captured["client"]
+    assert captured["client"]["trust_env"] is True
+
+
 @pytest.mark.asyncio
 async def test_exchange_adapter_closes_failed_responses_before_retrying() -> None:
     first = ClosingResponse(exc=httpx.TimeoutException("timeout"))
@@ -393,6 +478,23 @@ async def test_exchange_adapter_closes_failed_responses_before_retrying() -> Non
     assert payload == {"ok": True}
     assert first.closed is True
     assert second.closed is True
+
+
+@pytest.mark.asyncio
+async def test_exchange_adapter_adds_method_and_url_to_request_failures() -> None:
+    client = AlwaysFailingClient(httpx.ConnectTimeout(""))
+    adapter = OKXAdapter(client=client)
+
+    with pytest.raises(ExchangeRequestError) as exc_info:
+        await adapter.get_json("https://www.okx.com/api/v5/market/tickers?instType=SPOT")
+
+    message = str(exc_info.value)
+    assert message == "GET https://www.okx.com/api/v5/market/tickers?instType=SPOT failed: ConnectTimeout"
+    assert isinstance(exc_info.value.__cause__, httpx.ConnectTimeout)
+    assert client.urls == [
+        "https://www.okx.com/api/v5/market/tickers?instType=SPOT",
+        "https://www.okx.com/api/v5/market/tickers?instType=SPOT",
+    ]
 
 
 @pytest.mark.asyncio

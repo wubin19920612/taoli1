@@ -2,18 +2,34 @@ import type {
   AlertEvent,
   AlertMessageTemplateSettings,
   AlertRule,
+  AnnouncementExchangeOption,
+  AnnouncementFilters,
+  AnnouncementSettings,
   AstroActionResult,
   AstroCardCreateRequest,
   AstroCardSettings,
   AstroPairPlan,
   AstroSdkStatus,
+  FundingArbitragePreview,
+  FundingArbitrageSettings,
   HealthStatus,
+  ExchangeAnnouncement,
+  IndexComponentChange,
+  IndexComponentChangeFilters,
+  IndexComponentSnapshot,
+  IndexComponentSnapshotFilters,
+  IndexComponentWatchItem,
   OpportunityHistoryStats,
   OpportunityHistoryStatsQuery,
   LivePilotPreview,
   LivePilotSettings,
+  MarketFilters,
+  MarketSnapshot,
   Opportunity,
   OpportunityFilters,
+  PhonePriceAlertDiagnostics,
+  PhonePriceAlertEvent,
+  PhonePriceAlertRule,
   RiskSettings,
   ServiceControlStatus,
   ServiceRestartResult
@@ -83,6 +99,16 @@ export function listOpportunities(filters: OpportunityFilters): Promise<Opportun
   });
 }
 
+export function listMarkets(filters: MarketFilters = {}): Promise<MarketSnapshot[]> {
+  const url = buildUrl("/markets", filters);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    return response.json() as Promise<MarketSnapshot[]>;
+  });
+}
+
 export async function getHealth(): Promise<HealthStatus> {
   return fetchJson<HealthStatus>("/health");
 }
@@ -137,6 +163,48 @@ export async function updateLivePilotSettings(settings: LivePilotSettings): Prom
   });
 }
 
+export async function getAnnouncementSettings(): Promise<AnnouncementSettings> {
+  return fetchJson<AnnouncementSettings>("/settings/announcements");
+}
+
+export async function updateAnnouncementSettings(settings: AnnouncementSettings): Promise<AnnouncementSettings> {
+  return fetchJson<AnnouncementSettings>("/settings/announcements", {
+    method: "PUT",
+    body: JSON.stringify(settings)
+  });
+}
+
+export async function listAnnouncements(filters: AnnouncementFilters = {}): Promise<ExchangeAnnouncement[]> {
+  const url = buildUrl("/announcements", { limit: 100, ...filters });
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    return response.json() as Promise<ExchangeAnnouncement[]>;
+  });
+}
+
+export async function listAnnouncementExchanges(): Promise<AnnouncementExchangeOption[]> {
+  return fetchJson<AnnouncementExchangeOption[]>("/announcements/exchanges");
+}
+
+export async function getFundingArbitrageSettings(): Promise<FundingArbitrageSettings> {
+  return fetchJson<FundingArbitrageSettings>("/funding-arbitrage/settings");
+}
+
+export async function updateFundingArbitrageSettings(
+  settings: FundingArbitrageSettings
+): Promise<FundingArbitrageSettings> {
+  return fetchJson<FundingArbitrageSettings>("/funding-arbitrage/settings", {
+    method: "PUT",
+    body: JSON.stringify(settings)
+  });
+}
+
+export async function getFundingArbitragePreview(): Promise<FundingArbitragePreview> {
+  return fetchJson<FundingArbitragePreview>("/funding-arbitrage/preview");
+}
+
 export async function listAlertRules(): Promise<AlertRule[]> {
   return fetchJson<AlertRule[]>("/alerts/rules");
 }
@@ -161,6 +229,82 @@ export async function deleteAlertRule(id: string): Promise<void> {
 
 export async function listAlertEvents(limit = 100): Promise<AlertEvent[]> {
   return fetchJson<AlertEvent[]>(`/alerts/events?limit=${limit}`);
+}
+
+export async function listPhonePriceAlertRules(): Promise<PhonePriceAlertRule[]> {
+  return fetchJson<PhonePriceAlertRule[]>("/phone-alerts/rules");
+}
+
+export async function createPhonePriceAlertRule(
+  rule: PhonePriceAlertRule
+): Promise<PhonePriceAlertRule> {
+  return fetchJson<PhonePriceAlertRule>("/phone-alerts/rules", {
+    method: "POST",
+    body: JSON.stringify(rule)
+  });
+}
+
+export async function updatePhonePriceAlertRule(
+  id: string,
+  rule: PhonePriceAlertRule
+): Promise<PhonePriceAlertRule> {
+  return fetchJson<PhonePriceAlertRule>(`/phone-alerts/rules/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(rule)
+  });
+}
+
+export async function deletePhonePriceAlertRule(id: string): Promise<void> {
+  await fetchJson(`/phone-alerts/rules/${id}`, { method: "DELETE" });
+}
+
+export async function listPhonePriceAlertEvents(limit = 100): Promise<PhonePriceAlertEvent[]> {
+  return fetchJson<PhonePriceAlertEvent[]>(`/phone-alerts/events?limit=${limit}`);
+}
+
+export async function getPhonePriceAlertDiagnostics(): Promise<PhonePriceAlertDiagnostics> {
+  return fetchJson<PhonePriceAlertDiagnostics>("/phone-alerts/diagnostics");
+}
+
+export async function listIndexComponentChanges(
+  filters: IndexComponentChangeFilters = {}
+): Promise<IndexComponentChange[]> {
+  const url = buildUrl("/index-components/changes", { limit: 100, ...filters });
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    return response.json() as Promise<IndexComponentChange[]>;
+  });
+}
+
+export async function listIndexComponentSnapshots(
+  filters: IndexComponentSnapshotFilters = {}
+): Promise<IndexComponentSnapshot[]> {
+  const url = buildUrl("/index-components/snapshots", { limit: 500, ...filters });
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    return response.json() as Promise<IndexComponentSnapshot[]>;
+  });
+}
+
+export async function listIndexComponentWatchlist(): Promise<IndexComponentWatchItem[]> {
+  return fetchJson<IndexComponentWatchItem[]>("/index-components/watchlist");
+}
+
+export async function createIndexComponentWatchItem(
+  item: Pick<IndexComponentWatchItem, "symbol" | "note">
+): Promise<IndexComponentWatchItem> {
+  return fetchJson<IndexComponentWatchItem>("/index-components/watchlist", {
+    method: "POST",
+    body: JSON.stringify(item)
+  });
+}
+
+export async function deleteIndexComponentWatchItem(id: string): Promise<void> {
+  await fetchJson(`/index-components/watchlist/${id}`, { method: "DELETE" });
 }
 
 export async function getOpportunityHistoryStats(

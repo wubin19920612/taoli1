@@ -732,7 +732,7 @@ export function DashboardPage() {
           <Statistic title="Markets" value={health?.markets ?? 0} />
         </Col>
         <Col xs={12} md={6}>
-          <Statistic title="Exchange errors" value={Object.keys(errors).length} />
+          <Statistic title="交易所链路异常" value={Object.keys(errors).length} />
         </Col>
         <Col xs={12} md={6}>
           <Statistic
@@ -748,10 +748,24 @@ export function DashboardPage() {
         <Alert
           className="page-alert"
           type="warning"
-          message={Object.entries(errors)
-            .slice(0, 4)
-            .map(([key, value]) => `${key}: ${value}`)
-            .join(" | ")}
+          message="交易所外部 API 链路异常"
+          description={
+            <div className="exchange-error-list">
+              {Object.entries(errors)
+                .slice(0, 6)
+                .map(([key, value]) => (
+                  <div key={key} className="exchange-error-item">
+                    <Typography.Text strong>{key}</Typography.Text>
+                    <Typography.Text>{`: ${value}`}</Typography.Text>
+                  </div>
+                ))}
+              {Object.keys(errors).length > 6 ? (
+                <Typography.Text type="secondary">
+                  还有 {Object.keys(errors).length - 6} 条交易所链路异常，请查看健康检查详情。
+                </Typography.Text>
+              ) : null}
+            </div>
+          }
           showIcon
         />
       ) : null}

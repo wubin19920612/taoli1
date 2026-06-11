@@ -54,6 +54,12 @@ class OpportunityHistoryPoint(BaseModel):
     open_spread_pct: float
     close_spread_pct: float
     fee_adjusted_open_pct: float
+    funding_rate_buy_pct: float | None = None
+    funding_rate_sell_pct: float | None = None
+    funding_next_rate_buy_pct: float | None = None
+    funding_next_rate_sell_pct: float | None = None
+    funding_next_time_buy: datetime | None = None
+    funding_next_time_sell: datetime | None = None
     net_funding_pct: float | None = None
     net_funding_next_pct: float | None = None
 

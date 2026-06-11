@@ -18,6 +18,12 @@ class Settings:
     funding_poll_interval_seconds: float = 120.0
     feishu_webhook_url: str = ""
     feishu_secret: str = ""
+    feishu_app_id: str = ""
+    feishu_app_secret: str = ""
+    feishu_alert_chat_id: str = ""
+    feishu_phone_user_ids: str = ""
+    feishu_phone_user_id_type: str = "open_id"
+    feishu_phone_enabled: bool = False
     dashboard_password: str = ""
     history_enabled: bool = True
     history_sample_seconds: int = 120
@@ -137,6 +143,12 @@ def get_settings() -> Settings:
         funding_poll_interval_seconds=float(os.getenv("FUNDING_POLL_INTERVAL_SECONDS", "120")),
         feishu_webhook_url=os.getenv("FEISHU_WEBHOOK_URL", ""),
         feishu_secret=os.getenv("FEISHU_SECRET", ""),
+        feishu_app_id=os.getenv("FEISHU_APP_ID", "").strip(),
+        feishu_app_secret=os.getenv("FEISHU_APP_SECRET", "").strip(),
+        feishu_alert_chat_id=os.getenv("FEISHU_ALERT_CHAT_ID", "").strip(),
+        feishu_phone_user_ids=os.getenv("FEISHU_PHONE_USER_IDS", "").strip(),
+        feishu_phone_user_id_type=os.getenv("FEISHU_PHONE_USER_ID_TYPE", "open_id").strip() or "open_id",
+        feishu_phone_enabled=bool_env("FEISHU_PHONE_ENABLED", False),
         dashboard_password=os.getenv("DASHBOARD_PASSWORD", ""),
         history_enabled=bool_env("HISTORY_ENABLED", True),
         history_sample_seconds=int(os.getenv("HISTORY_SAMPLE_SECONDS", "120")),
