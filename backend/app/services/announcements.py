@@ -13,7 +13,12 @@ from urllib.parse import quote_plus
 import httpx
 
 from app.db.repositories import AnnouncementRepository, SettingsRepository
-from app.models.announcement import AnnouncementKind, AnnouncementSettings, ExchangeAnnouncement
+from app.models.announcement import (
+    AnnouncementEventScheduleItem,
+    AnnouncementKind,
+    AnnouncementSettings,
+    ExchangeAnnouncement,
+)
 
 AlertSender = Callable[[str], None | Awaitable[None]]
 SettingsLoader = Callable[[], Awaitable[AnnouncementSettings]]
@@ -48,6 +53,9 @@ LISTING_KEYWORDS = (
     "adds support",
     "trading will commence",
     "trading will open",
+    "open trading",
+    "to open trading",
+    "will open trading",
     "opens for trading",
     "available for trading",
     "上线",
@@ -112,12 +120,19 @@ MONTHS = {
 
 EVENT_TIME_CONTEXT_KEYWORDS = (
     "trading will start",
+    "trading will open",
     "trading starts",
     "start trading",
     "starts trading",
+    "will start",
+    "will open",
+    "spot trading at",
+    "trading at",
     "open trading",
     "opens trading",
     "trading opens",
+    "will be enabled",
+    "enabled from",
     "will list",
     "to list",
     "will launch",
@@ -200,6 +215,10 @@ def _clean_text(value: object) -> str:
     return unescape(str(value)).replace("\xa0", " ").strip()
 
 
+def _strip_html(value: object) -> str:
+    return re.sub(r"\s+", " ", _clean_text(re.sub(r"<[^>]+>", " ", str(value)))).strip()
+
+
 def _flatten_json_text(value: object) -> str:
     fragments: list[str] = []
 
@@ -236,6 +255,21 @@ def _json_objects_from_text(text: str) -> list[object]:
             continue
         objects.append(value)
     return objects
+
+
+def _json_object_after_key(text: str, key: str) -> dict[str, object] | None:
+    marker = f'"{key}"'
+    index = text.find(marker)
+    if index < 0:
+        return None
+    brace_index = text.find("{", index + len(marker))
+    if brace_index < 0:
+        return None
+    try:
+        value, _ = json.JSONDecoder().raw_decode(text[brace_index:])
+    except ValueError:
+        return None
+    return value if isinstance(value, dict) else None
 
 
 def _find_article_dicts(value: object) -> list[dict[str, object]]:
@@ -321,7 +355,9 @@ def _symbols_from_uppercase_tokens(title: str) -> list[str]:
         "BYBIT",
         "CONTRACT",
         "CONVERT",
+        "COIN",
         "CROSS",
+        "CFD",
         "DELIST",
         "DELISTING",
         "ETF",
@@ -352,11 +388,14 @@ def _symbols_from_uppercase_tokens(title: str) -> list[str]:
         "USDC",
         "USDT",
         "UTC",
+        "U",
+        "S",
+        "VIP",
         "WILL",
         "X",
     }
     symbols: list[str] = []
-    for value in re.findall(r"\b[A-Z][A-Z0-9]{0,14}(?:/[A-Z0-9]{2,12})?\b", title):
+    for value in re.findall(r"\b[A-Z][A-Z0-9]{0,14}(?:/[A-Z0-9]{1,12})?\b", title):
         symbol = _normalize_symbol(value)
         if symbol in stop_words:
             continue
@@ -379,10 +418,11 @@ def _symbols_from_okx_contract_title(title: str) -> list[str]:
 
 
 def infer_symbols(title: str) -> list[str]:
+    parenthetical_symbols = _symbols_from_parentheses(title)
     normalized: list[str] = []
     for symbol in [
         *_symbols_from_okx_contract_title(title),
-        *_symbols_from_parentheses(title),
+        *parenthetical_symbols,
         *_symbols_from_uppercase_tokens(title),
     ]:
         if symbol.endswith("USDT") and len(symbol) > 4:
@@ -397,7 +437,52 @@ def infer_symbols(title: str) -> list[str]:
         seen.add(symbol)
         result.append(symbol)
     pair_bases = {symbol[:-4] for symbol in result if symbol.endswith("USDT") and len(symbol) > 4}
+    pair_bases.update(symbol.split("/", 1)[0] for symbol in result if "/" in symbol)
+    filtered = [symbol for symbol in result if symbol not in pair_bases]
+    if parenthetical_symbols:
+        parenthetical_set = set(parenthetical_symbols)
+        filtered = [
+            symbol
+            for symbol in filtered
+            if symbol in parenthetical_set or "/" in symbol or len(symbol) > 2
+        ]
+    return filtered
+
+
+def infer_symbols_from_content(text: str) -> list[str]:
+    candidates: list[str] = []
+    quote_assets = "USDT|USDC|USD1|FDUSD|USD|BTC|ETH|BNB|TRY|EUR|U"
+    for value in re.findall(rf"\b[A-Z0-9]{{1,20}}/(?:{quote_assets})\b", text):
+        candidates.append(_normalize_symbol(value))
+    for value in re.findall(r"\b[A-Z0-9]{2,20}USDT\b", text):
+        candidates.append(_normalize_symbol(value))
+    for value in re.findall(r"\b[A-Z0-9]{2,20}USD\b", text):
+        candidates.append(_normalize_symbol(value))
+
+    seen: set[str] = set()
+    result: list[str] = []
+    for symbol in candidates:
+        if symbol in seen:
+            continue
+        seen.add(symbol)
+        result.append(symbol)
+    pair_bases = {symbol[:-4] for symbol in result if symbol.endswith("USDT") and len(symbol) > 4}
+    pair_bases.update(symbol.split("/", 1)[0] for symbol in result if "/" in symbol)
     return [symbol for symbol in result if symbol not in pair_bases]
+
+
+def _should_prefer_content_symbols(title: str) -> bool:
+    normalized = title.lower()
+    return any(
+        token in normalized
+        for token in (
+            "multiple",
+            "trading pair",
+            "trading pairs",
+            "including",
+            "new trading pairs",
+        )
+    )
 
 
 def infer_market_type(title: str, category: str | None = None) -> str | None:
@@ -410,6 +495,8 @@ def infer_market_type(title: str, category: str | None = None) -> str | None:
         ]
 
     matched = matched_labels(title) or matched_labels(category or "")
+    if not matched and "will list" in title.lower():
+        return "spot"
     if not matched:
         return None
     primary = []
@@ -429,33 +516,40 @@ def _datetime_from_parts(year: int, month: int, day: int, hour: int, minute: int
 
 
 def _apply_timezone_hint(value: datetime, context: str) -> datetime:
-    if "utc+8" in context.lower() or "北京时间" in context or "香港时间" in context:
+    normalized = context.lower().replace(" ", "")
+    if "utc+8" in normalized or "utc8" in normalized or "北京时间" in context or "香港时间" in context:
         return value - timedelta(hours=8)
     return value
 
 
-def extract_event_time(text: str) -> datetime | None:
+DATETIME_PATTERNS = (
+    re.compile(
+        r"\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})[ T,]+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(?:\(UTC\)|UTC)?",
+        re.I,
+    ),
+    re.compile(
+        r"\b([A-Z][a-z]+)\s+(\d{1,2}),?\s+(20\d{2})[, ]+(?:at\s+)?(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(?:\(UTC\)|UTC)?",
+        re.I,
+    ),
+    re.compile(
+        r"\b(\d{1,2})\s+([A-Z][a-z]+)\s+(20\d{2})[, ]+(?:at\s+)?(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(?:\(UTC\)|UTC)?",
+        re.I,
+    ),
+    re.compile(
+        r"\b(?:at|from)\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(?:\(UTC\)|UTC)?\s+on\s+([A-Z][a-z]+)\s+(\d{1,2}),?\s+(20\d{2})",
+        re.I,
+    ),
+    re.compile(
+        r"\b(20\d{2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日\s*(?:上午|下午)?\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(?:\(UTC\s*\+?\s*8\)|UTC\s*\+?\s*8|北京时间|香港时间)?",
+        re.I,
+    ),
+)
+
+
+def _datetime_candidates(text: str) -> list[tuple[int, int, datetime, str]]:
     normalized = _clean_text(re.sub(r"\s+", " ", text))
-    patterns = (
-        re.compile(
-            r"\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})[ T,]+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(?:\(UTC\)|UTC)?",
-            re.I,
-        ),
-        re.compile(
-            r"\b([A-Z][a-z]+)\s+(\d{1,2}),?\s+(20\d{2})[, ]+(?:at\s+)?(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(?:\(UTC\)|UTC)?",
-            re.I,
-        ),
-        re.compile(
-            r"\b(\d{1,2})\s+([A-Z][a-z]+)\s+(20\d{2})[, ]+(?:at\s+)?(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(?:\(UTC\)|UTC)?",
-            re.I,
-        ),
-        re.compile(
-            r"\b(20\d{2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日\s*(?:上午|下午)?\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(?:\(UTC\+?8\)|UTC\+?8|北京时间|香港时间)?",
-            re.I,
-        ),
-    )
     candidates: list[tuple[int, int, datetime, str]] = []
-    for pattern in patterns:
+    for pattern in DATETIME_PATTERNS:
         for match in pattern.finditer(normalized):
             values = match.groups(default="0")
             parsed: datetime | None = None
@@ -475,8 +569,19 @@ def extract_event_time(text: str) -> datetime | None:
                 year = int(values[2])
                 hour, minute, second = int(values[3]), int(values[4]), int(values[5])
                 parsed = _datetime_from_parts(year, month, day, hour, minute, second)
+            elif values[3].lower() in MONTHS:
+                hour, minute, second = int(values[0]), int(values[1]), int(values[2])
+                month = MONTHS[values[3].lower()]
+                day, year = int(values[4]), int(values[5])
+                parsed = _datetime_from_parts(year, month, day, hour, minute, second)
             if parsed is not None:
                 candidates.append((match.start(), match.end(), _apply_timezone_hint(parsed, matched_text), matched_text))
+    return sorted(candidates, key=lambda item: item[0])
+
+
+def extract_event_time(text: str) -> datetime | None:
+    normalized = _clean_text(re.sub(r"\s+", " ", text))
+    candidates = _datetime_candidates(normalized)
     if not candidates:
         return None
 
@@ -485,11 +590,108 @@ def extract_event_time(text: str) -> datetime | None:
         context = normalized[max(0, start - 120) : min(len(normalized), end + 120)].lower()
         score = sum(3 for keyword in EVENT_TIME_CONTEXT_KEYWORDS if keyword in context)
         score -= sum(2 for keyword in NON_EVENT_TIME_CONTEXT_KEYWORDS if keyword in context)
-        if "utc+8" in matched_text.lower() or "北京时间" in matched_text or "香港时间" in matched_text:
+        matched_normalized = matched_text.lower().replace(" ", "")
+        if "utc+8" in matched_normalized or "utc8" in matched_normalized or "北京时间" in matched_text or "香港时间" in matched_text:
             score += 1
         scored.append((score, -index, parsed))
     best_score, _, best = max(scored, key=lambda item: (item[0], item[1]))
     return best if best_score > 0 else None
+
+
+def _schedule_alias_groups(symbol: str) -> tuple[list[str], list[str]]:
+    normalized = _normalize_symbol(symbol)
+    if not normalized:
+        return [], []
+    specific: list[str] = []
+    plain: list[str] = [normalized]
+    if "/" in normalized:
+        base, quote = normalized.split("/", 1)
+        specific.extend([normalized, f"{base}/USDⓈ", f"{base}/{quote}", f"{base} {quote}", f"{base}{quote}"])
+        if quote == "USD":
+            specific.extend([f"{base}/USDT", f"{base} USDT", f"{base}USDT"])
+    else:
+        quote_assets = ("USDT", "USDC", "USD", "USDⓈ", "USD1")
+        for quote in quote_assets:
+            specific.extend([f"{normalized}/{quote}", f"{normalized} {quote}", f"{normalized}{quote}"])
+    if len(normalized) <= 1:
+        plain = []
+    seen: set[str] = set()
+    unique_specific = []
+    for alias in specific:
+        if alias and alias not in seen:
+            seen.add(alias)
+            unique_specific.append(alias)
+    return unique_specific, plain
+
+
+def _schedule_context_has_time_cue(context: str) -> bool:
+    normalized = context.lower()
+    return (
+        any(
+            token in normalized
+            for token in (
+                "trading will open",
+                "trading opens",
+                "will open",
+                "will start",
+                "trading at",
+                "enabled from",
+                "open at",
+                "start at",
+            )
+        )
+        or ("trading" in normalized and any(token in normalized for token in ("open", "start", "enabled")))
+        or "开盘时间" in context
+        or "交易开盘" in context
+        or "正式上线" in context
+        or "上线时间" in context
+    )
+
+
+def _alias_pattern(alias: str) -> re.Pattern[str]:
+    return re.compile(rf"(?<![A-Z0-9]){re.escape(alias)}(?![A-Z0-9])", re.I)
+
+
+def extract_event_schedule(text: str, symbols: list[str]) -> list[AnnouncementEventScheduleItem]:
+    normalized = _clean_text(re.sub(r"\s+", " ", text))
+    if not normalized or not symbols:
+        return []
+
+    schedule_by_symbol: dict[str, AnnouncementEventScheduleItem] = {}
+    symbol_order = {_normalize_symbol(symbol): index for index, symbol in enumerate(symbols)}
+    for symbol in symbols:
+        schedule_symbol = _normalize_symbol(symbol)
+        if not schedule_symbol:
+            continue
+        specific_aliases, plain_aliases = _schedule_alias_groups(schedule_symbol)
+        for aliases in (specific_aliases, plain_aliases):
+            found = False
+            for alias in aliases:
+                for match in _alias_pattern(alias).finditer(normalized):
+                    window = normalized[match.start() : min(len(normalized), match.start() + 240)]
+                    if not _schedule_context_has_time_cue(window):
+                        continue
+                    candidates = _datetime_candidates(window)
+                    if not candidates:
+                        continue
+                    alias_end = match.end() - match.start()
+                    after_alias = [candidate for candidate in candidates if candidate[0] >= alias_end - 2]
+                    _, _, event_time, _ = min(after_alias or candidates, key=lambda item: (abs(item[0] - alias_end), item[0]))
+                    schedule_by_symbol[schedule_symbol] = AnnouncementEventScheduleItem(
+                        symbol=schedule_symbol,
+                        event_time=event_time,
+                    )
+                    found = True
+                    break
+                if found:
+                    break
+            if found:
+                break
+
+    return sorted(
+        schedule_by_symbol.values(),
+        key=lambda item: (symbol_order.get(item.symbol, len(symbol_order)), item.event_time),
+    )
 
 
 def _event_time_from_row(row: dict) -> datetime | None:
@@ -522,6 +724,7 @@ def _announcement_summary(
     symbols: list[str],
     market_type: str | None,
     event_time: datetime | None,
+    event_schedule: list[AnnouncementEventScheduleItem] | None = None,
 ) -> str | None:
     pieces: list[str] = []
     if symbols:
@@ -530,6 +733,12 @@ def _announcement_summary(
         pieces.append(f"market={market_type}")
     if event_time:
         pieces.append(f"event_time={event_time.isoformat()}")
+    if event_schedule:
+        schedule = ",".join(
+            f"{item.symbol}@{item.event_time.isoformat()}"
+            for item in event_schedule[:8]
+        )
+        pieces.append(f"schedule={schedule}")
     if not pieces:
         return None
     return f"{kind.value}: " + "; ".join(pieces)
@@ -562,6 +771,14 @@ def build_announcement_alert_message(announcement: ExchangeAnnouncement) -> str:
         lines.append(f"市场: {announcement.market_type}")
     if announcement.event_time:
         lines.append(f"事件时间: {_display_time(announcement.event_time)} UTC+8")
+    if announcement.event_schedule:
+        lines.append(
+            "分项时间: "
+            + "; ".join(
+                f"{item.symbol} {_display_time(item.event_time)} UTC+8"
+                for item in announcement.event_schedule[:12]
+            )
+        )
     lines.append(f"标题: {announcement.title}")
     if announcement.category:
         lines.append(f"分类: {announcement.category}")
@@ -589,6 +806,14 @@ def build_announcement_event_reminder_message(
         remaining_minutes = max(0, remaining_seconds // 60)
         lines.append(f"事件时间: {_display_time(announcement.event_time)} UTC+8")
         lines.append(f"剩余: 约 {remaining_minutes} 分钟")
+    if announcement.event_schedule:
+        lines.append(
+            "分项时间: "
+            + "; ".join(
+                f"{item.symbol} {_display_time(item.event_time)} UTC+8"
+                for item in announcement.event_schedule[:12]
+            )
+        )
     if announcement.symbols:
         lines.append(f"币种: {', '.join(announcement.symbols)}")
     if announcement.market_type:
@@ -647,6 +872,7 @@ class HttpAnnouncementProvider(AnnouncementProvider):
         symbols: list[str] | None = None,
         market_type: str | None = None,
         event_time: datetime | None = None,
+        event_schedule: list[AnnouncementEventScheduleItem] | None = None,
     ) -> ExchangeAnnouncement | None:
         title = title.strip()
         url = url.strip()
@@ -655,14 +881,31 @@ class HttpAnnouncementProvider(AnnouncementProvider):
             return None
         kind = classify_announcement(title, category)
         searchable_text = f"{title} {content or ''}"
-        inferred_symbols = symbols if symbols is not None else infer_symbols(title)
+        if symbols is not None:
+            inferred_symbols = symbols
+        else:
+            inferred_symbols = infer_symbols(title)
+            if content:
+                content_symbols = infer_symbols_from_content(searchable_text)
+                if content_symbols and (not inferred_symbols or _should_prefer_content_symbols(title)):
+                    inferred_symbols = content_symbols
         inferred_market_type = market_type or infer_market_type(title, category)
-        inferred_event_time = event_time or extract_event_time(searchable_text)
+        if inferred_market_type is None and content:
+            inferred_market_type = infer_market_type(searchable_text, category)
+        inferred_event_schedule = event_schedule or (
+            extract_event_schedule(content, inferred_symbols) if content else []
+        )
+        inferred_event_time = event_time
+        if inferred_event_time is None and inferred_event_schedule:
+            inferred_event_time = min(item.event_time for item in inferred_event_schedule)
+        if inferred_event_time is None:
+            inferred_event_time = extract_event_time(searchable_text)
         summary = _announcement_summary(
             kind=kind,
             symbols=inferred_symbols,
             market_type=inferred_market_type,
             event_time=inferred_event_time,
+            event_schedule=inferred_event_schedule,
         )
         reminder_status = "pending" if inferred_event_time and inferred_event_time > self._now_fn() else "not_applicable"
         return ExchangeAnnouncement(
@@ -676,6 +919,7 @@ class HttpAnnouncementProvider(AnnouncementProvider):
             symbols=inferred_symbols,
             market_type=inferred_market_type,
             event_time=inferred_event_time,
+            event_schedule=inferred_event_schedule,
             summary=summary,
             published_at=published_at or self._now_fn(),
             fetched_at=self._now_fn(),
@@ -784,7 +1028,8 @@ class OKXAnnouncementProvider(HttpAnnouncementProvider):
         announcements: list[ExchangeAnnouncement] = []
         for ann_type in self.ann_types:
             payload = await self._get_json(f"{self.base_url}?annType={ann_type}&page=1")
-            announcements.extend(self._parse_payload(payload, ann_type))
+            content_by_key = await self._fetch_detail_content_for_payload(payload, ann_type)
+            announcements.extend(self._parse_payload(payload, ann_type, content_by_key=content_by_key))
         for url in self.latest_urls:
             try:
                 html = await self._get_text(url)
@@ -846,7 +1091,68 @@ class OKXAnnouncementProvider(HttpAnnouncementProvider):
             if "/help/" in _clean_text(row.get("url") or row.get("link") or row.get("href"))
         ]
 
-    def _parse_payload(self, payload: object, fallback_category: str) -> list[ExchangeAnnouncement]:
+    async def _fetch_detail_content_for_payload(self, payload: object, fallback_category: str) -> dict[str, str]:
+        requests: list[tuple[str, str]] = []
+        for row in self._rows_from_payload(payload):
+            if _event_time_from_row(row) is not None:
+                continue
+            title = _clean_text(row.get("title") or row.get("annTitle") or row.get("name"))
+            category = _clean_text(row.get("annType") or row.get("category") or row.get("type")) or fallback_category
+            if classify_announcement(title, category) not in {AnnouncementKind.LISTING, AnnouncementKind.DELISTING}:
+                continue
+            url = self._row_url(row)
+            if not url:
+                continue
+            requests.append((self._row_content_key(row), url))
+
+        if not requests:
+            return {}
+
+        content_by_key: dict[str, str] = {}
+        contents = await asyncio.gather(
+            *(self._fetch_article_text(url) for _, url in requests),
+            return_exceptions=False,
+        )
+        for (key, _), content in zip(requests, contents, strict=False):
+            if content:
+                content_by_key[key] = content
+        return content_by_key
+
+    async def _fetch_article_text(self, url: str) -> str | None:
+        try:
+            html = await self._get_text(url)
+        except Exception:
+            logger.debug("failed to fetch okx announcement detail: %s", url, exc_info=True)
+            return None
+        return self._article_text_from_html(html)
+
+    def _article_text_from_html(self, html: str) -> str | None:
+        candidates: list[str] = []
+        for match in re.finditer(r"<meta[^>]+>", html, re.I | re.S):
+            tag = match.group(0)
+            if not re.search(r'(?:name|property)=["\'](?:description|og:description|twitter:description)["\']', tag, re.I):
+                continue
+            content_match = re.search(r'content=["\'](.*?)["\']', tag, re.I | re.S)
+            if content_match is not None:
+                candidates.append(_clean_text(content_match.group(1)))
+
+        visible_html = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", html, flags=re.I | re.S)
+        for value in (visible_html, html):
+            text = _strip_html(value)
+            if text:
+                candidates.append(text)
+
+        seen: set[str] = set()
+        merged: list[str] = []
+        for candidate in candidates:
+            if not candidate or candidate in seen:
+                continue
+            seen.add(candidate)
+            merged.append(candidate)
+        text = re.sub(r"\s+", " ", " ".join(merged)).strip()
+        return text or None
+
+    def _rows_from_payload(self, payload: object) -> list[dict]:
         if not isinstance(payload, dict):
             return []
         rows: list[dict] = []
@@ -858,19 +1164,44 @@ class OKXAnnouncementProvider(HttpAnnouncementProvider):
                 details = group.get("details")
                 if isinstance(details, list):
                     rows.extend(item for item in details if isinstance(item, dict))
+                elif group.get("title") or group.get("url"):
+                    rows.append(group)
+        return rows
+
+    def _row_url(self, row: dict[str, object]) -> str:
+        return _article_url(
+            self.site_base_url,
+            _clean_text(row.get("url") or row.get("link") or row.get("href")),
+            _clean_text(row.get("annId") or row.get("id") or row.get("title")),
+        )
+
+    def _row_content_key(self, row: dict[str, object]) -> str:
+        return _clean_text(row.get("annId") or row.get("id")) or self._row_url(row)
+
+    def _parse_payload(
+        self,
+        payload: object,
+        fallback_category: str,
+        *,
+        content_by_key: dict[str, str] | None = None,
+    ) -> list[ExchangeAnnouncement]:
         announcements: list[ExchangeAnnouncement] = []
-        for row in rows:
-            title = _clean_text(row.get("title"))
-            url = _clean_text(row.get("url"))
-            category = _clean_text(row.get("annType")) or fallback_category
-            published_at = _parse_datetime_ms(row.get("pTime") or row.get("businessPTime"))
-            announcement_id = _clean_text(row.get("annId")) or url.rsplit("/", 1)[-1]
+        for row in self._rows_from_payload(payload):
+            title = _clean_text(row.get("title") or row.get("annTitle") or row.get("name"))
+            url = self._row_url(row)
+            category = _clean_text(row.get("annType") or row.get("category") or row.get("type")) or fallback_category
+            published_at = _parse_datetime_any(row.get("pTime") or row.get("businessPTime") or row.get("publishTime"))
+            announcement_id = _clean_text(row.get("annId")) or url.rstrip("/").rsplit("/", 1)[-1]
+            content = (content_by_key or {}).get(self._row_content_key(row)) or _clean_text(
+                row.get("desc") or row.get("summary") or row.get("brief")
+            )
             announcement = self._announcement(
                 announcement_id=announcement_id,
                 title=title,
                 url=url,
                 category=category,
                 published_at=published_at,
+                content=content,
                 event_time=_event_time_from_row(row),
             )
             if announcement is not None:
@@ -932,7 +1263,8 @@ class BitgetAnnouncementProvider(HttpAnnouncementProvider):
         for ann_type in self.ann_types:
             query = f"language=en_US&annType={quote_plus(ann_type)}&limit=10"
             payload = await self._get_json(f"{self.base_url}?{query}")
-            parsed = self._parse_payload(payload, ann_type)
+            content_by_key = await self._fetch_detail_content_for_payload(payload)
+            parsed = self._parse_payload(payload, ann_type, content_by_key=content_by_key)
             announcements.extend(
                 announcement
                 for announcement in parsed
@@ -940,27 +1272,77 @@ class BitgetAnnouncementProvider(HttpAnnouncementProvider):
             )
         return announcements
 
-    def _parse_payload(self, payload: object, fallback_category: str) -> list[ExchangeAnnouncement]:
+    async def _fetch_detail_content_for_payload(self, payload: object) -> dict[str, str]:
+        content_by_key: dict[str, str] = {}
+        for row in self._rows_from_payload(payload):
+            title = _clean_text(row.get("annTitle") or row.get("title"))
+            url = _clean_text(row.get("annUrl") or row.get("url"))
+            if not url or not self._should_fetch_detail_content(title):
+                continue
+            content = await self._fetch_article_text(url)
+            if content:
+                content_by_key[self._row_content_key(row)] = content
+        return content_by_key
+
+    def _rows_from_payload(self, payload: object) -> list[dict]:
         if not isinstance(payload, dict):
             return []
         data = payload.get("data")
-        rows = data if isinstance(data, list) else []
+        return [row for row in data if isinstance(row, dict)] if isinstance(data, list) else []
+
+    def _should_fetch_detail_content(self, title: str) -> bool:
+        normalized = title.lower()
+        return (
+            not infer_symbols(title)
+            or "new trading pairs" in normalized
+            or "including" in normalized
+        )
+
+    async def _fetch_article_text(self, url: str) -> str | None:
+        try:
+            html = await self._get_text(url)
+        except Exception:
+            logger.debug("failed to fetch bitget announcement detail: %s", url, exc_info=True)
+            return None
+        details = _json_object_after_key(html, "articleDetails")
+        if details is not None:
+            content = _strip_html(details.get("content"))
+            if content:
+                return content
+        match = re.search(
+            r'<meta[^>]+(?:name|property)=["\'](?:description|og:description|twitter:description)["\'][^>]+content=["\'](.*?)["\']',
+            html,
+            re.I | re.S,
+        )
+        return _clean_text(match.group(1)) if match is not None else None
+
+    def _row_content_key(self, row: dict[str, object]) -> str:
+        return _clean_text(row.get("annId") or row.get("id")) or _clean_text(row.get("annUrl") or row.get("url"))
+
+    def _parse_payload(
+        self,
+        payload: object,
+        fallback_category: str,
+        *,
+        content_by_key: dict[str, str] | None = None,
+    ) -> list[ExchangeAnnouncement]:
+        rows = self._rows_from_payload(payload)
         announcements: list[ExchangeAnnouncement] = []
         for row in rows:
-            if not isinstance(row, dict):
-                continue
             title = _clean_text(row.get("annTitle") or row.get("title"))
             url = _clean_text(row.get("annUrl") or row.get("url"))
             category = _clean_text(row.get("annType") or row.get("type") or row.get("category")) or fallback_category
             sub_type = _clean_text(row.get("annSubType"))
             if sub_type:
                 category = f"{category}:{sub_type}"
+            content = (content_by_key or {}).get(self._row_content_key(row))
             announcement = self._announcement(
                 announcement_id=_clean_text(row.get("annId") or row.get("id")),
                 title=title,
                 url=url,
                 category=category,
                 published_at=_parse_datetime_ms(row.get("cTime") or row.get("publishTime")),
+                content=content,
                 event_time=_event_time_from_row(row),
             )
             if announcement is not None:

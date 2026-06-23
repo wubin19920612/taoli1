@@ -6,7 +6,12 @@ from datetime import datetime
 import aiosqlite
 
 from app.models.alert import AlertEvent, AlertRule
-from app.models.announcement import AnnouncementKind, AnnouncementSettings, ExchangeAnnouncement
+from app.models.announcement import (
+    AnnouncementEventScheduleItem,
+    AnnouncementKind,
+    AnnouncementSettings,
+    ExchangeAnnouncement,
+)
 from app.models.history import OpportunityHistoryRow
 from app.models.index_component import (
     IndexComponent,
@@ -72,6 +77,30 @@ def _serialize_datetime(value) -> str | None:
 
 def _deserialize_datetime(value) -> str | None:
     return value
+
+
+def _event_schedule_json(announcement: ExchangeAnnouncement) -> str:
+    return json.dumps(
+        [
+            AnnouncementEventScheduleItem.model_validate(item).model_dump(mode="json", exclude_none=True)
+            for item in announcement.event_schedule
+        ],
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _event_schedule_from_json(value: str | None) -> list[dict[str, object]]:
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+    except ValueError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [item for item in parsed if isinstance(item, dict)]
 
 
 def _component_json(components: list[IndexComponent]) -> str:
@@ -532,11 +561,11 @@ class AnnouncementRepository:
             """
             INSERT OR IGNORE INTO exchange_announcements (
               id, exchange, announcement_id, kind, title, url, source, category,
-              symbols_json, market_type, event_time, summary,
+              symbols_json, market_type, event_time, event_schedule_json, summary,
               published_at, fetched_at, alert_status, event_reminder_status,
               event_reminder_sent_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 announcement.id,
@@ -550,6 +579,7 @@ class AnnouncementRepository:
                 json.dumps(announcement.symbols, ensure_ascii=False, sort_keys=True),
                 announcement.market_type,
                 _serialize_datetime(announcement.event_time),
+                _event_schedule_json(announcement),
                 announcement.summary,
                 announcement.published_at.isoformat(),
                 announcement.fetched_at.isoformat(),
@@ -566,6 +596,8 @@ class AnnouncementRepository:
 
     async def _enrich_existing_metadata(self, announcement: ExchangeAnnouncement) -> None:
         symbols_json = json.dumps(announcement.symbols, ensure_ascii=False, sort_keys=True)
+        event_time = _serialize_datetime(announcement.event_time)
+        event_schedule_json = _event_schedule_json(announcement)
         await self.db.execute(
             """
             UPDATE exchange_announcements
@@ -573,9 +605,13 @@ class AnnouncementRepository:
               symbols_json = CASE WHEN ? != '[]' THEN ? ELSE symbols_json END,
               market_type = COALESCE(?, market_type),
               event_time = COALESCE(?, event_time),
-              summary = CASE WHEN ? IS NOT NULL THEN ? ELSE summary END,
+              event_schedule_json = CASE WHEN ? != '[]' THEN ? ELSE event_schedule_json END,
+              summary = CASE
+                WHEN ? IS NOT NULL AND (? IS NOT NULL OR ? != '[]' OR summary IS NULL) THEN ?
+                ELSE summary
+              END,
               event_reminder_status = CASE
-                WHEN event_time IS NOT NULL AND ? = 'pending' THEN 'pending'
+                WHEN ? IS NOT NULL AND ? = 'pending' AND event_reminder_status != 'sent' THEN 'pending'
                 ELSE event_reminder_status
               END
             WHERE exchange = ? AND source = ? AND announcement_id = ?
@@ -584,9 +620,14 @@ class AnnouncementRepository:
                 symbols_json,
                 symbols_json,
                 announcement.market_type,
-                _serialize_datetime(announcement.event_time),
+                event_time,
+                event_schedule_json,
+                event_schedule_json,
                 announcement.summary,
+                event_time,
+                event_schedule_json,
                 announcement.summary,
+                event_time,
                 announcement.event_reminder_status,
                 announcement.exchange,
                 announcement.source,
@@ -732,6 +773,11 @@ class AnnouncementRepository:
             symbols=symbols,
             market_type=row["market_type"] if "market_type" in row.keys() else None,
             event_time=row["event_time"] if "event_time" in row.keys() else None,
+            event_schedule=(
+                _event_schedule_from_json(row["event_schedule_json"])
+                if "event_schedule_json" in row.keys()
+                else []
+            ),
             summary=row["summary"] if "summary" in row.keys() else None,
             published_at=row["published_at"],
             fetched_at=row["fetched_at"],

@@ -17,6 +17,7 @@ from app.services.announcements import (
     build_announcement_alert_message,
     build_announcement_event_reminder_message,
     classify_announcement,
+    extract_event_schedule,
     extract_event_time,
     infer_market_type,
     infer_symbols,
@@ -72,8 +73,14 @@ def test_announcement_metadata_parsers_extract_symbols_market_and_time() -> None
     assert infer_symbols("Binance Alpha Will Remove DIGI, K, SKI") == ["DIGI", "K", "SKI"]
     assert infer_symbols("Pre-IPO Trading for QNTXUSDT Perpetual Futures (USDT-M)") == ["QNTXUSDT"]
     assert infer_symbols("Pre-Market Trading for QNTXUSDT Perpetual Futures (QNTX)") == ["QNTXUSDT"]
+    assert infer_symbols("Gate to List Ondo U.S. Dollar Yield (USDY) for Spot Trading") == ["USDY"]
+    assert infer_symbols("Bitget to list Bluwhale AI (BLUAI) in the AI zone") == ["BLUAI"]
+    assert infer_symbols("Binance will open trading for XLM/U and XLM/USD1 trading pairs") == ["XLM/U", "XLM/USD1"]
+    assert infer_symbols("Binance Futures Will List USDⓈ-M & COIN-M Quarterly 1225 Delivery Contracts") == []
+    assert infer_symbols("TradFi stock listing: SPCX CFD is now live on Bybit TradFi!") == ["SPCX"]
     assert infer_market_type("Bitget Spot Cross Margin adds GENIUS/USDT") == "spot margin"
     assert infer_market_type("Gate to List Irys (IRYS) for Spot and Convert Trading", "newfutureslistings") == "spot/convert"
+    assert infer_market_type("Binance Will List Re (RE) with Seed Tag Applied") == "spot"
     assert infer_market_type("Initial Listing: Gate Stocks Launches Pre-Market Trading for QNTXUSDT Perpetual Futures (USDT-M)") == "futures/pre-market"
     assert infer_symbols("欧易关于 IRYSUSDT X-合约（X-Perp）正式上线的公告") == ["IRYSUSDT"]
     assert infer_symbols("欧易关于 AMAT、DELL、VRT 股票永续合约正式上线的公告") == ["AMAT", "DELL", "VRT"]
@@ -81,8 +88,35 @@ def test_announcement_metadata_parsers_extract_symbols_market_and_time() -> None
     assert infer_market_type("欧易关于 AMAT、DELL、VRT 股票永续合约正式上线的公告") == "futures/stock perpetual"
     assert extract_event_time(title) == datetime(2026, 5, 30, 12, 0, tzinfo=UTC)
     assert extract_event_time("Trading starts on May 30, 2026 at 12:05 UTC") == datetime(2026, 5, 30, 12, 5, tzinfo=UTC)
+    assert extract_event_time("Spot trading for RE/USDⓈ will start at Jun 18, 2026 15:00 UTC") == datetime(2026, 6, 18, 15, 0, tzinfo=UTC)
+    assert extract_event_time("The contracts will be enabled from 09:00 UTC on June 18, 2026.") == datetime(2026, 6, 18, 9, 0, tzinfo=UTC)
     assert extract_event_time("交易将于 2026 年 5 月 29 日 15:00 (UTC+8) 正式上线") == datetime(2026, 5, 29, 7, 0, tzinfo=UTC)
     assert extract_event_time("The subscription period is from 2026-05-11 00:00 UTC to 2026-05-14 00:00 UTC.") is None
+
+
+def test_event_schedule_parser_extracts_per_symbol_times() -> None:
+    english = (
+        "SMH/USDT perpetual futures trading will open at 09:00 UTC on June 18, 2026. "
+        "EWZ/USDT perpetual futures trading will open at 09:15 UTC on June 18, 2026. "
+        "RIVN/USDT perpetual futures trading will open at 09:30 UTC on June 18, 2026."
+    )
+    chinese = (
+        "SMH/USDT 合约交易开盘时间：2026 年 6 月 18 日 17:00 (UTC+8)。"
+        "EWZ/USDT 合约交易开盘时间：2026 年 6 月 18 日 17:15 (UTC+8)。"
+    )
+
+    english_schedule = extract_event_schedule(english, ["SMH", "EWZ", "RIVN"])
+    chinese_schedule = extract_event_schedule(chinese, ["SMH", "EWZ"])
+
+    assert [(item.symbol, item.event_time) for item in english_schedule] == [
+        ("SMH", datetime(2026, 6, 18, 9, 0, tzinfo=UTC)),
+        ("EWZ", datetime(2026, 6, 18, 9, 15, tzinfo=UTC)),
+        ("RIVN", datetime(2026, 6, 18, 9, 30, tzinfo=UTC)),
+    ]
+    assert [(item.symbol, item.event_time) for item in chinese_schedule] == [
+        ("SMH", datetime(2026, 6, 18, 9, 0, tzinfo=UTC)),
+        ("EWZ", datetime(2026, 6, 18, 9, 15, tzinfo=UTC)),
+    ]
 
 
 def test_announcement_alert_message_is_readable() -> None:
@@ -154,6 +188,49 @@ async def test_repository_deduplicates_and_filters_announcements() -> None:
         rows = await repo.list(limit=10)
         assert rows[0].alert_status == "sent"
         assert await repo.has_any() is True
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_repository_enriches_existing_announcement_metadata() -> None:
+    db = await connect_database(":memory:")
+    try:
+        await initialize_schema(db)
+        repo = AnnouncementRepository(db)
+        stale = announcement().model_copy(
+            update={
+                "event_time": None,
+                "summary": "listing: symbols=TEST; market=spot",
+                "event_reminder_status": "not_applicable",
+            }
+        )
+        enriched = stale.model_copy(
+            update={
+                "id": "same-announcement-new-metadata",
+                "event_time": BASE_TIME.replace(hour=9),
+                "event_schedule": [
+                    {"symbol": "TEST", "event_time": BASE_TIME.replace(hour=9)},
+                ],
+                "summary": "listing: symbols=TEST; market=spot; event_time=2026-05-30T09:00:00+00:00",
+                "event_reminder_status": "pending",
+            }
+        )
+
+        inserted = await repo.create_if_new(stale)
+        duplicate = await repo.create_if_new(enriched)
+
+        assert inserted == stale
+        assert duplicate is None
+        rows = await repo.list(exchange="okx", kind=AnnouncementKind.LISTING, limit=10)
+        assert len(rows) == 1
+        assert rows[0].id == stale.id
+        assert rows[0].event_time == BASE_TIME.replace(hour=9)
+        assert [(item.symbol, item.event_time) for item in rows[0].event_schedule] == [
+            ("TEST", BASE_TIME.replace(hour=9)),
+        ]
+        assert rows[0].summary == "listing: symbols=TEST; market=spot; event_time=2026-05-30T09:00:00+00:00"
+        assert rows[0].event_reminder_status == "pending"
     finally:
         await db.close()
 
@@ -319,6 +396,8 @@ async def test_monitor_records_but_mutes_unalerted_exchanges() -> None:
 
 def test_okx_provider_parses_listing_and_delisting_payloads() -> None:
     provider = OKXAnnouncementProvider(client=None)
+    futures_url = "https://www.okx.com/help/okx-to-list-perpetual-futures-for-smh-ewz-rivn-dkng-and-rddt-equities"
+    spot_url = "https://www.okx.com/help/okx-will-launch-re-usds-for-spot-trading"
     listing_payload = {
         "code": "0",
         "data": [
@@ -328,6 +407,18 @@ def test_okx_provider_parses_listing_and_delisting_payloads() -> None:
                         "title": "OKX to list TRUMP (OFFICIAL TRUMP) for spot trading",
                         "url": "https://www.okx.com/help/okx-to-list-trump-official-trump-for-spot-trading",
                         "pTime": "1737255602487",
+                        "annType": "announcements-new-listings",
+                    },
+                    {
+                        "title": "OKX to list perpetual futures for SMH, EWZ, RIVN, DKNG and RDDT equities",
+                        "url": futures_url,
+                        "pTime": "1781769600000",
+                        "annType": "announcements-new-listings",
+                    },
+                    {
+                        "title": "OKX will launch RE/USDⓈ for spot trading",
+                        "url": spot_url,
+                        "pTime": "1781748010000",
                         "annType": "announcements-new-listings",
                     }
                 ]
@@ -351,13 +442,44 @@ def test_okx_provider_parses_listing_and_delisting_payloads() -> None:
     }
 
     rows = [
-        *provider._parse_payload(listing_payload, "announcements-new-listings"),
+        *provider._parse_payload(
+            listing_payload,
+            "announcements-new-listings",
+            content_by_key={
+                futures_url: (
+                    "SMH/USDT perpetual futures trading will open at 09:00 UTC on June 18, 2026. "
+                    "EWZ/USDT perpetual futures trading will open at 09:15 UTC on June 18, 2026. "
+                    "RIVN/USDT perpetual futures trading will open at 09:30 UTC on June 18, 2026. "
+                    "DKNG/USDT perpetual futures trading will open at 09:45 UTC on June 18, 2026. "
+                    "RDDT/USDT perpetual futures trading will open at 10:00 UTC on June 18, 2026."
+                ),
+                spot_url: "OKX is introducing the following USDⓈ trading pairs in our spot trading at Jun 18, 2026 15:00 UTC: RE/USDⓈ.",
+            },
+        ),
         *provider._parse_payload(delisting_payload, "announcements-delistings"),
     ]
 
-    assert [row.exchange for row in rows] == ["okx", "okx"]
-    assert [row.kind for row in rows] == [AnnouncementKind.LISTING, AnnouncementKind.DELISTING]
+    assert [row.exchange for row in rows] == ["okx", "okx", "okx", "okx"]
+    assert [row.kind for row in rows] == [
+        AnnouncementKind.LISTING,
+        AnnouncementKind.LISTING,
+        AnnouncementKind.LISTING,
+        AnnouncementKind.DELISTING,
+    ]
     assert rows[0].published_at.isoformat() == "2025-01-19T03:00:02.487000+00:00"
+    assert rows[1].symbols == ["SMH", "EWZ", "RIVN", "DKNG", "RDDT"]
+    assert rows[1].market_type == "futures"
+    assert rows[1].event_time == datetime(2026, 6, 18, 9, 0, tzinfo=UTC)
+    assert [(item.symbol, item.event_time) for item in rows[1].event_schedule] == [
+        ("SMH", datetime(2026, 6, 18, 9, 0, tzinfo=UTC)),
+        ("EWZ", datetime(2026, 6, 18, 9, 15, tzinfo=UTC)),
+        ("RIVN", datetime(2026, 6, 18, 9, 30, tzinfo=UTC)),
+        ("DKNG", datetime(2026, 6, 18, 9, 45, tzinfo=UTC)),
+        ("RDDT", datetime(2026, 6, 18, 10, 0, tzinfo=UTC)),
+    ]
+    assert rows[2].symbols == ["RE/USD"]
+    assert rows[2].market_type == "spot"
+    assert rows[2].event_time == datetime(2026, 6, 18, 15, 0, tzinfo=UTC)
 
 
 def test_okx_provider_parses_latest_page_contract_announcements() -> None:
@@ -449,6 +571,38 @@ def test_binance_provider_parses_listing_and_delisting_catalogs() -> None:
     assert rows[0].market_type == "futures"
     assert rows[0].url == "https://www.binance.com/en/support/announcement/3bdaff694bde45ccb443709336c8686d"
     assert rows[0].published_at.isoformat() == "2026-05-29T07:00:06.968000+00:00"
+
+    generic = provider._announcement_from_row(
+        {
+            "id": 275490,
+            "code": "multi-tradfi",
+            "title": "Binance Futures Will Launch Multiple USDⓈ-Margined TradFi Perpetual Contracts",
+            "releaseDate": 1780038006968,
+        },
+        "48",
+        "New Cryptocurrency Listing",
+        content=(
+            "Binance Futures will launch LRCXUSDT Perpetual Contract, "
+            "KLACUSDT Perpetual Contract and ALABUSDT Perpetual Contract."
+        ),
+    )
+    assert generic is not None
+    assert generic.symbols == ["LRCXUSDT", "KLACUSDT", "ALABUSDT"]
+    assert generic.market_type == "futures"
+
+    delivery = provider._announcement_from_row(
+        {
+            "id": 275491,
+            "code": "delivery",
+            "title": "Binance Futures Will List USDⓈ-M & COIN-M Quarterly 1225 Delivery Contracts",
+            "releaseDate": 1780038006968,
+        },
+        "48",
+        "New Cryptocurrency Listing",
+        content="USDⓈ-M contracts: BTCUSDT ETHUSDT. COIN-M contracts: BTCUSD ETHUSD.",
+    )
+    assert delivery is not None
+    assert delivery.symbols == ["BTCUSDT", "ETHUSDT", "BTCUSD", "ETHUSD"]
 
 
 def test_bybit_provider_parses_announcement_payload() -> None:
@@ -545,6 +699,31 @@ def test_bitget_provider_parses_and_classifies_payload() -> None:
     assert [row.exchange for row in rows] == ["bitget", "bitget"]
     assert [row.kind for row in rows] == [AnnouncementKind.LISTING, AnnouncementKind.DELISTING]
     assert rows[0].category == "coin_listings:margin"
+
+    generic_payload = {
+        "data": [
+            {
+                "annId": "12560603886243",
+                "annTitle": "14 New Trading Pairs for Bitget Spot Margin Trading",
+                "annUrl": "https://www.bitget.com/en/support/articles/12560603886243",
+                "cTime": "1781937745000",
+                "annType": "coin_listings",
+                "annSubType": "margin",
+            }
+        ]
+    }
+    generic_rows = provider._parse_payload(
+        generic_payload,
+        "coin_listings",
+        content_by_key={
+            "12560603886243": (
+                "Bitget has launched isolated spot margin trading for RE/USDT, "
+                "UAI/USDT, PUMPBTC/USDT, AEVO/USDT, STABLE/USDT."
+            )
+        },
+    )
+    assert generic_rows[0].symbols == ["RE/USDT", "UAI/USDT", "PUMPBTC/USDT", "AEVO/USDT", "STABLE/USDT"]
+    assert generic_rows[0].market_type == "spot margin"
 
 
 def test_bitget_provider_tolerates_alternate_article_fields() -> None:

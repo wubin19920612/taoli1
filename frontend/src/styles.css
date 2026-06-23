@@ -381,6 +381,22 @@ body {
   word-break: break-word;
 }
 
+.announcement-schedule-list {
+  display: grid;
+  gap: 4px;
+}
+
+.announcement-schedule-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+}
+
+.announcement-schedule-item .ant-tag {
+  min-width: 64px;
+  text-align: center;
+}
 .funding-table .ant-table-cell {
   vertical-align: middle;
 }

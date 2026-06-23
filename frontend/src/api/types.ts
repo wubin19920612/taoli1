@@ -263,6 +263,12 @@ export interface IndexComponentSnapshotFilters {
   limit?: number;
 }
 
+export interface AnnouncementEventScheduleItem {
+  symbol: string;
+  event_time: string;
+  note?: string | null;
+}
+
 export interface ExchangeAnnouncement {
   id: string;
   exchange: string;
@@ -275,6 +281,7 @@ export interface ExchangeAnnouncement {
   symbols: string[];
   market_type?: string | null;
   event_time?: string | null;
+  event_schedule?: AnnouncementEventScheduleItem[];
   summary?: string | null;
   published_at: string;
   fetched_at: string;

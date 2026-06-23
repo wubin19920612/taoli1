@@ -178,7 +178,33 @@ function categoryLabel(row: ExchangeAnnouncement): string {
   return row.category || "未分类";
 }
 
+function eventSchedule(row: ExchangeAnnouncement) {
+  return row.event_schedule ?? [];
+}
+
+function eventScheduleTimeRange(row: ExchangeAnnouncement): { first: string; last: string; count: number } | null {
+  const schedule = eventSchedule(row);
+  if (schedule.length === 0) {
+    return null;
+  }
+  const sorted = [...schedule].sort((a, b) => dayjs.utc(a.event_time).valueOf() - dayjs.utc(b.event_time).valueOf());
+  return {
+    first: sorted[0].event_time,
+    last: sorted[sorted.length - 1].event_time,
+    count: sorted.length
+  };
+}
+
 function eventTimeText(row: ExchangeAnnouncement): string {
+  const range = eventScheduleTimeRange(row);
+  if (range && range.count > 1) {
+    const first = formatUtcPlus8(range.first);
+    const last = formatUtcPlus8(range.last);
+    return first === last ? `分批 ${first} UTC+8 (${range.count}项)` : `分批 ${first} - ${last} UTC+8 (${range.count}项)`;
+  }
+  if (range) {
+    return `${formatUtcPlus8(range.first)} UTC+8`;
+  }
   if (row.event_time) {
     return `${formatUtcPlus8(row.event_time)} UTC+8`;
   }
@@ -189,6 +215,24 @@ function eventTimeText(row: ExchangeAnnouncement): string {
     return "公告未给出具体下币时间";
   }
   return "公告未给出具体时间";
+}
+
+function eventScheduleList(row: ExchangeAnnouncement) {
+  const schedule = eventSchedule(row);
+  if (schedule.length === 0) {
+    return "-";
+  }
+  return (
+    <div className="announcement-schedule-list">
+      {schedule.map((item) => (
+        <div key={`${item.symbol}-${item.event_time}`} className="announcement-schedule-item">
+          <Tag color="purple">{item.symbol}</Tag>
+          <Typography.Text>{formatUtcPlus8(item.event_time)} UTC+8</Typography.Text>
+          {item.note ? <Typography.Text type="secondary">{item.note}</Typography.Text> : null}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function symbolTags(values?: string[]) {
@@ -216,7 +260,12 @@ function rowSummary(row: ExchangeAnnouncement): string {
     pieces.push(`市场 ${marketTypeText(row.market_type)}`);
   }
   if (row.event_time) {
-    pieces.push(`事件时间 ${formatUtcPlus8(row.event_time)} UTC+8`);
+    const range = eventScheduleTimeRange(row);
+    if (range && range.count > 1) {
+      pieces.push(`分批 ${formatUtcPlus8(range.first)} - ${formatUtcPlus8(range.last)} UTC+8`);
+    } else {
+      pieces.push(`事件时间 ${formatUtcPlus8(row.event_time)} UTC+8`);
+    }
   }
   if (pieces.length === 0) {
     return row.title;
@@ -270,6 +319,9 @@ function announcementDetails(row: ExchangeAnnouncement) {
         <Descriptions.Item label="类型">{kindTag(row.kind)}</Descriptions.Item>
         <Descriptions.Item label="公告时间">{formatUtcPlus8(row.published_at)} UTC+8</Descriptions.Item>
         <Descriptions.Item label="上/下币时间">{eventTimeText(row)}</Descriptions.Item>
+        {eventSchedule(row).length > 0 ? (
+          <Descriptions.Item label="逐项时间">{eventScheduleList(row)}</Descriptions.Item>
+        ) : null}
         <Descriptions.Item label="抓取时间">{formatUtcPlus8(row.fetched_at)} UTC+8</Descriptions.Item>
         <Descriptions.Item label="交易所">{row.exchange.toUpperCase()}</Descriptions.Item>
         <Descriptions.Item label="分类">{categoryLabel(row)}</Descriptions.Item>
