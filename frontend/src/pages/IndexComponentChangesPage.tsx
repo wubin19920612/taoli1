@@ -271,6 +271,7 @@ function referencedSnapshotForMarket(
         ...snapshot,
         exchange: market.exchange,
         symbol: market.symbol,
+        components,
         component_hash: "",
         source: snapshot.source
       },
@@ -295,6 +296,7 @@ function fallbackReferenceSnapshotForMarket(
       ...snapshot,
       exchange: market.exchange,
       symbol: market.symbol,
+      components: [],
       component_hash: "",
       source: snapshot.source
     },

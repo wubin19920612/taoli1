@@ -1,6 +1,4 @@
 import {
-  ArrowDownOutlined,
-  ArrowUpOutlined,
   AreaChartOutlined,
   EyeInvisibleOutlined,
   EyeOutlined,
@@ -52,47 +50,43 @@ function money(value: number | null | undefined): string {
   return value.toFixed(2);
 }
 
-const EXCHANGE_CODES: Record<string, string> = {
-  aster: "as",
-  binance: "bn",
-  bitget: "bg",
-  bybit: "bb",
-  gate: "gt",
-  htx: "ht",
-  hyperliquid: "hl",
-  okx: "ok"
+const EXCHANGE_LABELS: Record<string, string> = {
+  aster: "Aster",
+  binance: "Binance",
+  bitget: "Bitget",
+  bybit: "Bybit",
+  gate: "Gate",
+  htx: "HTX",
+  hyperliquid: "Hyper",
+  okx: "OKX"
 };
 
-function exchangeCode(exchange: string): string {
+function exchangeLabel(exchange: string): string {
   const normalized = exchange.trim().toLowerCase();
-  if (EXCHANGE_CODES[normalized]) {
-    return EXCHANGE_CODES[normalized];
+  if (EXCHANGE_LABELS[normalized]) {
+    return EXCHANGE_LABELS[normalized];
   }
-  const compact = normalized.replace(/[^a-z0-9]/g, "");
-  return compact ? compact.slice(0, 4) : exchange;
+  return exchange;
 }
 
 function leg(
   exchange: string,
   marketType: string,
-  side: "buy" | "sell",
   rawSymbol?: string | null,
   canonicalSymbol?: string
 ) {
-  const icon = side === "buy" ? <ArrowDownOutlined /> : <ArrowUpOutlined />;
-  const color = side === "buy" ? "green" : "red";
   const rawSuffix =
     rawSymbol && canonicalSymbol && normalizeSymbol(rawSymbol) !== normalizeSymbol(canonicalSymbol)
-      ? ` ${rawSymbol}`
+      ? rawSymbol
       : "";
-  const fullName = `${exchange} ${marketType}${rawSuffix}`;
+  const fullName = [exchange, marketType, rawSuffix].filter(Boolean).join(" ");
   return (
     <div className="leg-cell">
-      <Tag color={color} icon={icon} className="leg-tag">
-        {side.toUpperCase()}
-      </Tag>
       <Typography.Text className="leg-text" title={fullName}>
-        {exchangeCode(exchange)}
+        {exchangeLabel(exchange)}
+      </Typography.Text>
+      <Typography.Text className="leg-meta" title={fullName}>
+        {[marketType, rawSuffix].filter(Boolean).join(" ") || marketType}
       </Typography.Text>
     </div>
   );
@@ -257,14 +251,14 @@ function buildColumns(
       )
     },
     {
-      title: "Buy leg",
-      width: 88,
-      render: (_, row) => leg(row.buy_exchange, row.buy_market_type, "buy", row.buy_raw_symbol, row.symbol)
+      title: "买入交易所",
+      width: 104,
+      render: (_, row) => leg(row.buy_exchange, row.buy_market_type, row.buy_raw_symbol, row.symbol)
     },
     {
-      title: "Sell leg",
-      width: 88,
-      render: (_, row) => leg(row.sell_exchange, row.sell_market_type, "sell", row.sell_raw_symbol, row.symbol)
+      title: "卖出交易所",
+      width: 104,
+      render: (_, row) => leg(row.sell_exchange, row.sell_market_type, row.sell_raw_symbol, row.symbol)
     },
     {
       title: "Open spread",
@@ -343,7 +337,7 @@ export function OpportunityTable({
       loading={loading}
       rowKey="id"
       pagination={{ pageSize: 50, showSizeChanger: true }}
-      scroll={{ x: 1480 }}
+      scroll={{ x: 1512 }}
       size="small"
       tableLayout="fixed"
     />

@@ -110,6 +110,7 @@ export interface RiskSettings {
   max_open_spread_decay_pct: number;
   signal_validation_notional_usdt: number;
   orderbook_depth_safety_multiple: number;
+  orderbook_depth_band_pct: number;
   min_top_of_book_depth_usdt: number;
   signal_strategy_notes: string;
   ticker_collision_symbols: string[];

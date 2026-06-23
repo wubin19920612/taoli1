@@ -152,6 +152,7 @@ async def test_validator_blocks_when_multi_level_vwap_erases_edge() -> None:
             signal_validation_notional_usdt=1000,
             signal_slippage_buffer_pct=0.05,
             min_effective_open_pct=0.25,
+            orderbook_depth_band_pct=2.0,
             ticker_collision_symbols=[],
         ),
         card_settings=AstroCardSettings(max_trade_usdt=1000, max_notional=1000),
@@ -162,6 +163,49 @@ async def test_validator_blocks_when_multi_level_vwap_erases_edge() -> None:
     assert result.sell_vwap is not None
     assert result.executable_open_pct < 0.5
     assert "effective executable edge" in " ".join(result.blockers)
+
+
+@pytest.mark.asyncio
+async def test_validator_ignores_depth_outside_price_band() -> None:
+    buy_book = book(
+        "binance",
+        bids=[(99, 20)],
+        asks=[(100, 5), (100.2, 50)],
+    )
+    sell_book = book(
+        "okx",
+        bids=[(101, 5), (100.7, 50)],
+        asks=[(102, 20)],
+    )
+    validator = OrderBookDepthValidator(
+        [FakeAdapter("binance", buy_book), FakeAdapter("okx", sell_book)]
+    )
+
+    result = await validator.validate(
+        opportunity(),
+        risk_settings=RiskSettings(
+            signal_validation_notional_usdt=1000,
+            orderbook_depth_safety_multiple=2,
+            orderbook_depth_band_pct=0.1,
+            signal_slippage_buffer_pct=0.05,
+            min_effective_open_pct=0.1,
+            ticker_collision_symbols=[],
+        ),
+        card_settings=AstroCardSettings(max_trade_usdt=1000, max_notional=1000),
+    )
+
+    assert result.passed is False
+    assert result.price_band_pct == pytest.approx(0.1)
+    assert result.required_depth_usdt == pytest.approx(2000)
+    assert result.buy_depth_usdt == pytest.approx(500)
+    assert result.sell_depth_usdt == pytest.approx(505)
+    assert result.min_depth_usdt == pytest.approx(500)
+    assert result.buy_filled_usdt == pytest.approx(500)
+    assert result.sell_filled_usdt == pytest.approx(505)
+    assert "buy side 0.100% band depth 500.00/2000.00 USDT" in result.blockers
+    assert "sell side 0.100% band depth 505.00/2000.00 USDT" in result.blockers
+    assert "buy side fill within 0.100% band 500.00/1000.00 USDT" in result.blockers
+    assert "sell side fill within 0.100% band 505.00/1000.00 USDT" in result.blockers
 
 
 @pytest.mark.asyncio

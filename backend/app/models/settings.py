@@ -65,6 +65,7 @@ class RiskSettings(BaseModel):
     max_open_spread_decay_pct: float = Field(default=60.0, ge=0, le=100)
     signal_validation_notional_usdt: float = Field(default=1000, ge=0)
     orderbook_depth_safety_multiple: float = Field(default=2, ge=0)
+    orderbook_depth_band_pct: float = Field(default=0.1, ge=0)
     min_top_of_book_depth_usdt: float = Field(default=0, ge=0)
     signal_strategy_notes: str = ""
     ticker_collision_symbols: list[str] = Field(default_factory=lambda: ["AIUSDT", "UPUSDT", "LABUSDT"])

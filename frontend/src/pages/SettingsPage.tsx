@@ -101,6 +101,7 @@ const defaultRiskSettings: RiskSettings = {
   max_open_spread_decay_pct: 60,
   signal_validation_notional_usdt: 1000,
   orderbook_depth_safety_multiple: 2,
+  orderbook_depth_band_pct: 0.1,
   min_top_of_book_depth_usdt: 0,
   signal_strategy_notes: "",
   ticker_collision_symbols: ["AIUSDT", "UPUSDT", "LABUSDT"],
@@ -598,7 +599,8 @@ export function SettingsPage() {
               </Typography.Paragraph>
               <Typography.Paragraph type="secondary">
                 最小验证金额是盘口深度校验的底线，默认 1000 USDT；实际校验金额会取卡片仓位价值、手动填写仓位价值、
-                最小验证金额三者中的较大值。若盘口不足、成交后价差不够、或价差衰减太快，系统会跳过创建卡片。
+                最小验证金额三者中的较大值。深度按最优价附近的价格带累计，例如 0.1% 价格带内有多少挂单。
+                若价格带深度不足、成交后价差不够、或价差衰减太快，系统会跳过创建卡片。
               </Typography.Paragraph>
             </div>
             <Form.Item label="信号滑点缓冲百分比 (Signal slippage buffer pct)" name="signal_slippage_buffer_pct" rules={[{ required: true }]}>
@@ -616,7 +618,10 @@ export function SettingsPage() {
             <Form.Item label="盘口深度安全倍数 (Depth safety multiple)" name="orderbook_depth_safety_multiple" rules={[{ required: true }]}>
               <InputNumber min={0} step={0.5} className="wide-input" />
             </Form.Item>
-            <Form.Item label="最小顶档盘口深度 USDT (Minimum top-of-book depth USDT)" name="min_top_of_book_depth_usdt" rules={[{ required: true }]}>
+            <Form.Item label="开仓深度价格带 % (Order book depth band pct)" name="orderbook_depth_band_pct" rules={[{ required: true }]}>
+              <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
+            </Form.Item>
+            <Form.Item label="最小价格带深度 USDT (Minimum band depth USDT)" name="min_top_of_book_depth_usdt" rules={[{ required: true }]}>
               <InputNumber min={0} step={10} className="wide-input" />
             </Form.Item>
             <Form.Item

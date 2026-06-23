@@ -92,6 +92,12 @@ async def _effective_risk_settings(request: Request) -> RiskSettings:
 def _format_depth_validation_message(result: DepthValidationResult) -> str:
     details = "; ".join(result.blockers) if result.blockers else "depth validation failed"
     metrics: list[str] = [f"target {result.target_notional_usdt:.2f} USDT"]
+    if result.price_band_pct is not None:
+        metrics.append(f"band {result.price_band_pct:.3f}%")
+    if result.required_depth_usdt is not None:
+        metrics.append(f"required depth {result.required_depth_usdt:.2f} USDT")
+    if result.min_depth_usdt is not None:
+        metrics.append(f"min band depth {result.min_depth_usdt:.2f} USDT")
     if result.executable_open_pct is not None:
         metrics.append(f"executable open {result.executable_open_pct:.3f}%")
     if result.effective_executable_edge_pct is not None:

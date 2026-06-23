@@ -514,7 +514,7 @@ class BitgetIndexComponentProvider(ExchangeIndexComponentProvider):
         row = _first_row(payload)
         if row is None:
             return None
-        rows = row.get("components") or row.get("constituents")
+        rows = row.get("components") or row.get("constituents") or row.get("componentList")
         if not isinstance(rows, list):
             return None
         components: list[IndexComponent] = []
@@ -522,7 +522,7 @@ class BitgetIndexComponentProvider(ExchangeIndexComponentProvider):
             if not isinstance(item, dict):
                 continue
             source = item.get("exchange") or item.get("exch")
-            symbol = item.get("symbol") or item.get("quoteSymbol")
+            symbol = item.get("symbol") or item.get("quoteSymbol") or item.get("spotPair")
             if not source or not symbol:
                 continue
             components.append(
@@ -530,8 +530,28 @@ class BitgetIndexComponentProvider(ExchangeIndexComponentProvider):
                     source=str(source),
                     symbol=str(symbol),
                     weight=parse_float(item.get("weight") or item.get("wgt")),
-                    price=parse_float(item.get("price") or item.get("indexPrice") or item.get("px")),
-                    extra=_component_extra(item, {"exchange", "exch", "symbol", "quoteSymbol", "weight", "wgt", "price", "indexPrice", "px"}),
+                    price=parse_float(
+                        item.get("price")
+                        or item.get("indexPrice")
+                        or item.get("equivalentPrice")
+                        or item.get("px")
+                    ),
+                    extra=_component_extra(
+                        item,
+                        {
+                            "exchange",
+                            "exch",
+                            "symbol",
+                            "quoteSymbol",
+                            "spotPair",
+                            "weight",
+                            "wgt",
+                            "price",
+                            "indexPrice",
+                            "equivalentPrice",
+                            "px",
+                        },
+                    ),
                 )
             )
         if not components:

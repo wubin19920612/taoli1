@@ -179,6 +179,12 @@ def _latest_signal_validation_failure(
 def _format_order_book_validation_failure(result: DepthValidationResult) -> str:
     details = "; ".join(result.blockers) if result.blockers else "depth validation failed"
     metrics: list[str] = [f"target {result.target_notional_usdt:.2f} USDT"]
+    if result.price_band_pct is not None:
+        metrics.append(f"band {result.price_band_pct:.3f}%")
+    if result.required_depth_usdt is not None:
+        metrics.append(f"required depth {result.required_depth_usdt:.2f} USDT")
+    if result.min_depth_usdt is not None:
+        metrics.append(f"min band depth {result.min_depth_usdt:.2f} USDT")
     if result.executable_open_pct is not None:
         metrics.append(f"executable open {result.executable_open_pct:.3f}%")
     if result.effective_executable_edge_pct is not None:
@@ -555,16 +561,6 @@ def create_app(
                         )
                     )
                 )
-            if app_settings.funding_research_enabled:
-                tasks.append(
-                    asyncio.create_task(
-                        _run_funding_research_loop(
-                            app,
-                            app_settings.funding_poll_interval_seconds,
-                            stop_event,
-                        )
-                    )
-                )
             announcement_monitor = AnnouncementMonitor(
                 app.state.announcement_repo,
                 alert_sender=lambda message: _send_index_component_alert(app, message),
@@ -582,6 +578,16 @@ def create_app(
                     )
                 )
             )
+            if app_settings.funding_research_enabled:
+                tasks.append(
+                    asyncio.create_task(
+                        _run_funding_research_loop(
+                            app,
+                            app_settings.funding_poll_interval_seconds,
+                            stop_event,
+                        )
+                    )
+                )
         try:
             yield
         finally:

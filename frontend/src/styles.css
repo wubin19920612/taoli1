@@ -172,25 +172,27 @@ body {
 }
 
 .leg-cell {
-  display: flex;
-  align-items: center;
-  gap: 4px;
+  display: grid;
+  gap: 1px;
+  line-height: 1.25;
 }
 
-.leg-tag {
-  flex: 0 0 auto;
-  padding-inline: 4px;
-  margin-inline-end: 0;
-  font-size: 11px;
-  line-height: 18px;
-}
-
-.leg-text {
+.leg-text,
+.leg-meta {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.leg-text {
   font-weight: 600;
+  text-transform: uppercase;
+}
+
+.leg-meta {
+  color: #66736f;
+  font-size: 12px;
 }
 
 .funding-cell {
@@ -397,6 +399,7 @@ body {
   min-width: 64px;
   text-align: center;
 }
+
 .funding-table .ant-table-cell {
   vertical-align: middle;
 }

@@ -25,16 +25,51 @@ class OrderBookAdapter(Protocol):
 
 @dataclass(frozen=True)
 class FillResult:
+    depth_usdt: float
     filled_usdt: float
     base_size: float
     vwap: float | None
 
 
-def _fill_quote_notional(levels: list[OrderBookLevel], target_notional: float) -> FillResult:
+def _is_level_inside_band(
+    level: OrderBookLevel,
+    *,
+    side: str,
+    reference_price: float,
+    band_pct: float,
+) -> bool:
+    if band_pct < 0:
+        return False
+    if side == "ask":
+        return level.price <= reference_price * (1 + band_pct / 100) + EPSILON
+    return level.price >= reference_price * (1 - band_pct / 100) - EPSILON
+
+
+def _fill_quote_notional(
+    levels: list[OrderBookLevel],
+    target_notional: float,
+    *,
+    side: str,
+    band_pct: float,
+) -> FillResult:
+    if not levels:
+        return FillResult(depth_usdt=0.0, filled_usdt=0.0, base_size=0.0, vwap=None)
+    reference_price = levels[0].price
+    band_levels = [
+        level
+        for level in levels
+        if _is_level_inside_band(
+            level,
+            side=side,
+            reference_price=reference_price,
+            band_pct=band_pct,
+        )
+    ]
+    depth = sum(level.price * level.size for level in band_levels)
     remaining = target_notional
     filled = 0.0
     base_size = 0.0
-    for level in levels:
+    for level in band_levels:
         level_notional = level.price * level.size
         take_notional = min(level_notional, remaining)
         if take_notional <= 0:
@@ -45,8 +80,8 @@ def _fill_quote_notional(levels: list[OrderBookLevel], target_notional: float) -
         if remaining <= EPSILON:
             break
     if base_size <= 0:
-        return FillResult(filled_usdt=filled, base_size=base_size, vwap=None)
-    return FillResult(filled_usdt=filled, base_size=base_size, vwap=filled / base_size)
+        return FillResult(depth_usdt=depth, filled_usdt=filled, base_size=base_size, vwap=None)
+    return FillResult(depth_usdt=depth, filled_usdt=filled, base_size=base_size, vwap=filled / base_size)
 
 
 def _cost_pct(opportunity: Opportunity) -> float:
@@ -64,6 +99,18 @@ def _target_notional(
     if card_settings is not None:
         candidates.append(card_settings.max_trade_usdt)
     return max(candidates)
+
+
+def _required_depth_usdt(
+    risk_settings: RiskSettings,
+    card_settings: AstroCardSettings | None,
+    override_notional_usdt: float | None,
+) -> float:
+    return max(
+        risk_settings.min_top_of_book_depth_usdt,
+        _target_notional(risk_settings, card_settings, override_notional_usdt)
+        * risk_settings.orderbook_depth_safety_multiple,
+    )
 
 
 def _exception_message(exc: BaseException) -> str:
@@ -84,6 +131,8 @@ class OrderBookDepthValidator:
         override_notional_usdt: float | None = None,
     ) -> DepthValidationResult:
         target = _target_notional(risk_settings, card_settings, override_notional_usdt)
+        required_depth = _required_depth_usdt(risk_settings, card_settings, override_notional_usdt)
+        band_pct = risk_settings.orderbook_depth_band_pct
         blockers: list[str] = []
         warnings: list[str] = []
         buy_adapter = self.adapters.get(opportunity.buy_exchange.lower())
@@ -93,7 +142,14 @@ class OrderBookDepthValidator:
         if sell_adapter is None:
             blockers.append(f"order book adapter unavailable for {opportunity.sell_exchange}")
         if blockers:
-            return self._result(opportunity, target, blockers=blockers, warnings=warnings)
+            return self._result(
+                opportunity,
+                target,
+                required_depth,
+                band_pct,
+                blockers=blockers,
+                warnings=warnings,
+            )
 
         buy_book = None
         sell_book = None
@@ -124,21 +180,62 @@ class OrderBookDepthValidator:
                 f"{opportunity.sell_exchange} {opportunity.sell_market_type}: {_exception_message(exc)}"
             )
         if blockers:
-            return self._result(opportunity, target, blockers=blockers, warnings=warnings)
+            return self._result(
+                opportunity,
+                target,
+                required_depth,
+                band_pct,
+                blockers=blockers,
+                warnings=warnings,
+            )
 
         if buy_book is None:
             blockers.append(f"order book unavailable for {opportunity.buy_exchange} {opportunity.buy_market_type}")
         if sell_book is None:
             blockers.append(f"order book unavailable for {opportunity.sell_exchange} {opportunity.sell_market_type}")
         if blockers:
-            return self._result(opportunity, target, blockers=blockers, warnings=warnings)
+            return self._result(
+                opportunity,
+                target,
+                required_depth,
+                band_pct,
+                blockers=blockers,
+                warnings=warnings,
+            )
 
-        buy_fill = _fill_quote_notional(buy_book.asks, target)
-        sell_fill = _fill_quote_notional(sell_book.bids, target)
+        buy_fill = _fill_quote_notional(
+            buy_book.asks,
+            target,
+            side="ask",
+            band_pct=band_pct,
+        )
+        sell_fill = _fill_quote_notional(
+            sell_book.bids,
+            target,
+            side="bid",
+            band_pct=band_pct,
+        )
+        min_depth = min(buy_fill.depth_usdt, sell_fill.depth_usdt)
+        if required_depth > 0 and buy_fill.depth_usdt + EPSILON < required_depth:
+            blockers.append(
+                f"buy side {band_pct:.3f}% band depth "
+                f"{buy_fill.depth_usdt:.2f}/{required_depth:.2f} USDT"
+            )
+        if required_depth > 0 and sell_fill.depth_usdt + EPSILON < required_depth:
+            blockers.append(
+                f"sell side {band_pct:.3f}% band depth "
+                f"{sell_fill.depth_usdt:.2f}/{required_depth:.2f} USDT"
+            )
         if buy_fill.filled_usdt + EPSILON < target:
-            blockers.append(f"buy side depth filled {buy_fill.filled_usdt:.2f}/{target:.2f} USDT")
+            blockers.append(
+                f"buy side fill within {band_pct:.3f}% band "
+                f"{buy_fill.filled_usdt:.2f}/{target:.2f} USDT"
+            )
         if sell_fill.filled_usdt + EPSILON < target:
-            blockers.append(f"sell side depth filled {sell_fill.filled_usdt:.2f}/{target:.2f} USDT")
+            blockers.append(
+                f"sell side fill within {band_pct:.3f}% band "
+                f"{sell_fill.filled_usdt:.2f}/{target:.2f} USDT"
+            )
 
         executable_open = None
         effective_edge = None
@@ -161,6 +258,11 @@ class OrderBookDepthValidator:
         return DepthValidationResult(
             passed=not blockers,
             target_notional_usdt=target,
+            required_depth_usdt=required_depth,
+            price_band_pct=band_pct,
+            buy_depth_usdt=buy_fill.depth_usdt,
+            sell_depth_usdt=sell_fill.depth_usdt,
+            min_depth_usdt=min_depth,
             buy_filled_usdt=buy_fill.filled_usdt,
             sell_filled_usdt=sell_fill.filled_usdt,
             buy_vwap=buy_fill.vwap,
@@ -177,12 +279,19 @@ class OrderBookDepthValidator:
         self,
         opportunity: Opportunity,
         target: float,
+        required_depth: float,
+        band_pct: float,
         blockers: list[str],
         warnings: list[str],
     ) -> DepthValidationResult:
         return DepthValidationResult(
             passed=False,
             target_notional_usdt=target,
+            required_depth_usdt=required_depth,
+            price_band_pct=band_pct,
+            buy_depth_usdt=None,
+            sell_depth_usdt=None,
+            min_depth_usdt=None,
             buy_filled_usdt=0,
             sell_filled_usdt=0,
             buy_vwap=None,
