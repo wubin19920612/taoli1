@@ -11,3 +11,12 @@ frontend/dist/
 *.log
 *.tsbuildinfo
 *.tar.gz
+
+# Generated local market research artifacts
+/output/husdt_bn_bybit/
+/output/husdt_bn_bybit_168h/
+/output/*_spread_*.csv
+/output/*_spread_*.png
+/*_spread_*.csv
+/*_spread_*.png
+/script/analyze_husdt_bn_bybit.py
