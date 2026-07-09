@@ -983,4 +983,5 @@ export interface OpportunityFilters {
   include_risky?: boolean;
   hidden_risk_labels?: string[];
   min_volume_24h_k?: number;
+  limit?: number;
 }

@@ -7,12 +7,31 @@ import { riskLabelOptions } from "../constants/riskLabels";
 interface TopFiltersProps {
   filters: OpportunityFilters;
   loading: boolean;
+  autoRefresh: boolean;
+  refreshIntervalMs: number;
   onChange: (filters: OpportunityFilters) => void;
   onRefresh: () => void;
+  onAutoRefreshChange: (enabled: boolean) => void;
+  onRefreshIntervalChange: (intervalMs: number) => void;
 }
 
 const exchanges = ["binance", "okx", "bybit", "gate", "bitget", "htx", "aster", "hyperliquid"];
-export function TopFilters({ filters, loading, onChange, onRefresh }: TopFiltersProps) {
+const refreshIntervalOptions = [
+  { label: "15s", value: 15000 },
+  { label: "30s", value: 30000 },
+  { label: "60s", value: 60000 }
+];
+
+export function TopFilters({
+  filters,
+  loading,
+  autoRefresh,
+  refreshIntervalMs,
+  onChange,
+  onRefresh,
+  onAutoRefreshChange,
+  onRefreshIntervalChange
+}: TopFiltersProps) {
   const patch = (next: Partial<OpportunityFilters>) => onChange({ ...filters, ...next });
   return (
     <div className="toolbar">
@@ -80,6 +99,15 @@ export function TopFilters({ filters, loading, onChange, onRefresh }: TopFilters
           value={filters.min_volume_24h_k}
           onChange={(value) => patch({ min_volume_24h_k: value ?? undefined })}
         />
+        <InputNumber
+          className="limit-input"
+          min={20}
+          max={500}
+          step={10}
+          placeholder="Rows"
+          value={filters.limit}
+          onChange={(value) => patch({ limit: value ?? undefined })}
+        />
         <Select
           mode="multiple"
           allowClear
@@ -103,6 +131,19 @@ export function TopFilters({ filters, loading, onChange, onRefresh }: TopFilters
         </Space>
       </Space>
       <div className="toolbar-actions">
+        <Space size={8} wrap>
+          <Space size={6}>
+            <Switch checked={autoRefresh} onChange={onAutoRefreshChange} />
+            <span>Auto</span>
+          </Space>
+          <Select
+            className="refresh-interval-select"
+            disabled={!autoRefresh}
+            options={refreshIntervalOptions}
+            value={refreshIntervalMs}
+            onChange={onRefreshIntervalChange}
+          />
+        </Space>
         <Tooltip title="刷新">
           <Button icon={<ReloadOutlined />} loading={loading} onClick={onRefresh} />
         </Tooltip>

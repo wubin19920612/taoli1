@@ -128,7 +128,8 @@ function defaultDashboardFilters(): OpportunityFilters {
   return {
     include_risky: false,
     hidden_risk_labels: defaultHiddenRiskLabels,
-    exclude_types: []
+    exclude_types: [],
+    limit: 120
   };
 }
 
@@ -534,7 +535,13 @@ export function DashboardPage() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [historyHours, setHistoryHours] = useState(168);
-  const { opportunities, health, loading, error, refresh } = useRadarStore(filters, settingsLoaded);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [refreshIntervalMs, setRefreshIntervalMs] = useState(15000);
+  const { opportunities, health, loading, error, refresh } = useRadarStore(
+    filters,
+    settingsLoaded,
+    { autoRefresh, refreshIntervalMs }
+  );
   const errors = health?.exchange_errors ?? {};
   const exchangeStates = useMemo(
     () =>
@@ -609,7 +616,7 @@ export function DashboardPage() {
       };
       setRiskSettings(normalizedSaved);
       message.success(block ? `Blocked ${normalizedSymbol}` : `Unblocked ${normalizedSymbol}`);
-      await refresh();
+      await refresh({ force: true, showLoading: true });
     } catch (exc) {
       message.error(exc instanceof Error ? exc.message : String(exc));
     } finally {
@@ -721,7 +728,16 @@ export function DashboardPage() {
 
   return (
     <div className="page">
-      <TopFilters filters={filters} loading={loading} onChange={changeFilters} onRefresh={refresh} />
+      <TopFilters
+        filters={filters}
+        loading={loading}
+        autoRefresh={autoRefresh}
+        refreshIntervalMs={refreshIntervalMs}
+        onChange={changeFilters}
+        onRefresh={() => void refresh({ force: true, showLoading: true })}
+        onAutoRefreshChange={setAutoRefresh}
+        onRefreshIntervalChange={setRefreshIntervalMs}
+      />
       {blockedSymbols.length > 0 ? (
         <div className="blocked-strip">
           <Typography.Text className="blocked-strip-title">Blocked symbols</Typography.Text>

@@ -8,24 +8,50 @@ interface RadarState {
   health: HealthStatus | null;
   loading: boolean;
   error: string;
-  refresh: () => Promise<void>;
+  refresh: (options?: RefreshOptions) => Promise<void>;
 }
 
-export function useRadarStore(filters: OpportunityFilters, enabled = true): RadarState {
+interface RefreshOptions {
+  force?: boolean;
+  showLoading?: boolean;
+}
+
+interface RadarStoreOptions {
+  autoRefresh?: boolean;
+  refreshIntervalMs?: number;
+}
+
+export function useRadarStore(
+  filters: OpportunityFilters,
+  enabled = true,
+  options: RadarStoreOptions = {}
+): RadarState {
   const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
   const [health, setHealth] = useState<HealthStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const hasLoadedRef = useRef(false);
+  const inFlightRef = useRef(false);
   const requestIdRef = useRef(0);
-  const stableFilters = useMemo(() => filters, [JSON.stringify(filters)]);
+  const autoRefresh = options.autoRefresh ?? true;
+  const refreshIntervalMs = Math.max(options.refreshIntervalMs ?? 15000, 5000);
+  const filterKey = useMemo(() => JSON.stringify(filters), [filters]);
+  const stableFilters = useMemo(() => filters, [filterKey]);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (refreshOptions: RefreshOptions = {}) => {
     if (!enabled) {
+      return;
+    }
+    if (inFlightRef.current && !refreshOptions.force) {
       return;
     }
     const requestId = requestIdRef.current + 1;
     requestIdRef.current = requestId;
-    setLoading(true);
+    inFlightRef.current = true;
+    const showLoading = refreshOptions.showLoading ?? !hasLoadedRef.current;
+    if (showLoading) {
+      setLoading(true);
+    }
     setError("");
     try {
       const [nextHealth, rows] = await Promise.all([
@@ -37,6 +63,7 @@ export function useRadarStore(filters: OpportunityFilters, enabled = true): Rada
       }
       setHealth(nextHealth);
       setOpportunities(rows);
+      hasLoadedRef.current = true;
     } catch (exc) {
       if (requestId !== requestIdRef.current) {
         return;
@@ -44,6 +71,7 @@ export function useRadarStore(filters: OpportunityFilters, enabled = true): Rada
       setError(exc instanceof Error ? exc.message : String(exc));
     } finally {
       if (requestId === requestIdRef.current) {
+        inFlightRef.current = false;
         setLoading(false);
       }
     }
@@ -55,10 +83,22 @@ export function useRadarStore(filters: OpportunityFilters, enabled = true): Rada
       setLoading(false);
       return undefined;
     }
-    void refresh();
-    const timer = window.setInterval(() => void refresh(), 8000);
-    return () => window.clearInterval(timer);
-  }, [enabled, refresh]);
+    void refresh({ showLoading: !hasLoadedRef.current });
+    if (!autoRefresh) {
+      return undefined;
+    }
+    const refreshIfVisible = () => {
+      if (document.visibilityState !== "hidden") {
+        void refresh({ showLoading: false });
+      }
+    };
+    const timer = window.setInterval(refreshIfVisible, refreshIntervalMs);
+    document.addEventListener("visibilitychange", refreshIfVisible);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refreshIfVisible);
+    };
+  }, [autoRefresh, enabled, refresh, refreshIntervalMs]);
 
   return { opportunities, health, loading, error, refresh };
 }

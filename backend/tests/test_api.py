@@ -586,6 +586,24 @@ def test_opportunities_endpoint_returns_seeded_rows() -> None:
     assert response.json()[0]["symbol"] == "BTCUSDT"
 
 
+def test_opportunities_endpoint_applies_limit_after_filtering() -> None:
+    store = SnapshotStore()
+    store.set_opportunities(
+        [
+            make_opportunity().model_copy(update={"id": "one", "symbol": "ONEUSDT"}),
+            make_opportunity().model_copy(update={"id": "two", "symbol": "TWOUSDT"}),
+            make_opportunity().model_copy(update={"id": "three", "symbol": "THREEUSDT"}),
+        ]
+    )
+    app = create_app(snapshot_store=store)
+    client = TestClient(app)
+
+    response = client.get("/api/opportunities?limit=2")
+
+    assert response.status_code == 200
+    assert [item["symbol"] for item in response.json()] == ["ONEUSDT", "TWOUSDT"]
+
+
 def test_funding_arbitrage_preview_returns_independent_candidates() -> None:
     now = datetime.now(UTC)
     store = SnapshotStore()

@@ -18,6 +18,7 @@ frontend/dist/
 /output/husdt_bn_bybit_168h/
 /output/*_spread_*.csv
 /output/*_spread_*.png
+/output/*_funding_*_stats.csv
 /*_spread_*.csv
 /*_spread_*.png
 /script/analyze_husdt_bn_bybit.py
