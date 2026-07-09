@@ -604,6 +604,77 @@ def test_opportunities_endpoint_applies_limit_after_filtering() -> None:
     assert [item["symbol"] for item in response.json()] == ["ONEUSDT", "TWOUSDT"]
 
 
+def test_pair_monitor_endpoints_create_sample_and_read_history() -> None:
+    now = datetime.now(UTC)
+    store = SnapshotStore()
+    store.set_markets(
+        [
+            MarketSnapshot(
+                symbol="BTCUSDT",
+                base="BTC",
+                quote="USDT",
+                exchange="binance",
+                market_type=MarketType.FUTURE,
+                bid=99,
+                ask=101,
+                volume_24h_usdt=1_000_000,
+                funding_rate_pct=0.01,
+                mark_price=100,
+                index_price=100,
+                timestamp=now,
+                raw_symbol="BTCUSDT",
+            ),
+            MarketSnapshot(
+                symbol="BTCUSDT",
+                base="BTC",
+                quote="USDT",
+                exchange="okx",
+                market_type=MarketType.FUTURE,
+                bid=101,
+                ask=103,
+                volume_24h_usdt=1_000_000,
+                funding_rate_pct=0.03,
+                mark_price=102,
+                index_price=102,
+                timestamp=now,
+                raw_symbol="BTC-USDT-SWAP",
+            ),
+        ]
+    )
+    app = create_app(
+        snapshot_store=store,
+        settings=Settings(dashboard_password="secret", database_url="sqlite:///:memory:"),
+    )
+
+    with TestClient(app) as client:
+        create_response = client.post(
+            "/api/pair-monitor/rules",
+            headers={"X-Dashboard-Password": "secret"},
+            json={
+                "name": "BTC basis",
+                "leg1": {"exchange": "binance", "symbol": "BTCUSDT", "market_type": "future"},
+                "leg2": {"exchange": "okx", "symbol": "BTC-USDT-SWAP", "market_type": "future"},
+                "sample_interval_seconds": 60,
+                "retention_days": 3,
+            },
+        )
+        rule_id = create_response.json()["id"]
+        sample_response = client.post(
+            f"/api/pair-monitor/sample?rule_id={rule_id}",
+            headers={"X-Dashboard-Password": "secret"},
+        )
+        history_response = client.get(f"/api/pair-monitor/rules/{rule_id}/history?hours=24")
+
+    assert create_response.status_code == 200
+    assert sample_response.status_code == 200
+    assert sample_response.json()[0]["status"] == "recorded"
+    assert history_response.status_code == 200
+    payload = history_response.json()
+    assert payload["rule"]["name"] == "BTC basis"
+    assert payload["count"] == 1
+    assert payload["latest"]["spread_pct"] == 2
+
+
 def test_funding_arbitrage_preview_returns_independent_candidates() -> None:
     now = datetime.now(UTC)
     store = SnapshotStore()

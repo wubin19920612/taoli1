@@ -33,6 +33,9 @@ import type {
   IndexComponentWatchItem,
   OpportunityHistoryStats,
   OpportunityHistoryStatsQuery,
+  PairMonitorHistory,
+  PairMonitorRule,
+  PairMonitorSampleResult,
   LivePilotPreview,
   LivePilotSettings,
   MarketFilters,
@@ -528,6 +531,58 @@ export async function getOpportunityHistoryStats(
       throw new Error(await response.text());
     }
     return response.json() as Promise<OpportunityHistoryStats>;
+  });
+}
+
+export async function listPairMonitorRules(): Promise<PairMonitorRule[]> {
+  return fetchJson<PairMonitorRule[]>("/pair-monitor/rules");
+}
+
+export async function createPairMonitorRule(rule: PairMonitorRule): Promise<PairMonitorRule> {
+  return fetchJson<PairMonitorRule>("/pair-monitor/rules", {
+    method: "POST",
+    body: JSON.stringify(rule)
+  });
+}
+
+export async function updatePairMonitorRule(id: string, rule: PairMonitorRule): Promise<PairMonitorRule> {
+  return fetchJson<PairMonitorRule>(`/pair-monitor/rules/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(rule)
+  });
+}
+
+export async function deletePairMonitorRule(id: string): Promise<void> {
+  await fetchJson(`/pair-monitor/rules/${id}`, { method: "DELETE" });
+}
+
+export async function samplePairMonitors(ruleId?: string): Promise<PairMonitorSampleResult[]> {
+  const url = buildUrl("/pair-monitor/sample", { rule_id: ruleId });
+  return fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders()
+    },
+    body: JSON.stringify({})
+  }).then(async (response) => {
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    return response.json() as Promise<PairMonitorSampleResult[]>;
+  });
+}
+
+export async function getPairMonitorHistory(
+  ruleId: string,
+  query: { hours?: number; point_limit?: number } = {}
+): Promise<PairMonitorHistory> {
+  const url = buildUrl(`/pair-monitor/rules/${ruleId}/history`, query);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    return response.json() as Promise<PairMonitorHistory>;
   });
 }
 

@@ -3,6 +3,8 @@ export type OpportunityType = "SF" | "FF" | "SS";
 export type AlertSeverity = "info" | "warning" | "critical";
 export type PhonePriceAlertCondition = "above" | "below";
 export type PhonePriceAlertPriceField = "mark_price" | "index_price" | "mid_price" | "bid" | "ask";
+export type PairMonitorPriceField = "auto" | "mid_price" | "mark_price" | "index_price" | "bid" | "ask";
+export type PairMonitorSampleStatus = "recorded" | "skipped";
 export type AnnouncementKind = "listing" | "delisting" | "other";
 
 export interface Opportunity {
@@ -398,6 +400,73 @@ export interface OpportunityHistoryStatsQuery {
   type?: OpportunityType;
   hours?: number;
   point_limit?: number;
+}
+
+export interface PairMonitorLeg {
+  exchange: string;
+  symbol: string;
+  market_type: MarketType;
+  price_field: PairMonitorPriceField;
+}
+
+export interface PairMonitorRule {
+  id?: string;
+  name: string;
+  enabled: boolean;
+  leg1: PairMonitorLeg;
+  leg2: PairMonitorLeg;
+  sample_interval_seconds: number;
+  retention_days: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface PairMonitorPoint {
+  rule_id: string;
+  observed_at: string;
+  bucket_at: string;
+  leg1_price: number;
+  leg2_price: number;
+  spread_abs: number;
+  spread_pct: number;
+  leg1_funding_rate_pct: number | null;
+  leg2_funding_rate_pct: number | null;
+  leg1_funding_next_rate_pct: number | null;
+  leg2_funding_next_rate_pct: number | null;
+  leg1_funding_next_time: string | null;
+  leg2_funding_next_time: string | null;
+  leg1_volume_24h_usdt: number | null;
+  leg2_volume_24h_usdt: number | null;
+  leg1_price_field: PairMonitorPriceField;
+  leg2_price_field: PairMonitorPriceField;
+  leg1_market_timestamp: string | null;
+  leg2_market_timestamp: string | null;
+}
+
+export interface PairMonitorValueStats {
+  min: number | null;
+  max: number | null;
+  mean: number | null;
+  current: number | null;
+}
+
+export interface PairMonitorHistory {
+  rule: PairMonitorRule;
+  count: number;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+  latest: PairMonitorPoint | null;
+  spread_pct: PairMonitorValueStats;
+  leg1_funding_rate_pct: PairMonitorValueStats;
+  leg2_funding_rate_pct: PairMonitorValueStats;
+  points: PairMonitorPoint[];
+}
+
+export interface PairMonitorSampleResult {
+  rule_id: string;
+  status: PairMonitorSampleStatus;
+  reason: string | null;
+  point: PairMonitorPoint | null;
 }
 
 export interface AstroCardSettings {

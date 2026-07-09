@@ -20,6 +20,7 @@ from app.api import (
     routes_history,
     routes_index_components,
     routes_opportunities,
+    routes_pair_monitor,
     routes_phone_alerts,
     routes_settings,
     stream,
@@ -37,6 +38,7 @@ from app.db.repositories import (
     PhonePriceAlertRuleRepository,
     SettingsRepository,
 )
+from app.db.pair_monitor_repository import PairMonitorRepository
 from app.db.schema import initialize_schema
 from app.models.alert import AlertEvent
 from app.models.orderbook import DepthValidationResult
@@ -79,6 +81,7 @@ from app.services.live_pilot import (
     select_live_pilot_opportunities,
 )
 from app.services.orderbook_validator import OrderBookDepthValidator
+from app.services.pair_monitor import PairMonitorSampler
 from app.services.phone_price_alerts import PhonePriceAlertEngine, build_phone_price_alert_message
 from app.services.risk_labels import effective_open_edge_pct, known_volume_24h_usdt
 from app.services.snapshot_store import SnapshotStore
@@ -498,6 +501,32 @@ async def _run_funding_research_loop(
             continue
 
 
+async def _run_pair_monitor_loop(
+    app: FastAPI,
+    interval_seconds: float,
+    stop_event: asyncio.Event,
+) -> None:
+    while not stop_event.is_set():
+        try:
+            sampler: PairMonitorSampler | None = getattr(
+                app.state,
+                "pair_monitor_sampler",
+                None,
+            )
+            if sampler is not None:
+                markets = app.state.snapshot_store.get_markets()
+                results = await sampler.sample(markets)
+                recorded = sum(1 for result in results if result.point is not None)
+                if recorded:
+                    logger.info("pair monitor recorded samples=%s rules=%s", recorded, len(results))
+        except Exception:
+            logger.exception("pair monitor loop failed")
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
+        except TimeoutError:
+            continue
+
+
 def create_app(
     snapshot_store: SnapshotStore | None = None,
     settings: Settings | None = None,
@@ -520,6 +549,8 @@ def create_app(
         app.state.settings_repo = SettingsRepository(db)
         app.state.history_repo = OpportunityHistoryRepository(db)
         app.state.funding_research_repo = FundingResearchRepository(db)
+        app.state.pair_monitor_repo = PairMonitorRepository(db)
+        app.state.pair_monitor_sampler = PairMonitorSampler(app.state.pair_monitor_repo)
         app.state.index_component_repo = IndexComponentRepository(db)
         app.state.announcement_repo = AnnouncementRepository(db)
         tasks: list[asyncio.Task] = []
@@ -611,6 +642,15 @@ def create_app(
                     ),
                     name="funding-research-loop",
                 )
+            _start_background_task(
+                tasks,
+                _run_pair_monitor_loop(
+                    app,
+                    app_settings.pair_monitor_sample_seconds,
+                    stop_event,
+                ),
+                name="pair-monitor-loop",
+            )
         try:
             yield
         finally:
@@ -640,6 +680,8 @@ def create_app(
     app.state.market_collector = None
     app.state.orderbook_validator = None
     app.state.funding_research_repo = None
+    app.state.pair_monitor_repo = None
+    app.state.pair_monitor_sampler = None
     app.state.alert_engine = AlertEngine()
     app.state.phone_price_alert_engine = PhonePriceAlertEngine()
     app.state.astro_client = AstroSdkClient(
@@ -689,6 +731,7 @@ def create_app(
     app.include_router(routes_astro.router, prefix="/api")
     app.include_router(routes_opportunities.router, prefix="/api")
     app.include_router(routes_history.router, prefix="/api")
+    app.include_router(routes_pair_monitor.router, prefix="/api")
     app.include_router(routes_index_components.router, prefix="/api")
     app.include_router(routes_announcements.router, prefix="/api")
     app.include_router(routes_alerts.router, prefix="/api")

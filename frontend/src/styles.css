@@ -680,6 +680,163 @@ body {
   vertical-align: middle;
 }
 
+.pair-monitor-form-grid {
+  display: grid;
+  grid-template-columns: minmax(160px, 1.1fr) repeat(9, minmax(112px, 1fr));
+  gap: 0 10px;
+  align-items: end;
+}
+
+.pair-monitor-layout {
+  display: grid;
+  grid-template-columns: minmax(360px, 0.75fr) minmax(0, 1.6fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.pair-monitor-rules .ant-table-row {
+  cursor: pointer;
+}
+
+.pair-monitor-row-selected > td {
+  background: #ecfdf5 !important;
+}
+
+.pair-monitor-detail {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.pair-monitor-detail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.pair-monitor-detail-head .ant-typography {
+  margin: 0;
+}
+
+.pair-monitor-stats {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.pair-monitor-stats .ant-statistic {
+  min-width: 0;
+  padding: 8px 10px;
+  background: #f7faf9;
+  border: 1px solid #dce4e1;
+  border-radius: 6px;
+}
+
+.pair-monitor-stats .ant-statistic-title,
+.pair-monitor-stats .ant-statistic-content {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pair-monitor-chart-wrap {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pair-monitor-chart {
+  width: 100%;
+  height: auto;
+  background: #f7faf9;
+  border: 1px solid #dce4e1;
+  border-radius: 6px;
+}
+
+.pair-monitor-chart rect {
+  fill: #ffffff;
+  stroke: #dce4e1;
+}
+
+.pair-monitor-grid-line {
+  stroke: #e5ece9;
+  stroke-width: 1;
+}
+
+.pair-monitor-zero-line {
+  stroke: #94a3b8;
+  stroke-width: 1.1;
+  stroke-dasharray: 5 4;
+}
+
+.pair-monitor-line {
+  fill: none;
+  stroke-width: 2.25;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.pair-monitor-line-spread,
+.legend-spread {
+  color: #0f766e;
+  stroke: #0f766e;
+}
+
+.pair-monitor-line-funding-a,
+.legend-funding-a {
+  color: #2563eb;
+  stroke: #2563eb;
+}
+
+.pair-monitor-line-funding-b,
+.legend-funding-b {
+  color: #b45309;
+  stroke: #b45309;
+}
+
+.pair-monitor-axis-label {
+  fill: #66736f;
+  font-size: 11px;
+}
+
+.pair-monitor-legend {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  color: #66736f;
+  font-size: 12px;
+}
+
+.pair-monitor-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pair-monitor-legend span::before {
+  content: "";
+  width: 12px;
+  height: 2px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.pair-monitor-empty {
+  min-height: 300px;
+  display: grid;
+  place-items: center;
+  color: #66736f;
+  background: #f7faf9;
+  border: 1px dashed #dce4e1;
+  border-radius: 6px;
+}
+
+.pair-monitor-points .ant-table-cell {
+  vertical-align: middle;
+}
+
 .research-table .ant-table-row {
   cursor: pointer;
 }
@@ -1239,6 +1396,9 @@ body {
   .tradfi-metrics,
   .funding-settings-grid,
   .research-metrics,
+  .pair-monitor-form-grid,
+  .pair-monitor-layout,
+  .pair-monitor-stats,
   .research-grid,
   .research-backtest-grid,
   .research-backtest-stats,
