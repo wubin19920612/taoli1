@@ -17,6 +17,7 @@ interface TopFiltersProps {
 
 const exchanges = ["binance", "okx", "bybit", "gate", "bitget", "htx", "aster", "hyperliquid"];
 const refreshIntervalOptions = [
+  { label: "8s", value: 8000 },
   { label: "15s", value: 15000 },
   { label: "30s", value: 30000 },
   { label: "60s", value: 60000 }

@@ -536,7 +536,7 @@ export function DashboardPage() {
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [historyHours, setHistoryHours] = useState(168);
   const [autoRefresh, setAutoRefresh] = useState(true);
-  const [refreshIntervalMs, setRefreshIntervalMs] = useState(15000);
+  const [refreshIntervalMs, setRefreshIntervalMs] = useState(8000);
   const { opportunities, health, loading, error, refresh } = useRadarStore(
     filters,
     settingsLoaded,

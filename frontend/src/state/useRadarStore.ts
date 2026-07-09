@@ -34,7 +34,7 @@ export function useRadarStore(
   const inFlightRef = useRef(false);
   const requestIdRef = useRef(0);
   const autoRefresh = options.autoRefresh ?? true;
-  const refreshIntervalMs = Math.max(options.refreshIntervalMs ?? 15000, 5000);
+  const refreshIntervalMs = Math.max(options.refreshIntervalMs ?? 8000, 5000);
   const filterKey = useMemo(() => JSON.stringify(filters), [filters]);
   const stableFilters = useMemo(() => filters, [filterKey]);
 
