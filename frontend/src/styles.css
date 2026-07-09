@@ -682,7 +682,7 @@ body {
 
 .pair-monitor-form-grid {
   display: grid;
-  grid-template-columns: minmax(160px, 1.1fr) repeat(9, minmax(112px, 1fr));
+  grid-template-columns: minmax(180px, 1.2fr) repeat(4, minmax(128px, 1fr));
   gap: 0 10px;
   align-items: end;
 }

@@ -36,11 +36,9 @@ import {
   updatePairMonitorRule
 } from "../api/client";
 import type {
-  MarketType,
   PairMonitorHistory,
   PairMonitorLeg,
   PairMonitorPoint,
-  PairMonitorPriceField,
   PairMonitorRule
 } from "../api/types";
 
@@ -50,12 +48,8 @@ type PairMonitorFormValues = {
   name?: string;
   leg1_exchange: string;
   leg1_symbol: string;
-  leg1_market_type: MarketType;
-  leg1_price_field: PairMonitorPriceField;
   leg2_exchange: string;
   leg2_symbol: string;
-  leg2_market_type: MarketType;
-  leg2_price_field: PairMonitorPriceField;
   retention_days: number;
 };
 
@@ -63,30 +57,14 @@ const defaultFormValues: PairMonitorFormValues = {
   name: "",
   leg1_exchange: "binance",
   leg1_symbol: "BTCUSDT",
-  leg1_market_type: "future",
-  leg1_price_field: "auto",
   leg2_exchange: "okx",
   leg2_symbol: "BTCUSDT",
-  leg2_market_type: "future",
-  leg2_price_field: "auto",
   retention_days: 7
 };
 
 const exchangeOptions = ["binance", "okx", "bybit", "gate", "bitget", "htx", "aster", "hyperliquid"].map(
   (value) => ({ label: value, value })
 );
-const marketTypeOptions = [
-  { label: "future", value: "future" },
-  { label: "spot", value: "spot" }
-];
-const priceFieldOptions = [
-  { label: "Auto", value: "auto" },
-  { label: "Mid", value: "mid_price" },
-  { label: "Mark", value: "mark_price" },
-  { label: "Index", value: "index_price" },
-  { label: "Bid", value: "bid" },
-  { label: "Ask", value: "ask" }
-];
 const rangeOptions = [
   { label: "24h", value: 24 },
   { label: "3d", value: 72 },
@@ -123,7 +101,7 @@ function time(value: string | null | undefined): string {
 }
 
 function legLabel(leg: PairMonitorLeg): string {
-  return `${leg.exchange} ${leg.market_type} ${leg.symbol}`;
+  return `${leg.exchange} ${leg.symbol}`;
 }
 
 function ruleFromForm(values: PairMonitorFormValues): PairMonitorRule {
@@ -135,14 +113,14 @@ function ruleFromForm(values: PairMonitorFormValues): PairMonitorRule {
     leg1: {
       exchange: values.leg1_exchange,
       symbol: values.leg1_symbol,
-      market_type: values.leg1_market_type,
-      price_field: values.leg1_price_field
+      market_type: "future",
+      price_field: "auto"
     },
     leg2: {
       exchange: values.leg2_exchange,
       symbol: values.leg2_symbol,
-      market_type: values.leg2_market_type,
-      price_field: values.leg2_price_field
+      market_type: "future",
+      price_field: "auto"
     }
   };
 }
@@ -243,11 +221,6 @@ const pointColumns: ColumnsType<PairMonitorPoint> = [
     title: "资金费率",
     align: "right",
     render: (_, row) => `${signedPct(row.leg1_funding_rate_pct)} / ${signedPct(row.leg2_funding_rate_pct)}`
-  },
-  {
-    title: "价格源",
-    width: 126,
-    render: (_, row) => `${row.leg1_price_field} / ${row.leg2_price_field}`
   }
 ];
 
@@ -463,23 +436,11 @@ export function PairMonitorPage() {
             <Form.Item label="腿1标的" name="leg1_symbol" rules={[{ required: true }]}>
               <Input />
             </Form.Item>
-            <Form.Item label="腿1市场" name="leg1_market_type" rules={[{ required: true }]}>
-              <Select options={marketTypeOptions} />
-            </Form.Item>
-            <Form.Item label="腿1价格" name="leg1_price_field" rules={[{ required: true }]}>
-              <Select options={priceFieldOptions} />
-            </Form.Item>
             <Form.Item label="腿2交易所" name="leg2_exchange" rules={[{ required: true }]}>
               <Select options={exchangeOptions} showSearch />
             </Form.Item>
             <Form.Item label="腿2标的" name="leg2_symbol" rules={[{ required: true }]}>
               <Input />
-            </Form.Item>
-            <Form.Item label="腿2市场" name="leg2_market_type" rules={[{ required: true }]}>
-              <Select options={marketTypeOptions} />
-            </Form.Item>
-            <Form.Item label="腿2价格" name="leg2_price_field" rules={[{ required: true }]}>
-              <Select options={priceFieldOptions} />
             </Form.Item>
             <Form.Item label="保留天数" name="retention_days" rules={[{ required: true }]}>
               <InputNumber min={1} max={30} className="wide-input" />
