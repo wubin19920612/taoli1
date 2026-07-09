@@ -52,6 +52,13 @@ body {
   overflow: hidden;
 }
 
+.page-loading {
+  align-items: center;
+  display: flex;
+  justify-content: center;
+  min-height: 220px;
+}
+
 .page {
   display: flex;
   flex-direction: column;

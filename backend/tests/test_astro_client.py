@@ -157,6 +157,23 @@ def test_paths_normalize_admin_prefix_slashes() -> None:
 
 
 @pytest.mark.asyncio
+async def test_status_and_close_do_not_create_http_client() -> None:
+    client = AstroSdkClient(
+        AstroSdkConfig(
+            base_url="",
+            admin_prefix="",
+            api_key="",
+        )
+    )
+
+    status = client.status(dry_run_only=True)
+    await client.aclose()
+
+    assert status["configured"] is False
+    assert client._client is None
+
+
+@pytest.mark.asyncio
 async def test_list_pairs_wraps_http_errors() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, text="bad signature")

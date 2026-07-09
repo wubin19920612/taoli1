@@ -10,18 +10,15 @@ import {
   NodeIndexOutlined,
   SettingOutlined
 } from "@ant-design/icons";
-import { Layout, Menu, Space, Typography } from "antd";
-import { useState } from "react";
-
-import { AlertHistoryPage } from "../pages/AlertHistoryPage";
-import { AnnouncementsPage } from "../pages/AnnouncementsPage";
-import { DashboardPage } from "../pages/DashboardPage";
-import { FundingArbitragePage } from "../pages/FundingArbitragePage";
-import { FundingResearchPage } from "../pages/FundingResearchPage";
-import { GateTwapPage } from "../pages/GateTwapPage";
-import { IndexComponentChangesPage } from "../pages/IndexComponentChangesPage";
-import { SettingsPage } from "../pages/SettingsPage";
-import { TradfiPerpMonitorPage } from "../pages/TradfiPerpMonitorPage";
+import { Layout, Menu, Space, Spin, Typography } from "antd";
+import {
+  lazy,
+  Suspense,
+  useMemo,
+  useState,
+  type ComponentType,
+  type LazyExoticComponent
+} from "react";
 
 type PageKey =
   | "dashboard"
@@ -34,8 +31,52 @@ type PageKey =
   | "settings"
   | "history";
 
+type LazyPage = LazyExoticComponent<ComponentType>;
+
+const lazyPages: Record<PageKey, LazyPage> = {
+  dashboard: lazy(() =>
+    import("../pages/DashboardPage").then((module) => ({ default: module.DashboardPage }))
+  ),
+  funding: lazy(() =>
+    import("../pages/FundingArbitragePage").then((module) => ({
+      default: module.FundingArbitragePage
+    }))
+  ),
+  "funding-research": lazy(() =>
+    import("../pages/FundingResearchPage").then((module) => ({
+      default: module.FundingResearchPage
+    }))
+  ),
+  "tradfi-perp": lazy(() =>
+    import("../pages/TradfiPerpMonitorPage").then((module) => ({
+      default: module.TradfiPerpMonitorPage
+    }))
+  ),
+  "gate-twap": lazy(() =>
+    import("../pages/GateTwapPage").then((module) => ({ default: module.GateTwapPage }))
+  ),
+  "index-components": lazy(() =>
+    import("../pages/IndexComponentChangesPage").then((module) => ({
+      default: module.IndexComponentChangesPage
+    }))
+  ),
+  announcements: lazy(() =>
+    import("../pages/AnnouncementsPage").then((module) => ({
+      default: module.AnnouncementsPage
+    }))
+  ),
+  settings: lazy(() =>
+    import("../pages/SettingsPage").then((module) => ({ default: module.SettingsPage }))
+  ),
+  history: lazy(() =>
+    import("../pages/AlertHistoryPage").then((module) => ({ default: module.AlertHistoryPage }))
+  )
+};
+
 export function AppShell() {
   const [page, setPage] = useState<PageKey>("dashboard");
+  const CurrentPage = useMemo(() => lazyPages[page], [page]);
+
   return (
     <Layout className="app-shell">
       <Layout.Sider breakpoint="lg" collapsedWidth={0} width={216} className="app-sider">
@@ -92,15 +133,15 @@ export function AppShell() {
           <Typography.Title level={3}>CEX 套利雷达</Typography.Title>
         </Layout.Header>
         <Layout.Content className="app-content">
-          {page === "dashboard" ? <DashboardPage /> : null}
-          {page === "funding" ? <FundingArbitragePage /> : null}
-          {page === "funding-research" ? <FundingResearchPage /> : null}
-          {page === "tradfi-perp" ? <TradfiPerpMonitorPage /> : null}
-          {page === "gate-twap" ? <GateTwapPage /> : null}
-          {page === "index-components" ? <IndexComponentChangesPage /> : null}
-          {page === "announcements" ? <AnnouncementsPage /> : null}
-          {page === "settings" ? <SettingsPage /> : null}
-          {page === "history" ? <AlertHistoryPage /> : null}
+          <Suspense
+            fallback={
+              <div className="page-loading">
+                <Spin />
+              </div>
+            }
+          >
+            <CurrentPage />
+          </Suspense>
         </Layout.Content>
       </Layout>
     </Layout>

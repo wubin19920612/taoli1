@@ -276,6 +276,7 @@ export async function runFundingResearch(params: {
 
 export async function listFundingResearchCandidates(params: {
   symbol?: string;
+  opportunity_type?: string;
   limit?: number;
 } = {}): Promise<FundingResearchCandidate[]> {
   const url = buildUrl("/funding-research/candidates", params);
@@ -304,6 +305,7 @@ export async function listFundingResearchCandidateSnapshots(params: {
 
 export async function listFundingResearchPaperTrades(params: {
   status?: string;
+  opportunity_type?: string;
   limit?: number;
 } = {}): Promise<FundingResearchPaperTrade[]> {
   const url = buildUrl("/funding-research/paper-trades", params);
@@ -315,10 +317,51 @@ export async function listFundingResearchPaperTrades(params: {
   });
 }
 
+export async function openFundingResearchPaperTrade(
+  candidateId: string
+): Promise<FundingResearchPaperTrade> {
+  return fetchJson<FundingResearchPaperTrade>(`/funding-research/paper-trades/open/${candidateId}`, {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+}
+
+export async function closeFundingResearchPaperTrade(
+  tradeId: string,
+  exitReason = "manual"
+): Promise<FundingResearchPaperTrade> {
+  const url = buildUrl(`/funding-research/paper-trades/${tradeId}/close`, {
+    exit_reason: exitReason
+  });
+  return fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders()
+    },
+    body: JSON.stringify({})
+  }).then(async (response) => {
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    return response.json() as Promise<FundingResearchPaperTrade>;
+  });
+}
+
 export async function getFundingResearchPaperTradeSummary(
-  limit = 1000
+  limit = 1000,
+  opportunityType?: string
 ): Promise<FundingResearchPaperTradeSummary> {
-  return fetchJson<FundingResearchPaperTradeSummary>(`/funding-research/paper-trades/summary?limit=${limit}`);
+  const url = buildUrl("/funding-research/paper-trades/summary", {
+    limit,
+    opportunity_type: opportunityType
+  });
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    return response.json() as Promise<FundingResearchPaperTradeSummary>;
+  });
 }
 
 export async function getFundingResearchLegacyBacktest(

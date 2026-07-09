@@ -44,13 +44,21 @@ class AstroSdkConfig:
 class AstroSdkClient:
     def __init__(self, config: AstroSdkConfig, client: httpx.AsyncClient | None = None):
         self.config = config
-        self.client = client or httpx.AsyncClient(
-            timeout=config.timeout_seconds,
-            verify=config.verify_tls,
-        )
+        self._client = client
+        self._owns_client = client is None
+
+    @property
+    def client(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                timeout=self.config.timeout_seconds,
+                verify=self.config.verify_tls,
+            )
+        return self._client
 
     async def aclose(self) -> None:
-        await self.client.aclose()
+        if self._client is not None and self._owns_client:
+            await self._client.aclose()
 
     def status(self, dry_run_only: bool) -> dict[str, Any]:
         return {

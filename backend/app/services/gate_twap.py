@@ -110,16 +110,25 @@ class GateTwapClient:
     ):
         self.credentials = credentials or GateCredentials.from_env()
         self.base_url = base_url.rstrip("/")
-        self._own_client = client is None
-        self.client = client or httpx.AsyncClient(timeout=httpx.Timeout(10.0), follow_redirects=True)
+        self._client = client
+        self._owns_client = client is None
 
     @property
     def has_credentials(self) -> bool:
         return self.credentials.available
 
     async def aclose(self) -> None:
-        if self._own_client:
-            await self.client.aclose()
+        if self._client is not None and self._owns_client:
+            await self._client.aclose()
+
+    @property
+    def client(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                timeout=httpx.Timeout(10.0),
+                follow_redirects=True,
+            )
+        return self._client
 
     @property
     def sign_prefix(self) -> str:

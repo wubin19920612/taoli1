@@ -147,6 +147,15 @@ def test_build_payload_can_use_prebuilt_alert_text() -> None:
     )
 
 
+@pytest.mark.asyncio
+async def test_notifier_does_not_create_http_client_when_webhook_is_disabled() -> None:
+    notifier = FeishuNotifier(FeishuConfig(webhook_url=""))
+
+    await notifier.send_text("skip")
+
+    assert notifier._client is None
+
+
 def test_alert_message_falls_back_to_current_cycle_when_next_funding_is_missing() -> None:
     rule = AlertRule(name="interval adjusted")
     opportunity = make_opportunity().model_copy(

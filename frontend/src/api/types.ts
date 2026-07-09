@@ -546,6 +546,13 @@ export interface FundingArbitrageSettings {
   leverage: number;
   notional_per_symbol_usdt: number;
   prefer_hyperliquid: boolean;
+  strong_funding_pct: number;
+  near_settlement_minutes: number;
+  small_basis_threshold_pct: number;
+  interval_mismatch_min_hours: number;
+  formula_divergence_min_funding_pct: number;
+  conflicted_basis_min_check_pct: number;
+  min_conflicted_reward_risk_ratio: number;
 }
 
 export interface FundingArbitrageCandidate {
@@ -580,13 +587,19 @@ export interface FundingArbitrageCandidate {
   confidence_penalty_pct: number;
   adl_risk_penalty_pct: number;
   expected_cycle_pnl_pct: number;
+  adverse_entry_basis_pct: number;
+  conflicted_reward_risk_ratio: number | null;
   adl_risk_score: number;
   adl_risk_level: AdlRiskLevel;
   decision: FundingArbitrageDecision;
   decision_reasons: string[];
   risk_labels: string[];
+  primary_opportunity_type: FundingOpportunityType;
+  opportunity_types: FundingOpportunityType[];
+  opportunity_reasons: string[];
   volume_24h_usdt: number | null;
   depth_usdt: number | null;
+  uses_gate: boolean;
   uses_hyperliquid: boolean;
 }
 
@@ -674,6 +687,14 @@ export interface TradfiPerpMonitorPreview {
 
 export type FundingResearchDecision = "TRADE" | "SMALL_TRADE" | "WATCH" | "NO_TRADE";
 export type FundingResearchBasisAlignment = "aligned" | "neutral" | "conflicted";
+export type FundingOpportunityType =
+  | "BASIS_AND_FUNDING_ALIGNED"
+  | "STRONG_FUNDING_NEAR_SETTLEMENT"
+  | "INTERVAL_MISMATCH"
+  | "FORMULA_DIVERGENCE"
+  | "BASIS_CARRY_CONFLICTED"
+  | "BASIS_MEAN_REVERSION"
+  | "PURE_FUNDING_SPREAD";
 export type FundingResearchFormulaConfidence =
   | "formula"
   | "predicted"
@@ -696,16 +717,25 @@ export interface FundingResearchDepthStats {
 }
 
 export interface FundingResearchCandidate {
+  id: string;
   symbol: string;
   long_exchange: string;
   short_exchange: string;
+  long_formula_family: string;
+  short_formula_family: string;
   long_funding_pct: number | null;
   short_funding_pct: number | null;
+  long_funding_interval_hours: number | null;
+  short_funding_interval_hours: number | null;
+  long_next_settlement_time: string | null;
+  short_next_settlement_time: string | null;
   expected_net_funding_pct: number | null;
   expected_basis_change_pct: number;
   estimated_cost_pct: number;
   risk_buffer_pct: number;
   ev_pct: number | null;
+  adverse_basis_pct: number;
+  conflicted_reward_risk_ratio: number | null;
   score: number;
   decision: FundingResearchDecision;
   basis_alignment: FundingResearchBasisAlignment;
@@ -716,6 +746,11 @@ export interface FundingResearchCandidate {
   next_settlement_time: string | null;
   minutes_to_settlement: number | null;
   funding_source: FundingResearchFormulaConfidence;
+  primary_opportunity_type: FundingOpportunityType;
+  opportunity_types: FundingOpportunityType[];
+  opportunity_reasons: string[];
+  uses_gate: boolean;
+  uses_hyperliquid: boolean;
   depth_stats: FundingResearchDepthStats | null;
   risk_labels: string[];
   reasons: string[];
@@ -743,14 +778,19 @@ export interface FundingResearchPaperTrade {
   symbol: string;
   long_exchange: string;
   short_exchange: string;
+  primary_opportunity_type: FundingOpportunityType;
+  opportunity_types: FundingOpportunityType[];
   opened_at: string;
   closed_at: string | null;
+  last_observed_at: string | null;
   open_long_basis_pct: number | null;
   open_short_basis_pct: number | null;
   open_basis_diff_pct: number | null;
   close_long_basis_pct: number | null;
   close_short_basis_pct: number | null;
   close_basis_diff_pct: number | null;
+  unrealized_basis_change_pct: number | null;
+  unrealized_pnl_pct: number | null;
   expected_net_funding_pct: number | null;
   expected_basis_change_pct: number;
   expected_ev_pct: number | null;
@@ -763,6 +803,17 @@ export interface FundingResearchPaperTrade {
   max_adverse_ev_pct: number | null;
   exit_reason: string | null;
   source_candidate: FundingResearchCandidate;
+}
+
+export interface FundingResearchOpportunityTypeSummary {
+  opportunity_type: FundingOpportunityType;
+  total_trades: number;
+  closed_trades: number;
+  winners: number;
+  losers: number;
+  win_rate_pct: number | null;
+  total_realized_pnl_pct: number;
+  average_realized_pnl_pct: number | null;
 }
 
 export interface FundingResearchPaperTradeSummary {
@@ -780,6 +831,7 @@ export interface FundingResearchPaperTradeSummary {
   max_win_pct: number | null;
   max_loss_pct: number | null;
   average_score: number | null;
+  by_opportunity_type: FundingResearchOpportunityTypeSummary[];
 }
 
 export interface FundingResearchLegacyBacktestSummary {

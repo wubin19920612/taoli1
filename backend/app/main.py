@@ -209,6 +209,29 @@ def _exception_message(exc: BaseException) -> str:
     return text if text else exc.__class__.__name__
 
 
+async def _close_state_resources(app: FastAPI, *names: str) -> None:
+    for name in names:
+        resource = getattr(app.state, name, None)
+        if resource is None:
+            continue
+        close = getattr(resource, "aclose", None)
+        if close is None:
+            continue
+        try:
+            await close()
+        except Exception:  # noqa: BLE001 - close every resource during shutdown.
+            logger.exception("failed to close app state resource %s", name)
+
+
+def _start_background_task(
+    tasks: list[asyncio.Task],
+    coroutine,
+    *,
+    name: str,
+) -> None:
+    tasks.append(asyncio.create_task(coroutine, name=name))
+
+
 async def _order_book_validation_failure(
     app: FastAPI,
     opportunity,
@@ -541,25 +564,25 @@ def create_app(
             )
             app.state.market_collector = collector
             app.state.orderbook_validator = OrderBookDepthValidator(exchange_adapters)
-            tasks.append(
-                asyncio.create_task(
-                    run_collector_loop(collector, app_settings.poll_interval_seconds, stop_event)
-                )
+            _start_background_task(
+                tasks,
+                run_collector_loop(collector, app_settings.poll_interval_seconds, stop_event),
+                name="market-collector",
             )
-            tasks.append(
-                asyncio.create_task(
-                    _run_alert_loop(app, app_settings.poll_interval_seconds, stop_event)
-                )
+            _start_background_task(
+                tasks,
+                _run_alert_loop(app, app_settings.poll_interval_seconds, stop_event),
+                name="alert-loop",
             )
             if app_settings.feishu_phone_enabled:
-                tasks.append(
-                    asyncio.create_task(
-                        _run_phone_price_alert_loop(
-                            app,
-                            app_settings.poll_interval_seconds,
-                            stop_event,
-                        )
-                    )
+                _start_background_task(
+                    tasks,
+                    _run_phone_price_alert_loop(
+                        app,
+                        app_settings.poll_interval_seconds,
+                        stop_event,
+                    ),
+                    name="phone-price-alert-loop",
                 )
             announcement_monitor = AnnouncementMonitor(
                 app.state.announcement_repo,
@@ -568,25 +591,25 @@ def create_app(
             announcement_provider = default_announcement_provider(app.state.announcement_repo)
             app.state.announcement_monitor = announcement_monitor
             app.state.announcement_provider = announcement_provider
-            tasks.append(
-                asyncio.create_task(
-                    run_announcement_loop(
-                        announcement_provider,
-                        announcement_monitor,
-                        app.state.settings_repo.get_announcement_settings,
-                        stop_event,
-                    )
-                )
+            _start_background_task(
+                tasks,
+                run_announcement_loop(
+                    announcement_provider,
+                    announcement_monitor,
+                    app.state.settings_repo.get_announcement_settings,
+                    stop_event,
+                ),
+                name="announcement-loop",
             )
             if app_settings.funding_research_enabled:
-                tasks.append(
-                    asyncio.create_task(
-                        _run_funding_research_loop(
-                            app,
-                            app_settings.funding_poll_interval_seconds,
-                            stop_event,
-                        )
-                    )
+                _start_background_task(
+                    tasks,
+                    _run_funding_research_loop(
+                        app,
+                        app_settings.funding_poll_interval_seconds,
+                        stop_event,
+                    ),
+                    name="funding-research-loop",
                 )
         try:
             yield
@@ -601,21 +624,14 @@ def create_app(
                 await collector.close()
             if announcement_provider is not None:
                 await announcement_provider.aclose()
-            astro_client = getattr(app.state, "astro_client", None)
-            if astro_client is not None:
-                await astro_client.aclose()
-            service_controller = getattr(app.state, "service_controller", None)
-            if service_controller is not None:
-                close = getattr(service_controller, "aclose", None)
-                if close is not None:
-                    await close()
-            gate_twap_manager = getattr(app.state, "gate_twap_manager", None)
-            if gate_twap_manager is not None:
-                await gate_twap_manager.aclose()
-            tradfi_perp_live_fetcher = getattr(app.state, "tradfi_perp_live_fetcher", None)
-            if tradfi_perp_live_fetcher is not None:
-                await tradfi_perp_live_fetcher.aclose()
-            await app.state.feishu_notifier.client.aclose()
+            await _close_state_resources(
+                app,
+                "astro_client",
+                "service_controller",
+                "gate_twap_manager",
+                "tradfi_perp_live_fetcher",
+                "feishu_notifier",
+            )
             await db.close()
 
     app = FastAPI(title=app_settings.app_name, lifespan=lifespan)
