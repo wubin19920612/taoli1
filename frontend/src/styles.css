@@ -682,7 +682,7 @@ body {
 
 .pair-monitor-form-grid {
   display: grid;
-  grid-template-columns: minmax(180px, 1.2fr) repeat(4, minmax(128px, 1fr));
+  grid-template-columns: repeat(4, minmax(148px, 1fr));
   gap: 0 10px;
   align-items: end;
 }
@@ -796,6 +796,20 @@ body {
   stroke: #b45309;
 }
 
+.pair-monitor-funding-marker {
+  stroke-width: 1;
+  stroke-dasharray: 3 4;
+  opacity: 0.62;
+}
+
+.pair-monitor-funding-a {
+  stroke: #2563eb;
+}
+
+.pair-monitor-funding-b {
+  stroke: #b45309;
+}
+
 .pair-monitor-axis-label {
   fill: #66736f;
   font-size: 11px;
@@ -835,6 +849,22 @@ body {
 
 .pair-monitor-points .ant-table-cell {
   vertical-align: middle;
+}
+
+.pair-monitor-current-strip {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.pair-monitor-tables {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(360px, 0.85fr);
+  gap: 12px;
+  align-items: start;
+  min-width: 0;
 }
 
 .research-table .ant-table-row {
@@ -1399,6 +1429,7 @@ body {
   .pair-monitor-form-grid,
   .pair-monitor-layout,
   .pair-monitor-stats,
+  .pair-monitor-tables,
   .research-grid,
   .research-backtest-grid,
   .research-backtest-stats,

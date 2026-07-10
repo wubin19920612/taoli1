@@ -3,8 +3,7 @@ export type OpportunityType = "SF" | "FF" | "SS";
 export type AlertSeverity = "info" | "warning" | "critical";
 export type PhonePriceAlertCondition = "above" | "below";
 export type PhonePriceAlertPriceField = "mark_price" | "index_price" | "mid_price" | "bid" | "ask";
-export type PairMonitorPriceField = "auto" | "mid_price" | "mark_price" | "index_price" | "bid" | "ask";
-export type PairMonitorSampleStatus = "recorded" | "skipped";
+export type PairSpreadPriceField = "mark_price" | "mid_price" | "index_price" | "last_price";
 export type AnnouncementKind = "listing" | "delisting" | "other";
 
 export interface Opportunity {
@@ -402,71 +401,71 @@ export interface OpportunityHistoryStatsQuery {
   point_limit?: number;
 }
 
-export interface PairMonitorLeg {
+export interface PairSpreadLegQuery {
   exchange: string;
   symbol: string;
-  market_type: MarketType;
-  price_field: PairMonitorPriceField;
 }
 
-export interface PairMonitorRule {
-  id?: string;
-  name: string;
-  enabled: boolean;
-  leg1: PairMonitorLeg;
-  leg2: PairMonitorLeg;
-  sample_interval_seconds: number;
-  retention_days: number;
-  created_at?: string;
-  updated_at?: string;
-}
-
-export interface PairMonitorPoint {
-  rule_id: string;
-  observed_at: string;
+export interface PairSpreadPoint {
   bucket_at: string;
-  leg1_price: number;
-  leg2_price: number;
+  leg1_close: number;
+  leg2_close: number;
   spread_abs: number;
   spread_pct: number;
-  leg1_funding_rate_pct: number | null;
-  leg2_funding_rate_pct: number | null;
-  leg1_funding_next_rate_pct: number | null;
-  leg2_funding_next_rate_pct: number | null;
-  leg1_funding_next_time: string | null;
-  leg2_funding_next_time: string | null;
-  leg1_volume_24h_usdt: number | null;
-  leg2_volume_24h_usdt: number | null;
-  leg1_price_field: PairMonitorPriceField;
-  leg2_price_field: PairMonitorPriceField;
-  leg1_market_timestamp: string | null;
-  leg2_market_timestamp: string | null;
 }
 
-export interface PairMonitorValueStats {
+export interface PairSpreadFundingPoint {
+  exchange: string;
+  symbol: string;
+  funding_time: string;
+  funding_rate_pct: number;
+}
+
+export interface PairSpreadCurrentLeg {
+  exchange: string;
+  symbol: string;
+  raw_symbol: string;
+  price: number;
+  price_field: PairSpreadPriceField;
+  mark_price: number | null;
+  index_price: number | null;
+  mid_price: number | null;
+  last_price: number | null;
+  funding_rate_pct: number | null;
+  funding_next_rate_pct: number | null;
+  funding_next_time: string | null;
+  timestamp: string;
+}
+
+export interface PairSpreadCurrentSnapshot {
+  observed_at: string;
+  leg1: PairSpreadCurrentLeg;
+  leg2: PairSpreadCurrentLeg;
+  spread_abs: number;
+  spread_pct: number;
+}
+
+export interface PairSpreadValueStats {
   min: number | null;
   max: number | null;
   mean: number | null;
   current: number | null;
 }
 
-export interface PairMonitorHistory {
-  rule: PairMonitorRule;
-  count: number;
+export interface PairSpreadQueryResult {
+  leg1: PairSpreadLegQuery;
+  leg2: PairSpreadLegQuery;
+  hours: number;
+  observed_at: string;
+  point_count: number;
   first_seen_at: string | null;
   last_seen_at: string | null;
-  latest: PairMonitorPoint | null;
-  spread_pct: PairMonitorValueStats;
-  leg1_funding_rate_pct: PairMonitorValueStats;
-  leg2_funding_rate_pct: PairMonitorValueStats;
-  points: PairMonitorPoint[];
-}
-
-export interface PairMonitorSampleResult {
-  rule_id: string;
-  status: PairMonitorSampleStatus;
-  reason: string | null;
-  point: PairMonitorPoint | null;
+  spread_abs: PairSpreadValueStats;
+  spread_pct: PairSpreadValueStats;
+  current: PairSpreadCurrentSnapshot | null;
+  points: PairSpreadPoint[];
+  funding_history: PairSpreadFundingPoint[];
+  warnings: string[];
 }
 
 export interface AstroCardSettings {

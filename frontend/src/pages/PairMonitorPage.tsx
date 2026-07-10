@@ -1,76 +1,62 @@
-import {
-  DeleteOutlined,
-  PauseCircleOutlined,
-  PlayCircleOutlined,
-  PlusOutlined,
-  ReloadOutlined,
-  SyncOutlined
-} from "@ant-design/icons";
+import { ReloadOutlined, SearchOutlined } from "@ant-design/icons";
 import {
   Alert,
   Button,
   Form,
   Input,
-  InputNumber,
   Segmented,
   Select,
   Space,
   Statistic,
-  Switch,
   Table,
   Tag,
-  Typography,
-  message
+  Typography
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 
-import {
-  createPairMonitorRule,
-  deletePairMonitorRule,
-  getPairMonitorHistory,
-  listPairMonitorRules,
-  samplePairMonitors,
-  updatePairMonitorRule
-} from "../api/client";
+import { queryPairSpread } from "../api/client";
 import type {
-  PairMonitorHistory,
-  PairMonitorLeg,
-  PairMonitorPoint,
-  PairMonitorRule
+  PairSpreadFundingPoint,
+  PairSpreadPoint,
+  PairSpreadPriceField,
+  PairSpreadQueryResult
 } from "../api/types";
 
 dayjs.extend(utc);
 
-type PairMonitorFormValues = {
-  name?: string;
+type PairSpreadFormValues = {
   leg1_exchange: string;
   leg1_symbol: string;
   leg2_exchange: string;
   leg2_symbol: string;
-  retention_days: number;
 };
 
-const defaultFormValues: PairMonitorFormValues = {
-  name: "",
+const defaultFormValues: PairSpreadFormValues = {
   leg1_exchange: "binance",
   leg1_symbol: "BTCUSDT",
   leg2_exchange: "okx",
-  leg2_symbol: "BTCUSDT",
-  retention_days: 7
+  leg2_symbol: "BTCUSDT"
 };
 
-const exchangeOptions = ["binance", "okx", "bybit", "gate", "bitget", "htx", "aster", "hyperliquid"].map(
+const exchangeOptions = ["binance", "okx", "bybit", "gate", "bitget", "aster", "hyperliquid"].map(
   (value) => ({ label: value, value })
 );
+
 const rangeOptions = [
   { label: "24h", value: 24 },
   { label: "3d", value: 72 },
-  { label: "7d", value: 168 },
-  { label: "14d", value: 336 }
+  { label: "7d", value: 168 }
 ];
+
+const priceFieldLabels: Record<PairSpreadPriceField, string> = {
+  mark_price: "标记价",
+  mid_price: "盘口中价",
+  index_price: "指数价",
+  last_price: "最新价"
+};
 
 function pct(value: number | null | undefined, digits = 3): string {
   return typeof value === "number" && Number.isFinite(value) ? `${value.toFixed(digits)}%` : "-";
@@ -91,7 +77,7 @@ function price(value: number | null | undefined): string {
     return value.toFixed(2);
   }
   if (value >= 1) {
-    return value.toFixed(5).replace(/0+$/, "").replace(/\.$/, "");
+    return value.toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
   }
   return value.toPrecision(6);
 }
@@ -100,78 +86,64 @@ function time(value: string | null | undefined): string {
   return value ? dayjs.utc(value).utcOffset(8).format("MM-DD HH:mm") : "-";
 }
 
-function legLabel(leg: PairMonitorLeg): string {
-  return `${leg.exchange} ${leg.symbol}`;
+function fullTime(value: string | null | undefined): string {
+  return value ? dayjs.utc(value).utcOffset(8).format("YYYY-MM-DD HH:mm") : "-";
 }
 
-function ruleFromForm(values: PairMonitorFormValues): PairMonitorRule {
-  return {
-    name: values.name?.trim() || "",
-    enabled: true,
-    sample_interval_seconds: 60,
-    retention_days: values.retention_days,
-    leg1: {
-      exchange: values.leg1_exchange,
-      symbol: values.leg1_symbol,
-      market_type: "future",
-      price_field: "auto"
-    },
-    leg2: {
-      exchange: values.leg2_exchange,
-      symbol: values.leg2_symbol,
-      market_type: "future",
-      price_field: "auto"
-    }
-  };
+function legLabel(exchange: string, symbol: string): string {
+  return `${exchange} ${symbol}`;
 }
 
-function valuePath(
-  points: PairMonitorPoint[],
-  field: "spread_pct" | "leg1_funding_rate_pct" | "leg2_funding_rate_pct",
+function spreadPath(
+  points: PairSpreadPoint[],
   xAt: (index: number) => number,
   yAt: (value: number) => number
 ): string {
   return points
-    .map((point, index) => {
-      const value = point[field];
-      if (typeof value !== "number" || !Number.isFinite(value)) {
-        return "";
-      }
-      return `${index === 0 ? "M" : "L"} ${xAt(index).toFixed(2)} ${yAt(value).toFixed(2)}`;
-    })
-    .filter(Boolean)
+    .map((point, index) => `${index === 0 ? "M" : "L"} ${xAt(index).toFixed(2)} ${yAt(point.spread_pct).toFixed(2)}`)
     .join(" ");
 }
 
-function PairMonitorChart({ history }: { history: PairMonitorHistory | null }) {
-  const points = history?.points ?? [];
+function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
+  const points = result?.points ?? [];
   const width = 920;
   const height = 300;
   const padding = { top: 18, right: 56, bottom: 34, left: 56 };
   const chartWidth = width - padding.left - padding.right;
   const chartHeight = height - padding.top - padding.bottom;
-  const values = points.flatMap((point) =>
-    [point.spread_pct, point.leg1_funding_rate_pct, point.leg2_funding_rate_pct].filter(
-      (value): value is number => typeof value === "number" && Number.isFinite(value)
-    )
-  );
-  if (!history || points.length === 0 || values.length === 0) {
-    return <div className="pair-monitor-empty">暂无分钟样本</div>;
+
+  if (!result || points.length === 0) {
+    return <div className="pair-monitor-empty">暂无查询结果</div>;
   }
+
+  const values = points.map((point) => point.spread_pct).filter((value) => Number.isFinite(value));
   const minValue = Math.min(...values);
   const maxValue = Math.max(...values);
-  const span = maxValue - minValue || 1;
+  const span = maxValue - minValue || Math.max(Math.abs(maxValue), 1);
   const min = minValue - span * 0.12;
   const max = maxValue + span * 0.12;
-  const xAt = (index: number) =>
-    padding.left + (points.length === 1 ? chartWidth / 2 : (chartWidth * index) / (points.length - 1));
-  const yAt = (value: number) => padding.top + ((max - value) / (max - min)) * chartHeight;
   const first = points[0];
   const last = points[points.length - 1];
+  const firstMs = dayjs.utc(first.bucket_at).valueOf();
+  const lastMs = dayjs.utc(last.bucket_at).valueOf();
+  const xAt = (index: number) =>
+    padding.left + (points.length === 1 ? chartWidth / 2 : (chartWidth * index) / (points.length - 1));
+  const xAtTime = (value: string) => {
+    const timestamp = dayjs.utc(value).valueOf();
+    if (lastMs <= firstMs) {
+      return padding.left + chartWidth / 2;
+    }
+    return padding.left + ((timestamp - firstMs) / (lastMs - firstMs)) * chartWidth;
+  };
+  const yAt = (value: number) => padding.top + ((max - value) / (max - min)) * chartHeight;
+  const markerRows = result.funding_history.filter((item) => {
+    const timestamp = dayjs.utc(item.funding_time).valueOf();
+    return timestamp >= firstMs && timestamp <= lastMs;
+  });
 
   return (
     <div className="pair-monitor-chart-wrap">
-      <svg className="pair-monitor-chart" role="img" aria-label="价差与资金费率分钟曲线" viewBox={`0 0 ${width} ${height}`}>
+      <svg className="pair-monitor-chart" role="img" aria-label="分钟价差曲线" viewBox={`0 0 ${width} ${height}`}>
         <rect x={padding.left} y={padding.top} width={chartWidth} height={chartHeight} rx="4" />
         {[0, 0.25, 0.5, 0.75, 1].map((tick) => {
           const y = padding.top + chartHeight * tick;
@@ -185,16 +157,27 @@ function PairMonitorChart({ history }: { history: PairMonitorHistory | null }) {
             </g>
           );
         })}
-        <line className="pair-monitor-zero-line" x1={padding.left} y1={yAt(0)} x2={padding.left + chartWidth} y2={yAt(0)} />
-        <path className="pair-monitor-line pair-monitor-line-spread" d={valuePath(points, "spread_pct", xAt, yAt)} />
-        <path
-          className="pair-monitor-line pair-monitor-line-funding-a"
-          d={valuePath(points, "leg1_funding_rate_pct", xAt, yAt)}
-        />
-        <path
-          className="pair-monitor-line pair-monitor-line-funding-b"
-          d={valuePath(points, "leg2_funding_rate_pct", xAt, yAt)}
-        />
+        {min <= 0 && max >= 0 ? (
+          <line className="pair-monitor-zero-line" x1={padding.left} y1={yAt(0)} x2={padding.left + chartWidth} y2={yAt(0)} />
+        ) : null}
+        {markerRows.map((item) => {
+          const x = xAtTime(item.funding_time);
+          return (
+            <line
+              key={`${item.exchange}-${item.funding_time}`}
+              className={`pair-monitor-funding-marker pair-monitor-funding-${item.exchange === result.leg1.exchange ? "a" : "b"}`}
+              x1={x}
+              y1={padding.top}
+              x2={x}
+              y2={padding.top + chartHeight}
+            >
+              <title>
+                {item.exchange} {time(item.funding_time)} {signedPct(item.funding_rate_pct)}
+              </title>
+            </line>
+          );
+        })}
+        <path className="pair-monitor-line pair-monitor-line-spread" d={spreadPath(points, xAt, yAt)} />
         <text className="pair-monitor-axis-label" x={padding.left} y={height - 10}>
           {time(first.bucket_at)}
         </text>
@@ -204,308 +187,187 @@ function PairMonitorChart({ history }: { history: PairMonitorHistory | null }) {
       </svg>
       <div className="pair-monitor-legend">
         <span className="legend-spread">价差</span>
-        <span className="legend-funding-a">腿1资金</span>
-        <span className="legend-funding-b">腿2资金</span>
+        <span className="legend-funding-a">{result.leg1.exchange} 资金</span>
+        <span className="legend-funding-b">{result.leg2.exchange} 资金</span>
       </div>
     </div>
   );
 }
 
-const pointColumns: ColumnsType<PairMonitorPoint> = [
-  { title: "时间", dataIndex: "bucket_at", width: 118, render: (value: string) => time(value) },
-  { title: "腿1价", dataIndex: "leg1_price", align: "right", render: (value: number) => price(value) },
-  { title: "腿2价", dataIndex: "leg2_price", align: "right", render: (value: number) => price(value) },
+const pointColumns: ColumnsType<PairSpreadPoint> = [
+  { title: "时间", dataIndex: "bucket_at", width: 120, render: (value: string) => time(value) },
+  { title: "A 收盘", dataIndex: "leg1_close", align: "right", render: (value: number) => price(value) },
+  { title: "B 收盘", dataIndex: "leg2_close", align: "right", render: (value: number) => price(value) },
   { title: "绝对差", dataIndex: "spread_abs", align: "right", render: (value: number) => price(value) },
-  { title: "价差", dataIndex: "spread_pct", align: "right", render: (value: number) => signedPct(value) },
+  { title: "价差", dataIndex: "spread_pct", align: "right", render: (value: number) => signedPct(value) }
+];
+
+const fundingColumns: ColumnsType<PairSpreadFundingPoint> = [
+  {
+    title: "交易所",
+    dataIndex: "exchange",
+    width: 100,
+    render: (value: string) => <Tag>{value}</Tag>
+  },
+  { title: "标的", dataIndex: "symbol", width: 110 },
+  { title: "结算时间", dataIndex: "funding_time", width: 150, render: (value: string) => fullTime(value) },
   {
     title: "资金费率",
+    dataIndex: "funding_rate_pct",
     align: "right",
-    render: (_, row) => `${signedPct(row.leg1_funding_rate_pct)} / ${signedPct(row.leg2_funding_rate_pct)}`
+    render: (value: number) => signedPct(value)
   }
 ];
 
 export function PairMonitorPage() {
-  const [form] = Form.useForm<PairMonitorFormValues>();
-  const [rules, setRules] = useState<PairMonitorRule[]>([]);
-  const [selectedRuleId, setSelectedRuleId] = useState<string | null>(null);
-  const [history, setHistory] = useState<PairMonitorHistory | null>(null);
+  const [form] = Form.useForm<PairSpreadFormValues>();
   const [hours, setHours] = useState(72);
-  const [loading, setLoading] = useState(true);
-  const [historyLoading, setHistoryLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [sampling, setSampling] = useState(false);
+  const [result, setResult] = useState<PairSpreadQueryResult | null>(null);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const selectedRule = useMemo(
-    () => rules.find((rule) => rule.id === selectedRuleId) ?? rules[0] ?? null,
-    [rules, selectedRuleId]
+  const recentPoints = useMemo(
+    () => [...(result?.points ?? [])].reverse().slice(0, 180),
+    [result?.points]
+  );
+  const recentFunding = useMemo(
+    () => [...(result?.funding_history ?? [])].reverse().slice(0, 120),
+    [result?.funding_history]
   );
 
-  const loadRules = useCallback(async () => {
+  const runQuery = async () => {
     setLoading(true);
     setError("");
     try {
-      const nextRules = await listPairMonitorRules();
-      setRules(nextRules);
-      setSelectedRuleId((current) => current ?? nextRules[0]?.id ?? null);
+      const values = await form.validateFields();
+      const next = await queryPairSpread({
+        ...values,
+        hours
+      });
+      setResult(next);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
     } finally {
       setLoading(false);
     }
-  }, []);
-
-  const loadHistory = useCallback(
-    async (ruleId: string | null, nextHours = hours) => {
-      if (!ruleId) {
-        setHistory(null);
-        return;
-      }
-      setHistoryLoading(true);
-      setError("");
-      try {
-        setHistory(await getPairMonitorHistory(ruleId, { hours: nextHours, point_limit: 5000 }));
-      } catch (exc) {
-        setError(exc instanceof Error ? exc.message : String(exc));
-      } finally {
-        setHistoryLoading(false);
-      }
-    },
-    [hours]
-  );
-
-  useEffect(() => {
-    form.setFieldsValue(defaultFormValues);
-    void loadRules();
-  }, [form, loadRules]);
-
-  useEffect(() => {
-    void loadHistory(selectedRule?.id ?? null);
-  }, [loadHistory, selectedRule?.id]);
-
-  const createRule = async () => {
-    setSaving(true);
-    setError("");
-    try {
-      const values = await form.validateFields();
-      const created = await createPairMonitorRule(ruleFromForm(values));
-      message.success("监控对已创建");
-      form.setFieldsValue({ ...defaultFormValues, name: "" });
-      const nextRules = await listPairMonitorRules();
-      setRules(nextRules);
-      setSelectedRuleId(created.id ?? null);
-      if (created.id) {
-        await samplePairMonitors(created.id);
-        await loadHistory(created.id);
-      }
-    } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
-    } finally {
-      setSaving(false);
-    }
   };
 
-  const toggleRule = async (rule: PairMonitorRule) => {
-    if (!rule.id) {
+  const rerun = () => {
+    if (!result) {
+      void runQuery();
       return;
     }
-    const updated = await updatePairMonitorRule(rule.id, { ...rule, enabled: !rule.enabled });
-    setRules((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+    form.setFieldsValue({
+      leg1_exchange: result.leg1.exchange,
+      leg1_symbol: result.leg1.symbol,
+      leg2_exchange: result.leg2.exchange,
+      leg2_symbol: result.leg2.symbol
+    });
+    void runQuery();
   };
 
-  const removeRule = async (rule: PairMonitorRule) => {
-    if (!rule.id) {
-      return;
-    }
-    await deletePairMonitorRule(rule.id);
-    message.success("监控对已删除");
-    const nextRules = await listPairMonitorRules();
-    setRules(nextRules);
-    setSelectedRuleId(nextRules[0]?.id ?? null);
-  };
-
-  const sampleSelected = async () => {
-    if (!selectedRule?.id) {
-      return;
-    }
-    setSampling(true);
-    try {
-      const results = await samplePairMonitors(selectedRule.id);
-      const result = results[0];
-      if (result?.status === "recorded") {
-        message.success("已记录当前分钟样本");
-      } else {
-        message.info(result?.reason ?? "暂无可记录样本");
-      }
-      await loadHistory(selectedRule.id);
-    } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
-    } finally {
-      setSampling(false);
-    }
-  };
-
-  const changeRange = (value: string | number) => {
-    const nextHours = Number(value);
-    setHours(nextHours);
-    void loadHistory(selectedRule?.id ?? null, nextHours);
-  };
-
-  const ruleColumns: ColumnsType<PairMonitorRule> = [
-    {
-      title: "监控对",
-      width: 230,
-      render: (_, rule) => (
-        <Space direction="vertical" size={2}>
-          <Typography.Text strong>{rule.name}</Typography.Text>
-          <Typography.Text type="secondary">{legLabel(rule.leg1)}</Typography.Text>
-          <Typography.Text type="secondary">{legLabel(rule.leg2)}</Typography.Text>
-        </Space>
-      )
-    },
-    {
-      title: "状态",
-      width: 82,
-      render: (_, rule) => <Tag color={rule.enabled ? "green" : "default"}>{rule.enabled ? "ON" : "OFF"}</Tag>
-    },
-    {
-      title: "保留",
-      dataIndex: "retention_days",
-      width: 70,
-      render: (value: number) => `${value}d`
-    },
-    {
-      title: "操作",
-      width: 112,
-      render: (_, rule) => (
-        <Space size={4}>
-          <Button
-            type="text"
-            icon={rule.enabled ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
-            onClick={(event) => {
-              event.stopPropagation();
-              void toggleRule(rule);
-            }}
-            aria-label={rule.enabled ? "暂停" : "启用"}
-          />
-          <Button
-            type="text"
-            danger
-            icon={<DeleteOutlined />}
-            onClick={(event) => {
-              event.stopPropagation();
-              void removeRule(rule);
-            }}
-            aria-label="删除"
-          />
-        </Space>
-      )
-    }
-  ];
-
-  const latest = history?.latest;
+  const current = result?.current;
+  const nextFundingTimes = [current?.leg1.funding_next_time, current?.leg2.funding_next_time].filter(Boolean) as string[];
+  const nextFundingTime = nextFundingTimes.length ? nextFundingTimes.sort()[0] : null;
 
   return (
     <div className="page pair-monitor-page">
       {error ? <Alert type="error" message={error} showIcon /> : null}
+      {result?.warnings.length ? <Alert type="warning" message={result.warnings.join("；")} showIcon /> : null}
+
       <section className="toolbar">
         <div className="toolbar-controls">
-          <Typography.Title level={4}>价差监控</Typography.Title>
-          <Typography.Text type="secondary">分钟级价差与资金费率</Typography.Text>
+          <Typography.Title level={4}>价差查询</Typography.Title>
+          <Typography.Text type="secondary">分钟价差与资金费率</Typography.Text>
         </div>
         <Space className="toolbar-actions" wrap>
-          <Segmented value={hours} options={rangeOptions} onChange={changeRange} />
-          <Button icon={<SyncOutlined />} onClick={() => void sampleSelected()} loading={sampling} disabled={!selectedRule}>
-            采样
+          <Segmented value={hours} options={rangeOptions} onChange={(value) => setHours(Number(value))} />
+          <Button type="primary" icon={<SearchOutlined />} loading={loading} onClick={() => void runQuery()}>
+            查询
           </Button>
-          <Button icon={<ReloadOutlined />} onClick={() => void loadRules()} loading={loading}>
-            刷新
+          <Button icon={<ReloadOutlined />} disabled={!result} loading={loading} onClick={rerun}>
+            重查
           </Button>
         </Space>
       </section>
 
       <section className="panel panel-wide">
-        <Form form={form} layout="vertical" initialValues={defaultFormValues} disabled={saving}>
+        <Form form={form} layout="vertical" initialValues={defaultFormValues} disabled={loading}>
           <div className="pair-monitor-form-grid">
-            <Form.Item label="名称" name="name">
-              <Input placeholder="BTC basis" />
-            </Form.Item>
-            <Form.Item label="腿1交易所" name="leg1_exchange" rules={[{ required: true }]}>
+            <Form.Item label="A 交易所" name="leg1_exchange" rules={[{ required: true, message: "请选择交易所" }]}>
               <Select options={exchangeOptions} showSearch />
             </Form.Item>
-            <Form.Item label="腿1标的" name="leg1_symbol" rules={[{ required: true }]}>
-              <Input />
+            <Form.Item label="A 标的" name="leg1_symbol" rules={[{ required: true, message: "请输入标的" }]}>
+              <Input placeholder="BTCUSDT" />
             </Form.Item>
-            <Form.Item label="腿2交易所" name="leg2_exchange" rules={[{ required: true }]}>
+            <Form.Item label="B 交易所" name="leg2_exchange" rules={[{ required: true, message: "请选择交易所" }]}>
               <Select options={exchangeOptions} showSearch />
             </Form.Item>
-            <Form.Item label="腿2标的" name="leg2_symbol" rules={[{ required: true }]}>
-              <Input />
-            </Form.Item>
-            <Form.Item label="保留天数" name="retention_days" rules={[{ required: true }]}>
-              <InputNumber min={1} max={30} className="wide-input" />
+            <Form.Item label="B 标的" name="leg2_symbol" rules={[{ required: true, message: "请输入标的" }]}>
+              <Input placeholder="BTCUSDT" />
             </Form.Item>
           </div>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => void createRule()} loading={saving}>
-            新增监控对
-          </Button>
         </Form>
       </section>
 
-      <section className="pair-monitor-layout">
-        <Table<PairMonitorRule>
-          className="opportunity-table pair-monitor-rules"
-          rowKey={(rule) => rule.id ?? rule.name}
-          columns={ruleColumns}
-          dataSource={rules}
-          loading={loading}
-          pagination={false}
-          size="small"
-          tableLayout="fixed"
-          onRow={(rule) => ({
-            onClick: () => setSelectedRuleId(rule.id ?? null)
-          })}
-          rowClassName={(rule) => (rule.id === selectedRule?.id ? "pair-monitor-row-selected" : "")}
-        />
+      <section className="panel pair-monitor-detail">
+        <div className="pair-monitor-detail-head">
+          <Space direction="vertical" size={2}>
+            <Typography.Title level={5}>
+              {result ? `${legLabel(result.leg1.exchange, result.leg1.symbol)} / ${legLabel(result.leg2.exchange, result.leg2.symbol)}` : "价差结果"}
+            </Typography.Title>
+            <Typography.Text type="secondary">
+              {result ? `${fullTime(result.first_seen_at)} - ${fullTime(result.last_seen_at)}` : "暂无查询结果"}
+            </Typography.Text>
+          </Space>
+          {result ? <Tag color="green">{result.hours === 24 ? "24h" : `${result.hours / 24}d`}</Tag> : null}
+        </div>
 
-        <div className="panel pair-monitor-detail">
-          <div className="pair-monitor-detail-head">
-            <Space direction="vertical" size={2}>
-              <Typography.Title level={5}>{selectedRule?.name ?? "未选择监控对"}</Typography.Title>
-              {selectedRule ? (
-                <Typography.Text type="secondary">
-                  {legLabel(selectedRule.leg1)} / {legLabel(selectedRule.leg2)}
-                </Typography.Text>
-              ) : null}
-            </Space>
-            <Switch
-              checked={selectedRule?.enabled ?? false}
-              disabled={!selectedRule}
-              onChange={() => selectedRule && void toggleRule(selectedRule)}
-            />
+        <div className="pair-monitor-stats">
+          <Statistic title="当前价差" value={current?.spread_pct ?? result?.spread_pct.current ?? 0} precision={3} suffix="%" />
+          <Statistic title="价差均值" value={result?.spread_pct.mean ?? 0} precision={3} suffix="%" />
+          <Statistic title="分钟点" value={result?.point_count ?? 0} />
+          <Statistic title="A 资金" value={current?.leg1.funding_rate_pct ?? 0} precision={4} suffix="%" />
+          <Statistic title="B 资金" value={current?.leg2.funding_rate_pct ?? 0} precision={4} suffix="%" />
+          <Statistic title="下次结算" value={time(nextFundingTime)} />
+        </div>
+
+        {current ? (
+          <div className="pair-monitor-current-strip">
+            <Tag color="blue">
+              A {price(current.leg1.price)} · {priceFieldLabels[current.leg1.price_field]}
+            </Tag>
+            <Tag color="orange">
+              B {price(current.leg2.price)} · {priceFieldLabels[current.leg2.price_field]}
+            </Tag>
+            <Typography.Text type="secondary">当前绝对差 {price(current.spread_abs)}</Typography.Text>
           </div>
+        ) : null}
 
-          <div className="pair-monitor-stats">
-            <Statistic title="样本" value={history?.count ?? 0} />
-            <Statistic title="最新价差" value={history?.spread_pct.current ?? 0} precision={3} suffix="%" />
-            <Statistic title="腿1资金" value={history?.leg1_funding_rate_pct.current ?? 0} precision={3} suffix="%" />
-            <Statistic title="腿2资金" value={history?.leg2_funding_rate_pct.current ?? 0} precision={3} suffix="%" />
-            <Statistic title="最新价格" value={latest ? `${price(latest.leg1_price)} / ${price(latest.leg2_price)}` : "-"} />
-            <Statistic title="最近样本" value={time(history?.last_seen_at)} />
-          </div>
+        <PairSpreadChart result={result} />
 
-          {historyLoading ? <Alert type="info" message="加载历史样本中" showIcon /> : null}
-          <PairMonitorChart history={history} />
-
-          <Table<PairMonitorPoint>
+        <div className="pair-monitor-tables">
+          <Table<PairSpreadPoint>
             className="pair-monitor-points"
             rowKey={(point) => point.bucket_at}
             columns={pointColumns}
-            dataSource={[...(history?.points ?? [])].reverse().slice(0, 120)}
-            loading={historyLoading}
+            dataSource={recentPoints}
+            loading={loading}
             pagination={{ pageSize: 12 }}
             size="small"
             tableLayout="fixed"
+            scroll={{ x: 640 }}
+          />
+          <Table<PairSpreadFundingPoint>
+            className="pair-monitor-points"
+            rowKey={(point) => `${point.exchange}-${point.symbol}-${point.funding_time}`}
+            columns={fundingColumns}
+            dataSource={recentFunding}
+            loading={loading}
+            pagination={{ pageSize: 8 }}
+            size="small"
+            tableLayout="fixed"
+            scroll={{ x: 560 }}
           />
         </div>
       </section>

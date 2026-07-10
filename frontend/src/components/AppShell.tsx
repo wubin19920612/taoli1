@@ -113,7 +113,7 @@ export function AppShell() {
             {
               key: "pair-monitor",
               icon: <StockOutlined />,
-              label: "价差监控"
+              label: "价差查询"
             },
             {
               key: "tradfi-perp",

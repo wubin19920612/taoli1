@@ -19,6 +19,14 @@ from app.models.market import MarketSnapshot, MarketType
 from app.models.opportunity import Opportunity, OpportunityType
 from app.models.alert import AlertEvent, AlertRule
 from app.models.orderbook import DepthValidationResult
+from app.models.pair_spread import (
+    PairSpreadCurrentLeg,
+    PairSpreadCurrentSnapshot,
+    PairSpreadLegQuery,
+    PairSpreadPriceField,
+    PairSpreadQueryResult,
+    PairSpreadValueStats,
+)
 from app.models.phone_alert import PhonePriceAlertCondition, PhonePriceAlertEvent, PhonePriceAlertRule
 from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, LivePilotSettings, RiskSettings
 from app.services.astro_alerts import AstroAlertService
@@ -604,75 +612,87 @@ def test_opportunities_endpoint_applies_limit_after_filtering() -> None:
     assert [item["symbol"] for item in response.json()] == ["ONEUSDT", "TWOUSDT"]
 
 
-def test_pair_monitor_endpoints_create_sample_and_read_history() -> None:
-    now = datetime.now(UTC)
-    store = SnapshotStore()
-    store.set_markets(
-        [
-            MarketSnapshot(
-                symbol="BTCUSDT",
-                base="BTC",
-                quote="USDT",
-                exchange="binance",
-                market_type=MarketType.FUTURE,
-                bid=99,
-                ask=101,
-                volume_24h_usdt=1_000_000,
-                funding_rate_pct=0.01,
+def test_pair_spread_query_endpoint_uses_on_demand_service() -> None:
+    now = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
+
+    class FakePairSpreadService:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def query(
+            self,
+            leg1: PairSpreadLegQuery,
+            leg2: PairSpreadLegQuery,
+            *,
+            hours: int,
+        ) -> PairSpreadQueryResult:
+            leg1_current = PairSpreadCurrentLeg(
+                exchange=leg1.exchange,
+                symbol=leg1.symbol,
+                raw_symbol=leg1.symbol,
+                price=100,
+                price_field=PairSpreadPriceField.MARK_PRICE,
                 mark_price=100,
-                index_price=100,
                 timestamp=now,
-                raw_symbol="BTCUSDT",
-            ),
-            MarketSnapshot(
-                symbol="BTCUSDT",
-                base="BTC",
-                quote="USDT",
-                exchange="okx",
-                market_type=MarketType.FUTURE,
-                bid=101,
-                ask=103,
-                volume_24h_usdt=1_000_000,
-                funding_rate_pct=0.03,
-                mark_price=102,
-                index_price=102,
-                timestamp=now,
+            )
+            leg2_current = PairSpreadCurrentLeg(
+                exchange=leg2.exchange,
+                symbol=leg2.symbol,
                 raw_symbol="BTC-USDT-SWAP",
-            ),
-        ]
-    )
-    app = create_app(
-        snapshot_store=store,
-        settings=Settings(dashboard_password="secret", database_url="sqlite:///:memory:"),
-    )
+                price=102,
+                price_field=PairSpreadPriceField.MARK_PRICE,
+                mark_price=102,
+                timestamp=now,
+            )
+            return PairSpreadQueryResult(
+                leg1=leg1,
+                leg2=leg2,
+                hours=hours,
+                observed_at=now,
+                point_count=1,
+                first_seen_at=now,
+                last_seen_at=now,
+                spread_abs=PairSpreadValueStats(current=2),
+                spread_pct=PairSpreadValueStats(current=2),
+                current=PairSpreadCurrentSnapshot(
+                    observed_at=now,
+                    leg1=leg1_current,
+                    leg2=leg2_current,
+                    spread_abs=2,
+                    spread_pct=2,
+                ),
+                points=[
+                    {
+                        "bucket_at": now,
+                        "leg1_close": 100,
+                        "leg2_close": 102,
+                        "spread_abs": 2,
+                        "spread_pct": 2,
+                    }
+                ],
+            )
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    service = FakePairSpreadService()
+    app = create_app(settings=Settings(database_url="sqlite:///:memory:"))
+    app.state.pair_spread_query_service_factory = lambda: service
 
     with TestClient(app) as client:
-        create_response = client.post(
-            "/api/pair-monitor/rules",
-            headers={"X-Dashboard-Password": "secret"},
-            json={
-                "name": "BTC basis",
-                "leg1": {"exchange": "binance", "symbol": "BTCUSDT", "market_type": "future"},
-                "leg2": {"exchange": "okx", "symbol": "BTC-USDT-SWAP", "market_type": "future"},
-                "sample_interval_seconds": 60,
-                "retention_days": 3,
-            },
+        response = client.get(
+            "/api/pair-spread/query"
+            "?leg1_exchange=binance&leg1_symbol=btc"
+            "&leg2_exchange=okx&leg2_symbol=BTC-USDT-SWAP&hours=72"
         )
-        rule_id = create_response.json()["id"]
-        sample_response = client.post(
-            f"/api/pair-monitor/sample?rule_id={rule_id}",
-            headers={"X-Dashboard-Password": "secret"},
-        )
-        history_response = client.get(f"/api/pair-monitor/rules/{rule_id}/history?hours=24")
 
-    assert create_response.status_code == 200
-    assert sample_response.status_code == 200
-    assert sample_response.json()[0]["status"] == "recorded"
-    assert history_response.status_code == 200
-    payload = history_response.json()
-    assert payload["rule"]["name"] == "BTC basis"
-    assert payload["count"] == 1
-    assert payload["latest"]["spread_pct"] == 2
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["leg1"]["symbol"] == "BTCUSDT"
+    assert payload["leg2"]["exchange"] == "okx"
+    assert payload["point_count"] == 1
+    assert payload["current"]["spread_pct"] == 2
+    assert service.closed is True
 
 
 def test_funding_arbitrage_preview_returns_independent_candidates() -> None:

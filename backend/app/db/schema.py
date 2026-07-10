@@ -157,43 +157,6 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_opportunity_history_time
           ON opportunity_history(observed_at DESC);
 
-        CREATE TABLE IF NOT EXISTS pair_monitor_rules (
-          id TEXT PRIMARY KEY,
-          payload TEXT NOT NULL,
-          created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS pair_monitor_points (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          rule_id TEXT NOT NULL,
-          observed_at TEXT NOT NULL,
-          bucket_at TEXT NOT NULL,
-          leg1_price REAL NOT NULL,
-          leg2_price REAL NOT NULL,
-          spread_abs REAL NOT NULL,
-          spread_pct REAL NOT NULL,
-          leg1_funding_rate_pct REAL,
-          leg2_funding_rate_pct REAL,
-          leg1_funding_next_rate_pct REAL,
-          leg2_funding_next_rate_pct REAL,
-          leg1_funding_next_time TEXT,
-          leg2_funding_next_time TEXT,
-          leg1_volume_24h_usdt REAL,
-          leg2_volume_24h_usdt REAL,
-          leg1_price_field TEXT NOT NULL,
-          leg2_price_field TEXT NOT NULL,
-          leg1_market_timestamp TEXT,
-          leg2_market_timestamp TEXT,
-          FOREIGN KEY(rule_id) REFERENCES pair_monitor_rules(id) ON DELETE CASCADE,
-          UNIQUE(rule_id, bucket_at)
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_pair_monitor_points_rule_time
-          ON pair_monitor_points(rule_id, bucket_at DESC);
-        CREATE INDEX IF NOT EXISTS idx_pair_monitor_points_time
-          ON pair_monitor_points(bucket_at DESC);
-
         CREATE TABLE IF NOT EXISTS index_component_snapshots (
           exchange TEXT NOT NULL,
           symbol TEXT NOT NULL,
