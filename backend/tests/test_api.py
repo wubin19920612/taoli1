@@ -625,6 +625,8 @@ def test_pair_spread_query_endpoint_uses_on_demand_service() -> None:
             leg2: PairSpreadLegQuery,
             *,
             hours: int,
+            interval_minutes: int = 1,
+            leg2_multiplier: float = 1.0,
         ) -> PairSpreadQueryResult:
             leg1_current = PairSpreadCurrentLeg(
                 exchange=leg1.exchange,
@@ -648,6 +650,8 @@ def test_pair_spread_query_endpoint_uses_on_demand_service() -> None:
                 leg1=leg1,
                 leg2=leg2,
                 hours=hours,
+                interval_minutes=interval_minutes,
+                leg2_multiplier=leg2_multiplier,
                 observed_at=now,
                 point_count=1,
                 first_seen_at=now,
@@ -683,13 +687,17 @@ def test_pair_spread_query_endpoint_uses_on_demand_service() -> None:
         response = client.get(
             "/api/pair-spread/query"
             "?leg1_exchange=binance&leg1_symbol=btc"
-            "&leg2_exchange=okx&leg2_symbol=BTC-USDT-SWAP&hours=72"
+            "&leg2_exchange=okx&leg2_symbol=BTC-USDT-SWAP&hours=720"
+            "&interval_minutes=5&leg2_multiplier=10"
         )
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["leg1"]["symbol"] == "BTCUSDT"
     assert payload["leg2"]["exchange"] == "okx"
+    assert payload["hours"] == 720
+    assert payload["interval_minutes"] == 5
+    assert payload["leg2_multiplier"] == 10
     assert payload["point_count"] == 1
     assert payload["current"]["spread_pct"] == 2
     assert service.closed is True

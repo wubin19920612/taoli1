@@ -46,16 +46,29 @@ def test_pair_spread_points_align_by_minute() -> None:
     assert points[1].spread_abs == 3
 
 
+def test_pair_spread_points_apply_right_side_multiplier() -> None:
+    points = build_pair_spread_points(
+        [kline(0, 100)],
+        [kline(0, 1050)],
+        leg2_multiplier=10,
+    )
+
+    assert points[0].leg2_close == 105
+    assert points[0].spread_abs == 5
+    assert points[0].spread_pct == 5
+
+
 @pytest.mark.asyncio
 async def test_pair_spread_query_builds_stats_current_and_funding() -> None:
     class FakePairSpreadService(PairSpreadQueryService):
-        async def _fetch_klines(self, exchange: str, symbol: str, start, end):
+        async def _fetch_klines(self, exchange: str, symbol: str, start, end, interval_minutes: int):
+            assert interval_minutes == 5
             if exchange == "binance":
                 return [kline(0, 100), kline(1, 101), kline(2, 102)]
-            return [kline(0, 101), kline(1, 103), kline(2, 105)]
+            return [kline(0, 1010), kline(1, 1030), kline(2, 1050)]
 
         async def _fetch_current_leg(self, exchange: str, symbol: str):
-            return current_leg(exchange, symbol, 100 if exchange == "binance" else 104)
+            return current_leg(exchange, symbol, 100 if exchange == "binance" else 1040)
 
         async def _fetch_funding_history(self, exchange: str, symbol: str, start, end):
             return [
@@ -73,6 +86,8 @@ async def test_pair_spread_query_builds_stats_current_and_funding() -> None:
             PairSpreadLegQuery(exchange="binance", symbol="btc"),
             PairSpreadLegQuery(exchange="okx", symbol="BTC-USDT-SWAP"),
             hours=24,
+            interval_minutes=5,
+            leg2_multiplier=10,
             now=datetime(2026, 7, 10, 12, 2, 30, tzinfo=UTC),
         )
     finally:
@@ -84,7 +99,10 @@ async def test_pair_spread_query_builds_stats_current_and_funding() -> None:
     assert result.spread_abs.current == 3
     assert result.spread_pct.current == pytest.approx((105 - 102) / 102 * 100)
     assert result.current is not None
+    assert result.current.leg2.price == 104
     assert result.current.spread_pct == 4
+    assert result.interval_minutes == 5
+    assert result.leg2_multiplier == 10
     assert len(result.funding_history) == 2
     assert result.warnings == []
 

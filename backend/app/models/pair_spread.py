@@ -13,7 +13,8 @@ SUPPORTED_PAIR_SPREAD_EXCHANGES: tuple[str, ...] = (
     "aster",
     "hyperliquid",
 )
-PAIR_SPREAD_HOUR_OPTIONS: tuple[int, ...] = (24, 72, 168)
+PAIR_SPREAD_HOUR_OPTIONS: tuple[int, ...] = (24, 72, 168, 720)
+PAIR_SPREAD_INTERVAL_OPTIONS: tuple[int, ...] = (1, 5, 15)
 
 
 class PairSpreadPriceField(StrEnum):
@@ -107,6 +108,8 @@ class PairSpreadQueryResult(BaseModel):
     leg1: PairSpreadLegQuery
     leg2: PairSpreadLegQuery
     hours: int
+    interval_minutes: int = 1
+    leg2_multiplier: float = 1.0
     observed_at: datetime
     point_count: int
     first_seen_at: datetime | None = None

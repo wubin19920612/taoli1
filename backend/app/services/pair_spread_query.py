@@ -41,6 +41,10 @@ def _to_ms(value: datetime) -> int:
     return int(value.timestamp() * 1000)
 
 
+def _interval_ms(interval_minutes: int) -> int:
+    return interval_minutes * MINUTE_MS
+
+
 def _floor_minute(value: datetime) -> datetime:
     return value.astimezone(UTC).replace(second=0, microsecond=0)
 
@@ -111,13 +115,17 @@ def _dedupe_sorted(points: list[PairSpreadKlinePoint]) -> list[PairSpreadKlinePo
 def build_pair_spread_points(
     leg1_klines: list[PairSpreadKlinePoint],
     leg2_klines: list[PairSpreadKlinePoint],
+    *,
+    leg2_multiplier: float = 1.0,
 ) -> list[PairSpreadPoint]:
+    if leg2_multiplier <= 0:
+        raise ValueError("leg2_multiplier must be positive")
     leg1_by_time = {point.bucket_at: point.close for point in leg1_klines}
     leg2_by_time = {point.bucket_at: point.close for point in leg2_klines}
     points: list[PairSpreadPoint] = []
     for bucket_at in sorted(leg1_by_time.keys() & leg2_by_time.keys()):
         leg1_close = leg1_by_time[bucket_at]
-        leg2_close = leg2_by_time[bucket_at]
+        leg2_close = leg2_by_time[bucket_at] / leg2_multiplier
         if leg1_close <= 0 or leg2_close <= 0:
             continue
         spread_abs = leg2_close - leg1_close
@@ -155,8 +163,12 @@ class PairSpreadQueryService:
         leg2: PairSpreadLegQuery,
         *,
         hours: int,
+        interval_minutes: int = 1,
+        leg2_multiplier: float = 1.0,
         now: datetime | None = None,
     ) -> PairSpreadQueryResult:
+        if leg2_multiplier <= 0:
+            raise PairSpreadQueryError("leg2_multiplier must be positive")
         observed_at = now or utc_now()
         end = _floor_minute(observed_at)
         start = end - timedelta(hours=hours)
@@ -165,14 +177,25 @@ class PairSpreadQueryService:
         kline_keys = list(dict.fromkeys(((leg1.exchange, leg1.symbol), (leg2.exchange, leg2.symbol))))
         kline_results = await asyncio.gather(
             *(
-                self._fetch_klines_with_warning(exchange, symbol, start, end, warnings)
+                self._fetch_klines_with_warning(
+                    exchange,
+                    symbol,
+                    start,
+                    end,
+                    interval_minutes,
+                    warnings,
+                )
                 for exchange, symbol in kline_keys
             )
         )
         klines_by_key = dict(zip(kline_keys, kline_results, strict=True))
         leg1_klines = klines_by_key[(leg1.exchange, leg1.symbol)]
         leg2_klines = klines_by_key[(leg2.exchange, leg2.symbol)]
-        points = build_pair_spread_points(leg1_klines, leg2_klines)
+        points = build_pair_spread_points(
+            leg1_klines,
+            leg2_klines,
+            leg2_multiplier=leg2_multiplier,
+        )
         if not points:
             suffix = f": {'; '.join(warnings)}" if warnings else ""
             raise PairSpreadQueryError(f"没有拿到可对齐的分钟K线{suffix}")
@@ -184,7 +207,11 @@ class PairSpreadQueryService:
             self._fetch_funding_with_warning(leg2, start, end, warnings),
         )
         current = (
-            self._build_current_snapshot(current_leg1, current_leg2, observed_at)
+            self._build_current_snapshot(
+                current_leg1,
+                _scale_current_leg(current_leg2, leg2_multiplier),
+                observed_at,
+            )
             if current_leg1 is not None and current_leg2 is not None
             else None
         )
@@ -193,6 +220,8 @@ class PairSpreadQueryService:
             leg1=leg1,
             leg2=leg2,
             hours=hours,
+            interval_minutes=interval_minutes,
+            leg2_multiplier=leg2_multiplier,
             observed_at=observed_at,
             point_count=len(points),
             first_seen_at=points[0].bucket_at,
@@ -211,10 +240,11 @@ class PairSpreadQueryService:
         symbol: str,
         start: datetime,
         end: datetime,
+        interval_minutes: int,
         warnings: list[str],
     ) -> list[PairSpreadKlinePoint]:
         try:
-            return await self._fetch_klines(exchange, symbol, start, end)
+            return await self._fetch_klines(exchange, symbol, start, end, interval_minutes)
         except Exception as exc:  # noqa: BLE001 - keep pair query error actionable.
             warnings.append(f"{exchange}:{symbol} 分钟K线失败: {_exception_text(exc)}")
             return []
@@ -264,19 +294,22 @@ class PairSpreadQueryService:
         symbol: str,
         start: datetime,
         end: datetime,
+        interval_minutes: int,
     ) -> list[PairSpreadKlinePoint]:
-        handlers: dict[str, Callable[[str, datetime, datetime], Awaitable[list[PairSpreadKlinePoint]]]] = {
-            "binance": lambda s, a, b: self._fetch_binance_like_klines(
+        handlers: dict[str, Callable[[str, datetime, datetime, int], Awaitable[list[PairSpreadKlinePoint]]]] = {
+            "binance": lambda s, a, b, i: self._fetch_binance_like_klines(
                 "https://fapi.binance.com",
                 s,
                 a,
                 b,
+                i,
             ),
-            "aster": lambda s, a, b: self._fetch_binance_like_klines(
+            "aster": lambda s, a, b, i: self._fetch_binance_like_klines(
                 "https://fapi.asterdex.com",
                 s,
                 a,
                 b,
+                i,
             ),
             "okx": self._fetch_okx_klines,
             "bybit": self._fetch_bybit_klines,
@@ -284,7 +317,7 @@ class PairSpreadQueryService:
             "bitget": self._fetch_bitget_klines,
             "hyperliquid": self._fetch_hyperliquid_klines,
         }
-        return await handlers[exchange](symbol, start, end)
+        return await handlers[exchange](symbol, start, end, interval_minutes)
 
     async def _fetch_current_leg(self, exchange: str, symbol: str) -> PairSpreadCurrentLeg:
         handlers: dict[str, Callable[[str], Awaitable[PairSpreadCurrentLeg]]] = {
@@ -360,16 +393,18 @@ class PairSpreadQueryService:
         symbol: str,
         start: datetime,
         end: datetime,
+        interval_minutes: int,
     ) -> list[PairSpreadKlinePoint]:
         raw = _compact_symbol(symbol)
         start_ms = _to_ms(start)
         end_ms = _to_ms(end)
+        interval_ms = _interval_ms(interval_minutes)
         cursor = start_ms
         points: list[PairSpreadKlinePoint] = []
         while cursor < end_ms:
-            chunk_end = min(end_ms, cursor + 1500 * MINUTE_MS - 1)
+            chunk_end = min(end_ms, cursor + 1500 * interval_ms - 1)
             url = (
-                f"{base_url}/fapi/v1/klines?symbol={raw}&interval=1m"
+                f"{base_url}/fapi/v1/klines?symbol={raw}&interval={interval_minutes}m"
                 f"&startTime={cursor}&endTime={chunk_end}&limit=1500"
             )
             rows = await self._get_json(url)
@@ -378,7 +413,7 @@ class PairSpreadQueryService:
             if not parsed:
                 break
             points.extend(point for point in parsed if start <= point.bucket_at <= end)
-            next_cursor = max(_to_ms(point.bucket_at) for point in parsed) + MINUTE_MS
+            next_cursor = max(_to_ms(point.bucket_at) for point in parsed) + interval_ms
             if next_cursor <= cursor:
                 break
             cursor = next_cursor
@@ -389,18 +424,20 @@ class PairSpreadQueryService:
         symbol: str,
         start: datetime,
         end: datetime,
+        interval_minutes: int,
     ) -> list[PairSpreadKlinePoint]:
         inst_id = _okx_inst_id(symbol)
-        points = await self._fetch_okx_klines_backward(inst_id, start, end)
+        points = await self._fetch_okx_klines_backward(inst_id, start, end, interval_minutes)
         if points:
             return points
-        return await self._fetch_okx_klines_forward(inst_id, start, end)
+        return await self._fetch_okx_klines_forward(inst_id, start, end, interval_minutes)
 
     async def _fetch_okx_klines_backward(
         self,
         inst_id: str,
         start: datetime,
         end: datetime,
+        interval_minutes: int,
     ) -> list[PairSpreadKlinePoint]:
         start_ms = _to_ms(start)
         cursor = _to_ms(end)
@@ -408,7 +445,7 @@ class PairSpreadQueryService:
         while cursor > start_ms:
             url = (
                 "https://www.okx.com/api/v5/market/history-candles"
-                f"?instId={inst_id}&bar=1m&after={cursor}&limit=100"
+                f"?instId={inst_id}&bar={interval_minutes}m&after={cursor}&limit=100"
             )
             rows = (await self._get_json(url)).get("data", [])
             parsed = [_parse_array_kline(row, 0, 4) for row in rows if isinstance(row, list)]
@@ -427,14 +464,16 @@ class PairSpreadQueryService:
         inst_id: str,
         start: datetime,
         end: datetime,
+        interval_minutes: int,
     ) -> list[PairSpreadKlinePoint]:
         end_ms = _to_ms(end)
         cursor = _to_ms(start)
+        interval_ms = _interval_ms(interval_minutes)
         points: list[PairSpreadKlinePoint] = []
         while cursor < end_ms:
             url = (
                 "https://www.okx.com/api/v5/market/history-candles"
-                f"?instId={inst_id}&bar=1m&before={cursor}&limit=100"
+                f"?instId={inst_id}&bar={interval_minutes}m&before={cursor}&limit=100"
             )
             rows = (await self._get_json(url)).get("data", [])
             parsed = [_parse_array_kline(row, 0, 4) for row in rows if isinstance(row, list)]
@@ -445,7 +484,7 @@ class PairSpreadQueryService:
             newest = max(_to_ms(point.bucket_at) for point in parsed)
             if newest <= cursor:
                 break
-            cursor = newest + MINUTE_MS
+            cursor = newest + interval_ms
         return _dedupe_sorted(points)
 
     async def _fetch_bybit_klines(
@@ -453,16 +492,18 @@ class PairSpreadQueryService:
         symbol: str,
         start: datetime,
         end: datetime,
+        interval_minutes: int,
     ) -> list[PairSpreadKlinePoint]:
         raw = _compact_symbol(symbol)
         end_ms = _to_ms(end)
+        interval_ms = _interval_ms(interval_minutes)
         cursor = _to_ms(start)
         points: list[PairSpreadKlinePoint] = []
         while cursor < end_ms:
-            chunk_end = min(end_ms, cursor + 1000 * MINUTE_MS - 1)
+            chunk_end = min(end_ms, cursor + 1000 * interval_ms - 1)
             url = (
                 "https://api.bybit.com/v5/market/kline"
-                f"?category=linear&symbol={raw}&interval=1&start={cursor}&end={chunk_end}&limit=1000"
+                f"?category=linear&symbol={raw}&interval={interval_minutes}&start={cursor}&end={chunk_end}&limit=1000"
             )
             rows = (await self._get_json(url)).get("result", {}).get("list", [])
             parsed = [_parse_array_kline(row, 0, 4) for row in rows if isinstance(row, list)]
@@ -470,7 +511,7 @@ class PairSpreadQueryService:
             if not parsed:
                 break
             points.extend(point for point in parsed if start <= point.bucket_at <= end)
-            next_cursor = max(_to_ms(point.bucket_at) for point in parsed) + MINUTE_MS
+            next_cursor = max(_to_ms(point.bucket_at) for point in parsed) + interval_ms
             if next_cursor <= cursor:
                 break
             cursor = next_cursor
@@ -481,16 +522,18 @@ class PairSpreadQueryService:
         symbol: str,
         start: datetime,
         end: datetime,
+        interval_minutes: int,
     ) -> list[PairSpreadKlinePoint]:
         contract = _gate_contract(symbol)
         end_sec = int(end.timestamp())
+        interval_seconds = interval_minutes * 60
         cursor = int(start.timestamp())
         points: list[PairSpreadKlinePoint] = []
         while cursor < end_sec:
-            chunk_end = min(end_sec, cursor + 1800 * 60)
+            chunk_end = min(end_sec, cursor + 1800 * interval_seconds)
             url = (
                 "https://api.gateio.ws/api/v4/futures/usdt/candlesticks"
-                f"?contract={contract}&interval=1m&from={cursor}&to={chunk_end}"
+                f"?contract={contract}&interval={interval_minutes}m&from={cursor}&to={chunk_end}"
             )
             rows = await self._get_json(url)
             parsed = [_parse_gate_kline(row) for row in rows if isinstance(row, (dict, list))]
@@ -498,7 +541,7 @@ class PairSpreadQueryService:
             if not parsed:
                 break
             points.extend(point for point in parsed if start <= point.bucket_at <= end)
-            next_cursor = max(int(point.bucket_at.timestamp()) for point in parsed) + 60
+            next_cursor = max(int(point.bucket_at.timestamp()) for point in parsed) + interval_seconds
             if next_cursor <= cursor:
                 break
             cursor = next_cursor
@@ -509,16 +552,18 @@ class PairSpreadQueryService:
         symbol: str,
         start: datetime,
         end: datetime,
+        interval_minutes: int,
     ) -> list[PairSpreadKlinePoint]:
         raw = _compact_symbol(symbol)
         end_ms = _to_ms(end)
+        interval_ms = _interval_ms(interval_minutes)
         cursor = _to_ms(start)
         points: list[PairSpreadKlinePoint] = []
         while cursor < end_ms:
-            chunk_end = min(end_ms, cursor + 1000 * MINUTE_MS - 1)
+            chunk_end = min(end_ms, cursor + 1000 * interval_ms - 1)
             url = (
                 "https://api.bitget.com/api/v2/mix/market/candles"
-                f"?symbol={raw}&productType=USDT-FUTURES&granularity=1m"
+                f"?symbol={raw}&productType=USDT-FUTURES&granularity={interval_minutes}m"
                 f"&startTime={cursor}&endTime={chunk_end}&limit=1000"
             )
             rows = (await self._get_json(url)).get("data", [])
@@ -527,7 +572,7 @@ class PairSpreadQueryService:
             if not parsed:
                 break
             points.extend(point for point in parsed if start <= point.bucket_at <= end)
-            next_cursor = max(_to_ms(point.bucket_at) for point in parsed) + MINUTE_MS
+            next_cursor = max(_to_ms(point.bucket_at) for point in parsed) + interval_ms
             if next_cursor <= cursor:
                 break
             cursor = next_cursor
@@ -538,6 +583,7 @@ class PairSpreadQueryService:
         symbol: str,
         start: datetime,
         end: datetime,
+        interval_minutes: int,
     ) -> list[PairSpreadKlinePoint]:
         payload = await self._post_json(
             "https://api.hyperliquid.xyz/info",
@@ -545,7 +591,7 @@ class PairSpreadQueryService:
                 "type": "candleSnapshot",
                 "req": {
                     "coin": _hyperliquid_coin(symbol),
-                    "interval": "1m",
+                    "interval": f"{interval_minutes}m",
                     "startTime": _to_ms(start),
                     "endTime": _to_ms(end),
                 },
@@ -988,6 +1034,24 @@ def _current_leg(
                 timestamp=utc_now(),
             )
     raise RuntimeError(f"no usable current price for {exchange}:{symbol}")
+
+
+def _scale_current_leg(leg: PairSpreadCurrentLeg, divisor: float) -> PairSpreadCurrentLeg:
+    if divisor == 1:
+        return leg
+
+    def scale(value: float | None) -> float | None:
+        return value / divisor if value is not None else None
+
+    return leg.model_copy(
+        update={
+            "price": leg.price / divisor,
+            "mark_price": scale(leg.mark_price),
+            "index_price": scale(leg.index_price),
+            "mid_price": scale(leg.mid_price),
+            "last_price": scale(leg.last_price),
+        }
+    )
 
 
 def _funding_point(

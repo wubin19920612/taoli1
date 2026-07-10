@@ -538,6 +538,8 @@ export async function queryPairSpread(query: {
   leg2_exchange: string;
   leg2_symbol: string;
   hours?: number;
+  interval_minutes?: number;
+  leg2_multiplier?: number;
 }): Promise<PairSpreadQueryResult> {
   const url = buildUrl("/pair-spread/query", query);
   return fetch(url, { headers: authHeaders() }).then(async (response) => {

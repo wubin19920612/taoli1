@@ -867,6 +867,216 @@ body {
   min-width: 0;
 }
 
+.pair-terminal-page {
+  gap: 10px;
+}
+
+.pair-query-panel {
+  padding: 8px;
+  background: #ffffff;
+  border: 1px solid #e2e8e5;
+  border-radius: 6px;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.04);
+}
+
+.pair-query-bar {
+  display: grid;
+  grid-template-columns:
+    minmax(126px, 0.75fr)
+    minmax(208px, 1.12fr)
+    minmax(126px, 0.75fr)
+    minmax(208px, 1.12fr)
+    minmax(168px, 0.9fr)
+    minmax(108px, 0.62fr)
+    minmax(116px, 0.68fr)
+    92px;
+  gap: 8px;
+  align-items: start;
+}
+
+.pair-query-bar .ant-form-item {
+  margin: 0;
+}
+
+.pair-query-bar .ant-select-selector,
+.pair-query-bar .ant-input,
+.pair-query-bar .ant-input-group-addon,
+.pair-query-bar .ant-input-number,
+.pair-query-bar .ant-input-number-group-addon,
+.pair-query-bar .ant-btn {
+  min-height: 34px;
+  border-radius: 6px;
+}
+
+.pair-query-contract .ant-input-group-addon,
+.pair-query-multiplier .ant-input-number-group-addon {
+  min-width: 64px;
+  color: #24352f;
+  font-weight: 600;
+  background: #f8faf9;
+}
+
+.pair-query-multiplier .ant-input-number-group-wrapper,
+.pair-query-multiplier .ant-input-number,
+.pair-query-item .ant-select,
+.pair-query-contract .ant-input-group-wrapper,
+.pair-query-select,
+.pair-query-bar .ant-btn {
+  width: 100%;
+}
+
+.pair-metric-grid {
+  display: grid;
+  grid-template-columns: 1.25fr 1fr 1fr 1.08fr 1fr;
+  gap: 10px;
+}
+
+.pair-metric-card {
+  min-height: 96px;
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  padding: 14px 16px;
+  background: #ffffff;
+  border: 1px solid #e2e8e5;
+  border-radius: 6px;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.04);
+  min-width: 0;
+}
+
+.pair-metric-label,
+.pair-metric-sub {
+  overflow: hidden;
+  color: #687872;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pair-metric-value {
+  overflow: hidden;
+  color: #17211d;
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: 0;
+  line-height: 1.05;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pair-metric-negative .pair-metric-value {
+  color: #14803c;
+}
+
+.pair-metric-positive .pair-metric-value {
+  color: #b42318;
+}
+
+.pair-chart-card {
+  overflow: hidden;
+  display: grid;
+  gap: 8px;
+  padding: 12px 12px 8px;
+  background: #ffffff;
+  border: 1px solid #e2e8e5;
+  border-radius: 6px;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.04);
+  min-width: 0;
+}
+
+.pair-spread-chart {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.pair-spread-chart rect {
+  fill: #ffffff;
+  stroke: #eef2f1;
+}
+
+.pair-chart-grid-line {
+  stroke: #edf2f0;
+  stroke-width: 1;
+}
+
+.pair-chart-zero-line {
+  stroke: #a7b0ad;
+  stroke-width: 1.1;
+}
+
+.pair-chart-area {
+  fill: url(#pairSpreadFill);
+}
+
+.pair-chart-line {
+  fill: none;
+  stroke: #2f80ed;
+  stroke-width: 2.35;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.pair-chart-axis-label {
+  fill: #6b7a75;
+  font-size: 12px;
+}
+
+.pair-chart-empty {
+  min-height: 330px;
+  display: grid;
+  place-items: center;
+  color: #687872;
+  background: #ffffff;
+  border: 1px dashed #dbe4e0;
+  border-radius: 6px;
+}
+
+.pair-chart-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.pair-footer-tags {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.pair-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(360px, 0.9fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.pair-detail-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  background: #ffffff;
+  border: 1px solid #e2e8e5;
+  border-radius: 6px;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.04);
+  min-width: 0;
+}
+
+.pair-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pair-detail-head .ant-typography {
+  margin: 0;
+}
+
 .research-table .ant-table-row {
   cursor: pointer;
 }
@@ -1430,6 +1640,9 @@ body {
   .pair-monitor-layout,
   .pair-monitor-stats,
   .pair-monitor-tables,
+  .pair-query-bar,
+  .pair-metric-grid,
+  .pair-detail-grid,
   .research-grid,
   .research-backtest-grid,
   .research-backtest-stats,
@@ -1455,6 +1668,11 @@ body {
   }
 
   .blocked-strip {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .pair-chart-footer {
     align-items: flex-start;
     flex-direction: column;
   }
