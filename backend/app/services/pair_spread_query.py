@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from math import isfinite
 from typing import Any
 
@@ -31,6 +31,7 @@ from app.models.pair_spread import (
 
 MINUTE_MS = 60_000
 PAIR_SPREAD_TIMEOUT = httpx.Timeout(18.0, connect=3.0, read=14.0, write=5.0, pool=5.0)
+DISPLAY_TZ = timezone(timedelta(hours=8))
 
 
 class PairSpreadQueryError(RuntimeError):
@@ -112,6 +113,21 @@ def _dedupe_sorted(points: list[PairSpreadKlinePoint]) -> list[PairSpreadKlinePo
     return [by_bucket[key] for key in sorted(by_bucket)]
 
 
+def _duration_text(hours: int) -> str:
+    if hours % 24 == 0:
+        return f"{hours // 24}天"
+    return f"{hours}小时"
+
+
+def _display_time(value: datetime) -> str:
+    return value.astimezone(DISPLAY_TZ).strftime("%Y-%m-%d %H:%M")
+
+
+def _query_window_hours(hours: int) -> list[int]:
+    candidates = [hours, 720, 168, 72, 24, 12, 6, 3, 1]
+    return list(dict.fromkeys(candidate for candidate in candidates if 0 < candidate <= hours))
+
+
 def build_pair_spread_points(
     leg1_klines: list[PairSpreadKlinePoint],
     leg2_klines: list[PairSpreadKlinePoint],
@@ -171,40 +187,67 @@ class PairSpreadQueryService:
             raise PairSpreadQueryError("leg2_multiplier must be positive")
         observed_at = now or utc_now()
         end = _floor_minute(observed_at)
-        start = end - timedelta(hours=hours)
+        requested_start = end - timedelta(hours=hours)
         warnings: list[str] = []
-
         kline_keys = list(dict.fromkeys(((leg1.exchange, leg1.symbol), (leg2.exchange, leg2.symbol))))
-        kline_results = await asyncio.gather(
-            *(
-                self._fetch_klines_with_warning(
-                    exchange,
-                    symbol,
-                    start,
-                    end,
-                    interval_minutes,
-                    warnings,
+
+        points: list[PairSpreadPoint] = []
+        used_start = requested_start
+        failed_window_warnings: list[str] = []
+
+        for window_hours in _query_window_hours(hours):
+            window_start = end - timedelta(hours=window_hours)
+            window_warnings: list[str] = []
+            kline_results = await asyncio.gather(
+                *(
+                    self._fetch_klines_with_warning(
+                        exchange,
+                        symbol,
+                        window_start,
+                        end,
+                        interval_minutes,
+                        window_warnings,
+                    )
+                    for exchange, symbol in kline_keys
                 )
-                for exchange, symbol in kline_keys
             )
-        )
-        klines_by_key = dict(zip(kline_keys, kline_results, strict=True))
-        leg1_klines = klines_by_key[(leg1.exchange, leg1.symbol)]
-        leg2_klines = klines_by_key[(leg2.exchange, leg2.symbol)]
-        points = build_pair_spread_points(
-            leg1_klines,
-            leg2_klines,
-            leg2_multiplier=leg2_multiplier,
-        )
+            klines_by_key = dict(zip(kline_keys, kline_results, strict=True))
+            candidate_leg1_klines = klines_by_key[(leg1.exchange, leg1.symbol)]
+            candidate_leg2_klines = klines_by_key[(leg2.exchange, leg2.symbol)]
+            candidate_points = build_pair_spread_points(
+                candidate_leg1_klines,
+                candidate_leg2_klines,
+                leg2_multiplier=leg2_multiplier,
+            )
+            if candidate_points:
+                points = candidate_points
+                used_start = window_start
+                if window_hours != hours:
+                    warnings.append(
+                        f"请求{_duration_text(hours)}没有拿到可对齐K线，已自动改查最近{_duration_text(window_hours)}。"
+                    )
+                warnings.extend(window_warnings)
+                break
+            failed_window_warnings.extend(window_warnings)
+
         if not points:
-            suffix = f": {'; '.join(warnings)}" if warnings else ""
+            suffix = f": {'; '.join(failed_window_warnings)}" if failed_window_warnings else ""
             raise PairSpreadQueryError(f"没有拿到可对齐的分钟K线{suffix}")
 
+        earliest_expected = used_start + timedelta(minutes=interval_minutes)
+        if points[0].bucket_at > earliest_expected:
+            warnings.insert(
+                0,
+                f"请求{_duration_text(hours)}，最早可对齐K线为{_display_time(points[0].bucket_at)}，已按可获取数据展示。",
+            )
+
+        funding_start = points[0].bucket_at
+        funding_end = points[-1].bucket_at
         current_leg1, current_leg2, funding1, funding2 = await asyncio.gather(
             self._fetch_current_with_warning(leg1, warnings),
             self._fetch_current_with_warning(leg2, warnings),
-            self._fetch_funding_with_warning(leg1, start, end, warnings),
-            self._fetch_funding_with_warning(leg2, start, end, warnings),
+            self._fetch_funding_with_warning(leg1, funding_start, funding_end, warnings),
+            self._fetch_funding_with_warning(leg2, funding_start, funding_end, warnings),
         )
         current = (
             self._build_current_snapshot(
@@ -411,7 +454,8 @@ class PairSpreadQueryService:
             parsed = [_parse_array_kline(row, 0, 4) for row in rows if isinstance(row, list)]
             parsed = [point for point in parsed if point is not None]
             if not parsed:
-                break
+                cursor = chunk_end + 1
+                continue
             points.extend(point for point in parsed if start <= point.bucket_at <= end)
             next_cursor = max(_to_ms(point.bucket_at) for point in parsed) + interval_ms
             if next_cursor <= cursor:
@@ -509,7 +553,8 @@ class PairSpreadQueryService:
             parsed = [_parse_array_kline(row, 0, 4) for row in rows if isinstance(row, list)]
             parsed = [point for point in parsed if point is not None]
             if not parsed:
-                break
+                cursor = chunk_end + 1
+                continue
             points.extend(point for point in parsed if start <= point.bucket_at <= end)
             next_cursor = max(_to_ms(point.bucket_at) for point in parsed) + interval_ms
             if next_cursor <= cursor:
@@ -539,7 +584,8 @@ class PairSpreadQueryService:
             parsed = [_parse_gate_kline(row) for row in rows if isinstance(row, (dict, list))]
             parsed = [point for point in parsed if point is not None]
             if not parsed:
-                break
+                cursor = chunk_end + interval_seconds
+                continue
             points.extend(point for point in parsed if start <= point.bucket_at <= end)
             next_cursor = max(int(point.bucket_at.timestamp()) for point in parsed) + interval_seconds
             if next_cursor <= cursor:
@@ -570,7 +616,8 @@ class PairSpreadQueryService:
             parsed = [_parse_array_kline(row, 0, 4) for row in rows if isinstance(row, list)]
             parsed = [point for point in parsed if point is not None]
             if not parsed:
-                break
+                cursor = chunk_end + 1
+                continue
             points.extend(point for point in parsed if start <= point.bucket_at <= end)
             next_cursor = max(_to_ms(point.bucket_at) for point in parsed) + interval_ms
             if next_cursor <= cursor:

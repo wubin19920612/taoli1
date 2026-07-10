@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from pydantic import ValidationError
@@ -18,6 +19,10 @@ def kline(minutes: int, close: float) -> PairSpreadKlinePoint:
         bucket_at=datetime(2026, 7, 10, 12, minutes, tzinfo=UTC),
         close=close,
     )
+
+
+def kline_at(bucket_at: datetime, close: float) -> PairSpreadKlinePoint:
+    return PairSpreadKlinePoint(bucket_at=bucket_at, close=close)
 
 
 def current_leg(exchange: str, symbol: str, price: float) -> PairSpreadCurrentLeg:
@@ -63,9 +68,18 @@ async def test_pair_spread_query_builds_stats_current_and_funding() -> None:
     class FakePairSpreadService(PairSpreadQueryService):
         async def _fetch_klines(self, exchange: str, symbol: str, start, end, interval_minutes: int):
             assert interval_minutes == 5
+            first_bucket = start + timedelta(minutes=5)
             if exchange == "binance":
-                return [kline(0, 100), kline(1, 101), kline(2, 102)]
-            return [kline(0, 1010), kline(1, 1030), kline(2, 1050)]
+                return [
+                    kline_at(first_bucket, 100),
+                    kline_at(first_bucket + timedelta(minutes=5), 101),
+                    kline_at(first_bucket + timedelta(minutes=10), 102),
+                ]
+            return [
+                kline_at(first_bucket, 1010),
+                kline_at(first_bucket + timedelta(minutes=5), 1030),
+                kline_at(first_bucket + timedelta(minutes=10), 1050),
+            ]
 
         async def _fetch_current_leg(self, exchange: str, symbol: str):
             return current_leg(exchange, symbol, 100 if exchange == "binance" else 1040)
@@ -105,6 +119,76 @@ async def test_pair_spread_query_builds_stats_current_and_funding() -> None:
     assert result.leg2_multiplier == 10
     assert len(result.funding_history) == 2
     assert result.warnings == []
+
+
+@pytest.mark.asyncio
+async def test_pair_spread_query_falls_back_to_available_window() -> None:
+    now = datetime(2026, 7, 10, 12, 30, tzinfo=UTC)
+    point_time = now - timedelta(hours=2)
+
+    class FakePairSpreadService(PairSpreadQueryService):
+        def __init__(self) -> None:
+            super().__init__()
+            self.window_hours: list[int] = []
+
+        async def _fetch_klines(self, exchange: str, symbol: str, start, end, interval_minutes: int):
+            self.window_hours.append(round((end - start).total_seconds() / 3600))
+            if start < end - timedelta(hours=168):
+                return []
+            close = 100 if exchange == "binance" else 103
+            return [kline_at(point_time, close)]
+
+        async def _fetch_current_leg(self, exchange: str, symbol: str):
+            return current_leg(exchange, symbol, 100 if exchange == "binance" else 103)
+
+        async def _fetch_funding_history(self, exchange: str, symbol: str, start, end):
+            return []
+
+    service = FakePairSpreadService()
+    try:
+        result = await service.query(
+            PairSpreadLegQuery(exchange="binance", symbol="btc"),
+            PairSpreadLegQuery(exchange="okx", symbol="btc"),
+            hours=720,
+            interval_minutes=5,
+            now=now,
+        )
+    finally:
+        await service.aclose()
+
+    assert 720 in service.window_hours
+    assert 168 in service.window_hours
+    assert result.hours == 720
+    assert result.point_count == 1
+    assert result.first_seen_at == point_time
+    assert any("自动改查最近7天" in warning for warning in result.warnings)
+
+
+@pytest.mark.asyncio
+async def test_bitget_klines_continue_after_empty_early_chunk() -> None:
+    start = datetime(2026, 7, 1, 0, 0, tzinfo=UTC)
+    end = start + timedelta(minutes=1001)
+    first_data_bucket = start + timedelta(minutes=1000)
+    requested_starts: list[int] = []
+
+    service = PairSpreadQueryService()
+
+    async def fake_get_json(url: str):
+        query = parse_qs(urlparse(url).query)
+        start_ms = int(query["startTime"][0])
+        requested_starts.append(start_ms)
+        if len(requested_starts) == 1:
+            return {"data": []}
+        return {"data": [[int(first_data_bucket.timestamp() * 1000), "0", "0", "0", "10"]]}
+
+    service._get_json = fake_get_json  # type: ignore[method-assign]
+    try:
+        points = await service._fetch_bitget_klines("BTCUSDT", start, end, 1)
+    finally:
+        await service.aclose()
+
+    assert len(requested_starts) == 2
+    assert points == [PairSpreadKlinePoint(bucket_at=first_data_bucket, close=10)]
 
 
 def test_pair_spread_rejects_htx() -> None:

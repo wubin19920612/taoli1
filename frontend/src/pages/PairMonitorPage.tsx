@@ -104,11 +104,26 @@ function fullTime(value: string | null | undefined): string {
   return value ? dayjs.utc(value).utcOffset(8).format("MM-DD HH:mm:ss") : "-";
 }
 
+function chartTime(value: string | null | undefined, spanHours: number): string {
+  if (!value) {
+    return "-";
+  }
+  const parsed = dayjs.utc(value).utcOffset(8);
+  return spanHours <= 24 ? parsed.format("HH:mm") : parsed.format("MM-DD HH:mm");
+}
+
 function durationLabel(hours: number): string {
   if (hours < 24) {
     return `${hours}小时`;
   }
   return `${hours / 24}天`;
+}
+
+function dataRangeLabel(result: PairSpreadQueryResult | null, fallbackHours: number): string {
+  if (!result?.first_seen_at || !result.last_seen_at) {
+    return durationLabel(fallbackHours);
+  }
+  return `${time(result.first_seen_at)} - ${time(result.last_seen_at)}`;
 }
 
 function rightLegLabel(result: PairSpreadQueryResult | null): string {
@@ -144,6 +159,31 @@ function spreadAreaPath(
     .map((point, index) => `L ${xAt(index).toFixed(2)} ${yAt(point.spread_pct).toFixed(2)}`)
     .join(" ");
   return `M ${firstX.toFixed(2)} ${baselineY.toFixed(2)} ${line} L ${lastX.toFixed(2)} ${baselineY.toFixed(2)} Z`;
+}
+
+function chartSpanHours(points: PairSpreadPoint[]): number {
+  if (points.length < 2) {
+    return 0;
+  }
+  const start = dayjs.utc(points[0].bucket_at);
+  const end = dayjs.utc(points[points.length - 1].bucket_at);
+  return Math.max(end.diff(start, "minute") / 60, 0);
+}
+
+function chartTicks(points: PairSpreadPoint[], maxTicks = 7): Array<{ index: number; point: PairSpreadPoint }> {
+  if (points.length <= 1) {
+    return points.map((point, index) => ({ index, point }));
+  }
+  const count = Math.min(maxTicks, points.length);
+  const seen = new Set<number>();
+  return Array.from({ length: count }, (_, tickIndex) => {
+    const index = Math.round((tickIndex * (points.length - 1)) / (count - 1));
+    if (seen.has(index)) {
+      return null;
+    }
+    seen.add(index);
+    return { index, point: points[index] };
+  }).filter((tick): tick is { index: number; point: PairSpreadPoint } => tick !== null);
 }
 
 function MetricCard({
@@ -189,8 +229,8 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
   const yAt = (value: number) => padding.top + ((max - value) / (max - min)) * chartHeight;
   const baselineValue = min <= 0 && max >= 0 ? 0 : minValue > 0 ? min : max;
   const baselineY = yAt(baselineValue);
-  const first = points[0];
-  const last = points[points.length - 1];
+  const spanHours = chartSpanHours(points);
+  const ticks = chartTicks(points, spanHours >= 168 ? 7 : 6);
 
   return (
     <div className="pair-chart-card">
@@ -214,17 +254,23 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
             </g>
           );
         })}
+        {ticks.map(({ index, point }, tickIndex) => {
+          const x = xAt(index);
+          const textAnchor = tickIndex === 0 ? "start" : tickIndex === ticks.length - 1 ? "end" : "middle";
+          return (
+            <g key={point.bucket_at}>
+              <line className="pair-chart-time-tick" x1={x} y1={padding.top} x2={x} y2={padding.top + chartHeight} />
+              <text className="pair-chart-axis-label" x={x} y={height - 10} textAnchor={textAnchor}>
+                {chartTime(point.bucket_at, spanHours)}
+              </text>
+            </g>
+          );
+        })}
         {min <= 0 && max >= 0 ? (
           <line className="pair-chart-zero-line" x1={padding.left} y1={yAt(0)} x2={padding.left + chartWidth} y2={yAt(0)} />
         ) : null}
         <path className="pair-chart-area" d={spreadAreaPath(points, xAt, yAt, baselineY)} />
         <path className="pair-chart-line" d={spreadLinePath(points, xAt, yAt)} />
-        <text className="pair-chart-axis-label" x={padding.left} y={height - 10}>
-          {time(first.bucket_at)}
-        </text>
-        <text className="pair-chart-axis-label" x={padding.left + chartWidth} y={height - 10} textAnchor="end">
-          {time(last.bucket_at)}
-        </text>
       </svg>
       <div className="pair-chart-footer">
         <div className="pair-footer-tags">
@@ -402,7 +448,7 @@ export function PairMonitorPage() {
         <MetricCard
           label="周期"
           value={`${result?.interval_minutes ?? intervalMinutes}m`}
-          sub={result ? `${durationLabel(result.hours)} · ${fullTime(result.observed_at)}` : durationLabel(hours)}
+          sub={result ? `${dataRangeLabel(result, hours)} · ${fullTime(result.observed_at)}` : durationLabel(hours)}
         />
       </section>
 
