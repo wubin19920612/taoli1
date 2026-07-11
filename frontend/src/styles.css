@@ -889,6 +889,7 @@ body {
     minmax(168px, 0.9fr)
     minmax(108px, 0.62fr)
     minmax(116px, 0.68fr)
+    minmax(72px, 0.42fr)
     92px;
   gap: 8px;
   align-items: start;
@@ -918,11 +919,21 @@ body {
 
 .pair-query-multiplier .ant-input-number-group-wrapper,
 .pair-query-multiplier .ant-input-number,
+.pair-query-hours,
+.pair-query-hours .ant-input-number-group-wrapper,
+.pair-query-hours .ant-input-number,
 .pair-query-item .ant-select,
 .pair-query-contract .ant-input-group-wrapper,
 .pair-query-select,
 .pair-query-bar .ant-btn {
   width: 100%;
+}
+
+.pair-query-refresh {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
 }
 
 .pair-metric-grid {

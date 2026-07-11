@@ -48,7 +48,7 @@ def test_pair_spread_points_align_by_minute() -> None:
 
     assert [point.bucket_at.minute for point in points] == [1, 2]
     assert points[0].spread_abs == 2
-    assert points[0].spread_pct == pytest.approx((103 - 101) / 101 * 100)
+    assert points[0].spread_pct == pytest.approx((103 - 101) / ((101 + 103) / 2) * 100)
     assert points[1].spread_abs == 3
 
 
@@ -61,7 +61,7 @@ def test_pair_spread_points_apply_right_side_multiplier() -> None:
 
     assert points[0].leg2_close == 105
     assert points[0].spread_abs == 5
-    assert points[0].spread_pct == 5
+    assert points[0].spread_pct == pytest.approx(5 / ((100 + 105) / 2) * 100)
 
 
 @pytest.mark.asyncio
@@ -112,10 +112,10 @@ async def test_pair_spread_query_builds_stats_current_and_funding() -> None:
     assert result.leg2.symbol == "BTCUSDT"
     assert result.point_count == 3
     assert result.spread_abs.current == 3
-    assert result.spread_pct.current == pytest.approx((105 - 102) / 102 * 100)
+    assert result.spread_pct.current == pytest.approx((105 - 102) / ((102 + 105) / 2) * 100)
     assert result.current is not None
     assert result.current.leg2.price == 104
-    assert result.current.spread_pct == 4
+    assert result.current.spread_pct == pytest.approx((104 - 100) / ((100 + 104) / 2) * 100)
     assert result.interval_minutes == 5
     assert result.leg2_multiplier == 10
     assert len(result.funding_history) == 2

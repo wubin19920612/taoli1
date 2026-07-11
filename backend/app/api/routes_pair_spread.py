@@ -2,7 +2,8 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import ValidationError
 
 from app.models.pair_spread import (
-    PAIR_SPREAD_HOUR_OPTIONS,
+    PAIR_SPREAD_MAX_HOURS,
+    PAIR_SPREAD_MIN_HOURS,
     PAIR_SPREAD_INTERVAL_OPTIONS,
     PairSpreadLegQuery,
     PairSpreadQueryResult,
@@ -25,13 +26,10 @@ async def query_pair_spread(
     leg1_symbol: str = Query(...),
     leg2_exchange: str = Query(...),
     leg2_symbol: str = Query(...),
-    hours: int = Query(default=72),
+    hours: int = Query(default=72, ge=PAIR_SPREAD_MIN_HOURS, le=PAIR_SPREAD_MAX_HOURS),
     interval_minutes: int = Query(default=1),
     leg2_multiplier: float = Query(default=1.0, gt=0),
 ) -> PairSpreadQueryResult:
-    if hours not in PAIR_SPREAD_HOUR_OPTIONS:
-        allowed = ", ".join(str(value) for value in PAIR_SPREAD_HOUR_OPTIONS)
-        raise HTTPException(status_code=422, detail=f"hours must be one of: {allowed}")
     if interval_minutes not in PAIR_SPREAD_INTERVAL_OPTIONS:
         allowed = ", ".join(str(value) for value in PAIR_SPREAD_INTERVAL_OPTIONS)
         raise HTTPException(status_code=422, detail=f"interval_minutes must be one of: {allowed}")

@@ -6,12 +6,13 @@ import {
   Input,
   InputNumber,
   Select,
+  Switch,
   Table,
   Tag,
   Typography
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 
@@ -44,13 +45,6 @@ const defaultFormValues: PairSpreadFormValues = {
 const exchangeOptions = ["binance", "okx", "bybit", "gate", "bitget", "aster", "hyperliquid"].map(
   (value) => ({ label: value[0].toUpperCase() + value.slice(1), value })
 );
-
-const rangeOptions = [
-  { label: "24小时", value: 24 },
-  { label: "3天", value: 72 },
-  { label: "7天", value: 168 },
-  { label: "30天", value: 720 }
-];
 
 const intervalOptions = [
   { label: "1分钟", value: 1 },
@@ -94,6 +88,13 @@ function compactNumber(value: number | null | undefined, digits = 4): string {
     return "-";
   }
   return value.toFixed(digits).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function clampHours(value: number | null): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return 1;
+  }
+  return Math.min(720, Math.max(1, Math.round(value)));
 }
 
 function time(value: string | null | undefined): string {
@@ -234,7 +235,7 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
 
   return (
     <div className="pair-chart-card">
-      <svg className="pair-spread-chart" role="img" aria-label="价差率曲线" viewBox={`0 0 ${width} ${height}`}>
+      <svg className="pair-spread-chart" role="img" aria-label="均值价差率曲线" viewBox={`0 0 ${width} ${height}`}>
         <defs>
           <linearGradient id="pairSpreadFill" x1="0" x2="0" y1="0" y2="1">
             <stop offset="0%" stopColor="#2f80ed" stopOpacity="0.18" />
@@ -291,7 +292,7 @@ const pointColumns: ColumnsType<PairSpreadPoint> = [
   { title: "左价", dataIndex: "leg1_close", align: "right", render: (value: number) => price(value) },
   { title: "右价", dataIndex: "leg2_close", align: "right", render: (value: number) => price(value) },
   { title: "差价", dataIndex: "spread_abs", align: "right", render: (value: number) => price(value) },
-  { title: "价差率", dataIndex: "spread_pct", align: "right", render: (value: number) => signedPct(value) }
+  { title: "均值价差率", dataIndex: "spread_pct", align: "right", render: (value: number) => signedPct(value) }
 ];
 
 const fundingColumns: ColumnsType<PairSpreadFundingPoint> = [
@@ -315,6 +316,7 @@ export function PairMonitorPage() {
   const [form] = Form.useForm<PairSpreadFormValues>();
   const [hours, setHours] = useState(720);
   const [intervalMinutes, setIntervalMinutes] = useState(5);
+  const [autoRefresh, setAutoRefresh] = useState(false);
   const [result, setResult] = useState<PairSpreadQueryResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -328,12 +330,12 @@ export function PairMonitorPage() {
     [result?.funding_history]
   );
 
-  const runQuery = async (override?: { hours?: number; intervalMinutes?: number }) => {
+  const runQuery = useCallback(async (override?: { hours?: number; intervalMinutes?: number }) => {
     setLoading(true);
     setError("");
     try {
       const values = await form.validateFields();
-      const queryHours = override?.hours ?? hours;
+      const queryHours = clampHours(override?.hours ?? hours);
       const queryInterval = override?.intervalMinutes ?? intervalMinutes;
       const next = await queryPairSpread({
         leg1_exchange: values.leg1_exchange,
@@ -350,7 +352,19 @@ export function PairMonitorPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [form, hours, intervalMinutes]);
+
+  useEffect(() => {
+    if (!autoRefresh || !result) {
+      return undefined;
+    }
+    const timer = window.setInterval(() => {
+      if (!loading) {
+        void runQuery();
+      }
+    }, 30_000);
+    return () => window.clearInterval(timer);
+  }, [autoRefresh, loading, result, runQuery]);
 
   const rerun = () => {
     if (!result) {
@@ -404,13 +418,25 @@ export function PairMonitorPage() {
             >
               <InputNumber addonBefore="右侧倍率" min={0.000001} step={1} />
             </Form.Item>
-            <Select className="pair-query-select" value={hours} options={rangeOptions} onChange={setHours} />
+            <InputNumber
+              addonBefore="小时"
+              className="pair-query-hours"
+              min={1}
+              max={720}
+              precision={0}
+              step={1}
+              value={hours}
+              onChange={(value) => setHours(clampHours(value))}
+            />
             <Select
               className="pair-query-select"
               value={intervalMinutes}
               options={intervalOptions}
               onChange={setIntervalMinutes}
             />
+            <Form.Item className="pair-query-refresh">
+              <Switch checked={autoRefresh} checkedChildren="自动" unCheckedChildren="手动" onChange={setAutoRefresh} />
+            </Form.Item>
             <Button type="primary" icon={<SearchOutlined />} loading={loading} onClick={() => void runQuery()}>
               查询
             </Button>
@@ -420,7 +446,7 @@ export function PairMonitorPage() {
 
       <section className="pair-metric-grid">
         <MetricCard
-          label="最新价差率"
+          label="最新均值价差率"
           value={signedPct(spreadPct)}
           sub={
             result

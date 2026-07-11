@@ -99,6 +99,11 @@ def _mid_price(bid: float | None, ask: float | None) -> float | None:
     return (bid + ask) / 2
 
 
+def _spread_pct(spread_abs: float, leg1_price: float, leg2_price: float) -> float:
+    midpoint = (leg1_price + leg2_price) / 2
+    return spread_abs / midpoint * 100
+
+
 def _stats(values: list[float]) -> PairSpreadValueStats:
     finite_values = [value for value in values if isfinite(value)]
     if not finite_values:
@@ -171,7 +176,7 @@ def build_pair_spread_points(
                 leg1_close=leg1_close,
                 leg2_close=leg2_close,
                 spread_abs=spread_abs,
-                spread_pct=spread_abs / leg1_close * 100,
+                spread_pct=_spread_pct(spread_abs, leg1_close, leg2_close),
             )
         )
     return points
@@ -352,7 +357,7 @@ class PairSpreadQueryService:
             leg1=leg1,
             leg2=leg2,
             spread_abs=spread_abs,
-            spread_pct=spread_abs / leg1.price * 100,
+            spread_pct=_spread_pct(spread_abs, leg1.price, leg2.price),
         )
 
     async def _fetch_klines(

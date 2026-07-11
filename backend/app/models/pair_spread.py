@@ -13,7 +13,8 @@ SUPPORTED_PAIR_SPREAD_EXCHANGES: tuple[str, ...] = (
     "aster",
     "hyperliquid",
 )
-PAIR_SPREAD_HOUR_OPTIONS: tuple[int, ...] = (24, 72, 168, 720)
+PAIR_SPREAD_MIN_HOURS = 1
+PAIR_SPREAD_MAX_HOURS = 720
 PAIR_SPREAD_INTERVAL_OPTIONS: tuple[int, ...] = (1, 5, 15)
 
 

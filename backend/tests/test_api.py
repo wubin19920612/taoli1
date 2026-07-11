@@ -687,7 +687,7 @@ def test_pair_spread_query_endpoint_uses_on_demand_service() -> None:
         response = client.get(
             "/api/pair-spread/query"
             "?leg1_exchange=binance&leg1_symbol=btc"
-            "&leg2_exchange=okx&leg2_symbol=BTC-USDT-SWAP&hours=720"
+            "&leg2_exchange=okx&leg2_symbol=BTC-USDT-SWAP&hours=6"
             "&interval_minutes=5&leg2_multiplier=10"
         )
 
@@ -695,7 +695,7 @@ def test_pair_spread_query_endpoint_uses_on_demand_service() -> None:
     payload = response.json()
     assert payload["leg1"]["symbol"] == "BTCUSDT"
     assert payload["leg2"]["exchange"] == "okx"
-    assert payload["hours"] == 720
+    assert payload["hours"] == 6
     assert payload["interval_minutes"] == 5
     assert payload["leg2_multiplier"] == 10
     assert payload["point_count"] == 1
