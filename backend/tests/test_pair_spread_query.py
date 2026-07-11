@@ -11,7 +11,7 @@ from app.models.pair_spread import (
     PairSpreadLegQuery,
     PairSpreadPriceField,
 )
-from app.services.pair_spread_query import PairSpreadQueryService, build_pair_spread_points
+from app.services.pair_spread_query import PairSpreadQueryError, PairSpreadQueryService, build_pair_spread_points
 
 
 def kline(minutes: int, close: float) -> PairSpreadKlinePoint:
@@ -162,6 +162,31 @@ async def test_pair_spread_query_falls_back_to_available_window() -> None:
     assert result.point_count == 1
     assert result.first_seen_at == point_time
     assert any("自动改查最近7天" in warning for warning in result.warnings)
+
+
+@pytest.mark.asyncio
+async def test_pair_spread_query_dedupes_repeated_kline_failures() -> None:
+    class FakePairSpreadService(PairSpreadQueryService):
+        async def _fetch_klines(self, exchange: str, symbol: str, start, end, interval_minutes: int):
+            raise RuntimeError("Hyperliquid 接口返回 HTTP 500，可能是该合约未上线、名称不匹配，或接口临时异常")
+
+    service = FakePairSpreadService()
+    try:
+        with pytest.raises(PairSpreadQueryError) as exc_info:
+            await service.query(
+                PairSpreadLegQuery(exchange="hyperliquid", symbol="skhy"),
+                PairSpreadLegQuery(exchange="hyperliquid", symbol="skhynix"),
+                hours=24,
+                interval_minutes=1,
+                now=datetime(2026, 7, 10, 12, 30, tzinfo=UTC),
+            )
+    finally:
+        await service.aclose()
+
+    message = str(exc_info.value)
+    assert message.count("hyperliquid:SKHYUSDT 分钟K线失败") == 1
+    assert message.count("hyperliquid:SKHYNIXUSDT 分钟K线失败") == 1
+    assert "developer.mozilla.org" not in message
 
 
 @pytest.mark.asyncio

@@ -5,6 +5,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta, timezone
 from math import isfinite
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -128,6 +129,21 @@ def _query_window_hours(hours: int) -> list[int]:
     return list(dict.fromkeys(candidate for candidate in candidates if 0 < candidate <= hours))
 
 
+def _append_unique(items: list[str], item: str) -> None:
+    if item not in items:
+        items.append(item)
+
+
+def _extend_unique(items: list[str], new_items: list[str]) -> None:
+    for item in new_items:
+        _append_unique(items, item)
+
+
+def _warnings_text(items: list[str]) -> str:
+    unique_items = list(dict.fromkeys(items))
+    return "; ".join(unique_items)
+
+
 def build_pair_spread_points(
     leg1_klines: list[PairSpreadKlinePoint],
     leg2_klines: list[PairSpreadKlinePoint],
@@ -223,15 +239,16 @@ class PairSpreadQueryService:
                 points = candidate_points
                 used_start = window_start
                 if window_hours != hours:
-                    warnings.append(
+                    _append_unique(
+                        warnings,
                         f"请求{_duration_text(hours)}没有拿到可对齐K线，已自动改查最近{_duration_text(window_hours)}。"
                     )
-                warnings.extend(window_warnings)
+                _extend_unique(warnings, window_warnings)
                 break
-            failed_window_warnings.extend(window_warnings)
+            _extend_unique(failed_window_warnings, window_warnings)
 
         if not points:
-            suffix = f": {'; '.join(failed_window_warnings)}" if failed_window_warnings else ""
+            suffix = f": {_warnings_text(failed_window_warnings)}" if failed_window_warnings else ""
             raise PairSpreadQueryError(f"没有拿到可对齐的分钟K线{suffix}")
 
         earliest_expected = used_start + timedelta(minutes=interval_minutes)
@@ -289,7 +306,7 @@ class PairSpreadQueryService:
         try:
             return await self._fetch_klines(exchange, symbol, start, end, interval_minutes)
         except Exception as exc:  # noqa: BLE001 - keep pair query error actionable.
-            warnings.append(f"{exchange}:{symbol} 分钟K线失败: {_exception_text(exc)}")
+            _append_unique(warnings, f"{exchange}:{symbol} 分钟K线失败: {_market_data_error_text(exchange, exc)}")
             return []
 
     async def _fetch_current_with_warning(
@@ -300,7 +317,7 @@ class PairSpreadQueryService:
         try:
             return await self._fetch_current_leg(leg.exchange, leg.symbol)
         except Exception as exc:  # noqa: BLE001 - current snapshot should not block chart.
-            warnings.append(f"{leg.exchange}:{leg.symbol} 当前价格/资金失败: {_exception_text(exc)}")
+            _append_unique(warnings, f"{leg.exchange}:{leg.symbol} 当前价格/资金失败: {_exception_text(exc)}")
             return None
 
     async def _fetch_funding_with_warning(
@@ -313,7 +330,7 @@ class PairSpreadQueryService:
         try:
             return await self._fetch_funding_history(leg.exchange, leg.symbol, start, end)
         except Exception as exc:  # noqa: BLE001 - funding history is supplementary.
-            warnings.append(f"{leg.exchange}:{leg.symbol} 历史资金费率失败: {_exception_text(exc)}")
+            _append_unique(warnings, f"{leg.exchange}:{leg.symbol} 历史资金费率失败: {_exception_text(exc)}")
             return []
 
     def _build_current_snapshot(
@@ -415,7 +432,7 @@ class PairSpreadQueryService:
                 last_error = exc
                 if attempt == 0:
                     await asyncio.sleep(0.15)
-        raise RuntimeError(f"GET {url} failed: {_exception_text(last_error)}")
+        raise RuntimeError(f"GET {_endpoint_label(url)}失败: {_exception_text(last_error)}")
 
     async def _post_json(self, url: str, body: dict[str, Any]) -> Any:
         last_error: Exception | None = None
@@ -428,7 +445,7 @@ class PairSpreadQueryService:
                 last_error = exc
                 if attempt == 0:
                     await asyncio.sleep(0.15)
-        raise RuntimeError(f"POST {url} failed: {_exception_text(last_error)}")
+        raise RuntimeError(f"POST {_endpoint_label(url)}失败: {_exception_text(last_error)}")
 
     async def _fetch_binance_like_klines(
         self,
@@ -974,8 +991,26 @@ class PairSpreadQueryService:
 def _exception_text(exc: BaseException | None) -> str:
     if exc is None:
         return "unknown error"
+    if isinstance(exc, httpx.HTTPStatusError):
+        status_code = exc.response.status_code
+        reason = exc.response.reason_phrase or "HTTP error"
+        return f"HTTP {status_code} {reason}"
     text = str(exc).strip()
     return f"{exc.__class__.__name__}: {text}" if text else exc.__class__.__name__
+
+
+def _endpoint_label(url: str) -> str:
+    parsed = urlsplit(url)
+    if not parsed.netloc:
+        return url
+    return f"{parsed.netloc}{parsed.path}"
+
+
+def _market_data_error_text(exchange: str, exc: BaseException) -> str:
+    text = _exception_text(exc)
+    if exchange == "hyperliquid" and "HTTP 500" in text:
+        return "Hyperliquid 接口返回 HTTP 500，可能是该合约未上线、名称不匹配，或接口临时异常"
+    return text
 
 
 def _parse_array_kline(row: list[Any], time_index: int, close_index: int) -> PairSpreadKlinePoint | None:
