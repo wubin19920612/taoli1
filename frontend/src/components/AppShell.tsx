@@ -26,6 +26,7 @@ type PageKey =
   | "funding"
   | "funding-research"
   | "pair-monitor"
+  | "premium-index"
   | "tradfi-perp"
   | "gate-twap"
   | "index-components"
@@ -52,6 +53,11 @@ const lazyPages: Record<PageKey, LazyPage> = {
   "pair-monitor": lazy(() =>
     import("../pages/PairMonitorPage").then((module) => ({
       default: module.PairMonitorPage
+    }))
+  ),
+  "premium-index": lazy(() =>
+    import("../pages/PremiumIndexPage").then((module) => ({
+      default: module.PremiumIndexPage
     }))
   ),
   "tradfi-perp": lazy(() =>
@@ -114,6 +120,11 @@ export function AppShell() {
               key: "pair-monitor",
               icon: <StockOutlined />,
               label: "价差查询"
+            },
+            {
+              key: "premium-index",
+              icon: <LineChartOutlined />,
+              label: "溢价指数"
             },
             {
               key: "tradfi-perp",

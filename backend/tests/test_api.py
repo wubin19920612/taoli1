@@ -28,6 +28,13 @@ from app.models.pair_spread import (
     PairSpreadValueStats,
 )
 from app.models.phone_alert import PhonePriceAlertCondition, PhonePriceAlertEvent, PhonePriceAlertRule
+from app.models.premium_index import (
+    PremiumIndexCurrentSnapshot,
+    PremiumIndexMarketQuery,
+    PremiumIndexPoint,
+    PremiumIndexQueryResult,
+    PremiumIndexValueStats,
+)
 from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, LivePilotSettings, RiskSettings
 from app.services.astro_alerts import AstroAlertService
 from app.services.index_components import MultiIndexComponentProvider
@@ -700,6 +707,69 @@ def test_pair_spread_query_endpoint_uses_on_demand_service() -> None:
     assert payload["leg2_multiplier"] == 10
     assert payload["point_count"] == 1
     assert payload["current"]["spread_pct"] == 2
+    assert service.closed is True
+
+
+def test_premium_index_endpoints_use_on_demand_service() -> None:
+    now = datetime(2026, 7, 11, 12, 0, tzinfo=UTC)
+
+    class FakePremiumIndexService:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def query(
+            self,
+            market: PremiumIndexMarketQuery,
+            *,
+            hours: int,
+            interval_minutes: int = 1,
+        ) -> PremiumIndexQueryResult:
+            current = await self.current(market)
+            return PremiumIndexQueryResult(
+                exchange=market.exchange,
+                symbol=market.symbol,
+                hours=hours,
+                interval_minutes=interval_minutes,
+                observed_at=now,
+                point_count=1,
+                first_seen_at=now,
+                last_seen_at=now,
+                premium_pct=PremiumIndexValueStats(current=0.5, min=0.5, max=0.5, mean=0.5),
+                current=current,
+                points=[PremiumIndexPoint(bucket_at=now, premium_pct=0.5, source="test")],
+                warnings=[],
+            )
+
+        async def current(self, market: PremiumIndexMarketQuery) -> PremiumIndexCurrentSnapshot:
+            return PremiumIndexCurrentSnapshot(
+                observed_at=now,
+                exchange=market.exchange,
+                symbol=market.symbol,
+                raw_symbol=market.symbol,
+                mark_price=100.5,
+                index_price=100,
+                premium_pct=0.5,
+                source="mark_index",
+            )
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    service = FakePremiumIndexService()
+    app = create_app(settings=Settings(database_url="sqlite:///:memory:"))
+    app.state.premium_index_query_service_factory = lambda: service
+
+    with TestClient(app) as client:
+        query_response = client.get(
+            "/api/premium-index/query?exchange=binance&symbol=btc&hours=6&interval_minutes=1"
+        )
+        current_response = client.get("/api/premium-index/current?exchange=binance&symbol=btc")
+
+    assert query_response.status_code == 200
+    assert query_response.json()["symbol"] == "BTCUSDT"
+    assert query_response.json()["premium_pct"]["current"] == 0.5
+    assert current_response.status_code == 200
+    assert current_response.json()["premium_pct"] == 0.5
     assert service.closed is True
 
 

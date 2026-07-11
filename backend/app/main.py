@@ -21,6 +21,7 @@ from app.api import (
     routes_index_components,
     routes_opportunities,
     routes_pair_spread,
+    routes_premium_index,
     routes_phone_alerts,
     routes_settings,
     stream,
@@ -642,6 +643,7 @@ def create_app(
     app.state.orderbook_validator = None
     app.state.funding_research_repo = None
     app.state.pair_spread_query_service_factory = None
+    app.state.premium_index_query_service_factory = None
     app.state.alert_engine = AlertEngine()
     app.state.phone_price_alert_engine = PhonePriceAlertEngine()
     app.state.astro_client = AstroSdkClient(
@@ -692,6 +694,7 @@ def create_app(
     app.include_router(routes_opportunities.router, prefix="/api")
     app.include_router(routes_history.router, prefix="/api")
     app.include_router(routes_pair_spread.router, prefix="/api")
+    app.include_router(routes_premium_index.router, prefix="/api")
     app.include_router(routes_index_components.router, prefix="/api")
     app.include_router(routes_announcements.router, prefix="/api")
     app.include_router(routes_alerts.router, prefix="/api")

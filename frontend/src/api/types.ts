@@ -470,6 +470,53 @@ export interface PairSpreadQueryResult {
   warnings: string[];
 }
 
+export interface PremiumIndexPoint {
+  bucket_at: string;
+  premium_pct: number;
+  mark_price: number | null;
+  index_price: number | null;
+  source: string;
+}
+
+export interface PremiumIndexCurrentSnapshot {
+  observed_at: string;
+  exchange: string;
+  symbol: string;
+  raw_symbol: string;
+  mark_price: number | null;
+  index_price: number | null;
+  mid_price: number | null;
+  last_price: number | null;
+  premium_pct: number | null;
+  mid_premium_pct: number | null;
+  funding_rate_pct: number | null;
+  funding_next_rate_pct: number | null;
+  funding_next_time: string | null;
+  source: string;
+}
+
+export interface PremiumIndexValueStats {
+  min: number | null;
+  max: number | null;
+  mean: number | null;
+  current: number | null;
+}
+
+export interface PremiumIndexQueryResult {
+  exchange: string;
+  symbol: string;
+  hours: number;
+  interval_minutes: number;
+  observed_at: string;
+  point_count: number;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+  premium_pct: PremiumIndexValueStats;
+  current: PremiumIndexCurrentSnapshot | null;
+  points: PremiumIndexPoint[];
+  warnings: string[];
+}
+
 export interface AstroCardSettings {
   max_trade_usdt: number;
   leverage: number;

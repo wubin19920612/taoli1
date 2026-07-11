@@ -43,6 +43,8 @@ import type {
   PhonePriceAlertDiagnostics,
   PhonePriceAlertEvent,
   PhonePriceAlertRule,
+  PremiumIndexCurrentSnapshot,
+  PremiumIndexQueryResult,
   RiskSettings,
   ServiceControlStatus,
   ServiceRestartResult,
@@ -548,6 +550,36 @@ export async function queryPairSpread(query: {
       throw new Error(extractErrorMessage(text, response.status));
     }
     return response.json() as Promise<PairSpreadQueryResult>;
+  });
+}
+
+export async function queryPremiumIndex(query: {
+  exchange: string;
+  symbol: string;
+  hours?: number;
+  interval_minutes?: number;
+}): Promise<PremiumIndexQueryResult> {
+  const url = buildUrl("/premium-index/query", query);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(extractErrorMessage(text, response.status));
+    }
+    return response.json() as Promise<PremiumIndexQueryResult>;
+  });
+}
+
+export async function getCurrentPremiumIndex(query: {
+  exchange: string;
+  symbol: string;
+}): Promise<PremiumIndexCurrentSnapshot> {
+  const url = buildUrl("/premium-index/current", query);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(extractErrorMessage(text, response.status));
+    }
+    return response.json() as Promise<PremiumIndexCurrentSnapshot>;
   });
 }
 

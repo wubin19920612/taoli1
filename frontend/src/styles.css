@@ -1181,6 +1181,213 @@ body {
   margin: 0;
 }
 
+.premium-index-page {
+  gap: 10px;
+}
+
+.premium-query-panel,
+.premium-chart-card,
+.premium-detail-card {
+  min-width: 0;
+  background: #ffffff;
+  border: 1px solid #e2e8e5;
+  border-radius: 6px;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.04);
+}
+
+.premium-query-panel {
+  padding: 8px;
+}
+
+.premium-query-bar {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.8fr) minmax(240px, 1.4fr) minmax(112px, 0.55fr) minmax(124px, 0.62fr) minmax(72px, 0.4fr) minmax(172px, 0.82fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.premium-query-bar .ant-form-item {
+  margin: 0;
+}
+
+.premium-query-bar .ant-select,
+.premium-query-bar .ant-input-group-wrapper,
+.premium-query-bar .ant-input-number-group-wrapper,
+.premium-query-bar .ant-input-number,
+.premium-query-bar .ant-btn,
+.premium-query-actions {
+  width: 100%;
+}
+
+.premium-query-bar .ant-select-selector,
+.premium-query-bar .ant-input,
+.premium-query-bar .ant-input-group-addon,
+.premium-query-bar .ant-input-number,
+.premium-query-bar .ant-input-number-group-addon,
+.premium-query-bar .ant-btn {
+  min-height: 34px;
+  border-radius: 6px;
+}
+
+.premium-query-bar .ant-input-group-addon,
+.premium-query-bar .ant-input-number-group-addon {
+  min-width: 52px;
+  color: #24352f;
+  font-weight: 600;
+  background: #f8faf9;
+}
+
+.premium-query-refresh {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+}
+
+.premium-query-actions {
+  display: grid;
+  grid-template-columns: 1fr 0.9fr;
+  gap: 8px;
+  min-width: 0;
+}
+
+.premium-metric-grid {
+  display: grid;
+  grid-template-columns: 1.25fr repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.premium-metric-card {
+  min-height: 92px;
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 14px 16px;
+  background: #ffffff;
+  border: 1px solid #e2e8e5;
+  border-radius: 6px;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.04);
+}
+
+.premium-metric-label,
+.premium-metric-sub {
+  overflow: hidden;
+  color: #687872;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.premium-metric-value {
+  overflow: hidden;
+  color: #17211d;
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: 0;
+  line-height: 1.05;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.premium-metric-positive .premium-metric-value {
+  color: #b42318;
+}
+
+.premium-metric-negative .premium-metric-value {
+  color: #14803c;
+}
+
+.premium-chart-card {
+  overflow: hidden;
+  display: grid;
+  gap: 8px;
+  padding: 12px 12px 8px;
+}
+
+.premium-index-chart {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.premium-index-chart rect {
+  fill: #ffffff;
+  stroke: #eef2f1;
+}
+
+.premium-chart-grid-line,
+.premium-chart-time-tick {
+  stroke: #edf2f0;
+  stroke-width: 1;
+}
+
+.premium-chart-zero-line {
+  stroke: #a7b0ad;
+  stroke-width: 1.1;
+  stroke-dasharray: 5 4;
+}
+
+.premium-chart-area {
+  fill: url(#premiumIndexFill);
+}
+
+.premium-chart-line {
+  fill: none;
+  stroke: #0f766e;
+  stroke-width: 2.35;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.premium-current-point {
+  fill: #b42318;
+  stroke: #ffffff;
+  stroke-width: 2;
+}
+
+.premium-chart-axis-label {
+  fill: #6b7a75;
+  font-size: 12px;
+}
+
+.premium-chart-empty {
+  min-height: 330px;
+  display: grid;
+  place-items: center;
+  color: #687872;
+  background: #ffffff;
+  border: 1px dashed #dbe4e0;
+  border-radius: 6px;
+}
+
+.premium-chart-footer,
+.premium-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.premium-footer-tags {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.premium-detail-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.premium-detail-head .ant-typography {
+  margin: 0;
+}
+
 .research-table .ant-table-row {
   cursor: pointer;
 }
@@ -1747,6 +1954,8 @@ body {
   .pair-query-bar,
   .pair-metric-grid,
   .pair-detail-grid,
+  .premium-query-bar,
+  .premium-metric-grid,
   .research-grid,
   .research-backtest-grid,
   .research-backtest-stats,
