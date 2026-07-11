@@ -1,4 +1,4 @@
-import { ReloadOutlined, SearchOutlined } from "@ant-design/icons";
+import { ReloadOutlined, SaveOutlined, SearchOutlined } from "@ant-design/icons";
 import {
   Alert,
   Button,
@@ -34,6 +34,13 @@ type PairSpreadFormValues = {
   leg2_multiplier: number;
 };
 
+type SavedPairSpreadPreset = PairSpreadFormValues & {
+  id: string;
+  hours: number;
+  intervalMinutes: number;
+  savedAt: string;
+};
+
 const defaultFormValues: PairSpreadFormValues = {
   leg1_exchange: "bitget",
   leg1_symbol: "SKHY",
@@ -51,6 +58,9 @@ const intervalOptions = [
   { label: "5分钟", value: 5 },
   { label: "15分钟", value: 15 }
 ];
+
+const PAIR_SPREAD_PRESETS_KEY = "taoli1.pairSpread.presets.v1";
+const MAX_SAVED_PAIR_PRESETS = 24;
 
 const priceFieldLabels: Record<PairSpreadPriceField, string> = {
   mark_price: "标记价",
@@ -97,6 +107,64 @@ function clampHours(value: number | null): number {
   return Math.min(720, Math.max(1, Math.round(value)));
 }
 
+function normalizePairForm(values: PairSpreadFormValues): PairSpreadFormValues {
+  return {
+    leg1_exchange: values.leg1_exchange,
+    leg1_symbol: values.leg1_symbol.trim().toUpperCase(),
+    leg2_exchange: values.leg2_exchange,
+    leg2_symbol: values.leg2_symbol.trim().toUpperCase(),
+    leg2_multiplier: Number(values.leg2_multiplier)
+  };
+}
+
+function pairPresetId(values: PairSpreadFormValues): string {
+  const normalized = normalizePairForm(values);
+  return [
+    normalized.leg1_exchange,
+    normalized.leg1_symbol,
+    normalized.leg2_exchange,
+    normalized.leg2_symbol,
+    compactNumber(normalized.leg2_multiplier, 8)
+  ].join("|");
+}
+
+function isSavedPreset(value: unknown): value is SavedPairSpreadPreset {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const item = value as Partial<SavedPairSpreadPreset>;
+  return (
+    typeof item.id === "string" &&
+    typeof item.leg1_exchange === "string" &&
+    typeof item.leg1_symbol === "string" &&
+    typeof item.leg2_exchange === "string" &&
+    typeof item.leg2_symbol === "string" &&
+    typeof item.leg2_multiplier === "number" &&
+    typeof item.hours === "number" &&
+    typeof item.intervalMinutes === "number" &&
+    typeof item.savedAt === "string"
+  );
+}
+
+function loadSavedPairPresets(): SavedPairSpreadPreset[] {
+  if (typeof window === "undefined") {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(PAIR_SPREAD_PRESETS_KEY) ?? "[]");
+    return Array.isArray(parsed) ? parsed.filter(isSavedPreset).slice(0, MAX_SAVED_PAIR_PRESETS) : [];
+  } catch {
+    return [];
+  }
+}
+
+function storeSavedPairPresets(presets: SavedPairSpreadPreset[]): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.setItem(PAIR_SPREAD_PRESETS_KEY, JSON.stringify(presets.slice(0, MAX_SAVED_PAIR_PRESETS)));
+}
+
 function time(value: string | null | undefined): string {
   return value ? dayjs.utc(value).utcOffset(8).format("MM-DD HH:mm") : "-";
 }
@@ -133,6 +201,11 @@ function rightLegLabel(result: PairSpreadQueryResult | null): string {
   }
   const divisor = result.leg2_multiplier === 1 ? "" : `/${compactNumber(result.leg2_multiplier, 4)}`;
   return `${result.leg2.exchange} · ${result.leg2.symbol}${divisor}`;
+}
+
+function savedPresetLabel(preset: SavedPairSpreadPreset): string {
+  const divisor = preset.leg2_multiplier === 1 ? "" : `/${compactNumber(preset.leg2_multiplier, 4)}`;
+  return `${preset.leg1_exchange} ${preset.leg1_symbol} / ${preset.leg2_exchange} ${preset.leg2_symbol}${divisor}`;
 }
 
 function spreadLinePath(
@@ -187,7 +260,7 @@ function chartTicks(points: PairSpreadPoint[], maxTicks = 7): Array<{ index: num
   }).filter((tick): tick is { index: number; point: PairSpreadPoint } => tick !== null);
 }
 
-function chartTurningPoints(points: PairSpreadPoint[], maxLabels = 6): Array<{
+function chartTurningPoints(points: PairSpreadPoint[], maxLabels = 14): Array<{
   index: number;
   point: PairSpreadPoint;
   kind: "peak" | "trough";
@@ -200,7 +273,9 @@ function chartTurningPoints(points: PairSpreadPoint[], maxLabels = 6): Array<{
   const minValue = Math.min(...values);
   const maxValue = Math.max(...values);
   const span = maxValue - minValue || 1;
-  const windowSize = Math.max(2, Math.floor(points.length / 80));
+  const localWindowSize = Math.max(2, Math.floor(points.length / 160));
+  const contextWindowSize = Math.max(localWindowSize + 2, Math.floor(points.length / 45));
+  const minProminence = Math.max(0.012, span * 0.006);
   const candidates: Array<{ index: number; kind: "peak" | "trough"; score: number }> = [];
   let previousDirection = 0;
 
@@ -213,7 +288,12 @@ function chartTurningPoints(points: PairSpreadPoint[], maxLabels = 6): Array<{
     if (previousDirection !== 0 && direction !== previousDirection) {
       const turnIndex = index - 1;
       const kind = previousDirection > 0 && direction < 0 ? "peak" : "trough";
-      candidates.push({ index: turnIndex, kind, score: turningPointScore(values, turnIndex, kind, windowSize) });
+      const localScore = turningPointScore(values, turnIndex, kind, localWindowSize);
+      const contextScore = turningPointScore(values, turnIndex, kind, contextWindowSize);
+      const score = Math.max(localScore * 1.25, contextScore);
+      if (score >= minProminence) {
+        candidates.push({ index: turnIndex, kind, score });
+      }
     }
     previousDirection = direction;
   }
@@ -223,12 +303,9 @@ function chartTurningPoints(points: PairSpreadPoint[], maxLabels = 6): Array<{
   candidates.push({ index: maxIndex, kind: "peak", score: span });
   candidates.push({ index: minIndex, kind: "trough", score: span });
 
-  const minIndexDistance = Math.max(8, Math.floor(points.length / 12));
+  const minIndexDistance = Math.max(6, Math.floor(points.length / 32));
   const selected: Array<{ index: number; kind: "peak" | "trough"; score: number }> = [];
   for (const candidate of candidates.sort((a, b) => b.score - a.score)) {
-    if (candidate.score < span * 0.02 && selected.length >= 2) {
-      continue;
-    }
     if (selected.some((item) => Math.abs(item.index - candidate.index) < minIndexDistance)) {
       continue;
     }
@@ -349,17 +426,19 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
         ) : null}
         <path className="pair-chart-area" d={spreadAreaPath(points, xAt, yAt, baselineY)} />
         <path className="pair-chart-line" d={spreadLinePath(points, xAt, yAt)} />
-        {turningPoints.map(({ index, point, kind }) => {
+        {turningPoints.map(({ index, point, kind }, labelIndex) => {
           const x = xAt(index);
           const y = yAt(point.spread_pct);
           const label = signedPct(point.spread_pct);
           const labelWidth = 66;
           const labelHeight = 22;
+          const labelOffset = 22 + (labelIndex % 2) * 12;
+          const labelShift = ((labelIndex % 3) - 1) * 10;
           const labelCenterX = Math.min(
             padding.left + chartWidth - labelWidth / 2,
-            Math.max(padding.left + labelWidth / 2, x)
+            Math.max(padding.left + labelWidth / 2, x + labelShift)
           );
-          const rawLabelY = kind === "peak" ? y - 22 : y + 22;
+          const rawLabelY = kind === "peak" ? y - labelOffset : y + labelOffset;
           const labelCenterY = Math.min(
             padding.top + chartHeight - labelHeight / 2,
             Math.max(padding.top + labelHeight / 2, rawLabelY)
@@ -428,6 +507,7 @@ export function PairMonitorPage() {
   const [hours, setHours] = useState(720);
   const [intervalMinutes, setIntervalMinutes] = useState(5);
   const [autoRefresh, setAutoRefresh] = useState(false);
+  const [savedPresets, setSavedPresets] = useState<SavedPairSpreadPreset[]>(() => loadSavedPairPresets());
   const [result, setResult] = useState<PairSpreadQueryResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -441,11 +521,16 @@ export function PairMonitorPage() {
     [result?.funding_history]
   );
 
-  const runQuery = useCallback(async (override?: { hours?: number; intervalMinutes?: number }) => {
+  const runQuery = useCallback(async (override?: {
+    hours?: number;
+    intervalMinutes?: number;
+    values?: PairSpreadFormValues;
+  }) => {
     setLoading(true);
     setError("");
     try {
-      const values = await form.validateFields();
+      const values = normalizePairForm(override?.values ?? await form.validateFields());
+      form.setFieldsValue(values);
       const queryHours = clampHours(override?.hours ?? hours);
       const queryInterval = override?.intervalMinutes ?? intervalMinutes;
       const next = await queryPairSpread({
@@ -492,6 +577,43 @@ export function PairMonitorPage() {
     setHours(result.hours);
     setIntervalMinutes(result.interval_minutes);
     void runQuery({ hours: result.hours, intervalMinutes: result.interval_minutes });
+  };
+
+  const saveCurrentPreset = async () => {
+    try {
+      const values = normalizePairForm(await form.validateFields());
+      const preset: SavedPairSpreadPreset = {
+        ...values,
+        id: pairPresetId(values),
+        hours: clampHours(hours),
+        intervalMinutes,
+        savedAt: new Date().toISOString()
+      };
+      setSavedPresets((currentPresets) => {
+        const next = [preset, ...currentPresets.filter((item) => item.id !== preset.id)].slice(0, MAX_SAVED_PAIR_PRESETS);
+        storeSavedPairPresets(next);
+        return next;
+      });
+      form.setFieldsValue(values);
+      setError("");
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc));
+    }
+  };
+
+  const removeSavedPreset = (id: string) => {
+    setSavedPresets((currentPresets) => {
+      const next = currentPresets.filter((preset) => preset.id !== id);
+      storeSavedPairPresets(next);
+      return next;
+    });
+  };
+
+  const applySavedPreset = (preset: SavedPairSpreadPreset) => {
+    form.setFieldsValue(preset);
+    setHours(clampHours(preset.hours));
+    setIntervalMinutes(preset.intervalMinutes);
+    void runQuery({ values: preset, hours: preset.hours, intervalMinutes: preset.intervalMinutes });
   };
 
   const current = result?.current;
@@ -551,8 +673,36 @@ export function PairMonitorPage() {
             <Button type="primary" icon={<SearchOutlined />} loading={loading} onClick={() => void runQuery()}>
               查询
             </Button>
+            <Button icon={<SaveOutlined />} disabled={loading} onClick={() => void saveCurrentPreset()}>
+              保存
+            </Button>
           </div>
         </Form>
+        {savedPresets.length ? (
+          <div className="pair-saved-presets">
+            <Typography.Text className="pair-saved-title">已保存</Typography.Text>
+            <div className="pair-saved-list">
+              {savedPresets.map((preset) => (
+                <Tag
+                  key={preset.id}
+                  closable
+                  className="pair-saved-tag"
+                  onClick={() => applySavedPreset(preset)}
+                  onClose={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    removeSavedPreset(preset.id);
+                  }}
+                >
+                  <span>{savedPresetLabel(preset)}</span>
+                  <span className="pair-saved-meta">
+                    {durationLabel(preset.hours)} · {preset.intervalMinutes}m
+                  </span>
+                </Tag>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </section>
 
       <section className="pair-metric-grid">

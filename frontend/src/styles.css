@@ -890,7 +890,8 @@ body {
     minmax(108px, 0.62fr)
     minmax(116px, 0.68fr)
     minmax(72px, 0.42fr)
-    92px;
+    92px
+    88px;
   gap: 8px;
   align-items: start;
 }
@@ -934,6 +935,55 @@ body {
   align-items: center;
   justify-content: center;
   min-height: 34px;
+}
+
+.pair-saved-presets {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  padding-top: 8px;
+}
+
+.pair-saved-title {
+  color: #687872;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 24px;
+  white-space: nowrap;
+}
+
+.pair-saved-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pair-saved-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  margin-inline-end: 0;
+  padding: 2px 8px;
+  cursor: pointer;
+  border-color: #b8d8ff;
+  color: #1256a0;
+  background: #f2f8ff;
+}
+
+.pair-saved-tag span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pair-saved-meta {
+  flex: 0 0 auto;
+  color: #687872;
+  font-size: 12px;
 }
 
 .pair-metric-grid {
