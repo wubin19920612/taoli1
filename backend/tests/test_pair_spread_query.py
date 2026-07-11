@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -187,6 +188,36 @@ async def test_pair_spread_query_dedupes_repeated_kline_failures() -> None:
     assert message.count("hyperliquid:SKHYUSDT 分钟K线失败") == 1
     assert message.count("hyperliquid:SKHYNIXUSDT 分钟K线失败") == 1
     assert "developer.mozilla.org" not in message
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_klines_resolve_prefixed_hip3_coin() -> None:
+    start = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
+    end = start + timedelta(minutes=2)
+    bodies: list[dict[str, Any]] = []
+
+    service = PairSpreadQueryService()
+
+    async def fake_post_json(url: str, body: dict[str, Any]):
+        bodies.append(body)
+        if body.get("type") == "metaAndAssetCtxs":
+            return [
+                {"universe": [{"name": "BTC"}, {"name": "xyz:SKHY"}]},
+                [{"markPx": "60000"}, {"markPx": "10"}],
+            ]
+        if body.get("type") == "candleSnapshot":
+            assert body["req"]["coin"] == "xyz:SKHY"
+            return [{"t": int(start.timestamp() * 1000), "c": "10"}]
+        raise AssertionError(f"unexpected body: {body}")
+
+    service._post_json = fake_post_json  # type: ignore[method-assign]
+    try:
+        points = await service._fetch_hyperliquid_klines("SKHYUSDT", start, end, 1)
+    finally:
+        await service.aclose()
+
+    assert points == [PairSpreadKlinePoint(bucket_at=start, close=10)]
+    assert [body.get("type") for body in bodies] == ["metaAndAssetCtxs", "candleSnapshot"]
 
 
 @pytest.mark.asyncio

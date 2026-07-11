@@ -81,6 +81,10 @@ def _hyperliquid_coin(symbol: str) -> str:
     return base
 
 
+def _hyperliquid_base_from_raw(raw_coin: str) -> str:
+    return raw_coin.split(":", 1)[1] if ":" in raw_coin else raw_coin
+
+
 def _positive(value: float | None) -> float | None:
     if value is None or not isfinite(value) or value <= 0:
         return None
@@ -184,6 +188,8 @@ class PairSpreadQueryService:
             trust_env=True,
         )
         self._owns_client = client is None
+        self._hyperliquid_meta_contexts: tuple[dict[str, Any], list[Any]] | None = None
+        self._hyperliquid_coin_by_base: dict[str, str] | None = None
 
     async def aclose(self) -> None:
         if self._owns_client and not self.client.is_closed:
@@ -649,12 +655,13 @@ class PairSpreadQueryService:
         end: datetime,
         interval_minutes: int,
     ) -> list[PairSpreadKlinePoint]:
+        raw_coin = await self._resolve_hyperliquid_coin(symbol)
         payload = await self._post_json(
             "https://api.hyperliquid.xyz/info",
             {
                 "type": "candleSnapshot",
                 "req": {
-                    "coin": _hyperliquid_coin(symbol),
+                    "coin": raw_coin,
                     "interval": f"{interval_minutes}m",
                     "startTime": _to_ms(start),
                     "endTime": _to_ms(end),
@@ -802,19 +809,14 @@ class PairSpreadQueryService:
         )
 
     async def _fetch_hyperliquid_current(self, symbol: str) -> PairSpreadCurrentLeg:
-        coin = _hyperliquid_coin(symbol)
-        payload = await self._post_json("https://api.hyperliquid.xyz/info", {"type": "metaAndAssetCtxs"})
-        if not isinstance(payload, list) or len(payload) < 2:
-            raise RuntimeError("unexpected hyperliquid metaAndAssetCtxs payload")
-        meta = payload[0] if isinstance(payload[0], dict) else {}
-        contexts = payload[1] if isinstance(payload[1], list) else []
+        resolved_coin = await self._resolve_hyperliquid_coin(symbol)
+        meta, contexts = await self._fetch_hyperliquid_meta_contexts()
         universe = meta.get("universe", [])
         for asset, context in zip(universe, contexts):
             if not isinstance(asset, dict) or not isinstance(context, dict):
                 continue
             raw_coin = str(asset.get("name", "")).strip()
-            base_coin = raw_coin.split(":", 1)[1] if ":" in raw_coin else raw_coin
-            if base_coin.upper() != coin.upper():
+            if raw_coin.upper() != resolved_coin.upper():
                 continue
             funding = parse_float(context.get("funding"))
             return _current_leg(
@@ -830,6 +832,38 @@ class PairSpreadQueryService:
                 funding_next_time=None,
             )
         raise RuntimeError(f"hyperliquid symbol not found: {symbol}")
+
+    async def _fetch_hyperliquid_meta_contexts(self) -> tuple[dict[str, Any], list[Any]]:
+        if self._hyperliquid_meta_contexts is not None:
+            return self._hyperliquid_meta_contexts
+
+        payload = await self._post_json("https://api.hyperliquid.xyz/info", {"type": "metaAndAssetCtxs"})
+        if not isinstance(payload, list) or len(payload) < 2:
+            raise RuntimeError("unexpected hyperliquid metaAndAssetCtxs payload")
+        meta = payload[0] if isinstance(payload[0], dict) else {}
+        contexts = payload[1] if isinstance(payload[1], list) else []
+        self._hyperliquid_meta_contexts = (meta, contexts)
+        return self._hyperliquid_meta_contexts
+
+    async def _resolve_hyperliquid_coin(self, symbol: str) -> str:
+        requested_coin = _hyperliquid_coin(symbol).upper()
+        if self._hyperliquid_coin_by_base is None:
+            meta, _ = await self._fetch_hyperliquid_meta_contexts()
+            mapping: dict[str, str] = {}
+            for asset in meta.get("universe", []):
+                if not isinstance(asset, dict):
+                    continue
+                raw_coin = str(asset.get("name", "")).strip()
+                if not raw_coin:
+                    continue
+                mapping.setdefault(raw_coin.upper(), raw_coin)
+                mapping.setdefault(_hyperliquid_base_from_raw(raw_coin).upper(), raw_coin)
+            self._hyperliquid_coin_by_base = mapping
+
+        raw_coin = self._hyperliquid_coin_by_base.get(requested_coin)
+        if raw_coin is None:
+            raise RuntimeError(f"hyperliquid symbol not found: {symbol}")
+        return raw_coin
 
     async def _fetch_binance_like_funding(
         self,
@@ -963,11 +997,12 @@ class PairSpreadQueryService:
         start: datetime,
         end: datetime,
     ) -> list[PairSpreadFundingPoint]:
+        raw_coin = await self._resolve_hyperliquid_coin(symbol)
         payload = await self._post_json(
             "https://api.hyperliquid.xyz/info",
             {
                 "type": "fundingHistory",
-                "coin": _hyperliquid_coin(symbol),
+                "coin": raw_coin,
                 "startTime": _to_ms(start),
                 "endTime": _to_ms(end),
             },
