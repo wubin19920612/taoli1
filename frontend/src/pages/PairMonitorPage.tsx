@@ -670,12 +670,14 @@ export function PairMonitorPage() {
             <Form.Item className="pair-query-refresh">
               <Switch checked={autoRefresh} checkedChildren="自动" unCheckedChildren="手动" onChange={setAutoRefresh} />
             </Form.Item>
-            <Button type="primary" icon={<SearchOutlined />} loading={loading} onClick={() => void runQuery()}>
-              查询
-            </Button>
-            <Button icon={<SaveOutlined />} disabled={loading} onClick={() => void saveCurrentPreset()}>
-              保存
-            </Button>
+            <div className="pair-query-actions">
+              <Button type="primary" icon={<SearchOutlined />} loading={loading} onClick={() => void runQuery()}>
+                查询
+              </Button>
+              <Button icon={<SaveOutlined />} disabled={loading} onClick={() => void saveCurrentPreset()}>
+                保存
+              </Button>
+            </div>
           </div>
         </Form>
         {savedPresets.length ? (

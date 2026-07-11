@@ -882,16 +882,15 @@ body {
 .pair-query-bar {
   display: grid;
   grid-template-columns:
-    minmax(126px, 0.75fr)
-    minmax(208px, 1.12fr)
-    minmax(126px, 0.75fr)
-    minmax(208px, 1.12fr)
-    minmax(168px, 0.9fr)
-    minmax(108px, 0.62fr)
-    minmax(116px, 0.68fr)
-    minmax(72px, 0.42fr)
-    92px
-    88px;
+    minmax(118px, 0.72fr)
+    minmax(180px, 1fr)
+    minmax(118px, 0.72fr)
+    minmax(180px, 1fr)
+    minmax(148px, 0.78fr)
+    minmax(92px, 0.5fr)
+    minmax(108px, 0.58fr)
+    minmax(68px, 0.36fr)
+    minmax(164px, 0.86fr);
   gap: 8px;
   align-items: start;
 }
@@ -926,7 +925,8 @@ body {
 .pair-query-item .ant-select,
 .pair-query-contract .ant-input-group-wrapper,
 .pair-query-select,
-.pair-query-bar .ant-btn {
+.pair-query-actions,
+.pair-query-actions .ant-btn {
   width: 100%;
 }
 
@@ -935,6 +935,13 @@ body {
   align-items: center;
   justify-content: center;
   min-height: 34px;
+}
+
+.pair-query-actions {
+  display: grid;
+  grid-template-columns: minmax(82px, 1fr) minmax(74px, 0.86fr);
+  gap: 8px;
+  min-width: 0;
 }
 
 .pair-saved-presets {
