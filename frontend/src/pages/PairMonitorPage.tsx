@@ -260,7 +260,32 @@ function chartTicks(points: PairSpreadPoint[], maxTicks = 7): Array<{ index: num
   }).filter((tick): tick is { index: number; point: PairSpreadPoint } => tick !== null);
 }
 
-function chartTurningPoints(points: PairSpreadPoint[], maxLabels = 14): Array<{
+type ChartTurnCandidate = {
+  index: number;
+  kind: "peak" | "trough";
+  score: number;
+};
+
+function addChartTurnCandidate(
+  selected: ChartTurnCandidate[],
+  candidate: ChartTurnCandidate,
+  maxLabels: number,
+  minIndexDistance: number
+): boolean {
+  if (selected.length >= maxLabels) {
+    return false;
+  }
+  if (selected.some((item) => item.index === candidate.index)) {
+    return false;
+  }
+  if (selected.some((item) => Math.abs(item.index - candidate.index) < minIndexDistance)) {
+    return false;
+  }
+  selected.push(candidate);
+  return true;
+}
+
+function chartTurningPoints(points: PairSpreadPoint[], maxLabels = 18): Array<{
   index: number;
   point: PairSpreadPoint;
   kind: "peak" | "trough";
@@ -275,8 +300,8 @@ function chartTurningPoints(points: PairSpreadPoint[], maxLabels = 14): Array<{
   const span = maxValue - minValue || 1;
   const localWindowSize = Math.max(2, Math.floor(points.length / 160));
   const contextWindowSize = Math.max(localWindowSize + 2, Math.floor(points.length / 45));
-  const minProminence = Math.max(0.012, span * 0.006);
-  const candidates: Array<{ index: number; kind: "peak" | "trough"; score: number }> = [];
+  const minProminence = Math.max(0.006, span * 0.0035);
+  const candidates: ChartTurnCandidate[] = [];
   let previousDirection = 0;
 
   for (let index = 1; index < points.length; index += 1) {
@@ -303,14 +328,67 @@ function chartTurningPoints(points: PairSpreadPoint[], maxLabels = 14): Array<{
   candidates.push({ index: maxIndex, kind: "peak", score: span });
   candidates.push({ index: minIndex, kind: "trough", score: span });
 
-  const minIndexDistance = Math.max(6, Math.floor(points.length / 32));
-  const selected: Array<{ index: number; kind: "peak" | "trough"; score: number }> = [];
-  for (const candidate of candidates.sort((a, b) => b.score - a.score)) {
-    if (selected.some((item) => Math.abs(item.index - candidate.index) < minIndexDistance)) {
+  const rankedCandidates = candidates.sort((a, b) => b.score - a.score);
+  const minIndexDistance = Math.max(5, Math.floor(points.length / 48));
+  const selected: ChartTurnCandidate[] = [];
+  const primaryBudget = Math.max(6, Math.floor(maxLabels * 0.48));
+
+  for (const candidate of rankedCandidates) {
+    addChartTurnCandidate(selected, candidate, primaryBudget, minIndexDistance);
+    if (selected.length >= primaryBudget) {
+      break;
+    }
+  }
+
+  const segmentCount = Math.min(10, Math.max(5, Math.ceil(points.length / 90)));
+  const segmentSize = Math.ceil(points.length / segmentCount);
+  for (let segmentIndex = 0; segmentIndex < segmentCount; segmentIndex += 1) {
+    const start = segmentIndex * segmentSize;
+    const end = Math.min(points.length - 1, start + segmentSize - 1);
+    if (selected.some((item) => item.index >= start && item.index <= end)) {
       continue;
     }
-    selected.push(candidate);
-    if (selected.length >= maxLabels) {
+    const segmentCandidate = rankedCandidates.find(
+      (candidate) =>
+        candidate.index >= start &&
+        candidate.index <= end &&
+        selected.every((item) => Math.abs(item.index - candidate.index) >= minIndexDistance)
+    );
+    if (segmentCandidate) {
+      addChartTurnCandidate(selected, segmentCandidate, maxLabels, minIndexDistance);
+    }
+  }
+
+  while (selected.length < maxLabels) {
+    const selectedByIndex = [...selected].sort((a, b) => a.index - b.index);
+    const gaps = [
+      { start: 0, end: selectedByIndex[0]?.index ?? points.length - 1 },
+      ...selectedByIndex.slice(0, -1).map((item, index) => ({
+        start: item.index,
+        end: selectedByIndex[index + 1].index
+      })),
+      { start: selectedByIndex[selectedByIndex.length - 1]?.index ?? 0, end: points.length - 1 }
+    ]
+      .map((gap) => ({ ...gap, size: gap.end - gap.start }))
+      .filter((gap) => gap.size >= minIndexDistance * 2)
+      .sort((a, b) => b.size - a.size);
+
+    let added = false;
+    for (const gap of gaps) {
+      const gapCandidate = rankedCandidates.find(
+        (candidate) =>
+          candidate.index > gap.start &&
+          candidate.index < gap.end &&
+          selected.every((item) => Math.abs(item.index - candidate.index) >= minIndexDistance)
+      );
+      if (gapCandidate) {
+        added = addChartTurnCandidate(selected, gapCandidate, maxLabels, minIndexDistance);
+        if (added) {
+          break;
+        }
+      }
+    }
+    if (!added) {
       break;
     }
   }
