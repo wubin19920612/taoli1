@@ -1034,6 +1034,37 @@ body {
   stroke-linejoin: round;
 }
 
+.pair-chart-turning-leader {
+  stroke: #95a3a0;
+  stroke-dasharray: 3 3;
+  stroke-width: 1;
+}
+
+.pair-chart-turning-dot {
+  stroke: #ffffff;
+  stroke-width: 2;
+}
+
+.pair-chart-turning-peak .pair-chart-turning-dot {
+  fill: #b42318;
+}
+
+.pair-chart-turning-trough .pair-chart-turning-dot {
+  fill: #14803c;
+}
+
+.pair-chart-turning-label-bg {
+  fill: #ffffff;
+  stroke: #d7e0dc;
+  stroke-width: 1;
+}
+
+.pair-chart-turning-label {
+  fill: #17211d;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .pair-chart-axis-label {
   fill: #6b7a75;
   font-size: 12px;

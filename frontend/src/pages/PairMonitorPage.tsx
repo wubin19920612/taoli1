@@ -187,6 +187,82 @@ function chartTicks(points: PairSpreadPoint[], maxTicks = 7): Array<{ index: num
   }).filter((tick): tick is { index: number; point: PairSpreadPoint } => tick !== null);
 }
 
+function chartTurningPoints(points: PairSpreadPoint[], maxLabels = 6): Array<{
+  index: number;
+  point: PairSpreadPoint;
+  kind: "peak" | "trough";
+}> {
+  if (points.length < 3) {
+    return [];
+  }
+
+  const values = points.map((point) => point.spread_pct);
+  const minValue = Math.min(...values);
+  const maxValue = Math.max(...values);
+  const span = maxValue - minValue || 1;
+  const windowSize = Math.max(2, Math.floor(points.length / 80));
+  const candidates: Array<{ index: number; kind: "peak" | "trough"; score: number }> = [];
+  let previousDirection = 0;
+
+  for (let index = 1; index < points.length; index += 1) {
+    const delta = values[index] - values[index - 1];
+    const direction = delta > 0 ? 1 : delta < 0 ? -1 : 0;
+    if (direction === 0) {
+      continue;
+    }
+    if (previousDirection !== 0 && direction !== previousDirection) {
+      const turnIndex = index - 1;
+      const kind = previousDirection > 0 && direction < 0 ? "peak" : "trough";
+      candidates.push({ index: turnIndex, kind, score: turningPointScore(values, turnIndex, kind, windowSize) });
+    }
+    previousDirection = direction;
+  }
+
+  const minIndex = values.indexOf(minValue);
+  const maxIndex = values.indexOf(maxValue);
+  candidates.push({ index: maxIndex, kind: "peak", score: span });
+  candidates.push({ index: minIndex, kind: "trough", score: span });
+
+  const minIndexDistance = Math.max(8, Math.floor(points.length / 12));
+  const selected: Array<{ index: number; kind: "peak" | "trough"; score: number }> = [];
+  for (const candidate of candidates.sort((a, b) => b.score - a.score)) {
+    if (candidate.score < span * 0.02 && selected.length >= 2) {
+      continue;
+    }
+    if (selected.some((item) => Math.abs(item.index - candidate.index) < minIndexDistance)) {
+      continue;
+    }
+    selected.push(candidate);
+    if (selected.length >= maxLabels) {
+      break;
+    }
+  }
+
+  return selected
+    .sort((a, b) => a.index - b.index)
+    .map(({ index, kind }) => ({ index, point: points[index], kind }));
+}
+
+function turningPointScore(
+  values: number[],
+  index: number,
+  kind: "peak" | "trough",
+  windowSize: number
+): number {
+  const start = Math.max(0, index - windowSize);
+  const end = Math.min(values.length - 1, index + windowSize);
+  const left = values.slice(start, index);
+  const right = values.slice(index + 1, end + 1);
+  if (!left.length || !right.length) {
+    return 0;
+  }
+  const value = values[index];
+  if (kind === "peak") {
+    return Math.min(value - Math.min(...left), value - Math.min(...right));
+  }
+  return Math.min(Math.max(...left) - value, Math.max(...right) - value);
+}
+
 function MetricCard({
   label,
   value,
@@ -232,6 +308,7 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
   const baselineY = yAt(baselineValue);
   const spanHours = chartSpanHours(points);
   const ticks = chartTicks(points, spanHours >= 168 ? 7 : 6);
+  const turningPoints = chartTurningPoints(points);
 
   return (
     <div className="pair-chart-card">
@@ -272,6 +349,40 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
         ) : null}
         <path className="pair-chart-area" d={spreadAreaPath(points, xAt, yAt, baselineY)} />
         <path className="pair-chart-line" d={spreadLinePath(points, xAt, yAt)} />
+        {turningPoints.map(({ index, point, kind }) => {
+          const x = xAt(index);
+          const y = yAt(point.spread_pct);
+          const label = signedPct(point.spread_pct);
+          const labelWidth = 66;
+          const labelHeight = 22;
+          const labelCenterX = Math.min(
+            padding.left + chartWidth - labelWidth / 2,
+            Math.max(padding.left + labelWidth / 2, x)
+          );
+          const rawLabelY = kind === "peak" ? y - 22 : y + 22;
+          const labelCenterY = Math.min(
+            padding.top + chartHeight - labelHeight / 2,
+            Math.max(padding.top + labelHeight / 2, rawLabelY)
+          );
+          return (
+            <g key={`turn-${point.bucket_at}-${kind}`} className={`pair-chart-turning pair-chart-turning-${kind}`}>
+              <title>{`${time(point.bucket_at)} 均值价差率 ${label}，差价 ${price(point.spread_abs)}`}</title>
+              <line className="pair-chart-turning-leader" x1={x} y1={y} x2={labelCenterX} y2={labelCenterY} />
+              <circle className="pair-chart-turning-dot" cx={x} cy={y} r="4" />
+              <rect
+                className="pair-chart-turning-label-bg"
+                x={labelCenterX - labelWidth / 2}
+                y={labelCenterY - labelHeight / 2}
+                width={labelWidth}
+                height={labelHeight}
+                rx="4"
+              />
+              <text className="pair-chart-turning-label" x={labelCenterX} y={labelCenterY + 4} textAnchor="middle">
+                {label}
+              </text>
+            </g>
+          );
+        })}
       </svg>
       <div className="pair-chart-footer">
         <div className="pair-footer-tags">
