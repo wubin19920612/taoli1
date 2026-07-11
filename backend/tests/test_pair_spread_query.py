@@ -200,10 +200,17 @@ async def test_hyperliquid_klines_resolve_prefixed_hip3_coin() -> None:
 
     async def fake_post_json(url: str, body: dict[str, Any]):
         bodies.append(body)
+        if body.get("type") == "perpDexs":
+            return [None, {"name": "xyz"}]
         if body.get("type") == "metaAndAssetCtxs":
+            if body.get("dex") == "xyz":
+                return [
+                    {"universe": [{"name": "xyz:SKHY"}]},
+                    [{"markPx": "10"}],
+                ]
             return [
-                {"universe": [{"name": "BTC"}, {"name": "xyz:SKHY"}]},
-                [{"markPx": "60000"}, {"markPx": "10"}],
+                {"universe": [{"name": "BTC"}]},
+                [{"markPx": "60000"}],
             ]
         if body.get("type") == "candleSnapshot":
             assert body["req"]["coin"] == "xyz:SKHY"
@@ -217,7 +224,12 @@ async def test_hyperliquid_klines_resolve_prefixed_hip3_coin() -> None:
         await service.aclose()
 
     assert points == [PairSpreadKlinePoint(bucket_at=start, close=10)]
-    assert [body.get("type") for body in bodies] == ["metaAndAssetCtxs", "candleSnapshot"]
+    assert [body.get("type") for body in bodies] == [
+        "perpDexs",
+        "metaAndAssetCtxs",
+        "metaAndAssetCtxs",
+        "candleSnapshot",
+    ]
 
 
 @pytest.mark.asyncio
