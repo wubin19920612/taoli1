@@ -1,4 +1,4 @@
-import { ReloadOutlined, SearchOutlined } from "@ant-design/icons";
+import { ReloadOutlined, SaveOutlined, SearchOutlined } from "@ant-design/icons";
 import { Alert, Button, Form, Input, InputNumber, Select, Switch, Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -20,6 +20,13 @@ type PremiumIndexFormValues = {
   symbol: string;
 };
 
+type SavedPremiumIndexPreset = PremiumIndexFormValues & {
+  id: string;
+  hours: number;
+  intervalMinutes: number;
+  savedAt: string;
+};
+
 const defaultFormValues: PremiumIndexFormValues = {
   exchange: "binance",
   symbol: "BTC"
@@ -34,6 +41,9 @@ const intervalOptions = [
   { label: "5分钟", value: 5 },
   { label: "15分钟", value: 15 }
 ];
+
+const PREMIUM_INDEX_PRESETS_KEY = "taoli1.premiumIndex.presets.v1";
+const MAX_SAVED_PREMIUM_PRESETS = 24;
 
 function signedPct(value: number | null | undefined, digits = 4): string {
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -67,6 +77,52 @@ function normalizeSymbol(value: string): string {
   return value.trim().toUpperCase();
 }
 
+function normalizePremiumForm(values: PremiumIndexFormValues): PremiumIndexFormValues {
+  return {
+    exchange: values.exchange,
+    symbol: normalizeSymbol(values.symbol)
+  };
+}
+
+function presetId(values: PremiumIndexFormValues): string {
+  const normalized = normalizePremiumForm(values);
+  return `${normalized.exchange}|${normalized.symbol}`;
+}
+
+function isSavedPreset(value: unknown): value is SavedPremiumIndexPreset {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const item = value as Partial<SavedPremiumIndexPreset>;
+  return (
+    typeof item.id === "string" &&
+    typeof item.exchange === "string" &&
+    typeof item.symbol === "string" &&
+    typeof item.hours === "number" &&
+    typeof item.intervalMinutes === "number" &&
+    typeof item.savedAt === "string"
+  );
+}
+
+function loadSavedPresets(): SavedPremiumIndexPreset[] {
+  if (typeof window === "undefined") {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(PREMIUM_INDEX_PRESETS_KEY) ?? "[]");
+    return Array.isArray(parsed) ? parsed.filter(isSavedPreset).slice(0, MAX_SAVED_PREMIUM_PRESETS) : [];
+  } catch {
+    return [];
+  }
+}
+
+function storeSavedPresets(presets: SavedPremiumIndexPreset[]): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.setItem(PREMIUM_INDEX_PRESETS_KEY, JSON.stringify(presets.slice(0, MAX_SAVED_PREMIUM_PRESETS)));
+}
+
 function time(value: string | null | undefined): string {
   return value ? dayjs.utc(value).utcOffset(8).format("MM-DD HH:mm") : "-";
 }
@@ -80,6 +136,10 @@ function durationLabel(hours: number): string {
     return `${hours}小时`;
   }
   return `${hours / 24}天`;
+}
+
+function savedPresetLabel(preset: SavedPremiumIndexPreset): string {
+  return `${preset.exchange[0].toUpperCase()}${preset.exchange.slice(1)} ${preset.symbol}`;
 }
 
 function premiumStats(points: PremiumIndexPoint[], current?: PremiumIndexCurrentSnapshot | null): PremiumIndexValueStats {
@@ -291,6 +351,7 @@ export function PremiumIndexPage() {
   const [hours, setHours] = useState(12);
   const [intervalMinutes, setIntervalMinutes] = useState(1);
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const [savedPresets, setSavedPresets] = useState<SavedPremiumIndexPreset[]>(() => loadSavedPresets());
   const [result, setResult] = useState<PremiumIndexQueryResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -298,18 +359,24 @@ export function PremiumIndexPage() {
 
   const recentPoints = useMemo(() => [...(result?.points ?? [])].reverse().slice(0, 180), [result?.points]);
 
-  const runQuery = useCallback(async () => {
+  const runQuery = useCallback(async (override?: {
+    values?: PremiumIndexFormValues;
+    hours?: number;
+    intervalMinutes?: number;
+  }) => {
     setLoading(true);
     setError("");
     try {
-      const values = await form.validateFields();
+      const values = normalizePremiumForm(override?.values ?? await form.validateFields());
+      const queryHours = clampHours(override?.hours ?? hours);
+      const queryInterval = override?.intervalMinutes ?? intervalMinutes;
       const next = await queryPremiumIndex({
         exchange: values.exchange,
-        symbol: normalizeSymbol(values.symbol),
-        hours: clampHours(hours),
-        interval_minutes: intervalMinutes
+        symbol: values.symbol,
+        hours: queryHours,
+        interval_minutes: queryInterval
       });
-      form.setFieldsValue({ ...values, symbol: normalizeSymbol(values.symbol) });
+      form.setFieldsValue(values);
       setResult(next);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
@@ -349,6 +416,46 @@ export function PremiumIndexPage() {
     return () => window.clearInterval(timer);
   }, [autoRefresh, loading, refreshCurrent, refreshing, result]);
 
+  const saveCurrentPreset = async () => {
+    try {
+      const values = normalizePremiumForm(await form.validateFields());
+      const preset: SavedPremiumIndexPreset = {
+        ...values,
+        id: presetId(values),
+        hours: clampHours(hours),
+        intervalMinutes,
+        savedAt: new Date().toISOString()
+      };
+      setSavedPresets((currentPresets) => {
+        const next = [preset, ...currentPresets.filter((item) => item.id !== preset.id)].slice(
+          0,
+          MAX_SAVED_PREMIUM_PRESETS
+        );
+        storeSavedPresets(next);
+        return next;
+      });
+      form.setFieldsValue(values);
+      setError("");
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc));
+    }
+  };
+
+  const removeSavedPreset = (id: string) => {
+    setSavedPresets((currentPresets) => {
+      const next = currentPresets.filter((preset) => preset.id !== id);
+      storeSavedPresets(next);
+      return next;
+    });
+  };
+
+  const applySavedPreset = (preset: SavedPremiumIndexPreset) => {
+    form.setFieldsValue(preset);
+    setHours(clampHours(preset.hours));
+    setIntervalMinutes(preset.intervalMinutes);
+    void runQuery({ values: preset, hours: preset.hours, intervalMinutes: preset.intervalMinutes });
+  };
+
   const current = result?.current ?? null;
   const currentPremium = current?.premium_pct ?? result?.premium_pct.current ?? null;
   const tone = typeof currentPremium === "number" ? (currentPremium >= 0 ? "positive" : "negative") : "neutral";
@@ -387,9 +494,37 @@ export function PremiumIndexPage() {
               <Button icon={<ReloadOutlined />} disabled={!result} loading={refreshing} onClick={() => void refreshCurrent()}>
                 最新
               </Button>
+              <Button icon={<SaveOutlined />} disabled={loading} onClick={() => void saveCurrentPreset()}>
+                保存
+              </Button>
             </div>
           </div>
         </Form>
+        {savedPresets.length ? (
+          <div className="premium-saved-presets">
+            <Typography.Text className="premium-saved-title">已保存</Typography.Text>
+            <div className="premium-saved-list">
+              {savedPresets.map((preset) => (
+                <Tag
+                  key={preset.id}
+                  closable
+                  className="premium-saved-tag"
+                  onClick={() => applySavedPreset(preset)}
+                  onClose={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    removeSavedPreset(preset.id);
+                  }}
+                >
+                  <span>{savedPresetLabel(preset)}</span>
+                  <span className="premium-saved-meta">
+                    {durationLabel(preset.hours)} · {preset.intervalMinutes}m
+                  </span>
+                </Tag>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </section>
 
       <section className="premium-metric-grid">
