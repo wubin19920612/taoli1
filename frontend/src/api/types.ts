@@ -742,6 +742,7 @@ export type OpportunityRadarSignalLevel = "HIGH" | "MEDIUM" | "WATCH";
 export interface OpportunityRadarSettings {
   enabled: boolean;
   anchor_exchange: string;
+  peer_exchanges: string[];
   premium_direction: OpportunityRadarPremiumDirection;
   min_abs_premium_pct: number;
   min_relative_premium_gap_pct: number;

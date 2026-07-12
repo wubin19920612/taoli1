@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 SUPPORTED_RADAR_EXCHANGES: tuple[str, ...] = (
@@ -22,6 +22,7 @@ RadarSignalLevel = Literal["HIGH", "MEDIUM", "WATCH"]
 class OpportunityRadarSettings(BaseModel):
     enabled: bool = True
     anchor_exchange: str = "bybit"
+    peer_exchanges: list[str] = Field(default_factory=list)
     premium_direction: PremiumDirection = "both"
     min_abs_premium_pct: float = Field(default=1.5, ge=0)
     min_relative_premium_gap_pct: float = Field(default=0.5, ge=0)
@@ -42,6 +43,23 @@ class OpportunityRadarSettings(BaseModel):
             allowed = ", ".join(SUPPORTED_RADAR_EXCHANGES)
             raise ValueError(f"unsupported anchor exchange: {value}; allowed: {allowed}")
         return normalized
+
+    @field_validator("peer_exchanges")
+    @classmethod
+    def normalize_peer_exchanges(cls, values: list[str]) -> list[str]:
+        normalized = list(dict.fromkeys(value.strip().lower() for value in values if value.strip()))
+        unsupported = [value for value in normalized if value not in SUPPORTED_RADAR_EXCHANGES]
+        if unsupported:
+            raise ValueError(f"unsupported peer exchanges: {', '.join(unsupported)}")
+        return normalized
+
+    @model_validator(mode="after")
+    def ensure_cross_exchange_peers(self) -> "OpportunityRadarSettings":
+        peers = [value for value in self.peer_exchanges if value != self.anchor_exchange]
+        if not peers:
+            peers = [value for value in SUPPORTED_RADAR_EXCHANGES if value != self.anchor_exchange]
+        self.peer_exchanges = peers
+        return self
 
 
 class OpportunityRadarCandidate(BaseModel):

@@ -122,6 +122,7 @@ def build_opportunity_radar_preview(
     pairs_evaluated = 0
     candidates: list[OpportunityRadarCandidate] = []
     if resolved.enabled:
+        peer_exchange_set = set(resolved.peer_exchanges)
         for symbol, symbol_markets in by_symbol.items():
             anchors = [
                 item
@@ -131,7 +132,7 @@ def build_opportunity_radar_preview(
             peers = [
                 item
                 for item in symbol_markets
-                if item.exchange.lower() != resolved.anchor_exchange
+                if item.exchange.lower() in peer_exchange_set
             ]
             for anchor in anchors:
                 anchor_markets += 1

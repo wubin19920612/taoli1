@@ -188,11 +188,13 @@ function expandedRow(row: OpportunityRadarCandidate) {
 
 export function OpportunityRadarPage() {
   const [form] = Form.useForm<OpportunityRadarSettings>();
+  const anomalyExchange = Form.useWatch("anchor_exchange", form) ?? "bybit";
   const [preview, setPreview] = useState<OpportunityRadarPreview | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [error, setError] = useState("");
+  const peerExchangeOptions = exchangeOptions.filter((option) => option.value !== anomalyExchange);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -248,13 +250,24 @@ export function OpportunityRadarPage() {
     }
   };
 
+  const changeAnomalyExchange = (value: string) => {
+    const currentPeers = (form.getFieldValue("peer_exchanges") ?? []) as string[];
+    const nextPeers = currentPeers.filter((exchange) => exchange !== value);
+    form.setFieldValue(
+      "peer_exchanges",
+      nextPeers.length > 0
+        ? nextPeers
+        : exchangeOptions.map((option) => option.value).filter((exchange) => exchange !== value)
+    );
+  };
+
   return (
     <div className="page radar-page">
       {error ? <Alert type="error" message={error} showIcon /> : null}
       <section className="toolbar">
         <div className="toolbar-controls">
           <Typography.Title level={4}>机会雷达</Typography.Title>
-          <Typography.Text type="secondary">极端溢价 / 低价差试错</Typography.Text>
+          <Typography.Text type="secondary">异常交易所 vs 对手交易所</Typography.Text>
         </div>
         <div className="toolbar-actions">
           <Space size={8}>
@@ -272,8 +285,8 @@ export function OpportunityRadarPage() {
         <Statistic title="强信号" value={preview?.high_count ?? 0} />
         <Statistic title="中等" value={preview?.medium_count ?? 0} />
         <Statistic title="观察" value={preview?.watch_count ?? 0} />
-        <Statistic title="锚定市场" value={preview?.anchor_markets ?? 0} />
-        <Statistic title="已比较" value={preview?.total_pairs_evaluated ?? 0} />
+        <Statistic title="异常所市场" value={preview?.anchor_markets ?? 0} />
+        <Statistic title="跨所比较" value={preview?.total_pairs_evaluated ?? 0} />
       </section>
 
       <section className="panel panel-wide radar-settings-panel">
@@ -282,8 +295,11 @@ export function OpportunityRadarPage() {
             <Form.Item label="启用扫描" name="enabled" valuePropName="checked">
               <Switch />
             </Form.Item>
-            <Form.Item label="锚定交易所" name="anchor_exchange" rules={[{ required: true }]}>
-              <Select options={exchangeOptions} />
+            <Form.Item label="异常溢价交易所" name="anchor_exchange" rules={[{ required: true }]}>
+              <Select options={exchangeOptions} onChange={changeAnomalyExchange} />
+            </Form.Item>
+            <Form.Item label="对手交易所" name="peer_exchanges" rules={[{ required: true }]}>
+              <Select mode="multiple" maxTagCount={3} options={peerExchangeOptions} />
             </Form.Item>
             <Form.Item label="溢价方向" name="premium_direction" rules={[{ required: true }]}>
               <Segmented

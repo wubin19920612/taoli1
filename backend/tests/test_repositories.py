@@ -85,6 +85,7 @@ async def test_opportunity_radar_settings_round_trip() -> None:
                 min_relative_premium_gap_pct=0.8,
                 max_abs_entry_spread_pct=0.3,
                 premium_direction="negative",
+                peer_exchanges=["binance", "okx"],
             )
         )
         loaded = await repo.get_opportunity_radar_settings()
@@ -93,6 +94,7 @@ async def test_opportunity_radar_settings_round_trip() -> None:
         assert loaded.min_relative_premium_gap_pct == 0.8
         assert loaded.max_abs_entry_spread_pct == 0.3
         assert loaded.premium_direction == "negative"
+        assert loaded.peer_exchanges == ["binance", "okx"]
     finally:
         await db.close()
 

@@ -151,3 +151,32 @@ def test_htx_is_not_considered_as_a_radar_peer() -> None:
 
     assert preview.displayed_candidates == 0
     assert preview.total_pairs_evaluated == 0
+
+
+def test_only_selected_peer_exchanges_are_compared() -> None:
+    preview = build_opportunity_radar_preview(
+        [
+            market("bybit", bid=99.95, ask=100.05, mark=98),
+            market("binance", bid=100.25, ask=100.35, mark=100),
+            market("okx", bid=100.15, ask=100.25, mark=100),
+        ],
+        OpportunityRadarSettings(peer_exchanges=["okx"], min_depth_multiple=1),
+        now=NOW,
+    )
+
+    assert preview.total_pairs_evaluated == 1
+    assert preview.displayed_candidates == 1
+    assert preview.candidates[0].peer_exchange == "okx"
+
+
+def test_anchor_exchange_is_removed_from_peer_selection() -> None:
+    settings = OpportunityRadarSettings(
+        anchor_exchange="bybit",
+        peer_exchanges=["bybit", "binance"],
+    )
+
+    assert settings.peer_exchanges == ["binance"]
+
+    all_other_peers = OpportunityRadarSettings(anchor_exchange="binance", peer_exchanges=[])
+    assert "binance" not in all_other_peers.peer_exchanges
+    assert "bybit" in all_other_peers.peer_exchanges

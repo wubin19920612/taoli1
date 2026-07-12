@@ -7,6 +7,7 @@ import { OpportunityRadarPage } from "../src/pages/OpportunityRadarPage";
 const settings = {
   enabled: true,
   anchor_exchange: "bybit",
+  peer_exchanges: ["binance", "okx", "gate", "bitget", "aster", "hyperliquid"],
   premium_direction: "both",
   min_abs_premium_pct: 1.5,
   min_relative_premium_gap_pct: 0.5,
@@ -107,6 +108,8 @@ describe("OpportunityRadarPage", () => {
         );
       expect(putCall).toBeTruthy();
       expect(JSON.parse(String(putCall?.[1]?.body))).toMatchObject({
+        anchor_exchange: "bybit",
+        peer_exchanges: ["binance", "okx", "gate", "bitget", "aster", "hyperliquid"],
         min_abs_premium_pct: 2,
         max_abs_entry_spread_pct: 0.3
       });
