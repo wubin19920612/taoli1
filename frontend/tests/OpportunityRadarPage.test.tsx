@@ -92,7 +92,7 @@ describe("OpportunityRadarPage", () => {
     expect(await screen.findByText("bybit -2.000%")).toBeTruthy();
     expect(screen.getByText("+0.200%")).toBeTruthy();
 
-    const premiumInput = screen.getByLabelText("极端溢价阈值");
+    const premiumInput = screen.getByLabelText("最低绝对溢价");
     const spreadInput = screen.getByLabelText("最大试错价差");
     await user.clear(premiumInput);
     await user.type(premiumInput, "2");

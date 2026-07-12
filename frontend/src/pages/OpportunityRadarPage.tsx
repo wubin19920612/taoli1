@@ -311,13 +311,28 @@ export function OpportunityRadarPage() {
                 ]}
               />
             </Form.Item>
-            <Form.Item label="极端溢价阈值" name="min_abs_premium_pct" rules={[{ required: true }]}>
+            <Form.Item
+              label="最低绝对溢价"
+              name="min_abs_premium_pct"
+              tooltip="异常交易所的溢价绝对值达到这个下限才入选；例如阈值 1.5%，-2% 会通过。"
+              rules={[{ required: true }]}
+            >
               <InputNumber min={0} step={0.1} suffix="%" />
             </Form.Item>
-            <Form.Item label="最小相对溢价差" name="min_relative_premium_gap_pct" rules={[{ required: true }]}>
+            <Form.Item
+              label="最低跨所溢价差"
+              name="min_relative_premium_gap_pct"
+              tooltip="异常交易所与对手交易所的溢价差至少达到这个值，用于排除全市场同步极端的情况。"
+              rules={[{ required: true }]}
+            >
               <InputNumber min={0} step={0.1} suffix="%" />
             </Form.Item>
-            <Form.Item label="最大试错价差" name="max_abs_entry_spread_pct" rules={[{ required: true }]}>
+            <Form.Item
+              label="最大试错价差"
+              name="max_abs_entry_spread_pct"
+              tooltip="两家交易所按真实 ask/bid 计算的价差上限；超过上限表示价格可能已经反映溢价异常。"
+              rules={[{ required: true }]}
+            >
               <InputNumber min={0} step={0.1} suffix="%" />
             </Form.Item>
             <Form.Item label="要求资金方向一致" name="require_funding_alignment" valuePropName="checked">
