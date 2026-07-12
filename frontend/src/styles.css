@@ -944,6 +944,29 @@ body {
   min-width: 0;
 }
 
+.pair-query-options {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding-top: 8px;
+}
+
+.pair-query-option-label {
+  flex: 0 0 auto;
+  color: #687872;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.pair-query-options .ant-typography-secondary {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .pair-saved-presets {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -1179,6 +1202,132 @@ body {
 
 .pair-detail-head .ant-typography {
   margin: 0;
+}
+
+.pair-premium-card {
+  overflow: hidden;
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px 12px 10px;
+  background: #ffffff;
+  border: 1px solid #e2e8e5;
+  border-radius: 6px;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.04);
+}
+
+.pair-premium-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.pair-premium-head .ant-typography {
+  margin: 0;
+}
+
+.pair-premium-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.pair-premium-chart {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.pair-premium-chart rect {
+  fill: #ffffff;
+  stroke: #eef2f1;
+}
+
+.pair-premium-grid-line,
+.pair-premium-time-tick {
+  stroke: #edf2f0;
+  stroke-width: 1;
+}
+
+.pair-premium-zero-line {
+  stroke: #a7b0ad;
+  stroke-width: 1.1;
+  stroke-dasharray: 5 4;
+}
+
+.pair-premium-line {
+  fill: none;
+  stroke-width: 2.25;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.pair-premium-line-left,
+.pair-premium-legend-left {
+  color: #2563eb;
+  stroke: #2563eb;
+}
+
+.pair-premium-line-right,
+.pair-premium-legend-right {
+  color: #7c3aed;
+  stroke: #7c3aed;
+}
+
+.pair-premium-dot-left,
+.pair-premium-dot-right {
+  stroke: #ffffff;
+  stroke-width: 2;
+}
+
+.pair-premium-dot-left {
+  fill: #2563eb;
+}
+
+.pair-premium-dot-right {
+  fill: #7c3aed;
+}
+
+.pair-premium-axis-label {
+  fill: #6b7a75;
+  font-size: 12px;
+}
+
+.pair-premium-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  color: #66736f;
+  font-size: 12px;
+}
+
+.pair-premium-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pair-premium-legend span::before {
+  content: "";
+  width: 18px;
+  height: 2px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.pair-premium-empty {
+  min-height: 220px;
+  display: grid;
+  place-items: center;
+  color: #687872;
+  background: #ffffff;
+  border: 1px dashed #dbe4e0;
+  border-radius: 6px;
 }
 
 .premium-index-page {

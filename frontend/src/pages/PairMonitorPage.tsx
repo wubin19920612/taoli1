@@ -16,12 +16,15 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 
-import { queryPairSpread } from "../api/client";
+import { getCurrentPremiumIndex, queryPairSpread, queryPremiumIndex } from "../api/client";
 import type {
   PairSpreadFundingPoint,
   PairSpreadPoint,
   PairSpreadPriceField,
-  PairSpreadQueryResult
+  PairSpreadQueryResult,
+  PremiumIndexCurrentSnapshot,
+  PremiumIndexPoint,
+  PremiumIndexQueryResult
 } from "../api/types";
 
 dayjs.extend(utc);
@@ -39,6 +42,12 @@ type SavedPairSpreadPreset = PairSpreadFormValues & {
   hours: number;
   intervalMinutes: number;
   savedAt: string;
+};
+
+type PairPremiumCompareResult = {
+  left: PremiumIndexQueryResult | null;
+  right: PremiumIndexQueryResult | null;
+  warnings: string[];
 };
 
 const defaultFormValues: PairSpreadFormValues = {
@@ -555,6 +564,196 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
   );
 }
 
+function premiumCurrentToPoint(current: PremiumIndexCurrentSnapshot): PremiumIndexPoint | null {
+  if (typeof current.premium_pct !== "number" || !Number.isFinite(current.premium_pct)) {
+    return null;
+  }
+  return {
+    bucket_at: current.observed_at,
+    premium_pct: current.premium_pct,
+    mark_price: current.mark_price,
+    index_price: current.index_price,
+    source: current.source
+  };
+}
+
+function premiumStats(points: PremiumIndexPoint[], current?: PremiumIndexCurrentSnapshot | null) {
+  const values = points.map((point) => point.premium_pct).filter((value) => Number.isFinite(value));
+  if (!values.length) {
+    return { min: null, max: null, mean: null, current: current?.premium_pct ?? null };
+  }
+  return {
+    min: Math.min(...values),
+    max: Math.max(...values),
+    mean: values.reduce((total, value) => total + value, 0) / values.length,
+    current: current?.premium_pct ?? values[values.length - 1]
+  };
+}
+
+function mergePremiumCurrent(
+  result: PremiumIndexQueryResult,
+  current: PremiumIndexCurrentSnapshot
+): PremiumIndexQueryResult {
+  const nextPoint = premiumCurrentToPoint(current);
+  if (!nextPoint) {
+    return { ...result, current, observed_at: current.observed_at };
+  }
+  const cutoff = dayjs.utc(current.observed_at).subtract(result.hours, "hour");
+  const byTime = new Map<string, PremiumIndexPoint>();
+  for (const point of result.points) {
+    if (dayjs.utc(point.bucket_at).isAfter(cutoff)) {
+      byTime.set(point.bucket_at, point);
+    }
+  }
+  byTime.set(nextPoint.bucket_at, nextPoint);
+  const points = Array.from(byTime.values())
+    .sort((a, b) => dayjs.utc(a.bucket_at).valueOf() - dayjs.utc(b.bucket_at).valueOf())
+    .slice(-2400);
+  return {
+    ...result,
+    observed_at: current.observed_at,
+    point_count: points.length,
+    first_seen_at: points[0]?.bucket_at ?? null,
+    last_seen_at: points[points.length - 1]?.bucket_at ?? null,
+    premium_pct: premiumStats(points, current),
+    current,
+    points
+  };
+}
+
+function premiumSpanHours(points: PremiumIndexPoint[]): number {
+  if (points.length < 2) {
+    return 0;
+  }
+  const start = dayjs.utc(points[0].bucket_at);
+  const end = dayjs.utc(points[points.length - 1].bucket_at);
+  return Math.max(end.diff(start, "minute") / 60, 0);
+}
+
+function PairPremiumCompareChart({
+  comparison,
+  loading
+}: {
+  comparison: PairPremiumCompareResult | null;
+  loading: boolean;
+}) {
+  const leftPoints = comparison?.left?.points ?? [];
+  const rightPoints = comparison?.right?.points ?? [];
+  const allPoints = [...leftPoints, ...rightPoints];
+  const width = 1180;
+  const height = 280;
+  const padding = { top: 24, right: 28, bottom: 34, left: 56 };
+  const chartWidth = width - padding.left - padding.right;
+  const chartHeight = height - padding.top - padding.bottom;
+
+  if (!comparison && loading) {
+    return <div className="pair-premium-empty">正在加载溢价指数对比</div>;
+  }
+  if (!allPoints.length) {
+    return <div className="pair-premium-empty">暂无溢价指数对比</div>;
+  }
+
+  const sortedAllPoints = allPoints
+    .slice()
+    .sort((a, b) => dayjs.utc(a.bucket_at).valueOf() - dayjs.utc(b.bucket_at).valueOf());
+  const spanHours = premiumSpanHours(sortedAllPoints);
+  const values = sortedAllPoints.map((point) => point.premium_pct).filter((value) => Number.isFinite(value));
+  if (!values.length) {
+    return <div className="pair-premium-empty">暂无可用溢价指数对比</div>;
+  }
+  const minValue = Math.min(...values);
+  const maxValue = Math.max(...values);
+  const span = maxValue - minValue || Math.max(Math.abs(maxValue), 0.01);
+  const min = minValue - span * 0.16;
+  const max = maxValue + span * 0.16;
+  const startMs = dayjs.utc(sortedAllPoints[0].bucket_at).valueOf();
+  const endMs = dayjs.utc(sortedAllPoints[sortedAllPoints.length - 1].bucket_at).valueOf();
+  const xAt = (point: PremiumIndexPoint) =>
+    padding.left + (startMs === endMs ? chartWidth / 2 : ((dayjs.utc(point.bucket_at).valueOf() - startMs) / (endMs - startMs)) * chartWidth);
+  const yAt = (value: number) => padding.top + ((max - value) / (max - min)) * chartHeight;
+  const linePath = (points: PremiumIndexPoint[]) =>
+    points
+      .map((point, index) => `${index === 0 ? "M" : "L"} ${xAt(point).toFixed(2)} ${yAt(point.premium_pct).toFixed(2)}`)
+      .join(" ");
+  const ticks = chartTicks(
+    sortedAllPoints.map((point) => ({
+        bucket_at: point.bucket_at,
+        leg1_close: 1,
+        leg2_close: 1,
+        spread_abs: 0,
+        spread_pct: point.premium_pct
+      })),
+    spanHours >= 168 ? 7 : 6
+  );
+  const leftCurrent = comparison?.left?.current?.premium_pct ?? comparison?.left?.premium_pct.current ?? null;
+  const rightCurrent = comparison?.right?.current?.premium_pct ?? comparison?.right?.premium_pct.current ?? null;
+  const diff =
+    typeof leftCurrent === "number" && typeof rightCurrent === "number"
+      ? rightCurrent - leftCurrent
+      : null;
+
+  return (
+    <div className="pair-premium-card">
+      <div className="pair-premium-head">
+        <Typography.Title level={5}>溢价指数对比</Typography.Title>
+        <div className="pair-premium-summary">
+          <Tag color="blue">左 {signedPct(leftCurrent, 4)}</Tag>
+          <Tag color="purple">右 {signedPct(rightCurrent, 4)}</Tag>
+          <Tag>右-左 {signedPct(diff, 4)}</Tag>
+        </div>
+      </div>
+      <svg className="pair-premium-chart" role="img" aria-label="左右腿溢价指数对比" viewBox={`0 0 ${width} ${height}`}>
+        <rect x={padding.left} y={padding.top} width={chartWidth} height={chartHeight} rx="4" />
+        {[0, 0.25, 0.5, 0.75, 1].map((tick) => {
+          const y = padding.top + chartHeight * tick;
+          const value = max - (max - min) * tick;
+          return (
+            <g key={tick}>
+              <line className="pair-premium-grid-line" x1={padding.left} y1={y} x2={padding.left + chartWidth} y2={y} />
+              <text className="pair-premium-axis-label" x={padding.left - 10} y={y + 4} textAnchor="end">
+                {value.toFixed(3)}%
+              </text>
+            </g>
+          );
+        })}
+        {ticks.map(({ index, point }, tickIndex) => {
+          const source = sortedAllPoints[index];
+          const x = source ? xAt(source) : padding.left;
+          const textAnchor = tickIndex === 0 ? "start" : tickIndex === ticks.length - 1 ? "end" : "middle";
+          return (
+            <g key={`premium-tick-${point.bucket_at}-${tickIndex}`}>
+              <line className="pair-premium-time-tick" x1={x} y1={padding.top} x2={x} y2={padding.top + chartHeight} />
+              <text className="pair-premium-axis-label" x={x} y={height - 10} textAnchor={textAnchor}>
+                {chartTime(point.bucket_at, spanHours)}
+              </text>
+            </g>
+          );
+        })}
+        {min <= 0 && max >= 0 ? (
+          <line className="pair-premium-zero-line" x1={padding.left} y1={yAt(0)} x2={padding.left + chartWidth} y2={yAt(0)} />
+        ) : null}
+        {leftPoints.length ? <path className="pair-premium-line pair-premium-line-left" d={linePath(leftPoints)} /> : null}
+        {rightPoints.length ? <path className="pair-premium-line pair-premium-line-right" d={linePath(rightPoints)} /> : null}
+        {leftPoints.length ? (
+          <circle className="pair-premium-dot-left" cx={xAt(leftPoints[leftPoints.length - 1])} cy={yAt(leftPoints[leftPoints.length - 1].premium_pct)} r="4" />
+        ) : null}
+        {rightPoints.length ? (
+          <circle className="pair-premium-dot-right" cx={xAt(rightPoints[rightPoints.length - 1])} cy={yAt(rightPoints[rightPoints.length - 1].premium_pct)} r="4" />
+        ) : null}
+      </svg>
+      <div className="pair-premium-legend">
+        <span className="pair-premium-legend-left">
+          {comparison?.left ? `${comparison.left.exchange} · ${comparison.left.symbol}` : "左腿无数据"}
+        </span>
+        <span className="pair-premium-legend-right">
+          {comparison?.right ? `${comparison.right.exchange} · ${comparison.right.symbol}` : "右腿无数据"}
+        </span>
+      </div>
+      {comparison?.warnings.length ? <Alert type="warning" message={comparison.warnings.join("；")} showIcon /> : null}
+    </div>
+  );
+}
+
 const pointColumns: ColumnsType<PairSpreadPoint> = [
   { title: "时间", dataIndex: "bucket_at", width: 120, render: (value: string) => time(value) },
   { title: "左价", dataIndex: "leg1_close", align: "right", render: (value: number) => price(value) },
@@ -585,10 +784,14 @@ export function PairMonitorPage() {
   const [hours, setHours] = useState(720);
   const [intervalMinutes, setIntervalMinutes] = useState(5);
   const [autoRefresh, setAutoRefresh] = useState(false);
+  const [showPremiumCompare, setShowPremiumCompare] = useState(false);
   const [savedPresets, setSavedPresets] = useState<SavedPairSpreadPreset[]>(() => loadSavedPairPresets());
   const [result, setResult] = useState<PairSpreadQueryResult | null>(null);
+  const [premiumCompare, setPremiumCompare] = useState<PairPremiumCompareResult | null>(null);
   const [loading, setLoading] = useState(false);
+  const [premiumLoading, setPremiumLoading] = useState(false);
   const [error, setError] = useState("");
+  const [premiumError, setPremiumError] = useState("");
 
   const recentPoints = useMemo(
     () => [...(result?.points ?? [])].reverse().slice(0, 180),
@@ -599,10 +802,94 @@ export function PairMonitorPage() {
     [result?.funding_history]
   );
 
+  const loadPremiumCompare = useCallback(async (pairResult: PairSpreadQueryResult) => {
+    setPremiumLoading(true);
+    setPremiumError("");
+    try {
+      const [left, right] = await Promise.allSettled([
+        queryPremiumIndex({
+          exchange: pairResult.leg1.exchange,
+          symbol: pairResult.leg1.symbol,
+          hours: pairResult.hours,
+          interval_minutes: pairResult.interval_minutes
+        }),
+        queryPremiumIndex({
+          exchange: pairResult.leg2.exchange,
+          symbol: pairResult.leg2.symbol,
+          hours: pairResult.hours,
+          interval_minutes: pairResult.interval_minutes
+        })
+      ]);
+      const warnings: string[] = [];
+      if (left.status === "rejected") {
+        warnings.push(`左腿溢价指数失败：${left.reason instanceof Error ? left.reason.message : String(left.reason)}`);
+      }
+      if (right.status === "rejected") {
+        warnings.push(`右腿溢价指数失败：${right.reason instanceof Error ? right.reason.message : String(right.reason)}`);
+      }
+      setPremiumCompare({
+        left: left.status === "fulfilled" ? left.value : null,
+        right: right.status === "fulfilled" ? right.value : null,
+        warnings
+      });
+    } catch (exc) {
+      setPremiumError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setPremiumLoading(false);
+    }
+  }, []);
+
+  const refreshPremiumCompareCurrent = useCallback(async (pairResult: PairSpreadQueryResult) => {
+    setPremiumLoading(true);
+    setPremiumError("");
+    try {
+      const [left, right] = await Promise.allSettled([
+        getCurrentPremiumIndex({
+          exchange: pairResult.leg1.exchange,
+          symbol: pairResult.leg1.symbol
+        }),
+        getCurrentPremiumIndex({
+          exchange: pairResult.leg2.exchange,
+          symbol: pairResult.leg2.symbol
+        })
+      ]);
+      setPremiumCompare((existing) => {
+        if (!existing) {
+          return existing;
+        }
+        const warnings = [...existing.warnings].filter(
+          (warning) => !warning.startsWith("左腿溢价指数失败") && !warning.startsWith("右腿溢价指数失败")
+        );
+        let nextLeft = existing.left;
+        let nextRight = existing.right;
+        if (left.status === "fulfilled" && nextLeft) {
+          nextLeft = mergePremiumCurrent(nextLeft, left.value);
+        } else if (left.status === "rejected") {
+          warnings.push(`左腿溢价指数失败：${left.reason instanceof Error ? left.reason.message : String(left.reason)}`);
+        }
+        if (right.status === "fulfilled" && nextRight) {
+          nextRight = mergePremiumCurrent(nextRight, right.value);
+        } else if (right.status === "rejected") {
+          warnings.push(`右腿溢价指数失败：${right.reason instanceof Error ? right.reason.message : String(right.reason)}`);
+        }
+        return {
+          left: nextLeft,
+          right: nextRight,
+          warnings
+        };
+      });
+    } catch (exc) {
+      setPremiumError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setPremiumLoading(false);
+    }
+  }, []);
+
   const runQuery = useCallback(async (override?: {
     hours?: number;
     intervalMinutes?: number;
     values?: PairSpreadFormValues;
+    premiumMode?: "history" | "current";
   }) => {
     setLoading(true);
     setError("");
@@ -621,12 +908,27 @@ export function PairMonitorPage() {
         hours: queryHours
       });
       setResult(next);
+      if (showPremiumCompare) {
+        if (override?.premiumMode === "current" && premiumCompare) {
+          await refreshPremiumCompareCurrent(next);
+        } else {
+          await loadPremiumCompare(next);
+        }
+      }
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
     } finally {
       setLoading(false);
     }
-  }, [form, hours, intervalMinutes]);
+  }, [
+    form,
+    hours,
+    intervalMinutes,
+    loadPremiumCompare,
+    premiumCompare,
+    refreshPremiumCompareCurrent,
+    showPremiumCompare
+  ]);
 
   useEffect(() => {
     if (!autoRefresh || !result) {
@@ -634,7 +936,7 @@ export function PairMonitorPage() {
     }
     const timer = window.setInterval(() => {
       if (!loading) {
-        void runQuery();
+        void runQuery({ premiumMode: "current" });
       }
     }, 30_000);
     return () => window.clearInterval(timer);
@@ -705,6 +1007,7 @@ export function PairMonitorPage() {
   return (
     <div className="page pair-monitor-page pair-terminal-page">
       {error ? <Alert type="error" message={error} showIcon /> : null}
+      {showPremiumCompare && premiumError ? <Alert type="error" message={premiumError} showIcon /> : null}
       {result?.warnings.length ? <Alert type="warning" message={result.warnings.join("；")} showIcon /> : null}
 
       <section className="pair-query-panel">
@@ -758,6 +1061,24 @@ export function PairMonitorPage() {
             </div>
           </div>
         </Form>
+        <div className="pair-query-options">
+          <Typography.Text className="pair-query-option-label">图表扩展</Typography.Text>
+          <Switch
+            checked={showPremiumCompare}
+            checkedChildren="溢价对比"
+            unCheckedChildren="溢价对比"
+            loading={premiumLoading}
+            onChange={(checked) => {
+              setShowPremiumCompare(checked);
+              if (checked && result) {
+                void loadPremiumCompare(result);
+              }
+            }}
+          />
+          <Typography.Text type="secondary">
+            {showPremiumCompare ? "显示左右腿隐含溢价指数，自动刷新时追加最新点" : "关闭后只显示价差曲线"}
+          </Typography.Text>
+        </div>
         {savedPresets.length ? (
           <div className="pair-saved-presets">
             <Typography.Text className="pair-saved-title">已保存</Typography.Text>
@@ -820,6 +1141,8 @@ export function PairMonitorPage() {
       </section>
 
       <PairSpreadChart result={result} />
+
+      {showPremiumCompare ? <PairPremiumCompareChart comparison={premiumCompare} loading={premiumLoading} /> : null}
 
       <section className="pair-detail-grid">
         <div className="pair-detail-card">
