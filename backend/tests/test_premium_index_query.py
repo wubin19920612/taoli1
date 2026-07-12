@@ -3,7 +3,11 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from app.models.premium_index import PremiumIndexCurrentSnapshot, PremiumIndexMarketQuery, PremiumIndexPoint
-from app.services.premium_index_query import PremiumIndexQueryService, build_premium_points_from_mark_index
+from app.services.premium_index_query import (
+    PremiumIndexQueryService,
+    build_premium_points_from_mark_index,
+    densify_premium_points,
+)
 
 
 def test_build_premium_points_from_mark_index_aligns_by_time() -> None:
@@ -18,6 +22,38 @@ def test_build_premium_points_from_mark_index_aligns_by_time() -> None:
     assert points[0].premium_pct == pytest.approx(1.0)
     assert points[0].mark_price == 101
     assert points[0].index_price == 100
+
+
+def test_densify_premium_points_fills_requested_interval() -> None:
+    first = datetime(2026, 7, 11, 12, 0, tzinfo=UTC)
+    points = densify_premium_points(
+        [
+            PremiumIndexPoint(bucket_at=first, premium_pct=0.0, source="hyperliquid_funding_premium"),
+            PremiumIndexPoint(
+                bucket_at=first + timedelta(hours=1),
+                premium_pct=0.6,
+                source="hyperliquid_funding_premium",
+            ),
+        ],
+        interval_minutes=1,
+    )
+
+    assert len(points) == 61
+    assert points[1].bucket_at == first + timedelta(minutes=1)
+    assert points[1].premium_pct == pytest.approx(0.01)
+    assert points[30].premium_pct == pytest.approx(0.3)
+    assert points[1].source == "hyperliquid_funding_premium_interpolated"
+
+
+def test_densify_premium_points_keeps_minute_points_unchanged() -> None:
+    first = datetime(2026, 7, 11, 12, 0, tzinfo=UTC)
+    original = [
+        PremiumIndexPoint(bucket_at=first, premium_pct=0.0, source="binance_premium_index"),
+        PremiumIndexPoint(bucket_at=first + timedelta(minutes=1), premium_pct=0.1, source="binance_premium_index"),
+        PremiumIndexPoint(bucket_at=first + timedelta(minutes=2), premium_pct=0.2, source="binance_premium_index"),
+    ]
+
+    assert densify_premium_points(original, interval_minutes=1) == original
 
 
 @pytest.mark.asyncio

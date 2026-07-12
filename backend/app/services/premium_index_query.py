@@ -72,6 +72,53 @@ def _dedupe_sorted(points: list[PremiumIndexPoint]) -> list[PremiumIndexPoint]:
     return [by_bucket[key] for key in sorted(by_bucket)]
 
 
+def _interpolate_optional_number(left: float | None, right: float | None, ratio: float) -> float | None:
+    if left is None or right is None or not isfinite(left) or not isfinite(right):
+        return None
+    return left + (right - left) * ratio
+
+
+def densify_premium_points(
+    points: list[PremiumIndexPoint],
+    *,
+    interval_minutes: int,
+) -> list[PremiumIndexPoint]:
+    if interval_minutes <= 0 or len(points) < 2:
+        return _dedupe_sorted(points)
+
+    sorted_points = _dedupe_sorted(points)
+    interval = timedelta(minutes=interval_minutes)
+    dense_points: list[PremiumIndexPoint] = []
+
+    for left, right in zip(sorted_points, sorted_points[1:], strict=False):
+        dense_points.append(left)
+        gap = right.bucket_at - left.bucket_at
+        if gap <= interval:
+            continue
+
+        step_count = int(gap.total_seconds() // interval.total_seconds())
+        if step_count <= 1:
+            continue
+
+        for step_index in range(1, step_count):
+            bucket_at = left.bucket_at + interval * step_index
+            if bucket_at >= right.bucket_at:
+                break
+            ratio = (bucket_at - left.bucket_at).total_seconds() / gap.total_seconds()
+            dense_points.append(
+                PremiumIndexPoint(
+                    bucket_at=bucket_at,
+                    premium_pct=left.premium_pct + (right.premium_pct - left.premium_pct) * ratio,
+                    mark_price=_interpolate_optional_number(left.mark_price, right.mark_price, ratio),
+                    index_price=_interpolate_optional_number(left.index_price, right.index_price, ratio),
+                    source=f"{left.source}_interpolated" if left.source == right.source else "interpolated",
+                )
+            )
+
+    dense_points.append(sorted_points[-1])
+    return _dedupe_sorted(dense_points)
+
+
 def build_premium_points_from_mark_index(
     mark_points: list[tuple[datetime, float]],
     index_points: list[tuple[datetime, float]],
@@ -137,6 +184,14 @@ class PremiumIndexQueryService(PairSpreadQueryService):
                 warnings.extend(window_warnings)
                 break
             failed_window_warnings.extend(window_warnings)
+
+        raw_point_count = len(points)
+        points = densify_premium_points(points, interval_minutes=interval_minutes)
+        if len(points) > raw_point_count:
+            _append_unique(
+                warnings,
+                f"原始溢价指数历史粒度较粗，已按{interval_minutes}分钟线性补点用于画图。",
+            )
 
         current = await self.current(market)
         if not points and current.premium_pct is not None:
