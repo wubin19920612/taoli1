@@ -1156,12 +1156,16 @@ body {
   font-size: 12px;
 }
 
-.pair-price-section {
+.pair-price-card {
+  overflow: hidden;
   display: grid;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
-  padding-top: 4px;
-  border-top: 1px solid #eef2f1;
+  padding: 12px 12px 10px;
+  background: #ffffff;
+  border: 1px solid #e2e8e5;
+  border-radius: 6px;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.04);
 }
 
 .pair-price-head {

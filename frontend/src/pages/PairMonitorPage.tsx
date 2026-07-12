@@ -558,7 +558,6 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
           );
         })}
       </svg>
-      <PairPriceChart result={result} ticks={ticks} spanHours={spanHours} />
       <div className="pair-chart-footer">
         <div className="pair-footer-tags">
           <Tag color="blue">
@@ -574,20 +573,21 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
 }
 
 function PairPriceChart({
-  result,
-  ticks,
-  spanHours
+  result
 }: {
-  result: PairSpreadQueryResult;
-  ticks: Array<{ index: number; point: PairSpreadPoint }>;
-  spanHours: number;
+  result: PairSpreadQueryResult | null;
 }) {
-  const points = result.points;
+  const points = result?.points ?? [];
   const width = 1180;
   const height = 230;
   const padding = { top: 18, right: 28, bottom: 34, left: 56 };
   const chartWidth = width - padding.left - padding.right;
   const chartHeight = height - padding.top - padding.bottom;
+
+  if (!result || points.length === 0) {
+    return null;
+  }
+
   const values = points
     .flatMap((point) => [point.leg1_close, point.leg2_close])
     .filter((value) => Number.isFinite(value));
@@ -604,6 +604,8 @@ function PairPriceChart({
   const xAt = (index: number) =>
     padding.left + (points.length === 1 ? chartWidth / 2 : (chartWidth * index) / (points.length - 1));
   const yAt = (value: number) => padding.top + ((max - value) / (max - min)) * chartHeight;
+  const spanHours = chartSpanHours(points);
+  const ticks = chartTicks(points, spanHours >= 168 ? 7 : 6);
   const linePath = (field: "leg1_close" | "leg2_close") =>
     points
       .map((point, index) => `${index === 0 ? "M" : "L"} ${xAt(index).toFixed(2)} ${yAt(point[field]).toFixed(2)}`)
@@ -611,7 +613,7 @@ function PairPriceChart({
   const lastPoint = points[points.length - 1];
 
   return (
-    <div className="pair-price-section">
+    <div className="pair-price-card">
       <div className="pair-price-head">
         <Typography.Text strong>标的价格</Typography.Text>
         <div className="pair-price-legend">
@@ -1377,6 +1379,7 @@ export function PairMonitorPage() {
       <PairSpreadChart result={result} />
 
       {showPremiumCompare ? <PairPremiumCompareChart comparison={premiumCompare} loading={premiumLoading} /> : null}
+      <PairPriceChart result={result} />
 
       <section className="pair-detail-grid">
         <div className="pair-detail-card">
