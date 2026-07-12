@@ -1156,6 +1156,107 @@ body {
   font-size: 12px;
 }
 
+.pair-price-section {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding-top: 4px;
+  border-top: 1px solid #eef2f1;
+}
+
+.pair-price-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.pair-price-head .ant-typography {
+  margin: 0;
+  font-size: 13px;
+}
+
+.pair-price-chart {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.pair-price-chart rect {
+  fill: #ffffff;
+  stroke: #eef2f1;
+}
+
+.pair-price-grid-line,
+.pair-price-time-tick {
+  stroke: #edf2f0;
+  stroke-width: 1;
+}
+
+.pair-price-line {
+  fill: none;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.pair-price-line-left,
+.pair-price-legend-left {
+  color: #0f766e;
+  stroke: #0f766e;
+}
+
+.pair-price-line-right,
+.pair-price-legend-right {
+  color: #7c3aed;
+  stroke: #7c3aed;
+}
+
+.pair-price-dot-left,
+.pair-price-dot-right {
+  stroke: #ffffff;
+  stroke-width: 2;
+}
+
+.pair-price-dot-left {
+  fill: #0f766e;
+}
+
+.pair-price-dot-right {
+  fill: #7c3aed;
+}
+
+.pair-price-axis-label {
+  fill: #6b7a75;
+  font-size: 12px;
+}
+
+.pair-price-legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 14px;
+  min-width: 0;
+  color: #66736f;
+  font-size: 12px;
+}
+
+.pair-price-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pair-price-legend span::before {
+  content: "";
+  width: 18px;
+  height: 2px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
 .pair-chart-empty {
   min-height: 330px;
   display: grid;
@@ -1296,6 +1397,38 @@ body {
 
 .pair-premium-dot-right {
   fill: #7c3aed;
+}
+
+.pair-premium-turning-leader {
+  stroke: #95a3a0;
+  stroke-dasharray: 3 3;
+  stroke-width: 1;
+  opacity: 0.7;
+}
+
+.pair-premium-turning-dot {
+  stroke: #ffffff;
+  stroke-width: 2;
+}
+
+.pair-premium-turning-left .pair-premium-turning-dot {
+  fill: #2563eb;
+}
+
+.pair-premium-turning-right .pair-premium-turning-dot {
+  fill: #7c3aed;
+}
+
+.pair-premium-turning-label-bg {
+  fill: #ffffff;
+  stroke: #d7e0dc;
+  stroke-width: 1;
+}
+
+.pair-premium-turning-label {
+  fill: #17211d;
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .pair-premium-axis-label {
@@ -1494,6 +1627,38 @@ body {
   stroke-width: 2.35;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.premium-chart-turning-leader {
+  stroke: #95a3a0;
+  stroke-dasharray: 3 3;
+  stroke-width: 1;
+  opacity: 0.72;
+}
+
+.premium-chart-turning-dot {
+  stroke: #ffffff;
+  stroke-width: 2;
+}
+
+.premium-chart-turning-peak .premium-chart-turning-dot {
+  fill: #b42318;
+}
+
+.premium-chart-turning-trough .premium-chart-turning-dot {
+  fill: #14803c;
+}
+
+.premium-chart-turning-label-bg {
+  fill: #ffffff;
+  stroke: #d7e0dc;
+  stroke-width: 1;
+}
+
+.premium-chart-turning-label {
+  fill: #17211d;
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .premium-current-point {

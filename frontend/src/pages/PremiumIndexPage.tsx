@@ -52,6 +52,14 @@ function signedPct(value: number | null | undefined, digits = 4): string {
   return `${value >= 0 ? "+" : ""}${value.toFixed(digits)}%`;
 }
 
+function signedBp(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "-";
+  }
+  const bp = Math.round(value * 100);
+  return `${bp >= 0 ? "+" : ""}${bp}bp`;
+}
+
 function price(value: number | null | undefined): string {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return "-";
@@ -224,6 +232,103 @@ function chartTicks(points: PremiumIndexPoint[], maxTicks = 7): Array<{ index: n
   });
 }
 
+type PremiumTurnCandidate = {
+  index: number;
+  kind: "peak" | "trough";
+  score: number;
+};
+
+function addPremiumTurnCandidate(
+  selected: PremiumTurnCandidate[],
+  candidate: PremiumTurnCandidate,
+  maxLabels: number,
+  minIndexDistance: number
+): boolean {
+  if (selected.length >= maxLabels) {
+    return false;
+  }
+  if (selected.some((item) => item.index === candidate.index)) {
+    return false;
+  }
+  if (selected.some((item) => Math.abs(item.index - candidate.index) < minIndexDistance)) {
+    return false;
+  }
+  selected.push(candidate);
+  return true;
+}
+
+function premiumTurningPoints(points: PremiumIndexPoint[], maxLabels = 12): Array<{
+  index: number;
+  point: PremiumIndexPoint;
+  kind: "peak" | "trough";
+}> {
+  if (points.length < 3) {
+    return [];
+  }
+
+  const values = points.map((point) => point.premium_pct);
+  const minValue = Math.min(...values);
+  const maxValue = Math.max(...values);
+  const span = maxValue - minValue || 1;
+  const localWindowSize = Math.max(2, Math.floor(points.length / 180));
+  const contextWindowSize = Math.max(localWindowSize + 2, Math.floor(points.length / 55));
+  const minProminence = Math.max(0.003, span * 0.004);
+  const candidates: PremiumTurnCandidate[] = [];
+  let previousDirection = 0;
+
+  for (let index = 1; index < points.length; index += 1) {
+    const delta = values[index] - values[index - 1];
+    const direction = delta > 0 ? 1 : delta < 0 ? -1 : 0;
+    if (direction === 0) {
+      continue;
+    }
+    if (previousDirection !== 0 && direction !== previousDirection) {
+      const turnIndex = index - 1;
+      const kind = previousDirection > 0 && direction < 0 ? "peak" : "trough";
+      const score = Math.max(
+        premiumTurnScore(values, turnIndex, kind, localWindowSize) * 1.25,
+        premiumTurnScore(values, turnIndex, kind, contextWindowSize)
+      );
+      if (score >= minProminence) {
+        candidates.push({ index: turnIndex, kind, score });
+      }
+    }
+    previousDirection = direction;
+  }
+
+  candidates.push({ index: values.indexOf(maxValue), kind: "peak", score: span });
+  candidates.push({ index: values.indexOf(minValue), kind: "trough", score: span });
+
+  const selected: PremiumTurnCandidate[] = [];
+  const rankedCandidates = candidates.sort((a, b) => b.score - a.score);
+  const minIndexDistance = Math.max(5, Math.floor(points.length / 44));
+  for (const candidate of rankedCandidates) {
+    addPremiumTurnCandidate(selected, candidate, maxLabels, minIndexDistance);
+    if (selected.length >= maxLabels) {
+      break;
+    }
+  }
+
+  return selected
+    .sort((a, b) => a.index - b.index)
+    .map(({ index, kind }) => ({ index, point: points[index], kind }));
+}
+
+function premiumTurnScore(values: number[], index: number, kind: "peak" | "trough", windowSize: number): number {
+  const start = Math.max(0, index - windowSize);
+  const end = Math.min(values.length - 1, index + windowSize);
+  const left = values.slice(start, index);
+  const right = values.slice(index + 1, end + 1);
+  if (!left.length || !right.length) {
+    return 0;
+  }
+  const value = values[index];
+  if (kind === "peak") {
+    return Math.min(value - Math.min(...left), value - Math.min(...right));
+  }
+  return Math.min(Math.max(...left) - value, Math.max(...right) - value);
+}
+
 function PremiumIndexChart({ result }: { result: PremiumIndexQueryResult | null }) {
   const points = result?.points ?? [];
   const width = 1180;
@@ -261,6 +366,7 @@ function PremiumIndexChart({ result }: { result: PremiumIndexQueryResult | null 
     .join(" ")} L ${xAt(points[points.length - 1]).toFixed(2)} ${baselineY.toFixed(2)} Z`;
   const spanHours = chartSpanHours(points);
   const ticks = chartTicks(points, spanHours >= 168 ? 7 : 6);
+  const turningPoints = premiumTurningPoints(points);
 
   return (
     <div className="premium-chart-card">
@@ -279,7 +385,7 @@ function PremiumIndexChart({ result }: { result: PremiumIndexQueryResult | null 
             <g key={tick}>
               <line className="premium-chart-grid-line" x1={padding.left} y1={y} x2={padding.left + chartWidth} y2={y} />
               <text className="premium-chart-axis-label" x={padding.left - 10} y={y + 4} textAnchor="end">
-                {value.toFixed(2)}%
+                {Math.round(value * 100)}bp
               </text>
             </g>
           );
@@ -301,6 +407,42 @@ function PremiumIndexChart({ result }: { result: PremiumIndexQueryResult | null 
         ) : null}
         <path className="premium-chart-area" d={area} />
         <path className="premium-chart-line" d={line} />
+        {turningPoints.map(({ index, point, kind }, labelIndex) => {
+          const x = xAt(point);
+          const y = yAt(point.premium_pct);
+          const label = signedBp(point.premium_pct);
+          const labelWidth = 58;
+          const labelHeight = 22;
+          const labelOffset = 20 + (labelIndex % 2) * 10;
+          const labelShift = ((labelIndex % 3) - 1) * 8;
+          const labelCenterX = Math.min(
+            padding.left + chartWidth - labelWidth / 2,
+            Math.max(padding.left + labelWidth / 2, x + labelShift)
+          );
+          const rawLabelY = kind === "peak" ? y - labelOffset : y + labelOffset;
+          const labelCenterY = Math.min(
+            padding.top + chartHeight - labelHeight / 2,
+            Math.max(padding.top + labelHeight / 2, rawLabelY)
+          );
+          return (
+            <g key={`premium-turn-${point.bucket_at}-${kind}-${index}`} className={`premium-chart-turning premium-chart-turning-${kind}`}>
+              <title>{`${time(point.bucket_at)} 溢价指数 ${signedPct(point.premium_pct, 4)} (${label})`}</title>
+              <line className="premium-chart-turning-leader" x1={x} y1={y} x2={labelCenterX} y2={labelCenterY} />
+              <circle className="premium-chart-turning-dot" cx={x} cy={y} r="3.5" />
+              <rect
+                className="premium-chart-turning-label-bg"
+                x={labelCenterX - labelWidth / 2}
+                y={labelCenterY - labelHeight / 2}
+                width={labelWidth}
+                height={labelHeight}
+                rx="4"
+              />
+              <text className="premium-chart-turning-label" x={labelCenterX} y={labelCenterY + 4} textAnchor="middle">
+                {label}
+              </text>
+            </g>
+          );
+        })}
         {result.current?.premium_pct != null ? (
           <circle
             className="premium-current-point"

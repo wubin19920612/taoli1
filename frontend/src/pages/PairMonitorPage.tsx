@@ -85,6 +85,14 @@ function signedPct(value: number | null | undefined, digits = 2): string {
   return `${value >= 0 ? "+" : ""}${value.toFixed(digits)}%`;
 }
 
+function signedBp(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "-";
+  }
+  const bp = Math.round(value * 100);
+  return `${bp >= 0 ? "+" : ""}${bp}bp`;
+}
+
 function price(value: number | null | undefined): string {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return "-";
@@ -550,6 +558,7 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
           );
         })}
       </svg>
+      <PairPriceChart result={result} ticks={ticks} spanHours={spanHours} />
       <div className="pair-chart-footer">
         <div className="pair-footer-tags">
           <Tag color="blue">
@@ -560,6 +569,93 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
         </div>
         <Typography.Text type="secondary">最新 {fullTime(result.observed_at)}</Typography.Text>
       </div>
+    </div>
+  );
+}
+
+function PairPriceChart({
+  result,
+  ticks,
+  spanHours
+}: {
+  result: PairSpreadQueryResult;
+  ticks: Array<{ index: number; point: PairSpreadPoint }>;
+  spanHours: number;
+}) {
+  const points = result.points;
+  const width = 1180;
+  const height = 230;
+  const padding = { top: 18, right: 28, bottom: 34, left: 56 };
+  const chartWidth = width - padding.left - padding.right;
+  const chartHeight = height - padding.top - padding.bottom;
+  const values = points
+    .flatMap((point) => [point.leg1_close, point.leg2_close])
+    .filter((value) => Number.isFinite(value));
+
+  if (!values.length) {
+    return null;
+  }
+
+  const minValue = Math.min(...values);
+  const maxValue = Math.max(...values);
+  const span = maxValue - minValue || Math.max(Math.abs(maxValue), 1);
+  const min = minValue - span * 0.08;
+  const max = maxValue + span * 0.08;
+  const xAt = (index: number) =>
+    padding.left + (points.length === 1 ? chartWidth / 2 : (chartWidth * index) / (points.length - 1));
+  const yAt = (value: number) => padding.top + ((max - value) / (max - min)) * chartHeight;
+  const linePath = (field: "leg1_close" | "leg2_close") =>
+    points
+      .map((point, index) => `${index === 0 ? "M" : "L"} ${xAt(index).toFixed(2)} ${yAt(point[field]).toFixed(2)}`)
+      .join(" ");
+  const lastPoint = points[points.length - 1];
+
+  return (
+    <div className="pair-price-section">
+      <div className="pair-price-head">
+        <Typography.Text strong>标的价格</Typography.Text>
+        <div className="pair-price-legend">
+          <span className="pair-price-legend-left">
+            {result.leg1.exchange} · {result.leg1.symbol}
+          </span>
+          <span className="pair-price-legend-right">{rightLegLabel(result)}</span>
+        </div>
+      </div>
+      <svg className="pair-price-chart" role="img" aria-label="左右腿标的价格曲线" viewBox={`0 0 ${width} ${height}`}>
+        <rect x={padding.left} y={padding.top} width={chartWidth} height={chartHeight} rx="4" />
+        {[0, 0.25, 0.5, 0.75, 1].map((tick) => {
+          const y = padding.top + chartHeight * tick;
+          const value = max - (max - min) * tick;
+          return (
+            <g key={tick}>
+              <line className="pair-price-grid-line" x1={padding.left} y1={y} x2={padding.left + chartWidth} y2={y} />
+              <text className="pair-price-axis-label" x={padding.left - 10} y={y + 4} textAnchor="end">
+                {price(value)}
+              </text>
+            </g>
+          );
+        })}
+        {ticks.map(({ index, point }, tickIndex) => {
+          const x = xAt(index);
+          const textAnchor = tickIndex === 0 ? "start" : tickIndex === ticks.length - 1 ? "end" : "middle";
+          return (
+            <g key={`price-tick-${point.bucket_at}`}>
+              <line className="pair-price-time-tick" x1={x} y1={padding.top} x2={x} y2={padding.top + chartHeight} />
+              <text className="pair-price-axis-label" x={x} y={height - 10} textAnchor={textAnchor}>
+                {chartTime(point.bucket_at, spanHours)}
+              </text>
+            </g>
+          );
+        })}
+        <path className="pair-price-line pair-price-line-left" d={linePath("leg1_close")} />
+        <path className="pair-price-line pair-price-line-right" d={linePath("leg2_close")} />
+        <circle className="pair-price-dot-left" cx={xAt(points.length - 1)} cy={yAt(lastPoint.leg1_close)} r="4">
+          <title>{`${time(lastPoint.bucket_at)} 左腿 ${price(lastPoint.leg1_close)}`}</title>
+        </circle>
+        <circle className="pair-price-dot-right" cx={xAt(points.length - 1)} cy={yAt(lastPoint.leg2_close)} r="4">
+          <title>{`${time(lastPoint.bucket_at)} 右腿 ${price(lastPoint.leg2_close)}`}</title>
+        </circle>
+      </svg>
     </div>
   );
 }
@@ -630,6 +726,102 @@ function premiumSpanHours(points: PremiumIndexPoint[]): number {
   return Math.max(end.diff(start, "minute") / 60, 0);
 }
 
+type PremiumTurnCandidate = {
+  index: number;
+  kind: "peak" | "trough";
+  score: number;
+};
+
+function addPremiumTurnCandidate(
+  selected: PremiumTurnCandidate[],
+  candidate: PremiumTurnCandidate,
+  maxLabels: number,
+  minIndexDistance: number
+): boolean {
+  if (selected.length >= maxLabels) {
+    return false;
+  }
+  if (selected.some((item) => item.index === candidate.index)) {
+    return false;
+  }
+  if (selected.some((item) => Math.abs(item.index - candidate.index) < minIndexDistance)) {
+    return false;
+  }
+  selected.push(candidate);
+  return true;
+}
+
+function premiumTurningPoints(points: PremiumIndexPoint[], maxLabels = 8): Array<{
+  index: number;
+  point: PremiumIndexPoint;
+  kind: "peak" | "trough";
+}> {
+  if (points.length < 3) {
+    return [];
+  }
+  const values = points.map((point) => point.premium_pct);
+  const minValue = Math.min(...values);
+  const maxValue = Math.max(...values);
+  const span = maxValue - minValue || 1;
+  const localWindowSize = Math.max(2, Math.floor(points.length / 180));
+  const contextWindowSize = Math.max(localWindowSize + 2, Math.floor(points.length / 55));
+  const minProminence = Math.max(0.003, span * 0.004);
+  const candidates: PremiumTurnCandidate[] = [];
+  let previousDirection = 0;
+
+  for (let index = 1; index < points.length; index += 1) {
+    const delta = values[index] - values[index - 1];
+    const direction = delta > 0 ? 1 : delta < 0 ? -1 : 0;
+    if (direction === 0) {
+      continue;
+    }
+    if (previousDirection !== 0 && direction !== previousDirection) {
+      const turnIndex = index - 1;
+      const kind = previousDirection > 0 && direction < 0 ? "peak" : "trough";
+      const score = Math.max(
+        premiumTurnScore(values, turnIndex, kind, localWindowSize) * 1.25,
+        premiumTurnScore(values, turnIndex, kind, contextWindowSize)
+      );
+      if (score >= minProminence) {
+        candidates.push({ index: turnIndex, kind, score });
+      }
+    }
+    previousDirection = direction;
+  }
+
+  candidates.push({ index: values.indexOf(maxValue), kind: "peak", score: span });
+  candidates.push({ index: values.indexOf(minValue), kind: "trough", score: span });
+
+  const selected: PremiumTurnCandidate[] = [];
+  const rankedCandidates = candidates.sort((a, b) => b.score - a.score);
+  const minIndexDistance = Math.max(5, Math.floor(points.length / 44));
+  for (const candidate of rankedCandidates) {
+    addPremiumTurnCandidate(selected, candidate, maxLabels, minIndexDistance);
+    if (selected.length >= maxLabels) {
+      break;
+    }
+  }
+
+  return selected
+    .sort((a, b) => a.index - b.index)
+    .map(({ index, kind }) => ({ index, point: points[index], kind }));
+}
+
+function premiumTurnScore(values: number[], index: number, kind: "peak" | "trough", windowSize: number): number {
+  const start = Math.max(0, index - windowSize);
+  const end = Math.min(values.length - 1, index + windowSize);
+  const left = values.slice(start, index);
+  const right = values.slice(index + 1, end + 1);
+  if (!left.length || !right.length) {
+    return 0;
+  }
+  const value = values[index];
+  if (kind === "peak") {
+    return Math.min(value - Math.min(...left), value - Math.min(...right));
+  }
+  return Math.min(Math.max(...left) - value, Math.max(...right) - value);
+}
+
 function PairPremiumCompareChart({
   comparison,
   loading
@@ -675,6 +867,46 @@ function PairPremiumCompareChart({
     points
       .map((point, index) => `${index === 0 ? "M" : "L"} ${xAt(point).toFixed(2)} ${yAt(point.premium_pct).toFixed(2)}`)
       .join(" ");
+  const renderTurnLabels = (
+    points: PremiumIndexPoint[],
+    side: "left" | "right"
+  ) =>
+    premiumTurningPoints(points).map(({ index, point, kind }, labelIndex) => {
+      const x = xAt(point);
+      const y = yAt(point.premium_pct);
+      const label = signedBp(point.premium_pct);
+      const labelWidth = 58;
+      const labelHeight = 22;
+      const labelOffset = 20 + (labelIndex % 2) * 10;
+      const labelShift = ((labelIndex % 3) - 1) * 8;
+      const labelCenterX = Math.min(
+        padding.left + chartWidth - labelWidth / 2,
+        Math.max(padding.left + labelWidth / 2, x + labelShift)
+      );
+      const rawLabelY = kind === "peak" ? y - labelOffset : y + labelOffset;
+      const labelCenterY = Math.min(
+        padding.top + chartHeight - labelHeight / 2,
+        Math.max(padding.top + labelHeight / 2, rawLabelY)
+      );
+      return (
+        <g key={`premium-turn-${side}-${point.bucket_at}-${kind}-${index}`} className={`pair-premium-turning pair-premium-turning-${side}`}>
+          <title>{`${time(point.bucket_at)} ${side === "left" ? "左腿" : "右腿"}溢价指数 ${signedPct(point.premium_pct, 4)} (${label})`}</title>
+          <line className="pair-premium-turning-leader" x1={x} y1={y} x2={labelCenterX} y2={labelCenterY} />
+          <circle className="pair-premium-turning-dot" cx={x} cy={y} r="3.5" />
+          <rect
+            className="pair-premium-turning-label-bg"
+            x={labelCenterX - labelWidth / 2}
+            y={labelCenterY - labelHeight / 2}
+            width={labelWidth}
+            height={labelHeight}
+            rx="4"
+          />
+          <text className="pair-premium-turning-label" x={labelCenterX} y={labelCenterY + 4} textAnchor="middle">
+            {label}
+          </text>
+        </g>
+      );
+    });
   const ticks = chartTicks(
     sortedAllPoints.map((point) => ({
         bucket_at: point.bucket_at,
@@ -711,7 +943,7 @@ function PairPremiumCompareChart({
             <g key={tick}>
               <line className="pair-premium-grid-line" x1={padding.left} y1={y} x2={padding.left + chartWidth} y2={y} />
               <text className="pair-premium-axis-label" x={padding.left - 10} y={y + 4} textAnchor="end">
-                {value.toFixed(3)}%
+                {Math.round(value * 100)}bp
               </text>
             </g>
           );
@@ -734,6 +966,8 @@ function PairPremiumCompareChart({
         ) : null}
         {leftPoints.length ? <path className="pair-premium-line pair-premium-line-left" d={linePath(leftPoints)} /> : null}
         {rightPoints.length ? <path className="pair-premium-line pair-premium-line-right" d={linePath(rightPoints)} /> : null}
+        {renderTurnLabels(leftPoints, "left")}
+        {renderTurnLabels(rightPoints, "right")}
         {leftPoints.length ? (
           <circle className="pair-premium-dot-left" cx={xAt(leftPoints[leftPoints.length - 1])} cy={yAt(leftPoints[leftPoints.length - 1].premium_pct)} r="4" />
         ) : null}
