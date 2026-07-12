@@ -735,6 +735,67 @@ export interface FundingArbitragePreview {
   candidates: FundingArbitrageCandidate[];
 }
 
+export type OpportunityRadarPremiumDirection = "negative" | "positive" | "both";
+export type OpportunityRadarDirection = "LONG_ANCHOR_SHORT_PEER" | "LONG_PEER_SHORT_ANCHOR";
+export type OpportunityRadarSignalLevel = "HIGH" | "MEDIUM" | "WATCH";
+
+export interface OpportunityRadarSettings {
+  enabled: boolean;
+  anchor_exchange: string;
+  premium_direction: OpportunityRadarPremiumDirection;
+  min_abs_premium_pct: number;
+  min_relative_premium_gap_pct: number;
+  max_abs_entry_spread_pct: number;
+  require_funding_alignment: boolean;
+  min_hourly_funding_edge_pct: number;
+  min_volume_24h_usdt: number;
+  notional_per_symbol_usdt: number;
+  min_depth_multiple: number;
+  max_data_age_seconds: number;
+  max_candidates: number;
+}
+
+export interface OpportunityRadarCandidate {
+  id: string;
+  symbol: string;
+  signal_level: OpportunityRadarSignalLevel;
+  score: number;
+  direction: OpportunityRadarDirection;
+  long_exchange: string;
+  short_exchange: string;
+  anchor_exchange: string;
+  peer_exchange: string;
+  anchor_premium_pct: number;
+  peer_premium_pct: number;
+  peer_median_premium_pct: number;
+  relative_premium_gap_pct: number;
+  entry_spread_pct: number;
+  long_entry_price: number;
+  short_entry_price: number;
+  long_funding_pct: number | null;
+  short_funding_pct: number | null;
+  long_funding_interval_hours: number | null;
+  short_funding_interval_hours: number | null;
+  hourly_funding_edge_pct: number | null;
+  volume_24h_usdt: number | null;
+  depth_usdt: number | null;
+  data_age_seconds: number;
+  reasons: string[];
+  risk_labels: string[];
+}
+
+export interface OpportunityRadarPreview {
+  observed_at: string;
+  settings: OpportunityRadarSettings;
+  anchor_markets: number;
+  total_pairs_evaluated: number;
+  displayed_candidates: number;
+  high_count: number;
+  medium_count: number;
+  watch_count: number;
+  candidates: OpportunityRadarCandidate[];
+}
+
 export type TradfiPerpDirection = "LONG_HL_SHORT_BINANCE" | "LONG_BINANCE_SHORT_HL";
 
 export interface TradfiPerpLeg {

@@ -5,6 +5,7 @@ from app.db.repositories import AlertRuleRepository, SettingsRepository
 from app.db.schema import initialize_schema
 from app.models.alert import AlertRule, AlertSeverity
 from app.models.settings import AstroCardSettings
+from app.models.opportunity_radar import OpportunityRadarSettings
 
 
 @pytest.mark.asyncio
@@ -64,6 +65,36 @@ async def test_settings_repository_defaults() -> None:
     assert settings.symbol_aliases[0].exchange == "gate"
     assert settings.symbol_aliases[0].symbol == "EDGEXUSDT"
     assert settings.symbol_aliases[0].canonical_symbol == "EDGEUSDT"
+
+
+@pytest.mark.asyncio
+async def test_opportunity_radar_settings_round_trip() -> None:
+    db = await connect_database(":memory:")
+    try:
+        await initialize_schema(db)
+        repo = SettingsRepository(db)
+
+        defaults = await repo.get_opportunity_radar_settings()
+        assert defaults.anchor_exchange == "bybit"
+        assert defaults.min_abs_premium_pct == 1.5
+        assert defaults.max_abs_entry_spread_pct == 0.5
+
+        saved = await repo.set_opportunity_radar_settings(
+            OpportunityRadarSettings(
+                min_abs_premium_pct=2,
+                min_relative_premium_gap_pct=0.8,
+                max_abs_entry_spread_pct=0.3,
+                premium_direction="negative",
+            )
+        )
+        loaded = await repo.get_opportunity_radar_settings()
+
+        assert saved.min_abs_premium_pct == 2
+        assert loaded.min_relative_premium_gap_pct == 0.8
+        assert loaded.max_abs_entry_spread_pct == 0.3
+        assert loaded.premium_direction == "negative"
+    finally:
+        await db.close()
 
 
 @pytest.mark.asyncio

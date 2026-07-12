@@ -363,6 +363,62 @@ body {
   overflow: hidden;
 }
 
+.radar-metrics {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.radar-settings-panel {
+  overflow: hidden;
+}
+
+.radar-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(150px, 1fr));
+  gap: 0 12px;
+  align-items: end;
+}
+
+.radar-settings-grid .ant-input-number,
+.radar-settings-grid .ant-select,
+.radar-settings-grid .ant-segmented {
+  width: 100%;
+}
+
+.radar-stack-cell,
+.radar-route-cell {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  line-height: 1.35;
+}
+
+.radar-stack-cell .ant-tag {
+  width: fit-content;
+  margin-inline-end: 0;
+}
+
+.radar-route-cell > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.radar-expanded-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.7fr) minmax(220px, 1fr) minmax(260px, 1.4fr);
+  gap: 16px;
+  padding: 8px 12px 8px 42px;
+}
+
+.radar-expanded-row > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
 .announcements-settings-panel {
   display: grid;
   gap: 12px;
@@ -2268,8 +2324,10 @@ body {
   .settings-grid,
   .form-grid,
   .funding-metrics,
+  .radar-metrics,
   .tradfi-metrics,
   .funding-settings-grid,
+  .radar-settings-grid,
   .research-metrics,
   .pair-monitor-form-grid,
   .pair-monitor-layout,
@@ -2333,6 +2391,7 @@ body {
   .research-toolbar-grid,
   .research-panel-head,
   .research-expanded-row,
+  .radar-expanded-row,
   .tradfi-expanded-row {
     grid-template-columns: 1fr;
   }

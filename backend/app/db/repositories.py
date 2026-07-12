@@ -22,6 +22,7 @@ from app.models.index_component import (
 from app.models.market import MarketType
 from app.models.opportunity import Opportunity, OpportunityType
 from app.models.funding_arbitrage import FundingArbitrageSettings
+from app.models.opportunity_radar import OpportunityRadarSettings
 from app.models.phone_alert import PhonePriceAlertEvent, PhonePriceAlertRule
 from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, LivePilotSettings, RiskSettings
 
@@ -914,6 +915,31 @@ class SettingsRepository:
             ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
             """,
             ("funding_arbitrage", settings.model_dump_json()),
+        )
+        await self.db.commit()
+        return settings
+
+    async def get_opportunity_radar_settings(self) -> OpportunityRadarSettings:
+        cursor = await self.db.execute(
+            "SELECT payload FROM app_settings WHERE key = ?",
+            ("opportunity_radar",),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return OpportunityRadarSettings()
+        return OpportunityRadarSettings.model_validate(json.loads(row["payload"]))
+
+    async def set_opportunity_radar_settings(
+        self,
+        settings: OpportunityRadarSettings,
+    ) -> OpportunityRadarSettings:
+        await self.db.execute(
+            """
+            INSERT INTO app_settings (key, payload)
+            VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
+            """,
+            ("opportunity_radar", settings.model_dump_json()),
         )
         await self.db.commit()
         return settings

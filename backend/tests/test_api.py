@@ -17,6 +17,7 @@ from app.models.index_component import (
 )
 from app.models.market import MarketSnapshot, MarketType
 from app.models.opportunity import Opportunity, OpportunityType
+from app.models.opportunity_radar import OpportunityRadarSettings
 from app.models.alert import AlertEvent, AlertRule
 from app.models.orderbook import DepthValidationResult
 from app.models.pair_spread import (
@@ -50,6 +51,7 @@ class FakeSettingsRepository:
         astro_card_settings: AstroCardSettings | None = None,
         live_pilot_settings: LivePilotSettings | None = None,
         funding_arbitrage_settings: FundingArbitrageSettings | None = None,
+        opportunity_radar_settings: OpportunityRadarSettings | None = None,
         announcement_settings: AnnouncementSettings | None = None,
     ):
         self.settings = settings
@@ -57,6 +59,7 @@ class FakeSettingsRepository:
         self.astro_card_settings = astro_card_settings
         self.live_pilot_settings = live_pilot_settings or LivePilotSettings()
         self.funding_arbitrage_settings = funding_arbitrage_settings or FundingArbitrageSettings()
+        self.opportunity_radar_settings = opportunity_radar_settings or OpportunityRadarSettings()
         self.announcement_settings = announcement_settings or AnnouncementSettings()
 
     async def get_risk_settings(self) -> RiskSettings:
@@ -92,12 +95,23 @@ class FakeSettingsRepository:
         self.funding_arbitrage_settings = settings
         return settings
 
+    async def get_opportunity_radar_settings(self) -> OpportunityRadarSettings:
+        return self.opportunity_radar_settings
+
+    async def set_opportunity_radar_settings(
+        self,
+        settings: OpportunityRadarSettings,
+    ) -> OpportunityRadarSettings:
+        self.opportunity_radar_settings = settings
+        return settings
+
     async def get_announcement_settings(self) -> AnnouncementSettings:
         return self.announcement_settings
 
     async def set_announcement_settings(self, settings: AnnouncementSettings) -> AnnouncementSettings:
         self.announcement_settings = settings
         return settings
+
 
 
 class FakeHistoryRepository:
@@ -2691,3 +2705,69 @@ async def test_service_control_frontend_restart_is_reported_as_restarted() -> No
     assert result.status == "restarted"
     assert result.message == "Frontend restart triggered."
     assert controller._request.await_count == 1
+
+
+def test_opportunity_radar_preview_and_settings_round_trip() -> None:
+    now = datetime.now(UTC)
+    store = SnapshotStore()
+    store.set_markets(
+        [
+            MarketSnapshot(
+                symbol="BTCUSDT",
+                base="BTC",
+                exchange="bybit",
+                market_type=MarketType.FUTURE,
+                bid=99.95,
+                ask=100.05,
+                bid_size=200,
+                ask_size=200,
+                volume_24h_usdt=5_000_000,
+                funding_next_rate_pct=-0.1,
+                funding_interval_hours=1,
+                mark_price=98,
+                index_price=100,
+                timestamp=now,
+                raw_symbol="BTCUSDT",
+            ),
+            MarketSnapshot(
+                symbol="BTCUSDT",
+                base="BTC",
+                exchange="binance",
+                market_type=MarketType.FUTURE,
+                bid=100.25,
+                ask=100.35,
+                bid_size=200,
+                ask_size=200,
+                volume_24h_usdt=5_000_000,
+                funding_next_rate_pct=0.04,
+                funding_interval_hours=4,
+                mark_price=100,
+                index_price=100,
+                timestamp=now,
+                raw_symbol="BTCUSDT",
+            ),
+        ]
+    )
+    app = create_app(snapshot_store=store)
+    app.state.settings_repo = FakeSettingsRepository(
+        RiskSettings(),
+        opportunity_radar_settings=OpportunityRadarSettings(min_depth_multiple=1),
+    )
+    client = TestClient(app)
+
+    preview_response = client.get("/api/opportunity-radar/preview")
+    settings_response = client.put(
+        "/api/opportunity-radar/settings",
+        json={
+            **OpportunityRadarSettings().model_dump(),
+            "min_abs_premium_pct": 2,
+            "max_abs_entry_spread_pct": 0.3,
+        },
+    )
+
+    assert preview_response.status_code == 200
+    assert preview_response.json()["displayed_candidates"] == 1
+    assert preview_response.json()["candidates"][0]["long_exchange"] == "bybit"
+    assert settings_response.status_code == 200
+    assert settings_response.json()["min_abs_premium_pct"] == 2
+    assert settings_response.json()["max_abs_entry_spread_pct"] == 0.3

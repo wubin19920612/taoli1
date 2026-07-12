@@ -8,6 +8,7 @@ import {
   LineChartOutlined,
   NotificationOutlined,
   NodeIndexOutlined,
+  RadarChartOutlined,
   StockOutlined,
   SettingOutlined
 } from "@ant-design/icons";
@@ -25,6 +26,7 @@ type PageKey =
   | "dashboard"
   | "funding"
   | "funding-research"
+  | "opportunity-radar"
   | "pair-monitor"
   | "premium-index"
   | "tradfi-perp"
@@ -48,6 +50,11 @@ const lazyPages: Record<PageKey, LazyPage> = {
   "funding-research": lazy(() =>
     import("../pages/FundingResearchPage").then((module) => ({
       default: module.FundingResearchPage
+    }))
+  ),
+  "opportunity-radar": lazy(() =>
+    import("../pages/OpportunityRadarPage").then((module) => ({
+      default: module.OpportunityRadarPage
     }))
   ),
   "pair-monitor": lazy(() =>
@@ -115,6 +122,11 @@ export function AppShell() {
               key: "funding-research",
               icon: <ExperimentOutlined />,
               label: "资金研究"
+            },
+            {
+              key: "opportunity-radar",
+              icon: <RadarChartOutlined />,
+              label: "机会雷达"
             },
             {
               key: "pair-monitor",

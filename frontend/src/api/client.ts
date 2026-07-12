@@ -33,6 +33,8 @@ import type {
   IndexComponentWatchItem,
   OpportunityHistoryStats,
   OpportunityHistoryStatsQuery,
+  OpportunityRadarPreview,
+  OpportunityRadarSettings,
   PairSpreadQueryResult,
   LivePilotPreview,
   LivePilotSettings,
@@ -219,6 +221,23 @@ export async function updateFundingArbitrageSettings(
 
 export async function getFundingArbitragePreview(): Promise<FundingArbitragePreview> {
   return fetchJson<FundingArbitragePreview>("/funding-arbitrage/preview");
+}
+
+export async function getOpportunityRadarSettings(): Promise<OpportunityRadarSettings> {
+  return fetchJson<OpportunityRadarSettings>("/opportunity-radar/settings");
+}
+
+export async function updateOpportunityRadarSettings(
+  settings: OpportunityRadarSettings
+): Promise<OpportunityRadarSettings> {
+  return fetchJson<OpportunityRadarSettings>("/opportunity-radar/settings", {
+    method: "PUT",
+    body: JSON.stringify(settings)
+  });
+}
+
+export async function getOpportunityRadarPreview(): Promise<OpportunityRadarPreview> {
+  return fetchJson<OpportunityRadarPreview>("/opportunity-radar/preview");
 }
 
 export async function getTradfiPerpMonitorPreview(params: {

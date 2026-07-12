@@ -20,6 +20,7 @@ from app.api import (
     routes_history,
     routes_index_components,
     routes_opportunities,
+    routes_opportunity_radar,
     routes_pair_spread,
     routes_premium_index,
     routes_phone_alerts,
@@ -692,6 +693,7 @@ def create_app(
     app.include_router(routes_health.router, prefix="/api")
     app.include_router(routes_astro.router, prefix="/api")
     app.include_router(routes_opportunities.router, prefix="/api")
+    app.include_router(routes_opportunity_radar.router, prefix="/api")
     app.include_router(routes_history.router, prefix="/api")
     app.include_router(routes_pair_spread.router, prefix="/api")
     app.include_router(routes_premium_index.router, prefix="/api")
