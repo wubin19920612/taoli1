@@ -2,7 +2,11 @@ from datetime import UTC, datetime
 
 from app.models.market import MarketSnapshot, MarketType
 from app.models.opportunity_radar import OpportunityRadarSettings
-from app.services.opportunity_radar import build_opportunity_radar_preview
+from app.services.opportunity_radar import (
+    OpportunityRadarAlertEngine,
+    build_opportunity_radar_alert_message,
+    build_opportunity_radar_preview,
+)
 
 
 NOW = datetime(2026, 7, 12, 8, 0, tzinfo=UTC)
@@ -180,3 +184,44 @@ def test_anchor_exchange_is_removed_from_peer_selection() -> None:
     all_other_peers = OpportunityRadarSettings(anchor_exchange="binance", peer_exchanges=[])
     assert "binance" not in all_other_peers.peer_exchanges
     assert "bybit" in all_other_peers.peer_exchanges
+
+
+def test_alert_engine_requires_consecutive_hits_and_suppresses_active_duplicates() -> None:
+    settings = OpportunityRadarSettings(
+        min_depth_multiple=1,
+        min_alert_score=70,
+        alert_consecutive_hits=2,
+        alert_cooldown_seconds=1800,
+    )
+    candidate = build_opportunity_radar_preview(
+        [
+            market("bybit", bid=99.95, ask=100.05, mark=98, funding=-0.10, interval=1),
+            market("binance", bid=100.25, ask=100.35, mark=100, funding=0.04, interval=4),
+        ],
+        settings,
+        now=NOW,
+    ).candidates[0]
+    engine = OpportunityRadarAlertEngine()
+
+    assert engine.evaluate([candidate], settings, now=NOW) == []
+    assert engine.evaluate([candidate], settings, now=NOW) == [candidate]
+    assert engine.evaluate([candidate], settings, now=NOW) == []
+
+
+def test_alert_message_contains_exchanges_premium_spread_and_funding() -> None:
+    candidate = build_opportunity_radar_preview(
+        [
+            market("bybit", bid=99.95, ask=100.05, mark=98, funding=-0.10, interval=1),
+            market("binance", bid=100.25, ask=100.35, mark=100, funding=0.04, interval=4),
+        ],
+        OpportunityRadarSettings(min_depth_multiple=1),
+        now=NOW,
+    ).candidates[0]
+
+    message = build_opportunity_radar_alert_message(candidate, observed_at=NOW)
+
+    assert "BTCUSDT" in message
+    assert "多 bybit / 空 binance" in message
+    assert "跨所溢价差：2.000%" in message
+    assert "可执行价差" in message
+    assert "每小时资金优势" in message

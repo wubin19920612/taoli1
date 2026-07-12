@@ -82,6 +82,11 @@ from app.services.live_pilot import (
     select_live_pilot_opportunities,
 )
 from app.services.orderbook_validator import OrderBookDepthValidator
+from app.services.opportunity_radar import (
+    OpportunityRadarAlertEngine,
+    build_opportunity_radar_alert_message,
+    build_opportunity_radar_preview,
+)
 from app.services.phone_price_alerts import PhonePriceAlertEngine, build_phone_price_alert_message
 from app.services.risk_labels import effective_open_edge_pct, known_volume_24h_usdt
 from app.services.snapshot_store import SnapshotStore
@@ -261,7 +266,11 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
         try:
             repo: AlertRuleRepository = app.state.alert_rule_repo
             event_repo: AlertEventRepository = app.state.alert_event_repo
-            settings_repo: SettingsRepository | None = getattr(app.state, "settings_repo", None)
+            settings_repo: SettingsRepository | None = getattr(
+                app.state,
+                "settings_repo",
+                None,
+            )
             rules = await repo.list()
             settings = await settings_repo.get_risk_settings() if settings_repo is not None else RiskSettings()
             alert_template = (
@@ -403,6 +412,47 @@ async def _send_index_component_alert(app: FastAPI, message: str) -> None:
     if notifier is None:
         return
     await notifier.send_text(message)
+
+
+async def _run_opportunity_radar_alert_loop(
+    app: FastAPI,
+    interval_seconds: float,
+    stop_event: asyncio.Event,
+) -> None:
+    while not stop_event.is_set():
+        try:
+            settings_repo: SettingsRepository | None = getattr(app.state, "settings_repo", None)
+            notifier = getattr(app.state, "feishu_notifier", None)
+            webhook_url = getattr(getattr(notifier, "config", None), "webhook_url", "")
+            if settings_repo is not None and notifier is not None and webhook_url:
+                settings = await settings_repo.get_opportunity_radar_settings()
+                engine: OpportunityRadarAlertEngine = (
+                    app.state.opportunity_radar_alert_engine
+                )
+                if settings.enabled and settings.feishu_notifications_enabled:
+                    risk_settings = await settings_repo.get_risk_settings()
+                    markets = filter_markets(
+                        app.state.snapshot_store.get_markets(),
+                        risk_settings,
+                    )
+                    now = datetime.now(UTC)
+                    preview = build_opportunity_radar_preview(markets, settings, now=now)
+                    for candidate in engine.evaluate(preview.candidates, settings, now=now):
+                        try:
+                            await notifier.send_text(
+                                build_opportunity_radar_alert_message(candidate, observed_at=now)
+                            )
+                        except Exception:  # noqa: BLE001 - retry after transient webhook failures.
+                            engine.release_failed(candidate.id)
+                            logger.exception("opportunity radar Feishu notification failed")
+                else:
+                    engine.reset_active()
+        except Exception:
+            logger.exception("opportunity radar alert loop failed")
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
+        except TimeoutError:
+            continue
 
 
 async def _run_phone_price_alert_loop(
@@ -577,6 +627,15 @@ def create_app(
                 _run_alert_loop(app, app_settings.poll_interval_seconds, stop_event),
                 name="alert-loop",
             )
+            _start_background_task(
+                tasks,
+                _run_opportunity_radar_alert_loop(
+                    app,
+                    app_settings.poll_interval_seconds,
+                    stop_event,
+                ),
+                name="opportunity-radar-alert-loop",
+            )
             if app_settings.feishu_phone_enabled:
                 _start_background_task(
                     tasks,
@@ -647,6 +706,7 @@ def create_app(
     app.state.premium_index_query_service_factory = None
     app.state.alert_engine = AlertEngine()
     app.state.phone_price_alert_engine = PhonePriceAlertEngine()
+    app.state.opportunity_radar_alert_engine = OpportunityRadarAlertEngine()
     app.state.astro_client = AstroSdkClient(
         AstroSdkConfig(
             base_url=app_settings.astro_sdk_base_url,

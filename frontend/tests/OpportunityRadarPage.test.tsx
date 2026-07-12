@@ -6,6 +6,10 @@ import { OpportunityRadarPage } from "../src/pages/OpportunityRadarPage";
 
 const settings = {
   enabled: true,
+  feishu_notifications_enabled: true,
+  min_alert_score: 75,
+  alert_consecutive_hits: 3,
+  alert_cooldown_seconds: 1800,
   anchor_exchange: "bybit",
   peer_exchanges: ["binance", "okx", "gate", "bitget", "aster", "hyperliquid"],
   premium_direction: "both",
@@ -62,6 +66,9 @@ describe("OpportunityRadarPage", () => {
           }
           return Response.json(settings);
         }
+        if (url.includes("/opportunity-radar/test-notification")) {
+          return Response.json({ status: "sent" });
+        }
         if (url.includes("/opportunity-radar/preview")) {
           return Response.json({
             observed_at: "2026-07-12T08:00:00Z",
@@ -91,6 +98,17 @@ describe("OpportunityRadarPage", () => {
     expect(await screen.findByText("BTCUSDT")).toBeTruthy();
     expect(await screen.findByText("bybit -2.000%")).toBeTruthy();
     expect(screen.getByText("+0.200%")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: /测试飞书/ }));
+    await waitFor(() => {
+      expect(
+        vi.mocked(fetch).mock.calls.some(
+          (call) =>
+            String(call[0]).includes("/opportunity-radar/test-notification") &&
+            call[1]?.method === "POST"
+        )
+      ).toBe(true);
+    });
 
     const premiumInput = screen.getByLabelText("最低绝对溢价");
     const spreadInput = screen.getByLabelText("最大试错价差");

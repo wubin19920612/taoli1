@@ -240,6 +240,13 @@ export async function getOpportunityRadarPreview(): Promise<OpportunityRadarPrev
   return fetchJson<OpportunityRadarPreview>("/opportunity-radar/preview");
 }
 
+export async function testOpportunityRadarNotification(): Promise<{ status: string }> {
+  return fetchJson<{ status: string }>("/opportunity-radar/test-notification", {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+}
+
 export async function getTradfiPerpMonitorPreview(params: {
   live?: boolean;
   min_volume_24h_k?: number;

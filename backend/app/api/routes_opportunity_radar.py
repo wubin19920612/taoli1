@@ -31,6 +31,20 @@ async def update_opportunity_radar_settings(
     return await _settings_repo(request).set_opportunity_radar_settings(settings)
 
 
+@router.post("/test-notification")
+async def test_opportunity_radar_notification(
+    request: Request,
+    password: str | None = Depends(dashboard_password_header),
+) -> dict[str, str]:
+    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
+    notifier = getattr(request.app.state, "feishu_notifier", None)
+    webhook_url = getattr(getattr(notifier, "config", None), "webhook_url", "")
+    if notifier is None or not webhook_url:
+        raise HTTPException(status_code=400, detail="FEISHU_WEBHOOK_URL is not configured")
+    await notifier.send_text("[机会雷达] 飞书通知测试成功")
+    return {"status": "sent"}
+
+
 @router.get("/preview", response_model=OpportunityRadarPreview)
 async def get_opportunity_radar_preview(request: Request) -> OpportunityRadarPreview:
     repo = _settings_repo(request)

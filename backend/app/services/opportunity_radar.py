@@ -12,6 +12,94 @@ from app.models.opportunity_radar import (
 )
 
 
+class OpportunityRadarAlertEngine:
+    def __init__(self) -> None:
+        self._hits: dict[str, int] = {}
+        self._alerted_active: set[str] = set()
+        self._last_sent: dict[str, datetime] = {}
+
+    def evaluate(
+        self,
+        candidates: list[OpportunityRadarCandidate],
+        settings: OpportunityRadarSettings,
+        *,
+        now: datetime | None = None,
+    ) -> list[OpportunityRadarCandidate]:
+        current = now or datetime.now(UTC)
+        eligible = {
+            candidate.id: candidate
+            for candidate in candidates
+            if candidate.score >= settings.min_alert_score
+        }
+        for candidate_id in list(self._hits):
+            if candidate_id not in eligible:
+                self._hits.pop(candidate_id, None)
+                self._alerted_active.discard(candidate_id)
+
+        matches: list[OpportunityRadarCandidate] = []
+        for candidate_id, candidate in eligible.items():
+            hits = self._hits.get(candidate_id, 0) + 1
+            self._hits[candidate_id] = hits
+            if hits < settings.alert_consecutive_hits:
+                continue
+            if candidate_id in self._alerted_active:
+                continue
+            last_sent = self._last_sent.get(candidate_id)
+            if last_sent is not None:
+                elapsed = (current - last_sent).total_seconds()
+                if elapsed < settings.alert_cooldown_seconds:
+                    continue
+            self._alerted_active.add(candidate_id)
+            self._last_sent[candidate_id] = current
+            matches.append(candidate)
+        return matches
+
+    def release_failed(self, candidate_id: str) -> None:
+        self._alerted_active.discard(candidate_id)
+        self._last_sent.pop(candidate_id, None)
+
+    def reset_active(self) -> None:
+        self._hits.clear()
+        self._alerted_active.clear()
+
+
+def build_opportunity_radar_alert_message(
+    candidate: OpportunityRadarCandidate,
+    *,
+    observed_at: datetime,
+) -> str:
+    hourly_edge = (
+        "-"
+        if candidate.hourly_funding_edge_pct is None
+        else f"{candidate.hourly_funding_edge_pct:+.4f}%"
+    )
+    long_funding = (
+        "-" if candidate.long_funding_pct is None else f"{candidate.long_funding_pct:+.4f}%"
+    )
+    short_funding = (
+        "-" if candidate.short_funding_pct is None else f"{candidate.short_funding_pct:+.4f}%"
+    )
+    return "\n".join(
+        [
+            "[机会雷达] 极端溢价 / 低价差",
+            f"标的：{candidate.symbol} | 评分：{candidate.score:.0f} | 信号：{candidate.signal_level}",
+            f"方向：多 {candidate.long_exchange} / 空 {candidate.short_exchange}",
+            (
+                f"溢价：{candidate.anchor_exchange} {candidate.anchor_premium_pct:+.3f}% / "
+                f"{candidate.peer_exchange} {candidate.peer_premium_pct:+.3f}%"
+            ),
+            f"跨所溢价差：{candidate.relative_premium_gap_pct:.3f}%",
+            f"可执行价差：{candidate.entry_spread_pct:+.3f}%",
+            (
+                f"资金：多腿 {long_funding}/{candidate.long_funding_interval_hours or '-'}h / "
+                f"空腿 {short_funding}/{candidate.short_funding_interval_hours or '-'}h"
+            ),
+            f"每小时资金优势：{hourly_edge}",
+            f"时间：{observed_at.astimezone(UTC).strftime('%Y-%m-%d %H:%M:%S')} UTC",
+        ]
+    )
+
+
 def _premium_pct(snapshot: MarketSnapshot) -> float | None:
     if snapshot.mark_price is None or snapshot.index_price is None or snapshot.index_price <= 0:
         return None

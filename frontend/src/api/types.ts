@@ -741,6 +741,10 @@ export type OpportunityRadarSignalLevel = "HIGH" | "MEDIUM" | "WATCH";
 
 export interface OpportunityRadarSettings {
   enabled: boolean;
+  feishu_notifications_enabled: boolean;
+  min_alert_score: number;
+  alert_consecutive_hits: number;
+  alert_cooldown_seconds: number;
   anchor_exchange: string;
   peer_exchanges: string[];
   premium_direction: OpportunityRadarPremiumDirection;

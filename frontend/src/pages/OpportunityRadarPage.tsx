@@ -1,4 +1,4 @@
-import { ReloadOutlined, SaveOutlined } from "@ant-design/icons";
+import { BellOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
 import {
   Alert,
   Button,
@@ -20,6 +20,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   getOpportunityRadarPreview,
   getOpportunityRadarSettings,
+  testOpportunityRadarNotification,
   updateOpportunityRadarSettings
 } from "../api/client";
 import type {
@@ -192,6 +193,7 @@ export function OpportunityRadarPage() {
   const [preview, setPreview] = useState<OpportunityRadarPreview | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [testingNotification, setTestingNotification] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [error, setError] = useState("");
   const peerExchangeOptions = exchangeOptions.filter((option) => option.value !== anomalyExchange);
@@ -261,6 +263,19 @@ export function OpportunityRadarPage() {
     );
   };
 
+  const testNotification = async () => {
+    setTestingNotification(true);
+    setError("");
+    try {
+      await testOpportunityRadarNotification();
+      message.success("飞书测试通知已发送");
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setTestingNotification(false);
+    }
+  };
+
   return (
     <div className="page radar-page">
       {error ? <Alert type="error" message={error} showIcon /> : null}
@@ -273,6 +288,13 @@ export function OpportunityRadarPage() {
           <Space size={8}>
             <Typography.Text type="secondary">自动刷新</Typography.Text>
             <Switch checked={autoRefresh} onChange={setAutoRefresh} />
+            <Button
+              icon={<BellOutlined />}
+              onClick={() => void testNotification()}
+              loading={testingNotification}
+            >
+              测试飞书
+            </Button>
             <Button icon={<ReloadOutlined />} onClick={() => void refreshPreview()} loading={loading}>
               刷新
             </Button>
@@ -294,6 +316,23 @@ export function OpportunityRadarPage() {
           <div className="radar-settings-grid">
             <Form.Item label="启用扫描" name="enabled" valuePropName="checked">
               <Switch />
+            </Form.Item>
+            <Form.Item
+              label="飞书通知"
+              name="feishu_notifications_enabled"
+              valuePropName="checked"
+              tooltip="服务器需要配置 FEISHU_WEBHOOK_URL；机器人启用签名校验时还要配置 FEISHU_SECRET。"
+            >
+              <Switch />
+            </Form.Item>
+            <Form.Item label="最低通知评分" name="min_alert_score" rules={[{ required: true }]}>
+              <InputNumber min={0} max={100} step={5} />
+            </Form.Item>
+            <Form.Item label="连续命中次数" name="alert_consecutive_hits" rules={[{ required: true }]}>
+              <InputNumber min={1} max={60} step={1} />
+            </Form.Item>
+            <Form.Item label="通知冷却时间" name="alert_cooldown_seconds" rules={[{ required: true }]}>
+              <InputNumber min={0} max={86400} step={60} suffix="秒" />
             </Form.Item>
             <Form.Item label="异常溢价交易所" name="anchor_exchange" rules={[{ required: true }]}>
               <Select options={exchangeOptions} onChange={changeAnomalyExchange} />

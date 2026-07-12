@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from fastapi.testclient import TestClient
@@ -2771,3 +2772,21 @@ def test_opportunity_radar_preview_and_settings_round_trip() -> None:
     assert settings_response.status_code == 200
     assert settings_response.json()["min_abs_premium_pct"] == 2
     assert settings_response.json()["max_abs_entry_spread_pct"] == 0.3
+
+    app.state.feishu_notifier = SimpleNamespace(
+        config=SimpleNamespace(webhook_url=""),
+        send_text=AsyncMock(),
+    )
+    missing_config_response = client.post("/api/opportunity-radar/test-notification")
+    assert missing_config_response.status_code == 400
+
+    send_text = AsyncMock()
+    app.state.feishu_notifier = SimpleNamespace(
+        config=SimpleNamespace(webhook_url="https://example.test/hook"),
+        send_text=send_text,
+    )
+    test_response = client.post("/api/opportunity-radar/test-notification")
+
+    assert test_response.status_code == 200
+    assert test_response.json() == {"status": "sent"}
+    send_text.assert_awaited_once_with("[机会雷达] 飞书通知测试成功")

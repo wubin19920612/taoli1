@@ -21,6 +21,10 @@ RadarSignalLevel = Literal["HIGH", "MEDIUM", "WATCH"]
 
 class OpportunityRadarSettings(BaseModel):
     enabled: bool = True
+    feishu_notifications_enabled: bool = False
+    min_alert_score: float = Field(default=75, ge=0, le=100)
+    alert_consecutive_hits: int = Field(default=3, ge=1, le=60)
+    alert_cooldown_seconds: int = Field(default=1800, ge=0, le=86400)
     anchor_exchange: str = "bybit"
     peer_exchanges: list[str] = Field(default_factory=list)
     premium_direction: PremiumDirection = "both"
