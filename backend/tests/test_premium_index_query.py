@@ -2,11 +2,12 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from app.models.pair_spread import PairSpreadKlinePoint
 from app.models.premium_index import PremiumIndexCurrentSnapshot, PremiumIndexMarketQuery, PremiumIndexPoint
 from app.services.premium_index_query import (
     PremiumIndexQueryService,
+    build_hyperliquid_candle_premium_points,
     build_premium_points_from_mark_index,
-    densify_premium_points,
 )
 
 
@@ -24,14 +25,21 @@ def test_build_premium_points_from_mark_index_aligns_by_time() -> None:
     assert points[0].index_price == 100
 
 
-def test_densify_premium_points_fills_requested_interval() -> None:
+def test_hyperliquid_candle_premium_points_use_minute_candles() -> None:
     first = datetime(2026, 7, 11, 12, 0, tzinfo=UTC)
-    points = densify_premium_points(
+    candles = [
+        PairSpreadKlinePoint(bucket_at=first + timedelta(minutes=index), close=100.0)
+        for index in range(61)
+    ]
+    candles[30] = PairSpreadKlinePoint(bucket_at=first + timedelta(minutes=30), close=101.0)
+
+    points = build_hyperliquid_candle_premium_points(
+        candles,
         [
             PremiumIndexPoint(bucket_at=first, premium_pct=0.0, source="hyperliquid_funding_premium"),
             PremiumIndexPoint(
                 bucket_at=first + timedelta(hours=1),
-                premium_pct=0.6,
+                premium_pct=0.0,
                 source="hyperliquid_funding_premium",
             ),
         ],
@@ -40,20 +48,24 @@ def test_densify_premium_points_fills_requested_interval() -> None:
 
     assert len(points) == 61
     assert points[1].bucket_at == first + timedelta(minutes=1)
-    assert points[1].premium_pct == pytest.approx(0.01)
-    assert points[30].premium_pct == pytest.approx(0.3)
-    assert points[1].source == "hyperliquid_funding_premium_interpolated"
+    assert points[1].premium_pct == pytest.approx(0.0)
+    assert points[30].premium_pct == pytest.approx(1.0)
+    assert points[30].mark_price == pytest.approx(101.0)
+    assert points[30].index_price == pytest.approx(100.0)
+    assert points[30].source == "hyperliquid_candle_funding_anchor"
 
 
-def test_densify_premium_points_keeps_minute_points_unchanged() -> None:
+def test_hyperliquid_candle_premium_points_require_two_anchors() -> None:
     first = datetime(2026, 7, 11, 12, 0, tzinfo=UTC)
-    original = [
-        PremiumIndexPoint(bucket_at=first, premium_pct=0.0, source="binance_premium_index"),
-        PremiumIndexPoint(bucket_at=first + timedelta(minutes=1), premium_pct=0.1, source="binance_premium_index"),
-        PremiumIndexPoint(bucket_at=first + timedelta(minutes=2), premium_pct=0.2, source="binance_premium_index"),
-    ]
 
-    assert densify_premium_points(original, interval_minutes=1) == original
+    assert (
+        build_hyperliquid_candle_premium_points(
+            [PairSpreadKlinePoint(bucket_at=first, close=100.0)],
+            [PremiumIndexPoint(bucket_at=first, premium_pct=0.0, source="hyperliquid_funding_premium")],
+            interval_minutes=1,
+        )
+        == []
+    )
 
 
 @pytest.mark.asyncio

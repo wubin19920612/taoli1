@@ -14,6 +14,7 @@ from app.models.premium_index import (
     PremiumIndexQueryResult,
     PremiumIndexValueStats,
 )
+from app.models.pair_spread import PairSpreadKlinePoint
 from app.services.pair_spread_query import (
     PairSpreadQueryService,
     _append_unique,
@@ -72,51 +73,78 @@ def _dedupe_sorted(points: list[PremiumIndexPoint]) -> list[PremiumIndexPoint]:
     return [by_bucket[key] for key in sorted(by_bucket)]
 
 
-def _interpolate_optional_number(left: float | None, right: float | None, ratio: float) -> float | None:
-    if left is None or right is None or not isfinite(left) or not isfinite(right):
-        return None
-    return left + (right - left) * ratio
-
-
-def densify_premium_points(
-    points: list[PremiumIndexPoint],
+def build_hyperliquid_candle_premium_points(
+    candles: list[PairSpreadKlinePoint],
+    premium_anchors: list[PremiumIndexPoint],
     *,
     interval_minutes: int,
 ) -> list[PremiumIndexPoint]:
-    if interval_minutes <= 0 or len(points) < 2:
-        return _dedupe_sorted(points)
+    sorted_candles = sorted(candles, key=lambda point: point.bucket_at)
+    sorted_anchors = _dedupe_sorted(premium_anchors)
+    if len(sorted_candles) < 2 or len(sorted_anchors) < 2:
+        return []
 
-    sorted_points = _dedupe_sorted(points)
-    interval = timedelta(minutes=interval_minutes)
-    dense_points: list[PremiumIndexPoint] = []
+    tolerance = timedelta(minutes=max(interval_minutes * 3, 5))
+    oracle_anchors: list[tuple[datetime, float]] = []
+    for anchor in sorted_anchors:
+        close = _nearest_candle_close(sorted_candles, anchor.bucket_at, tolerance=tolerance)
+        premium_ratio = anchor.premium_pct / 100
+        if close is None or 1 + premium_ratio <= 0:
+            continue
+        oracle_anchors.append((anchor.bucket_at, close / (1 + premium_ratio)))
 
-    for left, right in zip(sorted_points, sorted_points[1:], strict=False):
-        dense_points.append(left)
-        gap = right.bucket_at - left.bucket_at
-        if gap <= interval:
+    if len(oracle_anchors) < 2:
+        return []
+
+    points: list[PremiumIndexPoint] = []
+    anchor_index = 0
+    for candle in sorted_candles:
+        while anchor_index + 1 < len(oracle_anchors) and candle.bucket_at > oracle_anchors[anchor_index + 1][0]:
+            anchor_index += 1
+        if anchor_index + 1 >= len(oracle_anchors):
+            break
+
+        left_at, left_oracle = oracle_anchors[anchor_index]
+        right_at, right_oracle = oracle_anchors[anchor_index + 1]
+        if candle.bucket_at < left_at or candle.bucket_at > right_at:
             continue
 
-        step_count = int(gap.total_seconds() // interval.total_seconds())
-        if step_count <= 1:
+        gap_seconds = (right_at - left_at).total_seconds()
+        if gap_seconds <= 0:
             continue
-
-        for step_index in range(1, step_count):
-            bucket_at = left.bucket_at + interval * step_index
-            if bucket_at >= right.bucket_at:
-                break
-            ratio = (bucket_at - left.bucket_at).total_seconds() / gap.total_seconds()
-            dense_points.append(
-                PremiumIndexPoint(
-                    bucket_at=bucket_at,
-                    premium_pct=left.premium_pct + (right.premium_pct - left.premium_pct) * ratio,
-                    mark_price=_interpolate_optional_number(left.mark_price, right.mark_price, ratio),
-                    index_price=_interpolate_optional_number(left.index_price, right.index_price, ratio),
-                    source=f"{left.source}_interpolated" if left.source == right.source else "interpolated",
-                )
+        ratio = (candle.bucket_at - left_at).total_seconds() / gap_seconds
+        oracle = left_oracle + (right_oracle - left_oracle) * ratio
+        if oracle <= 0:
+            continue
+        points.append(
+            PremiumIndexPoint(
+                bucket_at=candle.bucket_at,
+                premium_pct=(candle.close - oracle) / oracle * 100,
+                mark_price=candle.close,
+                index_price=oracle,
+                source="hyperliquid_candle_funding_anchor",
             )
+        )
 
-    dense_points.append(sorted_points[-1])
-    return _dedupe_sorted(dense_points)
+    return _dedupe_sorted(points)
+
+
+def _nearest_candle_close(
+    candles: list[PairSpreadKlinePoint],
+    target: datetime,
+    *,
+    tolerance: timedelta,
+) -> float | None:
+    nearest: PairSpreadKlinePoint | None = None
+    nearest_gap: timedelta | None = None
+    for candle in candles:
+        gap = abs(candle.bucket_at - target)
+        if nearest_gap is None or gap < nearest_gap:
+            nearest = candle
+            nearest_gap = gap
+    if nearest is None or nearest_gap is None or nearest_gap > tolerance:
+        return None
+    return nearest.close
 
 
 def build_premium_points_from_mark_index(
@@ -185,12 +213,10 @@ class PremiumIndexQueryService(PairSpreadQueryService):
                 break
             failed_window_warnings.extend(window_warnings)
 
-        raw_point_count = len(points)
-        points = densify_premium_points(points, interval_minutes=interval_minutes)
-        if len(points) > raw_point_count:
+        if any(point.source == "hyperliquid_candle_funding_anchor" for point in points):
             _append_unique(
                 warnings,
-                f"原始溢价指数历史粒度较粗，已按{interval_minutes}分钟线性补点用于画图。",
+                "Hyperliquid 没有公开分钟级历史 premium 接口，曲线已用分钟K线和小时 premium 锚点估算。",
             )
 
         current = await self.current(market)
@@ -502,23 +528,53 @@ class PremiumIndexQueryService(PairSpreadQueryService):
         end: datetime,
         interval_minutes: int,
     ) -> list[PremiumIndexPoint]:
-        del interval_minutes
         raw_coin, _ = await self._resolve_hyperliquid_coin(symbol)
-        rows = await self._post_json(
-            "https://api.hyperliquid.xyz/info",
-            {
-                "type": "fundingHistory",
-                "coin": raw_coin,
-                "startTime": _to_ms(start),
-                "endTime": _to_ms(end),
-            },
+        anchor_start = start - timedelta(hours=1)
+        rows, candles = await asyncio.gather(
+            self._post_json(
+                "https://api.hyperliquid.xyz/info",
+                {
+                    "type": "fundingHistory",
+                    "coin": raw_coin,
+                    "startTime": _to_ms(anchor_start),
+                    "endTime": _to_ms(end),
+                },
+            ),
+            self._fetch_hyperliquid_klines(symbol, start, end, interval_minutes),
         )
-        return _dedupe_sorted(
+        anchors = [
+            point
+            for row in rows if isinstance(row, dict)
+            if (point := _parse_premium_row(row, source="hyperliquid_funding_premium")) is not None
+            and anchor_start <= point.bucket_at <= end
+        ]
+        try:
+            current = await self._fetch_hyperliquid_current(symbol)
+        except Exception:  # noqa: BLE001 - historical candles and funding anchors can still be useful.
+            current = None
+        if current is not None:
+            current_premium = _premium_pct(current.mark_price, current.index_price)
+            if current_premium is not None:
+                anchors.append(
+                    PremiumIndexPoint(
+                        bucket_at=end,
+                        premium_pct=current_premium,
+                        mark_price=current.mark_price,
+                        index_price=current.index_price,
+                        source="hyperliquid_current_anchor",
+                    )
+                )
+        anchors = _dedupe_sorted(anchors)
+        candle_points = build_hyperliquid_candle_premium_points(
+            candles,
+            anchors,
+            interval_minutes=interval_minutes,
+        )
+        return candle_points or _dedupe_sorted(
             [
                 point
-                for row in rows if isinstance(row, dict)
-                if (point := _parse_premium_row(row, source="hyperliquid_funding_premium")) is not None
-                and start <= point.bucket_at <= end
+                for point in anchors
+                if start <= point.bucket_at <= end
             ]
         )
 
