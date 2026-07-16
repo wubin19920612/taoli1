@@ -110,17 +110,14 @@ async def _validate_order_book_before_create(
     opportunity: Opportunity,
     risk_settings: RiskSettings,
     card_settings: AstroCardSettings,
-    card_request: AstroCardCreateRequest | None,
 ) -> DepthValidationResult | None:
     validator = getattr(request.app.state, "orderbook_validator", None)
     if validator is None:
         return None
-    override_notional = card_request.max_trade_usdt if card_request is not None else None
     result = await validator.validate(
         opportunity,
         risk_settings=risk_settings,
         card_settings=card_settings,
-        override_notional_usdt=override_notional,
     )
     return None if result.passed else result
 
@@ -190,7 +187,6 @@ async def create_astro_card_from_opportunity(
         opportunity,
         risk_settings,
         effective_settings,
-        card_request,
     )
     if depth_failure is not None:
         return AstroAlertActionResult(

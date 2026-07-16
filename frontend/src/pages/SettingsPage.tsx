@@ -649,11 +649,11 @@ export function SettingsPage() {
               <Typography.Title level={5}>Signal strategy（信号策略）</Typography.Title>
               <Typography.Paragraph type="secondary">
                 信号策略用于判断告警机会是否真的适合创建 Astro 卡片。系统会在创建卡片前拉取两边交易所的多档 order book，
-                按计划仓位金额模拟买入侧 asks 和卖出侧 bids 的可成交 VWAP，避免只看瞬时最优价导致价差一买就消失。
+                按盘口验证金额模拟买入侧 asks 和卖出侧 bids 的可成交 VWAP，避免只看瞬时最优价导致价差一买就消失。
               </Typography.Paragraph>
               <Typography.Paragraph type="secondary">
-                最小验证金额是盘口深度校验的底线，默认 1000 USDT；实际校验金额会取卡片仓位价值、手动填写仓位价值、
-                最小验证金额三者中的较大值。深度按最优价附近的价格带累计，例如 0.1% 价格带内有多少挂单。
+                最小验证金额是创建卡片前的盘口试算金额，默认 1000 USDT；不会使用 Astro 卡片的总仓位金额或手动建卡金额。
+                深度按最优价附近的价格带累计，例如 0.1% 价格带内有多少挂单。
                 若价格带深度不足、成交后价差不够、或价差衰减太快，系统会跳过创建卡片。
               </Typography.Paragraph>
             </div>

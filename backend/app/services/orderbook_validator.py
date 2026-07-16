@@ -88,28 +88,14 @@ def _cost_pct(opportunity: Opportunity) -> float:
     return opportunity.open_spread_pct - opportunity.fee_adjusted_open_pct
 
 
-def _target_notional(
-    risk_settings: RiskSettings,
-    card_settings: AstroCardSettings | None,
-    override_notional_usdt: float | None,
-) -> float:
-    if override_notional_usdt is not None:
-        return override_notional_usdt
-    candidates = [risk_settings.signal_validation_notional_usdt]
-    if card_settings is not None:
-        candidates.append(card_settings.max_trade_usdt)
-    return max(candidates)
+def _target_notional(risk_settings: RiskSettings) -> float:
+    return risk_settings.signal_validation_notional_usdt
 
 
-def _required_depth_usdt(
-    risk_settings: RiskSettings,
-    card_settings: AstroCardSettings | None,
-    override_notional_usdt: float | None,
-) -> float:
+def _required_depth_usdt(risk_settings: RiskSettings) -> float:
     return max(
         risk_settings.min_top_of_book_depth_usdt,
-        _target_notional(risk_settings, card_settings, override_notional_usdt)
-        * risk_settings.orderbook_depth_safety_multiple,
+        _target_notional(risk_settings) * risk_settings.orderbook_depth_safety_multiple,
     )
 
 
@@ -130,8 +116,8 @@ class OrderBookDepthValidator:
         card_settings: AstroCardSettings | None = None,
         override_notional_usdt: float | None = None,
     ) -> DepthValidationResult:
-        target = _target_notional(risk_settings, card_settings, override_notional_usdt)
-        required_depth = _required_depth_usdt(risk_settings, card_settings, override_notional_usdt)
+        target = _target_notional(risk_settings)
+        required_depth = _required_depth_usdt(risk_settings)
         band_pct = risk_settings.orderbook_depth_band_pct
         blockers: list[str] = []
         warnings: list[str] = []

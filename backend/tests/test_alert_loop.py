@@ -533,7 +533,7 @@ async def test_alert_loop_mutes_when_astro_plan_cannot_create_card_and_filter_en
 
 
 @pytest.mark.asyncio
-async def test_alert_loop_uses_live_pilot_notional_for_order_book_validation() -> None:
+async def test_alert_loop_does_not_override_order_book_validation_for_live_pilot() -> None:
     stop_event = asyncio.Event()
     app = FastAPI()
     rule = AlertRule(
@@ -588,7 +588,7 @@ async def test_alert_loop_uses_live_pilot_notional_for_order_book_validation() -
 
     assert service.calls == ["opp-1"]
     assert service.live_pilot_settings.enabled is True
-    assert validator.calls[0][3] == 100
+    assert validator.calls[0][3] is None
 
 
 @pytest.mark.asyncio

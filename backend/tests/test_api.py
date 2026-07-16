@@ -2333,7 +2333,7 @@ def test_astro_manual_card_create_endpoint_skips_when_order_book_validation_fail
     assert payload["action"] == "order_book_validation"
     assert "buy side depth filled" in payload["message"]
     assert service.calls == []
-    assert validator.calls[0]["override_notional_usdt"] == 80
+    assert validator.calls[0]["override_notional_usdt"] is None
     card_settings = validator.calls[0]["card_settings"]
     assert isinstance(card_settings, AstroCardSettings)
     assert card_settings.max_trade_usdt == 80

@@ -329,11 +329,6 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                 if astro_alert_service is not None and not signal_condition_failure:
                     try:
                         card_settings = getattr(astro_alert_service, "card_settings", None)
-                        validation_notional = (
-                            live_pilot_settings.notional_per_symbol_usdt
-                            if live_pilot_settings.enabled
-                            else None
-                        )
                         plan_failure = _astro_plan_validation_failure(
                             latest_opportunity,
                             card_settings,
@@ -350,7 +345,6 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                                 latest_opportunity,
                                 settings,
                                 card_settings,
-                                validation_notional,
                             )
                             if order_book_failure is not None:
                                 card_condition_failure = True
