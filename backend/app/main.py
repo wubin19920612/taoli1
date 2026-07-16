@@ -151,53 +151,53 @@ def _latest_signal_validation_failure(
     now: datetime,
 ) -> str | None:
     if latest is None:
-        return "opportunity disappeared from the latest snapshot"
+        return "最新快照中已找不到该机会"
     if latest.open_spread_pct + 1e-9 < match.rule.min_open_spread_pct:
         return (
-            f"open spread {latest.open_spread_pct:.3f}% is below rule threshold "
+            f"开仓价差 {latest.open_spread_pct:.3f}% 低于规则阈值 "
             f"{match.rule.min_open_spread_pct:.3f}%"
         )
     effective_edge = effective_open_edge_pct(latest, settings)
     required_edge = max(match.rule.min_fee_adjusted_open_pct, settings.min_effective_open_pct)
     if effective_edge + 1e-9 < required_edge:
         return (
-            f"effective edge after slippage {effective_edge:.3f}% is below "
+            f"滑点后有效收益 {effective_edge:.3f}% 低于最低要求 "
             f"{required_edge:.3f}%"
         )
     min_volume = known_volume_24h_usdt(latest)
     if min_volume is not None and min_volume < match.rule.min_volume_24h_usdt:
         return (
-            f"24h volume {min_volume:.0f} USDT is below rule threshold "
+            f"24h 成交额 {min_volume:.0f} USDT 低于规则阈值 "
             f"{match.rule.min_volume_24h_usdt:.0f} USDT"
         )
     if (now - latest.last_seen_at).total_seconds() > match.rule.max_data_age_seconds:
-        return "latest market data is stale"
+        return "最新行情数据已过期"
     excluded_labels = set(latest.risk_labels).intersection(match.rule.excluded_risk_labels)
     if excluded_labels:
-        return f"latest opportunity has excluded risk labels: {', '.join(sorted(excluded_labels))}"
+        return f"最新机会包含已排除的风险标签：{', '.join(sorted(excluded_labels))}"
 
     observations = list(match.observations)
     if not observations or observations[-1].open_spread_pct != latest.open_spread_pct:
         observations.append(observe_alert_metrics(latest, now))
     if not observations_are_stable(observations, settings):
-        return "open spread decayed too quickly across recent observations"
+        return "最近几次观察中开仓价差衰减过快"
     return None
 
 
 def _format_order_book_validation_failure(result: DepthValidationResult) -> str:
-    details = "; ".join(result.blockers) if result.blockers else "depth validation failed"
-    metrics: list[str] = [f"target {result.target_notional_usdt:.2f} USDT"]
+    details = "；".join(result.blockers) if result.blockers else "深度校验未通过"
+    metrics: list[str] = [f"验证金额 {result.target_notional_usdt:.2f} USDT"]
     if result.price_band_pct is not None:
-        metrics.append(f"band {result.price_band_pct:.3f}%")
+        metrics.append(f"价格带 {result.price_band_pct:.3f}%")
     if result.required_depth_usdt is not None:
-        metrics.append(f"required depth {result.required_depth_usdt:.2f} USDT")
+        metrics.append(f"要求深度 {result.required_depth_usdt:.2f} USDT")
     if result.min_depth_usdt is not None:
-        metrics.append(f"min band depth {result.min_depth_usdt:.2f} USDT")
+        metrics.append(f"最小价格带深度 {result.min_depth_usdt:.2f} USDT")
     if result.executable_open_pct is not None:
-        metrics.append(f"executable open {result.executable_open_pct:.3f}%")
+        metrics.append(f"实际可成交开仓价差 {result.executable_open_pct:.3f}%")
     if result.effective_executable_edge_pct is not None:
-        metrics.append(f"effective edge {result.effective_executable_edge_pct:.3f}%")
-    return f"{details} ({', '.join(metrics)})"
+        metrics.append(f"实际可成交有效收益 {result.effective_executable_edge_pct:.3f}%")
+    return f"{details}（{'，'.join(metrics)}）"
 
 
 def _astro_plan_validation_failure(
@@ -319,7 +319,7 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                     signal_condition_failure = True
                     message = (
                         f"{message}\n\n"
-                        f"Astro: skipped latest signal validation: {validation_failure}"
+                        f"Astro: 最新信号校验未通过：{validation_failure}"
                     )
                 astro_alert_service: AstroAlertService | None = getattr(
                     app.state,
@@ -337,7 +337,7 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                             card_condition_failure = True
                             message = (
                                 f"{message}\n\n"
-                                f"Astro: skipped card validation: {plan_failure}"
+                                f"Astro: 卡片参数校验未通过：{plan_failure}"
                             )
                         else:
                             order_book_failure = await _order_book_validation_failure(
@@ -350,7 +350,7 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                                 card_condition_failure = True
                                 message = (
                                     f"{message}\n\n"
-                                    f"Astro: skipped order book validation: {order_book_failure}"
+                                    f"Astro: 订单簿校验未通过：{order_book_failure}"
                                 )
                             else:
                                 astro_result = await astro_alert_service.handle_alert(

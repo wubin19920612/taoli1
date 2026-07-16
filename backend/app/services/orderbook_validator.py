@@ -124,9 +124,9 @@ class OrderBookDepthValidator:
         buy_adapter = self.adapters.get(opportunity.buy_exchange.lower())
         sell_adapter = self.adapters.get(opportunity.sell_exchange.lower())
         if buy_adapter is None:
-            blockers.append(f"order book adapter unavailable for {opportunity.buy_exchange}")
+            blockers.append(f"{opportunity.buy_exchange} 订单簿适配器不可用")
         if sell_adapter is None:
-            blockers.append(f"order book adapter unavailable for {opportunity.sell_exchange}")
+            blockers.append(f"{opportunity.sell_exchange} 订单簿适配器不可用")
         if blockers:
             return self._result(
                 opportunity,
@@ -150,8 +150,8 @@ class OrderBookDepthValidator:
             )
         except Exception as exc:  # noqa: BLE001 - report validation blocker instead of aborting alert.
             blockers.append(
-                f"buy side order book request failed for "
-                f"{opportunity.buy_exchange} {opportunity.buy_market_type}: {_exception_message(exc)}"
+                f"买入侧订单簿请求失败："
+                f"{opportunity.buy_exchange} {opportunity.buy_market_type}，{_exception_message(exc)}"
             )
         try:
             sell_book = await sell_adapter.fetch_order_book(
@@ -162,8 +162,8 @@ class OrderBookDepthValidator:
             )
         except Exception as exc:  # noqa: BLE001 - report validation blocker instead of aborting alert.
             blockers.append(
-                f"sell side order book request failed for "
-                f"{opportunity.sell_exchange} {opportunity.sell_market_type}: {_exception_message(exc)}"
+                f"卖出侧订单簿请求失败："
+                f"{opportunity.sell_exchange} {opportunity.sell_market_type}，{_exception_message(exc)}"
             )
         if blockers:
             return self._result(
@@ -176,9 +176,9 @@ class OrderBookDepthValidator:
             )
 
         if buy_book is None:
-            blockers.append(f"order book unavailable for {opportunity.buy_exchange} {opportunity.buy_market_type}")
+            blockers.append(f"买入侧订单簿不可用：{opportunity.buy_exchange} {opportunity.buy_market_type}")
         if sell_book is None:
-            blockers.append(f"order book unavailable for {opportunity.sell_exchange} {opportunity.sell_market_type}")
+            blockers.append(f"卖出侧订单簿不可用：{opportunity.sell_exchange} {opportunity.sell_market_type}")
         if blockers:
             return self._result(
                 opportunity,
@@ -204,22 +204,22 @@ class OrderBookDepthValidator:
         min_depth = min(buy_fill.depth_usdt, sell_fill.depth_usdt)
         if required_depth > 0 and buy_fill.depth_usdt + EPSILON < required_depth:
             blockers.append(
-                f"buy side {band_pct:.3f}% band depth "
+                f"买入侧 {band_pct:.3f}% 价格带深度不足："
                 f"{buy_fill.depth_usdt:.2f}/{required_depth:.2f} USDT"
             )
         if required_depth > 0 and sell_fill.depth_usdt + EPSILON < required_depth:
             blockers.append(
-                f"sell side {band_pct:.3f}% band depth "
+                f"卖出侧 {band_pct:.3f}% 价格带深度不足："
                 f"{sell_fill.depth_usdt:.2f}/{required_depth:.2f} USDT"
             )
         if buy_fill.filled_usdt + EPSILON < target:
             blockers.append(
-                f"buy side fill within {band_pct:.3f}% band "
+                f"买入侧 {band_pct:.3f}% 价格带内可成交金额不足："
                 f"{buy_fill.filled_usdt:.2f}/{target:.2f} USDT"
             )
         if sell_fill.filled_usdt + EPSILON < target:
             blockers.append(
-                f"sell side fill within {band_pct:.3f}% band "
+                f"卖出侧 {band_pct:.3f}% 价格带内可成交金额不足："
                 f"{sell_fill.filled_usdt:.2f}/{target:.2f} USDT"
             )
 
@@ -237,8 +237,8 @@ class OrderBookDepthValidator:
             slippage_loss = opportunity.open_spread_pct - executable_open
             if effective_edge + EPSILON < risk_settings.min_effective_open_pct:
                 blockers.append(
-                    f"effective executable edge {effective_edge:.3f}% is below "
-                    f"{risk_settings.min_effective_open_pct:.3f}%"
+                    f"实际可成交有效收益 {effective_edge:.3f}% "
+                    f"低于最低要求 {risk_settings.min_effective_open_pct:.3f}%"
                 )
 
         return DepthValidationResult(

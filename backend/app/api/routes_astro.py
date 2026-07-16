@@ -90,19 +90,19 @@ async def _effective_risk_settings(request: Request) -> RiskSettings:
 
 
 def _format_depth_validation_message(result: DepthValidationResult) -> str:
-    details = "; ".join(result.blockers) if result.blockers else "depth validation failed"
-    metrics: list[str] = [f"target {result.target_notional_usdt:.2f} USDT"]
+    details = "；".join(result.blockers) if result.blockers else "深度校验未通过"
+    metrics: list[str] = [f"验证金额 {result.target_notional_usdt:.2f} USDT"]
     if result.price_band_pct is not None:
-        metrics.append(f"band {result.price_band_pct:.3f}%")
+        metrics.append(f"价格带 {result.price_band_pct:.3f}%")
     if result.required_depth_usdt is not None:
-        metrics.append(f"required depth {result.required_depth_usdt:.2f} USDT")
+        metrics.append(f"要求深度 {result.required_depth_usdt:.2f} USDT")
     if result.min_depth_usdt is not None:
-        metrics.append(f"min band depth {result.min_depth_usdt:.2f} USDT")
+        metrics.append(f"最小价格带深度 {result.min_depth_usdt:.2f} USDT")
     if result.executable_open_pct is not None:
-        metrics.append(f"executable open {result.executable_open_pct:.3f}%")
+        metrics.append(f"实际可成交开仓价差 {result.executable_open_pct:.3f}%")
     if result.effective_executable_edge_pct is not None:
-        metrics.append(f"effective edge {result.effective_executable_edge_pct:.3f}%")
-    return f"skipped order book validation: {details} ({', '.join(metrics)})"
+        metrics.append(f"实际可成交有效收益 {result.effective_executable_edge_pct:.3f}%")
+    return f"订单簿校验未通过：{details}（{'，'.join(metrics)}）"
 
 
 async def _validate_order_book_before_create(

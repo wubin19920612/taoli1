@@ -188,7 +188,7 @@ async def test_validator_blocks_when_multi_level_vwap_erases_edge() -> None:
     assert result.buy_vwap is not None
     assert result.sell_vwap is not None
     assert result.executable_open_pct < 0.5
-    assert "effective executable edge" in " ".join(result.blockers)
+    assert "实际可成交有效收益" in " ".join(result.blockers)
 
 
 @pytest.mark.asyncio
@@ -228,10 +228,10 @@ async def test_validator_ignores_depth_outside_price_band() -> None:
     assert result.min_depth_usdt == pytest.approx(500)
     assert result.buy_filled_usdt == pytest.approx(500)
     assert result.sell_filled_usdt == pytest.approx(505)
-    assert "buy side 0.100% band depth 500.00/2000.00 USDT" in result.blockers
-    assert "sell side 0.100% band depth 505.00/2000.00 USDT" in result.blockers
-    assert "buy side fill within 0.100% band 500.00/1000.00 USDT" in result.blockers
-    assert "sell side fill within 0.100% band 505.00/1000.00 USDT" in result.blockers
+    assert "买入侧 0.100% 价格带深度不足：500.00/2000.00 USDT" in result.blockers
+    assert "卖出侧 0.100% 价格带深度不足：505.00/2000.00 USDT" in result.blockers
+    assert "买入侧 0.100% 价格带内可成交金额不足：500.00/1000.00 USDT" in result.blockers
+    assert "卖出侧 0.100% 价格带内可成交金额不足：505.00/1000.00 USDT" in result.blockers
 
 
 @pytest.mark.asyncio
@@ -255,7 +255,7 @@ async def test_validator_reports_order_book_request_failures_as_blockers() -> No
     assert result.buy_filled_usdt == 0
     assert result.sell_filled_usdt == 0
     assert result.blockers == [
-        "buy side order book request failed for binance future: TimeoutError"
+        "买入侧订单簿请求失败：binance future，TimeoutError"
     ]
 
 

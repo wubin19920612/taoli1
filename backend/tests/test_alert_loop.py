@@ -389,7 +389,7 @@ async def test_alert_loop_skips_astro_create_when_latest_signal_collapsed() -> N
 
     assert service.calls == []
     assert event_repo.events[0].status == "muted"
-    assert "Astro: skipped latest signal validation" in event_repo.events[0].message
+    assert "Astro: 最新信号校验未通过" in event_repo.events[0].message
     assert feishu.sent_texts == []
 
 
@@ -424,7 +424,7 @@ async def test_alert_loop_skips_astro_create_when_order_book_validation_fails() 
             executable_open_pct=0.2,
             effective_executable_edge_pct=-0.1,
             slippage_loss_pct=0.6,
-            blockers=["buy side depth filled 300.00/1000.00 USDT"],
+            blockers=["买入侧深度不足：300.00/1000.00 USDT"],
             warnings=[],
         )
     )
@@ -445,10 +445,10 @@ async def test_alert_loop_skips_astro_create_when_order_book_validation_fails() 
     assert validator.calls[0][2] is not None
     assert validator.calls[0][2].max_trade_usdt == 50
     assert event_repo.events[0].status == "sent"
-    assert "Astro: skipped order book validation" in event_repo.events[0].message
+    assert "Astro: 订单簿校验未通过" in event_repo.events[0].message
     assert feishu.sent_texts[0] is not None
-    assert "Astro: skipped order book validation" in feishu.sent_texts[0]
-    assert "buy side depth filled" in event_repo.events[0].message
+    assert "Astro: 订单簿校验未通过" in feishu.sent_texts[0]
+    assert "买入侧深度不足" in event_repo.events[0].message
 
 
 @pytest.mark.asyncio
@@ -527,7 +527,7 @@ async def test_alert_loop_mutes_when_astro_plan_cannot_create_card_and_filter_en
 
     assert service.calls == []
     assert event_repo.events[0].status == "muted"
-    assert "Astro: skipped card validation" in event_repo.events[0].message
+    assert "Astro: 卡片参数校验未通过" in event_repo.events[0].message
     assert "SS" in event_repo.events[0].message
     assert feishu.sent_texts == []
 

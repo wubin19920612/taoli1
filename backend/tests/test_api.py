@@ -1383,8 +1383,8 @@ def test_alert_loop_mutes_feishu_when_card_conditions_fail() -> None:
             effective_executable_edge_pct=-1.284,
             slippage_loss_pct=1.67,
             blockers=[
-                "sell side depth filled 228.33/1000.00 USDT",
-                "effective executable edge -1.284% is below 0.050%",
+                "卖出侧深度不足：228.33/1000.00 USDT",
+                "实际可成交有效收益 -1.284% 低于最低要求 0.050%",
             ],
             warnings=[],
         )
@@ -1407,8 +1407,8 @@ def test_alert_loop_mutes_feishu_when_card_conditions_fail() -> None:
     assert notifier.alerts == []
     assert len(event_repo.events) == 1
     assert event_repo.events[0].status == "muted"
-    assert "Astro: skipped order book validation" in event_repo.events[0].message
-    assert "sell side depth filled" in event_repo.events[0].message
+    assert "Astro: 订单簿校验未通过" in event_repo.events[0].message
+    assert "卖出侧深度不足" in event_repo.events[0].message
 
 
 def test_alert_loop_sends_feishu_when_card_condition_filter_is_disabled() -> None:
@@ -1457,7 +1457,7 @@ def test_alert_loop_sends_feishu_when_card_condition_filter_is_disabled() -> Non
             executable_open_pct=-0.87,
             effective_executable_edge_pct=-1.284,
             slippage_loss_pct=1.67,
-            blockers=["sell side depth filled 228.33/1000.00 USDT"],
+            blockers=["卖出侧深度不足：228.33/1000.00 USDT"],
             warnings=[],
         )
     )
@@ -1479,7 +1479,7 @@ def test_alert_loop_sends_feishu_when_card_condition_filter_is_disabled() -> Non
     assert len(notifier.alerts) == 1
     assert len(event_repo.events) == 1
     assert event_repo.events[0].status == "sent"
-    assert "Astro: skipped order book validation" in str(notifier.alerts[0]["prebuilt_text"])
+    assert "Astro: 订单簿校验未通过" in str(notifier.alerts[0]["prebuilt_text"])
 
 
 def test_astro_card_settings_endpoint_roundtrips() -> None:
@@ -2313,7 +2313,7 @@ def test_astro_manual_card_create_endpoint_skips_when_order_book_validation_fail
             executable_open_pct=0.1,
             effective_executable_edge_pct=-0.05,
             slippage_loss_pct=0.4,
-            blockers=["buy side depth filled 500.00/1000.00 USDT"],
+            blockers=["买入侧深度不足：500.00/1000.00 USDT"],
             warnings=[],
         )
     )
@@ -2331,7 +2331,7 @@ def test_astro_manual_card_create_endpoint_skips_when_order_book_validation_fail
     payload = response.json()
     assert payload["status"] == "skipped"
     assert payload["action"] == "order_book_validation"
-    assert "buy side depth filled" in payload["message"]
+    assert "买入侧深度不足" in payload["message"]
     assert service.calls == []
     assert validator.calls[0]["override_notional_usdt"] is None
     card_settings = validator.calls[0]["card_settings"]
