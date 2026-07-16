@@ -101,6 +101,9 @@ async def test_validator_uses_minimum_signal_notional_when_card_size_is_smaller(
     assert result.buy_filled_usdt == pytest.approx(1000)
     assert result.sell_filled_usdt == pytest.approx(1000)
     assert result.executable_open_pct == pytest.approx(1.0)
+    assert result.cost_pct == pytest.approx(0.25)
+    assert result.funding_edge_pct == pytest.approx(0)
+    assert result.slippage_buffer_pct == pytest.approx(0.05)
     assert result.effective_executable_edge_pct == pytest.approx(0.70)
 
 

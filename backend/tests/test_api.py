@@ -2311,6 +2311,9 @@ def test_astro_manual_card_create_endpoint_skips_when_order_book_validation_fail
             sell_vwap=100.5,
             quoted_open_pct=0.5,
             executable_open_pct=0.1,
+            cost_pct=0.2,
+            funding_edge_pct=0.05,
+            slippage_buffer_pct=0.05,
             effective_executable_edge_pct=-0.05,
             slippage_loss_pct=0.4,
             blockers=["买入侧深度不足：500.00/1000.00 USDT"],
@@ -2332,6 +2335,11 @@ def test_astro_manual_card_create_endpoint_skips_when_order_book_validation_fail
     assert payload["status"] == "skipped"
     assert payload["action"] == "order_book_validation"
     assert "买入侧深度不足" in payload["message"]
+    assert "实际可成交开仓价差 +0.100%" in payload["message"]
+    assert "成本修正 -0.200%" in payload["message"]
+    assert "资金费边际 +0.050%" in payload["message"]
+    assert "滑点缓冲 -0.050%" in payload["message"]
+    assert "实际可成交有效收益 -0.050%" in payload["message"]
     assert service.calls == []
     assert validator.calls[0]["override_notional_usdt"] is None
     card_settings = validator.calls[0]["card_settings"]

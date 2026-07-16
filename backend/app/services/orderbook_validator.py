@@ -226,13 +226,19 @@ class OrderBookDepthValidator:
         executable_open = None
         effective_edge = None
         slippage_loss = None
+        cost = None
+        funding_edge = None
+        slippage_buffer = None
         if buy_fill.vwap is not None and sell_fill.vwap is not None:
             executable_open = (sell_fill.vwap - buy_fill.vwap) / buy_fill.vwap * 100
+            cost = _cost_pct(opportunity)
+            funding_edge = funding_edge_pct(opportunity)
+            slippage_buffer = risk_settings.signal_slippage_buffer_pct
             effective_edge = (
                 executable_open
-                - _cost_pct(opportunity)
-                + funding_edge_pct(opportunity)
-                - risk_settings.signal_slippage_buffer_pct
+                - cost
+                + funding_edge
+                - slippage_buffer
             )
             slippage_loss = opportunity.open_spread_pct - executable_open
             if effective_edge + EPSILON < risk_settings.min_effective_open_pct:
@@ -255,6 +261,9 @@ class OrderBookDepthValidator:
             sell_vwap=sell_fill.vwap,
             quoted_open_pct=opportunity.open_spread_pct,
             executable_open_pct=executable_open,
+            cost_pct=cost,
+            funding_edge_pct=funding_edge,
+            slippage_buffer_pct=slippage_buffer,
             effective_executable_edge_pct=effective_edge,
             slippage_loss_pct=slippage_loss,
             blockers=blockers,

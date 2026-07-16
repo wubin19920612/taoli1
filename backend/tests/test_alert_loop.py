@@ -422,6 +422,9 @@ async def test_alert_loop_skips_astro_create_when_order_book_validation_fails() 
             sell_vwap=100.8,
             quoted_open_pct=0.8,
             executable_open_pct=0.2,
+            cost_pct=0.2,
+            funding_edge_pct=-0.05,
+            slippage_buffer_pct=0.05,
             effective_executable_edge_pct=-0.1,
             slippage_loss_pct=0.6,
             blockers=["买入侧深度不足：300.00/1000.00 USDT"],
@@ -449,6 +452,11 @@ async def test_alert_loop_skips_astro_create_when_order_book_validation_fails() 
     assert feishu.sent_texts[0] is not None
     assert "Astro: 订单簿校验未通过" in feishu.sent_texts[0]
     assert "买入侧深度不足" in event_repo.events[0].message
+    assert "实际可成交开仓价差 +0.200%" in event_repo.events[0].message
+    assert "成本修正 -0.200%" in event_repo.events[0].message
+    assert "资金费边际 -0.050%" in event_repo.events[0].message
+    assert "滑点缓冲 -0.050%" in event_repo.events[0].message
+    assert "实际可成交有效收益 -0.100%" in event_repo.events[0].message
 
 
 @pytest.mark.asyncio

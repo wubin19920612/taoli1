@@ -89,6 +89,10 @@ async def _effective_risk_settings(request: Request) -> RiskSettings:
     return await repo.get_risk_settings()
 
 
+def _signed_pct(value: float) -> str:
+    return f"{value:+.3f}%"
+
+
 def _format_depth_validation_message(result: DepthValidationResult) -> str:
     details = "；".join(result.blockers) if result.blockers else "深度校验未通过"
     metrics: list[str] = [f"验证金额 {result.target_notional_usdt:.2f} USDT"]
@@ -99,9 +103,15 @@ def _format_depth_validation_message(result: DepthValidationResult) -> str:
     if result.min_depth_usdt is not None:
         metrics.append(f"最小价格带深度 {result.min_depth_usdt:.2f} USDT")
     if result.executable_open_pct is not None:
-        metrics.append(f"实际可成交开仓价差 {result.executable_open_pct:.3f}%")
+        metrics.append(f"实际可成交开仓价差 {_signed_pct(result.executable_open_pct)}")
+    if result.cost_pct is not None:
+        metrics.append(f"成本修正 {_signed_pct(-result.cost_pct)}")
+    if result.funding_edge_pct is not None:
+        metrics.append(f"资金费边际 {_signed_pct(result.funding_edge_pct)}")
+    if result.slippage_buffer_pct is not None:
+        metrics.append(f"滑点缓冲 {_signed_pct(-result.slippage_buffer_pct)}")
     if result.effective_executable_edge_pct is not None:
-        metrics.append(f"实际可成交有效收益 {result.effective_executable_edge_pct:.3f}%")
+        metrics.append(f"实际可成交有效收益 {_signed_pct(result.effective_executable_edge_pct)}")
     return f"订单簿校验未通过：{details}（{'，'.join(metrics)}）"
 
 

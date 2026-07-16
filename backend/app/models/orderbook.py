@@ -34,6 +34,9 @@ class DepthValidationResult(BaseModel):
     sell_vwap: float | None
     quoted_open_pct: float
     executable_open_pct: float | None
+    cost_pct: float | None = None
+    funding_edge_pct: float | None = None
+    slippage_buffer_pct: float | None = None
     effective_executable_edge_pct: float | None
     slippage_loss_pct: float | None
     blockers: list[str]
