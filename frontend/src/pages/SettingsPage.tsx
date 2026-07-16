@@ -1,4 +1,4 @@
-import { DeleteOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
+import { CloseOutlined, DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
 import {
   Alert,
   Button,
@@ -11,11 +11,12 @@ import {
   Switch,
   Table,
   Tag,
+  Tooltip,
   Typography,
   message
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   createAlertRule,
@@ -33,6 +34,7 @@ import {
   updateAlertMessageTemplate,
   updateAstroCardSettings,
   updateLivePilotSettings,
+  updateAlertRule,
   updateRiskSettings
 } from "../api/client";
 import type {
@@ -167,7 +169,7 @@ function ruleFromForm(values: AlertRuleFormValues, defaults: AlertRule): AlertRu
   return {
     ...defaults,
     ...rule,
-    exclude_symbols: [],
+    exclude_symbols: defaults.exclude_symbols,
     min_volume_24h_usdt: (minVolumeK ?? 0) * 1000
   };
 }
@@ -338,6 +340,9 @@ export function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [ruleDefaults, setRuleDefaults] = useState<AlertRule>(defaultRule);
+  const [editingRule, setEditingRule] = useState<AlertRule | null>(null);
+  const [ruleSaving, setRuleSaving] = useState(false);
+  const ruleEditorRef = useRef<HTMLElement | null>(null);
   const [alertTemplatePreview, setAlertTemplatePreview] =
     useState<AlertMessageTemplateSettings>(defaultAlertMessageTemplate);
   const [serviceControl, setServiceControl] = useState<ServiceControlStatus | null>(null);
@@ -386,6 +391,7 @@ export function SettingsPage() {
       setLivePilotPreview(nextLivePilot);
       setLivePilotSelection(pilotSelection);
       setRules(nextRules);
+      setEditingRule(null);
       setServiceControl(nextServiceControl);
       setAstroStatus(nextAstroStatus);
     } catch (exc) {
@@ -407,7 +413,9 @@ export function SettingsPage() {
     const saved = await updateRiskSettings(riskFromForm(values));
     const nextRuleDefaults = ruleDefaultsForRisk(saved);
     riskForm.setFieldsValue(riskToForm(saved));
-    ruleForm.setFieldsValue(ruleToForm(nextRuleDefaults));
+    if (!editingRule) {
+      ruleForm.setFieldsValue(ruleToForm(nextRuleDefaults));
+    }
     setRuleDefaults(nextRuleDefaults);
     message.success("已保存");
   };
@@ -436,12 +444,37 @@ export function SettingsPage() {
     message.success("实盘灰度已保存");
   };
 
-  const createRule = async () => {
-    const values = await ruleForm.validateFields();
-    const saved = await createAlertRule(ruleFromForm(values, ruleDefaults));
-    setRules((current) => [saved, ...current]);
+  const resetRuleEditor = () => {
+    setEditingRule(null);
     ruleForm.setFieldsValue(ruleToForm(ruleDefaults));
-    message.success("已新增");
+  };
+
+  const editRule = (rule: AlertRule) => {
+    setEditingRule(rule);
+    ruleForm.setFieldsValue(ruleToForm(rule));
+    ruleEditorRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+  };
+
+  const saveRule = async () => {
+    setRuleSaving(true);
+    try {
+      const values = await ruleForm.validateFields();
+      const nextRule = ruleFromForm(values, editingRule ?? ruleDefaults);
+      if (editingRule?.id) {
+        const saved = await updateAlertRule(editingRule.id, nextRule);
+        setRules((current) => current.map((item) => (item.id === editingRule.id ? saved : item)));
+        message.success("规则已更新");
+      } else {
+        const saved = await createAlertRule(nextRule);
+        setRules((current) => [saved, ...current]);
+        message.success("规则已新增");
+      }
+      resetRuleEditor();
+    } catch (exc) {
+      message.error(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setRuleSaving(false);
+    }
   };
 
   const removeRule = async (rule: AlertRule) => {
@@ -450,6 +483,9 @@ export function SettingsPage() {
     }
     await deleteAlertRule(rule.id);
     setRules((current) => current.filter((item) => item.id !== rule.id));
+    if (editingRule?.id === rule.id) {
+      resetRuleEditor();
+    }
   };
 
   const restartService = async (service: ServiceName) => {
@@ -479,10 +515,28 @@ export function SettingsPage() {
     { title: "连续命中", dataIndex: "consecutive_hits" },
     { title: "冷却", dataIndex: "cooldown_seconds", render: (value: number) => `${value}s` },
     {
-      title: "",
-      width: 72,
+      title: "操作",
+      width: 104,
       render: (_, row) => (
-        <Button icon={<DeleteOutlined />} type="text" danger onClick={() => void removeRule(row)} />
+        <Space size={4}>
+          <Tooltip title="编辑规则">
+            <Button
+              icon={<EditOutlined />}
+              type="text"
+              aria-label={`编辑规则 ${row.name}`}
+              onClick={() => editRule(row)}
+            />
+          </Tooltip>
+          <Tooltip title="删除规则">
+            <Button
+              icon={<DeleteOutlined />}
+              type="text"
+              danger
+              aria-label={`删除规则 ${row.name}`}
+              onClick={() => void removeRule(row)}
+            />
+          </Tooltip>
+        </Space>
       )
     }
   ];
@@ -905,18 +959,28 @@ export function SettingsPage() {
           </Button>
         </Form>
       </section>
-      <section className="panel">
-        <Typography.Title level={4}>新增告警规则</Typography.Title>
+      <section className="panel" ref={ruleEditorRef}>
+        <Typography.Title level={4}>{editingRule ? "编辑告警规则" : "新增告警规则"}</Typography.Title>
+        {editingRule ? (
+          <Alert
+            className="rule-guide"
+            type="warning"
+            showIcon
+            message={`正在编辑：${editingRule.name}`}
+            description="保存后立即更新现有规则，不会创建重复规则。"
+          />
+        ) : null}
         <Alert className="rule-guide" type="info" showIcon message="规则说明" description={alertRuleGuide} />
         <Form
+          name="alert-rule-editor"
           form={ruleForm}
           layout="vertical"
-          disabled={loading}
+          disabled={loading || ruleSaving}
           initialValues={ruleToForm(ruleDefaults)}
-          onFinish={createRule}
+          onFinish={saveRule}
         >
           <div className="form-grid">
-            <Form.Item label="规则名称" name="name" rules={[{ required: true }]} help={alertRuleFieldHelp.name}>
+            <Form.Item label="告警规则名称" name="name" rules={[{ required: true }]} help={alertRuleFieldHelp.name}>
               <Input />
             </Form.Item>
             <Form.Item label="启用" name="enabled" valuePropName="checked" help={alertRuleFieldHelp.enabled}>
@@ -994,9 +1058,22 @@ export function SettingsPage() {
           <Form.Item label="排除风险标签" name="excluded_risk_labels">
             <Select mode="multiple" options={riskSelectOptions} />
           </Form.Item>
-          <Button type="primary" htmlType="submit">
-            新增规则
-          </Button>
+          <Space wrap>
+            <Button
+              type="primary"
+              htmlType="submit"
+              icon={editingRule ? <SaveOutlined /> : <PlusOutlined />}
+              loading={ruleSaving}
+              aria-label={editingRule ? "保存修改" : "新增规则"}
+            >
+              {editingRule ? "保存修改" : "新增规则"}
+            </Button>
+            {editingRule ? (
+              <Button icon={<CloseOutlined />} onClick={resetRuleEditor} disabled={ruleSaving}>
+                取消编辑
+              </Button>
+            ) : null}
+          </Space>
         </Form>
       </section>
       <section className="panel panel-wide">

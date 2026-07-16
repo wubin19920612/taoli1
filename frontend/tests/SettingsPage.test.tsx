@@ -154,8 +154,33 @@ describe("SettingsPage", () => {
         if (url.includes("/alerts/rules") && init?.method === "POST") {
           return Response.json(JSON.parse(String(init.body)));
         }
+        if (url.includes("/alerts/rules/rule-existing") && init?.method === "PUT") {
+          return Response.json({
+            ...JSON.parse(String(init.body)),
+            id: "rule-existing"
+          });
+        }
         if (url.includes("/alerts/rules")) {
-          return Response.json([]);
+          return Response.json([
+            {
+              id: "rule-existing",
+              name: "Existing FF",
+              enabled: true,
+              types: ["FF"],
+              include_exchanges: ["binance"],
+              exclude_exchanges: [],
+              include_symbols: ["BTCUSDT"],
+              exclude_symbols: ["LEGACYUSDT"],
+              min_open_spread_pct: 0.8,
+              min_fee_adjusted_open_pct: 0.4,
+              min_volume_24h_usdt: 2500000,
+              max_data_age_seconds: 600,
+              excluded_risk_labels: ["LOW_VOLUME"],
+              consecutive_hits: 4,
+              cooldown_seconds: 900,
+              severity: "critical"
+            }
+          ]);
         }
         if (url.includes("/admin/service-control")) {
           return Response.json({
@@ -193,7 +218,7 @@ describe("SettingsPage", () => {
       screen.getByText("排除标的直接继承实时机会页隐藏的黑名单，无需单独填写。")
     ).toBeTruthy();
     expect(screen.queryByLabelText("排除标的")).toBeNull();
-    await userEvent.type(screen.getByLabelText("规则名称"), "FF 价差");
+    await userEvent.type(screen.getByLabelText("告警规则名称"), "FF 价差");
     await userEvent.clear(screen.getByLabelText("开仓阈值"));
     await userEvent.type(screen.getByLabelText("开仓阈值"), "0.5");
     await userEvent.click(screen.getByRole("button", { name: "新增规则" }));
@@ -204,6 +229,40 @@ describe("SettingsPage", () => {
         expect.objectContaining({ method: "POST" })
       );
     });
+  }, 15000);
+
+  it("edits an existing alert rule in place", async () => {
+    render(<SettingsPage />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "编辑规则 Existing FF" }));
+
+    expect(screen.getByText("编辑告警规则")).toBeTruthy();
+    expect((screen.getByLabelText("告警规则名称") as HTMLInputElement).value).toBe("Existing FF");
+    await waitFor(() => {
+      expect((screen.getByLabelText("最低成交额 (K)") as HTMLInputElement).value).toBe("2500");
+    });
+
+    const threshold = screen.getByLabelText("开仓阈值");
+    await userEvent.clear(threshold);
+    await userEvent.type(threshold, "1.1");
+    await userEvent.click(screen.getByRole("button", { name: "保存修改" }));
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/alerts/rules/rule-existing"),
+        expect.objectContaining({
+          method: "PUT",
+          body: expect.stringContaining('"min_open_spread_pct":1.1')
+        })
+      );
+    });
+    expect(
+      vi.mocked(fetch).mock.calls.some(([, init]) => {
+        return init?.method === "PUT" && String(init.body).includes('"exclude_symbols":["LEGACYUSDT"]');
+      })
+    ).toBe(true);
+    expect(screen.getByText("新增告警规则")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "保存修改" })).toBeNull();
   }, 15000);
 
   it("saves global alert message template field choices", async () => {
@@ -391,10 +450,10 @@ describe("SettingsPage", () => {
 
     render(<SettingsPage />);
 
-    await userEvent.type(await screen.findByLabelText("规则名称"), "TRADOOR");
+    await userEvent.type(await screen.findByLabelText("告警规则名称"), "TRADOOR");
     await userEvent.click(screen.getByRole("button", { name: "新增规则" }));
-    await userEvent.clear(await screen.findByLabelText("规则名称"));
-    await userEvent.type(await screen.findByLabelText("规则名称"), "TRADOOR2");
+    await userEvent.clear(await screen.findByLabelText("告警规则名称"));
+    await userEvent.type(await screen.findByLabelText("告警规则名称"), "TRADOOR2");
     await userEvent.click(screen.getByRole("button", { name: "新增规则" }));
 
     await waitFor(() => {
