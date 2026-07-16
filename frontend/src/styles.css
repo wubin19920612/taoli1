@@ -928,6 +928,7 @@ body {
 }
 
 .pair-query-panel {
+  min-width: 0;
   padding: 8px;
   background: #ffffff;
   border: 1px solid #e2e8e5;
@@ -1597,6 +1598,24 @@ body {
   grid-template-columns: 1fr 0.86fr 0.86fr;
   gap: 8px;
   min-width: 0;
+}
+
+@media (max-width: 1500px) {
+  .pair-query-bar {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .pair-query-actions {
+    grid-column: 1 / -1;
+  }
+
+  .premium-query-bar {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .premium-query-actions {
+    grid-column: 1 / -1;
+  }
 }
 
 .premium-metric-grid {
@@ -2351,6 +2370,16 @@ body {
     grid-template-columns: 1fr;
   }
 
+  .pair-query-bar,
+  .premium-query-bar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .pair-query-actions,
+  .premium-query-actions {
+    grid-column: 1 / -1;
+  }
+
   .toolbar {
     align-items: stretch;
     flex-direction: column;
@@ -2427,5 +2456,29 @@ body {
 
   .gate-plan-head {
     flex-direction: column;
+  }
+}
+
+@media (max-width: 600px) {
+  .pair-query-bar,
+  .premium-query-bar {
+    grid-template-columns: 1fr;
+  }
+
+  .pair-query-options {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .pair-query-options .ant-typography-secondary {
+    flex-basis: 100%;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+  }
+
+  .pair-saved-presets,
+  .premium-saved-presets {
+    grid-template-columns: 1fr;
   }
 }
