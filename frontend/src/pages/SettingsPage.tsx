@@ -21,6 +21,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   createAlertRule,
   deleteAlertRule,
+  getAstroAutomationSettings,
   getAlertMessageTemplate,
   getAstroCardSettings,
   getAstroStatus,
@@ -32,6 +33,7 @@ import {
   restartServiceControl,
   saveDashboardPassword,
   updateAlertMessageTemplate,
+  updateAstroAutomationSettings,
   updateAstroCardSettings,
   updateLivePilotSettings,
   updateAlertRule,
@@ -40,6 +42,7 @@ import {
 import type {
   AlertMessageTemplateSettings,
   AlertRule,
+  AstroAutomationSettings,
   AstroCardSettings,
   AstroSdkStatus,
   LivePilotPreview,
@@ -334,6 +337,7 @@ export function SettingsPage() {
   const [riskForm] = Form.useForm<RiskSettings>();
   const [ruleForm] = Form.useForm<AlertRuleFormValues>();
   const [templateForm] = Form.useForm<AlertMessageTemplateSettings>();
+  const [astroAutomationForm] = Form.useForm<AstroAutomationSettings>();
   const [astroCardForm] = Form.useForm<AstroCardSettings>();
   const [livePilotForm] = Form.useForm<LivePilotSettings>();
   const [rules, setRules] = useState<AlertRule[]>([]);
@@ -368,11 +372,22 @@ export function SettingsPage() {
         setAstroStatusError(exc instanceof Error ? exc.message : String(exc));
         return null;
       });
-      const [risk, nextRules, nextServiceControl, alertTemplate, astroCard, livePilot, pilotSelection, nextAstroStatus] = await Promise.all([
+      const [
+        risk,
+        nextRules,
+        nextServiceControl,
+        alertTemplate,
+        astroAutomation,
+        astroCard,
+        livePilot,
+        pilotSelection,
+        nextAstroStatus
+      ] = await Promise.all([
         getRiskSettings(),
         listAlertRules(),
         serviceControlRequest,
         getAlertMessageTemplate(),
+        getAstroAutomationSettings(),
         getAstroCardSettings(),
         getLivePilotSettings(),
         getLivePilotPreview(),
@@ -384,6 +399,7 @@ export function SettingsPage() {
       riskForm.setFieldsValue(riskToForm(risk));
       ruleForm.setFieldsValue(ruleToForm(nextRuleDefaults));
       templateForm.setFieldsValue(nextAlertTemplate);
+      astroAutomationForm.setFieldsValue(astroAutomation);
       astroCardForm.setFieldsValue(astroCard);
       livePilotForm.setFieldsValue(nextLivePilot);
       setRuleDefaults(nextRuleDefaults);
@@ -404,6 +420,7 @@ export function SettingsPage() {
   useEffect(() => {
     ruleForm.setFieldsValue(ruleToForm(defaultRule));
     templateForm.setFieldsValue(defaultAlertMessageTemplate);
+    astroAutomationForm.setFieldsValue({ alert_auto_create: false });
     livePilotForm.setFieldsValue(defaultLivePilotSettings);
     void load();
   }, []);
@@ -433,6 +450,13 @@ export function SettingsPage() {
     const saved = await updateAstroCardSettings(values);
     astroCardForm.setFieldsValue(saved);
     message.success("Astro 卡片默认参数已保存");
+  };
+
+  const saveAstroAutomation = async () => {
+    const values = await astroAutomationForm.validateFields();
+    const saved = await updateAstroAutomationSettings(values);
+    astroAutomationForm.setFieldsValue(saved);
+    message.success("Astro 自动化设置已保存");
   };
 
   const saveLivePilot = async () => {
@@ -501,7 +525,7 @@ export function SettingsPage() {
   };
 
   const livePilotBudget = livePilotPreview.max_symbols * livePilotPreview.notional_per_symbol_usdt;
-  const livePilotRuntimeWarnings = [
+  const astroRuntimeWarnings = [
     astroStatus?.dry_run_only ? "Astro dry-run 当前开启，保存配置后仍不会写入实盘卡片。" : "",
     astroStatus && !astroStatus.configured ? "Astro SDK 未配置，无法提交卡片。" : "",
     astroStatusError ? `Astro 状态读取失败：${astroStatusError}` : ""
@@ -764,6 +788,43 @@ export function SettingsPage() {
         </Form>
       </section>
       <section className="panel">
+        <Typography.Title level={4}>Astro 自动化</Typography.Title>
+        <Alert
+          className="rule-guide"
+          type="info"
+          showIcon
+          message="控制告警是否自动创建 Astro 卡片"
+          description="开启后，命中告警会继续经过最新信号、订单簿、卡片参数和重复卡片校验；全部通过后才会写入 Astro。"
+        />
+        {astroRuntimeWarnings.length > 0 ? (
+          <Alert
+            className="rule-guide"
+            type="warning"
+            showIcon
+            message="运行状态提示"
+            description={astroRuntimeWarnings.join(" ")}
+          />
+        ) : null}
+        <Form
+          form={astroAutomationForm}
+          layout="vertical"
+          disabled={loading}
+          onFinish={saveAstroAutomation}
+        >
+          <Form.Item
+            label="告警自动创建 Astro 卡片"
+            name="alert_auto_create"
+            valuePropName="checked"
+            help="关闭时只会记录告警和通知，不会自动写入 Astro 卡片。"
+          >
+            <Switch checkedChildren="开启" unCheckedChildren="关闭" />
+          </Form.Item>
+          <Button type="primary" htmlType="submit" icon={<SaveOutlined />}>
+            保存 Astro 自动化
+          </Button>
+        </Form>
+      </section>
+      <section className="panel">
         <Typography.Title level={4}>Astro 卡片默认参数</Typography.Title>
         <Form form={astroCardForm} layout="vertical" disabled={loading} onFinish={saveAstroCardDefaults}>
           <div className="form-grid">
@@ -810,15 +871,6 @@ export function SettingsPage() {
               : "开启后用于小资金实盘灰度，不影响手动 Astro 建卡的安全默认。"
           }
         />
-        {livePilotRuntimeWarnings.length > 0 ? (
-          <Alert
-            className="rule-guide"
-            type="warning"
-            showIcon
-            message="运行状态提示"
-            description={livePilotRuntimeWarnings.join(" ")}
-          />
-        ) : null}
         <Form
           form={livePilotForm}
           layout="vertical"

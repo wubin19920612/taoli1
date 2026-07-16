@@ -5,6 +5,7 @@ from app.db.repositories import SettingsRepository
 from app.models.announcement import AnnouncementSettings
 from app.models.settings import (
     AlertMessageTemplateSettings,
+    AstroAutomationSettings,
     AstroCardSettings,
     LivePilotPreview,
     LivePilotPreviewItem,
@@ -79,6 +80,30 @@ async def update_astro_card_settings(
 ) -> AstroCardSettings:
     verify_dashboard_password(request.app.state.settings.dashboard_password, password)
     return await _settings_repo(request).set_astro_card_settings(settings)
+
+
+@router.get("/astro-automation", response_model=AstroAutomationSettings)
+async def get_astro_automation_settings(request: Request) -> AstroAutomationSettings:
+    repo = _settings_repo(request)
+    find_settings = getattr(repo, "find_astro_automation_settings", None)
+    stored = await find_settings() if find_settings is not None else None
+    if stored is None:
+        return request.app.state.settings.astro_automation_settings
+    return stored
+
+
+@router.put("/astro-automation", response_model=AstroAutomationSettings)
+async def update_astro_automation_settings(
+    settings: AstroAutomationSettings,
+    request: Request,
+    password: str | None = Depends(dashboard_password_header),
+) -> AstroAutomationSettings:
+    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
+    saved = await _settings_repo(request).set_astro_automation_settings(settings)
+    service = getattr(request.app.state, "astro_alert_service", None)
+    if service is not None and hasattr(service, "alert_auto_create_enabled"):
+        service.alert_auto_create_enabled = saved.alert_auto_create
+    return saved
 
 
 @router.get("/live-pilot", response_model=LivePilotSettings)

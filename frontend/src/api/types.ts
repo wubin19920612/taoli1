@@ -134,6 +134,10 @@ export interface AlertMessageTemplateSettings {
   observation_limit: number;
 }
 
+export interface AstroAutomationSettings {
+  alert_auto_create: boolean;
+}
+
 export interface AlertRule {
   id?: string;
   name: string;

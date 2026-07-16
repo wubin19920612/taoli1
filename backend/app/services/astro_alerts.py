@@ -96,12 +96,13 @@ class AstroAlertService:
         self.planner = planner
         self.card_settings = card_settings or settings.astro_card_settings
         self.live_pilot_settings = live_pilot_settings or LivePilotSettings()
+        self.alert_auto_create_enabled = settings.astro_alert_auto_create
         self.add_restart_delay_seconds = add_restart_delay_seconds
 
     async def handle_alert(self, opportunity: Opportunity) -> AstroAlertActionResult:
         return await self._handle(
             opportunity,
-            enabled=self.settings.astro_alert_auto_create,
+            enabled=self.alert_auto_create_enabled,
             disabled_message="自动创建卡片未开启",
             live_pilot=self.live_pilot_settings.enabled,
         )

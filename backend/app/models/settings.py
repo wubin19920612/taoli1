@@ -99,6 +99,10 @@ class AstroCardSettings(BaseModel):
     close_position_floor_pct: float = Field(default=0, ge=0)
 
 
+class AstroAutomationSettings(BaseModel):
+    alert_auto_create: bool = False
+
+
 class LivePilotSettings(BaseModel):
     enabled: bool = False
     max_symbols: int = Field(default=10, ge=1, le=100)

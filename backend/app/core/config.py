@@ -5,7 +5,7 @@ from pathlib import Path
 
 from dotenv import find_dotenv, load_dotenv
 
-from app.models.settings import AstroCardSettings, HistorySettings
+from app.models.settings import AstroAutomationSettings, AstroCardSettings, HistorySettings
 
 
 @dataclass(frozen=True)
@@ -84,6 +84,10 @@ class Settings:
             open_enabled=self.astro_default_open_enabled,
             close_position_buffer_pct=self.astro_default_close_position_buffer_pct,
         )
+
+    @property
+    def astro_automation_settings(self) -> AstroAutomationSettings:
+        return AstroAutomationSettings(alert_auto_create=self.astro_alert_auto_create)
 
 
 def _is_running_in_container() -> bool:

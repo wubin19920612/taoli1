@@ -1526,6 +1526,41 @@ def test_astro_card_settings_endpoint_roundtrips() -> None:
         assert reloaded.json()["close_position_floor_pct"] == 0.01
 
 
+def test_astro_automation_settings_endpoint_updates_runtime_service() -> None:
+    app = create_app(
+        settings=Settings(
+            dashboard_password="secret",
+            database_url="sqlite:///:memory:",
+            astro_alert_auto_create=False,
+        )
+    )
+    app.state.astro_alert_service = AstroAlertService(FakeAstroPairClient(), app.state.settings)
+
+    with TestClient(app) as client:
+        response = client.get("/api/settings/astro-automation")
+        assert response.status_code == 200
+        assert response.json()["alert_auto_create"] is False
+
+        unauthenticated = client.put(
+            "/api/settings/astro-automation",
+            json={"alert_auto_create": True},
+        )
+        assert unauthenticated.status_code == 401
+
+        saved = client.put(
+            "/api/settings/astro-automation",
+            headers={"X-Dashboard-Password": "secret"},
+            json={"alert_auto_create": True},
+        )
+        assert saved.status_code == 200
+        assert saved.json()["alert_auto_create"] is True
+        assert app.state.astro_alert_service.alert_auto_create_enabled is True
+
+        reloaded = client.get("/api/settings/astro-automation")
+        assert reloaded.status_code == 200
+        assert reloaded.json()["alert_auto_create"] is True
+
+
 def test_live_pilot_settings_endpoint_roundtrips() -> None:
     app = create_app(settings=Settings(dashboard_password="secret", database_url="sqlite:///:memory:"))
 

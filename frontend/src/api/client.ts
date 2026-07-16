@@ -5,6 +5,7 @@ import type {
   AnnouncementExchangeOption,
   AnnouncementFilters,
   AnnouncementSettings,
+  AstroAutomationSettings,
   AstroActionResult,
   AstroCardCreateRequest,
   AstroCardSettings,
@@ -161,6 +162,19 @@ export async function getAstroCardSettings(): Promise<AstroCardSettings> {
 
 export async function updateAstroCardSettings(settings: AstroCardSettings): Promise<AstroCardSettings> {
   return fetchJson<AstroCardSettings>("/settings/astro-card", {
+    method: "PUT",
+    body: JSON.stringify(settings)
+  });
+}
+
+export async function getAstroAutomationSettings(): Promise<AstroAutomationSettings> {
+  return fetchJson<AstroAutomationSettings>("/settings/astro-automation");
+}
+
+export async function updateAstroAutomationSettings(
+  settings: AstroAutomationSettings
+): Promise<AstroAutomationSettings> {
+  return fetchJson<AstroAutomationSettings>("/settings/astro-automation", {
     method: "PUT",
     body: JSON.stringify(settings)
   });

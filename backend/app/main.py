@@ -122,13 +122,26 @@ async def _refresh_astro_runtime_settings(app: FastAPI, settings_repo: SettingsR
         "astro_card_settings",
         getattr(astro_alert_service, "card_settings", None),
     )
+    fallback_automation = getattr(
+        getattr(app.state, "settings", None),
+        "astro_automation_settings",
+        None,
+    )
     if settings_repo is None:
         astro_alert_service.card_settings = fallback_settings
         astro_alert_service.live_pilot_settings = LivePilotSettings()
+        if fallback_automation is not None:
+            astro_alert_service.alert_auto_create_enabled = fallback_automation.alert_auto_create
         return
     find_settings = getattr(settings_repo, "find_astro_card_settings", None)
     stored = await find_settings() if find_settings is not None else None
     astro_alert_service.card_settings = stored or fallback_settings
+    find_automation = getattr(settings_repo, "find_astro_automation_settings", None)
+    stored_automation = await find_automation() if find_automation is not None else None
+    if stored_automation is not None:
+        astro_alert_service.alert_auto_create_enabled = stored_automation.alert_auto_create
+    elif fallback_automation is not None:
+        astro_alert_service.alert_auto_create_enabled = fallback_automation.alert_auto_create
     get_live_pilot_settings = getattr(settings_repo, "get_live_pilot_settings", None)
     astro_alert_service.live_pilot_settings = (
         await get_live_pilot_settings()

@@ -24,7 +24,13 @@ from app.models.opportunity import Opportunity, OpportunityType
 from app.models.funding_arbitrage import FundingArbitrageSettings
 from app.models.opportunity_radar import OpportunityRadarSettings
 from app.models.phone_alert import PhonePriceAlertEvent, PhonePriceAlertRule
-from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, LivePilotSettings, RiskSettings
+from app.models.settings import (
+    AlertMessageTemplateSettings,
+    AstroAutomationSettings,
+    AstroCardSettings,
+    LivePilotSettings,
+    RiskSettings,
+)
 
 PERCENT_SCALE = 10_000
 RISK_LABEL_BITS = {
@@ -865,6 +871,35 @@ class SettingsRepository:
             ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
             """,
             ("astro_card", settings.model_dump_json()),
+        )
+        await self.db.commit()
+        return settings
+
+    async def get_astro_automation_settings(self) -> AstroAutomationSettings:
+        settings = await self.find_astro_automation_settings()
+        return settings or AstroAutomationSettings()
+
+    async def find_astro_automation_settings(self) -> AstroAutomationSettings | None:
+        cursor = await self.db.execute(
+            "SELECT payload FROM app_settings WHERE key = ?",
+            ("astro_automation",),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        return AstroAutomationSettings.model_validate(json.loads(row["payload"]))
+
+    async def set_astro_automation_settings(
+        self,
+        settings: AstroAutomationSettings,
+    ) -> AstroAutomationSettings:
+        await self.db.execute(
+            """
+            INSERT INTO app_settings (key, payload)
+            VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
+            """,
+            ("astro_automation", settings.model_dump_json()),
         )
         await self.db.commit()
         return settings

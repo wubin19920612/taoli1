@@ -52,6 +52,14 @@ describe("SettingsPage", () => {
             observation_limit: 5
           });
         }
+        if (url.includes("/settings/astro-automation") && init?.method === "PUT") {
+          return Response.json(JSON.parse(String(init.body)));
+        }
+        if (url.includes("/settings/astro-automation")) {
+          return Response.json({
+            alert_auto_create: false
+          });
+        }
         if (url.includes("/settings/astro-card") && init?.method === "PUT") {
           return Response.json(JSON.parse(String(init.body)));
         }
@@ -295,6 +303,24 @@ describe("SettingsPage", () => {
     expect(preview?.textContent).toContain("价差对：BTCUSDT | binance future -> okx future");
     expect(preview?.textContent).not.toContain("资金费率差");
     expect(preview?.textContent).toContain("只报告可建卡告警");
+  }, 15000);
+
+  it("loads and saves Astro automation settings", async () => {
+    render(<SettingsPage />);
+
+    expect(await screen.findByText("Astro 自动化")).toBeTruthy();
+    await userEvent.click(screen.getByLabelText("告警自动创建 Astro 卡片"));
+    await userEvent.click(screen.getByRole("button", { name: /保存 Astro 自动化/ }));
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/settings/astro-automation"),
+        expect.objectContaining({
+          method: "PUT",
+          body: expect.stringContaining('"alert_auto_create":true')
+        })
+      );
+    });
   }, 15000);
 
   it("loads and saves Astro card defaults", async () => {
