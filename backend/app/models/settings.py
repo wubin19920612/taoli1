@@ -61,7 +61,7 @@ class RiskSettings(BaseModel):
     mark_index_deviation_pct: float = Field(default=1.0, ge=0)
     funding_against_pct: float = Field(default=0.01, ge=0)
     signal_slippage_buffer_pct: float = Field(default=0.05, ge=0)
-    min_effective_open_pct: float = Field(default=0.05, ge=0)
+    min_effective_open_pct: float = 0.05
     max_open_spread_decay_pct: float = Field(default=60.0, ge=0, le=100)
     signal_validation_notional_usdt: float = Field(default=1000, ge=0)
     orderbook_depth_safety_multiple: float = Field(default=2, ge=0)

@@ -195,6 +195,39 @@ async def test_validator_blocks_when_multi_level_vwap_erases_edge() -> None:
 
 
 @pytest.mark.asyncio
+async def test_validator_allows_negative_effective_edge_threshold() -> None:
+    buy_book = book(
+        "binance",
+        bids=[(99, 20)],
+        asks=[(100, 5), (101, 20)],
+    )
+    sell_book = book(
+        "okx",
+        bids=[(101, 5), (100.2, 20)],
+        asks=[(102, 20)],
+    )
+    validator = OrderBookDepthValidator(
+        [FakeAdapter("binance", buy_book), FakeAdapter("okx", sell_book)]
+    )
+
+    result = await validator.validate(
+        opportunity(),
+        risk_settings=RiskSettings(
+            signal_validation_notional_usdt=1000,
+            signal_slippage_buffer_pct=0.05,
+            min_effective_open_pct=-1.0,
+            orderbook_depth_band_pct=2.0,
+            ticker_collision_symbols=[],
+        ),
+        card_settings=AstroCardSettings(max_trade_usdt=1000, max_notional=1000),
+    )
+
+    assert result.effective_executable_edge_pct is not None
+    assert result.effective_executable_edge_pct < 0
+    assert result.passed is True
+
+
+@pytest.mark.asyncio
 async def test_validator_ignores_depth_outside_price_band() -> None:
     buy_book = book(
         "binance",

@@ -684,8 +684,13 @@ export function SettingsPage() {
             <Form.Item label="信号滑点缓冲百分比 (Signal slippage buffer pct)" name="signal_slippage_buffer_pct" rules={[{ required: true }]}>
               <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
             </Form.Item>
-            <Form.Item label="最低有效开仓收益率 (Minimum effective open pct)" name="min_effective_open_pct" rules={[{ required: true }]}>
-              <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
+            <Form.Item
+              label="最低有效开仓收益率 (Minimum effective open pct)"
+              name="min_effective_open_pct"
+              rules={[{ required: true }]}
+              help="允许填负数；例如 -1 表示实际可成交有效收益低于 -1% 才拦截，填更低可基本关闭这项拦截。"
+            >
+              <InputNumber step={0.01} suffix="%" className="wide-input" />
             </Form.Item>
             <Form.Item label="最大开仓价差衰减百分比 (Max open spread decay pct)" name="max_open_spread_decay_pct" rules={[{ required: true }]}>
               <InputNumber min={0} max={100} step={1} suffix="%" className="wide-input" />
