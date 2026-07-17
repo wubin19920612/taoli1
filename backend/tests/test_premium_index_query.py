@@ -2,7 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from app.models.pair_spread import PairSpreadKlinePoint
+from app.models.pair_spread import PairSpreadCurrentLeg, PairSpreadKlinePoint, PairSpreadPriceField
 from app.models.premium_index import PremiumIndexCurrentSnapshot, PremiumIndexMarketQuery, PremiumIndexPoint
 from app.services.premium_index_query import (
     PremiumIndexQueryService,
@@ -66,6 +66,58 @@ def test_hyperliquid_candle_premium_points_require_two_anchors() -> None:
         )
         == []
     )
+
+
+@pytest.mark.asyncio
+async def test_bybit_current_uses_official_premium_index_over_mark_deviation() -> None:
+    now = datetime(2026, 7, 17, 10, 40, tzinfo=UTC)
+
+    class FakePremiumIndexService(PremiumIndexQueryService):
+        async def _fetch_bybit_current(self, symbol):
+            assert symbol == "HOMEUSDT"
+            return PairSpreadCurrentLeg(
+                exchange="bybit",
+                symbol="HOMEUSDT",
+                raw_symbol="HOMEUSDT",
+                price=0.009126,
+                price_field=PairSpreadPriceField.MARK_PRICE,
+                mark_price=0.009126,
+                index_price=0.009291,
+                mid_price=0.0091075,
+                last_price=0.00912,
+                funding_rate_pct=-1.9844,
+                funding_next_time=now + timedelta(hours=2),
+                funding_interval_hours=4,
+                funding_rate_upper_pct=2,
+                funding_rate_lower_pct=-2,
+                timestamp=now,
+            )
+
+        async def _fetch_bybit_premium(self, symbol, start, end, interval_minutes):
+            assert symbol == "HOMEUSDT"
+            assert interval_minutes == 1
+            return [
+                PremiumIndexPoint(
+                    bucket_at=now - timedelta(minutes=1),
+                    premium_pct=-1.2345,
+                    source="bybit_premium_index",
+                )
+            ]
+
+    service = FakePremiumIndexService()
+    try:
+        current = await service.current(PremiumIndexMarketQuery(exchange="bybit", symbol="HOMEUSDT"))
+    finally:
+        await service.aclose()
+
+    mark_deviation = (0.009126 - 0.009291) / 0.009291 * 100
+    assert current.source == "bybit_premium_index"
+    assert current.premium_pct == pytest.approx(-1.2345)
+    assert current.premium_pct != pytest.approx(mark_deviation)
+    assert current.mid_premium_pct == pytest.approx((0.0091075 - 0.009291) / 0.009291 * 100)
+    assert current.funding_interval_hours == pytest.approx(4)
+    assert current.funding_rate_upper_pct == pytest.approx(2)
+    assert current.funding_rate_lower_pct == pytest.approx(-2)
 
 
 @pytest.mark.asyncio

@@ -146,6 +146,10 @@ function premiumSourceLabel(source: string | null | undefined): string {
   return source;
 }
 
+function isOfficialPremiumSource(source: string | null | undefined): boolean {
+  return Boolean(source?.includes("premium_index"));
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -1007,12 +1011,16 @@ export function PremiumIndexPage() {
   const current = result?.current ?? null;
   const currentPremium = current?.premium_pct ?? result?.premium_pct.current ?? null;
   const tone = typeof currentPremium === "number" ? (currentPremium >= 0 ? "positive" : "negative") : "neutral";
+  const officialPremiumSource = isOfficialPremiumSource(current?.source);
+  const primaryPremiumLabel = officialPremiumSource ? "当前官方溢价指数" : "当前标记价偏离";
   const fundingFollowEstimate = useMemo(
     () => buildFundingFollowEstimate(result, current, currentPremium),
     [current, currentPremium, result]
   );
   const premiumDefinitionMessage = current
-    ? "当前标记价溢价 = (标记价 - 指数价) / 指数价；盘口中价溢价 = ((买一 + 卖一) / 2 - 指数价) / 指数价，只反映当前盘口中点相对指数价的偏离。资金费率为交易所返回值，不由这两个即时偏离直接计算；Bybit 官方P基于 Impact Bid/Ask，不等于盘口中价溢价。"
+    ? officialPremiumSource
+      ? "当前官方溢价指数来自交易所 premium index API；标记价偏离 = (标记价 - 指数价) / 指数价；盘口中价溢价 = ((买一 + 卖一) / 2 - 指数价) / 指数价。标记价偏离和盘口中价溢价只作为参考，不参与 Bybit 资金费估算。"
+      : "当前标记价偏离 = (标记价 - 指数价) / 指数价；盘口中价溢价 = ((买一 + 卖一) / 2 - 指数价) / 指数价，只反映当前盘口中点相对指数价的偏离。资金费率为交易所返回值，不由这两个即时偏离直接计算；Bybit 官方P基于 Impact Bid/Ask，不等于盘口中价溢价。"
     : "";
 
   return (
@@ -1085,7 +1093,7 @@ export function PremiumIndexPage() {
 
       <section className="premium-metric-grid">
         <MetricCard
-          label="当前标记价溢价"
+          label={primaryPremiumLabel}
           value={signedPct(currentPremium)}
           sub={current ? `${current.exchange} · ${current.symbol} · ${premiumSourceLabel(current.source)}` : "等待查询"}
           tone={tone}

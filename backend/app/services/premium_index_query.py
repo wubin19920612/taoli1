@@ -261,6 +261,8 @@ class PremiumIndexQueryService(PairSpreadQueryService):
     async def current(self, market: PremiumIndexMarketQuery) -> PremiumIndexCurrentSnapshot:
         if market.exchange == "okx":
             return await self._fetch_okx_current_premium(market.symbol)
+        if market.exchange == "bybit":
+            return await self._fetch_bybit_current_premium(market.symbol)
         leg = await self._fetch_current_leg(market.exchange, market.symbol)
         premium = _premium_pct(leg.mark_price, leg.index_price)
         mid_premium = _premium_pct(leg.mid_price, leg.index_price)
@@ -282,6 +284,37 @@ class PremiumIndexQueryService(PairSpreadQueryService):
             funding_rate_upper_pct=leg.funding_rate_upper_pct,
             funding_rate_lower_pct=leg.funding_rate_lower_pct,
             source="mark_index" if premium is not None else "unavailable",
+        )
+
+    async def _fetch_bybit_current_premium(self, symbol: str) -> PremiumIndexCurrentSnapshot:
+        observed_at = utc_now()
+        leg = await self._fetch_bybit_current(symbol)
+        try:
+            points = await self._fetch_bybit_premium(symbol, observed_at - timedelta(minutes=10), observed_at, 1)
+        except Exception:  # noqa: BLE001 - current ticker fields are still useful when official P is unavailable.
+            points = []
+        latest = points[-1] if points else None
+        mark_premium = _premium_pct(leg.mark_price, leg.index_price)
+        mid_premium = _premium_pct(leg.mid_price, leg.index_price)
+        premium = latest.premium_pct if latest is not None else mark_premium
+        return PremiumIndexCurrentSnapshot(
+            observed_at=observed_at,
+            exchange="bybit",
+            symbol=leg.symbol,
+            raw_symbol=leg.raw_symbol,
+            mark_price=leg.mark_price,
+            index_price=leg.index_price,
+            mid_price=leg.mid_price,
+            last_price=leg.last_price,
+            premium_pct=premium,
+            mid_premium_pct=mid_premium,
+            funding_rate_pct=leg.funding_rate_pct,
+            funding_next_rate_pct=leg.funding_next_rate_pct,
+            funding_next_time=leg.funding_next_time,
+            funding_interval_hours=leg.funding_interval_hours,
+            funding_rate_upper_pct=leg.funding_rate_upper_pct,
+            funding_rate_lower_pct=leg.funding_rate_lower_pct,
+            source=latest.source if latest is not None else "mark_index_fallback",
         )
 
     async def _fetch_history_with_warning(
