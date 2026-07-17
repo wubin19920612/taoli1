@@ -27,6 +27,24 @@ type SavedPremiumIndexPreset = PremiumIndexFormValues & {
   savedAt: string;
 };
 
+type FundingFollowEstimate = {
+  intervalHours: number;
+  sampledPoints: number;
+  sampledFrom: string | null;
+  sampledTo: string | null;
+  elapsedHours: number | null;
+  remainingHours: number | null;
+  averagePremiumPct: number | null;
+  currentPremiumPct: number | null;
+  exchangeFundingPct: number | null;
+  estimatedFundingPct: number | null;
+  projectedFundingIfCurrentPremiumPersistsPct: number | null;
+  limitPct: number | null;
+  lowerLimitAveragePremiumPct: number | null;
+  upperLimitAveragePremiumPct: number | null;
+  futureAveragePremiumToExitLimitPct: number | null;
+};
+
 const defaultFormValues: PremiumIndexFormValues = {
   exchange: "binance",
   symbol: "BTC"
@@ -60,6 +78,16 @@ function signedBp(value: number | null | undefined): string {
   return `${bp >= 0 ? "+" : ""}${bp}bp`;
 }
 
+function compactHours(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "-";
+  }
+  if (value < 1) {
+    return `${Math.round(value * 60)}分钟`;
+  }
+  return `${value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}小时`;
+}
+
 function price(value: number | null | undefined): string {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return "-";
@@ -91,6 +119,153 @@ function premiumSourceLabel(source: string | null | undefined): string {
     return "当前标记价锚点";
   }
   return source;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function hoursBetween(start: dayjs.Dayjs, end: dayjs.Dayjs): number {
+  return Math.max(end.diff(start, "second") / 3600, 0);
+}
+
+function nearestFundingIntervalHours(hours: number): number {
+  const candidates = [1, 2, 4, 8];
+  return candidates.reduce((best, candidate) => (
+    Math.abs(candidate - hours) < Math.abs(best - hours) ? candidate : best
+  ), candidates[0]);
+}
+
+function bitgetFundingFromAveragePremiumPct(
+  averagePremiumPct: number | null | undefined,
+  intervalHours: number,
+  limitPct: number | null = null
+): number | null {
+  if (typeof averagePremiumPct !== "number" || !Number.isFinite(averagePremiumPct)) {
+    return null;
+  }
+  const interestPct = 0.01;
+  const dampenerPct = 0.05;
+  const intervalScale = 8 / intervalHours;
+  const uncapped = (
+    averagePremiumPct + clamp(interestPct - averagePremiumPct, -dampenerPct, dampenerPct)
+  ) / intervalScale;
+  return typeof limitPct === "number" && Number.isFinite(limitPct) && limitPct > 0
+    ? clamp(uncapped, -limitPct, limitPct)
+    : uncapped;
+}
+
+function weightedAveragePremiumPct(points: PremiumIndexPoint[], fallbackStepSeconds: number): number | null {
+  const sorted = [...points]
+    .filter((point) => Number.isFinite(point.premium_pct))
+    .sort((a, b) => dayjs.utc(a.bucket_at).valueOf() - dayjs.utc(b.bucket_at).valueOf());
+  if (!sorted.length) {
+    return null;
+  }
+  if (sorted.length === 1) {
+    return sorted[0].premium_pct;
+  }
+  let weightedTotal = 0;
+  let weightTotal = 0;
+  for (let index = 0; index < sorted.length; index += 1) {
+    const currentAt = dayjs.utc(sorted[index].bucket_at);
+    const nextAt = index + 1 < sorted.length ? dayjs.utc(sorted[index + 1].bucket_at) : null;
+    const weight = Math.max(nextAt ? nextAt.diff(currentAt, "second") : fallbackStepSeconds, 1);
+    weightedTotal += sorted[index].premium_pct * weight;
+    weightTotal += weight;
+  }
+  return weightTotal > 0 ? weightedTotal / weightTotal : null;
+}
+
+function likelyFundingLimitPct(fundingPct: number | null | undefined): number | null {
+  if (typeof fundingPct !== "number" || !Number.isFinite(fundingPct)) {
+    return null;
+  }
+  const abs = Math.abs(fundingPct);
+  return abs >= 0.45 ? abs : null;
+}
+
+function buildBitgetFundingFollowEstimate(
+  result: PremiumIndexQueryResult | null,
+  current: PremiumIndexCurrentSnapshot | null,
+  currentPremiumPct: number | null
+): FundingFollowEstimate | null {
+  if (!result || result.exchange !== "bitget" || !current) {
+    return null;
+  }
+  const intervalHours = nearestFundingIntervalHours(result.hours);
+  const observedAt = dayjs.utc(current.observed_at);
+  const nextFundingAt = current.funding_next_time ? dayjs.utc(current.funding_next_time) : null;
+  const fallbackWindowStart = result.first_seen_at ? dayjs.utc(result.first_seen_at) : null;
+  const windowStart = nextFundingAt ? nextFundingAt.subtract(intervalHours, "hour") : fallbackWindowStart;
+  const windowEnd = observedAt;
+  const intervalSeconds = Math.max(result.interval_minutes * 60, 1);
+  const windowPoints = result.points.filter((point) => {
+    const bucketAt = dayjs.utc(point.bucket_at);
+    return (
+      (!windowStart || !bucketAt.isBefore(windowStart)) &&
+      !bucketAt.isAfter(windowEnd)
+    );
+  });
+  const averagePremiumPct = weightedAveragePremiumPct(windowPoints, intervalSeconds);
+  const elapsedHours = windowStart ? Math.min(hoursBetween(windowStart, observedAt), intervalHours) : null;
+  const remainingHours = nextFundingAt ? Math.max(hoursBetween(observedAt, nextFundingAt), 0) : null;
+  const limitPct = likelyFundingLimitPct(current.funding_rate_pct);
+  const estimatedFundingPct = bitgetFundingFromAveragePremiumPct(averagePremiumPct, intervalHours, limitPct);
+  const projectedAveragePremium =
+    typeof averagePremiumPct === "number" &&
+    typeof currentPremiumPct === "number" &&
+    elapsedHours !== null &&
+    remainingHours !== null &&
+    elapsedHours + remainingHours > 0
+      ? (averagePremiumPct * elapsedHours + currentPremiumPct * remainingHours) / (elapsedHours + remainingHours)
+      : null;
+  const projectedFundingIfCurrentPremiumPersistsPct = bitgetFundingFromAveragePremiumPct(
+    projectedAveragePremium,
+    intervalHours,
+    limitPct
+  );
+  const dampenerPct = 0.05;
+  const intervalScale = 8 / intervalHours;
+  const lowerLimitAveragePremiumPct = limitPct !== null ? -limitPct * intervalScale - dampenerPct : null;
+  const upperLimitAveragePremiumPct = limitPct !== null ? limitPct * intervalScale + dampenerPct : null;
+  let futureAveragePremiumToExitLimitPct: number | null = null;
+  if (
+    limitPct !== null &&
+    typeof current.funding_rate_pct === "number" &&
+    typeof averagePremiumPct === "number" &&
+    elapsedHours !== null &&
+    remainingHours !== null &&
+    remainingHours > 0 &&
+    lowerLimitAveragePremiumPct !== null &&
+    upperLimitAveragePremiumPct !== null
+  ) {
+    const exitTarget = current.funding_rate_pct <= -limitPct
+      ? lowerLimitAveragePremiumPct
+      : current.funding_rate_pct >= limitPct
+        ? upperLimitAveragePremiumPct
+        : null;
+    futureAveragePremiumToExitLimitPct = exitTarget !== null
+      ? (exitTarget * intervalHours - averagePremiumPct * elapsedHours) / remainingHours
+      : null;
+  }
+  return {
+    intervalHours,
+    sampledPoints: windowPoints.length,
+    sampledFrom: windowPoints[0]?.bucket_at ?? null,
+    sampledTo: windowPoints[windowPoints.length - 1]?.bucket_at ?? null,
+    elapsedHours,
+    remainingHours,
+    averagePremiumPct,
+    currentPremiumPct,
+    exchangeFundingPct: current.funding_rate_pct,
+    estimatedFundingPct,
+    projectedFundingIfCurrentPremiumPersistsPct,
+    limitPct,
+    lowerLimitAveragePremiumPct,
+    upperLimitAveragePremiumPct,
+    futureAveragePremiumToExitLimitPct
+  };
 }
 
 function clampHours(value: number | null): number {
@@ -499,6 +674,72 @@ function MetricCard({ label, value, sub, tone = "neutral" }: {
   );
 }
 
+function FundingFollowPanel({ estimate }: { estimate: FundingFollowEstimate | null }) {
+  if (!estimate) {
+    return null;
+  }
+  const limitText = estimate.limitPct !== null
+    ? `当前交易所返回值疑似触及 ±${estimate.limitPct.toFixed(4)}% 上下限`
+    : "未检测到明显上下限";
+  const thresholdText = estimate.limitPct !== null
+    ? `触及下限约需平均P ≤ ${signedPct(estimate.lowerLimitAveragePremiumPct)}，触及上限约需平均P ≥ ${signedPct(estimate.upperLimitAveragePremiumPct)}`
+    : "未按上下限截断";
+  const exitLimitText = estimate.futureAveragePremiumToExitLimitPct !== null
+    ? `若想本次结算脱离当前上下限，剩余 ${compactHours(estimate.remainingHours)} 的平均P大约需要达到 ${signedPct(estimate.futureAveragePremiumToExitLimitPct)}`
+    : "当前未处于明显上下限，或剩余时间不足以估算脱离阈值";
+
+  return (
+    <section className="premium-detail-card">
+      <div className="premium-detail-head">
+        <Typography.Title level={5}>资金费跟随估算（Bitget）</Typography.Title>
+        <Tag color="orange">近似</Tag>
+      </div>
+      <Typography.Paragraph type="secondary">
+        按 Bitget 公式近似：资金费率 = [平均P + clamp(利率 - 平均P, -0.05%, 0.05%)] ÷ (8 / N)，再套合约资金费上下限。
+        这里用页面上的“标记价-指数价”偏离近似 P；Bitget 实际还可能使用 5 秒采样和上一结算周期样本平滑，最终以交易所返回值为准。
+      </Typography.Paragraph>
+      <div className="premium-metric-grid">
+        <MetricCard
+          label="估算资金周期"
+          value={`${estimate.intervalHours}h`}
+          sub={`样本 ${estimate.sampledPoints} 点 · ${time(estimate.sampledFrom)} - ${time(estimate.sampledTo)}`}
+        />
+        <MetricCard
+          label="本周期平均P"
+          value={signedPct(estimate.averagePremiumPct)}
+          sub={`已过 ${compactHours(estimate.elapsedHours)} · 剩余 ${compactHours(estimate.remainingHours)}`}
+          tone={typeof estimate.averagePremiumPct === "number" ? (estimate.averagePremiumPct >= 0 ? "positive" : "negative") : "neutral"}
+        />
+        <MetricCard
+          label="当前交易所资金费"
+          value={signedPct(estimate.exchangeFundingPct)}
+          sub={limitText}
+          tone={typeof estimate.exchangeFundingPct === "number" ? (estimate.exchangeFundingPct >= 0 ? "positive" : "negative") : "neutral"}
+        />
+        <MetricCard
+          label="平均P对应估算资金费"
+          value={signedPct(estimate.estimatedFundingPct)}
+          sub={thresholdText}
+          tone={typeof estimate.estimatedFundingPct === "number" ? (estimate.estimatedFundingPct >= 0 ? "positive" : "negative") : "neutral"}
+        />
+        <MetricCard
+          label="若当前P保持到结算"
+          value={signedPct(estimate.projectedFundingIfCurrentPremiumPersistsPct)}
+          sub={`当前P ${signedPct(estimate.currentPremiumPct)} 参与剩余时间加权`}
+          tone={typeof estimate.projectedFundingIfCurrentPremiumPersistsPct === "number" ? (
+            estimate.projectedFundingIfCurrentPremiumPersistsPct >= 0 ? "positive" : "negative"
+          ) : "neutral"}
+        />
+        <MetricCard
+          label="脱离上下限所需P"
+          value={signedPct(estimate.futureAveragePremiumToExitLimitPct)}
+          sub={exitLimitText}
+        />
+      </div>
+    </section>
+  );
+}
+
 const pointColumns: ColumnsType<PremiumIndexPoint> = [
   { title: "时间", dataIndex: "bucket_at", width: 150, render: (value: string) => fullTime(value) },
   { title: "溢价/偏离", dataIndex: "premium_pct", align: "right", render: (value: number) => signedPct(value) },
@@ -620,6 +861,10 @@ export function PremiumIndexPage() {
   const current = result?.current ?? null;
   const currentPremium = current?.premium_pct ?? result?.premium_pct.current ?? null;
   const tone = typeof currentPremium === "number" ? (currentPremium >= 0 ? "positive" : "negative") : "neutral";
+  const fundingFollowEstimate = useMemo(
+    () => buildBitgetFundingFollowEstimate(result, current, currentPremium),
+    [current, currentPremium, result]
+  );
   const premiumDefinitionMessage = current
     ? "当前标记价溢价 = (标记价 - 指数价) / 指数价；资金费率为交易所返回值，不由这个即时偏离直接计算。交易所资金费通常参考整个结算周期的平均 premium、冲击买卖价、利率项和上下限。"
     : "";
@@ -713,6 +958,8 @@ export function PremiumIndexPage() {
           sub={result ? `${time(result.first_seen_at)} - ${time(result.last_seen_at)}` : durationLabel(hours)}
         />
       </section>
+
+      <FundingFollowPanel estimate={fundingFollowEstimate} />
 
       <PremiumIndexChart result={result} />
 
