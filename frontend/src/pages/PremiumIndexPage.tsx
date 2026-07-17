@@ -74,6 +74,25 @@ function price(value: number | null | undefined): string {
   return value.toPrecision(8);
 }
 
+function premiumSourceLabel(source: string | null | undefined): string {
+  if (!source) {
+    return "来源未知";
+  }
+  if (source.includes("mark_index")) {
+    return "标记价-指数价";
+  }
+  if (source.includes("premium_index")) {
+    return "交易所 premium index";
+  }
+  if (source.includes("funding_premium")) {
+    return "资金费 premium 锚点";
+  }
+  if (source.includes("current_anchor")) {
+    return "当前标记价锚点";
+  }
+  return source;
+}
+
 function clampHours(value: number | null): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return 1;
@@ -370,7 +389,7 @@ function PremiumIndexChart({ result }: { result: PremiumIndexQueryResult | null 
 
   return (
     <div className="premium-chart-card">
-      <svg className="premium-index-chart" role="img" aria-label="隐含加权溢价指数曲线" viewBox={`0 0 ${width} ${height}`}>
+      <svg className="premium-index-chart" role="img" aria-label="合约溢价/偏离曲线" viewBox={`0 0 ${width} ${height}`}>
         <defs>
           <linearGradient id="premiumIndexFill" x1="0" x2="0" y1="0" y2="1">
             <stop offset="0%" stopColor="#0f766e" stopOpacity="0.2" />
@@ -426,7 +445,7 @@ function PremiumIndexChart({ result }: { result: PremiumIndexQueryResult | null 
           );
           return (
             <g key={`premium-turn-${point.bucket_at}-${kind}-${index}`} className={`premium-chart-turning premium-chart-turning-${kind}`}>
-              <title>{`${time(point.bucket_at)} 溢价指数 ${signedPct(point.premium_pct, 4)} (${label})`}</title>
+              <title>{`${time(point.bucket_at)} 溢价/偏离 ${signedPct(point.premium_pct, 4)} (${label})`}</title>
               <line className="premium-chart-turning-leader" x1={x} y1={y} x2={labelCenterX} y2={labelCenterY} />
               <circle className="premium-chart-turning-dot" cx={x} cy={y} r="3.5" />
               <rect
@@ -482,10 +501,10 @@ function MetricCard({ label, value, sub, tone = "neutral" }: {
 
 const pointColumns: ColumnsType<PremiumIndexPoint> = [
   { title: "时间", dataIndex: "bucket_at", width: 150, render: (value: string) => fullTime(value) },
-  { title: "溢价指数", dataIndex: "premium_pct", align: "right", render: (value: number) => signedPct(value) },
+  { title: "溢价/偏离", dataIndex: "premium_pct", align: "right", render: (value: number) => signedPct(value) },
   { title: "标记价", dataIndex: "mark_price", align: "right", render: (value: number | null) => price(value) },
   { title: "指数价", dataIndex: "index_price", align: "right", render: (value: number | null) => price(value) },
-  { title: "来源", dataIndex: "source", width: 160, render: (value: string) => <Tag>{value}</Tag> }
+  { title: "来源", dataIndex: "source", width: 180, render: (value: string) => <Tag>{premiumSourceLabel(value)}</Tag> }
 ];
 
 export function PremiumIndexPage() {
@@ -601,11 +620,15 @@ export function PremiumIndexPage() {
   const current = result?.current ?? null;
   const currentPremium = current?.premium_pct ?? result?.premium_pct.current ?? null;
   const tone = typeof currentPremium === "number" ? (currentPremium >= 0 ? "positive" : "negative") : "neutral";
+  const premiumDefinitionMessage = current
+    ? "当前标记价溢价 = (标记价 - 指数价) / 指数价；资金费率为交易所返回值，不由这个即时偏离直接计算。交易所资金费通常参考整个结算周期的平均 premium、冲击买卖价、利率项和上下限。"
+    : "";
 
   return (
     <div className="page premium-index-page">
       {error ? <Alert type="error" message={error} showIcon /> : null}
       {result?.warnings.length ? <Alert type="warning" message={result.warnings.join("；")} showIcon /> : null}
+      {premiumDefinitionMessage ? <Alert type="info" message={premiumDefinitionMessage} showIcon /> : null}
 
       <section className="premium-query-panel">
         <Form form={form} initialValues={defaultFormValues} disabled={loading}>
@@ -671,9 +694,9 @@ export function PremiumIndexPage() {
 
       <section className="premium-metric-grid">
         <MetricCard
-          label="当前隐含溢价指数"
+          label="当前标记价溢价"
           value={signedPct(currentPremium)}
-          sub={current ? `${current.exchange} · ${current.symbol} · ${current.source}` : "等待查询"}
+          sub={current ? `${current.exchange} · ${current.symbol} · ${premiumSourceLabel(current.source)}` : "等待查询"}
           tone={tone}
         />
         <MetricCard label="标记价" value={price(current?.mark_price)} sub="mark price" />
@@ -682,7 +705,7 @@ export function PremiumIndexPage() {
         <MetricCard
           label="资金费率"
           value={signedPct(current?.funding_rate_pct)}
-          sub={current?.funding_next_time ? `下次 ${time(current.funding_next_time)}` : "-"}
+          sub={current?.funding_next_time ? `交易所返回 · 下次 ${time(current.funding_next_time)}` : "交易所返回"}
         />
         <MetricCard
           label="数据窗口"
@@ -695,7 +718,7 @@ export function PremiumIndexPage() {
 
       <section className="premium-detail-card">
         <div className="premium-detail-head">
-          <Typography.Title level={5}>最近溢价指数</Typography.Title>
+          <Typography.Title level={5}>最近溢价/偏离</Typography.Title>
           <Tag>{recentPoints.length} 条</Tag>
         </div>
         <Table<PremiumIndexPoint>
