@@ -38,11 +38,19 @@ type FundingFollowEstimate = {
   currentPremiumPct: number | null;
   exchangeFundingPct: number | null;
   estimatedFundingPct: number | null;
+  projectedAveragePremiumPct: number | null;
   projectedFundingIfCurrentPremiumPersistsPct: number | null;
   limitPct: number | null;
   lowerLimitAveragePremiumPct: number | null;
   upperLimitAveragePremiumPct: number | null;
   futureAveragePremiumToExitLimitPct: number | null;
+};
+
+type WeightedPremiumStats = {
+  averagePremiumPct: number | null;
+  weightedTotal: number;
+  weightTotal: number;
+  sampleCount: number;
 };
 
 const defaultFormValues: PremiumIndexFormValues = {
@@ -155,26 +163,33 @@ function bitgetFundingFromAveragePremiumPct(
     : uncapped;
 }
 
-function weightedAveragePremiumPct(points: PremiumIndexPoint[], fallbackStepSeconds: number): number | null {
+function sumConsecutiveWeights(start: number, count: number): number {
+  if (count <= 0) {
+    return 0;
+  }
+  return (count * (2 * start + count - 1)) / 2;
+}
+
+function bitgetWeightedPremiumStats(points: PremiumIndexPoint[]): WeightedPremiumStats {
   const sorted = [...points]
     .filter((point) => Number.isFinite(point.premium_pct))
     .sort((a, b) => dayjs.utc(a.bucket_at).valueOf() - dayjs.utc(b.bucket_at).valueOf());
   if (!sorted.length) {
-    return null;
-  }
-  if (sorted.length === 1) {
-    return sorted[0].premium_pct;
+    return { averagePremiumPct: null, weightedTotal: 0, weightTotal: 0, sampleCount: 0 };
   }
   let weightedTotal = 0;
   let weightTotal = 0;
   for (let index = 0; index < sorted.length; index += 1) {
-    const currentAt = dayjs.utc(sorted[index].bucket_at);
-    const nextAt = index + 1 < sorted.length ? dayjs.utc(sorted[index + 1].bucket_at) : null;
-    const weight = Math.max(nextAt ? nextAt.diff(currentAt, "second") : fallbackStepSeconds, 1);
+    const weight = index + 1;
     weightedTotal += sorted[index].premium_pct * weight;
     weightTotal += weight;
   }
-  return weightTotal > 0 ? weightedTotal / weightTotal : null;
+  return {
+    averagePremiumPct: weightTotal > 0 ? weightedTotal / weightTotal : null,
+    weightedTotal,
+    weightTotal,
+    sampleCount: sorted.length
+  };
 }
 
 function likelyFundingLimitPct(fundingPct: number | null | undefined): number | null {
@@ -199,7 +214,6 @@ function buildBitgetFundingFollowEstimate(
   const fallbackWindowStart = result.first_seen_at ? dayjs.utc(result.first_seen_at) : null;
   const windowStart = nextFundingAt ? nextFundingAt.subtract(intervalHours, "hour") : fallbackWindowStart;
   const windowEnd = observedAt;
-  const intervalSeconds = Math.max(result.interval_minutes * 60, 1);
   const windowPoints = result.points.filter((point) => {
     const bucketAt = dayjs.utc(point.bucket_at);
     return (
@@ -207,18 +221,23 @@ function buildBitgetFundingFollowEstimate(
       !bucketAt.isAfter(windowEnd)
     );
   });
-  const averagePremiumPct = weightedAveragePremiumPct(windowPoints, intervalSeconds);
+  const weightedStats = bitgetWeightedPremiumStats(windowPoints);
+  const averagePremiumPct = weightedStats.averagePremiumPct;
   const elapsedHours = windowStart ? Math.min(hoursBetween(windowStart, observedAt), intervalHours) : null;
   const remainingHours = nextFundingAt ? Math.max(hoursBetween(observedAt, nextFundingAt), 0) : null;
   const limitPct = likelyFundingLimitPct(current.funding_rate_pct);
   const estimatedFundingPct = bitgetFundingFromAveragePremiumPct(averagePremiumPct, intervalHours, limitPct);
+  const remainingSampleCount = remainingHours !== null
+    ? Math.max(Math.round((remainingHours * 60) / Math.max(result.interval_minutes, 1)), 0)
+    : 0;
+  const futureWeightTotal = sumConsecutiveWeights(weightedStats.sampleCount + 1, remainingSampleCount);
   const projectedAveragePremium =
     typeof averagePremiumPct === "number" &&
     typeof currentPremiumPct === "number" &&
-    elapsedHours !== null &&
-    remainingHours !== null &&
-    elapsedHours + remainingHours > 0
-      ? (averagePremiumPct * elapsedHours + currentPremiumPct * remainingHours) / (elapsedHours + remainingHours)
+    weightedStats.weightTotal + futureWeightTotal > 0
+      ? (weightedStats.weightedTotal + currentPremiumPct * futureWeightTotal) / (
+        weightedStats.weightTotal + futureWeightTotal
+      )
       : null;
   const projectedFundingIfCurrentPremiumPersistsPct = bitgetFundingFromAveragePremiumPct(
     projectedAveragePremium,
@@ -233,10 +252,8 @@ function buildBitgetFundingFollowEstimate(
   if (
     limitPct !== null &&
     typeof current.funding_rate_pct === "number" &&
-    typeof averagePremiumPct === "number" &&
-    elapsedHours !== null &&
-    remainingHours !== null &&
-    remainingHours > 0 &&
+    weightedStats.weightTotal > 0 &&
+    futureWeightTotal > 0 &&
     lowerLimitAveragePremiumPct !== null &&
     upperLimitAveragePremiumPct !== null
   ) {
@@ -246,7 +263,9 @@ function buildBitgetFundingFollowEstimate(
         ? upperLimitAveragePremiumPct
         : null;
     futureAveragePremiumToExitLimitPct = exitTarget !== null
-      ? (exitTarget * intervalHours - averagePremiumPct * elapsedHours) / remainingHours
+      ? (
+        exitTarget * (weightedStats.weightTotal + futureWeightTotal) - weightedStats.weightedTotal
+      ) / futureWeightTotal
       : null;
   }
   return {
@@ -260,6 +279,7 @@ function buildBitgetFundingFollowEstimate(
     currentPremiumPct,
     exchangeFundingPct: current.funding_rate_pct,
     estimatedFundingPct,
+    projectedAveragePremiumPct: projectedAveragePremium,
     projectedFundingIfCurrentPremiumPersistsPct,
     limitPct,
     lowerLimitAveragePremiumPct,
@@ -695,7 +715,7 @@ function FundingFollowPanel({ estimate }: { estimate: FundingFollowEstimate | nu
         <Tag color="orange">近似</Tag>
       </div>
       <Typography.Paragraph type="secondary">
-        按 Bitget 公式近似：资金费率 = [平均P + clamp(利率 - 平均P, -0.05%, 0.05%)] ÷ (8 / N)，再套合约资金费上下限。
+        按 Bitget 公式近似：平均P = (P1×1 + P2×2 + ... + Pn×n) / (1 + 2 + ... + n)，资金费率 = [平均P + clamp(利率 - 平均P, -0.05%, 0.05%)] ÷ (8 / N)，再套合约资金费上下限。
         这里用页面上的“标记价-指数价”偏离近似 P；Bitget 实际还可能使用 5 秒采样和上一结算周期样本平滑，最终以交易所返回值为准。
       </Typography.Paragraph>
       <div className="premium-metric-grid">
@@ -707,7 +727,7 @@ function FundingFollowPanel({ estimate }: { estimate: FundingFollowEstimate | nu
         <MetricCard
           label="本周期平均P"
           value={signedPct(estimate.averagePremiumPct)}
-          sub={`已过 ${compactHours(estimate.elapsedHours)} · 剩余 ${compactHours(estimate.remainingHours)}`}
+          sub={`递增权重 · 已过 ${compactHours(estimate.elapsedHours)} · 剩余 ${compactHours(estimate.remainingHours)}`}
           tone={typeof estimate.averagePremiumPct === "number" ? (estimate.averagePremiumPct >= 0 ? "positive" : "negative") : "neutral"}
         />
         <MetricCard
@@ -725,7 +745,7 @@ function FundingFollowPanel({ estimate }: { estimate: FundingFollowEstimate | nu
         <MetricCard
           label="若当前P保持到结算"
           value={signedPct(estimate.projectedFundingIfCurrentPremiumPersistsPct)}
-          sub={`当前P ${signedPct(estimate.currentPremiumPct)} 参与剩余时间加权`}
+          sub={`结算平均P约 ${signedPct(estimate.projectedAveragePremiumPct)} · 当前P ${signedPct(estimate.currentPremiumPct)} 继续加权`}
           tone={typeof estimate.projectedFundingIfCurrentPremiumPersistsPct === "number" ? (
             estimate.projectedFundingIfCurrentPremiumPersistsPct >= 0 ? "positive" : "negative"
           ) : "neutral"}
