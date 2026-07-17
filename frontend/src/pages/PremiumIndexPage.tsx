@@ -36,6 +36,9 @@ type FundingFollowEstimate = {
   remainingHours: number | null;
   averagePremiumPct: number | null;
   currentPremiumPct: number | null;
+  remainingPremiumAssumptionPct: number | null;
+  remainingPremiumSampleCount: number;
+  remainingPremiumWindowMinutes: number;
   exchangeFundingPct: number | null;
   estimatedFundingPct: number | null;
   projectedAveragePremiumPct: number | null;
@@ -51,6 +54,12 @@ type WeightedPremiumStats = {
   weightedTotal: number;
   weightTotal: number;
   sampleCount: number;
+};
+
+type RecentPremiumAssumption = {
+  premiumPct: number | null;
+  sampleCount: number;
+  windowMinutes: number;
 };
 
 const defaultFormValues: PremiumIndexFormValues = {
@@ -192,6 +201,30 @@ function bitgetWeightedPremiumStats(points: PremiumIndexPoint[]): WeightedPremiu
   };
 }
 
+function recentPremiumAssumption(
+  points: PremiumIndexPoint[],
+  observedAt: dayjs.Dayjs,
+  intervalMinutes: number
+): RecentPremiumAssumption {
+  const sorted = [...points]
+    .filter((point) => Number.isFinite(point.premium_pct) && !dayjs.utc(point.bucket_at).isAfter(observedAt))
+    .sort((a, b) => dayjs.utc(a.bucket_at).valueOf() - dayjs.utc(b.bucket_at).valueOf());
+  const windowMinutes = Math.max(15, Math.min(60, intervalMinutes * 10));
+  const windowStart = observedAt.subtract(windowMinutes, "minute");
+  let recent = sorted.filter((point) => !dayjs.utc(point.bucket_at).isBefore(windowStart));
+  if (recent.length < 3) {
+    recent = sorted.slice(-Math.min(10, sorted.length));
+  } else if (recent.length > 30) {
+    recent = recent.slice(-30);
+  }
+  const values = recent.map((point) => point.premium_pct);
+  return {
+    premiumPct: values.length ? values.reduce((total, value) => total + value, 0) / values.length : null,
+    sampleCount: values.length,
+    windowMinutes
+  };
+}
+
 function likelyFundingLimitPct(fundingPct: number | null | undefined): number | null {
   if (typeof fundingPct !== "number" || !Number.isFinite(fundingPct)) {
     return null;
@@ -227,15 +260,17 @@ function buildBitgetFundingFollowEstimate(
   const remainingHours = nextFundingAt ? Math.max(hoursBetween(observedAt, nextFundingAt), 0) : null;
   const limitPct = likelyFundingLimitPct(current.funding_rate_pct);
   const estimatedFundingPct = bitgetFundingFromAveragePremiumPct(averagePremiumPct, intervalHours, limitPct);
+  const assumption = recentPremiumAssumption(windowPoints, observedAt, result.interval_minutes);
+  const remainingPremiumAssumptionPct = assumption.premiumPct ?? currentPremiumPct;
   const remainingSampleCount = remainingHours !== null
     ? Math.max(Math.round((remainingHours * 60) / Math.max(result.interval_minutes, 1)), 0)
     : 0;
   const futureWeightTotal = sumConsecutiveWeights(weightedStats.sampleCount + 1, remainingSampleCount);
   const projectedAveragePremium =
     typeof averagePremiumPct === "number" &&
-    typeof currentPremiumPct === "number" &&
+    typeof remainingPremiumAssumptionPct === "number" &&
     weightedStats.weightTotal + futureWeightTotal > 0
-      ? (weightedStats.weightedTotal + currentPremiumPct * futureWeightTotal) / (
+      ? (weightedStats.weightedTotal + remainingPremiumAssumptionPct * futureWeightTotal) / (
         weightedStats.weightTotal + futureWeightTotal
       )
       : null;
@@ -277,6 +312,9 @@ function buildBitgetFundingFollowEstimate(
     remainingHours,
     averagePremiumPct,
     currentPremiumPct,
+    remainingPremiumAssumptionPct,
+    remainingPremiumSampleCount: assumption.sampleCount,
+    remainingPremiumWindowMinutes: assumption.windowMinutes,
     exchangeFundingPct: current.funding_rate_pct,
     estimatedFundingPct,
     projectedAveragePremiumPct: projectedAveragePremium,
@@ -716,7 +754,7 @@ function FundingFollowPanel({ estimate }: { estimate: FundingFollowEstimate | nu
       </div>
       <Typography.Paragraph type="secondary">
         按 Bitget 公式近似：平均P = (P1×1 + P2×2 + ... + Pn×n) / (1 + 2 + ... + n)，资金费率 = [平均P + clamp(利率 - 平均P, -0.05%, 0.05%)] ÷ (8 / N)，再套合约资金费上下限。
-        这里用页面上的“标记价-指数价”偏离近似 P；Bitget 实际还可能使用 5 秒采样和上一结算周期样本平滑，最终以交易所返回值为准。
+        这里用页面上的“标记价-指数价”偏离近似 P；剩余时间默认按近期稳定P均值继续估算，避免被最后一个点的小波动牵着跳。Bitget 实际还可能使用 5 秒采样和上一结算周期样本平滑，最终以交易所返回值为准。
       </Typography.Paragraph>
       <div className="premium-metric-grid">
         <MetricCard
@@ -731,24 +769,30 @@ function FundingFollowPanel({ estimate }: { estimate: FundingFollowEstimate | nu
           tone={typeof estimate.averagePremiumPct === "number" ? (estimate.averagePremiumPct >= 0 ? "positive" : "negative") : "neutral"}
         />
         <MetricCard
+          label="剩余P假设"
+          value={signedPct(estimate.remainingPremiumAssumptionPct)}
+          sub={`近${estimate.remainingPremiumWindowMinutes}分钟 ${estimate.remainingPremiumSampleCount}点均值 · 当前P ${signedPct(estimate.currentPremiumPct)}`}
+          tone={typeof estimate.remainingPremiumAssumptionPct === "number" ? (estimate.remainingPremiumAssumptionPct >= 0 ? "positive" : "negative") : "neutral"}
+        />
+        <MetricCard
+          label="预计结算资金费"
+          value={signedPct(estimate.projectedFundingIfCurrentPremiumPersistsPct)}
+          sub={`预计结算平均P ${signedPct(estimate.projectedAveragePremiumPct)} · 剩余P按稳定均值加权`}
+          tone={typeof estimate.projectedFundingIfCurrentPremiumPersistsPct === "number" ? (
+            estimate.projectedFundingIfCurrentPremiumPersistsPct >= 0 ? "positive" : "negative"
+          ) : "neutral"}
+        />
+        <MetricCard
           label="当前交易所资金费"
           value={signedPct(estimate.exchangeFundingPct)}
           sub={limitText}
           tone={typeof estimate.exchangeFundingPct === "number" ? (estimate.exchangeFundingPct >= 0 ? "positive" : "negative") : "neutral"}
         />
         <MetricCard
-          label="平均P对应估算资金费"
+          label="截至当前累计估算"
           value={signedPct(estimate.estimatedFundingPct)}
-          sub={thresholdText}
+          sub={`只看已发生平均P，非结算预测 · ${thresholdText}`}
           tone={typeof estimate.estimatedFundingPct === "number" ? (estimate.estimatedFundingPct >= 0 ? "positive" : "negative") : "neutral"}
-        />
-        <MetricCard
-          label="若当前P保持到结算"
-          value={signedPct(estimate.projectedFundingIfCurrentPremiumPersistsPct)}
-          sub={`结算平均P约 ${signedPct(estimate.projectedAveragePremiumPct)} · 当前P ${signedPct(estimate.currentPremiumPct)} 继续加权`}
-          tone={typeof estimate.projectedFundingIfCurrentPremiumPersistsPct === "number" ? (
-            estimate.projectedFundingIfCurrentPremiumPersistsPct >= 0 ? "positive" : "negative"
-          ) : "neutral"}
         />
         <MetricCard
           label="脱离上下限所需P"
