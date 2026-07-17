@@ -954,6 +954,7 @@ export function SettingsPage() {
               pagination={false}
               size="small"
               tableLayout="fixed"
+              scroll={{ x: 920 }}
             />
           </div>
           <Button type="primary" htmlType="submit" icon={<SaveOutlined />}>
@@ -1137,6 +1138,7 @@ export function SettingsPage() {
           rowKey={(row) => row.id ?? row.name}
           pagination={false}
           size="middle"
+          scroll={{ x: 980 }}
         />
       </section>
       <PhonePriceAlertsPanel />

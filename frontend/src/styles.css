@@ -4,12 +4,14 @@
 
 body {
   margin: 0;
+  min-width: 0;
   color: #172026;
   background: #eef3f1;
 }
 
 .app-shell {
   min-height: 100vh;
+  min-width: 0;
 }
 
 .app-shell .ant-layout {
@@ -48,8 +50,10 @@ body {
 
 .app-content {
   min-width: 0;
+  max-width: 100vw;
   padding: 16px;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: visible;
 }
 
 .page-loading {
@@ -63,10 +67,12 @@ body {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-width: 0;
 }
 
 .toolbar {
   width: 100%;
+  min-width: 0;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -84,10 +90,23 @@ body {
 
 .toolbar-actions {
   flex: 0 0 auto;
+  min-width: 0;
+  max-width: 100%;
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.toolbar-controls.ant-space,
+.toolbar-actions .ant-space {
+  max-width: 100%;
+}
+
+.toolbar-controls .ant-space-item,
+.toolbar-actions .ant-space-item {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .symbol-input {
@@ -129,6 +148,7 @@ body {
 
 .metric-row {
   padding: 12px;
+  min-width: 0;
   background: #ffffff;
   border: 1px solid #dce4e1;
   border-radius: 6px;
@@ -170,10 +190,28 @@ body {
 }
 
 .opportunity-table {
+  min-width: 0;
   background: #ffffff;
   border: 1px solid #dce4e1;
   border-radius: 6px;
   overflow: hidden;
+}
+
+.ant-table-wrapper {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.ant-table {
+  min-width: 0;
+}
+
+.ant-table-content {
+  overflow-x: auto;
+}
+
+.ant-table-cell {
+  overflow-wrap: anywhere;
 }
 
 .opportunity-table .ant-table-cell {
@@ -248,10 +286,12 @@ body {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
   align-items: start;
+  min-width: 0;
 }
 
 .panel {
   padding: 14px;
+  min-width: 0;
   background: #ffffff;
   border: 1px solid #dce4e1;
   border-radius: 6px;
@@ -2339,6 +2379,118 @@ body {
   border-left-color: #dc2626;
 }
 
+@media (max-width: 1200px) {
+  .app-content {
+    padding: 12px;
+  }
+
+  .toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .toolbar-controls,
+  .toolbar-actions,
+  .toolbar-actions .ant-space {
+    width: 100%;
+  }
+
+  .toolbar-actions,
+  .toolbar-actions .ant-space {
+    justify-content: flex-start;
+  }
+
+  .settings-grid,
+  .research-grid,
+  .pair-monitor-layout,
+  .pair-monitor-tables,
+  .pair-detail-grid,
+  .template-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .funding-metrics,
+  .radar-metrics,
+  .tradfi-metrics,
+  .research-metrics,
+  .pair-monitor-stats,
+  .pair-metric-grid,
+  .premium-metric-grid,
+  .spread-history-stats,
+  .live-pilot-metrics,
+  .gate-market-grid {
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  }
+
+  .funding-settings-grid,
+  .radar-settings-grid,
+  .announcements-settings-grid,
+  .pair-monitor-form-grid,
+  .gate-twap-form,
+  .template-options {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .pair-query-bar,
+  .premium-query-bar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .pair-query-actions,
+  .premium-query-actions {
+    grid-column: 1 / -1;
+  }
+
+  .research-toolbar-grid,
+  .research-expanded-row,
+  .radar-expanded-row,
+  .funding-expanded-row,
+  .tradfi-expanded-row {
+    grid-template-columns: 1fr;
+  }
+
+  .radar-expanded-row,
+  .funding-expanded-row,
+  .tradfi-expanded-row,
+  .research-expanded-row,
+  .gate-job-events {
+    padding-left: 12px;
+  }
+
+  .research-panel-head,
+  .pair-monitor-detail-head,
+  .pair-detail-head,
+  .pair-price-head,
+  .pair-premium-head,
+  .premium-detail-head,
+  .spread-history-head,
+  .announcements-settings-head,
+  .index-component-watch-head,
+  .index-component-market-head,
+  .gate-plan-head,
+  .live-pilot-preview-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .pair-premium-summary,
+  .premium-footer-tags {
+    justify-content: flex-start;
+  }
+
+  .index-component-market-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .gate-job-event {
+    grid-template-columns: minmax(120px, 0.45fr) minmax(0, 1fr);
+  }
+
+  .gate-job-event .ant-typography:last-child {
+    grid-column: 1 / -1;
+  }
+}
+
 @media (max-width: 900px) {
   .settings-grid,
   .form-grid,
@@ -2460,9 +2612,67 @@ body {
 }
 
 @media (max-width: 600px) {
+  .app-header {
+    padding: 0 12px;
+  }
+
+  .app-header .ant-typography {
+    font-size: 18px;
+  }
+
+  .app-content {
+    padding: 8px;
+  }
+
+  .panel,
+  .metric-row,
+  .toolbar {
+    padding: 10px;
+  }
+
+  .toolbar-actions,
+  .toolbar-actions .ant-space,
+  .toolbar-actions .ant-btn,
+  .service-control-actions .ant-btn {
+    width: 100%;
+  }
+
+  .toolbar-controls.ant-space {
+    width: 100%;
+  }
+
+  .toolbar-controls .ant-space-item,
+  .toolbar-controls .ant-segmented,
+  .toolbar-controls .ant-select,
+  .toolbar-controls .ant-input,
+  .toolbar-controls .ant-input-number,
+  .toolbar-controls .ant-input-number-affix-wrapper {
+    width: 100%;
+  }
+
+  .ant-pagination {
+    justify-content: flex-start;
+  }
+
+  .ant-modal {
+    max-width: calc(100vw - 16px);
+  }
+
   .pair-query-bar,
   .premium-query-bar {
     grid-template-columns: 1fr;
+  }
+
+  .pair-query-actions,
+  .premium-query-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .pair-query-actions .ant-btn,
+  .premium-query-actions .ant-btn,
+  .index-component-watch-add,
+  .index-component-watch-add .ant-btn {
+    width: 100%;
   }
 
   .pair-query-options {

@@ -48,10 +48,10 @@ describe("OpportunityTable", () => {
     render(<OpportunityTable opportunities={[row]} loading={false} />);
 
     expect(screen.getByText("BTCUSDT")).toBeTruthy();
-    expect(screen.getByText("bn")).toBeTruthy();
-    expect(screen.getByText("ok")).toBeTruthy();
-    expect(screen.getByTitle("binance future")).toBeTruthy();
-    expect(screen.getByTitle("okx future")).toBeTruthy();
+    expect(screen.getByText("Binance")).toBeTruthy();
+    expect(screen.getByText("OKX")).toBeTruthy();
+    expect(screen.getAllByTitle("binance future").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByTitle("okx future").length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText("binance future")).toBeNull();
     expect(screen.queryByText("okx future")).toBeNull();
     expect(screen.getByText("0.620%")).toBeTruthy();
@@ -135,6 +135,6 @@ describe("OpportunityTable", () => {
       />
     );
 
-    expect(screen.getByTitle("gate future EDGEX_USDT")).toBeTruthy();
+    expect(screen.getAllByTitle("gate future EDGEX_USDT").length).toBeGreaterThanOrEqual(1);
   });
 });

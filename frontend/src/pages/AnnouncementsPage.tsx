@@ -514,6 +514,7 @@ export function AnnouncementsPage() {
         loading={loading}
         size="middle"
         tableLayout="fixed"
+        scroll={{ x: 1280 }}
         expandable={{
           expandedRowRender: announcementDetails,
           rowExpandable: () => true

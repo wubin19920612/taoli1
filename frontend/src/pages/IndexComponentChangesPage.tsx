@@ -685,6 +685,7 @@ export function IndexComponentChangesPage() {
         loading={loading}
         size="middle"
         tableLayout="fixed"
+        scroll={{ x: 980 }}
       />
     </div>
   );

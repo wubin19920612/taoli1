@@ -641,6 +641,7 @@ export function FundingArbitragePage() {
                   pagination={{ pageSize: 12 }}
                   dataSource={historyStats.points.slice(0, 80)}
                   columns={historyColumns}
+                  scroll={{ x: 760 }}
                 />
               </>
             ) : null}

@@ -99,7 +99,7 @@ export function AppShell() {
 
   return (
     <Layout className="app-shell">
-      <Layout.Sider breakpoint="lg" collapsedWidth={0} width={216} className="app-sider">
+      <Layout.Sider breakpoint="xl" collapsedWidth={0} width={216} className="app-sider">
         <div className="brand">
           <Space>
             <AlertOutlined />
