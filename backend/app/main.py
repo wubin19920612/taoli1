@@ -730,6 +730,7 @@ def create_app(
             admin_prefix=app_settings.astro_admin_prefix,
             api_key=app_settings.astro_api_key,
             verify_tls=app_settings.astro_verify_tls,
+            ca_bundle=app_settings.astro_ca_bundle,
             timeout_seconds=app_settings.astro_request_timeout_seconds,
         )
     )

@@ -615,6 +615,8 @@ export interface AstroSdkStatus {
   base_url: string;
   admin_prefix: string;
   api_key_configured: boolean;
+  verify_tls: boolean;
+  ca_bundle_configured: boolean;
   list_path: string;
   pair_path: string;
   message_path: string;

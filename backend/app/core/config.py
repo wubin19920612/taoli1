@@ -43,6 +43,7 @@ class Settings:
     astro_admin_prefix: str = ""
     astro_api_key: str = ""
     astro_verify_tls: bool = True
+    astro_ca_bundle: str = ""
     astro_dry_run_only: bool = True
     astro_alert_auto_create: bool = False
     astro_manual_card_create: bool = False
@@ -190,6 +191,7 @@ def get_settings() -> Settings:
         astro_admin_prefix=os.getenv("ASTRO_ADMIN_PREFIX", "").strip(),
         astro_api_key=os.getenv("ASTRO_API_KEY", "").strip(),
         astro_verify_tls=bool_env("ASTRO_VERIFY_TLS", True),
+        astro_ca_bundle=os.getenv("ASTRO_CA_BUNDLE", "").strip(),
         astro_dry_run_only=bool_env("ASTRO_DRY_RUN_ONLY", True),
         astro_alert_auto_create=bool_env("ASTRO_ALERT_AUTO_CREATE", False),
         astro_manual_card_create=bool_env("ASTRO_MANUAL_CARD_CREATE", False),

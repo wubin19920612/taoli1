@@ -528,6 +528,9 @@ export function SettingsPage() {
   const astroRuntimeWarnings = [
     astroStatus?.dry_run_only ? "Astro dry-run 当前开启，保存配置后仍不会写入实盘卡片。" : "",
     astroStatus && !astroStatus.configured ? "Astro SDK 未配置，无法提交卡片。" : "",
+    astroStatus && astroStatus.configured && !astroStatus.verify_tls
+      ? "Astro TLS 证书校验已关闭，仅建议用于可信内网或临时排障。"
+      : "",
     astroStatusError ? `Astro 状态读取失败：${astroStatusError}` : ""
   ].filter(Boolean);
 
