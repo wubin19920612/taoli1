@@ -87,6 +87,9 @@ class PairSpreadCurrentLeg(BaseModel):
     funding_rate_pct: float | None = None
     funding_next_rate_pct: float | None = None
     funding_next_time: datetime | None = None
+    funding_interval_hours: float | None = Field(default=None, gt=0)
+    funding_rate_upper_pct: float | None = None
+    funding_rate_lower_pct: float | None = None
     timestamp: datetime
 
 

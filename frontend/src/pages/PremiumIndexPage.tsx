@@ -28,6 +28,12 @@ type SavedPremiumIndexPreset = PremiumIndexFormValues & {
 };
 
 type FundingFollowEstimate = {
+  exchange: "bitget" | "bybit";
+  title: string;
+  formulaNote: string;
+  basisNote: string;
+  limitNote: string;
+  intervalSource: string;
   intervalHours: number;
   sampledPoints: number;
   sampledFrom: string | null;
@@ -44,6 +50,8 @@ type FundingFollowEstimate = {
   projectedAveragePremiumPct: number | null;
   projectedFundingIfCurrentPremiumPersistsPct: number | null;
   limitPct: number | null;
+  lowerFundingLimitPct: number | null;
+  upperFundingLimitPct: number | null;
   lowerLimitAveragePremiumPct: number | null;
   upperLimitAveragePremiumPct: number | null;
   futureAveragePremiumToExitLimitPct: number | null;
@@ -172,6 +180,27 @@ function bitgetFundingFromAveragePremiumPct(
     : uncapped;
 }
 
+function bybitFundingFromAveragePremiumPct(
+  averagePremiumPct: number | null | undefined,
+  intervalHours: number,
+  lowerLimitPct: number | null = null,
+  upperLimitPct: number | null = null
+): number | null {
+  if (typeof averagePremiumPct !== "number" || !Number.isFinite(averagePremiumPct)) {
+    return null;
+  }
+  const interestPct = 0.03 / (24 / intervalHours);
+  const dampenerPct = 0.05;
+  const uncapped = averagePremiumPct + clamp(interestPct - averagePremiumPct, -dampenerPct, dampenerPct);
+  const withLowerLimit =
+    typeof lowerLimitPct === "number" && Number.isFinite(lowerLimitPct)
+      ? Math.max(uncapped, lowerLimitPct)
+      : uncapped;
+  return typeof upperLimitPct === "number" && Number.isFinite(upperLimitPct)
+    ? Math.min(withLowerLimit, upperLimitPct)
+    : withLowerLimit;
+}
+
 function sumConsecutiveWeights(start: number, count: number): number {
   if (count <= 0) {
     return 0;
@@ -233,15 +262,19 @@ function likelyFundingLimitPct(fundingPct: number | null | undefined): number | 
   return abs >= 0.45 ? abs : null;
 }
 
-function buildBitgetFundingFollowEstimate(
+function buildFundingFollowEstimate(
   result: PremiumIndexQueryResult | null,
   current: PremiumIndexCurrentSnapshot | null,
   currentPremiumPct: number | null
 ): FundingFollowEstimate | null {
-  if (!result || result.exchange !== "bitget" || !current) {
+  if (!result || !current || !["bitget", "bybit"].includes(result.exchange)) {
     return null;
   }
-  const intervalHours = nearestFundingIntervalHours(result.hours);
+  const exchange = result.exchange as "bitget" | "bybit";
+  const intervalHours = current.funding_interval_hours ?? nearestFundingIntervalHours(result.hours);
+  const intervalSource = current.funding_interval_hours
+    ? "交易所 fundingInterval"
+    : "未取到交易所周期，按查询窗口近似";
   const observedAt = dayjs.utc(current.observed_at);
   const nextFundingAt = current.funding_next_time ? dayjs.utc(current.funding_next_time) : null;
   const fallbackWindowStart = result.first_seen_at ? dayjs.utc(result.first_seen_at) : null;
@@ -258,10 +291,35 @@ function buildBitgetFundingFollowEstimate(
   const averagePremiumPct = weightedStats.averagePremiumPct;
   const elapsedHours = windowStart ? Math.min(hoursBetween(windowStart, observedAt), intervalHours) : null;
   const remainingHours = nextFundingAt ? Math.max(hoursBetween(observedAt, nextFundingAt), 0) : null;
-  const limitPct = likelyFundingLimitPct(current.funding_rate_pct);
-  const estimatedFundingPct = bitgetFundingFromAveragePremiumPct(averagePremiumPct, intervalHours, limitPct);
+  const limitPct = exchange === "bitget" ? likelyFundingLimitPct(current.funding_rate_pct) : null;
+  const explicitLowerLimitPct =
+    exchange === "bybit" &&
+    typeof current.funding_rate_lower_pct === "number" &&
+    Number.isFinite(current.funding_rate_lower_pct)
+      ? current.funding_rate_lower_pct
+      : null;
+  const explicitUpperLimitPct =
+    exchange === "bybit" &&
+    typeof current.funding_rate_upper_pct === "number" &&
+    Number.isFinite(current.funding_rate_upper_pct)
+      ? current.funding_rate_upper_pct
+      : null;
+  const lowerFundingLimitPct = exchange === "bitget" && limitPct !== null ? -limitPct : explicitLowerLimitPct;
+  const upperFundingLimitPct = exchange === "bitget" && limitPct !== null ? limitPct : explicitUpperLimitPct;
+  const fundingFormula = (premiumPct: number | null | undefined) => (
+    exchange === "bitget"
+      ? bitgetFundingFromAveragePremiumPct(premiumPct, intervalHours, limitPct)
+      : bybitFundingFromAveragePremiumPct(
+        premiumPct,
+        intervalHours,
+        explicitLowerLimitPct,
+        explicitUpperLimitPct
+      )
+  );
+  const estimatedFundingPct = fundingFormula(averagePremiumPct);
   const assumption = recentPremiumAssumption(windowPoints, observedAt, result.interval_minutes);
-  const remainingPremiumAssumptionPct = assumption.premiumPct ?? currentPremiumPct;
+  const latestPremiumPct = windowPoints[windowPoints.length - 1]?.premium_pct ?? currentPremiumPct;
+  const remainingPremiumAssumptionPct = assumption.premiumPct ?? latestPremiumPct;
   const remainingSampleCount = remainingHours !== null
     ? Math.max(Math.round((remainingHours * 60) / Math.max(result.interval_minutes, 1)), 0)
     : 0;
@@ -274,27 +332,34 @@ function buildBitgetFundingFollowEstimate(
         weightedStats.weightTotal + futureWeightTotal
       )
       : null;
-  const projectedFundingIfCurrentPremiumPersistsPct = bitgetFundingFromAveragePremiumPct(
-    projectedAveragePremium,
-    intervalHours,
-    limitPct
-  );
+  const projectedFundingIfCurrentPremiumPersistsPct = fundingFormula(projectedAveragePremium);
   const dampenerPct = 0.05;
   const intervalScale = 8 / intervalHours;
-  const lowerLimitAveragePremiumPct = limitPct !== null ? -limitPct * intervalScale - dampenerPct : null;
-  const upperLimitAveragePremiumPct = limitPct !== null ? limitPct * intervalScale + dampenerPct : null;
+  const lowerLimitAveragePremiumPct =
+    exchange === "bitget" && limitPct !== null
+      ? -limitPct * intervalScale - dampenerPct
+      : exchange === "bybit" && explicitLowerLimitPct !== null
+        ? explicitLowerLimitPct - dampenerPct
+        : null;
+  const upperLimitAveragePremiumPct =
+    exchange === "bitget" && limitPct !== null
+      ? limitPct * intervalScale + dampenerPct
+      : exchange === "bybit" && explicitUpperLimitPct !== null
+        ? explicitUpperLimitPct + dampenerPct
+        : null;
   let futureAveragePremiumToExitLimitPct: number | null = null;
   if (
-    limitPct !== null &&
+    lowerFundingLimitPct !== null &&
+    upperFundingLimitPct !== null &&
     typeof current.funding_rate_pct === "number" &&
     weightedStats.weightTotal > 0 &&
     futureWeightTotal > 0 &&
     lowerLimitAveragePremiumPct !== null &&
     upperLimitAveragePremiumPct !== null
   ) {
-    const exitTarget = current.funding_rate_pct <= -limitPct
+    const exitTarget = current.funding_rate_pct <= lowerFundingLimitPct
       ? lowerLimitAveragePremiumPct
-      : current.funding_rate_pct >= limitPct
+      : current.funding_rate_pct >= upperFundingLimitPct
         ? upperLimitAveragePremiumPct
         : null;
     futureAveragePremiumToExitLimitPct = exitTarget !== null
@@ -304,6 +369,18 @@ function buildBitgetFundingFollowEstimate(
       : null;
   }
   return {
+    exchange,
+    title: `资金费跟随估算（${exchange === "bitget" ? "Bitget" : "Bybit"}）`,
+    formulaNote: exchange === "bitget"
+      ? "按 Bitget 公式近似：平均P = (P1×1 + P2×2 + ... + Pn×n) / (1 + 2 + ... + n)，资金费率 = [平均P + clamp(0.01% - 平均P, -0.05%, 0.05%)] ÷ (8 / N)，再套合约资金费上下限。"
+      : "按 Bybit 公式近似：平均P = (P1×1 + P2×2 + ... + Pn×n) / (1 + 2 + ... + n)，资金费率 = 平均P + clamp(利率I - 平均P, -0.05%, 0.05%)，I = 0.03% / (24 / N)；若交易所返回上下限，再按上下限截断。Bybit 官方P来自 Impact Bid/Ask，不等于盘口中价溢价。",
+    basisNote: exchange === "bitget"
+      ? "Bitget 当前没有官方分钟 premium 曲线时，本页用“标记价-指数价”偏离近似 P；剩余时间默认按近期稳定P均值继续估算，避免被最后一个点的小波动牵着跳。"
+      : "Bybit 本页历史曲线使用官方 premium-index-price-kline 作为 P；剩余时间默认按近期官方P均值继续估算。盘口中价溢价只用于盘口参考，不参与资金费估算。",
+    limitNote: exchange === "bitget"
+      ? "Bitget 上下限用当前返回值做近似识别。"
+      : "未取到 Bybit 上下限时，本面板不做精确上下限截断；最终以交易所返回资金费为准。",
+    intervalSource,
     intervalHours,
     sampledPoints: windowPoints.length,
     sampledFrom: windowPoints[0]?.bucket_at ?? null,
@@ -311,7 +388,7 @@ function buildBitgetFundingFollowEstimate(
     elapsedHours,
     remainingHours,
     averagePremiumPct,
-    currentPremiumPct,
+    currentPremiumPct: latestPremiumPct,
     remainingPremiumAssumptionPct,
     remainingPremiumSampleCount: assumption.sampleCount,
     remainingPremiumWindowMinutes: assumption.windowMinutes,
@@ -320,6 +397,8 @@ function buildBitgetFundingFollowEstimate(
     projectedAveragePremiumPct: projectedAveragePremium,
     projectedFundingIfCurrentPremiumPersistsPct,
     limitPct,
+    lowerFundingLimitPct,
+    upperFundingLimitPct,
     lowerLimitAveragePremiumPct,
     upperLimitAveragePremiumPct,
     futureAveragePremiumToExitLimitPct
@@ -738,10 +817,12 @@ function FundingFollowPanel({ estimate }: { estimate: FundingFollowEstimate | nu
   }
   const limitText = estimate.limitPct !== null
     ? `当前交易所返回值疑似触及 ±${estimate.limitPct.toFixed(4)}% 上下限`
-    : "未检测到明显上下限";
-  const thresholdText = estimate.limitPct !== null
+    : estimate.lowerFundingLimitPct !== null || estimate.upperFundingLimitPct !== null
+      ? `Bybit 返回上下限 ${signedPct(estimate.lowerFundingLimitPct)} / ${signedPct(estimate.upperFundingLimitPct)}`
+      : estimate.limitNote;
+  const thresholdText = estimate.lowerLimitAveragePremiumPct !== null || estimate.upperLimitAveragePremiumPct !== null
     ? `触及下限约需平均P ≤ ${signedPct(estimate.lowerLimitAveragePremiumPct)}，触及上限约需平均P ≥ ${signedPct(estimate.upperLimitAveragePremiumPct)}`
-    : "未按上下限截断";
+    : "未按精确上下限截断";
   const exitLimitText = estimate.futureAveragePremiumToExitLimitPct !== null
     ? `若想本次结算脱离当前上下限，剩余 ${compactHours(estimate.remainingHours)} 的平均P大约需要达到 ${signedPct(estimate.futureAveragePremiumToExitLimitPct)}`
     : "当前未处于明显上下限，或剩余时间不足以估算脱离阈值";
@@ -749,18 +830,19 @@ function FundingFollowPanel({ estimate }: { estimate: FundingFollowEstimate | nu
   return (
     <section className="premium-detail-card">
       <div className="premium-detail-head">
-        <Typography.Title level={5}>资金费跟随估算（Bitget）</Typography.Title>
+        <Typography.Title level={5}>{estimate.title}</Typography.Title>
         <Tag color="orange">近似</Tag>
       </div>
       <Typography.Paragraph type="secondary">
-        按 Bitget 公式近似：平均P = (P1×1 + P2×2 + ... + Pn×n) / (1 + 2 + ... + n)，资金费率 = [平均P + clamp(利率 - 平均P, -0.05%, 0.05%)] ÷ (8 / N)，再套合约资金费上下限。
-        这里用页面上的“标记价-指数价”偏离近似 P；剩余时间默认按近期稳定P均值继续估算，避免被最后一个点的小波动牵着跳。Bitget 实际还可能使用 5 秒采样和上一结算周期样本平滑，最终以交易所返回值为准。
+        {estimate.formulaNote}
+        {estimate.basisNote}
+        最终以交易所返回资金费为准。
       </Typography.Paragraph>
       <div className="premium-metric-grid">
         <MetricCard
           label="估算资金周期"
           value={`${estimate.intervalHours}h`}
-          sub={`样本 ${estimate.sampledPoints} 点 · ${time(estimate.sampledFrom)} - ${time(estimate.sampledTo)}`}
+          sub={`${estimate.intervalSource} · 样本 ${estimate.sampledPoints} 点 · ${time(estimate.sampledFrom)} - ${time(estimate.sampledTo)}`}
         />
         <MetricCard
           label="本周期平均P"
@@ -926,11 +1008,11 @@ export function PremiumIndexPage() {
   const currentPremium = current?.premium_pct ?? result?.premium_pct.current ?? null;
   const tone = typeof currentPremium === "number" ? (currentPremium >= 0 ? "positive" : "negative") : "neutral";
   const fundingFollowEstimate = useMemo(
-    () => buildBitgetFundingFollowEstimate(result, current, currentPremium),
+    () => buildFundingFollowEstimate(result, current, currentPremium),
     [current, currentPremium, result]
   );
   const premiumDefinitionMessage = current
-    ? "当前标记价溢价 = (标记价 - 指数价) / 指数价；资金费率为交易所返回值，不由这个即时偏离直接计算。交易所资金费通常参考整个结算周期的平均 premium、冲击买卖价、利率项和上下限。"
+    ? "当前标记价溢价 = (标记价 - 指数价) / 指数价；盘口中价溢价 = ((买一 + 卖一) / 2 - 指数价) / 指数价，只反映当前盘口中点相对指数价的偏离。资金费率为交易所返回值，不由这两个即时偏离直接计算；Bybit 官方P基于 Impact Bid/Ask，不等于盘口中价溢价。"
     : "";
 
   return (
@@ -1010,7 +1092,7 @@ export function PremiumIndexPage() {
         />
         <MetricCard label="标记价" value={price(current?.mark_price)} sub="mark price" />
         <MetricCard label="指数价" value={price(current?.index_price)} sub="index price" />
-        <MetricCard label="盘口中价溢价" value={signedPct(current?.mid_premium_pct)} sub={price(current?.mid_price)} tone={tone} />
+        <MetricCard label="盘口中价溢价（参考）" value={signedPct(current?.mid_premium_pct)} sub={price(current?.mid_price)} tone={tone} />
         <MetricCard
           label="资金费率"
           value={signedPct(current?.funding_rate_pct)}

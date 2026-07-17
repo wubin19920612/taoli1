@@ -259,6 +259,60 @@ async def test_bitget_klines_continue_after_empty_early_chunk() -> None:
     assert points == [PairSpreadKlinePoint(bucket_at=first_data_bucket, close=10)]
 
 
+@pytest.mark.asyncio
+async def test_bybit_current_uses_instruments_info_for_funding_interval_and_limits() -> None:
+    service = PairSpreadQueryService()
+    requested_urls: list[str] = []
+
+    async def fake_get_json(url: str):
+        requested_urls.append(url)
+        if "market/tickers" in url:
+            return {
+                "result": {
+                    "list": [
+                        {
+                            "symbol": "HOMEUSDT",
+                            "markPrice": "0.009126",
+                            "indexPrice": "0.009291",
+                            "bid1Price": "0.00910",
+                            "ask1Price": "0.009115",
+                            "lastPrice": "0.00912",
+                            "fundingRate": "-0.019844",
+                            "nextFundingTime": "1784256000000",
+                        }
+                    ]
+                }
+            }
+        if "market/instruments-info" in url:
+            return {
+                "result": {
+                    "list": [
+                        {
+                            "symbol": "HOMEUSDT",
+                            "fundingInterval": "240",
+                            "upperFundingRate": "0.020000",
+                            "lowerFundingRate": "-0.020000",
+                        }
+                    ]
+                }
+            }
+        raise AssertionError(f"unexpected url: {url}")
+
+    service._get_json = fake_get_json  # type: ignore[method-assign]
+    try:
+        leg = await service._fetch_bybit_current("HOMEUSDT")
+    finally:
+        await service.aclose()
+
+    assert any("market/tickers" in url for url in requested_urls)
+    assert any("market/instruments-info" in url for url in requested_urls)
+    assert leg.mid_price == pytest.approx((0.00910 + 0.009115) / 2)
+    assert leg.funding_rate_pct == pytest.approx(-1.9844)
+    assert leg.funding_interval_hours == pytest.approx(4)
+    assert leg.funding_rate_upper_pct == pytest.approx(2)
+    assert leg.funding_rate_lower_pct == pytest.approx(-2)
+
+
 def test_pair_spread_rejects_htx() -> None:
     with pytest.raises(ValidationError):
         PairSpreadLegQuery(exchange="htx", symbol="BTCUSDT")

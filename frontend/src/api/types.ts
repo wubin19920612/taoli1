@@ -438,6 +438,9 @@ export interface PairSpreadCurrentLeg {
   funding_rate_pct: number | null;
   funding_next_rate_pct: number | null;
   funding_next_time: string | null;
+  funding_interval_hours: number | null;
+  funding_rate_upper_pct: number | null;
+  funding_rate_lower_pct: number | null;
   timestamp: string;
 }
 
@@ -496,6 +499,9 @@ export interface PremiumIndexCurrentSnapshot {
   funding_rate_pct: number | null;
   funding_next_rate_pct: number | null;
   funding_next_time: string | null;
+  funding_interval_hours: number | null;
+  funding_rate_upper_pct: number | null;
+  funding_rate_lower_pct: number | null;
   source: string;
 }
 

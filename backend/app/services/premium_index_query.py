@@ -278,6 +278,9 @@ class PremiumIndexQueryService(PairSpreadQueryService):
             funding_rate_pct=leg.funding_rate_pct,
             funding_next_rate_pct=leg.funding_next_rate_pct,
             funding_next_time=leg.funding_next_time,
+            funding_interval_hours=leg.funding_interval_hours,
+            funding_rate_upper_pct=leg.funding_rate_upper_pct,
+            funding_rate_lower_pct=leg.funding_rate_lower_pct,
             source="mark_index" if premium is not None else "unavailable",
         )
 
@@ -611,6 +614,9 @@ class PremiumIndexQueryService(PairSpreadQueryService):
             funding_next_rate_pct=next_funding * 100 if next_funding is not None else None,
             funding_next_time=parse_datetime_ms(funding_row.get("nextFundingTime"))
             or parse_datetime_ms(funding_row.get("fundingTime")),
+            funding_interval_hours=None,
+            funding_rate_upper_pct=None,
+            funding_rate_lower_pct=None,
             source="mark_index",
         )
 

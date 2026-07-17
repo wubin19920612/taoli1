@@ -91,6 +91,12 @@ def _positive(value: float | None) -> float | None:
     return value
 
 
+def _ratio_to_pct(value: float | None) -> float | None:
+    if value is None or not isfinite(value):
+        return None
+    return value * 100
+
+
 def _mid_price(bid: float | None, ask: float | None) -> float | None:
     bid = _positive(bid)
     ask = _positive(ask)
@@ -744,11 +750,22 @@ class PairSpreadQueryService:
 
     async def _fetch_bybit_current(self, symbol: str) -> PairSpreadCurrentLeg:
         raw = _compact_symbol(symbol)
-        payload = await self._get_json(
-            f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={raw}"
+        payload, instrument_payload = await asyncio.gather(
+            self._get_json(
+                f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={raw}"
+            ),
+            self._get_json(
+                f"https://api.bybit.com/v5/market/instruments-info?category=linear&symbol={raw}"
+            ),
         )
         row = _first_row(payload.get("result", {}).get("list", [])) if isinstance(payload, dict) else {}
+        instrument_row = (
+            _first_row(instrument_payload.get("result", {}).get("list", []))
+            if isinstance(instrument_payload, dict)
+            else {}
+        )
         funding = parse_float(row.get("fundingRate"))
+        funding_interval_minutes = _positive(parse_float(instrument_row.get("fundingInterval")))
         return _current_leg(
             exchange="bybit",
             symbol=symbol,
@@ -760,6 +777,9 @@ class PairSpreadQueryService:
             funding_rate_pct=funding * 100 if funding is not None else None,
             funding_next_rate_pct=None,
             funding_next_time=parse_datetime_ms(row.get("nextFundingTime")),
+            funding_interval_hours=funding_interval_minutes / 60 if funding_interval_minutes is not None else None,
+            funding_rate_upper_pct=_ratio_to_pct(parse_float(instrument_row.get("upperFundingRate"))),
+            funding_rate_lower_pct=_ratio_to_pct(parse_float(instrument_row.get("lowerFundingRate"))),
         )
 
     async def _fetch_gate_current(self, symbol: str) -> PairSpreadCurrentLeg:
@@ -1162,6 +1182,9 @@ def _current_leg(
     funding_rate_pct: float | None,
     funding_next_rate_pct: float | None,
     funding_next_time: datetime | None,
+    funding_interval_hours: float | None = None,
+    funding_rate_upper_pct: float | None = None,
+    funding_rate_lower_pct: float | None = None,
 ) -> PairSpreadCurrentLeg:
     candidates = (
         (mark_price, PairSpreadPriceField.MARK_PRICE),
@@ -1185,6 +1208,9 @@ def _current_leg(
                 funding_rate_pct=funding_rate_pct,
                 funding_next_rate_pct=funding_next_rate_pct,
                 funding_next_time=funding_next_time,
+                funding_interval_hours=funding_interval_hours,
+                funding_rate_upper_pct=funding_rate_upper_pct,
+                funding_rate_lower_pct=funding_rate_lower_pct,
                 timestamp=utc_now(),
             )
     raise RuntimeError(f"no usable current price for {exchange}:{symbol}")
