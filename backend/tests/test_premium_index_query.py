@@ -120,6 +120,85 @@ async def test_bybit_current_uses_official_premium_index_over_mark_deviation() -
     assert current.funding_rate_lower_pct == pytest.approx(-2)
 
 
+@pytest.mark.parametrize("exchange", ["binance", "aster", "gate"])
+@pytest.mark.asyncio
+async def test_current_uses_official_premium_history_when_exchange_supports_it(exchange: str) -> None:
+    now = datetime(2026, 7, 17, 10, 40, tzinfo=UTC)
+
+    class FakePremiumIndexService(PremiumIndexQueryService):
+        async def _fetch_current_leg(self, requested_exchange, symbol):
+            assert requested_exchange == exchange
+            assert symbol == "BTCUSDT"
+            return PairSpreadCurrentLeg(
+                exchange=requested_exchange,
+                symbol="BTCUSDT",
+                raw_symbol="BTCUSDT",
+                price=101,
+                price_field=PairSpreadPriceField.MARK_PRICE,
+                mark_price=101,
+                index_price=100,
+                mid_price=100.5,
+                last_price=101.2,
+                funding_rate_pct=0.01,
+                timestamp=now,
+            )
+
+        async def _fetch_history(self, requested_exchange, symbol, start, end, interval_minutes):
+            assert requested_exchange == exchange
+            assert symbol == "BTCUSDT"
+            assert interval_minutes == 1
+            return [
+                PremiumIndexPoint(
+                    bucket_at=now - timedelta(minutes=1),
+                    premium_pct=0.1234,
+                    source=f"{exchange}_premium_index",
+                )
+            ]
+
+    service = FakePremiumIndexService()
+    try:
+        current = await service.current(PremiumIndexMarketQuery(exchange=exchange, symbol="BTCUSDT"))
+    finally:
+        await service.aclose()
+
+    assert current.source == f"{exchange}_premium_index"
+    assert current.premium_pct == pytest.approx(0.1234)
+    assert current.premium_pct != pytest.approx(1.0)
+    assert current.mid_premium_pct == pytest.approx(0.5)
+
+
+@pytest.mark.asyncio
+async def test_okx_official_premium_history_keeps_latest_sample_per_minute() -> None:
+    first = datetime(2026, 7, 17, 10, 40, tzinfo=UTC)
+    rows = [
+        {"ts": str(int((first + timedelta(seconds=5)).timestamp() * 1000)), "premium": "0.001"},
+        {"ts": str(int((first + timedelta(seconds=45)).timestamp() * 1000)), "premium": "0.002"},
+        {"ts": str(int((first + timedelta(minutes=1, seconds=10)).timestamp() * 1000)), "premium": "-0.0015"},
+        {"ts": str(int((first - timedelta(seconds=1)).timestamp() * 1000)), "premium": "0.009"},
+    ]
+
+    service = PremiumIndexQueryService()
+
+    async def fake_get_json(url: str):
+        assert "premium-history" in url
+        return {"data": rows}
+
+    service._get_json = fake_get_json  # type: ignore[method-assign]
+    try:
+        points = await service._fetch_okx_official_premium_history(
+            "BTCUSDT",
+            first,
+            first + timedelta(minutes=2),
+        )
+    finally:
+        await service.aclose()
+
+    assert [(point.bucket_at, point.premium_pct, point.source) for point in points] == [
+        (first, pytest.approx(0.2), "okx_premium_index"),
+        (first + timedelta(minutes=1), pytest.approx(-0.15), "okx_premium_index"),
+    ]
+
+
 @pytest.mark.asyncio
 async def test_premium_index_query_builds_stats_and_current() -> None:
     now = datetime(2026, 7, 11, 12, 3, 40, tzinfo=UTC)

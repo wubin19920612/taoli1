@@ -73,6 +73,17 @@ def _dedupe_sorted(points: list[PremiumIndexPoint]) -> list[PremiumIndexPoint]:
     return [by_bucket[key] for key in sorted(by_bucket)]
 
 
+def _filter_interval_points(points: list[PremiumIndexPoint], interval_minutes: int) -> list[PremiumIndexPoint]:
+    if interval_minutes <= 1:
+        return _dedupe_sorted(points)
+    by_bucket: dict[datetime, PremiumIndexPoint] = {}
+    for point in sorted(points, key=lambda item: item.bucket_at):
+        bucket_minute = point.bucket_at.minute - (point.bucket_at.minute % interval_minutes)
+        bucket_at = point.bucket_at.replace(minute=bucket_minute, second=0, microsecond=0)
+        by_bucket[bucket_at] = point.model_copy(update={"bucket_at": bucket_at})
+    return [by_bucket[key] for key in sorted(by_bucket)]
+
+
 def build_hyperliquid_candle_premium_points(
     candles: list[PairSpreadKlinePoint],
     premium_anchors: list[PremiumIndexPoint],
@@ -261,8 +272,8 @@ class PremiumIndexQueryService(PairSpreadQueryService):
     async def current(self, market: PremiumIndexMarketQuery) -> PremiumIndexCurrentSnapshot:
         if market.exchange == "okx":
             return await self._fetch_okx_current_premium(market.symbol)
-        if market.exchange == "bybit":
-            return await self._fetch_bybit_current_premium(market.symbol)
+        if market.exchange in {"binance", "aster", "bybit", "gate"}:
+            return await self._fetch_current_with_official_premium(market.exchange, market.symbol)
         leg = await self._fetch_current_leg(market.exchange, market.symbol)
         premium = _premium_pct(leg.mark_price, leg.index_price)
         mid_premium = _premium_pct(leg.mid_price, leg.index_price)
@@ -286,11 +297,15 @@ class PremiumIndexQueryService(PairSpreadQueryService):
             source="mark_index" if premium is not None else "unavailable",
         )
 
-    async def _fetch_bybit_current_premium(self, symbol: str) -> PremiumIndexCurrentSnapshot:
+    async def _fetch_current_with_official_premium(
+        self,
+        exchange: str,
+        symbol: str,
+    ) -> PremiumIndexCurrentSnapshot:
         observed_at = utc_now()
-        leg = await self._fetch_bybit_current(symbol)
+        leg = await self._fetch_current_leg(exchange, symbol)
         try:
-            points = await self._fetch_bybit_premium(symbol, observed_at - timedelta(minutes=10), observed_at, 1)
+            points = await self._fetch_history(exchange, symbol, observed_at - timedelta(minutes=10), observed_at, 1)
         except Exception:  # noqa: BLE001 - current ticker fields are still useful when official P is unavailable.
             points = []
         latest = points[-1] if points else None
@@ -299,7 +314,7 @@ class PremiumIndexQueryService(PairSpreadQueryService):
         premium = latest.premium_pct if latest is not None else mark_premium
         return PremiumIndexCurrentSnapshot(
             observed_at=observed_at,
-            exchange="bybit",
+            exchange=exchange,
             symbol=leg.symbol,
             raw_symbol=leg.raw_symbol,
             mark_price=leg.mark_price,
@@ -360,7 +375,7 @@ class PremiumIndexQueryService(PairSpreadQueryService):
             "bybit": self._fetch_bybit_premium,
             "gate": self._fetch_gate_premium,
             "bitget": self._fetch_bitget_mark_index_premium,
-            "okx": self._fetch_okx_mark_index_premium,
+            "okx": self._fetch_okx_premium_history,
             "hyperliquid": self._fetch_hyperliquid_premium,
         }
         return await handlers[exchange](symbol, start, end, interval_minutes)
@@ -510,6 +525,77 @@ class PremiumIndexQueryService(PairSpreadQueryService):
             cursor = next_cursor
         return _dedupe_price_points(points)
 
+    async def _fetch_okx_premium_history(
+        self,
+        symbol: str,
+        start: datetime,
+        end: datetime,
+        interval_minutes: int,
+    ) -> list[PremiumIndexPoint]:
+        try:
+            points = await self._fetch_okx_official_premium_history(symbol, start, end)
+        except Exception:  # noqa: BLE001 - fall back to mark/index deviation when OKX premium history is unavailable.
+            points = []
+        if points:
+            return _filter_interval_points(points, interval_minutes)
+        return await self._fetch_okx_mark_index_premium(symbol, start, end, interval_minutes)
+
+    async def _fetch_okx_official_premium_history(
+        self,
+        symbol: str,
+        start: datetime,
+        end: datetime,
+    ) -> list[PremiumIndexPoint]:
+        inst_id = _okx_inst_id(symbol)
+        start_ms = _to_ms(start)
+        cursor: int | None = None
+        parsed_pairs: list[tuple[int, PremiumIndexPoint]] = []
+        seen_cursors: set[int] = set()
+        for _ in range(120):
+            url = f"https://www.okx.com/api/v5/public/premium-history?instId={inst_id}&limit=100"
+            if cursor is not None:
+                url = f"{url}&after={cursor}"
+            payload = await self._get_json(url)
+            rows = payload.get("data", []) if isinstance(payload, dict) else []
+            if not rows:
+                break
+            row_timestamps: list[int] = []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                timestamp = parse_datetime_ms(row.get("ts"))
+                premium_pct = _ratio_to_pct(parse_float(row.get("premium")))
+                if timestamp is None or premium_pct is None:
+                    continue
+                timestamp_ms = _to_ms(timestamp)
+                row_timestamps.append(timestamp_ms)
+                bucket_at = _floor_minute(timestamp)
+                if start <= bucket_at <= end:
+                    parsed_pairs.append(
+                        (
+                            timestamp_ms,
+                            PremiumIndexPoint(
+                                bucket_at=bucket_at,
+                                premium_pct=premium_pct,
+                                source="okx_premium_index",
+                            ),
+                        )
+                    )
+            if not row_timestamps:
+                break
+            oldest = min(row_timestamps)
+            if oldest <= start_ms or oldest in seen_cursors:
+                break
+            seen_cursors.add(oldest)
+            cursor = oldest
+
+        by_bucket: dict[datetime, tuple[int, PremiumIndexPoint]] = {}
+        for timestamp_ms, point in parsed_pairs:
+            existing = by_bucket.get(point.bucket_at)
+            if existing is None or timestamp_ms >= existing[0]:
+                by_bucket[point.bucket_at] = (timestamp_ms, point)
+        return [by_bucket[key][1] for key in sorted(by_bucket)]
+
     async def _fetch_okx_mark_index_premium(
         self,
         symbol: str,
@@ -615,6 +701,7 @@ class PremiumIndexQueryService(PairSpreadQueryService):
         )
 
     async def _fetch_okx_current_premium(self, symbol: str) -> PremiumIndexCurrentSnapshot:
+        observed_at = utc_now()
         inst_id = _okx_inst_id(symbol)
         index_id = inst_id.removesuffix("-SWAP")
         mark_payload, index_payload, ticker_payload, funding_payload = await asyncio.gather(
@@ -632,8 +719,18 @@ class PremiumIndexQueryService(PairSpreadQueryService):
         mid = _mid(parse_float(ticker_row.get("bidPx")), parse_float(ticker_row.get("askPx")))
         funding = parse_float(funding_row.get("fundingRate"))
         next_funding = parse_float(funding_row.get("nextFundingRate"))
+        try:
+            premium_points = await self._fetch_okx_official_premium_history(
+                symbol,
+                observed_at - timedelta(minutes=10),
+                observed_at,
+            )
+        except Exception:  # noqa: BLE001 - mark/index deviation is still useful as a fallback.
+            premium_points = []
+        latest_premium = premium_points[-1] if premium_points else None
+        mark_premium = _premium_pct(mark, index)
         return PremiumIndexCurrentSnapshot(
-            observed_at=utc_now(),
+            observed_at=observed_at,
             exchange="okx",
             symbol=_compact_symbol(symbol),
             raw_symbol=inst_id,
@@ -641,7 +738,7 @@ class PremiumIndexQueryService(PairSpreadQueryService):
             index_price=index,
             mid_price=mid,
             last_price=_positive(parse_float(ticker_row.get("last"))),
-            premium_pct=_premium_pct(mark, index),
+            premium_pct=latest_premium.premium_pct if latest_premium is not None else mark_premium,
             mid_premium_pct=_premium_pct(mid, index),
             funding_rate_pct=funding * 100 if funding is not None else None,
             funding_next_rate_pct=next_funding * 100 if next_funding is not None else None,
@@ -650,7 +747,7 @@ class PremiumIndexQueryService(PairSpreadQueryService):
             funding_interval_hours=None,
             funding_rate_upper_pct=None,
             funding_rate_lower_pct=None,
-            source="mark_index",
+            source=latest_premium.source if latest_premium is not None else "mark_index_fallback",
         )
 
 
