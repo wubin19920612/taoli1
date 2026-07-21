@@ -54,7 +54,10 @@ type FundingFollowEstimate = {
   upperFundingLimitPct: number | null;
   lowerLimitAveragePremiumPct: number | null;
   upperLimitAveragePremiumPct: number | null;
-  futureAveragePremiumToExitLimitPct: number | null;
+  targetLimitSide: "lower" | "upper" | null;
+  targetFundingLimitPct: number | null;
+  targetAveragePremiumPct: number | null;
+  futureAveragePremiumToReachLimitPct: number | null;
 };
 
 type WeightedPremiumStats = {
@@ -146,10 +149,6 @@ function premiumSourceLabel(source: string | null | undefined): string {
   return source;
 }
 
-function isOfficialPremiumSource(source: string | null | undefined): boolean {
-  return Boolean(source?.includes("premium_index"));
-}
-
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -212,7 +211,7 @@ function sumConsecutiveWeights(start: number, count: number): number {
   return (count * (2 * start + count - 1)) / 2;
 }
 
-function bitgetWeightedPremiumStats(points: PremiumIndexPoint[]): WeightedPremiumStats {
+function weightedPremiumStats(points: PremiumIndexPoint[]): WeightedPremiumStats {
   const sorted = [...points]
     .filter((point) => Number.isFinite(point.premium_pct))
     .sort((a, b) => dayjs.utc(a.bucket_at).valueOf() - dayjs.utc(b.bucket_at).valueOf());
@@ -232,6 +231,24 @@ function bitgetWeightedPremiumStats(points: PremiumIndexPoint[]): WeightedPremiu
     weightTotal,
     sampleCount: sorted.length
   };
+}
+
+function requiredFutureAveragePremiumPct(
+  targetAveragePremiumPct: number | null,
+  weightedStats: WeightedPremiumStats,
+  futureWeightTotal: number
+): number | null {
+  if (
+    targetAveragePremiumPct === null ||
+    weightedStats.weightTotal <= 0 ||
+    futureWeightTotal <= 0
+  ) {
+    return null;
+  }
+  return (
+    targetAveragePremiumPct * (weightedStats.weightTotal + futureWeightTotal) -
+    weightedStats.weightedTotal
+  ) / futureWeightTotal;
 }
 
 function recentPremiumAssumption(
@@ -291,7 +308,7 @@ function buildFundingFollowEstimate(
       !bucketAt.isAfter(windowEnd)
     );
   });
-  const weightedStats = bitgetWeightedPremiumStats(windowPoints);
+  const weightedStats = weightedPremiumStats(windowPoints);
   const averagePremiumPct = weightedStats.averagePremiumPct;
   const elapsedHours = windowStart ? Math.min(hoursBetween(windowStart, observedAt), intervalHours) : null;
   const remainingHours = nextFundingAt ? Math.max(hoursBetween(observedAt, nextFundingAt), 0) : null;
@@ -351,36 +368,47 @@ function buildFundingFollowEstimate(
       : exchange === "bybit" && explicitUpperLimitPct !== null
         ? explicitUpperLimitPct + dampenerPct
         : null;
-  let futureAveragePremiumToExitLimitPct: number | null = null;
-  if (
-    lowerFundingLimitPct !== null &&
-    upperFundingLimitPct !== null &&
-    typeof current.funding_rate_pct === "number" &&
-    weightedStats.weightTotal > 0 &&
-    futureWeightTotal > 0 &&
-    lowerLimitAveragePremiumPct !== null &&
-    upperLimitAveragePremiumPct !== null
-  ) {
-    const exitTarget = current.funding_rate_pct <= lowerFundingLimitPct
-      ? lowerLimitAveragePremiumPct
-      : current.funding_rate_pct >= upperFundingLimitPct
-        ? upperLimitAveragePremiumPct
-        : null;
-    futureAveragePremiumToExitLimitPct = exitTarget !== null
-      ? (
-        exitTarget * (weightedStats.weightTotal + futureWeightTotal) - weightedStats.weightedTotal
-      ) / futureWeightTotal
-      : null;
+  const directionReference = [
+    current.funding_rate_pct,
+    estimatedFundingPct,
+    averagePremiumPct,
+    currentPremiumPct
+  ].find((value): value is number => typeof value === "number" && Number.isFinite(value) && Math.abs(value) > 1e-12) ?? null;
+  let targetLimitSide: "lower" | "upper" | null = directionReference === null
+    ? null
+    : directionReference < 0
+      ? "lower"
+      : "upper";
+  if (targetLimitSide === "lower" && (lowerFundingLimitPct === null || lowerLimitAveragePremiumPct === null)) {
+    targetLimitSide = upperFundingLimitPct !== null && upperLimitAveragePremiumPct !== null ? "upper" : null;
   }
+  if (targetLimitSide === "upper" && (upperFundingLimitPct === null || upperLimitAveragePremiumPct === null)) {
+    targetLimitSide = lowerFundingLimitPct !== null && lowerLimitAveragePremiumPct !== null ? "lower" : null;
+  }
+  const targetFundingLimitPct = targetLimitSide === "lower"
+    ? lowerFundingLimitPct
+    : targetLimitSide === "upper"
+      ? upperFundingLimitPct
+      : null;
+  const targetAveragePremiumPct = targetLimitSide === "lower"
+    ? lowerLimitAveragePremiumPct
+    : targetLimitSide === "upper"
+      ? upperLimitAveragePremiumPct
+      : null;
+  const futureAveragePremiumToReachLimitPct = requiredFutureAveragePremiumPct(
+    targetAveragePremiumPct,
+    weightedStats,
+    futureWeightTotal
+  );
   return {
     exchange,
     title: `资金费跟随估算（${exchange === "bitget" ? "Bitget" : "Bybit"}）`,
     formulaNote: exchange === "bitget"
       ? "按 Bitget 公式近似：平均P = (P1×1 + P2×2 + ... + Pn×n) / (1 + 2 + ... + n)，资金费率 = [平均P + clamp(0.01% - 平均P, -0.05%, 0.05%)] ÷ (8 / N)，再套合约资金费上下限。"
-      : "按 Bybit 公式近似：平均P = (P1×1 + P2×2 + ... + Pn×n) / (1 + 2 + ... + n)，资金费率 = 平均P + clamp(利率I - 平均P, -0.05%, 0.05%)，I = 0.03% / (24 / N)；若交易所返回上下限，再按上下限截断。Bybit 官方P来自 Impact Bid/Ask，不等于盘口中价溢价。",
+      : "按 Bybit 公式近似：平均P = (P1×1 + P2×2 + ... + Pn×n) / (1 + 2 + ... + n)，资金费率 = 平均P + clamp(利率I - 平均P, -0.05%, 0.05%)，I = 0.03% / (24 / N)；若交易所返回上下限，再按上下限截断。Bybit 官方P来自 Impact Bid/Ask。",
     basisNote: exchange === "bitget"
       ? "Bitget 当前没有官方分钟 premium 曲线时，本页用“标记价-指数价”偏离近似 P；剩余时间默认按近期稳定P均值继续估算，避免被最后一个点的小波动牵着跳。"
-      : "Bybit 本页历史曲线使用官方 premium-index-price-kline 作为 P；剩余时间默认按近期官方P均值继续估算。盘口中价溢价只用于盘口参考，不参与资金费估算。",
+      : "Bybit 本页历史曲线使用官方 premium-index-price-kline 作为 P；剩余时间默认按近期官方P均值继续估算。",
     limitNote: exchange === "bitget"
       ? "Bitget 上下限用当前返回值做近似识别。"
       : "未取到 Bybit 上下限时，本面板不做精确上下限截断；最终以交易所返回资金费为准。",
@@ -405,7 +433,10 @@ function buildFundingFollowEstimate(
     upperFundingLimitPct,
     lowerLimitAveragePremiumPct,
     upperLimitAveragePremiumPct,
-    futureAveragePremiumToExitLimitPct
+    targetLimitSide,
+    targetFundingLimitPct,
+    targetAveragePremiumPct,
+    futureAveragePremiumToReachLimitPct
   };
 }
 
@@ -498,12 +529,18 @@ function premiumStats(points: PremiumIndexPoint[], current?: PremiumIndexCurrent
   };
 }
 
-function currentToPoint(current: PremiumIndexCurrentSnapshot): PremiumIndexPoint | null {
+function premiumBucketAt(value: string, intervalMinutes: number): string {
+  const parsed = dayjs.utc(value);
+  const bucketMinute = parsed.minute() - (parsed.minute() % Math.max(intervalMinutes, 1));
+  return parsed.minute(bucketMinute).second(0).millisecond(0).toISOString();
+}
+
+function currentToPoint(current: PremiumIndexCurrentSnapshot, intervalMinutes: number): PremiumIndexPoint | null {
   if (typeof current.premium_pct !== "number" || !Number.isFinite(current.premium_pct)) {
     return null;
   }
   return {
-    bucket_at: current.observed_at,
+    bucket_at: premiumBucketAt(current.observed_at, intervalMinutes),
     premium_pct: current.premium_pct,
     mark_price: current.mark_price,
     index_price: current.index_price,
@@ -512,7 +549,7 @@ function currentToPoint(current: PremiumIndexCurrentSnapshot): PremiumIndexPoint
 }
 
 function mergeCurrent(result: PremiumIndexQueryResult, current: PremiumIndexCurrentSnapshot): PremiumIndexQueryResult {
-  const nextPoint = currentToPoint(current);
+  const nextPoint = currentToPoint(current, result.interval_minutes);
   if (!nextPoint) {
     return { ...result, current, observed_at: current.observed_at };
   }
@@ -520,7 +557,8 @@ function mergeCurrent(result: PremiumIndexQueryResult, current: PremiumIndexCurr
   const byTime = new Map<string, PremiumIndexPoint>();
   for (const point of result.points) {
     if (dayjs.utc(point.bucket_at).isAfter(cutoff)) {
-      byTime.set(point.bucket_at, point);
+      const bucketAt = premiumBucketAt(point.bucket_at, result.interval_minutes);
+      byTime.set(bucketAt, { ...point, bucket_at: bucketAt });
     }
   }
   byTime.set(nextPoint.bucket_at, nextPoint);
@@ -827,9 +865,11 @@ function FundingFollowPanel({ estimate }: { estimate: FundingFollowEstimate | nu
   const thresholdText = estimate.lowerLimitAveragePremiumPct !== null || estimate.upperLimitAveragePremiumPct !== null
     ? `触及下限约需平均P ≤ ${signedPct(estimate.lowerLimitAveragePremiumPct)}，触及上限约需平均P ≥ ${signedPct(estimate.upperLimitAveragePremiumPct)}`
     : "未按精确上下限截断";
-  const exitLimitText = estimate.futureAveragePremiumToExitLimitPct !== null
-    ? `若想本次结算脱离当前上下限，剩余 ${compactHours(estimate.remainingHours)} 的平均P大约需要达到 ${signedPct(estimate.futureAveragePremiumToExitLimitPct)}`
-    : "当前未处于明显上下限，或剩余时间不足以估算脱离阈值";
+  const reachLimitOperator = estimate.targetLimitSide === "lower" ? "≤" : "≥";
+  const reachLimitName = estimate.targetLimitSide === "lower" ? "下限" : "上限";
+  const reachLimitText = estimate.futureAveragePremiumToReachLimitPct !== null
+    ? `要在本次结算达到或维持资金费${reachLimitName} ${signedPct(estimate.targetFundingLimitPct)}，剩余 ${compactHours(estimate.remainingHours)} 的平均P需 ${reachLimitOperator} ${signedPct(estimate.futureAveragePremiumToReachLimitPct)}；目标最终平均P ${signedPct(estimate.targetAveragePremiumPct)}`
+    : "缺少资金费率上下限、本周期样本或剩余时间，暂时无法反推拉满所需P";
 
   return (
     <section className="premium-detail-card">
@@ -881,9 +921,12 @@ function FundingFollowPanel({ estimate }: { estimate: FundingFollowEstimate | nu
           tone={typeof estimate.estimatedFundingPct === "number" ? (estimate.estimatedFundingPct >= 0 ? "positive" : "negative") : "neutral"}
         />
         <MetricCard
-          label="脱离上下限所需P"
-          value={signedPct(estimate.futureAveragePremiumToExitLimitPct)}
-          sub={exitLimitText}
+          label="剩余拉满所需P"
+          value={signedPct(estimate.futureAveragePremiumToReachLimitPct)}
+          sub={reachLimitText}
+          tone={typeof estimate.futureAveragePremiumToReachLimitPct === "number" ? (
+            estimate.futureAveragePremiumToReachLimitPct >= 0 ? "positive" : "negative"
+          ) : "neutral"}
         />
       </div>
     </section>
@@ -1010,17 +1053,27 @@ export function PremiumIndexPage() {
 
   const current = result?.current ?? null;
   const currentPremium = current?.premium_pct ?? result?.premium_pct.current ?? null;
-  const tone = typeof currentPremium === "number" ? (currentPremium >= 0 ? "positive" : "negative") : "neutral";
-  const officialPremiumSource = isOfficialPremiumSource(current?.source);
-  const primaryPremiumLabel = officialPremiumSource ? "当前官方溢价指数" : "当前标记价偏离";
   const fundingFollowEstimate = useMemo(
     () => buildFundingFollowEstimate(result, current, currentPremium),
     [current, currentPremium, result]
   );
+  const weightedPremiumPct = fundingFollowEstimate?.averagePremiumPct ?? currentPremium;
+  const weightedPremiumTone = typeof weightedPremiumPct === "number"
+    ? weightedPremiumPct >= 0 ? "positive" : "negative"
+    : "neutral";
+  const requiredPremiumPct = fundingFollowEstimate?.futureAveragePremiumToReachLimitPct ?? null;
+  const requiredPremiumTone = typeof requiredPremiumPct === "number"
+    ? requiredPremiumPct >= 0 ? "positive" : "negative"
+    : "neutral";
+  const requiredPremiumOperator = fundingFollowEstimate?.targetLimitSide === "lower" ? "≤" : "≥";
+  const requiredPremiumLimitName = fundingFollowEstimate?.targetLimitSide === "lower" ? "下限" : "上限";
+  const requiredPremiumSub = fundingFollowEstimate && requiredPremiumPct !== null
+    ? `${requiredPremiumOperator} 该值 · 拉满${requiredPremiumLimitName} ${signedPct(fundingFollowEstimate.targetFundingLimitPct)} · 剩余 ${compactHours(fundingFollowEstimate.remainingHours)}`
+    : "缺少上下限、本周期样本或剩余时间";
   const premiumDefinitionMessage = current
-    ? officialPremiumSource
-      ? "当前官方溢价指数来自交易所 premium index API；标记价偏离 = (标记价 - 指数价) / 指数价；盘口中价溢价 = ((买一 + 卖一) / 2 - 指数价) / 指数价。标记价偏离和盘口中价溢价只作为参考，不参与 Bybit 资金费估算。"
-      : "当前标记价偏离 = (标记价 - 指数价) / 指数价；盘口中价溢价 = ((买一 + 卖一) / 2 - 指数价) / 指数价，只反映当前盘口中点相对指数价的偏离。资金费率为交易所返回值，不由这两个即时偏离直接计算；Bybit 官方P基于 Impact Bid/Ask，不等于盘口中价溢价。"
+    ? fundingFollowEstimate
+      ? "本周期加权溢价指数只使用当前资金周期内的 Premium Index，并按时间递增权重计算；剩余拉满所需溢价指数表示，为使最终资金费率达到当前方向的上限或下限，剩余时间内 P 必须维持的加权平均水平。触及上下限不代表交易所一定调整结算周期。"
+      : "当前交易所未提供完整的资金周期和上下限数据，暂时只能展示当前溢价，不能精确反推剩余拉满所需溢价指数。"
     : "";
 
   return (
@@ -1093,14 +1146,21 @@ export function PremiumIndexPage() {
 
       <section className="premium-metric-grid">
         <MetricCard
-          label={primaryPremiumLabel}
-          value={signedPct(currentPremium)}
-          sub={current ? `${current.exchange} · ${current.symbol} · ${premiumSourceLabel(current.source)}` : "等待查询"}
-          tone={tone}
+          label={fundingFollowEstimate ? "本周期加权溢价指数" : "当前溢价指数"}
+          value={signedPct(weightedPremiumPct)}
+          sub={fundingFollowEstimate
+            ? `递增权重 · ${fundingFollowEstimate.sampledPoints}点 · 已过 ${compactHours(fundingFollowEstimate.elapsedHours)}`
+            : current ? `${current.exchange} · ${current.symbol} · ${premiumSourceLabel(current.source)}` : "等待查询"}
+          tone={weightedPremiumTone}
         />
         <MetricCard label="标记价" value={price(current?.mark_price)} sub="mark price" />
         <MetricCard label="指数价" value={price(current?.index_price)} sub="index price" />
-        <MetricCard label="盘口中价溢价（参考）" value={signedPct(current?.mid_premium_pct)} sub={price(current?.mid_price)} tone={tone} />
+        <MetricCard
+          label="剩余拉满所需溢价指数"
+          value={signedPct(requiredPremiumPct)}
+          sub={requiredPremiumSub}
+          tone={requiredPremiumTone}
+        />
         <MetricCard
           label="资金费率"
           value={signedPct(current?.funding_rate_pct)}
