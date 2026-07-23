@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta, timezone
-from math import isfinite
+from math import ceil, isfinite
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -31,6 +31,7 @@ from app.models.pair_spread import (
 )
 
 MINUTE_MS = 60_000
+HYPERLIQUID_CANDLE_LIMIT = 5000
 PAIR_SPREAD_TIMEOUT = httpx.Timeout(18.0, connect=3.0, read=14.0, write=5.0, pool=5.0)
 DISPLAY_TZ = timezone(timedelta(hours=8))
 
@@ -159,6 +160,36 @@ def _warnings_text(items: list[str]) -> str:
     return "; ".join(unique_items)
 
 
+def _hyperliquid_history_limit_warning(
+    exchanges: set[str],
+    *,
+    hours: int,
+    interval_minutes: int,
+) -> str | None:
+    expected_points = ceil(hours * 60 / interval_minutes)
+    if "hyperliquid" not in exchanges or expected_points <= HYPERLIQUID_CANDLE_LIMIT:
+        return None
+    max_days = HYPERLIQUID_CANDLE_LIMIT * interval_minutes / 60 / 24
+    recommended = next(
+        (
+            candidate
+            for candidate in (1, 5, 15)
+            if ceil(hours * 60 / candidate) <= HYPERLIQUID_CANDLE_LIMIT
+        ),
+        None,
+    )
+    recommendation = (
+        f"；切换到{recommended}分钟可覆盖{_duration_text(hours)}"
+        if recommended is not None
+        else ""
+    )
+    return (
+        f"Hyperliquid 官方接口只提供最近{HYPERLIQUID_CANDLE_LIMIT}根K线："
+        f"{_duration_text(hours)}的{interval_minutes}分钟周期需要约{expected_points}根，"
+        f"当前最多约{max_days:.1f}天{recommendation}。"
+    )
+
+
 def build_pair_spread_points(
     leg1_klines: list[PairSpreadKlinePoint],
     leg2_klines: list[PairSpreadKlinePoint],
@@ -271,9 +302,18 @@ class PairSpreadQueryService:
 
         earliest_expected = used_start + timedelta(minutes=interval_minutes)
         if points[0].bucket_at > earliest_expected:
+            history_limit_warning = _hyperliquid_history_limit_warning(
+                {leg1.exchange, leg2.exchange},
+                hours=hours,
+                interval_minutes=interval_minutes,
+            )
             warnings.insert(
                 0,
-                f"请求{_duration_text(hours)}，最早可对齐K线为{_display_time(points[0].bucket_at)}，已按可获取数据展示。",
+                history_limit_warning
+                or (
+                    f"请求{_duration_text(hours)}，最早可对齐K线为"
+                    f"{_display_time(points[0].bucket_at)}，已按可获取数据展示。"
+                ),
             )
 
         funding_start = points[0].bucket_at

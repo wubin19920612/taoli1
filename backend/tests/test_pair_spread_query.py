@@ -12,7 +12,12 @@ from app.models.pair_spread import (
     PairSpreadLegQuery,
     PairSpreadPriceField,
 )
-from app.services.pair_spread_query import PairSpreadQueryError, PairSpreadQueryService, build_pair_spread_points
+from app.services.pair_spread_query import (
+    PairSpreadQueryError,
+    PairSpreadQueryService,
+    _hyperliquid_history_limit_warning,
+    build_pair_spread_points,
+)
 
 
 def kline(minutes: int, close: float) -> PairSpreadKlinePoint:
@@ -62,6 +67,31 @@ def test_pair_spread_points_apply_right_side_multiplier() -> None:
     assert points[0].leg2_close == 105
     assert points[0].spread_abs == 5
     assert points[0].spread_pct == pytest.approx(5 / ((100 + 105) / 2) * 100)
+
+
+def test_hyperliquid_history_limit_warning_recommends_15_minutes_for_30_days() -> None:
+    warning = _hyperliquid_history_limit_warning(
+        {"hyperliquid"},
+        hours=720,
+        interval_minutes=5,
+    )
+
+    assert warning is not None
+    assert "最近5000根K线" in warning
+    assert "需要约8640根" in warning
+    assert "最多约17.4天" in warning
+    assert "切换到15分钟可覆盖30天" in warning
+
+
+def test_hyperliquid_history_limit_warning_is_not_needed_for_15_minutes() -> None:
+    assert (
+        _hyperliquid_history_limit_warning(
+            {"hyperliquid"},
+            hours=720,
+            interval_minutes=15,
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio
