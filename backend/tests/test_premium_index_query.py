@@ -200,6 +200,55 @@ async def test_okx_official_premium_history_keeps_latest_sample_per_minute() -> 
 
 
 @pytest.mark.asyncio
+async def test_okx_current_premium_parses_funding_interval_and_limits() -> None:
+    funding_time = datetime(2026, 7, 17, 8, 0, tzinfo=UTC)
+    next_funding_time = funding_time + timedelta(hours=4)
+    requested_urls: list[str] = []
+    service = PremiumIndexQueryService()
+
+    async def fake_get_json(url: str):
+        requested_urls.append(url)
+        if "mark-price" in url:
+            return {"data": [{"markPx": "101"}]}
+        if "index-tickers" in url:
+            return {"data": [{"idxPx": "100"}]}
+        if "market/ticker" in url:
+            return {"data": [{"bidPx": "100.4", "askPx": "100.6", "last": "100.5"}]}
+        if "funding-rate" in url:
+            return {
+                "data": [
+                    {
+                        "fundingRate": "-0.010000",
+                        "nextFundingRate": "-0.005000",
+                        "fundingTime": str(int(funding_time.timestamp() * 1000)),
+                        "nextFundingTime": str(int(next_funding_time.timestamp() * 1000)),
+                        "minFundingRate": "-0.010000",
+                        "maxFundingRate": "0.010000",
+                    }
+                ]
+            }
+        if "premium-history" in url:
+            return {"data": []}
+        raise AssertionError(f"unexpected url: {url}")
+
+    service._get_json = fake_get_json  # type: ignore[method-assign]
+    try:
+        current = await service._fetch_okx_current_premium("OUSDT")
+    finally:
+        await service.aclose()
+
+    assert any("funding-rate?instId=O-USDT-SWAP" in url for url in requested_urls)
+    assert current.raw_symbol == "O-USDT-SWAP"
+    assert current.premium_pct == pytest.approx(1.0)
+    assert current.funding_rate_pct == pytest.approx(-1.0)
+    assert current.funding_next_rate_pct == pytest.approx(-0.5)
+    assert current.funding_next_time == next_funding_time
+    assert current.funding_interval_hours == pytest.approx(4)
+    assert current.funding_rate_lower_pct == pytest.approx(-1.0)
+    assert current.funding_rate_upper_pct == pytest.approx(1.0)
+
+
+@pytest.mark.asyncio
 async def test_premium_index_query_builds_stats_and_current() -> None:
     now = datetime(2026, 7, 11, 12, 3, 40, tzinfo=UTC)
     first = datetime(2026, 7, 11, 12, 0, tzinfo=UTC)

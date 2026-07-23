@@ -26,12 +26,14 @@ from app.services.pair_spread_query import (
     _exception_text,
     _first_row,
     _floor_minute,
+    _funding_interval_hours_from_row,
     _gate_contract,
     _interval_ms,
     _market_data_error_text,
     _okx_inst_id,
     _positive,
     _query_window_hours,
+    _rate_pct_from_row,
     _to_ms,
 )
 
@@ -719,6 +721,9 @@ class PremiumIndexQueryService(PairSpreadQueryService):
         mid = _mid(parse_float(ticker_row.get("bidPx")), parse_float(ticker_row.get("askPx")))
         funding = parse_float(funding_row.get("fundingRate"))
         next_funding = parse_float(funding_row.get("nextFundingRate"))
+        funding_next_time = parse_datetime_ms(funding_row.get("nextFundingTime")) or parse_datetime_ms(
+            funding_row.get("fundingTime")
+        )
         try:
             premium_points = await self._fetch_okx_official_premium_history(
                 symbol,
@@ -742,11 +747,20 @@ class PremiumIndexQueryService(PairSpreadQueryService):
             mid_premium_pct=_premium_pct(mid, index),
             funding_rate_pct=funding * 100 if funding is not None else None,
             funding_next_rate_pct=next_funding * 100 if next_funding is not None else None,
-            funding_next_time=parse_datetime_ms(funding_row.get("nextFundingTime"))
-            or parse_datetime_ms(funding_row.get("fundingTime")),
-            funding_interval_hours=None,
-            funding_rate_upper_pct=None,
-            funding_rate_lower_pct=None,
+            funding_next_time=funding_next_time,
+            funding_interval_hours=_funding_interval_hours_from_row(funding_row),
+            funding_rate_upper_pct=_rate_pct_from_row(
+                funding_row,
+                "maxFundingRate",
+                "fundingRateCap",
+                "upperFundingRate",
+            ),
+            funding_rate_lower_pct=_rate_pct_from_row(
+                funding_row,
+                "minFundingRate",
+                "fundingRateFloor",
+                "lowerFundingRate",
+            ),
             source=latest_premium.source if latest_premium is not None else "mark_index_fallback",
         )
 

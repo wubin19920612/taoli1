@@ -98,6 +98,33 @@ def _ratio_to_pct(value: float | None) -> float | None:
     return value * 100
 
 
+def _rate_pct_from_row(row: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        parsed = parse_float(row.get(key))
+        if parsed is not None:
+            return _ratio_to_pct(parsed)
+    return None
+
+
+def _funding_interval_hours_between(
+    funding_time: datetime | None,
+    next_funding_time: datetime | None,
+) -> float | None:
+    if funding_time is None or next_funding_time is None:
+        return None
+    seconds = (next_funding_time - funding_time).total_seconds()
+    if seconds <= 0:
+        return None
+    return seconds / 3600
+
+
+def _funding_interval_hours_from_row(row: dict[str, Any]) -> float | None:
+    return _funding_interval_hours_between(
+        parse_datetime_ms(row.get("fundingTime")),
+        parse_datetime_ms(row.get("nextFundingTime")),
+    )
+
+
 def _mid_price(bid: float | None, ask: float | None) -> float | None:
     bid = _positive(bid)
     ask = _positive(ask)
@@ -774,6 +801,9 @@ class PairSpreadQueryService:
         mid = _mid_price(parse_float(ticker.get("bidPx")), parse_float(ticker.get("askPx")))
         funding = parse_float(funding_row.get("fundingRate"))
         next_funding = parse_float(funding_row.get("nextFundingRate"))
+        funding_next_time = parse_datetime_ms(funding_row.get("nextFundingTime")) or parse_datetime_ms(
+            funding_row.get("fundingTime")
+        )
         return _current_leg(
             exchange="okx",
             symbol=symbol,
@@ -784,8 +814,20 @@ class PairSpreadQueryService:
             last_price=_positive(parse_float(ticker.get("last"))),
             funding_rate_pct=funding * 100 if funding is not None else None,
             funding_next_rate_pct=next_funding * 100 if next_funding is not None else None,
-            funding_next_time=parse_datetime_ms(funding_row.get("nextFundingTime"))
-            or parse_datetime_ms(funding_row.get("fundingTime")),
+            funding_next_time=funding_next_time,
+            funding_interval_hours=_funding_interval_hours_from_row(funding_row),
+            funding_rate_upper_pct=_rate_pct_from_row(
+                funding_row,
+                "maxFundingRate",
+                "fundingRateCap",
+                "upperFundingRate",
+            ),
+            funding_rate_lower_pct=_rate_pct_from_row(
+                funding_row,
+                "minFundingRate",
+                "fundingRateFloor",
+                "lowerFundingRate",
+            ),
         )
 
     async def _fetch_bybit_current(self, symbol: str) -> PairSpreadCurrentLeg:

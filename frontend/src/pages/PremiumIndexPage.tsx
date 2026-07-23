@@ -29,7 +29,7 @@ type SavedPremiumIndexPreset = PremiumIndexFormValues & {
 };
 
 type FundingFollowEstimate = {
-  exchange: "bitget" | "bybit";
+  exchange: "bitget" | "bybit" | "okx";
   title: string;
   formulaNote: string;
   basisNote: string;
@@ -191,16 +191,15 @@ function bitgetFundingFromAveragePremiumPct(
     : uncapped;
 }
 
-function bybitFundingFromAveragePremiumPct(
+function premiumBasedFundingFromAveragePremiumPct(
   averagePremiumPct: number | null | undefined,
-  intervalHours: number,
+  interestPct: number,
   lowerLimitPct: number | null = null,
   upperLimitPct: number | null = null
 ): number | null {
   if (typeof averagePremiumPct !== "number" || !Number.isFinite(averagePremiumPct)) {
     return null;
   }
-  const interestPct = 0.03 / (24 / intervalHours);
   const dampenerPct = 0.05;
   const uncapped = averagePremiumPct + clamp(interestPct - averagePremiumPct, -dampenerPct, dampenerPct);
   const withLowerLimit =
@@ -210,6 +209,28 @@ function bybitFundingFromAveragePremiumPct(
   return typeof upperLimitPct === "number" && Number.isFinite(upperLimitPct)
     ? Math.min(withLowerLimit, upperLimitPct)
     : withLowerLimit;
+}
+
+function bybitFundingFromAveragePremiumPct(
+  averagePremiumPct: number | null | undefined,
+  intervalHours: number,
+  lowerLimitPct: number | null = null,
+  upperLimitPct: number | null = null
+): number | null {
+  return premiumBasedFundingFromAveragePremiumPct(
+    averagePremiumPct,
+    0.03 / (24 / intervalHours),
+    lowerLimitPct,
+    upperLimitPct
+  );
+}
+
+function okxFundingFromAveragePremiumPct(
+  averagePremiumPct: number | null | undefined,
+  lowerLimitPct: number | null = null,
+  upperLimitPct: number | null = null
+): number | null {
+  return premiumBasedFundingFromAveragePremiumPct(averagePremiumPct, 0.01, lowerLimitPct, upperLimitPct);
 }
 
 function sumConsecutiveWeights(start: number, count: number): number {
@@ -291,15 +312,23 @@ function likelyFundingLimitPct(fundingPct: number | null | undefined): number | 
   return abs >= 0.45 ? abs : null;
 }
 
+function exchangeDisplayName(exchange: FundingFollowEstimate["exchange"]): string {
+  if (exchange === "okx") {
+    return "OKX";
+  }
+  return exchange[0].toUpperCase() + exchange.slice(1);
+}
+
 function buildFundingFollowEstimate(
   result: PremiumIndexQueryResult | null,
   current: PremiumIndexCurrentSnapshot | null,
   currentPremiumPct: number | null
 ): FundingFollowEstimate | null {
-  if (!result || !current || !["bitget", "bybit"].includes(result.exchange)) {
+  if (!result || !current || !["bitget", "bybit", "okx"].includes(result.exchange)) {
     return null;
   }
-  const exchange = result.exchange as "bitget" | "bybit";
+  const exchange = result.exchange as FundingFollowEstimate["exchange"];
+  const exchangeLabel = exchangeDisplayName(exchange);
   const intervalHours = current.funding_interval_hours ?? nearestFundingIntervalHours(result.hours);
   const intervalSource = current.funding_interval_hours
     ? "交易所 fundingInterval"
@@ -320,30 +349,38 @@ function buildFundingFollowEstimate(
   const averagePremiumPct = weightedStats.averagePremiumPct;
   const elapsedHours = windowStart ? Math.min(hoursBetween(windowStart, observedAt), intervalHours) : null;
   const remainingHours = nextFundingAt ? Math.max(hoursBetween(observedAt, nextFundingAt), 0) : null;
-  const limitPct = exchange === "bitget" ? likelyFundingLimitPct(current.funding_rate_pct) : null;
+  const inferredLimitPct = ["bitget", "okx"].includes(exchange)
+    ? likelyFundingLimitPct(current.funding_rate_pct)
+    : null;
   const explicitLowerLimitPct =
-    exchange === "bybit" &&
+    ["bybit", "okx"].includes(exchange) &&
     typeof current.funding_rate_lower_pct === "number" &&
     Number.isFinite(current.funding_rate_lower_pct)
       ? current.funding_rate_lower_pct
       : null;
   const explicitUpperLimitPct =
-    exchange === "bybit" &&
+    ["bybit", "okx"].includes(exchange) &&
     typeof current.funding_rate_upper_pct === "number" &&
     Number.isFinite(current.funding_rate_upper_pct)
       ? current.funding_rate_upper_pct
       : null;
-  const lowerFundingLimitPct = exchange === "bitget" && limitPct !== null ? -limitPct : explicitLowerLimitPct;
-  const upperFundingLimitPct = exchange === "bitget" && limitPct !== null ? limitPct : explicitUpperLimitPct;
+  const lowerFundingLimitPct = explicitLowerLimitPct ?? (inferredLimitPct !== null ? -inferredLimitPct : null);
+  const upperFundingLimitPct = explicitUpperLimitPct ?? (inferredLimitPct !== null ? inferredLimitPct : null);
   const fundingFormula = (premiumPct: number | null | undefined) => (
     exchange === "bitget"
-      ? bitgetFundingFromAveragePremiumPct(premiumPct, intervalHours, limitPct)
-      : bybitFundingFromAveragePremiumPct(
-        premiumPct,
-        intervalHours,
-        explicitLowerLimitPct,
-        explicitUpperLimitPct
-      )
+      ? bitgetFundingFromAveragePremiumPct(premiumPct, intervalHours, inferredLimitPct)
+      : exchange === "bybit"
+        ? bybitFundingFromAveragePremiumPct(
+          premiumPct,
+          intervalHours,
+          lowerFundingLimitPct,
+          upperFundingLimitPct
+        )
+        : okxFundingFromAveragePremiumPct(
+          premiumPct,
+          lowerFundingLimitPct,
+          upperFundingLimitPct
+        )
   );
   const estimatedFundingPct = fundingFormula(averagePremiumPct);
   const assumption = recentPremiumAssumption(windowPoints, observedAt, result.interval_minutes);
@@ -365,16 +402,16 @@ function buildFundingFollowEstimate(
   const dampenerPct = 0.05;
   const intervalScale = 8 / intervalHours;
   const lowerLimitAveragePremiumPct =
-    exchange === "bitget" && limitPct !== null
-      ? -limitPct * intervalScale - dampenerPct
-      : exchange === "bybit" && explicitLowerLimitPct !== null
-        ? explicitLowerLimitPct - dampenerPct
+    exchange === "bitget" && inferredLimitPct !== null
+      ? -inferredLimitPct * intervalScale - dampenerPct
+      : ["bybit", "okx"].includes(exchange) && lowerFundingLimitPct !== null
+        ? lowerFundingLimitPct - dampenerPct
         : null;
   const upperLimitAveragePremiumPct =
-    exchange === "bitget" && limitPct !== null
-      ? limitPct * intervalScale + dampenerPct
-      : exchange === "bybit" && explicitUpperLimitPct !== null
-        ? explicitUpperLimitPct + dampenerPct
+    exchange === "bitget" && inferredLimitPct !== null
+      ? inferredLimitPct * intervalScale + dampenerPct
+      : ["bybit", "okx"].includes(exchange) && upperFundingLimitPct !== null
+        ? upperFundingLimitPct + dampenerPct
         : null;
   const directionReference = [
     current.funding_rate_pct,
@@ -410,16 +447,22 @@ function buildFundingFollowEstimate(
   );
   return {
     exchange,
-    title: `资金费跟随估算（${exchange === "bitget" ? "Bitget" : "Bybit"}）`,
+    title: `资金费跟随估算（${exchangeLabel}）`,
     formulaNote: exchange === "bitget"
       ? "按 Bitget 公式近似：平均P = (P1×1 + P2×2 + ... + Pn×n) / (1 + 2 + ... + n)，资金费率 = [平均P + clamp(0.01% - 平均P, -0.05%, 0.05%)] ÷ (8 / N)，再套合约资金费上下限。"
-      : "按 Bybit 公式近似：平均P = (P1×1 + P2×2 + ... + Pn×n) / (1 + 2 + ... + n)，资金费率 = 平均P + clamp(利率I - 平均P, -0.05%, 0.05%)，I = 0.03% / (24 / N)；若交易所返回上下限，再按上下限截断。Bybit 官方P来自 Impact Bid/Ask。",
+      : exchange === "bybit"
+        ? "按 Bybit 公式近似：平均P = (P1×1 + P2×2 + ... + Pn×n) / (1 + 2 + ... + n)，资金费率 = 平均P + clamp(利率I - 平均P, -0.05%, 0.05%)，I = 0.03% / (24 / N)；若交易所返回上下限，再按上下限截断。Bybit 官方P来自 Impact Bid/Ask。"
+        : "按 OKX 公式近似：平均P = (P1×1 + P2×2 + ... + Pn×n) / (1 + 2 + ... + n)，资金费率 = 平均P + clamp(0.01% - 平均P, -0.05%, 0.05%)；若 OKX 返回上下限，再按上下限截断。",
     basisNote: exchange === "bitget"
       ? "Bitget 当前没有官方分钟 premium 曲线时，本页用“标记价-指数价”偏离近似 P；剩余时间默认按近期稳定P均值继续估算，避免被最后一个点的小波动牵着跳。"
-      : "Bybit 本页历史曲线使用官方 premium-index-price-kline 作为 P；剩余时间默认按近期官方P均值继续估算。",
+      : exchange === "bybit"
+        ? "Bybit 本页历史曲线使用官方 premium-index-price-kline 作为 P；剩余时间默认按近期官方P均值继续估算。"
+        : "OKX 本页历史曲线优先使用官方 premium-history 作为 P；拿不到时才用“标记价-指数价”偏离近似 P，剩余时间默认按近期官方P均值继续估算。",
     limitNote: exchange === "bitget"
       ? "Bitget 上下限用当前返回值做近似识别。"
-      : "未取到 Bybit 上下限时，本面板不做精确上下限截断；最终以交易所返回资金费为准。",
+      : exchange === "bybit"
+        ? "未取到 Bybit 上下限时，本面板不做精确上下限截断；最终以交易所返回资金费为准。"
+        : "优先使用 OKX 返回的上下限；缺少上下限但当前资金费疑似已触及整值上限/下限时，用当前返回值近似识别。",
     intervalSource,
     intervalHours,
     sampledPoints: windowPoints.length,
@@ -436,7 +479,7 @@ function buildFundingFollowEstimate(
     estimatedFundingPct,
     projectedAveragePremiumPct: projectedAveragePremium,
     projectedFundingIfCurrentPremiumPersistsPct,
-    limitPct,
+    limitPct: explicitLowerLimitPct === null && explicitUpperLimitPct === null ? inferredLimitPct : null,
     lowerFundingLimitPct,
     upperFundingLimitPct,
     lowerLimitAveragePremiumPct,
@@ -906,10 +949,11 @@ function FundingFollowPanel({ estimate }: { estimate: FundingFollowEstimate | nu
   if (!estimate) {
     return null;
   }
+  const exchangeLabel = exchangeDisplayName(estimate.exchange);
   const limitText = estimate.limitPct !== null
     ? `当前交易所返回值疑似触及 ±${estimate.limitPct.toFixed(4)}% 上下限`
     : estimate.lowerFundingLimitPct !== null || estimate.upperFundingLimitPct !== null
-      ? `Bybit 返回上下限 ${signedPct(estimate.lowerFundingLimitPct)} / ${signedPct(estimate.upperFundingLimitPct)}`
+      ? `${exchangeLabel} 返回上下限 ${signedPct(estimate.lowerFundingLimitPct)} / ${signedPct(estimate.upperFundingLimitPct)}`
       : estimate.limitNote;
   const thresholdText = estimate.lowerLimitAveragePremiumPct !== null || estimate.upperLimitAveragePremiumPct !== null
     ? `触及下限约需平均P ≤ ${signedPct(estimate.lowerLimitAveragePremiumPct)}，触及上限约需平均P ≥ ${signedPct(estimate.upperLimitAveragePremiumPct)}`

@@ -106,6 +106,61 @@ function bybitPremiumResult() {
   };
 }
 
+function okxPremiumResult() {
+  return {
+    exchange: "okx",
+    symbol: "OUSDT",
+    hours: 4,
+    interval_minutes: 60,
+    observed_at: "2026-07-21T05:40:00Z",
+    point_count: 2,
+    first_seen_at: "2026-07-21T04:00:00Z",
+    last_seen_at: "2026-07-21T05:00:00Z",
+    premium_pct: {
+      min: -1.2,
+      max: -1.2,
+      mean: -1.2,
+      current: -1.2
+    },
+    current: {
+      observed_at: "2026-07-21T05:40:00Z",
+      exchange: "okx",
+      symbol: "OUSDT",
+      raw_symbol: "O-USDT-SWAP",
+      mark_price: 0.6279,
+      index_price: 0.63684,
+      mid_price: 0.628,
+      last_price: 0.628,
+      premium_pct: -1.2,
+      mid_premium_pct: -1.3881,
+      funding_rate_pct: -1,
+      funding_next_rate_pct: null,
+      funding_next_time: "2026-07-21T08:00:00Z",
+      funding_interval_hours: 4,
+      funding_rate_upper_pct: null,
+      funding_rate_lower_pct: null,
+      source: "okx_premium_index"
+    },
+    points: [
+      {
+        bucket_at: "2026-07-21T04:00:00Z",
+        premium_pct: -1.2,
+        mark_price: null,
+        index_price: null,
+        source: "okx_premium_index"
+      },
+      {
+        bucket_at: "2026-07-21T05:00:00Z",
+        premium_pct: -1.2,
+        mark_price: null,
+        index_price: null,
+        source: "okx_premium_index"
+      }
+    ],
+    warnings: []
+  };
+}
+
 describe("PremiumIndexPage", () => {
   const requests: string[] = [];
 
@@ -214,5 +269,31 @@ describe("PremiumIndexPage", () => {
 
     await user.click(screen.getByRole("button", { name: /最新/ }));
     await waitFor(() => expect(weightedCard?.textContent).toContain("2点"));
+  });
+
+  it("estimates the remaining OKX premium needed when the funding rate looks capped", async () => {
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), "http://localhost");
+      requests.push(String(input));
+      if (url.pathname.includes("/premium-index/query")) {
+        return Response.json(okxPremiumResult());
+      }
+      if (url.pathname.includes("/premium-index/current")) {
+        return Response.json(okxPremiumResult().current);
+      }
+      return Response.json({});
+    });
+    const user = userEvent.setup();
+    render(<PremiumIndexPage />);
+
+    await user.click(screen.getByRole("button", { name: /查询/ }));
+
+    const weightedCard = (await screen.findByText("本周期加权溢价指数")).parentElement;
+    expect(weightedCard?.textContent).toContain("-1.2000%");
+    const requiredCard = screen.getByText("剩余拉满所需溢价指数").parentElement;
+    expect(requiredCard?.textContent).toContain("-0.9857%");
+    expect(requiredCard?.textContent).toContain("拉满下限 -1.0000%");
+    expect(await screen.findByText("资金费跟随估算（OKX）")).toBeTruthy();
+    expect(screen.getByText(/当前交易所返回值疑似触及/)).toBeTruthy();
   });
 });
