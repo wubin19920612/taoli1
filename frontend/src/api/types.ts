@@ -5,6 +5,7 @@ export type PhonePriceAlertCondition = "above" | "below";
 export type PhonePriceAlertPriceField = "mark_price" | "index_price" | "mid_price" | "bid" | "ask";
 export type PairSpreadPriceField = "mark_price" | "mid_price" | "index_price" | "last_price";
 export type AnnouncementKind = "listing" | "delisting" | "other";
+export type SecondLevelSampleStatus = "ok" | "partial" | "error";
 
 export interface Opportunity {
   id: string;
@@ -88,6 +89,63 @@ export interface MarketSnapshot {
   index_price?: number | null;
   timestamp: string;
   raw_symbol: string;
+}
+
+export interface SecondLevelSamplingConfig {
+  enabled: boolean;
+  interval_seconds: number;
+  retention_hours: number;
+  exchanges: string[];
+  symbols: string[];
+  max_concurrent_requests: number;
+}
+
+export interface SecondLevelMarketSample {
+  id?: number | null;
+  observed_at: string;
+  exchange: string;
+  symbol: string;
+  status: SecondLevelSampleStatus;
+  spot_bid?: number | null;
+  spot_ask?: number | null;
+  spot_mid?: number | null;
+  spot_last?: number | null;
+  future_bid?: number | null;
+  future_ask?: number | null;
+  future_mid?: number | null;
+  future_last?: number | null;
+  mark_price?: number | null;
+  index_price?: number | null;
+  mark_premium_pct?: number | null;
+  mid_premium_pct?: number | null;
+  funding_rate_pct?: number | null;
+  raw_spot_symbol?: string | null;
+  raw_future_symbol?: string | null;
+  latency_ms?: number | null;
+  error?: string | null;
+}
+
+export interface SecondLevelPairSpreadSnapshot {
+  symbol: string;
+  left_exchange: string;
+  right_exchange: string;
+  observed_at: string;
+  left_future_mid?: number | null;
+  right_future_mid?: number | null;
+  future_spread_pct?: number | null;
+  left_mark_premium_pct?: number | null;
+  right_mark_premium_pct?: number | null;
+  premium_gap_pct?: number | null;
+}
+
+export interface SecondLevelSamplingStatus {
+  running: boolean;
+  config: SecondLevelSamplingConfig;
+  sample_count: number;
+  latest_observed_at?: string | null;
+  latest_error?: string | null;
+  latest_samples: SecondLevelMarketSample[];
+  latest_spreads: SecondLevelPairSpreadSnapshot[];
 }
 
 export interface HealthStatus {

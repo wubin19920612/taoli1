@@ -1073,6 +1073,36 @@ body {
   padding-top: 8px;
 }
 
+.second-sampling-page .page-stack {
+  width: 100%;
+}
+
+.second-sampling-page .page-heading-row {
+  align-items: flex-start;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+}
+
+.second-sampling-page .ant-card {
+  border-radius: 8px;
+}
+
+.sampling-control-card .ant-form-item {
+  margin-bottom: 10px;
+}
+
+.sampling-filter-select {
+  min-width: 140px;
+}
+
+.sampling-error-text {
+  margin: 0;
+  max-width: 100%;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
 .pair-saved-title,
 .premium-saved-title {
   color: #687872;
@@ -2694,6 +2724,10 @@ body {
     overflow: visible;
     text-overflow: clip;
     white-space: normal;
+  }
+
+  .second-sampling-page .page-heading-row {
+    flex-direction: column;
   }
 
   .pair-saved-presets,

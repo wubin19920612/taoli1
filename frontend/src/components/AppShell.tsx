@@ -10,7 +10,8 @@ import {
   NodeIndexOutlined,
   RadarChartOutlined,
   StockOutlined,
-  SettingOutlined
+  SettingOutlined,
+  ThunderboltOutlined
 } from "@ant-design/icons";
 import { Layout, Menu, Space, Spin, Typography } from "antd";
 import {
@@ -29,6 +30,7 @@ type PageKey =
   | "opportunity-radar"
   | "pair-monitor"
   | "premium-index"
+  | "second-sampling"
   | "tradfi-perp"
   | "gate-twap"
   | "index-components"
@@ -65,6 +67,11 @@ const lazyPages: Record<PageKey, LazyPage> = {
   "premium-index": lazy(() =>
     import("../pages/PremiumIndexPage").then((module) => ({
       default: module.PremiumIndexPage
+    }))
+  ),
+  "second-sampling": lazy(() =>
+    import("../pages/SecondLevelSamplingPage").then((module) => ({
+      default: module.SecondLevelSamplingPage
     }))
   ),
   "tradfi-perp": lazy(() =>
@@ -137,6 +144,11 @@ export function AppShell() {
               key: "premium-index",
               icon: <LineChartOutlined />,
               label: "溢价指数"
+            },
+            {
+              key: "second-sampling",
+              icon: <ThunderboltOutlined />,
+              label: "1s 采样"
             },
             {
               key: "tradfi-perp",

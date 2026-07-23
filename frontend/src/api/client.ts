@@ -49,6 +49,9 @@ import type {
   PremiumIndexCurrentSnapshot,
   PremiumIndexQueryResult,
   RiskSettings,
+  SecondLevelMarketSample,
+  SecondLevelSamplingConfig,
+  SecondLevelSamplingStatus,
   ServiceControlStatus,
   ServiceRestartResult,
   TradfiPerpMonitorPreview
@@ -620,6 +623,57 @@ export async function getCurrentPremiumIndex(query: {
       throw new Error(extractErrorMessage(text, response.status));
     }
     return response.json() as Promise<PremiumIndexCurrentSnapshot>;
+  });
+}
+
+export async function listSecondLevelSamplingExchanges(): Promise<string[]> {
+  return fetchJson<string[]>("/second-level-sampling/exchanges");
+}
+
+export async function getSecondLevelSamplingConfig(): Promise<SecondLevelSamplingConfig> {
+  return fetchJson<SecondLevelSamplingConfig>("/second-level-sampling/config");
+}
+
+export async function updateSecondLevelSamplingConfig(
+  config: SecondLevelSamplingConfig
+): Promise<SecondLevelSamplingConfig> {
+  return fetchJson<SecondLevelSamplingConfig>("/second-level-sampling/config", {
+    method: "PUT",
+    body: JSON.stringify(config)
+  });
+}
+
+export async function startSecondLevelSampling(): Promise<SecondLevelSamplingStatus> {
+  return fetchJson<SecondLevelSamplingStatus>("/second-level-sampling/start", {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+}
+
+export async function stopSecondLevelSampling(): Promise<SecondLevelSamplingStatus> {
+  return fetchJson<SecondLevelSamplingStatus>("/second-level-sampling/stop", {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+}
+
+export async function getSecondLevelSamplingStatus(): Promise<SecondLevelSamplingStatus> {
+  return fetchJson<SecondLevelSamplingStatus>("/second-level-sampling/status");
+}
+
+export async function listSecondLevelSamples(query: {
+  exchange?: string;
+  symbol?: string;
+  minutes?: number;
+  limit?: number;
+} = {}): Promise<SecondLevelMarketSample[]> {
+  const url = buildUrl("/second-level-sampling/samples", query);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(extractErrorMessage(text, response.status));
+    }
+    return response.json() as Promise<SecondLevelMarketSample[]>;
   });
 }
 

@@ -337,6 +337,40 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
           ON funding_research_paper_trades(symbol, opened_at DESC);
         CREATE INDEX IF NOT EXISTS idx_funding_research_paper_pair_status
           ON funding_research_paper_trades(symbol, long_exchange, short_exchange, status);
+
+        CREATE TABLE IF NOT EXISTS second_level_market_samples (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          observed_at TEXT NOT NULL,
+          exchange TEXT NOT NULL,
+          symbol TEXT NOT NULL,
+          status TEXT NOT NULL,
+          spot_bid REAL,
+          spot_ask REAL,
+          spot_mid REAL,
+          spot_last REAL,
+          future_bid REAL,
+          future_ask REAL,
+          future_mid REAL,
+          future_last REAL,
+          mark_price REAL,
+          index_price REAL,
+          mark_premium_pct REAL,
+          mid_premium_pct REAL,
+          funding_rate_pct REAL,
+          raw_spot_symbol TEXT,
+          raw_future_symbol TEXT,
+          latency_ms REAL,
+          error TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_second_level_samples_symbol_time
+          ON second_level_market_samples(symbol, observed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_second_level_samples_exchange_time
+          ON second_level_market_samples(exchange, observed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_second_level_samples_pair_time
+          ON second_level_market_samples(symbol, exchange, observed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_second_level_samples_time
+          ON second_level_market_samples(observed_at DESC);
         """
     )
     await _ensure_opportunity_history_columns(db)

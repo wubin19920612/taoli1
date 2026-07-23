@@ -25,6 +25,7 @@ from app.api import (
     routes_premium_index,
     routes_phone_alerts,
     routes_settings,
+    routes_second_level_sampling,
     stream,
     routes_tradfi_perp_monitor,
 )
@@ -91,6 +92,7 @@ from app.services.phone_price_alerts import PhonePriceAlertEngine, build_phone_p
 from app.services.risk_labels import effective_open_edge_pct, known_volume_24h_usdt
 from app.services.snapshot_store import SnapshotStore
 from app.services.service_control import DockerServiceController, ServiceControlConfig
+from app.services.second_level_sampler import SecondLevelSampler, SecondLevelSamplingRepository
 
 logger = logging.getLogger(__name__)
 
@@ -592,6 +594,8 @@ def create_app(
         app.state.funding_research_repo = FundingResearchRepository(db)
         app.state.index_component_repo = IndexComponentRepository(db)
         app.state.announcement_repo = AnnouncementRepository(db)
+        app.state.second_level_sampler = SecondLevelSampler(SecondLevelSamplingRepository(db))
+        await app.state.second_level_sampler.initialize()
         tasks: list[asyncio.Task] = []
         collector: MarketCollector | None = None
         announcement_provider = None
@@ -709,6 +713,7 @@ def create_app(
                 "service_controller",
                 "gate_twap_manager",
                 "tradfi_perp_live_fetcher",
+                "second_level_sampler",
                 "feishu_notifier",
             )
             await db.close()
@@ -721,6 +726,7 @@ def create_app(
     app.state.funding_research_repo = None
     app.state.pair_spread_query_service_factory = None
     app.state.premium_index_query_service_factory = None
+    app.state.second_level_sampler = None
     app.state.alert_engine = AlertEngine()
     app.state.phone_price_alert_engine = PhonePriceAlertEngine()
     app.state.opportunity_radar_alert_engine = OpportunityRadarAlertEngine()
@@ -783,6 +789,7 @@ def create_app(
     app.include_router(routes_funding_research.router, prefix="/api")
     app.include_router(routes_gate_twap.router, prefix="/api")
     app.include_router(routes_tradfi_perp_monitor.router, prefix="/api")
+    app.include_router(routes_second_level_sampling.router, prefix="/api")
     app.include_router(routes_settings.router, prefix="/api")
     app.include_router(routes_admin.router, prefix="/api")
     app.include_router(stream.router, prefix="/api")
