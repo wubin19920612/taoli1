@@ -12,6 +12,7 @@ import httpx
 from app.exchanges.base import (
     DEFAULT_HEADERS,
     DEFAULT_LIMITS,
+    next_aligned_funding_time,
     normalize_usdt_symbol,
     parse_datetime_ms,
     parse_datetime_seconds,
@@ -106,6 +107,14 @@ def _rate_pct_from_row(row: dict[str, Any], *keys: str) -> float | None:
     return None
 
 
+def _symmetric_rate_limit_pct_from_row(row: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        parsed = parse_float(row.get(key))
+        if parsed is not None:
+            return abs(_ratio_to_pct(parsed))
+    return None
+
+
 def _funding_interval_hours_between(
     funding_time: datetime | None,
     next_funding_time: datetime | None,
@@ -123,6 +132,16 @@ def _funding_interval_hours_from_row(row: dict[str, Any]) -> float | None:
         parse_datetime_ms(row.get("fundingTime")),
         parse_datetime_ms(row.get("nextFundingTime")),
     )
+
+
+def _next_aligned_funding_time_from_hours(now: datetime, interval_hours: float | None) -> datetime | None:
+    interval = _positive(interval_hours)
+    if interval is None:
+        return None
+    rounded = int(round(interval))
+    if rounded <= 0 or abs(interval - rounded) > 1e-9:
+        return None
+    return next_aligned_funding_time(now, rounded)
 
 
 def _mid_price(bid: float | None, ask: float | None) -> float | None:
@@ -765,9 +784,10 @@ class PairSpreadQueryService:
         symbol: str,
     ) -> PairSpreadCurrentLeg:
         raw = _compact_symbol(symbol)
-        premium, book = await asyncio.gather(
+        premium, book, funding_info = await asyncio.gather(
             self._get_json(f"{base_url}/fapi/v1/premiumIndex?symbol={raw}"),
             self._get_json(f"{base_url}/fapi/v1/ticker/bookTicker?symbol={raw}"),
+            self._fetch_binance_like_funding_info(base_url, raw),
         )
         mark = _positive(parse_float(premium.get("markPrice"))) if isinstance(premium, dict) else None
         index = _positive(parse_float(premium.get("indexPrice"))) if isinstance(premium, dict) else None
@@ -775,6 +795,12 @@ class PairSpreadQueryService:
         ask = parse_float(book.get("askPrice")) if isinstance(book, dict) else None
         mid = _mid_price(bid, ask)
         funding = parse_float(premium.get("lastFundingRate")) if isinstance(premium, dict) else None
+        funding_interval_hours = _positive(parse_float(funding_info.get("fundingIntervalHours"))) or 8
+        funding_next_time = (
+            parse_datetime_ms(premium.get("nextFundingTime"))
+            if isinstance(premium, dict)
+            else None
+        ) or _next_aligned_funding_time_from_hours(utc_now(), funding_interval_hours)
         return _current_leg(
             exchange=exchange,
             symbol=symbol,
@@ -785,10 +811,31 @@ class PairSpreadQueryService:
             last_price=None,
             funding_rate_pct=funding * 100 if funding is not None else None,
             funding_next_rate_pct=None,
-            funding_next_time=parse_datetime_ms(premium.get("nextFundingTime"))
-            if isinstance(premium, dict)
-            else None,
+            funding_next_time=funding_next_time,
+            funding_interval_hours=funding_interval_hours,
+            funding_rate_upper_pct=_rate_pct_from_row(
+                funding_info,
+                "adjustedFundingRateCap",
+                "fundingRateCap",
+                "upperFundingRate",
+            ),
+            funding_rate_lower_pct=_rate_pct_from_row(
+                funding_info,
+                "adjustedFundingRateFloor",
+                "fundingRateFloor",
+                "lowerFundingRate",
+            ),
         )
+
+    async def _fetch_binance_like_funding_info(self, base_url: str, raw_symbol: str) -> dict[str, Any]:
+        try:
+            rows = await self._get_json(f"{base_url}/fapi/v1/fundingInfo")
+        except Exception:  # noqa: BLE001 - interval/caps are useful but should not block current prices.
+            return {}
+        for row in rows if isinstance(rows, list) else []:
+            if isinstance(row, dict) and row.get("symbol") == raw_symbol:
+                return row
+        return {}
 
     async def _fetch_okx_current(self, symbol: str) -> PairSpreadCurrentLeg:
         inst_id = _okx_inst_id(symbol)
@@ -869,9 +916,29 @@ class PairSpreadQueryService:
         rows = await self._get_json(
             f"https://api.gateio.ws/api/v4/futures/usdt/tickers?contract={contract}"
         )
+        try:
+            contract_row = await self._get_json(
+                f"https://api.gateio.ws/api/v4/futures/usdt/contracts/{contract}"
+            )
+        except Exception:  # noqa: BLE001 - ticker still carries the critical current fields.
+            contract_row = {}
+        if not isinstance(contract_row, dict):
+            contract_row = {}
         row = _first_row(rows if isinstance(rows, list) else [])
         funding = parse_float(row.get("funding_rate"))
         next_funding = parse_float(row.get("funding_rate_indicative"))
+        interval_seconds = parse_float(row.get("funding_interval")) or parse_float(contract_row.get("funding_interval"))
+        funding_interval_hours = interval_seconds / 3600 if interval_seconds and interval_seconds > 0 else None
+        funding_next_time = parse_datetime_seconds(row.get("funding_next_apply")) or parse_datetime_seconds(
+            contract_row.get("funding_next_apply")
+        )
+        symmetric_limit = _symmetric_rate_limit_pct_from_row(
+            contract_row,
+            "funding_rate_limit",
+            "fundingRateLimit",
+            "funding_rate_cap",
+            "fundingRateCap",
+        )
         return _current_leg(
             exchange="gate",
             symbol=symbol,
@@ -882,7 +949,28 @@ class PairSpreadQueryService:
             last_price=_positive(parse_float(row.get("last"))),
             funding_rate_pct=funding * 100 if funding is not None else None,
             funding_next_rate_pct=next_funding * 100 if next_funding is not None else None,
-            funding_next_time=parse_datetime_seconds(row.get("funding_next_apply")),
+            funding_next_time=funding_next_time,
+            funding_interval_hours=funding_interval_hours,
+            funding_rate_upper_pct=_rate_pct_from_row(
+                contract_row,
+                "funding_rate_upper_limit",
+                "fundingRateUpperLimit",
+                "max_funding_rate",
+                "maxFundingRate",
+                "funding_rate_max",
+                "fundingRateMax",
+            )
+            or symmetric_limit,
+            funding_rate_lower_pct=_rate_pct_from_row(
+                contract_row,
+                "funding_rate_lower_limit",
+                "fundingRateLowerLimit",
+                "min_funding_rate",
+                "minFundingRate",
+                "funding_rate_min",
+                "fundingRateMin",
+            )
+            or (-symmetric_limit if symmetric_limit is not None else None),
         )
 
     async def _fetch_bitget_current(self, symbol: str) -> PairSpreadCurrentLeg:
@@ -927,6 +1015,7 @@ class PairSpreadQueryService:
             if raw_coin.upper() != resolved_coin.upper():
                 continue
             funding = parse_float(context.get("funding"))
+            now = utc_now()
             return _current_leg(
                 exchange="hyperliquid",
                 symbol=symbol,
@@ -937,7 +1026,10 @@ class PairSpreadQueryService:
                 last_price=None,
                 funding_rate_pct=funding * 100 if funding is not None else None,
                 funding_next_rate_pct=None,
-                funding_next_time=None,
+                funding_next_time=next_aligned_funding_time(now, 1),
+                funding_interval_hours=1,
+                funding_rate_upper_pct=4.0,
+                funding_rate_lower_pct=-4.0,
             )
         raise RuntimeError(f"hyperliquid symbol not found: {symbol}")
 

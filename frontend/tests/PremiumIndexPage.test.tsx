@@ -161,6 +161,79 @@ function okxPremiumResult() {
   };
 }
 
+function fundingFollowPremiumResult(
+  exchange: "binance" | "gate" | "hyperliquid",
+  options?: {
+    fundingIntervalHours?: number;
+    fundingLimitPct?: number;
+    fundingRatePct?: number;
+    hours?: number;
+    intervalMinutes?: number;
+    nextFundingTime?: string;
+    symbol?: string;
+  }
+) {
+  const symbol = options?.symbol ?? "IOUSDT";
+  const fundingIntervalHours = options?.fundingIntervalHours ?? 4;
+  const fundingLimitPct = options?.fundingLimitPct ?? 1;
+  const fundingRatePct = options?.fundingRatePct ?? -1;
+  const hours = options?.hours ?? 4;
+  const intervalMinutes = options?.intervalMinutes ?? 60;
+  const nextFundingTime = options?.nextFundingTime ?? "2026-07-21T08:00:00Z";
+  return {
+    exchange,
+    symbol,
+    hours,
+    interval_minutes: intervalMinutes,
+    observed_at: "2026-07-21T05:40:00Z",
+    point_count: 2,
+    first_seen_at: "2026-07-21T04:00:00Z",
+    last_seen_at: "2026-07-21T05:00:00Z",
+    premium_pct: {
+      min: -1.2,
+      max: -1.2,
+      mean: -1.2,
+      current: -1.2
+    },
+    current: {
+      observed_at: "2026-07-21T05:40:00Z",
+      exchange,
+      symbol,
+      raw_symbol: exchange === "gate" ? "IO_USDT" : symbol,
+      mark_price: 0.6279,
+      index_price: 0.63684,
+      mid_price: 0.628,
+      last_price: 0.628,
+      premium_pct: -1.2,
+      mid_premium_pct: -1.3881,
+      funding_rate_pct: fundingRatePct,
+      funding_next_rate_pct: null,
+      funding_next_time: nextFundingTime,
+      funding_interval_hours: fundingIntervalHours,
+      funding_rate_upper_pct: fundingLimitPct,
+      funding_rate_lower_pct: -fundingLimitPct,
+      source: `${exchange}_premium_index`
+    },
+    points: [
+      {
+        bucket_at: "2026-07-21T04:00:00Z",
+        premium_pct: -1.2,
+        mark_price: null,
+        index_price: null,
+        source: `${exchange}_premium_index`
+      },
+      {
+        bucket_at: "2026-07-21T05:00:00Z",
+        premium_pct: -1.2,
+        mark_price: null,
+        index_price: null,
+        source: `${exchange}_premium_index`
+      }
+    ],
+    warnings: []
+  };
+}
+
 describe("PremiumIndexPage", () => {
   const requests: string[] = [];
 
@@ -291,9 +364,60 @@ describe("PremiumIndexPage", () => {
     const weightedCard = (await screen.findByText("本周期加权溢价指数")).parentElement;
     expect(weightedCard?.textContent).toContain("-1.2000%");
     const requiredCard = screen.getByText("剩余拉满所需溢价指数").parentElement;
-    expect(requiredCard?.textContent).toContain("-0.9857%");
+    expect(requiredCard?.textContent).toContain("-2.4143%");
     expect(requiredCard?.textContent).toContain("拉满下限 -1.0000%");
     expect(await screen.findByText("资金费跟随估算（OKX）")).toBeTruthy();
     expect(screen.getByText(/当前交易所返回值疑似触及/)).toBeTruthy();
+  });
+
+  it.each([
+    {
+      exchange: "binance" as const,
+      title: "资金费跟随估算（Binance）",
+      expectedRequired: "-2.4143%",
+      options: undefined
+    },
+    {
+      exchange: "gate" as const,
+      title: "资金费跟随估算（Gate）",
+      expectedRequired: "-2.4143%",
+      options: undefined
+    },
+    {
+      exchange: "hyperliquid" as const,
+      title: "资金费跟随估算（Hyperliquid）",
+      expectedRequired: "-47.4750%",
+      options: {
+        fundingIntervalHours: 1,
+        fundingLimitPct: 4,
+        fundingRatePct: -0.25,
+        hours: 1,
+        intervalMinutes: 15,
+        nextFundingTime: "2026-07-21T06:00:00Z"
+      }
+    }
+  ])("shows remaining premium needed for $exchange funding limit", async ({ exchange, title, expectedRequired, options }) => {
+    const response = fundingFollowPremiumResult(exchange, options);
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), "http://localhost");
+      requests.push(String(input));
+      if (url.pathname.includes("/premium-index/query")) {
+        return Response.json(response);
+      }
+      if (url.pathname.includes("/premium-index/current")) {
+        return Response.json(response.current);
+      }
+      return Response.json({});
+    });
+    const user = userEvent.setup();
+    render(<PremiumIndexPage />);
+
+    await user.click(screen.getByRole("button", { name: /查询/ }));
+
+    expect(await screen.findByText(title)).toBeTruthy();
+    const requiredCard = screen.getByText("剩余拉满所需溢价指数").parentElement;
+    expect(requiredCard?.textContent).toContain(expectedRequired);
+    expect(requiredCard?.textContent).toContain(`拉满下限 -${response.current.funding_rate_upper_pct.toFixed(4)}%`);
+    expect(requiredCard?.textContent).not.toContain("暂时无法反推");
   });
 });

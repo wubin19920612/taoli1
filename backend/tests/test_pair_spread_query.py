@@ -5,6 +5,7 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 from pydantic import ValidationError
 
+import app.services.pair_spread_query as pair_spread_query_module
 from app.models.pair_spread import (
     PairSpreadCurrentLeg,
     PairSpreadFundingPoint,
@@ -344,6 +345,54 @@ async def test_bybit_current_uses_instruments_info_for_funding_interval_and_limi
 
 
 @pytest.mark.asyncio
+async def test_binance_like_current_uses_funding_info_for_interval_and_limits(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = datetime(2026, 7, 17, 10, 40, tzinfo=UTC)
+    monkeypatch.setattr(pair_spread_query_module, "utc_now", lambda: now)
+    service = PairSpreadQueryService()
+    requested_urls: list[str] = []
+
+    async def fake_get_json(url: str):
+        requested_urls.append(url)
+        if "premiumIndex" in url:
+            return {
+                "symbol": "HOMEUSDT",
+                "markPrice": "0.009126",
+                "indexPrice": "0.009291",
+                "lastFundingRate": "-0.019844",
+            }
+        if "ticker/bookTicker" in url:
+            return {
+                "symbol": "HOMEUSDT",
+                "bidPrice": "0.00910",
+                "askPrice": "0.009115",
+            }
+        if "fundingInfo" in url:
+            return [
+                {
+                    "symbol": "HOMEUSDT",
+                    "fundingIntervalHours": "4",
+                    "adjustedFundingRateCap": "0.020000",
+                    "adjustedFundingRateFloor": "-0.020000",
+                }
+            ]
+        raise AssertionError(f"unexpected url: {url}")
+
+    service._get_json = fake_get_json  # type: ignore[method-assign]
+    try:
+        leg = await service._fetch_binance_like_current("https://fapi.binance.com", "binance", "HOMEUSDT")
+    finally:
+        await service.aclose()
+
+    assert any("fapi/v1/fundingInfo" in url for url in requested_urls)
+    assert leg.mid_price == pytest.approx((0.00910 + 0.009115) / 2)
+    assert leg.funding_rate_pct == pytest.approx(-1.9844)
+    assert leg.funding_next_time == datetime(2026, 7, 17, 12, 0, tzinfo=UTC)
+    assert leg.funding_interval_hours == pytest.approx(4)
+    assert leg.funding_rate_upper_pct == pytest.approx(2)
+    assert leg.funding_rate_lower_pct == pytest.approx(-2)
+
+
+@pytest.mark.asyncio
 async def test_okx_current_uses_funding_interval_and_limits() -> None:
     funding_time = datetime(2026, 7, 17, 8, 0, tzinfo=UTC)
     next_funding_time = funding_time + timedelta(hours=4)
@@ -393,6 +442,85 @@ async def test_okx_current_uses_funding_interval_and_limits() -> None:
     assert leg.funding_interval_hours == pytest.approx(4)
     assert leg.funding_rate_lower_pct == pytest.approx(-1.0)
     assert leg.funding_rate_upper_pct == pytest.approx(1.0)
+
+
+@pytest.mark.asyncio
+async def test_gate_current_uses_contract_interval_and_limit() -> None:
+    next_funding_time = datetime(2026, 7, 17, 12, 0, tzinfo=UTC)
+    service = PairSpreadQueryService()
+    requested_urls: list[str] = []
+
+    async def fake_get_json(url: str):
+        requested_urls.append(url)
+        if "futures/usdt/tickers" in url:
+            return [
+                {
+                    "contract": "MIRA_USDT",
+                    "mark_price": "0.04726",
+                    "index_price": "0.04761",
+                    "highest_bid": "0.04725",
+                    "lowest_ask": "0.04727",
+                    "last": "0.04726",
+                    "funding_rate": "-0.003588",
+                    "funding_rate_indicative": "-0.002500",
+                }
+            ]
+        if "futures/usdt/contracts/MIRA_USDT" in url:
+            return {
+                "name": "MIRA_USDT",
+                "funding_interval": 14400,
+                "funding_next_apply": int(next_funding_time.timestamp()),
+                "funding_rate_limit": "0.020000",
+            }
+        raise AssertionError(f"unexpected url: {url}")
+
+    service._get_json = fake_get_json  # type: ignore[method-assign]
+    try:
+        leg = await service._fetch_gate_current("MIRAUSDT")
+    finally:
+        await service.aclose()
+
+    assert any("futures/usdt/contracts/MIRA_USDT" in url for url in requested_urls)
+    assert leg.raw_symbol == "MIRA_USDT"
+    assert leg.mid_price == pytest.approx((0.04725 + 0.04727) / 2)
+    assert leg.funding_rate_pct == pytest.approx(-0.3588)
+    assert leg.funding_next_rate_pct == pytest.approx(-0.25)
+    assert leg.funding_next_time == next_funding_time
+    assert leg.funding_interval_hours == pytest.approx(4)
+    assert leg.funding_rate_upper_pct == pytest.approx(2)
+    assert leg.funding_rate_lower_pct == pytest.approx(-2)
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_current_sets_hourly_interval_and_limits(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = datetime(2026, 7, 17, 10, 40, tzinfo=UTC)
+    monkeypatch.setattr(pair_spread_query_module, "utc_now", lambda: now)
+
+    class FakePairSpreadService(PairSpreadQueryService):
+        async def _resolve_hyperliquid_coin(self, symbol: str):
+            assert symbol == "BTCUSDT"
+            return "BTC", ""
+
+        async def _fetch_hyperliquid_meta_contexts(self, dex: str = ""):
+            assert dex == ""
+            return (
+                {"universe": [{"name": "BTC"}]},
+                [{"markPx": "101", "oraclePx": "100", "midPx": "100.5", "funding": "-0.002500"}],
+            )
+
+    service = FakePairSpreadService()
+    try:
+        leg = await service._fetch_hyperliquid_current("BTCUSDT")
+    finally:
+        await service.aclose()
+
+    assert leg.raw_symbol == "BTC"
+    assert leg.price == pytest.approx(101)
+    assert leg.funding_rate_pct == pytest.approx(-0.25)
+    assert leg.funding_next_time == datetime(2026, 7, 17, 11, 0, tzinfo=UTC)
+    assert leg.funding_interval_hours == pytest.approx(1)
+    assert leg.funding_rate_upper_pct == pytest.approx(4)
+    assert leg.funding_rate_lower_pct == pytest.approx(-4)
 
 
 def test_pair_spread_rejects_htx() -> None:
