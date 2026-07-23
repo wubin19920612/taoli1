@@ -11,6 +11,24 @@ from app.models.second_level_sampling import SecondLevelMarketSample, SecondLeve
 from app.services.second_level_sampler import SecondLevelSampler, SecondLevelSamplingRepository
 
 
+class FutureOnlyFetcher:
+    async def fetch(self, exchange: str, symbol: str) -> SecondLevelMarketSample:
+        return SecondLevelMarketSample(
+            observed_at=datetime(2026, 7, 23, 8, 0, tzinfo=UTC),
+            exchange=exchange,
+            symbol=symbol,
+            status="partial",
+            future_mid=10.1,
+            mark_price=10.1,
+            index_price=10,
+            mark_premium_pct=1,
+            error="spot: 现货行情不可用：交易所未返回该标的现货价格",
+        )
+
+    async def aclose(self) -> None:
+        return None
+
+
 def test_second_level_sampling_config_normalizes_targets() -> None:
     config = SecondLevelSamplingConfig(
         enabled=False,
@@ -101,3 +119,29 @@ def test_second_level_sampling_api_saves_config() -> None:
     assert payload["max_concurrent_requests"] == 4
     assert status_response.status_code == 200
     assert status_response.json()["config"]["symbols"] == ["DEXEUSDT", "BTCUSDT"]
+
+
+@pytest.mark.asyncio
+async def test_second_level_sampler_keeps_future_samples_when_spot_is_missing() -> None:
+    db = await connect_database(":memory:")
+    await initialize_schema(db)
+    repo = SecondLevelSamplingRepository(db)
+    sampler = SecondLevelSampler(repo, fetcher=FutureOnlyFetcher())  # type: ignore[arg-type]
+    config = SecondLevelSamplingConfig(
+        enabled=True,
+        exchanges=["bybit"],
+        symbols=["DEXEUSDT"],
+    )
+
+    try:
+        await sampler._collect_config(config)
+        samples = await repo.list_samples(exchange="bybit", symbol="DEXEUSDT")
+    finally:
+        await sampler.aclose()
+        await db.close()
+
+    assert len(samples) == 1
+    assert samples[0].status == "partial"
+    assert samples[0].future_mid == pytest.approx(10.1)
+    assert samples[0].error is not None
+    assert "现货行情不可用" in samples[0].error

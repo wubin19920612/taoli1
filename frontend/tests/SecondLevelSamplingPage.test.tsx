@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SecondLevelSamplingPage } from "../src/pages/SecondLevelSamplingPage";
 
@@ -85,6 +85,10 @@ describe("SecondLevelSamplingPage", () => {
     );
   });
 
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("loads status, samples, and saves config", async () => {
     render(<SecondLevelSamplingPage />);
 
@@ -99,5 +103,20 @@ describe("SecondLevelSamplingPage", () => {
     await waitFor(() => {
       expect(requests.some((request) => request.startsWith("PUT"))).toBe(true);
     });
+  });
+
+  it("does not keep polling while the sampler is paused", async () => {
+    render(<SecondLevelSamplingPage />);
+
+    expect(await screen.findByText("1s 采样")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getAllByText("DEXEUSDT").length).toBeGreaterThan(0);
+    });
+
+    await new Promise((resolve) => window.setTimeout(resolve, 100));
+    requests.length = 0;
+    await new Promise((resolve) => window.setTimeout(resolve, 3500));
+
+    expect(requests).toHaveLength(0);
   });
 });

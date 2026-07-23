@@ -132,13 +132,22 @@ export function SecondLevelSamplingPage() {
     };
   }, []);
 
+  const isRunning = status?.running ?? false;
+  const pollingMs = Math.max(1000, Math.round((status?.config.interval_seconds ?? draft.interval_seconds) * 1000));
+
   useEffect(() => {
     void refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    if (!isRunning) {
+      return undefined;
+    }
     const timer = window.setInterval(() => {
       void refresh();
-    }, 3000);
+    }, pollingMs);
     return () => window.clearInterval(timer);
-  }, [refresh]);
+  }, [isRunning, pollingMs, refresh]);
 
   const saveConfig = useCallback(
     async (enabled = draft.enabled) => {
@@ -304,7 +313,7 @@ export function SecondLevelSamplingPage() {
       render: (value) => (typeof value === "number" ? `${value.toFixed(0)}ms` : "-")
     },
     {
-      title: "错误",
+      title: "提示",
       dataIndex: "error",
       key: "error",
       ellipsis: true,
@@ -321,7 +330,7 @@ export function SecondLevelSamplingPage() {
             <Typography.Text type="secondary">秒级采集现货、合约、标记价、指数价和溢价</Typography.Text>
           </div>
           <Space>
-            {status?.running ? <Tag color="green">运行中</Tag> : <Tag>已暂停</Tag>}
+            {isRunning ? <Tag color="green">运行中 / 自动刷新</Tag> : <Tag>已暂停</Tag>}
             <Button icon={<ReloadOutlined />} onClick={() => void refresh()} loading={loading}>
               刷新
             </Button>
@@ -329,6 +338,9 @@ export function SecondLevelSamplingPage() {
         </div>
 
         {status?.latest_error ? <Alert type="warning" showIcon message={status.latest_error} /> : null}
+        {status && !isRunning ? (
+          <Alert type="info" showIcon message="采样已暂停，自动刷新已停止；点击右上角“刷新”可手动查看历史样本。" />
+        ) : null}
 
         <Row gutter={[12, 12]}>
           <Col xs={12} md={6}>
@@ -428,7 +440,12 @@ export function SecondLevelSamplingPage() {
               >
                 启动
               </Button>
-              <Button icon={<PauseCircleOutlined />} onClick={() => void stopSampling()} loading={saving}>
+              <Button
+                icon={<PauseCircleOutlined />}
+                onClick={() => void stopSampling()}
+                loading={saving}
+                disabled={!isRunning}
+              >
                 暂停
               </Button>
             </Space>

@@ -88,6 +88,38 @@ def _error_message(exc: BaseException) -> str:
     return f"{exc.__class__.__name__}: {text}" if text else exc.__class__.__name__
 
 
+def _leg_label(label: str) -> str:
+    return "现货" if label == "spot" else "合约"
+
+
+def _compact_error_detail(text: str) -> str:
+    text = " ".join(text.strip().split())
+    return text[:117] + "..." if len(text) > 120 else text
+
+
+def _http_status_error_message(exc: httpx.HTTPStatusError, label: str) -> str:
+    status_code = exc.response.status_code
+    detail = ""
+    with suppress(Exception):
+        payload = exc.response.json()
+        if isinstance(payload, dict):
+            for key in ("msg", "retMsg", "message", "detail", "code"):
+                value = payload.get(key)
+                if value is not None and str(value).strip():
+                    detail = str(value)
+                    break
+    if not detail:
+        detail = exc.response.text
+    detail = _compact_error_detail(detail) if detail else ""
+    suffix = f"：{detail}" if detail else ""
+    return f"{_leg_label(label)}行情不可用（HTTP {status_code}{suffix}）"
+
+
+def _missing_leg_message(label: str) -> str:
+    leg = _leg_label(label)
+    return f"{leg}行情不可用：交易所未返回该标的{leg}价格"
+
+
 def _first_row(rows: Any) -> dict[str, Any]:
     if isinstance(rows, list) and rows:
         first = rows[0]
@@ -348,6 +380,9 @@ class SecondLevelMarketFetcher:
         async def call(fetcher, label: str) -> dict[str, Any] | None:
             try:
                 return await fetcher(symbol)
+            except httpx.HTTPStatusError as exc:
+                errors.append(f"{label}: {_http_status_error_message(exc, label)}")
+                return None
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"{label}: {_error_message(exc)}")
                 return None
@@ -374,6 +409,10 @@ class SecondLevelMarketFetcher:
         has_future = future is not None and any(
             future.get(key) is not None for key in ("bid", "ask", "mid", "last", "mark", "index")
         )
+        if spot_fetcher is not None and not has_spot and not any(error.startswith("spot:") for error in errors):
+            errors.append(f"spot: {_missing_leg_message('spot')}")
+        if future_fetcher is not None and not has_future and not any(error.startswith("future:") for error in errors):
+            errors.append(f"future: {_missing_leg_message('future')}")
         status = "ok" if has_future and (has_spot or spot_fetcher is None) and not errors else "partial"
         if not has_spot and not has_future:
             status = "error"
