@@ -24,6 +24,7 @@ type SavedPremiumIndexPreset = PremiumIndexFormValues & {
   id: string;
   hours: number;
   intervalMinutes: number;
+  samplingIntervalSeconds: number;
   savedAt: string;
 };
 
@@ -83,13 +84,20 @@ const exchangeOptions = ["binance", "okx", "bybit", "gate", "bitget", "aster", "
 );
 
 const intervalOptions = [
-  { label: "1分钟", value: 1 },
-  { label: "5分钟", value: 5 },
-  { label: "15分钟", value: 15 }
+  { label: "历史 1 分钟", value: 1 },
+  { label: "历史 5 分钟", value: 5 },
+  { label: "历史 15 分钟", value: 15 }
 ];
 
+const samplingIntervalOptions = [3, 5, 8, 15, 30, 60].map((value) => ({
+  label: `采样 ${value} 秒`,
+  value
+}));
+
 const PREMIUM_INDEX_PRESETS_KEY = "taoli1.premiumIndex.presets.v1";
+const PREMIUM_INDEX_SAMPLING_INTERVAL_KEY = "taoli1.premiumIndex.samplingIntervalSeconds.v1";
 const MAX_SAVED_PREMIUM_PRESETS = 24;
+const DEFAULT_SAMPLING_INTERVAL_SECONDS = 8;
 
 function signedPct(value: number | null | undefined, digits = 4): string {
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -447,6 +455,12 @@ function clampHours(value: number | null): number {
   return Math.min(720, Math.max(1, Math.round(value)));
 }
 
+function normalizeSamplingIntervalSeconds(value: unknown): number {
+  return samplingIntervalOptions.some((option) => option.value === value)
+    ? value as number
+    : DEFAULT_SAMPLING_INTERVAL_SECONDS;
+}
+
 function normalizeSymbol(value: string): string {
   return value.trim().toUpperCase();
 }
@@ -484,7 +498,15 @@ function loadSavedPresets(): SavedPremiumIndexPreset[] {
   }
   try {
     const parsed = JSON.parse(window.localStorage.getItem(PREMIUM_INDEX_PRESETS_KEY) ?? "[]");
-    return Array.isArray(parsed) ? parsed.filter(isSavedPreset).slice(0, MAX_SAVED_PREMIUM_PRESETS) : [];
+    return Array.isArray(parsed)
+      ? parsed
+        .filter(isSavedPreset)
+        .map((preset) => ({
+          ...preset,
+          samplingIntervalSeconds: normalizeSamplingIntervalSeconds(preset.samplingIntervalSeconds)
+        }))
+        .slice(0, MAX_SAVED_PREMIUM_PRESETS)
+      : [];
   } catch {
     return [];
   }
@@ -495,6 +517,22 @@ function storeSavedPresets(presets: SavedPremiumIndexPreset[]): void {
     return;
   }
   window.localStorage.setItem(PREMIUM_INDEX_PRESETS_KEY, JSON.stringify(presets.slice(0, MAX_SAVED_PREMIUM_PRESETS)));
+}
+
+function loadSamplingIntervalSeconds(): number {
+  if (typeof window === "undefined") {
+    return DEFAULT_SAMPLING_INTERVAL_SECONDS;
+  }
+  return normalizeSamplingIntervalSeconds(
+    Number(window.localStorage.getItem(PREMIUM_INDEX_SAMPLING_INTERVAL_KEY))
+  );
+}
+
+function storeSamplingIntervalSeconds(value: number): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.setItem(PREMIUM_INDEX_SAMPLING_INTERVAL_KEY, String(value));
 }
 
 function time(value: string | null | undefined): string {
@@ -702,7 +740,15 @@ function premiumTurnScore(values: number[], index: number, kind: "peak" | "troug
   return Math.min(Math.max(...left) - value, Math.max(...right) - value);
 }
 
-function PremiumIndexChart({ result }: { result: PremiumIndexQueryResult | null }) {
+function PremiumIndexChart({
+  result,
+  autoRefresh,
+  samplingIntervalSeconds
+}: {
+  result: PremiumIndexQueryResult | null;
+  autoRefresh: boolean;
+  samplingIntervalSeconds: number;
+}) {
   const points = result?.points ?? [];
   const width = 1180;
   const height = 330;
@@ -831,6 +877,9 @@ function PremiumIndexChart({ result }: { result: PremiumIndexQueryResult | null 
           <Tag>{result.symbol}</Tag>
           <Tag>{result.point_count} 点</Tag>
           <Tag>{result.interval_minutes}m 周期</Tag>
+          <Tag color={autoRefresh ? "processing" : undefined}>
+            {autoRefresh ? `${samplingIntervalSeconds}s 实时采样` : "手动刷新"}
+          </Tag>
         </div>
         <Typography.Text type="secondary">最新 {fullTime(result.observed_at)}</Typography.Text>
       </div>
@@ -945,6 +994,7 @@ export function PremiumIndexPage() {
   const [form] = Form.useForm<PremiumIndexFormValues>();
   const [hours, setHours] = useState(12);
   const [intervalMinutes, setIntervalMinutes] = useState(1);
+  const [samplingIntervalSeconds, setSamplingIntervalSeconds] = useState(loadSamplingIntervalSeconds);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [savedPresets, setSavedPresets] = useState<SavedPremiumIndexPreset[]>(() => loadSavedPresets());
   const [result, setResult] = useState<PremiumIndexQueryResult | null>(null);
@@ -1000,6 +1050,10 @@ export function PremiumIndexPage() {
   }, [result]);
 
   useEffect(() => {
+    storeSamplingIntervalSeconds(samplingIntervalSeconds);
+  }, [samplingIntervalSeconds]);
+
+  useEffect(() => {
     if (!autoRefresh || !result) {
       return undefined;
     }
@@ -1007,9 +1061,9 @@ export function PremiumIndexPage() {
       if (!loading && !refreshing) {
         void refreshCurrent();
       }
-    }, 8_000);
+    }, samplingIntervalSeconds * 1_000);
     return () => window.clearInterval(timer);
-  }, [autoRefresh, loading, refreshCurrent, refreshing, result]);
+  }, [autoRefresh, loading, refreshCurrent, refreshing, result, samplingIntervalSeconds]);
 
   const saveCurrentPreset = async () => {
     try {
@@ -1019,6 +1073,7 @@ export function PremiumIndexPage() {
         id: presetId(values),
         hours: clampHours(hours),
         intervalMinutes,
+        samplingIntervalSeconds,
         savedAt: new Date().toISOString()
       };
       setSavedPresets((currentPresets) => {
@@ -1048,6 +1103,7 @@ export function PremiumIndexPage() {
     form.setFieldsValue(preset);
     setHours(clampHours(preset.hours));
     setIntervalMinutes(preset.intervalMinutes);
+    setSamplingIntervalSeconds(normalizeSamplingIntervalSeconds(preset.samplingIntervalSeconds));
     void runQuery({ values: preset, hours: preset.hours, intervalMinutes: preset.intervalMinutes });
   };
 
@@ -1102,6 +1158,13 @@ export function PremiumIndexPage() {
             />
             <Select value={intervalMinutes} options={intervalOptions} onChange={setIntervalMinutes} />
             <div className="premium-query-refresh">
+              <Select
+                aria-label="实时采样间隔"
+                value={samplingIntervalSeconds}
+                options={samplingIntervalOptions}
+                disabled={!autoRefresh}
+                onChange={setSamplingIntervalSeconds}
+              />
               <Switch checked={autoRefresh} checkedChildren="自动" unCheckedChildren="手动" onChange={setAutoRefresh} />
             </div>
             <div className="premium-query-actions">
@@ -1135,7 +1198,7 @@ export function PremiumIndexPage() {
                 >
                   <span>{savedPresetLabel(preset)}</span>
                   <span className="premium-saved-meta">
-                    {durationLabel(preset.hours)} · {preset.intervalMinutes}m
+                    {durationLabel(preset.hours)} · {preset.intervalMinutes}m 历史 · {preset.samplingIntervalSeconds}s 采样
                   </span>
                 </Tag>
               ))}
@@ -1175,7 +1238,11 @@ export function PremiumIndexPage() {
 
       <FundingFollowPanel estimate={fundingFollowEstimate} />
 
-      <PremiumIndexChart result={result} />
+      <PremiumIndexChart
+        result={result}
+        autoRefresh={autoRefresh}
+        samplingIntervalSeconds={samplingIntervalSeconds}
+      />
 
       <section className="premium-detail-card">
         <div className="premium-detail-head">

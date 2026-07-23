@@ -152,7 +152,8 @@ describe("PremiumIndexPage", () => {
       exchange: "binance",
       symbol: "ETH",
       hours: 12,
-      intervalMinutes: 1
+      intervalMinutes: 1,
+      samplingIntervalSeconds: 8
     });
 
     await user.clear(symbolInput);
@@ -167,6 +168,24 @@ describe("PremiumIndexPage", () => {
       ).toBe(true);
     });
     expect(await screen.findByText("当前溢价指数")).toBeTruthy();
+  });
+
+  it("uses and persists the selected real-time sampling interval", async () => {
+    const intervalSpy = vi.spyOn(window, "setInterval");
+    const user = userEvent.setup();
+    render(<PremiumIndexPage />);
+
+    await user.click(screen.getByRole("combobox", { name: "实时采样间隔" }));
+    await user.click(await screen.findByText("采样 3 秒"));
+    await user.click(screen.getByRole("button", { name: /查询/ }));
+
+    expect(await screen.findByText("3s 实时采样")).toBeTruthy();
+    await waitFor(() => {
+      expect(window.localStorage.getItem("taoli1.premiumIndex.samplingIntervalSeconds.v1")).toBe("3");
+      expect(intervalSpy.mock.calls.some((call) => call[1] === 3_000)).toBe(true);
+    });
+
+    intervalSpy.mockRestore();
   });
 
   it("shows the weighted period premium and remaining average needed to hit the funding limit", async () => {
