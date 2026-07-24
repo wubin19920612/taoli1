@@ -653,6 +653,7 @@ def test_pair_spread_query_endpoint_uses_on_demand_service() -> None:
             leg1_current = PairSpreadCurrentLeg(
                 exchange=leg1.exchange,
                 symbol=leg1.symbol,
+                market_type=leg1.market_type,
                 raw_symbol=leg1.symbol,
                 price=100,
                 price_field=PairSpreadPriceField.MARK_PRICE,
@@ -662,6 +663,7 @@ def test_pair_spread_query_endpoint_uses_on_demand_service() -> None:
             leg2_current = PairSpreadCurrentLeg(
                 exchange=leg2.exchange,
                 symbol=leg2.symbol,
+                market_type=leg2.market_type,
                 raw_symbol="BTC-USDT-SWAP",
                 price=102,
                 price_field=PairSpreadPriceField.MARK_PRICE,
@@ -710,13 +712,16 @@ def test_pair_spread_query_endpoint_uses_on_demand_service() -> None:
             "/api/pair-spread/query"
             "?leg1_exchange=binance&leg1_symbol=btc"
             "&leg2_exchange=okx&leg2_symbol=BTC-USDT-SWAP&hours=6"
+            "&leg1_market_type=spot&leg2_market_type=future"
             "&interval_minutes=5&leg2_multiplier=10"
         )
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["leg1"]["symbol"] == "BTCUSDT"
+    assert payload["leg1"]["market_type"] == "spot"
     assert payload["leg2"]["exchange"] == "okx"
+    assert payload["leg2"]["market_type"] == "future"
     assert payload["hours"] == 6
     assert payload["interval_minutes"] == 5
     assert payload["leg2_multiplier"] == 10

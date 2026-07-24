@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 import app.services.pair_spread_query as pair_spread_query_module
+from app.models.market import MarketType
 from app.models.pair_spread import (
     PairSpreadCurrentLeg,
     PairSpreadFundingPoint,
@@ -32,10 +33,16 @@ def kline_at(bucket_at: datetime, close: float) -> PairSpreadKlinePoint:
     return PairSpreadKlinePoint(bucket_at=bucket_at, close=close)
 
 
-def current_leg(exchange: str, symbol: str, price: float) -> PairSpreadCurrentLeg:
+def current_leg(
+    exchange: str,
+    symbol: str,
+    price: float,
+    market_type: MarketType = MarketType.FUTURE,
+) -> PairSpreadCurrentLeg:
     return PairSpreadCurrentLeg(
         exchange=exchange,
         symbol=symbol,
+        market_type=market_type,
         raw_symbol=symbol,
         price=price,
         price_field=PairSpreadPriceField.MARK_PRICE,
@@ -154,6 +161,64 @@ async def test_pair_spread_query_builds_stats_current_and_funding() -> None:
 
 
 @pytest.mark.asyncio
+async def test_pair_spread_query_keeps_spot_and_future_legs_separate() -> None:
+    now = datetime(2026, 7, 10, 12, 2, 30, tzinfo=UTC)
+
+    class FakePairSpreadService(PairSpreadQueryService):
+        def __init__(self) -> None:
+            super().__init__()
+            self.kline_market_types: list[MarketType] = []
+            self.funding_markets: list[tuple[str, str]] = []
+
+        async def _fetch_klines(
+            self,
+            exchange: str,
+            symbol: str,
+            start,
+            end,
+            interval_minutes: int,
+            market_type: MarketType = MarketType.FUTURE,
+        ):
+            self.kline_market_types.append(market_type)
+            first_bucket = start + timedelta(minutes=interval_minutes)
+            close = 101 if market_type == MarketType.FUTURE else 100
+            return [kline_at(first_bucket, close)]
+
+        async def _fetch_current_leg(
+            self,
+            exchange: str,
+            symbol: str,
+            market_type: MarketType = MarketType.FUTURE,
+        ):
+            return current_leg(exchange, symbol, 101 if market_type == MarketType.FUTURE else 100, market_type)
+
+        async def _fetch_funding_history(self, exchange: str, symbol: str, start, end):
+            self.funding_markets.append((exchange, symbol))
+            return []
+
+    service = FakePairSpreadService()
+    try:
+        result = await service.query(
+            PairSpreadLegQuery(exchange="bybit", symbol="dexe", market_type=MarketType.FUTURE),
+            PairSpreadLegQuery(exchange="bybit", symbol="dexe", market_type=MarketType.SPOT),
+            hours=1,
+            interval_minutes=1,
+            now=now,
+        )
+    finally:
+        await service.aclose()
+
+    assert result.leg1.market_type == MarketType.FUTURE
+    assert result.leg2.market_type == MarketType.SPOT
+    assert result.point_count == 1
+    assert result.current is not None
+    assert result.current.leg1.market_type == MarketType.FUTURE
+    assert result.current.leg2.market_type == MarketType.SPOT
+    assert sorted(service.kline_market_types) == [MarketType.FUTURE, MarketType.SPOT]
+    assert service.funding_markets == [("bybit", "DEXEUSDT")]
+
+
+@pytest.mark.asyncio
 async def test_pair_spread_query_falls_back_to_available_window() -> None:
     now = datetime(2026, 7, 10, 12, 30, tzinfo=UTC)
     point_time = now - timedelta(hours=2)
@@ -216,8 +281,8 @@ async def test_pair_spread_query_dedupes_repeated_kline_failures() -> None:
         await service.aclose()
 
     message = str(exc_info.value)
-    assert message.count("hyperliquid:SKHYUSDT 分钟K线失败") == 1
-    assert message.count("hyperliquid:SKHYNIXUSDT 分钟K线失败") == 1
+    assert message.count("hyperliquid:合约:SKHYUSDT 分钟K线失败") == 1
+    assert message.count("hyperliquid:合约:SKHYNIXUSDT 分钟K线失败") == 1
     assert "developer.mozilla.org" not in message
 
 
@@ -288,6 +353,65 @@ async def test_bitget_klines_continue_after_empty_early_chunk() -> None:
 
     assert len(requested_starts) == 2
     assert points == [PairSpreadKlinePoint(bucket_at=first_data_bucket, close=10)]
+
+
+@pytest.mark.asyncio
+async def test_bitget_spot_klines_use_spot_endpoint_and_granularity() -> None:
+    start = datetime(2026, 7, 1, 0, 0, tzinfo=UTC)
+    end = start + timedelta(minutes=1)
+    requested_urls: list[str] = []
+    service = PairSpreadQueryService()
+
+    async def fake_get_json(url: str):
+        requested_urls.append(url)
+        query = parse_qs(urlparse(url).query)
+        assert "/api/v2/spot/market/candles" in url
+        assert query["symbol"] == ["DEXEUSDT"]
+        assert query["granularity"] == ["1min"]
+        return {"data": [[int(start.timestamp() * 1000), "0", "0", "0", "10"]]}
+
+    service._get_json = fake_get_json  # type: ignore[method-assign]
+    try:
+        points = await service._fetch_bitget_spot_klines("DEXEUSDT", start, end, 1)
+    finally:
+        await service.aclose()
+
+    assert requested_urls
+    assert points == [PairSpreadKlinePoint(bucket_at=start, close=10)]
+
+
+@pytest.mark.asyncio
+async def test_bybit_spot_current_uses_spot_ticker_without_funding() -> None:
+    service = PairSpreadQueryService()
+    requested_urls: list[str] = []
+
+    async def fake_get_json(url: str):
+        requested_urls.append(url)
+        return {
+            "result": {
+                "list": [
+                    {
+                        "symbol": "DEXEUSDT",
+                        "bid1Price": "10",
+                        "ask1Price": "10.2",
+                        "lastPrice": "10.1",
+                    }
+                ]
+            }
+        }
+
+    service._get_json = fake_get_json  # type: ignore[method-assign]
+    try:
+        leg = await service._fetch_bybit_spot_current("DEXEUSDT")
+    finally:
+        await service.aclose()
+
+    assert requested_urls == ["https://api.bybit.com/v5/market/tickers?category=spot&symbol=DEXEUSDT"]
+    assert leg.market_type == MarketType.SPOT
+    assert leg.price == pytest.approx(10.1)
+    assert leg.price_field == PairSpreadPriceField.MID_PRICE
+    assert leg.funding_rate_pct is None
+    assert leg.funding_next_time is None
 
 
 @pytest.mark.asyncio
@@ -531,3 +655,5 @@ def test_pair_spread_rejects_htx() -> None:
 def test_pair_spread_symbol_normalization() -> None:
     assert PairSpreadLegQuery(exchange="okx", symbol="btc-usdt-swap").symbol == "BTCUSDT"
     assert PairSpreadLegQuery(exchange="gate", symbol="eth").symbol == "ETHUSDT"
+    assert PairSpreadLegQuery(exchange="binance", symbol="btc").market_type == MarketType.FUTURE
+    assert PairSpreadLegQuery(exchange="binance", symbol="btc", market_type="spot").market_type == MarketType.SPOT

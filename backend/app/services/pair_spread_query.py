@@ -19,6 +19,7 @@ from app.exchanges.base import (
     parse_float,
     utc_now,
 )
+from app.models.market import MarketType
 from app.models.pair_spread import (
     PairSpreadCurrentLeg,
     PairSpreadCurrentSnapshot,
@@ -71,6 +72,11 @@ def _compact_symbol(symbol: str) -> str:
 def _okx_inst_id(symbol: str) -> str:
     _, base, quote = normalize_usdt_symbol(symbol)
     return f"{base}-{quote}-SWAP"
+
+
+def _okx_spot_inst_id(symbol: str) -> str:
+    _, base, quote = normalize_usdt_symbol(symbol)
+    return f"{base}-{quote}"
 
 
 def _gate_contract(symbol: str) -> str:
@@ -196,6 +202,10 @@ def _append_unique(items: list[str], item: str) -> None:
         items.append(item)
 
 
+def _market_type_text(market_type: MarketType) -> str:
+    return "现货" if market_type == MarketType.SPOT else "合约"
+
+
 def _extend_unique(items: list[str], new_items: list[str]) -> None:
     for item in new_items:
         _append_unique(items, item)
@@ -300,7 +310,14 @@ class PairSpreadQueryService:
         end = _floor_minute(observed_at)
         requested_start = end - timedelta(hours=hours)
         warnings: list[str] = []
-        kline_keys = list(dict.fromkeys(((leg1.exchange, leg1.symbol), (leg2.exchange, leg2.symbol))))
+        kline_keys = list(
+            dict.fromkeys(
+                (
+                    (leg1.exchange, leg1.symbol, leg1.market_type),
+                    (leg2.exchange, leg2.symbol, leg2.market_type),
+                )
+            )
+        )
 
         points: list[PairSpreadPoint] = []
         used_start = requested_start
@@ -314,17 +331,18 @@ class PairSpreadQueryService:
                     self._fetch_klines_with_warning(
                         exchange,
                         symbol,
+                        market_type,
                         window_start,
                         end,
                         interval_minutes,
                         window_warnings,
                     )
-                    for exchange, symbol in kline_keys
+                    for exchange, symbol, market_type in kline_keys
                 )
             )
             klines_by_key = dict(zip(kline_keys, kline_results, strict=True))
-            candidate_leg1_klines = klines_by_key[(leg1.exchange, leg1.symbol)]
-            candidate_leg2_klines = klines_by_key[(leg2.exchange, leg2.symbol)]
+            candidate_leg1_klines = klines_by_key[(leg1.exchange, leg1.symbol, leg1.market_type)]
+            candidate_leg2_klines = klines_by_key[(leg2.exchange, leg2.symbol, leg2.market_type)]
             candidate_points = build_pair_spread_points(
                 candidate_leg1_klines,
                 candidate_leg2_klines,
@@ -349,7 +367,11 @@ class PairSpreadQueryService:
         earliest_expected = used_start + timedelta(minutes=interval_minutes)
         if points[0].bucket_at > earliest_expected:
             history_limit_warning = _hyperliquid_history_limit_warning(
-                {leg1.exchange, leg2.exchange},
+                {
+                    leg.exchange
+                    for leg in (leg1, leg2)
+                    if leg.market_type == MarketType.FUTURE
+                },
                 hours=hours,
                 interval_minutes=interval_minutes,
             )
@@ -402,15 +424,22 @@ class PairSpreadQueryService:
         self,
         exchange: str,
         symbol: str,
+        market_type: MarketType,
         start: datetime,
         end: datetime,
         interval_minutes: int,
         warnings: list[str],
     ) -> list[PairSpreadKlinePoint]:
         try:
-            return await self._fetch_klines(exchange, symbol, start, end, interval_minutes)
+            if market_type == MarketType.FUTURE:
+                return await self._fetch_klines(exchange, symbol, start, end, interval_minutes)
+            return await self._fetch_klines(exchange, symbol, start, end, interval_minutes, market_type)
         except Exception as exc:  # noqa: BLE001 - keep pair query error actionable.
-            _append_unique(warnings, f"{exchange}:{symbol} 分钟K线失败: {_market_data_error_text(exchange, exc)}")
+            _append_unique(
+                warnings,
+                f"{exchange}:{_market_type_text(market_type)}:{symbol} 分钟K线失败: "
+                f"{_market_data_error_text(exchange, exc)}",
+            )
             return []
 
     async def _fetch_current_with_warning(
@@ -419,9 +448,15 @@ class PairSpreadQueryService:
         warnings: list[str],
     ) -> PairSpreadCurrentLeg | None:
         try:
-            return await self._fetch_current_leg(leg.exchange, leg.symbol)
+            if leg.market_type == MarketType.FUTURE:
+                return await self._fetch_current_leg(leg.exchange, leg.symbol)
+            return await self._fetch_current_leg(leg.exchange, leg.symbol, leg.market_type)
         except Exception as exc:  # noqa: BLE001 - current snapshot should not block chart.
-            _append_unique(warnings, f"{leg.exchange}:{leg.symbol} 当前价格/资金失败: {_exception_text(exc)}")
+            _append_unique(
+                warnings,
+                f"{leg.exchange}:{_market_type_text(leg.market_type)}:{leg.symbol} 当前价格/资金失败: "
+                f"{_exception_text(exc)}",
+            )
             return None
 
     async def _fetch_funding_with_warning(
@@ -431,6 +466,8 @@ class PairSpreadQueryService:
         end: datetime,
         warnings: list[str],
     ) -> list[PairSpreadFundingPoint]:
+        if leg.market_type == MarketType.SPOT:
+            return []
         try:
             return await self._fetch_funding_history(leg.exchange, leg.symbol, start, end)
         except Exception as exc:  # noqa: BLE001 - funding history is supplementary.
@@ -459,8 +496,22 @@ class PairSpreadQueryService:
         start: datetime,
         end: datetime,
         interval_minutes: int,
+        market_type: MarketType = MarketType.FUTURE,
     ) -> list[PairSpreadKlinePoint]:
-        handlers: dict[str, Callable[[str, datetime, datetime, int], Awaitable[list[PairSpreadKlinePoint]]]] = {
+        if market_type == MarketType.SPOT:
+            spot_handlers: dict[str, Callable[[str, datetime, datetime, int], Awaitable[list[PairSpreadKlinePoint]]]] = {
+                "binance": self._fetch_binance_spot_klines,
+                "okx": self._fetch_okx_spot_klines,
+                "bybit": self._fetch_bybit_spot_klines,
+                "gate": self._fetch_gate_spot_klines,
+                "bitget": self._fetch_bitget_spot_klines,
+            }
+            handler = spot_handlers.get(exchange)
+            if handler is None:
+                raise RuntimeError(f"{exchange} 暂不支持现货价差查询")
+            return await handler(symbol, start, end, interval_minutes)
+
+        futures_handlers: dict[str, Callable[[str, datetime, datetime, int], Awaitable[list[PairSpreadKlinePoint]]]] = {
             "binance": lambda s, a, b, i: self._fetch_binance_like_klines(
                 "https://fapi.binance.com",
                 s,
@@ -481,10 +532,28 @@ class PairSpreadQueryService:
             "bitget": self._fetch_bitget_klines,
             "hyperliquid": self._fetch_hyperliquid_klines,
         }
-        return await handlers[exchange](symbol, start, end, interval_minutes)
+        return await futures_handlers[exchange](symbol, start, end, interval_minutes)
 
-    async def _fetch_current_leg(self, exchange: str, symbol: str) -> PairSpreadCurrentLeg:
-        handlers: dict[str, Callable[[str], Awaitable[PairSpreadCurrentLeg]]] = {
+    async def _fetch_current_leg(
+        self,
+        exchange: str,
+        symbol: str,
+        market_type: MarketType = MarketType.FUTURE,
+    ) -> PairSpreadCurrentLeg:
+        if market_type == MarketType.SPOT:
+            spot_handlers: dict[str, Callable[[str], Awaitable[PairSpreadCurrentLeg]]] = {
+                "binance": self._fetch_binance_spot_current,
+                "okx": self._fetch_okx_spot_current,
+                "bybit": self._fetch_bybit_spot_current,
+                "gate": self._fetch_gate_spot_current,
+                "bitget": self._fetch_bitget_spot_current,
+            }
+            handler = spot_handlers.get(exchange)
+            if handler is None:
+                raise RuntimeError(f"{exchange} 暂不支持现货当前价格查询")
+            return await handler(symbol)
+
+        futures_handlers: dict[str, Callable[[str], Awaitable[PairSpreadCurrentLeg]]] = {
             "binance": lambda s: self._fetch_binance_like_current("https://fapi.binance.com", "binance", s),
             "aster": lambda s: self._fetch_binance_like_current("https://fapi.asterdex.com", "aster", s),
             "okx": self._fetch_okx_current,
@@ -493,7 +562,7 @@ class PairSpreadQueryService:
             "bitget": self._fetch_bitget_current,
             "hyperliquid": self._fetch_hyperliquid_current,
         }
-        return await handlers[exchange](symbol)
+        return await futures_handlers[exchange](symbol)
 
     async def _fetch_funding_history(
         self,
@@ -584,6 +653,39 @@ class PairSpreadQueryService:
             cursor = next_cursor
         return _dedupe_sorted(points)
 
+    async def _fetch_binance_spot_klines(
+        self,
+        symbol: str,
+        start: datetime,
+        end: datetime,
+        interval_minutes: int,
+    ) -> list[PairSpreadKlinePoint]:
+        raw = _compact_symbol(symbol)
+        start_ms = _to_ms(start)
+        end_ms = _to_ms(end)
+        interval_ms = _interval_ms(interval_minutes)
+        cursor = start_ms
+        points: list[PairSpreadKlinePoint] = []
+        while cursor < end_ms:
+            chunk_end = min(end_ms, cursor + 1000 * interval_ms - 1)
+            url = (
+                "https://api.binance.com/api/v3/klines"
+                f"?symbol={raw}&interval={interval_minutes}m"
+                f"&startTime={cursor}&endTime={chunk_end}&limit=1000"
+            )
+            rows = await self._get_json(url)
+            parsed = [_parse_array_kline(row, 0, 4) for row in rows if isinstance(row, list)]
+            parsed = [point for point in parsed if point is not None]
+            if not parsed:
+                cursor = chunk_end + 1
+                continue
+            points.extend(point for point in parsed if start <= point.bucket_at <= end)
+            next_cursor = max(_to_ms(point.bucket_at) for point in parsed) + interval_ms
+            if next_cursor <= cursor:
+                break
+            cursor = next_cursor
+        return _dedupe_sorted(points)
+
     async def _fetch_okx_klines(
         self,
         symbol: str,
@@ -592,6 +694,19 @@ class PairSpreadQueryService:
         interval_minutes: int,
     ) -> list[PairSpreadKlinePoint]:
         inst_id = _okx_inst_id(symbol)
+        points = await self._fetch_okx_klines_backward(inst_id, start, end, interval_minutes)
+        if points:
+            return points
+        return await self._fetch_okx_klines_forward(inst_id, start, end, interval_minutes)
+
+    async def _fetch_okx_spot_klines(
+        self,
+        symbol: str,
+        start: datetime,
+        end: datetime,
+        interval_minutes: int,
+    ) -> list[PairSpreadKlinePoint]:
+        inst_id = _okx_spot_inst_id(symbol)
         points = await self._fetch_okx_klines_backward(inst_id, start, end, interval_minutes)
         if points:
             return points
@@ -683,6 +798,37 @@ class PairSpreadQueryService:
             cursor = next_cursor
         return _dedupe_sorted(points)
 
+    async def _fetch_bybit_spot_klines(
+        self,
+        symbol: str,
+        start: datetime,
+        end: datetime,
+        interval_minutes: int,
+    ) -> list[PairSpreadKlinePoint]:
+        raw = _compact_symbol(symbol)
+        end_ms = _to_ms(end)
+        interval_ms = _interval_ms(interval_minutes)
+        cursor = _to_ms(start)
+        points: list[PairSpreadKlinePoint] = []
+        while cursor < end_ms:
+            chunk_end = min(end_ms, cursor + 1000 * interval_ms - 1)
+            url = (
+                "https://api.bybit.com/v5/market/kline"
+                f"?category=spot&symbol={raw}&interval={interval_minutes}&start={cursor}&end={chunk_end}&limit=1000"
+            )
+            rows = (await self._get_json(url)).get("result", {}).get("list", [])
+            parsed = [_parse_array_kline(row, 0, 4) for row in rows if isinstance(row, list)]
+            parsed = [point for point in parsed if point is not None]
+            if not parsed:
+                cursor = chunk_end + 1
+                continue
+            points.extend(point for point in parsed if start <= point.bucket_at <= end)
+            next_cursor = max(_to_ms(point.bucket_at) for point in parsed) + interval_ms
+            if next_cursor <= cursor:
+                break
+            cursor = next_cursor
+        return _dedupe_sorted(points)
+
     async def _fetch_gate_klines(
         self,
         symbol: str,
@@ -714,6 +860,37 @@ class PairSpreadQueryService:
             cursor = next_cursor
         return _dedupe_sorted(points)
 
+    async def _fetch_gate_spot_klines(
+        self,
+        symbol: str,
+        start: datetime,
+        end: datetime,
+        interval_minutes: int,
+    ) -> list[PairSpreadKlinePoint]:
+        pair = _gate_contract(symbol)
+        end_sec = int(end.timestamp())
+        interval_seconds = interval_minutes * 60
+        cursor = int(start.timestamp())
+        points: list[PairSpreadKlinePoint] = []
+        while cursor < end_sec:
+            chunk_end = min(end_sec, cursor + 1000 * interval_seconds)
+            url = (
+                "https://api.gateio.ws/api/v4/spot/candlesticks"
+                f"?currency_pair={pair}&interval={interval_minutes}m&from={cursor}&to={chunk_end}"
+            )
+            rows = await self._get_json(url)
+            parsed = [_parse_gate_spot_kline(row) for row in rows if isinstance(row, (dict, list))]
+            parsed = [point for point in parsed if point is not None]
+            if not parsed:
+                cursor = chunk_end + interval_seconds
+                continue
+            points.extend(point for point in parsed if start <= point.bucket_at <= end)
+            next_cursor = max(int(point.bucket_at.timestamp()) for point in parsed) + interval_seconds
+            if next_cursor <= cursor:
+                break
+            cursor = next_cursor
+        return _dedupe_sorted(points)
+
     async def _fetch_bitget_klines(
         self,
         symbol: str,
@@ -731,6 +908,39 @@ class PairSpreadQueryService:
             url = (
                 "https://api.bitget.com/api/v2/mix/market/candles"
                 f"?symbol={raw}&productType=USDT-FUTURES&granularity={interval_minutes}m"
+                f"&startTime={cursor}&endTime={chunk_end}&limit=1000"
+            )
+            rows = (await self._get_json(url)).get("data", [])
+            parsed = [_parse_array_kline(row, 0, 4) for row in rows if isinstance(row, list)]
+            parsed = [point for point in parsed if point is not None]
+            if not parsed:
+                cursor = chunk_end + 1
+                continue
+            points.extend(point for point in parsed if start <= point.bucket_at <= end)
+            next_cursor = max(_to_ms(point.bucket_at) for point in parsed) + interval_ms
+            if next_cursor <= cursor:
+                break
+            cursor = next_cursor
+        return _dedupe_sorted(points)
+
+    async def _fetch_bitget_spot_klines(
+        self,
+        symbol: str,
+        start: datetime,
+        end: datetime,
+        interval_minutes: int,
+    ) -> list[PairSpreadKlinePoint]:
+        raw = _compact_symbol(symbol)
+        end_ms = _to_ms(end)
+        interval_ms = _interval_ms(interval_minutes)
+        cursor = _to_ms(start)
+        granularity = f"{interval_minutes}min"
+        points: list[PairSpreadKlinePoint] = []
+        while cursor < end_ms:
+            chunk_end = min(end_ms, cursor + 1000 * interval_ms - 1)
+            url = (
+                "https://api.bitget.com/api/v2/spot/market/candles"
+                f"?symbol={raw}&granularity={granularity}"
                 f"&startTime={cursor}&endTime={chunk_end}&limit=1000"
             )
             rows = (await self._get_json(url)).get("data", [])
@@ -827,6 +1037,29 @@ class PairSpreadQueryService:
             ),
         )
 
+    async def _fetch_binance_spot_current(self, symbol: str) -> PairSpreadCurrentLeg:
+        raw = _compact_symbol(symbol)
+        book, last_payload = await asyncio.gather(
+            self._get_json(f"https://api.binance.com/api/v3/ticker/bookTicker?symbol={raw}"),
+            self._get_json(f"https://api.binance.com/api/v3/ticker/price?symbol={raw}"),
+        )
+        bid = parse_float(book.get("bidPrice")) if isinstance(book, dict) else None
+        ask = parse_float(book.get("askPrice")) if isinstance(book, dict) else None
+        last = parse_float(last_payload.get("price")) if isinstance(last_payload, dict) else None
+        return _current_leg(
+            exchange="binance",
+            symbol=symbol,
+            market_type=MarketType.SPOT,
+            raw_symbol=raw,
+            mark_price=None,
+            index_price=None,
+            mid_price=_mid_price(bid, ask),
+            last_price=_positive(last),
+            funding_rate_pct=None,
+            funding_next_rate_pct=None,
+            funding_next_time=None,
+        )
+
     async def _fetch_binance_like_funding_info(self, base_url: str, raw_symbol: str) -> dict[str, Any]:
         try:
             rows = await self._get_json(f"{base_url}/fapi/v1/fundingInfo")
@@ -877,6 +1110,24 @@ class PairSpreadQueryService:
             ),
         )
 
+    async def _fetch_okx_spot_current(self, symbol: str) -> PairSpreadCurrentLeg:
+        inst_id = _okx_spot_inst_id(symbol)
+        ticker_payload = await self._get_json(f"https://www.okx.com/api/v5/market/ticker?instId={inst_id}")
+        ticker = _first_row(ticker_payload.get("data", [])) if isinstance(ticker_payload, dict) else {}
+        return _current_leg(
+            exchange="okx",
+            symbol=symbol,
+            market_type=MarketType.SPOT,
+            raw_symbol=inst_id,
+            mark_price=None,
+            index_price=None,
+            mid_price=_mid_price(parse_float(ticker.get("bidPx")), parse_float(ticker.get("askPx"))),
+            last_price=_positive(parse_float(ticker.get("last"))),
+            funding_rate_pct=None,
+            funding_next_rate_pct=None,
+            funding_next_time=None,
+        )
+
     async def _fetch_bybit_current(self, symbol: str) -> PairSpreadCurrentLeg:
         raw = _compact_symbol(symbol)
         payload, instrument_payload = await asyncio.gather(
@@ -909,6 +1160,26 @@ class PairSpreadQueryService:
             funding_interval_hours=funding_interval_minutes / 60 if funding_interval_minutes is not None else None,
             funding_rate_upper_pct=_ratio_to_pct(parse_float(instrument_row.get("upperFundingRate"))),
             funding_rate_lower_pct=_ratio_to_pct(parse_float(instrument_row.get("lowerFundingRate"))),
+        )
+
+    async def _fetch_bybit_spot_current(self, symbol: str) -> PairSpreadCurrentLeg:
+        raw = _compact_symbol(symbol)
+        payload = await self._get_json(
+            f"https://api.bybit.com/v5/market/tickers?category=spot&symbol={raw}"
+        )
+        row = _first_row(payload.get("result", {}).get("list", [])) if isinstance(payload, dict) else {}
+        return _current_leg(
+            exchange="bybit",
+            symbol=symbol,
+            market_type=MarketType.SPOT,
+            raw_symbol=raw,
+            mark_price=None,
+            index_price=None,
+            mid_price=_mid_price(parse_float(row.get("bid1Price")), parse_float(row.get("ask1Price"))),
+            last_price=_positive(parse_float(row.get("lastPrice"))),
+            funding_rate_pct=None,
+            funding_next_rate_pct=None,
+            funding_next_time=None,
         )
 
     async def _fetch_gate_current(self, symbol: str) -> PairSpreadCurrentLeg:
@@ -973,6 +1244,26 @@ class PairSpreadQueryService:
             or (-symmetric_limit if symmetric_limit is not None else None),
         )
 
+    async def _fetch_gate_spot_current(self, symbol: str) -> PairSpreadCurrentLeg:
+        pair = _gate_contract(symbol)
+        rows = await self._get_json(
+            f"https://api.gateio.ws/api/v4/spot/tickers?currency_pair={pair}"
+        )
+        row = _first_row(rows if isinstance(rows, list) else [])
+        return _current_leg(
+            exchange="gate",
+            symbol=symbol,
+            market_type=MarketType.SPOT,
+            raw_symbol=pair,
+            mark_price=None,
+            index_price=None,
+            mid_price=_mid_price(parse_float(row.get("highest_bid")), parse_float(row.get("lowest_ask"))),
+            last_price=_positive(parse_float(row.get("last"))),
+            funding_rate_pct=None,
+            funding_next_rate_pct=None,
+            funding_next_time=None,
+        )
+
     async def _fetch_bitget_current(self, symbol: str) -> PairSpreadCurrentLeg:
         raw = _compact_symbol(symbol)
         ticker_payload, funding_payload = await asyncio.gather(
@@ -1002,6 +1293,29 @@ class PairSpreadQueryService:
             funding_rate_pct=funding * 100 if funding is not None else None,
             funding_next_rate_pct=None,
             funding_next_time=parse_datetime_ms(funding_row.get("nextUpdate") or ticker.get("nextUpdate")),
+        )
+
+    async def _fetch_bitget_spot_current(self, symbol: str) -> PairSpreadCurrentLeg:
+        raw = _compact_symbol(symbol)
+        ticker_payload = await self._get_json(
+            f"https://api.bitget.com/api/v2/spot/market/tickers?symbol={raw}"
+        )
+        ticker = _payload_data_row(ticker_payload)
+        return _current_leg(
+            exchange="bitget",
+            symbol=symbol,
+            market_type=MarketType.SPOT,
+            raw_symbol=raw,
+            mark_price=None,
+            index_price=None,
+            mid_price=_mid_price(
+                parse_float(ticker.get("bidPr") or ticker.get("bid")),
+                parse_float(ticker.get("askPr") or ticker.get("ask")),
+            ),
+            last_price=_positive(parse_float(ticker.get("lastPr") or ticker.get("last"))),
+            funding_rate_pct=None,
+            funding_next_rate_pct=None,
+            funding_next_time=None,
         )
 
     async def _fetch_hyperliquid_current(self, symbol: str) -> PairSpreadCurrentLeg:
@@ -1327,6 +1641,25 @@ def _parse_gate_kline(row: dict[str, Any] | list[Any]) -> PairSpreadKlinePoint |
     return PairSpreadKlinePoint(bucket_at=bucket_at, close=close)
 
 
+def _parse_gate_spot_kline(row: dict[str, Any] | list[Any]) -> PairSpreadKlinePoint | None:
+    if isinstance(row, list):
+        if len(row) >= 3:
+            bucket_at = _bucket_datetime_seconds(row[0]) or _bucket_datetime_ms(row[0])
+            close = _positive(parse_float(row[2]))
+            if bucket_at is not None and close is not None:
+                return PairSpreadKlinePoint(bucket_at=bucket_at, close=close)
+        return None
+    bucket_at = (
+        _bucket_datetime_seconds(row.get("t"))
+        or _bucket_datetime_seconds(row.get("time"))
+        or _bucket_datetime_ms(row.get("timestamp"))
+    )
+    close = _positive(parse_float(row.get("c") or row.get("close")))
+    if bucket_at is None or close is None:
+        return None
+    return PairSpreadKlinePoint(bucket_at=bucket_at, close=close)
+
+
 def _first_row(rows: Any) -> dict[str, Any]:
     if isinstance(rows, list) and rows and isinstance(rows[0], dict):
         return rows[0]
@@ -1348,6 +1681,7 @@ def _current_leg(
     *,
     exchange: str,
     symbol: str,
+    market_type: MarketType = MarketType.FUTURE,
     raw_symbol: str,
     mark_price: float | None,
     index_price: float | None,
@@ -1372,6 +1706,7 @@ def _current_leg(
             return PairSpreadCurrentLeg(
                 exchange=exchange,
                 symbol=_compact_symbol(symbol),
+                market_type=market_type,
                 raw_symbol=raw_symbol,
                 price=resolved,
                 price_field=field,

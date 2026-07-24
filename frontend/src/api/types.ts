@@ -516,6 +516,7 @@ export interface OpportunityHistoryStatsQuery {
 export interface PairSpreadLegQuery {
   exchange: string;
   symbol: string;
+  market_type: MarketType;
 }
 
 export interface PairSpreadPoint {
@@ -536,6 +537,7 @@ export interface PairSpreadFundingPoint {
 export interface PairSpreadCurrentLeg {
   exchange: string;
   symbol: string;
+  market_type: MarketType;
   raw_symbol: string;
   price: number;
   price_field: PairSpreadPriceField;

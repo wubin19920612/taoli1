@@ -18,6 +18,7 @@ import utc from "dayjs/plugin/utc";
 
 import { getCurrentPremiumIndex, queryPairSpread, queryPremiumIndex } from "../api/client";
 import type {
+  MarketType,
   PairSpreadFundingPoint,
   PairSpreadPoint,
   PairSpreadPriceField,
@@ -31,13 +32,25 @@ dayjs.extend(utc);
 
 type PairSpreadFormValues = {
   leg1_exchange: string;
+  leg1_market_type: MarketType;
   leg1_symbol: string;
   leg2_exchange: string;
+  leg2_market_type: MarketType;
   leg2_symbol: string;
   leg2_multiplier: number;
 };
 
+type LegacyPairSpreadFormValues = Omit<PairSpreadFormValues, "leg1_market_type" | "leg2_market_type"> &
+  Partial<Pick<PairSpreadFormValues, "leg1_market_type" | "leg2_market_type">>;
+
 type SavedPairSpreadPreset = PairSpreadFormValues & {
+  id: string;
+  hours: number;
+  intervalMinutes: number;
+  savedAt: string;
+};
+
+type LegacySavedPairSpreadPreset = LegacyPairSpreadFormValues & {
   id: string;
   hours: number;
   intervalMinutes: number;
@@ -52,8 +65,10 @@ type PairPremiumCompareResult = {
 
 const defaultFormValues: PairSpreadFormValues = {
   leg1_exchange: "bitget",
+  leg1_market_type: "future",
   leg1_symbol: "SKHY",
   leg2_exchange: "bitget",
+  leg2_market_type: "future",
   leg2_symbol: "SKHYNIX",
   leg2_multiplier: 10
 };
@@ -66,6 +81,11 @@ const intervalOptions = [
   { label: "1分钟", value: 1 },
   { label: "5分钟", value: 5 },
   { label: "15分钟", value: 15 }
+];
+
+const marketTypeOptions: Array<{ label: string; value: MarketType }> = [
+  { label: "合约", value: "future" },
+  { label: "现货", value: "spot" }
 ];
 
 const PAIR_SPREAD_PRESETS_KEY = "taoli1.pairSpread.presets.v1";
@@ -124,11 +144,25 @@ function clampHours(value: number | null): number {
   return Math.min(720, Math.max(1, Math.round(value)));
 }
 
-function normalizePairForm(values: PairSpreadFormValues): PairSpreadFormValues {
+function normalizeMarketType(value: unknown): MarketType {
+  return value === "spot" ? "spot" : "future";
+}
+
+function marketTypeText(value: MarketType | null | undefined): string {
+  return value === "spot" ? "现货" : "合约";
+}
+
+function legDisplay(exchange: string, marketType: MarketType | null | undefined, symbol: string, suffix = ""): string {
+  return `${exchange} · ${marketTypeText(marketType)} · ${symbol}${suffix}`;
+}
+
+function normalizePairForm(values: LegacyPairSpreadFormValues): PairSpreadFormValues {
   return {
     leg1_exchange: values.leg1_exchange,
+    leg1_market_type: normalizeMarketType(values.leg1_market_type),
     leg1_symbol: values.leg1_symbol.trim().toUpperCase(),
     leg2_exchange: values.leg2_exchange,
+    leg2_market_type: normalizeMarketType(values.leg2_market_type),
     leg2_symbol: values.leg2_symbol.trim().toUpperCase(),
     leg2_multiplier: Number(values.leg2_multiplier)
   };
@@ -138,18 +172,23 @@ function pairPresetId(values: PairSpreadFormValues): string {
   const normalized = normalizePairForm(values);
   return [
     normalized.leg1_exchange,
+    normalized.leg1_market_type,
     normalized.leg1_symbol,
     normalized.leg2_exchange,
+    normalized.leg2_market_type,
     normalized.leg2_symbol,
     compactNumber(normalized.leg2_multiplier, 8)
   ].join("|");
 }
 
-function isSavedPreset(value: unknown): value is SavedPairSpreadPreset {
+function isSavedPreset(value: unknown): value is LegacySavedPairSpreadPreset {
   if (!value || typeof value !== "object") {
     return false;
   }
   const item = value as Partial<SavedPairSpreadPreset>;
+  const hasValidMarketTypes =
+    (item.leg1_market_type === undefined || item.leg1_market_type === "future" || item.leg1_market_type === "spot") &&
+    (item.leg2_market_type === undefined || item.leg2_market_type === "future" || item.leg2_market_type === "spot");
   return (
     typeof item.id === "string" &&
     typeof item.leg1_exchange === "string" &&
@@ -159,8 +198,21 @@ function isSavedPreset(value: unknown): value is SavedPairSpreadPreset {
     typeof item.leg2_multiplier === "number" &&
     typeof item.hours === "number" &&
     typeof item.intervalMinutes === "number" &&
-    typeof item.savedAt === "string"
+    typeof item.savedAt === "string" &&
+    hasValidMarketTypes
   );
+}
+
+function normalizeSavedPreset(preset: LegacySavedPairSpreadPreset): SavedPairSpreadPreset {
+  const values = normalizePairForm(preset);
+  return {
+    ...preset,
+    ...values,
+    id: pairPresetId(values),
+    hours: clampHours(preset.hours),
+    intervalMinutes: preset.intervalMinutes,
+    savedAt: preset.savedAt
+  };
 }
 
 function loadSavedPairPresets(): SavedPairSpreadPreset[] {
@@ -169,7 +221,9 @@ function loadSavedPairPresets(): SavedPairSpreadPreset[] {
   }
   try {
     const parsed = JSON.parse(window.localStorage.getItem(PAIR_SPREAD_PRESETS_KEY) ?? "[]");
-    return Array.isArray(parsed) ? parsed.filter(isSavedPreset).slice(0, MAX_SAVED_PAIR_PRESETS) : [];
+    return Array.isArray(parsed)
+      ? parsed.filter(isSavedPreset).map(normalizeSavedPreset).slice(0, MAX_SAVED_PAIR_PRESETS)
+      : [];
   } catch {
     return [];
   }
@@ -214,15 +268,29 @@ function dataRangeLabel(result: PairSpreadQueryResult | null, fallbackHours: num
 
 function rightLegLabel(result: PairSpreadQueryResult | null): string {
   if (!result) {
-    return "右合约";
+    return "右标的";
   }
   const divisor = result.leg2_multiplier === 1 ? "" : `/${compactNumber(result.leg2_multiplier, 4)}`;
-  return `${result.leg2.exchange} · ${result.leg2.symbol}${divisor}`;
+  return legDisplay(result.leg2.exchange, result.leg2.market_type, result.leg2.symbol, divisor);
+}
+
+function leftLegLabel(result: PairSpreadQueryResult | null): string {
+  if (!result) {
+    return "左标的";
+  }
+  return legDisplay(result.leg1.exchange, result.leg1.market_type, result.leg1.symbol);
 }
 
 function savedPresetLabel(preset: SavedPairSpreadPreset): string {
   const divisor = preset.leg2_multiplier === 1 ? "" : `/${compactNumber(preset.leg2_multiplier, 4)}`;
-  return `${preset.leg1_exchange} ${preset.leg1_symbol} / ${preset.leg2_exchange} ${preset.leg2_symbol}${divisor}`;
+  return (
+    `${preset.leg1_exchange} ${marketTypeText(preset.leg1_market_type)} ${preset.leg1_symbol} / ` +
+    `${preset.leg2_exchange} ${marketTypeText(preset.leg2_market_type)} ${preset.leg2_symbol}${divisor}`
+  );
+}
+
+function supportsPremiumCompare(result: PairSpreadQueryResult): boolean {
+  return result.leg1.market_type === "future" && result.leg2.market_type === "future";
 }
 
 function spreadLinePath(
@@ -561,7 +629,7 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
       <div className="pair-chart-footer">
         <div className="pair-footer-tags">
           <Tag color="blue">
-            {result.leg1.exchange} / {result.leg2.exchange}
+            {leftLegLabel(result)} / {rightLegLabel(result)}
           </Tag>
           <Tag>{result.point_count} 点</Tag>
           <Tag>{result.interval_minutes}m 周期</Tag>
@@ -617,9 +685,7 @@ function PairPriceChart({
       <div className="pair-price-head">
         <Typography.Text strong>标的价格</Typography.Text>
         <div className="pair-price-legend">
-          <span className="pair-price-legend-left">
-            {result.leg1.exchange} · {result.leg1.symbol}
-          </span>
+          <span className="pair-price-legend-left">{leftLegLabel(result)}</span>
           <span className="pair-price-legend-right">{rightLegLabel(result)}</span>
         </div>
       </div>
@@ -1042,6 +1108,14 @@ export function PairMonitorPage() {
     setPremiumLoading(true);
     setPremiumError("");
     try {
+      if (!supportsPremiumCompare(pairResult)) {
+        setPremiumCompare({
+          left: null,
+          right: null,
+          warnings: ["溢价指数只适用于合约腿；当前价差组合包含现货，已跳过溢价指数对比。"]
+        });
+        return;
+      }
       const [left, right] = await Promise.allSettled([
         queryPremiumIndex({
           exchange: pairResult.leg1.exchange,
@@ -1079,6 +1153,14 @@ export function PairMonitorPage() {
     setPremiumLoading(true);
     setPremiumError("");
     try {
+      if (!supportsPremiumCompare(pairResult)) {
+        setPremiumCompare((existing) => existing ?? {
+          left: null,
+          right: null,
+          warnings: ["溢价指数只适用于合约腿；当前价差组合包含现货，已跳过溢价指数对比。"]
+        });
+        return;
+      }
       const [left, right] = await Promise.allSettled([
         getCurrentPremiumIndex({
           exchange: pairResult.leg1.exchange,
@@ -1136,8 +1218,10 @@ export function PairMonitorPage() {
       const queryInterval = override?.intervalMinutes ?? intervalMinutes;
       const next = await queryPairSpread({
         leg1_exchange: values.leg1_exchange,
+        leg1_market_type: values.leg1_market_type,
         leg1_symbol: values.leg1_symbol,
         leg2_exchange: values.leg2_exchange,
+        leg2_market_type: values.leg2_market_type,
         leg2_symbol: values.leg2_symbol,
         leg2_multiplier: values.leg2_multiplier,
         interval_minutes: queryInterval,
@@ -1185,8 +1269,10 @@ export function PairMonitorPage() {
     }
     form.setFieldsValue({
       leg1_exchange: result.leg1.exchange,
+      leg1_market_type: result.leg1.market_type,
       leg1_symbol: result.leg1.symbol,
       leg2_exchange: result.leg2.exchange,
+      leg2_market_type: result.leg2.market_type,
       leg2_symbol: result.leg2.symbol,
       leg2_multiplier: result.leg2_multiplier
     });
@@ -1252,14 +1338,20 @@ export function PairMonitorPage() {
             <Form.Item name="leg1_exchange" rules={[{ required: true }]} className="pair-query-item">
               <Select options={exchangeOptions} showSearch />
             </Form.Item>
-            <Form.Item name="leg1_symbol" rules={[{ required: true, message: "请输入左合约" }]} className="pair-query-contract">
-              <Input addonBefore="左合约" placeholder="SKHY" />
+            <Form.Item name="leg1_market_type" rules={[{ required: true }]} className="pair-query-market-type">
+              <Select options={marketTypeOptions} />
+            </Form.Item>
+            <Form.Item name="leg1_symbol" rules={[{ required: true, message: "请输入左标的" }]} className="pair-query-contract">
+              <Input addonBefore="左标的" placeholder="SKHY" />
             </Form.Item>
             <Form.Item name="leg2_exchange" rules={[{ required: true }]} className="pair-query-item">
               <Select options={exchangeOptions} showSearch />
             </Form.Item>
-            <Form.Item name="leg2_symbol" rules={[{ required: true, message: "请输入右合约" }]} className="pair-query-contract">
-              <Input addonBefore="右合约" placeholder="SKHYNIX" />
+            <Form.Item name="leg2_market_type" rules={[{ required: true }]} className="pair-query-market-type">
+              <Select options={marketTypeOptions} />
+            </Form.Item>
+            <Form.Item name="leg2_symbol" rules={[{ required: true, message: "请输入右标的" }]} className="pair-query-contract">
+              <Input addonBefore="右标的" placeholder="SKHYNIX" />
             </Form.Item>
             <Form.Item
               name="leg2_multiplier"
@@ -1346,15 +1438,15 @@ export function PairMonitorPage() {
         <MetricCard
           label="最新均值价差率"
           value={signedPct(spreadPct)}
-          sub={
-            result
-              ? `实时价差 = ${rightLegLabel(result)} - ${result.leg1.exchange} · ${result.leg1.symbol}`
+            sub={
+              result
+              ? `实时价差 = ${rightLegLabel(result)} - ${leftLegLabel(result)}`
               : "等待查询"
           }
           tone={spreadTone}
         />
         <MetricCard
-          label={result ? `${result.leg1.exchange} · ${result.leg1.symbol}` : "左合约"}
+          label={leftLegLabel(result)}
           value={price(current?.leg1.price)}
           sub={current ? priceFieldLabels[current.leg1.price_field] : "-"}
         />

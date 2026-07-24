@@ -3,6 +3,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.models.market import MarketType
+
 
 SUPPORTED_PAIR_SPREAD_EXCHANGES: tuple[str, ...] = (
     "binance",
@@ -38,6 +40,7 @@ def normalize_pair_spread_symbol(value: str) -> str:
 class PairSpreadLegQuery(BaseModel):
     exchange: str
     symbol: str
+    market_type: MarketType = MarketType.FUTURE
 
     @field_validator("exchange")
     @classmethod
@@ -77,6 +80,7 @@ class PairSpreadFundingPoint(BaseModel):
 class PairSpreadCurrentLeg(BaseModel):
     exchange: str
     symbol: str
+    market_type: MarketType = MarketType.FUTURE
     raw_symbol: str
     price: float
     price_field: PairSpreadPriceField

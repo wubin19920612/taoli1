@@ -38,6 +38,7 @@ import type {
   OpportunityRadarSettings,
   PairSpreadQueryResult,
   LivePilotPreview,
+  MarketType,
   LivePilotSettings,
   MarketFilters,
   MarketSnapshot,
@@ -581,8 +582,10 @@ export async function getOpportunityHistoryStats(
 export async function queryPairSpread(query: {
   leg1_exchange: string;
   leg1_symbol: string;
+  leg1_market_type?: MarketType;
   leg2_exchange: string;
   leg2_symbol: string;
+  leg2_market_type?: MarketType;
   hours?: number;
   interval_minutes?: number;
   leg2_multiplier?: number;
