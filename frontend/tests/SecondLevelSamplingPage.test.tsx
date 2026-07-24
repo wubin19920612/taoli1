@@ -147,6 +147,9 @@ describe("SecondLevelSamplingPage", () => {
     expect(await screen.findByText("bitget / bybit")).toBeTruthy();
     expect(await screen.findByText("指数组成痕迹")).toBeTruthy();
     expect(await screen.findByText("强痕迹")).toBeTruthy();
+    expect(await screen.findByText("Bybit DEXE 指数组成")).toBeTruthy();
+    expect(await screen.findByText("加权价格")).toBeTruthy();
+    expect(await screen.findByText("接口正常")).toBeTruthy();
     expect(screen.getAllByText("binance").length).toBeGreaterThan(0);
 
     await userEvent.click(screen.getByRole("button", { name: /保存/ }));

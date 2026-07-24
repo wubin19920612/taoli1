@@ -1096,6 +1096,165 @@ body {
   margin-bottom: 12px;
 }
 
+.index-composition-grid {
+  margin-top: 14px;
+}
+
+.index-composition-card {
+  background:
+    radial-gradient(circle at top right, rgba(88, 166, 255, 0.12), transparent 32%),
+    linear-gradient(180deg, #ffffff 0%, #fbfcff 100%);
+  border: 1px solid #e8edf5;
+  border-radius: 18px;
+  box-shadow: 0 12px 30px rgba(20, 40, 80, 0.06);
+  height: 100%;
+  padding: 18px;
+}
+
+.index-composition-card-header {
+  align-items: flex-start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.index-composition-title {
+  margin: 0 0 4px !important;
+}
+
+.index-composition-stats {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 16px 0;
+}
+
+.index-composition-stat {
+  background: rgba(246, 248, 252, 0.92);
+  border: 1px solid #edf1f7;
+  border-radius: 12px;
+  min-width: 0;
+  padding: 10px 12px;
+}
+
+.index-composition-stat span,
+.index-composition-summary span,
+.index-composition-muted {
+  color: #738196;
+  display: block;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.index-composition-stat strong,
+.index-composition-summary strong,
+.index-composition-mono {
+  color: #172033;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+
+.index-composition-table {
+  border: 1px solid #edf1f7;
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.index-composition-row {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.92);
+  border-top: 1px solid #f0f3f8;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(138px, 1fr) minmax(128px, 0.9fr) minmax(176px, 1.25fr);
+  padding: 11px 14px;
+}
+
+.index-composition-row:first-child {
+  border-top: 0;
+}
+
+.index-composition-row-head {
+  background: #f7f9fd;
+  color: #6e7b8f;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.index-composition-row-error {
+  background: #fff8f0;
+}
+
+.index-composition-weight-cell {
+  display: grid;
+  gap: 7px;
+}
+
+.index-composition-weight-text {
+  color: #172033;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 17px;
+  font-weight: 800;
+}
+
+.index-composition-weight-track {
+  background: #e8eef7;
+  border-radius: 999px;
+  height: 7px;
+  overflow: hidden;
+}
+
+.index-composition-weight-fill {
+  background: linear-gradient(90deg, #1677ff, #23c9a9);
+  border-radius: inherit;
+  display: block;
+  height: 100%;
+  min-width: 3px;
+}
+
+.index-composition-source-cell {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.index-composition-source-cell > span:not(.ant-tag):not(.index-composition-error-text) {
+  color: #334155;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.index-composition-error-text {
+  color: #b26a00;
+  flex-basis: 100%;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.index-composition-summary {
+  background: #f7f9fd;
+  border: 1px solid #edf1f7;
+  border-radius: 14px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-top: 14px;
+  padding: 12px 14px;
+}
+
+.index-composition-empty {
+  padding: 28px 0 12px;
+}
+
 .sampling-filter-select {
   min-width: 140px;
 }
@@ -2565,6 +2724,15 @@ body {
     grid-template-columns: 1fr;
   }
 
+  .index-composition-stats,
+  .index-composition-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .index-composition-row {
+    grid-template-columns: 1fr;
+  }
+
   .pair-query-bar,
   .premium-query-bar {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2691,6 +2859,11 @@ body {
   .toolbar-controls .ant-input-number,
   .toolbar-controls .ant-input-number-affix-wrapper {
     width: 100%;
+  }
+
+  .index-composition-stats,
+  .index-composition-summary {
+    grid-template-columns: 1fr;
   }
 
   .ant-pagination {
