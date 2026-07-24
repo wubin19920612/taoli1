@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -98,9 +98,11 @@ const status = {
 
 describe("SecondLevelSamplingPage", () => {
   const requests: string[] = [];
+  let currentStatus = status;
 
   beforeEach(() => {
     requests.length = 0;
+    currentStatus = status;
     window.localStorage.clear();
     vi.stubGlobal(
       "fetch",
@@ -118,10 +120,10 @@ describe("SecondLevelSamplingPage", () => {
           return Response.json(config);
         }
         if (url.pathname.includes("/second-level-sampling/status")) {
-          return Response.json(status);
+          return Response.json(currentStatus);
         }
         if (url.pathname.includes("/second-level-sampling/component-samples")) {
-          return Response.json(status.latest_component_samples);
+          return Response.json(currentStatus.latest_component_samples);
         }
         if (url.pathname.includes("/second-level-sampling/samples")) {
           return Response.json([sample]);
@@ -167,5 +169,45 @@ describe("SecondLevelSamplingPage", () => {
     await new Promise((resolve) => window.setTimeout(resolve, 3500));
 
     expect(requests).toHaveLength(0);
+  });
+
+  it("does not reload component details on every automatic poll when composition is unchanged", async () => {
+    currentStatus = { ...status, running: true };
+    render(<SecondLevelSamplingPage />);
+
+    expect(await screen.findByText("1s 采样")).toBeTruthy();
+    await waitFor(() => {
+      expect(requests.filter((request) => request.includes("/second-level-sampling/component-samples")).length)
+        .toBeGreaterThan(0);
+    });
+
+    requests.length = 0;
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 1500));
+    });
+
+    expect(requests.some((request) => request.includes("/second-level-sampling/status"))).toBe(true);
+    expect(requests.some((request) => request.includes("/second-level-sampling/samples"))).toBe(true);
+    expect(requests.some((request) => request.includes("/second-level-sampling/component-samples"))).toBe(false);
+
+    currentStatus = {
+      ...currentStatus,
+      latest_component_samples: [
+        {
+          ...status.latest_component_samples[0],
+          id: 11,
+          observed_at: "2026-07-23T08:00:02Z",
+          component_source: "gateio",
+          component_symbol: "DEXE_USDT",
+          weight_pct: 16.1
+        }
+      ]
+    };
+    requests.length = 0;
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 1500));
+    });
+
+    expect(requests.some((request) => request.includes("/second-level-sampling/component-samples"))).toBe(true);
   });
 });

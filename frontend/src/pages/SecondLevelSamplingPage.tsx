@@ -24,7 +24,7 @@ import {
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   getSecondLevelSamplingConfig,
@@ -88,6 +88,46 @@ function normalizeSymbolInput(values: string[]): string[] {
     .map((value) => (value.endsWith("USDT") ? value : `${value}USDT`));
 }
 
+function componentDetailFingerprint(samples: SecondLevelIndexComponentSample[]): string {
+  const latestByComponent = new Map<string, SecondLevelIndexComponentSample>();
+  [...samples]
+    .sort((left, right) => dayjs(right.observed_at).valueOf() - dayjs(left.observed_at).valueOf())
+    .forEach((sample) => {
+      const key = [
+        sample.target_exchange,
+        sample.symbol,
+        sample.component_source,
+        sample.component_symbol
+      ].join(":");
+      if (!latestByComponent.has(key)) {
+        latestByComponent.set(key, sample);
+      }
+    });
+  return Array.from(latestByComponent.values())
+    .map((sample) =>
+      [
+        sample.target_exchange,
+        sample.symbol,
+        sample.component_source,
+        sample.component_symbol,
+        sample.weight_pct?.toFixed(8) ?? "",
+        sample.error ? "error" : "ok"
+      ].join(":")
+    )
+    .sort()
+    .join("|");
+}
+
+function filterComponentSamples(
+  samples: SecondLevelIndexComponentSample[],
+  symbol: string,
+  exchange?: string
+): SecondLevelIndexComponentSample[] {
+  return samples.filter(
+    (sample) => sample.symbol === symbol && (!exchange || sample.target_exchange === exchange)
+  );
+}
+
 export function SecondLevelSamplingPage() {
   const [exchangeOptions, setExchangeOptions] = useState<string[]>([]);
   const [draft, setDraft] = useState<SecondLevelSamplingConfig>(defaultConfig);
@@ -98,35 +138,61 @@ export function SecondLevelSamplingPage() {
   const [selectedExchange, setSelectedExchange] = useState<string | undefined>();
   const [minutes, setMinutes] = useState<number>(30);
   const [loading, setLoading] = useState(false);
+  const [componentLoading, setComponentLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const componentFingerprintRef = useRef<string | null>(null);
 
-  const refresh = useCallback(async () => {
+  const refreshComponentSamples = useCallback(
+    async (knownFingerprint?: string) => {
+      setComponentLoading(true);
+      try {
+        const nextComponentSamples = await listSecondLevelIndexComponentSamples({
+          symbol: selectedSymbol,
+          target_exchange: selectedExchange,
+          minutes,
+          limit: 1000
+        });
+        setComponentSamples(nextComponentSamples);
+        componentFingerprintRef.current = knownFingerprint ?? componentDetailFingerprint(nextComponentSamples);
+      } catch (exc) {
+        message.error(exc instanceof Error ? exc.message : String(exc));
+      } finally {
+        setComponentLoading(false);
+      }
+    },
+    [minutes, selectedExchange, selectedSymbol]
+  );
+
+  const refresh = useCallback(async (options: { forceComponentDetails?: boolean } = {}) => {
     setLoading(true);
     try {
-      const [nextStatus, nextSamples, nextComponentSamples] = await Promise.all([
+      const [nextStatus, nextSamples] = await Promise.all([
         getSecondLevelSamplingStatus(),
         listSecondLevelSamples({
           symbol: selectedSymbol,
           exchange: selectedExchange,
           minutes,
           limit: 1000
-        }),
-        listSecondLevelIndexComponentSamples({
-          symbol: selectedSymbol,
-          target_exchange: selectedExchange,
-          minutes,
-          limit: 1000
         })
       ]);
       setStatus(nextStatus);
       setSamples(nextSamples);
-      setComponentSamples(nextComponentSamples);
+      const nextComponentFingerprint = componentDetailFingerprint(
+        filterComponentSamples(nextStatus.latest_component_samples ?? [], selectedSymbol, selectedExchange)
+      );
+      if (
+        options.forceComponentDetails ||
+        componentFingerprintRef.current === null ||
+        nextComponentFingerprint !== componentFingerprintRef.current
+      ) {
+        await refreshComponentSamples(nextComponentFingerprint);
+      }
     } catch (exc) {
       message.error(exc instanceof Error ? exc.message : String(exc));
     } finally {
       setLoading(false);
     }
-  }, [minutes, selectedExchange, selectedSymbol]);
+  }, [minutes, refreshComponentSamples, selectedExchange, selectedSymbol]);
 
   useEffect(() => {
     let alive = true;
@@ -156,7 +222,7 @@ export function SecondLevelSamplingPage() {
   const pollingMs = Math.max(1000, Math.round((status?.config.interval_seconds ?? draft.interval_seconds) * 1000));
 
   useEffect(() => {
-    void refresh();
+    void refresh({ forceComponentDetails: true });
   }, [refresh]);
 
   useEffect(() => {
@@ -182,7 +248,7 @@ export function SecondLevelSamplingPage() {
         setDraft(saved);
         setSelectedSymbol(saved.symbols[0] ?? selectedSymbol);
         message.success(enabled ? "采样已启动" : "配置已保存");
-        await refresh();
+        await refresh({ forceComponentDetails: true });
       } catch (exc) {
         message.error(exc instanceof Error ? exc.message : String(exc));
       } finally {
@@ -199,7 +265,7 @@ export function SecondLevelSamplingPage() {
       setStatus(nextStatus);
       setDraft(nextStatus.config);
       message.success("采样已暂停");
-      await refresh();
+      await refresh({ forceComponentDetails: true });
     } catch (exc) {
       message.error(exc instanceof Error ? exc.message : String(exc));
     } finally {
@@ -519,7 +585,7 @@ export function SecondLevelSamplingPage() {
           </div>
           <Space>
             {isRunning ? <Tag color="green">运行中 / 自动刷新</Tag> : <Tag>已暂停</Tag>}
-            <Button icon={<ReloadOutlined />} onClick={() => void refresh()} loading={loading}>
+            <Button icon={<ReloadOutlined />} onClick={() => void refresh({ forceComponentDetails: true })} loading={loading}>
               刷新
             </Button>
           </Space>
@@ -707,7 +773,7 @@ export function SecondLevelSamplingPage() {
           />
         </Card>
 
-        <Card title="指数组成明细" size="small">
+        <Card title="指数组成明细" size="small" extra={<Tag>组成变化时更新</Tag>}>
           <Table
             rowKey={(row) =>
               row.id ?? `${row.target_exchange}:${row.symbol}:${row.component_source}:${row.component_symbol}:${row.observed_at}`
@@ -716,7 +782,7 @@ export function SecondLevelSamplingPage() {
             dataSource={componentSamples}
             pagination={{ pageSize: 20, showSizeChanger: true }}
             size="small"
-            loading={loading}
+            loading={componentLoading}
             scroll={{ x: 1380 }}
             expandable={{
               expandedRowRender: (row) => <pre className="sampling-error-text">{row.error || "OK"}</pre>,
