@@ -830,34 +830,6 @@ export function SecondLevelSamplingPage() {
         </Card>
 
         <Card
-          title="指数组成痕迹"
-          size="small"
-          extra={
-            <Space wrap>
-              <Tag color="blue">窗口 {status?.config.component_signal_window_seconds ?? draft.component_signal_window_seconds}s</Tag>
-              <Tag>组成变化时更新</Tag>
-            </Space>
-          }
-        >
-          <Alert
-            type="info"
-            showIcon
-            message="后台仍按秒采样保存成分源价格；前端这张组成快照不跟着秒级轮询滚动，只在构成源、权重或可用状态变化时更新。"
-            className="sampling-card-hint"
-          />
-          <Table
-            rowKey={(row) =>
-              `${row.target_exchange}:${row.symbol}:${row.component_source}:${row.component_symbol}:${row.observed_at}`
-            }
-            columns={componentSignalColumns}
-            dataSource={componentSignals}
-            pagination={false}
-            size="small"
-            scroll={{ x: 1380 }}
-          />
-        </Card>
-
-        <Card
           title="指数组成明细"
           size="small"
           extra={
@@ -1009,6 +981,34 @@ export function SecondLevelSamplingPage() {
               ),
               rowExpandable: (row) => Boolean(row.error)
             }}
+          />
+        </Card>
+
+        <Card
+          title="指数组成痕迹"
+          size="small"
+          extra={
+            <Space wrap>
+              <Tag color="blue">窗口 {status?.config.component_signal_window_seconds ?? draft.component_signal_window_seconds}s</Tag>
+              <Tag>组成变化时更新</Tag>
+            </Space>
+          }
+        >
+          <Alert
+            type="info"
+            showIcon
+            message="后台仍按秒采样保存成分源价格；前端这张组成快照不跟着秒级轮询滚动，只在构成源、权重或可用状态变化时更新。"
+            className="sampling-card-hint"
+          />
+          <Table
+            rowKey={(row) =>
+              `${row.target_exchange}:${row.symbol}:${row.component_source}:${row.component_symbol}:${row.observed_at}`
+            }
+            columns={componentSignalColumns}
+            dataSource={componentSignals}
+            pagination={false}
+            size="small"
+            scroll={{ x: 1380 }}
           />
         </Card>
       </Space>
