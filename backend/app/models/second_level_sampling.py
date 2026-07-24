@@ -103,9 +103,16 @@ class SecondLevelPairSpreadSnapshot(BaseModel):
     left_exchange: str
     right_exchange: str
     observed_at: datetime
+    left_spot_mid: float | None = None
+    right_spot_mid: float | None = None
     left_future_mid: float | None = None
     right_future_mid: float | None = None
+    spot_spread_pct: float | None = None
     future_spread_pct: float | None = None
+    future_spot_spread_gap_pct: float | None = None
+    left_future_spot_basis_pct: float | None = None
+    right_future_spot_basis_pct: float | None = None
+    future_spot_basis_gap_pct: float | None = None
     left_mark_premium_pct: float | None = None
     right_mark_premium_pct: float | None = None
     premium_gap_pct: float | None = None

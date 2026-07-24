@@ -1193,7 +1193,7 @@ class SecondLevelSampler:
 def _latest_spreads(samples: list[SecondLevelMarketSample]) -> list[SecondLevelPairSpreadSnapshot]:
     by_symbol: dict[str, list[SecondLevelMarketSample]] = {}
     for sample in samples:
-        if sample.future_mid is None:
+        if sample.future_mid is None and sample.spot_mid is None:
             continue
         by_symbol.setdefault(sample.symbol, []).append(sample)
 
@@ -1201,6 +1201,10 @@ def _latest_spreads(samples: list[SecondLevelMarketSample]) -> list[SecondLevelP
     for symbol, rows in by_symbol.items():
         for left, right in combinations(sorted(rows, key=lambda item: item.exchange), 2):
             observed_at = max(left.observed_at, right.observed_at)
+            spot_spread = _pct_diff(left.spot_mid, right.spot_mid)
+            future_spread = _pct_diff(left.future_mid, right.future_mid)
+            left_basis = _pct_diff(left.future_mid, left.spot_mid)
+            right_basis = _pct_diff(right.future_mid, right.spot_mid)
             premium_gap = None
             if left.mark_premium_pct is not None and right.mark_premium_pct is not None:
                 premium_gap = left.mark_premium_pct - right.mark_premium_pct
@@ -1210,9 +1214,16 @@ def _latest_spreads(samples: list[SecondLevelMarketSample]) -> list[SecondLevelP
                     left_exchange=left.exchange,
                     right_exchange=right.exchange,
                     observed_at=observed_at,
+                    left_spot_mid=left.spot_mid,
+                    right_spot_mid=right.spot_mid,
                     left_future_mid=left.future_mid,
                     right_future_mid=right.future_mid,
-                    future_spread_pct=_pct_diff(left.future_mid, right.future_mid),
+                    spot_spread_pct=spot_spread,
+                    future_spread_pct=future_spread,
+                    future_spot_spread_gap_pct=_delta(future_spread, spot_spread),
+                    left_future_spot_basis_pct=left_basis,
+                    right_future_spot_basis_pct=right_basis,
+                    future_spot_basis_gap_pct=_delta(left_basis, right_basis),
                     left_mark_premium_pct=left.mark_premium_pct,
                     right_mark_premium_pct=right.mark_premium_pct,
                     premium_gap_pct=premium_gap,

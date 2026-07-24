@@ -66,6 +66,10 @@ function pctText(value: number | null | undefined, digits = 4): string {
   return typeof value === "number" && Number.isFinite(value) ? `${value.toFixed(digits)}%` : "-";
 }
 
+function pctPointText(value: number | null | undefined, digits = 4): string {
+  return typeof value === "number" && Number.isFinite(value) ? `${value.toFixed(digits)}pct` : "-";
+}
+
 function timeText(value: string | null | undefined): string {
   return value ? dayjs.utc(value).utcOffset(8).format("MM-DD HH:mm:ss") : "-";
 }
@@ -459,35 +463,86 @@ export function SecondLevelSamplingPage() {
     {
       title: "路径",
       key: "route",
+      width: 140,
       render: (_, row) => `${row.left_exchange} / ${row.right_exchange}`
+    },
+    {
+      title: "左侧价格",
+      key: "left_prices",
+      width: 130,
+      render: (_, row) => (
+        <Space direction="vertical" size={0}>
+          <Typography.Text>现 {numberText(row.left_spot_mid)}</Typography.Text>
+          <Typography.Text>合 {numberText(row.left_future_mid)}</Typography.Text>
+        </Space>
+      )
+    },
+    {
+      title: "右侧价格",
+      key: "right_prices",
+      width: 130,
+      render: (_, row) => (
+        <Space direction="vertical" size={0}>
+          <Typography.Text>现 {numberText(row.right_spot_mid)}</Typography.Text>
+          <Typography.Text>合 {numberText(row.right_future_mid)}</Typography.Text>
+        </Space>
+      )
+    },
+    {
+      title: "现货价差",
+      dataIndex: "spot_spread_pct",
+      key: "spot_spread_pct",
+      align: "right",
+      width: 112,
+      render: (value) => pctText(value)
     },
     {
       title: "合约价差",
       dataIndex: "future_spread_pct",
       key: "future_spread_pct",
       align: "right",
+      width: 112,
       render: (value) => pctText(value)
     },
     {
-      title: "溢价差",
+      title: "合约-现货",
+      dataIndex: "future_spot_spread_gap_pct",
+      key: "future_spot_spread_gap_pct",
+      align: "right",
+      width: 118,
+      render: (value) => pctPointText(value)
+    },
+    {
+      title: "左基差",
+      dataIndex: "left_future_spot_basis_pct",
+      key: "left_future_spot_basis_pct",
+      align: "right",
+      width: 104,
+      render: (value) => pctText(value)
+    },
+    {
+      title: "右基差",
+      dataIndex: "right_future_spot_basis_pct",
+      key: "right_future_spot_basis_pct",
+      align: "right",
+      width: 104,
+      render: (value) => pctText(value)
+    },
+    {
+      title: "基差差",
+      dataIndex: "future_spot_basis_gap_pct",
+      key: "future_spot_basis_gap_pct",
+      align: "right",
+      width: 104,
+      render: (value) => pctPointText(value)
+    },
+    {
+      title: "mark 溢价差",
       dataIndex: "premium_gap_pct",
       key: "premium_gap_pct",
       align: "right",
-      render: (value) => pctText(value)
-    },
-    {
-      title: "左侧合约",
-      dataIndex: "left_future_mid",
-      key: "left_future_mid",
-      align: "right",
-      render: (value) => numberText(value)
-    },
-    {
-      title: "右侧合约",
-      dataIndex: "right_future_mid",
-      key: "right_future_mid",
-      align: "right",
-      render: (value) => numberText(value)
+      width: 118,
+      render: (value) => pctPointText(value)
     },
     {
       title: "时间",
@@ -818,14 +873,20 @@ export function SecondLevelSamplingPage() {
           </Form>
         </Card>
 
-        <Card title="最新跨所价差" size="small">
+        <Card title="最新跨所价差" size="small" extra={<Tag color="blue">现货 / 合约对比</Tag>}>
+          <Alert
+            type="info"
+            showIcon
+            message="现货价差用于判断底层现货是否同步偏移；合约-现货为合约跨所价差减去现货跨所价差，数值越大代表价差更偏合约端。"
+            className="sampling-card-hint"
+          />
           <Table
             rowKey={(row) => `${row.symbol}:${row.left_exchange}:${row.right_exchange}`}
             columns={spreadColumns}
             dataSource={latestSpreads}
             pagination={false}
             size="small"
-            scroll={{ x: 860 }}
+            scroll={{ x: 1380 }}
           />
         </Card>
 

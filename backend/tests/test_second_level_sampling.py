@@ -113,6 +113,7 @@ async def test_second_level_sampler_status_builds_latest_spreads() -> None:
                 exchange="bybit",
                 symbol="DEXEUSDT",
                 status="ok",
+                spot_mid=100.5,
                 future_mid=101,
                 mark_premium_pct=1.2,
             ),
@@ -121,6 +122,7 @@ async def test_second_level_sampler_status_builds_latest_spreads() -> None:
                 exchange="bitget",
                 symbol="DEXEUSDT",
                 status="ok",
+                spot_mid=99.5,
                 future_mid=100,
                 mark_premium_pct=0.8,
             ),
@@ -138,7 +140,18 @@ async def test_second_level_sampler_status_builds_latest_spreads() -> None:
     spread = status.latest_spreads[0]
     assert spread.left_exchange == "bitget"
     assert spread.right_exchange == "bybit"
+    assert spread.left_spot_mid == pytest.approx(99.5)
+    assert spread.right_spot_mid == pytest.approx(100.5)
+    assert spread.spot_spread_pct == pytest.approx((99.5 / 100.5 - 1) * 100)
     assert spread.future_spread_pct == pytest.approx((100 / 101 - 1) * 100)
+    assert spread.future_spot_spread_gap_pct == pytest.approx(
+        ((100 / 101 - 1) * 100) - ((99.5 / 100.5 - 1) * 100)
+    )
+    assert spread.left_future_spot_basis_pct == pytest.approx((100 / 99.5 - 1) * 100)
+    assert spread.right_future_spot_basis_pct == pytest.approx((101 / 100.5 - 1) * 100)
+    assert spread.future_spot_basis_gap_pct == pytest.approx(
+        ((100 / 99.5 - 1) * 100) - ((101 / 100.5 - 1) * 100)
+    )
     assert spread.premium_gap_pct == pytest.approx(-0.4)
 
 

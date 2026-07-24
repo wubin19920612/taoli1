@@ -46,9 +46,16 @@ const status = {
       left_exchange: "bitget",
       right_exchange: "bybit",
       observed_at: "2026-07-23T08:00:00Z",
+      left_spot_mid: 9.95,
+      right_spot_mid: 10.05,
       left_future_mid: 10,
       right_future_mid: 10.1,
+      spot_spread_pct: -0.995,
       future_spread_pct: -0.9901,
+      future_spot_spread_gap_pct: 0.0049,
+      left_future_spot_basis_pct: 0.5025,
+      right_future_spot_basis_pct: 0.4975,
+      future_spot_basis_gap_pct: 0.005,
       left_mark_premium_pct: 0.8,
       right_mark_premium_pct: 1.1,
       premium_gap_pct: -0.3
@@ -145,6 +152,11 @@ describe("SecondLevelSamplingPage", () => {
       expect(screen.getAllByText("DEXEUSDT").length).toBeGreaterThan(0);
     });
     expect(await screen.findByText("bitget / bybit")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getAllByText("现货价差").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("合约-现货").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("左基差").length).toBeGreaterThan(0);
+    });
     expect(await screen.findByText("指数组成痕迹")).toBeTruthy();
     expect(await screen.findByText("强痕迹")).toBeTruthy();
     expect(await screen.findByText("Bybit DEXE 指数组成")).toBeTruthy();

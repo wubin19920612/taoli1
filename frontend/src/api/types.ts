@@ -132,9 +132,16 @@ export interface SecondLevelPairSpreadSnapshot {
   left_exchange: string;
   right_exchange: string;
   observed_at: string;
+  left_spot_mid?: number | null;
+  right_spot_mid?: number | null;
   left_future_mid?: number | null;
   right_future_mid?: number | null;
+  spot_spread_pct?: number | null;
   future_spread_pct?: number | null;
+  future_spot_spread_gap_pct?: number | null;
+  left_future_spot_basis_pct?: number | null;
+  right_future_spot_basis_pct?: number | null;
+  future_spot_basis_gap_pct?: number | null;
   left_mark_premium_pct?: number | null;
   right_mark_premium_pct?: number | null;
   premium_gap_pct?: number | null;
