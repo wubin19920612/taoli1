@@ -129,6 +129,16 @@ function filterComponentSamples(
   );
 }
 
+function filterComponentSignals(
+  signals: SecondLevelIndexComponentSignal[],
+  symbol: string,
+  exchange?: string
+): SecondLevelIndexComponentSignal[] {
+  return signals.filter(
+    (signal) => signal.symbol === symbol && (!exchange || signal.target_exchange === exchange)
+  );
+}
+
 interface ComponentCompositionGroup {
   key: string;
   targetExchange: string;
@@ -282,6 +292,7 @@ export function SecondLevelSamplingPage() {
   const [status, setStatus] = useState<SecondLevelSamplingStatus | null>(null);
   const [samples, setSamples] = useState<SecondLevelMarketSample[]>([]);
   const [componentSamples, setComponentSamples] = useState<SecondLevelIndexComponentSample[]>([]);
+  const [componentSignals, setComponentSignals] = useState<SecondLevelIndexComponentSignal[]>([]);
   const [selectedSymbol, setSelectedSymbol] = useState<string>("DEXEUSDT");
   const [selectedExchange, setSelectedExchange] = useState<string | undefined>();
   const [minutes, setMinutes] = useState<number>(30);
@@ -333,6 +344,9 @@ export function SecondLevelSamplingPage() {
         componentFingerprintRef.current === null ||
         nextComponentFingerprint !== componentFingerprintRef.current
       ) {
+        setComponentSignals(
+          filterComponentSignals(nextStatus.latest_component_signals ?? [], selectedSymbol, selectedExchange)
+        );
         await refreshComponentSamples(nextComponentFingerprint);
       }
     } catch (exc) {
@@ -422,7 +436,6 @@ export function SecondLevelSamplingPage() {
   }, [refresh]);
 
   const latestSpreads = status?.latest_spreads ?? [];
-  const componentSignals = status?.latest_component_signals ?? [];
   const symbolOptions = useMemo(
     () =>
       Array.from(
@@ -819,12 +832,17 @@ export function SecondLevelSamplingPage() {
         <Card
           title="指数组成痕迹"
           size="small"
-          extra={<Tag color="blue">窗口 {status?.config.component_signal_window_seconds ?? draft.component_signal_window_seconds}s</Tag>}
+          extra={
+            <Space wrap>
+              <Tag color="blue">窗口 {status?.config.component_signal_window_seconds ?? draft.component_signal_window_seconds}s</Tag>
+              <Tag>组成变化时更新</Tag>
+            </Space>
+          }
         >
           <Alert
             type="info"
             showIcon
-            message="这里追踪成分源现货价对目标交易所指数价、mark 溢价的秒级传导；权重大且预计推指数幅度大的行优先看。"
+            message="后台仍按秒采样保存成分源价格；前端这张组成快照不跟着秒级轮询滚动，只在构成源、权重或可用状态变化时更新。"
             className="sampling-card-hint"
           />
           <Table

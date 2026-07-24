@@ -185,6 +185,16 @@ describe("SecondLevelSamplingPage", () => {
     });
 
     requests.length = 0;
+    currentStatus = {
+      ...currentStatus,
+      latest_component_signals: [
+        {
+          ...status.latest_component_signals[0],
+          observed_at: "2026-07-23T08:00:05Z",
+          component_price_change_pct: 2
+        }
+      ]
+    };
     await act(async () => {
       await new Promise((resolve) => window.setTimeout(resolve, 1500));
     });
@@ -192,6 +202,7 @@ describe("SecondLevelSamplingPage", () => {
     expect(requests.some((request) => request.includes("/second-level-sampling/status"))).toBe(true);
     expect(requests.some((request) => request.includes("/second-level-sampling/samples"))).toBe(true);
     expect(requests.some((request) => request.includes("/second-level-sampling/component-samples"))).toBe(false);
+    expect(screen.queryByText("07-23 16:00:05")).toBeNull();
 
     currentStatus = {
       ...currentStatus,
@@ -204,6 +215,16 @@ describe("SecondLevelSamplingPage", () => {
           component_symbol: "DEXE_USDT",
           weight_pct: 16.1
         }
+      ],
+      latest_component_signals: [
+        {
+          ...status.latest_component_signals[0],
+          observed_at: "2026-07-23T08:00:10Z",
+          component_source: "gateio",
+          component_symbol: "DEXE_USDT",
+          weight_pct: 16.1,
+          signal_level: "watch"
+        }
       ]
     };
     requests.length = 0;
@@ -212,5 +233,8 @@ describe("SecondLevelSamplingPage", () => {
     });
 
     expect(requests.some((request) => request.includes("/second-level-sampling/component-samples"))).toBe(true);
+    await waitFor(() => {
+      expect(screen.getAllByText("07-23 16:00:10").length).toBeGreaterThan(0);
+    });
   });
 });
