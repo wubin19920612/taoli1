@@ -371,6 +371,37 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
           ON second_level_market_samples(symbol, exchange, observed_at DESC);
         CREATE INDEX IF NOT EXISTS idx_second_level_samples_time
           ON second_level_market_samples(observed_at DESC);
+
+        CREATE TABLE IF NOT EXISTS second_level_index_component_samples (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          observed_at TEXT NOT NULL,
+          target_exchange TEXT NOT NULL,
+          symbol TEXT NOT NULL,
+          component_source TEXT NOT NULL,
+          component_symbol TEXT NOT NULL,
+          weight_pct REAL,
+          component_price REAL,
+          contribution_price REAL,
+          official_index_price REAL,
+          reconstructed_index_price REAL,
+          mark_price REAL,
+          future_mid REAL,
+          mark_premium_pct REAL,
+          funding_rate_pct REAL,
+          latency_ms REAL,
+          error TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_second_level_component_samples_symbol_time
+          ON second_level_index_component_samples(symbol, observed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_second_level_component_samples_target_time
+          ON second_level_index_component_samples(target_exchange, observed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_second_level_component_samples_component_time
+          ON second_level_index_component_samples(
+            target_exchange, symbol, component_source, component_symbol, observed_at DESC
+          );
+        CREATE INDEX IF NOT EXISTS idx_second_level_component_samples_time
+          ON second_level_index_component_samples(observed_at DESC);
         """
     )
     await _ensure_opportunity_history_columns(db)

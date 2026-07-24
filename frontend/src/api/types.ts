@@ -98,6 +98,8 @@ export interface SecondLevelSamplingConfig {
   exchanges: string[];
   symbols: string[];
   max_concurrent_requests: number;
+  capture_index_components: boolean;
+  component_signal_window_seconds: number;
 }
 
 export interface SecondLevelMarketSample {
@@ -138,14 +140,55 @@ export interface SecondLevelPairSpreadSnapshot {
   premium_gap_pct?: number | null;
 }
 
+export interface SecondLevelIndexComponentSample {
+  id?: number | null;
+  observed_at: string;
+  target_exchange: string;
+  symbol: string;
+  component_source: string;
+  component_symbol: string;
+  weight_pct?: number | null;
+  component_price?: number | null;
+  contribution_price?: number | null;
+  official_index_price?: number | null;
+  reconstructed_index_price?: number | null;
+  mark_price?: number | null;
+  future_mid?: number | null;
+  mark_premium_pct?: number | null;
+  funding_rate_pct?: number | null;
+  latency_ms?: number | null;
+  error?: string | null;
+}
+
+export interface SecondLevelIndexComponentSignal {
+  observed_at: string;
+  target_exchange: string;
+  symbol: string;
+  component_source: string;
+  component_symbol: string;
+  window_seconds: number;
+  weight_pct?: number | null;
+  component_price?: number | null;
+  component_price_change_pct?: number | null;
+  estimated_index_impact_pct?: number | null;
+  official_index_change_pct?: number | null;
+  mark_premium_change_pct?: number | null;
+  lag_vs_official_index_pct?: number | null;
+  signal_level: "high" | "medium" | "watch";
+  reason: string;
+}
+
 export interface SecondLevelSamplingStatus {
   running: boolean;
   config: SecondLevelSamplingConfig;
   sample_count: number;
+  component_sample_count: number;
   latest_observed_at?: string | null;
   latest_error?: string | null;
   latest_samples: SecondLevelMarketSample[];
   latest_spreads: SecondLevelPairSpreadSnapshot[];
+  latest_component_samples: SecondLevelIndexComponentSample[];
+  latest_component_signals: SecondLevelIndexComponentSignal[];
 }
 
 export interface HealthStatus {

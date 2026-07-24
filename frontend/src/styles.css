@@ -1092,6 +1092,10 @@ body {
   margin-bottom: 10px;
 }
 
+.sampling-card-hint {
+  margin-bottom: 12px;
+}
+
 .sampling-filter-select {
   min-width: 140px;
 }

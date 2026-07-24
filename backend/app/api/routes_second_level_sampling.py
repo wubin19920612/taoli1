@@ -8,6 +8,7 @@ from app.core.security import dashboard_password_header, verify_dashboard_passwo
 from app.models.pair_spread import normalize_pair_spread_symbol
 from app.models.second_level_sampling import (
     SUPPORTED_SECOND_LEVEL_EXCHANGES,
+    SecondLevelIndexComponentSample,
     SecondLevelMarketSample,
     SecondLevelSamplingConfig,
     SecondLevelSamplingStatus,
@@ -90,6 +91,30 @@ async def list_second_level_samples(
     return await repo.list_samples(
         exchange=normalized_exchange,
         symbol=normalized_symbol,
+        since=datetime.now(UTC) - timedelta(minutes=minutes),
+        limit=limit,
+    )
+
+
+@router.get("/component-samples", response_model=list[SecondLevelIndexComponentSample])
+async def list_second_level_index_component_samples(
+    request: Request,
+    target_exchange: str | None = Query(default=None),
+    symbol: str | None = Query(default=None),
+    component_source: str | None = Query(default=None),
+    minutes: int = Query(default=60, ge=1, le=60 * 24 * 30),
+    limit: int = Query(default=1000, ge=1, le=20_000),
+) -> list[SecondLevelIndexComponentSample]:
+    sampler = _sampler(request)
+    normalized_exchange = target_exchange.strip().lower() if target_exchange else None
+    if normalized_exchange and normalized_exchange not in SUPPORTED_SECOND_LEVEL_EXCHANGES:
+        raise HTTPException(status_code=422, detail=f"Unsupported exchange: {target_exchange}")
+    normalized_symbol = normalize_pair_spread_symbol(symbol) if symbol else None
+    normalized_source = component_source.strip().lower() if component_source else None
+    return await sampler.repo.list_component_samples(
+        target_exchange=normalized_exchange,
+        symbol=normalized_symbol,
+        component_source=normalized_source,
         since=datetime.now(UTC) - timedelta(minutes=minutes),
         limit=limit,
     )

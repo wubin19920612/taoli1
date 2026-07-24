@@ -10,7 +10,9 @@ const config = {
   retention_hours: 48,
   exchanges: ["bybit", "bitget"],
   symbols: ["DEXEUSDT"],
-  max_concurrent_requests: 8
+  max_concurrent_requests: 8,
+  capture_index_components: true,
+  component_signal_window_seconds: 10
 };
 
 const sample = {
@@ -34,6 +36,7 @@ const status = {
   running: false,
   config,
   sample_count: 2,
+  component_sample_count: 1,
   latest_observed_at: "2026-07-23T08:00:00Z",
   latest_error: null,
   latest_samples: [sample],
@@ -49,6 +52,46 @@ const status = {
       left_mark_premium_pct: 0.8,
       right_mark_premium_pct: 1.1,
       premium_gap_pct: -0.3
+    }
+  ],
+  latest_component_samples: [
+    {
+      id: 10,
+      observed_at: "2026-07-23T08:00:00Z",
+      target_exchange: "bybit",
+      symbol: "DEXEUSDT",
+      component_source: "binance",
+      component_symbol: "DEXEUSDT",
+      weight_pct: 81.75,
+      component_price: 3.47,
+      contribution_price: 2.83725,
+      official_index_price: 3.55,
+      reconstructed_index_price: 3.54,
+      mark_price: 3.33,
+      future_mid: 3.25,
+      mark_premium_pct: -6.08,
+      funding_rate_pct: 0.005,
+      latency_ms: 50,
+      error: null
+    }
+  ],
+  latest_component_signals: [
+    {
+      observed_at: "2026-07-23T08:00:00Z",
+      target_exchange: "bybit",
+      symbol: "DEXEUSDT",
+      component_source: "binance",
+      component_symbol: "DEXEUSDT",
+      window_seconds: 10,
+      weight_pct: 81.75,
+      component_price: 3.47,
+      component_price_change_pct: 1.2,
+      estimated_index_impact_pct: 0.98,
+      official_index_change_pct: 0.5,
+      mark_premium_change_pct: -0.4,
+      lag_vs_official_index_pct: 0.48,
+      signal_level: "high",
+      reason: "binance 成分源价格变化 +1.2000%；权重 81.75%；预计推动指数 +0.9800%"
     }
   ]
 };
@@ -77,6 +120,9 @@ describe("SecondLevelSamplingPage", () => {
         if (url.pathname.includes("/second-level-sampling/status")) {
           return Response.json(status);
         }
+        if (url.pathname.includes("/second-level-sampling/component-samples")) {
+          return Response.json(status.latest_component_samples);
+        }
         if (url.pathname.includes("/second-level-sampling/samples")) {
           return Response.json([sample]);
         }
@@ -97,6 +143,9 @@ describe("SecondLevelSamplingPage", () => {
       expect(screen.getAllByText("DEXEUSDT").length).toBeGreaterThan(0);
     });
     expect(await screen.findByText("bitget / bybit")).toBeTruthy();
+    expect(await screen.findByText("指数组成痕迹")).toBeTruthy();
+    expect(await screen.findByText("强痕迹")).toBeTruthy();
+    expect(screen.getAllByText("binance").length).toBeGreaterThan(0);
 
     await userEvent.click(screen.getByRole("button", { name: /保存/ }));
 

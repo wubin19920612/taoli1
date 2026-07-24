@@ -30,6 +30,8 @@ class SecondLevelSamplingConfig(BaseModel):
     exchanges: list[str] = Field(default_factory=lambda: list(DEFAULT_SECOND_LEVEL_EXCHANGES))
     symbols: list[str] = Field(default_factory=lambda: list(DEFAULT_SECOND_LEVEL_SYMBOLS))
     max_concurrent_requests: int = Field(default=8, ge=1, le=32)
+    capture_index_components: bool = True
+    component_signal_window_seconds: int = Field(default=10, ge=2, le=300)
 
     @field_validator("exchanges")
     @classmethod
@@ -109,11 +111,52 @@ class SecondLevelPairSpreadSnapshot(BaseModel):
     premium_gap_pct: float | None = None
 
 
+class SecondLevelIndexComponentSample(BaseModel):
+    id: int | None = None
+    observed_at: datetime
+    target_exchange: str
+    symbol: str
+    component_source: str
+    component_symbol: str
+    weight_pct: float | None = None
+    component_price: float | None = None
+    contribution_price: float | None = None
+    official_index_price: float | None = None
+    reconstructed_index_price: float | None = None
+    mark_price: float | None = None
+    future_mid: float | None = None
+    mark_premium_pct: float | None = None
+    funding_rate_pct: float | None = None
+    latency_ms: float | None = None
+    error: str | None = None
+
+
+class SecondLevelIndexComponentSignal(BaseModel):
+    observed_at: datetime
+    target_exchange: str
+    symbol: str
+    component_source: str
+    component_symbol: str
+    window_seconds: int
+    weight_pct: float | None = None
+    component_price: float | None = None
+    component_price_change_pct: float | None = None
+    estimated_index_impact_pct: float | None = None
+    official_index_change_pct: float | None = None
+    mark_premium_change_pct: float | None = None
+    lag_vs_official_index_pct: float | None = None
+    signal_level: Literal["high", "medium", "watch"] = "watch"
+    reason: str
+
+
 class SecondLevelSamplingStatus(BaseModel):
     running: bool
     config: SecondLevelSamplingConfig
     sample_count: int
+    component_sample_count: int = 0
     latest_observed_at: datetime | None = None
     latest_error: str | None = None
     latest_samples: list[SecondLevelMarketSample] = Field(default_factory=list)
     latest_spreads: list[SecondLevelPairSpreadSnapshot] = Field(default_factory=list)
+    latest_component_samples: list[SecondLevelIndexComponentSample] = Field(default_factory=list)
+    latest_component_signals: list[SecondLevelIndexComponentSignal] = Field(default_factory=list)

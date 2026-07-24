@@ -15,6 +15,7 @@ import {
   Select,
   Space,
   Statistic,
+  Switch,
   Table,
   Tag,
   Typography,
@@ -28,12 +29,15 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   getSecondLevelSamplingConfig,
   getSecondLevelSamplingStatus,
+  listSecondLevelIndexComponentSamples,
   listSecondLevelSamples,
   listSecondLevelSamplingExchanges,
   stopSecondLevelSampling,
   updateSecondLevelSamplingConfig
 } from "../api/client";
 import type {
+  SecondLevelIndexComponentSample,
+  SecondLevelIndexComponentSignal,
   SecondLevelMarketSample,
   SecondLevelPairSpreadSnapshot,
   SecondLevelSamplingConfig,
@@ -48,7 +52,9 @@ const defaultConfig: SecondLevelSamplingConfig = {
   retention_hours: 48,
   exchanges: ["bybit", "bitget"],
   symbols: ["DEXEUSDT"],
-  max_concurrent_requests: 8
+  max_concurrent_requests: 8,
+  capture_index_components: true,
+  component_signal_window_seconds: 10
 };
 
 function numberText(value: number | null | undefined, digits = 6): string {
@@ -69,6 +75,12 @@ function statusTag(status: SecondLevelMarketSample["status"]) {
   return <Tag color={color}>{text}</Tag>;
 }
 
+function signalLevelTag(level: SecondLevelIndexComponentSignal["signal_level"]) {
+  const color = level === "high" ? "red" : level === "medium" ? "gold" : "blue";
+  const text = level === "high" ? "强痕迹" : level === "medium" ? "观察" : "轻微";
+  return <Tag color={color}>{text}</Tag>;
+}
+
 function normalizeSymbolInput(values: string[]): string[] {
   return values
     .map((value) => value.trim().toUpperCase().replace(/[-_/]/g, ""))
@@ -81,6 +93,7 @@ export function SecondLevelSamplingPage() {
   const [draft, setDraft] = useState<SecondLevelSamplingConfig>(defaultConfig);
   const [status, setStatus] = useState<SecondLevelSamplingStatus | null>(null);
   const [samples, setSamples] = useState<SecondLevelMarketSample[]>([]);
+  const [componentSamples, setComponentSamples] = useState<SecondLevelIndexComponentSample[]>([]);
   const [selectedSymbol, setSelectedSymbol] = useState<string>("DEXEUSDT");
   const [selectedExchange, setSelectedExchange] = useState<string | undefined>();
   const [minutes, setMinutes] = useState<number>(30);
@@ -90,17 +103,24 @@ export function SecondLevelSamplingPage() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [nextStatus, nextSamples] = await Promise.all([
+      const [nextStatus, nextSamples, nextComponentSamples] = await Promise.all([
         getSecondLevelSamplingStatus(),
         listSecondLevelSamples({
           symbol: selectedSymbol,
           exchange: selectedExchange,
           minutes,
           limit: 1000
+        }),
+        listSecondLevelIndexComponentSamples({
+          symbol: selectedSymbol,
+          target_exchange: selectedExchange,
+          minutes,
+          limit: 1000
         })
       ]);
       setStatus(nextStatus);
       setSamples(nextSamples);
+      setComponentSamples(nextComponentSamples);
     } catch (exc) {
       message.error(exc instanceof Error ? exc.message : String(exc));
     } finally {
@@ -188,9 +208,17 @@ export function SecondLevelSamplingPage() {
   }, [refresh]);
 
   const latestSpreads = status?.latest_spreads ?? [];
+  const componentSignals = status?.latest_component_signals ?? [];
   const symbolOptions = useMemo(
-    () => Array.from(new Set([...draft.symbols, ...samples.map((item) => item.symbol)])).filter(Boolean),
-    [draft.symbols, samples]
+    () =>
+      Array.from(
+        new Set([
+          ...draft.symbols,
+          ...samples.map((item) => item.symbol),
+          ...componentSamples.map((item) => item.symbol)
+        ])
+      ).filter(Boolean),
+    [draft.symbols, samples, componentSamples]
   );
 
   const spreadColumns: ColumnsType<SecondLevelPairSpreadSnapshot> = [
@@ -239,6 +267,166 @@ export function SecondLevelSamplingPage() {
       key: "observed_at",
       width: 140,
       render: timeText
+    }
+  ];
+
+  const componentSignalColumns: ColumnsType<SecondLevelIndexComponentSignal> = [
+    {
+      title: "时间",
+      dataIndex: "observed_at",
+      key: "observed_at",
+      width: 140,
+      render: timeText
+    },
+    {
+      title: "目标",
+      key: "target",
+      width: 150,
+      render: (_, row) => `${row.target_exchange} ${row.symbol}`
+    },
+    {
+      title: "成分源",
+      key: "component",
+      width: 150,
+      render: (_, row) => `${row.component_source} ${row.component_symbol}`
+    },
+    {
+      title: "等级",
+      dataIndex: "signal_level",
+      key: "signal_level",
+      width: 92,
+      render: signalLevelTag
+    },
+    {
+      title: "权重",
+      dataIndex: "weight_pct",
+      key: "weight_pct",
+      align: "right",
+      render: (value) => pctText(value, 2)
+    },
+    {
+      title: "成分价",
+      dataIndex: "component_price",
+      key: "component_price",
+      align: "right",
+      render: (value) => numberText(value)
+    },
+    {
+      title: "成分变化",
+      dataIndex: "component_price_change_pct",
+      key: "component_price_change_pct",
+      align: "right",
+      render: (value) => pctText(value, 4)
+    },
+    {
+      title: "预计推指数",
+      dataIndex: "estimated_index_impact_pct",
+      key: "estimated_index_impact_pct",
+      align: "right",
+      render: (value) => pctText(value, 4)
+    },
+    {
+      title: "官方指数变化",
+      dataIndex: "official_index_change_pct",
+      key: "official_index_change_pct",
+      align: "right",
+      render: (value) => pctText(value, 4)
+    },
+    {
+      title: "mark 溢价变化",
+      dataIndex: "mark_premium_change_pct",
+      key: "mark_premium_change_pct",
+      align: "right",
+      render: (value) => (typeof value === "number" ? `${value.toFixed(4)}pct` : "-")
+    },
+    {
+      title: "说明",
+      dataIndex: "reason",
+      key: "reason",
+      ellipsis: true
+    }
+  ];
+
+  const componentSampleColumns: ColumnsType<SecondLevelIndexComponentSample> = [
+    {
+      title: "时间",
+      dataIndex: "observed_at",
+      key: "observed_at",
+      width: 140,
+      render: timeText
+    },
+    {
+      title: "目标所",
+      dataIndex: "target_exchange",
+      key: "target_exchange",
+      width: 86
+    },
+    {
+      title: "标的",
+      dataIndex: "symbol",
+      key: "symbol",
+      width: 108
+    },
+    {
+      title: "成分源",
+      dataIndex: "component_source",
+      key: "component_source",
+      width: 96
+    },
+    {
+      title: "成分标的",
+      dataIndex: "component_symbol",
+      key: "component_symbol",
+      width: 120
+    },
+    {
+      title: "权重",
+      dataIndex: "weight_pct",
+      key: "weight_pct",
+      align: "right",
+      render: (value) => pctText(value, 2)
+    },
+    {
+      title: "成分价",
+      dataIndex: "component_price",
+      key: "component_price",
+      align: "right",
+      render: (value) => numberText(value)
+    },
+    {
+      title: "贡献价",
+      dataIndex: "contribution_price",
+      key: "contribution_price",
+      align: "right",
+      render: (value) => numberText(value)
+    },
+    {
+      title: "官方指数",
+      dataIndex: "official_index_price",
+      key: "official_index_price",
+      align: "right",
+      render: (value) => numberText(value)
+    },
+    {
+      title: "重建指数",
+      dataIndex: "reconstructed_index_price",
+      key: "reconstructed_index_price",
+      align: "right",
+      render: (value) => numberText(value)
+    },
+    {
+      title: "mark 溢价",
+      dataIndex: "mark_premium_pct",
+      key: "mark_premium_pct",
+      align: "right",
+      render: (value) => pctText(value)
+    },
+    {
+      title: "提示",
+      dataIndex: "error",
+      key: "error",
+      ellipsis: true,
+      render: (value) => value || "-"
     }
   ];
 
@@ -350,6 +538,11 @@ export function SecondLevelSamplingPage() {
           </Col>
           <Col xs={12} md={6}>
             <Card size="small">
+              <Statistic title="成分样本" value={status?.component_sample_count ?? 0} />
+            </Card>
+          </Col>
+          <Col xs={12} md={6}>
+            <Card size="small">
               <Statistic title="最新时间" value={timeText(status?.latest_observed_at)} />
             </Card>
           </Col>
@@ -427,6 +620,34 @@ export function SecondLevelSamplingPage() {
                   />
                 </Form.Item>
               </Col>
+              <Col xs={12} lg={3}>
+                <Form.Item label="指数组成">
+                  <Switch
+                    checked={draft.capture_index_components}
+                    checkedChildren="采集"
+                    unCheckedChildren="关闭"
+                    onChange={(capture_index_components) =>
+                      setDraft((current) => ({ ...current, capture_index_components }))
+                    }
+                  />
+                </Form.Item>
+              </Col>
+              <Col xs={12} lg={3}>
+                <Form.Item label="信号窗口秒">
+                  <InputNumber
+                    min={2}
+                    max={300}
+                    value={draft.component_signal_window_seconds}
+                    onChange={(value) =>
+                      setDraft((current) => ({
+                        ...current,
+                        component_signal_window_seconds: Number(value ?? 10)
+                      }))
+                    }
+                    className="full-width-control"
+                  />
+                </Form.Item>
+              </Col>
             </Row>
             <Space wrap>
               <Button icon={<SaveOutlined />} onClick={() => void saveConfig(false)} loading={saving}>
@@ -460,6 +681,47 @@ export function SecondLevelSamplingPage() {
             pagination={false}
             size="small"
             scroll={{ x: 860 }}
+          />
+        </Card>
+
+        <Card
+          title="指数组成痕迹"
+          size="small"
+          extra={<Tag color="blue">窗口 {status?.config.component_signal_window_seconds ?? draft.component_signal_window_seconds}s</Tag>}
+        >
+          <Alert
+            type="info"
+            showIcon
+            message="这里追踪成分源现货价对目标交易所指数价、mark 溢价的秒级传导；权重大且预计推指数幅度大的行优先看。"
+            className="sampling-card-hint"
+          />
+          <Table
+            rowKey={(row) =>
+              `${row.target_exchange}:${row.symbol}:${row.component_source}:${row.component_symbol}:${row.observed_at}`
+            }
+            columns={componentSignalColumns}
+            dataSource={componentSignals}
+            pagination={false}
+            size="small"
+            scroll={{ x: 1380 }}
+          />
+        </Card>
+
+        <Card title="指数组成明细" size="small">
+          <Table
+            rowKey={(row) =>
+              row.id ?? `${row.target_exchange}:${row.symbol}:${row.component_source}:${row.component_symbol}:${row.observed_at}`
+            }
+            columns={componentSampleColumns}
+            dataSource={componentSamples}
+            pagination={{ pageSize: 20, showSizeChanger: true }}
+            size="small"
+            loading={loading}
+            scroll={{ x: 1380 }}
+            expandable={{
+              expandedRowRender: (row) => <pre className="sampling-error-text">{row.error || "OK"}</pre>,
+              rowExpandable: (row) => Boolean(row.error)
+            }}
           />
         </Card>
 

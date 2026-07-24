@@ -49,6 +49,7 @@ import type {
   PremiumIndexCurrentSnapshot,
   PremiumIndexQueryResult,
   RiskSettings,
+  SecondLevelIndexComponentSample,
   SecondLevelMarketSample,
   SecondLevelSamplingConfig,
   SecondLevelSamplingStatus,
@@ -674,6 +675,23 @@ export async function listSecondLevelSamples(query: {
       throw new Error(extractErrorMessage(text, response.status));
     }
     return response.json() as Promise<SecondLevelMarketSample[]>;
+  });
+}
+
+export async function listSecondLevelIndexComponentSamples(query: {
+  target_exchange?: string;
+  symbol?: string;
+  component_source?: string;
+  minutes?: number;
+  limit?: number;
+} = {}): Promise<SecondLevelIndexComponentSample[]> {
+  const url = buildUrl("/second-level-sampling/component-samples", query);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(extractErrorMessage(text, response.status));
+    }
+    return response.json() as Promise<SecondLevelIndexComponentSample[]>;
   });
 }
 
