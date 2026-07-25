@@ -50,6 +50,7 @@ import type {
   PremiumIndexCurrentSnapshot,
   PremiumIndexQueryResult,
   MinuteSignalScanResult,
+  MinuteSignalUniverseScanResult,
   RiskSettings,
   SecondLevelIndexComponentSample,
   SecondLevelMarketSample,
@@ -643,6 +644,21 @@ export async function scanMinuteSignals(query: {
       throw new Error(extractErrorMessage(text, response.status));
     }
     return response.json() as Promise<MinuteSignalScanResult>;
+  });
+}
+
+export async function scanMinuteSignalUniverse(query: {
+  hours?: number;
+  max_symbols?: number;
+  min_volume_24h_usdt?: number;
+} = {}): Promise<MinuteSignalUniverseScanResult> {
+  const url = buildUrl("/minute-signals/scan-all", query);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(extractErrorMessage(text, response.status));
+    }
+    return response.json() as Promise<MinuteSignalUniverseScanResult>;
   });
 }
 

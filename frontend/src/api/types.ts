@@ -682,6 +682,45 @@ export interface MinuteSignalScanResult {
   warnings: string[];
 }
 
+export interface MinuteSignalUniverseCandidate {
+  base_asset: string;
+  alpha_id: string;
+  alpha_symbol: string;
+  futures_symbol: string;
+  alpha_price: number;
+  futures_price: number;
+  index_price: number | null;
+  volume_24h_usdt: number;
+  initial_basis_bps: number;
+  initial_premium_bps: number | null;
+  score: number;
+  event_type: MinuteSignalEventType | null;
+  signal_time_cst: string | null;
+  planned_execution_time_cst: string | null;
+  reason: string;
+  basis_bps: number | null;
+  premium_bps: number | null;
+  basis_peak_60m_bps: number | null;
+  compression_ratio: number | null;
+  bar_count: number;
+  recent_events: MinuteSignalEvent[];
+  error: string | null;
+}
+
+export interface MinuteSignalUniverseScanResult {
+  observed_at: string;
+  hours: number;
+  max_symbols: number;
+  min_volume_24h_usdt: number;
+  universe_count: number;
+  eligible_count: number;
+  scanned_count: number;
+  signal_count: number;
+  error_count: number;
+  candidates: MinuteSignalUniverseCandidate[];
+  warnings: string[];
+}
+
 export interface AstroCardSettings {
   max_trade_usdt: number;
   leverage: number;

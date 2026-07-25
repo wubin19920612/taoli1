@@ -5,11 +5,11 @@ import {
   Card,
   Col,
   Form,
-  Input,
   InputNumber,
   Row,
   Space,
   Statistic,
+  Switch,
   Table,
   Tag,
   Typography
@@ -17,22 +17,26 @@ import {
 import type { ColumnsType } from "antd/es/table";
 import { useCallback, useEffect, useState } from "react";
 
-import { scanMinuteSignals } from "../api/client";
-import type { MinuteSignalEvent, MinuteSignalPoint, MinuteSignalScanResult } from "../api/types";
+import { scanMinuteSignalUniverse } from "../api/client";
+import type {
+  MinuteSignalEventType,
+  MinuteSignalUniverseCandidate,
+  MinuteSignalUniverseScanResult
+} from "../api/types";
 
 type FormValues = {
-  symbol: string;
-  alpha_symbol: string;
   hours: number;
+  max_symbols: number;
+  min_volume_24h_usdt: number;
 };
 
 const defaultValues: FormValues = {
-  symbol: "AKEUSDT",
-  alpha_symbol: "ALPHA_331USDT",
-  hours: 4
+  hours: 4,
+  max_symbols: 30,
+  min_volume_24h_usdt: 100_000
 };
 
-const eventLabels: Record<string, string> = {
+const eventLabels: Record<MinuteSignalEventType, string> = {
   SHOCK_ALERT: "价差冲击",
   ENTRY: "候选入场",
   TAKE_PROFIT: "价差收敛",
@@ -40,7 +44,7 @@ const eventLabels: Record<string, string> = {
   TIME_EXIT: "超时退出"
 };
 
-const eventColors: Record<string, string> = {
+const eventColors: Record<MinuteSignalEventType, string> = {
   SHOCK_ALERT: "orange",
   ENTRY: "blue",
   TAKE_PROFIT: "green",
@@ -54,99 +58,119 @@ function bps(value: number | null | undefined): string {
     : "-";
 }
 
-function latestNumber(result: MinuteSignalScanResult | null, key: string): number | null {
-  const value = result?.latest?.[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
+function volume(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "-";
+  }
+  if (value >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(2)}M`;
+  }
+  if (value >= 1_000) {
+    return `${(value / 1_000).toFixed(0)}K`;
+  }
+  return value.toFixed(0);
 }
 
-function pointKey(point: MinuteSignalPoint): string {
-  return `${point.time_cst}-${point.basis_bps ?? "na"}`;
+function eventTag(eventType: MinuteSignalEventType | null) {
+  if (!eventType) {
+    return <Tag>观察</Tag>;
+  }
+  return <Tag color={eventColors[eventType]}>{eventLabels[eventType]}</Tag>;
 }
 
-const eventColumns: ColumnsType<MinuteSignalEvent> = [
+const candidateColumns: ColumnsType<MinuteSignalUniverseCandidate> = [
+  {
+    title: "标的",
+    dataIndex: "futures_symbol",
+    fixed: "left",
+    width: 120,
+    render: (value: string, row) => (
+      <Space direction="vertical" size={0}>
+        <Typography.Text strong>{value}</Typography.Text>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          {row.base_asset}
+        </Typography.Text>
+      </Space>
+    )
+  },
+  {
+    title: "Alpha 现货",
+    dataIndex: "alpha_symbol",
+    width: 150,
+    render: (value: string) => <Tag color="blue">{value}</Tag>
+  },
   {
     title: "事件",
     dataIndex: "event_type",
-    width: 130,
-    render: (value: string) => (
-      <Tag color={eventColors[value] ?? "default"}>{eventLabels[value] ?? value}</Tag>
-    )
-  },
-  { title: "信号时间", dataIndex: "signal_time_cst", width: 150 },
-  { title: "计划执行", dataIndex: "planned_execution_time_cst", width: 150 },
-  {
-    title: "信号 basis",
-    dataIndex: "signal_basis_bps",
-    align: "right",
     width: 120,
-    render: (value: number | null) => bps(value)
+    render: (value: MinuteSignalEventType | null) => eventTag(value)
   },
   {
-    title: "premium",
-    dataIndex: "premium_bps",
-    align: "right",
-    width: 120,
-    render: (value: number | null) => bps(value)
+    title: "信号时间",
+    dataIndex: "signal_time_cst",
+    width: 155,
+    render: (value: string | null) => value ?? "-"
   },
-  {
-    title: "15m premium 低点",
-    dataIndex: "premium_low_15m_bps",
-    align: "right",
-    width: 140,
-    render: (value: number | null) => bps(value)
-  },
-  {
-    title: "basis 峰值",
-    dataIndex: "basis_peak_60m_bps",
-    align: "right",
-    width: 120,
-    render: (value: number | null) => bps(value)
-  },
-  {
-    title: "说明",
-    dataIndex: "reason",
-    width: 280,
-    render: (value: string) => <Typography.Text type="secondary">{value}</Typography.Text>
-  }
-];
-
-const pointColumns: ColumnsType<MinuteSignalPoint> = [
-  { title: "时间", dataIndex: "time_cst", width: 150 },
   {
     title: "basis",
     dataIndex: "basis_bps",
     align: "right",
-    width: 120,
+    width: 110,
     render: (value: number | null) => bps(value)
   },
   {
     title: "premium",
     dataIndex: "premium_bps",
     align: "right",
-    width: 120,
+    width: 110,
     render: (value: number | null) => bps(value)
   },
   {
     title: "60m 峰值",
     dataIndex: "basis_peak_60m_bps",
     align: "right",
-    width: 120,
+    width: 110,
     render: (value: number | null) => bps(value)
   },
   {
-    title: "压缩比例",
+    title: "压缩",
     dataIndex: "compression_ratio",
     align: "right",
-    width: 110,
+    width: 90,
     render: (value: number | null) =>
       typeof value === "number" && Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : "-"
+  },
+  {
+    title: "24h 成交额",
+    dataIndex: "volume_24h_usdt",
+    align: "right",
+    width: 110,
+    render: (value: number) => `${volume(value)} USDT`
+  },
+  {
+    title: "说明",
+    dataIndex: "reason",
+    width: 280,
+    render: (value: string, row) => (
+      <Space direction="vertical" size={0}>
+        <Typography.Text type={row.error ? "danger" : "secondary"}>
+          {row.error ?? value}
+        </Typography.Text>
+        {row.planned_execution_time_cst ? (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            计划执行：{row.planned_execution_time_cst}
+          </Typography.Text>
+        ) : null}
+      </Space>
+    )
   }
 ];
 
 export function MinuteSignalPage() {
   const [form] = Form.useForm<FormValues>();
-  const [result, setResult] = useState<MinuteSignalScanResult | null>(null);
+  const [result, setResult] = useState<MinuteSignalUniverseScanResult | null>(null);
   const [loading, setLoading] = useState(false);
+  const [autoRefresh, setAutoRefresh] = useState(true);
   const [error, setError] = useState("");
 
   const load = useCallback(
@@ -155,11 +179,11 @@ export function MinuteSignalPage() {
       setError("");
       try {
         const normalized = {
-          symbol: values.symbol.trim().toUpperCase(),
-          alpha_symbol: values.alpha_symbol.trim().toUpperCase(),
-          hours: Number(values.hours)
+          hours: Number(values.hours),
+          max_symbols: Number(values.max_symbols),
+          min_volume_24h_usdt: Number(values.min_volume_24h_usdt)
         };
-        setResult(await scanMinuteSignals(normalized));
+        setResult(await scanMinuteSignalUniverse(normalized));
       } catch (exc) {
         setError(exc instanceof Error ? exc.message : String(exc));
       } finally {
@@ -174,11 +198,15 @@ export function MinuteSignalPage() {
     void load(defaultValues);
   }, [form, load]);
 
-  const currentBasis = latestNumber(result, "basis_bps");
-  const currentPremium = latestNumber(result, "premium_bps");
-  const currentPeak = latestNumber(result, "basis_peak_60m_bps");
-  const currentCompression = latestNumber(result, "compression_ratio");
-  const recentPoints = result?.points.slice(-120).reverse() ?? [];
+  useEffect(() => {
+    if (!autoRefresh || loading) {
+      return undefined;
+    }
+    const timer = window.setInterval(() => {
+      void load();
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, [autoRefresh, load, loading]);
 
   return (
     <div className="page minute-signal-page">
@@ -187,22 +215,26 @@ export function MinuteSignalPage() {
       <section className="toolbar">
         <div className="toolbar-controls">
           <Typography.Title level={4} style={{ margin: 0 }}>
-            1 分钟价差信号
+            1 分钟全网价差信号
           </Typography.Title>
           <Typography.Text type="secondary">
-            监测 basis 冲击、回压和重新扩张；信号只表示下一分钟的计划执行边界。
+            自动发现候选标的，不需要手工填写币种；系统先扫描候选池，再用 1 分钟 K 线复核冲击、回压和入场信号。
           </Typography.Text>
         </div>
-        <div className="toolbar-actions">
+        <Space className="toolbar-actions" wrap>
+          <Space size={6}>
+            <Typography.Text type="secondary">每 60 秒自动刷新</Typography.Text>
+            <Switch checked={autoRefresh} onChange={setAutoRefresh} />
+          </Space>
           <Button
             type="primary"
             icon={<ReloadOutlined />}
             loading={loading}
             onClick={() => void load()}
           >
-            刷新扫描
+            扫描全市场
           </Button>
-        </div>
+        </Space>
       </section>
 
       <Card size="small">
@@ -212,14 +244,19 @@ export function MinuteSignalPage() {
           initialValues={defaultValues}
           onFinish={(values) => void load(values)}
         >
-          <Form.Item label="期货标的" name="symbol" rules={[{ required: true }]}>
-            <Input style={{ width: 150 }} />
-          </Form.Item>
-          <Form.Item label="Alpha 现货" name="alpha_symbol" rules={[{ required: true }]}>
-            <Input style={{ width: 170 }} />
-          </Form.Item>
           <Form.Item label="回看小时" name="hours" rules={[{ required: true }]}>
             <InputNumber min={1} max={24} style={{ width: 100 }} />
+          </Form.Item>
+          <Form.Item label="复核候选数" name="max_symbols" rules={[{ required: true }]}>
+            <InputNumber min={5} max={100} style={{ width: 110 }} />
+          </Form.Item>
+          <Form.Item label="最低24h成交额" name="min_volume_24h_usdt" rules={[{ required: true }]}>
+            <InputNumber
+              min={0}
+              step={100_000}
+              style={{ width: 150 }}
+              formatter={(value) => `${value ?? ""}`}
+            />
           </Form.Item>
           <Form.Item>
             <Button htmlType="submit" icon={<ThunderboltOutlined />} loading={loading}>
@@ -232,21 +269,16 @@ export function MinuteSignalPage() {
       <section className="metric-row">
         <Row gutter={[16, 12]}>
           <Col xs={12} sm={6}>
-            <Statistic title="当前 basis" value={currentBasis ?? 0} precision={2} suffix="bps" />
+            <Statistic title="全市场映射" value={result?.universe_count ?? 0} suffix="个" />
           </Col>
           <Col xs={12} sm={6}>
-            <Statistic title="当前 premium" value={currentPremium ?? 0} precision={2} suffix="bps" />
+            <Statistic title="符合初筛" value={result?.eligible_count ?? 0} suffix="个" />
           </Col>
           <Col xs={12} sm={6}>
-            <Statistic title="60m basis 峰值" value={currentPeak ?? 0} precision={2} suffix="bps" />
+            <Statistic title="1m复核" value={result?.scanned_count ?? 0} suffix="个" />
           </Col>
           <Col xs={12} sm={6}>
-            <Statistic
-              title="压缩比例"
-              value={currentCompression === null ? 0 : currentCompression * 100}
-              precision={1}
-              suffix="%"
-            />
+            <Statistic title="当前信号" value={result?.signal_count ?? 0} suffix="个" />
           </Col>
         </Row>
       </section>
@@ -255,37 +287,21 @@ export function MinuteSignalPage() {
         <Space direction="vertical" size={8} style={{ width: "100%" }}>
           <Space wrap>
             <Typography.Title level={5} style={{ margin: 0 }}>
-              {result?.futures_symbol ?? defaultValues.symbol}
+              自动发现候选
             </Typography.Title>
-            <Tag color="blue">{result?.alpha_symbol ?? defaultValues.alpha_symbol}</Tag>
-            <Tag>{result ? `${result.bar_count} 根 1m K 线` : "尚未扫描"}</Tag>
-            {result ? <Tag>观察时间 {result.observed_at}</Tag> : null}
+            <Tag color="blue">
+              {result ? `观察时间 ${result.observed_at}` : "尚未扫描"}
+            </Tag>
+            {result?.error_count ? <Tag color="red">{result.error_count} 个扫描失败</Tag> : null}
           </Space>
-          <Table<MinuteSignalEvent>
+          <Table<MinuteSignalUniverseCandidate>
             className="opportunity-table"
-            rowKey={(row, index) => `${row.event_type}-${row.signal_time_cst}-${index}`}
-            columns={eventColumns}
-            dataSource={result?.events ?? []}
-            loading={loading}
-            pagination={{ pageSize: 10, showSizeChanger: true }}
-            scroll={{ x: 1250 }}
-            size="small"
-          />
-        </Space>
-      </section>
-
-      <section className="panel">
-        <Space direction="vertical" size={8} style={{ width: "100%" }}>
-          <Typography.Title level={5} style={{ margin: 0 }}>
-            最近 1 分钟特征
-          </Typography.Title>
-          <Table<MinuteSignalPoint>
-            rowKey={pointKey}
-            columns={pointColumns}
-            dataSource={recentPoints}
+            rowKey={(row) => `${row.futures_symbol}-${row.alpha_symbol}`}
+            columns={candidateColumns}
+            dataSource={result?.candidates ?? []}
             loading={loading}
             pagination={{ pageSize: 20, showSizeChanger: true }}
-            scroll={{ x: 650 }}
+            scroll={{ x: 1400 }}
             size="small"
           />
         </Space>
@@ -295,7 +311,7 @@ export function MinuteSignalPage() {
         <Alert
           type="warning"
           showIcon
-          message="使用边界"
+          message="扫描范围与执行边界"
           description={
             <ul style={{ margin: 0, paddingLeft: 20 }}>
               {result.warnings.map((warning) => (

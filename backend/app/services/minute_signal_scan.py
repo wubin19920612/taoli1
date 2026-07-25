@@ -12,8 +12,19 @@ import httpx
 
 
 ALPHA_KLINES_URL = "https://www.binance.com/bapi/defi/v1/public/alpha-trade/klines"
+ALPHA_EXCHANGE_INFO_URL = (
+    "https://www.binance.com/bapi/defi/v1/public/alpha-trade/get-exchange-info"
+)
+ALPHA_TOKEN_LIST_URL = (
+    "https://www.binance.com/bapi/defi/v1/public/"
+    "wallet-direct/buw/wallet/cex/alpha/all/token/list"
+)
+ALPHA_TICKER_URL = "https://www.binance.com/bapi/defi/v1/public/alpha-trade/ticker"
 FUTURES_KLINES_URL = "https://www.binance.com/fapi/v1/klines"
 PREMIUM_KLINES_URL = "https://www.binance.com/fapi/v1/premiumIndexKlines"
+FUTURES_EXCHANGE_INFO_URL = "https://fapi.binance.com/fapi/v1/exchangeInfo"
+FUTURES_24HR_URL = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+FUTURES_PREMIUM_URL = "https://fapi.binance.com/fapi/v1/premiumIndex"
 MINUTE_MS = 60_000
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 
@@ -44,6 +55,13 @@ class MinuteSignalConfig:
     maximum_hold_minutes: int = 180
     shock_expiry_minutes: int = 180
     cooldown_minutes: int = 10
+
+
+@dataclass(frozen=True)
+class GlobalMinuteSignalConfig:
+    max_symbols: int = 30
+    min_volume_24h_usdt: float = 100_000.0
+    max_concurrency: int = 8
 
 
 def _finite(value: Any) -> float | None:
@@ -89,21 +107,300 @@ class MinuteSignalScanService:
         self._timeout_seconds = timeout_seconds
         self.config = config or MinuteSignalConfig()
 
-    async def _get(self, url: str, params: dict[str, Any]) -> list[list[Any]]:
+    async def _get_payload(self, url: str, params: dict[str, Any] | None = None) -> Any:
         client = self._client
         if client is None:
             client = httpx.AsyncClient(timeout=self._timeout_seconds, follow_redirects=True)
             self._client = client
-        response = await client.get(url, params=params)
+        response = await client.get(url, params=params or {})
         response.raise_for_status()
         payload = response.json()
-        if url == ALPHA_KLINES_URL:
+        if url.startswith("https://www.binance.com/bapi/defi/"):
             if not isinstance(payload, dict) or payload.get("success") is False:
                 raise RuntimeError(f"Binance Alpha response is not successful: {payload!r}")
             payload = payload.get("data")
+        return payload
+
+    async def _get(self, url: str, params: dict[str, Any]) -> list[list[Any]]:
+        payload = await self._get_payload(url, params)
         if not isinstance(payload, list):
             raise RuntimeError(f"Unexpected kline response from {url}")
         return payload
+
+    @staticmethod
+    def _alpha_id(value: Any) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip().upper()
+        if not text:
+            return None
+        return text if text.startswith("ALPHA_") else f"ALPHA_{text}"
+
+    @staticmethod
+    def _upper(value: Any) -> str:
+        return str(value or "").strip().upper()
+
+    @staticmethod
+    def _records(payload: Any, *keys: str) -> list[dict[str, Any]]:
+        if isinstance(payload, list):
+            return [item for item in payload if isinstance(item, dict)]
+        if not isinstance(payload, dict):
+            return []
+        for key in keys:
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+        return []
+
+    async def _fetch_global_universe(self) -> list[dict[str, Any]]:
+        exchange_info, futures_rows, premium_rows, alpha_info, token_rows = await asyncio.gather(
+            self._get_payload(FUTURES_EXCHANGE_INFO_URL),
+            self._get_payload(FUTURES_24HR_URL),
+            self._get_payload(FUTURES_PREMIUM_URL),
+            self._get_payload(ALPHA_EXCHANGE_INFO_URL),
+            self._get_payload(ALPHA_TOKEN_LIST_URL),
+        )
+        futures_info_rows = self._records(exchange_info, "symbols")
+        futures_ticker_rows = self._records(futures_rows)
+        futures_premium_rows = self._records(premium_rows)
+        alpha_info_rows = self._records(alpha_info, "symbols")
+        token_info_rows = self._records(token_rows, "list", "tokens", "data")
+        futures_by_symbol = {
+            self._upper(item.get("symbol")): item
+            for item in futures_info_rows
+            if self._upper(item.get("status")) == "TRADING"
+            and self._upper(item.get("contractType")) == "PERPETUAL"
+            and self._upper(item.get("quoteAsset")) == "USDT"
+        }
+        ticker_by_symbol = {
+            self._upper(item.get("symbol")): item
+            for item in futures_ticker_rows
+        }
+        premium_by_symbol = {
+            self._upper(item.get("symbol")): item
+            for item in futures_premium_rows
+        }
+        alpha_symbols = alpha_info_rows
+        alpha_by_id = {
+            self._alpha_id(item.get("baseAsset")): item
+            for item in alpha_symbols
+            if isinstance(item, dict)
+            and self._upper(item.get("status")) == "TRADING"
+            and self._upper(item.get("quoteAsset")) == "USDT"
+            and self._alpha_id(item.get("baseAsset")) is not None
+        }
+        tokens_by_alpha_id = {
+            self._alpha_id(item.get("alphaId")): item
+            for item in token_info_rows
+            if self._alpha_id(item.get("alphaId")) is not None
+        }
+        futures_by_base: dict[str, list[dict[str, Any]]] = {}
+        for symbol, item in futures_by_symbol.items():
+            base = self._upper(item.get("baseAsset"))
+            futures_by_base.setdefault(base, []).append(
+                {
+                    **item,
+                    "symbol": symbol,
+                }
+            )
+
+        universe: list[dict[str, Any]] = []
+        for alpha_id, alpha in alpha_by_id.items():
+            token = tokens_by_alpha_id.get(alpha_id, {})
+            base_asset = self._upper(token.get("symbol"))
+            if not base_asset:
+                continue
+            futures = futures_by_base.get(base_asset, [])
+            if not futures:
+                continue
+            alpha_symbol = self._upper(alpha.get("symbol"))
+            alpha_price = _finite(token.get("price"))
+            for future in futures:
+                futures_symbol = self._upper(future.get("symbol"))
+                ticker = ticker_by_symbol.get(futures_symbol, {})
+                premium = premium_by_symbol.get(futures_symbol, {})
+                future_price = (
+                    _finite(premium.get("markPrice"))
+                    or _finite(ticker.get("lastPrice"))
+                )
+                index_price = _finite(premium.get("indexPrice"))
+                volume = _finite(ticker.get("quoteVolume")) or 0.0
+                if (
+                    not alpha_symbol
+                    or alpha_price is None
+                    or alpha_price <= 0
+                    or future_price is None
+                    or future_price <= 0
+                    or volume < 0
+                ):
+                    continue
+                basis = (alpha_price - future_price) / alpha_price * 10_000
+                premium_bps = (
+                    (future_price - index_price) / index_price * 10_000
+                    if index_price and index_price > 0
+                    else None
+                )
+                universe.append(
+                    {
+                        "base_asset": base_asset,
+                        "alpha_id": alpha_id,
+                        "alpha_symbol": alpha_symbol,
+                        "futures_symbol": futures_symbol,
+                        "alpha_price": alpha_price,
+                        "futures_price": future_price,
+                        "index_price": index_price,
+                        "volume_24h_usdt": volume,
+                        "initial_basis_bps": basis,
+                        "initial_premium_bps": premium_bps,
+                    }
+                )
+        return universe
+
+    @staticmethod
+    def _global_candidate_score(item: dict[str, Any]) -> float:
+        basis = item.get("initial_basis_bps")
+        premium = item.get("initial_premium_bps")
+        volume = item.get("volume_24h_usdt") or 0.0
+        positive_basis = max(float(basis or 0), 0.0)
+        negative_premium = max(-float(premium or 0), 0.0)
+        liquidity_bonus = min(math.log10(max(volume, 1.0)), 10.0)
+        return positive_basis * 2.0 + negative_premium + liquidity_bonus
+
+    async def _scan_global_candidate(
+        self,
+        item: dict[str, Any],
+        *,
+        hours: int,
+        semaphore: asyncio.Semaphore,
+    ) -> dict[str, Any]:
+        async with semaphore:
+            try:
+                result = await self.scan_symbol(
+                    alpha_symbol=item["alpha_symbol"],
+                    futures_symbol=item["futures_symbol"],
+                    hours=hours,
+                )
+                latest = result.get("latest") or {}
+                events = result.get("events") or []
+                event = events[-1] if events else None
+                event_priority = {
+                    "ENTRY": 5,
+                    "SHOCK_ALERT": 4,
+                    "TAKE_PROFIT": 3,
+                    "STOP_LOSS": 2,
+                    "TIME_EXIT": 1,
+                }.get(event.get("event_type") if event else "", 0)
+                basis = latest.get("basis_bps")
+                premium = latest.get("premium_bps")
+                score = (
+                    event_priority * 10_000
+                    + max(float(basis or 0), 0.0) * 2
+                    + max(-float(premium or 0), 0.0)
+                    + math.log10(max(item["volume_24h_usdt"], 1.0))
+                )
+                return {
+                    **item,
+                    "score": score,
+                    "event_type": event.get("event_type") if event else None,
+                    "signal_time_cst": event.get("signal_time_cst") if event else None,
+                    "planned_execution_time_cst": (
+                        event.get("planned_execution_time_cst") if event else None
+                    ),
+                    "reason": event.get("reason") if event else "no_confirmed_signal",
+                    "basis_bps": basis,
+                    "premium_bps": premium,
+                    "basis_peak_60m_bps": latest.get("basis_peak_60m_bps"),
+                    "compression_ratio": latest.get("compression_ratio"),
+                    "bar_count": result.get("bar_count", 0),
+                    "recent_events": events[-5:],
+                    "error": None,
+                }
+            except Exception as exc:  # noqa: BLE001 - keep one bad symbol from aborting the scan.
+                return {
+                    **item,
+                    "score": self._global_candidate_score(item),
+                    "event_type": None,
+                    "signal_time_cst": None,
+                    "planned_execution_time_cst": None,
+                    "reason": "scan_failed",
+                    "basis_bps": None,
+                    "premium_bps": None,
+                    "basis_peak_60m_bps": None,
+                    "compression_ratio": None,
+                    "bar_count": 0,
+                    "recent_events": [],
+                    "error": str(exc),
+                }
+
+    async def scan_all(
+        self,
+        *,
+        hours: int = 4,
+        max_symbols: int | None = None,
+        min_volume_24h_usdt: float | None = None,
+    ) -> dict[str, Any]:
+        defaults = GlobalMinuteSignalConfig()
+        max_symbols = max_symbols or defaults.max_symbols
+        min_volume_24h_usdt = (
+            defaults.min_volume_24h_usdt
+            if min_volume_24h_usdt is None
+            else min_volume_24h_usdt
+        )
+        universe = await self._fetch_global_universe()
+        eligible = [
+            item
+            for item in universe
+            if item["volume_24h_usdt"] >= min_volume_24h_usdt
+            and (
+                item["initial_basis_bps"] >= 0
+                or (
+                    item["initial_premium_bps"] is not None
+                    and item["initial_premium_bps"] <= 0
+                )
+            )
+        ]
+        eligible.sort(key=self._global_candidate_score, reverse=True)
+        selected = eligible[:max(1, min(max_symbols, 100))]
+        semaphore = asyncio.Semaphore(defaults.max_concurrency)
+        candidates = await asyncio.gather(
+            *(
+                self._scan_global_candidate(
+                    item,
+                    hours=hours,
+                    semaphore=semaphore,
+                )
+                for item in selected
+            )
+        )
+        candidates.sort(key=lambda item: item["score"], reverse=True)
+        errors = sum(1 for item in candidates if item["error"])
+        signal_count = sum(1 for item in candidates if item["event_type"] is not None)
+        return {
+            "observed_at": datetime.now(UTC).isoformat(),
+            "hours": hours,
+            "max_symbols": max_symbols,
+            "min_volume_24h_usdt": min_volume_24h_usdt,
+            "universe_count": len(universe),
+            "eligible_count": len(eligible),
+            "scanned_count": len(candidates),
+            "signal_count": signal_count,
+            "error_count": errors,
+            "candidates": candidates,
+            "warnings": [
+                (
+                    "全市场扫描采用两阶段：先按实时成交额、basis 和 premium 发现候选，"
+                    "再对候选做 1 分钟历史复核。"
+                ),
+                (
+                    "当前候选池是 Binance Alpha 现货与 Binance Futures 永续的可映射交集，"
+                    "不等同于所有交易所的全部币种。"
+                ),
+                (
+                    "信号是下一分钟计划执行边界，不包含真实成交、滑点和盘口容量；"
+                    "执行前仍需检查流动性。"
+                ),
+            ],
+        }
 
     async def _fetch_klines(
         self,

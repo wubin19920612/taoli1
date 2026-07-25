@@ -26,3 +26,26 @@ async def scan_minute_signals(
         close = getattr(service, "aclose", None)
         if close is not None:
             await close()
+
+
+@router.get("/scan-all")
+async def scan_all_minute_signals(
+    request: Request,
+    hours: int = Query(default=4, ge=1, le=24),
+    max_symbols: int = Query(default=30, ge=5, le=100),
+    min_volume_24h_usdt: float = Query(default=100_000, ge=0),
+) -> dict:
+    service_factory = getattr(request.app.state, "minute_signal_scan_service_factory", None)
+    service = service_factory() if service_factory is not None else MinuteSignalScanService()
+    try:
+        return await service.scan_all(
+            hours=hours,
+            max_symbols=max_symbols,
+            min_volume_24h_usdt=min_volume_24h_usdt,
+        )
+    except Exception as exc:  # noqa: BLE001 - surface discovery failures to the dashboard.
+        raise HTTPException(status_code=502, detail=f"全市场分钟信号扫描失败: {exc}") from exc
+    finally:
+        close = getattr(service, "aclose", None)
+        if close is not None:
+            await close()
