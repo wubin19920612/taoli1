@@ -295,6 +295,7 @@ describe("PremiumIndexPage", () => {
         )
       ).toBe(true);
     });
+    expect(await screen.findByText("实时溢价指数")).toBeTruthy();
     expect(await screen.findByText("当前溢价指数")).toBeTruthy();
   });
 

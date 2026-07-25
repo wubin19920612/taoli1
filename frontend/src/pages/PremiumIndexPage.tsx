@@ -1,7 +1,7 @@
 import { ReloadOutlined, SaveOutlined, SearchOutlined } from "@ant-design/icons";
 import { Alert, Button, Form, Input, InputNumber, Select, Switch, Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 
@@ -1018,24 +1018,32 @@ function PremiumIndexChart({
           <Tag>{result.symbol}</Tag>
           <Tag>{result.point_count} 点</Tag>
           <Tag>{result.interval_minutes}m 周期</Tag>
+          {result.current?.premium_pct != null ? (
+            <Tag color={result.current.premium_pct >= 0 ? "red" : "green"}>
+              实时P {signedBp(result.current.premium_pct)}
+            </Tag>
+          ) : null}
           <Tag color={autoRefresh ? "processing" : undefined}>
             {autoRefresh ? `${samplingIntervalSeconds}s 实时采样` : "手动刷新"}
           </Tag>
         </div>
-        <Typography.Text type="secondary">最新 {fullTime(result.observed_at)}</Typography.Text>
+        <Typography.Text type="secondary">
+          实时 {fullTime(result.current?.observed_at ?? result.observed_at)} · {premiumSourceLabel(result.current?.source)}
+        </Typography.Text>
       </div>
     </div>
   );
 }
 
-function MetricCard({ label, value, sub, tone = "neutral" }: {
+function MetricCard({ label, value, sub, tone = "neutral", accent }: {
   label: string;
   value: string;
-  sub: string;
+  sub: ReactNode;
   tone?: "positive" | "negative" | "neutral";
+  accent?: "live";
 }) {
   return (
-    <div className={`premium-metric-card premium-metric-${tone}`}>
+    <div className={`premium-metric-card premium-metric-${tone}${accent ? ` premium-metric-${accent}` : ""}`}>
       <Typography.Text className="premium-metric-label">{label}</Typography.Text>
       <div className="premium-metric-value">{value}</div>
       <Typography.Text className="premium-metric-sub">{sub}</Typography.Text>
@@ -1251,11 +1259,20 @@ export function PremiumIndexPage() {
 
   const current = result?.current ?? null;
   const currentPremium = current?.premium_pct ?? result?.premium_pct.current ?? null;
+  const currentPremiumTone = typeof currentPremium === "number"
+    ? currentPremium >= 0 ? "positive" : "negative"
+    : "neutral";
+  const currentPremiumSub = current ? (
+    <>
+      <span>当前溢价指数</span>
+      <span className="premium-metric-sub-detail"> · {premiumSourceLabel(current.source)} · {fullTime(current.observed_at)}</span>
+    </>
+  ) : "等待实时采样";
   const fundingFollowEstimate = useMemo(
     () => buildFundingFollowEstimate(result, current, currentPremium),
     [current, currentPremium, result]
   );
-  const weightedPremiumPct = fundingFollowEstimate?.averagePremiumPct ?? currentPremium;
+  const weightedPremiumPct = fundingFollowEstimate?.averagePremiumPct ?? null;
   const weightedPremiumTone = typeof weightedPremiumPct === "number"
     ? weightedPremiumPct >= 0 ? "positive" : "negative"
     : "neutral";
@@ -1270,8 +1287,8 @@ export function PremiumIndexPage() {
     : "缺少上下限、本周期样本或剩余时间";
   const premiumDefinitionMessage = current
     ? fundingFollowEstimate
-      ? "本周期加权溢价指数只使用当前资金周期内的 Premium Index，并按时间递增权重计算；剩余拉满所需溢价指数表示，为使最终资金费率达到当前方向的上限或下限，剩余时间内 P 必须维持的加权平均水平。触及上下限不代表交易所一定调整结算周期。"
-      : "当前交易所未提供完整的资金周期和上下限数据，暂时只能展示当前溢价，不能精确反推剩余拉满所需溢价指数。"
+      ? "实时溢价指数来自当前快照并随自动采样刷新；本周期加权溢价指数只使用当前资金周期内的 Premium Index，并按时间递增权重计算。剩余拉满所需溢价指数表示，为使最终资金费率达到当前方向的上限或下限，剩余时间内 P 必须维持的加权平均水平。触及上下限不代表交易所一定调整结算周期。"
+      : "实时溢价指数来自当前快照并随自动采样刷新；当前交易所未提供完整的资金周期和上下限数据，暂时不能精确反推剩余拉满所需溢价指数。"
     : "";
 
   return (
@@ -1351,11 +1368,18 @@ export function PremiumIndexPage() {
 
       <section className="premium-metric-grid">
         <MetricCard
-          label={fundingFollowEstimate ? "本周期加权溢价指数" : "当前溢价指数"}
+          label="实时溢价指数"
+          value={signedPct(currentPremium)}
+          sub={currentPremiumSub}
+          tone={currentPremiumTone}
+          accent="live"
+        />
+        <MetricCard
+          label="本周期加权溢价指数"
           value={signedPct(weightedPremiumPct)}
           sub={fundingFollowEstimate
             ? `递增权重 · ${fundingFollowEstimate.sampledPoints}点 · 已过 ${compactHours(fundingFollowEstimate.elapsedHours)}`
-            : current ? `${current.exchange} · ${current.symbol} · ${premiumSourceLabel(current.source)}` : "等待查询"}
+            : "等待资金周期样本"}
           tone={weightedPremiumTone}
         />
         <MetricCard label="标记价" value={price(current?.mark_price)} sub="mark price" />
