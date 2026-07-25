@@ -159,23 +159,20 @@ const candidateColumns: ColumnsType<MinuteSignalUniverseCandidate> = [
   {
     title: parameterTitle(
       "Alpha 现货",
-      "Binance Alpha 的现货交易对，不是普通 Binance Spot。ALPHA_331USDT 这类名称是 Alpha 内部交易对名。"
+      "Binance Alpha 的现货交易对，不是普通 Binance Spot。ALPHA_331USDT 这类名称是 Alpha 现货交易对名。"
     ),
     dataIndex: "alpha_symbol",
     width: 190,
-    render: (value: string, row) => (
+    render: (value: string) => (
       <Space direction="vertical" size={0}>
         <Tag color="blue">Binance Alpha 现货</Tag>
         <Tooltip
-          title={`${value} 是 Binance Alpha 内部现货交易对名；${row.alpha_id} 是 Alpha token 内部 ID，USDT 是报价币。`}
+          title={`${value} 是 Binance Alpha 现货交易对名，不是普通 Binance Spot。`}
         >
           <Tag color="geekblue" style={{ cursor: "help" }}>
             {value}
           </Tag>
         </Tooltip>
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          内部 ID：{row.alpha_id}
-        </Typography.Text>
       </Space>
     )
   },

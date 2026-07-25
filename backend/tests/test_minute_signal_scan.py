@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from app.main import create_app
-from app.services.minute_signal_scan import MinuteSignalScanService
+from app.services.minute_signal_scan import ALPHA_KLINES_URL, MinuteSignalScanService
 
 
 def _row(
@@ -86,6 +86,46 @@ async def test_fetch_rows_excludes_any_unclosed_source_bar(monkeypatch) -> None:
     monkeypatch.setattr(service, "_fetch_klines", fake_fetch_klines)
 
     assert await service._fetch_rows("ALPHA_331USDT", "AKEUSDT", start_ms, end_ms) == []
+
+
+@pytest.mark.asyncio
+async def test_alpha_kline_pagination_stops_when_start_exceeds_latest_alpha_end(monkeypatch) -> None:
+    service = MinuteSignalScanService()
+    start_ms = 1_000_000
+    end_ms = start_ms + 3 * 60_000
+    calls: list[dict] = []
+
+    async def fake_get(url: str, params: dict):
+        calls.append(params)
+        if len(calls) == 1:
+            return [
+                [
+                    start_ms,
+                    "1.20",
+                    "1.30",
+                    "1.10",
+                    "1.25",
+                    "1000",
+                    start_ms + 60_000 - 1,
+                ]
+            ]
+        raise RuntimeError("Binance Alpha 接口失败: Start time is greater than end time (code=-1023)")
+
+    monkeypatch.setattr(service, "_get", fake_get)
+
+    rows = await service._fetch_klines(ALPHA_KLINES_URL, "ALPHA_331USDT", start_ms, end_ms)
+
+    assert len(calls) == 2
+    assert rows == [
+        {
+            "open_time": start_ms,
+            "close_time": start_ms + 60_000 - 1,
+            "open": 1.20,
+            "high": 1.30,
+            "low": 1.10,
+            "close": 1.25,
+        }
+    ]
 
 
 @pytest.mark.asyncio

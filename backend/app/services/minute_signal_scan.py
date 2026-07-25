@@ -94,6 +94,18 @@ def _parse_kline(row: list[Any]) -> dict[str, Any] | None:
     }
 
 
+def _binance_alpha_error(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return f"Binance Alpha 接口返回格式异常: {type(payload).__name__}"
+    message = payload.get("message") or payload.get("messageDetail") or "unknown error"
+    code = payload.get("code")
+    return f"Binance Alpha 接口失败: {message} (code={code})"
+
+
+def _is_start_after_end_error(exc: Exception) -> bool:
+    return "Start time is greater than end time" in str(exc)
+
+
 class MinuteSignalScanService:
     def __init__(
         self,
@@ -117,7 +129,7 @@ class MinuteSignalScanService:
         payload = response.json()
         if url.startswith("https://www.binance.com/bapi/defi/"):
             if not isinstance(payload, dict) or payload.get("success") is False:
-                raise RuntimeError(f"Binance Alpha response is not successful: {payload!r}")
+                raise RuntimeError(_binance_alpha_error(payload))
             payload = payload.get("data")
         return payload
 
@@ -458,16 +470,21 @@ class MinuteSignalScanService:
         cursor = start_ms
         rows: dict[int, dict[str, Any]] = {}
         while cursor <= end_ms:
-            page = await self._get(
-                url,
-                {
-                    "symbol": symbol,
-                    "interval": "1m",
-                    "startTime": cursor,
-                    "endTime": end_ms,
-                    "limit": 1000,
-                },
-            )
+            try:
+                page = await self._get(
+                    url,
+                    {
+                        "symbol": symbol,
+                        "interval": "1m",
+                        "startTime": cursor,
+                        "endTime": end_ms,
+                        "limit": 1000,
+                    },
+                )
+            except RuntimeError as exc:
+                if url == ALPHA_KLINES_URL and _is_start_after_end_error(exc):
+                    break
+                raise
             parsed = [item for row in page if (item := _parse_kline(row)) is not None]
             if not parsed:
                 break

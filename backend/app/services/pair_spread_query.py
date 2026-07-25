@@ -41,6 +41,18 @@ BINANCE_ALPHA_KLINES_URL = "https://www.binance.com/bapi/defi/v1/public/alpha-tr
 BINANCE_ALPHA_TICKER_URL = "https://www.binance.com/bapi/defi/v1/public/alpha-trade/ticker"
 
 
+def _binance_alpha_error(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return f"Binance Alpha 接口返回格式异常: {type(payload).__name__}"
+    message = payload.get("message") or payload.get("messageDetail") or "unknown error"
+    code = payload.get("code")
+    return f"Binance Alpha 接口失败: {message} (code={code})"
+
+
+def _is_start_after_end_error(exc: Exception) -> bool:
+    return "Start time is greater than end time" in str(exc)
+
+
 class PairSpreadQueryError(RuntimeError):
     pass
 
@@ -628,7 +640,7 @@ class PairSpreadQueryService:
     async def _get_binance_alpha_payload(self, url: str) -> Any:
         payload = await self._get_json(url)
         if not isinstance(payload, dict) or payload.get("success") is False:
-            raise RuntimeError(f"Binance Alpha response is not successful: {payload!r}")
+            raise RuntimeError(_binance_alpha_error(payload))
         return payload.get("data")
 
     async def _fetch_binance_like_klines(
@@ -716,7 +728,12 @@ class PairSpreadQueryService:
                 f"{BINANCE_ALPHA_KLINES_URL}?symbol={raw}&interval={interval_minutes}m"
                 f"&startTime={cursor}&endTime={chunk_end}&limit=1000"
             )
-            rows = await self._get_binance_alpha_payload(url)
+            try:
+                rows = await self._get_binance_alpha_payload(url)
+            except RuntimeError as exc:
+                if _is_start_after_end_error(exc):
+                    break
+                raise
             parsed = [_parse_array_kline(row, 0, 4) for row in rows if isinstance(row, list)]
             parsed = [point for point in parsed if point is not None]
             if not parsed:

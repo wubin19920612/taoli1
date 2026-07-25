@@ -719,6 +719,48 @@ async def test_binance_alpha_spot_klines_unwrap_bapi_payload() -> None:
 
 
 @pytest.mark.asyncio
+async def test_binance_alpha_spot_klines_stop_when_start_exceeds_latest_alpha_end() -> None:
+    start = datetime(2026, 7, 25, 10, 0, tzinfo=UTC)
+    end = start + timedelta(minutes=3)
+    service = PairSpreadQueryService()
+    requested_urls: list[str] = []
+
+    async def fake_get_json(url: str):
+        requested_urls.append(url)
+        if len(requested_urls) == 1:
+            return {
+                "success": True,
+                "data": [
+                    [
+                        str(int(start.timestamp() * 1000)),
+                        "0.0026",
+                        "0.0027",
+                        "0.0025",
+                        "0.00265",
+                        "1000",
+                        str(int((start + timedelta(minutes=1)).timestamp() * 1000) - 1),
+                    ]
+                ],
+            }
+        return {
+            "success": False,
+            "code": "-1023",
+            "message": "Start time is greater than end time.",
+            "messageDetail": None,
+            "data": None,
+        }
+
+    service._get_json = fake_get_json  # type: ignore[method-assign]
+    try:
+        points = await service._fetch_binance_alpha_spot_klines("ALPHA_331USDT", start, end, 1)
+    finally:
+        await service.aclose()
+
+    assert len(requested_urls) == 2
+    assert points == [PairSpreadKlinePoint(bucket_at=start, close=0.00265)]
+
+
+@pytest.mark.asyncio
 async def test_binance_alpha_spot_current_uses_alpha_ticker() -> None:
     service = PairSpreadQueryService()
     requested_urls: list[str] = []
