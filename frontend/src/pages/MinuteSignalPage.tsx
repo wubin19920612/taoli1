@@ -12,6 +12,7 @@ import {
   Switch,
   Table,
   Tag,
+  Tooltip,
   Typography
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
@@ -52,6 +53,43 @@ const eventColors: Record<MinuteSignalEventType, string> = {
   TIME_EXIT: "default"
 };
 
+const reasonLabels: Record<string, string> = {
+  shock_compressed_and_entry_confirmed: "价差冲击后回压，确认候选入场",
+  basis_expansion_with_negative_premium: "价差扩大，且合约溢价为负",
+  new_shock_after_expiry: "原冲击过期后再次出现新冲击",
+  basis_converged: "价差已收敛，达到止盈条件",
+  basis_reversed: "价差方向反转，触发止损",
+  no_confirmed_signal: "尚未确认信号",
+  scan_failed: "扫描失败"
+};
+
+function formatTime(value: string | null | undefined, includeSeconds = false): string {
+  if (!value) {
+    return "-";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value.replace("T", " ").replace(/([+-]\d{2}:\d{2}|Z)$/, "");
+  }
+  const parts = new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    ...(includeSeconds ? { second: "2-digit" } : {})
+  }).formatToParts(date);
+  const part = (type: string) => parts.find((item) => item.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")} ${part("hour")}:${part("minute")}${
+    includeSeconds ? `:${part("second")}` : ""
+  }`;
+}
+
+function reasonLabel(value: string): string {
+  return reasonLabels[value] ?? `检测条件：${value.replace(/_/g, " ")}`;
+}
+
 function bps(value: number | null | undefined): string {
   return typeof value === "number" && Number.isFinite(value)
     ? `${value >= 0 ? "+" : ""}${value.toFixed(2)} bps`
@@ -76,6 +114,14 @@ function eventTag(eventType: MinuteSignalEventType | null) {
     return <Tag>观察</Tag>;
   }
   return <Tag color={eventColors[eventType]}>{eventLabels[eventType]}</Tag>;
+}
+
+function parameterTitle(label: string, description: string) {
+  return (
+    <Tooltip title={description}>
+      <span style={{ cursor: "help", borderBottom: "1px dashed currentColor" }}>{label}</span>
+    </Tooltip>
+  );
 }
 
 const candidateColumns: ColumnsType<MinuteSignalUniverseCandidate> = [
@@ -106,45 +152,54 @@ const candidateColumns: ColumnsType<MinuteSignalUniverseCandidate> = [
     render: (value: MinuteSignalEventType | null) => eventTag(value)
   },
   {
-    title: "信号时间",
+    title: parameterTitle("信号时间", "北京时间；对应触发信号的 1 分钟 K 线起始时间"),
     dataIndex: "signal_time_cst",
     width: 155,
-    render: (value: string | null) => value ?? "-"
+    render: (value: string | null) => formatTime(value)
   },
   {
-    title: "basis",
+    title: parameterTitle(
+      "现货-合约价差（basis）",
+      "Alpha 现货相对 Futures 合约标记价的价差；正数表示现货高于合约。1 bps = 0.01%。"
+    ),
     dataIndex: "basis_bps",
     align: "right",
-    width: 110,
+    width: 155,
     render: (value: number | null) => bps(value)
   },
   {
-    title: "premium",
+    title: parameterTitle(
+      "合约溢价（premium）",
+      "Futures 合约标记价相对指数价的偏离；负数表示合约低于指数。1 bps = 0.01%。"
+    ),
     dataIndex: "premium_bps",
     align: "right",
-    width: 110,
+    width: 155,
     render: (value: number | null) => bps(value)
   },
   {
-    title: "60m 峰值",
+    title: parameterTitle("60 分钟价差峰值", "最近 60 分钟内观测到的最高 basis。"),
     dataIndex: "basis_peak_60m_bps",
     align: "right",
-    width: 110,
+    width: 140,
     render: (value: number | null) => bps(value)
   },
   {
-    title: "压缩",
+    title: parameterTitle(
+      "价差压缩比例",
+      "从最近 60 分钟 basis 峰值回落的比例；例如 26.9% 表示已从峰值回落约 26.9%。"
+    ),
     dataIndex: "compression_ratio",
     align: "right",
-    width: 90,
+    width: 125,
     render: (value: number | null) =>
       typeof value === "number" && Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : "-"
   },
   {
-    title: "24h 成交额",
+    title: parameterTitle("24 小时成交额", "Futures 合约最近 24 小时的 USDT 计价成交额，用于衡量流动性。"),
     dataIndex: "volume_24h_usdt",
     align: "right",
-    width: 110,
+    width: 140,
     render: (value: number) => `${volume(value)} USDT`
   },
   {
@@ -154,11 +209,11 @@ const candidateColumns: ColumnsType<MinuteSignalUniverseCandidate> = [
     render: (value: string, row) => (
       <Space direction="vertical" size={0}>
         <Typography.Text type={row.error ? "danger" : "secondary"}>
-          {row.error ?? value}
+          {row.error ? `扫描失败：${row.error}` : reasonLabel(value)}
         </Typography.Text>
         {row.planned_execution_time_cst ? (
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            计划执行：{row.planned_execution_time_cst}
+            计划执行：{formatTime(row.planned_execution_time_cst)}
           </Typography.Text>
         ) : null}
       </Space>
@@ -290,7 +345,7 @@ export function MinuteSignalPage() {
               自动发现候选
             </Typography.Title>
             <Tag color="blue">
-              {result ? `观察时间 ${result.observed_at}` : "尚未扫描"}
+              {result ? `观察时间（北京时间）${formatTime(result.observed_at, true)}` : "尚未扫描"}
             </Tag>
             {result?.error_count ? <Tag color="red">{result.error_count} 个扫描失败</Tag> : null}
           </Space>
