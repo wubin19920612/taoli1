@@ -657,3 +657,95 @@ def test_pair_spread_symbol_normalization() -> None:
     assert PairSpreadLegQuery(exchange="gate", symbol="eth").symbol == "ETHUSDT"
     assert PairSpreadLegQuery(exchange="binance", symbol="btc").market_type == MarketType.FUTURE
     assert PairSpreadLegQuery(exchange="binance", symbol="btc", market_type="spot").market_type == MarketType.SPOT
+    assert (
+        PairSpreadLegQuery(
+            exchange="binance_alpha",
+            symbol="ALPHA_331USDT",
+            market_type=MarketType.SPOT,
+        ).symbol
+        == "ALPHA_331USDT"
+    )
+    assert (
+        PairSpreadLegQuery(
+            exchange="binance_alpha",
+            symbol="331",
+            market_type=MarketType.SPOT,
+        ).symbol
+        == "ALPHA_331USDT"
+    )
+
+
+def test_pair_spread_rejects_binance_alpha_future_leg() -> None:
+    with pytest.raises(ValidationError):
+        PairSpreadLegQuery(exchange="binance_alpha", symbol="ALPHA_331USDT")
+
+
+@pytest.mark.asyncio
+async def test_binance_alpha_spot_klines_unwrap_bapi_payload() -> None:
+    start = datetime(2026, 7, 25, 10, 0, tzinfo=UTC)
+    end = start + timedelta(minutes=1)
+    requested_urls: list[str] = []
+    service = PairSpreadQueryService()
+
+    async def fake_get_json(url: str):
+        requested_urls.append(url)
+        query = parse_qs(urlparse(url).query)
+        assert "alpha-trade/klines" in url
+        assert query["symbol"] == ["ALPHA_331USDT"]
+        assert query["interval"] == ["1m"]
+        return {
+            "success": True,
+            "data": [
+                [
+                    str(int(start.timestamp() * 1000)),
+                    "0.0026",
+                    "0.0027",
+                    "0.0025",
+                    "0.00265",
+                    "1000",
+                    str(int((start + timedelta(minutes=1)).timestamp() * 1000) - 1),
+                ]
+            ],
+        }
+
+    service._get_json = fake_get_json  # type: ignore[method-assign]
+    try:
+        points = await service._fetch_binance_alpha_spot_klines("ALPHA_331USDT", start, end, 1)
+    finally:
+        await service.aclose()
+
+    assert requested_urls
+    assert points == [PairSpreadKlinePoint(bucket_at=start, close=0.00265)]
+
+
+@pytest.mark.asyncio
+async def test_binance_alpha_spot_current_uses_alpha_ticker() -> None:
+    service = PairSpreadQueryService()
+    requested_urls: list[str] = []
+
+    async def fake_get_json(url: str):
+        requested_urls.append(url)
+        assert "alpha-trade/ticker" in url
+        assert parse_qs(urlparse(url).query)["symbol"] == ["ALPHA_331USDT"]
+        return {
+            "success": True,
+            "data": {
+                "symbol": "ALPHA_331USDT",
+                "lastPrice": "0.00270610",
+            },
+        }
+
+    service._get_json = fake_get_json  # type: ignore[method-assign]
+    try:
+        leg = await service._fetch_binance_alpha_spot_current("331")
+    finally:
+        await service.aclose()
+
+    assert requested_urls
+    assert leg.exchange == "binance_alpha"
+    assert leg.symbol == "ALPHA_331USDT"
+    assert leg.raw_symbol == "ALPHA_331USDT"
+    assert leg.market_type == MarketType.SPOT
+    assert leg.price == pytest.approx(0.00270610)
+    assert leg.price_field == PairSpreadPriceField.LAST_PRICE
+    assert leg.funding_rate_pct is None

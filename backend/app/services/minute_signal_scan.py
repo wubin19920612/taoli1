@@ -152,6 +152,29 @@ class MinuteSignalScanService:
                 return [item for item in value if isinstance(item, dict)]
         return []
 
+    async def _fetch_alpha_ticker_prices(self, symbols: list[str]) -> dict[str, float]:
+        unique_symbols = sorted(
+            {
+                symbol
+                for symbol in (self._upper(item) for item in symbols)
+                if symbol
+            }
+        )
+        semaphore = asyncio.Semaphore(12)
+
+        async def fetch(symbol: str) -> tuple[str, float | None]:
+            async with semaphore:
+                try:
+                    payload = await self._get_payload(ALPHA_TICKER_URL, {"symbol": symbol})
+                except Exception:  # noqa: BLE001 - keep one stale Alpha ticker from aborting discovery.
+                    return symbol, None
+                ticker = payload if isinstance(payload, dict) else {}
+                price = _finite(ticker.get("lastPrice")) or _finite(ticker.get("weightedAvgPrice"))
+                return symbol, price if price is not None and price > 0 else None
+
+        rows = await asyncio.gather(*(fetch(symbol) for symbol in unique_symbols))
+        return {symbol: price for symbol, price in rows if price is not None}
+
     async def _fetch_global_universe(self) -> list[dict[str, Any]]:
         exchange_info, futures_rows, premium_rows, alpha_info, token_rows = await asyncio.gather(
             self._get_payload(FUTURES_EXCHANGE_INFO_URL),
@@ -204,7 +227,8 @@ class MinuteSignalScanService:
                 }
             )
 
-        universe: list[dict[str, Any]] = []
+        mapped_alpha: list[dict[str, Any]] = []
+        alpha_symbols_for_pricing: list[str] = []
         for alpha_id, alpha in alpha_by_id.items():
             token = tokens_by_alpha_id.get(alpha_id, {})
             base_asset = self._upper(token.get("symbol"))
@@ -214,8 +238,29 @@ class MinuteSignalScanService:
             if not futures:
                 continue
             alpha_symbol = self._upper(alpha.get("symbol"))
-            alpha_price = _finite(token.get("price"))
-            for future in futures:
+            if not alpha_symbol:
+                continue
+            mapped_alpha.append(
+                {
+                    "alpha_id": alpha_id,
+                    "alpha_symbol": alpha_symbol,
+                    "base_asset": base_asset,
+                    "token_price": _finite(token.get("price")),
+                    "futures": futures,
+                }
+            )
+            alpha_symbols_for_pricing.append(alpha_symbol)
+
+        alpha_prices_by_symbol = await self._fetch_alpha_ticker_prices(alpha_symbols_for_pricing)
+        universe: list[dict[str, Any]] = []
+        for item in mapped_alpha:
+            alpha_symbol = item["alpha_symbol"]
+            alpha_price = alpha_prices_by_symbol.get(alpha_symbol)
+            alpha_price_source = "binance_alpha_ticker_last_price"
+            if alpha_price is None or alpha_price <= 0:
+                alpha_price = item["token_price"]
+                alpha_price_source = "binance_alpha_token_list_price"
+            for future in item["futures"]:
                 futures_symbol = self._upper(future.get("symbol"))
                 ticker = ticker_by_symbol.get(futures_symbol, {})
                 premium = premium_by_symbol.get(futures_symbol, {})
@@ -242,11 +287,12 @@ class MinuteSignalScanService:
                 )
                 universe.append(
                     {
-                        "base_asset": base_asset,
-                        "alpha_id": alpha_id,
+                        "base_asset": item["base_asset"],
+                        "alpha_id": item["alpha_id"],
                         "alpha_symbol": alpha_symbol,
                         "futures_symbol": futures_symbol,
                         "alpha_price": alpha_price,
+                        "alpha_price_source": alpha_price_source,
                         "futures_price": future_price,
                         "index_price": index_price,
                         "volume_24h_usdt": volume,
@@ -388,7 +434,7 @@ class MinuteSignalScanService:
             "candidates": candidates,
             "warnings": [
                 (
-                    "全市场扫描采用两阶段：先按实时成交额、basis 和 premium 发现候选，"
+                    "全市场扫描采用两阶段：先用 Binance Alpha ticker 最新价、Futures 成交额、basis 和 premium 发现候选，"
                     "再对候选做 1 分钟历史复核。"
                 ),
                 (
@@ -794,12 +840,12 @@ class MinuteSignalScanService:
             "events": events[-100:],
             "warnings": [
                 (
-                    "Signal-only: planned_execution_time_cst is the next-minute execution "
-                    "boundary; no fill/slippage is modeled."
+                    "仅作为信号提示：planned_execution_time_cst 表示下一分钟执行边界；"
+                    "未建模真实成交、滑点和盘口深度。"
                 ),
                 (
-                    "Alpha spot and Binance futures are separate venues/market sources; "
-                    "verify liquidity before acting."
+                    "Binance Alpha 现货与 Binance Futures 永续来自不同市场源；"
+                    "执行前请复核流动性。"
                 ),
             ],
         }

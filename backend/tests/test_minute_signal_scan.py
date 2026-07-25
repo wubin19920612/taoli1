@@ -123,6 +123,9 @@ async def test_global_universe_maps_alpha_token_to_futures_contract(monkeypatch)
     }
 
     async def fake_get_payload(url: str, params=None):
+        if "alpha-trade/ticker" in url:
+            assert params == {"symbol": "ALPHA_331USDT"}
+            return {"symbol": "ALPHA_331USDT", "lastPrice": "1.25"}
         for marker, payload in payloads.items():
             if marker in url:
                 return payload
@@ -136,7 +139,61 @@ async def test_global_universe_maps_alpha_token_to_futures_contract(monkeypatch)
     assert universe[0]["futures_symbol"] == "AKEUSDT"
     assert universe[0]["alpha_symbol"] == "ALPHA_331USDT"
     assert universe[0]["base_asset"] == "AKE"
-    assert universe[0]["initial_basis_bps"] > 1_000
+    assert universe[0]["alpha_price"] == pytest.approx(1.25)
+    assert universe[0]["alpha_price_source"] == "binance_alpha_ticker_last_price"
+    assert universe[0]["initial_basis_bps"] == pytest.approx((1.25 - 1.10) / 1.25 * 10_000)
+
+
+@pytest.mark.asyncio
+async def test_global_universe_falls_back_to_token_price_when_ticker_missing(monkeypatch) -> None:
+    service = MinuteSignalScanService()
+    payloads = {
+        "fapi/v1/exchangeInfo": {
+            "symbols": [
+                {
+                    "symbol": "AKEUSDT",
+                    "baseAsset": "AKE",
+                    "quoteAsset": "USDT",
+                    "contractType": "PERPETUAL",
+                    "status": "TRADING",
+                }
+            ]
+        },
+        "fapi/v1/ticker/24hr": [
+            {"symbol": "AKEUSDT", "lastPrice": "1.10", "quoteVolume": "1000000"}
+        ],
+        "fapi/v1/premiumIndex": [
+            {"symbol": "AKEUSDT", "markPrice": "1.10", "indexPrice": "1.00"}
+        ],
+        "get-exchange-info": {
+            "symbols": [
+                {
+                    "symbol": "ALPHA_331USDT",
+                    "baseAsset": "ALPHA_331",
+                    "quoteAsset": "USDT",
+                    "status": "TRADING",
+                }
+            ]
+        },
+        "wallet-direct": [{"alphaId": "331", "symbol": "AKE", "price": "1.30"}],
+    }
+
+    async def fake_get_payload(url: str, params=None):
+        if "alpha-trade/ticker" in url:
+            raise RuntimeError("temporary alpha ticker failure")
+        for marker, payload in payloads.items():
+            if marker in url:
+                return payload
+        raise AssertionError(url)
+
+    monkeypatch.setattr(service, "_get_payload", fake_get_payload)
+
+    universe = await service._fetch_global_universe()
+
+    assert len(universe) == 1
+    assert universe[0]["alpha_price"] == pytest.approx(1.30)
+    assert universe[0]["alpha_price_source"] == "binance_alpha_token_list_price"
+    assert universe[0]["initial_basis_bps"] == pytest.approx((1.30 - 1.10) / 1.30 * 10_000)
 
 
 @pytest.mark.asyncio

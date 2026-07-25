@@ -21,7 +21,7 @@ async def scan_minute_signals(
             hours=hours,
         )
     except Exception as exc:  # noqa: BLE001 - expose a useful upstream failure to the dashboard.
-        raise HTTPException(status_code=502, detail=f"Minute signal scan failed: {exc}") from exc
+        raise HTTPException(status_code=502, detail=f"分钟信号扫描失败: {exc}") from exc
     finally:
         close = getattr(service, "aclose", None)
         if close is not None:

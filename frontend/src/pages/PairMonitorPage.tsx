@@ -12,7 +12,7 @@ import {
   Typography
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 
@@ -73,9 +73,27 @@ const defaultFormValues: PairSpreadFormValues = {
   leg2_multiplier: 10
 };
 
-const exchangeOptions = ["binance", "okx", "bybit", "gate", "bitget", "aster", "hyperliquid"].map(
-  (value) => ({ label: value[0].toUpperCase() + value.slice(1), value })
-);
+const exchangeLabels: Record<string, string> = {
+  binance: "Binance",
+  binance_alpha: "Binance Alpha",
+  okx: "OKX",
+  bybit: "Bybit",
+  gate: "Gate",
+  bitget: "Bitget",
+  aster: "Aster",
+  hyperliquid: "Hyperliquid"
+};
+
+const exchangeOptions = [
+  "binance",
+  "binance_alpha",
+  "okx",
+  "bybit",
+  "gate",
+  "bitget",
+  "aster",
+  "hyperliquid"
+].map((value) => ({ label: exchangeLabels[value] ?? value, value }));
 
 const intervalOptions = [
   { label: "1分钟", value: 1 },
@@ -148,23 +166,75 @@ function normalizeMarketType(value: unknown): MarketType {
   return value === "spot" ? "spot" : "future";
 }
 
+function normalizeAlphaSymbol(value: string): string {
+  let normalized = value.trim().toUpperCase().replace(/\//g, "").replace(/-/g, "_");
+  if (normalized.endsWith("_USDT")) {
+    normalized = `${normalized.slice(0, -5)}USDT`;
+  }
+  if (/^\d+$/.test(normalized)) {
+    normalized = `ALPHA_${normalized}`;
+  }
+  if (normalized.startsWith("ALPHA") && !normalized.startsWith("ALPHA_")) {
+    normalized = `ALPHA_${normalized.slice("ALPHA".length)}`;
+  }
+  return normalized.endsWith("USDT") ? normalized : `${normalized}USDT`;
+}
+
+function normalizeFormSymbol(exchange: string, symbol: string): string {
+  return exchange === "binance_alpha" ? normalizeAlphaSymbol(symbol) : symbol.trim().toUpperCase();
+}
+
 function marketTypeText(value: MarketType | null | undefined): string {
   return value === "spot" ? "现货" : "合约";
 }
 
 function legDisplay(exchange: string, marketType: MarketType | null | undefined, symbol: string, suffix = ""): string {
-  return `${exchange} · ${marketTypeText(marketType)} · ${symbol}${suffix}`;
+  return `${exchangeLabels[exchange] ?? exchange} · ${marketTypeText(marketType)} · ${symbol}${suffix}`;
 }
 
 function normalizePairForm(values: LegacyPairSpreadFormValues): PairSpreadFormValues {
+  const leg1Exchange = values.leg1_exchange.trim().toLowerCase();
+  const leg2Exchange = values.leg2_exchange.trim().toLowerCase();
   return {
-    leg1_exchange: values.leg1_exchange,
+    leg1_exchange: leg1Exchange,
     leg1_market_type: normalizeMarketType(values.leg1_market_type),
-    leg1_symbol: values.leg1_symbol.trim().toUpperCase(),
-    leg2_exchange: values.leg2_exchange,
+    leg1_symbol: normalizeFormSymbol(leg1Exchange, values.leg1_symbol),
+    leg2_exchange: leg2Exchange,
     leg2_market_type: normalizeMarketType(values.leg2_market_type),
-    leg2_symbol: values.leg2_symbol.trim().toUpperCase(),
+    leg2_symbol: normalizeFormSymbol(leg2Exchange, values.leg2_symbol),
     leg2_multiplier: Number(values.leg2_multiplier)
+  };
+}
+
+function pairQueryFromUrl(): { values: PairSpreadFormValues; hours: number; intervalMinutes: number } | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const params = new URLSearchParams(window.location.search);
+  const leg1Exchange = params.get("leg1_exchange");
+  const leg1Symbol = params.get("leg1_symbol");
+  const leg2Exchange = params.get("leg2_exchange");
+  const leg2Symbol = params.get("leg2_symbol");
+  if (!leg1Exchange || !leg1Symbol || !leg2Exchange || !leg2Symbol) {
+    return null;
+  }
+  const rawInterval = Number(params.get("interval_minutes") ?? 1);
+  const intervalMinutes = intervalOptions.some((option) => option.value === rawInterval)
+    ? rawInterval
+    : 1;
+  const multiplier = Number(params.get("leg2_multiplier") ?? 1);
+  return {
+    values: normalizePairForm({
+      leg1_exchange: leg1Exchange,
+      leg1_market_type: normalizeMarketType(params.get("leg1_market_type")),
+      leg1_symbol: leg1Symbol,
+      leg2_exchange: leg2Exchange,
+      leg2_market_type: normalizeMarketType(params.get("leg2_market_type")),
+      leg2_symbol: leg2Symbol,
+      leg2_multiplier: Number.isFinite(multiplier) && multiplier > 0 ? multiplier : 1
+    }),
+    hours: clampHours(Number(params.get("hours") ?? 4)),
+    intervalMinutes
   };
 }
 
@@ -1083,8 +1153,12 @@ const fundingColumns: ColumnsType<PairSpreadFundingPoint> = [
 
 export function PairMonitorPage() {
   const [form] = Form.useForm<PairSpreadFormValues>();
+  const loadedUrlQueryRef = useRef("");
   const [hours, setHours] = useState(720);
   const [intervalMinutes, setIntervalMinutes] = useState(5);
+  const [locationSearch, setLocationSearch] = useState(() =>
+    typeof window === "undefined" ? "" : window.location.search
+  );
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [showPremiumCompare, setShowPremiumCompare] = useState(false);
   const [savedPresets, setSavedPresets] = useState<SavedPairSpreadPreset[]>(() => loadSavedPairPresets());
@@ -1249,6 +1323,40 @@ export function PairMonitorPage() {
     refreshPremiumCompareCurrent,
     showPremiumCompare
   ]);
+
+  useEffect(() => {
+    const syncLocationSearch = () => {
+      setLocationSearch(window.location.search);
+    };
+    window.addEventListener("popstate", syncLocationSearch);
+    window.addEventListener("taoli1:navigate", syncLocationSearch);
+    return () => {
+      window.removeEventListener("popstate", syncLocationSearch);
+      window.removeEventListener("taoli1:navigate", syncLocationSearch);
+    };
+  }, []);
+
+  useEffect(() => {
+    const incoming = pairQueryFromUrl();
+    if (!incoming) {
+      return;
+    }
+    const key = `${pairPresetId(incoming.values)}|${incoming.hours}|${incoming.intervalMinutes}`;
+    if (loadedUrlQueryRef.current === key) {
+      return;
+    }
+    loadedUrlQueryRef.current = key;
+    form.setFieldsValue(incoming.values);
+    setHours(incoming.hours);
+    setIntervalMinutes(incoming.intervalMinutes);
+    setAutoRefresh(false);
+    setShowPremiumCompare(false);
+    void runQuery({
+      values: incoming.values,
+      hours: incoming.hours,
+      intervalMinutes: incoming.intervalMinutes
+    });
+  }, [form, locationSearch, runQuery]);
 
   useEffect(() => {
     if (!autoRefresh || !result) {

@@ -17,6 +17,7 @@ import { Layout, Menu, Space, Spin, Typography } from "antd";
 import {
   lazy,
   Suspense,
+  useEffect,
   useMemo,
   useState,
   type ComponentType,
@@ -106,9 +107,47 @@ const lazyPages: Record<PageKey, LazyPage> = {
   )
 };
 
+const pageKeys = Object.keys(lazyPages) as PageKey[];
+
+function isPageKey(value: string | null): value is PageKey {
+  return value !== null && pageKeys.includes(value as PageKey);
+}
+
+function pageFromUrl(): PageKey | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const requested = new URLSearchParams(window.location.search).get("page");
+  return isPageKey(requested) ? requested : null;
+}
+
+function pushPageToUrl(page: PageKey): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const url = new URL(window.location.href);
+  url.searchParams.set("page", page);
+  window.history.pushState({}, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
 export function AppShell() {
-  const [page, setPage] = useState<PageKey>("dashboard");
+  const [page, setPage] = useState<PageKey>(() => pageFromUrl() ?? "dashboard");
   const CurrentPage = useMemo(() => lazyPages[page], [page]);
+
+  useEffect(() => {
+    const syncPageFromUrl = () => {
+      const requested = pageFromUrl();
+      if (requested) {
+        setPage(requested);
+      }
+    };
+    window.addEventListener("popstate", syncPageFromUrl);
+    window.addEventListener("taoli1:navigate", syncPageFromUrl);
+    return () => {
+      window.removeEventListener("popstate", syncPageFromUrl);
+      window.removeEventListener("taoli1:navigate", syncPageFromUrl);
+    };
+  }, []);
 
   return (
     <Layout className="app-shell">
@@ -123,7 +162,11 @@ export function AppShell() {
           theme="dark"
           mode="inline"
           selectedKeys={[page]}
-          onClick={(item) => setPage(item.key as PageKey)}
+          onClick={(item) => {
+            const nextPage = item.key as PageKey;
+            setPage(nextPage);
+            pushPageToUrl(nextPage);
+          }}
           items={[
             { key: "dashboard", icon: <DashboardOutlined />, label: "实时机会" },
             {

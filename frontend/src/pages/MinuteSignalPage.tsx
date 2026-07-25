@@ -1,4 +1,4 @@
-import { ReloadOutlined, ThunderboltOutlined } from "@ant-design/icons";
+import { LineChartOutlined, ReloadOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import {
   Alert,
   Button,
@@ -124,26 +124,60 @@ function parameterTitle(label: string, description: string) {
   );
 }
 
+function openPairSpread(row: MinuteSignalUniverseCandidate) {
+  const url = new URL(window.location.href);
+  url.searchParams.set("page", "pair-monitor");
+  url.searchParams.set("leg1_exchange", "binance");
+  url.searchParams.set("leg1_market_type", "future");
+  url.searchParams.set("leg1_symbol", row.futures_symbol);
+  url.searchParams.set("leg2_exchange", "binance_alpha");
+  url.searchParams.set("leg2_market_type", "spot");
+  url.searchParams.set("leg2_symbol", row.alpha_symbol);
+  url.searchParams.set("leg2_multiplier", "1");
+  url.searchParams.set("hours", "4");
+  url.searchParams.set("interval_minutes", "1");
+  window.history.pushState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  window.dispatchEvent(new Event("taoli1:navigate"));
+}
+
 const candidateColumns: ColumnsType<MinuteSignalUniverseCandidate> = [
   {
-    title: "标的",
+    title: parameterTitle("合约标的", "Binance Futures USDT 永续合约，用来和 Binance Alpha 现货计算价差。"),
     dataIndex: "futures_symbol",
     fixed: "left",
-    width: 120,
+    width: 170,
     render: (value: string, row) => (
       <Space direction="vertical" size={0}>
+        <Tag color="purple">Binance Futures 永续</Tag>
         <Typography.Text strong>{value}</Typography.Text>
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          {row.base_asset}
+          基础币：{row.base_asset}
         </Typography.Text>
       </Space>
     )
   },
   {
-    title: "Alpha 现货",
+    title: parameterTitle(
+      "Alpha 现货",
+      "Binance Alpha 的现货交易对，不是普通 Binance Spot。ALPHA_331USDT 这类名称是 Alpha 内部交易对名。"
+    ),
     dataIndex: "alpha_symbol",
-    width: 150,
-    render: (value: string) => <Tag color="blue">{value}</Tag>
+    width: 190,
+    render: (value: string, row) => (
+      <Space direction="vertical" size={0}>
+        <Tag color="blue">Binance Alpha 现货</Tag>
+        <Tooltip
+          title={`${value} 是 Binance Alpha 内部现货交易对名；${row.alpha_id} 是 Alpha token 内部 ID，USDT 是报价币。`}
+        >
+          <Tag color="geekblue" style={{ cursor: "help" }}>
+            {value}
+          </Tag>
+        </Tooltip>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          内部 ID：{row.alpha_id}
+        </Typography.Text>
+      </Space>
+    )
   },
   {
     title: "事件",
@@ -201,6 +235,24 @@ const candidateColumns: ColumnsType<MinuteSignalUniverseCandidate> = [
     align: "right",
     width: 140,
     render: (value: number) => `${volume(value)} USDT`
+  },
+  {
+    title: "价差",
+    key: "pair_spread",
+    fixed: "right",
+    width: 110,
+    render: (_, row) => (
+      <Tooltip title="跳到价差查询，查看 Binance Alpha 现货 - Binance Futures 永续 的价差曲线">
+        <Button
+          size="small"
+          type="link"
+          icon={<LineChartOutlined />}
+          onClick={() => openPairSpread(row)}
+        >
+          查看价差
+        </Button>
+      </Tooltip>
+    )
   },
   {
     title: "说明",
@@ -274,6 +326,10 @@ export function MinuteSignalPage() {
           </Typography.Title>
           <Typography.Text type="secondary">
             自动发现候选标的，不需要手工填写币种；系统先扫描候选池，再用 1 分钟 K 线复核冲击、回压和入场信号。
+          </Typography.Text>
+          <Typography.Text type="secondary">
+            当前价差方向为 Binance Alpha 现货 - Binance Futures 永续；ALPHA_331USDT 这类名称是
+            Binance Alpha 内部现货交易对名，不是普通 Binance Spot。
           </Typography.Text>
         </div>
         <Space className="toolbar-actions" wrap>
@@ -356,7 +412,7 @@ export function MinuteSignalPage() {
             dataSource={result?.candidates ?? []}
             loading={loading}
             pagination={{ pageSize: 20, showSizeChanger: true }}
-            scroll={{ x: 1400 }}
+            scroll={{ x: 1750 }}
             size="small"
           />
         </Space>

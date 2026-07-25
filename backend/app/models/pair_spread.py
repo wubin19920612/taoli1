@@ -1,13 +1,14 @@
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 
 from app.models.market import MarketType
 
 
 SUPPORTED_PAIR_SPREAD_EXCHANGES: tuple[str, ...] = (
     "binance",
+    "binance_alpha",
     "okx",
     "bybit",
     "gate",
@@ -37,6 +38,19 @@ def normalize_pair_spread_symbol(value: str) -> str:
     return compact if compact.endswith("USDT") else f"{compact}USDT"
 
 
+def normalize_binance_alpha_symbol(value: str) -> str:
+    normalized = value.strip().upper().replace("/", "").replace("-", "_")
+    if normalized.endswith("_USDT"):
+        normalized = f"{normalized.removesuffix('_USDT')}USDT"
+    if normalized.isdigit():
+        normalized = f"ALPHA_{normalized}"
+    if normalized.startswith("ALPHA") and not normalized.startswith("ALPHA_"):
+        normalized = f"ALPHA_{normalized.removeprefix('ALPHA')}"
+    if not normalized:
+        raise ValueError("symbol is required")
+    return normalized if normalized.endswith("USDT") else f"{normalized}USDT"
+
+
 class PairSpreadLegQuery(BaseModel):
     exchange: str
     symbol: str
@@ -53,8 +67,17 @@ class PairSpreadLegQuery(BaseModel):
 
     @field_validator("symbol")
     @classmethod
-    def normalize_symbol(cls, value: str) -> str:
+    def normalize_symbol(cls, value: str, info: ValidationInfo) -> str:
+        exchange = info.data.get("exchange") if isinstance(info.data, dict) else None
+        if exchange == "binance_alpha":
+            return normalize_binance_alpha_symbol(value)
         return normalize_pair_spread_symbol(value)
+
+    @model_validator(mode="after")
+    def validate_market_type(self) -> "PairSpreadLegQuery":
+        if self.exchange == "binance_alpha" and self.market_type != MarketType.SPOT:
+            raise ValueError("binance_alpha only supports spot pair-spread queries")
+        return self
 
 
 class PairSpreadKlinePoint(BaseModel):

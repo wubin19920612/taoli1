@@ -30,12 +30,15 @@ from app.models.pair_spread import (
     PairSpreadPriceField,
     PairSpreadQueryResult,
     PairSpreadValueStats,
+    normalize_binance_alpha_symbol,
 )
 
 MINUTE_MS = 60_000
 HYPERLIQUID_CANDLE_LIMIT = 5000
 PAIR_SPREAD_TIMEOUT = httpx.Timeout(18.0, connect=3.0, read=14.0, write=5.0, pool=5.0)
 DISPLAY_TZ = timezone(timedelta(hours=8))
+BINANCE_ALPHA_KLINES_URL = "https://www.binance.com/bapi/defi/v1/public/alpha-trade/klines"
+BINANCE_ALPHA_TICKER_URL = "https://www.binance.com/bapi/defi/v1/public/alpha-trade/ticker"
 
 
 class PairSpreadQueryError(RuntimeError):
@@ -501,6 +504,7 @@ class PairSpreadQueryService:
         if market_type == MarketType.SPOT:
             spot_handlers: dict[str, Callable[[str, datetime, datetime, int], Awaitable[list[PairSpreadKlinePoint]]]] = {
                 "binance": self._fetch_binance_spot_klines,
+                "binance_alpha": self._fetch_binance_alpha_spot_klines,
                 "okx": self._fetch_okx_spot_klines,
                 "bybit": self._fetch_bybit_spot_klines,
                 "gate": self._fetch_gate_spot_klines,
@@ -543,6 +547,7 @@ class PairSpreadQueryService:
         if market_type == MarketType.SPOT:
             spot_handlers: dict[str, Callable[[str], Awaitable[PairSpreadCurrentLeg]]] = {
                 "binance": self._fetch_binance_spot_current,
+                "binance_alpha": self._fetch_binance_alpha_spot_current,
                 "okx": self._fetch_okx_spot_current,
                 "bybit": self._fetch_bybit_spot_current,
                 "gate": self._fetch_gate_spot_current,
@@ -620,6 +625,12 @@ class PairSpreadQueryService:
                     await asyncio.sleep(0.15)
         raise RuntimeError(f"POST {_endpoint_label(url)}失败: {_exception_text(last_error)}")
 
+    async def _get_binance_alpha_payload(self, url: str) -> Any:
+        payload = await self._get_json(url)
+        if not isinstance(payload, dict) or payload.get("success") is False:
+            raise RuntimeError(f"Binance Alpha response is not successful: {payload!r}")
+        return payload.get("data")
+
     async def _fetch_binance_like_klines(
         self,
         base_url: str,
@@ -674,6 +685,38 @@ class PairSpreadQueryService:
                 f"&startTime={cursor}&endTime={chunk_end}&limit=1000"
             )
             rows = await self._get_json(url)
+            parsed = [_parse_array_kline(row, 0, 4) for row in rows if isinstance(row, list)]
+            parsed = [point for point in parsed if point is not None]
+            if not parsed:
+                cursor = chunk_end + 1
+                continue
+            points.extend(point for point in parsed if start <= point.bucket_at <= end)
+            next_cursor = max(_to_ms(point.bucket_at) for point in parsed) + interval_ms
+            if next_cursor <= cursor:
+                break
+            cursor = next_cursor
+        return _dedupe_sorted(points)
+
+    async def _fetch_binance_alpha_spot_klines(
+        self,
+        symbol: str,
+        start: datetime,
+        end: datetime,
+        interval_minutes: int,
+    ) -> list[PairSpreadKlinePoint]:
+        raw = normalize_binance_alpha_symbol(symbol)
+        start_ms = _to_ms(start)
+        end_ms = _to_ms(end)
+        interval_ms = _interval_ms(interval_minutes)
+        cursor = start_ms
+        points: list[PairSpreadKlinePoint] = []
+        while cursor < end_ms:
+            chunk_end = min(end_ms, cursor + 1000 * interval_ms - 1)
+            url = (
+                f"{BINANCE_ALPHA_KLINES_URL}?symbol={raw}&interval={interval_minutes}m"
+                f"&startTime={cursor}&endTime={chunk_end}&limit=1000"
+            )
+            rows = await self._get_binance_alpha_payload(url)
             parsed = [_parse_array_kline(row, 0, 4) for row in rows if isinstance(row, list)]
             parsed = [point for point in parsed if point is not None]
             if not parsed:
@@ -1054,6 +1097,25 @@ class PairSpreadQueryService:
             mark_price=None,
             index_price=None,
             mid_price=_mid_price(bid, ask),
+            last_price=_positive(last),
+            funding_rate_pct=None,
+            funding_next_rate_pct=None,
+            funding_next_time=None,
+        )
+
+    async def _fetch_binance_alpha_spot_current(self, symbol: str) -> PairSpreadCurrentLeg:
+        raw = normalize_binance_alpha_symbol(symbol)
+        payload = await self._get_binance_alpha_payload(f"{BINANCE_ALPHA_TICKER_URL}?symbol={raw}")
+        ticker = payload if isinstance(payload, dict) else {}
+        last = parse_float(ticker.get("lastPrice"))
+        return _current_leg(
+            exchange="binance_alpha",
+            symbol=raw,
+            market_type=MarketType.SPOT,
+            raw_symbol=raw,
+            mark_price=None,
+            index_price=None,
+            mid_price=None,
             last_price=_positive(last),
             funding_rate_pct=None,
             funding_next_rate_pct=None,
@@ -1705,7 +1767,11 @@ def _current_leg(
         if resolved is not None:
             return PairSpreadCurrentLeg(
                 exchange=exchange,
-                symbol=_compact_symbol(symbol),
+                symbol=(
+                    normalize_binance_alpha_symbol(symbol)
+                    if exchange == "binance_alpha"
+                    else _compact_symbol(symbol)
+                ),
                 market_type=market_type,
                 raw_symbol=raw_symbol,
                 price=resolved,
