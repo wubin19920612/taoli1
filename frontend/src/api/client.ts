@@ -49,6 +49,7 @@ import type {
   PhonePriceAlertRule,
   PremiumIndexCurrentSnapshot,
   PremiumIndexQueryResult,
+  MinuteSignalScanResult,
   RiskSettings,
   SecondLevelIndexComponentSample,
   SecondLevelMarketSample,
@@ -627,6 +628,21 @@ export async function getCurrentPremiumIndex(query: {
       throw new Error(extractErrorMessage(text, response.status));
     }
     return response.json() as Promise<PremiumIndexCurrentSnapshot>;
+  });
+}
+
+export async function scanMinuteSignals(query: {
+  symbol?: string;
+  alpha_symbol?: string;
+  hours?: number;
+} = {}): Promise<MinuteSignalScanResult> {
+  const url = buildUrl("/minute-signals/scan", query);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(extractErrorMessage(text, response.status));
+    }
+    return response.json() as Promise<MinuteSignalScanResult>;
   });
 }
 

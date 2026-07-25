@@ -637,6 +637,51 @@ export interface PremiumIndexQueryResult {
   warnings: string[];
 }
 
+export type MinuteSignalEventType =
+  | "SHOCK_ALERT"
+  | "ENTRY"
+  | "TAKE_PROFIT"
+  | "STOP_LOSS"
+  | "TIME_EXIT";
+
+export interface MinuteSignalEvent {
+  event_type: MinuteSignalEventType;
+  state_before: string;
+  state_after: string;
+  signal_time_cst: string;
+  planned_execution_time_cst: string;
+  reason: string;
+  signal_basis_bps: number | null;
+  premium_bps: number | null;
+  premium_low_5m_bps: number | null;
+  premium_low_15m_bps: number | null;
+  basis_peak_60m_bps: number | null;
+  basis_drawdown_bps: number | null;
+  compression_ratio: number | null;
+  signal_entry_basis_bps: number | null;
+  signal_basis_gain_bps: number | null;
+}
+
+export interface MinuteSignalPoint {
+  time_cst: string;
+  basis_bps: number | null;
+  premium_bps: number | null;
+  basis_peak_60m_bps: number | null;
+  compression_ratio: number | null;
+}
+
+export interface MinuteSignalScanResult {
+  alpha_symbol: string;
+  futures_symbol: string;
+  hours: number;
+  observed_at: string;
+  bar_count: number;
+  latest: Record<string, unknown> | null;
+  points: MinuteSignalPoint[];
+  events: MinuteSignalEvent[];
+  warnings: string[];
+}
+
 export interface AstroCardSettings {
   max_trade_usdt: number;
   leverage: number;

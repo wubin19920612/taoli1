@@ -30,6 +30,7 @@ type PageKey =
   | "opportunity-radar"
   | "pair-monitor"
   | "premium-index"
+  | "minute-signals"
   | "second-sampling"
   | "tradfi-perp"
   | "gate-twap"
@@ -67,6 +68,11 @@ const lazyPages: Record<PageKey, LazyPage> = {
   "premium-index": lazy(() =>
     import("../pages/PremiumIndexPage").then((module) => ({
       default: module.PremiumIndexPage
+    }))
+  ),
+  "minute-signals": lazy(() =>
+    import("../pages/MinuteSignalPage").then((module) => ({
+      default: module.MinuteSignalPage
     }))
   ),
   "second-sampling": lazy(() =>
@@ -144,6 +150,11 @@ export function AppShell() {
               key: "premium-index",
               icon: <LineChartOutlined />,
               label: "溢价指数"
+            },
+            {
+              key: "minute-signals",
+              icon: <ThunderboltOutlined />,
+              label: "1 分钟价差信号"
             },
             {
               key: "second-sampling",

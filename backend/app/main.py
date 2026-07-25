@@ -19,6 +19,7 @@ from app.api import (
     routes_health,
     routes_history,
     routes_index_components,
+    routes_minute_signals,
     routes_opportunities,
     routes_opportunity_radar,
     routes_pair_spread,
@@ -726,6 +727,7 @@ def create_app(
     app.state.funding_research_repo = None
     app.state.pair_spread_query_service_factory = None
     app.state.premium_index_query_service_factory = None
+    app.state.minute_signal_scan_service_factory = None
     app.state.second_level_sampler = None
     app.state.alert_engine = AlertEngine()
     app.state.phone_price_alert_engine = PhonePriceAlertEngine()
@@ -781,6 +783,7 @@ def create_app(
     app.include_router(routes_history.router, prefix="/api")
     app.include_router(routes_pair_spread.router, prefix="/api")
     app.include_router(routes_premium_index.router, prefix="/api")
+    app.include_router(routes_minute_signals.router, prefix="/api")
     app.include_router(routes_index_components.router, prefix="/api")
     app.include_router(routes_announcements.router, prefix="/api")
     app.include_router(routes_alerts.router, prefix="/api")
