@@ -29,12 +29,14 @@ type FormValues = {
   hours: number;
   max_symbols: number;
   min_volume_24h_usdt: number;
+  alert_cooldown_minutes: number;
 };
 
 const defaultValues: FormValues = {
   hours: 4,
   max_symbols: 30,
-  min_volume_24h_usdt: 100_000
+  min_volume_24h_usdt: 100_000,
+  alert_cooldown_minutes: 60
 };
 
 const eventLabels: Record<MinuteSignalEventType, string> = {
@@ -285,7 +287,8 @@ export function MinuteSignalPage() {
         const normalized = {
           hours: Number(values.hours),
           max_symbols: Number(values.max_symbols),
-          min_volume_24h_usdt: Number(values.min_volume_24h_usdt)
+          min_volume_24h_usdt: Number(values.min_volume_24h_usdt),
+          alert_cooldown_minutes: Number(values.alert_cooldown_minutes)
         };
         setResult(await scanMinuteSignalUniverse(normalized));
       } catch (exc) {
@@ -366,6 +369,16 @@ export function MinuteSignalPage() {
               formatter={(value) => `${value ?? ""}`}
             />
           </Form.Item>
+          <Form.Item
+            label={parameterTitle(
+              "飞书冷却分钟",
+              "同一个 Binance Futures / Binance Alpha 交易对在冷却期内最多推送一次 1 分钟价差信号。"
+            )}
+            name="alert_cooldown_minutes"
+            rules={[{ required: true }]}
+          >
+            <InputNumber min={1} max={10_080} step={5} style={{ width: 130 }} />
+          </Form.Item>
           <Form.Item>
             <Button htmlType="submit" icon={<ThunderboltOutlined />} loading={loading}>
               执行扫描
@@ -401,6 +414,7 @@ export function MinuteSignalPage() {
               {result ? `观察时间（北京时间）${formatTime(result.observed_at, true)}` : "尚未扫描"}
             </Tag>
             {result?.error_count ? <Tag color="red">{result.error_count} 个扫描失败</Tag> : null}
+            {result ? <Tag color="gold">飞书冷却 {result.alert_cooldown_minutes} 分钟</Tag> : null}
           </Space>
           <Table<MinuteSignalUniverseCandidate>
             className="opportunity-table"

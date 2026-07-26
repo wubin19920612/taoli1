@@ -712,6 +712,7 @@ export interface MinuteSignalUniverseScanResult {
   hours: number;
   max_symbols: number;
   min_volume_24h_usdt: number;
+  alert_cooldown_minutes: number;
   universe_count: number;
   eligible_count: number;
   scanned_count: number;

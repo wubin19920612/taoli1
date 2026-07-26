@@ -12,7 +12,12 @@ router = APIRouter(prefix="/minute-signals")
 logger = logging.getLogger(__name__)
 
 
-async def _send_scan_all_alert_if_needed(request: Request, result: dict) -> None:
+async def _send_scan_all_alert_if_needed(
+    request: Request,
+    result: dict,
+    *,
+    alert_cooldown_seconds: int,
+) -> None:
     notifier = getattr(request.app.state, "feishu_notifier", None)
     webhook_url = getattr(getattr(notifier, "config", None), "webhook_url", "")
     if notifier is None or not webhook_url:
@@ -21,7 +26,7 @@ async def _send_scan_all_alert_if_needed(request: Request, result: dict) -> None
     if engine is None:
         engine = MinuteSignalAlertEngine()
         request.app.state.minute_signal_alert_engine = engine
-    matches = engine.evaluate(result)
+    matches = engine.evaluate(result, alert_cooldown_seconds=alert_cooldown_seconds)
     if not matches:
         return
     try:
@@ -64,6 +69,7 @@ async def scan_all_minute_signals(
     hours: int = Query(default=4, ge=1, le=24),
     max_symbols: int = Query(default=30, ge=5, le=100),
     min_volume_24h_usdt: float = Query(default=100_000, ge=0),
+    alert_cooldown_minutes: int = Query(default=60, ge=1, le=10_080),
 ) -> dict:
     service_factory = getattr(request.app.state, "minute_signal_scan_service_factory", None)
     service = service_factory() if service_factory is not None else MinuteSignalScanService()
@@ -73,7 +79,12 @@ async def scan_all_minute_signals(
             max_symbols=max_symbols,
             min_volume_24h_usdt=min_volume_24h_usdt,
         )
-        await _send_scan_all_alert_if_needed(request, result)
+        result["alert_cooldown_minutes"] = alert_cooldown_minutes
+        await _send_scan_all_alert_if_needed(
+            request,
+            result,
+            alert_cooldown_seconds=alert_cooldown_minutes * 60,
+        )
         return result
     except Exception as exc:  # noqa: BLE001 - surface discovery failures to the dashboard.
         raise HTTPException(status_code=502, detail=f"全市场分钟信号扫描失败: {exc}") from exc

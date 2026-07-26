@@ -88,32 +88,47 @@ class GlobalMinuteSignalConfig:
 class MinuteSignalAlertEngine:
     def __init__(self, *, dedupe_retention_seconds: int = 86_400) -> None:
         self.dedupe_retention_seconds = dedupe_retention_seconds
-        self._sent_at_by_key: dict[str, datetime] = {}
+        self._sent_at_by_signal_key: dict[str, datetime] = {}
+        self._last_sent_at_by_pair_key: dict[str, datetime] = {}
 
     def evaluate(
         self,
         scan_result: dict[str, Any],
         *,
+        alert_cooldown_seconds: int,
         now: datetime | None = None,
     ) -> list[dict[str, Any]]:
         current = now or datetime.now(UTC)
-        self._prune(current)
+        self._prune(current, alert_cooldown_seconds=alert_cooldown_seconds)
         matches: list[dict[str, Any]] = []
         for candidate in minute_signal_alert_candidates(scan_result):
-            key = minute_signal_alert_key(candidate)
-            if key in self._sent_at_by_key:
+            signal_key = minute_signal_alert_key(candidate)
+            if signal_key in self._sent_at_by_signal_key:
                 continue
-            self._sent_at_by_key[key] = current
+            pair_key = minute_signal_alert_pair_key(candidate)
+            last_sent_at = self._last_sent_at_by_pair_key.get(pair_key)
+            if (
+                last_sent_at is not None
+                and (current - last_sent_at).total_seconds() < alert_cooldown_seconds
+            ):
+                continue
+            self._sent_at_by_signal_key[signal_key] = current
+            self._last_sent_at_by_pair_key[pair_key] = current
             matches.append(candidate)
         return matches
 
     def release_failed(self, candidate: dict[str, Any]) -> None:
-        self._sent_at_by_key.pop(minute_signal_alert_key(candidate), None)
+        self._sent_at_by_signal_key.pop(minute_signal_alert_key(candidate), None)
+        self._last_sent_at_by_pair_key.pop(minute_signal_alert_pair_key(candidate), None)
 
-    def _prune(self, now: datetime) -> None:
-        for key, sent_at in list(self._sent_at_by_key.items()):
+    def _prune(self, now: datetime, *, alert_cooldown_seconds: int) -> None:
+        for key, sent_at in list(self._sent_at_by_signal_key.items()):
             if (now - sent_at).total_seconds() > self.dedupe_retention_seconds:
-                self._sent_at_by_key.pop(key, None)
+                self._sent_at_by_signal_key.pop(key, None)
+        retention = max(alert_cooldown_seconds, 0)
+        for key, sent_at in list(self._last_sent_at_by_pair_key.items()):
+            if (now - sent_at).total_seconds() > retention:
+                self._last_sent_at_by_pair_key.pop(key, None)
 
 
 def _finite(value: Any) -> float | None:
@@ -178,6 +193,15 @@ def minute_signal_alert_key(candidate: dict[str, Any]) -> str:
             str(candidate.get("alpha_symbol") or "").upper(),
             str(candidate.get("event_type") or ""),
             str(candidate.get("signal_time_cst") or ""),
+        ]
+    )
+
+
+def minute_signal_alert_pair_key(candidate: dict[str, Any]) -> str:
+    return "|".join(
+        [
+            str(candidate.get("futures_symbol") or "").upper(),
+            str(candidate.get("alpha_symbol") or "").upper(),
         ]
     )
 

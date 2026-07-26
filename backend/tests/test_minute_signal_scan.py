@@ -342,15 +342,34 @@ def _scan_all_result(candidates: list[dict]) -> dict:
     }
 
 
-def test_minute_signal_alert_engine_dedupes_same_signal_but_allows_new_wave() -> None:
+def test_minute_signal_alert_engine_applies_pair_cooldown() -> None:
     engine = MinuteSignalAlertEngine()
+    now = datetime(2026, 7, 25, 2, 0, tzinfo=UTC)
     first = _scan_all_result([_signal_candidate()])
     second = _scan_all_result([_signal_candidate()])
     next_wave = _scan_all_result([_signal_candidate(signal_time_cst="2026-07-25T10:15+08:00")])
+    after_cooldown = _scan_all_result(
+        [_signal_candidate(signal_time_cst="2026-07-25T11:01+08:00")]
+    )
 
-    assert len(engine.evaluate(first)) == 1
-    assert engine.evaluate(second) == []
-    assert len(engine.evaluate(next_wave)) == 1
+    assert len(engine.evaluate(first, alert_cooldown_seconds=3600, now=now)) == 1
+    assert engine.evaluate(
+        second,
+        alert_cooldown_seconds=3600,
+        now=now + timedelta(minutes=1),
+    ) == []
+    assert engine.evaluate(
+        next_wave,
+        alert_cooldown_seconds=3600,
+        now=now + timedelta(minutes=15),
+    ) == []
+    assert len(
+        engine.evaluate(
+            after_cooldown,
+            alert_cooldown_seconds=3600,
+            now=now + timedelta(minutes=61),
+        )
+    ) == 1
 
 
 def test_minute_signal_alert_message_uses_distinct_title_and_candidate_details() -> None:
@@ -392,11 +411,16 @@ def test_minute_signal_scan_all_route_sends_feishu_alert_for_targets() -> None:
     app.state.feishu_notifier = notifier
 
     with TestClient(app) as client:
-        first = client.get("/api/minute-signals/scan-all?hours=4&max_symbols=5")
-        second = client.get("/api/minute-signals/scan-all?hours=4&max_symbols=5")
+        first = client.get(
+            "/api/minute-signals/scan-all?hours=4&max_symbols=5&alert_cooldown_minutes=30"
+        )
+        second = client.get(
+            "/api/minute-signals/scan-all?hours=4&max_symbols=5&alert_cooldown_minutes=30"
+        )
 
     assert first.status_code == 200
     assert second.status_code == 200
+    assert first.json()["alert_cooldown_minutes"] == 30
     assert len(notifier.messages) == 1
     assert "【1分钟价差信号】发现目标" in notifier.messages[0]
     assert "[机会雷达]" not in notifier.messages[0]

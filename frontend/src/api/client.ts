@@ -651,6 +651,7 @@ export async function scanMinuteSignalUniverse(query: {
   hours?: number;
   max_symbols?: number;
   min_volume_24h_usdt?: number;
+  alert_cooldown_minutes?: number;
 } = {}): Promise<MinuteSignalUniverseScanResult> {
   const url = buildUrl("/minute-signals/scan-all", query);
   return fetch(url, { headers: authHeaders() }).then(async (response) => {
