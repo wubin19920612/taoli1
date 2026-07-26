@@ -1,4 +1,4 @@
-import { ReloadOutlined, SaveOutlined, SearchOutlined } from "@ant-design/icons";
+import { LineChartOutlined, ReloadOutlined, SaveOutlined, SearchOutlined } from "@ant-design/icons";
 import {
   Alert,
   Button,
@@ -12,7 +12,7 @@ import {
   Typography
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 
@@ -20,6 +20,7 @@ import { getCurrentPremiumIndex, queryPairSpread, queryPremiumIndex } from "../a
 import type {
   MarketType,
   PairSpreadFundingPoint,
+  PairSpreadLegQuery,
   PairSpreadPoint,
   PairSpreadPriceField,
   PairSpreadQueryResult,
@@ -105,6 +106,8 @@ const marketTypeOptions: Array<{ label: string; value: MarketType }> = [
   { label: "合约", value: "future" },
   { label: "现货", value: "spot" }
 ];
+
+const premiumIndexExchanges = new Set(["binance", "okx", "bybit", "gate", "bitget", "aster", "hyperliquid"]);
 
 const PAIR_SPREAD_PRESETS_KEY = "taoli1.pairSpread.presets.v1";
 const MAX_SAVED_PAIR_PRESETS = 24;
@@ -363,6 +366,21 @@ function supportsPremiumCompare(result: PairSpreadQueryResult): boolean {
   return result.leg1.market_type === "future" && result.leg2.market_type === "future";
 }
 
+function supportsPremiumIndexLeg(leg: PairSpreadLegQuery | null | undefined): leg is PairSpreadLegQuery {
+  return Boolean(leg && leg.market_type === "future" && premiumIndexExchanges.has(leg.exchange));
+}
+
+function openPremiumIndexFromLeg(leg: PairSpreadLegQuery, hours: number, intervalMinutes: number) {
+  const url = new URL(window.location.href);
+  url.searchParams.set("page", "premium-index");
+  url.searchParams.set("exchange", leg.exchange);
+  url.searchParams.set("symbol", leg.symbol);
+  url.searchParams.set("hours", String(clampHours(hours)));
+  url.searchParams.set("interval_minutes", String(intervalMinutes));
+  window.history.pushState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  window.dispatchEvent(new Event("taoli1:navigate"));
+}
+
 function spreadLinePath(
   points: PairSpreadPoint[],
   xAt: (index: number) => number,
@@ -577,18 +595,21 @@ function MetricCard({
   label,
   value,
   sub,
-  tone = "neutral"
+  tone = "neutral",
+  action = null
 }: {
   label: string;
   value: string;
-  sub: string;
+  sub: ReactNode;
   tone?: "positive" | "negative" | "neutral";
+  action?: ReactNode;
 }) {
   return (
     <div className={`pair-metric-card pair-metric-${tone}`}>
       <Typography.Text className="pair-metric-label">{label}</Typography.Text>
       <div className="pair-metric-value">{value}</div>
       <Typography.Text className="pair-metric-sub">{sub}</Typography.Text>
+      {action ? <div style={{ marginTop: 6 }}>{action}</div> : null}
     </div>
   );
 }
@@ -1433,6 +1454,10 @@ export function PairMonitorPage() {
     current && result && current.leg1.price > 0
       ? (current.leg2.price * result.leg2_multiplier) / current.leg1.price
       : null;
+  const leftPremiumLeg = supportsPremiumIndexLeg(result?.leg1) ? result.leg1 : null;
+  const rightPremiumLeg = supportsPremiumIndexLeg(result?.leg2) ? result.leg2 : null;
+  const premiumLinkHours = result?.hours ?? hours;
+  const premiumLinkIntervalMinutes = result?.interval_minutes ?? intervalMinutes;
 
   return (
     <div className="page pair-monitor-page pair-terminal-page">
@@ -1557,11 +1582,35 @@ export function PairMonitorPage() {
           label={leftLegLabel(result)}
           value={price(current?.leg1.price)}
           sub={current ? priceFieldLabels[current.leg1.price_field] : "-"}
+          action={
+            leftPremiumLeg ? (
+              <Button
+                size="small"
+                type="link"
+                icon={<LineChartOutlined />}
+                onClick={() => openPremiumIndexFromLeg(leftPremiumLeg, premiumLinkHours, premiumLinkIntervalMinutes)}
+              >
+                查看溢价指数
+              </Button>
+            ) : null
+          }
         />
         <MetricCard
           label={rightLegLabel(result)}
           value={price(current?.leg2.price)}
           sub={current ? priceFieldLabels[current.leg2.price_field] : "-"}
+          action={
+            rightPremiumLeg ? (
+              <Button
+                size="small"
+                type="link"
+                icon={<LineChartOutlined />}
+                onClick={() => openPremiumIndexFromLeg(rightPremiumLeg, premiumLinkHours, premiumLinkIntervalMinutes)}
+              >
+                查看溢价指数
+              </Button>
+            ) : null
+          }
         />
         <MetricCard
           label="差价"

@@ -106,6 +106,7 @@ describe("PairMonitorPage", () => {
 
   beforeEach(() => {
     requests.length = 0;
+    window.history.pushState({}, "", "/");
     window.localStorage.clear();
     vi.stubGlobal(
       "fetch",
@@ -122,6 +123,7 @@ describe("PairMonitorPage", () => {
   });
 
   afterEach(() => {
+    window.history.pushState({}, "", "/");
     window.localStorage.clear();
     vi.unstubAllGlobals();
   });
@@ -195,5 +197,21 @@ describe("PairMonitorPage", () => {
       ).toBe(true);
     });
     expect((await screen.findAllByText("Binance Alpha · 现货 · ALPHA_331USDT")).length).toBeGreaterThan(0);
+  });
+
+  it("opens the premium index page for a futures leg from the spread result", async () => {
+    const user = userEvent.setup();
+    render(<PairMonitorPage />);
+
+    await user.click(screen.getByRole("button", { name: /查询/ }));
+    const premiumButtons = await screen.findAllByRole("button", { name: /查看溢价指数/ });
+    await user.click(premiumButtons[0]);
+
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("page")).toBe("premium-index");
+    expect(params.get("exchange")).toBe("bitget");
+    expect(params.get("symbol")).toBe("SKHYUSDT");
+    expect(params.get("hours")).toBe("720");
+    expect(params.get("interval_minutes")).toBe("5");
   });
 });

@@ -1,7 +1,7 @@
 import { ReloadOutlined, SaveOutlined, SearchOutlined } from "@ant-design/icons";
 import { Alert, Button, Form, Input, InputNumber, Select, Switch, Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 
@@ -608,8 +608,29 @@ function normalizeSymbol(value: string): string {
 
 function normalizePremiumForm(values: PremiumIndexFormValues): PremiumIndexFormValues {
   return {
-    exchange: values.exchange,
+    exchange: values.exchange.trim().toLowerCase(),
     symbol: normalizeSymbol(values.symbol)
+  };
+}
+
+function normalizeIntervalMinutes(value: number): number {
+  return intervalOptions.some((option) => option.value === value) ? value : 1;
+}
+
+function premiumQueryFromUrl(): { values: PremiumIndexFormValues; hours: number; intervalMinutes: number } | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const params = new URLSearchParams(window.location.search);
+  const exchange = params.get("exchange");
+  const symbol = params.get("symbol");
+  if (!exchange || !symbol) {
+    return null;
+  }
+  return {
+    values: normalizePremiumForm({ exchange, symbol }),
+    hours: clampHours(Number(params.get("hours") ?? 12)),
+    intervalMinutes: normalizeIntervalMinutes(Number(params.get("interval_minutes") ?? 1))
   };
 }
 
@@ -1142,10 +1163,14 @@ const pointColumns: ColumnsType<PremiumIndexPoint> = [
 
 export function PremiumIndexPage() {
   const [form] = Form.useForm<PremiumIndexFormValues>();
+  const loadedUrlQueryRef = useRef("");
   const [hours, setHours] = useState(12);
   const [intervalMinutes, setIntervalMinutes] = useState(1);
   const [samplingIntervalSeconds, setSamplingIntervalSeconds] = useState(loadSamplingIntervalSeconds);
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const [locationSearch, setLocationSearch] = useState(() =>
+    typeof window === "undefined" ? "" : window.location.search
+  );
   const [savedPresets, setSavedPresets] = useState<SavedPremiumIndexPreset[]>(() => loadSavedPresets());
   const [result, setResult] = useState<PremiumIndexQueryResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -1202,6 +1227,38 @@ export function PremiumIndexPage() {
   useEffect(() => {
     storeSamplingIntervalSeconds(samplingIntervalSeconds);
   }, [samplingIntervalSeconds]);
+
+  useEffect(() => {
+    const syncLocationSearch = () => {
+      setLocationSearch(window.location.search);
+    };
+    window.addEventListener("popstate", syncLocationSearch);
+    window.addEventListener("taoli1:navigate", syncLocationSearch);
+    return () => {
+      window.removeEventListener("popstate", syncLocationSearch);
+      window.removeEventListener("taoli1:navigate", syncLocationSearch);
+    };
+  }, []);
+
+  useEffect(() => {
+    const incoming = premiumQueryFromUrl();
+    if (!incoming) {
+      return;
+    }
+    const key = `${presetId(incoming.values)}|${incoming.hours}|${incoming.intervalMinutes}`;
+    if (loadedUrlQueryRef.current === key) {
+      return;
+    }
+    loadedUrlQueryRef.current = key;
+    form.setFieldsValue(incoming.values);
+    setHours(incoming.hours);
+    setIntervalMinutes(incoming.intervalMinutes);
+    void runQuery({
+      values: incoming.values,
+      hours: incoming.hours,
+      intervalMinutes: incoming.intervalMinutes
+    });
+  }, [form, locationSearch, runQuery]);
 
   useEffect(() => {
     if (!autoRefresh || !result) {

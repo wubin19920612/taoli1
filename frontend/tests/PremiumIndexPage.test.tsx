@@ -6,9 +6,9 @@ import { PremiumIndexPage } from "../src/pages/PremiumIndexPage";
 
 const observedAt = "2026-07-12T02:00:00Z";
 
-function premiumResult(symbol: string, hours: number, intervalMinutes: number) {
+function premiumResult(symbol: string, hours: number, intervalMinutes: number, exchange = "binance") {
   return {
-    exchange: "binance",
+    exchange,
     symbol,
     hours,
     interval_minutes: intervalMinutes,
@@ -24,7 +24,7 @@ function premiumResult(symbol: string, hours: number, intervalMinutes: number) {
     },
     current: {
       observed_at: observedAt,
-      exchange: "binance",
+      exchange,
       symbol,
       raw_symbol: `${symbol}USDT`,
       mark_price: 101,
@@ -239,6 +239,7 @@ describe("PremiumIndexPage", () => {
 
   beforeEach(() => {
     requests.length = 0;
+    window.history.pushState({}, "", "/");
     window.localStorage.clear();
     vi.stubGlobal(
       "fetch",
@@ -247,14 +248,16 @@ describe("PremiumIndexPage", () => {
         requests.push(urlText);
         const url = new URL(urlText, "http://localhost");
         if (url.pathname.includes("/premium-index/query")) {
+          const exchange = url.searchParams.get("exchange") ?? "binance";
           const symbol = url.searchParams.get("symbol") ?? "BTC";
           const hours = Number(url.searchParams.get("hours") ?? "12");
           const intervalMinutes = Number(url.searchParams.get("interval_minutes") ?? "1");
-          return Response.json(premiumResult(symbol, hours, intervalMinutes));
+          return Response.json(premiumResult(symbol, hours, intervalMinutes, exchange));
         }
         if (url.pathname.includes("/premium-index/current")) {
+          const exchange = url.searchParams.get("exchange") ?? "binance";
           const symbol = url.searchParams.get("symbol") ?? "BTC";
-          return Response.json(premiumResult(symbol, 12, 1).current);
+          return Response.json(premiumResult(symbol, 12, 1, exchange).current);
         }
         return Response.json({});
       })
@@ -262,8 +265,34 @@ describe("PremiumIndexPage", () => {
   });
 
   afterEach(() => {
+    window.history.pushState({}, "", "/");
     window.localStorage.clear();
     vi.unstubAllGlobals();
+  });
+
+  it("auto-runs a premium index query from URL parameters", async () => {
+    window.history.pushState(
+      {},
+      "",
+      "/?page=premium-index&exchange=hyperliquid&symbol=SKHXUSDT&hours=6&interval_minutes=1"
+    );
+
+    render(<PremiumIndexPage />);
+
+    await waitFor(() => {
+      expect(
+        requests.some(
+          (request) =>
+            request.includes("/premium-index/query") &&
+            request.includes("exchange=hyperliquid") &&
+            request.includes("symbol=SKHXUSDT") &&
+            request.includes("hours=6") &&
+            request.includes("interval_minutes=1")
+        )
+      ).toBe(true);
+    });
+    expect((screen.getByPlaceholderText("BTC") as HTMLInputElement).value).toBe("SKHXUSDT");
+    expect(await screen.findByText("实时溢价指数")).toBeTruthy();
   });
 
   it("saves premium index presets and queries a saved preset", async () => {
