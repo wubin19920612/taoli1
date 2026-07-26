@@ -64,6 +64,14 @@ type PairPremiumCompareResult = {
   warnings: string[];
 };
 
+type LastPairSpreadState = {
+  values: PairSpreadFormValues;
+  hours: number;
+  intervalMinutes: number;
+  result: PairSpreadQueryResult;
+  savedAt: string;
+};
+
 const defaultFormValues: PairSpreadFormValues = {
   leg1_exchange: "bitget",
   leg1_market_type: "future",
@@ -109,6 +117,7 @@ const marketTypeOptions: Array<{ label: string; value: MarketType }> = [
 
 const premiumIndexExchanges = new Set(["binance", "okx", "bybit", "gate", "bitget", "aster", "hyperliquid"]);
 
+const LAST_PAIR_SPREAD_STATE_KEY = "taoli1.pairSpread.lastState.v1";
 const PAIR_SPREAD_PRESETS_KEY = "taoli1.pairSpread.presets.v1";
 const MAX_SAVED_PAIR_PRESETS = 24;
 
@@ -254,6 +263,144 @@ function pairPresetId(values: PairSpreadFormValues): string {
   ].join("|");
 }
 
+function pairQueryKey(values: PairSpreadFormValues, hours: number, intervalMinutes: number): string {
+  return `${pairPresetId(values)}|${clampHours(hours)}|${intervalMinutes}`;
+}
+
+function pairFormFromResult(result: PairSpreadQueryResult): PairSpreadFormValues {
+  return {
+    leg1_exchange: result.leg1.exchange,
+    leg1_market_type: result.leg1.market_type,
+    leg1_symbol: result.leg1.symbol,
+    leg2_exchange: result.leg2.exchange,
+    leg2_market_type: result.leg2.market_type,
+    leg2_symbol: result.leg2.symbol,
+    leg2_multiplier: result.leg2_multiplier
+  };
+}
+
+function applyPairQueryParams(
+  url: URL,
+  values: PairSpreadFormValues,
+  hours: number,
+  intervalMinutes: number
+): void {
+  url.searchParams.set("leg1_exchange", values.leg1_exchange);
+  url.searchParams.set("leg1_market_type", values.leg1_market_type);
+  url.searchParams.set("leg1_symbol", values.leg1_symbol);
+  url.searchParams.set("leg2_exchange", values.leg2_exchange);
+  url.searchParams.set("leg2_market_type", values.leg2_market_type);
+  url.searchParams.set("leg2_symbol", values.leg2_symbol);
+  url.searchParams.set("leg2_multiplier", compactNumber(values.leg2_multiplier, 8));
+  url.searchParams.set("hours", String(clampHours(hours)));
+  url.searchParams.set("interval_minutes", String(intervalMinutes));
+}
+
+function replacePairQueryInUrl(values: PairSpreadFormValues, hours: number, intervalMinutes: number): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const url = new URL(window.location.href);
+  const currentPage = url.searchParams.get("page");
+  if (currentPage && currentPage !== "pair-monitor") {
+    return;
+  }
+  url.searchParams.set("page", "pair-monitor");
+  url.searchParams.delete("exchange");
+  url.searchParams.delete("symbol");
+  url.searchParams.delete("from");
+  applyPairQueryParams(url, values, hours, intervalMinutes);
+  window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+function isPairSpreadLegQuery(value: unknown): value is PairSpreadLegQuery {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const item = value as Partial<PairSpreadLegQuery>;
+  return (
+    typeof item.exchange === "string" &&
+    typeof item.symbol === "string" &&
+    (item.market_type === "future" || item.market_type === "spot")
+  );
+}
+
+function isPairSpreadQueryResult(value: unknown): value is PairSpreadQueryResult {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const item = value as Partial<PairSpreadQueryResult>;
+  return (
+    isPairSpreadLegQuery(item.leg1) &&
+    isPairSpreadLegQuery(item.leg2) &&
+    typeof item.hours === "number" &&
+    typeof item.interval_minutes === "number" &&
+    typeof item.leg2_multiplier === "number" &&
+    Array.isArray(item.points) &&
+    Array.isArray(item.funding_history) &&
+    Array.isArray(item.warnings)
+  );
+}
+
+function isLastPairSpreadState(value: unknown): value is LastPairSpreadState {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const item = value as Partial<LastPairSpreadState>;
+  return (
+    typeof item.savedAt === "string" &&
+    typeof item.hours === "number" &&
+    typeof item.intervalMinutes === "number" &&
+    Boolean(item.values) &&
+    isPairSpreadQueryResult(item.result)
+  );
+}
+
+function loadLastPairSpreadState(): LastPairSpreadState | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(window.sessionStorage.getItem(LAST_PAIR_SPREAD_STATE_KEY) ?? "null");
+    if (!isLastPairSpreadState(parsed)) {
+      return null;
+    }
+    const values = normalizePairForm(parsed.values);
+    return {
+      values,
+      hours: clampHours(parsed.hours),
+      intervalMinutes: parsed.intervalMinutes,
+      result: parsed.result,
+      savedAt: parsed.savedAt
+    };
+  } catch {
+    return null;
+  }
+}
+
+function storeLastPairSpreadState(
+  values: PairSpreadFormValues,
+  hours: number,
+  intervalMinutes: number,
+  result: PairSpreadQueryResult
+): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const state: LastPairSpreadState = {
+    values,
+    hours: clampHours(hours),
+    intervalMinutes,
+    result,
+    savedAt: new Date().toISOString()
+  };
+  try {
+    window.sessionStorage.setItem(LAST_PAIR_SPREAD_STATE_KEY, JSON.stringify(state));
+  } catch {
+    window.sessionStorage.removeItem(LAST_PAIR_SPREAD_STATE_KEY);
+  }
+}
+
 function isSavedPreset(value: unknown): value is LegacySavedPairSpreadPreset {
   if (!value || typeof value !== "object") {
     return false;
@@ -370,9 +517,18 @@ function supportsPremiumIndexLeg(leg: PairSpreadLegQuery | null | undefined): le
   return Boolean(leg && leg.market_type === "future" && premiumIndexExchanges.has(leg.exchange));
 }
 
-function openPremiumIndexFromLeg(leg: PairSpreadLegQuery, hours: number, intervalMinutes: number) {
+function openPremiumIndexFromLeg(
+  leg: PairSpreadLegQuery,
+  hours: number,
+  intervalMinutes: number,
+  pairResult: PairSpreadQueryResult | null
+) {
   const url = new URL(window.location.href);
+  if (pairResult) {
+    applyPairQueryParams(url, pairFormFromResult(pairResult), pairResult.hours, pairResult.interval_minutes);
+  }
   url.searchParams.set("page", "premium-index");
+  url.searchParams.set("from", "pair-monitor");
   url.searchParams.set("exchange", leg.exchange);
   url.searchParams.set("symbol", leg.symbol);
   url.searchParams.set("hours", String(clampHours(hours)));
@@ -1174,16 +1330,30 @@ const fundingColumns: ColumnsType<PairSpreadFundingPoint> = [
 
 export function PairMonitorPage() {
   const [form] = Form.useForm<PairSpreadFormValues>();
+  const initialUrlQuery = useMemo(() => pairQueryFromUrl(), []);
+  const initialCachedState = useMemo(() => {
+    const cached = loadLastPairSpreadState();
+    if (!cached) {
+      return null;
+    }
+    if (!initialUrlQuery) {
+      return cached;
+    }
+    return pairQueryKey(cached.values, cached.hours, cached.intervalMinutes) ===
+      pairQueryKey(initialUrlQuery.values, initialUrlQuery.hours, initialUrlQuery.intervalMinutes)
+      ? cached
+      : null;
+  }, [initialUrlQuery]);
   const loadedUrlQueryRef = useRef("");
-  const [hours, setHours] = useState(720);
-  const [intervalMinutes, setIntervalMinutes] = useState(5);
+  const [hours, setHours] = useState(() => initialCachedState?.hours ?? 720);
+  const [intervalMinutes, setIntervalMinutes] = useState(() => initialCachedState?.intervalMinutes ?? 5);
   const [locationSearch, setLocationSearch] = useState(() =>
     typeof window === "undefined" ? "" : window.location.search
   );
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [showPremiumCompare, setShowPremiumCompare] = useState(false);
   const [savedPresets, setSavedPresets] = useState<SavedPairSpreadPreset[]>(() => loadSavedPairPresets());
-  const [result, setResult] = useState<PairSpreadQueryResult | null>(null);
+  const [result, setResult] = useState<PairSpreadQueryResult | null>(() => initialCachedState?.result ?? null);
   const [premiumCompare, setPremiumCompare] = useState<PairPremiumCompareResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [premiumLoading, setPremiumLoading] = useState(false);
@@ -1323,6 +1493,10 @@ export function PairMonitorPage() {
         hours: queryHours
       });
       setResult(next);
+      const resultValues = pairFormFromResult(next);
+      form.setFieldsValue(resultValues);
+      storeLastPairSpreadState(resultValues, queryHours, queryInterval, next);
+      replacePairQueryInUrl(resultValues, queryHours, queryInterval);
       if (showPremiumCompare) {
         if (override?.premiumMode === "current" && premiumCompare) {
           await refreshPremiumCompareCurrent(next);
@@ -1466,7 +1640,7 @@ export function PairMonitorPage() {
       {result?.warnings.length ? <Alert type="warning" message={result.warnings.join("；")} showIcon /> : null}
 
       <section className="pair-query-panel">
-        <Form form={form} initialValues={defaultFormValues} disabled={loading}>
+        <Form form={form} initialValues={initialCachedState?.values ?? defaultFormValues} disabled={loading}>
           <div className="pair-query-bar">
             <Form.Item name="leg1_exchange" rules={[{ required: true }]} className="pair-query-item">
               <Select options={exchangeOptions} showSearch />
@@ -1588,7 +1762,9 @@ export function PairMonitorPage() {
                 size="small"
                 type="link"
                 icon={<LineChartOutlined />}
-                onClick={() => openPremiumIndexFromLeg(leftPremiumLeg, premiumLinkHours, premiumLinkIntervalMinutes)}
+                onClick={() =>
+                  openPremiumIndexFromLeg(leftPremiumLeg, premiumLinkHours, premiumLinkIntervalMinutes, result)
+                }
               >
                 查看溢价指数
               </Button>
@@ -1605,7 +1781,9 @@ export function PairMonitorPage() {
                 size="small"
                 type="link"
                 icon={<LineChartOutlined />}
-                onClick={() => openPremiumIndexFromLeg(rightPremiumLeg, premiumLinkHours, premiumLinkIntervalMinutes)}
+                onClick={() =>
+                  openPremiumIndexFromLeg(rightPremiumLeg, premiumLinkHours, premiumLinkIntervalMinutes, result)
+                }
               >
                 查看溢价指数
               </Button>

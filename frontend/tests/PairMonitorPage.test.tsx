@@ -108,6 +108,7 @@ describe("PairMonitorPage", () => {
     requests.length = 0;
     window.history.pushState({}, "", "/");
     window.localStorage.clear();
+    window.sessionStorage.clear();
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
@@ -125,6 +126,7 @@ describe("PairMonitorPage", () => {
   afterEach(() => {
     window.history.pushState({}, "", "/");
     window.localStorage.clear();
+    window.sessionStorage.clear();
     vi.unstubAllGlobals();
   });
 
@@ -209,9 +211,40 @@ describe("PairMonitorPage", () => {
 
     const params = new URLSearchParams(window.location.search);
     expect(params.get("page")).toBe("premium-index");
+    expect(params.get("from")).toBe("pair-monitor");
     expect(params.get("exchange")).toBe("bitget");
     expect(params.get("symbol")).toBe("SKHYUSDT");
+    expect(params.get("leg1_exchange")).toBe("bitget");
+    expect(params.get("leg1_market_type")).toBe("future");
+    expect(params.get("leg1_symbol")).toBe("SKHYUSDT");
+    expect(params.get("leg2_exchange")).toBe("bitget");
+    expect(params.get("leg2_market_type")).toBe("future");
+    expect(params.get("leg2_symbol")).toBe("SKHYNIXUSDT");
+    expect(params.get("leg2_multiplier")).toBe("10");
     expect(params.get("hours")).toBe("720");
     expect(params.get("interval_minutes")).toBe("5");
+  });
+
+  it("restores the last spread result from session storage after returning from another page", async () => {
+    const user = userEvent.setup();
+    const { unmount } = render(<PairMonitorPage />);
+
+    await user.click(screen.getByRole("button", { name: /查询/ }));
+    expect((await screen.findAllByText("Bitget · 合约 · SKHYUSDT")).length).toBeGreaterThan(0);
+
+    window.history.pushState(
+      {},
+      "",
+      "/?page=premium-index&exchange=bitget&symbol=SKHYUSDT&hours=720&interval_minutes=5"
+    );
+    unmount();
+    requests.length = 0;
+
+    render(<PairMonitorPage />);
+
+    expect(screen.getAllByText("+0.50%").length).toBeGreaterThan(0);
+    expect((screen.getByPlaceholderText("SKHY") as HTMLInputElement).value).toBe("SKHYUSDT");
+    expect((await screen.findAllByText("Bitget · 合约 · SKHYUSDT")).length).toBeGreaterThan(0);
+    expect(requests.some((request) => request.includes("/pair-spread/query"))).toBe(false);
   });
 });
