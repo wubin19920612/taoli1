@@ -83,6 +83,7 @@ from app.services.live_pilot import (
     select_live_pilot_matches,
     select_live_pilot_opportunities,
 )
+from app.services.minute_signal_scan import MinuteSignalAlertEngine
 from app.services.orderbook_validator import OrderBookDepthValidator
 from app.services.opportunity_radar import (
     OpportunityRadarAlertEngine,
@@ -728,6 +729,7 @@ def create_app(
     app.state.pair_spread_query_service_factory = None
     app.state.premium_index_query_service_factory = None
     app.state.minute_signal_scan_service_factory = None
+    app.state.minute_signal_alert_engine = MinuteSignalAlertEngine()
     app.state.second_level_sampler = None
     app.state.alert_engine = AlertEngine()
     app.state.phone_price_alert_engine = PhonePriceAlertEngine()

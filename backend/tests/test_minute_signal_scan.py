@@ -4,7 +4,13 @@ from fastapi.testclient import TestClient
 import pytest
 
 from app.main import create_app
-from app.services.minute_signal_scan import ALPHA_KLINES_URL, MinuteSignalScanService
+from app.services.feishu import FeishuConfig
+from app.services.minute_signal_scan import (
+    ALPHA_KLINES_URL,
+    MinuteSignalAlertEngine,
+    MinuteSignalScanService,
+    build_minute_signal_alert_message,
+)
 
 
 def _row(
@@ -287,6 +293,134 @@ async def test_scan_all_returns_signal_candidates(monkeypatch) -> None:
     assert result["scanned_count"] == 1
     assert result["signal_count"] == 1
     assert result["candidates"][0]["event_type"] == "SHOCK_ALERT"
+
+
+def _signal_candidate(
+    *,
+    event_type: str | None = "ENTRY",
+    signal_time_cst: str | None = "2026-07-25T10:00+08:00",
+):
+    return {
+        "base_asset": "AKE",
+        "alpha_id": "ALPHA_331",
+        "alpha_symbol": "ALPHA_331USDT",
+        "futures_symbol": "AKEUSDT",
+        "alpha_price": 1.3,
+        "futures_price": 1.1,
+        "index_price": 1.0,
+        "volume_24h_usdt": 1_000_000,
+        "initial_basis_bps": 1538.46,
+        "initial_premium_bps": -50.0,
+        "score": 50_000,
+        "event_type": event_type,
+        "signal_time_cst": signal_time_cst,
+        "planned_execution_time_cst": "2026-07-25T10:01+08:00",
+        "reason": "shock_compressed_and_entry_confirmed",
+        "basis_bps": 30.0,
+        "premium_bps": -10.0,
+        "basis_peak_60m_bps": 180.0,
+        "compression_ratio": 0.7,
+        "bar_count": 60,
+        "recent_events": [],
+        "error": None,
+    }
+
+
+def _scan_all_result(candidates: list[dict]) -> dict:
+    return {
+        "observed_at": "2026-07-25T02:00:30+00:00",
+        "hours": 4,
+        "max_symbols": 30,
+        "min_volume_24h_usdt": 100_000,
+        "universe_count": 123,
+        "eligible_count": 10,
+        "scanned_count": len(candidates),
+        "signal_count": sum(1 for item in candidates if item.get("event_type") is not None),
+        "error_count": sum(1 for item in candidates if item.get("error")),
+        "candidates": candidates,
+        "warnings": [],
+    }
+
+
+def test_minute_signal_alert_engine_dedupes_same_signal_but_allows_new_wave() -> None:
+    engine = MinuteSignalAlertEngine()
+    first = _scan_all_result([_signal_candidate()])
+    second = _scan_all_result([_signal_candidate()])
+    next_wave = _scan_all_result([_signal_candidate(signal_time_cst="2026-07-25T10:15+08:00")])
+
+    assert len(engine.evaluate(first)) == 1
+    assert engine.evaluate(second) == []
+    assert len(engine.evaluate(next_wave)) == 1
+
+
+def test_minute_signal_alert_message_uses_distinct_title_and_candidate_details() -> None:
+    result = _scan_all_result([_signal_candidate()])
+
+    message = build_minute_signal_alert_message(result["candidates"], result)
+
+    assert "【1分钟价差信号】发现目标" in message
+    assert "[机会雷达]" not in message
+    assert "AKEUSDT / ALPHA_331USDT" in message
+    assert "候选入场" in message
+    assert "买 Binance Alpha 现货 / 空 Binance Futures 永续" in message
+    assert "basis +30.00 bps" in message
+
+
+class FakeMinuteSignalNotifier:
+    def __init__(self) -> None:
+        self.config = FeishuConfig(webhook_url="https://example.test/hook")
+        self.messages: list[str] = []
+
+    async def send_text(self, text: str) -> None:
+        self.messages.append(text)
+
+
+def test_minute_signal_scan_all_route_sends_feishu_alert_for_targets() -> None:
+    class FakeService:
+        closed = False
+
+        async def scan_all(self, *, hours: int, max_symbols: int, min_volume_24h_usdt: float):
+            return _scan_all_result([_signal_candidate()])
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    service = FakeService()
+    notifier = FakeMinuteSignalNotifier()
+    app = create_app()
+    app.state.minute_signal_scan_service_factory = lambda: service
+    app.state.feishu_notifier = notifier
+
+    with TestClient(app) as client:
+        first = client.get("/api/minute-signals/scan-all?hours=4&max_symbols=5")
+        second = client.get("/api/minute-signals/scan-all?hours=4&max_symbols=5")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert len(notifier.messages) == 1
+    assert "【1分钟价差信号】发现目标" in notifier.messages[0]
+    assert "[机会雷达]" not in notifier.messages[0]
+    assert service.closed is True
+
+
+def test_minute_signal_scan_all_route_skips_feishu_alert_without_targets() -> None:
+    class FakeService:
+        async def scan_all(self, *, hours: int, max_symbols: int, min_volume_24h_usdt: float):
+            return _scan_all_result([_signal_candidate(event_type=None)])
+
+        async def aclose(self) -> None:
+            return None
+
+    notifier = FakeMinuteSignalNotifier()
+    app = create_app()
+    app.state.minute_signal_scan_service_factory = lambda: FakeService()
+    app.state.feishu_notifier = notifier
+
+    with TestClient(app) as client:
+        response = client.get("/api/minute-signals/scan-all?hours=4&max_symbols=5")
+
+    assert response.status_code == 200
+    assert notifier.messages == []
 
 
 async def _async_value(value):

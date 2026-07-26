@@ -27,6 +27,27 @@ FUTURES_24HR_URL = "https://fapi.binance.com/fapi/v1/ticker/24hr"
 FUTURES_PREMIUM_URL = "https://fapi.binance.com/fapi/v1/premiumIndex"
 MINUTE_MS = 60_000
 SHANGHAI = ZoneInfo("Asia/Shanghai")
+MINUTE_SIGNAL_ALERT_TITLE = "【1分钟价差信号】发现目标"
+
+EVENT_LABELS: dict[str, str] = {
+    "SHOCK_ALERT": "价差冲击",
+    "ENTRY": "候选入场",
+    "TAKE_PROFIT": "价差收敛",
+    "STOP_LOSS": "止损",
+    "TIME_EXIT": "超时退出",
+}
+
+REASON_LABELS: dict[str, str] = {
+    "shock_compressed_and_entry_confirmed": "价差冲击后回压，确认候选入场",
+    "basis_expansion_with_negative_premium": "价差扩大，且合约溢价为负",
+    "new_shock_after_expiry": "原冲击过期后再次出现新冲击",
+    "basis_converged": "价差已收敛，达到止盈条件",
+    "basis_reversed": "价差方向反转，触发止损",
+    "maximum_hold": "达到最大持仓时间",
+    "reset_held_and_entry_confirmed": "价差回压保持后确认候选入场",
+    "no_confirmed_signal": "尚未确认信号",
+    "scan_failed": "扫描失败",
+}
 
 
 class State(str, Enum):
@@ -62,6 +83,37 @@ class GlobalMinuteSignalConfig:
     max_symbols: int = 30
     min_volume_24h_usdt: float = 100_000.0
     max_concurrency: int = 8
+
+
+class MinuteSignalAlertEngine:
+    def __init__(self, *, dedupe_retention_seconds: int = 86_400) -> None:
+        self.dedupe_retention_seconds = dedupe_retention_seconds
+        self._sent_at_by_key: dict[str, datetime] = {}
+
+    def evaluate(
+        self,
+        scan_result: dict[str, Any],
+        *,
+        now: datetime | None = None,
+    ) -> list[dict[str, Any]]:
+        current = now or datetime.now(UTC)
+        self._prune(current)
+        matches: list[dict[str, Any]] = []
+        for candidate in minute_signal_alert_candidates(scan_result):
+            key = minute_signal_alert_key(candidate)
+            if key in self._sent_at_by_key:
+                continue
+            self._sent_at_by_key[key] = current
+            matches.append(candidate)
+        return matches
+
+    def release_failed(self, candidate: dict[str, Any]) -> None:
+        self._sent_at_by_key.pop(minute_signal_alert_key(candidate), None)
+
+    def _prune(self, now: datetime) -> None:
+        for key, sent_at in list(self._sent_at_by_key.items()):
+            if (now - sent_at).total_seconds() > self.dedupe_retention_seconds:
+                self._sent_at_by_key.pop(key, None)
 
 
 def _finite(value: Any) -> float | None:
@@ -104,6 +156,123 @@ def _binance_alpha_error(payload: Any) -> str:
 
 def _is_start_after_end_error(exc: Exception) -> bool:
     return "Start time is greater than end time" in str(exc)
+
+
+def minute_signal_alert_candidates(scan_result: dict[str, Any]) -> list[dict[str, Any]]:
+    candidates = scan_result.get("candidates")
+    if not isinstance(candidates, list):
+        return []
+    return [
+        candidate
+        for candidate in candidates
+        if isinstance(candidate, dict)
+        and candidate.get("event_type") is not None
+        and not candidate.get("error")
+    ]
+
+
+def minute_signal_alert_key(candidate: dict[str, Any]) -> str:
+    return "|".join(
+        [
+            str(candidate.get("futures_symbol") or "").upper(),
+            str(candidate.get("alpha_symbol") or "").upper(),
+            str(candidate.get("event_type") or ""),
+            str(candidate.get("signal_time_cst") or ""),
+        ]
+    )
+
+
+def _format_bps(value: Any) -> str:
+    number = _finite(value)
+    return "-" if number is None else f"{number:+.2f} bps"
+
+
+def _format_ratio(value: Any) -> str:
+    number = _finite(value)
+    return "-" if number is None else f"{number * 100:.1f}%"
+
+
+def _format_volume_usdt(value: Any) -> str:
+    number = _finite(value)
+    if number is None:
+        return "-"
+    if abs(number) >= 1_000_000:
+        return f"{number / 1_000_000:.2f}M USDT"
+    if abs(number) >= 1_000:
+        return f"{number / 1_000:.0f}K USDT"
+    return f"{number:.0f} USDT"
+
+
+def _format_cst_time(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "-"
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return text.replace("T", " ").replace("+08:00", "")
+    if parsed.tzinfo is None:
+        return parsed.strftime("%Y-%m-%d %H:%M")
+    return parsed.astimezone(SHANGHAI).strftime("%Y-%m-%d %H:%M")
+
+
+def _event_label(value: Any) -> str:
+    text = str(value or "").strip()
+    return EVENT_LABELS.get(text, text or "未知信号")
+
+
+def _reason_label(value: Any) -> str:
+    text = str(value or "").strip()
+    return REASON_LABELS.get(text, text.replace("_", " ") if text else "-")
+
+
+def build_minute_signal_alert_message(
+    candidates: list[dict[str, Any]],
+    scan_result: dict[str, Any],
+    *,
+    max_items: int = 8,
+) -> str:
+    displayed = candidates[:max(1, max_items)]
+    observed_at = _format_cst_time(scan_result.get("observed_at"))
+    lines = [
+        f"{MINUTE_SIGNAL_ALERT_TITLE}：新增 {len(candidates)} 个",
+        "方向：买 Binance Alpha 现货 / 空 Binance Futures 永续",
+        (
+            f"扫描：最近 {scan_result.get('hours', '-')} 小时；"
+            f"复核 {scan_result.get('scanned_count', '-')} / "
+            f"{scan_result.get('eligible_count', '-')}；"
+            f"当前信号 {scan_result.get('signal_count', '-')}"
+        ),
+        f"观察时间：{observed_at} 北京时间",
+    ]
+    for index, candidate in enumerate(displayed, start=1):
+        lines.extend(
+            [
+                "",
+                (
+                    f"{index}. {candidate.get('futures_symbol', '-')} / "
+                    f"{candidate.get('alpha_symbol', '-')} | "
+                    f"{_event_label(candidate.get('event_type'))}"
+                ),
+                (
+                    f"   信号：{_format_cst_time(candidate.get('signal_time_cst'))}；"
+                    f"计划：{_format_cst_time(candidate.get('planned_execution_time_cst'))}"
+                ),
+                (
+                    f"   basis {_format_bps(candidate.get('basis_bps'))}；"
+                    f"premium {_format_bps(candidate.get('premium_bps'))}；"
+                    f"60m峰值 {_format_bps(candidate.get('basis_peak_60m_bps'))}；"
+                    f"压缩 {_format_ratio(candidate.get('compression_ratio'))}"
+                ),
+                (
+                    f"   24h成交额 {_format_volume_usdt(candidate.get('volume_24h_usdt'))}；"
+                    f"说明：{_reason_label(candidate.get('reason'))}"
+                ),
+            ]
+        )
+    if len(candidates) > len(displayed):
+        lines.extend(["", f"还有 {len(candidates) - len(displayed)} 个新目标未展开，请到网页查看。"])
+    return "\n".join(lines)
 
 
 class MinuteSignalScanService:
