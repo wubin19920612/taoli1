@@ -79,7 +79,7 @@ const defaultFormValues: PairSpreadFormValues = {
   leg2_exchange: "bitget",
   leg2_market_type: "future",
   leg2_symbol: "SKHYNIX",
-  leg2_multiplier: 10
+  leg2_multiplier: 1
 };
 
 const exchangeLabels: Record<string, string> = {
@@ -1345,7 +1345,7 @@ export function PairMonitorPage() {
       : null;
   }, [initialUrlQuery]);
   const loadedUrlQueryRef = useRef("");
-  const [hours, setHours] = useState(() => initialCachedState?.hours ?? 720);
+  const [hours, setHours] = useState(() => initialCachedState?.hours ?? 4);
   const [intervalMinutes, setIntervalMinutes] = useState(() => initialCachedState?.intervalMinutes ?? 5);
   const [locationSearch, setLocationSearch] = useState(() =>
     typeof window === "undefined" ? "" : window.location.search

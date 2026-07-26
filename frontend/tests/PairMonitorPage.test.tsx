@@ -21,9 +21,9 @@ function pairSpreadResult(params?: URLSearchParams) {
   const leg2Exchange = params?.get("leg2_exchange") ?? "bitget";
   const leg1Symbol = normalizedMockSymbol(leg1Exchange, params?.get("leg1_symbol") ?? "SKHYUSDT");
   const leg2Symbol = normalizedMockSymbol(leg2Exchange, params?.get("leg2_symbol") ?? "SKHYNIXUSDT");
-  const leg2Multiplier = Number(params?.get("leg2_multiplier") ?? 10);
+  const leg2Multiplier = Number(params?.get("leg2_multiplier") ?? 1);
   const intervalMinutes = Number(params?.get("interval_minutes") ?? 5);
-  const hours = Number(params?.get("hours") ?? 720);
+  const hours = Number(params?.get("hours") ?? 4);
   return {
     leg1: {
       exchange: leg1Exchange,
@@ -220,8 +220,8 @@ describe("PairMonitorPage", () => {
     expect(params.get("leg2_exchange")).toBe("bitget");
     expect(params.get("leg2_market_type")).toBe("future");
     expect(params.get("leg2_symbol")).toBe("SKHYNIXUSDT");
-    expect(params.get("leg2_multiplier")).toBe("10");
-    expect(params.get("hours")).toBe("720");
+    expect(params.get("leg2_multiplier")).toBe("1");
+    expect(params.get("hours")).toBe("4");
     expect(params.get("interval_minutes")).toBe("5");
   });
 
@@ -235,7 +235,7 @@ describe("PairMonitorPage", () => {
     window.history.pushState(
       {},
       "",
-      "/?page=premium-index&exchange=bitget&symbol=SKHYUSDT&hours=720&interval_minutes=5"
+      "/?page=premium-index&exchange=bitget&symbol=SKHYUSDT&hours=4&interval_minutes=5"
     );
     unmount();
     requests.length = 0;

@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { OpportunityTable } from "../src/components/OpportunityTable";
 import type { Opportunity } from "../src/api/types";
@@ -44,6 +44,14 @@ const row: Opportunity = {
 };
 
 describe("OpportunityTable", () => {
+  beforeEach(() => {
+    window.history.pushState({}, "", "/");
+  });
+
+  afterEach(() => {
+    window.history.pushState({}, "", "/");
+  });
+
   it("renders spread legs, funding previews and risk labels", () => {
     render(<OpportunityTable opportunities={[row]} loading={false} />);
 
@@ -117,6 +125,40 @@ describe("OpportunityTable", () => {
     await userEvent.click(screen.getByRole("button", { name: "价差历史 BTCUSDT" }));
 
     expect(onOpenHistory).toHaveBeenCalledWith(row);
+  });
+
+  it("opens pair spread query from a real-time opportunity row", async () => {
+    render(
+      <OpportunityTable
+        opportunities={[
+          {
+            ...row,
+            symbol: "EDGEUSDT",
+            buy_exchange: "gate",
+            buy_market_type: "spot",
+            buy_raw_symbol: "EDGEX_USDT",
+            sell_exchange: "binance",
+            sell_market_type: "future",
+            sell_raw_symbol: "EDGEUSDT"
+          }
+        ]}
+        loading={false}
+      />
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "价差查询 EDGEUSDT" }));
+
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("page")).toBe("pair-monitor");
+    expect(params.get("leg1_exchange")).toBe("gate");
+    expect(params.get("leg1_market_type")).toBe("spot");
+    expect(params.get("leg1_symbol")).toBe("EDGEX_USDT");
+    expect(params.get("leg2_exchange")).toBe("binance");
+    expect(params.get("leg2_market_type")).toBe("future");
+    expect(params.get("leg2_symbol")).toBe("EDGEUSDT");
+    expect(params.get("leg2_multiplier")).toBe("1");
+    expect(params.get("hours")).toBe("4");
+    expect(params.get("interval_minutes")).toBe("5");
   });
 
   it("shows raw leg symbols for aliased opportunities in leg titles", () => {

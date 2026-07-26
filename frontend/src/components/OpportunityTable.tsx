@@ -2,7 +2,8 @@ import {
   AreaChartOutlined,
   EyeInvisibleOutlined,
   EyeOutlined,
-  ExperimentOutlined
+  ExperimentOutlined,
+  LineChartOutlined
 } from "@ant-design/icons";
 import { Button, Space, Table, Tag, Tooltip, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
@@ -139,6 +140,27 @@ function isBlocked(symbol: string, blockedSymbols: string[] | undefined): boolea
   return (blockedSymbols ?? []).some((item) => normalizeSymbol(item) === normalized);
 }
 
+function routeSymbol(rawSymbol: string | null | undefined, canonicalSymbol: string): string {
+  const value = rawSymbol?.trim() || canonicalSymbol;
+  return value.toUpperCase();
+}
+
+function openPairSpread(row: Opportunity): void {
+  const url = new URL(window.location.href);
+  url.searchParams.set("page", "pair-monitor");
+  url.searchParams.set("leg1_exchange", row.buy_exchange);
+  url.searchParams.set("leg1_market_type", row.buy_market_type);
+  url.searchParams.set("leg1_symbol", routeSymbol(row.buy_raw_symbol, row.symbol));
+  url.searchParams.set("leg2_exchange", row.sell_exchange);
+  url.searchParams.set("leg2_market_type", row.sell_market_type);
+  url.searchParams.set("leg2_symbol", routeSymbol(row.sell_raw_symbol, row.symbol));
+  url.searchParams.set("leg2_multiplier", "1");
+  url.searchParams.set("hours", "4");
+  url.searchParams.set("interval_minutes", "5");
+  window.history.pushState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  window.dispatchEvent(new Event("taoli1:navigate"));
+}
+
 function FundingCell({ row }: { row: Opportunity }) {
   const cycleFundingEdge = nextCycleFundingEdge(row);
   const cycleType =
@@ -239,6 +261,22 @@ function buildColumns(
         ) : null
     },
     {
+      title: "",
+      fixed: "left",
+      width: 44,
+      render: (_, row) => (
+        <Tooltip title="跳到价差查询，按买入腿/卖出腿查看价差曲线">
+          <Button
+            type="text"
+            size="small"
+            icon={<LineChartOutlined />}
+            aria-label={`价差查询 ${row.symbol}`}
+            onClick={() => openPairSpread(row)}
+          />
+        </Tooltip>
+      )
+    },
+    {
       title: "Symbol",
       dataIndex: "symbol",
       fixed: "left",
@@ -337,7 +375,7 @@ export function OpportunityTable({
       loading={loading}
       rowKey="id"
       pagination={{ pageSize: 50, showSizeChanger: true }}
-      scroll={{ x: 1512 }}
+      scroll={{ x: 1556 }}
       size="small"
       tableLayout="fixed"
     />
