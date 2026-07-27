@@ -24,6 +24,42 @@ function pairSpreadResult(params?: URLSearchParams) {
   const leg2Multiplier = Number(params?.get("leg2_multiplier") ?? 1);
   const intervalMinutes = Number(params?.get("interval_minutes") ?? 5);
   const hours = Number(params?.get("hours") ?? 4);
+  const largePriceGap = leg2Multiplier === 0.1;
+  const leg1Price = largePriceGap ? 1218.6 : 100;
+  const leg2Price = largePriceGap ? 1618.3 : 101;
+  const points = largePriceGap
+    ? [
+        {
+          bucket_at: "2026-07-24T02:00:00Z",
+          leg1_close: 1200,
+          leg2_close: 1600,
+          spread_abs: 400,
+          spread_pct: 28.5
+        },
+        {
+          bucket_at: "2026-07-24T02:01:00Z",
+          leg1_close: 1210,
+          leg2_close: 1590,
+          spread_abs: 380,
+          spread_pct: 27.2
+        },
+        {
+          bucket_at: "2026-07-24T02:02:00Z",
+          leg1_close: leg1Price,
+          leg2_close: leg2Price,
+          spread_abs: 399.7,
+          spread_pct: 28.18
+        }
+      ]
+    : [
+        {
+          bucket_at: observedAt,
+          leg1_close: 100,
+          leg2_close: 101,
+          spread_abs: 1,
+          spread_pct: 0.5
+        }
+      ];
   return {
     leg1: {
       exchange: leg1Exchange,
@@ -39,9 +75,9 @@ function pairSpreadResult(params?: URLSearchParams) {
     interval_minutes: intervalMinutes,
     leg2_multiplier: leg2Multiplier,
     observed_at: observedAt,
-    point_count: 1,
-    first_seen_at: observedAt,
-    last_seen_at: observedAt,
+    point_count: points.length,
+    first_seen_at: points[0]?.bucket_at ?? observedAt,
+    last_seen_at: points[points.length - 1]?.bucket_at ?? observedAt,
     spread_abs: { min: 1, max: 1, mean: 1, current: 1 },
     spread_pct: { min: 0.5, max: 0.5, mean: 0.5, current: 0.5 },
     current: {
@@ -51,12 +87,12 @@ function pairSpreadResult(params?: URLSearchParams) {
         symbol: leg1Symbol,
         market_type: leg1MarketType,
         raw_symbol: leg1Symbol,
-        price: 100,
+        price: leg1Price,
         price_field: "mid_price" as const,
         mark_price: null,
         index_price: null,
-        mid_price: 100,
-        last_price: 100,
+        mid_price: leg1Price,
+        last_price: leg1Price,
         funding_rate_pct: leg1MarketType === "spot" ? null : 0.01,
         funding_next_rate_pct: null,
         funding_next_time: null,
@@ -70,12 +106,12 @@ function pairSpreadResult(params?: URLSearchParams) {
         symbol: leg2Symbol,
         market_type: leg2MarketType,
         raw_symbol: leg2Symbol,
-        price: 101,
+        price: leg2Price,
         price_field: leg2MarketType === "spot" ? "last_price" as const : "mark_price" as const,
-        mark_price: leg2MarketType === "spot" ? null : 101,
+        mark_price: leg2MarketType === "spot" ? null : leg2Price,
         index_price: leg2MarketType === "spot" ? null : 100,
-        mid_price: 101,
-        last_price: 101,
+        mid_price: leg2Price,
+        last_price: leg2Price,
         funding_rate_pct: leg2MarketType === "spot" ? null : 0.01,
         funding_next_rate_pct: null,
         funding_next_time: null,
@@ -84,18 +120,10 @@ function pairSpreadResult(params?: URLSearchParams) {
         funding_rate_lower_pct: null,
         timestamp: observedAt
       },
-      spread_abs: 1,
-      spread_pct: 0.5
+      spread_abs: largePriceGap ? 399.7 : 1,
+      spread_pct: largePriceGap ? 28.18 : 0.5
     },
-    points: [
-      {
-        bucket_at: observedAt,
-        leg1_close: 100,
-        leg2_close: 101,
-        spread_abs: 1,
-        spread_pct: 0.5
-      }
-    ],
+    points,
     funding_history: [],
     warnings: []
   };
@@ -199,6 +227,21 @@ describe("PairMonitorPage", () => {
       ).toBe(true);
     });
     expect((await screen.findAllByText("Binance Alpha · 现货 · ALPHA_331USDT")).length).toBeGreaterThan(0);
+  });
+
+  it("switches the price chart to indexed trend view when leg prices are far apart", async () => {
+    window.history.pushState(
+      {},
+      "",
+      "/?page=pair-monitor&leg1_exchange=hyperliquid&leg1_market_type=future&leg1_symbol=SKHXUSDT" +
+        "&leg2_exchange=hyperliquid&leg2_market_type=future&leg2_symbol=SKHYUSDT" +
+        "&leg2_multiplier=0.1&hours=6&interval_minutes=1"
+    );
+
+    render(<PairMonitorPage />);
+
+    expect(await screen.findByText("自动：相对走势 · 首点=100")).toBeTruthy();
+    expect(screen.getByText(/原始最新价：左 1218.60 \/ 右 1618.30/)).toBeTruthy();
   });
 
   it("opens the premium index page for a futures leg from the spread result", async () => {

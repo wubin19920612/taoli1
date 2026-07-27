@@ -5,6 +5,7 @@ import {
   Form,
   Input,
   InputNumber,
+  Segmented,
   Select,
   Switch,
   Table,
@@ -63,6 +64,8 @@ type PairPremiumCompareResult = {
   right: PremiumIndexQueryResult | null;
   warnings: string[];
 };
+
+type PairPriceChartMode = "auto" | "raw" | "indexed";
 
 type LastPairSpreadState = {
   values: PairSpreadFormValues;
@@ -892,6 +895,7 @@ function PairPriceChart({
 }: {
   result: PairSpreadQueryResult | null;
 }) {
+  const [priceChartMode, setPriceChartMode] = useState<PairPriceChartMode>("auto");
   const points = result?.points ?? [];
   const width = 1180;
   const height = 230;
@@ -903,8 +907,40 @@ function PairPriceChart({
     return null;
   }
 
-  const values = points
-    .flatMap((point) => [point.leg1_close, point.leg2_close])
+  const leftRawValues = points.map((point) => point.leg1_close).filter((value) => Number.isFinite(value));
+  const rightRawValues = points.map((point) => point.leg2_close).filter((value) => Number.isFinite(value));
+  const rawValues = [...leftRawValues, ...rightRawValues];
+
+  if (!rawValues.length) {
+    return null;
+  }
+
+  const firstFinite = (field: "leg1_close" | "leg2_close") => {
+    const first = points.find((point) => Number.isFinite(point[field]) && point[field] !== 0);
+    return first?.[field] ?? null;
+  };
+  const leftBase = firstFinite("leg1_close");
+  const rightBase = firstFinite("leg2_close");
+  const canIndexPrices = leftBase !== null && rightBase !== null;
+  const average = (items: number[]) => items.reduce((total, value) => total + value, 0) / items.length;
+  const leftAverage = leftRawValues.length ? average(leftRawValues) : null;
+  const rightAverage = rightRawValues.length ? average(rightRawValues) : null;
+  const priceLevelGapPct =
+    leftAverage !== null && rightAverage !== null
+      ? (Math.abs(leftAverage - rightAverage) / Math.max(Math.min(Math.abs(leftAverage), Math.abs(rightAverage)), 1e-9)) *
+        100
+      : 0;
+  const autoIndexed = canIndexPrices && priceLevelGapPct >= 12;
+  const indexedView = canIndexPrices && (priceChartMode === "indexed" || (priceChartMode === "auto" && autoIndexed));
+  const chartPoints = points.map((point) => ({
+    ...point,
+    left_value: indexedView && leftBase !== null ? (point.leg1_close / leftBase) * 100 : point.leg1_close,
+    right_value: indexedView && rightBase !== null ? (point.leg2_close / rightBase) * 100 : point.leg2_close,
+    left_change_pct: leftBase !== null ? (point.leg1_close / leftBase - 1) * 100 : null,
+    right_change_pct: rightBase !== null ? (point.leg2_close / rightBase - 1) * 100 : null
+  }));
+  const values = chartPoints
+    .flatMap((point) => [point.left_value, point.right_value])
     .filter((value) => Number.isFinite(value));
 
   if (!values.length) {
@@ -921,20 +957,64 @@ function PairPriceChart({
   const yAt = (value: number) => padding.top + ((max - value) / (max - min)) * chartHeight;
   const spanHours = chartSpanHours(points);
   const ticks = chartTicks(points, spanHours >= 168 ? 7 : 6);
-  const linePath = (field: "leg1_close" | "leg2_close") =>
-    points
+  const axisValueLabel = (value: number) => (indexedView ? value.toFixed(2) : price(value));
+  const changeLabel = (value: number | null) =>
+    typeof value === "number" && Number.isFinite(value) ? signedPct(value, 2) : "-";
+  const linePath = (field: "left_value" | "right_value") =>
+    chartPoints
       .map((point, index) => `${index === 0 ? "M" : "L"} ${xAt(index).toFixed(2)} ${yAt(point[field]).toFixed(2)}`)
       .join(" ");
   const lastPoint = points[points.length - 1];
+  const lastChartPoint = chartPoints[chartPoints.length - 1];
+  const modeLabel = indexedView
+    ? priceChartMode === "auto"
+      ? "自动：相对走势 · 首点=100"
+      : "相对走势 · 首点=100"
+    : priceChartMode === "auto"
+      ? "自动：原始价格"
+      : "原始价格";
 
   return (
     <div className="pair-price-card">
       <div className="pair-price-head">
-        <Typography.Text strong>标的价格</Typography.Text>
-        <div className="pair-price-legend">
-          <span className="pair-price-legend-left">{leftLegLabel(result)}</span>
-          <span className="pair-price-legend-right">{rightLegLabel(result)}</span>
+        <div className="pair-price-title">
+          <Typography.Text strong>标的价格</Typography.Text>
+          <Typography.Text type="secondary">
+            {indexedView
+              ? "大价差组合已按各自首个价格归一化，重点看走势和相对涨跌。"
+              : "显示两个标的的原始价格。"}
+          </Typography.Text>
         </div>
+        <div className="pair-price-controls">
+          <Tag color={indexedView ? "gold" : "default"}>{modeLabel}</Tag>
+          <Segmented
+            size="small"
+            value={priceChartMode}
+            options={[
+              { label: "自动", value: "auto" },
+              { label: "原始价格", value: "raw" },
+              { label: "相对走势", value: "indexed" }
+            ]}
+            onChange={(value) => setPriceChartMode(value as PairPriceChartMode)}
+          />
+        </div>
+      </div>
+      <div className="pair-price-subhead">
+        <div className="pair-price-legend">
+          <span className="pair-price-legend-left">
+            {leftLegLabel(result)}
+            {indexedView ? ` ${changeLabel(lastChartPoint.left_change_pct)}` : ""}
+          </span>
+          <span className="pair-price-legend-right">
+            {rightLegLabel(result)}
+            {indexedView ? ` ${changeLabel(lastChartPoint.right_change_pct)}` : ""}
+          </span>
+        </div>
+        {indexedView ? (
+          <Typography.Text type="secondary">
+            原始最新价：左 {price(lastPoint.leg1_close)} / 右 {price(lastPoint.leg2_close)}
+          </Typography.Text>
+        ) : null}
       </div>
       <svg className="pair-price-chart" role="img" aria-label="左右腿标的价格曲线" viewBox={`0 0 ${width} ${height}`}>
         <rect x={padding.left} y={padding.top} width={chartWidth} height={chartHeight} rx="4" />
@@ -945,7 +1025,7 @@ function PairPriceChart({
             <g key={tick}>
               <line className="pair-price-grid-line" x1={padding.left} y1={y} x2={padding.left + chartWidth} y2={y} />
               <text className="pair-price-axis-label" x={padding.left - 10} y={y + 4} textAnchor="end">
-                {price(value)}
+                {axisValueLabel(value)}
               </text>
             </g>
           );
@@ -962,13 +1042,24 @@ function PairPriceChart({
             </g>
           );
         })}
-        <path className="pair-price-line pair-price-line-left" d={linePath("leg1_close")} />
-        <path className="pair-price-line pair-price-line-right" d={linePath("leg2_close")} />
-        <circle className="pair-price-dot-left" cx={xAt(points.length - 1)} cy={yAt(lastPoint.leg1_close)} r="4">
-          <title>{`${time(lastPoint.bucket_at)} 左腿 ${price(lastPoint.leg1_close)}`}</title>
+        {indexedView ? (
+          <line className="pair-price-base-line" x1={padding.left} y1={yAt(100)} x2={padding.left + chartWidth} y2={yAt(100)} />
+        ) : null}
+        <path className="pair-price-line pair-price-line-left" d={linePath("left_value")} />
+        <path className="pair-price-line pair-price-line-right" d={linePath("right_value")} />
+        <circle className="pair-price-dot-left" cx={xAt(points.length - 1)} cy={yAt(lastChartPoint.left_value)} r="4">
+          <title>
+            {`${time(lastPoint.bucket_at)} 左腿 ${price(lastPoint.leg1_close)}${
+              indexedView ? `，相对首点 ${changeLabel(lastChartPoint.left_change_pct)}` : ""
+            }`}
+          </title>
         </circle>
-        <circle className="pair-price-dot-right" cx={xAt(points.length - 1)} cy={yAt(lastPoint.leg2_close)} r="4">
-          <title>{`${time(lastPoint.bucket_at)} 右腿 ${price(lastPoint.leg2_close)}`}</title>
+        <circle className="pair-price-dot-right" cx={xAt(points.length - 1)} cy={yAt(lastChartPoint.right_value)} r="4">
+          <title>
+            {`${time(lastPoint.bucket_at)} 右腿 ${price(lastPoint.leg2_close)}${
+              indexedView ? `，相对首点 ${changeLabel(lastChartPoint.right_change_pct)}` : ""
+            }`}
+          </title>
         </circle>
       </svg>
     </div>

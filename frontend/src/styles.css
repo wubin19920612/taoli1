@@ -1474,6 +1474,33 @@ body {
   font-size: 13px;
 }
 
+.pair-price-title {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.pair-price-title .ant-typography-secondary,
+.pair-price-subhead .ant-typography-secondary {
+  font-size: 12px;
+}
+
+.pair-price-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pair-price-subhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
 .pair-price-chart {
   width: 100%;
   height: auto;
@@ -1488,6 +1515,12 @@ body {
 .pair-price-grid-line,
 .pair-price-time-tick {
   stroke: #edf2f0;
+  stroke-width: 1;
+}
+
+.pair-price-base-line {
+  stroke: #a7b6b1;
+  stroke-dasharray: 5 5;
   stroke-width: 1;
 }
 
@@ -1532,7 +1565,7 @@ body {
 .pair-price-legend {
   display: flex;
   flex-wrap: wrap;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 14px;
   min-width: 0;
   color: #66736f;
@@ -2671,6 +2704,7 @@ body {
   .pair-monitor-detail-head,
   .pair-detail-head,
   .pair-price-head,
+  .pair-price-subhead,
   .pair-premium-head,
   .premium-detail-head,
   .spread-history-head,
