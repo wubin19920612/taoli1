@@ -22,7 +22,8 @@ function pairSpreadResult(params?: URLSearchParams) {
   const leg1Symbol = normalizedMockSymbol(leg1Exchange, params?.get("leg1_symbol") ?? "SKHYUSDT");
   const leg2Symbol = normalizedMockSymbol(leg2Exchange, params?.get("leg2_symbol") ?? "SKHYNIXUSDT");
   const leg2Multiplier = Number(params?.get("leg2_multiplier") ?? 1);
-  const intervalMinutes = Number(params?.get("interval_minutes") ?? 5);
+  const intervalSeconds = Number(params?.get("interval_seconds") ?? 5);
+  const intervalMinutes = Number(params?.get("interval_minutes") ?? Math.max(1, Math.round(intervalSeconds / 60)));
   const hours = Number(params?.get("hours") ?? 4);
   const largePriceGap = leg2Multiplier === 0.1;
   const leg1Price = largePriceGap ? 1218.6 : 100;
@@ -73,6 +74,7 @@ function pairSpreadResult(params?: URLSearchParams) {
     },
     hours,
     interval_minutes: intervalMinutes,
+    interval_seconds: intervalSeconds,
     leg2_multiplier: leg2Multiplier,
     observed_at: observedAt,
     point_count: points.length,
@@ -203,13 +205,49 @@ describe("PairMonitorPage", () => {
     expect(screen.getByText("bybit 合约 DEXE / bitget 合约 DEXE")).toBeTruthy();
   });
 
+  it("uses 5-second pair spread queries by default", async () => {
+    const user = userEvent.setup();
+    render(<PairMonitorPage />);
+
+    await user.click(screen.getByRole("button", { name: /查询/ }));
+
+    await waitFor(() => {
+      expect(
+        requests.some(
+          (request) =>
+            request.includes("interval_seconds=5") &&
+            request.includes("interval_minutes=1")
+        )
+      ).toBe(true);
+    });
+    expect((await screen.findAllByText("5秒")).length).toBeGreaterThan(0);
+  });
+
+  it("sends a custom second interval when selected", async () => {
+    const user = userEvent.setup();
+    render(<PairMonitorPage />);
+
+    const comboboxes = screen.getAllByRole("combobox");
+    await user.click(comboboxes[comboboxes.length - 1]);
+    await user.click(await screen.findByText("自定义"));
+    const customInput = screen.getByRole("spinbutton", { name: /自定义秒/ });
+    await user.clear(customInput);
+    await user.type(customInput, "7");
+    await user.click(screen.getByRole("button", { name: /查询/ }));
+
+    await waitFor(() => {
+      expect(requests.some((request) => request.includes("interval_seconds=7"))).toBe(true);
+    });
+    expect(new URLSearchParams(window.location.search).get("interval_seconds")).toBe("7");
+  });
+
   it("auto-runs a Binance Alpha spread query from URL parameters", async () => {
     window.history.pushState(
       {},
       "",
       "/?page=pair-monitor&leg1_exchange=binance&leg1_market_type=future&leg1_symbol=AKEUSDT" +
         "&leg2_exchange=binance_alpha&leg2_market_type=spot&leg2_symbol=ALPHA_331USDT" +
-        "&leg2_multiplier=1&hours=4&interval_minutes=1"
+        "&leg2_multiplier=1&hours=4&interval_seconds=5"
     );
 
     render(<PairMonitorPage />);
@@ -221,6 +259,7 @@ describe("PairMonitorPage", () => {
             request.includes("leg1_exchange=binance") &&
             request.includes("leg2_exchange=binance_alpha") &&
             request.includes("leg2_symbol=ALPHA_331USDT") &&
+            request.includes("interval_seconds=5") &&
             request.includes("interval_minutes=1") &&
             request.includes("hours=4")
         )
@@ -235,7 +274,7 @@ describe("PairMonitorPage", () => {
       "",
       "/?page=pair-monitor&leg1_exchange=hyperliquid&leg1_market_type=future&leg1_symbol=SKHXUSDT" +
         "&leg2_exchange=hyperliquid&leg2_market_type=future&leg2_symbol=SKHYUSDT" +
-        "&leg2_multiplier=0.1&hours=6&interval_minutes=1"
+        "&leg2_multiplier=0.1&hours=6&interval_seconds=60"
     );
 
     render(<PairMonitorPage />);
@@ -265,7 +304,8 @@ describe("PairMonitorPage", () => {
     expect(params.get("leg2_symbol")).toBe("SKHYNIXUSDT");
     expect(params.get("leg2_multiplier")).toBe("1");
     expect(params.get("hours")).toBe("4");
-    expect(params.get("interval_minutes")).toBe("5");
+    expect(params.get("interval_minutes")).toBe("1");
+    expect(params.get("interval_seconds")).toBe("5");
   });
 
   it("restores the last spread result from session storage after returning from another page", async () => {

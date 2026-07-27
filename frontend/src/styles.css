@@ -994,6 +994,22 @@ body {
   align-items: start;
 }
 
+.pair-query-bar-custom {
+  grid-template-columns:
+    minmax(112px, 0.66fr)
+    minmax(76px, 0.38fr)
+    minmax(168px, 1fr)
+    minmax(112px, 0.66fr)
+    minmax(76px, 0.38fr)
+    minmax(168px, 1fr)
+    minmax(148px, 0.78fr)
+    minmax(92px, 0.5fr)
+    minmax(108px, 0.58fr)
+    minmax(120px, 0.64fr)
+    minmax(68px, 0.36fr)
+    minmax(164px, 0.86fr);
+}
+
 .pair-query-bar .ant-form-item {
   margin: 0;
 }
@@ -1021,6 +1037,9 @@ body {
 .pair-query-hours,
 .pair-query-hours .ant-input-number-group-wrapper,
 .pair-query-hours .ant-input-number,
+.pair-query-custom-interval,
+.pair-query-custom-interval .ant-input-number-group-wrapper,
+.pair-query-custom-interval .ant-input-number,
 .pair-query-item .ant-select,
 .pair-query-market-type .ant-select,
 .pair-query-contract .ant-input-group-wrapper,

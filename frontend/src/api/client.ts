@@ -602,6 +602,7 @@ export async function queryPairSpread(query: {
   leg2_market_type?: MarketType;
   hours?: number;
   interval_minutes?: number;
+  interval_seconds?: number;
   leg2_multiplier?: number;
 }): Promise<PairSpreadQueryResult> {
   const url = buildUrl("/pair-spread/query", query);

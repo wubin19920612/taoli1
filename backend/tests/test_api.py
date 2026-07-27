@@ -663,8 +663,10 @@ def test_pair_spread_query_endpoint_uses_on_demand_service() -> None:
             *,
             hours: int,
             interval_minutes: int = 1,
+            interval_seconds: int | None = None,
             leg2_multiplier: float = 1.0,
         ) -> PairSpreadQueryResult:
+            resolved_interval_seconds = interval_seconds or interval_minutes * 60
             leg1_current = PairSpreadCurrentLeg(
                 exchange=leg1.exchange,
                 symbol=leg1.symbol,
@@ -690,6 +692,7 @@ def test_pair_spread_query_endpoint_uses_on_demand_service() -> None:
                 leg2=leg2,
                 hours=hours,
                 interval_minutes=interval_minutes,
+                interval_seconds=resolved_interval_seconds,
                 leg2_multiplier=leg2_multiplier,
                 observed_at=now,
                 point_count=1,
@@ -739,10 +742,98 @@ def test_pair_spread_query_endpoint_uses_on_demand_service() -> None:
     assert payload["leg2"]["market_type"] == "future"
     assert payload["hours"] == 6
     assert payload["interval_minutes"] == 5
+    assert payload["interval_seconds"] == 300
     assert payload["leg2_multiplier"] == 10
     assert payload["point_count"] == 1
     assert payload["current"]["spread_pct"] == 2
     assert service.closed is True
+
+
+def test_pair_spread_query_endpoint_accepts_second_interval() -> None:
+    now = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
+
+    class FakePairSpreadService:
+        async def query(
+            self,
+            leg1: PairSpreadLegQuery,
+            leg2: PairSpreadLegQuery,
+            *,
+            hours: int,
+            interval_minutes: int = 1,
+            interval_seconds: int | None = None,
+            leg2_multiplier: float = 1.0,
+        ) -> PairSpreadQueryResult:
+            assert interval_minutes == 1
+            assert interval_seconds == 5
+            leg1_current = PairSpreadCurrentLeg(
+                exchange=leg1.exchange,
+                symbol=leg1.symbol,
+                market_type=leg1.market_type,
+                raw_symbol=leg1.symbol,
+                price=100,
+                price_field=PairSpreadPriceField.MID_PRICE,
+                mid_price=100,
+                timestamp=now,
+            )
+            leg2_current = PairSpreadCurrentLeg(
+                exchange=leg2.exchange,
+                symbol=leg2.symbol,
+                market_type=leg2.market_type,
+                raw_symbol=leg2.symbol,
+                price=101,
+                price_field=PairSpreadPriceField.MID_PRICE,
+                mid_price=101,
+                timestamp=now,
+            )
+            return PairSpreadQueryResult(
+                leg1=leg1,
+                leg2=leg2,
+                hours=hours,
+                interval_minutes=1,
+                interval_seconds=5,
+                leg2_multiplier=leg2_multiplier,
+                observed_at=now,
+                point_count=1,
+                first_seen_at=now,
+                last_seen_at=now,
+                spread_abs=PairSpreadValueStats(current=1),
+                spread_pct=PairSpreadValueStats(current=1),
+                current=PairSpreadCurrentSnapshot(
+                    observed_at=now,
+                    leg1=leg1_current,
+                    leg2=leg2_current,
+                    spread_abs=1,
+                    spread_pct=1,
+                ),
+                points=[
+                    {
+                        "bucket_at": now,
+                        "leg1_close": 100,
+                        "leg2_close": 101,
+                        "spread_abs": 1,
+                        "spread_pct": 1,
+                    }
+                ],
+            )
+
+        async def aclose(self) -> None:
+            return None
+
+    app = create_app(settings=Settings(database_url="sqlite:///:memory:"))
+    app.state.pair_spread_query_service_factory = FakePairSpreadService
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/pair-spread/query"
+            "?leg1_exchange=binance&leg1_symbol=btc"
+            "&leg2_exchange=okx&leg2_symbol=btc&hours=1"
+            "&interval_seconds=5"
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["interval_minutes"] == 1
+    assert payload["interval_seconds"] == 5
 
 
 def test_premium_index_endpoints_use_on_demand_service() -> None:

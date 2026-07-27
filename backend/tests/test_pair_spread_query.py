@@ -17,6 +17,7 @@ from app.models.pair_spread import (
 from app.services.pair_spread_query import (
     PairSpreadQueryError,
     PairSpreadQueryService,
+    _REALTIME_PAIR_SPREAD_CACHE,
     _hyperliquid_history_limit_warning,
     build_pair_spread_points,
 )
@@ -158,6 +159,65 @@ async def test_pair_spread_query_builds_stats_current_and_funding() -> None:
     assert result.leg2_multiplier == 10
     assert len(result.funding_history) == 2
     assert result.warnings == []
+
+
+@pytest.mark.asyncio
+async def test_pair_spread_query_accumulates_realtime_second_points() -> None:
+    _REALTIME_PAIR_SPREAD_CACHE.clear()
+
+    class FakePairSpreadService(PairSpreadQueryService):
+        async def _fetch_current_leg(
+            self,
+            exchange: str,
+            symbol: str,
+            market_type: MarketType = MarketType.FUTURE,
+        ):
+            price = 100 if exchange == "binance" else self.right_price
+            return current_leg(exchange, symbol, price, market_type)
+
+        async def _fetch_funding_history(self, exchange: str, symbol: str, start, end):
+            return []
+
+    service = FakePairSpreadService()
+    service.right_price = 101
+    try:
+        first = await service.query(
+            PairSpreadLegQuery(exchange="binance", symbol="btc"),
+            PairSpreadLegQuery(exchange="okx", symbol="btc"),
+            hours=1,
+            interval_seconds=5,
+            now=datetime(2026, 7, 10, 12, 0, 3, tzinfo=UTC),
+        )
+        service.right_price = 102
+        updated_same_bucket = await service.query(
+            PairSpreadLegQuery(exchange="binance", symbol="btc"),
+            PairSpreadLegQuery(exchange="okx", symbol="btc"),
+            hours=1,
+            interval_seconds=5,
+            now=datetime(2026, 7, 10, 12, 0, 4, tzinfo=UTC),
+        )
+        service.right_price = 103
+        next_bucket = await service.query(
+            PairSpreadLegQuery(exchange="binance", symbol="btc"),
+            PairSpreadLegQuery(exchange="okx", symbol="btc"),
+            hours=1,
+            interval_seconds=5,
+            now=datetime(2026, 7, 10, 12, 0, 8, tzinfo=UTC),
+        )
+    finally:
+        await service.aclose()
+        _REALTIME_PAIR_SPREAD_CACHE.clear()
+
+    assert first.interval_seconds == 5
+    assert first.interval_minutes == 1
+    assert first.points[0].bucket_at == datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
+    assert first.point_count == 1
+    assert "实时采样" in first.warnings[0]
+    assert updated_same_bucket.point_count == 1
+    assert updated_same_bucket.spread_abs.current == 2
+    assert next_bucket.point_count == 2
+    assert [point.bucket_at.second for point in next_bucket.points] == [0, 5]
+    assert next_bucket.spread_abs.current == 3
 
 
 @pytest.mark.asyncio

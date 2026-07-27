@@ -35,6 +35,8 @@ from app.models.pair_spread import (
 
 MINUTE_MS = 60_000
 HYPERLIQUID_CANDLE_LIMIT = 5000
+PAIR_SPREAD_REALTIME_MAX_POINTS = 4000
+PAIR_SPREAD_HISTORICAL_INTERVAL_SECONDS = (60, 300, 900)
 PAIR_SPREAD_TIMEOUT = httpx.Timeout(18.0, connect=3.0, read=14.0, write=5.0, pool=5.0)
 DISPLAY_TZ = timezone(timedelta(hours=8))
 BINANCE_ALPHA_KLINES_URL = "https://www.binance.com/bapi/defi/v1/public/alpha-trade/klines"
@@ -65,8 +67,18 @@ def _interval_ms(interval_minutes: int) -> int:
     return interval_minutes * MINUTE_MS
 
 
+def _interval_minutes_from_seconds(interval_seconds: int) -> int:
+    return max(1, interval_seconds // 60)
+
+
 def _floor_minute(value: datetime) -> datetime:
     return value.astimezone(UTC).replace(second=0, microsecond=0)
+
+
+def _floor_interval(value: datetime, interval_seconds: int) -> datetime:
+    timestamp = int(value.astimezone(UTC).timestamp())
+    bucket_timestamp = timestamp - (timestamp % interval_seconds)
+    return datetime.fromtimestamp(bucket_timestamp, UTC)
 
 
 def _bucket_datetime_ms(value: Any) -> datetime | None:
@@ -217,6 +229,12 @@ def _append_unique(items: list[str], item: str) -> None:
         items.append(item)
 
 
+def _interval_text(interval_seconds: int) -> str:
+    if interval_seconds % 60 == 0:
+        return f"{interval_seconds // 60}分钟"
+    return f"{interval_seconds}秒"
+
+
 def _market_type_text(market_type: MarketType) -> str:
     return "现货" if market_type == MarketType.SPOT else "合约"
 
@@ -229,6 +247,43 @@ def _extend_unique(items: list[str], new_items: list[str]) -> None:
 def _warnings_text(items: list[str]) -> str:
     unique_items = list(dict.fromkeys(items))
     return "; ".join(unique_items)
+
+
+_REALTIME_PAIR_SPREAD_CACHE: dict[str, list[PairSpreadPoint]] = {}
+
+
+def _realtime_cache_key(
+    leg1: PairSpreadLegQuery,
+    leg2: PairSpreadLegQuery,
+    *,
+    leg2_multiplier: float,
+    interval_seconds: int,
+) -> str:
+    return "|".join(
+        (
+            leg1.exchange,
+            leg1.market_type,
+            leg1.symbol,
+            leg2.exchange,
+            leg2.market_type,
+            leg2.symbol,
+            f"{leg2_multiplier:.12g}",
+            str(interval_seconds),
+        )
+    )
+
+
+def _append_realtime_point(
+    points: list[PairSpreadPoint],
+    point: PairSpreadPoint,
+) -> list[PairSpreadPoint]:
+    if points and points[-1].bucket_at == point.bucket_at:
+        points[-1] = point
+    else:
+        points.append(point)
+    if len(points) > PAIR_SPREAD_REALTIME_MAX_POINTS:
+        del points[:-PAIR_SPREAD_REALTIME_MAX_POINTS]
+    return points
 
 
 def _hyperliquid_history_limit_warning(
@@ -316,11 +371,23 @@ class PairSpreadQueryService:
         *,
         hours: int,
         interval_minutes: int = 1,
+        interval_seconds: int | None = None,
         leg2_multiplier: float = 1.0,
         now: datetime | None = None,
     ) -> PairSpreadQueryResult:
         if leg2_multiplier <= 0:
             raise PairSpreadQueryError("leg2_multiplier must be positive")
+        resolved_interval_seconds = interval_seconds or interval_minutes * 60
+        if resolved_interval_seconds not in PAIR_SPREAD_HISTORICAL_INTERVAL_SECONDS:
+            return await self._query_realtime(
+                leg1,
+                leg2,
+                hours=hours,
+                interval_seconds=resolved_interval_seconds,
+                leg2_multiplier=leg2_multiplier,
+                now=now,
+            )
+        interval_minutes = _interval_minutes_from_seconds(resolved_interval_seconds)
         observed_at = now or utc_now()
         end = _floor_minute(observed_at)
         requested_start = end - timedelta(hours=hours)
@@ -422,6 +489,7 @@ class PairSpreadQueryService:
             leg2=leg2,
             hours=hours,
             interval_minutes=interval_minutes,
+            interval_seconds=resolved_interval_seconds,
             leg2_multiplier=leg2_multiplier,
             observed_at=observed_at,
             point_count=len(points),
@@ -432,6 +500,84 @@ class PairSpreadQueryService:
             current=current,
             points=points,
             funding_history=sorted(funding1 + funding2, key=lambda item: item.funding_time),
+            warnings=warnings,
+        )
+
+    async def _query_realtime(
+        self,
+        leg1: PairSpreadLegQuery,
+        leg2: PairSpreadLegQuery,
+        *,
+        hours: int,
+        interval_seconds: int,
+        leg2_multiplier: float,
+        now: datetime | None = None,
+    ) -> PairSpreadQueryResult:
+        observed_at = now or utc_now()
+        warnings: list[str] = []
+        current_leg1, current_leg2 = await asyncio.gather(
+            self._fetch_current_with_warning(leg1, warnings),
+            self._fetch_current_with_warning(leg2, warnings),
+        )
+        current = (
+            self._build_current_snapshot(
+                current_leg1,
+                _scale_current_leg(current_leg2, leg2_multiplier),
+                observed_at,
+            )
+            if current_leg1 is not None and current_leg2 is not None
+            else None
+        )
+        if current is None:
+            suffix = f": {_warnings_text(warnings)}" if warnings else ""
+            raise PairSpreadQueryError(f"没有拿到可用于实时采样的当前价格{suffix}")
+
+        bucket_at = _floor_interval(observed_at, interval_seconds)
+        cache_key = _realtime_cache_key(
+            leg1,
+            leg2,
+            leg2_multiplier=leg2_multiplier,
+            interval_seconds=interval_seconds,
+        )
+        # 秒级周期没有统一的跨交易所历史K线来源，使用每次查询拿到的实时价格形成可保存的本地采样序列。
+        cached_points = _REALTIME_PAIR_SPREAD_CACHE.setdefault(cache_key, [])
+        _append_realtime_point(
+            cached_points,
+            PairSpreadPoint(
+                bucket_at=bucket_at,
+                leg1_close=current.leg1.price,
+                leg2_close=current.leg2.price,
+                spread_abs=current.spread_abs,
+                spread_pct=current.spread_pct,
+            ),
+        )
+        cutoff = observed_at - timedelta(hours=hours)
+        points = [point for point in cached_points if point.bucket_at >= cutoff]
+        if len(points) != len(cached_points):
+            _REALTIME_PAIR_SPREAD_CACHE[cache_key] = points
+
+        if len(points) <= 1:
+            _append_unique(
+                warnings,
+                f"{_interval_text(interval_seconds)}周期为实时采样，需要保持自动刷新一段时间后才会形成连续曲线。",
+            )
+
+        return PairSpreadQueryResult(
+            leg1=leg1,
+            leg2=leg2,
+            hours=hours,
+            interval_minutes=1,
+            interval_seconds=interval_seconds,
+            leg2_multiplier=leg2_multiplier,
+            observed_at=observed_at,
+            point_count=len(points),
+            first_seen_at=points[0].bucket_at if points else None,
+            last_seen_at=points[-1].bucket_at if points else None,
+            spread_abs=_stats([point.spread_abs for point in points]),
+            spread_pct=_stats([point.spread_pct for point in points]),
+            current=current,
+            points=points,
+            funding_history=[],
             warnings=warnings,
         )
 

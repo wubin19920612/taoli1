@@ -48,14 +48,15 @@ type LegacyPairSpreadFormValues = Omit<PairSpreadFormValues, "leg1_market_type" 
 type SavedPairSpreadPreset = PairSpreadFormValues & {
   id: string;
   hours: number;
-  intervalMinutes: number;
+  intervalSeconds: number;
   savedAt: string;
 };
 
 type LegacySavedPairSpreadPreset = LegacyPairSpreadFormValues & {
   id: string;
   hours: number;
-  intervalMinutes: number;
+  intervalMinutes?: number;
+  intervalSeconds?: number;
   savedAt: string;
 };
 
@@ -70,7 +71,7 @@ type PairPriceChartMode = "auto" | "raw" | "indexed";
 type LastPairSpreadState = {
   values: PairSpreadFormValues;
   hours: number;
-  intervalMinutes: number;
+  intervalSeconds: number;
   result: PairSpreadQueryResult;
   savedAt: string;
 };
@@ -108,10 +109,16 @@ const exchangeOptions = [
 ].map((value) => ({ label: exchangeLabels[value] ?? value, value }));
 
 const intervalOptions = [
-  { label: "1分钟", value: 1 },
-  { label: "5分钟", value: 5 },
-  { label: "15分钟", value: 15 }
+  { label: "5秒", value: 5 },
+  { label: "10秒", value: 10 },
+  { label: "30秒", value: 30 },
+  { label: "1分钟", value: 60 },
+  { label: "5分钟", value: 300 },
+  { label: "15分钟", value: 900 }
 ];
+
+const CUSTOM_INTERVAL_VALUE = -1;
+const DEFAULT_PAIR_INTERVAL_SECONDS = 5;
 
 const marketTypeOptions: Array<{ label: string; value: MarketType }> = [
   { label: "合约", value: "future" },
@@ -177,6 +184,47 @@ function clampHours(value: number | null): number {
   return Math.min(720, Math.max(1, Math.round(value)));
 }
 
+function clampIntervalSeconds(value: number | null | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_PAIR_INTERVAL_SECONDS;
+  }
+  return Math.min(86_400, Math.max(5, Math.round(value)));
+}
+
+function intervalSecondsFromLegacy(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_PAIR_INTERVAL_SECONDS;
+  }
+  return clampIntervalSeconds(value * 60);
+}
+
+function intervalLabel(seconds: number): string {
+  const normalized = clampIntervalSeconds(seconds);
+  if (normalized % 60 === 0) {
+    const minutes = normalized / 60;
+    return `${minutes}分钟`;
+  }
+  return `${normalized}秒`;
+}
+
+function intervalMinutesParam(seconds: number): number {
+  const normalized = clampIntervalSeconds(seconds);
+  if (normalized === 300) {
+    return 5;
+  }
+  if (normalized === 900) {
+    return 15;
+  }
+  return 1;
+}
+
+function intervalSelectValue(seconds: number): number {
+  const normalized = clampIntervalSeconds(seconds);
+  return intervalOptions.some((option) => option.value === normalized)
+    ? normalized
+    : CUSTOM_INTERVAL_VALUE;
+}
+
 function normalizeMarketType(value: unknown): MarketType {
   return value === "spot" ? "spot" : "future";
 }
@@ -221,7 +269,7 @@ function normalizePairForm(values: LegacyPairSpreadFormValues): PairSpreadFormVa
   };
 }
 
-function pairQueryFromUrl(): { values: PairSpreadFormValues; hours: number; intervalMinutes: number } | null {
+function pairQueryFromUrl(): { values: PairSpreadFormValues; hours: number; intervalSeconds: number } | null {
   if (typeof window === "undefined") {
     return null;
   }
@@ -233,10 +281,11 @@ function pairQueryFromUrl(): { values: PairSpreadFormValues; hours: number; inte
   if (!leg1Exchange || !leg1Symbol || !leg2Exchange || !leg2Symbol) {
     return null;
   }
-  const rawInterval = Number(params.get("interval_minutes") ?? 1);
-  const intervalMinutes = intervalOptions.some((option) => option.value === rawInterval)
-    ? rawInterval
-    : 1;
+  const rawIntervalSeconds = Number(params.get("interval_seconds") ?? NaN);
+  const rawIntervalMinutes = Number(params.get("interval_minutes") ?? NaN);
+  const intervalSeconds = Number.isFinite(rawIntervalSeconds)
+    ? clampIntervalSeconds(rawIntervalSeconds)
+    : intervalSecondsFromLegacy(rawIntervalMinutes);
   const multiplier = Number(params.get("leg2_multiplier") ?? 1);
   return {
     values: normalizePairForm({
@@ -249,7 +298,7 @@ function pairQueryFromUrl(): { values: PairSpreadFormValues; hours: number; inte
       leg2_multiplier: Number.isFinite(multiplier) && multiplier > 0 ? multiplier : 1
     }),
     hours: clampHours(Number(params.get("hours") ?? 4)),
-    intervalMinutes
+    intervalSeconds
   };
 }
 
@@ -266,8 +315,8 @@ function pairPresetId(values: PairSpreadFormValues): string {
   ].join("|");
 }
 
-function pairQueryKey(values: PairSpreadFormValues, hours: number, intervalMinutes: number): string {
-  return `${pairPresetId(values)}|${clampHours(hours)}|${intervalMinutes}`;
+function pairQueryKey(values: PairSpreadFormValues, hours: number, intervalSeconds: number): string {
+  return `${pairPresetId(values)}|${clampHours(hours)}|${clampIntervalSeconds(intervalSeconds)}`;
 }
 
 function pairFormFromResult(result: PairSpreadQueryResult): PairSpreadFormValues {
@@ -286,7 +335,7 @@ function applyPairQueryParams(
   url: URL,
   values: PairSpreadFormValues,
   hours: number,
-  intervalMinutes: number
+  intervalSeconds: number
 ): void {
   url.searchParams.set("leg1_exchange", values.leg1_exchange);
   url.searchParams.set("leg1_market_type", values.leg1_market_type);
@@ -296,10 +345,11 @@ function applyPairQueryParams(
   url.searchParams.set("leg2_symbol", values.leg2_symbol);
   url.searchParams.set("leg2_multiplier", compactNumber(values.leg2_multiplier, 8));
   url.searchParams.set("hours", String(clampHours(hours)));
-  url.searchParams.set("interval_minutes", String(intervalMinutes));
+  url.searchParams.set("interval_seconds", String(clampIntervalSeconds(intervalSeconds)));
+  url.searchParams.set("interval_minutes", String(intervalMinutesParam(intervalSeconds)));
 }
 
-function replacePairQueryInUrl(values: PairSpreadFormValues, hours: number, intervalMinutes: number): void {
+function replacePairQueryInUrl(values: PairSpreadFormValues, hours: number, intervalSeconds: number): void {
   if (typeof window === "undefined") {
     return;
   }
@@ -312,7 +362,7 @@ function replacePairQueryInUrl(values: PairSpreadFormValues, hours: number, inte
   url.searchParams.delete("exchange");
   url.searchParams.delete("symbol");
   url.searchParams.delete("from");
-  applyPairQueryParams(url, values, hours, intervalMinutes);
+  applyPairQueryParams(url, values, hours, intervalSeconds);
   window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
 }
 
@@ -338,6 +388,7 @@ function isPairSpreadQueryResult(value: unknown): value is PairSpreadQueryResult
     isPairSpreadLegQuery(item.leg2) &&
     typeof item.hours === "number" &&
     typeof item.interval_minutes === "number" &&
+    (item.interval_seconds === undefined || typeof item.interval_seconds === "number") &&
     typeof item.leg2_multiplier === "number" &&
     Array.isArray(item.points) &&
     Array.isArray(item.funding_history) &&
@@ -353,7 +404,7 @@ function isLastPairSpreadState(value: unknown): value is LastPairSpreadState {
   return (
     typeof item.savedAt === "string" &&
     typeof item.hours === "number" &&
-    typeof item.intervalMinutes === "number" &&
+    (typeof item.intervalSeconds === "number" || typeof (item as { intervalMinutes?: unknown }).intervalMinutes === "number") &&
     Boolean(item.values) &&
     isPairSpreadQueryResult(item.result)
   );
@@ -369,11 +420,19 @@ function loadLastPairSpreadState(): LastPairSpreadState | null {
       return null;
     }
     const values = normalizePairForm(parsed.values);
+    const intervalSeconds =
+      typeof parsed.intervalSeconds === "number"
+        ? clampIntervalSeconds(parsed.intervalSeconds)
+        : intervalSecondsFromLegacy((parsed as { intervalMinutes?: unknown }).intervalMinutes);
+    const result = {
+      ...parsed.result,
+      interval_seconds: parsed.result.interval_seconds ?? intervalSeconds
+    };
     return {
       values,
       hours: clampHours(parsed.hours),
-      intervalMinutes: parsed.intervalMinutes,
-      result: parsed.result,
+      intervalSeconds,
+      result,
       savedAt: parsed.savedAt
     };
   } catch {
@@ -384,7 +443,7 @@ function loadLastPairSpreadState(): LastPairSpreadState | null {
 function storeLastPairSpreadState(
   values: PairSpreadFormValues,
   hours: number,
-  intervalMinutes: number,
+  intervalSeconds: number,
   result: PairSpreadQueryResult
 ): void {
   if (typeof window === "undefined") {
@@ -393,7 +452,7 @@ function storeLastPairSpreadState(
   const state: LastPairSpreadState = {
     values,
     hours: clampHours(hours),
-    intervalMinutes,
+    intervalSeconds: clampIntervalSeconds(intervalSeconds),
     result,
     savedAt: new Date().toISOString()
   };
@@ -408,7 +467,7 @@ function isSavedPreset(value: unknown): value is LegacySavedPairSpreadPreset {
   if (!value || typeof value !== "object") {
     return false;
   }
-  const item = value as Partial<SavedPairSpreadPreset>;
+  const item = value as Partial<LegacySavedPairSpreadPreset>;
   const hasValidMarketTypes =
     (item.leg1_market_type === undefined || item.leg1_market_type === "future" || item.leg1_market_type === "spot") &&
     (item.leg2_market_type === undefined || item.leg2_market_type === "future" || item.leg2_market_type === "spot");
@@ -420,7 +479,7 @@ function isSavedPreset(value: unknown): value is LegacySavedPairSpreadPreset {
     typeof item.leg2_symbol === "string" &&
     typeof item.leg2_multiplier === "number" &&
     typeof item.hours === "number" &&
-    typeof item.intervalMinutes === "number" &&
+    (typeof item.intervalSeconds === "number" || typeof item.intervalMinutes === "number") &&
     typeof item.savedAt === "string" &&
     hasValidMarketTypes
   );
@@ -433,7 +492,10 @@ function normalizeSavedPreset(preset: LegacySavedPairSpreadPreset): SavedPairSpr
     ...values,
     id: pairPresetId(values),
     hours: clampHours(preset.hours),
-    intervalMinutes: preset.intervalMinutes,
+    intervalSeconds:
+      typeof preset.intervalSeconds === "number"
+        ? clampIntervalSeconds(preset.intervalSeconds)
+        : intervalSecondsFromLegacy(preset.intervalMinutes),
     savedAt: preset.savedAt
   };
 }
@@ -472,6 +534,9 @@ function chartTime(value: string | null | undefined, spanHours: number): string 
     return "-";
   }
   const parsed = dayjs.utc(value).utcOffset(8);
+  if (spanHours <= 1) {
+    return parsed.format("HH:mm:ss");
+  }
   return spanHours <= 24 ? parsed.format("HH:mm") : parsed.format("MM-DD HH:mm");
 }
 
@@ -512,6 +577,10 @@ function savedPresetLabel(preset: SavedPairSpreadPreset): string {
   );
 }
 
+function resultIntervalSeconds(result: PairSpreadQueryResult): number {
+  return clampIntervalSeconds(result.interval_seconds ?? result.interval_minutes * 60);
+}
+
 function supportsPremiumCompare(result: PairSpreadQueryResult): boolean {
   return result.leg1.market_type === "future" && result.leg2.market_type === "future";
 }
@@ -523,19 +592,19 @@ function supportsPremiumIndexLeg(leg: PairSpreadLegQuery | null | undefined): le
 function openPremiumIndexFromLeg(
   leg: PairSpreadLegQuery,
   hours: number,
-  intervalMinutes: number,
+  intervalSeconds: number,
   pairResult: PairSpreadQueryResult | null
 ) {
   const url = new URL(window.location.href);
   if (pairResult) {
-    applyPairQueryParams(url, pairFormFromResult(pairResult), pairResult.hours, pairResult.interval_minutes);
+    applyPairQueryParams(url, pairFormFromResult(pairResult), pairResult.hours, resultIntervalSeconds(pairResult));
   }
   url.searchParams.set("page", "premium-index");
   url.searchParams.set("from", "pair-monitor");
   url.searchParams.set("exchange", leg.exchange);
   url.searchParams.set("symbol", leg.symbol);
   url.searchParams.set("hours", String(clampHours(hours)));
-  url.searchParams.set("interval_minutes", String(intervalMinutes));
+  url.searchParams.set("interval_minutes", String(intervalMinutesParam(intervalSeconds)));
   window.history.pushState({}, "", `${url.pathname}${url.search}${url.hash}`);
   window.dispatchEvent(new Event("taoli1:navigate"));
 }
@@ -573,7 +642,7 @@ function chartSpanHours(points: PairSpreadPoint[]): number {
   }
   const start = dayjs.utc(points[0].bucket_at);
   const end = dayjs.utc(points[points.length - 1].bucket_at);
-  return Math.max(end.diff(start, "minute") / 60, 0);
+  return Math.max(end.diff(start, "second") / 3600, 0);
 }
 
 function chartTicks(points: PairSpreadPoint[], maxTicks = 7): Array<{ index: number; point: PairSpreadPoint }> {
@@ -882,7 +951,7 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
             {leftLegLabel(result)} / {rightLegLabel(result)}
           </Tag>
           <Tag>{result.point_count} 点</Tag>
-          <Tag>{result.interval_minutes}m 周期</Tag>
+          <Tag>{intervalLabel(resultIntervalSeconds(result))} 周期</Tag>
         </div>
         <Typography.Text type="secondary">最新 {fullTime(result.observed_at)}</Typography.Text>
       </div>
@@ -1430,14 +1499,17 @@ export function PairMonitorPage() {
     if (!initialUrlQuery) {
       return cached;
     }
-    return pairQueryKey(cached.values, cached.hours, cached.intervalMinutes) ===
-      pairQueryKey(initialUrlQuery.values, initialUrlQuery.hours, initialUrlQuery.intervalMinutes)
+    return pairQueryKey(cached.values, cached.hours, cached.intervalSeconds) ===
+      pairQueryKey(initialUrlQuery.values, initialUrlQuery.hours, initialUrlQuery.intervalSeconds)
       ? cached
       : null;
   }, [initialUrlQuery]);
   const loadedUrlQueryRef = useRef("");
   const [hours, setHours] = useState(() => initialCachedState?.hours ?? 4);
-  const [intervalMinutes, setIntervalMinutes] = useState(() => initialCachedState?.intervalMinutes ?? 5);
+  const [intervalSeconds, setIntervalSeconds] = useState(() => initialCachedState?.intervalSeconds ?? DEFAULT_PAIR_INTERVAL_SECONDS);
+  const [customInterval, setCustomInterval] = useState(
+    () => intervalSelectValue(initialCachedState?.intervalSeconds ?? DEFAULT_PAIR_INTERVAL_SECONDS) === CUSTOM_INTERVAL_VALUE
+  );
   const [locationSearch, setLocationSearch] = useState(() =>
     typeof window === "undefined" ? "" : window.location.search
   );
@@ -1477,13 +1549,13 @@ export function PairMonitorPage() {
           exchange: pairResult.leg1.exchange,
           symbol: pairResult.leg1.symbol,
           hours: pairResult.hours,
-          interval_minutes: pairResult.interval_minutes
+          interval_minutes: intervalMinutesParam(resultIntervalSeconds(pairResult))
         }),
         queryPremiumIndex({
           exchange: pairResult.leg2.exchange,
           symbol: pairResult.leg2.symbol,
           hours: pairResult.hours,
-          interval_minutes: pairResult.interval_minutes
+          interval_minutes: intervalMinutesParam(resultIntervalSeconds(pairResult))
         })
       ]);
       const warnings: string[] = [];
@@ -1561,7 +1633,7 @@ export function PairMonitorPage() {
 
   const runQuery = useCallback(async (override?: {
     hours?: number;
-    intervalMinutes?: number;
+    intervalSeconds?: number;
     values?: PairSpreadFormValues;
     premiumMode?: "history" | "current";
   }) => {
@@ -1571,7 +1643,7 @@ export function PairMonitorPage() {
       const values = normalizePairForm(override?.values ?? await form.validateFields());
       form.setFieldsValue(values);
       const queryHours = clampHours(override?.hours ?? hours);
-      const queryInterval = override?.intervalMinutes ?? intervalMinutes;
+      const queryIntervalSeconds = clampIntervalSeconds(override?.intervalSeconds ?? intervalSeconds);
       const next = await queryPairSpread({
         leg1_exchange: values.leg1_exchange,
         leg1_market_type: values.leg1_market_type,
@@ -1580,14 +1652,15 @@ export function PairMonitorPage() {
         leg2_market_type: values.leg2_market_type,
         leg2_symbol: values.leg2_symbol,
         leg2_multiplier: values.leg2_multiplier,
-        interval_minutes: queryInterval,
+        interval_minutes: intervalMinutesParam(queryIntervalSeconds),
+        interval_seconds: queryIntervalSeconds,
         hours: queryHours
       });
       setResult(next);
       const resultValues = pairFormFromResult(next);
       form.setFieldsValue(resultValues);
-      storeLastPairSpreadState(resultValues, queryHours, queryInterval, next);
-      replacePairQueryInUrl(resultValues, queryHours, queryInterval);
+      storeLastPairSpreadState(resultValues, queryHours, queryIntervalSeconds, next);
+      replacePairQueryInUrl(resultValues, queryHours, queryIntervalSeconds);
       if (showPremiumCompare) {
         if (override?.premiumMode === "current" && premiumCompare) {
           await refreshPremiumCompareCurrent(next);
@@ -1603,7 +1676,7 @@ export function PairMonitorPage() {
   }, [
     form,
     hours,
-    intervalMinutes,
+    intervalSeconds,
     loadPremiumCompare,
     premiumCompare,
     refreshPremiumCompareCurrent,
@@ -1627,20 +1700,21 @@ export function PairMonitorPage() {
     if (!incoming) {
       return;
     }
-    const key = `${pairPresetId(incoming.values)}|${incoming.hours}|${incoming.intervalMinutes}`;
+    const key = pairQueryKey(incoming.values, incoming.hours, incoming.intervalSeconds);
     if (loadedUrlQueryRef.current === key) {
       return;
     }
     loadedUrlQueryRef.current = key;
     form.setFieldsValue(incoming.values);
     setHours(incoming.hours);
-    setIntervalMinutes(incoming.intervalMinutes);
+    setIntervalSeconds(incoming.intervalSeconds);
+    setCustomInterval(intervalSelectValue(incoming.intervalSeconds) === CUSTOM_INTERVAL_VALUE);
     setAutoRefresh(false);
     setShowPremiumCompare(false);
     void runQuery({
       values: incoming.values,
       hours: incoming.hours,
-      intervalMinutes: incoming.intervalMinutes
+      intervalSeconds: incoming.intervalSeconds
     });
   }, [form, locationSearch, runQuery]);
 
@@ -1652,7 +1726,7 @@ export function PairMonitorPage() {
       if (!loading) {
         void runQuery({ premiumMode: "current" });
       }
-    }, 30_000);
+    }, clampIntervalSeconds(resultIntervalSeconds(result)) * 1000);
     return () => window.clearInterval(timer);
   }, [autoRefresh, loading, result, runQuery]);
 
@@ -1671,8 +1745,9 @@ export function PairMonitorPage() {
       leg2_multiplier: result.leg2_multiplier
     });
     setHours(result.hours);
-    setIntervalMinutes(result.interval_minutes);
-    void runQuery({ hours: result.hours, intervalMinutes: result.interval_minutes });
+    setIntervalSeconds(resultIntervalSeconds(result));
+    setCustomInterval(intervalSelectValue(resultIntervalSeconds(result)) === CUSTOM_INTERVAL_VALUE);
+    void runQuery({ hours: result.hours, intervalSeconds: resultIntervalSeconds(result) });
   };
 
   const saveCurrentPreset = async () => {
@@ -1682,7 +1757,7 @@ export function PairMonitorPage() {
         ...values,
         id: pairPresetId(values),
         hours: clampHours(hours),
-        intervalMinutes,
+        intervalSeconds: clampIntervalSeconds(intervalSeconds),
         savedAt: new Date().toISOString()
       };
       setSavedPresets((currentPresets) => {
@@ -1708,8 +1783,9 @@ export function PairMonitorPage() {
   const applySavedPreset = (preset: SavedPairSpreadPreset) => {
     form.setFieldsValue(preset);
     setHours(clampHours(preset.hours));
-    setIntervalMinutes(preset.intervalMinutes);
-    void runQuery({ values: preset, hours: preset.hours, intervalMinutes: preset.intervalMinutes });
+    setIntervalSeconds(preset.intervalSeconds);
+    setCustomInterval(intervalSelectValue(preset.intervalSeconds) === CUSTOM_INTERVAL_VALUE);
+    void runQuery({ values: preset, hours: preset.hours, intervalSeconds: preset.intervalSeconds });
   };
 
   const current = result?.current;
@@ -1722,7 +1798,7 @@ export function PairMonitorPage() {
   const leftPremiumLeg = supportsPremiumIndexLeg(result?.leg1) ? result.leg1 : null;
   const rightPremiumLeg = supportsPremiumIndexLeg(result?.leg2) ? result.leg2 : null;
   const premiumLinkHours = result?.hours ?? hours;
-  const premiumLinkIntervalMinutes = result?.interval_minutes ?? intervalMinutes;
+  const premiumLinkIntervalSeconds = result ? resultIntervalSeconds(result) : intervalSeconds;
 
   return (
     <div className="page pair-monitor-page pair-terminal-page">
@@ -1732,7 +1808,7 @@ export function PairMonitorPage() {
 
       <section className="pair-query-panel">
         <Form form={form} initialValues={initialCachedState?.values ?? defaultFormValues} disabled={loading}>
-          <div className="pair-query-bar">
+          <div className={customInterval ? "pair-query-bar pair-query-bar-custom" : "pair-query-bar"}>
             <Form.Item name="leg1_exchange" rules={[{ required: true }]} className="pair-query-item">
               <Select options={exchangeOptions} showSearch />
             </Form.Item>
@@ -1770,10 +1846,33 @@ export function PairMonitorPage() {
             />
             <Select
               className="pair-query-select"
-              value={intervalMinutes}
-              options={intervalOptions}
-              onChange={setIntervalMinutes}
+              value={customInterval ? CUSTOM_INTERVAL_VALUE : intervalSelectValue(intervalSeconds)}
+              options={[
+                ...intervalOptions,
+                { label: "自定义", value: CUSTOM_INTERVAL_VALUE }
+              ]}
+              onChange={(value) => {
+                if (value === CUSTOM_INTERVAL_VALUE) {
+                  setCustomInterval(true);
+                } else {
+                  setCustomInterval(false);
+                  setIntervalSeconds(value);
+                }
+              }}
             />
+            {customInterval ? (
+              <InputNumber
+                addonBefore="自定义秒"
+                aria-label="自定义秒"
+                className="pair-query-custom-interval"
+                min={5}
+                max={86_400}
+                precision={0}
+                step={1}
+                value={intervalSeconds}
+                onChange={(value) => setIntervalSeconds(clampIntervalSeconds(value))}
+              />
+            ) : null}
             <Form.Item className="pair-query-refresh">
               <Switch checked={autoRefresh} checkedChildren="自动" unCheckedChildren="手动" onChange={setAutoRefresh} />
             </Form.Item>
@@ -1823,7 +1922,7 @@ export function PairMonitorPage() {
                 >
                   <span>{savedPresetLabel(preset)}</span>
                   <span className="pair-saved-meta">
-                    {durationLabel(preset.hours)} · {preset.intervalMinutes}m
+                    {durationLabel(preset.hours)} · {intervalLabel(preset.intervalSeconds)}
                   </span>
                 </Tag>
               ))}
@@ -1854,7 +1953,7 @@ export function PairMonitorPage() {
                 type="link"
                 icon={<LineChartOutlined />}
                 onClick={() =>
-                  openPremiumIndexFromLeg(leftPremiumLeg, premiumLinkHours, premiumLinkIntervalMinutes, result)
+                  openPremiumIndexFromLeg(leftPremiumLeg, premiumLinkHours, premiumLinkIntervalSeconds, result)
                 }
               >
                 查看溢价指数
@@ -1873,7 +1972,7 @@ export function PairMonitorPage() {
                 type="link"
                 icon={<LineChartOutlined />}
                 onClick={() =>
-                  openPremiumIndexFromLeg(rightPremiumLeg, premiumLinkHours, premiumLinkIntervalMinutes, result)
+                  openPremiumIndexFromLeg(rightPremiumLeg, premiumLinkHours, premiumLinkIntervalSeconds, result)
                 }
               >
                 查看溢价指数
@@ -1889,7 +1988,7 @@ export function PairMonitorPage() {
         />
         <MetricCard
           label="周期"
-          value={`${result?.interval_minutes ?? intervalMinutes}m`}
+          value={intervalLabel(result ? resultIntervalSeconds(result) : intervalSeconds)}
           sub={result ? `${dataRangeLabel(result, hours)} · ${fullTime(result.observed_at)}` : durationLabel(hours)}
         />
       </section>

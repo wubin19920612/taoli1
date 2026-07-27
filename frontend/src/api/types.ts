@@ -574,6 +574,7 @@ export interface PairSpreadQueryResult {
   leg2: PairSpreadLegQuery;
   hours: number;
   interval_minutes: number;
+  interval_seconds: number;
   leg2_multiplier: number;
   observed_at: string;
   point_count: number;

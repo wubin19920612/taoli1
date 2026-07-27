@@ -19,6 +19,9 @@ SUPPORTED_PAIR_SPREAD_EXCHANGES: tuple[str, ...] = (
 PAIR_SPREAD_MIN_HOURS = 1
 PAIR_SPREAD_MAX_HOURS = 720
 PAIR_SPREAD_INTERVAL_OPTIONS: tuple[int, ...] = (1, 5, 15)
+PAIR_SPREAD_INTERVAL_SECONDS_OPTIONS: tuple[int, ...] = (5, 10, 30, 60, 300, 900)
+PAIR_SPREAD_MIN_INTERVAL_SECONDS = 5
+PAIR_SPREAD_MAX_INTERVAL_SECONDS = 86_400
 
 
 class PairSpreadPriceField(StrEnum):
@@ -140,6 +143,7 @@ class PairSpreadQueryResult(BaseModel):
     leg2: PairSpreadLegQuery
     hours: int
     interval_minutes: int = 1
+    interval_seconds: int = 60
     leg2_multiplier: float = 1.0
     observed_at: datetime
     point_count: int
