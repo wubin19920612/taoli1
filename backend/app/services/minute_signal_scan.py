@@ -83,6 +83,9 @@ class GlobalMinuteSignalConfig:
     max_symbols: int = 30
     min_volume_24h_usdt: float = 100_000.0
     max_concurrency: int = 8
+    max_entry_basis_bps: float = 45.0
+    require_negative_premium_when_spot_above: bool = True
+    max_premium_when_spot_above_bps: float = -5.0
 
 
 class MinuteSignalAlertEngine:
@@ -517,6 +520,25 @@ class MinuteSignalScanService:
         liquidity_bonus = min(math.log10(max(volume, 1.0)), 10.0)
         return positive_basis * 2.0 + negative_premium + liquidity_bonus
 
+    @staticmethod
+    def _global_candidate_filter_reason(
+        item: dict[str, Any],
+        *,
+        max_entry_basis_bps: float,
+        require_negative_premium_when_spot_above: bool,
+        max_premium_when_spot_above_bps: float,
+    ) -> str | None:
+        basis = _finite(item.get("initial_basis_bps"))
+        if basis is None or basis > max_entry_basis_bps:
+            return "basis"
+        if basis <= 0 or not require_negative_premium_when_spot_above:
+            return None
+        premium = _finite(item.get("initial_premium_bps"))
+        # 现货还高于合约时，必须看到合约相对指数的负溢价，否则只是持久现货/合约基差。
+        if premium is None or premium > max_premium_when_spot_above_bps:
+            return "premium"
+        return None
+
     async def _scan_global_candidate(
         self,
         item: dict[str, Any],
@@ -589,6 +611,9 @@ class MinuteSignalScanService:
         hours: int = 4,
         max_symbols: int | None = None,
         min_volume_24h_usdt: float | None = None,
+        max_entry_basis_bps: float | None = None,
+        require_negative_premium_when_spot_above: bool | None = None,
+        max_premium_when_spot_above_bps: float | None = None,
     ) -> dict[str, Any]:
         defaults = GlobalMinuteSignalConfig()
         max_symbols = max_symbols or defaults.max_symbols
@@ -597,18 +622,38 @@ class MinuteSignalScanService:
             if min_volume_24h_usdt is None
             else min_volume_24h_usdt
         )
+        max_entry_basis_bps = (
+            defaults.max_entry_basis_bps
+            if max_entry_basis_bps is None
+            else max_entry_basis_bps
+        )
+        require_negative_premium_when_spot_above = (
+            defaults.require_negative_premium_when_spot_above
+            if require_negative_premium_when_spot_above is None
+            else require_negative_premium_when_spot_above
+        )
+        max_premium_when_spot_above_bps = (
+            defaults.max_premium_when_spot_above_bps
+            if max_premium_when_spot_above_bps is None
+            else max_premium_when_spot_above_bps
+        )
         universe = await self._fetch_global_universe()
+        volume_passed = [
+            item for item in universe if item["volume_24h_usdt"] >= min_volume_24h_usdt
+        ]
+        filter_reasons = {
+            id(item): self._global_candidate_filter_reason(
+                item,
+                max_entry_basis_bps=max_entry_basis_bps,
+                require_negative_premium_when_spot_above=require_negative_premium_when_spot_above,
+                max_premium_when_spot_above_bps=max_premium_when_spot_above_bps,
+            )
+            for item in volume_passed
+        }
         eligible = [
             item
-            for item in universe
-            if item["volume_24h_usdt"] >= min_volume_24h_usdt
-            and (
-                item["initial_basis_bps"] >= 0
-                or (
-                    item["initial_premium_bps"] is not None
-                    and item["initial_premium_bps"] <= 0
-                )
-            )
+            for item in volume_passed
+            if filter_reasons[id(item)] is None
         ]
         eligible.sort(key=self._global_candidate_score, reverse=True)
         selected = eligible[:max(1, min(max_symbols, 100))]
@@ -631,8 +676,17 @@ class MinuteSignalScanService:
             "hours": hours,
             "max_symbols": max_symbols,
             "min_volume_24h_usdt": min_volume_24h_usdt,
+            "max_entry_basis_bps": max_entry_basis_bps,
+            "require_negative_premium_when_spot_above": require_negative_premium_when_spot_above,
+            "max_premium_when_spot_above_bps": max_premium_when_spot_above_bps,
             "universe_count": len(universe),
             "eligible_count": len(eligible),
+            "filtered_by_basis_count": sum(
+                1 for reason in filter_reasons.values() if reason == "basis"
+            ),
+            "filtered_by_premium_count": sum(
+                1 for reason in filter_reasons.values() if reason == "premium"
+            ),
             "scanned_count": len(candidates),
             "signal_count": signal_count,
             "error_count": errors,
@@ -641,6 +695,15 @@ class MinuteSignalScanService:
                 (
                     "全市场扫描采用两阶段：先用 Binance Alpha ticker 最新价、Futures 成交额、basis 和 premium 发现候选，"
                     "再对候选做 1 分钟历史复核。"
+                ),
+                (
+                    f"当前初筛要求 basis <= {max_entry_basis_bps:.2f} bps；"
+                    "basis 为正表示 Alpha 现货高于合约。"
+                    + (
+                        f"若现货仍高于合约，还要求合约 premium <= {max_premium_when_spot_above_bps:.2f} bps。"
+                        if require_negative_premium_when_spot_above
+                        else "已关闭现货高于合约时的负 premium 要求。"
+                    )
                 ),
                 (
                     "当前候选池是 Binance Alpha 现货与 Binance Futures 永续的可映射交集，"

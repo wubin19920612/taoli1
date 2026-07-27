@@ -50,6 +50,7 @@ import type {
   PremiumIndexCurrentSnapshot,
   PremiumIndexQueryResult,
   MinuteSignalScanResult,
+  MinuteSignalSettings,
   MinuteSignalUniverseScanResult,
   RiskSettings,
   SecondLevelIndexComponentSample,
@@ -197,6 +198,17 @@ export async function getLivePilotPreview(): Promise<LivePilotPreview> {
 
 export async function updateLivePilotSettings(settings: LivePilotSettings): Promise<LivePilotSettings> {
   return fetchJson<LivePilotSettings>("/settings/live-pilot", {
+    method: "PUT",
+    body: JSON.stringify(settings)
+  });
+}
+
+export async function getMinuteSignalSettings(): Promise<MinuteSignalSettings> {
+  return fetchJson<MinuteSignalSettings>("/settings/minute-signals");
+}
+
+export async function updateMinuteSignalSettings(settings: MinuteSignalSettings): Promise<MinuteSignalSettings> {
+  return fetchJson<MinuteSignalSettings>("/settings/minute-signals", {
     method: "PUT",
     body: JSON.stringify(settings)
   });
@@ -652,6 +664,9 @@ export async function scanMinuteSignalUniverse(query: {
   max_symbols?: number;
   min_volume_24h_usdt?: number;
   alert_cooldown_minutes?: number;
+  max_entry_basis_bps?: number;
+  require_negative_premium_when_spot_above?: boolean;
+  max_premium_when_spot_above_bps?: number;
 } = {}): Promise<MinuteSignalUniverseScanResult> {
   const url = buildUrl("/minute-signals/scan-all", query);
   return fetch(url, { headers: authHeaders() }).then(async (response) => {

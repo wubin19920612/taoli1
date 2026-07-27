@@ -259,8 +259,8 @@ async def test_scan_all_returns_signal_candidates(monkeypatch) -> None:
                     "futures_price": 1.1,
                     "index_price": 1.0,
                     "volume_24h_usdt": 1_000_000,
-                    "initial_basis_bps": 1538.46,
-                    "initial_premium_bps": 1000.0,
+                    "initial_basis_bps": 30.0,
+                    "initial_premium_bps": -10.0,
                 }
             ]
         ),
@@ -293,6 +293,120 @@ async def test_scan_all_returns_signal_candidates(monkeypatch) -> None:
     assert result["scanned_count"] == 1
     assert result["signal_count"] == 1
     assert result["candidates"][0]["event_type"] == "SHOCK_ALERT"
+
+
+@pytest.mark.asyncio
+async def test_scan_all_filters_spot_above_future_when_premium_is_not_negative(monkeypatch) -> None:
+    service = MinuteSignalScanService()
+    monkeypatch.setattr(
+        service,
+        "_fetch_global_universe",
+        lambda: _async_value(
+            [
+                {
+                    "base_asset": "ESPORTS",
+                    "alpha_id": "ALPHA_999",
+                    "alpha_symbol": "ALPHA_999USDT",
+                    "futures_symbol": "ESPORTSUSDT",
+                    "alpha_price": 1.05,
+                    "futures_price": 1.0,
+                    "index_price": 1.0,
+                    "volume_24h_usdt": 1_000_000,
+                    "initial_basis_bps": 476.19,
+                    "initial_premium_bps": 0.0,
+                }
+            ]
+        ),
+    )
+
+    async def fail_if_scanned(**kwargs):
+        raise AssertionError(f"候选不应进入 1m 复核: {kwargs}")
+
+    monkeypatch.setattr(service, "scan_symbol", fail_if_scanned)
+
+    result = await service.scan_all(hours=2, max_symbols=5, min_volume_24h_usdt=0)
+
+    assert result["eligible_count"] == 0
+    assert result["scanned_count"] == 0
+    assert result["filtered_by_basis_count"] == 1
+    assert result["filtered_by_premium_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_scan_all_requires_negative_premium_when_spot_is_slightly_above(monkeypatch) -> None:
+    service = MinuteSignalScanService()
+    monkeypatch.setattr(
+        service,
+        "_fetch_global_universe",
+        lambda: _async_value(
+            [
+                {
+                    "base_asset": "AKE",
+                    "alpha_id": "ALPHA_331",
+                    "alpha_symbol": "ALPHA_331USDT",
+                    "futures_symbol": "AKEUSDT",
+                    "alpha_price": 1.004,
+                    "futures_price": 1.0,
+                    "index_price": 1.0,
+                    "volume_24h_usdt": 1_000_000,
+                    "initial_basis_bps": 39.84,
+                    "initial_premium_bps": 0.0,
+                }
+            ]
+        ),
+    )
+
+    result = await service.scan_all(hours=2, max_symbols=5, min_volume_24h_usdt=0)
+
+    assert result["eligible_count"] == 0
+    assert result["filtered_by_basis_count"] == 0
+    assert result["filtered_by_premium_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_scan_all_allows_spot_below_future_without_negative_premium(monkeypatch) -> None:
+    service = MinuteSignalScanService()
+    monkeypatch.setattr(
+        service,
+        "_fetch_global_universe",
+        lambda: _async_value(
+            [
+                {
+                    "base_asset": "AKE",
+                    "alpha_id": "ALPHA_331",
+                    "alpha_symbol": "ALPHA_331USDT",
+                    "futures_symbol": "AKEUSDT",
+                    "alpha_price": 0.99,
+                    "futures_price": 1.0,
+                    "index_price": 1.0,
+                    "volume_24h_usdt": 1_000_000,
+                    "initial_basis_bps": -101.01,
+                    "initial_premium_bps": 0.0,
+                }
+            ]
+        ),
+    )
+
+    async def fake_scan_symbol(*, alpha_symbol: str, futures_symbol: str, hours: int):
+        return {
+            "bar_count": 60,
+            "latest": {
+                "basis_bps": -20.0,
+                "premium_bps": 0.0,
+                "basis_peak_60m_bps": 30.0,
+                "compression_ratio": 0.7,
+            },
+            "events": [],
+        }
+
+    monkeypatch.setattr(service, "scan_symbol", fake_scan_symbol)
+
+    result = await service.scan_all(hours=2, max_symbols=5, min_volume_24h_usdt=0)
+
+    assert result["eligible_count"] == 1
+    assert result["scanned_count"] == 1
+    assert result["filtered_by_basis_count"] == 0
+    assert result["filtered_by_premium_count"] == 0
 
 
 def _signal_candidate(
@@ -398,7 +512,7 @@ def test_minute_signal_scan_all_route_sends_feishu_alert_for_targets() -> None:
     class FakeService:
         closed = False
 
-        async def scan_all(self, *, hours: int, max_symbols: int, min_volume_24h_usdt: float):
+        async def scan_all(self, *, hours: int, max_symbols: int, min_volume_24h_usdt: float, **kwargs):
             return _scan_all_result([_signal_candidate()])
 
         async def aclose(self) -> None:
@@ -429,7 +543,7 @@ def test_minute_signal_scan_all_route_sends_feishu_alert_for_targets() -> None:
 
 def test_minute_signal_scan_all_route_skips_feishu_alert_without_targets() -> None:
     class FakeService:
-        async def scan_all(self, *, hours: int, max_symbols: int, min_volume_24h_usdt: float):
+        async def scan_all(self, *, hours: int, max_symbols: int, min_volume_24h_usdt: float, **kwargs):
             return _scan_all_result([_signal_candidate(event_type=None)])
 
         async def aclose(self) -> None:
@@ -491,7 +605,7 @@ def test_minute_signal_scan_all_route_uses_factory() -> None:
     class FakeService:
         closed = False
 
-        async def scan_all(self, *, hours: int, max_symbols: int, min_volume_24h_usdt: float):
+        async def scan_all(self, *, hours: int, max_symbols: int, min_volume_24h_usdt: float, **kwargs):
             return {
                 "observed_at": "2026-07-25T00:00:00+00:00",
                 "hours": hours,

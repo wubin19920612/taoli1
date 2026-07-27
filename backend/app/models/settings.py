@@ -113,6 +113,18 @@ class LivePilotSettings(BaseModel):
     create_cards_enabled: bool = True
 
 
+class MinuteSignalSettings(BaseModel):
+    hours: int = Field(default=4, ge=1, le=24)
+    max_symbols: int = Field(default=30, ge=5, le=100)
+    min_volume_24h_usdt: float = Field(default=100_000, ge=0)
+    alert_cooldown_minutes: int = Field(default=60, ge=1, le=10_080)
+    # 入场时不希望 Alpha 现货明显贵于合约；45 bps 约等于 0.45%，接近平价。
+    max_entry_basis_bps: float = Field(default=45.0, ge=-10_000, le=10_000)
+    # 如果现货仍高于合约，要求合约相对指数有负溢价，否则多半只是持久基差。
+    require_negative_premium_when_spot_above: bool = True
+    max_premium_when_spot_above_bps: float = Field(default=-5.0, le=0)
+
+
 class LivePilotPreviewItem(BaseModel):
     opportunity_id: str
     symbol: str

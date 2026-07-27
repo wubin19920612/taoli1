@@ -1,4 +1,4 @@
-import { LineChartOutlined, ReloadOutlined, ThunderboltOutlined } from "@ant-design/icons";
+import { LineChartOutlined, ReloadOutlined, SaveOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import {
   Alert,
   Button,
@@ -13,31 +13,44 @@ import {
   Table,
   Tag,
   Tooltip,
-  Typography
+  Typography,
+  message
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useCallback, useEffect, useState } from "react";
 
-import { scanMinuteSignalUniverse } from "../api/client";
+import { getMinuteSignalSettings, scanMinuteSignalUniverse, updateMinuteSignalSettings } from "../api/client";
 import type {
   MinuteSignalEventType,
+  MinuteSignalSettings,
   MinuteSignalUniverseCandidate,
   MinuteSignalUniverseScanResult
 } from "../api/types";
 
-type FormValues = {
-  hours: number;
-  max_symbols: number;
-  min_volume_24h_usdt: number;
-  alert_cooldown_minutes: number;
-};
+type FormValues = MinuteSignalSettings;
 
 const defaultValues: FormValues = {
   hours: 4,
   max_symbols: 30,
   min_volume_24h_usdt: 100_000,
-  alert_cooldown_minutes: 60
+  alert_cooldown_minutes: 60,
+  max_entry_basis_bps: 45,
+  require_negative_premium_when_spot_above: true,
+  max_premium_when_spot_above_bps: -5
 };
+
+function normalizeSettings(values: Partial<FormValues> = {}): FormValues {
+  const merged = { ...defaultValues, ...values };
+  return {
+    hours: Number(merged.hours),
+    max_symbols: Number(merged.max_symbols),
+    min_volume_24h_usdt: Number(merged.min_volume_24h_usdt),
+    alert_cooldown_minutes: Number(merged.alert_cooldown_minutes),
+    max_entry_basis_bps: Number(merged.max_entry_basis_bps),
+    require_negative_premium_when_spot_above: Boolean(merged.require_negative_premium_when_spot_above),
+    max_premium_when_spot_above_bps: Number(merged.max_premium_when_spot_above_bps)
+  };
+}
 
 const eventLabels: Record<MinuteSignalEventType, string> = {
   SHOCK_ALERT: "价差冲击",
@@ -276,20 +289,16 @@ export function MinuteSignalPage() {
   const [form] = Form.useForm<FormValues>();
   const [result, setResult] = useState<MinuteSignalUniverseScanResult | null>(null);
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [error, setError] = useState("");
 
   const load = useCallback(
-    async (values: FormValues = form.getFieldsValue()) => {
+    async (values: Partial<FormValues> = form.getFieldsValue()) => {
       setLoading(true);
       setError("");
       try {
-        const normalized = {
-          hours: Number(values.hours),
-          max_symbols: Number(values.max_symbols),
-          min_volume_24h_usdt: Number(values.min_volume_24h_usdt),
-          alert_cooldown_minutes: Number(values.alert_cooldown_minutes)
-        };
+        const normalized = normalizeSettings(values);
         setResult(await scanMinuteSignalUniverse(normalized));
       } catch (exc) {
         setError(exc instanceof Error ? exc.message : String(exc));
@@ -301,9 +310,45 @@ export function MinuteSignalPage() {
   );
 
   useEffect(() => {
-    form.setFieldsValue(defaultValues);
-    void load(defaultValues);
+    let alive = true;
+    const init = async () => {
+      try {
+        const saved = normalizeSettings(await getMinuteSignalSettings());
+        if (!alive) {
+          return;
+        }
+        form.setFieldsValue(saved);
+        await load(saved);
+      } catch (exc) {
+        if (!alive) {
+          return;
+        }
+        form.setFieldsValue(defaultValues);
+        setError(exc instanceof Error ? exc.message : String(exc));
+        await load(defaultValues);
+      }
+    };
+    void init();
+    return () => {
+      alive = false;
+    };
   }, [form, load]);
+
+  const saveSettings = async () => {
+    setSaving(true);
+    setError("");
+    try {
+      const values = normalizeSettings(await form.validateFields());
+      const saved = normalizeSettings(await updateMinuteSignalSettings(values));
+      form.setFieldsValue(saved);
+      message.success("分钟价差信号参数已保存");
+      await load(saved);
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setSaving(false);
+    }
+  };
 
   useEffect(() => {
     if (!autoRefresh || loading) {
@@ -379,9 +424,44 @@ export function MinuteSignalPage() {
           >
             <InputNumber min={1} max={10_080} step={5} style={{ width: 130 }} />
           </Form.Item>
+          <Form.Item
+            label={parameterTitle(
+              "入场 basis 上限",
+              "Alpha 现货高于合约太多时不适合买现货、空合约；默认 45 bps 约等于 0.45%，更接近平价。"
+            )}
+            name="max_entry_basis_bps"
+            rules={[{ required: true }]}
+          >
+            <InputNumber min={-10_000} max={10_000} step={5} suffix="bps" style={{ width: 130 }} />
+          </Form.Item>
+          <Form.Item
+            label={parameterTitle(
+              "现货高于合约需负溢价",
+              "开启后，如果 Alpha 现货仍高于合约，必须看到合约 premium 足够为负，避免只因为持久现货/合约基差入选。"
+            )}
+            name="require_negative_premium_when_spot_above"
+            valuePropName="checked"
+          >
+            <Switch checkedChildren="开启" unCheckedChildren="关闭" />
+          </Form.Item>
+          <Form.Item
+            label={parameterTitle(
+              "合约负溢价阈值",
+              "现货高于合约时，Futures premium 必须小于等于该值才保留；-5 bps 表示合约相对指数至少低 0.05%。"
+            )}
+            name="max_premium_when_spot_above_bps"
+            rules={[{ required: true }]}
+          >
+            <InputNumber max={0} step={5} suffix="bps" style={{ width: 140 }} />
+          </Form.Item>
           <Form.Item>
             <Button htmlType="submit" icon={<ThunderboltOutlined />} loading={loading}>
               执行扫描
+            </Button>
+          </Form.Item>
+          <Form.Item>
+            <Button icon={<SaveOutlined />} loading={saving} onClick={() => void saveSettings()}>
+              保存参数
             </Button>
           </Form.Item>
         </Form>
@@ -415,6 +495,12 @@ export function MinuteSignalPage() {
             </Tag>
             {result?.error_count ? <Tag color="red">{result.error_count} 个扫描失败</Tag> : null}
             {result ? <Tag color="gold">飞书冷却 {result.alert_cooldown_minutes} 分钟</Tag> : null}
+            {result ? <Tag color="cyan">入场 basis ≤ {bps(result.max_entry_basis_bps)}</Tag> : null}
+            {result?.require_negative_premium_when_spot_above ? (
+              <Tag color="magenta">现货高于合约需 premium ≤ {bps(result.max_premium_when_spot_above_bps)}</Tag>
+            ) : null}
+            {result ? <Tag color="orange">basis 过滤 {result.filtered_by_basis_count} 个</Tag> : null}
+            {result ? <Tag color="orange">premium 过滤 {result.filtered_by_premium_count} 个</Tag> : null}
           </Space>
           <Table<MinuteSignalUniverseCandidate>
             className="opportunity-table"

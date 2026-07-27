@@ -29,6 +29,7 @@ from app.models.settings import (
     AstroAutomationSettings,
     AstroCardSettings,
     LivePilotSettings,
+    MinuteSignalSettings,
     RiskSettings,
 )
 
@@ -925,6 +926,31 @@ class SettingsRepository:
             ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
             """,
             ("live_pilot", settings.model_dump_json()),
+        )
+        await self.db.commit()
+        return settings
+
+    async def get_minute_signal_settings(self) -> MinuteSignalSettings:
+        cursor = await self.db.execute(
+            "SELECT payload FROM app_settings WHERE key = ?",
+            ("minute_signals",),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return MinuteSignalSettings()
+        return MinuteSignalSettings.model_validate(json.loads(row["payload"]))
+
+    async def set_minute_signal_settings(
+        self,
+        settings: MinuteSignalSettings,
+    ) -> MinuteSignalSettings:
+        await self.db.execute(
+            """
+            INSERT INTO app_settings (key, payload)
+            VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
+            """,
+            ("minute_signals", settings.model_dump_json()),
         )
         await self.db.commit()
         return settings

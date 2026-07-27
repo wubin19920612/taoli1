@@ -37,7 +37,13 @@ from app.models.premium_index import (
     PremiumIndexQueryResult,
     PremiumIndexValueStats,
 )
-from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, LivePilotSettings, RiskSettings
+from app.models.settings import (
+    AlertMessageTemplateSettings,
+    AstroCardSettings,
+    LivePilotSettings,
+    MinuteSignalSettings,
+    RiskSettings,
+)
 from app.services.astro_alerts import AstroAlertService
 from app.services.index_components import MultiIndexComponentProvider
 from app.services.service_control import DockerServiceController, ServiceControlConfig, ServiceControlError
@@ -54,6 +60,7 @@ class FakeSettingsRepository:
         funding_arbitrage_settings: FundingArbitrageSettings | None = None,
         opportunity_radar_settings: OpportunityRadarSettings | None = None,
         announcement_settings: AnnouncementSettings | None = None,
+        minute_signal_settings: MinuteSignalSettings | None = None,
     ):
         self.settings = settings
         self.alert_template = alert_template or AlertMessageTemplateSettings()
@@ -62,6 +69,7 @@ class FakeSettingsRepository:
         self.funding_arbitrage_settings = funding_arbitrage_settings or FundingArbitrageSettings()
         self.opportunity_radar_settings = opportunity_radar_settings or OpportunityRadarSettings()
         self.announcement_settings = announcement_settings or AnnouncementSettings()
+        self.minute_signal_settings = minute_signal_settings or MinuteSignalSettings()
 
     async def get_risk_settings(self) -> RiskSettings:
         return self.settings
@@ -111,6 +119,13 @@ class FakeSettingsRepository:
 
     async def set_announcement_settings(self, settings: AnnouncementSettings) -> AnnouncementSettings:
         self.announcement_settings = settings
+        return settings
+
+    async def get_minute_signal_settings(self) -> MinuteSignalSettings:
+        return self.minute_signal_settings
+
+    async def set_minute_signal_settings(self, settings: MinuteSignalSettings) -> MinuteSignalSettings:
+        self.minute_signal_settings = settings
         return settings
 
 
@@ -1604,6 +1619,40 @@ def test_live_pilot_settings_endpoint_roundtrips() -> None:
         assert reloaded.json()["min_next_funding_edge_pct"] == -0.03
         assert reloaded.json()["prefer_hyperliquid"] is False
         assert reloaded.json()["exclude_ss"] is False
+
+
+def test_minute_signal_settings_endpoint_roundtrips() -> None:
+    app = create_app(settings=Settings(dashboard_password="secret", database_url="sqlite:///:memory:"))
+
+    with TestClient(app) as client:
+        response = client.get("/api/settings/minute-signals")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["hours"] == 4
+        assert payload["max_entry_basis_bps"] == 45
+        assert payload["require_negative_premium_when_spot_above"] is True
+
+        payload["max_symbols"] = 12
+        payload["max_entry_basis_bps"] = 10
+        payload["max_premium_when_spot_above_bps"] = -20
+
+        unauthenticated = client.put("/api/settings/minute-signals", json=payload)
+        assert unauthenticated.status_code == 401
+
+        saved = client.put(
+            "/api/settings/minute-signals",
+            headers={"X-Dashboard-Password": "secret"},
+            json=payload,
+        )
+        assert saved.status_code == 200
+        assert saved.json()["max_symbols"] == 12
+        assert saved.json()["max_entry_basis_bps"] == 10
+        assert saved.json()["max_premium_when_spot_above_bps"] == -20
+
+        reloaded = client.get("/api/settings/minute-signals")
+        assert reloaded.status_code == 200
+        assert reloaded.json()["max_symbols"] == 12
+        assert reloaded.json()["max_entry_basis_bps"] == 10
 
 
 def test_live_pilot_preview_endpoint_returns_selected_test_symbols() -> None:

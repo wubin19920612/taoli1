@@ -713,13 +713,28 @@ export interface MinuteSignalUniverseScanResult {
   max_symbols: number;
   min_volume_24h_usdt: number;
   alert_cooldown_minutes: number;
+  max_entry_basis_bps: number;
+  require_negative_premium_when_spot_above: boolean;
+  max_premium_when_spot_above_bps: number;
   universe_count: number;
   eligible_count: number;
+  filtered_by_basis_count: number;
+  filtered_by_premium_count: number;
   scanned_count: number;
   signal_count: number;
   error_count: number;
   candidates: MinuteSignalUniverseCandidate[];
   warnings: string[];
+}
+
+export interface MinuteSignalSettings {
+  hours: number;
+  max_symbols: number;
+  min_volume_24h_usdt: number;
+  alert_cooldown_minutes: number;
+  max_entry_basis_bps: number;
+  require_negative_premium_when_spot_above: boolean;
+  max_premium_when_spot_above_bps: number;
 }
 
 export interface AstroCardSettings {
