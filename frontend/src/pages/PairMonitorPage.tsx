@@ -1578,12 +1578,14 @@ function buildFundingRateDiffRows(result: PairSpreadQueryResult | null): Funding
 
   const historyRows = [...rowsByTime.values()]
     .map((row) => {
-      const leftRate = finiteRate(row.left_rate_pct);
-      const rightRate = finiteRate(row.right_rate_pct);
+      const leftRate = finiteRate(row.left_rate_pct) ?? 0;
+      const rightRate = finiteRate(row.right_rate_pct) ?? 0;
       // 净费率按右侧费率减左侧费率，和价差方向保持一致。
       return {
         ...row,
-        net_rate_pct: leftRate !== null && rightRate !== null ? rightRate - leftRate : null
+        left_rate_pct: leftRate,
+        right_rate_pct: rightRate,
+        net_rate_pct: rightRate - leftRate
       };
     })
     .sort((a, b) => dayjs.utc(b.funding_time).valueOf() - dayjs.utc(a.funding_time).valueOf())
@@ -1596,15 +1598,18 @@ function buildFundingRateDiffRows(result: PairSpreadQueryResult | null): Funding
   const current = result.current;
   const leftRate = finiteRate(current?.leg1.funding_rate_pct);
   const rightRate = finiteRate(current?.leg2.funding_rate_pct);
-  if (!current || leftRate === null || rightRate === null) {
+  if (!current || (leftRate === null && rightRate === null)) {
     return [];
   }
+  const currentLeftRate = leftRate ?? 0;
+  const currentRightRate = rightRate ?? 0;
   return [
     {
       funding_time: current.observed_at,
-      left_rate_pct: leftRate,
-      right_rate_pct: rightRate,
-      net_rate_pct: rightRate - leftRate,
+      left_rate_pct: currentLeftRate,
+      right_rate_pct: currentRightRate,
+      // 当前快照缺一侧资金费率时按 0 处理，避免净费率展示为空。
+      net_rate_pct: currentRightRate - currentLeftRate,
       source: "current"
     }
   ];
@@ -2182,6 +2187,7 @@ export function PairMonitorPage() {
             scroll={{ x: "max-content" }}
           />
         </div>
+        <div className="pair-funding-empty-panel" aria-hidden="true" />
         <div className="pair-detail-card pair-funding-raw-card">
           <div className="pair-detail-head">
             <Typography.Title level={5}>资金费率</Typography.Title>
@@ -2195,7 +2201,7 @@ export function PairMonitorPage() {
             pagination={{ pageSize: 8 }}
             size="small"
             tableLayout="fixed"
-            scroll={{ x: 520 }}
+            scroll={{ x: 560 }}
           />
         </div>
       </section>

@@ -54,6 +54,12 @@ function pairSpreadResult(params?: URLSearchParams) {
             symbol: leg2Symbol,
             funding_time: "2026-07-23T16:00:00Z",
             funding_rate_pct: 0.01
+          },
+          {
+            exchange: leg1Exchange,
+            symbol: leg1Symbol,
+            funding_time: "2026-07-23T08:00:00Z",
+            funding_rate_pct: -0.1
           }
         ]
       : [];
@@ -279,9 +285,18 @@ describe("PairMonitorPage", () => {
     expect(await screen.findByText("资金费率差")).toBeTruthy();
     expect(screen.getAllByText("净费率").length).toBeGreaterThan(0);
     expect(screen.getAllByText("+0.0300%").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("+0.1000%").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("+0.0000%").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Bitget 费率").length).toBeGreaterThan(0);
+    const fundingLayout = Array.from(document.querySelector(".pair-funding-grid")?.children ?? []).map(
+      (element) => (element as HTMLElement).className
+    );
+    expect(fundingLayout[0]).toContain("pair-funding-diff-card");
+    expect(fundingLayout[1]).toContain("pair-funding-empty-panel");
+    expect(fundingLayout[2]).toContain("pair-funding-raw-card");
     const pageText = document.body.textContent ?? "";
     expect(pageText.indexOf("资金费率差")).toBeLessThan(pageText.indexOf("标的价格"));
+    expect(pageText.indexOf("资金费率")).toBeLessThan(pageText.indexOf("标的价格"));
   });
 
   it("auto-runs a Binance Alpha spread query from URL parameters", async () => {

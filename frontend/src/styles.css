@@ -1639,7 +1639,7 @@ body {
 }
 
 .pair-funding-grid {
-  grid-template-columns: minmax(520px, 0.9fr) minmax(360px, 1.1fr);
+  grid-template-columns: minmax(520px, 1fr) minmax(0, 1fr);
 }
 
 .pair-detail-grid {
@@ -1670,6 +1670,15 @@ body {
 
 .pair-funding-diff-card {
   grid-column: auto;
+}
+
+.pair-funding-empty-panel {
+  min-height: 1px;
+  min-width: 0;
+}
+
+.pair-funding-raw-card {
+  grid-column: 1 / -1;
 }
 
 .pair-spread-points-card {
@@ -2791,6 +2800,10 @@ body {
   .pair-query-actions,
   .premium-query-actions {
     grid-column: 1 / -1;
+  }
+
+  .pair-funding-empty-panel {
+    display: none;
   }
 
   .research-toolbar-grid,
