@@ -1709,6 +1709,11 @@ body {
   stroke-linejoin: round;
 }
 
+.pair-funding-chart-line-settlement {
+  stroke: #f97316;
+  stroke-dasharray: 5 4;
+}
+
 .pair-funding-chart-point {
   fill: #2563eb;
   stroke: #ffffff;
@@ -1735,6 +1740,62 @@ body {
 .pair-funding-chart-axis-label {
   fill: #6b7a75;
   font-size: 12px;
+}
+
+.pair-funding-settlement-leader {
+  stroke: #f59e0b;
+  stroke-dasharray: 3 3;
+  stroke-width: 1;
+  opacity: 0.72;
+}
+
+.pair-funding-settlement-point {
+  fill: #f97316;
+  stroke: #ffffff;
+  stroke-width: 2;
+}
+
+.pair-funding-settlement-label-bg {
+  fill: #fff7ed;
+  stroke: #fdba74;
+  stroke-width: 1;
+}
+
+.pair-funding-settlement-label {
+  fill: #9a3412;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.pair-funding-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  color: #66736f;
+  font-size: 12px;
+}
+
+.pair-funding-chart-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pair-funding-chart-legend span::before {
+  content: "";
+  width: 18px;
+  height: 2px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.pair-funding-legend-realtime {
+  color: #2563eb;
+}
+
+.pair-funding-legend-settlement {
+  color: #f97316;
 }
 
 .pair-funding-chart-empty {

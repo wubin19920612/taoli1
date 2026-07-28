@@ -534,6 +534,14 @@ export interface PairSpreadFundingPoint {
   funding_rate_pct: number;
 }
 
+export interface PairSpreadRealtimeFundingPoint {
+  bucket_at: string;
+  left_rate_pct: number | null;
+  right_rate_pct: number | null;
+  net_rate_pct: number | null;
+  source?: string;
+}
+
 export interface PairSpreadCurrentLeg {
   exchange: string;
   symbol: string;
@@ -585,6 +593,7 @@ export interface PairSpreadQueryResult {
   current: PairSpreadCurrentSnapshot | null;
   points: PairSpreadPoint[];
   funding_history: PairSpreadFundingPoint[];
+  realtime_funding?: PairSpreadRealtimeFundingPoint[];
   warnings: string[];
 }
 

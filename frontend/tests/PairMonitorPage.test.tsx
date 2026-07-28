@@ -63,6 +63,32 @@ function pairSpreadResult(params?: URLSearchParams) {
           }
         ]
       : [];
+  const realtimeFunding =
+    leg1MarketType === "future" && leg2MarketType === "future"
+      ? [
+          {
+            bucket_at: "2026-07-24T01:59:50Z",
+            left_rate_pct: 0.01,
+            right_rate_pct: 0.015,
+            net_rate_pct: 0.005,
+            source: "current"
+          },
+          {
+            bucket_at: "2026-07-24T01:59:55Z",
+            left_rate_pct: 0.01,
+            right_rate_pct: 0.02,
+            net_rate_pct: 0.01,
+            source: "current"
+          },
+          {
+            bucket_at: "2026-07-24T02:00:00Z",
+            left_rate_pct: 0.01,
+            right_rate_pct: 0.025,
+            net_rate_pct: 0.015,
+            source: "current"
+          }
+        ]
+      : [];
   const points = largePriceGap
     ? [
         {
@@ -162,6 +188,7 @@ function pairSpreadResult(params?: URLSearchParams) {
     },
     points,
     funding_history: fundingHistory,
+    realtime_funding: realtimeFunding,
     warnings: []
   };
 }
@@ -296,6 +323,10 @@ describe("PairMonitorPage", () => {
     expect(fundingLayout).toHaveLength(2);
     expect(await screen.findByText("资金费率差走势")).toBeTruthy();
     expect(document.querySelector(".pair-funding-diff-chart")).toBeTruthy();
+    expect(document.querySelector(".pair-funding-settlement-point")).toBeTruthy();
+    expect(document.querySelector(".pair-funding-settlement-label")).toBeTruthy();
+    expect(document.querySelector(".pair-funding-legend-realtime")).toBeTruthy();
+    expect(document.querySelector(".pair-funding-legend-settlement")).toBeTruthy();
     expect(document.querySelector(".pair-funding-raw-card")).toBeNull();
     const pageText = document.body.textContent ?? "";
     const pageLayout = Array.from(document.querySelector(".pair-monitor-page")?.children ?? []).map((element) =>

@@ -29,6 +29,7 @@ from app.models.pair_spread import (
     PairSpreadPoint,
     PairSpreadPriceField,
     PairSpreadQueryResult,
+    PairSpreadRealtimeFundingPoint,
     PairSpreadValueStats,
     normalize_binance_alpha_symbol,
 )
@@ -250,6 +251,8 @@ def _warnings_text(items: list[str]) -> str:
 
 
 _REALTIME_PAIR_SPREAD_CACHE: dict[str, list[PairSpreadPoint]] = {}
+# 实时资金费率由每次价差查询抓到的当前快照累积，和交易所整点结算历史分开保存。
+_REALTIME_PAIR_FUNDING_CACHE: dict[str, list[PairSpreadRealtimeFundingPoint]] = {}
 
 
 def _realtime_cache_key(
@@ -283,6 +286,63 @@ def _append_realtime_point(
         points.append(point)
     if len(points) > PAIR_SPREAD_REALTIME_MAX_POINTS:
         del points[:-PAIR_SPREAD_REALTIME_MAX_POINTS]
+    return points
+
+
+def _realtime_funding_point(
+    current: PairSpreadCurrentSnapshot,
+    bucket_at: datetime,
+) -> PairSpreadRealtimeFundingPoint | None:
+    left_rate = current.leg1.funding_rate_pct
+    right_rate = current.leg2.funding_rate_pct
+    left_rate = left_rate if left_rate is not None and isfinite(left_rate) else None
+    right_rate = right_rate if right_rate is not None and isfinite(right_rate) else None
+    if left_rate is None and right_rate is None:
+        return None
+    normalized_left = left_rate or 0
+    normalized_right = right_rate or 0
+    return PairSpreadRealtimeFundingPoint(
+        bucket_at=bucket_at,
+        left_rate_pct=normalized_left,
+        right_rate_pct=normalized_right,
+        net_rate_pct=normalized_right - normalized_left,
+    )
+
+
+def _append_realtime_funding_point(
+    points: list[PairSpreadRealtimeFundingPoint],
+    point: PairSpreadRealtimeFundingPoint,
+) -> list[PairSpreadRealtimeFundingPoint]:
+    if points and points[-1].bucket_at == point.bucket_at:
+        points[-1] = point
+    else:
+        points.append(point)
+    if len(points) > PAIR_SPREAD_REALTIME_MAX_POINTS:
+        del points[:-PAIR_SPREAD_REALTIME_MAX_POINTS]
+    return points
+
+
+def _realtime_funding_points_from_current(
+    cache_key: str,
+    current: PairSpreadCurrentSnapshot | None,
+    *,
+    observed_at: datetime,
+    interval_seconds: int,
+    hours: int,
+) -> list[PairSpreadRealtimeFundingPoint]:
+    if current is None:
+        return []
+    cached_funding = _REALTIME_PAIR_FUNDING_CACHE.setdefault(cache_key, [])
+    current_funding_point = _realtime_funding_point(
+        current,
+        _floor_interval(observed_at, interval_seconds),
+    )
+    if current_funding_point is not None:
+        _append_realtime_funding_point(cached_funding, current_funding_point)
+    cutoff = observed_at - timedelta(hours=hours)
+    points = [point for point in cached_funding if point.bucket_at >= cutoff]
+    if len(points) != len(cached_funding):
+        _REALTIME_PAIR_FUNDING_CACHE[cache_key] = points
     return points
 
 
@@ -483,6 +543,18 @@ class PairSpreadQueryService:
             if current_leg1 is not None and current_leg2 is not None
             else None
         )
+        realtime_funding = _realtime_funding_points_from_current(
+            _realtime_cache_key(
+                leg1,
+                leg2,
+                leg2_multiplier=leg2_multiplier,
+                interval_seconds=resolved_interval_seconds,
+            ),
+            current,
+            observed_at=observed_at,
+            interval_seconds=resolved_interval_seconds,
+            hours=hours,
+        )
 
         return PairSpreadQueryResult(
             leg1=leg1,
@@ -500,6 +572,7 @@ class PairSpreadQueryService:
             current=current,
             points=points,
             funding_history=sorted(funding1 + funding2, key=lambda item: item.funding_time),
+            realtime_funding=realtime_funding,
             warnings=warnings,
         )
 
@@ -556,6 +629,14 @@ class PairSpreadQueryService:
         if len(points) != len(cached_points):
             _REALTIME_PAIR_SPREAD_CACHE[cache_key] = points
 
+        realtime_funding = _realtime_funding_points_from_current(
+            cache_key,
+            current,
+            observed_at=observed_at,
+            interval_seconds=interval_seconds,
+            hours=hours,
+        )
+
         if len(points) <= 1:
             _append_unique(
                 warnings,
@@ -578,6 +659,7 @@ class PairSpreadQueryService:
             current=current,
             points=points,
             funding_history=[],
+            realtime_funding=realtime_funding,
             warnings=warnings,
         )
 

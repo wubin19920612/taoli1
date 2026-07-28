@@ -25,6 +25,7 @@ import type {
   PairSpreadPoint,
   PairSpreadPriceField,
   PairSpreadQueryResult,
+  PairSpreadRealtimeFundingPoint,
   PremiumIndexCurrentSnapshot,
   PremiumIndexPoint,
   PremiumIndexQueryResult
@@ -81,7 +82,7 @@ type FundingRateDiffRow = {
   left_rate_pct: number | null;
   right_rate_pct: number | null;
   net_rate_pct: number | null;
-  source: "history" | "current";
+  source: "history" | "current" | "realtime";
 };
 
 const defaultFormValues: PairSpreadFormValues = {
@@ -412,6 +413,7 @@ function isPairSpreadQueryResult(value: unknown): value is PairSpreadQueryResult
     typeof item.leg2_multiplier === "number" &&
     Array.isArray(item.points) &&
     Array.isArray(item.funding_history) &&
+    (item.realtime_funding === undefined || Array.isArray(item.realtime_funding)) &&
     Array.isArray(item.warnings)
   );
 }
@@ -871,11 +873,25 @@ function FundingRateValue({ value, strong = false }: { value: number | null | un
   );
 }
 
-function PairFundingDiffChart({ rows }: { rows: FundingRateDiffRow[] }) {
-  const chartRows = rows
+function PairFundingDiffChart({
+  realtimeRows,
+  settlementRows
+}: {
+  realtimeRows: FundingRateDiffRow[];
+  settlementRows: FundingRateDiffRow[];
+}) {
+  const realtimeChartRows = realtimeRows
     .filter((row) => finiteRate(row.net_rate_pct) !== null)
     .slice()
     .sort((a, b) => dayjs.utc(a.funding_time).valueOf() - dayjs.utc(b.funding_time).valueOf());
+  const settlementChartRows = settlementRows
+    .filter((row) => finiteRate(row.net_rate_pct) !== null)
+    .slice()
+    .sort((a, b) => dayjs.utc(a.funding_time).valueOf() - dayjs.utc(b.funding_time).valueOf());
+  const chartRows = realtimeChartRows.length > 0 ? realtimeChartRows : settlementChartRows;
+  const domainRows = [...chartRows, ...settlementChartRows].sort(
+    (a, b) => dayjs.utc(a.funding_time).valueOf() - dayjs.utc(b.funding_time).valueOf()
+  );
   const latest = chartRows[chartRows.length - 1] ?? null;
   const width = 560;
   const height = 328;
@@ -895,47 +911,49 @@ function PairFundingDiffChart({ rows }: { rows: FundingRateDiffRow[] }) {
     );
   }
 
-  const values = chartRows.map((row) => finiteRate(row.net_rate_pct) ?? 0);
+  const values = domainRows.map((row) => finiteRate(row.net_rate_pct) ?? 0);
   const valueMin = Math.min(...values, 0);
   const valueMax = Math.max(...values, 0);
   const span = valueMax - valueMin || 0.01;
   const min = valueMin - span * 0.16;
   const max = valueMax + span * 0.16;
-  const xAt = (index: number) =>
-    padding.left + (chartRows.length === 1 ? chartWidth / 2 : (chartWidth * index) / (chartRows.length - 1));
+  const startMs = dayjs.utc(domainRows[0].funding_time).valueOf();
+  const endMs = dayjs.utc(domainRows[domainRows.length - 1].funding_time).valueOf();
+  const xAt = (fundingTime: string) =>
+    padding.left +
+    (startMs === endMs
+      ? chartWidth / 2
+      : ((dayjs.utc(fundingTime).valueOf() - startMs) / (endMs - startMs)) * chartWidth);
   const yAt = (value: number) => padding.top + ((max - value) / (max - min)) * chartHeight;
   const linePath = chartRows
     .map((row, index) => {
       const value = finiteRate(row.net_rate_pct) ?? 0;
-      return `${index === 0 ? "M" : "L"} ${xAt(index).toFixed(2)} ${yAt(value).toFixed(2)}`;
+      return `${index === 0 ? "M" : "L"} ${xAt(row.funding_time).toFixed(2)} ${yAt(value).toFixed(2)}`;
     })
     .join(" ");
-  const areaPath = `M ${xAt(0).toFixed(2)} ${yAt(0).toFixed(2)} ${chartRows
-    .map((row, index) => {
-      const value = finiteRate(row.net_rate_pct) ?? 0;
-      return `L ${xAt(index).toFixed(2)} ${yAt(value).toFixed(2)}`;
-    })
-    .join(" ")} L ${xAt(chartRows.length - 1).toFixed(2)} ${yAt(0).toFixed(2)} Z`;
-  const startMs = dayjs.utc(chartRows[0].funding_time).valueOf();
-  const endMs = dayjs.utc(chartRows[chartRows.length - 1].funding_time).valueOf();
+  const areaPath =
+    chartRows.length > 1
+      ? `M ${xAt(chartRows[0].funding_time).toFixed(2)} ${yAt(0).toFixed(2)} ${chartRows
+          .map((row) => {
+            const value = finiteRate(row.net_rate_pct) ?? 0;
+            return `L ${xAt(row.funding_time).toFixed(2)} ${yAt(value).toFixed(2)}`;
+          })
+          .join(" ")} L ${xAt(chartRows[chartRows.length - 1].funding_time).toFixed(2)} ${yAt(0).toFixed(2)} Z`
+      : "";
   const spanHours = Math.max((endMs - startMs) / 3_600_000, 0);
-  const tickCount = Math.min(spanHours >= 168 ? 6 : 5, chartRows.length);
-  const seenTickIndexes = new Set<number>();
+  const tickCount = startMs === endMs ? 1 : Math.min(spanHours >= 168 ? 6 : 5, domainRows.length);
   const ticks =
     tickCount <= 1
-      ? chartRows.map((row, index) => ({ row, index }))
+      ? [{ funding_time: domainRows[0].funding_time }]
       : Array.from({ length: tickCount }, (_, tickIndex) => {
-          const index = Math.round((tickIndex * (chartRows.length - 1)) / (tickCount - 1));
-          if (seenTickIndexes.has(index)) {
-            return null;
-          }
-          seenTickIndexes.add(index);
-          return { row: chartRows[index], index };
-        }).filter((item): item is { row: FundingRateDiffRow; index: number } => item !== null);
+          const tickMs = startMs + ((endMs - startMs) * tickIndex) / (tickCount - 1);
+          return { funding_time: dayjs.utc(tickMs).toISOString() };
+        });
   const latestValue = finiteRate(latest?.net_rate_pct) ?? 0;
   const latestTone = fundingRateTone(latestValue);
   const latestTagColor = latestTone === "negative" ? "red" : latestTone === "positive" ? "green" : undefined;
-  const latestIndex = chartRows.length - 1;
+  const hasRealtimeLine = realtimeChartRows.length > 0;
+  const settlementLabelStride = Math.max(1, Math.ceil(settlementChartRows.length / 8));
 
   return (
     <div className="pair-detail-card pair-funding-chart-card">
@@ -943,9 +961,10 @@ function PairFundingDiffChart({ rows }: { rows: FundingRateDiffRow[] }) {
         <Typography.Title level={5}>资金费率差走势</Typography.Title>
         <div className="pair-funding-chart-tools">
           <Tag color={latestTagColor}>
-            最新 {signedPct(latestValue, 4)}
+            {hasRealtimeLine ? "实时" : "最新"} {signedPct(latestValue, 4)}
           </Tag>
-          <Tag>{chartRows.length} 条</Tag>
+          {hasRealtimeLine ? <Tag color="blue">实时采样 {realtimeChartRows.length} 点</Tag> : null}
+          {settlementChartRows.length ? <Tag color="orange">整点标注 {settlementChartRows.length} 个</Tag> : null}
         </div>
       </div>
       <svg className="pair-funding-diff-chart" role="img" aria-label="资金费率差净费率走势" viewBox={`0 0 ${width} ${height}`}>
@@ -968,42 +987,106 @@ function PairFundingDiffChart({ rows }: { rows: FundingRateDiffRow[] }) {
             </g>
           );
         })}
-        {ticks.map(({ row, index }, tickIndex) => {
-          const x = xAt(index);
+        {ticks.map((tick, tickIndex) => {
+          const x = xAt(tick.funding_time);
           const textAnchor = tickIndex === 0 ? "start" : tickIndex === ticks.length - 1 ? "end" : "middle";
           return (
-            <g key={`funding-tick-${row.funding_time}-${tickIndex}`}>
+            <g key={`funding-tick-${tick.funding_time}-${tickIndex}`}>
               <line className="pair-funding-chart-time-tick" x1={x} y1={padding.top} x2={x} y2={padding.top + chartHeight} />
               <text className="pair-funding-chart-axis-label" x={x} y={height - 10} textAnchor={textAnchor}>
-                {chartTime(row.funding_time, spanHours)}
+                {chartTime(tick.funding_time, spanHours)}
               </text>
             </g>
           );
         })}
         <line className="pair-funding-chart-zero-line" x1={padding.left} y1={yAt(0)} x2={padding.left + chartWidth} y2={yAt(0)} />
-        <path className="pair-funding-chart-area" d={areaPath} />
-        <path className="pair-funding-chart-line" d={linePath} />
-        {chartRows.map((row, index) => {
+        {areaPath ? <path className="pair-funding-chart-area" d={areaPath} /> : null}
+        {linePath ? (
+          <path
+            className={`pair-funding-chart-line${hasRealtimeLine ? "" : " pair-funding-chart-line-settlement"}`}
+            d={linePath}
+          />
+        ) : null}
+        {hasRealtimeLine ? chartRows.map((row, index) => {
           const value = finiteRate(row.net_rate_pct) ?? 0;
           return (
             <circle
               key={`funding-point-${row.funding_time}-${index}`}
               className="pair-funding-chart-point"
-              cx={xAt(index)}
+              cx={xAt(row.funding_time)}
               cy={yAt(value)}
               r="2.6"
             >
               <title>{`${time(row.funding_time)} 净费率 ${signedPct(value, 4)}`}</title>
             </circle>
           );
+        }) : null}
+        {settlementChartRows.map((row, index) => {
+          const value = finiteRate(row.net_rate_pct) ?? 0;
+          const x = xAt(row.funding_time);
+          const y = yAt(value);
+          const shouldLabel =
+            settlementChartRows.length <= 8 ||
+            index % settlementLabelStride === 0 ||
+            index === settlementChartRows.length - 1;
+          const labelWidth = 74;
+          const labelHeight = 20;
+          const labelX = Math.max(
+            padding.left + 4,
+            Math.min(padding.left + chartWidth - labelWidth - 4, x - labelWidth / 2)
+          );
+          const preferredLabelY = y - labelHeight - 12 - (index % 2) * 10;
+          const fallbackLabelY = y + 12 + (index % 2) * 10;
+          const labelY =
+            preferredLabelY >= padding.top + 4
+              ? preferredLabelY
+              : Math.min(padding.top + chartHeight - labelHeight - 4, fallbackLabelY);
+          return (
+            <g key={`funding-settlement-${row.funding_time}-${index}`} className="pair-funding-settlement-marker">
+              <circle className="pair-funding-settlement-point" cx={x} cy={y} r="4">
+                <title>{`${time(row.funding_time)} 整点净费率 ${signedPct(value, 4)}`}</title>
+              </circle>
+              {shouldLabel ? (
+                <>
+                  <line
+                    className="pair-funding-settlement-leader"
+                    x1={x}
+                    y1={y}
+                    x2={labelX + labelWidth / 2}
+                    y2={labelY + labelHeight / 2}
+                  />
+                  <rect
+                    className="pair-funding-settlement-label-bg"
+                    x={labelX}
+                    y={labelY}
+                    width={labelWidth}
+                    height={labelHeight}
+                    rx="5"
+                  />
+                  <text
+                    className="pair-funding-settlement-label"
+                    x={labelX + labelWidth / 2}
+                    y={labelY + 14}
+                    textAnchor="middle"
+                  >
+                    {signedPct(value, 4)}
+                  </text>
+                </>
+              ) : null}
+            </g>
+          );
         })}
         <circle
           className={`pair-funding-chart-current-point pair-funding-chart-current-${latestTone}`}
-          cx={xAt(latestIndex)}
+          cx={xAt(latest?.funding_time ?? chartRows[chartRows.length - 1].funding_time)}
           cy={yAt(latestValue)}
           r="4.2"
         />
       </svg>
+      <div className="pair-funding-chart-legend">
+        {hasRealtimeLine ? <span className="pair-funding-legend-realtime">实时采样</span> : null}
+        {settlementChartRows.length ? <span className="pair-funding-legend-settlement">整点资金费率</span> : null}
+      </div>
     </div>
   );
 }
@@ -1735,6 +1818,56 @@ function buildFundingRateDiffRows(result: PairSpreadQueryResult | null): Funding
   ];
 }
 
+function realtimeFundingPointToRow(point: PairSpreadRealtimeFundingPoint): FundingRateDiffRow | null {
+  const leftRate = finiteRate(point.left_rate_pct);
+  const rightRate = finiteRate(point.right_rate_pct);
+  const netRate = finiteRate(point.net_rate_pct);
+  if (leftRate === null && rightRate === null && netRate === null) {
+    return null;
+  }
+  const normalizedLeftRate = leftRate ?? 0;
+  const normalizedRightRate = rightRate ?? 0;
+  return {
+    funding_time: fundingTimeBucket(point.bucket_at),
+    left_rate_pct: normalizedLeftRate,
+    right_rate_pct: normalizedRightRate,
+    net_rate_pct: netRate ?? normalizedRightRate - normalizedLeftRate,
+    source: "realtime"
+  };
+}
+
+function buildRealtimeFundingRateDiffRows(result: PairSpreadQueryResult | null): FundingRateDiffRow[] {
+  if (!result) {
+    return [];
+  }
+  const sampleRows = (result.realtime_funding ?? [])
+    .map(realtimeFundingPointToRow)
+    .filter((row): row is FundingRateDiffRow => row !== null)
+    .sort((a, b) => dayjs.utc(b.funding_time).valueOf() - dayjs.utc(a.funding_time).valueOf())
+    .slice(0, 500);
+  if (sampleRows.length > 0) {
+    return sampleRows;
+  }
+
+  const current = result.current;
+  const leftRate = finiteRate(current?.leg1.funding_rate_pct);
+  const rightRate = finiteRate(current?.leg2.funding_rate_pct);
+  if (!current || (leftRate === null && rightRate === null)) {
+    return [];
+  }
+  const currentLeftRate = leftRate ?? 0;
+  const currentRightRate = rightRate ?? 0;
+  return [
+    {
+      funding_time: current.observed_at,
+      left_rate_pct: currentLeftRate,
+      right_rate_pct: currentRightRate,
+      net_rate_pct: currentRightRate - currentLeftRate,
+      source: "current"
+    }
+  ];
+}
+
 export function PairMonitorPage() {
   const [form] = Form.useForm<PairSpreadFormValues>();
   const initialUrlQuery = useMemo(() => pairQueryFromUrl(), []);
@@ -1775,7 +1908,14 @@ export function PairMonitorPage() {
     [result?.points]
   );
   const fundingDiffRows = useMemo(() => buildFundingRateDiffRows(result), [result]);
-  const latestFundingDiff = fundingDiffRows.find((row) => finiteRate(row.net_rate_pct) !== null);
+  const realtimeFundingDiffRows = useMemo(() => buildRealtimeFundingRateDiffRows(result), [result]);
+  const settlementFundingDiffRows = useMemo(
+    () => fundingDiffRows.filter((row) => row.source === "history"),
+    [fundingDiffRows]
+  );
+  const latestFundingDiff =
+    realtimeFundingDiffRows.find((row) => finiteRate(row.net_rate_pct) !== null) ??
+    fundingDiffRows.find((row) => finiteRate(row.net_rate_pct) !== null);
   const fundingDiffColumns = useMemo<ColumnsType<FundingRateDiffRow>>(
     () => [
       {
@@ -2306,7 +2446,7 @@ export function PairMonitorPage() {
             scroll={{ x: "max-content" }}
           />
         </div>
-        <PairFundingDiffChart rows={fundingDiffRows} />
+        <PairFundingDiffChart realtimeRows={realtimeFundingDiffRows} settlementRows={settlementFundingDiffRows} />
       </section>
 
       <section className="pair-detail-grid">

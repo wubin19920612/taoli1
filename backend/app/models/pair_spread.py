@@ -103,6 +103,14 @@ class PairSpreadFundingPoint(BaseModel):
     funding_rate_pct: float
 
 
+class PairSpreadRealtimeFundingPoint(BaseModel):
+    bucket_at: datetime
+    left_rate_pct: float | None = None
+    right_rate_pct: float | None = None
+    net_rate_pct: float | None = None
+    source: str = "current"
+
+
 class PairSpreadCurrentLeg(BaseModel):
     exchange: str
     symbol: str
@@ -154,4 +162,5 @@ class PairSpreadQueryResult(BaseModel):
     current: PairSpreadCurrentSnapshot | None = None
     points: list[PairSpreadPoint]
     funding_history: list[PairSpreadFundingPoint] = Field(default_factory=list)
+    realtime_funding: list[PairSpreadRealtimeFundingPoint] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)

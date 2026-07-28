@@ -17,6 +17,7 @@ from app.models.pair_spread import (
 from app.services.pair_spread_query import (
     PairSpreadQueryError,
     PairSpreadQueryService,
+    _REALTIME_PAIR_FUNDING_CACHE,
     _REALTIME_PAIR_SPREAD_CACHE,
     _hyperliquid_history_limit_warning,
     build_pair_spread_points,
@@ -105,6 +106,8 @@ def test_hyperliquid_history_limit_warning_is_not_needed_for_15_minutes() -> Non
 
 @pytest.mark.asyncio
 async def test_pair_spread_query_builds_stats_current_and_funding() -> None:
+    _REALTIME_PAIR_FUNDING_CACHE.clear()
+
     class FakePairSpreadService(PairSpreadQueryService):
         async def _fetch_klines(self, exchange: str, symbol: str, start, end, interval_minutes: int):
             assert interval_minutes == 5
@@ -158,12 +161,16 @@ async def test_pair_spread_query_builds_stats_current_and_funding() -> None:
     assert result.interval_minutes == 5
     assert result.leg2_multiplier == 10
     assert len(result.funding_history) == 2
+    assert len(result.realtime_funding) == 1
+    assert result.realtime_funding[0].net_rate_pct == pytest.approx(0)
     assert result.warnings == []
+    _REALTIME_PAIR_FUNDING_CACHE.clear()
 
 
 @pytest.mark.asyncio
 async def test_pair_spread_query_accumulates_realtime_second_points() -> None:
     _REALTIME_PAIR_SPREAD_CACHE.clear()
+    _REALTIME_PAIR_FUNDING_CACHE.clear()
 
     class FakePairSpreadService(PairSpreadQueryService):
         async def _fetch_current_leg(
@@ -173,13 +180,16 @@ async def test_pair_spread_query_accumulates_realtime_second_points() -> None:
             market_type: MarketType = MarketType.FUTURE,
         ):
             price = 100 if exchange == "binance" else self.right_price
-            return current_leg(exchange, symbol, price, market_type)
+            leg = current_leg(exchange, symbol, price, market_type)
+            rate = 0.01 if exchange == "binance" else self.right_funding
+            return leg.model_copy(update={"funding_rate_pct": rate})
 
         async def _fetch_funding_history(self, exchange: str, symbol: str, start, end):
             return []
 
     service = FakePairSpreadService()
     service.right_price = 101
+    service.right_funding = 0.02
     try:
         first = await service.query(
             PairSpreadLegQuery(exchange="binance", symbol="btc"),
@@ -189,6 +199,7 @@ async def test_pair_spread_query_accumulates_realtime_second_points() -> None:
             now=datetime(2026, 7, 10, 12, 0, 3, tzinfo=UTC),
         )
         service.right_price = 102
+        service.right_funding = 0.03
         updated_same_bucket = await service.query(
             PairSpreadLegQuery(exchange="binance", symbol="btc"),
             PairSpreadLegQuery(exchange="okx", symbol="btc"),
@@ -197,6 +208,7 @@ async def test_pair_spread_query_accumulates_realtime_second_points() -> None:
             now=datetime(2026, 7, 10, 12, 0, 4, tzinfo=UTC),
         )
         service.right_price = 103
+        service.right_funding = 0.04
         next_bucket = await service.query(
             PairSpreadLegQuery(exchange="binance", symbol="btc"),
             PairSpreadLegQuery(exchange="okx", symbol="btc"),
@@ -207,6 +219,7 @@ async def test_pair_spread_query_accumulates_realtime_second_points() -> None:
     finally:
         await service.aclose()
         _REALTIME_PAIR_SPREAD_CACHE.clear()
+        _REALTIME_PAIR_FUNDING_CACHE.clear()
 
     assert first.interval_seconds == 5
     assert first.interval_minutes == 1
@@ -215,9 +228,12 @@ async def test_pair_spread_query_accumulates_realtime_second_points() -> None:
     assert "实时采样" in first.warnings[0]
     assert updated_same_bucket.point_count == 1
     assert updated_same_bucket.spread_abs.current == 2
+    assert updated_same_bucket.realtime_funding[0].net_rate_pct == pytest.approx(0.02)
     assert next_bucket.point_count == 2
     assert [point.bucket_at.second for point in next_bucket.points] == [0, 5]
     assert next_bucket.spread_abs.current == 3
+    assert [point.bucket_at.second for point in next_bucket.realtime_funding] == [0, 5]
+    assert next_bucket.realtime_funding[-1].net_rate_pct == pytest.approx(0.03)
 
 
 @pytest.mark.asyncio
