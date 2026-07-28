@@ -292,8 +292,10 @@ describe("PairMonitorPage", () => {
       (element) => (element as HTMLElement).className
     );
     expect(fundingLayout[0]).toContain("pair-funding-diff-card");
-    expect(fundingLayout[1]).toContain("pair-funding-empty-panel");
+    expect(fundingLayout[1]).toContain("pair-funding-chart-card");
     expect(fundingLayout).toHaveLength(2);
+    expect(await screen.findByText("资金费率差走势")).toBeTruthy();
+    expect(document.querySelector(".pair-funding-diff-chart")).toBeTruthy();
     expect(document.querySelector(".pair-funding-raw-card")).toBeNull();
     const pageText = document.body.textContent ?? "";
     const pageLayout = Array.from(document.querySelector(".pair-monitor-page")?.children ?? []).map((element) =>

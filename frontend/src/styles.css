@@ -1646,11 +1646,6 @@ body {
   grid-column: auto;
 }
 
-.pair-funding-empty-panel {
-  min-height: 1px;
-  min-width: 0;
-}
-
 .pair-spread-points-card {
   grid-column: 1 / -1;
 }
@@ -1663,6 +1658,93 @@ body {
 
 .pair-funding-diff-card .ant-table-tbody > tr > td {
   border-bottom-color: #edf2ef;
+}
+
+.pair-funding-chart-card {
+  min-height: 100%;
+  align-content: start;
+}
+
+.pair-funding-chart-tools {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.pair-funding-diff-chart {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.pair-funding-diff-chart rect {
+  fill: #ffffff;
+  stroke: #eef2f1;
+}
+
+.pair-funding-chart-grid-line,
+.pair-funding-chart-time-tick {
+  stroke: #edf2f0;
+  stroke-width: 1;
+}
+
+.pair-funding-chart-zero-line {
+  stroke: #a7b0ad;
+  stroke-width: 1.1;
+  stroke-dasharray: 5 4;
+}
+
+.pair-funding-chart-area {
+  fill: url(#pairFundingDiffFill);
+}
+
+.pair-funding-chart-line {
+  fill: none;
+  stroke: #2563eb;
+  stroke-width: 2.25;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.pair-funding-chart-point {
+  fill: #2563eb;
+  stroke: #ffffff;
+  stroke-width: 1.5;
+}
+
+.pair-funding-chart-current-point {
+  stroke: #ffffff;
+  stroke-width: 2;
+}
+
+.pair-funding-chart-current-positive {
+  fill: #14803c;
+}
+
+.pair-funding-chart-current-negative {
+  fill: #c62828;
+}
+
+.pair-funding-chart-current-neutral {
+  fill: #69736f;
+}
+
+.pair-funding-chart-axis-label {
+  fill: #6b7a75;
+  font-size: 12px;
+}
+
+.pair-funding-chart-empty {
+  min-height: 300px;
+  display: grid;
+  place-items: center;
+  color: #687872;
+  background: #ffffff;
+  border: 1px dashed #dbe4e0;
+  border-radius: 6px;
 }
 
 .pair-funding-column-title {
@@ -2770,10 +2852,6 @@ body {
   .pair-query-actions,
   .premium-query-actions {
     grid-column: 1 / -1;
-  }
-
-  .pair-funding-empty-panel {
-    display: none;
   }
 
   .research-toolbar-grid,

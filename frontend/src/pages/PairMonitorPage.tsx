@@ -871,6 +871,143 @@ function FundingRateValue({ value, strong = false }: { value: number | null | un
   );
 }
 
+function PairFundingDiffChart({ rows }: { rows: FundingRateDiffRow[] }) {
+  const chartRows = rows
+    .filter((row) => finiteRate(row.net_rate_pct) !== null)
+    .slice()
+    .sort((a, b) => dayjs.utc(a.funding_time).valueOf() - dayjs.utc(b.funding_time).valueOf());
+  const latest = chartRows[chartRows.length - 1] ?? null;
+  const width = 560;
+  const height = 328;
+  const padding = { top: 18, right: 24, bottom: 34, left: 58 };
+  const chartWidth = width - padding.left - padding.right;
+  const chartHeight = height - padding.top - padding.bottom;
+
+  if (!chartRows.length) {
+    return (
+      <div className="pair-detail-card pair-funding-chart-card">
+        <div className="pair-detail-head">
+          <Typography.Title level={5}>资金费率差走势</Typography.Title>
+          <Tag>0 条</Tag>
+        </div>
+        <div className="pair-funding-chart-empty">暂无资金费率差数据</div>
+      </div>
+    );
+  }
+
+  const values = chartRows.map((row) => finiteRate(row.net_rate_pct) ?? 0);
+  const valueMin = Math.min(...values, 0);
+  const valueMax = Math.max(...values, 0);
+  const span = valueMax - valueMin || 0.01;
+  const min = valueMin - span * 0.16;
+  const max = valueMax + span * 0.16;
+  const xAt = (index: number) =>
+    padding.left + (chartRows.length === 1 ? chartWidth / 2 : (chartWidth * index) / (chartRows.length - 1));
+  const yAt = (value: number) => padding.top + ((max - value) / (max - min)) * chartHeight;
+  const linePath = chartRows
+    .map((row, index) => {
+      const value = finiteRate(row.net_rate_pct) ?? 0;
+      return `${index === 0 ? "M" : "L"} ${xAt(index).toFixed(2)} ${yAt(value).toFixed(2)}`;
+    })
+    .join(" ");
+  const areaPath = `M ${xAt(0).toFixed(2)} ${yAt(0).toFixed(2)} ${chartRows
+    .map((row, index) => {
+      const value = finiteRate(row.net_rate_pct) ?? 0;
+      return `L ${xAt(index).toFixed(2)} ${yAt(value).toFixed(2)}`;
+    })
+    .join(" ")} L ${xAt(chartRows.length - 1).toFixed(2)} ${yAt(0).toFixed(2)} Z`;
+  const startMs = dayjs.utc(chartRows[0].funding_time).valueOf();
+  const endMs = dayjs.utc(chartRows[chartRows.length - 1].funding_time).valueOf();
+  const spanHours = Math.max((endMs - startMs) / 3_600_000, 0);
+  const tickCount = Math.min(spanHours >= 168 ? 6 : 5, chartRows.length);
+  const seenTickIndexes = new Set<number>();
+  const ticks =
+    tickCount <= 1
+      ? chartRows.map((row, index) => ({ row, index }))
+      : Array.from({ length: tickCount }, (_, tickIndex) => {
+          const index = Math.round((tickIndex * (chartRows.length - 1)) / (tickCount - 1));
+          if (seenTickIndexes.has(index)) {
+            return null;
+          }
+          seenTickIndexes.add(index);
+          return { row: chartRows[index], index };
+        }).filter((item): item is { row: FundingRateDiffRow; index: number } => item !== null);
+  const latestValue = finiteRate(latest?.net_rate_pct) ?? 0;
+  const latestTone = fundingRateTone(latestValue);
+  const latestTagColor = latestTone === "negative" ? "red" : latestTone === "positive" ? "green" : undefined;
+  const latestIndex = chartRows.length - 1;
+
+  return (
+    <div className="pair-detail-card pair-funding-chart-card">
+      <div className="pair-detail-head">
+        <Typography.Title level={5}>资金费率差走势</Typography.Title>
+        <div className="pair-funding-chart-tools">
+          <Tag color={latestTagColor}>
+            最新 {signedPct(latestValue, 4)}
+          </Tag>
+          <Tag>{chartRows.length} 条</Tag>
+        </div>
+      </div>
+      <svg className="pair-funding-diff-chart" role="img" aria-label="资金费率差净费率走势" viewBox={`0 0 ${width} ${height}`}>
+        <defs>
+          <linearGradient id="pairFundingDiffFill" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stopColor="#2563eb" stopOpacity="0.14" />
+            <stop offset="100%" stopColor="#2563eb" stopOpacity="0.03" />
+          </linearGradient>
+        </defs>
+        <rect x={padding.left} y={padding.top} width={chartWidth} height={chartHeight} rx="4" />
+        {[0, 0.25, 0.5, 0.75, 1].map((tick) => {
+          const y = padding.top + chartHeight * tick;
+          const value = max - (max - min) * tick;
+          return (
+            <g key={tick}>
+              <line className="pair-funding-chart-grid-line" x1={padding.left} y1={y} x2={padding.left + chartWidth} y2={y} />
+              <text className="pair-funding-chart-axis-label" x={padding.left - 8} y={y + 4} textAnchor="end">
+                {signedPct(value, 3)}
+              </text>
+            </g>
+          );
+        })}
+        {ticks.map(({ row, index }, tickIndex) => {
+          const x = xAt(index);
+          const textAnchor = tickIndex === 0 ? "start" : tickIndex === ticks.length - 1 ? "end" : "middle";
+          return (
+            <g key={`funding-tick-${row.funding_time}-${tickIndex}`}>
+              <line className="pair-funding-chart-time-tick" x1={x} y1={padding.top} x2={x} y2={padding.top + chartHeight} />
+              <text className="pair-funding-chart-axis-label" x={x} y={height - 10} textAnchor={textAnchor}>
+                {chartTime(row.funding_time, spanHours)}
+              </text>
+            </g>
+          );
+        })}
+        <line className="pair-funding-chart-zero-line" x1={padding.left} y1={yAt(0)} x2={padding.left + chartWidth} y2={yAt(0)} />
+        <path className="pair-funding-chart-area" d={areaPath} />
+        <path className="pair-funding-chart-line" d={linePath} />
+        {chartRows.map((row, index) => {
+          const value = finiteRate(row.net_rate_pct) ?? 0;
+          return (
+            <circle
+              key={`funding-point-${row.funding_time}-${index}`}
+              className="pair-funding-chart-point"
+              cx={xAt(index)}
+              cy={yAt(value)}
+              r="2.6"
+            >
+              <title>{`${time(row.funding_time)} 净费率 ${signedPct(value, 4)}`}</title>
+            </circle>
+          );
+        })}
+        <circle
+          className={`pair-funding-chart-current-point pair-funding-chart-current-${latestTone}`}
+          cx={xAt(latestIndex)}
+          cy={yAt(latestValue)}
+          r="4.2"
+        />
+      </svg>
+    </div>
+  );
+}
+
 function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
   const points = result?.points ?? [];
   const width = 1180;
@@ -2169,7 +2306,7 @@ export function PairMonitorPage() {
             scroll={{ x: "max-content" }}
           />
         </div>
-        <div className="pair-funding-empty-panel" aria-hidden="true" />
+        <PairFundingDiffChart rows={fundingDiffRows} />
       </section>
 
       <section className="pair-detail-grid">
