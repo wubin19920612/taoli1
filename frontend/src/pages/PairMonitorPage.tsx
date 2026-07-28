@@ -2156,10 +2156,7 @@ export function PairMonitorPage() {
 
       <PairSpreadChart result={result} />
 
-      {showPremiumCompare ? <PairPremiumCompareChart comparison={premiumCompare} loading={premiumLoading} /> : null}
-      <PairPriceChart result={result} />
-
-      <section className="pair-detail-grid">
+      <section className="pair-funding-grid">
         <div className="pair-detail-card pair-funding-diff-card">
           <div className="pair-detail-head">
             <Typography.Title level={5}>资金费率差</Typography.Title>
@@ -2201,6 +2198,12 @@ export function PairMonitorPage() {
             scroll={{ x: 520 }}
           />
         </div>
+      </section>
+
+      {showPremiumCompare ? <PairPremiumCompareChart comparison={premiumCompare} loading={premiumLoading} /> : null}
+      <PairPriceChart result={result} />
+
+      <section className="pair-detail-grid">
         <div className="pair-detail-card pair-spread-points-card">
           <div className="pair-detail-head">
             <Typography.Title level={5}>最近价差</Typography.Title>

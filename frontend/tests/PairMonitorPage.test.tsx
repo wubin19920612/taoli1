@@ -280,6 +280,8 @@ describe("PairMonitorPage", () => {
     expect(screen.getAllByText("净费率").length).toBeGreaterThan(0);
     expect(screen.getAllByText("+0.0300%").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Bitget 费率").length).toBeGreaterThan(0);
+    const pageText = document.body.textContent ?? "";
+    expect(pageText.indexOf("资金费率差")).toBeLessThan(pageText.indexOf("标的价格"));
   });
 
   it("auto-runs a Binance Alpha spread query from URL parameters", async () => {

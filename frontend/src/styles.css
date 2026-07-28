@@ -1631,11 +1631,19 @@ body {
   min-width: 0;
 }
 
+.pair-funding-grid,
 .pair-detail-grid {
   display: grid;
-  grid-template-columns: minmax(520px, 0.9fr) minmax(360px, 1.1fr);
   gap: 10px;
   align-items: start;
+}
+
+.pair-funding-grid {
+  grid-template-columns: minmax(520px, 0.9fr) minmax(360px, 1.1fr);
+}
+
+.pair-detail-grid {
+  grid-template-columns: 1fr;
 }
 
 .pair-detail-card {
@@ -2747,6 +2755,7 @@ body {
   .research-grid,
   .pair-monitor-layout,
   .pair-monitor-tables,
+  .pair-funding-grid,
   .pair-detail-grid,
   .template-grid {
     grid-template-columns: 1fr;
@@ -2850,6 +2859,7 @@ body {
   .pair-monitor-tables,
   .pair-query-bar,
   .pair-metric-grid,
+  .pair-funding-grid,
   .pair-detail-grid,
   .premium-query-bar,
   .premium-metric-grid,
