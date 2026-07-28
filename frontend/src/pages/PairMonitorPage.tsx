@@ -1521,6 +1521,11 @@ function fundingLegKey(exchange: string, symbol: string): string {
   return `${exchange.trim().toLowerCase()}|${symbol.trim().toUpperCase().replace(/[-_/]/g, "")}`;
 }
 
+function fundingTimeBucket(value: string): string {
+  const parsed = dayjs.utc(value);
+  return parsed.isValid() ? parsed.second(0).millisecond(0).toISOString() : value;
+}
+
 function fundingPointBelongsTo(point: PairSpreadFundingPoint, leg: PairSpreadLegQuery): boolean {
   if (leg.market_type !== "future") {
     return false;
@@ -1547,15 +1552,16 @@ function buildFundingRateDiffRows(result: PairSpreadQueryResult | null): Funding
 
   const rowsByTime = new Map<string, FundingRateDiffRow>();
   for (const point of result.funding_history ?? []) {
+    const fundingTime = fundingTimeBucket(point.funding_time);
     const isLeft = fundingPointBelongsTo(point, result.leg1);
     const isRight = fundingPointBelongsTo(point, result.leg2);
     if (!isLeft && !isRight) {
       continue;
     }
     const row =
-      rowsByTime.get(point.funding_time) ??
+      rowsByTime.get(fundingTime) ??
       {
-        funding_time: point.funding_time,
+        funding_time: fundingTime,
         left_rate_pct: null,
         right_rate_pct: null,
         net_rate_pct: null,
@@ -1567,7 +1573,7 @@ function buildFundingRateDiffRows(result: PairSpreadQueryResult | null): Funding
     if (isRight) {
       row.right_rate_pct = finiteRate(point.funding_rate_pct);
     }
-    rowsByTime.set(point.funding_time, row);
+    rowsByTime.set(fundingTime, row);
   }
 
   const historyRows = [...rowsByTime.values()]
@@ -1654,7 +1660,7 @@ export function PairMonitorPage() {
       {
         title: "时间",
         dataIndex: "funding_time",
-        width: 170,
+        width: 112,
         render: (value: string, row) => (
           <span className="pair-funding-time-cell">
             <span>{time(value)}</span>
@@ -1666,18 +1672,21 @@ export function PairMonitorPage() {
         title: fundingRateColumnTitle(result?.leg1, "左侧费率"),
         dataIndex: "left_rate_pct",
         align: "right",
+        width: 138,
         render: (value: number | null) => <FundingRateValue value={value} />
       },
       {
         title: fundingRateColumnTitle(result?.leg2, "右侧费率"),
         dataIndex: "right_rate_pct",
         align: "right",
+        width: 138,
         render: (value: number | null) => <FundingRateValue value={value} />
       },
       {
         title: "净费率",
         dataIndex: "net_rate_pct",
         align: "right",
+        width: 118,
         render: (value: number | null) => <FundingRateValue value={value} strong />
       }
     ],
@@ -2172,11 +2181,27 @@ export function PairMonitorPage() {
             loading={loading}
             pagination={{ pageSize: 8 }}
             size="small"
-            tableLayout="fixed"
-            scroll={{ x: 760 }}
+            tableLayout="auto"
+            scroll={{ x: "max-content" }}
           />
         </div>
-        <div className="pair-detail-card">
+        <div className="pair-detail-card pair-funding-raw-card">
+          <div className="pair-detail-head">
+            <Typography.Title level={5}>资金费率</Typography.Title>
+            <Tag>{recentFunding.length} 条</Tag>
+          </div>
+          <Table<PairSpreadFundingPoint>
+            rowKey={(point) => `${point.exchange}-${point.symbol}-${point.funding_time}`}
+            columns={fundingColumns}
+            dataSource={recentFunding}
+            loading={loading}
+            pagination={{ pageSize: 8 }}
+            size="small"
+            tableLayout="fixed"
+            scroll={{ x: 520 }}
+          />
+        </div>
+        <div className="pair-detail-card pair-spread-points-card">
           <div className="pair-detail-head">
             <Typography.Title level={5}>最近价差</Typography.Title>
             <Button icon={<ReloadOutlined />} disabled={!result} loading={loading} onClick={rerun}>
@@ -2192,22 +2217,6 @@ export function PairMonitorPage() {
             size="small"
             tableLayout="fixed"
             scroll={{ x: 640 }}
-          />
-        </div>
-        <div className="pair-detail-card">
-          <div className="pair-detail-head">
-            <Typography.Title level={5}>资金费率</Typography.Title>
-            <Tag>{recentFunding.length} 条</Tag>
-          </div>
-          <Table<PairSpreadFundingPoint>
-            rowKey={(point) => `${point.exchange}-${point.symbol}-${point.funding_time}`}
-            columns={fundingColumns}
-            dataSource={recentFunding}
-            loading={loading}
-            pagination={{ pageSize: 8 }}
-            size="small"
-            tableLayout="fixed"
-            scroll={{ x: 560 }}
           />
         </div>
       </section>

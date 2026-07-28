@@ -1633,7 +1633,7 @@ body {
 
 .pair-detail-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(360px, 0.9fr);
+  grid-template-columns: minmax(520px, 0.9fr) minmax(360px, 1.1fr);
   gap: 10px;
   align-items: start;
 }
@@ -1661,6 +1661,10 @@ body {
 }
 
 .pair-funding-diff-card {
+  grid-column: auto;
+}
+
+.pair-spread-points-card {
   grid-column: 1 / -1;
 }
 
@@ -1679,11 +1683,12 @@ body {
   flex-direction: column;
   gap: 2px;
   line-height: 1.1;
+  min-width: 0;
 }
 
 .pair-funding-column-title small {
   overflow: hidden;
-  max-width: 180px;
+  max-width: 116px;
   color: #687872;
   font-size: 11px;
   font-weight: 600;
@@ -1696,7 +1701,7 @@ body {
 .pair-funding-diff-latest {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -1717,6 +1722,7 @@ body {
   font-variant-numeric: tabular-nums;
   font-weight: 700;
   letter-spacing: 0;
+  white-space: nowrap;
 }
 
 .pair-funding-rate-positive {

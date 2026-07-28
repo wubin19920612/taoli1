@@ -40,7 +40,7 @@ function pairSpreadResult(params?: URLSearchParams) {
           {
             exchange: leg2Exchange,
             symbol: leg2Symbol,
-            funding_time: "2026-07-24T00:00:00Z",
+            funding_time: "2026-07-24T00:00:40Z",
             funding_rate_pct: -0.07
           },
           {
