@@ -1500,23 +1500,6 @@ const pointColumns: ColumnsType<PairSpreadPoint> = [
   { title: "均值价差率", dataIndex: "spread_pct", align: "right", render: (value: number) => signedPct(value) }
 ];
 
-const fundingColumns: ColumnsType<PairSpreadFundingPoint> = [
-  {
-    title: "交易所",
-    dataIndex: "exchange",
-    width: 100,
-    render: (value: string) => <Tag>{value}</Tag>
-  },
-  { title: "标的", dataIndex: "symbol", width: 120 },
-  { title: "结算时间", dataIndex: "funding_time", width: 150, render: (value: string) => fullTime(value) },
-  {
-    title: "资金费率",
-    dataIndex: "funding_rate_pct",
-    align: "right",
-    render: (value: number) => <FundingRateValue value={value} />
-  }
-];
-
 function fundingLegKey(exchange: string, symbol: string): string {
   return `${exchange.trim().toLowerCase()}|${symbol.trim().toUpperCase().replace(/[-_/]/g, "")}`;
 }
@@ -1653,10 +1636,6 @@ export function PairMonitorPage() {
   const recentPoints = useMemo(
     () => [...(result?.points ?? [])].reverse().slice(0, 180),
     [result?.points]
-  );
-  const recentFunding = useMemo(
-    () => [...(result?.funding_history ?? [])].reverse().slice(0, 80),
-    [result?.funding_history]
   );
   const fundingDiffRows = useMemo(() => buildFundingRateDiffRows(result), [result]);
   const latestFundingDiff = fundingDiffRows.find((row) => finiteRate(row.net_rate_pct) !== null);
@@ -2191,22 +2170,6 @@ export function PairMonitorPage() {
           />
         </div>
         <div className="pair-funding-empty-panel" aria-hidden="true" />
-        <div className="pair-detail-card pair-funding-raw-card">
-          <div className="pair-detail-head">
-            <Typography.Title level={5}>资金费率</Typography.Title>
-            <Tag>{recentFunding.length} 条</Tag>
-          </div>
-          <Table<PairSpreadFundingPoint>
-            rowKey={(point) => `${point.exchange}-${point.symbol}-${point.funding_time}`}
-            columns={fundingColumns}
-            dataSource={recentFunding}
-            loading={loading}
-            pagination={{ pageSize: 8 }}
-            size="small"
-            tableLayout="fixed"
-            scroll={{ x: 560 }}
-          />
-        </div>
       </section>
 
       <section className="pair-detail-grid">

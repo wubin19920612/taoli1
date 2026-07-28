@@ -293,7 +293,8 @@ describe("PairMonitorPage", () => {
     );
     expect(fundingLayout[0]).toContain("pair-funding-diff-card");
     expect(fundingLayout[1]).toContain("pair-funding-empty-panel");
-    expect(fundingLayout[2]).toContain("pair-funding-raw-card");
+    expect(fundingLayout).toHaveLength(2);
+    expect(document.querySelector(".pair-funding-raw-card")).toBeNull();
     const pageText = document.body.textContent ?? "";
     const pageLayout = Array.from(document.querySelector(".pair-monitor-page")?.children ?? []).map((element) =>
       (element as HTMLElement).className.toString()

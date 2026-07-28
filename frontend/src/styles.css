@@ -1651,10 +1651,6 @@ body {
   min-width: 0;
 }
 
-.pair-funding-raw-card {
-  grid-column: 1 / -1;
-}
-
 .pair-spread-points-card {
   grid-column: 1 / -1;
 }
