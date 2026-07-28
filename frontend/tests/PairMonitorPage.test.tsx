@@ -295,8 +295,16 @@ describe("PairMonitorPage", () => {
     expect(fundingLayout[1]).toContain("pair-funding-empty-panel");
     expect(fundingLayout[2]).toContain("pair-funding-raw-card");
     const pageText = document.body.textContent ?? "";
-    expect(pageText.indexOf("资金费率差")).toBeLessThan(pageText.indexOf("标的价格"));
-    expect(pageText.indexOf("资金费率")).toBeLessThan(pageText.indexOf("标的价格"));
+    const pageLayout = Array.from(document.querySelector(".pair-monitor-page")?.children ?? []).map((element) =>
+      (element as HTMLElement).className.toString()
+    );
+    const spreadChartIndex = pageLayout.findIndex((className) => className.includes("pair-chart-card"));
+    const priceChartIndex = pageLayout.findIndex((className) => className.includes("pair-price-card"));
+    const fundingGridIndex = pageLayout.findIndex((className) => className.includes("pair-funding-grid"));
+    expect(spreadChartIndex).toBeGreaterThan(-1);
+    expect(priceChartIndex).toBe(spreadChartIndex + 1);
+    expect(fundingGridIndex).toBeGreaterThan(priceChartIndex);
+    expect(pageText.indexOf("标的价格")).toBeLessThan(pageText.indexOf("资金费率差"));
   });
 
   it("auto-runs a Binance Alpha spread query from URL parameters", async () => {

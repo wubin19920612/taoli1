@@ -2160,6 +2160,9 @@ export function PairMonitorPage() {
       </section>
 
       <PairSpreadChart result={result} />
+      <PairPriceChart result={result} />
+
+      {showPremiumCompare ? <PairPremiumCompareChart comparison={premiumCompare} loading={premiumLoading} /> : null}
 
       <section className="pair-funding-grid">
         <div className="pair-detail-card pair-funding-diff-card">
@@ -2205,9 +2208,6 @@ export function PairMonitorPage() {
           />
         </div>
       </section>
-
-      {showPremiumCompare ? <PairPremiumCompareChart comparison={premiumCompare} loading={premiumLoading} /> : null}
-      <PairPriceChart result={result} />
 
       <section className="pair-detail-grid">
         <div className="pair-detail-card pair-spread-points-card">

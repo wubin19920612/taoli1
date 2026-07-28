@@ -880,32 +880,6 @@ body {
   stroke: #0f766e;
 }
 
-.pair-monitor-line-funding-a,
-.legend-funding-a {
-  color: #2563eb;
-  stroke: #2563eb;
-}
-
-.pair-monitor-line-funding-b,
-.legend-funding-b {
-  color: #b45309;
-  stroke: #b45309;
-}
-
-.pair-monitor-funding-marker {
-  stroke-width: 1;
-  stroke-dasharray: 3 4;
-  opacity: 0.62;
-}
-
-.pair-monitor-funding-a {
-  stroke: #2563eb;
-}
-
-.pair-monitor-funding-b {
-  stroke: #b45309;
-}
-
 .pair-monitor-axis-label {
   fill: #66736f;
   font-size: 11px;
