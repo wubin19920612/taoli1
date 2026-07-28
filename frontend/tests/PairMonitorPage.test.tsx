@@ -28,6 +28,35 @@ function pairSpreadResult(params?: URLSearchParams) {
   const largePriceGap = leg2Multiplier === 0.1;
   const leg1Price = largePriceGap ? 1218.6 : 100;
   const leg2Price = largePriceGap ? 1618.3 : 101;
+  const fundingHistory =
+    leg1MarketType === "future" && leg2MarketType === "future"
+      ? [
+          {
+            exchange: leg1Exchange,
+            symbol: leg1Symbol,
+            funding_time: "2026-07-24T00:00:00Z",
+            funding_rate_pct: -0.1
+          },
+          {
+            exchange: leg2Exchange,
+            symbol: leg2Symbol,
+            funding_time: "2026-07-24T00:00:00Z",
+            funding_rate_pct: -0.07
+          },
+          {
+            exchange: leg1Exchange,
+            symbol: leg1Symbol,
+            funding_time: "2026-07-23T16:00:00Z",
+            funding_rate_pct: 0.01
+          },
+          {
+            exchange: leg2Exchange,
+            symbol: leg2Symbol,
+            funding_time: "2026-07-23T16:00:00Z",
+            funding_rate_pct: 0.01
+          }
+        ]
+      : [];
   const points = largePriceGap
     ? [
         {
@@ -126,7 +155,7 @@ function pairSpreadResult(params?: URLSearchParams) {
       spread_pct: largePriceGap ? 28.18 : 0.5
     },
     points,
-    funding_history: [],
+    funding_history: fundingHistory,
     warnings: []
   };
 }
@@ -239,6 +268,18 @@ describe("PairMonitorPage", () => {
       expect(requests.some((request) => request.includes("interval_seconds=7"))).toBe(true);
     });
     expect(new URLSearchParams(window.location.search).get("interval_seconds")).toBe("7");
+  });
+
+  it("shows the funding rate difference table", async () => {
+    const user = userEvent.setup();
+    render(<PairMonitorPage />);
+
+    await user.click(screen.getByRole("button", { name: /查询/ }));
+
+    expect(await screen.findByText("资金费率差")).toBeTruthy();
+    expect(screen.getAllByText("净费率").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("+0.0300%").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Bitget 费率").length).toBeGreaterThan(0);
   });
 
   it("auto-runs a Binance Alpha spread query from URL parameters", async () => {

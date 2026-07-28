@@ -76,6 +76,14 @@ type LastPairSpreadState = {
   savedAt: string;
 };
 
+type FundingRateDiffRow = {
+  funding_time: string;
+  left_rate_pct: number | null;
+  right_rate_pct: number | null;
+  net_rate_pct: number | null;
+  source: "history" | "current";
+};
+
 const defaultFormValues: PairSpreadFormValues = {
   leg1_exchange: "bitget",
   leg1_market_type: "future",
@@ -143,6 +151,18 @@ function signedPct(value: number | null | undefined, digits = 2): string {
     return "-";
   }
   return `${value >= 0 ? "+" : ""}${value.toFixed(digits)}%`;
+}
+
+function finiteRate(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function fundingRateTone(value: number | null | undefined): "positive" | "negative" | "neutral" {
+  const rate = finiteRate(value);
+  if (rate === null || Math.abs(rate) < 0.000_000_1) {
+    return "neutral";
+  }
+  return rate > 0 ? "positive" : "negative";
 }
 
 function signedBp(value: number | null | undefined): string {
@@ -842,6 +862,15 @@ function MetricCard({
   );
 }
 
+function FundingRateValue({ value, strong = false }: { value: number | null | undefined; strong?: boolean }) {
+  const tone = fundingRateTone(value);
+  return (
+    <span className={`pair-funding-rate-value pair-funding-rate-${tone}${strong ? " pair-funding-rate-strong" : ""}`}>
+      {signedPct(value, 4)}
+    </span>
+  );
+}
+
 function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
   const points = result?.points ?? [];
   const width = 1180;
@@ -1484,9 +1513,96 @@ const fundingColumns: ColumnsType<PairSpreadFundingPoint> = [
     title: "资金费率",
     dataIndex: "funding_rate_pct",
     align: "right",
-    render: (value: number) => signedPct(value, 4)
+    render: (value: number) => <FundingRateValue value={value} />
   }
 ];
+
+function fundingLegKey(exchange: string, symbol: string): string {
+  return `${exchange.trim().toLowerCase()}|${symbol.trim().toUpperCase().replace(/[-_/]/g, "")}`;
+}
+
+function fundingPointBelongsTo(point: PairSpreadFundingPoint, leg: PairSpreadLegQuery): boolean {
+  if (leg.market_type !== "future") {
+    return false;
+  }
+  return fundingLegKey(point.exchange, point.symbol) === fundingLegKey(leg.exchange, leg.symbol);
+}
+
+function fundingRateColumnTitle(leg: PairSpreadLegQuery | null | undefined, fallback: string): ReactNode {
+  if (!leg) {
+    return fallback;
+  }
+  return (
+    <span className="pair-funding-column-title">
+      <span>{exchangeLabels[leg.exchange] ?? leg.exchange} 费率</span>
+      <small>{leg.symbol}</small>
+    </span>
+  );
+}
+
+function buildFundingRateDiffRows(result: PairSpreadQueryResult | null): FundingRateDiffRow[] {
+  if (!result) {
+    return [];
+  }
+
+  const rowsByTime = new Map<string, FundingRateDiffRow>();
+  for (const point of result.funding_history ?? []) {
+    const isLeft = fundingPointBelongsTo(point, result.leg1);
+    const isRight = fundingPointBelongsTo(point, result.leg2);
+    if (!isLeft && !isRight) {
+      continue;
+    }
+    const row =
+      rowsByTime.get(point.funding_time) ??
+      {
+        funding_time: point.funding_time,
+        left_rate_pct: null,
+        right_rate_pct: null,
+        net_rate_pct: null,
+        source: "history" as const
+      };
+    if (isLeft) {
+      row.left_rate_pct = finiteRate(point.funding_rate_pct);
+    }
+    if (isRight) {
+      row.right_rate_pct = finiteRate(point.funding_rate_pct);
+    }
+    rowsByTime.set(point.funding_time, row);
+  }
+
+  const historyRows = [...rowsByTime.values()]
+    .map((row) => {
+      const leftRate = finiteRate(row.left_rate_pct);
+      const rightRate = finiteRate(row.right_rate_pct);
+      // 净费率按右侧费率减左侧费率，和价差方向保持一致。
+      return {
+        ...row,
+        net_rate_pct: leftRate !== null && rightRate !== null ? rightRate - leftRate : null
+      };
+    })
+    .sort((a, b) => dayjs.utc(b.funding_time).valueOf() - dayjs.utc(a.funding_time).valueOf())
+    .slice(0, 80);
+
+  if (historyRows.length > 0) {
+    return historyRows;
+  }
+
+  const current = result.current;
+  const leftRate = finiteRate(current?.leg1.funding_rate_pct);
+  const rightRate = finiteRate(current?.leg2.funding_rate_pct);
+  if (!current || leftRate === null || rightRate === null) {
+    return [];
+  }
+  return [
+    {
+      funding_time: current.observed_at,
+      left_rate_pct: leftRate,
+      right_rate_pct: rightRate,
+      net_rate_pct: rightRate - leftRate,
+      source: "current"
+    }
+  ];
+}
 
 export function PairMonitorPage() {
   const [form] = Form.useForm<PairSpreadFormValues>();
@@ -1530,6 +1646,42 @@ export function PairMonitorPage() {
   const recentFunding = useMemo(
     () => [...(result?.funding_history ?? [])].reverse().slice(0, 80),
     [result?.funding_history]
+  );
+  const fundingDiffRows = useMemo(() => buildFundingRateDiffRows(result), [result]);
+  const latestFundingDiff = fundingDiffRows.find((row) => finiteRate(row.net_rate_pct) !== null);
+  const fundingDiffColumns = useMemo<ColumnsType<FundingRateDiffRow>>(
+    () => [
+      {
+        title: "时间",
+        dataIndex: "funding_time",
+        width: 170,
+        render: (value: string, row) => (
+          <span className="pair-funding-time-cell">
+            <span>{time(value)}</span>
+            {row.source === "current" ? <Tag color="blue">当前</Tag> : null}
+          </span>
+        )
+      },
+      {
+        title: fundingRateColumnTitle(result?.leg1, "左侧费率"),
+        dataIndex: "left_rate_pct",
+        align: "right",
+        render: (value: number | null) => <FundingRateValue value={value} />
+      },
+      {
+        title: fundingRateColumnTitle(result?.leg2, "右侧费率"),
+        dataIndex: "right_rate_pct",
+        align: "right",
+        render: (value: number | null) => <FundingRateValue value={value} />
+      },
+      {
+        title: "净费率",
+        dataIndex: "net_rate_pct",
+        align: "right",
+        render: (value: number | null) => <FundingRateValue value={value} strong />
+      }
+    ],
+    [result?.leg1, result?.leg2]
   );
 
   const loadPremiumCompare = useCallback(async (pairResult: PairSpreadQueryResult) => {
@@ -1999,6 +2151,31 @@ export function PairMonitorPage() {
       <PairPriceChart result={result} />
 
       <section className="pair-detail-grid">
+        <div className="pair-detail-card pair-funding-diff-card">
+          <div className="pair-detail-head">
+            <Typography.Title level={5}>资金费率差</Typography.Title>
+            <div className="pair-funding-diff-tools">
+              {latestFundingDiff ? (
+                <span className="pair-funding-diff-latest">
+                  <Typography.Text type="secondary">最新净费率</Typography.Text>
+                  <FundingRateValue value={latestFundingDiff.net_rate_pct} strong />
+                </span>
+              ) : null}
+              <Tag color="blue">右-左</Tag>
+              <Tag>{fundingDiffRows.length} 条</Tag>
+            </div>
+          </div>
+          <Table<FundingRateDiffRow>
+            rowKey={(row) => `${row.source}-${row.funding_time}`}
+            columns={fundingDiffColumns}
+            dataSource={fundingDiffRows}
+            loading={loading}
+            pagination={{ pageSize: 8 }}
+            size="small"
+            tableLayout="fixed"
+            scroll={{ x: 760 }}
+          />
+        </div>
         <div className="pair-detail-card">
           <div className="pair-detail-head">
             <Typography.Title level={5}>最近价差</Typography.Title>

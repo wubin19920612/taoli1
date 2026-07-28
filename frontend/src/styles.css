@@ -1660,6 +1660,81 @@ body {
   margin: 0;
 }
 
+.pair-funding-diff-card {
+  grid-column: 1 / -1;
+}
+
+.pair-funding-diff-card .ant-table-thead > tr > th {
+  background: #f7faf8;
+  color: #17211d;
+  font-weight: 800;
+}
+
+.pair-funding-diff-card .ant-table-tbody > tr > td {
+  border-bottom-color: #edf2ef;
+}
+
+.pair-funding-column-title {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.1;
+}
+
+.pair-funding-column-title small {
+  overflow: hidden;
+  max-width: 180px;
+  color: #687872;
+  font-size: 11px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pair-funding-time-cell,
+.pair-funding-diff-tools,
+.pair-funding-diff-latest {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pair-funding-diff-tools {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.pair-funding-diff-latest {
+  padding: 3px 8px;
+  background: #f7faf8;
+  border: 1px solid #e2e8e5;
+  border-radius: 6px;
+}
+
+.pair-funding-rate-value {
+  color: #687872;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.pair-funding-rate-positive {
+  color: #14803c;
+}
+
+.pair-funding-rate-negative {
+  color: #c62828;
+}
+
+.pair-funding-rate-neutral {
+  color: #69736f;
+}
+
+.pair-funding-rate-strong {
+  font-weight: 850;
+}
+
 .pair-premium-card {
   overflow: hidden;
   display: grid;
