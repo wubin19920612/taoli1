@@ -461,6 +461,8 @@ describe("PairMonitorPage", () => {
     expect(document.querySelector(".pair-funding-legend-settlement")).toBeTruthy();
     expect(document.querySelector(".pair-funding-raw-card")).toBeNull();
     const pageText = document.body.textContent ?? "";
+    expect(pageText).toContain("关键标注");
+    expect(pageText).not.toContain("整点标注");
     const pageLayout = Array.from(document.querySelector(".pair-monitor-page")?.children ?? []).map((element) =>
       (element as HTMLElement).className.toString()
     );

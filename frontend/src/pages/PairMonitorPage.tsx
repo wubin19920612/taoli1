@@ -600,7 +600,7 @@ function chartTime(value: string | null | undefined, spanHours: number): string 
     return "-";
   }
   const parsed = dayjs.utc(value).utcOffset(8);
-  if (spanHours <= 1) {
+  if (spanHours <= 1 && parsed.second() !== 0) {
     return parsed.format("HH:mm:ss");
   }
   return spanHours <= 24 ? parsed.format("HH:mm") : parsed.format("MM-DD HH:mm");
@@ -768,10 +768,100 @@ function chartSpanHours(points: PairSpreadPoint[]): number {
   return Math.max(end.diff(start, "second") / 3600, 0);
 }
 
+type TimeAxisTick = {
+  ms: number;
+  value: string;
+};
+
+function chooseTimeTickStepMs(spanMs: number, maxTicks: number): number | null {
+  const minuteMs = 60_000;
+  const hourMs = 60 * minuteMs;
+  const dayMs = 24 * hourMs;
+  const steps =
+    spanMs <= hourMs
+      ? [5 * minuteMs, 10 * minuteMs, 15 * minuteMs, 30 * minuteMs, hourMs]
+      : spanMs <= 12 * hourMs
+        ? [hourMs, 2 * hourMs, 3 * hourMs, 4 * hourMs, 6 * hourMs]
+        : spanMs <= 24 * hourMs
+          ? [2 * hourMs, 3 * hourMs, 4 * hourMs, 6 * hourMs, 8 * hourMs, 12 * hourMs]
+          : spanMs <= 72 * hourMs
+            ? [4 * hourMs, 6 * hourMs, 8 * hourMs, 12 * hourMs, dayMs]
+            : [12 * hourMs, dayMs, 2 * dayMs, 3 * dayMs, 7 * dayMs];
+
+  return steps.find((stepMs) => Math.floor(spanMs / stepMs) + 1 <= maxTicks) ?? null;
+}
+
+function chartTimeTicks(startMs: number, endMs: number, maxTicks = 7): TimeAxisTick[] {
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) {
+    return [];
+  }
+  const start = Math.min(startMs, endMs);
+  const end = Math.max(startMs, endMs);
+  if (start === end) {
+    return [{ ms: start, value: dayjs.utc(start).toISOString() }];
+  }
+
+  const spanMs = end - start;
+  const stepMs = chooseTimeTickStepMs(spanMs, Math.max(2, maxTicks));
+  if (stepMs) {
+    const chinaOffsetMs = 8 * 3_600_000;
+    let cursor = Math.ceil((start + chinaOffsetMs) / stepMs) * stepMs - chinaOffsetMs;
+    const ticks: TimeAxisTick[] = [];
+    while (cursor <= end + 1_000) {
+      if (cursor >= start - 1_000) {
+        ticks.push({ ms: cursor, value: dayjs.utc(cursor).toISOString() });
+      }
+      cursor += stepMs;
+    }
+    if (ticks.length >= 2 && ticks.length <= maxTicks) {
+      return ticks;
+    }
+  }
+
+  const count = Math.max(2, Math.min(maxTicks, Math.ceil(spanMs / 3_600_000) + 1));
+  return Array.from({ length: count }, (_, tickIndex) => {
+    const tickMs = start + (spanMs * tickIndex) / (count - 1);
+    return { ms: tickMs, value: dayjs.utc(tickMs).toISOString() };
+  });
+}
+
+function nearestPointIndexByTime(points: PairSpreadPoint[], targetMs: number, seen: Set<number>): number | null {
+  let bestIndex: number | null = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  points.forEach((point, index) => {
+    if (seen.has(index)) {
+      return;
+    }
+    const pointMs = dayjs.utc(point.bucket_at).valueOf();
+    const distance = Math.abs(pointMs - targetMs);
+    if (Number.isFinite(distance) && distance < bestDistance) {
+      bestDistance = distance;
+      bestIndex = index;
+    }
+  });
+  return bestIndex;
+}
+
 function chartTicks(points: PairSpreadPoint[], maxTicks = 7): Array<{ index: number; point: PairSpreadPoint }> {
   if (points.length <= 1) {
     return points.map((point, index) => ({ index, point }));
   }
+  const startMs = dayjs.utc(points[0].bucket_at).valueOf();
+  const endMs = dayjs.utc(points[points.length - 1].bucket_at).valueOf();
+  const timeTicks = chartTimeTicks(startMs, endMs, maxTicks);
+  const timeTickSeen = new Set<number>();
+  const alignedTicks: Array<{ index: number; point: PairSpreadPoint }> = [];
+  for (const tick of timeTicks) {
+    const index = nearestPointIndexByTime(points, tick.ms, timeTickSeen);
+    if (index !== null) {
+      timeTickSeen.add(index);
+      alignedTicks.push({ index, point: points[index] });
+    }
+  }
+  if (alignedTicks.length >= Math.min(2, points.length)) {
+    return alignedTicks;
+  }
+
   const count = Math.min(maxTicks, points.length);
   const seen = new Set<number>();
   return Array.from({ length: count }, (_, tickIndex) => {
@@ -974,6 +1064,69 @@ function FundingRateValue({ value, strong = false }: { value: number | null | un
   );
 }
 
+function fundingDiffTurningPoints(rows: FundingRateDiffRow[], maxLabels = 5): Array<{
+  index: number;
+  row: FundingRateDiffRow;
+  kind: "peak" | "trough";
+}> {
+  const items = rows
+    .map((row, index) => ({ row, index, value: finiteRate(row.net_rate_pct) }))
+    .filter((item): item is { row: FundingRateDiffRow; index: number; value: number } => item.value !== null);
+  if (items.length === 0) {
+    return [];
+  }
+  if (items.length === 1) {
+    return [{ index: items[0].index, row: items[0].row, kind: items[0].value >= 0 ? "peak" : "trough" }];
+  }
+
+  const values = items.map((item) => item.value);
+  const minValue = Math.min(...values);
+  const maxValue = Math.max(...values);
+  const span = maxValue - minValue || Math.max(Math.abs(maxValue), 0.0001);
+  const localWindowSize = Math.max(1, Math.floor(items.length / 18));
+  const contextWindowSize = Math.max(localWindowSize + 1, Math.floor(items.length / 7));
+  const minProminence = Math.max(0.0001, span * 0.045);
+  const candidates: ChartTurnCandidate[] = [];
+  let previousDirection = 0;
+
+  for (let index = 1; index < values.length; index += 1) {
+    const delta = values[index] - values[index - 1];
+    const direction = delta > 0 ? 1 : delta < 0 ? -1 : 0;
+    if (direction === 0) {
+      continue;
+    }
+    if (previousDirection !== 0 && direction !== previousDirection) {
+      const turnIndex = index - 1;
+      const kind = previousDirection > 0 && direction < 0 ? "peak" : "trough";
+      const score = Math.max(
+        turningPointScore(values, turnIndex, kind, localWindowSize) * 1.2,
+        turningPointScore(values, turnIndex, kind, contextWindowSize)
+      );
+      if (score >= minProminence) {
+        candidates.push({ index: turnIndex, kind, score });
+      }
+    }
+    previousDirection = direction;
+  }
+
+  candidates.push({ index: values.indexOf(maxValue), kind: "peak", score: span });
+  candidates.push({ index: values.indexOf(minValue), kind: "trough", score: span });
+
+  const selected: ChartTurnCandidate[] = [];
+  const rankedCandidates = candidates.sort((a, b) => b.score - a.score);
+  const minIndexDistance = Math.max(2, Math.floor(items.length / (maxLabels + 1)));
+  for (const candidate of rankedCandidates) {
+    addChartTurnCandidate(selected, candidate, maxLabels, minIndexDistance);
+    if (selected.length >= maxLabels) {
+      break;
+    }
+  }
+
+  return selected
+    .sort((a, b) => a.index - b.index)
+    .map(({ index, kind }) => ({ index: items[index].index, row: items[index].row, kind }));
+}
+
 function PairFundingDiffChart({
   realtimeRows,
   settlementRows
@@ -1042,19 +1195,15 @@ function PairFundingDiffChart({
           .join(" ")} L ${xAt(chartRows[chartRows.length - 1].funding_time).toFixed(2)} ${yAt(0).toFixed(2)} Z`
       : "";
   const spanHours = Math.max((endMs - startMs) / 3_600_000, 0);
-  const tickCount = startMs === endMs ? 1 : Math.min(spanHours >= 168 ? 6 : 5, domainRows.length);
-  const ticks =
-    tickCount <= 1
-      ? [{ funding_time: domainRows[0].funding_time }]
-      : Array.from({ length: tickCount }, (_, tickIndex) => {
-          const tickMs = startMs + ((endMs - startMs) * tickIndex) / (tickCount - 1);
-          return { funding_time: dayjs.utc(tickMs).toISOString() };
-        });
+  const ticks = chartTimeTicks(startMs, endMs, spanHours <= 12 ? 7 : spanHours <= 72 ? 6 : 5);
   const latestValue = finiteRate(latest?.net_rate_pct) ?? 0;
   const latestTone = fundingRateTone(latestValue);
   const latestTagColor = latestTone === "negative" ? "red" : latestTone === "positive" ? "green" : undefined;
   const hasRealtimeLine = realtimeChartRows.length > 0;
-  const settlementLabelStride = Math.max(1, Math.ceil(settlementChartRows.length / 8));
+  const settlementTurningPoints = fundingDiffTurningPoints(settlementChartRows, hasRealtimeLine ? 5 : 6);
+  const settlementTurnByTime = new Map(
+    settlementTurningPoints.map((item, labelIndex) => [item.row.funding_time, { ...item, labelIndex }])
+  );
 
   return (
     <div className="pair-detail-card pair-funding-chart-card">
@@ -1065,7 +1214,8 @@ function PairFundingDiffChart({
             {hasRealtimeLine ? "实时" : "最新"} {signedPct(latestValue, 4)}
           </Tag>
           {hasRealtimeLine ? <Tag color="blue">实时采样 {realtimeChartRows.length} 点</Tag> : null}
-          {settlementChartRows.length ? <Tag color="orange">整点标注 {settlementChartRows.length} 个</Tag> : null}
+          {settlementChartRows.length ? <Tag color="orange">整点费率 {settlementChartRows.length} 点</Tag> : null}
+          {settlementTurningPoints.length ? <Tag color="gold">关键标注 {settlementTurningPoints.length} 个</Tag> : null}
         </div>
       </div>
       <svg className="pair-funding-diff-chart" role="img" aria-label="资金费率差净费率走势" viewBox={`0 0 ${width} ${height}`}>
@@ -1089,13 +1239,13 @@ function PairFundingDiffChart({
           );
         })}
         {ticks.map((tick, tickIndex) => {
-          const x = xAt(tick.funding_time);
+          const x = xAt(tick.value);
           const textAnchor = tickIndex === 0 ? "start" : tickIndex === ticks.length - 1 ? "end" : "middle";
           return (
-            <g key={`funding-tick-${tick.funding_time}-${tickIndex}`}>
+            <g key={`funding-tick-${tick.value}-${tickIndex}`}>
               <line className="pair-funding-chart-time-tick" x1={x} y1={padding.top} x2={x} y2={padding.top + chartHeight} />
               <text className="pair-funding-chart-axis-label" x={x} y={height - 10} textAnchor={textAnchor}>
-                {chartTime(tick.funding_time, spanHours)}
+                {chartTime(tick.value, spanHours)}
               </text>
             </g>
           );
@@ -1126,48 +1276,52 @@ function PairFundingDiffChart({
           const value = finiteRate(row.net_rate_pct) ?? 0;
           const x = xAt(row.funding_time);
           const y = yAt(value);
-          const shouldLabel =
-            settlementChartRows.length <= 8 ||
-            index % settlementLabelStride === 0 ||
-            index === settlementChartRows.length - 1;
+          const turn = settlementTurnByTime.get(row.funding_time);
           const labelWidth = 74;
           const labelHeight = 20;
-          const labelX = Math.max(
-            padding.left + 4,
-            Math.min(padding.left + chartWidth - labelWidth - 4, x - labelWidth / 2)
+          const labelIndex = turn?.labelIndex ?? index;
+          const labelOffset = 22 + (labelIndex % 2) * 12;
+          const labelShift = ((labelIndex % 3) - 1) * 10;
+          const labelCenterX = Math.min(
+            padding.left + chartWidth - labelWidth / 2,
+            Math.max(padding.left + labelWidth / 2, x + labelShift)
           );
-          const preferredLabelY = y - labelHeight - 12 - (index % 2) * 10;
-          const fallbackLabelY = y + 12 + (index % 2) * 10;
-          const labelY =
-            preferredLabelY >= padding.top + 4
-              ? preferredLabelY
-              : Math.min(padding.top + chartHeight - labelHeight - 4, fallbackLabelY);
+          const rawLabelY = turn?.kind === "trough" ? y + labelOffset : y - labelOffset;
+          const labelCenterY = Math.min(
+            padding.top + chartHeight - labelHeight / 2,
+            Math.max(padding.top + labelHeight / 2, rawLabelY)
+          );
           return (
-            <g key={`funding-settlement-${row.funding_time}-${index}`} className="pair-funding-settlement-marker">
-              <circle className="pair-funding-settlement-point" cx={x} cy={y} r="4">
-                <title>{`${time(row.funding_time)} 整点净费率 ${signedPct(value, 4)}`}</title>
+            <g
+              key={`funding-settlement-${row.funding_time}-${index}`}
+              className={`pair-funding-settlement-marker${
+                turn ? ` pair-funding-settlement-turning pair-funding-settlement-turning-${turn.kind}` : ""
+              }`}
+            >
+              <circle className="pair-funding-settlement-point" cx={x} cy={y} r={turn ? "4" : "3.2"}>
+                <title>{`${time(row.funding_time)} ${turn ? "关键" : "整点"}净费率 ${signedPct(value, 4)}`}</title>
               </circle>
-              {shouldLabel ? (
+              {turn ? (
                 <>
                   <line
                     className="pair-funding-settlement-leader"
                     x1={x}
                     y1={y}
-                    x2={labelX + labelWidth / 2}
-                    y2={labelY + labelHeight / 2}
+                    x2={labelCenterX}
+                    y2={labelCenterY}
                   />
                   <rect
                     className="pair-funding-settlement-label-bg"
-                    x={labelX}
-                    y={labelY}
+                    x={labelCenterX - labelWidth / 2}
+                    y={labelCenterY - labelHeight / 2}
                     width={labelWidth}
                     height={labelHeight}
                     rx="5"
                   />
                   <text
                     className="pair-funding-settlement-label"
-                    x={labelX + labelWidth / 2}
-                    y={labelY + 14}
+                    x={labelCenterX}
+                    y={labelCenterY + 4}
                     textAnchor="middle"
                   >
                     {signedPct(value, 4)}
@@ -1216,7 +1370,7 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
   const baselineValue = min <= 0 && max >= 0 ? 0 : minValue > 0 ? min : max;
   const baselineY = yAt(baselineValue);
   const spanHours = chartSpanHours(points);
-  const ticks = chartTicks(points, spanHours >= 168 ? 7 : 6);
+  const ticks = chartTicks(points, spanHours <= 12 ? 13 : spanHours <= 24 ? 9 : spanHours >= 168 ? 7 : 6);
   const turningPoints = chartTurningPoints(points);
   const latestPoint = points[points.length - 1];
   const latestTone = fundingRateTone(latestPoint.spread_pct);
@@ -1522,7 +1676,7 @@ function PairPriceChart({
     padding.left + (points.length === 1 ? chartWidth / 2 : (chartWidth * index) / (points.length - 1));
   const yAt = (value: number) => padding.top + ((max - value) / (max - min)) * chartHeight;
   const spanHours = chartSpanHours(points);
-  const ticks = chartTicks(points, spanHours >= 168 ? 7 : 6);
+  const ticks = chartTicks(points, spanHours <= 12 ? 13 : spanHours <= 24 ? 9 : spanHours >= 168 ? 7 : 6);
   const axisValueLabel = (value: number) => (indexedView ? value.toFixed(2) : price(value));
   const changeLabel = (value: number | null) =>
     typeof value === "number" && Number.isFinite(value) ? signedPct(value, 2) : "-";
@@ -1887,7 +2041,7 @@ function PairPremiumCompareChart({
         spread_abs: 0,
         spread_pct: point.premium_pct
       })),
-    spanHours >= 168 ? 7 : 6
+    spanHours <= 12 ? 13 : spanHours <= 24 ? 9 : spanHours >= 168 ? 7 : 6
   );
   const leftCurrent = comparison?.left?.current?.premium_pct ?? comparison?.left?.premium_pct.current ?? null;
   const rightCurrent = comparison?.right?.current?.premium_pct ?? comparison?.right?.premium_pct.current ?? null;
