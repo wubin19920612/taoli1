@@ -168,6 +168,57 @@ async def test_pair_spread_query_builds_stats_current_and_funding() -> None:
 
 
 @pytest.mark.asyncio
+async def test_pair_spread_query_historical_compare_skips_current_and_funding() -> None:
+    class FakePairSpreadService(PairSpreadQueryService):
+        def __init__(self) -> None:
+            super().__init__()
+            self.kline_windows: list[tuple[str, datetime, datetime, int]] = []
+            self.current_calls = 0
+            self.funding_calls = 0
+
+        async def _fetch_klines(self, exchange: str, symbol: str, start, end, interval_minutes: int):
+            self.kline_windows.append((exchange, start, end, interval_minutes))
+            close = 100 if exchange == "binance" else 101
+            return [kline_at(end - timedelta(minutes=interval_minutes), close)]
+
+        async def _fetch_current_leg(self, exchange: str, symbol: str):
+            self.current_calls += 1
+            return current_leg(exchange, symbol, 100)
+
+        async def _fetch_funding_history(self, exchange: str, symbol: str, start, end):
+            self.funding_calls += 1
+            return []
+
+    service = FakePairSpreadService()
+    historical_end = datetime(2026, 7, 9, 12, 2, 45, tzinfo=UTC)
+    try:
+        result = await service.query(
+            PairSpreadLegQuery(exchange="binance", symbol="btc"),
+            PairSpreadLegQuery(exchange="okx", symbol="btc"),
+            hours=6,
+            interval_seconds=60,
+            now=historical_end,
+            include_current=False,
+        )
+    finally:
+        await service.aclose()
+
+    floored_end = datetime(2026, 7, 9, 12, 2, tzinfo=UTC)
+    assert result.observed_at == historical_end
+    assert result.first_seen_at == floored_end - timedelta(minutes=1)
+    assert result.last_seen_at == floored_end - timedelta(minutes=1)
+    assert result.current is None
+    assert result.funding_history == []
+    assert result.realtime_funding == []
+    assert service.current_calls == 0
+    assert service.funding_calls == 0
+    assert sorted((exchange, end, interval_minutes) for exchange, _, end, interval_minutes in service.kline_windows) == [
+        ("binance", floored_end, 1),
+        ("okx", floored_end, 1),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_pair_spread_query_accumulates_realtime_second_points() -> None:
     _REALTIME_PAIR_SPREAD_CACHE.clear()
     _REALTIME_PAIR_FUNDING_CACHE.clear()

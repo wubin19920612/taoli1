@@ -27,6 +27,11 @@ function pairSpreadResult(params?: URLSearchParams) {
   const intervalSeconds = Number(params?.get("interval_seconds") ?? 5);
   const intervalMinutes = Number(params?.get("interval_minutes") ?? Math.max(1, Math.round(intervalSeconds / 60)));
   const hours = Number(params?.get("hours") ?? 4);
+  const includeCurrent = params?.get("include_current") !== "false";
+  const requestedEndAt = params?.get("end_at");
+  const baseObservedAt = requestedEndAt ?? observedAt;
+  const compareDayOffset = requestedEndAt ? Math.max(0, Math.round((Date.parse(observedAt) - Date.parse(requestedEndAt)) / 86_400_000)) : 0;
+  const compareSpreadBias = compareDayOffset * 0.18;
   const largePriceGap = leg2Multiplier === 0.1;
   const currentTailMismatch = requestedLeg1Symbol.trim().toUpperCase() === "TAIL";
   const leg1Price = largePriceGap ? 1218.6 : 100;
@@ -69,7 +74,7 @@ function pairSpreadResult(params?: URLSearchParams) {
         ]
       : [];
   const realtimeFunding =
-    leg1MarketType === "future" && leg2MarketType === "future"
+    includeCurrent && leg1MarketType === "future" && leg2MarketType === "future"
       ? [
           {
             bucket_at: "2026-07-24T01:59:50Z",
@@ -137,13 +142,21 @@ function pairSpreadResult(params?: URLSearchParams) {
       ]
     : [
         {
-          bucket_at: observedAt,
+          bucket_at: baseObservedAt,
           leg1_close: 100,
           leg2_close: 101,
           spread_abs: 1,
           spread_pct: 0.5
         }
       ];
+  const historicalPoints = includeCurrent
+    ? points
+    : points.map((point, index) => ({
+        ...point,
+        bucket_at: new Date(Date.parse(baseObservedAt) - (points.length - index - 1) * intervalSeconds * 1000).toISOString(),
+        spread_abs: Number((point.spread_abs + compareSpreadBias).toFixed(4)),
+        spread_pct: Number((point.spread_pct + compareSpreadBias).toFixed(4))
+      }));
   return {
     leg1: {
       exchange: leg1Exchange,
@@ -159,57 +172,59 @@ function pairSpreadResult(params?: URLSearchParams) {
     interval_minutes: intervalMinutes,
     interval_seconds: intervalSeconds,
     leg2_multiplier: leg2Multiplier,
-    observed_at: observedAt,
-    point_count: points.length,
-    first_seen_at: points[0]?.bucket_at ?? observedAt,
-    last_seen_at: points[points.length - 1]?.bucket_at ?? observedAt,
+    observed_at: baseObservedAt,
+    point_count: historicalPoints.length,
+    first_seen_at: historicalPoints[0]?.bucket_at ?? baseObservedAt,
+    last_seen_at: historicalPoints[historicalPoints.length - 1]?.bucket_at ?? baseObservedAt,
     spread_abs: { min: 1, max: 1, mean: 1, current: 1 },
     spread_pct: { min: 0.5, max: 0.5, mean: 0.5, current: 0.5 },
-    current: {
-      observed_at: observedAt,
-      leg1: {
-        exchange: leg1Exchange,
-        symbol: leg1Symbol,
-        market_type: leg1MarketType,
-        raw_symbol: leg1Symbol,
-        price: leg1Price,
-        price_field: "mid_price" as const,
-        mark_price: null,
-        index_price: null,
-        mid_price: leg1Price,
-        last_price: leg1Price,
-        funding_rate_pct: leg1MarketType === "spot" ? null : 0.01,
-        funding_next_rate_pct: null,
-        funding_next_time: null,
-        funding_interval_hours: null,
-        funding_rate_upper_pct: null,
-        funding_rate_lower_pct: null,
-        timestamp: observedAt
-      },
-      leg2: {
-        exchange: leg2Exchange,
-        symbol: leg2Symbol,
-        market_type: leg2MarketType,
-        raw_symbol: leg2Symbol,
-        price: leg2Price,
-        price_field: leg2MarketType === "spot" ? "last_price" as const : "mark_price" as const,
-        mark_price: leg2MarketType === "spot" ? null : leg2Price,
-        index_price: leg2MarketType === "spot" ? null : 100,
-        mid_price: leg2Price,
-        last_price: leg2Price,
-        funding_rate_pct: leg2MarketType === "spot" ? null : 0.01,
-        funding_next_rate_pct: null,
-        funding_next_time: null,
-        funding_interval_hours: 8,
-        funding_rate_upper_pct: null,
-        funding_rate_lower_pct: null,
-        timestamp: observedAt
-      },
-      spread_abs: currentSpreadAbs,
-      spread_pct: currentSpreadPct
-    },
-    points,
-    funding_history: fundingHistory,
+    current: includeCurrent
+      ? {
+          observed_at: observedAt,
+          leg1: {
+            exchange: leg1Exchange,
+            symbol: leg1Symbol,
+            market_type: leg1MarketType,
+            raw_symbol: leg1Symbol,
+            price: leg1Price,
+            price_field: "mid_price" as const,
+            mark_price: null,
+            index_price: null,
+            mid_price: leg1Price,
+            last_price: leg1Price,
+            funding_rate_pct: leg1MarketType === "spot" ? null : 0.01,
+            funding_next_rate_pct: null,
+            funding_next_time: null,
+            funding_interval_hours: null,
+            funding_rate_upper_pct: null,
+            funding_rate_lower_pct: null,
+            timestamp: observedAt
+          },
+          leg2: {
+            exchange: leg2Exchange,
+            symbol: leg2Symbol,
+            market_type: leg2MarketType,
+            raw_symbol: leg2Symbol,
+            price: leg2Price,
+            price_field: leg2MarketType === "spot" ? "last_price" as const : "mark_price" as const,
+            mark_price: leg2MarketType === "spot" ? null : leg2Price,
+            index_price: leg2MarketType === "spot" ? null : 100,
+            mid_price: leg2Price,
+            last_price: leg2Price,
+            funding_rate_pct: leg2MarketType === "spot" ? null : 0.01,
+            funding_next_rate_pct: null,
+            funding_next_time: null,
+            funding_interval_hours: 8,
+            funding_rate_upper_pct: null,
+            funding_rate_lower_pct: null,
+            timestamp: observedAt
+          },
+          spread_abs: currentSpreadAbs,
+          spread_pct: currentSpreadPct
+        }
+      : null,
+    points: historicalPoints,
+    funding_history: includeCurrent ? fundingHistory : [],
     realtime_funding: realtimeFunding,
     warnings: []
   };
@@ -305,6 +320,38 @@ describe("PairMonitorPage", () => {
       ).toBe(true);
     });
     expect((await screen.findAllByText("5秒")).length).toBeGreaterThan(0);
+  });
+
+  it("loads same-time day comparison with historical minute queries", async () => {
+    const user = userEvent.setup();
+    render(<PairMonitorPage />);
+
+    await user.click(screen.getByRole("button", { name: /查询/ }));
+    await waitFor(() => {
+      expect(document.querySelector(".pair-chart-card")).toBeTruthy();
+    });
+    requests.length = 0;
+
+    await user.click(screen.getByRole("switch", { name: /同时段/ }));
+
+    await waitFor(() => {
+      expect(requests.filter((request) => request.includes("include_current=false"))).toHaveLength(2);
+    });
+    const compareRequests = requests
+      .map((request) => new URL(request, "http://localhost"))
+      .filter((url) => url.searchParams.get("include_current") === "false");
+    expect(compareRequests.every((url) => url.searchParams.get("interval_seconds") === "60")).toBe(true);
+    expect(compareRequests.every((url) => url.searchParams.get("interval_minutes") === "1")).toBe(true);
+    expect(compareRequests.map((url) => url.searchParams.get("end_at") ?? "")[0]).toContain("2026-07-23T02:00:00");
+    expect(compareRequests.map((url) => url.searchParams.get("end_at") ?? "")[1]).toContain("2026-07-22T02:00:00");
+
+    await waitFor(() => {
+      expect(document.querySelector(".pair-day-compare-chart")).toBeTruthy();
+      expect(document.querySelectorAll(".pair-day-compare-line").length).toBeGreaterThan(1);
+    });
+    const cachedState = JSON.parse(window.sessionStorage.getItem("taoli1.pairSpread.lastState.v1") ?? "{}");
+    expect(cachedState.showDayCompare).toBe(true);
+    expect(cachedState.dayCompareDays).toBe(3);
   });
 
   it("sends a custom second interval when selected", async () => {

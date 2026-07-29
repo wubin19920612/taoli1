@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import ValidationError
 
@@ -35,6 +37,8 @@ async def query_pair_spread(
     interval_minutes: int = Query(default=1),
     interval_seconds: int | None = Query(default=None),
     leg2_multiplier: float = Query(default=1.0, gt=0),
+    end_at: datetime | None = Query(default=None),
+    include_current: bool = Query(default=True),
 ) -> PairSpreadQueryResult:
     if interval_seconds is None and interval_minutes not in PAIR_SPREAD_INTERVAL_OPTIONS:
         allowed = ", ".join(str(value) for value in PAIR_SPREAD_INTERVAL_OPTIONS)
@@ -64,6 +68,8 @@ async def query_pair_spread(
             interval_minutes=interval_minutes,
             interval_seconds=resolved_interval_seconds,
             leg2_multiplier=leg2_multiplier,
+            now=end_at,
+            include_current=include_current,
         )
     except PairSpreadQueryError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc

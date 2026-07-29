@@ -434,11 +434,14 @@ class PairSpreadQueryService:
         interval_seconds: int | None = None,
         leg2_multiplier: float = 1.0,
         now: datetime | None = None,
+        include_current: bool = True,
     ) -> PairSpreadQueryResult:
         if leg2_multiplier <= 0:
             raise PairSpreadQueryError("leg2_multiplier must be positive")
         resolved_interval_seconds = interval_seconds or interval_minutes * 60
         if resolved_interval_seconds not in PAIR_SPREAD_HISTORICAL_INTERVAL_SECONDS:
+            if not include_current:
+                raise PairSpreadQueryError("秒级周期只支持实时采样，历史对比请使用 1 分钟、5 分钟或 15 分钟周期")
             return await self._query_realtime(
                 leg1,
                 leg2,
@@ -526,23 +529,27 @@ class PairSpreadQueryService:
                 ),
             )
 
-        funding_start = points[0].bucket_at
-        funding_end = points[-1].bucket_at
-        current_leg1, current_leg2, funding1, funding2 = await asyncio.gather(
-            self._fetch_current_with_warning(leg1, warnings),
-            self._fetch_current_with_warning(leg2, warnings),
-            self._fetch_funding_with_warning(leg1, funding_start, funding_end, warnings),
-            self._fetch_funding_with_warning(leg2, funding_start, funding_end, warnings),
-        )
-        current = (
-            self._build_current_snapshot(
-                current_leg1,
-                _scale_current_leg(current_leg2, leg2_multiplier),
-                observed_at,
+        current: PairSpreadCurrentSnapshot | None = None
+        funding1: list[PairSpreadFundingPoint] = []
+        funding2: list[PairSpreadFundingPoint] = []
+        if include_current:
+            funding_start = points[0].bucket_at
+            funding_end = points[-1].bucket_at
+            current_leg1, current_leg2, funding1, funding2 = await asyncio.gather(
+                self._fetch_current_with_warning(leg1, warnings),
+                self._fetch_current_with_warning(leg2, warnings),
+                self._fetch_funding_with_warning(leg1, funding_start, funding_end, warnings),
+                self._fetch_funding_with_warning(leg2, funding_start, funding_end, warnings),
             )
-            if current_leg1 is not None and current_leg2 is not None
-            else None
-        )
+            current = (
+                self._build_current_snapshot(
+                    current_leg1,
+                    _scale_current_leg(current_leg2, leg2_multiplier),
+                    observed_at,
+                )
+                if current_leg1 is not None and current_leg2 is not None
+                else None
+            )
         realtime_funding = _realtime_funding_points_from_current(
             _realtime_cache_key(
                 leg1,

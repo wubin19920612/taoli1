@@ -604,6 +604,8 @@ export async function queryPairSpread(query: {
   interval_minutes?: number;
   interval_seconds?: number;
   leg2_multiplier?: number;
+  end_at?: string;
+  include_current?: boolean;
 }): Promise<PairSpreadQueryResult> {
   const url = buildUrl("/pair-spread/query", query);
   return fetch(url, { headers: authHeaders() }).then(async (response) => {

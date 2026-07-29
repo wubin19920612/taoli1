@@ -1459,6 +1459,112 @@ body {
   font-size: 12px;
 }
 
+.pair-day-compare-card {
+  overflow: hidden;
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px 12px 8px;
+  background: #ffffff;
+  border: 1px solid #e2e8e5;
+  border-radius: 6px;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.04);
+}
+
+.pair-day-compare-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.pair-day-compare-head .ant-typography {
+  margin: 0;
+}
+
+.pair-day-compare-summary,
+.pair-day-compare-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pair-day-compare-summary {
+  justify-content: flex-end;
+}
+
+.pair-day-compare-chart {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.pair-day-compare-chart rect {
+  fill: #ffffff;
+  stroke: #eef2f1;
+}
+
+.pair-day-compare-grid-line,
+.pair-day-compare-time-tick {
+  stroke: #edf2f0;
+  stroke-width: 1;
+}
+
+.pair-day-compare-zero-line {
+  stroke: #a7b0ad;
+  stroke-width: 1.1;
+  stroke-dasharray: 5 4;
+}
+
+.pair-day-compare-line {
+  fill: none;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.pair-day-compare-point {
+  stroke: #ffffff;
+  stroke-width: 2;
+}
+
+.pair-day-compare-axis-label {
+  fill: #6b7a75;
+  font-size: 12px;
+}
+
+.pair-day-compare-legend {
+  color: #66736f;
+  font-size: 12px;
+}
+
+.pair-day-compare-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+}
+
+.pair-day-compare-legend span::before {
+  content: "";
+  width: 18px;
+  height: 2px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.pair-day-compare-empty {
+  min-height: 240px;
+  display: grid;
+  place-items: center;
+  color: #687872;
+  background: #ffffff;
+  border: 1px dashed #d9e2de;
+  border-radius: 6px;
+}
+
 .pair-price-card {
   overflow: hidden;
   display: grid;
