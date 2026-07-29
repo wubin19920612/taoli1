@@ -1425,6 +1425,23 @@ body {
   fill: #14803c;
 }
 
+.pair-chart-current-point {
+  stroke: #ffffff;
+  stroke-width: 2;
+}
+
+.pair-chart-current-positive {
+  fill: #14803c;
+}
+
+.pair-chart-current-negative {
+  fill: #b42318;
+}
+
+.pair-chart-current-neutral {
+  fill: #69736f;
+}
+
 .pair-chart-turning-label-bg {
   fill: #ffffff;
   stroke: #d7e0dc;

@@ -631,6 +631,62 @@ function openPremiumIndexFromLeg(
   window.dispatchEvent(new Event("taoli1:navigate"));
 }
 
+function pairCurrentToPoint(result: PairSpreadQueryResult): PairSpreadPoint | null {
+  const current = result.current;
+  if (!current || !Number.isFinite(current.spread_pct) || !Number.isFinite(current.spread_abs)) {
+    return null;
+  }
+  if (!Number.isFinite(current.leg1.price) || !Number.isFinite(current.leg2.price)) {
+    return null;
+  }
+  return {
+    bucket_at: current.observed_at,
+    leg1_close: current.leg1.price,
+    leg2_close: current.leg2.price,
+    spread_abs: current.spread_abs,
+    spread_pct: current.spread_pct
+  };
+}
+
+function samePairSpreadPoint(left: PairSpreadPoint, right: PairSpreadPoint): boolean {
+  const closeEnough = (a: number, b: number) => Math.abs(a - b) <= Math.max(Math.abs(a), Math.abs(b), 1) * 1e-10;
+  return (
+    closeEnough(left.leg1_close, right.leg1_close) &&
+    closeEnough(left.leg2_close, right.leg2_close) &&
+    closeEnough(left.spread_abs, right.spread_abs) &&
+    closeEnough(left.spread_pct, right.spread_pct)
+  );
+}
+
+function pairDisplayPoints(result: PairSpreadQueryResult | null): PairSpreadPoint[] {
+  if (!result) {
+    return [];
+  }
+  const points = result.points.slice();
+  const currentPoint = pairCurrentToPoint(result);
+  if (!currentPoint) {
+    return points;
+  }
+  if (!points.length) {
+    return [currentPoint];
+  }
+
+  const currentMs = dayjs.utc(currentPoint.bucket_at).valueOf();
+  const last = points[points.length - 1];
+  const lastMs = dayjs.utc(last.bucket_at).valueOf();
+  if (!Number.isFinite(currentMs) || !Number.isFinite(lastMs) || currentMs < lastMs) {
+    return points;
+  }
+  if (currentMs === lastMs) {
+    points[points.length - 1] = currentPoint;
+    return points;
+  }
+  if (samePairSpreadPoint(last, currentPoint)) {
+    return points;
+  }
+  return [...points, currentPoint];
+}
+
 function spreadLinePath(
   points: PairSpreadPoint[],
   xAt: (index: number) => number,
@@ -1092,7 +1148,7 @@ function PairFundingDiffChart({
 }
 
 function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
-  const points = result?.points ?? [];
+  const points = pairDisplayPoints(result);
   const width = 1180;
   const height = 330;
   const padding = { top: 24, right: 28, bottom: 34, left: 56 };
@@ -1117,6 +1173,8 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
   const spanHours = chartSpanHours(points);
   const ticks = chartTicks(points, spanHours >= 168 ? 7 : 6);
   const turningPoints = chartTurningPoints(points);
+  const latestPoint = points[points.length - 1];
+  const latestTone = fundingRateTone(latestPoint.spread_pct);
 
   return (
     <div className="pair-chart-card">
@@ -1157,6 +1215,14 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
         ) : null}
         <path className="pair-chart-area" d={spreadAreaPath(points, xAt, yAt, baselineY)} />
         <path className="pair-chart-line" d={spreadLinePath(points, xAt, yAt)} />
+        <circle
+          className={`pair-chart-current-point pair-chart-current-${latestTone}`}
+          cx={xAt(points.length - 1)}
+          cy={yAt(latestPoint.spread_pct)}
+          r="4.6"
+        >
+          <title>{`${time(latestPoint.bucket_at)} 实时均值价差率 ${signedPct(latestPoint.spread_pct)}，差价 ${price(latestPoint.spread_abs)}`}</title>
+        </circle>
         {turningPoints.map(({ index, point, kind }, labelIndex) => {
           const x = xAt(index);
           const y = yAt(point.spread_pct);
@@ -1199,7 +1265,7 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
           <Tag color="blue">
             {leftLegLabel(result)} / {rightLegLabel(result)}
           </Tag>
-          <Tag>{result.point_count} 点</Tag>
+          <Tag>{points.length} 点</Tag>
           <Tag>{intervalLabel(resultIntervalSeconds(result))} 周期</Tag>
         </div>
         <Typography.Text type="secondary">最新 {fullTime(result.observed_at)}</Typography.Text>
@@ -1214,7 +1280,7 @@ function PairPriceChart({
   result: PairSpreadQueryResult | null;
 }) {
   const [priceChartMode, setPriceChartMode] = useState<PairPriceChartMode>("auto");
-  const points = result?.points ?? [];
+  const points = pairDisplayPoints(result);
   const width = 1180;
   const height = 230;
   const padding = { top: 18, right: 28, bottom: 34, left: 56 };
@@ -1904,8 +1970,8 @@ export function PairMonitorPage() {
   const [premiumError, setPremiumError] = useState("");
 
   const recentPoints = useMemo(
-    () => [...(result?.points ?? [])].reverse().slice(0, 180),
-    [result?.points]
+    () => pairDisplayPoints(result).reverse().slice(0, 180),
+    [result]
   );
   const fundingDiffRows = useMemo(() => buildFundingRateDiffRows(result), [result]);
   const realtimeFundingDiffRows = useMemo(() => buildRealtimeFundingRateDiffRows(result), [result]);

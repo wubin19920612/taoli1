@@ -19,15 +19,20 @@ function pairSpreadResult(params?: URLSearchParams) {
   const leg2MarketType = params?.get("leg2_market_type") === "spot" ? "spot" : "future";
   const leg1Exchange = params?.get("leg1_exchange") ?? "bitget";
   const leg2Exchange = params?.get("leg2_exchange") ?? "bitget";
-  const leg1Symbol = normalizedMockSymbol(leg1Exchange, params?.get("leg1_symbol") ?? "SKHYUSDT");
-  const leg2Symbol = normalizedMockSymbol(leg2Exchange, params?.get("leg2_symbol") ?? "SKHYNIXUSDT");
+  const requestedLeg1Symbol = params?.get("leg1_symbol") ?? "SKHYUSDT";
+  const requestedLeg2Symbol = params?.get("leg2_symbol") ?? "SKHYNIXUSDT";
+  const leg1Symbol = normalizedMockSymbol(leg1Exchange, requestedLeg1Symbol);
+  const leg2Symbol = normalizedMockSymbol(leg2Exchange, requestedLeg2Symbol);
   const leg2Multiplier = Number(params?.get("leg2_multiplier") ?? 1);
   const intervalSeconds = Number(params?.get("interval_seconds") ?? 5);
   const intervalMinutes = Number(params?.get("interval_minutes") ?? Math.max(1, Math.round(intervalSeconds / 60)));
   const hours = Number(params?.get("hours") ?? 4);
   const largePriceGap = leg2Multiplier === 0.1;
+  const currentTailMismatch = requestedLeg1Symbol.trim().toUpperCase() === "TAIL";
   const leg1Price = largePriceGap ? 1218.6 : 100;
-  const leg2Price = largePriceGap ? 1618.3 : 101;
+  const leg2Price = largePriceGap ? 1618.3 : currentTailMismatch ? 99.94 : 101;
+  const currentSpreadAbs = largePriceGap ? 399.7 : currentTailMismatch ? -0.06 : 1;
+  const currentSpreadPct = largePriceGap ? 28.18 : currentTailMismatch ? -0.06 : 0.5;
   const fundingHistory =
     leg1MarketType === "future" && leg2MarketType === "future"
       ? [
@@ -89,8 +94,25 @@ function pairSpreadResult(params?: URLSearchParams) {
           }
         ]
       : [];
-  const points = largePriceGap
+  const points = currentTailMismatch
     ? [
+        {
+          bucket_at: "2026-07-24T01:58:00Z",
+          leg1_close: 100,
+          leg2_close: 98.8,
+          spread_abs: -1.2,
+          spread_pct: -1.21
+        },
+        {
+          bucket_at: "2026-07-24T01:59:00Z",
+          leg1_close: 100,
+          leg2_close: 98.5,
+          spread_abs: -1.5,
+          spread_pct: -1.51
+        }
+      ]
+    : largePriceGap
+      ? [
         {
           bucket_at: "2026-07-24T02:00:00Z",
           leg1_close: 1200,
@@ -183,8 +205,8 @@ function pairSpreadResult(params?: URLSearchParams) {
         funding_rate_lower_pct: null,
         timestamp: observedAt
       },
-      spread_abs: largePriceGap ? 399.7 : 1,
-      spread_pct: largePriceGap ? 28.18 : 0.5
+      spread_abs: currentSpreadAbs,
+      spread_pct: currentSpreadPct
     },
     points,
     funding_history: fundingHistory,
@@ -339,6 +361,26 @@ describe("PairMonitorPage", () => {
     expect(priceChartIndex).toBe(spreadChartIndex + 1);
     expect(fundingGridIndex).toBeGreaterThan(priceChartIndex);
     expect(pageText.indexOf("标的价格")).toBeLessThan(pageText.indexOf("资金费率差"));
+  });
+
+  it("uses the realtime current spread as the chart tail point", async () => {
+    window.history.pushState(
+      {},
+      "",
+      "/?page=pair-monitor&leg1_exchange=aster&leg1_market_type=future&leg1_symbol=TAIL" +
+        "&leg2_exchange=gate&leg2_market_type=future&leg2_symbol=TAIL&hours=6&interval_seconds=60"
+    );
+
+    render(<PairMonitorPage />);
+
+    await waitFor(() => {
+      expect(document.querySelector(".pair-chart-current-point")).toBeTruthy();
+    });
+    const currentPointTitle = document.querySelector(".pair-chart-current-point title")?.textContent ?? "";
+    expect(currentPointTitle).toContain("-0.06%");
+    expect((document.querySelector(".pair-spread-chart .pair-chart-line") as SVGPathElement).getAttribute("d")).toContain(
+      "L "
+    );
   });
 
   it("auto-runs a Binance Alpha spread query from URL parameters", async () => {
