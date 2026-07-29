@@ -2134,7 +2134,11 @@ export function PairMonitorPage() {
   }, [initialUrlQuery]);
   const initialDayCompareEnabled = initialCachedState?.showDayCompare ?? false;
   const initialDayCompareHistoryDays = initialCachedState?.dayCompareDays ?? DEFAULT_DAY_COMPARE_DAYS;
-  const loadedUrlQueryRef = useRef("");
+  const initialUrlQueryKey =
+    initialCachedState && initialUrlQuery
+      ? pairQueryKey(initialUrlQuery.values, initialUrlQuery.hours, initialUrlQuery.intervalSeconds)
+      : "";
+  const loadedUrlQueryRef = useRef(initialUrlQueryKey);
   const [hours, setHours] = useState(() => initialCachedState?.hours ?? 4);
   const [intervalSeconds, setIntervalSeconds] = useState(() => initialCachedState?.intervalSeconds ?? DEFAULT_PAIR_INTERVAL_SECONDS);
   const [customInterval, setCustomInterval] = useState(
@@ -2385,6 +2389,7 @@ export function PairMonitorPage() {
     intervalSeconds?: number;
     values?: PairSpreadFormValues;
     premiumMode?: "history" | "current";
+    premiumEnabled?: boolean;
     dayCompareEnabled?: boolean;
     dayCompareDays?: number;
   }) => {
@@ -2395,6 +2400,7 @@ export function PairMonitorPage() {
       form.setFieldsValue(values);
       const queryHours = clampHours(override?.hours ?? hours);
       const queryIntervalSeconds = clampIntervalSeconds(override?.intervalSeconds ?? intervalSeconds);
+      const queryShowPremiumCompare = override?.premiumEnabled ?? showPremiumCompare;
       const queryShowDayCompare = override?.dayCompareEnabled ?? showDayCompare;
       const queryDayCompareDays = clampDayCompareDays(override?.dayCompareDays ?? dayCompareDays);
       const next = await queryPairSpread({
@@ -2415,7 +2421,7 @@ export function PairMonitorPage() {
       storeLastPairSpreadState(resultValues, queryHours, queryIntervalSeconds, next, queryShowDayCompare, queryDayCompareDays);
       loadedUrlQueryRef.current = pairQueryKey(resultValues, queryHours, queryIntervalSeconds);
       replacePairQueryInUrl(resultValues, queryHours, queryIntervalSeconds);
-      if (showPremiumCompare) {
+      if (queryShowPremiumCompare) {
         if (override?.premiumMode === "current" && premiumCompare) {
           await refreshPremiumCompareCurrent(next);
         } else {
@@ -2442,6 +2448,11 @@ export function PairMonitorPage() {
     showDayCompare,
     showPremiumCompare
   ]);
+
+  const runQueryRef = useRef(runQuery);
+  useEffect(() => {
+    runQueryRef.current = runQuery;
+  }, [runQuery]);
 
   useEffect(() => {
     const syncLocationSearch = () => {
@@ -2475,14 +2486,15 @@ export function PairMonitorPage() {
     setDayCompareDays(DEFAULT_DAY_COMPARE_DAYS);
     setDayCompareSeries([]);
     setDayCompareError("");
-    void runQuery({
+    void runQueryRef.current({
       values: incoming.values,
       hours: incoming.hours,
       intervalSeconds: incoming.intervalSeconds,
+      premiumEnabled: false,
       dayCompareEnabled: false,
       dayCompareDays: DEFAULT_DAY_COMPARE_DAYS
     });
-  }, [form, locationSearch, runQuery]);
+  }, [form, locationSearch]);
 
   useEffect(() => {
     if (!autoRefresh || !result) {
@@ -2549,23 +2561,21 @@ export function PairMonitorPage() {
   };
 
   const applySavedPreset = (preset: SavedPairSpreadPreset) => {
-    form.setFieldsValue(preset);
-    setHours(clampHours(preset.hours));
-    setIntervalSeconds(preset.intervalSeconds);
-    setCustomInterval(intervalSelectValue(preset.intervalSeconds) === CUSTOM_INTERVAL_VALUE);
-    setShowDayCompare(Boolean(preset.showDayCompare));
-    setDayCompareDays(clampDayCompareDays(preset.dayCompareDays));
-    if (!preset.showDayCompare) {
-      setDayCompareSeries([]);
-      setDayCompareError("");
-    }
-    void runQuery({
-      values: preset,
-      hours: preset.hours,
-      intervalSeconds: preset.intervalSeconds,
-      dayCompareEnabled: Boolean(preset.showDayCompare),
-      dayCompareDays: clampDayCompareDays(preset.dayCompareDays)
-    });
+    const values = normalizePairForm(preset);
+    const nextHours = clampHours(preset.hours);
+    const nextIntervalSeconds = clampIntervalSeconds(preset.intervalSeconds);
+    const nextShowDayCompare = Boolean(preset.showDayCompare);
+    const nextDayCompareDays = clampDayCompareDays(preset.dayCompareDays);
+    form.setFieldsValue(values);
+    setHours(nextHours);
+    setIntervalSeconds(nextIntervalSeconds);
+    setCustomInterval(intervalSelectValue(nextIntervalSeconds) === CUSTOM_INTERVAL_VALUE);
+    setAutoRefresh(false);
+    setShowDayCompare(nextShowDayCompare);
+    setDayCompareDays(nextDayCompareDays);
+    setDayCompareSeries([]);
+    setDayCompareError("");
+    setError("");
   };
 
   const current = result?.current;

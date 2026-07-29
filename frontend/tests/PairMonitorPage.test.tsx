@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -370,6 +370,69 @@ describe("PairMonitorPage", () => {
       expect(requests.some((request) => request.includes("interval_seconds=7"))).toBe(true);
     });
     expect(new URLSearchParams(window.location.search).get("interval_seconds")).toBe("7");
+  });
+
+  it("does not auto-query or reset form values when editing hours", async () => {
+    const user = userEvent.setup();
+    window.history.pushState(
+      {},
+      "",
+      "/?page=pair-monitor&leg1_exchange=bitget&leg1_market_type=future&leg1_symbol=SKHY" +
+        "&leg2_exchange=bitget&leg2_market_type=future&leg2_symbol=SKHYNIX&hours=1&interval_seconds=5"
+    );
+    render(<PairMonitorPage />);
+
+    await waitFor(() => {
+      expect(document.querySelector(".pair-chart-card")).toBeTruthy();
+    });
+    requests.length = 0;
+
+    const leftSymbolInput = screen.getByPlaceholderText("SKHY") as HTMLInputElement;
+    await user.clear(leftSymbolInput);
+    await user.type(leftSymbolInput, "CXMTUSDT");
+    const hoursInput = document.querySelector(".pair-query-hours input") as HTMLInputElement;
+    fireEvent.change(hoursInput, { target: { value: "12" } });
+
+    await new Promise((resolve) => window.setTimeout(resolve, 20));
+
+    expect(leftSymbolInput.value).toBe("CXMTUSDT");
+    expect(hoursInput.value).toBe("12");
+    expect(requests.some((request) => request.includes("/pair-spread/query"))).toBe(false);
+  });
+
+  it("fills a saved preset without querying immediately", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem(
+      "taoli1.pairSpread.presets.v1",
+      JSON.stringify([
+        {
+          id: "cxmt",
+          leg1_exchange: "aster",
+          leg1_market_type: "future",
+          leg1_symbol: "CXMTUSDT",
+          leg2_exchange: "gate",
+          leg2_market_type: "future",
+          leg2_symbol: "CXMTUSDT",
+          leg2_multiplier: 1,
+          hours: 12,
+          intervalSeconds: 60,
+          showDayCompare: true,
+          dayCompareDays: 4,
+          savedAt: observedAt
+        }
+      ])
+    );
+    render(<PairMonitorPage />);
+    requests.length = 0;
+
+    const savedTag = document.querySelector(".pair-saved-tag") as HTMLElement;
+    await user.click(savedTag);
+
+    expect((screen.getByPlaceholderText("SKHY") as HTMLInputElement).value).toBe("CXMTUSDT");
+    expect((screen.getByPlaceholderText("SKHYNIX") as HTMLInputElement).value).toBe("CXMTUSDT");
+    expect((document.querySelector(".pair-query-hours input") as HTMLInputElement).value).toBe("12");
+    expect((screen.getByRole("spinbutton", { name: /同时段对比天数/ }) as HTMLInputElement).value).toBe("4");
+    expect(requests.some((request) => request.includes("/pair-spread/query"))).toBe(false);
   });
 
   it("shows the funding rate difference table", async () => {
