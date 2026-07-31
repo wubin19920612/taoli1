@@ -196,3 +196,72 @@ class PairSpreadQueryResult(BaseModel):
     funding_history: list[PairSpreadFundingPoint] = Field(default_factory=list)
     realtime_funding: list[PairSpreadRealtimeFundingPoint] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+
+
+class PairSpreadDiagnosticThresholdRun(BaseModel):
+    start_at: datetime | None = None
+    end_at: datetime | None = None
+    point_count: int = 0
+    peak_spread_pct: float | None = None
+    peak_at: datetime | None = None
+
+
+class PairSpreadDiagnosticRule(BaseModel):
+    id: str
+    name: str
+    enabled: bool
+    matches_pair_scope: bool
+    min_open_spread_pct: float
+    min_fee_adjusted_open_pct: float
+    consecutive_hits: int
+    cooldown_seconds: int
+    reasons: list[str] = Field(default_factory=list)
+
+
+class PairSpreadDiagnosticEvent(BaseModel):
+    rule_id: str
+    status: str
+    created_at: datetime
+    message: str
+
+
+class PairSpreadDiagnosticEventSummary(BaseModel):
+    total: int = 0
+    sent: int = 0
+    muted: int = 0
+    failed: int = 0
+    latest_status: str | None = None
+    latest_at: datetime | None = None
+    latest_message: str | None = None
+    events: list[PairSpreadDiagnosticEvent] = Field(default_factory=list)
+
+
+class PairSpreadDiagnosticResult(BaseModel):
+    leg1: PairSpreadLegQuery
+    leg2: PairSpreadLegQuery
+    hours: int
+    requested_interval_seconds: int
+    interval_seconds: int
+    observed_at: datetime
+    point_count: int
+    threshold_pct: float
+    peak_at: datetime | None = None
+    peak_spread_pct: float | None = None
+    peak_spread_abs: float | None = None
+    peak_leg1_close: float | None = None
+    peak_leg2_close: float | None = None
+    points_over_threshold: int = 0
+    first_over_threshold_at: datetime | None = None
+    last_over_threshold_at: datetime | None = None
+    longest_run: PairSpreadDiagnosticThresholdRun = Field(
+        default_factory=PairSpreadDiagnosticThresholdRun
+    )
+    current_spread_pct: float | None = None
+    inferred_type: str
+    alert_rules: list[PairSpreadDiagnosticRule] = Field(default_factory=list)
+    alert_events: PairSpreadDiagnosticEventSummary = Field(
+        default_factory=PairSpreadDiagnosticEventSummary
+    )
+    suppress_when_card_conditions_fail: bool = False
+    notes: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)

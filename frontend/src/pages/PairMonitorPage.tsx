@@ -27,6 +27,7 @@ import {
   getCurrentPremiumIndex,
   getPairSpreadFundingRecordStatus,
   queryPairSpread,
+  queryPairSpreadDiagnostics,
   queryPremiumIndex,
   startPairSpreadFundingRecord,
   stopPairSpreadFundingRecord
@@ -36,6 +37,9 @@ import type {
   PairSpreadFundingRecordRequest,
   PairSpreadFundingRecordStatus,
   PairSpreadFundingPoint,
+  PairSpreadDiagnosticEvent,
+  PairSpreadDiagnosticResult,
+  PairSpreadDiagnosticRule,
   PairSpreadLegQuery,
   PairSpreadPoint,
   PairSpreadPriceField,
@@ -193,7 +197,9 @@ const premiumIndexExchanges = new Set(["binance", "okx", "bybit", "gate", "bitge
 
 const LAST_PAIR_SPREAD_STATE_KEY = "taoli1.pairSpread.lastState.v1";
 const PAIR_SPREAD_PRESETS_KEY = "taoli1.pairSpread.presets.v1";
+const PAIR_SPREAD_DIAGNOSTIC_THRESHOLD_KEY = "taoli1.pairSpread.diagnosticThreshold.v1";
 const MAX_SAVED_PAIR_PRESETS = 24;
+const DEFAULT_DIAGNOSTIC_THRESHOLD_PCT = 1;
 const DEFAULT_DAY_COMPARE_DAYS = 3;
 const MAX_DAY_COMPARE_DAYS = 7;
 const DEFAULT_DAY_COMPARE_SETTINGS: DayCompareSettings = {
@@ -266,6 +272,35 @@ function clampHours(value: number | null): number {
     return 1;
   }
   return Math.min(720, Math.max(1, Math.round(value)));
+}
+
+function clampDiagnosticThreshold(value: number | null | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_DIAGNOSTIC_THRESHOLD_PCT;
+  }
+  return Math.min(100_000, Math.max(0, Number(value.toFixed(4))));
+}
+
+function loadDiagnosticThreshold(): number {
+  if (typeof window === "undefined") {
+    return DEFAULT_DIAGNOSTIC_THRESHOLD_PCT;
+  }
+  const storedValue = window.localStorage.getItem(PAIR_SPREAD_DIAGNOSTIC_THRESHOLD_KEY);
+  if (storedValue === null) {
+    return DEFAULT_DIAGNOSTIC_THRESHOLD_PCT;
+  }
+  const stored = Number(storedValue);
+  return clampDiagnosticThreshold(stored);
+}
+
+function saveDiagnosticThreshold(value: number): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.setItem(
+    PAIR_SPREAD_DIAGNOSTIC_THRESHOLD_KEY,
+    String(clampDiagnosticThreshold(value))
+  );
 }
 
 function clampIntervalSeconds(value: number | null | undefined): number {
@@ -1689,6 +1724,252 @@ function PairMinuteFundingDiffChart({
   );
 }
 
+function diagnosticEventStatusLabel(status: string): string {
+  if (status === "muted") {
+    return "已静默";
+  }
+  if (status === "sent") {
+    return "已发送";
+  }
+  if (status === "failed") {
+    return "发送失败";
+  }
+  return status || "未知";
+}
+
+function PairSpreadDiagnosticCard({
+  result,
+  thresholdPct,
+  diagnostic,
+  loading,
+  error,
+  onThresholdChange,
+  onSaveThreshold,
+  onDiagnose
+}: {
+  result: PairSpreadQueryResult | null;
+  thresholdPct: number;
+  diagnostic: PairSpreadDiagnosticResult | null;
+  loading: boolean;
+  error: string;
+  onThresholdChange: (value: number) => void;
+  onSaveThreshold: () => void;
+  onDiagnose: () => void;
+}) {
+  const diagnosticColumns = useMemo<ColumnsType<PairSpreadDiagnosticRule>>(
+    () => [
+      {
+        title: "规则",
+        dataIndex: "name",
+        width: 150,
+        render: (value: string, row) => (
+          <span className="pair-diagnostic-rule-name">
+            <span>{value}</span>
+            <Typography.Text type="secondary">{row.id}</Typography.Text>
+          </span>
+        )
+      },
+      {
+        title: "范围",
+        dataIndex: "matches_pair_scope",
+        width: 92,
+        render: (value: boolean, row) => (
+          <Tag color={!row.enabled ? undefined : value ? "green" : "red"}>
+            {!row.enabled ? "已关闭" : value ? "匹配" : "不匹配"}
+          </Tag>
+        )
+      },
+      {
+        title: "阈值 / 连续",
+        key: "threshold",
+        width: 150,
+        render: (_value: unknown, row) => (
+          <span className="pair-diagnostic-rule-threshold">
+            <span>开仓 ≥ {signedPct(row.min_open_spread_pct)}</span>
+            <span>连续 {row.consecutive_hits} 轮</span>
+          </span>
+        )
+      },
+      {
+        title: "判断",
+        dataIndex: "reasons",
+        render: (value: string[]) => (
+          <span className="pair-diagnostic-reasons">
+            {value.length ? value.join("；") : "没有额外判断"}
+          </span>
+        )
+      }
+    ],
+    []
+  );
+  const eventColumns = useMemo<ColumnsType<PairSpreadDiagnosticEvent>>(
+    () => [
+      {
+        title: "时间",
+        dataIndex: "created_at",
+        width: 126,
+        render: (value: string) => fullTime(value)
+      },
+      {
+        title: "状态",
+        dataIndex: "status",
+        width: 92,
+        render: (value: string) => (
+          <Tag color={value === "sent" ? "green" : value === "muted" ? "orange" : "red"}>
+            {diagnosticEventStatusLabel(value)}
+          </Tag>
+        )
+      },
+      {
+        title: "原因 / 事件消息",
+        dataIndex: "message",
+        render: (value: string) => (
+          <Typography.Text className="pair-diagnostic-event-message" ellipsis={{ tooltip: value }}>
+            {value}
+          </Typography.Text>
+        )
+      }
+    ],
+    []
+  );
+  const longestRunLabel = diagnostic
+    ? diagnostic.longest_run.point_count > 0
+      ? `${diagnostic.longest_run.point_count} 个连续 ${intervalLabel(diagnostic.interval_seconds)}点`
+      : "没有连续超过阈值"
+    : "-";
+  const verdictType = diagnostic && diagnostic.points_over_threshold > 0 ? "success" : "info";
+  const verdictMessage = diagnostic
+    ? diagnostic.points_over_threshold > 0
+      ? `历史窗口内有 ${diagnostic.points_over_threshold} 个点达到 ${signedPct(diagnostic.threshold_pct)}，峰值 ${signedPct(diagnostic.peak_spread_pct)}。这证明历史上出现过候选机会，但仍需结合实时盘口复核。`
+      : `历史窗口内没有点达到 ${signedPct(diagnostic.threshold_pct)}，暂时不能仅凭这段历史数据判断监控漏报。`
+    : "点击“诊断监控”后，才会查询历史价差并读取告警事件。";
+
+  return (
+    <section className="pair-detail-card pair-diagnostic-card">
+      <div className="pair-detail-head pair-diagnostic-head">
+        <div>
+          <Typography.Title level={5}>监控诊断</Typography.Title>
+          <Typography.Text type="secondary">
+            只在点击诊断时查询，不会因修改小时或点击保存预设而触发查询
+          </Typography.Text>
+        </div>
+        <div className="pair-diagnostic-tools">
+          <InputNumber
+            aria-label="监控诊断阈值"
+            addonBefore="阈值"
+            min={0}
+            max={100_000}
+            precision={4}
+            step={0.1}
+            value={thresholdPct}
+            disabled={!result || loading}
+            onChange={(value) => onThresholdChange(clampDiagnosticThreshold(value))}
+          />
+          <Button
+            icon={<SaveOutlined />}
+            disabled={!result || loading}
+            onClick={onSaveThreshold}
+          >
+            记住阈值
+          </Button>
+          <Button
+            type="primary"
+            icon={<SearchOutlined />}
+            loading={loading}
+            disabled={!result}
+            onClick={onDiagnose}
+          >
+            诊断监控
+          </Button>
+        </div>
+      </div>
+      {error ? <Alert type="error" message={error} showIcon /> : null}
+      {!diagnostic ? (
+        <div className="pair-diagnostic-empty">{verdictMessage}</div>
+      ) : (
+        <>
+          <Alert type={verdictType} message={verdictMessage} showIcon />
+          <div className="pair-diagnostic-metrics">
+            <div>
+              <Typography.Text type="secondary">历史峰值</Typography.Text>
+              <strong>{signedPct(diagnostic.peak_spread_pct)}</strong>
+              <span>{fullTime(diagnostic.peak_at)}</span>
+            </div>
+            <div>
+              <Typography.Text type="secondary">超过阈值</Typography.Text>
+              <strong>{diagnostic.points_over_threshold} 个点</strong>
+              <span>
+                {fullTime(diagnostic.first_over_threshold_at)} 至 {fullTime(diagnostic.last_over_threshold_at)}
+              </span>
+            </div>
+            <div>
+              <Typography.Text type="secondary">最长连续</Typography.Text>
+              <strong>{longestRunLabel}</strong>
+              <span>{fullTime(diagnostic.longest_run.start_at)} 至 {fullTime(diagnostic.longest_run.end_at)}</span>
+            </div>
+            <div>
+              <Typography.Text type="secondary">告警事件</Typography.Text>
+              <strong>
+                {diagnostic.alert_events.total} 条
+                <small>
+                  {" "}
+                  发送 {diagnostic.alert_events.sent} / 静默 {diagnostic.alert_events.muted}
+                </small>
+              </strong>
+              <span>{diagnostic.alert_events.latest_status ? `最近：${diagnosticEventStatusLabel(diagnostic.alert_events.latest_status)}` : "窗口内暂无事件"}</span>
+            </div>
+          </div>
+          <div className="pair-diagnostic-notes">
+            {diagnostic.notes.map((note) => (
+              <Typography.Text key={note} type="secondary">
+                {note}
+              </Typography.Text>
+            ))}
+          </div>
+          <div className="pair-diagnostic-section">
+            <div className="pair-diagnostic-section-head">
+              <Typography.Text strong>规则匹配</Typography.Text>
+              <Tag>{diagnostic.inferred_type} · {intervalLabel(diagnostic.interval_seconds)}历史数据</Tag>
+            </div>
+            {diagnostic.alert_rules.length ? (
+              <Table<PairSpreadDiagnosticRule>
+                rowKey="id"
+                columns={diagnosticColumns}
+                dataSource={diagnostic.alert_rules}
+                pagination={false}
+                size="small"
+                tableLayout="fixed"
+                scroll={{ x: 720 }}
+              />
+            ) : (
+              <Typography.Text type="secondary">当前实例没有可读取的实时告警规则。</Typography.Text>
+            )}
+          </div>
+          <div className="pair-diagnostic-section">
+            <div className="pair-diagnostic-section-head">
+              <Typography.Text strong>窗口内告警事件</Typography.Text>
+              <Tag>{diagnostic.alert_events.events.length} 条明细</Tag>
+            </div>
+            {diagnostic.alert_events.events.length ? (
+              <Table<PairSpreadDiagnosticEvent>
+                rowKey={(row) => `${row.created_at}-${row.rule_id}-${row.status}`}
+                columns={eventColumns}
+                dataSource={diagnostic.alert_events.events}
+                pagination={false}
+                size="small"
+                tableLayout="fixed"
+                scroll={{ x: 620 }}
+              />
+            ) : (
+              <Typography.Text type="secondary">窗口内没有找到这个标的的告警事件。</Typography.Text>
+            )}
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
 function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
   const points = pairDisplayPoints(result);
   const width = 1180;
@@ -2680,15 +2961,19 @@ export function PairMonitorPage() {
   const [dayCompareMode, setDayCompareMode] = useState<DayCompareWindowMode>(() => initialDayCompareSettings.mode);
   const [dayCompareStartTime, setDayCompareStartTime] = useState(() => initialDayCompareSettings.startTime);
   const [dayCompareEndTime, setDayCompareEndTime] = useState(() => initialDayCompareSettings.endTime);
+  const [diagnosticThresholdPct, setDiagnosticThresholdPct] = useState(loadDiagnosticThreshold);
   const [savedPresets, setSavedPresets] = useState<SavedPairSpreadPreset[]>(() => loadSavedPairPresets());
   const [result, setResult] = useState<PairSpreadQueryResult | null>(() => initialCachedState?.result ?? null);
+  const [diagnostic, setDiagnostic] = useState<PairSpreadDiagnosticResult | null>(null);
   const [premiumCompare, setPremiumCompare] = useState<PairPremiumCompareResult | null>(null);
   const [dayCompareSeries, setDayCompareSeries] = useState<PairDayCompareSeries[]>([]);
   const [loading, setLoading] = useState(false);
+  const [diagnosticLoading, setDiagnosticLoading] = useState(false);
   const [premiumLoading, setPremiumLoading] = useState(false);
   const [dayCompareLoading, setDayCompareLoading] = useState(false);
   const [fundingRecordLoading, setFundingRecordLoading] = useState(false);
   const [error, setError] = useState("");
+  const [diagnosticError, setDiagnosticError] = useState("");
   const [premiumError, setPremiumError] = useState("");
   const [dayCompareError, setDayCompareError] = useState("");
   const [fundingRecordError, setFundingRecordError] = useState("");
@@ -2777,6 +3062,44 @@ export function PairMonitorPage() {
       setFundingRecordLoading(false);
     }
   }, []);
+
+  const runDiagnostic = useCallback(async () => {
+    if (!result) {
+      setDiagnosticError("请先查询一个价差对。");
+      return;
+    }
+    const threshold = clampDiagnosticThreshold(diagnosticThresholdPct);
+    setDiagnosticLoading(true);
+    setDiagnosticError("");
+    try {
+      const next = await queryPairSpreadDiagnostics({
+        leg1_exchange: result.leg1.exchange,
+        leg1_market_type: result.leg1.market_type,
+        leg1_symbol: result.leg1.symbol,
+        leg2_exchange: result.leg2.exchange,
+        leg2_market_type: result.leg2.market_type,
+        leg2_symbol: result.leg2.symbol,
+        leg2_multiplier: result.leg2_multiplier,
+        hours: result.hours,
+        interval_seconds: resultIntervalSeconds(result),
+        threshold_pct: threshold,
+        end_at: result.observed_at
+      });
+      setDiagnostic(next);
+    } catch (exc) {
+      setDiagnostic(null);
+      setDiagnosticError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setDiagnosticLoading(false);
+    }
+  }, [diagnosticThresholdPct, result]);
+
+  const saveDiagnosticParameter = useCallback(() => {
+    const nextThreshold = clampDiagnosticThreshold(diagnosticThresholdPct);
+    setDiagnosticThresholdPct(nextThreshold);
+    saveDiagnosticThreshold(nextThreshold);
+    setDiagnosticError("");
+  }, [diagnosticThresholdPct]);
 
   const toggleFundingRecord = useCallback(async () => {
     const payload = fundingRecordRequestFromResult(result);
@@ -3002,6 +3325,8 @@ export function PairMonitorPage() {
   }) => {
     setLoading(true);
     setError("");
+    setDiagnostic(null);
+    setDiagnosticError("");
     try {
       const values = normalizePairForm(override?.values ?? await form.validateFields());
       form.setFieldsValue(values);
@@ -3655,6 +3980,16 @@ export function PairMonitorPage() {
         />
       ) : null}
       <PairPriceChart result={result} />
+      <PairSpreadDiagnosticCard
+        result={result}
+        thresholdPct={diagnosticThresholdPct}
+        diagnostic={diagnostic}
+        loading={diagnosticLoading}
+        error={diagnosticError}
+        onThresholdChange={setDiagnosticThresholdPct}
+        onSaveThreshold={saveDiagnosticParameter}
+        onDiagnose={() => void runDiagnostic()}
+      />
 
       {showPremiumCompare ? <PairPremiumCompareChart comparison={premiumCompare} loading={premiumLoading} /> : null}
 

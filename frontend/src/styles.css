@@ -1932,6 +1932,126 @@ body {
   grid-column: 1 / -1;
 }
 
+.pair-diagnostic-card {
+  gap: 12px;
+}
+
+.pair-diagnostic-head {
+  align-items: center;
+}
+
+.pair-diagnostic-head > div:first-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.pair-diagnostic-tools {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pair-diagnostic-tools .ant-input-number {
+  width: 142px;
+}
+
+.pair-diagnostic-empty {
+  padding: 24px 12px;
+  color: #687872;
+  text-align: center;
+  background: #f8faf9;
+  border: 1px dashed #d7e0dc;
+  border-radius: 5px;
+}
+
+.pair-diagnostic-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.pair-diagnostic-metrics > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px 12px;
+  background: #f7faf8;
+  border: 1px solid #e5ece8;
+  border-radius: 5px;
+}
+
+.pair-diagnostic-metrics strong {
+  color: #17211d;
+  font-size: 18px;
+  line-height: 1.25;
+}
+
+.pair-diagnostic-metrics strong small {
+  color: #687872;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.pair-diagnostic-metrics span {
+  overflow: hidden;
+  color: #687872;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pair-diagnostic-notes {
+  display: grid;
+  gap: 3px;
+  padding: 8px 10px;
+  background: #fbfcfb;
+  border-left: 3px solid #9bb7aa;
+}
+
+.pair-diagnostic-notes .ant-typography {
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.pair-diagnostic-section {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pair-diagnostic-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pair-diagnostic-rule-name,
+.pair-diagnostic-rule-threshold {
+  display: grid;
+  gap: 2px;
+}
+
+.pair-diagnostic-rule-name .ant-typography,
+.pair-diagnostic-rule-threshold span {
+  color: #687872;
+  font-size: 11px;
+}
+
+.pair-diagnostic-reasons {
+  color: #42514b;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.pair-diagnostic-event-message {
+  display: block;
+  max-width: 100%;
+}
+
 .pair-funding-diff-card .ant-table-thead > tr > th {
   background: #f7faf8;
   color: #17211d;
@@ -3239,6 +3359,16 @@ body {
     justify-content: flex-start;
   }
 
+  .pair-diagnostic-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .pair-diagnostic-tools {
+    justify-content: flex-start;
+    width: 100%;
+  }
+
   .index-component-market-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -3267,6 +3397,7 @@ body {
   .pair-monitor-tables,
   .pair-query-bar,
   .pair-metric-grid,
+  .pair-diagnostic-metrics,
   .pair-funding-grid,
   .pair-detail-grid,
   .premium-query-bar,

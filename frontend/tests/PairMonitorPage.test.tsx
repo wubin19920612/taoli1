@@ -275,6 +275,69 @@ function pairFundingRecordStatus(watched: boolean) {
   };
 }
 
+function pairSpreadDiagnosticResult() {
+  return {
+    leg1: { exchange: "bitget", symbol: "SKHYUSDT", market_type: "future" },
+    leg2: { exchange: "hyperliquid", symbol: "SKHYNIXUSDT", market_type: "future" },
+    hours: 4,
+    requested_interval_seconds: 5,
+    interval_seconds: 60,
+    observed_at: observedAt,
+    point_count: 7,
+    threshold_pct: 1,
+    peak_at: "2026-07-24T01:59:00Z",
+    peak_spread_pct: 11.23,
+    peak_spread_abs: 30,
+    peak_leg1_close: 100,
+    peak_leg2_close: 112,
+    points_over_threshold: 6,
+    first_over_threshold_at: "2026-07-24T01:54:00Z",
+    last_over_threshold_at: "2026-07-24T01:59:00Z",
+    longest_run: {
+      start_at: "2026-07-24T01:54:00Z",
+      end_at: "2026-07-24T01:59:00Z",
+      point_count: 6,
+      peak_spread_pct: 11.23,
+      peak_at: "2026-07-24T01:59:00Z"
+    },
+    current_spread_pct: 0.5,
+    inferred_type: "FF",
+    alert_rules: [
+      {
+        id: "rule-1",
+        name: "规则1",
+        enabled: true,
+        matches_pair_scope: true,
+        min_open_spread_pct: 1.5,
+        min_fee_adjusted_open_pct: 0.05,
+        consecutive_hits: 3,
+        cooldown_seconds: 300,
+        reasons: ["历史峰值达到规则的开仓价差阈值"]
+      }
+    ],
+    alert_events: {
+      total: 1,
+      sent: 0,
+      muted: 1,
+      failed: 0,
+      latest_status: "muted",
+      latest_at: "2026-07-24T01:58:00Z",
+      latest_message: "订单簿深度不足",
+      events: [
+        {
+          rule_id: "rule-1",
+          status: "muted",
+          created_at: "2026-07-24T01:58:00Z",
+          message: "订单簿深度不足"
+        }
+      ]
+    },
+    suppress_when_card_conditions_fail: true,
+    notes: ["历史 K 线和实时告警使用不同数据链路。"],
+    warnings: []
+  };
+}
+
 describe("PairMonitorPage", () => {
   const requests: string[] = [];
   let fundingRecordWatched = false;
@@ -296,6 +359,9 @@ describe("PairMonitorPage", () => {
         }
         if (url.pathname.includes("/pair-spread/funding-records/status")) {
           return Response.json(pairFundingRecordStatus(fundingRecordWatched));
+        }
+        if (url.pathname.includes("/pair-spread/diagnostics")) {
+          return Response.json(pairSpreadDiagnosticResult());
         }
         if (url.pathname.includes("/pair-spread/funding-records/watch")) {
           fundingRecordWatched = init?.method !== "DELETE";
@@ -617,6 +683,27 @@ describe("PairMonitorPage", () => {
     expect(priceChartIndex).toBe(spreadChartIndex + 1);
     expect(fundingGridIndex).toBeGreaterThan(priceChartIndex);
     expect(pageText.indexOf("标的价格")).toBeLessThan(pageText.indexOf("资金费率差"));
+  });
+
+  it("runs a saved threshold diagnostic on demand", async () => {
+    const user = userEvent.setup();
+    render(<PairMonitorPage />);
+
+    await user.click(screen.getByRole("button", { name: /查询/ }));
+    await user.click(await screen.findByRole("button", { name: /诊断监控/ }));
+
+    await waitFor(() => {
+      expect(requests.some((request) => request.includes("/pair-spread/diagnostics"))).toBe(true);
+    });
+    expect(await screen.findByText("历史峰值")).toBeTruthy();
+    expect(screen.getByText("+11.23%")).toBeTruthy();
+    expect(screen.getByText("已静默")).toBeTruthy();
+
+    const thresholdInput = screen.getByRole("spinbutton", { name: /监控诊断阈值/ });
+    await user.clear(thresholdInput);
+    await user.type(thresholdInput, "2.5");
+    await user.click(screen.getByRole("button", { name: /记住阈值/ }));
+    expect(window.localStorage.getItem("taoli1.pairSpread.diagnosticThreshold.v1")).toBe("2.5");
   });
 
   it("starts minute funding recording before showing the funding rate difference chart", async () => {

@@ -622,6 +622,71 @@ export interface PairSpreadQueryResult {
   warnings: string[];
 }
 
+export interface PairSpreadDiagnosticThresholdRun {
+  start_at: string | null;
+  end_at: string | null;
+  point_count: number;
+  peak_spread_pct: number | null;
+  peak_at: string | null;
+}
+
+export interface PairSpreadDiagnosticRule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  matches_pair_scope: boolean;
+  min_open_spread_pct: number;
+  min_fee_adjusted_open_pct: number;
+  consecutive_hits: number;
+  cooldown_seconds: number;
+  reasons: string[];
+}
+
+export interface PairSpreadDiagnosticEvent {
+  rule_id: string;
+  status: string;
+  created_at: string;
+  message: string;
+}
+
+export interface PairSpreadDiagnosticEventSummary {
+  total: number;
+  sent: number;
+  muted: number;
+  failed: number;
+  latest_status: string | null;
+  latest_at: string | null;
+  latest_message: string | null;
+  events: PairSpreadDiagnosticEvent[];
+}
+
+export interface PairSpreadDiagnosticResult {
+  leg1: PairSpreadLegQuery;
+  leg2: PairSpreadLegQuery;
+  hours: number;
+  requested_interval_seconds: number;
+  interval_seconds: number;
+  observed_at: string;
+  point_count: number;
+  threshold_pct: number;
+  peak_at: string | null;
+  peak_spread_pct: number | null;
+  peak_spread_abs: number | null;
+  peak_leg1_close: number | null;
+  peak_leg2_close: number | null;
+  points_over_threshold: number;
+  first_over_threshold_at: string | null;
+  last_over_threshold_at: string | null;
+  longest_run: PairSpreadDiagnosticThresholdRun;
+  current_spread_pct: number | null;
+  inferred_type: OpportunityType;
+  alert_rules: PairSpreadDiagnosticRule[];
+  alert_events: PairSpreadDiagnosticEventSummary;
+  suppress_when_card_conditions_fail: boolean;
+  notes: string[];
+  warnings: string[];
+}
+
 export interface PremiumIndexPoint {
   bucket_at: string;
   premium_pct: number;

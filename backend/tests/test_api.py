@@ -29,6 +29,7 @@ from app.models.pair_spread import (
     PairSpreadCurrentSnapshot,
     PairSpreadLegQuery,
     PairSpreadPriceField,
+    PairSpreadPoint,
     PairSpreadQueryResult,
     PairSpreadRealtimeFundingPoint,
     PairSpreadValueStats,
@@ -844,6 +845,81 @@ def test_pair_spread_query_endpoint_accepts_second_interval() -> None:
     payload = response.json()
     assert payload["interval_minutes"] == 1
     assert payload["interval_seconds"] == 5
+
+
+def test_pair_spread_diagnostics_endpoint_coarsens_second_interval() -> None:
+    fixed_now = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
+
+    class FakePairSpreadService:
+        async def query(
+            self,
+            leg1: PairSpreadLegQuery,
+            leg2: PairSpreadLegQuery,
+            *,
+            hours: int,
+            interval_minutes: int = 1,
+            interval_seconds: int | None = None,
+            leg2_multiplier: float = 1.0,
+            now: datetime | None = None,
+            include_current: bool = True,
+        ) -> PairSpreadQueryResult:
+            assert interval_minutes == 1
+            assert interval_seconds == 60
+            assert include_current is False
+            observed_at = now or fixed_now
+            points = [
+                PairSpreadPoint(
+                    bucket_at=observed_at - timedelta(minutes=2),
+                    leg1_close=100,
+                    leg2_close=112,
+                    spread_abs=12,
+                    spread_pct=11.32,
+                ),
+                PairSpreadPoint(
+                    bucket_at=observed_at - timedelta(minutes=1),
+                    leg1_close=100,
+                    leg2_close=102,
+                    spread_abs=2,
+                    spread_pct=1.98,
+                ),
+            ]
+            return PairSpreadQueryResult(
+                leg1=leg1,
+                leg2=leg2,
+                hours=hours,
+                interval_minutes=1,
+                interval_seconds=60,
+                leg2_multiplier=leg2_multiplier,
+                observed_at=observed_at,
+                point_count=len(points),
+                first_seen_at=points[0].bucket_at,
+                last_seen_at=points[-1].bucket_at,
+                spread_abs=PairSpreadValueStats(min=2, max=12, mean=7, current=2),
+                spread_pct=PairSpreadValueStats(min=1.98, max=11.32, mean=6.65, current=1.98),
+                points=points,
+            )
+
+        async def aclose(self) -> None:
+            return None
+
+    app = create_app(settings=Settings(database_url="sqlite:///:memory:"))
+    app.state.pair_spread_query_service_factory = FakePairSpreadService
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/pair-spread/diagnostics"
+            "?leg1_exchange=bitget&leg1_symbol=KIOXIA"
+            "&leg2_exchange=hyperliquid&leg2_symbol=KIOXIA"
+            "&hours=24&threshold_pct=1&interval_seconds=5"
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["requested_interval_seconds"] == 5
+    assert payload["interval_seconds"] == 60
+    assert payload["peak_spread_pct"] == pytest.approx(11.32)
+    assert payload["points_over_threshold"] == 2
+    assert any("只支持实时采样" in note for note in payload["notes"])
 
 
 def test_pair_spread_funding_record_endpoints_round_trip() -> None:

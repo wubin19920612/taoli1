@@ -14,11 +14,14 @@ from app.models.pair_spread import (
     PairSpreadFundingRecordRequest,
     PairSpreadFundingRecordStatus,
     PairSpreadFundingWatchItem,
+    PairSpreadDiagnosticResult,
     PairSpreadLegQuery,
     PairSpreadQueryResult,
     SUPPORTED_PAIR_SPREAD_EXCHANGES,
 )
+from app.models.settings import AlertMessageTemplateSettings
 from app.services.pair_spread_funding_recorder import PairSpreadFundingRecorder
+from app.services.pair_spread_diagnostics import build_pair_spread_diagnostic
 from app.services.pair_spread_query import PairSpreadQueryError, PairSpreadQueryService
 
 router = APIRouter(prefix="/pair-spread")
@@ -106,6 +109,89 @@ async def stop_pair_spread_funding_record(
 ) -> PairSpreadFundingRecordStatus:
     verify_dashboard_password(request.app.state.settings.dashboard_password, password)
     return await _funding_recorder(request).delete_watch(payload, hours=hours)
+
+
+def _diagnostic_historical_interval_seconds(requested: int) -> int:
+    if requested <= 60:
+        return 60
+    if requested <= 300:
+        return 300
+    return 900
+
+
+@router.get("/diagnostics", response_model=PairSpreadDiagnosticResult)
+async def diagnose_pair_spread(
+    request: Request,
+    leg1_exchange: str = Query(...),
+    leg1_symbol: str = Query(...),
+    leg1_market_type: MarketType = Query(default=MarketType.FUTURE),
+    leg2_exchange: str = Query(...),
+    leg2_symbol: str = Query(...),
+    leg2_market_type: MarketType = Query(default=MarketType.FUTURE),
+    hours: int = Query(default=24, ge=PAIR_SPREAD_MIN_HOURS, le=PAIR_SPREAD_MAX_HOURS),
+    threshold_pct: float = Query(default=1.0, ge=0, le=100_000),
+    interval_seconds: int = Query(
+        default=60,
+        ge=PAIR_SPREAD_MIN_INTERVAL_SECONDS,
+        le=PAIR_SPREAD_MAX_INTERVAL_SECONDS,
+    ),
+    leg2_multiplier: float = Query(default=1.0, gt=0),
+    end_at: datetime | None = Query(default=None),
+) -> PairSpreadDiagnosticResult:
+    try:
+        leg1 = PairSpreadLegQuery(exchange=leg1_exchange, symbol=leg1_symbol, market_type=leg1_market_type)
+        leg2 = PairSpreadLegQuery(exchange=leg2_exchange, symbol=leg2_symbol, market_type=leg2_market_type)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    historical_interval_seconds = _diagnostic_historical_interval_seconds(interval_seconds)
+    factory = getattr(request.app.state, "pair_spread_query_service_factory", None) or PairSpreadQueryService
+    service = factory()
+    try:
+        result = await service.query(
+            leg1,
+            leg2,
+            hours=hours,
+            interval_minutes=historical_interval_seconds // 60,
+            interval_seconds=historical_interval_seconds,
+            leg2_multiplier=leg2_multiplier,
+            now=end_at,
+            include_current=False,
+        )
+        rule_repo = getattr(request.app.state, "alert_rule_repo", None)
+        event_repo = getattr(request.app.state, "alert_event_repo", None)
+        settings_repo = getattr(request.app.state, "settings_repo", None)
+        rules = await rule_repo.list() if rule_repo is not None else []
+        events = await event_repo.list(limit=500) if event_repo is not None else []
+        template = (
+            await settings_repo.get_alert_message_template()
+            if settings_repo is not None
+            else AlertMessageTemplateSettings()
+        )
+        diagnostic = build_pair_spread_diagnostic(
+            result,
+            threshold_pct=threshold_pct,
+            requested_interval_seconds=interval_seconds,
+            interval_seconds=historical_interval_seconds,
+            rules=rules,
+            events=events,
+            suppress_when_card_conditions_fail=template.suppress_when_card_conditions_fail,
+        )
+        if historical_interval_seconds != interval_seconds:
+            diagnostic.notes.insert(
+                0,
+                (
+                    f"诊断使用 {historical_interval_seconds // 60} 分钟历史 K 线；"
+                    f"你选择的 {interval_seconds} 秒周期只支持实时采样，不能回溯历史分钟数据。"
+                ),
+            )
+        return diagnostic
+    except PairSpreadQueryError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    finally:
+        close = getattr(service, "aclose", None)
+        if close is not None:
+            await close()
 
 
 @router.get("/query", response_model=PairSpreadQueryResult)
