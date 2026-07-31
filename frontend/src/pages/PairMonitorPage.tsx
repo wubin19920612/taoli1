@@ -754,6 +754,21 @@ function exchangeToneClass(exchange: string): string {
   return "pair-exchange-default";
 }
 
+function exchangeShortLabel(exchange: string): string {
+  const normalized = exchange.trim().toLowerCase().replace(/_/g, "-");
+  const shortLabels: Record<string, string> = {
+    aster: "as",
+    gate: "gt",
+    hyperliquid: "hl",
+    bybit: "by",
+    bitget: "bg",
+    binance: "bn",
+    "binance-alpha": "ba",
+    okx: "ok"
+  };
+  return shortLabels[normalized] ?? normalized.slice(0, 2);
+}
+
 function ExchangeChip({
   exchange,
   marketType
@@ -762,8 +777,11 @@ function ExchangeChip({
   marketType: MarketType;
 }) {
   return (
-    <span className={`pair-exchange-chip ${exchangeToneClass(exchange)}`}>
-      <span>{exchangeLabels[exchange] ?? exchange}</span>
+    <span
+      className={`pair-exchange-chip ${exchangeToneClass(exchange)}`}
+      title={exchangeLabels[exchange] ?? exchange}
+    >
+      <span>{exchangeShortLabel(exchange)}</span>
       <span className="pair-exchange-market">{marketTypeShortText(marketType)}</span>
     </span>
   );
@@ -3557,9 +3575,6 @@ export function PairMonitorPage() {
                   }}
                 >
                   <SavedPairPresetContent preset={preset} />
-                  <span className="pair-saved-meta">
-                    {durationLabel(preset.hours)} · {intervalLabel(preset.intervalSeconds)}
-                  </span>
                 </Tag>
               ))}
             </div>

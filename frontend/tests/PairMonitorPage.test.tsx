@@ -533,7 +533,7 @@ describe("PairMonitorPage", () => {
       JSON.stringify([
         {
           id: "cxmt",
-          leg1_exchange: "aster",
+          leg1_exchange: "hyperliquid",
           leg1_market_type: "future",
           leg1_symbol: "CXMTUSDT",
           leg2_exchange: "gate",
@@ -554,8 +554,12 @@ describe("PairMonitorPage", () => {
     const savedTag = document.querySelector(".pair-saved-tag") as HTMLElement;
     expect(savedTag.textContent).toContain("CXMT");
     expect(savedTag.textContent).not.toContain("CXMTUSDT");
+    expect(savedTag.textContent).toContain("hl");
+    expect(savedTag.textContent).toContain("gt");
+    expect(savedTag.textContent).not.toContain("12小时");
+    expect(savedTag.textContent).not.toContain("1分钟");
     expect((savedTag.textContent?.match(/CXMT/g) ?? []).length).toBe(1);
-    expect(document.querySelector(".pair-exchange-aster")).toBeTruthy();
+    expect(document.querySelector(".pair-exchange-hyperliquid")).toBeTruthy();
     expect(document.querySelector(".pair-exchange-gate")).toBeTruthy();
     await user.click(savedTag);
 
@@ -568,7 +572,7 @@ describe("PairMonitorPage", () => {
         requests.some(
           (request) =>
             request.includes("/pair-spread/query") &&
-            request.includes("leg1_exchange=aster") &&
+            request.includes("leg1_exchange=hyperliquid") &&
             request.includes("leg2_exchange=gate") &&
             request.includes("leg1_symbol=CXMTUSDT") &&
             request.includes("leg2_symbol=CXMTUSDT") &&
