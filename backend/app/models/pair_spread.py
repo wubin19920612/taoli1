@@ -22,6 +22,7 @@ PAIR_SPREAD_INTERVAL_OPTIONS: tuple[int, ...] = (1, 5, 15)
 PAIR_SPREAD_INTERVAL_SECONDS_OPTIONS: tuple[int, ...] = (5, 10, 30, 60, 300, 900)
 PAIR_SPREAD_MIN_INTERVAL_SECONDS = 5
 PAIR_SPREAD_MAX_INTERVAL_SECONDS = 86_400
+PAIR_SPREAD_FUNDING_RECORD_INTERVAL_SECONDS = 60
 
 
 class PairSpreadPriceField(StrEnum):
@@ -109,6 +110,37 @@ class PairSpreadRealtimeFundingPoint(BaseModel):
     right_rate_pct: float | None = None
     net_rate_pct: float | None = None
     source: str = "current"
+
+
+class PairSpreadFundingRecordRequest(BaseModel):
+    leg1: PairSpreadLegQuery
+    leg2: PairSpreadLegQuery
+    leg2_multiplier: float = Field(default=1.0, gt=0)
+
+    @model_validator(mode="after")
+    def require_funding_leg(self) -> "PairSpreadFundingRecordRequest":
+        if self.leg1.market_type != MarketType.FUTURE or self.leg2.market_type != MarketType.FUTURE:
+            raise ValueError("分钟资金费率记录只支持合约对")
+        return self
+
+
+class PairSpreadFundingWatchItem(BaseModel):
+    pair_key: str
+    leg1: PairSpreadLegQuery
+    leg2: PairSpreadLegQuery
+    leg2_multiplier: float = Field(gt=0)
+    interval_seconds: int = PAIR_SPREAD_FUNDING_RECORD_INTERVAL_SECONDS
+    created_at: datetime
+    updated_at: datetime
+    sample_count: int = 0
+    latest_sample_at: datetime | None = None
+
+
+class PairSpreadFundingRecordStatus(BaseModel):
+    watched: bool
+    item: PairSpreadFundingWatchItem | None = None
+    samples: list[PairSpreadRealtimeFundingPoint] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 
 
 class PairSpreadCurrentLeg(BaseModel):

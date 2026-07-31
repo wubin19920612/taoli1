@@ -22,11 +22,15 @@ from app.models.opportunity_radar import OpportunityRadarSettings
 from app.models.alert import AlertEvent, AlertRule
 from app.models.orderbook import DepthValidationResult
 from app.models.pair_spread import (
+    PairSpreadFundingRecordRequest,
+    PairSpreadFundingRecordStatus,
+    PairSpreadFundingWatchItem,
     PairSpreadCurrentLeg,
     PairSpreadCurrentSnapshot,
     PairSpreadLegQuery,
     PairSpreadPriceField,
     PairSpreadQueryResult,
+    PairSpreadRealtimeFundingPoint,
     PairSpreadValueStats,
 )
 from app.models.phone_alert import PhonePriceAlertCondition, PhonePriceAlertEvent, PhonePriceAlertRule
@@ -650,7 +654,7 @@ def test_opportunities_endpoint_applies_limit_after_filtering() -> None:
 
 
 def test_pair_spread_query_endpoint_uses_on_demand_service() -> None:
-    now = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
+    fixed_now = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
 
     class FakePairSpreadService:
         def __init__(self) -> None:
@@ -665,8 +669,11 @@ def test_pair_spread_query_endpoint_uses_on_demand_service() -> None:
             interval_minutes: int = 1,
             interval_seconds: int | None = None,
             leg2_multiplier: float = 1.0,
+            now: datetime | None = None,
+            include_current: bool = True,
         ) -> PairSpreadQueryResult:
             resolved_interval_seconds = interval_seconds or interval_minutes * 60
+            observed_at = now or fixed_now
             leg1_current = PairSpreadCurrentLeg(
                 exchange=leg1.exchange,
                 symbol=leg1.symbol,
@@ -675,7 +682,7 @@ def test_pair_spread_query_endpoint_uses_on_demand_service() -> None:
                 price=100,
                 price_field=PairSpreadPriceField.MARK_PRICE,
                 mark_price=100,
-                timestamp=now,
+                timestamp=observed_at,
             )
             leg2_current = PairSpreadCurrentLeg(
                 exchange=leg2.exchange,
@@ -685,7 +692,7 @@ def test_pair_spread_query_endpoint_uses_on_demand_service() -> None:
                 price=102,
                 price_field=PairSpreadPriceField.MARK_PRICE,
                 mark_price=102,
-                timestamp=now,
+                timestamp=observed_at,
             )
             return PairSpreadQueryResult(
                 leg1=leg1,
@@ -694,14 +701,14 @@ def test_pair_spread_query_endpoint_uses_on_demand_service() -> None:
                 interval_minutes=interval_minutes,
                 interval_seconds=resolved_interval_seconds,
                 leg2_multiplier=leg2_multiplier,
-                observed_at=now,
+                observed_at=observed_at,
                 point_count=1,
-                first_seen_at=now,
-                last_seen_at=now,
+                first_seen_at=observed_at,
+                last_seen_at=observed_at,
                 spread_abs=PairSpreadValueStats(current=2),
                 spread_pct=PairSpreadValueStats(current=2),
                 current=PairSpreadCurrentSnapshot(
-                    observed_at=now,
+                    observed_at=observed_at,
                     leg1=leg1_current,
                     leg2=leg2_current,
                     spread_abs=2,
@@ -709,7 +716,7 @@ def test_pair_spread_query_endpoint_uses_on_demand_service() -> None:
                 ),
                 points=[
                     {
-                        "bucket_at": now,
+                        "bucket_at": observed_at,
                         "leg1_close": 100,
                         "leg2_close": 102,
                         "spread_abs": 2,
@@ -750,7 +757,7 @@ def test_pair_spread_query_endpoint_uses_on_demand_service() -> None:
 
 
 def test_pair_spread_query_endpoint_accepts_second_interval() -> None:
-    now = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
+    fixed_now = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
 
     class FakePairSpreadService:
         async def query(
@@ -762,9 +769,12 @@ def test_pair_spread_query_endpoint_accepts_second_interval() -> None:
             interval_minutes: int = 1,
             interval_seconds: int | None = None,
             leg2_multiplier: float = 1.0,
+            now: datetime | None = None,
+            include_current: bool = True,
         ) -> PairSpreadQueryResult:
             assert interval_minutes == 1
             assert interval_seconds == 5
+            observed_at = now or fixed_now
             leg1_current = PairSpreadCurrentLeg(
                 exchange=leg1.exchange,
                 symbol=leg1.symbol,
@@ -773,7 +783,7 @@ def test_pair_spread_query_endpoint_accepts_second_interval() -> None:
                 price=100,
                 price_field=PairSpreadPriceField.MID_PRICE,
                 mid_price=100,
-                timestamp=now,
+                timestamp=observed_at,
             )
             leg2_current = PairSpreadCurrentLeg(
                 exchange=leg2.exchange,
@@ -783,7 +793,7 @@ def test_pair_spread_query_endpoint_accepts_second_interval() -> None:
                 price=101,
                 price_field=PairSpreadPriceField.MID_PRICE,
                 mid_price=101,
-                timestamp=now,
+                timestamp=observed_at,
             )
             return PairSpreadQueryResult(
                 leg1=leg1,
@@ -792,14 +802,14 @@ def test_pair_spread_query_endpoint_accepts_second_interval() -> None:
                 interval_minutes=1,
                 interval_seconds=5,
                 leg2_multiplier=leg2_multiplier,
-                observed_at=now,
+                observed_at=observed_at,
                 point_count=1,
-                first_seen_at=now,
-                last_seen_at=now,
+                first_seen_at=observed_at,
+                last_seen_at=observed_at,
                 spread_abs=PairSpreadValueStats(current=1),
                 spread_pct=PairSpreadValueStats(current=1),
                 current=PairSpreadCurrentSnapshot(
-                    observed_at=now,
+                    observed_at=observed_at,
                     leg1=leg1_current,
                     leg2=leg2_current,
                     spread_abs=1,
@@ -807,7 +817,7 @@ def test_pair_spread_query_endpoint_accepts_second_interval() -> None:
                 ),
                 points=[
                     {
-                        "bucket_at": now,
+                        "bucket_at": observed_at,
                         "leg1_close": 100,
                         "leg2_close": 101,
                         "spread_abs": 1,
@@ -834,6 +844,154 @@ def test_pair_spread_query_endpoint_accepts_second_interval() -> None:
     payload = response.json()
     assert payload["interval_minutes"] == 1
     assert payload["interval_seconds"] == 5
+
+
+def test_pair_spread_funding_record_endpoints_round_trip() -> None:
+    now = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
+    payload = {
+        "leg1": {"exchange": "binance", "symbol": "btc", "market_type": "future"},
+        "leg2": {"exchange": "okx", "symbol": "btc", "market_type": "future"},
+        "leg2_multiplier": 1,
+    }
+
+    class FakePairSpreadFundingRecorder:
+        def __init__(self) -> None:
+            self.repo = self
+            self.watch_items: dict[str, PairSpreadFundingWatchItem] = {}
+            self.samples: dict[str, list[PairSpreadRealtimeFundingPoint]] = {}
+
+        def _key(self, request: PairSpreadFundingRecordRequest) -> str:
+            return "|".join(
+                [
+                    request.leg1.exchange,
+                    request.leg1.market_type.value,
+                    request.leg1.symbol,
+                    request.leg2.exchange,
+                    request.leg2.market_type.value,
+                    request.leg2.symbol,
+                    str(request.leg2_multiplier),
+                ]
+            )
+
+        async def list_watch_items(self) -> list[PairSpreadFundingWatchItem]:
+            return list(self.watch_items.values())
+
+        async def status_for(
+            self,
+            request: PairSpreadFundingRecordRequest,
+            *,
+            hours: int,
+            now: datetime | None = None,
+        ) -> PairSpreadFundingRecordStatus:
+            key = self._key(request)
+            item = self.watch_items.get(key)
+            if item is None:
+                return PairSpreadFundingRecordStatus(watched=False)
+            return PairSpreadFundingRecordStatus(
+                watched=True,
+                item=item,
+                samples=self.samples.get(key, []),
+                warnings=[],
+            )
+
+        async def upsert_watch(
+            self,
+            request: PairSpreadFundingRecordRequest,
+            *,
+            hours: int,
+            now: datetime | None = None,
+        ) -> PairSpreadFundingRecordStatus:
+            observed_at = now or datetime.now(UTC)
+            key = self._key(request)
+            item = PairSpreadFundingWatchItem(
+                pair_key=key,
+                leg1=request.leg1,
+                leg2=request.leg2,
+                leg2_multiplier=request.leg2_multiplier,
+                interval_seconds=60,
+                created_at=observed_at,
+                updated_at=observed_at,
+                sample_count=1,
+                latest_sample_at=observed_at,
+            )
+            sample = PairSpreadRealtimeFundingPoint(
+                bucket_at=observed_at.replace(second=0, microsecond=0),
+                left_rate_pct=0.01,
+                right_rate_pct=0.04,
+                net_rate_pct=0.03,
+                source="minute_record",
+            )
+            self.watch_items[key] = item
+            self.samples[key] = [sample]
+            return PairSpreadFundingRecordStatus(watched=True, item=item, samples=[sample], warnings=[])
+
+        async def delete_watch(
+            self,
+            request: PairSpreadFundingRecordRequest,
+            *,
+            hours: int,
+            now: datetime | None = None,
+        ) -> PairSpreadFundingRecordStatus:
+            key = self._key(request)
+            self.watch_items.pop(key, None)
+            self.samples.pop(key, None)
+            return PairSpreadFundingRecordStatus(watched=False)
+
+    app = create_app(settings=Settings(dashboard_password="secret", database_url="sqlite:///:memory:"))
+    fake_recorder = FakePairSpreadFundingRecorder()
+
+    with TestClient(app) as client:
+        app.state.pair_spread_funding_recorder = fake_recorder
+        headers = {"X-Dashboard-Password": "secret"}
+
+        watchlist_response = client.get("/api/pair-spread/funding-records/watchlist")
+        assert watchlist_response.status_code == 200
+        assert watchlist_response.json() == []
+
+        status_response = client.get(
+            "/api/pair-spread/funding-records/status"
+            "?leg1_exchange=binance&leg1_symbol=btc&leg2_exchange=okx&leg2_symbol=btc"
+            "&leg1_market_type=future&leg2_market_type=future&hours=6&leg2_multiplier=1"
+        )
+        assert status_response.status_code == 200
+        assert status_response.json()["watched"] is False
+
+        start_response = client.post(
+            "/api/pair-spread/funding-records/watch?hours=6",
+            headers=headers,
+            json=payload,
+        )
+        assert start_response.status_code == 200
+        started = start_response.json()
+        assert started["watched"] is True
+        assert started["item"]["sample_count"] == 1
+        assert started["samples"][0]["net_rate_pct"] == pytest.approx(0.03)
+
+        watchlist_response = client.get("/api/pair-spread/funding-records/watchlist")
+        assert watchlist_response.status_code == 200
+        assert watchlist_response.json()[0]["sample_count"] == 1
+
+        status_response = client.get(
+            "/api/pair-spread/funding-records/status"
+            "?leg1_exchange=binance&leg1_symbol=btc&leg2_exchange=okx&leg2_symbol=btc"
+            "&leg1_market_type=future&leg2_market_type=future&hours=6&leg2_multiplier=1"
+        )
+        assert status_response.status_code == 200
+        assert status_response.json()["watched"] is True
+        assert status_response.json()["samples"][0]["net_rate_pct"] == pytest.approx(0.03)
+
+        stop_response = client.request(
+            "DELETE",
+            "/api/pair-spread/funding-records/watch?hours=6",
+            headers=headers,
+            json=payload,
+        )
+        assert stop_response.status_code == 200
+        assert stop_response.json()["watched"] is False
+
+        watchlist_response = client.get("/api/pair-spread/funding-records/watchlist")
+        assert watchlist_response.status_code == 200
+        assert watchlist_response.json() == []
 
 
 def test_premium_index_endpoints_use_on_demand_service() -> None:

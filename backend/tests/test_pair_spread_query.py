@@ -6,9 +6,12 @@ import pytest
 from pydantic import ValidationError
 
 import app.services.pair_spread_query as pair_spread_query_module
+from app.db.database import connect_database
+from app.db.schema import initialize_schema
 from app.models.market import MarketType
 from app.models.pair_spread import (
     PairSpreadCurrentLeg,
+    PairSpreadFundingRecordRequest,
     PairSpreadFundingPoint,
     PairSpreadKlinePoint,
     PairSpreadLegQuery,
@@ -22,6 +25,7 @@ from app.services.pair_spread_query import (
     _hyperliquid_history_limit_warning,
     build_pair_spread_points,
 )
+from app.services.pair_spread_funding_recorder import PairSpreadFundingRecorder, PairSpreadFundingRepository
 
 
 def kline(minutes: int, close: float) -> PairSpreadKlinePoint:
@@ -285,6 +289,64 @@ async def test_pair_spread_query_accumulates_realtime_second_points() -> None:
     assert next_bucket.spread_abs.current == 3
     assert [point.bucket_at.second for point in next_bucket.realtime_funding] == [0, 5]
     assert next_bucket.realtime_funding[-1].net_rate_pct == pytest.approx(0.03)
+
+
+@pytest.mark.asyncio
+async def test_pair_spread_funding_recorder_persists_minute_samples() -> None:
+    db = await connect_database(":memory:")
+    await initialize_schema(db)
+    right_funding = {"value": 0.02}
+
+    class FakePairSpreadService(PairSpreadQueryService):
+        async def _fetch_current_leg(
+            self,
+            exchange: str,
+            symbol: str,
+            market_type: MarketType = MarketType.FUTURE,
+        ):
+            leg = current_leg(exchange, symbol, 100 if exchange == "binance" else 101, market_type)
+            rate = 0.01 if exchange == "binance" else right_funding["value"]
+            return leg.model_copy(update={"funding_rate_pct": rate})
+
+    repo = PairSpreadFundingRepository(db)
+    recorder = PairSpreadFundingRecorder(repo, service_factory=FakePairSpreadService)
+    request = PairSpreadFundingRecordRequest(
+        leg1=PairSpreadLegQuery(exchange="binance", symbol="btc"),
+        leg2=PairSpreadLegQuery(exchange="okx", symbol="btc"),
+        leg2_multiplier=1,
+    )
+
+    try:
+        first = await recorder.upsert_watch(
+            request,
+            hours=1,
+            now=datetime(2026, 7, 10, 12, 0, 30, tzinfo=UTC),
+        )
+        right_funding["value"] = 0.04
+        await recorder.collect_once(now=datetime(2026, 7, 10, 12, 1, 30, tzinfo=UTC))
+        second = await recorder.status_for(
+            request,
+            hours=1,
+            now=datetime(2026, 7, 10, 12, 2, tzinfo=UTC),
+        )
+        stopped = await recorder.delete_watch(
+            request,
+            hours=1,
+            now=datetime(2026, 7, 10, 12, 2, tzinfo=UTC),
+        )
+    finally:
+        await db.close()
+
+    assert first.watched is True
+    assert len(first.samples) == 1
+    assert first.samples[0].bucket_at == datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
+    assert first.samples[0].net_rate_pct == pytest.approx(0.01)
+    assert second.watched is True
+    assert [sample.bucket_at.minute for sample in second.samples] == [0, 1]
+    assert [sample.net_rate_pct for sample in second.samples] == pytest.approx([0.01, 0.03])
+    assert second.item is not None
+    assert second.item.sample_count == 2
+    assert stopped.watched is False
 
 
 @pytest.mark.asyncio

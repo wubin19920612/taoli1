@@ -1820,8 +1820,8 @@ body {
   stroke-dasharray: 5 4;
 }
 
-.pair-funding-chart-area {
-  fill: url(#pairFundingDiffFill);
+.pair-minute-funding-area {
+  fill: url(#pairMinuteFundingDiffFill);
 }
 
 .pair-funding-chart-line {
@@ -1832,15 +1832,15 @@ body {
   stroke-linejoin: round;
 }
 
-.pair-funding-chart-line-settlement {
-  stroke: #f97316;
-  stroke-dasharray: 5 4;
+.pair-minute-funding-line {
+  stroke-width: 2.4;
 }
 
-.pair-funding-chart-point {
+.pair-minute-funding-point {
   fill: #2563eb;
   stroke: #ffffff;
-  stroke-width: 1.5;
+  stroke-width: 1.4;
+  opacity: 0.82;
 }
 
 .pair-funding-chart-current-point {
@@ -1865,39 +1865,34 @@ body {
   font-size: 12px;
 }
 
-.pair-funding-settlement-leader {
-  stroke: #95a3a0;
+.pair-minute-funding-leader {
+  stroke: #6d7f7a;
   stroke-dasharray: 3 3;
   stroke-width: 1;
-  opacity: 0.72;
+  opacity: 0.7;
 }
 
-.pair-funding-settlement-point {
-  fill: #f97316;
+.pair-minute-funding-turning-dot {
+  fill: #2563eb;
   stroke: #ffffff;
   stroke-width: 2;
-  opacity: 0.72;
 }
 
-.pair-funding-settlement-turning .pair-funding-settlement-point {
-  opacity: 1;
-}
-
-.pair-funding-settlement-turning-peak .pair-funding-settlement-point {
+.pair-minute-funding-turning-peak .pair-minute-funding-turning-dot {
   fill: #b42318;
 }
 
-.pair-funding-settlement-turning-trough .pair-funding-settlement-point {
+.pair-minute-funding-turning-trough .pair-minute-funding-turning-dot {
   fill: #14803c;
 }
 
-.pair-funding-settlement-label-bg {
+.pair-minute-funding-label-bg {
   fill: #ffffff;
   stroke: #d7e0dc;
   stroke-width: 1;
 }
 
-.pair-funding-settlement-label {
+.pair-minute-funding-label {
   fill: #17211d;
   font-size: 11px;
   font-weight: 800;
@@ -1928,10 +1923,6 @@ body {
 
 .pair-funding-legend-realtime {
   color: #2563eb;
-}
-
-.pair-funding-legend-settlement {
-  color: #f97316;
 }
 
 .pair-funding-chart-empty {

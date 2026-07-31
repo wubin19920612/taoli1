@@ -542,6 +542,31 @@ export interface PairSpreadRealtimeFundingPoint {
   source?: string;
 }
 
+export interface PairSpreadFundingRecordRequest {
+  leg1: PairSpreadLegQuery;
+  leg2: PairSpreadLegQuery;
+  leg2_multiplier: number;
+}
+
+export interface PairSpreadFundingWatchItem {
+  pair_key: string;
+  leg1: PairSpreadLegQuery;
+  leg2: PairSpreadLegQuery;
+  leg2_multiplier: number;
+  interval_seconds: number;
+  created_at: string;
+  updated_at: string;
+  sample_count: number;
+  latest_sample_at: string | null;
+}
+
+export interface PairSpreadFundingRecordStatus {
+  watched: boolean;
+  item: PairSpreadFundingWatchItem | null;
+  samples: PairSpreadRealtimeFundingPoint[];
+  warnings: string[];
+}
+
 export interface PairSpreadCurrentLeg {
   exchange: string;
   symbol: string;

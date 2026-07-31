@@ -90,6 +90,7 @@ from app.services.opportunity_radar import (
     build_opportunity_radar_alert_message,
     build_opportunity_radar_preview,
 )
+from app.services.pair_spread_funding_recorder import PairSpreadFundingRecorder, PairSpreadFundingRepository
 from app.services.phone_price_alerts import PhonePriceAlertEngine, build_phone_price_alert_message
 from app.services.risk_labels import effective_open_edge_pct, known_volume_24h_usdt
 from app.services.snapshot_store import SnapshotStore
@@ -597,8 +598,14 @@ def create_app(
         app.state.index_component_repo = IndexComponentRepository(db)
         app.state.announcement_repo = AnnouncementRepository(db)
         app.state.second_level_sampler = SecondLevelSampler(SecondLevelSamplingRepository(db))
+        app.state.pair_spread_funding_recorder = PairSpreadFundingRecorder(PairSpreadFundingRepository(db))
         await app.state.second_level_sampler.initialize()
         tasks: list[asyncio.Task] = []
+        _start_background_task(
+            tasks,
+            app.state.pair_spread_funding_recorder.run(stop_event),
+            name="pair-spread-funding-recorder",
+        )
         collector: MarketCollector | None = None
         announcement_provider = None
         if start_collector:
@@ -716,6 +723,7 @@ def create_app(
                 "gate_twap_manager",
                 "tradfi_perp_live_fetcher",
                 "second_level_sampler",
+                "pair_spread_funding_recorder",
                 "feishu_notifier",
             )
             await db.close()
@@ -728,6 +736,7 @@ def create_app(
     app.state.funding_research_repo = None
     app.state.pair_spread_query_service_factory = None
     app.state.premium_index_query_service_factory = None
+    app.state.pair_spread_funding_recorder = None
     app.state.minute_signal_scan_service_factory = None
     app.state.minute_signal_alert_engine = MinuteSignalAlertEngine()
     app.state.second_level_sampler = None

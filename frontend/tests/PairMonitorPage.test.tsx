@@ -230,22 +230,76 @@ function pairSpreadResult(params?: URLSearchParams) {
   };
 }
 
+function pairFundingRecordStatus(watched: boolean) {
+  return {
+    watched,
+    item: watched
+      ? {
+          pair_key: "bitget|future|SKHYUSDT|bitget|future|SKHYNIXUSDT|1|60",
+          leg1: { exchange: "bitget", symbol: "SKHYUSDT", market_type: "future" },
+          leg2: { exchange: "bitget", symbol: "SKHYNIXUSDT", market_type: "future" },
+          leg2_multiplier: 1,
+          interval_seconds: 60,
+          created_at: "2026-07-24T01:58:00Z",
+          updated_at: "2026-07-24T02:02:00Z",
+          sample_count: 3,
+          latest_sample_at: "2026-07-24T02:02:00Z"
+        }
+      : null,
+    samples: watched
+      ? [
+          {
+            bucket_at: "2026-07-24T02:00:00Z",
+            left_rate_pct: 0.01,
+            right_rate_pct: 0.015,
+            net_rate_pct: 0.005,
+            source: "minute_record"
+          },
+          {
+            bucket_at: "2026-07-24T02:01:00Z",
+            left_rate_pct: 0.01,
+            right_rate_pct: 0.02,
+            net_rate_pct: 0.01,
+            source: "minute_record"
+          },
+          {
+            bucket_at: "2026-07-24T02:02:00Z",
+            left_rate_pct: 0.01,
+            right_rate_pct: 0.025,
+            net_rate_pct: 0.015,
+            source: "minute_record"
+          }
+        ]
+      : [],
+    warnings: []
+  };
+}
+
 describe("PairMonitorPage", () => {
   const requests: string[] = [];
+  let fundingRecordWatched = false;
 
   beforeEach(() => {
     requests.length = 0;
+    fundingRecordWatched = false;
     window.history.pushState({}, "", "/");
     window.localStorage.clear();
     window.sessionStorage.clear();
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (input: RequestInfo | URL) => {
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const urlText = String(input);
         requests.push(urlText);
         const url = new URL(urlText, "http://localhost");
         if (url.pathname.includes("/pair-spread/query")) {
           return Response.json(pairSpreadResult(url.searchParams));
+        }
+        if (url.pathname.includes("/pair-spread/funding-records/status")) {
+          return Response.json(pairFundingRecordStatus(fundingRecordWatched));
+        }
+        if (url.pathname.includes("/pair-spread/funding-records/watch")) {
+          fundingRecordWatched = init?.method !== "DELETE";
+          return Response.json(pairFundingRecordStatus(fundingRecordWatched));
         }
         return Response.json({});
       })
@@ -451,18 +505,13 @@ describe("PairMonitorPage", () => {
       (element) => (element as HTMLElement).className
     );
     expect(fundingLayout[0]).toContain("pair-funding-diff-card");
-    expect(fundingLayout[1]).toContain("pair-funding-chart-card");
-    expect(fundingLayout).toHaveLength(2);
-    expect(await screen.findByText("资金费率差走势")).toBeTruthy();
-    expect(document.querySelector(".pair-funding-diff-chart")).toBeTruthy();
-    expect(document.querySelector(".pair-funding-settlement-point")).toBeTruthy();
-    expect(document.querySelector(".pair-funding-settlement-label")).toBeTruthy();
-    expect(document.querySelector(".pair-funding-legend-realtime")).toBeTruthy();
-    expect(document.querySelector(".pair-funding-legend-settlement")).toBeTruthy();
+    expect(fundingLayout).toHaveLength(1);
+    expect(await screen.findByText("未记录分钟费率")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /开始记录/ })).toBeTruthy();
+    expect(document.querySelector(".pair-funding-diff-chart")).toBeNull();
     expect(document.querySelector(".pair-funding-raw-card")).toBeNull();
     const pageText = document.body.textContent ?? "";
-    expect(pageText).toContain("关键标注");
-    expect(pageText).not.toContain("整点标注");
+    expect(pageText).not.toContain("分钟资金费率差图");
     const pageLayout = Array.from(document.querySelector(".pair-monitor-page")?.children ?? []).map((element) =>
       (element as HTMLElement).className.toString()
     );
@@ -473,6 +522,25 @@ describe("PairMonitorPage", () => {
     expect(priceChartIndex).toBe(spreadChartIndex + 1);
     expect(fundingGridIndex).toBeGreaterThan(priceChartIndex);
     expect(pageText.indexOf("标的价格")).toBeLessThan(pageText.indexOf("资金费率差"));
+  });
+
+  it("starts minute funding recording before showing the funding rate difference chart", async () => {
+    const user = userEvent.setup();
+    render(<PairMonitorPage />);
+
+    await user.click(screen.getByRole("button", { name: /查询/ }));
+    await user.click(await screen.findByRole("button", { name: /开始记录/ }));
+
+    await waitFor(() => {
+      expect(requests.some((request) => request.includes("/pair-spread/funding-records/watch"))).toBe(true);
+    });
+    expect(await screen.findByText("分钟资金费率差图")).toBeTruthy();
+    expect(screen.getByText("分钟记录样本")).toBeTruthy();
+    expect(screen.getByText("分钟记录已开启")).toBeTruthy();
+    expect(document.querySelector(".pair-funding-diff-chart")).toBeTruthy();
+    expect(document.querySelector(".pair-minute-funding-point")).toBeTruthy();
+    expect(document.querySelector(".pair-minute-funding-turning-dot")).toBeTruthy();
+    expect((document.querySelector(".pair-funding-diff-chart .pair-funding-chart-line") as SVGPathElement).getAttribute("d")).toContain("L ");
   });
 
   it("uses the realtime current spread as the chart tail point", async () => {

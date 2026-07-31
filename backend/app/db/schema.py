@@ -402,6 +402,36 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
           );
         CREATE INDEX IF NOT EXISTS idx_second_level_component_samples_time
           ON second_level_index_component_samples(observed_at DESC);
+
+        CREATE TABLE IF NOT EXISTS pair_spread_funding_watchlist (
+          pair_key TEXT PRIMARY KEY,
+          leg1_exchange TEXT NOT NULL,
+          leg1_market_type TEXT NOT NULL,
+          leg1_symbol TEXT NOT NULL,
+          leg2_exchange TEXT NOT NULL,
+          leg2_market_type TEXT NOT NULL,
+          leg2_symbol TEXT NOT NULL,
+          leg2_multiplier REAL NOT NULL,
+          interval_seconds INTEGER NOT NULL DEFAULT 60,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS pair_spread_funding_samples (
+          pair_key TEXT NOT NULL,
+          bucket_at TEXT NOT NULL,
+          left_rate_pct REAL,
+          right_rate_pct REAL,
+          net_rate_pct REAL,
+          source TEXT NOT NULL DEFAULT 'minute_record',
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (pair_key, bucket_at),
+          FOREIGN KEY (pair_key) REFERENCES pair_spread_funding_watchlist(pair_key) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_pair_spread_funding_samples_pair_time
+          ON pair_spread_funding_samples(pair_key, bucket_at DESC);
         """
     )
     await _ensure_opportunity_history_columns(db)
