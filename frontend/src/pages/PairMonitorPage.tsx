@@ -851,6 +851,70 @@ function dayCompareRequestLabel(offsetDays: number, labelDate: string): string {
   return offsetDays === 0 ? `基准 ${labelDate}` : `前${offsetDays}天 ${labelDate}`;
 }
 
+function dayCompareTickStepMs(spanHours: number): number {
+  const normalizedHours = Math.max(spanHours, 0);
+  if (normalizedHours <= 2) {
+    return 30 * 60_000;
+  }
+  if (normalizedHours <= 6) {
+    return 60 * 60_000;
+  }
+  if (normalizedHours <= 24) {
+    return 2 * 60 * 60_000;
+  }
+  if (normalizedHours <= 48) {
+    return 4 * 60 * 60_000;
+  }
+  if (normalizedHours <= 72) {
+    return 6 * 60 * 60_000;
+  }
+  if (normalizedHours <= 168) {
+    return 12 * 60 * 60_000;
+  }
+  if (normalizedHours <= 360) {
+    return 24 * 60 * 60_000;
+  }
+  return 72 * 60 * 60_000;
+}
+
+function dayCompareTickTimeLabel(
+  baseStart: ReturnType<typeof dayjs>,
+  elapsedMs: number,
+  spanHours: number
+): string {
+  const tickTime = baseStart.add(elapsedMs, "millisecond").utcOffset(8);
+  if (spanHours < 24) {
+    return tickTime.format("HH:mm");
+  }
+  if (spanHours <= 168) {
+    return tickTime.format("MM-DD HH:mm");
+  }
+  return tickTime.format("MM-DD");
+}
+
+function dayCompareTimeTicks(
+  baseStart: ReturnType<typeof dayjs>,
+  maxElapsedMs: number
+): Array<{ elapsedMs: number; label: string }> {
+  const spanHours = maxElapsedMs / 3_600_000;
+  const stepMs = dayCompareTickStepMs(spanHours);
+  const ticks: Array<{ elapsedMs: number; label: string }> = [];
+  for (let elapsedMs = 0; elapsedMs < maxElapsedMs; elapsedMs += stepMs) {
+    ticks.push({
+      elapsedMs,
+      label: dayCompareTickTimeLabel(baseStart, elapsedMs, spanHours)
+    });
+  }
+  const lastTick = ticks[ticks.length - 1];
+  if (!lastTick || Math.abs(lastTick.elapsedMs - maxElapsedMs) > 60_000) {
+    ticks.push({
+      elapsedMs: maxElapsedMs,
+      label: dayCompareTickTimeLabel(baseStart, maxElapsedMs, spanHours)
+    });
+  }
+  return ticks;
+}
+
 function supportsPremiumCompare(result: PairSpreadQueryResult): boolean {
   return result.leg1.market_type === "future" && result.leg2.market_type === "future";
 }
@@ -1735,14 +1799,8 @@ function PairDayCompareChart({
         return `${index === 0 ? "M" : "L"} ${x.toFixed(2)} ${yAt(point.spread_pct).toFixed(2)}`;
       })
       .join(" ");
-  const tickCount = hours >= 24 ? 7 : 5;
-  const ticks = Array.from({ length: tickCount }, (_, index) => {
-    const elapsedMs = (maxElapsedMs * index) / (tickCount - 1);
-    return {
-      elapsedMs,
-      label: `+${compactNumber(elapsedMs / 3_600_000, hours >= 24 ? 0 : 1)}h`
-    };
-  });
+  const baseSeries = activeSeries.find((item) => item.offsetDays === 0) ?? activeSeries[0];
+  const ticks = dayCompareTimeTicks(dayjs.utc(baseSeries.start_at), maxElapsedMs);
 
   return (
     <div className="pair-day-compare-card">
@@ -1774,7 +1832,7 @@ function PairDayCompareChart({
           const x = xAtElapsed(tick.elapsedMs);
           const textAnchor = index === 0 ? "start" : index === ticks.length - 1 ? "end" : "middle";
           return (
-            <g key={`day-compare-tick-${tick.label}`}>
+            <g key={`day-compare-tick-${tick.elapsedMs}`}>
               <line className="pair-day-compare-time-tick" x1={x} y1={padding.top} x2={x} y2={padding.top + chartHeight} />
               <text className="pair-day-compare-axis-label" x={x} y={height - 12} textAnchor={textAnchor}>
                 {tick.label}

@@ -403,6 +403,12 @@ describe("PairMonitorPage", () => {
       expect(document.querySelector(".pair-day-compare-chart")).toBeTruthy();
       expect(document.querySelectorAll(".pair-day-compare-line").length).toBeGreaterThan(1);
     });
+    const axisLabels = Array.from(document.querySelectorAll(".pair-day-compare-axis-label")).map(
+      (element) => element.textContent ?? ""
+    );
+    expect(axisLabels).toEqual(expect.arrayContaining(["06:00", "07:00", "10:00"]));
+    expect(axisLabels).not.toContain("+0h");
+    expect(axisLabels).not.toContain("+4h");
     const cachedState = JSON.parse(window.sessionStorage.getItem("taoli1.pairSpread.lastState.v1") ?? "{}");
     expect(cachedState.showDayCompare).toBe(true);
     expect(cachedState.dayCompareDays).toBe(3);
@@ -452,6 +458,12 @@ describe("PairMonitorPage", () => {
       expect(document.querySelector(".pair-day-compare-chart")).toBeTruthy();
       expect(screen.getByText("09:00-15:00")).toBeTruthy();
     });
+    const axisLabels = Array.from(document.querySelectorAll(".pair-day-compare-axis-label")).map(
+      (element) => element.textContent ?? ""
+    );
+    expect(axisLabels).toEqual(expect.arrayContaining(["09:00", "10:00", "15:00"]));
+    expect(axisLabels).not.toContain("+0h");
+    expect(axisLabels).not.toContain("+6h");
     const cachedState = JSON.parse(window.sessionStorage.getItem("taoli1.pairSpread.lastState.v1") ?? "{}");
     expect(cachedState.dayCompareMode).toBe("custom");
     expect(cachedState.dayCompareStartTime).toBe("09:00");
