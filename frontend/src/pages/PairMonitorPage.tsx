@@ -380,8 +380,16 @@ function normalizeFormSymbol(exchange: string, symbol: string): string {
   return exchange === "binance_alpha" ? normalizeAlphaSymbol(symbol) : symbol.trim().toUpperCase();
 }
 
+function shortSavedSymbol(symbol: string): string {
+  return symbol.trim().toUpperCase().replace(/(?:USDT|USDC|USD)$/i, "");
+}
+
 function marketTypeText(value: MarketType | null | undefined): string {
   return value === "spot" ? "现货" : "合约";
+}
+
+function marketTypeShortText(value: MarketType | null | undefined): string {
+  return value === "spot" ? "现" : "合";
 }
 
 function legDisplay(exchange: string, marketType: MarketType | null | undefined, symbol: string, suffix = ""): string {
@@ -738,19 +746,71 @@ function leftLegLabel(result: PairSpreadQueryResult | null): string {
   return legDisplay(result.leg1.exchange, result.leg1.market_type, result.leg1.symbol);
 }
 
-function savedPresetLabel(preset: SavedPairSpreadPreset): string {
-  const divisor = preset.leg2_multiplier === 1 ? "" : `/${compactNumber(preset.leg2_multiplier, 4)}`;
+function exchangeToneClass(exchange: string): string {
+  const normalized = exchange.trim().toLowerCase().replace(/_/g, "-");
+  if (["aster", "gate", "hyperliquid", "bybit", "bitget", "binance", "okx", "binance-alpha"].includes(normalized)) {
+    return `pair-exchange-${normalized}`;
+  }
+  return "pair-exchange-default";
+}
+
+function ExchangeChip({
+  exchange,
+  marketType
+}: {
+  exchange: string;
+  marketType: MarketType;
+}) {
+  return (
+    <span className={`pair-exchange-chip ${exchangeToneClass(exchange)}`}>
+      <span>{exchangeLabels[exchange] ?? exchange}</span>
+      <span className="pair-exchange-market">{marketTypeShortText(marketType)}</span>
+    </span>
+  );
+}
+
+function SavedPairPresetContent({ preset }: { preset: SavedPairSpreadPreset }) {
+  const leftSymbol = shortSavedSymbol(preset.leg1_symbol);
+  const rightSymbol = shortSavedSymbol(preset.leg2_symbol);
+  const sameSymbol = leftSymbol === rightSymbol;
+  const sameVenue = preset.leg1_exchange === preset.leg2_exchange && preset.leg1_market_type === preset.leg2_market_type;
+  const multiplierText = preset.leg2_multiplier === 1 ? "" : `右×${compactNumber(preset.leg2_multiplier, 4)}`;
   const dayCompareSettings = normalizeDayCompareSettings({
     mode: preset.dayCompareMode,
     startTime: preset.dayCompareStartTime,
     endTime: preset.dayCompareEndTime
   });
-  const compareText = preset.showDayCompare
-    ? ` · 同时段${preset.dayCompareDays}天${dayCompareSettingsLabel(dayCompareSettings)}`
-    : "";
+  const compareText = preset.showDayCompare ? `同时段${preset.dayCompareDays}天${dayCompareSettingsLabel(dayCompareSettings)}` : "";
   return (
-    `${preset.leg1_exchange} ${marketTypeText(preset.leg1_market_type)} ${preset.leg1_symbol} / ` +
-    `${preset.leg2_exchange} ${marketTypeText(preset.leg2_market_type)} ${preset.leg2_symbol}${divisor}${compareText}`
+    <span className="pair-saved-main">
+      {sameSymbol ? (
+        <>
+          <span className="pair-saved-symbol">{leftSymbol}</span>
+          <span className="pair-saved-exchanges">
+            <ExchangeChip exchange={preset.leg1_exchange} marketType={preset.leg1_market_type} />
+            <span className="pair-saved-separator">/</span>
+            <ExchangeChip exchange={preset.leg2_exchange} marketType={preset.leg2_market_type} />
+          </span>
+        </>
+      ) : sameVenue ? (
+        <>
+          <ExchangeChip exchange={preset.leg1_exchange} marketType={preset.leg1_market_type} />
+          <span className="pair-saved-symbol">
+            {leftSymbol} / {rightSymbol}
+          </span>
+        </>
+      ) : (
+        <>
+          <ExchangeChip exchange={preset.leg1_exchange} marketType={preset.leg1_market_type} />
+          <span className="pair-saved-symbol">{leftSymbol}</span>
+          <span className="pair-saved-separator">/</span>
+          <ExchangeChip exchange={preset.leg2_exchange} marketType={preset.leg2_market_type} />
+          <span className="pair-saved-symbol">{rightSymbol}</span>
+        </>
+      )}
+      {multiplierText ? <span className="pair-saved-badge">{multiplierText}</span> : null}
+      {compareText ? <span className="pair-saved-badge">{compareText}</span> : null}
+    </span>
   );
 }
 
@@ -3149,6 +3209,14 @@ export function PairMonitorPage() {
     setDayCompareSeries([]);
     setDayCompareError("");
     setError("");
+    void runQuery({
+      values,
+      hours: nextHours,
+      intervalSeconds: nextIntervalSeconds,
+      dayCompareEnabled: nextShowDayCompare,
+      dayCompareDays: nextDayCompareDays,
+      dayCompareSettings: nextDayCompareSettings
+    });
   };
 
   const current = result?.current;
@@ -3488,7 +3556,7 @@ export function PairMonitorPage() {
                     removeSavedPreset(preset.id);
                   }}
                 >
-                  <span>{savedPresetLabel(preset)}</span>
+                  <SavedPairPresetContent preset={preset} />
                   <span className="pair-saved-meta">
                     {durationLabel(preset.hours)} · {intervalLabel(preset.intervalSeconds)}
                   </span>

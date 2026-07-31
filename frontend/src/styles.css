@@ -1323,13 +1323,132 @@ body {
   margin-inline-end: 0;
   padding: 2px 8px;
   cursor: pointer;
-  border-color: #b8d8ff;
-  color: #1256a0;
-  background: #f2f8ff;
+  border-color: #d8e3e0;
+  color: #17211d;
+  background: #fbfdfc;
 }
 
-.pair-saved-tag span:first-child,
-.premium-saved-tag span:first-child {
+.pair-saved-tag:hover,
+.premium-saved-tag:hover {
+  border-color: #9fc9be;
+  background: #f5fbf8;
+}
+
+.pair-saved-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.pair-saved-symbol {
+  min-width: 0;
+  max-width: 120px;
+  overflow: hidden;
+  color: #17211d;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pair-saved-exchanges {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.pair-saved-separator {
+  flex: 0 0 auto;
+  color: #7d8c87;
+  font-weight: 800;
+}
+
+.pair-exchange-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+  max-width: 112px;
+  padding: 1px 6px;
+  overflow: hidden;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 18px;
+}
+
+.pair-exchange-chip > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pair-exchange-market {
+  flex: 0 0 auto;
+  padding-left: 3px;
+  border-left: 1px solid currentColor;
+  font-size: 11px;
+  opacity: 0.72;
+}
+
+.pair-exchange-aster {
+  color: #0f766e;
+  background: #ecfdf5;
+}
+
+.pair-exchange-gate {
+  color: #b45309;
+  background: #fff7ed;
+}
+
+.pair-exchange-hyperliquid {
+  color: #047857;
+  background: #f0fdf4;
+}
+
+.pair-exchange-bybit {
+  color: #92400e;
+  background: #fffbeb;
+}
+
+.pair-exchange-bitget {
+  color: #0369a1;
+  background: #eff6ff;
+}
+
+.pair-exchange-binance,
+.pair-exchange-binance-alpha {
+  color: #854d0e;
+  background: #fefce8;
+}
+
+.pair-exchange-okx {
+  color: #334155;
+  background: #f1f5f9;
+}
+
+.pair-exchange-default {
+  color: #475569;
+  background: #f8fafc;
+}
+
+.pair-saved-badge {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  color: #52645f;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 18px;
+  background: #eef4f1;
+  border-radius: 4px;
+}
+
+.premium-saved-tag > span:first-child {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

@@ -355,7 +355,11 @@ describe("PairMonitorPage", () => {
 
     render(<PairMonitorPage />);
 
-    expect(screen.getByText("bybit 合约 DEXE / bitget 合约 DEXE")).toBeTruthy();
+    const savedTag = document.querySelector(".pair-saved-tag") as HTMLElement;
+    expect(savedTag.textContent).toContain("DEXE");
+    expect(savedTag.textContent).not.toContain("DEXEUSDT");
+    expect(document.querySelector(".pair-exchange-bybit")).toBeTruthy();
+    expect(document.querySelector(".pair-exchange-bitget")).toBeTruthy();
   });
 
   it("uses 5-second pair spread queries by default", async () => {
@@ -522,7 +526,7 @@ describe("PairMonitorPage", () => {
     expect(requests.some((request) => request.includes("/pair-spread/query"))).toBe(false);
   });
 
-  it("fills a saved preset without querying immediately", async () => {
+  it("queries immediately when selecting a saved preset", async () => {
     const user = userEvent.setup();
     window.localStorage.setItem(
       "taoli1.pairSpread.presets.v1",
@@ -548,13 +552,32 @@ describe("PairMonitorPage", () => {
     requests.length = 0;
 
     const savedTag = document.querySelector(".pair-saved-tag") as HTMLElement;
+    expect(savedTag.textContent).toContain("CXMT");
+    expect(savedTag.textContent).not.toContain("CXMTUSDT");
+    expect((savedTag.textContent?.match(/CXMT/g) ?? []).length).toBe(1);
+    expect(document.querySelector(".pair-exchange-aster")).toBeTruthy();
+    expect(document.querySelector(".pair-exchange-gate")).toBeTruthy();
     await user.click(savedTag);
 
     expect((screen.getByPlaceholderText("SKHY") as HTMLInputElement).value).toBe("CXMTUSDT");
     expect((screen.getByPlaceholderText("SKHYNIX") as HTMLInputElement).value).toBe("CXMTUSDT");
     expect((document.querySelector(".pair-query-hours input") as HTMLInputElement).value).toBe("12");
     expect((screen.getByRole("spinbutton", { name: /同时段对比天数/ }) as HTMLInputElement).value).toBe("4");
-    expect(requests.some((request) => request.includes("/pair-spread/query"))).toBe(false);
+    await waitFor(() => {
+      expect(
+        requests.some(
+          (request) =>
+            request.includes("/pair-spread/query") &&
+            request.includes("leg1_exchange=aster") &&
+            request.includes("leg2_exchange=gate") &&
+            request.includes("leg1_symbol=CXMTUSDT") &&
+            request.includes("leg2_symbol=CXMTUSDT") &&
+            request.includes("hours=12") &&
+            request.includes("interval_seconds=60") &&
+            !request.includes("include_current=false")
+        )
+      ).toBe(true);
+    });
   });
 
   it("shows the funding rate difference table", async () => {
