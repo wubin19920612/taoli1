@@ -1308,24 +1308,26 @@ body {
 
 .pair-saved-list,
 .premium-saved-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   min-width: 0;
 }
 
 .pair-saved-tag,
 .premium-saved-tag {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 6px;
-  max-width: 100%;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
   margin-inline-end: 0;
-  padding: 2px 8px;
+  padding: 4px 10px;
   cursor: pointer;
   border-color: #d8e3e0;
   color: #17211d;
   background: #fbfdfc;
+  border-radius: 6px;
 }
 
 .pair-saved-tag:hover,
@@ -1335,9 +1337,10 @@ body {
 }
 
 .pair-saved-main {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 5px;
+  flex: 1 1 auto;
+  gap: 6px;
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
@@ -1458,8 +1461,10 @@ body {
 .pair-saved-meta,
 .premium-saved-meta {
   flex: 0 0 auto;
+  margin-left: auto;
   color: #687872;
   font-size: 12px;
+  white-space: nowrap;
 }
 
 .pair-metric-grid {
