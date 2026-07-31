@@ -408,6 +408,62 @@ describe("PairMonitorPage", () => {
     expect(cachedState.dayCompareDays).toBe(3);
   });
 
+  it("loads same-time comparison for a custom Beijing time window", async () => {
+    const user = userEvent.setup();
+    render(<PairMonitorPage />);
+
+    await user.click(screen.getByRole("button", { name: /查询/ }));
+    await waitFor(() => {
+      expect(document.querySelector(".pair-chart-card")).toBeTruthy();
+    });
+    requests.length = 0;
+
+    await user.click(screen.getByRole("switch", { name: /同时段/ }));
+    await waitFor(() => {
+      expect(requests.filter((request) => request.includes("include_current=false"))).toHaveLength(2);
+    });
+    requests.length = 0;
+
+    await user.click(screen.getByText("指定时间"));
+    fireEvent.change(screen.getByLabelText("同时段开始时间"), { target: { value: "09:00" } });
+    fireEvent.change(screen.getByLabelText("同时段结束时间"), { target: { value: "15:00" } });
+
+    await new Promise((resolve) => window.setTimeout(resolve, 20));
+    expect(requests.some((request) => request.includes("/pair-spread/query"))).toBe(false);
+
+    await user.click(screen.getByRole("button", { name: /查询同时段/ }));
+
+    await waitFor(() => {
+      expect(requests.filter((request) => request.includes("include_current=false"))).toHaveLength(3);
+    });
+    const compareRequests = requests
+      .map((request) => new URL(request, "http://localhost"))
+      .filter((url) => url.searchParams.get("include_current") === "false");
+    expect(compareRequests.every((url) => url.searchParams.get("interval_seconds") === "60")).toBe(true);
+    expect(compareRequests.every((url) => url.searchParams.get("interval_minutes") === "1")).toBe(true);
+    expect(compareRequests.every((url) => url.searchParams.get("hours") === "6")).toBe(true);
+    expect(compareRequests.map((url) => url.searchParams.get("end_at"))).toEqual([
+      "2026-07-23T07:00:00.000Z",
+      "2026-07-22T07:00:00.000Z",
+      "2026-07-21T07:00:00.000Z"
+    ]);
+
+    await waitFor(() => {
+      expect(document.querySelector(".pair-day-compare-chart")).toBeTruthy();
+      expect(screen.getByText("09:00-15:00")).toBeTruthy();
+    });
+    const cachedState = JSON.parse(window.sessionStorage.getItem("taoli1.pairSpread.lastState.v1") ?? "{}");
+    expect(cachedState.dayCompareMode).toBe("custom");
+    expect(cachedState.dayCompareStartTime).toBe("09:00");
+    expect(cachedState.dayCompareEndTime).toBe("15:00");
+
+    await user.click(screen.getByRole("button", { name: /保存/ }));
+    const savedPreset = JSON.parse(window.localStorage.getItem("taoli1.pairSpread.presets.v1") ?? "[]")[0];
+    expect(savedPreset.dayCompareMode).toBe("custom");
+    expect(savedPreset.dayCompareStartTime).toBe("09:00");
+    expect(savedPreset.dayCompareEndTime).toBe("15:00");
+  });
+
   it("sends a custom second interval when selected", async () => {
     const user = userEvent.setup();
     render(<PairMonitorPage />);

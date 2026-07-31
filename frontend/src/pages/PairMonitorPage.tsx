@@ -67,6 +67,9 @@ type SavedPairSpreadPreset = PairSpreadFormValues & {
   intervalSeconds: number;
   showDayCompare: boolean;
   dayCompareDays: number;
+  dayCompareMode: DayCompareWindowMode;
+  dayCompareStartTime: string;
+  dayCompareEndTime: string;
   savedAt: string;
 };
 
@@ -77,6 +80,9 @@ type LegacySavedPairSpreadPreset = LegacyPairSpreadFormValues & {
   intervalSeconds?: number;
   showDayCompare?: boolean;
   dayCompareDays?: number;
+  dayCompareMode?: string;
+  dayCompareStartTime?: string;
+  dayCompareEndTime?: string;
   savedAt: string;
 };
 
@@ -91,9 +97,27 @@ type PairDayCompareSeries = {
   label: string;
   points: PairSpreadPoint[];
   warnings: string[];
+  start_at: string;
+  end_at: string;
 };
 
 type PairPriceChartMode = "auto" | "raw" | "indexed";
+type DayCompareWindowMode = "query" | "custom";
+type DayCompareSettings = {
+  mode: DayCompareWindowMode;
+  startTime: string;
+  endTime: string;
+};
+type DayCompareWindowPlan = {
+  mode: DayCompareWindowMode;
+  baseStart: ReturnType<typeof dayjs>;
+  baseEnd: ReturnType<typeof dayjs>;
+  durationHours: number;
+  queryHours: number;
+  intervalSeconds: number;
+  useCurrentResult: boolean;
+  rangeLabel: string;
+};
 
 type LastPairSpreadState = {
   values: PairSpreadFormValues;
@@ -101,6 +125,9 @@ type LastPairSpreadState = {
   intervalSeconds: number;
   showDayCompare: boolean;
   dayCompareDays: number;
+  dayCompareMode: DayCompareWindowMode;
+  dayCompareStartTime: string;
+  dayCompareEndTime: string;
   result: PairSpreadQueryResult;
   savedAt: string;
 };
@@ -169,6 +196,12 @@ const PAIR_SPREAD_PRESETS_KEY = "taoli1.pairSpread.presets.v1";
 const MAX_SAVED_PAIR_PRESETS = 24;
 const DEFAULT_DAY_COMPARE_DAYS = 3;
 const MAX_DAY_COMPARE_DAYS = 7;
+const DEFAULT_DAY_COMPARE_SETTINGS: DayCompareSettings = {
+  mode: "query",
+  startTime: "",
+  endTime: ""
+};
+const DAY_COMPARE_CLOCK_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
 const priceFieldLabels: Record<PairSpreadPriceField, string> = {
   mark_price: "标记价",
@@ -247,6 +280,36 @@ function clampDayCompareDays(value: number | null | undefined): number {
     return DEFAULT_DAY_COMPARE_DAYS;
   }
   return Math.min(MAX_DAY_COMPARE_DAYS, Math.max(2, Math.round(value)));
+}
+
+function normalizeDayCompareMode(value: unknown): DayCompareWindowMode {
+  return value === "custom" ? "custom" : "query";
+}
+
+function normalizeClockTime(value: unknown): string {
+  if (typeof value !== "string") {
+    return "";
+  }
+  const normalized = value.trim();
+  return DAY_COMPARE_CLOCK_PATTERN.test(normalized) ? normalized : "";
+}
+
+function normalizeDayCompareSettings(value: {
+  mode?: unknown;
+  startTime?: unknown;
+  endTime?: unknown;
+}): DayCompareSettings {
+  return {
+    mode: normalizeDayCompareMode(value.mode),
+    startTime: normalizeClockTime(value.startTime),
+    endTime: normalizeClockTime(value.endTime)
+  };
+}
+
+function dayCompareSettingsLabel(settings: DayCompareSettings): string {
+  return settings.mode === "custom" && settings.startTime && settings.endTime
+    ? ` · ${settings.startTime}-${settings.endTime}`
+    : "";
 }
 
 function intervalSecondsFromLegacy(value: unknown): number {
@@ -499,12 +562,20 @@ function loadLastPairSpreadState(): LastPairSpreadState | null {
       ...parsed.result,
       interval_seconds: parsed.result.interval_seconds ?? intervalSeconds
     };
+    const dayCompareSettings = normalizeDayCompareSettings({
+      mode: (parsed as { dayCompareMode?: unknown }).dayCompareMode,
+      startTime: (parsed as { dayCompareStartTime?: unknown }).dayCompareStartTime,
+      endTime: (parsed as { dayCompareEndTime?: unknown }).dayCompareEndTime
+    });
     return {
       values,
       hours: clampHours(parsed.hours),
       intervalSeconds,
       showDayCompare: Boolean((parsed as { showDayCompare?: unknown }).showDayCompare),
       dayCompareDays: clampDayCompareDays((parsed as { dayCompareDays?: number }).dayCompareDays),
+      dayCompareMode: dayCompareSettings.mode,
+      dayCompareStartTime: dayCompareSettings.startTime,
+      dayCompareEndTime: dayCompareSettings.endTime,
       result,
       savedAt: parsed.savedAt
     };
@@ -519,17 +590,22 @@ function storeLastPairSpreadState(
   intervalSeconds: number,
   result: PairSpreadQueryResult,
   showDayCompare = false,
-  dayCompareDays = DEFAULT_DAY_COMPARE_DAYS
+  dayCompareDays = DEFAULT_DAY_COMPARE_DAYS,
+  dayCompareSettings = DEFAULT_DAY_COMPARE_SETTINGS
 ): void {
   if (typeof window === "undefined") {
     return;
   }
+  const normalizedDayCompareSettings = normalizeDayCompareSettings(dayCompareSettings);
   const state: LastPairSpreadState = {
     values,
     hours: clampHours(hours),
     intervalSeconds: clampIntervalSeconds(intervalSeconds),
     showDayCompare,
     dayCompareDays: clampDayCompareDays(dayCompareDays),
+    dayCompareMode: normalizedDayCompareSettings.mode,
+    dayCompareStartTime: normalizedDayCompareSettings.startTime,
+    dayCompareEndTime: normalizedDayCompareSettings.endTime,
     result,
     savedAt: new Date().toISOString()
   };
@@ -560,12 +636,20 @@ function isSavedPreset(value: unknown): value is LegacySavedPairSpreadPreset {
     typeof item.savedAt === "string" &&
     (item.showDayCompare === undefined || typeof item.showDayCompare === "boolean") &&
     (item.dayCompareDays === undefined || typeof item.dayCompareDays === "number") &&
+    (item.dayCompareMode === undefined || typeof item.dayCompareMode === "string") &&
+    (item.dayCompareStartTime === undefined || typeof item.dayCompareStartTime === "string") &&
+    (item.dayCompareEndTime === undefined || typeof item.dayCompareEndTime === "string") &&
     hasValidMarketTypes
   );
 }
 
 function normalizeSavedPreset(preset: LegacySavedPairSpreadPreset): SavedPairSpreadPreset {
   const values = normalizePairForm(preset);
+  const dayCompareSettings = normalizeDayCompareSettings({
+    mode: preset.dayCompareMode,
+    startTime: preset.dayCompareStartTime,
+    endTime: preset.dayCompareEndTime
+  });
   return {
     ...preset,
     ...values,
@@ -577,6 +661,9 @@ function normalizeSavedPreset(preset: LegacySavedPairSpreadPreset): SavedPairSpr
         : intervalSecondsFromLegacy(preset.intervalMinutes),
     showDayCompare: Boolean(preset.showDayCompare),
     dayCompareDays: clampDayCompareDays(preset.dayCompareDays),
+    dayCompareMode: dayCompareSettings.mode,
+    dayCompareStartTime: dayCompareSettings.startTime,
+    dayCompareEndTime: dayCompareSettings.endTime,
     savedAt: preset.savedAt
   };
 }
@@ -623,9 +710,10 @@ function chartTime(value: string | null | undefined, spanHours: number): string 
 
 function durationLabel(hours: number): string {
   if (hours < 24) {
-    return `${hours}小时`;
+    return `${compactNumber(hours, hours % 1 === 0 ? 0 : 1)}小时`;
   }
-  return `${hours / 24}天`;
+  const days = hours / 24;
+  return `${compactNumber(days, days % 1 === 0 ? 0 : 1)}天`;
 }
 
 function dataRangeLabel(result: PairSpreadQueryResult | null, fallbackHours: number): string {
@@ -652,7 +740,14 @@ function leftLegLabel(result: PairSpreadQueryResult | null): string {
 
 function savedPresetLabel(preset: SavedPairSpreadPreset): string {
   const divisor = preset.leg2_multiplier === 1 ? "" : `/${compactNumber(preset.leg2_multiplier, 4)}`;
-  const compareText = preset.showDayCompare ? ` · 同时段${preset.dayCompareDays}天` : "";
+  const dayCompareSettings = normalizeDayCompareSettings({
+    mode: preset.dayCompareMode,
+    startTime: preset.dayCompareStartTime,
+    endTime: preset.dayCompareEndTime
+  });
+  const compareText = preset.showDayCompare
+    ? ` · 同时段${preset.dayCompareDays}天${dayCompareSettingsLabel(dayCompareSettings)}`
+    : "";
   return (
     `${preset.leg1_exchange} ${marketTypeText(preset.leg1_market_type)} ${preset.leg1_symbol} / ` +
     `${preset.leg2_exchange} ${marketTypeText(preset.leg2_market_type)} ${preset.leg2_symbol}${divisor}${compareText}`
@@ -661,6 +756,99 @@ function savedPresetLabel(preset: SavedPairSpreadPreset): string {
 
 function resultIntervalSeconds(result: PairSpreadQueryResult): number {
   return clampIntervalSeconds(result.interval_seconds ?? result.interval_minutes * 60);
+}
+
+function clockTimeParts(value: string): { hour: number; minute: number } | null {
+  const match = DAY_COMPARE_CLOCK_PATTERN.exec(value);
+  if (!match) {
+    return null;
+  }
+  return { hour: Number(match[1]), minute: Number(match[2]) };
+}
+
+function localDateTimeWithClock(anchor: ReturnType<typeof dayjs>, clockTime: string): ReturnType<typeof dayjs> {
+  const parts = clockTimeParts(clockTime);
+  if (!parts) {
+    throw new Error("同时段开始和结束时间格式不正确。");
+  }
+  return anchor.hour(parts.hour).minute(parts.minute).second(0).millisecond(0);
+}
+
+function filterPairPointsByWindow(
+  points: PairSpreadPoint[],
+  start: ReturnType<typeof dayjs>,
+  end: ReturnType<typeof dayjs>
+): PairSpreadPoint[] {
+  const startMs = start.valueOf();
+  const endMs = end.valueOf();
+  return points.filter((point) => {
+    const pointMs = dayjs.utc(point.bucket_at).valueOf();
+    return Number.isFinite(pointMs) && pointMs >= startMs && pointMs <= endMs;
+  });
+}
+
+function buildDayCompareWindowPlan(
+  pairResult: PairSpreadQueryResult,
+  settings: DayCompareSettings
+): DayCompareWindowPlan {
+  const intervalSeconds = historicalCompareIntervalSeconds(resultIntervalSeconds(pairResult));
+  const observedAt = dayjs.utc(pairResult.observed_at);
+  if (settings.mode !== "custom") {
+    return {
+      mode: "query",
+      baseStart: observedAt.subtract(pairResult.hours, "hour"),
+      baseEnd: observedAt,
+      durationHours: pairResult.hours,
+      queryHours: pairResult.hours,
+      intervalSeconds,
+      useCurrentResult: true,
+      rangeLabel: "跟随查询"
+    };
+  }
+  if (!settings.startTime || !settings.endTime) {
+    throw new Error("请先填写同时段开始时间和结束时间。");
+  }
+
+  // 自定义窗口按北京时间解释，然后对每个历史日期平移同一段时间。
+  const observedLocal = observedAt.utcOffset(8);
+  let baseStart = localDateTimeWithClock(observedLocal, settings.startTime);
+  let baseEnd = localDateTimeWithClock(observedLocal, settings.endTime);
+  if (!baseEnd.isAfter(baseStart)) {
+    baseEnd = baseEnd.add(1, "day");
+  }
+  while (baseEnd.isAfter(observedLocal)) {
+    baseStart = baseStart.subtract(1, "day");
+    baseEnd = baseEnd.subtract(1, "day");
+  }
+
+  const durationHours = (baseEnd.valueOf() - baseStart.valueOf()) / 3_600_000;
+  if (!Number.isFinite(durationHours) || durationHours <= 0) {
+    throw new Error("同时段开始时间必须早于结束时间。");
+  }
+  return {
+    mode: "custom",
+    baseStart,
+    baseEnd,
+    durationHours,
+    queryHours: clampHours(Math.ceil(durationHours)),
+    intervalSeconds,
+    useCurrentResult: false,
+    rangeLabel: `${settings.startTime}-${settings.endTime}`
+  };
+}
+
+function shiftedDayCompareWindow(
+  plan: DayCompareWindowPlan,
+  offsetDays: number
+): { start: ReturnType<typeof dayjs>; end: ReturnType<typeof dayjs> } {
+  return {
+    start: plan.baseStart.subtract(offsetDays, "day"),
+    end: plan.baseEnd.subtract(offsetDays, "day")
+  };
+}
+
+function dayCompareRequestLabel(offsetDays: number, labelDate: string): string {
+  return offsetDays === 0 ? `基准 ${labelDate}` : `前${offsetDays}天 ${labelDate}`;
 }
 
 function supportsPremiumCompare(result: PairSpreadQueryResult): boolean {
@@ -1490,12 +1678,14 @@ function PairDayCompareChart({
   series,
   loading,
   hours,
-  intervalSeconds
+  intervalSeconds,
+  rangeLabel
 }: {
   series: PairDayCompareSeries[];
   loading: boolean;
   hours: number;
   intervalSeconds: number;
+  rangeLabel: string;
 }) {
   const activeSeries = series.filter((item) => item.points.length > 0);
   const width = 1180;
@@ -1528,15 +1718,15 @@ function PairDayCompareChart({
   const maxElapsedMs = Math.max(
     expectedWindowMs,
     ...activeSeries.map((item) => {
-      const first = dayjs.utc(item.points[0].bucket_at).valueOf();
-      const last = dayjs.utc(item.points[item.points.length - 1].bucket_at).valueOf();
+      const first = dayjs.utc(item.start_at).valueOf();
+      const last = dayjs.utc(item.end_at).valueOf();
       return Math.max(last - first, 0);
     })
   );
   const xAtElapsed = (elapsedMs: number) => padding.left + (Math.max(elapsedMs, 0) / maxElapsedMs) * chartWidth;
   const yAt = (value: number) => padding.top + ((max - value) / (max - min)) * chartHeight;
   const elapsedAt = (item: PairDayCompareSeries, point: PairSpreadPoint) =>
-    Math.max(dayjs.utc(point.bucket_at).valueOf() - dayjs.utc(item.points[0].bucket_at).valueOf(), 0);
+    Math.max(dayjs.utc(point.bucket_at).valueOf() - dayjs.utc(item.start_at).valueOf(), 0);
   const colors = ["#2563eb", "#f97316", "#0f766e", "#7c3aed", "#b42318", "#0891b2", "#64748b"];
   const linePath = (item: PairDayCompareSeries) =>
     item.points
@@ -1560,6 +1750,7 @@ function PairDayCompareChart({
         <Typography.Title level={5}>同时段价差对比</Typography.Title>
         <div className="pair-day-compare-summary">
           <Tag color="blue">{durationLabel(hours)}</Tag>
+          {rangeLabel ? <Tag>{rangeLabel}</Tag> : null}
           <Tag>{intervalLabel(intervalSeconds)} 周期</Tag>
           <Tag>{activeSeries.length} 天</Tag>
           {loading ? <Tag color="processing">刷新中</Tag> : null}
@@ -2328,6 +2519,11 @@ export function PairMonitorPage() {
   }, [initialUrlQuery]);
   const initialDayCompareEnabled = initialCachedState?.showDayCompare ?? false;
   const initialDayCompareHistoryDays = initialCachedState?.dayCompareDays ?? DEFAULT_DAY_COMPARE_DAYS;
+  const initialDayCompareSettings = normalizeDayCompareSettings({
+    mode: initialCachedState?.dayCompareMode,
+    startTime: initialCachedState?.dayCompareStartTime,
+    endTime: initialCachedState?.dayCompareEndTime
+  });
   const initialUrlQueryKey =
     initialCachedState && initialUrlQuery
       ? pairQueryKey(initialUrlQuery.values, initialUrlQuery.hours, initialUrlQuery.intervalSeconds)
@@ -2345,6 +2541,9 @@ export function PairMonitorPage() {
   const [showPremiumCompare, setShowPremiumCompare] = useState(false);
   const [showDayCompare, setShowDayCompare] = useState(() => initialDayCompareEnabled);
   const [dayCompareDays, setDayCompareDays] = useState(() => initialDayCompareHistoryDays);
+  const [dayCompareMode, setDayCompareMode] = useState<DayCompareWindowMode>(() => initialDayCompareSettings.mode);
+  const [dayCompareStartTime, setDayCompareStartTime] = useState(() => initialDayCompareSettings.startTime);
+  const [dayCompareEndTime, setDayCompareEndTime] = useState(() => initialDayCompareSettings.endTime);
   const [savedPresets, setSavedPresets] = useState<SavedPairSpreadPreset[]>(() => loadSavedPairPresets());
   const [result, setResult] = useState<PairSpreadQueryResult | null>(() => initialCachedState?.result ?? null);
   const [premiumCompare, setPremiumCompare] = useState<PairPremiumCompareResult | null>(null);
@@ -2373,6 +2572,14 @@ export function PairMonitorPage() {
   const latestFundingDiff =
     realtimeFundingDiffRows.find((row) => finiteRate(row.net_rate_pct) !== null) ??
     fundingDiffRows.find((row) => finiteRate(row.net_rate_pct) !== null);
+  const dayCompareSettings = useMemo(
+    () => normalizeDayCompareSettings({
+      mode: dayCompareMode,
+      startTime: dayCompareStartTime,
+      endTime: dayCompareEndTime
+    }),
+    [dayCompareMode, dayCompareEndTime, dayCompareStartTime]
+  );
   const fundingDiffColumns = useMemo<ColumnsType<FundingRateDiffRow>>(
     () => [
       {
@@ -2557,24 +2764,38 @@ export function PairMonitorPage() {
     }
   }, []);
 
-  const loadDayCompare = useCallback(async (pairResult: PairSpreadQueryResult, days = dayCompareDays) => {
-    const compareDays = clampDayCompareDays(days);
-    const baseValues = pairFormFromResult(pairResult);
-    const compareIntervalSeconds = historicalCompareIntervalSeconds(resultIntervalSeconds(pairResult));
-    const baseEnd = dayjs.utc(pairResult.observed_at);
-    const currentSeries: PairDayCompareSeries = {
-      offsetDays: 0,
-      label: `今天 ${baseEnd.utcOffset(8).format("MM-DD")}`,
-      points: pairDisplayPoints(pairResult),
-      warnings: pairResult.warnings
-    };
+  const loadDayCompare = useCallback(async (
+    pairResult: PairSpreadQueryResult,
+    days = dayCompareDays,
+    settings = dayCompareSettings
+  ) => {
     setDayCompareLoading(true);
     setDayCompareError("");
     try {
-      const offsets = Array.from({ length: compareDays - 1 }, (_, index) => index + 1);
+      const compareDays = clampDayCompareDays(days);
+      const compareSettings = normalizeDayCompareSettings(settings);
+      const plan = buildDayCompareWindowPlan(pairResult, compareSettings);
+      const baseValues = pairFormFromResult(pairResult);
+      const baseEnd = plan.baseEnd;
+      const baseWindow = shiftedDayCompareWindow(plan, 0);
+      const currentSeries: PairDayCompareSeries = {
+        offsetDays: 0,
+        label: `${plan.mode === "custom" ? "基准" : "今天"} ${baseEnd.utcOffset(8).format("MM-DD")}`,
+        points: plan.useCurrentResult
+          ? pairDisplayPoints(pairResult)
+          : filterPairPointsByWindow(pairDisplayPoints(pairResult), baseWindow.start, baseWindow.end),
+        warnings: pairResult.warnings,
+        start_at: baseWindow.start.toISOString(),
+        end_at: baseWindow.end.toISOString()
+      };
+      const offsets = Array.from(
+        { length: plan.useCurrentResult ? compareDays - 1 : compareDays },
+        (_, index) => plan.useCurrentResult ? index + 1 : index
+      );
       const settled = await Promise.allSettled(
-        offsets.map((offsetDays) =>
-          queryPairSpread({
+        offsets.map((offsetDays) => {
+          const window = shiftedDayCompareWindow(plan, offsetDays);
+          return queryPairSpread({
             leg1_exchange: baseValues.leg1_exchange,
             leg1_market_type: baseValues.leg1_market_type,
             leg1_symbol: baseValues.leg1_symbol,
@@ -2582,51 +2803,56 @@ export function PairMonitorPage() {
             leg2_market_type: baseValues.leg2_market_type,
             leg2_symbol: baseValues.leg2_symbol,
             leg2_multiplier: baseValues.leg2_multiplier,
-            hours: pairResult.hours,
-            interval_minutes: intervalMinutesParam(compareIntervalSeconds),
-            interval_seconds: compareIntervalSeconds,
-            end_at: baseEnd.subtract(offsetDays, "day").toISOString(),
+            hours: plan.queryHours,
+            interval_minutes: intervalMinutesParam(plan.intervalSeconds),
+            interval_seconds: plan.intervalSeconds,
+            end_at: window.end.toISOString(),
             include_current: false
-          })
-        )
+          });
+        })
       );
       const warnings: string[] = [];
       const historicalSeries = settled.flatMap((item, index): PairDayCompareSeries[] => {
         const offsetDays = offsets[index];
-        const labelDate = baseEnd.subtract(offsetDays, "day").utcOffset(8).format("MM-DD");
+        const window = shiftedDayCompareWindow(plan, offsetDays);
+        const labelDate = window.end.utcOffset(8).format("MM-DD");
+        const requestLabel = dayCompareRequestLabel(offsetDays, labelDate);
         if (item.status === "rejected") {
-          warnings.push(`前${offsetDays}天 ${labelDate} 加载失败：${item.reason instanceof Error ? item.reason.message : String(item.reason)}`);
+          warnings.push(`${requestLabel} 加载失败：${item.reason instanceof Error ? item.reason.message : String(item.reason)}`);
           return [];
         }
         if (item.value.warnings.length) {
-          warnings.push(`前${offsetDays}天 ${labelDate}：${item.value.warnings.join("；")}`);
+          warnings.push(`${requestLabel}：${item.value.warnings.join("；")}`);
         }
+        const points = filterPairPointsByWindow(item.value.points, window.start, window.end);
         return [
           {
             offsetDays,
-            label: `前${offsetDays}天 ${labelDate}`,
-            points: item.value.points,
-            warnings: item.value.warnings
+            label: requestLabel,
+            points,
+            warnings: item.value.warnings,
+            start_at: window.start.toISOString(),
+            end_at: window.end.toISOString()
           }
         ];
       });
-      setDayCompareSeries([currentSeries, ...historicalSeries]);
+      setDayCompareSeries(plan.useCurrentResult ? [currentSeries, ...historicalSeries] : historicalSeries);
       setDayCompareError(warnings.join("；"));
     } catch (exc) {
-      setDayCompareSeries([currentSeries]);
+      setDayCompareSeries([]);
       setDayCompareError(exc instanceof Error ? exc.message : String(exc));
     } finally {
       setDayCompareLoading(false);
     }
-  }, [dayCompareDays]);
+  }, [dayCompareDays, dayCompareSettings]);
 
   useEffect(() => {
     if (initialDayCompareLoadedRef.current || !initialDayCompareEnabled || !result || !showDayCompare) {
       return;
     }
     initialDayCompareLoadedRef.current = true;
-    void loadDayCompare(result, dayCompareDays);
-  }, [dayCompareDays, initialDayCompareEnabled, loadDayCompare, result, showDayCompare]);
+    void loadDayCompare(result, dayCompareDays, dayCompareSettings);
+  }, [dayCompareDays, dayCompareSettings, initialDayCompareEnabled, loadDayCompare, result, showDayCompare]);
 
   const runQuery = useCallback(async (override?: {
     hours?: number;
@@ -2636,6 +2862,7 @@ export function PairMonitorPage() {
     premiumEnabled?: boolean;
     dayCompareEnabled?: boolean;
     dayCompareDays?: number;
+    dayCompareSettings?: DayCompareSettings;
   }) => {
     setLoading(true);
     setError("");
@@ -2647,6 +2874,7 @@ export function PairMonitorPage() {
       const queryShowPremiumCompare = override?.premiumEnabled ?? showPremiumCompare;
       const queryShowDayCompare = override?.dayCompareEnabled ?? showDayCompare;
       const queryDayCompareDays = clampDayCompareDays(override?.dayCompareDays ?? dayCompareDays);
+      const queryDayCompareSettings = normalizeDayCompareSettings(override?.dayCompareSettings ?? dayCompareSettings);
       const next = await queryPairSpread({
         leg1_exchange: values.leg1_exchange,
         leg1_market_type: values.leg1_market_type,
@@ -2662,7 +2890,15 @@ export function PairMonitorPage() {
       setResult(next);
       const resultValues = pairFormFromResult(next);
       form.setFieldsValue(resultValues);
-      storeLastPairSpreadState(resultValues, queryHours, queryIntervalSeconds, next, queryShowDayCompare, queryDayCompareDays);
+      storeLastPairSpreadState(
+        resultValues,
+        queryHours,
+        queryIntervalSeconds,
+        next,
+        queryShowDayCompare,
+        queryDayCompareDays,
+        queryDayCompareSettings
+      );
       loadedUrlQueryRef.current = pairQueryKey(resultValues, queryHours, queryIntervalSeconds);
       replacePairQueryInUrl(resultValues, queryHours, queryIntervalSeconds);
       if (queryShowPremiumCompare) {
@@ -2673,7 +2909,7 @@ export function PairMonitorPage() {
         }
       }
       if (queryShowDayCompare) {
-        await loadDayCompare(next, queryDayCompareDays);
+        await loadDayCompare(next, queryDayCompareDays, queryDayCompareSettings);
       }
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
@@ -2689,6 +2925,7 @@ export function PairMonitorPage() {
     premiumCompare,
     refreshPremiumCompareCurrent,
     dayCompareDays,
+    dayCompareSettings,
     showDayCompare,
     showPremiumCompare
   ]);
@@ -2747,6 +2984,9 @@ export function PairMonitorPage() {
     setShowPremiumCompare(false);
     setShowDayCompare(false);
     setDayCompareDays(DEFAULT_DAY_COMPARE_DAYS);
+    setDayCompareMode(DEFAULT_DAY_COMPARE_SETTINGS.mode);
+    setDayCompareStartTime(DEFAULT_DAY_COMPARE_SETTINGS.startTime);
+    setDayCompareEndTime(DEFAULT_DAY_COMPARE_SETTINGS.endTime);
     setDayCompareSeries([]);
     setDayCompareError("");
     void runQueryRef.current({
@@ -2755,7 +2995,8 @@ export function PairMonitorPage() {
       intervalSeconds: incoming.intervalSeconds,
       premiumEnabled: false,
       dayCompareEnabled: false,
-      dayCompareDays: DEFAULT_DAY_COMPARE_DAYS
+      dayCompareDays: DEFAULT_DAY_COMPARE_DAYS,
+      dayCompareSettings: DEFAULT_DAY_COMPARE_SETTINGS
     });
   }, [form, locationSearch]);
 
@@ -2801,6 +3042,9 @@ export function PairMonitorPage() {
         intervalSeconds: clampIntervalSeconds(intervalSeconds),
         showDayCompare,
         dayCompareDays: clampDayCompareDays(dayCompareDays),
+        dayCompareMode: dayCompareSettings.mode,
+        dayCompareStartTime: dayCompareSettings.startTime,
+        dayCompareEndTime: dayCompareSettings.endTime,
         savedAt: new Date().toISOString()
       };
       setSavedPresets((currentPresets) => {
@@ -2829,6 +3073,11 @@ export function PairMonitorPage() {
     const nextIntervalSeconds = clampIntervalSeconds(preset.intervalSeconds);
     const nextShowDayCompare = Boolean(preset.showDayCompare);
     const nextDayCompareDays = clampDayCompareDays(preset.dayCompareDays);
+    const nextDayCompareSettings = normalizeDayCompareSettings({
+      mode: preset.dayCompareMode,
+      startTime: preset.dayCompareStartTime,
+      endTime: preset.dayCompareEndTime
+    });
     form.setFieldsValue(values);
     setHours(nextHours);
     setIntervalSeconds(nextIntervalSeconds);
@@ -2836,6 +3085,9 @@ export function PairMonitorPage() {
     setAutoRefresh(false);
     setShowDayCompare(nextShowDayCompare);
     setDayCompareDays(nextDayCompareDays);
+    setDayCompareMode(nextDayCompareSettings.mode);
+    setDayCompareStartTime(nextDayCompareSettings.startTime);
+    setDayCompareEndTime(nextDayCompareSettings.endTime);
     setDayCompareSeries([]);
     setDayCompareError("");
     setError("");
@@ -2855,6 +3107,37 @@ export function PairMonitorPage() {
   const fundingRecordSupported = supportsFundingRecord(result);
   const fundingRecordWatched = Boolean(fundingRecordStatus?.watched);
   const fundingRecordSampleCount = fundingRecordStatus?.item?.sample_count ?? minuteFundingDiffRows.length;
+  const dayCompareRangeTag =
+    dayCompareSettings.mode === "custom" && dayCompareSettings.startTime && dayCompareSettings.endTime
+      ? `${dayCompareSettings.startTime}-${dayCompareSettings.endTime}`
+      : "";
+  const dayCompareChartConfig = useMemo(() => {
+    const fallbackHours = result?.hours ?? hours;
+    const fallbackIntervalSeconds = result
+      ? historicalCompareIntervalSeconds(resultIntervalSeconds(result))
+      : historicalCompareIntervalSeconds(intervalSeconds);
+    if (!result || dayCompareSettings.mode !== "custom" || !dayCompareSettings.startTime || !dayCompareSettings.endTime) {
+      return {
+        hours: fallbackHours,
+        intervalSeconds: fallbackIntervalSeconds,
+        rangeLabel: dayCompareRangeTag
+      };
+    }
+    try {
+      const plan = buildDayCompareWindowPlan(result, dayCompareSettings);
+      return {
+        hours: plan.durationHours,
+        intervalSeconds: plan.intervalSeconds,
+        rangeLabel: plan.rangeLabel
+      };
+    } catch {
+      return {
+        hours: fallbackHours,
+        intervalSeconds: fallbackIntervalSeconds,
+        rangeLabel: dayCompareRangeTag
+      };
+    }
+  }, [dayCompareRangeTag, dayCompareSettings, hours, intervalSeconds, result]);
 
   return (
     <div className="page pair-monitor-page pair-terminal-page">
@@ -2975,13 +3258,48 @@ export function PairMonitorPage() {
                   resultIntervalSeconds(result),
                   result,
                   checked,
-                  dayCompareDays
+                  dayCompareDays,
+                  dayCompareSettings
                 );
               }
               if (checked && result) {
-                void loadDayCompare(result, dayCompareDays);
+                void loadDayCompare(result, dayCompareDays, dayCompareSettings);
               }
               if (!checked) {
+                setDayCompareSeries([]);
+                setDayCompareError("");
+              }
+            }}
+          />
+          <Segmented
+            size="small"
+            className="pair-day-compare-mode"
+            options={[
+              { label: "跟随查询", value: "query" },
+              { label: "指定时间", value: "custom" }
+            ]}
+            value={dayCompareMode}
+            disabled={!showDayCompare}
+            onChange={(value) => {
+              const nextSettings = normalizeDayCompareSettings({
+                ...dayCompareSettings,
+                mode: value
+              });
+              setDayCompareMode(nextSettings.mode);
+              if (result) {
+                storeLastPairSpreadState(
+                  pairFormFromResult(result),
+                  result.hours,
+                  resultIntervalSeconds(result),
+                  result,
+                  showDayCompare,
+                  dayCompareDays,
+                  nextSettings
+                );
+              }
+              if (showDayCompare && result && nextSettings.mode === "query") {
+                void loadDayCompare(result, dayCompareDays, nextSettings);
+              } else if (nextSettings.mode === "custom") {
                 setDayCompareSeries([]);
                 setDayCompareError("");
               }
@@ -3007,14 +3325,94 @@ export function PairMonitorPage() {
                   resultIntervalSeconds(result),
                   result,
                   showDayCompare,
-                  nextDays
+                  nextDays,
+                  dayCompareSettings
                 );
               }
               if (showDayCompare && result) {
-                void loadDayCompare(result, nextDays);
+                void loadDayCompare(result, nextDays, dayCompareSettings);
               }
             }}
           />
+          {dayCompareMode === "custom" ? (
+            <>
+              <Input
+                aria-label="同时段开始时间"
+                className="pair-day-compare-time"
+                type="time"
+                size="small"
+                value={dayCompareStartTime}
+                disabled={!showDayCompare}
+                addonBefore="开始"
+                onChange={(event) => {
+                  const nextSettings = normalizeDayCompareSettings({
+                    ...dayCompareSettings,
+                    startTime: event.target.value
+                  });
+                  setDayCompareStartTime(nextSettings.startTime);
+                  if (result) {
+                    storeLastPairSpreadState(
+                      pairFormFromResult(result),
+                      result.hours,
+                      resultIntervalSeconds(result),
+                      result,
+                      showDayCompare,
+                      dayCompareDays,
+                      nextSettings
+                    );
+                  }
+                  if (showDayCompare) {
+                    setDayCompareSeries([]);
+                    setDayCompareError("");
+                  }
+                }}
+              />
+              <Input
+                aria-label="同时段结束时间"
+                className="pair-day-compare-time"
+                type="time"
+                size="small"
+                value={dayCompareEndTime}
+                disabled={!showDayCompare}
+                addonBefore="结束"
+                onChange={(event) => {
+                  const nextSettings = normalizeDayCompareSettings({
+                    ...dayCompareSettings,
+                    endTime: event.target.value
+                  });
+                  setDayCompareEndTime(nextSettings.endTime);
+                  if (result) {
+                    storeLastPairSpreadState(
+                      pairFormFromResult(result),
+                      result.hours,
+                      resultIntervalSeconds(result),
+                      result,
+                      showDayCompare,
+                      dayCompareDays,
+                      nextSettings
+                    );
+                  }
+                  if (showDayCompare) {
+                    setDayCompareSeries([]);
+                    setDayCompareError("");
+                  }
+                }}
+              />
+              <Button
+                size="small"
+                icon={<ReloadOutlined />}
+                disabled={!showDayCompare || !result}
+                loading={dayCompareLoading}
+                onClick={() => {
+                  if (result) {
+                    void loadDayCompare(result, dayCompareDays, dayCompareSettings);
+                  }
+                }}
+              >
+                查询同时段
+              </Button>
+            </>
+          ) : null}
         </div>
         {savedPresets.length ? (
           <div className="pair-saved-presets">
@@ -3110,8 +3508,9 @@ export function PairMonitorPage() {
         <PairDayCompareChart
           series={dayCompareSeries}
           loading={dayCompareLoading}
-          hours={result?.hours ?? hours}
-          intervalSeconds={result ? historicalCompareIntervalSeconds(resultIntervalSeconds(result)) : historicalCompareIntervalSeconds(intervalSeconds)}
+          hours={dayCompareChartConfig.hours}
+          intervalSeconds={dayCompareChartConfig.intervalSeconds}
+          rangeLabel={dayCompareChartConfig.rangeLabel}
         />
       ) : null}
       <PairPriceChart result={result} />
