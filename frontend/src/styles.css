@@ -2062,6 +2062,82 @@ body {
   border-bottom-color: #edf2ef;
 }
 
+.pair-funding-summary-panel {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.7fr) minmax(220px, 1fr) minmax(260px, 1.25fr);
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  background: #f8faf9;
+  border-left: 3px solid #0f8f7b;
+}
+
+.pair-funding-summary-main,
+.pair-funding-summary-metrics,
+.pair-funding-summary-controls {
+  min-width: 0;
+}
+
+.pair-funding-summary-main {
+  display: grid;
+  gap: 3px;
+}
+
+.pair-funding-summary-main .pair-funding-rate-value {
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.pair-funding-summary-main > span:last-child {
+  overflow: hidden;
+  color: #687872;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pair-funding-summary-metrics,
+.pair-funding-summary-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pair-funding-summary-metrics > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.pair-funding-summary-metrics strong {
+  color: #17211d;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.pair-funding-summary-time-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.pair-funding-summary-time-field > span {
+  color: #687872;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.pair-funding-summary-controls {
+  justify-content: flex-end;
+}
+
+.pair-funding-summary-controls .ant-input {
+  width: 168px;
+}
+
 .pair-funding-chart-card {
   min-height: 100%;
   align-content: start;
@@ -3369,6 +3445,14 @@ body {
     width: 100%;
   }
 
+  .pair-funding-summary-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .pair-funding-summary-controls {
+    justify-content: flex-start;
+  }
+
   .index-component-market-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -3530,6 +3614,15 @@ body {
   .metric-row,
   .toolbar {
     padding: 10px;
+  }
+
+  .pair-funding-summary-controls .ant-input,
+  .pair-funding-summary-controls .ant-btn {
+    width: 100%;
+  }
+
+  .pair-funding-summary-time-field {
+    width: 100%;
   }
 
   .toolbar-actions,

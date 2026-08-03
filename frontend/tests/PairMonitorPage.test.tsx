@@ -662,6 +662,11 @@ describe("PairMonitorPage", () => {
     expect(screen.getAllByText("+0.1000%").length).toBeGreaterThan(0);
     expect(screen.getAllByText("+0.0000%").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Bitget 费率").length).toBeGreaterThan(0);
+    expect(screen.getByText("总资金费率差（右-左）")).toBeTruthy();
+    const summaryPanel = document.querySelector(".pair-funding-summary-panel") as HTMLElement;
+    expect(summaryPanel.textContent).toContain("+0.0300%");
+    expect(summaryPanel.textContent).toContain("当前周期");
+    expect(summaryPanel.textContent).toContain("1 条");
     const fundingLayout = Array.from(document.querySelector(".pair-funding-grid")?.children ?? []).map(
       (element) => (element as HTMLElement).className
     );
@@ -683,6 +688,16 @@ describe("PairMonitorPage", () => {
     expect(priceChartIndex).toBe(spreadChartIndex + 1);
     expect(fundingGridIndex).toBeGreaterThan(priceChartIndex);
     expect(pageText.indexOf("标的价格")).toBeLessThan(pageText.indexOf("资金费率差"));
+
+    requests.length = 0;
+    fireEvent.change(screen.getByLabelText("资金费率累计开始时间"), { target: { value: "2026-07-23T15:30" } });
+    fireEvent.change(screen.getByLabelText("资金费率累计结束时间"), { target: { value: "2026-07-24T08:30" } });
+    await waitFor(() => {
+      expect(summaryPanel.textContent).toContain("+0.1300%");
+      expect(summaryPanel.textContent).toContain("指定时间");
+      expect(summaryPanel.textContent).toContain("3 条");
+    });
+    expect(requests.some((request) => request.includes("/pair-spread/query"))).toBe(false);
   });
 
   it("runs a saved threshold diagnostic on demand", async () => {

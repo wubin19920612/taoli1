@@ -144,6 +144,17 @@ type FundingRateDiffRow = {
   source: "history" | "current" | "realtime" | "minute_record";
 };
 
+type FundingRateTotalSummary = {
+  rows: FundingRateDiffRow[];
+  left_total_pct: number | null;
+  right_total_pct: number | null;
+  net_total_pct: number | null;
+  start_at: string | null;
+  end_at: string | null;
+  custom: boolean;
+  warning: string;
+};
+
 const defaultFormValues: PairSpreadFormValues = {
   leg1_exchange: "bitget",
   leg1_market_type: "future",
@@ -738,6 +749,30 @@ function time(value: string | null | undefined): string {
 
 function fullTime(value: string | null | undefined): string {
   return value ? dayjs.utc(value).utcOffset(8).format("MM-DD HH:mm:ss") : "-";
+}
+
+function parseBeijingDatetimeInput(value: string): ReturnType<typeof dayjs> | null {
+  const normalized = value.trim();
+  if (!normalized) {
+    return null;
+  }
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(normalized);
+  if (!match) {
+    return null;
+  }
+  const [, year, month, day, hour, minute, second = "0"] = match;
+  // 页面时间统一按北京时间输入，转成 UTC 后再和接口返回时间比较。
+  const parsed = dayjs.utc(
+    Date.UTC(
+      Number(year),
+      Number(month) - 1,
+      Number(day),
+      Number(hour) - 8,
+      Number(minute),
+      Number(second)
+    )
+  );
+  return parsed.isValid() ? parsed : null;
 }
 
 function chartTime(value: string | null | undefined, spanHours: number): string {
@@ -2814,8 +2849,7 @@ function buildFundingRateDiffRows(result: PairSpreadQueryResult | null): Funding
         net_rate_pct: rightRate - leftRate
       };
     })
-    .sort((a, b) => dayjs.utc(b.funding_time).valueOf() - dayjs.utc(a.funding_time).valueOf())
-    .slice(0, 80);
+    .sort((a, b) => dayjs.utc(b.funding_time).valueOf() - dayjs.utc(a.funding_time).valueOf());
 
   if (historyRows.length > 0) {
     return historyRows;
@@ -2839,6 +2873,109 @@ function buildFundingRateDiffRows(result: PairSpreadQueryResult | null): Funding
       source: "current"
     }
   ];
+}
+
+function buildFundingRateTotalSummary(
+  rows: FundingRateDiffRow[],
+  result: PairSpreadQueryResult | null,
+  startInput: string,
+  endInput: string
+): FundingRateTotalSummary {
+  const hasCustomRange = Boolean(startInput.trim() || endInput.trim());
+  const customStart = parseBeijingDatetimeInput(startInput);
+  const customEnd = parseBeijingDatetimeInput(endInput);
+  const defaultEnd = result?.observed_at
+    ? dayjs.utc(result.observed_at)
+    : result?.last_seen_at
+      ? dayjs.utc(result.last_seen_at)
+      : null;
+  const defaultStart = result && defaultEnd ? defaultEnd.subtract(result.hours, "hour") : null;
+  const start = hasCustomRange ? customStart : defaultStart;
+  const end = hasCustomRange ? customEnd : defaultEnd;
+
+  if (hasCustomRange && startInput.trim() && !customStart) {
+    return {
+      rows: [],
+      left_total_pct: null,
+      right_total_pct: null,
+      net_total_pct: null,
+      start_at: null,
+      end_at: end?.toISOString() ?? null,
+      custom: true,
+      warning: "开始时间格式不正确。"
+    };
+  }
+  if (hasCustomRange && endInput.trim() && !customEnd) {
+    return {
+      rows: [],
+      left_total_pct: null,
+      right_total_pct: null,
+      net_total_pct: null,
+      start_at: start?.toISOString() ?? null,
+      end_at: null,
+      custom: true,
+      warning: "结束时间格式不正确。"
+    };
+  }
+  if (start && end && start.valueOf() > end.valueOf()) {
+    return {
+      rows: [],
+      left_total_pct: null,
+      right_total_pct: null,
+      net_total_pct: null,
+      start_at: start.toISOString(),
+      end_at: end.toISOString(),
+      custom: hasCustomRange,
+      warning: "开始时间不能晚于结束时间。"
+    };
+  }
+
+  const filteredRows = rows.filter((row) => {
+    const rowTime = dayjs.utc(row.funding_time);
+    if (!rowTime.isValid()) {
+      return false;
+    }
+    if (start && rowTime.valueOf() < start.valueOf()) {
+      return false;
+    }
+    if (end && rowTime.valueOf() > end.valueOf()) {
+      return false;
+    }
+    return true;
+  });
+  const totals = filteredRows.reduce(
+    (acc, row) => {
+      acc.left += finiteRate(row.left_rate_pct) ?? 0;
+      acc.right += finiteRate(row.right_rate_pct) ?? 0;
+      acc.net += finiteRate(row.net_rate_pct) ?? 0;
+      return acc;
+    },
+    { left: 0, right: 0, net: 0 }
+  );
+  return {
+    rows: filteredRows,
+    left_total_pct: filteredRows.length ? totals.left : null,
+    right_total_pct: filteredRows.length ? totals.right : null,
+    net_total_pct: filteredRows.length ? totals.net : null,
+    start_at: start?.toISOString() ?? null,
+    end_at: end?.toISOString() ?? null,
+    custom: hasCustomRange,
+    warning: ""
+  };
+}
+
+function fundingRateSummaryRangeLabel(summary: FundingRateTotalSummary): string {
+  const prefix = summary.custom ? "指定时间" : "当前周期";
+  if (summary.start_at && summary.end_at) {
+    return `${prefix} ${time(summary.start_at)} - ${time(summary.end_at)}`;
+  }
+  if (summary.start_at) {
+    return `${prefix} ${time(summary.start_at)} 之后`;
+  }
+  if (summary.end_at) {
+    return `${prefix} ${time(summary.end_at)} 之前`;
+  }
+  return prefix;
 }
 
 function realtimeFundingPointToRow(point: PairSpreadRealtimeFundingPoint): FundingRateDiffRow | null {
@@ -2978,6 +3115,8 @@ export function PairMonitorPage() {
   const [dayCompareError, setDayCompareError] = useState("");
   const [fundingRecordError, setFundingRecordError] = useState("");
   const [fundingRecordStatus, setFundingRecordStatus] = useState<PairSpreadFundingRecordStatus | null>(null);
+  const [fundingSummaryStart, setFundingSummaryStart] = useState("");
+  const [fundingSummaryEnd, setFundingSummaryEnd] = useState("");
   const initialDayCompareLoadedRef = useRef(false);
 
   const recentPoints = useMemo(
@@ -2989,6 +3128,10 @@ export function PairMonitorPage() {
   const minuteFundingDiffRows = useMemo(
     () => buildMinuteFundingRateDiffRows(fundingRecordStatus),
     [fundingRecordStatus]
+  );
+  const fundingRateTotalSummary = useMemo(
+    () => buildFundingRateTotalSummary(fundingDiffRows, result, fundingSummaryStart, fundingSummaryEnd),
+    [fundingDiffRows, fundingSummaryEnd, fundingSummaryStart, result]
   );
   const latestFundingDiff =
     realtimeFundingDiffRows.find((row) => finiteRate(row.net_rate_pct) !== null) ??
@@ -4029,6 +4172,62 @@ export function PairMonitorPage() {
               ) : null}
             </div>
           </div>
+          <div className="pair-funding-summary-panel">
+            <div className="pair-funding-summary-main">
+              <Typography.Text type="secondary">总资金费率差（右-左）</Typography.Text>
+              <FundingRateValue value={fundingRateTotalSummary.net_total_pct} strong />
+              <span>{fundingRateSummaryRangeLabel(fundingRateTotalSummary)}</span>
+            </div>
+            <div className="pair-funding-summary-metrics">
+              <span>
+                <Typography.Text type="secondary">右侧合计</Typography.Text>
+                <FundingRateValue value={fundingRateTotalSummary.right_total_pct} />
+              </span>
+              <span>
+                <Typography.Text type="secondary">左侧合计</Typography.Text>
+                <FundingRateValue value={fundingRateTotalSummary.left_total_pct} />
+              </span>
+              <span>
+                <Typography.Text type="secondary">计入点数</Typography.Text>
+                <strong>{fundingRateTotalSummary.rows.length} 条</strong>
+              </span>
+            </div>
+            <div className="pair-funding-summary-controls">
+              <label className="pair-funding-summary-time-field">
+                <span>开始</span>
+                <Input
+                  aria-label="资金费率累计开始时间"
+                  type="datetime-local"
+                  size="small"
+                  value={fundingSummaryStart}
+                  onChange={(event) => setFundingSummaryStart(event.target.value)}
+                />
+              </label>
+              <label className="pair-funding-summary-time-field">
+                <span>结束</span>
+                <Input
+                  aria-label="资金费率累计结束时间"
+                  type="datetime-local"
+                  size="small"
+                  value={fundingSummaryEnd}
+                  onChange={(event) => setFundingSummaryEnd(event.target.value)}
+                />
+              </label>
+              <Button
+                size="small"
+                disabled={!fundingSummaryStart && !fundingSummaryEnd}
+                onClick={() => {
+                  setFundingSummaryStart("");
+                  setFundingSummaryEnd("");
+                }}
+              >
+                清空时间
+              </Button>
+            </div>
+          </div>
+          {fundingRateTotalSummary.warning ? (
+            <Alert type="warning" message={fundingRateTotalSummary.warning} showIcon />
+          ) : null}
           <Table<FundingRateDiffRow>
             rowKey={(row) => `${row.source}-${row.funding_time}`}
             columns={fundingDiffColumns}
