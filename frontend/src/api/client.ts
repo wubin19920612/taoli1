@@ -37,6 +37,7 @@ import type {
   OpportunityRadarPreview,
   OpportunityRadarSettings,
   PairSpreadDiagnosticResult,
+  PairSpreadFundingHistoryResult,
   PairSpreadQueryResult,
   PairSpreadFundingRecordRequest,
   PairSpreadFundingRecordStatus,
@@ -661,6 +662,28 @@ export async function queryPairSpreadDiagnostics(query: {
       throw new Error(extractErrorMessage(text, response.status));
     }
     return response.json() as Promise<PairSpreadDiagnosticResult>;
+  });
+}
+
+export async function queryPairSpreadFundingHistory(query: {
+  leg1_exchange: string;
+  leg1_symbol: string;
+  leg1_market_type?: MarketType;
+  leg2_exchange: string;
+  leg2_symbol: string;
+  leg2_market_type?: MarketType;
+  hours?: number;
+  leg2_multiplier?: number;
+  start_at?: string;
+  end_at?: string;
+}): Promise<PairSpreadFundingHistoryResult> {
+  const url = buildUrl("/pair-spread/funding-history", query);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(extractErrorMessage(text, response.status));
+    }
+    return response.json() as Promise<PairSpreadFundingHistoryResult>;
   });
 }
 

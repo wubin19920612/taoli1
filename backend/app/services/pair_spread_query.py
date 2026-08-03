@@ -23,6 +23,7 @@ from app.models.market import MarketType
 from app.models.pair_spread import (
     PairSpreadCurrentLeg,
     PairSpreadCurrentSnapshot,
+    PairSpreadFundingHistoryResult,
     PairSpreadFundingPoint,
     PairSpreadKlinePoint,
     PairSpreadLegQuery,
@@ -79,6 +80,12 @@ def _interval_minutes_from_seconds(interval_seconds: int) -> int:
 
 def _floor_minute(value: datetime) -> datetime:
     return value.astimezone(UTC).replace(second=0, microsecond=0)
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def _floor_interval(value: datetime, interval_seconds: int) -> datetime:
@@ -561,6 +568,41 @@ class PairSpreadQueryService:
     async def aclose(self) -> None:
         if self._owns_client and not self.client.is_closed:
             await self.client.aclose()
+
+    async def query_funding_history(
+        self,
+        leg1: PairSpreadLegQuery,
+        leg2: PairSpreadLegQuery,
+        *,
+        start: datetime,
+        end: datetime,
+    ) -> PairSpreadFundingHistoryResult:
+        start_at = _as_utc(start)
+        end_at = _as_utc(end)
+        if start_at > end_at:
+            raise PairSpreadQueryError("开始时间不能晚于结束时间")
+
+        warnings: list[str] = []
+        funding1, funding2 = await asyncio.gather(
+            self._fetch_funding_with_warning(leg1, start_at, end_at, warnings),
+            self._fetch_funding_with_warning(leg2, start_at, end_at, warnings),
+        )
+        funding_history = sorted(
+            (
+                point
+                for point in [*funding1, *funding2]
+                if start_at <= _as_utc(point.funding_time) <= end_at
+            ),
+            key=lambda item: item.funding_time,
+        )
+        return PairSpreadFundingHistoryResult(
+            leg1=leg1,
+            leg2=leg2,
+            start_at=start_at,
+            end_at=end_at,
+            funding_history=funding_history,
+            warnings=warnings,
+        )
 
     async def query(
         self,

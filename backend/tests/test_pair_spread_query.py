@@ -188,6 +188,65 @@ async def test_pair_spread_query_builds_stats_current_and_funding() -> None:
 
 
 @pytest.mark.asyncio
+async def test_pair_spread_funding_history_fetches_only_funding_points() -> None:
+    start = datetime(2026, 7, 10, 0, 0, tzinfo=UTC)
+    end = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
+
+    class FakePairSpreadService(PairSpreadQueryService):
+        def __init__(self) -> None:
+            super().__init__()
+            self.kline_calls = 0
+            self.current_calls = 0
+            self.funding_windows: list[tuple[str, datetime, datetime]] = []
+
+        async def _fetch_klines(self, exchange: str, symbol: str, start, end, interval_minutes: int):
+            self.kline_calls += 1
+            return []
+
+        async def _fetch_current_leg(self, exchange: str, symbol: str):
+            self.current_calls += 1
+            return current_leg(exchange, symbol, 100)
+
+        async def _fetch_funding_history(self, exchange: str, symbol: str, start, end):
+            self.funding_windows.append((exchange, start, end))
+            inside_time = start + timedelta(hours=8)
+            return [
+                PairSpreadFundingPoint(
+                    exchange=exchange,
+                    symbol=symbol,
+                    funding_time=inside_time,
+                    funding_rate_pct=0.01 if exchange == "binance" else 0.03,
+                ),
+                PairSpreadFundingPoint(
+                    exchange=exchange,
+                    symbol=symbol,
+                    funding_time=end + timedelta(hours=8),
+                    funding_rate_pct=0.99,
+                ),
+            ]
+
+    service = FakePairSpreadService()
+    try:
+        result = await service.query_funding_history(
+            PairSpreadLegQuery(exchange="binance", symbol="btc"),
+            PairSpreadLegQuery(exchange="okx", symbol="btc"),
+            start=start,
+            end=end,
+        )
+    finally:
+        await service.aclose()
+
+    assert result.start_at == start
+    assert result.end_at == end
+    assert len(result.funding_history) == 2
+    assert {point.exchange for point in result.funding_history} == {"binance", "okx"}
+    assert all(start <= point.funding_time <= end for point in result.funding_history)
+    assert service.kline_calls == 0
+    assert service.current_calls == 0
+    assert service.funding_windows == [("binance", start, end), ("okx", start, end)]
+
+
+@pytest.mark.asyncio
 async def test_symbol_spread_query_falls_back_to_available_base_exchange() -> None:
     now = datetime(2026, 7, 10, 12, 2, 30, tzinfo=UTC)
 

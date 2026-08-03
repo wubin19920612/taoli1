@@ -622,6 +622,15 @@ export interface PairSpreadQueryResult {
   warnings: string[];
 }
 
+export interface PairSpreadFundingHistoryResult {
+  leg1: PairSpreadLegQuery;
+  leg2: PairSpreadLegQuery;
+  start_at: string;
+  end_at: string;
+  funding_history: PairSpreadFundingPoint[];
+  warnings: string[];
+}
+
 export interface SymbolExchangePriceSnapshot {
   exchange: string;
   symbol: string;

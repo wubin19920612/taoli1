@@ -25,6 +25,8 @@ from app.models.pair_spread import (
     PairSpreadFundingRecordRequest,
     PairSpreadFundingRecordStatus,
     PairSpreadFundingWatchItem,
+    PairSpreadFundingHistoryResult,
+    PairSpreadFundingPoint,
     PairSpreadCurrentLeg,
     PairSpreadCurrentSnapshot,
     PairSpreadLegQuery,
@@ -758,6 +760,80 @@ def test_pair_spread_query_endpoint_uses_on_demand_service() -> None:
     assert payload["leg2_multiplier"] == 10
     assert payload["point_count"] == 1
     assert payload["current"]["spread_pct"] == 2
+    assert service.closed is True
+
+
+def test_pair_spread_funding_history_endpoint_uses_lightweight_service() -> None:
+    fixed_start = datetime(2026, 7, 10, 0, 0, tzinfo=UTC)
+    fixed_end = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
+
+    class FakePairSpreadService:
+        def __init__(self) -> None:
+            self.closed = False
+            self.query_called = False
+            self.funding_call: tuple[PairSpreadLegQuery, PairSpreadLegQuery, datetime, datetime] | None = None
+
+        async def query_funding_history(
+            self,
+            leg1: PairSpreadLegQuery,
+            leg2: PairSpreadLegQuery,
+            *,
+            start: datetime,
+            end: datetime,
+        ) -> PairSpreadFundingHistoryResult:
+            self.funding_call = (leg1, leg2, start, end)
+            return PairSpreadFundingHistoryResult(
+                leg1=leg1,
+                leg2=leg2,
+                start_at=start,
+                end_at=end,
+                funding_history=[
+                    PairSpreadFundingPoint(
+                        exchange=leg1.exchange,
+                        symbol=leg1.symbol,
+                        funding_time=fixed_start,
+                        funding_rate_pct=0.01,
+                    ),
+                    PairSpreadFundingPoint(
+                        exchange=leg2.exchange,
+                        symbol=leg2.symbol,
+                        funding_time=fixed_start,
+                        funding_rate_pct=0.03,
+                    ),
+                ],
+                warnings=["测试警告"],
+            )
+
+        async def query(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            self.query_called = True
+            raise AssertionError("funding history endpoint should not query pair spread klines")
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    service = FakePairSpreadService()
+    app = create_app(settings=Settings(database_url="sqlite:///:memory:"))
+    app.state.pair_spread_query_service_factory = lambda: service
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/pair-spread/funding-history"
+            "?leg1_exchange=binance&leg1_symbol=btc"
+            "&leg2_exchange=okx&leg2_symbol=BTC-USDT-SWAP"
+            "&leg1_market_type=future&leg2_market_type=future"
+            "&start_at=2026-07-10T00:00:00Z&end_at=2026-07-10T12:00:00Z"
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["leg1"]["symbol"] == "BTCUSDT"
+    assert payload["leg2"]["symbol"] == "BTCUSDT"
+    assert len(payload["funding_history"]) == 2
+    assert payload["warnings"] == ["测试警告"]
+    assert service.funding_call is not None
+    assert service.funding_call[2] == fixed_start
+    assert service.funding_call[3] == fixed_end
+    assert service.query_called is False
     assert service.closed is True
 
 

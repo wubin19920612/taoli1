@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import ValidationError
@@ -14,6 +14,7 @@ from app.models.pair_spread import (
     PairSpreadFundingRecordRequest,
     PairSpreadFundingRecordStatus,
     PairSpreadFundingWatchItem,
+    PairSpreadFundingHistoryResult,
     PairSpreadDiagnosticResult,
     PairSpreadLegQuery,
     PairSpreadQueryResult,
@@ -128,6 +129,12 @@ def _symbol_spread_exchanges_from_query(value: str | None) -> list[str] | None:
     return list(dict.fromkeys(exchanges)) or None
 
 
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
 @router.get("/diagnostics", response_model=PairSpreadDiagnosticResult)
 async def diagnose_pair_spread(
     request: Request,
@@ -195,6 +202,51 @@ async def diagnose_pair_spread(
                 ),
             )
         return diagnostic
+    except PairSpreadQueryError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    finally:
+        close = getattr(service, "aclose", None)
+        if close is not None:
+            await close()
+
+
+@router.get("/funding-history", response_model=PairSpreadFundingHistoryResult)
+async def query_pair_spread_funding_history(
+    request: Request,
+    leg1_exchange: str = Query(...),
+    leg1_symbol: str = Query(...),
+    leg1_market_type: MarketType = Query(default=MarketType.FUTURE),
+    leg2_exchange: str = Query(...),
+    leg2_symbol: str = Query(...),
+    leg2_market_type: MarketType = Query(default=MarketType.FUTURE),
+    hours: int = Query(default=72, ge=PAIR_SPREAD_MIN_HOURS, le=PAIR_SPREAD_MAX_HOURS),
+    leg2_multiplier: float = Query(default=1.0, gt=0),
+    start_at: datetime | None = Query(default=None),
+    end_at: datetime | None = Query(default=None),
+) -> PairSpreadFundingHistoryResult:
+    try:
+        leg1 = PairSpreadLegQuery(exchange=leg1_exchange, symbol=leg1_symbol, market_type=leg1_market_type)
+        leg2 = PairSpreadLegQuery(exchange=leg2_exchange, symbol=leg2_symbol, market_type=leg2_market_type)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    end = _as_utc(end_at) if end_at is not None else datetime.now(UTC)
+    start = _as_utc(start_at) if start_at is not None else end - timedelta(hours=hours)
+    if start > end:
+        raise HTTPException(status_code=422, detail="开始时间不能晚于结束时间")
+    duration_hours = (end - start).total_seconds() / 3600
+    if duration_hours > PAIR_SPREAD_MAX_HOURS:
+        raise HTTPException(status_code=422, detail=f"资金费率统计时间跨度不能超过 {PAIR_SPREAD_MAX_HOURS} 小时")
+
+    factory = getattr(request.app.state, "pair_spread_query_service_factory", None) or PairSpreadQueryService
+    service = factory()
+    try:
+        return await service.query_funding_history(
+            leg1,
+            leg2,
+            start=start,
+            end=end,
+        )
     except PairSpreadQueryError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     finally:

@@ -201,6 +201,15 @@ class PairSpreadQueryResult(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class PairSpreadFundingHistoryResult(BaseModel):
+    leg1: PairSpreadLegQuery
+    leg2: PairSpreadLegQuery
+    start_at: datetime
+    end_at: datetime
+    funding_history: list[PairSpreadFundingPoint] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
 class SymbolExchangePriceSnapshot(BaseModel):
     exchange: str
     symbol: str
