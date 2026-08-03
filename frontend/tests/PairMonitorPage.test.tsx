@@ -692,6 +692,12 @@ describe("PairMonitorPage", () => {
     requests.length = 0;
     fireEvent.change(screen.getByLabelText("资金费率累计开始时间"), { target: { value: "2026-07-23T15:30" } });
     fireEvent.change(screen.getByLabelText("资金费率累计结束时间"), { target: { value: "2026-07-24T08:30" } });
+    await new Promise((resolve) => window.setTimeout(resolve, 20));
+    expect(summaryPanel.textContent).toContain("+0.0300%");
+    expect(summaryPanel.textContent).toContain("当前周期");
+    expect(requests.some((request) => request.includes("/pair-spread/query"))).toBe(false);
+
+    await user.click(screen.getByRole("button", { name: /确定资金费率累计时间/ }));
     await waitFor(() => {
       expect(summaryPanel.textContent).toContain("+0.1300%");
       expect(summaryPanel.textContent).toContain("指定时间");

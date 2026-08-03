@@ -3117,6 +3117,8 @@ export function PairMonitorPage() {
   const [fundingRecordStatus, setFundingRecordStatus] = useState<PairSpreadFundingRecordStatus | null>(null);
   const [fundingSummaryStart, setFundingSummaryStart] = useState("");
   const [fundingSummaryEnd, setFundingSummaryEnd] = useState("");
+  const [fundingSummaryDraftStart, setFundingSummaryDraftStart] = useState("");
+  const [fundingSummaryDraftEnd, setFundingSummaryDraftEnd] = useState("");
   const initialDayCompareLoadedRef = useRef(false);
 
   const recentPoints = useMemo(
@@ -3133,6 +3135,9 @@ export function PairMonitorPage() {
     () => buildFundingRateTotalSummary(fundingDiffRows, result, fundingSummaryStart, fundingSummaryEnd),
     [fundingDiffRows, fundingSummaryEnd, fundingSummaryStart, result]
   );
+  const fundingSummaryChanged =
+    fundingSummaryDraftStart !== fundingSummaryStart ||
+    fundingSummaryDraftEnd !== fundingSummaryEnd;
   const latestFundingDiff =
     realtimeFundingDiffRows.find((row) => finiteRate(row.net_rate_pct) !== null) ??
     fundingDiffRows.find((row) => finiteRate(row.net_rate_pct) !== null);
@@ -4199,8 +4204,8 @@ export function PairMonitorPage() {
                   aria-label="资金费率累计开始时间"
                   type="datetime-local"
                   size="small"
-                  value={fundingSummaryStart}
-                  onChange={(event) => setFundingSummaryStart(event.target.value)}
+                  value={fundingSummaryDraftStart}
+                  onChange={(event) => setFundingSummaryDraftStart(event.target.value)}
                 />
               </label>
               <label className="pair-funding-summary-time-field">
@@ -4209,14 +4214,33 @@ export function PairMonitorPage() {
                   aria-label="资金费率累计结束时间"
                   type="datetime-local"
                   size="small"
-                  value={fundingSummaryEnd}
-                  onChange={(event) => setFundingSummaryEnd(event.target.value)}
+                  value={fundingSummaryDraftEnd}
+                  onChange={(event) => setFundingSummaryDraftEnd(event.target.value)}
                 />
               </label>
               <Button
                 size="small"
-                disabled={!fundingSummaryStart && !fundingSummaryEnd}
+                type="primary"
+                aria-label="确定资金费率累计时间"
+                disabled={!fundingSummaryChanged}
                 onClick={() => {
+                  setFundingSummaryStart(fundingSummaryDraftStart);
+                  setFundingSummaryEnd(fundingSummaryDraftEnd);
+                }}
+              >
+                确定
+              </Button>
+              <Button
+                size="small"
+                disabled={
+                  !fundingSummaryDraftStart &&
+                  !fundingSummaryDraftEnd &&
+                  !fundingSummaryStart &&
+                  !fundingSummaryEnd
+                }
+                onClick={() => {
+                  setFundingSummaryDraftStart("");
+                  setFundingSummaryDraftEnd("");
                   setFundingSummaryStart("");
                   setFundingSummaryEnd("");
                 }}
