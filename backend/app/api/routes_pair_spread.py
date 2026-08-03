@@ -18,6 +18,8 @@ from app.models.pair_spread import (
     PairSpreadLegQuery,
     PairSpreadQueryResult,
     SUPPORTED_PAIR_SPREAD_EXCHANGES,
+    SUPPORTED_SYMBOL_SPREAD_EXCHANGES,
+    SymbolSpreadQueryResult,
 )
 from app.models.settings import AlertMessageTemplateSettings
 from app.services.pair_spread_funding_recorder import PairSpreadFundingRecorder
@@ -117,6 +119,13 @@ def _diagnostic_historical_interval_seconds(requested: int) -> int:
     if requested <= 300:
         return 300
     return 900
+
+
+def _symbol_spread_exchanges_from_query(value: str | None) -> list[str] | None:
+    if value is None:
+        return None
+    exchanges = [item.strip().lower() for item in value.split(",") if item.strip()]
+    return list(dict.fromkeys(exchanges)) or None
 
 
 @router.get("/diagnostics", response_model=PairSpreadDiagnosticResult)
@@ -241,6 +250,60 @@ async def query_pair_spread(
             now=end_at,
             include_current=include_current,
         )
+    except PairSpreadQueryError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    finally:
+        close = getattr(service, "aclose", None)
+        if close is not None:
+            await close()
+
+
+@router.get("/symbol-query", response_model=SymbolSpreadQueryResult)
+async def query_symbol_spread(
+    request: Request,
+    symbol: str = Query(...),
+    market_type: MarketType = Query(default=MarketType.FUTURE),
+    base_exchange: str = Query(default="binance"),
+    exchanges: str | None = Query(default=None),
+    hours: int = Query(default=24, ge=PAIR_SPREAD_MIN_HOURS, le=PAIR_SPREAD_MAX_HOURS),
+    interval_seconds: int = Query(
+        default=60,
+        ge=PAIR_SPREAD_MIN_INTERVAL_SECONDS,
+        le=PAIR_SPREAD_MAX_INTERVAL_SECONDS,
+    ),
+    end_at: datetime | None = Query(default=None),
+    include_current: bool = Query(default=True),
+) -> SymbolSpreadQueryResult:
+    allowed = set(SUPPORTED_SYMBOL_SPREAD_EXCHANGES)
+    normalized_base_exchange = base_exchange.strip().lower()
+    if normalized_base_exchange not in allowed:
+        allowed_text = ", ".join(SUPPORTED_SYMBOL_SPREAD_EXCHANGES)
+        raise HTTPException(status_code=422, detail=f"base_exchange must be one of: {allowed_text}")
+    requested_exchanges = _symbol_spread_exchanges_from_query(exchanges)
+    if requested_exchanges is not None:
+        unsupported = [exchange for exchange in requested_exchanges if exchange not in allowed]
+        if unsupported:
+            allowed_text = ", ".join(SUPPORTED_SYMBOL_SPREAD_EXCHANGES)
+            raise HTTPException(
+                status_code=422,
+                detail=f"unsupported exchanges: {', '.join(unsupported)}; allowed: {allowed_text}",
+            )
+
+    factory = getattr(request.app.state, "pair_spread_query_service_factory", None) or PairSpreadQueryService
+    service = factory()
+    try:
+        return await service.query_symbol_spreads(
+            symbol,
+            market_type=market_type,
+            base_exchange=normalized_base_exchange,
+            exchanges=requested_exchanges,
+            hours=hours,
+            interval_seconds=interval_seconds,
+            now=end_at,
+            include_current=include_current,
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except PairSpreadQueryError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     finally:

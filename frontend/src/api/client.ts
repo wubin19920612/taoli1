@@ -62,6 +62,7 @@ import type {
   SecondLevelSamplingStatus,
   ServiceControlStatus,
   ServiceRestartResult,
+  SymbolSpreadQueryResult,
   TradfiPerpMonitorPreview
 } from "./types";
 
@@ -617,6 +618,26 @@ export async function queryPairSpread(query: {
       throw new Error(extractErrorMessage(text, response.status));
     }
     return response.json() as Promise<PairSpreadQueryResult>;
+  });
+}
+
+export async function querySymbolExchangeSpreads(query: {
+  symbol: string;
+  market_type?: MarketType;
+  base_exchange?: string;
+  exchanges?: string[];
+  hours?: number;
+  interval_seconds?: number;
+  end_at?: string;
+  include_current?: boolean;
+}): Promise<SymbolSpreadQueryResult> {
+  const url = buildUrl("/pair-spread/symbol-query", query);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(extractErrorMessage(text, response.status));
+    }
+    return response.json() as Promise<SymbolSpreadQueryResult>;
   });
 }
 

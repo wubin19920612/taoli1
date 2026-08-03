@@ -22,8 +22,10 @@ from app.services.pair_spread_query import (
     PairSpreadQueryService,
     _REALTIME_PAIR_FUNDING_CACHE,
     _REALTIME_PAIR_SPREAD_CACHE,
+    _REALTIME_SYMBOL_SPREAD_CACHE,
     _hyperliquid_history_limit_warning,
     build_pair_spread_points,
+    build_symbol_spread_points,
 )
 from app.services.pair_spread_funding_recorder import PairSpreadFundingRecorder, PairSpreadFundingRepository
 
@@ -81,6 +83,20 @@ def test_pair_spread_points_apply_right_side_multiplier() -> None:
     assert points[0].leg2_close == 105
     assert points[0].spread_abs == 5
     assert points[0].spread_pct == pytest.approx(5 / ((100 + 105) / 2) * 100)
+
+
+def test_symbol_spread_points_align_against_base_exchange() -> None:
+    points = build_symbol_spread_points(
+        [kline(0, 100), kline(1, 101), kline(2, 102)],
+        [kline(1, 102), kline(2, 105), kline(3, 108)],
+    )
+
+    assert [point.bucket_at.minute for point in points] == [1, 2]
+    assert points[0].base_close == 101
+    assert points[0].exchange_close == 102
+    assert points[0].spread_abs == 1
+    assert points[0].spread_pct == pytest.approx(1 / ((101 + 102) / 2) * 100)
+    assert points[1].spread_abs == 3
 
 
 def test_hyperliquid_history_limit_warning_recommends_15_minutes_for_30_days() -> None:
@@ -169,6 +185,53 @@ async def test_pair_spread_query_builds_stats_current_and_funding() -> None:
     assert result.realtime_funding[0].net_rate_pct == pytest.approx(0)
     assert result.warnings == []
     _REALTIME_PAIR_FUNDING_CACHE.clear()
+
+
+@pytest.mark.asyncio
+async def test_symbol_spread_query_falls_back_to_available_base_exchange() -> None:
+    now = datetime(2026, 7, 10, 12, 2, 30, tzinfo=UTC)
+
+    class FakePairSpreadService(PairSpreadQueryService):
+        async def _fetch_klines(self, exchange: str, symbol: str, start, end, interval_minutes: int):
+            first_bucket = start + timedelta(minutes=interval_minutes)
+            if exchange == "binance":
+                return []
+            if exchange == "okx":
+                return [
+                    kline_at(first_bucket, 100),
+                    kline_at(first_bucket + timedelta(minutes=interval_minutes), 101),
+                ]
+            return [
+                kline_at(first_bucket, 102),
+                kline_at(first_bucket + timedelta(minutes=interval_minutes), 104),
+            ]
+
+        async def _fetch_current_leg(self, exchange: str, symbol: str):
+            price = {"binance": 99, "okx": 101, "bybit": 104}[exchange]
+            return current_leg(exchange, symbol, price)
+
+    service = FakePairSpreadService()
+    try:
+        result = await service.query_symbol_spreads(
+            "btc",
+            base_exchange="binance",
+            exchanges=["binance", "okx", "bybit"],
+            hours=1,
+            interval_seconds=60,
+            now=now,
+        )
+    finally:
+        await service.aclose()
+
+    assert result.symbol == "BTCUSDT"
+    assert result.base_exchange == "okx"
+    assert result.exchanges == ["okx", "bybit"]
+    assert result.series[0].exchange == "bybit"
+    assert result.series[0].point_count == 2
+    assert result.series[0].spread_abs.current == 3
+    assert result.series[0].current is not None
+    assert result.series[0].current.spread_abs == 3
+    assert "已改用 okx 做基准" in "；".join(result.warnings)
 
 
 @pytest.mark.asyncio
@@ -289,6 +352,64 @@ async def test_pair_spread_query_accumulates_realtime_second_points() -> None:
     assert next_bucket.spread_abs.current == 3
     assert [point.bucket_at.second for point in next_bucket.realtime_funding] == [0, 5]
     assert next_bucket.realtime_funding[-1].net_rate_pct == pytest.approx(0.03)
+
+
+@pytest.mark.asyncio
+async def test_symbol_spread_query_accumulates_realtime_second_points() -> None:
+    _REALTIME_SYMBOL_SPREAD_CACHE.clear()
+
+    class FakePairSpreadService(PairSpreadQueryService):
+        async def _fetch_current_leg(
+            self,
+            exchange: str,
+            symbol: str,
+            market_type: MarketType = MarketType.FUTURE,
+        ):
+            price = 100 if exchange == "binance" else self.okx_price
+            return current_leg(exchange, symbol, price, market_type)
+
+    service = FakePairSpreadService()
+    service.okx_price = 101
+    try:
+        first = await service.query_symbol_spreads(
+            "btc",
+            base_exchange="binance",
+            exchanges=["binance", "okx"],
+            hours=1,
+            interval_seconds=5,
+            now=datetime(2026, 7, 10, 12, 0, 3, tzinfo=UTC),
+        )
+        service.okx_price = 102
+        updated_same_bucket = await service.query_symbol_spreads(
+            "btc",
+            base_exchange="binance",
+            exchanges=["binance", "okx"],
+            hours=1,
+            interval_seconds=5,
+            now=datetime(2026, 7, 10, 12, 0, 4, tzinfo=UTC),
+        )
+        service.okx_price = 103
+        next_bucket = await service.query_symbol_spreads(
+            "btc",
+            base_exchange="binance",
+            exchanges=["binance", "okx"],
+            hours=1,
+            interval_seconds=5,
+            now=datetime(2026, 7, 10, 12, 0, 8, tzinfo=UTC),
+        )
+    finally:
+        await service.aclose()
+        _REALTIME_SYMBOL_SPREAD_CACHE.clear()
+
+    assert first.interval_seconds == 5
+    assert first.point_count == 1
+    assert first.series[0].points[0].bucket_at == datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
+    assert "实时采样" in first.warnings[0]
+    assert updated_same_bucket.point_count == 1
+    assert updated_same_bucket.series[0].spread_abs.current == 2
+    assert next_bucket.point_count == 2
+    assert [point.bucket_at.second for point in next_bucket.series[0].points] == [0, 5]
+    assert next_bucket.series[0].spread_abs.current == 3
 
 
 @pytest.mark.asyncio

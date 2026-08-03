@@ -30,6 +30,7 @@ type PageKey =
   | "funding-research"
   | "opportunity-radar"
   | "pair-monitor"
+  | "symbol-spread"
   | "premium-index"
   | "minute-signals"
   | "second-sampling"
@@ -64,6 +65,11 @@ const lazyPages: Record<PageKey, LazyPage> = {
   "pair-monitor": lazy(() =>
     import("../pages/PairMonitorPage").then((module) => ({
       default: module.PairMonitorPage
+    }))
+  ),
+  "symbol-spread": lazy(() =>
+    import("../pages/SymbolSpreadPage").then((module) => ({
+      default: module.SymbolSpreadPage
     }))
   ),
   "premium-index": lazy(() =>
@@ -188,6 +194,11 @@ export function AppShell() {
               key: "pair-monitor",
               icon: <StockOutlined />,
               label: "价差查询"
+            },
+            {
+              key: "symbol-spread",
+              icon: <LineChartOutlined />,
+              label: "跨所价差"
             },
             {
               key: "premium-index",

@@ -622,6 +622,55 @@ export interface PairSpreadQueryResult {
   warnings: string[];
 }
 
+export interface SymbolExchangePriceSnapshot {
+  exchange: string;
+  symbol: string;
+  market_type: MarketType;
+  raw_symbol: string;
+  price: number;
+  price_field: PairSpreadPriceField;
+  funding_rate_pct: number | null;
+  timestamp: string;
+}
+
+export interface SymbolSpreadPoint {
+  bucket_at: string;
+  base_close: number;
+  exchange_close: number;
+  spread_abs: number;
+  spread_pct: number;
+}
+
+export interface SymbolSpreadSeries {
+  exchange: string;
+  symbol: string;
+  market_type: MarketType;
+  point_count: number;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+  spread_abs: PairSpreadValueStats;
+  spread_pct: PairSpreadValueStats;
+  current: SymbolSpreadPoint | null;
+  points: SymbolSpreadPoint[];
+}
+
+export interface SymbolSpreadQueryResult {
+  symbol: string;
+  market_type: MarketType;
+  base_exchange: string;
+  exchanges: string[];
+  hours: number;
+  interval_minutes: number;
+  interval_seconds: number;
+  observed_at: string;
+  point_count: number;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+  current_prices: SymbolExchangePriceSnapshot[];
+  series: SymbolSpreadSeries[];
+  warnings: string[];
+}
+
 export interface PairSpreadDiagnosticThresholdRun {
   start_at: string | null;
   end_at: string | null;

@@ -33,6 +33,10 @@ from app.models.pair_spread import (
     PairSpreadQueryResult,
     PairSpreadRealtimeFundingPoint,
     PairSpreadValueStats,
+    SymbolExchangePriceSnapshot,
+    SymbolSpreadPoint,
+    SymbolSpreadQueryResult,
+    SymbolSpreadSeries,
 )
 from app.models.phone_alert import PhonePriceAlertCondition, PhonePriceAlertEvent, PhonePriceAlertRule
 from app.models.premium_index import (
@@ -845,6 +849,104 @@ def test_pair_spread_query_endpoint_accepts_second_interval() -> None:
     payload = response.json()
     assert payload["interval_minutes"] == 1
     assert payload["interval_seconds"] == 5
+
+
+def test_symbol_spread_query_endpoint_accepts_custom_scope_and_interval() -> None:
+    fixed_now = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
+
+    class FakePairSpreadService:
+        async def query_symbol_spreads(
+            self,
+            symbol: str,
+            *,
+            market_type: MarketType = MarketType.FUTURE,
+            base_exchange: str = "binance",
+            exchanges: list[str] | None = None,
+            hours: int,
+            interval_seconds: int = 60,
+            now: datetime | None = None,
+            include_current: bool = True,
+        ) -> SymbolSpreadQueryResult:
+            assert symbol == "btc"
+            assert market_type == MarketType.FUTURE
+            assert base_exchange == "okx"
+            assert exchanges == ["okx", "bybit"]
+            assert hours == 6
+            assert interval_seconds == 5
+            assert include_current is True
+            observed_at = now or fixed_now
+            point = SymbolSpreadPoint(
+                bucket_at=observed_at,
+                base_close=100,
+                exchange_close=102,
+                spread_abs=2,
+                spread_pct=2,
+            )
+            return SymbolSpreadQueryResult(
+                symbol="BTCUSDT",
+                market_type=market_type,
+                base_exchange=base_exchange,
+                exchanges=[base_exchange, "bybit"],
+                hours=hours,
+                interval_minutes=1,
+                interval_seconds=interval_seconds,
+                observed_at=observed_at,
+                point_count=1,
+                first_seen_at=observed_at,
+                last_seen_at=observed_at,
+                current_prices=[
+                    SymbolExchangePriceSnapshot(
+                        exchange="okx",
+                        symbol="BTCUSDT",
+                        raw_symbol="BTC-USDT-SWAP",
+                        price=100,
+                        price_field=PairSpreadPriceField.MID_PRICE,
+                        timestamp=observed_at,
+                    ),
+                    SymbolExchangePriceSnapshot(
+                        exchange="bybit",
+                        symbol="BTCUSDT",
+                        raw_symbol="BTCUSDT",
+                        price=102,
+                        price_field=PairSpreadPriceField.MID_PRICE,
+                        timestamp=observed_at,
+                    ),
+                ],
+                series=[
+                    SymbolSpreadSeries(
+                        exchange="bybit",
+                        symbol="BTCUSDT",
+                        point_count=1,
+                        first_seen_at=observed_at,
+                        last_seen_at=observed_at,
+                        spread_abs=PairSpreadValueStats(current=2),
+                        spread_pct=PairSpreadValueStats(current=2),
+                        current=point,
+                        points=[point],
+                    )
+                ],
+            )
+
+        async def aclose(self) -> None:
+            return None
+
+    app = create_app(settings=Settings(database_url="sqlite:///:memory:"))
+    app.state.pair_spread_query_service_factory = FakePairSpreadService
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/pair-spread/symbol-query"
+            "?symbol=btc&market_type=future&base_exchange=okx"
+            "&exchanges=okx,bybit&hours=6&interval_seconds=5"
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["symbol"] == "BTCUSDT"
+    assert payload["base_exchange"] == "okx"
+    assert payload["exchanges"] == ["okx", "bybit"]
+    assert payload["interval_seconds"] == 5
+    assert payload["series"][0]["exchange"] == "bybit"
 
 
 def test_pair_spread_diagnostics_endpoint_coarsens_second_interval() -> None:

@@ -31,6 +31,11 @@ from app.models.pair_spread import (
     PairSpreadQueryResult,
     PairSpreadRealtimeFundingPoint,
     PairSpreadValueStats,
+    SUPPORTED_SYMBOL_SPREAD_EXCHANGES,
+    SymbolExchangePriceSnapshot,
+    SymbolSpreadPoint,
+    SymbolSpreadQueryResult,
+    SymbolSpreadSeries,
     normalize_binance_alpha_symbol,
 )
 
@@ -253,6 +258,8 @@ def _warnings_text(items: list[str]) -> str:
 _REALTIME_PAIR_SPREAD_CACHE: dict[str, list[PairSpreadPoint]] = {}
 # 实时资金费率由每次价差查询抓到的当前快照累积，和交易所整点结算历史分开保存。
 _REALTIME_PAIR_FUNDING_CACHE: dict[str, list[PairSpreadRealtimeFundingPoint]] = {}
+# 单标的跨交易所秒级价差没有统一历史源，使用每次查询抓到的当前价形成本地采样线。
+_REALTIME_SYMBOL_SPREAD_CACHE: dict[str, dict[str, list[SymbolSpreadPoint]]] = {}
 
 
 def _realtime_cache_key(
@@ -403,6 +410,137 @@ def build_pair_spread_points(
             )
         )
     return points
+
+
+def build_symbol_spread_points(
+    base_klines: list[PairSpreadKlinePoint],
+    exchange_klines: list[PairSpreadKlinePoint],
+) -> list[SymbolSpreadPoint]:
+    base_by_time = {point.bucket_at: point.close for point in base_klines}
+    exchange_by_time = {point.bucket_at: point.close for point in exchange_klines}
+    points: list[SymbolSpreadPoint] = []
+    for bucket_at in sorted(base_by_time.keys() & exchange_by_time.keys()):
+        base_close = base_by_time[bucket_at]
+        exchange_close = exchange_by_time[bucket_at]
+        if base_close <= 0 or exchange_close <= 0:
+            continue
+        spread_abs = exchange_close - base_close
+        points.append(
+            SymbolSpreadPoint(
+                bucket_at=bucket_at,
+                base_close=base_close,
+                exchange_close=exchange_close,
+                spread_abs=spread_abs,
+                spread_pct=_spread_pct(spread_abs, base_close, exchange_close),
+            )
+        )
+    return points
+
+
+def _symbol_spread_stats(points: list[SymbolSpreadPoint], field: str) -> PairSpreadValueStats:
+    return _stats([getattr(point, field) for point in points])
+
+
+def _symbol_spread_series(
+    *,
+    exchange: str,
+    symbol: str,
+    market_type: MarketType,
+    points: list[SymbolSpreadPoint],
+    current: SymbolSpreadPoint | None = None,
+) -> SymbolSpreadSeries:
+    stats_points = [*points]
+    if current is not None:
+        if stats_points and stats_points[-1].bucket_at == current.bucket_at:
+            stats_points[-1] = current
+        elif not stats_points or stats_points[-1].bucket_at < current.bucket_at:
+            stats_points.append(current)
+    return SymbolSpreadSeries(
+        exchange=exchange,
+        symbol=symbol,
+        market_type=market_type,
+        point_count=len(points),
+        first_seen_at=points[0].bucket_at if points else None,
+        last_seen_at=points[-1].bucket_at if points else None,
+        spread_abs=_symbol_spread_stats(stats_points, "spread_abs"),
+        spread_pct=_symbol_spread_stats(stats_points, "spread_pct"),
+        current=current,
+        points=points,
+    )
+
+
+def _symbol_current_price_snapshot(leg: PairSpreadCurrentLeg) -> SymbolExchangePriceSnapshot:
+    return SymbolExchangePriceSnapshot(
+        exchange=leg.exchange,
+        symbol=leg.symbol,
+        market_type=leg.market_type,
+        raw_symbol=leg.raw_symbol,
+        price=leg.price,
+        price_field=leg.price_field,
+        funding_rate_pct=leg.funding_rate_pct,
+        timestamp=leg.timestamp,
+    )
+
+
+def _symbol_current_spread_point(
+    base_leg: PairSpreadCurrentLeg,
+    exchange_leg: PairSpreadCurrentLeg,
+    bucket_at: datetime,
+) -> SymbolSpreadPoint:
+    spread_abs = exchange_leg.price - base_leg.price
+    return SymbolSpreadPoint(
+        bucket_at=bucket_at,
+        base_close=base_leg.price,
+        exchange_close=exchange_leg.price,
+        spread_abs=spread_abs,
+        spread_pct=_spread_pct(spread_abs, base_leg.price, exchange_leg.price),
+    )
+
+
+def _append_symbol_spread_point(
+    points: list[SymbolSpreadPoint],
+    point: SymbolSpreadPoint,
+) -> list[SymbolSpreadPoint]:
+    if points and points[-1].bucket_at == point.bucket_at:
+        points[-1] = point
+    else:
+        points.append(point)
+    if len(points) > PAIR_SPREAD_REALTIME_MAX_POINTS:
+        del points[:-PAIR_SPREAD_REALTIME_MAX_POINTS]
+    return points
+
+
+def _symbol_spread_cache_key(
+    *,
+    symbol: str,
+    market_type: MarketType,
+    base_exchange: str,
+    exchanges: list[str],
+    interval_seconds: int,
+) -> str:
+    return "|".join(
+        (
+            _compact_symbol(symbol),
+            str(market_type),
+            base_exchange,
+            ",".join(exchanges),
+            str(interval_seconds),
+        )
+    )
+
+
+def _normalize_symbol_spread_exchanges(
+    exchanges: list[str] | None,
+    base_exchange: str,
+) -> list[str]:
+    allowed = set(SUPPORTED_SYMBOL_SPREAD_EXCHANGES)
+    requested = exchanges or list(SUPPORTED_SYMBOL_SPREAD_EXCHANGES)
+    normalized: list[str] = []
+    for exchange in [base_exchange, *requested]:
+        item = exchange.strip().lower()
+        if item in allowed and item not in normalized:
+            normalized.append(item)
+    return normalized
 
 
 class PairSpreadQueryService:
@@ -581,6 +719,307 @@ class PairSpreadQueryService:
             funding_history=sorted(funding1 + funding2, key=lambda item: item.funding_time),
             realtime_funding=realtime_funding,
             warnings=warnings,
+        )
+
+    async def query_symbol_spreads(
+        self,
+        symbol: str,
+        *,
+        market_type: MarketType = MarketType.FUTURE,
+        base_exchange: str = "binance",
+        exchanges: list[str] | None = None,
+        hours: int,
+        interval_seconds: int = 60,
+        now: datetime | None = None,
+        include_current: bool = True,
+    ) -> SymbolSpreadQueryResult:
+        if interval_seconds not in PAIR_SPREAD_HISTORICAL_INTERVAL_SECONDS:
+            if not include_current:
+                raise PairSpreadQueryError("秒级周期只支持实时采样，历史对比请使用 1 分钟、5 分钟或 15 分钟周期")
+            return await self._query_symbol_spreads_realtime(
+                symbol,
+                market_type=market_type,
+                base_exchange=base_exchange,
+                exchanges=exchanges,
+                hours=hours,
+                interval_seconds=interval_seconds,
+                now=now,
+            )
+
+        interval_minutes = _interval_minutes_from_seconds(interval_seconds)
+        observed_at = now or utc_now()
+        end = _floor_minute(observed_at)
+        requested_start = end - timedelta(hours=hours)
+        normalized_exchanges = _normalize_symbol_spread_exchanges(exchanges, base_exchange)
+        if len(normalized_exchanges) < 2:
+            raise PairSpreadQueryError("至少需要两个支持的主流交易所才能画跨所价差")
+
+        legs_by_exchange = {
+            exchange: PairSpreadLegQuery(exchange=exchange, symbol=symbol, market_type=market_type)
+            for exchange in normalized_exchanges
+        }
+        query_symbol = next(iter(legs_by_exchange.values())).symbol
+        requested_base_exchange = base_exchange.strip().lower()
+        warnings: list[str] = []
+        failed_window_warnings: list[str] = []
+        effective_base_exchange = requested_base_exchange
+        raw_series_points: list[tuple[str, list[SymbolSpreadPoint]]] = []
+        used_start = requested_start
+
+        for window_hours in _query_window_hours(hours):
+            window_start = end - timedelta(hours=window_hours)
+            window_warnings: list[str] = []
+            kline_results = await asyncio.gather(
+                *(
+                    self._fetch_klines_with_warning(
+                        leg.exchange,
+                        leg.symbol,
+                        leg.market_type,
+                        window_start,
+                        end,
+                        interval_minutes,
+                        window_warnings,
+                    )
+                    for leg in legs_by_exchange.values()
+                )
+            )
+            klines_by_exchange = dict(zip(legs_by_exchange.keys(), kline_results, strict=True))
+            candidate_base_exchange = (
+                requested_base_exchange
+                if klines_by_exchange.get(requested_base_exchange)
+                else next((exchange for exchange in normalized_exchanges if klines_by_exchange.get(exchange)), None)
+            )
+            if candidate_base_exchange is None:
+                _extend_unique(failed_window_warnings, window_warnings)
+                continue
+
+            base_klines = klines_by_exchange[candidate_base_exchange]
+            candidate_series: list[tuple[str, list[SymbolSpreadPoint]]] = []
+            for exchange in normalized_exchanges:
+                if exchange == candidate_base_exchange:
+                    continue
+                exchange_klines = klines_by_exchange.get(exchange, [])
+                if not exchange_klines:
+                    continue
+                points = build_symbol_spread_points(base_klines, exchange_klines)
+                if points:
+                    candidate_series.append((exchange, points))
+                else:
+                    _append_unique(
+                        window_warnings,
+                        f"{exchange} 与基准 {candidate_base_exchange} 没有可对齐的K线。",
+                    )
+
+            if candidate_series:
+                raw_series_points = candidate_series
+                effective_base_exchange = candidate_base_exchange
+                used_start = window_start
+                if window_hours != hours:
+                    _append_unique(
+                        warnings,
+                        f"请求{_duration_text(hours)}没有拿到可对齐K线，已自动改查最近{_duration_text(window_hours)}。",
+                    )
+                if effective_base_exchange != requested_base_exchange:
+                    _append_unique(
+                        warnings,
+                        f"基准 {requested_base_exchange} 没有可用K线，已改用 {effective_base_exchange} 做基准。",
+                    )
+                _extend_unique(warnings, window_warnings)
+                break
+            _extend_unique(failed_window_warnings, window_warnings)
+
+        if not raw_series_points:
+            suffix = f": {_warnings_text(failed_window_warnings)}" if failed_window_warnings else ""
+            raise PairSpreadQueryError(f"没有拿到可用于跨所对比的分钟K线{suffix}")
+
+        all_points = [point for _, points in raw_series_points for point in points]
+        earliest_expected = used_start + timedelta(minutes=interval_minutes)
+        if all_points and min(point.bucket_at for point in all_points) > earliest_expected:
+            history_limit_warning = _hyperliquid_history_limit_warning(
+                {
+                    exchange
+                    for exchange, leg in legs_by_exchange.items()
+                    if leg.market_type == MarketType.FUTURE
+                },
+                hours=hours,
+                interval_minutes=interval_minutes,
+            )
+            warnings.insert(
+                0,
+                history_limit_warning
+                or (
+                    f"请求{_duration_text(hours)}，最早可对齐K线为"
+                    f"{_display_time(min(point.bucket_at for point in all_points))}，已按可获取数据展示。"
+                ),
+            )
+
+        current_prices: list[SymbolExchangePriceSnapshot] = []
+        current_by_exchange: dict[str, PairSpreadCurrentLeg] = {}
+        if include_current:
+            current_results = await asyncio.gather(
+                *(
+                    self._fetch_current_with_warning(leg, warnings)
+                    for leg in legs_by_exchange.values()
+                )
+            )
+            current_by_exchange = {
+                exchange: leg
+                for exchange, leg in zip(legs_by_exchange.keys(), current_results, strict=True)
+                if leg is not None
+            }
+            current_prices = [
+                _symbol_current_price_snapshot(current_by_exchange[exchange])
+                for exchange in normalized_exchanges
+                if exchange in current_by_exchange
+            ]
+
+        current_base = current_by_exchange.get(effective_base_exchange)
+        series = [
+            _symbol_spread_series(
+                exchange=exchange,
+                symbol=legs_by_exchange[exchange].symbol,
+                market_type=market_type,
+                points=points,
+                current=(
+                    _symbol_current_spread_point(current_base, current_by_exchange[exchange], observed_at)
+                    if current_base is not None and exchange in current_by_exchange
+                    else None
+                ),
+            )
+            for exchange, points in raw_series_points
+        ]
+
+        result_exchanges = [effective_base_exchange, *[item.exchange for item in series]]
+        result_points = [point for item in series for point in item.points]
+        return SymbolSpreadQueryResult(
+            symbol=query_symbol,
+            market_type=market_type,
+            base_exchange=effective_base_exchange,
+            exchanges=result_exchanges,
+            hours=hours,
+            interval_minutes=interval_minutes,
+            interval_seconds=interval_seconds,
+            observed_at=observed_at,
+            point_count=sum(item.point_count for item in series),
+            first_seen_at=min((point.bucket_at for point in result_points), default=None),
+            last_seen_at=max((point.bucket_at for point in result_points), default=None),
+            current_prices=current_prices,
+            series=series,
+            warnings=list(dict.fromkeys(warnings)),
+        )
+
+    async def _query_symbol_spreads_realtime(
+        self,
+        symbol: str,
+        *,
+        market_type: MarketType,
+        base_exchange: str,
+        exchanges: list[str] | None,
+        hours: int,
+        interval_seconds: int,
+        now: datetime | None = None,
+    ) -> SymbolSpreadQueryResult:
+        observed_at = now or utc_now()
+        bucket_at = _floor_interval(observed_at, interval_seconds)
+        normalized_exchanges = _normalize_symbol_spread_exchanges(exchanges, base_exchange)
+        if len(normalized_exchanges) < 2:
+            raise PairSpreadQueryError("至少需要两个支持的主流交易所才能画跨所价差")
+
+        legs_by_exchange = {
+            exchange: PairSpreadLegQuery(exchange=exchange, symbol=symbol, market_type=market_type)
+            for exchange in normalized_exchanges
+        }
+        query_symbol = next(iter(legs_by_exchange.values())).symbol
+        requested_base_exchange = base_exchange.strip().lower()
+        warnings: list[str] = []
+        current_results = await asyncio.gather(
+            *(
+                self._fetch_current_with_warning(leg, warnings)
+                for leg in legs_by_exchange.values()
+            )
+        )
+        current_by_exchange = {
+            exchange: leg
+            for exchange, leg in zip(legs_by_exchange.keys(), current_results, strict=True)
+            if leg is not None
+        }
+        if len(current_by_exchange) < 2:
+            suffix = f": {_warnings_text(warnings)}" if warnings else ""
+            raise PairSpreadQueryError(f"没有拿到足够的当前价格用于实时跨所采样{suffix}")
+
+        effective_base_exchange = (
+            requested_base_exchange
+            if requested_base_exchange in current_by_exchange
+            else next(exchange for exchange in normalized_exchanges if exchange in current_by_exchange)
+        )
+        if effective_base_exchange != requested_base_exchange:
+            _append_unique(
+                warnings,
+                f"基准 {requested_base_exchange} 没有当前价格，已改用 {effective_base_exchange} 做基准。",
+            )
+        base_leg = current_by_exchange[effective_base_exchange]
+        result_exchanges = [
+            effective_base_exchange,
+            *[
+                exchange
+                for exchange in normalized_exchanges
+                if exchange != effective_base_exchange and exchange in current_by_exchange
+            ],
+        ]
+        cache_key = _symbol_spread_cache_key(
+            symbol=query_symbol,
+            market_type=market_type,
+            base_exchange=effective_base_exchange,
+            exchanges=result_exchanges,
+            interval_seconds=interval_seconds,
+        )
+        cached_by_exchange = _REALTIME_SYMBOL_SPREAD_CACHE.setdefault(cache_key, {})
+        cutoff = observed_at - timedelta(hours=hours)
+        series: list[SymbolSpreadSeries] = []
+        for exchange in result_exchanges:
+            if exchange == effective_base_exchange:
+                continue
+            current_point = _symbol_current_spread_point(base_leg, current_by_exchange[exchange], bucket_at)
+            cached_points = cached_by_exchange.setdefault(exchange, [])
+            _append_symbol_spread_point(cached_points, current_point)
+            points = [point for point in cached_points if point.bucket_at >= cutoff]
+            if len(points) != len(cached_points):
+                cached_by_exchange[exchange] = points
+            series.append(
+                _symbol_spread_series(
+                    exchange=exchange,
+                    symbol=legs_by_exchange[exchange].symbol,
+                    market_type=market_type,
+                    points=points,
+                    current=current_point,
+                )
+            )
+
+        if any(item.point_count <= 1 for item in series):
+            _append_unique(
+                warnings,
+                f"{_interval_text(interval_seconds)}周期为实时采样，需要保持刷新一段时间后才会形成连续曲线。",
+            )
+
+        result_points = [point for item in series for point in item.points]
+        return SymbolSpreadQueryResult(
+            symbol=query_symbol,
+            market_type=market_type,
+            base_exchange=effective_base_exchange,
+            exchanges=result_exchanges,
+            hours=hours,
+            interval_minutes=1,
+            interval_seconds=interval_seconds,
+            observed_at=observed_at,
+            point_count=sum(item.point_count for item in series),
+            first_seen_at=min((point.bucket_at for point in result_points), default=None),
+            last_seen_at=max((point.bucket_at for point in result_points), default=None),
+            current_prices=[
+                _symbol_current_price_snapshot(current_by_exchange[exchange])
+                for exchange in result_exchanges
+            ],
+            series=series,
+            warnings=list(dict.fromkeys(warnings)),
         )
 
     async def _query_realtime(

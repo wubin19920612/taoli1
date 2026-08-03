@@ -16,6 +16,9 @@ SUPPORTED_PAIR_SPREAD_EXCHANGES: tuple[str, ...] = (
     "aster",
     "hyperliquid",
 )
+SUPPORTED_SYMBOL_SPREAD_EXCHANGES: tuple[str, ...] = tuple(
+    exchange for exchange in SUPPORTED_PAIR_SPREAD_EXCHANGES if exchange != "binance_alpha"
+)
 PAIR_SPREAD_MIN_HOURS = 1
 PAIR_SPREAD_MAX_HOURS = 720
 PAIR_SPREAD_INTERVAL_OPTIONS: tuple[int, ...] = (1, 5, 15)
@@ -195,6 +198,55 @@ class PairSpreadQueryResult(BaseModel):
     points: list[PairSpreadPoint]
     funding_history: list[PairSpreadFundingPoint] = Field(default_factory=list)
     realtime_funding: list[PairSpreadRealtimeFundingPoint] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class SymbolExchangePriceSnapshot(BaseModel):
+    exchange: str
+    symbol: str
+    market_type: MarketType = MarketType.FUTURE
+    raw_symbol: str
+    price: float
+    price_field: PairSpreadPriceField
+    funding_rate_pct: float | None = None
+    timestamp: datetime
+
+
+class SymbolSpreadPoint(BaseModel):
+    bucket_at: datetime
+    base_close: float
+    exchange_close: float
+    spread_abs: float
+    spread_pct: float
+
+
+class SymbolSpreadSeries(BaseModel):
+    exchange: str
+    symbol: str
+    market_type: MarketType = MarketType.FUTURE
+    point_count: int
+    first_seen_at: datetime | None = None
+    last_seen_at: datetime | None = None
+    spread_abs: PairSpreadValueStats
+    spread_pct: PairSpreadValueStats
+    current: SymbolSpreadPoint | None = None
+    points: list[SymbolSpreadPoint]
+
+
+class SymbolSpreadQueryResult(BaseModel):
+    symbol: str
+    market_type: MarketType = MarketType.FUTURE
+    base_exchange: str
+    exchanges: list[str]
+    hours: int
+    interval_minutes: int = 1
+    interval_seconds: int = 60
+    observed_at: datetime
+    point_count: int
+    first_seen_at: datetime | None = None
+    last_seen_at: datetime | None = None
+    current_prices: list[SymbolExchangePriceSnapshot] = Field(default_factory=list)
+    series: list[SymbolSpreadSeries]
     warnings: list[str] = Field(default_factory=list)
 
 

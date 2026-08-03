@@ -1887,6 +1887,258 @@ body {
   min-width: 0;
 }
 
+.symbol-spread-page {
+  gap: 10px;
+}
+
+.symbol-spread-query-panel,
+.symbol-spread-chart-card,
+.symbol-spread-detail-card {
+  min-width: 0;
+  background: #ffffff;
+  border: 1px solid #e2e8e5;
+  border-radius: 6px;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.04);
+}
+
+.symbol-spread-query-panel {
+  padding: 8px;
+}
+
+.symbol-spread-query-bar {
+  display: grid;
+  grid-template-columns:
+    minmax(170px, 0.78fr)
+    minmax(106px, 0.42fr)
+    minmax(150px, 0.58fr)
+    minmax(280px, 1.3fr)
+    minmax(102px, 0.38fr)
+    minmax(122px, 0.46fr)
+    minmax(74px, 0.28fr)
+    minmax(160px, 0.58fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.symbol-spread-query-bar .ant-form-item {
+  margin: 0;
+}
+
+.symbol-spread-query-bar .ant-input-group-wrapper,
+.symbol-spread-query-bar .ant-input-number-group-wrapper,
+.symbol-spread-query-bar .ant-input-number,
+.symbol-spread-query-bar .ant-select,
+.symbol-spread-query-bar .ant-btn,
+.symbol-spread-actions {
+  width: 100%;
+}
+
+.symbol-spread-query-bar .ant-input,
+.symbol-spread-query-bar .ant-input-group-addon,
+.symbol-spread-query-bar .ant-input-number,
+.symbol-spread-query-bar .ant-input-number-group-addon,
+.symbol-spread-query-bar .ant-select-selector,
+.symbol-spread-query-bar .ant-btn {
+  min-height: 34px;
+  border-radius: 6px;
+}
+
+.symbol-spread-query-bar .ant-input-group-addon,
+.symbol-spread-query-bar .ant-input-number-group-addon {
+  min-width: 52px;
+  color: #24352f;
+  font-weight: 600;
+  background: #f8faf9;
+}
+
+.symbol-spread-refresh {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.symbol-spread-actions {
+  display: grid;
+  grid-template-columns: 1fr 0.86fr;
+  gap: 8px;
+}
+
+.symbol-spread-metric-grid {
+  display: grid;
+  grid-template-columns: 1fr 1.18fr 1fr 1fr 1.2fr;
+  gap: 10px;
+}
+
+.symbol-spread-metric-card {
+  min-height: 92px;
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 14px 16px;
+  background: #ffffff;
+  border: 1px solid #e2e8e5;
+  border-radius: 6px;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.04);
+}
+
+.symbol-spread-metric-label,
+.symbol-spread-metric-sub {
+  overflow: hidden;
+  color: #687872;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.symbol-spread-metric-value {
+  overflow: hidden;
+  color: #17211d;
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: 0;
+  line-height: 1.05;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.symbol-spread-metric-positive .symbol-spread-metric-value {
+  color: #b42318;
+}
+
+.symbol-spread-metric-negative .symbol-spread-metric-value {
+  color: #14803c;
+}
+
+.symbol-spread-chart-card {
+  overflow: hidden;
+  display: grid;
+  gap: 8px;
+  padding: 12px 12px 8px;
+}
+
+.symbol-spread-chart-head,
+.symbol-spread-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.symbol-spread-chart-head .ant-typography,
+.symbol-spread-detail-head .ant-typography {
+  margin: 0;
+}
+
+.symbol-spread-chart-tags {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+}
+
+.symbol-spread-chart {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.symbol-spread-chart rect {
+  fill: #ffffff;
+  stroke: #eef2f1;
+}
+
+.symbol-spread-grid-line,
+.symbol-spread-time-tick {
+  stroke: #edf2f0;
+  stroke-width: 1;
+}
+
+.symbol-spread-zero-line {
+  stroke: #a7b0ad;
+  stroke-width: 1.1;
+  stroke-dasharray: 5 4;
+}
+
+.symbol-spread-line {
+  fill: none;
+  stroke-width: 2.15;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.symbol-spread-latest-dot {
+  stroke: #ffffff;
+  stroke-width: 2;
+}
+
+.symbol-spread-axis-label {
+  fill: #6b7a75;
+  font-size: 12px;
+}
+
+.symbol-spread-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  color: #66736f;
+  font-size: 12px;
+}
+
+.symbol-spread-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+}
+
+.symbol-spread-legend span::before {
+  content: "";
+  width: 18px;
+  height: 2px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.symbol-spread-chart-empty {
+  min-height: 330px;
+  display: grid;
+  place-items: center;
+  color: #687872;
+  background: #ffffff;
+  border: 1px dashed #dbe4e0;
+  border-radius: 6px;
+}
+
+.symbol-spread-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(360px, 0.82fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.symbol-spread-detail-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.symbol-spread-rate {
+  font-weight: 800;
+}
+
+.symbol-spread-rate-positive {
+  color: #b42318;
+}
+
+.symbol-spread-rate-negative {
+  color: #14803c;
+}
+
 .pair-funding-grid,
 .pair-detail-grid {
   display: grid;
@@ -2592,6 +2844,14 @@ body {
   }
 
   .pair-query-actions {
+    grid-column: 1 / -1;
+  }
+
+  .symbol-spread-query-bar {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .symbol-spread-actions {
     grid-column: 1 / -1;
   }
 
@@ -3361,6 +3621,7 @@ body {
   .pair-monitor-tables,
   .pair-funding-grid,
   .pair-detail-grid,
+  .symbol-spread-detail-grid,
   .template-grid {
     grid-template-columns: 1fr;
   }
@@ -3371,6 +3632,7 @@ body {
   .research-metrics,
   .pair-monitor-stats,
   .pair-metric-grid,
+  .symbol-spread-metric-grid,
   .premium-metric-grid,
   .spread-history-stats,
   .live-pilot-metrics,
@@ -3388,11 +3650,13 @@ body {
   }
 
   .pair-query-bar,
+  .symbol-spread-query-bar,
   .premium-query-bar {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .pair-query-actions,
+  .symbol-spread-actions,
   .premium-query-actions {
     grid-column: 1 / -1;
   }
@@ -3419,6 +3683,8 @@ body {
   .pair-price-head,
   .pair-price-subhead,
   .pair-premium-head,
+  .symbol-spread-chart-head,
+  .symbol-spread-detail-head,
   .premium-detail-head,
   .spread-history-head,
   .announcements-settings-head,
@@ -3481,6 +3747,9 @@ body {
   .pair-monitor-tables,
   .pair-query-bar,
   .pair-metric-grid,
+  .symbol-spread-query-bar,
+  .symbol-spread-metric-grid,
+  .symbol-spread-detail-grid,
   .pair-diagnostic-metrics,
   .pair-funding-grid,
   .pair-detail-grid,
@@ -3659,16 +3928,19 @@ body {
   }
 
   .pair-query-bar,
+  .symbol-spread-query-bar,
   .premium-query-bar {
     grid-template-columns: 1fr;
   }
 
   .pair-query-actions,
+  .symbol-spread-actions,
   .premium-query-actions {
     grid-template-columns: 1fr;
   }
 
   .pair-query-actions .ant-btn,
+  .symbol-spread-actions .ant-btn,
   .premium-query-actions .ant-btn,
   .index-component-watch-add,
   .index-component-watch-add .ant-btn {
