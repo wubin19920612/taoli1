@@ -234,6 +234,8 @@ def _leg(
     raw_symbol: str | None = None,
     bid: float | None = None,
     ask: float | None = None,
+    bid_size: float | None = None,
+    ask_size: float | None = None,
     last: float | None = None,
     mark: float | None = None,
     index: float | None = None,
@@ -244,6 +246,8 @@ def _leg(
         "raw_symbol": raw_symbol,
         "bid": _positive(bid),
         "ask": _positive(ask),
+        "bid_size": _positive(bid_size),
+        "ask_size": _positive(ask_size),
         "mid": mid,
         "last": _positive(last),
         "mark": _positive(mark),
@@ -287,13 +291,13 @@ class SecondLevelSamplingRepository:
             """
             INSERT INTO second_level_market_samples (
               observed_at, exchange, symbol, status,
-              spot_bid, spot_ask, spot_mid, spot_last,
-              future_bid, future_ask, future_mid, future_last,
+              spot_bid, spot_ask, spot_bid_size, spot_ask_size, spot_mid, spot_last,
+              future_bid, future_ask, future_bid_size, future_ask_size, future_mid, future_last,
               mark_price, index_price, mark_premium_pct, mid_premium_pct,
               funding_rate_pct, raw_spot_symbol, raw_future_symbol,
               latency_ms, error
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
@@ -303,10 +307,14 @@ class SecondLevelSamplingRepository:
                     item.status,
                     item.spot_bid,
                     item.spot_ask,
+                    item.spot_bid_size,
+                    item.spot_ask_size,
                     item.spot_mid,
                     item.spot_last,
                     item.future_bid,
                     item.future_ask,
+                    item.future_bid_size,
+                    item.future_ask_size,
                     item.future_mid,
                     item.future_last,
                     item.mark_price,
@@ -532,10 +540,14 @@ def _sample_from_row(row: aiosqlite.Row) -> SecondLevelMarketSample:
         status=row["status"],
         spot_bid=row["spot_bid"],
         spot_ask=row["spot_ask"],
+        spot_bid_size=row["spot_bid_size"],
+        spot_ask_size=row["spot_ask_size"],
         spot_mid=row["spot_mid"],
         spot_last=row["spot_last"],
         future_bid=row["future_bid"],
         future_ask=row["future_ask"],
+        future_bid_size=row["future_bid_size"],
+        future_ask_size=row["future_ask_size"],
         future_mid=row["future_mid"],
         future_last=row["future_last"],
         mark_price=row["mark_price"],
@@ -649,10 +661,14 @@ class SecondLevelMarketFetcher:
             status=status,
             spot_bid=spot.get("bid") if spot else None,
             spot_ask=spot.get("ask") if spot else None,
+            spot_bid_size=spot.get("bid_size") if spot else None,
+            spot_ask_size=spot.get("ask_size") if spot else None,
             spot_mid=spot.get("mid") if spot else None,
             spot_last=spot.get("last") if spot else None,
             future_bid=future.get("bid") if future else None,
             future_ask=future.get("ask") if future else None,
+            future_bid_size=future.get("bid_size") if future else None,
+            future_ask_size=future.get("ask_size") if future else None,
             future_mid=future.get("mid") if future else None,
             future_last=future.get("last") if future else None,
             mark_price=future.get("mark") if future else None,
@@ -853,6 +869,8 @@ class SecondLevelMarketFetcher:
             raw_symbol=raw,
             bid=parse_float(row.get("bid1Price")),
             ask=parse_float(row.get("ask1Price")),
+            bid_size=parse_float(row.get("bid1Size")),
+            ask_size=parse_float(row.get("ask1Size")),
             last=parse_float(row.get("lastPrice")),
         )
 
@@ -865,6 +883,8 @@ class SecondLevelMarketFetcher:
             raw_symbol=raw,
             bid=parse_float(row.get("bid1Price")),
             ask=parse_float(row.get("ask1Price")),
+            bid_size=parse_float(row.get("bid1Size")),
+            ask_size=parse_float(row.get("ask1Size")),
             last=parse_float(row.get("lastPrice")),
             mark=parse_float(row.get("markPrice")),
             index=parse_float(row.get("indexPrice")),
@@ -879,6 +899,8 @@ class SecondLevelMarketFetcher:
             raw_symbol=raw,
             bid=parse_float(row.get("bidPr") or row.get("bid")),
             ask=parse_float(row.get("askPr") or row.get("ask")),
+            bid_size=parse_float(row.get("bidSz") or row.get("bidSize")),
+            ask_size=parse_float(row.get("askSz") or row.get("askSize")),
             last=parse_float(row.get("lastPr") or row.get("last") or row.get("close")),
         )
 
@@ -894,6 +916,8 @@ class SecondLevelMarketFetcher:
             raw_symbol=raw,
             bid=parse_float(row.get("bidPr") or row.get("bid")),
             ask=parse_float(row.get("askPr") or row.get("ask")),
+            bid_size=parse_float(row.get("bidSz") or row.get("bidSize")),
+            ask_size=parse_float(row.get("askSz") or row.get("askSize")),
             last=parse_float(row.get("lastPr") or row.get("last")),
             mark=parse_float(row.get("markPrice")),
             index=parse_float(row.get("indexPrice")),
@@ -903,7 +927,13 @@ class SecondLevelMarketFetcher:
     async def _fetch_binance_spot(self, symbol: str) -> dict[str, Any]:
         raw = _compact_symbol(symbol)
         payload = await self._get_json(f"https://api.binance.com/api/v3/ticker/bookTicker?symbol={raw}")
-        return _leg(raw_symbol=raw, bid=parse_float(payload.get("bidPrice")), ask=parse_float(payload.get("askPrice")))
+        return _leg(
+            raw_symbol=raw,
+            bid=parse_float(payload.get("bidPrice")),
+            ask=parse_float(payload.get("askPrice")),
+            bid_size=parse_float(payload.get("bidQty")),
+            ask_size=parse_float(payload.get("askQty")),
+        )
 
     async def _fetch_binance_future(self, symbol: str) -> dict[str, Any]:
         raw = _compact_symbol(symbol)
@@ -916,6 +946,8 @@ class SecondLevelMarketFetcher:
             raw_symbol=raw,
             bid=parse_float(book.get("bidPrice")) if isinstance(book, dict) else None,
             ask=parse_float(book.get("askPrice")) if isinstance(book, dict) else None,
+            bid_size=parse_float(book.get("bidQty")) if isinstance(book, dict) else None,
+            ask_size=parse_float(book.get("askQty")) if isinstance(book, dict) else None,
             mark=parse_float(premium.get("markPrice")) if isinstance(premium, dict) else None,
             index=parse_float(premium.get("indexPrice")) if isinstance(premium, dict) else None,
             funding_rate_pct=funding * 100 if funding is not None else None,
@@ -932,6 +964,8 @@ class SecondLevelMarketFetcher:
             raw_symbol=raw,
             bid=parse_float(book.get("bidPrice")) if isinstance(book, dict) else None,
             ask=parse_float(book.get("askPrice")) if isinstance(book, dict) else None,
+            bid_size=parse_float(book.get("bidQty")) if isinstance(book, dict) else None,
+            ask_size=parse_float(book.get("askQty")) if isinstance(book, dict) else None,
             mark=parse_float(premium.get("markPrice")) if isinstance(premium, dict) else None,
             index=parse_float(premium.get("indexPrice")) if isinstance(premium, dict) else None,
             funding_rate_pct=funding * 100 if funding is not None else None,
@@ -945,6 +979,8 @@ class SecondLevelMarketFetcher:
             raw_symbol=inst_id,
             bid=parse_float(row.get("bidPx")),
             ask=parse_float(row.get("askPx")),
+            bid_size=parse_float(row.get("bidSz")),
+            ask_size=parse_float(row.get("askSz")),
             last=parse_float(row.get("last")),
         )
 
@@ -966,6 +1002,8 @@ class SecondLevelMarketFetcher:
             raw_symbol=inst_id,
             bid=parse_float(ticker.get("bidPx")),
             ask=parse_float(ticker.get("askPx")),
+            bid_size=parse_float(ticker.get("bidSz")),
+            ask_size=parse_float(ticker.get("askSz")),
             last=parse_float(ticker.get("last")),
             mark=parse_float(mark.get("markPx")),
             index=parse_float(index.get("idxPx")),

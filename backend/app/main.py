@@ -20,6 +20,7 @@ from app.api import (
     routes_history,
     routes_index_components,
     routes_minute_signals,
+    routes_new_listing_monitor,
     routes_opportunities,
     routes_opportunity_radar,
     routes_pair_spread,
@@ -84,6 +85,7 @@ from app.services.live_pilot import (
     select_live_pilot_opportunities,
 )
 from app.services.minute_signal_scan import MinuteSignalAlertEngine
+from app.services.new_listing_monitor import NewListingMonitor, NewListingMonitorRepository
 from app.services.orderbook_validator import OrderBookDepthValidator
 from app.services.opportunity_radar import (
     OpportunityRadarAlertEngine,
@@ -598,9 +600,18 @@ def create_app(
         app.state.index_component_repo = IndexComponentRepository(db)
         app.state.announcement_repo = AnnouncementRepository(db)
         app.state.second_level_sampler = SecondLevelSampler(SecondLevelSamplingRepository(db))
+        app.state.new_listing_monitor = NewListingMonitor(
+            NewListingMonitorRepository(db),
+            alert_sender=lambda message: _send_index_component_alert(app, message),
+        )
         app.state.pair_spread_funding_recorder = PairSpreadFundingRecorder(PairSpreadFundingRepository(db))
         await app.state.second_level_sampler.initialize()
         tasks: list[asyncio.Task] = []
+        _start_background_task(
+            tasks,
+            app.state.new_listing_monitor.run(stop_event),
+            name="new-listing-monitor",
+        )
         _start_background_task(
             tasks,
             app.state.pair_spread_funding_recorder.run(stop_event),
@@ -723,6 +734,7 @@ def create_app(
                 "gate_twap_manager",
                 "tradfi_perp_live_fetcher",
                 "second_level_sampler",
+                "new_listing_monitor",
                 "pair_spread_funding_recorder",
                 "feishu_notifier",
             )
@@ -740,6 +752,7 @@ def create_app(
     app.state.minute_signal_scan_service_factory = None
     app.state.minute_signal_alert_engine = MinuteSignalAlertEngine()
     app.state.second_level_sampler = None
+    app.state.new_listing_monitor = None
     app.state.alert_engine = AlertEngine()
     app.state.phone_price_alert_engine = PhonePriceAlertEngine()
     app.state.opportunity_radar_alert_engine = OpportunityRadarAlertEngine()
@@ -795,6 +808,7 @@ def create_app(
     app.include_router(routes_pair_spread.router, prefix="/api")
     app.include_router(routes_premium_index.router, prefix="/api")
     app.include_router(routes_minute_signals.router, prefix="/api")
+    app.include_router(routes_new_listing_monitor.router, prefix="/api")
     app.include_router(routes_index_components.router, prefix="/api")
     app.include_router(routes_announcements.router, prefix="/api")
     app.include_router(routes_alerts.router, prefix="/api")

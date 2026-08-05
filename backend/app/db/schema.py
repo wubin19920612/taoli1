@@ -63,6 +63,22 @@ async def _ensure_exchange_announcement_columns(db: aiosqlite.Connection) -> Non
         await db.execute(f"ALTER TABLE exchange_announcements ADD COLUMN {name} {ddl}")
 
 
+async def _ensure_second_level_sample_columns(db: aiosqlite.Connection) -> None:
+    cursor = await db.execute("PRAGMA table_info(second_level_market_samples)")
+    rows = await cursor.fetchall()
+    existing = {row["name"] for row in rows}
+    columns: dict[str, str] = {
+        "spot_bid_size": "REAL",
+        "spot_ask_size": "REAL",
+        "future_bid_size": "REAL",
+        "future_ask_size": "REAL",
+    }
+    for name, ddl in columns.items():
+        if name in existing:
+            continue
+        await db.execute(f"ALTER TABLE second_level_market_samples ADD COLUMN {name} {ddl}")
+
+
 async def initialize_schema(db: aiosqlite.Connection) -> None:
     await db.executescript(
         """
@@ -346,10 +362,14 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
           status TEXT NOT NULL,
           spot_bid REAL,
           spot_ask REAL,
+          spot_bid_size REAL,
+          spot_ask_size REAL,
           spot_mid REAL,
           spot_last REAL,
           future_bid REAL,
           future_ask REAL,
+          future_bid_size REAL,
+          future_ask_size REAL,
           future_mid REAL,
           future_last REAL,
           mark_price REAL,
@@ -403,6 +423,76 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_second_level_component_samples_time
           ON second_level_index_component_samples(observed_at DESC);
 
+        CREATE TABLE IF NOT EXISTS new_listing_watchlist (
+          id TEXT PRIMARY KEY,
+          payload TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS new_listing_spread_samples (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          watch_id TEXT NOT NULL,
+          observed_at TEXT NOT NULL,
+          symbol TEXT NOT NULL,
+          market_type TEXT NOT NULL,
+          buy_exchange TEXT NOT NULL,
+          sell_exchange TEXT NOT NULL,
+          buy_bid REAL,
+          buy_ask REAL,
+          buy_bid_size REAL,
+          buy_ask_size REAL,
+          sell_bid REAL,
+          sell_ask REAL,
+          sell_bid_size REAL,
+          sell_ask_size REAL,
+          buy_price REAL NOT NULL,
+          sell_price REAL NOT NULL,
+          raw_spread_pct REAL NOT NULL,
+          net_spread_pct REAL NOT NULL,
+          executable_notional_usdt REAL,
+          buy_latency_ms REAL,
+          sell_latency_ms REAL,
+          alert_level TEXT NOT NULL,
+          alert_triggered INTEGER NOT NULL DEFAULT 0,
+          no_alert_reason TEXT,
+          risk_labels_json TEXT NOT NULL DEFAULT '[]',
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (watch_id) REFERENCES new_listing_watchlist(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_new_listing_samples_symbol_time
+          ON new_listing_spread_samples(symbol, observed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_new_listing_samples_watch_time
+          ON new_listing_spread_samples(watch_id, observed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_new_listing_samples_pair_time
+          ON new_listing_spread_samples(symbol, buy_exchange, sell_exchange, observed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_new_listing_samples_time
+          ON new_listing_spread_samples(observed_at DESC);
+
+        CREATE TABLE IF NOT EXISTS new_listing_alert_events (
+          id TEXT PRIMARY KEY,
+          watch_id TEXT NOT NULL,
+          symbol TEXT NOT NULL,
+          market_type TEXT NOT NULL,
+          level TEXT NOT NULL,
+          buy_exchange TEXT NOT NULL,
+          sell_exchange TEXT NOT NULL,
+          net_spread_pct REAL NOT NULL,
+          raw_spread_pct REAL NOT NULL,
+          executable_notional_usdt REAL,
+          message TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY (watch_id) REFERENCES new_listing_watchlist(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_new_listing_events_symbol_time
+          ON new_listing_alert_events(symbol, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_new_listing_events_watch_time
+          ON new_listing_alert_events(watch_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_new_listing_events_time
+          ON new_listing_alert_events(created_at DESC);
+
         CREATE TABLE IF NOT EXISTS pair_spread_funding_watchlist (
           pair_key TEXT PRIMARY KEY,
           leg1_exchange TEXT NOT NULL,
@@ -436,5 +526,6 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
     )
     await _ensure_opportunity_history_columns(db)
     await _ensure_exchange_announcement_columns(db)
+    await _ensure_second_level_sample_columns(db)
     await _migrate_alert_rule_excluded_labels(db)
     await db.commit()

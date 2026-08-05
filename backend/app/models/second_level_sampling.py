@@ -81,10 +81,14 @@ class SecondLevelMarketSample(BaseModel):
     status: SecondLevelSampleStatus
     spot_bid: float | None = None
     spot_ask: float | None = None
+    spot_bid_size: float | None = None
+    spot_ask_size: float | None = None
     spot_mid: float | None = None
     spot_last: float | None = None
     future_bid: float | None = None
     future_ask: float | None = None
+    future_bid_size: float | None = None
+    future_ask_size: float | None = None
     future_mid: float | None = None
     future_last: float | None = None
     mark_price: float | None = None

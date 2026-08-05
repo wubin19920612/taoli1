@@ -33,6 +33,7 @@ type PageKey =
   | "symbol-spread"
   | "premium-index"
   | "minute-signals"
+  | "new-listing"
   | "second-sampling"
   | "tradfi-perp"
   | "gate-twap"
@@ -80,6 +81,11 @@ const lazyPages: Record<PageKey, LazyPage> = {
   "minute-signals": lazy(() =>
     import("../pages/MinuteSignalPage").then((module) => ({
       default: module.MinuteSignalPage
+    }))
+  ),
+  "new-listing": lazy(() =>
+    import("../pages/NewListingMonitorPage").then((module) => ({
+      default: module.NewListingMonitorPage
     }))
   ),
   "second-sampling": lazy(() =>
@@ -209,6 +215,11 @@ export function AppShell() {
               key: "minute-signals",
               icon: <ThunderboltOutlined />,
               label: "1 分钟价差信号"
+            },
+            {
+              key: "new-listing",
+              icon: <ThunderboltOutlined />,
+              label: "新币极速"
             },
             {
               key: "second-sampling",

@@ -6,6 +6,7 @@ export type PhonePriceAlertPriceField = "mark_price" | "index_price" | "mid_pric
 export type PairSpreadPriceField = "mark_price" | "mid_price" | "index_price" | "last_price";
 export type AnnouncementKind = "listing" | "delisting" | "other";
 export type SecondLevelSampleStatus = "ok" | "partial" | "error";
+export type NewListingAlertLevel = "none" | "normal" | "strong" | "extreme";
 
 export interface Opportunity {
   id: string;
@@ -110,10 +111,14 @@ export interface SecondLevelMarketSample {
   status: SecondLevelSampleStatus;
   spot_bid?: number | null;
   spot_ask?: number | null;
+  spot_bid_size?: number | null;
+  spot_ask_size?: number | null;
   spot_mid?: number | null;
   spot_last?: number | null;
   future_bid?: number | null;
   future_ask?: number | null;
+  future_bid_size?: number | null;
+  future_ask_size?: number | null;
   future_mid?: number | null;
   future_last?: number | null;
   mark_price?: number | null;
@@ -196,6 +201,103 @@ export interface SecondLevelSamplingStatus {
   latest_spreads: SecondLevelPairSpreadSnapshot[];
   latest_component_samples: SecondLevelIndexComponentSample[];
   latest_component_signals: SecondLevelIndexComponentSignal[];
+}
+
+export interface NewListingWatchItem {
+  id: string;
+  enabled: boolean;
+  symbol: string;
+  market_type: MarketType;
+  exchanges: string[];
+  interval_seconds: number;
+  retention_hours: number;
+  normal_threshold_pct: number;
+  strong_threshold_pct: number;
+  extreme_threshold_pct: number;
+  min_executable_notional_usdt: number;
+  depth_validation_notional_usdt: number;
+  allow_low_liquidity_alert: boolean;
+  normal_consecutive_hits: number;
+  strong_consecutive_hits: number;
+  extreme_consecutive_hits: number;
+  cooldown_seconds: number;
+  buy_fee_pct: number;
+  sell_fee_pct: number;
+  slippage_buffer_pct: number;
+  note: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NewListingSpreadSample {
+  id?: number | null;
+  watch_id: string;
+  observed_at: string;
+  symbol: string;
+  market_type: MarketType;
+  buy_exchange: string;
+  sell_exchange: string;
+  buy_bid?: number | null;
+  buy_ask?: number | null;
+  buy_bid_size?: number | null;
+  buy_ask_size?: number | null;
+  sell_bid?: number | null;
+  sell_ask?: number | null;
+  sell_bid_size?: number | null;
+  sell_ask_size?: number | null;
+  buy_price: number;
+  sell_price: number;
+  raw_spread_pct: number;
+  net_spread_pct: number;
+  executable_notional_usdt?: number | null;
+  buy_latency_ms?: number | null;
+  sell_latency_ms?: number | null;
+  alert_level: NewListingAlertLevel;
+  alert_triggered: boolean;
+  no_alert_reason?: string | null;
+  risk_labels: string[];
+}
+
+export interface NewListingAlertEvent {
+  id: string;
+  watch_id: string;
+  symbol: string;
+  market_type: MarketType;
+  level: NewListingAlertLevel;
+  buy_exchange: string;
+  sell_exchange: string;
+  net_spread_pct: number;
+  raw_spread_pct: number;
+  executable_notional_usdt?: number | null;
+  message: string;
+  created_at: string;
+}
+
+export interface NewListingMonitorStatus {
+  running: boolean;
+  watch_count: number;
+  enabled_watch_count: number;
+  sample_count: number;
+  event_count: number;
+  latest_error?: string | null;
+  watchlist: NewListingWatchItem[];
+  latest_samples: NewListingSpreadSample[];
+  latest_events: NewListingAlertEvent[];
+}
+
+export interface NewListingHistoryResult {
+  symbol?: string | null;
+  watch_id?: string | null;
+  start_at: string;
+  end_at: string;
+  sample_count: number;
+  event_count: number;
+  max_raw_spread_pct?: number | null;
+  max_net_spread_pct?: number | null;
+  max_sample?: NewListingSpreadSample | null;
+  samples: NewListingSpreadSample[];
+  events: NewListingAlertEvent[];
+  warnings: string[];
 }
 
 export interface HealthStatus {
