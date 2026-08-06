@@ -1741,6 +1741,10 @@ body {
   font-size: 12px;
 }
 
+.pair-chart-axis-label-hourly {
+  font-size: 11px;
+}
+
 .pair-day-compare-card {
   overflow: hidden;
   display: grid;

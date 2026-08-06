@@ -139,6 +139,12 @@ def _positive(value: float | None) -> float | None:
     return value
 
 
+def _nonnegative(value: float | None) -> float | None:
+    if value is None or not isfinite(value) or value < 0:
+        return None
+    return value
+
+
 def _ratio_to_pct(value: float | None) -> float | None:
     if value is None or not isfinite(value):
         return None
@@ -1340,6 +1346,12 @@ class PairSpreadQueryService:
                     await asyncio.sleep(0.15)
         raise RuntimeError(f"GET {_endpoint_label(url)}失败: {_exception_text(last_error)}")
 
+    async def _get_json_optional(self, url: str) -> Any:
+        try:
+            return await self._get_json(url)
+        except Exception:  # noqa: BLE001 - supplemental volume must not block price data.
+            return {}
+
     async def _post_json(self, url: str, body: dict[str, Any]) -> Any:
         last_error: Exception | None = None
         for attempt in range(2):
@@ -1770,15 +1782,17 @@ class PairSpreadQueryService:
         symbol: str,
     ) -> PairSpreadCurrentLeg:
         raw = _compact_symbol(symbol)
-        premium, book, funding_info = await asyncio.gather(
+        premium, book, funding_info, ticker_payload = await asyncio.gather(
             self._get_json(f"{base_url}/fapi/v1/premiumIndex?symbol={raw}"),
             self._get_json(f"{base_url}/fapi/v1/ticker/bookTicker?symbol={raw}"),
             self._fetch_binance_like_funding_info(base_url, raw),
+            self._get_json_optional(f"{base_url}/fapi/v1/ticker/24hr?symbol={raw}"),
         )
         mark = _positive(parse_float(premium.get("markPrice"))) if isinstance(premium, dict) else None
         index = _positive(parse_float(premium.get("indexPrice"))) if isinstance(premium, dict) else None
         bid = parse_float(book.get("bidPrice")) if isinstance(book, dict) else None
         ask = parse_float(book.get("askPrice")) if isinstance(book, dict) else None
+        ticker = ticker_payload if isinstance(ticker_payload, dict) else {}
         mid = _mid_price(bid, ask)
         funding = parse_float(premium.get("lastFundingRate")) if isinstance(premium, dict) else None
         funding_interval_hours = _positive(parse_float(funding_info.get("fundingIntervalHours"))) or 8
@@ -1795,6 +1809,7 @@ class PairSpreadQueryService:
             index_price=index,
             mid_price=mid,
             last_price=None,
+            volume_24h_usdt=_nonnegative(parse_float(ticker.get("quoteVolume"))),
             funding_rate_pct=funding * 100 if funding is not None else None,
             funding_next_rate_pct=None,
             funding_next_time=funding_next_time,
@@ -1815,13 +1830,15 @@ class PairSpreadQueryService:
 
     async def _fetch_binance_spot_current(self, symbol: str) -> PairSpreadCurrentLeg:
         raw = _compact_symbol(symbol)
-        book, last_payload = await asyncio.gather(
+        book, last_payload, ticker_payload = await asyncio.gather(
             self._get_json(f"https://api.binance.com/api/v3/ticker/bookTicker?symbol={raw}"),
             self._get_json(f"https://api.binance.com/api/v3/ticker/price?symbol={raw}"),
+            self._get_json_optional(f"https://api.binance.com/api/v3/ticker/24hr?symbol={raw}"),
         )
         bid = parse_float(book.get("bidPrice")) if isinstance(book, dict) else None
         ask = parse_float(book.get("askPrice")) if isinstance(book, dict) else None
         last = parse_float(last_payload.get("price")) if isinstance(last_payload, dict) else None
+        ticker = ticker_payload if isinstance(ticker_payload, dict) else {}
         return _current_leg(
             exchange="binance",
             symbol=symbol,
@@ -1831,6 +1848,7 @@ class PairSpreadQueryService:
             index_price=None,
             mid_price=_mid_price(bid, ask),
             last_price=_positive(last),
+            volume_24h_usdt=_nonnegative(parse_float(ticker.get("quoteVolume"))),
             funding_rate_pct=None,
             funding_next_rate_pct=None,
             funding_next_time=None,
@@ -1850,6 +1868,7 @@ class PairSpreadQueryService:
             index_price=None,
             mid_price=None,
             last_price=_positive(last),
+            volume_24h_usdt=_nonnegative(parse_float(ticker.get("quoteVolume"))),
             funding_rate_pct=None,
             funding_next_rate_pct=None,
             funding_next_time=None,
@@ -1887,6 +1906,7 @@ class PairSpreadQueryService:
             index_price=None,
             mid_price=mid,
             last_price=_positive(parse_float(ticker.get("last"))),
+            volume_24h_usdt=_nonnegative(parse_float(ticker.get("volCcy24h"))),
             funding_rate_pct=funding * 100 if funding is not None else None,
             funding_next_rate_pct=next_funding * 100 if next_funding is not None else None,
             funding_next_time=funding_next_time,
@@ -1918,6 +1938,7 @@ class PairSpreadQueryService:
             index_price=None,
             mid_price=_mid_price(parse_float(ticker.get("bidPx")), parse_float(ticker.get("askPx"))),
             last_price=_positive(parse_float(ticker.get("last"))),
+            volume_24h_usdt=_nonnegative(parse_float(ticker.get("volCcy24h"))),
             funding_rate_pct=None,
             funding_next_rate_pct=None,
             funding_next_time=None,
@@ -1949,6 +1970,7 @@ class PairSpreadQueryService:
             index_price=_positive(parse_float(row.get("indexPrice"))),
             mid_price=_mid_price(parse_float(row.get("bid1Price")), parse_float(row.get("ask1Price"))),
             last_price=_positive(parse_float(row.get("lastPrice"))),
+            volume_24h_usdt=_nonnegative(parse_float(row.get("turnover24h"))),
             funding_rate_pct=funding * 100 if funding is not None else None,
             funding_next_rate_pct=None,
             funding_next_time=parse_datetime_ms(row.get("nextFundingTime")),
@@ -1972,6 +1994,7 @@ class PairSpreadQueryService:
             index_price=None,
             mid_price=_mid_price(parse_float(row.get("bid1Price")), parse_float(row.get("ask1Price"))),
             last_price=_positive(parse_float(row.get("lastPrice"))),
+            volume_24h_usdt=_nonnegative(parse_float(row.get("turnover24h"))),
             funding_rate_pct=None,
             funding_next_rate_pct=None,
             funding_next_time=None,
@@ -2013,6 +2036,7 @@ class PairSpreadQueryService:
             index_price=_positive(parse_float(row.get("index_price"))),
             mid_price=_mid_price(parse_float(row.get("highest_bid")), parse_float(row.get("lowest_ask"))),
             last_price=_positive(parse_float(row.get("last"))),
+            volume_24h_usdt=_nonnegative(parse_float(row.get("volume_24h_quote"))),
             funding_rate_pct=funding * 100 if funding is not None else None,
             funding_next_rate_pct=next_funding * 100 if next_funding is not None else None,
             funding_next_time=funding_next_time,
@@ -2054,6 +2078,7 @@ class PairSpreadQueryService:
             index_price=None,
             mid_price=_mid_price(parse_float(row.get("highest_bid")), parse_float(row.get("lowest_ask"))),
             last_price=_positive(parse_float(row.get("last"))),
+            volume_24h_usdt=_nonnegative(parse_float(row.get("quote_volume"))),
             funding_rate_pct=None,
             funding_next_rate_pct=None,
             funding_next_time=None,
@@ -2085,6 +2110,7 @@ class PairSpreadQueryService:
                 parse_float(ticker.get("askPr") or ticker.get("ask")),
             ),
             last_price=_positive(parse_float(ticker.get("lastPr") or ticker.get("last"))),
+            volume_24h_usdt=_nonnegative(parse_float(ticker.get("quoteVolume") or ticker.get("usdtVolume"))),
             funding_rate_pct=funding * 100 if funding is not None else None,
             funding_next_rate_pct=None,
             funding_next_time=parse_datetime_ms(funding_row.get("nextUpdate") or ticker.get("nextUpdate")),
@@ -2108,6 +2134,7 @@ class PairSpreadQueryService:
                 parse_float(ticker.get("askPr") or ticker.get("ask")),
             ),
             last_price=_positive(parse_float(ticker.get("lastPr") or ticker.get("last"))),
+            volume_24h_usdt=_nonnegative(parse_float(ticker.get("quoteVolume") or ticker.get("usdtVolume"))),
             funding_rate_pct=None,
             funding_next_rate_pct=None,
             funding_next_time=None,
@@ -2133,6 +2160,7 @@ class PairSpreadQueryService:
                 index_price=_positive(parse_float(context.get("oraclePx"))),
                 mid_price=_positive(parse_float(context.get("midPx"))),
                 last_price=None,
+                volume_24h_usdt=_nonnegative(parse_float(context.get("dayNtlVlm"))),
                 funding_rate_pct=funding * 100 if funding is not None else None,
                 funding_next_rate_pct=None,
                 funding_next_time=next_aligned_funding_time(now, 1),
@@ -2488,6 +2516,7 @@ def _current_leg(
     funding_interval_hours: float | None = None,
     funding_rate_upper_pct: float | None = None,
     funding_rate_lower_pct: float | None = None,
+    volume_24h_usdt: float | None = None,
 ) -> PairSpreadCurrentLeg:
     candidates = (
         (mark_price, PairSpreadPriceField.MARK_PRICE),
@@ -2513,6 +2542,7 @@ def _current_leg(
                 index_price=index_price,
                 mid_price=mid_price,
                 last_price=last_price,
+                volume_24h_usdt=_nonnegative(volume_24h_usdt),
                 funding_rate_pct=funding_rate_pct,
                 funding_next_rate_pct=funding_next_rate_pct,
                 funding_next_time=funding_next_time,

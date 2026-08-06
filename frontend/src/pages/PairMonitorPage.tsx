@@ -281,6 +281,27 @@ function price(value: number | null | undefined): string {
   return value.toPrecision(6);
 }
 
+function compactUsdt(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "-";
+  }
+  if (value >= 1_000_000_000) {
+    return `${(value / 1_000_000_000).toFixed(2)}B`;
+  }
+  if (value >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(2)}M`;
+  }
+  if (value >= 1_000) {
+    return `${(value / 1_000).toFixed(1)}K`;
+  }
+  return value.toFixed(0);
+}
+
+function volume24hLabel(value: number | null | undefined): string {
+  const formatted = compactUsdt(value);
+  return formatted === "-" ? "24h成交额 -" : `24h成交额 ${formatted} USDT`;
+}
+
 function compactNumber(value: number | null | undefined, digits = 4): string {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return "-";
@@ -865,13 +886,16 @@ function parseBeijingDatetimeInput(value: string): ReturnType<typeof dayjs> | nu
   return parsed.isValid() ? parsed : null;
 }
 
-function chartTime(value: string | null | undefined, spanHours: number): string {
+function chartTime(value: string | null | undefined, spanHours: number, compactHourLabel = false): string {
   if (!value) {
     return "-";
   }
   const parsed = dayjs.utc(value).utcOffset(8);
   if (spanHours <= 1 && parsed.second() !== 0) {
     return parsed.format("HH:mm:ss");
+  }
+  if (compactHourLabel) {
+    return parsed.format("HH");
   }
   return spanHours <= 24 ? parsed.format("HH:mm") : parsed.format("MM-DD HH:mm");
 }
@@ -1316,7 +1340,7 @@ function chooseTimeTickStepMs(spanMs: number, maxTicks: number): number | null {
       : spanMs <= 12 * hourMs
         ? [hourMs, 2 * hourMs, 3 * hourMs, 4 * hourMs, 6 * hourMs]
         : spanMs <= 24 * hourMs
-          ? [2 * hourMs, 3 * hourMs, 4 * hourMs, 6 * hourMs, 8 * hourMs, 12 * hourMs]
+          ? [hourMs, 2 * hourMs, 3 * hourMs, 4 * hourMs, 6 * hourMs, 8 * hourMs, 12 * hourMs]
           : spanMs <= 72 * hourMs
             ? [4 * hourMs, 6 * hourMs, 8 * hourMs, 12 * hourMs, dayMs]
             : [12 * hourMs, dayMs, 2 * dayMs, 3 * dayMs, 7 * dayMs];
@@ -2119,7 +2143,8 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
   const baselineValue = min <= 0 && max >= 0 ? 0 : minValue > 0 ? min : max;
   const baselineY = yAt(baselineValue);
   const spanHours = chartSpanHours(points);
-  const ticks = chartTicks(points, spanHours <= 12 ? 13 : spanHours <= 24 ? 9 : spanHours >= 168 ? 7 : 6);
+  const hourlyTicks = spanHours > 12 && spanHours <= 26;
+  const ticks = chartTicks(points, hourlyTicks ? 25 : spanHours <= 12 ? 13 : spanHours >= 168 ? 7 : 6);
   const turningPoints = chartTurningPoints(points);
   const latestPoint = points[points.length - 1];
   const latestTone = fundingRateTone(latestPoint.spread_pct);
@@ -2152,8 +2177,13 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
           return (
             <g key={point.bucket_at}>
               <line className="pair-chart-time-tick" x1={x} y1={padding.top} x2={x} y2={padding.top + chartHeight} />
-              <text className="pair-chart-axis-label" x={x} y={height - 10} textAnchor={textAnchor}>
-                {chartTime(point.bucket_at, spanHours)}
+              <text
+                className={`pair-chart-axis-label${hourlyTicks ? " pair-chart-axis-label-hourly" : ""}`}
+                x={x}
+                y={height - 10}
+                textAnchor={textAnchor}
+              >
+                {chartTime(point.bucket_at, spanHours, hourlyTicks)}
               </text>
             </g>
           );
@@ -4353,7 +4383,7 @@ export function PairMonitorPage() {
         <MetricCard
           label={leftLegLabel(result)}
           value={price(current?.leg1.price)}
-          sub={current ? priceFieldLabels[current.leg1.price_field] : "-"}
+          sub={current ? `${priceFieldLabels[current.leg1.price_field]} · ${volume24hLabel(current.leg1.volume_24h_usdt)}` : "-"}
           action={
             leftPremiumLeg ? (
               <Button
@@ -4372,7 +4402,7 @@ export function PairMonitorPage() {
         <MetricCard
           label={rightLegLabel(result)}
           value={price(current?.leg2.price)}
-          sub={current ? priceFieldLabels[current.leg2.price_field] : "-"}
+          sub={current ? `${priceFieldLabels[current.leg2.price_field]} · ${volume24hLabel(current.leg2.volume_24h_usdt)}` : "-"}
           action={
             rightPremiumLeg ? (
               <Button

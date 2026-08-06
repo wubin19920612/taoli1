@@ -680,6 +680,7 @@ export interface PairSpreadCurrentLeg {
   index_price: number | null;
   mid_price: number | null;
   last_price: number | null;
+  volume_24h_usdt: number | null;
   funding_rate_pct: number | null;
   funding_next_rate_pct: number | null;
   funding_next_time: string | null;

@@ -46,6 +46,7 @@ def current_leg(
     symbol: str,
     price: float,
     market_type: MarketType = MarketType.FUTURE,
+    volume_24h_usdt: float | None = None,
 ) -> PairSpreadCurrentLeg:
     return PairSpreadCurrentLeg(
         exchange=exchange,
@@ -55,6 +56,7 @@ def current_leg(
         price=price,
         price_field=PairSpreadPriceField.MARK_PRICE,
         mark_price=price,
+        volume_24h_usdt=volume_24h_usdt,
         funding_rate_pct=0.01,
         funding_next_time=datetime(2026, 7, 10, 16, 0, tzinfo=UTC),
         timestamp=datetime(2026, 7, 10, 12, 2, tzinfo=UTC),
@@ -145,7 +147,12 @@ async def test_pair_spread_query_builds_stats_current_and_funding() -> None:
             ]
 
         async def _fetch_current_leg(self, exchange: str, symbol: str):
-            return current_leg(exchange, symbol, 100 if exchange == "binance" else 1040)
+            return current_leg(
+                exchange,
+                symbol,
+                100 if exchange == "binance" else 1040,
+                volume_24h_usdt=1_000_000 if exchange == "binance" else 2_000_000,
+            )
 
         async def _fetch_funding_history(self, exchange: str, symbol: str, start, end):
             return [
@@ -177,6 +184,8 @@ async def test_pair_spread_query_builds_stats_current_and_funding() -> None:
     assert result.spread_pct.current == pytest.approx((105 - 102) / ((102 + 105) / 2) * 100)
     assert result.current is not None
     assert result.current.leg2.price == 104
+    assert result.current.leg1.volume_24h_usdt == pytest.approx(1_000_000)
+    assert result.current.leg2.volume_24h_usdt == pytest.approx(2_000_000)
     assert result.current.spread_pct == pytest.approx((104 - 100) / ((100 + 104) / 2) * 100)
     assert result.interval_minutes == 5
     assert result.leg2_multiplier == 10
@@ -764,6 +773,7 @@ async def test_bybit_spot_current_uses_spot_ticker_without_funding() -> None:
                         "bid1Price": "10",
                         "ask1Price": "10.2",
                         "lastPrice": "10.1",
+                        "turnover24h": "123456.78",
                     }
                 ]
             }
@@ -779,6 +789,7 @@ async def test_bybit_spot_current_uses_spot_ticker_without_funding() -> None:
     assert leg.market_type == MarketType.SPOT
     assert leg.price == pytest.approx(10.1)
     assert leg.price_field == PairSpreadPriceField.MID_PRICE
+    assert leg.volume_24h_usdt == pytest.approx(123456.78)
     assert leg.funding_rate_pct is None
     assert leg.funding_next_time is None
 
@@ -801,6 +812,7 @@ async def test_bybit_current_uses_instruments_info_for_funding_interval_and_limi
                             "bid1Price": "0.00910",
                             "ask1Price": "0.009115",
                             "lastPrice": "0.00912",
+                            "turnover24h": "234567.89",
                             "fundingRate": "-0.019844",
                             "nextFundingTime": "1784256000000",
                         }
@@ -831,6 +843,7 @@ async def test_bybit_current_uses_instruments_info_for_funding_interval_and_limi
     assert any("market/tickers" in url for url in requested_urls)
     assert any("market/instruments-info" in url for url in requested_urls)
     assert leg.mid_price == pytest.approx((0.00910 + 0.009115) / 2)
+    assert leg.volume_24h_usdt == pytest.approx(234567.89)
     assert leg.funding_rate_pct == pytest.approx(-1.9844)
     assert leg.funding_interval_hours == pytest.approx(4)
     assert leg.funding_rate_upper_pct == pytest.approx(2)
