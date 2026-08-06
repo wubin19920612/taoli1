@@ -966,13 +966,20 @@ body {
   align-items: start;
 }
 
+.pair-query-bar-same-symbol {
+  grid-template-columns:
+    minmax(168px, 1.08fr)
+    minmax(0, 2fr)
+    minmax(92px, 0.5fr)
+    minmax(108px, 0.58fr)
+    minmax(68px, 0.36fr)
+    minmax(164px, 0.86fr);
+}
+
 .pair-query-bar-same-symbol.pair-query-bar-custom-interval {
   grid-template-columns:
-    minmax(112px, 0.66fr)
-    minmax(76px, 0.38fr)
     minmax(168px, 1fr)
-    minmax(112px, 0.66fr)
-    minmax(76px, 0.38fr)
+    minmax(0, 2fr)
     minmax(92px, 0.5fr)
     minmax(108px, 0.58fr)
     minmax(120px, 0.64fr)
@@ -1080,6 +1087,17 @@ body {
   font-weight: 700;
 }
 
+.pair-query-symbol-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 2px 8px;
+  border: 1px solid #dfe8e4;
+  border-radius: 6px;
+  background: #fafcfb;
+}
+
 .pair-query-options .ant-typography-secondary {
   min-width: 0;
   overflow: hidden;
@@ -1088,8 +1106,81 @@ body {
   white-space: nowrap;
 }
 
-.pair-symbol-mode {
+.pair-query-venues {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.pair-query-venue {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pair-query-venue-label {
+  color: #687872;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.pair-saved-group-list {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  min-width: 0;
+}
+
+.pair-saved-group {
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid #dfe8e4;
+  border-radius: 6px;
+  background: #fafcfb;
+}
+
+.pair-saved-group-head {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  min-width: 0;
+}
+
+.pair-saved-group-symbol {
+  min-width: 0;
+  overflow: hidden;
+  color: #24352f;
+  font-size: 12px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pair-saved-group-count {
   flex: 0 0 auto;
+  color: #6a7a74;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.pair-saved-group-items {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pair-saved-tag-same {
+  border-color: #b7d9cf;
+  background: #f5fbf8;
+}
+
+.pair-saved-tag-custom {
+  border-color: #dde7e4;
+  background: #ffffff;
 }
 
 .pair-day-compare-mode {

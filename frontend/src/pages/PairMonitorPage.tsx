@@ -78,6 +78,14 @@ type SavedPairSpreadPreset = PairSpreadFormValues & {
   savedAt: string;
 };
 
+type SavedPairSpreadGroup = {
+  key: string;
+  title: string;
+  sameSymbol: boolean;
+  presets: SavedPairSpreadPreset[];
+  latestSavedAt: string;
+};
+
 type LegacySavedPairSpreadPreset = LegacyPairSpreadFormValues & {
   id: string;
   hours: number;
@@ -479,6 +487,63 @@ function pairSymbolModeFromValues(values: PairSpreadFormValues): PairSymbolMode 
     Math.abs(normalized.leg2_multiplier - 1) < 0.000_000_001
     ? "same"
     : "custom";
+}
+
+function isSameSymbolPreset(preset: SavedPairSpreadPreset): boolean {
+  return shortSavedSymbol(preset.leg1_symbol) === shortSavedSymbol(preset.leg2_symbol);
+}
+
+function groupSavedPairPresets(presets: SavedPairSpreadPreset[]): SavedPairSpreadGroup[] {
+  const grouped = new Map<string, SavedPairSpreadGroup>();
+  presets.forEach((preset) => {
+    const leftSymbol = shortSavedSymbol(preset.leg1_symbol) || preset.leg1_symbol;
+    const rightSymbol = shortSavedSymbol(preset.leg2_symbol) || preset.leg2_symbol;
+    const sameSymbol = isSameSymbolPreset(preset);
+    const key = sameSymbol
+      ? `same:${leftSymbol}`
+      : `custom:${preset.leg1_exchange}:${preset.leg1_market_type}:${preset.leg1_symbol}|${preset.leg2_exchange}:${preset.leg2_market_type}:${preset.leg2_symbol}|${compactNumber(preset.leg2_multiplier, 8)}`;
+    const title = sameSymbol ? leftSymbol : `${leftSymbol} / ${rightSymbol}`;
+    const existing = grouped.get(key);
+    if (existing) {
+      existing.presets.push(preset);
+      if (dayjs.utc(preset.savedAt).valueOf() > dayjs.utc(existing.latestSavedAt).valueOf()) {
+        existing.latestSavedAt = preset.savedAt;
+      }
+      return;
+    }
+    grouped.set(key, {
+      key,
+      title,
+      sameSymbol,
+      presets: [preset],
+      latestSavedAt: preset.savedAt
+    });
+  });
+
+  return Array.from(grouped.values())
+    .map((group) => ({
+      ...group,
+      presets: group.presets
+        .slice()
+        .sort((left, right) => {
+          const sameSymbolLeft = isSameSymbolPreset(left);
+          const sameSymbolRight = isSameSymbolPreset(right);
+          if (sameSymbolLeft !== sameSymbolRight) {
+            return sameSymbolLeft ? -1 : 1;
+          }
+          return dayjs.utc(right.savedAt).valueOf() - dayjs.utc(left.savedAt).valueOf();
+        })
+    }))
+    .sort((left, right) => {
+      if (left.sameSymbol !== right.sameSymbol) {
+        return left.sameSymbol ? -1 : 1;
+      }
+      const savedAtDiff = dayjs.utc(right.latestSavedAt).valueOf() - dayjs.utc(left.latestSavedAt).valueOf();
+      if (savedAtDiff !== 0) {
+        return savedAtDiff;
+      }
+      return left.title.localeCompare(right.title);
+    });
 }
 
 function pairQueryFromUrl(): { values: PairSpreadFormValues; hours: number; intervalSeconds: number } | null {
@@ -3163,6 +3228,7 @@ export function PairMonitorPage() {
   const [fundingSummaryLoading, setFundingSummaryLoading] = useState(false);
   const [fundingSummaryError, setFundingSummaryError] = useState("");
   const initialDayCompareLoadedRef = useRef(false);
+  const savedPresetGroups = useMemo(() => groupSavedPairPresets(savedPresets), [savedPresets]);
 
   const recentPoints = useMemo(
     () => pairDisplayPoints(result).reverse().slice(0, 180),
@@ -3935,23 +4001,49 @@ export function PairMonitorPage() {
       <section className="pair-query-panel">
         <Form form={form} initialValues={initialFormValues} disabled={loading}>
           <div className={queryBarClassName}>
-            <Form.Item name="leg1_exchange" rules={[{ required: true }]} className="pair-query-item">
-              <Select options={exchangeOptions} showSearch />
-            </Form.Item>
-            <Form.Item name="leg1_market_type" rules={[{ required: true }]} className="pair-query-market-type">
-              <Select options={marketTypeOptions} />
-            </Form.Item>
-            <Form.Item name="leg1_symbol" rules={[{ required: true, message: "请输入标的" }]} className="pair-query-contract">
-              <Input addonBefore={sameSymbolMode ? "标的" : "左标的"} placeholder="SKHY" />
-            </Form.Item>
-            <Form.Item name="leg2_exchange" rules={[{ required: true }]} className="pair-query-item">
-              <Select options={exchangeOptions} showSearch />
-            </Form.Item>
-            <Form.Item name="leg2_market_type" rules={[{ required: true }]} className="pair-query-market-type">
-              <Select options={marketTypeOptions} />
-            </Form.Item>
-            {sameSymbolMode ? null : (
+            {sameSymbolMode ? (
               <>
+                <Form.Item name="leg1_symbol" rules={[{ required: true, message: "请输入标的" }]} className="pair-query-contract">
+                  <Input addonBefore="标的" placeholder="SKHY" />
+                </Form.Item>
+                <div className="pair-query-venues">
+                  <div className="pair-query-venue">
+                    <Typography.Text className="pair-query-venue-label">左交易所</Typography.Text>
+                    <Form.Item name="leg1_exchange" rules={[{ required: true }]} className="pair-query-item">
+                      <Select options={exchangeOptions} showSearch />
+                    </Form.Item>
+                    <Form.Item name="leg1_market_type" rules={[{ required: true }]} className="pair-query-market-type">
+                      <Select options={marketTypeOptions} />
+                    </Form.Item>
+                  </div>
+                  <div className="pair-query-venue">
+                    <Typography.Text className="pair-query-venue-label">右交易所</Typography.Text>
+                    <Form.Item name="leg2_exchange" rules={[{ required: true }]} className="pair-query-item">
+                      <Select options={exchangeOptions} showSearch />
+                    </Form.Item>
+                    <Form.Item name="leg2_market_type" rules={[{ required: true }]} className="pair-query-market-type">
+                      <Select options={marketTypeOptions} />
+                    </Form.Item>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <>
+                <Form.Item name="leg1_exchange" rules={[{ required: true }]} className="pair-query-item">
+                  <Select options={exchangeOptions} showSearch />
+                </Form.Item>
+                <Form.Item name="leg1_market_type" rules={[{ required: true }]} className="pair-query-market-type">
+                  <Select options={marketTypeOptions} />
+                </Form.Item>
+                <Form.Item name="leg1_symbol" rules={[{ required: true, message: "请输入左标的" }]} className="pair-query-contract">
+                  <Input addonBefore="左标的" placeholder="SKHY" />
+                </Form.Item>
+                <Form.Item name="leg2_exchange" rules={[{ required: true }]} className="pair-query-item">
+                  <Select options={exchangeOptions} showSearch />
+                </Form.Item>
+                <Form.Item name="leg2_market_type" rules={[{ required: true }]} className="pair-query-market-type">
+                  <Select options={marketTypeOptions} />
+                </Form.Item>
                 <Form.Item name="leg2_symbol" rules={[{ required: true, message: "请输入右标的" }]} className="pair-query-contract">
                   <Input addonBefore="右标的" placeholder="SKHYNIX" />
                 </Form.Item>
@@ -4017,17 +4109,13 @@ export function PairMonitorPage() {
           </div>
         </Form>
         <div className="pair-query-options">
-          <Typography.Text className="pair-query-option-label">标的模式</Typography.Text>
-          <Segmented<PairSymbolMode>
-            size="small"
-            className="pair-symbol-mode"
-            options={[
-              { label: "同标的 x1", value: "same" },
-              { label: "自定义右侧", value: "custom" }
-            ]}
-            value={pairSymbolMode}
-            onChange={(value) => setPairSymbolMode(value)}
-          />
+          <div className="pair-query-symbol-toggle">
+            <Typography.Text className="pair-query-option-label">自定义</Typography.Text>
+            <Switch
+              checked={pairSymbolMode === "custom"}
+              onChange={(checked) => setPairSymbolMode(checked ? "custom" : "same")}
+            />
+          </div>
           <Typography.Text className="pair-query-option-label">图表扩展</Typography.Text>
           <Switch
             checked={showPremiumCompare}
@@ -4214,24 +4302,37 @@ export function PairMonitorPage() {
             </>
           ) : null}
         </div>
-        {savedPresets.length ? (
+        {savedPresetGroups.length ? (
           <div className="pair-saved-presets">
             <Typography.Text className="pair-saved-title">已保存</Typography.Text>
-            <div className="pair-saved-list">
-              {savedPresets.map((preset) => (
-                <Tag
-                  key={preset.id}
-                  closable
-                  className="pair-saved-tag"
-                  onClick={() => applySavedPreset(preset)}
-                  onClose={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    removeSavedPreset(preset.id);
-                  }}
+            <div className="pair-saved-group-list">
+              {savedPresetGroups.map((group) => (
+                <div
+                  key={group.key}
+                  className={`pair-saved-group ${group.sameSymbol ? "pair-saved-group-same" : "pair-saved-group-custom"}`}
                 >
-                  <SavedPairPresetContent preset={preset} />
-                </Tag>
+                  <div className="pair-saved-group-head">
+                    <Typography.Text className="pair-saved-group-symbol">{group.title}</Typography.Text>
+                    <span className="pair-saved-group-count">{group.presets.length}</span>
+                  </div>
+                  <div className="pair-saved-group-items">
+                    {group.presets.map((preset) => (
+                      <Tag
+                        key={preset.id}
+                        closable
+                        className={`pair-saved-tag ${isSameSymbolPreset(preset) ? "pair-saved-tag-same" : "pair-saved-tag-custom"}`}
+                        onClick={() => applySavedPreset(preset)}
+                        onClose={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          removeSavedPreset(preset.id);
+                        }}
+                      >
+                        <SavedPairPresetContent preset={preset} />
+                      </Tag>
+                    ))}
+                  </div>
+                </div>
               ))}
             </div>
           </div>
