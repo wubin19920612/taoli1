@@ -297,11 +297,6 @@ function compactUsdt(value: number | null | undefined): string {
   return value.toFixed(0);
 }
 
-function volume24hLabel(value: number | null | undefined): string {
-  const formatted = compactUsdt(value);
-  return formatted === "-" ? "24h成交额 -" : `24h成交额 ${formatted} USDT`;
-}
-
 function compactNumber(value: number | null | undefined, digits = 4): string {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return "-";
@@ -1589,16 +1584,72 @@ function turningPointScore(
   return Math.min(Math.max(...left) - value, Math.max(...right) - value);
 }
 
+type VolumeComparisonTone = "higher" | "lower" | "balanced" | "neutral" | "unknown";
+
+function volumeComparisonTone(
+  value: number | null | undefined,
+  comparisonValue: number | null | undefined
+): VolumeComparisonTone {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "unknown";
+  }
+  if (typeof comparisonValue !== "number" || !Number.isFinite(comparisonValue) || comparisonValue <= 0) {
+    return "neutral";
+  }
+  const ratio = value / comparisonValue;
+  if (ratio >= 1.15) {
+    return "higher";
+  }
+  if (ratio <= 0.85) {
+    return "lower";
+  }
+  return "balanced";
+}
+
+function VolumeMetric({
+  value,
+  comparisonValue
+}: {
+  value: number | null | undefined;
+  comparisonValue: number | null | undefined;
+}) {
+  const tone = volumeComparisonTone(value, comparisonValue);
+  const formatted = compactUsdt(value);
+  const statusLabel =
+    tone === "higher"
+      ? "较高"
+      : tone === "lower"
+        ? "较低"
+        : tone === "balanced"
+          ? "接近"
+          : tone === "neutral"
+            ? "已知"
+            : "暂无";
+  return (
+    <div
+      className={`pair-metric-volume pair-metric-volume-${tone}`}
+      title={formatted === "-" ? "24小时成交额暂无数据" : `24小时成交额 ${formatted} USDT`}
+    >
+      <span className="pair-metric-volume-label">24h成交额</span>
+      <strong className="pair-metric-volume-value">{formatted}</strong>
+      {formatted !== "-" ? <span className="pair-metric-volume-unit">USDT</span> : null}
+      <span className="pair-metric-volume-status">{statusLabel}</span>
+    </div>
+  );
+}
+
 function MetricCard({
   label,
   value,
   sub,
+  highlight = null,
   tone = "neutral",
   action = null
 }: {
   label: string;
   value: string;
   sub: ReactNode;
+  highlight?: ReactNode;
   tone?: "positive" | "negative" | "neutral";
   action?: ReactNode;
 }) {
@@ -1607,6 +1658,7 @@ function MetricCard({
       <Typography.Text className="pair-metric-label">{label}</Typography.Text>
       <div className="pair-metric-value">{value}</div>
       <Typography.Text className="pair-metric-sub">{sub}</Typography.Text>
+      {highlight ? <div className="pair-metric-highlight">{highlight}</div> : null}
       {action ? <div style={{ marginTop: 6 }}>{action}</div> : null}
     </div>
   );
@@ -4383,7 +4435,15 @@ export function PairMonitorPage() {
         <MetricCard
           label={leftLegLabel(result)}
           value={price(current?.leg1.price)}
-          sub={current ? `${priceFieldLabels[current.leg1.price_field]} · ${volume24hLabel(current.leg1.volume_24h_usdt)}` : "-"}
+          sub={current ? priceFieldLabels[current.leg1.price_field] : "-"}
+          highlight={
+            current ? (
+              <VolumeMetric
+                value={current.leg1.volume_24h_usdt}
+                comparisonValue={current.leg2.volume_24h_usdt}
+              />
+            ) : null
+          }
           action={
             leftPremiumLeg ? (
               <Button
@@ -4402,7 +4462,15 @@ export function PairMonitorPage() {
         <MetricCard
           label={rightLegLabel(result)}
           value={price(current?.leg2.price)}
-          sub={current ? `${priceFieldLabels[current.leg2.price_field]} · ${volume24hLabel(current.leg2.volume_24h_usdt)}` : "-"}
+          sub={current ? priceFieldLabels[current.leg2.price_field] : "-"}
+          highlight={
+            current ? (
+              <VolumeMetric
+                value={current.leg2.volume_24h_usdt}
+                comparisonValue={current.leg1.volume_24h_usdt}
+              />
+            ) : null
+          }
           action={
             rightPremiumLeg ? (
               <Button

@@ -1597,7 +1597,7 @@ body {
 }
 
 .pair-metric-card {
-  min-height: 96px;
+  min-height: 122px;
   display: grid;
   align-content: center;
   gap: 4px;
@@ -1636,6 +1636,100 @@ body {
 
 .pair-metric-positive .pair-metric-value {
   color: #b42318;
+}
+
+.pair-metric-highlight {
+  min-width: 0;
+}
+
+.pair-metric-volume {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+  max-width: 100%;
+  min-height: 30px;
+  padding: 4px 8px;
+  border: 1px solid;
+  border-radius: 6px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.pair-metric-volume-label {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.pair-metric-volume-value {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 17px;
+  font-weight: 800;
+  line-height: 1;
+  text-overflow: ellipsis;
+}
+
+.pair-metric-volume-unit {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.pair-metric-volume-status {
+  flex: 0 0 auto;
+  padding: 2px 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.pair-metric-volume-higher {
+  color: #047857;
+  border-color: #99f6e4;
+  background: #ecfdf5;
+}
+
+.pair-metric-volume-higher .pair-metric-volume-status {
+  color: #065f46;
+  background: #a7f3d0;
+}
+
+.pair-metric-volume-lower {
+  color: #b45309;
+  border-color: #fcd34d;
+  background: #fffbeb;
+}
+
+.pair-metric-volume-lower .pair-metric-volume-status {
+  color: #92400e;
+  background: #fde68a;
+}
+
+.pair-metric-volume-balanced,
+.pair-metric-volume-neutral {
+  color: #1d4ed8;
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+
+.pair-metric-volume-balanced .pair-metric-volume-status,
+.pair-metric-volume-neutral .pair-metric-volume-status {
+  color: #1e40af;
+  background: #dbeafe;
+}
+
+.pair-metric-volume-unknown {
+  color: #64748b;
+  border-color: #cbd5e1;
+  background: #f8fafc;
+}
+
+.pair-metric-volume-unknown .pair-metric-volume-status {
+  color: #475569;
+  background: #e2e8f0;
 }
 
 .pair-chart-card {
