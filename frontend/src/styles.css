@@ -958,8 +958,6 @@ body {
     minmax(168px, 1fr)
     minmax(112px, 0.66fr)
     minmax(76px, 0.38fr)
-    minmax(168px, 1fr)
-    minmax(148px, 0.78fr)
     minmax(92px, 0.5fr)
     minmax(108px, 0.58fr)
     minmax(68px, 0.36fr)
@@ -968,7 +966,36 @@ body {
   align-items: start;
 }
 
-.pair-query-bar-custom {
+.pair-query-bar-same-symbol.pair-query-bar-custom-interval {
+  grid-template-columns:
+    minmax(112px, 0.66fr)
+    minmax(76px, 0.38fr)
+    minmax(168px, 1fr)
+    minmax(112px, 0.66fr)
+    minmax(76px, 0.38fr)
+    minmax(92px, 0.5fr)
+    minmax(108px, 0.58fr)
+    minmax(120px, 0.64fr)
+    minmax(68px, 0.36fr)
+    minmax(164px, 0.86fr);
+}
+
+.pair-query-bar-custom-symbol {
+  grid-template-columns:
+    minmax(112px, 0.66fr)
+    minmax(76px, 0.38fr)
+    minmax(168px, 1fr)
+    minmax(112px, 0.66fr)
+    minmax(76px, 0.38fr)
+    minmax(168px, 1fr)
+    minmax(148px, 0.78fr)
+    minmax(92px, 0.5fr)
+    minmax(108px, 0.58fr)
+    minmax(68px, 0.36fr)
+    minmax(164px, 0.86fr);
+}
+
+.pair-query-bar-custom-symbol.pair-query-bar-custom-interval {
   grid-template-columns:
     minmax(112px, 0.66fr)
     minmax(76px, 0.38fr)
@@ -1040,6 +1067,7 @@ body {
 .pair-query-options {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
   min-width: 0;
   padding-top: 8px;
@@ -1058,6 +1086,10 @@ body {
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.pair-symbol-mode {
+  flex: 0 0 auto;
 }
 
 .pair-day-compare-mode {

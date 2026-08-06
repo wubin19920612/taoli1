@@ -107,6 +107,7 @@ type PairDayCompareSeries = {
 };
 
 type PairPriceChartMode = "auto" | "raw" | "indexed";
+type PairSymbolMode = "same" | "custom";
 type DayCompareWindowMode = "query" | "custom";
 type DayCompareSettings = {
   mode: DayCompareWindowMode;
@@ -162,7 +163,7 @@ const defaultFormValues: PairSpreadFormValues = {
   leg1_symbol: "SKHY",
   leg2_exchange: "bitget",
   leg2_market_type: "future",
-  leg2_symbol: "SKHYNIX",
+  leg2_symbol: "SKHY",
   leg2_multiplier: 1
 };
 
@@ -455,6 +456,29 @@ function normalizePairForm(values: LegacyPairSpreadFormValues): PairSpreadFormVa
     leg2_symbol: normalizeFormSymbol(leg2Exchange, values.leg2_symbol),
     leg2_multiplier: Number(values.leg2_multiplier)
   };
+}
+
+function normalizePairFormForSymbolMode(
+  values: LegacyPairSpreadFormValues,
+  symbolMode: PairSymbolMode
+): PairSpreadFormValues {
+  return normalizePairForm(
+    symbolMode === "same"
+      ? {
+          ...values,
+          leg2_symbol: values.leg1_symbol,
+          leg2_multiplier: 1
+        }
+      : values
+  );
+}
+
+function pairSymbolModeFromValues(values: PairSpreadFormValues): PairSymbolMode {
+  const normalized = normalizePairForm(values);
+  return shortSavedSymbol(normalized.leg1_symbol) === shortSavedSymbol(normalized.leg2_symbol) &&
+    Math.abs(normalized.leg2_multiplier - 1) < 0.000_000_001
+    ? "same"
+    : "custom";
 }
 
 function pairQueryFromUrl(): { values: PairSpreadFormValues; hours: number; intervalSeconds: number } | null {
@@ -3094,12 +3118,16 @@ export function PairMonitorPage() {
     initialCachedState && initialUrlQuery
       ? pairQueryKey(initialUrlQuery.values, initialUrlQuery.hours, initialUrlQuery.intervalSeconds)
       : "";
+  const initialFormValues = initialCachedState?.values ?? initialUrlQuery?.values ?? defaultFormValues;
+  const initialHours = initialCachedState?.hours ?? initialUrlQuery?.hours ?? 4;
+  const initialIntervalSeconds = initialCachedState?.intervalSeconds ?? initialUrlQuery?.intervalSeconds ?? DEFAULT_PAIR_INTERVAL_SECONDS;
   const loadedUrlQueryRef = useRef(initialUrlQueryKey);
-  const [hours, setHours] = useState(() => initialCachedState?.hours ?? 4);
-  const [intervalSeconds, setIntervalSeconds] = useState(() => initialCachedState?.intervalSeconds ?? DEFAULT_PAIR_INTERVAL_SECONDS);
+  const [hours, setHours] = useState(() => initialHours);
+  const [intervalSeconds, setIntervalSeconds] = useState(() => initialIntervalSeconds);
   const [customInterval, setCustomInterval] = useState(
-    () => intervalSelectValue(initialCachedState?.intervalSeconds ?? DEFAULT_PAIR_INTERVAL_SECONDS) === CUSTOM_INTERVAL_VALUE
+    () => intervalSelectValue(initialIntervalSeconds) === CUSTOM_INTERVAL_VALUE
   );
+  const [pairSymbolMode, setPairSymbolMode] = useState<PairSymbolMode>(() => pairSymbolModeFromValues(initialFormValues));
   const [locationSearch, setLocationSearch] = useState(() =>
     typeof window === "undefined" ? "" : window.location.search
   );
@@ -3487,6 +3515,7 @@ export function PairMonitorPage() {
     hours?: number;
     intervalSeconds?: number;
     values?: PairSpreadFormValues;
+    symbolMode?: PairSymbolMode;
     premiumMode?: "history" | "current";
     premiumEnabled?: boolean;
     dayCompareEnabled?: boolean;
@@ -3498,7 +3527,15 @@ export function PairMonitorPage() {
     setDiagnostic(null);
     setDiagnosticError("");
     try {
-      const values = normalizePairForm(override?.values ?? await form.validateFields());
+      const querySymbolMode = override?.symbolMode ?? pairSymbolMode;
+      let rawValues: LegacyPairSpreadFormValues;
+      if (override?.values) {
+        rawValues = override.values;
+      } else {
+        await form.validateFields();
+        rawValues = form.getFieldsValue(true) as LegacyPairSpreadFormValues;
+      }
+      const values = normalizePairFormForSymbolMode(rawValues, querySymbolMode);
       form.setFieldsValue(values);
       const queryHours = clampHours(override?.hours ?? hours);
       const queryIntervalSeconds = clampIntervalSeconds(override?.intervalSeconds ?? intervalSeconds);
@@ -3553,6 +3590,7 @@ export function PairMonitorPage() {
     intervalSeconds,
     loadPremiumCompare,
     loadDayCompare,
+    pairSymbolMode,
     premiumCompare,
     refreshPremiumCompareCurrent,
     dayCompareDays,
@@ -3690,11 +3728,13 @@ export function PairMonitorPage() {
     if (loadedUrlQueryRef.current === key) {
       return;
     }
+    const nextSymbolMode = pairSymbolModeFromValues(incoming.values);
     loadedUrlQueryRef.current = key;
     form.setFieldsValue(incoming.values);
     setHours(incoming.hours);
     setIntervalSeconds(incoming.intervalSeconds);
     setCustomInterval(intervalSelectValue(incoming.intervalSeconds) === CUSTOM_INTERVAL_VALUE);
+    setPairSymbolMode(nextSymbolMode);
     setAutoRefresh(false);
     setShowPremiumCompare(false);
     setShowDayCompare(false);
@@ -3706,6 +3746,7 @@ export function PairMonitorPage() {
     setDayCompareError("");
     void runQueryRef.current({
       values: incoming.values,
+      symbolMode: nextSymbolMode,
       hours: incoming.hours,
       intervalSeconds: incoming.intervalSeconds,
       premiumEnabled: false,
@@ -3732,7 +3773,7 @@ export function PairMonitorPage() {
       void runQuery();
       return;
     }
-    form.setFieldsValue({
+    const resultValues = {
       leg1_exchange: result.leg1.exchange,
       leg1_market_type: result.leg1.market_type,
       leg1_symbol: result.leg1.symbol,
@@ -3740,16 +3781,28 @@ export function PairMonitorPage() {
       leg2_market_type: result.leg2.market_type,
       leg2_symbol: result.leg2.symbol,
       leg2_multiplier: result.leg2_multiplier
-    });
+    };
+    const nextSymbolMode = pairSymbolModeFromValues(resultValues);
+    form.setFieldsValue(resultValues);
+    setPairSymbolMode(nextSymbolMode);
     setHours(result.hours);
     setIntervalSeconds(resultIntervalSeconds(result));
     setCustomInterval(intervalSelectValue(resultIntervalSeconds(result)) === CUSTOM_INTERVAL_VALUE);
-    void runQuery({ hours: result.hours, intervalSeconds: resultIntervalSeconds(result) });
+    void runQuery({
+      values: resultValues,
+      symbolMode: nextSymbolMode,
+      hours: result.hours,
+      intervalSeconds: resultIntervalSeconds(result)
+    });
   };
 
   const saveCurrentPreset = async () => {
     try {
-      const values = normalizePairForm(await form.validateFields());
+      await form.validateFields();
+      const values = normalizePairFormForSymbolMode(
+        form.getFieldsValue(true) as LegacyPairSpreadFormValues,
+        pairSymbolMode
+      );
       const preset: SavedPairSpreadPreset = {
         ...values,
         id: pairPresetId(values),
@@ -3784,6 +3837,7 @@ export function PairMonitorPage() {
 
   const applySavedPreset = (preset: SavedPairSpreadPreset) => {
     const values = normalizePairForm(preset);
+    const nextSymbolMode = pairSymbolModeFromValues(values);
     const nextHours = clampHours(preset.hours);
     const nextIntervalSeconds = clampIntervalSeconds(preset.intervalSeconds);
     const nextShowDayCompare = Boolean(preset.showDayCompare);
@@ -3797,6 +3851,7 @@ export function PairMonitorPage() {
     setHours(nextHours);
     setIntervalSeconds(nextIntervalSeconds);
     setCustomInterval(intervalSelectValue(nextIntervalSeconds) === CUSTOM_INTERVAL_VALUE);
+    setPairSymbolMode(nextSymbolMode);
     setAutoRefresh(false);
     setShowDayCompare(nextShowDayCompare);
     setDayCompareDays(nextDayCompareDays);
@@ -3808,6 +3863,7 @@ export function PairMonitorPage() {
     setError("");
     void runQuery({
       values,
+      symbolMode: nextSymbolMode,
       hours: nextHours,
       intervalSeconds: nextIntervalSeconds,
       dayCompareEnabled: nextShowDayCompare,
@@ -3861,6 +3917,12 @@ export function PairMonitorPage() {
       };
     }
   }, [dayCompareRangeTag, dayCompareSettings, hours, intervalSeconds, result]);
+  const sameSymbolMode = pairSymbolMode === "same";
+  const queryBarClassName = [
+    "pair-query-bar",
+    sameSymbolMode ? "pair-query-bar-same-symbol" : "pair-query-bar-custom-symbol",
+    customInterval ? "pair-query-bar-custom-interval" : ""
+  ].filter(Boolean).join(" ");
 
   return (
     <div className="page pair-monitor-page pair-terminal-page">
@@ -3871,16 +3933,16 @@ export function PairMonitorPage() {
       {result?.warnings.length ? <Alert type="warning" message={result.warnings.join("；")} showIcon /> : null}
 
       <section className="pair-query-panel">
-        <Form form={form} initialValues={initialCachedState?.values ?? defaultFormValues} disabled={loading}>
-          <div className={customInterval ? "pair-query-bar pair-query-bar-custom" : "pair-query-bar"}>
+        <Form form={form} initialValues={initialFormValues} disabled={loading}>
+          <div className={queryBarClassName}>
             <Form.Item name="leg1_exchange" rules={[{ required: true }]} className="pair-query-item">
               <Select options={exchangeOptions} showSearch />
             </Form.Item>
             <Form.Item name="leg1_market_type" rules={[{ required: true }]} className="pair-query-market-type">
               <Select options={marketTypeOptions} />
             </Form.Item>
-            <Form.Item name="leg1_symbol" rules={[{ required: true, message: "请输入左标的" }]} className="pair-query-contract">
-              <Input addonBefore="左标的" placeholder="SKHY" />
+            <Form.Item name="leg1_symbol" rules={[{ required: true, message: "请输入标的" }]} className="pair-query-contract">
+              <Input addonBefore={sameSymbolMode ? "标的" : "左标的"} placeholder="SKHY" />
             </Form.Item>
             <Form.Item name="leg2_exchange" rules={[{ required: true }]} className="pair-query-item">
               <Select options={exchangeOptions} showSearch />
@@ -3888,16 +3950,20 @@ export function PairMonitorPage() {
             <Form.Item name="leg2_market_type" rules={[{ required: true }]} className="pair-query-market-type">
               <Select options={marketTypeOptions} />
             </Form.Item>
-            <Form.Item name="leg2_symbol" rules={[{ required: true, message: "请输入右标的" }]} className="pair-query-contract">
-              <Input addonBefore="右标的" placeholder="SKHYNIX" />
-            </Form.Item>
-            <Form.Item
-              name="leg2_multiplier"
-              rules={[{ required: true, type: "number", min: 0.000001, message: "倍率必须大于0" }]}
-              className="pair-query-multiplier"
-            >
-              <InputNumber addonBefore="右侧倍率" min={0.000001} step={1} />
-            </Form.Item>
+            {sameSymbolMode ? null : (
+              <>
+                <Form.Item name="leg2_symbol" rules={[{ required: true, message: "请输入右标的" }]} className="pair-query-contract">
+                  <Input addonBefore="右标的" placeholder="SKHYNIX" />
+                </Form.Item>
+                <Form.Item
+                  name="leg2_multiplier"
+                  rules={[{ required: true, type: "number", min: 0.000001, message: "倍率必须大于0" }]}
+                  className="pair-query-multiplier"
+                >
+                  <InputNumber addonBefore="右侧倍率" min={0.000001} step={1} />
+                </Form.Item>
+              </>
+            )}
             <InputNumber
               addonBefore="小时"
               className="pair-query-hours"
@@ -3951,6 +4017,17 @@ export function PairMonitorPage() {
           </div>
         </Form>
         <div className="pair-query-options">
+          <Typography.Text className="pair-query-option-label">标的模式</Typography.Text>
+          <Segmented<PairSymbolMode>
+            size="small"
+            className="pair-symbol-mode"
+            options={[
+              { label: "同标的 x1", value: "same" },
+              { label: "自定义右侧", value: "custom" }
+            ]}
+            value={pairSymbolMode}
+            onChange={(value) => setPairSymbolMode(value)}
+          />
           <Typography.Text className="pair-query-option-label">图表扩展</Typography.Text>
           <Switch
             checked={showPremiumCompare}
