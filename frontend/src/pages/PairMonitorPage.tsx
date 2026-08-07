@@ -42,6 +42,7 @@ import type {
   PairSpreadDiagnosticResult,
   PairSpreadDiagnosticRule,
   PairSpreadLegQuery,
+  PairSpreadHourlyVolumePoint,
   PairSpreadPoint,
   PairSpreadPriceField,
   PairSpreadQueryResult,
@@ -684,6 +685,7 @@ function isPairSpreadQueryResult(value: unknown): value is PairSpreadQueryResult
     (item.interval_seconds === undefined || typeof item.interval_seconds === "number") &&
     typeof item.leg2_multiplier === "number" &&
     Array.isArray(item.points) &&
+    (item.hourly_volume === undefined || Array.isArray(item.hourly_volume)) &&
     Array.isArray(item.funding_history) &&
     (item.realtime_funding === undefined || Array.isArray(item.realtime_funding)) &&
     Array.isArray(item.warnings)
@@ -2300,6 +2302,247 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
         </div>
         <Typography.Text type="secondary">最新 {fullTime(result.observed_at)}</Typography.Text>
       </div>
+    </div>
+  );
+}
+
+function volumeDiffClass(value: number | null | undefined): string {
+  const diff = finiteRate(value);
+  if (diff === null) {
+    return "pair-hourly-volume-diff-empty";
+  }
+  if (diff > 0) {
+    return "pair-hourly-volume-diff-right";
+  }
+  if (diff < 0) {
+    return "pair-hourly-volume-diff-left";
+  }
+  return "pair-hourly-volume-diff-balanced";
+}
+
+function signedUsdt(value: number | null | undefined): string {
+  const diff = finiteRate(value);
+  if (diff === null) {
+    return "-";
+  }
+  return `${diff >= 0 ? "+" : "-"}${compactUsdt(Math.abs(diff))}`;
+}
+
+function ratioText(value: number | null | undefined): string {
+  const ratio = finiteRate(value);
+  if (ratio === null) {
+    return "-";
+  }
+  return `${compactNumber(ratio, ratio >= 10 ? 1 : 2)}x`;
+}
+
+function PairHourlyVolumeCard({ result }: { result: PairSpreadQueryResult | null }) {
+  const rowsAsc = useMemo(
+    () =>
+      (result?.hourly_volume ?? [])
+        .slice()
+        .sort((left, right) => dayjs.utc(left.bucket_at).valueOf() - dayjs.utc(right.bucket_at).valueOf()),
+    [result]
+  );
+  const tableRows = useMemo(() => rowsAsc.slice().reverse(), [rowsAsc]);
+  const volumeValues = rowsAsc
+    .flatMap((row) => [row.leg1_volume_usdt, row.leg2_volume_usdt])
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  const leftTotal = rowsAsc.reduce((total, row) => total + (finiteRate(row.leg1_volume_usdt) ?? 0), 0);
+  const rightTotal = rowsAsc.reduce((total, row) => total + (finiteRate(row.leg2_volume_usdt) ?? 0), 0);
+  const columns = useMemo<ColumnsType<PairSpreadHourlyVolumePoint>>(
+    () => [
+      {
+        title: "小时",
+        dataIndex: "bucket_at",
+        width: 118,
+        render: (value: string) => time(value)
+      },
+      {
+        title: (
+          <span className="pair-volume-column-title">
+            <span>左成交额</span>
+            <small>{leftLegLabel(result)}</small>
+          </span>
+        ),
+        dataIndex: "leg1_volume_usdt",
+        align: "right",
+        render: (value: number | null) => (
+          <span className="pair-hourly-volume-cell pair-hourly-volume-cell-left">{compactUsdt(value)}</span>
+        )
+      },
+      {
+        title: (
+          <span className="pair-volume-column-title">
+            <span>右成交额</span>
+            <small>{rightLegLabel(result)}</small>
+          </span>
+        ),
+        dataIndex: "leg2_volume_usdt",
+        align: "right",
+        render: (value: number | null) => (
+          <span className="pair-hourly-volume-cell pair-hourly-volume-cell-right">{compactUsdt(value)}</span>
+        )
+      },
+      {
+        title: "合计",
+        dataIndex: "total_volume_usdt",
+        align: "right",
+        render: (value: number | null) => compactUsdt(value)
+      },
+      {
+        title: "右-左",
+        dataIndex: "volume_diff_usdt",
+        align: "right",
+        render: (value: number | null) => (
+          <span className={`pair-hourly-volume-diff ${volumeDiffClass(value)}`}>{signedUsdt(value)}</span>
+        )
+      },
+      {
+        title: "右/左",
+        dataIndex: "volume_ratio",
+        align: "right",
+        render: (value: number | null) => ratioText(value)
+      }
+    ],
+    [result]
+  );
+
+  if (!result) {
+    return null;
+  }
+
+  if (!rowsAsc.length && resultIntervalSeconds(result) < 60) {
+    return null;
+  }
+
+  if (!rowsAsc.length || !volumeValues.length) {
+    return (
+      <div className="pair-hourly-volume-card">
+        <div className="pair-hourly-volume-head">
+          <Typography.Title level={5}>每小时成交额</Typography.Title>
+          <div className="pair-hourly-volume-summary">
+            <Tag>{intervalLabel(resultIntervalSeconds(result))}</Tag>
+            <Tag>0 小时</Tag>
+          </div>
+        </div>
+        <div className="pair-hourly-volume-empty">暂无可统计的小时成交额</div>
+      </div>
+    );
+  }
+
+  const width = 1180;
+  const height = 260;
+  const padding = { top: 18, right: 28, bottom: 34, left: 64 };
+  const chartWidth = width - padding.left - padding.right;
+  const chartHeight = height - padding.top - padding.bottom;
+  const maxValue = Math.max(...volumeValues, 1);
+  const yAt = (value: number) => padding.top + ((maxValue - value) / maxValue) * chartHeight;
+  const zeroY = yAt(0);
+  const groupWidth = chartWidth / Math.max(rowsAsc.length, 1);
+  const barWidth = Math.max(2, Math.min(16, groupWidth * 0.32));
+  const xCenterAt = (index: number) => padding.left + groupWidth * index + groupWidth / 2;
+  const startMs = dayjs.utc(rowsAsc[0].bucket_at).valueOf();
+  const endMs = dayjs.utc(rowsAsc[rowsAsc.length - 1].bucket_at).valueOf();
+  const spanHours = Math.max((endMs - startMs) / 3_600_000, 1);
+  const tickRows =
+    rowsAsc.length <= 26
+      ? rowsAsc.map((row, index) => ({ row, index }))
+      : chartTicks(
+          rowsAsc.map((row) => ({
+            bucket_at: row.bucket_at,
+            leg1_close: 1,
+            leg2_close: 1,
+            spread_abs: 0,
+            spread_pct: 0
+          })),
+          rowsAsc.length >= 168 ? 7 : 12
+        ).map(({ index }) => ({ row: rowsAsc[index], index }));
+  const barHeight = (value: number) => Math.max(value === 0 ? 1 : 2, zeroY - yAt(value));
+
+  return (
+    <div className="pair-hourly-volume-card">
+      <div className="pair-hourly-volume-head">
+        <Typography.Title level={5}>每小时成交额</Typography.Title>
+        <div className="pair-hourly-volume-summary">
+          <Tag color="green">左 {compactUsdt(leftTotal)} USDT</Tag>
+          <Tag color="purple">右 {compactUsdt(rightTotal)} USDT</Tag>
+          <Tag>{rowsAsc.length} 小时</Tag>
+        </div>
+      </div>
+      <svg className="pair-hourly-volume-chart" role="img" aria-label="左右腿每小时成交额" viewBox={`0 0 ${width} ${height}`}>
+        <rect x={padding.left} y={padding.top} width={chartWidth} height={chartHeight} rx="4" />
+        {[0, 0.25, 0.5, 0.75, 1].map((tick) => {
+          const y = padding.top + chartHeight * tick;
+          const value = maxValue - maxValue * tick;
+          return (
+            <g key={`hourly-volume-y-${tick}`}>
+              <line className="pair-hourly-volume-grid-line" x1={padding.left} y1={y} x2={padding.left + chartWidth} y2={y} />
+              <text className="pair-hourly-volume-axis-label" x={padding.left - 10} y={y + 4} textAnchor="end">
+                {compactUsdt(value)}
+              </text>
+            </g>
+          );
+        })}
+        {tickRows.map(({ row, index }, tickIndex) => {
+          const x = xCenterAt(index);
+          const textAnchor = tickIndex === 0 ? "start" : tickIndex === tickRows.length - 1 ? "end" : "middle";
+          return (
+            <g key={`hourly-volume-tick-${row.bucket_at}`}>
+              <line className="pair-hourly-volume-time-tick" x1={x} y1={padding.top} x2={x} y2={padding.top + chartHeight} />
+              <text className="pair-hourly-volume-axis-label" x={x} y={height - 10} textAnchor={textAnchor}>
+                {chartTime(row.bucket_at, spanHours, rowsAsc.length <= 26)}
+              </text>
+            </g>
+          );
+        })}
+        {rowsAsc.map((row, index) => {
+          const leftVolume = finiteRate(row.leg1_volume_usdt);
+          const rightVolume = finiteRate(row.leg2_volume_usdt);
+          const centerX = xCenterAt(index);
+          return (
+            <g key={`hourly-volume-bars-${row.bucket_at}`}>
+              {leftVolume !== null ? (
+                <rect
+                  className="pair-hourly-volume-bar pair-hourly-volume-bar-left"
+                  x={centerX - barWidth - 1}
+                  y={zeroY - barHeight(leftVolume)}
+                  width={barWidth}
+                  height={barHeight(leftVolume)}
+                  rx="2"
+                >
+                  <title>{`${time(row.bucket_at)} 左成交额 ${compactUsdt(leftVolume)} USDT`}</title>
+                </rect>
+              ) : null}
+              {rightVolume !== null ? (
+                <rect
+                  className="pair-hourly-volume-bar pair-hourly-volume-bar-right"
+                  x={centerX + 1}
+                  y={zeroY - barHeight(rightVolume)}
+                  width={barWidth}
+                  height={barHeight(rightVolume)}
+                  rx="2"
+                >
+                  <title>{`${time(row.bucket_at)} 右成交额 ${compactUsdt(rightVolume)} USDT`}</title>
+                </rect>
+              ) : null}
+            </g>
+          );
+        })}
+      </svg>
+      <div className="pair-hourly-volume-legend">
+        <span className="pair-hourly-volume-legend-left">{leftLegLabel(result)}</span>
+        <span className="pair-hourly-volume-legend-right">{rightLegLabel(result)}</span>
+      </div>
+      <Table<PairSpreadHourlyVolumePoint>
+        rowKey={(row) => row.bucket_at}
+        columns={columns}
+        dataSource={tableRows}
+        pagination={{ pageSize: 24, showSizeChanger: false }}
+        size="small"
+        tableLayout="fixed"
+        scroll={{ x: 760 }}
+      />
     </div>
   );
 }
@@ -4500,6 +4743,7 @@ export function PairMonitorPage() {
       </section>
 
       <PairSpreadChart result={result} />
+      <PairHourlyVolumeCard result={result} />
       {showDayCompare ? (
         <PairDayCompareChart
           series={dayCompareSeries}

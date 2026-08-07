@@ -24,6 +24,7 @@ from app.services.pair_spread_query import (
     _REALTIME_PAIR_SPREAD_CACHE,
     _REALTIME_SYMBOL_SPREAD_CACHE,
     _hyperliquid_history_limit_warning,
+    build_pair_hourly_volume_points,
     build_pair_spread_points,
     build_symbol_spread_points,
 )
@@ -37,8 +38,8 @@ def kline(minutes: int, close: float) -> PairSpreadKlinePoint:
     )
 
 
-def kline_at(bucket_at: datetime, close: float) -> PairSpreadKlinePoint:
-    return PairSpreadKlinePoint(bucket_at=bucket_at, close=close)
+def kline_at(bucket_at: datetime, close: float, volume_usdt: float | None = None) -> PairSpreadKlinePoint:
+    return PairSpreadKlinePoint(bucket_at=bucket_at, close=close, volume_usdt=volume_usdt)
 
 
 def current_leg(
@@ -85,6 +86,31 @@ def test_pair_spread_points_apply_right_side_multiplier() -> None:
     assert points[0].leg2_close == 105
     assert points[0].spread_abs == 5
     assert points[0].spread_pct == pytest.approx(5 / ((100 + 105) / 2) * 100)
+
+
+def test_pair_hourly_volume_points_bucket_by_beijing_hour() -> None:
+    points = build_pair_hourly_volume_points(
+        [
+            kline_at(datetime(2026, 7, 10, 15, 50, tzinfo=UTC), 100, 1_000),
+            kline_at(datetime(2026, 7, 10, 16, 5, tzinfo=UTC), 101, 2_000),
+        ],
+        [
+            kline_at(datetime(2026, 7, 10, 16, 15, tzinfo=UTC), 102, 5_000),
+        ],
+    )
+
+    assert [point.bucket_at for point in points] == [
+        datetime(2026, 7, 10, 15, 0, tzinfo=UTC),
+        datetime(2026, 7, 10, 16, 0, tzinfo=UTC),
+    ]
+    assert points[0].leg1_volume_usdt == pytest.approx(1_000)
+    assert points[0].leg2_volume_usdt is None
+    assert points[0].total_volume_usdt == pytest.approx(1_000)
+    assert points[1].leg1_volume_usdt == pytest.approx(2_000)
+    assert points[1].leg2_volume_usdt == pytest.approx(5_000)
+    assert points[1].total_volume_usdt == pytest.approx(7_000)
+    assert points[1].volume_diff_usdt == pytest.approx(3_000)
+    assert points[1].volume_ratio == pytest.approx(2.5)
 
 
 def test_symbol_spread_points_align_against_base_exchange() -> None:
@@ -136,14 +162,14 @@ async def test_pair_spread_query_builds_stats_current_and_funding() -> None:
             first_bucket = start + timedelta(minutes=5)
             if exchange == "binance":
                 return [
-                    kline_at(first_bucket, 100),
-                    kline_at(first_bucket + timedelta(minutes=5), 101),
-                    kline_at(first_bucket + timedelta(minutes=10), 102),
+                    kline_at(first_bucket, 100, 100_000),
+                    kline_at(first_bucket + timedelta(minutes=5), 101, 110_000),
+                    kline_at(first_bucket + timedelta(minutes=10), 102, 120_000),
                 ]
             return [
-                kline_at(first_bucket, 1010),
-                kline_at(first_bucket + timedelta(minutes=5), 1030),
-                kline_at(first_bucket + timedelta(minutes=10), 1050),
+                kline_at(first_bucket, 1010, 200_000),
+                kline_at(first_bucket + timedelta(minutes=5), 1030, 210_000),
+                kline_at(first_bucket + timedelta(minutes=10), 1050, 220_000),
             ]
 
         async def _fetch_current_leg(self, exchange: str, symbol: str):
@@ -189,6 +215,11 @@ async def test_pair_spread_query_builds_stats_current_and_funding() -> None:
     assert result.current.spread_pct == pytest.approx((104 - 100) / ((100 + 104) / 2) * 100)
     assert result.interval_minutes == 5
     assert result.leg2_multiplier == 10
+    assert len(result.hourly_volume) == 1
+    assert result.hourly_volume[0].leg1_volume_usdt == pytest.approx(330_000)
+    assert result.hourly_volume[0].leg2_volume_usdt == pytest.approx(630_000)
+    assert result.hourly_volume[0].total_volume_usdt == pytest.approx(960_000)
+    assert result.hourly_volume[0].volume_ratio == pytest.approx(630_000 / 330_000)
     assert len(result.funding_history) == 2
     assert len(result.realtime_funding) == 1
     assert result.realtime_funding[0].net_rate_pct == pytest.approx(0)
@@ -1097,7 +1128,7 @@ async def test_binance_alpha_spot_klines_unwrap_bapi_payload() -> None:
         await service.aclose()
 
     assert requested_urls
-    assert points == [PairSpreadKlinePoint(bucket_at=start, close=0.00265)]
+    assert points == [PairSpreadKlinePoint(bucket_at=start, close=0.00265, volume_usdt=2.65)]
 
 
 @pytest.mark.asyncio
@@ -1139,7 +1170,7 @@ async def test_binance_alpha_spot_klines_stop_when_start_exceeds_latest_alpha_en
         await service.aclose()
 
     assert len(requested_urls) == 2
-    assert points == [PairSpreadKlinePoint(bucket_at=start, close=0.00265)]
+    assert points == [PairSpreadKlinePoint(bucket_at=start, close=0.00265, volume_usdt=2.65)]
 
 
 @pytest.mark.asyncio

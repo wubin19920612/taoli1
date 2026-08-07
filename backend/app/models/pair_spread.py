@@ -90,6 +90,7 @@ class PairSpreadLegQuery(BaseModel):
 class PairSpreadKlinePoint(BaseModel):
     bucket_at: datetime
     close: float = Field(gt=0)
+    volume_usdt: float | None = Field(default=None, ge=0)
 
 
 class PairSpreadPoint(BaseModel):
@@ -98,6 +99,15 @@ class PairSpreadPoint(BaseModel):
     leg2_close: float
     spread_abs: float
     spread_pct: float
+
+
+class PairSpreadHourlyVolumePoint(BaseModel):
+    bucket_at: datetime
+    leg1_volume_usdt: float | None = Field(default=None, ge=0)
+    leg2_volume_usdt: float | None = Field(default=None, ge=0)
+    total_volume_usdt: float | None = Field(default=None, ge=0)
+    volume_diff_usdt: float | None = None
+    volume_ratio: float | None = Field(default=None, ge=0)
 
 
 class PairSpreadFundingPoint(BaseModel):
@@ -197,6 +207,7 @@ class PairSpreadQueryResult(BaseModel):
     spread_pct: PairSpreadValueStats
     current: PairSpreadCurrentSnapshot | None = None
     points: list[PairSpreadPoint]
+    hourly_volume: list[PairSpreadHourlyVolumePoint] = Field(default_factory=list)
     funding_history: list[PairSpreadFundingPoint] = Field(default_factory=list)
     realtime_funding: list[PairSpreadRealtimeFundingPoint] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)

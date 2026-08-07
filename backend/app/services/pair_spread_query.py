@@ -25,6 +25,7 @@ from app.models.pair_spread import (
     PairSpreadCurrentSnapshot,
     PairSpreadFundingHistoryResult,
     PairSpreadFundingPoint,
+    PairSpreadHourlyVolumePoint,
     PairSpreadKlinePoint,
     PairSpreadLegQuery,
     PairSpreadPoint,
@@ -228,6 +229,21 @@ def _dedupe_sorted(points: list[PairSpreadKlinePoint]) -> list[PairSpreadKlinePo
     return [by_bucket[key] for key in sorted(by_bucket)]
 
 
+def _display_hour_bucket(value: datetime) -> datetime:
+    return value.astimezone(DISPLAY_TZ).replace(minute=0, second=0, microsecond=0).astimezone(UTC)
+
+
+def _hourly_volume_totals(points: list[PairSpreadKlinePoint]) -> dict[datetime, float]:
+    totals: dict[datetime, float] = {}
+    for point in points:
+        volume = _nonnegative(point.volume_usdt)
+        if volume is None:
+            continue
+        bucket_at = _display_hour_bucket(point.bucket_at)
+        totals[bucket_at] = totals.get(bucket_at, 0) + volume
+    return totals
+
+
 def _duration_text(hours: int) -> str:
     if hours % 24 == 0:
         return f"{hours // 24}天"
@@ -422,6 +438,53 @@ def build_pair_spread_points(
                 spread_pct=_spread_pct(spread_abs, leg1_close, leg2_close),
             )
         )
+    return points
+
+
+def build_pair_hourly_volume_points(
+    leg1_klines: list[PairSpreadKlinePoint],
+    leg2_klines: list[PairSpreadKlinePoint],
+) -> list[PairSpreadHourlyVolumePoint]:
+    leg1_by_hour = _hourly_volume_totals(leg1_klines)
+    leg2_by_hour = _hourly_volume_totals(leg2_klines)
+    volume_hours = sorted(leg1_by_hour.keys() | leg2_by_hour.keys())
+    if not volume_hours:
+        return []
+
+    points: list[PairSpreadHourlyVolumePoint] = []
+    bucket_at = volume_hours[0]
+    last_bucket_at = volume_hours[-1]
+    while bucket_at <= last_bucket_at:
+        leg1_volume = leg1_by_hour.get(bucket_at)
+        leg2_volume = leg2_by_hour.get(bucket_at)
+        total_volume = (
+            (leg1_volume or 0) + (leg2_volume or 0)
+            if leg1_volume is not None or leg2_volume is not None
+            else None
+        )
+        volume_diff = (
+            leg2_volume - leg1_volume
+            if leg1_volume is not None and leg2_volume is not None
+            else None
+        )
+        volume_ratio = (
+            leg2_volume / leg1_volume
+            if leg1_volume is not None
+            and leg1_volume > 0
+            and leg2_volume is not None
+            else None
+        )
+        points.append(
+            PairSpreadHourlyVolumePoint(
+                bucket_at=bucket_at,
+                leg1_volume_usdt=leg1_volume,
+                leg2_volume_usdt=leg2_volume,
+                total_volume_usdt=total_volume,
+                volume_diff_usdt=volume_diff,
+                volume_ratio=volume_ratio,
+            )
+        )
+        bucket_at += timedelta(hours=1)
     return points
 
 
@@ -651,6 +714,8 @@ class PairSpreadQueryService:
         )
 
         points: list[PairSpreadPoint] = []
+        leg1_klines: list[PairSpreadKlinePoint] = []
+        leg2_klines: list[PairSpreadKlinePoint] = []
         used_start = requested_start
         failed_window_warnings: list[str] = []
 
@@ -681,6 +746,8 @@ class PairSpreadQueryService:
             )
             if candidate_points:
                 points = candidate_points
+                leg1_klines = candidate_leg1_klines
+                leg2_klines = candidate_leg2_klines
                 used_start = window_start
                 if window_hours != hours:
                     _append_unique(
@@ -764,6 +831,7 @@ class PairSpreadQueryService:
             spread_pct=_stats([point.spread_pct for point in points]),
             current=current,
             points=points,
+            hourly_volume=build_pair_hourly_volume_points(leg1_klines, leg2_klines),
             funding_history=sorted(funding1 + funding2, key=lambda item: item.funding_time),
             realtime_funding=realtime_funding,
             warnings=warnings,
@@ -1392,7 +1460,7 @@ class PairSpreadQueryService:
                 f"&startTime={cursor}&endTime={chunk_end}&limit=1500"
             )
             rows = await self._get_json(url)
-            parsed = [_parse_array_kline(row, 0, 4) for row in rows if isinstance(row, list)]
+            parsed = [_parse_array_kline(row, 0, 4, 7, 5) for row in rows if isinstance(row, list)]
             parsed = [point for point in parsed if point is not None]
             if not parsed:
                 cursor = chunk_end + 1
@@ -1425,7 +1493,7 @@ class PairSpreadQueryService:
                 f"&startTime={cursor}&endTime={chunk_end}&limit=1000"
             )
             rows = await self._get_json(url)
-            parsed = [_parse_array_kline(row, 0, 4) for row in rows if isinstance(row, list)]
+            parsed = [_parse_array_kline(row, 0, 4, 7, 5) for row in rows if isinstance(row, list)]
             parsed = [point for point in parsed if point is not None]
             if not parsed:
                 cursor = chunk_end + 1
@@ -1462,7 +1530,7 @@ class PairSpreadQueryService:
                 if _is_start_after_end_error(exc):
                     break
                 raise
-            parsed = [_parse_array_kline(row, 0, 4) for row in rows if isinstance(row, list)]
+            parsed = [_parse_array_kline(row, 0, 4, 7, 5) for row in rows if isinstance(row, list)]
             parsed = [point for point in parsed if point is not None]
             if not parsed:
                 cursor = chunk_end + 1
@@ -1516,7 +1584,7 @@ class PairSpreadQueryService:
                 f"?instId={inst_id}&bar={interval_minutes}m&after={cursor}&limit=100"
             )
             rows = (await self._get_json(url)).get("data", [])
-            parsed = [_parse_array_kline(row, 0, 4) for row in rows if isinstance(row, list)]
+            parsed = [_parse_array_kline(row, 0, 4, 7, 6) for row in rows if isinstance(row, list)]
             parsed = [point for point in parsed if point is not None]
             if not parsed:
                 break
@@ -1544,7 +1612,7 @@ class PairSpreadQueryService:
                 f"?instId={inst_id}&bar={interval_minutes}m&before={cursor}&limit=100"
             )
             rows = (await self._get_json(url)).get("data", [])
-            parsed = [_parse_array_kline(row, 0, 4) for row in rows if isinstance(row, list)]
+            parsed = [_parse_array_kline(row, 0, 4, 7, 6) for row in rows if isinstance(row, list)]
             parsed = [point for point in parsed if point is not None]
             if not parsed:
                 break
@@ -1574,7 +1642,7 @@ class PairSpreadQueryService:
                 f"?category=linear&symbol={raw}&interval={interval_minutes}&start={cursor}&end={chunk_end}&limit=1000"
             )
             rows = (await self._get_json(url)).get("result", {}).get("list", [])
-            parsed = [_parse_array_kline(row, 0, 4) for row in rows if isinstance(row, list)]
+            parsed = [_parse_array_kline(row, 0, 4, 6, 5) for row in rows if isinstance(row, list)]
             parsed = [point for point in parsed if point is not None]
             if not parsed:
                 cursor = chunk_end + 1
@@ -1605,7 +1673,7 @@ class PairSpreadQueryService:
                 f"?category=spot&symbol={raw}&interval={interval_minutes}&start={cursor}&end={chunk_end}&limit=1000"
             )
             rows = (await self._get_json(url)).get("result", {}).get("list", [])
-            parsed = [_parse_array_kline(row, 0, 4) for row in rows if isinstance(row, list)]
+            parsed = [_parse_array_kline(row, 0, 4, 6, 5) for row in rows if isinstance(row, list)]
             parsed = [point for point in parsed if point is not None]
             if not parsed:
                 cursor = chunk_end + 1
@@ -1699,7 +1767,7 @@ class PairSpreadQueryService:
                 f"&startTime={cursor}&endTime={chunk_end}&limit=1000"
             )
             rows = (await self._get_json(url)).get("data", [])
-            parsed = [_parse_array_kline(row, 0, 4) for row in rows if isinstance(row, list)]
+            parsed = [_parse_array_kline(row, 0, 4, 6, 5) for row in rows if isinstance(row, list)]
             parsed = [point for point in parsed if point is not None]
             if not parsed:
                 cursor = chunk_end + 1
@@ -1732,7 +1800,7 @@ class PairSpreadQueryService:
                 f"&startTime={cursor}&endTime={chunk_end}&limit=1000"
             )
             rows = (await self._get_json(url)).get("data", [])
-            parsed = [_parse_array_kline(row, 0, 4) for row in rows if isinstance(row, list)]
+            parsed = [_parse_array_kline(row, 0, 4, 6, 5) for row in rows if isinstance(row, list)]
             parsed = [point for point in parsed if point is not None]
             if not parsed:
                 cursor = chunk_end + 1
@@ -1770,8 +1838,20 @@ class PairSpreadQueryService:
                 point
                 for row in rows
                 if isinstance(row, dict)
-                if (point := _parse_dict_kline(row, ("t", "T", "time"), ("c", "close"))) is not None
-                and start <= point.bucket_at <= end
+                if (
+                    (
+                        (
+                            point := _parse_dict_kline(
+                                row,
+                                ("t", "T", "time"),
+                                ("c", "close"),
+                                base_volume_keys=("v", "volume"),
+                            )
+                        )
+                        is not None
+                    )
+                    and start <= point.bucket_at <= end
+                )
             ]
         )
 
@@ -2416,20 +2496,63 @@ def _market_data_error_text(exchange: str, exc: BaseException) -> str:
     return text
 
 
-def _parse_array_kline(row: list[Any], time_index: int, close_index: int) -> PairSpreadKlinePoint | None:
+def _array_value(row: list[Any], index: int | None) -> Any:
+    if index is None or len(row) <= index:
+        return None
+    return row[index]
+
+
+def _dict_value(row: dict[str, Any], keys: tuple[str, ...]) -> Any:
+    for key in keys:
+        if key in row:
+            return row.get(key)
+    return None
+
+
+def _volume_usdt_from_values(
+    close: float,
+    quote_volume_value: Any,
+    base_volume_value: Any,
+) -> float | None:
+    quote_volume = _nonnegative(parse_float(quote_volume_value))
+    if quote_volume is not None:
+        return quote_volume
+    base_volume = _nonnegative(parse_float(base_volume_value))
+    if base_volume is None:
+        return None
+    return base_volume * close
+
+
+def _parse_array_kline(
+    row: list[Any],
+    time_index: int,
+    close_index: int,
+    quote_volume_index: int | None = None,
+    base_volume_index: int | None = None,
+) -> PairSpreadKlinePoint | None:
     if len(row) <= max(time_index, close_index):
         return None
     bucket_at = _bucket_datetime_ms(row[time_index])
     close = _positive(parse_float(row[close_index]))
     if bucket_at is None or close is None:
         return None
-    return PairSpreadKlinePoint(bucket_at=bucket_at, close=close)
+    return PairSpreadKlinePoint(
+        bucket_at=bucket_at,
+        close=close,
+        volume_usdt=_volume_usdt_from_values(
+            close,
+            _array_value(row, quote_volume_index),
+            _array_value(row, base_volume_index),
+        ),
+    )
 
 
 def _parse_dict_kline(
     row: dict[str, Any],
     time_keys: tuple[str, ...],
     close_keys: tuple[str, ...],
+    quote_volume_keys: tuple[str, ...] = (),
+    base_volume_keys: tuple[str, ...] = (),
 ) -> PairSpreadKlinePoint | None:
     bucket_at: datetime | None = None
     for key in time_keys:
@@ -2445,7 +2568,15 @@ def _parse_dict_kline(
                 break
     if bucket_at is None or close is None:
         return None
-    return PairSpreadKlinePoint(bucket_at=bucket_at, close=close)
+    return PairSpreadKlinePoint(
+        bucket_at=bucket_at,
+        close=close,
+        volume_usdt=_volume_usdt_from_values(
+            close,
+            _dict_value(row, quote_volume_keys),
+            _dict_value(row, base_volume_keys),
+        ),
+    )
 
 
 def _parse_gate_kline(row: dict[str, Any] | list[Any]) -> PairSpreadKlinePoint | None:
@@ -2461,7 +2592,15 @@ def _parse_gate_kline(row: dict[str, Any] | list[Any]) -> PairSpreadKlinePoint |
     close = _positive(parse_float(row.get("c") or row.get("close")))
     if bucket_at is None or close is None:
         return None
-    return PairSpreadKlinePoint(bucket_at=bucket_at, close=close)
+    return PairSpreadKlinePoint(
+        bucket_at=bucket_at,
+        close=close,
+        volume_usdt=_volume_usdt_from_values(
+            close,
+            _dict_value(row, ("sum", "quote_volume", "quoteVolume", "amount", "turnover")),
+            _dict_value(row, ("v", "volume", "base_volume", "baseVolume")),
+        ),
+    )
 
 
 def _parse_gate_spot_kline(row: dict[str, Any] | list[Any]) -> PairSpreadKlinePoint | None:
@@ -2470,7 +2609,15 @@ def _parse_gate_spot_kline(row: dict[str, Any] | list[Any]) -> PairSpreadKlinePo
             bucket_at = _bucket_datetime_seconds(row[0]) or _bucket_datetime_ms(row[0])
             close = _positive(parse_float(row[2]))
             if bucket_at is not None and close is not None:
-                return PairSpreadKlinePoint(bucket_at=bucket_at, close=close)
+                return PairSpreadKlinePoint(
+                    bucket_at=bucket_at,
+                    close=close,
+                    volume_usdt=_volume_usdt_from_values(
+                        close,
+                        _array_value(row, 1),
+                        _array_value(row, 6),
+                    ),
+                )
         return None
     bucket_at = (
         _bucket_datetime_seconds(row.get("t"))
@@ -2480,7 +2627,15 @@ def _parse_gate_spot_kline(row: dict[str, Any] | list[Any]) -> PairSpreadKlinePo
     close = _positive(parse_float(row.get("c") or row.get("close")))
     if bucket_at is None or close is None:
         return None
-    return PairSpreadKlinePoint(bucket_at=bucket_at, close=close)
+    return PairSpreadKlinePoint(
+        bucket_at=bucket_at,
+        close=close,
+        volume_usdt=_volume_usdt_from_values(
+            close,
+            _dict_value(row, ("quote_volume", "quoteVolume", "amount", "sum", "turnover")),
+            _dict_value(row, ("v", "volume", "base_volume", "baseVolume")),
+        ),
+    )
 
 
 def _first_row(rows: Any) -> dict[str, Any]:

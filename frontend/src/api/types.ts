@@ -629,6 +629,15 @@ export interface PairSpreadPoint {
   spread_pct: number;
 }
 
+export interface PairSpreadHourlyVolumePoint {
+  bucket_at: string;
+  leg1_volume_usdt: number | null;
+  leg2_volume_usdt: number | null;
+  total_volume_usdt: number | null;
+  volume_diff_usdt: number | null;
+  volume_ratio: number | null;
+}
+
 export interface PairSpreadFundingPoint {
   exchange: string;
   symbol: string;
@@ -720,6 +729,7 @@ export interface PairSpreadQueryResult {
   spread_pct: PairSpreadValueStats;
   current: PairSpreadCurrentSnapshot | null;
   points: PairSpreadPoint[];
+  hourly_volume?: PairSpreadHourlyVolumePoint[];
   funding_history: PairSpreadFundingPoint[];
   realtime_funding?: PairSpreadRealtimeFundingPoint[];
   warnings: string[];
