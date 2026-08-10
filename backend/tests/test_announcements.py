@@ -278,12 +278,14 @@ async def test_settings_repository_round_trips_announcement_settings() -> None:
 
         defaults = await repo.get_announcement_settings()
         assert defaults.record_exchanges == ["binance", "okx", "bybit", "gate", "bitget", "hyperliquid"]
+        assert defaults.listing_delisting_alerts_enabled is True
 
         settings = AnnouncementSettings(
             enabled=True,
             poll_interval_seconds=120,
             record_exchanges=["OKX", "okx", "bybit"],
             alert_exchanges=["BYBIT"],
+            listing_delisting_alerts_enabled=False,
             bootstrap_alerts_enabled=True,
             event_reminders_enabled=False,
             event_reminder_minutes_before=45,
@@ -294,6 +296,7 @@ async def test_settings_repository_round_trips_announcement_settings() -> None:
         assert saved.record_exchanges == ["okx", "bybit"]
         assert loaded.record_exchanges == ["okx", "bybit"]
         assert loaded.alert_exchanges == ["bybit"]
+        assert loaded.listing_delisting_alerts_enabled is False
         assert loaded.bootstrap_alerts_enabled is True
         assert loaded.event_reminders_enabled is False
         assert loaded.event_reminder_minutes_before == 45
@@ -345,6 +348,26 @@ async def test_monitor_alerts_new_configured_exchange_announcements() -> None:
 
 
 @pytest.mark.asyncio
+async def test_monitor_alerts_listing_delisting_announcements_by_default() -> None:
+    db = await connect_database(":memory:")
+    alerts: list[str] = []
+    try:
+        await initialize_schema(db)
+        repo = AnnouncementRepository(db)
+        monitor = AnnouncementMonitor(repo, alert_sender=alerts.append)
+        settings = AnnouncementSettings(record_exchanges=["okx"], alert_exchanges=[])
+
+        created = await monitor.process([announcement()], settings, bootstrap=False)
+
+        assert len(created) == 1
+        assert created[0].alert_status == "sent"
+        assert len(alerts) == 1
+        assert "[OKX] 上币公告" in alerts[0]
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
 async def test_monitor_sends_due_event_reminders_once() -> None:
     db = await connect_database(":memory:")
     alerts: list[str] = []
@@ -383,7 +406,11 @@ async def test_monitor_records_but_mutes_unalerted_exchanges() -> None:
         await initialize_schema(db)
         repo = AnnouncementRepository(db)
         monitor = AnnouncementMonitor(repo, alert_sender=alerts.append)
-        settings = AnnouncementSettings(record_exchanges=["okx"], alert_exchanges=["bybit"])
+        settings = AnnouncementSettings(
+            record_exchanges=["okx"],
+            alert_exchanges=["bybit"],
+            listing_delisting_alerts_enabled=False,
+        )
 
         created = await monitor.process([announcement()], settings, bootstrap=False)
 

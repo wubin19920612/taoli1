@@ -511,6 +511,7 @@ export interface AnnouncementSettings {
   poll_interval_seconds: number;
   record_exchanges: string[];
   alert_exchanges: string[];
+  listing_delisting_alerts_enabled: boolean;
   bootstrap_alerts_enabled: boolean;
   event_reminders_enabled: boolean;
   event_reminder_minutes_before: number;

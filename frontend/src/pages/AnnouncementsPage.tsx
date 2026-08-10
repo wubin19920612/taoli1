@@ -25,6 +25,7 @@ const defaultAnnouncementSettings: AnnouncementSettings = {
   poll_interval_seconds: 300,
   record_exchanges: ["binance", "okx", "bybit", "gate", "bitget", "hyperliquid"],
   alert_exchanges: [],
+  listing_delisting_alerts_enabled: true,
   bootstrap_alerts_enabled: false,
   event_reminders_enabled: true,
   event_reminder_minutes_before: 30
@@ -51,7 +52,9 @@ function normalizeAnnouncementSettings(values?: Partial<AnnouncementSettings>): 
     ...defaultAnnouncementSettings,
     ...(values ?? {}),
     record_exchanges: values?.record_exchanges ?? defaultAnnouncementSettings.record_exchanges,
-    alert_exchanges: values?.alert_exchanges ?? defaultAnnouncementSettings.alert_exchanges
+    alert_exchanges: values?.alert_exchanges ?? defaultAnnouncementSettings.alert_exchanges,
+    listing_delisting_alerts_enabled:
+      values?.listing_delisting_alerts_enabled ?? defaultAnnouncementSettings.listing_delisting_alerts_enabled
   };
 }
 
@@ -412,6 +415,7 @@ export function AnnouncementsPage() {
   const tableExchangeOptions = [{ label: "全部交易所", value: "" }, ...exchangeOptions];
   const alertExchangeSet = new Set(settingsPreview.alert_exchanges);
   const recordExchangeSet = new Set(settingsPreview.record_exchanges);
+  const listingDelistingAlertEnabled = settingsPreview.listing_delisting_alerts_enabled;
 
   return (
     <div className="page announcements-page">
@@ -425,6 +429,9 @@ export function AnnouncementsPage() {
             </Typography.Text>
           </div>
           <Space wrap>
+            <Tag color={listingDelistingAlertEnabled ? "green" : "default"}>
+              上/下币告警 {listingDelistingAlertEnabled ? "开启" : "关闭"}
+            </Tag>
             {exchangeOptions.map((item) => (
               <Tag
                 key={item.value}
@@ -441,7 +448,7 @@ export function AnnouncementsPage() {
           type={settingsPreview.enabled ? "info" : "warning"}
           showIcon
           message={settingsPreview.enabled ? "公告轮询已启用" : "公告轮询已关闭"}
-          description="record_exchanges 控制哪些交易所会写入公告记录，alert_exchanges 控制哪些交易所的新公告和事件到点提醒会发飞书。只有能识别出明确上币/下架时间的公告才会触发到点提醒。"
+          description="record_exchanges 控制哪些交易所会写入公告记录，alert_exchanges 控制哪些交易所的新公告和事件到点提醒会发飞书。上/下币公告默认也会同步飞书，可通过上面的开关单独关闭；只有能识别出明确上/下币时间的公告才会触发到点提醒。"
         />
         <Form
           form={form}
@@ -452,6 +459,9 @@ export function AnnouncementsPage() {
         >
           <div className="announcements-settings-grid">
             <Form.Item label="启用公告轮询" name="enabled" valuePropName="checked">
+              <Switch />
+            </Form.Item>
+            <Form.Item label="上/下币公告飞书提醒" name="listing_delisting_alerts_enabled" valuePropName="checked">
               <Switch />
             </Form.Item>
             <Form.Item label="首次启动也告警" name="bootstrap_alerts_enabled" valuePropName="checked">

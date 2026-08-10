@@ -1623,7 +1623,15 @@ class AnnouncementMonitor:
                 continue
             seen_keys.add(key)
 
-            alert_status = "pending" if announcement.exchange in alert_exchanges else "muted"
+            should_alert_listing_delisting = (
+                settings.listing_delisting_alerts_enabled
+                and announcement.kind in (AnnouncementKind.LISTING, AnnouncementKind.DELISTING)
+            )
+            alert_status = (
+                "pending"
+                if announcement.exchange in alert_exchanges or should_alert_listing_delisting
+                else "muted"
+            )
             if bootstrap and not should_alert_on_bootstrap and alert_status == "pending":
                 alert_status = "muted"
             candidate = announcement.model_copy(update={"alert_status": alert_status})
