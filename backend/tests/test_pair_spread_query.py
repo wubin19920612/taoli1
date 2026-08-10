@@ -863,6 +863,27 @@ async def test_bybit_current_uses_instruments_info_for_funding_interval_and_limi
                     ]
                 }
             }
+        if "market/open-interest" in url:
+            return {
+                "result": {
+                    "list": [
+                        {
+                            "openInterest": "2000000",
+                        }
+                    ]
+                }
+            }
+        if "market/account-ratio" in url:
+            return {
+                "result": {
+                    "list": [
+                        {
+                            "buyRatio": "0.55",
+                            "sellRatio": "0.45",
+                        }
+                    ]
+                }
+            }
         raise AssertionError(f"unexpected url: {url}")
 
     service._get_json = fake_get_json  # type: ignore[method-assign]
@@ -879,6 +900,11 @@ async def test_bybit_current_uses_instruments_info_for_funding_interval_and_limi
     assert leg.funding_interval_hours == pytest.approx(4)
     assert leg.funding_rate_upper_pct == pytest.approx(2)
     assert leg.funding_rate_lower_pct == pytest.approx(-2)
+    assert leg.open_interest_contracts == pytest.approx(2_000_000)
+    assert leg.open_interest_usdt == pytest.approx(2_000_000 * 0.009126)
+    assert leg.long_account_pct == pytest.approx(55)
+    assert leg.short_account_pct == pytest.approx(45)
+    assert leg.long_short_ratio == pytest.approx(0.55 / 0.45)
 
 
 @pytest.mark.asyncio
@@ -912,6 +938,19 @@ async def test_binance_like_current_uses_funding_info_for_interval_and_limits(mo
                     "adjustedFundingRateFloor": "-0.020000",
                 }
             ]
+        if "openInterest" in url:
+            return {
+                "symbol": "HOMEUSDT",
+                "openInterest": "3000000",
+            }
+        if "globalLongShortAccountRatio" in url:
+            return [
+                {
+                    "longAccount": "0.54",
+                    "shortAccount": "0.46",
+                    "longShortRatio": "1.1739",
+                }
+            ]
         raise AssertionError(f"unexpected url: {url}")
 
     service._get_json = fake_get_json  # type: ignore[method-assign]
@@ -927,6 +966,11 @@ async def test_binance_like_current_uses_funding_info_for_interval_and_limits(mo
     assert leg.funding_interval_hours == pytest.approx(4)
     assert leg.funding_rate_upper_pct == pytest.approx(2)
     assert leg.funding_rate_lower_pct == pytest.approx(-2)
+    assert leg.open_interest_contracts == pytest.approx(3_000_000)
+    assert leg.open_interest_usdt == pytest.approx(3_000_000 * 0.009126)
+    assert leg.long_account_pct == pytest.approx(54)
+    assert leg.short_account_pct == pytest.approx(46)
+    assert leg.long_short_ratio == pytest.approx(1.1739)
 
 
 @pytest.mark.asyncio
@@ -961,6 +1005,23 @@ async def test_okx_current_uses_funding_interval_and_limits() -> None:
                     }
                 ]
             }
+        if "open-interest" in url:
+            return {
+                "data": [
+                    {
+                        "oi": "3159609.84",
+                        "oiCcy": "31596.0984",
+                        "oiUsd": "2058959752.24",
+                    }
+                ]
+            }
+        if "long-short-account-ratio" in url:
+            return {
+                "data": [
+                    ["1784253600000", "1.2"],
+                    ["1784253900000", "1.25"],
+                ]
+            }
         raise AssertionError(f"unexpected url: {url}")
 
     service._get_json = fake_get_json  # type: ignore[method-assign]
@@ -979,6 +1040,11 @@ async def test_okx_current_uses_funding_interval_and_limits() -> None:
     assert leg.funding_interval_hours == pytest.approx(4)
     assert leg.funding_rate_lower_pct == pytest.approx(-1.0)
     assert leg.funding_rate_upper_pct == pytest.approx(1.0)
+    assert leg.open_interest_contracts == pytest.approx(31596.0984)
+    assert leg.open_interest_usdt == pytest.approx(2058959752.24)
+    assert leg.long_account_pct == pytest.approx(1.25 / 2.25 * 100)
+    assert leg.short_account_pct == pytest.approx(1 / 2.25 * 100)
+    assert leg.long_short_ratio == pytest.approx(1.25)
 
 
 @pytest.mark.asyncio
@@ -1009,6 +1075,14 @@ async def test_gate_current_uses_contract_interval_and_limit() -> None:
                 "funding_next_apply": int(next_funding_time.timestamp()),
                 "funding_rate_limit": "0.020000",
             }
+        if "contract_stats" in url:
+            return {
+                "open_interest": 665877432,
+                "open_interest_usd": 4339589146.21,
+                "lsr_account": 0.921960928,
+                "long_users": 17603,
+                "short_users": 19093,
+            }
         raise AssertionError(f"unexpected url: {url}")
 
     service._get_json = fake_get_json  # type: ignore[method-assign]
@@ -1026,6 +1100,82 @@ async def test_gate_current_uses_contract_interval_and_limit() -> None:
     assert leg.funding_interval_hours == pytest.approx(4)
     assert leg.funding_rate_upper_pct == pytest.approx(2)
     assert leg.funding_rate_lower_pct == pytest.approx(-2)
+    assert leg.open_interest_contracts == pytest.approx(665877432)
+    assert leg.open_interest_usdt == pytest.approx(4339589146.21)
+    assert leg.long_account_count == pytest.approx(17603)
+    assert leg.short_account_count == pytest.approx(19093)
+    assert leg.long_account_pct == pytest.approx(17603 / (17603 + 19093) * 100)
+    assert leg.short_account_pct == pytest.approx(19093 / (17603 + 19093) * 100)
+    assert leg.long_short_ratio == pytest.approx(0.921960928)
+
+
+@pytest.mark.asyncio
+async def test_bitget_current_uses_ticker_holding_and_account_ratio() -> None:
+    service = PairSpreadQueryService()
+    requested_urls: list[str] = []
+
+    async def fake_get_json(url: str):
+        requested_urls.append(url)
+        if "mix/market/ticker" in url:
+            return {
+                "data": [
+                    {
+                        "symbol": "BTCUSDT",
+                        "lastPr": "65160.7",
+                        "askPr": "65160.7",
+                        "bidPr": "65160.6",
+                        "quoteVolume": "1100170977.67",
+                        "indexPrice": "65196.521",
+                        "fundingRate": "0.000054",
+                        "holdingAmount": "37730.0454",
+                        "markPrice": "65161.8",
+                    }
+                ]
+            }
+        if "current-fund-rate" in url:
+            return {
+                "data": [
+                    {
+                        "fundingRate": "0.000054",
+                        "nextUpdate": "1784256000000",
+                    }
+                ]
+            }
+        if "account-long-short" in url:
+            return {
+                "data": [
+                    {
+                        "longAccountRatio": "0.5705",
+                        "shortAccountRatio": "0.4295",
+                        "longShortAccountRatio": "1.3282",
+                        "ts": "1786333500000",
+                    },
+                    {
+                        "longAccountRatio": "0.5734",
+                        "shortAccountRatio": "0.4266",
+                        "longShortAccountRatio": "1.3441",
+                        "ts": "1786341600000",
+                    },
+                ]
+            }
+        raise AssertionError(f"unexpected url: {url}")
+
+    service._get_json = fake_get_json  # type: ignore[method-assign]
+    try:
+        leg = await service._fetch_bitget_current("BTCUSDT")
+    finally:
+        await service.aclose()
+
+    assert any("mix/market/ticker" in url for url in requested_urls)
+    assert any("account-long-short" in url for url in requested_urls)
+    assert leg.raw_symbol == "BTCUSDT"
+    assert leg.mid_price == pytest.approx((65160.6 + 65160.7) / 2)
+    assert leg.volume_24h_usdt == pytest.approx(1100170977.67)
+    assert leg.open_interest_contracts == pytest.approx(37730.0454)
+    assert leg.open_interest_usdt == pytest.approx(37730.0454 * 65161.8)
+    assert leg.long_account_pct == pytest.approx(57.34)
+    assert leg.short_account_pct == pytest.approx(42.66)
+    assert leg.long_short_ratio == pytest.approx(1.3441)
 
 
 @pytest.mark.asyncio
@@ -1042,7 +1192,15 @@ async def test_hyperliquid_current_sets_hourly_interval_and_limits(monkeypatch: 
             assert dex == ""
             return (
                 {"universe": [{"name": "BTC"}]},
-                [{"markPx": "101", "oraclePx": "100", "midPx": "100.5", "funding": "-0.002500"}],
+                [
+                    {
+                        "markPx": "101",
+                        "oraclePx": "100",
+                        "midPx": "100.5",
+                        "openInterest": "12345.6",
+                        "funding": "-0.002500",
+                    }
+                ],
             )
 
     service = FakePairSpreadService()
@@ -1058,6 +1216,8 @@ async def test_hyperliquid_current_sets_hourly_interval_and_limits(monkeypatch: 
     assert leg.funding_interval_hours == pytest.approx(1)
     assert leg.funding_rate_upper_pct == pytest.approx(4)
     assert leg.funding_rate_lower_pct == pytest.approx(-4)
+    assert leg.open_interest_contracts == pytest.approx(12345.6)
+    assert leg.open_interest_usdt == pytest.approx(12345.6 * 101)
 
 
 def test_pair_spread_rejects_htx() -> None:

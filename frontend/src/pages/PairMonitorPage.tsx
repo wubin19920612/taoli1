@@ -41,6 +41,7 @@ import type {
   PairSpreadDiagnosticEvent,
   PairSpreadDiagnosticResult,
   PairSpreadDiagnosticRule,
+  PairSpreadCurrentLeg,
   PairSpreadLegQuery,
   PairSpreadHourlyVolumePoint,
   PairSpreadPoint,
@@ -1637,6 +1638,92 @@ function VolumeMetric({
       {formatted !== "-" ? <span className="pair-metric-volume-unit">USDT</span> : null}
       <span className="pair-metric-volume-status">{statusLabel}</span>
     </div>
+  );
+}
+
+function accountPct(value: number | null | undefined): string {
+  const pct = finiteRate(value);
+  if (pct === null) {
+    return "-";
+  }
+  return `${compactNumber(pct, pct >= 10 ? 1 : 2)}%`;
+}
+
+function accountCount(value: number | null | undefined): string {
+  return compactUsdt(value);
+}
+
+function PositionValue({
+  label,
+  children,
+  sub = null,
+  tone = "neutral"
+}: {
+  label: string;
+  children: ReactNode;
+  sub?: ReactNode;
+  tone?: "long" | "short" | "neutral";
+}) {
+  return (
+    <div className={`pair-position-stat pair-position-stat-${tone}`}>
+      <span className="pair-position-label">{label}</span>
+      <strong className="pair-position-value">{children}</strong>
+      {sub ? <span className="pair-position-sub">{sub}</span> : null}
+    </div>
+  );
+}
+
+function PairPositionLeg({ leg }: { leg: PairSpreadCurrentLeg }) {
+  const rawOpenInterest = compactNumber(leg.open_interest_contracts, 2);
+  const hasOpenInterestUsdt = finiteRate(leg.open_interest_usdt) !== null;
+  return (
+    <div className="pair-position-leg">
+      <div className="pair-position-leg-head">
+        <Typography.Text strong>{legDisplay(leg.exchange, leg.market_type, leg.symbol)}</Typography.Text>
+        <Typography.Text type="secondary">{leg.raw_symbol}</Typography.Text>
+      </div>
+      <div className="pair-position-stats">
+        <PositionValue
+          label="OI"
+          sub={rawOpenInterest === "-" ? "原始 OI 暂无" : `原始 OI ${rawOpenInterest}`}
+        >
+          {compactUsdt(leg.open_interest_usdt)}
+          {hasOpenInterestUsdt ? <small>USDT</small> : null}
+        </PositionValue>
+        <PositionValue label="多 / 空人数">
+          <span className="pair-position-long">{accountCount(leg.long_account_count)}</span>
+          <span className="pair-position-divider">/</span>
+          <span className="pair-position-short">{accountCount(leg.short_account_count)}</span>
+        </PositionValue>
+        <PositionValue label="多 / 空账户占比">
+          <span className="pair-position-long">{accountPct(leg.long_account_pct)}</span>
+          <span className="pair-position-divider">/</span>
+          <span className="pair-position-short">{accountPct(leg.short_account_pct)}</span>
+        </PositionValue>
+        <PositionValue label="多空比" tone="neutral" sub="多头 / 空头">
+          {ratioText(leg.long_short_ratio)}
+        </PositionValue>
+      </div>
+    </div>
+  );
+}
+
+function PairPositionStatsCard({ result }: { result: PairSpreadQueryResult | null }) {
+  const current = result?.current;
+  if (!current) {
+    return null;
+  }
+  return (
+    <section className="pair-position-card">
+      <div className="pair-position-head">
+        <Typography.Title level={5}>持仓与多空</Typography.Title>
+        <Tag>{fullTime(current.observed_at)}</Tag>
+      </div>
+      <div className="pair-position-grid">
+        <PairPositionLeg leg={current.leg1} />
+        <PairPositionLeg leg={current.leg2} />
+      </div>
+    </section>
   );
 }
 
@@ -4742,6 +4829,7 @@ export function PairMonitorPage() {
         />
       </section>
 
+      <PairPositionStatsCard result={result} />
       <PairSpreadChart result={result} />
       <PairHourlyVolumeCard result={result} />
       {showDayCompare ? (

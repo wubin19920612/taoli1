@@ -152,6 +152,29 @@ def _ratio_to_pct(value: float | None) -> float | None:
     return value * 100
 
 
+def _account_ratio_to_pct(value: float | None) -> float | None:
+    parsed = _nonnegative(value)
+    if parsed is None:
+        return None
+    return parsed * 100 if parsed <= 1 else parsed
+
+
+def _long_short_ratio(long_value: float | None, short_value: float | None) -> float | None:
+    long_value = _nonnegative(long_value)
+    short_value = _positive(short_value)
+    if long_value is None or short_value is None:
+        return None
+    return long_value / short_value
+
+
+def _open_interest_usdt(size: float | None, price: float | None) -> float | None:
+    size = _nonnegative(size)
+    price = _positive(price)
+    if size is None or price is None:
+        return None
+    return size * price
+
+
 def _rate_pct_from_row(row: dict[str, Any], *keys: str) -> float | None:
     for key in keys:
         parsed = parse_float(row.get(key))
@@ -1862,11 +1885,22 @@ class PairSpreadQueryService:
         symbol: str,
     ) -> PairSpreadCurrentLeg:
         raw = _compact_symbol(symbol)
-        premium, book, funding_info, ticker_payload = await asyncio.gather(
+        (
+            premium,
+            book,
+            funding_info,
+            ticker_payload,
+            open_interest_payload,
+            account_ratio_payload,
+        ) = await asyncio.gather(
             self._get_json(f"{base_url}/fapi/v1/premiumIndex?symbol={raw}"),
             self._get_json(f"{base_url}/fapi/v1/ticker/bookTicker?symbol={raw}"),
             self._fetch_binance_like_funding_info(base_url, raw),
             self._get_json_optional(f"{base_url}/fapi/v1/ticker/24hr?symbol={raw}"),
+            self._get_json_optional(f"{base_url}/fapi/v1/openInterest?symbol={raw}"),
+            self._get_json_optional(
+                f"{base_url}/futures/data/globalLongShortAccountRatio?symbol={raw}&period=5m&limit=1"
+            ),
         )
         mark = _positive(parse_float(premium.get("markPrice"))) if isinstance(premium, dict) else None
         index = _positive(parse_float(premium.get("indexPrice"))) if isinstance(premium, dict) else None
@@ -1874,6 +1908,17 @@ class PairSpreadQueryService:
         ask = parse_float(book.get("askPrice")) if isinstance(book, dict) else None
         ticker = ticker_payload if isinstance(ticker_payload, dict) else {}
         mid = _mid_price(bid, ask)
+        account_row = (
+            _first_row(account_ratio_payload)
+            if isinstance(account_ratio_payload, list)
+            else account_ratio_payload if isinstance(account_ratio_payload, dict) else {}
+        )
+        open_interest_contracts = (
+            _nonnegative(parse_float(open_interest_payload.get("openInterest")))
+            if isinstance(open_interest_payload, dict)
+            else None
+        )
+        price_for_oi = mark or mid or index
         funding = parse_float(premium.get("lastFundingRate")) if isinstance(premium, dict) else None
         funding_interval_hours = _positive(parse_float(funding_info.get("fundingIntervalHours"))) or 8
         funding_next_time = (
@@ -1890,6 +1935,11 @@ class PairSpreadQueryService:
             mid_price=mid,
             last_price=None,
             volume_24h_usdt=_nonnegative(parse_float(ticker.get("quoteVolume"))),
+            open_interest_usdt=_open_interest_usdt(open_interest_contracts, price_for_oi),
+            open_interest_contracts=open_interest_contracts,
+            long_account_pct=parse_float(account_row.get("longAccount")),
+            short_account_pct=parse_float(account_row.get("shortAccount")),
+            long_short_ratio=parse_float(account_row.get("longShortRatio")),
             funding_rate_pct=funding * 100 if funding is not None else None,
             funding_next_rate_pct=None,
             funding_next_time=funding_next_time,
@@ -1966,18 +2016,44 @@ class PairSpreadQueryService:
 
     async def _fetch_okx_current(self, symbol: str) -> PairSpreadCurrentLeg:
         inst_id = _okx_inst_id(symbol)
-        ticker_payload, funding_payload = await asyncio.gather(
+        _, base, _ = normalize_usdt_symbol(symbol)
+        end_ms = _to_ms(utc_now())
+        begin_ms = end_ms - 10 * MINUTE_MS
+        ticker_payload, funding_payload, open_interest_payload, account_ratio_payload = await asyncio.gather(
             self._get_json(f"https://www.okx.com/api/v5/market/ticker?instId={inst_id}"),
             self._get_json(f"https://www.okx.com/api/v5/public/funding-rate?instId={inst_id}"),
+            self._get_json_optional(
+                f"https://www.okx.com/api/v5/public/open-interest?instType=SWAP&instId={inst_id}"
+            ),
+            self._get_json_optional(
+                "https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio"
+                f"?ccy={base}&period=5m&begin={begin_ms}&end={end_ms}"
+            ),
         )
         ticker = _first_row(ticker_payload.get("data", [])) if isinstance(ticker_payload, dict) else {}
         funding_row = _first_row(funding_payload.get("data", [])) if isinstance(funding_payload, dict) else {}
         mid = _mid_price(parse_float(ticker.get("bidPx")), parse_float(ticker.get("askPx")))
+        last = _positive(parse_float(ticker.get("last")))
+        open_interest_row = (
+            _first_row(open_interest_payload.get("data", []))
+            if isinstance(open_interest_payload, dict)
+            else {}
+        )
+        open_interest_contracts = _nonnegative(
+            parse_float(open_interest_row.get("oiCcy") or open_interest_row.get("oi"))
+        )
+        open_interest_usdt = _nonnegative(parse_float(open_interest_row.get("oiUsd"))) or _open_interest_usdt(
+            open_interest_contracts,
+            mid or last,
+        )
         funding = parse_float(funding_row.get("fundingRate"))
         next_funding = parse_float(funding_row.get("nextFundingRate"))
         funding_next_time = parse_datetime_ms(funding_row.get("nextFundingTime")) or parse_datetime_ms(
             funding_row.get("fundingTime")
         )
+        account_ratio = _okx_rubik_latest_ratio(account_ratio_payload)
+        account_long_pct = account_ratio / (1 + account_ratio) * 100 if account_ratio is not None else None
+        account_short_pct = 100 / (1 + account_ratio) if account_ratio is not None else None
         return _current_leg(
             exchange="okx",
             symbol=symbol,
@@ -1985,8 +2061,13 @@ class PairSpreadQueryService:
             mark_price=None,
             index_price=None,
             mid_price=mid,
-            last_price=_positive(parse_float(ticker.get("last"))),
+            last_price=last,
             volume_24h_usdt=_nonnegative(parse_float(ticker.get("volCcy24h"))),
+            open_interest_usdt=open_interest_usdt,
+            open_interest_contracts=open_interest_contracts,
+            long_account_pct=account_long_pct,
+            short_account_pct=account_short_pct,
+            long_short_ratio=account_ratio,
             funding_rate_pct=funding * 100 if funding is not None else None,
             funding_next_rate_pct=next_funding * 100 if next_funding is not None else None,
             funding_next_time=funding_next_time,
@@ -2026,12 +2107,19 @@ class PairSpreadQueryService:
 
     async def _fetch_bybit_current(self, symbol: str) -> PairSpreadCurrentLeg:
         raw = _compact_symbol(symbol)
-        payload, instrument_payload = await asyncio.gather(
+        payload, instrument_payload, open_interest_payload, account_ratio_payload = await asyncio.gather(
             self._get_json(
                 f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={raw}"
             ),
             self._get_json(
                 f"https://api.bybit.com/v5/market/instruments-info?category=linear&symbol={raw}"
+            ),
+            self._get_json_optional(
+                "https://api.bybit.com/v5/market/open-interest"
+                f"?category=linear&symbol={raw}&intervalTime=5min&limit=1"
+            ),
+            self._get_json_optional(
+                f"https://api.bybit.com/v5/market/account-ratio?category=linear&symbol={raw}&period=5min&limit=1"
             ),
         )
         row = _first_row(payload.get("result", {}).get("list", [])) if isinstance(payload, dict) else {}
@@ -2040,17 +2128,45 @@ class PairSpreadQueryService:
             if isinstance(instrument_payload, dict)
             else {}
         )
+        open_interest_row = (
+            _first_row(open_interest_payload.get("result", {}).get("list", []))
+            if isinstance(open_interest_payload, dict)
+            else {}
+        )
+        account_row = (
+            _first_row(account_ratio_payload.get("result", {}).get("list", []))
+            if isinstance(account_ratio_payload, dict)
+            else {}
+        )
+        mark = _positive(parse_float(row.get("markPrice")))
+        index = _positive(parse_float(row.get("indexPrice")))
+        mid = _mid_price(parse_float(row.get("bid1Price")), parse_float(row.get("ask1Price")))
+        last = _positive(parse_float(row.get("lastPrice")))
+        open_interest_contracts = _nonnegative(
+            parse_float(open_interest_row.get("openInterest") or row.get("openInterest"))
+        )
+        open_interest_usdt = _nonnegative(
+            parse_float(row.get("openInterestValue") or row.get("openInterestValue24h"))
+        ) or _open_interest_usdt(open_interest_contracts, mark or mid or last or index)
         funding = parse_float(row.get("fundingRate"))
         funding_interval_minutes = _positive(parse_float(instrument_row.get("fundingInterval")))
         return _current_leg(
             exchange="bybit",
             symbol=symbol,
             raw_symbol=raw,
-            mark_price=_positive(parse_float(row.get("markPrice"))),
-            index_price=_positive(parse_float(row.get("indexPrice"))),
-            mid_price=_mid_price(parse_float(row.get("bid1Price")), parse_float(row.get("ask1Price"))),
-            last_price=_positive(parse_float(row.get("lastPrice"))),
+            mark_price=mark,
+            index_price=index,
+            mid_price=mid,
+            last_price=last,
             volume_24h_usdt=_nonnegative(parse_float(row.get("turnover24h"))),
+            open_interest_usdt=open_interest_usdt,
+            open_interest_contracts=open_interest_contracts,
+            long_account_pct=parse_float(account_row.get("buyRatio")),
+            short_account_pct=parse_float(account_row.get("sellRatio")),
+            long_short_ratio=_long_short_ratio(
+                parse_float(account_row.get("buyRatio")),
+                parse_float(account_row.get("sellRatio")),
+            ),
             funding_rate_pct=funding * 100 if funding is not None else None,
             funding_next_rate_pct=None,
             funding_next_time=parse_datetime_ms(row.get("nextFundingTime")),
@@ -2094,6 +2210,32 @@ class PairSpreadQueryService:
         if not isinstance(contract_row, dict):
             contract_row = {}
         row = _first_row(rows if isinstance(rows, list) else [])
+        stats_payload = await self._get_json_optional(
+            f"https://api.gateio.ws/api/v4/futures/usdt/contract_stats?contract={contract}&interval=5m&limit=1"
+        )
+        stats_row = (
+            stats_payload
+            if isinstance(stats_payload, dict)
+            else _first_row(stats_payload if isinstance(stats_payload, list) else [])
+        )
+        mark = _positive(parse_float(row.get("mark_price") or stats_row.get("mark_price")))
+        index = _positive(parse_float(row.get("index_price")))
+        mid = _mid_price(parse_float(row.get("highest_bid")), parse_float(row.get("lowest_ask")))
+        last = _positive(parse_float(row.get("last")))
+        long_count = _nonnegative(parse_float(stats_row.get("long_users")))
+        short_count = _nonnegative(parse_float(stats_row.get("short_users")))
+        account_ratio = _nonnegative(parse_float(stats_row.get("lsr_account")))
+        account_total = long_count + short_count if long_count is not None and short_count is not None else None
+        long_pct = long_count / account_total * 100 if account_total and account_total > 0 else None
+        short_pct = short_count / account_total * 100 if account_total and account_total > 0 else None
+        if long_pct is None and account_ratio is not None:
+            long_pct = account_ratio / (1 + account_ratio) * 100
+            short_pct = 100 / (1 + account_ratio)
+        open_interest_contracts = _nonnegative(parse_float(stats_row.get("open_interest")))
+        open_interest_usdt = _nonnegative(parse_float(stats_row.get("open_interest_usd"))) or _open_interest_usdt(
+            open_interest_contracts,
+            mark or mid or last,
+        )
         funding = parse_float(row.get("funding_rate"))
         next_funding = parse_float(row.get("funding_rate_indicative"))
         interval_seconds = parse_float(row.get("funding_interval")) or parse_float(contract_row.get("funding_interval"))
@@ -2112,11 +2254,18 @@ class PairSpreadQueryService:
             exchange="gate",
             symbol=symbol,
             raw_symbol=contract,
-            mark_price=_positive(parse_float(row.get("mark_price"))),
-            index_price=_positive(parse_float(row.get("index_price"))),
-            mid_price=_mid_price(parse_float(row.get("highest_bid")), parse_float(row.get("lowest_ask"))),
-            last_price=_positive(parse_float(row.get("last"))),
+            mark_price=mark,
+            index_price=index,
+            mid_price=mid,
+            last_price=last,
             volume_24h_usdt=_nonnegative(parse_float(row.get("volume_24h_quote"))),
+            open_interest_usdt=open_interest_usdt,
+            open_interest_contracts=open_interest_contracts,
+            long_account_pct=long_pct,
+            short_account_pct=short_pct,
+            long_account_count=long_count,
+            short_account_count=short_count,
+            long_short_ratio=account_ratio,
             funding_rate_pct=funding * 100 if funding is not None else None,
             funding_next_rate_pct=next_funding * 100 if next_funding is not None else None,
             funding_next_time=funding_next_time,
@@ -2166,7 +2315,7 @@ class PairSpreadQueryService:
 
     async def _fetch_bitget_current(self, symbol: str) -> PairSpreadCurrentLeg:
         raw = _compact_symbol(symbol)
-        ticker_payload, funding_payload = await asyncio.gather(
+        ticker_payload, funding_payload, account_ratio_payload = await asyncio.gather(
             self._get_json(
                 "https://api.bitget.com/api/v2/mix/market/ticker"
                 f"?symbol={raw}&productType=USDT-FUTURES"
@@ -2175,22 +2324,40 @@ class PairSpreadQueryService:
                 "https://api.bitget.com/api/v2/mix/market/current-fund-rate"
                 f"?symbol={raw}&productType=USDT-FUTURES"
             ),
+            self._get_json_optional(
+                "https://api.bitget.com/api/v2/mix/market/account-long-short"
+                f"?symbol={raw}&productType=USDT-FUTURES&period=5m"
+            ),
         )
         ticker = _payload_data_row(ticker_payload)
         funding_row = _payload_data_row(funding_payload)
+        account_row = _payload_data_latest_row(account_ratio_payload, "ts", "timestamp")
+        mark = _positive(parse_float(ticker.get("markPrice")))
+        index = _positive(parse_float(ticker.get("indexPrice")))
+        mid = _mid_price(
+            parse_float(ticker.get("bidPr") or ticker.get("bid")),
+            parse_float(ticker.get("askPr") or ticker.get("ask")),
+        )
+        last = _positive(parse_float(ticker.get("lastPr") or ticker.get("last")))
+        open_interest_contracts = _nonnegative(parse_float(ticker.get("holdingAmount") or ticker.get("openInterest")))
+        open_interest_usdt = _nonnegative(
+            parse_float(ticker.get("openInterestUsd") or ticker.get("openInterestUSDT"))
+        ) or _open_interest_usdt(open_interest_contracts, mark or mid or last or index)
         funding = parse_float(funding_row.get("fundingRate") or ticker.get("fundingRate"))
         return _current_leg(
             exchange="bitget",
             symbol=symbol,
             raw_symbol=raw,
-            mark_price=_positive(parse_float(ticker.get("markPrice"))),
-            index_price=_positive(parse_float(ticker.get("indexPrice"))),
-            mid_price=_mid_price(
-                parse_float(ticker.get("bidPr") or ticker.get("bid")),
-                parse_float(ticker.get("askPr") or ticker.get("ask")),
-            ),
-            last_price=_positive(parse_float(ticker.get("lastPr") or ticker.get("last"))),
+            mark_price=mark,
+            index_price=index,
+            mid_price=mid,
+            last_price=last,
             volume_24h_usdt=_nonnegative(parse_float(ticker.get("quoteVolume") or ticker.get("usdtVolume"))),
+            open_interest_usdt=open_interest_usdt,
+            open_interest_contracts=open_interest_contracts,
+            long_account_pct=parse_float(account_row.get("longAccountRatio")),
+            short_account_pct=parse_float(account_row.get("shortAccountRatio")),
+            long_short_ratio=parse_float(account_row.get("longShortAccountRatio")),
             funding_rate_pct=funding * 100 if funding is not None else None,
             funding_next_rate_pct=None,
             funding_next_time=parse_datetime_ms(funding_row.get("nextUpdate") or ticker.get("nextUpdate")),
@@ -2232,15 +2399,21 @@ class PairSpreadQueryService:
                 continue
             funding = parse_float(context.get("funding"))
             now = utc_now()
+            mark = _positive(parse_float(context.get("markPx")))
+            index = _positive(parse_float(context.get("oraclePx")))
+            mid = _positive(parse_float(context.get("midPx")))
+            open_interest_contracts = _nonnegative(parse_float(context.get("openInterest")))
             return _current_leg(
                 exchange="hyperliquid",
                 symbol=symbol,
                 raw_symbol=raw_coin,
-                mark_price=_positive(parse_float(context.get("markPx"))),
-                index_price=_positive(parse_float(context.get("oraclePx"))),
-                mid_price=_positive(parse_float(context.get("midPx"))),
+                mark_price=mark,
+                index_price=index,
+                mid_price=mid,
                 last_price=None,
                 volume_24h_usdt=_nonnegative(parse_float(context.get("dayNtlVlm"))),
+                open_interest_usdt=_open_interest_usdt(open_interest_contracts, mark or mid or index),
+                open_interest_contracts=open_interest_contracts,
                 funding_rate_pct=funding * 100 if funding is not None else None,
                 funding_next_rate_pct=None,
                 funding_next_time=next_aligned_funding_time(now, 1),
@@ -2655,6 +2828,43 @@ def _payload_data_row(payload: Any) -> dict[str, Any]:
     return {}
 
 
+def _payload_data_latest_row(payload: Any, *timestamp_keys: str) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    data = payload.get("data", {})
+    if isinstance(data, dict):
+        return data
+    if not isinstance(data, list):
+        return {}
+    rows = [row for row in data if isinstance(row, dict)]
+    if not rows:
+        return {}
+    if not timestamp_keys:
+        return rows[-1]
+    return max(rows, key=lambda row: max((parse_float(row.get(key)) or 0 for key in timestamp_keys), default=0))
+
+
+def _okx_rubik_latest_ratio(payload: Any) -> float | None:
+    if not isinstance(payload, dict):
+        return None
+    rows = payload.get("data", [])
+    if not isinstance(rows, list):
+        return None
+    latest_time: float | None = None
+    latest_ratio: float | None = None
+    for row in rows:
+        if not isinstance(row, list) or len(row) < 2:
+            continue
+        row_time = parse_float(row[0])
+        row_ratio = _nonnegative(parse_float(row[1]))
+        if row_ratio is None:
+            continue
+        if latest_time is None or (row_time is not None and row_time > latest_time):
+            latest_time = row_time
+            latest_ratio = row_ratio
+    return latest_ratio
+
+
 def _current_leg(
     *,
     exchange: str,
@@ -2672,6 +2882,13 @@ def _current_leg(
     funding_rate_upper_pct: float | None = None,
     funding_rate_lower_pct: float | None = None,
     volume_24h_usdt: float | None = None,
+    open_interest_usdt: float | None = None,
+    open_interest_contracts: float | None = None,
+    long_account_pct: float | None = None,
+    short_account_pct: float | None = None,
+    long_account_count: float | None = None,
+    short_account_count: float | None = None,
+    long_short_ratio: float | None = None,
 ) -> PairSpreadCurrentLeg:
     candidates = (
         (mark_price, PairSpreadPriceField.MARK_PRICE),
@@ -2698,6 +2915,15 @@ def _current_leg(
                 mid_price=mid_price,
                 last_price=last_price,
                 volume_24h_usdt=_nonnegative(volume_24h_usdt),
+                open_interest_usdt=_nonnegative(open_interest_usdt),
+                open_interest_contracts=_nonnegative(open_interest_contracts),
+                long_account_pct=_account_ratio_to_pct(long_account_pct),
+                short_account_pct=_account_ratio_to_pct(short_account_pct),
+                long_account_count=_nonnegative(long_account_count),
+                short_account_count=_nonnegative(short_account_count),
+                long_short_ratio=_nonnegative(long_short_ratio)
+                or _long_short_ratio(long_account_pct, short_account_pct)
+                or _long_short_ratio(long_account_count, short_account_count),
                 funding_rate_pct=funding_rate_pct,
                 funding_next_rate_pct=funding_next_rate_pct,
                 funding_next_time=funding_next_time,

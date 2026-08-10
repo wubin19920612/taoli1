@@ -690,6 +690,13 @@ export interface PairSpreadCurrentLeg {
   mid_price: number | null;
   last_price: number | null;
   volume_24h_usdt: number | null;
+  open_interest_usdt: number | null;
+  open_interest_contracts: number | null;
+  long_account_pct: number | null;
+  short_account_pct: number | null;
+  long_account_count: number | null;
+  short_account_count: number | null;
+  long_short_ratio: number | null;
   funding_rate_pct: number | null;
   funding_next_rate_pct: number | null;
   funding_next_time: string | null;

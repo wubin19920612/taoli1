@@ -168,6 +168,13 @@ class PairSpreadCurrentLeg(BaseModel):
     mid_price: float | None = None
     last_price: float | None = None
     volume_24h_usdt: float | None = Field(default=None, ge=0)
+    open_interest_usdt: float | None = Field(default=None, ge=0)
+    open_interest_contracts: float | None = Field(default=None, ge=0)
+    long_account_pct: float | None = Field(default=None, ge=0)
+    short_account_pct: float | None = Field(default=None, ge=0)
+    long_account_count: float | None = Field(default=None, ge=0)
+    short_account_count: float | None = Field(default=None, ge=0)
+    long_short_ratio: float | None = Field(default=None, ge=0)
     funding_rate_pct: float | None = None
     funding_next_rate_pct: float | None = None
     funding_next_time: datetime | None = None
