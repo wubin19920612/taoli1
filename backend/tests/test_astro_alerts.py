@@ -242,6 +242,30 @@ async def test_missing_pair_creates_paused_disable_open_card() -> None:
 
 
 @pytest.mark.asyncio
+async def test_new_listing_alert_creates_open_card_even_when_default_is_paused() -> None:
+    client = FakeAstroClient()
+    service = AstroAlertService(
+        client,
+        Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
+        add_restart_delay_seconds=0,
+    )
+
+    result = await service.handle_alert(
+        opportunity().model_copy(
+            update={
+                "symbol": "UNITREEUSDT",
+                "risk_labels": ["NEW_LISTING"],
+            }
+        )
+    )
+
+    assert result.status == "created"
+    assert "已创建开启卡片 UNITREE FF binance->okx，禁开=false" in result.message
+    assert client.added[0]["status"] is True
+    assert client.added[0]["disableOpen"] is False
+
+
+@pytest.mark.asyncio
 async def test_alert_create_uses_supplied_astro_card_settings() -> None:
     client = FakeAstroClient()
     service = AstroAlertService(

@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager, suppress
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import AsyncIterator
 
 from fastapi import FastAPI
@@ -45,6 +45,7 @@ from app.db.repositories import (
 )
 from app.db.schema import initialize_schema
 from app.models.alert import AlertEvent
+from app.models.announcement import AnnouncementKind
 from app.models.orderbook import DepthValidationResult
 from app.models.phone_alert import PhonePriceAlertEvent
 from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, LivePilotSettings, RiskSettings
@@ -94,12 +95,14 @@ from app.services.opportunity_radar import (
 )
 from app.services.pair_spread_funding_recorder import PairSpreadFundingRecorder, PairSpreadFundingRepository
 from app.services.phone_price_alerts import PhonePriceAlertEngine, build_phone_price_alert_message
-from app.services.risk_labels import effective_open_edge_pct, known_volume_24h_usdt
+from app.services.risk_labels import NEW_LISTING_RISK_LABEL, effective_open_edge_pct, known_volume_24h_usdt
 from app.services.snapshot_store import SnapshotStore
 from app.services.service_control import DockerServiceController, ServiceControlConfig
 from app.services.second_level_sampler import SecondLevelSampler, SecondLevelSamplingRepository
 
 logger = logging.getLogger(__name__)
+NEW_LISTING_ANNOUNCEMENT_LOOKBACK_HOURS = 72
+NEW_LISTING_ANNOUNCEMENT_FUTURE_HOURS = 24
 
 
 def _sqlite_path(settings: Settings) -> str:
@@ -162,6 +165,98 @@ def _find_latest_opportunity(app: FastAPI, opportunity_id: str):
     if store is None:
         return None
     return next((item for item in store.get_opportunities() if item.id == opportunity_id), None)
+
+
+def _datetime_as_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def _symbol_lookup_keys(value: str) -> set[str]:
+    normalized = value.strip().upper().replace("-", "").replace("_", "").replace("/", "")
+    if not normalized:
+        return set()
+    keys = {normalized}
+    quote_suffixes = ("USDT", "USDC", "USD")
+    has_quote_suffix = False
+    for suffix in quote_suffixes:
+        if normalized.endswith(suffix) and len(normalized) > len(suffix):
+            keys.add(normalized[: -len(suffix)])
+            has_quote_suffix = True
+    if not has_quote_suffix:
+        keys.update(f"{normalized}{suffix}" for suffix in quote_suffixes)
+    return keys
+
+
+def _has_new_listing_label(opportunity) -> bool:
+    return any(label.upper() == NEW_LISTING_RISK_LABEL for label in opportunity.risk_labels)
+
+
+def _with_new_listing_label(opportunity):
+    if _has_new_listing_label(opportunity):
+        return opportunity
+    return opportunity.model_copy(
+        update={"risk_labels": [*opportunity.risk_labels, NEW_LISTING_RISK_LABEL]}
+    )
+
+
+def _inherit_new_listing_label(source, target):
+    if target is None or not _has_new_listing_label(source):
+        return target
+    return _with_new_listing_label(target)
+
+
+def _announcement_time_candidates(announcement) -> list[datetime]:
+    candidates = [
+        getattr(announcement, "published_at", None),
+        getattr(announcement, "event_time", None),
+    ]
+    for item in getattr(announcement, "event_schedule", []) or []:
+        candidates.append(getattr(item, "event_time", None))
+    return [item for item in candidates if isinstance(item, datetime)]
+
+
+def _is_recent_listing_announcement(announcement, now: datetime) -> bool:
+    if getattr(announcement, "kind", None) != AnnouncementKind.LISTING:
+        return False
+    start_at = now - timedelta(hours=NEW_LISTING_ANNOUNCEMENT_LOOKBACK_HOURS)
+    end_at = now + timedelta(hours=NEW_LISTING_ANNOUNCEMENT_FUTURE_HOURS)
+    return any(start_at <= _datetime_as_utc(item) <= end_at for item in _announcement_time_candidates(announcement))
+
+
+async def _recent_listing_symbol_keys(app: FastAPI, now: datetime) -> set[str]:
+    repo = getattr(app.state, "announcement_repo", None)
+    list_announcements = getattr(repo, "list", None)
+    if list_announcements is None:
+        return set()
+    try:
+        announcements = await list_announcements(
+            kind=AnnouncementKind.LISTING,
+            limit=500,
+            demote_baseline=True,
+        )
+    except Exception:  # noqa: BLE001 - announcement enrichment must not break alert delivery.
+        logger.exception("failed to load recent listing announcements for alert labeling")
+        return set()
+
+    keys: set[str] = set()
+    for announcement in announcements:
+        if not _is_recent_listing_announcement(announcement, now):
+            continue
+        for symbol in getattr(announcement, "symbols", []) or []:
+            keys.update(_symbol_lookup_keys(str(symbol)))
+    return keys
+
+
+async def _tag_recent_listing_opportunities(app: FastAPI, opportunities: list, now: datetime) -> list:
+    listing_symbol_keys = await _recent_listing_symbol_keys(app, now)
+    if not listing_symbol_keys:
+        return opportunities
+    return [
+        _with_new_listing_label(opportunity)
+        if _symbol_lookup_keys(opportunity.symbol).intersection(listing_symbol_keys)
+        else opportunity
+        for opportunity in opportunities
+    ]
 
 
 def _latest_signal_validation_failure(
@@ -314,18 +409,21 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                 else LivePilotSettings()
             )
             await _refresh_astro_runtime_settings(app, settings_repo)
+            now = datetime.now(UTC)
             opportunities = filter_opportunities(app.state.snapshot_store.get_opportunities(), settings)
+            opportunities = await _tag_recent_listing_opportunities(app, opportunities, now)
             opportunities = filter_opportunities_by_alert_rules(
                 opportunities,
                 rules,
                 settings,
+                now=now,
             )
             opportunities = select_live_pilot_opportunities(
                 opportunities,
                 live_pilot_settings,
                 settings,
             )
-            matches = app.state.alert_engine.evaluate(opportunities, rules, risk_settings=settings)
+            matches = app.state.alert_engine.evaluate(opportunities, rules, now=now, risk_settings=settings)
             matches = select_live_pilot_matches(matches, live_pilot_settings, settings)
             for match in matches:
                 status = "sent"
@@ -338,12 +436,15 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                     observations=match.observations,
                     template=alert_template,
                 )
-                latest_opportunity = _find_latest_opportunity(app, match.opportunity.id)
+                latest_opportunity = _inherit_new_listing_label(
+                    match.opportunity,
+                    _find_latest_opportunity(app, match.opportunity.id),
+                )
                 validation_failure = _latest_signal_validation_failure(
                     match,
                     latest_opportunity,
                     settings,
-                    datetime.now(UTC),
+                    now,
                 )
                 if validation_failure is not None:
                     signal_condition_failure = True

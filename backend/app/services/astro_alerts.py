@@ -7,6 +7,7 @@ from app.models.opportunity import Opportunity
 from app.models.settings import AstroCardSettings, LivePilotSettings
 from app.services.astro_client import AstroClientError
 from app.services.astro_planner import AstroPairPlanner, AstroPlannerConfig
+from app.services.risk_labels import NEW_LISTING_RISK_LABEL
 
 
 class AstroPairClient(Protocol):
@@ -81,6 +82,10 @@ def _settings_with_live_pilot_overrides(
     )
 
 
+def _is_new_listing_opportunity(opportunity: Opportunity) -> bool:
+    return any(label.upper() == NEW_LISTING_RISK_LABEL for label in opportunity.risk_labels)
+
+
 class AstroAlertService:
     def __init__(
         self,
@@ -105,6 +110,7 @@ class AstroAlertService:
             enabled=self.alert_auto_create_enabled,
             disabled_message="自动创建卡片未开启",
             live_pilot=self.live_pilot_settings.enabled,
+            auto_open_new_listing=True,
         )
 
     async def handle_manual_create(
@@ -126,6 +132,7 @@ class AstroAlertService:
         disabled_message: str,
         card_request: AstroCardCreateRequest | None = None,
         live_pilot: bool = False,
+        auto_open_new_listing: bool = False,
     ) -> AstroAlertActionResult:
         if not enabled:
             return AstroAlertActionResult(
@@ -143,6 +150,8 @@ class AstroAlertService:
             )
 
         effective_card_settings = _settings_with_create_overrides(self.card_settings, card_request)
+        if auto_open_new_listing and _is_new_listing_opportunity(opportunity):
+            effective_card_settings = effective_card_settings.model_copy(update={"open_enabled": True})
         if live_pilot:
             effective_card_settings = _settings_with_live_pilot_overrides(
                 effective_card_settings,

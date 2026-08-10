@@ -6,6 +6,7 @@ from fastapi import FastAPI
 
 from app.main import _run_alert_loop
 from app.models.alert import AlertEvent, AlertRule
+from app.models.announcement import AnnouncementKind, ExchangeAnnouncement
 from app.models.astro import AstroAlertActionResult
 from app.models.market import MarketType
 from app.models.opportunity import Opportunity, OpportunityType
@@ -100,6 +101,16 @@ class FakeSettingsRepo:
         return self.live_pilot_settings
 
 
+class FakeAnnouncementRepo:
+    def __init__(self, announcements: list[ExchangeAnnouncement]):
+        self.announcements = announcements
+        self.calls: list[dict] = []
+
+    async def list(self, **kwargs) -> list[ExchangeAnnouncement]:
+        self.calls.append(kwargs)
+        return self.announcements
+
+
 class FakeAlertEngine:
     def __init__(self, match: AlertMatch):
         self.match = match
@@ -108,6 +119,16 @@ class FakeAlertEngine:
     def evaluate(self, opportunities: list[Opportunity], rules: list[AlertRule], **kwargs) -> list[AlertMatch]:
         self.seen_opportunity_ids = [item.id for item in opportunities]
         return [self.match]
+
+
+class EchoAlertEngine:
+    def __init__(self, rule: AlertRule):
+        self.rule = rule
+        self.seen_opportunity_ids: list[str] = []
+
+    def evaluate(self, opportunities: list[Opportunity], rules: list[AlertRule], **kwargs) -> list[AlertMatch]:
+        self.seen_opportunity_ids = [item.id for item in opportunities]
+        return [AlertMatch(self.rule, opportunities[0], [])] if opportunities else []
 
 
 class FakeLimitedAlertEngine:
@@ -164,6 +185,27 @@ class ExistingAstroAlertService(FakeAstroAlertService):
             action="existing",
             message="已跳过，Astro 已存在卡片 BTC FF binance->okx",
             pair_name="BTC",
+            pair_type="FF",
+        )
+
+
+class NewListingAwareAstroAlertService(FakeAstroAlertService):
+    def __init__(self):
+        super().__init__()
+        self.opportunities: list[Opportunity] = []
+
+    async def handle_alert(self, opportunity: Opportunity) -> AstroAlertActionResult:
+        self.calls.append(opportunity.id)
+        self.opportunities.append(opportunity)
+        opened = any(label.upper() == "NEW_LISTING" for label in opportunity.risk_labels)
+        state_text = "开启" if opened else "暂停"
+        disabled_text = "false" if opened else "true"
+        return AstroAlertActionResult(
+            enabled=True,
+            status="created",
+            action="add",
+            message=f"已创建{state_text}卡片 UNITREE FF binance->okx，禁开={disabled_text}",
+            pair_name="UNITREE",
             pair_type="FF",
         )
 
@@ -276,6 +318,63 @@ async def test_alert_loop_appends_astro_result_to_feishu_and_event_message() -> 
     assert "Astro: 已创建暂停卡片 BTC FF binance->okx，禁开=true" in event_repo.events[0].message
     assert feishu.sent_texts[0] is not None
     assert "Astro: 已创建暂停卡片 BTC FF binance->okx，禁开=true" in feishu.sent_texts[0]
+
+
+@pytest.mark.asyncio
+async def test_alert_loop_marks_recent_listing_announcements_for_open_astro_card() -> None:
+    stop_event = asyncio.Event()
+    app = FastAPI()
+    rule = AlertRule(
+        id="rule-1",
+        name="FF spread",
+        types=["FF"],
+        min_open_spread_pct=0.5,
+        min_fee_adjusted_open_pct=0.25,
+        min_volume_24h_usdt=1_000_000,
+        consecutive_hits=1,
+    )
+    now = datetime.now(UTC)
+    opp = opportunity().model_copy(
+        update={
+            "symbol": "UNITREEUSDT",
+            "id": "unitree-ff",
+        }
+    )
+    listing = ExchangeAnnouncement(
+        exchange="bybit",
+        announcement_id="listing-unitree",
+        kind=AnnouncementKind.LISTING,
+        title="New listing: UNITREEUSDT Perpetual Contract",
+        url="https://example.test/listing-unitree",
+        source="test",
+        symbols=["UNITREE"],
+        market_type="futures",
+        published_at=now,
+        fetched_at=now,
+        alert_status="sent",
+    )
+    store = SnapshotStore()
+    store.set_opportunities([opp])
+    event_repo = FakeEventRepo(stop_event)
+    feishu = FakeFeishuNotifier()
+    service = NewListingAwareAstroAlertService()
+
+    app.state.alert_rule_repo = FakeRuleRepo([rule])
+    app.state.alert_event_repo = event_repo
+    app.state.settings_repo = FakeSettingsRepo()
+    app.state.announcement_repo = FakeAnnouncementRepo([listing])
+    app.state.snapshot_store = store
+    app.state.alert_engine = EchoAlertEngine(rule)
+    app.state.feishu_notifier = feishu
+    app.state.astro_alert_service = service
+
+    await asyncio.wait_for(_run_alert_loop(app, 60, stop_event), timeout=2)
+
+    assert service.calls == ["unitree-ff"]
+    assert service.opportunities[0].risk_labels == ["NEW_LISTING"]
+    assert "Astro: 已创建开启卡片 UNITREE FF binance->okx，禁开=false" in event_repo.events[0].message
+    assert feishu.sent_texts[0] is not None
+    assert "Astro: 已创建开启卡片 UNITREE FF binance->okx，禁开=false" in feishu.sent_texts[0]
 
 
 @pytest.mark.asyncio

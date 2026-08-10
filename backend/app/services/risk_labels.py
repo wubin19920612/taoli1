@@ -6,6 +6,8 @@ from app.models.settings import RiskSettings
 from app.services.alert_metrics import combined_open_edge_pct
 from app.services.funding_edge import next_cycle_funding_edge_pct
 
+NEW_LISTING_RISK_LABEL = "NEW_LISTING"
+
 NON_ACTIONABLE_RISK_LABELS = frozenset(
     {
         "LOW_VOLUME",
