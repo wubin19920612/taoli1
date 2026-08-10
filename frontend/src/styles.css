@@ -2259,25 +2259,28 @@ body {
   display: block;
 }
 
-.pair-hourly-volume-chart rect {
-  fill: #ffffff;
-  stroke: #eef2f1;
+.pair-hourly-volume-chart-bg {
+  fill: #fbfdfc;
+  stroke: #d8e3df;
+  stroke-width: 1;
 }
 
 .pair-hourly-volume-grid-line,
 .pair-hourly-volume-time-tick {
-  stroke: #edf2f0;
+  stroke: #dfe9e5;
   stroke-width: 1;
 }
 
 .pair-hourly-volume-axis-label {
-  fill: #6b7a75;
-  font-size: 11px;
+  fill: #50635c;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .pair-hourly-volume-bar {
-  stroke: #ffffff;
-  stroke-width: 1;
+  stroke: rgba(255, 255, 255, 0.88);
+  stroke-width: 0.8;
+  opacity: 0.96;
 }
 
 .pair-hourly-volume-bar-left {
@@ -2306,9 +2309,9 @@ body {
 
 .pair-hourly-volume-legend span::before {
   content: "";
-  width: 18px;
-  height: 2px;
-  border-radius: 999px;
+  width: 12px;
+  height: 9px;
+  border-radius: 2px;
   background: currentColor;
 }
 

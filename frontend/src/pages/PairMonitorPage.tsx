@@ -2519,11 +2519,11 @@ function PairHourlyVolumeCard({ result }: { result: PairSpreadQueryResult | null
   }
 
   const width = 1180;
-  const height = 260;
+  const height = 300;
   const padding = { top: 18, right: 28, bottom: 34, left: 64 };
   const chartWidth = width - padding.left - padding.right;
   const chartHeight = height - padding.top - padding.bottom;
-  const maxValue = Math.max(...volumeValues, 1);
+  const maxValue = Math.max(...volumeValues, 1) * 1.06;
   const yAt = (value: number) => padding.top + ((maxValue - value) / maxValue) * chartHeight;
   const zeroY = yAt(0);
   const groupWidth = chartWidth / Math.max(rowsAsc.length, 1);
@@ -2545,7 +2545,7 @@ function PairHourlyVolumeCard({ result }: { result: PairSpreadQueryResult | null
           })),
           rowsAsc.length >= 168 ? 7 : 12
         ).map(({ index }) => ({ row: rowsAsc[index], index }));
-  const barHeight = (value: number) => Math.max(value === 0 ? 1 : 2, zeroY - yAt(value));
+  const barHeight = (value: number) => Math.max(value === 0 ? 1 : 6, zeroY - yAt(value));
 
   return (
     <div className="pair-hourly-volume-card">
@@ -2558,7 +2558,14 @@ function PairHourlyVolumeCard({ result }: { result: PairSpreadQueryResult | null
         </div>
       </div>
       <svg className="pair-hourly-volume-chart" role="img" aria-label="左右腿每小时成交额" viewBox={`0 0 ${width} ${height}`}>
-        <rect x={padding.left} y={padding.top} width={chartWidth} height={chartHeight} rx="4" />
+        <rect
+          className="pair-hourly-volume-chart-bg"
+          x={padding.left}
+          y={padding.top}
+          width={chartWidth}
+          height={chartHeight}
+          rx="4"
+        />
         {[0, 0.25, 0.5, 0.75, 1].map((tick) => {
           const y = padding.top + chartHeight * tick;
           const value = maxValue - maxValue * tick;
