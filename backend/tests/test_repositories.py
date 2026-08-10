@@ -169,3 +169,54 @@ async def test_astro_card_settings_round_trip() -> None:
         assert loaded.close_position_floor_pct == 0.01
     finally:
         await db.close()
+
+
+@pytest.mark.asyncio
+async def test_astro_new_listing_card_settings_default_to_card_settings_and_round_trip() -> None:
+    db = await connect_database(":memory:")
+    try:
+        await initialize_schema(db)
+        repo = SettingsRepository(db)
+
+        defaults = await repo.get_astro_new_listing_card_settings()
+        assert defaults.max_trade_usdt == 10
+        assert defaults.max_notional == 10
+
+        await repo.set_astro_card_settings(
+            AstroCardSettings(
+                max_trade_usdt=60,
+                leverage=3,
+                min_notional=12,
+                max_notional=60,
+            )
+        )
+        inherited = await repo.get_astro_new_listing_card_settings()
+
+        assert inherited.max_trade_usdt == 60
+        assert inherited.leverage == 3
+        assert inherited.max_notional == 60
+
+        saved = await repo.set_astro_new_listing_card_settings(
+            AstroCardSettings(
+                max_trade_usdt=25,
+                leverage=2,
+                min_notional=10,
+                max_notional=25,
+                close_position_buffer_pct=0.2,
+                unfavorable_funding_weight=1.5,
+                close_position_floor_pct=0.01,
+            )
+        )
+        loaded = await repo.get_astro_new_listing_card_settings()
+        ordinary = await repo.get_astro_card_settings()
+
+        assert saved.max_trade_usdt == 25
+        assert loaded.max_trade_usdt == 25
+        assert loaded.leverage == 2
+        assert loaded.max_notional == 25
+        assert loaded.close_position_buffer_pct == 0.2
+        assert loaded.unfavorable_funding_weight == 1.5
+        assert loaded.close_position_floor_pct == 0.01
+        assert ordinary.max_trade_usdt == 60
+    finally:
+        await db.close()

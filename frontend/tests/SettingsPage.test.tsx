@@ -60,6 +60,21 @@ describe("SettingsPage", () => {
             alert_auto_create: false
           });
         }
+        if (url.includes("/settings/astro-new-listing-card") && init?.method === "PUT") {
+          return Response.json(JSON.parse(String(init.body)));
+        }
+        if (url.includes("/settings/astro-new-listing-card")) {
+          return Response.json({
+            max_trade_usdt: 35,
+            leverage: 3,
+            min_notional: 10,
+            max_notional: 35,
+            open_enabled: false,
+            close_position_buffer_pct: 0.1,
+            unfavorable_funding_weight: 1,
+            close_position_floor_pct: 0
+          });
+        }
         if (url.includes("/settings/astro-card") && init?.method === "PUT") {
           return Response.json(JSON.parse(String(init.body)));
         }
@@ -327,12 +342,14 @@ describe("SettingsPage", () => {
     render(<SettingsPage />);
 
     expect(await screen.findByText("Astro 卡片默认参数")).toBeTruthy();
-    const positionValueInput = await screen.findByLabelText("仓位金额 USDT");
-    expect((positionValueInput as HTMLInputElement).value).toBe("25");
+    const positionValueInput = (await screen.findAllByLabelText("仓位金额 USDT"))[0];
+    await waitFor(() => {
+      expect((positionValueInput as HTMLInputElement).value).toBe("25");
+    });
 
     await userEvent.clear(positionValueInput);
     await userEvent.type(positionValueInput, "80");
-    await userEvent.click(screen.getByLabelText("创建后允许开仓"));
+    await userEvent.click(screen.getAllByLabelText("创建后允许开仓")[0]);
     await userEvent.click(screen.getByRole("button", { name: /保存 Astro 卡片默认参数/ }));
 
     await waitFor(() => {
@@ -351,6 +368,31 @@ describe("SettingsPage", () => {
         body: expect.stringContaining('"open_enabled":true')
       })
     );
+  }, 15000);
+
+  it("loads and saves new listing Astro card defaults", async () => {
+    render(<SettingsPage />);
+
+    expect(await screen.findByText("新币 Astro 默认参数")).toBeTruthy();
+    const positionInputs = await screen.findAllByLabelText("仓位金额 USDT");
+    const newListingPositionInput = positionInputs[1];
+    await waitFor(() => {
+      expect((newListingPositionInput as HTMLInputElement).value).toBe("35");
+    });
+
+    await userEvent.clear(newListingPositionInput);
+    await userEvent.type(newListingPositionInput, "120");
+    await userEvent.click(screen.getByRole("button", { name: /保存新币 Astro 默认参数/ }));
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/settings/astro-new-listing-card"),
+        expect.objectContaining({
+          method: "PUT",
+          body: expect.stringContaining('"max_trade_usdt":120')
+        })
+      );
+    });
   }, 15000);
 
   it("loads and saves symbol aliases with risk settings", async () => {

@@ -9,6 +9,7 @@ import type {
   AstroActionResult,
   AstroCardCreateRequest,
   AstroCardSettings,
+  AstroNewListingCardSettings,
   AstroPairPlan,
   AstroSdkStatus,
   FundingArbitragePreview,
@@ -180,6 +181,19 @@ export async function getAstroCardSettings(): Promise<AstroCardSettings> {
 
 export async function updateAstroCardSettings(settings: AstroCardSettings): Promise<AstroCardSettings> {
   return fetchJson<AstroCardSettings>("/settings/astro-card", {
+    method: "PUT",
+    body: JSON.stringify(settings)
+  });
+}
+
+export async function getAstroNewListingCardSettings(): Promise<AstroNewListingCardSettings> {
+  return fetchJson<AstroNewListingCardSettings>("/settings/astro-new-listing-card");
+}
+
+export async function updateAstroNewListingCardSettings(
+  settings: AstroNewListingCardSettings
+): Promise<AstroNewListingCardSettings> {
+  return fetchJson<AstroNewListingCardSettings>("/settings/astro-new-listing-card", {
     method: "PUT",
     body: JSON.stringify(settings)
   });

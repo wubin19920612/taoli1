@@ -72,10 +72,12 @@ class FakeSettingsRepository:
         opportunity_radar_settings: OpportunityRadarSettings | None = None,
         announcement_settings: AnnouncementSettings | None = None,
         minute_signal_settings: MinuteSignalSettings | None = None,
+        astro_new_listing_card_settings: AstroCardSettings | None = None,
     ):
         self.settings = settings
         self.alert_template = alert_template or AlertMessageTemplateSettings()
         self.astro_card_settings = astro_card_settings
+        self.astro_new_listing_card_settings = astro_new_listing_card_settings
         self.live_pilot_settings = live_pilot_settings or LivePilotSettings()
         self.funding_arbitrage_settings = funding_arbitrage_settings or FundingArbitrageSettings()
         self.opportunity_radar_settings = opportunity_radar_settings or OpportunityRadarSettings()
@@ -96,6 +98,16 @@ class FakeSettingsRepository:
 
     async def set_astro_card_settings(self, settings: AstroCardSettings) -> AstroCardSettings:
         self.astro_card_settings = settings
+        return settings
+
+    async def get_astro_new_listing_card_settings(self) -> AstroCardSettings:
+        return self.astro_new_listing_card_settings or await self.get_astro_card_settings()
+
+    async def find_astro_new_listing_card_settings(self) -> AstroCardSettings | None:
+        return self.astro_new_listing_card_settings
+
+    async def set_astro_new_listing_card_settings(self, settings: AstroCardSettings) -> AstroCardSettings:
+        self.astro_new_listing_card_settings = settings
         return settings
 
     async def get_live_pilot_settings(self) -> LivePilotSettings:
@@ -2047,6 +2059,69 @@ def test_astro_card_settings_endpoint_roundtrips() -> None:
         assert reloaded.json()["open_enabled"] is True
         assert reloaded.json()["unfavorable_funding_weight"] == 1.5
         assert reloaded.json()["close_position_floor_pct"] == 0.01
+
+
+def test_astro_new_listing_card_settings_endpoint_defaults_to_card_settings_and_roundtrips() -> None:
+    app = create_app(
+        settings=Settings(
+            dashboard_password="secret",
+            database_url="sqlite:///:memory:",
+            astro_default_max_trade_usdt=22,
+            astro_default_max_notional=22,
+        )
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/api/settings/astro-new-listing-card")
+        assert response.status_code == 200
+        assert response.json()["max_trade_usdt"] == 22
+        assert response.json()["max_notional"] == 22
+
+        saved_card = client.put(
+            "/api/settings/astro-card",
+            headers={"X-Dashboard-Password": "secret"},
+            json={
+                "max_trade_usdt": 75,
+                "leverage": 4,
+                "min_notional": 12,
+                "max_notional": 75,
+                "open_enabled": True,
+                "close_position_buffer_pct": 0.2,
+                "unfavorable_funding_weight": 1.5,
+                "close_position_floor_pct": 0.01,
+            },
+        )
+        assert saved_card.status_code == 200
+
+        inherited = client.get("/api/settings/astro-new-listing-card")
+        assert inherited.status_code == 200
+        assert inherited.json()["max_trade_usdt"] == 75
+        assert inherited.json()["leverage"] == 4
+
+        payload = inherited.json()
+        payload["max_trade_usdt"] = 120
+        payload["leverage"] = 2
+        payload["max_notional"] = 120
+        payload["open_enabled"] = False
+
+        unauthenticated = client.put("/api/settings/astro-new-listing-card", json=payload)
+        assert unauthenticated.status_code == 401
+
+        saved = client.put(
+            "/api/settings/astro-new-listing-card",
+            headers={"X-Dashboard-Password": "secret"},
+            json=payload,
+        )
+        assert saved.status_code == 200
+        assert saved.json()["max_trade_usdt"] == 120
+        assert saved.json()["leverage"] == 2
+        assert saved.json()["open_enabled"] is False
+
+        reloaded = client.get("/api/settings/astro-new-listing-card")
+        assert reloaded.status_code == 200
+        assert reloaded.json()["max_trade_usdt"] == 120
+        assert reloaded.json()["max_notional"] == 120
+        assert reloaded.json()["open_enabled"] is False
 
 
 def test_astro_automation_settings_endpoint_updates_runtime_service() -> None:

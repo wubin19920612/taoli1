@@ -266,6 +266,46 @@ async def test_new_listing_alert_creates_open_card_even_when_default_is_paused()
 
 
 @pytest.mark.asyncio
+async def test_new_listing_alert_uses_new_listing_card_settings() -> None:
+    client = FakeAstroClient()
+    service = AstroAlertService(
+        client,
+        Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
+        card_settings=AstroCardSettings(max_trade_usdt=11, max_notional=11),
+        new_listing_card_settings=AstroCardSettings(
+            max_trade_usdt=45,
+            leverage=4,
+            min_notional=12,
+            max_notional=45,
+            open_enabled=False,
+        ),
+        live_pilot_settings=LivePilotSettings(
+            enabled=True,
+            notional_per_symbol_usdt=100,
+            create_cards_enabled=False,
+        ),
+        add_restart_delay_seconds=0,
+    )
+
+    result = await service.handle_alert(
+        opportunity().model_copy(
+            update={
+                "symbol": "UNITREEUSDT",
+                "risk_labels": ["NEW_LISTING"],
+            }
+        )
+    )
+
+    assert result.status == "created"
+    assert client.added[0]["maxTradeUSDT"] == "45"
+    assert client.added[0]["leverage"] == "4"
+    assert client.added[0]["minNotional"] == "12"
+    assert client.added[0]["maxNotional"] == "45"
+    assert client.added[0]["status"] is True
+    assert client.added[0]["disableOpen"] is False
+
+
+@pytest.mark.asyncio
 async def test_alert_create_uses_supplied_astro_card_settings() -> None:
     client = FakeAstroClient()
     service = AstroAlertService(

@@ -876,6 +876,35 @@ class SettingsRepository:
         await self.db.commit()
         return settings
 
+    async def get_astro_new_listing_card_settings(self) -> AstroCardSettings:
+        settings = await self.find_astro_new_listing_card_settings()
+        return settings or await self.get_astro_card_settings()
+
+    async def find_astro_new_listing_card_settings(self) -> AstroCardSettings | None:
+        cursor = await self.db.execute(
+            "SELECT payload FROM app_settings WHERE key = ?",
+            ("astro_new_listing_card",),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        return AstroCardSettings.model_validate(json.loads(row["payload"]))
+
+    async def set_astro_new_listing_card_settings(
+        self,
+        settings: AstroCardSettings,
+    ) -> AstroCardSettings:
+        await self.db.execute(
+            """
+            INSERT INTO app_settings (key, payload)
+            VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
+            """,
+            ("astro_new_listing_card", settings.model_dump_json()),
+        )
+        await self.db.commit()
+        return settings
+
     async def get_astro_automation_settings(self) -> AstroAutomationSettings:
         settings = await self.find_astro_automation_settings()
         return settings or AstroAutomationSettings()

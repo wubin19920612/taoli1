@@ -7,7 +7,7 @@ from app.models.opportunity import Opportunity
 from app.models.settings import AstroCardSettings, LivePilotSettings
 from app.services.astro_client import AstroClientError
 from app.services.astro_planner import AstroPairPlanner, AstroPlannerConfig
-from app.services.risk_labels import NEW_LISTING_RISK_LABEL
+from app.services.risk_labels import is_new_listing_opportunity
 
 
 class AstroPairClient(Protocol):
@@ -82,10 +82,6 @@ def _settings_with_live_pilot_overrides(
     )
 
 
-def _is_new_listing_opportunity(opportunity: Opportunity) -> bool:
-    return any(label.upper() == NEW_LISTING_RISK_LABEL for label in opportunity.risk_labels)
-
-
 class AstroAlertService:
     def __init__(
         self,
@@ -93,6 +89,7 @@ class AstroAlertService:
         settings: Settings,
         planner: AstroPairPlanner | None = None,
         card_settings: AstroCardSettings | None = None,
+        new_listing_card_settings: AstroCardSettings | None = None,
         live_pilot_settings: LivePilotSettings | None = None,
         add_restart_delay_seconds: float = 3.0,
     ):
@@ -100,6 +97,7 @@ class AstroAlertService:
         self.settings = settings
         self.planner = planner
         self.card_settings = card_settings or settings.astro_card_settings
+        self.new_listing_card_settings = new_listing_card_settings or settings.astro_new_listing_card_settings
         self.live_pilot_settings = live_pilot_settings or LivePilotSettings()
         self.alert_auto_create_enabled = settings.astro_alert_auto_create
         self.add_restart_delay_seconds = add_restart_delay_seconds
@@ -149,10 +147,12 @@ class AstroAlertService:
                 message="dry-run 模式开启，未写入 Astro",
             )
 
-        effective_card_settings = _settings_with_create_overrides(self.card_settings, card_request)
-        if auto_open_new_listing and _is_new_listing_opportunity(opportunity):
+        use_new_listing_settings = auto_open_new_listing and is_new_listing_opportunity(opportunity)
+        base_card_settings = self.new_listing_card_settings if use_new_listing_settings else self.card_settings
+        effective_card_settings = _settings_with_create_overrides(base_card_settings, card_request)
+        if use_new_listing_settings:
             effective_card_settings = effective_card_settings.model_copy(update={"open_enabled": True})
-        if live_pilot:
+        if live_pilot and not use_new_listing_settings:
             effective_card_settings = _settings_with_live_pilot_overrides(
                 effective_card_settings,
                 self.live_pilot_settings,
@@ -170,11 +170,12 @@ class AstroAlertService:
                 message=reason,
             )
 
-        pair_enabled = (
-            self.live_pilot_settings.create_cards_enabled
-            if live_pilot
-            else effective_card_settings.open_enabled
-        )
+        if use_new_listing_settings:
+            pair_enabled = True
+        elif live_pilot:
+            pair_enabled = self.live_pilot_settings.create_cards_enabled
+        else:
+            pair_enabled = effective_card_settings.open_enabled
         pair = _with_card_enabled(plan.pair, pair_enabled)
         pair_name = str(pair.get("name", ""))
         pair_type = str(pair.get("type", ""))

@@ -61,6 +61,17 @@ def has_non_actionable_risk(
     return bool(labels.intersection(opportunity.risk_labels))
 
 
+def has_risk_label(opportunity: Opportunity, label: str) -> bool:
+    normalized = label.strip().upper()
+    if not normalized:
+        return False
+    return any(item.upper() == normalized for item in opportunity.risk_labels)
+
+
+def is_new_listing_opportunity(opportunity: Opportunity) -> bool:
+    return has_risk_label(opportunity, NEW_LISTING_RISK_LABEL)
+
+
 def apply_risk_labels(
     opportunity: Opportunity,
     settings: RiskSettings,

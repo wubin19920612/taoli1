@@ -83,8 +83,10 @@ class FakeSettingsRepo:
         astro_card_settings: AstroCardSettings | None = None,
         live_pilot_settings: LivePilotSettings | None = None,
         alert_template: AlertMessageTemplateSettings | None = None,
+        astro_new_listing_card_settings: AstroCardSettings | None = None,
     ):
         self.astro_card_settings = astro_card_settings
+        self.astro_new_listing_card_settings = astro_new_listing_card_settings
         self.live_pilot_settings = live_pilot_settings or LivePilotSettings()
         self.alert_template = alert_template or AlertMessageTemplateSettings()
 
@@ -96,6 +98,9 @@ class FakeSettingsRepo:
 
     async def find_astro_card_settings(self) -> AstroCardSettings | None:
         return self.astro_card_settings
+
+    async def find_astro_new_listing_card_settings(self) -> AstroCardSettings | None:
+        return self.astro_new_listing_card_settings
 
     async def get_live_pilot_settings(self) -> LivePilotSettings:
         return self.live_pilot_settings
@@ -358,20 +363,50 @@ async def test_alert_loop_marks_recent_listing_announcements_for_open_astro_card
     event_repo = FakeEventRepo(stop_event)
     feishu = FakeFeishuNotifier()
     service = NewListingAwareAstroAlertService()
+    validator = FakeOrderBookValidator(
+        DepthValidationResult(
+            passed=True,
+            target_notional_usdt=1000,
+            buy_filled_usdt=1000,
+            sell_filled_usdt=1000,
+            buy_vwap=100,
+            sell_vwap=100.8,
+            quoted_open_pct=0.8,
+            executable_open_pct=0.8,
+            effective_executable_edge_pct=0.5,
+            slippage_loss_pct=0,
+            blockers=[],
+            warnings=[],
+        )
+    )
 
     app.state.alert_rule_repo = FakeRuleRepo([rule])
     app.state.alert_event_repo = event_repo
-    app.state.settings_repo = FakeSettingsRepo()
+    app.state.settings_repo = FakeSettingsRepo(
+        astro_card_settings=AstroCardSettings(max_trade_usdt=22, max_notional=22),
+        astro_new_listing_card_settings=AstroCardSettings(
+            max_trade_usdt=44,
+            leverage=5,
+            max_notional=44,
+            open_enabled=False,
+        ),
+    )
     app.state.announcement_repo = FakeAnnouncementRepo([listing])
     app.state.snapshot_store = store
     app.state.alert_engine = EchoAlertEngine(rule)
     app.state.feishu_notifier = feishu
     app.state.astro_alert_service = service
+    app.state.orderbook_validator = validator
 
     await asyncio.wait_for(_run_alert_loop(app, 60, stop_event), timeout=2)
 
     assert service.calls == ["unitree-ff"]
     assert service.opportunities[0].risk_labels == ["NEW_LISTING"]
+    assert service.new_listing_card_settings.max_trade_usdt == 44
+    assert validator.calls[0][2] is not None
+    assert validator.calls[0][2].max_trade_usdt == 44
+    assert validator.calls[0][2].leverage == 5
+    assert validator.calls[0][2].open_enabled is True
     assert "Astro: 已创建开启卡片 UNITREE FF binance->okx，禁开=false" in event_repo.events[0].message
     assert feishu.sent_texts[0] is not None
     assert "Astro: 已创建开启卡片 UNITREE FF binance->okx，禁开=false" in feishu.sent_texts[0]

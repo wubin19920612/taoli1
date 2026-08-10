@@ -1027,6 +1027,8 @@ export interface AstroCardSettings {
   close_position_floor_pct: number;
 }
 
+export interface AstroNewListingCardSettings extends AstroCardSettings {}
+
 export interface LivePilotSettings {
   enabled: boolean;
   max_symbols: number;

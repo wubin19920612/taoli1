@@ -95,7 +95,12 @@ from app.services.opportunity_radar import (
 )
 from app.services.pair_spread_funding_recorder import PairSpreadFundingRecorder, PairSpreadFundingRepository
 from app.services.phone_price_alerts import PhonePriceAlertEngine, build_phone_price_alert_message
-from app.services.risk_labels import NEW_LISTING_RISK_LABEL, effective_open_edge_pct, known_volume_24h_usdt
+from app.services.risk_labels import (
+    NEW_LISTING_RISK_LABEL,
+    effective_open_edge_pct,
+    is_new_listing_opportunity,
+    known_volume_24h_usdt,
+)
 from app.services.snapshot_store import SnapshotStore
 from app.services.service_control import DockerServiceController, ServiceControlConfig
 from app.services.second_level_sampler import SecondLevelSampler, SecondLevelSamplingRepository
@@ -132,6 +137,11 @@ async def _refresh_astro_runtime_settings(app: FastAPI, settings_repo: SettingsR
         "astro_card_settings",
         getattr(astro_alert_service, "card_settings", None),
     )
+    fallback_new_listing_settings = getattr(
+        getattr(app.state, "settings", None),
+        "astro_new_listing_card_settings",
+        getattr(astro_alert_service, "new_listing_card_settings", fallback_settings),
+    )
     fallback_automation = getattr(
         getattr(app.state, "settings", None),
         "astro_automation_settings",
@@ -139,6 +149,7 @@ async def _refresh_astro_runtime_settings(app: FastAPI, settings_repo: SettingsR
     )
     if settings_repo is None:
         astro_alert_service.card_settings = fallback_settings
+        astro_alert_service.new_listing_card_settings = fallback_new_listing_settings
         astro_alert_service.live_pilot_settings = LivePilotSettings()
         if fallback_automation is not None:
             astro_alert_service.alert_auto_create_enabled = fallback_automation.alert_auto_create
@@ -146,6 +157,17 @@ async def _refresh_astro_runtime_settings(app: FastAPI, settings_repo: SettingsR
     find_settings = getattr(settings_repo, "find_astro_card_settings", None)
     stored = await find_settings() if find_settings is not None else None
     astro_alert_service.card_settings = stored or fallback_settings
+    find_new_listing_settings = getattr(settings_repo, "find_astro_new_listing_card_settings", None)
+    stored_new_listing = await find_new_listing_settings() if find_new_listing_settings is not None else None
+    app_settings = getattr(app.state, "settings", None)
+    astro_alert_service.new_listing_card_settings = (
+        stored_new_listing
+        or (
+            app_settings.astro_new_listing_card_settings_from(astro_alert_service.card_settings)
+            if hasattr(app_settings, "astro_new_listing_card_settings_from")
+            else astro_alert_service.card_settings
+        )
+    )
     find_automation = getattr(settings_repo, "find_astro_automation_settings", None)
     stored_automation = await find_automation() if find_automation is not None else None
     if stored_automation is not None:
@@ -337,6 +359,24 @@ def _astro_plan_validation_failure(
     return "; ".join(plan.blockers) if plan.blockers else "Astro pair cannot be submitted"
 
 
+def _astro_card_settings_for_opportunity(
+    astro_alert_service: AstroAlertService,
+    opportunity,
+) -> AstroCardSettings | None:
+    card_settings = getattr(astro_alert_service, "card_settings", None)
+    if not is_new_listing_opportunity(opportunity):
+        return card_settings
+    new_listing_settings = getattr(
+        astro_alert_service,
+        "new_listing_card_settings",
+        None,
+    )
+    effective_settings = new_listing_settings or card_settings
+    if effective_settings is None:
+        return None
+    return effective_settings.model_copy(update={"open_enabled": True})
+
+
 def _exception_message(exc: BaseException) -> str:
     text = str(exc).strip()
     return text if text else exc.__class__.__name__
@@ -459,7 +499,10 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                 )
                 if astro_alert_service is not None and not signal_condition_failure:
                     try:
-                        card_settings = getattr(astro_alert_service, "card_settings", None)
+                        card_settings = _astro_card_settings_for_opportunity(
+                            astro_alert_service,
+                            latest_opportunity,
+                        )
                         plan_failure = _astro_plan_validation_failure(
                             latest_opportunity,
                             card_settings,

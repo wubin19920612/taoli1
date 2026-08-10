@@ -73,6 +73,26 @@ async def get_astro_card_settings(request: Request) -> AstroCardSettings:
     return stored
 
 
+@router.get("/astro-new-listing-card", response_model=AstroCardSettings)
+async def get_astro_new_listing_card_settings(request: Request) -> AstroCardSettings:
+    repo = _settings_repo(request)
+    find_settings = getattr(repo, "find_astro_new_listing_card_settings", None)
+    stored = await find_settings() if find_settings is not None else None
+    if stored is not None:
+        return stored
+    find_card_settings = getattr(repo, "find_astro_card_settings", None)
+    stored_card = await find_card_settings() if find_card_settings is not None else None
+    fallback_card = stored_card or request.app.state.settings.astro_card_settings
+    apply_new_listing_overrides = getattr(
+        request.app.state.settings,
+        "astro_new_listing_card_settings_from",
+        None,
+    )
+    if apply_new_listing_overrides is None:
+        return getattr(request.app.state.settings, "astro_new_listing_card_settings", fallback_card)
+    return apply_new_listing_overrides(fallback_card)
+
+
 @router.put("/astro-card", response_model=AstroCardSettings)
 async def update_astro_card_settings(
     settings: AstroCardSettings,
@@ -81,6 +101,16 @@ async def update_astro_card_settings(
 ) -> AstroCardSettings:
     verify_dashboard_password(request.app.state.settings.dashboard_password, password)
     return await _settings_repo(request).set_astro_card_settings(settings)
+
+
+@router.put("/astro-new-listing-card", response_model=AstroCardSettings)
+async def update_astro_new_listing_card_settings(
+    settings: AstroCardSettings,
+    request: Request,
+    password: str | None = Depends(dashboard_password_header),
+) -> AstroCardSettings:
+    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
+    return await _settings_repo(request).set_astro_new_listing_card_settings(settings)
 
 
 @router.get("/astro-automation", response_model=AstroAutomationSettings)
