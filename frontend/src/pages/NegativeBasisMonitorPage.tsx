@@ -534,7 +534,7 @@ export function NegativeBasisMonitorPage() {
           loading={blockActionLoading}
           disabled={blockedSymbols.includes(normalizeSymbol(symbol))}
         >
-          标的
+          屏蔽标的
         </Button>
       </Popconfirm>
       <Popconfirm
@@ -547,7 +547,7 @@ export function NegativeBasisMonitorPage() {
           loading={blockActionLoading}
           disabled={blockedExchanges.includes(spotExchange)}
         >
-          现货所
+          屏蔽现货所
         </Button>
       </Popconfirm>
       <Popconfirm
@@ -560,7 +560,7 @@ export function NegativeBasisMonitorPage() {
           loading={blockActionLoading}
           disabled={blockedExchanges.includes(futureExchange)}
         >
-          合约所
+          屏蔽合约所
         </Button>
       </Popconfirm>
     </Space>
@@ -733,7 +733,7 @@ export function NegativeBasisMonitorPage() {
     },
     {
       title: "操作",
-      width: 340,
+      width: 440,
       render: (_, item) => (
         <Space size={4} wrap onClick={(event) => event.stopPropagation()}>
           <Button icon={<EditOutlined />} size="small" onClick={() => editWatch(item)} />
@@ -772,7 +772,7 @@ export function NegativeBasisMonitorPage() {
     { title: "发现时间", dataIndex: "observed_at", width: 120, render: (value: string) => time(value) },
     {
       title: "操作",
-      width: 330,
+      width: 430,
       render: (_, item) => {
         const watch = status?.watchlist.find((watchItem) => watchItem.id === item.id);
         return (
@@ -907,7 +907,7 @@ export function NegativeBasisMonitorPage() {
           columns={candidateColumns}
           dataSource={status?.auto_candidates ?? []}
           pagination={{ pageSize: 8 }}
-          scroll={{ x: 1220 }}
+          scroll={{ x: 1320 }}
           locale={{ emptyText: <Empty description="暂未发现现货溢价候选" /> }}
         />
       </Card>
@@ -1033,7 +1033,7 @@ export function NegativeBasisMonitorPage() {
                 setDraft(item);
               }
             })}
-            scroll={{ x: 1040 }}
+            scroll={{ x: 1140 }}
           />
         </Card>
         </div>
@@ -1052,7 +1052,7 @@ export function NegativeBasisMonitorPage() {
                 setDraft(item);
               }
             })}
-            scroll={{ x: 1040 }}
+            scroll={{ x: 1140 }}
           />
         </Card>
       )}
