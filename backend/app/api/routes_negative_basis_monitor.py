@@ -159,6 +159,31 @@ async def unblock_negative_basis_auto_exchange(
     return await _monitor(request).unblock_auto_exchange(exchange)
 
 
+@router.post("/auto-scan/block-exchange-symbol", response_model=NegativeBasisAutoScanSettings)
+async def block_negative_basis_auto_exchange_symbol(
+    request: Request,
+    exchange: str = Query(...),
+    symbol: str = Query(...),
+    password: str | None = Depends(dashboard_password_header),
+) -> NegativeBasisAutoScanSettings:
+    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
+    try:
+        return await _monitor(request).block_auto_exchange_symbol(exchange=exchange, symbol=symbol)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.delete("/auto-scan/block-exchange-symbol", response_model=NegativeBasisAutoScanSettings)
+async def unblock_negative_basis_auto_exchange_symbol(
+    request: Request,
+    exchange: str = Query(...),
+    symbol: str = Query(...),
+    password: str | None = Depends(dashboard_password_header),
+) -> NegativeBasisAutoScanSettings:
+    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
+    return await _monitor(request).unblock_auto_exchange_symbol(exchange=exchange, symbol=symbol)
+
+
 @router.get("/samples", response_model=list[NegativeBasisSignalSample])
 async def list_negative_basis_samples(
     request: Request,

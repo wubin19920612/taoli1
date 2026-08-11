@@ -179,6 +179,7 @@ def test_negative_basis_auto_scan_settings_normalizes_blocklist() -> None:
 
     assert settings.blocked_exchanges == ["gate", "binance"]
     assert settings.blocked_symbols == ["PROMUSDT", "DEXEUSDT"]
+    assert settings.blocked_exchange_symbols == ["gate:EDGEUSDT"]
 
 
 def test_negative_basis_analysis_detects_strong_prom_like_setup() -> None:
@@ -303,6 +304,124 @@ async def test_negative_basis_monitor_auto_discovers_spot_premium_candidates() -
     assert watchlist[0].auto_managed is True
     assert watchlist[0].spot_exchange == "binance"
     assert watchlist[0].future_exchange == "gate"
+
+
+@pytest.mark.asyncio
+async def test_negative_basis_monitor_auto_scan_blocks_gate_edge_same_name() -> None:
+    db = await connect_database(":memory:")
+    await initialize_schema(db)
+    repo = NegativeBasisMonitorRepository(db)
+    store = SnapshotStore()
+    observed_at = datetime(2026, 8, 11, 0, 6, tzinfo=UTC)
+    store.set_markets(
+        [
+            MarketSnapshot(
+                symbol="EDGEUSDT",
+                base="EDGE",
+                exchange="okx",
+                market_type=MarketType.SPOT,
+                bid=1.0,
+                ask=1.01,
+                volume_24h_usdt=1_500_000,
+                timestamp=observed_at,
+                raw_symbol="EDGE-USDT",
+            ),
+            MarketSnapshot(
+                symbol="EDGEUSDT",
+                base="EDGE",
+                exchange="gate",
+                market_type=MarketType.FUTURE,
+                bid=0.49,
+                ask=0.51,
+                mark_price=0.5,
+                volume_24h_usdt=2_000_000,
+                timestamp=observed_at,
+                raw_symbol="EDGE_USDT",
+            ),
+        ]
+    )
+    monitor = NegativeBasisMonitor(
+        repo,
+        snapshot_store=store,
+        gate_stats_client=FakeGateStatsClient(),  # type: ignore[arg-type]
+    )
+
+    try:
+        candidates = await monitor.discover_auto_candidates(force=True)
+        watchlist = await repo.list_watch_items()
+    finally:
+        await monitor.aclose()
+        await db.close()
+
+    assert candidates == []
+    assert watchlist == []
+
+
+@pytest.mark.asyncio
+async def test_negative_basis_monitor_auto_scan_keeps_best_route_per_symbol() -> None:
+    db = await connect_database(":memory:")
+    await initialize_schema(db)
+    repo = NegativeBasisMonitorRepository(db)
+    store = SnapshotStore()
+    observed_at = datetime(2026, 8, 11, 0, 6, tzinfo=UTC)
+    store.set_markets(
+        [
+            MarketSnapshot(
+                symbol="ALLOUSDT",
+                base="ALLO",
+                exchange="aster",
+                market_type=MarketType.SPOT,
+                bid=2.54,
+                ask=2.56,
+                volume_24h_usdt=3_000_000,
+                timestamp=observed_at,
+                raw_symbol="ALLOUSDT",
+            ),
+            MarketSnapshot(
+                symbol="ALLOUSDT",
+                base="ALLO",
+                exchange="gate",
+                market_type=MarketType.FUTURE,
+                bid=0.299,
+                ask=0.301,
+                mark_price=0.3,
+                volume_24h_usdt=500_000,
+                timestamp=observed_at,
+                raw_symbol="ALLO_USDT",
+            ),
+            MarketSnapshot(
+                symbol="ALLOUSDT",
+                base="ALLO",
+                exchange="binance",
+                market_type=MarketType.FUTURE,
+                bid=0.301,
+                ask=0.303,
+                mark_price=0.302,
+                volume_24h_usdt=30_000_000,
+                timestamp=observed_at,
+                raw_symbol="ALLOUSDT",
+            ),
+        ]
+    )
+    monitor = NegativeBasisMonitor(
+        repo,
+        snapshot_store=store,
+        gate_stats_client=FakeGateStatsClient(),  # type: ignore[arg-type]
+    )
+
+    try:
+        candidates = await monitor.discover_auto_candidates(force=True)
+        watchlist = await repo.list_watch_items()
+    finally:
+        await monitor.aclose()
+        await db.close()
+
+    assert len(candidates) == 1
+    assert candidates[0].symbol == "ALLOUSDT"
+    assert candidates[0].future_exchange == "binance"
+    assert candidates[0].selection_score > 0
+    assert len(watchlist) == 1
+    assert watchlist[0].id == "auto:aster:binance:ALLOUSDT"
 
 
 @pytest.mark.asyncio
@@ -451,19 +570,35 @@ def test_negative_basis_monitor_api_updates_auto_scan_blocklist() -> None:
             headers=headers,
             params={"exchange": "Gate"},
         )
+        block_exchange_symbol_response = client.post(
+            "/api/negative-basis-monitor/auto-scan/block-exchange-symbol",
+            headers=headers,
+            params={"exchange": "Binance", "symbol": "PROM"},
+        )
         status_response = client.get("/api/negative-basis-monitor/status")
         unblock_symbol_response = client.delete(
             "/api/negative-basis-monitor/auto-scan/block-symbol",
             headers=headers,
             params={"symbol": "PROMUSDT"},
         )
+        unblock_exchange_symbol_response = client.delete(
+            "/api/negative-basis-monitor/auto-scan/block-exchange-symbol",
+            headers=headers,
+            params={"exchange": "binance", "symbol": "PROMUSDT"},
+        )
 
     assert block_symbol_response.status_code == 200
     assert block_symbol_response.json()["blocked_symbols"] == ["PROMUSDT"]
     assert block_exchange_response.status_code == 200
     assert block_exchange_response.json()["blocked_exchanges"] == ["gate"]
+    assert block_exchange_symbol_response.status_code == 200
+    assert "binance:PROMUSDT" in block_exchange_symbol_response.json()["blocked_exchange_symbols"]
     assert status_response.status_code == 200
     assert status_response.json()["auto_scan_settings"]["blocked_symbols"] == ["PROMUSDT"]
     assert status_response.json()["auto_scan_settings"]["blocked_exchanges"] == ["gate"]
+    assert "binance:PROMUSDT" in status_response.json()["auto_scan_settings"]["blocked_exchange_symbols"]
+    assert "gate:EDGEUSDT" in status_response.json()["auto_scan_settings"]["blocked_exchange_symbols"]
     assert unblock_symbol_response.status_code == 200
     assert unblock_symbol_response.json()["blocked_symbols"] == []
+    assert unblock_exchange_symbol_response.status_code == 200
+    assert "binance:PROMUSDT" not in unblock_exchange_symbol_response.json()["blocked_exchange_symbols"]

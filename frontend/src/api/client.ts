@@ -1070,6 +1070,44 @@ export async function unblockNegativeBasisExchange(exchange: string): Promise<Ne
   });
 }
 
+export async function blockNegativeBasisExchangeSymbol(
+  exchange: string,
+  symbol: string
+): Promise<NegativeBasisAutoScanSettings> {
+  const url = buildUrl("/negative-basis-monitor/auto-scan/block-exchange-symbol", { exchange, symbol });
+  return fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders()
+    },
+    body: JSON.stringify({})
+  }).then(async (response) => {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(extractErrorMessage(text, response.status));
+    }
+    return response.json() as Promise<NegativeBasisAutoScanSettings>;
+  });
+}
+
+export async function unblockNegativeBasisExchangeSymbol(
+  exchange: string,
+  symbol: string
+): Promise<NegativeBasisAutoScanSettings> {
+  const url = buildUrl("/negative-basis-monitor/auto-scan/block-exchange-symbol", { exchange, symbol });
+  return fetch(url, {
+    method: "DELETE",
+    headers: authHeaders()
+  }).then(async (response) => {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(extractErrorMessage(text, response.status));
+    }
+    return response.json() as Promise<NegativeBasisAutoScanSettings>;
+  });
+}
+
 export async function listNegativeBasisWatchlist(): Promise<NegativeBasisWatchItem[]> {
   return fetchJson<NegativeBasisWatchItem[]>("/negative-basis-monitor/watchlist");
 }

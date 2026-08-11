@@ -23,6 +23,7 @@ import {
   Switch,
   Table,
   Tag,
+  Tooltip,
   Typography,
   message
 } from "antd";
@@ -33,6 +34,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   blockNegativeBasisExchange,
+  blockNegativeBasisExchangeSymbol,
   blockNegativeBasisSymbol,
   collectNegativeBasisWatchItem,
   deleteNegativeBasisWatchItem,
@@ -41,6 +43,7 @@ import {
   queryNegativeBasis,
   refreshNegativeBasisAutoScan,
   unblockNegativeBasisExchange,
+  unblockNegativeBasisExchangeSymbol,
   unblockNegativeBasisSymbol,
   updateNegativeBasisAutoScanSettings,
   upsertNegativeBasisWatchItem
@@ -153,6 +156,15 @@ function shortSymbol(symbol: string | null | undefined): string {
 
 function exchangeText(exchange: string): string {
   return exchangeNames[exchange] ?? exchange;
+}
+
+function exchangeSymbolKey(exchange: string, symbol: string): string {
+  return `${exchange.toLowerCase()}:${normalizeSymbol(symbol)}`;
+}
+
+function exchangeSymbolText(key: string): string {
+  const [exchange, symbol] = key.split(":");
+  return `${exchangeText(exchange ?? "")} ${shortSymbol(symbol)}`;
 }
 
 function time(value: string | null | undefined, seconds = false): string {
@@ -441,6 +453,7 @@ export function NegativeBasisMonitorPage() {
   const autoScanSettings = status?.auto_scan_settings;
   const blockedExchanges = autoScanSettings?.blocked_exchanges ?? [];
   const blockedSymbols = autoScanSettings?.blocked_symbols ?? [];
+  const blockedExchangeSymbols = autoScanSettings?.blocked_exchange_symbols ?? [];
 
   const exchangeOptionItems = (values: string[]) =>
     values.map((exchange) => ({ label: exchangeText(exchange), value: exchange }));
@@ -532,6 +545,36 @@ export function NegativeBasisMonitorPage() {
     }
   };
 
+  const blockExchangeSymbol = async (exchange: string, symbol: string) => {
+    setBlockActionLoading(true);
+    try {
+      await blockNegativeBasisExchangeSymbol(exchange, normalizeSymbol(symbol));
+      message.success(`已屏蔽 ${exchangeText(exchange)} 的 ${shortSymbol(symbol)}`);
+      await refresh();
+    } catch (exc) {
+      message.error(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setBlockActionLoading(false);
+    }
+  };
+
+  const unblockExchangeSymbol = async (key: string) => {
+    const [exchange, symbol] = key.split(":");
+    if (!exchange || !symbol) {
+      return;
+    }
+    setBlockActionLoading(true);
+    try {
+      await unblockNegativeBasisExchangeSymbol(exchange, symbol);
+      message.success(`已解除 ${exchangeSymbolText(key)}`);
+      await refresh();
+    } catch (exc) {
+      message.error(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setBlockActionLoading(false);
+    }
+  };
+
   const blockSelectedExchange = async () => {
     if (!globalBlockExchange) {
       message.warning("先选择要屏蔽的交易所");
@@ -540,55 +583,60 @@ export function NegativeBasisMonitorPage() {
     await blockExchange(globalBlockExchange);
   };
 
-  const renderBlockButtons = (symbol: string, spotExchange: string, futureExchange: string) => (
-    <Space
-      size={4}
-      wrap
-      className="negative-basis-block-actions"
-      onClick={(event) => event.stopPropagation()}
-    >
-      <Popconfirm
-        title={`屏蔽标的 ${shortSymbol(symbol)}？`}
-        onConfirm={() => void blockSymbol(symbol)}
+  const renderBlockButtons = (symbol: string, spotExchange: string, futureExchange: string) => {
+    const normalizedSymbol = normalizeSymbol(symbol);
+    const spotKey = exchangeSymbolKey(spotExchange, normalizedSymbol);
+    const futureKey = exchangeSymbolKey(futureExchange, normalizedSymbol);
+    return (
+      <Space
+        size={4}
+        wrap
+        className="negative-basis-block-actions"
+        onClick={(event) => event.stopPropagation()}
       >
-        <Button
-          size="small"
-          danger
-          icon={<StopOutlined />}
-          loading={blockActionLoading}
-          disabled={blockedSymbols.includes(normalizeSymbol(symbol))}
+        <Popconfirm
+          title={`屏蔽标的 ${shortSymbol(symbol)}？`}
+          onConfirm={() => void blockSymbol(symbol)}
         >
-          屏蔽标的
-        </Button>
-      </Popconfirm>
-      <Popconfirm
-        title={`屏蔽交易所 ${exchangeText(spotExchange)}？`}
-        onConfirm={() => void blockExchange(spotExchange)}
-      >
-        <Button
-          size="small"
-          danger
-          loading={blockActionLoading}
-          disabled={blockedExchanges.includes(spotExchange)}
+          <Button
+            size="small"
+            danger
+            icon={<StopOutlined />}
+            loading={blockActionLoading}
+            disabled={blockedSymbols.includes(normalizedSymbol)}
+          >
+            屏蔽标的
+          </Button>
+        </Popconfirm>
+        <Popconfirm
+          title={`屏蔽 ${exchangeText(spotExchange)} 的 ${shortSymbol(symbol)}？`}
+          onConfirm={() => void blockExchangeSymbol(spotExchange, normalizedSymbol)}
         >
-          屏蔽现货所
-        </Button>
-      </Popconfirm>
-      <Popconfirm
-        title={`屏蔽交易所 ${exchangeText(futureExchange)}？`}
-        onConfirm={() => void blockExchange(futureExchange)}
-      >
-        <Button
-          size="small"
-          danger
-          loading={blockActionLoading}
-          disabled={blockedExchanges.includes(futureExchange)}
+          <Button
+            size="small"
+            danger
+            loading={blockActionLoading}
+            disabled={blockedExchangeSymbols.includes(spotKey)}
+          >
+            屏蔽现货腿
+          </Button>
+        </Popconfirm>
+        <Popconfirm
+          title={`屏蔽 ${exchangeText(futureExchange)} 的 ${shortSymbol(symbol)}？`}
+          onConfirm={() => void blockExchangeSymbol(futureExchange, normalizedSymbol)}
         >
-          屏蔽合约所
-        </Button>
-      </Popconfirm>
-    </Space>
-  );
+          <Button
+            size="small"
+            danger
+            loading={blockActionLoading}
+            disabled={blockedExchangeSymbols.includes(futureKey)}
+          >
+            屏蔽合约腿
+          </Button>
+        </Popconfirm>
+      </Space>
+    );
+  };
 
   const renderBlocklist = () => (
     <div className="negative-basis-blockbar">
@@ -644,7 +692,20 @@ export function NegativeBasisMonitorPage() {
             交易所 {exchangeText(exchange)}
           </Tag>
         ))}
-        {!blockedSymbols.length && !blockedExchanges.length ? <Tag>无</Tag> : null}
+        {blockedExchangeSymbols.map((key) => (
+          <Tag
+            key={`exchange-symbol-${key}`}
+            color="magenta"
+            closable={!blockActionLoading}
+            onClose={(event) => {
+              event.preventDefault();
+              void unblockExchangeSymbol(key);
+            }}
+          >
+            交易所标的 {exchangeSymbolText(key)}
+          </Tag>
+        ))}
+        {!blockedSymbols.length && !blockedExchanges.length && !blockedExchangeSymbols.length ? <Tag>无</Tag> : null}
       </div>
     </div>
   );
@@ -815,6 +876,17 @@ export function NegativeBasisMonitorPage() {
       )
     },
     { title: "级别", dataIndex: "signal_level", width: 88, render: levelTag },
+    {
+      title: "性价比",
+      dataIndex: "selection_score",
+      width: 92,
+      align: "right",
+      render: (value: number, item) => (
+        <Tooltip title={item.selection_reasons.join(" / ") || "按溢价和现货、合约流动性综合排序"}>
+          <Typography.Text strong>{numberText(value, 1)}</Typography.Text>
+        </Tooltip>
+      )
+    },
     { title: "现货溢价", dataIndex: "spot_premium_pct", width: 100, align: "right", render: (value: number) => pct(value, 3) },
     { title: "价格", width: 150, render: (_, item) => `${price(item.spot_price)} / ${price(item.future_price)}` },
     { title: "现货24h", dataIndex: "spot_volume_24h_usdt", width: 110, align: "right", render: (value: number | null) => money(value) },
@@ -957,7 +1029,7 @@ export function NegativeBasisMonitorPage() {
           columns={candidateColumns}
           dataSource={status?.auto_candidates ?? []}
           pagination={{ pageSize: 8 }}
-          scroll={{ x: 1320 }}
+          scroll={{ x: 1410 }}
           locale={{ emptyText: <Empty description="暂未发现现货溢价候选" /> }}
         />
       </Card>

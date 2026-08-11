@@ -339,6 +339,7 @@ export interface NegativeBasisAutoScanSettings {
   enabled: boolean;
   blocked_exchanges: string[];
   blocked_symbols: string[];
+  blocked_exchange_symbols: string[];
   updated_at: string;
 }
 
@@ -445,6 +446,8 @@ export interface NegativeBasisAutoCandidate {
   spot_exchange: string;
   future_exchange: string;
   signal_level: NegativeBasisSignalLevel;
+  selection_score: number;
+  selection_reasons: string[];
   spot_premium_pct: number;
   spot_price: number;
   future_price: number;

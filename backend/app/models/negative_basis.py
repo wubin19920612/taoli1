@@ -22,6 +22,7 @@ NEGATIVE_BASIS_SPOT_EXCHANGES: tuple[str, ...] = tuple(
 NEGATIVE_BASIS_FUTURE_EXCHANGES: tuple[str, ...] = tuple(
     exchange for exchange in SUPPORTED_PAIR_SPREAD_EXCHANGES if exchange != "binance_alpha"
 )
+DEFAULT_NEGATIVE_BASIS_BLOCKED_EXCHANGE_SYMBOLS: tuple[str, ...] = ("gate:EDGEUSDT",)
 
 NegativeBasisSignalLevel = Literal[
     "none",
@@ -46,10 +47,29 @@ def utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+def normalize_negative_basis_exchange_symbol_key(value: str) -> str:
+    if ":" not in value:
+        raise ValueError("exchange-symbol block must use exchange:SYMBOL format")
+    exchange_text, symbol_text = value.split(":", 1)
+    exchange = exchange_text.strip().lower()
+    allowed = set(NEGATIVE_BASIS_SPOT_EXCHANGES) | set(NEGATIVE_BASIS_FUTURE_EXCHANGES)
+    if exchange not in allowed:
+        allowed_text = ", ".join(sorted(allowed))
+        raise ValueError(f"unsupported blocked exchange: {exchange_text}; allowed: {allowed_text}")
+    return f"{exchange}:{normalize_pair_spread_symbol(symbol_text)}"
+
+
+def negative_basis_exchange_symbol_key(exchange: str, symbol: str) -> str:
+    return normalize_negative_basis_exchange_symbol_key(f"{exchange}:{symbol}")
+
+
 class NegativeBasisAutoScanSettings(BaseModel):
     enabled: bool = Field(default=True)
     blocked_exchanges: list[str] = Field(default_factory=list)
     blocked_symbols: list[str] = Field(default_factory=list)
+    blocked_exchange_symbols: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_NEGATIVE_BASIS_BLOCKED_EXCHANGE_SYMBOLS)
+    )
     updated_at: datetime = Field(default_factory=utc_now)
 
     @field_validator("blocked_exchanges")
@@ -78,6 +98,18 @@ class NegativeBasisAutoScanSettings(BaseModel):
             symbol = normalize_pair_spread_symbol(item)
             if symbol not in normalized:
                 normalized.append(symbol)
+        return normalized
+
+    @field_validator("blocked_exchange_symbols")
+    @classmethod
+    def normalize_blocked_exchange_symbols(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for item in value:
+            if not item or not item.strip():
+                continue
+            key = normalize_negative_basis_exchange_symbol_key(item)
+            if key not in normalized:
+                normalized.append(key)
         return normalized
 
 
@@ -276,6 +308,8 @@ class NegativeBasisAutoCandidate(BaseModel):
     spot_exchange: str
     future_exchange: str
     signal_level: NegativeBasisSignalLevel = "none"
+    selection_score: float = 0
+    selection_reasons: list[str] = Field(default_factory=list)
     spot_premium_pct: float
     spot_price: float
     future_price: float

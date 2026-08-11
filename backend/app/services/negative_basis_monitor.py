@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone
-from math import isfinite
+from math import isfinite, log10
 from typing import Any
 
 import aiosqlite
@@ -38,6 +38,7 @@ from app.models.negative_basis import (
     NegativeBasisSignalSample,
     NegativeBasisThresholdState,
     NegativeBasisWatchItem,
+    negative_basis_exchange_symbol_key,
     utc_now,
 )
 from app.models.pair_spread import PairSpreadQueryResult, PairSpreadValueStats, normalize_pair_spread_symbol
@@ -563,6 +564,38 @@ def _spot_premium_pct(spot_price: float, future_price: float) -> float:
     return (spot_price - future_price) / ((spot_price + future_price) / 2) * 100
 
 
+def _volume_score(value: float | None, cap: float) -> float:
+    value = _positive(value)
+    if value is None:
+        return 0.0
+    return min(cap, max(0.0, (log10(value) - 5.0) / 4.0) * cap)
+
+
+def _auto_candidate_selection_score(
+    *,
+    premium_pct: float,
+    spot_volume_24h_usdt: float | None,
+    future_volume_24h_usdt: float | None,
+) -> float:
+    premium_score = min(30.0, max(0.0, premium_pct) * 0.2)
+    spot_liquidity_score = _volume_score(spot_volume_24h_usdt, 40.0)
+    future_liquidity_score = _volume_score(future_volume_24h_usdt, 30.0)
+    return round(premium_score + spot_liquidity_score + future_liquidity_score, 2)
+
+
+def _auto_candidate_selection_reasons(
+    *,
+    premium_pct: float,
+    spot_volume_24h_usdt: float | None,
+    future_volume_24h_usdt: float | None,
+) -> list[str]:
+    return [
+        f"现货溢价 {_fmt_pct(premium_pct, 3)}",
+        f"现货24h {_fmt_usdt(spot_volume_24h_usdt)}",
+        f"合约24h {_fmt_usdt(future_volume_24h_usdt)}",
+    ]
+
+
 def _auto_watch_id(symbol: str, spot_exchange: str, future_exchange: str) -> str:
     return f"auto:{spot_exchange}:{future_exchange}:{symbol}"
 
@@ -600,18 +633,49 @@ def _auto_candidate(
         and spot.volume_24h_usdt < AUTO_SCAN_MIN_SPOT_VOLUME_24H_USDT
     ):
         return None
+    selection_score = _auto_candidate_selection_score(
+        premium_pct=premium_pct,
+        spot_volume_24h_usdt=spot.volume_24h_usdt,
+        future_volume_24h_usdt=future.volume_24h_usdt,
+    )
     return NegativeBasisAutoCandidate(
         id=_auto_watch_id(spot.symbol, spot.exchange, future.exchange),
         symbol=spot.symbol,
         spot_exchange=spot.exchange,
         future_exchange=future.exchange,
         signal_level=_auto_signal_level(premium_pct, item),
+        selection_score=selection_score,
+        selection_reasons=_auto_candidate_selection_reasons(
+            premium_pct=premium_pct,
+            spot_volume_24h_usdt=spot.volume_24h_usdt,
+            future_volume_24h_usdt=future.volume_24h_usdt,
+        ),
         spot_premium_pct=premium_pct,
         spot_price=spot_price,
         future_price=future_price,
         spot_volume_24h_usdt=spot.volume_24h_usdt,
         future_volume_24h_usdt=future.volume_24h_usdt,
         observed_at=observed_at,
+    )
+
+
+def _best_auto_candidates_by_symbol(
+    candidates: list[NegativeBasisAutoCandidate],
+) -> list[NegativeBasisAutoCandidate]:
+    best_by_symbol: dict[str, NegativeBasisAutoCandidate] = {}
+    for candidate in candidates:
+        current = best_by_symbol.get(candidate.symbol)
+        if current is None or _auto_candidate_sort_key(candidate) > _auto_candidate_sort_key(current):
+            best_by_symbol[candidate.symbol] = candidate
+    return sorted(best_by_symbol.values(), key=_auto_candidate_sort_key, reverse=True)
+
+
+def _auto_candidate_sort_key(candidate: NegativeBasisAutoCandidate) -> tuple[float, float, float, float]:
+    return (
+        candidate.selection_score,
+        candidate.spot_volume_24h_usdt or 0.0,
+        candidate.future_volume_24h_usdt or 0.0,
+        candidate.spot_premium_pct,
     )
 
 
@@ -623,6 +687,10 @@ def _auto_candidate_blocked(
         candidate.symbol in set(settings.blocked_symbols)
         or candidate.spot_exchange in set(settings.blocked_exchanges)
         or candidate.future_exchange in set(settings.blocked_exchanges)
+        or negative_basis_exchange_symbol_key(candidate.spot_exchange, candidate.symbol)
+        in set(settings.blocked_exchange_symbols)
+        or negative_basis_exchange_symbol_key(candidate.future_exchange, candidate.symbol)
+        in set(settings.blocked_exchange_symbols)
     )
 
 
@@ -646,10 +714,15 @@ def _auto_watch_matches_blocklist(
         item.spot_symbol or item.symbol,
         item.future_symbol or item.symbol,
     }
+    exchange_symbols = {
+        negative_basis_exchange_symbol_key(item.spot_exchange, item.spot_symbol or item.symbol),
+        negative_basis_exchange_symbol_key(item.future_exchange, item.future_symbol or item.symbol),
+    }
     return (
         bool(symbols & set(settings.blocked_symbols))
         or item.spot_exchange in set(settings.blocked_exchanges)
         or item.future_exchange in set(settings.blocked_exchanges)
+        or bool(exchange_symbols & set(settings.blocked_exchange_symbols))
     )
 
 
@@ -835,12 +908,24 @@ class NegativeBasisMonitorRepository:
     ) -> int:
         blocked_exchanges = set(settings.blocked_exchanges)
         blocked_symbols = set(settings.blocked_symbols)
-        if not blocked_exchanges and not blocked_symbols:
+        blocked_exchange_symbols = set(settings.blocked_exchange_symbols)
+        if not blocked_exchanges and not blocked_symbols and not blocked_exchange_symbols:
             return 0
 
         deleted = 0
         for item in await self.list_watch_items():
             if not _auto_watch_matches_blocklist(item, settings):
+                continue
+            await self.db.execute("DELETE FROM negative_basis_watchlist WHERE id = ?", (item.id,))
+            deleted += 1
+        if deleted:
+            await self.db.commit()
+        return deleted
+
+    async def delete_unselected_auto_watch_items(self, keep_ids: set[str]) -> int:
+        deleted = 0
+        for item in await self.list_watch_items():
+            if not item.auto_managed or item.id in keep_ids:
                 continue
             await self.db.execute("DELETE FROM negative_basis_watchlist WHERE id = ?", (item.id,))
             deleted += 1
@@ -1058,6 +1143,7 @@ class NegativeBasisMonitor:
                 enabled=settings.enabled,
                 blocked_exchanges=settings.blocked_exchanges,
                 blocked_symbols=blocked_symbols,
+                blocked_exchange_symbols=settings.blocked_exchange_symbols,
             )
         )
 
@@ -1071,6 +1157,7 @@ class NegativeBasisMonitor:
                 blocked_symbols=[
                     item for item in settings.blocked_symbols if item != normalized_symbol
                 ],
+                blocked_exchange_symbols=settings.blocked_exchange_symbols,
             )
         )
 
@@ -1085,6 +1172,7 @@ class NegativeBasisMonitor:
                 enabled=settings.enabled,
                 blocked_exchanges=blocked_exchanges,
                 blocked_symbols=settings.blocked_symbols,
+                blocked_exchange_symbols=settings.blocked_exchange_symbols,
             )
         )
 
@@ -1098,6 +1186,46 @@ class NegativeBasisMonitor:
                     item for item in settings.blocked_exchanges if item != normalized_exchange
                 ],
                 blocked_symbols=settings.blocked_symbols,
+                blocked_exchange_symbols=settings.blocked_exchange_symbols,
+            )
+        )
+
+    async def block_auto_exchange_symbol(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+    ) -> NegativeBasisAutoScanSettings:
+        key = negative_basis_exchange_symbol_key(exchange, symbol)
+        settings = await self.repo.get_auto_scan_settings()
+        blocked_exchange_symbols = [*settings.blocked_exchange_symbols]
+        if key not in blocked_exchange_symbols:
+            blocked_exchange_symbols.append(key)
+        return await self.update_auto_scan_settings(
+            NegativeBasisAutoScanSettings(
+                enabled=settings.enabled,
+                blocked_exchanges=settings.blocked_exchanges,
+                blocked_symbols=settings.blocked_symbols,
+                blocked_exchange_symbols=blocked_exchange_symbols,
+            )
+        )
+
+    async def unblock_auto_exchange_symbol(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+    ) -> NegativeBasisAutoScanSettings:
+        key = negative_basis_exchange_symbol_key(exchange, symbol)
+        settings = await self.repo.get_auto_scan_settings()
+        return await self.update_auto_scan_settings(
+            NegativeBasisAutoScanSettings(
+                enabled=settings.enabled,
+                blocked_exchanges=settings.blocked_exchanges,
+                blocked_symbols=settings.blocked_symbols,
+                blocked_exchange_symbols=[
+                    item for item in settings.blocked_exchange_symbols if item != key
+                ],
             )
         )
 
@@ -1182,6 +1310,7 @@ class NegativeBasisMonitor:
             self._last_auto_scan_at = now
             self._auto_scan_error = None
             await self._upsert_auto_candidates(candidates, settings=settings)
+            await self.repo.delete_unselected_auto_watch_items({candidate.id for candidate in candidates})
             return candidates
         except Exception as exc:  # noqa: BLE001 - keep existing watchlist monitoring alive.
             self._auto_scan_error = _error_message(exc)
@@ -1200,6 +1329,7 @@ class NegativeBasisMonitor:
             return []
         blocked_exchanges = set(settings.blocked_exchanges)
         blocked_symbols = set(settings.blocked_symbols)
+        blocked_exchange_symbols = set(settings.blocked_exchange_symbols)
         template = NegativeBasisWatchItem(id="auto-template", enabled=True)
         spots_by_symbol: dict[str, list[MarketSnapshot]] = {}
         futures_by_symbol: dict[str, list[MarketSnapshot]] = {}
@@ -1211,9 +1341,13 @@ class NegativeBasisMonitor:
             if market.market_type == MarketType.SPOT:
                 if market.exchange not in NEGATIVE_BASIS_SPOT_EXCHANGES:
                     continue
+                if negative_basis_exchange_symbol_key(market.exchange, market.symbol) in blocked_exchange_symbols:
+                    continue
                 spots_by_symbol.setdefault(market.symbol, []).append(market)
             elif market.market_type == MarketType.FUTURE:
                 if market.exchange not in NEGATIVE_BASIS_FUTURE_EXCHANGES:
+                    continue
+                if negative_basis_exchange_symbol_key(market.exchange, market.symbol) in blocked_exchange_symbols:
                     continue
                 futures_by_symbol.setdefault(market.symbol, []).append(market)
 
@@ -1224,9 +1358,7 @@ class NegativeBasisMonitor:
                     candidate = _auto_candidate(spot, future, template, observed_at=now)
                     if candidate is not None:
                         candidates.append(candidate)
-        return sorted(candidates, key=lambda item: item.spot_premium_pct, reverse=True)[
-            :AUTO_SCAN_MAX_CANDIDATES
-        ]
+        return _best_auto_candidates_by_symbol(candidates)[:AUTO_SCAN_MAX_CANDIDATES]
 
     async def _upsert_auto_candidates(
         self,
