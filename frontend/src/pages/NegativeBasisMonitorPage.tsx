@@ -5,7 +5,8 @@ import {
   PlusOutlined,
   ReloadOutlined,
   SaveOutlined,
-  SearchOutlined
+  SearchOutlined,
+  StopOutlined
 } from "@ant-design/icons";
 import {
   Alert,
@@ -31,12 +32,17 @@ import utc from "dayjs/plugin/utc";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
+  blockNegativeBasisExchange,
+  blockNegativeBasisSymbol,
   collectNegativeBasisWatchItem,
   deleteNegativeBasisWatchItem,
   getNegativeBasisMonitorStatus,
   listNegativeBasisExchanges,
   queryNegativeBasis,
   refreshNegativeBasisAutoScan,
+  unblockNegativeBasisExchange,
+  unblockNegativeBasisSymbol,
+  updateNegativeBasisAutoScanSettings,
   upsertNegativeBasisWatchItem
 } from "../api/client";
 import type {
@@ -383,6 +389,7 @@ export function NegativeBasisMonitorPage() {
   const [analysis, setAnalysis] = useState<NegativeBasisAnalysisResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [autoScanLoading, setAutoScanLoading] = useState(false);
+  const [blockActionLoading, setBlockActionLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [showManualConfig, setShowManualConfig] = useState(false);
   const customSymbols = Form.useWatch("custom_symbols", form);
@@ -430,8 +437,167 @@ export function NegativeBasisMonitorPage() {
     [selectedWatchId, status?.latest_samples]
   );
 
+  const autoScanSettings = status?.auto_scan_settings;
+  const blockedExchanges = autoScanSettings?.blocked_exchanges ?? [];
+  const blockedSymbols = autoScanSettings?.blocked_symbols ?? [];
+
   const exchangeOptionItems = (values: string[]) =>
     values.map((exchange) => ({ label: exchangeText(exchange), value: exchange }));
+
+  const toggleAutoScanEnabled = async (enabled: boolean) => {
+    if (!autoScanSettings) {
+      return;
+    }
+    setBlockActionLoading(true);
+    try {
+      await updateNegativeBasisAutoScanSettings({
+        ...autoScanSettings,
+        enabled,
+        updated_at: nowIso()
+      });
+      message.success(enabled ? "自动扫描已开启" : "自动扫描已暂停");
+      await refresh();
+    } catch (exc) {
+      message.error(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setBlockActionLoading(false);
+    }
+  };
+
+  const blockSymbol = async (symbol: string) => {
+    setBlockActionLoading(true);
+    try {
+      await blockNegativeBasisSymbol(normalizeSymbol(symbol));
+      message.success(`已屏蔽标的 ${shortSymbol(symbol)}`);
+      await refresh();
+    } catch (exc) {
+      message.error(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setBlockActionLoading(false);
+    }
+  };
+
+  const unblockSymbol = async (symbol: string) => {
+    setBlockActionLoading(true);
+    try {
+      await unblockNegativeBasisSymbol(normalizeSymbol(symbol));
+      message.success(`已解除标的 ${shortSymbol(symbol)}`);
+      await refresh();
+    } catch (exc) {
+      message.error(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setBlockActionLoading(false);
+    }
+  };
+
+  const blockExchange = async (exchange: string) => {
+    setBlockActionLoading(true);
+    try {
+      await blockNegativeBasisExchange(exchange);
+      message.success(`已屏蔽交易所 ${exchangeText(exchange)}`);
+      await refresh();
+    } catch (exc) {
+      message.error(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setBlockActionLoading(false);
+    }
+  };
+
+  const unblockExchange = async (exchange: string) => {
+    setBlockActionLoading(true);
+    try {
+      await unblockNegativeBasisExchange(exchange);
+      message.success(`已解除交易所 ${exchangeText(exchange)}`);
+      await refresh();
+    } catch (exc) {
+      message.error(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setBlockActionLoading(false);
+    }
+  };
+
+  const renderBlockButtons = (symbol: string, spotExchange: string, futureExchange: string) => (
+    <Space
+      size={4}
+      wrap
+      className="negative-basis-block-actions"
+      onClick={(event) => event.stopPropagation()}
+    >
+      <Popconfirm
+        title={`屏蔽标的 ${shortSymbol(symbol)}？`}
+        onConfirm={() => void blockSymbol(symbol)}
+      >
+        <Button
+          size="small"
+          danger
+          icon={<StopOutlined />}
+          loading={blockActionLoading}
+          disabled={blockedSymbols.includes(normalizeSymbol(symbol))}
+        >
+          标的
+        </Button>
+      </Popconfirm>
+      <Popconfirm
+        title={`屏蔽交易所 ${exchangeText(spotExchange)}？`}
+        onConfirm={() => void blockExchange(spotExchange)}
+      >
+        <Button
+          size="small"
+          danger
+          loading={blockActionLoading}
+          disabled={blockedExchanges.includes(spotExchange)}
+        >
+          现货所
+        </Button>
+      </Popconfirm>
+      <Popconfirm
+        title={`屏蔽交易所 ${exchangeText(futureExchange)}？`}
+        onConfirm={() => void blockExchange(futureExchange)}
+      >
+        <Button
+          size="small"
+          danger
+          loading={blockActionLoading}
+          disabled={blockedExchanges.includes(futureExchange)}
+        >
+          合约所
+        </Button>
+      </Popconfirm>
+    </Space>
+  );
+
+  const renderBlocklist = () => (
+    <div className="negative-basis-blocklist">
+      <Typography.Text type="secondary">已屏蔽</Typography.Text>
+      {blockedSymbols.map((symbol) => (
+        <Tag
+          key={`symbol-${symbol}`}
+          color="red"
+          closable={!blockActionLoading}
+          onClose={(event) => {
+            event.preventDefault();
+            void unblockSymbol(symbol);
+          }}
+        >
+          标的 {shortSymbol(symbol)}
+        </Tag>
+      ))}
+      {blockedExchanges.map((exchange) => (
+        <Tag
+          key={`exchange-${exchange}`}
+          color="volcano"
+          closable={!blockActionLoading}
+          onClose={(event) => {
+            event.preventDefault();
+            void unblockExchange(exchange);
+          }}
+        >
+          交易所 {exchangeText(exchange)}
+        </Tag>
+      ))}
+      {!blockedSymbols.length && !blockedExchanges.length ? <Tag>无</Tag> : null}
+    </div>
+  );
 
   const readPayload = async (): Promise<NegativeBasisWatchItem> => {
     const values = await form.validateFields();
@@ -567,11 +733,12 @@ export function NegativeBasisMonitorPage() {
     },
     {
       title: "操作",
-      width: 150,
+      width: 340,
       render: (_, item) => (
-        <Space size={4}>
+        <Space size={4} wrap onClick={(event) => event.stopPropagation()}>
           <Button icon={<EditOutlined />} size="small" onClick={() => editWatch(item)} />
           <Button icon={<PlayCircleOutlined />} size="small" onClick={() => void collectNow(item)} />
+          {item.auto_managed ? renderBlockButtons(item.symbol, item.spot_exchange, item.future_exchange) : null}
           <Popconfirm title="删除这个负基差监控？" onConfirm={() => void deleteWatch(item)}>
             <Button icon={<DeleteOutlined />} size="small" danger />
           </Popconfirm>
@@ -605,15 +772,20 @@ export function NegativeBasisMonitorPage() {
     { title: "发现时间", dataIndex: "observed_at", width: 120, render: (value: string) => time(value) },
     {
       title: "操作",
-      width: 96,
+      width: 330,
       render: (_, item) => {
         const watch = status?.watchlist.find((watchItem) => watchItem.id === item.id);
-        return watch ? (
-          <Button size="small" icon={<PlayCircleOutlined />} onClick={() => void collectNow(watch)}>
-            采样
-          </Button>
-        ) : (
-          <Tag>待入池</Tag>
+        return (
+          <Space size={4} wrap onClick={(event) => event.stopPropagation()}>
+            {watch ? (
+              <Button size="small" icon={<PlayCircleOutlined />} onClick={() => void collectNow(watch)}>
+                采样
+              </Button>
+            ) : (
+              <Tag>待入池</Tag>
+            )}
+            {renderBlockButtons(item.symbol, item.spot_exchange, item.future_exchange)}
+          </Space>
         );
       }
     }
@@ -703,8 +875,20 @@ export function NegativeBasisMonitorPage() {
         title="自动发现候选"
         extra={
           <Space wrap>
+            <Switch
+              size="small"
+              checked={autoScanSettings?.enabled ?? false}
+              loading={blockActionLoading}
+              checkedChildren="自动"
+              unCheckedChildren="暂停"
+              onChange={(checked) => void toggleAutoScanEnabled(checked)}
+            />
             <Tag color={status?.auto_scan_enabled ? "green" : undefined}>
-              {status?.auto_scan_enabled ? "自动扫描开启" : "等待行情快照"}
+              {autoScanSettings?.enabled === false
+                ? "自动扫描暂停"
+                : status?.auto_scan_enabled
+                  ? "自动扫描开启"
+                  : "等待行情快照"}
             </Tag>
             <Tag>上次 {time(status?.auto_scan_last_at)}</Tag>
             <Button size="small" icon={<ReloadOutlined />} loading={autoScanLoading} onClick={() => void runAutoScan()}>
@@ -716,13 +900,14 @@ export function NegativeBasisMonitorPage() {
           </Space>
         }
       >
+        {renderBlocklist()}
         <Table
           rowKey="id"
           size="small"
           columns={candidateColumns}
           dataSource={status?.auto_candidates ?? []}
           pagination={{ pageSize: 8 }}
-          scroll={{ x: 960 }}
+          scroll={{ x: 1220 }}
           locale={{ emptyText: <Empty description="暂未发现现货溢价候选" /> }}
         />
       </Card>
@@ -848,6 +1033,7 @@ export function NegativeBasisMonitorPage() {
                 setDraft(item);
               }
             })}
+            scroll={{ x: 1040 }}
           />
         </Card>
         </div>
@@ -866,7 +1052,7 @@ export function NegativeBasisMonitorPage() {
                 setDraft(item);
               }
             })}
-            scroll={{ x: 760 }}
+            scroll={{ x: 1040 }}
           />
         </Card>
       )}

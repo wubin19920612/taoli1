@@ -46,6 +46,41 @@ def utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+class NegativeBasisAutoScanSettings(BaseModel):
+    enabled: bool = Field(default=True)
+    blocked_exchanges: list[str] = Field(default_factory=list)
+    blocked_symbols: list[str] = Field(default_factory=list)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+    @field_validator("blocked_exchanges")
+    @classmethod
+    def normalize_blocked_exchanges(cls, value: list[str]) -> list[str]:
+        allowed = set(NEGATIVE_BASIS_SPOT_EXCHANGES) | set(NEGATIVE_BASIS_FUTURE_EXCHANGES)
+        normalized: list[str] = []
+        for item in value:
+            exchange = item.strip().lower()
+            if not exchange:
+                continue
+            if exchange not in allowed:
+                allowed_text = ", ".join(sorted(allowed))
+                raise ValueError(f"unsupported blocked exchange: {item}; allowed: {allowed_text}")
+            if exchange not in normalized:
+                normalized.append(exchange)
+        return normalized
+
+    @field_validator("blocked_symbols")
+    @classmethod
+    def normalize_blocked_symbols(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for item in value:
+            if not item or not item.strip():
+                continue
+            symbol = normalize_pair_spread_symbol(item)
+            if symbol not in normalized:
+                normalized.append(symbol)
+        return normalized
+
+
 class NegativeBasisWatchItem(BaseModel):
     id: str = Field(default_factory=lambda: uuid4().hex)
     auto_managed: bool = Field(default=False)
@@ -252,6 +287,9 @@ class NegativeBasisAutoCandidate(BaseModel):
 class NegativeBasisMonitorStatus(BaseModel):
     running: bool
     auto_scan_enabled: bool = True
+    auto_scan_settings: NegativeBasisAutoScanSettings = Field(
+        default_factory=NegativeBasisAutoScanSettings
+    )
     auto_scan_last_at: datetime | None = None
     auto_scan_error: str | None = None
     auto_candidate_count: int = 0

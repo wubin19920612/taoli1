@@ -335,6 +335,13 @@ export interface NegativeBasisWatchItem {
   updated_at: string;
 }
 
+export interface NegativeBasisAutoScanSettings {
+  enabled: boolean;
+  blocked_exchanges: string[];
+  blocked_symbols: string[];
+  updated_at: string;
+}
+
 export interface NegativeBasisPoint {
   bucket_at: string;
   spot_close: number;
@@ -449,6 +456,7 @@ export interface NegativeBasisAutoCandidate {
 export interface NegativeBasisMonitorStatus {
   running: boolean;
   auto_scan_enabled: boolean;
+  auto_scan_settings: NegativeBasisAutoScanSettings;
   auto_scan_last_at: string | null;
   auto_scan_error: string | null;
   auto_candidate_count: number;

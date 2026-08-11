@@ -29,6 +29,7 @@ from app.models.negative_basis import (
     NegativeBasisAlertEvent,
     NegativeBasisAnalysisResult,
     NegativeBasisAutoCandidate,
+    NegativeBasisAutoScanSettings,
     NegativeBasisCurrentSnapshot,
     NegativeBasisHourlyStatPoint,
     NegativeBasisMonitorStatus,
@@ -39,7 +40,7 @@ from app.models.negative_basis import (
     NegativeBasisWatchItem,
     utc_now,
 )
-from app.models.pair_spread import PairSpreadQueryResult, PairSpreadValueStats
+from app.models.pair_spread import PairSpreadQueryResult, PairSpreadValueStats, normalize_pair_spread_symbol
 from app.services.pair_spread_query import PairSpreadQueryError, PairSpreadQueryService
 from app.services.snapshot_store import SnapshotStore
 
@@ -51,6 +52,7 @@ AUTO_SCAN_INTERVAL_SECONDS = 60
 AUTO_SCAN_MAX_CANDIDATES = 16
 AUTO_SCAN_MIN_SPOT_VOLUME_24H_USDT = 100_000
 AUTO_COLLECT_MAX_DUE = 6
+NEGATIVE_BASIS_AUTO_SCAN_SETTINGS_KEY = "negative_basis_auto_scan_settings"
 
 
 @dataclass(frozen=True)
@@ -613,6 +615,44 @@ def _auto_candidate(
     )
 
 
+def _auto_candidate_blocked(
+    candidate: NegativeBasisAutoCandidate,
+    settings: NegativeBasisAutoScanSettings,
+) -> bool:
+    return (
+        candidate.symbol in set(settings.blocked_symbols)
+        or candidate.spot_exchange in set(settings.blocked_exchanges)
+        or candidate.future_exchange in set(settings.blocked_exchanges)
+    )
+
+
+def _auto_watch_blocked(
+    item: NegativeBasisWatchItem,
+    settings: NegativeBasisAutoScanSettings,
+) -> bool:
+    if not item.auto_managed:
+        return False
+    return not settings.enabled or _auto_watch_matches_blocklist(item, settings)
+
+
+def _auto_watch_matches_blocklist(
+    item: NegativeBasisWatchItem,
+    settings: NegativeBasisAutoScanSettings,
+) -> bool:
+    if not item.auto_managed:
+        return False
+    symbols = {
+        item.symbol,
+        item.spot_symbol or item.symbol,
+        item.future_symbol or item.symbol,
+    }
+    return (
+        bool(symbols & set(settings.blocked_symbols))
+        or item.spot_exchange in set(settings.blocked_exchanges)
+        or item.future_exchange in set(settings.blocked_exchanges)
+    )
+
+
 class GateContractStatsClient:
     def __init__(self, client: httpx.AsyncClient | None = None) -> None:
         self.client = client or httpx.AsyncClient(
@@ -714,6 +754,38 @@ class NegativeBasisMonitorRepository:
     def __init__(self, db: aiosqlite.Connection):
         self.db = db
 
+    async def get_auto_scan_settings(self) -> NegativeBasisAutoScanSettings:
+        cursor = await self.db.execute(
+            "SELECT payload FROM app_settings WHERE key = ?",
+            (NEGATIVE_BASIS_AUTO_SCAN_SETTINGS_KEY,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return NegativeBasisAutoScanSettings()
+        try:
+            return NegativeBasisAutoScanSettings.model_validate_json(row["payload"])
+        except ValueError:
+            logger.exception("invalid negative basis auto scan settings payload")
+            return NegativeBasisAutoScanSettings()
+
+    async def upsert_auto_scan_settings(
+        self,
+        settings: NegativeBasisAutoScanSettings,
+    ) -> NegativeBasisAutoScanSettings:
+        saved = NegativeBasisAutoScanSettings.model_validate(
+            {**settings.model_dump(), "updated_at": utc_now()}
+        )
+        await self.db.execute(
+            """
+            INSERT INTO app_settings (key, payload)
+            VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
+            """,
+            (NEGATIVE_BASIS_AUTO_SCAN_SETTINGS_KEY, saved.model_dump_json()),
+        )
+        await self.db.commit()
+        return saved
+
     async def upsert_watch_item(self, item: NegativeBasisWatchItem) -> NegativeBasisWatchItem:
         saved = item.model_copy(update={"updated_at": utc_now()})
         await self.db.execute(
@@ -756,6 +828,25 @@ class NegativeBasisMonitorRepository:
     async def delete_watch_item(self, item_id: str) -> None:
         await self.db.execute("DELETE FROM negative_basis_watchlist WHERE id = ?", (item_id,))
         await self.db.commit()
+
+    async def delete_auto_watch_items_matching(
+        self,
+        settings: NegativeBasisAutoScanSettings,
+    ) -> int:
+        blocked_exchanges = set(settings.blocked_exchanges)
+        blocked_symbols = set(settings.blocked_symbols)
+        if not blocked_exchanges and not blocked_symbols:
+            return 0
+
+        deleted = 0
+        for item in await self.list_watch_items():
+            if not _auto_watch_matches_blocklist(item, settings):
+                continue
+            await self.db.execute("DELETE FROM negative_basis_watchlist WHERE id = ?", (item.id,))
+            deleted += 1
+        if deleted:
+            await self.db.commit()
+        return deleted
 
     async def insert_sample(self, sample: NegativeBasisSignalSample) -> None:
         await self.db.execute(
@@ -940,6 +1031,76 @@ class NegativeBasisMonitor:
     async def aclose(self) -> None:
         await self.gate_stats_client.aclose()
 
+    async def update_auto_scan_settings(
+        self,
+        settings: NegativeBasisAutoScanSettings,
+    ) -> NegativeBasisAutoScanSettings:
+        saved = await self.repo.upsert_auto_scan_settings(settings)
+        await self.repo.delete_auto_watch_items_matching(saved)
+        if saved.enabled:
+            self._auto_candidates = [
+                candidate
+                for candidate in self._auto_candidates
+                if not _auto_candidate_blocked(candidate, saved)
+            ]
+        else:
+            self._auto_candidates = []
+        return saved
+
+    async def block_auto_symbol(self, symbol: str) -> NegativeBasisAutoScanSettings:
+        normalized_symbol = normalize_pair_spread_symbol(symbol)
+        settings = await self.repo.get_auto_scan_settings()
+        blocked_symbols = [*settings.blocked_symbols]
+        if normalized_symbol not in blocked_symbols:
+            blocked_symbols.append(normalized_symbol)
+        return await self.update_auto_scan_settings(
+            NegativeBasisAutoScanSettings(
+                enabled=settings.enabled,
+                blocked_exchanges=settings.blocked_exchanges,
+                blocked_symbols=blocked_symbols,
+            )
+        )
+
+    async def unblock_auto_symbol(self, symbol: str) -> NegativeBasisAutoScanSettings:
+        normalized_symbol = normalize_pair_spread_symbol(symbol)
+        settings = await self.repo.get_auto_scan_settings()
+        return await self.update_auto_scan_settings(
+            NegativeBasisAutoScanSettings(
+                enabled=settings.enabled,
+                blocked_exchanges=settings.blocked_exchanges,
+                blocked_symbols=[
+                    item for item in settings.blocked_symbols if item != normalized_symbol
+                ],
+            )
+        )
+
+    async def block_auto_exchange(self, exchange: str) -> NegativeBasisAutoScanSettings:
+        normalized_exchange = exchange.strip().lower()
+        settings = await self.repo.get_auto_scan_settings()
+        blocked_exchanges = [*settings.blocked_exchanges]
+        if normalized_exchange not in blocked_exchanges:
+            blocked_exchanges.append(normalized_exchange)
+        return await self.update_auto_scan_settings(
+            NegativeBasisAutoScanSettings(
+                enabled=settings.enabled,
+                blocked_exchanges=blocked_exchanges,
+                blocked_symbols=settings.blocked_symbols,
+            )
+        )
+
+    async def unblock_auto_exchange(self, exchange: str) -> NegativeBasisAutoScanSettings:
+        normalized_exchange = exchange.strip().lower()
+        settings = await self.repo.get_auto_scan_settings()
+        return await self.update_auto_scan_settings(
+            NegativeBasisAutoScanSettings(
+                enabled=settings.enabled,
+                blocked_exchanges=[
+                    item for item in settings.blocked_exchanges if item != normalized_exchange
+                ],
+                blocked_symbols=settings.blocked_symbols,
+            )
+        )
+
     async def run(self, stop_event: asyncio.Event) -> None:
         self._running = True
         prune_counter = 0
@@ -968,7 +1129,12 @@ class NegativeBasisMonitor:
 
     async def collect_due(self) -> list[NegativeBasisAnalysisResult]:
         now = utc_now()
-        items = [item for item in await self.repo.list_watch_items() if item.enabled]
+        settings = await self.repo.get_auto_scan_settings()
+        items = [
+            item
+            for item in await self.repo.list_watch_items()
+            if item.enabled and not _auto_watch_blocked(item, settings)
+        ]
         due_items = [
             item
             for item in items
@@ -992,6 +1158,12 @@ class NegativeBasisMonitor:
             self._auto_candidates = []
             return []
         now = utc_now()
+        settings = await self.repo.get_auto_scan_settings()
+        if not settings.enabled:
+            self._auto_candidates = []
+            self._last_auto_scan_at = now
+            self._auto_scan_error = None
+            return []
         if (
             not force
             and self._last_auto_scan_at is not None
@@ -999,12 +1171,17 @@ class NegativeBasisMonitor:
         ):
             return self._auto_candidates
         try:
+            await self.repo.delete_auto_watch_items_matching(settings)
             markets = self.snapshot_store.get_markets()
-            candidates = self._discover_auto_candidates_from_markets(markets, now=now)
+            candidates = self._discover_auto_candidates_from_markets(
+                markets,
+                now=now,
+                settings=settings,
+            )
             self._auto_candidates = candidates
             self._last_auto_scan_at = now
             self._auto_scan_error = None
-            await self._upsert_auto_candidates(candidates)
+            await self._upsert_auto_candidates(candidates, settings=settings)
             return candidates
         except Exception as exc:  # noqa: BLE001 - keep existing watchlist monitoring alive.
             self._auto_scan_error = _error_message(exc)
@@ -1016,12 +1193,20 @@ class NegativeBasisMonitor:
         markets: list[MarketSnapshot],
         *,
         now: datetime,
+        settings: NegativeBasisAutoScanSettings | None = None,
     ) -> list[NegativeBasisAutoCandidate]:
+        settings = settings or NegativeBasisAutoScanSettings()
+        if not settings.enabled:
+            return []
+        blocked_exchanges = set(settings.blocked_exchanges)
+        blocked_symbols = set(settings.blocked_symbols)
         template = NegativeBasisWatchItem(id="auto-template", enabled=True)
         spots_by_symbol: dict[str, list[MarketSnapshot]] = {}
         futures_by_symbol: dict[str, list[MarketSnapshot]] = {}
         for market in markets:
             if not market.symbol.endswith("USDT"):
+                continue
+            if market.symbol in blocked_symbols or market.exchange in blocked_exchanges:
                 continue
             if market.market_type == MarketType.SPOT:
                 if market.exchange not in NEGATIVE_BASIS_SPOT_EXCHANGES:
@@ -1043,8 +1228,16 @@ class NegativeBasisMonitor:
             :AUTO_SCAN_MAX_CANDIDATES
         ]
 
-    async def _upsert_auto_candidates(self, candidates: list[NegativeBasisAutoCandidate]) -> None:
+    async def _upsert_auto_candidates(
+        self,
+        candidates: list[NegativeBasisAutoCandidate],
+        *,
+        settings: NegativeBasisAutoScanSettings | None = None,
+    ) -> None:
+        settings = settings or NegativeBasisAutoScanSettings()
         for candidate in candidates:
+            if _auto_candidate_blocked(candidate, settings):
+                continue
             existing = await self.repo.get_watch_item(candidate.id)
             if existing is not None and not existing.auto_managed:
                 continue
@@ -1140,15 +1333,28 @@ class NegativeBasisMonitor:
 
     async def status(self) -> NegativeBasisMonitorStatus:
         watchlist = await self.repo.list_watch_items()
+        settings = await self.repo.get_auto_scan_settings()
+        auto_candidates = (
+            [
+                candidate
+                for candidate in self._auto_candidates
+                if not _auto_candidate_blocked(candidate, settings)
+            ]
+            if settings.enabled
+            else []
+        )
         return NegativeBasisMonitorStatus(
             running=self.running(),
-            auto_scan_enabled=self.snapshot_store is not None,
+            auto_scan_enabled=self.snapshot_store is not None and settings.enabled,
+            auto_scan_settings=settings,
             auto_scan_last_at=self._last_auto_scan_at,
             auto_scan_error=self._auto_scan_error,
-            auto_candidate_count=len(self._auto_candidates),
-            auto_candidates=self._auto_candidates,
+            auto_candidate_count=len(auto_candidates),
+            auto_candidates=auto_candidates,
             watch_count=len(watchlist),
-            enabled_watch_count=sum(1 for item in watchlist if item.enabled),
+            enabled_watch_count=sum(
+                1 for item in watchlist if item.enabled and not _auto_watch_blocked(item, settings)
+            ),
             sample_count=await self.repo.count_samples(),
             event_count=await self.repo.count_events(),
             latest_error=self._latest_error,

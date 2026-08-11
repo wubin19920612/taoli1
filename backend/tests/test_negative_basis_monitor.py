@@ -8,7 +8,7 @@ from app.db.database import connect_database
 from app.db.schema import initialize_schema
 from app.main import create_app
 from app.models.market import MarketSnapshot, MarketType
-from app.models.negative_basis import NegativeBasisWatchItem
+from app.models.negative_basis import NegativeBasisAutoScanSettings, NegativeBasisWatchItem
 from app.models.pair_spread import (
     PairSpreadCurrentLeg,
     PairSpreadCurrentSnapshot,
@@ -171,6 +171,16 @@ def test_negative_basis_watch_item_defaults_to_same_symbol() -> None:
     assert item.future_leg().market_type == MarketType.FUTURE
 
 
+def test_negative_basis_auto_scan_settings_normalizes_blocklist() -> None:
+    settings = NegativeBasisAutoScanSettings(
+        blocked_exchanges=["Gate", "gate", " Binance "],
+        blocked_symbols=["prom", "PROM_USDT", " dexe-usdt "],
+    )
+
+    assert settings.blocked_exchanges == ["gate", "binance"]
+    assert settings.blocked_symbols == ["PROMUSDT", "DEXEUSDT"]
+
+
 def test_negative_basis_analysis_detects_strong_prom_like_setup() -> None:
     item = NegativeBasisWatchItem(symbol="PROM", spot_exchange="binance", future_exchange="gate")
 
@@ -295,6 +305,73 @@ async def test_negative_basis_monitor_auto_discovers_spot_premium_candidates() -
     assert watchlist[0].future_exchange == "gate"
 
 
+@pytest.mark.asyncio
+async def test_negative_basis_monitor_blocklist_removes_auto_items_but_keeps_manual() -> None:
+    db = await connect_database(":memory:")
+    await initialize_schema(db)
+    repo = NegativeBasisMonitorRepository(db)
+    store = SnapshotStore()
+    observed_at = datetime(2026, 8, 11, 0, 6, tzinfo=UTC)
+    store.set_markets(
+        [
+            MarketSnapshot(
+                symbol="PROMUSDT",
+                base="PROM",
+                exchange="binance",
+                market_type=MarketType.SPOT,
+                bid=1.039,
+                ask=1.041,
+                volume_24h_usdt=2_000_000,
+                timestamp=observed_at,
+                raw_symbol="PROMUSDT",
+            ),
+            MarketSnapshot(
+                symbol="PROMUSDT",
+                base="PROM",
+                exchange="gate",
+                market_type=MarketType.FUTURE,
+                bid=0.999,
+                ask=1.001,
+                mark_price=1.0,
+                volume_24h_usdt=800_000,
+                timestamp=observed_at,
+                raw_symbol="PROM_USDT",
+            ),
+        ]
+    )
+    manual = NegativeBasisWatchItem(
+        id="manual-prom",
+        symbol="PROM",
+        spot_exchange="binance",
+        future_exchange="gate",
+    )
+    await repo.upsert_watch_item(manual)
+    monitor = NegativeBasisMonitor(
+        repo,
+        snapshot_store=store,
+        gate_stats_client=FakeGateStatsClient(),  # type: ignore[arg-type]
+    )
+
+    try:
+        first_candidates = await monitor.discover_auto_candidates(force=True)
+        watchlist_after_scan = await repo.list_watch_items()
+        settings = await monitor.block_auto_symbol("prom")
+        second_candidates = await monitor.discover_auto_candidates(force=True)
+        watchlist_after_block = await repo.list_watch_items()
+    finally:
+        await monitor.aclose()
+        await db.close()
+
+    assert len(first_candidates) == 1
+    assert {item.id for item in watchlist_after_scan} == {
+        "manual-prom",
+        "auto:binance:gate:PROMUSDT",
+    }
+    assert settings.blocked_symbols == ["PROMUSDT"]
+    assert second_candidates == []
+    assert [item.id for item in watchlist_after_block] == ["manual-prom"]
+
+
 def test_negative_basis_monitor_api_saves_watch_item() -> None:
     app = create_app(
         settings=Settings(
@@ -352,3 +429,41 @@ def test_negative_basis_monitor_api_saves_watch_item() -> None:
     assert payload["future_exchange"] == "gate"
     assert status_response.status_code == 200
     assert status_response.json()["watch_count"] == 1
+
+
+def test_negative_basis_monitor_api_updates_auto_scan_blocklist() -> None:
+    app = create_app(
+        settings=Settings(
+            dashboard_password="secret",
+            database_url="sqlite:///:memory:",
+        )
+    )
+    headers = {"X-Dashboard-Password": "secret"}
+
+    with TestClient(app) as client:
+        block_symbol_response = client.post(
+            "/api/negative-basis-monitor/auto-scan/block-symbol",
+            headers=headers,
+            params={"symbol": "prom"},
+        )
+        block_exchange_response = client.post(
+            "/api/negative-basis-monitor/auto-scan/block-exchange",
+            headers=headers,
+            params={"exchange": "Gate"},
+        )
+        status_response = client.get("/api/negative-basis-monitor/status")
+        unblock_symbol_response = client.delete(
+            "/api/negative-basis-monitor/auto-scan/block-symbol",
+            headers=headers,
+            params={"symbol": "PROMUSDT"},
+        )
+
+    assert block_symbol_response.status_code == 200
+    assert block_symbol_response.json()["blocked_symbols"] == ["PROMUSDT"]
+    assert block_exchange_response.status_code == 200
+    assert block_exchange_response.json()["blocked_exchanges"] == ["gate"]
+    assert status_response.status_code == 200
+    assert status_response.json()["auto_scan_settings"]["blocked_symbols"] == ["PROMUSDT"]
+    assert status_response.json()["auto_scan_settings"]["blocked_exchanges"] == ["gate"]
+    assert unblock_symbol_response.status_code == 200
+    assert unblock_symbol_response.json()["blocked_symbols"] == []

@@ -12,6 +12,7 @@ from app.models.negative_basis import (
     NegativeBasisAlertEvent,
     NegativeBasisAnalysisResult,
     NegativeBasisAutoCandidate,
+    NegativeBasisAutoScanSettings,
     NegativeBasisMonitorStatus,
     NegativeBasisSignalSample,
     NegativeBasisWatchItem,
@@ -93,6 +94,69 @@ async def refresh_negative_basis_auto_scan(
 ) -> list[NegativeBasisAutoCandidate]:
     verify_dashboard_password(request.app.state.settings.dashboard_password, password)
     return await _monitor(request).discover_auto_candidates(force=True)
+
+
+@router.get("/auto-scan/settings", response_model=NegativeBasisAutoScanSettings)
+async def get_negative_basis_auto_scan_settings(
+    request: Request,
+) -> NegativeBasisAutoScanSettings:
+    return await _monitor(request).repo.get_auto_scan_settings()
+
+
+@router.put("/auto-scan/settings", response_model=NegativeBasisAutoScanSettings)
+async def update_negative_basis_auto_scan_settings(
+    settings: NegativeBasisAutoScanSettings,
+    request: Request,
+    password: str | None = Depends(dashboard_password_header),
+) -> NegativeBasisAutoScanSettings:
+    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
+    return await _monitor(request).update_auto_scan_settings(settings)
+
+
+@router.post("/auto-scan/block-symbol", response_model=NegativeBasisAutoScanSettings)
+async def block_negative_basis_auto_symbol(
+    request: Request,
+    symbol: str = Query(...),
+    password: str | None = Depends(dashboard_password_header),
+) -> NegativeBasisAutoScanSettings:
+    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
+    try:
+        return await _monitor(request).block_auto_symbol(symbol)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.delete("/auto-scan/block-symbol", response_model=NegativeBasisAutoScanSettings)
+async def unblock_negative_basis_auto_symbol(
+    request: Request,
+    symbol: str = Query(...),
+    password: str | None = Depends(dashboard_password_header),
+) -> NegativeBasisAutoScanSettings:
+    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
+    return await _monitor(request).unblock_auto_symbol(symbol)
+
+
+@router.post("/auto-scan/block-exchange", response_model=NegativeBasisAutoScanSettings)
+async def block_negative_basis_auto_exchange(
+    request: Request,
+    exchange: str = Query(...),
+    password: str | None = Depends(dashboard_password_header),
+) -> NegativeBasisAutoScanSettings:
+    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
+    try:
+        return await _monitor(request).block_auto_exchange(exchange)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.delete("/auto-scan/block-exchange", response_model=NegativeBasisAutoScanSettings)
+async def unblock_negative_basis_auto_exchange(
+    request: Request,
+    exchange: str = Query(...),
+    password: str | None = Depends(dashboard_password_header),
+) -> NegativeBasisAutoScanSettings:
+    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
+    return await _monitor(request).unblock_auto_exchange(exchange)
 
 
 @router.get("/samples", response_model=list[NegativeBasisSignalSample])

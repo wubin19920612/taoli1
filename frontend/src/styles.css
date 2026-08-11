@@ -3524,6 +3524,18 @@ body {
   background: #eef8f6 !important;
 }
 
+.negative-basis-blocklist {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.negative-basis-block-actions {
+  row-gap: 4px;
+}
+
 .negative-basis-reasons {
   display: flex;
   flex-wrap: wrap;
