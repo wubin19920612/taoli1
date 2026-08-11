@@ -120,7 +120,8 @@ const defaultRiskSettings: RiskSettings = {
       exchange: "gate",
       symbol: "EDGEXUSDT",
       canonical_symbol: "EDGEUSDT",
-      market_type: null
+      market_type: null,
+      price_multiplier: 1
     }
   ]
 };
@@ -203,8 +204,8 @@ const exchangeOptions = ["binance", "okx", "bybit", "gate", "bitget", "htx", "as
   value: item
 }));
 const marketTypeOptions = [
-  { label: "spot", value: "spot" },
-  { label: "future", value: "future" }
+  { label: "现货", value: "spot" },
+  { label: "合约", value: "future" }
 ];
 const serviceNames: ServiceName[] = ["frontend", "backend"];
 const serviceLabels: Record<ServiceName, string> = {
@@ -262,7 +263,11 @@ function normalizeSymbolAliases(values?: SymbolAlias[]): SymbolAlias[] {
       exchange: (item.exchange ?? "").trim().toLowerCase(),
       symbol: normalizeAliasSymbol(item.symbol),
       canonical_symbol: normalizeAliasSymbol(item.canonical_symbol),
-      market_type: item.market_type ?? null
+      market_type: item.market_type ?? null,
+      price_multiplier:
+        Number.isFinite(Number(item.price_multiplier)) && Number(item.price_multiplier) > 0
+          ? Number(item.price_multiplier)
+          : 1
     }))
     .filter((item) => item.exchange && item.symbol && item.canonical_symbol);
 }
@@ -772,51 +777,66 @@ export function SettingsPage() {
             {(fields, { add, remove }) => (
               <div className="symbol-alias-list">
                 <Space className="symbol-alias-header" align="center" wrap>
-                  <Typography.Title level={5}>Symbol aliases</Typography.Title>
+                  <Typography.Title level={5}>币名映射</Typography.Title>
                   <Button
                     type="dashed"
                     icon={<PlusOutlined />}
-                    onClick={() => add({ exchange: "gate", symbol: "", canonical_symbol: "", market_type: null })}
+                    onClick={() =>
+                      add({
+                        exchange: "gate",
+                        symbol: "",
+                        canonical_symbol: "",
+                        market_type: null,
+                        price_multiplier: 1
+                      })
+                    }
                   >
-                    Add alias
+                    添加映射
                   </Button>
                 </Space>
                 {fields.map((field) => (
                   <Space key={field.key} align="start" wrap className="symbol-alias-row">
                     <Form.Item
-                      label="Exchange"
+                      label="交易所"
                       name={[field.name, "exchange"]}
                       rules={[{ required: true }]}
                     >
                       <Select options={exchangeOptions} className="alias-exchange-input" />
                     </Form.Item>
                     <Form.Item
-                      label="Exchange symbol"
+                      label="原始名"
                       name={[field.name, "symbol"]}
                       rules={[{ required: true }]}
                     >
-                      <Input placeholder="EDGEXUSDT" className="alias-symbol-input" />
+                      <Input placeholder="NEX" className="alias-symbol-input" />
                     </Form.Item>
                     <Form.Item
-                      label="Canonical symbol"
+                      label="映射名"
                       name={[field.name, "canonical_symbol"]}
                       rules={[{ required: true }]}
                     >
-                      <Input placeholder="EDGEUSDT" className="alias-symbol-input" />
+                      <Input placeholder="10000NEX" className="alias-symbol-input" />
                     </Form.Item>
-                    <Form.Item label="Market type" name={[field.name, "market_type"]}>
+                    <Form.Item label="类型" name={[field.name, "market_type"]}>
                       <Select
                         allowClear
                         options={marketTypeOptions}
-                        placeholder="all"
+                        placeholder="全部"
                         className="alias-market-type-input"
                       />
+                    </Form.Item>
+                    <Form.Item
+                      label="价格汇率"
+                      name={[field.name, "price_multiplier"]}
+                      rules={[{ required: true, type: "number", min: 0.000001 }]}
+                    >
+                      <InputNumber min={0.000001} step={1} className="alias-symbol-input" />
                     </Form.Item>
                     <Button
                       type="text"
                       danger
                       icon={<DeleteOutlined />}
-                      aria-label="Remove alias"
+                      aria-label="删除映射"
                       onClick={() => remove(field.name)}
                     />
                   </Space>

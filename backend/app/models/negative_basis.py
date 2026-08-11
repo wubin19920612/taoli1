@@ -307,6 +307,9 @@ class NegativeBasisAutoCandidate(BaseModel):
     symbol: str
     spot_exchange: str
     future_exchange: str
+    spot_symbol: str | None = None
+    future_symbol: str | None = None
+    future_multiplier: float = Field(default=1.0, gt=0)
     signal_level: NegativeBasisSignalLevel = "none"
     selection_score: float = 0
     selection_reasons: list[str] = Field(default_factory=list)

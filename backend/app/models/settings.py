@@ -28,6 +28,7 @@ class SymbolAlias(BaseModel):
     symbol: str
     canonical_symbol: str
     market_type: MarketType | None = None
+    price_multiplier: float = Field(default=1.0, gt=0)
 
     @field_validator("exchange")
     @classmethod
@@ -49,6 +50,7 @@ def default_symbol_aliases() -> list[SymbolAlias]:
             exchange="gate",
             symbol="EDGEXUSDT",
             canonical_symbol="EDGEUSDT",
+            price_multiplier=1,
         )
     ]
 

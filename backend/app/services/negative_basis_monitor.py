@@ -560,6 +560,41 @@ def _market_price(market: MarketSnapshot) -> float | None:
     return (bid + ask) / 2
 
 
+def _market_original_symbol(market: MarketSnapshot) -> str:
+    return market.symbol_alias_original_symbol or market.symbol
+
+
+def _market_alias_multiplier(market: MarketSnapshot) -> float:
+    multiplier = market.symbol_alias_price_multiplier
+    return multiplier if multiplier > 0 else 1.0
+
+
+def _market_symbols(market: MarketSnapshot) -> set[str]:
+    return {market.symbol, _market_original_symbol(market)}
+
+
+def _market_exchange_symbol_blocked(
+    market: MarketSnapshot,
+    blocked_exchange_symbols: set[str],
+) -> bool:
+    return (
+        negative_basis_exchange_symbol_key(market.exchange, _market_original_symbol(market))
+        in blocked_exchange_symbols
+    )
+
+
+def _future_multiplier_from_aliases(spot: MarketSnapshot, future: MarketSnapshot) -> float:
+    return _market_alias_multiplier(spot) / _market_alias_multiplier(future)
+
+
+def _alias_reason(label: str, market: MarketSnapshot) -> str | None:
+    original_symbol = _market_original_symbol(market)
+    multiplier = _market_alias_multiplier(market)
+    if original_symbol == market.symbol and abs(multiplier - 1) < 1e-12:
+        return None
+    return f"{label}映射 {original_symbol}->{market.symbol}，汇率 {multiplier:g}"
+
+
 def _spot_premium_pct(spot_price: float, future_price: float) -> float:
     return (spot_price - future_price) / ((spot_price + future_price) / 2) * 100
 
@@ -588,12 +623,27 @@ def _auto_candidate_selection_reasons(
     premium_pct: float,
     spot_volume_24h_usdt: float | None,
     future_volume_24h_usdt: float | None,
+    spot: MarketSnapshot,
+    future: MarketSnapshot,
+    future_multiplier: float,
 ) -> list[str]:
-    return [
+    reasons = [
         f"现货溢价 {_fmt_pct(premium_pct, 3)}",
         f"现货24h {_fmt_usdt(spot_volume_24h_usdt)}",
         f"合约24h {_fmt_usdt(future_volume_24h_usdt)}",
     ]
+    alias_reasons = [
+        reason
+        for reason in (
+            _alias_reason("现货", spot),
+            _alias_reason("合约", future),
+        )
+        if reason is not None
+    ]
+    if alias_reasons:
+        reasons.extend(alias_reasons)
+        reasons.append(f"采样合约倍率 {future_multiplier:g}")
+    return reasons
 
 
 def _auto_watch_id(symbol: str, spot_exchange: str, future_exchange: str) -> str:
@@ -638,17 +688,26 @@ def _auto_candidate(
         spot_volume_24h_usdt=spot.volume_24h_usdt,
         future_volume_24h_usdt=future.volume_24h_usdt,
     )
+    spot_symbol = _market_original_symbol(spot)
+    future_symbol = _market_original_symbol(future)
+    future_multiplier = _future_multiplier_from_aliases(spot, future)
     return NegativeBasisAutoCandidate(
         id=_auto_watch_id(spot.symbol, spot.exchange, future.exchange),
         symbol=spot.symbol,
         spot_exchange=spot.exchange,
         future_exchange=future.exchange,
+        spot_symbol=spot_symbol,
+        future_symbol=future_symbol,
+        future_multiplier=future_multiplier,
         signal_level=_auto_signal_level(premium_pct, item),
         selection_score=selection_score,
         selection_reasons=_auto_candidate_selection_reasons(
             premium_pct=premium_pct,
             spot_volume_24h_usdt=spot.volume_24h_usdt,
             future_volume_24h_usdt=future.volume_24h_usdt,
+            spot=spot,
+            future=future,
+            future_multiplier=future_multiplier,
         ),
         spot_premium_pct=premium_pct,
         spot_price=spot_price,
@@ -683,14 +742,26 @@ def _auto_candidate_blocked(
     candidate: NegativeBasisAutoCandidate,
     settings: NegativeBasisAutoScanSettings,
 ) -> bool:
+    symbols = {
+        candidate.symbol,
+        candidate.spot_symbol or candidate.symbol,
+        candidate.future_symbol or candidate.symbol,
+    }
+    exchange_symbols = {
+        negative_basis_exchange_symbol_key(
+            candidate.spot_exchange,
+            candidate.spot_symbol or candidate.symbol,
+        ),
+        negative_basis_exchange_symbol_key(
+            candidate.future_exchange,
+            candidate.future_symbol or candidate.symbol,
+        ),
+    }
     return (
-        candidate.symbol in set(settings.blocked_symbols)
+        bool(symbols & set(settings.blocked_symbols))
         or candidate.spot_exchange in set(settings.blocked_exchanges)
         or candidate.future_exchange in set(settings.blocked_exchanges)
-        or negative_basis_exchange_symbol_key(candidate.spot_exchange, candidate.symbol)
-        in set(settings.blocked_exchange_symbols)
-        or negative_basis_exchange_symbol_key(candidate.future_exchange, candidate.symbol)
-        in set(settings.blocked_exchange_symbols)
+        or bool(exchange_symbols & set(settings.blocked_exchange_symbols))
     )
 
 
@@ -1336,18 +1407,18 @@ class NegativeBasisMonitor:
         for market in markets:
             if not market.symbol.endswith("USDT"):
                 continue
-            if market.symbol in blocked_symbols or market.exchange in blocked_exchanges:
+            if _market_symbols(market) & blocked_symbols or market.exchange in blocked_exchanges:
                 continue
             if market.market_type == MarketType.SPOT:
                 if market.exchange not in NEGATIVE_BASIS_SPOT_EXCHANGES:
                     continue
-                if negative_basis_exchange_symbol_key(market.exchange, market.symbol) in blocked_exchange_symbols:
+                if _market_exchange_symbol_blocked(market, blocked_exchange_symbols):
                     continue
                 spots_by_symbol.setdefault(market.symbol, []).append(market)
             elif market.market_type == MarketType.FUTURE:
                 if market.exchange not in NEGATIVE_BASIS_FUTURE_EXCHANGES:
                     continue
-                if negative_basis_exchange_symbol_key(market.exchange, market.symbol) in blocked_exchange_symbols:
+                if _market_exchange_symbol_blocked(market, blocked_exchange_symbols):
                     continue
                 futures_by_symbol.setdefault(market.symbol, []).append(market)
 
@@ -1380,9 +1451,9 @@ class NegativeBasisMonitor:
                 symbol=candidate.symbol,
                 spot_exchange=candidate.spot_exchange,
                 future_exchange=candidate.future_exchange,
-                spot_symbol=candidate.symbol,
-                future_symbol=candidate.symbol,
-                future_multiplier=1,
+                spot_symbol=candidate.spot_symbol or candidate.symbol,
+                future_symbol=candidate.future_symbol or candidate.symbol,
+                future_multiplier=candidate.future_multiplier,
                 interval_seconds=60,
                 lookback_hours=4,
                 note="auto discovered spot-premium candidate",
@@ -1394,9 +1465,9 @@ class NegativeBasisMonitor:
                     "symbol": candidate.symbol,
                     "spot_exchange": candidate.spot_exchange,
                     "future_exchange": candidate.future_exchange,
-                    "spot_symbol": candidate.symbol,
-                    "future_symbol": candidate.symbol,
-                    "future_multiplier": 1,
+                    "spot_symbol": candidate.spot_symbol or candidate.symbol,
+                    "future_symbol": candidate.future_symbol or candidate.symbol,
+                    "future_multiplier": candidate.future_multiplier,
                     "updated_at": utc_now(),
                 }
             )

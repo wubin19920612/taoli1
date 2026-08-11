@@ -60,6 +60,7 @@ export interface SymbolAlias {
   symbol: string;
   canonical_symbol: string;
   market_type?: MarketType | null;
+  price_multiplier: number;
 }
 
 export interface ExchangePollState {
@@ -91,6 +92,8 @@ export interface MarketSnapshot {
   index_price?: number | null;
   timestamp: string;
   raw_symbol: string;
+  symbol_alias_original_symbol?: string | null;
+  symbol_alias_price_multiplier?: number | null;
 }
 
 export interface SecondLevelSamplingConfig {
@@ -445,6 +448,9 @@ export interface NegativeBasisAutoCandidate {
   symbol: string;
   spot_exchange: string;
   future_exchange: string;
+  spot_symbol?: string | null;
+  future_symbol?: string | null;
+  future_multiplier: number;
   signal_level: NegativeBasisSignalLevel;
   selection_score: number;
   selection_reasons: string[];

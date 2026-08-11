@@ -65,6 +65,7 @@ async def test_settings_repository_defaults() -> None:
     assert settings.symbol_aliases[0].exchange == "gate"
     assert settings.symbol_aliases[0].symbol == "EDGEXUSDT"
     assert settings.symbol_aliases[0].canonical_symbol == "EDGEUSDT"
+    assert settings.symbol_aliases[0].price_multiplier == 1
 
 
 @pytest.mark.asyncio

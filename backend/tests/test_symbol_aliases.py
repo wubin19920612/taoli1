@@ -1,5 +1,7 @@
 from datetime import UTC, datetime
 
+import pytest
+
 from app.models.market import MarketSnapshot, MarketType
 from app.models.settings import RiskSettings, SymbolAlias
 from app.services.spread_engine import build_opportunities
@@ -36,6 +38,8 @@ def test_default_symbol_alias_maps_gate_edgex_to_edge() -> None:
     assert aliased[0].symbol == "EDGEUSDT"
     assert aliased[0].base == "EDGE"
     assert aliased[0].raw_symbol == "EDGEX_USDT"
+    assert aliased[0].symbol_alias_original_symbol == "EDGEXUSDT"
+    assert aliased[0].symbol_alias_price_multiplier == 1
     assert aliased[1].symbol == "EDGEXUSDT"
 
 
@@ -53,6 +57,43 @@ def test_symbol_alias_normalizes_case_and_optional_market_type() -> None:
 
     assert aliased[0].symbol == "EDGEXUSDT"
     assert aliased[1].symbol == "EDGEUSDT"
+
+
+def test_symbol_alias_price_multiplier_scales_prices_but_not_usdt_volume() -> None:
+    nex = snapshot("bitget", "NEXUSDT", MarketType.SPOT, "NEXUSDT").model_copy(
+        update={
+            "bid": 0.0101,
+            "ask": 0.0102,
+            "bid_size": 20_000,
+            "ask_size": 30_000,
+            "mark_price": None,
+            "index_price": 0.01015,
+            "volume_24h_usdt": 123_456,
+        }
+    )
+    aliased = apply_symbol_aliases(
+        [nex],
+        [
+            SymbolAlias(
+                exchange="bitget",
+                symbol="NEX",
+                canonical_symbol="10000NEX",
+                market_type=MarketType.SPOT,
+                price_multiplier=10_000,
+            )
+        ],
+    )
+
+    assert aliased[0].symbol == "10000NEXUSDT"
+    assert aliased[0].base == "10000NEX"
+    assert aliased[0].bid == pytest.approx(101)
+    assert aliased[0].ask == pytest.approx(102)
+    assert aliased[0].bid_size == pytest.approx(2)
+    assert aliased[0].ask_size == pytest.approx(3)
+    assert aliased[0].index_price == pytest.approx(101.5)
+    assert aliased[0].volume_24h_usdt == pytest.approx(123_456)
+    assert aliased[0].symbol_alias_original_symbol == "NEXUSDT"
+    assert aliased[0].symbol_alias_price_multiplier == pytest.approx(10_000)
 
 
 def test_alias_enables_cross_exchange_opportunity_with_raw_leg_symbols() -> None:

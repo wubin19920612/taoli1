@@ -38,6 +38,7 @@ import {
   blockNegativeBasisSymbol,
   collectNegativeBasisWatchItem,
   deleteNegativeBasisWatchItem,
+  getRiskSettings,
   getNegativeBasisMonitorStatus,
   listNegativeBasisExchanges,
   queryNegativeBasis,
@@ -46,9 +47,11 @@ import {
   unblockNegativeBasisExchangeSymbol,
   unblockNegativeBasisSymbol,
   updateNegativeBasisAutoScanSettings,
+  updateRiskSettings,
   upsertNegativeBasisWatchItem
 } from "../api/client";
 import type {
+  MarketType,
   NegativeBasisAlertEvent,
   NegativeBasisAnalysisResult,
   NegativeBasisAutoCandidate,
@@ -58,13 +61,20 @@ import type {
   NegativeBasisSignalLevel,
   NegativeBasisSignalSample,
   NegativeBasisThresholdState,
-  NegativeBasisWatchItem
+  NegativeBasisWatchItem,
+  RiskSettings,
+  SymbolAlias
 } from "../api/types";
 
 dayjs.extend(utc);
 
 type NegativeBasisFormValues = NegativeBasisWatchItem & {
   custom_symbols: boolean;
+};
+
+type SymbolAliasRow = SymbolAlias & {
+  key: string;
+  index: number;
 };
 
 const exchangeNames: Record<string, string> = {
@@ -76,6 +86,17 @@ const exchangeNames: Record<string, string> = {
   gate: "Gate",
   hyperliquid: "Hyperliquid",
   okx: "OKX"
+};
+
+const aliasMarketTypeOptions: Array<{ label: string; value: MarketType }> = [
+  { label: "现货", value: "spot" },
+  { label: "合约", value: "future" }
+];
+
+const aliasMarketTypeMeta: Record<MarketType | "all", { label: string; color?: string }> = {
+  all: { label: "全部" },
+  spot: { label: "现货", color: "green" },
+  future: { label: "合约", color: "blue" }
 };
 
 const levelMeta: Record<NegativeBasisSignalLevel, { label: string; color: string }> = {
@@ -150,6 +171,34 @@ function normalizeSymbol(value: string | null | undefined): string {
   return normalized.endsWith("USDT") ? normalized : `${normalized}USDT`;
 }
 
+function normalizeAliasSymbol(value: string | null | undefined): string {
+  const normalized = String(value ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/[-_/]/g, "");
+  if (!normalized) {
+    return "";
+  }
+  return normalized.endsWith("USDT") ? normalized : `${normalized}USDT`;
+}
+
+function normalizeSymbolAlias(value: SymbolAlias): SymbolAlias {
+  const multiplier = Number(value.price_multiplier ?? 1);
+  return {
+    exchange: String(value.exchange ?? "").trim().toLowerCase(),
+    symbol: normalizeAliasSymbol(value.symbol),
+    canonical_symbol: normalizeAliasSymbol(value.canonical_symbol),
+    market_type: value.market_type ?? null,
+    price_multiplier: Number.isFinite(multiplier) && multiplier > 0 ? multiplier : 1
+  };
+}
+
+function normalizeSymbolAliases(values: SymbolAlias[] | null | undefined): SymbolAlias[] {
+  return (values ?? [])
+    .map(normalizeSymbolAlias)
+    .filter((item) => item.exchange && item.symbol && item.canonical_symbol);
+}
+
 function shortSymbol(symbol: string | null | undefined): string {
   return String(symbol ?? "").replace(/(?:USDT|USDC|USD)$/iu, "");
 }
@@ -181,6 +230,19 @@ function numberText(value: number | null | undefined, digits = 2): string {
   return typeof value === "number" && Number.isFinite(value)
     ? value.toFixed(digits).replace(/0+$/, "").replace(/\.$/, "")
     : "-";
+}
+
+function aliasMultiplierText(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return "1";
+  }
+  if (Math.abs(value - 1) < 0.000_000_001) {
+    return "1";
+  }
+  if (value >= 1) {
+    return `${numberText(value, 6)}:1 (${numberText(value, 6)})`;
+  }
+  return `1:${numberText(1 / value, 6)} (${numberText(value, 8)})`;
 }
 
 function price(value: number | null | undefined): string {
@@ -222,6 +284,16 @@ function sameSymbolMode(item: NegativeBasisWatchItem): boolean {
     shortSymbol(item.symbol) === shortSymbol(item.spot_symbol ?? item.symbol) &&
     shortSymbol(item.symbol) === shortSymbol(item.future_symbol ?? item.symbol) &&
     Math.abs(item.future_multiplier - 1) < 0.000_000_001
+  );
+}
+
+function candidateUsesMapping(item: NegativeBasisAutoCandidate): boolean {
+  const spotSymbol = item.spot_symbol ?? item.symbol;
+  const futureSymbol = item.future_symbol ?? item.symbol;
+  return (
+    shortSymbol(spotSymbol) !== shortSymbol(item.symbol) ||
+    shortSymbol(futureSymbol) !== shortSymbol(item.symbol) ||
+    Math.abs((item.future_multiplier ?? 1) - 1) > 0.000_000_001
   );
 }
 
@@ -393,7 +465,9 @@ function CurrentSignalPanel({ analysis }: { analysis: NegativeBasisAnalysisResul
 
 export function NegativeBasisMonitorPage() {
   const [form] = Form.useForm<NegativeBasisFormValues>();
+  const [aliasForm] = Form.useForm<SymbolAlias>();
   const [status, setStatus] = useState<NegativeBasisMonitorStatus | null>(null);
+  const [riskSettings, setRiskSettings] = useState<RiskSettings | null>(null);
   const [spotExchanges, setSpotExchanges] = useState<string[]>([]);
   const [futureExchanges, setFutureExchanges] = useState<string[]>([]);
   const [draft, setDraft] = useState<NegativeBasisWatchItem>(() => emptyWatch());
@@ -404,17 +478,23 @@ export function NegativeBasisMonitorPage() {
   const [blockActionLoading, setBlockActionLoading] = useState(false);
   const [globalBlockExchange, setGlobalBlockExchange] = useState<string | undefined>();
   const [saving, setSaving] = useState(false);
+  const [aliasSaving, setAliasSaving] = useState(false);
   const [showManualConfig, setShowManualConfig] = useState(false);
   const customSymbols = Form.useWatch("custom_symbols", form);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [nextStatus, exchanges] = await Promise.all([
+      const [nextStatus, exchanges, nextRiskSettings] = await Promise.all([
         getNegativeBasisMonitorStatus(),
-        listNegativeBasisExchanges()
+        listNegativeBasisExchanges(),
+        getRiskSettings()
       ]);
       setStatus(nextStatus);
+      setRiskSettings({
+        ...nextRiskSettings,
+        symbol_aliases: normalizeSymbolAliases(nextRiskSettings.symbol_aliases)
+      });
       setSpotExchanges(exchanges.spot);
       setFutureExchanges(exchanges.future);
       if (!selectedWatchId && nextStatus.watchlist.length > 0) {
@@ -436,6 +516,16 @@ export function NegativeBasisMonitorPage() {
   useEffect(() => {
     form.setFieldsValue(formValuesFromWatch(draft));
   }, [draft, form]);
+
+  useEffect(() => {
+    aliasForm.setFieldsValue({
+      exchange: "gate",
+      symbol: "",
+      canonical_symbol: "",
+      market_type: null,
+      price_multiplier: 1
+    });
+  }, [aliasForm]);
 
   const selectedWatch = useMemo(
     () => status?.watchlist.find((item) => item.id === selectedWatchId),
@@ -468,6 +558,24 @@ export function NegativeBasisMonitorPage() {
           disabled: blockedExchanges.includes(exchange)
         })),
     [blockedExchanges, futureExchanges, spotExchanges]
+  );
+
+  const aliasExchangeOptions = useMemo(
+    () =>
+      Array.from(new Set([...Object.keys(exchangeNames), ...spotExchanges, ...futureExchanges]))
+        .sort((left, right) => exchangeText(left).localeCompare(exchangeText(right)))
+        .map((exchange) => ({ label: exchangeText(exchange), value: exchange })),
+    [futureExchanges, spotExchanges]
+  );
+
+  const symbolAliasRows = useMemo<SymbolAliasRow[]>(
+    () =>
+      normalizeSymbolAliases(riskSettings?.symbol_aliases).map((item, index) => ({
+        ...item,
+        key: `${item.exchange}:${item.market_type ?? "all"}:${item.symbol}:${item.canonical_symbol}:${index}`,
+        index
+      })),
+    [riskSettings?.symbol_aliases]
   );
 
   const toggleAutoScanEnabled = async (enabled: boolean) => {
@@ -583,10 +691,73 @@ export function NegativeBasisMonitorPage() {
     await blockExchange(globalBlockExchange);
   };
 
-  const renderBlockButtons = (symbol: string, spotExchange: string, futureExchange: string) => {
+  const saveSymbolAliases = async (aliases: SymbolAlias[], successText: string) => {
+    if (!riskSettings) {
+      message.warning("风险配置还没有加载完成");
+      return;
+    }
+    setAliasSaving(true);
+    try {
+      const saved = await updateRiskSettings({
+        ...riskSettings,
+        symbol_aliases: normalizeSymbolAliases(aliases)
+      });
+      setRiskSettings({
+        ...saved,
+        symbol_aliases: normalizeSymbolAliases(saved.symbol_aliases)
+      });
+      message.success(successText);
+      await refresh();
+    } catch (exc) {
+      message.error(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setAliasSaving(false);
+    }
+  };
+
+  const addSymbolAlias = async () => {
+    const alias = normalizeSymbolAlias(await aliasForm.validateFields());
+    const current = normalizeSymbolAliases(riskSettings?.symbol_aliases);
+    const existingIndex = current.findIndex(
+      (item) =>
+        item.exchange === alias.exchange &&
+        item.symbol === alias.symbol &&
+        (item.market_type ?? null) === (alias.market_type ?? null)
+    );
+    const next =
+      existingIndex >= 0
+        ? current.map((item, index) => (index === existingIndex ? alias : item))
+        : [...current, alias];
+    await saveSymbolAliases(next, existingIndex >= 0 ? "币名映射已更新" : "币名映射已新增");
+    aliasForm.setFieldsValue({
+      exchange: alias.exchange,
+      symbol: "",
+      canonical_symbol: "",
+      market_type: null,
+      price_multiplier: 1
+    });
+  };
+
+  const deleteSymbolAlias = async (row: SymbolAliasRow) => {
+    const current = normalizeSymbolAliases(riskSettings?.symbol_aliases);
+    await saveSymbolAliases(
+      current.filter((_, index) => index !== row.index),
+      "币名映射已删除"
+    );
+  };
+
+  const renderBlockButtons = (
+    symbol: string,
+    spotExchange: string,
+    futureExchange: string,
+    spotSymbol?: string | null,
+    futureSymbol?: string | null
+  ) => {
     const normalizedSymbol = normalizeSymbol(symbol);
-    const spotKey = exchangeSymbolKey(spotExchange, normalizedSymbol);
-    const futureKey = exchangeSymbolKey(futureExchange, normalizedSymbol);
+    const normalizedSpotSymbol = normalizeSymbol(spotSymbol || symbol);
+    const normalizedFutureSymbol = normalizeSymbol(futureSymbol || symbol);
+    const spotKey = exchangeSymbolKey(spotExchange, normalizedSpotSymbol);
+    const futureKey = exchangeSymbolKey(futureExchange, normalizedFutureSymbol);
     return (
       <Space
         size={4}
@@ -609,8 +780,8 @@ export function NegativeBasisMonitorPage() {
           </Button>
         </Popconfirm>
         <Popconfirm
-          title={`屏蔽 ${exchangeText(spotExchange)} 的 ${shortSymbol(symbol)}？`}
-          onConfirm={() => void blockExchangeSymbol(spotExchange, normalizedSymbol)}
+          title={`屏蔽 ${exchangeText(spotExchange)} 的 ${shortSymbol(normalizedSpotSymbol)}？`}
+          onConfirm={() => void blockExchangeSymbol(spotExchange, normalizedSpotSymbol)}
         >
           <Button
             size="small"
@@ -622,8 +793,8 @@ export function NegativeBasisMonitorPage() {
           </Button>
         </Popconfirm>
         <Popconfirm
-          title={`屏蔽 ${exchangeText(futureExchange)} 的 ${shortSymbol(symbol)}？`}
-          onConfirm={() => void blockExchangeSymbol(futureExchange, normalizedSymbol)}
+          title={`屏蔽 ${exchangeText(futureExchange)} 的 ${shortSymbol(normalizedFutureSymbol)}？`}
+          onConfirm={() => void blockExchangeSymbol(futureExchange, normalizedFutureSymbol)}
         >
           <Button
             size="small"
@@ -808,6 +979,75 @@ export function NegativeBasisMonitorPage() {
     }
   };
 
+  const symbolAliasColumns: ColumnsType<SymbolAliasRow> = [
+    {
+      title: "交易所",
+      dataIndex: "exchange",
+      width: 130,
+      render: (value: string) => <Typography.Text strong>{exchangeText(value)}</Typography.Text>
+    },
+    {
+      title: "类型",
+      dataIndex: "market_type",
+      width: 92,
+      render: (value: MarketType | null | undefined) => {
+        const meta = aliasMarketTypeMeta[value ?? "all"];
+        return <Tag color={meta.color}>{meta.label}</Tag>;
+      }
+    },
+    {
+      title: "原始名",
+      dataIndex: "symbol",
+      width: 130,
+      render: (value: string) => <Typography.Text code>{shortSymbol(value)}</Typography.Text>
+    },
+    {
+      title: "映射名",
+      dataIndex: "canonical_symbol",
+      width: 140,
+      render: (value: string) => <Typography.Text strong>{shortSymbol(value)}</Typography.Text>
+    },
+    {
+      title: "价格汇率",
+      dataIndex: "price_multiplier",
+      width: 130,
+      align: "right",
+      render: (value: number) => aliasMultiplierText(value)
+    },
+    {
+      title: "操作",
+      width: 88,
+      render: (_, row) => (
+        <Popconfirm title="删除这个币名映射？" onConfirm={() => void deleteSymbolAlias(row)}>
+          <Button type="text" danger icon={<DeleteOutlined />} loading={aliasSaving}>
+            删除
+          </Button>
+        </Popconfirm>
+      )
+    }
+  ];
+
+  const renderCandidateMapping = (item: NegativeBasisAutoCandidate) => {
+    if (!candidateUsesMapping(item)) {
+      return <Tag>同名</Tag>;
+    }
+    const spotSymbol = item.spot_symbol ?? item.symbol;
+    const futureSymbol = item.future_symbol ?? item.symbol;
+    return (
+      <Space size={4} wrap>
+        {shortSymbol(spotSymbol) !== shortSymbol(item.symbol) ? (
+          <Tag color="green">现货 {shortSymbol(spotSymbol)}→{shortSymbol(item.symbol)}</Tag>
+        ) : null}
+        {shortSymbol(futureSymbol) !== shortSymbol(item.symbol) ? (
+          <Tag color="orange">合约 {shortSymbol(futureSymbol)}→{shortSymbol(item.symbol)}</Tag>
+        ) : null}
+        {Math.abs((item.future_multiplier ?? 1) - 1) > 0.000_000_001 ? (
+          <Tag color="purple">倍率 {numberText(item.future_multiplier, 6)}</Tag>
+        ) : null}
+      </Space>
+    );
+  };
+
   const watchColumns: ColumnsType<NegativeBasisWatchItem> = [
     {
       title: "标的",
@@ -828,7 +1068,15 @@ export function NegativeBasisMonitorPage() {
           {item.auto_managed ? <Tag color="processing">自动</Tag> : <Tag>手动</Tag>}
           <Tag color="green">{exchangeText(item.spot_exchange)} 现货</Tag>
           <Tag color="orange">{exchangeText(item.future_exchange)} 合约</Tag>
-          {sameSymbolMode(item) ? <Tag>同标的</Tag> : <Tag color="purple">自定义</Tag>}
+          {sameSymbolMode(item) ? (
+            <Tag>同标的</Tag>
+          ) : (
+            <Tooltip
+              title={`现货 ${shortSymbol(item.spot_symbol ?? item.symbol)} / 合约 ${shortSymbol(item.future_symbol ?? item.symbol)} / 倍率 ${numberText(item.future_multiplier, 6)}`}
+            >
+              <Tag color="purple">自定义</Tag>
+            </Tooltip>
+          )}
         </Space>
       )
     },
@@ -849,7 +1097,15 @@ export function NegativeBasisMonitorPage() {
         <Space size={4} wrap onClick={(event) => event.stopPropagation()}>
           <Button icon={<EditOutlined />} size="small" onClick={() => editWatch(item)} />
           <Button icon={<PlayCircleOutlined />} size="small" onClick={() => void collectNow(item)} />
-          {item.auto_managed ? renderBlockButtons(item.symbol, item.spot_exchange, item.future_exchange) : null}
+          {item.auto_managed
+            ? renderBlockButtons(
+                item.symbol,
+                item.spot_exchange,
+                item.future_exchange,
+                item.spot_symbol,
+                item.future_symbol
+              )
+            : null}
           <Popconfirm title="删除这个负基差监控？" onConfirm={() => void deleteWatch(item)}>
             <Button icon={<DeleteOutlined />} size="small" danger />
           </Popconfirm>
@@ -875,6 +1131,7 @@ export function NegativeBasisMonitorPage() {
         </Space>
       )
     },
+    { title: "映射", width: 200, render: (_, item) => renderCandidateMapping(item) },
     { title: "级别", dataIndex: "signal_level", width: 88, render: levelTag },
     {
       title: "性价比",
@@ -906,7 +1163,13 @@ export function NegativeBasisMonitorPage() {
             ) : (
               <Tag>待入池</Tag>
             )}
-            {renderBlockButtons(item.symbol, item.spot_exchange, item.future_exchange)}
+            {renderBlockButtons(
+              item.symbol,
+              item.spot_exchange,
+              item.future_exchange,
+              item.spot_symbol,
+              item.future_symbol
+            )}
           </Space>
         );
       }
@@ -1029,8 +1292,59 @@ export function NegativeBasisMonitorPage() {
           columns={candidateColumns}
           dataSource={status?.auto_candidates ?? []}
           pagination={{ pageSize: 8 }}
-          scroll={{ x: 1410 }}
+          scroll={{ x: 1610 }}
           locale={{ emptyText: <Empty description="暂未发现现货溢价候选" /> }}
+        />
+      </Card>
+
+      <Card size="small" title="币名映射" className="negative-basis-alias-card" extra={<Tag>全局生效</Tag>}>
+        <Form
+          form={aliasForm}
+          layout="vertical"
+          initialValues={{
+            exchange: "gate",
+            symbol: "",
+            canonical_symbol: "",
+            market_type: null,
+            price_multiplier: 1
+          }}
+          onFinish={() => void addSymbolAlias()}
+        >
+          <div className="negative-basis-alias-form">
+            <Form.Item label="交易所" name="exchange" rules={[{ required: true }]}>
+              <Select options={aliasExchangeOptions} showSearch optionFilterProp="label" />
+            </Form.Item>
+            <Form.Item label="类型" name="market_type">
+              <Select allowClear options={aliasMarketTypeOptions} placeholder="全部" />
+            </Form.Item>
+            <Form.Item label="原始名" name="symbol" rules={[{ required: true, message: "请输入原始名" }]}>
+              <Input placeholder="NEX" />
+            </Form.Item>
+            <Form.Item label="映射名" name="canonical_symbol" rules={[{ required: true, message: "请输入映射名" }]}>
+              <Input placeholder="10000NEX" />
+            </Form.Item>
+            <Form.Item
+              label="价格汇率"
+              name="price_multiplier"
+              rules={[{ required: true, type: "number", min: 0.000001 }]}
+            >
+              <InputNumber min={0.000001} step={1} />
+            </Form.Item>
+            <Form.Item className="negative-basis-alias-action">
+              <Button type="primary" htmlType="submit" icon={<PlusOutlined />} loading={aliasSaving}>
+                添加/更新
+              </Button>
+            </Form.Item>
+          </div>
+        </Form>
+        <Table
+          rowKey="key"
+          size="small"
+          columns={symbolAliasColumns}
+          dataSource={symbolAliasRows}
+          pagination={false}
+          scroll={{ x: 760 }}
+          locale={{ emptyText: <Empty description="暂无币名映射" /> }}
         />
       </Card>
 

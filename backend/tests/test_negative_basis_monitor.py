@@ -19,6 +19,7 @@ from app.models.pair_spread import (
     PairSpreadPriceField,
     PairSpreadQueryResult,
 )
+from app.models.settings import SymbolAlias
 from app.services.negative_basis_monitor import (
     GateContractStatPoint,
     NegativeBasisMonitor,
@@ -27,6 +28,7 @@ from app.services.negative_basis_monitor import (
 )
 from app.services.pair_spread_query import build_pair_spread_points
 from app.services.snapshot_store import SnapshotStore
+from app.services.symbol_aliases import apply_symbol_aliases
 
 
 def _current_leg(
@@ -304,6 +306,84 @@ async def test_negative_basis_monitor_auto_discovers_spot_premium_candidates() -
     assert watchlist[0].auto_managed is True
     assert watchlist[0].spot_exchange == "binance"
     assert watchlist[0].future_exchange == "gate"
+    assert watchlist[0].spot_symbol == "PROMUSDT"
+    assert watchlist[0].future_symbol == "PROMUSDT"
+    assert watchlist[0].future_multiplier == 1
+
+
+@pytest.mark.asyncio
+async def test_negative_basis_monitor_auto_discovery_uses_symbol_alias_multiplier() -> None:
+    db = await connect_database(":memory:")
+    await initialize_schema(db)
+    repo = NegativeBasisMonitorRepository(db)
+    store = SnapshotStore()
+    observed_at = datetime(2026, 8, 11, 0, 6, tzinfo=UTC)
+    markets = apply_symbol_aliases(
+        [
+            MarketSnapshot(
+                symbol="NEXUSDT",
+                base="NEX",
+                exchange="bitget",
+                market_type=MarketType.SPOT,
+                bid=0.01039,
+                ask=0.01041,
+                volume_24h_usdt=2_000_000,
+                timestamp=observed_at,
+                raw_symbol="NEXUSDT",
+            ),
+            MarketSnapshot(
+                symbol="10000NEXUSDT",
+                base="10000NEX",
+                exchange="gate",
+                market_type=MarketType.FUTURE,
+                bid=99.9,
+                ask=100.1,
+                mark_price=100.0,
+                volume_24h_usdt=800_000,
+                timestamp=observed_at,
+                raw_symbol="10000NEX_USDT",
+            ),
+        ],
+        [
+            SymbolAlias(
+                exchange="bitget",
+                symbol="NEX",
+                canonical_symbol="10000NEX",
+                market_type=MarketType.SPOT,
+                price_multiplier=10_000,
+            )
+        ],
+    )
+    store.set_markets(markets)
+    monitor = NegativeBasisMonitor(
+        repo,
+        snapshot_store=store,
+        gate_stats_client=FakeGateStatsClient(),  # type: ignore[arg-type]
+    )
+
+    try:
+        candidates = await monitor.discover_auto_candidates(force=True)
+        watchlist = await repo.list_watch_items()
+    finally:
+        await monitor.aclose()
+        await db.close()
+
+    assert len(candidates) == 1
+    assert candidates[0].symbol == "10000NEXUSDT"
+    assert candidates[0].spot_symbol == "NEXUSDT"
+    assert candidates[0].future_symbol == "10000NEXUSDT"
+    assert candidates[0].future_multiplier == pytest.approx(10_000)
+    assert candidates[0].spot_price == pytest.approx(104)
+    assert candidates[0].future_price == pytest.approx(100)
+    assert any(
+        "现货映射 NEXUSDT->10000NEXUSDT" in reason
+        for reason in candidates[0].selection_reasons
+    )
+    assert len(watchlist) == 1
+    assert watchlist[0].symbol == "10000NEXUSDT"
+    assert watchlist[0].spot_symbol == "NEXUSDT"
+    assert watchlist[0].future_symbol == "10000NEXUSDT"
+    assert watchlist[0].future_multiplier == pytest.approx(10_000)
 
 
 @pytest.mark.asyncio
@@ -355,6 +435,62 @@ async def test_negative_basis_monitor_auto_scan_blocks_gate_edge_same_name() -> 
 
     assert candidates == []
     assert watchlist == []
+
+
+@pytest.mark.asyncio
+async def test_negative_basis_monitor_exchange_symbol_block_uses_original_symbol() -> None:
+    db = await connect_database(":memory:")
+    await initialize_schema(db)
+    repo = NegativeBasisMonitorRepository(db)
+    store = SnapshotStore()
+    observed_at = datetime(2026, 8, 11, 0, 6, tzinfo=UTC)
+    markets = apply_symbol_aliases(
+        [
+            MarketSnapshot(
+                symbol="EDGEUSDT",
+                base="EDGE",
+                exchange="okx",
+                market_type=MarketType.SPOT,
+                bid=1.039,
+                ask=1.041,
+                volume_24h_usdt=1_500_000,
+                timestamp=observed_at,
+                raw_symbol="EDGE-USDT",
+            ),
+            MarketSnapshot(
+                symbol="EDGEXUSDT",
+                base="EDGEX",
+                exchange="gate",
+                market_type=MarketType.FUTURE,
+                bid=0.999,
+                ask=1.001,
+                mark_price=1.0,
+                volume_24h_usdt=2_000_000,
+                timestamp=observed_at,
+                raw_symbol="EDGEX_USDT",
+            ),
+        ],
+        [SymbolAlias(exchange="gate", symbol="EDGEXUSDT", canonical_symbol="EDGEUSDT")],
+    )
+    store.set_markets(markets)
+    monitor = NegativeBasisMonitor(
+        repo,
+        snapshot_store=store,
+        gate_stats_client=FakeGateStatsClient(),  # type: ignore[arg-type]
+    )
+
+    try:
+        candidates = await monitor.discover_auto_candidates(force=True)
+        watchlist = await repo.list_watch_items()
+    finally:
+        await monitor.aclose()
+        await db.close()
+
+    assert len(candidates) == 1
+    assert candidates[0].symbol == "EDGEUSDT"
+    assert candidates[0].future_symbol == "EDGEXUSDT"
+    assert len(watchlist) == 1
+    assert watchlist[0].future_symbol == "EDGEXUSDT"
 
 
 @pytest.mark.asyncio
