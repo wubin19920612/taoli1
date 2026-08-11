@@ -3464,7 +3464,189 @@ body {
   background: #fbfdfc;
 }
 
+.negative-basis-page .toolbar {
+  align-items: center;
+}
+
+.negative-basis-page .toolbar .ant-typography {
+  margin: 0;
+}
+
+.negative-basis-warning {
+  margin-bottom: 0;
+}
+
+.negative-basis-status,
+.negative-basis-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px;
+  background: #ffffff;
+  border: 1px solid #dce4e1;
+  border-radius: 6px;
+}
+
+.negative-basis-metrics {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  margin-bottom: 10px;
+}
+
+.negative-basis-layout {
+  display: grid;
+  grid-template-columns: minmax(460px, 0.95fr) minmax(560px, 1.05fr);
+  gap: 12px;
+  min-width: 0;
+}
+
+.negative-basis-config-card,
+.negative-basis-watch-card {
+  min-width: 0;
+}
+
+.negative-basis-form-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px 10px;
+}
+
+.negative-basis-form-grid .ant-form-item {
+  margin-bottom: 6px;
+}
+
+.negative-basis-form-grid .ant-input-number,
+.negative-basis-form-grid .ant-select,
+.negative-basis-form-grid .ant-input {
+  width: 100%;
+}
+
+.negative-basis-row-active > td {
+  background: #eef8f6 !important;
+}
+
+.negative-basis-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.negative-basis-chart-wrap {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid #dce4e1;
+  border-radius: 6px;
+  background: #fbfdfc;
+  overflow-x: auto;
+}
+
+.negative-basis-chart {
+  display: block;
+  min-width: 820px;
+  width: 100%;
+  height: auto;
+}
+
+.negative-basis-chart-bg {
+  fill: #ffffff;
+  stroke: #dce4e1;
+}
+
+.negative-basis-grid {
+  stroke: #e6eeeb;
+  stroke-width: 1;
+}
+
+.negative-basis-time-grid {
+  stroke: #edf3f1;
+  stroke-width: 1;
+}
+
+.negative-basis-zero {
+  stroke: #4b635c;
+  stroke-dasharray: 4 4;
+  stroke-width: 1.35;
+}
+
+.negative-basis-axis {
+  fill: #5e6f69;
+  font-size: 11px;
+}
+
+.negative-basis-time-label {
+  font-size: 10px;
+}
+
+.negative-basis-threshold {
+  stroke-width: 1.1;
+  stroke-dasharray: 5 5;
+}
+
+.negative-basis-threshold-watch {
+  stroke: #2563eb;
+}
+
+.negative-basis-threshold-building {
+  stroke: #0891b2;
+}
+
+.negative-basis-threshold-confirmed {
+  stroke: #7c3aed;
+}
+
+.negative-basis-threshold-strong {
+  stroke: #f97316;
+}
+
+.negative-basis-threshold-extreme {
+  stroke: #dc2626;
+}
+
+.negative-basis-threshold-label {
+  fill: #2f3f3a;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.negative-basis-line {
+  fill: none;
+  stroke: #b42318;
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.negative-basis-point {
+  fill: #b42318;
+  stroke: #ffffff;
+  stroke-width: 1.2;
+}
+
+.negative-basis-chart-empty {
+  display: grid;
+  place-items: center;
+  min-height: 220px;
+  color: #66736f;
+  border: 1px dashed #cbd7d3;
+  border-radius: 6px;
+  background: #fbfdfc;
+}
+
+.negative-basis-tables {
+  display: grid;
+  grid-template-columns: minmax(480px, 0.86fr) minmax(560px, 1.14fr);
+  gap: 12px;
+  min-width: 0;
+}
+
 @media (max-width: 1500px) {
+  .negative-basis-form-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .negative-basis-metrics {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
   .pair-query-bar {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
@@ -4229,6 +4411,15 @@ body {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .negative-basis-layout,
+  .negative-basis-tables {
+    grid-template-columns: 1fr;
+  }
+
+  .negative-basis-form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .premium-index-page {
     padding-top: 44px;
   }
@@ -4396,6 +4587,11 @@ body {
   .pair-monitor-tables,
   .pair-query-bar,
   .pair-metric-grid,
+  .negative-basis-status,
+  .negative-basis-metrics,
+  .negative-basis-form-grid,
+  .negative-basis-layout,
+  .negative-basis-tables,
   .symbol-spread-query-bar,
   .symbol-spread-metric-grid,
   .symbol-spread-detail-grid,

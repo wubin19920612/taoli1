@@ -493,6 +493,68 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_new_listing_events_time
           ON new_listing_alert_events(created_at DESC);
 
+        CREATE TABLE IF NOT EXISTS negative_basis_watchlist (
+          id TEXT PRIMARY KEY,
+          payload TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS negative_basis_signal_samples (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          watch_id TEXT NOT NULL,
+          observed_at TEXT NOT NULL,
+          symbol TEXT NOT NULL,
+          spot_exchange TEXT NOT NULL,
+          future_exchange TEXT NOT NULL,
+          signal_level TEXT NOT NULL,
+          score REAL NOT NULL,
+          spot_premium_pct REAL,
+          spot_price REAL,
+          future_price REAL,
+          spot_volume_24h_usdt REAL,
+          future_volume_24h_usdt REAL,
+          open_interest_usdt REAL,
+          open_interest_change_pct REAL,
+          long_account_pct REAL,
+          short_account_pct REAL,
+          long_short_ratio REAL,
+          funding_rate_pct REAL,
+          reasons_json TEXT NOT NULL DEFAULT '[]',
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (watch_id) REFERENCES negative_basis_watchlist(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_negative_basis_samples_symbol_time
+          ON negative_basis_signal_samples(symbol, observed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_negative_basis_samples_watch_time
+          ON negative_basis_signal_samples(watch_id, observed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_negative_basis_samples_level_time
+          ON negative_basis_signal_samples(signal_level, observed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_negative_basis_samples_time
+          ON negative_basis_signal_samples(observed_at DESC);
+
+        CREATE TABLE IF NOT EXISTS negative_basis_alert_events (
+          id TEXT PRIMARY KEY,
+          watch_id TEXT NOT NULL,
+          symbol TEXT NOT NULL,
+          spot_exchange TEXT NOT NULL,
+          future_exchange TEXT NOT NULL,
+          signal_level TEXT NOT NULL,
+          score REAL NOT NULL,
+          spot_premium_pct REAL,
+          message TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY (watch_id) REFERENCES negative_basis_watchlist(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_negative_basis_events_symbol_time
+          ON negative_basis_alert_events(symbol, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_negative_basis_events_watch_time
+          ON negative_basis_alert_events(watch_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_negative_basis_events_time
+          ON negative_basis_alert_events(created_at DESC);
+
         CREATE TABLE IF NOT EXISTS pair_spread_funding_watchlist (
           pair_key TEXT PRIMARY KEY,
           leg1_exchange TEXT NOT NULL,

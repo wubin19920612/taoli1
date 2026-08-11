@@ -7,6 +7,7 @@ export type PairSpreadPriceField = "mark_price" | "mid_price" | "index_price" | 
 export type AnnouncementKind = "listing" | "delisting" | "other";
 export type SecondLevelSampleStatus = "ok" | "partial" | "error";
 export type NewListingAlertLevel = "none" | "normal" | "strong" | "extreme";
+export type NegativeBasisSignalLevel = "none" | "watch" | "building" | "confirmed" | "strong" | "extreme";
 
 export interface Opportunity {
   id: string;
@@ -298,6 +299,148 @@ export interface NewListingHistoryResult {
   samples: NewListingSpreadSample[];
   events: NewListingAlertEvent[];
   warnings: string[];
+}
+
+export interface NegativeBasisWatchItem {
+  id: string;
+  enabled: boolean;
+  symbol: string;
+  spot_exchange: string;
+  future_exchange: string;
+  spot_symbol: string | null;
+  future_symbol: string | null;
+  future_multiplier: number;
+  interval_seconds: number;
+  lookback_hours: number;
+  retention_hours: number;
+  watch_threshold_pct: number;
+  building_threshold_pct: number;
+  confirmed_threshold_pct: number;
+  strong_threshold_pct: number;
+  extreme_threshold_pct: number;
+  watch_consecutive_hits: number;
+  building_consecutive_hits: number;
+  confirmed_consecutive_hits: number;
+  strong_consecutive_hits: number;
+  extreme_consecutive_hits: number;
+  spot_volume_growth_threshold: number;
+  oi_confirmed_growth_pct: number;
+  oi_strong_growth_pct: number;
+  min_spot_hourly_volume_usdt: number;
+  alert_min_level: NegativeBasisSignalLevel;
+  cooldown_seconds: number;
+  note: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NegativeBasisPoint {
+  bucket_at: string;
+  spot_close: number;
+  future_close: number;
+  spot_premium_abs: number;
+  spot_premium_pct: number;
+}
+
+export interface NegativeBasisHourlyStatPoint {
+  bucket_at: string;
+  spot_premium_mean_pct: number | null;
+  spot_premium_max_pct: number | null;
+  spot_premium_last_pct: number | null;
+  spot_volume_usdt: number | null;
+  future_volume_usdt: number | null;
+  spot_volume_growth: number | null;
+  future_volume_ratio: number | null;
+  open_interest_open_usdt: number | null;
+  open_interest_close_usdt: number | null;
+  open_interest_change_pct: number | null;
+  long_account_pct: number | null;
+  short_account_pct: number | null;
+  long_account_count: number | null;
+  short_account_count: number | null;
+  long_short_ratio: number | null;
+  funding_rate_pct: number | null;
+}
+
+export interface NegativeBasisThresholdState {
+  name: NegativeBasisSignalLevel;
+  threshold_pct: number;
+  required_hits: number;
+  first_seen_at: string | null;
+  first_consecutive_at: string | null;
+  current_consecutive_hits: number;
+  max_consecutive_hits: number;
+  currently_active: boolean;
+}
+
+export interface NegativeBasisCurrentSnapshot {
+  observed_at: string;
+  spot_leg: PairSpreadCurrentLeg;
+  future_leg: PairSpreadCurrentLeg;
+  spot_premium_abs: number;
+  spot_premium_pct: number;
+}
+
+export interface NegativeBasisAnalysisResult {
+  item: NegativeBasisWatchItem;
+  observed_at: string;
+  signal_level: NegativeBasisSignalLevel;
+  score: number;
+  reasons: string[];
+  warnings: string[];
+  current: NegativeBasisCurrentSnapshot | null;
+  spot_premium: PairSpreadValueStats;
+  thresholds: NegativeBasisThresholdState[];
+  points: NegativeBasisPoint[];
+  hourly_stats: NegativeBasisHourlyStatPoint[];
+}
+
+export interface NegativeBasisSignalSample {
+  id?: number | null;
+  watch_id: string;
+  observed_at: string;
+  symbol: string;
+  spot_exchange: string;
+  future_exchange: string;
+  signal_level: NegativeBasisSignalLevel;
+  score: number;
+  spot_premium_pct: number | null;
+  spot_price: number | null;
+  future_price: number | null;
+  spot_volume_24h_usdt: number | null;
+  future_volume_24h_usdt: number | null;
+  open_interest_usdt: number | null;
+  open_interest_change_pct: number | null;
+  long_account_pct: number | null;
+  short_account_pct: number | null;
+  long_short_ratio: number | null;
+  funding_rate_pct: number | null;
+  reasons: string[];
+}
+
+export interface NegativeBasisAlertEvent {
+  id: string;
+  watch_id: string;
+  symbol: string;
+  spot_exchange: string;
+  future_exchange: string;
+  signal_level: NegativeBasisSignalLevel;
+  score: number;
+  spot_premium_pct: number | null;
+  message: string;
+  created_at: string;
+}
+
+export interface NegativeBasisMonitorStatus {
+  running: boolean;
+  watch_count: number;
+  enabled_watch_count: number;
+  sample_count: number;
+  event_count: number;
+  latest_error?: string | null;
+  watchlist: NegativeBasisWatchItem[];
+  latest_samples: NegativeBasisSignalSample[];
+  latest_events: NegativeBasisAlertEvent[];
 }
 
 export interface HealthStatus {

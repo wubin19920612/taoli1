@@ -33,6 +33,7 @@ type PageKey =
   | "symbol-spread"
   | "premium-index"
   | "minute-signals"
+  | "negative-basis"
   | "new-listing"
   | "second-sampling"
   | "tradfi-perp"
@@ -81,6 +82,11 @@ const lazyPages: Record<PageKey, LazyPage> = {
   "minute-signals": lazy(() =>
     import("../pages/MinuteSignalPage").then((module) => ({
       default: module.MinuteSignalPage
+    }))
+  ),
+  "negative-basis": lazy(() =>
+    import("../pages/NegativeBasisMonitorPage").then((module) => ({
+      default: module.NegativeBasisMonitorPage
     }))
   ),
   "new-listing": lazy(() =>
@@ -215,6 +221,11 @@ export function AppShell() {
               key: "minute-signals",
               icon: <ThunderboltOutlined />,
               label: "1 分钟价差信号"
+            },
+            {
+              key: "negative-basis",
+              icon: <RadarChartOutlined />,
+              label: "负基差埋伏"
             },
             {
               key: "new-listing",

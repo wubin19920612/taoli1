@@ -57,6 +57,11 @@ import type {
   MinuteSignalScanResult,
   MinuteSignalSettings,
   MinuteSignalUniverseScanResult,
+  NegativeBasisAlertEvent,
+  NegativeBasisAnalysisResult,
+  NegativeBasisMonitorStatus,
+  NegativeBasisSignalSample,
+  NegativeBasisWatchItem,
   NewListingAlertEvent,
   NewListingHistoryResult,
   NewListingMonitorStatus,
@@ -968,6 +973,107 @@ export async function queryNewListingHistory(query: {
       throw new Error(extractErrorMessage(text, response.status));
     }
     return response.json() as Promise<NewListingHistoryResult>;
+  });
+}
+
+export async function listNegativeBasisExchanges(): Promise<{ spot: string[]; future: string[] }> {
+  return fetchJson<{ spot: string[]; future: string[] }>("/negative-basis-monitor/exchanges");
+}
+
+export async function getNegativeBasisMonitorStatus(): Promise<NegativeBasisMonitorStatus> {
+  return fetchJson<NegativeBasisMonitorStatus>("/negative-basis-monitor/status");
+}
+
+export async function listNegativeBasisWatchlist(): Promise<NegativeBasisWatchItem[]> {
+  return fetchJson<NegativeBasisWatchItem[]>("/negative-basis-monitor/watchlist");
+}
+
+export async function upsertNegativeBasisWatchItem(
+  item: NegativeBasisWatchItem
+): Promise<NegativeBasisWatchItem> {
+  return fetchJson<NegativeBasisWatchItem>("/negative-basis-monitor/watchlist", {
+    method: "POST",
+    body: JSON.stringify(item)
+  });
+}
+
+export async function deleteNegativeBasisWatchItem(itemId: string): Promise<{ ok: boolean }> {
+  return fetchJson<{ ok: boolean }>(`/negative-basis-monitor/watchlist/${itemId}`, {
+    method: "DELETE"
+  });
+}
+
+export async function collectNegativeBasisWatchItem(
+  itemId: string
+): Promise<NegativeBasisAnalysisResult> {
+  return fetchJson<NegativeBasisAnalysisResult>(`/negative-basis-monitor/watchlist/${itemId}/collect`, {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+}
+
+export async function listNegativeBasisSamples(query: {
+  watch_id?: string;
+  symbol?: string;
+  minutes?: number;
+  limit?: number;
+} = {}): Promise<NegativeBasisSignalSample[]> {
+  const url = buildUrl("/negative-basis-monitor/samples", query);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(extractErrorMessage(text, response.status));
+    }
+    return response.json() as Promise<NegativeBasisSignalSample[]>;
+  });
+}
+
+export async function listNegativeBasisEvents(query: {
+  watch_id?: string;
+  symbol?: string;
+  minutes?: number;
+  limit?: number;
+} = {}): Promise<NegativeBasisAlertEvent[]> {
+  const url = buildUrl("/negative-basis-monitor/events", query);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(extractErrorMessage(text, response.status));
+    }
+    return response.json() as Promise<NegativeBasisAlertEvent[]>;
+  });
+}
+
+export async function queryNegativeBasis(query: {
+  symbol?: string;
+  spot_exchange?: string;
+  future_exchange?: string;
+  spot_symbol?: string;
+  future_symbol?: string;
+  future_multiplier?: number;
+  hours?: number;
+  watch_threshold_pct?: number;
+  building_threshold_pct?: number;
+  confirmed_threshold_pct?: number;
+  strong_threshold_pct?: number;
+  extreme_threshold_pct?: number;
+  watch_consecutive_hits?: number;
+  building_consecutive_hits?: number;
+  confirmed_consecutive_hits?: number;
+  strong_consecutive_hits?: number;
+  extreme_consecutive_hits?: number;
+  spot_volume_growth_threshold?: number;
+  oi_confirmed_growth_pct?: number;
+  oi_strong_growth_pct?: number;
+  min_spot_hourly_volume_usdt?: number;
+}): Promise<NegativeBasisAnalysisResult> {
+  const url = buildUrl("/negative-basis-monitor/query", query);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(extractErrorMessage(text, response.status));
+    }
+    return response.json() as Promise<NegativeBasisAnalysisResult>;
   });
 }
 
