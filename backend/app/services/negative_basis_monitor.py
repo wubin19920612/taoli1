@@ -21,10 +21,14 @@ from app.exchanges.base import (
     parse_datetime_seconds,
     parse_float,
 )
+from app.models.market import MarketSnapshot, MarketType
 from app.models.negative_basis import (
+    NEGATIVE_BASIS_FUTURE_EXCHANGES,
+    NEGATIVE_BASIS_SPOT_EXCHANGES,
     NEGATIVE_BASIS_LEVEL_ORDER,
     NegativeBasisAlertEvent,
     NegativeBasisAnalysisResult,
+    NegativeBasisAutoCandidate,
     NegativeBasisCurrentSnapshot,
     NegativeBasisHourlyStatPoint,
     NegativeBasisMonitorStatus,
@@ -37,11 +41,16 @@ from app.models.negative_basis import (
 )
 from app.models.pair_spread import PairSpreadQueryResult, PairSpreadValueStats
 from app.services.pair_spread_query import PairSpreadQueryError, PairSpreadQueryService
+from app.services.snapshot_store import SnapshotStore
 
 logger = logging.getLogger(__name__)
 
 DISPLAY_TZ = timezone(timedelta(hours=8))
 GATE_STATS_TIMEOUT = httpx.Timeout(12.0, connect=3.0, read=8.0, write=4.0, pool=4.0)
+AUTO_SCAN_INTERVAL_SECONDS = 60
+AUTO_SCAN_MAX_CANDIDATES = 16
+AUTO_SCAN_MIN_SPOT_VOLUME_24H_USDT = 100_000
+AUTO_COLLECT_MAX_DUE = 6
 
 
 @dataclass(frozen=True)
@@ -536,6 +545,74 @@ def build_negative_basis_analysis(
     )
 
 
+def _market_price(market: MarketSnapshot) -> float | None:
+    if market.market_type == MarketType.FUTURE:
+        mark = _positive(market.mark_price)
+        if mark is not None:
+            return mark
+    bid = _positive(market.bid)
+    ask = _positive(market.ask)
+    if bid is None or ask is None:
+        return None
+    return (bid + ask) / 2
+
+
+def _spot_premium_pct(spot_price: float, future_price: float) -> float:
+    return (spot_price - future_price) / ((spot_price + future_price) / 2) * 100
+
+
+def _auto_watch_id(symbol: str, spot_exchange: str, future_exchange: str) -> str:
+    return f"auto:{spot_exchange}:{future_exchange}:{symbol}"
+
+
+def _auto_signal_level(premium_pct: float, item: NegativeBasisWatchItem) -> NegativeBasisSignalLevel:
+    if premium_pct >= item.extreme_threshold_pct:
+        return "extreme"
+    if premium_pct >= item.strong_threshold_pct:
+        return "strong"
+    if premium_pct >= item.confirmed_threshold_pct:
+        return "confirmed"
+    if premium_pct >= item.building_threshold_pct:
+        return "building"
+    if premium_pct >= item.watch_threshold_pct:
+        return "watch"
+    return "none"
+
+
+def _auto_candidate(
+    spot: MarketSnapshot,
+    future: MarketSnapshot,
+    item: NegativeBasisWatchItem,
+    *,
+    observed_at: datetime,
+) -> NegativeBasisAutoCandidate | None:
+    spot_price = _market_price(spot)
+    future_price = _market_price(future)
+    if spot_price is None or future_price is None:
+        return None
+    premium_pct = _spot_premium_pct(spot_price, future_price)
+    if premium_pct < item.watch_threshold_pct:
+        return None
+    if (
+        spot.volume_24h_usdt is not None
+        and spot.volume_24h_usdt < AUTO_SCAN_MIN_SPOT_VOLUME_24H_USDT
+    ):
+        return None
+    return NegativeBasisAutoCandidate(
+        id=_auto_watch_id(spot.symbol, spot.exchange, future.exchange),
+        symbol=spot.symbol,
+        spot_exchange=spot.exchange,
+        future_exchange=future.exchange,
+        signal_level=_auto_signal_level(premium_pct, item),
+        spot_premium_pct=premium_pct,
+        spot_price=spot_price,
+        future_price=future_price,
+        spot_volume_24h_usdt=spot.volume_24h_usdt,
+        future_volume_24h_usdt=future.volume_24h_usdt,
+        observed_at=observed_at,
+    )
+
+
 class GateContractStatsClient:
     def __init__(self, client: httpx.AsyncClient | None = None) -> None:
         self.client = client or httpx.AsyncClient(
@@ -838,17 +915,22 @@ class NegativeBasisMonitor:
         self,
         repo: NegativeBasisMonitorRepository,
         *,
+        snapshot_store: SnapshotStore | None = None,
         query_service_factory: Callable[[], PairSpreadQueryService] | None = None,
         gate_stats_client: GateContractStatsClient | None = None,
         alert_sender: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         self.repo = repo
+        self.snapshot_store = snapshot_store
         self.query_service_factory = query_service_factory or PairSpreadQueryService
         self.gate_stats_client = gate_stats_client or GateContractStatsClient()
         self.alert_sender = alert_sender
         self._last_run_at: dict[str, datetime] = {}
         self._last_sent_at: dict[str, datetime] = {}
         self._last_sent_level: dict[str, NegativeBasisSignalLevel] = {}
+        self._last_auto_scan_at: datetime | None = None
+        self._auto_candidates: list[NegativeBasisAutoCandidate] = []
+        self._auto_scan_error: str | None = None
         self._latest_error: str | None = None
         self._running = False
 
@@ -864,6 +946,7 @@ class NegativeBasisMonitor:
         try:
             while not stop_event.is_set():
                 try:
+                    await self.discover_auto_candidates()
                     await self.collect_due()
                     self._latest_error = None
                 except Exception as exc:  # noqa: BLE001 - background monitor should keep running.
@@ -894,8 +977,105 @@ class NegativeBasisMonitor:
         ]
         if not due_items:
             return []
+        due_items = sorted(
+            due_items,
+            key=lambda item: (
+                item.auto_managed,
+                self._last_run_at.get(item.id) or datetime.min.replace(tzinfo=UTC),
+            ),
+        )[:AUTO_COLLECT_MAX_DUE]
         results = await asyncio.gather(*(self.collect_watch_item(item) for item in due_items))
         return list(results)
+
+    async def discover_auto_candidates(self, *, force: bool = False) -> list[NegativeBasisAutoCandidate]:
+        if self.snapshot_store is None:
+            self._auto_candidates = []
+            return []
+        now = utc_now()
+        if (
+            not force
+            and self._last_auto_scan_at is not None
+            and (now - self._last_auto_scan_at).total_seconds() < AUTO_SCAN_INTERVAL_SECONDS
+        ):
+            return self._auto_candidates
+        try:
+            markets = self.snapshot_store.get_markets()
+            candidates = self._discover_auto_candidates_from_markets(markets, now=now)
+            self._auto_candidates = candidates
+            self._last_auto_scan_at = now
+            self._auto_scan_error = None
+            await self._upsert_auto_candidates(candidates)
+            return candidates
+        except Exception as exc:  # noqa: BLE001 - keep existing watchlist monitoring alive.
+            self._auto_scan_error = _error_message(exc)
+            logger.exception("negative basis auto discovery failed")
+            return self._auto_candidates
+
+    def _discover_auto_candidates_from_markets(
+        self,
+        markets: list[MarketSnapshot],
+        *,
+        now: datetime,
+    ) -> list[NegativeBasisAutoCandidate]:
+        template = NegativeBasisWatchItem(id="auto-template", enabled=True)
+        spots_by_symbol: dict[str, list[MarketSnapshot]] = {}
+        futures_by_symbol: dict[str, list[MarketSnapshot]] = {}
+        for market in markets:
+            if not market.symbol.endswith("USDT"):
+                continue
+            if market.market_type == MarketType.SPOT:
+                if market.exchange not in NEGATIVE_BASIS_SPOT_EXCHANGES:
+                    continue
+                spots_by_symbol.setdefault(market.symbol, []).append(market)
+            elif market.market_type == MarketType.FUTURE:
+                if market.exchange not in NEGATIVE_BASIS_FUTURE_EXCHANGES:
+                    continue
+                futures_by_symbol.setdefault(market.symbol, []).append(market)
+
+        candidates: list[NegativeBasisAutoCandidate] = []
+        for symbol in sorted(spots_by_symbol.keys() & futures_by_symbol.keys()):
+            for spot in spots_by_symbol[symbol]:
+                for future in futures_by_symbol[symbol]:
+                    candidate = _auto_candidate(spot, future, template, observed_at=now)
+                    if candidate is not None:
+                        candidates.append(candidate)
+        return sorted(candidates, key=lambda item: item.spot_premium_pct, reverse=True)[
+            :AUTO_SCAN_MAX_CANDIDATES
+        ]
+
+    async def _upsert_auto_candidates(self, candidates: list[NegativeBasisAutoCandidate]) -> None:
+        for candidate in candidates:
+            existing = await self.repo.get_watch_item(candidate.id)
+            if existing is not None and not existing.auto_managed:
+                continue
+            item = existing or NegativeBasisWatchItem(
+                id=candidate.id,
+                auto_managed=True,
+                enabled=True,
+                symbol=candidate.symbol,
+                spot_exchange=candidate.spot_exchange,
+                future_exchange=candidate.future_exchange,
+                spot_symbol=candidate.symbol,
+                future_symbol=candidate.symbol,
+                future_multiplier=1,
+                interval_seconds=60,
+                lookback_hours=4,
+                note="auto discovered spot-premium candidate",
+            )
+            saved = item.model_copy(
+                update={
+                    "auto_managed": True,
+                    "enabled": True,
+                    "symbol": candidate.symbol,
+                    "spot_exchange": candidate.spot_exchange,
+                    "future_exchange": candidate.future_exchange,
+                    "spot_symbol": candidate.symbol,
+                    "future_symbol": candidate.symbol,
+                    "future_multiplier": 1,
+                    "updated_at": utc_now(),
+                }
+            )
+            await self.repo.upsert_watch_item(saved)
 
     async def collect_watch_item(self, item: NegativeBasisWatchItem) -> NegativeBasisAnalysisResult:
         result = await self.analyze_item(item)
@@ -962,6 +1142,11 @@ class NegativeBasisMonitor:
         watchlist = await self.repo.list_watch_items()
         return NegativeBasisMonitorStatus(
             running=self.running(),
+            auto_scan_enabled=self.snapshot_store is not None,
+            auto_scan_last_at=self._last_auto_scan_at,
+            auto_scan_error=self._auto_scan_error,
+            auto_candidate_count=len(self._auto_candidates),
+            auto_candidates=self._auto_candidates,
             watch_count=len(watchlist),
             enabled_watch_count=sum(1 for item in watchlist if item.enabled),
             sample_count=await self.repo.count_samples(),

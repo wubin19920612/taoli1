@@ -752,6 +752,7 @@ def create_app(
         )
         app.state.negative_basis_monitor = NegativeBasisMonitor(
             NegativeBasisMonitorRepository(db),
+            snapshot_store=store,
             alert_sender=lambda message: _send_index_component_alert(app, message),
         )
         app.state.pair_spread_funding_recorder = PairSpreadFundingRecorder(PairSpreadFundingRepository(db))

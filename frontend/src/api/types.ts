@@ -303,6 +303,7 @@ export interface NewListingHistoryResult {
 
 export interface NegativeBasisWatchItem {
   id: string;
+  auto_managed: boolean;
   enabled: boolean;
   symbol: string;
   spot_exchange: string;
@@ -431,8 +432,27 @@ export interface NegativeBasisAlertEvent {
   created_at: string;
 }
 
+export interface NegativeBasisAutoCandidate {
+  id: string;
+  symbol: string;
+  spot_exchange: string;
+  future_exchange: string;
+  signal_level: NegativeBasisSignalLevel;
+  spot_premium_pct: number;
+  spot_price: number;
+  future_price: number;
+  spot_volume_24h_usdt: number | null;
+  future_volume_24h_usdt: number | null;
+  observed_at: string;
+}
+
 export interface NegativeBasisMonitorStatus {
   running: boolean;
+  auto_scan_enabled: boolean;
+  auto_scan_last_at: string | null;
+  auto_scan_error: string | null;
+  auto_candidate_count: number;
+  auto_candidates: NegativeBasisAutoCandidate[];
   watch_count: number;
   enabled_watch_count: number;
   sample_count: number;

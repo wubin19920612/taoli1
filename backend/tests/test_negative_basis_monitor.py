@@ -7,7 +7,7 @@ from app.core.config import Settings
 from app.db.database import connect_database
 from app.db.schema import initialize_schema
 from app.main import create_app
-from app.models.market import MarketType
+from app.models.market import MarketSnapshot, MarketType
 from app.models.negative_basis import NegativeBasisWatchItem
 from app.models.pair_spread import (
     PairSpreadCurrentLeg,
@@ -26,6 +26,7 @@ from app.services.negative_basis_monitor import (
     build_negative_basis_analysis,
 )
 from app.services.pair_spread_query import build_pair_spread_points
+from app.services.snapshot_store import SnapshotStore
 
 
 def _current_leg(
@@ -235,6 +236,63 @@ async def test_negative_basis_monitor_records_and_alerts() -> None:
     assert len(events) == 1
     assert "PROMUSDT" in events[0].message
     assert len(sent_messages) == 1
+
+
+@pytest.mark.asyncio
+async def test_negative_basis_monitor_auto_discovers_spot_premium_candidates() -> None:
+    db = await connect_database(":memory:")
+    await initialize_schema(db)
+    repo = NegativeBasisMonitorRepository(db)
+    store = SnapshotStore()
+    observed_at = datetime(2026, 8, 11, 0, 6, tzinfo=UTC)
+    store.set_markets(
+        [
+            MarketSnapshot(
+                symbol="PROMUSDT",
+                base="PROM",
+                exchange="binance",
+                market_type=MarketType.SPOT,
+                bid=1.039,
+                ask=1.041,
+                volume_24h_usdt=2_000_000,
+                timestamp=observed_at,
+                raw_symbol="PROMUSDT",
+            ),
+            MarketSnapshot(
+                symbol="PROMUSDT",
+                base="PROM",
+                exchange="gate",
+                market_type=MarketType.FUTURE,
+                bid=0.999,
+                ask=1.001,
+                mark_price=1.0,
+                volume_24h_usdt=800_000,
+                timestamp=observed_at,
+                raw_symbol="PROM_USDT",
+            ),
+        ]
+    )
+    monitor = NegativeBasisMonitor(
+        repo,
+        snapshot_store=store,
+        gate_stats_client=FakeGateStatsClient(),  # type: ignore[arg-type]
+    )
+
+    try:
+        candidates = await monitor.discover_auto_candidates(force=True)
+        watchlist = await repo.list_watch_items()
+    finally:
+        await monitor.aclose()
+        await db.close()
+
+    assert len(candidates) == 1
+    assert candidates[0].symbol == "PROMUSDT"
+    assert candidates[0].signal_level == "strong"
+    assert candidates[0].spot_premium_pct == pytest.approx(3.92156862745)
+    assert len(watchlist) == 1
+    assert watchlist[0].auto_managed is True
+    assert watchlist[0].spot_exchange == "binance"
+    assert watchlist[0].future_exchange == "gate"
 
 
 def test_negative_basis_monitor_api_saves_watch_item() -> None:

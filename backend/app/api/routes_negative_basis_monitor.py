@@ -11,6 +11,7 @@ from app.models.negative_basis import (
     NEGATIVE_BASIS_SPOT_EXCHANGES,
     NegativeBasisAlertEvent,
     NegativeBasisAnalysisResult,
+    NegativeBasisAutoCandidate,
     NegativeBasisMonitorStatus,
     NegativeBasisSignalSample,
     NegativeBasisWatchItem,
@@ -83,6 +84,15 @@ async def collect_negative_basis_watch_item(
 @router.get("/status", response_model=NegativeBasisMonitorStatus)
 async def get_negative_basis_monitor_status(request: Request) -> NegativeBasisMonitorStatus:
     return await _monitor(request).status()
+
+
+@router.post("/auto-scan", response_model=list[NegativeBasisAutoCandidate])
+async def refresh_negative_basis_auto_scan(
+    request: Request,
+    password: str | None = Depends(dashboard_password_header),
+) -> list[NegativeBasisAutoCandidate]:
+    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
+    return await _monitor(request).discover_auto_candidates(force=True)
 
 
 @router.get("/samples", response_model=list[NegativeBasisSignalSample])

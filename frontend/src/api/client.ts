@@ -59,6 +59,7 @@ import type {
   MinuteSignalUniverseScanResult,
   NegativeBasisAlertEvent,
   NegativeBasisAnalysisResult,
+  NegativeBasisAutoCandidate,
   NegativeBasisMonitorStatus,
   NegativeBasisSignalSample,
   NegativeBasisWatchItem,
@@ -982,6 +983,13 @@ export async function listNegativeBasisExchanges(): Promise<{ spot: string[]; fu
 
 export async function getNegativeBasisMonitorStatus(): Promise<NegativeBasisMonitorStatus> {
   return fetchJson<NegativeBasisMonitorStatus>("/negative-basis-monitor/status");
+}
+
+export async function refreshNegativeBasisAutoScan(): Promise<NegativeBasisAutoCandidate[]> {
+  return fetchJson<NegativeBasisAutoCandidate[]>("/negative-basis-monitor/auto-scan", {
+    method: "POST",
+    body: JSON.stringify({})
+  });
 }
 
 export async function listNegativeBasisWatchlist(): Promise<NegativeBasisWatchItem[]> {

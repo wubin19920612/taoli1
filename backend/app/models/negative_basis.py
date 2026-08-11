@@ -48,6 +48,7 @@ def utc_now() -> datetime:
 
 class NegativeBasisWatchItem(BaseModel):
     id: str = Field(default_factory=lambda: uuid4().hex)
+    auto_managed: bool = Field(default=False)
     enabled: bool = Field(default=True)
     symbol: str = Field(default="PROMUSDT")
     spot_exchange: str = Field(default="binance")
@@ -234,8 +235,27 @@ class NegativeBasisAlertEvent(BaseModel):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class NegativeBasisAutoCandidate(BaseModel):
+    id: str
+    symbol: str
+    spot_exchange: str
+    future_exchange: str
+    signal_level: NegativeBasisSignalLevel = "none"
+    spot_premium_pct: float
+    spot_price: float
+    future_price: float
+    spot_volume_24h_usdt: float | None = Field(default=None, ge=0)
+    future_volume_24h_usdt: float | None = Field(default=None, ge=0)
+    observed_at: datetime
+
+
 class NegativeBasisMonitorStatus(BaseModel):
     running: bool
+    auto_scan_enabled: bool = True
+    auto_scan_last_at: datetime | None = None
+    auto_scan_error: str | None = None
+    auto_candidate_count: int = 0
+    auto_candidates: list[NegativeBasisAutoCandidate] = Field(default_factory=list)
     watch_count: int
     enabled_watch_count: int
     sample_count: int

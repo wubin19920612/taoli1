@@ -36,11 +36,13 @@ import {
   getNegativeBasisMonitorStatus,
   listNegativeBasisExchanges,
   queryNegativeBasis,
+  refreshNegativeBasisAutoScan,
   upsertNegativeBasisWatchItem
 } from "../api/client";
 import type {
   NegativeBasisAlertEvent,
   NegativeBasisAnalysisResult,
+  NegativeBasisAutoCandidate,
   NegativeBasisHourlyStatPoint,
   NegativeBasisMonitorStatus,
   NegativeBasisPoint,
@@ -98,6 +100,7 @@ function emptyWatch(): NegativeBasisWatchItem {
   const now = nowIso();
   return {
     id: newId(),
+    auto_managed: false,
     enabled: true,
     symbol: "PROMUSDT",
     spot_exchange: "binance",
@@ -379,7 +382,9 @@ export function NegativeBasisMonitorPage() {
   const [selectedWatchId, setSelectedWatchId] = useState<string | undefined>();
   const [analysis, setAnalysis] = useState<NegativeBasisAnalysisResult | null>(null);
   const [loading, setLoading] = useState(false);
+  const [autoScanLoading, setAutoScanLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [showManualConfig, setShowManualConfig] = useState(false);
   const customSymbols = Form.useWatch("custom_symbols", form);
 
   const refresh = useCallback(async () => {
@@ -468,11 +473,13 @@ export function NegativeBasisMonitorPage() {
     setDraft(item);
     setSelectedWatchId(undefined);
     setAnalysis(null);
+    setShowManualConfig(true);
   };
 
   const editWatch = (item: NegativeBasisWatchItem) => {
     setDraft(item);
     setSelectedWatchId(item.id);
+    setShowManualConfig(true);
   };
 
   const toggleWatch = async (item: NegativeBasisWatchItem, enabled: boolean) => {
@@ -495,6 +502,19 @@ export function NegativeBasisMonitorPage() {
       message.error(exc instanceof Error ? exc.message : String(exc));
     } finally {
       setLoading(false);
+    }
+  };
+
+  const runAutoScan = async () => {
+    setAutoScanLoading(true);
+    try {
+      const candidates = await refreshNegativeBasisAutoScan();
+      message.success(`自动扫描完成，发现 ${candidates.length} 个候选`);
+      await refresh();
+    } catch (exc) {
+      message.error(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setAutoScanLoading(false);
     }
   };
 
@@ -528,6 +548,7 @@ export function NegativeBasisMonitorPage() {
       title: "交易对",
       render: (_, item) => (
         <Space size={4} wrap>
+          {item.auto_managed ? <Tag color="processing">自动</Tag> : <Tag>手动</Tag>}
           <Tag color="green">{exchangeText(item.spot_exchange)} 现货</Tag>
           <Tag color="orange">{exchangeText(item.future_exchange)} 合约</Tag>
           {sameSymbolMode(item) ? <Tag>同标的</Tag> : <Tag color="purple">自定义</Tag>}
@@ -556,6 +577,45 @@ export function NegativeBasisMonitorPage() {
           </Popconfirm>
         </Space>
       )
+    }
+  ];
+
+  const candidateColumns: ColumnsType<NegativeBasisAutoCandidate> = [
+    {
+      title: "标的",
+      dataIndex: "symbol",
+      width: 92,
+      render: (value: string) => <Typography.Text strong>{shortSymbol(value)}</Typography.Text>
+    },
+    {
+      title: "路线",
+      width: 190,
+      render: (_, item) => (
+        <Space size={4} wrap>
+          <Tag color="green">{exchangeText(item.spot_exchange)} 现货</Tag>
+          <Tag color="orange">{exchangeText(item.future_exchange)} 合约</Tag>
+        </Space>
+      )
+    },
+    { title: "级别", dataIndex: "signal_level", width: 88, render: levelTag },
+    { title: "现货溢价", dataIndex: "spot_premium_pct", width: 100, align: "right", render: (value: number) => pct(value, 3) },
+    { title: "价格", width: 150, render: (_, item) => `${price(item.spot_price)} / ${price(item.future_price)}` },
+    { title: "现货24h", dataIndex: "spot_volume_24h_usdt", width: 110, align: "right", render: (value: number | null) => money(value) },
+    { title: "合约24h", dataIndex: "future_volume_24h_usdt", width: 110, align: "right", render: (value: number | null) => money(value) },
+    { title: "发现时间", dataIndex: "observed_at", width: 120, render: (value: string) => time(value) },
+    {
+      title: "操作",
+      width: 96,
+      render: (_, item) => {
+        const watch = status?.watchlist.find((watchItem) => watchItem.id === item.id);
+        return watch ? (
+          <Button size="small" icon={<PlayCircleOutlined />} onClick={() => void collectNow(watch)}>
+            采样
+          </Button>
+        ) : (
+          <Tag>待入池</Tag>
+        );
+      }
     }
   ];
 
@@ -615,27 +675,60 @@ export function NegativeBasisMonitorPage() {
       <div className="toolbar">
         <div>
           <Typography.Title level={4}>负基差埋伏监控</Typography.Title>
-          <Typography.Text type="secondary">现货高于合约时跟踪零轴附近启动、量能放大、OI 和多空变化。</Typography.Text>
+          <Typography.Text type="secondary">后台自动扫描全市场现货溢价候选，命中后自动入池、采样并按策略上报。</Typography.Text>
         </div>
         <Space>
-          <Button icon={<PlusOutlined />} onClick={createWatch}>新增</Button>
+          <Button icon={<ReloadOutlined />} loading={autoScanLoading} onClick={() => void runAutoScan()}>立即扫描</Button>
+          <Button icon={<PlusOutlined />} onClick={createWatch}>高级配置</Button>
           <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void refresh()}>刷新</Button>
         </Space>
       </div>
 
       {status?.latest_error ? <Alert type="warning" showIcon message={status.latest_error} /> : null}
+      {status?.auto_scan_error ? <Alert type="warning" showIcon message={status.auto_scan_error} /> : null}
       {analysis?.warnings.map((warning) => (
         <Alert key={warning} type="warning" showIcon message={warning} className="negative-basis-warning" />
       ))}
 
       <div className="negative-basis-status">
         <Statistic title="后台状态" value={status?.running ? "运行中" : "未运行"} />
+        <Statistic title="自动候选" value={status?.auto_candidate_count ?? 0} />
         <Statistic title="启用标的" value={status?.enabled_watch_count ?? 0} suffix={`/ ${status?.watch_count ?? 0}`} />
         <Statistic title="样本" value={status?.sample_count ?? 0} />
         <Statistic title="告警" value={status?.event_count ?? 0} />
       </div>
 
-      <div className="negative-basis-layout">
+      <Card
+        size="small"
+        title="自动发现候选"
+        extra={
+          <Space wrap>
+            <Tag color={status?.auto_scan_enabled ? "green" : undefined}>
+              {status?.auto_scan_enabled ? "自动扫描开启" : "等待行情快照"}
+            </Tag>
+            <Tag>上次 {time(status?.auto_scan_last_at)}</Tag>
+            <Button size="small" icon={<ReloadOutlined />} loading={autoScanLoading} onClick={() => void runAutoScan()}>
+              立即扫描
+            </Button>
+            <Button size="small" onClick={() => setShowManualConfig((value) => !value)}>
+              {showManualConfig ? "收起高级配置" : "展开高级配置"}
+            </Button>
+          </Space>
+        }
+      >
+        <Table
+          rowKey="id"
+          size="small"
+          columns={candidateColumns}
+          dataSource={status?.auto_candidates ?? []}
+          pagination={{ pageSize: 8 }}
+          scroll={{ x: 960 }}
+          locale={{ emptyText: <Empty description="暂未发现现货溢价候选" /> }}
+        />
+      </Card>
+
+      {showManualConfig ? (
+        <div className="negative-basis-layout">
         <Card size="small" title="监控参数" className="negative-basis-config-card">
           <Form form={form} layout="vertical" initialValues={formValuesFromWatch(draft)}>
             <div className="negative-basis-form-grid">
@@ -757,7 +850,26 @@ export function NegativeBasisMonitorPage() {
             })}
           />
         </Card>
-      </div>
+        </div>
+      ) : (
+        <Card size="small" title="后台监控池">
+          <Table
+            rowKey="id"
+            size="small"
+            pagination={{ pageSize: 10 }}
+            columns={watchColumns}
+            dataSource={status?.watchlist ?? []}
+            rowClassName={(item) => (item.id === selectedWatchId ? "negative-basis-row-active" : "")}
+            onRow={(item) => ({
+              onClick: () => {
+                setSelectedWatchId(item.id);
+                setDraft(item);
+              }
+            })}
+            scroll={{ x: 760 }}
+          />
+        </Card>
+      )}
 
       <Card size="small" title="当前信号">
         {analysis ? (
