@@ -3524,12 +3524,21 @@ body {
   background: #eef8f6 !important;
 }
 
+.negative-basis-blockbar {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.negative-basis-global-block {
+  align-items: center;
+}
+
 .negative-basis-blocklist {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  margin-bottom: 10px;
 }
 
 .negative-basis-block-actions {

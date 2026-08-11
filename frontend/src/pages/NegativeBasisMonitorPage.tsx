@@ -390,6 +390,7 @@ export function NegativeBasisMonitorPage() {
   const [loading, setLoading] = useState(false);
   const [autoScanLoading, setAutoScanLoading] = useState(false);
   const [blockActionLoading, setBlockActionLoading] = useState(false);
+  const [globalBlockExchange, setGlobalBlockExchange] = useState<string | undefined>();
   const [saving, setSaving] = useState(false);
   const [showManualConfig, setShowManualConfig] = useState(false);
   const customSymbols = Form.useWatch("custom_symbols", form);
@@ -444,6 +445,18 @@ export function NegativeBasisMonitorPage() {
   const exchangeOptionItems = (values: string[]) =>
     values.map((exchange) => ({ label: exchangeText(exchange), value: exchange }));
 
+  const globalBlockExchangeOptions = useMemo(
+    () =>
+      Array.from(new Set([...spotExchanges, ...futureExchanges]))
+        .sort((left, right) => exchangeText(left).localeCompare(exchangeText(right)))
+        .map((exchange) => ({
+          label: `${exchangeText(exchange)}${blockedExchanges.includes(exchange) ? "（已屏蔽）" : ""}`,
+          value: exchange,
+          disabled: blockedExchanges.includes(exchange)
+        })),
+    [blockedExchanges, futureExchanges, spotExchanges]
+  );
+
   const toggleAutoScanEnabled = async (enabled: boolean) => {
     if (!autoScanSettings) {
       return;
@@ -495,6 +508,9 @@ export function NegativeBasisMonitorPage() {
     try {
       await blockNegativeBasisExchange(exchange);
       message.success(`已屏蔽交易所 ${exchangeText(exchange)}`);
+      if (globalBlockExchange === exchange) {
+        setGlobalBlockExchange(undefined);
+      }
       await refresh();
     } catch (exc) {
       message.error(exc instanceof Error ? exc.message : String(exc));
@@ -514,6 +530,14 @@ export function NegativeBasisMonitorPage() {
     } finally {
       setBlockActionLoading(false);
     }
+  };
+
+  const blockSelectedExchange = async () => {
+    if (!globalBlockExchange) {
+      message.warning("先选择要屏蔽的交易所");
+      return;
+    }
+    await blockExchange(globalBlockExchange);
   };
 
   const renderBlockButtons = (symbol: string, spotExchange: string, futureExchange: string) => (
@@ -567,35 +591,61 @@ export function NegativeBasisMonitorPage() {
   );
 
   const renderBlocklist = () => (
-    <div className="negative-basis-blocklist">
-      <Typography.Text type="secondary">已屏蔽</Typography.Text>
-      {blockedSymbols.map((symbol) => (
-        <Tag
-          key={`symbol-${symbol}`}
-          color="red"
-          closable={!blockActionLoading}
-          onClose={(event) => {
-            event.preventDefault();
-            void unblockSymbol(symbol);
-          }}
+    <div className="negative-basis-blockbar">
+      <Space size={6} wrap className="negative-basis-global-block">
+        <Typography.Text strong>全局屏蔽交易所</Typography.Text>
+        <Select
+          size="small"
+          allowClear
+          showSearch
+          placeholder="选择交易所"
+          value={globalBlockExchange}
+          options={globalBlockExchangeOptions}
+          optionFilterProp="label"
+          style={{ width: 168 }}
+          onChange={(value) => setGlobalBlockExchange(value)}
+        />
+        <Button
+          size="small"
+          danger
+          icon={<StopOutlined />}
+          loading={blockActionLoading}
+          disabled={!globalBlockExchange || blockedExchanges.includes(globalBlockExchange)}
+          onClick={() => void blockSelectedExchange()}
         >
-          标的 {shortSymbol(symbol)}
-        </Tag>
-      ))}
-      {blockedExchanges.map((exchange) => (
-        <Tag
-          key={`exchange-${exchange}`}
-          color="volcano"
-          closable={!blockActionLoading}
-          onClose={(event) => {
-            event.preventDefault();
-            void unblockExchange(exchange);
-          }}
-        >
-          交易所 {exchangeText(exchange)}
-        </Tag>
-      ))}
-      {!blockedSymbols.length && !blockedExchanges.length ? <Tag>无</Tag> : null}
+          屏蔽交易所
+        </Button>
+      </Space>
+      <div className="negative-basis-blocklist">
+        <Typography.Text type="secondary">已屏蔽</Typography.Text>
+        {blockedSymbols.map((symbol) => (
+          <Tag
+            key={`symbol-${symbol}`}
+            color="red"
+            closable={!blockActionLoading}
+            onClose={(event) => {
+              event.preventDefault();
+              void unblockSymbol(symbol);
+            }}
+          >
+            标的 {shortSymbol(symbol)}
+          </Tag>
+        ))}
+        {blockedExchanges.map((exchange) => (
+          <Tag
+            key={`exchange-${exchange}`}
+            color="volcano"
+            closable={!blockActionLoading}
+            onClose={(event) => {
+              event.preventDefault();
+              void unblockExchange(exchange);
+            }}
+          >
+            交易所 {exchangeText(exchange)}
+          </Tag>
+        ))}
+        {!blockedSymbols.length && !blockedExchanges.length ? <Tag>无</Tag> : null}
+      </div>
     </div>
   );
 
