@@ -1863,7 +1863,7 @@ body {
   display: block;
 }
 
-.pair-spread-chart rect {
+.pair-chart-plot-bg {
   fill: #ffffff;
   stroke: #eef2f1;
 }
@@ -1929,6 +1929,50 @@ body {
 
 .pair-chart-current-neutral {
   fill: #69736f;
+}
+
+.pair-chart-hover-target {
+  cursor: crosshair;
+}
+
+.pair-chart-hover-crosshair {
+  stroke: #7b8a85;
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+}
+
+.pair-chart-hover-point {
+  fill: #ffffff;
+  stroke: #1d6fdc;
+  stroke-width: 2.5;
+}
+
+.pair-chart-hover-tooltip-bg {
+  fill: rgba(255, 255, 255, 0.97);
+  stroke: #cfd9d5;
+  stroke-width: 1;
+}
+
+.pair-chart-hover-tooltip-divider {
+  stroke: #e4ebe8;
+  stroke-width: 1;
+}
+
+.pair-chart-hover-tooltip-time,
+.pair-chart-hover-tooltip-rate,
+.pair-chart-hover-tooltip-value {
+  fill: #17211d;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.pair-chart-hover-tooltip-rate {
+  fill: #1d6fdc;
+}
+
+.pair-chart-hover-tooltip-label {
+  fill: #6b7a75;
+  font-size: 11px;
 }
 
 .pair-chart-turning-label-bg {

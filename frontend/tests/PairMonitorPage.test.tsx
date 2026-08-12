@@ -766,6 +766,47 @@ describe("PairMonitorPage", () => {
     );
   });
 
+  it("shows the nearest point time and spread details when hovering the spread chart", async () => {
+    window.history.pushState(
+      {},
+      "",
+      "/?page=pair-monitor&leg1_exchange=aster&leg1_market_type=future&leg1_symbol=TAIL" +
+        "&leg2_exchange=gate&leg2_market_type=future&leg2_symbol=TAIL&hours=6&interval_seconds=60"
+    );
+    render(<PairMonitorPage />);
+
+    await waitFor(() => {
+      expect(document.querySelector(".pair-chart-hover-target")).toBeTruthy();
+    });
+    const chart = document.querySelector(".pair-spread-chart") as SVGSVGElement;
+    const hoverTarget = document.querySelector(".pair-chart-hover-target") as SVGRectElement;
+    vi.spyOn(chart, "getBoundingClientRect").mockReturnValue({
+      bottom: 330,
+      height: 330,
+      left: 0,
+      right: 1180,
+      top: 0,
+      width: 1180,
+      x: 0,
+      y: 0,
+      toJSON: () => ({})
+    });
+
+    fireEvent.mouseMove(hoverTarget, { clientX: 1148, clientY: 160 });
+
+    expect(document.querySelector(".pair-chart-hover-crosshair")).toBeTruthy();
+    expect(document.querySelector(".pair-chart-hover-point")).toBeTruthy();
+    const tooltip = document.querySelector(".pair-chart-hover-detail")?.textContent ?? "";
+    expect(tooltip).toContain("07-24 10:00");
+    expect(tooltip).toContain("-0.06%");
+    expect(tooltip).toContain("-0.06");
+    expect(tooltip).toContain("100");
+    expect(tooltip).toContain("99.94");
+
+    fireEvent.mouseLeave(hoverTarget);
+    expect(document.querySelector(".pair-chart-hover-detail")).toBeNull();
+  });
+
   it("auto-runs a Binance Alpha spread query from URL parameters", async () => {
     window.history.pushState(
       {},

@@ -19,7 +19,7 @@ import {
   Typography
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 
@@ -2261,6 +2261,7 @@ function PairSpreadDiagnosticCard({
 }
 
 function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   const points = pairDisplayPoints(result);
   const width = 1180;
   const height = 330;
@@ -2289,6 +2290,39 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
   const turningPoints = chartTurningPoints(points);
   const latestPoint = points[points.length - 1];
   const latestTone = fundingRateTone(latestPoint.spread_pct);
+  const hoveredPoint = hoveredIndex === null ? null : points[hoveredIndex] ?? null;
+  const hoveredX = hoveredIndex === null ? null : xAt(hoveredIndex);
+  const hoveredY = hoveredPoint ? yAt(hoveredPoint.spread_pct) : null;
+  const tooltipWidth = 184;
+  const tooltipHeight = 88;
+  const tooltipX =
+    hoveredX === null
+      ? 0
+      : hoveredX + tooltipWidth + 12 <= padding.left + chartWidth
+        ? hoveredX + 12
+        : hoveredX - tooltipWidth - 12;
+  const tooltipY =
+    hoveredY === null
+      ? 0
+      : Math.min(
+          padding.top + chartHeight - tooltipHeight,
+          Math.max(padding.top, hoveredY - tooltipHeight / 2)
+        );
+  const handleChartMouseMove = (event: ReactMouseEvent<SVGRectElement>) => {
+    const svg = event.currentTarget.ownerSVGElement;
+    if (!svg) {
+      return;
+    }
+    const bounds = svg.getBoundingClientRect();
+    if (bounds.width <= 0) {
+      return;
+    }
+    const viewBoxX = ((event.clientX - bounds.left) / bounds.width) * width;
+    const chartCursorX = Math.min(chartWidth, Math.max(0, viewBoxX - padding.left));
+    const index =
+      points.length === 1 ? 0 : Math.round((chartCursorX / chartWidth) * (points.length - 1));
+    setHoveredIndex(index);
+  };
 
   return (
     <div className="pair-chart-card">
@@ -2299,7 +2333,7 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
             <stop offset="100%" stopColor="#2f80ed" stopOpacity="0.04" />
           </linearGradient>
         </defs>
-        <rect x={padding.left} y={padding.top} width={chartWidth} height={chartHeight} rx="4" />
+        <rect className="pair-chart-plot-bg" x={padding.left} y={padding.top} width={chartWidth} height={chartHeight} rx="4" />
         {[0, 0.25, 0.5, 0.75, 1].map((tick) => {
           const y = padding.top + chartHeight * tick;
           const value = max - (max - min) * tick;
@@ -2378,6 +2412,54 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
             </g>
           );
         })}
+        <rect
+          className="pair-chart-hover-target"
+          x={padding.left}
+          y={padding.top}
+          width={chartWidth}
+          height={chartHeight}
+          style={{ fill: "transparent", stroke: "none" }}
+          onMouseMove={handleChartMouseMove}
+          onMouseLeave={() => setHoveredIndex(null)}
+        />
+        {hoveredPoint && hoveredX !== null && hoveredY !== null ? (
+          <g className="pair-chart-hover-detail" pointerEvents="none">
+            <line
+              className="pair-chart-hover-crosshair"
+              x1={hoveredX}
+              y1={padding.top}
+              x2={hoveredX}
+              y2={padding.top + chartHeight}
+            />
+            <circle className="pair-chart-hover-point" cx={hoveredX} cy={hoveredY} r="5" />
+            <rect className="pair-chart-hover-tooltip-bg" x={tooltipX} y={tooltipY} width={tooltipWidth} height={tooltipHeight} rx="4" />
+            <text className="pair-chart-hover-tooltip-time" x={tooltipX + 10} y={tooltipY + 18}>
+              {time(hoveredPoint.bucket_at)}
+            </text>
+            <text className="pair-chart-hover-tooltip-rate" x={tooltipX + tooltipWidth - 10} y={tooltipY + 18} textAnchor="end">
+              {signedPct(hoveredPoint.spread_pct)}
+            </text>
+            <line className="pair-chart-hover-tooltip-divider" x1={tooltipX + 10} y1={tooltipY + 27} x2={tooltipX + tooltipWidth - 10} y2={tooltipY + 27} />
+            <text className="pair-chart-hover-tooltip-label" x={tooltipX + 10} y={tooltipY + 45}>
+              差价
+            </text>
+            <text className="pair-chart-hover-tooltip-value" x={tooltipX + tooltipWidth - 10} y={tooltipY + 45} textAnchor="end">
+              {price(hoveredPoint.spread_abs)}
+            </text>
+            <text className="pair-chart-hover-tooltip-label" x={tooltipX + 10} y={tooltipY + 62}>
+              左价
+            </text>
+            <text className="pair-chart-hover-tooltip-value" x={tooltipX + tooltipWidth - 10} y={tooltipY + 62} textAnchor="end">
+              {price(hoveredPoint.leg1_close)}
+            </text>
+            <text className="pair-chart-hover-tooltip-label" x={tooltipX + 10} y={tooltipY + 79}>
+              右价
+            </text>
+            <text className="pair-chart-hover-tooltip-value" x={tooltipX + tooltipWidth - 10} y={tooltipY + 79} textAnchor="end">
+              {price(hoveredPoint.leg2_close)}
+            </text>
+          </g>
+        ) : null}
       </svg>
       <div className="pair-chart-footer">
         <div className="pair-footer-tags">
