@@ -30,7 +30,7 @@ import {
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   blockNegativeBasisExchange,
@@ -428,6 +428,8 @@ export function NegativeBasisMonitorPage() {
   const [globalBlockExchange, setGlobalBlockExchange] = useState<string | undefined>();
   const [saving, setSaving] = useState(false);
   const [showManualConfig, setShowManualConfig] = useState(false);
+  const manualConfigRef = useRef<HTMLElement | null>(null);
+  const manualConfigFocusPendingRef = useRef(false);
   const customSymbols = Form.useWatch("custom_symbols", form);
 
   const refresh = useCallback(async () => {
@@ -459,6 +461,40 @@ export function NegativeBasisMonitorPage() {
   useEffect(() => {
     form.setFieldsValue(formValuesFromWatch(draft));
   }, [draft, form]);
+
+  const scrollToManualConfig = useCallback(() => {
+    window.requestAnimationFrame(() => {
+      manualConfigFocusPendingRef.current = false;
+      manualConfigRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start"
+      });
+    });
+  }, []);
+
+  const openManualConfig = () => {
+    manualConfigFocusPendingRef.current = true;
+    if (showManualConfig) {
+      scrollToManualConfig();
+      return;
+    }
+    setShowManualConfig(true);
+  };
+
+  const toggleManualConfig = () => {
+    if (showManualConfig) {
+      manualConfigFocusPendingRef.current = false;
+      setShowManualConfig(false);
+      return;
+    }
+    openManualConfig();
+  };
+
+  useEffect(() => {
+    if (showManualConfig && manualConfigFocusPendingRef.current) {
+      scrollToManualConfig();
+    }
+  }, [scrollToManualConfig, showManualConfig]);
 
   const selectedWatch = useMemo(
     () => status?.watchlist.find((item) => item.id === selectedWatchId),
@@ -781,13 +817,13 @@ export function NegativeBasisMonitorPage() {
     setDraft(item);
     setSelectedWatchId(undefined);
     setAnalysis(null);
-    setShowManualConfig(true);
+    openManualConfig();
   };
 
   const editWatch = (item: NegativeBasisWatchItem) => {
     setDraft(item);
     setSelectedWatchId(item.id);
-    setShowManualConfig(true);
+    openManualConfig();
   };
 
   const toggleWatch = async (item: NegativeBasisWatchItem, enabled: boolean) => {
@@ -1091,7 +1127,7 @@ export function NegativeBasisMonitorPage() {
             <Button size="small" icon={<ReloadOutlined />} loading={autoScanLoading} onClick={() => void runAutoScan()}>
               立即扫描
             </Button>
-            <Button size="small" onClick={() => setShowManualConfig((value) => !value)}>
+            <Button size="small" onClick={toggleManualConfig}>
               {showManualConfig ? "收起高级配置" : "展开高级配置"}
             </Button>
           </Space>
@@ -1110,8 +1146,9 @@ export function NegativeBasisMonitorPage() {
       </Card>
 
       {showManualConfig ? (
-        <div className="negative-basis-layout">
-        <Card size="small" title="监控参数" className="negative-basis-config-card">
+        <section className="negative-basis-manual-config" ref={manualConfigRef}>
+          <div className="negative-basis-layout">
+          <Card size="small" title="监控参数" className="negative-basis-config-card">
           <Form form={form} layout="vertical" initialValues={formValuesFromWatch(draft)}>
             <div className="negative-basis-form-grid">
               <Form.Item label="启用" name="enabled" valuePropName="checked">
@@ -1232,8 +1269,9 @@ export function NegativeBasisMonitorPage() {
             })}
             scroll={{ x: 1140 }}
           />
-        </Card>
-        </div>
+          </Card>
+          </div>
+        </section>
       ) : (
         <Card size="small" title="后台监控池">
           <Table

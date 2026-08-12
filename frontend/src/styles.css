@@ -3543,6 +3543,10 @@ body {
   min-width: 0;
 }
 
+.negative-basis-manual-config {
+  scroll-margin-top: 16px;
+}
+
 .negative-basis-config-card,
 .negative-basis-watch-card {
   min-width: 0;
