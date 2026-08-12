@@ -68,6 +68,15 @@ type NegativeBasisFormValues = NegativeBasisWatchItem & {
   custom_symbols: boolean;
 };
 
+type NegativeBasisPairRoute = {
+  symbol: string;
+  spot_exchange: string;
+  future_exchange: string;
+  spot_symbol?: string | null;
+  future_symbol?: string | null;
+  future_multiplier: number;
+};
+
 const exchangeNames: Record<string, string> = {
   aster: "Aster",
   binance: "Binance",
@@ -207,6 +216,26 @@ function exchangeSymbolKey(exchange: string, symbol: string): string {
 function exchangeSymbolText(key: string): string {
   const [exchange, symbol] = key.split(":");
   return `${exchangeText(exchange ?? "")} ${shortSymbol(symbol)}`;
+}
+
+function pairSpreadPath(route: NegativeBasisPairRoute, hours: number, intervalSeconds: number): string {
+  const url = new URL(window.location.href);
+  url.searchParams.set("page", "pair-monitor");
+  url.searchParams.set("leg1_exchange", route.spot_exchange);
+  url.searchParams.set("leg1_market_type", "spot");
+  url.searchParams.set("leg1_symbol", route.spot_symbol ?? route.symbol);
+  url.searchParams.set("leg2_exchange", route.future_exchange);
+  url.searchParams.set("leg2_market_type", "future");
+  url.searchParams.set("leg2_symbol", route.future_symbol ?? route.symbol);
+  url.searchParams.set("leg2_multiplier", String(route.future_multiplier || 1));
+  url.searchParams.set("hours", String(hours));
+  url.searchParams.set("interval_seconds", String(intervalSeconds));
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
+function openPairSpread(route: NegativeBasisPairRoute, hours: number, intervalSeconds: number): void {
+  window.history.pushState({}, "", pairSpreadPath(route, hours, intervalSeconds));
+  window.dispatchEvent(new Event("taoli1:navigate"));
 }
 
 function time(value: string | null | undefined, seconds = false): string {
@@ -1041,6 +1070,23 @@ export function NegativeBasisMonitorPage() {
     }
   };
 
+  const openWatchPairSpread = (item: NegativeBasisWatchItem) => {
+    openPairSpread(item, item.lookback_hours, item.interval_seconds);
+  };
+
+  const watchPairSpreadPath = (item: NegativeBasisWatchItem) =>
+    pairSpreadPath(item, item.lookback_hours, item.interval_seconds);
+
+  const openCandidatePairSpread = (item: NegativeBasisAutoCandidate) => {
+    const strategy = autoScanSettings?.strategy ?? defaultAutoScanStrategy();
+    openPairSpread(item, strategy.lookback_hours, strategy.interval_seconds);
+  };
+
+  const candidatePairSpreadPath = (item: NegativeBasisAutoCandidate) => {
+    const strategy = autoScanSettings?.strategy ?? defaultAutoScanStrategy();
+    return pairSpreadPath(item, strategy.lookback_hours, strategy.interval_seconds);
+  };
+
   const renderCandidateMapping = (item: NegativeBasisAutoCandidate) => {
     if (!candidateUsesMapping(item)) {
       return <Tag>同名</Tag>;
@@ -1067,7 +1113,24 @@ export function NegativeBasisMonitorPage() {
       title: "标的",
       dataIndex: "symbol",
       width: 96,
-      render: (value: string) => <Typography.Text strong>{shortSymbol(value)}</Typography.Text>
+      render: (value: string, item) => (
+        <Typography.Link
+          strong
+          href={watchPairSpreadPath(item)}
+          title="跳转到价差查询"
+          aria-label={`在价差查询查看 ${shortSymbol(value)}`}
+          onClick={(event) => {
+            if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+              return;
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            openWatchPairSpread(item);
+          }}
+        >
+          {shortSymbol(value)}
+        </Typography.Link>
+      )
     },
     {
       title: "状态",
@@ -1133,7 +1196,23 @@ export function NegativeBasisMonitorPage() {
       title: "标的",
       dataIndex: "symbol",
       width: 92,
-      render: (value: string) => <Typography.Text strong>{shortSymbol(value)}</Typography.Text>
+      render: (value: string, item) => (
+        <Typography.Link
+          strong
+          href={candidatePairSpreadPath(item)}
+          title="跳转到价差查询"
+          aria-label={`在价差查询查看 ${shortSymbol(value)}`}
+          onClick={(event) => {
+            if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+              return;
+            }
+            event.preventDefault();
+            openCandidatePairSpread(item);
+          }}
+        >
+          {shortSymbol(value)}
+        </Typography.Link>
+      )
     },
     {
       title: "路线",

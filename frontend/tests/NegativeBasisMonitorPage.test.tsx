@@ -26,11 +26,31 @@ const autoScanStrategy = {
   cooldown_seconds: 900
 };
 
+const autoCandidate = {
+  id: "auto-prom-gate-binance",
+  symbol: "PROMUSDT",
+  spot_exchange: "gate",
+  future_exchange: "binance",
+  spot_symbol: "PROMUSDT",
+  future_symbol: "PROMUSDT",
+  future_multiplier: 1,
+  signal_level: "strong" as const,
+  selection_score: 38,
+  selection_reasons: ["现货与合约流动性良好"],
+  spot_premium_pct: 13.077,
+  spot_price: 3.30235,
+  future_price: 2.897,
+  spot_volume_24h_usdt: 1_180_000,
+  future_volume_24h_usdt: 192_890_000,
+  observed_at: "2026-08-12T08:59:00Z"
+};
+
 describe("NegativeBasisMonitorPage", () => {
   const scrollIntoView = vi.fn();
 
   beforeEach(() => {
     scrollIntoView.mockReset();
+    window.history.pushState({}, "", "/?page=negative-basis");
     Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
       configurable: true,
       value: scrollIntoView
@@ -63,8 +83,8 @@ describe("NegativeBasisMonitorPage", () => {
             },
             auto_scan_last_at: "2026-08-12T00:00:00Z",
             auto_scan_error: null,
-            auto_candidate_count: 0,
-            auto_candidates: [],
+            auto_candidate_count: 1,
+            auto_candidates: [autoCandidate],
             watch_count: 0,
             enabled_watch_count: 0,
             sample_count: 0,
@@ -128,5 +148,23 @@ describe("NegativeBasisMonitorPage", () => {
         }
       });
     });
+  });
+
+  it("opens a candidate's exact spot and futures route in pair spread query", async () => {
+    render(<NegativeBasisMonitorPage />);
+
+    await userEvent.click(await screen.findByRole("link", { name: "在价差查询查看 PROM" }));
+
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("page")).toBe("pair-monitor");
+    expect(params.get("leg1_exchange")).toBe("gate");
+    expect(params.get("leg1_market_type")).toBe("spot");
+    expect(params.get("leg1_symbol")).toBe("PROMUSDT");
+    expect(params.get("leg2_exchange")).toBe("binance");
+    expect(params.get("leg2_market_type")).toBe("future");
+    expect(params.get("leg2_symbol")).toBe("PROMUSDT");
+    expect(params.get("leg2_multiplier")).toBe("1");
+    expect(params.get("hours")).toBe("4");
+    expect(params.get("interval_seconds")).toBe("60");
   });
 });
