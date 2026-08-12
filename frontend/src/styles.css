@@ -3547,6 +3547,15 @@ body {
   scroll-margin-top: 16px;
 }
 
+.negative-basis-manual-override {
+  width: 100%;
+  margin: 4px 0 12px;
+  padding: 8px 10px;
+  border: 1px solid #dce4e1;
+  border-radius: 6px;
+  background: #f7fbf9;
+}
+
 .negative-basis-config-card,
 .negative-basis-watch-card {
   min-width: 0;

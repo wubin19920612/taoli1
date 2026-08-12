@@ -338,8 +338,31 @@ export interface NegativeBasisWatchItem {
   updated_at: string;
 }
 
+export interface NegativeBasisAutoScanStrategy {
+  interval_seconds: number;
+  lookback_hours: number;
+  retention_hours: number;
+  watch_threshold_pct: number;
+  building_threshold_pct: number;
+  confirmed_threshold_pct: number;
+  strong_threshold_pct: number;
+  extreme_threshold_pct: number;
+  watch_consecutive_hits: number;
+  building_consecutive_hits: number;
+  confirmed_consecutive_hits: number;
+  strong_consecutive_hits: number;
+  extreme_consecutive_hits: number;
+  spot_volume_growth_threshold: number;
+  oi_confirmed_growth_pct: number;
+  oi_strong_growth_pct: number;
+  min_spot_hourly_volume_usdt: number;
+  alert_min_level: NegativeBasisSignalLevel;
+  cooldown_seconds: number;
+}
+
 export interface NegativeBasisAutoScanSettings {
   enabled: boolean;
+  strategy: NegativeBasisAutoScanStrategy;
   blocked_exchanges: string[];
   blocked_symbols: string[];
   blocked_exchange_symbols: string[];

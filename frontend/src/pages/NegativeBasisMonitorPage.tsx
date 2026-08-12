@@ -52,6 +52,7 @@ import type {
   NegativeBasisAlertEvent,
   NegativeBasisAnalysisResult,
   NegativeBasisAutoCandidate,
+  NegativeBasisAutoScanStrategy,
   NegativeBasisHourlyStatPoint,
   NegativeBasisMonitorStatus,
   NegativeBasisPoint,
@@ -105,18 +106,8 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-function emptyWatch(): NegativeBasisWatchItem {
-  const now = nowIso();
+function defaultAutoScanStrategy(): NegativeBasisAutoScanStrategy {
   return {
-    id: newId(),
-    auto_managed: false,
-    enabled: true,
-    symbol: "PROMUSDT",
-    spot_exchange: "binance",
-    future_exchange: "gate",
-    spot_symbol: "PROMUSDT",
-    future_symbol: "PROMUSDT",
-    future_multiplier: 1,
     interval_seconds: 60,
     lookback_hours: 4,
     retention_hours: 720,
@@ -135,11 +126,62 @@ function emptyWatch(): NegativeBasisWatchItem {
     oi_strong_growth_pct: 30,
     min_spot_hourly_volume_usdt: 0,
     alert_min_level: "watch",
-    cooldown_seconds: 900,
+    cooldown_seconds: 900
+  };
+}
+
+function emptyWatch(strategy: NegativeBasisAutoScanStrategy = defaultAutoScanStrategy()): NegativeBasisWatchItem {
+  const now = nowIso();
+  return {
+    id: newId(),
+    auto_managed: false,
+    enabled: true,
+    symbol: "PROMUSDT",
+    spot_exchange: "binance",
+    future_exchange: "gate",
+    spot_symbol: "PROMUSDT",
+    future_symbol: "PROMUSDT",
+    future_multiplier: 1,
+    ...strategy,
     note: "",
     created_at: now,
     updated_at: now
   };
+}
+
+function strategyFromWatch(item: NegativeBasisWatchItem): NegativeBasisAutoScanStrategy {
+  return {
+    interval_seconds: item.interval_seconds,
+    lookback_hours: item.lookback_hours,
+    retention_hours: item.retention_hours,
+    watch_threshold_pct: item.watch_threshold_pct,
+    building_threshold_pct: item.building_threshold_pct,
+    confirmed_threshold_pct: item.confirmed_threshold_pct,
+    strong_threshold_pct: item.strong_threshold_pct,
+    extreme_threshold_pct: item.extreme_threshold_pct,
+    watch_consecutive_hits: item.watch_consecutive_hits,
+    building_consecutive_hits: item.building_consecutive_hits,
+    confirmed_consecutive_hits: item.confirmed_consecutive_hits,
+    strong_consecutive_hits: item.strong_consecutive_hits,
+    extreme_consecutive_hits: item.extreme_consecutive_hits,
+    spot_volume_growth_threshold: item.spot_volume_growth_threshold,
+    oi_confirmed_growth_pct: item.oi_confirmed_growth_pct,
+    oi_strong_growth_pct: item.oi_strong_growth_pct,
+    min_spot_hourly_volume_usdt: item.min_spot_hourly_volume_usdt,
+    alert_min_level: item.alert_min_level,
+    cooldown_seconds: item.cooldown_seconds
+  };
+}
+
+const autoScanStrategyKeys = Object.keys(defaultAutoScanStrategy()) as Array<
+  keyof NegativeBasisAutoScanStrategy
+>;
+
+function sameAutoScanStrategy(
+  left: NegativeBasisAutoScanStrategy,
+  right: NegativeBasisAutoScanStrategy
+): boolean {
+  return autoScanStrategyKeys.every((key) => left[key] === right[key]);
 }
 
 function normalizeSymbol(value: string | null | undefined): string {
@@ -414,8 +456,73 @@ function CurrentSignalPanel({ analysis }: { analysis: NegativeBasisAnalysisResul
   );
 }
 
+function NegativeBasisStrategyFields() {
+  return (
+    <div className="negative-basis-form-grid">
+      <Form.Item label="回看小时" name="lookback_hours">
+        <InputNumber min={1} max={720} step={1} />
+      </Form.Item>
+      <Form.Item label="采样秒" name="interval_seconds">
+        <InputNumber min={30} max={3600} step={30} />
+      </Form.Item>
+      <Form.Item label="保留小时" name="retention_hours">
+        <InputNumber min={1} max={2160} step={24} />
+      </Form.Item>
+      <Form.Item label="最低现货小时成交额" name="min_spot_hourly_volume_usdt">
+        <InputNumber min={0} step={1_000} />
+      </Form.Item>
+      <Form.Item label="观察%" name="watch_threshold_pct">
+        <InputNumber min={0} step={0.1} />
+      </Form.Item>
+      <Form.Item label="启动%" name="building_threshold_pct">
+        <InputNumber min={0} step={0.1} />
+      </Form.Item>
+      <Form.Item label="确认%" name="confirmed_threshold_pct">
+        <InputNumber min={0} step={0.1} />
+      </Form.Item>
+      <Form.Item label="强信号%" name="strong_threshold_pct">
+        <InputNumber min={0} step={0.1} />
+      </Form.Item>
+      <Form.Item label="过热%" name="extreme_threshold_pct">
+        <InputNumber min={0} step={0.5} />
+      </Form.Item>
+      <Form.Item label="观察连续" name="watch_consecutive_hits">
+        <InputNumber min={1} max={60} step={1} />
+      </Form.Item>
+      <Form.Item label="启动连续" name="building_consecutive_hits">
+        <InputNumber min={1} max={60} step={1} />
+      </Form.Item>
+      <Form.Item label="确认连续" name="confirmed_consecutive_hits">
+        <InputNumber min={1} max={60} step={1} />
+      </Form.Item>
+      <Form.Item label="强信号连续" name="strong_consecutive_hits">
+        <InputNumber min={1} max={60} step={1} />
+      </Form.Item>
+      <Form.Item label="过热连续" name="extreme_consecutive_hits">
+        <InputNumber min={1} max={60} step={1} />
+      </Form.Item>
+      <Form.Item label="现货量放大" name="spot_volume_growth_threshold">
+        <InputNumber min={0} step={0.1} addonAfter="x" />
+      </Form.Item>
+      <Form.Item label="确认OI%" name="oi_confirmed_growth_pct">
+        <InputNumber min={0} step={1} />
+      </Form.Item>
+      <Form.Item label="强信号OI%" name="oi_strong_growth_pct">
+        <InputNumber min={0} step={1} />
+      </Form.Item>
+      <Form.Item label="告警级别" name="alert_min_level">
+        <Select options={thresholdOrder.map((level) => ({ label: levelMeta[level].label, value: level }))} />
+      </Form.Item>
+      <Form.Item label="冷却秒" name="cooldown_seconds">
+        <InputNumber min={0} max={86_400} step={60} />
+      </Form.Item>
+    </div>
+  );
+}
+
 export function NegativeBasisMonitorPage() {
   const [form] = Form.useForm<NegativeBasisFormValues>();
+  const [strategyForm] = Form.useForm<NegativeBasisAutoScanStrategy>();
   const [status, setStatus] = useState<NegativeBasisMonitorStatus | null>(null);
   const [spotExchanges, setSpotExchanges] = useState<string[]>([]);
   const [futureExchanges, setFutureExchanges] = useState<string[]>([]);
@@ -428,6 +535,7 @@ export function NegativeBasisMonitorPage() {
   const [globalBlockExchange, setGlobalBlockExchange] = useState<string | undefined>();
   const [saving, setSaving] = useState(false);
   const [showManualConfig, setShowManualConfig] = useState(false);
+  const [manualStrategyOverride, setManualStrategyOverride] = useState(false);
   const manualConfigRef = useRef<HTMLElement | null>(null);
   const manualConfigFocusPendingRef = useRef(false);
   const customSymbols = Form.useWatch("custom_symbols", form);
@@ -514,6 +622,10 @@ export function NegativeBasisMonitorPage() {
   const blockedSymbols = autoScanSettings?.blocked_symbols ?? [];
   const blockedExchangeSymbols = autoScanSettings?.blocked_exchange_symbols ?? [];
 
+  useEffect(() => {
+    strategyForm.setFieldsValue(autoScanSettings?.strategy ?? defaultAutoScanStrategy());
+  }, [autoScanSettings?.updated_at, strategyForm]);
+
   const exchangeOptionItems = (values: string[]) =>
     values.map((exchange) => ({ label: exchangeText(exchange), value: exchange }));
 
@@ -546,6 +658,27 @@ export function NegativeBasisMonitorPage() {
       message.error(exc instanceof Error ? exc.message : String(exc));
     } finally {
       setBlockActionLoading(false);
+    }
+  };
+
+  const saveAutoScanStrategy = async () => {
+    if (!autoScanSettings) {
+      return;
+    }
+    setSaving(true);
+    try {
+      const strategy = await strategyForm.validateFields();
+      await updateNegativeBasisAutoScanSettings({
+        ...autoScanSettings,
+        strategy,
+        updated_at: nowIso()
+      });
+      message.success("全市场自动监控策略已保存并重新扫描");
+      await refresh();
+    } catch (exc) {
+      message.error(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -779,7 +912,14 @@ export function NegativeBasisMonitorPage() {
 
   const readPayload = async (): Promise<NegativeBasisWatchItem> => {
     const values = await form.validateFields();
-    return payloadFromForm(draft, values);
+    const payload = payloadFromForm(draft, values);
+    return manualStrategyOverride
+      ? payload
+      : {
+          ...payload,
+          ...(autoScanSettings?.strategy ?? defaultAutoScanStrategy()),
+          updated_at: nowIso()
+        };
   };
 
   const runQuery = async () => {
@@ -813,20 +953,42 @@ export function NegativeBasisMonitorPage() {
   };
 
   const createWatch = () => {
-    const item = emptyWatch();
+    const item = emptyWatch(autoScanSettings?.strategy);
     setDraft(item);
     setSelectedWatchId(undefined);
     setAnalysis(null);
+    setManualStrategyOverride(false);
     openManualConfig();
   };
 
   const editWatch = (item: NegativeBasisWatchItem) => {
+    if (item.auto_managed) {
+      message.info("自动入池的标的使用全局自动监控策略，请在上方策略中修改");
+      return;
+    }
     setDraft(item);
     setSelectedWatchId(item.id);
+    setManualStrategyOverride(
+      !sameAutoScanStrategy(
+        strategyFromWatch(item),
+        autoScanSettings?.strategy ?? defaultAutoScanStrategy()
+      )
+    );
     openManualConfig();
   };
 
+  const toggleManualStrategyOverride = (enabled: boolean) => {
+    if (!enabled) {
+      form.setFieldsValue(autoScanSettings?.strategy ?? defaultAutoScanStrategy());
+    }
+    setManualStrategyOverride(enabled);
+  };
+
   const toggleWatch = async (item: NegativeBasisWatchItem, enabled: boolean) => {
+    if (item.auto_managed) {
+      message.info("自动入池标的由全市场自动监控开关统一管理");
+      return;
+    }
     try {
       await upsertNegativeBasisWatchItem({ ...item, enabled, updated_at: nowIso() });
       await refresh();
@@ -863,6 +1025,10 @@ export function NegativeBasisMonitorPage() {
   };
 
   const deleteWatch = async (item: NegativeBasisWatchItem) => {
+    if (item.auto_managed) {
+      message.info("自动入池标的会在下一次扫描时重新生成，请使用屏蔽功能排除");
+      return;
+    }
     try {
       await deleteNegativeBasisWatchItem(item.id);
       message.success("已删除监控标的");
@@ -1080,11 +1246,11 @@ export function NegativeBasisMonitorPage() {
       <div className="toolbar">
         <div>
           <Typography.Title level={4}>负基差埋伏监控</Typography.Title>
-          <Typography.Text type="secondary">后台自动扫描全市场现货溢价候选，命中后自动入池、采样并按策略上报。</Typography.Text>
+          <Typography.Text type="secondary">后台扫描全市场现货高于合约的路线，命中策略后自动入池、采样并上报。</Typography.Text>
         </div>
         <Space>
           <Button icon={<ReloadOutlined />} loading={autoScanLoading} onClick={() => void runAutoScan()}>立即扫描</Button>
-          <Button icon={<PlusOutlined />} onClick={createWatch}>高级配置</Button>
+          <Button icon={<PlusOutlined />} onClick={createWatch}>手动指定路线</Button>
           <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void refresh()}>刷新</Button>
         </Space>
       </div>
@@ -1102,6 +1268,26 @@ export function NegativeBasisMonitorPage() {
         <Statistic title="样本" value={status?.sample_count ?? 0} />
         <Statistic title="告警" value={status?.event_count ?? 0} />
       </div>
+
+      <Card
+        size="small"
+        title="全市场自动监控策略"
+        extra={
+          <Button
+            type="primary"
+            icon={<SaveOutlined />}
+            loading={saving}
+            disabled={!autoScanSettings}
+            onClick={() => void saveAutoScanStrategy()}
+          >
+            保存策略并重扫
+          </Button>
+        }
+      >
+        <Form form={strategyForm} layout="vertical" initialValues={defaultAutoScanStrategy()}>
+          <NegativeBasisStrategyFields />
+        </Form>
+      </Card>
 
       <Card
         size="small"
@@ -1128,7 +1314,7 @@ export function NegativeBasisMonitorPage() {
               立即扫描
             </Button>
             <Button size="small" onClick={toggleManualConfig}>
-              {showManualConfig ? "收起高级配置" : "展开高级配置"}
+              {showManualConfig ? "收起手动路线" : "手动指定路线"}
             </Button>
           </Space>
         }
@@ -1148,7 +1334,7 @@ export function NegativeBasisMonitorPage() {
       {showManualConfig ? (
         <section className="negative-basis-manual-config" ref={manualConfigRef}>
           <div className="negative-basis-layout">
-          <Card size="small" title="监控参数" className="negative-basis-config-card">
+          <Card size="small" title="手动指定路线" className="negative-basis-config-card">
           <Form form={form} layout="vertical" initialValues={formValuesFromWatch(draft)}>
             <div className="negative-basis-form-grid">
               <Form.Item label="启用" name="enabled" valuePropName="checked">
@@ -1179,61 +1365,13 @@ export function NegativeBasisMonitorPage() {
                   </Form.Item>
                 </>
               ) : null}
-              <Form.Item label="回看小时" name="lookback_hours">
-                <InputNumber min={1} max={720} step={1} />
-              </Form.Item>
-              <Form.Item label="采样秒" name="interval_seconds">
-                <InputNumber min={30} max={3600} step={30} />
-              </Form.Item>
-              <Form.Item label="保留小时" name="retention_hours">
-                <InputNumber min={1} max={2160} step={24} />
-              </Form.Item>
-              <Form.Item label="观察%" name="watch_threshold_pct">
-                <InputNumber min={0} step={0.1} />
-              </Form.Item>
-              <Form.Item label="启动%" name="building_threshold_pct">
-                <InputNumber min={0} step={0.1} />
-              </Form.Item>
-              <Form.Item label="确认%" name="confirmed_threshold_pct">
-                <InputNumber min={0} step={0.1} />
-              </Form.Item>
-              <Form.Item label="强信号%" name="strong_threshold_pct">
-                <InputNumber min={0} step={0.1} />
-              </Form.Item>
-              <Form.Item label="过热%" name="extreme_threshold_pct">
-                <InputNumber min={0} step={0.5} />
-              </Form.Item>
-              <Form.Item label="观察连续" name="watch_consecutive_hits">
-                <InputNumber min={1} max={60} step={1} />
-              </Form.Item>
-              <Form.Item label="启动连续" name="building_consecutive_hits">
-                <InputNumber min={1} max={60} step={1} />
-              </Form.Item>
-              <Form.Item label="确认连续" name="confirmed_consecutive_hits">
-                <InputNumber min={1} max={60} step={1} />
-              </Form.Item>
-              <Form.Item label="强信号连续" name="strong_consecutive_hits">
-                <InputNumber min={1} max={60} step={1} />
-              </Form.Item>
-              <Form.Item label="过热连续" name="extreme_consecutive_hits">
-                <InputNumber min={1} max={60} step={1} />
-              </Form.Item>
-              <Form.Item label="现货量放大" name="spot_volume_growth_threshold">
-                <InputNumber min={0} step={0.1} addonAfter="x" />
-              </Form.Item>
-              <Form.Item label="确认OI%" name="oi_confirmed_growth_pct">
-                <InputNumber min={0} step={1} />
-              </Form.Item>
-              <Form.Item label="强信号OI%" name="oi_strong_growth_pct">
-                <InputNumber min={0} step={1} />
-              </Form.Item>
-              <Form.Item label="告警级别" name="alert_min_level">
-                <Select options={thresholdOrder.map((level) => ({ label: levelMeta[level].label, value: level }))} />
-              </Form.Item>
-              <Form.Item label="冷却秒" name="cooldown_seconds">
-                <InputNumber min={0} max={86_400} step={60} />
-              </Form.Item>
             </div>
+            <Space className="negative-basis-manual-override" size={8} wrap>
+              <Switch checked={manualStrategyOverride} onChange={toggleManualStrategyOverride} />
+              <Typography.Text>为这条手动路线单独设置策略</Typography.Text>
+              {!manualStrategyOverride ? <Typography.Text type="secondary">默认继承全市场自动监控策略</Typography.Text> : null}
+            </Space>
+            {manualStrategyOverride ? <NegativeBasisStrategyFields /> : null}
             <Form.Item label="备注" name="note">
               <Input.TextArea rows={2} placeholder="例如：重点看零轴附近启动，过热后只做风险提示" />
             </Form.Item>

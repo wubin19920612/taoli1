@@ -668,6 +668,42 @@ def _auto_signal_level(premium_pct: float, item: NegativeBasisWatchItem) -> Nega
     return "none"
 
 
+def _auto_watch_item(
+    candidate: NegativeBasisAutoCandidate,
+    settings: NegativeBasisAutoScanSettings,
+    *,
+    existing: NegativeBasisWatchItem | None = None,
+) -> NegativeBasisWatchItem:
+    strategy_values = settings.strategy.model_dump()
+    base = existing or NegativeBasisWatchItem(
+        id=candidate.id,
+        auto_managed=True,
+        enabled=True,
+        symbol=candidate.symbol,
+        spot_exchange=candidate.spot_exchange,
+        future_exchange=candidate.future_exchange,
+        spot_symbol=candidate.spot_symbol or candidate.symbol,
+        future_symbol=candidate.future_symbol or candidate.symbol,
+        future_multiplier=1.0,
+        note="auto discovered spot-premium candidate",
+        **strategy_values,
+    )
+    return base.model_copy(
+        update={
+            **strategy_values,
+            "auto_managed": True,
+            "enabled": True,
+            "symbol": candidate.symbol,
+            "spot_exchange": candidate.spot_exchange,
+            "future_exchange": candidate.future_exchange,
+            "spot_symbol": candidate.spot_symbol or candidate.symbol,
+            "future_symbol": candidate.future_symbol or candidate.symbol,
+            "future_multiplier": 1.0,
+            "updated_at": utc_now(),
+        }
+    )
+
+
 def _auto_candidate(
     spot: MarketSnapshot,
     future: MarketSnapshot,
@@ -1198,11 +1234,7 @@ class NegativeBasisMonitor:
         saved = await self.repo.upsert_auto_scan_settings(settings)
         await self.repo.delete_auto_watch_items_matching(saved)
         if saved.enabled:
-            self._auto_candidates = [
-                candidate
-                for candidate in self._auto_candidates
-                if not _auto_candidate_blocked(candidate, saved)
-            ]
+            await self.discover_auto_candidates(force=True)
         else:
             self._auto_candidates = []
         return saved
@@ -1216,6 +1248,7 @@ class NegativeBasisMonitor:
         return await self.update_auto_scan_settings(
             NegativeBasisAutoScanSettings(
                 enabled=settings.enabled,
+                strategy=settings.strategy,
                 blocked_exchanges=settings.blocked_exchanges,
                 blocked_symbols=blocked_symbols,
                 blocked_exchange_symbols=settings.blocked_exchange_symbols,
@@ -1228,6 +1261,7 @@ class NegativeBasisMonitor:
         return await self.update_auto_scan_settings(
             NegativeBasisAutoScanSettings(
                 enabled=settings.enabled,
+                strategy=settings.strategy,
                 blocked_exchanges=settings.blocked_exchanges,
                 blocked_symbols=[
                     item for item in settings.blocked_symbols if item != normalized_symbol
@@ -1245,6 +1279,7 @@ class NegativeBasisMonitor:
         return await self.update_auto_scan_settings(
             NegativeBasisAutoScanSettings(
                 enabled=settings.enabled,
+                strategy=settings.strategy,
                 blocked_exchanges=blocked_exchanges,
                 blocked_symbols=settings.blocked_symbols,
                 blocked_exchange_symbols=settings.blocked_exchange_symbols,
@@ -1257,6 +1292,7 @@ class NegativeBasisMonitor:
         return await self.update_auto_scan_settings(
             NegativeBasisAutoScanSettings(
                 enabled=settings.enabled,
+                strategy=settings.strategy,
                 blocked_exchanges=[
                     item for item in settings.blocked_exchanges if item != normalized_exchange
                 ],
@@ -1279,6 +1315,7 @@ class NegativeBasisMonitor:
         return await self.update_auto_scan_settings(
             NegativeBasisAutoScanSettings(
                 enabled=settings.enabled,
+                strategy=settings.strategy,
                 blocked_exchanges=settings.blocked_exchanges,
                 blocked_symbols=settings.blocked_symbols,
                 blocked_exchange_symbols=blocked_exchange_symbols,
@@ -1296,6 +1333,7 @@ class NegativeBasisMonitor:
         return await self.update_auto_scan_settings(
             NegativeBasisAutoScanSettings(
                 enabled=settings.enabled,
+                strategy=settings.strategy,
                 blocked_exchanges=settings.blocked_exchanges,
                 blocked_symbols=settings.blocked_symbols,
                 blocked_exchange_symbols=[
@@ -1405,7 +1443,12 @@ class NegativeBasisMonitor:
         blocked_exchanges = set(settings.blocked_exchanges)
         blocked_symbols = set(settings.blocked_symbols)
         blocked_exchange_symbols = set(settings.blocked_exchange_symbols)
-        template = NegativeBasisWatchItem(id="auto-template", enabled=True)
+        template = NegativeBasisWatchItem(
+            id="auto-template",
+            auto_managed=True,
+            enabled=True,
+            **settings.strategy.model_dump(),
+        )
         spots_by_symbol: dict[str, list[MarketSnapshot]] = {}
         futures_by_symbol: dict[str, list[MarketSnapshot]] = {}
         for market in markets:
@@ -1448,33 +1491,7 @@ class NegativeBasisMonitor:
             existing = await self.repo.get_watch_item(candidate.id)
             if existing is not None and not existing.auto_managed:
                 continue
-            item = existing or NegativeBasisWatchItem(
-                id=candidate.id,
-                auto_managed=True,
-                enabled=True,
-                symbol=candidate.symbol,
-                spot_exchange=candidate.spot_exchange,
-                future_exchange=candidate.future_exchange,
-                spot_symbol=candidate.spot_symbol or candidate.symbol,
-                future_symbol=candidate.future_symbol or candidate.symbol,
-                future_multiplier=1.0,
-                interval_seconds=60,
-                lookback_hours=4,
-                note="auto discovered spot-premium candidate",
-            )
-            saved = item.model_copy(
-                update={
-                    "auto_managed": True,
-                    "enabled": True,
-                    "symbol": candidate.symbol,
-                    "spot_exchange": candidate.spot_exchange,
-                    "future_exchange": candidate.future_exchange,
-                    "spot_symbol": candidate.spot_symbol or candidate.symbol,
-                    "future_symbol": candidate.future_symbol or candidate.symbol,
-                    "future_multiplier": 1.0,
-                    "updated_at": utc_now(),
-                }
-            )
+            saved = _auto_watch_item(candidate, settings, existing=existing)
             await self.repo.upsert_watch_item(saved)
 
     async def collect_watch_item(self, item: NegativeBasisWatchItem) -> NegativeBasisAnalysisResult:

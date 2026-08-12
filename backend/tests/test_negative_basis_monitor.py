@@ -8,7 +8,11 @@ from app.db.database import connect_database
 from app.db.schema import initialize_schema
 from app.main import create_app
 from app.models.market import MarketSnapshot, MarketType
-from app.models.negative_basis import NegativeBasisAutoScanSettings, NegativeBasisWatchItem
+from app.models.negative_basis import (
+    NegativeBasisAutoScanSettings,
+    NegativeBasisAutoScanStrategy,
+    NegativeBasisWatchItem,
+)
 from app.models.pair_spread import (
     PairSpreadCurrentLeg,
     PairSpreadCurrentSnapshot,
@@ -309,6 +313,94 @@ async def test_negative_basis_monitor_auto_discovers_spot_premium_candidates() -
     assert watchlist[0].spot_symbol == "PROMUSDT"
     assert watchlist[0].future_symbol == "PROMUSDT"
     assert watchlist[0].future_multiplier == 1
+
+
+@pytest.mark.asyncio
+async def test_negative_basis_auto_scan_strategy_controls_auto_watch_items() -> None:
+    db = await connect_database(":memory:")
+    await initialize_schema(db)
+    repo = NegativeBasisMonitorRepository(db)
+    store = SnapshotStore()
+    observed_at = datetime(2026, 8, 11, 0, 6, tzinfo=UTC)
+    store.set_markets(
+        [
+            MarketSnapshot(
+                symbol="PROMUSDT",
+                base="PROM",
+                exchange="binance",
+                market_type=MarketType.SPOT,
+                bid=1.039,
+                ask=1.041,
+                volume_24h_usdt=2_000_000,
+                timestamp=observed_at,
+                raw_symbol="PROMUSDT",
+            ),
+            MarketSnapshot(
+                symbol="PROMUSDT",
+                base="PROM",
+                exchange="gate",
+                market_type=MarketType.FUTURE,
+                bid=0.999,
+                ask=1.001,
+                mark_price=1.0,
+                volume_24h_usdt=800_000,
+                timestamp=observed_at,
+                raw_symbol="PROM_USDT",
+            ),
+        ]
+    )
+    monitor = NegativeBasisMonitor(
+        repo,
+        snapshot_store=store,
+        gate_stats_client=FakeGateStatsClient(),  # type: ignore[arg-type]
+    )
+
+    try:
+        blocked_by_strategy = await monitor.update_auto_scan_settings(
+            NegativeBasisAutoScanSettings(
+                strategy=NegativeBasisAutoScanStrategy(
+                    watch_threshold_pct=5,
+                    building_threshold_pct=5,
+                    confirmed_threshold_pct=5,
+                    strong_threshold_pct=5,
+                )
+            )
+        )
+        assert blocked_by_strategy.strategy.watch_threshold_pct == 5
+        assert await repo.list_watch_items() == []
+
+        await monitor.update_auto_scan_settings(
+            NegativeBasisAutoScanSettings(
+                strategy=NegativeBasisAutoScanStrategy(
+                    interval_seconds=120,
+                    watch_threshold_pct=0.5,
+                    oi_confirmed_growth_pct=25,
+                )
+            )
+        )
+        initial_watch = (await repo.list_watch_items())[0]
+
+        await monitor.update_auto_scan_settings(
+            NegativeBasisAutoScanSettings(
+                strategy=NegativeBasisAutoScanStrategy(
+                    interval_seconds=90,
+                    watch_threshold_pct=0.75,
+                    oi_confirmed_growth_pct=35,
+                )
+            )
+        )
+        updated_watch = (await repo.list_watch_items())[0]
+    finally:
+        await monitor.aclose()
+        await db.close()
+
+    assert initial_watch.auto_managed is True
+    assert initial_watch.interval_seconds == 120
+    assert initial_watch.oi_confirmed_growth_pct == 25
+    assert updated_watch.auto_managed is True
+    assert updated_watch.interval_seconds == 90
+    assert updated_watch.watch_threshold_pct == 0.75
+    assert updated_watch.oi_confirmed_growth_pct == 35
 
 
 @pytest.mark.asyncio

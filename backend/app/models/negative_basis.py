@@ -63,8 +63,44 @@ def negative_basis_exchange_symbol_key(exchange: str, symbol: str) -> str:
     return normalize_negative_basis_exchange_symbol_key(f"{exchange}:{symbol}")
 
 
+class NegativeBasisAutoScanStrategy(BaseModel):
+    interval_seconds: int = Field(default=60, ge=30, le=3600)
+    lookback_hours: int = Field(default=4, ge=1, le=720)
+    retention_hours: int = Field(default=720, ge=1, le=2160)
+    watch_threshold_pct: float = Field(default=0.5, ge=0)
+    building_threshold_pct: float = Field(default=1.0, ge=0)
+    confirmed_threshold_pct: float = Field(default=2.0, ge=0)
+    strong_threshold_pct: float = Field(default=3.0, ge=0)
+    extreme_threshold_pct: float = Field(default=10.0, ge=0)
+    watch_consecutive_hits: int = Field(default=3, ge=1, le=60)
+    building_consecutive_hits: int = Field(default=3, ge=1, le=60)
+    confirmed_consecutive_hits: int = Field(default=3, ge=1, le=60)
+    strong_consecutive_hits: int = Field(default=2, ge=1, le=60)
+    extreme_consecutive_hits: int = Field(default=1, ge=1, le=60)
+    spot_volume_growth_threshold: float = Field(default=3.0, ge=0)
+    oi_confirmed_growth_pct: float = Field(default=20.0, ge=0)
+    oi_strong_growth_pct: float = Field(default=30.0, ge=0)
+    min_spot_hourly_volume_usdt: float = Field(default=0.0, ge=0)
+    alert_min_level: NegativeBasisSignalLevel = Field(default="watch")
+    cooldown_seconds: int = Field(default=900, ge=0, le=86_400)
+
+    @model_validator(mode="after")
+    def validate_thresholds(self) -> "NegativeBasisAutoScanStrategy":
+        thresholds = [
+            self.watch_threshold_pct,
+            self.building_threshold_pct,
+            self.confirmed_threshold_pct,
+            self.strong_threshold_pct,
+            self.extreme_threshold_pct,
+        ]
+        if thresholds != sorted(thresholds):
+            raise ValueError("negative basis thresholds must be ascending")
+        return self
+
+
 class NegativeBasisAutoScanSettings(BaseModel):
     enabled: bool = Field(default=True)
+    strategy: NegativeBasisAutoScanStrategy = Field(default_factory=NegativeBasisAutoScanStrategy)
     blocked_exchanges: list[str] = Field(default_factory=list)
     blocked_symbols: list[str] = Field(default_factory=list)
     blocked_exchange_symbols: list[str] = Field(
