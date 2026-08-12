@@ -2,12 +2,13 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from app.models.settings import MinuteSignalSettings
+from app.models.settings import MinuteSignalSettings, RiskSettings
 from app.services.minute_signal_scan import (
     MinuteSignalAlertEngine,
     MinuteSignalScanService,
     build_minute_signal_alert_message,
 )
+from app.services.symbol_aliases import SymbolAliasResolver
 
 router = APIRouter(prefix="/minute-signals")
 logger = logging.getLogger(__name__)
@@ -19,6 +20,23 @@ async def _minute_signal_settings(request: Request) -> MinuteSignalSettings:
     if get_settings is None:
         return MinuteSignalSettings()
     return await get_settings()
+
+
+async def _symbol_alias_resolver(request: Request) -> SymbolAliasResolver:
+    repo = getattr(request.app.state, "settings_repo", None)
+    get_risk_settings = getattr(repo, "get_risk_settings", None)
+    if get_risk_settings is None:
+        return SymbolAliasResolver(RiskSettings().symbol_aliases)
+    return SymbolAliasResolver((await get_risk_settings()).symbol_aliases)
+
+
+async def _configured_scan_service(request: Request) -> MinuteSignalScanService:
+    service_factory = getattr(request.app.state, "minute_signal_scan_service_factory", None)
+    service = service_factory() if service_factory is not None else MinuteSignalScanService()
+    configure_symbol_aliases = getattr(service, "configure_symbol_aliases", None)
+    if configure_symbol_aliases is not None:
+        configure_symbol_aliases(await _symbol_alias_resolver(request))
+    return service
 
 
 async def _send_scan_all_alert_if_needed(
@@ -57,8 +75,7 @@ async def scan_minute_signals(
     hours: int | None = Query(default=None, ge=1, le=24),
 ) -> dict:
     settings = await _minute_signal_settings(request)
-    service_factory = getattr(request.app.state, "minute_signal_scan_service_factory", None)
-    service = service_factory() if service_factory is not None else MinuteSignalScanService()
+    service = await _configured_scan_service(request)
     try:
         return await service.scan_symbol(
             alpha_symbol=alpha_symbol.strip().upper(),
@@ -112,8 +129,7 @@ async def scan_all_minute_signals(
         if max_premium_when_spot_above_bps is not None
         else settings.max_premium_when_spot_above_bps
     )
-    service_factory = getattr(request.app.state, "minute_signal_scan_service_factory", None)
-    service = service_factory() if service_factory is not None else MinuteSignalScanService()
+    service = await _configured_scan_service(request)
     try:
         result = await service.scan_all(
             hours=scan_hours,

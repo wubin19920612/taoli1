@@ -4,6 +4,8 @@ from fastapi.testclient import TestClient
 import pytest
 
 from app.main import create_app
+from app.models.market import MarketType
+from app.models.settings import MinuteSignalSettings, RiskSettings, SymbolAlias
 from app.services.feishu import FeishuConfig
 from app.services.minute_signal_scan import (
     ALPHA_KLINES_URL,
@@ -11,6 +13,7 @@ from app.services.minute_signal_scan import (
     MinuteSignalScanService,
     build_minute_signal_alert_message,
 )
+from app.services.symbol_aliases import SymbolAliasResolver
 
 
 def _row(
@@ -92,6 +95,76 @@ async def test_fetch_rows_excludes_any_unclosed_source_bar(monkeypatch) -> None:
     monkeypatch.setattr(service, "_fetch_klines", fake_fetch_klines)
 
     assert await service._fetch_rows("ALPHA_331USDT", "AKEUSDT", start_ms, end_ms) == []
+
+
+@pytest.mark.asyncio
+async def test_scan_symbol_uses_global_alias_raw_symbols_and_price_multipliers(monkeypatch) -> None:
+    service = MinuteSignalScanService()
+    service.configure_symbol_aliases(
+        SymbolAliasResolver(
+            [
+                SymbolAlias(
+                    exchange="binance_alpha",
+                    symbol="ALPHA_331USDT",
+                    canonical_symbol="10000NEXUSDT",
+                    market_type=MarketType.SPOT,
+                    price_multiplier=10_000,
+                ),
+                SymbolAlias(
+                    exchange="binance",
+                    symbol="NEXPERPUSDT",
+                    canonical_symbol="10000NEXUSDT",
+                    market_type=MarketType.FUTURE,
+                    price_multiplier=10_000,
+                ),
+            ]
+        )
+    )
+    requested: list[tuple[str, str, float, float]] = []
+
+    async def fake_fetch_rows(
+        alpha_symbol: str,
+        futures_symbol: str,
+        start_ms: int,
+        end_ms: int,
+        *,
+        alpha_price_multiplier: float = 1.0,
+        futures_price_multiplier: float = 1.0,
+    ):
+        requested.append(
+            (
+                alpha_symbol,
+                futures_symbol,
+                alpha_price_multiplier,
+                futures_price_multiplier,
+            )
+        )
+        return [
+            {
+                "open_time": start_ms,
+                "time_cst": "2026-08-12T08:00+08:00",
+                "spot_close": 0.01 * alpha_price_multiplier,
+                "fut_close": 0.0105 * futures_price_multiplier,
+                "spot_open": 0.01 * alpha_price_multiplier,
+                "fut_open": 0.0105 * futures_price_multiplier,
+                "premium_low": -0.001,
+                "premium_high": 0.0,
+                "premium_close": -0.0005,
+            }
+        ]
+
+    monkeypatch.setattr(service, "_fetch_rows", fake_fetch_rows)
+
+    result = await service.scan_symbol(
+        alpha_symbol="10000NEXUSDT",
+        futures_symbol="10000NEXUSDT",
+        hours=1,
+    )
+
+    assert requested == [("ALPHA_331USDT", "NEXPERPUSDT", 10_000, 10_000)]
+    assert result["alpha_symbol"] == "10000NEXUSDT"
+    assert result["futures_symbol"] == "10000NEXUSDT"
+    assert result["latest"]["basis_bps"] == pytest.approx(-500.0)
 
 
 @pytest.mark.asyncio
@@ -293,6 +366,77 @@ async def test_scan_all_returns_signal_candidates(monkeypatch) -> None:
     assert result["scanned_count"] == 1
     assert result["signal_count"] == 1
     assert result["candidates"][0]["event_type"] == "SHOCK_ALERT"
+
+
+@pytest.mark.asyncio
+async def test_scan_all_uses_global_aliases_for_candidate_display_and_filtering(monkeypatch) -> None:
+    service = MinuteSignalScanService()
+    service.configure_symbol_aliases(
+        SymbolAliasResolver(
+            [
+                SymbolAlias(
+                    exchange="binance_alpha",
+                    symbol="ALPHA_331USDT",
+                    canonical_symbol="10000NEXUSDT",
+                    market_type=MarketType.SPOT,
+                    price_multiplier=10_000,
+                ),
+                SymbolAlias(
+                    exchange="binance",
+                    symbol="NEXPERPUSDT",
+                    canonical_symbol="10000NEXUSDT",
+                    market_type=MarketType.FUTURE,
+                    price_multiplier=10_000,
+                ),
+            ]
+        )
+    )
+    monkeypatch.setattr(
+        service,
+        "_fetch_global_universe",
+        lambda: _async_value(
+            [
+                {
+                    "base_asset": "NEX",
+                    "alpha_id": "ALPHA_331",
+                    "alpha_symbol": "ALPHA_331USDT",
+                    "futures_symbol": "NEXPERPUSDT",
+                    "alpha_price": 0.01,
+                    "futures_price": 0.0105,
+                    "index_price": 0.0105,
+                    "volume_24h_usdt": 1_000_000,
+                    "initial_basis_bps": 1.0,
+                    "initial_premium_bps": 0.0,
+                }
+            ]
+        ),
+    )
+    scanned: list[tuple[str, str]] = []
+
+    async def fake_scan_symbol(*, alpha_symbol: str, futures_symbol: str, hours: int):
+        scanned.append((alpha_symbol, futures_symbol))
+        return {
+            "bar_count": 60,
+            "latest": {
+                "basis_bps": -500.0,
+                "premium_bps": 0.0,
+                "basis_peak_60m_bps": 0.0,
+                "compression_ratio": None,
+            },
+            "events": [],
+        }
+
+    monkeypatch.setattr(service, "scan_symbol", fake_scan_symbol)
+
+    result = await service.scan_all(hours=2, max_symbols=5, min_volume_24h_usdt=0)
+
+    assert scanned == [("ALPHA_331USDT", "NEXPERPUSDT")]
+    candidate = result["candidates"][0]
+    assert candidate["alpha_symbol"] == "10000NEXUSDT"
+    assert candidate["futures_symbol"] == "10000NEXUSDT"
+    assert candidate["alpha_price"] == pytest.approx(100.0)
+    assert candidate["futures_price"] == pytest.approx(105.0)
+    assert candidate["initial_basis_bps"] == pytest.approx(-500.0)
 
 
 @pytest.mark.asyncio
@@ -598,6 +742,81 @@ def test_minute_signal_route_uses_factory_and_normalizes_symbols() -> None:
     assert response.json()["futures_symbol"] == "AKEUSDT"
     assert response.json()["alpha_symbol"] == "ALPHA_331USDT"
     assert response.json()["hours"] == 2
+    assert service.closed is True
+
+
+def test_minute_signal_route_configures_global_aliases() -> None:
+    class FakeSettingsRepository:
+        async def get_minute_signal_settings(self) -> MinuteSignalSettings:
+            return MinuteSignalSettings()
+
+        async def get_risk_settings(self) -> RiskSettings:
+            return RiskSettings(
+                symbol_aliases=[
+                    SymbolAlias(
+                        exchange="binance_alpha",
+                        symbol="ALPHA_331USDT",
+                        canonical_symbol="10000NEXUSDT",
+                        market_type=MarketType.SPOT,
+                        price_multiplier=10_000,
+                    ),
+                    SymbolAlias(
+                        exchange="binance",
+                        symbol="NEXPERPUSDT",
+                        canonical_symbol="10000NEXUSDT",
+                        market_type=MarketType.FUTURE,
+                        price_multiplier=10_000,
+                    ),
+                ]
+            )
+
+    class FakeService:
+        closed = False
+        resolver: SymbolAliasResolver | None = None
+
+        def configure_symbol_aliases(self, resolver: SymbolAliasResolver) -> None:
+            self.resolver = resolver
+
+        async def scan_symbol(self, *, alpha_symbol: str, futures_symbol: str, hours: int):
+            assert self.resolver is not None
+            alpha = self.resolver.resolve(
+                exchange="binance_alpha",
+                symbol=alpha_symbol,
+                market_type=MarketType.SPOT,
+            )
+            futures = self.resolver.resolve(
+                exchange="binance",
+                symbol=futures_symbol,
+                market_type=MarketType.FUTURE,
+            )
+            return {
+                "alpha_symbol": alpha.canonical_symbol,
+                "futures_symbol": futures.canonical_symbol,
+                "hours": hours,
+                "observed_at": "2026-07-25T00:00:00+00:00",
+                "bar_count": 0,
+                "latest": None,
+                "points": [],
+                "events": [],
+                "warnings": [],
+            }
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    service = FakeService()
+    app = create_app()
+    app.state.settings_repo = FakeSettingsRepository()
+    app.state.minute_signal_scan_service_factory = lambda: service
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/minute-signals/scan?symbol=10000nex&alpha_symbol=10000nex&hours=2"
+        )
+
+    assert response.status_code == 200
+    assert response.json()["futures_symbol"] == "10000NEXUSDT"
+    assert response.json()["alpha_symbol"] == "10000NEXUSDT"
     assert service.closed is True
 
 

@@ -357,6 +357,40 @@ describe("PairMonitorPage", () => {
         if (url.pathname.includes("/pair-spread/query")) {
           return Response.json(pairSpreadResult(url.searchParams));
         }
+        if (url.pathname.includes("/pair-spread/funding-history")) {
+          const result = pairSpreadResult(url.searchParams);
+          return Response.json({
+            leg1: result.leg1,
+            leg2: result.leg2,
+            funding_history: [
+              {
+                exchange: result.leg1.exchange,
+                symbol: result.leg1.symbol,
+                funding_time: "2026-07-23T16:00:00Z",
+                funding_rate_pct: 0.01
+              },
+              {
+                exchange: result.leg1.exchange,
+                symbol: result.leg1.symbol,
+                funding_time: "2026-07-24T00:00:00Z",
+                funding_rate_pct: -0.1
+              },
+              {
+                exchange: result.leg2.exchange,
+                symbol: result.leg2.symbol,
+                funding_time: "2026-07-24T00:00:00Z",
+                funding_rate_pct: -0.07
+              },
+              {
+                exchange: result.leg1.exchange,
+                symbol: result.leg1.symbol,
+                funding_time: "2026-07-23T08:00:00Z",
+                funding_rate_pct: -0.1
+              }
+            ],
+            warnings: []
+          });
+        }
         if (url.pathname.includes("/pair-spread/funding-records/status")) {
           return Response.json(pairFundingRecordStatus(fundingRecordWatched));
         }
@@ -552,7 +586,8 @@ describe("PairMonitorPage", () => {
 
     const comboboxes = screen.getAllByRole("combobox");
     await user.click(comboboxes[comboboxes.length - 1]);
-    await user.click(await screen.findByText("自定义"));
+    const customOptions = await screen.findAllByText("自定义");
+    await user.click(customOptions[customOptions.length - 1]);
     const customInput = screen.getByRole("spinbutton", { name: /自定义秒/ });
     await user.clear(customInput);
     await user.type(customInput, "7");
@@ -630,7 +665,6 @@ describe("PairMonitorPage", () => {
     await user.click(savedTag);
 
     expect((screen.getByPlaceholderText("SKHY") as HTMLInputElement).value).toBe("CXMTUSDT");
-    expect((screen.getByPlaceholderText("SKHYNIX") as HTMLInputElement).value).toBe("CXMTUSDT");
     expect((document.querySelector(".pair-query-hours input") as HTMLInputElement).value).toBe("12");
     expect((screen.getByRole("spinbutton", { name: /同时段对比天数/ }) as HTMLInputElement).value).toBe("4");
     await waitFor(() => {
@@ -652,6 +686,12 @@ describe("PairMonitorPage", () => {
 
   it("shows the funding rate difference table", async () => {
     const user = userEvent.setup();
+    window.history.pushState(
+      {},
+      "",
+      "/?page=pair-monitor&leg1_exchange=bitget&leg1_market_type=future&leg1_symbol=SKHY" +
+        "&leg2_exchange=bybit&leg2_market_type=future&leg2_symbol=SKHY&hours=4&interval_seconds=5"
+    );
     render(<PairMonitorPage />);
 
     await user.click(screen.getByRole("button", { name: /查询/ }));
@@ -662,6 +702,7 @@ describe("PairMonitorPage", () => {
     expect(screen.getAllByText("+0.1000%").length).toBeGreaterThan(0);
     expect(screen.getAllByText("+0.0000%").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Bitget 费率").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Bybit 费率").length).toBeGreaterThan(0);
     expect(screen.getByText("总资金费率差（右-左）")).toBeTruthy();
     const summaryPanel = document.querySelector(".pair-funding-summary-panel") as HTMLElement;
     expect(summaryPanel.textContent).toContain("+0.0300%");
@@ -699,7 +740,7 @@ describe("PairMonitorPage", () => {
 
     await user.click(screen.getByRole("button", { name: /确定资金费率累计时间/ }));
     await waitFor(() => {
-      expect(summaryPanel.textContent).toContain("+0.1300%");
+      expect(summaryPanel.textContent).toContain("+0.1200%");
       expect(summaryPanel.textContent).toContain("指定时间");
       expect(summaryPanel.textContent).toContain("3 条");
     });
@@ -867,7 +908,7 @@ describe("PairMonitorPage", () => {
     expect(params.get("leg1_symbol")).toBe("SKHYUSDT");
     expect(params.get("leg2_exchange")).toBe("bitget");
     expect(params.get("leg2_market_type")).toBe("future");
-    expect(params.get("leg2_symbol")).toBe("SKHYNIXUSDT");
+    expect(params.get("leg2_symbol")).toBe("SKHYUSDT");
     expect(params.get("leg2_multiplier")).toBe("1");
     expect(params.get("hours")).toBe("4");
     expect(params.get("interval_minutes")).toBe("1");

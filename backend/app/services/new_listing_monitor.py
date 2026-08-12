@@ -23,7 +23,9 @@ from app.models.new_listing import (
     NewListingWatchItem,
 )
 from app.models.second_level_sampling import SecondLevelMarketSample
+from app.models.settings import RiskSettings
 from app.services.second_level_sampler import SecondLevelMarketFetcher
+from app.services.symbol_aliases import ResolvedSymbolAlias, SymbolAliasResolver
 
 logger = logging.getLogger(__name__)
 
@@ -348,10 +350,12 @@ class NewListingMonitor:
         repo: NewListingMonitorRepository,
         fetcher: SecondLevelMarketFetcher | None = None,
         alert_sender: Callable[[str], Awaitable[None]] | None = None,
+        risk_settings_loader: Callable[[], Awaitable[RiskSettings]] | None = None,
     ) -> None:
         self.repo = repo
         self.fetcher = fetcher or SecondLevelMarketFetcher()
         self.alert_sender = alert_sender
+        self.risk_settings_loader = risk_settings_loader
         self._hits: dict[str, int] = {}
         self._last_sent: dict[str, datetime] = {}
         self._last_run_at: dict[str, datetime] = {}
@@ -406,8 +410,22 @@ class NewListingMonitor:
     async def collect_watch_item(self, item: NewListingWatchItem) -> list[NewListingSpreadSample]:
         started = time.perf_counter()
         observed_at = utc_now()
+        resolver = SymbolAliasResolver([])
+        if self.risk_settings_loader is not None:
+            resolver = SymbolAliasResolver((await self.risk_settings_loader()).symbol_aliases)
+        aliases_by_exchange = {
+            exchange: resolver.resolve(
+                exchange=exchange,
+                symbol=item.symbol,
+                market_type=item.market_type,
+            )
+            for exchange in item.exchanges
+        }
         exchange_samples = await asyncio.gather(
-            *(self.fetcher.fetch(exchange, item.symbol) for exchange in item.exchanges),
+            *(
+                self.fetcher.fetch(exchange, aliases_by_exchange[exchange].raw_symbol)
+                for exchange in item.exchanges
+            ),
             return_exceptions=True,
         )
         market_samples: list[SecondLevelMarketSample] = []
@@ -423,7 +441,13 @@ class NewListingMonitor:
                     )
                 )
             else:
-                market_samples.append(result)
+                market_samples.append(
+                    _apply_symbol_alias_to_market_sample(
+                        result,
+                        alias=aliases_by_exchange[exchange],
+                        display_symbol=item.symbol,
+                    )
+                )
 
         samples = self._spread_samples(item, market_samples, observed_at=observed_at)
         await self.repo.insert_samples(samples)
@@ -587,6 +611,41 @@ class NewListingMonitor:
 
 def _leg_bid(sample: SecondLevelMarketSample, market_type: MarketType) -> float | None:
     return _positive(sample.spot_bid if market_type == MarketType.SPOT else sample.future_bid)
+
+
+def _apply_symbol_alias_to_market_sample(
+    sample: SecondLevelMarketSample,
+    *,
+    alias: ResolvedSymbolAlias,
+    display_symbol: str,
+) -> SecondLevelMarketSample:
+    multiplier = alias.price_multiplier
+
+    def scale_price(value: float | None) -> float | None:
+        return value * multiplier if value is not None else None
+
+    def scale_size(value: float | None) -> float | None:
+        return value / multiplier if value is not None else None
+
+    return sample.model_copy(
+        update={
+            "symbol": display_symbol,
+            "spot_bid": scale_price(sample.spot_bid),
+            "spot_ask": scale_price(sample.spot_ask),
+            "spot_bid_size": scale_size(sample.spot_bid_size),
+            "spot_ask_size": scale_size(sample.spot_ask_size),
+            "spot_mid": scale_price(sample.spot_mid),
+            "spot_last": scale_price(sample.spot_last),
+            "future_bid": scale_price(sample.future_bid),
+            "future_ask": scale_price(sample.future_ask),
+            "future_bid_size": scale_size(sample.future_bid_size),
+            "future_ask_size": scale_size(sample.future_ask_size),
+            "future_mid": scale_price(sample.future_mid),
+            "future_last": scale_price(sample.future_last),
+            "mark_price": scale_price(sample.mark_price),
+            "index_price": scale_price(sample.index_price),
+        }
+    )
 
 
 def _leg_ask(sample: SecondLevelMarketSample, market_type: MarketType) -> float | None:

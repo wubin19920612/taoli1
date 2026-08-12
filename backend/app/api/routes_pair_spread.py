@@ -26,6 +26,12 @@ from app.models.settings import AlertMessageTemplateSettings
 from app.services.pair_spread_funding_recorder import PairSpreadFundingRecorder
 from app.services.pair_spread_diagnostics import build_pair_spread_diagnostic
 from app.services.pair_spread_query import PairSpreadQueryError, PairSpreadQueryService
+from app.services.symbol_aliases import (
+    ResolvedSymbolAlias,
+    SymbolAliasResolver,
+    apply_pair_spread_funding_aliases,
+    apply_pair_spread_symbol_aliases,
+)
 
 router = APIRouter(prefix="/pair-spread")
 
@@ -37,8 +43,83 @@ def _funding_recorder(request: Request) -> PairSpreadFundingRecorder:
     return recorder
 
 
+async def _symbol_alias_resolver(request: Request) -> SymbolAliasResolver:
+    repo = getattr(request.app.state, "settings_repo", None)
+    if repo is None:
+        return SymbolAliasResolver([])
+    settings = await repo.get_risk_settings()
+    return SymbolAliasResolver(settings.symbol_aliases)
+
+
+def _resolved_leg(
+    resolver: SymbolAliasResolver,
+    *,
+    exchange: str,
+    symbol: str,
+    market_type: MarketType,
+) -> tuple[PairSpreadLegQuery, ResolvedSymbolAlias]:
+    alias = resolver.resolve(exchange=exchange, symbol=symbol, market_type=market_type)
+    return (
+        PairSpreadLegQuery(
+            exchange=exchange,
+            symbol=alias.raw_symbol,
+            market_type=market_type,
+        ),
+        alias,
+    )
+
+
+def _display_funding_status(
+    status: PairSpreadFundingRecordStatus,
+    *,
+    leg1_alias: ResolvedSymbolAlias,
+    leg2_alias: ResolvedSymbolAlias,
+) -> PairSpreadFundingRecordStatus:
+    if status.item is None:
+        return status
+    return status.model_copy(
+        update={
+            "item": status.item.model_copy(
+                update={
+                    "leg1": status.item.leg1.model_copy(update={"symbol": leg1_alias.canonical_symbol}),
+                    "leg2": status.item.leg2.model_copy(update={"symbol": leg2_alias.canonical_symbol}),
+                }
+            )
+        }
+    )
+
+
+async def _funding_request_from_payload(
+    request: Request,
+    payload: PairSpreadFundingRecordRequest,
+) -> tuple[PairSpreadFundingRecordRequest, ResolvedSymbolAlias, ResolvedSymbolAlias]:
+    resolver = await _symbol_alias_resolver(request)
+    leg1, leg1_alias = _resolved_leg(
+        resolver,
+        exchange=payload.leg1.exchange,
+        symbol=payload.leg1.symbol,
+        market_type=payload.leg1.market_type,
+    )
+    leg2, leg2_alias = _resolved_leg(
+        resolver,
+        exchange=payload.leg2.exchange,
+        symbol=payload.leg2.symbol,
+        market_type=payload.leg2.market_type,
+    )
+    return (
+        PairSpreadFundingRecordRequest(
+            leg1=leg1,
+            leg2=leg2,
+            leg2_multiplier=payload.leg2_multiplier,
+        ),
+        leg1_alias,
+        leg2_alias,
+    )
+
+
 def _funding_record_request_from_params(
     *,
+    resolver: SymbolAliasResolver,
     leg1_exchange: str,
     leg1_symbol: str,
     leg1_market_type: MarketType,
@@ -46,12 +127,28 @@ def _funding_record_request_from_params(
     leg2_symbol: str,
     leg2_market_type: MarketType,
     leg2_multiplier: float,
-) -> PairSpreadFundingRecordRequest:
+) -> tuple[PairSpreadFundingRecordRequest, ResolvedSymbolAlias, ResolvedSymbolAlias]:
     try:
-        return PairSpreadFundingRecordRequest(
-            leg1=PairSpreadLegQuery(exchange=leg1_exchange, symbol=leg1_symbol, market_type=leg1_market_type),
-            leg2=PairSpreadLegQuery(exchange=leg2_exchange, symbol=leg2_symbol, market_type=leg2_market_type),
-            leg2_multiplier=leg2_multiplier,
+        leg1, leg1_alias = _resolved_leg(
+            resolver,
+            exchange=leg1_exchange,
+            symbol=leg1_symbol,
+            market_type=leg1_market_type,
+        )
+        leg2, leg2_alias = _resolved_leg(
+            resolver,
+            exchange=leg2_exchange,
+            symbol=leg2_symbol,
+            market_type=leg2_market_type,
+        )
+        return (
+            PairSpreadFundingRecordRequest(
+                leg1=leg1,
+                leg2=leg2,
+                leg2_multiplier=leg2_multiplier,
+            ),
+            leg1_alias,
+            leg2_alias,
         )
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -64,7 +161,33 @@ async def list_pair_spread_exchanges() -> list[str]:
 
 @router.get("/funding-records/watchlist", response_model=list[PairSpreadFundingWatchItem])
 async def list_pair_spread_funding_records(request: Request) -> list[PairSpreadFundingWatchItem]:
-    return await _funding_recorder(request).repo.list_watch_items()
+    resolver = await _symbol_alias_resolver(request)
+    items = await _funding_recorder(request).repo.list_watch_items()
+    return [
+        item.model_copy(
+            update={
+                "leg1": item.leg1.model_copy(
+                    update={
+                        "symbol": resolver.resolve(
+                            exchange=item.leg1.exchange,
+                            symbol=item.leg1.symbol,
+                            market_type=item.leg1.market_type,
+                        ).canonical_symbol
+                    }
+                ),
+                "leg2": item.leg2.model_copy(
+                    update={
+                        "symbol": resolver.resolve(
+                            exchange=item.leg2.exchange,
+                            symbol=item.leg2.symbol,
+                            market_type=item.leg2.market_type,
+                        ).canonical_symbol
+                    }
+                ),
+            }
+        )
+        for item in items
+    ]
 
 
 @router.get("/funding-records/status", response_model=PairSpreadFundingRecordStatus)
@@ -80,7 +203,9 @@ async def get_pair_spread_funding_record_status(
     leg2_multiplier: float = Query(default=1.0, gt=0),
     end_at: datetime | None = Query(default=None),
 ) -> PairSpreadFundingRecordStatus:
-    record_request = _funding_record_request_from_params(
+    resolver = await _symbol_alias_resolver(request)
+    record_request, leg1_alias, leg2_alias = _funding_record_request_from_params(
+        resolver=resolver,
         leg1_exchange=leg1_exchange,
         leg1_symbol=leg1_symbol,
         leg1_market_type=leg1_market_type,
@@ -89,7 +214,8 @@ async def get_pair_spread_funding_record_status(
         leg2_market_type=leg2_market_type,
         leg2_multiplier=leg2_multiplier,
     )
-    return await _funding_recorder(request).status_for(record_request, hours=hours, now=end_at)
+    status = await _funding_recorder(request).status_for(record_request, hours=hours, now=end_at)
+    return _display_funding_status(status, leg1_alias=leg1_alias, leg2_alias=leg2_alias)
 
 
 @router.post("/funding-records/watch", response_model=PairSpreadFundingRecordStatus)
@@ -100,7 +226,9 @@ async def start_pair_spread_funding_record(
     password: str | None = Depends(dashboard_password_header),
 ) -> PairSpreadFundingRecordStatus:
     verify_dashboard_password(request.app.state.settings.dashboard_password, password)
-    return await _funding_recorder(request).upsert_watch(payload, hours=hours)
+    record_request, leg1_alias, leg2_alias = await _funding_request_from_payload(request, payload)
+    status = await _funding_recorder(request).upsert_watch(record_request, hours=hours)
+    return _display_funding_status(status, leg1_alias=leg1_alias, leg2_alias=leg2_alias)
 
 
 @router.delete("/funding-records/watch", response_model=PairSpreadFundingRecordStatus)
@@ -111,7 +239,9 @@ async def stop_pair_spread_funding_record(
     password: str | None = Depends(dashboard_password_header),
 ) -> PairSpreadFundingRecordStatus:
     verify_dashboard_password(request.app.state.settings.dashboard_password, password)
-    return await _funding_recorder(request).delete_watch(payload, hours=hours)
+    record_request, leg1_alias, leg2_alias = await _funding_request_from_payload(request, payload)
+    status = await _funding_recorder(request).delete_watch(record_request, hours=hours)
+    return _display_funding_status(status, leg1_alias=leg1_alias, leg2_alias=leg2_alias)
 
 
 def _diagnostic_historical_interval_seconds(requested: int) -> int:
@@ -154,9 +284,20 @@ async def diagnose_pair_spread(
     leg2_multiplier: float = Query(default=1.0, gt=0),
     end_at: datetime | None = Query(default=None),
 ) -> PairSpreadDiagnosticResult:
+    resolver = await _symbol_alias_resolver(request)
     try:
-        leg1 = PairSpreadLegQuery(exchange=leg1_exchange, symbol=leg1_symbol, market_type=leg1_market_type)
-        leg2 = PairSpreadLegQuery(exchange=leg2_exchange, symbol=leg2_symbol, market_type=leg2_market_type)
+        leg1, leg1_alias = _resolved_leg(
+            resolver,
+            exchange=leg1_exchange,
+            symbol=leg1_symbol,
+            market_type=leg1_market_type,
+        )
+        leg2, leg2_alias = _resolved_leg(
+            resolver,
+            exchange=leg2_exchange,
+            symbol=leg2_symbol,
+            market_type=leg2_market_type,
+        )
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -184,8 +325,13 @@ async def diagnose_pair_spread(
             if settings_repo is not None
             else AlertMessageTemplateSettings()
         )
-        diagnostic = build_pair_spread_diagnostic(
+        aliased_result = apply_pair_spread_symbol_aliases(
             result,
+            leg1_alias=leg1_alias,
+            leg2_alias=leg2_alias,
+        )
+        diagnostic = build_pair_spread_diagnostic(
+            aliased_result,
             threshold_pct=threshold_pct,
             requested_interval_seconds=interval_seconds,
             interval_seconds=historical_interval_seconds,
@@ -224,9 +370,20 @@ async def query_pair_spread_funding_history(
     start_at: datetime | None = Query(default=None),
     end_at: datetime | None = Query(default=None),
 ) -> PairSpreadFundingHistoryResult:
+    resolver = await _symbol_alias_resolver(request)
     try:
-        leg1 = PairSpreadLegQuery(exchange=leg1_exchange, symbol=leg1_symbol, market_type=leg1_market_type)
-        leg2 = PairSpreadLegQuery(exchange=leg2_exchange, symbol=leg2_symbol, market_type=leg2_market_type)
+        leg1, leg1_alias = _resolved_leg(
+            resolver,
+            exchange=leg1_exchange,
+            symbol=leg1_symbol,
+            market_type=leg1_market_type,
+        )
+        leg2, leg2_alias = _resolved_leg(
+            resolver,
+            exchange=leg2_exchange,
+            symbol=leg2_symbol,
+            market_type=leg2_market_type,
+        )
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -241,11 +398,16 @@ async def query_pair_spread_funding_history(
     factory = getattr(request.app.state, "pair_spread_query_service_factory", None) or PairSpreadQueryService
     service = factory()
     try:
-        return await service.query_funding_history(
+        result = await service.query_funding_history(
             leg1,
             leg2,
             start=start,
             end=end,
+        )
+        return apply_pair_spread_funding_aliases(
+            result,
+            leg1_alias=leg1_alias,
+            leg2_alias=leg2_alias,
         )
     except PairSpreadQueryError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -283,16 +445,27 @@ async def query_pair_spread(
                 f"{PAIR_SPREAD_MIN_INTERVAL_SECONDS} and {PAIR_SPREAD_MAX_INTERVAL_SECONDS}"
             ),
         )
+    resolver = await _symbol_alias_resolver(request)
     try:
-        leg1 = PairSpreadLegQuery(exchange=leg1_exchange, symbol=leg1_symbol, market_type=leg1_market_type)
-        leg2 = PairSpreadLegQuery(exchange=leg2_exchange, symbol=leg2_symbol, market_type=leg2_market_type)
+        leg1, leg1_alias = _resolved_leg(
+            resolver,
+            exchange=leg1_exchange,
+            symbol=leg1_symbol,
+            market_type=leg1_market_type,
+        )
+        leg2, leg2_alias = _resolved_leg(
+            resolver,
+            exchange=leg2_exchange,
+            symbol=leg2_symbol,
+            market_type=leg2_market_type,
+        )
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     factory = getattr(request.app.state, "pair_spread_query_service_factory", None) or PairSpreadQueryService
     service = factory()
     try:
-        return await service.query(
+        result = await service.query(
             leg1,
             leg2,
             hours=hours,
@@ -301,6 +474,11 @@ async def query_pair_spread(
             leg2_multiplier=leg2_multiplier,
             now=end_at,
             include_current=include_current,
+        )
+        return apply_pair_spread_symbol_aliases(
+            result,
+            leg1_alias=leg1_alias,
+            leg2_alias=leg2_alias,
         )
     except PairSpreadQueryError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -341,6 +519,31 @@ async def query_symbol_spread(
                 detail=f"unsupported exchanges: {', '.join(unsupported)}; allowed: {allowed_text}",
             )
 
+    resolver = await _symbol_alias_resolver(request)
+    normalized_scope = requested_exchanges or list(SUPPORTED_SYMBOL_SPREAD_EXCHANGES)
+    normalized_exchanges = list(dict.fromkeys([normalized_base_exchange, *normalized_scope]))
+    aliases_by_exchange = {
+        exchange: resolver.resolve(
+            exchange=exchange,
+            symbol=symbol,
+            market_type=market_type,
+        )
+        for exchange in normalized_exchanges
+    }
+    display_symbol = next(iter(aliases_by_exchange.values())).canonical_symbol
+    legs_by_exchange = {
+        exchange: PairSpreadLegQuery(
+            exchange=exchange,
+            symbol=alias.raw_symbol,
+            market_type=market_type,
+        )
+        for exchange, alias in aliases_by_exchange.items()
+    }
+    price_multipliers_by_exchange = {
+        exchange: alias.price_multiplier
+        for exchange, alias in aliases_by_exchange.items()
+    }
+
     factory = getattr(request.app.state, "pair_spread_query_service_factory", None) or PairSpreadQueryService
     service = factory()
     try:
@@ -353,6 +556,9 @@ async def query_symbol_spread(
             interval_seconds=interval_seconds,
             now=end_at,
             include_current=include_current,
+            legs_by_exchange=legs_by_exchange,
+            price_multipliers_by_exchange=price_multipliers_by_exchange,
+            display_symbol=display_symbol,
         )
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

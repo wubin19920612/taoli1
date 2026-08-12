@@ -514,13 +514,18 @@ def build_pair_hourly_volume_points(
 def build_symbol_spread_points(
     base_klines: list[PairSpreadKlinePoint],
     exchange_klines: list[PairSpreadKlinePoint],
+    *,
+    base_price_multiplier: float = 1.0,
+    exchange_price_multiplier: float = 1.0,
 ) -> list[SymbolSpreadPoint]:
+    if base_price_multiplier <= 0 or exchange_price_multiplier <= 0:
+        raise ValueError("price multipliers must be positive")
     base_by_time = {point.bucket_at: point.close for point in base_klines}
     exchange_by_time = {point.bucket_at: point.close for point in exchange_klines}
     points: list[SymbolSpreadPoint] = []
     for bucket_at in sorted(base_by_time.keys() & exchange_by_time.keys()):
-        base_close = base_by_time[bucket_at]
-        exchange_close = exchange_by_time[bucket_at]
+        base_close = base_by_time[bucket_at] * base_price_multiplier
+        exchange_close = exchange_by_time[bucket_at] * exchange_price_multiplier
         if base_close <= 0 or exchange_close <= 0:
             continue
         spread_abs = exchange_close - base_close
@@ -615,14 +620,26 @@ def _symbol_spread_cache_key(
     market_type: MarketType,
     base_exchange: str,
     exchanges: list[str],
+    legs_by_exchange: dict[str, PairSpreadLegQuery] | None = None,
+    price_multipliers_by_exchange: dict[str, float] | None = None,
     interval_seconds: int,
 ) -> str:
+    legs_by_exchange = legs_by_exchange or {}
+    price_multipliers_by_exchange = price_multipliers_by_exchange or {}
     return "|".join(
         (
             _compact_symbol(symbol),
             str(market_type),
             base_exchange,
             ",".join(exchanges),
+            ",".join(
+                (
+                    f"{exchange}:{legs_by_exchange[exchange].symbol}:"
+                    f"{price_multipliers_by_exchange.get(exchange, 1.0):.12g}"
+                )
+                for exchange in exchanges
+                if exchange in legs_by_exchange
+            ),
             str(interval_seconds),
         )
     )
@@ -871,7 +888,11 @@ class PairSpreadQueryService:
         interval_seconds: int = 60,
         now: datetime | None = None,
         include_current: bool = True,
+        legs_by_exchange: dict[str, PairSpreadLegQuery] | None = None,
+        price_multipliers_by_exchange: dict[str, float] | None = None,
+        display_symbol: str | None = None,
     ) -> SymbolSpreadQueryResult:
+        price_multipliers_by_exchange = price_multipliers_by_exchange or {}
         if interval_seconds not in PAIR_SPREAD_HISTORICAL_INTERVAL_SECONDS:
             if not include_current:
                 raise PairSpreadQueryError("秒级周期只支持实时采样，历史对比请使用 1 分钟、5 分钟或 15 分钟周期")
@@ -883,6 +904,9 @@ class PairSpreadQueryService:
                 hours=hours,
                 interval_seconds=interval_seconds,
                 now=now,
+                legs_by_exchange=legs_by_exchange,
+                price_multipliers_by_exchange=price_multipliers_by_exchange,
+                display_symbol=display_symbol,
             )
 
         interval_minutes = _interval_minutes_from_seconds(interval_seconds)
@@ -893,11 +917,14 @@ class PairSpreadQueryService:
         if len(normalized_exchanges) < 2:
             raise PairSpreadQueryError("至少需要两个支持的主流交易所才能画跨所价差")
 
-        legs_by_exchange = {
-            exchange: PairSpreadLegQuery(exchange=exchange, symbol=symbol, market_type=market_type)
+        resolved_legs = {
+            exchange: (legs_by_exchange or {}).get(
+                exchange,
+                PairSpreadLegQuery(exchange=exchange, symbol=symbol, market_type=market_type),
+            )
             for exchange in normalized_exchanges
         }
-        query_symbol = next(iter(legs_by_exchange.values())).symbol
+        query_symbol = display_symbol or next(iter(resolved_legs.values())).symbol
         requested_base_exchange = base_exchange.strip().lower()
         warnings: list[str] = []
         failed_window_warnings: list[str] = []
@@ -919,10 +946,10 @@ class PairSpreadQueryService:
                         interval_minutes,
                         window_warnings,
                     )
-                    for leg in legs_by_exchange.values()
+                    for leg in resolved_legs.values()
                 )
             )
-            klines_by_exchange = dict(zip(legs_by_exchange.keys(), kline_results, strict=True))
+            klines_by_exchange = dict(zip(resolved_legs.keys(), kline_results, strict=True))
             candidate_base_exchange = (
                 requested_base_exchange
                 if klines_by_exchange.get(requested_base_exchange)
@@ -940,7 +967,12 @@ class PairSpreadQueryService:
                 exchange_klines = klines_by_exchange.get(exchange, [])
                 if not exchange_klines:
                     continue
-                points = build_symbol_spread_points(base_klines, exchange_klines)
+                points = build_symbol_spread_points(
+                    base_klines,
+                    exchange_klines,
+                    base_price_multiplier=price_multipliers_by_exchange.get(candidate_base_exchange, 1.0),
+                    exchange_price_multiplier=price_multipliers_by_exchange.get(exchange, 1.0),
+                )
                 if points:
                     candidate_series.append((exchange, points))
                 else:
@@ -977,7 +1009,7 @@ class PairSpreadQueryService:
             history_limit_warning = _hyperliquid_history_limit_warning(
                 {
                     exchange
-                    for exchange, leg in legs_by_exchange.items()
+                    for exchange, leg in resolved_legs.items()
                     if leg.market_type == MarketType.FUTURE
                 },
                 hours=hours,
@@ -998,13 +1030,20 @@ class PairSpreadQueryService:
             current_results = await asyncio.gather(
                 *(
                     self._fetch_current_with_warning(leg, warnings)
-                    for leg in legs_by_exchange.values()
+                    for leg in resolved_legs.values()
                 )
             )
             current_by_exchange = {
                 exchange: leg
-                for exchange, leg in zip(legs_by_exchange.keys(), current_results, strict=True)
+                for exchange, leg in zip(resolved_legs.keys(), current_results, strict=True)
                 if leg is not None
+            }
+            current_by_exchange = {
+                exchange: _scale_current_leg_by_factor(
+                    leg,
+                    price_multipliers_by_exchange.get(exchange, 1.0),
+                ).model_copy(update={"symbol": query_symbol})
+                for exchange, leg in current_by_exchange.items()
             }
             current_prices = [
                 _symbol_current_price_snapshot(current_by_exchange[exchange])
@@ -1016,7 +1055,7 @@ class PairSpreadQueryService:
         series = [
             _symbol_spread_series(
                 exchange=exchange,
-                symbol=legs_by_exchange[exchange].symbol,
+                symbol=query_symbol,
                 market_type=market_type,
                 points=points,
                 current=(
@@ -1057,6 +1096,9 @@ class PairSpreadQueryService:
         hours: int,
         interval_seconds: int,
         now: datetime | None = None,
+        legs_by_exchange: dict[str, PairSpreadLegQuery] | None = None,
+        price_multipliers_by_exchange: dict[str, float] | None = None,
+        display_symbol: str | None = None,
     ) -> SymbolSpreadQueryResult:
         observed_at = now or utc_now()
         bucket_at = _floor_interval(observed_at, interval_seconds)
@@ -1064,23 +1106,34 @@ class PairSpreadQueryService:
         if len(normalized_exchanges) < 2:
             raise PairSpreadQueryError("至少需要两个支持的主流交易所才能画跨所价差")
 
-        legs_by_exchange = {
-            exchange: PairSpreadLegQuery(exchange=exchange, symbol=symbol, market_type=market_type)
+        price_multipliers_by_exchange = price_multipliers_by_exchange or {}
+        resolved_legs = {
+            exchange: (legs_by_exchange or {}).get(
+                exchange,
+                PairSpreadLegQuery(exchange=exchange, symbol=symbol, market_type=market_type),
+            )
             for exchange in normalized_exchanges
         }
-        query_symbol = next(iter(legs_by_exchange.values())).symbol
+        query_symbol = display_symbol or next(iter(resolved_legs.values())).symbol
         requested_base_exchange = base_exchange.strip().lower()
         warnings: list[str] = []
         current_results = await asyncio.gather(
             *(
                 self._fetch_current_with_warning(leg, warnings)
-                for leg in legs_by_exchange.values()
+                for leg in resolved_legs.values()
             )
         )
         current_by_exchange = {
             exchange: leg
-            for exchange, leg in zip(legs_by_exchange.keys(), current_results, strict=True)
+            for exchange, leg in zip(resolved_legs.keys(), current_results, strict=True)
             if leg is not None
+        }
+        current_by_exchange = {
+            exchange: _scale_current_leg_by_factor(
+                leg,
+                price_multipliers_by_exchange.get(exchange, 1.0),
+            ).model_copy(update={"symbol": query_symbol})
+            for exchange, leg in current_by_exchange.items()
         }
         if len(current_by_exchange) < 2:
             suffix = f": {_warnings_text(warnings)}" if warnings else ""
@@ -1110,6 +1163,8 @@ class PairSpreadQueryService:
             market_type=market_type,
             base_exchange=effective_base_exchange,
             exchanges=result_exchanges,
+            legs_by_exchange=resolved_legs,
+            price_multipliers_by_exchange=price_multipliers_by_exchange,
             interval_seconds=interval_seconds,
         )
         cached_by_exchange = _REALTIME_SYMBOL_SPREAD_CACHE.setdefault(cache_key, {})
@@ -1127,7 +1182,7 @@ class PairSpreadQueryService:
             series.append(
                 _symbol_spread_series(
                     exchange=exchange,
-                    symbol=legs_by_exchange[exchange].symbol,
+                    symbol=query_symbol,
                     market_type=market_type,
                     points=points,
                     current=current_point,
@@ -2945,6 +3000,26 @@ def _scale_current_leg(leg: PairSpreadCurrentLeg, divisor: float) -> PairSpreadC
     return leg.model_copy(
         update={
             "price": leg.price / divisor,
+            "mark_price": scale(leg.mark_price),
+            "index_price": scale(leg.index_price),
+            "mid_price": scale(leg.mid_price),
+            "last_price": scale(leg.last_price),
+        }
+    )
+
+
+def _scale_current_leg_by_factor(leg: PairSpreadCurrentLeg, factor: float) -> PairSpreadCurrentLeg:
+    if factor <= 0:
+        raise ValueError("price multiplier must be positive")
+    if factor == 1:
+        return leg
+
+    def scale(value: float | None) -> float | None:
+        return value * factor if value is not None else None
+
+    return leg.model_copy(
+        update={
+            "price": leg.price * factor,
             "mark_price": scale(leg.mark_price),
             "index_price": scale(leg.index_price),
             "mid_price": scale(leg.mid_price),

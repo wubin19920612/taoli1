@@ -745,15 +745,20 @@ def create_app(
         app.state.funding_research_repo = FundingResearchRepository(db)
         app.state.index_component_repo = IndexComponentRepository(db)
         app.state.announcement_repo = AnnouncementRepository(db)
-        app.state.second_level_sampler = SecondLevelSampler(SecondLevelSamplingRepository(db))
+        app.state.second_level_sampler = SecondLevelSampler(
+            SecondLevelSamplingRepository(db),
+            risk_settings_loader=app.state.settings_repo.get_risk_settings,
+        )
         app.state.new_listing_monitor = NewListingMonitor(
             NewListingMonitorRepository(db),
             alert_sender=lambda message: _send_index_component_alert(app, message),
+            risk_settings_loader=app.state.settings_repo.get_risk_settings,
         )
         app.state.negative_basis_monitor = NegativeBasisMonitor(
             NegativeBasisMonitorRepository(db),
             snapshot_store=store,
             alert_sender=lambda message: _send_index_component_alert(app, message),
+            risk_settings_loader=app.state.settings_repo.get_risk_settings,
         )
         app.state.pair_spread_funding_recorder = PairSpreadFundingRecorder(PairSpreadFundingRepository(db))
         await app.state.second_level_sampler.initialize()

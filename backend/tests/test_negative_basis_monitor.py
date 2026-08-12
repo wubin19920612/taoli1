@@ -372,7 +372,7 @@ async def test_negative_basis_monitor_auto_discovery_uses_symbol_alias_multiplie
     assert candidates[0].symbol == "10000NEXUSDT"
     assert candidates[0].spot_symbol == "NEXUSDT"
     assert candidates[0].future_symbol == "10000NEXUSDT"
-    assert candidates[0].future_multiplier == pytest.approx(10_000)
+    assert candidates[0].future_multiplier == pytest.approx(1)
     assert candidates[0].spot_price == pytest.approx(104)
     assert candidates[0].future_price == pytest.approx(100)
     assert any(
@@ -383,7 +383,7 @@ async def test_negative_basis_monitor_auto_discovery_uses_symbol_alias_multiplie
     assert watchlist[0].symbol == "10000NEXUSDT"
     assert watchlist[0].spot_symbol == "NEXUSDT"
     assert watchlist[0].future_symbol == "10000NEXUSDT"
-    assert watchlist[0].future_multiplier == pytest.approx(10_000)
+    assert watchlist[0].future_multiplier == pytest.approx(1)
 
 
 @pytest.mark.asyncio

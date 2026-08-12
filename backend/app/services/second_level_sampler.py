@@ -5,15 +5,18 @@ import json
 import logging
 import time
 from contextlib import suppress
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from itertools import combinations
 from math import isfinite
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import aiosqlite
 import httpx
 
 from app.exchanges.base import DEFAULT_HEADERS, DEFAULT_LIMITS, parse_float
+from app.models.market import MarketType
 from app.models.pair_spread import normalize_pair_spread_symbol
 from app.models.second_level_sampling import (
     SecondLevelIndexComponentSample,
@@ -23,6 +26,8 @@ from app.models.second_level_sampling import (
     SecondLevelSamplingConfig,
     SecondLevelSamplingStatus,
 )
+from app.models.settings import RiskSettings
+from app.services.symbol_aliases import ResolvedSymbolAlias, SymbolAliasResolver
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +41,15 @@ def utc_now() -> datetime:
 
 def _compact_symbol(symbol: str) -> str:
     return normalize_pair_spread_symbol(symbol)
+
+
+@dataclass(frozen=True)
+class SecondLevelSamplingTarget:
+    exchange: str
+    requested_symbol: str
+    display_symbol: str
+    spot_alias: ResolvedSymbolAlias
+    future_alias: ResolvedSymbolAlias
 
 
 def _base_quote(symbol: str) -> tuple[str, str]:
@@ -258,6 +272,100 @@ def _leg(
     }
 
 
+def _second_level_display_symbol(
+    *,
+    requested_symbol: str,
+    spot_alias: ResolvedSymbolAlias,
+    future_alias: ResolvedSymbolAlias,
+) -> str:
+    normalized_requested = _compact_symbol(requested_symbol)
+    canonical_candidates = {
+        alias.canonical_symbol
+        for alias in (spot_alias, future_alias)
+        if alias.canonical_symbol != normalized_requested
+    }
+    if len(canonical_candidates) == 1:
+        return next(iter(canonical_candidates))
+    return normalized_requested
+
+
+def _apply_second_level_symbol_aliases(
+    sample: SecondLevelMarketSample,
+    *,
+    display_symbol: str,
+    spot_alias: ResolvedSymbolAlias,
+    future_alias: ResolvedSymbolAlias,
+) -> SecondLevelMarketSample:
+    def scale_price(value: float | None, alias: ResolvedSymbolAlias) -> float | None:
+        return value * alias.price_multiplier if value is not None else None
+
+    def scale_size(value: float | None, alias: ResolvedSymbolAlias) -> float | None:
+        return value / alias.price_multiplier if value is not None else None
+
+    future_mid = scale_price(sample.future_mid, future_alias)
+    mark_price = scale_price(sample.mark_price, future_alias)
+    index_price = scale_price(sample.index_price, future_alias)
+    return sample.model_copy(
+        update={
+            "symbol": display_symbol,
+            "spot_bid": scale_price(sample.spot_bid, spot_alias),
+            "spot_ask": scale_price(sample.spot_ask, spot_alias),
+            "spot_bid_size": scale_size(sample.spot_bid_size, spot_alias),
+            "spot_ask_size": scale_size(sample.spot_ask_size, spot_alias),
+            "spot_mid": scale_price(sample.spot_mid, spot_alias),
+            "spot_last": scale_price(sample.spot_last, spot_alias),
+            "future_bid": scale_price(sample.future_bid, future_alias),
+            "future_ask": scale_price(sample.future_ask, future_alias),
+            "future_bid_size": scale_size(sample.future_bid_size, future_alias),
+            "future_ask_size": scale_size(sample.future_ask_size, future_alias),
+            "future_mid": future_mid,
+            "future_last": scale_price(sample.future_last, future_alias),
+            "mark_price": mark_price,
+            "index_price": index_price,
+            "mark_premium_pct": _pct_diff(mark_price, index_price),
+            "mid_premium_pct": _pct_diff(future_mid, index_price),
+        }
+    )
+
+
+def _apply_second_level_component_aliases(
+    samples: list[SecondLevelIndexComponentSample],
+    *,
+    display_symbol: str,
+    resolver: SymbolAliasResolver,
+) -> list[SecondLevelIndexComponentSample]:
+    normalized: list[SecondLevelIndexComponentSample] = []
+    for sample in samples:
+        alias = resolver.resolve(
+            exchange=sample.component_source,
+            symbol=sample.component_symbol,
+            market_type=MarketType.SPOT,
+        )
+        component_price = (
+            sample.component_price * alias.price_multiplier if sample.component_price is not None else None
+        )
+        normalized.append(
+            sample.model_copy(
+                update={
+                    "symbol": display_symbol,
+                    "component_symbol": alias.canonical_symbol,
+                    "component_price": component_price,
+                    "contribution_price": _contribution_price(sample.weight_pct, component_price),
+                }
+            )
+        )
+    reconstructed = sum(
+        contribution
+        for sample in normalized
+        if (contribution := sample.contribution_price) is not None
+    )
+    reconstructed_index_price = reconstructed if reconstructed > 0 else None
+    return [
+        sample.model_copy(update={"reconstructed_index_price": reconstructed_index_price})
+        for sample in normalized
+    ]
+
+
 class SecondLevelSamplingRepository:
     def __init__(self, db: aiosqlite.Connection):
         self.db = db
@@ -421,6 +529,7 @@ class SecondLevelSamplingRepository:
         *,
         exchange: str | None = None,
         symbol: str | None = None,
+        symbols: list[str] | None = None,
         since: datetime | None = None,
         limit: int = 1000,
     ) -> list[SecondLevelMarketSample]:
@@ -432,6 +541,9 @@ class SecondLevelSamplingRepository:
         if symbol:
             clauses.append("symbol = ?")
             params.append(symbol)
+        elif symbols:
+            clauses.append(f"symbol IN ({','.join('?' for _ in symbols)})")
+            params.extend(symbols)
         if since:
             clauses.append("observed_at >= ?")
             params.append(since.isoformat())
@@ -454,6 +566,7 @@ class SecondLevelSamplingRepository:
         *,
         target_exchange: str | None = None,
         symbol: str | None = None,
+        symbols: list[str] | None = None,
         component_source: str | None = None,
         since: datetime | None = None,
         limit: int = 1000,
@@ -466,6 +579,9 @@ class SecondLevelSamplingRepository:
         if symbol:
             clauses.append("symbol = ?")
             params.append(symbol)
+        elif symbols:
+            clauses.append(f"symbol IN ({','.join('?' for _ in symbols)})")
+            params.extend(symbols)
         if component_source:
             clauses.append("component_source = ?")
             params.append(component_source)
@@ -608,16 +724,26 @@ class SecondLevelMarketFetcher:
         response.raise_for_status()
         return response.json()
 
-    async def fetch(self, exchange: str, symbol: str) -> SecondLevelMarketSample:
+    async def fetch(
+        self,
+        exchange: str,
+        symbol: str,
+        *,
+        spot_symbol: str | None = None,
+        future_symbol: str | None = None,
+    ) -> SecondLevelMarketSample:
         observed_at = utc_now()
         started = time.perf_counter()
         errors: list[str] = []
         spot: dict[str, Any] | None = None
         future: dict[str, Any] | None = None
+        display_symbol = _compact_symbol(symbol)
+        requested_spot_symbol = _compact_symbol(spot_symbol or display_symbol)
+        requested_future_symbol = _compact_symbol(future_symbol or display_symbol)
 
-        async def call(fetcher, label: str) -> dict[str, Any] | None:
+        async def call(fetcher, requested_symbol: str, label: str) -> dict[str, Any] | None:
             try:
-                return await fetcher(symbol)
+                return await fetcher(requested_symbol)
             except httpx.HTTPStatusError as exc:
                 errors.append(f"{label}: {_http_status_error_message(exc, label)}")
                 return None
@@ -630,10 +756,10 @@ class SecondLevelMarketFetcher:
         tasks = []
         labels = []
         if spot_fetcher is not None:
-            tasks.append(call(spot_fetcher, "spot"))
+            tasks.append(call(spot_fetcher, requested_spot_symbol, "spot"))
             labels.append("spot")
         if future_fetcher is not None:
-            tasks.append(call(future_fetcher, "future"))
+            tasks.append(call(future_fetcher, requested_future_symbol, "future"))
             labels.append("future")
         results = await asyncio.gather(*tasks) if tasks else []
         for label, result in zip(labels, results, strict=True):
@@ -657,7 +783,7 @@ class SecondLevelMarketFetcher:
         return SecondLevelMarketSample(
             observed_at=observed_at,
             exchange=exchange,
-            symbol=_compact_symbol(symbol),
+            symbol=display_symbol,
             status=status,
             spot_bid=spot.get("bid") if spot else None,
             spot_ask=spot.get("ask") if spot else None,
@@ -1067,16 +1193,21 @@ class SecondLevelSampler:
         self,
         repo: SecondLevelSamplingRepository,
         fetcher: SecondLevelMarketFetcher | None = None,
+        risk_settings_loader: Callable[[], Awaitable[RiskSettings]] | None = None,
     ) -> None:
         self.repo = repo
         self.fetcher = fetcher or SecondLevelMarketFetcher()
+        self.risk_settings_loader = risk_settings_loader
         self._config = SecondLevelSamplingConfig()
         self._task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
         self._latest_error: str | None = None
 
     async def initialize(self) -> None:
-        config = await self.repo.get_config()
+        loaded_config = await self.repo.get_config()
+        config = await self._canonicalize_config(loaded_config)
+        if config != loaded_config:
+            await self.repo.set_config(config)
         self._config = config
         if config.enabled:
             await self.start(config)
@@ -1089,7 +1220,7 @@ class SecondLevelSampler:
         return self._task is not None and not self._task.done()
 
     async def apply_config(self, config: SecondLevelSamplingConfig) -> SecondLevelSamplingConfig:
-        saved = await self.repo.set_config(config)
+        saved = await self.repo.set_config(await self._canonicalize_config(config))
         self._config = saved
         if saved.enabled:
             await self.start(saved)
@@ -1121,9 +1252,12 @@ class SecondLevelSampler:
 
     async def status(self) -> SecondLevelSamplingStatus:
         config = self._config
+        resolver = await self._symbol_alias_resolver()
+        targets = self._sampling_targets(config, resolver=resolver)
+        display_symbols = list({target.display_symbol for target in targets})
         latest = await self.repo.list_latest_samples(
             exchanges=config.exchanges or None,
-            symbols=config.symbols or None,
+            symbols=display_symbols or None,
             limit=max(100, len(config.exchanges) * len(config.symbols) * 2),
         )
         latest_by_pair: dict[tuple[str, str], SecondLevelMarketSample] = {}
@@ -1134,7 +1268,7 @@ class SecondLevelSampler:
         latest_samples = list(latest_by_pair.values())
         latest_components = await self.repo.list_latest_component_samples(
             target_exchanges=config.exchanges or None,
-            symbols=config.symbols or None,
+            symbols=display_symbols or None,
             limit=max(500, len(config.exchanges) * len(config.symbols) * 30),
         )
         latest_component_by_key: dict[tuple[str, str, str, str], SecondLevelIndexComponentSample] = {}
@@ -1156,6 +1290,25 @@ class SecondLevelSampler:
             latest_component_samples=latest_component_samples,
             latest_component_signals=component_signals,
         )
+
+    async def resolve_display_symbols(
+        self,
+        symbol: str,
+        *,
+        exchanges: list[str] | None = None,
+    ) -> list[str]:
+        requested_symbol = _compact_symbol(symbol)
+        resolver = await self._symbol_alias_resolver()
+        display_symbols = {requested_symbol}
+        for exchange in exchanges or self._config.exchanges:
+            for market_type in (MarketType.SPOT, MarketType.FUTURE):
+                alias = resolver.resolve(
+                    exchange=exchange,
+                    symbol=requested_symbol,
+                    market_type=market_type,
+                )
+                display_symbols.add(alias.canonical_symbol)
+        return sorted(display_symbols)
 
     async def _component_signals(
         self,
@@ -1200,32 +1353,125 @@ class SecondLevelSampler:
         if not config.enabled or not config.exchanges or not config.symbols:
             return
         semaphore = asyncio.Semaphore(config.max_concurrent_requests)
+        resolver = await self._symbol_alias_resolver()
+        targets = self._sampling_targets(config, resolver=resolver)
 
-        async def fetch_one(exchange: str, symbol: str) -> SecondLevelMarketSample:
+        async def fetch_one(target: SecondLevelSamplingTarget) -> tuple[SecondLevelSamplingTarget, SecondLevelMarketSample]:
             async with semaphore:
-                return await self.fetcher.fetch(exchange, symbol)
+                if (
+                    target.spot_alias.raw_symbol == target.display_symbol
+                    and target.future_alias.raw_symbol == target.display_symbol
+                ):
+                    sample = await self.fetcher.fetch(target.exchange, target.display_symbol)
+                else:
+                    sample = await self.fetcher.fetch(
+                        target.exchange,
+                        target.display_symbol,
+                        spot_symbol=target.spot_alias.raw_symbol,
+                        future_symbol=target.future_alias.raw_symbol,
+                    )
+                return (
+                    target,
+                    _apply_second_level_symbol_aliases(
+                        sample,
+                        display_symbol=target.display_symbol,
+                        spot_alias=target.spot_alias,
+                        future_alias=target.future_alias,
+                    ),
+                )
 
-        samples = await asyncio.gather(
-            *(fetch_one(exchange, symbol) for symbol in config.symbols for exchange in config.exchanges),
-        )
-        market_samples = list(samples)
+        sampled_targets = await asyncio.gather(*(fetch_one(target) for target in targets))
+        market_samples = [sample for _, sample in sampled_targets]
         await self.repo.insert_samples(market_samples)
         if not config.capture_index_components:
             return
         fetch_components = getattr(self.fetcher, "fetch_index_components", None)
         if fetch_components is None:
             return
-        market_by_pair = {(sample.exchange, sample.symbol): sample for sample in market_samples}
+        market_by_target = {target: sample for target, sample in sampled_targets}
 
-        async def fetch_component_set(exchange: str, symbol: str) -> list[SecondLevelIndexComponentSample]:
+        async def fetch_component_set(target: SecondLevelSamplingTarget) -> list[SecondLevelIndexComponentSample]:
             async with semaphore:
-                market_sample = market_by_pair.get((exchange, _compact_symbol(symbol)))
-                return await fetch_components(exchange, symbol, market_sample)
+                market_sample = market_by_target.get(target)
+                rows = await fetch_components(target.exchange, target.future_alias.raw_symbol, market_sample)
+                return _apply_second_level_component_aliases(
+                    rows,
+                    display_symbol=target.display_symbol,
+                    resolver=resolver,
+                )
 
         component_batches = await asyncio.gather(
-            *(fetch_component_set(exchange, symbol) for symbol in config.symbols for exchange in config.exchanges),
+            *(fetch_component_set(target) for target in targets),
         )
         await self.repo.insert_component_samples([sample for batch in component_batches for sample in batch])
+
+    async def _symbol_alias_resolver(self) -> SymbolAliasResolver:
+        if self.risk_settings_loader is None:
+            return SymbolAliasResolver([])
+        return SymbolAliasResolver((await self.risk_settings_loader()).symbol_aliases)
+
+    async def _canonicalize_config(
+        self,
+        config: SecondLevelSamplingConfig,
+    ) -> SecondLevelSamplingConfig:
+        if not config.symbols or not config.exchanges:
+            return config
+        resolver = await self._symbol_alias_resolver()
+        canonical_symbols: list[str] = []
+        for symbol in config.symbols:
+            candidates = {
+                alias.canonical_symbol
+                for exchange in config.exchanges
+                for alias in (
+                    resolver.resolve(
+                        exchange=exchange,
+                        symbol=symbol,
+                        market_type=MarketType.SPOT,
+                    ),
+                    resolver.resolve(
+                        exchange=exchange,
+                        symbol=symbol,
+                        market_type=MarketType.FUTURE,
+                    ),
+                )
+                if alias.canonical_symbol != symbol
+            }
+            canonical_symbols.append(next(iter(candidates)) if len(candidates) == 1 else symbol)
+        return config.model_copy(update={"symbols": list(dict.fromkeys(canonical_symbols))})
+
+    def _sampling_targets(
+        self,
+        config: SecondLevelSamplingConfig,
+        *,
+        resolver: SymbolAliasResolver,
+    ) -> list[SecondLevelSamplingTarget]:
+        targets: list[SecondLevelSamplingTarget] = []
+        for symbol in config.symbols:
+            for exchange in config.exchanges:
+                spot_alias = resolver.resolve(
+                    exchange=exchange,
+                    symbol=symbol,
+                    market_type=MarketType.SPOT,
+                )
+                future_alias = resolver.resolve(
+                    exchange=exchange,
+                    symbol=symbol,
+                    market_type=MarketType.FUTURE,
+                )
+                targets.append(
+                    SecondLevelSamplingTarget(
+                        exchange=exchange,
+                        requested_symbol=symbol,
+                        display_symbol=_second_level_display_symbol(
+                            requested_symbol=symbol,
+                            spot_alias=spot_alias,
+                            future_alias=future_alias,
+                        ),
+                        spot_alias=spot_alias,
+                        future_alias=future_alias,
+                    )
+                )
+        return targets
 
 
 def _latest_spreads(samples: list[SecondLevelMarketSample]) -> list[SecondLevelPairSpreadSnapshot]:

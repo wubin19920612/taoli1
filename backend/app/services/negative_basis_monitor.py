@@ -22,6 +22,7 @@ from app.exchanges.base import (
     parse_float,
 )
 from app.models.market import MarketSnapshot, MarketType
+from app.models.settings import RiskSettings
 from app.models.negative_basis import (
     NEGATIVE_BASIS_FUTURE_EXCHANGES,
     NEGATIVE_BASIS_SPOT_EXCHANGES,
@@ -41,9 +42,18 @@ from app.models.negative_basis import (
     negative_basis_exchange_symbol_key,
     utc_now,
 )
-from app.models.pair_spread import PairSpreadQueryResult, PairSpreadValueStats, normalize_pair_spread_symbol
+from app.models.pair_spread import (
+    PairSpreadLegQuery,
+    PairSpreadQueryResult,
+    PairSpreadValueStats,
+    normalize_pair_spread_symbol,
+)
 from app.services.pair_spread_query import PairSpreadQueryError, PairSpreadQueryService
 from app.services.snapshot_store import SnapshotStore
+from app.services.symbol_aliases import (
+    SymbolAliasResolver,
+    apply_pair_spread_symbol_aliases,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -583,10 +593,6 @@ def _market_exchange_symbol_blocked(
     )
 
 
-def _future_multiplier_from_aliases(spot: MarketSnapshot, future: MarketSnapshot) -> float:
-    return _market_alias_multiplier(spot) / _market_alias_multiplier(future)
-
-
 def _alias_reason(label: str, market: MarketSnapshot) -> str | None:
     original_symbol = _market_original_symbol(market)
     multiplier = _market_alias_multiplier(market)
@@ -625,7 +631,6 @@ def _auto_candidate_selection_reasons(
     future_volume_24h_usdt: float | None,
     spot: MarketSnapshot,
     future: MarketSnapshot,
-    future_multiplier: float,
 ) -> list[str]:
     reasons = [
         f"现货溢价 {_fmt_pct(premium_pct, 3)}",
@@ -642,7 +647,6 @@ def _auto_candidate_selection_reasons(
     ]
     if alias_reasons:
         reasons.extend(alias_reasons)
-        reasons.append(f"采样合约倍率 {future_multiplier:g}")
     return reasons
 
 
@@ -690,7 +694,6 @@ def _auto_candidate(
     )
     spot_symbol = _market_original_symbol(spot)
     future_symbol = _market_original_symbol(future)
-    future_multiplier = _future_multiplier_from_aliases(spot, future)
     return NegativeBasisAutoCandidate(
         id=_auto_watch_id(spot.symbol, spot.exchange, future.exchange),
         symbol=spot.symbol,
@@ -698,7 +701,7 @@ def _auto_candidate(
         future_exchange=future.exchange,
         spot_symbol=spot_symbol,
         future_symbol=future_symbol,
-        future_multiplier=future_multiplier,
+        future_multiplier=1.0,
         signal_level=_auto_signal_level(premium_pct, item),
         selection_score=selection_score,
         selection_reasons=_auto_candidate_selection_reasons(
@@ -707,7 +710,6 @@ def _auto_candidate(
             future_volume_24h_usdt=future.volume_24h_usdt,
             spot=spot,
             future=future,
-            future_multiplier=future_multiplier,
         ),
         spot_premium_pct=premium_pct,
         spot_price=spot_price,
@@ -1166,12 +1168,14 @@ class NegativeBasisMonitor:
         query_service_factory: Callable[[], PairSpreadQueryService] | None = None,
         gate_stats_client: GateContractStatsClient | None = None,
         alert_sender: Callable[[str], Awaitable[None]] | None = None,
+        risk_settings_loader: Callable[[], Awaitable[RiskSettings]] | None = None,
     ) -> None:
         self.repo = repo
         self.snapshot_store = snapshot_store
         self.query_service_factory = query_service_factory or PairSpreadQueryService
         self.gate_stats_client = gate_stats_client or GateContractStatsClient()
         self.alert_sender = alert_sender
+        self.risk_settings_loader = risk_settings_loader
         self._last_run_at: dict[str, datetime] = {}
         self._last_sent_at: dict[str, datetime] = {}
         self._last_sent_level: dict[str, NegativeBasisSignalLevel] = {}
@@ -1453,7 +1457,7 @@ class NegativeBasisMonitor:
                 future_exchange=candidate.future_exchange,
                 spot_symbol=candidate.spot_symbol or candidate.symbol,
                 future_symbol=candidate.future_symbol or candidate.symbol,
-                future_multiplier=candidate.future_multiplier,
+                future_multiplier=1.0,
                 interval_seconds=60,
                 lookback_hours=4,
                 note="auto discovered spot-premium candidate",
@@ -1467,7 +1471,7 @@ class NegativeBasisMonitor:
                     "future_exchange": candidate.future_exchange,
                     "spot_symbol": candidate.spot_symbol or candidate.symbol,
                     "future_symbol": candidate.future_symbol or candidate.symbol,
-                    "future_multiplier": candidate.future_multiplier,
+                    "future_multiplier": 1.0,
                     "updated_at": utc_now(),
                 }
             )
@@ -1500,11 +1504,34 @@ class NegativeBasisMonitor:
         return result
 
     async def analyze_item(self, item: NegativeBasisWatchItem) -> NegativeBasisAnalysisResult:
+        resolver = SymbolAliasResolver([])
+        if self.risk_settings_loader is not None:
+            resolver = SymbolAliasResolver((await self.risk_settings_loader()).symbol_aliases)
+        spot_alias = resolver.resolve(
+            exchange=item.spot_exchange,
+            symbol=item.spot_symbol or item.symbol,
+            market_type=MarketType.SPOT,
+        )
+        future_alias = resolver.resolve(
+            exchange=item.future_exchange,
+            symbol=item.future_symbol or item.symbol,
+            market_type=MarketType.FUTURE,
+        )
+        spot_leg = PairSpreadLegQuery(
+            exchange=item.spot_exchange,
+            symbol=spot_alias.raw_symbol,
+            market_type=MarketType.SPOT,
+        )
+        future_leg = PairSpreadLegQuery(
+            exchange=item.future_exchange,
+            symbol=future_alias.raw_symbol,
+            market_type=MarketType.FUTURE,
+        )
         service = self.query_service_factory()
         try:
             result = await service.query(
-                item.spot_leg(),
-                item.future_leg(),
+                spot_leg,
+                future_leg,
                 hours=item.lookback_hours,
                 interval_minutes=1,
                 interval_seconds=60,
@@ -1517,13 +1544,18 @@ class NegativeBasisMonitor:
             close = getattr(service, "aclose", None)
             if close is not None:
                 await close()
+        result = apply_pair_spread_symbol_aliases(
+            result,
+            leg1_alias=spot_alias,
+            leg2_alias=future_alias,
+        )
 
         gate_stats: list[GateContractStatPoint] = []
         warnings: list[str] = []
         if item.future_exchange == "gate":
             try:
                 gate_stats = await self.gate_stats_client.fetch(
-                    item.future_symbol or item.symbol,
+                    future_alias.raw_symbol,
                     start=result.first_seen_at or result.observed_at - timedelta(hours=item.lookback_hours),
                     end=result.observed_at,
                 )

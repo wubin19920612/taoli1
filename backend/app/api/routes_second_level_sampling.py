@@ -87,10 +87,17 @@ async def list_second_level_samples(
     normalized_exchange = exchange.strip().lower() if exchange else None
     if normalized_exchange and normalized_exchange not in SUPPORTED_SECOND_LEVEL_EXCHANGES:
         raise HTTPException(status_code=422, detail=f"Unsupported exchange: {exchange}")
-    normalized_symbol = normalize_pair_spread_symbol(symbol) if symbol else None
+    normalized_symbols = (
+        await sampler.resolve_display_symbols(
+            normalize_pair_spread_symbol(symbol),
+            exchanges=[normalized_exchange] if normalized_exchange else None,
+        )
+        if symbol
+        else None
+    )
     return await repo.list_samples(
         exchange=normalized_exchange,
-        symbol=normalized_symbol,
+        symbols=normalized_symbols,
         since=datetime.now(UTC) - timedelta(minutes=minutes),
         limit=limit,
     )
@@ -109,11 +116,18 @@ async def list_second_level_index_component_samples(
     normalized_exchange = target_exchange.strip().lower() if target_exchange else None
     if normalized_exchange and normalized_exchange not in SUPPORTED_SECOND_LEVEL_EXCHANGES:
         raise HTTPException(status_code=422, detail=f"Unsupported exchange: {target_exchange}")
-    normalized_symbol = normalize_pair_spread_symbol(symbol) if symbol else None
+    normalized_symbols = (
+        await sampler.resolve_display_symbols(
+            normalize_pair_spread_symbol(symbol),
+            exchanges=[normalized_exchange] if normalized_exchange else None,
+        )
+        if symbol
+        else None
+    )
     normalized_source = component_source.strip().lower() if component_source else None
     return await sampler.repo.list_component_samples(
         target_exchange=normalized_exchange,
-        symbol=normalized_symbol,
+        symbols=normalized_symbols,
         component_source=normalized_source,
         since=datetime.now(UTC) - timedelta(minutes=minutes),
         limit=limit,

@@ -398,7 +398,8 @@ describe("SettingsPage", () => {
   it("loads and saves symbol aliases with risk settings", async () => {
     render(<SettingsPage />);
 
-    expect(await screen.findByText("Symbol aliases")).toBeTruthy();
+    expect(await screen.findByText("全局币名映射")).toBeTruthy();
+    expect(screen.getByText("全部页面生效")).toBeTruthy();
     expect(await screen.findByDisplayValue("EDGEXUSDT")).toBeTruthy();
     expect(await screen.findByDisplayValue("EDGEUSDT")).toBeTruthy();
 
@@ -409,7 +410,9 @@ describe("SettingsPage", () => {
         expect.stringContaining("/settings/risk"),
         expect.objectContaining({
           method: "PUT",
-          body: expect.stringContaining('"symbol_aliases":[{"exchange":"gate","symbol":"EDGEXUSDT","canonical_symbol":"EDGEUSDT","market_type":null}]')
+          body: expect.stringContaining(
+            '"symbol_aliases":[{"exchange":"gate","symbol":"EDGEXUSDT","canonical_symbol":"EDGEUSDT","market_type":null,"price_multiplier":1}]'
+          )
         })
       );
     });

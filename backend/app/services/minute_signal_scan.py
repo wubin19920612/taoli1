@@ -10,6 +10,13 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
+from app.models.market import MarketType
+from app.models.pair_spread import (
+    normalize_binance_alpha_symbol,
+    normalize_pair_spread_symbol,
+)
+from app.services.symbol_aliases import SymbolAliasResolver
+
 
 ALPHA_KLINES_URL = "https://www.binance.com/bapi/defi/v1/public/alpha-trade/klines"
 ALPHA_EXCHANGE_INFO_URL = (
@@ -314,6 +321,41 @@ class MinuteSignalScanService:
         self._owned_client = client is None
         self._timeout_seconds = timeout_seconds
         self.config = config or MinuteSignalConfig()
+        self._symbol_alias_resolver = SymbolAliasResolver([])
+
+    def configure_symbol_aliases(self, resolver: SymbolAliasResolver) -> None:
+        self._symbol_alias_resolver = resolver
+
+    def _resolve_symbols(
+        self,
+        *,
+        alpha_symbol: str,
+        futures_symbol: str,
+    ) -> tuple[str, str, str, str, float, float]:
+        normalized_alpha_symbol = normalize_binance_alpha_symbol(alpha_symbol)
+        normalized_alpha_key = normalize_pair_spread_symbol(alpha_symbol)
+        alpha_alias = self._symbol_alias_resolver.resolve(
+            exchange="binance_alpha",
+            symbol=alpha_symbol,
+            market_type=MarketType.SPOT,
+        )
+        futures_alias = self._symbol_alias_resolver.resolve(
+            exchange="binance",
+            symbol=futures_symbol,
+            market_type=MarketType.FUTURE,
+        )
+        return (
+            normalize_binance_alpha_symbol(alpha_alias.raw_symbol),
+            normalize_pair_spread_symbol(futures_alias.raw_symbol),
+            (
+                normalized_alpha_symbol
+                if alpha_alias.canonical_symbol == normalized_alpha_key
+                else alpha_alias.canonical_symbol
+            ),
+            futures_alias.canonical_symbol,
+            alpha_alias.price_multiplier,
+            futures_alias.price_multiplier,
+        )
 
     async def _get_payload(self, url: str, params: dict[str, Any] | None = None) -> Any:
         client = self._client
@@ -510,6 +552,67 @@ class MinuteSignalScanService:
                 )
         return universe
 
+    def _apply_global_symbol_aliases(
+        self,
+        universe: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        normalized: list[dict[str, Any]] = []
+        for item in universe:
+            (
+                alpha_raw_symbol,
+                futures_raw_symbol,
+                alpha_symbol,
+                futures_symbol,
+                alpha_multiplier,
+                futures_multiplier,
+            ) = self._resolve_symbols(
+                alpha_symbol=str(item["alpha_symbol"]),
+                futures_symbol=str(item["futures_symbol"]),
+            )
+            scales_prices = (
+                abs(alpha_multiplier - 1.0) > 1e-12
+                or abs(futures_multiplier - 1.0) > 1e-12
+            )
+            alpha_price = float(item["alpha_price"])
+            futures_price = float(item["futures_price"])
+            index_price = _finite(item.get("index_price"))
+            initial_basis_bps = item.get("initial_basis_bps")
+            initial_premium_bps = item.get("initial_premium_bps")
+            if scales_prices:
+                alpha_price *= alpha_multiplier
+                futures_price *= futures_multiplier
+                index_price = (
+                    index_price * futures_multiplier if index_price is not None else None
+                )
+                initial_basis_bps = (
+                    (alpha_price - futures_price) / alpha_price * 10_000
+                    if alpha_price > 0
+                    else None
+                )
+                initial_premium_bps = (
+                    (futures_price - index_price) / index_price * 10_000
+                    if index_price is not None and index_price > 0
+                    else None
+                )
+            normalized.append(
+                {
+                    **item,
+                    "base_asset": futures_symbol.removesuffix("USDT"),
+                    "alpha_symbol": alpha_symbol,
+                    "futures_symbol": futures_symbol,
+                    "alpha_raw_symbol": alpha_raw_symbol,
+                    "futures_raw_symbol": futures_raw_symbol,
+                    "alpha_price_multiplier": alpha_multiplier,
+                    "futures_price_multiplier": futures_multiplier,
+                    "alpha_price": alpha_price,
+                    "futures_price": futures_price,
+                    "index_price": index_price,
+                    "initial_basis_bps": initial_basis_bps,
+                    "initial_premium_bps": initial_premium_bps,
+                }
+            )
+        return normalized
+
     @staticmethod
     def _global_candidate_score(item: dict[str, Any]) -> float:
         basis = item.get("initial_basis_bps")
@@ -549,8 +652,8 @@ class MinuteSignalScanService:
         async with semaphore:
             try:
                 result = await self.scan_symbol(
-                    alpha_symbol=item["alpha_symbol"],
-                    futures_symbol=item["futures_symbol"],
+                    alpha_symbol=item.get("alpha_raw_symbol", item["alpha_symbol"]),
+                    futures_symbol=item.get("futures_raw_symbol", item["futures_symbol"]),
                     hours=hours,
                 )
                 latest = result.get("latest") or {}
@@ -637,7 +740,7 @@ class MinuteSignalScanService:
             if max_premium_when_spot_above_bps is None
             else max_premium_when_spot_above_bps
         )
-        universe = await self._fetch_global_universe()
+        universe = self._apply_global_symbol_aliases(await self._fetch_global_universe())
         volume_passed = [
             item for item in universe if item["volume_24h_usdt"] >= min_volume_24h_usdt
         ]
@@ -760,6 +863,9 @@ class MinuteSignalScanService:
         futures_symbol: str,
         start_ms: int,
         end_ms: int,
+        *,
+        alpha_price_multiplier: float = 1.0,
+        futures_price_multiplier: float = 1.0,
     ) -> list[dict[str, Any]]:
         spot, futures, premium = await asyncio.gather(
             self._fetch_klines(ALPHA_KLINES_URL, alpha_symbol, start_ms, end_ms),
@@ -782,10 +888,10 @@ class MinuteSignalScanService:
                     "time_cst": datetime.fromtimestamp(open_time / 1000, UTC)
                     .astimezone(SHANGHAI)
                     .isoformat(timespec="minutes"),
-                    "spot_close": s["close"],
-                    "fut_close": f["close"],
-                    "spot_open": s["open"],
-                    "fut_open": f["open"],
+                    "spot_close": s["close"] * alpha_price_multiplier,
+                    "fut_close": f["close"] * futures_price_multiplier,
+                    "spot_open": s["open"] * alpha_price_multiplier,
+                    "fut_open": f["open"] * futures_price_multiplier,
                     "premium_low": p["low"],
                     "premium_high": p["high"],
                     "premium_close": p["close"],
@@ -1083,19 +1189,32 @@ class MinuteSignalScanService:
         futures_symbol: str,
         hours: int,
     ) -> dict[str, Any]:
+        (
+            alpha_raw_symbol,
+            futures_raw_symbol,
+            alpha_display_symbol,
+            futures_display_symbol,
+            alpha_price_multiplier,
+            futures_price_multiplier,
+        ) = self._resolve_symbols(
+            alpha_symbol=alpha_symbol,
+            futures_symbol=futures_symbol,
+        )
         end = datetime.now(UTC).replace(second=0, microsecond=0)
         start = end - timedelta(hours=hours)
         rows = await self._fetch_rows(
-            alpha_symbol,
-            futures_symbol,
+            alpha_raw_symbol,
+            futures_raw_symbol,
             _timestamp_ms(start),
             _timestamp_ms(end),
+            alpha_price_multiplier=alpha_price_multiplier,
+            futures_price_multiplier=futures_price_multiplier,
         )
         features = self._features(rows)
         events = self.scan(rows)
         return {
-            "alpha_symbol": alpha_symbol,
-            "futures_symbol": futures_symbol,
+            "alpha_symbol": alpha_display_symbol,
+            "futures_symbol": futures_display_symbol,
             "hours": hours,
             "observed_at": end.isoformat(),
             "bar_count": len(features),

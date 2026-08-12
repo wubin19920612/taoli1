@@ -777,7 +777,8 @@ export function SettingsPage() {
             {(fields, { add, remove }) => (
               <div className="symbol-alias-list">
                 <Space className="symbol-alias-header" align="center" wrap>
-                  <Typography.Title level={5}>币名映射</Typography.Title>
+                  <Typography.Title level={5}>全局币名映射</Typography.Title>
+                  <Tag color="blue">全部页面生效</Tag>
                   <Button
                     type="dashed"
                     icon={<PlusOutlined />}

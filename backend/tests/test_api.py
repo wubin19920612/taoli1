@@ -775,6 +775,115 @@ def test_pair_spread_query_endpoint_uses_on_demand_service() -> None:
     assert service.closed is True
 
 
+def test_pair_spread_query_endpoint_resolves_global_symbol_alias_and_price_multiplier() -> None:
+    fixed_now = datetime(2026, 8, 12, 12, 0, tzinfo=UTC)
+
+    class FakePairSpreadService:
+        async def query(
+            self,
+            leg1: PairSpreadLegQuery,
+            leg2: PairSpreadLegQuery,
+            *,
+            hours: int,
+            interval_minutes: int = 1,
+            interval_seconds: int | None = None,
+            leg2_multiplier: float = 1.0,
+            now: datetime | None = None,
+            include_current: bool = True,
+        ) -> PairSpreadQueryResult:
+            assert leg1.symbol == "NEXUSDT"
+            assert leg2.symbol == "10000NEXUSDT"
+            observed_at = now or fixed_now
+            leg1_current = PairSpreadCurrentLeg(
+                exchange=leg1.exchange,
+                symbol=leg1.symbol,
+                market_type=leg1.market_type,
+                raw_symbol="NEXUSDT",
+                price=0.0104,
+                price_field=PairSpreadPriceField.MID_PRICE,
+                mid_price=0.0104,
+                timestamp=observed_at,
+            )
+            leg2_current = PairSpreadCurrentLeg(
+                exchange=leg2.exchange,
+                symbol=leg2.symbol,
+                market_type=leg2.market_type,
+                raw_symbol="10000NEX_USDT",
+                price=100,
+                price_field=PairSpreadPriceField.MID_PRICE,
+                mid_price=100,
+                timestamp=observed_at,
+            )
+            return PairSpreadQueryResult(
+                leg1=leg1,
+                leg2=leg2,
+                hours=hours,
+                interval_minutes=interval_minutes,
+                interval_seconds=interval_seconds or interval_minutes * 60,
+                leg2_multiplier=leg2_multiplier,
+                observed_at=observed_at,
+                point_count=1,
+                first_seen_at=observed_at,
+                last_seen_at=observed_at,
+                spread_abs=PairSpreadValueStats(current=99.9896),
+                spread_pct=PairSpreadValueStats(current=199.9584),
+                current=PairSpreadCurrentSnapshot(
+                    observed_at=observed_at,
+                    leg1=leg1_current,
+                    leg2=leg2_current,
+                    spread_abs=99.9896,
+                    spread_pct=199.9584,
+                ),
+                points=[
+                    PairSpreadPoint(
+                        bucket_at=observed_at,
+                        leg1_close=0.0104,
+                        leg2_close=100,
+                        spread_abs=99.9896,
+                        spread_pct=199.9584,
+                    )
+                ],
+            )
+
+        async def aclose(self) -> None:
+            return None
+
+    app = create_app(settings=Settings(database_url="sqlite:///:memory:"))
+    app.state.pair_spread_query_service_factory = FakePairSpreadService
+
+    with TestClient(app) as client:
+        settings_response = client.put(
+            "/api/settings/risk",
+            json={
+                "symbol_aliases": [
+                    {
+                        "exchange": "bitget",
+                        "symbol": "NEX",
+                        "canonical_symbol": "10000NEX",
+                        "market_type": "spot",
+                        "price_multiplier": 10000,
+                    }
+                ]
+            },
+        )
+        response = client.get(
+            "/api/pair-spread/query"
+            "?leg1_exchange=bitget&leg1_symbol=10000NEX&leg1_market_type=spot"
+            "&leg2_exchange=gate&leg2_symbol=10000NEX&leg2_market_type=future&hours=1"
+        )
+
+    assert settings_response.status_code == 200
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["leg1"]["symbol"] == "10000NEXUSDT"
+    assert payload["leg2"]["symbol"] == "10000NEXUSDT"
+    assert payload["points"][0]["leg1_close"] == pytest.approx(104)
+    assert payload["points"][0]["leg2_close"] == pytest.approx(100)
+    assert payload["current"]["leg1"]["symbol"] == "10000NEXUSDT"
+    assert payload["current"]["leg1"]["raw_symbol"] == "NEXUSDT"
+    assert payload["current"]["leg1"]["price"] == pytest.approx(104)
+
+
 def test_pair_spread_funding_history_endpoint_uses_lightweight_service() -> None:
     fixed_start = datetime(2026, 7, 10, 0, 0, tzinfo=UTC)
     fixed_end = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
@@ -954,6 +1063,9 @@ def test_symbol_spread_query_endpoint_accepts_custom_scope_and_interval() -> Non
             interval_seconds: int = 60,
             now: datetime | None = None,
             include_current: bool = True,
+            legs_by_exchange: dict[str, PairSpreadLegQuery] | None = None,
+            price_multipliers_by_exchange: dict[str, float] | None = None,
+            display_symbol: str | None = None,
         ) -> SymbolSpreadQueryResult:
             assert symbol == "btc"
             assert market_type == MarketType.FUTURE
@@ -962,6 +1074,10 @@ def test_symbol_spread_query_endpoint_accepts_custom_scope_and_interval() -> Non
             assert hours == 6
             assert interval_seconds == 5
             assert include_current is True
+            assert legs_by_exchange is not None
+            assert legs_by_exchange["okx"].symbol == "BTCUSDT"
+            assert price_multipliers_by_exchange == {"okx": 1.0, "bybit": 1.0}
+            assert display_symbol == "BTCUSDT"
             observed_at = now or fixed_now
             point = SymbolSpreadPoint(
                 bucket_at=observed_at,

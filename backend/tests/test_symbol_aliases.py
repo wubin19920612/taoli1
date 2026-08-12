@@ -5,7 +5,7 @@ import pytest
 from app.models.market import MarketSnapshot, MarketType
 from app.models.settings import RiskSettings, SymbolAlias
 from app.services.spread_engine import build_opportunities
-from app.services.symbol_aliases import apply_symbol_aliases
+from app.services.symbol_aliases import apply_symbol_aliases, resolve_symbol_alias
 
 
 def snapshot(
@@ -94,6 +94,39 @@ def test_symbol_alias_price_multiplier_scales_prices_but_not_usdt_volume() -> No
     assert aliased[0].volume_24h_usdt == pytest.approx(123_456)
     assert aliased[0].symbol_alias_original_symbol == "NEXUSDT"
     assert aliased[0].symbol_alias_price_multiplier == pytest.approx(10_000)
+
+
+def test_symbol_alias_resolver_accepts_canonical_or_raw_symbol() -> None:
+    aliases = [
+        SymbolAlias(
+            exchange="gate",
+            symbol="NEX",
+            canonical_symbol="10000NEX",
+            market_type=MarketType.FUTURE,
+            price_multiplier=10_000,
+        )
+    ]
+
+    from_canonical = resolve_symbol_alias(
+        aliases,
+        exchange="gate",
+        symbol="10000NEX",
+        market_type=MarketType.FUTURE,
+    )
+    from_raw = resolve_symbol_alias(
+        aliases,
+        exchange="gate",
+        symbol="NEX",
+        market_type=MarketType.FUTURE,
+    )
+
+    assert from_canonical.raw_symbol == "NEXUSDT"
+    assert from_canonical.canonical_symbol == "10000NEXUSDT"
+    assert from_canonical.price_multiplier == pytest.approx(10_000)
+    assert from_raw.requested_symbol == "NEXUSDT"
+    assert from_raw.raw_symbol == from_canonical.raw_symbol
+    assert from_raw.canonical_symbol == from_canonical.canonical_symbol
+    assert from_raw.price_multiplier == from_canonical.price_multiplier
 
 
 def test_alias_enables_cross_exchange_opportunity_with_raw_leg_symbols() -> None:

@@ -157,7 +157,10 @@ function openPairSpread(row: MinuteSignalUniverseCandidate) {
 
 const candidateColumns: ColumnsType<MinuteSignalUniverseCandidate> = [
   {
-    title: parameterTitle("合约标的", "Binance Futures USDT 永续合约，用来和 Binance Alpha 现货计算价差。"),
+    title: parameterTitle(
+      "合约标的",
+      "显示全局统一币名；查询时会按“参数与告警”中的币名映射自动切换到 Binance Futures 的实际合约代码。"
+    ),
     dataIndex: "futures_symbol",
     fixed: "left",
     width: 170,
@@ -173,8 +176,8 @@ const candidateColumns: ColumnsType<MinuteSignalUniverseCandidate> = [
   },
   {
     title: parameterTitle(
-      "Alpha 现货",
-      "Binance Alpha 的现货交易对，不是普通 Binance Spot。ALPHA_331USDT 这类名称是 Alpha 现货交易对名。"
+      "Alpha 现货标的",
+      "显示全局统一币名；查询时会按“参数与告警”中的币名映射自动切换到 Binance Alpha 的实际交易对。"
     ),
     dataIndex: "alpha_symbol",
     width: 190,
@@ -182,7 +185,7 @@ const candidateColumns: ColumnsType<MinuteSignalUniverseCandidate> = [
       <Space direction="vertical" size={0}>
         <Tag color="blue">Binance Alpha 现货</Tag>
         <Tooltip
-          title={`${value} 是 Binance Alpha 现货交易对名，不是普通 Binance Spot。`}
+          title={`${value} 为全局统一币名，系统会按币名映射请求对应的 Binance Alpha 实际交易对。`}
         >
           <Tag color="geekblue" style={{ cursor: "help" }}>
             {value}
