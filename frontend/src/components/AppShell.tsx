@@ -36,6 +36,7 @@ type PageKey =
   | "negative-basis"
   | "new-listing"
   | "second-sampling"
+  | "fat-finger"
   | "tradfi-perp"
   | "gate-twap"
   | "index-components"
@@ -97,6 +98,11 @@ const lazyPages: Record<PageKey, LazyPage> = {
   "second-sampling": lazy(() =>
     import("../pages/SecondLevelSamplingPage").then((module) => ({
       default: module.SecondLevelSamplingPage
+    }))
+  ),
+  "fat-finger": lazy(() =>
+    import("../pages/FatFingerBacktestPage").then((module) => ({
+      default: module.FatFingerBacktestPage
     }))
   ),
   "tradfi-perp": lazy(() =>
@@ -236,6 +242,11 @@ export function AppShell() {
               key: "second-sampling",
               icon: <ThunderboltOutlined />,
               label: "1s 采样"
+            },
+            {
+              key: "fat-finger",
+              icon: <ExperimentOutlined />,
+              label: "乌龙回测"
             },
             {
               key: "tradfi-perp",

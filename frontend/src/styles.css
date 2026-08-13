@@ -3709,6 +3709,64 @@ body {
   background: #fbfdfc;
 }
 
+.fat-finger-page .ant-card-body {
+  min-width: 0;
+}
+
+.fat-finger-form-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0 12px;
+}
+
+.fat-finger-form-grid .ant-input-number,
+.fat-finger-form-grid .ant-segmented {
+  width: 100%;
+}
+
+.fat-finger-config-note {
+  margin: -4px 0 12px;
+  line-height: 1.5;
+}
+
+.fat-finger-metrics {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(120px, 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+
+.fat-finger-metrics .ant-statistic {
+  min-width: 0;
+  padding: 10px 12px;
+  background: #f7faf9;
+  border: 1px solid #dce4e1;
+  border-radius: 6px;
+}
+
+.fat-finger-metrics .ant-statistic-title,
+.fat-finger-metrics .ant-statistic-content {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fat-finger-detail-strip {
+  margin-top: 12px;
+  padding: 8px 10px;
+  background: #f7faf9;
+  border-left: 3px solid #94a3b8;
+  border-radius: 4px;
+}
+
+.fat-finger-positive {
+  color: #14803c;
+}
+
+.fat-finger-negative {
+  color: #b42318;
+}
+
 .negative-basis-tables {
   display: grid;
   grid-template-columns: minmax(480px, 0.86fr) minmax(560px, 1.14fr);
@@ -3719,6 +3777,14 @@ body {
 @media (max-width: 1500px) {
   .negative-basis-form-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .fat-finger-form-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .fat-finger-metrics {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
   .negative-basis-metrics {
@@ -4498,6 +4564,10 @@ body {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .fat-finger-form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .premium-index-page {
     padding-top: 44px;
   }
@@ -4670,6 +4740,8 @@ body {
   .negative-basis-form-grid,
   .negative-basis-layout,
   .negative-basis-tables,
+  .fat-finger-form-grid,
+  .fat-finger-metrics,
   .symbol-spread-query-bar,
   .symbol-spread-metric-grid,
   .symbol-spread-detail-grid,

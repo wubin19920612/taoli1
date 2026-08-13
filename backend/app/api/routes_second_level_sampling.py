@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.core.security import dashboard_password_header, verify_dashboard_password
+from app.models.fat_finger_backtest import FatFingerBacktestRequest, FatFingerBacktestResult
 from app.models.pair_spread import normalize_pair_spread_symbol
 from app.models.second_level_sampling import (
     SUPPORTED_SECOND_LEVEL_EXCHANGES,
@@ -14,6 +15,7 @@ from app.models.second_level_sampling import (
     SecondLevelSamplingStatus,
 )
 from app.services.second_level_sampler import SecondLevelSampler
+from app.services.fat_finger_backtest import run_fat_finger_backtest
 
 router = APIRouter(prefix="/second-level-sampling")
 
@@ -132,3 +134,28 @@ async def list_second_level_index_component_samples(
         since=datetime.now(UTC) - timedelta(minutes=minutes),
         limit=limit,
     )
+
+
+@router.post("/fat-finger-backtest", response_model=FatFingerBacktestResult)
+async def run_second_level_fat_finger_backtest(
+    config: FatFingerBacktestRequest,
+    request: Request,
+) -> FatFingerBacktestResult:
+    sampler = _sampler(request)
+    display_symbols = await sampler.resolve_display_symbols(config.symbol)
+    rows = await sampler.repo.list_samples(
+        symbols=display_symbols,
+        since=datetime.now(UTC) - timedelta(hours=config.hours),
+        limit=config.sample_limit + 1,
+    )
+    samples_truncated = len(rows) > config.sample_limit
+    if samples_truncated:
+        rows = rows[: config.sample_limit]
+    result = run_fat_finger_backtest(rows, config)
+    result.samples_truncated = samples_truncated
+    if samples_truncated:
+        result.warnings.insert(
+            0,
+            f"原始样本超过 {config.sample_limit:,} 条，仅回放最近部分；请缩短周期或提高样本上限后再判断策略表现。",
+        )
+    return result

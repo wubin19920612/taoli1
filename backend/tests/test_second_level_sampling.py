@@ -256,6 +256,28 @@ def test_second_level_sampling_api_saves_config() -> None:
     assert status_response.json()["config"]["symbols"] == ["DEXEUSDT", "BTCUSDT"]
 
 
+def test_fat_finger_backtest_api_returns_explicit_empty_history_result() -> None:
+    app = create_app(
+        settings=Settings(
+            dashboard_password="secret",
+            database_url="sqlite:///:memory:",
+        )
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/second-level-sampling/fat-finger-backtest",
+            json={"symbol": "dexe"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["request"]["symbol"] == "DEXEUSDT"
+    assert payload["raw_sample_count"] == 0
+    assert payload["quote_touch_count"] == 0
+    assert any("1 秒盘口样本" in warning for warning in payload["warnings"])
+
+
 @pytest.mark.asyncio
 async def test_second_level_sampler_keeps_future_samples_when_spot_is_missing() -> None:
     db = await connect_database(":memory:")

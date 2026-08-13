@@ -21,6 +21,8 @@ import type {
   FundingResearchPaperTrade,
   FundingResearchPaperTradeSummary,
   FundingResearchRunResult,
+  FatFingerBacktestRequest,
+  FatFingerBacktestResult,
   GateTwapJobStatus,
   GateTwapMarketSnapshot,
   GateTwapPlan,
@@ -889,6 +891,15 @@ export async function listSecondLevelIndexComponentSamples(query: {
       throw new Error(extractErrorMessage(text, response.status));
     }
     return response.json() as Promise<SecondLevelIndexComponentSample[]>;
+  });
+}
+
+export async function runFatFingerBacktest(
+  request: FatFingerBacktestRequest
+): Promise<FatFingerBacktestResult> {
+  return fetchJson<FatFingerBacktestResult>("/second-level-sampling/fat-finger-backtest", {
+    method: "POST",
+    body: JSON.stringify(request)
   });
 }
 

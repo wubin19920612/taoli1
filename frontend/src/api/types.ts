@@ -8,6 +8,9 @@ export type AnnouncementKind = "listing" | "delisting" | "other";
 export type SecondLevelSampleStatus = "ok" | "partial" | "error";
 export type NewListingAlertLevel = "none" | "normal" | "strong" | "extreme";
 export type NegativeBasisSignalLevel = "none" | "watch" | "building" | "confirmed" | "strong" | "extreme";
+export type FatFingerMarketMode = "SF" | "FF";
+export type FatFingerMakerSide = "buy" | "sell";
+export type FatFingerExitReason = "target" | "timeout";
 
 export interface Opportunity {
   id: string;
@@ -205,6 +208,115 @@ export interface SecondLevelSamplingStatus {
   latest_spreads: SecondLevelPairSpreadSnapshot[];
   latest_component_samples: SecondLevelIndexComponentSample[];
   latest_component_signals: SecondLevelIndexComponentSignal[];
+}
+
+export interface FatFingerBacktestRequest {
+  symbol: string;
+  market_mode: FatFingerMarketMode;
+  hours: number;
+  sample_limit: number;
+  entry_spread_pct: number;
+  ladder_levels: number;
+  ladder_step_pct: number;
+  order_notional_usdt: number;
+  maker_fill_assumption_pct: number;
+  maker_fee_pct: number;
+  taker_fee_pct: number;
+  taker_slippage_pct: number;
+  hedge_delay_seconds: number;
+  order_expiry_seconds: number;
+  take_profit_pct: number;
+  max_hold_seconds: number;
+  min_hedge_depth_usdt: number;
+  max_quote_age_seconds: number;
+  require_known_hedge_depth: boolean;
+  cooldown_seconds: number;
+}
+
+export interface FatFingerBacktestTrade {
+  id: string;
+  symbol: string;
+  market_mode: FatFingerMarketMode;
+  maker_exchange: string;
+  maker_market_type: MarketType;
+  hedge_exchange: string;
+  hedge_market_type: MarketType;
+  maker_side: FatFingerMakerSide;
+  tier: number;
+  entry_target_spread_pct: number;
+  order_placed_at: string;
+  maker_filled_at: string;
+  hedge_filled_at: string;
+  closed_at: string;
+  exit_reason: FatFingerExitReason;
+  maker_entry_price: number;
+  hedge_entry_price: number;
+  maker_exit_price: number;
+  hedge_exit_price: number;
+  notional_usdt: number;
+  hedge_depth_usdt?: number | null;
+  entry_hedge_edge_pct: number;
+  gross_pnl_usdt: number;
+  net_pnl_usdt: number;
+  net_pnl_pct: number;
+  max_favorable_pnl_pct: number;
+  max_adverse_pnl_pct: number;
+  hedge_delay_seconds: number;
+  hold_seconds: number;
+}
+
+export interface FatFingerBacktestRouteSummary {
+  maker_exchange: string;
+  maker_market_type: MarketType;
+  hedge_exchange: string;
+  hedge_market_type: MarketType;
+  maker_side: FatFingerMakerSide;
+  touch_count: number;
+  hedge_count: number;
+  unhedged_count: number;
+  closed_trade_count: number;
+  win_count: number;
+  total_notional_usdt: number;
+  total_net_pnl_usdt: number;
+  average_net_pnl_pct?: number | null;
+  median_net_pnl_pct?: number | null;
+  worst_net_pnl_pct?: number | null;
+  average_hold_seconds?: number | null;
+}
+
+export interface FatFingerBacktestResult {
+  request: FatFingerBacktestRequest;
+  start_at: string;
+  end_at: string;
+  raw_sample_count: number;
+  samples_truncated: boolean;
+  frame_count: number;
+  exchange_count: number;
+  order_placed_count: number;
+  order_expired_count: number;
+  order_skipped_depth_count: number;
+  exit_skipped_depth_count: number;
+  quote_touch_count: number;
+  hedge_completed_count: number;
+  unhedged_touch_count: number;
+  open_position_count: number;
+  closed_trade_count: number;
+  target_exit_count: number;
+  timeout_exit_count: number;
+  win_count: number;
+  loss_count: number;
+  win_rate_pct?: number | null;
+  hedge_success_rate_pct?: number | null;
+  total_notional_usdt: number;
+  total_net_pnl_usdt: number;
+  average_net_pnl_pct?: number | null;
+  median_net_pnl_pct?: number | null;
+  worst_net_pnl_pct?: number | null;
+  average_hold_seconds?: number | null;
+  average_hedge_delay_seconds?: number | null;
+  route_summaries: FatFingerBacktestRouteSummary[];
+  trades: FatFingerBacktestTrade[];
+  warnings: string[];
 }
 
 export interface NewListingWatchItem {
