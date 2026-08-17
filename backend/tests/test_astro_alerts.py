@@ -336,7 +336,7 @@ async def test_alert_create_uses_supplied_astro_card_settings() -> None:
 
 
 @pytest.mark.asyncio
-async def test_live_pilot_alert_create_uses_pilot_notional_and_enabled_card() -> None:
+async def test_live_pilot_experiment_create_uses_pilot_notional_and_enabled_card() -> None:
     client = FakeAstroClient()
     service = AstroAlertService(
         client,
@@ -358,7 +358,7 @@ async def test_live_pilot_alert_create_uses_pilot_notional_and_enabled_card() ->
         add_restart_delay_seconds=0,
     )
 
-    result = await service.handle_alert(opportunity())
+    result = await service.handle_live_pilot(opportunity())
 
     assert result.status == "created"
     assert "已创建开启卡片 BTC FF binance->okx，禁开=false" in result.message
@@ -366,6 +366,36 @@ async def test_live_pilot_alert_create_uses_pilot_notional_and_enabled_card() ->
     assert client.added[0]["disableOpen"] is False
     assert client.added[0]["maxTradeUSDT"] == "100"
     assert client.added[0]["maxNotional"] == "100"
+
+
+@pytest.mark.asyncio
+async def test_live_pilot_experiment_does_not_change_regular_alert_card_defaults() -> None:
+    client = FakeAstroClient()
+    service = AstroAlertService(
+        client,
+        Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
+        card_settings=AstroCardSettings(
+            max_trade_usdt=10,
+            leverage=1,
+            min_notional=10,
+            max_notional=10,
+            open_enabled=False,
+        ),
+        live_pilot_settings=LivePilotSettings(
+            enabled=True,
+            notional_per_symbol_usdt=100,
+            create_cards_enabled=True,
+        ),
+        add_restart_delay_seconds=0,
+    )
+
+    result = await service.handle_alert(opportunity())
+
+    assert result.status == "created"
+    assert client.added[0]["status"] is False
+    assert client.added[0]["disableOpen"] is True
+    assert client.added[0]["maxTradeUSDT"] == "10"
+    assert client.added[0]["maxNotional"] == "10"
 
 
 @pytest.mark.asyncio

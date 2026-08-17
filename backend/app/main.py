@@ -58,7 +58,7 @@ from app.services.announcements import (
     default_announcement_provider,
     run_announcement_loop,
 )
-from app.services.astro_alerts import AstroAlertService
+from app.services.astro_alerts import AstroAlertService, live_pilot_card_settings
 from app.services.astro_client import AstroSdkClient, AstroSdkConfig
 from app.services.astro_planner import AstroPairPlanner, AstroPlannerConfig
 from app.services.collector import MarketCollector, default_exchange_adapters, run_collector_loop
@@ -84,7 +84,6 @@ from app.services.index_components import (
 from app.services.live_pilot import (
     filter_opportunities_by_alert_rules,
     select_live_pilot_matches,
-    select_live_pilot_opportunities,
 )
 from app.services.minute_signal_scan import MinuteSignalAlertEngine
 from app.services.negative_basis_monitor import NegativeBasisMonitor, NegativeBasisMonitorRepository
@@ -460,18 +459,42 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                 settings,
                 now=now,
             )
-            opportunities = select_live_pilot_opportunities(
-                opportunities,
-                live_pilot_settings,
-                settings,
-            )
             matches = app.state.alert_engine.evaluate(opportunities, rules, now=now, risk_settings=settings)
-            matches = select_live_pilot_matches(matches, live_pilot_settings, settings)
-            for match in matches:
+            live_pilot_matches = (
+                select_live_pilot_matches(
+                    [
+                        match
+                        for match in matches
+                        if not is_new_listing_opportunity(match.opportunity)
+                    ],
+                    live_pilot_settings,
+                    settings,
+                )
+                if live_pilot_settings.enabled
+                else []
+            )
+            live_pilot_match_keys = {
+                (match.rule.id, match.opportunity.id)
+                for match in live_pilot_matches
+            }
+            ordered_matches = [
+                *(
+                    match
+                    for match in matches
+                    if (match.rule.id, match.opportunity.id) in live_pilot_match_keys
+                ),
+                *(
+                    match
+                    for match in matches
+                    if (match.rule.id, match.opportunity.id) not in live_pilot_match_keys
+                ),
+            ]
+            for match in ordered_matches:
                 status = "sent"
                 card_condition_failure = False
                 existing_card_skipped = False
                 signal_condition_failure = False
+                is_live_pilot_match = (match.rule.id, match.opportunity.id) in live_pilot_match_keys
                 message = build_alert_message(
                     match.rule,
                     match.opportunity,
@@ -505,6 +528,11 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                             astro_alert_service,
                             latest_opportunity,
                         )
+                        if is_live_pilot_match and card_settings is not None:
+                            card_settings = live_pilot_card_settings(
+                                card_settings,
+                                live_pilot_settings,
+                            )
                         plan_failure = _astro_plan_validation_failure(
                             latest_opportunity,
                             card_settings,
@@ -521,6 +549,11 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                                 latest_opportunity,
                                 settings,
                                 card_settings,
+                                override_notional_usdt=(
+                                    live_pilot_settings.notional_per_symbol_usdt
+                                    if is_live_pilot_match
+                                    else None
+                                ),
                             )
                             if order_book_failure is not None:
                                 card_condition_failure = True
@@ -529,8 +562,10 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                                     f"Astro: 订单簿校验未通过：{order_book_failure}"
                                 )
                             else:
-                                astro_result = await astro_alert_service.handle_alert(
-                                    latest_opportunity
+                                astro_result = await (
+                                    astro_alert_service.handle_live_pilot(latest_opportunity)
+                                    if is_live_pilot_match
+                                    else astro_alert_service.handle_alert(latest_opportunity)
                                 )
                                 if astro_result.status == "skipped" and astro_result.action in {
                                     "unsupported",

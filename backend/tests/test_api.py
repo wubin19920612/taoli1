@@ -3237,7 +3237,7 @@ def test_live_pilot_auto_create_service_uses_pilot_settings_for_real_service() -
 
     import asyncio
 
-    asyncio.run(app.state.astro_alert_service.handle_alert(make_opportunity()))
+    asyncio.run(app.state.astro_alert_service.handle_live_pilot(make_opportunity()))
 
     assert client_backend.added[0]["status"] is True
     assert client_backend.added[0]["disableOpen"] is False

@@ -67,7 +67,7 @@ def _settings_with_create_overrides(
     return settings.model_copy(update=updates)
 
 
-def _settings_with_live_pilot_overrides(
+def live_pilot_card_settings(
     settings: AstroCardSettings,
     live_pilot_settings: LivePilotSettings,
 ) -> AstroCardSettings:
@@ -107,8 +107,15 @@ class AstroAlertService:
             opportunity,
             enabled=self.alert_auto_create_enabled,
             disabled_message="自动创建卡片未开启",
-            live_pilot=self.live_pilot_settings.enabled,
             auto_open_new_listing=True,
+        )
+
+    async def handle_live_pilot(self, opportunity: Opportunity) -> AstroAlertActionResult:
+        return await self._handle(
+            opportunity,
+            enabled=self.live_pilot_settings.enabled,
+            disabled_message="实盘实验未开启",
+            live_pilot=True,
         )
 
     async def handle_manual_create(
@@ -153,7 +160,7 @@ class AstroAlertService:
         if use_new_listing_settings:
             effective_card_settings = effective_card_settings.model_copy(update={"open_enabled": True})
         if live_pilot and not use_new_listing_settings:
-            effective_card_settings = _settings_with_live_pilot_overrides(
+            effective_card_settings = live_pilot_card_settings(
                 effective_card_settings,
                 self.live_pilot_settings,
             )

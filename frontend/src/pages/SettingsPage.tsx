@@ -980,16 +980,16 @@ export function SettingsPage() {
         </Form>
       </section>
       <section className="panel panel-wide">
-        <Typography.Title level={4}>实盘灰度</Typography.Title>
+        <Typography.Title level={4}>正差价正费率实盘实验</Typography.Title>
         <Alert
           className="rule-guide"
           type={livePilotPreview.enabled ? "warning" : "info"}
           showIcon
-          message={livePilotPreview.enabled ? "Live Pilot 已配置为启用" : "Live Pilot 未启用"}
+          message={livePilotPreview.enabled ? "实盘实验已启用" : "实盘实验未启用"}
           description={
             livePilotPreview.enabled
-              ? "告警循环会先从实时机会中选最多 10 个标的，同标的只保留一个路线；默认优先 Hyper，跳过 SS、强负资金和风险候选，然后按综合开仓收益排序。"
-              : "开启后用于小资金实盘灰度，不影响手动 Astro 建卡的安全默认。"
+              ? "常规告警、飞书通知和普通自动建卡保持原逻辑；实验只从其中挑选少量候选，同标的仅保留一条最优路线，并使用下面的实验仓位与启动状态。"
+              : "开启后用于小资金实盘测试；未开启时不会新增任何实验建卡动作。"
           }
         />
         <Form
@@ -1018,17 +1018,22 @@ export function SettingsPage() {
             </div>
           </div>
           <div className="form-grid">
-            <Form.Item label="启用实盘灰度" name="enabled" valuePropName="checked">
+            <Form.Item label="启用实盘实验" name="enabled" valuePropName="checked">
               <Switch />
             </Form.Item>
-            <Form.Item label="卡片默认开启" name="create_cards_enabled" valuePropName="checked">
+            <Form.Item
+              label="实验卡片默认启动"
+              name="create_cards_enabled"
+              valuePropName="checked"
+              help="只影响实验挑选出的候选；普通自动建卡仍遵循 Astro 卡片默认参数。"
+            >
               <Switch />
             </Form.Item>
             <Form.Item
               label="屏蔽 SS（现货-现货）"
               name="exclude_ss"
               valuePropName="checked"
-              help="默认开启；开启后 SS 不进入实盘灰度选标和自动建卡。"
+              help="默认开启；开启后 SS 不进入实验候选和实验建卡。"
             >
               <Switch />
             </Form.Item>
@@ -1039,10 +1044,10 @@ export function SettingsPage() {
               <InputNumber min={0.01} step={1} className="wide-input" />
             </Form.Item>
             <Form.Item
-              label="强负资金跳过阈值"
+              label="最小下周期资金边际"
               name="min_next_funding_edge_pct"
               rules={[{ required: true }]}
-              help="下一资金周期净资金差低于该值的机会不会进入本次灰度。"
+              help="填正数即可只保留正资金边际；低于该值的机会不会进入实验。"
             >
               <InputNumber step={0.01} suffix="%" className="wide-input" />
             </Form.Item>
@@ -1051,7 +1056,7 @@ export function SettingsPage() {
             </Form.Item>
           </div>
           <div className="rule-note">
-            实盘灰度只影响告警自动创建 Astro 卡片：同一标的多条告警时先按套利类型和风控过滤，再选 Hyper 路线与综合开仓收益；启用后盘口验证金额使用每标的资金。
+            实验不会截流常规告警：所有原有规则仍照常告警、通知和建卡。实验只对命中的正资金候选额外使用实验资金和启动状态；同标的多条路线时，实验路线优先，避免普通卡片抢占同名标的。
           </div>
           <div className="live-pilot-preview">
             <div className="live-pilot-preview-head">
@@ -1079,7 +1084,7 @@ export function SettingsPage() {
             />
           </div>
           <Button type="primary" htmlType="submit" icon={<SaveOutlined />}>
-            保存实盘灰度
+            保存实盘实验
           </Button>
         </Form>
       </section>
