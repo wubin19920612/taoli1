@@ -47,7 +47,9 @@ from app.db.repositories import (
 from app.db.schema import initialize_schema
 from app.models.alert import AlertEvent
 from app.models.announcement import AnnouncementKind
+from app.models.astro import AstroAlertActionResult
 from app.models.orderbook import DepthValidationResult
+from app.models.opportunity import Opportunity
 from app.models.phone_alert import PhonePriceAlertEvent
 from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, LivePilotSettings, RiskSettings
 from app.services.alert_engine import AlertEngine, AlertMatch, observations_are_stable
@@ -87,7 +89,7 @@ from app.services.live_pilot import (
 )
 from app.services.minute_signal_scan import MinuteSignalAlertEngine
 from app.services.negative_basis_monitor import NegativeBasisMonitor, NegativeBasisMonitorRepository
-from app.services.new_listing_monitor import NewListingMonitor, NewListingMonitorRepository
+from app.services.new_listing_monitor import NewListingMonitor, NewListingMonitorRepository, NewListingPrewarmer
 from app.services.orderbook_validator import OrderBookDepthValidator
 from app.services.opportunity_radar import (
     OpportunityRadarAlertEngine,
@@ -181,6 +183,64 @@ async def _refresh_astro_runtime_settings(app: FastAPI, settings_repo: SettingsR
         if get_live_pilot_settings is not None
         else LivePilotSettings()
     )
+
+
+async def _handle_new_listing_astro_alert(app: FastAPI, opportunity: Opportunity) -> AstroAlertActionResult:
+    settings_repo: SettingsRepository | None = getattr(app.state, "settings_repo", None)
+    await _refresh_astro_runtime_settings(app, settings_repo)
+    astro_alert_service: AstroAlertService | None = getattr(app.state, "astro_alert_service", None)
+    if astro_alert_service is None:
+        return AstroAlertActionResult(
+            enabled=False,
+            status="disabled",
+            action="none",
+            message="Astro 自动建卡服务未初始化",
+        )
+    if not astro_alert_service.alert_auto_create_enabled or astro_alert_service.settings.astro_dry_run_only:
+        return await astro_alert_service.handle_alert(opportunity)
+    executable_depth = opportunity.min_open_depth_usdt
+    required_depth = astro_alert_service.new_listing_card_settings.max_notional
+    if executable_depth is None or executable_depth + 1e-9 < required_depth:
+        depth_text = "深度未知" if executable_depth is None else f"{executable_depth:.2f} USDT"
+        return AstroAlertActionResult(
+            enabled=True,
+            status="skipped",
+            action="depth",
+            message=(
+                f"可成交盘口 {depth_text} 低于新币卡片最大金额 "
+                f"{required_depth:.2f} USDT，未自动建卡"
+            ),
+        )
+    return await astro_alert_service.handle_new_listing_alert(opportunity)
+
+
+async def _prewarm_recent_listing_announcements(app: FastAPI) -> None:
+    announcement_repo: AnnouncementRepository | None = getattr(
+        app.state,
+        "announcement_repo",
+        None,
+    )
+    prewarmer = getattr(app.state, "new_listing_prewarmer", None)
+    if announcement_repo is None or prewarmer is None:
+        return
+    try:
+        await prewarmer.backfill_auto_watch_windows()
+    except Exception:  # noqa: BLE001 - migration must never block application startup.
+        logger.exception("failed to backfill new listing prewarm windows")
+    try:
+        announcements = await announcement_repo.list(
+            kind=AnnouncementKind.LISTING,
+            limit=500,
+            demote_baseline=True,
+        )
+    except Exception:  # noqa: BLE001 - prewarm must never block application startup.
+        logger.exception("failed to load listing announcements for prewarm")
+        return
+    for announcement in announcements:
+        try:
+            await prewarmer.prewarm_from_announcement(announcement)
+        except Exception:  # noqa: BLE001 - continue with other listing announcements.
+            logger.exception("failed to prewarm listing announcement id=%s", announcement.id)
 
 
 def _find_latest_opportunity(app: FastAPI, opportunity_id: str):
@@ -784,10 +844,13 @@ def create_app(
             SecondLevelSamplingRepository(db),
             risk_settings_loader=app.state.settings_repo.get_risk_settings,
         )
+        new_listing_repo = NewListingMonitorRepository(db)
+        app.state.new_listing_prewarmer = NewListingPrewarmer(new_listing_repo)
         app.state.new_listing_monitor = NewListingMonitor(
-            NewListingMonitorRepository(db),
+            new_listing_repo,
             alert_sender=lambda message: _send_index_component_alert(app, message),
             risk_settings_loader=app.state.settings_repo.get_risk_settings,
+            astro_alert_handler=lambda opportunity: _handle_new_listing_astro_alert(app, opportunity),
         )
         app.state.negative_basis_monitor = NegativeBasisMonitor(
             NegativeBasisMonitorRepository(db),
@@ -797,6 +860,7 @@ def create_app(
         )
         app.state.pair_spread_funding_recorder = PairSpreadFundingRecorder(PairSpreadFundingRepository(db))
         await app.state.second_level_sampler.initialize()
+        await _prewarm_recent_listing_announcements(app)
         tasks: list[asyncio.Task] = []
         _start_background_task(
             tasks,
@@ -886,6 +950,7 @@ def create_app(
             announcement_monitor = AnnouncementMonitor(
                 app.state.announcement_repo,
                 alert_sender=lambda message: _send_index_component_alert(app, message),
+                new_listing_prewarmer=app.state.new_listing_prewarmer.prewarm_from_announcement,
             )
             announcement_provider = default_announcement_provider(app.state.announcement_repo)
             app.state.announcement_monitor = announcement_monitor
@@ -949,6 +1014,7 @@ def create_app(
     app.state.minute_signal_scan_service_factory = None
     app.state.minute_signal_alert_engine = MinuteSignalAlertEngine()
     app.state.second_level_sampler = None
+    app.state.new_listing_prewarmer = None
     app.state.new_listing_monitor = None
     app.state.negative_basis_monitor = None
     app.state.alert_engine = AlertEngine()

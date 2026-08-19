@@ -110,6 +110,15 @@ class AstroAlertService:
             auto_open_new_listing=True,
         )
 
+    async def handle_new_listing_alert(self, opportunity: Opportunity) -> AstroAlertActionResult:
+        return await self._handle(
+            opportunity,
+            enabled=self.alert_auto_create_enabled,
+            disabled_message="自动创建卡片未开启",
+            auto_open_new_listing=True,
+            add_restart_delay_seconds=0,
+        )
+
     async def handle_live_pilot(self, opportunity: Opportunity) -> AstroAlertActionResult:
         return await self._handle(
             opportunity,
@@ -138,6 +147,7 @@ class AstroAlertService:
         card_request: AstroCardCreateRequest | None = None,
         live_pilot: bool = False,
         auto_open_new_listing: bool = False,
+        add_restart_delay_seconds: float | None = None,
     ) -> AstroAlertActionResult:
         if not enabled:
             return AstroAlertActionResult(
@@ -213,8 +223,9 @@ class AstroAlertService:
                     pair_name=pair_name,
                     pair_type=pair_type,
                 )
-            if self.add_restart_delay_seconds > 0:
-                await asyncio.sleep(self.add_restart_delay_seconds)
+            restart_delay = self.add_restart_delay_seconds if add_restart_delay_seconds is None else add_restart_delay_seconds
+            if restart_delay > 0:
+                await asyncio.sleep(restart_delay)
             return AstroAlertActionResult(
                 enabled=True,
                 status="created",

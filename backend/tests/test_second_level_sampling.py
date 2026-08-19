@@ -15,6 +15,7 @@ from app.models.second_level_sampling import (
 )
 from app.models.settings import RiskSettings, SymbolAlias
 from app.services.second_level_sampler import SecondLevelSampler, SecondLevelSamplingRepository
+from app.services.second_level_sampler import SecondLevelMarketFetcher
 
 
 class FutureOnlyFetcher:
@@ -160,6 +161,35 @@ def test_second_level_sampling_config_normalizes_targets() -> None:
 
     assert config.exchanges == ["bybit", "bitget"]
     assert config.symbols == ["DEXEUSDT", "BTCUSDT"]
+
+
+@pytest.mark.asyncio
+async def test_gate_future_fetcher_keeps_top_of_book_sizes() -> None:
+    fetcher = SecondLevelMarketFetcher()
+
+    async def fake_get_json(url: str):
+        assert "CXMT_USDT" in url
+        return [
+            {
+                "highest_bid": "8.613",
+                "lowest_ask": "8.614",
+                "highest_size": "152",
+                "lowest_size": "2",
+                "last": "8.614",
+                "mark_price": "8.619",
+                "index_price": "8.6584",
+                "funding_rate": "-0.000494",
+            }
+        ]
+
+    fetcher._get_json = fake_get_json  # type: ignore[method-assign]
+    try:
+        result = await fetcher._fetch_gate_future("CXMTUSDT")
+    finally:
+        await fetcher.aclose()
+
+    assert result["bid_size"] == pytest.approx(152)
+    assert result["ask_size"] == pytest.approx(2)
 
 
 @pytest.mark.asyncio

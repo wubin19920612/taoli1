@@ -256,6 +256,39 @@ async def test_negative_basis_monitor_records_and_alerts() -> None:
 
 
 @pytest.mark.asyncio
+async def test_negative_basis_monitor_can_mute_feishu_notifications() -> None:
+    db = await connect_database(":memory:")
+    await initialize_schema(db)
+    repo = NegativeBasisMonitorRepository(db)
+    sent_messages: list[str] = []
+
+    async def send_message(message: str) -> None:
+        sent_messages.append(message)
+
+    item = NegativeBasisWatchItem(symbol="PROM", spot_exchange="binance", future_exchange="gate")
+    await repo.upsert_watch_item(item)
+    await repo.upsert_auto_scan_settings(
+        NegativeBasisAutoScanSettings(feishu_notifications_enabled=False)
+    )
+    monitor = NegativeBasisMonitor(
+        repo,
+        query_service_factory=FakePairSpreadQueryService,  # type: ignore[arg-type]
+        gate_stats_client=FakeGateStatsClient(),  # type: ignore[arg-type]
+        alert_sender=send_message,
+    )
+
+    try:
+        await monitor.collect_watch_item(item)
+        events = await repo.list_events(watch_id=item.id)
+    finally:
+        await monitor.aclose()
+        await db.close()
+
+    assert len(events) == 1
+    assert sent_messages == []
+
+
+@pytest.mark.asyncio
 async def test_negative_basis_monitor_auto_discovers_spot_premium_candidates() -> None:
     db = await connect_database(":memory:")
     await initialize_schema(db)

@@ -1248,6 +1248,7 @@ class NegativeBasisMonitor:
         return await self.update_auto_scan_settings(
             NegativeBasisAutoScanSettings(
                 enabled=settings.enabled,
+                feishu_notifications_enabled=settings.feishu_notifications_enabled,
                 strategy=settings.strategy,
                 blocked_exchanges=settings.blocked_exchanges,
                 blocked_symbols=blocked_symbols,
@@ -1261,6 +1262,7 @@ class NegativeBasisMonitor:
         return await self.update_auto_scan_settings(
             NegativeBasisAutoScanSettings(
                 enabled=settings.enabled,
+                feishu_notifications_enabled=settings.feishu_notifications_enabled,
                 strategy=settings.strategy,
                 blocked_exchanges=settings.blocked_exchanges,
                 blocked_symbols=[
@@ -1279,6 +1281,7 @@ class NegativeBasisMonitor:
         return await self.update_auto_scan_settings(
             NegativeBasisAutoScanSettings(
                 enabled=settings.enabled,
+                feishu_notifications_enabled=settings.feishu_notifications_enabled,
                 strategy=settings.strategy,
                 blocked_exchanges=blocked_exchanges,
                 blocked_symbols=settings.blocked_symbols,
@@ -1292,6 +1295,7 @@ class NegativeBasisMonitor:
         return await self.update_auto_scan_settings(
             NegativeBasisAutoScanSettings(
                 enabled=settings.enabled,
+                feishu_notifications_enabled=settings.feishu_notifications_enabled,
                 strategy=settings.strategy,
                 blocked_exchanges=[
                     item for item in settings.blocked_exchanges if item != normalized_exchange
@@ -1315,6 +1319,7 @@ class NegativeBasisMonitor:
         return await self.update_auto_scan_settings(
             NegativeBasisAutoScanSettings(
                 enabled=settings.enabled,
+                feishu_notifications_enabled=settings.feishu_notifications_enabled,
                 strategy=settings.strategy,
                 blocked_exchanges=settings.blocked_exchanges,
                 blocked_symbols=settings.blocked_symbols,
@@ -1333,6 +1338,7 @@ class NegativeBasisMonitor:
         return await self.update_auto_scan_settings(
             NegativeBasisAutoScanSettings(
                 enabled=settings.enabled,
+                feishu_notifications_enabled=settings.feishu_notifications_enabled,
                 strategy=settings.strategy,
                 blocked_exchanges=settings.blocked_exchanges,
                 blocked_symbols=settings.blocked_symbols,
@@ -1391,7 +1397,12 @@ class NegativeBasisMonitor:
                 self._last_run_at.get(item.id) or datetime.min.replace(tzinfo=UTC),
             ),
         )[:AUTO_COLLECT_MAX_DUE]
-        results = await asyncio.gather(*(self.collect_watch_item(item) for item in due_items))
+        results = await asyncio.gather(
+            *(
+                self.collect_watch_item(item, auto_scan_settings=settings)
+                for item in due_items
+            )
+        )
         return list(results)
 
     async def discover_auto_candidates(self, *, force: bool = False) -> list[NegativeBasisAutoCandidate]:
@@ -1494,9 +1505,15 @@ class NegativeBasisMonitor:
             saved = _auto_watch_item(candidate, settings, existing=existing)
             await self.repo.upsert_watch_item(saved)
 
-    async def collect_watch_item(self, item: NegativeBasisWatchItem) -> NegativeBasisAnalysisResult:
+    async def collect_watch_item(
+        self,
+        item: NegativeBasisWatchItem,
+        *,
+        auto_scan_settings: NegativeBasisAutoScanSettings | None = None,
+    ) -> NegativeBasisAnalysisResult:
         result = await self.analyze_item(item)
         await self.repo.insert_sample(_sample_from_analysis(result))
+        settings = auto_scan_settings or await self.repo.get_auto_scan_settings()
         if self._should_alert(item, result):
             event = NegativeBasisAlertEvent(
                 watch_id=item.id,
@@ -1512,7 +1529,7 @@ class NegativeBasisMonitor:
             await self.repo.create_event(event)
             self._last_sent_at[item.id] = result.observed_at
             self._last_sent_level[item.id] = result.signal_level
-            if self.alert_sender is not None:
+            if self.alert_sender is not None and settings.feishu_notifications_enabled:
                 try:
                     await self.alert_sender(event.message)
                 except Exception:  # noqa: BLE001 - event has already been recorded.

@@ -95,6 +95,8 @@ function emptyWatch(): NewListingWatchItem {
     buy_fee_pct: 0.05,
     sell_fee_pct: 0.05,
     slippage_buffer_pct: 0.1,
+    start_at: null,
+    stop_at: null,
     note: "",
     created_at: now,
     updated_at: now
@@ -435,6 +437,25 @@ export function NewListingMonitorPage() {
       render: (_, item) => <Switch size="small" checked={item.enabled} onChange={(checked) => void toggleWatch(item, checked)} />
     },
     {
+      title: "预热",
+      dataIndex: "start_at",
+      width: 148,
+      render: (_: string | null, item) => {
+        const now = dayjs.utc();
+        if (item.stop_at && !dayjs.utc(item.stop_at).isAfter(now)) {
+          return <Tag color="default">已结束</Tag>;
+        }
+        if (!item.start_at) {
+          return <Tag color="green">立即</Tag>;
+        }
+        return dayjs.utc(item.start_at).isAfter(now) ? (
+          <Tag color="gold">待 {time(item.start_at)}</Tag>
+        ) : (
+          <Tag color="green">{item.stop_at ? `采样至 ${time(item.stop_at)}` : "已启动"}</Tag>
+        );
+      }
+    },
+    {
       title: "交易所",
       dataIndex: "exchanges",
       render: (exchanges: string[]) => (
@@ -574,7 +595,11 @@ export function NewListingMonitorPage() {
 
       <div className="new-listing-metrics">
         <Statistic title="后台状态" value={status?.running ? "运行中" : "未运行"} />
-        <Statistic title="启用标的" value={status?.enabled_watch_count ?? 0} suffix={`/ ${status?.watch_count ?? 0}`} />
+        <Statistic
+          title="活跃标的"
+          value={status?.active_watch_count ?? 0}
+          suffix={`/ 启用 ${status?.enabled_watch_count ?? 0} / 共 ${status?.watch_count ?? 0}`}
+        />
         <Statistic title="样本数" value={status?.sample_count ?? 0} />
         <Statistic title="提醒事件" value={status?.event_count ?? 0} />
       </div>

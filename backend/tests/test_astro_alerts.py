@@ -306,6 +306,23 @@ async def test_new_listing_alert_uses_new_listing_card_settings() -> None:
 
 
 @pytest.mark.asyncio
+async def test_new_listing_alert_does_not_wait_for_restart_delay() -> None:
+    client = FakeAstroClient()
+    service = AstroAlertService(
+        client,
+        Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
+        add_restart_delay_seconds=30,
+    )
+
+    result = await service.handle_new_listing_alert(
+        opportunity().model_copy(update={"risk_labels": ["NEW_LISTING"]})
+    )
+
+    assert result.status == "created"
+    assert client.added
+
+
+@pytest.mark.asyncio
 async def test_alert_create_uses_supplied_astro_card_settings() -> None:
     client = FakeAstroClient()
     service = AstroAlertService(

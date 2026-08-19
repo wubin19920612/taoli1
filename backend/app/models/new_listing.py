@@ -50,6 +50,14 @@ class NewListingWatchItem(BaseModel):
     buy_fee_pct: float = Field(default=0.05, ge=0.0, le=10.0, description="买入侧手续费百分比。")
     sell_fee_pct: float = Field(default=0.05, ge=0.0, le=10.0, description="卖出侧手续费百分比。")
     slippage_buffer_pct: float = Field(default=0.10, ge=0.0, le=50.0, description="额外滑点缓冲百分比。")
+    start_at: datetime | None = Field(
+        default=None,
+        description="预热监控的实际开始时间；为空时立即采样。",
+    )
+    stop_at: datetime | None = Field(
+        default=None,
+        description="预热监控的实际停止时间；为空时持续采样。",
+    )
     note: str = Field(default="", description="中文备注，例如上市时间、只做观察等。")
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
@@ -138,6 +146,7 @@ class NewListingMonitorStatus(BaseModel):
     running: bool
     watch_count: int
     enabled_watch_count: int
+    active_watch_count: int
     sample_count: int
     event_count: int
     latest_error: str | None = None

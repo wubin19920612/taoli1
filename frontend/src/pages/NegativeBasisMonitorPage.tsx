@@ -690,6 +690,26 @@ export function NegativeBasisMonitorPage() {
     }
   };
 
+  const toggleFeishuNotificationsEnabled = async (enabled: boolean) => {
+    if (!autoScanSettings) {
+      return;
+    }
+    setBlockActionLoading(true);
+    try {
+      await updateNegativeBasisAutoScanSettings({
+        ...autoScanSettings,
+        feishu_notifications_enabled: enabled,
+        updated_at: nowIso()
+      });
+      message.success(enabled ? "负基差飞书通知已开启" : "负基差飞书通知已静音");
+      await refresh();
+    } catch (exc) {
+      message.error(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setBlockActionLoading(false);
+    }
+  };
+
   const saveAutoScanStrategy = async () => {
     if (!autoScanSettings) {
       return;
@@ -1373,6 +1393,22 @@ export function NegativeBasisMonitorPage() {
         title="自动发现候选"
         extra={
           <Space wrap>
+            <Space size={4} align="center">
+              <Tooltip title="关闭后仍保留监控和告警记录，但不再发送飞书消息">
+                <Typography.Text type="secondary">飞书通知</Typography.Text>
+              </Tooltip>
+              <Switch
+                size="small"
+                checked={autoScanSettings?.feishu_notifications_enabled ?? false}
+                loading={blockActionLoading}
+                checkedChildren="开"
+                unCheckedChildren="关"
+                onChange={(checked) => void toggleFeishuNotificationsEnabled(checked)}
+              />
+            </Space>
+            <Tag color={autoScanSettings?.feishu_notifications_enabled === false ? undefined : "green"}>
+              {autoScanSettings?.feishu_notifications_enabled === false ? "飞书已静音" : "飞书通知开启"}
+            </Tag>
             <Switch
               size="small"
               checked={autoScanSettings?.enabled ?? false}

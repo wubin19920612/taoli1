@@ -721,9 +721,11 @@ class PremiumIndexQueryService(PairSpreadQueryService):
         mid = _mid(parse_float(ticker_row.get("bidPx")), parse_float(ticker_row.get("askPx")))
         funding = parse_float(funding_row.get("fundingRate"))
         next_funding = parse_float(funding_row.get("nextFundingRate"))
-        funding_next_time = parse_datetime_ms(funding_row.get("nextFundingTime")) or parse_datetime_ms(
-            funding_row.get("fundingTime")
-        )
+        funding_time = parse_datetime_ms(funding_row.get("fundingTime"))
+        next_funding_time = parse_datetime_ms(funding_row.get("nextFundingTime"))
+        funding_times = [value for value in (funding_time, next_funding_time) if value is not None]
+        future_funding_times = [value for value in funding_times if value >= observed_at]
+        funding_next_time = min(future_funding_times, default=min(funding_times, default=None))
         try:
             premium_points = await self._fetch_okx_official_premium_history(
                 symbol,

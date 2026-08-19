@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+import app.services.premium_index_query as premium_index_query
 from app.models.pair_spread import PairSpreadCurrentLeg, PairSpreadKlinePoint, PairSpreadPriceField
 from app.models.premium_index import PremiumIndexCurrentSnapshot, PremiumIndexMarketQuery, PremiumIndexPoint
 from app.services.premium_index_query import (
@@ -200,11 +201,15 @@ async def test_okx_official_premium_history_keeps_latest_sample_per_minute() -> 
 
 
 @pytest.mark.asyncio
-async def test_okx_current_premium_parses_funding_interval_and_limits() -> None:
-    funding_time = datetime(2026, 7, 17, 8, 0, tzinfo=UTC)
-    next_funding_time = funding_time + timedelta(hours=4)
+async def test_okx_current_premium_uses_imminent_funding_time_for_current_period(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_at = datetime(2026, 8, 19, 7, 47, tzinfo=UTC)
+    funding_time = datetime(2026, 8, 19, 8, 0, tzinfo=UTC)
+    next_funding_time = datetime(2026, 8, 19, 16, 0, tzinfo=UTC)
     requested_urls: list[str] = []
     service = PremiumIndexQueryService()
+    monkeypatch.setattr(premium_index_query, "utc_now", lambda: observed_at)
 
     async def fake_get_json(url: str):
         requested_urls.append(url)
@@ -242,8 +247,8 @@ async def test_okx_current_premium_parses_funding_interval_and_limits() -> None:
     assert current.premium_pct == pytest.approx(1.0)
     assert current.funding_rate_pct == pytest.approx(-1.0)
     assert current.funding_next_rate_pct == pytest.approx(-0.5)
-    assert current.funding_next_time == next_funding_time
-    assert current.funding_interval_hours == pytest.approx(4)
+    assert current.funding_next_time == funding_time
+    assert current.funding_interval_hours == pytest.approx(8)
     assert current.funding_rate_lower_pct == pytest.approx(-1.0)
     assert current.funding_rate_upper_pct == pytest.approx(1.0)
 

@@ -1156,6 +1156,8 @@ class SecondLevelMarketFetcher:
             raw_symbol=raw,
             bid=parse_float(row.get("highest_bid")),
             ask=parse_float(row.get("lowest_ask")),
+            bid_size=parse_float(row.get("highest_size")),
+            ask_size=parse_float(row.get("lowest_size")),
             last=parse_float(row.get("last")),
             mark=parse_float(row.get("mark_price")),
             index=parse_float(row.get("index_price")),

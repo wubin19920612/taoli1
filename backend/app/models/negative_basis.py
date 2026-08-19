@@ -100,6 +100,7 @@ class NegativeBasisAutoScanStrategy(BaseModel):
 
 class NegativeBasisAutoScanSettings(BaseModel):
     enabled: bool = Field(default=True)
+    feishu_notifications_enabled: bool = Field(default=True)
     strategy: NegativeBasisAutoScanStrategy = Field(default_factory=NegativeBasisAutoScanStrategy)
     blocked_exchanges: list[str] = Field(default_factory=list)
     blocked_symbols: list[str] = Field(default_factory=list)

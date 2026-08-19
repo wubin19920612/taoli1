@@ -340,6 +340,8 @@ export interface NewListingWatchItem {
   buy_fee_pct: number;
   sell_fee_pct: number;
   slippage_buffer_pct: number;
+  start_at: string | null;
+  stop_at: string | null;
   note: string;
   created_at: string;
   updated_at: string;
@@ -393,6 +395,7 @@ export interface NewListingMonitorStatus {
   running: boolean;
   watch_count: number;
   enabled_watch_count: number;
+  active_watch_count: number;
   sample_count: number;
   event_count: number;
   latest_error?: string | null;
@@ -474,6 +477,7 @@ export interface NegativeBasisAutoScanStrategy {
 
 export interface NegativeBasisAutoScanSettings {
   enabled: boolean;
+  feishu_notifications_enabled: boolean;
   strategy: NegativeBasisAutoScanStrategy;
   blocked_exchanges: string[];
   blocked_symbols: string[];
