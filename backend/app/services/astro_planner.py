@@ -150,6 +150,18 @@ def _astro_close_decision(
 
 
 def _type_blockers(opportunity: Opportunity) -> list[str]:
+    is_bitget_rtoken_spot = (
+        opportunity.buy_exchange.lower() == "bitget"
+        and opportunity.buy_market_type == MarketType.SPOT
+        and opportunity.buy_raw_symbol is not None
+        and opportunity.buy_raw_symbol.upper().startswith("R")
+        and opportunity.buy_raw_symbol.upper().removeprefix("R") == opportunity.symbol.upper()
+    )
+    if is_bitget_rtoken_spot:
+        return [
+            "Bitget RToken spot uses a different raw symbol from the perpetual; "
+            "Astro has no per-leg raw-symbol field, so this route cannot be submitted safely."
+        ]
     if opportunity.type == OpportunityType.SS:
         return ["Astro SDK document does not list SS as a supported pair type."]
     if opportunity.type not in SUPPORTED_ASTRO_TYPES:

@@ -763,7 +763,7 @@ def test_exchange_adapters_use_shared_get_json(adapter_cls, monkeypatch) -> None
 
     expected_calls_by_adapter = {
         AsterAdapter: 3,
-        BitgetAdapter: 3,
+        BitgetAdapter: 4,
         BybitAdapter: 2,
         GateAdapter: 3,
         HTXAdapter: 3,

@@ -76,18 +76,23 @@ function leg(
   rawSymbol?: string | null,
   canonicalSymbol?: string
 ) {
+  const isBitgetRToken =
+    exchange.trim().toLowerCase() === "bitget" &&
+    marketType === "spot" &&
+    Boolean(rawSymbol && canonicalSymbol && normalizeSymbol(rawSymbol).slice(1) === normalizeSymbol(canonicalSymbol));
   const rawSuffix =
     rawSymbol && canonicalSymbol && normalizeSymbol(rawSymbol) !== normalizeSymbol(canonicalSymbol)
       ? rawSymbol
       : "";
-  const fullName = [exchange, marketType, rawSuffix].filter(Boolean).join(" ");
+  const meta = [marketType, isBitgetRToken ? "RToken" : "", rawSuffix].filter(Boolean).join(" ");
+  const fullName = [exchange, meta].filter(Boolean).join(" ");
   return (
     <div className="leg-cell">
       <Typography.Text className="leg-text" title={fullName}>
         {exchangeLabel(exchange)}
       </Typography.Text>
       <Typography.Text className="leg-meta" title={fullName}>
-        {[marketType, rawSuffix].filter(Boolean).join(" ") || marketType}
+        {meta || marketType}
       </Typography.Text>
     </div>
   );
@@ -109,6 +114,13 @@ function sideNextCycleFundingRate(
     return nextRate;
   }
   return typeof currentRate === "number" ? currentRate : null;
+}
+
+function sideCurrentFundingRate(
+  marketType: string,
+  currentRate: number | null | undefined
+): number | null {
+  return marketType === "spot" ? 0 : (typeof currentRate === "number" ? currentRate : null);
 }
 
 function nextCycleFundingEdge(row: Opportunity): number | null {
@@ -165,18 +177,30 @@ function FundingCell({ row }: { row: Opportunity }) {
   const cycleFundingEdge = nextCycleFundingEdge(row);
   const cycleType =
     typeof cycleFundingEdge === "number" && cycleFundingEdge < 0 ? "danger" : "secondary";
+  const currentBuyRate = sideCurrentFundingRate(row.buy_market_type, row.funding_rate_buy_pct);
+  const currentSellRate = sideCurrentFundingRate(row.sell_market_type, row.funding_rate_sell_pct);
+  const predictedBuyRate = sideNextCycleFundingRate(
+    row.buy_market_type,
+    row.funding_next_rate_buy_pct,
+    row.funding_rate_buy_pct
+  );
+  const predictedSellRate = sideNextCycleFundingRate(
+    row.sell_market_type,
+    row.funding_next_rate_sell_pct,
+    row.funding_rate_sell_pct
+  );
   return (
     <div className="funding-cell">
       <div className="funding-row">
         <span className="funding-label">{"\u5f53\u524d"}</span>
         <Typography.Text className="funding-value">
-          {fundingPair(row.funding_rate_buy_pct, row.funding_rate_sell_pct)}
+          {fundingPair(currentBuyRate, currentSellRate)}
         </Typography.Text>
       </div>
       <div className="funding-row">
         <span className="funding-label">{"\u9884\u6d4b"}</span>
         <Typography.Text className="funding-value">
-          {fundingPair(row.funding_next_rate_buy_pct, row.funding_next_rate_sell_pct)}
+          {fundingPair(predictedBuyRate, predictedSellRate)}
         </Typography.Text>
       </div>
       <div className="funding-row">
