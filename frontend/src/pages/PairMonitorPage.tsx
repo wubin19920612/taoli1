@@ -205,7 +205,10 @@ const intervalOptions = [
   { label: "30秒", value: 30 },
   { label: "1分钟", value: 60 },
   { label: "5分钟", value: 300 },
-  { label: "15分钟", value: 900 }
+  { label: "15分钟", value: 900 },
+  { label: "1小时", value: 3_600 },
+  { label: "4小时", value: 14_400 },
+  { label: "1天", value: 86_400 }
 ];
 
 const CUSTOM_INTERVAL_VALUE = -1;
@@ -395,6 +398,12 @@ function intervalSecondsFromLegacy(value: unknown): number {
 
 function intervalLabel(seconds: number): string {
   const normalized = clampIntervalSeconds(seconds);
+  if (normalized % 86_400 === 0) {
+    return `${normalized / 86_400}天`;
+  }
+  if (normalized % 3_600 === 0) {
+    return `${normalized / 3_600}小时`;
+  }
   if (normalized % 60 === 0) {
     const minutes = normalized / 60;
     return `${minutes}分钟`;
@@ -404,11 +413,8 @@ function intervalLabel(seconds: number): string {
 
 function intervalMinutesParam(seconds: number): number {
   const normalized = clampIntervalSeconds(seconds);
-  if (normalized === 300) {
-    return 5;
-  }
-  if (normalized === 900) {
-    return 15;
+  if (normalized >= 60 && normalized % 60 === 0) {
+    return normalized / 60;
   }
   return 1;
 }
@@ -422,7 +428,10 @@ function historicalCompareIntervalSeconds(seconds: number): number {
   if (normalized <= 300) {
     return 300;
   }
-  return 900;
+  if (normalized <= 900) {
+    return 900;
+  }
+  return [3_600, 14_400, 86_400].includes(normalized) ? normalized : 900;
 }
 
 function intervalSelectValue(seconds: number): number {

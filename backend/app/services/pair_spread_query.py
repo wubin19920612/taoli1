@@ -44,7 +44,7 @@ from app.models.pair_spread import (
 MINUTE_MS = 60_000
 HYPERLIQUID_CANDLE_LIMIT = 5000
 PAIR_SPREAD_REALTIME_MAX_POINTS = 4000
-PAIR_SPREAD_HISTORICAL_INTERVAL_SECONDS = (60, 300, 900)
+PAIR_SPREAD_HISTORICAL_INTERVAL_SECONDS = (60, 300, 900, 3_600, 14_400, 86_400)
 PAIR_SPREAD_TIMEOUT = httpx.Timeout(18.0, connect=3.0, read=14.0, write=5.0, pool=5.0)
 DISPLAY_TZ = timezone(timedelta(hours=8))
 BINANCE_ALPHA_KLINES_URL = "https://www.binance.com/bapi/defi/v1/public/alpha-trade/klines"
@@ -77,6 +77,58 @@ def _interval_ms(interval_minutes: int) -> int:
 
 def _interval_minutes_from_seconds(interval_seconds: int) -> int:
     return max(1, interval_seconds // 60)
+
+
+def _binance_interval(interval_minutes: int) -> str:
+    return {
+        60: "1h",
+        240: "4h",
+        1440: "1d",
+    }.get(interval_minutes, f"{interval_minutes}m")
+
+
+def _okx_interval(interval_minutes: int) -> str:
+    return {
+        60: "1H",
+        240: "4H",
+        1440: "1D",
+    }.get(interval_minutes, f"{interval_minutes}m")
+
+
+def _bybit_interval(interval_minutes: int) -> str:
+    return "D" if interval_minutes == 1440 else str(interval_minutes)
+
+
+def _gate_interval(interval_minutes: int) -> str:
+    return {
+        60: "1h",
+        240: "4h",
+        1440: "1d",
+    }.get(interval_minutes, f"{interval_minutes}m")
+
+
+def _bitget_future_interval(interval_minutes: int) -> str:
+    return {
+        60: "1H",
+        240: "4H",
+        1440: "1D",
+    }.get(interval_minutes, f"{interval_minutes}m")
+
+
+def _bitget_spot_interval(interval_minutes: int) -> str:
+    return {
+        60: "1h",
+        240: "4h",
+        1440: "1day",
+    }.get(interval_minutes, f"{interval_minutes}min")
+
+
+def _hyperliquid_interval(interval_minutes: int) -> str:
+    return {
+        60: "1h",
+        240: "4h",
+        1440: "1d",
+    }.get(interval_minutes, f"{interval_minutes}m")
 
 
 def _floor_minute(value: datetime) -> datetime:
@@ -288,6 +340,10 @@ def _append_unique(items: list[str], item: str) -> None:
 
 
 def _interval_text(interval_seconds: int) -> str:
+    if interval_seconds % 86_400 == 0:
+        return f"{interval_seconds // 86_400}天"
+    if interval_seconds % 3_600 == 0:
+        return f"{interval_seconds // 3_600}小时"
     if interval_seconds % 60 == 0:
         return f"{interval_seconds // 60}分钟"
     return f"{interval_seconds}秒"
@@ -418,7 +474,7 @@ def _hyperliquid_history_limit_warning(
     recommended = next(
         (
             candidate
-            for candidate in (1, 5, 15)
+            for candidate in (1, 5, 15, 60, 240, 1440)
             if ceil(hours * 60 / candidate) <= HYPERLIQUID_CANDLE_LIMIT
         ),
         None,
@@ -730,7 +786,9 @@ class PairSpreadQueryService:
         resolved_interval_seconds = interval_seconds or interval_minutes * 60
         if resolved_interval_seconds not in PAIR_SPREAD_HISTORICAL_INTERVAL_SECONDS:
             if not include_current:
-                raise PairSpreadQueryError("秒级周期只支持实时采样，历史对比请使用 1 分钟、5 分钟或 15 分钟周期")
+                raise PairSpreadQueryError(
+                    "秒级周期只支持实时采样，历史对比请使用 1 分钟、5 分钟、15 分钟、1 小时、4 小时或 1 天周期"
+                )
             return await self._query_realtime(
                 leg1,
                 leg2,
@@ -800,7 +858,7 @@ class PairSpreadQueryService:
 
         if not points:
             suffix = f": {_warnings_text(failed_window_warnings)}" if failed_window_warnings else ""
-            raise PairSpreadQueryError(f"没有拿到可对齐的分钟K线{suffix}")
+            raise PairSpreadQueryError(f"没有拿到可对齐的历史K线{suffix}")
 
         earliest_expected = used_start + timedelta(minutes=interval_minutes)
         if points[0].bucket_at > earliest_expected:
@@ -895,7 +953,9 @@ class PairSpreadQueryService:
         price_multipliers_by_exchange = price_multipliers_by_exchange or {}
         if interval_seconds not in PAIR_SPREAD_HISTORICAL_INTERVAL_SECONDS:
             if not include_current:
-                raise PairSpreadQueryError("秒级周期只支持实时采样，历史对比请使用 1 分钟、5 分钟或 15 分钟周期")
+                raise PairSpreadQueryError(
+                    "秒级周期只支持实时采样，历史对比请使用 1 分钟、5 分钟、15 分钟、1 小时、4 小时或 1 天周期"
+                )
             return await self._query_symbol_spreads_realtime(
                 symbol,
                 market_type=market_type,
@@ -1001,7 +1061,7 @@ class PairSpreadQueryService:
 
         if not raw_series_points:
             suffix = f": {_warnings_text(failed_window_warnings)}" if failed_window_warnings else ""
-            raise PairSpreadQueryError(f"没有拿到可用于跨所对比的分钟K线{suffix}")
+            raise PairSpreadQueryError(f"没有拿到可用于跨所对比的历史K线{suffix}")
 
         all_points = [point for _, points in raw_series_points for point in points]
         earliest_expected = used_start + timedelta(minutes=interval_minutes)
@@ -1534,7 +1594,7 @@ class PairSpreadQueryService:
         while cursor < end_ms:
             chunk_end = min(end_ms, cursor + 1500 * interval_ms - 1)
             url = (
-                f"{base_url}/fapi/v1/klines?symbol={raw}&interval={interval_minutes}m"
+                f"{base_url}/fapi/v1/klines?symbol={raw}&interval={_binance_interval(interval_minutes)}"
                 f"&startTime={cursor}&endTime={chunk_end}&limit=1500"
             )
             rows = await self._get_json(url)
@@ -1567,7 +1627,7 @@ class PairSpreadQueryService:
             chunk_end = min(end_ms, cursor + 1000 * interval_ms - 1)
             url = (
                 "https://api.binance.com/api/v3/klines"
-                f"?symbol={raw}&interval={interval_minutes}m"
+                f"?symbol={raw}&interval={_binance_interval(interval_minutes)}"
                 f"&startTime={cursor}&endTime={chunk_end}&limit=1000"
             )
             rows = await self._get_json(url)
@@ -1599,7 +1659,7 @@ class PairSpreadQueryService:
         while cursor < end_ms:
             chunk_end = min(end_ms, cursor + 1000 * interval_ms - 1)
             url = (
-                f"{BINANCE_ALPHA_KLINES_URL}?symbol={raw}&interval={interval_minutes}m"
+                f"{BINANCE_ALPHA_KLINES_URL}?symbol={raw}&interval={_binance_interval(interval_minutes)}"
                 f"&startTime={cursor}&endTime={chunk_end}&limit=1000"
             )
             try:
@@ -1659,7 +1719,7 @@ class PairSpreadQueryService:
         while cursor > start_ms:
             url = (
                 "https://www.okx.com/api/v5/market/history-candles"
-                f"?instId={inst_id}&bar={interval_minutes}m&after={cursor}&limit=100"
+                f"?instId={inst_id}&bar={_okx_interval(interval_minutes)}&after={cursor}&limit=100"
             )
             rows = (await self._get_json(url)).get("data", [])
             parsed = [_parse_array_kline(row, 0, 4, 7, 6) for row in rows if isinstance(row, list)]
@@ -1687,7 +1747,7 @@ class PairSpreadQueryService:
         while cursor < end_ms:
             url = (
                 "https://www.okx.com/api/v5/market/history-candles"
-                f"?instId={inst_id}&bar={interval_minutes}m&before={cursor}&limit=100"
+                f"?instId={inst_id}&bar={_okx_interval(interval_minutes)}&before={cursor}&limit=100"
             )
             rows = (await self._get_json(url)).get("data", [])
             parsed = [_parse_array_kline(row, 0, 4, 7, 6) for row in rows if isinstance(row, list)]
@@ -1717,7 +1777,7 @@ class PairSpreadQueryService:
             chunk_end = min(end_ms, cursor + 1000 * interval_ms - 1)
             url = (
                 "https://api.bybit.com/v5/market/kline"
-                f"?category=linear&symbol={raw}&interval={interval_minutes}&start={cursor}&end={chunk_end}&limit=1000"
+                f"?category=linear&symbol={raw}&interval={_bybit_interval(interval_minutes)}&start={cursor}&end={chunk_end}&limit=1000"
             )
             rows = (await self._get_json(url)).get("result", {}).get("list", [])
             parsed = [_parse_array_kline(row, 0, 4, 6, 5) for row in rows if isinstance(row, list)]
@@ -1748,7 +1808,7 @@ class PairSpreadQueryService:
             chunk_end = min(end_ms, cursor + 1000 * interval_ms - 1)
             url = (
                 "https://api.bybit.com/v5/market/kline"
-                f"?category=spot&symbol={raw}&interval={interval_minutes}&start={cursor}&end={chunk_end}&limit=1000"
+                f"?category=spot&symbol={raw}&interval={_bybit_interval(interval_minutes)}&start={cursor}&end={chunk_end}&limit=1000"
             )
             rows = (await self._get_json(url)).get("result", {}).get("list", [])
             parsed = [_parse_array_kline(row, 0, 4, 6, 5) for row in rows if isinstance(row, list)]
@@ -1779,7 +1839,7 @@ class PairSpreadQueryService:
             chunk_end = min(end_sec, cursor + 1800 * interval_seconds)
             url = (
                 "https://api.gateio.ws/api/v4/futures/usdt/candlesticks"
-                f"?contract={contract}&interval={interval_minutes}m&from={cursor}&to={chunk_end}"
+                f"?contract={contract}&interval={_gate_interval(interval_minutes)}&from={cursor}&to={chunk_end}"
             )
             rows = await self._get_json(url)
             parsed = [_parse_gate_kline(row) for row in rows if isinstance(row, (dict, list))]
@@ -1810,7 +1870,7 @@ class PairSpreadQueryService:
             chunk_end = min(end_sec, cursor + 1000 * interval_seconds)
             url = (
                 "https://api.gateio.ws/api/v4/spot/candlesticks"
-                f"?currency_pair={pair}&interval={interval_minutes}m&from={cursor}&to={chunk_end}"
+                f"?currency_pair={pair}&interval={_gate_interval(interval_minutes)}&from={cursor}&to={chunk_end}"
             )
             rows = await self._get_json(url)
             parsed = [_parse_gate_spot_kline(row) for row in rows if isinstance(row, (dict, list))]
@@ -1841,7 +1901,7 @@ class PairSpreadQueryService:
             chunk_end = min(end_ms, cursor + 1000 * interval_ms - 1)
             url = (
                 "https://api.bitget.com/api/v2/mix/market/candles"
-                f"?symbol={raw}&productType=USDT-FUTURES&granularity={interval_minutes}m"
+                f"?symbol={raw}&productType=USDT-FUTURES&granularity={_bitget_future_interval(interval_minutes)}"
                 f"&startTime={cursor}&endTime={chunk_end}&limit=1000"
             )
             rows = (await self._get_json(url)).get("data", [])
@@ -1868,7 +1928,7 @@ class PairSpreadQueryService:
         end_ms = _to_ms(end)
         interval_ms = _interval_ms(interval_minutes)
         cursor = _to_ms(start)
-        granularity = f"{interval_minutes}min"
+        granularity = _bitget_spot_interval(interval_minutes)
         points: list[PairSpreadKlinePoint] = []
         while cursor < end_ms:
             chunk_end = min(end_ms, cursor + 1000 * interval_ms - 1)
@@ -1904,7 +1964,7 @@ class PairSpreadQueryService:
                 "type": "candleSnapshot",
                 "req": {
                     "coin": raw_coin,
-                    "interval": f"{interval_minutes}m",
+                    "interval": _hyperliquid_interval(interval_minutes),
                     "startTime": _to_ms(start),
                     "endTime": _to_ms(end),
                 },

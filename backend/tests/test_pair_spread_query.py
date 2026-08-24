@@ -152,6 +152,71 @@ def test_hyperliquid_history_limit_warning_is_not_needed_for_15_minutes() -> Non
     )
 
 
+@pytest.mark.parametrize(
+    ("interval_minutes", "binance", "okx", "bybit", "gate", "bitget_future", "bitget_spot", "hyperliquid"),
+    [
+        (60, "1h", "1H", "60", "1h", "1H", "1h", "1h"),
+        (240, "4h", "4H", "240", "4h", "4H", "4h", "4h"),
+        (1440, "1d", "1D", "D", "1d", "1D", "1day", "1d"),
+    ],
+)
+def test_exchange_kline_interval_mapping_supports_hourly_and_daily_history(
+    interval_minutes: int,
+    binance: str,
+    okx: str,
+    bybit: str,
+    gate: str,
+    bitget_future: str,
+    bitget_spot: str,
+    hyperliquid: str,
+) -> None:
+    assert pair_spread_query_module._binance_interval(interval_minutes) == binance
+    assert pair_spread_query_module._okx_interval(interval_minutes) == okx
+    assert pair_spread_query_module._bybit_interval(interval_minutes) == bybit
+    assert pair_spread_query_module._gate_interval(interval_minutes) == gate
+    assert pair_spread_query_module._bitget_future_interval(interval_minutes) == bitget_future
+    assert pair_spread_query_module._bitget_spot_interval(interval_minutes) == bitget_spot
+    assert pair_spread_query_module._hyperliquid_interval(interval_minutes) == hyperliquid
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("interval_seconds", "expected_interval_minutes"),
+    [(3_600, 60), (14_400, 240), (86_400, 1440)],
+)
+async def test_pair_spread_query_uses_large_intervals_as_historical_klines(
+    interval_seconds: int,
+    expected_interval_minutes: int,
+) -> None:
+    class FakePairSpreadService(PairSpreadQueryService):
+        def __init__(self) -> None:
+            super().__init__()
+            self.requested_intervals: list[int] = []
+
+        async def _fetch_klines(self, exchange: str, symbol: str, start, end, interval_minutes: int):
+            self.requested_intervals.append(interval_minutes)
+            close = 100 if exchange == "binance" else 101
+            return [kline_at(end - timedelta(minutes=interval_minutes), close)]
+
+    service = FakePairSpreadService()
+    try:
+        result = await service.query(
+            PairSpreadLegQuery(exchange="binance", symbol="btc"),
+            PairSpreadLegQuery(exchange="okx", symbol="btc"),
+            hours=720,
+            interval_seconds=interval_seconds,
+            now=datetime(2026, 7, 10, 12, 0, tzinfo=UTC),
+            include_current=False,
+        )
+    finally:
+        await service.aclose()
+
+    assert result.interval_seconds == interval_seconds
+    assert result.interval_minutes == expected_interval_minutes
+    assert result.point_count == 1
+    assert service.requested_intervals == [expected_interval_minutes, expected_interval_minutes]
+
+
 @pytest.mark.asyncio
 async def test_pair_spread_query_builds_stats_current_and_funding() -> None:
     _REALTIME_PAIR_FUNDING_CACHE.clear()
