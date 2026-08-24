@@ -156,6 +156,57 @@ def test_paths_normalize_admin_prefix_slashes() -> None:
     assert config.message_path == "/admin/api/config/sdk-send-message"
 
 
+def test_httpx_verify_uses_tls_switch_and_custom_ca_bundle() -> None:
+    assert (
+        AstroSdkConfig(
+            base_url="https://astro.example",
+            admin_prefix="admin",
+            api_key="secret-key",
+        ).httpx_verify
+        is True
+    )
+    assert (
+        AstroSdkConfig(
+            base_url="https://astro.example",
+            admin_prefix="admin",
+            api_key="secret-key",
+            verify_tls=False,
+            ca_bundle="/certs/astro-ca.pem",
+        ).httpx_verify
+        is False
+    )
+    assert (
+        AstroSdkConfig(
+            base_url="https://astro.example",
+            admin_prefix="admin",
+            api_key="secret-key",
+            ca_bundle=" /certs/astro-ca.pem ",
+        ).httpx_verify
+        == "/certs/astro-ca.pem"
+    )
+
+
+@pytest.mark.asyncio
+async def test_status_and_close_do_not_create_http_client() -> None:
+    client = AstroSdkClient(
+        AstroSdkConfig(
+            base_url="",
+            admin_prefix="",
+            api_key="",
+            verify_tls=False,
+            ca_bundle="/certs/astro-ca.pem",
+        )
+    )
+
+    status = client.status(dry_run_only=True)
+    await client.aclose()
+
+    assert status["configured"] is False
+    assert status["verify_tls"] is False
+    assert status["ca_bundle_configured"] is True
+    assert client._client is None
+
+
 @pytest.mark.asyncio
 async def test_list_pairs_wraps_http_errors() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -175,3 +226,29 @@ async def test_list_pairs_wraps_http_errors() -> None:
 
     assert exc_info.value.status_code == 401
     assert "bad signature" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_list_pairs_explains_ssl_certificate_errors() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError(
+            "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: self-signed certificate",
+            request=request,
+        )
+
+    client = AstroSdkClient(
+        AstroSdkConfig(
+            base_url="https://astro.example",
+            admin_prefix="admin",
+            api_key="secret-key",
+        ),
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    with pytest.raises(AstroClientError) as exc_info:
+        await client.list_pairs()
+
+    assert exc_info.value.status_code == 502
+    assert "Astro TLS 证书校验失败" in exc_info.value.message
+    assert "ASTRO_VERIFY_TLS=false" in exc_info.value.message
+    assert "ASTRO_CA_BUNDLE" in exc_info.value.message

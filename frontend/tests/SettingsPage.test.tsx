@@ -52,6 +52,29 @@ describe("SettingsPage", () => {
             observation_limit: 5
           });
         }
+        if (url.includes("/settings/astro-automation") && init?.method === "PUT") {
+          return Response.json(JSON.parse(String(init.body)));
+        }
+        if (url.includes("/settings/astro-automation")) {
+          return Response.json({
+            alert_auto_create: false
+          });
+        }
+        if (url.includes("/settings/astro-new-listing-card") && init?.method === "PUT") {
+          return Response.json(JSON.parse(String(init.body)));
+        }
+        if (url.includes("/settings/astro-new-listing-card")) {
+          return Response.json({
+            max_trade_usdt: 35,
+            leverage: 3,
+            min_notional: 10,
+            max_notional: 35,
+            open_enabled: false,
+            close_position_buffer_pct: 0.1,
+            unfavorable_funding_weight: 1,
+            close_position_floor_pct: 0
+          });
+        }
         if (url.includes("/settings/astro-card") && init?.method === "PUT") {
           return Response.json(JSON.parse(String(init.body)));
         }
@@ -154,8 +177,33 @@ describe("SettingsPage", () => {
         if (url.includes("/alerts/rules") && init?.method === "POST") {
           return Response.json(JSON.parse(String(init.body)));
         }
+        if (url.includes("/alerts/rules/rule-existing") && init?.method === "PUT") {
+          return Response.json({
+            ...JSON.parse(String(init.body)),
+            id: "rule-existing"
+          });
+        }
         if (url.includes("/alerts/rules")) {
-          return Response.json([]);
+          return Response.json([
+            {
+              id: "rule-existing",
+              name: "Existing FF",
+              enabled: true,
+              types: ["FF"],
+              include_exchanges: ["binance"],
+              exclude_exchanges: [],
+              include_symbols: ["BTCUSDT"],
+              exclude_symbols: ["LEGACYUSDT"],
+              min_open_spread_pct: 0.8,
+              min_fee_adjusted_open_pct: 0.4,
+              min_volume_24h_usdt: 2500000,
+              max_data_age_seconds: 600,
+              excluded_risk_labels: ["LOW_VOLUME"],
+              consecutive_hits: 4,
+              cooldown_seconds: 900,
+              severity: "critical"
+            }
+          ]);
         }
         if (url.includes("/admin/service-control")) {
           return Response.json({
@@ -193,7 +241,7 @@ describe("SettingsPage", () => {
       screen.getByText("排除标的直接继承实时机会页隐藏的黑名单，无需单独填写。")
     ).toBeTruthy();
     expect(screen.queryByLabelText("排除标的")).toBeNull();
-    await userEvent.type(screen.getByLabelText("规则名称"), "FF 价差");
+    await userEvent.type(screen.getByLabelText("告警规则名称"), "FF 价差");
     await userEvent.clear(screen.getByLabelText("开仓阈值"));
     await userEvent.type(screen.getByLabelText("开仓阈值"), "0.5");
     await userEvent.click(screen.getByRole("button", { name: "新增规则" }));
@@ -206,11 +254,45 @@ describe("SettingsPage", () => {
     });
   }, 15000);
 
+  it("edits an existing alert rule in place", async () => {
+    render(<SettingsPage />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "编辑规则 Existing FF" }));
+
+    expect(screen.getByText("编辑告警规则")).toBeTruthy();
+    expect((screen.getByLabelText("告警规则名称") as HTMLInputElement).value).toBe("Existing FF");
+    await waitFor(() => {
+      expect((screen.getByLabelText("最低成交额 (K)") as HTMLInputElement).value).toBe("2500");
+    });
+
+    const threshold = screen.getByLabelText("开仓阈值");
+    await userEvent.clear(threshold);
+    await userEvent.type(threshold, "1.1");
+    await userEvent.click(screen.getByRole("button", { name: "保存修改" }));
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/alerts/rules/rule-existing"),
+        expect.objectContaining({
+          method: "PUT",
+          body: expect.stringContaining('"min_open_spread_pct":1.1')
+        })
+      );
+    });
+    expect(
+      vi.mocked(fetch).mock.calls.some(([, init]) => {
+        return init?.method === "PUT" && String(init.body).includes('"exclude_symbols":["LEGACYUSDT"]');
+      })
+    ).toBe(true);
+    expect(screen.getByText("新增告警规则")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "保存修改" })).toBeNull();
+  }, 15000);
+
   it("saves global alert message template field choices", async () => {
     render(<SettingsPage />);
 
     expect(await screen.findByText("告警内容模板")).toBeTruthy();
-    expect(screen.getByLabelText("建卡失败不通知")).toBeTruthy();
+    expect(screen.getByLabelText("只报告可建卡告警")).toBeTruthy();
     await userEvent.click(screen.getByLabelText("资金费率"));
     await userEvent.click(screen.getByRole("button", { name: /保存告警模板/ }));
 
@@ -235,20 +317,40 @@ describe("SettingsPage", () => {
     expect(preview).not.toBeNull();
     expect(preview?.textContent).toContain("价差对：BTCUSDT | binance future -> okx future");
     expect(preview?.textContent).not.toContain("资金费率差");
-    expect(preview?.textContent).toContain("建卡条件过滤");
+    expect(preview?.textContent).toContain("只报告可建卡告警");
+  }, 15000);
+
+  it("loads and saves Astro automation settings", async () => {
+    render(<SettingsPage />);
+
+    expect(await screen.findByText("Astro 自动化")).toBeTruthy();
+    await userEvent.click(screen.getByLabelText("告警自动创建 Astro 卡片"));
+    await userEvent.click(screen.getByRole("button", { name: /保存 Astro 自动化/ }));
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/settings/astro-automation"),
+        expect.objectContaining({
+          method: "PUT",
+          body: expect.stringContaining('"alert_auto_create":true')
+        })
+      );
+    });
   }, 15000);
 
   it("loads and saves Astro card defaults", async () => {
     render(<SettingsPage />);
 
-    expect(await screen.findByText("Astro card defaults")).toBeTruthy();
-    const positionValueInput = await screen.findByLabelText("Position value USDT");
-    expect((positionValueInput as HTMLInputElement).value).toBe("25");
+    expect(await screen.findByText("Astro 卡片默认参数")).toBeTruthy();
+    const positionValueInput = (await screen.findAllByLabelText("仓位金额 USDT"))[0];
+    await waitFor(() => {
+      expect((positionValueInput as HTMLInputElement).value).toBe("25");
+    });
 
     await userEvent.clear(positionValueInput);
     await userEvent.type(positionValueInput, "80");
-    await userEvent.click(screen.getByLabelText("Open after create"));
-    await userEvent.click(screen.getByRole("button", { name: /Save Astro card defaults/ }));
+    await userEvent.click(screen.getAllByLabelText("创建后允许开仓")[0]);
+    await userEvent.click(screen.getByRole("button", { name: /保存 Astro 卡片默认参数/ }));
 
     await waitFor(() => {
       expect(fetch).toHaveBeenCalledWith(
@@ -268,24 +370,49 @@ describe("SettingsPage", () => {
     );
   }, 15000);
 
+  it("loads and saves new listing Astro card defaults", async () => {
+    render(<SettingsPage />);
+
+    expect(await screen.findByText("新币 Astro 默认参数")).toBeTruthy();
+    const positionInputs = await screen.findAllByLabelText("仓位金额 USDT");
+    const newListingPositionInput = positionInputs[1];
+    await waitFor(() => {
+      expect((newListingPositionInput as HTMLInputElement).value).toBe("35");
+    });
+
+    await userEvent.clear(newListingPositionInput);
+    await userEvent.type(newListingPositionInput, "120");
+    await userEvent.click(screen.getByRole("button", { name: /保存新币 Astro 默认参数/ }));
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/settings/astro-new-listing-card"),
+        expect.objectContaining({
+          method: "PUT",
+          body: expect.stringContaining('"max_trade_usdt":120')
+        })
+      );
+    });
+  }, 15000);
+
   it("loads and saves symbol aliases with risk settings", async () => {
     render(<SettingsPage />);
 
-    expect(await screen.findByText("Symbol aliases")).toBeTruthy();
+    expect(await screen.findByText("全局币名映射")).toBeTruthy();
+    expect(screen.getByText("全部页面生效")).toBeTruthy();
     expect(await screen.findByDisplayValue("EDGEXUSDT")).toBeTruthy();
     expect(await screen.findByDisplayValue("EDGEUSDT")).toBeTruthy();
 
-    const aliasSection = screen.getByText("Symbol aliases").closest("section");
-    const saveButton = aliasSection?.querySelector('button[type="submit"]');
-    expect(saveButton).toBeTruthy();
-    await userEvent.click(saveButton as HTMLButtonElement);
+    await userEvent.click(screen.getByRole("button", { name: /保存风险参数/ }));
 
     await waitFor(() => {
       expect(fetch).toHaveBeenCalledWith(
         expect.stringContaining("/settings/risk"),
         expect.objectContaining({
           method: "PUT",
-          body: expect.stringContaining('"symbol_aliases":[{"exchange":"gate","symbol":"EDGEXUSDT","canonical_symbol":"EDGEUSDT","market_type":null}]')
+          body: expect.stringContaining(
+            '"symbol_aliases":[{"exchange":"gate","symbol":"EDGEXUSDT","canonical_symbol":"EDGEUSDT","market_type":null,"price_multiplier":1}]'
+          )
         })
       );
     });
@@ -394,10 +521,10 @@ describe("SettingsPage", () => {
 
     render(<SettingsPage />);
 
-    await userEvent.type(await screen.findByLabelText("规则名称"), "TRADOOR");
+    await userEvent.type(await screen.findByLabelText("告警规则名称"), "TRADOOR");
     await userEvent.click(screen.getByRole("button", { name: "新增规则" }));
-    await userEvent.clear(await screen.findByLabelText("规则名称"));
-    await userEvent.type(await screen.findByLabelText("规则名称"), "TRADOOR2");
+    await userEvent.clear(await screen.findByLabelText("告警规则名称"));
+    await userEvent.type(await screen.findByLabelText("告警规则名称"), "TRADOOR2");
     await userEvent.click(screen.getByRole("button", { name: "新增规则" }));
 
     await waitFor(() => {

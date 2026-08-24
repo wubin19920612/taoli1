@@ -13,6 +13,28 @@ class AnnouncementKind(StrEnum):
     OTHER = "other"
 
 
+class AnnouncementEventScheduleItem(BaseModel):
+    symbol: str
+    event_time: datetime
+    note: str | None = None
+
+    @field_validator("symbol")
+    @classmethod
+    def normalize_symbol(cls, value: str) -> str:
+        text = value.strip().upper()
+        if not text:
+            raise ValueError("symbol must not be empty")
+        return text
+
+    @field_validator("note")
+    @classmethod
+    def normalize_note(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        text = value.strip()
+        return text or None
+
+
 class ExchangeAnnouncement(BaseModel):
     id: str = Field(default_factory=lambda: uuid4().hex)
     exchange: str
@@ -25,6 +47,7 @@ class ExchangeAnnouncement(BaseModel):
     symbols: list[str] = Field(default_factory=list)
     market_type: str | None = None
     event_time: datetime | None = None
+    event_schedule: list[AnnouncementEventScheduleItem] = Field(default_factory=list)
     summary: str | None = None
     published_at: datetime
     fetched_at: datetime
@@ -82,6 +105,7 @@ class AnnouncementSettings(BaseModel):
         default_factory=lambda: ["binance", "okx", "bybit", "gate", "bitget", "hyperliquid"]
     )
     alert_exchanges: list[str] = Field(default_factory=list)
+    listing_delisting_alerts_enabled: bool = True
     bootstrap_alerts_enabled: bool = False
     event_reminders_enabled: bool = True
     event_reminder_minutes_before: int = Field(default=30, ge=1, le=10_080)

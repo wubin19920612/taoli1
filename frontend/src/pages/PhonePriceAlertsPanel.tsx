@@ -222,6 +222,7 @@ export function PhonePriceAlertsPanel() {
         pagination={false}
         size="middle"
         tableLayout="fixed"
+        scroll={{ x: 1240 }}
       />
     </section>
   );

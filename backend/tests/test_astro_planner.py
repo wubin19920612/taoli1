@@ -95,6 +95,23 @@ def test_sf_opportunity_maps_spot_to_future() -> None:
     assert plan.pair["maxTradeUSDT"] == "25"
 
 
+def test_bitget_rtoken_sf_opportunity_is_blocked_without_per_leg_raw_symbol_support() -> None:
+    planner = AstroPairPlanner(AstroPlannerConfig())
+    rtoken_opportunity = opportunity(OpportunityType.SF, MarketType.SPOT, MarketType.FUTURE).model_copy(
+        update={
+            "symbol": "AAPLUSDT",
+            "buy_exchange": "bitget",
+            "buy_raw_symbol": "RAAPLUSDT",
+        }
+    )
+
+    plan = planner.plan(rtoken_opportunity)
+
+    assert plan.can_submit is False
+    assert plan.pair is None
+    assert any("RToken" in blocker for blocker in plan.blockers)
+
+
 def test_open_enabled_config_builds_open_enabled_pair() -> None:
     planner = AstroPairPlanner(AstroPlannerConfig(default_open_enabled=True))
 

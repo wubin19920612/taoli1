@@ -608,7 +608,7 @@ describe("DashboardPage", () => {
     render(<DashboardPage />);
 
     await userEvent.click(await screen.findByRole("button", { name: "Astro BTCUSDT" }));
-    await userEvent.click(await screen.findByRole("button", { name: "创建/更新暂停卡片" }));
+    await userEvent.click(await screen.findByRole("button", { name: "创建卡片" }));
 
     await waitFor(() => {
       expect(fetch).toHaveBeenCalledWith(
@@ -702,9 +702,9 @@ describe("DashboardPage", () => {
 
     await userEvent.clear(positionInput);
     await userEvent.type(positionInput, "80");
-    await userEvent.click(screen.getByLabelText("Open after create"));
+    await userEvent.click(screen.getByLabelText("创建后允许开仓"));
     await userEvent.click(screen.getByLabelText("Save sizing as global default"));
-    await userEvent.click(screen.getByRole("button", { name: /暂停卡片/ }));
+    await userEvent.click(screen.getByRole("button", { name: "创建卡片" }));
 
     await waitFor(() => {
       expect(createBodies).toHaveLength(1);

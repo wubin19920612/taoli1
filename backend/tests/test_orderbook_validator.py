@@ -101,11 +101,40 @@ async def test_validator_uses_minimum_signal_notional_when_card_size_is_smaller(
     assert result.buy_filled_usdt == pytest.approx(1000)
     assert result.sell_filled_usdt == pytest.approx(1000)
     assert result.executable_open_pct == pytest.approx(1.0)
+    assert result.cost_pct == pytest.approx(0.25)
+    assert result.funding_edge_pct == pytest.approx(0)
+    assert result.slippage_buffer_pct == pytest.approx(0.05)
     assert result.effective_executable_edge_pct == pytest.approx(0.70)
 
 
 @pytest.mark.asyncio
-async def test_validator_can_use_explicit_override_notional_for_small_live_pilot() -> None:
+async def test_validator_uses_signal_notional_when_card_size_is_larger() -> None:
+    buy_book = book("binance", bids=[(99, 20)], asks=[(100, 20)])
+    sell_book = book("okx", bids=[(101, 20)], asks=[(102, 20)])
+    validator = OrderBookDepthValidator(
+        [FakeAdapter("binance", buy_book), FakeAdapter("okx", sell_book)]
+    )
+
+    result = await validator.validate(
+        opportunity(),
+        risk_settings=RiskSettings(
+            signal_validation_notional_usdt=100,
+            signal_slippage_buffer_pct=0.05,
+            min_effective_open_pct=0.1,
+            ticker_collision_symbols=[],
+        ),
+        card_settings=AstroCardSettings(max_trade_usdt=5000, max_notional=100),
+    )
+
+    assert result.passed is True
+    assert result.target_notional_usdt == 100
+    assert result.required_depth_usdt == pytest.approx(200)
+    assert result.buy_filled_usdt == pytest.approx(100)
+    assert result.sell_filled_usdt == pytest.approx(100)
+
+
+@pytest.mark.asyncio
+async def test_validator_ignores_explicit_override_notional() -> None:
     buy_book = book("binance", bids=[(99, 20)], asks=[(100, 20)])
     sell_book = book("okx", bids=[(101, 20)], asks=[(102, 20)])
     validator = OrderBookDepthValidator(
@@ -125,9 +154,9 @@ async def test_validator_can_use_explicit_override_notional_for_small_live_pilot
     )
 
     assert result.passed is True
-    assert result.target_notional_usdt == 100
-    assert result.buy_filled_usdt == pytest.approx(100)
-    assert result.sell_filled_usdt == pytest.approx(100)
+    assert result.target_notional_usdt == 1000
+    assert result.buy_filled_usdt == pytest.approx(1000)
+    assert result.sell_filled_usdt == pytest.approx(1000)
 
 
 @pytest.mark.asyncio
@@ -152,6 +181,7 @@ async def test_validator_blocks_when_multi_level_vwap_erases_edge() -> None:
             signal_validation_notional_usdt=1000,
             signal_slippage_buffer_pct=0.05,
             min_effective_open_pct=0.25,
+            orderbook_depth_band_pct=2.0,
             ticker_collision_symbols=[],
         ),
         card_settings=AstroCardSettings(max_trade_usdt=1000, max_notional=1000),
@@ -161,7 +191,83 @@ async def test_validator_blocks_when_multi_level_vwap_erases_edge() -> None:
     assert result.buy_vwap is not None
     assert result.sell_vwap is not None
     assert result.executable_open_pct < 0.5
-    assert "effective executable edge" in " ".join(result.blockers)
+    assert "实际可成交有效收益" in " ".join(result.blockers)
+
+
+@pytest.mark.asyncio
+async def test_validator_allows_negative_effective_edge_threshold() -> None:
+    buy_book = book(
+        "binance",
+        bids=[(99, 20)],
+        asks=[(100, 5), (101, 20)],
+    )
+    sell_book = book(
+        "okx",
+        bids=[(101, 5), (100.2, 20)],
+        asks=[(102, 20)],
+    )
+    validator = OrderBookDepthValidator(
+        [FakeAdapter("binance", buy_book), FakeAdapter("okx", sell_book)]
+    )
+
+    result = await validator.validate(
+        opportunity(),
+        risk_settings=RiskSettings(
+            signal_validation_notional_usdt=1000,
+            signal_slippage_buffer_pct=0.05,
+            min_effective_open_pct=-1.0,
+            orderbook_depth_band_pct=2.0,
+            ticker_collision_symbols=[],
+        ),
+        card_settings=AstroCardSettings(max_trade_usdt=1000, max_notional=1000),
+    )
+
+    assert result.effective_executable_edge_pct is not None
+    assert result.effective_executable_edge_pct < 0
+    assert result.passed is True
+
+
+@pytest.mark.asyncio
+async def test_validator_ignores_depth_outside_price_band() -> None:
+    buy_book = book(
+        "binance",
+        bids=[(99, 20)],
+        asks=[(100, 5), (100.2, 50)],
+    )
+    sell_book = book(
+        "okx",
+        bids=[(101, 5), (100.7, 50)],
+        asks=[(102, 20)],
+    )
+    validator = OrderBookDepthValidator(
+        [FakeAdapter("binance", buy_book), FakeAdapter("okx", sell_book)]
+    )
+
+    result = await validator.validate(
+        opportunity(),
+        risk_settings=RiskSettings(
+            signal_validation_notional_usdt=1000,
+            orderbook_depth_safety_multiple=2,
+            orderbook_depth_band_pct=0.1,
+            signal_slippage_buffer_pct=0.05,
+            min_effective_open_pct=0.1,
+            ticker_collision_symbols=[],
+        ),
+        card_settings=AstroCardSettings(max_trade_usdt=1000, max_notional=1000),
+    )
+
+    assert result.passed is False
+    assert result.price_band_pct == pytest.approx(0.1)
+    assert result.required_depth_usdt == pytest.approx(2000)
+    assert result.buy_depth_usdt == pytest.approx(500)
+    assert result.sell_depth_usdt == pytest.approx(505)
+    assert result.min_depth_usdt == pytest.approx(500)
+    assert result.buy_filled_usdt == pytest.approx(500)
+    assert result.sell_filled_usdt == pytest.approx(505)
+    assert "买入侧 0.100% 价格带深度不足：500.00/2000.00 USDT" in result.blockers
+    assert "卖出侧 0.100% 价格带深度不足：505.00/2000.00 USDT" in result.blockers
+    assert "买入侧 0.100% 价格带内可成交金额不足：500.00/1000.00 USDT" in result.blockers
+    assert "卖出侧 0.100% 价格带内可成交金额不足：505.00/1000.00 USDT" in result.blockers
 
 
 @pytest.mark.asyncio
@@ -185,7 +291,7 @@ async def test_validator_reports_order_book_request_failures_as_blockers() -> No
     assert result.buy_filled_usdt == 0
     assert result.sell_filled_usdt == 0
     assert result.blockers == [
-        "buy side order book request failed for binance future: TimeoutError"
+        "买入侧订单簿请求失败：binance future，TimeoutError"
     ]
 
 

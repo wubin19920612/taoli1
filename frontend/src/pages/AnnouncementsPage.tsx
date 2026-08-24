@@ -25,6 +25,7 @@ const defaultAnnouncementSettings: AnnouncementSettings = {
   poll_interval_seconds: 300,
   record_exchanges: ["binance", "okx", "bybit", "gate", "bitget", "hyperliquid"],
   alert_exchanges: [],
+  listing_delisting_alerts_enabled: true,
   bootstrap_alerts_enabled: false,
   event_reminders_enabled: true,
   event_reminder_minutes_before: 30
@@ -51,7 +52,9 @@ function normalizeAnnouncementSettings(values?: Partial<AnnouncementSettings>): 
     ...defaultAnnouncementSettings,
     ...(values ?? {}),
     record_exchanges: values?.record_exchanges ?? defaultAnnouncementSettings.record_exchanges,
-    alert_exchanges: values?.alert_exchanges ?? defaultAnnouncementSettings.alert_exchanges
+    alert_exchanges: values?.alert_exchanges ?? defaultAnnouncementSettings.alert_exchanges,
+    listing_delisting_alerts_enabled:
+      values?.listing_delisting_alerts_enabled ?? defaultAnnouncementSettings.listing_delisting_alerts_enabled
   };
 }
 
@@ -178,7 +181,33 @@ function categoryLabel(row: ExchangeAnnouncement): string {
   return row.category || "未分类";
 }
 
+function eventSchedule(row: ExchangeAnnouncement) {
+  return row.event_schedule ?? [];
+}
+
+function eventScheduleTimeRange(row: ExchangeAnnouncement): { first: string; last: string; count: number } | null {
+  const schedule = eventSchedule(row);
+  if (schedule.length === 0) {
+    return null;
+  }
+  const sorted = [...schedule].sort((a, b) => dayjs.utc(a.event_time).valueOf() - dayjs.utc(b.event_time).valueOf());
+  return {
+    first: sorted[0].event_time,
+    last: sorted[sorted.length - 1].event_time,
+    count: sorted.length
+  };
+}
+
 function eventTimeText(row: ExchangeAnnouncement): string {
+  const range = eventScheduleTimeRange(row);
+  if (range && range.count > 1) {
+    const first = formatUtcPlus8(range.first);
+    const last = formatUtcPlus8(range.last);
+    return first === last ? `分批 ${first} UTC+8 (${range.count}项)` : `分批 ${first} - ${last} UTC+8 (${range.count}项)`;
+  }
+  if (range) {
+    return `${formatUtcPlus8(range.first)} UTC+8`;
+  }
   if (row.event_time) {
     return `${formatUtcPlus8(row.event_time)} UTC+8`;
   }
@@ -189,6 +218,24 @@ function eventTimeText(row: ExchangeAnnouncement): string {
     return "公告未给出具体下币时间";
   }
   return "公告未给出具体时间";
+}
+
+function eventScheduleList(row: ExchangeAnnouncement) {
+  const schedule = eventSchedule(row);
+  if (schedule.length === 0) {
+    return "-";
+  }
+  return (
+    <div className="announcement-schedule-list">
+      {schedule.map((item) => (
+        <div key={`${item.symbol}-${item.event_time}`} className="announcement-schedule-item">
+          <Tag color="purple">{item.symbol}</Tag>
+          <Typography.Text>{formatUtcPlus8(item.event_time)} UTC+8</Typography.Text>
+          {item.note ? <Typography.Text type="secondary">{item.note}</Typography.Text> : null}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function symbolTags(values?: string[]) {
@@ -216,7 +263,12 @@ function rowSummary(row: ExchangeAnnouncement): string {
     pieces.push(`市场 ${marketTypeText(row.market_type)}`);
   }
   if (row.event_time) {
-    pieces.push(`事件时间 ${formatUtcPlus8(row.event_time)} UTC+8`);
+    const range = eventScheduleTimeRange(row);
+    if (range && range.count > 1) {
+      pieces.push(`分批 ${formatUtcPlus8(range.first)} - ${formatUtcPlus8(range.last)} UTC+8`);
+    } else {
+      pieces.push(`事件时间 ${formatUtcPlus8(row.event_time)} UTC+8`);
+    }
   }
   if (pieces.length === 0) {
     return row.title;
@@ -270,6 +322,9 @@ function announcementDetails(row: ExchangeAnnouncement) {
         <Descriptions.Item label="类型">{kindTag(row.kind)}</Descriptions.Item>
         <Descriptions.Item label="公告时间">{formatUtcPlus8(row.published_at)} UTC+8</Descriptions.Item>
         <Descriptions.Item label="上/下币时间">{eventTimeText(row)}</Descriptions.Item>
+        {eventSchedule(row).length > 0 ? (
+          <Descriptions.Item label="逐项时间">{eventScheduleList(row)}</Descriptions.Item>
+        ) : null}
         <Descriptions.Item label="抓取时间">{formatUtcPlus8(row.fetched_at)} UTC+8</Descriptions.Item>
         <Descriptions.Item label="交易所">{row.exchange.toUpperCase()}</Descriptions.Item>
         <Descriptions.Item label="分类">{categoryLabel(row)}</Descriptions.Item>
@@ -360,6 +415,7 @@ export function AnnouncementsPage() {
   const tableExchangeOptions = [{ label: "全部交易所", value: "" }, ...exchangeOptions];
   const alertExchangeSet = new Set(settingsPreview.alert_exchanges);
   const recordExchangeSet = new Set(settingsPreview.record_exchanges);
+  const listingDelistingAlertEnabled = settingsPreview.listing_delisting_alerts_enabled;
 
   return (
     <div className="page announcements-page">
@@ -373,6 +429,9 @@ export function AnnouncementsPage() {
             </Typography.Text>
           </div>
           <Space wrap>
+            <Tag color={listingDelistingAlertEnabled ? "green" : "default"}>
+              上/下币告警 {listingDelistingAlertEnabled ? "开启" : "关闭"}
+            </Tag>
             {exchangeOptions.map((item) => (
               <Tag
                 key={item.value}
@@ -389,7 +448,7 @@ export function AnnouncementsPage() {
           type={settingsPreview.enabled ? "info" : "warning"}
           showIcon
           message={settingsPreview.enabled ? "公告轮询已启用" : "公告轮询已关闭"}
-          description="record_exchanges 控制哪些交易所会写入公告记录，alert_exchanges 控制哪些交易所的新公告和事件到点提醒会发飞书。只有能识别出明确上币/下架时间的公告才会触发到点提醒。"
+          description="record_exchanges 控制哪些交易所会写入公告记录，alert_exchanges 控制哪些交易所的新公告和事件到点提醒会发飞书。上/下币公告默认也会同步飞书，可通过上面的开关单独关闭；只有能识别出明确上/下币时间的公告才会触发到点提醒。"
         />
         <Form
           form={form}
@@ -400,6 +459,9 @@ export function AnnouncementsPage() {
         >
           <div className="announcements-settings-grid">
             <Form.Item label="启用公告轮询" name="enabled" valuePropName="checked">
+              <Switch />
+            </Form.Item>
+            <Form.Item label="上/下币公告飞书提醒" name="listing_delisting_alerts_enabled" valuePropName="checked">
               <Switch />
             </Form.Item>
             <Form.Item label="首次启动也告警" name="bootstrap_alerts_enabled" valuePropName="checked">
@@ -462,6 +524,7 @@ export function AnnouncementsPage() {
         loading={loading}
         size="middle"
         tableLayout="fixed"
+        scroll={{ x: 1280 }}
         expandable={{
           expandedRowRender: announcementDetails,
           rowExpandable: () => true

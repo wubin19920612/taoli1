@@ -1,4 +1,4 @@
-import { DeleteOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
+import { CloseOutlined, DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
 import {
   Alert,
   Button,
@@ -11,17 +11,20 @@ import {
   Switch,
   Table,
   Tag,
+  Tooltip,
   Typography,
   message
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   createAlertRule,
   deleteAlertRule,
+  getAstroAutomationSettings,
   getAlertMessageTemplate,
   getAstroCardSettings,
+  getAstroNewListingCardSettings,
   getAstroStatus,
   getLivePilotPreview,
   getLivePilotSettings,
@@ -31,15 +34,20 @@ import {
   restartServiceControl,
   saveDashboardPassword,
   updateAlertMessageTemplate,
+  updateAstroAutomationSettings,
   updateAstroCardSettings,
+  updateAstroNewListingCardSettings,
   updateLivePilotSettings,
+  updateAlertRule,
   updateRiskSettings
 } from "../api/client";
 import type {
   AlertMessageTemplateSettings,
   AlertRule,
+  AstroAutomationSettings,
   AstroCardSettings,
   AstroSdkStatus,
+  AstroNewListingCardSettings,
   LivePilotPreview,
   LivePilotPreviewItem,
   LivePilotSettings,
@@ -101,6 +109,7 @@ const defaultRiskSettings: RiskSettings = {
   max_open_spread_decay_pct: 60,
   signal_validation_notional_usdt: 1000,
   orderbook_depth_safety_multiple: 2,
+  orderbook_depth_band_pct: 0.1,
   min_top_of_book_depth_usdt: 0,
   signal_strategy_notes: "",
   ticker_collision_symbols: ["AIUSDT", "UPUSDT", "LABUSDT"],
@@ -111,7 +120,8 @@ const defaultRiskSettings: RiskSettings = {
       exchange: "gate",
       symbol: "EDGEXUSDT",
       canonical_symbol: "EDGEUSDT",
-      market_type: null
+      market_type: null,
+      price_multiplier: 1
     }
   ]
 };
@@ -125,6 +135,24 @@ const defaultLivePilotSettings: LivePilotSettings = {
   exclude_ss: true,
   create_cards_enabled: true
 };
+
+const defaultAstroCardSettings: AstroCardSettings = {
+  max_trade_usdt: 10,
+  leverage: 1,
+  min_notional: 10,
+  max_notional: 10,
+  open_enabled: false,
+  close_position_buffer_pct: 0.1,
+  unfavorable_funding_weight: 1,
+  close_position_floor_pct: 0
+};
+
+function normalizeAstroCardSettings(values?: Partial<AstroCardSettings>): AstroCardSettings {
+  return {
+    ...defaultAstroCardSettings,
+    ...(values ?? {})
+  };
+}
 
 const alertTemplateOptions: Array<{
   name: Exclude<keyof AlertMessageTemplateSettings, "observation_limit">;
@@ -142,8 +170,8 @@ const alertTemplateOptions: Array<{
   { name: "include_dashboard_link", label: "Dashboard 链接", description: "消息末尾追加面板地址" },
   {
     name: "suppress_when_card_conditions_fail",
-    label: "建卡失败不通知",
-    description: "最新信号或盘口深度不满足建卡条件时，只写告警历史，不发飞书"
+    label: "只报告可建卡告警",
+    description: "最新信号失效会始终静默；开启后，Astro 支持类型或盘口深度不满足建卡条件时也只写历史"
   }
 ];
 
@@ -166,7 +194,7 @@ function ruleFromForm(values: AlertRuleFormValues, defaults: AlertRule): AlertRu
   return {
     ...defaults,
     ...rule,
-    exclude_symbols: [],
+    exclude_symbols: defaults.exclude_symbols,
     min_volume_24h_usdt: (minVolumeK ?? 0) * 1000
   };
 }
@@ -176,8 +204,8 @@ const exchangeOptions = ["binance", "okx", "bybit", "gate", "bitget", "htx", "as
   value: item
 }));
 const marketTypeOptions = [
-  { label: "spot", value: "spot" },
-  { label: "future", value: "future" }
+  { label: "现货", value: "spot" },
+  { label: "合约", value: "future" }
 ];
 const serviceNames: ServiceName[] = ["frontend", "backend"];
 const serviceLabels: Record<ServiceName, string> = {
@@ -235,7 +263,11 @@ function normalizeSymbolAliases(values?: SymbolAlias[]): SymbolAlias[] {
       exchange: (item.exchange ?? "").trim().toLowerCase(),
       symbol: normalizeAliasSymbol(item.symbol),
       canonical_symbol: normalizeAliasSymbol(item.canonical_symbol),
-      market_type: item.market_type ?? null
+      market_type: item.market_type ?? null,
+      price_multiplier:
+        Number.isFinite(Number(item.price_multiplier)) && Number(item.price_multiplier) > 0
+          ? Number(item.price_multiplier)
+          : 1
     }))
     .filter((item) => item.exchange && item.symbol && item.canonical_symbol);
 }
@@ -322,7 +354,7 @@ function buildAlertTemplatePreview(template: AlertMessageTemplateSettings): stri
     blocks.push("Dashboard: https://your-domain.example");
   }
   if (template.suppress_when_card_conditions_fail) {
-    blocks.push("建卡条件过滤：不满足时仅保留告警历史，不发送飞书。");
+    blocks.push("只报告可建卡告警：不满足建卡条件时仅保留告警历史，不发送飞书。");
   }
   return blocks.join("\n\n") || "至少保留一个字段，避免告警内容为空。";
 }
@@ -331,12 +363,17 @@ export function SettingsPage() {
   const [riskForm] = Form.useForm<RiskSettings>();
   const [ruleForm] = Form.useForm<AlertRuleFormValues>();
   const [templateForm] = Form.useForm<AlertMessageTemplateSettings>();
+  const [astroAutomationForm] = Form.useForm<AstroAutomationSettings>();
   const [astroCardForm] = Form.useForm<AstroCardSettings>();
+  const [astroNewListingCardForm] = Form.useForm<AstroNewListingCardSettings>();
   const [livePilotForm] = Form.useForm<LivePilotSettings>();
   const [rules, setRules] = useState<AlertRule[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [ruleDefaults, setRuleDefaults] = useState<AlertRule>(defaultRule);
+  const [editingRule, setEditingRule] = useState<AlertRule | null>(null);
+  const [ruleSaving, setRuleSaving] = useState(false);
+  const ruleEditorRef = useRef<HTMLElement | null>(null);
   const [alertTemplatePreview, setAlertTemplatePreview] =
     useState<AlertMessageTemplateSettings>(defaultAlertMessageTemplate);
   const [serviceControl, setServiceControl] = useState<ServiceControlStatus | null>(null);
@@ -362,12 +399,25 @@ export function SettingsPage() {
         setAstroStatusError(exc instanceof Error ? exc.message : String(exc));
         return null;
       });
-      const [risk, nextRules, nextServiceControl, alertTemplate, astroCard, livePilot, pilotSelection, nextAstroStatus] = await Promise.all([
+      const [
+        risk,
+        nextRules,
+        nextServiceControl,
+        alertTemplate,
+        astroAutomation,
+        astroCard,
+        astroNewListingCard,
+        livePilot,
+        pilotSelection,
+        nextAstroStatus
+      ] = await Promise.all([
         getRiskSettings(),
         listAlertRules(),
         serviceControlRequest,
         getAlertMessageTemplate(),
+        getAstroAutomationSettings(),
         getAstroCardSettings(),
+        getAstroNewListingCardSettings(),
         getLivePilotSettings(),
         getLivePilotPreview(),
         astroStatusRequest
@@ -378,13 +428,16 @@ export function SettingsPage() {
       riskForm.setFieldsValue(riskToForm(risk));
       ruleForm.setFieldsValue(ruleToForm(nextRuleDefaults));
       templateForm.setFieldsValue(nextAlertTemplate);
+      astroAutomationForm.setFieldsValue(astroAutomation);
       astroCardForm.setFieldsValue(astroCard);
+      astroNewListingCardForm.setFieldsValue(astroNewListingCard);
       livePilotForm.setFieldsValue(nextLivePilot);
       setRuleDefaults(nextRuleDefaults);
       setAlertTemplatePreview(nextAlertTemplate);
       setLivePilotPreview(nextLivePilot);
       setLivePilotSelection(pilotSelection);
       setRules(nextRules);
+      setEditingRule(null);
       setServiceControl(nextServiceControl);
       setAstroStatus(nextAstroStatus);
     } catch (exc) {
@@ -397,7 +450,10 @@ export function SettingsPage() {
   useEffect(() => {
     ruleForm.setFieldsValue(ruleToForm(defaultRule));
     templateForm.setFieldsValue(defaultAlertMessageTemplate);
+    astroAutomationForm.setFieldsValue({ alert_auto_create: false });
     livePilotForm.setFieldsValue(defaultLivePilotSettings);
+    astroCardForm.setFieldsValue(defaultAstroCardSettings);
+    astroNewListingCardForm.setFieldsValue(defaultAstroCardSettings);
     void load();
   }, []);
 
@@ -406,7 +462,9 @@ export function SettingsPage() {
     const saved = await updateRiskSettings(riskFromForm(values));
     const nextRuleDefaults = ruleDefaultsForRisk(saved);
     riskForm.setFieldsValue(riskToForm(saved));
-    ruleForm.setFieldsValue(ruleToForm(nextRuleDefaults));
+    if (!editingRule) {
+      ruleForm.setFieldsValue(ruleToForm(nextRuleDefaults));
+    }
     setRuleDefaults(nextRuleDefaults);
     message.success("已保存");
   };
@@ -421,9 +479,23 @@ export function SettingsPage() {
 
   const saveAstroCardDefaults = async () => {
     const values = await astroCardForm.validateFields();
-    const saved = await updateAstroCardSettings(values);
+    const saved = await updateAstroCardSettings(normalizeAstroCardSettings(values));
     astroCardForm.setFieldsValue(saved);
-    message.success("Astro card defaults saved");
+    message.success("Astro 卡片默认参数已保存");
+  };
+
+  const saveAstroNewListingCardDefaults = async () => {
+    const values = await astroNewListingCardForm.validateFields();
+    const saved = await updateAstroNewListingCardSettings(normalizeAstroCardSettings(values));
+    astroNewListingCardForm.setFieldsValue(saved);
+    message.success("新币 Astro 默认参数已保存");
+  };
+
+  const saveAstroAutomation = async () => {
+    const values = await astroAutomationForm.validateFields();
+    const saved = await updateAstroAutomationSettings(values);
+    astroAutomationForm.setFieldsValue(saved);
+    message.success("Astro 自动化设置已保存");
   };
 
   const saveLivePilot = async () => {
@@ -435,12 +507,37 @@ export function SettingsPage() {
     message.success("实盘灰度已保存");
   };
 
-  const createRule = async () => {
-    const values = await ruleForm.validateFields();
-    const saved = await createAlertRule(ruleFromForm(values, ruleDefaults));
-    setRules((current) => [saved, ...current]);
+  const resetRuleEditor = () => {
+    setEditingRule(null);
     ruleForm.setFieldsValue(ruleToForm(ruleDefaults));
-    message.success("已新增");
+  };
+
+  const editRule = (rule: AlertRule) => {
+    setEditingRule(rule);
+    ruleForm.setFieldsValue(ruleToForm(rule));
+    ruleEditorRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+  };
+
+  const saveRule = async () => {
+    setRuleSaving(true);
+    try {
+      const values = await ruleForm.validateFields();
+      const nextRule = ruleFromForm(values, editingRule ?? ruleDefaults);
+      if (editingRule?.id) {
+        const saved = await updateAlertRule(editingRule.id, nextRule);
+        setRules((current) => current.map((item) => (item.id === editingRule.id ? saved : item)));
+        message.success("规则已更新");
+      } else {
+        const saved = await createAlertRule(nextRule);
+        setRules((current) => [saved, ...current]);
+        message.success("规则已新增");
+      }
+      resetRuleEditor();
+    } catch (exc) {
+      message.error(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setRuleSaving(false);
+    }
   };
 
   const removeRule = async (rule: AlertRule) => {
@@ -449,6 +546,9 @@ export function SettingsPage() {
     }
     await deleteAlertRule(rule.id);
     setRules((current) => current.filter((item) => item.id !== rule.id));
+    if (editingRule?.id === rule.id) {
+      resetRuleEditor();
+    }
   };
 
   const restartService = async (service: ServiceName) => {
@@ -464,9 +564,12 @@ export function SettingsPage() {
   };
 
   const livePilotBudget = livePilotPreview.max_symbols * livePilotPreview.notional_per_symbol_usdt;
-  const livePilotRuntimeWarnings = [
+  const astroRuntimeWarnings = [
     astroStatus?.dry_run_only ? "Astro dry-run 当前开启，保存配置后仍不会写入实盘卡片。" : "",
     astroStatus && !astroStatus.configured ? "Astro SDK 未配置，无法提交卡片。" : "",
+    astroStatus && astroStatus.configured && !astroStatus.verify_tls
+      ? "Astro TLS 证书校验已关闭，仅建议用于可信内网或临时排障。"
+      : "",
     astroStatusError ? `Astro 状态读取失败：${astroStatusError}` : ""
   ].filter(Boolean);
 
@@ -478,10 +581,28 @@ export function SettingsPage() {
     { title: "连续命中", dataIndex: "consecutive_hits" },
     { title: "冷却", dataIndex: "cooldown_seconds", render: (value: number) => `${value}s` },
     {
-      title: "",
-      width: 72,
+      title: "操作",
+      width: 104,
       render: (_, row) => (
-        <Button icon={<DeleteOutlined />} type="text" danger onClick={() => void removeRule(row)} />
+        <Space size={4}>
+          <Tooltip title="编辑规则">
+            <Button
+              icon={<EditOutlined />}
+              type="text"
+              aria-label={`编辑规则 ${row.name}`}
+              onClick={() => editRule(row)}
+            />
+          </Tooltip>
+          <Tooltip title="删除规则">
+            <Button
+              icon={<DeleteOutlined />}
+              type="text"
+              danger
+              aria-label={`删除规则 ${row.name}`}
+              onClick={() => void removeRule(row)}
+            />
+          </Tooltip>
+        </Space>
       )
     }
   ];
@@ -594,18 +715,24 @@ export function SettingsPage() {
               <Typography.Title level={5}>Signal strategy（信号策略）</Typography.Title>
               <Typography.Paragraph type="secondary">
                 信号策略用于判断告警机会是否真的适合创建 Astro 卡片。系统会在创建卡片前拉取两边交易所的多档 order book，
-                按计划仓位金额模拟买入侧 asks 和卖出侧 bids 的可成交 VWAP，避免只看瞬时最优价导致价差一买就消失。
+                按盘口验证金额模拟买入侧 asks 和卖出侧 bids 的可成交 VWAP，避免只看瞬时最优价导致价差一买就消失。
               </Typography.Paragraph>
               <Typography.Paragraph type="secondary">
-                最小验证金额是盘口深度校验的底线，默认 1000 USDT；实际校验金额会取卡片仓位价值、手动填写仓位价值、
-                最小验证金额三者中的较大值。若盘口不足、成交后价差不够、或价差衰减太快，系统会跳过创建卡片。
+                最小验证金额是创建卡片前的盘口试算金额，默认 1000 USDT；不会使用 Astro 卡片的总仓位金额或手动建卡金额。
+                深度按最优价附近的价格带累计，例如 0.1% 价格带内有多少挂单。
+                若价格带深度不足、成交后价差不够、或价差衰减太快，系统会跳过创建卡片。
               </Typography.Paragraph>
             </div>
             <Form.Item label="信号滑点缓冲百分比 (Signal slippage buffer pct)" name="signal_slippage_buffer_pct" rules={[{ required: true }]}>
               <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
             </Form.Item>
-            <Form.Item label="最低有效开仓收益率 (Minimum effective open pct)" name="min_effective_open_pct" rules={[{ required: true }]}>
-              <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
+            <Form.Item
+              label="最低有效开仓收益率 (Minimum effective open pct)"
+              name="min_effective_open_pct"
+              rules={[{ required: true }]}
+              help="允许填负数；例如 -1 表示实际可成交有效收益低于 -1% 才拦截，填更低可基本关闭这项拦截。"
+            >
+              <InputNumber step={0.01} suffix="%" className="wide-input" />
             </Form.Item>
             <Form.Item label="最大开仓价差衰减百分比 (Max open spread decay pct)" name="max_open_spread_decay_pct" rules={[{ required: true }]}>
               <InputNumber min={0} max={100} step={1} suffix="%" className="wide-input" />
@@ -616,7 +743,10 @@ export function SettingsPage() {
             <Form.Item label="盘口深度安全倍数 (Depth safety multiple)" name="orderbook_depth_safety_multiple" rules={[{ required: true }]}>
               <InputNumber min={0} step={0.5} className="wide-input" />
             </Form.Item>
-            <Form.Item label="最小顶档盘口深度 USDT (Minimum top-of-book depth USDT)" name="min_top_of_book_depth_usdt" rules={[{ required: true }]}>
+            <Form.Item label="开仓深度价格带 % (Order book depth band pct)" name="orderbook_depth_band_pct" rules={[{ required: true }]}>
+              <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
+            </Form.Item>
+            <Form.Item label="最小价格带深度 USDT (Minimum band depth USDT)" name="min_top_of_book_depth_usdt" rules={[{ required: true }]}>
               <InputNumber min={0} step={10} className="wide-input" />
             </Form.Item>
             <Form.Item
@@ -643,48 +773,71 @@ export function SettingsPage() {
           <Form.Item label="忽略交易所" name="ignored_exchanges">
             <Select mode="multiple" allowClear options={exchangeOptions} />
           </Form.Item>
-
           <Form.List name="symbol_aliases">
             {(fields, { add, remove }) => (
               <div className="symbol-alias-list">
                 <Space className="symbol-alias-header" align="center" wrap>
-                  <Typography.Title level={5}>Symbol aliases</Typography.Title>
+                  <Typography.Title level={5}>全局币名映射</Typography.Title>
+                  <Tag color="blue">全部页面生效</Tag>
                   <Button
                     type="dashed"
                     icon={<PlusOutlined />}
-                    onClick={() => add({ exchange: "gate", symbol: "", canonical_symbol: "", market_type: null })}
+                    onClick={() =>
+                      add({
+                        exchange: "gate",
+                        symbol: "",
+                        canonical_symbol: "",
+                        market_type: null,
+                        price_multiplier: 1
+                      })
+                    }
                   >
-                    Add alias
+                    添加映射
                   </Button>
                 </Space>
                 {fields.map((field) => (
                   <Space key={field.key} align="start" wrap className="symbol-alias-row">
-                    <Form.Item label="Exchange" name={[field.name, "exchange"]} rules={[{ required: true }]}>
+                    <Form.Item
+                      label="交易所"
+                      name={[field.name, "exchange"]}
+                      rules={[{ required: true }]}
+                    >
                       <Select options={exchangeOptions} className="alias-exchange-input" />
                     </Form.Item>
-                    <Form.Item label="Exchange symbol" name={[field.name, "symbol"]} rules={[{ required: true }]}>
-                      <Input placeholder="EDGEXUSDT" className="alias-symbol-input" />
+                    <Form.Item
+                      label="原始名"
+                      name={[field.name, "symbol"]}
+                      rules={[{ required: true }]}
+                    >
+                      <Input placeholder="NEX" className="alias-symbol-input" />
                     </Form.Item>
                     <Form.Item
-                      label="Canonical symbol"
+                      label="映射名"
                       name={[field.name, "canonical_symbol"]}
                       rules={[{ required: true }]}
                     >
-                      <Input placeholder="EDGEUSDT" className="alias-symbol-input" />
+                      <Input placeholder="10000NEX" className="alias-symbol-input" />
                     </Form.Item>
-                    <Form.Item label="Market type" name={[field.name, "market_type"]}>
+                    <Form.Item label="类型" name={[field.name, "market_type"]}>
                       <Select
                         allowClear
                         options={marketTypeOptions}
-                        placeholder="all"
+                        placeholder="全部"
                         className="alias-market-type-input"
                       />
+                    </Form.Item>
+                    <Form.Item
+                      label="价格汇率"
+                      name={[field.name, "price_multiplier"]}
+                      rules={[{ required: true, type: "number", min: 0.000001 }]}
+                    >
+                      <InputNumber min={0.000001} step={1} className="alias-symbol-input" />
                     </Form.Item>
                     <Button
                       type="text"
                       danger
                       icon={<DeleteOutlined />}
-                      aria-label="Remove alias"
+                      aria-label="删除映射"
                       onClick={() => remove(field.name)}
                     />
                   </Space>
@@ -698,61 +851,147 @@ export function SettingsPage() {
         </Form>
       </section>
       <section className="panel">
-        <Typography.Title level={4}>Astro card defaults</Typography.Title>
-        <Form form={astroCardForm} layout="vertical" disabled={loading} onFinish={saveAstroCardDefaults}>
-          <div className="form-grid">
-            <Form.Item label="Position value USDT" name="max_trade_usdt" rules={[{ required: true }]}>
-              <InputNumber min={0.01} step={1} className="wide-input" />
-            </Form.Item>
-            <Form.Item label="Leverage" name="leverage" rules={[{ required: true }]}>
-              <InputNumber min={1} step={1} className="wide-input" />
-            </Form.Item>
-            <Form.Item label="Minimum notional USDT" name="min_notional" rules={[{ required: true }]}>
-              <InputNumber min={0} step={1} className="wide-input" />
-            </Form.Item>
-            <Form.Item label="Maximum notional USDT" name="max_notional" rules={[{ required: true }]}>
-              <InputNumber min={0.01} step={1} className="wide-input" />
-            </Form.Item>
-            <Form.Item label="Open after create" name="open_enabled" valuePropName="checked">
-              <Switch checkedChildren="on" unCheckedChildren="off" />
-            </Form.Item>
-            <Form.Item label="Close buffer pct" name="close_position_buffer_pct" rules={[{ required: true }]}>
-              <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
-            </Form.Item>
-            <Form.Item label="Unfavorable funding weight" name="unfavorable_funding_weight" rules={[{ required: true }]}>
-              <InputNumber min={0} step={0.1} className="wide-input" />
-            </Form.Item>
-            <Form.Item label="Close floor pct" name="close_position_floor_pct" rules={[{ required: true }]}>
-              <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
-            </Form.Item>
-          </div>
-          <Button type="primary" htmlType="submit" icon={<SaveOutlined />}>
-            Save Astro card defaults
-          </Button>
-        </Form>
-      </section>
-      <section className="panel panel-wide">
-        <Typography.Title level={4}>实盘灰度</Typography.Title>
+        <Typography.Title level={4}>Astro 自动化</Typography.Title>
         <Alert
           className="rule-guide"
-          type={livePilotPreview.enabled ? "warning" : "info"}
+          type="info"
           showIcon
-          message={livePilotPreview.enabled ? "Live Pilot 已配置为启用" : "Live Pilot 未启用"}
-          description={
-            livePilotPreview.enabled
-              ? "告警循环会先从实时机会中选最多 10 个标的，同标的只保留一个路线；默认优先 Hyper，跳过 SS、强负资金和风险候选，然后按综合开仓收益排序。"
-              : "开启后用于小资金实盘灰度，不影响手动 Astro 建卡的安全默认。"
-          }
+          message="控制告警是否自动创建 Astro 卡片"
+          description="开启后，命中告警会继续经过最新信号、订单簿、卡片参数和重复卡片校验；全部通过后才会写入 Astro。"
         />
-        {livePilotRuntimeWarnings.length > 0 ? (
+        {astroRuntimeWarnings.length > 0 ? (
           <Alert
             className="rule-guide"
             type="warning"
             showIcon
             message="运行状态提示"
-            description={livePilotRuntimeWarnings.join(" ")}
+            description={astroRuntimeWarnings.join(" ")}
           />
         ) : null}
+        <Form
+          form={astroAutomationForm}
+          layout="vertical"
+          disabled={loading}
+          onFinish={saveAstroAutomation}
+        >
+          <Form.Item
+            label="告警自动创建 Astro 卡片"
+            name="alert_auto_create"
+            valuePropName="checked"
+            help="关闭时只会记录告警和通知，不会自动写入 Astro 卡片。"
+          >
+            <Switch checkedChildren="开启" unCheckedChildren="关闭" />
+          </Form.Item>
+          <Button type="primary" htmlType="submit" icon={<SaveOutlined />}>
+            保存 Astro 自动化
+          </Button>
+        </Form>
+      </section>
+      <section className="panel">
+        <Typography.Title level={4}>Astro 卡片默认参数</Typography.Title>
+        <Form
+          name="astro-card-defaults"
+          form={astroCardForm}
+          layout="vertical"
+          disabled={loading}
+          onFinish={saveAstroCardDefaults}
+        >
+          <div className="form-grid">
+            <Form.Item label="仓位金额 USDT" name="max_trade_usdt" rules={[{ required: true }]}>
+              <InputNumber min={0.01} step={1} className="wide-input" />
+            </Form.Item>
+            <Form.Item label="杠杆倍数" name="leverage" rules={[{ required: true }]}>
+              <InputNumber min={1} step={1} className="wide-input" />
+            </Form.Item>
+            <Form.Item label="最小名义金额 USDT" name="min_notional" rules={[{ required: true }]}>
+              <InputNumber min={0} step={1} className="wide-input" />
+            </Form.Item>
+            <Form.Item label="最大名义金额 USDT" name="max_notional" rules={[{ required: true }]}>
+              <InputNumber min={0.01} step={1} className="wide-input" />
+            </Form.Item>
+            <Form.Item label="创建后允许开仓" name="open_enabled" valuePropName="checked">
+              <Switch checkedChildren="开启" unCheckedChildren="关闭" />
+            </Form.Item>
+            <Form.Item label="平仓缓冲比例" name="close_position_buffer_pct" rules={[{ required: true }]}>
+              <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
+            </Form.Item>
+            <Form.Item label="不利资金费权重" name="unfavorable_funding_weight" rules={[{ required: true }]}>
+              <InputNumber min={0} step={0.1} className="wide-input" />
+            </Form.Item>
+            <Form.Item label="平仓下限比例" name="close_position_floor_pct" rules={[{ required: true }]}>
+              <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
+            </Form.Item>
+          </div>
+          <Button type="primary" htmlType="submit" icon={<SaveOutlined />}>
+            保存 Astro 卡片默认参数
+          </Button>
+        </Form>
+      </section>
+      <section className="panel">
+        <Typography.Title level={4}>新币 Astro 默认参数</Typography.Title>
+        <Alert
+          className="rule-guide"
+          type="info"
+          showIcon
+          message="未单独保存前跟随 Astro 卡片默认参数"
+          description="保存后，新币上市告警自动创建的 Astro 卡片会使用这里的仓位、杠杆、名义金额和平仓参数；新币告警仍会按规则直接创建为开启卡片。"
+        />
+        <Form
+          name="astro-new-listing-card-defaults"
+          form={astroNewListingCardForm}
+          layout="vertical"
+          disabled={loading}
+          onFinish={saveAstroNewListingCardDefaults}
+        >
+          <div className="form-grid">
+            <Form.Item label="仓位金额 USDT" name="max_trade_usdt" rules={[{ required: true }]}>
+              <InputNumber min={0.01} step={1} className="wide-input" />
+            </Form.Item>
+            <Form.Item label="杠杆倍数" name="leverage" rules={[{ required: true }]}>
+              <InputNumber min={1} step={1} className="wide-input" />
+            </Form.Item>
+            <Form.Item label="最小名义金额 USDT" name="min_notional" rules={[{ required: true }]}>
+              <InputNumber min={0} step={1} className="wide-input" />
+            </Form.Item>
+            <Form.Item label="最大名义金额 USDT" name="max_notional" rules={[{ required: true }]}>
+              <InputNumber min={0.01} step={1} className="wide-input" />
+            </Form.Item>
+            <Form.Item
+              label="创建后允许开仓"
+              name="open_enabled"
+              valuePropName="checked"
+              help="新币上市告警会强制开启，这里保留同一套卡片参数结构。"
+            >
+              <Switch checkedChildren="开启" unCheckedChildren="关闭" />
+            </Form.Item>
+            <Form.Item label="平仓缓冲比例" name="close_position_buffer_pct" rules={[{ required: true }]}>
+              <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
+            </Form.Item>
+            <Form.Item label="不利资金费权重" name="unfavorable_funding_weight" rules={[{ required: true }]}>
+              <InputNumber min={0} step={0.1} className="wide-input" />
+            </Form.Item>
+            <Form.Item label="平仓下限比例" name="close_position_floor_pct" rules={[{ required: true }]}>
+              <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
+            </Form.Item>
+          </div>
+          <Button type="primary" htmlType="submit" icon={<SaveOutlined />}>
+            保存新币 Astro 默认参数
+          </Button>
+        </Form>
+      </section>
+      <section className="panel panel-wide">
+        <Typography.Title level={4}>正差价正费率实盘实验</Typography.Title>
+        <Alert
+          className="rule-guide"
+          type={livePilotPreview.enabled ? "warning" : "info"}
+          showIcon
+          message={livePilotPreview.enabled ? "实盘实验已启用" : "实盘实验未启用"}
+          description={
+            livePilotPreview.enabled
+              ? "常规告警、飞书通知和普通自动建卡保持原逻辑；实验只从其中挑选少量候选，同标的仅保留一条最优路线，并使用下面的实验仓位与启动状态。"
+              : "开启后用于小资金实盘测试；未开启时不会新增任何实验建卡动作。"
+          }
+        />
         <Form
           form={livePilotForm}
           layout="vertical"
@@ -779,17 +1018,22 @@ export function SettingsPage() {
             </div>
           </div>
           <div className="form-grid">
-            <Form.Item label="启用实盘灰度" name="enabled" valuePropName="checked">
+            <Form.Item label="启用实盘实验" name="enabled" valuePropName="checked">
               <Switch />
             </Form.Item>
-            <Form.Item label="卡片默认开启" name="create_cards_enabled" valuePropName="checked">
+            <Form.Item
+              label="实验卡片默认启动"
+              name="create_cards_enabled"
+              valuePropName="checked"
+              help="只影响实验挑选出的候选；普通自动建卡仍遵循 Astro 卡片默认参数。"
+            >
               <Switch />
             </Form.Item>
             <Form.Item
               label="屏蔽 SS（现货-现货）"
               name="exclude_ss"
               valuePropName="checked"
-              help="默认开启；开启后 SS 不进入实盘灰度选标和自动建卡。"
+              help="默认开启；开启后 SS 不进入实验候选和实验建卡。"
             >
               <Switch />
             </Form.Item>
@@ -800,10 +1044,10 @@ export function SettingsPage() {
               <InputNumber min={0.01} step={1} className="wide-input" />
             </Form.Item>
             <Form.Item
-              label="强负资金跳过阈值"
+              label="最小下周期资金边际"
               name="min_next_funding_edge_pct"
               rules={[{ required: true }]}
-              help="下一资金周期净资金差低于该值的机会不会进入本次灰度。"
+              help="填正数即可只保留正资金边际；低于该值的机会不会进入实验。"
             >
               <InputNumber step={0.01} suffix="%" className="wide-input" />
             </Form.Item>
@@ -812,7 +1056,7 @@ export function SettingsPage() {
             </Form.Item>
           </div>
           <div className="rule-note">
-            实盘灰度只影响告警自动创建 Astro 卡片：同一标的多条告警时先按套利类型和风控过滤，再选 Hyper 路线与综合开仓收益；启用后盘口验证金额使用每标的资金。
+            实验不会截流常规告警：所有原有规则仍照常告警、通知和建卡。实验只对命中的正资金候选额外使用实验资金和启动状态；同标的多条路线时，实验路线优先，避免普通卡片抢占同名标的。
           </div>
           <div className="live-pilot-preview">
             <div className="live-pilot-preview-head">
@@ -836,10 +1080,11 @@ export function SettingsPage() {
               pagination={false}
               size="small"
               tableLayout="fixed"
+              scroll={{ x: 920 }}
             />
           </div>
           <Button type="primary" htmlType="submit" icon={<SaveOutlined />}>
-            保存实盘灰度
+            保存实盘实验
           </Button>
         </Form>
       </section>
@@ -893,18 +1138,28 @@ export function SettingsPage() {
           </Button>
         </Form>
       </section>
-      <section className="panel">
-        <Typography.Title level={4}>新增告警规则</Typography.Title>
+      <section className="panel" ref={ruleEditorRef}>
+        <Typography.Title level={4}>{editingRule ? "编辑告警规则" : "新增告警规则"}</Typography.Title>
+        {editingRule ? (
+          <Alert
+            className="rule-guide"
+            type="warning"
+            showIcon
+            message={`正在编辑：${editingRule.name}`}
+            description="保存后立即更新现有规则，不会创建重复规则。"
+          />
+        ) : null}
         <Alert className="rule-guide" type="info" showIcon message="规则说明" description={alertRuleGuide} />
         <Form
+          name="alert-rule-editor"
           form={ruleForm}
           layout="vertical"
-          disabled={loading}
+          disabled={loading || ruleSaving}
           initialValues={ruleToForm(ruleDefaults)}
-          onFinish={createRule}
+          onFinish={saveRule}
         >
           <div className="form-grid">
-            <Form.Item label="规则名称" name="name" rules={[{ required: true }]} help={alertRuleFieldHelp.name}>
+            <Form.Item label="告警规则名称" name="name" rules={[{ required: true }]} help={alertRuleFieldHelp.name}>
               <Input />
             </Form.Item>
             <Form.Item label="启用" name="enabled" valuePropName="checked" help={alertRuleFieldHelp.enabled}>
@@ -982,9 +1237,22 @@ export function SettingsPage() {
           <Form.Item label="排除风险标签" name="excluded_risk_labels">
             <Select mode="multiple" options={riskSelectOptions} />
           </Form.Item>
-          <Button type="primary" htmlType="submit">
-            新增规则
-          </Button>
+          <Space wrap>
+            <Button
+              type="primary"
+              htmlType="submit"
+              icon={editingRule ? <SaveOutlined /> : <PlusOutlined />}
+              loading={ruleSaving}
+              aria-label={editingRule ? "保存修改" : "新增规则"}
+            >
+              {editingRule ? "保存修改" : "新增规则"}
+            </Button>
+            {editingRule ? (
+              <Button icon={<CloseOutlined />} onClick={resetRuleEditor} disabled={ruleSaving}>
+                取消编辑
+              </Button>
+            ) : null}
+          </Space>
         </Form>
       </section>
       <section className="panel panel-wide">
@@ -996,6 +1264,7 @@ export function SettingsPage() {
           rowKey={(row) => row.id ?? row.name}
           pagination={false}
           size="middle"
+          scroll={{ x: 980 }}
         />
       </section>
       <PhonePriceAlertsPanel />

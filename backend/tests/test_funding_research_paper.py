@@ -9,6 +9,7 @@ from app.services.funding_research.engine import build_candidate
 from app.services.funding_research.paper import (
     close_paper_trade,
     create_paper_trade_from_candidate,
+    mark_to_market_paper_trade,
     open_paper_trades_for_candidates,
     reconcile_open_paper_trades,
     summarize_paper_trades,
@@ -56,9 +57,34 @@ def test_create_and_close_paper_trade_from_candidate() -> None:
     closed = close_paper_trade(trade, closing_candidate, exit_reason="settlement")
 
     assert trade.status == "OPEN"
+    assert trade.primary_opportunity_type == candidate.primary_opportunity_type
+    assert trade.opportunity_types == candidate.opportunity_types
     assert closed.status == "CLOSED"
     assert closed.realized_basis_change_pct == pytest.approx(0.5)
     assert closed.realized_pnl_pct is not None
+    assert closed.unrealized_pnl_pct == pytest.approx(closed.realized_pnl_pct)
+
+
+def test_mark_to_market_paper_trade_tracks_unrealized_pnl() -> None:
+    candidate = trade_candidate()
+    trade = create_paper_trade_from_candidate(
+        candidate,
+        opened_at=datetime(2026, 6, 1, 8, 0, tzinfo=UTC),
+    )
+    current_candidate = candidate.model_copy(
+        update={"basis_diff_pct": candidate.basis_diff_pct - 0.25}
+    )
+
+    marked = mark_to_market_paper_trade(
+        trade,
+        current_candidate,
+        observed_at=datetime(2026, 6, 1, 8, 15, tzinfo=UTC),
+    )
+
+    assert marked.status == "OPEN"
+    assert marked.unrealized_basis_change_pct == pytest.approx(0.25)
+    assert marked.unrealized_pnl_pct == pytest.approx(0.25 - trade.estimated_cost_pct)
+    assert marked.max_adverse_ev_pct == pytest.approx(marked.unrealized_pnl_pct)
 
 
 @pytest.mark.asyncio
@@ -137,3 +163,5 @@ def test_summarize_paper_trades() -> None:
     assert summary.winners == 1
     assert summary.win_rate_pct == 100
     assert summary.average_realized_pnl_pct == pytest.approx(closed.realized_pnl_pct)
+    assert summary.by_opportunity_type
+    assert summary.by_opportunity_type[0].closed_trades == 1

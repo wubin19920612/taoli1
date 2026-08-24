@@ -29,6 +29,8 @@ class AstroSdkStatus(BaseModel):
     base_url: str
     admin_prefix: str
     api_key_configured: bool
+    verify_tls: bool = True
+    ca_bundle_configured: bool = False
     list_path: str
     pair_path: str
     message_path: str

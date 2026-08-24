@@ -28,6 +28,7 @@ class SymbolAlias(BaseModel):
     symbol: str
     canonical_symbol: str
     market_type: MarketType | None = None
+    price_multiplier: float = Field(default=1.0, gt=0)
 
     @field_validator("exchange")
     @classmethod
@@ -49,6 +50,7 @@ def default_symbol_aliases() -> list[SymbolAlias]:
             exchange="gate",
             symbol="EDGEXUSDT",
             canonical_symbol="EDGEUSDT",
+            price_multiplier=1,
         )
     ]
 
@@ -61,10 +63,11 @@ class RiskSettings(BaseModel):
     mark_index_deviation_pct: float = Field(default=1.0, ge=0)
     funding_against_pct: float = Field(default=0.01, ge=0)
     signal_slippage_buffer_pct: float = Field(default=0.05, ge=0)
-    min_effective_open_pct: float = Field(default=0.05, ge=0)
+    min_effective_open_pct: float = 0.05
     max_open_spread_decay_pct: float = Field(default=60.0, ge=0, le=100)
     signal_validation_notional_usdt: float = Field(default=1000, ge=0)
     orderbook_depth_safety_multiple: float = Field(default=2, ge=0)
+    orderbook_depth_band_pct: float = Field(default=0.1, ge=0)
     min_top_of_book_depth_usdt: float = Field(default=0, ge=0)
     signal_strategy_notes: str = ""
     ticker_collision_symbols: list[str] = Field(default_factory=lambda: ["AIUSDT", "UPUSDT", "LABUSDT"])
@@ -98,6 +101,10 @@ class AstroCardSettings(BaseModel):
     close_position_floor_pct: float = Field(default=0, ge=0)
 
 
+class AstroAutomationSettings(BaseModel):
+    alert_auto_create: bool = False
+
+
 class LivePilotSettings(BaseModel):
     enabled: bool = False
     max_symbols: int = Field(default=10, ge=1, le=100)
@@ -106,6 +113,18 @@ class LivePilotSettings(BaseModel):
     prefer_hyperliquid: bool = True
     exclude_ss: bool = True
     create_cards_enabled: bool = True
+
+
+class MinuteSignalSettings(BaseModel):
+    hours: int = Field(default=4, ge=1, le=24)
+    max_symbols: int = Field(default=30, ge=5, le=100)
+    min_volume_24h_usdt: float = Field(default=100_000, ge=0)
+    alert_cooldown_minutes: int = Field(default=60, ge=1, le=10_080)
+    # 入场时不希望 Alpha 现货明显贵于合约；45 bps 约等于 0.45%，接近平价。
+    max_entry_basis_bps: float = Field(default=45.0, ge=-10_000, le=10_000)
+    # 如果现货仍高于合约，要求合约相对指数有负溢价，否则多半只是持久基差。
+    require_negative_premium_when_spot_above: bool = True
+    max_premium_when_spot_above_bps: float = Field(default=-5.0, le=0)
 
 
 class LivePilotPreviewItem(BaseModel):

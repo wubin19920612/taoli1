@@ -29,7 +29,18 @@ class FeishuConfig:
 class FeishuNotifier:
     def __init__(self, config: FeishuConfig, client: httpx.AsyncClient | None = None):
         self.config = config
-        self.client = client or httpx.AsyncClient(timeout=10)
+        self._client = client
+        self._owns_client = client is None
+
+    @property
+    def client(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(timeout=10)
+        return self._client
+
+    async def aclose(self) -> None:
+        if self._client is not None and self._owns_client:
+            await self._client.aclose()
 
     async def send_alert(
         self,

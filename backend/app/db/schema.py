@@ -52,6 +52,7 @@ async def _ensure_exchange_announcement_columns(db: aiosqlite.Connection) -> Non
         "symbols_json": "TEXT NOT NULL DEFAULT '[]'",
         "market_type": "TEXT",
         "event_time": "TEXT",
+        "event_schedule_json": "TEXT NOT NULL DEFAULT '[]'",
         "summary": "TEXT",
         "event_reminder_status": "TEXT NOT NULL DEFAULT 'not_applicable'",
         "event_reminder_sent_at": "TEXT",
@@ -60,6 +61,22 @@ async def _ensure_exchange_announcement_columns(db: aiosqlite.Connection) -> Non
         if name in existing:
             continue
         await db.execute(f"ALTER TABLE exchange_announcements ADD COLUMN {name} {ddl}")
+
+
+async def _ensure_second_level_sample_columns(db: aiosqlite.Connection) -> None:
+    cursor = await db.execute("PRAGMA table_info(second_level_market_samples)")
+    rows = await cursor.fetchall()
+    existing = {row["name"] for row in rows}
+    columns: dict[str, str] = {
+        "spot_bid_size": "REAL",
+        "spot_ask_size": "REAL",
+        "future_bid_size": "REAL",
+        "future_ask_size": "REAL",
+    }
+    for name, ddl in columns.items():
+        if name in existing:
+            continue
+        await db.execute(f"ALTER TABLE second_level_market_samples ADD COLUMN {name} {ddl}")
 
 
 async def initialize_schema(db: aiosqlite.Connection) -> None:
@@ -212,6 +229,7 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
           symbols_json TEXT NOT NULL DEFAULT '[]',
           market_type TEXT,
           event_time TEXT,
+          event_schedule_json TEXT NOT NULL DEFAULT '[]',
           summary TEXT,
           published_at TEXT NOT NULL,
           fetched_at TEXT NOT NULL,
@@ -335,9 +353,241 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
           ON funding_research_paper_trades(symbol, opened_at DESC);
         CREATE INDEX IF NOT EXISTS idx_funding_research_paper_pair_status
           ON funding_research_paper_trades(symbol, long_exchange, short_exchange, status);
+
+        CREATE TABLE IF NOT EXISTS second_level_market_samples (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          observed_at TEXT NOT NULL,
+          exchange TEXT NOT NULL,
+          symbol TEXT NOT NULL,
+          status TEXT NOT NULL,
+          spot_bid REAL,
+          spot_ask REAL,
+          spot_bid_size REAL,
+          spot_ask_size REAL,
+          spot_mid REAL,
+          spot_last REAL,
+          future_bid REAL,
+          future_ask REAL,
+          future_bid_size REAL,
+          future_ask_size REAL,
+          future_mid REAL,
+          future_last REAL,
+          mark_price REAL,
+          index_price REAL,
+          mark_premium_pct REAL,
+          mid_premium_pct REAL,
+          funding_rate_pct REAL,
+          raw_spot_symbol TEXT,
+          raw_future_symbol TEXT,
+          latency_ms REAL,
+          error TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_second_level_samples_symbol_time
+          ON second_level_market_samples(symbol, observed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_second_level_samples_exchange_time
+          ON second_level_market_samples(exchange, observed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_second_level_samples_pair_time
+          ON second_level_market_samples(symbol, exchange, observed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_second_level_samples_time
+          ON second_level_market_samples(observed_at DESC);
+
+        CREATE TABLE IF NOT EXISTS second_level_index_component_samples (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          observed_at TEXT NOT NULL,
+          target_exchange TEXT NOT NULL,
+          symbol TEXT NOT NULL,
+          component_source TEXT NOT NULL,
+          component_symbol TEXT NOT NULL,
+          weight_pct REAL,
+          component_price REAL,
+          contribution_price REAL,
+          official_index_price REAL,
+          reconstructed_index_price REAL,
+          mark_price REAL,
+          future_mid REAL,
+          mark_premium_pct REAL,
+          funding_rate_pct REAL,
+          latency_ms REAL,
+          error TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_second_level_component_samples_symbol_time
+          ON second_level_index_component_samples(symbol, observed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_second_level_component_samples_target_time
+          ON second_level_index_component_samples(target_exchange, observed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_second_level_component_samples_component_time
+          ON second_level_index_component_samples(
+            target_exchange, symbol, component_source, component_symbol, observed_at DESC
+          );
+        CREATE INDEX IF NOT EXISTS idx_second_level_component_samples_time
+          ON second_level_index_component_samples(observed_at DESC);
+
+        CREATE TABLE IF NOT EXISTS new_listing_watchlist (
+          id TEXT PRIMARY KEY,
+          payload TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS new_listing_spread_samples (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          watch_id TEXT NOT NULL,
+          observed_at TEXT NOT NULL,
+          symbol TEXT NOT NULL,
+          market_type TEXT NOT NULL,
+          buy_exchange TEXT NOT NULL,
+          sell_exchange TEXT NOT NULL,
+          buy_bid REAL,
+          buy_ask REAL,
+          buy_bid_size REAL,
+          buy_ask_size REAL,
+          sell_bid REAL,
+          sell_ask REAL,
+          sell_bid_size REAL,
+          sell_ask_size REAL,
+          buy_price REAL NOT NULL,
+          sell_price REAL NOT NULL,
+          raw_spread_pct REAL NOT NULL,
+          net_spread_pct REAL NOT NULL,
+          executable_notional_usdt REAL,
+          buy_latency_ms REAL,
+          sell_latency_ms REAL,
+          alert_level TEXT NOT NULL,
+          alert_triggered INTEGER NOT NULL DEFAULT 0,
+          no_alert_reason TEXT,
+          risk_labels_json TEXT NOT NULL DEFAULT '[]',
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (watch_id) REFERENCES new_listing_watchlist(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_new_listing_samples_symbol_time
+          ON new_listing_spread_samples(symbol, observed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_new_listing_samples_watch_time
+          ON new_listing_spread_samples(watch_id, observed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_new_listing_samples_pair_time
+          ON new_listing_spread_samples(symbol, buy_exchange, sell_exchange, observed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_new_listing_samples_time
+          ON new_listing_spread_samples(observed_at DESC);
+
+        CREATE TABLE IF NOT EXISTS new_listing_alert_events (
+          id TEXT PRIMARY KEY,
+          watch_id TEXT NOT NULL,
+          symbol TEXT NOT NULL,
+          market_type TEXT NOT NULL,
+          level TEXT NOT NULL,
+          buy_exchange TEXT NOT NULL,
+          sell_exchange TEXT NOT NULL,
+          net_spread_pct REAL NOT NULL,
+          raw_spread_pct REAL NOT NULL,
+          executable_notional_usdt REAL,
+          message TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY (watch_id) REFERENCES new_listing_watchlist(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_new_listing_events_symbol_time
+          ON new_listing_alert_events(symbol, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_new_listing_events_watch_time
+          ON new_listing_alert_events(watch_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_new_listing_events_time
+          ON new_listing_alert_events(created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS negative_basis_watchlist (
+          id TEXT PRIMARY KEY,
+          payload TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS negative_basis_signal_samples (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          watch_id TEXT NOT NULL,
+          observed_at TEXT NOT NULL,
+          symbol TEXT NOT NULL,
+          spot_exchange TEXT NOT NULL,
+          future_exchange TEXT NOT NULL,
+          signal_level TEXT NOT NULL,
+          score REAL NOT NULL,
+          spot_premium_pct REAL,
+          spot_price REAL,
+          future_price REAL,
+          spot_volume_24h_usdt REAL,
+          future_volume_24h_usdt REAL,
+          open_interest_usdt REAL,
+          open_interest_change_pct REAL,
+          long_account_pct REAL,
+          short_account_pct REAL,
+          long_short_ratio REAL,
+          funding_rate_pct REAL,
+          reasons_json TEXT NOT NULL DEFAULT '[]',
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (watch_id) REFERENCES negative_basis_watchlist(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_negative_basis_samples_symbol_time
+          ON negative_basis_signal_samples(symbol, observed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_negative_basis_samples_watch_time
+          ON negative_basis_signal_samples(watch_id, observed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_negative_basis_samples_level_time
+          ON negative_basis_signal_samples(signal_level, observed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_negative_basis_samples_time
+          ON negative_basis_signal_samples(observed_at DESC);
+
+        CREATE TABLE IF NOT EXISTS negative_basis_alert_events (
+          id TEXT PRIMARY KEY,
+          watch_id TEXT NOT NULL,
+          symbol TEXT NOT NULL,
+          spot_exchange TEXT NOT NULL,
+          future_exchange TEXT NOT NULL,
+          signal_level TEXT NOT NULL,
+          score REAL NOT NULL,
+          spot_premium_pct REAL,
+          message TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY (watch_id) REFERENCES negative_basis_watchlist(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_negative_basis_events_symbol_time
+          ON negative_basis_alert_events(symbol, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_negative_basis_events_watch_time
+          ON negative_basis_alert_events(watch_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_negative_basis_events_time
+          ON negative_basis_alert_events(created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS pair_spread_funding_watchlist (
+          pair_key TEXT PRIMARY KEY,
+          leg1_exchange TEXT NOT NULL,
+          leg1_market_type TEXT NOT NULL,
+          leg1_symbol TEXT NOT NULL,
+          leg2_exchange TEXT NOT NULL,
+          leg2_market_type TEXT NOT NULL,
+          leg2_symbol TEXT NOT NULL,
+          leg2_multiplier REAL NOT NULL,
+          interval_seconds INTEGER NOT NULL DEFAULT 60,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS pair_spread_funding_samples (
+          pair_key TEXT NOT NULL,
+          bucket_at TEXT NOT NULL,
+          left_rate_pct REAL,
+          right_rate_pct REAL,
+          net_rate_pct REAL,
+          source TEXT NOT NULL DEFAULT 'minute_record',
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (pair_key, bucket_at),
+          FOREIGN KEY (pair_key) REFERENCES pair_spread_funding_watchlist(pair_key) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_pair_spread_funding_samples_pair_time
+          ON pair_spread_funding_samples(pair_key, bucket_at DESC);
         """
     )
     await _ensure_opportunity_history_columns(db)
     await _ensure_exchange_announcement_columns(db)
+    await _ensure_second_level_sample_columns(db)
     await _migrate_alert_rule_excluded_labels(db)
     await db.commit()

@@ -7,6 +7,15 @@ from pydantic import BaseModel, Field
 FundingArbitrageDecision = Literal["ENTER", "HOLD", "EXIT_SOON", "EXIT_NOW", "BLOCKED"]
 FundingSource = Literal["predicted", "fallback_current", "missing"]
 AdlRiskLevel = Literal["LOW", "MEDIUM", "HIGH", "BLOCKED"]
+FundingOpportunityType = Literal[
+    "BASIS_AND_FUNDING_ALIGNED",
+    "STRONG_FUNDING_NEAR_SETTLEMENT",
+    "INTERVAL_MISMATCH",
+    "FORMULA_DIVERGENCE",
+    "BASIS_CARRY_CONFLICTED",
+    "BASIS_MEAN_REVERSION",
+    "PURE_FUNDING_SPREAD",
+]
 
 
 class FundingArbitrageSettings(BaseModel):
@@ -28,6 +37,13 @@ class FundingArbitrageSettings(BaseModel):
     leverage: int = Field(default=1, ge=1)
     notional_per_symbol_usdt: float = Field(default=100, gt=0)
     prefer_hyperliquid: bool = True
+    strong_funding_pct: float = Field(default=0.6, ge=0)
+    near_settlement_minutes: float = Field(default=45, ge=0)
+    small_basis_threshold_pct: float = Field(default=0.25, ge=0)
+    interval_mismatch_min_hours: float = Field(default=1, ge=0)
+    formula_divergence_min_funding_pct: float = Field(default=0.25, ge=0)
+    conflicted_basis_min_check_pct: float = Field(default=0.3, ge=0)
+    min_conflicted_reward_risk_ratio: float = Field(default=1.0, ge=0)
 
 
 class FundingArbitrageCandidate(BaseModel):
@@ -62,13 +78,19 @@ class FundingArbitrageCandidate(BaseModel):
     confidence_penalty_pct: float
     adl_risk_penalty_pct: float
     expected_cycle_pnl_pct: float
+    adverse_entry_basis_pct: float
+    conflicted_reward_risk_ratio: float | None = None
     adl_risk_score: float
     adl_risk_level: AdlRiskLevel
     decision: FundingArbitrageDecision
     decision_reasons: list[str]
     risk_labels: list[str]
+    primary_opportunity_type: FundingOpportunityType = "PURE_FUNDING_SPREAD"
+    opportunity_types: list[FundingOpportunityType] = Field(default_factory=list)
+    opportunity_reasons: list[str] = Field(default_factory=list)
     volume_24h_usdt: float | None = None
     depth_usdt: float | None = None
+    uses_gate: bool = False
     uses_hyperliquid: bool
 
 

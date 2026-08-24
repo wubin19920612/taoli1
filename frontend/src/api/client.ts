@@ -5,9 +5,11 @@ import type {
   AnnouncementExchangeOption,
   AnnouncementFilters,
   AnnouncementSettings,
+  AstroAutomationSettings,
   AstroActionResult,
   AstroCardCreateRequest,
   AstroCardSettings,
+  AstroNewListingCardSettings,
   AstroPairPlan,
   AstroSdkStatus,
   FundingArbitragePreview,
@@ -19,6 +21,8 @@ import type {
   FundingResearchPaperTrade,
   FundingResearchPaperTradeSummary,
   FundingResearchRunResult,
+  FatFingerBacktestRequest,
+  FatFingerBacktestResult,
   GateTwapJobStatus,
   GateTwapMarketSnapshot,
   GateTwapPlan,
@@ -33,7 +37,15 @@ import type {
   IndexComponentWatchItem,
   OpportunityHistoryStats,
   OpportunityHistoryStatsQuery,
+  OpportunityRadarPreview,
+  OpportunityRadarSettings,
+  PairSpreadDiagnosticResult,
+  PairSpreadFundingHistoryResult,
+  PairSpreadQueryResult,
+  PairSpreadFundingRecordRequest,
+  PairSpreadFundingRecordStatus,
   LivePilotPreview,
+  MarketType,
   LivePilotSettings,
   MarketFilters,
   MarketSnapshot,
@@ -42,9 +54,31 @@ import type {
   PhonePriceAlertDiagnostics,
   PhonePriceAlertEvent,
   PhonePriceAlertRule,
+  PremiumIndexCurrentSnapshot,
+  PremiumIndexQueryResult,
+  MinuteSignalScanResult,
+  MinuteSignalSettings,
+  MinuteSignalUniverseScanResult,
+  NegativeBasisAlertEvent,
+  NegativeBasisAnalysisResult,
+  NegativeBasisAutoCandidate,
+  NegativeBasisAutoScanSettings,
+  NegativeBasisMonitorStatus,
+  NegativeBasisSignalSample,
+  NegativeBasisWatchItem,
+  NewListingAlertEvent,
+  NewListingHistoryResult,
+  NewListingMonitorStatus,
+  NewListingSpreadSample,
+  NewListingWatchItem,
   RiskSettings,
+  SecondLevelIndexComponentSample,
+  SecondLevelMarketSample,
+  SecondLevelSamplingConfig,
+  SecondLevelSamplingStatus,
   ServiceControlStatus,
   ServiceRestartResult,
+  SymbolSpreadQueryResult,
   TradfiPerpMonitorPreview
 } from "./types";
 
@@ -161,6 +195,32 @@ export async function updateAstroCardSettings(settings: AstroCardSettings): Prom
   });
 }
 
+export async function getAstroNewListingCardSettings(): Promise<AstroNewListingCardSettings> {
+  return fetchJson<AstroNewListingCardSettings>("/settings/astro-new-listing-card");
+}
+
+export async function updateAstroNewListingCardSettings(
+  settings: AstroNewListingCardSettings
+): Promise<AstroNewListingCardSettings> {
+  return fetchJson<AstroNewListingCardSettings>("/settings/astro-new-listing-card", {
+    method: "PUT",
+    body: JSON.stringify(settings)
+  });
+}
+
+export async function getAstroAutomationSettings(): Promise<AstroAutomationSettings> {
+  return fetchJson<AstroAutomationSettings>("/settings/astro-automation");
+}
+
+export async function updateAstroAutomationSettings(
+  settings: AstroAutomationSettings
+): Promise<AstroAutomationSettings> {
+  return fetchJson<AstroAutomationSettings>("/settings/astro-automation", {
+    method: "PUT",
+    body: JSON.stringify(settings)
+  });
+}
+
 export async function getLivePilotSettings(): Promise<LivePilotSettings> {
   return fetchJson<LivePilotSettings>("/settings/live-pilot");
 }
@@ -171,6 +231,17 @@ export async function getLivePilotPreview(): Promise<LivePilotPreview> {
 
 export async function updateLivePilotSettings(settings: LivePilotSettings): Promise<LivePilotSettings> {
   return fetchJson<LivePilotSettings>("/settings/live-pilot", {
+    method: "PUT",
+    body: JSON.stringify(settings)
+  });
+}
+
+export async function getMinuteSignalSettings(): Promise<MinuteSignalSettings> {
+  return fetchJson<MinuteSignalSettings>("/settings/minute-signals");
+}
+
+export async function updateMinuteSignalSettings(settings: MinuteSignalSettings): Promise<MinuteSignalSettings> {
+  return fetchJson<MinuteSignalSettings>("/settings/minute-signals", {
     method: "PUT",
     body: JSON.stringify(settings)
   });
@@ -216,6 +287,30 @@ export async function updateFundingArbitrageSettings(
 
 export async function getFundingArbitragePreview(): Promise<FundingArbitragePreview> {
   return fetchJson<FundingArbitragePreview>("/funding-arbitrage/preview");
+}
+
+export async function getOpportunityRadarSettings(): Promise<OpportunityRadarSettings> {
+  return fetchJson<OpportunityRadarSettings>("/opportunity-radar/settings");
+}
+
+export async function updateOpportunityRadarSettings(
+  settings: OpportunityRadarSettings
+): Promise<OpportunityRadarSettings> {
+  return fetchJson<OpportunityRadarSettings>("/opportunity-radar/settings", {
+    method: "PUT",
+    body: JSON.stringify(settings)
+  });
+}
+
+export async function getOpportunityRadarPreview(): Promise<OpportunityRadarPreview> {
+  return fetchJson<OpportunityRadarPreview>("/opportunity-radar/preview");
+}
+
+export async function testOpportunityRadarNotification(): Promise<{ status: string }> {
+  return fetchJson<{ status: string }>("/opportunity-radar/test-notification", {
+    method: "POST",
+    body: JSON.stringify({})
+  });
 }
 
 export async function getTradfiPerpMonitorPreview(params: {
@@ -276,6 +371,7 @@ export async function runFundingResearch(params: {
 
 export async function listFundingResearchCandidates(params: {
   symbol?: string;
+  opportunity_type?: string;
   limit?: number;
 } = {}): Promise<FundingResearchCandidate[]> {
   const url = buildUrl("/funding-research/candidates", params);
@@ -304,6 +400,7 @@ export async function listFundingResearchCandidateSnapshots(params: {
 
 export async function listFundingResearchPaperTrades(params: {
   status?: string;
+  opportunity_type?: string;
   limit?: number;
 } = {}): Promise<FundingResearchPaperTrade[]> {
   const url = buildUrl("/funding-research/paper-trades", params);
@@ -315,10 +412,51 @@ export async function listFundingResearchPaperTrades(params: {
   });
 }
 
+export async function openFundingResearchPaperTrade(
+  candidateId: string
+): Promise<FundingResearchPaperTrade> {
+  return fetchJson<FundingResearchPaperTrade>(`/funding-research/paper-trades/open/${candidateId}`, {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+}
+
+export async function closeFundingResearchPaperTrade(
+  tradeId: string,
+  exitReason = "manual"
+): Promise<FundingResearchPaperTrade> {
+  const url = buildUrl(`/funding-research/paper-trades/${tradeId}/close`, {
+    exit_reason: exitReason
+  });
+  return fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders()
+    },
+    body: JSON.stringify({})
+  }).then(async (response) => {
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    return response.json() as Promise<FundingResearchPaperTrade>;
+  });
+}
+
 export async function getFundingResearchPaperTradeSummary(
-  limit = 1000
+  limit = 1000,
+  opportunityType?: string
 ): Promise<FundingResearchPaperTradeSummary> {
-  return fetchJson<FundingResearchPaperTradeSummary>(`/funding-research/paper-trades/summary?limit=${limit}`);
+  const url = buildUrl("/funding-research/paper-trades/summary", {
+    limit,
+    opportunity_type: opportunityType
+  });
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    return response.json() as Promise<FundingResearchPaperTradeSummary>;
+  });
 }
 
 export async function getFundingResearchLegacyBacktest(
@@ -485,6 +623,592 @@ export async function getOpportunityHistoryStats(
       throw new Error(await response.text());
     }
     return response.json() as Promise<OpportunityHistoryStats>;
+  });
+}
+
+export async function queryPairSpread(query: {
+  leg1_exchange: string;
+  leg1_symbol: string;
+  leg1_market_type?: MarketType;
+  leg2_exchange: string;
+  leg2_symbol: string;
+  leg2_market_type?: MarketType;
+  hours?: number;
+  interval_minutes?: number;
+  interval_seconds?: number;
+  leg2_multiplier?: number;
+  end_at?: string;
+  include_current?: boolean;
+}): Promise<PairSpreadQueryResult> {
+  const url = buildUrl("/pair-spread/query", query);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(extractErrorMessage(text, response.status));
+    }
+    return response.json() as Promise<PairSpreadQueryResult>;
+  });
+}
+
+export async function querySymbolExchangeSpreads(query: {
+  symbol: string;
+  market_type?: MarketType;
+  base_exchange?: string;
+  exchanges?: string[];
+  hours?: number;
+  interval_seconds?: number;
+  end_at?: string;
+  include_current?: boolean;
+}): Promise<SymbolSpreadQueryResult> {
+  const url = buildUrl("/pair-spread/symbol-query", query);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(extractErrorMessage(text, response.status));
+    }
+    return response.json() as Promise<SymbolSpreadQueryResult>;
+  });
+}
+
+export async function queryPairSpreadDiagnostics(query: {
+  leg1_exchange: string;
+  leg1_symbol: string;
+  leg1_market_type?: MarketType;
+  leg2_exchange: string;
+  leg2_symbol: string;
+  leg2_market_type?: MarketType;
+  hours?: number;
+  threshold_pct?: number;
+  interval_seconds?: number;
+  leg2_multiplier?: number;
+  end_at?: string;
+}): Promise<PairSpreadDiagnosticResult> {
+  const url = buildUrl("/pair-spread/diagnostics", query);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(extractErrorMessage(text, response.status));
+    }
+    return response.json() as Promise<PairSpreadDiagnosticResult>;
+  });
+}
+
+export async function queryPairSpreadFundingHistory(query: {
+  leg1_exchange: string;
+  leg1_symbol: string;
+  leg1_market_type?: MarketType;
+  leg2_exchange: string;
+  leg2_symbol: string;
+  leg2_market_type?: MarketType;
+  hours?: number;
+  leg2_multiplier?: number;
+  start_at?: string;
+  end_at?: string;
+}): Promise<PairSpreadFundingHistoryResult> {
+  const url = buildUrl("/pair-spread/funding-history", query);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(extractErrorMessage(text, response.status));
+    }
+    return response.json() as Promise<PairSpreadFundingHistoryResult>;
+  });
+}
+
+export async function getPairSpreadFundingRecordStatus(query: {
+  leg1_exchange: string;
+  leg1_symbol: string;
+  leg1_market_type?: MarketType;
+  leg2_exchange: string;
+  leg2_symbol: string;
+  leg2_market_type?: MarketType;
+  hours?: number;
+  leg2_multiplier?: number;
+  end_at?: string;
+}): Promise<PairSpreadFundingRecordStatus> {
+  const url = buildUrl("/pair-spread/funding-records/status", query);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(extractErrorMessage(text, response.status));
+    }
+    return response.json() as Promise<PairSpreadFundingRecordStatus>;
+  });
+}
+
+export async function startPairSpreadFundingRecord(
+  request: PairSpreadFundingRecordRequest,
+  hours = 72
+): Promise<PairSpreadFundingRecordStatus> {
+  return fetchJson<PairSpreadFundingRecordStatus>(
+    `/pair-spread/funding-records/watch?hours=${hours}`,
+    {
+      method: "POST",
+      body: JSON.stringify(request)
+    }
+  );
+}
+
+export async function stopPairSpreadFundingRecord(
+  request: PairSpreadFundingRecordRequest,
+  hours = 72
+): Promise<PairSpreadFundingRecordStatus> {
+  return fetchJson<PairSpreadFundingRecordStatus>(
+    `/pair-spread/funding-records/watch?hours=${hours}`,
+    {
+      method: "DELETE",
+      body: JSON.stringify(request)
+    }
+  );
+}
+
+export async function queryPremiumIndex(query: {
+  exchange: string;
+  symbol: string;
+  hours?: number;
+  interval_minutes?: number;
+}): Promise<PremiumIndexQueryResult> {
+  const url = buildUrl("/premium-index/query", query);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(extractErrorMessage(text, response.status));
+    }
+    return response.json() as Promise<PremiumIndexQueryResult>;
+  });
+}
+
+export async function getCurrentPremiumIndex(query: {
+  exchange: string;
+  symbol: string;
+}): Promise<PremiumIndexCurrentSnapshot> {
+  const url = buildUrl("/premium-index/current", query);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(extractErrorMessage(text, response.status));
+    }
+    return response.json() as Promise<PremiumIndexCurrentSnapshot>;
+  });
+}
+
+export async function scanMinuteSignals(query: {
+  symbol?: string;
+  alpha_symbol?: string;
+  hours?: number;
+} = {}): Promise<MinuteSignalScanResult> {
+  const url = buildUrl("/minute-signals/scan", query);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(extractErrorMessage(text, response.status));
+    }
+    return response.json() as Promise<MinuteSignalScanResult>;
+  });
+}
+
+export async function scanMinuteSignalUniverse(query: {
+  hours?: number;
+  max_symbols?: number;
+  min_volume_24h_usdt?: number;
+  alert_cooldown_minutes?: number;
+  max_entry_basis_bps?: number;
+  require_negative_premium_when_spot_above?: boolean;
+  max_premium_when_spot_above_bps?: number;
+} = {}): Promise<MinuteSignalUniverseScanResult> {
+  const url = buildUrl("/minute-signals/scan-all", query);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(extractErrorMessage(text, response.status));
+    }
+    return response.json() as Promise<MinuteSignalUniverseScanResult>;
+  });
+}
+
+export async function listSecondLevelSamplingExchanges(): Promise<string[]> {
+  return fetchJson<string[]>("/second-level-sampling/exchanges");
+}
+
+export async function getSecondLevelSamplingConfig(): Promise<SecondLevelSamplingConfig> {
+  return fetchJson<SecondLevelSamplingConfig>("/second-level-sampling/config");
+}
+
+export async function updateSecondLevelSamplingConfig(
+  config: SecondLevelSamplingConfig
+): Promise<SecondLevelSamplingConfig> {
+  return fetchJson<SecondLevelSamplingConfig>("/second-level-sampling/config", {
+    method: "PUT",
+    body: JSON.stringify(config)
+  });
+}
+
+export async function startSecondLevelSampling(): Promise<SecondLevelSamplingStatus> {
+  return fetchJson<SecondLevelSamplingStatus>("/second-level-sampling/start", {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+}
+
+export async function stopSecondLevelSampling(): Promise<SecondLevelSamplingStatus> {
+  return fetchJson<SecondLevelSamplingStatus>("/second-level-sampling/stop", {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+}
+
+export async function getSecondLevelSamplingStatus(): Promise<SecondLevelSamplingStatus> {
+  return fetchJson<SecondLevelSamplingStatus>("/second-level-sampling/status");
+}
+
+export async function listSecondLevelSamples(query: {
+  exchange?: string;
+  symbol?: string;
+  minutes?: number;
+  limit?: number;
+} = {}): Promise<SecondLevelMarketSample[]> {
+  const url = buildUrl("/second-level-sampling/samples", query);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(extractErrorMessage(text, response.status));
+    }
+    return response.json() as Promise<SecondLevelMarketSample[]>;
+  });
+}
+
+export async function listSecondLevelIndexComponentSamples(query: {
+  target_exchange?: string;
+  symbol?: string;
+  component_source?: string;
+  minutes?: number;
+  limit?: number;
+} = {}): Promise<SecondLevelIndexComponentSample[]> {
+  const url = buildUrl("/second-level-sampling/component-samples", query);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(extractErrorMessage(text, response.status));
+    }
+    return response.json() as Promise<SecondLevelIndexComponentSample[]>;
+  });
+}
+
+export async function runFatFingerBacktest(
+  request: FatFingerBacktestRequest
+): Promise<FatFingerBacktestResult> {
+  return fetchJson<FatFingerBacktestResult>("/second-level-sampling/fat-finger-backtest", {
+    method: "POST",
+    body: JSON.stringify(request)
+  });
+}
+
+export async function listNewListingMonitorExchanges(): Promise<string[]> {
+  return fetchJson<string[]>("/new-listing-monitor/exchanges");
+}
+
+export async function getNewListingMonitorStatus(): Promise<NewListingMonitorStatus> {
+  return fetchJson<NewListingMonitorStatus>("/new-listing-monitor/status");
+}
+
+export async function listNewListingWatchlist(): Promise<NewListingWatchItem[]> {
+  return fetchJson<NewListingWatchItem[]>("/new-listing-monitor/watchlist");
+}
+
+export async function upsertNewListingWatchItem(
+  item: NewListingWatchItem
+): Promise<NewListingWatchItem> {
+  return fetchJson<NewListingWatchItem>("/new-listing-monitor/watchlist", {
+    method: "POST",
+    body: JSON.stringify(item)
+  });
+}
+
+export async function deleteNewListingWatchItem(itemId: string): Promise<{ ok: boolean }> {
+  return fetchJson<{ ok: boolean }>(`/new-listing-monitor/watchlist/${itemId}`, {
+    method: "DELETE"
+  });
+}
+
+export async function collectNewListingWatchItem(
+  itemId: string
+): Promise<NewListingSpreadSample[]> {
+  return fetchJson<NewListingSpreadSample[]>(`/new-listing-monitor/watchlist/${itemId}/collect`, {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+}
+
+export async function listNewListingSamples(query: {
+  watch_id?: string;
+  symbol?: string;
+  minutes?: number;
+  limit?: number;
+} = {}): Promise<NewListingSpreadSample[]> {
+  const url = buildUrl("/new-listing-monitor/samples", query);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(extractErrorMessage(text, response.status));
+    }
+    return response.json() as Promise<NewListingSpreadSample[]>;
+  });
+}
+
+export async function listNewListingEvents(query: {
+  watch_id?: string;
+  symbol?: string;
+  minutes?: number;
+  limit?: number;
+} = {}): Promise<NewListingAlertEvent[]> {
+  const url = buildUrl("/new-listing-monitor/events", query);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(extractErrorMessage(text, response.status));
+    }
+    return response.json() as Promise<NewListingAlertEvent[]>;
+  });
+}
+
+export async function queryNewListingHistory(query: {
+  watch_id?: string;
+  symbol?: string;
+  hours?: number;
+  start_at?: string;
+  end_at?: string;
+  limit?: number;
+}): Promise<NewListingHistoryResult> {
+  const url = buildUrl("/new-listing-monitor/history", query);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(extractErrorMessage(text, response.status));
+    }
+    return response.json() as Promise<NewListingHistoryResult>;
+  });
+}
+
+export async function listNegativeBasisExchanges(): Promise<{ spot: string[]; future: string[] }> {
+  return fetchJson<{ spot: string[]; future: string[] }>("/negative-basis-monitor/exchanges");
+}
+
+export async function getNegativeBasisMonitorStatus(): Promise<NegativeBasisMonitorStatus> {
+  return fetchJson<NegativeBasisMonitorStatus>("/negative-basis-monitor/status");
+}
+
+export async function refreshNegativeBasisAutoScan(): Promise<NegativeBasisAutoCandidate[]> {
+  return fetchJson<NegativeBasisAutoCandidate[]>("/negative-basis-monitor/auto-scan", {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+}
+
+export async function getNegativeBasisAutoScanSettings(): Promise<NegativeBasisAutoScanSettings> {
+  return fetchJson<NegativeBasisAutoScanSettings>("/negative-basis-monitor/auto-scan/settings");
+}
+
+export async function updateNegativeBasisAutoScanSettings(
+  settings: NegativeBasisAutoScanSettings
+): Promise<NegativeBasisAutoScanSettings> {
+  return fetchJson<NegativeBasisAutoScanSettings>("/negative-basis-monitor/auto-scan/settings", {
+    method: "PUT",
+    body: JSON.stringify(settings)
+  });
+}
+
+export async function blockNegativeBasisSymbol(symbol: string): Promise<NegativeBasisAutoScanSettings> {
+  const url = buildUrl("/negative-basis-monitor/auto-scan/block-symbol", { symbol });
+  return fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders()
+    },
+    body: JSON.stringify({})
+  }).then(async (response) => {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(extractErrorMessage(text, response.status));
+    }
+    return response.json() as Promise<NegativeBasisAutoScanSettings>;
+  });
+}
+
+export async function unblockNegativeBasisSymbol(symbol: string): Promise<NegativeBasisAutoScanSettings> {
+  const url = buildUrl("/negative-basis-monitor/auto-scan/block-symbol", { symbol });
+  return fetch(url, {
+    method: "DELETE",
+    headers: authHeaders()
+  }).then(async (response) => {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(extractErrorMessage(text, response.status));
+    }
+    return response.json() as Promise<NegativeBasisAutoScanSettings>;
+  });
+}
+
+export async function blockNegativeBasisExchange(exchange: string): Promise<NegativeBasisAutoScanSettings> {
+  const url = buildUrl("/negative-basis-monitor/auto-scan/block-exchange", { exchange });
+  return fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders()
+    },
+    body: JSON.stringify({})
+  }).then(async (response) => {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(extractErrorMessage(text, response.status));
+    }
+    return response.json() as Promise<NegativeBasisAutoScanSettings>;
+  });
+}
+
+export async function unblockNegativeBasisExchange(exchange: string): Promise<NegativeBasisAutoScanSettings> {
+  const url = buildUrl("/negative-basis-monitor/auto-scan/block-exchange", { exchange });
+  return fetch(url, {
+    method: "DELETE",
+    headers: authHeaders()
+  }).then(async (response) => {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(extractErrorMessage(text, response.status));
+    }
+    return response.json() as Promise<NegativeBasisAutoScanSettings>;
+  });
+}
+
+export async function blockNegativeBasisExchangeSymbol(
+  exchange: string,
+  symbol: string
+): Promise<NegativeBasisAutoScanSettings> {
+  const url = buildUrl("/negative-basis-monitor/auto-scan/block-exchange-symbol", { exchange, symbol });
+  return fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders()
+    },
+    body: JSON.stringify({})
+  }).then(async (response) => {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(extractErrorMessage(text, response.status));
+    }
+    return response.json() as Promise<NegativeBasisAutoScanSettings>;
+  });
+}
+
+export async function unblockNegativeBasisExchangeSymbol(
+  exchange: string,
+  symbol: string
+): Promise<NegativeBasisAutoScanSettings> {
+  const url = buildUrl("/negative-basis-monitor/auto-scan/block-exchange-symbol", { exchange, symbol });
+  return fetch(url, {
+    method: "DELETE",
+    headers: authHeaders()
+  }).then(async (response) => {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(extractErrorMessage(text, response.status));
+    }
+    return response.json() as Promise<NegativeBasisAutoScanSettings>;
+  });
+}
+
+export async function listNegativeBasisWatchlist(): Promise<NegativeBasisWatchItem[]> {
+  return fetchJson<NegativeBasisWatchItem[]>("/negative-basis-monitor/watchlist");
+}
+
+export async function upsertNegativeBasisWatchItem(
+  item: NegativeBasisWatchItem
+): Promise<NegativeBasisWatchItem> {
+  return fetchJson<NegativeBasisWatchItem>("/negative-basis-monitor/watchlist", {
+    method: "POST",
+    body: JSON.stringify(item)
+  });
+}
+
+export async function deleteNegativeBasisWatchItem(itemId: string): Promise<{ ok: boolean }> {
+  return fetchJson<{ ok: boolean }>(`/negative-basis-monitor/watchlist/${itemId}`, {
+    method: "DELETE"
+  });
+}
+
+export async function collectNegativeBasisWatchItem(
+  itemId: string
+): Promise<NegativeBasisAnalysisResult> {
+  return fetchJson<NegativeBasisAnalysisResult>(`/negative-basis-monitor/watchlist/${itemId}/collect`, {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+}
+
+export async function listNegativeBasisSamples(query: {
+  watch_id?: string;
+  symbol?: string;
+  minutes?: number;
+  limit?: number;
+} = {}): Promise<NegativeBasisSignalSample[]> {
+  const url = buildUrl("/negative-basis-monitor/samples", query);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(extractErrorMessage(text, response.status));
+    }
+    return response.json() as Promise<NegativeBasisSignalSample[]>;
+  });
+}
+
+export async function listNegativeBasisEvents(query: {
+  watch_id?: string;
+  symbol?: string;
+  minutes?: number;
+  limit?: number;
+} = {}): Promise<NegativeBasisAlertEvent[]> {
+  const url = buildUrl("/negative-basis-monitor/events", query);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(extractErrorMessage(text, response.status));
+    }
+    return response.json() as Promise<NegativeBasisAlertEvent[]>;
+  });
+}
+
+export async function queryNegativeBasis(query: {
+  symbol?: string;
+  spot_exchange?: string;
+  future_exchange?: string;
+  spot_symbol?: string;
+  future_symbol?: string;
+  future_multiplier?: number;
+  hours?: number;
+  watch_threshold_pct?: number;
+  building_threshold_pct?: number;
+  confirmed_threshold_pct?: number;
+  strong_threshold_pct?: number;
+  extreme_threshold_pct?: number;
+  watch_consecutive_hits?: number;
+  building_consecutive_hits?: number;
+  confirmed_consecutive_hits?: number;
+  strong_consecutive_hits?: number;
+  extreme_consecutive_hits?: number;
+  spot_volume_growth_threshold?: number;
+  oi_confirmed_growth_pct?: number;
+  oi_strong_growth_pct?: number;
+  min_spot_hourly_volume_usdt?: number;
+}): Promise<NegativeBasisAnalysisResult> {
+  const url = buildUrl("/negative-basis-monitor/query", query);
+  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(extractErrorMessage(text, response.status));
+    }
+    return response.json() as Promise<NegativeBasisAnalysisResult>;
   });
 }
 

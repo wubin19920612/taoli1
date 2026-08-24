@@ -31,6 +31,7 @@ import type {
   FundingArbitrageDecision,
   FundingArbitragePreview,
   FundingArbitrageSettings,
+  FundingOpportunityType,
   FundingSource,
   OpportunityHistoryPoint,
   OpportunityHistoryStats
@@ -56,7 +57,14 @@ const defaultFundingSettings: FundingArbitrageSettings = {
   adl_block_score: 80,
   leverage: 1,
   notional_per_symbol_usdt: 100,
-  prefer_hyperliquid: true
+  prefer_hyperliquid: true,
+  strong_funding_pct: 0.6,
+  near_settlement_minutes: 45,
+  small_basis_threshold_pct: 0.25,
+  interval_mismatch_min_hours: 1,
+  formula_divergence_min_funding_pct: 0.25,
+  conflicted_basis_min_check_pct: 0.3,
+  min_conflicted_reward_risk_ratio: 1
 };
 
 type FundingSettingsForm = Omit<FundingArbitrageSettings, "min_volume_24h_usdt"> & {
@@ -90,6 +98,16 @@ const fundingSourceText: Record<FundingSource, string> = {
   predicted: "\u9884\u6d4b",
   fallback_current: "\u5f53\u524d\u56de\u9000",
   missing: "\u7f3a\u5931"
+};
+
+const opportunityTypeText: Record<FundingOpportunityType, string> = {
+  BASIS_AND_FUNDING_ALIGNED: "Aligned",
+  STRONG_FUNDING_NEAR_SETTLEMENT: "Near",
+  INTERVAL_MISMATCH: "Cycle",
+  FORMULA_DIVERGENCE: "Formula",
+  BASIS_CARRY_CONFLICTED: "Conflict",
+  BASIS_MEAN_REVERSION: "Basis",
+  PURE_FUNDING_SPREAD: "Carry"
 };
 
 function pct(value: number | null | undefined, digits = 3): string {
@@ -195,6 +213,8 @@ function buildColumns(
         <Space size={4} wrap className="funding-symbol-cell">
           <Typography.Text strong>{value}</Typography.Text>
           <Tag>{row.type}</Tag>
+          <Tag color="purple">{opportunityTypeText[row.primary_opportunity_type]}</Tag>
+          {row.uses_gate ? <Tag color="geekblue">Gate</Tag> : null}
           {row.uses_hyperliquid ? <Tag color="cyan">Hyper</Tag> : null}
         </Space>
       )
@@ -546,6 +566,12 @@ export function FundingArbitragePage() {
             <Form.Item label={"\u6760\u6746"} name="leverage" rules={[{ required: true }]}>
               <InputNumber min={1} step={1} className="wide-input" />
             </Form.Item>
+            <Form.Item label={"逆风价差检查"} name="conflicted_basis_min_check_pct" rules={[{ required: true }]}>
+              <InputNumber min={0} step={0.05} suffix="%" className="wide-input" />
+            </Form.Item>
+            <Form.Item label={"最低盈亏比"} name="min_conflicted_reward_risk_ratio" rules={[{ required: true }]}>
+              <InputNumber min={0} step={0.1} className="wide-input" />
+            </Form.Item>
           </div>
           <Button type="primary" icon={<SaveOutlined />} onClick={() => void save()} loading={saving}>
             {"\u4fdd\u5b58\u7b56\u7565\u53c2\u6570"}
@@ -615,6 +641,7 @@ export function FundingArbitragePage() {
                   pagination={{ pageSize: 12 }}
                   dataSource={historyStats.points.slice(0, 80)}
                   columns={historyColumns}
+                  scroll={{ x: 760 }}
                 />
               </>
             ) : null}

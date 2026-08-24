@@ -13,10 +13,13 @@ from app.models.funding_arbitrage import (
     FundingSource,
 )
 from app.models.market import MarketSnapshot, MarketType
+from app.services.funding_research.opportunity_types import exchange_formula_family
 
 HYPERLIQUID_EXCHANGE = "hyperliquid"
+GATE_EXCHANGE = "gate"
 DEFAULT_OPEN_COST_PCT = 0.02
 DEFAULT_CLOSE_COST_PCT = 0.02
+POOR_REWARD_RISK_LABEL = "POOR_REWARD_RISK"
 
 
 def _candidate_id(kind: str, symbol: str, long_leg: MarketSnapshot, short_leg: MarketSnapshot) -> str:
@@ -167,6 +170,19 @@ def _basis_risk_penalty_pct(
     return (mark_component + width_component) * settings.basis_risk_weight
 
 
+def _adverse_entry_basis_pct(entry_basis_pct: float) -> float:
+    return abs(min(entry_basis_pct, 0.0))
+
+
+def _conflicted_reward_risk_ratio(
+    expected_pnl_pct: float,
+    adverse_entry_basis_pct: float,
+) -> float | None:
+    if adverse_entry_basis_pct <= 0:
+        return None
+    return max(expected_pnl_pct, 0.0) / adverse_entry_basis_pct
+
+
 def _adl_risk_score(
     funding_edge_pct: float | None,
     basis_width_pct: float,
@@ -205,6 +221,97 @@ def _adl_level(score: float, settings: FundingArbitrageSettings) -> AdlRiskLevel
 
 def _uses_hyperliquid(long_leg: MarketSnapshot, short_leg: MarketSnapshot) -> bool:
     return HYPERLIQUID_EXCHANGE in {long_leg.exchange.lower(), short_leg.exchange.lower()}
+
+
+def _uses_gate(long_leg: MarketSnapshot, short_leg: MarketSnapshot) -> bool:
+    return GATE_EXCHANGE in {long_leg.exchange.lower(), short_leg.exchange.lower()}
+
+
+def _opportunity_classification(
+    *,
+    long_leg: MarketSnapshot,
+    short_leg: MarketSnapshot,
+    next_edge: float | None,
+    entry_basis: float,
+    basis_width: float,
+    long_interval: int | None,
+    short_interval: int | None,
+    minutes_to_settlement: float | None,
+    settings: FundingArbitrageSettings,
+) -> tuple[str, list[str], list[str]]:
+    types: list[str] = []
+    reasons: list[str] = []
+    funding_edge = next_edge or 0.0
+
+    def add(opportunity_type: str, reason: str) -> None:
+        if opportunity_type in types:
+            return
+        types.append(opportunity_type)
+        reasons.append(reason)
+
+    if funding_edge > 0 and entry_basis >= 0:
+        add(
+            "BASIS_AND_FUNDING_ALIGNED",
+            "entry basis and funding carry both favor the selected direction",
+        )
+    elif funding_edge > 0 and entry_basis < 0:
+        add(
+            "BASIS_CARRY_CONFLICTED",
+            "funding carry is positive but entry basis is against the selected direction",
+        )
+    elif funding_edge > 0:
+        add("PURE_FUNDING_SPREAD", "funding carry is positive")
+
+    if (
+        funding_edge >= settings.strong_funding_pct
+        and abs(entry_basis) <= settings.small_basis_threshold_pct
+        and minutes_to_settlement is not None
+        and minutes_to_settlement <= settings.near_settlement_minutes
+    ):
+        add(
+            "STRONG_FUNDING_NEAR_SETTLEMENT",
+            "strong funding edge, small basis, and settlement is near",
+        )
+
+    if (
+        long_interval is not None
+        and short_interval is not None
+        and abs(long_interval - short_interval) >= settings.interval_mismatch_min_hours
+    ):
+        add(
+            "INTERVAL_MISMATCH",
+            "long and short legs settle on different funding intervals",
+        )
+
+    if (
+        exchange_formula_family(long_leg.exchange) != exchange_formula_family(short_leg.exchange)
+        and abs(funding_edge) >= settings.formula_divergence_min_funding_pct
+    ):
+        add(
+            "FORMULA_DIVERGENCE",
+            "exchange funding formula families differ and funding edge is meaningful",
+        )
+
+    if entry_basis > 0 and basis_width <= settings.max_basis_width_pct:
+        add("BASIS_MEAN_REVERSION", "entry basis can be captured if spread mean-reverts")
+
+    if not types:
+        add(
+            "PURE_FUNDING_SPREAD",
+            "no specialized detector matched; keep as generic funding-spread watch item",
+        )
+
+    priority = (
+        "BASIS_AND_FUNDING_ALIGNED",
+        "STRONG_FUNDING_NEAR_SETTLEMENT",
+        "INTERVAL_MISMATCH",
+        "FORMULA_DIVERGENCE",
+        "BASIS_CARRY_CONFLICTED",
+        "BASIS_MEAN_REVERSION",
+        "PURE_FUNDING_SPREAD",
+    )
+    primary = next(item for item in priority if item in types)
+    return primary, types, reasons
 
 
 def _build_candidate(
@@ -252,6 +359,17 @@ def _build_candidate(
     depth = _depth_usdt(long_leg, short_leg)
     minutes_to_settlement = _minutes_to_settlement(long_leg, short_leg, now)
     next_settlement = _next_settlement_time(long_leg, short_leg)
+    primary_type, opportunity_types, opportunity_reasons = _opportunity_classification(
+        long_leg=long_leg,
+        short_leg=short_leg,
+        next_edge=next_edge,
+        entry_basis=entry_basis,
+        basis_width=basis_width,
+        long_interval=long_interval,
+        short_interval=short_interval,
+        minutes_to_settlement=minutes_to_settlement,
+        settings=settings,
+    )
     confidence_penalty = settings.confidence_penalty_pct if source == "fallback_current" else 0.0
     adl_score = _adl_risk_score(next_edge, basis_width, volume, long_leg, short_leg, settings)
     adl_level = _adl_level(adl_score, settings)
@@ -265,6 +383,8 @@ def _build_candidate(
         - adl_penalty
         - confidence_penalty
     )
+    adverse_entry_basis = _adverse_entry_basis_pct(entry_basis)
+    reward_risk_ratio = _conflicted_reward_risk_ratio(expected_pnl, adverse_entry_basis)
 
     risk_labels: list[str] = []
     reasons: list[str] = []
@@ -297,6 +417,16 @@ def _build_candidate(
         reasons.append("ADL risk proxy crossed block threshold")
     if next_edge is not None and next_edge < settings.min_funding_edge_pct:
         reasons.append("same-cycle funding edge below entry floor")
+    if (
+        adverse_entry_basis >= settings.conflicted_basis_min_check_pct
+        and reward_risk_ratio is not None
+        and reward_risk_ratio < settings.min_conflicted_reward_risk_ratio
+    ):
+        risk_labels.append(POOR_REWARD_RISK_LABEL)
+        reasons.append(
+            "conflicted basis reward/risk is below entry floor "
+            f"({reward_risk_ratio:.2f}x < {settings.min_conflicted_reward_risk_ratio:.2f}x)"
+        )
     if minutes_to_settlement is None:
         risk_labels.append("MISSING_SETTLEMENT_TIME")
         reasons.append("missing next settlement time")
@@ -355,13 +485,19 @@ def _build_candidate(
         confidence_penalty_pct=confidence_penalty,
         adl_risk_penalty_pct=adl_penalty,
         expected_cycle_pnl_pct=expected_pnl,
+        adverse_entry_basis_pct=adverse_entry_basis,
+        conflicted_reward_risk_ratio=reward_risk_ratio,
         adl_risk_score=adl_score,
         adl_risk_level=adl_level,
         decision=decision,
         decision_reasons=reasons,
         risk_labels=risk_labels,
+        primary_opportunity_type=primary_type,  # type: ignore[arg-type]
+        opportunity_types=opportunity_types,  # type: ignore[arg-type]
+        opportunity_reasons=opportunity_reasons,
         volume_24h_usdt=volume,
         depth_usdt=depth,
+        uses_gate=_uses_gate(long_leg, short_leg),
         uses_hyperliquid=_uses_hyperliquid(long_leg, short_leg),
     )
 

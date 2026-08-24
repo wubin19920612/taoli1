@@ -89,14 +89,30 @@ async def _effective_risk_settings(request: Request) -> RiskSettings:
     return await repo.get_risk_settings()
 
 
+def _signed_pct(value: float) -> str:
+    return f"{value:+.3f}%"
+
+
 def _format_depth_validation_message(result: DepthValidationResult) -> str:
-    details = "; ".join(result.blockers) if result.blockers else "depth validation failed"
-    metrics: list[str] = [f"target {result.target_notional_usdt:.2f} USDT"]
+    details = "；".join(result.blockers) if result.blockers else "深度校验未通过"
+    metrics: list[str] = [f"验证金额 {result.target_notional_usdt:.2f} USDT"]
+    if result.price_band_pct is not None:
+        metrics.append(f"价格带 {result.price_band_pct:.3f}%")
+    if result.required_depth_usdt is not None:
+        metrics.append(f"要求深度 {result.required_depth_usdt:.2f} USDT")
+    if result.min_depth_usdt is not None:
+        metrics.append(f"最小价格带深度 {result.min_depth_usdt:.2f} USDT")
     if result.executable_open_pct is not None:
-        metrics.append(f"executable open {result.executable_open_pct:.3f}%")
+        metrics.append(f"实际可成交开仓价差 {_signed_pct(result.executable_open_pct)}")
+    if result.cost_pct is not None:
+        metrics.append(f"成本修正 {_signed_pct(-result.cost_pct)}")
+    if result.funding_edge_pct is not None:
+        metrics.append(f"资金费边际 {_signed_pct(result.funding_edge_pct)}")
+    if result.slippage_buffer_pct is not None:
+        metrics.append(f"滑点缓冲 {_signed_pct(-result.slippage_buffer_pct)}")
     if result.effective_executable_edge_pct is not None:
-        metrics.append(f"effective edge {result.effective_executable_edge_pct:.3f}%")
-    return f"skipped order book validation: {details} ({', '.join(metrics)})"
+        metrics.append(f"实际可成交有效收益 {_signed_pct(result.effective_executable_edge_pct)}")
+    return f"订单簿校验未通过：{details}（{'，'.join(metrics)}）"
 
 
 async def _validate_order_book_before_create(
@@ -104,17 +120,14 @@ async def _validate_order_book_before_create(
     opportunity: Opportunity,
     risk_settings: RiskSettings,
     card_settings: AstroCardSettings,
-    card_request: AstroCardCreateRequest | None,
 ) -> DepthValidationResult | None:
     validator = getattr(request.app.state, "orderbook_validator", None)
     if validator is None:
         return None
-    override_notional = card_request.max_trade_usdt if card_request is not None else None
     result = await validator.validate(
         opportunity,
         risk_settings=risk_settings,
         card_settings=card_settings,
-        override_notional_usdt=override_notional,
     )
     return None if result.passed else result
 
@@ -184,7 +197,6 @@ async def create_astro_card_from_opportunity(
         opportunity,
         risk_settings,
         effective_settings,
-        card_request,
     )
     if depth_failure is not None:
         return AstroAlertActionResult(

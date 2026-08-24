@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from fastapi.testclient import TestClient
@@ -17,10 +18,43 @@ from app.models.index_component import (
 )
 from app.models.market import MarketSnapshot, MarketType
 from app.models.opportunity import Opportunity, OpportunityType
+from app.models.opportunity_radar import OpportunityRadarSettings
 from app.models.alert import AlertEvent, AlertRule
 from app.models.orderbook import DepthValidationResult
+from app.models.pair_spread import (
+    PairSpreadFundingRecordRequest,
+    PairSpreadFundingRecordStatus,
+    PairSpreadFundingWatchItem,
+    PairSpreadFundingHistoryResult,
+    PairSpreadFundingPoint,
+    PairSpreadCurrentLeg,
+    PairSpreadCurrentSnapshot,
+    PairSpreadLegQuery,
+    PairSpreadPriceField,
+    PairSpreadPoint,
+    PairSpreadQueryResult,
+    PairSpreadRealtimeFundingPoint,
+    PairSpreadValueStats,
+    SymbolExchangePriceSnapshot,
+    SymbolSpreadPoint,
+    SymbolSpreadQueryResult,
+    SymbolSpreadSeries,
+)
 from app.models.phone_alert import PhonePriceAlertCondition, PhonePriceAlertEvent, PhonePriceAlertRule
-from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, LivePilotSettings, RiskSettings
+from app.models.premium_index import (
+    PremiumIndexCurrentSnapshot,
+    PremiumIndexMarketQuery,
+    PremiumIndexPoint,
+    PremiumIndexQueryResult,
+    PremiumIndexValueStats,
+)
+from app.models.settings import (
+    AlertMessageTemplateSettings,
+    AstroCardSettings,
+    LivePilotSettings,
+    MinuteSignalSettings,
+    RiskSettings,
+)
 from app.services.astro_alerts import AstroAlertService
 from app.services.index_components import MultiIndexComponentProvider
 from app.services.service_control import DockerServiceController, ServiceControlConfig, ServiceControlError
@@ -35,14 +69,20 @@ class FakeSettingsRepository:
         astro_card_settings: AstroCardSettings | None = None,
         live_pilot_settings: LivePilotSettings | None = None,
         funding_arbitrage_settings: FundingArbitrageSettings | None = None,
+        opportunity_radar_settings: OpportunityRadarSettings | None = None,
         announcement_settings: AnnouncementSettings | None = None,
+        minute_signal_settings: MinuteSignalSettings | None = None,
+        astro_new_listing_card_settings: AstroCardSettings | None = None,
     ):
         self.settings = settings
         self.alert_template = alert_template or AlertMessageTemplateSettings()
         self.astro_card_settings = astro_card_settings
+        self.astro_new_listing_card_settings = astro_new_listing_card_settings
         self.live_pilot_settings = live_pilot_settings or LivePilotSettings()
         self.funding_arbitrage_settings = funding_arbitrage_settings or FundingArbitrageSettings()
+        self.opportunity_radar_settings = opportunity_radar_settings or OpportunityRadarSettings()
         self.announcement_settings = announcement_settings or AnnouncementSettings()
+        self.minute_signal_settings = minute_signal_settings or MinuteSignalSettings()
 
     async def get_risk_settings(self) -> RiskSettings:
         return self.settings
@@ -58,6 +98,16 @@ class FakeSettingsRepository:
 
     async def set_astro_card_settings(self, settings: AstroCardSettings) -> AstroCardSettings:
         self.astro_card_settings = settings
+        return settings
+
+    async def get_astro_new_listing_card_settings(self) -> AstroCardSettings:
+        return self.astro_new_listing_card_settings or await self.get_astro_card_settings()
+
+    async def find_astro_new_listing_card_settings(self) -> AstroCardSettings | None:
+        return self.astro_new_listing_card_settings
+
+    async def set_astro_new_listing_card_settings(self, settings: AstroCardSettings) -> AstroCardSettings:
+        self.astro_new_listing_card_settings = settings
         return settings
 
     async def get_live_pilot_settings(self) -> LivePilotSettings:
@@ -77,12 +127,30 @@ class FakeSettingsRepository:
         self.funding_arbitrage_settings = settings
         return settings
 
+    async def get_opportunity_radar_settings(self) -> OpportunityRadarSettings:
+        return self.opportunity_radar_settings
+
+    async def set_opportunity_radar_settings(
+        self,
+        settings: OpportunityRadarSettings,
+    ) -> OpportunityRadarSettings:
+        self.opportunity_radar_settings = settings
+        return settings
+
     async def get_announcement_settings(self) -> AnnouncementSettings:
         return self.announcement_settings
 
     async def set_announcement_settings(self, settings: AnnouncementSettings) -> AnnouncementSettings:
         self.announcement_settings = settings
         return settings
+
+    async def get_minute_signal_settings(self) -> MinuteSignalSettings:
+        return self.minute_signal_settings
+
+    async def set_minute_signal_settings(self, settings: MinuteSignalSettings) -> MinuteSignalSettings:
+        self.minute_signal_settings = settings
+        return settings
+
 
 
 class FakeHistoryRepository:
@@ -584,6 +652,800 @@ def test_opportunities_endpoint_returns_seeded_rows() -> None:
 
     assert response.status_code == 200
     assert response.json()[0]["symbol"] == "BTCUSDT"
+
+
+def test_opportunities_endpoint_applies_limit_after_filtering() -> None:
+    store = SnapshotStore()
+    store.set_opportunities(
+        [
+            make_opportunity().model_copy(update={"id": "one", "symbol": "ONEUSDT"}),
+            make_opportunity().model_copy(update={"id": "two", "symbol": "TWOUSDT"}),
+            make_opportunity().model_copy(update={"id": "three", "symbol": "THREEUSDT"}),
+        ]
+    )
+    app = create_app(snapshot_store=store)
+    client = TestClient(app)
+
+    response = client.get("/api/opportunities?limit=2")
+
+    assert response.status_code == 200
+    assert [item["symbol"] for item in response.json()] == ["ONEUSDT", "TWOUSDT"]
+
+
+def test_pair_spread_query_endpoint_uses_on_demand_service() -> None:
+    fixed_now = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
+
+    class FakePairSpreadService:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def query(
+            self,
+            leg1: PairSpreadLegQuery,
+            leg2: PairSpreadLegQuery,
+            *,
+            hours: int,
+            interval_minutes: int = 1,
+            interval_seconds: int | None = None,
+            leg2_multiplier: float = 1.0,
+            now: datetime | None = None,
+            include_current: bool = True,
+        ) -> PairSpreadQueryResult:
+            resolved_interval_seconds = interval_seconds or interval_minutes * 60
+            observed_at = now or fixed_now
+            leg1_current = PairSpreadCurrentLeg(
+                exchange=leg1.exchange,
+                symbol=leg1.symbol,
+                market_type=leg1.market_type,
+                raw_symbol=leg1.symbol,
+                price=100,
+                price_field=PairSpreadPriceField.MARK_PRICE,
+                mark_price=100,
+                timestamp=observed_at,
+            )
+            leg2_current = PairSpreadCurrentLeg(
+                exchange=leg2.exchange,
+                symbol=leg2.symbol,
+                market_type=leg2.market_type,
+                raw_symbol="BTC-USDT-SWAP",
+                price=102,
+                price_field=PairSpreadPriceField.MARK_PRICE,
+                mark_price=102,
+                timestamp=observed_at,
+            )
+            return PairSpreadQueryResult(
+                leg1=leg1,
+                leg2=leg2,
+                hours=hours,
+                interval_minutes=interval_minutes,
+                interval_seconds=resolved_interval_seconds,
+                leg2_multiplier=leg2_multiplier,
+                observed_at=observed_at,
+                point_count=1,
+                first_seen_at=observed_at,
+                last_seen_at=observed_at,
+                spread_abs=PairSpreadValueStats(current=2),
+                spread_pct=PairSpreadValueStats(current=2),
+                current=PairSpreadCurrentSnapshot(
+                    observed_at=observed_at,
+                    leg1=leg1_current,
+                    leg2=leg2_current,
+                    spread_abs=2,
+                    spread_pct=2,
+                ),
+                points=[
+                    {
+                        "bucket_at": observed_at,
+                        "leg1_close": 100,
+                        "leg2_close": 102,
+                        "spread_abs": 2,
+                        "spread_pct": 2,
+                    }
+                ],
+            )
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    service = FakePairSpreadService()
+    app = create_app(settings=Settings(database_url="sqlite:///:memory:"))
+    app.state.pair_spread_query_service_factory = lambda: service
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/pair-spread/query"
+            "?leg1_exchange=binance&leg1_symbol=btc"
+            "&leg2_exchange=okx&leg2_symbol=BTC-USDT-SWAP&hours=6"
+            "&leg1_market_type=spot&leg2_market_type=future"
+            "&interval_minutes=5&leg2_multiplier=10"
+        )
+        hourly_response = client.get(
+            "/api/pair-spread/query"
+            "?leg1_exchange=binance&leg1_symbol=btc"
+            "&leg2_exchange=okx&leg2_symbol=BTC-USDT-SWAP&hours=24"
+            "&interval_minutes=60"
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["leg1"]["symbol"] == "BTCUSDT"
+    assert payload["leg1"]["market_type"] == "spot"
+    assert payload["leg2"]["exchange"] == "okx"
+    assert payload["leg2"]["market_type"] == "future"
+    assert payload["hours"] == 6
+    assert payload["interval_minutes"] == 5
+    assert payload["interval_seconds"] == 300
+    assert payload["leg2_multiplier"] == 10
+    assert payload["point_count"] == 1
+    assert payload["current"]["spread_pct"] == 2
+    assert service.closed is True
+    assert hourly_response.status_code == 200
+    assert hourly_response.json()["interval_minutes"] == 60
+    assert hourly_response.json()["interval_seconds"] == 3600
+
+
+def test_pair_spread_query_endpoint_resolves_global_symbol_alias_and_price_multiplier() -> None:
+    fixed_now = datetime(2026, 8, 12, 12, 0, tzinfo=UTC)
+
+    class FakePairSpreadService:
+        async def query(
+            self,
+            leg1: PairSpreadLegQuery,
+            leg2: PairSpreadLegQuery,
+            *,
+            hours: int,
+            interval_minutes: int = 1,
+            interval_seconds: int | None = None,
+            leg2_multiplier: float = 1.0,
+            now: datetime | None = None,
+            include_current: bool = True,
+        ) -> PairSpreadQueryResult:
+            assert leg1.symbol == "NEXUSDT"
+            assert leg2.symbol == "10000NEXUSDT"
+            observed_at = now or fixed_now
+            leg1_current = PairSpreadCurrentLeg(
+                exchange=leg1.exchange,
+                symbol=leg1.symbol,
+                market_type=leg1.market_type,
+                raw_symbol="NEXUSDT",
+                price=0.0104,
+                price_field=PairSpreadPriceField.MID_PRICE,
+                mid_price=0.0104,
+                timestamp=observed_at,
+            )
+            leg2_current = PairSpreadCurrentLeg(
+                exchange=leg2.exchange,
+                symbol=leg2.symbol,
+                market_type=leg2.market_type,
+                raw_symbol="10000NEX_USDT",
+                price=100,
+                price_field=PairSpreadPriceField.MID_PRICE,
+                mid_price=100,
+                timestamp=observed_at,
+            )
+            return PairSpreadQueryResult(
+                leg1=leg1,
+                leg2=leg2,
+                hours=hours,
+                interval_minutes=interval_minutes,
+                interval_seconds=interval_seconds or interval_minutes * 60,
+                leg2_multiplier=leg2_multiplier,
+                observed_at=observed_at,
+                point_count=1,
+                first_seen_at=observed_at,
+                last_seen_at=observed_at,
+                spread_abs=PairSpreadValueStats(current=99.9896),
+                spread_pct=PairSpreadValueStats(current=199.9584),
+                current=PairSpreadCurrentSnapshot(
+                    observed_at=observed_at,
+                    leg1=leg1_current,
+                    leg2=leg2_current,
+                    spread_abs=99.9896,
+                    spread_pct=199.9584,
+                ),
+                points=[
+                    PairSpreadPoint(
+                        bucket_at=observed_at,
+                        leg1_close=0.0104,
+                        leg2_close=100,
+                        spread_abs=99.9896,
+                        spread_pct=199.9584,
+                    )
+                ],
+            )
+
+        async def aclose(self) -> None:
+            return None
+
+    app = create_app(settings=Settings(database_url="sqlite:///:memory:"))
+    app.state.pair_spread_query_service_factory = FakePairSpreadService
+
+    with TestClient(app) as client:
+        settings_response = client.put(
+            "/api/settings/risk",
+            json={
+                "symbol_aliases": [
+                    {
+                        "exchange": "bitget",
+                        "symbol": "NEX",
+                        "canonical_symbol": "10000NEX",
+                        "market_type": "spot",
+                        "price_multiplier": 10000,
+                    }
+                ]
+            },
+        )
+        response = client.get(
+            "/api/pair-spread/query"
+            "?leg1_exchange=bitget&leg1_symbol=10000NEX&leg1_market_type=spot"
+            "&leg2_exchange=gate&leg2_symbol=10000NEX&leg2_market_type=future&hours=1"
+        )
+
+    assert settings_response.status_code == 200
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["leg1"]["symbol"] == "10000NEXUSDT"
+    assert payload["leg2"]["symbol"] == "10000NEXUSDT"
+    assert payload["points"][0]["leg1_close"] == pytest.approx(104)
+    assert payload["points"][0]["leg2_close"] == pytest.approx(100)
+    assert payload["current"]["leg1"]["symbol"] == "10000NEXUSDT"
+    assert payload["current"]["leg1"]["raw_symbol"] == "NEXUSDT"
+    assert payload["current"]["leg1"]["price"] == pytest.approx(104)
+
+
+def test_pair_spread_funding_history_endpoint_uses_lightweight_service() -> None:
+    fixed_start = datetime(2026, 7, 10, 0, 0, tzinfo=UTC)
+    fixed_end = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
+
+    class FakePairSpreadService:
+        def __init__(self) -> None:
+            self.closed = False
+            self.query_called = False
+            self.funding_call: tuple[PairSpreadLegQuery, PairSpreadLegQuery, datetime, datetime] | None = None
+
+        async def query_funding_history(
+            self,
+            leg1: PairSpreadLegQuery,
+            leg2: PairSpreadLegQuery,
+            *,
+            start: datetime,
+            end: datetime,
+        ) -> PairSpreadFundingHistoryResult:
+            self.funding_call = (leg1, leg2, start, end)
+            return PairSpreadFundingHistoryResult(
+                leg1=leg1,
+                leg2=leg2,
+                start_at=start,
+                end_at=end,
+                funding_history=[
+                    PairSpreadFundingPoint(
+                        exchange=leg1.exchange,
+                        symbol=leg1.symbol,
+                        funding_time=fixed_start,
+                        funding_rate_pct=0.01,
+                    ),
+                    PairSpreadFundingPoint(
+                        exchange=leg2.exchange,
+                        symbol=leg2.symbol,
+                        funding_time=fixed_start,
+                        funding_rate_pct=0.03,
+                    ),
+                ],
+                warnings=["测试警告"],
+            )
+
+        async def query(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            self.query_called = True
+            raise AssertionError("funding history endpoint should not query pair spread klines")
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    service = FakePairSpreadService()
+    app = create_app(settings=Settings(database_url="sqlite:///:memory:"))
+    app.state.pair_spread_query_service_factory = lambda: service
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/pair-spread/funding-history"
+            "?leg1_exchange=binance&leg1_symbol=btc"
+            "&leg2_exchange=okx&leg2_symbol=BTC-USDT-SWAP"
+            "&leg1_market_type=future&leg2_market_type=future"
+            "&start_at=2026-07-10T00:00:00Z&end_at=2026-07-10T12:00:00Z"
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["leg1"]["symbol"] == "BTCUSDT"
+    assert payload["leg2"]["symbol"] == "BTCUSDT"
+    assert len(payload["funding_history"]) == 2
+    assert payload["warnings"] == ["测试警告"]
+    assert service.funding_call is not None
+    assert service.funding_call[2] == fixed_start
+    assert service.funding_call[3] == fixed_end
+    assert service.query_called is False
+    assert service.closed is True
+
+
+def test_pair_spread_query_endpoint_accepts_second_interval() -> None:
+    fixed_now = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
+
+    class FakePairSpreadService:
+        async def query(
+            self,
+            leg1: PairSpreadLegQuery,
+            leg2: PairSpreadLegQuery,
+            *,
+            hours: int,
+            interval_minutes: int = 1,
+            interval_seconds: int | None = None,
+            leg2_multiplier: float = 1.0,
+            now: datetime | None = None,
+            include_current: bool = True,
+        ) -> PairSpreadQueryResult:
+            assert interval_minutes == 1
+            assert interval_seconds == 5
+            observed_at = now or fixed_now
+            leg1_current = PairSpreadCurrentLeg(
+                exchange=leg1.exchange,
+                symbol=leg1.symbol,
+                market_type=leg1.market_type,
+                raw_symbol=leg1.symbol,
+                price=100,
+                price_field=PairSpreadPriceField.MID_PRICE,
+                mid_price=100,
+                timestamp=observed_at,
+            )
+            leg2_current = PairSpreadCurrentLeg(
+                exchange=leg2.exchange,
+                symbol=leg2.symbol,
+                market_type=leg2.market_type,
+                raw_symbol=leg2.symbol,
+                price=101,
+                price_field=PairSpreadPriceField.MID_PRICE,
+                mid_price=101,
+                timestamp=observed_at,
+            )
+            return PairSpreadQueryResult(
+                leg1=leg1,
+                leg2=leg2,
+                hours=hours,
+                interval_minutes=1,
+                interval_seconds=5,
+                leg2_multiplier=leg2_multiplier,
+                observed_at=observed_at,
+                point_count=1,
+                first_seen_at=observed_at,
+                last_seen_at=observed_at,
+                spread_abs=PairSpreadValueStats(current=1),
+                spread_pct=PairSpreadValueStats(current=1),
+                current=PairSpreadCurrentSnapshot(
+                    observed_at=observed_at,
+                    leg1=leg1_current,
+                    leg2=leg2_current,
+                    spread_abs=1,
+                    spread_pct=1,
+                ),
+                points=[
+                    {
+                        "bucket_at": observed_at,
+                        "leg1_close": 100,
+                        "leg2_close": 101,
+                        "spread_abs": 1,
+                        "spread_pct": 1,
+                    }
+                ],
+            )
+
+        async def aclose(self) -> None:
+            return None
+
+    app = create_app(settings=Settings(database_url="sqlite:///:memory:"))
+    app.state.pair_spread_query_service_factory = FakePairSpreadService
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/pair-spread/query"
+            "?leg1_exchange=binance&leg1_symbol=btc"
+            "&leg2_exchange=okx&leg2_symbol=btc&hours=1"
+            "&interval_seconds=5"
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["interval_minutes"] == 1
+    assert payload["interval_seconds"] == 5
+
+
+def test_symbol_spread_query_endpoint_accepts_custom_scope_and_interval() -> None:
+    fixed_now = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
+
+    class FakePairSpreadService:
+        async def query_symbol_spreads(
+            self,
+            symbol: str,
+            *,
+            market_type: MarketType = MarketType.FUTURE,
+            base_exchange: str = "binance",
+            exchanges: list[str] | None = None,
+            hours: int,
+            interval_seconds: int = 60,
+            now: datetime | None = None,
+            include_current: bool = True,
+            legs_by_exchange: dict[str, PairSpreadLegQuery] | None = None,
+            price_multipliers_by_exchange: dict[str, float] | None = None,
+            display_symbol: str | None = None,
+        ) -> SymbolSpreadQueryResult:
+            assert symbol == "btc"
+            assert market_type == MarketType.FUTURE
+            assert base_exchange == "okx"
+            assert exchanges == ["okx", "bybit"]
+            assert hours == 6
+            assert interval_seconds == 5
+            assert include_current is True
+            assert legs_by_exchange is not None
+            assert legs_by_exchange["okx"].symbol == "BTCUSDT"
+            assert price_multipliers_by_exchange == {"okx": 1.0, "bybit": 1.0}
+            assert display_symbol == "BTCUSDT"
+            observed_at = now or fixed_now
+            point = SymbolSpreadPoint(
+                bucket_at=observed_at,
+                base_close=100,
+                exchange_close=102,
+                spread_abs=2,
+                spread_pct=2,
+            )
+            return SymbolSpreadQueryResult(
+                symbol="BTCUSDT",
+                market_type=market_type,
+                base_exchange=base_exchange,
+                exchanges=[base_exchange, "bybit"],
+                hours=hours,
+                interval_minutes=1,
+                interval_seconds=interval_seconds,
+                observed_at=observed_at,
+                point_count=1,
+                first_seen_at=observed_at,
+                last_seen_at=observed_at,
+                current_prices=[
+                    SymbolExchangePriceSnapshot(
+                        exchange="okx",
+                        symbol="BTCUSDT",
+                        raw_symbol="BTC-USDT-SWAP",
+                        price=100,
+                        price_field=PairSpreadPriceField.MID_PRICE,
+                        timestamp=observed_at,
+                    ),
+                    SymbolExchangePriceSnapshot(
+                        exchange="bybit",
+                        symbol="BTCUSDT",
+                        raw_symbol="BTCUSDT",
+                        price=102,
+                        price_field=PairSpreadPriceField.MID_PRICE,
+                        timestamp=observed_at,
+                    ),
+                ],
+                series=[
+                    SymbolSpreadSeries(
+                        exchange="bybit",
+                        symbol="BTCUSDT",
+                        point_count=1,
+                        first_seen_at=observed_at,
+                        last_seen_at=observed_at,
+                        spread_abs=PairSpreadValueStats(current=2),
+                        spread_pct=PairSpreadValueStats(current=2),
+                        current=point,
+                        points=[point],
+                    )
+                ],
+            )
+
+        async def aclose(self) -> None:
+            return None
+
+    app = create_app(settings=Settings(database_url="sqlite:///:memory:"))
+    app.state.pair_spread_query_service_factory = FakePairSpreadService
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/pair-spread/symbol-query"
+            "?symbol=btc&market_type=future&base_exchange=okx"
+            "&exchanges=okx,bybit&hours=6&interval_seconds=5"
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["symbol"] == "BTCUSDT"
+    assert payload["base_exchange"] == "okx"
+    assert payload["exchanges"] == ["okx", "bybit"]
+    assert payload["interval_seconds"] == 5
+    assert payload["series"][0]["exchange"] == "bybit"
+
+
+def test_pair_spread_diagnostics_endpoint_coarsens_second_interval() -> None:
+    fixed_now = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
+
+    class FakePairSpreadService:
+        async def query(
+            self,
+            leg1: PairSpreadLegQuery,
+            leg2: PairSpreadLegQuery,
+            *,
+            hours: int,
+            interval_minutes: int = 1,
+            interval_seconds: int | None = None,
+            leg2_multiplier: float = 1.0,
+            now: datetime | None = None,
+            include_current: bool = True,
+        ) -> PairSpreadQueryResult:
+            assert interval_minutes == 1
+            assert interval_seconds == 60
+            assert include_current is False
+            observed_at = now or fixed_now
+            points = [
+                PairSpreadPoint(
+                    bucket_at=observed_at - timedelta(minutes=2),
+                    leg1_close=100,
+                    leg2_close=112,
+                    spread_abs=12,
+                    spread_pct=11.32,
+                ),
+                PairSpreadPoint(
+                    bucket_at=observed_at - timedelta(minutes=1),
+                    leg1_close=100,
+                    leg2_close=102,
+                    spread_abs=2,
+                    spread_pct=1.98,
+                ),
+            ]
+            return PairSpreadQueryResult(
+                leg1=leg1,
+                leg2=leg2,
+                hours=hours,
+                interval_minutes=1,
+                interval_seconds=60,
+                leg2_multiplier=leg2_multiplier,
+                observed_at=observed_at,
+                point_count=len(points),
+                first_seen_at=points[0].bucket_at,
+                last_seen_at=points[-1].bucket_at,
+                spread_abs=PairSpreadValueStats(min=2, max=12, mean=7, current=2),
+                spread_pct=PairSpreadValueStats(min=1.98, max=11.32, mean=6.65, current=1.98),
+                points=points,
+            )
+
+        async def aclose(self) -> None:
+            return None
+
+    app = create_app(settings=Settings(database_url="sqlite:///:memory:"))
+    app.state.pair_spread_query_service_factory = FakePairSpreadService
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/pair-spread/diagnostics"
+            "?leg1_exchange=bitget&leg1_symbol=KIOXIA"
+            "&leg2_exchange=hyperliquid&leg2_symbol=KIOXIA"
+            "&hours=24&threshold_pct=1&interval_seconds=5"
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["requested_interval_seconds"] == 5
+    assert payload["interval_seconds"] == 60
+    assert payload["peak_spread_pct"] == pytest.approx(11.32)
+    assert payload["points_over_threshold"] == 2
+    assert any("只支持实时采样" in note for note in payload["notes"])
+
+
+def test_pair_spread_funding_record_endpoints_round_trip() -> None:
+    now = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
+    payload = {
+        "leg1": {"exchange": "binance", "symbol": "btc", "market_type": "future"},
+        "leg2": {"exchange": "okx", "symbol": "btc", "market_type": "future"},
+        "leg2_multiplier": 1,
+    }
+
+    class FakePairSpreadFundingRecorder:
+        def __init__(self) -> None:
+            self.repo = self
+            self.watch_items: dict[str, PairSpreadFundingWatchItem] = {}
+            self.samples: dict[str, list[PairSpreadRealtimeFundingPoint]] = {}
+
+        def _key(self, request: PairSpreadFundingRecordRequest) -> str:
+            return "|".join(
+                [
+                    request.leg1.exchange,
+                    request.leg1.market_type.value,
+                    request.leg1.symbol,
+                    request.leg2.exchange,
+                    request.leg2.market_type.value,
+                    request.leg2.symbol,
+                    str(request.leg2_multiplier),
+                ]
+            )
+
+        async def list_watch_items(self) -> list[PairSpreadFundingWatchItem]:
+            return list(self.watch_items.values())
+
+        async def status_for(
+            self,
+            request: PairSpreadFundingRecordRequest,
+            *,
+            hours: int,
+            now: datetime | None = None,
+        ) -> PairSpreadFundingRecordStatus:
+            key = self._key(request)
+            item = self.watch_items.get(key)
+            if item is None:
+                return PairSpreadFundingRecordStatus(watched=False)
+            return PairSpreadFundingRecordStatus(
+                watched=True,
+                item=item,
+                samples=self.samples.get(key, []),
+                warnings=[],
+            )
+
+        async def upsert_watch(
+            self,
+            request: PairSpreadFundingRecordRequest,
+            *,
+            hours: int,
+            now: datetime | None = None,
+        ) -> PairSpreadFundingRecordStatus:
+            observed_at = now or datetime.now(UTC)
+            key = self._key(request)
+            item = PairSpreadFundingWatchItem(
+                pair_key=key,
+                leg1=request.leg1,
+                leg2=request.leg2,
+                leg2_multiplier=request.leg2_multiplier,
+                interval_seconds=60,
+                created_at=observed_at,
+                updated_at=observed_at,
+                sample_count=1,
+                latest_sample_at=observed_at,
+            )
+            sample = PairSpreadRealtimeFundingPoint(
+                bucket_at=observed_at.replace(second=0, microsecond=0),
+                left_rate_pct=0.01,
+                right_rate_pct=0.04,
+                net_rate_pct=0.03,
+                source="minute_record",
+            )
+            self.watch_items[key] = item
+            self.samples[key] = [sample]
+            return PairSpreadFundingRecordStatus(watched=True, item=item, samples=[sample], warnings=[])
+
+        async def delete_watch(
+            self,
+            request: PairSpreadFundingRecordRequest,
+            *,
+            hours: int,
+            now: datetime | None = None,
+        ) -> PairSpreadFundingRecordStatus:
+            key = self._key(request)
+            self.watch_items.pop(key, None)
+            self.samples.pop(key, None)
+            return PairSpreadFundingRecordStatus(watched=False)
+
+    app = create_app(settings=Settings(dashboard_password="secret", database_url="sqlite:///:memory:"))
+    fake_recorder = FakePairSpreadFundingRecorder()
+
+    with TestClient(app) as client:
+        app.state.pair_spread_funding_recorder = fake_recorder
+        headers = {"X-Dashboard-Password": "secret"}
+
+        watchlist_response = client.get("/api/pair-spread/funding-records/watchlist")
+        assert watchlist_response.status_code == 200
+        assert watchlist_response.json() == []
+
+        status_response = client.get(
+            "/api/pair-spread/funding-records/status"
+            "?leg1_exchange=binance&leg1_symbol=btc&leg2_exchange=okx&leg2_symbol=btc"
+            "&leg1_market_type=future&leg2_market_type=future&hours=6&leg2_multiplier=1"
+        )
+        assert status_response.status_code == 200
+        assert status_response.json()["watched"] is False
+
+        start_response = client.post(
+            "/api/pair-spread/funding-records/watch?hours=6",
+            headers=headers,
+            json=payload,
+        )
+        assert start_response.status_code == 200
+        started = start_response.json()
+        assert started["watched"] is True
+        assert started["item"]["sample_count"] == 1
+        assert started["samples"][0]["net_rate_pct"] == pytest.approx(0.03)
+
+        watchlist_response = client.get("/api/pair-spread/funding-records/watchlist")
+        assert watchlist_response.status_code == 200
+        assert watchlist_response.json()[0]["sample_count"] == 1
+
+        status_response = client.get(
+            "/api/pair-spread/funding-records/status"
+            "?leg1_exchange=binance&leg1_symbol=btc&leg2_exchange=okx&leg2_symbol=btc"
+            "&leg1_market_type=future&leg2_market_type=future&hours=6&leg2_multiplier=1"
+        )
+        assert status_response.status_code == 200
+        assert status_response.json()["watched"] is True
+        assert status_response.json()["samples"][0]["net_rate_pct"] == pytest.approx(0.03)
+
+        stop_response = client.request(
+            "DELETE",
+            "/api/pair-spread/funding-records/watch?hours=6",
+            headers=headers,
+            json=payload,
+        )
+        assert stop_response.status_code == 200
+        assert stop_response.json()["watched"] is False
+
+        watchlist_response = client.get("/api/pair-spread/funding-records/watchlist")
+        assert watchlist_response.status_code == 200
+        assert watchlist_response.json() == []
+
+
+def test_premium_index_endpoints_use_on_demand_service() -> None:
+    now = datetime(2026, 7, 11, 12, 0, tzinfo=UTC)
+
+    class FakePremiumIndexService:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def query(
+            self,
+            market: PremiumIndexMarketQuery,
+            *,
+            hours: int,
+            interval_minutes: int = 1,
+        ) -> PremiumIndexQueryResult:
+            current = await self.current(market)
+            return PremiumIndexQueryResult(
+                exchange=market.exchange,
+                symbol=market.symbol,
+                hours=hours,
+                interval_minutes=interval_minutes,
+                observed_at=now,
+                point_count=1,
+                first_seen_at=now,
+                last_seen_at=now,
+                premium_pct=PremiumIndexValueStats(current=0.5, min=0.5, max=0.5, mean=0.5),
+                current=current,
+                points=[PremiumIndexPoint(bucket_at=now, premium_pct=0.5, source="test")],
+                warnings=[],
+            )
+
+        async def current(self, market: PremiumIndexMarketQuery) -> PremiumIndexCurrentSnapshot:
+            return PremiumIndexCurrentSnapshot(
+                observed_at=now,
+                exchange=market.exchange,
+                symbol=market.symbol,
+                raw_symbol=market.symbol,
+                mark_price=100.5,
+                index_price=100,
+                premium_pct=0.5,
+                source="mark_index",
+            )
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    service = FakePremiumIndexService()
+    app = create_app(settings=Settings(database_url="sqlite:///:memory:"))
+    app.state.premium_index_query_service_factory = lambda: service
+
+    with TestClient(app) as client:
+        query_response = client.get(
+            "/api/premium-index/query?exchange=binance&symbol=btc&hours=6&interval_minutes=1"
+        )
+        current_response = client.get("/api/premium-index/current?exchange=binance&symbol=btc")
+
+    assert query_response.status_code == 200
+    assert query_response.json()["symbol"] == "BTCUSDT"
+    assert query_response.json()["premium_pct"]["current"] == 0.5
+    assert current_response.status_code == 200
+    assert current_response.json()["premium_pct"] == 0.5
+    assert service.closed is True
 
 
 def test_funding_arbitrage_preview_returns_independent_candidates() -> None:
@@ -1181,8 +2043,8 @@ def test_alert_loop_mutes_feishu_when_card_conditions_fail() -> None:
             effective_executable_edge_pct=-1.284,
             slippage_loss_pct=1.67,
             blockers=[
-                "sell side depth filled 228.33/1000.00 USDT",
-                "effective executable edge -1.284% is below 0.050%",
+                "卖出侧深度不足：228.33/1000.00 USDT",
+                "实际可成交有效收益 -1.284% 低于最低要求 0.050%",
             ],
             warnings=[],
         )
@@ -1205,8 +2067,8 @@ def test_alert_loop_mutes_feishu_when_card_conditions_fail() -> None:
     assert notifier.alerts == []
     assert len(event_repo.events) == 1
     assert event_repo.events[0].status == "muted"
-    assert "Astro: skipped order book validation" in event_repo.events[0].message
-    assert "sell side depth filled" in event_repo.events[0].message
+    assert "Astro: 订单簿校验未通过" in event_repo.events[0].message
+    assert "卖出侧深度不足" in event_repo.events[0].message
 
 
 def test_alert_loop_sends_feishu_when_card_condition_filter_is_disabled() -> None:
@@ -1255,7 +2117,7 @@ def test_alert_loop_sends_feishu_when_card_condition_filter_is_disabled() -> Non
             executable_open_pct=-0.87,
             effective_executable_edge_pct=-1.284,
             slippage_loss_pct=1.67,
-            blockers=["sell side depth filled 228.33/1000.00 USDT"],
+            blockers=["卖出侧深度不足：228.33/1000.00 USDT"],
             warnings=[],
         )
     )
@@ -1277,7 +2139,7 @@ def test_alert_loop_sends_feishu_when_card_condition_filter_is_disabled() -> Non
     assert len(notifier.alerts) == 1
     assert len(event_repo.events) == 1
     assert event_repo.events[0].status == "sent"
-    assert "Astro: skipped order book validation" in str(notifier.alerts[0]["prebuilt_text"])
+    assert "Astro: 订单簿校验未通过" in str(notifier.alerts[0]["prebuilt_text"])
 
 
 def test_astro_card_settings_endpoint_roundtrips() -> None:
@@ -1324,6 +2186,104 @@ def test_astro_card_settings_endpoint_roundtrips() -> None:
         assert reloaded.json()["close_position_floor_pct"] == 0.01
 
 
+def test_astro_new_listing_card_settings_endpoint_defaults_to_card_settings_and_roundtrips() -> None:
+    app = create_app(
+        settings=Settings(
+            dashboard_password="secret",
+            database_url="sqlite:///:memory:",
+            astro_default_max_trade_usdt=22,
+            astro_default_max_notional=22,
+        )
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/api/settings/astro-new-listing-card")
+        assert response.status_code == 200
+        assert response.json()["max_trade_usdt"] == 22
+        assert response.json()["max_notional"] == 22
+
+        saved_card = client.put(
+            "/api/settings/astro-card",
+            headers={"X-Dashboard-Password": "secret"},
+            json={
+                "max_trade_usdt": 75,
+                "leverage": 4,
+                "min_notional": 12,
+                "max_notional": 75,
+                "open_enabled": True,
+                "close_position_buffer_pct": 0.2,
+                "unfavorable_funding_weight": 1.5,
+                "close_position_floor_pct": 0.01,
+            },
+        )
+        assert saved_card.status_code == 200
+
+        inherited = client.get("/api/settings/astro-new-listing-card")
+        assert inherited.status_code == 200
+        assert inherited.json()["max_trade_usdt"] == 75
+        assert inherited.json()["leverage"] == 4
+
+        payload = inherited.json()
+        payload["max_trade_usdt"] = 120
+        payload["leverage"] = 2
+        payload["max_notional"] = 120
+        payload["open_enabled"] = False
+
+        unauthenticated = client.put("/api/settings/astro-new-listing-card", json=payload)
+        assert unauthenticated.status_code == 401
+
+        saved = client.put(
+            "/api/settings/astro-new-listing-card",
+            headers={"X-Dashboard-Password": "secret"},
+            json=payload,
+        )
+        assert saved.status_code == 200
+        assert saved.json()["max_trade_usdt"] == 120
+        assert saved.json()["leverage"] == 2
+        assert saved.json()["open_enabled"] is False
+
+        reloaded = client.get("/api/settings/astro-new-listing-card")
+        assert reloaded.status_code == 200
+        assert reloaded.json()["max_trade_usdt"] == 120
+        assert reloaded.json()["max_notional"] == 120
+        assert reloaded.json()["open_enabled"] is False
+
+
+def test_astro_automation_settings_endpoint_updates_runtime_service() -> None:
+    app = create_app(
+        settings=Settings(
+            dashboard_password="secret",
+            database_url="sqlite:///:memory:",
+            astro_alert_auto_create=False,
+        )
+    )
+    app.state.astro_alert_service = AstroAlertService(FakeAstroPairClient(), app.state.settings)
+
+    with TestClient(app) as client:
+        response = client.get("/api/settings/astro-automation")
+        assert response.status_code == 200
+        assert response.json()["alert_auto_create"] is False
+
+        unauthenticated = client.put(
+            "/api/settings/astro-automation",
+            json={"alert_auto_create": True},
+        )
+        assert unauthenticated.status_code == 401
+
+        saved = client.put(
+            "/api/settings/astro-automation",
+            headers={"X-Dashboard-Password": "secret"},
+            json={"alert_auto_create": True},
+        )
+        assert saved.status_code == 200
+        assert saved.json()["alert_auto_create"] is True
+        assert app.state.astro_alert_service.alert_auto_create_enabled is True
+
+        reloaded = client.get("/api/settings/astro-automation")
+        assert reloaded.status_code == 200
+        assert reloaded.json()["alert_auto_create"] is True
+
+
 def test_live_pilot_settings_endpoint_roundtrips() -> None:
     app = create_app(settings=Settings(dashboard_password="secret", database_url="sqlite:///:memory:"))
 
@@ -1362,6 +2322,40 @@ def test_live_pilot_settings_endpoint_roundtrips() -> None:
         assert reloaded.json()["min_next_funding_edge_pct"] == -0.03
         assert reloaded.json()["prefer_hyperliquid"] is False
         assert reloaded.json()["exclude_ss"] is False
+
+
+def test_minute_signal_settings_endpoint_roundtrips() -> None:
+    app = create_app(settings=Settings(dashboard_password="secret", database_url="sqlite:///:memory:"))
+
+    with TestClient(app) as client:
+        response = client.get("/api/settings/minute-signals")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["hours"] == 4
+        assert payload["max_entry_basis_bps"] == 45
+        assert payload["require_negative_premium_when_spot_above"] is True
+
+        payload["max_symbols"] = 12
+        payload["max_entry_basis_bps"] = 10
+        payload["max_premium_when_spot_above_bps"] = -20
+
+        unauthenticated = client.put("/api/settings/minute-signals", json=payload)
+        assert unauthenticated.status_code == 401
+
+        saved = client.put(
+            "/api/settings/minute-signals",
+            headers={"X-Dashboard-Password": "secret"},
+            json=payload,
+        )
+        assert saved.status_code == 200
+        assert saved.json()["max_symbols"] == 12
+        assert saved.json()["max_entry_basis_bps"] == 10
+        assert saved.json()["max_premium_when_spot_above_bps"] == -20
+
+        reloaded = client.get("/api/settings/minute-signals")
+        assert reloaded.status_code == 200
+        assert reloaded.json()["max_symbols"] == 12
+        assert reloaded.json()["max_entry_basis_bps"] == 10
 
 
 def test_live_pilot_preview_endpoint_returns_selected_test_symbols() -> None:
@@ -2109,9 +3103,12 @@ def test_astro_manual_card_create_endpoint_skips_when_order_book_validation_fail
             sell_vwap=100.5,
             quoted_open_pct=0.5,
             executable_open_pct=0.1,
+            cost_pct=0.2,
+            funding_edge_pct=0.05,
+            slippage_buffer_pct=0.05,
             effective_executable_edge_pct=-0.05,
             slippage_loss_pct=0.4,
-            blockers=["buy side depth filled 500.00/1000.00 USDT"],
+            blockers=["买入侧深度不足：500.00/1000.00 USDT"],
             warnings=[],
         )
     )
@@ -2129,9 +3126,14 @@ def test_astro_manual_card_create_endpoint_skips_when_order_book_validation_fail
     payload = response.json()
     assert payload["status"] == "skipped"
     assert payload["action"] == "order_book_validation"
-    assert "buy side depth filled" in payload["message"]
+    assert "买入侧深度不足" in payload["message"]
+    assert "实际可成交开仓价差 +0.100%" in payload["message"]
+    assert "成本修正 -0.200%" in payload["message"]
+    assert "资金费边际 +0.050%" in payload["message"]
+    assert "滑点缓冲 -0.050%" in payload["message"]
+    assert "实际可成交有效收益 -0.050%" in payload["message"]
     assert service.calls == []
-    assert validator.calls[0]["override_notional_usdt"] == 80
+    assert validator.calls[0]["override_notional_usdt"] is None
     card_settings = validator.calls[0]["card_settings"]
     assert isinstance(card_settings, AstroCardSettings)
     assert card_settings.max_trade_usdt == 80
@@ -2244,7 +3246,7 @@ def test_live_pilot_auto_create_service_uses_pilot_settings_for_real_service() -
 
     import asyncio
 
-    asyncio.run(app.state.astro_alert_service.handle_alert(make_opportunity()))
+    asyncio.run(app.state.astro_alert_service.handle_live_pilot(make_opportunity()))
 
     assert client_backend.added[0]["status"] is True
     assert client_backend.added[0]["disableOpen"] is False
@@ -2504,3 +3506,87 @@ async def test_service_control_frontend_restart_is_reported_as_restarted() -> No
     assert result.status == "restarted"
     assert result.message == "Frontend restart triggered."
     assert controller._request.await_count == 1
+
+
+def test_opportunity_radar_preview_and_settings_round_trip() -> None:
+    now = datetime.now(UTC)
+    store = SnapshotStore()
+    store.set_markets(
+        [
+            MarketSnapshot(
+                symbol="BTCUSDT",
+                base="BTC",
+                exchange="bybit",
+                market_type=MarketType.FUTURE,
+                bid=99.95,
+                ask=100.05,
+                bid_size=200,
+                ask_size=200,
+                volume_24h_usdt=5_000_000,
+                funding_next_rate_pct=-0.1,
+                funding_interval_hours=1,
+                mark_price=98,
+                index_price=100,
+                timestamp=now,
+                raw_symbol="BTCUSDT",
+            ),
+            MarketSnapshot(
+                symbol="BTCUSDT",
+                base="BTC",
+                exchange="binance",
+                market_type=MarketType.FUTURE,
+                bid=100.25,
+                ask=100.35,
+                bid_size=200,
+                ask_size=200,
+                volume_24h_usdt=5_000_000,
+                funding_next_rate_pct=0.04,
+                funding_interval_hours=4,
+                mark_price=100,
+                index_price=100,
+                timestamp=now,
+                raw_symbol="BTCUSDT",
+            ),
+        ]
+    )
+    app = create_app(snapshot_store=store)
+    app.state.settings_repo = FakeSettingsRepository(
+        RiskSettings(),
+        opportunity_radar_settings=OpportunityRadarSettings(min_depth_multiple=1),
+    )
+    client = TestClient(app)
+
+    preview_response = client.get("/api/opportunity-radar/preview")
+    settings_response = client.put(
+        "/api/opportunity-radar/settings",
+        json={
+            **OpportunityRadarSettings().model_dump(),
+            "min_abs_premium_pct": 2,
+            "max_abs_entry_spread_pct": 0.3,
+        },
+    )
+
+    assert preview_response.status_code == 200
+    assert preview_response.json()["displayed_candidates"] == 1
+    assert preview_response.json()["candidates"][0]["long_exchange"] == "bybit"
+    assert settings_response.status_code == 200
+    assert settings_response.json()["min_abs_premium_pct"] == 2
+    assert settings_response.json()["max_abs_entry_spread_pct"] == 0.3
+
+    app.state.feishu_notifier = SimpleNamespace(
+        config=SimpleNamespace(webhook_url=""),
+        send_text=AsyncMock(),
+    )
+    missing_config_response = client.post("/api/opportunity-radar/test-notification")
+    assert missing_config_response.status_code == 400
+
+    send_text = AsyncMock()
+    app.state.feishu_notifier = SimpleNamespace(
+        config=SimpleNamespace(webhook_url="https://example.test/hook"),
+        send_text=send_text,
+    )
+    test_response = client.post("/api/opportunity-radar/test-notification")
+
+    assert test_response.status_code == 200
+    assert test_response.json() == {"status": "sent"}
+    send_text.assert_awaited_once_with("[机会雷达] 飞书通知测试成功")

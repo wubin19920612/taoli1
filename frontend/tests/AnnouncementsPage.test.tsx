@@ -20,6 +20,7 @@ describe("AnnouncementsPage", () => {
             poll_interval_seconds: 120,
             record_exchanges: ["binance", "okx", "bybit", "gate", "bitget", "hyperliquid"],
             alert_exchanges: ["bybit"],
+            listing_delisting_alerts_enabled: true,
             bootstrap_alerts_enabled: false,
             event_reminders_enabled: true,
             event_reminder_minutes_before: 30
@@ -67,6 +68,7 @@ describe("AnnouncementsPage", () => {
     render(<AnnouncementsPage />);
 
     expect(await screen.findByText("上币/下币公告监控")).toBeTruthy();
+    expect(await screen.findByText("上/下币告警 开启")).toBeTruthy();
     expect(await screen.findByText("New listing: WDCUSDT Perpetual Contract")).toBeTruthy();
     expect(await screen.findByText("WDCUSDT")).toBeTruthy();
     expect(await screen.findByText("合约")).toBeTruthy();
@@ -105,6 +107,7 @@ describe("AnnouncementsPage", () => {
         poll_interval_seconds: 120,
         record_exchanges: ["binance", "okx", "bybit", "gate", "bitget", "hyperliquid"],
         alert_exchanges: ["bybit"],
+        listing_delisting_alerts_enabled: true,
         bootstrap_alerts_enabled: false,
         event_reminders_enabled: true,
         event_reminder_minutes_before: 30

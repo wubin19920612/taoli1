@@ -139,3 +139,33 @@ def test_builds_sf_opportunity_treats_spot_funding_as_zero() -> None:
     assert item.net_funding_next_pct == pytest.approx(0.05)
     assert item.net_funding_hourly_pct == pytest.approx(0.00375)
     assert item.net_funding_daily_pct == pytest.approx(0.09)
+
+
+def test_builds_rtoken_spot_to_perpetual_opportunity_with_positive_funding() -> None:
+    rtoken_spot = snapshot("bitget", MarketType.SPOT, bid=311.18, ask=311.29).model_copy(
+        update={
+            "symbol": "AAPLUSDT",
+            "base": "AAPL",
+            "raw_symbol": "RAAPLUSDT",
+            "symbol_alias_original_symbol": "RAAPLUSDT",
+        }
+    )
+    perpetual = snapshot("binance", MarketType.FUTURE, bid=312, ask=312.1).model_copy(
+        update={
+            "symbol": "AAPLUSDT",
+            "base": "AAPL",
+            "funding_rate_pct": 0.04,
+            "funding_next_rate_pct": 0.05,
+            "funding_interval_hours": 8,
+        }
+    )
+
+    opportunities = build_opportunities([rtoken_spot, perpetual], mode="SF")
+
+    assert len(opportunities) == 1
+    item = opportunities[0]
+    assert item.buy_exchange == "bitget"
+    assert item.buy_raw_symbol == "RAAPLUSDT"
+    assert item.sell_exchange == "binance"
+    assert item.net_funding_pct == pytest.approx(0.04)
+    assert item.net_funding_next_pct == pytest.approx(0.05)
