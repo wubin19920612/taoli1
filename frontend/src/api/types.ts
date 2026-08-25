@@ -958,6 +958,16 @@ export interface PairSpreadHourlyVolumePoint {
   volume_ratio: number | null;
 }
 
+export interface PairSpreadOpenInterestPoint {
+  bucket_at: string;
+  leg1_open_interest_usdt: number | null;
+  leg2_open_interest_usdt: number | null;
+  leg1_change_usdt: number | null;
+  leg2_change_usdt: number | null;
+  net_change_usdt: number | null;
+  source?: string;
+}
+
 export interface PairSpreadFundingPoint {
   exchange: string;
   symbol: string;
@@ -1057,6 +1067,7 @@ export interface PairSpreadQueryResult {
   current: PairSpreadCurrentSnapshot | null;
   points: PairSpreadPoint[];
   hourly_volume?: PairSpreadHourlyVolumePoint[];
+  open_interest?: PairSpreadOpenInterestPoint[];
   funding_history: PairSpreadFundingPoint[];
   realtime_funding?: PairSpreadRealtimeFundingPoint[];
   warnings: string[];

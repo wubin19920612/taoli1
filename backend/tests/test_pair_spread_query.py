@@ -15,6 +15,7 @@ from app.models.pair_spread import (
     PairSpreadFundingPoint,
     PairSpreadKlinePoint,
     PairSpreadLegQuery,
+    PairSpreadOpenInterestPoint,
     PairSpreadPriceField,
 )
 from app.services.pair_spread_query import (
@@ -25,6 +26,7 @@ from app.services.pair_spread_query import (
     _REALTIME_SYMBOL_SPREAD_CACHE,
     _hyperliquid_history_limit_warning,
     build_pair_hourly_volume_points,
+    _append_realtime_open_interest_point,
     build_pair_spread_points,
     build_symbol_spread_points,
 )
@@ -86,6 +88,31 @@ def test_pair_spread_points_apply_right_side_multiplier() -> None:
     assert points[0].leg2_close == 105
     assert points[0].spread_abs == 5
     assert points[0].spread_pct == pytest.approx(5 / ((100 + 105) / 2) * 100)
+
+
+def test_pair_open_interest_change_points_calculate_leg_and_net_deltas() -> None:
+    points = []
+    _append_realtime_open_interest_point(
+        points,
+        PairSpreadOpenInterestPoint(
+            bucket_at=datetime(2026, 7, 10, 12, 0, tzinfo=UTC),
+            leg1_open_interest_usdt=100,
+            leg2_open_interest_usdt=250,
+        ),
+    )
+    _append_realtime_open_interest_point(
+        points,
+        PairSpreadOpenInterestPoint(
+            bucket_at=datetime(2026, 7, 10, 12, 5, tzinfo=UTC),
+            leg1_open_interest_usdt=130,
+            leg2_open_interest_usdt=260,
+        ),
+    )
+
+    assert points[0].leg1_change_usdt is None
+    assert points[1].leg1_change_usdt == pytest.approx(30)
+    assert points[1].leg2_change_usdt == pytest.approx(10)
+    assert points[1].net_change_usdt == pytest.approx(-20)
 
 
 def test_pair_hourly_volume_points_bucket_by_beijing_hour() -> None:

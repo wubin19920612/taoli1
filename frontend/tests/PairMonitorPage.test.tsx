@@ -224,6 +224,28 @@ function pairSpreadResult(params?: URLSearchParams) {
         }
       : null,
     points: historicalPoints,
+    open_interest: includeCurrent
+      ? [
+          {
+            bucket_at: "2026-07-24T01:59:55Z",
+            leg1_open_interest_usdt: 1000000,
+            leg2_open_interest_usdt: 1500000,
+            leg1_change_usdt: null,
+            leg2_change_usdt: null,
+            net_change_usdt: null,
+            source: "realtime"
+          },
+          {
+            bucket_at: "2026-07-24T02:00:00Z",
+            leg1_open_interest_usdt: 1020000,
+            leg2_open_interest_usdt: 1490000,
+            leg1_change_usdt: 20000,
+            leg2_change_usdt: -10000,
+            net_change_usdt: -30000,
+            source: "realtime"
+          }
+        ]
+      : [],
     funding_history: includeCurrent ? fundingHistory : [],
     realtime_funding: realtimeFunding,
     warnings: []
@@ -723,11 +745,15 @@ describe("PairMonitorPage", () => {
       (element as HTMLElement).className.toString()
     );
     const spreadChartIndex = pageLayout.findIndex((className) => className.includes("pair-chart-card"));
+    const openInterestChartIndex = pageLayout.findIndex((className) => className.includes("pair-oi-card"));
     const priceChartIndex = pageLayout.findIndex((className) => className.includes("pair-price-card"));
     const fundingGridIndex = pageLayout.findIndex((className) => className.includes("pair-funding-grid"));
     expect(spreadChartIndex).toBeGreaterThan(-1);
-    expect(priceChartIndex).toBe(spreadChartIndex + 1);
+    expect(openInterestChartIndex).toBe(spreadChartIndex + 1);
+    expect(priceChartIndex).toBe(openInterestChartIndex + 1);
     expect(fundingGridIndex).toBeGreaterThan(priceChartIndex);
+    expect(screen.getByText("OI变化量（USDT）")).toBeTruthy();
+    expect(document.querySelector(".pair-oi-chart")).toBeTruthy();
     expect(pageText.indexOf("标的价格")).toBeLessThan(pageText.indexOf("资金费率差"));
 
     requests.length = 0;

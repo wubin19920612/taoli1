@@ -28,6 +28,7 @@ from app.models.pair_spread import (
     PairSpreadHourlyVolumePoint,
     PairSpreadKlinePoint,
     PairSpreadLegQuery,
+    PairSpreadOpenInterestPoint,
     PairSpreadPoint,
     PairSpreadPriceField,
     PairSpreadQueryResult,
@@ -366,6 +367,8 @@ def _warnings_text(items: list[str]) -> str:
 _REALTIME_PAIR_SPREAD_CACHE: dict[str, list[PairSpreadPoint]] = {}
 # 实时资金费率由每次价差查询抓到的当前快照累积，和交易所整点结算历史分开保存。
 _REALTIME_PAIR_FUNDING_CACHE: dict[str, list[PairSpreadRealtimeFundingPoint]] = {}
+# 交易所没有统一的跨所 OI 回溯接口，保存当前快照并按查询周期形成变化量序列。
+_REALTIME_PAIR_OPEN_INTEREST_CACHE: dict[str, list[PairSpreadOpenInterestPoint]] = {}
 # 单标的跨交易所秒级价差没有统一历史源，使用每次查询抓到的当前价形成本地采样线。
 _REALTIME_SYMBOL_SPREAD_CACHE: dict[str, dict[str, list[SymbolSpreadPoint]]] = {}
 
@@ -434,6 +437,89 @@ def _append_realtime_funding_point(
         points.append(point)
     if len(points) > PAIR_SPREAD_REALTIME_MAX_POINTS:
         del points[:-PAIR_SPREAD_REALTIME_MAX_POINTS]
+    return points
+
+
+def _rebuild_open_interest_changes(points: list[PairSpreadOpenInterestPoint]) -> None:
+    previous: PairSpreadOpenInterestPoint | None = None
+    for index, point in enumerate(points):
+        leg1_change = (
+            point.leg1_open_interest_usdt - previous.leg1_open_interest_usdt
+            if previous is not None
+            and point.leg1_open_interest_usdt is not None
+            and previous.leg1_open_interest_usdt is not None
+            else None
+        )
+        leg2_change = (
+            point.leg2_open_interest_usdt - previous.leg2_open_interest_usdt
+            if previous is not None
+            and point.leg2_open_interest_usdt is not None
+            and previous.leg2_open_interest_usdt is not None
+            else None
+        )
+        points[index] = point.model_copy(
+            update={
+                "leg1_change_usdt": leg1_change,
+                "leg2_change_usdt": leg2_change,
+                "net_change_usdt": (
+                    leg2_change - leg1_change
+                    if leg1_change is not None and leg2_change is not None
+                    else None
+                ),
+            }
+        )
+        previous = points[index]
+
+
+def _append_realtime_open_interest_point(
+    points: list[PairSpreadOpenInterestPoint],
+    point: PairSpreadOpenInterestPoint,
+) -> list[PairSpreadOpenInterestPoint]:
+    if points and points[-1].bucket_at == point.bucket_at:
+        points[-1] = point
+    else:
+        points.append(point)
+    if len(points) > PAIR_SPREAD_REALTIME_MAX_POINTS:
+        del points[:-PAIR_SPREAD_REALTIME_MAX_POINTS]
+    _rebuild_open_interest_changes(points)
+    return points
+
+
+def _open_interest_point_from_current(
+    current: PairSpreadCurrentSnapshot,
+    bucket_at: datetime,
+) -> PairSpreadOpenInterestPoint:
+    return PairSpreadOpenInterestPoint(
+        bucket_at=bucket_at,
+        leg1_open_interest_usdt=current.leg1.open_interest_usdt,
+        leg2_open_interest_usdt=current.leg2.open_interest_usdt,
+    )
+
+
+def _realtime_open_interest_points_from_current(
+    cache_key: str,
+    current: PairSpreadCurrentSnapshot | None,
+    *,
+    observed_at: datetime,
+    interval_seconds: int,
+    hours: int,
+) -> list[PairSpreadOpenInterestPoint]:
+    if current is None:
+        return []
+    if current.leg1.open_interest_usdt is None and current.leg2.open_interest_usdt is None:
+        return []
+    cached_open_interest = _REALTIME_PAIR_OPEN_INTEREST_CACHE.setdefault(cache_key, [])
+    _append_realtime_open_interest_point(
+        cached_open_interest,
+        _open_interest_point_from_current(
+            current,
+            _floor_interval(observed_at, interval_seconds),
+        ),
+    )
+    cutoff = observed_at - timedelta(hours=hours)
+    points = [point for point in cached_open_interest if point.bucket_at >= cutoff]
+    if len(points) != len(cached_open_interest):
+        _REALTIME_PAIR_OPEN_INTEREST_CACHE[cache_key] = points
     return points
 
 
@@ -901,18 +987,33 @@ class PairSpreadQueryService:
                 if current_leg1 is not None and current_leg2 is not None
                 else None
             )
+        cache_key = _realtime_cache_key(
+            leg1,
+            leg2,
+            leg2_multiplier=leg2_multiplier,
+            interval_seconds=resolved_interval_seconds,
+        )
         realtime_funding = _realtime_funding_points_from_current(
-            _realtime_cache_key(
-                leg1,
-                leg2,
-                leg2_multiplier=leg2_multiplier,
-                interval_seconds=resolved_interval_seconds,
-            ),
+            cache_key,
             current,
             observed_at=observed_at,
             interval_seconds=resolved_interval_seconds,
             hours=hours,
         )
+        open_interest = _realtime_open_interest_points_from_current(
+            cache_key,
+            current,
+            observed_at=observed_at,
+            interval_seconds=resolved_interval_seconds,
+            hours=hours,
+        )
+        if current is not None and (
+            current.leg1.open_interest_usdt is not None or current.leg2.open_interest_usdt is not None
+        ):
+            _append_unique(
+                warnings,
+                "OI变化量来自当前快照采样，不是交易所回溯历史；保持自动刷新后曲线会逐步累积。",
+            )
 
         return PairSpreadQueryResult(
             leg1=leg1,
@@ -930,6 +1031,7 @@ class PairSpreadQueryService:
             current=current,
             points=points,
             hourly_volume=build_pair_hourly_volume_points(leg1_klines, leg2_klines),
+            open_interest=open_interest,
             funding_history=sorted(funding1 + funding2, key=lambda item: item.funding_time),
             realtime_funding=realtime_funding,
             warnings=warnings,
@@ -1336,6 +1438,18 @@ class PairSpreadQueryService:
             interval_seconds=interval_seconds,
             hours=hours,
         )
+        open_interest = _realtime_open_interest_points_from_current(
+            cache_key,
+            current,
+            observed_at=observed_at,
+            interval_seconds=interval_seconds,
+            hours=hours,
+        )
+        if current.leg1.open_interest_usdt is not None or current.leg2.open_interest_usdt is not None:
+            _append_unique(
+                warnings,
+                "OI变化量来自当前快照采样，不是交易所回溯历史；保持自动刷新后曲线会逐步累积。",
+            )
 
         if len(points) <= 1:
             _append_unique(
@@ -1358,6 +1472,7 @@ class PairSpreadQueryService:
             spread_pct=_stats([point.spread_pct for point in points]),
             current=current,
             points=points,
+            open_interest=open_interest,
             funding_history=[],
             realtime_funding=realtime_funding,
             warnings=warnings,

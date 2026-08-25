@@ -44,6 +44,7 @@ import type {
   PairSpreadCurrentLeg,
   PairSpreadLegQuery,
   PairSpreadHourlyVolumePoint,
+  PairSpreadOpenInterestPoint,
   PairSpreadPoint,
   PairSpreadPriceField,
   PairSpreadQueryResult,
@@ -2476,6 +2477,179 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
             {leftLegLabel(result)} / {rightLegLabel(result)}
           </Tag>
           <Tag>{points.length} 点</Tag>
+          <Tag>{intervalLabel(resultIntervalSeconds(result))} 周期</Tag>
+        </div>
+        <Typography.Text type="secondary">最新 {fullTime(result.observed_at)}</Typography.Text>
+      </div>
+    </div>
+  );
+}
+
+function openInterestChangeClass(value: number | null | undefined): string {
+  const change = finiteRate(value);
+  if (change === null || change === 0) {
+    return "pair-oi-change-neutral";
+  }
+  return change > 0 ? "pair-oi-change-positive" : "pair-oi-change-negative";
+}
+
+function PairOpenInterestChart({ result }: { result: PairSpreadQueryResult | null }) {
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const points = useMemo(
+    () =>
+      (result?.open_interest ?? [])
+        .slice()
+        .sort((left, right) => dayjs.utc(left.bucket_at).valueOf() - dayjs.utc(right.bucket_at).valueOf()),
+    [result]
+  );
+  const width = 1180;
+  const height = 330;
+  const padding = { top: 24, right: 28, bottom: 34, left: 64 };
+  const chartWidth = width - padding.left - padding.right;
+  const chartHeight = height - padding.top - padding.bottom;
+
+  if (!result) {
+    return null;
+  }
+  const changeValues = points
+    .flatMap((point) => [point.leg1_change_usdt, point.leg2_change_usdt, point.net_change_usdt])
+    .map(finiteRate)
+    .filter((value): value is number => value !== null);
+  if (points.length < 2 || changeValues.length === 0) {
+    return (
+      <div className="pair-oi-card pair-detail-card">
+        <div className="pair-detail-head">
+          <Typography.Title level={5}>OI变化量（USDT）</Typography.Title>
+          <Tag>{points.length} 点</Tag>
+        </div>
+        <div className="pair-oi-empty">
+          {points.length === 1 ? "当前只有 1 个 OI 快照，保持自动刷新后才会形成变化曲线。" : "暂无可用的 OI 变化量"}
+        </div>
+      </div>
+    );
+  }
+
+  const minValue = Math.min(0, ...changeValues);
+  const maxValue = Math.max(0, ...changeValues);
+  const span = maxValue - minValue || 1;
+  const min = minValue - span * 0.12;
+  const max = maxValue + span * 0.12;
+  const xAt = (index: number) =>
+    padding.left + (points.length === 1 ? chartWidth / 2 : (chartWidth * index) / (points.length - 1));
+  const yAt = (value: number) => padding.top + ((max - value) / (max - min)) * chartHeight;
+  const zeroY = yAt(0);
+  const axisPoints: PairSpreadPoint[] = points.map((point) => ({
+    bucket_at: point.bucket_at,
+    leg1_close: 1,
+    leg2_close: 1,
+    spread_abs: point.net_change_usdt ?? 0,
+    spread_pct: point.net_change_usdt ?? 0
+  }));
+  const spanHours = chartSpanHours(axisPoints);
+  const hourlyTicks = spanHours > 12 && spanHours <= 26;
+  const ticks = chartTicks(axisPoints, hourlyTicks ? 25 : spanHours <= 12 ? 13 : spanHours >= 168 ? 7 : 6);
+  const latestPoint = points[points.length - 1];
+  const hoveredPoint = hoveredIndex === null ? null : points[hoveredIndex] ?? null;
+  const hoveredX = hoveredIndex === null ? null : xAt(hoveredIndex);
+  const hoveredY = hoveredPoint ? yAt(finiteRate(hoveredPoint.net_change_usdt) ?? 0) : null;
+  const tooltipWidth = 224;
+  const tooltipHeight = 105;
+  const tooltipX =
+    hoveredX === null
+      ? 0
+      : hoveredX + tooltipWidth + 12 <= padding.left + chartWidth
+        ? hoveredX + 12
+        : hoveredX - tooltipWidth - 12;
+  const tooltipY = hoveredY === null
+    ? 0
+    : Math.min(padding.top + chartHeight - tooltipHeight, Math.max(padding.top, hoveredY - tooltipHeight / 2));
+  const linePath = (field: keyof PairSpreadOpenInterestPoint) => {
+    const segments: string[] = [];
+    points.forEach((point, index) => {
+      const value = finiteRate(point[field] as number | null | undefined);
+      if (value === null) {
+        return;
+      }
+      segments.push(`${segments.length === 0 || finiteRate(points[index - 1]?.[field] as number | null | undefined) === null ? "M" : "L"} ${xAt(index)} ${yAt(value)}`);
+    });
+    return segments.join(" ");
+  };
+  const handleChartMouseMove = (event: ReactMouseEvent<SVGRectElement>) => {
+    const svg = event.currentTarget.ownerSVGElement;
+    if (!svg) {
+      return;
+    }
+    const bounds = svg.getBoundingClientRect();
+    if (bounds.width <= 0) {
+      return;
+    }
+    const viewBoxX = ((event.clientX - bounds.left) / bounds.width) * width;
+    const chartCursorX = Math.min(chartWidth, Math.max(0, viewBoxX - padding.left));
+    const index = points.length === 1 ? 0 : Math.round((chartCursorX / chartWidth) * (points.length - 1));
+    setHoveredIndex(index);
+  };
+
+  return (
+    <div className="pair-oi-card pair-detail-card">
+      <div className="pair-detail-head">
+        <Typography.Title level={5}>OI变化量（USDT）</Typography.Title>
+        <div className="pair-oi-summary">
+          <span>左腿 <strong className={openInterestChangeClass(latestPoint.leg1_change_usdt)}>{signedUsdt(latestPoint.leg1_change_usdt)}</strong></span>
+          <span>右腿 <strong className={openInterestChangeClass(latestPoint.leg2_change_usdt)}>{signedUsdt(latestPoint.leg2_change_usdt)}</strong></span>
+          <span>净变化 <strong className={openInterestChangeClass(latestPoint.net_change_usdt)}>{signedUsdt(latestPoint.net_change_usdt)}</strong></span>
+          <Tag>{points.length} 点</Tag>
+        </div>
+      </div>
+      <svg className="pair-spread-chart pair-oi-chart" role="img" aria-label="OI变化量曲线" viewBox={`0 0 ${width} ${height}`}>
+        <rect className="pair-chart-plot-bg" x={padding.left} y={padding.top} width={chartWidth} height={chartHeight} rx="4" />
+        {[0, 0.25, 0.5, 0.75, 1].map((tick) => {
+          const y = padding.top + chartHeight * tick;
+          const value = max - (max - min) * tick;
+          return (
+            <g key={tick}>
+              <line className="pair-chart-grid-line" x1={padding.left} y1={y} x2={padding.left + chartWidth} y2={y} />
+              <text className="pair-chart-axis-label" x={padding.left - 10} y={y + 4} textAnchor="end">{compactUsdt(value)}</text>
+            </g>
+          );
+        })}
+        {ticks.map(({ index, point }, tickIndex) => {
+          const x = xAt(index);
+          const textAnchor = tickIndex === 0 ? "start" : tickIndex === ticks.length - 1 ? "end" : "middle";
+          return (
+            <g key={point.bucket_at}>
+              <line className="pair-chart-time-tick" x1={x} y1={padding.top} x2={x} y2={padding.top + chartHeight} />
+              <text className={`pair-chart-axis-label${hourlyTicks ? " pair-chart-axis-label-hourly" : ""}`} x={x} y={height - 10} textAnchor={textAnchor}>{chartTime(point.bucket_at, spanHours, hourlyTicks)}</text>
+            </g>
+          );
+        })}
+        <line className="pair-chart-zero-line" x1={padding.left} y1={zeroY} x2={padding.left + chartWidth} y2={zeroY} />
+        <path className="pair-oi-line pair-oi-line-left" d={linePath("leg1_change_usdt")} />
+        <path className="pair-oi-line pair-oi-line-right" d={linePath("leg2_change_usdt")} />
+        <path className="pair-oi-line pair-oi-line-net" d={linePath("net_change_usdt")} />
+        <circle className="pair-oi-current-point" cx={xAt(points.length - 1)} cy={yAt(finiteRate(latestPoint.net_change_usdt) ?? 0)} r="4.6">
+          <title>{`${time(latestPoint.bucket_at)} OI净变化 ${signedUsdt(latestPoint.net_change_usdt)}`}</title>
+        </circle>
+        <rect className="pair-chart-hover-target" x={padding.left} y={padding.top} width={chartWidth} height={chartHeight} style={{ fill: "transparent", stroke: "none" }} onMouseMove={handleChartMouseMove} onMouseLeave={() => setHoveredIndex(null)} />
+        {hoveredPoint && hoveredX !== null && hoveredY !== null ? (
+          <g className="pair-chart-hover-detail" pointerEvents="none">
+            <line className="pair-chart-hover-crosshair" x1={hoveredX} y1={padding.top} x2={hoveredX} y2={padding.top + chartHeight} />
+            <rect className="pair-chart-hover-tooltip-bg" x={tooltipX} y={tooltipY} width={tooltipWidth} height={tooltipHeight} rx="4" />
+            <text className="pair-chart-hover-tooltip-time" x={tooltipX + 10} y={tooltipY + 18}>{time(hoveredPoint.bucket_at)}</text>
+            <text className="pair-chart-hover-tooltip-label" x={tooltipX + 10} y={tooltipY + 42}>左腿变化</text>
+            <text className="pair-chart-hover-tooltip-value" x={tooltipX + tooltipWidth - 10} y={tooltipY + 42} textAnchor="end">{signedUsdt(hoveredPoint.leg1_change_usdt)}</text>
+            <text className="pair-chart-hover-tooltip-label" x={tooltipX + 10} y={tooltipY + 62}>右腿变化</text>
+            <text className="pair-chart-hover-tooltip-value" x={tooltipX + tooltipWidth - 10} y={tooltipY + 62} textAnchor="end">{signedUsdt(hoveredPoint.leg2_change_usdt)}</text>
+            <text className="pair-chart-hover-tooltip-label" x={tooltipX + 10} y={tooltipY + 82}>净变化（右-左）</text>
+            <text className="pair-chart-hover-tooltip-value" x={tooltipX + tooltipWidth - 10} y={tooltipY + 82} textAnchor="end">{signedUsdt(hoveredPoint.net_change_usdt)}</text>
+          </g>
+        ) : null}
+      </svg>
+      <div className="pair-chart-footer">
+        <div className="pair-footer-tags">
+          <Tag color="blue">{leftLegLabel(result)} / {rightLegLabel(result)}</Tag>
+          <Tag color="green">左腿变化</Tag>
+          <Tag color="orange">右腿变化</Tag>
+          <Tag color="purple">净变化（右-左）</Tag>
           <Tag>{intervalLabel(resultIntervalSeconds(result))} 周期</Tag>
         </div>
         <Typography.Text type="secondary">最新 {fullTime(result.observed_at)}</Typography.Text>
@@ -4929,6 +5103,7 @@ export function PairMonitorPage() {
 
       <PairPositionStatsCard result={result} />
       <PairSpreadChart result={result} />
+      <PairOpenInterestChart result={result} />
       <PairHourlyVolumeCard result={result} />
       {showDayCompare ? (
         <PairDayCompareChart

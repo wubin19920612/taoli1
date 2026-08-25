@@ -1895,6 +1895,85 @@ body {
   stroke-linejoin: round;
 }
 
+.pair-oi-card {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px 12px 8px;
+  background: #ffffff;
+  border: 1px solid #e2e8e5;
+  border-radius: 6px;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.04);
+}
+
+.pair-oi-card .pair-detail-head {
+  align-items: flex-start;
+}
+
+.pair-oi-summary {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  color: #687872;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.pair-oi-summary strong {
+  margin-left: 3px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
+.pair-oi-change-positive {
+  color: #b42318;
+}
+
+.pair-oi-change-negative {
+  color: #14803c;
+}
+
+.pair-oi-change-neutral {
+  color: #687872;
+}
+
+.pair-oi-line {
+  fill: none;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.pair-oi-line-left {
+  stroke: #0f766e;
+}
+
+.pair-oi-line-right {
+  stroke: #d97706;
+}
+
+.pair-oi-line-net {
+  stroke: #7c3aed;
+  stroke-width: 2.6;
+}
+
+.pair-oi-current-point {
+  fill: #7c3aed;
+  stroke: #ffffff;
+  stroke-width: 2;
+}
+
+.pair-oi-empty {
+  min-height: 180px;
+  display: grid;
+  place-items: center;
+  color: #687872;
+  background: #ffffff;
+  border: 1px dashed #dbe4e0;
+  border-radius: 6px;
+}
+
 .pair-chart-turning-leader {
   stroke: #95a3a0;
   stroke-dasharray: 3 3;

@@ -110,6 +110,16 @@ class PairSpreadHourlyVolumePoint(BaseModel):
     volume_ratio: float | None = Field(default=None, ge=0)
 
 
+class PairSpreadOpenInterestPoint(BaseModel):
+    bucket_at: datetime
+    leg1_open_interest_usdt: float | None = Field(default=None, ge=0)
+    leg2_open_interest_usdt: float | None = Field(default=None, ge=0)
+    leg1_change_usdt: float | None = None
+    leg2_change_usdt: float | None = None
+    net_change_usdt: float | None = None
+    source: str = "current"
+
+
 class PairSpreadFundingPoint(BaseModel):
     exchange: str
     symbol: str
@@ -215,6 +225,7 @@ class PairSpreadQueryResult(BaseModel):
     current: PairSpreadCurrentSnapshot | None = None
     points: list[PairSpreadPoint]
     hourly_volume: list[PairSpreadHourlyVolumePoint] = Field(default_factory=list)
+    open_interest: list[PairSpreadOpenInterestPoint] = Field(default_factory=list)
     funding_history: list[PairSpreadFundingPoint] = Field(default_factory=list)
     realtime_funding: list[PairSpreadRealtimeFundingPoint] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
