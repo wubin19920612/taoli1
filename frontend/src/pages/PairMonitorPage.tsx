@@ -3,7 +3,8 @@ import {
   LineChartOutlined,
   ReloadOutlined,
   SaveOutlined,
-  SearchOutlined
+  SearchOutlined,
+  SwapOutlined
 } from "@ant-design/icons";
 import {
   Alert,
@@ -4405,6 +4406,27 @@ export function PairMonitorPage() {
     runQueryRef.current = runQuery;
   }, [runQuery]);
 
+  const swapPairLegs = useCallback(async () => {
+    try {
+      await form.validateFields();
+    } catch {
+      return;
+    }
+    const currentValues = normalizePairForm(form.getFieldsValue(true) as LegacyPairSpreadFormValues);
+    const leftSymbol = currentValues.leg1_symbol;
+    const rightSymbol = pairSymbolMode === "same" ? leftSymbol : currentValues.leg2_symbol;
+    form.setFieldsValue({
+      leg1_exchange: currentValues.leg2_exchange,
+      leg1_market_type: currentValues.leg2_market_type,
+      leg1_symbol: rightSymbol,
+      leg2_exchange: currentValues.leg1_exchange,
+      leg2_market_type: currentValues.leg1_market_type,
+      leg2_symbol: leftSymbol,
+      leg2_multiplier: 1
+    });
+    await runQuery();
+  }, [form, pairSymbolMode, runQuery]);
+
   useEffect(() => {
     setFundingSummaryRows(null);
     setFundingSummaryError("");
@@ -4844,6 +4866,20 @@ export function PairMonitorPage() {
           </div>
         </Form>
         <div className="pair-query-options">
+          <Button
+            className="pair-query-swap"
+            icon={<SwapOutlined />}
+            aria-label="交换左右标的"
+            title={
+              sameSymbolMode
+                ? "交换左右交易所并立即查询"
+                : "交换左右标的并立即查询；自定义标的模式下右侧倍率重置为 1"
+            }
+            disabled={loading}
+            onClick={() => void swapPairLegs()}
+          >
+            交换左右
+          </Button>
           <div className="pair-query-symbol-toggle">
             <Typography.Text className="pair-query-option-label">自定义</Typography.Text>
             <Switch

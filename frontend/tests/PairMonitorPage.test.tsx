@@ -649,6 +649,64 @@ describe("PairMonitorPage", () => {
     expect(requests.some((request) => request.includes("/pair-spread/query"))).toBe(false);
   });
 
+  it("swaps same-symbol legs and immediately queries the reversed spread", async () => {
+    const user = userEvent.setup();
+    window.history.pushState(
+      {},
+      "",
+      "/?page=pair-monitor&leg1_exchange=bitget&leg1_market_type=future&leg1_symbol=SKHY" +
+        "&leg2_exchange=bybit&leg2_market_type=future&leg2_symbol=SKHY&hours=4&interval_seconds=60"
+    );
+    render(<PairMonitorPage />);
+
+    await waitFor(() => {
+      expect(document.querySelector(".pair-chart-card")).toBeTruthy();
+    });
+    requests.length = 0;
+
+    await user.click(screen.getByRole("button", { name: "交换左右标的" }));
+
+    await waitFor(() => {
+      const swappedRequest = requests
+        .map((request) => new URL(request, "http://localhost"))
+        .find((url) => url.pathname.endsWith("/pair-spread/query") && !url.searchParams.has("include_current"));
+      expect(swappedRequest?.searchParams.get("leg1_exchange")).toBe("bybit");
+      expect(swappedRequest?.searchParams.get("leg2_exchange")).toBe("bitget");
+      expect(swappedRequest?.searchParams.get("leg1_symbol")).toBe("SKHYUSDT");
+      expect(swappedRequest?.searchParams.get("leg2_symbol")).toBe("SKHYUSDT");
+      expect(swappedRequest?.searchParams.get("leg2_multiplier")).toBe("1");
+    });
+  });
+
+  it("swaps custom symbols and resets the position-specific multiplier", async () => {
+    const user = userEvent.setup();
+    window.history.pushState(
+      {},
+      "",
+      "/?page=pair-monitor&leg1_exchange=bitget&leg1_market_type=future&leg1_symbol=SKHY" +
+        "&leg2_exchange=bybit&leg2_market_type=future&leg2_symbol=SKHYNIX&leg2_multiplier=2&hours=4&interval_seconds=60"
+    );
+    render(<PairMonitorPage />);
+
+    await waitFor(() => {
+      expect(document.querySelector(".pair-chart-card")).toBeTruthy();
+    });
+    requests.length = 0;
+
+    await user.click(screen.getByRole("button", { name: "交换左右标的" }));
+
+    await waitFor(() => {
+      const swappedRequest = requests
+        .map((request) => new URL(request, "http://localhost"))
+        .find((url) => url.pathname.endsWith("/pair-spread/query") && !url.searchParams.has("include_current"));
+      expect(swappedRequest?.searchParams.get("leg1_exchange")).toBe("bybit");
+      expect(swappedRequest?.searchParams.get("leg1_symbol")).toBe("SKHYNIXUSDT");
+      expect(swappedRequest?.searchParams.get("leg2_exchange")).toBe("bitget");
+      expect(swappedRequest?.searchParams.get("leg2_symbol")).toBe("SKHYUSDT");
+      expect(swappedRequest?.searchParams.get("leg2_multiplier")).toBe("1");
+    });
+  });
+
   it("queries immediately when selecting a saved preset", async () => {
     const user = userEvent.setup();
     window.localStorage.setItem(

@@ -1218,6 +1218,10 @@ body {
   flex: 0 0 auto;
 }
 
+.pair-query-swap {
+  min-height: 28px;
+}
+
 .pair-saved-presets,
 .premium-saved-presets {
   display: grid;
