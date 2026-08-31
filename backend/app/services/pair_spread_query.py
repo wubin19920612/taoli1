@@ -50,6 +50,16 @@ PAIR_SPREAD_TIMEOUT = httpx.Timeout(18.0, connect=3.0, read=14.0, write=5.0, poo
 DISPLAY_TZ = timezone(timedelta(hours=8))
 BINANCE_ALPHA_KLINES_URL = "https://www.binance.com/bapi/defi/v1/public/alpha-trade/klines"
 BINANCE_ALPHA_TICKER_URL = "https://www.binance.com/bapi/defi/v1/public/alpha-trade/ticker"
+OPEN_INTEREST_HISTORY_EXCHANGES = frozenset(("binance", "bybit", "gate"))
+OPEN_INTEREST_HISTORY_MIN_INTERVAL_MINUTES = {"binance": 5, "bybit": 5, "gate": 1}
+OPEN_INTEREST_SOURCE_HISTORY = "exchange_history"
+OPEN_INTEREST_SOURCE_REALTIME = "realtime_snapshot"
+OPEN_INTEREST_SOURCE_NOT_APPLICABLE = "not_applicable"
+OPEN_INTEREST_SOURCE_UNAVAILABLE = "unavailable"
+OPEN_INTEREST_SOURCE_MIXED = "mixed"
+BINANCE_OPEN_INTEREST_LIMIT = 500
+BYBIT_OPEN_INTEREST_LIMIT = 200
+GATE_OPEN_INTEREST_LIMIT = 1000
 
 
 def _binance_alpha_error(payload: Any) -> str:
@@ -98,6 +108,17 @@ def _okx_interval(interval_minutes: int) -> str:
 
 def _bybit_interval(interval_minutes: int) -> str:
     return "D" if interval_minutes == 1440 else str(interval_minutes)
+
+
+def _bybit_open_interest_interval(interval_minutes: int) -> str:
+    return {
+        5: "5min",
+        15: "15min",
+        30: "30min",
+        60: "1h",
+        240: "4h",
+        1440: "1d",
+    }.get(interval_minutes, f"{interval_minutes}min")
 
 
 def _gate_interval(interval_minutes: int) -> str:
@@ -226,6 +247,54 @@ def _open_interest_usdt(size: float | None, price: float | None) -> float | None
     if size is None or price is None:
         return None
     return size * price
+
+
+def _open_interest_source_for_market(market_type: MarketType) -> str:
+    return (
+        OPEN_INTEREST_SOURCE_NOT_APPLICABLE
+        if market_type == MarketType.SPOT
+        else OPEN_INTEREST_SOURCE_REALTIME
+    )
+
+
+def _open_interest_source_for_leg(leg: PairSpreadCurrentLeg) -> str:
+    market_source = _open_interest_source_for_market(leg.market_type)
+    if market_source == OPEN_INTEREST_SOURCE_NOT_APPLICABLE:
+        return market_source
+    return (
+        OPEN_INTEREST_SOURCE_REALTIME
+        if leg.open_interest_usdt is not None
+        else OPEN_INTEREST_SOURCE_UNAVAILABLE
+    )
+
+
+def _combine_open_interest_sources(leg1_source: str, leg2_source: str) -> str:
+    if leg1_source == leg2_source:
+        return leg1_source
+    return OPEN_INTEREST_SOURCE_MIXED
+
+
+def build_pair_open_interest_points(
+    leg1_values: dict[datetime, float],
+    leg2_values: dict[datetime, float],
+    *,
+    leg1_source: str,
+    leg2_source: str,
+) -> list[PairSpreadOpenInterestPoint]:
+    buckets = sorted(leg1_values.keys() | leg2_values.keys())
+    points = [
+        PairSpreadOpenInterestPoint(
+            bucket_at=bucket_at,
+            leg1_open_interest_usdt=leg1_values.get(bucket_at),
+            leg2_open_interest_usdt=leg2_values.get(bucket_at),
+            source=_combine_open_interest_sources(leg1_source, leg2_source),
+            leg1_source=leg1_source,
+            leg2_source=leg2_source,
+        )
+        for bucket_at in buckets
+    ]
+    _rebuild_open_interest_changes(points)
+    return points
 
 
 def _rate_pct_from_row(row: dict[str, Any], *keys: str) -> float | None:
@@ -367,7 +436,7 @@ def _warnings_text(items: list[str]) -> str:
 _REALTIME_PAIR_SPREAD_CACHE: dict[str, list[PairSpreadPoint]] = {}
 # 实时资金费率由每次价差查询抓到的当前快照累积，和交易所整点结算历史分开保存。
 _REALTIME_PAIR_FUNDING_CACHE: dict[str, list[PairSpreadRealtimeFundingPoint]] = {}
-# 交易所没有统一的跨所 OI 回溯接口，保存当前快照并按查询周期形成变化量序列。
+# 对未提供公开历史 OI 的交易所，保存当前快照并按查询周期形成变化量序列。
 _REALTIME_PAIR_OPEN_INTEREST_CACHE: dict[str, list[PairSpreadOpenInterestPoint]] = {}
 # 单标的跨交易所秒级价差没有统一历史源，使用每次查询抓到的当前价形成本地采样线。
 _REALTIME_SYMBOL_SPREAD_CACHE: dict[str, dict[str, list[SymbolSpreadPoint]]] = {}
@@ -489,10 +558,15 @@ def _open_interest_point_from_current(
     current: PairSpreadCurrentSnapshot,
     bucket_at: datetime,
 ) -> PairSpreadOpenInterestPoint:
+    leg1_source = _open_interest_source_for_leg(current.leg1)
+    leg2_source = _open_interest_source_for_leg(current.leg2)
     return PairSpreadOpenInterestPoint(
         bucket_at=bucket_at,
         leg1_open_interest_usdt=current.leg1.open_interest_usdt,
         leg2_open_interest_usdt=current.leg2.open_interest_usdt,
+        source=_combine_open_interest_sources(leg1_source, leg2_source),
+        leg1_source=leg1_source,
+        leg2_source=leg2_source,
     )
 
 
@@ -1000,20 +1074,21 @@ class PairSpreadQueryService:
             interval_seconds=resolved_interval_seconds,
             hours=hours,
         )
-        open_interest = _realtime_open_interest_points_from_current(
-            cache_key,
-            current,
+        open_interest, open_interest_sources = await self._query_open_interest(
+            leg1,
+            leg2,
+            start=points[0].bucket_at,
+            end=end,
+            interval_minutes=interval_minutes,
+            leg1_klines=leg1_klines,
+            leg2_klines=leg2_klines,
+            current=current,
+            cache_key=cache_key,
             observed_at=observed_at,
-            interval_seconds=resolved_interval_seconds,
             hours=hours,
+            interval_seconds=resolved_interval_seconds,
+            warnings=warnings,
         )
-        if current is not None and (
-            current.leg1.open_interest_usdt is not None or current.leg2.open_interest_usdt is not None
-        ):
-            _append_unique(
-                warnings,
-                "OI变化量来自当前快照采样，不是交易所回溯历史；保持自动刷新后曲线会逐步累积。",
-            )
 
         return PairSpreadQueryResult(
             leg1=leg1,
@@ -1032,6 +1107,9 @@ class PairSpreadQueryService:
             points=points,
             hourly_volume=build_pair_hourly_volume_points(leg1_klines, leg2_klines),
             open_interest=open_interest,
+            open_interest_source=open_interest_sources[0],
+            open_interest_leg1_source=open_interest_sources[1],
+            open_interest_leg2_source=open_interest_sources[2],
             funding_history=sorted(funding1 + funding2, key=lambda item: item.funding_time),
             realtime_funding=realtime_funding,
             warnings=warnings,
@@ -1445,11 +1523,8 @@ class PairSpreadQueryService:
             interval_seconds=interval_seconds,
             hours=hours,
         )
-        if current.leg1.open_interest_usdt is not None or current.leg2.open_interest_usdt is not None:
-            _append_unique(
-                warnings,
-                "OI变化量来自当前快照采样，不是交易所回溯历史；保持自动刷新后曲线会逐步累积。",
-            )
+        open_interest_leg1_source = _open_interest_source_for_leg(current.leg1)
+        open_interest_leg2_source = _open_interest_source_for_leg(current.leg2)
 
         if len(points) <= 1:
             _append_unique(
@@ -1473,6 +1548,12 @@ class PairSpreadQueryService:
             current=current,
             points=points,
             open_interest=open_interest,
+            open_interest_source=_combine_open_interest_sources(
+                open_interest_leg1_source,
+                open_interest_leg2_source,
+            ),
+            open_interest_leg1_source=open_interest_leg1_source,
+            open_interest_leg2_source=open_interest_leg2_source,
             funding_history=[],
             realtime_funding=realtime_funding,
             warnings=warnings,
@@ -1531,6 +1612,126 @@ class PairSpreadQueryService:
         except Exception as exc:  # noqa: BLE001 - funding history is supplementary.
             _append_unique(warnings, f"{leg.exchange}:{leg.symbol} 历史资金费率失败: {_exception_text(exc)}")
             return []
+
+    async def _query_open_interest(
+        self,
+        leg1: PairSpreadLegQuery,
+        leg2: PairSpreadLegQuery,
+        *,
+        start: datetime,
+        end: datetime,
+        interval_minutes: int,
+        leg1_klines: list[PairSpreadKlinePoint],
+        leg2_klines: list[PairSpreadKlinePoint],
+        current: PairSpreadCurrentSnapshot | None,
+        cache_key: str,
+        observed_at: datetime,
+        hours: int,
+        interval_seconds: int,
+        warnings: list[str],
+    ) -> tuple[list[PairSpreadOpenInterestPoint], tuple[str, str, str]]:
+        history_results = await asyncio.gather(
+            self._fetch_open_interest_with_warning(
+                leg1,
+                start,
+                end,
+                interval_minutes,
+                leg1_klines,
+                warnings,
+            ),
+            self._fetch_open_interest_with_warning(
+                leg2,
+                start,
+                end,
+                interval_minutes,
+                leg2_klines,
+                warnings,
+            ),
+        )
+        leg1_values, leg1_source = history_results[0]
+        leg2_values, leg2_source = history_results[1]
+
+        if leg1_source == OPEN_INTEREST_SOURCE_REALTIME and (
+            current is None or current.leg1.open_interest_usdt is None
+        ):
+            leg1_source = OPEN_INTEREST_SOURCE_UNAVAILABLE
+        if leg2_source == OPEN_INTEREST_SOURCE_REALTIME and (
+            current is None or current.leg2.open_interest_usdt is None
+        ):
+            leg2_source = OPEN_INTEREST_SOURCE_UNAVAILABLE
+
+        realtime_points: list[PairSpreadOpenInterestPoint] = []
+        if OPEN_INTEREST_SOURCE_REALTIME in (leg1_source, leg2_source):
+            realtime_points = _realtime_open_interest_points_from_current(
+                cache_key,
+                current,
+                observed_at=observed_at,
+                interval_seconds=interval_seconds,
+                hours=hours,
+            )
+
+        if leg1_source == OPEN_INTEREST_SOURCE_REALTIME:
+            leg1_values = {
+                point.bucket_at: point.leg1_open_interest_usdt
+                for point in realtime_points
+                if point.leg1_open_interest_usdt is not None
+            }
+        if leg2_source == OPEN_INTEREST_SOURCE_REALTIME:
+            leg2_values = {
+                point.bucket_at: point.leg2_open_interest_usdt
+                for point in realtime_points
+                if point.leg2_open_interest_usdt is not None
+            }
+
+        points = build_pair_open_interest_points(
+            leg1_values,
+            leg2_values,
+            leg1_source=leg1_source,
+            leg2_source=leg2_source,
+        )
+        return points, (
+            _combine_open_interest_sources(leg1_source, leg2_source),
+            leg1_source,
+            leg2_source,
+        )
+
+    async def _fetch_open_interest_with_warning(
+        self,
+        leg: PairSpreadLegQuery,
+        start: datetime,
+        end: datetime,
+        interval_minutes: int,
+        price_klines: list[PairSpreadKlinePoint],
+        warnings: list[str],
+    ) -> tuple[dict[datetime, float], str]:
+        if leg.market_type == MarketType.SPOT:
+            return {}, OPEN_INTEREST_SOURCE_NOT_APPLICABLE
+        if leg.exchange not in OPEN_INTEREST_HISTORY_EXCHANGES:
+            return {}, OPEN_INTEREST_SOURCE_REALTIME
+        if interval_minutes < OPEN_INTEREST_HISTORY_MIN_INTERVAL_MINUTES[leg.exchange]:
+            return {}, OPEN_INTEREST_SOURCE_REALTIME
+        try:
+            values = await self._fetch_open_interest_history(
+                leg.exchange,
+                leg.symbol,
+                start,
+                end,
+                interval_minutes,
+                price_klines,
+            )
+        except Exception as exc:  # noqa: BLE001 - OI is supplementary to the price chart.
+            _append_unique(
+                warnings,
+                f"{leg.exchange}:{leg.symbol} 历史OI失败，已降级为实时采样: {_exception_text(exc)}",
+            )
+            return {}, OPEN_INTEREST_SOURCE_REALTIME
+        if not values:
+            _append_unique(
+                warnings,
+                f"{leg.exchange}:{leg.symbol} 没有可用的历史OI，已降级为实时采样。",
+            )
+            return {}, OPEN_INTEREST_SOURCE_REALTIME
+        return values, OPEN_INTEREST_SOURCE_HISTORY
 
     def _build_current_snapshot(
         self,
@@ -1592,6 +1793,39 @@ class PairSpreadQueryService:
             "hyperliquid": self._fetch_hyperliquid_klines,
         }
         return await futures_handlers[exchange](symbol, start, end, interval_minutes)
+
+    async def _fetch_open_interest_history(
+        self,
+        exchange: str,
+        symbol: str,
+        start: datetime,
+        end: datetime,
+        interval_minutes: int,
+        price_klines: list[PairSpreadKlinePoint],
+    ) -> dict[datetime, float]:
+        if exchange == "binance":
+            return await self._fetch_binance_open_interest_history(
+                symbol,
+                start,
+                end,
+                interval_minutes,
+            )
+        if exchange == "bybit":
+            return await self._fetch_bybit_open_interest_history(
+                symbol,
+                start,
+                end,
+                interval_minutes,
+                price_klines,
+            )
+        if exchange == "gate":
+            return await self._fetch_gate_open_interest_history(
+                symbol,
+                start,
+                end,
+                interval_minutes,
+            )
+        raise RuntimeError(f"{exchange} 暂不支持历史OI回溯")
 
     async def _fetch_current_leg(
         self,
@@ -1691,6 +1925,138 @@ class PairSpreadQueryService:
         if not isinstance(payload, dict) or payload.get("success") is False:
             raise RuntimeError(_binance_alpha_error(payload))
         return payload.get("data")
+
+    async def _fetch_binance_open_interest_history(
+        self,
+        symbol: str,
+        start: datetime,
+        end: datetime,
+        interval_minutes: int,
+    ) -> dict[datetime, float]:
+        raw = _compact_symbol(symbol)
+        start_ms = _to_ms(start)
+        end_ms = _to_ms(end)
+        interval_ms = _interval_ms(interval_minutes)
+        cursor = start_ms
+        values: dict[datetime, float] = {}
+        while cursor <= end_ms:
+            chunk_end = min(end_ms, cursor + (BINANCE_OPEN_INTEREST_LIMIT - 1) * interval_ms)
+            payload = await self._get_json(
+                "https://fapi.binance.com/futures/data/openInterestHist"
+                f"?symbol={raw}&period={_binance_interval(interval_minutes)}"
+                f"&startTime={cursor}&endTime={chunk_end}&limit={BINANCE_OPEN_INTEREST_LIMIT}"
+            )
+            rows = payload if isinstance(payload, list) else []
+            parsed_rows: list[tuple[datetime, float]] = []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                bucket_at = parse_datetime_ms(row.get("timestamp"))
+                value = _nonnegative(parse_float(row.get("sumOpenInterestValue")))
+                if bucket_at is None or value is None:
+                    continue
+                bucket_at = _floor_interval(bucket_at, interval_minutes * 60)
+                if start <= bucket_at <= end:
+                    values[bucket_at] = value
+                parsed_rows.append((bucket_at, value))
+            if not parsed_rows:
+                break
+            latest_bucket = max(bucket_at for bucket_at, _ in parsed_rows)
+            if latest_bucket >= end or len(rows) < BINANCE_OPEN_INTEREST_LIMIT:
+                break
+            next_cursor = _to_ms(latest_bucket) + interval_ms
+            if next_cursor <= cursor:
+                break
+            cursor = next_cursor
+        return dict(sorted(values.items()))
+
+    async def _fetch_bybit_open_interest_history(
+        self,
+        symbol: str,
+        start: datetime,
+        end: datetime,
+        interval_minutes: int,
+        price_klines: list[PairSpreadKlinePoint],
+    ) -> dict[datetime, float]:
+        raw = _compact_symbol(symbol)
+        start_ms = _to_ms(start)
+        end_ms = _to_ms(end)
+        price_by_bucket = {point.bucket_at: point.close for point in price_klines}
+        values: dict[datetime, float] = {}
+        api_cursor: str | None = None
+        seen_cursors: set[str] = set()
+        while True:
+            cursor_query = f"&cursor={api_cursor}" if api_cursor else ""
+            payload = await self._get_json(
+                "https://api.bybit.com/v5/market/open-interest"
+                f"?category=linear&symbol={raw}"
+                f"&intervalTime={_bybit_open_interest_interval(interval_minutes)}"
+                f"&startTime={start_ms}&endTime={end_ms}&limit={BYBIT_OPEN_INTEREST_LIMIT}{cursor_query}"
+            )
+            rows = payload.get("result", {}).get("list", []) if isinstance(payload, dict) else []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                bucket_at = parse_datetime_ms(row.get("timestamp"))
+                size = _nonnegative(parse_float(row.get("openInterest")))
+                if bucket_at is None or size is None:
+                    continue
+                bucket_at = _floor_interval(bucket_at, interval_minutes * 60)
+                close = _positive(price_by_bucket.get(bucket_at))
+                if start <= bucket_at <= end and close is not None:
+                    values[bucket_at] = size * close
+            next_cursor = (
+                payload.get("result", {}).get("nextPageCursor")
+                if isinstance(payload, dict)
+                else None
+            )
+            if not isinstance(next_cursor, str) or not next_cursor or next_cursor in seen_cursors:
+                break
+            seen_cursors.add(next_cursor)
+            api_cursor = next_cursor
+        return dict(sorted(values.items()))
+
+    async def _fetch_gate_open_interest_history(
+        self,
+        symbol: str,
+        start: datetime,
+        end: datetime,
+        interval_minutes: int,
+    ) -> dict[datetime, float]:
+        contract = _gate_contract(symbol)
+        interval_seconds = interval_minutes * 60
+        cursor = int(start.timestamp())
+        end_seconds = int(end.timestamp())
+        values: dict[datetime, float] = {}
+        while cursor <= end_seconds:
+            payload = await self._get_json(
+                "https://api.gateio.ws/api/v4/futures/usdt/contract_stats"
+                f"?contract={contract}&interval={_gate_interval(interval_minutes)}"
+                f"&from={cursor}&limit={GATE_OPEN_INTEREST_LIMIT}"
+            )
+            rows = payload if isinstance(payload, list) else []
+            parsed_times: list[datetime] = []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                bucket_at = parse_datetime_seconds(row.get("time"))
+                value = _nonnegative(parse_float(row.get("open_interest_usd")))
+                if bucket_at is None or value is None:
+                    continue
+                bucket_at = _floor_interval(bucket_at, interval_seconds)
+                parsed_times.append(bucket_at)
+                if start <= bucket_at <= end:
+                    values[bucket_at] = value
+            if not parsed_times:
+                break
+            latest_bucket = max(parsed_times)
+            if latest_bucket >= end or len(rows) < GATE_OPEN_INTEREST_LIMIT:
+                break
+            next_cursor = int(latest_bucket.timestamp()) + interval_seconds
+            if next_cursor <= cursor:
+                break
+            cursor = next_cursor
+        return dict(sorted(values.items()))
 
     async def _fetch_binance_like_klines(
         self,

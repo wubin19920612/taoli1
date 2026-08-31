@@ -118,6 +118,8 @@ class PairSpreadOpenInterestPoint(BaseModel):
     leg2_change_usdt: float | None = None
     net_change_usdt: float | None = None
     source: str = "current"
+    leg1_source: str = "current"
+    leg2_source: str = "current"
 
 
 class PairSpreadFundingPoint(BaseModel):
@@ -226,6 +228,9 @@ class PairSpreadQueryResult(BaseModel):
     points: list[PairSpreadPoint]
     hourly_volume: list[PairSpreadHourlyVolumePoint] = Field(default_factory=list)
     open_interest: list[PairSpreadOpenInterestPoint] = Field(default_factory=list)
+    open_interest_source: str = "unavailable"
+    open_interest_leg1_source: str = "unavailable"
+    open_interest_leg2_source: str = "unavailable"
     funding_history: list[PairSpreadFundingPoint] = Field(default_factory=list)
     realtime_funding: list[PairSpreadRealtimeFundingPoint] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)

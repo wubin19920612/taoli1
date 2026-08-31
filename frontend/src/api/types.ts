@@ -966,6 +966,8 @@ export interface PairSpreadOpenInterestPoint {
   leg2_change_usdt: number | null;
   net_change_usdt: number | null;
   source?: string;
+  leg1_source?: string;
+  leg2_source?: string;
 }
 
 export interface PairSpreadFundingPoint {
@@ -1068,6 +1070,9 @@ export interface PairSpreadQueryResult {
   points: PairSpreadPoint[];
   hourly_volume?: PairSpreadHourlyVolumePoint[];
   open_interest?: PairSpreadOpenInterestPoint[];
+  open_interest_source?: string;
+  open_interest_leg1_source?: string;
+  open_interest_leg2_source?: string;
   funding_history: PairSpreadFundingPoint[];
   realtime_funding?: PairSpreadRealtimeFundingPoint[];
   warnings: string[];

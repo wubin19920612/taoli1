@@ -2502,6 +2502,10 @@ function PairOpenInterestChart({ result }: { result: PairSpreadQueryResult | nul
         .sort((left, right) => dayjs.utc(left.bucket_at).valueOf() - dayjs.utc(right.bucket_at).valueOf()),
     [result]
   );
+  const latestSourcePoint = points.length > 0 ? points[points.length - 1] : undefined;
+  const leg1Source = result?.open_interest_leg1_source ?? latestSourcePoint?.leg1_source;
+  const leg2Source = result?.open_interest_leg2_source ?? latestSourcePoint?.leg2_source;
+  const overallSource = result?.open_interest_source ?? latestSourcePoint?.source;
   const width = 1180;
   const height = 330;
   const padding = { top: 24, right: 28, bottom: 34, left: 64 };
@@ -2520,10 +2524,16 @@ function PairOpenInterestChart({ result }: { result: PairSpreadQueryResult | nul
       <div className="pair-oi-card pair-detail-card">
         <div className="pair-detail-head">
           <Typography.Title level={5}>OI变化量（USDT）</Typography.Title>
-          <Tag>{points.length} 点</Tag>
+          <div className="pair-oi-summary">
+            <Tag color={openInterestSourceColor(leg1Source)}>左腿 {openInterestSourceLabel(leg1Source)}</Tag>
+            <Tag color={openInterestSourceColor(leg2Source)}>右腿 {openInterestSourceLabel(leg2Source)}</Tag>
+            <Tag>{points.length} 点</Tag>
+          </div>
         </div>
         <div className="pair-oi-empty">
-          {points.length === 1 ? "当前只有 1 个 OI 快照，保持自动刷新后才会形成变化曲线。" : "暂无可用的 OI 变化量"}
+          {points.length === 1
+            ? `当前只有 1 个 OI点（${openInterestSourceLabel(overallSource)}），无法计算变化量。`
+            : "暂无可用的 OI 变化量"}
         </div>
       </div>
     );
@@ -2594,9 +2604,18 @@ function PairOpenInterestChart({ result }: { result: PairSpreadQueryResult | nul
       <div className="pair-detail-head">
         <Typography.Title level={5}>OI变化量（USDT）</Typography.Title>
         <div className="pair-oi-summary">
-          <span>左腿 <strong className={openInterestChangeClass(latestPoint.leg1_change_usdt)}>{signedUsdt(latestPoint.leg1_change_usdt)}</strong></span>
-          <span>右腿 <strong className={openInterestChangeClass(latestPoint.leg2_change_usdt)}>{signedUsdt(latestPoint.leg2_change_usdt)}</strong></span>
-          <span>净变化 <strong className={openInterestChangeClass(latestPoint.net_change_usdt)}>{signedUsdt(latestPoint.net_change_usdt)}</strong></span>
+          <Tag color={openInterestSourceColor(leg1Source)}>左腿 {openInterestSourceLabel(leg1Source)}</Tag>
+          <Tag color={openInterestSourceColor(leg2Source)}>右腿 {openInterestSourceLabel(leg2Source)}</Tag>
+          <Tag color={openInterestSourceColor(overallSource)}>整体 {openInterestSourceLabel(overallSource)}</Tag>
+          <span>
+            左腿 <strong className={openInterestChangeClass(latestPoint.leg1_change_usdt)}>{signedUsdt(latestPoint.leg1_change_usdt)}</strong>
+          </span>
+          <span>
+            右腿 <strong className={openInterestChangeClass(latestPoint.leg2_change_usdt)}>{signedUsdt(latestPoint.leg2_change_usdt)}</strong>
+          </span>
+          <span>
+            净变化 <strong className={openInterestChangeClass(latestPoint.net_change_usdt)}>{signedUsdt(latestPoint.net_change_usdt)}</strong>
+          </span>
           <Tag>{points.length} 点</Tag>
         </div>
       </div>
@@ -2678,6 +2697,38 @@ function signedUsdt(value: number | null | undefined): string {
     return "-";
   }
   return `${diff >= 0 ? "+" : "-"}${compactUsdt(Math.abs(diff))}`;
+}
+
+function openInterestSourceLabel(source: string | undefined): string {
+  switch (source) {
+    case "exchange_history":
+      return "交易所历史";
+    case "realtime_snapshot":
+      return "实时采样";
+    case "not_applicable":
+      return "不适用（现货）";
+    case "mixed":
+      return "混合来源";
+    case "current":
+      return "当前快照";
+    default:
+      return "暂无数据";
+  }
+}
+
+function openInterestSourceColor(source: string | undefined): string | undefined {
+  switch (source) {
+    case "exchange_history":
+      return "green";
+    case "realtime_snapshot":
+      return "orange";
+    case "not_applicable":
+      return "default";
+    case "mixed":
+      return "blue";
+    default:
+      return undefined;
+  }
 }
 
 function ratioText(value: number | null | undefined): string {

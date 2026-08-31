@@ -22,10 +22,12 @@ from app.services.pair_spread_query import (
     PairSpreadQueryError,
     PairSpreadQueryService,
     _REALTIME_PAIR_FUNDING_CACHE,
+    _REALTIME_PAIR_OPEN_INTEREST_CACHE,
     _REALTIME_PAIR_SPREAD_CACHE,
     _REALTIME_SYMBOL_SPREAD_CACHE,
     _hyperliquid_history_limit_warning,
     build_pair_hourly_volume_points,
+    build_pair_open_interest_points,
     _append_realtime_open_interest_point,
     build_pair_spread_points,
     build_symbol_spread_points,
@@ -113,6 +115,132 @@ def test_pair_open_interest_change_points_calculate_leg_and_net_deltas() -> None
     assert points[1].leg1_change_usdt == pytest.approx(30)
     assert points[1].leg2_change_usdt == pytest.approx(10)
     assert points[1].net_change_usdt == pytest.approx(-20)
+
+
+def test_pair_open_interest_history_points_keep_per_leg_sources() -> None:
+    start = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
+    points = build_pair_open_interest_points(
+        {start: 100, start + timedelta(hours=1): 130},
+        {start + timedelta(hours=1): 250},
+        leg1_source="exchange_history",
+        leg2_source="not_applicable",
+    )
+
+    assert [point.bucket_at for point in points] == [start, start + timedelta(hours=1)]
+    assert points[0].leg1_change_usdt is None
+    assert points[1].leg1_change_usdt == pytest.approx(30)
+    assert points[1].leg2_open_interest_usdt == pytest.approx(250)
+    assert points[0].source == "mixed"
+    assert points[0].leg1_source == "exchange_history"
+    assert points[0].leg2_source == "not_applicable"
+
+
+@pytest.mark.asyncio
+async def test_binance_open_interest_history_uses_usdt_value_and_time_window() -> None:
+    start = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
+    end = start + timedelta(hours=1)
+    requested_urls: list[str] = []
+    service = PairSpreadQueryService()
+
+    async def fake_get_json(url: str):
+        requested_urls.append(url)
+        query = parse_qs(urlparse(url).query)
+        assert query["symbol"] == ["BTCUSDT"]
+        assert query["period"] == ["1h"]
+        assert query["limit"] == ["500"]
+        return [
+            {
+                "timestamp": str(int(start.timestamp() * 1000)),
+                "sumOpenInterestValue": "1000.5",
+            },
+            {
+                "timestamp": str(int(end.timestamp() * 1000)),
+                "sumOpenInterestValue": "1100.5",
+            },
+        ]
+
+    service._get_json = fake_get_json  # type: ignore[method-assign]
+    try:
+        values = await service._fetch_binance_open_interest_history("BTCUSDT", start, end, 60)
+    finally:
+        await service.aclose()
+
+    assert len(requested_urls) == 1
+    assert values == {
+        start: pytest.approx(1000.5),
+        end: pytest.approx(1100.5),
+    }
+
+
+@pytest.mark.asyncio
+async def test_bybit_open_interest_history_converts_linear_size_with_matching_kline_price() -> None:
+    start = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
+    end = start + timedelta(hours=1)
+    service = PairSpreadQueryService()
+
+    async def fake_get_json(url: str):
+        query = parse_qs(urlparse(url).query)
+        assert query["category"] == ["linear"]
+        assert query["intervalTime"] == ["1h"]
+        assert query["limit"] == ["200"]
+        return {
+            "retCode": 0,
+            "result": {
+                "list": [
+                    {
+                        "timestamp": str(int(end.timestamp() * 1000)),
+                        "openInterest": "3",
+                    },
+                    {
+                        "timestamp": str(int(start.timestamp() * 1000)),
+                        "openInterest": "2",
+                    },
+                ],
+                "nextPageCursor": "",
+            },
+        }
+
+    service._get_json = fake_get_json  # type: ignore[method-assign]
+    try:
+        values = await service._fetch_bybit_open_interest_history(
+            "BTCUSDT",
+            start,
+            end,
+            60,
+            [kline_at(start, 100), kline_at(end, 110)],
+        )
+    finally:
+        await service.aclose()
+
+    assert values == {start: pytest.approx(200), end: pytest.approx(330)}
+
+
+@pytest.mark.asyncio
+async def test_gate_open_interest_history_uses_open_interest_usd() -> None:
+    start = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
+    end = start + timedelta(hours=1)
+    requested_urls: list[str] = []
+    service = PairSpreadQueryService()
+
+    async def fake_get_json(url: str):
+        requested_urls.append(url)
+        query = parse_qs(urlparse(url).query)
+        assert query["contract"] == ["BTC_USDT"]
+        assert query["interval"] == ["1h"]
+        assert query["limit"] == ["1000"]
+        return [
+            {"time": int(start.timestamp()), "open_interest_usd": "2000"},
+            {"time": int(end.timestamp()), "open_interest_usd": "2200"},
+        ]
+
+    service._get_json = fake_get_json  # type: ignore[method-assign]
+    try:
+        values = await service._fetch_gate_open_interest_history("BTCUSDT", start, end, 60)
+    finally:
+        await service.aclose()
+
+    assert len(requested_urls) == 1
+    assert values == {start: pytest.approx(2000), end: pytest.approx(2200)}
 
 
 def test_pair_hourly_volume_points_bucket_by_beijing_hour() -> None:
@@ -282,6 +410,22 @@ async def test_pair_spread_query_builds_stats_current_and_funding() -> None:
                 )
             ]
 
+        async def _fetch_open_interest_history(
+            self,
+            exchange: str,
+            symbol: str,
+            start,
+            end,
+            interval_minutes: int,
+            price_klines,
+        ):
+            if exchange != "binance":
+                return {}
+            return {
+                point.bucket_at: 1_000 + index * 100
+                for index, point in enumerate(price_klines)
+            }
+
     service = FakePairSpreadService()
     try:
         result = await service.query(
@@ -317,6 +461,59 @@ async def test_pair_spread_query_builds_stats_current_and_funding() -> None:
     assert result.realtime_funding[0].net_rate_pct == pytest.approx(0)
     assert result.warnings == []
     _REALTIME_PAIR_FUNDING_CACHE.clear()
+
+
+@pytest.mark.asyncio
+async def test_pair_spread_query_combines_exchange_history_with_realtime_oi_fallback() -> None:
+    _REALTIME_PAIR_OPEN_INTEREST_CACHE.clear()
+    now = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
+    start = now - timedelta(hours=2)
+
+    class FakePairSpreadService(PairSpreadQueryService):
+        async def _fetch_klines(self, exchange: str, symbol: str, start, end, interval_minutes: int):
+            close = 100 if exchange == "binance" else 101
+            return [kline_at(start, close), kline_at(start + timedelta(hours=1), close)]
+
+        async def _fetch_current_leg(self, exchange: str, symbol: str):
+            open_interest = 150 if exchange == "binance" else 250
+            return current_leg(exchange, symbol, 100 if exchange == "binance" else 101).model_copy(
+                update={"open_interest_usdt": open_interest}
+            )
+
+        async def _fetch_funding_history(self, exchange: str, symbol: str, start, end):
+            return []
+
+        async def _fetch_open_interest_history(
+            self,
+            exchange: str,
+            symbol: str,
+            start,
+            end,
+            interval_minutes: int,
+            price_klines,
+        ):
+            assert exchange == "binance"
+            return {start: 100, start + timedelta(hours=1): 120}
+
+    service = FakePairSpreadService()
+    try:
+        result = await service.query(
+            PairSpreadLegQuery(exchange="binance", symbol="btc"),
+            PairSpreadLegQuery(exchange="okx", symbol="btc"),
+            hours=2,
+            interval_seconds=3_600,
+            now=now,
+        )
+    finally:
+        await service.aclose()
+        _REALTIME_PAIR_OPEN_INTEREST_CACHE.clear()
+
+    assert result.open_interest_source == "mixed"
+    assert result.open_interest_leg1_source == "exchange_history"
+    assert result.open_interest_leg2_source == "realtime_snapshot"
+    assert [point.bucket_at for point in result.open_interest] == [start, start + timedelta(hours=1), now]
+    assert result.open_interest[1].leg1_change_usdt == pytest.approx(20)
+    assert result.open_interest[-1].leg2_change_usdt is None
 
 
 @pytest.mark.asyncio
