@@ -707,6 +707,67 @@ describe("PairMonitorPage", () => {
     });
   });
 
+  it("overwrites older saved configs when only the multiplier changes", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem(
+      "taoli1.pairSpread.presets.v1",
+      JSON.stringify([
+        {
+          id: "old-config",
+          leg1_exchange: "bitget",
+          leg1_market_type: "future",
+          leg1_symbol: "SKHX",
+          leg2_exchange: "bybit",
+          leg2_market_type: "future",
+          leg2_symbol: "SMSN",
+          leg2_multiplier: 1,
+          hours: 4,
+          intervalSeconds: 60,
+          savedAt: "2026-07-23T02:00:00Z"
+        },
+        {
+          id: "new-config",
+          leg1_exchange: "bitget",
+          leg1_market_type: "future",
+          leg1_symbol: "SKHX",
+          leg2_exchange: "bybit",
+          leg2_market_type: "future",
+          leg2_symbol: "SMSN",
+          leg2_multiplier: 0.1,
+          hours: 12,
+          intervalSeconds: 300,
+          savedAt: observedAt
+        }
+      ])
+    );
+    window.history.pushState(
+      {},
+      "",
+      "/?page=pair-monitor&leg1_exchange=bitget&leg1_market_type=future&leg1_symbol=SKHX" +
+        "&leg2_exchange=bybit&leg2_market_type=future&leg2_symbol=SMSN&leg2_multiplier=0.1&hours=12&interval_seconds=300"
+    );
+    render(<PairMonitorPage />);
+
+    await waitFor(() => {
+      expect(document.querySelector(".pair-chart-card")).toBeTruthy();
+    });
+    expect(document.querySelectorAll(".pair-saved-group")).toHaveLength(1);
+    expect(document.querySelectorAll(".pair-saved-tag")).toHaveLength(1);
+    expect(document.querySelector(".pair-saved-tag")?.textContent).toContain("右×0.1");
+    const migratedPresets = JSON.parse(window.localStorage.getItem("taoli1.pairSpread.presets.v1") ?? "[]");
+    expect(migratedPresets).toHaveLength(1);
+    expect(migratedPresets[0].leg2_multiplier).toBe(0.1);
+
+    await user.click(screen.getByRole("button", { name: /保存/ }));
+
+    await waitFor(() => {
+      const savedPresets = JSON.parse(window.localStorage.getItem("taoli1.pairSpread.presets.v1") ?? "[]");
+      expect(savedPresets).toHaveLength(1);
+      expect(savedPresets[0].leg2_multiplier).toBe(0.1);
+      expect(savedPresets[0].hours).toBe(12);
+    });
+  });
+
   it("queries immediately when selecting a saved preset", async () => {
     const user = userEvent.setup();
     window.localStorage.setItem(

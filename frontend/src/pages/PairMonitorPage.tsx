@@ -518,6 +518,18 @@ function pairSymbolModeFromValues(values: PairSpreadFormValues): PairSymbolMode 
     : "custom";
 }
 
+function pairConfigId(values: PairSpreadFormValues): string {
+  const normalized = normalizePairForm(values);
+  return [
+    normalized.leg1_exchange,
+    normalized.leg1_market_type,
+    shortSavedSymbol(normalized.leg1_symbol),
+    normalized.leg2_exchange,
+    normalized.leg2_market_type,
+    shortSavedSymbol(normalized.leg2_symbol)
+  ].join("|");
+}
+
 function isSameSymbolPreset(preset: SavedPairSpreadPreset): boolean {
   return shortSavedSymbol(preset.leg1_symbol) === shortSavedSymbol(preset.leg2_symbol);
 }
@@ -530,7 +542,7 @@ function groupSavedPairPresets(presets: SavedPairSpreadPreset[]): SavedPairSprea
     const sameSymbol = isSameSymbolPreset(preset);
     const key = sameSymbol
       ? `same:${leftSymbol}`
-      : `custom:${preset.leg1_exchange}:${preset.leg1_market_type}:${preset.leg1_symbol}|${preset.leg2_exchange}:${preset.leg2_market_type}:${preset.leg2_symbol}|${compactNumber(preset.leg2_multiplier, 8)}`;
+      : `custom:${pairConfigId(preset)}`;
     const title = sameSymbol ? leftSymbol : `${leftSymbol} / ${rightSymbol}`;
     const existing = grouped.get(key);
     if (existing) {
@@ -827,7 +839,7 @@ function normalizeSavedPreset(preset: LegacySavedPairSpreadPreset): SavedPairSpr
   return {
     ...preset,
     ...values,
-    id: pairPresetId(values),
+    id: pairConfigId(values),
     hours: clampHours(preset.hours),
     intervalSeconds:
       typeof preset.intervalSeconds === "number"
@@ -842,15 +854,34 @@ function normalizeSavedPreset(preset: LegacySavedPairSpreadPreset): SavedPairSpr
   };
 }
 
+function dedupeSavedPairPresets(presets: SavedPairSpreadPreset[]): SavedPairSpreadPreset[] {
+  const latestByPair = new Map<string, SavedPairSpreadPreset>();
+  presets.forEach((preset) => {
+    const existing = latestByPair.get(preset.id);
+    if (!existing || dayjs.utc(preset.savedAt).valueOf() >= dayjs.utc(existing.savedAt).valueOf()) {
+      latestByPair.set(preset.id, preset);
+    }
+  });
+  return Array.from(latestByPair.values()).sort(
+    (left, right) => dayjs.utc(right.savedAt).valueOf() - dayjs.utc(left.savedAt).valueOf()
+  );
+}
+
 function loadSavedPairPresets(): SavedPairSpreadPreset[] {
   if (typeof window === "undefined") {
     return [];
   }
   try {
     const parsed = JSON.parse(window.localStorage.getItem(PAIR_SPREAD_PRESETS_KEY) ?? "[]");
-    return Array.isArray(parsed)
-      ? parsed.filter(isSavedPreset).map(normalizeSavedPreset).slice(0, MAX_SAVED_PAIR_PRESETS)
-      : [];
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    const presets = dedupeSavedPairPresets(parsed.filter(isSavedPreset).map(normalizeSavedPreset)).slice(
+      0,
+      MAX_SAVED_PAIR_PRESETS
+    );
+    storeSavedPairPresets(presets);
+    return presets;
   } catch {
     return [];
   }
@@ -860,7 +891,10 @@ function storeSavedPairPresets(presets: SavedPairSpreadPreset[]): void {
   if (typeof window === "undefined") {
     return;
   }
-  window.localStorage.setItem(PAIR_SPREAD_PRESETS_KEY, JSON.stringify(presets.slice(0, MAX_SAVED_PAIR_PRESETS)));
+  window.localStorage.setItem(
+    PAIR_SPREAD_PRESETS_KEY,
+    JSON.stringify(dedupeSavedPairPresets(presets).slice(0, MAX_SAVED_PAIR_PRESETS))
+  );
 }
 
 function time(value: string | null | undefined): string {
@@ -4628,7 +4662,7 @@ export function PairMonitorPage() {
       );
       const preset: SavedPairSpreadPreset = {
         ...values,
-        id: pairPresetId(values),
+        id: pairConfigId(values),
         hours: clampHours(hours),
         intervalSeconds: clampIntervalSeconds(intervalSeconds),
         showDayCompare,
