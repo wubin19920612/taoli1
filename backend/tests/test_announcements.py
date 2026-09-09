@@ -135,7 +135,7 @@ def test_announcement_alert_message_is_readable() -> None:
             "[BYBIT] 下币公告",
             "公告时间: 2026-05-30 16:00:00 UTC+8",
             "币种: TEST",
-            "市场: spot",
+            "市场: 现货",
             "事件时间: 2026-05-30 17:00:00 UTC+8",
             "标题: Delisting of DOGUSDT Perpetual Contract",
             "分类: delistings",
@@ -158,7 +158,7 @@ def test_announcement_event_reminder_message_is_readable() -> None:
             "事件时间: 2026-05-30 17:00:00 UTC+8",
             "剩余: 约 60 分钟",
             "币种: TEST",
-            "市场: spot",
+            "市场: 现货",
             "标题: OKX to list TEST for spot trading",
             "链接: https://www.okx.com/help/test",
         ]

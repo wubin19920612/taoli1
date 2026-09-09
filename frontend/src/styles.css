@@ -502,6 +502,36 @@ body {
   word-break: break-word;
 }
 
+.announcement-research-list {
+  display: grid;
+  gap: 12px;
+}
+
+.announcement-research-item {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid #dce4e1;
+  background: #f7faf9;
+}
+
+.announcement-research-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.announcement-research-item .ant-typography {
+  margin-bottom: 0;
+}
+
+.announcement-research-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .announcement-schedule-list {
   display: grid;
   gap: 4px;
@@ -4919,6 +4949,10 @@ body {
   }
 
   .announcements-settings-head {
+    flex-direction: column;
+  }
+
+  .announcement-research-head {
     flex-direction: column;
   }
 

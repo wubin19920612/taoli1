@@ -35,6 +35,55 @@ class AnnouncementEventScheduleItem(BaseModel):
         return text or None
 
 
+class AnnouncementResearchSource(BaseModel):
+    title: str
+    url: str
+
+    @field_validator("title", "url")
+    @classmethod
+    def normalize_text(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("research source text must not be empty")
+        return text
+
+
+class AnnouncementAssetResearch(BaseModel):
+    symbol: str
+    canonical_symbol: str | None = None
+    asset_type: str = "unknown"
+    name: str | None = None
+    summary: str | None = None
+    business: str | None = None
+    sources: list[AnnouncementResearchSource] = Field(default_factory=list)
+    status: str = "not_found"
+    searched_at: datetime
+
+    @field_validator("symbol", "canonical_symbol")
+    @classmethod
+    def normalize_symbols(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        text = value.strip().upper()
+        return text or None
+
+    @field_validator("asset_type", "status")
+    @classmethod
+    def normalize_labels(cls, value: str) -> str:
+        text = value.strip().lower()
+        if not text:
+            raise ValueError("research label must not be empty")
+        return text
+
+    @field_validator("name", "summary", "business")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        text = value.strip()
+        return text or None
+
+
 class ExchangeAnnouncement(BaseModel):
     id: str = Field(default_factory=lambda: uuid4().hex)
     exchange: str
@@ -49,6 +98,7 @@ class ExchangeAnnouncement(BaseModel):
     event_time: datetime | None = None
     event_schedule: list[AnnouncementEventScheduleItem] = Field(default_factory=list)
     summary: str | None = None
+    asset_research: list[AnnouncementAssetResearch] = Field(default_factory=list)
     published_at: datetime
     fetched_at: datetime
     alert_status: str = "pending"

@@ -54,6 +54,7 @@ async def _ensure_exchange_announcement_columns(db: aiosqlite.Connection) -> Non
         "event_time": "TEXT",
         "event_schedule_json": "TEXT NOT NULL DEFAULT '[]'",
         "summary": "TEXT",
+        "asset_research_json": "TEXT NOT NULL DEFAULT '[]'",
         "event_reminder_status": "TEXT NOT NULL DEFAULT 'not_applicable'",
         "event_reminder_sent_at": "TEXT",
     }
@@ -231,6 +232,7 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
           event_time TEXT,
           event_schedule_json TEXT NOT NULL DEFAULT '[]',
           summary TEXT,
+          asset_research_json TEXT NOT NULL DEFAULT '[]',
           published_at TEXT NOT NULL,
           fetched_at TEXT NOT NULL,
           alert_status TEXT NOT NULL,

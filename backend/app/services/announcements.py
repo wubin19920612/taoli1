@@ -13,7 +13,9 @@ from urllib.parse import quote_plus
 import httpx
 
 from app.db.repositories import AnnouncementRepository, SettingsRepository
+from app.exchanges.bitget import KNOWN_RTOKEN_SPOT_SYMBOLS
 from app.models.announcement import (
+    AnnouncementAssetResearch,
     AnnouncementEventScheduleItem,
     AnnouncementKind,
     AnnouncementSettings,
@@ -22,6 +24,7 @@ from app.models.announcement import (
 
 AlertSender = Callable[[str], None | Awaitable[None]]
 SettingsLoader = Callable[[], Awaitable[AnnouncementSettings]]
+AssetResearcher = Callable[[ExchangeAnnouncement], Awaitable[list[AnnouncementAssetResearch]]]
 logger = logging.getLogger(__name__)
 
 ANNOUNCEMENT_EXCHANGES = ("binance", "okx", "bybit", "gate", "bitget", "hyperliquid")
@@ -755,6 +758,124 @@ def _display_time(value: datetime) -> str:
     ).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _is_bitget_rtoken_announcement_symbol(symbol: str) -> bool:
+    normalized = symbol.strip().upper().replace("-", "").replace("_", "").replace("/", "")
+    return normalized in KNOWN_RTOKEN_SPOT_SYMBOLS
+
+
+def _announcement_is_stock(announcement: ExchangeAnnouncement) -> bool:
+    if any(item.asset_type in {"stock", "index"} for item in announcement.asset_research):
+        return True
+    context = f"{announcement.title} {announcement.category or ''} {announcement.market_type or ''}".lower()
+    return any(
+        token in context
+        for token in (
+            "stock",
+            "stocks",
+            "equity",
+            "equities",
+            "bstock",
+            "tradfi",
+            "cfd",
+            "share",
+            "股票",
+            "指数",
+            "index",
+            "etf",
+        )
+    ) or (
+        announcement.exchange == "bitget"
+        and "spot" in (announcement.market_type or "").lower()
+        and any(_is_bitget_rtoken_announcement_symbol(symbol) for symbol in announcement.symbols)
+    )
+
+
+def _announcement_market_type_label(announcement: ExchangeAnnouncement) -> str:
+    raw_value = (announcement.market_type or "").strip().lower()
+    if not raw_value:
+        return "未识别"
+
+    is_stock = _announcement_is_stock(announcement)
+    parts = [part.strip() for part in raw_value.split("/") if part.strip()]
+    labels: list[str] = []
+    for part in parts:
+        if part == "spot":
+            labels.append("股票现货" if is_stock else "现货")
+        elif part in {"futures", "stock perpetual"}:
+            labels.append("股票合约" if is_stock or part == "stock perpetual" else "合约")
+        elif part == "margin":
+            labels.append("杠杆")
+        elif part == "convert":
+            labels.append("闪兑")
+        elif part == "pre-market":
+            labels.append("盘前")
+        elif part == "options":
+            labels.append("期权")
+        elif part == "alpha":
+            labels.append("Alpha")
+        elif part == "airdrop":
+            labels.append("空投活动")
+        else:
+            labels.append(part)
+    return "/".join(dict.fromkeys(labels)) or "未识别"
+
+
+def _announcement_asset_label(announcement: ExchangeAnnouncement) -> str:
+    if _announcement_is_stock(announcement):
+        return "标的"
+    return "币种"
+
+
+def _research_asset_type_label(asset_type: str) -> str:
+    return {
+        "crypto": "加密货币",
+        "stock": "股票",
+        "index": "指数",
+    }.get(asset_type, "未识别")
+
+
+def _research_source_text(item: AnnouncementAssetResearch) -> str:
+    if not item.sources:
+        return "无可靠来源链接"
+    return "；".join(f"{source.title}: {source.url}" for source in item.sources[:3])
+
+
+def _announcement_research_lines(
+    announcement: ExchangeAnnouncement,
+    *,
+    include_disclaimer: bool = True,
+) -> list[str]:
+    if not announcement.asset_research:
+        return []
+
+    lines = ["公开资料："]
+    for item in announcement.asset_research[:12]:
+        identity = item.symbol
+        if item.name:
+            identity += f"（{item.name}）"
+        if item.canonical_symbol and item.canonical_symbol != item.symbol:
+            identity += f"；标准标的：{item.canonical_symbol}"
+        lines.append(f"- {identity}")
+        if item.status == "not_found":
+            type_label = _research_asset_type_label(item.asset_type)
+            lines.append(f"  类型：{type_label if item.asset_type != 'unknown' else '暂未确认'}")
+            lines.append("  介绍：暂未检索到足够可靠的公开资料，建议人工核实。")
+        else:
+            lines.append(f"  类型：{_research_asset_type_label(item.asset_type)}")
+            if item.summary:
+                lines.append(f"  简介：{item.summary}")
+            if item.business:
+                lines.append(f"  具体业务：{item.business}")
+            if item.status == "partial":
+                lines.append("  说明：资料不完整或来自公开搜索摘要，建议人工核实。")
+        lines.append(f"  来源：{_research_source_text(item)}")
+    if len(announcement.asset_research) > 12:
+        lines.append(f"- 其余 {len(announcement.asset_research) - 12} 个标的未在通知中展开")
+    if include_disclaimer:
+        lines.append("说明：以上为公开资料自动整理，仅供参考，请自行核实，不构成投资建议。")
+    return lines
+
+
 def build_announcement_alert_message(announcement: ExchangeAnnouncement) -> str:
     kind_label = {
         AnnouncementKind.LISTING: "上币",
@@ -766,9 +887,9 @@ def build_announcement_alert_message(announcement: ExchangeAnnouncement) -> str:
         f"公告时间: {_display_time(announcement.published_at)} UTC+8",
     ]
     if announcement.symbols:
-        lines.append(f"币种: {', '.join(announcement.symbols)}")
+        lines.append(f"{_announcement_asset_label(announcement)}: {', '.join(announcement.symbols)}")
     if announcement.market_type:
-        lines.append(f"市场: {announcement.market_type}")
+        lines.append(f"市场: {_announcement_market_type_label(announcement)}")
     if announcement.event_time:
         lines.append(f"事件时间: {_display_time(announcement.event_time)} UTC+8")
     if announcement.event_schedule:
@@ -783,6 +904,7 @@ def build_announcement_alert_message(announcement: ExchangeAnnouncement) -> str:
     if announcement.category:
         lines.append(f"分类: {announcement.category}")
     lines.append(f"链接: {announcement.url}")
+    lines.extend(_announcement_research_lines(announcement))
     return "\n".join(lines)
 
 
@@ -815,9 +937,9 @@ def build_announcement_event_reminder_message(
             )
         )
     if announcement.symbols:
-        lines.append(f"币种: {', '.join(announcement.symbols)}")
+        lines.append(f"{_announcement_asset_label(announcement)}: {', '.join(announcement.symbols)}")
     if announcement.market_type:
-        lines.append(f"市场: {announcement.market_type}")
+        lines.append(f"市场: {_announcement_market_type_label(announcement)}")
     lines.append(f"标题: {announcement.title}")
     lines.append(f"链接: {announcement.url}")
     return "\n".join(lines)
@@ -1594,11 +1716,13 @@ class AnnouncementMonitor:
         *,
         alert_sender: AlertSender | None = None,
         new_listing_prewarmer: Callable[[ExchangeAnnouncement], Awaitable[list[object]]] | None = None,
+        asset_researcher: AssetResearcher | None = None,
         now_fn: Callable[[], datetime] | None = None,
     ) -> None:
         self.repository = repository
         self.alert_sender = alert_sender
         self.new_listing_prewarmer = new_listing_prewarmer
+        self.asset_researcher = asset_researcher
         self._now_fn = now_fn or utc_now
 
     async def process(
@@ -1638,6 +1762,42 @@ class AnnouncementMonitor:
                 alert_status = "muted"
             candidate = announcement.model_copy(update={"alert_status": alert_status})
             inserted = await self.repository.create_if_new(candidate)
+            research_target = inserted
+            if (
+                research_target is None
+                and self.asset_researcher is not None
+                and not bootstrap
+                and announcement.kind == AnnouncementKind.LISTING
+            ):
+                get_existing = getattr(self.repository, "get_by_identity", None)
+                if get_existing is not None:
+                    research_target = await get_existing(
+                        exchange=announcement.exchange,
+                        source=announcement.source,
+                        announcement_id=announcement.announcement_id,
+                    )
+
+            if (
+                research_target is not None
+                and self.asset_researcher is not None
+                and not bootstrap
+                and research_target.kind == AnnouncementKind.LISTING
+                and self._needs_asset_research(research_target)
+            ):
+                try:
+                    asset_research = await self.asset_researcher(research_target)
+                    if asset_research:
+                        research_target = research_target.model_copy(
+                            update={"asset_research": asset_research}
+                        )
+                        update_research = getattr(self.repository, "update_asset_research", None)
+                        if update_research is not None:
+                            await update_research(research_target.id, asset_research)
+                        if inserted is not None:
+                            inserted = research_target
+                except Exception:
+                    logger.exception("asset research failed for announcement id=%s", research_target.id)
+
             if self.new_listing_prewarmer is not None:
                 try:
                     await self.new_listing_prewarmer(announcement)
@@ -1652,6 +1812,12 @@ class AnnouncementMonitor:
                     await self.repository.update_alert_status(inserted.id, next_status)
             created.append(inserted)
         return created
+
+    @staticmethod
+    def _needs_asset_research(announcement: ExchangeAnnouncement) -> bool:
+        if not announcement.asset_research:
+            return True
+        return any(item.status == "not_found" for item in announcement.asset_research)
 
     async def process_due_event_reminders(self, settings: AnnouncementSettings) -> list[ExchangeAnnouncement]:
         if not settings.event_reminders_enabled:

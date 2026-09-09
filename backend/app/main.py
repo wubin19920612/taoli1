@@ -60,6 +60,7 @@ from app.services.announcements import (
     default_announcement_provider,
     run_announcement_loop,
 )
+from app.services.announcement_research import AnnouncementResearchService
 from app.services.astro_alerts import AstroAlertService, live_pilot_card_settings
 from app.services.astro_client import AstroSdkClient, AstroSdkConfig
 from app.services.astro_planner import AstroPairPlanner, AstroPlannerConfig
@@ -879,6 +880,7 @@ def create_app(
         )
         collector: MarketCollector | None = None
         announcement_provider = None
+        announcement_research: AnnouncementResearchService | None = None
         if start_collector:
             exchange_adapters = default_exchange_adapters()
             history_recorder = OpportunityHistoryRecorder(
@@ -947,10 +949,13 @@ def create_app(
                     ),
                     name="phone-price-alert-loop",
                 )
+            announcement_research = AnnouncementResearchService()
+            app.state.announcement_research = announcement_research
             announcement_monitor = AnnouncementMonitor(
                 app.state.announcement_repo,
                 alert_sender=lambda message: _send_index_component_alert(app, message),
                 new_listing_prewarmer=app.state.new_listing_prewarmer.prewarm_from_announcement,
+                asset_researcher=announcement_research.research,
             )
             announcement_provider = default_announcement_provider(app.state.announcement_repo)
             app.state.announcement_monitor = announcement_monitor
@@ -988,6 +993,8 @@ def create_app(
                 await collector.close()
             if announcement_provider is not None:
                 await announcement_provider.aclose()
+            if announcement_research is not None:
+                await announcement_research.aclose()
             await _close_state_resources(
                 app,
                 "astro_client",

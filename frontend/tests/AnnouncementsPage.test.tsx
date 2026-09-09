@@ -49,6 +49,19 @@ describe("AnnouncementsPage", () => {
               category: "new_crypto",
               symbols: ["WDCUSDT"],
               market_type: "futures",
+              asset_research: [
+                {
+                  symbol: "WDCUSDT",
+                  canonical_symbol: "WDC",
+                  asset_type: "crypto",
+                  name: "Worldcoin Data Chain",
+                  summary: "Worldcoin Data Chain，公开项目介绍。",
+                  business: "Provides a data availability and settlement network.",
+                  sources: [{ title: "CoinGecko", url: "https://www.coingecko.com/en/coins/wdc" }],
+                  status: "found",
+                  searched_at: "2026-05-30T08:01:00Z"
+                }
+              ],
               event_time: "2026-05-30T09:00:00Z",
               summary: "listing: symbols=WDCUSDT; market=futures; event_time=2026-05-30T09:00:00Z",
               published_at: "2026-05-30T08:00:00Z",
@@ -72,11 +85,15 @@ describe("AnnouncementsPage", () => {
     expect(await screen.findByText("New listing: WDCUSDT Perpetual Contract")).toBeTruthy();
     expect(await screen.findByText("WDCUSDT")).toBeTruthy();
     expect(await screen.findByText("合约")).toBeTruthy();
+    expect(await screen.findByText("1/1 已找到")).toBeTruthy();
     expect(await screen.findByText("新币上架")).toBeTruthy();
     expect(await screen.findByText("待提醒")).toBeTruthy();
     fireEvent.click(screen.getByLabelText("Expand row"));
     expect(await screen.findByText("完整标题")).toBeTruthy();
     expect(await screen.findByText("结构化摘要")).toBeTruthy();
+    expect(await screen.findByText("Worldcoin Data Chain")).toBeTruthy();
+    expect(await screen.findByText("具体业务：")).toBeTruthy();
+    expect(await screen.findByText("CoinGecko")).toBeTruthy();
     expect(await screen.findByText("原始分类")).toBeTruthy();
     expect(screen.getAllByText("listing: symbols=WDCUSDT; market=futures; event_time=2026-05-30T09:00:00Z").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("Bybit").length).toBeGreaterThanOrEqual(1);

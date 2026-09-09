@@ -804,6 +804,23 @@ export interface AnnouncementEventScheduleItem {
   note?: string | null;
 }
 
+export interface AnnouncementResearchSource {
+  title: string;
+  url: string;
+}
+
+export interface AnnouncementAssetResearch {
+  symbol: string;
+  canonical_symbol?: string | null;
+  asset_type: string;
+  name?: string | null;
+  summary?: string | null;
+  business?: string | null;
+  sources: AnnouncementResearchSource[];
+  status: string;
+  searched_at: string;
+}
+
 export interface ExchangeAnnouncement {
   id: string;
   exchange: string;
@@ -818,6 +835,7 @@ export interface ExchangeAnnouncement {
   event_time?: string | null;
   event_schedule?: AnnouncementEventScheduleItem[];
   summary?: string | null;
+  asset_research?: AnnouncementAssetResearch[];
   published_at: string;
   fetched_at: string;
   alert_status: string;

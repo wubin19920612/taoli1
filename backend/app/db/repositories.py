@@ -7,6 +7,7 @@ import aiosqlite
 
 from app.models.alert import AlertEvent, AlertRule
 from app.models.announcement import (
+    AnnouncementAssetResearch,
     AnnouncementEventScheduleItem,
     AnnouncementKind,
     AnnouncementSettings,
@@ -100,6 +101,33 @@ def _event_schedule_json(announcement: ExchangeAnnouncement) -> str:
 
 
 def _event_schedule_from_json(value: str | None) -> list[dict[str, object]]:
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+    except ValueError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [item for item in parsed if isinstance(item, dict)]
+
+
+def _asset_research_json(announcement: ExchangeAnnouncement) -> str:
+    return json.dumps(
+        [
+            AnnouncementAssetResearch.model_validate(item).model_dump(
+                mode="json",
+                exclude_none=True,
+            )
+            for item in announcement.asset_research
+        ],
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _asset_research_from_json(value: str | None) -> list[dict[str, object]]:
     if not value:
         return []
     try:
@@ -570,10 +598,10 @@ class AnnouncementRepository:
             INSERT OR IGNORE INTO exchange_announcements (
               id, exchange, announcement_id, kind, title, url, source, category,
               symbols_json, market_type, event_time, event_schedule_json, summary,
-              published_at, fetched_at, alert_status, event_reminder_status,
+              asset_research_json, published_at, fetched_at, alert_status, event_reminder_status,
               event_reminder_sent_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 announcement.id,
@@ -589,6 +617,7 @@ class AnnouncementRepository:
                 _serialize_datetime(announcement.event_time),
                 _event_schedule_json(announcement),
                 announcement.summary,
+                _asset_research_json(announcement),
                 announcement.published_at.isoformat(),
                 announcement.fetched_at.isoformat(),
                 announcement.alert_status,
@@ -618,6 +647,10 @@ class AnnouncementRepository:
                 WHEN ? IS NOT NULL AND (? IS NOT NULL OR ? != '[]' OR summary IS NULL) THEN ?
                 ELSE summary
               END,
+              asset_research_json = CASE
+                WHEN ? != '[]' THEN ?
+                ELSE asset_research_json
+              END,
               event_reminder_status = CASE
                 WHEN ? IS NOT NULL AND ? = 'pending' AND event_reminder_status != 'sent' THEN 'pending'
                 ELSE event_reminder_status
@@ -635,6 +668,8 @@ class AnnouncementRepository:
                 event_time,
                 event_schedule_json,
                 announcement.summary,
+                _asset_research_json(announcement),
+                _asset_research_json(announcement),
                 event_time,
                 announcement.event_reminder_status,
                 announcement.exchange,
@@ -648,6 +683,46 @@ class AnnouncementRepository:
         await self.db.execute(
             "UPDATE exchange_announcements SET alert_status = ? WHERE id = ?",
             (alert_status, announcement_id),
+        )
+        await self.db.commit()
+
+    async def get_by_identity(
+        self,
+        *,
+        exchange: str,
+        source: str,
+        announcement_id: str,
+    ) -> ExchangeAnnouncement | None:
+        cursor = await self.db.execute(
+            """
+            SELECT * FROM exchange_announcements
+            WHERE exchange = ? AND source = ? AND announcement_id = ?
+            LIMIT 1
+            """,
+            (exchange.strip().lower(), source, announcement_id),
+        )
+        row = await cursor.fetchone()
+        return self._announcement_from_db(row) if row is not None else None
+
+    async def update_asset_research(
+        self,
+        announcement_id: str,
+        asset_research: list[AnnouncementAssetResearch],
+    ) -> None:
+        await self.db.execute(
+            "UPDATE exchange_announcements SET asset_research_json = ? WHERE id = ?",
+            (
+                json.dumps(
+                    [
+                        item.model_dump(mode="json", exclude_none=True)
+                        for item in asset_research
+                    ],
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                announcement_id,
+            ),
         )
         await self.db.commit()
 
@@ -787,6 +862,11 @@ class AnnouncementRepository:
                 else []
             ),
             summary=row["summary"] if "summary" in row.keys() else None,
+            asset_research=(
+                _asset_research_from_json(row["asset_research_json"])
+                if "asset_research_json" in row.keys()
+                else []
+            ),
             published_at=row["published_at"],
             fetched_at=row["fetched_at"],
             alert_status=row["alert_status"],
