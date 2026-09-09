@@ -1,6 +1,9 @@
+from datetime import UTC, datetime
+
 from app.models.market import MarketSnapshot
 from app.models.opportunity import Opportunity
 from app.models.settings import RiskSettings
+from app.services.market_sessions import is_opportunity_tradable
 
 
 def normalize_symbol(value: str) -> str:
@@ -28,7 +31,11 @@ def market_is_excluded(market: MarketSnapshot, settings: RiskSettings) -> bool:
     )
 
 
-def opportunity_is_excluded(opportunity: Opportunity, settings: RiskSettings) -> bool:
+def opportunity_is_excluded(
+    opportunity: Opportunity,
+    settings: RiskSettings,
+    now: datetime | None = None,
+) -> bool:
     excluded_symbols = excluded_symbol_set(settings)
     if normalize_symbol(opportunity.symbol) in excluded_symbols:
         return True
@@ -36,6 +43,7 @@ def opportunity_is_excluded(opportunity: Opportunity, settings: RiskSettings) ->
     return (
         normalize_exchange(opportunity.buy_exchange) in ignored_exchanges
         or normalize_exchange(opportunity.sell_exchange) in ignored_exchanges
+        or not is_opportunity_tradable(opportunity, now or datetime.now(UTC))
     )
 
 
@@ -46,8 +54,13 @@ def filter_markets(markets: list[MarketSnapshot], settings: RiskSettings) -> lis
 def filter_opportunities(
     opportunities: list[Opportunity],
     settings: RiskSettings,
+    now: datetime | None = None,
 ) -> list[Opportunity]:
-    return [item for item in opportunities if not opportunity_is_excluded(item, settings)]
+    return [
+        item
+        for item in opportunities
+        if not opportunity_is_excluded(item, settings, now=now)
+    ]
 
 
 def filter_exchange_errors(errors: dict[str, str], settings: RiskSettings) -> dict[str, str]:

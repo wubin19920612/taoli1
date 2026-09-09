@@ -194,8 +194,12 @@ class MarketCollector:
         aliased_markets = apply_symbol_aliases(markets, self.risk_settings.symbol_aliases)
         filtered_markets = filter_markets(aliased_markets, self.risk_settings)
 
-        opportunities = self._build_labeled_opportunities(filtered_markets)
-        filtered_opportunities = filter_opportunities(opportunities, self.risk_settings)
+        opportunities = self._build_labeled_opportunities(filtered_markets, now=now)
+        filtered_opportunities = filter_opportunities(
+            opportunities,
+            self.risk_settings,
+            now=now,
+        )
         self.store.set_markets(filtered_markets)
         self.store.set_opportunities(filtered_opportunities)
         self.store.set_exchange_errors(errors)
@@ -410,8 +414,13 @@ class MarketCollector:
                 errors[f"{adapter.name}:{label}"] = _error_message(exc)
         return markets, errors
 
-    def _build_labeled_opportunities(self, markets: list[MarketSnapshot]) -> list[Opportunity]:
+    def _build_labeled_opportunities(
+        self,
+        markets: list[MarketSnapshot],
+        now: datetime | None = None,
+    ) -> list[Opportunity]:
         raw: list[Opportunity] = []
+        current = now or self._now_fn()
         for mode in ("SF", "FF", "SS"):
             buy_fee = self.fee_settings.spot_fee_pct if mode in {"SF", "SS"} else self.fee_settings.future_fee_pct
             sell_fee = self.fee_settings.future_fee_pct if mode in {"SF", "FF"} else self.fee_settings.spot_fee_pct
@@ -422,11 +431,11 @@ class MarketCollector:
                     buy_fee_pct=buy_fee,
                     sell_fee_pct=sell_fee,
                     safety_slippage_pct=self.fee_settings.safety_slippage_pct,
+                    now=current,
                 )
             )
-        now = datetime.now(UTC)
         labeled = [
-            apply_risk_labels(item, settings=self.risk_settings, now=now)
+            apply_risk_labels(item, settings=self.risk_settings, now=current)
             for item in raw
         ]
         return sorted(labeled, key=lambda item: item.open_spread_pct, reverse=True)

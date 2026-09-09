@@ -1,9 +1,11 @@
 from collections import defaultdict
+from datetime import UTC, datetime
 from hashlib import sha1
 from typing import Literal
 
 from app.models.market import MarketSnapshot, MarketType
 from app.models.opportunity import Opportunity, OpportunityType
+from app.services.market_sessions import is_market_snapshot_tradable
 
 Mode = Literal["SF", "FF", "SS"]
 
@@ -97,9 +99,13 @@ def build_opportunities(
     buy_fee_pct: float = 0.1,
     sell_fee_pct: float = 0.1,
     safety_slippage_pct: float = 0.05,
+    now: datetime | None = None,
 ) -> list[Opportunity]:
+    current = now or datetime.now(UTC)
     by_symbol: dict[str, list[MarketSnapshot]] = defaultdict(list)
     for snapshot in snapshots:
+        if not is_market_snapshot_tradable(snapshot, current):
+            continue
         by_symbol[snapshot.symbol].append(snapshot)
 
     opportunities: list[Opportunity] = []

@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
 
@@ -7,6 +8,7 @@ from app.models.opportunity import Opportunity, OpportunityType
 from app.models.settings import AstroCardSettings
 from app.services.funding_edge import current_cycle_funding_edge_pct, next_cycle_funding_edge_pct
 from app.services.market_labels import astro_exchange_id
+from app.services.market_sessions import is_opportunity_tradable
 
 
 SUPPORTED_ASTRO_TYPES = {OpportunityType.SF, OpportunityType.FF}
@@ -150,7 +152,12 @@ def _astro_close_decision(
     )
 
 
-def _type_blockers(opportunity: Opportunity) -> list[str]:
+def _type_blockers(
+    opportunity: Opportunity,
+    now: datetime | None = None,
+) -> list[str]:
+    if not is_opportunity_tradable(opportunity, now or datetime.now(UTC)):
+        return ["Bitget 股票现货当前处于休市时间，已阻止提交 Astro。"]
     if opportunity.type == OpportunityType.SS:
         return ["Astro SDK document does not list SS as a supported pair type."]
     if opportunity.type not in SUPPORTED_ASTRO_TYPES:
@@ -174,8 +181,12 @@ class AstroPairPlanner:
     def __init__(self, config: AstroPlannerConfig | None = None):
         self.config = config or AstroPlannerConfig()
 
-    def plan(self, opportunity: Opportunity) -> AstroPairPlan:
-        blockers = _type_blockers(opportunity)
+    def plan(
+        self,
+        opportunity: Opportunity,
+        now: datetime | None = None,
+    ) -> AstroPairPlan:
+        blockers = _type_blockers(opportunity, now=now)
         if opportunity.open_spread_pct <= 0:
             blockers.append("Open spread must be positive before building an Astro pair.")
         if opportunity.close_spread_pct < 0:

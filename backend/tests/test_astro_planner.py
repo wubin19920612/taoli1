@@ -105,7 +105,10 @@ def test_bitget_rtoken_sf_opportunity_maps_to_astro_bitgetr() -> None:
         }
     )
 
-    plan = planner.plan(rtoken_opportunity)
+    plan = planner.plan(
+        rtoken_opportunity,
+        now=datetime(2026, 5, 15, 15, 0, tzinfo=UTC),
+    )
 
     assert plan.can_submit is True
     assert plan.pair is not None
@@ -118,6 +121,26 @@ def test_bitget_rtoken_sf_opportunity_maps_to_astro_bitgetr() -> None:
         and "bitgetr" in item.note
         for item in plan.assumptions
     )
+
+
+def test_closed_bitget_rtoken_opportunity_is_blocked() -> None:
+    planner = AstroPairPlanner(AstroPlannerConfig())
+    rtoken_opportunity = opportunity(OpportunityType.SF, MarketType.SPOT, MarketType.FUTURE).model_copy(
+        update={
+            "symbol": "AAPLUSDT",
+            "buy_exchange": "bitget",
+            "buy_raw_symbol": "RAAPLUSDT",
+        }
+    )
+
+    plan = planner.plan(
+        rtoken_opportunity,
+        now=datetime(2026, 9, 9, 21, 0, tzinfo=UTC),
+    )
+
+    assert plan.can_submit is False
+    assert plan.pair is None
+    assert "Bitget 股票现货当前处于休市时间" in plan.blockers[0]
 
 
 def test_open_enabled_config_builds_open_enabled_pair() -> None:
