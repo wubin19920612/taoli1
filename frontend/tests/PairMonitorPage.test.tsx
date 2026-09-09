@@ -502,6 +502,43 @@ describe("PairMonitorPage", () => {
     expect((await screen.findAllByText("5秒")).length).toBeGreaterThan(0);
   });
 
+  it("uses hourly history for query windows longer than 7 days", async () => {
+    const user = userEvent.setup();
+    render(<PairMonitorPage />);
+
+    const hoursInput = document.querySelector(".pair-query-hours input") as HTMLInputElement;
+    fireEvent.change(hoursInput, { target: { value: "200" } });
+    await user.click(screen.getByRole("button", { name: /查询/ }));
+
+    await waitFor(() => {
+      const query = requests
+        .map((request) => new URL(request, "http://localhost"))
+        .find((url) => url.pathname.endsWith("/pair-spread/query"));
+      expect(query?.searchParams.get("hours")).toBe("200");
+      expect(query?.searchParams.get("interval_seconds")).toBe("3600");
+    });
+    expect((await screen.findAllByText("1小时")).length).toBeGreaterThan(0);
+    expect(hoursInput.value).toBe("200");
+  });
+
+  it("uses daily history for query windows longer than one year", async () => {
+    const user = userEvent.setup();
+    render(<PairMonitorPage />);
+
+    const hoursInput = document.querySelector(".pair-query-hours input") as HTMLInputElement;
+    fireEvent.change(hoursInput, { target: { value: "8761" } });
+    await user.click(screen.getByRole("button", { name: /查询/ }));
+
+    await waitFor(() => {
+      const query = requests
+        .map((request) => new URL(request, "http://localhost"))
+        .find((url) => url.pathname.endsWith("/pair-spread/query"));
+      expect(query?.searchParams.get("hours")).toBe("8761");
+      expect(query?.searchParams.get("interval_seconds")).toBe("86400");
+    });
+    expect((await screen.findAllByText("1天")).length).toBeGreaterThan(0);
+  });
+
   it("loads same-time day comparison with historical minute queries", async () => {
     const user = userEvent.setup();
     render(<PairMonitorPage />);

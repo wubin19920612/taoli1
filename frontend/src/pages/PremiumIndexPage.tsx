@@ -12,6 +12,7 @@ import type {
   PremiumIndexQueryResult,
   PremiumIndexValueStats
 } from "../api/types";
+import { resolveHistoryIntervalSeconds } from "../constants/queryLimits";
 
 dayjs.extend(utc);
 
@@ -97,7 +98,10 @@ const exchangeOptions = ["binance", "okx", "bybit", "gate", "bitget", "aster", "
 const intervalOptions = [
   { label: "历史 1 分钟", value: 1 },
   { label: "历史 5 分钟", value: 5 },
-  { label: "历史 15 分钟", value: 15 }
+  { label: "历史 15 分钟", value: 15 },
+  { label: "历史 1 小时", value: 60 },
+  { label: "历史 4 小时", value: 240 },
+  { label: "历史 1 天", value: 1440 }
 ];
 
 const samplingIntervalOptions = [3, 5, 8, 15, 30, 60].map((value) => ({
@@ -593,7 +597,7 @@ function clampHours(value: number | null): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return 1;
   }
-  return Math.min(720, Math.max(1, Math.round(value)));
+  return Math.max(1, Math.round(value));
 }
 
 function normalizeSamplingIntervalSeconds(value: unknown): number {
@@ -615,6 +619,16 @@ function normalizePremiumForm(values: PremiumIndexFormValues): PremiumIndexFormV
 
 function normalizeIntervalMinutes(value: number): number {
   return intervalOptions.some((option) => option.value === value) ? value : 1;
+}
+
+function intervalLabel(intervalMinutes: number): string {
+  if (intervalMinutes >= 1440 && intervalMinutes % 1440 === 0) {
+    return `${intervalMinutes / 1440}天`;
+  }
+  if (intervalMinutes >= 60 && intervalMinutes % 60 === 0) {
+    return `${intervalMinutes / 60}小时`;
+  }
+  return `${intervalMinutes}分钟`;
 }
 
 function premiumQueryFromUrl(): { values: PremiumIndexFormValues; hours: number; intervalMinutes: number } | null {
@@ -731,8 +745,16 @@ function premiumStats(points: PremiumIndexPoint[], current?: PremiumIndexCurrent
 
 function premiumBucketAt(value: string, intervalMinutes: number): string {
   const parsed = dayjs.utc(value);
+  if (intervalMinutes >= 1440) {
+    return parsed.startOf("day").toISOString();
+  }
+  if (intervalMinutes >= 60) {
+    const intervalHours = Math.max(1, Math.floor(intervalMinutes / 60));
+    const bucketHour = parsed.hour() - (parsed.hour() % intervalHours);
+    return parsed.startOf("day").hour(bucketHour).toISOString();
+  }
   const bucketMinute = parsed.minute() - (parsed.minute() % Math.max(intervalMinutes, 1));
-  return parsed.minute(bucketMinute).second(0).millisecond(0).toISOString();
+  return parsed.startOf("hour").minute(bucketMinute).toISOString();
 }
 
 function currentToPoint(current: PremiumIndexCurrentSnapshot, intervalMinutes: number): PremiumIndexPoint | null {
@@ -1038,7 +1060,7 @@ function PremiumIndexChart({
           <Tag color="green">{result.exchange}</Tag>
           <Tag>{result.symbol}</Tag>
           <Tag>{result.point_count} 点</Tag>
-          <Tag>{result.interval_minutes}m 周期</Tag>
+          <Tag>{intervalLabel(result.interval_minutes)} 周期</Tag>
           {result.current?.premium_pct != null ? (
             <Tag color={result.current.premium_pct >= 0 ? "red" : "green"}>
               实时P {signedBp(result.current.premium_pct)}
@@ -1189,7 +1211,12 @@ export function PremiumIndexPage() {
     try {
       const values = normalizePremiumForm(override?.values ?? await form.validateFields());
       const queryHours = clampHours(override?.hours ?? hours);
-      const queryInterval = override?.intervalMinutes ?? intervalMinutes;
+      const requestedIntervalMinutes = override?.intervalMinutes ?? intervalMinutes;
+      const queryInterval =
+        resolveHistoryIntervalSeconds(
+          queryHours,
+          requestedIntervalMinutes * 60
+        ) / 60;
       const next = await queryPremiumIndex({
         exchange: values.exchange,
         symbol: values.symbol,
@@ -1198,6 +1225,8 @@ export function PremiumIndexPage() {
       });
       form.setFieldsValue(values);
       setResult(next);
+      setHours(clampHours(next.hours));
+      setIntervalMinutes(normalizeIntervalMinutes(next.interval_minutes));
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
     } finally {
@@ -1366,7 +1395,6 @@ export function PremiumIndexPage() {
             <InputNumber
               addonBefore="小时"
               min={1}
-              max={720}
               precision={0}
               step={1}
               value={hours}
@@ -1414,7 +1442,7 @@ export function PremiumIndexPage() {
                 >
                   <span>{savedPresetLabel(preset)}</span>
                   <span className="premium-saved-meta">
-                    {durationLabel(preset.hours)} · {preset.intervalMinutes}m 历史 · {preset.samplingIntervalSeconds}s 采样
+                    {durationLabel(preset.hours)} · {intervalLabel(preset.intervalMinutes)}历史 · {preset.samplingIntervalSeconds}s 采样
                   </span>
                 </Tag>
               ))}
@@ -1454,7 +1482,7 @@ export function PremiumIndexPage() {
         />
         <MetricCard
           label="数据窗口"
-          value={`${result?.interval_minutes ?? intervalMinutes}m`}
+          value={intervalLabel(result?.interval_minutes ?? intervalMinutes)}
           sub={result ? `${time(result.first_seen_at)} - ${time(result.last_seen_at)}` : durationLabel(hours)}
         />
       </section>

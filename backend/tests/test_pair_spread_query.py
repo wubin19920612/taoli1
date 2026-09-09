@@ -26,6 +26,8 @@ from app.services.pair_spread_query import (
     _REALTIME_PAIR_SPREAD_CACHE,
     _REALTIME_SYMBOL_SPREAD_CACHE,
     _hyperliquid_history_limit_warning,
+    _historical_interval_adjustment_warning,
+    _resolve_historical_interval_seconds,
     build_pair_hourly_volume_points,
     build_pair_open_interest_points,
     _append_realtime_open_interest_point,
@@ -305,6 +307,35 @@ def test_hyperliquid_history_limit_warning_is_not_needed_for_15_minutes() -> Non
         )
         is None
     )
+
+
+@pytest.mark.parametrize(
+    ("hours", "requested_interval_seconds", "expected_interval_seconds"),
+    [
+        (168, 5, 5),
+        (169, 5, 3_600),
+        (169, 900, 3_600),
+        (169, 14_400, 14_400),
+        (8_761, 3_600, 86_400),
+        (8_761, 14_400, 86_400),
+    ],
+)
+def test_historical_interval_resolution_scales_with_query_window(
+    hours: int,
+    requested_interval_seconds: int,
+    expected_interval_seconds: int,
+) -> None:
+    resolved = _resolve_historical_interval_seconds(hours, requested_interval_seconds)
+
+    assert resolved == expected_interval_seconds
+    if resolved != requested_interval_seconds:
+        warning = _historical_interval_adjustment_warning(
+            hours,
+            requested_interval_seconds,
+            resolved,
+        )
+        assert warning
+        assert "自动调整" in warning
 
 
 @pytest.mark.parametrize(

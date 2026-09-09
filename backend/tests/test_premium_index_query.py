@@ -7,6 +7,7 @@ from app.models.pair_spread import PairSpreadCurrentLeg, PairSpreadKlinePoint, P
 from app.models.premium_index import PremiumIndexCurrentSnapshot, PremiumIndexMarketQuery, PremiumIndexPoint
 from app.services.premium_index_query import (
     PremiumIndexQueryService,
+    _filter_interval_points,
     build_hyperliquid_candle_premium_points,
     build_premium_points_from_mark_index,
 )
@@ -24,6 +25,39 @@ def test_build_premium_points_from_mark_index_aligns_by_time() -> None:
     assert points[0].premium_pct == pytest.approx(1.0)
     assert points[0].mark_price == 101
     assert points[0].index_price == 100
+
+
+def test_filter_interval_points_buckets_hourly_and_daily_data() -> None:
+    points = [
+        PremiumIndexPoint(
+            bucket_at=datetime(2026, 7, 11, 1, 15, tzinfo=UTC),
+            premium_pct=0.1,
+            source="test",
+        ),
+        PremiumIndexPoint(
+            bucket_at=datetime(2026, 7, 11, 3, 45, tzinfo=UTC),
+            premium_pct=0.2,
+            source="test",
+        ),
+        PremiumIndexPoint(
+            bucket_at=datetime(2026, 7, 12, 0, 20, tzinfo=UTC),
+            premium_pct=0.3,
+            source="test",
+        ),
+    ]
+
+    hourly = _filter_interval_points(points, 240)
+    daily = _filter_interval_points(points, 1440)
+
+    assert [point.bucket_at for point in hourly] == [
+        datetime(2026, 7, 11, 0, 0, tzinfo=UTC),
+        datetime(2026, 7, 12, 0, 0, tzinfo=UTC),
+    ]
+    assert [point.premium_pct for point in hourly] == [0.2, 0.3]
+    assert [point.bucket_at for point in daily] == [
+        datetime(2026, 7, 11, 0, 0, tzinfo=UTC),
+        datetime(2026, 7, 12, 0, 0, tzinfo=UTC),
+    ]
 
 
 def test_hyperliquid_candle_premium_points_use_minute_candles() -> None:

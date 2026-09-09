@@ -54,6 +54,7 @@ import type {
   PremiumIndexPoint,
   PremiumIndexQueryResult
 } from "../api/types";
+import { resolveHistoryIntervalSeconds } from "../constants/queryLimits";
 
 dayjs.extend(utc);
 
@@ -315,7 +316,7 @@ function clampHours(value: number | null): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return 1;
   }
-  return Math.min(720, Math.max(1, Math.round(value)));
+  return Math.max(1, Math.round(value));
 }
 
 function clampDiagnosticThreshold(value: number | null | undefined): number {
@@ -4374,7 +4375,13 @@ export function PairMonitorPage() {
       const values = normalizePairFormForSymbolMode(rawValues, querySymbolMode);
       form.setFieldsValue(values);
       const queryHours = clampHours(override?.hours ?? hours);
-      const queryIntervalSeconds = clampIntervalSeconds(override?.intervalSeconds ?? intervalSeconds);
+      const requestedIntervalSeconds = clampIntervalSeconds(
+        override?.intervalSeconds ?? intervalSeconds
+      );
+      const queryIntervalSeconds = resolveHistoryIntervalSeconds(
+        queryHours,
+        requestedIntervalSeconds
+      );
       const queryShowPremiumCompare = override?.premiumEnabled ?? showPremiumCompare;
       const queryShowDayCompare = override?.dayCompareEnabled ?? showDayCompare;
       const queryDayCompareDays = clampDayCompareDays(override?.dayCompareDays ?? dayCompareDays);
@@ -4394,17 +4401,21 @@ export function PairMonitorPage() {
       setResult(next);
       const resultValues = pairFormFromResult(next);
       form.setFieldsValue(resultValues);
+      const actualIntervalSeconds = resultIntervalSeconds(next);
+      setHours(next.hours);
+      setIntervalSeconds(actualIntervalSeconds);
+      setCustomInterval(intervalSelectValue(actualIntervalSeconds) === CUSTOM_INTERVAL_VALUE);
       storeLastPairSpreadState(
         resultValues,
-        queryHours,
-        queryIntervalSeconds,
+        next.hours,
+        actualIntervalSeconds,
         next,
         queryShowDayCompare,
         queryDayCompareDays,
         queryDayCompareSettings
       );
-      loadedUrlQueryRef.current = pairQueryKey(resultValues, queryHours, queryIntervalSeconds);
-      replacePairQueryInUrl(resultValues, queryHours, queryIntervalSeconds);
+      loadedUrlQueryRef.current = pairQueryKey(resultValues, next.hours, actualIntervalSeconds);
+      replacePairQueryInUrl(resultValues, next.hours, actualIntervalSeconds);
       if (queryShowPremiumCompare) {
         if (override?.premiumMode === "current" && premiumCompare) {
           await refreshPremiumCompareCurrent(next);
@@ -4509,12 +4520,6 @@ export function PairMonitorPage() {
     }
 
     const durationHours = Math.max(queryEnd.diff(queryStart, "second") / 3600, 1 / 60);
-    if (durationHours > 720) {
-      setFundingSummaryRows([]);
-      setFundingSummaryError("资金费率统计时间跨度不能超过 720 小时。");
-      return;
-    }
-
     setFundingSummaryLoading(true);
     try {
       const values = pairFormFromResult(result);
@@ -4526,7 +4531,7 @@ export function PairMonitorPage() {
         leg2_market_type: values.leg2_market_type,
         leg2_symbol: values.leg2_symbol,
         leg2_multiplier: values.leg2_multiplier,
-        hours: clampHours(Math.ceil(durationHours)),
+        hours: Math.ceil(durationHours),
         start_at: queryStart.toISOString(),
         end_at: queryEnd.toISOString()
       });
@@ -4851,7 +4856,6 @@ export function PairMonitorPage() {
               addonBefore="小时"
               className="pair-query-hours"
               min={1}
-              max={720}
               precision={0}
               step={1}
               value={hours}

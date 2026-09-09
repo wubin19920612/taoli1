@@ -7,7 +7,6 @@ from app.core.security import dashboard_password_header, verify_dashboard_passwo
 from app.models.market import MarketType
 from app.models.pair_spread import (
     PAIR_SPREAD_MAX_INTERVAL_SECONDS,
-    PAIR_SPREAD_MAX_HOURS,
     PAIR_SPREAD_MIN_INTERVAL_SECONDS,
     PAIR_SPREAD_MIN_HOURS,
     PAIR_SPREAD_INTERVAL_OPTIONS,
@@ -199,7 +198,7 @@ async def get_pair_spread_funding_record_status(
     leg2_exchange: str = Query(...),
     leg2_symbol: str = Query(...),
     leg2_market_type: MarketType = Query(default=MarketType.FUTURE),
-    hours: int = Query(default=72, ge=PAIR_SPREAD_MIN_HOURS, le=PAIR_SPREAD_MAX_HOURS),
+    hours: int = Query(default=72, ge=PAIR_SPREAD_MIN_HOURS),
     leg2_multiplier: float = Query(default=1.0, gt=0),
     end_at: datetime | None = Query(default=None),
 ) -> PairSpreadFundingRecordStatus:
@@ -222,7 +221,7 @@ async def get_pair_spread_funding_record_status(
 async def start_pair_spread_funding_record(
     payload: PairSpreadFundingRecordRequest,
     request: Request,
-    hours: int = Query(default=72, ge=PAIR_SPREAD_MIN_HOURS, le=PAIR_SPREAD_MAX_HOURS),
+    hours: int = Query(default=72, ge=PAIR_SPREAD_MIN_HOURS),
     password: str | None = Depends(dashboard_password_header),
 ) -> PairSpreadFundingRecordStatus:
     verify_dashboard_password(request.app.state.settings.dashboard_password, password)
@@ -235,7 +234,7 @@ async def start_pair_spread_funding_record(
 async def stop_pair_spread_funding_record(
     payload: PairSpreadFundingRecordRequest,
     request: Request,
-    hours: int = Query(default=72, ge=PAIR_SPREAD_MIN_HOURS, le=PAIR_SPREAD_MAX_HOURS),
+    hours: int = Query(default=72, ge=PAIR_SPREAD_MIN_HOURS),
     password: str | None = Depends(dashboard_password_header),
 ) -> PairSpreadFundingRecordStatus:
     verify_dashboard_password(request.app.state.settings.dashboard_password, password)
@@ -274,7 +273,7 @@ async def diagnose_pair_spread(
     leg2_exchange: str = Query(...),
     leg2_symbol: str = Query(...),
     leg2_market_type: MarketType = Query(default=MarketType.FUTURE),
-    hours: int = Query(default=24, ge=PAIR_SPREAD_MIN_HOURS, le=PAIR_SPREAD_MAX_HOURS),
+    hours: int = Query(default=24, ge=PAIR_SPREAD_MIN_HOURS),
     threshold_pct: float = Query(default=1.0, ge=0, le=100_000),
     interval_seconds: int = Query(
         default=60,
@@ -365,7 +364,7 @@ async def query_pair_spread_funding_history(
     leg2_exchange: str = Query(...),
     leg2_symbol: str = Query(...),
     leg2_market_type: MarketType = Query(default=MarketType.FUTURE),
-    hours: int = Query(default=72, ge=PAIR_SPREAD_MIN_HOURS, le=PAIR_SPREAD_MAX_HOURS),
+    hours: int = Query(default=72, ge=PAIR_SPREAD_MIN_HOURS),
     leg2_multiplier: float = Query(default=1.0, gt=0),
     start_at: datetime | None = Query(default=None),
     end_at: datetime | None = Query(default=None),
@@ -391,10 +390,6 @@ async def query_pair_spread_funding_history(
     start = _as_utc(start_at) if start_at is not None else end - timedelta(hours=hours)
     if start > end:
         raise HTTPException(status_code=422, detail="开始时间不能晚于结束时间")
-    duration_hours = (end - start).total_seconds() / 3600
-    if duration_hours > PAIR_SPREAD_MAX_HOURS:
-        raise HTTPException(status_code=422, detail=f"资金费率统计时间跨度不能超过 {PAIR_SPREAD_MAX_HOURS} 小时")
-
     factory = getattr(request.app.state, "pair_spread_query_service_factory", None) or PairSpreadQueryService
     service = factory()
     try:
@@ -426,7 +421,7 @@ async def query_pair_spread(
     leg2_exchange: str = Query(...),
     leg2_symbol: str = Query(...),
     leg2_market_type: MarketType = Query(default=MarketType.FUTURE),
-    hours: int = Query(default=72, ge=PAIR_SPREAD_MIN_HOURS, le=PAIR_SPREAD_MAX_HOURS),
+    hours: int = Query(default=72, ge=PAIR_SPREAD_MIN_HOURS),
     interval_minutes: int = Query(default=1),
     interval_seconds: int | None = Query(default=None),
     leg2_multiplier: float = Query(default=1.0, gt=0),
@@ -495,7 +490,7 @@ async def query_symbol_spread(
     market_type: MarketType = Query(default=MarketType.FUTURE),
     base_exchange: str = Query(default="binance"),
     exchanges: str | None = Query(default=None),
-    hours: int = Query(default=24, ge=PAIR_SPREAD_MIN_HOURS, le=PAIR_SPREAD_MAX_HOURS),
+    hours: int = Query(default=24, ge=PAIR_SPREAD_MIN_HOURS),
     interval_seconds: int = Query(
         default=60,
         ge=PAIR_SPREAD_MIN_INTERVAL_SECONDS,

@@ -34,6 +34,10 @@ from app.models.pair_spread import (
     PairSpreadQueryResult,
     PairSpreadRealtimeFundingPoint,
     PairSpreadValueStats,
+    PAIR_SPREAD_DAILY_INTERVAL_SECONDS,
+    PAIR_SPREAD_DAILY_THRESHOLD_HOURS,
+    PAIR_SPREAD_HOURLY_INTERVAL_SECONDS,
+    PAIR_SPREAD_HOURLY_THRESHOLD_HOURS,
     SUPPORTED_SYMBOL_SPREAD_EXCHANGES,
     SymbolExchangePriceSnapshot,
     SymbolSpreadPoint,
@@ -417,6 +421,42 @@ def _interval_text(interval_seconds: int) -> str:
     if interval_seconds % 60 == 0:
         return f"{interval_seconds // 60}分钟"
     return f"{interval_seconds}秒"
+
+
+def _resolve_historical_interval_seconds(hours: int, requested_interval_seconds: int) -> int:
+    if hours > PAIR_SPREAD_DAILY_THRESHOLD_HOURS:
+        return PAIR_SPREAD_DAILY_INTERVAL_SECONDS
+    if hours <= PAIR_SPREAD_HOURLY_THRESHOLD_HOURS:
+        return requested_interval_seconds
+    if requested_interval_seconds <= PAIR_SPREAD_HOURLY_INTERVAL_SECONDS:
+        return PAIR_SPREAD_HOURLY_INTERVAL_SECONDS
+    return next(
+        (
+            candidate
+            for candidate in PAIR_SPREAD_HISTORICAL_INTERVAL_SECONDS
+            if candidate >= requested_interval_seconds
+        ),
+        PAIR_SPREAD_DAILY_INTERVAL_SECONDS,
+    )
+
+
+def _historical_interval_adjustment_warning(
+    hours: int,
+    requested_interval_seconds: int,
+    resolved_interval_seconds: int,
+) -> str | None:
+    if requested_interval_seconds == resolved_interval_seconds:
+        return None
+    if hours > PAIR_SPREAD_DAILY_THRESHOLD_HOURS:
+        return (
+            f"查询窗口超过1年，历史周期已从{_interval_text(requested_interval_seconds)}"
+            f"自动调整为{_interval_text(resolved_interval_seconds)}。"
+        )
+    return (
+        f"查询窗口超过7天，历史周期已从{_interval_text(requested_interval_seconds)}"
+        f"自动调整为至少{_interval_text(PAIR_SPREAD_HOURLY_INTERVAL_SECONDS)}"
+        f"（实际使用{_interval_text(resolved_interval_seconds)}）。"
+    )
 
 
 def _market_type_text(market_type: MarketType) -> str:
@@ -943,7 +983,18 @@ class PairSpreadQueryService:
     ) -> PairSpreadQueryResult:
         if leg2_multiplier <= 0:
             raise PairSpreadQueryError("leg2_multiplier must be positive")
-        resolved_interval_seconds = interval_seconds or interval_minutes * 60
+        if hours < 1:
+            raise PairSpreadQueryError("hours must be at least 1")
+        requested_interval_seconds = interval_seconds or interval_minutes * 60
+        resolved_interval_seconds = _resolve_historical_interval_seconds(
+            hours,
+            requested_interval_seconds,
+        )
+        interval_adjustment_warning = _historical_interval_adjustment_warning(
+            hours,
+            requested_interval_seconds,
+            resolved_interval_seconds,
+        )
         if resolved_interval_seconds not in PAIR_SPREAD_HISTORICAL_INTERVAL_SECONDS:
             if not include_current:
                 raise PairSpreadQueryError(
@@ -961,7 +1012,7 @@ class PairSpreadQueryService:
         observed_at = now or utc_now()
         end = _floor_minute(observed_at)
         requested_start = end - timedelta(hours=hours)
-        warnings: list[str] = []
+        warnings: list[str] = [interval_adjustment_warning] if interval_adjustment_warning else []
         kline_keys = list(
             dict.fromkeys(
                 (
@@ -1131,7 +1182,19 @@ class PairSpreadQueryService:
         display_symbol: str | None = None,
     ) -> SymbolSpreadQueryResult:
         price_multipliers_by_exchange = price_multipliers_by_exchange or {}
-        if interval_seconds not in PAIR_SPREAD_HISTORICAL_INTERVAL_SECONDS:
+        if hours < 1:
+            raise PairSpreadQueryError("hours must be at least 1")
+        requested_interval_seconds = interval_seconds
+        resolved_interval_seconds = _resolve_historical_interval_seconds(
+            hours,
+            requested_interval_seconds,
+        )
+        interval_adjustment_warning = _historical_interval_adjustment_warning(
+            hours,
+            requested_interval_seconds,
+            resolved_interval_seconds,
+        )
+        if resolved_interval_seconds not in PAIR_SPREAD_HISTORICAL_INTERVAL_SECONDS:
             if not include_current:
                 raise PairSpreadQueryError(
                     "秒级周期只支持实时采样，历史对比请使用 1 分钟、5 分钟、15 分钟、1 小时、4 小时或 1 天周期"
@@ -1142,13 +1205,14 @@ class PairSpreadQueryService:
                 base_exchange=base_exchange,
                 exchanges=exchanges,
                 hours=hours,
-                interval_seconds=interval_seconds,
+                interval_seconds=resolved_interval_seconds,
                 now=now,
                 legs_by_exchange=legs_by_exchange,
                 price_multipliers_by_exchange=price_multipliers_by_exchange,
                 display_symbol=display_symbol,
             )
 
+        interval_seconds = resolved_interval_seconds
         interval_minutes = _interval_minutes_from_seconds(interval_seconds)
         observed_at = now or utc_now()
         end = _floor_minute(observed_at)
@@ -1166,7 +1230,7 @@ class PairSpreadQueryService:
         }
         query_symbol = display_symbol or next(iter(resolved_legs.values())).symbol
         requested_base_exchange = base_exchange.strip().lower()
-        warnings: list[str] = []
+        warnings: list[str] = [interval_adjustment_warning] if interval_adjustment_warning else []
         failed_window_warnings: list[str] = []
         effective_base_exchange = requested_base_exchange
         raw_series_points: list[tuple[str, list[SymbolSpreadPoint]]] = []

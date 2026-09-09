@@ -4,7 +4,6 @@ from pydantic import ValidationError
 from app.models.market import MarketType
 from app.models.premium_index import (
     PREMIUM_INDEX_INTERVAL_OPTIONS,
-    PREMIUM_INDEX_MAX_HOURS,
     PREMIUM_INDEX_MIN_HOURS,
     PremiumIndexCurrentSnapshot,
     PremiumIndexMarketQuery,
@@ -39,7 +38,7 @@ async def query_premium_index(
     request: Request,
     exchange: str = Query(...),
     symbol: str = Query(...),
-    hours: int = Query(default=24, ge=PREMIUM_INDEX_MIN_HOURS, le=PREMIUM_INDEX_MAX_HOURS),
+    hours: int = Query(default=24, ge=PREMIUM_INDEX_MIN_HOURS),
     interval_minutes: int = Query(default=1),
 ) -> PremiumIndexQueryResult:
     if interval_minutes not in PREMIUM_INDEX_INTERVAL_OPTIONS:

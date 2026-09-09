@@ -765,6 +765,12 @@ def test_pair_spread_query_endpoint_uses_on_demand_service() -> None:
             "&leg2_exchange=okx&leg2_symbol=BTC-USDT-SWAP&hours=24"
             "&interval_minutes=60"
         )
+        long_response = client.get(
+            "/api/pair-spread/query"
+            "?leg1_exchange=binance&leg1_symbol=btc"
+            "&leg2_exchange=okx&leg2_symbol=BTC-USDT-SWAP&hours=8761"
+            "&interval_seconds=5"
+        )
 
     assert response.status_code == 200
     payload = response.json()
@@ -782,6 +788,7 @@ def test_pair_spread_query_endpoint_uses_on_demand_service() -> None:
     assert hourly_response.status_code == 200
     assert hourly_response.json()["interval_minutes"] == 60
     assert hourly_response.json()["interval_seconds"] == 3600
+    assert long_response.status_code == 200
 
 
 def test_pair_spread_query_endpoint_resolves_global_symbol_alias_and_price_multiplier() -> None:

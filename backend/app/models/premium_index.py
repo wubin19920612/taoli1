@@ -15,8 +15,7 @@ SUPPORTED_PREMIUM_INDEX_EXCHANGES: tuple[str, ...] = (
     "hyperliquid",
 )
 PREMIUM_INDEX_MIN_HOURS = 1
-PREMIUM_INDEX_MAX_HOURS = 720
-PREMIUM_INDEX_INTERVAL_OPTIONS: tuple[int, ...] = (1, 5, 15)
+PREMIUM_INDEX_INTERVAL_OPTIONS: tuple[int, ...] = (1, 5, 15, 60, 240, 1440)
 
 
 class PremiumIndexMarketQuery(BaseModel):

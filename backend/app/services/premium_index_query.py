@@ -34,6 +34,8 @@ from app.services.pair_spread_query import (
     _positive,
     _query_window_hours,
     _rate_pct_from_row,
+    _historical_interval_adjustment_warning,
+    _resolve_historical_interval_seconds,
     _to_ms,
 )
 
@@ -80,8 +82,20 @@ def _filter_interval_points(points: list[PremiumIndexPoint], interval_minutes: i
         return _dedupe_sorted(points)
     by_bucket: dict[datetime, PremiumIndexPoint] = {}
     for point in sorted(points, key=lambda item: item.bucket_at):
-        bucket_minute = point.bucket_at.minute - (point.bucket_at.minute % interval_minutes)
-        bucket_at = point.bucket_at.replace(minute=bucket_minute, second=0, microsecond=0)
+        if interval_minutes >= 1440:
+            bucket_at = point.bucket_at.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif interval_minutes >= 60:
+            interval_hours = max(1, interval_minutes // 60)
+            bucket_hour = point.bucket_at.hour - (point.bucket_at.hour % interval_hours)
+            bucket_at = point.bucket_at.replace(
+                hour=bucket_hour,
+                minute=0,
+                second=0,
+                microsecond=0,
+            )
+        else:
+            bucket_minute = point.bucket_at.minute - (point.bucket_at.minute % interval_minutes)
+            bucket_at = point.bucket_at.replace(minute=bucket_minute, second=0, microsecond=0)
         by_bucket[bucket_at] = point.model_copy(update={"bucket_at": bucket_at})
     return [by_bucket[key] for key in sorted(by_bucket)]
 
@@ -196,10 +210,23 @@ class PremiumIndexQueryService(PairSpreadQueryService):
         interval_minutes: int = 1,
         now: datetime | None = None,
     ) -> PremiumIndexQueryResult:
+        if hours < 1:
+            raise PremiumIndexQueryError("hours must be at least 1")
+        requested_interval_seconds = interval_minutes * 60
+        resolved_interval_seconds = _resolve_historical_interval_seconds(
+            hours,
+            requested_interval_seconds,
+        )
+        interval_minutes = resolved_interval_seconds // 60
+        interval_adjustment_warning = _historical_interval_adjustment_warning(
+            hours,
+            requested_interval_seconds,
+            resolved_interval_seconds,
+        )
         observed_at = now or utc_now()
         end = _floor_minute(observed_at)
         requested_start = end - timedelta(hours=hours)
-        warnings: list[str] = []
+        warnings: list[str] = [interval_adjustment_warning] if interval_adjustment_warning else []
         failed_window_warnings: list[str] = []
         points: list[PremiumIndexPoint] = []
         used_start = requested_start

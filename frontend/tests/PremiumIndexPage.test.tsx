@@ -295,6 +295,28 @@ describe("PremiumIndexPage", () => {
     expect(await screen.findByText("实时溢价指数")).toBeTruthy();
   });
 
+  it.each([
+    { hours: 200, requestedInterval: 1, actualInterval: 60, label: "1小时 周期" },
+    { hours: 8761, requestedInterval: 60, actualInterval: 1440, label: "1天 周期" }
+  ])("adjusts long premium-index history to $label", async ({ hours, requestedInterval, actualInterval, label }) => {
+    window.history.pushState(
+      {},
+      "",
+      `/?page=premium-index&exchange=binance&symbol=BTC&hours=${hours}&interval_minutes=${requestedInterval}`
+    );
+
+    render(<PremiumIndexPage />);
+
+    await waitFor(() => {
+      const query = requests
+        .map((request) => new URL(request, "http://localhost"))
+        .find((url) => url.pathname.endsWith("/premium-index/query"));
+      expect(query?.searchParams.get("hours")).toBe(String(hours));
+      expect(query?.searchParams.get("interval_minutes")).toBe(String(actualInterval));
+    });
+    expect(await screen.findByText(label)).toBeTruthy();
+  });
+
   it("saves premium index presets and queries a saved preset", async () => {
     const user = userEvent.setup();
     render(<PremiumIndexPage />);

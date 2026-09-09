@@ -13,6 +13,7 @@ import type {
   SymbolSpreadQueryResult,
   SymbolSpreadSeries
 } from "../api/types";
+import { resolveHistoryIntervalSeconds } from "../constants/queryLimits";
 
 dayjs.extend(utc);
 
@@ -94,7 +95,7 @@ function clampHours(value: number | null | undefined): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return 24;
   }
-  return Math.min(720, Math.max(1, Math.round(value)));
+  return Math.max(1, Math.round(value));
 }
 
 function clampIntervalSeconds(value: number | null | undefined): number {
@@ -130,6 +131,12 @@ function price(value: number | null | undefined): string {
 
 function intervalLabel(seconds: number): string {
   const normalized = clampIntervalSeconds(seconds);
+  if (normalized % 86_400 === 0) {
+    return `${normalized / 86_400}天`;
+  }
+  if (normalized % 3_600 === 0) {
+    return `${normalized / 3_600}小时`;
+  }
   if (normalized % 60 === 0) {
     const minutes = normalized / 60;
     return `${minutes}分钟`;
@@ -443,7 +450,10 @@ export function SymbolSpreadPage() {
       base_exchange: baseExchange,
       exchanges,
       hours: clampHours(hours),
-      interval_seconds: clampIntervalSeconds(intervalSeconds),
+      interval_seconds: resolveHistoryIntervalSeconds(
+        clampHours(hours),
+        clampIntervalSeconds(intervalSeconds)
+      ),
       include_current: true
     };
   }, [form, hours, intervalSeconds]);
@@ -458,7 +468,14 @@ export function SymbolSpreadPage() {
     try {
       const next = await querySymbolExchangeSpreads(query);
       setResult(next);
-      setLastQuery(query);
+      const actualIntervalSeconds = clampIntervalSeconds(next.interval_seconds);
+      setHours(clampHours(next.hours));
+      setIntervalSeconds(actualIntervalSeconds);
+      setLastQuery({
+        ...query,
+        hours: clampHours(next.hours),
+        interval_seconds: actualIntervalSeconds
+      });
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
     } finally {
@@ -610,7 +627,6 @@ export function SymbolSpreadPage() {
               addonBefore="小时"
               className="symbol-spread-hours"
               min={1}
-              max={720}
               precision={0}
               step={1}
               value={hours}
