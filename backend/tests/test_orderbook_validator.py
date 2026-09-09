@@ -291,7 +291,7 @@ async def test_validator_reports_order_book_request_failures_as_blockers() -> No
     assert result.buy_filled_usdt == 0
     assert result.sell_filled_usdt == 0
     assert result.blockers == [
-        "买入侧订单簿请求失败：binance future，TimeoutError"
+        "买入侧订单簿请求失败：binance 合约，TimeoutError"
     ]
 
 

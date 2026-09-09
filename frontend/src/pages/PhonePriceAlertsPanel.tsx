@@ -10,6 +10,7 @@ import {
   listPhonePriceAlertRules
 } from "../api/client";
 import type { PhonePriceAlertDiagnostic, PhonePriceAlertDiagnostics, PhonePriceAlertRule } from "../api/types";
+import { marketTypeText } from "../constants/marketLabels";
 
 const exchangeOptions = ["binance", "okx", "bybit", "gate", "bitget", "htx", "aster", "hyperliquid"].map((item) => ({
   label: item,
@@ -108,7 +109,12 @@ export function PhonePriceAlertsPanel() {
     { title: "规则", dataIndex: "name" },
     { title: "标的", dataIndex: "symbol", width: 120 },
     { title: "交易所", dataIndex: "exchange", width: 120, render: (value?: string | null) => value || "任意" },
-    { title: "市场", dataIndex: "market_type", width: 90, render: (value: string) => <Tag>{value}</Tag> },
+    {
+      title: "市场",
+      dataIndex: "market_type",
+      width: 90,
+      render: (value: string) => <Tag>{marketTypeText("", value)}</Tag>
+    },
     { title: "价格源", dataIndex: "price_field", width: 120 },
     {
       title: "当前",

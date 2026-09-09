@@ -36,6 +36,7 @@ import type {
   OpportunityHistoryPoint,
   OpportunityHistoryStats
 } from "../api/types";
+import { marketTypeText } from "../constants/marketLabels";
 
 dayjs.extend(utc);
 
@@ -150,8 +151,13 @@ function compactMoney(value: number | null | undefined): string {
   return value.toFixed(0);
 }
 
-function leg(exchange: string, marketType: string): string {
-  return `${exchange} ${marketType}`;
+function leg(
+  exchange: string,
+  marketType: string,
+  rawSymbol?: string | null,
+  canonicalSymbol?: string | null
+): string {
+  return `${exchange} ${marketTypeText(exchange, marketType, rawSymbol, canonicalSymbol)}`;
 }
 
 function riskReasonText(values: string[]): string {
@@ -226,11 +232,11 @@ function buildColumns(
         <div className="funding-route-cell">
           <span>
             <Tag color="green">多</Tag>
-            {leg(row.long_exchange, row.long_market_type)}
+            {leg(row.long_exchange, row.long_market_type, row.long_raw_symbol, row.symbol)}
           </span>
           <span>
             <Tag color="red">空</Tag>
-            {leg(row.short_exchange, row.short_market_type)}
+            {leg(row.short_exchange, row.short_market_type, row.short_raw_symbol, row.symbol)}
           </span>
         </div>
       )

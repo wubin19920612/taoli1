@@ -1516,8 +1516,10 @@ export interface FundingArbitrageCandidate {
   type: "SF" | "FF";
   long_exchange: string;
   long_market_type: MarketType;
+  long_raw_symbol?: string | null;
   short_exchange: string;
   short_market_type: MarketType;
+  short_raw_symbol?: string | null;
   funding_source: FundingSource;
   long_current_funding_pct: number | null;
   short_current_funding_pct: number | null;

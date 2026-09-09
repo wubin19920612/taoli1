@@ -6,6 +6,7 @@ from app.models.opportunity import Opportunity
 from app.models.orderbook import DepthValidationResult, OrderBookLevel, OrderBookSnapshot
 from app.models.settings import AstroCardSettings, RiskSettings
 from app.services.alert_metrics import funding_edge_pct
+from app.services.market_labels import market_leg_label
 
 EPSILON = 1e-9
 
@@ -141,6 +142,18 @@ class OrderBookDepthValidator:
         sell_book = None
         buy_raw_symbol = opportunity.buy_raw_symbol or opportunity.symbol
         sell_raw_symbol = opportunity.sell_raw_symbol or opportunity.symbol
+        buy_leg = market_leg_label(
+            opportunity.buy_exchange,
+            opportunity.buy_market_type,
+            buy_raw_symbol,
+            opportunity.symbol,
+        )
+        sell_leg = market_leg_label(
+            opportunity.sell_exchange,
+            opportunity.sell_market_type,
+            sell_raw_symbol,
+            opportunity.symbol,
+        )
         try:
             buy_book = await buy_adapter.fetch_order_book(
                 opportunity.symbol,
@@ -151,7 +164,7 @@ class OrderBookDepthValidator:
         except Exception as exc:  # noqa: BLE001 - report validation blocker instead of aborting alert.
             blockers.append(
                 f"买入侧订单簿请求失败："
-                f"{opportunity.buy_exchange} {opportunity.buy_market_type}，{_exception_message(exc)}"
+                f"{buy_leg}，{_exception_message(exc)}"
             )
         try:
             sell_book = await sell_adapter.fetch_order_book(
@@ -163,7 +176,7 @@ class OrderBookDepthValidator:
         except Exception as exc:  # noqa: BLE001 - report validation blocker instead of aborting alert.
             blockers.append(
                 f"卖出侧订单簿请求失败："
-                f"{opportunity.sell_exchange} {opportunity.sell_market_type}，{_exception_message(exc)}"
+                f"{sell_leg}，{_exception_message(exc)}"
             )
         if blockers:
             return self._result(
@@ -176,9 +189,9 @@ class OrderBookDepthValidator:
             )
 
         if buy_book is None:
-            blockers.append(f"买入侧订单簿不可用：{opportunity.buy_exchange} {opportunity.buy_market_type}")
+            blockers.append(f"买入侧订单簿不可用：{buy_leg}")
         if sell_book is None:
-            blockers.append(f"卖出侧订单簿不可用：{opportunity.sell_exchange} {opportunity.sell_market_type}")
+            blockers.append(f"卖出侧订单簿不可用：{sell_leg}")
         if blockers:
             return self._result(
                 opportunity,

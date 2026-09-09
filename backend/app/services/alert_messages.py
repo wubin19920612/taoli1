@@ -5,6 +5,7 @@ from app.models.opportunity import Opportunity
 from app.models.settings import AlertMessageTemplateSettings
 from app.services.alert_metrics import AlertObservation, combined_open_edge_pct
 from app.services.funding_edge import current_cycle_funding_edge_pct, next_cycle_funding_edge_pct
+from app.services.market_labels import is_bitget_rtoken_spot, market_leg_label
 
 ALERT_DISPLAY_TIMEZONE = timezone(timedelta(hours=8), "UTC+8")
 
@@ -54,25 +55,41 @@ def build_alert_message(
 
     snapshot_lines: list[str] = []
     if settings.include_pair:
+        buy_leg = market_leg_label(
+            opportunity.buy_exchange,
+            opportunity.buy_market_type,
+            getattr(opportunity, "buy_raw_symbol", None),
+            opportunity.symbol,
+        )
+        sell_leg = market_leg_label(
+            opportunity.sell_exchange,
+            opportunity.sell_market_type,
+            getattr(opportunity, "sell_raw_symbol", None),
+            opportunity.symbol,
+        )
         snapshot_lines.extend(
             [
                 f"标的：{opportunity.symbol} / {opportunity.type}",
                 (
                     "价差对："
                     f"{opportunity.symbol} | "
-                    f"{opportunity.buy_exchange} {opportunity.buy_market_type} -> "
-                    f"{opportunity.sell_exchange} {opportunity.sell_market_type}"
+                    f"{buy_leg} -> {sell_leg}"
                 ),
                 (
                     "方向："
-                    f"买入 {opportunity.buy_exchange} {opportunity.buy_market_type} {opportunity.symbol}，"
-                    f"卖出 {opportunity.sell_exchange} {opportunity.sell_market_type} {opportunity.symbol}"
+                    f"买入 {buy_leg} {opportunity.symbol}，"
+                    f"卖出 {sell_leg} {opportunity.symbol}"
                 ),
-                f"买入腿：{opportunity.buy_exchange} {opportunity.buy_market_type}",
-                f"卖出腿：{opportunity.sell_exchange} {opportunity.sell_market_type}",
+                f"买入腿：{buy_leg}",
+                f"卖出腿：{sell_leg}",
             ]
         )
         snapshot_lines.extend(_raw_symbol_lines(opportunity))
+        if _has_bitget_rtoken_spot_leg(opportunity):
+            snapshot_lines.append(
+                "提示：Bitget 股票现货使用 RToken 原始标的，"
+                "Astro 对应交易所使用 bitgetr。"
+            )
     if settings.include_spread:
         snapshot_lines.extend(
             [
@@ -200,10 +217,24 @@ def _raw_symbol_lines(opportunity: Opportunity) -> list[str]:
     buy_raw = getattr(opportunity, "buy_raw_symbol", None)
     sell_raw = getattr(opportunity, "sell_raw_symbol", None)
     if buy_raw and _normalize_symbol(buy_raw) != _normalize_symbol(opportunity.symbol):
-        rows.append(f"Buy raw symbol: {opportunity.buy_exchange} {buy_raw}")
+        rows.append(f"买入原始标的：{opportunity.buy_exchange} {buy_raw}")
     if sell_raw and _normalize_symbol(sell_raw) != _normalize_symbol(opportunity.symbol):
-        rows.append(f"Sell raw symbol: {opportunity.sell_exchange} {sell_raw}")
+        rows.append(f"卖出原始标的：{opportunity.sell_exchange} {sell_raw}")
     return rows
+
+
+def _has_bitget_rtoken_spot_leg(opportunity: Opportunity) -> bool:
+    return is_bitget_rtoken_spot(
+        opportunity.buy_exchange,
+        opportunity.buy_market_type,
+        getattr(opportunity, "buy_raw_symbol", None),
+        opportunity.symbol,
+    ) or is_bitget_rtoken_spot(
+        opportunity.sell_exchange,
+        opportunity.sell_market_type,
+        getattr(opportunity, "sell_raw_symbol", None),
+        opportunity.symbol,
+    )
 
 
 def _to_alert_display_timezone(value: datetime) -> datetime:

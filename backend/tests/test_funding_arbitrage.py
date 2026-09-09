@@ -84,6 +84,45 @@ def test_sf_positive_funding_can_enter_when_basis_and_adl_are_low() -> None:
     assert candidate.expected_cycle_pnl_pct > 0
 
 
+def test_sf_bitget_rtoken_candidate_preserves_stock_spot_raw_symbol() -> None:
+    now = datetime(2026, 5, 26, 8, 0, tzinfo=UTC)
+    spot = market("bitget", MarketType.SPOT, bid=99.9, ask=100.0).model_copy(
+        update={
+            "symbol": "SOXLUSDT",
+            "base": "SOXL",
+            "raw_symbol": "RSOXLUSDT",
+        }
+    )
+    future = market(
+        "okx",
+        MarketType.FUTURE,
+        bid=100.25,
+        ask=100.35,
+        funding_next_rate_pct=0.12,
+        mark_price=100.3,
+        index_price=100.0,
+        next_time=now + timedelta(minutes=30),
+    ).model_copy(
+        update={
+            "symbol": "SOXLUSDT",
+            "base": "SOXL",
+            "raw_symbol": "SOXL-USDT-SWAP",
+        }
+    )
+
+    preview = build_funding_arbitrage_preview(
+        [spot, future],
+        FundingArbitrageSettings(min_entry_edge_pct=0.01, min_funding_edge_pct=0.01),
+        now=now,
+    )
+
+    candidate = preview.candidates[0]
+    assert candidate.long_exchange == "bitget"
+    assert candidate.long_market_type == "spot"
+    assert candidate.long_raw_symbol == "RSOXLUSDT"
+    assert candidate.short_raw_symbol == "SOXL-USDT-SWAP"
+
+
 def test_ff_orients_higher_funding_leg_as_short() -> None:
     now = datetime(2026, 5, 26, 8, 0, tzinfo=UTC)
     preview = build_funding_arbitrage_preview(

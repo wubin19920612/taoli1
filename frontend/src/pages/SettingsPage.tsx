@@ -322,8 +322,8 @@ function buildAlertTemplatePreview(template: AlertMessageTemplateSettings): stri
   if (template.include_pair) {
     snapshotLines.push(
       "标的：BTCUSDT / FF",
-      "价差对：BTCUSDT | binance future -> okx future",
-      "方向：买入 binance future BTCUSDT，卖出 okx future BTCUSDT"
+      "价差对：BTCUSDT | binance 合约 -> okx 合约",
+      "方向：买入 binance 合约 BTCUSDT，卖出 okx 合约 BTCUSDT"
     );
   }
   if (template.include_spread) {

@@ -459,8 +459,10 @@ def _build_candidate(
         type=kind,  # type: ignore[arg-type]
         long_exchange=long_leg.exchange,
         long_market_type=long_leg.market_type.value,
+        long_raw_symbol=long_leg.raw_symbol,
         short_exchange=short_leg.exchange,
         short_market_type=short_leg.market_type.value,
+        short_raw_symbol=short_leg.raw_symbol,
         funding_source=source,
         long_current_funding_pct=current_long,
         short_current_funding_pct=current_short,

@@ -6,6 +6,7 @@ from app.models.market import MarketType
 from app.models.opportunity import Opportunity, OpportunityType
 from app.models.settings import AstroCardSettings
 from app.services.funding_edge import current_cycle_funding_edge_pct, next_cycle_funding_edge_pct
+from app.services.market_labels import astro_exchange_id
 
 
 SUPPORTED_ASTRO_TYPES = {OpportunityType.SF, OpportunityType.FF}
@@ -150,18 +151,6 @@ def _astro_close_decision(
 
 
 def _type_blockers(opportunity: Opportunity) -> list[str]:
-    is_bitget_rtoken_spot = (
-        opportunity.buy_exchange.lower() == "bitget"
-        and opportunity.buy_market_type == MarketType.SPOT
-        and opportunity.buy_raw_symbol is not None
-        and opportunity.buy_raw_symbol.upper().startswith("R")
-        and opportunity.buy_raw_symbol.upper().removeprefix("R") == opportunity.symbol.upper()
-    )
-    if is_bitget_rtoken_spot:
-        return [
-            "Bitget RToken spot uses a different raw symbol from the perpetual; "
-            "Astro has no per-leg raw-symbol field, so this route cannot be submitted safely."
-        ]
     if opportunity.type == OpportunityType.SS:
         return ["Astro SDK document does not list SS as a supported pair type."]
     if opportunity.type not in SUPPORTED_ASTRO_TYPES:
@@ -194,6 +183,19 @@ class AstroPairPlanner:
 
         close_decision = _astro_close_decision(opportunity, self.config)
 
+        buy_astro_exchange = astro_exchange_id(
+            opportunity.buy_exchange,
+            opportunity.buy_market_type,
+            opportunity.buy_raw_symbol,
+            opportunity.symbol,
+        )
+        sell_astro_exchange = astro_exchange_id(
+            opportunity.sell_exchange,
+            opportunity.sell_market_type,
+            opportunity.sell_raw_symbol,
+            opportunity.symbol,
+        )
+
         assumptions = [
             AstroFieldAssumption(
                 field="name",
@@ -216,8 +218,11 @@ class AstroPairPlanner:
             AstroFieldAssumption(
                 field="buyEx/sellEx",
                 source=f"{opportunity.buy_exchange}->{opportunity.sell_exchange}",
-                assumed_value=f"{opportunity.buy_exchange}->{opportunity.sell_exchange}",
-                note="Uses local exchange ids directly. Astro exchange id coverage must be verified on your instance.",
+                assumed_value=f"{buy_astro_exchange}->{sell_astro_exchange}",
+                note=(
+                    "Uses Astro exchange ids; Bitget RToken stock spot is mapped from "
+                    "bitget to bitgetr."
+                ),
             ),
         ]
 
@@ -252,8 +257,8 @@ class AstroPairPlanner:
             "disableClose": False,
             "maxTradeUSDT": _compact_number(self.config.default_max_trade_usdt),
             "leverage": _compact_number(self.config.default_leverage),
-            "buyEx": opportunity.buy_exchange,
-            "sellEx": opportunity.sell_exchange,
+            "buyEx": buy_astro_exchange,
+            "sellEx": sell_astro_exchange,
             "startTime": "0",
             "minNotional": _compact_number(self.config.default_min_notional),
             "maxNotional": _compact_number(self.config.default_max_notional),

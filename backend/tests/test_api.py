@@ -2673,7 +2673,7 @@ def test_alert_history_endpoint_enriches_legacy_short_messages() -> None:
     assert response.status_code == 200
     text = response.json()[0]["message"]
     assert "【告警触发】" in text
-    assert "价差对：BTCUSDT | binance future -> okx future" in text
+    assert "价差对：BTCUSDT | binance 合约 -> okx 合约" in text
     assert "【连续监测】" in text
     assert "1. 20:38:53 | 价差 0.863% | 净估算 0.663% | 资金差（周期） 0.01% | 综合 0.673%" in text
     assert "3. 20:39:17 | 价差 1.007% | 净估算 0.807% | 资金差（周期） 0.01% | 综合 0.817%" in text
@@ -2815,7 +2815,7 @@ def test_alert_history_endpoint_applies_global_message_template() -> None:
     text = response.json()[0]["message"]
     assert "【告警触发】" in text
     assert "compact template" in text
-    assert "价差对：BTCUSDT | binance future -> okx future" in text
+    assert "价差对：BTCUSDT | binance 合约 -> okx 合约" in text
     assert "开仓 1.007%" in text
     assert "【规则参数】" not in text
     assert "资金费率" not in text

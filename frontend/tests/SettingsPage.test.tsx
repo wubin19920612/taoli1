@@ -315,7 +315,7 @@ describe("SettingsPage", () => {
     ).toBe(true);
     const preview = document.querySelector(".template-preview pre");
     expect(preview).not.toBeNull();
-    expect(preview?.textContent).toContain("价差对：BTCUSDT | binance future -> okx future");
+    expect(preview?.textContent).toContain("价差对：BTCUSDT | binance 合约 -> okx 合约");
     expect(preview?.textContent).not.toContain("资金费率差");
     expect(preview?.textContent).toContain("只报告可建卡告警");
   }, 15000);

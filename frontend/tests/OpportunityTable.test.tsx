@@ -58,10 +58,11 @@ describe("OpportunityTable", () => {
     expect(screen.getByText("BTCUSDT")).toBeTruthy();
     expect(screen.getByText("Binance")).toBeTruthy();
     expect(screen.getByText("OKX")).toBeTruthy();
-    expect(screen.getAllByTitle("binance future").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByTitle("okx future").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByTitle("binance 合约").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByTitle("okx 合约").length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText("binance future")).toBeNull();
     expect(screen.queryByText("okx future")).toBeNull();
+    expect(screen.getAllByText("合约").length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText("0.620%")).toBeTruthy();
     expect(screen.getByText("当前")).toBeTruthy();
     expect(screen.getByText("预测")).toBeTruthy();
@@ -177,6 +178,26 @@ describe("OpportunityTable", () => {
       />
     );
 
-    expect(screen.getAllByTitle("gate future EDGEX_USDT").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByTitle("gate 合约 原始 EDGEX_USDT").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("labels Bitget RToken stock spot legs as stock spot", () => {
+    render(
+      <OpportunityTable
+        opportunities={[
+          {
+            ...row,
+            symbol: "AAPLUSDT",
+            buy_exchange: "bitget",
+            buy_market_type: "spot",
+            buy_raw_symbol: "RAAPLUSDT"
+          }
+        ]}
+        loading={false}
+      />
+    );
+
+    expect(screen.getAllByTitle("bitget 股票现货 原始 RAAPLUSDT").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/股票现货/).length).toBeGreaterThanOrEqual(1);
   });
 });

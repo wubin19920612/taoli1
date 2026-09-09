@@ -116,10 +116,10 @@ def test_build_payload_explains_rule_parameters() -> None:
     assert "连续命中：3 次" in text
     assert "冷却时间：300s" in text
     assert "【行情快照】" in text
-    assert "买入腿：binance future" in text
-    assert "卖出腿：okx future" in text
-    assert "价差对：BTCUSDT | binance future -> okx future" in text
-    assert "方向：买入 binance future BTCUSDT，卖出 okx future BTCUSDT" in text
+    assert "买入腿：binance 合约" in text
+    assert "卖出腿：okx 合约" in text
+    assert "价差对：BTCUSDT | binance 合约 -> okx 合约" in text
+    assert "方向：买入 binance 合约 BTCUSDT，卖出 okx 合约 BTCUSDT" in text
     assert "价差：开仓 0.800% / 平仓 0.500%" in text
     assert "资金费率差（周期）：当前 -0.03% / 预测 0.01%" in text
     assert "结算周期：8h / 8h" in text
@@ -245,7 +245,7 @@ def test_build_payload_honors_alert_message_template_blocks() -> None:
     text = payload["content"]["text"]
     assert "【告警触发】" in text
     assert "compact alert" in text
-    assert "价差对：BTCUSDT | binance future -> okx future" in text
+    assert "价差对：BTCUSDT | binance 合约 -> okx 合约" in text
     assert "开仓 0.800%" in text
     assert "【规则参数】" not in text
     assert "资金费率" not in text

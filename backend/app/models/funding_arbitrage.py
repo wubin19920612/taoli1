@@ -52,8 +52,10 @@ class FundingArbitrageCandidate(BaseModel):
     type: Literal["SF", "FF"]
     long_exchange: str
     long_market_type: str
+    long_raw_symbol: str | None = None
     short_exchange: str
     short_market_type: str
+    short_raw_symbol: str | None = None
     funding_source: FundingSource
     long_current_funding_pct: float | None = None
     short_current_funding_pct: float | None = None

@@ -10,6 +10,7 @@ import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
 
 import type { Opportunity } from "../api/types";
+import { marketTypeText } from "../constants/marketLabels";
 import { RiskTags } from "./RiskTags";
 
 interface OpportunityTableProps {
@@ -76,15 +77,12 @@ function leg(
   rawSymbol?: string | null,
   canonicalSymbol?: string
 ) {
-  const isBitgetRToken =
-    exchange.trim().toLowerCase() === "bitget" &&
-    marketType === "spot" &&
-    Boolean(rawSymbol && canonicalSymbol && normalizeSymbol(rawSymbol).slice(1) === normalizeSymbol(canonicalSymbol));
   const rawSuffix =
     rawSymbol && canonicalSymbol && normalizeSymbol(rawSymbol) !== normalizeSymbol(canonicalSymbol)
       ? rawSymbol
       : "";
-  const meta = [marketType, isBitgetRToken ? "RToken" : "", rawSuffix].filter(Boolean).join(" ");
+  const marketLabel = marketTypeText(exchange, marketType, rawSymbol, canonicalSymbol);
+  const meta = [marketLabel, rawSuffix ? `原始 ${rawSuffix}` : ""].filter(Boolean).join(" ");
   const fullName = [exchange, meta].filter(Boolean).join(" ");
   return (
     <div className="leg-cell">
@@ -92,7 +90,7 @@ function leg(
         {exchangeLabel(exchange)}
       </Typography.Text>
       <Typography.Text className="leg-meta" title={fullName}>
-        {meta || marketType}
+        {meta || marketLabel}
       </Typography.Text>
     </div>
   );
