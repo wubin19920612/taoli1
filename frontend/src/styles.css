@@ -1630,6 +1630,31 @@ body {
   gap: 10px;
 }
 
+.pair-focus-block {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.pair-focus-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+
+.pair-focus-metrics .pair-metric-card {
+  min-height: 108px;
+}
+
+.pair-focus-metrics .pair-metric-value {
+  font-size: 32px;
+}
+
+.pair-secondary-metric-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .pair-metric-card {
   min-height: 122px;
   display: grid;
@@ -1888,6 +1913,27 @@ body {
   border: 1px solid #e2e8e5;
   border-radius: 6px;
   box-shadow: 0 1px 4px rgba(15, 23, 42, 0.04);
+  min-width: 0;
+}
+
+.pair-chart-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.pair-chart-head .ant-typography {
+  margin: 0;
+}
+
+.pair-chart-head-meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -4779,6 +4825,7 @@ body {
   .pair-hourly-volume-head,
   .pair-price-head,
   .pair-price-subhead,
+  .pair-chart-head,
   .pair-premium-head,
   .symbol-spread-chart-head,
   .symbol-spread-detail-head,
@@ -5052,6 +5099,20 @@ body {
   .pair-position-leg {
     padding-right: 2px;
     padding-left: 2px;
+  }
+
+  .pair-focus-metrics .pair-metric-card {
+    min-height: 96px;
+    padding: 12px;
+  }
+
+  .pair-focus-metrics .pair-metric-value {
+    font-size: 26px;
+  }
+
+  .pair-focus-metrics .pair-metric-sub {
+    white-space: normal;
+    line-height: 1.3;
   }
 
   .new-listing-metrics,

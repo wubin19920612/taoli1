@@ -2372,6 +2372,15 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
 
   return (
     <div className="pair-chart-card">
+      <div className="pair-chart-head">
+        <Typography.Title level={5}>价差曲线</Typography.Title>
+        <div className="pair-chart-head-meta">
+          <Tag color={latestTone === "positive" ? "red" : latestTone === "negative" ? "green" : undefined}>
+            最新 {signedPct(latestPoint.spread_pct)}
+          </Tag>
+          <Typography.Text type="secondary">{fullTime(latestPoint.bucket_at)}</Typography.Text>
+        </div>
+      </div>
       <svg className="pair-spread-chart" role="img" aria-label="均值价差率曲线" viewBox={`0 0 ${width} ${height}`}>
         <defs>
           <linearGradient id="pairSpreadFill" x1="0" x2="0" y1="0" y2="1">
@@ -4903,6 +4912,31 @@ export function PairMonitorPage() {
             </div>
           </div>
         </Form>
+      </section>
+
+      <section className="pair-focus-block">
+        <section className="pair-focus-metrics">
+          <MetricCard
+            label="最新均值价差率"
+            value={signedPct(spreadPct)}
+            sub={
+              result
+                ? `实时价差 = ${rightLegLabel(result)} - ${leftLegLabel(result)}`
+                : "等待查询"
+            }
+            tone={spreadTone}
+          />
+          <MetricCard
+            label="差价"
+            value={price(current?.spread_abs ?? result?.spread_abs.current)}
+            sub={ratio ? `倍率 ${compactNumber(ratio, 4)}x` : "-"}
+            tone={spreadTone}
+          />
+        </section>
+        <PairSpreadChart result={result} />
+      </section>
+
+      <section className="pair-query-panel pair-query-secondary-panel">
         <div className="pair-query-options">
           <Button
             className="pair-query-swap"
@@ -5148,17 +5182,7 @@ export function PairMonitorPage() {
         ) : null}
       </section>
 
-      <section className="pair-metric-grid">
-        <MetricCard
-          label="最新均值价差率"
-          value={signedPct(spreadPct)}
-            sub={
-              result
-              ? `实时价差 = ${rightLegLabel(result)} - ${leftLegLabel(result)}`
-              : "等待查询"
-          }
-          tone={spreadTone}
-        />
+      <section className="pair-metric-grid pair-secondary-metric-grid">
         <MetricCard
           label={leftLegLabel(result)}
           value={price(current?.leg1.price)}
@@ -5214,12 +5238,6 @@ export function PairMonitorPage() {
           }
         />
         <MetricCard
-          label="差价"
-          value={price(current?.spread_abs ?? result?.spread_abs.current)}
-          sub={ratio ? `倍率 ${compactNumber(ratio, 4)}x` : "-"}
-          tone={spreadTone}
-        />
-        <MetricCard
           label="周期"
           value={intervalLabel(result ? resultIntervalSeconds(result) : intervalSeconds)}
           sub={result ? `${dataRangeLabel(result, hours)} · ${fullTime(result.observed_at)}` : durationLabel(hours)}
@@ -5227,7 +5245,6 @@ export function PairMonitorPage() {
       </section>
 
       <PairPositionStatsCard result={result} />
-      <PairSpreadChart result={result} />
       <PairOpenInterestChart result={result} />
       <PairHourlyVolumeCard result={result} />
       {showDayCompare ? (

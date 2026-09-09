@@ -900,12 +900,13 @@ describe("PairMonitorPage", () => {
     const pageLayout = Array.from(document.querySelector(".pair-monitor-page")?.children ?? []).map((element) =>
       (element as HTMLElement).className.toString()
     );
-    const spreadChartIndex = pageLayout.findIndex((className) => className.includes("pair-chart-card"));
+    const focusBlockIndex = pageLayout.findIndex((className) => className.includes("pair-focus-block"));
     const openInterestChartIndex = pageLayout.findIndex((className) => className.includes("pair-oi-card"));
     const priceChartIndex = pageLayout.findIndex((className) => className.includes("pair-price-card"));
     const fundingGridIndex = pageLayout.findIndex((className) => className.includes("pair-funding-grid"));
-    expect(spreadChartIndex).toBeGreaterThan(-1);
-    expect(openInterestChartIndex).toBe(spreadChartIndex + 1);
+    expect(focusBlockIndex).toBeGreaterThan(-1);
+    expect(document.querySelector(".pair-focus-block .pair-chart-card")).toBeTruthy();
+    expect(openInterestChartIndex).toBeGreaterThan(focusBlockIndex);
     expect(priceChartIndex).toBe(openInterestChartIndex + 1);
     expect(fundingGridIndex).toBeGreaterThan(priceChartIndex);
     expect(screen.getByText("OI变化量（USDT）")).toBeTruthy();
