@@ -599,6 +599,24 @@ def test_binance_provider_parses_listing_and_delisting_catalogs() -> None:
     assert rows[0].url == "https://www.binance.com/en/support/announcement/3bdaff694bde45ccb443709336c8686d"
     assert rows[0].published_at.isoformat() == "2026-05-29T07:00:06.968000+00:00"
 
+    collateral = provider._announcement_from_row(
+        {
+            "id": 275492,
+            "code": "bstocks-collateral",
+            "title": "Binance Will Add 2 bStocks Tokenized Securities as Collateral Asset - 2026-09-09",
+            "releaseDate": 1788937216000,
+        },
+        "48",
+        "New Cryptocurrency Listing",
+        content=(
+            "Binance Cross Margin will add two bStocks tokens — Hims & Hers (HIMSB) "
+            "and Salesforce (CRMB) — as eligible collateral assets."
+        ),
+    )
+    assert collateral is not None
+    assert collateral.symbols == ["HIMSB", "CRMB"]
+    assert collateral.market_type == "margin"
+
     generic = provider._announcement_from_row(
         {
             "id": 275490,

@@ -163,11 +163,11 @@ async def test_researches_bstock_announcement_as_stocks_without_calling_coingeck
             return httpx.Response(404, text="not found", request=request)
         if request.url.host == "html.duckduckgo.com":
             query = parse_qs(request.url.query.decode()).get("q", [""])[0]
-            if "CRMB" in query:
+            if "CRM" in query:
                 return httpx.Response(
                     200,
                     text=_search_html(
-                        "CRMB",
+                        "CRM",
                         "Salesforce",
                         "Salesforce provides customer relationship management software and cloud services for sales, service, marketing, and data teams.",
                     ),
@@ -176,7 +176,7 @@ async def test_researches_bstock_announcement_as_stocks_without_calling_coingeck
             return httpx.Response(
                 200,
                 text=_search_html(
-                    "HIMSB",
+                    "HIMS",
                     "Hims & Hers Health",
                     "Hims & Hers Health operates a digital health platform connecting consumers with online consultations, prescriptions, and wellness products.",
                 ),
@@ -209,6 +209,7 @@ async def test_researches_bstock_announcement_as_stocks_without_calling_coingeck
         ("CRMB", "stock", "Salesforce"),
         ("HIMSB", "stock", "Hims & Hers Health"),
     ]
+    assert [item.canonical_symbol for item in results] == ["CRM", "HIMS"]
     assert all(item.status == "partial" for item in results)
     assert all("coingecko.com" not in url for url in requested_paths)
     assert any("Salesforce provides" in (item.business or "") for item in results)

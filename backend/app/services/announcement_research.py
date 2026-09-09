@@ -136,6 +136,30 @@ def _is_index_context(announcement: ExchangeAnnouncement, symbol: str) -> bool:
     }
 
 
+def _is_binance_bstock_context(announcement: ExchangeAnnouncement) -> bool:
+    context = _research_context(announcement)
+    return announcement.exchange == "binance" and any(
+        token in context for token in ("bstock", "tokenized security", "tokenized securities")
+    )
+
+
+def _binance_bstock_canonical_symbol(announcement: ExchangeAnnouncement, symbol: str) -> str | None:
+    if not _is_binance_bstock_context(announcement):
+        return None
+    value = _symbol_base(symbol)
+    if len(value) > 2 and value.endswith("B"):
+        return value[:-1]
+    return value
+
+
+def _stock_canonical_symbol(announcement: ExchangeAnnouncement, symbol: str) -> str:
+    return (
+        _bitget_rtoken_canonical_symbol(announcement, symbol)
+        or _binance_bstock_canonical_symbol(announcement, symbol)
+        or _symbol_base(symbol)
+    )
+
+
 def _bitget_rtoken_canonical_symbol(announcement: ExchangeAnnouncement, symbol: str) -> str | None:
     if not _is_bitget_rtoken_shape(announcement, symbol):
         return None
@@ -291,7 +315,7 @@ class AnnouncementResearchService:
         except TimeoutError:
             logger.warning("asset research timed out for %s", symbol)
             canonical_symbol = (
-                _bitget_rtoken_canonical_symbol(announcement, symbol)
+                _stock_canonical_symbol(announcement, symbol)
                 if _is_stock_context(announcement, symbol)
                 else _symbol_base(symbol)
             )
@@ -314,10 +338,10 @@ class AnnouncementResearchService:
                         return self._not_found(symbol, canonical_symbol)
                     stock_context = verified_rtoken
                 canonical_symbol = (
-                    _bitget_rtoken_canonical_symbol(announcement, symbol)
+                    _stock_canonical_symbol(announcement, symbol)
                     if stock_context
-                    else None
-                ) or _symbol_base(symbol)
+                    else _symbol_base(symbol)
+                )
                 cache_key = self._cache_key(announcement, symbol, canonical_symbol)
                 cached = self._cache.get(cache_key)
                 if cached is not None:

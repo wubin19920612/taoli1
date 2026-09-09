@@ -461,6 +461,16 @@ def infer_symbols_from_content(text: str) -> list[str]:
         candidates.append(_normalize_symbol(value))
     for value in re.findall(r"\b[A-Z0-9]{2,20}USD\b", text):
         candidates.append(_normalize_symbol(value))
+    if any(
+        marker in text.lower()
+        for marker in ("bstock", "tokenized security", "tokenized securities", "collateral asset")
+    ):
+        # Binance bStocks collateral announcements list the underlying companies as
+        # `Company Name (TICKER)` in the article body, without a trading-pair suffix.
+        for value in re.findall(r"\(([A-Z][A-Z0-9]{1,14})\)", text):
+            symbol = _normalize_symbol(value)
+            if symbol not in {"UTC", "ADGM"}:
+                candidates.append(symbol)
 
     seen: set[str] = set()
     result: list[str] = []
