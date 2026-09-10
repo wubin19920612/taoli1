@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from pydantic import ValidationError
 
 import app.services.premium_index_query as premium_index_query
 from app.models.pair_spread import PairSpreadCurrentLeg, PairSpreadKlinePoint, PairSpreadPriceField
@@ -25,6 +26,15 @@ def test_build_premium_points_from_mark_index_aligns_by_time() -> None:
     assert points[0].premium_pct == pytest.approx(1.0)
     assert points[0].mark_price == 101
     assert points[0].index_price == 100
+
+
+def test_premium_index_hyperliquid_symbol_extracts_dex() -> None:
+    market = PremiumIndexMarketQuery(exchange="hyperliquid", symbol="io:OAI")
+    assert market.symbol == "OAIUSDT"
+    assert market.dex == "io"
+
+    with pytest.raises(ValidationError):
+        PremiumIndexMarketQuery(exchange="binance", symbol="OAI", dex="io")
 
 
 def test_filter_interval_points_buckets_hourly_and_daily_data() -> None:

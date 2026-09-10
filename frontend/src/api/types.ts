@@ -957,6 +957,20 @@ export interface PairSpreadLegQuery {
   exchange: string;
   symbol: string;
   market_type: MarketType;
+  dex?: string | null;
+}
+
+export interface HyperliquidMarketAsset {
+  raw_symbol: string;
+  symbol: string;
+  base: string;
+  delisted: boolean;
+}
+
+export interface HyperliquidDexMarket {
+  dex: string;
+  full_name: string;
+  assets: HyperliquidMarketAsset[];
 }
 
 export interface PairSpreadPoint {
@@ -993,6 +1007,7 @@ export interface PairSpreadFundingPoint {
   symbol: string;
   funding_time: string;
   funding_rate_pct: number;
+  dex?: string | null;
 }
 
 export interface PairSpreadRealtimeFundingPoint {
@@ -1032,6 +1047,7 @@ export interface PairSpreadCurrentLeg {
   exchange: string;
   symbol: string;
   market_type: MarketType;
+  dex?: string | null;
   raw_symbol: string;
   price: number;
   price_field: PairSpreadPriceField;
@@ -1231,6 +1247,7 @@ export interface PremiumIndexCurrentSnapshot {
   observed_at: string;
   exchange: string;
   symbol: string;
+  dex?: string | null;
   raw_symbol: string;
   mark_price: number | null;
   index_price: number | null;
@@ -1257,6 +1274,7 @@ export interface PremiumIndexValueStats {
 export interface PremiumIndexQueryResult {
   exchange: string;
   symbol: string;
+  dex?: string | null;
   hours: number;
   interval_minutes: number;
   observed_at: string;

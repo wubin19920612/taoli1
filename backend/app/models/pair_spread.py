@@ -29,6 +29,7 @@ PAIR_SPREAD_INTERVAL_SECONDS_OPTIONS: tuple[int, ...] = (5, 10, 30, 60, 300, 900
 PAIR_SPREAD_MIN_INTERVAL_SECONDS = 5
 PAIR_SPREAD_MAX_INTERVAL_SECONDS = 86_400
 PAIR_SPREAD_FUNDING_RECORD_INTERVAL_SECONDS = 60
+HYPERLIQUID_MAIN_DEX = "main"
 
 
 class PairSpreadPriceField(StrEnum):
@@ -48,6 +49,26 @@ def normalize_pair_spread_symbol(value: str) -> str:
     return compact if compact.endswith("USDT") else f"{compact}USDT"
 
 
+def normalize_hyperliquid_dex(value: str | None) -> str | None:
+    normalized = value.strip().lower() if isinstance(value, str) else None
+    return normalized or None
+
+
+def split_hyperliquid_symbol(value: str, dex: str | None = None) -> tuple[str | None, str]:
+    normalized = value.strip().upper()
+    resolved_dex = normalize_hyperliquid_dex(dex)
+    if ":" in normalized:
+        prefix, symbol = normalized.split(":", 1)
+        prefix = prefix.strip().lower()
+        if not prefix or not symbol.strip():
+            raise ValueError("hyperliquid symbol must use DEX:SYMBOL format")
+        if resolved_dex is not None and resolved_dex != prefix:
+            raise ValueError(f"hyperliquid symbol DEX {prefix} conflicts with selected DEX {resolved_dex}")
+        resolved_dex = prefix
+        normalized = symbol
+    return resolved_dex, normalize_pair_spread_symbol(normalized)
+
+
 def normalize_binance_alpha_symbol(value: str) -> str:
     normalized = value.strip().upper().replace("/", "").replace("-", "_")
     if normalized.endswith("_USDT"):
@@ -65,6 +86,24 @@ class PairSpreadLegQuery(BaseModel):
     exchange: str
     symbol: str
     market_type: MarketType = MarketType.FUTURE
+    dex: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def extract_hyperliquid_dex(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        exchange = str(value.get("exchange", "")).strip().lower()
+        if exchange != "hyperliquid" or "symbol" not in value:
+            return value
+        payload = dict(value)
+        dex, symbol = split_hyperliquid_symbol(
+            str(payload.get("symbol", "")),
+            payload.get("dex") if isinstance(payload.get("dex"), str) else None,
+        )
+        payload["dex"] = dex
+        payload["symbol"] = symbol
+        return payload
 
     @field_validator("exchange")
     @classmethod
@@ -83,11 +122,34 @@ class PairSpreadLegQuery(BaseModel):
             return normalize_binance_alpha_symbol(value)
         return normalize_pair_spread_symbol(value)
 
+    @field_validator("dex")
+    @classmethod
+    def normalize_dex(cls, value: str | None) -> str | None:
+        normalized = value.strip().lower() if isinstance(value, str) else None
+        return normalized or None
+
     @model_validator(mode="after")
     def validate_market_type(self) -> "PairSpreadLegQuery":
         if self.exchange == "binance_alpha" and self.market_type != MarketType.SPOT:
             raise ValueError("binance_alpha only supports spot pair-spread queries")
+        if self.dex is not None and self.exchange != "hyperliquid":
+            raise ValueError("dex is only supported for hyperliquid pair-spread queries")
+        if self.dex is not None and self.market_type != MarketType.FUTURE:
+            raise ValueError("hyperliquid DEX is only supported for contract queries")
         return self
+
+
+class HyperliquidMarketAsset(BaseModel):
+    raw_symbol: str
+    symbol: str
+    base: str
+    delisted: bool = False
+
+
+class HyperliquidDexMarket(BaseModel):
+    dex: str
+    full_name: str
+    assets: list[HyperliquidMarketAsset] = Field(default_factory=list)
 
 
 class PairSpreadKlinePoint(BaseModel):
@@ -130,6 +192,7 @@ class PairSpreadFundingPoint(BaseModel):
     symbol: str
     funding_time: datetime
     funding_rate_pct: float
+    dex: str | None = None
 
 
 class PairSpreadRealtimeFundingPoint(BaseModel):
@@ -175,6 +238,7 @@ class PairSpreadCurrentLeg(BaseModel):
     exchange: str
     symbol: str
     market_type: MarketType = MarketType.FUTURE
+    dex: str | None = None
     raw_symbol: str
     price: float
     price_field: PairSpreadPriceField

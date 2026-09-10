@@ -34,6 +34,9 @@ from app.models.pair_spread import (
     PairSpreadQueryResult,
     PairSpreadRealtimeFundingPoint,
     PairSpreadValueStats,
+    HYPERLIQUID_MAIN_DEX,
+    HyperliquidDexMarket,
+    HyperliquidMarketAsset,
     PAIR_SPREAD_DAILY_INTERVAL_SECONDS,
     PAIR_SPREAD_DAILY_THRESHOLD_HOURS,
     PAIR_SPREAD_HOURLY_INTERVAL_SECONDS,
@@ -44,6 +47,8 @@ from app.models.pair_spread import (
     SymbolSpreadQueryResult,
     SymbolSpreadSeries,
     normalize_binance_alpha_symbol,
+    normalize_hyperliquid_dex,
+    normalize_pair_spread_symbol,
 )
 
 MINUTE_MS = 60_000
@@ -64,6 +69,15 @@ OPEN_INTEREST_SOURCE_MIXED = "mixed"
 BINANCE_OPEN_INTEREST_LIMIT = 500
 BYBIT_OPEN_INTEREST_LIMIT = 200
 GATE_OPEN_INTEREST_LIMIT = 1000
+
+
+def _hyperliquid_api_dex(dex: str | None) -> str:
+    normalized = normalize_hyperliquid_dex(dex)
+    return "" if normalized in {None, HYPERLIQUID_MAIN_DEX} else normalized
+
+
+def _hyperliquid_public_dex(dex: str | None) -> str:
+    return normalize_hyperliquid_dex(dex) or HYPERLIQUID_MAIN_DEX
 
 
 def _binance_alpha_error(payload: Any) -> str:
@@ -493,9 +507,11 @@ def _realtime_cache_key(
         (
             leg1.exchange,
             leg1.market_type,
+            leg1.dex or "",
             leg1.symbol,
             leg2.exchange,
             leg2.market_type,
+            leg2.dex or "",
             leg2.symbol,
             f"{leg2_multiplier:.12g}",
             str(interval_seconds),
@@ -927,8 +943,9 @@ class PairSpreadQueryService:
         )
         self._owns_client = client is None
         self._hyperliquid_dex_names: list[str] | None = None
+        self._hyperliquid_dex_details: dict[str, str] = {}
         self._hyperliquid_meta_contexts_by_dex: dict[str, tuple[dict[str, Any], list[Any]]] = {}
-        self._hyperliquid_coin_by_base: dict[str, tuple[str, str]] = {}
+        self._hyperliquid_coin_by_base: dict[tuple[str, str], tuple[str, str]] = {}
 
     async def aclose(self) -> None:
         if self._owns_client and not self.client.is_closed:
@@ -1016,8 +1033,8 @@ class PairSpreadQueryService:
         kline_keys = list(
             dict.fromkeys(
                 (
-                    (leg1.exchange, leg1.symbol, leg1.market_type),
-                    (leg2.exchange, leg2.symbol, leg2.market_type),
+                    (leg1.exchange, leg1.symbol, leg1.market_type, leg1.dex),
+                    (leg2.exchange, leg2.symbol, leg2.market_type, leg2.dex),
                 )
             )
         )
@@ -1037,17 +1054,18 @@ class PairSpreadQueryService:
                         exchange,
                         symbol,
                         market_type,
+                        dex,
                         window_start,
                         end,
                         interval_minutes,
                         window_warnings,
                     )
-                    for exchange, symbol, market_type in kline_keys
+                    for exchange, symbol, market_type, dex in kline_keys
                 )
             )
             klines_by_key = dict(zip(kline_keys, kline_results, strict=True))
-            candidate_leg1_klines = klines_by_key[(leg1.exchange, leg1.symbol, leg1.market_type)]
-            candidate_leg2_klines = klines_by_key[(leg2.exchange, leg2.symbol, leg2.market_type)]
+            candidate_leg1_klines = klines_by_key[(leg1.exchange, leg1.symbol, leg1.market_type, leg1.dex)]
+            candidate_leg2_klines = klines_by_key[(leg2.exchange, leg2.symbol, leg2.market_type, leg2.dex)]
             candidate_points = build_pair_spread_points(
                 candidate_leg1_klines,
                 candidate_leg2_klines,
@@ -1245,6 +1263,7 @@ class PairSpreadQueryService:
                         leg.exchange,
                         leg.symbol,
                         leg.market_type,
+                        leg.dex,
                         window_start,
                         end,
                         interval_minutes,
@@ -1628,19 +1647,28 @@ class PairSpreadQueryService:
         exchange: str,
         symbol: str,
         market_type: MarketType,
+        dex: str | None,
         start: datetime,
         end: datetime,
         interval_minutes: int,
         warnings: list[str],
     ) -> list[PairSpreadKlinePoint]:
         try:
+            if exchange == "hyperliquid" and dex:
+                return await self._fetch_hyperliquid_klines(
+                    symbol,
+                    start,
+                    end,
+                    interval_minutes,
+                    dex=dex,
+                )
             if market_type == MarketType.FUTURE:
                 return await self._fetch_klines(exchange, symbol, start, end, interval_minutes)
             return await self._fetch_klines(exchange, symbol, start, end, interval_minutes, market_type)
         except Exception as exc:  # noqa: BLE001 - keep pair query error actionable.
             _append_unique(
                 warnings,
-                f"{exchange}:{_market_type_text(market_type)}:{symbol} 分钟K线失败: "
+                f"{exchange}:{dex + ':' if dex else ''}{_market_type_text(market_type)}:{symbol} 分钟K线失败: "
                 f"{_market_data_error_text(exchange, exc)}",
             )
             return []
@@ -1651,13 +1679,15 @@ class PairSpreadQueryService:
         warnings: list[str],
     ) -> PairSpreadCurrentLeg | None:
         try:
+            if leg.exchange == "hyperliquid" and leg.dex:
+                return await self._fetch_hyperliquid_current(leg.symbol, dex=leg.dex)
             if leg.market_type == MarketType.FUTURE:
                 return await self._fetch_current_leg(leg.exchange, leg.symbol)
             return await self._fetch_current_leg(leg.exchange, leg.symbol, leg.market_type)
         except Exception as exc:  # noqa: BLE001 - current snapshot should not block chart.
             _append_unique(
                 warnings,
-                f"{leg.exchange}:{_market_type_text(leg.market_type)}:{leg.symbol} 当前价格/资金失败: "
+                f"{leg.exchange}:{leg.dex + ':' if leg.dex else ''}{_market_type_text(leg.market_type)}:{leg.symbol} 当前价格/资金失败: "
                 f"{_exception_text(exc)}",
             )
             return None
@@ -1672,9 +1702,15 @@ class PairSpreadQueryService:
         if leg.market_type == MarketType.SPOT:
             return []
         try:
+            if leg.exchange == "hyperliquid" and leg.dex:
+                return await self._fetch_hyperliquid_funding(leg.symbol, start, end, dex=leg.dex)
             return await self._fetch_funding_history(leg.exchange, leg.symbol, start, end)
         except Exception as exc:  # noqa: BLE001 - funding history is supplementary.
-            _append_unique(warnings, f"{leg.exchange}:{leg.symbol} 历史资金费率失败: {_exception_text(exc)}")
+            _append_unique(
+                warnings,
+                f"{leg.exchange}:{leg.dex + ':' if leg.dex else ''}{leg.symbol} 历史资金费率失败: "
+                f"{_exception_text(exc)}",
+            )
             return []
 
     async def _query_open_interest(
@@ -2501,8 +2537,13 @@ class PairSpreadQueryService:
         start: datetime,
         end: datetime,
         interval_minutes: int,
+        *,
+        dex: str | None = None,
     ) -> list[PairSpreadKlinePoint]:
-        raw_coin, _ = await self._resolve_hyperliquid_coin(symbol)
+        if dex:
+            raw_coin, _ = await self._resolve_hyperliquid_coin(symbol, dex=dex)
+        else:
+            raw_coin, _ = await self._resolve_hyperliquid_coin(symbol)
         payload = await self._post_json(
             "https://api.hyperliquid.xyz/info",
             {
@@ -3047,9 +3088,17 @@ class PairSpreadQueryService:
             funding_next_time=None,
         )
 
-    async def _fetch_hyperliquid_current(self, symbol: str) -> PairSpreadCurrentLeg:
-        resolved_coin, dex = await self._resolve_hyperliquid_coin(symbol)
-        meta, contexts = await self._fetch_hyperliquid_meta_contexts(dex)
+    async def _fetch_hyperliquid_current(
+        self,
+        symbol: str,
+        *,
+        dex: str | None = None,
+    ) -> PairSpreadCurrentLeg:
+        if dex:
+            resolved_coin, resolved_dex = await self._resolve_hyperliquid_coin(symbol, dex=dex)
+        else:
+            resolved_coin, resolved_dex = await self._resolve_hyperliquid_coin(symbol)
+        meta, contexts = await self._fetch_hyperliquid_meta_contexts(resolved_dex)
         universe = meta.get("universe", [])
         for asset, context in zip(universe, contexts):
             if not isinstance(asset, dict) or not isinstance(context, dict):
@@ -3066,6 +3115,7 @@ class PairSpreadQueryService:
             return _current_leg(
                 exchange="hyperliquid",
                 symbol=symbol,
+                dex=_hyperliquid_public_dex(resolved_dex),
                 raw_symbol=raw_coin,
                 mark_price=mark,
                 index_price=index,
@@ -3088,45 +3138,123 @@ class PairSpreadQueryService:
             return self._hyperliquid_dex_names
 
         dex_names = [""]
+        self._hyperliquid_dex_details[""] = "Hyperliquid 主站"
         payload = await self._post_json("https://api.hyperliquid.xyz/info", {"type": "perpDexs"})
         if isinstance(payload, list):
             for dex in payload:
                 if not isinstance(dex, dict):
                     continue
-                name = str(dex.get("name", "")).strip()
+                name = str(dex.get("name", "")).strip().lower()
                 if name and name not in dex_names:
                     dex_names.append(name)
+                if name:
+                    self._hyperliquid_dex_details[name] = (
+                        str(dex.get("fullName") or dex.get("full_name") or name).strip()
+                    )
         self._hyperliquid_dex_names = dex_names
         return dex_names
 
+    async def list_hyperliquid_markets(self) -> list[HyperliquidDexMarket]:
+        markets: list[HyperliquidDexMarket] = []
+        for dex in await self._fetch_hyperliquid_dex_names():
+            meta, _ = await self._fetch_hyperliquid_meta_contexts(dex)
+            assets: list[HyperliquidMarketAsset] = []
+            for asset in meta.get("universe", []):
+                if not isinstance(asset, dict):
+                    continue
+                raw_symbol = str(asset.get("name", "")).strip()
+                if not raw_symbol:
+                    continue
+                base = _hyperliquid_base_from_raw(raw_symbol).upper()
+                try:
+                    symbol = normalize_pair_spread_symbol(base)
+                except Exception:
+                    continue
+                assets.append(
+                    HyperliquidMarketAsset(
+                        raw_symbol=raw_symbol,
+                        symbol=symbol,
+                        base=base,
+                        delisted=bool(asset.get("isDelisted", False)),
+                    )
+                )
+            markets.append(
+                HyperliquidDexMarket(
+                    dex=_hyperliquid_public_dex(dex),
+                    full_name=self._hyperliquid_dex_details.get(
+                        dex,
+                        "Hyperliquid 主站" if not dex else dex,
+                    ),
+                    assets=assets,
+                )
+            )
+        return markets
+
     async def _fetch_hyperliquid_meta_contexts(self, dex: str = "") -> tuple[dict[str, Any], list[Any]]:
-        if dex in self._hyperliquid_meta_contexts_by_dex:
-            return self._hyperliquid_meta_contexts_by_dex[dex]
+        normalized_dex = _hyperliquid_api_dex(dex)
+        if normalized_dex in self._hyperliquid_meta_contexts_by_dex:
+            return self._hyperliquid_meta_contexts_by_dex[normalized_dex]
 
         body: dict[str, Any] = {"type": "metaAndAssetCtxs"}
-        if dex:
-            body["dex"] = dex
+        if normalized_dex:
+            body["dex"] = normalized_dex
         payload = await self._post_json("https://api.hyperliquid.xyz/info", body)
         if not isinstance(payload, list) or len(payload) < 2:
             raise RuntimeError("unexpected hyperliquid metaAndAssetCtxs payload")
         meta = payload[0] if isinstance(payload[0], dict) else {}
         contexts = payload[1] if isinstance(payload[1], list) else []
-        self._hyperliquid_meta_contexts_by_dex[dex] = (meta, contexts)
-        self._index_hyperliquid_meta_coins(dex, meta)
-        return self._hyperliquid_meta_contexts_by_dex[dex]
+        self._hyperliquid_meta_contexts_by_dex[normalized_dex] = (meta, contexts)
+        self._index_hyperliquid_meta_coins(normalized_dex, meta)
+        return self._hyperliquid_meta_contexts_by_dex[normalized_dex]
 
-    async def _resolve_hyperliquid_coin(self, symbol: str) -> tuple[str, str]:
-        requested_coin = _hyperliquid_coin(symbol).upper()
-        cached = self._hyperliquid_coin_by_base.get(requested_coin)
-        if cached is not None:
-            return cached
+    async def _resolve_hyperliquid_coin(
+        self,
+        symbol: str,
+        *,
+        dex: str | None = None,
+    ) -> tuple[str, str]:
+        requested = symbol.strip().upper()
+        embedded_dex: str | None = None
+        if ":" in requested:
+            embedded_dex, requested = requested.split(":", 1)
+            embedded_dex = normalize_hyperliquid_dex(embedded_dex)
+            requested = requested.strip()
+        selected_dex = normalize_hyperliquid_dex(dex)
+        if embedded_dex and selected_dex is not None and embedded_dex != selected_dex:
+            raise RuntimeError(
+                f"hyperliquid symbol DEX {embedded_dex} conflicts with selected DEX {selected_dex}"
+            )
+        requested_dex_label = selected_dex if selected_dex is not None else embedded_dex
+        requested_dex = (
+            _hyperliquid_api_dex(requested_dex_label)
+            if requested_dex_label is not None
+            else None
+        )
+        requested_coin = _hyperliquid_coin(requested).upper()
 
-        for dex in await self._fetch_hyperliquid_dex_names():
-            await self._fetch_hyperliquid_meta_contexts(dex)
-            resolved = self._hyperliquid_coin_by_base.get(requested_coin)
+        if requested_dex is not None:
+            await self._fetch_hyperliquid_meta_contexts(requested_dex)
+            resolved = self._hyperliquid_coin_by_base.get((requested_dex, requested_coin))
             if resolved is not None:
                 return resolved
+            raise RuntimeError(
+                f"hyperliquid symbol not found on DEX {requested_dex_label}: {requested_coin}"
+            )
 
+        matches: list[tuple[str, str]] = []
+        for candidate_dex in await self._fetch_hyperliquid_dex_names():
+            await self._fetch_hyperliquid_meta_contexts(candidate_dex)
+            resolved = self._hyperliquid_coin_by_base.get((candidate_dex, requested_coin))
+            if resolved is not None and resolved not in matches:
+                matches.append(resolved)
+
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            dex_labels = "、".join(dex_name or "主站" for _, dex_name in matches)
+            raise RuntimeError(
+                f"hyperliquid symbol {requested_coin} 同时存在于多个 perp DEX（{dex_labels}），请先选择 DEX"
+            )
         raise RuntimeError(f"hyperliquid symbol not found: {symbol}")
 
     def _index_hyperliquid_meta_coins(self, dex: str, meta: dict[str, Any]) -> None:
@@ -3137,11 +3265,17 @@ class PairSpreadQueryService:
             if not raw_coin:
                 continue
             resolved = (raw_coin, dex)
-            self._hyperliquid_coin_by_base.setdefault(raw_coin.upper(), resolved)
-            self._hyperliquid_coin_by_base.setdefault(_hyperliquid_base_from_raw(raw_coin).upper(), resolved)
+            normalized_dex = dex.strip().lower()
+            self._hyperliquid_coin_by_base[(normalized_dex, raw_coin.upper())] = resolved
+            self._hyperliquid_coin_by_base[
+                (normalized_dex, _hyperliquid_base_from_raw(raw_coin).upper())
+            ] = resolved
 
-    async def _require_hyperliquid_coin(self, symbol: str) -> str:
-        raw_coin, _ = await self._resolve_hyperliquid_coin(symbol)
+    async def _require_hyperliquid_coin(self, symbol: str, *, dex: str | None = None) -> str:
+        if dex:
+            raw_coin, _ = await self._resolve_hyperliquid_coin(symbol, dex=dex)
+        else:
+            raw_coin, _ = await self._resolve_hyperliquid_coin(symbol)
         if not raw_coin:
             raise RuntimeError(f"hyperliquid symbol not found: {symbol}")
         return raw_coin
@@ -3277,8 +3411,10 @@ class PairSpreadQueryService:
         symbol: str,
         start: datetime,
         end: datetime,
+        *,
+        dex: str | None = None,
     ) -> list[PairSpreadFundingPoint]:
-        raw_coin = await self._require_hyperliquid_coin(symbol)
+        raw_coin, resolved_dex = await self._resolve_hyperliquid_coin(symbol, dex=dex)
         payload = await self._post_json(
             "https://api.hyperliquid.xyz/info",
             {
@@ -3298,6 +3434,7 @@ class PairSpreadQueryService:
                 symbol,
                 parse_datetime_ms(row.get("time")),
                 parse_float(row.get("fundingRate")),
+                dex=_hyperliquid_public_dex(resolved_dex),
             )
             if point is not None:
                 points.append(point)
@@ -3530,6 +3667,7 @@ def _current_leg(
     exchange: str,
     symbol: str,
     market_type: MarketType = MarketType.FUTURE,
+    dex: str | None = None,
     raw_symbol: str,
     mark_price: float | None,
     index_price: float | None,
@@ -3567,6 +3705,7 @@ def _current_leg(
                     else _compact_symbol(symbol)
                 ),
                 market_type=market_type,
+                dex=dex,
                 raw_symbol=raw_symbol,
                 price=resolved,
                 price_field=field,
@@ -3638,6 +3777,8 @@ def _funding_point(
     symbol: str,
     funding_time: datetime | None,
     funding_rate: float | None,
+    *,
+    dex: str | None = None,
 ) -> PairSpreadFundingPoint | None:
     if funding_time is None or funding_rate is None or not isfinite(funding_rate):
         return None
@@ -3646,4 +3787,5 @@ def _funding_point(
         symbol=_compact_symbol(symbol),
         funding_time=funding_time,
         funding_rate_pct=funding_rate * 100,
+        dex=dex,
     )

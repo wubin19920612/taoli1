@@ -38,6 +38,7 @@ async def query_premium_index(
     request: Request,
     exchange: str = Query(...),
     symbol: str = Query(...),
+    dex: str | None = Query(default=None),
     hours: int = Query(default=24, ge=PREMIUM_INDEX_MIN_HOURS),
     interval_minutes: int = Query(default=1),
 ) -> PremiumIndexQueryResult:
@@ -46,11 +47,12 @@ async def query_premium_index(
         raise HTTPException(status_code=422, detail=f"interval_minutes must be one of: {allowed}")
     resolver = await _symbol_alias_resolver(request)
     try:
-        requested_market = PremiumIndexMarketQuery(exchange=exchange, symbol=symbol)
+        requested_market = PremiumIndexMarketQuery(exchange=exchange, symbol=symbol, dex=dex)
         alias = resolver.resolve(
             exchange=requested_market.exchange,
             symbol=requested_market.symbol,
             market_type=MarketType.FUTURE,
+            dex=requested_market.dex,
         )
         market = requested_market.model_copy(update={"symbol": alias.raw_symbol})
     except ValidationError as exc:
@@ -74,14 +76,16 @@ async def get_current_premium_index(
     request: Request,
     exchange: str = Query(...),
     symbol: str = Query(...),
+    dex: str | None = Query(default=None),
 ) -> PremiumIndexCurrentSnapshot:
     resolver = await _symbol_alias_resolver(request)
     try:
-        requested_market = PremiumIndexMarketQuery(exchange=exchange, symbol=symbol)
+        requested_market = PremiumIndexMarketQuery(exchange=exchange, symbol=symbol, dex=dex)
         alias = resolver.resolve(
             exchange=requested_market.exchange,
             symbol=requested_market.symbol,
             market_type=MarketType.FUTURE,
+            dex=requested_market.dex,
         )
         market = requested_market.model_copy(update={"symbol": alias.raw_symbol})
     except ValidationError as exc:

@@ -80,6 +80,20 @@ async def _ensure_second_level_sample_columns(db: aiosqlite.Connection) -> None:
         await db.execute(f"ALTER TABLE second_level_market_samples ADD COLUMN {name} {ddl}")
 
 
+async def _ensure_pair_spread_funding_columns(db: aiosqlite.Connection) -> None:
+    cursor = await db.execute("PRAGMA table_info(pair_spread_funding_watchlist)")
+    rows = await cursor.fetchall()
+    existing = {row["name"] for row in rows}
+    columns: dict[str, str] = {
+        "leg1_dex": "TEXT",
+        "leg2_dex": "TEXT",
+    }
+    for name, ddl in columns.items():
+        if name in existing:
+            continue
+        await db.execute(f"ALTER TABLE pair_spread_funding_watchlist ADD COLUMN {name} {ddl}")
+
+
 async def initialize_schema(db: aiosqlite.Connection) -> None:
     await db.executescript(
         """
@@ -562,9 +576,11 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
           leg1_exchange TEXT NOT NULL,
           leg1_market_type TEXT NOT NULL,
           leg1_symbol TEXT NOT NULL,
+          leg1_dex TEXT,
           leg2_exchange TEXT NOT NULL,
           leg2_market_type TEXT NOT NULL,
           leg2_symbol TEXT NOT NULL,
+          leg2_dex TEXT,
           leg2_multiplier REAL NOT NULL,
           interval_seconds INTEGER NOT NULL DEFAULT 60,
           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -591,5 +607,6 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
     await _ensure_opportunity_history_columns(db)
     await _ensure_exchange_announcement_columns(db)
     await _ensure_second_level_sample_columns(db)
+    await _ensure_pair_spread_funding_columns(db)
     await _migrate_alert_rule_excluded_labels(db)
     await db.commit()

@@ -27,6 +27,7 @@ import utc from "dayjs/plugin/utc";
 import {
   getCurrentPremiumIndex,
   getPairSpreadFundingRecordStatus,
+  listHyperliquidMarkets,
   queryPairSpread,
   queryPairSpreadDiagnostics,
   queryPairSpreadFundingHistory,
@@ -50,6 +51,7 @@ import type {
   PairSpreadPriceField,
   PairSpreadQueryResult,
   PairSpreadRealtimeFundingPoint,
+  HyperliquidDexMarket,
   PremiumIndexCurrentSnapshot,
   PremiumIndexPoint,
   PremiumIndexQueryResult
@@ -61,15 +63,20 @@ dayjs.extend(utc);
 type PairSpreadFormValues = {
   leg1_exchange: string;
   leg1_market_type: MarketType;
+  leg1_dex: string;
   leg1_symbol: string;
   leg2_exchange: string;
   leg2_market_type: MarketType;
+  leg2_dex: string;
   leg2_symbol: string;
   leg2_multiplier: number;
 };
 
-type LegacyPairSpreadFormValues = Omit<PairSpreadFormValues, "leg1_market_type" | "leg2_market_type"> &
-  Partial<Pick<PairSpreadFormValues, "leg1_market_type" | "leg2_market_type">>;
+type LegacyPairSpreadFormValues = Omit<
+  PairSpreadFormValues,
+  "leg1_market_type" | "leg2_market_type" | "leg1_dex" | "leg2_dex"
+> &
+  Partial<Pick<PairSpreadFormValues, "leg1_market_type" | "leg2_market_type" | "leg1_dex" | "leg2_dex">>;
 
 type SavedPairSpreadPreset = PairSpreadFormValues & {
   id: string;
@@ -173,9 +180,11 @@ type FundingRateTotalSummary = {
 const defaultFormValues: PairSpreadFormValues = {
   leg1_exchange: "bitget",
   leg1_market_type: "future",
+  leg1_dex: "",
   leg1_symbol: "SKHY",
   leg2_exchange: "bitget",
   leg2_market_type: "future",
+  leg2_dex: "",
   leg2_symbol: "SKHY",
   leg2_multiplier: 1
 };
@@ -216,11 +225,41 @@ const intervalOptions = [
 
 const CUSTOM_INTERVAL_VALUE = -1;
 const DEFAULT_PAIR_INTERVAL_SECONDS = 5;
+const HYPERLIQUID_MAIN_DEX = "main";
 
 const marketTypeOptions: Array<{ label: string; value: MarketType }> = [
   { label: "合约", value: "future" },
   { label: "现货", value: "spot" }
 ];
+
+function isHyperliquidFuture(exchange: string | null | undefined, marketType: MarketType | null | undefined): boolean {
+  return exchange === "hyperliquid" && marketType === "future";
+}
+
+function hyperliquidDexSelectOptions(markets: HyperliquidDexMarket[]): Array<{ label: string; value: string }> {
+  const options = markets.map((market) => ({
+    label: market.dex === HYPERLIQUID_MAIN_DEX ? market.full_name : `${market.dex} · ${market.full_name}`,
+    value: market.dex
+  }));
+  return options.length ? options : [{ label: "主站", value: HYPERLIQUID_MAIN_DEX }];
+}
+
+function hyperliquidAssetOptions(markets: HyperliquidDexMarket[], dex: string | null | undefined): string[] {
+  const selectedDex = dex || HYPERLIQUID_MAIN_DEX;
+  const market = markets.find(
+    (item) =>
+      item.dex === selectedDex ||
+      (selectedDex === HYPERLIQUID_MAIN_DEX && !item.dex)
+  );
+  return Array.from(
+    new Set(
+      (market?.assets ?? [])
+        .filter((asset) => !asset.delisted)
+        .map((asset) => asset.base)
+        .filter(Boolean)
+    )
+  ).sort();
+}
 
 const premiumIndexExchanges = new Set(["binance", "okx", "bybit", "gate", "bitget", "aster", "hyperliquid"]);
 
@@ -466,6 +505,29 @@ function normalizeFormSymbol(exchange: string, symbol: string): string {
   return exchange === "binance_alpha" ? normalizeAlphaSymbol(symbol) : symbol.trim().toUpperCase();
 }
 
+function normalizeFormLeg(exchange: string, dex: unknown, symbol: string): { dex: string; symbol: string } {
+  if (exchange !== "hyperliquid") {
+    return {
+      dex: "",
+      symbol: normalizeFormSymbol(exchange, symbol)
+    };
+  }
+  let normalizedSymbol = symbol.trim();
+  let normalizedDex = typeof dex === "string" ? dex.trim().toLowerCase() : "";
+  if (!normalizedDex) {
+    normalizedDex = HYPERLIQUID_MAIN_DEX;
+  }
+  const separatorIndex = normalizedSymbol.indexOf(":");
+  if (separatorIndex > 0) {
+    normalizedDex = normalizedSymbol.slice(0, separatorIndex).trim().toLowerCase();
+    normalizedSymbol = normalizedSymbol.slice(separatorIndex + 1);
+  }
+  return {
+    dex: normalizedDex,
+    symbol: normalizeFormSymbol(exchange, normalizedSymbol)
+  };
+}
+
 function shortSavedSymbol(symbol: string): string {
   return symbol.trim().toUpperCase().replace(/(?:USDT|USDC|USD)$/i, "");
 }
@@ -478,20 +540,37 @@ function marketTypeShortText(value: MarketType | null | undefined): string {
   return value === "spot" ? "现" : "合";
 }
 
-function legDisplay(exchange: string, marketType: MarketType | null | undefined, symbol: string, suffix = ""): string {
-  return `${exchangeLabels[exchange] ?? exchange} · ${marketTypeText(marketType)} · ${symbol}${suffix}`;
+function hyperliquidDexText(dex: string | null | undefined): string {
+  return !dex || dex === HYPERLIQUID_MAIN_DEX ? "Hyperliquid 主站" : `Hyperliquid ${dex}`;
+}
+
+function legDisplay(
+  exchange: string,
+  marketType: MarketType | null | undefined,
+  symbol: string,
+  suffix = "",
+  dex?: string | null
+): string {
+  const venue = exchange === "hyperliquid" ? hyperliquidDexText(dex) : exchangeLabels[exchange] ?? exchange;
+  return `${venue} · ${marketTypeText(marketType)} · ${symbol}${suffix}`;
 }
 
 function normalizePairForm(values: LegacyPairSpreadFormValues): PairSpreadFormValues {
   const leg1Exchange = values.leg1_exchange.trim().toLowerCase();
   const leg2Exchange = values.leg2_exchange.trim().toLowerCase();
+  const leg1MarketType = normalizeMarketType(values.leg1_market_type);
+  const leg2MarketType = normalizeMarketType(values.leg2_market_type);
+  const leg1 = normalizeFormLeg(leg1Exchange, values.leg1_dex, values.leg1_symbol);
+  const leg2 = normalizeFormLeg(leg2Exchange, values.leg2_dex, values.leg2_symbol);
   return {
     leg1_exchange: leg1Exchange,
-    leg1_market_type: normalizeMarketType(values.leg1_market_type),
-    leg1_symbol: normalizeFormSymbol(leg1Exchange, values.leg1_symbol),
+    leg1_market_type: leg1MarketType,
+    leg1_dex: leg1MarketType === "future" ? leg1.dex : "",
+    leg1_symbol: leg1.symbol,
     leg2_exchange: leg2Exchange,
-    leg2_market_type: normalizeMarketType(values.leg2_market_type),
-    leg2_symbol: normalizeFormSymbol(leg2Exchange, values.leg2_symbol),
+    leg2_market_type: leg2MarketType,
+    leg2_dex: leg2MarketType === "future" ? leg2.dex : "",
+    leg2_symbol: leg2.symbol,
     leg2_multiplier: Number(values.leg2_multiplier)
   };
 }
@@ -524,9 +603,11 @@ function pairConfigId(values: PairSpreadFormValues): string {
   return [
     normalized.leg1_exchange,
     normalized.leg1_market_type,
+    normalized.leg1_dex,
     shortSavedSymbol(normalized.leg1_symbol),
     normalized.leg2_exchange,
     normalized.leg2_market_type,
+    normalized.leg2_dex,
     shortSavedSymbol(normalized.leg2_symbol)
   ].join("|");
 }
@@ -594,8 +675,10 @@ function pairQueryFromUrl(): { values: PairSpreadFormValues; hours: number; inte
   }
   const params = new URLSearchParams(window.location.search);
   const leg1Exchange = params.get("leg1_exchange");
+  const leg1Dex = params.get("leg1_dex") ?? "";
   const leg1Symbol = params.get("leg1_symbol");
   const leg2Exchange = params.get("leg2_exchange");
+  const leg2Dex = params.get("leg2_dex") ?? "";
   const leg2Symbol = params.get("leg2_symbol");
   if (!leg1Exchange || !leg1Symbol || !leg2Exchange || !leg2Symbol) {
     return null;
@@ -610,9 +693,11 @@ function pairQueryFromUrl(): { values: PairSpreadFormValues; hours: number; inte
     values: normalizePairForm({
       leg1_exchange: leg1Exchange,
       leg1_market_type: normalizeMarketType(params.get("leg1_market_type")),
+      leg1_dex: leg1Dex,
       leg1_symbol: leg1Symbol,
       leg2_exchange: leg2Exchange,
       leg2_market_type: normalizeMarketType(params.get("leg2_market_type")),
+      leg2_dex: leg2Dex,
       leg2_symbol: leg2Symbol,
       leg2_multiplier: Number.isFinite(multiplier) && multiplier > 0 ? multiplier : 1
     }),
@@ -626,9 +711,11 @@ function pairPresetId(values: PairSpreadFormValues): string {
   return [
     normalized.leg1_exchange,
     normalized.leg1_market_type,
+    normalized.leg1_dex,
     normalized.leg1_symbol,
     normalized.leg2_exchange,
     normalized.leg2_market_type,
+    normalized.leg2_dex,
     normalized.leg2_symbol,
     compactNumber(normalized.leg2_multiplier, 8)
   ].join("|");
@@ -642,9 +729,11 @@ function pairFormFromResult(result: PairSpreadQueryResult): PairSpreadFormValues
   return {
     leg1_exchange: result.leg1.exchange,
     leg1_market_type: result.leg1.market_type,
+    leg1_dex: result.leg1.dex ?? (isHyperliquidFuture(result.leg1.exchange, result.leg1.market_type) ? HYPERLIQUID_MAIN_DEX : ""),
     leg1_symbol: result.leg1.symbol,
     leg2_exchange: result.leg2.exchange,
     leg2_market_type: result.leg2.market_type,
+    leg2_dex: result.leg2.dex ?? (isHyperliquidFuture(result.leg2.exchange, result.leg2.market_type) ? HYPERLIQUID_MAIN_DEX : ""),
     leg2_symbol: result.leg2.symbol,
     leg2_multiplier: result.leg2_multiplier
   };
@@ -658,9 +747,19 @@ function applyPairQueryParams(
 ): void {
   url.searchParams.set("leg1_exchange", values.leg1_exchange);
   url.searchParams.set("leg1_market_type", values.leg1_market_type);
+  if (values.leg1_dex) {
+    url.searchParams.set("leg1_dex", values.leg1_dex);
+  } else {
+    url.searchParams.delete("leg1_dex");
+  }
   url.searchParams.set("leg1_symbol", values.leg1_symbol);
   url.searchParams.set("leg2_exchange", values.leg2_exchange);
   url.searchParams.set("leg2_market_type", values.leg2_market_type);
+  if (values.leg2_dex) {
+    url.searchParams.set("leg2_dex", values.leg2_dex);
+  } else {
+    url.searchParams.delete("leg2_dex");
+  }
   url.searchParams.set("leg2_symbol", values.leg2_symbol);
   url.searchParams.set("leg2_multiplier", compactNumber(values.leg2_multiplier, 8));
   url.searchParams.set("hours", String(clampHours(hours)));
@@ -964,14 +1063,14 @@ function rightLegLabel(result: PairSpreadQueryResult | null): string {
     return "右标的";
   }
   const divisor = result.leg2_multiplier === 1 ? "" : `/${compactNumber(result.leg2_multiplier, 4)}`;
-  return legDisplay(result.leg2.exchange, result.leg2.market_type, result.leg2.symbol, divisor);
+  return legDisplay(result.leg2.exchange, result.leg2.market_type, result.leg2.symbol, divisor, result.leg2.dex);
 }
 
 function leftLegLabel(result: PairSpreadQueryResult | null): string {
   if (!result) {
     return "左标的";
   }
-  return legDisplay(result.leg1.exchange, result.leg1.market_type, result.leg1.symbol);
+  return legDisplay(result.leg1.exchange, result.leg1.market_type, result.leg1.symbol, "", result.leg1.dex);
 }
 
 function exchangeToneClass(exchange: string): string {
@@ -999,18 +1098,21 @@ function exchangeShortLabel(exchange: string): string {
 
 function ExchangeChip({
   exchange,
-  marketType
+  marketType,
+  dex
 }: {
   exchange: string;
   marketType: MarketType;
+  dex?: string | null;
 }) {
   return (
     <span
       className={`pair-exchange-chip ${exchangeToneClass(exchange)}`}
-      title={exchangeLabels[exchange] ?? exchange}
+      title={exchange === "hyperliquid" ? hyperliquidDexText(dex) : exchangeLabels[exchange] ?? exchange}
     >
       <span>{exchangeShortLabel(exchange)}</span>
       <span className="pair-exchange-market">{marketTypeShortText(marketType)}</span>
+      {exchange === "hyperliquid" && dex ? <span className="pair-exchange-dex">{dex}</span> : null}
     </span>
   );
 }
@@ -1019,7 +1121,10 @@ function SavedPairPresetContent({ preset }: { preset: SavedPairSpreadPreset }) {
   const leftSymbol = shortSavedSymbol(preset.leg1_symbol);
   const rightSymbol = shortSavedSymbol(preset.leg2_symbol);
   const sameSymbol = leftSymbol === rightSymbol;
-  const sameVenue = preset.leg1_exchange === preset.leg2_exchange && preset.leg1_market_type === preset.leg2_market_type;
+  const sameVenue =
+    preset.leg1_exchange === preset.leg2_exchange &&
+    preset.leg1_market_type === preset.leg2_market_type &&
+    preset.leg1_dex === preset.leg2_dex;
   const multiplierText = preset.leg2_multiplier === 1 ? "" : `右×${compactNumber(preset.leg2_multiplier, 4)}`;
   const dayCompareSettings = normalizeDayCompareSettings({
     mode: preset.dayCompareMode,
@@ -1033,24 +1138,24 @@ function SavedPairPresetContent({ preset }: { preset: SavedPairSpreadPreset }) {
         <>
           <span className="pair-saved-symbol">{leftSymbol}</span>
           <span className="pair-saved-exchanges">
-            <ExchangeChip exchange={preset.leg1_exchange} marketType={preset.leg1_market_type} />
+            <ExchangeChip exchange={preset.leg1_exchange} marketType={preset.leg1_market_type} dex={preset.leg1_dex} />
             <span className="pair-saved-separator">/</span>
-            <ExchangeChip exchange={preset.leg2_exchange} marketType={preset.leg2_market_type} />
+            <ExchangeChip exchange={preset.leg2_exchange} marketType={preset.leg2_market_type} dex={preset.leg2_dex} />
           </span>
         </>
       ) : sameVenue ? (
         <>
-          <ExchangeChip exchange={preset.leg1_exchange} marketType={preset.leg1_market_type} />
+          <ExchangeChip exchange={preset.leg1_exchange} marketType={preset.leg1_market_type} dex={preset.leg1_dex} />
           <span className="pair-saved-symbol">
             {leftSymbol} / {rightSymbol}
           </span>
         </>
       ) : (
         <>
-          <ExchangeChip exchange={preset.leg1_exchange} marketType={preset.leg1_market_type} />
+          <ExchangeChip exchange={preset.leg1_exchange} marketType={preset.leg1_market_type} dex={preset.leg1_dex} />
           <span className="pair-saved-symbol">{leftSymbol}</span>
           <span className="pair-saved-separator">/</span>
-          <ExchangeChip exchange={preset.leg2_exchange} marketType={preset.leg2_market_type} />
+          <ExchangeChip exchange={preset.leg2_exchange} marketType={preset.leg2_market_type} dex={preset.leg2_dex} />
           <span className="pair-saved-symbol">{rightSymbol}</span>
         </>
       )}
@@ -1244,9 +1349,11 @@ function fundingRecordStatusQuery(result: PairSpreadQueryResult) {
   return {
     leg1_exchange: result.leg1.exchange,
     leg1_market_type: result.leg1.market_type,
+    leg1_dex: result.leg1.dex ?? undefined,
     leg1_symbol: result.leg1.symbol,
     leg2_exchange: result.leg2.exchange,
     leg2_market_type: result.leg2.market_type,
+    leg2_dex: result.leg2.dex ?? undefined,
     leg2_symbol: result.leg2.symbol,
     leg2_multiplier: result.leg2_multiplier,
     hours: result.hours
@@ -1271,6 +1378,11 @@ function openPremiumIndexFromLeg(
   url.searchParams.set("from", "pair-monitor");
   url.searchParams.set("exchange", leg.exchange);
   url.searchParams.set("symbol", leg.symbol);
+  if (leg.dex) {
+    url.searchParams.set("dex", leg.dex);
+  } else {
+    url.searchParams.delete("dex");
+  }
   url.searchParams.set("hours", String(clampHours(hours)));
   url.searchParams.set("interval_minutes", String(intervalMinutesParam(intervalSeconds)));
   window.history.pushState({}, "", `${url.pathname}${url.search}${url.hash}`);
@@ -1725,7 +1837,7 @@ function PairPositionLeg({ leg }: { leg: PairSpreadCurrentLeg }) {
   return (
     <div className="pair-position-leg">
       <div className="pair-position-leg-head">
-        <Typography.Text strong>{legDisplay(leg.exchange, leg.market_type, leg.symbol)}</Typography.Text>
+        <Typography.Text strong>{legDisplay(leg.exchange, leg.market_type, leg.symbol, "", leg.dex)}</Typography.Text>
         <Typography.Text type="secondary">{leg.raw_symbol}</Typography.Text>
       </div>
       <div className="pair-position-stats">
@@ -3648,8 +3760,8 @@ const pointColumns: ColumnsType<PairSpreadPoint> = [
   { title: "均值价差率", dataIndex: "spread_pct", align: "right", render: (value: number) => signedPct(value) }
 ];
 
-function fundingLegKey(exchange: string, symbol: string): string {
-  return `${exchange.trim().toLowerCase()}|${symbol.trim().toUpperCase().replace(/[-_/]/g, "")}`;
+function fundingLegKey(exchange: string, symbol: string, dex?: string | null): string {
+  return `${exchange.trim().toLowerCase()}|${dex?.trim().toLowerCase() ?? ""}|${symbol.trim().toUpperCase().replace(/[-_/]/g, "")}`;
 }
 
 function fundingTimeBucket(value: string): string {
@@ -3661,7 +3773,7 @@ function fundingPointBelongsTo(point: PairSpreadFundingPoint, leg: PairSpreadLeg
   if (leg.market_type !== "future") {
     return false;
   }
-  return fundingLegKey(point.exchange, point.symbol) === fundingLegKey(leg.exchange, leg.symbol);
+  return fundingLegKey(point.exchange, point.symbol, point.dex) === fundingLegKey(leg.exchange, leg.symbol, leg.dex);
 }
 
 function fundingRateColumnTitle(leg: PairSpreadLegQuery | null | undefined, fallback: string): ReactNode {
@@ -3670,7 +3782,9 @@ function fundingRateColumnTitle(leg: PairSpreadLegQuery | null | undefined, fall
   }
   return (
     <span className="pair-funding-column-title">
-      <span>{exchangeLabels[leg.exchange] ?? leg.exchange} 费率</span>
+      <span>
+        {leg.exchange === "hyperliquid" ? hyperliquidDexText(leg.dex) : exchangeLabels[leg.exchange] ?? leg.exchange} 费率
+      </span>
       <small>{leg.symbol}</small>
     </span>
   );
@@ -3938,6 +4052,12 @@ function buildMinuteFundingRateDiffRows(status: PairSpreadFundingRecordStatus | 
 
 export function PairMonitorPage() {
   const [form] = Form.useForm<PairSpreadFormValues>();
+  const watchedLeg1Exchange = Form.useWatch("leg1_exchange", form);
+  const watchedLeg1MarketType = Form.useWatch("leg1_market_type", form);
+  const watchedLeg1Dex = Form.useWatch("leg1_dex", form);
+  const watchedLeg2Exchange = Form.useWatch("leg2_exchange", form);
+  const watchedLeg2MarketType = Form.useWatch("leg2_market_type", form);
+  const watchedLeg2Dex = Form.useWatch("leg2_dex", form);
   const initialUrlQuery = useMemo(() => pairQueryFromUrl(), []);
   const initialCachedState = useMemo(() => {
     const cached = loadLastPairSpreadState();
@@ -3985,6 +4105,8 @@ export function PairMonitorPage() {
   const [dayCompareEndTime, setDayCompareEndTime] = useState(() => initialDayCompareSettings.endTime);
   const [diagnosticThresholdPct, setDiagnosticThresholdPct] = useState(loadDiagnosticThreshold);
   const [savedPresets, setSavedPresets] = useState<SavedPairSpreadPreset[]>(() => loadSavedPairPresets());
+  const [hyperliquidMarkets, setHyperliquidMarkets] = useState<HyperliquidDexMarket[]>([]);
+  const hyperliquidMarketsPromiseRef = useRef<Promise<HyperliquidDexMarket[]> | null>(null);
   const [result, setResult] = useState<PairSpreadQueryResult | null>(() => initialCachedState?.result ?? null);
   const [diagnostic, setDiagnostic] = useState<PairSpreadDiagnosticResult | null>(null);
   const [premiumCompare, setPremiumCompare] = useState<PairPremiumCompareResult | null>(null);
@@ -4009,6 +4131,48 @@ export function PairMonitorPage() {
   const [fundingSummaryError, setFundingSummaryError] = useState("");
   const initialDayCompareLoadedRef = useRef(false);
   const savedPresetGroups = useMemo(() => groupSavedPairPresets(savedPresets), [savedPresets]);
+  const hyperliquidDexOptions = useMemo(
+    () => hyperliquidDexSelectOptions(hyperliquidMarkets),
+    [hyperliquidMarkets]
+  );
+  const leg1HyperliquidAssets = useMemo(
+    () => hyperliquidAssetOptions(hyperliquidMarkets, watchedLeg1Dex),
+    [hyperliquidMarkets, watchedLeg1Dex]
+  );
+  const leg2HyperliquidAssets = useMemo(
+    () => hyperliquidAssetOptions(hyperliquidMarkets, watchedLeg2Dex),
+    [hyperliquidMarkets, watchedLeg2Dex]
+  );
+  const loadHyperliquidMarkets = useCallback(async () => {
+    if (hyperliquidMarketsPromiseRef.current) {
+      return hyperliquidMarketsPromiseRef.current;
+    }
+    const request = listHyperliquidMarkets()
+      .then((markets) => {
+        setHyperliquidMarkets(markets);
+        return markets;
+      })
+      .finally(() => {
+        hyperliquidMarketsPromiseRef.current = null;
+      });
+    hyperliquidMarketsPromiseRef.current = request;
+    return request;
+  }, []);
+
+  useEffect(() => {
+    if (
+      isHyperliquidFuture(watchedLeg1Exchange, watchedLeg1MarketType) ||
+      isHyperliquidFuture(watchedLeg2Exchange, watchedLeg2MarketType)
+    ) {
+      void loadHyperliquidMarkets();
+    }
+  }, [
+    loadHyperliquidMarkets,
+    watchedLeg1Exchange,
+    watchedLeg1MarketType,
+    watchedLeg2Exchange,
+    watchedLeg2MarketType
+  ]);
 
   const recentPoints = useMemo(
     () => pairDisplayPoints(result).reverse().slice(0, 180),
@@ -4119,9 +4283,11 @@ export function PairMonitorPage() {
       const next = await queryPairSpreadDiagnostics({
         leg1_exchange: result.leg1.exchange,
         leg1_market_type: result.leg1.market_type,
+        leg1_dex: result.leg1.dex ?? undefined,
         leg1_symbol: result.leg1.symbol,
         leg2_exchange: result.leg2.exchange,
         leg2_market_type: result.leg2.market_type,
+        leg2_dex: result.leg2.dex ?? undefined,
         leg2_symbol: result.leg2.symbol,
         leg2_multiplier: result.leg2_multiplier,
         hours: result.hours,
@@ -4184,12 +4350,14 @@ export function PairMonitorPage() {
         queryPremiumIndex({
           exchange: pairResult.leg1.exchange,
           symbol: pairResult.leg1.symbol,
+          dex: pairResult.leg1.dex ?? undefined,
           hours: pairResult.hours,
           interval_minutes: intervalMinutesParam(resultIntervalSeconds(pairResult))
         }),
         queryPremiumIndex({
           exchange: pairResult.leg2.exchange,
           symbol: pairResult.leg2.symbol,
+          dex: pairResult.leg2.dex ?? undefined,
           hours: pairResult.hours,
           interval_minutes: intervalMinutesParam(resultIntervalSeconds(pairResult))
         })
@@ -4228,11 +4396,13 @@ export function PairMonitorPage() {
       const [left, right] = await Promise.allSettled([
         getCurrentPremiumIndex({
           exchange: pairResult.leg1.exchange,
-          symbol: pairResult.leg1.symbol
+          symbol: pairResult.leg1.symbol,
+          dex: pairResult.leg1.dex ?? undefined
         }),
         getCurrentPremiumIndex({
           exchange: pairResult.leg2.exchange,
-          symbol: pairResult.leg2.symbol
+          symbol: pairResult.leg2.symbol,
+          dex: pairResult.leg2.dex ?? undefined
         })
       ]);
       setPremiumCompare((existing) => {
@@ -4301,9 +4471,11 @@ export function PairMonitorPage() {
           return queryPairSpread({
             leg1_exchange: baseValues.leg1_exchange,
             leg1_market_type: baseValues.leg1_market_type,
+            leg1_dex: baseValues.leg1_dex || undefined,
             leg1_symbol: baseValues.leg1_symbol,
             leg2_exchange: baseValues.leg2_exchange,
             leg2_market_type: baseValues.leg2_market_type,
+            leg2_dex: baseValues.leg2_dex || undefined,
             leg2_symbol: baseValues.leg2_symbol,
             leg2_multiplier: baseValues.leg2_multiplier,
             hours: plan.queryHours,
@@ -4398,9 +4570,11 @@ export function PairMonitorPage() {
       const next = await queryPairSpread({
         leg1_exchange: values.leg1_exchange,
         leg1_market_type: values.leg1_market_type,
+        leg1_dex: values.leg1_dex || undefined,
         leg1_symbol: values.leg1_symbol,
         leg2_exchange: values.leg2_exchange,
         leg2_market_type: values.leg2_market_type,
+        leg2_dex: values.leg2_dex || undefined,
         leg2_symbol: values.leg2_symbol,
         leg2_multiplier: values.leg2_multiplier,
         interval_minutes: intervalMinutesParam(queryIntervalSeconds),
@@ -4472,9 +4646,11 @@ export function PairMonitorPage() {
     form.setFieldsValue({
       leg1_exchange: currentValues.leg2_exchange,
       leg1_market_type: currentValues.leg2_market_type,
+      leg1_dex: currentValues.leg2_dex,
       leg1_symbol: rightSymbol,
       leg2_exchange: currentValues.leg1_exchange,
       leg2_market_type: currentValues.leg1_market_type,
+      leg2_dex: currentValues.leg1_dex,
       leg2_symbol: leftSymbol,
       leg2_multiplier: 1
     });
@@ -4535,9 +4711,11 @@ export function PairMonitorPage() {
       const summaryResult = await queryPairSpreadFundingHistory({
         leg1_exchange: values.leg1_exchange,
         leg1_market_type: values.leg1_market_type,
+        leg1_dex: values.leg1_dex || undefined,
         leg1_symbol: values.leg1_symbol,
         leg2_exchange: values.leg2_exchange,
         leg2_market_type: values.leg2_market_type,
+        leg2_dex: values.leg2_dex || undefined,
         leg2_symbol: values.leg2_symbol,
         leg2_multiplier: values.leg2_multiplier,
         hours: Math.ceil(durationHours),
@@ -4644,15 +4822,7 @@ export function PairMonitorPage() {
       void runQuery();
       return;
     }
-    const resultValues = {
-      leg1_exchange: result.leg1.exchange,
-      leg1_market_type: result.leg1.market_type,
-      leg1_symbol: result.leg1.symbol,
-      leg2_exchange: result.leg2.exchange,
-      leg2_market_type: result.leg2.market_type,
-      leg2_symbol: result.leg2.symbol,
-      leg2_multiplier: result.leg2_multiplier
-    };
+    const resultValues = pairFormFromResult(result);
     const nextSymbolMode = pairSymbolModeFromValues(resultValues);
     form.setFieldsValue(resultValues);
     setPairSymbolMode(nextSymbolMode);
@@ -4809,7 +4979,11 @@ export function PairMonitorPage() {
             {sameSymbolMode ? (
               <>
                 <Form.Item name="leg1_symbol" rules={[{ required: true, message: "请输入标的" }]} className="pair-query-contract">
-                  <Input addonBefore="标的" placeholder="SKHY" />
+                  <Input
+                    addonBefore="标的"
+                    placeholder="SKHY"
+                    list={isHyperliquidFuture(watchedLeg1Exchange, watchedLeg1MarketType) ? "pair-hyperliquid-assets-leg1" : undefined}
+                  />
                 </Form.Item>
                 <div className="pair-query-venues">
                   <div className="pair-query-venue">
@@ -4820,6 +4994,11 @@ export function PairMonitorPage() {
                     <Form.Item name="leg1_market_type" rules={[{ required: true }]} className="pair-query-market-type">
                       <Select options={marketTypeOptions} />
                     </Form.Item>
+                    {isHyperliquidFuture(watchedLeg1Exchange, watchedLeg1MarketType) ? (
+                      <Form.Item name="leg1_dex" className="pair-query-dex">
+                        <Select options={hyperliquidDexOptions} showSearch placeholder="选择 DEX" />
+                      </Form.Item>
+                    ) : null}
                   </div>
                   <div className="pair-query-venue">
                     <Typography.Text className="pair-query-venue-label">右交易所</Typography.Text>
@@ -4829,6 +5008,11 @@ export function PairMonitorPage() {
                     <Form.Item name="leg2_market_type" rules={[{ required: true }]} className="pair-query-market-type">
                       <Select options={marketTypeOptions} />
                     </Form.Item>
+                    {isHyperliquidFuture(watchedLeg2Exchange, watchedLeg2MarketType) ? (
+                      <Form.Item name="leg2_dex" className="pair-query-dex">
+                        <Select options={hyperliquidDexOptions} showSearch placeholder="选择 DEX" />
+                      </Form.Item>
+                    ) : null}
                   </div>
                 </div>
               </>
@@ -4840,8 +5024,17 @@ export function PairMonitorPage() {
                 <Form.Item name="leg1_market_type" rules={[{ required: true }]} className="pair-query-market-type">
                   <Select options={marketTypeOptions} />
                 </Form.Item>
+                {isHyperliquidFuture(watchedLeg1Exchange, watchedLeg1MarketType) ? (
+                  <Form.Item name="leg1_dex" className="pair-query-dex">
+                    <Select options={hyperliquidDexOptions} showSearch placeholder="选择 DEX" />
+                  </Form.Item>
+                ) : null}
                 <Form.Item name="leg1_symbol" rules={[{ required: true, message: "请输入左标的" }]} className="pair-query-contract">
-                  <Input addonBefore="左标的" placeholder="SKHY" />
+                  <Input
+                    addonBefore="左标的"
+                    placeholder="SKHY"
+                    list={isHyperliquidFuture(watchedLeg1Exchange, watchedLeg1MarketType) ? "pair-hyperliquid-assets-leg1" : undefined}
+                  />
                 </Form.Item>
                 <Form.Item name="leg2_exchange" rules={[{ required: true }]} className="pair-query-item">
                   <Select options={exchangeOptions} showSearch />
@@ -4849,8 +5042,17 @@ export function PairMonitorPage() {
                 <Form.Item name="leg2_market_type" rules={[{ required: true }]} className="pair-query-market-type">
                   <Select options={marketTypeOptions} />
                 </Form.Item>
+                {isHyperliquidFuture(watchedLeg2Exchange, watchedLeg2MarketType) ? (
+                  <Form.Item name="leg2_dex" className="pair-query-dex">
+                    <Select options={hyperliquidDexOptions} showSearch placeholder="选择 DEX" />
+                  </Form.Item>
+                ) : null}
                 <Form.Item name="leg2_symbol" rules={[{ required: true, message: "请输入右标的" }]} className="pair-query-contract">
-                  <Input addonBefore="右标的" placeholder="SKHYNIX" />
+                  <Input
+                    addonBefore="右标的"
+                    placeholder="SKHYNIX"
+                    list={isHyperliquidFuture(watchedLeg2Exchange, watchedLeg2MarketType) ? "pair-hyperliquid-assets-leg2" : undefined}
+                  />
                 </Form.Item>
                 <Form.Item
                   name="leg2_multiplier"
@@ -4861,6 +5063,12 @@ export function PairMonitorPage() {
                 </Form.Item>
               </>
             )}
+            <datalist id="pair-hyperliquid-assets-leg1">
+              {leg1HyperliquidAssets.map((asset) => <option key={asset} value={asset} />)}
+            </datalist>
+            <datalist id="pair-hyperliquid-assets-leg2">
+              {leg2HyperliquidAssets.map((asset) => <option key={asset} value={asset} />)}
+            </datalist>
             <InputNumber
               addonBefore="小时"
               className="pair-query-hours"

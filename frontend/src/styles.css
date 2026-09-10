@@ -1080,6 +1080,7 @@ body {
 .pair-query-custom-interval .ant-input-number,
 .pair-query-item .ant-select,
 .pair-query-market-type .ant-select,
+.pair-query-dex .ant-select,
 .pair-query-contract .ant-input-group-wrapper,
 .pair-query-select,
 .pair-query-actions,
@@ -1554,6 +1555,18 @@ body {
   border-left: 1px solid currentColor;
   font-size: 11px;
   opacity: 0.72;
+}
+
+.pair-exchange-dex {
+  flex: 0 0 auto;
+  max-width: 44px;
+  overflow: hidden;
+  padding-left: 3px;
+  border-left: 1px solid currentColor;
+  font-size: 10px;
+  opacity: 0.72;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .pair-exchange-aster {

@@ -65,18 +65,20 @@ class PairSpreadFundingRepository:
             """
             INSERT INTO pair_spread_funding_watchlist (
               pair_key,
-              leg1_exchange, leg1_market_type, leg1_symbol,
-              leg2_exchange, leg2_market_type, leg2_symbol,
+              leg1_exchange, leg1_market_type, leg1_symbol, leg1_dex,
+              leg2_exchange, leg2_market_type, leg2_symbol, leg2_dex,
               leg2_multiplier, interval_seconds, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(pair_key) DO UPDATE SET
               leg1_exchange = excluded.leg1_exchange,
               leg1_market_type = excluded.leg1_market_type,
               leg1_symbol = excluded.leg1_symbol,
+              leg1_dex = excluded.leg1_dex,
               leg2_exchange = excluded.leg2_exchange,
               leg2_market_type = excluded.leg2_market_type,
               leg2_symbol = excluded.leg2_symbol,
+              leg2_dex = excluded.leg2_dex,
               leg2_multiplier = excluded.leg2_multiplier,
               interval_seconds = excluded.interval_seconds,
               updated_at = excluded.updated_at
@@ -86,9 +88,11 @@ class PairSpreadFundingRepository:
                 request.leg1.exchange,
                 request.leg1.market_type.value,
                 request.leg1.symbol,
+                request.leg1.dex,
                 request.leg2.exchange,
                 request.leg2.market_type.value,
                 request.leg2.symbol,
+                request.leg2.dex,
                 request.leg2_multiplier,
                 PAIR_SPREAD_FUNDING_RECORD_INTERVAL_SECONDS,
                 observed_at.isoformat(),
@@ -201,11 +205,13 @@ class PairSpreadFundingRepository:
                 exchange=row["leg1_exchange"],
                 market_type=row["leg1_market_type"],
                 symbol=row["leg1_symbol"],
+                dex=row["leg1_dex"],
             ),
             leg2=PairSpreadLegQuery(
                 exchange=row["leg2_exchange"],
                 market_type=row["leg2_market_type"],
                 symbol=row["leg2_symbol"],
+                dex=row["leg2_dex"],
             ),
             leg2_multiplier=row["leg2_multiplier"],
             interval_seconds=row["interval_seconds"],

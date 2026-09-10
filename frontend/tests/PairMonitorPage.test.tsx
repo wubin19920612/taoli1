@@ -8,10 +8,13 @@ const observedAt = "2026-07-24T02:00:00Z";
 
 function normalizedMockSymbol(exchange: string, symbol: string) {
   const text = symbol.trim().toUpperCase();
+  const baseText = exchange === "hyperliquid" && text.includes(":")
+    ? text.slice(text.indexOf(":") + 1)
+    : text;
   if (exchange === "binance_alpha") {
-    return text;
+    return baseText;
   }
-  return text.endsWith("USDT") ? text : `${text}USDT`;
+  return baseText.endsWith("USDT") ? baseText : `${baseText}USDT`;
 }
 
 function pairSpreadResult(params?: URLSearchParams) {
@@ -21,6 +24,16 @@ function pairSpreadResult(params?: URLSearchParams) {
   const leg2Exchange = params?.get("leg2_exchange") ?? "bitget";
   const requestedLeg1Symbol = params?.get("leg1_symbol") ?? "SKHYUSDT";
   const requestedLeg2Symbol = params?.get("leg2_symbol") ?? "SKHYNIXUSDT";
+  const embeddedLeg1Dex = requestedLeg1Symbol.includes(":") ? requestedLeg1Symbol.split(":", 1)[0] : "";
+  const embeddedLeg2Dex = requestedLeg2Symbol.includes(":") ? requestedLeg2Symbol.split(":", 1)[0] : "";
+  const leg1Dex =
+    leg1Exchange === "hyperliquid"
+      ? (params?.get("leg1_dex") ?? embeddedLeg1Dex)
+      : "";
+  const leg2Dex =
+    leg2Exchange === "hyperliquid"
+      ? (params?.get("leg2_dex") ?? embeddedLeg2Dex)
+      : "";
   const leg1Symbol = normalizedMockSymbol(leg1Exchange, requestedLeg1Symbol);
   const leg2Symbol = normalizedMockSymbol(leg2Exchange, requestedLeg2Symbol);
   const leg2Multiplier = Number(params?.get("leg2_multiplier") ?? 1);
@@ -161,12 +174,14 @@ function pairSpreadResult(params?: URLSearchParams) {
     leg1: {
       exchange: leg1Exchange,
       symbol: leg1Symbol,
-      market_type: leg1MarketType
+      market_type: leg1MarketType,
+      ...(leg1Dex ? { dex: leg1Dex } : {})
     },
     leg2: {
       exchange: leg2Exchange,
       symbol: leg2Symbol,
-      market_type: leg2MarketType
+      market_type: leg2MarketType,
+      ...(leg2Dex ? { dex: leg2Dex } : {})
     },
     hours,
     interval_minutes: intervalMinutes,
@@ -185,6 +200,7 @@ function pairSpreadResult(params?: URLSearchParams) {
             exchange: leg1Exchange,
             symbol: leg1Symbol,
             market_type: leg1MarketType,
+            ...(leg1Dex ? { dex: leg1Dex } : {}),
             raw_symbol: leg1Symbol,
             price: leg1Price,
             price_field: "mid_price" as const,
@@ -204,6 +220,7 @@ function pairSpreadResult(params?: URLSearchParams) {
             exchange: leg2Exchange,
             symbol: leg2Symbol,
             market_type: leg2MarketType,
+            ...(leg2Dex ? { dex: leg2Dex } : {}),
             raw_symbol: leg2Symbol,
             price: leg2Price,
             price_field: leg2MarketType === "spot" ? "last_price" as const : "mark_price" as const,
@@ -378,6 +395,25 @@ describe("PairMonitorPage", () => {
         const url = new URL(urlText, "http://localhost");
         if (url.pathname.includes("/pair-spread/query")) {
           return Response.json(pairSpreadResult(url.searchParams));
+        }
+        if (url.pathname.includes("/pair-spread/hyperliquid-markets")) {
+          return Response.json([
+            {
+              dex: "main",
+              full_name: "Hyperliquid 主站",
+              assets: [{ raw_symbol: "BTC", symbol: "BTCUSDT", base: "BTC", delisted: false }]
+            },
+            {
+              dex: "io",
+              full_name: "EntropyIO",
+              assets: [{ raw_symbol: "io:OAI", symbol: "OAIUSDT", base: "OAI", delisted: false }]
+            },
+            {
+              dex: "xyz",
+              full_name: "XYZ",
+              assets: [{ raw_symbol: "xyz:COIN", symbol: "COINUSDT", base: "COIN", delisted: false }]
+            }
+          ]);
         }
         if (url.pathname.includes("/pair-spread/funding-history")) {
           const result = pairSpreadResult(url.searchParams);
@@ -860,6 +896,29 @@ describe("PairMonitorPage", () => {
         )
       ).toBe(true);
     });
+  });
+
+  it("preserves an embedded Hyperliquid perp DEX symbol such as io:OAI", async () => {
+    window.history.pushState(
+      {},
+      "",
+      "/?page=pair-monitor&leg1_exchange=hyperliquid&leg1_market_type=future&leg1_symbol=io:OAI" +
+        "&leg2_exchange=bitget&leg2_market_type=future&leg2_symbol=OAI&hours=4&interval_seconds=60"
+    );
+
+    render(<PairMonitorPage />);
+
+    await waitFor(() => {
+      const query = requests
+        .map((request) => new URL(request, "http://localhost"))
+        .find((url) => url.pathname.endsWith("/pair-spread/query"));
+       expect(query?.searchParams.get("leg1_dex")).toBe("io");
+       expect(query?.searchParams.get("leg1_symbol")).toBe("OAI");
+       expect(query?.searchParams.get("leg2_symbol")).toBe("OAI");
+    });
+    expect((await screen.findAllByText("Hyperliquid io · 合约 · OAIUSDT")).length).toBeGreaterThan(0);
+    expect(new URLSearchParams(window.location.search).get("leg1_symbol")).toBe("OAIUSDT");
+    expect(requests.some((request) => request.includes("/pair-spread/hyperliquid-markets"))).toBe(true);
   });
 
   it("shows the funding rate difference table", async () => {

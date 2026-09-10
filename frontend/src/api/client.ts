@@ -29,6 +29,7 @@ import type {
   GateTwapRequest,
   GateTwapRunRequest,
   HealthStatus,
+  HyperliquidDexMarket,
   ExchangeAnnouncement,
   IndexComponentChange,
   IndexComponentChangeFilters,
@@ -630,9 +631,11 @@ export async function queryPairSpread(query: {
   leg1_exchange: string;
   leg1_symbol: string;
   leg1_market_type?: MarketType;
+  leg1_dex?: string;
   leg2_exchange: string;
   leg2_symbol: string;
   leg2_market_type?: MarketType;
+  leg2_dex?: string;
   hours?: number;
   interval_minutes?: number;
   interval_seconds?: number;
@@ -648,6 +651,11 @@ export async function queryPairSpread(query: {
     }
     return response.json() as Promise<PairSpreadQueryResult>;
   });
+}
+
+export async function listHyperliquidMarkets(): Promise<HyperliquidDexMarket[]> {
+  const value = await fetchJson<unknown>("/pair-spread/hyperliquid-markets");
+  return Array.isArray(value) ? (value as HyperliquidDexMarket[]) : [];
 }
 
 export async function querySymbolExchangeSpreads(query: {
@@ -674,9 +682,11 @@ export async function queryPairSpreadDiagnostics(query: {
   leg1_exchange: string;
   leg1_symbol: string;
   leg1_market_type?: MarketType;
+  leg1_dex?: string;
   leg2_exchange: string;
   leg2_symbol: string;
   leg2_market_type?: MarketType;
+  leg2_dex?: string;
   hours?: number;
   threshold_pct?: number;
   interval_seconds?: number;
@@ -697,9 +707,11 @@ export async function queryPairSpreadFundingHistory(query: {
   leg1_exchange: string;
   leg1_symbol: string;
   leg1_market_type?: MarketType;
+  leg1_dex?: string;
   leg2_exchange: string;
   leg2_symbol: string;
   leg2_market_type?: MarketType;
+  leg2_dex?: string;
   hours?: number;
   leg2_multiplier?: number;
   start_at?: string;
@@ -719,9 +731,11 @@ export async function getPairSpreadFundingRecordStatus(query: {
   leg1_exchange: string;
   leg1_symbol: string;
   leg1_market_type?: MarketType;
+  leg1_dex?: string;
   leg2_exchange: string;
   leg2_symbol: string;
   leg2_market_type?: MarketType;
+  leg2_dex?: string;
   hours?: number;
   leg2_multiplier?: number;
   end_at?: string;
@@ -765,6 +779,7 @@ export async function stopPairSpreadFundingRecord(
 export async function queryPremiumIndex(query: {
   exchange: string;
   symbol: string;
+  dex?: string;
   hours?: number;
   interval_minutes?: number;
 }): Promise<PremiumIndexQueryResult> {
@@ -781,6 +796,7 @@ export async function queryPremiumIndex(query: {
 export async function getCurrentPremiumIndex(query: {
   exchange: string;
   symbol: string;
+  dex?: string;
 }): Promise<PremiumIndexCurrentSnapshot> {
   const url = buildUrl("/premium-index/current", query);
   return fetch(url, { headers: authHeaders() }).then(async (response) => {

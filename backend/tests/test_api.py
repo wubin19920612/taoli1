@@ -791,6 +791,74 @@ def test_pair_spread_query_endpoint_uses_on_demand_service() -> None:
     assert long_response.status_code == 200
 
 
+def test_pair_spread_query_endpoint_accepts_hyperliquid_dex_selection() -> None:
+    observed_at = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
+    captured: dict[str, PairSpreadLegQuery] = {}
+
+    class FakePairSpreadService:
+        async def query(
+            self,
+            leg1: PairSpreadLegQuery,
+            leg2: PairSpreadLegQuery,
+            *,
+            hours: int,
+            interval_minutes: int = 1,
+            interval_seconds: int | None = None,
+            leg2_multiplier: float = 1.0,
+            now: datetime | None = None,
+            include_current: bool = True,
+        ) -> PairSpreadQueryResult:
+            captured["leg1"] = leg1
+            captured["leg2"] = leg2
+            assert include_current is False
+            point = PairSpreadPoint(
+                bucket_at=observed_at,
+                leg1_close=1.2,
+                leg2_close=1.25,
+                spread_abs=0.05,
+                spread_pct=4.08,
+            )
+            return PairSpreadQueryResult(
+                leg1=leg1,
+                leg2=leg2,
+                hours=hours,
+                interval_minutes=interval_minutes,
+                interval_seconds=interval_seconds or interval_minutes * 60,
+                leg2_multiplier=leg2_multiplier,
+                observed_at=now or observed_at,
+                point_count=1,
+                first_seen_at=observed_at,
+                last_seen_at=observed_at,
+                spread_abs=PairSpreadValueStats(current=0.05),
+                spread_pct=PairSpreadValueStats(current=4.08),
+                points=[point],
+            )
+
+        async def aclose(self) -> None:
+            return None
+
+    app = create_app(settings=Settings(database_url="sqlite:///:memory:"))
+    app.state.pair_spread_query_service_factory = FakePairSpreadService
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/pair-spread/query"
+            "?leg1_exchange=hyperliquid&leg1_symbol=OAI&leg1_dex=io"
+            "&leg2_exchange=binance&leg2_symbol=OAI&hours=6"
+            "&interval_minutes=60&include_current=false"
+        )
+
+    assert response.status_code == 200
+    assert captured["leg1"] == PairSpreadLegQuery(
+        exchange="hyperliquid",
+        symbol="OAIUSDT",
+        dex="io",
+    )
+    assert captured["leg2"] == PairSpreadLegQuery(exchange="binance", symbol="OAIUSDT")
+    assert response.json()["leg1"]["dex"] == "io"
+    assert response.json()["leg1"]["symbol"] == "OAIUSDT"
+
+
 def test_pair_spread_query_endpoint_resolves_global_symbol_alias_and_price_multiplier() -> None:
     fixed_now = datetime(2026, 8, 12, 12, 0, tzinfo=UTC)
 

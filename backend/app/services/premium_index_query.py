@@ -241,6 +241,7 @@ class PremiumIndexQueryService(PairSpreadQueryService):
                 end,
                 interval_minutes,
                 window_warnings,
+                market.dex,
             )
             if points:
                 used_start = window_start
@@ -289,6 +290,7 @@ class PremiumIndexQueryService(PairSpreadQueryService):
             hours=hours,
             interval_minutes=interval_minutes,
             observed_at=observed_at,
+            dex=market.dex,
             point_count=len(points),
             first_seen_at=points[0].bucket_at,
             last_seen_at=points[-1].bucket_at,
@@ -303,7 +305,10 @@ class PremiumIndexQueryService(PairSpreadQueryService):
             return await self._fetch_okx_current_premium(market.symbol)
         if market.exchange in {"binance", "aster", "bybit", "gate"}:
             return await self._fetch_current_with_official_premium(market.exchange, market.symbol)
-        leg = await self._fetch_current_leg(market.exchange, market.symbol)
+        if market.exchange == "hyperliquid" and market.dex:
+            leg = await self._fetch_hyperliquid_current(market.symbol, dex=market.dex)
+        else:
+            leg = await self._fetch_current_leg(market.exchange, market.symbol)
         premium = _premium_pct(leg.mark_price, leg.index_price)
         mid_premium = _premium_pct(leg.mid_price, leg.index_price)
         return PremiumIndexCurrentSnapshot(
@@ -311,6 +316,7 @@ class PremiumIndexQueryService(PairSpreadQueryService):
             exchange=market.exchange,
             symbol=market.symbol,
             raw_symbol=leg.raw_symbol,
+            dex=leg.dex,
             mark_price=leg.mark_price,
             index_price=leg.index_price,
             mid_price=leg.mid_price,
@@ -369,11 +375,24 @@ class PremiumIndexQueryService(PairSpreadQueryService):
         end: datetime,
         interval_minutes: int,
         warnings: list[str],
+        dex: str | None = None,
     ) -> list[PremiumIndexPoint]:
         try:
+            if exchange == "hyperliquid" and dex:
+                return await self._fetch_hyperliquid_premium(
+                    symbol,
+                    start,
+                    end,
+                    interval_minutes,
+                    dex=dex,
+                )
             return await self._fetch_history(exchange, symbol, start, end, interval_minutes)
         except Exception as exc:  # noqa: BLE001 - return current point when history is unavailable.
-            _append_unique(warnings, f"{exchange}:{symbol} 溢价指数历史失败: {_market_data_error_text(exchange, exc)}")
+            _append_unique(
+                warnings,
+                f"{exchange}:{dex + ':' if dex else ''}{symbol} 溢价指数历史失败: "
+                f"{_market_data_error_text(exchange, exc)}",
+            )
             return []
 
     async def _fetch_history(
@@ -678,8 +697,13 @@ class PremiumIndexQueryService(PairSpreadQueryService):
         start: datetime,
         end: datetime,
         interval_minutes: int,
+        *,
+        dex: str | None = None,
     ) -> list[PremiumIndexPoint]:
-        raw_coin, _ = await self._resolve_hyperliquid_coin(symbol)
+        if dex:
+            raw_coin, _ = await self._resolve_hyperliquid_coin(symbol, dex=dex)
+        else:
+            raw_coin, _ = await self._resolve_hyperliquid_coin(symbol)
         anchor_start = start - timedelta(hours=1)
         rows, candles = await asyncio.gather(
             self._post_json(
@@ -691,7 +715,7 @@ class PremiumIndexQueryService(PairSpreadQueryService):
                     "endTime": _to_ms(end),
                 },
             ),
-            self._fetch_hyperliquid_klines(symbol, start, end, interval_minutes),
+            self._fetch_hyperliquid_klines(symbol, start, end, interval_minutes, dex=dex),
         )
         anchors = [
             point
@@ -700,7 +724,7 @@ class PremiumIndexQueryService(PairSpreadQueryService):
             and anchor_start <= point.bucket_at <= end
         ]
         try:
-            current = await self._fetch_hyperliquid_current(symbol)
+            current = await self._fetch_hyperliquid_current(symbol, dex=dex)
         except Exception:  # noqa: BLE001 - historical candles and funding anchors can still be useful.
             current = None
         if current is not None:

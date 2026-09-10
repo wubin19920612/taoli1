@@ -9,7 +9,9 @@ from app.models.pair_spread import (
     PairSpreadPoint,
     PairSpreadQueryResult,
     PairSpreadValueStats,
+    HYPERLIQUID_MAIN_DEX,
     normalize_pair_spread_symbol,
+    split_hyperliquid_symbol,
 )
 from app.models.premium_index import (
     PremiumIndexCurrentSnapshot,
@@ -23,6 +25,7 @@ from app.models.settings import SymbolAlias
 class ResolvedSymbolAlias:
     exchange: str
     market_type: MarketType
+    dex: str | None
     requested_symbol: str
     raw_symbol: str
     canonical_symbol: str
@@ -63,9 +66,15 @@ class SymbolAliasResolver:
         exchange: str,
         symbol: str,
         market_type: MarketType,
+        dex: str | None = None,
     ) -> ResolvedSymbolAlias:
         normalized_exchange = exchange.strip().lower()
-        requested_symbol = normalize_pair_spread_symbol(symbol)
+        normalized_dex = dex.strip().lower() if isinstance(dex, str) and dex.strip() else None
+        if normalized_exchange == "hyperliquid":
+            extracted_dex, requested_symbol = split_hyperliquid_symbol(symbol, normalized_dex)
+            normalized_dex = extracted_dex
+        else:
+            requested_symbol = normalize_pair_spread_symbol(symbol)
         market_key = market_type.value
         direct = self._by_key.get((normalized_exchange, requested_symbol, market_key)) or self._by_key.get(
             (normalized_exchange, requested_symbol, None)
@@ -74,6 +83,7 @@ class SymbolAliasResolver:
             return ResolvedSymbolAlias(
                 exchange=normalized_exchange,
                 market_type=market_type,
+                dex=normalized_dex,
                 requested_symbol=requested_symbol,
                 raw_symbol=direct.symbol,
                 canonical_symbol=direct.canonical_symbol,
@@ -88,6 +98,7 @@ class SymbolAliasResolver:
             return ResolvedSymbolAlias(
                 exchange=normalized_exchange,
                 market_type=market_type,
+                dex=normalized_dex,
                 requested_symbol=requested_symbol,
                 raw_symbol=alias.symbol,
                 canonical_symbol=alias.canonical_symbol,
@@ -97,6 +108,7 @@ class SymbolAliasResolver:
         return ResolvedSymbolAlias(
             exchange=normalized_exchange,
             market_type=market_type,
+            dex=normalized_dex,
             requested_symbol=requested_symbol,
             raw_symbol=requested_symbol,
             canonical_symbol=requested_symbol,
@@ -110,11 +122,13 @@ def resolve_symbol_alias(
     exchange: str,
     symbol: str,
     market_type: MarketType,
+    dex: str | None = None,
 ) -> ResolvedSymbolAlias:
     return SymbolAliasResolver(aliases).resolve(
         exchange=exchange,
         symbol=symbol,
         market_type=market_type,
+        dex=dex,
     )
 
 
@@ -235,7 +249,14 @@ def _funding_symbol(
 ) -> str:
     normalized_symbol = normalize_pair_spread_symbol(point.symbol)
     for alias in (leg1_alias, leg2_alias):
-        if point.exchange == alias.exchange and normalized_symbol == alias.raw_symbol:
+        dex_matches = point.dex is None or point.dex == alias.dex
+        if point.dex is not None and alias.exchange == "hyperliquid":
+            dex_matches = point.dex == (alias.dex or HYPERLIQUID_MAIN_DEX)
+        if (
+            point.exchange == alias.exchange
+            and normalized_symbol == alias.raw_symbol
+            and dex_matches
+        ):
             return alias.canonical_symbol
     return point.symbol
 

@@ -17,6 +17,7 @@ from app.models.pair_spread import (
     PairSpreadDiagnosticResult,
     PairSpreadLegQuery,
     PairSpreadQueryResult,
+    HyperliquidDexMarket,
     SUPPORTED_PAIR_SPREAD_EXCHANGES,
     SUPPORTED_SYMBOL_SPREAD_EXCHANGES,
     SymbolSpreadQueryResult,
@@ -56,14 +57,22 @@ def _resolved_leg(
     exchange: str,
     symbol: str,
     market_type: MarketType,
+    dex: str | None = None,
 ) -> tuple[PairSpreadLegQuery, ResolvedSymbolAlias]:
-    alias = resolver.resolve(exchange=exchange, symbol=symbol, market_type=market_type)
+    requested_leg = PairSpreadLegQuery(
+        exchange=exchange,
+        symbol=symbol,
+        market_type=market_type,
+        dex=dex,
+    )
+    alias = resolver.resolve(
+        exchange=requested_leg.exchange,
+        symbol=requested_leg.symbol,
+        market_type=requested_leg.market_type,
+        dex=requested_leg.dex,
+    )
     return (
-        PairSpreadLegQuery(
-            exchange=exchange,
-            symbol=alias.raw_symbol,
-            market_type=market_type,
-        ),
+        requested_leg.model_copy(update={"symbol": alias.raw_symbol}),
         alias,
     )
 
@@ -98,12 +107,14 @@ async def _funding_request_from_payload(
         exchange=payload.leg1.exchange,
         symbol=payload.leg1.symbol,
         market_type=payload.leg1.market_type,
+        dex=payload.leg1.dex,
     )
     leg2, leg2_alias = _resolved_leg(
         resolver,
         exchange=payload.leg2.exchange,
         symbol=payload.leg2.symbol,
         market_type=payload.leg2.market_type,
+        dex=payload.leg2.dex,
     )
     return (
         PairSpreadFundingRecordRequest(
@@ -122,9 +133,11 @@ def _funding_record_request_from_params(
     leg1_exchange: str,
     leg1_symbol: str,
     leg1_market_type: MarketType,
+    leg1_dex: str | None,
     leg2_exchange: str,
     leg2_symbol: str,
     leg2_market_type: MarketType,
+    leg2_dex: str | None,
     leg2_multiplier: float,
 ) -> tuple[PairSpreadFundingRecordRequest, ResolvedSymbolAlias, ResolvedSymbolAlias]:
     try:
@@ -133,12 +146,14 @@ def _funding_record_request_from_params(
             exchange=leg1_exchange,
             symbol=leg1_symbol,
             market_type=leg1_market_type,
+            dex=leg1_dex,
         )
         leg2, leg2_alias = _resolved_leg(
             resolver,
             exchange=leg2_exchange,
             symbol=leg2_symbol,
             market_type=leg2_market_type,
+            dex=leg2_dex,
         )
         return (
             PairSpreadFundingRecordRequest(
@@ -158,6 +173,20 @@ async def list_pair_spread_exchanges() -> list[str]:
     return list(SUPPORTED_PAIR_SPREAD_EXCHANGES)
 
 
+@router.get("/hyperliquid-markets", response_model=list[HyperliquidDexMarket])
+async def list_hyperliquid_markets(request: Request) -> list[HyperliquidDexMarket]:
+    factory = getattr(request.app.state, "pair_spread_query_service_factory", None) or PairSpreadQueryService
+    service = factory()
+    try:
+        return await service.list_hyperliquid_markets()
+    except Exception as exc:  # noqa: BLE001 - keep metadata failures visible to the UI.
+        raise HTTPException(status_code=502, detail=f"Hyperliquid DEX 市场元数据失败: {exc}") from exc
+    finally:
+        close = getattr(service, "aclose", None)
+        if close is not None:
+            await close()
+
+
 @router.get("/funding-records/watchlist", response_model=list[PairSpreadFundingWatchItem])
 async def list_pair_spread_funding_records(request: Request) -> list[PairSpreadFundingWatchItem]:
     resolver = await _symbol_alias_resolver(request)
@@ -171,6 +200,7 @@ async def list_pair_spread_funding_records(request: Request) -> list[PairSpreadF
                             exchange=item.leg1.exchange,
                             symbol=item.leg1.symbol,
                             market_type=item.leg1.market_type,
+                            dex=item.leg1.dex,
                         ).canonical_symbol
                     }
                 ),
@@ -180,6 +210,7 @@ async def list_pair_spread_funding_records(request: Request) -> list[PairSpreadF
                             exchange=item.leg2.exchange,
                             symbol=item.leg2.symbol,
                             market_type=item.leg2.market_type,
+                            dex=item.leg2.dex,
                         ).canonical_symbol
                     }
                 ),
@@ -195,9 +226,11 @@ async def get_pair_spread_funding_record_status(
     leg1_exchange: str = Query(...),
     leg1_symbol: str = Query(...),
     leg1_market_type: MarketType = Query(default=MarketType.FUTURE),
+    leg1_dex: str | None = Query(default=None),
     leg2_exchange: str = Query(...),
     leg2_symbol: str = Query(...),
     leg2_market_type: MarketType = Query(default=MarketType.FUTURE),
+    leg2_dex: str | None = Query(default=None),
     hours: int = Query(default=72, ge=PAIR_SPREAD_MIN_HOURS),
     leg2_multiplier: float = Query(default=1.0, gt=0),
     end_at: datetime | None = Query(default=None),
@@ -208,9 +241,11 @@ async def get_pair_spread_funding_record_status(
         leg1_exchange=leg1_exchange,
         leg1_symbol=leg1_symbol,
         leg1_market_type=leg1_market_type,
+        leg1_dex=leg1_dex,
         leg2_exchange=leg2_exchange,
         leg2_symbol=leg2_symbol,
         leg2_market_type=leg2_market_type,
+        leg2_dex=leg2_dex,
         leg2_multiplier=leg2_multiplier,
     )
     status = await _funding_recorder(request).status_for(record_request, hours=hours, now=end_at)
@@ -270,9 +305,11 @@ async def diagnose_pair_spread(
     leg1_exchange: str = Query(...),
     leg1_symbol: str = Query(...),
     leg1_market_type: MarketType = Query(default=MarketType.FUTURE),
+    leg1_dex: str | None = Query(default=None),
     leg2_exchange: str = Query(...),
     leg2_symbol: str = Query(...),
     leg2_market_type: MarketType = Query(default=MarketType.FUTURE),
+    leg2_dex: str | None = Query(default=None),
     hours: int = Query(default=24, ge=PAIR_SPREAD_MIN_HOURS),
     threshold_pct: float = Query(default=1.0, ge=0, le=100_000),
     interval_seconds: int = Query(
@@ -290,12 +327,14 @@ async def diagnose_pair_spread(
             exchange=leg1_exchange,
             symbol=leg1_symbol,
             market_type=leg1_market_type,
+            dex=leg1_dex,
         )
         leg2, leg2_alias = _resolved_leg(
             resolver,
             exchange=leg2_exchange,
             symbol=leg2_symbol,
             market_type=leg2_market_type,
+            dex=leg2_dex,
         )
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -361,9 +400,11 @@ async def query_pair_spread_funding_history(
     leg1_exchange: str = Query(...),
     leg1_symbol: str = Query(...),
     leg1_market_type: MarketType = Query(default=MarketType.FUTURE),
+    leg1_dex: str | None = Query(default=None),
     leg2_exchange: str = Query(...),
     leg2_symbol: str = Query(...),
     leg2_market_type: MarketType = Query(default=MarketType.FUTURE),
+    leg2_dex: str | None = Query(default=None),
     hours: int = Query(default=72, ge=PAIR_SPREAD_MIN_HOURS),
     leg2_multiplier: float = Query(default=1.0, gt=0),
     start_at: datetime | None = Query(default=None),
@@ -376,12 +417,14 @@ async def query_pair_spread_funding_history(
             exchange=leg1_exchange,
             symbol=leg1_symbol,
             market_type=leg1_market_type,
+            dex=leg1_dex,
         )
         leg2, leg2_alias = _resolved_leg(
             resolver,
             exchange=leg2_exchange,
             symbol=leg2_symbol,
             market_type=leg2_market_type,
+            dex=leg2_dex,
         )
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -418,9 +461,11 @@ async def query_pair_spread(
     leg1_exchange: str = Query(...),
     leg1_symbol: str = Query(...),
     leg1_market_type: MarketType = Query(default=MarketType.FUTURE),
+    leg1_dex: str | None = Query(default=None),
     leg2_exchange: str = Query(...),
     leg2_symbol: str = Query(...),
     leg2_market_type: MarketType = Query(default=MarketType.FUTURE),
+    leg2_dex: str | None = Query(default=None),
     hours: int = Query(default=72, ge=PAIR_SPREAD_MIN_HOURS),
     interval_minutes: int = Query(default=1),
     interval_seconds: int | None = Query(default=None),
@@ -447,12 +492,14 @@ async def query_pair_spread(
             exchange=leg1_exchange,
             symbol=leg1_symbol,
             market_type=leg1_market_type,
+            dex=leg1_dex,
         )
         leg2, leg2_alias = _resolved_leg(
             resolver,
             exchange=leg2_exchange,
             symbol=leg2_symbol,
             market_type=leg2_market_type,
+            dex=leg2_dex,
         )
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -531,6 +578,7 @@ async def query_symbol_spread(
             exchange=exchange,
             symbol=alias.raw_symbol,
             market_type=market_type,
+            dex=alias.dex,
         )
         for exchange, alias in aliases_by_exchange.items()
     }

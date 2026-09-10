@@ -1057,6 +1057,191 @@ async def test_hyperliquid_klines_resolve_prefixed_hip3_coin() -> None:
     ]
 
 
+def test_pair_spread_hyperliquid_symbol_extracts_dex() -> None:
+    embedded = PairSpreadLegQuery(exchange="hyperliquid", symbol="io:OAI")
+    assert embedded.symbol == "OAIUSDT"
+    assert embedded.dex == "io"
+
+    selected = PairSpreadLegQuery(exchange="hyperliquid", symbol="OAI", dex="IO")
+    assert selected.symbol == "OAIUSDT"
+    assert selected.dex == "io"
+
+    main = PairSpreadLegQuery(exchange="hyperliquid", symbol="BTC", dex="MAIN")
+    assert main.symbol == "BTCUSDT"
+    assert main.dex == "main"
+
+    with pytest.raises(ValidationError):
+        PairSpreadLegQuery(exchange="hyperliquid", symbol="io:OAI", dex="xyz")
+    with pytest.raises(ValidationError):
+        PairSpreadLegQuery(exchange="hyperliquid", symbol="OAI", market_type=MarketType.SPOT, dex="io")
+    with pytest.raises(ValidationError):
+        PairSpreadLegQuery(exchange="binance", symbol="OAI", dex="io")
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_selected_dex_uses_raw_coin_for_all_market_requests() -> None:
+    start = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
+    end = start + timedelta(hours=1)
+    bodies: list[dict[str, Any]] = []
+    service = PairSpreadQueryService()
+
+    async def fake_post_json(url: str, body: dict[str, Any]):
+        bodies.append(body)
+        if body.get("type") == "metaAndAssetCtxs":
+            assert body.get("dex") == "io"
+            return [
+                {"universe": [{"name": "io:OAI"}]},
+                [
+                    {
+                        "markPx": "1.25",
+                        "oraclePx": "1.24",
+                        "midPx": "1.245",
+                        "openInterest": "10",
+                        "funding": "0.001",
+                        "dayNtlVlm": "1000",
+                    }
+                ],
+            ]
+        if body.get("type") == "candleSnapshot":
+            assert body["req"]["coin"] == "io:OAI"
+            return [{"t": int(start.timestamp() * 1000), "c": "1.20"}]
+        if body.get("type") == "fundingHistory":
+            assert body["coin"] == "io:OAI"
+            return [
+                {
+                    "time": int(start.timestamp() * 1000),
+                    "fundingRate": "0.001",
+                }
+            ]
+        raise AssertionError(f"unexpected body: {body}")
+
+    service._post_json = fake_post_json  # type: ignore[method-assign]
+    try:
+        klines = await service._fetch_hyperliquid_klines(
+            "OAIUSDT",
+            start,
+            end,
+            60,
+            dex="io",
+        )
+        current = await service._fetch_hyperliquid_current("OAIUSDT", dex="io")
+        funding = await service._fetch_hyperliquid_funding(
+            "OAIUSDT",
+            start,
+            end,
+            dex="io",
+        )
+    finally:
+        await service.aclose()
+
+    assert klines == [PairSpreadKlinePoint(bucket_at=start, close=1.2)]
+    assert current.dex == "io"
+    assert current.raw_symbol == "io:OAI"
+    assert current.open_interest_usdt == pytest.approx(12.5)
+    assert len(funding) == 1
+    assert funding[0].dex == "io"
+    assert funding[0].symbol == "OAIUSDT"
+    assert [body.get("type") for body in bodies] == [
+        "metaAndAssetCtxs",
+        "candleSnapshot",
+        "fundingHistory",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_without_dex_rejects_ambiguous_same_name_asset() -> None:
+    service = PairSpreadQueryService()
+
+    async def fake_post_json(url: str, body: dict[str, Any]):
+        if body.get("type") == "perpDexs":
+            return [{"name": "xyz"}, {"name": "io"}]
+        if body.get("type") == "metaAndAssetCtxs":
+            dex = body.get("dex")
+            if dex == "xyz":
+                raw_symbol = "xyz:COIN"
+            elif dex == "io":
+                raw_symbol = "io:COIN"
+            else:
+                raw_symbol = "BTC"
+            return [{"universe": [{"name": raw_symbol}]}, [{}]]
+        raise AssertionError(f"unexpected body: {body}")
+
+    service._post_json = fake_post_json  # type: ignore[method-assign]
+    try:
+        with pytest.raises(RuntimeError, match="多个 perp DEX"):
+            await service._resolve_hyperliquid_coin("COINUSDT")
+    finally:
+        await service.aclose()
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_main_dex_is_explicit_but_uses_main_api_payload() -> None:
+    service = PairSpreadQueryService()
+    bodies: list[dict[str, Any]] = []
+
+    async def fake_post_json(url: str, body: dict[str, Any]):
+        bodies.append(body)
+        if body.get("type") == "metaAndAssetCtxs":
+            assert "dex" not in body
+            return [
+                {"universe": [{"name": "BTC"}]},
+                [
+                    {
+                        "markPx": "100",
+                        "oraclePx": "99",
+                        "midPx": "100",
+                        "openInterest": "10",
+                        "funding": "0.001",
+                    }
+                ],
+            ]
+        raise AssertionError(f"unexpected body: {body}")
+
+    service._post_json = fake_post_json  # type: ignore[method-assign]
+    try:
+        resolved = await service._resolve_hyperliquid_coin("BTCUSDT", dex="main")
+        current = await service._fetch_hyperliquid_current("BTCUSDT", dex="main")
+    finally:
+        await service.aclose()
+
+    assert resolved == ("BTC", "")
+    assert current.dex == "main"
+    assert [body.get("type") for body in bodies] == ["metaAndAssetCtxs"]
+
+
+@pytest.mark.asyncio
+async def test_list_hyperliquid_markets_returns_each_perp_dex() -> None:
+    service = PairSpreadQueryService()
+
+    async def fake_post_json(url: str, body: dict[str, Any]):
+        if body.get("type") == "perpDexs":
+            return [
+                {"name": "xyz", "fullName": "XYZ"},
+                {"name": "io", "fullName": "EntropyIO"},
+            ]
+        if body.get("type") == "metaAndAssetCtxs":
+            dex = body.get("dex")
+            if dex == "xyz":
+                raw_symbol = "xyz:COIN"
+            elif dex == "io":
+                raw_symbol = "io:OAI"
+            else:
+                raw_symbol = "BTC"
+            return [{"universe": [{"name": raw_symbol}]}, [{}]]
+        raise AssertionError(f"unexpected body: {body}")
+
+    service._post_json = fake_post_json  # type: ignore[method-assign]
+    try:
+        markets = await service.list_hyperliquid_markets()
+    finally:
+        await service.aclose()
+
+    assert [market.dex for market in markets] == ["main", "xyz", "io"]
+    assert markets[1].full_name == "XYZ"
+    assert markets[2].assets[0].raw_symbol == "io:OAI"
+    assert markets[2].assets[0].base == "OAI"
+
+
 @pytest.mark.asyncio
 async def test_bitget_klines_continue_after_empty_early_chunk() -> None:
     start = datetime(2026, 7, 1, 0, 0, tzinfo=UTC)
