@@ -52,7 +52,7 @@ class FeishuNotifier:
         prebuilt_text: str | None = None,
     ) -> None:
         if not self.config.webhook_url:
-            return
+            raise RuntimeError("Feishu webhook is not configured")
         payload = self._build_payload(
             rule,
             opportunity,
@@ -62,11 +62,11 @@ class FeishuNotifier:
             prebuilt_text=prebuilt_text,
         )
         response = await self.client.post(self.config.webhook_url, json=payload)
-        response.raise_for_status()
+        self._checked_webhook_payload(response, "send alert")
 
     async def send_text(self, text: str) -> None:
         if not self.config.webhook_url:
-            return
+            raise RuntimeError("Feishu webhook is not configured")
         payload: dict = {
             "msg_type": "text",
             "content": {
@@ -78,7 +78,7 @@ class FeishuNotifier:
             payload["timestamp"] = timestamp
             payload["sign"] = self._sign(timestamp)
         response = await self.client.post(self.config.webhook_url, json=payload)
-        response.raise_for_status()
+        self._checked_webhook_payload(response, "send text")
 
     async def send_phone_urgent_text(self, text: str) -> None:
         user_ids = self.config.phone_user_ids or []
@@ -155,6 +155,30 @@ class FeishuNotifier:
             if log_id:
                 detail = f"{detail}, log_id={log_id}"
             raise RuntimeError(detail)
+        return payload
+
+    def _checked_webhook_payload(self, response: httpx.Response, action: str) -> dict:
+        response.raise_for_status()
+        try:
+            payload = response.json()
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(f"Feishu webhook {action} response is not valid JSON") from exc
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"Feishu webhook {action} response must be a JSON object")
+
+        code = payload.get("code")
+        if code is None:
+            code = payload.get("StatusCode")
+        if code not in (0, "0"):
+            message = (
+                payload.get("msg")
+                or payload.get("message")
+                or payload.get("StatusMessage")
+                or "unknown error"
+            )
+            raise RuntimeError(
+                f"Feishu webhook {action} failed: code={code}, message={message}"
+            )
         return payload
 
     def _build_payload(

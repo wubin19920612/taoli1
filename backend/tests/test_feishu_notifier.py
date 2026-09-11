@@ -148,10 +148,11 @@ def test_build_payload_can_use_prebuilt_alert_text() -> None:
 
 
 @pytest.mark.asyncio
-async def test_notifier_does_not_create_http_client_when_webhook_is_disabled() -> None:
+async def test_notifier_raises_without_creating_http_client_when_webhook_is_missing() -> None:
     notifier = FeishuNotifier(FeishuConfig(webhook_url=""))
 
-    await notifier.send_text("skip")
+    with pytest.raises(RuntimeError, match="webhook is not configured"):
+        await notifier.send_text("fail")
 
     assert notifier._client is None
 
@@ -291,7 +292,7 @@ class FakeFeishuOpenClient:
 
 
 class FakeFeishuResponse:
-    def __init__(self, payload: dict):
+    def __init__(self, payload):
         self.payload = payload
 
     def raise_for_status(self) -> None:
@@ -299,6 +300,58 @@ class FakeFeishuResponse:
 
     def json(self) -> dict:
         return self.payload
+
+
+class FakeFeishuWebhookClient:
+    def __init__(self, payload):
+        self.payload = payload
+        self.requests: list[tuple[str, dict]] = []
+
+    async def post(self, url: str, **kwargs):
+        self.requests.append((url, kwargs["json"]))
+        return FakeFeishuResponse(self.payload)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"code": 0, "msg": "success"},
+        {"StatusCode": 0, "StatusMessage": "success"},
+    ],
+)
+async def test_send_text_accepts_successful_webhook_business_response(payload: dict) -> None:
+    client = FakeFeishuWebhookClient(payload)
+    notifier = FeishuNotifier(
+        FeishuConfig(webhook_url="https://open.feishu.cn/open-apis/bot/v2/hook/test"),
+        client=client,
+    )
+
+    await notifier.send_text("test message")
+
+    assert client.requests[0][1] == {
+        "msg_type": "text",
+        "content": {"text": "test message"},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"code": 19002, "msg": "sign match fail"},
+        {"StatusCode": 9499, "StatusMessage": "Bad Request"},
+    ],
+)
+async def test_send_text_raises_on_webhook_business_error(payload: dict) -> None:
+    client = FakeFeishuWebhookClient(payload)
+    notifier = FeishuNotifier(
+        FeishuConfig(webhook_url="https://open.feishu.cn/open-apis/bot/v2/hook/test"),
+        client=client,
+    )
+
+    with pytest.raises(RuntimeError, match="Feishu webhook send text failed"):
+        await notifier.send_text("test message")
 
 
 @pytest.mark.asyncio
