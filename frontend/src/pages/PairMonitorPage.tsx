@@ -4076,14 +4076,10 @@ export function PairMonitorPage() {
     startTime: initialCachedState?.dayCompareStartTime,
     endTime: initialCachedState?.dayCompareEndTime
   });
-  const initialUrlQueryKey =
-    initialCachedState && initialUrlQuery
-      ? pairQueryKey(initialUrlQuery.values, initialUrlQuery.hours, initialUrlQuery.intervalSeconds)
-      : "";
   const initialFormValues = initialCachedState?.values ?? initialUrlQuery?.values ?? defaultFormValues;
   const initialHours = initialCachedState?.hours ?? initialUrlQuery?.hours ?? 4;
   const initialIntervalSeconds = initialCachedState?.intervalSeconds ?? initialUrlQuery?.intervalSeconds ?? DEFAULT_PAIR_INTERVAL_SECONDS;
-  const loadedUrlQueryRef = useRef(initialUrlQueryKey);
+  const loadedUrlQueryRef = useRef("");
   const [hours, setHours] = useState(() => initialHours);
   const [intervalSeconds, setIntervalSeconds] = useState(() => initialIntervalSeconds);
   const [customInterval, setCustomInterval] = useState(

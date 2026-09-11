@@ -208,6 +208,7 @@ function pairSpreadResult(params?: URLSearchParams) {
             index_price: null,
             mid_price: leg1Price,
             last_price: leg1Price,
+            volume_24h_usdt: 15_330_064.8066,
             funding_rate_pct: leg1MarketType === "spot" ? null : 0.01,
             funding_next_rate_pct: null,
             funding_next_time: null,
@@ -228,6 +229,7 @@ function pairSpreadResult(params?: URLSearchParams) {
             index_price: leg2MarketType === "spot" ? null : 100,
             mid_price: leg2Price,
             last_price: leg2Price,
+            volume_24h_usdt: 2_241_911.7006,
             funding_rate_pct: leg2MarketType === "spot" ? null : 0.01,
             funding_next_rate_pct: null,
             funding_next_time: null,
@@ -1197,5 +1199,54 @@ describe("PairMonitorPage", () => {
     expect((screen.getByPlaceholderText("SKHY") as HTMLInputElement).value).toBe("SKHYUSDT");
     expect((await screen.findAllByText("Bitget · 合约 · SKHYUSDT")).length).toBeGreaterThan(0);
     expect(requests.some((request) => request.includes("/pair-spread/query"))).toBe(false);
+  });
+
+  it("revalidates a cached spread result when reloading the same pair monitor URL", async () => {
+    window.history.pushState(
+      {},
+      "",
+      "/?page=pair-monitor&leg1_exchange=bitget&leg1_market_type=future&leg1_symbol=SKHYUSDT" +
+        "&leg2_exchange=okx&leg2_market_type=future&leg2_symbol=SKHYNIXUSDT" +
+        "&leg2_multiplier=1&hours=4&interval_seconds=5&interval_minutes=1"
+    );
+    const params = new URLSearchParams(window.location.search);
+    const cachedResult = pairSpreadResult(params);
+    if (!cachedResult.current) {
+      throw new Error("Expected the cached result to include current prices");
+    }
+    cachedResult.current.leg2.volume_24h_usdt = 10_640.236;
+    window.sessionStorage.setItem(
+      "taoli1.pairSpread.lastState.v1",
+      JSON.stringify({
+        values: {
+          leg1_exchange: "bitget",
+          leg1_market_type: "future",
+          leg1_dex: "",
+          leg1_symbol: "SKHYUSDT",
+          leg2_exchange: "okx",
+          leg2_market_type: "future",
+          leg2_dex: "",
+          leg2_symbol: "SKHYNIXUSDT",
+          leg2_multiplier: 1
+        },
+        hours: 4,
+        intervalSeconds: 5,
+        showDayCompare: false,
+        dayCompareDays: 3,
+        dayCompareMode: "query",
+        dayCompareStartTime: "",
+        dayCompareEndTime: "",
+        result: cachedResult,
+        savedAt: "2026-07-24T01:59:00Z"
+      })
+    );
+
+    render(<PairMonitorPage />);
+
+    expect(screen.getByText("10.6K")).toBeTruthy();
+    expect(await screen.findByText("2.24M")).toBeTruthy();
+    expect(screen.queryByText("10.6K")).toBeNull();
+    const spreadRequests = requests.filter((request) => request.includes("/pair-spread/query"));
+    expect(spreadRequests).toHaveLength(1);
   });
 });
