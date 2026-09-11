@@ -380,6 +380,7 @@ export function SettingsPage() {
   const [ruleDefaults, setRuleDefaults] = useState<AlertRule>(defaultRule);
   const [editingRule, setEditingRule] = useState<AlertRule | null>(null);
   const [ruleSaving, setRuleSaving] = useState(false);
+  const [quickSavingRuleId, setQuickSavingRuleId] = useState<string | null>(null);
   const ruleEditorRef = useRef<HTMLElement | null>(null);
   const [alertTemplatePreview, setAlertTemplatePreview] =
     useState<AlertMessageTemplateSettings>(defaultAlertMessageTemplate);
@@ -558,6 +559,29 @@ export function SettingsPage() {
     }
   };
 
+  const setSfNegativeFundingSuppression = async (rule: AlertRule, checked: boolean) => {
+    if (!rule.id) {
+      return;
+    }
+    setQuickSavingRuleId(rule.id);
+    try {
+      const saved = await updateAlertRule(rule.id, {
+        ...rule,
+        suppress_sf_negative_funding: checked
+      });
+      setRules((current) => current.map((item) => (item.id === rule.id ? saved : item)));
+      if (editingRule?.id === rule.id) {
+        setEditingRule(saved);
+        ruleForm.setFieldsValue(ruleToForm(saved));
+      }
+      message.success(checked ? "SF 负资金费率通知已关闭" : "SF 负资金费率通知已允许");
+    } catch (exc) {
+      message.error(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setQuickSavingRuleId(null);
+    }
+  };
+
   const restartService = async (service: ServiceName) => {
     setRestartingService(service);
     try {
@@ -587,6 +611,22 @@ export function SettingsPage() {
     { title: "综合阈值", dataIndex: "min_fee_adjusted_open_pct", render: (value: number) => `${value}%` },
     { title: "连续命中", dataIndex: "consecutive_hits" },
     { title: "冷却", dataIndex: "cooldown_seconds", render: (value: number) => `${value}s` },
+    {
+      title: "SF 负资金通知",
+      width: 150,
+      render: (_, row) => (
+        <Switch
+          size="small"
+          checked={row.suppress_sf_negative_funding !== false}
+          checkedChildren="不通知"
+          unCheckedChildren="允许"
+          loading={quickSavingRuleId === row.id}
+          disabled={!row.id || quickSavingRuleId !== null}
+          aria-label={`设置 ${row.name} 的 SF 负资金费率不通知`}
+          onChange={(checked) => void setSfNegativeFundingSuppression(row, checked)}
+        />
+      )
+    },
     {
       title: "操作",
       width: 104,

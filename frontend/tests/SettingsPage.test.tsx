@@ -310,6 +310,28 @@ describe("SettingsPage", () => {
     expect(screen.queryByRole("button", { name: "保存修改" })).toBeNull();
   }, 15000);
 
+  it("quickly updates SF negative funding notifications from the rule list", async () => {
+    render(<SettingsPage />);
+
+    const quickSwitch = await screen.findByLabelText("设置 Existing FF 的 SF 负资金费率不通知");
+    expect(quickSwitch.getAttribute("aria-checked")).toBe("true");
+
+    await userEvent.click(quickSwitch);
+
+    await waitFor(() => {
+      expect(
+        vi.mocked(fetch).mock.calls.some(([input, init]) => {
+          return (
+            String(input).includes("/alerts/rules/rule-existing") &&
+            init?.method === "PUT" &&
+            String(init.body).includes('"suppress_sf_negative_funding":false')
+          );
+        })
+      ).toBe(true);
+    });
+    expect(quickSwitch.getAttribute("aria-checked")).toBe("false");
+  }, 15000);
+
   it("saves global alert message template field choices", async () => {
     render(<SettingsPage />);
 
