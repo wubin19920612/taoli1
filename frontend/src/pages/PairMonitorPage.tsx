@@ -4080,6 +4080,18 @@ export function PairMonitorPage() {
   const initialHours = initialCachedState?.hours ?? initialUrlQuery?.hours ?? 4;
   const initialIntervalSeconds = initialCachedState?.intervalSeconds ?? initialUrlQuery?.intervalSeconds ?? DEFAULT_PAIR_INTERVAL_SECONDS;
   const loadedUrlQueryRef = useRef("");
+  const pendingCachedQueryRef = useRef(
+    initialCachedState
+      ? {
+          values: initialCachedState.values,
+          hours: initialCachedState.hours,
+          intervalSeconds: initialCachedState.intervalSeconds,
+          showDayCompare: initialDayCompareEnabled,
+          dayCompareDays: initialDayCompareHistoryDays,
+          dayCompareSettings: initialDayCompareSettings
+        }
+      : null
+  );
   const [hours, setHours] = useState(() => initialHours);
   const [intervalSeconds, setIntervalSeconds] = useState(() => initialIntervalSeconds);
   const [customInterval, setCustomInterval] = useState(
@@ -4762,15 +4774,25 @@ export function PairMonitorPage() {
   }, []);
 
   useEffect(() => {
-    const incoming = pairQueryFromUrl();
+    const urlQuery = pairQueryFromUrl();
+    const currentPage = new URLSearchParams(window.location.search).get("page");
+    const cachedQuery =
+      !urlQuery && (!currentPage || currentPage === "pair-monitor")
+        ? pendingCachedQueryRef.current
+        : null;
+    const incoming = urlQuery ?? cachedQuery;
     if (!incoming) {
       return;
     }
+    pendingCachedQueryRef.current = null;
     const key = pairQueryKey(incoming.values, incoming.hours, incoming.intervalSeconds);
     if (loadedUrlQueryRef.current === key) {
       return;
     }
     const nextSymbolMode = pairSymbolModeFromValues(incoming.values);
+    const nextShowDayCompare = cachedQuery?.showDayCompare ?? false;
+    const nextDayCompareDays = cachedQuery?.dayCompareDays ?? DEFAULT_DAY_COMPARE_DAYS;
+    const nextDayCompareSettings = cachedQuery?.dayCompareSettings ?? DEFAULT_DAY_COMPARE_SETTINGS;
     loadedUrlQueryRef.current = key;
     form.setFieldsValue(incoming.values);
     setHours(incoming.hours);
@@ -4779,11 +4801,11 @@ export function PairMonitorPage() {
     setPairSymbolMode(nextSymbolMode);
     setAutoRefresh(false);
     setShowPremiumCompare(false);
-    setShowDayCompare(false);
-    setDayCompareDays(DEFAULT_DAY_COMPARE_DAYS);
-    setDayCompareMode(DEFAULT_DAY_COMPARE_SETTINGS.mode);
-    setDayCompareStartTime(DEFAULT_DAY_COMPARE_SETTINGS.startTime);
-    setDayCompareEndTime(DEFAULT_DAY_COMPARE_SETTINGS.endTime);
+    setShowDayCompare(nextShowDayCompare);
+    setDayCompareDays(nextDayCompareDays);
+    setDayCompareMode(nextDayCompareSettings.mode);
+    setDayCompareStartTime(nextDayCompareSettings.startTime);
+    setDayCompareEndTime(nextDayCompareSettings.endTime);
     setDayCompareSeries([]);
     setDayCompareError("");
     void runQueryRef.current({
@@ -4792,9 +4814,9 @@ export function PairMonitorPage() {
       hours: incoming.hours,
       intervalSeconds: incoming.intervalSeconds,
       premiumEnabled: false,
-      dayCompareEnabled: false,
-      dayCompareDays: DEFAULT_DAY_COMPARE_DAYS,
-      dayCompareSettings: DEFAULT_DAY_COMPARE_SETTINGS
+      dayCompareEnabled: nextShowDayCompare,
+      dayCompareDays: nextDayCompareDays,
+      dayCompareSettings: nextDayCompareSettings
     });
   }, [form, locationSearch]);
 

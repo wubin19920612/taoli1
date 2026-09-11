@@ -1178,27 +1178,36 @@ describe("PairMonitorPage", () => {
     expect(params.get("interval_seconds")).toBe("5");
   });
 
-  it("restores the last spread result from session storage after returning from another page", async () => {
+  it("restores and revalidates the last spread result after returning to a URL without pair parameters", async () => {
     const user = userEvent.setup();
     const { unmount } = render(<PairMonitorPage />);
 
     await user.click(screen.getByRole("button", { name: /查询/ }));
     expect((await screen.findAllByText("Bitget · 合约 · SKHYUSDT")).length).toBeGreaterThan(0);
 
-    window.history.pushState(
-      {},
-      "",
-      "/?page=premium-index&exchange=bitget&symbol=SKHYUSDT&hours=4&interval_minutes=5"
-    );
     unmount();
+    const cachedState = JSON.parse(
+      window.sessionStorage.getItem("taoli1.pairSpread.lastState.v1") ?? "null"
+    );
+    cachedState.result.current.leg2.volume_24h_usdt = 10_640.236;
+    window.sessionStorage.setItem("taoli1.pairSpread.lastState.v1", JSON.stringify(cachedState));
+    window.history.pushState({}, "", "/?page=pair-monitor");
     requests.length = 0;
 
     render(<PairMonitorPage />);
 
+    expect(screen.getByText("10.6K")).toBeTruthy();
     expect(screen.getAllByText("+0.50%").length).toBeGreaterThan(0);
     expect((screen.getByPlaceholderText("SKHY") as HTMLInputElement).value).toBe("SKHYUSDT");
-    expect((await screen.findAllByText("Bitget · 合约 · SKHYUSDT")).length).toBeGreaterThan(0);
-    expect(requests.some((request) => request.includes("/pair-spread/query"))).toBe(false);
+    expect(await screen.findByText("2.24M")).toBeTruthy();
+    expect(screen.queryByText("10.6K")).toBeNull();
+    const spreadRequests = requests.filter((request) => request.includes("/pair-spread/query"));
+    expect(spreadRequests).toHaveLength(1);
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("leg1_exchange")).toBe("bitget");
+    expect(params.get("leg2_exchange")).toBe("bitget");
+    expect(params.get("leg1_symbol")).toBe("SKHYUSDT");
+    expect(params.get("leg2_symbol")).toBe("SKHYUSDT");
   });
 
   it("revalidates a cached spread result when reloading the same pair monitor URL", async () => {
