@@ -200,6 +200,7 @@ class MarketCollector:
             self.risk_settings,
             now=now,
         )
+        self.store.set_all_markets(aliased_markets)
         self.store.set_markets(filtered_markets)
         self.store.set_opportunities(filtered_opportunities)
         self.store.set_exchange_errors(errors)

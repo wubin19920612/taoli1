@@ -19,6 +19,7 @@ from app.api import (
     routes_health,
     routes_history,
     routes_index_components,
+    routes_instruments,
     routes_minute_signals,
     routes_negative_basis_monitor,
     routes_new_listing_monitor,
@@ -1076,6 +1077,7 @@ def create_app(
     app.include_router(routes_opportunities.router, prefix="/api")
     app.include_router(routes_opportunity_radar.router, prefix="/api")
     app.include_router(routes_history.router, prefix="/api")
+    app.include_router(routes_instruments.router, prefix="/api")
     app.include_router(routes_pair_spread.router, prefix="/api")
     app.include_router(routes_premium_index.router, prefix="/api")
     app.include_router(routes_minute_signals.router, prefix="/api")

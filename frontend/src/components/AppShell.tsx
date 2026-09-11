@@ -9,6 +9,7 @@ import {
   NotificationOutlined,
   NodeIndexOutlined,
   RadarChartOutlined,
+  SearchOutlined,
   StockOutlined,
   SettingOutlined,
   ThunderboltOutlined
@@ -29,6 +30,7 @@ type PageKey =
   | "funding"
   | "funding-research"
   | "opportunity-radar"
+  | "instrument"
   | "pair-monitor"
   | "symbol-spread"
   | "premium-index"
@@ -63,6 +65,11 @@ const lazyPages: Record<PageKey, LazyPage> = {
   "opportunity-radar": lazy(() =>
     import("../pages/OpportunityRadarPage").then((module) => ({
       default: module.OpportunityRadarPage
+    }))
+  ),
+  instrument: lazy(() =>
+    import("../pages/InstrumentLookupPage").then((module) => ({
+      default: module.InstrumentLookupPage
     }))
   ),
   "pair-monitor": lazy(() =>
@@ -207,6 +214,11 @@ export function AppShell() {
               key: "opportunity-radar",
               icon: <RadarChartOutlined />,
               label: "机会雷达"
+            },
+            {
+              key: "instrument",
+              icon: <SearchOutlined />,
+              label: "标的查询"
             },
             {
               key: "pair-monitor",

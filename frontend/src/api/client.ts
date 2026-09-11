@@ -36,6 +36,7 @@ import type {
   IndexComponentSnapshot,
   IndexComponentSnapshotFilters,
   IndexComponentWatchItem,
+  InstrumentLookupResult,
   OpportunityHistoryStats,
   OpportunityHistoryStatsQuery,
   OpportunityRadarPreview,
@@ -155,6 +156,10 @@ export function listMarkets(filters: MarketFilters = {}): Promise<MarketSnapshot
     }
     return response.json() as Promise<MarketSnapshot[]>;
   });
+}
+
+export function lookupInstrument(symbol: string): Promise<InstrumentLookupResult> {
+  return fetchJson<InstrumentLookupResult>(`/instruments/${encodeURIComponent(symbol)}`);
 }
 
 export async function getHealth(): Promise<HealthStatus> {

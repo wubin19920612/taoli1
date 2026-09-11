@@ -99,6 +99,24 @@ export interface MarketSnapshot {
   symbol_alias_price_multiplier?: number | null;
 }
 
+export interface InstrumentExchangeSnapshot {
+  exchange: string;
+  spot: MarketSnapshot | null;
+  future: MarketSnapshot | null;
+  error: string | null;
+}
+
+export interface InstrumentLookupResult {
+  query: string;
+  symbol: string;
+  base: string;
+  quote: string;
+  observed_at: string | null;
+  exchange_count: number;
+  market_count: number;
+  exchanges: InstrumentExchangeSnapshot[];
+}
+
 export interface SecondLevelSamplingConfig {
   enabled: boolean;
   interval_seconds: number;
