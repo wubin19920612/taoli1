@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -3493,9 +3494,7 @@ def test_live_pilot_auto_create_service_uses_pilot_settings_for_real_service() -
         result = client_backend.added
         assert result == []
 
-    import asyncio
-
-    asyncio.run(app.state.astro_alert_service.handle_live_pilot(make_opportunity()))
+        asyncio.run(app.state.astro_alert_service.handle_live_pilot(make_opportunity()))
 
     assert client_backend.added[0]["status"] is True
     assert client_backend.added[0]["disableOpen"] is False

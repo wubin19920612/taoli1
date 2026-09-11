@@ -7,7 +7,7 @@ from app.core.config import Settings
 from app.models.astro import AstroCardCreateRequest
 from app.models.market import MarketType
 from app.models.opportunity import Opportunity, OpportunityType
-from app.models.settings import AstroCardSettings, LivePilotSettings
+from app.models.settings import AstroCardSettings, LivePilotSettings, RiskSettings
 from app.services.astro_alerts import AstroAlertService
 from app.services.astro_client import AstroClientError
 
@@ -116,6 +116,62 @@ async def test_dry_run_mode_skips_astro_writes() -> None:
     assert result.action == "dry_run"
     assert "dry-run" in result.message
     assert client.list_calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "handler_name",
+    [
+        "handle_alert",
+        "handle_new_listing_alert",
+        "handle_live_pilot",
+        "handle_manual_create",
+    ],
+)
+async def test_global_blacklist_blocks_every_astro_create_path(handler_name: str) -> None:
+    async def load_risk_settings() -> RiskSettings:
+        return RiskSettings(excluded_symbols=["BTCUSDT"])
+
+    client = FakeAstroClient()
+    service = AstroAlertService(
+        client,
+        Settings(
+            astro_alert_auto_create=True,
+            astro_manual_card_create=True,
+            astro_dry_run_only=False,
+        ),
+        live_pilot_settings=LivePilotSettings(enabled=True),
+        risk_settings_loader=load_risk_settings,
+    )
+
+    result = await getattr(service, handler_name)(opportunity())
+
+    assert result.status == "skipped"
+    assert result.action == "excluded_symbol"
+    assert "BTCUSDT 已在全局黑名单" in result.message
+    assert client.list_calls == 0
+    assert not client.added
+
+
+@pytest.mark.asyncio
+async def test_risk_settings_failure_blocks_astro_write() -> None:
+    async def fail_to_load_risk_settings() -> RiskSettings:
+        raise RuntimeError("database unavailable")
+
+    client = FakeAstroClient()
+    service = AstroAlertService(
+        client,
+        Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
+        risk_settings_loader=fail_to_load_risk_settings,
+    )
+
+    result = await service.handle_alert(opportunity())
+
+    assert result.status == "failed"
+    assert result.action == "risk_settings"
+    assert "已阻止创建" in result.message
+    assert client.list_calls == 0
+    assert not client.added
 
 
 @pytest.mark.asyncio

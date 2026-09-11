@@ -858,6 +858,9 @@ def create_app(
         app.state.phone_price_alert_rule_repo = PhonePriceAlertRuleRepository(db)
         app.state.phone_price_alert_event_repo = PhonePriceAlertEventRepository(db)
         app.state.settings_repo = SettingsRepository(db)
+        app.state.astro_alert_service.risk_settings_loader = (
+            app.state.settings_repo.get_risk_settings
+        )
         app.state.history_repo = OpportunityHistoryRepository(db)
         app.state.funding_research_repo = FundingResearchRepository(db)
         app.state.index_component_repo = IndexComponentRepository(db)

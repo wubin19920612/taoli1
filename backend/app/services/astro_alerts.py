@@ -1,11 +1,13 @@
 import asyncio
+from collections.abc import Awaitable, Callable
 from typing import Protocol
 
 from app.core.config import Settings
 from app.models.astro import AstroAlertActionResult, AstroCardCreateRequest
 from app.models.opportunity import Opportunity
-from app.models.settings import AstroCardSettings, LivePilotSettings
+from app.models.settings import AstroCardSettings, LivePilotSettings, RiskSettings
 from app.services.astro_client import AstroClientError
+from app.services.data_filters import symbol_is_excluded
 from app.services.market_labels import astro_exchange_route_variants
 from app.services.astro_planner import AstroPairPlanner, AstroPlannerConfig
 from app.services.risk_labels import is_new_listing_opportunity
@@ -114,6 +116,7 @@ class AstroAlertService:
         new_listing_card_settings: AstroCardSettings | None = None,
         live_pilot_settings: LivePilotSettings | None = None,
         add_restart_delay_seconds: float = 3.0,
+        risk_settings_loader: Callable[[], Awaitable[RiskSettings]] | None = None,
     ):
         self.client = client
         self.settings = settings
@@ -123,6 +126,7 @@ class AstroAlertService:
         self.live_pilot_settings = live_pilot_settings or LivePilotSettings()
         self.alert_auto_create_enabled = settings.astro_alert_auto_create
         self.add_restart_delay_seconds = add_restart_delay_seconds
+        self.risk_settings_loader = risk_settings_loader
 
     async def handle_alert(self, opportunity: Opportunity) -> AstroAlertActionResult:
         return await self._handle(
@@ -178,6 +182,23 @@ class AstroAlertService:
                 action="none",
                 message=disabled_message,
             )
+        if self.risk_settings_loader is not None:
+            try:
+                risk_settings = await self.risk_settings_loader()
+            except Exception as exc:  # noqa: BLE001 - fail closed before writing to Astro.
+                return AstroAlertActionResult(
+                    enabled=True,
+                    status="failed",
+                    action="risk_settings",
+                    message=f"读取全局黑名单失败，已阻止创建 Astro 卡片：{exc}",
+                )
+            if symbol_is_excluded(opportunity.symbol, risk_settings):
+                return AstroAlertActionResult(
+                    enabled=True,
+                    status="skipped",
+                    action="excluded_symbol",
+                    message=f"{opportunity.symbol} 已在全局黑名单，未创建 Astro 卡片",
+                )
         if self.settings.astro_dry_run_only:
             return AstroAlertActionResult(
                 enabled=True,
