@@ -691,6 +691,7 @@ export interface AlertRule {
   name: string;
   enabled: boolean;
   types: OpportunityType[];
+  suppress_sf_negative_funding: boolean;
   include_exchanges: string[];
   exclude_exchanges: string[];
   include_symbols: string[];

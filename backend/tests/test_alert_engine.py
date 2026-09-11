@@ -339,7 +339,7 @@ def test_negative_funding_can_block_fee_adjusted_edge_under_threshold() -> None:
     assert engine.evaluate([opp], [rule], now=datetime.now(UTC)) == []
 
 
-def test_large_price_edge_can_cover_negative_funding() -> None:
+def test_default_rule_blocks_sf_negative_funding_even_with_large_price_edge() -> None:
     engine = AlertEngine()
     rule = AlertRule(
         name="funding adjusted",
@@ -359,9 +359,109 @@ def test_large_price_edge_can_cover_negative_funding() -> None:
         }
     )
 
-    fired = engine.evaluate([opp], [rule], now=datetime.now(UTC))
+    assert engine.evaluate([opp], [rule], now=datetime.now(UTC)) == []
 
-    assert len(fired) == 1
+
+def test_sf_negative_funding_can_be_allowed_by_rule() -> None:
+    engine = AlertEngine()
+    rule = AlertRule(
+        name="funding adjusted",
+        types=["SF"],
+        suppress_sf_negative_funding=False,
+        min_open_spread_pct=0.3,
+        min_fee_adjusted_open_pct=0.25,
+        min_volume_24h_usdt=1_000_000,
+        consecutive_hits=1,
+    )
+    opp = opportunity(spread=0.95).model_copy(
+        update={
+            "type": OpportunityType.SF,
+            "buy_market_type": MarketType.SPOT,
+            "fee_adjusted_open_pct": 0.70,
+            "net_funding_pct": -0.20,
+            "net_funding_next_pct": -0.30,
+        }
+    )
+
+    assert len(engine.evaluate([opp], [rule], now=datetime.now(UTC))) == 1
+
+
+def test_sf_negative_funding_filter_prefers_next_rate_and_falls_back_to_current() -> None:
+    engine = AlertEngine()
+    rule = AlertRule(
+        name="funding filter",
+        types=["SF"],
+        min_open_spread_pct=0.3,
+        min_fee_adjusted_open_pct=0.25,
+        min_volume_24h_usdt=1_000_000,
+        consecutive_hits=1,
+    )
+    base = opportunity(spread=0.95).model_copy(
+        update={
+            "type": OpportunityType.SF,
+            "buy_market_type": MarketType.SPOT,
+            "fee_adjusted_open_pct": 0.70,
+            "funding_rate_buy_pct": None,
+            "funding_rate_sell_pct": -0.10,
+            "funding_next_rate_buy_pct": None,
+            "net_funding_pct": None,
+            "net_funding_next_pct": None,
+        }
+    )
+    predicted_positive = base.model_copy(
+        update={"id": "predicted-positive", "funding_next_rate_sell_pct": 0.05}
+    )
+    current_negative = base.model_copy(
+        update={"id": "current-negative", "funding_next_rate_sell_pct": None}
+    )
+
+    fired = engine.evaluate([predicted_positive, current_negative], [rule], now=datetime.now(UTC))
+
+    assert [match.opportunity.id for match in fired] == ["predicted-positive"]
+
+
+def test_sf_missing_funding_and_ff_negative_funding_are_not_suppressed() -> None:
+    engine = AlertEngine()
+    rule = AlertRule(
+        name="funding filter scope",
+        types=["SF", "FF"],
+        min_open_spread_pct=0.3,
+        min_fee_adjusted_open_pct=0.25,
+        min_volume_24h_usdt=1_000_000,
+        consecutive_hits=1,
+    )
+    missing_sf = opportunity(spread=0.95).model_copy(
+        update={
+            "id": "missing-sf",
+            "type": OpportunityType.SF,
+            "buy_market_type": MarketType.SPOT,
+            "fee_adjusted_open_pct": 0.70,
+            "funding_rate_buy_pct": None,
+            "funding_rate_sell_pct": None,
+            "funding_next_rate_buy_pct": None,
+            "funding_next_rate_sell_pct": None,
+            "net_funding_pct": None,
+            "net_funding_next_pct": None,
+        }
+    )
+    negative_ff = opportunity(spread=0.95).model_copy(
+        update={
+            "id": "negative-ff",
+            "fee_adjusted_open_pct": 0.70,
+            "net_funding_pct": -0.20,
+            "net_funding_next_pct": -0.30,
+        }
+    )
+
+    fired = engine.evaluate([missing_sf, negative_ff], [rule], now=datetime.now(UTC))
+
+    assert {match.opportunity.id for match in fired} == {"missing-sf", "negative-ff"}
+
+
+def test_legacy_alert_rule_defaults_to_suppressing_sf_negative_funding() -> None:
+    rule = AlertRule.model_validate({"name": "legacy"})
+
+    assert rule.suppress_sf_negative_funding is True
 
 
 def test_all_missing_volume_does_not_block_alert_when_rule_requires_volume() -> None:

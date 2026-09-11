@@ -43,6 +43,10 @@ class AlertRule(BaseModel):
         default_factory=lambda: ["SF", "FF", "SS"],
         description="要监控的套利类型。SF=现货买入 / 永续卖出，FF=永续买入 / 永续卖出，SS=现货买入 / 现货卖出。",
     )
+    suppress_sf_negative_funding: bool = Field(
+        default=True,
+        description="SF 卖出侧下一结算周期资金费率为负时不发告警；预测缺失时使用当前费率。",
+    )
     include_exchanges: list[str] = Field(
         default_factory=list,
         description="只匹配这些交易所，留空表示不限制。",

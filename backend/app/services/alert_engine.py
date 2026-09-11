@@ -2,9 +2,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from app.models.alert import AlertRule
-from app.models.opportunity import Opportunity
+from app.models.opportunity import Opportunity, OpportunityType
 from app.models.settings import RiskSettings
 from app.services.alert_metrics import AlertObservation, combined_open_edge_pct, observe_alert_metrics
+from app.services.funding_edge import funding_edge_pct
 from app.services.risk_labels import effective_open_edge_pct, known_volume_24h_usdt
 
 MAX_ALERTS_PER_SYMBOL = 3
@@ -41,6 +42,8 @@ class AlertEngine:
                 continue
             for opportunity in opportunities:
                 key = f"{rule.id}:{opportunity.id}"
+                if _suppresses_sf_negative_funding(rule, opportunity):
+                    continue
                 if not self._matches(rule, opportunity, current, settings):
                     continue
                 active_keys.add(key)
@@ -81,6 +84,14 @@ class AlertEngine:
         settings: RiskSettings,
     ) -> bool:
         return opportunity_matches_rule(rule, opportunity, now, settings)
+
+
+def _suppresses_sf_negative_funding(rule: AlertRule, opportunity: Opportunity) -> bool:
+    return (
+        rule.suppress_sf_negative_funding
+        and opportunity.type == OpportunityType.SF
+        and funding_edge_pct(opportunity) < 0
+    )
 
 
 def opportunity_matches_rule(

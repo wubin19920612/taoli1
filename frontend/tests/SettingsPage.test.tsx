@@ -242,6 +242,8 @@ describe("SettingsPage", () => {
     expect(screen.getAllByText(/info=仅记录，warning=普通告警，critical=强提醒/).length).toBeGreaterThan(0);
     expect(screen.getByText("综合开仓阈值")).toBeTruthy();
     expect(screen.getAllByText(/正资金费率会加分，逆风资金费率会扣分/).length).toBeGreaterThan(0);
+    expect(screen.getByLabelText("SF 负资金费率不通知").getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByText(/卖出侧下一结算周期资金费率小于 0 时不通知/)).toBeTruthy();
     expect(screen.getAllByText(/同一机会需要连续满足多少轮才触发/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/同一机会触发后，多少秒内不重复发送/).length).toBeGreaterThan(0);
     expect(screen.getByText("包含标的")).toBeTruthy();
@@ -260,6 +262,11 @@ describe("SettingsPage", () => {
         expect.objectContaining({ method: "POST" })
       );
     });
+    expect(
+      vi.mocked(fetch).mock.calls.some(([, init]) => {
+        return init?.method === "POST" && String(init.body).includes('"suppress_sf_negative_funding":true');
+      })
+    ).toBe(true);
   }, 15000);
 
   it("edits an existing alert rule in place", async () => {
@@ -269,10 +276,12 @@ describe("SettingsPage", () => {
 
     expect(screen.getByText("编辑告警规则")).toBeTruthy();
     expect((screen.getByLabelText("告警规则名称") as HTMLInputElement).value).toBe("Existing FF");
+    expect(screen.getByLabelText("SF 负资金费率不通知").getAttribute("aria-checked")).toBe("true");
     await waitFor(() => {
       expect((screen.getByLabelText("最低成交额 (K)") as HTMLInputElement).value).toBe("2500");
     });
 
+    await userEvent.click(screen.getByLabelText("SF 负资金费率不通知"));
     const threshold = screen.getByLabelText("开仓阈值");
     await userEvent.clear(threshold);
     await userEvent.type(threshold, "1.1");
@@ -290,6 +299,11 @@ describe("SettingsPage", () => {
     expect(
       vi.mocked(fetch).mock.calls.some(([, init]) => {
         return init?.method === "PUT" && String(init.body).includes('"exclude_symbols":["LEGACYUSDT"]');
+      })
+    ).toBe(true);
+    expect(
+      vi.mocked(fetch).mock.calls.some(([, init]) => {
+        return init?.method === "PUT" && String(init.body).includes('"suppress_sf_negative_funding":false');
       })
     ).toBe(true);
     expect(screen.getByText("新增告警规则")).toBeTruthy();

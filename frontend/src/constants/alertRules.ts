@@ -17,6 +17,7 @@ export const alertRuleFieldHelp = {
   name: "只是给自己识别这条规则的名字。",
   enabled: "关闭后这条规则不会参与评估，也不会发告警。",
   types: "选择要监控的套利类型。",
+  suppress_sf_negative_funding: "仅影响 SF 告警：卖出侧下一结算周期资金费率小于 0 时不通知；优先使用预测值，缺失时回退当前值。资金费率完全缺失时不按此项拦截。",
   include_exchanges: "只匹配这些交易所，留空表示不限制。",
   exclude_exchanges: "这些交易所会被排除。",
   include_symbols: "只匹配这些标的，留空表示不限制。",

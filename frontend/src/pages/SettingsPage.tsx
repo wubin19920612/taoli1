@@ -69,6 +69,7 @@ const defaultRule: AlertRule = {
   name: "",
   enabled: true,
   types: ["SF", "FF", "SS"],
+  suppress_sf_negative_funding: true,
   include_exchanges: [],
   exclude_exchanges: [],
   include_symbols: [],
@@ -186,6 +187,7 @@ function ruleDefaultsForRisk(settings: RiskSettings): AlertRule {
 function ruleToForm(rule: AlertRule): AlertRuleFormValues {
   return {
     ...rule,
+    suppress_sf_negative_funding: rule.suppress_sf_negative_funding ?? true,
     min_volume_24h_k: Math.round(rule.min_volume_24h_usdt / 1000)
   };
 }
@@ -1176,6 +1178,14 @@ export function SettingsPage() {
             </Form.Item>
             <Form.Item label="套利类型" name="types" rules={[{ required: true }]} help={alertRuleFieldHelp.types}>
               <Select mode="multiple" options={alertTypeOptions} />
+            </Form.Item>
+            <Form.Item
+              label="SF 负资金费率不通知"
+              name="suppress_sf_negative_funding"
+              valuePropName="checked"
+              help={alertRuleFieldHelp.suppress_sf_negative_funding}
+            >
+              <Switch checkedChildren="不通知" unCheckedChildren="允许通知" />
             </Form.Item>
             <Form.Item
               label="包含交易所"
