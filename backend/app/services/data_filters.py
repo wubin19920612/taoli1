@@ -18,15 +18,18 @@ def excluded_symbol_set(settings: RiskSettings) -> set[str]:
     return {normalize_symbol(item) for item in settings.excluded_symbols}
 
 
+def symbol_is_excluded(symbol: str, settings: RiskSettings) -> bool:
+    return normalize_symbol(symbol) in excluded_symbol_set(settings)
+
+
 def ignored_exchange_set(settings: RiskSettings) -> set[str]:
     return {normalize_exchange(item) for item in settings.ignored_exchanges}
 
 
 def market_is_excluded(market: MarketSnapshot, settings: RiskSettings) -> bool:
-    excluded_symbols = excluded_symbol_set(settings)
     ignored_exchanges = ignored_exchange_set(settings)
     return (
-        normalize_symbol(market.symbol) in excluded_symbols
+        symbol_is_excluded(market.symbol, settings)
         or normalize_exchange(market.exchange) in ignored_exchanges
     )
 
@@ -36,8 +39,7 @@ def opportunity_is_excluded(
     settings: RiskSettings,
     now: datetime | None = None,
 ) -> bool:
-    excluded_symbols = excluded_symbol_set(settings)
-    if normalize_symbol(opportunity.symbol) in excluded_symbols:
+    if symbol_is_excluded(opportunity.symbol, settings):
         return True
     ignored_exchanges = ignored_exchange_set(settings)
     return (

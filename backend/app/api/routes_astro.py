@@ -8,6 +8,7 @@ from app.models.orderbook import DepthValidationResult
 from app.models.settings import AstroCardSettings, RiskSettings
 from app.core.security import dashboard_password_header, verify_dashboard_password
 from app.services.astro_client import AstroClientError, AstroSdkClient
+from app.services.data_filters import symbol_is_excluded
 from app.services.astro_planner import AstroPairPlanner, AstroPlannerConfig
 
 router = APIRouter(prefix="/astro")
@@ -171,6 +172,16 @@ async def create_astro_card_from_opportunity(
 ) -> AstroAlertActionResult:
     _require_dashboard_password(request, password)
     opportunity = _find_opportunity(request, opportunity_id)
+    risk_settings = await _effective_risk_settings(request)
+    if symbol_is_excluded(opportunity.symbol, risk_settings):
+        return AstroAlertActionResult(
+            enabled=True,
+            status="skipped",
+            action="excluded_symbol",
+            message=f"{opportunity.symbol} 已在全局黑名单，未创建 Astro 卡片",
+            pair_name=opportunity.symbol.removesuffix("USDT"),
+            pair_type=str(opportunity.type),
+        )
     settings_repo = _optional_settings_repo(request)
     saved_settings = await _effective_astro_card_settings(request)
     effective_settings = _settings_with_create_overrides(saved_settings, card_request)
@@ -191,7 +202,6 @@ async def create_astro_card_from_opportunity(
         raise HTTPException(status_code=503, detail="Astro submit service is not ready")
     if hasattr(service, "card_settings"):
         service.card_settings = saved_settings
-    risk_settings = await _effective_risk_settings(request)
     depth_failure = await _validate_order_book_before_create(
         request,
         opportunity,

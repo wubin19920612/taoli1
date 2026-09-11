@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 import pytest
 from fastapi import FastAPI
 
-from app.main import _run_alert_loop
+from app.main import _handle_new_listing_astro_alert, _run_alert_loop
 from app.models.alert import AlertEvent, AlertRule
 from app.models.announcement import AnnouncementKind, ExchangeAnnouncement
 from app.models.astro import AstroAlertActionResult
@@ -84,14 +84,16 @@ class FakeSettingsRepo:
         live_pilot_settings: LivePilotSettings | None = None,
         alert_template: AlertMessageTemplateSettings | None = None,
         astro_new_listing_card_settings: AstroCardSettings | None = None,
+        risk_settings: RiskSettings | None = None,
     ):
         self.astro_card_settings = astro_card_settings
         self.astro_new_listing_card_settings = astro_new_listing_card_settings
         self.live_pilot_settings = live_pilot_settings or LivePilotSettings()
         self.alert_template = alert_template or AlertMessageTemplateSettings()
+        self.risk_settings = risk_settings or RiskSettings()
 
     async def get_risk_settings(self) -> RiskSettings:
-        return RiskSettings()
+        return self.risk_settings
 
     async def get_alert_message_template(self) -> AlertMessageTemplateSettings:
         return self.alert_template
@@ -261,6 +263,30 @@ class FailingAstroAlertService:
 class BlankExceptionAstroAlertService:
     async def handle_alert(self, opportunity: Opportunity) -> AstroAlertActionResult:
         raise TimeoutError()
+
+
+@pytest.mark.asyncio
+async def test_new_listing_astro_handler_skips_globally_blocked_symbol() -> None:
+    app = FastAPI()
+    service = FakeAstroAlertService()
+    app.state.settings_repo = FakeSettingsRepo(
+        risk_settings=RiskSettings(excluded_symbols=["PURRUSDT"])
+    )
+    app.state.astro_alert_service = service
+    blocked = opportunity().model_copy(
+        update={
+            "id": "purr-new-listing",
+            "symbol": "PURRUSDT",
+            "min_open_depth_usdt": 100,
+        }
+    )
+
+    result = await _handle_new_listing_astro_alert(app, blocked)
+
+    assert result.status == "skipped"
+    assert result.action == "excluded_symbol"
+    assert "已在全局黑名单" in result.message
+    assert service.calls == []
 
 
 @pytest.mark.asyncio

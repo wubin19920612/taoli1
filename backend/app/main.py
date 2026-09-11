@@ -66,7 +66,7 @@ from app.services.astro_alerts import AstroAlertService, live_pilot_card_setting
 from app.services.astro_client import AstroSdkClient, AstroSdkConfig
 from app.services.astro_planner import AstroPairPlanner, AstroPlannerConfig
 from app.services.collector import MarketCollector, default_exchange_adapters, run_collector_loop
-from app.services.data_filters import filter_markets, filter_opportunities
+from app.services.data_filters import filter_markets, filter_opportunities, symbol_is_excluded
 from app.services.feishu import FeishuConfig, FeishuNotifier
 from app.services.funding_research import (
     FundingResearchRepository,
@@ -189,6 +189,20 @@ async def _refresh_astro_runtime_settings(app: FastAPI, settings_repo: SettingsR
 
 async def _handle_new_listing_astro_alert(app: FastAPI, opportunity: Opportunity) -> AstroAlertActionResult:
     settings_repo: SettingsRepository | None = getattr(app.state, "settings_repo", None)
+    risk_settings = (
+        await settings_repo.get_risk_settings()
+        if settings_repo is not None
+        else RiskSettings()
+    )
+    if symbol_is_excluded(opportunity.symbol, risk_settings):
+        return AstroAlertActionResult(
+            enabled=True,
+            status="skipped",
+            action="excluded_symbol",
+            message=f"{opportunity.symbol} 已在全局黑名单，未创建 Astro 卡片",
+            pair_name=opportunity.symbol.removesuffix("USDT"),
+            pair_type=str(opportunity.type),
+        )
     await _refresh_astro_runtime_settings(app, settings_repo)
     astro_alert_service: AstroAlertService | None = getattr(app.state, "astro_alert_service", None)
     if astro_alert_service is None:

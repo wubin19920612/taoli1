@@ -3257,6 +3257,33 @@ def test_astro_manual_card_create_endpoint_returns_action_result_for_seeded_oppo
     assert service.requests[0] is None
 
 
+def test_astro_manual_card_create_endpoint_skips_globally_blocked_symbol() -> None:
+    store = SnapshotStore()
+    store.set_opportunities([make_opportunity()])
+    app = create_app(
+        snapshot_store=store,
+        settings=Settings(dashboard_password="secret", astro_manual_card_create=True),
+    )
+    service = FakeAstroSubmitService()
+    app.state.settings_repo = FakeSettingsRepository(
+        RiskSettings(excluded_symbols=["BTCUSDT"])
+    )
+    app.state.astro_alert_service = service
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/astro/opportunities/opp/card",
+        headers={"X-Dashboard-Password": "secret"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "skipped"
+    assert payload["action"] == "excluded_symbol"
+    assert "已在全局黑名单" in payload["message"]
+    assert service.calls == []
+
+
 def test_astro_manual_card_create_endpoint_forwards_overrides_and_saves_defaults() -> None:
     store = SnapshotStore()
     store.set_opportunities([make_opportunity()])

@@ -479,6 +479,7 @@ body {
 .blocked-strip {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
   min-width: 0;
   padding: 8px 12px;
@@ -491,6 +492,11 @@ body {
   flex: 0 0 auto;
   color: #66736f;
   font-size: 13px;
+}
+
+.blocked-strip-input {
+  flex: 0 0 180px;
+  width: 180px;
 }
 
 .blocked-strip-list {

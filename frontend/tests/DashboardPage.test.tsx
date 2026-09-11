@@ -272,6 +272,54 @@ describe("DashboardPage", () => {
     });
   });
 
+  it("adds a manually entered symbol when it is absent from opportunities", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/settings/risk") && init?.method === "PUT") {
+          return Response.json(JSON.parse(String(init.body)));
+        }
+        if (url.includes("/settings/risk")) {
+          return Response.json({
+            min_volume_24h_usdt: 100000,
+            stale_after_seconds: 30,
+            huge_spread_pct: 10,
+            wide_spread_pct: 3,
+            mark_index_deviation_pct: 1,
+            funding_against_pct: 0.01,
+            ticker_collision_symbols: [],
+            excluded_symbols: [],
+            ignored_exchanges: []
+          });
+        }
+        if (url.includes("/health")) {
+          return Response.json({ status: "ok", markets: 0, opportunities: 0, exchange_errors: {} });
+        }
+        if (url.includes("/opportunities")) {
+          return Response.json([]);
+        }
+        return Response.json({});
+      })
+    );
+
+    render(<DashboardPage />);
+
+    await userEvent.type(await screen.findByRole("textbox", { name: "输入要屏蔽的标的" }), "purr");
+    await userEvent.click(screen.getByRole("button", { name: "屏蔽输入标的" }));
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/settings/risk"),
+        expect.objectContaining({
+          method: "PUT",
+          body: expect.stringContaining('"excluded_symbols":["PURRUSDT"]')
+        })
+      );
+    });
+    expect(await screen.findByRole("button", { name: "取消屏蔽 PURRUSDT" })).toBeTruthy();
+  });
+
   it("removes a symbol from the global blacklist from the dashboard", async () => {
     vi.stubGlobal(
       "fetch",
