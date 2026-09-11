@@ -21,6 +21,7 @@ describe("AnnouncementsPage", () => {
             record_exchanges: ["binance", "okx", "bybit", "gate", "bitget", "hyperliquid"],
             alert_exchanges: ["bybit"],
             listing_delisting_alerts_enabled: true,
+            launchpool_alerts_enabled: true,
             bootstrap_alerts_enabled: false,
             alert_max_age_minutes: 30,
             event_reminders_enabled: true,
@@ -70,6 +71,27 @@ describe("AnnouncementsPage", () => {
               alert_status: "sent",
               event_reminder_status: "pending",
               event_reminder_sent_at: null
+            },
+            {
+              id: "ann-2",
+              exchange: "gate",
+              announcement_id: "gate-launchpool-363",
+              kind: "launchpool",
+              title: "Gate Launchpool Project #363",
+              url: "https://www.gate.com/announcements/article/51430",
+              source: "gate-next-announcements",
+              category: "newspotlistings",
+              symbols: [],
+              market_type: null,
+              asset_research: [],
+              event_time: null,
+              event_schedule: [],
+              summary: "launchpool",
+              published_at: "2026-05-30T08:05:00Z",
+              fetched_at: "2026-05-30T08:06:00Z",
+              alert_status: "sent",
+              event_reminder_status: "not_applicable",
+              event_reminder_sent_at: null
             }
           ]);
         }
@@ -81,15 +103,19 @@ describe("AnnouncementsPage", () => {
   it("loads announcement settings and renders recorded listing announcements", async () => {
     render(<AnnouncementsPage />);
 
-    expect(await screen.findByText("上币/下币公告监控")).toBeTruthy();
+    expect(await screen.findByText("交易所公告监控")).toBeTruthy();
     expect(await screen.findByText("上/下币告警 开启")).toBeTruthy();
+    expect(await screen.findByText("Launchpool 告警 开启")).toBeTruthy();
     expect(await screen.findByText("New listing: WDCUSDT Perpetual Contract")).toBeTruthy();
     expect(await screen.findByText("WDCUSDT")).toBeTruthy();
     expect(await screen.findByText("合约")).toBeTruthy();
     expect(await screen.findByText("1/1 已找到")).toBeTruthy();
     expect(await screen.findByText("新币上架")).toBeTruthy();
     expect(await screen.findByText("待提醒")).toBeTruthy();
-    fireEvent.click(screen.getByLabelText("Expand row"));
+    expect(await screen.findByText("Gate Launchpool Project #363")).toBeTruthy();
+    expect((await screen.findAllByText("Launchpool")).length).toBeGreaterThanOrEqual(1);
+    expect(await screen.findByText("Launchpool 活动")).toBeTruthy();
+    fireEvent.click(screen.getAllByLabelText("Expand row")[0]);
     expect(await screen.findByText("完整标题")).toBeTruthy();
     expect(await screen.findByText("结构化摘要")).toBeTruthy();
     expect(await screen.findByText("Worldcoin Data Chain")).toBeTruthy();
@@ -126,6 +152,7 @@ describe("AnnouncementsPage", () => {
         record_exchanges: ["binance", "okx", "bybit", "gate", "bitget", "hyperliquid"],
         alert_exchanges: ["bybit"],
         listing_delisting_alerts_enabled: true,
+        launchpool_alerts_enabled: true,
         bootstrap_alerts_enabled: false,
         alert_max_age_minutes: 30,
         event_reminders_enabled: true,

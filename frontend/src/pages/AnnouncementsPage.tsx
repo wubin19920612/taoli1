@@ -28,6 +28,7 @@ const defaultAnnouncementSettings: AnnouncementSettings = {
   record_exchanges: ["binance", "okx", "bybit", "gate", "bitget", "hyperliquid"],
   alert_exchanges: [],
   listing_delisting_alerts_enabled: true,
+  launchpool_alerts_enabled: true,
   bootstrap_alerts_enabled: false,
   event_reminders_enabled: true,
   event_reminder_minutes_before: 30
@@ -46,6 +47,7 @@ const kindOptions: Array<{ label: string; value: "" | AnnouncementKind }> = [
   { label: "全部类型", value: "" },
   { label: "上币", value: "listing" },
   { label: "下币", value: "delisting" },
+  { label: "Launchpool", value: "launchpool" },
   { label: "其他", value: "other" }
 ];
 
@@ -56,7 +58,9 @@ function normalizeAnnouncementSettings(values?: Partial<AnnouncementSettings>): 
     record_exchanges: values?.record_exchanges ?? defaultAnnouncementSettings.record_exchanges,
     alert_exchanges: values?.alert_exchanges ?? defaultAnnouncementSettings.alert_exchanges,
     listing_delisting_alerts_enabled:
-      values?.listing_delisting_alerts_enabled ?? defaultAnnouncementSettings.listing_delisting_alerts_enabled
+      values?.listing_delisting_alerts_enabled ?? defaultAnnouncementSettings.listing_delisting_alerts_enabled,
+    launchpool_alerts_enabled:
+      values?.launchpool_alerts_enabled ?? defaultAnnouncementSettings.launchpool_alerts_enabled
   };
 }
 
@@ -81,11 +85,13 @@ function kindTag(kind: AnnouncementKind) {
   const labels: Record<AnnouncementKind, string> = {
     listing: "上币",
     delisting: "下币",
+    launchpool: "Launchpool",
     other: "其他"
   };
   const colors: Record<AnnouncementKind, string> = {
     listing: "green",
     delisting: "red",
+    launchpool: "gold",
     other: "default"
   };
   return <Tag color={colors[kind]}>{labels[kind]}</Tag>;
@@ -201,6 +207,9 @@ function marketTypeText(row: ExchangeAnnouncement): string {
 
 function categoryLabel(row: ExchangeAnnouncement): string {
   const value = (row.category || "").toLowerCase();
+  if (row.kind === "launchpool") {
+    return value.includes("poolx") ? "PoolX 活动" : "Launchpool 活动";
+  }
   if (value.includes("baseline")) {
     return "当前市场基线";
   }
@@ -421,7 +430,13 @@ function rowSummary(row: ExchangeAnnouncement): string {
   if (pieces.length === 0) {
     return row.title;
   }
-  const action = row.kind === "listing" ? "上币" : row.kind === "delisting" ? "下币" : "公告";
+  const actionLabels: Record<AnnouncementKind, string> = {
+    listing: "上币",
+    delisting: "下币",
+    launchpool: "Launchpool",
+    other: "公告"
+  };
+  const action = actionLabels[row.kind];
   return `${action}: ${pieces.join("；")}`;
 }
 
@@ -432,7 +447,7 @@ const columns: ColumnsType<ExchangeAnnouncement> = [
   { title: "标的/币种", dataIndex: "symbols", width: 180, render: symbolTags },
   { title: "市场", dataIndex: "market_type", width: 132, render: (_value, row) => marketTypeTag(row) },
   { title: "公开资料", dataIndex: "asset_research", width: 142, render: (_value, row) => researchSummary(row) },
-  { title: "上/下币时间(UTC+8)", dataIndex: "event_time", width: 168, render: (_value, row) => eventTimeText(row) },
+  { title: "事件时间(UTC+8)", dataIndex: "event_time", width: 168, render: (_value, row) => eventTimeText(row) },
   {
     title: "公告摘要",
     dataIndex: "title",
@@ -472,7 +487,7 @@ function announcementDetails(row: ExchangeAnnouncement) {
         <Descriptions.Item label="市场">{marketTypeText(row)}</Descriptions.Item>
         <Descriptions.Item label="类型">{kindTag(row.kind)}</Descriptions.Item>
         <Descriptions.Item label="公告时间">{formatUtcPlus8(row.published_at)} UTC+8</Descriptions.Item>
-        <Descriptions.Item label="上/下币时间">{eventTimeText(row)}</Descriptions.Item>
+        <Descriptions.Item label="事件时间">{eventTimeText(row)}</Descriptions.Item>
         {eventSchedule(row).length > 0 ? (
           <Descriptions.Item label="逐项时间">{eventScheduleList(row)}</Descriptions.Item>
         ) : null}
@@ -568,6 +583,7 @@ export function AnnouncementsPage() {
   const alertExchangeSet = new Set(settingsPreview.alert_exchanges);
   const recordExchangeSet = new Set(settingsPreview.record_exchanges);
   const listingDelistingAlertEnabled = settingsPreview.listing_delisting_alerts_enabled;
+  const launchpoolAlertEnabled = settingsPreview.launchpool_alerts_enabled;
 
   return (
     <div className="page announcements-page">
@@ -575,14 +591,17 @@ export function AnnouncementsPage() {
       <section className="panel panel-wide announcements-settings-panel">
         <div className="announcements-settings-head">
           <div>
-            <Typography.Title level={4}>上币/下币公告监控</Typography.Title>
+            <Typography.Title level={4}>交易所公告监控</Typography.Title>
             <Typography.Text type="secondary">
-              记录交易所公告并按配置发送飞书告警，当前支持 Binance、OKX、Bybit、Gate、Bitget、Hyperliquid 的公开数据源。
+              统一记录上币、下币、Launchpool 等交易所公告并按配置发送飞书告警，当前支持 Binance、OKX、Bybit、Gate、Bitget、Hyperliquid 的公开数据源。
             </Typography.Text>
           </div>
           <Space wrap>
             <Tag color={listingDelistingAlertEnabled ? "green" : "default"}>
               上/下币告警 {listingDelistingAlertEnabled ? "开启" : "关闭"}
+            </Tag>
+            <Tag color={launchpoolAlertEnabled ? "gold" : "default"}>
+              Launchpool 告警 {launchpoolAlertEnabled ? "开启" : "关闭"}
             </Tag>
             {exchangeOptions.map((item) => (
               <Tag
@@ -600,7 +619,7 @@ export function AnnouncementsPage() {
           type={settingsPreview.enabled ? "info" : "warning"}
           showIcon
           message={settingsPreview.enabled ? "公告轮询已启用" : "公告轮询已关闭"}
-          description="record_exchanges 控制哪些交易所会写入公告记录，alert_exchanges 控制哪些交易所的新公告和事件到点提醒会发飞书。上/下币公告默认也会同步飞书，可通过上面的开关单独关闭；只有能识别出明确上/下币时间的公告才会触发到点提醒。"
+          description="record_exchanges 控制哪些交易所会写入公告记录，alert_exchanges 控制哪些交易所的新公告和事件到点提醒会发飞书。上/下币和 Launchpool 公告默认也会同步飞书，可分别关闭；只有能识别出明确上/下币时间的公告才会触发到点提醒。"
         />
         <Form
           form={form}
@@ -614,6 +633,9 @@ export function AnnouncementsPage() {
               <Switch />
             </Form.Item>
             <Form.Item label="上/下币公告飞书提醒" name="listing_delisting_alerts_enabled" valuePropName="checked">
+              <Switch />
+            </Form.Item>
+            <Form.Item label="Launchpool 公告飞书提醒" name="launchpool_alerts_enabled" valuePropName="checked">
               <Switch />
             </Form.Item>
             <Form.Item label="首次启动也告警" name="bootstrap_alerts_enabled" valuePropName="checked">

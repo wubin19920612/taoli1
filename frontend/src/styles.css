@@ -5052,6 +5052,10 @@ body {
     padding-top: 44px;
   }
 
+  .announcements-page {
+    padding-top: 44px;
+  }
+
   .toolbar {
     align-items: stretch;
     flex-direction: column;

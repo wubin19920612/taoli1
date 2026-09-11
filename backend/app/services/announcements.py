@@ -37,6 +37,14 @@ ANNOUNCEMENT_EXCHANGE_OPTIONS = [
     {"label": "Hyperliquid", "value": "hyperliquid"},
 ]
 
+LAUNCHPOOL_KEYWORDS = (
+    "launchpool",
+    "launch pool",
+    "launch_pool",
+    "launchhub",
+    "launch hub",
+    "poolx",
+)
 LISTING_KEYWORDS = (
     "list ",
     "lists ",
@@ -318,6 +326,10 @@ def _contains_keyword(text: str, keywords: tuple[str, ...]) -> bool:
 def classify_announcement(title: str, category: str | None = None) -> AnnouncementKind:
     category_value = (category or "").lower()
     title_value = title.lower()
+    if _contains_keyword(category_value, LAUNCHPOOL_KEYWORDS) or _contains_keyword(
+        title_value, LAUNCHPOOL_KEYWORDS
+    ):
+        return AnnouncementKind.LAUNCHPOOL
     if "delist" in category_value or _contains_keyword(title_value, DELISTING_KEYWORDS):
         return AnnouncementKind.DELISTING
     if (
@@ -386,6 +398,8 @@ def _symbols_from_uppercase_tokens(title: str) -> list[str]:
         "INITIAL",
         "IPO",
         "LAUNCH",
+        "LAUNCHHUB",
+        "LAUNCHPOOL",
         "LIST",
         "LISTING",
         "M",
@@ -395,6 +409,7 @@ def _symbols_from_uppercase_tokens(title: str) -> list[str]:
         "OFFICIAL",
         "OKX",
         "PERPETUAL",
+        "POOLX",
         "REMOVE",
         "SPOT",
         "THE",
@@ -904,6 +919,7 @@ def build_announcement_alert_message(announcement: ExchangeAnnouncement) -> str:
     kind_label = {
         AnnouncementKind.LISTING: "上币",
         AnnouncementKind.DELISTING: "下币",
+        AnnouncementKind.LAUNCHPOOL: "Launchpool",
         AnnouncementKind.OTHER: "公告",
     }[announcement.kind]
     lines = [
@@ -941,6 +957,7 @@ def build_announcement_event_reminder_message(
     kind_label = {
         AnnouncementKind.LISTING: "上币",
         AnnouncementKind.DELISTING: "下币",
+        AnnouncementKind.LAUNCHPOOL: "Launchpool",
         AnnouncementKind.OTHER: "公告",
     }[announcement.kind]
     lines = [
@@ -1226,7 +1243,11 @@ class OKXAnnouncementProvider(HttpAnnouncementProvider):
                 published_at=published_at,
                 content=_clean_text(row.get("desc") or row.get("summary") or row.get("brief")),
             )
-            if announcement is not None and announcement.kind in {AnnouncementKind.LISTING, AnnouncementKind.DELISTING}:
+            if announcement is not None and announcement.kind in {
+                AnnouncementKind.LISTING,
+                AnnouncementKind.DELISTING,
+                AnnouncementKind.LAUNCHPOOL,
+            }:
                 announcements.append(announcement)
         return announcements
 
@@ -1244,7 +1265,11 @@ class OKXAnnouncementProvider(HttpAnnouncementProvider):
                 continue
             title = _clean_text(row.get("title") or row.get("annTitle") or row.get("name"))
             category = _clean_text(row.get("annType") or row.get("category") or row.get("type")) or fallback_category
-            if classify_announcement(title, category) not in {AnnouncementKind.LISTING, AnnouncementKind.DELISTING}:
+            if classify_announcement(title, category) not in {
+                AnnouncementKind.LISTING,
+                AnnouncementKind.DELISTING,
+                AnnouncementKind.LAUNCHPOOL,
+            }:
                 continue
             url = self._row_url(row)
             if not url:
@@ -1405,26 +1430,44 @@ class BitgetAnnouncementProvider(HttpAnnouncementProvider):
     exchange = "bitget"
     source = "bitget-public-annoucements"
     base_url = "https://api.bitget.com/api/v2/public/annoucements"
-    ann_types = ("coin_listings", "symbol_delisting")
+    ann_types = ("coin_listings", "symbol_delisting", "latest_news")
 
     async def fetch(self) -> list[ExchangeAnnouncement]:
         announcements: list[ExchangeAnnouncement] = []
         for ann_type in self.ann_types:
             query = f"language=en_US&annType={quote_plus(ann_type)}&limit=10"
             payload = await self._get_json(f"{self.base_url}?{query}")
-            content_by_key = await self._fetch_detail_content_for_payload(payload)
+            content_by_key = await self._fetch_detail_content_for_payload(payload, ann_type)
             parsed = self._parse_payload(payload, ann_type, content_by_key=content_by_key)
             announcements.extend(
                 announcement
                 for announcement in parsed
-                if announcement.kind in {AnnouncementKind.LISTING, AnnouncementKind.DELISTING}
+                if announcement.kind in {
+                    AnnouncementKind.LISTING,
+                    AnnouncementKind.DELISTING,
+                    AnnouncementKind.LAUNCHPOOL,
+                }
             )
         return announcements
 
-    async def _fetch_detail_content_for_payload(self, payload: object) -> dict[str, str]:
+    async def _fetch_detail_content_for_payload(
+        self,
+        payload: object,
+        fallback_category: str,
+    ) -> dict[str, str]:
         content_by_key: dict[str, str] = {}
         for row in self._rows_from_payload(payload):
             title = _clean_text(row.get("annTitle") or row.get("title"))
+            category = (
+                _clean_text(row.get("annType") or row.get("type") or row.get("category"))
+                or fallback_category
+            )
+            if classify_announcement(title, category) not in {
+                AnnouncementKind.LISTING,
+                AnnouncementKind.DELISTING,
+                AnnouncementKind.LAUNCHPOOL,
+            }:
+                continue
             url = _clean_text(row.get("annUrl") or row.get("url"))
             if not url or not self._should_fetch_detail_content(title):
                 continue
@@ -1543,7 +1586,11 @@ class GateAnnouncementProvider(HttpAnnouncementProvider):
             kind = classify_announcement(title, category)
             if fallback_category == "delisted" and kind != AnnouncementKind.DELISTING:
                 continue
-            if fallback_category != "delisted" and not self._is_listing_title(title):
+            if (
+                fallback_category != "delisted"
+                and kind != AnnouncementKind.LAUNCHPOOL
+                and not self._is_listing_title(title)
+            ):
                 continue
             article_id = _clean_text(row.get("id"))
             url = _article_url(self.base_url, _clean_text(row.get("url")), article_id)
@@ -1787,9 +1834,17 @@ class AnnouncementMonitor:
                 settings.listing_delisting_alerts_enabled
                 and announcement.kind in (AnnouncementKind.LISTING, AnnouncementKind.DELISTING)
             )
+            should_alert_launchpool = (
+                settings.launchpool_alerts_enabled
+                and announcement.kind == AnnouncementKind.LAUNCHPOOL
+            )
             alert_status = (
                 "pending"
-                if announcement.exchange in alert_exchanges or should_alert_listing_delisting
+                if (
+                    announcement.exchange in alert_exchanges
+                    or should_alert_listing_delisting
+                    or should_alert_launchpool
+                )
                 else "muted"
             )
             watermark = source_watermarks[key[:2]]

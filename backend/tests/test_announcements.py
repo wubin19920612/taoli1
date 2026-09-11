@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 
+import httpx
 import pytest
 
 from app.db.database import connect_database
@@ -57,6 +58,18 @@ def announcement(
 
 
 def test_classify_announcement_uses_category_and_title_fallbacks() -> None:
+    assert (
+        classify_announcement("Gate Launchpool Project #363", "newspotlistings")
+        == AnnouncementKind.LAUNCHPOOL
+    )
+    assert (
+        classify_announcement("PoolX will launch a new mining pool", "latest_news")
+        == AnnouncementKind.LAUNCHPOOL
+    )
+    assert (
+        classify_announcement("New project on LaunchHub", "activities")
+        == AnnouncementKind.LAUNCHPOOL
+    )
     assert classify_announcement("Something ordinary", "announcements-new-listings") == AnnouncementKind.LISTING
     assert classify_announcement("Delisting of DOGUSDT Perpetual Contract") == AnnouncementKind.DELISTING
     assert classify_announcement("Bitget Spot Cross Margin adds GENIUS/USDT") == AnnouncementKind.LISTING
@@ -163,6 +176,21 @@ def test_announcement_event_reminder_message_is_readable() -> None:
             "链接: https://www.okx.com/help/test",
         ]
     )
+
+
+def test_launchpool_alert_message_uses_launchpool_label() -> None:
+    message = build_announcement_alert_message(
+        announcement(
+            exchange="gate",
+            title="Gate Launchpool Project #363",
+            kind=AnnouncementKind.LAUNCHPOOL,
+            category="newspotlistings",
+            url="https://www.gate.com/announcements/article/51430",
+        )
+    )
+
+    assert "[GATE] Launchpool公告" in message
+    assert "标题: Gate Launchpool Project #363" in message
 
 
 @pytest.mark.asyncio
@@ -279,6 +307,7 @@ async def test_settings_repository_round_trips_announcement_settings() -> None:
         defaults = await repo.get_announcement_settings()
         assert defaults.record_exchanges == ["binance", "okx", "bybit", "gate", "bitget", "hyperliquid"]
         assert defaults.listing_delisting_alerts_enabled is True
+        assert defaults.launchpool_alerts_enabled is True
         assert defaults.alert_max_age_minutes == 30
 
         settings = AnnouncementSettings(
@@ -287,6 +316,7 @@ async def test_settings_repository_round_trips_announcement_settings() -> None:
             record_exchanges=["OKX", "okx", "bybit"],
             alert_exchanges=["BYBIT"],
             listing_delisting_alerts_enabled=False,
+            launchpool_alerts_enabled=False,
             bootstrap_alerts_enabled=True,
             alert_max_age_minutes=45,
             event_reminders_enabled=False,
@@ -299,6 +329,7 @@ async def test_settings_repository_round_trips_announcement_settings() -> None:
         assert loaded.record_exchanges == ["okx", "bybit"]
         assert loaded.alert_exchanges == ["bybit"]
         assert loaded.listing_delisting_alerts_enabled is False
+        assert loaded.launchpool_alerts_enabled is False
         assert loaded.bootstrap_alerts_enabled is True
         assert loaded.alert_max_age_minutes == 45
         assert loaded.event_reminders_enabled is False
@@ -378,6 +409,81 @@ async def test_monitor_alerts_listing_delisting_announcements_by_default() -> No
         assert created[0].alert_status == "sent"
         assert len(alerts) == 1
         assert "[OKX] 上币公告" in alerts[0]
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_monitor_alerts_launchpool_announcements_by_default() -> None:
+    db = await connect_database(":memory:")
+    alerts: list[str] = []
+    try:
+        await initialize_schema(db)
+        repo = AnnouncementRepository(db)
+        monitor = AnnouncementMonitor(repo, alert_sender=alerts.append, now_fn=lambda: BASE_TIME)
+        await repo.create_if_new(
+            announcement(
+                exchange="gate",
+                announcement_id="source-baseline",
+                published_at=BASE_TIME - timedelta(minutes=1),
+            ).model_copy(update={"alert_status": "muted"})
+        )
+        launchpool = announcement(
+            exchange="gate",
+            announcement_id="gate-launchpool-363",
+            kind=AnnouncementKind.LAUNCHPOOL,
+            title="Gate Launchpool Project #363",
+            category="newspotlistings",
+        ).model_copy(update={"source": "test-source"})
+
+        created = await monitor.process(
+            [launchpool],
+            AnnouncementSettings(record_exchanges=["gate"], alert_exchanges=[]),
+            bootstrap=False,
+        )
+
+        assert len(created) == 1
+        assert created[0].alert_status == "sent"
+        assert len(alerts) == 1
+        assert "[GATE] Launchpool公告" in alerts[0]
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_monitor_can_mute_launchpool_announcements() -> None:
+    db = await connect_database(":memory:")
+    alerts: list[str] = []
+    try:
+        await initialize_schema(db)
+        repo = AnnouncementRepository(db)
+        monitor = AnnouncementMonitor(repo, alert_sender=alerts.append, now_fn=lambda: BASE_TIME)
+        await repo.create_if_new(
+            announcement(
+                announcement_id="source-baseline",
+                published_at=BASE_TIME - timedelta(minutes=1),
+            ).model_copy(update={"alert_status": "muted"})
+        )
+        launchpool = announcement(
+            announcement_id="launchpool-muted",
+            kind=AnnouncementKind.LAUNCHPOOL,
+            title="PoolX launches a new mining pool",
+            category="latest_news",
+        )
+
+        created = await monitor.process(
+            [launchpool],
+            AnnouncementSettings(
+                record_exchanges=["okx"],
+                alert_exchanges=[],
+                launchpool_alerts_enabled=False,
+            ),
+            bootstrap=False,
+        )
+
+        assert len(created) == 1
+        assert created[0].alert_status == "muted"
+        assert alerts == []
     finally:
         await db.close()
 
@@ -857,6 +963,32 @@ def test_bitget_provider_parses_and_classifies_payload() -> None:
     assert [row.kind for row in rows] == [AnnouncementKind.LISTING, AnnouncementKind.DELISTING]
     assert rows[0].category == "coin_listings:margin"
 
+    launchpool_payload = {
+        "code": "00000",
+        "data": [
+            {
+                "annId": "12560603884672",
+                "annTitle": "Bitget Launchpool: stake BGB to mine SOMI",
+                "annUrl": "https://www.bitget.com/en/support/articles/12560603884672",
+                "cTime": "1780052400000",
+                "annType": "latest_news",
+            },
+            {
+                "annId": "12560603884673",
+                "annTitle": "Bitget publishes monthly proof of reserves",
+                "annUrl": "https://www.bitget.com/en/support/articles/12560603884673",
+                "cTime": "1780052400000",
+                "annType": "latest_news",
+            },
+        ],
+    }
+    launchpool_rows = provider._parse_payload(launchpool_payload, "latest_news")
+    assert [row.kind for row in launchpool_rows] == [
+        AnnouncementKind.LAUNCHPOOL,
+        AnnouncementKind.OTHER,
+    ]
+    assert "latest_news" in provider.ann_types
+
     generic_payload = {
         "data": [
             {
@@ -905,6 +1037,45 @@ def test_bitget_provider_tolerates_alternate_article_fields() -> None:
     assert rows[0].market_type == "futures"
 
 
+@pytest.mark.asyncio
+async def test_bitget_fetches_launchpool_and_filters_other_latest_news() -> None:
+    requested_urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        if request.url.params.get("annType") == "latest_news":
+            return httpx.Response(
+                200,
+                json={
+                    "code": "00000",
+                    "data": [
+                        {
+                            "annId": "launchpool-1",
+                            "annTitle": "Bitget Launchpool: stake BGB to mine SOMI",
+                            "annUrl": "https://www.bitget.com/en/support/articles/launchpool-1",
+                            "cTime": "1780052400000",
+                            "annType": "latest_news",
+                        },
+                        {
+                            "annId": "ordinary-news-1",
+                            "annTitle": "Bitget publishes monthly proof of reserves",
+                            "annUrl": "https://www.bitget.com/en/support/articles/ordinary-news-1",
+                            "cTime": "1780052400000",
+                            "annType": "latest_news",
+                        },
+                    ],
+                },
+            )
+        return httpx.Response(200, json={"code": "00000", "data": []})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        rows = await BitgetAnnouncementProvider(client=client).fetch()
+
+    assert [row.announcement_id for row in rows] == ["launchpool-1"]
+    assert rows[0].kind == AnnouncementKind.LAUNCHPOOL
+    assert any("annType=latest_news" in url for url in requested_urls)
+
+
 def test_gate_provider_parses_next_data_listing_and_delisting_pages() -> None:
     provider = GateAnnouncementProvider(client=None)
     listing_html = """
@@ -928,13 +1099,18 @@ def test_gate_provider_parses_next_data_listing_and_delisting_pages() -> None:
         *provider._parse_page(delisting_html, "delisted"),
     ]
 
-    assert [row.exchange for row in rows] == ["gate", "gate"]
-    assert [row.kind for row in rows] == [AnnouncementKind.LISTING, AnnouncementKind.DELISTING]
+    assert [row.exchange for row in rows] == ["gate", "gate", "gate"]
+    assert [row.kind for row in rows] == [
+        AnnouncementKind.LISTING,
+        AnnouncementKind.LAUNCHPOOL,
+        AnnouncementKind.DELISTING,
+    ]
     assert rows[0].symbols == ["QAIT"]
     assert rows[0].market_type == "spot/convert"
     assert rows[0].url == "https://www.gate.com/announcements/article/51434"
     assert rows[0].published_at.isoformat() == "2026-05-28T15:00:55+00:00"
     assert rows[0].event_time.isoformat() == "2026-05-28T15:20:00+00:00"
+    assert rows[1].title == "Gate Launchpool Project #363"
 
 
 def test_gate_provider_finds_nested_article_lists() -> None:

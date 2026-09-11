@@ -278,7 +278,7 @@ export function AppShell() {
             {
               key: "announcements",
               icon: <NotificationOutlined />,
-              label: "上下币公告"
+              label: "交易所公告"
             },
             { key: "settings", icon: <SettingOutlined />, label: "参数与告警" },
             { key: "history", icon: <BellOutlined />, label: "告警历史" }

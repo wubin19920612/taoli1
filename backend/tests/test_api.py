@@ -3607,6 +3607,7 @@ def test_announcement_settings_endpoint_round_trip() -> None:
             "poll_interval_seconds": 120,
             "record_exchanges": ["OKX", "bybit", "okx"],
             "alert_exchanges": ["BYBIT"],
+            "launchpool_alerts_enabled": False,
             "bootstrap_alerts_enabled": True,
             "event_reminders_enabled": True,
             "event_reminder_minutes_before": 45,
@@ -3616,9 +3617,11 @@ def test_announcement_settings_endpoint_round_trip() -> None:
     assert response.status_code == 200
     assert response.json()["record_exchanges"] == ["okx", "bybit"]
     assert response.json()["alert_exchanges"] == ["bybit"]
+    assert response.json()["launchpool_alerts_enabled"] is False
     listed = client.get("/api/settings/announcements")
     assert listed.status_code == 200
     assert listed.json()["bootstrap_alerts_enabled"] is True
+    assert listed.json()["launchpool_alerts_enabled"] is False
     assert listed.json()["event_reminders_enabled"] is True
     assert listed.json()["event_reminder_minutes_before"] == 45
 

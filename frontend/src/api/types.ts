@@ -4,7 +4,7 @@ export type AlertSeverity = "info" | "warning" | "critical";
 export type PhonePriceAlertCondition = "above" | "below";
 export type PhonePriceAlertPriceField = "mark_price" | "index_price" | "mid_price" | "bid" | "ask";
 export type PairSpreadPriceField = "mark_price" | "mid_price" | "index_price" | "last_price";
-export type AnnouncementKind = "listing" | "delisting" | "other";
+export type AnnouncementKind = "listing" | "delisting" | "launchpool" | "other";
 export type SecondLevelSampleStatus = "ok" | "partial" | "error";
 export type NewListingAlertLevel = "none" | "normal" | "strong" | "extreme";
 export type NegativeBasisSignalLevel = "none" | "watch" | "building" | "confirmed" | "strong" | "extreme";
@@ -869,6 +869,7 @@ export interface AnnouncementSettings {
   record_exchanges: string[];
   alert_exchanges: string[];
   listing_delisting_alerts_enabled: boolean;
+  launchpool_alerts_enabled: boolean;
   bootstrap_alerts_enabled: boolean;
   event_reminders_enabled: boolean;
   event_reminder_minutes_before: number;
