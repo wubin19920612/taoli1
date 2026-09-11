@@ -63,7 +63,12 @@ async def lookup_instrument(symbol: str, request: Request) -> InstrumentLookupRe
         raise HTTPException(status_code=422, detail="请输入有效标的，例如 BTC 或 BTCUSDT") from exc
 
     store = request.app.state.snapshot_store
-    all_markets = store.get_all_markets()
+    allowed_exchanges = set(INSTRUMENT_LOOKUP_EXCHANGES)
+    all_markets = [
+        market
+        for market in store.get_all_markets()
+        if market.exchange.lower() in allowed_exchanges
+    ]
     settings = await _risk_settings(request)
     canonical_symbol = _best_symbol(
         _candidate_symbols(requested_symbol, settings),

@@ -38,6 +38,7 @@ def test_instrument_lookup_groups_exact_symbol_across_all_exchanges() -> None:
             market("BTCUSDT", "binance", MarketType.SPOT, 100_000, now),
             market("BTCUSDT", "binance", MarketType.FUTURE, 100_100, now + timedelta(seconds=1)),
             market("BTCUSDT", "gate", MarketType.FUTURE, 100_200, now),
+            market("BTCUSDT", "htx", MarketType.SPOT, 100_300, now + timedelta(seconds=2)),
             market("WBTCUSDT", "okx", MarketType.SPOT, 99_900, now),
         ]
     )
@@ -55,8 +56,9 @@ def test_instrument_lookup_groups_exact_symbol_across_all_exchanges() -> None:
     assert payload["symbol"] == "BTCUSDT"
     assert payload["exchange_count"] == 2
     assert payload["market_count"] == 3
-    assert len(payload["exchanges"]) == 8
+    assert len(payload["exchanges"]) == 7
     exchanges = {item["exchange"]: item for item in payload["exchanges"]}
+    assert "htx" not in exchanges
     assert exchanges["binance"]["spot"]["bid"] == 99_999
     assert exchanges["binance"]["future"]["ask"] == 100_101
     assert exchanges["okx"]["spot"] is None

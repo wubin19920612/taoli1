@@ -11,7 +11,6 @@ INSTRUMENT_LOOKUP_EXCHANGES: tuple[str, ...] = (
     "bybit",
     "gate",
     "bitget",
-    "htx",
     "aster",
     "hyperliquid",
 )

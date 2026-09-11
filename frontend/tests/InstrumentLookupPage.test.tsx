@@ -67,7 +67,7 @@ const lookupResult = {
       },
       error: null
     },
-    ...["bybit", "gate", "bitget", "htx", "aster", "hyperliquid"].map((exchange) => ({
+    ...["bybit", "gate", "bitget", "aster", "hyperliquid"].map((exchange) => ({
       exchange,
       spot: null,
       future: null,
@@ -128,7 +128,8 @@ describe("InstrumentLookupPage", () => {
     render(<InstrumentLookupPage />);
 
     expect(await screen.findByText("BTC / USDT")).not.toBeNull();
-    expect(screen.getByText("2 / 8")).not.toBeNull();
+    expect(screen.getByText("2 / 7")).not.toBeNull();
+    expect(screen.queryByText("HTX")).toBeNull();
     expect(screen.getByText("1 现货 · 2 永续")).not.toBeNull();
     expect(screen.getByText(/BTC-USDT-SWAP/)).not.toBeNull();
     expect(screen.getAllByText("Binance").length).toBeGreaterThan(0);
