@@ -1,8 +1,10 @@
 import {
   AlertOutlined,
+  BgColorsOutlined,
   BellOutlined,
   ClockCircleOutlined,
   DashboardOutlined,
+  EyeInvisibleOutlined,
   ExperimentOutlined,
   FundProjectionScreenOutlined,
   LineChartOutlined,
@@ -14,7 +16,8 @@ import {
   SettingOutlined,
   ThunderboltOutlined
 } from "@ant-design/icons";
-import { Layout, Menu, Space, Spin, Typography } from "antd";
+import { ConfigProvider, Layout, Menu, Segmented, Space, Spin, Tooltip, Typography } from "antd";
+import type { ThemeConfig } from "antd";
 import {
   lazy,
   Suspense,
@@ -139,6 +142,56 @@ const lazyPages: Record<PageKey, LazyPage> = {
 };
 
 const pageKeys = Object.keys(lazyPages) as PageKey[];
+const appearanceModeStorageKey = "taoli1:appearance-mode";
+
+type AppearanceMode = "quiet" | "standard";
+
+const quietTheme: ThemeConfig = {
+  token: {
+    colorPrimary: "#586b66",
+    colorInfo: "#66737a",
+    colorSuccess: "#617168",
+    colorWarning: "#81745f",
+    colorError: "#806969",
+    colorLink: "#536a65",
+    colorTextBase: "#303836",
+    colorBgBase: "#f3f5f4",
+    colorBgLayout: "#ecefed",
+    colorBgContainer: "#f7f8f7",
+    colorBorder: "#d5dcda"
+  },
+  components: {
+    Button: {
+      primaryShadow: "none"
+    },
+    Menu: {
+      darkItemBg: "#3d4543",
+      darkItemColor: "#cbd1cf",
+      darkItemHoverBg: "#4a5350",
+      darkItemSelectedBg: "#59635f",
+      darkItemSelectedColor: "#f4f6f5"
+    },
+    Segmented: {
+      itemColor: "#66706d",
+      itemSelectedBg: "#f8f9f8",
+      itemSelectedColor: "#303836",
+      trackBg: "#e4e8e6"
+    }
+  }
+};
+
+function initialAppearanceMode(): AppearanceMode {
+  if (typeof window === "undefined") {
+    return "standard";
+  }
+  try {
+    return window.localStorage.getItem(appearanceModeStorageKey) === "quiet"
+      ? "quiet"
+      : "standard";
+  } catch {
+    return "standard";
+  }
+}
 
 function isPageKey(value: string | null): value is PageKey {
   return value !== null && pageKeys.includes(value as PageKey);
@@ -163,7 +216,17 @@ function pushPageToUrl(page: PageKey): void {
 
 export function AppShell() {
   const [page, setPage] = useState<PageKey>(() => pageFromUrl() ?? "dashboard");
+  const [appearanceMode, setAppearanceMode] = useState<AppearanceMode>(initialAppearanceMode);
   const CurrentPage = useMemo(() => lazyPages[page], [page]);
+  const quietMode = appearanceMode === "quiet";
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(appearanceModeStorageKey, appearanceMode);
+    } catch {
+      // The selected mode still applies for this session when storage is unavailable.
+    }
+  }, [appearanceMode]);
 
   useEffect(() => {
     const syncPageFromUrl = () => {
@@ -181,24 +244,25 @@ export function AppShell() {
   }, []);
 
   return (
-    <Layout className="app-shell">
-      <Layout.Sider breakpoint="xl" collapsedWidth={0} width={216} className="app-sider">
-        <div className="brand">
-          <Space>
-            <AlertOutlined />
-            <Typography.Text strong>套利雷达</Typography.Text>
-          </Space>
-        </div>
-        <Menu
-          theme="dark"
-          mode="inline"
-          selectedKeys={[page]}
-          onClick={(item) => {
-            const nextPage = item.key as PageKey;
-            setPage(nextPage);
-            pushPageToUrl(nextPage);
-          }}
-          items={[
+    <ConfigProvider theme={quietMode ? quietTheme : undefined}>
+      <Layout className={`app-shell app-shell-${appearanceMode}`}>
+        <Layout.Sider breakpoint="xl" collapsedWidth={0} width={216} className="app-sider">
+          <div className="brand">
+            <Space>
+              <AlertOutlined />
+              <Typography.Text strong>{quietMode ? "数据台" : "套利雷达"}</Typography.Text>
+            </Space>
+          </div>
+          <Menu
+            theme="dark"
+            mode="inline"
+            selectedKeys={[page]}
+            onClick={(item) => {
+              const nextPage = item.key as PageKey;
+              setPage(nextPage);
+              pushPageToUrl(nextPage);
+            }}
+            items={[
             { key: "dashboard", icon: <DashboardOutlined />, label: "实时机会" },
             {
               key: "funding",
@@ -282,25 +346,39 @@ export function AppShell() {
             },
             { key: "settings", icon: <SettingOutlined />, label: "参数与告警" },
             { key: "history", icon: <BellOutlined />, label: "告警历史" }
-          ]}
-        />
-      </Layout.Sider>
-      <Layout>
-        <Layout.Header className="app-header">
-          <Typography.Title level={3}>CEX 套利雷达</Typography.Title>
-        </Layout.Header>
-        <Layout.Content className="app-content">
-          <Suspense
-            fallback={
-              <div className="page-loading">
-                <Spin />
-              </div>
-            }
-          >
-            <CurrentPage />
-          </Suspense>
-        </Layout.Content>
+            ]}
+          />
+        </Layout.Sider>
+        <Layout>
+          <Layout.Header className="app-header">
+            <Typography.Title level={3}>{quietMode ? "数据工作台" : "CEX 套利雷达"}</Typography.Title>
+            <Tooltip title="切换显示配色">
+              <Segmented
+                className="appearance-switch"
+                size="small"
+                aria-label="显示配色"
+                value={appearanceMode}
+                options={[
+                  { label: "低调", value: "quiet", icon: <EyeInvisibleOutlined /> },
+                  { label: "原配色", value: "standard", icon: <BgColorsOutlined /> }
+                ]}
+                onChange={(value) => setAppearanceMode(value as AppearanceMode)}
+              />
+            </Tooltip>
+          </Layout.Header>
+          <Layout.Content className="app-content">
+            <Suspense
+              fallback={
+                <div className="page-loading">
+                  <Spin />
+                </div>
+              }
+            >
+              <CurrentPage />
+            </Suspense>
+          </Layout.Content>
+        </Layout>
       </Layout>
-    </Layout>
+    </ConfigProvider>
   );
 }
