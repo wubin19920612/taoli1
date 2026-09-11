@@ -61,9 +61,11 @@ class FakeAstroClient:
         self,
         pairs: list[dict[str, Any]] | None = None,
         error: AstroClientError | None = None,
+        add_errors: dict[str, AstroClientError] | None = None,
     ):
         self.pairs = pairs or []
         self.error = error
+        self.add_errors = add_errors or {}
         self.added: list[dict[str, Any]] = []
         self.updated: list[dict[str, Any]] = []
         self.list_calls = 0
@@ -75,6 +77,9 @@ class FakeAstroClient:
         return self.pairs
 
     async def add_pair(self, pair: dict[str, Any]) -> dict[str, Any]:
+        route = f"{pair.get('buyEx')}->{pair.get('sellEx')}"
+        if error := self.add_errors.get(route):
+            raise error
         self.added.append(pair)
         return {"code": 0}
 
@@ -236,6 +241,11 @@ async def test_missing_pair_creates_paused_disable_open_card() -> None:
     assert result.pair_name == "BTC"
     assert result.pair_type == "FF"
     assert "已创建暂停卡片 BTC FF binance->okx" in result.message
+    assert "同步创建 gc-binance->gc-okx（共 2 张）" in result.message
+    assert [(item["buyEx"], item["sellEx"]) for item in client.added] == [
+        ("binance", "okx"),
+        ("gc-binance", "gc-okx"),
+    ]
     assert client.added[0]["status"] is False
     assert client.added[0]["disableOpen"] is True
     assert client.added[0]["type"] == "FF"
@@ -306,7 +316,13 @@ async def test_new_listing_alert_uses_new_listing_card_settings() -> None:
 
 
 @pytest.mark.asyncio
-async def test_new_listing_alert_does_not_wait_for_restart_delay() -> None:
+async def test_new_listing_alert_only_waits_between_gc_pair_adds(monkeypatch) -> None:
+    sleep_calls: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr("app.services.astro_alerts.asyncio.sleep", fake_sleep)
     client = FakeAstroClient()
     service = AstroAlertService(
         client,
@@ -319,7 +335,8 @@ async def test_new_listing_alert_does_not_wait_for_restart_delay() -> None:
     )
 
     assert result.status == "created"
-    assert client.added
+    assert len(client.added) == 2
+    assert sleep_calls == [30]
 
 
 @pytest.mark.asyncio
@@ -433,15 +450,123 @@ async def test_existing_same_route_pair_is_skipped_without_update() -> None:
     service = AstroAlertService(
         client,
         Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
+        add_restart_delay_seconds=0,
+    )
+
+    result = await service.handle_alert(opportunity())
+
+    assert [(item["buyEx"], item["sellEx"]) for item in client.added] == [
+        ("gc-binance", "gc-okx")
+    ]
+    assert not client.updated
+    assert result.status == "created"
+    assert result.action == "add"
+    assert "已存在 binance->okx" in result.message
+
+
+@pytest.mark.asyncio
+async def test_existing_base_and_gc_routes_are_both_skipped() -> None:
+    client = FakeAstroClient(
+        [
+            {"name": "BTC", "type": "FF", "buyEx": "binance", "sellEx": "okx"},
+            {"name": "BTC", "type": "FF", "buyEx": "gc-binance", "sellEx": "gc-okx"},
+        ]
+    )
+    service = AstroAlertService(
+        client,
+        Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
     )
 
     result = await service.handle_alert(opportunity())
 
     assert not client.added
-    assert not client.updated
     assert result.status == "skipped"
     assert result.action == "existing"
-    assert "已存在卡片" in result.message
+    assert "binance->okx、gc-binance->gc-okx" in result.message
+
+
+@pytest.mark.asyncio
+async def test_existing_gc_route_only_backfills_base_route() -> None:
+    client = FakeAstroClient(
+        [
+            {"name": "BTC", "type": "FF", "buyEx": "gc-binance", "sellEx": "gc-okx"},
+        ]
+    )
+    service = AstroAlertService(
+        client,
+        Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
+        add_restart_delay_seconds=0,
+    )
+
+    result = await service.handle_alert(opportunity())
+
+    assert [(item["buyEx"], item["sellEx"]) for item in client.added] == [
+        ("binance", "okx")
+    ]
+    assert result.status == "created"
+    assert "已存在 gc-binance->gc-okx" in result.message
+
+
+@pytest.mark.asyncio
+async def test_bitget_route_creates_plain_and_other_leg_gc_versions() -> None:
+    client = FakeAstroClient()
+    service = AstroAlertService(
+        client,
+        Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
+        add_restart_delay_seconds=0,
+    )
+    bitget_opportunity = opportunity().model_copy(update={"buy_exchange": "bitget"})
+
+    result = await service.handle_alert(bitget_opportunity)
+
+    assert result.status == "created"
+    assert [(item["buyEx"], item["sellEx"]) for item in client.added] == [
+        ("bitget", "okx"),
+        ("bitget", "gc-okx"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_reverse_bitget_route_only_adds_gc_to_other_leg() -> None:
+    client = FakeAstroClient()
+    service = AstroAlertService(
+        client,
+        Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
+        add_restart_delay_seconds=0,
+    )
+    bitget_opportunity = opportunity().model_copy(update={"sell_exchange": "bitget"})
+
+    result = await service.handle_alert(bitget_opportunity)
+
+    assert result.status == "created"
+    assert [(item["buyEx"], item["sellEx"]) for item in client.added] == [
+        ("binance", "bitget"),
+        ("gc-binance", "bitget"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_partial_gc_create_failure_is_reported_after_base_success() -> None:
+    client = FakeAstroClient(
+        add_errors={
+            "gc-binance->gc-okx": AstroClientError("Astro HTTP 503: restarting", 503),
+        }
+    )
+    service = AstroAlertService(
+        client,
+        Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
+        add_restart_delay_seconds=0,
+    )
+
+    result = await service.handle_alert(opportunity())
+
+    assert result.status == "failed"
+    assert result.action == "add_partial"
+    assert [(item["buyEx"], item["sellEx"]) for item in client.added] == [
+        ("binance", "okx")
+    ]
+    assert "已创建 binance->okx" in result.message
+    assert "gc-binance->gc-okx 创建失败" in result.message
 
 
 @pytest.mark.asyncio

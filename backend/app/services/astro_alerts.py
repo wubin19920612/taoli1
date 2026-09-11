@@ -6,6 +6,7 @@ from app.models.astro import AstroAlertActionResult, AstroCardCreateRequest
 from app.models.opportunity import Opportunity
 from app.models.settings import AstroCardSettings, LivePilotSettings
 from app.services.astro_client import AstroClientError
+from app.services.market_labels import astro_exchange_route_variants
 from app.services.astro_planner import AstroPairPlanner, AstroPlannerConfig
 from app.services.risk_labels import is_new_listing_opportunity
 
@@ -35,6 +36,27 @@ def _with_card_enabled(pair: dict, enabled: bool) -> dict:
     next_pair["status"] = enabled
     next_pair["disableOpen"] = not enabled
     return next_pair
+
+
+def _pair_variants(pair: dict) -> list[dict]:
+    variants: list[dict] = []
+    for buy_exchange, sell_exchange in astro_exchange_route_variants(
+        str(pair.get("buyEx", "")),
+        str(pair.get("sellEx", "")),
+    ):
+        variant = dict(pair)
+        variant["buyEx"] = buy_exchange
+        variant["sellEx"] = sell_exchange
+        variants.append(variant)
+    return variants
+
+
+def _route(pair: dict) -> str:
+    return f"{pair.get('buyEx')}->{pair.get('sellEx')}"
+
+
+def _routes(pairs: list[dict]) -> str:
+    return "、".join(_route(pair) for pair in pairs)
 
 
 def _card_state_message(enabled: bool) -> str:
@@ -194,9 +216,9 @@ class AstroAlertService:
         else:
             pair_enabled = effective_card_settings.open_enabled
         pair = _with_card_enabled(plan.pair, pair_enabled)
+        pair_variants = _pair_variants(pair)
         pair_name = str(pair.get("name", ""))
         pair_type = str(pair.get("type", ""))
-        route = f"{pair.get('buyEx')}->{pair.get('sellEx')}"
 
         try:
             existing_pairs = await self.client.list_pairs()
@@ -211,52 +233,102 @@ class AstroAlertService:
             )
 
         same_name_pairs = [item for item in existing_pairs if item.get("name") == pair_name]
-        if not same_name_pairs:
-            try:
-                await self.client.add_pair(pair)
-            except AstroClientError as exc:
-                return AstroAlertActionResult(
-                    enabled=True,
-                    status="failed",
-                    action="add",
-                    message=f"创建失败，{exc.message}",
-                    pair_name=pair_name,
-                    pair_type=pair_type,
-                )
-            restart_delay = self.add_restart_delay_seconds if add_restart_delay_seconds is None else add_restart_delay_seconds
-            if restart_delay > 0:
-                await asyncio.sleep(restart_delay)
+        conflicting_pairs = [
+            existing
+            for existing in same_name_pairs
+            if not any(_same_route(existing, planned) for planned in pair_variants)
+        ]
+        if conflicting_pairs:
             return AstroAlertActionResult(
                 enabled=True,
-                status="created",
-                action="add",
+                status="skipped",
+                action="conflict",
                 message=(
-                    f"已创建{_card_state_message(pair_enabled)} "
-                    f"{pair_name} {pair_type} {route}，{_disable_open_message(pair_enabled)}"
+                    f"已跳过，Astro 已存在同名 {pair_name} 但类型或交易所不同："
+                    f"{_routes(conflicting_pairs)}"
                 ),
                 pair_name=pair_name,
                 pair_type=pair_type,
             )
 
-        same_route_pair = next(
-            (existing for existing in same_name_pairs if _same_route(existing, pair)),
-            None,
-        )
-        if same_route_pair is not None:
+        existing_variants = [
+            planned
+            for planned in pair_variants
+            if any(_same_route(existing, planned) for existing in same_name_pairs)
+        ]
+        missing_variants = [
+            planned
+            for planned in pair_variants
+            if not any(_same_route(existing, planned) for existing in same_name_pairs)
+        ]
+        if not missing_variants:
             return AstroAlertActionResult(
                 enabled=True,
                 status="skipped",
                 action="existing",
-                message=f"已跳过，Astro 已存在卡片 {pair_name} {pair_type} {route}",
+                message=(
+                    f"已跳过，Astro 已存在卡片 {pair_name} {pair_type} "
+                    f"{_routes(existing_variants)}"
+                ),
                 pair_name=pair_name,
                 pair_type=pair_type,
             )
 
+        created_variants: list[dict] = []
+        restart_delay = (
+            self.add_restart_delay_seconds
+            if add_restart_delay_seconds is None
+            else add_restart_delay_seconds
+        )
+        for index, planned in enumerate(missing_variants):
+            try:
+                await self.client.add_pair(planned)
+            except AstroClientError as exc:
+                failed_route = _route(planned)
+                if created_variants:
+                    return AstroAlertActionResult(
+                        enabled=True,
+                        status="failed",
+                        action="add_partial",
+                        message=(
+                            f"部分创建成功：已创建 {_routes(created_variants)}；"
+                            f"{failed_route} 创建失败，{exc.message}。"
+                            f"卡片状态为{_card_state_message(pair_enabled)}，"
+                            f"{_disable_open_message(pair_enabled)}"
+                        ),
+                        pair_name=pair_name,
+                        pair_type=pair_type,
+                    )
+                return AstroAlertActionResult(
+                    enabled=True,
+                    status="failed",
+                    action="add",
+                    message=f"创建 {failed_route} 失败，{exc.message}",
+                    pair_name=pair_name,
+                    pair_type=pair_type,
+                )
+            created_variants.append(planned)
+            is_last_add = index == len(missing_variants) - 1
+            delay = restart_delay if is_last_add else self.add_restart_delay_seconds
+            if delay > 0:
+                await asyncio.sleep(delay)
+
+        message = (
+            f"已创建{_card_state_message(pair_enabled)} {pair_name} {pair_type} "
+            f"{_route(created_variants[0])}，{_disable_open_message(pair_enabled)}"
+        )
+        if len(created_variants) > 1:
+            message += (
+                f"；同步创建 {_routes(created_variants[1:])}"
+                f"（共 {len(created_variants)} 张）"
+            )
+        if existing_variants:
+            message += f"；已存在 {_routes(existing_variants)}"
         return AstroAlertActionResult(
             enabled=True,
-            status="skipped",
-            action="conflict",
-            message=f"已跳过，Astro 已存在同名 {pair_name} 但类型或交易所不同",
+            status="created",
+            action="add",
+            message=message,
             pair_name=pair_name,
             pair_type=pair_type,
         )

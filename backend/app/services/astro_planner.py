@@ -231,8 +231,8 @@ class AstroPairPlanner:
                 source=f"{opportunity.buy_exchange}->{opportunity.sell_exchange}",
                 assumed_value=f"{buy_astro_exchange}->{sell_astro_exchange}",
                 note=(
-                    "Uses Astro exchange ids; Bitget RToken stock spot is mapped from "
-                    "bitget to bitgetr."
+                    "Uses Astro exchange ids; Hyperliquid is mapped to hl and Bitget "
+                    "RToken stock spot is mapped from bitget to bitgetr."
                 ),
             ),
         ]

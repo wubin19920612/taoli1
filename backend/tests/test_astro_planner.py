@@ -123,6 +123,19 @@ def test_bitget_rtoken_sf_opportunity_maps_to_astro_bitgetr() -> None:
     )
 
 
+def test_hyperliquid_opportunity_maps_to_astro_hl() -> None:
+    planner = AstroPairPlanner(AstroPlannerConfig())
+
+    plan = planner.plan(
+        opportunity().model_copy(update={"buy_exchange": "hyperliquid"})
+    )
+
+    assert plan.can_submit is True
+    assert plan.pair is not None
+    assert plan.pair["buyEx"] == "hl"
+    assert plan.pair["sellEx"] == "okx"
+
+
 def test_closed_bitget_rtoken_opportunity_is_blocked() -> None:
     planner = AstroPairPlanner(AstroPlannerConfig())
     rtoken_opportunity = opportunity(OpportunityType.SF, MarketType.SPOT, MarketType.FUTURE).model_copy(
