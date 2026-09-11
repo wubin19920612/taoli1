@@ -1524,6 +1524,7 @@ async def test_okx_current_uses_funding_interval_and_limits() -> None:
                         "bidPx": "100.4",
                         "askPx": "100.6",
                         "last": "100.5",
+                        "volCcy24h": "1234",
                     }
                 ]
             }
@@ -1569,6 +1570,7 @@ async def test_okx_current_uses_funding_interval_and_limits() -> None:
     assert any("funding-rate?instId=O-USDT-SWAP" in url for url in requested_urls)
     assert leg.raw_symbol == "O-USDT-SWAP"
     assert leg.price == pytest.approx(100.5)
+    assert leg.volume_24h_usdt == pytest.approx(1234 * 100.5)
     assert leg.funding_rate_pct == pytest.approx(-1.0)
     assert leg.funding_next_rate_pct == pytest.approx(-0.5)
     assert leg.funding_next_time == next_funding_time

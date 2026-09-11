@@ -9,7 +9,7 @@ from app.exchanges.bybit import BybitAdapter
 from app.exchanges.gate import GateAdapter
 from app.exchanges.hyperliquid import HyperliquidAdapter
 from app.exchanges.htx import HTXAdapter
-from app.exchanges.okx import OKXAdapter
+from app.exchanges.okx import OKXAdapter, okx_ticker_volume_24h_usdt
 from app.models.market import MarketType
 
 
@@ -25,6 +25,43 @@ class FakeResponse:
 
     async def aclose(self):
         return None
+
+
+def test_okx_future_ticker_converts_base_volume_to_quote_volume() -> None:
+    volume = okx_ticker_volume_24h_usdt(
+        {
+            "last": "208.11",
+            "volCcy24h": "10631.506",
+        },
+        MarketType.FUTURE,
+    )
+
+    assert volume == pytest.approx(2_212_522.71366)
+
+
+def test_okx_ticker_prefers_explicit_quote_volume() -> None:
+    volume = okx_ticker_volume_24h_usdt(
+        {
+            "last": "208.11",
+            "volCcy24h": "10631.506",
+            "volCcyQuote24h": "2257828.35308",
+        },
+        MarketType.FUTURE,
+    )
+
+    assert volume == pytest.approx(2_257_828.35308)
+
+
+def test_okx_spot_ticker_keeps_quote_currency_volume() -> None:
+    volume = okx_ticker_volume_24h_usdt(
+        {
+            "last": "208.11",
+            "volCcy24h": "10631.506",
+        },
+        MarketType.SPOT,
+    )
+
+    assert volume == pytest.approx(10_631.506)
 
 
 class FakeClient:
@@ -204,6 +241,7 @@ async def test_okx_fetches_all_funding_rates_in_one_request() -> None:
     rows = await adapter.fetch_future_tickers()
 
     assert rows[0].symbol == "BTCUSDT"
+    assert rows[0].volume_24h_usdt == pytest.approx(100_500_000)
     assert rows[0].funding_rate_pct == 0.01
     assert rows[0].funding_next_rate_pct == 0.02
     assert rows[0].funding_interval_hours == 4

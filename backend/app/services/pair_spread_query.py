@@ -19,6 +19,7 @@ from app.exchanges.base import (
     parse_float,
     utc_now,
 )
+from app.exchanges.okx import okx_ticker_volume_24h_usdt
 from app.models.market import MarketType
 from app.models.pair_spread import (
     PairSpreadCurrentLeg,
@@ -2763,7 +2764,7 @@ class PairSpreadQueryService:
             index_price=None,
             mid_price=mid,
             last_price=last,
-            volume_24h_usdt=_nonnegative(parse_float(ticker.get("volCcy24h"))),
+            volume_24h_usdt=okx_ticker_volume_24h_usdt(ticker, MarketType.FUTURE),
             open_interest_usdt=open_interest_usdt,
             open_interest_contracts=open_interest_contracts,
             long_account_pct=account_long_pct,
@@ -2800,7 +2801,7 @@ class PairSpreadQueryService:
             index_price=None,
             mid_price=_mid_price(parse_float(ticker.get("bidPx")), parse_float(ticker.get("askPx"))),
             last_price=_positive(parse_float(ticker.get("last"))),
-            volume_24h_usdt=_nonnegative(parse_float(ticker.get("volCcy24h"))),
+            volume_24h_usdt=okx_ticker_volume_24h_usdt(ticker, MarketType.SPOT),
             funding_rate_pct=None,
             funding_next_rate_pct=None,
             funding_next_time=None,
