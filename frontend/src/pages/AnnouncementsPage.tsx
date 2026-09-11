@@ -24,6 +24,7 @@ dayjs.extend(utc);
 const defaultAnnouncementSettings: AnnouncementSettings = {
   enabled: true,
   poll_interval_seconds: 300,
+  alert_max_age_minutes: 30,
   record_exchanges: ["binance", "okx", "bybit", "gate", "bitget", "hyperliquid"],
   alert_exchanges: [],
   listing_delisting_alerts_enabled: true,
@@ -623,6 +624,9 @@ export function AnnouncementsPage() {
             </Form.Item>
             <Form.Item label="轮询间隔" name="poll_interval_seconds" rules={[{ required: true }]}>
               <InputNumber min={30} max={86400} step={30} suffix="s" className="wide-input" />
+            </Form.Item>
+            <Form.Item label="新公告通知窗口" name="alert_max_age_minutes" rules={[{ required: true }]}>
+              <InputNumber min={1} max={10080} step={5} suffix="min" className="wide-input" />
             </Form.Item>
             <Form.Item label="提前提醒" name="event_reminder_minutes_before" rules={[{ required: true }]}>
               <InputNumber min={1} max={10080} step={5} suffix="min" className="wide-input" />

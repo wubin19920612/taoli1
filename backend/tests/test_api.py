@@ -1,6 +1,6 @@
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 from fastapi.testclient import TestClient
 import pytest
@@ -462,6 +462,69 @@ def test_health_endpoint() -> None:
 
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
+
+
+def test_api_only_mode_does_not_start_background_workers(monkeypatch) -> None:
+    start_background_task = Mock()
+    monkeypatch.setattr("app.main._start_background_task", start_background_task)
+    app = create_app(
+        settings=Settings(database_url="sqlite:///:memory:"),
+        start_background_workers=False,
+    )
+
+    with TestClient(app) as client:
+        assert client.get("/api/health").status_code == 200
+
+    start_background_task.assert_not_called()
+
+
+def test_create_app_blanks_feishu_credentials_when_live_send_is_disabled() -> None:
+    app = create_app(
+        settings=Settings(
+            feishu_webhook_url="https://example.test/webhook",
+            feishu_secret="webhook-secret",
+            feishu_app_id="app-id",
+            feishu_app_secret="app-secret",
+            feishu_alert_chat_id="chat-id",
+            feishu_phone_user_ids="user-1,user-2",
+            feishu_phone_enabled=True,
+            feishu_live_send_enabled=False,
+        )
+    )
+
+    config = app.state.feishu_notifier.config
+    assert app.state.feishu_live_send_enabled is False
+    assert config.webhook_url == ""
+    assert config.secret == ""
+    assert config.app_id == ""
+    assert config.app_secret == ""
+    assert config.alert_chat_id == ""
+    assert config.phone_enabled is False
+
+
+def test_create_app_preserves_feishu_credentials_when_live_send_is_enabled() -> None:
+    app = create_app(
+        settings=Settings(
+            feishu_webhook_url="https://example.test/webhook",
+            feishu_secret="webhook-secret",
+            feishu_app_id="app-id",
+            feishu_app_secret="app-secret",
+            feishu_alert_chat_id="chat-id",
+            feishu_phone_user_ids="user-1,user-2",
+            feishu_phone_enabled=True,
+            feishu_live_send_enabled=True,
+        )
+    )
+
+    config = app.state.feishu_notifier.config
+    assert app.state.feishu_live_send_enabled is True
+    assert config.webhook_url == "https://example.test/webhook"
+    assert config.secret == "webhook-secret"
+    assert config.app_id == "app-id"
+    assert config.app_secret == "app-secret"
+    assert config.alert_chat_id == "chat-id"
+    assert config.phone_user_ids == ["user-1", "user-2"]
+    assert config.phone_enabled is True
 
 
 def test_collector_startup_uses_multi_exchange_index_component_provider(monkeypatch) -> None:
@@ -966,6 +1029,88 @@ def test_pair_spread_query_endpoint_resolves_global_symbol_alias_and_price_multi
     assert payload["current"]["leg1"]["symbol"] == "10000NEXUSDT"
     assert payload["current"]["leg1"]["raw_symbol"] == "NEXUSDT"
     assert payload["current"]["leg1"]["price"] == pytest.approx(104)
+
+
+def test_pair_spread_query_endpoint_resolves_known_hyperliquid_dex_alias() -> None:
+    fixed_now = datetime(2026, 9, 11, 1, 5, tzinfo=UTC)
+
+    class FakePairSpreadService:
+        async def query(
+            self,
+            leg1: PairSpreadLegQuery,
+            leg2: PairSpreadLegQuery,
+            *,
+            hours: int,
+            interval_minutes: int = 1,
+            interval_seconds: int | None = None,
+            leg2_multiplier: float = 1.0,
+            now: datetime | None = None,
+            include_current: bool = True,
+        ) -> PairSpreadQueryResult:
+            assert leg1 == PairSpreadLegQuery(
+                exchange="bitget",
+                symbol="ANTHROPICUSDT",
+                market_type=MarketType.FUTURE,
+            )
+            assert leg2 == PairSpreadLegQuery(
+                exchange="hyperliquid",
+                symbol="ANTHUSDT",
+                market_type=MarketType.FUTURE,
+                dex="io",
+            )
+            observed_at = now or fixed_now
+            point = PairSpreadPoint(
+                bucket_at=observed_at,
+                leg1_close=2060,
+                leg2_close=2160,
+                spread_abs=100,
+                spread_pct=4.7393,
+            )
+            return PairSpreadQueryResult(
+                leg1=leg1,
+                leg2=leg2,
+                hours=hours,
+                interval_minutes=interval_minutes,
+                interval_seconds=interval_seconds or interval_minutes * 60,
+                leg2_multiplier=leg2_multiplier,
+                observed_at=observed_at,
+                point_count=1,
+                first_seen_at=observed_at,
+                last_seen_at=observed_at,
+                spread_abs=PairSpreadValueStats(current=point.spread_abs),
+                spread_pct=PairSpreadValueStats(current=point.spread_pct),
+                points=[point],
+            )
+
+        async def aclose(self) -> None:
+            return None
+
+    app = create_app(settings=Settings(database_url="sqlite:///:memory:"))
+    app.state.pair_spread_query_service_factory = FakePairSpreadService
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/pair-spread/query"
+            "?leg1_exchange=bitget&leg1_symbol=ANTHROPIC&leg1_market_type=future"
+            "&leg2_exchange=hyperliquid&leg2_symbol=ANTHROPIC&leg2_market_type=future"
+            "&hours=24&interval_minutes=1"
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["leg1"] == {
+        "exchange": "bitget",
+        "symbol": "ANTHROPICUSDT",
+        "market_type": "future",
+        "dex": None,
+    }
+    assert payload["leg2"] == {
+        "exchange": "hyperliquid",
+        "symbol": "ANTHROPICUSDT",
+        "market_type": "future",
+        "dex": "io",
+    }
+    assert payload["point_count"] == 1
 
 
 def test_pair_spread_funding_history_endpoint_uses_lightweight_service() -> None:
@@ -2126,6 +2271,7 @@ def test_alert_loop_mutes_feishu_when_card_conditions_fail() -> None:
     )
     notifier = FakeFeishuNotifier()
     app.state.feishu_notifier = notifier
+    app.state.feishu_live_send_enabled = True
 
     async def run_once() -> None:
         stop_event = asyncio.Event()
@@ -2198,6 +2344,7 @@ def test_alert_loop_sends_feishu_when_card_condition_filter_is_disabled() -> Non
     )
     notifier = FakeFeishuNotifier()
     app.state.feishu_notifier = notifier
+    app.state.feishu_live_send_enabled = True
 
     async def run_once() -> None:
         stop_event = asyncio.Event()

@@ -21,6 +21,17 @@ from app.models.premium_index import (
 from app.models.settings import SymbolAlias
 
 
+KNOWN_SYMBOL_ALIASES: tuple[SymbolAlias, ...] = (
+    SymbolAlias(
+        exchange="hyperliquid",
+        dex="io",
+        symbol="ANTH",
+        canonical_symbol="ANTHROPIC",
+        market_type=MarketType.FUTURE,
+    ),
+)
+
+
 @dataclass(frozen=True)
 class ResolvedSymbolAlias:
     exchange: str
@@ -32,11 +43,12 @@ class ResolvedSymbolAlias:
     price_multiplier: float
 
 
-def _alias_key(alias: SymbolAlias) -> tuple[str, str, str | None]:
+def _alias_key(alias: SymbolAlias) -> tuple[str, str, str | None, str | None]:
     return (
         alias.exchange.lower(),
         alias.symbol.upper(),
         alias.market_type.value if alias.market_type is not None else None,
+        alias.dex,
     )
 
 
@@ -46,14 +58,44 @@ def _base_from_symbol(symbol: str) -> str:
 
 class SymbolAliasResolver:
     def __init__(self, aliases: list[SymbolAlias]) -> None:
-        self._by_key = {_alias_key(alias): alias for alias in aliases}
+        self._by_key = {
+            _alias_key(alias): alias
+            for alias in (*KNOWN_SYMBOL_ALIASES, *aliases)
+        }
+
+    def _direct_alias(
+        self,
+        *,
+        exchange: str,
+        symbol: str,
+        market_type: str,
+        dex: str | None,
+    ) -> SymbolAlias | None:
+        keys = [
+            (exchange, symbol, market_type, dex),
+            (exchange, symbol, None, dex),
+        ]
+        if dex is not None:
+            keys.extend(
+                [
+                    (exchange, symbol, market_type, None),
+                    (exchange, symbol, None, None),
+                ]
+            )
+        return next((self._by_key[key] for key in keys if key in self._by_key), None)
 
     def alias_for(self, market: MarketSnapshot) -> SymbolAlias | None:
         exchange = market.exchange.lower()
         market_type = market.market_type.value
         symbol = market.symbol.upper()
-        return self._by_key.get((exchange, symbol, market_type)) or self._by_key.get(
-            (exchange, symbol, None)
+        dex = None
+        if exchange == "hyperliquid" and ":" in market.raw_symbol:
+            dex = market.raw_symbol.split(":", 1)[0].strip().lower() or None
+        return self._direct_alias(
+            exchange=exchange,
+            symbol=symbol,
+            market_type=market_type,
+            dex=dex,
         )
 
     def canonical_symbol_for(self, market: MarketSnapshot) -> str:
@@ -76,29 +118,34 @@ class SymbolAliasResolver:
         else:
             requested_symbol = normalize_pair_spread_symbol(symbol)
         market_key = market_type.value
-        direct = self._by_key.get((normalized_exchange, requested_symbol, market_key)) or self._by_key.get(
-            (normalized_exchange, requested_symbol, None)
+        direct = self._direct_alias(
+            exchange=normalized_exchange,
+            symbol=requested_symbol,
+            market_type=market_key,
+            dex=normalized_dex,
         )
         if direct is not None:
             return ResolvedSymbolAlias(
                 exchange=normalized_exchange,
                 market_type=market_type,
-                dex=normalized_dex,
+                dex=normalized_dex or direct.dex,
                 requested_symbol=requested_symbol,
                 raw_symbol=direct.symbol,
                 canonical_symbol=direct.canonical_symbol,
                 price_multiplier=direct.price_multiplier,
             )
 
-        for alias in self._by_key.values():
+        for alias in reversed(tuple(self._by_key.values())):
             if alias.exchange != normalized_exchange or alias.canonical_symbol != requested_symbol:
                 continue
             if alias.market_type is not None and alias.market_type != market_type:
                 continue
+            if normalized_dex is not None and alias.dex is not None and alias.dex != normalized_dex:
+                continue
             return ResolvedSymbolAlias(
                 exchange=normalized_exchange,
                 market_type=market_type,
-                dex=normalized_dex,
+                dex=normalized_dex or alias.dex,
                 requested_symbol=requested_symbol,
                 raw_symbol=alias.symbol,
                 canonical_symbol=alias.canonical_symbol,
@@ -335,9 +382,6 @@ def apply_symbol_aliases(
     markets: list[MarketSnapshot],
     aliases: list[SymbolAlias],
 ) -> list[MarketSnapshot]:
-    if not aliases:
-        return markets
-
     resolver = SymbolAliasResolver(aliases)
     normalized: list[MarketSnapshot] = []
     for market in markets:

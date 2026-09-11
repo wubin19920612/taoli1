@@ -362,10 +362,20 @@ async def test_research_failure_does_not_block_announcement_alert_or_persistence
     try:
         await initialize_schema(db)
         repository = AnnouncementRepository(db)
+        await repository.create_if_new(
+            listing_announcement(exchange="okx").model_copy(
+                update={
+                    "announcement_id": "research-okx-baseline",
+                    "published_at": BASE_TIME.replace(hour=7, minute=59),
+                    "alert_status": "muted",
+                }
+            )
+        )
         monitor = AnnouncementMonitor(
             repository,
             alert_sender=alerts.append,
             asset_researcher=failing_research,
+            now_fn=lambda: BASE_TIME,
         )
         created = await monitor.process(
             [listing_announcement(exchange="okx")],

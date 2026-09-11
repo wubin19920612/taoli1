@@ -29,7 +29,15 @@ describe("SettingsPage", () => {
                 exchange: "gate",
                 symbol: "EDGEXUSDT",
                 canonical_symbol: "EDGEUSDT",
-                market_type: null
+                market_type: null,
+                dex: null
+              },
+              {
+                exchange: "hyperliquid",
+                symbol: "ANTHUSDT",
+                canonical_symbol: "ANTHROPICUSDT",
+                market_type: "future",
+                dex: "io"
               }
             ]
           });
@@ -402,6 +410,9 @@ describe("SettingsPage", () => {
     expect(screen.getByText("全部页面生效")).toBeTruthy();
     expect(await screen.findByDisplayValue("EDGEXUSDT")).toBeTruthy();
     expect(await screen.findByDisplayValue("EDGEUSDT")).toBeTruthy();
+    expect(await screen.findByDisplayValue("ANTHUSDT")).toBeTruthy();
+    expect(await screen.findByDisplayValue("ANTHROPICUSDT")).toBeTruthy();
+    expect(await screen.findByDisplayValue("io")).toBeTruthy();
 
     await userEvent.click(screen.getByRole("button", { name: /保存风险参数/ }));
 
@@ -411,7 +422,7 @@ describe("SettingsPage", () => {
         expect.objectContaining({
           method: "PUT",
           body: expect.stringContaining(
-            '"symbol_aliases":[{"exchange":"gate","symbol":"EDGEXUSDT","canonical_symbol":"EDGEUSDT","market_type":null,"price_multiplier":1}]'
+            '"symbol_aliases":[{"exchange":"gate","symbol":"EDGEXUSDT","canonical_symbol":"EDGEUSDT","market_type":null,"dex":null,"price_multiplier":1},{"exchange":"hyperliquid","symbol":"ANTHUSDT","canonical_symbol":"ANTHROPICUSDT","market_type":"future","dex":"io","price_multiplier":1}]'
           )
         })
       );

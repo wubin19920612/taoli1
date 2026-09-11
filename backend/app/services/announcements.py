@@ -218,6 +218,20 @@ def _clean_text(value: object) -> str:
     return unescape(str(value)).replace("\xa0", " ").strip()
 
 
+def _category_text(value: object, fallback: str) -> str:
+    if isinstance(value, dict):
+        for key in ("title", "name", "key", "value"):
+            text = _clean_text(value.get(key))
+            if text:
+                return text
+        return fallback
+    return _clean_text(value) or fallback
+
+
+def _as_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
 def _strip_html(value: object) -> str:
     return re.sub(r"\s+", " ", _clean_text(re.sub(r"<[^>]+>", " ", str(value)))).strip()
 
@@ -1368,7 +1382,10 @@ class BybitAnnouncementProvider(HttpAnnouncementProvider):
                 continue
             title = _clean_text(row.get("title") or row.get("name"))
             url = _clean_text(row.get("url") or row.get("articleUrl") or row.get("link"))
-            category = _clean_text(row.get("type") or row.get("category") or row.get("tag")) or fallback_category
+            category = _category_text(
+                row.get("type") or row.get("category") or row.get("tag"),
+                fallback_category,
+            )
             published_at = _parse_datetime_ms(row.get("publishTime") or row.get("dateTimestamp"))
             announcement_id = _clean_text(row.get("id")) or url.rstrip("/").rsplit("/", 1)[-1]
             announcement = self._announcement(
@@ -1747,6 +1764,13 @@ class AnnouncementMonitor:
         should_alert_on_bootstrap = settings.bootstrap_alerts_enabled
         created: list[ExchangeAnnouncement] = []
         seen_keys: set[tuple[str, str, str]] = set()
+        source_keys = {(item.exchange, item.source) for item in announcements}
+        source_watermarks = {
+            key: await self.repository.latest_published_at(exchange=key[0], source=key[1])
+            for key in source_keys
+        }
+        now = _as_utc(self._now_fn())
+        alert_cutoff = now - timedelta(minutes=settings.alert_max_age_minutes)
 
         for announcement in sorted(
             announcements,
@@ -1768,7 +1792,14 @@ class AnnouncementMonitor:
                 if announcement.exchange in alert_exchanges or should_alert_listing_delisting
                 else "muted"
             )
-            if bootstrap and not should_alert_on_bootstrap and alert_status == "pending":
+            watermark = source_watermarks[key[:2]]
+            historical_sync = (
+                bootstrap
+                or watermark is None
+                or _as_utc(announcement.published_at) <= _as_utc(watermark)
+                or _as_utc(announcement.published_at) < alert_cutoff
+            )
+            if historical_sync and not should_alert_on_bootstrap and alert_status == "pending":
                 alert_status = "muted"
             candidate = announcement.model_copy(update={"alert_status": alert_status})
             inserted = await self.repository.create_if_new(candidate)

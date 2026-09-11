@@ -72,7 +72,7 @@ def _resolved_leg(
         dex=requested_leg.dex,
     )
     return (
-        requested_leg.model_copy(update={"symbol": alias.raw_symbol}),
+        requested_leg.model_copy(update={"symbol": alias.raw_symbol, "dex": alias.dex}),
         alias,
     )
 

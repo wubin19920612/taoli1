@@ -131,7 +131,7 @@ class MarketCollector:
         history_recorder=None,
         index_component_provider=None,
         index_component_monitor=None,
-        poll_interval_seconds: float = 8.0,
+        poll_interval_seconds: float = 5.0,
         max_due_adapters_per_cycle: int = DEFAULT_MAX_DUE_ADAPTERS_PER_CYCLE,
         now_fn: Callable[[], datetime] | None = None,
     ) -> None:

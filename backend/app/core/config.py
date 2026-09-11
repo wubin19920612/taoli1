@@ -14,7 +14,7 @@ class Settings:
     environment: str = "development"
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     database_url: str = "sqlite:///./data/radar.db"
-    poll_interval_seconds: float = 8.0
+    poll_interval_seconds: float = 5.0
     funding_poll_interval_seconds: float = 120.0
     funding_research_enabled: bool = False
     funding_research_manage_paper_trades: bool = True
@@ -27,6 +27,7 @@ class Settings:
     feishu_phone_user_ids: str = ""
     feishu_phone_user_id_type: str = "open_id"
     feishu_phone_enabled: bool = False
+    feishu_live_send_enabled: bool = False
     dashboard_password: str = ""
     history_enabled: bool = True
     history_sample_seconds: int = 120
@@ -192,7 +193,7 @@ def get_settings() -> Settings:
         environment=environment,
         cors_origins=os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"),
         database_url=database_url,
-        poll_interval_seconds=float(os.getenv("POLL_INTERVAL_SECONDS", "8")),
+        poll_interval_seconds=float(os.getenv("POLL_INTERVAL_SECONDS", "5")),
         funding_poll_interval_seconds=float(os.getenv("FUNDING_POLL_INTERVAL_SECONDS", "120")),
         funding_research_enabled=bool_env("FUNDING_RESEARCH_ENABLED", False),
         funding_research_manage_paper_trades=bool_env(
@@ -210,6 +211,7 @@ def get_settings() -> Settings:
         feishu_phone_user_ids=os.getenv("FEISHU_PHONE_USER_IDS", "").strip(),
         feishu_phone_user_id_type=os.getenv("FEISHU_PHONE_USER_ID_TYPE", "open_id").strip() or "open_id",
         feishu_phone_enabled=bool_env("FEISHU_PHONE_ENABLED", False),
+        feishu_live_send_enabled=bool_env("FEISHU_LIVE_SEND_ENABLED", False),
         dashboard_password=os.getenv("DASHBOARD_PASSWORD", ""),
         history_enabled=bool_env("HISTORY_ENABLED", True),
         history_sample_seconds=int(os.getenv("HISTORY_SAMPLE_SECONDS", "120")),

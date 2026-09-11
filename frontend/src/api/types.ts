@@ -63,6 +63,7 @@ export interface SymbolAlias {
   symbol: string;
   canonical_symbol: string;
   market_type?: MarketType | null;
+  dex?: string | null;
   price_multiplier: number;
 }
 
@@ -864,6 +865,7 @@ export interface ExchangeAnnouncement {
 export interface AnnouncementSettings {
   enabled: boolean;
   poll_interval_seconds: number;
+  alert_max_age_minutes: number;
   record_exchanges: string[];
   alert_exchanges: string[];
   listing_delisting_alerts_enabled: boolean;

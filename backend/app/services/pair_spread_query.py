@@ -3261,6 +3261,8 @@ class PairSpreadQueryService:
         for asset in meta.get("universe", []):
             if not isinstance(asset, dict):
                 continue
+            if asset.get("isDelisted") is True:
+                continue
             raw_coin = str(asset.get("name", "")).strip()
             if not raw_coin:
                 continue

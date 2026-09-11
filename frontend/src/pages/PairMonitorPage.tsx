@@ -514,9 +514,6 @@ function normalizeFormLeg(exchange: string, dex: unknown, symbol: string): { dex
   }
   let normalizedSymbol = symbol.trim();
   let normalizedDex = typeof dex === "string" ? dex.trim().toLowerCase() : "";
-  if (!normalizedDex) {
-    normalizedDex = HYPERLIQUID_MAIN_DEX;
-  }
   const separatorIndex = normalizedSymbol.indexOf(":");
   if (separatorIndex > 0) {
     normalizedDex = normalizedSymbol.slice(0, separatorIndex).trim().toLowerCase();

@@ -473,6 +473,40 @@ async def test_alert_loop_appends_astro_result_to_feishu_and_event_message() -> 
 
 
 @pytest.mark.asyncio
+async def test_alert_loop_mutes_when_live_feishu_send_is_disabled() -> None:
+    stop_event = asyncio.Event()
+    app = FastAPI()
+    rule = AlertRule(
+        id="rule-live-send-disabled",
+        name="FF spread",
+        types=["FF"],
+        min_open_spread_pct=0.5,
+        min_fee_adjusted_open_pct=0.25,
+        min_volume_24h_usdt=1_000_000,
+        consecutive_hits=1,
+    )
+    opp = opportunity()
+    store = SnapshotStore()
+    store.set_opportunities([opp])
+    event_repo = FakeEventRepo(stop_event)
+    feishu = FakeFeishuNotifier()
+
+    app.state.alert_rule_repo = FakeRuleRepo([rule])
+    app.state.alert_event_repo = event_repo
+    app.state.settings_repo = FakeSettingsRepo()
+    app.state.snapshot_store = store
+    app.state.alert_engine = FakeAlertEngine(AlertMatch(rule, opp, []))
+    app.state.feishu_notifier = feishu
+    app.state.feishu_live_send_enabled = False
+
+    await asyncio.wait_for(_run_alert_loop(app, 60, stop_event), timeout=2)
+
+    assert feishu.sent_texts == []
+    assert event_repo.events[0].status == "muted"
+    assert "飞书实时发送未启用" in event_repo.events[0].message
+
+
+@pytest.mark.asyncio
 async def test_alert_loop_marks_recent_listing_announcements_for_open_astro_card() -> None:
     stop_event = asyncio.Event()
     app = FastAPI()

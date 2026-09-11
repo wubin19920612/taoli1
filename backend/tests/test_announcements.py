@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -279,6 +279,7 @@ async def test_settings_repository_round_trips_announcement_settings() -> None:
         defaults = await repo.get_announcement_settings()
         assert defaults.record_exchanges == ["binance", "okx", "bybit", "gate", "bitget", "hyperliquid"]
         assert defaults.listing_delisting_alerts_enabled is True
+        assert defaults.alert_max_age_minutes == 30
 
         settings = AnnouncementSettings(
             enabled=True,
@@ -287,6 +288,7 @@ async def test_settings_repository_round_trips_announcement_settings() -> None:
             alert_exchanges=["BYBIT"],
             listing_delisting_alerts_enabled=False,
             bootstrap_alerts_enabled=True,
+            alert_max_age_minutes=45,
             event_reminders_enabled=False,
             event_reminder_minutes_before=45,
         )
@@ -298,6 +300,7 @@ async def test_settings_repository_round_trips_announcement_settings() -> None:
         assert loaded.alert_exchanges == ["bybit"]
         assert loaded.listing_delisting_alerts_enabled is False
         assert loaded.bootstrap_alerts_enabled is True
+        assert loaded.alert_max_age_minutes == 45
         assert loaded.event_reminders_enabled is False
         assert loaded.event_reminder_minutes_before == 45
     finally:
@@ -330,8 +333,14 @@ async def test_monitor_alerts_new_configured_exchange_announcements() -> None:
     try:
         await initialize_schema(db)
         repo = AnnouncementRepository(db)
-        monitor = AnnouncementMonitor(repo, alert_sender=alerts.append)
+        monitor = AnnouncementMonitor(repo, alert_sender=alerts.append, now_fn=lambda: BASE_TIME)
         settings = AnnouncementSettings(record_exchanges=["okx"], alert_exchanges=["okx"])
+        await repo.create_if_new(
+            announcement(
+                announcement_id="source-baseline",
+                published_at=BASE_TIME - timedelta(minutes=1),
+            ).model_copy(update={"alert_status": "muted"})
+        )
 
         created = await monitor.process([announcement()], settings, bootstrap=False)
         duplicate = await monitor.process([announcement()], settings, bootstrap=False)
@@ -354,8 +363,14 @@ async def test_monitor_alerts_listing_delisting_announcements_by_default() -> No
     try:
         await initialize_schema(db)
         repo = AnnouncementRepository(db)
-        monitor = AnnouncementMonitor(repo, alert_sender=alerts.append)
+        monitor = AnnouncementMonitor(repo, alert_sender=alerts.append, now_fn=lambda: BASE_TIME)
         settings = AnnouncementSettings(record_exchanges=["okx"], alert_exchanges=[])
+        await repo.create_if_new(
+            announcement(
+                announcement_id="source-baseline",
+                published_at=BASE_TIME - timedelta(minutes=1),
+            ).model_copy(update={"alert_status": "muted"})
+        )
 
         created = await monitor.process([announcement()], settings, bootstrap=False)
 
@@ -363,6 +378,101 @@ async def test_monitor_alerts_listing_delisting_announcements_by_default() -> No
         assert created[0].alert_status == "sent"
         assert len(alerts) == 1
         assert "[OKX] 上币公告" in alerts[0]
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_monitor_mutes_first_batch_for_a_new_source_in_nonempty_database() -> None:
+    db = await connect_database(":memory:")
+    alerts: list[str] = []
+    try:
+        await initialize_schema(db)
+        repo = AnnouncementRepository(db)
+        await repo.create_if_new(announcement().model_copy(update={"alert_status": "muted"}))
+        monitor = AnnouncementMonitor(repo, alert_sender=alerts.append, now_fn=lambda: BASE_TIME)
+        bybit = announcement(
+            exchange="bybit",
+            announcement_id="bybit-first-seen",
+            source="bybit-v5-announcements",
+            published_at=BASE_TIME,
+        )
+
+        created = await monitor.process(
+            [bybit],
+            AnnouncementSettings(record_exchanges=["okx", "bybit"]),
+            bootstrap=False,
+        )
+
+        assert len(created) == 1
+        assert created[0].alert_status == "muted"
+        assert alerts == []
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_monitor_mutes_historical_gaps_but_alerts_recent_rows_above_source_watermark() -> None:
+    db = await connect_database(":memory:")
+    alerts: list[str] = []
+    try:
+        await initialize_schema(db)
+        repo = AnnouncementRepository(db)
+        await repo.create_if_new(
+            announcement(
+                announcement_id="source-watermark",
+                published_at=BASE_TIME - timedelta(minutes=5),
+            ).model_copy(update={"alert_status": "muted"})
+        )
+        monitor = AnnouncementMonitor(repo, alert_sender=alerts.append, now_fn=lambda: BASE_TIME)
+        historical_gap = announcement(
+            announcement_id="historical-gap",
+            published_at=BASE_TIME - timedelta(minutes=10),
+        )
+        recent = announcement(
+            announcement_id="recent-row",
+            title="OKX to list RECENT for spot trading",
+            published_at=BASE_TIME - timedelta(minutes=1),
+        )
+
+        created = await monitor.process(
+            [historical_gap, recent],
+            AnnouncementSettings(record_exchanges=["okx"], alert_max_age_minutes=30),
+            bootstrap=False,
+        )
+
+        created_by_id = {item.announcement_id: item for item in created}
+        assert created_by_id["historical-gap"].alert_status == "muted"
+        assert created_by_id["recent-row"].alert_status == "sent"
+        assert len(alerts) == 1
+        assert "OKX to list RECENT for spot trading" in alerts[0]
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_monitor_mutes_stale_catchup_even_when_it_is_above_source_watermark() -> None:
+    db = await connect_database(":memory:")
+    alerts: list[str] = []
+    try:
+        await initialize_schema(db)
+        repo = AnnouncementRepository(db)
+        await repo.create_if_new(
+            announcement(
+                announcement_id="source-watermark",
+                published_at=BASE_TIME - timedelta(days=2),
+            ).model_copy(update={"alert_status": "muted"})
+        )
+        monitor = AnnouncementMonitor(repo, alert_sender=alerts.append, now_fn=lambda: BASE_TIME)
+
+        created = await monitor.process(
+            [announcement(announcement_id="stale-catchup", published_at=BASE_TIME - timedelta(hours=2))],
+            AnnouncementSettings(record_exchanges=["okx"], alert_max_age_minutes=30),
+            bootstrap=False,
+        )
+
+        assert created[0].alert_status == "muted"
+        assert alerts == []
     finally:
         await db.close()
 
@@ -672,6 +782,7 @@ def test_bybit_provider_parses_announcement_payload() -> None:
                 {
                     "title": "Delisting of DOGUSDT Perpetual Contract",
                     "url": "https://announcements.bybit.com/en-US/article/delisting/",
+                    "type": {"key": "delistings", "title": "Delistings"},
                     "publishTime": 1779952014000,
                     "endDateTimestamp": 1779951114000,
                 },
@@ -689,6 +800,7 @@ def test_bybit_provider_parses_announcement_payload() -> None:
     assert rows[0].announcement_id == "new-listing"
     assert rows[0].event_time == datetime(2026, 5, 28, 8, 48, 30, tzinfo=UTC)
     assert rows[1].event_time == datetime(2026, 5, 28, 6, 51, 54, tzinfo=UTC)
+    assert rows[1].category == "Delistings"
 
 
 def test_bybit_provider_tolerates_alternate_article_fields() -> None:

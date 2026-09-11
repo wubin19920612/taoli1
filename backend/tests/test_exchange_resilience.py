@@ -544,6 +544,27 @@ async def test_hyperliquid_parses_perp_contexts_from_info_endpoint() -> None:
     assert rows[0].volume_24h_usdt == 1234567.89
 
 
+def test_hyperliquid_ignores_delisted_perp_assets_with_residual_prices() -> None:
+    adapter = HyperliquidAdapter(client=FakePostClient({}))
+
+    rows = adapter._parse_perp_payload(
+        [
+            {
+                "universe": [
+                    {"name": "vntl:ANTHROPIC", "isDelisted": True},
+                    {"name": "io:ANTH", "isDelisted": False},
+                ]
+            },
+            [
+                {"midPx": "2100", "markPx": "2100", "dayNtlVlm": "1000000"},
+                {"midPx": "2200", "markPx": "2200", "dayNtlVlm": "2000000"},
+            ],
+        ]
+    )
+
+    assert [row.raw_symbol for row in rows] == ["io:ANTH"]
+
+
 @pytest.mark.asyncio
 async def test_hyperliquid_fetches_stock_perp_dexes_and_keeps_best_symbol() -> None:
     client = FakePostClient(

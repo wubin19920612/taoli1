@@ -644,6 +644,9 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                     status = "muted"
                 elif alert_template.suppress_when_card_conditions_fail and card_condition_failure:
                     status = "muted"
+                elif not getattr(app.state, "feishu_live_send_enabled", True):
+                    status = "muted"
+                    message = f"{message}\n\n飞书实时发送未启用"
                 else:
                     try:
                         await app.state.feishu_notifier.send_alert(
@@ -822,7 +825,10 @@ def create_app(
     snapshot_store: SnapshotStore | None = None,
     settings: Settings | None = None,
     start_collector: bool = False,
+    start_background_workers: bool = True,
 ) -> FastAPI:
+    if start_collector and not start_background_workers:
+        raise ValueError("start_collector requires start_background_workers")
     app_settings = settings or get_settings()
     store = snapshot_store or SnapshotStore()
     stop_event = asyncio.Event()
@@ -848,37 +854,43 @@ def create_app(
         )
         new_listing_repo = NewListingMonitorRepository(db)
         app.state.new_listing_prewarmer = NewListingPrewarmer(new_listing_repo)
+        text_alert_sender = (
+            (lambda message: _send_index_component_alert(app, message))
+            if app_settings.feishu_live_send_enabled
+            else None
+        )
         app.state.new_listing_monitor = NewListingMonitor(
             new_listing_repo,
-            alert_sender=lambda message: _send_index_component_alert(app, message),
+            alert_sender=text_alert_sender,
             risk_settings_loader=app.state.settings_repo.get_risk_settings,
             astro_alert_handler=lambda opportunity: _handle_new_listing_astro_alert(app, opportunity),
         )
         app.state.negative_basis_monitor = NegativeBasisMonitor(
             NegativeBasisMonitorRepository(db),
             snapshot_store=store,
-            alert_sender=lambda message: _send_index_component_alert(app, message),
+            alert_sender=text_alert_sender,
             risk_settings_loader=app.state.settings_repo.get_risk_settings,
         )
         app.state.pair_spread_funding_recorder = PairSpreadFundingRecorder(PairSpreadFundingRepository(db))
-        await app.state.second_level_sampler.initialize()
-        await _prewarm_recent_listing_announcements(app)
         tasks: list[asyncio.Task] = []
-        _start_background_task(
-            tasks,
-            app.state.new_listing_monitor.run(stop_event),
-            name="new-listing-monitor",
-        )
-        _start_background_task(
-            tasks,
-            app.state.negative_basis_monitor.run(stop_event),
-            name="negative-basis-monitor",
-        )
-        _start_background_task(
-            tasks,
-            app.state.pair_spread_funding_recorder.run(stop_event),
-            name="pair-spread-funding-recorder",
-        )
+        if start_background_workers:
+            await app.state.second_level_sampler.initialize()
+            await _prewarm_recent_listing_announcements(app)
+            _start_background_task(
+                tasks,
+                app.state.new_listing_monitor.run(stop_event),
+                name="new-listing-monitor",
+            )
+            _start_background_task(
+                tasks,
+                app.state.negative_basis_monitor.run(stop_event),
+                name="negative-basis-monitor",
+            )
+            _start_background_task(
+                tasks,
+                app.state.pair_spread_funding_recorder.run(stop_event),
+                name="pair-spread-funding-recorder",
+            )
         collector: MarketCollector | None = None
         announcement_provider = None
         announcement_research: AnnouncementResearchService | None = None
@@ -890,7 +902,7 @@ def create_app(
             )
             index_component_monitor = IndexComponentMonitor(
                 app.state.index_component_repo,
-                alert_sender=lambda message: _send_index_component_alert(app, message),
+                alert_sender=text_alert_sender,
             )
             app.state.index_component_monitor = index_component_monitor
             index_component_provider_classes = {
@@ -940,7 +952,7 @@ def create_app(
                 ),
                 name="opportunity-radar-alert-loop",
             )
-            if app_settings.feishu_phone_enabled:
+            if app_settings.feishu_live_send_enabled and app_settings.feishu_phone_enabled:
                 _start_background_task(
                     tasks,
                     _run_phone_price_alert_loop(
@@ -954,7 +966,7 @@ def create_app(
             app.state.announcement_research = announcement_research
             announcement_monitor = AnnouncementMonitor(
                 app.state.announcement_repo,
-                alert_sender=lambda message: _send_index_component_alert(app, message),
+                alert_sender=text_alert_sender,
                 new_listing_prewarmer=app.state.new_listing_prewarmer.prewarm_from_announcement,
                 asset_researcher=announcement_research.research,
             )
@@ -1049,20 +1061,21 @@ def create_app(
         )
     )
     app.state.gate_twap_manager = GateTwapJobManager(GateTwapClient())
+    app.state.feishu_live_send_enabled = app_settings.feishu_live_send_enabled
     app.state.feishu_notifier = FeishuNotifier(
         FeishuConfig(
-            webhook_url=app_settings.feishu_webhook_url,
-            secret=app_settings.feishu_secret,
-            app_id=app_settings.feishu_app_id,
-            app_secret=app_settings.feishu_app_secret,
-            alert_chat_id=app_settings.feishu_alert_chat_id,
+            webhook_url=app_settings.feishu_webhook_url if app_settings.feishu_live_send_enabled else "",
+            secret=app_settings.feishu_secret if app_settings.feishu_live_send_enabled else "",
+            app_id=app_settings.feishu_app_id if app_settings.feishu_live_send_enabled else "",
+            app_secret=app_settings.feishu_app_secret if app_settings.feishu_live_send_enabled else "",
+            alert_chat_id=app_settings.feishu_alert_chat_id if app_settings.feishu_live_send_enabled else "",
             phone_user_ids=[
                 item.strip()
                 for item in app_settings.feishu_phone_user_ids.split(",")
                 if item.strip()
             ],
             phone_user_id_type=app_settings.feishu_phone_user_id_type,
-            phone_enabled=app_settings.feishu_phone_enabled,
+            phone_enabled=app_settings.feishu_live_send_enabled and app_settings.feishu_phone_enabled,
         )
     )
     app.add_middleware(
@@ -1098,4 +1111,5 @@ def create_app(
     return app
 
 
+api_app = create_app(start_background_workers=False)
 app = create_app(start_collector=True)

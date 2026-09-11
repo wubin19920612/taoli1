@@ -121,6 +121,7 @@ const defaultRiskSettings: RiskSettings = {
       symbol: "EDGEXUSDT",
       canonical_symbol: "EDGEUSDT",
       market_type: null,
+      dex: null,
       price_multiplier: 1
     }
   ]
@@ -259,16 +260,20 @@ function normalizeAliasSymbol(value?: string | null): string {
 
 function normalizeSymbolAliases(values?: SymbolAlias[]): SymbolAlias[] {
   return (values ?? [])
-    .map((item) => ({
-      exchange: (item.exchange ?? "").trim().toLowerCase(),
-      symbol: normalizeAliasSymbol(item.symbol),
-      canonical_symbol: normalizeAliasSymbol(item.canonical_symbol),
-      market_type: item.market_type ?? null,
-      price_multiplier:
-        Number.isFinite(Number(item.price_multiplier)) && Number(item.price_multiplier) > 0
-          ? Number(item.price_multiplier)
-          : 1
-    }))
+    .map((item) => {
+      const exchange = (item.exchange ?? "").trim().toLowerCase();
+      return {
+        exchange,
+        symbol: normalizeAliasSymbol(item.symbol),
+        canonical_symbol: normalizeAliasSymbol(item.canonical_symbol),
+        market_type: item.market_type ?? null,
+        dex: exchange === "hyperliquid" ? (item.dex ?? "").trim().toLowerCase() || null : null,
+        price_multiplier:
+          Number.isFinite(Number(item.price_multiplier)) && Number(item.price_multiplier) > 0
+            ? Number(item.price_multiplier)
+            : 1
+      };
+    })
     .filter((item) => item.exchange && item.symbol && item.canonical_symbol);
 }
 
@@ -788,6 +793,7 @@ export function SettingsPage() {
                         symbol: "",
                         canonical_symbol: "",
                         market_type: null,
+                        dex: null,
                         price_multiplier: 1
                       })
                     }
@@ -825,6 +831,9 @@ export function SettingsPage() {
                         placeholder="全部"
                         className="alias-market-type-input"
                       />
+                    </Form.Item>
+                    <Form.Item label="DEX" name={[field.name, "dex"]}>
+                      <Input placeholder="仅 Hyperliquid，如 io" className="alias-symbol-input" />
                     </Form.Item>
                     <Form.Item
                       label="价格汇率"

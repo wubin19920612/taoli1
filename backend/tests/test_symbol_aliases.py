@@ -129,6 +129,45 @@ def test_symbol_alias_resolver_accepts_canonical_or_raw_symbol() -> None:
     assert from_raw.price_multiplier == from_canonical.price_multiplier
 
 
+def test_known_hyperliquid_anth_alias_resolves_canonical_symbol_and_dex() -> None:
+    resolved = resolve_symbol_alias(
+        [],
+        exchange="hyperliquid",
+        symbol="ANTHROPIC",
+        market_type=MarketType.FUTURE,
+    )
+
+    assert resolved.raw_symbol == "ANTHUSDT"
+    assert resolved.canonical_symbol == "ANTHROPICUSDT"
+    assert resolved.dex == "io"
+
+    market = snapshot(
+        "hyperliquid",
+        "ANTHUSDT",
+        MarketType.FUTURE,
+        raw_symbol="io:ANTH",
+    )
+    [aliased] = apply_symbol_aliases([market], [])
+
+    assert aliased.symbol == "ANTHROPICUSDT"
+    assert aliased.raw_symbol == "io:ANTH"
+    assert aliased.symbol_alias_original_symbol == "ANTHUSDT"
+
+
+def test_known_hyperliquid_anth_alias_does_not_override_explicit_other_dex() -> None:
+    resolved = resolve_symbol_alias(
+        [],
+        exchange="hyperliquid",
+        symbol="ANTHROPIC",
+        market_type=MarketType.FUTURE,
+        dex="main",
+    )
+
+    assert resolved.raw_symbol == "ANTHROPICUSDT"
+    assert resolved.canonical_symbol == "ANTHROPICUSDT"
+    assert resolved.dex == "main"
+
+
 def test_alias_enables_cross_exchange_opportunity_with_raw_leg_symbols() -> None:
     gate = snapshot("gate", "EDGEXUSDT", MarketType.SPOT, "EDGEX_USDT")
     binance = snapshot("binance", "EDGEUSDT", MarketType.FUTURE, "EDGEUSDT").model_copy(

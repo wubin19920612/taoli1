@@ -921,6 +921,25 @@ describe("PairMonitorPage", () => {
     expect(requests.some((request) => request.includes("/pair-spread/hyperliquid-markets"))).toBe(true);
   });
 
+  it("leaves an unselected Hyperliquid DEX unset for backend alias resolution", async () => {
+    window.history.pushState(
+      {},
+      "",
+      "/?page=pair-monitor&leg1_exchange=bitget&leg1_market_type=future&leg1_symbol=ANTHROPIC" +
+        "&leg2_exchange=hyperliquid&leg2_market_type=future&leg2_symbol=ANTHROPIC&hours=24&interval_seconds=60"
+    );
+
+    render(<PairMonitorPage />);
+
+    await waitFor(() => {
+      const query = requests
+        .map((request) => new URL(request, "http://localhost"))
+        .find((url) => url.pathname.endsWith("/pair-spread/query"));
+      expect(query?.searchParams.get("leg2_dex")).toBeNull();
+      expect(query?.searchParams.get("leg2_symbol")).toBe("ANTHROPIC");
+    });
+  });
+
   it("shows the funding rate difference table", async () => {
     const user = userEvent.setup();
     window.history.pushState(

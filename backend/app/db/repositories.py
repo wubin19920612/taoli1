@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 
 import aiosqlite
 
@@ -747,6 +747,22 @@ class AnnouncementRepository:
         cursor = await self.db.execute("SELECT 1 FROM exchange_announcements LIMIT 1")
         row = await cursor.fetchone()
         return row is not None
+
+    async def latest_published_at(self, *, exchange: str, source: str) -> datetime | None:
+        cursor = await self.db.execute(
+            """
+            SELECT MAX(published_at) AS published_at
+            FROM exchange_announcements
+            WHERE exchange = ? AND source = ?
+            """,
+            (exchange.strip().lower(), source.strip().lower()),
+        )
+        row = await cursor.fetchone()
+        value = row["published_at"] if row is not None else None
+        if not value:
+            return None
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
 
     async def get_provider_state(self, key: str) -> dict[str, object] | None:
         cursor = await self.db.execute(

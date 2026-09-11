@@ -21,8 +21,12 @@
 ```bash
 cd backend
 python -m pip install -e ".[dev]"
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn app.main:api_app --reload --host 0.0.0.0 --port 8000
 ```
+
+`api_app` 只启动 HTTP API，不启动行情采集、公告轮询或通知 worker。只有生产服务才应使用
+`app.main:app`；直接运行生产入口时，还必须显式设置 `FEISHU_LIVE_SEND_ENABLED=true`
+才会发送真实飞书消息。Docker Compose 的生产后端默认显式开启该开关。
 
 前端：
 

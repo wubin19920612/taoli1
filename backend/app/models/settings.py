@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.models.market import MarketType
 
@@ -28,6 +28,7 @@ class SymbolAlias(BaseModel):
     symbol: str
     canonical_symbol: str
     market_type: MarketType | None = None
+    dex: str | None = None
     price_multiplier: float = Field(default=1.0, gt=0)
 
     @field_validator("exchange")
@@ -42,6 +43,20 @@ class SymbolAlias(BaseModel):
     @classmethod
     def normalize_symbol(cls, value: str) -> str:
         return _normalize_alias_symbol(value)
+
+    @field_validator("dex")
+    @classmethod
+    def normalize_dex(cls, value: str | None) -> str | None:
+        normalized = value.strip().lower() if isinstance(value, str) else None
+        return normalized or None
+
+    @model_validator(mode="after")
+    def validate_dex_scope(self) -> "SymbolAlias":
+        if self.dex is not None and self.exchange != "hyperliquid":
+            raise ValueError("dex is only supported for hyperliquid symbol aliases")
+        if self.dex is not None and self.market_type not in {None, MarketType.FUTURE}:
+            raise ValueError("hyperliquid DEX aliases only support contract markets")
+        return self
 
 
 def default_symbol_aliases() -> list[SymbolAlias]:

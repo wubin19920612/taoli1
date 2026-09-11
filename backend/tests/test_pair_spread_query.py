@@ -1175,6 +1175,36 @@ async def test_hyperliquid_without_dex_rejects_ambiguous_same_name_asset() -> No
 
 
 @pytest.mark.asyncio
+async def test_hyperliquid_without_dex_ignores_delisted_markets() -> None:
+    service = PairSpreadQueryService()
+
+    async def fake_post_json(url: str, body: dict[str, Any]):
+        if body.get("type") == "perpDexs":
+            return [{"name": "para"}, {"name": "io"}]
+        if body.get("type") == "metaAndAssetCtxs":
+            if body.get("dex") == "para":
+                return [
+                    {"universe": [{"name": "para:ANTH", "isDelisted": True}]},
+                    [{}],
+                ]
+            if body.get("dex") == "io":
+                return [
+                    {"universe": [{"name": "io:ANTH", "isDelisted": False}]},
+                    [{}],
+                ]
+            return [{"universe": []}, []]
+        raise AssertionError(f"unexpected body: {body}")
+
+    service._post_json = fake_post_json  # type: ignore[method-assign]
+    try:
+        resolved = await service._resolve_hyperliquid_coin("ANTHUSDT")
+    finally:
+        await service.aclose()
+
+    assert resolved == ("io:ANTH", "io")
+
+
+@pytest.mark.asyncio
 async def test_hyperliquid_main_dex_is_explicit_but_uses_main_api_payload() -> None:
     service = PairSpreadQueryService()
     bodies: list[dict[str, Any]] = []

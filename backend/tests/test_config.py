@@ -31,7 +31,20 @@ def test_get_settings_loads_dotenv_from_parent_directory(
 
     assert settings.feishu_webhook_url == "https://example.test/hook"
     assert settings.feishu_secret == "local-secret"
+    assert settings.feishu_live_send_enabled is False
     assert settings.dashboard_password == "dashboard-pass"
+
+
+def test_get_settings_requires_explicit_opt_in_for_live_feishu(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / ".env").write_text("FEISHU_LIVE_SEND_ENABLED=true", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("FEISHU_LIVE_SEND_ENABLED", raising=False)
+    get_settings.cache_clear()
+
+    try:
+        assert get_settings().feishu_live_send_enabled is True
+    finally:
+        get_settings.cache_clear()
 
 
 def test_get_settings_prefers_local_database_copy_when_docker_path_is_loaded(

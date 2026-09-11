@@ -22,6 +22,7 @@ describe("AnnouncementsPage", () => {
             alert_exchanges: ["bybit"],
             listing_delisting_alerts_enabled: true,
             bootstrap_alerts_enabled: false,
+            alert_max_age_minutes: 30,
             event_reminders_enabled: true,
             event_reminder_minutes_before: 30
           });
@@ -126,6 +127,7 @@ describe("AnnouncementsPage", () => {
         alert_exchanges: ["bybit"],
         listing_delisting_alerts_enabled: true,
         bootstrap_alerts_enabled: false,
+        alert_max_age_minutes: 30,
         event_reminders_enabled: true,
         event_reminder_minutes_before: 30
       });
