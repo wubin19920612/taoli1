@@ -18,6 +18,7 @@ DEFAULT_NEW_LISTING_EXCHANGES: tuple[str, ...] = (
     "okx",
     "binance",
 )
+DEFAULT_NEW_LISTING_ALERT_COOLDOWN_SECONDS = 60
 
 NewListingAlertLevel = Literal["none", "normal", "strong", "extreme"]
 
@@ -46,7 +47,12 @@ class NewListingWatchItem(BaseModel):
     normal_consecutive_hits: int = Field(default=2, ge=1, le=20, description="普通提醒需要连续命中的次数。")
     strong_consecutive_hits: int = Field(default=1, ge=1, le=20, description="强提醒需要连续命中的次数。")
     extreme_consecutive_hits: int = Field(default=1, ge=1, le=20, description="极端提醒需要连续命中的次数。")
-    cooldown_seconds: int = Field(default=60, ge=0, le=86_400, description="同一方向提醒后的冷却时间。")
+    cooldown_seconds: int = Field(
+        default=DEFAULT_NEW_LISTING_ALERT_COOLDOWN_SECONDS,
+        ge=0,
+        le=86_400,
+        description="同一方向提醒后的冷却时间。",
+    )
     buy_fee_pct: float = Field(default=0.05, ge=0.0, le=10.0, description="买入侧手续费百分比。")
     sell_fee_pct: float = Field(default=0.05, ge=0.0, le=10.0, description="卖出侧手续费百分比。")
     slippage_buffer_pct: float = Field(default=0.10, ge=0.0, le=50.0, description="额外滑点缓冲百分比。")

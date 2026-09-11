@@ -18,6 +18,7 @@ from app.models.announcement import AnnouncementKind, ExchangeAnnouncement
 from app.models.astro import AstroAlertActionResult
 from app.models.market import MarketType
 from app.models.new_listing import (
+    DEFAULT_NEW_LISTING_ALERT_COOLDOWN_SECONDS,
     DEFAULT_NEW_LISTING_EXCHANGES,
     NewListingAlertEvent,
     NewListingAlertLevel,
@@ -39,6 +40,7 @@ logger = logging.getLogger(__name__)
 NEW_LISTING_PREWARM_LOOKBACK_HOURS = 2
 NEW_LISTING_PREWARM_FUTURE_HOURS = 72
 NEW_LISTING_PREWARM_POST_LISTING_HOURS = 2
+LEGACY_NEW_LISTING_PREWARM_COOLDOWN_SECONDS = 5
 
 
 def utc_now() -> datetime:
@@ -515,11 +517,19 @@ class NewListingPrewarmer:
         saved: list[NewListingWatchItem] = []
         for existing in await self.repo.list_watch_items():
             legacy_stop_at = _legacy_auto_stop_at(existing)
-            if existing.stop_at is not None or legacy_stop_at is None:
+            updates: dict[str, object] = {}
+            if existing.stop_at is None and legacy_stop_at is not None:
+                updates["stop_at"] = legacy_stop_at
+            if (
+                _is_auto_prewarm_watch(existing)
+                and existing.cooldown_seconds == LEGACY_NEW_LISTING_PREWARM_COOLDOWN_SECONDS
+            ):
+                updates["cooldown_seconds"] = DEFAULT_NEW_LISTING_ALERT_COOLDOWN_SECONDS
+            if not updates:
                 continue
             saved.append(
                 await self.repo.upsert_watch_item(
-                    existing.model_copy(update={"stop_at": legacy_stop_at})
+                    existing.model_copy(update=updates)
                 )
             )
         return saved
@@ -573,7 +583,7 @@ class NewListingPrewarmer:
                     normal_consecutive_hits=1,
                     strong_consecutive_hits=1,
                     extreme_consecutive_hits=1,
-                    cooldown_seconds=5,
+                    cooldown_seconds=DEFAULT_NEW_LISTING_ALERT_COOLDOWN_SECONDS,
                     buy_fee_pct=0.05,
                     sell_fee_pct=0.05,
                     slippage_buffer_pct=0.10,
@@ -598,6 +608,8 @@ class NewListingPrewarmer:
                         updates["start_at"] = next_start_at
                     if next_stop_at != existing.stop_at:
                         updates["stop_at"] = next_stop_at
+                    if existing.cooldown_seconds == LEGACY_NEW_LISTING_PREWARM_COOLDOWN_SECONDS:
+                        updates["cooldown_seconds"] = DEFAULT_NEW_LISTING_ALERT_COOLDOWN_SECONDS
                 if not updates:
                     continue
                 item = existing.model_copy(update=updates)

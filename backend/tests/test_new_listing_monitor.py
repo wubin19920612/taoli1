@@ -10,7 +10,7 @@ from app.db.schema import initialize_schema
 from app.main import create_app
 from app.models.announcement import AnnouncementKind, AnnouncementSettings, ExchangeAnnouncement
 from app.models.astro import AstroAlertActionResult
-from app.models.new_listing import NewListingWatchItem
+from app.models.new_listing import NewListingSpreadSample, NewListingWatchItem
 from app.models.second_level_sampling import SecondLevelMarketSample
 from app.services.announcements import AnnouncementMonitor
 from app.services.new_listing_monitor import NewListingMonitor, NewListingMonitorRepository
@@ -244,6 +244,7 @@ async def test_announcement_monitor_prewarms_new_listing_watchlist() -> None:
     assert watch_items[0].market_type.value == "future"
     assert watch_items[0].interval_seconds == 1
     assert watch_items[0].normal_consecutive_hits == 1
+    assert watch_items[0].cooldown_seconds == 60
     assert watch_items[0].exchanges[0] == "okx"
     assert watch_items[0].start_at == datetime(2026, 8, 18, 10, 0, tzinfo=UTC)
     assert watch_items[0].stop_at == datetime(2026, 8, 18, 12, 5, tzinfo=UTC)
@@ -298,9 +299,17 @@ async def test_new_listing_prewarm_backfills_stop_at_for_existing_auto_watch() -
         id="new-listing-prewarm-legacy",
         symbol="CXMT",
         exchanges=["okx", "gate"],
+        cooldown_seconds=5,
         start_at=datetime(2026, 8, 18, 10, 0, tzinfo=UTC),
     )
+    manual_item = NewListingWatchItem(
+        id="manual-fast-watch",
+        symbol="UNITREE",
+        exchanges=["bybit", "gate"],
+        cooldown_seconds=5,
+    )
     await repo.upsert_watch_item(item)
+    await repo.upsert_watch_item(manual_item)
 
     try:
         saved = await prewarmer.backfill_auto_watch_windows()
@@ -309,7 +318,55 @@ async def test_new_listing_prewarm_backfills_stop_at_for_existing_auto_watch() -
         await db.close()
 
     assert len(saved) == 1
-    assert watch_items[0].stop_at == datetime(2026, 8, 18, 12, 5, tzinfo=UTC)
+    saved_by_id = {saved_item.id: saved_item for saved_item in watch_items}
+    assert saved_by_id[item.id].stop_at == datetime(2026, 8, 18, 12, 5, tzinfo=UTC)
+    assert saved_by_id[item.id].cooldown_seconds == 60
+    assert saved_by_id[manual_item.id].cooldown_seconds == 5
+
+
+def test_new_listing_monitor_keeps_level_fluctuations_in_the_same_cooldown() -> None:
+    monitor = NewListingMonitor(object(), fetcher=PendingFetcher())  # type: ignore[arg-type]
+    item = NewListingWatchItem(
+        id="mcat-auto-watch",
+        symbol="MCAT",
+        market_type="spot",
+        exchanges=["gate", "bitget"],
+        normal_threshold_pct=1,
+        strong_threshold_pct=3,
+        extreme_threshold_pct=8,
+        normal_consecutive_hits=1,
+        strong_consecutive_hits=1,
+        cooldown_seconds=60,
+    )
+    first_at = datetime(2026, 9, 10, 12, 9, 27, tzinfo=UTC)
+
+    def sample(net_spread_pct: float, observed_at: datetime) -> NewListingSpreadSample:
+        return NewListingSpreadSample(
+            watch_id=item.id,
+            observed_at=observed_at,
+            symbol=item.symbol,
+            market_type=item.market_type,
+            buy_exchange="gate",
+            sell_exchange="bitget",
+            buy_price=0.3975,
+            sell_price=0.411,
+            raw_spread_pct=net_spread_pct + 0.2,
+            net_spread_pct=net_spread_pct,
+        )
+
+    strong = sample(3.196, first_at)
+    monitor._classify_sample(item, strong)
+    normal_during_cooldown = sample(2.945, first_at + timedelta(seconds=10))
+    monitor._classify_sample(item, normal_during_cooldown)
+    normal_after_cooldown = sample(2.945, first_at + timedelta(seconds=60))
+    monitor._classify_sample(item, normal_after_cooldown)
+
+    assert strong.alert_level == "strong"
+    assert strong.alert_triggered is True
+    assert normal_during_cooldown.alert_level == "normal"
+    assert normal_during_cooldown.alert_triggered is False
+    assert normal_during_cooldown.no_alert_reason == "冷却中，约 50 秒后可再次提醒"
+    assert normal_after_cooldown.alert_triggered is True
 
 
 @pytest.mark.asyncio
