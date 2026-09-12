@@ -39,7 +39,7 @@ const lookupResult = {
         funding_rate_pct: 0.01,
         funding_next_rate_pct: 0.012,
         funding_interval_hours: 8,
-        mark_price: 100100,
+        mark_price: 100180,
         index_price: 100000,
         timestamp: "2026-09-11T04:00:00Z",
         raw_symbol: "BTCUSDT"
@@ -131,6 +131,10 @@ describe("InstrumentLookupPage", () => {
     expect(screen.getByText("2 / 7")).not.toBeNull();
     expect(screen.queryByText("HTX")).toBeNull();
     expect(screen.getByText("1 现货 · 2 永续")).not.toBeNull();
+    expect(screen.getAllByText("盘口中价")).toHaveLength(3);
+    expect(screen.getByText("标记价 100,180")).not.toBeNull();
+    expect(screen.getByText("100,000 - 100,100")).not.toBeNull();
+    expect(screen.getByText("+0.100% · Binance")).not.toBeNull();
     expect(screen.getByText(/BTC-USDT-SWAP/)).not.toBeNull();
     expect(screen.getAllByText("Binance").length).toBeGreaterThan(0);
     expect(screen.getAllByText("暂无数据").length).toBeGreaterThan(0);

@@ -222,6 +222,25 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+.instrument-market-price {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.instrument-market-price span {
+  flex: 0 0 auto;
+  font-size: 11px;
+}
+
+.instrument-market-price strong {
+  overflow: hidden;
+  font-size: 14px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+}
+
 .instrument-rate {
   font-variant-numeric: tabular-nums;
 }

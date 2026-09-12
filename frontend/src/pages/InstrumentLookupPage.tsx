@@ -115,8 +115,7 @@ function mid(market: MarketSnapshot | null | undefined): number | null {
 }
 
 function displayPrice(market: MarketSnapshot | null | undefined): number | null {
-  if (!market) return null;
-  return market.market_type === "future" ? market.mark_price ?? mid(market) : mid(market);
+  return mid(market);
 }
 
 function bookSpread(market: MarketSnapshot | null | undefined): number | null {
@@ -163,8 +162,12 @@ function MarketCell({ market }: { market: MarketSnapshot | null }) {
   }
   return (
     <div className="instrument-market-cell">
-      <Typography.Text strong>{price(displayPrice(market))}</Typography.Text>
+      <div className="instrument-market-price">
+        <span>盘口中价</span>
+        <Typography.Text strong>{price(displayPrice(market))}</Typography.Text>
+      </div>
       <span>买 {price(market.bid)} · 卖 {price(market.ask)}</span>
+      {market.market_type === "future" ? <span>标记价 {price(market.mark_price)}</span> : null}
       <span>24h {compactUsdt(market.volume_24h_usdt)}</span>
     </div>
   );
