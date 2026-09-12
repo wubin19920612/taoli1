@@ -22,3 +22,4 @@ frontend/dist/
 /*_spread_*.csv
 /*_spread_*.png
 /script/analyze_husdt_bn_bybit.py
+/output/gigadev_ah_perp_minute/gigadev_minute_spreads.csv
