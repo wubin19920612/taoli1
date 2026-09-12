@@ -46,6 +46,7 @@ type PageKey =
   | "gate-twap"
   | "index-components"
   | "announcements"
+  | "oil-news"
   | "settings"
   | "history";
 
@@ -131,6 +132,11 @@ const lazyPages: Record<PageKey, LazyPage> = {
   announcements: lazy(() =>
     import("../pages/AnnouncementsPage").then((module) => ({
       default: module.AnnouncementsPage
+    }))
+  ),
+  "oil-news": lazy(() =>
+    import("../pages/OilNewsPage").then((module) => ({
+      default: module.OilNewsPage
     }))
   ),
   settings: lazy(() =>
@@ -343,6 +349,11 @@ export function AppShell() {
               key: "announcements",
               icon: <NotificationOutlined />,
               label: "交易所公告"
+            },
+            {
+              key: "oil-news",
+              icon: <NotificationOutlined />,
+              label: "原油新闻"
             },
             { key: "settings", icon: <SettingOutlined />, label: "参数与告警" },
             { key: "history", icon: <BellOutlined />, label: "告警历史" }

@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from app.core.security import dashboard_password_header, verify_dashboard_password
 from app.db.repositories import SettingsRepository
 from app.models.announcement import AnnouncementSettings
+from app.models.oil_news import OilNewsSettings
 from app.models.settings import (
     AlertMessageTemplateSettings,
     AstroAutomationSettings,
@@ -237,3 +238,18 @@ async def update_announcement_settings(
 ) -> AnnouncementSettings:
     verify_dashboard_password(request.app.state.settings.dashboard_password, password)
     return await _settings_repo(request).set_announcement_settings(settings)
+
+
+@router.get("/oil-news", response_model=OilNewsSettings)
+async def get_oil_news_settings(request: Request) -> OilNewsSettings:
+    return await _settings_repo(request).get_oil_news_settings()
+
+
+@router.put("/oil-news", response_model=OilNewsSettings)
+async def update_oil_news_settings(
+    settings: OilNewsSettings,
+    request: Request,
+    password: str | None = Depends(dashboard_password_header),
+) -> OilNewsSettings:
+    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
+    return await _settings_repo(request).set_oil_news_settings(settings)

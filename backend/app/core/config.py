@@ -28,6 +28,7 @@ class Settings:
     feishu_phone_user_id_type: str = "open_id"
     feishu_phone_enabled: bool = False
     feishu_live_send_enabled: bool = False
+    oil_news_feishu_live_send_enabled: bool = False
     dashboard_password: str = ""
     history_enabled: bool = True
     history_sample_seconds: int = 120
@@ -187,6 +188,7 @@ def get_settings() -> Settings:
         os.getenv("DATABASE_URL", "sqlite:///./data/radar.db"),
         dotenv_path or None,
     )
+    feishu_live_send_enabled = bool_env("FEISHU_LIVE_SEND_ENABLED", False)
 
     return Settings(
         app_name=os.getenv("APP_NAME", "Arbitrage Radar"),
@@ -211,7 +213,11 @@ def get_settings() -> Settings:
         feishu_phone_user_ids=os.getenv("FEISHU_PHONE_USER_IDS", "").strip(),
         feishu_phone_user_id_type=os.getenv("FEISHU_PHONE_USER_ID_TYPE", "open_id").strip() or "open_id",
         feishu_phone_enabled=bool_env("FEISHU_PHONE_ENABLED", False),
-        feishu_live_send_enabled=bool_env("FEISHU_LIVE_SEND_ENABLED", False),
+        feishu_live_send_enabled=feishu_live_send_enabled,
+        oil_news_feishu_live_send_enabled=bool_env(
+            "OIL_NEWS_FEISHU_LIVE_SEND_ENABLED",
+            feishu_live_send_enabled,
+        ),
         dashboard_password=os.getenv("DASHBOARD_PASSWORD", ""),
         history_enabled=bool_env("HISTORY_ENABLED", True),
         history_sample_seconds=int(os.getenv("HISTORY_SAMPLE_SECONDS", "120")),

@@ -837,6 +837,61 @@ body {
   align-items: end;
 }
 
+.oil-news-page {
+  display: grid;
+  gap: 14px;
+}
+
+.oil-news-page .page-heading-row .ant-typography {
+  margin: 0;
+}
+
+.oil-news-metrics {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(140px, 1fr));
+  gap: 10px;
+}
+
+.oil-news-metrics > div {
+  min-width: 0;
+  padding: 12px 14px;
+  background: #ffffff;
+  border: 1px solid #dce4e1;
+  border-radius: 6px;
+}
+
+.oil-news-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(130px, 1fr));
+  gap: 0 12px;
+  align-items: end;
+}
+
+.oil-news-details {
+  padding: 8px 12px 8px 38px;
+  background: #f7faf9;
+}
+
+.oil-news-reasons {
+  display: grid;
+  gap: 3px;
+}
+
+.oil-news-table .ant-typography {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.oil-news-title-cell {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.oil-news-title-cell .ant-typography {
+  display: block;
+}
+
 .announcements-table .ant-table-cell {
   vertical-align: top;
 }
@@ -5103,6 +5158,10 @@ body {
     padding-top: 44px;
   }
 
+  .oil-news-page {
+    padding-top: 44px;
+  }
+
   .toolbar {
     align-items: stretch;
     flex-direction: column;
@@ -5157,6 +5216,7 @@ body {
   .funding-settings-grid,
   .radar-settings-grid,
   .announcements-settings-grid,
+  .oil-news-settings-grid,
   .pair-monitor-form-grid,
   .gate-twap-form,
   .template-options {
@@ -5286,6 +5346,7 @@ body {
   .research-backtest-grid,
   .research-backtest-stats,
   .announcements-settings-grid,
+  .oil-news-settings-grid,
   .live-pilot-metrics,
   .template-grid,
   .template-options,
@@ -5293,6 +5354,10 @@ body {
   .gate-twap-form,
   .gate-job-event {
     grid-template-columns: 1fr;
+  }
+
+  .oil-news-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .index-composition-stats,
@@ -5408,6 +5473,14 @@ body {
 
   .app-content {
     padding: 8px;
+  }
+
+  .oil-news-metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .oil-news-details {
+    padding-left: 10px;
   }
 
   .panel,

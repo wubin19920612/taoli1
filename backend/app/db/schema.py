@@ -94,6 +94,20 @@ async def _ensure_pair_spread_funding_columns(db: aiosqlite.Connection) -> None:
         await db.execute(f"ALTER TABLE pair_spread_funding_watchlist ADD COLUMN {name} {ddl}")
 
 
+async def _ensure_oil_news_columns(db: aiosqlite.Connection) -> None:
+    cursor = await db.execute("PRAGMA table_info(oil_news_items)")
+    rows = await cursor.fetchall()
+    existing = {row["name"] for row in rows}
+    columns: dict[str, str] = {
+        "title_zh": "TEXT",
+        "summary_zh": "TEXT",
+    }
+    for name, ddl in columns.items():
+        if name in existing:
+            continue
+        await db.execute(f"ALTER TABLE oil_news_items ADD COLUMN {name} {ddl}")
+
+
 async def initialize_schema(db: aiosqlite.Connection) -> None:
     await db.executescript(
         """
@@ -267,6 +281,43 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
           payload TEXT NOT NULL,
           updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
+
+        CREATE TABLE IF NOT EXISTS oil_news_items (
+          id TEXT PRIMARY KEY,
+          fingerprint TEXT NOT NULL UNIQUE,
+          external_id TEXT NOT NULL,
+          source TEXT NOT NULL,
+          source_feed TEXT NOT NULL,
+          title TEXT NOT NULL,
+          title_zh TEXT,
+          url TEXT NOT NULL,
+          summary TEXT,
+          summary_zh TEXT,
+          published_at TEXT NOT NULL,
+          fetched_at TEXT NOT NULL,
+          categories_json TEXT NOT NULL DEFAULT '[]',
+          severity TEXT NOT NULL,
+          impact_score INTEGER NOT NULL,
+          direction TEXT NOT NULL,
+          confidence REAL NOT NULL,
+          horizon TEXT NOT NULL,
+          rationale_json TEXT NOT NULL DEFAULT '[]',
+          risk_note TEXT NOT NULL,
+          market_symbol TEXT,
+          market_price REAL,
+          market_change_1h_pct REAL,
+          market_observed_at TEXT,
+          alert_status TEXT NOT NULL,
+          alerted_at TEXT,
+          UNIQUE(source_feed, external_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_oil_news_items_time
+          ON oil_news_items(published_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_oil_news_items_severity_time
+          ON oil_news_items(severity, published_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_oil_news_items_direction_time
+          ON oil_news_items(direction, published_at DESC);
 
         CREATE TABLE IF NOT EXISTS funding_research_market_snapshots (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -608,5 +659,6 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
     await _ensure_exchange_announcement_columns(db)
     await _ensure_second_level_sample_columns(db)
     await _ensure_pair_spread_funding_columns(db)
+    await _ensure_oil_news_columns(db)
     await _migrate_alert_rule_excluded_labels(db)
     await db.commit()

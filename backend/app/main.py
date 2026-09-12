@@ -23,6 +23,7 @@ from app.api import (
     routes_minute_signals,
     routes_negative_basis_monitor,
     routes_new_listing_monitor,
+    routes_oil_news,
     routes_opportunities,
     routes_opportunity_radar,
     routes_pair_spread,
@@ -41,6 +42,7 @@ from app.db.repositories import (
     IndexComponentRepository,
     AlertRuleRepository,
     OpportunityHistoryRepository,
+    OilNewsRepository,
     PhonePriceAlertEventRepository,
     PhonePriceAlertRuleRepository,
     SettingsRepository,
@@ -92,6 +94,12 @@ from app.services.live_pilot import (
 from app.services.minute_signal_scan import MinuteSignalAlertEngine
 from app.services.negative_basis_monitor import NegativeBasisMonitor, NegativeBasisMonitorRepository
 from app.services.new_listing_monitor import NewListingMonitor, NewListingMonitorRepository, NewListingPrewarmer
+from app.services.oil_news import (
+    OilNewsMonitor,
+    OilNewsProvider,
+    OilNewsTranslator,
+    run_oil_news_loop,
+)
 from app.services.orderbook_validator import OrderBookDepthValidator
 from app.services.opportunity_radar import (
     OpportunityRadarAlertEngine,
@@ -865,6 +873,7 @@ def create_app(
         app.state.funding_research_repo = FundingResearchRepository(db)
         app.state.index_component_repo = IndexComponentRepository(db)
         app.state.announcement_repo = AnnouncementRepository(db)
+        app.state.oil_news_repo = OilNewsRepository(db)
         app.state.second_level_sampler = SecondLevelSampler(
             SecondLevelSamplingRepository(db),
             risk_settings_loader=app.state.settings_repo.get_risk_settings,
@@ -875,6 +884,18 @@ def create_app(
             (lambda message: _send_index_component_alert(app, message))
             if app_settings.feishu_live_send_enabled
             else None
+        )
+        oil_news_alert_sender = (
+            (lambda message: _send_index_component_alert(app, message))
+            if app_settings.oil_news_feishu_live_send_enabled
+            and app_settings.feishu_webhook_url
+            else None
+        )
+        app.state.oil_news_monitor = OilNewsMonitor(
+            app.state.oil_news_repo,
+            OilNewsProvider(),
+            alert_sender=oil_news_alert_sender,
+            translator=OilNewsTranslator(),
         )
         app.state.new_listing_monitor = NewListingMonitor(
             new_listing_repo,
@@ -1000,6 +1021,15 @@ def create_app(
                 ),
                 name="announcement-loop",
             )
+            _start_background_task(
+                tasks,
+                run_oil_news_loop(
+                    app.state.oil_news_monitor,
+                    app.state.settings_repo.get_oil_news_settings,
+                    stop_event,
+                ),
+                name="oil-news-loop",
+            )
             if app_settings.funding_research_enabled:
                 _start_background_task(
                     tasks,
@@ -1035,6 +1065,7 @@ def create_app(
                 "new_listing_monitor",
                 "negative_basis_monitor",
                 "pair_spread_funding_recorder",
+                "oil_news_monitor",
                 "feishu_notifier",
             )
             await db.close()
@@ -1051,6 +1082,7 @@ def create_app(
     app.state.minute_signal_scan_service_factory = None
     app.state.minute_signal_alert_engine = MinuteSignalAlertEngine()
     app.state.second_level_sampler = None
+    app.state.oil_news_monitor = None
     app.state.new_listing_prewarmer = None
     app.state.new_listing_monitor = None
     app.state.negative_basis_monitor = None
@@ -1079,10 +1111,14 @@ def create_app(
     )
     app.state.gate_twap_manager = GateTwapJobManager(GateTwapClient())
     app.state.feishu_live_send_enabled = app_settings.feishu_live_send_enabled
+    feishu_text_send_enabled = (
+        app_settings.feishu_live_send_enabled
+        or app_settings.oil_news_feishu_live_send_enabled
+    )
     app.state.feishu_notifier = FeishuNotifier(
         FeishuConfig(
-            webhook_url=app_settings.feishu_webhook_url if app_settings.feishu_live_send_enabled else "",
-            secret=app_settings.feishu_secret if app_settings.feishu_live_send_enabled else "",
+            webhook_url=app_settings.feishu_webhook_url if feishu_text_send_enabled else "",
+            secret=app_settings.feishu_secret if feishu_text_send_enabled else "",
             app_id=app_settings.feishu_app_id if app_settings.feishu_live_send_enabled else "",
             app_secret=app_settings.feishu_app_secret if app_settings.feishu_live_send_enabled else "",
             alert_chat_id=app_settings.feishu_alert_chat_id if app_settings.feishu_live_send_enabled else "",
@@ -1115,6 +1151,7 @@ def create_app(
     app.include_router(routes_new_listing_monitor.router, prefix="/api")
     app.include_router(routes_index_components.router, prefix="/api")
     app.include_router(routes_announcements.router, prefix="/api")
+    app.include_router(routes_oil_news.router, prefix="/api")
     app.include_router(routes_alerts.router, prefix="/api")
     app.include_router(routes_phone_alerts.router, prefix="/api")
     app.include_router(routes_funding_arbitrage.router, prefix="/api")

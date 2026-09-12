@@ -12,6 +12,7 @@
 - 小硬盘友好的轻量历史：默认每 120 秒只记录价差达到 0.5%、成交额达到 100K 的 Top 100 机会，保留 3 天并定期清理 SQLite 空间。
 - Web 面板：实时机会、筛选、风险参数、告警规则、告警历史。
 - 飞书自定义机器人告警，支持 webhook secret 签名。
+- 原油重大新闻监测：作为价差后端的内置 worker 聚合公开新闻与 EIA RSS，按事件影响给出做多/做空倾向、置信度、影响周期和 CLUSDT 行情验证；复用公告的飞书通道，重大消息优先翻译为中文并附英文原题，翻译不可用时立即降级为英文原文。
 - Docker Compose 一键部署。
 
 ## 本地运行
@@ -27,6 +28,11 @@ uvicorn app.main:api_app --reload --host 0.0.0.0 --port 8000
 `api_app` 只启动 HTTP API，不启动行情采集、公告轮询或通知 worker。只有生产服务才应使用
 `app.main:app`；直接运行生产入口时，还必须显式设置 `FEISHU_LIVE_SEND_ENABLED=true`
 才会发送真实飞书消息。Docker Compose 的生产后端默认显式开启该开关。
+
+原油新闻监测和公告监测一样，由 `app.main:app` 随行情采集器一起启动并复用同一个飞书
+notifier，不需要运行第二个服务。`OIL_NEWS_FEISHU_LIVE_SEND_ENABLED=true` 可以只放行原油
+新闻，而不连带开启其他价差告警；首次启动默认只回填历史新闻，后续按面板中的轮询间隔
+（默认 300 秒）监测并推送新消息。
 
 前端：
 
@@ -108,7 +114,12 @@ docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
 ```env
 FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/...
 FEISHU_SECRET=...
+OIL_NEWS_FEISHU_LIVE_SEND_ENABLED=true
 ```
+
+原油新闻和公告复用同一个飞书 webhook、签名和 notifier。原油的实发许可仍独立于
+`FEISHU_LIVE_SEND_ENABLED`；只开启 `OIL_NEWS_FEISHU_LIVE_SEND_ENABLED` 时，不会同时放开
+其他价差告警。
 
 然后重启：
 

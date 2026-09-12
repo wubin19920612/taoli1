@@ -528,6 +528,60 @@ def test_create_app_preserves_feishu_credentials_when_live_send_is_enabled() -> 
     assert config.phone_enabled is True
 
 
+def test_oil_news_reuses_shared_feishu_notifier_and_keeps_other_live_sends_off() -> None:
+    app = create_app(
+        settings=Settings(
+            database_url="sqlite:///:memory:",
+            feishu_webhook_url="https://example.test/webhook",
+            feishu_secret="webhook-secret",
+            feishu_live_send_enabled=False,
+            oil_news_feishu_live_send_enabled=True,
+        ),
+        start_background_workers=False,
+    )
+
+    with TestClient(app):
+        monitor = app.state.oil_news_monitor
+        config = app.state.feishu_notifier.config
+        notifier = SimpleNamespace(send_text=AsyncMock())
+
+        assert monitor.alert_sender is not None
+        assert app.state.feishu_live_send_enabled is False
+        assert config.webhook_url == "https://example.test/webhook"
+        assert config.secret == "webhook-secret"
+        assert not hasattr(app.state, "oil_news_feishu_notifier")
+
+        original_notifier = app.state.feishu_notifier
+        try:
+            app.state.feishu_notifier = notifier
+            asyncio.run(monitor.alert_sender("oil news alert"))
+        finally:
+            app.state.feishu_notifier = original_notifier
+        notifier.send_text.assert_awaited_once_with("oil news alert")
+
+
+def test_price_collector_starts_announcement_and_oil_news_workers(monkeypatch) -> None:
+    started: list[str] = []
+
+    def record_background_task(_tasks, coroutine, *, name: str) -> None:
+        started.append(name)
+        coroutine.close()
+
+    monkeypatch.setattr("app.main._start_background_task", record_background_task)
+    monkeypatch.setattr("app.main.default_exchange_adapters", lambda: [])
+    app = create_app(
+        settings=Settings(database_url="sqlite:///:memory:"),
+        start_collector=True,
+    )
+
+    with TestClient(app) as client:
+        assert client.get("/api/health").status_code == 200
+
+    assert "market-collector" in started
+    assert "announcement-loop" in started
+    assert "oil-news-loop" in started
+
+
 def test_collector_startup_uses_multi_exchange_index_component_provider(monkeypatch) -> None:
     adapters = [
         FakeExchangeAdapter("binance"),

@@ -887,6 +887,66 @@ export interface AnnouncementExchangeOption {
   value: string;
 }
 
+export type OilNewsDirection = "long" | "short" | "watch";
+export type OilNewsSeverity = "critical" | "high" | "medium" | "low";
+
+export interface OilMarketSnapshot {
+  symbol: string;
+  price?: number | null;
+  change_1h_pct?: number | null;
+  observed_at: string;
+}
+
+export interface OilNewsItem {
+  id: string;
+  fingerprint: string;
+  external_id: string;
+  source: string;
+  source_feed: string;
+  title: string;
+  title_zh?: string | null;
+  url: string;
+  summary?: string | null;
+  summary_zh?: string | null;
+  published_at: string;
+  fetched_at: string;
+  categories: string[];
+  severity: OilNewsSeverity;
+  impact_score: number;
+  direction: OilNewsDirection;
+  confidence: number;
+  horizon: string;
+  rationale: string[];
+  risk_note: string;
+  market?: OilMarketSnapshot | null;
+  alert_status: string;
+  alerted_at?: string | null;
+}
+
+export interface OilNewsSettings {
+  enabled: boolean;
+  poll_interval_seconds: number;
+  feishu_notifications_enabled: boolean;
+  alert_min_severity: OilNewsSeverity;
+  alert_max_age_minutes: number;
+  bootstrap_alerts_enabled: boolean;
+}
+
+export interface OilNewsFilters {
+  severity?: OilNewsSeverity;
+  direction?: OilNewsDirection;
+  limit?: number;
+}
+
+export interface OilNewsRefreshResult {
+  fetched_count: number;
+  relevant_count: number;
+  inserted_count: number;
+  alerted_count: number;
+  market?: OilMarketSnapshot | null;
+  errors: string[];
+}
+
 export interface MarketFilters {
   symbol?: string;
   exchange?: string;
@@ -1073,6 +1133,8 @@ export interface PairSpreadCurrentLeg {
   raw_symbol: string;
   price: number;
   price_field: PairSpreadPriceField;
+  bid_price: number | null;
+  ask_price: number | null;
   mark_price: number | null;
   index_price: number | null;
   mid_price: number | null;
@@ -1100,6 +1162,12 @@ export interface PairSpreadCurrentSnapshot {
   leg2: PairSpreadCurrentLeg;
   spread_abs: number;
   spread_pct: number;
+  open_spread_abs: number | null;
+  open_spread_pct: number | null;
+  close_spread_abs: number | null;
+  close_spread_pct: number | null;
+  mark_spread_abs: number | null;
+  mark_spread_pct: number | null;
 }
 
 export interface PairSpreadValueStats {

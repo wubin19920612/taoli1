@@ -21,6 +21,13 @@ from app.models.index_component import (
     IndexComponentWatchItem,
 )
 from app.models.market import MarketType
+from app.models.oil_news import (
+    OilMarketSnapshot,
+    OilNewsDirection,
+    OilNewsItem,
+    OilNewsSettings,
+    OilNewsSeverity,
+)
 from app.models.opportunity import Opportunity, OpportunityType
 from app.models.funding_arbitrage import FundingArbitrageSettings
 from app.models.opportunity_radar import OpportunityRadarSettings
@@ -895,6 +902,159 @@ class AnnouncementRepository:
         )
 
 
+class OilNewsRepository:
+    def __init__(self, db: aiosqlite.Connection):
+        self.db = db
+
+    async def create_if_new(self, item: OilNewsItem) -> OilNewsItem | None:
+        market = item.market
+        cursor = await self.db.execute(
+            """
+            INSERT OR IGNORE INTO oil_news_items (
+              id, fingerprint, external_id, source, source_feed, title, title_zh, url,
+              summary, summary_zh, published_at, fetched_at, categories_json, severity,
+              impact_score, direction, confidence, horizon, rationale_json, risk_note,
+              market_symbol, market_price, market_change_1h_pct, market_observed_at,
+              alert_status, alerted_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                item.id,
+                item.fingerprint,
+                item.external_id,
+                item.source,
+                item.source_feed,
+                item.title,
+                item.title_zh,
+                item.url,
+                item.summary,
+                item.summary_zh,
+                item.published_at.isoformat(),
+                item.fetched_at.isoformat(),
+                json.dumps(item.categories, ensure_ascii=False),
+                item.severity.value,
+                item.impact_score,
+                item.direction.value,
+                item.confidence,
+                item.horizon,
+                json.dumps(item.rationale, ensure_ascii=False),
+                item.risk_note,
+                market.symbol if market else None,
+                market.price if market else None,
+                market.change_1h_pct if market else None,
+                market.observed_at.isoformat() if market else None,
+                item.alert_status,
+                _serialize_datetime(item.alerted_at),
+            ),
+        )
+        await self.db.commit()
+        return item if cursor.rowcount else None
+
+    async def update_translation(
+        self,
+        item_id: str,
+        *,
+        title_zh: str,
+        summary_zh: str | None,
+    ) -> None:
+        await self.db.execute(
+            "UPDATE oil_news_items SET title_zh = ?, summary_zh = ? WHERE id = ?",
+            (title_zh, summary_zh, item_id),
+        )
+        await self.db.commit()
+
+    async def has_any(self) -> bool:
+        cursor = await self.db.execute("SELECT 1 FROM oil_news_items LIMIT 1")
+        return await cursor.fetchone() is not None
+
+    async def get_by_fingerprint(self, fingerprint: str) -> OilNewsItem | None:
+        cursor = await self.db.execute(
+            "SELECT * FROM oil_news_items WHERE fingerprint = ? LIMIT 1",
+            (fingerprint,),
+        )
+        row = await cursor.fetchone()
+        return self._from_db(row) if row is not None else None
+
+    async def update_alert_status(
+        self,
+        item_id: str,
+        status: str,
+        *,
+        alerted_at: datetime | None = None,
+    ) -> None:
+        await self.db.execute(
+            "UPDATE oil_news_items SET alert_status = ?, alerted_at = ? WHERE id = ?",
+            (status, _serialize_datetime(alerted_at), item_id),
+        )
+        await self.db.commit()
+
+    async def list(
+        self,
+        *,
+        severity: OilNewsSeverity | str | None = None,
+        direction: OilNewsDirection | str | None = None,
+        limit: int = 100,
+    ) -> list[OilNewsItem]:
+        clauses: list[str] = []
+        params: list[object] = []
+        if severity:
+            clauses.append("severity = ?")
+            value = severity.value if isinstance(severity, OilNewsSeverity) else str(severity)
+            params.append(value)
+        if direction:
+            clauses.append("direction = ?")
+            value = direction.value if isinstance(direction, OilNewsDirection) else str(direction)
+            params.append(value)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(limit)
+        cursor = await self.db.execute(
+            f"""
+            SELECT * FROM oil_news_items
+            {where}
+            ORDER BY published_at DESC, fetched_at DESC
+            LIMIT ?
+            """,
+            params,
+        )
+        return [self._from_db(row) for row in await cursor.fetchall()]
+
+    def _from_db(self, row: aiosqlite.Row) -> OilNewsItem:
+        market = None
+        if row["market_observed_at"]:
+            market = OilMarketSnapshot(
+                symbol=row["market_symbol"] or "CLUSDT",
+                price=row["market_price"],
+                change_1h_pct=row["market_change_1h_pct"],
+                observed_at=row["market_observed_at"],
+            )
+        return OilNewsItem(
+            id=row["id"],
+            fingerprint=row["fingerprint"],
+            external_id=row["external_id"],
+            source=row["source"],
+            source_feed=row["source_feed"],
+            title=row["title"],
+            title_zh=row["title_zh"],
+            url=row["url"],
+            summary=row["summary"],
+            summary_zh=row["summary_zh"],
+            published_at=row["published_at"],
+            fetched_at=row["fetched_at"],
+            categories=json.loads(row["categories_json"]),
+            severity=OilNewsSeverity(row["severity"]),
+            impact_score=row["impact_score"],
+            direction=OilNewsDirection(row["direction"]),
+            confidence=row["confidence"],
+            horizon=row["horizon"],
+            rationale=json.loads(row["rationale_json"]),
+            risk_note=row["risk_note"],
+            market=market,
+            alert_status=row["alert_status"],
+            alerted_at=row["alerted_at"],
+        )
+
+
 class SettingsRepository:
     def __init__(self, db: aiosqlite.Connection):
         self.db = db
@@ -1151,6 +1311,28 @@ class SettingsRepository:
             ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
             """,
             ("announcements", settings.model_dump_json()),
+        )
+        await self.db.commit()
+        return settings
+
+    async def get_oil_news_settings(self) -> OilNewsSettings:
+        cursor = await self.db.execute(
+            "SELECT payload FROM app_settings WHERE key = ?",
+            ("oil_news",),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return OilNewsSettings()
+        return OilNewsSettings.model_validate(json.loads(row["payload"]))
+
+    async def set_oil_news_settings(self, settings: OilNewsSettings) -> OilNewsSettings:
+        await self.db.execute(
+            """
+            INSERT INTO app_settings (key, payload)
+            VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
+            """,
+            ("oil_news", settings.model_dump_json()),
         )
         await self.db.commit()
         return settings

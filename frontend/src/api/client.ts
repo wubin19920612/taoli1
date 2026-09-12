@@ -53,6 +53,10 @@ import type {
   MarketSnapshot,
   Opportunity,
   OpportunityFilters,
+  OilNewsFilters,
+  OilNewsItem,
+  OilNewsRefreshResult,
+  OilNewsSettings,
   PhonePriceAlertDiagnostics,
   PhonePriceAlertEvent,
   PhonePriceAlertRule,
@@ -276,6 +280,30 @@ export async function listAnnouncements(filters: AnnouncementFilters = {}): Prom
 
 export async function listAnnouncementExchanges(): Promise<AnnouncementExchangeOption[]> {
   return fetchJson<AnnouncementExchangeOption[]>("/announcements/exchanges");
+}
+
+export async function getOilNewsSettings(): Promise<OilNewsSettings> {
+  return fetchJson<OilNewsSettings>("/settings/oil-news");
+}
+
+export async function updateOilNewsSettings(settings: OilNewsSettings): Promise<OilNewsSettings> {
+  return fetchJson<OilNewsSettings>("/settings/oil-news", {
+    method: "PUT",
+    body: JSON.stringify(settings)
+  });
+}
+
+export async function listOilNews(filters: OilNewsFilters = {}): Promise<OilNewsItem[]> {
+  const url = buildUrl("/oil-news", { limit: 200, ...filters });
+  const response = await fetch(url, { headers: authHeaders() });
+  if (!response.ok) {
+    throw new Error(extractErrorMessage(await response.text(), response.status));
+  }
+  return response.json() as Promise<OilNewsItem[]>;
+}
+
+export async function refreshOilNews(): Promise<OilNewsRefreshResult> {
+  return fetchJson<OilNewsRefreshResult>("/oil-news/refresh", { method: "POST" });
 }
 
 export async function getFundingArbitrageSettings(): Promise<FundingArbitrageSettings> {
