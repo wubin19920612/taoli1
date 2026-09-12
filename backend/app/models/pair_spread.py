@@ -1,7 +1,8 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
+from typing import Literal
 
-from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
 from app.models.market import MarketType
 
@@ -29,6 +30,7 @@ PAIR_SPREAD_INTERVAL_SECONDS_OPTIONS: tuple[int, ...] = (5, 10, 30, 60, 300, 900
 PAIR_SPREAD_MIN_INTERVAL_SECONDS = 5
 PAIR_SPREAD_MAX_INTERVAL_SECONDS = 86_400
 PAIR_SPREAD_FUNDING_RECORD_INTERVAL_SECONDS = 60
+MAX_PAIR_SPREAD_PRESETS = 24
 HYPERLIQUID_MAIN_DEX = "main"
 
 
@@ -232,6 +234,63 @@ class PairSpreadFundingRecordStatus(BaseModel):
     item: PairSpreadFundingWatchItem | None = None
     samples: list[PairSpreadRealtimeFundingPoint] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+
+
+class PairSpreadPreset(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str = Field(min_length=1, max_length=512)
+    leg1_exchange: str = Field(min_length=1, max_length=32)
+    leg1_market_type: MarketType = MarketType.FUTURE
+    leg1_dex: str = Field(default="", max_length=64)
+    leg1_symbol: str = Field(min_length=1, max_length=128)
+    leg2_exchange: str = Field(min_length=1, max_length=32)
+    leg2_market_type: MarketType = MarketType.FUTURE
+    leg2_dex: str = Field(default="", max_length=64)
+    leg2_symbol: str = Field(min_length=1, max_length=128)
+    leg2_multiplier: float = Field(default=1.0, gt=0)
+    hours: int = Field(default=4, ge=PAIR_SPREAD_MIN_HOURS)
+    interval_seconds: int = Field(
+        default=60,
+        alias="intervalSeconds",
+        ge=PAIR_SPREAD_MIN_INTERVAL_SECONDS,
+        le=PAIR_SPREAD_MAX_INTERVAL_SECONDS,
+    )
+    show_day_compare: bool = Field(default=False, alias="showDayCompare")
+    day_compare_days: int = Field(default=3, alias="dayCompareDays", ge=2, le=7)
+    day_compare_mode: Literal["query", "custom"] = Field(
+        default="query",
+        alias="dayCompareMode",
+    )
+    day_compare_start_time: str = Field(default="", alias="dayCompareStartTime", max_length=5)
+    day_compare_end_time: str = Field(default="", alias="dayCompareEndTime", max_length=5)
+    saved_at: datetime = Field(alias="savedAt")
+
+    @field_validator("leg1_exchange", "leg2_exchange", mode="before")
+    @classmethod
+    def normalize_preset_exchange(cls, value: object) -> object:
+        return value.strip().lower() if isinstance(value, str) else value
+
+    @field_validator("leg1_dex", "leg2_dex", mode="before")
+    @classmethod
+    def normalize_preset_dex(cls, value: object) -> object:
+        return value.strip().lower() if isinstance(value, str) else value
+
+    @field_validator("leg1_symbol", "leg2_symbol", mode="before")
+    @classmethod
+    def normalize_preset_symbol(cls, value: object) -> object:
+        return value.strip().upper() if isinstance(value, str) else value
+
+    @field_validator("saved_at")
+    @classmethod
+    def normalize_preset_saved_at(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+
+
+class PairSpreadPresetMergeRequest(BaseModel):
+    presets: list[PairSpreadPreset] = Field(max_length=MAX_PAIR_SPREAD_PRESETS)
 
 
 class PairSpreadCurrentLeg(BaseModel):

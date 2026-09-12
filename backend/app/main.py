@@ -108,6 +108,7 @@ from app.services.opportunity_radar import (
     build_opportunity_radar_preview,
 )
 from app.services.pair_spread_funding_recorder import PairSpreadFundingRecorder, PairSpreadFundingRepository
+from app.services.pair_spread_presets import PairSpreadPresetRepository
 from app.services.phone_price_alerts import PhonePriceAlertEngine, build_phone_price_alert_message
 from app.services.risk_labels import (
     NEW_LISTING_RISK_LABEL,
@@ -911,6 +912,7 @@ def create_app(
             risk_settings_loader=app.state.settings_repo.get_risk_settings,
         )
         app.state.pair_spread_funding_recorder = PairSpreadFundingRecorder(PairSpreadFundingRepository(db))
+        app.state.pair_spread_preset_repo = PairSpreadPresetRepository(db)
         tasks: list[asyncio.Task] = []
         if start_background_workers:
             await app.state.second_level_sampler.initialize()
@@ -1089,6 +1091,7 @@ def create_app(
     app.state.pair_spread_query_service_factory = None
     app.state.premium_index_query_service_factory = None
     app.state.pair_spread_funding_recorder = None
+    app.state.pair_spread_preset_repo = None
     app.state.minute_signal_scan_service_factory = None
     app.state.minute_signal_alert_engine = MinuteSignalAlertEngine()
     app.state.second_level_sampler = None

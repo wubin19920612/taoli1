@@ -653,6 +653,17 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_pair_spread_funding_samples_pair_time
           ON pair_spread_funding_samples(pair_key, bucket_at DESC);
+
+        CREATE TABLE IF NOT EXISTS pair_spread_presets (
+          id TEXT PRIMARY KEY,
+          payload TEXT NOT NULL,
+          saved_at TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_pair_spread_presets_saved_at
+          ON pair_spread_presets(saved_at DESC);
         """
     )
     await _ensure_opportunity_history_columns(db)

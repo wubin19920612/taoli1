@@ -6,6 +6,30 @@ import { PairMonitorPage } from "../src/pages/PairMonitorPage";
 
 const observedAt = "2026-07-24T02:00:00Z";
 
+function savedPairPreset(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: "binance|future||BTC|okx|future||BTC",
+    leg1_exchange: "binance",
+    leg1_market_type: "future",
+    leg1_dex: "",
+    leg1_symbol: "BTCUSDT",
+    leg2_exchange: "okx",
+    leg2_market_type: "future",
+    leg2_dex: "",
+    leg2_symbol: "BTCUSDT",
+    leg2_multiplier: 1,
+    hours: 4,
+    intervalSeconds: 60,
+    showDayCompare: false,
+    dayCompareDays: 3,
+    dayCompareMode: "query",
+    dayCompareStartTime: "",
+    dayCompareEndTime: "",
+    savedAt: "2026-09-12T02:00:00Z",
+    ...overrides
+  };
+}
+
 function normalizedMockSymbol(exchange: string, symbol: string) {
   const text = symbol.trim().toUpperCase();
   const baseText = exchange === "hyperliquid" && text.includes(":")
@@ -392,10 +416,12 @@ function pairSpreadDiagnosticResult() {
 describe("PairMonitorPage", () => {
   const requests: string[] = [];
   let fundingRecordWatched = false;
+  let serverPresets: Array<Record<string, unknown>> = [];
 
   beforeEach(() => {
     requests.length = 0;
     fundingRecordWatched = false;
+    serverPresets = [];
     window.history.pushState({}, "", "/");
     window.localStorage.clear();
     window.sessionStorage.clear();
@@ -405,6 +431,36 @@ describe("PairMonitorPage", () => {
         const urlText = String(input);
         requests.push(urlText);
         const url = new URL(urlText, "http://localhost");
+        if (url.pathname.endsWith("/pair-spread/presets") && (!init?.method || init.method === "GET")) {
+          return Response.json(serverPresets);
+        }
+        if (url.pathname.endsWith("/pair-spread/presets/merge")) {
+          const incoming = JSON.parse(String(init?.body ?? "{}")) as {
+            presets?: Array<Record<string, unknown>>;
+          };
+          const latest = new Map(serverPresets.map((preset) => [String(preset.id), preset]));
+          (incoming.presets ?? []).forEach((preset) => {
+            const id = String(preset.id);
+            const current = latest.get(id);
+            if (!current || Date.parse(String(preset.savedAt)) >= Date.parse(String(current.savedAt))) {
+              latest.set(id, preset);
+            }
+          });
+          serverPresets = Array.from(latest.values()).sort(
+            (left, right) => Date.parse(String(right.savedAt)) - Date.parse(String(left.savedAt))
+          );
+          return Response.json(serverPresets);
+        }
+        if (url.pathname.includes("/pair-spread/presets/")) {
+          const id = decodeURIComponent(url.pathname.split("/pair-spread/presets/")[1]);
+          if (init?.method === "DELETE") {
+            serverPresets = serverPresets.filter((preset) => preset.id !== id);
+            return Response.json({ ok: true });
+          }
+          const preset = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+          serverPresets = [preset, ...serverPresets.filter((item) => item.id !== id)];
+          return Response.json(preset);
+        }
         if (url.pathname.includes("/pair-spread/query")) {
           return Response.json(pairSpreadResult(url.searchParams));
         }
@@ -481,6 +537,90 @@ describe("PairMonitorPage", () => {
     window.localStorage.clear();
     window.sessionStorage.clear();
     vi.unstubAllGlobals();
+  });
+
+  it("loads saved pair presets from the server on another device", async () => {
+    serverPresets = [savedPairPreset()];
+    window.localStorage.setItem("taoli1.pairSpread.presets.serverMigrated.v1", "1");
+
+    render(<PairMonitorPage />);
+
+    await waitFor(() => {
+      expect(document.querySelector(".pair-saved-tag")?.textContent).toContain("BTC");
+      const cached = JSON.parse(
+        window.localStorage.getItem("taoli1.pairSpread.presets.v1") ?? "[]"
+      );
+      expect(cached).toHaveLength(1);
+    });
+  });
+
+  it("uploads old local presets exactly once during server migration", async () => {
+    window.localStorage.setItem(
+      "taoli1.pairSpread.presets.v1",
+      JSON.stringify([savedPairPreset()])
+    );
+
+    render(<PairMonitorPage />);
+
+    await waitFor(() => {
+      expect(serverPresets).toHaveLength(1);
+      expect(window.localStorage.getItem("taoli1.pairSpread.presets.serverMigrated.v1")).toBe("1");
+    });
+    expect(requests.some((url) => url.endsWith("/pair-spread/presets/merge"))).toBe(true);
+  });
+
+  it("does not restore deleted server presets from an already migrated cache", async () => {
+    window.localStorage.setItem(
+      "taoli1.pairSpread.presets.v1",
+      JSON.stringify([savedPairPreset()])
+    );
+    window.localStorage.setItem("taoli1.pairSpread.presets.serverMigrated.v1", "1");
+
+    render(<PairMonitorPage />);
+
+    await waitFor(() => {
+      expect(document.querySelectorAll(".pair-saved-tag")).toHaveLength(0);
+    });
+    expect(requests.some((url) => url.endsWith("/pair-spread/presets/merge"))).toBe(false);
+  });
+
+  it("persists saves and deletes through the preset API", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem("taoli1.pairSpread.presets.serverMigrated.v1", "1");
+    render(<PairMonitorPage />);
+
+    await user.click(screen.getByRole("button", { name: /保存/ }));
+    await waitFor(() => expect(serverPresets).toHaveLength(1));
+    expect(
+      requests.some(
+        (url) => url.includes("/pair-spread/presets/") && !url.endsWith("/presets/merge")
+      )
+    ).toBe(true);
+
+    const closeButton = document.querySelector(".pair-saved-tag .ant-tag-close-icon");
+    expect(closeButton).toBeTruthy();
+    fireEvent.click(closeButton as Element);
+    await waitFor(() => expect(serverPresets).toHaveLength(0));
+    expect(document.querySelectorAll(".pair-saved-tag")).toHaveLength(0);
+  });
+
+  it("keeps local presets visible when the server sync fails", async () => {
+    window.localStorage.setItem(
+      "taoli1.pairSpread.presets.v1",
+      JSON.stringify([savedPairPreset()])
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("offline");
+      })
+    );
+
+    render(<PairMonitorPage />);
+
+    expect(document.querySelector(".pair-saved-tag")?.textContent).toContain("BTC");
+    expect(await screen.findByText(/已保存标的对同步失败.*offline/)).toBeTruthy();
+    expect(window.localStorage.getItem("taoli1.pairSpread.presets.serverMigrated.v1")).toBeNull();
   });
 
   it("sends the selected spot market type with the pair spread query", async () => {

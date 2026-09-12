@@ -44,6 +44,7 @@ import type {
   PairSpreadDiagnosticResult,
   PairSpreadFundingHistoryResult,
   PairSpreadQueryResult,
+  PairSpreadPreset,
   PairSpreadFundingRecordRequest,
   PairSpreadFundingRecordStatus,
   LivePilotPreview,
@@ -684,6 +685,33 @@ export async function queryPairSpread(query: {
     }
     return response.json() as Promise<PairSpreadQueryResult>;
   });
+}
+
+export async function listPairSpreadPresets(): Promise<PairSpreadPreset[]> {
+  const value = await fetchJson<unknown>("/pair-spread/presets");
+  return Array.isArray(value) ? (value as PairSpreadPreset[]) : [];
+}
+
+export async function mergePairSpreadPresets(
+  presets: PairSpreadPreset[]
+): Promise<PairSpreadPreset[]> {
+  return fetchJson<PairSpreadPreset[]>("/pair-spread/presets/merge", {
+    method: "POST",
+    body: JSON.stringify({ presets })
+  });
+}
+
+export async function upsertPairSpreadPreset(
+  preset: PairSpreadPreset
+): Promise<PairSpreadPreset> {
+  return fetchJson<PairSpreadPreset>(`/pair-spread/presets/${encodeURIComponent(preset.id)}`, {
+    method: "PUT",
+    body: JSON.stringify(preset)
+  });
+}
+
+export async function deletePairSpreadPreset(id: string): Promise<void> {
+  await fetchJson(`/pair-spread/presets/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 export async function listHyperliquidMarkets(): Promise<HyperliquidDexMarket[]> {

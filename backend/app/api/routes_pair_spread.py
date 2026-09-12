@@ -10,6 +10,8 @@ from app.models.pair_spread import (
     PAIR_SPREAD_MIN_INTERVAL_SECONDS,
     PAIR_SPREAD_MIN_HOURS,
     PAIR_SPREAD_INTERVAL_OPTIONS,
+    PairSpreadPreset,
+    PairSpreadPresetMergeRequest,
     PairSpreadFundingRecordRequest,
     PairSpreadFundingRecordStatus,
     PairSpreadFundingWatchItem,
@@ -26,6 +28,7 @@ from app.models.settings import AlertMessageTemplateSettings
 from app.services.pair_spread_funding_recorder import PairSpreadFundingRecorder
 from app.services.pair_spread_diagnostics import build_pair_spread_diagnostic
 from app.services.pair_spread_query import PairSpreadQueryError, PairSpreadQueryService
+from app.services.pair_spread_presets import PairSpreadPresetRepository
 from app.services.symbol_aliases import (
     ResolvedSymbolAlias,
     SymbolAliasResolver,
@@ -41,6 +44,13 @@ def _funding_recorder(request: Request) -> PairSpreadFundingRecorder:
     if recorder is None:
         raise HTTPException(status_code=503, detail="Pair spread funding recorder is not ready")
     return recorder
+
+
+def _preset_repo(request: Request) -> PairSpreadPresetRepository:
+    repo = getattr(request.app.state, "pair_spread_preset_repo", None)
+    if repo is None:
+        raise HTTPException(status_code=503, detail="Pair spread preset repository is not ready")
+    return repo
 
 
 async def _symbol_alias_resolver(request: Request) -> SymbolAliasResolver:
@@ -171,6 +181,45 @@ def _funding_record_request_from_params(
 @router.get("/exchanges", response_model=list[str])
 async def list_pair_spread_exchanges() -> list[str]:
     return list(SUPPORTED_PAIR_SPREAD_EXCHANGES)
+
+
+@router.get("/presets", response_model=list[PairSpreadPreset])
+async def list_pair_spread_presets(request: Request) -> list[PairSpreadPreset]:
+    return await _preset_repo(request).list()
+
+
+@router.put("/presets/{preset_id}", response_model=PairSpreadPreset)
+async def upsert_pair_spread_preset(
+    preset_id: str,
+    preset: PairSpreadPreset,
+    request: Request,
+    password: str | None = Depends(dashboard_password_header),
+) -> PairSpreadPreset:
+    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
+    if preset_id != preset.id:
+        raise HTTPException(status_code=422, detail="Preset id does not match request path")
+    return await _preset_repo(request).upsert(preset)
+
+
+@router.post("/presets/merge", response_model=list[PairSpreadPreset])
+async def merge_pair_spread_presets(
+    payload: PairSpreadPresetMergeRequest,
+    request: Request,
+    password: str | None = Depends(dashboard_password_header),
+) -> list[PairSpreadPreset]:
+    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
+    return await _preset_repo(request).merge(payload.presets)
+
+
+@router.delete("/presets/{preset_id}")
+async def delete_pair_spread_preset(
+    preset_id: str,
+    request: Request,
+    password: str | None = Depends(dashboard_password_header),
+) -> dict[str, bool]:
+    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
+    await _preset_repo(request).delete(preset_id)
+    return {"ok": True}
 
 
 @router.get("/hyperliquid-markets", response_model=list[HyperliquidDexMarket])

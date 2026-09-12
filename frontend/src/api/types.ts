@@ -1042,6 +1042,27 @@ export interface PairSpreadLegQuery {
   dex?: string | null;
 }
 
+export interface PairSpreadPreset {
+  id: string;
+  leg1_exchange: string;
+  leg1_market_type: MarketType;
+  leg1_dex: string;
+  leg1_symbol: string;
+  leg2_exchange: string;
+  leg2_market_type: MarketType;
+  leg2_dex: string;
+  leg2_symbol: string;
+  leg2_multiplier: number;
+  hours: number;
+  intervalSeconds: number;
+  showDayCompare: boolean;
+  dayCompareDays: number;
+  dayCompareMode: "query" | "custom";
+  dayCompareStartTime: string;
+  dayCompareEndTime: string;
+  savedAt: string;
+}
+
 export interface HyperliquidMarketAsset {
   raw_symbol: string;
   symbol: string;

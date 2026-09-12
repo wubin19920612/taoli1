@@ -25,15 +25,19 @@ import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 
 import {
+  deletePairSpreadPreset,
   getCurrentPremiumIndex,
   getPairSpreadFundingRecordStatus,
   listHyperliquidMarkets,
+  listPairSpreadPresets,
+  mergePairSpreadPresets,
   queryPairSpread,
   queryPairSpreadDiagnostics,
   queryPairSpreadFundingHistory,
   queryPremiumIndex,
   startPairSpreadFundingRecord,
-  stopPairSpreadFundingRecord
+  stopPairSpreadFundingRecord,
+  upsertPairSpreadPreset
 } from "../api/client";
 import type {
   MarketType,
@@ -48,6 +52,7 @@ import type {
   PairSpreadHourlyVolumePoint,
   PairSpreadOpenInterestPoint,
   PairSpreadPoint,
+  PairSpreadPreset,
   PairSpreadPriceField,
   PairSpreadQueryResult,
   PairSpreadRealtimeFundingPoint,
@@ -78,17 +83,7 @@ type LegacyPairSpreadFormValues = Omit<
 > &
   Partial<Pick<PairSpreadFormValues, "leg1_market_type" | "leg2_market_type" | "leg1_dex" | "leg2_dex">>;
 
-type SavedPairSpreadPreset = PairSpreadFormValues & {
-  id: string;
-  hours: number;
-  intervalSeconds: number;
-  showDayCompare: boolean;
-  dayCompareDays: number;
-  dayCompareMode: DayCompareWindowMode;
-  dayCompareStartTime: string;
-  dayCompareEndTime: string;
-  savedAt: string;
-};
+type SavedPairSpreadPreset = PairSpreadPreset;
 
 type SavedPairSpreadGroup = {
   key: string;
@@ -265,6 +260,7 @@ const premiumIndexExchanges = new Set(["binance", "okx", "bybit", "gate", "bitge
 
 const LAST_PAIR_SPREAD_STATE_KEY = "taoli1.pairSpread.lastState.v1";
 const PAIR_SPREAD_PRESETS_KEY = "taoli1.pairSpread.presets.v1";
+const PAIR_SPREAD_PRESETS_SERVER_MIGRATED_KEY = "taoli1.pairSpread.presets.serverMigrated.v1";
 const PAIR_SPREAD_DIAGNOSTIC_THRESHOLD_KEY = "taoli1.pairSpread.diagnosticThreshold.v1";
 const MAX_SAVED_PAIR_PRESETS = 24;
 const DEFAULT_DIAGNOSTIC_THRESHOLD_PCT = 1;
@@ -917,6 +913,7 @@ function isSavedPreset(value: unknown): value is LegacySavedPairSpreadPreset {
     typeof item.hours === "number" &&
     (typeof item.intervalSeconds === "number" || typeof item.intervalMinutes === "number") &&
     typeof item.savedAt === "string" &&
+    dayjs.utc(item.savedAt).isValid() &&
     (item.showDayCompare === undefined || typeof item.showDayCompare === "boolean") &&
     (item.dayCompareDays === undefined || typeof item.dayCompareDays === "number") &&
     (item.dayCompareMode === undefined || typeof item.dayCompareMode === "string") &&
@@ -982,6 +979,16 @@ function loadSavedPairPresets(): SavedPairSpreadPreset[] {
   } catch {
     return [];
   }
+}
+
+function normalizeSavedPairPresetList(value: unknown): SavedPairSpreadPreset[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return dedupeSavedPairPresets(value.filter(isSavedPreset).map(normalizeSavedPreset)).slice(
+    0,
+    MAX_SAVED_PAIR_PRESETS
+  );
 }
 
 function storeSavedPairPresets(presets: SavedPairSpreadPreset[]): void {
@@ -4118,6 +4125,9 @@ export function PairMonitorPage() {
   const [dayCompareEndTime, setDayCompareEndTime] = useState(() => initialDayCompareSettings.endTime);
   const [diagnosticThresholdPct, setDiagnosticThresholdPct] = useState(loadDiagnosticThreshold);
   const [savedPresets, setSavedPresets] = useState<SavedPairSpreadPreset[]>(() => loadSavedPairPresets());
+  const [presetSyncError, setPresetSyncError] = useState("");
+  const presetSyncStartedRef = useRef(false);
+  const presetMutationVersionRef = useRef(0);
   const [hyperliquidMarkets, setHyperliquidMarkets] = useState<HyperliquidDexMarket[]>([]);
   const hyperliquidMarketsPromiseRef = useRef<Promise<HyperliquidDexMarket[]> | null>(null);
   const [result, setResult] = useState<PairSpreadQueryResult | null>(() => initialCachedState?.result ?? null);
@@ -4170,6 +4180,40 @@ export function PairMonitorPage() {
       });
     hyperliquidMarketsPromiseRef.current = request;
     return request;
+  }, []);
+
+  useEffect(() => {
+    if (presetSyncStartedRef.current) {
+      return;
+    }
+    presetSyncStartedRef.current = true;
+    const localPresets = loadSavedPairPresets();
+    const initialMutationVersion = presetMutationVersionRef.current;
+
+    const syncSavedPresets = async () => {
+      try {
+        let serverPresets = normalizeSavedPairPresetList(await listPairSpreadPresets());
+        const migrated = window.localStorage.getItem(PAIR_SPREAD_PRESETS_SERVER_MIGRATED_KEY) === "1";
+        if (!migrated && localPresets.length > 0) {
+          serverPresets = normalizeSavedPairPresetList(
+            await mergePairSpreadPresets(localPresets)
+          );
+        }
+        if (!migrated) {
+          window.localStorage.setItem(PAIR_SPREAD_PRESETS_SERVER_MIGRATED_KEY, "1");
+        }
+        if (presetMutationVersionRef.current === initialMutationVersion) {
+          setSavedPresets(serverPresets);
+          storeSavedPairPresets(serverPresets);
+          setPresetSyncError("");
+        }
+      } catch (exc) {
+        const detail = exc instanceof Error ? exc.message : String(exc);
+        setPresetSyncError(`已保存标的对同步失败，当前显示本机缓存：${detail}`);
+      }
+    };
+
+    void syncSavedPresets();
   }, []);
 
   useEffect(() => {
@@ -4879,24 +4923,39 @@ export function PairMonitorPage() {
         dayCompareEndTime: dayCompareSettings.endTime,
         savedAt: new Date().toISOString()
       };
+      presetMutationVersionRef.current += 1;
+      const savedPreset = normalizeSavedPreset(await upsertPairSpreadPreset(preset));
       setSavedPresets((currentPresets) => {
-        const next = [preset, ...currentPresets.filter((item) => item.id !== preset.id)].slice(0, MAX_SAVED_PAIR_PRESETS);
+        const next = [
+          savedPreset,
+          ...currentPresets.filter((item) => item.id !== savedPreset.id)
+        ].slice(0, MAX_SAVED_PAIR_PRESETS);
         storeSavedPairPresets(next);
         return next;
       });
       form.setFieldsValue(values);
       setError("");
+      setPresetSyncError("");
     } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
+      const detail = exc instanceof Error ? exc.message : String(exc);
+      setPresetSyncError(`保存标的对失败：${detail}`);
     }
   };
 
-  const removeSavedPreset = (id: string) => {
-    setSavedPresets((currentPresets) => {
-      const next = currentPresets.filter((preset) => preset.id !== id);
-      storeSavedPairPresets(next);
-      return next;
-    });
+  const removeSavedPreset = async (id: string) => {
+    presetMutationVersionRef.current += 1;
+    try {
+      await deletePairSpreadPreset(id);
+      setSavedPresets((currentPresets) => {
+        const next = currentPresets.filter((preset) => preset.id !== id);
+        storeSavedPairPresets(next);
+        return next;
+      });
+      setPresetSyncError("");
+    } catch (exc) {
+      const detail = exc instanceof Error ? exc.message : String(exc);
+      setPresetSyncError(`删除标的对失败：${detail}`);
+    }
   };
 
   const applySavedPreset = (preset: SavedPairSpreadPreset) => {
@@ -5013,6 +5072,7 @@ export function PairMonitorPage() {
   return (
     <div className="page pair-monitor-page pair-terminal-page">
       {error ? <Alert type="error" message={error} showIcon /> : null}
+      {presetSyncError ? <Alert type="warning" message={presetSyncError} showIcon /> : null}
       {showPremiumCompare && premiumError ? <Alert type="error" message={premiumError} showIcon /> : null}
       {showDayCompare && dayCompareError ? <Alert type="warning" message={dayCompareError} showIcon /> : null}
       {fundingRecordError ? <Alert type="warning" message={fundingRecordError} showIcon /> : null}
@@ -5445,7 +5505,7 @@ export function PairMonitorPage() {
                         onClose={(event) => {
                           event.preventDefault();
                           event.stopPropagation();
-                          removeSavedPreset(preset.id);
+                          void removeSavedPreset(preset.id);
                         }}
                       >
                         <SavedPairPresetContent preset={preset} />
