@@ -294,6 +294,21 @@ class FlakyTranslator(FakeTranslator):
         return "霍尔木兹海峡附近一艘油轮遇袭", None
 
 
+class BackfillTranslator:
+    def __init__(self, failures: set[str] | None = None):
+        self.failures = failures or set()
+        self.calls: list[str] = []
+
+    async def translate_text(self, text: str) -> str:
+        self.calls.append(text)
+        if text in self.failures:
+            raise RuntimeError("temporary translation failure")
+        return f"中文：{text}"
+
+    async def aclose(self) -> None:
+        return None
+
+
 @pytest.mark.asyncio
 async def test_monitor_bootstraps_silently_then_alerts_new_major_news_once() -> None:
     db = await connect_database(":memory:")
@@ -405,6 +420,99 @@ async def test_monitor_sends_english_immediately_when_title_translation_fails() 
         stored = (await repo.list())[0]
         assert stored.title_zh is None
         assert stored.alert_status == "sent"
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_repository_lists_only_news_without_chinese_titles() -> None:
+    db = await connect_database(":memory:")
+    try:
+        await initialize_schema(db)
+        repo = OilNewsRepository(db)
+        untranslated = _item(fingerprint="untranslated")
+        untranslated.published_at = NOW + timedelta(minutes=1)
+        translated = _item(fingerprint="translated")
+        translated.title_zh = "已翻译标题"
+
+        await repo.create_if_new(translated)
+        await repo.create_if_new(untranslated)
+
+        rows = await repo.list_untranslated_titles(limit=10)
+
+        assert [row.id for row in rows] == [untranslated.id]
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_background_translation_adds_chinese_title_without_sending_alert() -> None:
+    db = await connect_database(":memory:")
+    sent: list[str] = []
+    try:
+        await initialize_schema(db)
+        repo = OilNewsRepository(db)
+        existing = _item(fingerprint="existing")
+        existing.title_zh = "已有中文标题"
+        await repo.create_if_new(existing)
+
+        item = _item(
+            fingerprint="ordinary",
+            title="Oil prices hold steady after the latest market update",
+            severity=OilNewsSeverity.LOW,
+        )
+        translator = BackfillTranslator()
+        monitor = OilNewsMonitor(
+            repo,
+            FakeProvider([[item]]),
+            alert_sender=sent.append,
+            translator=translator,
+            now_fn=lambda: NOW,
+        )
+
+        result = await monitor.poll(OilNewsSettings())
+        translated_count = await monitor.translate_untranslated_titles()
+
+        assert result.alerted_count == 0
+        assert translated_count == 1
+        assert sent == []
+        assert translator.calls == [item.title]
+        stored = next(row for row in await repo.list() if row.id == item.id)
+        assert stored.alert_status == "filtered"
+        assert stored.title_zh == f"中文：{item.title}"
+        assert stored.summary_zh is None
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_background_translation_failure_does_not_block_other_news() -> None:
+    db = await connect_database(":memory:")
+    try:
+        await initialize_schema(db)
+        repo = OilNewsRepository(db)
+        failed = _item(fingerprint="failed", title="Translation should fail")
+        succeeded = _item(fingerprint="succeeded", title="Translation should succeed")
+        await repo.create_if_new(failed)
+        await repo.create_if_new(succeeded)
+        translator = BackfillTranslator(failures={failed.title})
+        monitor = OilNewsMonitor(
+            repo,
+            FakeProvider([[]]),
+            translator=translator,
+            now_fn=lambda: NOW,
+        )
+
+        translated_count = await monitor.translate_untranslated_titles()
+        retry_count = await monitor.translate_untranslated_titles()
+
+        assert translated_count == 1
+        assert retry_count == 0
+        rows = {row.id: row for row in await repo.list()}
+        assert rows[failed.id].title_zh is None
+        assert rows[succeeded.id].title_zh == f"中文：{succeeded.title}"
+        assert len(translator.calls) == 2
+        assert set(translator.calls) == {failed.title, succeeded.title}
     finally:
         await db.close()
 

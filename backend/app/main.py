@@ -99,6 +99,7 @@ from app.services.oil_news import (
     OilNewsProvider,
     OilNewsTranslator,
     run_oil_news_loop,
+    run_oil_news_translation_loop,
 )
 from app.services.orderbook_validator import OrderBookDepthValidator
 from app.services.opportunity_radar import (
@@ -1029,6 +1030,15 @@ def create_app(
                     stop_event,
                 ),
                 name="oil-news-loop",
+            )
+            _start_background_task(
+                tasks,
+                run_oil_news_translation_loop(
+                    app.state.oil_news_monitor,
+                    app.state.settings_repo.get_oil_news_settings,
+                    stop_event,
+                ),
+                name="oil-news-translation-loop",
             )
             if app_settings.funding_research_enabled:
                 _start_background_task(

@@ -35,6 +35,10 @@ BINANCE_CL_KLINES = "https://fapi.binance.com/fapi/v1/klines"
 MYMEMORY_TRANSLATE_URL = "https://api.mymemory.translated.net/get"
 GOOGLE_TRANSLATE_URL = "https://clients5.google.com/translate_a/t"
 TRANSLATION_MAX_CHARS = 450
+TRANSLATION_BACKFILL_BATCH_SIZE = 4
+TRANSLATION_BACKFILL_CANDIDATE_LIMIT = 200
+TRANSLATION_BACKFILL_INTERVAL_SECONDS = 5
+TRANSLATION_RETRY_COOLDOWN = timedelta(minutes=15)
 CST = timezone(timedelta(hours=8))
 
 
@@ -725,6 +729,7 @@ class OilNewsMonitor:
         self.translator = translator
         self.now_fn = now_fn
         self._poll_lock = asyncio.Lock()
+        self._translation_retry_after: dict[str, datetime] = {}
 
     async def aclose(self) -> None:
         try:
@@ -736,6 +741,50 @@ class OilNewsMonitor:
     async def poll(self, settings: OilNewsSettings) -> OilNewsRefreshResult:
         async with self._poll_lock:
             return await self._poll_once(settings)
+
+    async def translate_untranslated_titles(
+        self,
+        *,
+        batch_size: int = TRANSLATION_BACKFILL_BATCH_SIZE,
+        candidate_limit: int = TRANSLATION_BACKFILL_CANDIDATE_LIMIT,
+        retry_cooldown: timedelta = TRANSLATION_RETRY_COOLDOWN,
+    ) -> int:
+        if self.translator is None:
+            return 0
+
+        now = self.now_fn()
+        candidates = await self.repository.list_untranslated_titles(
+            limit=max(batch_size, candidate_limit),
+        )
+        batch = [
+            item
+            for item in candidates
+            if self._translation_retry_after.get(item.id, now) <= now
+        ][:batch_size]
+        if not batch:
+            return 0
+
+        async def translate_title(item: OilNewsItem) -> int:
+            try:
+                title_zh = await self.translator.translate_text(item.title)
+                await self.repository.update_translation(
+                    item.id,
+                    title_zh=title_zh,
+                    summary_zh=item.summary_zh,
+                )
+            except Exception:  # noqa: BLE001 - retry this item after a cooldown.
+                retry_after = now + retry_cooldown
+                self._translation_retry_after[item.id] = retry_after
+                logger.warning(
+                    "failed to backfill oil news title id=%s; retry after %s",
+                    item.id,
+                    retry_after.isoformat(),
+                )
+                return 0
+            self._translation_retry_after.pop(item.id, None)
+            return 1
+
+        return sum(await asyncio.gather(*(translate_title(item) for item in batch)))
 
     async def _poll_once(self, settings: OilNewsSettings) -> OilNewsRefreshResult:
         had_rows = await self.repository.has_any()
@@ -821,5 +870,31 @@ async def run_oil_news_loop(
             logger.exception("oil news polling failed")
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=interval)
+        except TimeoutError:
+            pass
+
+
+async def run_oil_news_translation_loop(
+    monitor: OilNewsMonitor,
+    settings_loader: SettingsLoader,
+    stop_event: asyncio.Event,
+) -> None:
+    while not stop_event.is_set():
+        try:
+            settings = await settings_loader()
+            if settings.enabled:
+                translated_count = await monitor.translate_untranslated_titles()
+                if translated_count:
+                    logger.info(
+                        "backfilled %s oil news Chinese titles",
+                        translated_count,
+                    )
+        except Exception:  # noqa: BLE001 - retry without interrupting news collection.
+            logger.exception("oil news translation backfill failed")
+        try:
+            await asyncio.wait_for(
+                stop_event.wait(),
+                timeout=TRANSLATION_BACKFILL_INTERVAL_SECONDS,
+            )
         except TimeoutError:
             pass

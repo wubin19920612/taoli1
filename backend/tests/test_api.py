@@ -580,6 +580,7 @@ def test_price_collector_starts_announcement_and_oil_news_workers(monkeypatch) -
     assert "market-collector" in started
     assert "announcement-loop" in started
     assert "oil-news-loop" in started
+    assert "oil-news-translation-loop" in started
 
 
 def test_collector_startup_uses_multi_exchange_index_component_provider(monkeypatch) -> None:

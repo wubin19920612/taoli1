@@ -964,6 +964,18 @@ class OilNewsRepository:
         )
         await self.db.commit()
 
+    async def list_untranslated_titles(self, *, limit: int = 200) -> list[OilNewsItem]:
+        cursor = await self.db.execute(
+            """
+            SELECT * FROM oil_news_items
+            WHERE title_zh IS NULL
+            ORDER BY published_at DESC, fetched_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        return [self._from_db(row) for row in await cursor.fetchall()]
+
     async def has_any(self) -> bool:
         cursor = await self.db.execute("SELECT 1 FROM oil_news_items LIMIT 1")
         return await cursor.fetchone() is not None
