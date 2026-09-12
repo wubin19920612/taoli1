@@ -214,7 +214,12 @@ To let alerts create/update Astro cards, set both `ASTRO_DRY_RUN_ONLY=false` and
 
 If the live close spread is not lower than the open spread, the Astro payload uses `openPosition - ASTRO_DEFAULT_CLOSE_POSITION_BUFFER_PCT` for `closePosition` so the card satisfies Astro's `openPosition > closePosition` rule. The preview modal shows a warning when this adjustment happens.
 
-The integration currently treats `SF` and `FF` as candidate pair types. `SS` is blocked because the Astro SDK document lists `SF`, `FF`, `SR`, `FR`, and `FS`, but not `SS`. The most important fields to verify before any future live version are `name` (currently base symbol such as `BTC`), `openPosition`/`closePosition` (currently local percent divided by 100), and `buyEx`/`sellEx` (currently local exchange ids).
+The integration accepts `SF` and `FF` opportunities. `SS` is blocked because the Astro SDK
+document does not list it. A futures opportunity whose two raw base symbols differ, such as
+`OPENAIUSDT` and `io:OAI`, is emitted as an `FR` card named `OPENAI-OAI`. Regular `SF`/`FF`
+positions use local percent divided by 100. `FR` positions use the equivalent price ratio
+`(200 + spread_pct) / (200 - spread_pct)`, with `regressionValue=1`, `rateMultiply=1`, and the
+matching `aHlDex`/`bHlDex` field for Hyperliquid perp DEX markets.
 
 ## 安全边界
 

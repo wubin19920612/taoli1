@@ -242,6 +242,8 @@ class PairSpreadCurrentLeg(BaseModel):
     raw_symbol: str
     price: float
     price_field: PairSpreadPriceField
+    bid_price: float | None = None
+    ask_price: float | None = None
     mark_price: float | None = None
     index_price: float | None = None
     mid_price: float | None = None
@@ -269,6 +271,12 @@ class PairSpreadCurrentSnapshot(BaseModel):
     leg2: PairSpreadCurrentLeg
     spread_abs: float
     spread_pct: float
+    open_spread_abs: float | None = None
+    open_spread_pct: float | None = None
+    close_spread_abs: float | None = None
+    close_spread_pct: float | None = None
+    mark_spread_abs: float | None = None
+    mark_spread_pct: float | None = None
 
 
 class PairSpreadValueStats(BaseModel):

@@ -374,6 +374,18 @@ def _spread_pct(spread_abs: float, leg1_price: float, leg2_price: float) -> floa
     return spread_abs / midpoint * 100
 
 
+def _spread_values(
+    leg1_price: float | None,
+    leg2_price: float | None,
+) -> tuple[float | None, float | None]:
+    left = _positive(leg1_price)
+    right = _positive(leg2_price)
+    if left is None or right is None:
+        return None, None
+    spread_abs = right - left
+    return spread_abs, _spread_pct(spread_abs, left, right)
+
+
 def _stats(values: list[float]) -> PairSpreadValueStats:
     finite_values = [value for value in values if isfinite(value)]
     if not finite_values:
@@ -1576,18 +1588,24 @@ class PairSpreadQueryService:
             leg2_multiplier=leg2_multiplier,
             interval_seconds=interval_seconds,
         )
-        # 秒级周期没有统一的跨交易所历史K线来源，使用每次查询拿到的实时价格形成可保存的本地采样序列。
+        # 秒级周期没有统一的跨交易所历史K线来源，使用实时盘口中间价形成本地采样序列。
         cached_points = _REALTIME_PAIR_SPREAD_CACHE.setdefault(cache_key, [])
-        _append_realtime_point(
-            cached_points,
-            PairSpreadPoint(
-                bucket_at=bucket_at,
-                leg1_close=current.leg1.price,
-                leg2_close=current.leg2.price,
-                spread_abs=current.spread_abs,
-                spread_pct=current.spread_pct,
-            ),
-        )
+        left_mid = _positive(current.leg1.mid_price)
+        right_mid = _positive(current.leg2.mid_price)
+        if left_mid is not None and right_mid is not None:
+            midpoint_spread_abs = right_mid - left_mid
+            _append_realtime_point(
+                cached_points,
+                PairSpreadPoint(
+                    bucket_at=bucket_at,
+                    leg1_close=left_mid,
+                    leg2_close=right_mid,
+                    spread_abs=midpoint_spread_abs,
+                    spread_pct=_spread_pct(midpoint_spread_abs, left_mid, right_mid),
+                ),
+            )
+        else:
+            _append_unique(warnings, "盘口中间价不完整，本次快照未写入实时价差曲线。")
         cutoff = observed_at - timedelta(hours=hours)
         points = [point for point in cached_points if point.bucket_at >= cutoff]
         if len(points) != len(cached_points):
@@ -1841,12 +1859,27 @@ class PairSpreadQueryService:
         observed_at: datetime,
     ) -> PairSpreadCurrentSnapshot:
         spread_abs = leg2.price - leg1.price
+        open_spread_abs, open_spread_pct = _spread_values(
+            leg1.ask_price,
+            leg2.bid_price,
+        )
+        close_spread_abs, close_spread_pct = _spread_values(
+            leg1.bid_price,
+            leg2.ask_price,
+        )
+        mark_spread_abs, mark_spread_pct = _spread_values(leg1.mark_price, leg2.mark_price)
         return PairSpreadCurrentSnapshot(
             observed_at=observed_at,
             leg1=leg1,
             leg2=leg2,
             spread_abs=spread_abs,
             spread_pct=_spread_pct(spread_abs, leg1.price, leg2.price),
+            open_spread_abs=open_spread_abs,
+            open_spread_pct=open_spread_pct,
+            close_spread_abs=close_spread_abs,
+            close_spread_pct=close_spread_pct,
+            mark_spread_abs=mark_spread_abs,
+            mark_spread_pct=mark_spread_pct,
         )
 
     async def _fetch_klines(
@@ -2632,6 +2665,8 @@ class PairSpreadQueryService:
             exchange=exchange,
             symbol=symbol,
             raw_symbol=raw,
+            bid_price=bid,
+            ask_price=ask,
             mark_price=mark,
             index_price=index,
             mid_price=mid,
@@ -2676,6 +2711,8 @@ class PairSpreadQueryService:
             symbol=symbol,
             market_type=MarketType.SPOT,
             raw_symbol=raw,
+            bid_price=bid,
+            ask_price=ask,
             mark_price=None,
             index_price=None,
             mid_price=_mid_price(bid, ask),
@@ -2696,6 +2733,8 @@ class PairSpreadQueryService:
             symbol=raw,
             market_type=MarketType.SPOT,
             raw_symbol=raw,
+            bid_price=None,
+            ask_price=None,
             mark_price=None,
             index_price=None,
             mid_price=None,
@@ -2734,7 +2773,9 @@ class PairSpreadQueryService:
         )
         ticker = _first_row(ticker_payload.get("data", [])) if isinstance(ticker_payload, dict) else {}
         funding_row = _first_row(funding_payload.get("data", [])) if isinstance(funding_payload, dict) else {}
-        mid = _mid_price(parse_float(ticker.get("bidPx")), parse_float(ticker.get("askPx")))
+        bid = parse_float(ticker.get("bidPx"))
+        ask = parse_float(ticker.get("askPx"))
+        mid = _mid_price(bid, ask)
         last = _positive(parse_float(ticker.get("last")))
         open_interest_row = (
             _first_row(open_interest_payload.get("data", []))
@@ -2760,6 +2801,8 @@ class PairSpreadQueryService:
             exchange="okx",
             symbol=symbol,
             raw_symbol=inst_id,
+            bid_price=bid,
+            ask_price=ask,
             mark_price=None,
             index_price=None,
             mid_price=mid,
@@ -2792,14 +2835,18 @@ class PairSpreadQueryService:
         inst_id = _okx_spot_inst_id(symbol)
         ticker_payload = await self._get_json(f"https://www.okx.com/api/v5/market/ticker?instId={inst_id}")
         ticker = _first_row(ticker_payload.get("data", [])) if isinstance(ticker_payload, dict) else {}
+        bid = parse_float(ticker.get("bidPx"))
+        ask = parse_float(ticker.get("askPx"))
         return _current_leg(
             exchange="okx",
             symbol=symbol,
             market_type=MarketType.SPOT,
             raw_symbol=inst_id,
+            bid_price=bid,
+            ask_price=ask,
             mark_price=None,
             index_price=None,
-            mid_price=_mid_price(parse_float(ticker.get("bidPx")), parse_float(ticker.get("askPx"))),
+            mid_price=_mid_price(bid, ask),
             last_price=_positive(parse_float(ticker.get("last"))),
             volume_24h_usdt=okx_ticker_volume_24h_usdt(ticker, MarketType.SPOT),
             funding_rate_pct=None,
@@ -2842,7 +2889,9 @@ class PairSpreadQueryService:
         )
         mark = _positive(parse_float(row.get("markPrice")))
         index = _positive(parse_float(row.get("indexPrice")))
-        mid = _mid_price(parse_float(row.get("bid1Price")), parse_float(row.get("ask1Price")))
+        bid = parse_float(row.get("bid1Price"))
+        ask = parse_float(row.get("ask1Price"))
+        mid = _mid_price(bid, ask)
         last = _positive(parse_float(row.get("lastPrice")))
         open_interest_contracts = _nonnegative(
             parse_float(open_interest_row.get("openInterest") or row.get("openInterest"))
@@ -2856,6 +2905,8 @@ class PairSpreadQueryService:
             exchange="bybit",
             symbol=symbol,
             raw_symbol=raw,
+            bid_price=bid,
+            ask_price=ask,
             mark_price=mark,
             index_price=index,
             mid_price=mid,
@@ -2883,14 +2934,18 @@ class PairSpreadQueryService:
             f"https://api.bybit.com/v5/market/tickers?category=spot&symbol={raw}"
         )
         row = _first_row(payload.get("result", {}).get("list", [])) if isinstance(payload, dict) else {}
+        bid = parse_float(row.get("bid1Price"))
+        ask = parse_float(row.get("ask1Price"))
         return _current_leg(
             exchange="bybit",
             symbol=symbol,
             market_type=MarketType.SPOT,
             raw_symbol=raw,
+            bid_price=bid,
+            ask_price=ask,
             mark_price=None,
             index_price=None,
-            mid_price=_mid_price(parse_float(row.get("bid1Price")), parse_float(row.get("ask1Price"))),
+            mid_price=_mid_price(bid, ask),
             last_price=_positive(parse_float(row.get("lastPrice"))),
             volume_24h_usdt=_nonnegative(parse_float(row.get("turnover24h"))),
             funding_rate_pct=None,
@@ -2922,7 +2977,9 @@ class PairSpreadQueryService:
         )
         mark = _positive(parse_float(row.get("mark_price") or stats_row.get("mark_price")))
         index = _positive(parse_float(row.get("index_price")))
-        mid = _mid_price(parse_float(row.get("highest_bid")), parse_float(row.get("lowest_ask")))
+        bid = parse_float(row.get("highest_bid"))
+        ask = parse_float(row.get("lowest_ask"))
+        mid = _mid_price(bid, ask)
         last = _positive(parse_float(row.get("last")))
         long_count = _nonnegative(parse_float(stats_row.get("long_users")))
         short_count = _nonnegative(parse_float(stats_row.get("short_users")))
@@ -2956,6 +3013,8 @@ class PairSpreadQueryService:
             exchange="gate",
             symbol=symbol,
             raw_symbol=contract,
+            bid_price=bid,
+            ask_price=ask,
             mark_price=mark,
             index_price=index,
             mid_price=mid,
@@ -3000,14 +3059,18 @@ class PairSpreadQueryService:
             f"https://api.gateio.ws/api/v4/spot/tickers?currency_pair={pair}"
         )
         row = _first_row(rows if isinstance(rows, list) else [])
+        bid = parse_float(row.get("highest_bid"))
+        ask = parse_float(row.get("lowest_ask"))
         return _current_leg(
             exchange="gate",
             symbol=symbol,
             market_type=MarketType.SPOT,
             raw_symbol=pair,
+            bid_price=bid,
+            ask_price=ask,
             mark_price=None,
             index_price=None,
-            mid_price=_mid_price(parse_float(row.get("highest_bid")), parse_float(row.get("lowest_ask"))),
+            mid_price=_mid_price(bid, ask),
             last_price=_positive(parse_float(row.get("last"))),
             volume_24h_usdt=_nonnegative(parse_float(row.get("quote_volume"))),
             funding_rate_pct=None,
@@ -3036,10 +3099,9 @@ class PairSpreadQueryService:
         account_row = _payload_data_latest_row(account_ratio_payload, "ts", "timestamp")
         mark = _positive(parse_float(ticker.get("markPrice")))
         index = _positive(parse_float(ticker.get("indexPrice")))
-        mid = _mid_price(
-            parse_float(ticker.get("bidPr") or ticker.get("bid")),
-            parse_float(ticker.get("askPr") or ticker.get("ask")),
-        )
+        bid = parse_float(ticker.get("bidPr") or ticker.get("bid"))
+        ask = parse_float(ticker.get("askPr") or ticker.get("ask"))
+        mid = _mid_price(bid, ask)
         last = _positive(parse_float(ticker.get("lastPr") or ticker.get("last")))
         open_interest_contracts = _nonnegative(parse_float(ticker.get("holdingAmount") or ticker.get("openInterest")))
         open_interest_usdt = _nonnegative(
@@ -3050,6 +3112,8 @@ class PairSpreadQueryService:
             exchange="bitget",
             symbol=symbol,
             raw_symbol=raw,
+            bid_price=bid,
+            ask_price=ask,
             mark_price=mark,
             index_price=index,
             mid_price=mid,
@@ -3071,17 +3135,18 @@ class PairSpreadQueryService:
             f"https://api.bitget.com/api/v2/spot/market/tickers?symbol={raw}"
         )
         ticker = _payload_data_row(ticker_payload)
+        bid = parse_float(ticker.get("bidPr") or ticker.get("bid"))
+        ask = parse_float(ticker.get("askPr") or ticker.get("ask"))
         return _current_leg(
             exchange="bitget",
             symbol=symbol,
             market_type=MarketType.SPOT,
             raw_symbol=raw,
+            bid_price=bid,
+            ask_price=ask,
             mark_price=None,
             index_price=None,
-            mid_price=_mid_price(
-                parse_float(ticker.get("bidPr") or ticker.get("bid")),
-                parse_float(ticker.get("askPr") or ticker.get("ask")),
-            ),
+            mid_price=_mid_price(bid, ask),
             last_price=_positive(parse_float(ticker.get("lastPr") or ticker.get("last"))),
             volume_24h_usdt=_nonnegative(parse_float(ticker.get("quoteVolume") or ticker.get("usdtVolume"))),
             funding_rate_pct=None,
@@ -3099,7 +3164,10 @@ class PairSpreadQueryService:
             resolved_coin, resolved_dex = await self._resolve_hyperliquid_coin(symbol, dex=dex)
         else:
             resolved_coin, resolved_dex = await self._resolve_hyperliquid_coin(symbol)
-        meta, contexts = await self._fetch_hyperliquid_meta_contexts(resolved_dex)
+        (meta, contexts), (bid, ask) = await asyncio.gather(
+            self._fetch_hyperliquid_meta_contexts(resolved_dex),
+            self._fetch_hyperliquid_best_prices(resolved_coin),
+        )
         universe = meta.get("universe", [])
         for asset, context in zip(universe, contexts):
             if not isinstance(asset, dict) or not isinstance(context, dict):
@@ -3111,19 +3179,24 @@ class PairSpreadQueryService:
             now = utc_now()
             mark = _positive(parse_float(context.get("markPx")))
             index = _positive(parse_float(context.get("oraclePx")))
-            mid = _positive(parse_float(context.get("midPx")))
+            mid = _mid_price(bid, ask) or _positive(parse_float(context.get("midPx")))
             open_interest_contracts = _nonnegative(parse_float(context.get("openInterest")))
             return _current_leg(
                 exchange="hyperliquid",
                 symbol=symbol,
                 dex=_hyperliquid_public_dex(resolved_dex),
                 raw_symbol=raw_coin,
+                bid_price=bid,
+                ask_price=ask,
                 mark_price=mark,
                 index_price=index,
                 mid_price=mid,
                 last_price=None,
                 volume_24h_usdt=_nonnegative(parse_float(context.get("dayNtlVlm"))),
-                open_interest_usdt=_open_interest_usdt(open_interest_contracts, mark or mid or index),
+                open_interest_usdt=_open_interest_usdt(
+                    open_interest_contracts,
+                    mark or mid or index,
+                ),
                 open_interest_contracts=open_interest_contracts,
                 funding_rate_pct=funding * 100 if funding is not None else None,
                 funding_next_rate_pct=None,
@@ -3133,6 +3206,26 @@ class PairSpreadQueryService:
                 funding_rate_lower_pct=-4.0,
             )
         raise RuntimeError(f"hyperliquid symbol not found: {symbol}")
+
+    async def _fetch_hyperliquid_best_prices(
+        self,
+        raw_coin: str,
+    ) -> tuple[float | None, float | None]:
+        try:
+            payload = await self._post_json(
+                "https://api.hyperliquid.xyz/info",
+                {"type": "l2Book", "coin": raw_coin},
+            )
+        except Exception:  # noqa: BLE001 - the context midpoint remains a usable fallback.
+            return None, None
+        if not isinstance(payload, dict):
+            return None, None
+        levels = payload.get("levels")
+        if not isinstance(levels, list) or len(levels) < 2:
+            return None, None
+        bid_row = _first_row(levels[0])
+        ask_row = _first_row(levels[1])
+        return _positive(parse_float(bid_row.get("px"))), _positive(parse_float(ask_row.get("px")))
 
     async def _fetch_hyperliquid_dex_names(self) -> list[str]:
         if self._hyperliquid_dex_names is not None:
@@ -3672,6 +3765,8 @@ def _current_leg(
     market_type: MarketType = MarketType.FUTURE,
     dex: str | None = None,
     raw_symbol: str,
+    bid_price: float | None,
+    ask_price: float | None,
     mark_price: float | None,
     index_price: float | None,
     mid_price: float | None,
@@ -3692,8 +3787,8 @@ def _current_leg(
     long_short_ratio: float | None = None,
 ) -> PairSpreadCurrentLeg:
     candidates = (
-        (mark_price, PairSpreadPriceField.MARK_PRICE),
         (mid_price, PairSpreadPriceField.MID_PRICE),
+        (mark_price, PairSpreadPriceField.MARK_PRICE),
         (index_price, PairSpreadPriceField.INDEX_PRICE),
         (last_price, PairSpreadPriceField.LAST_PRICE),
     )
@@ -3712,6 +3807,8 @@ def _current_leg(
                 raw_symbol=raw_symbol,
                 price=resolved,
                 price_field=field,
+                bid_price=_positive(bid_price),
+                ask_price=_positive(ask_price),
                 mark_price=mark_price,
                 index_price=index_price,
                 mid_price=mid_price,
@@ -3747,6 +3844,8 @@ def _scale_current_leg(leg: PairSpreadCurrentLeg, divisor: float) -> PairSpreadC
     return leg.model_copy(
         update={
             "price": leg.price / divisor,
+            "bid_price": scale(leg.bid_price),
+            "ask_price": scale(leg.ask_price),
             "mark_price": scale(leg.mark_price),
             "index_price": scale(leg.index_price),
             "mid_price": scale(leg.mid_price),
@@ -3767,6 +3866,8 @@ def _scale_current_leg_by_factor(leg: PairSpreadCurrentLeg, factor: float) -> Pa
     return leg.model_copy(
         update={
             "price": leg.price * factor,
+            "bid_price": scale(leg.bid_price),
+            "ask_price": scale(leg.ask_price),
             "mark_price": scale(leg.mark_price),
             "index_price": scale(leg.index_price),
             "mid_price": scale(leg.mid_price),

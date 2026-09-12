@@ -136,6 +136,41 @@ def test_hyperliquid_opportunity_maps_to_astro_hl() -> None:
     assert plan.pair["sellEx"] == "okx"
 
 
+def test_aliased_future_pair_builds_fr_card_with_ratio_positions() -> None:
+    planner = AstroPairPlanner(AstroPlannerConfig())
+    aliased = opportunity().model_copy(
+        update={
+            "symbol": "OPENAIUSDT",
+            "buy_exchange": "bitget",
+            "buy_raw_symbol": "OPENAIUSDT",
+            "sell_exchange": "hyperliquid",
+            "sell_raw_symbol": "io:OAI",
+            "open_spread_pct": 2.55,
+            "close_spread_pct": 1.25,
+        }
+    )
+
+    plan = planner.plan(aliased)
+
+    assert plan.can_submit is True
+    assert plan.pair is not None
+    assert plan.pair["name"] == "OPENAI-OAI"
+    assert plan.pair["type"] == "FR"
+    assert plan.pair["buyEx"] == "bitget"
+    assert plan.pair["sellEx"] == "hl"
+    assert plan.pair["bHlDex"] == "io"
+    assert plan.pair["regressionValue"] == "1"
+    assert plan.pair["rateMultiply"] == "1"
+    assert plan.pair["openPosition"] == "1.025829"
+    assert plan.pair["closePosition"] == "1.000000"
+    assert any(
+        item.field == "openPosition"
+        and item.assumed_value == "1.025829"
+        and "price ratio" in item.note
+        for item in plan.assumptions
+    )
+
+
 def test_closed_bitget_rtoken_opportunity_is_blocked() -> None:
     planner = AstroPairPlanner(AstroPlannerConfig())
     rtoken_opportunity = opportunity(OpportunityType.SF, MarketType.SPOT, MarketType.FUTURE).model_copy(

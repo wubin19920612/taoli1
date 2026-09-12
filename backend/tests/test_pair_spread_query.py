@@ -33,6 +33,7 @@ from app.services.pair_spread_query import (
     _append_realtime_open_interest_point,
     build_pair_spread_points,
     build_symbol_spread_points,
+    _current_leg,
 )
 from app.services.pair_spread_funding_recorder import PairSpreadFundingRecorder, PairSpreadFundingRepository
 
@@ -61,8 +62,11 @@ def current_leg(
         market_type=market_type,
         raw_symbol=symbol,
         price=price,
-        price_field=PairSpreadPriceField.MARK_PRICE,
+        price_field=PairSpreadPriceField.MID_PRICE,
+        bid_price=price - 0.01,
+        ask_price=price + 0.01,
         mark_price=price,
+        mid_price=price,
         volume_24h_usdt=volume_24h_usdt,
         funding_rate_pct=0.01,
         funding_next_time=datetime(2026, 7, 10, 16, 0, tzinfo=UTC),
@@ -92,6 +96,52 @@ def test_pair_spread_points_apply_right_side_multiplier() -> None:
     assert points[0].leg2_close == 105
     assert points[0].spread_abs == 5
     assert points[0].spread_pct == pytest.approx(5 / ((100 + 105) / 2) * 100)
+
+
+def test_current_snapshot_uses_midpoint_and_exposes_executable_spreads() -> None:
+    observed_at = datetime(2026, 9, 12, 0, 0, tzinfo=UTC)
+    left = _current_leg(
+        exchange="bitget",
+        symbol="OPENAIUSDT",
+        raw_symbol="OPENAIUSDT",
+        bid_price=1529,
+        ask_price=1531,
+        mark_price=1520,
+        index_price=1519,
+        mid_price=1530,
+        last_price=1530.5,
+        funding_rate_pct=None,
+        funding_next_rate_pct=None,
+        funding_next_time=None,
+    )
+    right = _current_leg(
+        exchange="hyperliquid",
+        symbol="OAIUSDT",
+        dex="io",
+        raw_symbol="io:OAI",
+        bid_price=1684,
+        ask_price=1686,
+        mark_price=1660,
+        index_price=1661,
+        mid_price=1685,
+        last_price=None,
+        funding_rate_pct=None,
+        funding_next_rate_pct=None,
+        funding_next_time=None,
+    )
+
+    snapshot = PairSpreadQueryService()._build_current_snapshot(left, right, observed_at)
+
+    assert left.price == pytest.approx(1530)
+    assert left.price_field == PairSpreadPriceField.MID_PRICE
+    assert snapshot.spread_abs == pytest.approx(155)
+    assert snapshot.spread_pct == pytest.approx(155 / 1607.5 * 100)
+    assert snapshot.open_spread_abs == pytest.approx(153)
+    assert snapshot.open_spread_pct == pytest.approx(153 / ((1531 + 1684) / 2) * 100)
+    assert snapshot.close_spread_abs == pytest.approx(157)
+    assert snapshot.close_spread_pct == pytest.approx(157 / ((1529 + 1686) / 2) * 100)
+    assert snapshot.mark_spread_abs == pytest.approx(140)
+    assert snapshot.mark_spread_pct == pytest.approx(140 / 1590 * 100)
 
 
 def test_pair_open_interest_change_points_calculate_leg_and_net_deltas() -> None:
@@ -1113,6 +1163,9 @@ async def test_hyperliquid_selected_dex_uses_raw_coin_for_all_market_requests() 
                     "fundingRate": "0.001",
                 }
             ]
+        if body.get("type") == "l2Book":
+            assert body["coin"] == "io:OAI"
+            return {"levels": [[{"px": "1.24"}], [{"px": "1.25"}]]}
         raise AssertionError(f"unexpected body: {body}")
 
     service._post_json = fake_post_json  # type: ignore[method-assign]
@@ -1144,6 +1197,7 @@ async def test_hyperliquid_selected_dex_uses_raw_coin_for_all_market_requests() 
     assert [body.get("type") for body in bodies] == [
         "metaAndAssetCtxs",
         "candleSnapshot",
+        "l2Book",
         "fundingHistory",
     ]
 
@@ -1225,6 +1279,9 @@ async def test_hyperliquid_main_dex_is_explicit_but_uses_main_api_payload() -> N
                     }
                 ],
             ]
+        if body.get("type") == "l2Book":
+            assert body["coin"] == "BTC"
+            return {"levels": [[{"px": "99.9"}], [{"px": "100.1"}]]}
         raise AssertionError(f"unexpected body: {body}")
 
     service._post_json = fake_post_json  # type: ignore[method-assign]
@@ -1236,7 +1293,7 @@ async def test_hyperliquid_main_dex_is_explicit_but_uses_main_api_payload() -> N
 
     assert resolved == ("BTC", "")
     assert current.dex == "main"
-    assert [body.get("type") for body in bodies] == ["metaAndAssetCtxs"]
+    assert [body.get("type") for body in bodies] == ["metaAndAssetCtxs", "l2Book"]
 
 
 @pytest.mark.asyncio
@@ -1740,6 +1797,17 @@ async def test_hyperliquid_current_sets_hourly_interval_and_limits(monkeypatch: 
                 ],
             )
 
+        async def _post_json(self, url: str, body: dict[str, Any]):
+            assert url == "https://api.hyperliquid.xyz/info"
+            assert body == {"type": "l2Book", "coin": "BTC"}
+            return {
+                "levels": [
+                    [{"px": "100.4", "sz": "2"}],
+                    [{"px": "100.6", "sz": "3"}],
+                ],
+                "time": int(now.timestamp() * 1000),
+            }
+
     service = FakePairSpreadService()
     try:
         leg = await service._fetch_hyperliquid_current("BTCUSDT")
@@ -1747,7 +1815,10 @@ async def test_hyperliquid_current_sets_hourly_interval_and_limits(monkeypatch: 
         await service.aclose()
 
     assert leg.raw_symbol == "BTC"
-    assert leg.price == pytest.approx(101)
+    assert leg.price == pytest.approx(100.5)
+    assert leg.price_field == PairSpreadPriceField.MID_PRICE
+    assert leg.bid_price == pytest.approx(100.4)
+    assert leg.ask_price == pytest.approx(100.6)
     assert leg.funding_rate_pct == pytest.approx(-0.25)
     assert leg.funding_next_time == datetime(2026, 7, 17, 11, 0, tzinfo=UTC)
     assert leg.funding_interval_hours == pytest.approx(1)

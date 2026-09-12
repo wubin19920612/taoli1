@@ -1388,18 +1388,26 @@ function openPremiumIndexFromLeg(
 
 function pairCurrentToPoint(result: PairSpreadQueryResult): PairSpreadPoint | null {
   const current = result.current;
-  if (!current || !Number.isFinite(current.spread_pct) || !Number.isFinite(current.spread_abs)) {
+  const leftMid = current?.leg1.mid_price;
+  const rightMid = current?.leg2.mid_price;
+  if (
+    !current ||
+    typeof leftMid !== "number" ||
+    typeof rightMid !== "number" ||
+    !Number.isFinite(leftMid) ||
+    !Number.isFinite(rightMid) ||
+    leftMid <= 0 ||
+    rightMid <= 0
+  ) {
     return null;
   }
-  if (!Number.isFinite(current.leg1.price) || !Number.isFinite(current.leg2.price)) {
-    return null;
-  }
+  const spreadAbs = rightMid - leftMid;
   return {
     bucket_at: current.observed_at,
-    leg1_close: current.leg1.price,
-    leg2_close: current.leg2.price,
-    spread_abs: current.spread_abs,
-    spread_pct: current.spread_pct
+    leg1_close: leftMid,
+    leg2_close: rightMid,
+    spread_abs: spreadAbs,
+    spread_pct: spreadAbs / ((leftMid + rightMid) / 2) * 100
   };
 }
 
@@ -4929,8 +4937,30 @@ export function PairMonitorPage() {
   };
 
   const current = result?.current;
-  const spreadPct = current?.spread_pct ?? result?.spread_pct.current ?? null;
+  const openSpreadPct = current?.open_spread_pct ?? null;
+  const closeSpreadPct = current?.close_spread_pct ?? null;
+  const hasMidpointSpread = Boolean(
+    current &&
+    typeof current.leg1.mid_price === "number" &&
+    typeof current.leg2.mid_price === "number"
+  );
+  const midpointSpreadPct = hasMidpointSpread
+    ? current?.spread_pct ?? null
+    : result?.spread_pct.current ?? null;
+  const midpointSpreadAbs = hasMidpointSpread
+    ? current?.spread_abs ?? null
+    : result?.spread_abs.current ?? null;
+  const spreadPct = openSpreadPct ?? midpointSpreadPct;
   const spreadTone = typeof spreadPct === "number" ? (spreadPct < 0 ? "negative" : "positive") : "neutral";
+  const closeSpreadTone = typeof closeSpreadPct === "number"
+    ? (closeSpreadPct < 0 ? "negative" : "positive")
+    : "neutral";
+  const midpointSpreadTone = typeof midpointSpreadPct === "number"
+    ? (midpointSpreadPct < 0 ? "negative" : "positive")
+    : "neutral";
+  const markSpreadTone = typeof current?.mark_spread_pct === "number"
+    ? (current.mark_spread_pct < 0 ? "negative" : "positive")
+    : "neutral";
   const ratio =
     current && result && current.leg1.price > 0
       ? (current.leg2.price * result.leg2_multiplier) / current.leg1.price
@@ -5140,20 +5170,44 @@ export function PairMonitorPage() {
       <section className="pair-focus-block">
         <section className="pair-focus-metrics">
           <MetricCard
-            label="最新均值价差率"
-            value={signedPct(spreadPct)}
+            label="可成交开仓价差"
+            value={signedPct(openSpreadPct)}
             sub={
-              result
-                ? `实时价差 = ${rightLegLabel(result)} - ${leftLegLabel(result)}`
+              current
+                ? `左 ask ${price(current.leg1.ask_price)} · 右 bid ${price(current.leg2.bid_price)} · 差价 ${price(current.open_spread_abs)}`
                 : "等待查询"
             }
             tone={spreadTone}
           />
           <MetricCard
-            label="差价"
-            value={price(current?.spread_abs ?? result?.spread_abs.current)}
-            sub={ratio ? `倍率 ${compactNumber(ratio, 4)}x` : "-"}
-            tone={spreadTone}
+            label="可成交平仓价差"
+            value={signedPct(closeSpreadPct)}
+            sub={
+              current
+                ? `左 bid ${price(current.leg1.bid_price)} · 右 ask ${price(current.leg2.ask_price)} · 差价 ${price(current.close_spread_abs)}`
+                : "等待查询"
+            }
+            tone={closeSpreadTone}
+          />
+          <MetricCard
+            label="盘口中间价差"
+            value={signedPct(midpointSpreadPct)}
+            sub={
+              result
+                ? `差价 ${price(midpointSpreadAbs)}${ratio ? ` · 倍率 ${compactNumber(ratio, 4)}x` : ""}`
+                : "等待查询"
+            }
+            tone={midpointSpreadTone}
+          />
+          <MetricCard
+            label="标记价差（辅助）"
+            value={signedPct(current?.mark_spread_pct)}
+            sub={
+              current
+                ? `左标记 ${price(current.leg1.mark_price)} · 右标记 ${price(current.leg2.mark_price)} · 差价 ${price(current.mark_spread_abs)}`
+                : "等待查询"
+            }
+            tone={markSpreadTone}
           />
         </section>
         <PairSpreadChart result={result} />

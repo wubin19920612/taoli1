@@ -204,7 +204,9 @@ function pairSpreadResult(params?: URLSearchParams) {
             raw_symbol: leg1Symbol,
             price: leg1Price,
             price_field: "mid_price" as const,
-            mark_price: null,
+            bid_price: leg1Price - 0.1,
+            ask_price: leg1Price + 0.1,
+            mark_price: leg1Price - 0.2,
             index_price: null,
             mid_price: leg1Price,
             last_price: leg1Price,
@@ -224,8 +226,10 @@ function pairSpreadResult(params?: URLSearchParams) {
             ...(leg2Dex ? { dex: leg2Dex } : {}),
             raw_symbol: leg2Symbol,
             price: leg2Price,
-            price_field: leg2MarketType === "spot" ? "last_price" as const : "mark_price" as const,
-            mark_price: leg2MarketType === "spot" ? null : leg2Price,
+            price_field: "mid_price" as const,
+            bid_price: leg2Price - 0.1,
+            ask_price: leg2Price + 0.1,
+            mark_price: leg2MarketType === "spot" ? null : leg2Price + 0.2,
             index_price: leg2MarketType === "spot" ? null : 100,
             mid_price: leg2Price,
             last_price: leg2Price,
@@ -239,7 +243,13 @@ function pairSpreadResult(params?: URLSearchParams) {
             timestamp: observedAt
           },
           spread_abs: currentSpreadAbs,
-          spread_pct: currentSpreadPct
+          spread_pct: currentSpreadPct,
+          open_spread_abs: currentSpreadAbs - 0.2,
+          open_spread_pct: 0.8,
+          close_spread_abs: currentSpreadAbs + 0.2,
+          close_spread_pct: 1.2,
+          mark_spread_abs: leg2MarketType === "spot" ? null : currentSpreadAbs + 0.4,
+          mark_spread_pct: leg2MarketType === "spot" ? null : 1.4
         }
       : null,
     points: historicalPoints,
@@ -538,6 +548,23 @@ describe("PairMonitorPage", () => {
       ).toBe(true);
     });
     expect((await screen.findAllByText("5秒")).length).toBeGreaterThan(0);
+  });
+
+  it("shows executable open and close spreads separately from midpoint and mark spreads", async () => {
+    const user = userEvent.setup();
+    render(<PairMonitorPage />);
+
+    await user.click(screen.getByRole("button", { name: /查询/ }));
+
+    expect(await screen.findByText("可成交开仓价差")).toBeTruthy();
+    expect(screen.getByText("可成交平仓价差")).toBeTruthy();
+    expect(screen.getByText("盘口中间价差")).toBeTruthy();
+    expect(screen.getByText("标记价差（辅助）")).toBeTruthy();
+    expect(screen.getByText("+0.80%")).toBeTruthy();
+    expect(screen.getByText("+1.20%")).toBeTruthy();
+    expect(screen.getByText("+1.40%")).toBeTruthy();
+    expect(screen.getByText(/左 ask .*右 bid/)).toBeTruthy();
+    expect(screen.getByText(/左 bid .*右 ask/)).toBeTruthy();
   });
 
   it("uses hourly history for query windows longer than 7 days", async () => {

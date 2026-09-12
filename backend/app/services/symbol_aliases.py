@@ -191,6 +191,16 @@ def _spread_pct(spread_abs: float, left_price: float, right_price: float) -> flo
     return spread_abs / ((left_price + right_price) / 2) * 100
 
 
+def _spread_values(
+    left_price: float | None,
+    right_price: float | None,
+) -> tuple[float | None, float | None]:
+    if left_price is None or right_price is None or left_price <= 0 or right_price <= 0:
+        return None, None
+    spread_abs = right_price - left_price
+    return spread_abs, _spread_pct(spread_abs, left_price, right_price)
+
+
 def _stats(values: list[float]) -> PairSpreadValueStats:
     if not values:
         return PairSpreadValueStats()
@@ -215,6 +225,8 @@ def _scale_current_leg(
         update={
             "symbol": alias.canonical_symbol,
             "price": leg.price * multiplier,
+            "bid_price": scale(leg.bid_price),
+            "ask_price": scale(leg.ask_price),
             "mark_price": scale(leg.mark_price),
             "index_price": scale(leg.index_price),
             "mid_price": scale(leg.mid_price),
@@ -257,12 +269,30 @@ def apply_pair_spread_symbol_aliases(
         leg2 = _scale_current_leg(result.current.leg2, leg2_alias)
         if scales_prices:
             spread_abs = leg2.price - leg1.price
+            open_spread_abs, open_spread_pct = _spread_values(
+                leg1.ask_price,
+                leg2.bid_price,
+            )
+            close_spread_abs, close_spread_pct = _spread_values(
+                leg1.bid_price,
+                leg2.ask_price,
+            )
+            mark_spread_abs, mark_spread_pct = _spread_values(
+                leg1.mark_price,
+                leg2.mark_price,
+            )
             current = result.current.model_copy(
                 update={
                     "leg1": leg1,
                     "leg2": leg2,
                     "spread_abs": spread_abs,
                     "spread_pct": _spread_pct(spread_abs, leg1.price, leg2.price),
+                    "open_spread_abs": open_spread_abs,
+                    "open_spread_pct": open_spread_pct,
+                    "close_spread_abs": close_spread_abs,
+                    "close_spread_pct": close_spread_pct,
+                    "mark_spread_abs": mark_spread_abs,
+                    "mark_spread_pct": mark_spread_pct,
                 }
             )
         else:
