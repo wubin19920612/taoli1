@@ -8,6 +8,7 @@ import type {
   AstroAutomationSettings,
   AstroActionResult,
   AstroCardCreateRequest,
+  AstroInstrumentRouteRequest,
   AstroCardSettings,
   AstroNewListingCardSettings,
   AstroPairPlan,
@@ -1322,6 +1323,30 @@ export async function createAstroCard(
   return fetchJson<AstroActionResult>(`/astro/opportunities/${opportunityId}/card`, {
     method: "POST",
     body: JSON.stringify(request)
+  });
+}
+
+export async function previewInstrumentAstroPair(
+  route: AstroInstrumentRouteRequest
+): Promise<AstroPairPlan> {
+  return fetchJson<AstroPairPlan>("/astro/instrument/preview", {
+    method: "POST",
+    body: JSON.stringify(route)
+  });
+}
+
+export async function createInstrumentAstroCard(
+  route: AstroInstrumentRouteRequest,
+  expectedOpenSpreadPct: number,
+  card: AstroCardCreateRequest = {}
+): Promise<AstroActionResult> {
+  return fetchJson<AstroActionResult>("/astro/instrument/card", {
+    method: "POST",
+    body: JSON.stringify({
+      route,
+      card,
+      expected_open_spread_pct: expectedOpenSpreadPct
+    })
   });
 }
 

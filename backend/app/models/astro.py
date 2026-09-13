@@ -1,6 +1,9 @@
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
+from app.models.market import MarketType
 
 
 class AstroFieldAssumption(BaseModel):
@@ -14,6 +17,8 @@ class AstroFieldAssumption(BaseModel):
 class AstroPairPlan(BaseModel):
     opportunity_id: str
     symbol: str
+    source_open_spread_pct: float | None = None
+    quoted_at: datetime | None = None
     mode: Literal["dry_run"] = "dry_run"
     can_submit: bool
     pair: dict[str, Any] | None = None
@@ -44,6 +49,20 @@ class AstroCardCreateRequest(BaseModel):
     max_notional: float | None = Field(default=None, gt=0)
     open_enabled: bool | None = None
     save_as_default: bool = False
+
+
+class AstroInstrumentRouteRequest(BaseModel):
+    symbol: str = Field(min_length=1)
+    buy_exchange: str = Field(min_length=1)
+    buy_market_type: MarketType
+    sell_exchange: str = Field(min_length=1)
+    sell_market_type: MarketType
+
+
+class AstroInstrumentCardCreateRequest(BaseModel):
+    route: AstroInstrumentRouteRequest
+    card: AstroCardCreateRequest = Field(default_factory=AstroCardCreateRequest)
+    expected_open_spread_pct: float
 
 
 class AstroAlertActionResult(BaseModel):

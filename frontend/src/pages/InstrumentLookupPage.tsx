@@ -1,6 +1,7 @@
 import {
   DownOutlined,
   LineChartOutlined,
+  PlusOutlined,
   ReloadOutlined,
   RightOutlined,
   SearchOutlined,
@@ -9,8 +10,13 @@ import {
 import {
   Alert,
   Button,
+  Checkbox,
+  Descriptions,
   Empty,
+  Form,
   Input,
+  InputNumber,
+  Modal,
   Segmented,
   Space,
   Spin,
@@ -18,17 +24,28 @@ import {
   Table,
   Tag,
   Tooltip,
-  Typography
+  Typography,
+  message
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { lookupInstrument, querySymbolExchangeSpreads } from "../api/client";
+import {
+  createInstrumentAstroCard,
+  lookupInstrument,
+  previewInstrumentAstroPair,
+  querySymbolExchangeSpreads
+} from "../api/client";
 import type {
+  AstroActionResult,
+  AstroCardCreateRequest,
+  AstroInstrumentRouteRequest,
+  AstroPairPlan,
   InstrumentExchangeSnapshot,
   InstrumentLookupResult,
+  InstrumentSpreadComparison,
   MarketSnapshot,
   MarketType,
   SymbolSpreadPoint,
@@ -64,6 +81,10 @@ type TrendState = {
 type PriceSeries = {
   exchange: string;
   points: Array<{ bucketAt: string; price: number }>;
+};
+
+type AstroSizingFormValues = Required<Omit<AstroCardCreateRequest, "save_as_default">> & {
+  save_as_default: boolean;
 };
 
 function initialSymbol(): string {
@@ -108,6 +129,25 @@ function signedPct(value: number | null | undefined, digits = 3): string {
     return "-";
   }
   return `${value >= 0 ? "+" : ""}${value.toFixed(digits)}%`;
+}
+
+function marketTypeLabel(value: MarketType): string {
+  return value === "spot" ? "现货" : "永续";
+}
+
+function astroRoute(symbol: string, spread: InstrumentSpreadComparison): AstroInstrumentRouteRequest {
+  return {
+    symbol,
+    buy_exchange: spread.buy_exchange,
+    buy_market_type: spread.buy_market_type,
+    sell_exchange: spread.sell_exchange,
+    sell_market_type: spread.sell_market_type
+  };
+}
+
+function planNumber(plan: AstroPairPlan, field: string, fallback: number): number {
+  const value = Number(plan.pair?.[field]);
+  return Number.isFinite(value) ? value : fallback;
 }
 
 function mid(market: MarketSnapshot | null | undefined): number | null {
@@ -322,6 +362,7 @@ function latestSpreadPoint(points: SymbolSpreadPoint[]): SymbolSpreadPoint | nul
 }
 
 export function InstrumentLookupPage() {
+  const [astroSizingForm] = Form.useForm<AstroSizingFormValues>();
   const startingSymbol = useMemo(initialSymbol, []);
   const [query, setQuery] = useState(startingSymbol);
   const [activeSymbol, setActiveSymbol] = useState("");
@@ -334,7 +375,17 @@ export function InstrumentLookupPage() {
   const [trendType, setTrendType] = useState<MarketType>("future");
   const [trendHours, setTrendHours] = useState(24);
   const [trendCache, setTrendCache] = useState<Record<string, TrendState>>({});
+  const [astroSymbol, setAstroSymbol] = useState("");
+  const [astroSpread, setAstroSpread] = useState<InstrumentSpreadComparison | null>(null);
+  const [astroPlan, setAstroPlan] = useState<AstroPairPlan | null>(null);
+  const [astroPreviewLoading, setAstroPreviewLoading] = useState(false);
+  const [astroPreviewError, setAstroPreviewError] = useState("");
+  const [astroSubmitLoading, setAstroSubmitLoading] = useState(false);
+  const [astroSubmitResult, setAstroSubmitResult] = useState<AstroActionResult | null>(null);
+  const [astroSubmitError, setAstroSubmitError] = useState("");
   const requestIdRef = useRef(0);
+  const astroPreviewRequestIdRef = useRef(0);
+  const astroSubmitRequestIdRef = useRef(0);
 
   const runLookup = useCallback(async (value: string, background = false) => {
     const normalized = normalizeSymbol(value);
@@ -447,6 +498,97 @@ export function InstrumentLookupPage() {
     (counts, item) => ({ spot: counts.spot + Number(Boolean(item.spot)), future: counts.future + Number(Boolean(item.future)) }),
     { spot: 0, future: 0 }
   ) ?? { spot: 0, future: 0 };
+  const instrumentSpreads = result?.spreads ?? [];
+
+  const closeAstroPreview = () => {
+    if (astroSubmitLoading) return;
+    astroPreviewRequestIdRef.current += 1;
+    astroSubmitRequestIdRef.current += 1;
+    setAstroSymbol("");
+    setAstroSpread(null);
+    setAstroPlan(null);
+    setAstroPreviewLoading(false);
+    setAstroPreviewError("");
+    setAstroSubmitLoading(false);
+    setAstroSubmitResult(null);
+    setAstroSubmitError("");
+    astroSizingForm.resetFields();
+  };
+
+  const openAstroPreview = async (spread: InstrumentSpreadComparison) => {
+    if (!result || astroSubmitLoading) return;
+    const requestId = ++astroPreviewRequestIdRef.current;
+    astroSubmitRequestIdRef.current += 1;
+    const symbol = result.symbol;
+    setAstroSymbol(symbol);
+    setAstroSpread(spread);
+    setAstroPlan(null);
+    setAstroPreviewError("");
+    setAstroSubmitResult(null);
+    setAstroSubmitError("");
+    setAstroPreviewLoading(true);
+    try {
+      const plan = await previewInstrumentAstroPair(astroRoute(symbol, spread));
+      if (requestId !== astroPreviewRequestIdRef.current) return;
+      setAstroPlan(plan);
+      if (plan.pair) {
+        astroSizingForm.setFieldsValue({
+          max_trade_usdt: planNumber(plan, "maxTradeUSDT", 10),
+          leverage: planNumber(plan, "leverage", 1),
+          min_notional: planNumber(plan, "minNotional", 10),
+          max_notional: planNumber(plan, "maxNotional", 10),
+          open_enabled: plan.pair.status === true && plan.pair.disableOpen !== true,
+          save_as_default: false
+        });
+      }
+    } catch (exc) {
+      if (requestId !== astroPreviewRequestIdRef.current) return;
+      setAstroPreviewError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      if (requestId === astroPreviewRequestIdRef.current) {
+        setAstroPreviewLoading(false);
+      }
+    }
+  };
+
+  const submitAstroCard = async () => {
+    if (
+      !astroSymbol
+      || !astroSpread
+      || !astroPlan?.can_submit
+      || astroPlan.source_open_spread_pct === null
+    ) return;
+    const requestId = ++astroSubmitRequestIdRef.current;
+    setAstroSubmitLoading(true);
+    setAstroSubmitResult(null);
+    setAstroSubmitError("");
+    try {
+      const sizing = await astroSizingForm.validateFields();
+      const next = await createInstrumentAstroCard(
+        astroRoute(astroSymbol, astroSpread),
+        astroPlan.source_open_spread_pct,
+        sizing
+      );
+      if (requestId !== astroSubmitRequestIdRef.current) return;
+      setAstroSubmitResult(next);
+      if (next.status === "created" || next.status === "updated") {
+        message.success(next.message);
+      } else if (next.status === "failed") {
+        message.error(next.message);
+      } else {
+        message.warning(next.message);
+      }
+    } catch (exc) {
+      if (requestId !== astroSubmitRequestIdRef.current) return;
+      const text = exc instanceof Error ? exc.message : String(exc);
+      setAstroSubmitError(text);
+      message.error(text);
+    } finally {
+      if (requestId === astroSubmitRequestIdRef.current) {
+        setAstroSubmitLoading(false);
+      }
+    }
+  };
 
   const columns = useMemo<ColumnsType<InstrumentExchangeSnapshot>>(() => [
     {
@@ -529,6 +671,98 @@ export function InstrumentLookupPage() {
     }
   ], []);
 
+  const spreadColumns: ColumnsType<InstrumentSpreadComparison> = [
+    {
+      title: "类型",
+      dataIndex: "opportunity_type",
+      width: 84,
+      render: (value: string | null) => <Tag>{value ?? "反向 SF"}</Tag>
+    },
+    {
+      title: "买入市场",
+      key: "buy_market",
+      width: 170,
+      render: (_, spread) => (
+        <Space size={6}>
+          <Typography.Text strong>{exchangeLabels[spread.buy_exchange] ?? spread.buy_exchange}</Typography.Text>
+          <Tag>{marketTypeLabel(spread.buy_market_type)}</Tag>
+        </Space>
+      )
+    },
+    {
+      title: "买入 Ask",
+      dataIndex: "buy_ask",
+      width: 130,
+      align: "right",
+      render: (value: number) => price(value)
+    },
+    {
+      title: "卖出市场",
+      key: "sell_market",
+      width: 170,
+      render: (_, spread) => (
+        <Space size={6}>
+          <Typography.Text strong>{exchangeLabels[spread.sell_exchange] ?? spread.sell_exchange}</Typography.Text>
+          <Tag>{marketTypeLabel(spread.sell_market_type)}</Tag>
+        </Space>
+      )
+    },
+    {
+      title: "卖出 Bid",
+      dataIndex: "sell_bid",
+      width: 130,
+      align: "right",
+      render: (value: number) => price(value)
+    },
+    {
+      title: "可成交差价",
+      dataIndex: "executable_spread_pct",
+      width: 126,
+      align: "right",
+      sorter: (left, right) => left.executable_spread_pct - right.executable_spread_pct,
+      defaultSortOrder: "descend",
+      render: (value: number) => (
+        <Typography.Text strong className={`instrument-rate instrument-rate-${tone(value)}`}>
+          {signedPct(value)}
+        </Typography.Text>
+      )
+    },
+    {
+      title: "中价差",
+      dataIndex: "mid_spread_pct",
+      width: 110,
+      align: "right",
+      render: (value: number) => signedPct(value)
+    },
+    {
+      title: "价差额",
+      dataIndex: "price_difference",
+      width: 110,
+      align: "right",
+      render: (value: number) => price(value)
+    },
+    {
+      title: "操作",
+      key: "action",
+      fixed: "right",
+      width: 96,
+      render: (_, spread) => spread.astro_supported ? (
+        <Button
+          size="small"
+          type="primary"
+          icon={<PlusOutlined />}
+          onClick={() => void openAstroPreview(spread)}
+        >
+          建卡
+        </Button>
+      ) : (
+        <Tooltip title={spread.astro_blocker}>
+          <span><Button size="small" icon={<PlusOutlined />} disabled>建卡</Button></span>
+        </Tooltip>
+      )
+    }
+  ];
+
   const trendColumns = useMemo<ColumnsType<SymbolSpreadQueryResult["series"][number]>>(() => [
     { title: "交易所", dataIndex: "exchange", render: (value: string) => exchangeLabels[value] ?? value },
     {
@@ -594,6 +828,26 @@ export function InstrumentLookupPage() {
         />
       </section>
 
+      {instrumentSpreads.length > 0 ? (
+        <section className="instrument-market-table">
+          <div className="instrument-section-head">
+            <div>
+              <Typography.Title level={4}>跨市场差价</Typography.Title>
+              <Typography.Text type="secondary">按买入 Ask、卖出 Bid 计算，每组市场保留较优方向</Typography.Text>
+            </div>
+            <Tag>{instrumentSpreads.length} 组</Tag>
+          </div>
+          <Table<InstrumentSpreadComparison>
+            rowKey="id"
+            columns={spreadColumns}
+            dataSource={instrumentSpreads}
+            pagination={instrumentSpreads.length > 12 ? { defaultPageSize: 12, showSizeChanger: true } : false}
+            size="small"
+            scroll={{ x: 1160 }}
+          />
+        </section>
+      ) : null}
+
       {result && result.exchange_count > 0 ? (
         <section className={`instrument-trend-section ${trendOpen ? "instrument-trend-open" : ""}`}>
           <div className="instrument-section-head">
@@ -655,6 +909,87 @@ export function InstrumentLookupPage() {
           ) : null}
         </section>
       ) : null}
+
+      <Modal
+        open={astroSpread !== null}
+        title="创建 Astro 卡片"
+        width={760}
+        onCancel={closeAstroPreview}
+        closable={!astroSubmitLoading}
+        keyboard={!astroSubmitLoading}
+        maskClosable={!astroSubmitLoading}
+        footer={[
+          <Button key="close" disabled={astroSubmitLoading} onClick={closeAstroPreview}>关闭</Button>,
+          <Button
+            key="submit"
+            type="primary"
+            loading={astroSubmitLoading}
+            disabled={astroPreviewLoading || astroSubmitLoading || !astroPlan?.can_submit}
+            onClick={() => void submitAstroCard()}
+          >
+            确认创建
+          </Button>
+        ]}
+        destroyOnHidden
+      >
+        {astroSpread && astroSymbol ? (
+          <Space direction="vertical" size={12} className="astro-preview-panel">
+            <Descriptions bordered size="small" column={2}>
+              <Descriptions.Item label="标的">{astroSymbol}</Descriptions.Item>
+              <Descriptions.Item label="卡片名称">{String(astroPlan?.pair?.name ?? "-")}</Descriptions.Item>
+              <Descriptions.Item label="卡片类型">{String(astroPlan?.pair?.type ?? astroSpread.opportunity_type ?? "-")}</Descriptions.Item>
+              <Descriptions.Item label="Astro 路线">
+                {String(astroPlan?.pair?.buyEx ?? "-")} → {String(astroPlan?.pair?.sellEx ?? "-")}
+              </Descriptions.Item>
+              <Descriptions.Item label="买入">
+                {exchangeLabels[astroSpread.buy_exchange] ?? astroSpread.buy_exchange} · {marketTypeLabel(astroSpread.buy_market_type)} · Ask {price(astroSpread.buy_ask)}
+              </Descriptions.Item>
+              <Descriptions.Item label="卖出">
+                {exchangeLabels[astroSpread.sell_exchange] ?? astroSpread.sell_exchange} · {marketTypeLabel(astroSpread.sell_market_type)} · Bid {price(astroSpread.sell_bid)}
+              </Descriptions.Item>
+              <Descriptions.Item label="预览可成交差价">{signedPct(astroPlan?.source_open_spread_pct)}</Descriptions.Item>
+              <Descriptions.Item label="Astro 开仓阈值">{String(astroPlan?.pair?.openPosition ?? "-")}</Descriptions.Item>
+              <Descriptions.Item label="允许提交">{astroPlan?.can_submit ? "是" : "否"}</Descriptions.Item>
+            </Descriptions>
+            {astroPreviewLoading ? <Alert type="info" showIcon message="正在按最新行情生成卡片预览" /> : null}
+            {astroPreviewError ? <Alert type="error" showIcon message={astroPreviewError} /> : null}
+            {astroSubmitError ? <Alert type="error" showIcon message={astroSubmitError} /> : null}
+            {astroSubmitResult ? (
+              <Alert
+                type={astroSubmitResult.status === "created" || astroSubmitResult.status === "updated" ? "success" : astroSubmitResult.status === "failed" ? "error" : "warning"}
+                showIcon
+                message={astroSubmitResult.message}
+              />
+            ) : null}
+            {astroPlan?.blockers.length ? <Alert type="error" showIcon message="当前不能创建" description={astroPlan.blockers.join("；")} /> : null}
+            {astroPlan?.warnings.length ? <Alert type="warning" showIcon message={astroPlan.warnings.join("；")} /> : null}
+            {astroPlan?.pair ? (
+              <Form form={astroSizingForm} layout="vertical" className="astro-sizing-form">
+                <div className="form-grid">
+                  <Form.Item label="单笔金额 USDT" name="max_trade_usdt" rules={[{ required: true }]}>
+                    <InputNumber min={0.01} step={1} className="wide-input" />
+                  </Form.Item>
+                  <Form.Item label="杠杆" name="leverage" rules={[{ required: true }]}>
+                    <InputNumber min={1} step={1} className="wide-input" />
+                  </Form.Item>
+                  <Form.Item label="最小名义金额 USDT" name="min_notional" rules={[{ required: true }]}>
+                    <InputNumber min={0} step={1} className="wide-input" />
+                  </Form.Item>
+                  <Form.Item label="最大名义金额 USDT" name="max_notional" rules={[{ required: true }]}>
+                    <InputNumber min={0.01} step={1} className="wide-input" />
+                  </Form.Item>
+                  <Form.Item label="创建后允许开仓" name="open_enabled" valuePropName="checked">
+                    <Switch checkedChildren="开启" unCheckedChildren="关闭" />
+                  </Form.Item>
+                </div>
+                <Form.Item name="save_as_default" valuePropName="checked">
+                  <Checkbox>保存为全局建卡默认值</Checkbox>
+                </Form.Item>
+              </Form>
+            ) : null}
+          </Space>
+        ) : null}
+      </Modal>
     </div>
   );
 }

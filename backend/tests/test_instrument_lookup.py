@@ -31,7 +31,7 @@ def market(
 
 
 def test_instrument_lookup_groups_exact_symbol_across_all_exchanges() -> None:
-    now = datetime(2026, 9, 11, 4, 0, tzinfo=UTC)
+    now = datetime.now(UTC).replace(microsecond=0)
     store = SnapshotStore()
     store.set_all_markets(
         [
@@ -63,7 +63,13 @@ def test_instrument_lookup_groups_exact_symbol_across_all_exchanges() -> None:
     assert exchanges["binance"]["future"]["ask"] == 100_101
     assert exchanges["okx"]["spot"] is None
     assert exchanges["bitget"]["error"] == "temporary timeout"
-    assert payload["observed_at"] == "2026-09-11T04:00:01Z"
+    assert payload["observed_at"] == (now + timedelta(seconds=1)).isoformat().replace("+00:00", "Z")
+    assert len(payload["spreads"]) == 3
+    assert payload["spreads"][0]["buy_exchange"] == "binance"
+    assert payload["spreads"][0]["buy_market_type"] == "spot"
+    assert payload["spreads"][0]["sell_exchange"] == "gate"
+    assert payload["spreads"][0]["sell_market_type"] == "future"
+    assert payload["spreads"][0]["astro_supported"] is True
 
 
 def test_instrument_lookup_falls_back_to_filtered_markets_for_injected_stores() -> None:
@@ -114,3 +120,32 @@ def test_instrument_lookup_resolves_exchange_alias_to_canonical_symbol() -> None
     assert payload["exchange_count"] == 2
     exchanges = {item["exchange"]: item for item in payload["exchanges"]}
     assert exchanges["gate"]["future"]["raw_symbol"] == "EDGEX_USDT"
+
+
+def test_instrument_lookup_keeps_ignored_exchange_basics_but_excludes_its_spreads() -> None:
+    now = datetime.now(UTC)
+    store = SnapshotStore()
+    store.set_all_markets(
+        [
+            market("BTCUSDT", "binance", MarketType.FUTURE, 100_000, now),
+            market("BTCUSDT", "gate", MarketType.FUTURE, 100_100, now),
+        ]
+    )
+    app = create_app(
+        snapshot_store=store,
+        settings=Settings(database_url="sqlite:///:memory:"),
+    )
+
+    class SettingsRepository:
+        async def get_risk_settings(self) -> RiskSettings:
+            return RiskSettings(ignored_exchanges=["gate"])
+
+    with TestClient(app) as client:
+        app.state.settings_repo = SettingsRepository()
+        response = client.get("/api/instruments/BTCUSDT")
+
+    assert response.status_code == 200
+    payload = response.json()
+    gate = next(item for item in payload["exchanges"] if item["exchange"] == "gate")
+    assert gate["future"] is not None
+    assert payload["spreads"] == []

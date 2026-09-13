@@ -107,6 +107,22 @@ export interface InstrumentExchangeSnapshot {
   error: string | null;
 }
 
+export interface InstrumentSpreadComparison {
+  id: string;
+  buy_exchange: string;
+  buy_market_type: MarketType;
+  buy_ask: number;
+  sell_exchange: string;
+  sell_market_type: MarketType;
+  sell_bid: number;
+  price_difference: number;
+  executable_spread_pct: number;
+  mid_spread_pct: number;
+  opportunity_type: OpportunityType | null;
+  astro_supported: boolean;
+  astro_blocker: string | null;
+}
+
 export interface InstrumentLookupResult {
   query: string;
   symbol: string;
@@ -116,6 +132,7 @@ export interface InstrumentLookupResult {
   exchange_count: number;
   market_count: number;
   exchanges: InstrumentExchangeSnapshot[];
+  spreads: InstrumentSpreadComparison[];
 }
 
 export interface SecondLevelSamplingConfig {
@@ -1559,6 +1576,14 @@ export interface AstroCardCreateRequest {
   save_as_default?: boolean;
 }
 
+export interface AstroInstrumentRouteRequest {
+  symbol: string;
+  buy_exchange: string;
+  buy_market_type: MarketType;
+  sell_exchange: string;
+  sell_market_type: MarketType;
+}
+
 export interface AstroFieldAssumption {
   field: string;
   source: string;
@@ -1570,6 +1595,8 @@ export interface AstroFieldAssumption {
 export interface AstroPairPlan {
   opportunity_id: string;
   symbol: string;
+  source_open_spread_pct: number | null;
+  quoted_at: string | null;
   mode: "dry_run";
   can_submit: boolean;
   pair: Record<string, unknown> | null;

@@ -171,6 +171,23 @@ def test_aliased_future_pair_builds_fr_card_with_ratio_positions() -> None:
     )
 
 
+def test_standard_exchange_raw_symbols_stay_an_ff_card() -> None:
+    planner = AstroPairPlanner(AstroPlannerConfig())
+    standard_pair = opportunity().model_copy(
+        update={
+            "buy_raw_symbol": "BTC-USDT-SWAP",
+            "sell_raw_symbol": "BTCUSDT",
+        }
+    )
+
+    plan = planner.plan(standard_pair)
+
+    assert plan.can_submit is True
+    assert plan.pair is not None
+    assert plan.pair["name"] == "BTC"
+    assert plan.pair["type"] == "FF"
+
+
 def test_closed_bitget_rtoken_opportunity_is_blocked() -> None:
     planner = AstroPairPlanner(AstroPlannerConfig())
     rtoken_opportunity = opportunity(OpportunityType.SF, MarketType.SPOT, MarketType.FUTURE).model_copy(

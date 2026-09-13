@@ -10,6 +10,8 @@ from app.models.instrument import (
 from app.models.market import MarketSnapshot, MarketType
 from app.models.pair_spread import normalize_pair_spread_symbol
 from app.models.settings import RiskSettings
+from app.services.data_filters import ignored_exchange_set
+from app.services.instrument_spreads import build_instrument_spreads
 from app.services.symbol_aliases import SymbolAliasResolver
 
 
@@ -93,6 +95,12 @@ async def lookup_instrument(symbol: str, request: Request) -> InstrumentLookupRe
         for exchange in INSTRUMENT_LOOKUP_EXCHANGES
     ]
     observed_at = max((market.timestamp for market in latest_by_market.values()), default=None)
+    ignored_exchanges = ignored_exchange_set(settings)
+    spread_markets = [
+        market
+        for market in latest_by_market.values()
+        if market.exchange.lower() not in ignored_exchanges
+    ]
     base = canonical_symbol.removesuffix("USDT")
     return InstrumentLookupResult(
         query=symbol,
@@ -102,4 +110,8 @@ async def lookup_instrument(symbol: str, request: Request) -> InstrumentLookupRe
         exchange_count=sum(1 for item in exchanges if item.spot is not None or item.future is not None),
         market_count=len(latest_by_market),
         exchanges=exchanges,
+        spreads=build_instrument_spreads(
+            spread_markets,
+            stale_after_seconds=settings.stale_after_seconds,
+        ),
     )

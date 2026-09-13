@@ -76,6 +76,10 @@ def _raw_base_name(symbol: str | None) -> str | None:
     if not symbol:
         return None
     normalized = symbol.strip().upper().split(":", 1)[-1]
+    for suffix in ("-SWAP", "_SWAP", "/SWAP", "-PERP", "_PERP", "/PERP", "_UMCBL"):
+        if normalized.endswith(suffix):
+            normalized = normalized[: -len(suffix)]
+            break
     normalized = normalized.replace("-", "").replace("_", "").replace("/", "")
     return _base_name(normalized) or None
 
@@ -308,6 +312,8 @@ class AstroPairPlanner:
             return AstroPairPlan(
                 opportunity_id=opportunity.id,
                 symbol=opportunity.symbol,
+                source_open_spread_pct=opportunity.open_spread_pct,
+                quoted_at=opportunity.last_seen_at,
                 can_submit=False,
                 blockers=blockers,
                 warnings=warnings,
@@ -341,6 +347,8 @@ class AstroPairPlanner:
         return AstroPairPlan(
             opportunity_id=opportunity.id,
             symbol=opportunity.symbol,
+            source_open_spread_pct=opportunity.open_spread_pct,
+            quoted_at=opportunity.last_seen_at,
             can_submit=True,
             pair=pair,
             sdk_payload={"action": "add", "pair": pair},
