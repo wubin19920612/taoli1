@@ -274,6 +274,51 @@ describe("InstrumentLookupPage", () => {
     expect(await screen.findAllByText("已创建暂停卡片 BTC SF binance->binance")).toHaveLength(2);
   });
 
+  it("shows every spread without pagination and sorts by spread type", async () => {
+    const spreadTypes = ["SF", "FF", "SS", null] as const;
+    const manySpreads = Array.from({ length: 13 }, (_, index) => ({
+      ...lookupResult.spreads[index % lookupResult.spreads.length],
+      id: `spread-${index}`,
+      opportunity_type: spreadTypes[index % spreadTypes.length]
+    }));
+    (fetch as ReturnType<typeof vi.fn>).mockImplementation(async (input: RequestInfo | URL) => {
+      if (String(input).includes("/instruments/")) {
+        return Response.json({ ...lookupResult, spreads: manySpreads });
+      }
+      return Response.json({});
+    });
+
+    render(<InstrumentLookupPage />);
+
+    await screen.findByText("跨市场差价");
+    expect(screen.getAllByRole("button", { name: /建卡/ })).toHaveLength(13);
+    expect(document.querySelector(".ant-pagination")).toBeNull();
+
+    const typeHeader = screen.getByRole("columnheader", { name: /差价类型/ });
+    await userEvent.click(typeHeader);
+    const table = typeHeader.closest("table");
+    const ascendingTypes = Array.from(table?.querySelectorAll("tbody tr.ant-table-row") ?? []).map(
+      (row) => row.querySelector("td")?.textContent
+    );
+    expect(ascendingTypes).toEqual([
+      "FF", "FF", "FF",
+      "SF", "SF", "SF", "SF",
+      "SS", "SS", "SS",
+      "反向 SF", "反向 SF", "反向 SF"
+    ]);
+
+    await userEvent.click(typeHeader);
+    const descendingTypes = Array.from(table?.querySelectorAll("tbody tr.ant-table-row") ?? []).map(
+      (row) => row.querySelector("td")?.textContent
+    );
+    expect(descendingTypes).toEqual([
+      "反向 SF", "反向 SF", "反向 SF",
+      "SS", "SS", "SS",
+      "SF", "SF", "SF", "SF",
+      "FF", "FF", "FF"
+    ]);
+  });
+
   it("ignores an older preview response after another route is selected", async () => {
     const pendingPreviews: Array<(response: Response) => void> = [];
     (fetch as ReturnType<typeof vi.fn>).mockImplementation(async (input: RequestInfo | URL) => {

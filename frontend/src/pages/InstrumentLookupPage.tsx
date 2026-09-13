@@ -135,6 +135,17 @@ function marketTypeLabel(value: MarketType): string {
   return value === "spot" ? "现货" : "永续";
 }
 
+function spreadTypeLabel(value: InstrumentSpreadComparison["opportunity_type"]): string {
+  return value ?? "反向 SF";
+}
+
+function spreadTypeOrder(value: InstrumentSpreadComparison["opportunity_type"]): number {
+  if (value === "FF") return 0;
+  if (value === "SF") return 1;
+  if (value === "SS") return 2;
+  return 3;
+}
+
 function astroRoute(symbol: string, spread: InstrumentSpreadComparison): AstroInstrumentRouteRequest {
   return {
     symbol,
@@ -673,10 +684,15 @@ export function InstrumentLookupPage() {
 
   const spreadColumns: ColumnsType<InstrumentSpreadComparison> = [
     {
-      title: "类型",
+      title: "差价类型",
       dataIndex: "opportunity_type",
-      width: 84,
-      render: (value: string | null) => <Tag>{value ?? "反向 SF"}</Tag>
+      width: 108,
+      sorter: (left, right) => (
+        spreadTypeOrder(left.opportunity_type) - spreadTypeOrder(right.opportunity_type)
+      ),
+      render: (value: InstrumentSpreadComparison["opportunity_type"]) => (
+        <Tag>{spreadTypeLabel(value)}</Tag>
+      )
     },
     {
       title: "买入市场",
@@ -841,7 +857,7 @@ export function InstrumentLookupPage() {
             rowKey="id"
             columns={spreadColumns}
             dataSource={instrumentSpreads}
-            pagination={instrumentSpreads.length > 12 ? { defaultPageSize: 12, showSizeChanger: true } : false}
+            pagination={false}
             size="small"
             scroll={{ x: 1160 }}
           />
