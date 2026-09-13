@@ -72,6 +72,7 @@ class AstroAlertActionResult(BaseModel):
     message: str
     pair_name: str | None = None
     pair_type: str | None = None
+    warnings: list[str] = Field(default_factory=list)
 
     def format_message(self) -> str:
         return f"Astro: {self.message}"

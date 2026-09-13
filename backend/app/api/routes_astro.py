@@ -228,6 +228,23 @@ async def _build_astro_preview(request: Request, opportunity: Opportunity) -> As
     settings = await _effective_astro_card_settings(request)
     planner = AstroPairPlanner(AstroPlannerConfig.from_card_settings(settings))
     plan = planner.plan(opportunity)
+    preview_warning = (
+        "系统当前处于 dry-run 模式；点击确认也不会写入 Astro。"
+        if request.app.state.settings.astro_dry_run_only
+        else "当前仅为预览；点击确认创建后会实际写入 Astro。"
+    )
+    plan = plan.model_copy(
+        update={
+            "warnings": [
+                preview_warning,
+                *(
+                    warning
+                    for warning in plan.warnings
+                    if not warning.startswith("Dry-run only:")
+                ),
+            ]
+        }
+    )
     risk_settings = await _effective_risk_settings(request)
     if not symbol_is_excluded(opportunity.symbol, risk_settings):
         return plan
@@ -360,16 +377,18 @@ async def _create_astro_card(
         risk_settings,
         effective_settings,
     )
-    if depth_failure is not None:
-        return AstroAlertActionResult(
-            enabled=True,
-            status="skipped",
-            action="order_book_validation",
-            message=_format_depth_validation_message(depth_failure),
-            pair_name=opportunity.symbol.removesuffix("USDT"),
-            pair_type=str(opportunity.type),
-        )
-    return await service.handle_manual_create(opportunity, card_request)
+    result = await service.handle_manual_create(opportunity, card_request)
+    if depth_failure is None:
+        return result
+    depth_warning = _format_depth_validation_message(depth_failure)
+    return result.model_copy(
+        update={
+            "warnings": [
+                *result.warnings,
+                f"{depth_warning}；本次为人工建卡，仅作风险提示，未拦截创建",
+            ]
+        }
+    )
 
 
 @router.post("/opportunities/{opportunity_id}/card", response_model=AstroAlertActionResult)

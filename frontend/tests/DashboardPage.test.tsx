@@ -621,7 +621,8 @@ describe("DashboardPage", () => {
             action: "add",
             message: "已创建暂停卡片 BTC FF binance->okx，禁开=true",
             pair_name: "BTC",
-            pair_type: "FF"
+            pair_type: "FF",
+            warnings: ["订单簿深度不足；本次为人工建卡，仅作风险提示，未拦截创建"]
           });
         }
         if (url.includes("/astro/preview/opp-1")) {
@@ -665,6 +666,7 @@ describe("DashboardPage", () => {
       );
     });
     expect((await screen.findAllByText(/已创建暂停卡片 BTC FF/)).length).toBeGreaterThan(0);
+    expect(screen.getByText(/人工建卡，仅作风险提示，未拦截创建/)).toBeTruthy();
   }, 15000);
 
   it("sends edited Astro sizing values and can save them as defaults", async () => {

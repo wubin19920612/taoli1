@@ -6,6 +6,7 @@ from app.core.config import Settings
 from app.main import create_app
 from app.models.astro import AstroAlertActionResult
 from app.models.market import MarketSnapshot, MarketType
+from app.models.orderbook import DepthValidationResult
 from app.models.settings import AstroCardSettings, RiskSettings
 from app.services.snapshot_store import SnapshotStore
 
@@ -62,6 +63,20 @@ class FakeAstroSubmitService:
         )
 
 
+class FakeOrderBookValidator:
+    def __init__(self, result: DepthValidationResult) -> None:
+        self.result = result
+
+    async def validate(
+        self,
+        opportunity,
+        risk_settings,
+        card_settings=None,
+        override_notional_usdt=None,
+    ) -> DepthValidationResult:
+        return self.result
+
+
 class RiskSettingsRepository:
     def __init__(self, settings: RiskSettings | None = None) -> None:
         self.settings = settings or RiskSettings(excluded_symbols=["BTCUSDT"])
@@ -73,7 +88,7 @@ class RiskSettingsRepository:
         return None
 
 
-def instrument_app(*, dashboard_password: str = ""):
+def instrument_app(*, dashboard_password: str = "", astro_dry_run_only: bool = True):
     store = SnapshotStore()
     store.set_all_markets(
         [
@@ -86,6 +101,7 @@ def instrument_app(*, dashboard_password: str = ""):
         settings=Settings(
             database_url="sqlite:///:memory:",
             dashboard_password=dashboard_password,
+            astro_dry_run_only=astro_dry_run_only,
         ),
     )
 
@@ -103,6 +119,18 @@ def test_instrument_astro_preview_uses_selected_live_market_direction() -> None:
     assert payload["pair"]["buyEx"] == "okx"
     assert payload["pair"]["sellEx"] == "binance"
     assert payload["pair"]["openPosition"] == "0.009950"
+    assert "系统当前处于 dry-run 模式" in payload["warnings"][0]
+    assert not any("Dry-run only" in warning for warning in payload["warnings"])
+
+
+def test_instrument_astro_preview_explains_when_confirm_will_write_to_astro() -> None:
+    app = instrument_app(astro_dry_run_only=False)
+
+    with TestClient(app) as client:
+        response = client.post("/api/astro/instrument/preview", json=route())
+
+    assert response.status_code == 200
+    assert "确认创建后会实际写入 Astro" in response.json()["warnings"][0]
 
 
 def test_instrument_astro_preview_surfaces_global_blacklist() -> None:
@@ -150,6 +178,49 @@ def test_instrument_astro_create_rebuilds_route_and_passes_sizing_to_shared_serv
     assert opportunity.sell_raw_symbol == "BTCUSDT"
     assert service.requests[0].max_trade_usdt == 25
     assert service.requests[0].leverage == 2
+
+
+def test_instrument_astro_create_warns_but_continues_when_order_book_validation_fails() -> None:
+    app = instrument_app(dashboard_password="secret")
+    service = FakeAstroSubmitService()
+    app.state.astro_alert_service = service
+    app.state.orderbook_validator = FakeOrderBookValidator(
+        DepthValidationResult(
+            passed=False,
+            target_notional_usdt=100,
+            required_depth_usdt=200,
+            price_band_pct=0.2,
+            buy_filled_usdt=7.03,
+            sell_filled_usdt=100,
+            buy_vwap=100,
+            sell_vwap=101,
+            quoted_open_pct=1,
+            executable_open_pct=0.8,
+            effective_executable_edge_pct=0.5,
+            slippage_loss_pct=0.2,
+            blockers=["买入侧价格带深度不足：7.03/200.00 USDT"],
+            warnings=[],
+        )
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/astro/instrument/card",
+            headers={"X-Dashboard-Password": "secret"},
+            json={
+                "route": route(),
+                "card": {"max_trade_usdt": 100, "max_notional": 100},
+                "expected_open_spread_pct": 1,
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "created"
+    assert "created from instrument lookup" in payload["message"]
+    assert "订单簿校验未通过" in payload["warnings"][0]
+    assert "人工建卡，仅作风险提示，未拦截创建" in payload["warnings"][0]
+    assert len(service.calls) == 1
 
 
 def test_instrument_astro_create_requires_dashboard_password() -> None:

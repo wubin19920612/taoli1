@@ -1070,6 +1070,9 @@ export function InstrumentLookupPage() {
                 message={astroSubmitResult.message}
               />
             ) : null}
+            {astroSubmitResult?.warnings?.length ? (
+              <Alert type="warning" showIcon message={astroSubmitResult.warnings.join("；")} />
+            ) : null}
             {astroPlan?.blockers.length ? <Alert type="error" showIcon message="当前不能创建" description={astroPlan.blockers.join("；")} /> : null}
             {astroPlan?.warnings.length ? <Alert type="warning" showIcon message={astroPlan.warnings.join("；")} /> : null}
             {astroPlan?.pair ? (

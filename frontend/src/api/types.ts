@@ -1614,6 +1614,7 @@ export interface AstroActionResult {
   message: string;
   pair_name: string | null;
   pair_type: string | null;
+  warnings?: string[];
 }
 
 export interface AstroSdkStatus {

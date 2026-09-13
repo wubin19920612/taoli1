@@ -993,6 +993,13 @@ export function DashboardPage() {
                 message={astroSubmitResult.message}
               />
             ) : null}
+            {astroSubmitResult?.warnings?.length ? (
+              <Alert
+                type="warning"
+                showIcon
+                message={astroSubmitResult.warnings.join(" | ")}
+              />
+            ) : null}
             {astroPreviewPlan ? (
               <>
                 {astroPreviewPlan.warnings.length > 0 ? (

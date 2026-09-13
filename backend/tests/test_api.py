@@ -3393,7 +3393,7 @@ def test_astro_manual_card_create_endpoint_forwards_overrides_and_saves_defaults
     assert saved.json()["open_enabled"] is True
 
 
-def test_astro_manual_card_create_endpoint_skips_when_order_book_validation_fails() -> None:
+def test_astro_manual_card_create_endpoint_warns_but_continues_when_order_book_validation_fails() -> None:
     store = SnapshotStore()
     store.set_opportunities([make_opportunity()])
     app = create_app(
@@ -3436,15 +3436,17 @@ def test_astro_manual_card_create_endpoint_skips_when_order_book_validation_fail
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["status"] == "skipped"
-    assert payload["action"] == "order_book_validation"
-    assert "买入侧深度不足" in payload["message"]
-    assert "实际可成交开仓价差 +0.100%" in payload["message"]
-    assert "成本修正 -0.200%" in payload["message"]
-    assert "资金费边际 +0.050%" in payload["message"]
-    assert "滑点缓冲 -0.050%" in payload["message"]
-    assert "实际可成交有效收益 -0.050%" in payload["message"]
-    assert service.calls == []
+    assert payload["status"] == "created"
+    assert payload["action"] == "add"
+    warning = payload["warnings"][0]
+    assert "买入侧深度不足" in warning
+    assert "实际可成交开仓价差 +0.100%" in warning
+    assert "成本修正 -0.200%" in warning
+    assert "资金费边际 +0.050%" in warning
+    assert "滑点缓冲 -0.050%" in warning
+    assert "实际可成交有效收益 -0.050%" in warning
+    assert "人工建卡，仅作风险提示，未拦截创建" in warning
+    assert len(service.calls) == 1
     assert validator.calls[0]["override_notional_usdt"] is None
     card_settings = validator.calls[0]["card_settings"]
     assert isinstance(card_settings, AstroCardSettings)
