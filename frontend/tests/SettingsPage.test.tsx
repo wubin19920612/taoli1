@@ -65,7 +65,8 @@ describe("SettingsPage", () => {
         }
         if (url.includes("/settings/astro-automation")) {
           return Response.json({
-            alert_auto_create: false
+            alert_auto_create: false,
+            allow_same_name_different_type: false
           });
         }
         if (url.includes("/settings/astro-new-listing-card") && init?.method === "PUT") {
@@ -369,6 +370,7 @@ describe("SettingsPage", () => {
 
     expect(await screen.findByText("Astro 自动化")).toBeTruthy();
     await userEvent.click(screen.getByLabelText("告警自动创建 Astro 卡片"));
+    await userEvent.click(screen.getByLabelText("允许同名不同类型卡片"));
     await userEvent.click(screen.getByRole("button", { name: /保存 Astro 自动化/ }));
 
     await waitFor(() => {
@@ -376,7 +378,9 @@ describe("SettingsPage", () => {
         expect.stringContaining("/settings/astro-automation"),
         expect.objectContaining({
           method: "PUT",
-          body: expect.stringContaining('"alert_auto_create":true')
+          body: expect.stringMatching(
+            /"alert_auto_create":true.*"allow_same_name_different_type":true/
+          )
         })
       );
     });

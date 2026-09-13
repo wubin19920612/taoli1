@@ -458,7 +458,10 @@ export function SettingsPage() {
   useEffect(() => {
     ruleForm.setFieldsValue(ruleToForm(defaultRule));
     templateForm.setFieldsValue(defaultAlertMessageTemplate);
-    astroAutomationForm.setFieldsValue({ alert_auto_create: false });
+    astroAutomationForm.setFieldsValue({
+      alert_auto_create: false,
+      allow_same_name_different_type: false
+    });
     livePilotForm.setFieldsValue(defaultLivePilotSettings);
     astroCardForm.setFieldsValue(defaultAstroCardSettings);
     astroNewListingCardForm.setFieldsValue(defaultAstroCardSettings);
@@ -932,6 +935,14 @@ export function SettingsPage() {
             help="关闭时只会记录告警和通知，不会自动写入 Astro 卡片。"
           >
             <Switch checkedChildren="开启" unCheckedChildren="关闭" />
+          </Form.Item>
+          <Form.Item
+            label="允许同名不同类型卡片"
+            name="allow_same_name_different_type"
+            valuePropName="checked"
+            help="开启后，同名但类型不同的卡片也会继续创建；名称、类型和交易所路线完全相同时仍会跳过。"
+          >
+            <Switch checkedChildren="允许" unCheckedChildren="跳过" />
           </Form.Item>
           <Button type="primary" htmlType="submit" icon={<SaveOutlined />}>
             保存 Astro 自动化

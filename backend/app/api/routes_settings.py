@@ -135,6 +135,8 @@ async def update_astro_automation_settings(
     service = getattr(request.app.state, "astro_alert_service", None)
     if service is not None and hasattr(service, "alert_auto_create_enabled"):
         service.alert_auto_create_enabled = saved.alert_auto_create
+    if service is not None and hasattr(service, "allow_same_name_different_type"):
+        service.allow_same_name_different_type = saved.allow_same_name_different_type
     return saved
 
 

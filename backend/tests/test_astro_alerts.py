@@ -521,7 +521,7 @@ async def test_existing_same_route_pair_is_skipped_without_update() -> None:
 
 
 @pytest.mark.asyncio
-async def test_existing_base_and_gc_routes_are_both_skipped() -> None:
+async def test_existing_base_and_gc_routes_are_both_skipped_when_conflicts_allowed() -> None:
     client = FakeAstroClient(
         [
             {"name": "BTC", "type": "FF", "buyEx": "binance", "sellEx": "okx"},
@@ -532,6 +532,7 @@ async def test_existing_base_and_gc_routes_are_both_skipped() -> None:
         client,
         Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
     )
+    service.allow_same_name_different_type = True
 
     result = await service.handle_alert(opportunity())
 
@@ -626,7 +627,7 @@ async def test_partial_gc_create_failure_is_reported_after_base_success() -> Non
 
 
 @pytest.mark.asyncio
-async def test_existing_same_name_different_route_is_not_overwritten() -> None:
+async def test_existing_same_name_different_type_is_not_overwritten() -> None:
     client = FakeAstroClient(
         [
             {
@@ -649,6 +650,63 @@ async def test_existing_same_name_different_route_is_not_overwritten() -> None:
     assert "同名 BTC" in result.message
     assert not client.added
     assert not client.updated
+
+
+@pytest.mark.asyncio
+async def test_existing_same_name_different_type_can_be_created_when_allowed() -> None:
+    client = FakeAstroClient(
+        [
+            {
+                "name": "BTC",
+                "type": "SF",
+                "buyEx": "binance",
+                "sellEx": "okx",
+            }
+        ]
+    )
+    service = AstroAlertService(
+        client,
+        Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
+        add_restart_delay_seconds=0,
+    )
+    service.allow_same_name_different_type = True
+
+    result = await service.handle_alert(opportunity())
+
+    assert result.status == "created"
+    assert result.action == "add"
+    assert [(item["buyEx"], item["sellEx"]) for item in client.added] == [
+        ("binance", "okx"),
+        ("gc-binance", "gc-okx"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_existing_same_name_same_type_different_route_does_not_block_create() -> None:
+    client = FakeAstroClient(
+        [
+            {
+                "name": "BTC",
+                "type": "FF",
+                "buyEx": "gate",
+                "sellEx": "bybit",
+            }
+        ]
+    )
+    service = AstroAlertService(
+        client,
+        Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
+        add_restart_delay_seconds=0,
+    )
+
+    result = await service.handle_alert(opportunity())
+
+    assert result.status == "created"
+    assert result.action == "add"
+    assert [(item["buyEx"], item["sellEx"]) for item in client.added] == [
+        ("binance", "okx"),
+        ("gc-binance", "gc-okx"),
+    ]
 
 
 @pytest.mark.asyncio

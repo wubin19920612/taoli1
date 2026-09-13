@@ -118,6 +118,7 @@ class AstroCardSettings(BaseModel):
 
 class AstroAutomationSettings(BaseModel):
     alert_auto_create: bool = False
+    allow_same_name_different_type: bool = False
 
 
 class LivePilotSettings(BaseModel):
