@@ -26,12 +26,83 @@ body {
   height: 56px;
   display: flex;
   align-items: center;
+  justify-content: space-between;
   padding: 0 18px;
   color: #f8fafc;
 }
 
 .brand .ant-typography {
   color: #f8fafc;
+}
+
+.navigation-order-trigger.ant-btn {
+  width: 32px;
+  height: 32px;
+  color: #cbd5d1;
+}
+
+.navigation-order-trigger.ant-btn:hover {
+  color: #ffffff;
+  background: rgb(255 255 255 / 10%);
+}
+
+.navigation-order-list {
+  display: grid;
+  gap: 6px;
+  max-height: min(62vh, 620px);
+  margin: 0;
+  padding: 2px;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.navigation-order-item {
+  display: grid;
+  grid-template-columns: 24px 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 4px 6px;
+  color: #24312e;
+  background: #f7f9f8;
+  border: 1px solid #dce4e1;
+  border-radius: 6px;
+  cursor: grab;
+}
+
+.navigation-order-item:active {
+  cursor: grabbing;
+}
+
+.navigation-order-item-dragging {
+  opacity: 0.48;
+}
+
+.navigation-order-handle,
+.navigation-order-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #74817d;
+}
+
+.navigation-order-label {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.navigation-order-actions {
+  min-width: 56px;
+}
+
+.navigation-order-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .app-header {
