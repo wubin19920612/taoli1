@@ -13,6 +13,7 @@ import {
 } from "../api/client";
 import type {
   AnnouncementExchangeOption,
+  AnnouncementAssetResearch,
   AnnouncementKind,
   AnnouncementSettings,
   ExchangeAnnouncement
@@ -23,8 +24,11 @@ dayjs.extend(utc);
 const defaultAnnouncementSettings: AnnouncementSettings = {
   enabled: true,
   poll_interval_seconds: 300,
+  alert_max_age_minutes: 30,
   record_exchanges: ["binance", "okx", "bybit", "gate", "bitget", "hyperliquid"],
   alert_exchanges: [],
+  listing_delisting_alerts_enabled: true,
+  launchpool_alerts_enabled: true,
   bootstrap_alerts_enabled: false,
   event_reminders_enabled: true,
   event_reminder_minutes_before: 30
@@ -43,6 +47,7 @@ const kindOptions: Array<{ label: string; value: "" | AnnouncementKind }> = [
   { label: "全部类型", value: "" },
   { label: "上币", value: "listing" },
   { label: "下币", value: "delisting" },
+  { label: "Launchpool", value: "launchpool" },
   { label: "其他", value: "other" }
 ];
 
@@ -51,7 +56,11 @@ function normalizeAnnouncementSettings(values?: Partial<AnnouncementSettings>): 
     ...defaultAnnouncementSettings,
     ...(values ?? {}),
     record_exchanges: values?.record_exchanges ?? defaultAnnouncementSettings.record_exchanges,
-    alert_exchanges: values?.alert_exchanges ?? defaultAnnouncementSettings.alert_exchanges
+    alert_exchanges: values?.alert_exchanges ?? defaultAnnouncementSettings.alert_exchanges,
+    listing_delisting_alerts_enabled:
+      values?.listing_delisting_alerts_enabled ?? defaultAnnouncementSettings.listing_delisting_alerts_enabled,
+    launchpool_alerts_enabled:
+      values?.launchpool_alerts_enabled ?? defaultAnnouncementSettings.launchpool_alerts_enabled
   };
 }
 
@@ -76,11 +85,13 @@ function kindTag(kind: AnnouncementKind) {
   const labels: Record<AnnouncementKind, string> = {
     listing: "上币",
     delisting: "下币",
+    launchpool: "Launchpool",
     other: "其他"
   };
   const colors: Record<AnnouncementKind, string> = {
     listing: "green",
     delisting: "red",
+    launchpool: "gold",
     other: "default"
   };
   return <Tag color={colors[kind]}>{labels[kind]}</Tag>;
@@ -106,6 +117,7 @@ function reminderStatusTag(status: string) {
 const marketTypeLabels: Record<string, string> = {
   spot: "现货",
   futures: "合约",
+  "stock perpetual": "股票合约",
   "spot margin": "现货杠杆",
   margin: "杠杆",
   convert: "闪兑",
@@ -125,8 +137,52 @@ function marketTypeParts(value?: string | null): string[] {
     .filter(Boolean);
 }
 
-function marketTypeTag(value?: string | null) {
-  const parts = marketTypeParts(value);
+function announcementIsStock(row: ExchangeAnnouncement): boolean {
+  if (row.asset_research?.some((item) => item.asset_type === "stock" || item.asset_type === "index")) {
+    return true;
+  }
+  const context = `${row.title} ${row.category ?? ""} ${row.market_type ?? ""}`.toLowerCase();
+  if (
+    [
+      "stock",
+      "stocks",
+      "equity",
+      "equities",
+      "bstock",
+      "tradfi",
+      "cfd",
+      "share",
+      "股票",
+      "指数",
+      "index",
+      "etf"
+    ].some((token) => context.includes(token))
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function announcementMarketTypeParts(row: ExchangeAnnouncement): string[] {
+  const parts = marketTypeParts(row.market_type);
+  const isStock = announcementIsStock(row);
+  return Array.from(
+    new Set(
+      parts.map((part) => {
+        if (part === "spot" && isStock) {
+          return "股票现货";
+        }
+        if ((part === "futures" || part === "stock perpetual") && isStock) {
+          return "股票合约";
+        }
+        return part;
+      })
+    )
+  );
+}
+
+function marketTypeTag(row: ExchangeAnnouncement) {
+  const parts = announcementMarketTypeParts(row);
   if (parts.length === 0) {
     return <Typography.Text type="secondary">未识别</Typography.Text>;
   }
@@ -141,8 +197,8 @@ function marketTypeTag(value?: string | null) {
   );
 }
 
-function marketTypeText(value?: string | null): string {
-  const parts = marketTypeParts(value);
+function marketTypeText(row: ExchangeAnnouncement): string {
+  const parts = announcementMarketTypeParts(row);
   if (parts.length === 0) {
     return "未识别";
   }
@@ -151,6 +207,9 @@ function marketTypeText(value?: string | null): string {
 
 function categoryLabel(row: ExchangeAnnouncement): string {
   const value = (row.category || "").toLowerCase();
+  if (row.kind === "launchpool") {
+    return value.includes("poolx") ? "PoolX 活动" : "Launchpool 活动";
+  }
   if (value.includes("baseline")) {
     return "当前市场基线";
   }
@@ -178,7 +237,33 @@ function categoryLabel(row: ExchangeAnnouncement): string {
   return row.category || "未分类";
 }
 
+function eventSchedule(row: ExchangeAnnouncement) {
+  return row.event_schedule ?? [];
+}
+
+function eventScheduleTimeRange(row: ExchangeAnnouncement): { first: string; last: string; count: number } | null {
+  const schedule = eventSchedule(row);
+  if (schedule.length === 0) {
+    return null;
+  }
+  const sorted = [...schedule].sort((a, b) => dayjs.utc(a.event_time).valueOf() - dayjs.utc(b.event_time).valueOf());
+  return {
+    first: sorted[0].event_time,
+    last: sorted[sorted.length - 1].event_time,
+    count: sorted.length
+  };
+}
+
 function eventTimeText(row: ExchangeAnnouncement): string {
+  const range = eventScheduleTimeRange(row);
+  if (range && range.count > 1) {
+    const first = formatUtcPlus8(range.first);
+    const last = formatUtcPlus8(range.last);
+    return first === last ? `分批 ${first} UTC+8 (${range.count}项)` : `分批 ${first} - ${last} UTC+8 (${range.count}项)`;
+  }
+  if (range) {
+    return `${formatUtcPlus8(range.first)} UTC+8`;
+  }
   if (row.event_time) {
     return `${formatUtcPlus8(row.event_time)} UTC+8`;
   }
@@ -189,6 +274,24 @@ function eventTimeText(row: ExchangeAnnouncement): string {
     return "公告未给出具体下币时间";
   }
   return "公告未给出具体时间";
+}
+
+function eventScheduleList(row: ExchangeAnnouncement) {
+  const schedule = eventSchedule(row);
+  if (schedule.length === 0) {
+    return "-";
+  }
+  return (
+    <div className="announcement-schedule-list">
+      {schedule.map((item) => (
+        <div key={`${item.symbol}-${item.event_time}`} className="announcement-schedule-item">
+          <Tag color="purple">{item.symbol}</Tag>
+          <Typography.Text>{formatUtcPlus8(item.event_time)} UTC+8</Typography.Text>
+          {item.note ? <Typography.Text type="secondary">{item.note}</Typography.Text> : null}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function symbolTags(values?: string[]) {
@@ -207,21 +310,133 @@ function symbolTags(values?: string[]) {
   );
 }
 
+const researchAssetTypeLabels: Record<string, string> = {
+  crypto: "加密货币",
+  stock: "股票",
+  index: "指数",
+  unknown: "未确认"
+};
+
+function researchStatusTag(status: string) {
+  const labels: Record<string, string> = {
+    found: "已找到",
+    partial: "部分资料",
+    not_found: "待核实"
+  };
+  const colors: Record<string, string> = {
+    found: "green",
+    partial: "orange",
+    not_found: "default"
+  };
+  return <Tag color={colors[status] ?? "default"}>{labels[status] ?? status}</Tag>;
+}
+
+function researchTypeLabel(value: string): string {
+  return researchAssetTypeLabels[value] ?? (value || "未确认");
+}
+
+function researchList(row: ExchangeAnnouncement): AnnouncementAssetResearch[] {
+  return row.asset_research ?? [];
+}
+
+function researchSummary(row: ExchangeAnnouncement) {
+  const items = researchList(row);
+  if (items.length === 0) {
+    return <Typography.Text type="secondary">未检索</Typography.Text>;
+  }
+  const found = items.filter((item) => item.status === "found").length;
+  const pending = items.length - found;
+  return (
+    <Space size={[0, 4]} wrap>
+      <Tag color={found > 0 ? "green" : "default"}>{found}/{items.length} 已找到</Tag>
+      {pending > 0 ? <Tag color="orange">{pending} 待核实</Tag> : null}
+    </Space>
+  );
+}
+
+function researchDetails(row: ExchangeAnnouncement) {
+  const items = researchList(row);
+  if (items.length === 0) {
+    return <Typography.Text type="secondary">暂无自动检索资料</Typography.Text>;
+  }
+  return (
+    <div className="announcement-research-list">
+      {items.map((item) => (
+        <div key={`${item.symbol}-${item.canonical_symbol ?? ""}`} className="announcement-research-item">
+          <div className="announcement-research-head">
+            <Space size={6} wrap>
+              <Tag color="purple">{item.symbol}</Tag>
+              {item.name ? <Typography.Text strong>{item.name}</Typography.Text> : null}
+              {item.canonical_symbol && item.canonical_symbol !== item.symbol ? (
+                <Typography.Text type="secondary">标准标的：{item.canonical_symbol}</Typography.Text>
+              ) : null}
+            </Space>
+            <Space size={4} wrap>
+              <Tag>{researchTypeLabel(item.asset_type)}</Tag>
+              {researchStatusTag(item.status)}
+            </Space>
+          </div>
+          {item.summary ? <Typography.Paragraph>{item.summary}</Typography.Paragraph> : null}
+          {item.business ? (
+            <Typography.Paragraph>
+              <Typography.Text strong>具体业务：</Typography.Text> {item.business}
+            </Typography.Paragraph>
+          ) : null}
+          {item.status === "not_found" ? (
+            <Typography.Text type="secondary">
+              暂未检索到足够可靠的公开资料，建议人工核实。
+            </Typography.Text>
+          ) : null}
+          {item.status === "partial" ? (
+            <Typography.Text type="secondary">
+              资料不完整或来自公开搜索摘要，建议人工核实。
+            </Typography.Text>
+          ) : null}
+          {item.sources.length > 0 ? (
+            <div className="announcement-research-sources">
+              <Typography.Text type="secondary">来源：</Typography.Text>
+              {item.sources.map((source) => (
+                <a key={`${source.title}-${source.url}`} href={source.url} target="_blank" rel="noreferrer">
+                  {source.title}
+                </a>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ))}
+      <Typography.Text type="secondary">
+        以上为公开资料自动整理，仅供参考，请自行核实，不构成投资建议。
+      </Typography.Text>
+    </div>
+  );
+}
+
 function rowSummary(row: ExchangeAnnouncement): string {
   const pieces: string[] = [];
   if (row.symbols.length > 0) {
-    pieces.push(`币种 ${row.symbols.slice(0, 8).join(", ")}`);
+    pieces.push(`${announcementIsStock(row) ? "标的" : "币种"} ${row.symbols.slice(0, 8).join(", ")}`);
   }
   if (row.market_type) {
-    pieces.push(`市场 ${marketTypeText(row.market_type)}`);
+    pieces.push(`市场 ${marketTypeText(row)}`);
   }
   if (row.event_time) {
-    pieces.push(`事件时间 ${formatUtcPlus8(row.event_time)} UTC+8`);
+    const range = eventScheduleTimeRange(row);
+    if (range && range.count > 1) {
+      pieces.push(`分批 ${formatUtcPlus8(range.first)} - ${formatUtcPlus8(range.last)} UTC+8`);
+    } else {
+      pieces.push(`事件时间 ${formatUtcPlus8(row.event_time)} UTC+8`);
+    }
   }
   if (pieces.length === 0) {
     return row.title;
   }
-  const action = row.kind === "listing" ? "上币" : row.kind === "delisting" ? "下币" : "公告";
+  const actionLabels: Record<AnnouncementKind, string> = {
+    listing: "上币",
+    delisting: "下币",
+    launchpool: "Launchpool",
+    other: "公告"
+  };
+  const action = actionLabels[row.kind];
   return `${action}: ${pieces.join("；")}`;
 }
 
@@ -229,9 +444,10 @@ const columns: ColumnsType<ExchangeAnnouncement> = [
   { title: "公告时间(UTC+8)", dataIndex: "published_at", width: 142, render: formatUtcPlus8 },
   { title: "交易所", dataIndex: "exchange", width: 96, render: (value: string) => value.toUpperCase() },
   { title: "类型", dataIndex: "kind", width: 86, render: kindTag },
-  { title: "币种", dataIndex: "symbols", width: 180, render: symbolTags },
-  { title: "市场", dataIndex: "market_type", width: 132, render: marketTypeTag },
-  { title: "上/下币时间(UTC+8)", dataIndex: "event_time", width: 168, render: (_value, row) => eventTimeText(row) },
+  { title: "标的/币种", dataIndex: "symbols", width: 180, render: symbolTags },
+  { title: "市场", dataIndex: "market_type", width: 132, render: (_value, row) => marketTypeTag(row) },
+  { title: "公开资料", dataIndex: "asset_research", width: 142, render: (_value, row) => researchSummary(row) },
+  { title: "事件时间(UTC+8)", dataIndex: "event_time", width: 168, render: (_value, row) => eventTimeText(row) },
   {
     title: "公告摘要",
     dataIndex: "title",
@@ -265,11 +481,16 @@ function announcementDetails(row: ExchangeAnnouncement) {
             {row.title}
           </a>
         </Descriptions.Item>
-        <Descriptions.Item label="币种">{row.symbols.length > 0 ? row.symbols.join(", ") : "-"}</Descriptions.Item>
-        <Descriptions.Item label="市场">{marketTypeText(row.market_type)}</Descriptions.Item>
+        <Descriptions.Item label={announcementIsStock(row) ? "标的" : "币种"}>
+          {row.symbols.length > 0 ? row.symbols.join(", ") : "-"}
+        </Descriptions.Item>
+        <Descriptions.Item label="市场">{marketTypeText(row)}</Descriptions.Item>
         <Descriptions.Item label="类型">{kindTag(row.kind)}</Descriptions.Item>
         <Descriptions.Item label="公告时间">{formatUtcPlus8(row.published_at)} UTC+8</Descriptions.Item>
-        <Descriptions.Item label="上/下币时间">{eventTimeText(row)}</Descriptions.Item>
+        <Descriptions.Item label="事件时间">{eventTimeText(row)}</Descriptions.Item>
+        {eventSchedule(row).length > 0 ? (
+          <Descriptions.Item label="逐项时间">{eventScheduleList(row)}</Descriptions.Item>
+        ) : null}
         <Descriptions.Item label="抓取时间">{formatUtcPlus8(row.fetched_at)} UTC+8</Descriptions.Item>
         <Descriptions.Item label="交易所">{row.exchange.toUpperCase()}</Descriptions.Item>
         <Descriptions.Item label="分类">{categoryLabel(row)}</Descriptions.Item>
@@ -277,6 +498,7 @@ function announcementDetails(row: ExchangeAnnouncement) {
         <Descriptions.Item label="来源">{row.source}</Descriptions.Item>
         <Descriptions.Item label="新公告告警">{alertStatusTag(row.alert_status)}</Descriptions.Item>
         <Descriptions.Item label="到点提醒">{reminderStatusTag(row.event_reminder_status)}</Descriptions.Item>
+        <Descriptions.Item label="公开资料">{researchDetails(row)}</Descriptions.Item>
         <Descriptions.Item label="提醒发送时间">
           {row.event_reminder_sent_at ? `${formatUtcPlus8(row.event_reminder_sent_at)} UTC+8` : "-"}
         </Descriptions.Item>
@@ -360,6 +582,8 @@ export function AnnouncementsPage() {
   const tableExchangeOptions = [{ label: "全部交易所", value: "" }, ...exchangeOptions];
   const alertExchangeSet = new Set(settingsPreview.alert_exchanges);
   const recordExchangeSet = new Set(settingsPreview.record_exchanges);
+  const listingDelistingAlertEnabled = settingsPreview.listing_delisting_alerts_enabled;
+  const launchpoolAlertEnabled = settingsPreview.launchpool_alerts_enabled;
 
   return (
     <div className="page announcements-page">
@@ -367,12 +591,18 @@ export function AnnouncementsPage() {
       <section className="panel panel-wide announcements-settings-panel">
         <div className="announcements-settings-head">
           <div>
-            <Typography.Title level={4}>上币/下币公告监控</Typography.Title>
+            <Typography.Title level={4}>交易所公告监控</Typography.Title>
             <Typography.Text type="secondary">
-              记录交易所公告并按配置发送飞书告警，当前支持 Binance、OKX、Bybit、Gate、Bitget、Hyperliquid 的公开数据源。
+              统一记录上币、下币、Launchpool 等交易所公告并按配置发送飞书告警，当前支持 Binance、OKX、Bybit、Gate、Bitget、Hyperliquid 的公开数据源。
             </Typography.Text>
           </div>
           <Space wrap>
+            <Tag color={listingDelistingAlertEnabled ? "green" : "default"}>
+              上/下币告警 {listingDelistingAlertEnabled ? "开启" : "关闭"}
+            </Tag>
+            <Tag color={launchpoolAlertEnabled ? "gold" : "default"}>
+              Launchpool 告警 {launchpoolAlertEnabled ? "开启" : "关闭"}
+            </Tag>
             {exchangeOptions.map((item) => (
               <Tag
                 key={item.value}
@@ -389,7 +619,7 @@ export function AnnouncementsPage() {
           type={settingsPreview.enabled ? "info" : "warning"}
           showIcon
           message={settingsPreview.enabled ? "公告轮询已启用" : "公告轮询已关闭"}
-          description="record_exchanges 控制哪些交易所会写入公告记录，alert_exchanges 控制哪些交易所的新公告和事件到点提醒会发飞书。只有能识别出明确上币/下架时间的公告才会触发到点提醒。"
+          description="record_exchanges 控制哪些交易所会写入公告记录，alert_exchanges 控制哪些交易所的新公告和事件到点提醒会发飞书。上/下币和 Launchpool 公告默认也会同步飞书，可分别关闭；只有能识别出明确上/下币时间的公告才会触发到点提醒。"
         />
         <Form
           form={form}
@@ -402,6 +632,12 @@ export function AnnouncementsPage() {
             <Form.Item label="启用公告轮询" name="enabled" valuePropName="checked">
               <Switch />
             </Form.Item>
+            <Form.Item label="上/下币公告飞书提醒" name="listing_delisting_alerts_enabled" valuePropName="checked">
+              <Switch />
+            </Form.Item>
+            <Form.Item label="Launchpool 公告飞书提醒" name="launchpool_alerts_enabled" valuePropName="checked">
+              <Switch />
+            </Form.Item>
             <Form.Item label="首次启动也告警" name="bootstrap_alerts_enabled" valuePropName="checked">
               <Switch />
             </Form.Item>
@@ -410,6 +646,9 @@ export function AnnouncementsPage() {
             </Form.Item>
             <Form.Item label="轮询间隔" name="poll_interval_seconds" rules={[{ required: true }]}>
               <InputNumber min={30} max={86400} step={30} suffix="s" className="wide-input" />
+            </Form.Item>
+            <Form.Item label="新公告通知窗口" name="alert_max_age_minutes" rules={[{ required: true }]}>
+              <InputNumber min={1} max={10080} step={5} suffix="min" className="wide-input" />
             </Form.Item>
             <Form.Item label="提前提醒" name="event_reminder_minutes_before" rules={[{ required: true }]}>
               <InputNumber min={1} max={10080} step={5} suffix="min" className="wide-input" />
@@ -462,6 +701,7 @@ export function AnnouncementsPage() {
         loading={loading}
         size="middle"
         tableLayout="fixed"
+        scroll={{ x: 1280 }}
         expandable={{
           expandedRowRender: announcementDetails,
           rowExpandable: () => true

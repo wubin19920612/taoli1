@@ -6,6 +6,8 @@ from app.models.settings import RiskSettings
 from app.services.alert_metrics import combined_open_edge_pct
 from app.services.funding_edge import next_cycle_funding_edge_pct
 
+NEW_LISTING_RISK_LABEL = "NEW_LISTING"
+
 NON_ACTIONABLE_RISK_LABELS = frozenset(
     {
         "LOW_VOLUME",
@@ -51,32 +53,23 @@ def effective_open_edge_pct(opportunity: Opportunity, settings: RiskSettings) ->
     return combined_open_edge_pct(opportunity) - settings.signal_slippage_buffer_pct
 
 
-def known_open_depth_usdt(opportunity: Opportunity) -> float | None:
-    if opportunity.min_open_depth_usdt is not None:
-        return opportunity.min_open_depth_usdt
-    known_depths = [
-        depth
-        for depth in [opportunity.buy_ask_depth_usdt, opportunity.sell_bid_depth_usdt]
-        if depth is not None
-    ]
-    if not known_depths:
-        return None
-    return min(known_depths)
-
-
-def required_open_depth_usdt(settings: RiskSettings) -> float:
-    return max(
-        settings.min_top_of_book_depth_usdt,
-        settings.signal_validation_notional_usdt * settings.orderbook_depth_safety_multiple,
-    )
-
-
 def has_non_actionable_risk(
     opportunity: Opportunity,
     hidden_labels: set[str] | frozenset[str] | None = None,
 ) -> bool:
     labels = hidden_labels if hidden_labels is not None else NON_ACTIONABLE_RISK_LABELS
     return bool(labels.intersection(opportunity.risk_labels))
+
+
+def has_risk_label(opportunity: Opportunity, label: str) -> bool:
+    normalized = label.strip().upper()
+    if not normalized:
+        return False
+    return any(item.upper() == normalized for item in opportunity.risk_labels)
+
+
+def is_new_listing_opportunity(opportunity: Opportunity) -> bool:
+    return has_risk_label(opportunity, NEW_LISTING_RISK_LABEL)
 
 
 def apply_risk_labels(
@@ -118,11 +111,6 @@ def apply_risk_labels(
 
     if effective_open_edge_pct(opportunity, settings) < settings.min_effective_open_pct:
         labels.append("EDGE_AFTER_SLIPPAGE_TOO_SMALL")
-
-    required_depth = required_open_depth_usdt(settings)
-    open_depth = known_open_depth_usdt(opportunity)
-    if required_depth > 0 and open_depth is not None and open_depth < required_depth:
-        labels.append("THIN_ORDER_BOOK")
 
     if (
         opportunity.buy_market_type == MarketType.FUTURE

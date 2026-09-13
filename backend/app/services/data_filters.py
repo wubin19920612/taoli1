@@ -1,6 +1,9 @@
+from datetime import UTC, datetime
+
 from app.models.market import MarketSnapshot
 from app.models.opportunity import Opportunity
 from app.models.settings import RiskSettings
+from app.services.market_sessions import is_opportunity_tradable
 
 
 def normalize_symbol(value: str) -> str:
@@ -15,27 +18,34 @@ def excluded_symbol_set(settings: RiskSettings) -> set[str]:
     return {normalize_symbol(item) for item in settings.excluded_symbols}
 
 
+def symbol_is_excluded(symbol: str, settings: RiskSettings) -> bool:
+    return normalize_symbol(symbol) in excluded_symbol_set(settings)
+
+
 def ignored_exchange_set(settings: RiskSettings) -> set[str]:
     return {normalize_exchange(item) for item in settings.ignored_exchanges}
 
 
 def market_is_excluded(market: MarketSnapshot, settings: RiskSettings) -> bool:
-    excluded_symbols = excluded_symbol_set(settings)
     ignored_exchanges = ignored_exchange_set(settings)
     return (
-        normalize_symbol(market.symbol) in excluded_symbols
+        symbol_is_excluded(market.symbol, settings)
         or normalize_exchange(market.exchange) in ignored_exchanges
     )
 
 
-def opportunity_is_excluded(opportunity: Opportunity, settings: RiskSettings) -> bool:
-    excluded_symbols = excluded_symbol_set(settings)
-    if normalize_symbol(opportunity.symbol) in excluded_symbols:
+def opportunity_is_excluded(
+    opportunity: Opportunity,
+    settings: RiskSettings,
+    now: datetime | None = None,
+) -> bool:
+    if symbol_is_excluded(opportunity.symbol, settings):
         return True
     ignored_exchanges = ignored_exchange_set(settings)
     return (
         normalize_exchange(opportunity.buy_exchange) in ignored_exchanges
         or normalize_exchange(opportunity.sell_exchange) in ignored_exchanges
+        or not is_opportunity_tradable(opportunity, now or datetime.now(UTC))
     )
 
 
@@ -46,8 +56,13 @@ def filter_markets(markets: list[MarketSnapshot], settings: RiskSettings) -> lis
 def filter_opportunities(
     opportunities: list[Opportunity],
     settings: RiskSettings,
+    now: datetime | None = None,
 ) -> list[Opportunity]:
-    return [item for item in opportunities if not opportunity_is_excluded(item, settings)]
+    return [
+        item
+        for item in opportunities
+        if not opportunity_is_excluded(item, settings, now=now)
+    ]
 
 
 def filter_exchange_errors(errors: dict[str, str], settings: RiskSettings) -> dict[str, str]:

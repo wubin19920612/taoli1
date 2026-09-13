@@ -8,6 +8,10 @@ WORKDIR /app
 COPY pyproject.toml ./
 COPY app ./app
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN pip install --no-cache-dir .
 
 ENV DATABASE_URL=sqlite:////data/radar.db

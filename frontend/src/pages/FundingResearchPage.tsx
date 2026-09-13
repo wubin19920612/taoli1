@@ -660,6 +660,7 @@ export function FundingResearchPage() {
           size="small"
           pagination={{ pageSize: 8, showTotal: (total) => `共 ${total} 条` }}
           tableLayout="fixed"
+          scroll={{ x: 980 }}
         />
       </section>
     </div>

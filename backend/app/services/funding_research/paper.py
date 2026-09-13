@@ -1,9 +1,11 @@
+from collections import defaultdict
 from datetime import UTC, datetime
 from hashlib import sha1
 
 from app.services.funding_research.models import (
     FundingResearchCandidate,
     FundingResearchDecision,
+    FundingResearchOpportunityTypeSummary,
     FundingResearchPaperTrade,
     FundingResearchPaperTradeSummary,
     FundingResearchSettings,
@@ -14,7 +16,7 @@ OPEN_DECISIONS: set[FundingResearchDecision] = {"TRADE", "SMALL_TRADE"}
 
 
 def paper_trade_id(candidate: FundingResearchCandidate) -> str:
-    raw = (
+    raw = candidate.id or (
         f"{candidate.symbol}:{candidate.long_exchange}:"
         f"{candidate.short_exchange}:{candidate.next_settlement_time}"
     )
@@ -36,7 +38,10 @@ def create_paper_trade_from_candidate(
         symbol=candidate.symbol,
         long_exchange=candidate.long_exchange,
         short_exchange=candidate.short_exchange,
+        primary_opportunity_type=candidate.primary_opportunity_type,
+        opportunity_types=list(candidate.opportunity_types),
         opened_at=resolved_opened_at,
+        last_observed_at=resolved_opened_at,
         open_long_basis_pct=candidate.long_basis_pct,
         open_short_basis_pct=candidate.short_basis_pct,
         open_basis_diff_pct=candidate.basis_diff_pct,
@@ -50,6 +55,68 @@ def create_paper_trade_from_candidate(
     )
 
 
+def _basis_change_since_open(
+    trade: FundingResearchPaperTrade,
+    candidate: FundingResearchCandidate | None,
+) -> float:
+    if candidate is None or trade.open_basis_diff_pct is None or candidate.basis_diff_pct is None:
+        return 0.0
+    return trade.open_basis_diff_pct - candidate.basis_diff_pct
+
+
+def _funding_realized_by(
+    trade: FundingResearchPaperTrade,
+    observed_at: datetime,
+) -> float:
+    settlement_time = trade.source_candidate.next_settlement_time
+    if settlement_time is not None and observed_at >= settlement_time:
+        return trade.expected_net_funding_pct or 0.0
+    return 0.0
+
+
+def mark_to_market_paper_trade(
+    trade: FundingResearchPaperTrade,
+    candidate: FundingResearchCandidate | None,
+    *,
+    observed_at: datetime | None = None,
+) -> FundingResearchPaperTrade:
+    if trade.status != "OPEN":
+        return trade
+    resolved_observed_at = observed_at or datetime.now(UTC)
+    basis_change = _basis_change_since_open(trade, candidate)
+    realized_or_projected_funding = _funding_realized_by(trade, resolved_observed_at)
+    unrealized_pnl = realized_or_projected_funding + basis_change - trade.estimated_cost_pct
+    current_adverse = trade.max_adverse_ev_pct
+    max_adverse = (
+        unrealized_pnl
+        if current_adverse is None
+        else min(current_adverse, unrealized_pnl)
+    )
+    return trade.model_copy(
+        update={
+            "last_observed_at": resolved_observed_at,
+            "unrealized_basis_change_pct": basis_change,
+            "unrealized_pnl_pct": unrealized_pnl,
+            "max_adverse_ev_pct": max_adverse,
+            "close_long_basis_pct": (
+                candidate.long_basis_pct
+                if candidate is not None
+                else trade.close_long_basis_pct
+            ),
+            "close_short_basis_pct": (
+                candidate.short_basis_pct
+                if candidate is not None
+                else trade.close_short_basis_pct
+            ),
+            "close_basis_diff_pct": (
+                candidate.basis_diff_pct
+                if candidate is not None
+                else trade.close_basis_diff_pct
+            ),
+        }
+    )
+
+
 def close_paper_trade(
     trade: FundingResearchPaperTrade,
     candidate: FundingResearchCandidate | None,
@@ -58,26 +125,23 @@ def close_paper_trade(
     closed_at: datetime | None = None,
 ) -> FundingResearchPaperTrade:
     resolved_closed_at = closed_at or datetime.now(UTC)
-    realized_basis = 0.0
-    if candidate is not None and trade.open_basis_diff_pct is not None and candidate.basis_diff_pct is not None:
-        realized_basis = trade.open_basis_diff_pct - candidate.basis_diff_pct
-    settlement_time = trade.source_candidate.next_settlement_time
-    realized_funding = (
-        trade.expected_net_funding_pct or 0.0
-        if settlement_time is not None and resolved_closed_at >= settlement_time
-        else 0.0
-    )
+    marked = mark_to_market_paper_trade(trade, candidate, observed_at=resolved_closed_at)
+    realized_basis = marked.unrealized_basis_change_pct or 0.0
+    realized_funding = _funding_realized_by(trade, resolved_closed_at)
     realized_pnl = realized_funding + realized_basis - trade.estimated_cost_pct
     close_long_basis = candidate.long_basis_pct if candidate is not None else trade.close_long_basis_pct
     close_short_basis = candidate.short_basis_pct if candidate is not None else trade.close_short_basis_pct
     close_basis_diff = candidate.basis_diff_pct if candidate is not None else trade.close_basis_diff_pct
-    return trade.model_copy(
+    return marked.model_copy(
         update={
             "status": "CLOSED",
             "closed_at": resolved_closed_at,
+            "last_observed_at": resolved_closed_at,
             "close_long_basis_pct": close_long_basis,
             "close_short_basis_pct": close_short_basis,
             "close_basis_diff_pct": close_basis_diff,
+            "unrealized_basis_change_pct": realized_basis,
+            "unrealized_pnl_pct": realized_pnl,
             "realized_funding_pct": realized_funding,
             "realized_basis_change_pct": realized_basis,
             "realized_pnl_pct": realized_pnl,
@@ -153,6 +217,13 @@ async def reconcile_open_paper_trades(
         candidate = latest_by_pair.get(_pair_key_from_trade(trade))
         reason = _close_reason(trade, candidate, observed_at=observed_at, settings=resolved)
         if reason is None:
+            marked_trade = mark_to_market_paper_trade(
+                trade,
+                candidate,
+                observed_at=observed_at,
+            )
+            if marked_trade != trade:
+                await repo.upsert_paper_trade(marked_trade)
             continue
         closed_trade = close_paper_trade(
             trade,
@@ -167,31 +238,68 @@ async def reconcile_open_paper_trades(
 def summarize_paper_trades(
     trades: list[FundingResearchPaperTrade],
 ) -> FundingResearchPaperTradeSummary:
-    closed = [item for item in trades if item.status == "CLOSED"]
-    open_trades = [item for item in trades if item.status == "OPEN"]
-    realized = [
-        item.realized_pnl_pct
-        for item in closed
-        if item.realized_pnl_pct is not None
-    ]
-    winners = sum(value > 0 for value in realized)
-    losers = sum(value < 0 for value in realized)
-
     def average(values: list[float]) -> float | None:
         return sum(values) / len(values) if values else None
 
-    expected_evs = [
-        item.expected_ev_pct
-        for item in closed
-        if item.expected_ev_pct is not None
-    ]
-    funding = [item.realized_funding_pct for item in closed]
-    basis = [item.realized_basis_change_pct for item in closed]
-    scores = [item.score for item in closed]
+    closed_trades = 0
+    open_trades = 0
+    realized: list[float] = []
+    expected_evs: list[float] = []
+    funding: list[float] = []
+    basis: list[float] = []
+    scores: list[float] = []
+    type_totals: dict[str, int] = defaultdict(int)
+    type_closed: dict[str, int] = defaultdict(int)
+    type_realized: dict[str, list[float]] = defaultdict(list)
+
+    for item in trades:
+        is_closed = item.status == "CLOSED"
+        if is_closed:
+            closed_trades += 1
+            if item.expected_ev_pct is not None:
+                expected_evs.append(item.expected_ev_pct)
+            funding.append(item.realized_funding_pct)
+            basis.append(item.realized_basis_change_pct)
+            scores.append(item.score)
+            if item.realized_pnl_pct is not None:
+                realized.append(item.realized_pnl_pct)
+        elif item.status == "OPEN":
+            open_trades += 1
+
+        for opportunity_type in item.opportunity_types:
+            type_totals[opportunity_type] += 1
+            if is_closed:
+                type_closed[opportunity_type] += 1
+                if item.realized_pnl_pct is not None:
+                    type_realized[opportunity_type].append(item.realized_pnl_pct)
+
+    winners = sum(value > 0 for value in realized)
+    losers = sum(value < 0 for value in realized)
+    type_summaries = []
+    for opportunity_type in sorted(type_totals):
+        typed_realized = type_realized[opportunity_type]
+        typed_winners = sum(value > 0 for value in typed_realized)
+        typed_losers = sum(value < 0 for value in typed_realized)
+        type_summaries.append(
+            FundingResearchOpportunityTypeSummary(
+                opportunity_type=opportunity_type,
+                total_trades=type_totals[opportunity_type],
+                closed_trades=type_closed[opportunity_type],
+                winners=typed_winners,
+                losers=typed_losers,
+                win_rate_pct=(
+                    typed_winners / len(typed_realized) * 100
+                    if typed_realized
+                    else None
+                ),
+                total_realized_pnl_pct=sum(typed_realized),
+                average_realized_pnl_pct=average(typed_realized),
+            )
+        )
     return FundingResearchPaperTradeSummary(
         total_trades=len(trades),
-        open_trades=len(open_trades),
-        closed_trades=len(closed),
+        open_trades=open_trades,
+        closed_trades=closed_trades,
         winners=winners,
         losers=losers,
         win_rate_pct=(winners / len(realized) * 100 if realized else None),
@@ -203,4 +311,5 @@ def summarize_paper_trades(
         max_win_pct=max(realized) if realized else None,
         max_loss_pct=min(realized) if realized else None,
         average_score=average(scores),
+        by_opportunity_type=type_summaries,
     )

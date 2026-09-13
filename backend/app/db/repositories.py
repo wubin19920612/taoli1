@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import asyncio
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 
 import aiosqlite
 
 from app.models.alert import AlertEvent, AlertRule
-from app.models.announcement import AnnouncementKind, AnnouncementSettings, ExchangeAnnouncement
+from app.models.announcement import (
+    AnnouncementAssetResearch,
+    AnnouncementEventScheduleItem,
+    AnnouncementKind,
+    AnnouncementSettings,
+    ExchangeAnnouncement,
+)
 from app.models.history import OpportunityHistoryRow
 from app.models.index_component import (
     IndexComponent,
@@ -15,10 +22,29 @@ from app.models.index_component import (
     IndexComponentWatchItem,
 )
 from app.models.market import MarketType
+from app.models.oil_news import (
+    OilMarketSnapshot,
+    OilNewsDirection,
+    OilNewsItem,
+    OilNewsSettings,
+    OilNewsSeverity,
+)
 from app.models.opportunity import Opportunity, OpportunityType
 from app.models.funding_arbitrage import FundingArbitrageSettings
+from app.models.opportunity_radar import OpportunityRadarSettings
 from app.models.phone_alert import PhonePriceAlertEvent, PhonePriceAlertRule
-from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, LivePilotSettings, RiskSettings
+from app.models.settings import (
+    AlertMessageTemplateSettings,
+    AstroAutomationSettings,
+    AstroCardSettings,
+    FloatingWatchMutation,
+    FloatingWatchSettings,
+    MAX_FLOATING_WATCH_PAIRS,
+    MAX_FLOATING_WATCH_SYMBOLS,
+    LivePilotSettings,
+    MinuteSignalSettings,
+    RiskSettings,
+)
 
 PERCENT_SCALE = 10_000
 RISK_LABEL_BITS = {
@@ -72,6 +98,57 @@ def _serialize_datetime(value) -> str | None:
 
 def _deserialize_datetime(value) -> str | None:
     return value
+
+
+def _event_schedule_json(announcement: ExchangeAnnouncement) -> str:
+    return json.dumps(
+        [
+            AnnouncementEventScheduleItem.model_validate(item).model_dump(mode="json", exclude_none=True)
+            for item in announcement.event_schedule
+        ],
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _event_schedule_from_json(value: str | None) -> list[dict[str, object]]:
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+    except ValueError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [item for item in parsed if isinstance(item, dict)]
+
+
+def _asset_research_json(announcement: ExchangeAnnouncement) -> str:
+    return json.dumps(
+        [
+            AnnouncementAssetResearch.model_validate(item).model_dump(
+                mode="json",
+                exclude_none=True,
+            )
+            for item in announcement.asset_research
+        ],
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _asset_research_from_json(value: str | None) -> list[dict[str, object]]:
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+    except ValueError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [item for item in parsed if isinstance(item, dict)]
 
 
 def _component_json(components: list[IndexComponent]) -> str:
@@ -532,11 +609,11 @@ class AnnouncementRepository:
             """
             INSERT OR IGNORE INTO exchange_announcements (
               id, exchange, announcement_id, kind, title, url, source, category,
-              symbols_json, market_type, event_time, summary,
-              published_at, fetched_at, alert_status, event_reminder_status,
+              symbols_json, market_type, event_time, event_schedule_json, summary,
+              asset_research_json, published_at, fetched_at, alert_status, event_reminder_status,
               event_reminder_sent_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 announcement.id,
@@ -550,7 +627,9 @@ class AnnouncementRepository:
                 json.dumps(announcement.symbols, ensure_ascii=False, sort_keys=True),
                 announcement.market_type,
                 _serialize_datetime(announcement.event_time),
+                _event_schedule_json(announcement),
                 announcement.summary,
+                _asset_research_json(announcement),
                 announcement.published_at.isoformat(),
                 announcement.fetched_at.isoformat(),
                 announcement.alert_status,
@@ -566,6 +645,8 @@ class AnnouncementRepository:
 
     async def _enrich_existing_metadata(self, announcement: ExchangeAnnouncement) -> None:
         symbols_json = json.dumps(announcement.symbols, ensure_ascii=False, sort_keys=True)
+        event_time = _serialize_datetime(announcement.event_time)
+        event_schedule_json = _event_schedule_json(announcement)
         await self.db.execute(
             """
             UPDATE exchange_announcements
@@ -573,9 +654,17 @@ class AnnouncementRepository:
               symbols_json = CASE WHEN ? != '[]' THEN ? ELSE symbols_json END,
               market_type = COALESCE(?, market_type),
               event_time = COALESCE(?, event_time),
-              summary = CASE WHEN ? IS NOT NULL THEN ? ELSE summary END,
+              event_schedule_json = CASE WHEN ? != '[]' THEN ? ELSE event_schedule_json END,
+              summary = CASE
+                WHEN ? IS NOT NULL AND (? IS NOT NULL OR ? != '[]' OR summary IS NULL) THEN ?
+                ELSE summary
+              END,
+              asset_research_json = CASE
+                WHEN ? != '[]' THEN ?
+                ELSE asset_research_json
+              END,
               event_reminder_status = CASE
-                WHEN event_time IS NOT NULL AND ? = 'pending' THEN 'pending'
+                WHEN ? IS NOT NULL AND ? = 'pending' AND event_reminder_status != 'sent' THEN 'pending'
                 ELSE event_reminder_status
               END
             WHERE exchange = ? AND source = ? AND announcement_id = ?
@@ -584,9 +673,16 @@ class AnnouncementRepository:
                 symbols_json,
                 symbols_json,
                 announcement.market_type,
-                _serialize_datetime(announcement.event_time),
+                event_time,
+                event_schedule_json,
+                event_schedule_json,
                 announcement.summary,
+                event_time,
+                event_schedule_json,
                 announcement.summary,
+                _asset_research_json(announcement),
+                _asset_research_json(announcement),
+                event_time,
                 announcement.event_reminder_status,
                 announcement.exchange,
                 announcement.source,
@@ -599,6 +695,46 @@ class AnnouncementRepository:
         await self.db.execute(
             "UPDATE exchange_announcements SET alert_status = ? WHERE id = ?",
             (alert_status, announcement_id),
+        )
+        await self.db.commit()
+
+    async def get_by_identity(
+        self,
+        *,
+        exchange: str,
+        source: str,
+        announcement_id: str,
+    ) -> ExchangeAnnouncement | None:
+        cursor = await self.db.execute(
+            """
+            SELECT * FROM exchange_announcements
+            WHERE exchange = ? AND source = ? AND announcement_id = ?
+            LIMIT 1
+            """,
+            (exchange.strip().lower(), source, announcement_id),
+        )
+        row = await cursor.fetchone()
+        return self._announcement_from_db(row) if row is not None else None
+
+    async def update_asset_research(
+        self,
+        announcement_id: str,
+        asset_research: list[AnnouncementAssetResearch],
+    ) -> None:
+        await self.db.execute(
+            "UPDATE exchange_announcements SET asset_research_json = ? WHERE id = ?",
+            (
+                json.dumps(
+                    [
+                        item.model_dump(mode="json", exclude_none=True)
+                        for item in asset_research
+                    ],
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                announcement_id,
+            ),
         )
         await self.db.commit()
 
@@ -623,6 +759,22 @@ class AnnouncementRepository:
         cursor = await self.db.execute("SELECT 1 FROM exchange_announcements LIMIT 1")
         row = await cursor.fetchone()
         return row is not None
+
+    async def latest_published_at(self, *, exchange: str, source: str) -> datetime | None:
+        cursor = await self.db.execute(
+            """
+            SELECT MAX(published_at) AS published_at
+            FROM exchange_announcements
+            WHERE exchange = ? AND source = ?
+            """,
+            (exchange.strip().lower(), source.strip().lower()),
+        )
+        row = await cursor.fetchone()
+        value = row["published_at"] if row is not None else None
+        if not value:
+            return None
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
 
     async def get_provider_state(self, key: str) -> dict[str, object] | None:
         cursor = await self.db.execute(
@@ -732,7 +884,17 @@ class AnnouncementRepository:
             symbols=symbols,
             market_type=row["market_type"] if "market_type" in row.keys() else None,
             event_time=row["event_time"] if "event_time" in row.keys() else None,
+            event_schedule=(
+                _event_schedule_from_json(row["event_schedule_json"])
+                if "event_schedule_json" in row.keys()
+                else []
+            ),
             summary=row["summary"] if "summary" in row.keys() else None,
+            asset_research=(
+                _asset_research_from_json(row["asset_research_json"])
+                if "asset_research_json" in row.keys()
+                else []
+            ),
             published_at=row["published_at"],
             fetched_at=row["fetched_at"],
             alert_status=row["alert_status"],
@@ -745,9 +907,218 @@ class AnnouncementRepository:
         )
 
 
+class OilNewsRepository:
+    def __init__(self, db: aiosqlite.Connection):
+        self.db = db
+
+    async def create_if_new(self, item: OilNewsItem) -> OilNewsItem | None:
+        market = item.market
+        cursor = await self.db.execute(
+            """
+            INSERT OR IGNORE INTO oil_news_items (
+              id, fingerprint, external_id, source, source_feed, title, title_zh, url,
+              summary, summary_zh, published_at, fetched_at, categories_json, severity,
+              impact_score, direction, confidence, horizon, rationale_json, risk_note,
+              market_symbol, market_price, market_change_1h_pct, market_observed_at,
+              alert_status, alerted_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                item.id,
+                item.fingerprint,
+                item.external_id,
+                item.source,
+                item.source_feed,
+                item.title,
+                item.title_zh,
+                item.url,
+                item.summary,
+                item.summary_zh,
+                item.published_at.isoformat(),
+                item.fetched_at.isoformat(),
+                json.dumps(item.categories, ensure_ascii=False),
+                item.severity.value,
+                item.impact_score,
+                item.direction.value,
+                item.confidence,
+                item.horizon,
+                json.dumps(item.rationale, ensure_ascii=False),
+                item.risk_note,
+                market.symbol if market else None,
+                market.price if market else None,
+                market.change_1h_pct if market else None,
+                market.observed_at.isoformat() if market else None,
+                item.alert_status,
+                _serialize_datetime(item.alerted_at),
+            ),
+        )
+        await self.db.commit()
+        return item if cursor.rowcount else None
+
+    async def update_translation(
+        self,
+        item_id: str,
+        *,
+        title_zh: str,
+        summary_zh: str | None,
+    ) -> None:
+        await self.db.execute(
+            "UPDATE oil_news_items SET title_zh = ?, summary_zh = ? WHERE id = ?",
+            (title_zh, summary_zh, item_id),
+        )
+        await self.db.commit()
+
+    async def list_untranslated_titles(self, *, limit: int = 200) -> list[OilNewsItem]:
+        cursor = await self.db.execute(
+            """
+            SELECT * FROM oil_news_items
+            WHERE title_zh IS NULL
+            ORDER BY published_at DESC, fetched_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        return [self._from_db(row) for row in await cursor.fetchall()]
+
+    async def has_any(self) -> bool:
+        cursor = await self.db.execute("SELECT 1 FROM oil_news_items LIMIT 1")
+        return await cursor.fetchone() is not None
+
+    async def get_by_fingerprint(self, fingerprint: str) -> OilNewsItem | None:
+        cursor = await self.db.execute(
+            "SELECT * FROM oil_news_items WHERE fingerprint = ? LIMIT 1",
+            (fingerprint,),
+        )
+        row = await cursor.fetchone()
+        return self._from_db(row) if row is not None else None
+
+    async def update_alert_status(
+        self,
+        item_id: str,
+        status: str,
+        *,
+        alerted_at: datetime | None = None,
+    ) -> None:
+        await self.db.execute(
+            "UPDATE oil_news_items SET alert_status = ?, alerted_at = ? WHERE id = ?",
+            (status, _serialize_datetime(alerted_at), item_id),
+        )
+        await self.db.commit()
+
+    async def list(
+        self,
+        *,
+        severity: OilNewsSeverity | str | None = None,
+        direction: OilNewsDirection | str | None = None,
+        limit: int = 100,
+    ) -> list[OilNewsItem]:
+        clauses: list[str] = []
+        params: list[object] = []
+        if severity:
+            clauses.append("severity = ?")
+            value = severity.value if isinstance(severity, OilNewsSeverity) else str(severity)
+            params.append(value)
+        if direction:
+            clauses.append("direction = ?")
+            value = direction.value if isinstance(direction, OilNewsDirection) else str(direction)
+            params.append(value)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(limit)
+        cursor = await self.db.execute(
+            f"""
+            SELECT * FROM oil_news_items
+            {where}
+            ORDER BY published_at DESC, fetched_at DESC
+            LIMIT ?
+            """,
+            params,
+        )
+        return [self._from_db(row) for row in await cursor.fetchall()]
+
+    def _from_db(self, row: aiosqlite.Row) -> OilNewsItem:
+        market = None
+        if row["market_observed_at"]:
+            market = OilMarketSnapshot(
+                symbol=row["market_symbol"] or "CLUSDT",
+                price=row["market_price"],
+                change_1h_pct=row["market_change_1h_pct"],
+                observed_at=row["market_observed_at"],
+            )
+        return OilNewsItem(
+            id=row["id"],
+            fingerprint=row["fingerprint"],
+            external_id=row["external_id"],
+            source=row["source"],
+            source_feed=row["source_feed"],
+            title=row["title"],
+            title_zh=row["title_zh"],
+            url=row["url"],
+            summary=row["summary"],
+            summary_zh=row["summary_zh"],
+            published_at=row["published_at"],
+            fetched_at=row["fetched_at"],
+            categories=json.loads(row["categories_json"]),
+            severity=OilNewsSeverity(row["severity"]),
+            impact_score=row["impact_score"],
+            direction=OilNewsDirection(row["direction"]),
+            confidence=row["confidence"],
+            horizon=row["horizon"],
+            rationale=json.loads(row["rationale_json"]),
+            risk_note=row["risk_note"],
+            market=market,
+            alert_status=row["alert_status"],
+            alerted_at=row["alerted_at"],
+        )
+
+
 class SettingsRepository:
     def __init__(self, db: aiosqlite.Connection):
         self.db = db
+        self._floating_watch_lock = asyncio.Lock()
+
+    async def get_floating_watch_settings(self) -> FloatingWatchSettings:
+        cursor = await self.db.execute(
+            "SELECT payload FROM app_settings WHERE key = ?",
+            ("floating_watch",),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return FloatingWatchSettings()
+        return FloatingWatchSettings.model_validate(json.loads(row["payload"]))
+
+    async def mutate_floating_watch_settings(
+        self,
+        mutation: FloatingWatchMutation,
+    ) -> FloatingWatchSettings:
+        async with self._floating_watch_lock:
+            settings = await self.get_floating_watch_settings()
+            symbols = list(settings.symbols)
+            pair_ids = list(settings.pair_ids)
+            target = symbols if mutation.item_type == "symbol" else pair_ids
+            limit = (
+                MAX_FLOATING_WATCH_SYMBOLS
+                if mutation.item_type == "symbol"
+                else MAX_FLOATING_WATCH_PAIRS
+            )
+            if mutation.action == "add" and mutation.value not in target:
+                if len(target) >= limit:
+                    item_label = "标的" if mutation.item_type == "symbol" else "交易对"
+                    raise ValueError(f"浮窗最多关注 {limit} 个{item_label}")
+                target.append(mutation.value)
+            elif mutation.action == "remove":
+                target[:] = [item for item in target if item != mutation.value]
+            updated = FloatingWatchSettings(symbols=symbols, pair_ids=pair_ids)
+            await self.db.execute(
+                """
+                INSERT INTO app_settings (key, payload)
+                VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
+                """,
+                ("floating_watch", updated.model_dump_json()),
+            )
+            await self.db.commit()
+            return updated
 
     async def get_risk_settings(self) -> RiskSettings:
         cursor = await self.db.execute("SELECT payload FROM app_settings WHERE key = ?", ("risk",))
@@ -822,6 +1193,64 @@ class SettingsRepository:
         await self.db.commit()
         return settings
 
+    async def get_astro_new_listing_card_settings(self) -> AstroCardSettings:
+        settings = await self.find_astro_new_listing_card_settings()
+        return settings or await self.get_astro_card_settings()
+
+    async def find_astro_new_listing_card_settings(self) -> AstroCardSettings | None:
+        cursor = await self.db.execute(
+            "SELECT payload FROM app_settings WHERE key = ?",
+            ("astro_new_listing_card",),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        return AstroCardSettings.model_validate(json.loads(row["payload"]))
+
+    async def set_astro_new_listing_card_settings(
+        self,
+        settings: AstroCardSettings,
+    ) -> AstroCardSettings:
+        await self.db.execute(
+            """
+            INSERT INTO app_settings (key, payload)
+            VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
+            """,
+            ("astro_new_listing_card", settings.model_dump_json()),
+        )
+        await self.db.commit()
+        return settings
+
+    async def get_astro_automation_settings(self) -> AstroAutomationSettings:
+        settings = await self.find_astro_automation_settings()
+        return settings or AstroAutomationSettings()
+
+    async def find_astro_automation_settings(self) -> AstroAutomationSettings | None:
+        cursor = await self.db.execute(
+            "SELECT payload FROM app_settings WHERE key = ?",
+            ("astro_automation",),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        return AstroAutomationSettings.model_validate(json.loads(row["payload"]))
+
+    async def set_astro_automation_settings(
+        self,
+        settings: AstroAutomationSettings,
+    ) -> AstroAutomationSettings:
+        await self.db.execute(
+            """
+            INSERT INTO app_settings (key, payload)
+            VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
+            """,
+            ("astro_automation", settings.model_dump_json()),
+        )
+        await self.db.commit()
+        return settings
+
     async def get_live_pilot_settings(self) -> LivePilotSettings:
         cursor = await self.db.execute(
             "SELECT payload FROM app_settings WHERE key = ?",
@@ -843,6 +1272,31 @@ class SettingsRepository:
             ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
             """,
             ("live_pilot", settings.model_dump_json()),
+        )
+        await self.db.commit()
+        return settings
+
+    async def get_minute_signal_settings(self) -> MinuteSignalSettings:
+        cursor = await self.db.execute(
+            "SELECT payload FROM app_settings WHERE key = ?",
+            ("minute_signals",),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return MinuteSignalSettings()
+        return MinuteSignalSettings.model_validate(json.loads(row["payload"]))
+
+    async def set_minute_signal_settings(
+        self,
+        settings: MinuteSignalSettings,
+    ) -> MinuteSignalSettings:
+        await self.db.execute(
+            """
+            INSERT INTO app_settings (key, payload)
+            VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
+            """,
+            ("minute_signals", settings.model_dump_json()),
         )
         await self.db.commit()
         return settings
@@ -872,6 +1326,31 @@ class SettingsRepository:
         await self.db.commit()
         return settings
 
+    async def get_opportunity_radar_settings(self) -> OpportunityRadarSettings:
+        cursor = await self.db.execute(
+            "SELECT payload FROM app_settings WHERE key = ?",
+            ("opportunity_radar",),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return OpportunityRadarSettings()
+        return OpportunityRadarSettings.model_validate(json.loads(row["payload"]))
+
+    async def set_opportunity_radar_settings(
+        self,
+        settings: OpportunityRadarSettings,
+    ) -> OpportunityRadarSettings:
+        await self.db.execute(
+            """
+            INSERT INTO app_settings (key, payload)
+            VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
+            """,
+            ("opportunity_radar", settings.model_dump_json()),
+        )
+        await self.db.commit()
+        return settings
+
     async def get_announcement_settings(self) -> AnnouncementSettings:
         cursor = await self.db.execute(
             "SELECT payload FROM app_settings WHERE key = ?",
@@ -893,6 +1372,28 @@ class SettingsRepository:
             ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
             """,
             ("announcements", settings.model_dump_json()),
+        )
+        await self.db.commit()
+        return settings
+
+    async def get_oil_news_settings(self) -> OilNewsSettings:
+        cursor = await self.db.execute(
+            "SELECT payload FROM app_settings WHERE key = ?",
+            ("oil_news",),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return OilNewsSettings()
+        return OilNewsSettings.model_validate(json.loads(row["payload"]))
+
+    async def set_oil_news_settings(self, settings: OilNewsSettings) -> OilNewsSettings:
+        await self.db.execute(
+            """
+            INSERT INTO app_settings (key, payload)
+            VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
+            """,
+            ("oil_news", settings.model_dump_json()),
         )
         await self.db.commit()
         return settings

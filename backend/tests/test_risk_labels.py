@@ -12,6 +12,10 @@ def test_signal_validation_notional_defaults_to_1000_usdt() -> None:
     assert RiskSettings().signal_validation_notional_usdt == 1000
 
 
+def test_orderbook_depth_band_defaults_to_0_1_pct() -> None:
+    assert RiskSettings().orderbook_depth_band_pct == 0.1
+
+
 def opportunity(**overrides) -> Opportunity:
     base: dict[str, Any] = dict(
         id="abc",
@@ -118,7 +122,7 @@ def test_missing_volume_alone_does_not_trigger_low_volume() -> None:
     assert "LOW_VOLUME" not in labeled.risk_labels
 
 
-def test_thin_top_of_book_depth_is_non_actionable() -> None:
+def test_thin_top_of_book_depth_does_not_hide_realtime_opportunity() -> None:
     settings = RiskSettings(
         signal_validation_notional_usdt=100,
         orderbook_depth_safety_multiple=3,
@@ -150,8 +154,8 @@ def test_thin_top_of_book_depth_is_non_actionable() -> None:
         now=datetime.now(UTC),
     )
 
-    assert "THIN_ORDER_BOOK" in labeled.risk_labels
-    assert has_non_actionable_risk(labeled)
+    assert "THIN_ORDER_BOOK" not in labeled.risk_labels
+    assert not has_non_actionable_risk(labeled)
 
 
 def test_slippage_buffer_can_mark_small_effective_edge_non_actionable() -> None:

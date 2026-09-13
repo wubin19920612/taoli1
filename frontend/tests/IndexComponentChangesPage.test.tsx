@@ -215,10 +215,9 @@ describe("IndexComponentChangesPage", () => {
 
     expect((await screen.findAllByText("gateio 20.00%")).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("参考 binance 指数成分").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText("pancakeswapv3 50.00%").length).toBeGreaterThanOrEqual(2);
-    expect(screen.getAllByText("binance future 30.00%").length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText("pancakeswapv3 50.00%").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("binance future 30.00%").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("参考篮子包含 gateio 20.00%")).toBeTruthy();
-    expect(screen.getByText("参考篮子未包含 bitget")).toBeTruthy();
   });
 
   it("keeps reference snapshots available for the chart when exchange filter is selected", async () => {

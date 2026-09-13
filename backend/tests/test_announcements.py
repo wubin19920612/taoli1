@@ -1,5 +1,6 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
+import httpx
 import pytest
 
 from app.db.database import connect_database
@@ -17,6 +18,7 @@ from app.services.announcements import (
     build_announcement_alert_message,
     build_announcement_event_reminder_message,
     classify_announcement,
+    extract_event_schedule,
     extract_event_time,
     infer_market_type,
     infer_symbols,
@@ -56,6 +58,18 @@ def announcement(
 
 
 def test_classify_announcement_uses_category_and_title_fallbacks() -> None:
+    assert (
+        classify_announcement("Gate Launchpool Project #363", "newspotlistings")
+        == AnnouncementKind.LAUNCHPOOL
+    )
+    assert (
+        classify_announcement("PoolX will launch a new mining pool", "latest_news")
+        == AnnouncementKind.LAUNCHPOOL
+    )
+    assert (
+        classify_announcement("New project on LaunchHub", "activities")
+        == AnnouncementKind.LAUNCHPOOL
+    )
     assert classify_announcement("Something ordinary", "announcements-new-listings") == AnnouncementKind.LISTING
     assert classify_announcement("Delisting of DOGUSDT Perpetual Contract") == AnnouncementKind.DELISTING
     assert classify_announcement("Bitget Spot Cross Margin adds GENIUS/USDT") == AnnouncementKind.LISTING
@@ -72,8 +86,14 @@ def test_announcement_metadata_parsers_extract_symbols_market_and_time() -> None
     assert infer_symbols("Binance Alpha Will Remove DIGI, K, SKI") == ["DIGI", "K", "SKI"]
     assert infer_symbols("Pre-IPO Trading for QNTXUSDT Perpetual Futures (USDT-M)") == ["QNTXUSDT"]
     assert infer_symbols("Pre-Market Trading for QNTXUSDT Perpetual Futures (QNTX)") == ["QNTXUSDT"]
+    assert infer_symbols("Gate to List Ondo U.S. Dollar Yield (USDY) for Spot Trading") == ["USDY"]
+    assert infer_symbols("Bitget to list Bluwhale AI (BLUAI) in the AI zone") == ["BLUAI"]
+    assert infer_symbols("Binance will open trading for XLM/U and XLM/USD1 trading pairs") == ["XLM/U", "XLM/USD1"]
+    assert infer_symbols("Binance Futures Will List USDⓈ-M & COIN-M Quarterly 1225 Delivery Contracts") == []
+    assert infer_symbols("TradFi stock listing: SPCX CFD is now live on Bybit TradFi!") == ["SPCX"]
     assert infer_market_type("Bitget Spot Cross Margin adds GENIUS/USDT") == "spot margin"
     assert infer_market_type("Gate to List Irys (IRYS) for Spot and Convert Trading", "newfutureslistings") == "spot/convert"
+    assert infer_market_type("Binance Will List Re (RE) with Seed Tag Applied") == "spot"
     assert infer_market_type("Initial Listing: Gate Stocks Launches Pre-Market Trading for QNTXUSDT Perpetual Futures (USDT-M)") == "futures/pre-market"
     assert infer_symbols("欧易关于 IRYSUSDT X-合约（X-Perp）正式上线的公告") == ["IRYSUSDT"]
     assert infer_symbols("欧易关于 AMAT、DELL、VRT 股票永续合约正式上线的公告") == ["AMAT", "DELL", "VRT"]
@@ -81,8 +101,35 @@ def test_announcement_metadata_parsers_extract_symbols_market_and_time() -> None
     assert infer_market_type("欧易关于 AMAT、DELL、VRT 股票永续合约正式上线的公告") == "futures/stock perpetual"
     assert extract_event_time(title) == datetime(2026, 5, 30, 12, 0, tzinfo=UTC)
     assert extract_event_time("Trading starts on May 30, 2026 at 12:05 UTC") == datetime(2026, 5, 30, 12, 5, tzinfo=UTC)
+    assert extract_event_time("Spot trading for RE/USDⓈ will start at Jun 18, 2026 15:00 UTC") == datetime(2026, 6, 18, 15, 0, tzinfo=UTC)
+    assert extract_event_time("The contracts will be enabled from 09:00 UTC on June 18, 2026.") == datetime(2026, 6, 18, 9, 0, tzinfo=UTC)
     assert extract_event_time("交易将于 2026 年 5 月 29 日 15:00 (UTC+8) 正式上线") == datetime(2026, 5, 29, 7, 0, tzinfo=UTC)
     assert extract_event_time("The subscription period is from 2026-05-11 00:00 UTC to 2026-05-14 00:00 UTC.") is None
+
+
+def test_event_schedule_parser_extracts_per_symbol_times() -> None:
+    english = (
+        "SMH/USDT perpetual futures trading will open at 09:00 UTC on June 18, 2026. "
+        "EWZ/USDT perpetual futures trading will open at 09:15 UTC on June 18, 2026. "
+        "RIVN/USDT perpetual futures trading will open at 09:30 UTC on June 18, 2026."
+    )
+    chinese = (
+        "SMH/USDT 合约交易开盘时间：2026 年 6 月 18 日 17:00 (UTC+8)。"
+        "EWZ/USDT 合约交易开盘时间：2026 年 6 月 18 日 17:15 (UTC+8)。"
+    )
+
+    english_schedule = extract_event_schedule(english, ["SMH", "EWZ", "RIVN"])
+    chinese_schedule = extract_event_schedule(chinese, ["SMH", "EWZ"])
+
+    assert [(item.symbol, item.event_time) for item in english_schedule] == [
+        ("SMH", datetime(2026, 6, 18, 9, 0, tzinfo=UTC)),
+        ("EWZ", datetime(2026, 6, 18, 9, 15, tzinfo=UTC)),
+        ("RIVN", datetime(2026, 6, 18, 9, 30, tzinfo=UTC)),
+    ]
+    assert [(item.symbol, item.event_time) for item in chinese_schedule] == [
+        ("SMH", datetime(2026, 6, 18, 9, 0, tzinfo=UTC)),
+        ("EWZ", datetime(2026, 6, 18, 9, 15, tzinfo=UTC)),
+    ]
 
 
 def test_announcement_alert_message_is_readable() -> None:
@@ -101,7 +148,7 @@ def test_announcement_alert_message_is_readable() -> None:
             "[BYBIT] 下币公告",
             "公告时间: 2026-05-30 16:00:00 UTC+8",
             "币种: TEST",
-            "市场: spot",
+            "市场: 现货",
             "事件时间: 2026-05-30 17:00:00 UTC+8",
             "标题: Delisting of DOGUSDT Perpetual Contract",
             "分类: delistings",
@@ -124,11 +171,26 @@ def test_announcement_event_reminder_message_is_readable() -> None:
             "事件时间: 2026-05-30 17:00:00 UTC+8",
             "剩余: 约 60 分钟",
             "币种: TEST",
-            "市场: spot",
+            "市场: 现货",
             "标题: OKX to list TEST for spot trading",
             "链接: https://www.okx.com/help/test",
         ]
     )
+
+
+def test_launchpool_alert_message_uses_launchpool_label() -> None:
+    message = build_announcement_alert_message(
+        announcement(
+            exchange="gate",
+            title="Gate Launchpool Project #363",
+            kind=AnnouncementKind.LAUNCHPOOL,
+            category="newspotlistings",
+            url="https://www.gate.com/announcements/article/51430",
+        )
+    )
+
+    assert "[GATE] Launchpool公告" in message
+    assert "标题: Gate Launchpool Project #363" in message
 
 
 @pytest.mark.asyncio
@@ -154,6 +216,49 @@ async def test_repository_deduplicates_and_filters_announcements() -> None:
         rows = await repo.list(limit=10)
         assert rows[0].alert_status == "sent"
         assert await repo.has_any() is True
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_repository_enriches_existing_announcement_metadata() -> None:
+    db = await connect_database(":memory:")
+    try:
+        await initialize_schema(db)
+        repo = AnnouncementRepository(db)
+        stale = announcement().model_copy(
+            update={
+                "event_time": None,
+                "summary": "listing: symbols=TEST; market=spot",
+                "event_reminder_status": "not_applicable",
+            }
+        )
+        enriched = stale.model_copy(
+            update={
+                "id": "same-announcement-new-metadata",
+                "event_time": BASE_TIME.replace(hour=9),
+                "event_schedule": [
+                    {"symbol": "TEST", "event_time": BASE_TIME.replace(hour=9)},
+                ],
+                "summary": "listing: symbols=TEST; market=spot; event_time=2026-05-30T09:00:00+00:00",
+                "event_reminder_status": "pending",
+            }
+        )
+
+        inserted = await repo.create_if_new(stale)
+        duplicate = await repo.create_if_new(enriched)
+
+        assert inserted == stale
+        assert duplicate is None
+        rows = await repo.list(exchange="okx", kind=AnnouncementKind.LISTING, limit=10)
+        assert len(rows) == 1
+        assert rows[0].id == stale.id
+        assert rows[0].event_time == BASE_TIME.replace(hour=9)
+        assert [(item.symbol, item.event_time) for item in rows[0].event_schedule] == [
+            ("TEST", BASE_TIME.replace(hour=9)),
+        ]
+        assert rows[0].summary == "listing: symbols=TEST; market=spot; event_time=2026-05-30T09:00:00+00:00"
+        assert rows[0].event_reminder_status == "pending"
     finally:
         await db.close()
 
@@ -201,13 +306,19 @@ async def test_settings_repository_round_trips_announcement_settings() -> None:
 
         defaults = await repo.get_announcement_settings()
         assert defaults.record_exchanges == ["binance", "okx", "bybit", "gate", "bitget", "hyperliquid"]
+        assert defaults.listing_delisting_alerts_enabled is True
+        assert defaults.launchpool_alerts_enabled is True
+        assert defaults.alert_max_age_minutes == 30
 
         settings = AnnouncementSettings(
             enabled=True,
             poll_interval_seconds=120,
             record_exchanges=["OKX", "okx", "bybit"],
             alert_exchanges=["BYBIT"],
+            listing_delisting_alerts_enabled=False,
+            launchpool_alerts_enabled=False,
             bootstrap_alerts_enabled=True,
+            alert_max_age_minutes=45,
             event_reminders_enabled=False,
             event_reminder_minutes_before=45,
         )
@@ -217,7 +328,10 @@ async def test_settings_repository_round_trips_announcement_settings() -> None:
         assert saved.record_exchanges == ["okx", "bybit"]
         assert loaded.record_exchanges == ["okx", "bybit"]
         assert loaded.alert_exchanges == ["bybit"]
+        assert loaded.listing_delisting_alerts_enabled is False
+        assert loaded.launchpool_alerts_enabled is False
         assert loaded.bootstrap_alerts_enabled is True
+        assert loaded.alert_max_age_minutes == 45
         assert loaded.event_reminders_enabled is False
         assert loaded.event_reminder_minutes_before == 45
     finally:
@@ -250,8 +364,14 @@ async def test_monitor_alerts_new_configured_exchange_announcements() -> None:
     try:
         await initialize_schema(db)
         repo = AnnouncementRepository(db)
-        monitor = AnnouncementMonitor(repo, alert_sender=alerts.append)
+        monitor = AnnouncementMonitor(repo, alert_sender=alerts.append, now_fn=lambda: BASE_TIME)
         settings = AnnouncementSettings(record_exchanges=["okx"], alert_exchanges=["okx"])
+        await repo.create_if_new(
+            announcement(
+                announcement_id="source-baseline",
+                published_at=BASE_TIME - timedelta(minutes=1),
+            ).model_copy(update={"alert_status": "muted"})
+        )
 
         created = await monitor.process([announcement()], settings, bootstrap=False)
         duplicate = await monitor.process([announcement()], settings, bootstrap=False)
@@ -263,6 +383,202 @@ async def test_monitor_alerts_new_configured_exchange_announcements() -> None:
         assert "[OKX] 上币公告" in alerts[0]
         rows = await repo.list(limit=10)
         assert rows[0].alert_status == "sent"
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_monitor_alerts_listing_delisting_announcements_by_default() -> None:
+    db = await connect_database(":memory:")
+    alerts: list[str] = []
+    try:
+        await initialize_schema(db)
+        repo = AnnouncementRepository(db)
+        monitor = AnnouncementMonitor(repo, alert_sender=alerts.append, now_fn=lambda: BASE_TIME)
+        settings = AnnouncementSettings(record_exchanges=["okx"], alert_exchanges=[])
+        await repo.create_if_new(
+            announcement(
+                announcement_id="source-baseline",
+                published_at=BASE_TIME - timedelta(minutes=1),
+            ).model_copy(update={"alert_status": "muted"})
+        )
+
+        created = await monitor.process([announcement()], settings, bootstrap=False)
+
+        assert len(created) == 1
+        assert created[0].alert_status == "sent"
+        assert len(alerts) == 1
+        assert "[OKX] 上币公告" in alerts[0]
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_monitor_alerts_launchpool_announcements_by_default() -> None:
+    db = await connect_database(":memory:")
+    alerts: list[str] = []
+    try:
+        await initialize_schema(db)
+        repo = AnnouncementRepository(db)
+        monitor = AnnouncementMonitor(repo, alert_sender=alerts.append, now_fn=lambda: BASE_TIME)
+        await repo.create_if_new(
+            announcement(
+                exchange="gate",
+                announcement_id="source-baseline",
+                published_at=BASE_TIME - timedelta(minutes=1),
+            ).model_copy(update={"alert_status": "muted"})
+        )
+        launchpool = announcement(
+            exchange="gate",
+            announcement_id="gate-launchpool-363",
+            kind=AnnouncementKind.LAUNCHPOOL,
+            title="Gate Launchpool Project #363",
+            category="newspotlistings",
+        ).model_copy(update={"source": "test-source"})
+
+        created = await monitor.process(
+            [launchpool],
+            AnnouncementSettings(record_exchanges=["gate"], alert_exchanges=[]),
+            bootstrap=False,
+        )
+
+        assert len(created) == 1
+        assert created[0].alert_status == "sent"
+        assert len(alerts) == 1
+        assert "[GATE] Launchpool公告" in alerts[0]
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_monitor_can_mute_launchpool_announcements() -> None:
+    db = await connect_database(":memory:")
+    alerts: list[str] = []
+    try:
+        await initialize_schema(db)
+        repo = AnnouncementRepository(db)
+        monitor = AnnouncementMonitor(repo, alert_sender=alerts.append, now_fn=lambda: BASE_TIME)
+        await repo.create_if_new(
+            announcement(
+                announcement_id="source-baseline",
+                published_at=BASE_TIME - timedelta(minutes=1),
+            ).model_copy(update={"alert_status": "muted"})
+        )
+        launchpool = announcement(
+            announcement_id="launchpool-muted",
+            kind=AnnouncementKind.LAUNCHPOOL,
+            title="PoolX launches a new mining pool",
+            category="latest_news",
+        )
+
+        created = await monitor.process(
+            [launchpool],
+            AnnouncementSettings(
+                record_exchanges=["okx"],
+                alert_exchanges=[],
+                launchpool_alerts_enabled=False,
+            ),
+            bootstrap=False,
+        )
+
+        assert len(created) == 1
+        assert created[0].alert_status == "muted"
+        assert alerts == []
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_monitor_mutes_first_batch_for_a_new_source_in_nonempty_database() -> None:
+    db = await connect_database(":memory:")
+    alerts: list[str] = []
+    try:
+        await initialize_schema(db)
+        repo = AnnouncementRepository(db)
+        await repo.create_if_new(announcement().model_copy(update={"alert_status": "muted"}))
+        monitor = AnnouncementMonitor(repo, alert_sender=alerts.append, now_fn=lambda: BASE_TIME)
+        bybit = announcement(
+            exchange="bybit",
+            announcement_id="bybit-first-seen",
+            source="bybit-v5-announcements",
+            published_at=BASE_TIME,
+        )
+
+        created = await monitor.process(
+            [bybit],
+            AnnouncementSettings(record_exchanges=["okx", "bybit"]),
+            bootstrap=False,
+        )
+
+        assert len(created) == 1
+        assert created[0].alert_status == "muted"
+        assert alerts == []
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_monitor_mutes_historical_gaps_but_alerts_recent_rows_above_source_watermark() -> None:
+    db = await connect_database(":memory:")
+    alerts: list[str] = []
+    try:
+        await initialize_schema(db)
+        repo = AnnouncementRepository(db)
+        await repo.create_if_new(
+            announcement(
+                announcement_id="source-watermark",
+                published_at=BASE_TIME - timedelta(minutes=5),
+            ).model_copy(update={"alert_status": "muted"})
+        )
+        monitor = AnnouncementMonitor(repo, alert_sender=alerts.append, now_fn=lambda: BASE_TIME)
+        historical_gap = announcement(
+            announcement_id="historical-gap",
+            published_at=BASE_TIME - timedelta(minutes=10),
+        )
+        recent = announcement(
+            announcement_id="recent-row",
+            title="OKX to list RECENT for spot trading",
+            published_at=BASE_TIME - timedelta(minutes=1),
+        )
+
+        created = await monitor.process(
+            [historical_gap, recent],
+            AnnouncementSettings(record_exchanges=["okx"], alert_max_age_minutes=30),
+            bootstrap=False,
+        )
+
+        created_by_id = {item.announcement_id: item for item in created}
+        assert created_by_id["historical-gap"].alert_status == "muted"
+        assert created_by_id["recent-row"].alert_status == "sent"
+        assert len(alerts) == 1
+        assert "OKX to list RECENT for spot trading" in alerts[0]
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_monitor_mutes_stale_catchup_even_when_it_is_above_source_watermark() -> None:
+    db = await connect_database(":memory:")
+    alerts: list[str] = []
+    try:
+        await initialize_schema(db)
+        repo = AnnouncementRepository(db)
+        await repo.create_if_new(
+            announcement(
+                announcement_id="source-watermark",
+                published_at=BASE_TIME - timedelta(days=2),
+            ).model_copy(update={"alert_status": "muted"})
+        )
+        monitor = AnnouncementMonitor(repo, alert_sender=alerts.append, now_fn=lambda: BASE_TIME)
+
+        created = await monitor.process(
+            [announcement(announcement_id="stale-catchup", published_at=BASE_TIME - timedelta(hours=2))],
+            AnnouncementSettings(record_exchanges=["okx"], alert_max_age_minutes=30),
+            bootstrap=False,
+        )
+
+        assert created[0].alert_status == "muted"
+        assert alerts == []
     finally:
         await db.close()
 
@@ -306,7 +622,11 @@ async def test_monitor_records_but_mutes_unalerted_exchanges() -> None:
         await initialize_schema(db)
         repo = AnnouncementRepository(db)
         monitor = AnnouncementMonitor(repo, alert_sender=alerts.append)
-        settings = AnnouncementSettings(record_exchanges=["okx"], alert_exchanges=["bybit"])
+        settings = AnnouncementSettings(
+            record_exchanges=["okx"],
+            alert_exchanges=["bybit"],
+            listing_delisting_alerts_enabled=False,
+        )
 
         created = await monitor.process([announcement()], settings, bootstrap=False)
 
@@ -319,6 +639,8 @@ async def test_monitor_records_but_mutes_unalerted_exchanges() -> None:
 
 def test_okx_provider_parses_listing_and_delisting_payloads() -> None:
     provider = OKXAnnouncementProvider(client=None)
+    futures_url = "https://www.okx.com/help/okx-to-list-perpetual-futures-for-smh-ewz-rivn-dkng-and-rddt-equities"
+    spot_url = "https://www.okx.com/help/okx-will-launch-re-usds-for-spot-trading"
     listing_payload = {
         "code": "0",
         "data": [
@@ -328,6 +650,18 @@ def test_okx_provider_parses_listing_and_delisting_payloads() -> None:
                         "title": "OKX to list TRUMP (OFFICIAL TRUMP) for spot trading",
                         "url": "https://www.okx.com/help/okx-to-list-trump-official-trump-for-spot-trading",
                         "pTime": "1737255602487",
+                        "annType": "announcements-new-listings",
+                    },
+                    {
+                        "title": "OKX to list perpetual futures for SMH, EWZ, RIVN, DKNG and RDDT equities",
+                        "url": futures_url,
+                        "pTime": "1781769600000",
+                        "annType": "announcements-new-listings",
+                    },
+                    {
+                        "title": "OKX will launch RE/USDⓈ for spot trading",
+                        "url": spot_url,
+                        "pTime": "1781748010000",
                         "annType": "announcements-new-listings",
                     }
                 ]
@@ -351,13 +685,44 @@ def test_okx_provider_parses_listing_and_delisting_payloads() -> None:
     }
 
     rows = [
-        *provider._parse_payload(listing_payload, "announcements-new-listings"),
+        *provider._parse_payload(
+            listing_payload,
+            "announcements-new-listings",
+            content_by_key={
+                futures_url: (
+                    "SMH/USDT perpetual futures trading will open at 09:00 UTC on June 18, 2026. "
+                    "EWZ/USDT perpetual futures trading will open at 09:15 UTC on June 18, 2026. "
+                    "RIVN/USDT perpetual futures trading will open at 09:30 UTC on June 18, 2026. "
+                    "DKNG/USDT perpetual futures trading will open at 09:45 UTC on June 18, 2026. "
+                    "RDDT/USDT perpetual futures trading will open at 10:00 UTC on June 18, 2026."
+                ),
+                spot_url: "OKX is introducing the following USDⓈ trading pairs in our spot trading at Jun 18, 2026 15:00 UTC: RE/USDⓈ.",
+            },
+        ),
         *provider._parse_payload(delisting_payload, "announcements-delistings"),
     ]
 
-    assert [row.exchange for row in rows] == ["okx", "okx"]
-    assert [row.kind for row in rows] == [AnnouncementKind.LISTING, AnnouncementKind.DELISTING]
+    assert [row.exchange for row in rows] == ["okx", "okx", "okx", "okx"]
+    assert [row.kind for row in rows] == [
+        AnnouncementKind.LISTING,
+        AnnouncementKind.LISTING,
+        AnnouncementKind.LISTING,
+        AnnouncementKind.DELISTING,
+    ]
     assert rows[0].published_at.isoformat() == "2025-01-19T03:00:02.487000+00:00"
+    assert rows[1].symbols == ["SMH", "EWZ", "RIVN", "DKNG", "RDDT"]
+    assert rows[1].market_type == "futures"
+    assert rows[1].event_time == datetime(2026, 6, 18, 9, 0, tzinfo=UTC)
+    assert [(item.symbol, item.event_time) for item in rows[1].event_schedule] == [
+        ("SMH", datetime(2026, 6, 18, 9, 0, tzinfo=UTC)),
+        ("EWZ", datetime(2026, 6, 18, 9, 15, tzinfo=UTC)),
+        ("RIVN", datetime(2026, 6, 18, 9, 30, tzinfo=UTC)),
+        ("DKNG", datetime(2026, 6, 18, 9, 45, tzinfo=UTC)),
+        ("RDDT", datetime(2026, 6, 18, 10, 0, tzinfo=UTC)),
+    ]
+    assert rows[2].symbols == ["RE/USD"]
+    assert rows[2].market_type == "spot"
+    assert rows[2].event_time == datetime(2026, 6, 18, 15, 0, tzinfo=UTC)
 
 
 def test_okx_provider_parses_latest_page_contract_announcements() -> None:
@@ -450,6 +815,56 @@ def test_binance_provider_parses_listing_and_delisting_catalogs() -> None:
     assert rows[0].url == "https://www.binance.com/en/support/announcement/3bdaff694bde45ccb443709336c8686d"
     assert rows[0].published_at.isoformat() == "2026-05-29T07:00:06.968000+00:00"
 
+    collateral = provider._announcement_from_row(
+        {
+            "id": 275492,
+            "code": "bstocks-collateral",
+            "title": "Binance Will Add 2 bStocks Tokenized Securities as Collateral Asset - 2026-09-09",
+            "releaseDate": 1788937216000,
+        },
+        "48",
+        "New Cryptocurrency Listing",
+        content=(
+            "Binance Cross Margin will add two bStocks tokens — Hims & Hers (HIMSB) "
+            "and Salesforce (CRMB) — as eligible collateral assets."
+        ),
+    )
+    assert collateral is not None
+    assert collateral.symbols == ["HIMSB", "CRMB"]
+    assert collateral.market_type == "margin"
+
+    generic = provider._announcement_from_row(
+        {
+            "id": 275490,
+            "code": "multi-tradfi",
+            "title": "Binance Futures Will Launch Multiple USDⓈ-Margined TradFi Perpetual Contracts",
+            "releaseDate": 1780038006968,
+        },
+        "48",
+        "New Cryptocurrency Listing",
+        content=(
+            "Binance Futures will launch LRCXUSDT Perpetual Contract, "
+            "KLACUSDT Perpetual Contract and ALABUSDT Perpetual Contract."
+        ),
+    )
+    assert generic is not None
+    assert generic.symbols == ["LRCXUSDT", "KLACUSDT", "ALABUSDT"]
+    assert generic.market_type == "futures"
+
+    delivery = provider._announcement_from_row(
+        {
+            "id": 275491,
+            "code": "delivery",
+            "title": "Binance Futures Will List USDⓈ-M & COIN-M Quarterly 1225 Delivery Contracts",
+            "releaseDate": 1780038006968,
+        },
+        "48",
+        "New Cryptocurrency Listing",
+        content="USDⓈ-M contracts: BTCUSDT ETHUSDT. COIN-M contracts: BTCUSD ETHUSD.",
+    )
+    assert delivery is not None
+    assert delivery.symbols == ["BTCUSDT", "ETHUSDT", "BTCUSD", "ETHUSD"]
+
 
 def test_bybit_provider_parses_announcement_payload() -> None:
     provider = BybitAnnouncementProvider(client=None)
@@ -473,6 +888,7 @@ def test_bybit_provider_parses_announcement_payload() -> None:
                 {
                     "title": "Delisting of DOGUSDT Perpetual Contract",
                     "url": "https://announcements.bybit.com/en-US/article/delisting/",
+                    "type": {"key": "delistings", "title": "Delistings"},
                     "publishTime": 1779952014000,
                     "endDateTimestamp": 1779951114000,
                 },
@@ -490,6 +906,7 @@ def test_bybit_provider_parses_announcement_payload() -> None:
     assert rows[0].announcement_id == "new-listing"
     assert rows[0].event_time == datetime(2026, 5, 28, 8, 48, 30, tzinfo=UTC)
     assert rows[1].event_time == datetime(2026, 5, 28, 6, 51, 54, tzinfo=UTC)
+    assert rows[1].category == "Delistings"
 
 
 def test_bybit_provider_tolerates_alternate_article_fields() -> None:
@@ -546,6 +963,57 @@ def test_bitget_provider_parses_and_classifies_payload() -> None:
     assert [row.kind for row in rows] == [AnnouncementKind.LISTING, AnnouncementKind.DELISTING]
     assert rows[0].category == "coin_listings:margin"
 
+    launchpool_payload = {
+        "code": "00000",
+        "data": [
+            {
+                "annId": "12560603884672",
+                "annTitle": "Bitget Launchpool: stake BGB to mine SOMI",
+                "annUrl": "https://www.bitget.com/en/support/articles/12560603884672",
+                "cTime": "1780052400000",
+                "annType": "latest_news",
+            },
+            {
+                "annId": "12560603884673",
+                "annTitle": "Bitget publishes monthly proof of reserves",
+                "annUrl": "https://www.bitget.com/en/support/articles/12560603884673",
+                "cTime": "1780052400000",
+                "annType": "latest_news",
+            },
+        ],
+    }
+    launchpool_rows = provider._parse_payload(launchpool_payload, "latest_news")
+    assert [row.kind for row in launchpool_rows] == [
+        AnnouncementKind.LAUNCHPOOL,
+        AnnouncementKind.OTHER,
+    ]
+    assert "latest_news" in provider.ann_types
+
+    generic_payload = {
+        "data": [
+            {
+                "annId": "12560603886243",
+                "annTitle": "14 New Trading Pairs for Bitget Spot Margin Trading",
+                "annUrl": "https://www.bitget.com/en/support/articles/12560603886243",
+                "cTime": "1781937745000",
+                "annType": "coin_listings",
+                "annSubType": "margin",
+            }
+        ]
+    }
+    generic_rows = provider._parse_payload(
+        generic_payload,
+        "coin_listings",
+        content_by_key={
+            "12560603886243": (
+                "Bitget has launched isolated spot margin trading for RE/USDT, "
+                "UAI/USDT, PUMPBTC/USDT, AEVO/USDT, STABLE/USDT."
+            )
+        },
+    )
+    assert generic_rows[0].symbols == ["RE/USDT", "UAI/USDT", "PUMPBTC/USDT", "AEVO/USDT", "STABLE/USDT"]
+    assert generic_rows[0].market_type == "spot margin"
+
 
 def test_bitget_provider_tolerates_alternate_article_fields() -> None:
     provider = BitgetAnnouncementProvider(client=None)
@@ -567,6 +1035,45 @@ def test_bitget_provider_tolerates_alternate_article_fields() -> None:
     assert rows[0].kind == AnnouncementKind.LISTING
     assert rows[0].symbols == ["BGBUSDT"]
     assert rows[0].market_type == "futures"
+
+
+@pytest.mark.asyncio
+async def test_bitget_fetches_launchpool_and_filters_other_latest_news() -> None:
+    requested_urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        if request.url.params.get("annType") == "latest_news":
+            return httpx.Response(
+                200,
+                json={
+                    "code": "00000",
+                    "data": [
+                        {
+                            "annId": "launchpool-1",
+                            "annTitle": "Bitget Launchpool: stake BGB to mine SOMI",
+                            "annUrl": "https://www.bitget.com/en/support/articles/launchpool-1",
+                            "cTime": "1780052400000",
+                            "annType": "latest_news",
+                        },
+                        {
+                            "annId": "ordinary-news-1",
+                            "annTitle": "Bitget publishes monthly proof of reserves",
+                            "annUrl": "https://www.bitget.com/en/support/articles/ordinary-news-1",
+                            "cTime": "1780052400000",
+                            "annType": "latest_news",
+                        },
+                    ],
+                },
+            )
+        return httpx.Response(200, json={"code": "00000", "data": []})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        rows = await BitgetAnnouncementProvider(client=client).fetch()
+
+    assert [row.announcement_id for row in rows] == ["launchpool-1"]
+    assert rows[0].kind == AnnouncementKind.LAUNCHPOOL
+    assert any("annType=latest_news" in url for url in requested_urls)
 
 
 def test_gate_provider_parses_next_data_listing_and_delisting_pages() -> None:
@@ -592,13 +1099,18 @@ def test_gate_provider_parses_next_data_listing_and_delisting_pages() -> None:
         *provider._parse_page(delisting_html, "delisted"),
     ]
 
-    assert [row.exchange for row in rows] == ["gate", "gate"]
-    assert [row.kind for row in rows] == [AnnouncementKind.LISTING, AnnouncementKind.DELISTING]
+    assert [row.exchange for row in rows] == ["gate", "gate", "gate"]
+    assert [row.kind for row in rows] == [
+        AnnouncementKind.LISTING,
+        AnnouncementKind.LAUNCHPOOL,
+        AnnouncementKind.DELISTING,
+    ]
     assert rows[0].symbols == ["QAIT"]
     assert rows[0].market_type == "spot/convert"
     assert rows[0].url == "https://www.gate.com/announcements/article/51434"
     assert rows[0].published_at.isoformat() == "2026-05-28T15:00:55+00:00"
     assert rows[0].event_time.isoformat() == "2026-05-28T15:20:00+00:00"
+    assert rows[1].title == "Gate Launchpool Project #363"
 
 
 def test_gate_provider_finds_nested_article_lists() -> None:

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from dotenv import find_dotenv, load_dotenv
 
-from app.models.settings import AstroCardSettings, HistorySettings
+from app.models.settings import AstroAutomationSettings, AstroCardSettings, HistorySettings
 
 
 @dataclass(frozen=True)
@@ -14,7 +14,7 @@ class Settings:
     environment: str = "development"
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     database_url: str = "sqlite:///./data/radar.db"
-    poll_interval_seconds: float = 8.0
+    poll_interval_seconds: float = 5.0
     funding_poll_interval_seconds: float = 120.0
     funding_research_enabled: bool = False
     funding_research_manage_paper_trades: bool = True
@@ -27,6 +27,8 @@ class Settings:
     feishu_phone_user_ids: str = ""
     feishu_phone_user_id_type: str = "open_id"
     feishu_phone_enabled: bool = False
+    feishu_live_send_enabled: bool = False
+    oil_news_feishu_live_send_enabled: bool = False
     dashboard_password: str = ""
     history_enabled: bool = True
     history_sample_seconds: int = 120
@@ -43,6 +45,7 @@ class Settings:
     astro_admin_prefix: str = ""
     astro_api_key: str = ""
     astro_verify_tls: bool = True
+    astro_ca_bundle: str = ""
     astro_dry_run_only: bool = True
     astro_alert_auto_create: bool = False
     astro_manual_card_create: bool = False
@@ -52,6 +55,14 @@ class Settings:
     astro_default_max_notional: float = 10.0
     astro_default_open_enabled: bool = False
     astro_default_close_position_buffer_pct: float = 0.1
+    astro_new_listing_max_trade_usdt: float | None = None
+    astro_new_listing_leverage: int | None = None
+    astro_new_listing_min_notional: float | None = None
+    astro_new_listing_max_notional: float | None = None
+    astro_new_listing_open_enabled: bool | None = None
+    astro_new_listing_close_position_buffer_pct: float | None = None
+    astro_new_listing_unfavorable_funding_weight: float | None = None
+    astro_new_listing_close_position_floor_pct: float | None = None
     astro_request_timeout_seconds: float = 10.0
 
     @property
@@ -84,6 +95,31 @@ class Settings:
             open_enabled=self.astro_default_open_enabled,
             close_position_buffer_pct=self.astro_default_close_position_buffer_pct,
         )
+
+    @property
+    def astro_automation_settings(self) -> AstroAutomationSettings:
+        return AstroAutomationSettings(alert_auto_create=self.astro_alert_auto_create)
+
+    def astro_new_listing_card_settings_from(self, defaults: AstroCardSettings) -> AstroCardSettings:
+        updates = {
+            key: value
+            for key, value in {
+                "max_trade_usdt": self.astro_new_listing_max_trade_usdt,
+                "leverage": self.astro_new_listing_leverage,
+                "min_notional": self.astro_new_listing_min_notional,
+                "max_notional": self.astro_new_listing_max_notional,
+                "open_enabled": self.astro_new_listing_open_enabled,
+                "close_position_buffer_pct": self.astro_new_listing_close_position_buffer_pct,
+                "unfavorable_funding_weight": self.astro_new_listing_unfavorable_funding_weight,
+                "close_position_floor_pct": self.astro_new_listing_close_position_floor_pct,
+            }.items()
+            if value is not None
+        }
+        return defaults.model_copy(update=updates)
+
+    @property
+    def astro_new_listing_card_settings(self) -> AstroCardSettings:
+        return self.astro_new_listing_card_settings_from(self.astro_card_settings)
 
 
 def _is_running_in_container() -> bool:
@@ -133,18 +169,33 @@ def get_settings() -> Settings:
             return default
         return value.strip().lower() in {"1", "true", "yes", "on"}
 
+    def optional_float_env(name: str) -> float | None:
+        value = os.getenv(name)
+        return None if value is None or not value.strip() else float(value)
+
+    def optional_int_env(name: str) -> int | None:
+        value = os.getenv(name)
+        return None if value is None or not value.strip() else int(value)
+
+    def optional_bool_env(name: str) -> bool | None:
+        value = os.getenv(name)
+        if value is None or not value.strip():
+            return None
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+
     environment = os.getenv("ENVIRONMENT", "development")
     database_url = _resolve_sqlite_database_url(
         os.getenv("DATABASE_URL", "sqlite:///./data/radar.db"),
         dotenv_path or None,
     )
+    feishu_live_send_enabled = bool_env("FEISHU_LIVE_SEND_ENABLED", False)
 
     return Settings(
         app_name=os.getenv("APP_NAME", "Arbitrage Radar"),
         environment=environment,
         cors_origins=os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"),
         database_url=database_url,
-        poll_interval_seconds=float(os.getenv("POLL_INTERVAL_SECONDS", "8")),
+        poll_interval_seconds=float(os.getenv("POLL_INTERVAL_SECONDS", "5")),
         funding_poll_interval_seconds=float(os.getenv("FUNDING_POLL_INTERVAL_SECONDS", "120")),
         funding_research_enabled=bool_env("FUNDING_RESEARCH_ENABLED", False),
         funding_research_manage_paper_trades=bool_env(
@@ -162,6 +213,11 @@ def get_settings() -> Settings:
         feishu_phone_user_ids=os.getenv("FEISHU_PHONE_USER_IDS", "").strip(),
         feishu_phone_user_id_type=os.getenv("FEISHU_PHONE_USER_ID_TYPE", "open_id").strip() or "open_id",
         feishu_phone_enabled=bool_env("FEISHU_PHONE_ENABLED", False),
+        feishu_live_send_enabled=feishu_live_send_enabled,
+        oil_news_feishu_live_send_enabled=bool_env(
+            "OIL_NEWS_FEISHU_LIVE_SEND_ENABLED",
+            feishu_live_send_enabled,
+        ),
         dashboard_password=os.getenv("DASHBOARD_PASSWORD", ""),
         history_enabled=bool_env("HISTORY_ENABLED", True),
         history_sample_seconds=int(os.getenv("HISTORY_SAMPLE_SECONDS", "120")),
@@ -186,6 +242,7 @@ def get_settings() -> Settings:
         astro_admin_prefix=os.getenv("ASTRO_ADMIN_PREFIX", "").strip(),
         astro_api_key=os.getenv("ASTRO_API_KEY", "").strip(),
         astro_verify_tls=bool_env("ASTRO_VERIFY_TLS", True),
+        astro_ca_bundle=os.getenv("ASTRO_CA_BUNDLE", "").strip(),
         astro_dry_run_only=bool_env("ASTRO_DRY_RUN_ONLY", True),
         astro_alert_auto_create=bool_env("ASTRO_ALERT_AUTO_CREATE", False),
         astro_manual_card_create=bool_env("ASTRO_MANUAL_CARD_CREATE", False),
@@ -196,6 +253,20 @@ def get_settings() -> Settings:
         astro_default_open_enabled=bool_env("ASTRO_DEFAULT_OPEN_ENABLED", False),
         astro_default_close_position_buffer_pct=float(
             os.getenv("ASTRO_DEFAULT_CLOSE_POSITION_BUFFER_PCT", "0.1")
+        ),
+        astro_new_listing_max_trade_usdt=optional_float_env("ASTRO_NEW_LISTING_MAX_TRADE_USDT"),
+        astro_new_listing_leverage=optional_int_env("ASTRO_NEW_LISTING_LEVERAGE"),
+        astro_new_listing_min_notional=optional_float_env("ASTRO_NEW_LISTING_MIN_NOTIONAL"),
+        astro_new_listing_max_notional=optional_float_env("ASTRO_NEW_LISTING_MAX_NOTIONAL"),
+        astro_new_listing_open_enabled=optional_bool_env("ASTRO_NEW_LISTING_OPEN_ENABLED"),
+        astro_new_listing_close_position_buffer_pct=optional_float_env(
+            "ASTRO_NEW_LISTING_CLOSE_POSITION_BUFFER_PCT"
+        ),
+        astro_new_listing_unfavorable_funding_weight=optional_float_env(
+            "ASTRO_NEW_LISTING_UNFAVORABLE_FUNDING_WEIGHT"
+        ),
+        astro_new_listing_close_position_floor_pct=optional_float_env(
+            "ASTRO_NEW_LISTING_CLOSE_POSITION_FLOOR_PCT"
         ),
         astro_request_timeout_seconds=float(os.getenv("ASTRO_REQUEST_TIMEOUT_SECONDS", "10")),
     )

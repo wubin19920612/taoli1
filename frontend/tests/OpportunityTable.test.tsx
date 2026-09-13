@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { OpportunityTable } from "../src/components/OpportunityTable";
 import type { Opportunity } from "../src/api/types";
@@ -44,16 +44,25 @@ const row: Opportunity = {
 };
 
 describe("OpportunityTable", () => {
+  beforeEach(() => {
+    window.history.pushState({}, "", "/");
+  });
+
+  afterEach(() => {
+    window.history.pushState({}, "", "/");
+  });
+
   it("renders spread legs, funding previews and risk labels", () => {
     render(<OpportunityTable opportunities={[row]} loading={false} />);
 
     expect(screen.getByText("BTCUSDT")).toBeTruthy();
-    expect(screen.getByText("bn")).toBeTruthy();
-    expect(screen.getByText("ok")).toBeTruthy();
-    expect(screen.getByTitle("binance future")).toBeTruthy();
-    expect(screen.getByTitle("okx future")).toBeTruthy();
+    expect(screen.getByText("Binance")).toBeTruthy();
+    expect(screen.getByText("OKX")).toBeTruthy();
+    expect(screen.getAllByTitle("binance 合约").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByTitle("okx 合约").length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText("binance future")).toBeNull();
     expect(screen.queryByText("okx future")).toBeNull();
+    expect(screen.getAllByText("合约").length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText("0.620%")).toBeTruthy();
     expect(screen.getByText("当前")).toBeTruthy();
     expect(screen.getByText("预测")).toBeTruthy();
@@ -119,6 +128,40 @@ describe("OpportunityTable", () => {
     expect(onOpenHistory).toHaveBeenCalledWith(row);
   });
 
+  it("opens pair spread query from a real-time opportunity row", async () => {
+    render(
+      <OpportunityTable
+        opportunities={[
+          {
+            ...row,
+            symbol: "EDGEUSDT",
+            buy_exchange: "gate",
+            buy_market_type: "spot",
+            buy_raw_symbol: "EDGEX_USDT",
+            sell_exchange: "binance",
+            sell_market_type: "future",
+            sell_raw_symbol: "EDGEUSDT"
+          }
+        ]}
+        loading={false}
+      />
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "价差查询 EDGEUSDT" }));
+
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("page")).toBe("pair-monitor");
+    expect(params.get("leg1_exchange")).toBe("gate");
+    expect(params.get("leg1_market_type")).toBe("spot");
+    expect(params.get("leg1_symbol")).toBe("EDGEX_USDT");
+    expect(params.get("leg2_exchange")).toBe("binance");
+    expect(params.get("leg2_market_type")).toBe("future");
+    expect(params.get("leg2_symbol")).toBe("EDGEUSDT");
+    expect(params.get("leg2_multiplier")).toBe("1");
+    expect(params.get("hours")).toBe("4");
+    expect(params.get("interval_minutes")).toBe("5");
+  });
+
   it("shows raw leg symbols for aliased opportunities in leg titles", () => {
     render(
       <OpportunityTable
@@ -135,6 +178,26 @@ describe("OpportunityTable", () => {
       />
     );
 
-    expect(screen.getByTitle("gate future EDGEX_USDT")).toBeTruthy();
+    expect(screen.getAllByTitle("gate 合约 原始 EDGEX_USDT").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("labels Bitget RToken stock spot legs as stock spot", () => {
+    render(
+      <OpportunityTable
+        opportunities={[
+          {
+            ...row,
+            symbol: "AAPLUSDT",
+            buy_exchange: "bitget",
+            buy_market_type: "spot",
+            buy_raw_symbol: "RAAPLUSDT"
+          }
+        ]}
+        loading={false}
+      />
+    );
+
+    expect(screen.getAllByTitle("bitget 股票现货 原始 RAAPLUSDT").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/股票现货/).length).toBeGreaterThanOrEqual(1);
   });
 });

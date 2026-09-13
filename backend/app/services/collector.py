@@ -131,7 +131,7 @@ class MarketCollector:
         history_recorder=None,
         index_component_provider=None,
         index_component_monitor=None,
-        poll_interval_seconds: float = 8.0,
+        poll_interval_seconds: float = 5.0,
         max_due_adapters_per_cycle: int = DEFAULT_MAX_DUE_ADAPTERS_PER_CYCLE,
         now_fn: Callable[[], datetime] | None = None,
     ) -> None:
@@ -194,8 +194,13 @@ class MarketCollector:
         aliased_markets = apply_symbol_aliases(markets, self.risk_settings.symbol_aliases)
         filtered_markets = filter_markets(aliased_markets, self.risk_settings)
 
-        opportunities = self._build_labeled_opportunities(filtered_markets)
-        filtered_opportunities = filter_opportunities(opportunities, self.risk_settings)
+        opportunities = self._build_labeled_opportunities(filtered_markets, now=now)
+        filtered_opportunities = filter_opportunities(
+            opportunities,
+            self.risk_settings,
+            now=now,
+        )
+        self.store.set_all_markets(aliased_markets)
         self.store.set_markets(filtered_markets)
         self.store.set_opportunities(filtered_opportunities)
         self.store.set_exchange_errors(errors)
@@ -410,8 +415,13 @@ class MarketCollector:
                 errors[f"{adapter.name}:{label}"] = _error_message(exc)
         return markets, errors
 
-    def _build_labeled_opportunities(self, markets: list[MarketSnapshot]) -> list[Opportunity]:
+    def _build_labeled_opportunities(
+        self,
+        markets: list[MarketSnapshot],
+        now: datetime | None = None,
+    ) -> list[Opportunity]:
         raw: list[Opportunity] = []
+        current = now or self._now_fn()
         for mode in ("SF", "FF", "SS"):
             buy_fee = self.fee_settings.spot_fee_pct if mode in {"SF", "SS"} else self.fee_settings.future_fee_pct
             sell_fee = self.fee_settings.future_fee_pct if mode in {"SF", "FF"} else self.fee_settings.spot_fee_pct
@@ -422,11 +432,11 @@ class MarketCollector:
                     buy_fee_pct=buy_fee,
                     sell_fee_pct=sell_fee,
                     safety_slippage_pct=self.fee_settings.safety_slippage_pct,
+                    now=current,
                 )
             )
-        now = datetime.now(UTC)
         labeled = [
-            apply_risk_labels(item, settings=self.risk_settings, now=now)
+            apply_risk_labels(item, settings=self.risk_settings, now=current)
             for item in raw
         ]
         return sorted(labeled, key=lambda item: item.open_spread_pct, reverse=True)

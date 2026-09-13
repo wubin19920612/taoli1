@@ -100,6 +100,7 @@ async def _enrich_candidates_with_orderbook_depth(
 ) -> list[FundingResearchCandidate]:
     enriched: list[FundingResearchCandidate] = []
     market_by_key = {(market.symbol, market.exchange): market for market in markets}
+    book_cache = {}
     for candidate in candidates:
         depth_stats = await orderbook_depth_stats_for_candidate(
             candidate,
@@ -107,6 +108,7 @@ async def _enrich_candidates_with_orderbook_depth(
             depth_adapters,
             target_notional_usdt=settings.notional_per_symbol_usdt,
             levels=levels,
+            book_cache=book_cache,
         )
         if depth_stats is None:
             enriched.append(candidate)

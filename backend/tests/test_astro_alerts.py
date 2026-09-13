@@ -7,7 +7,7 @@ from app.core.config import Settings
 from app.models.astro import AstroCardCreateRequest
 from app.models.market import MarketType
 from app.models.opportunity import Opportunity, OpportunityType
-from app.models.settings import AstroCardSettings, LivePilotSettings
+from app.models.settings import AstroCardSettings, LivePilotSettings, RiskSettings
 from app.services.astro_alerts import AstroAlertService
 from app.services.astro_client import AstroClientError
 
@@ -61,9 +61,11 @@ class FakeAstroClient:
         self,
         pairs: list[dict[str, Any]] | None = None,
         error: AstroClientError | None = None,
+        add_errors: dict[str, AstroClientError] | None = None,
     ):
         self.pairs = pairs or []
         self.error = error
+        self.add_errors = add_errors or {}
         self.added: list[dict[str, Any]] = []
         self.updated: list[dict[str, Any]] = []
         self.list_calls = 0
@@ -75,6 +77,9 @@ class FakeAstroClient:
         return self.pairs
 
     async def add_pair(self, pair: dict[str, Any]) -> dict[str, Any]:
+        route = f"{pair.get('buyEx')}->{pair.get('sellEx')}"
+        if error := self.add_errors.get(route):
+            raise error
         self.added.append(pair)
         return {"code": 0}
 
@@ -111,6 +116,62 @@ async def test_dry_run_mode_skips_astro_writes() -> None:
     assert result.action == "dry_run"
     assert "dry-run" in result.message
     assert client.list_calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "handler_name",
+    [
+        "handle_alert",
+        "handle_new_listing_alert",
+        "handle_live_pilot",
+        "handle_manual_create",
+    ],
+)
+async def test_global_blacklist_blocks_every_astro_create_path(handler_name: str) -> None:
+    async def load_risk_settings() -> RiskSettings:
+        return RiskSettings(excluded_symbols=["BTCUSDT"])
+
+    client = FakeAstroClient()
+    service = AstroAlertService(
+        client,
+        Settings(
+            astro_alert_auto_create=True,
+            astro_manual_card_create=True,
+            astro_dry_run_only=False,
+        ),
+        live_pilot_settings=LivePilotSettings(enabled=True),
+        risk_settings_loader=load_risk_settings,
+    )
+
+    result = await getattr(service, handler_name)(opportunity())
+
+    assert result.status == "skipped"
+    assert result.action == "excluded_symbol"
+    assert "BTCUSDT 已在全局黑名单" in result.message
+    assert client.list_calls == 0
+    assert not client.added
+
+
+@pytest.mark.asyncio
+async def test_risk_settings_failure_blocks_astro_write() -> None:
+    async def fail_to_load_risk_settings() -> RiskSettings:
+        raise RuntimeError("database unavailable")
+
+    client = FakeAstroClient()
+    service = AstroAlertService(
+        client,
+        Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
+        risk_settings_loader=fail_to_load_risk_settings,
+    )
+
+    result = await service.handle_alert(opportunity())
+
+    assert result.status == "failed"
+    assert result.action == "risk_settings"
+    assert "已阻止创建" in result.message
+    assert client.list_calls == 0
+    assert not client.added
 
 
 @pytest.mark.asyncio
@@ -236,9 +297,102 @@ async def test_missing_pair_creates_paused_disable_open_card() -> None:
     assert result.pair_name == "BTC"
     assert result.pair_type == "FF"
     assert "已创建暂停卡片 BTC FF binance->okx" in result.message
+    assert "同步创建 gc-binance->gc-okx（共 2 张）" in result.message
+    assert [(item["buyEx"], item["sellEx"]) for item in client.added] == [
+        ("binance", "okx"),
+        ("gc-binance", "gc-okx"),
+    ]
     assert client.added[0]["status"] is False
     assert client.added[0]["disableOpen"] is True
     assert client.added[0]["type"] == "FF"
+
+
+@pytest.mark.asyncio
+async def test_new_listing_alert_creates_open_card_even_when_default_is_paused() -> None:
+    client = FakeAstroClient()
+    service = AstroAlertService(
+        client,
+        Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
+        add_restart_delay_seconds=0,
+    )
+
+    result = await service.handle_alert(
+        opportunity().model_copy(
+            update={
+                "symbol": "UNITREEUSDT",
+                "risk_labels": ["NEW_LISTING"],
+            }
+        )
+    )
+
+    assert result.status == "created"
+    assert "已创建开启卡片 UNITREE FF binance->okx，禁开=false" in result.message
+    assert client.added[0]["status"] is True
+    assert client.added[0]["disableOpen"] is False
+
+
+@pytest.mark.asyncio
+async def test_new_listing_alert_uses_new_listing_card_settings() -> None:
+    client = FakeAstroClient()
+    service = AstroAlertService(
+        client,
+        Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
+        card_settings=AstroCardSettings(max_trade_usdt=11, max_notional=11),
+        new_listing_card_settings=AstroCardSettings(
+            max_trade_usdt=45,
+            leverage=4,
+            min_notional=12,
+            max_notional=45,
+            open_enabled=False,
+        ),
+        live_pilot_settings=LivePilotSettings(
+            enabled=True,
+            notional_per_symbol_usdt=100,
+            create_cards_enabled=False,
+        ),
+        add_restart_delay_seconds=0,
+    )
+
+    result = await service.handle_alert(
+        opportunity().model_copy(
+            update={
+                "symbol": "UNITREEUSDT",
+                "risk_labels": ["NEW_LISTING"],
+            }
+        )
+    )
+
+    assert result.status == "created"
+    assert client.added[0]["maxTradeUSDT"] == "45"
+    assert client.added[0]["leverage"] == "4"
+    assert client.added[0]["minNotional"] == "12"
+    assert client.added[0]["maxNotional"] == "45"
+    assert client.added[0]["status"] is True
+    assert client.added[0]["disableOpen"] is False
+
+
+@pytest.mark.asyncio
+async def test_new_listing_alert_only_waits_between_gc_pair_adds(monkeypatch) -> None:
+    sleep_calls: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr("app.services.astro_alerts.asyncio.sleep", fake_sleep)
+    client = FakeAstroClient()
+    service = AstroAlertService(
+        client,
+        Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
+        add_restart_delay_seconds=30,
+    )
+
+    result = await service.handle_new_listing_alert(
+        opportunity().model_copy(update={"risk_labels": ["NEW_LISTING"]})
+    )
+
+    assert result.status == "created"
+    assert len(client.added) == 2
+    assert sleep_calls == [30]
 
 
 @pytest.mark.asyncio
@@ -272,7 +426,7 @@ async def test_alert_create_uses_supplied_astro_card_settings() -> None:
 
 
 @pytest.mark.asyncio
-async def test_live_pilot_alert_create_uses_pilot_notional_and_enabled_card() -> None:
+async def test_live_pilot_experiment_create_uses_pilot_notional_and_enabled_card() -> None:
     client = FakeAstroClient()
     service = AstroAlertService(
         client,
@@ -294,7 +448,7 @@ async def test_live_pilot_alert_create_uses_pilot_notional_and_enabled_card() ->
         add_restart_delay_seconds=0,
     )
 
-    result = await service.handle_alert(opportunity())
+    result = await service.handle_live_pilot(opportunity())
 
     assert result.status == "created"
     assert "已创建开启卡片 BTC FF binance->okx，禁开=false" in result.message
@@ -302,6 +456,36 @@ async def test_live_pilot_alert_create_uses_pilot_notional_and_enabled_card() ->
     assert client.added[0]["disableOpen"] is False
     assert client.added[0]["maxTradeUSDT"] == "100"
     assert client.added[0]["maxNotional"] == "100"
+
+
+@pytest.mark.asyncio
+async def test_live_pilot_experiment_does_not_change_regular_alert_card_defaults() -> None:
+    client = FakeAstroClient()
+    service = AstroAlertService(
+        client,
+        Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
+        card_settings=AstroCardSettings(
+            max_trade_usdt=10,
+            leverage=1,
+            min_notional=10,
+            max_notional=10,
+            open_enabled=False,
+        ),
+        live_pilot_settings=LivePilotSettings(
+            enabled=True,
+            notional_per_symbol_usdt=100,
+            create_cards_enabled=True,
+        ),
+        add_restart_delay_seconds=0,
+    )
+
+    result = await service.handle_alert(opportunity())
+
+    assert result.status == "created"
+    assert client.added[0]["status"] is False
+    assert client.added[0]["disableOpen"] is True
+    assert client.added[0]["maxTradeUSDT"] == "10"
+    assert client.added[0]["maxNotional"] == "10"
 
 
 @pytest.mark.asyncio
@@ -322,19 +506,128 @@ async def test_existing_same_route_pair_is_skipped_without_update() -> None:
     service = AstroAlertService(
         client,
         Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
+        add_restart_delay_seconds=0,
     )
 
     result = await service.handle_alert(opportunity())
 
-    assert not client.added
+    assert [(item["buyEx"], item["sellEx"]) for item in client.added] == [
+        ("gc-binance", "gc-okx")
+    ]
     assert not client.updated
-    assert result.status == "skipped"
-    assert result.action == "existing"
-    assert "已存在卡片" in result.message
+    assert result.status == "created"
+    assert result.action == "add"
+    assert "已存在 binance->okx" in result.message
 
 
 @pytest.mark.asyncio
-async def test_existing_same_name_different_route_is_not_overwritten() -> None:
+async def test_existing_base_and_gc_routes_are_both_skipped_when_variants_allowed() -> None:
+    client = FakeAstroClient(
+        [
+            {"name": "BTC", "type": "FF", "buyEx": "binance", "sellEx": "okx"},
+            {"name": "BTC", "type": "FF", "buyEx": "gc-binance", "sellEx": "gc-okx"},
+        ]
+    )
+    service = AstroAlertService(
+        client,
+        Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
+    )
+    service.allow_same_name_variants = True
+
+    result = await service.handle_alert(opportunity())
+
+    assert not client.added
+    assert result.status == "skipped"
+    assert result.action == "existing"
+    assert "binance->okx、gc-binance->gc-okx" in result.message
+
+
+@pytest.mark.asyncio
+async def test_existing_gc_route_only_backfills_base_route() -> None:
+    client = FakeAstroClient(
+        [
+            {"name": "BTC", "type": "FF", "buyEx": "gc-binance", "sellEx": "gc-okx"},
+        ]
+    )
+    service = AstroAlertService(
+        client,
+        Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
+        add_restart_delay_seconds=0,
+    )
+
+    result = await service.handle_alert(opportunity())
+
+    assert [(item["buyEx"], item["sellEx"]) for item in client.added] == [
+        ("binance", "okx")
+    ]
+    assert result.status == "created"
+    assert "已存在 gc-binance->gc-okx" in result.message
+
+
+@pytest.mark.asyncio
+async def test_bitget_route_creates_plain_and_other_leg_gc_versions() -> None:
+    client = FakeAstroClient()
+    service = AstroAlertService(
+        client,
+        Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
+        add_restart_delay_seconds=0,
+    )
+    bitget_opportunity = opportunity().model_copy(update={"buy_exchange": "bitget"})
+
+    result = await service.handle_alert(bitget_opportunity)
+
+    assert result.status == "created"
+    assert [(item["buyEx"], item["sellEx"]) for item in client.added] == [
+        ("bitget", "okx"),
+        ("bitget", "gc-okx"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_reverse_bitget_route_only_adds_gc_to_other_leg() -> None:
+    client = FakeAstroClient()
+    service = AstroAlertService(
+        client,
+        Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
+        add_restart_delay_seconds=0,
+    )
+    bitget_opportunity = opportunity().model_copy(update={"sell_exchange": "bitget"})
+
+    result = await service.handle_alert(bitget_opportunity)
+
+    assert result.status == "created"
+    assert [(item["buyEx"], item["sellEx"]) for item in client.added] == [
+        ("binance", "bitget"),
+        ("gc-binance", "bitget"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_partial_gc_create_failure_is_reported_after_base_success() -> None:
+    client = FakeAstroClient(
+        add_errors={
+            "gc-binance->gc-okx": AstroClientError("Astro HTTP 503: restarting", 503),
+        }
+    )
+    service = AstroAlertService(
+        client,
+        Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
+        add_restart_delay_seconds=0,
+    )
+
+    result = await service.handle_alert(opportunity())
+
+    assert result.status == "failed"
+    assert result.action == "add_partial"
+    assert [(item["buyEx"], item["sellEx"]) for item in client.added] == [
+        ("binance", "okx")
+    ]
+    assert "已创建 binance->okx" in result.message
+    assert "gc-binance->gc-okx 创建失败" in result.message
+
+
+@pytest.mark.asyncio
+async def test_existing_same_name_different_type_is_not_overwritten() -> None:
     client = FakeAstroClient(
         [
             {
@@ -357,6 +650,89 @@ async def test_existing_same_name_different_route_is_not_overwritten() -> None:
     assert "同名 BTC" in result.message
     assert not client.added
     assert not client.updated
+
+
+@pytest.mark.asyncio
+async def test_existing_same_name_different_type_can_be_created_when_variants_allowed() -> None:
+    client = FakeAstroClient(
+        [
+            {
+                "name": "BTC",
+                "type": "SF",
+                "buyEx": "binance",
+                "sellEx": "okx",
+            }
+        ]
+    )
+    service = AstroAlertService(
+        client,
+        Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
+        add_restart_delay_seconds=0,
+    )
+    service.allow_same_name_variants = True
+
+    result = await service.handle_alert(opportunity())
+
+    assert result.status == "created"
+    assert result.action == "add"
+    assert [(item["buyEx"], item["sellEx"]) for item in client.added] == [
+        ("binance", "okx"),
+        ("gc-binance", "gc-okx"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_existing_same_name_same_type_different_route_is_blocked_by_default() -> None:
+    client = FakeAstroClient(
+        [
+            {
+                "name": "BTC",
+                "type": "FF",
+                "buyEx": "gate",
+                "sellEx": "bybit",
+            }
+        ]
+    )
+    service = AstroAlertService(
+        client,
+        Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
+        add_restart_delay_seconds=0,
+    )
+
+    result = await service.handle_alert(opportunity())
+
+    assert result.status == "skipped"
+    assert result.action == "conflict"
+    assert not client.added
+
+
+@pytest.mark.asyncio
+async def test_existing_same_name_same_type_different_route_can_be_created_when_variants_allowed() -> None:
+    client = FakeAstroClient(
+        [
+            {
+                "name": "BTC",
+                "type": "FF",
+                "buyEx": "gate",
+                "sellEx": "bybit",
+            }
+        ]
+    )
+    service = AstroAlertService(
+        client,
+        Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
+        add_restart_delay_seconds=0,
+    )
+    service.allow_same_name_variants = True
+
+    result = await service.handle_alert(opportunity())
+
+    assert result.status == "created"
+    assert result.action == "add"
+    assert [(item["buyEx"], item["sellEx"]) for item in client.added] == [
+        ("binance", "okx"),
+        ("gc-binance", "gc-okx"),
+    ]
 
 
 @pytest.mark.asyncio

@@ -522,6 +522,7 @@ export function GateTwapPage() {
             columns={planColumns}
             dataSource={plan.slices}
             pagination={{ pageSize: 20, showSizeChanger: true }}
+            scroll={{ x: 780 }}
           />
         </div>
       ) : null}
@@ -534,6 +535,7 @@ export function GateTwapPage() {
           columns={jobColumns}
           dataSource={jobs}
           pagination={{ pageSize: 8 }}
+          scroll={{ x: 980 }}
           expandable={{
             expandedRowRender: (job) => (
               <div className="gate-job-events">

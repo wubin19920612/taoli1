@@ -42,7 +42,7 @@ export const riskLabelOptions = [
   {
     value: "THIN_ORDER_BOOK",
     label: "盘口深度薄",
-    description: "买入侧 ask 和卖出侧 bid 的顶层盘口深度低于配置的验证金额和安全倍数"
+    description: "下单前订单簿校验发现买入侧 ask 或卖出侧 bid 在配置价格带内的累计深度不足"
   },
   {
     value: "EDGE_AFTER_SLIPPAGE_TOO_SMALL",

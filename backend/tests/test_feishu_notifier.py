@@ -116,10 +116,10 @@ def test_build_payload_explains_rule_parameters() -> None:
     assert "连续命中：3 次" in text
     assert "冷却时间：300s" in text
     assert "【行情快照】" in text
-    assert "买入腿：binance future" in text
-    assert "卖出腿：okx future" in text
-    assert "价差对：BTCUSDT | binance future -> okx future" in text
-    assert "方向：买入 binance future BTCUSDT，卖出 okx future BTCUSDT" in text
+    assert "买入腿：binance 合约" in text
+    assert "卖出腿：okx 合约" in text
+    assert "价差对：BTCUSDT | binance 合约 -> okx 合约" in text
+    assert "方向：买入 binance 合约 BTCUSDT，卖出 okx 合约 BTCUSDT" in text
     assert "价差：开仓 0.800% / 平仓 0.500%" in text
     assert "资金费率差（周期）：当前 -0.03% / 预测 0.01%" in text
     assert "结算周期：8h / 8h" in text
@@ -145,6 +145,16 @@ def test_build_payload_can_use_prebuilt_alert_text() -> None:
     assert payload["content"]["text"] == (
         "custom alert\n\nAstro: 已创建暂停卡片 BTC FF binance->okx，禁开=true"
     )
+
+
+@pytest.mark.asyncio
+async def test_notifier_raises_without_creating_http_client_when_webhook_is_missing() -> None:
+    notifier = FeishuNotifier(FeishuConfig(webhook_url=""))
+
+    with pytest.raises(RuntimeError, match="webhook is not configured"):
+        await notifier.send_text("fail")
+
+    assert notifier._client is None
 
 
 def test_alert_message_falls_back_to_current_cycle_when_next_funding_is_missing() -> None:
@@ -236,7 +246,7 @@ def test_build_payload_honors_alert_message_template_blocks() -> None:
     text = payload["content"]["text"]
     assert "【告警触发】" in text
     assert "compact alert" in text
-    assert "价差对：BTCUSDT | binance future -> okx future" in text
+    assert "价差对：BTCUSDT | binance 合约 -> okx 合约" in text
     assert "开仓 0.800%" in text
     assert "【规则参数】" not in text
     assert "资金费率" not in text
@@ -282,7 +292,7 @@ class FakeFeishuOpenClient:
 
 
 class FakeFeishuResponse:
-    def __init__(self, payload: dict):
+    def __init__(self, payload):
         self.payload = payload
 
     def raise_for_status(self) -> None:
@@ -290,6 +300,58 @@ class FakeFeishuResponse:
 
     def json(self) -> dict:
         return self.payload
+
+
+class FakeFeishuWebhookClient:
+    def __init__(self, payload):
+        self.payload = payload
+        self.requests: list[tuple[str, dict]] = []
+
+    async def post(self, url: str, **kwargs):
+        self.requests.append((url, kwargs["json"]))
+        return FakeFeishuResponse(self.payload)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"code": 0, "msg": "success"},
+        {"StatusCode": 0, "StatusMessage": "success"},
+    ],
+)
+async def test_send_text_accepts_successful_webhook_business_response(payload: dict) -> None:
+    client = FakeFeishuWebhookClient(payload)
+    notifier = FeishuNotifier(
+        FeishuConfig(webhook_url="https://open.feishu.cn/open-apis/bot/v2/hook/test"),
+        client=client,
+    )
+
+    await notifier.send_text("test message")
+
+    assert client.requests[0][1] == {
+        "msg_type": "text",
+        "content": {"text": "test message"},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"code": 19002, "msg": "sign match fail"},
+        {"StatusCode": 9499, "StatusMessage": "Bad Request"},
+    ],
+)
+async def test_send_text_raises_on_webhook_business_error(payload: dict) -> None:
+    client = FakeFeishuWebhookClient(payload)
+    notifier = FeishuNotifier(
+        FeishuConfig(webhook_url="https://open.feishu.cn/open-apis/bot/v2/hook/test"),
+        client=client,
+    )
+
+    with pytest.raises(RuntimeError, match="Feishu webhook send text failed"):
+        await notifier.send_text("test message")
 
 
 @pytest.mark.asyncio
