@@ -273,6 +273,10 @@ body {
   font-size: 16px;
 }
 
+.instrument-spread-filters {
+  justify-content: flex-end;
+}
+
 .instrument-market-cell,
 .instrument-funding-cell {
   display: grid;
@@ -480,6 +484,16 @@ body {
 
   .instrument-search-tools > .ant-input-affix-wrapper {
     width: 100%;
+  }
+
+  .instrument-spread-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .instrument-spread-filters {
+    width: 100%;
+    justify-content: flex-start;
   }
 
   .instrument-summary-band {

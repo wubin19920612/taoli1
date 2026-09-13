@@ -276,7 +276,7 @@ describe("InstrumentLookupPage", () => {
     expect(screen.getByText(/人工建卡，仅作风险提示，未拦截创建/)).not.toBeNull();
   });
 
-  it("shows every spread without pagination and sorts by spread type", async () => {
+  it("hides uncommon spread types by default and can reveal and sort every spread", async () => {
     const spreadTypes = ["SF", "FF", "SS", null] as const;
     const manySpreads = Array.from({ length: 13 }, (_, index) => ({
       ...lookupResult.spreads[index % lookupResult.spreads.length],
@@ -293,7 +293,17 @@ describe("InstrumentLookupPage", () => {
     render(<InstrumentLookupPage />);
 
     await screen.findByText("跨市场差价");
+    const ssFilter = screen.getByRole<HTMLInputElement>("checkbox", { name: "SS" });
+    const reverseSfFilter = screen.getByRole<HTMLInputElement>("checkbox", { name: "反向 SF" });
+    expect(ssFilter.checked).toBe(true);
+    expect(reverseSfFilter.checked).toBe(true);
+    expect(screen.getAllByRole("button", { name: /建卡/ })).toHaveLength(7);
+    expect(screen.getByText("7 / 13 组")).not.toBeNull();
+
+    await userEvent.click(ssFilter);
+    await userEvent.click(reverseSfFilter);
     expect(screen.getAllByRole("button", { name: /建卡/ })).toHaveLength(13);
+    expect(screen.getByText("13 / 13 组")).not.toBeNull();
     expect(document.querySelector(".ant-pagination")).toBeNull();
 
     const typeHeader = screen.getByRole("columnheader", { name: /差价类型/ });
@@ -319,6 +329,26 @@ describe("InstrumentLookupPage", () => {
       "SF", "SF", "SF", "SF",
       "FF", "FF", "FF"
     ]);
+  });
+
+  it("sorts buy and sell markets by exchange name", async () => {
+    render(<InstrumentLookupPage />);
+
+    await screen.findByText("跨市场差价");
+    const buyHeader = screen.getByRole("columnheader", { name: /买入市场/ });
+    await userEvent.click(buyHeader);
+    const table = buyHeader.closest("table");
+    const buyMarkets = Array.from(table?.querySelectorAll("tbody tr.ant-table-row") ?? []).map(
+      (row) => row.querySelectorAll("td")[1]?.textContent
+    );
+    expect(buyMarkets).toEqual(["Binance现货", "Binance现货", "OKX永续"]);
+
+    const sellHeader = screen.getByRole("columnheader", { name: /卖出市场/ });
+    await userEvent.click(sellHeader);
+    const sellMarkets = Array.from(table?.querySelectorAll("tbody tr.ant-table-row") ?? []).map(
+      (row) => row.querySelectorAll("td")[3]?.textContent
+    );
+    expect(sellMarkets).toEqual(["Binance永续", "Binance永续", "OKX永续"]);
   });
 
   it("opens the selected market pair in the spread query", async () => {

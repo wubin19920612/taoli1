@@ -87,6 +87,15 @@ type AstroSizingFormValues = Required<Omit<AstroCardCreateRequest, "save_as_defa
   save_as_default: boolean;
 };
 
+type SpreadTypeFilter = "FF" | "SF" | "SS" | "reverse_sf";
+
+const spreadTypeFilterOptions: Array<{ label: string; value: SpreadTypeFilter }> = [
+  { label: "FF", value: "FF" },
+  { label: "SF", value: "SF" },
+  { label: "SS", value: "SS" },
+  { label: "反向 SF", value: "reverse_sf" }
+];
+
 function initialSymbol(): string {
   if (typeof window === "undefined") {
     return "BTC";
@@ -144,6 +153,16 @@ function spreadTypeOrder(value: InstrumentSpreadComparison["opportunity_type"]):
   if (value === "SF") return 1;
   if (value === "SS") return 2;
   return 3;
+}
+
+function spreadTypeFilter(value: InstrumentSpreadComparison["opportunity_type"]): SpreadTypeFilter {
+  return value ?? "reverse_sf";
+}
+
+function exchangeNameOrder(left: string, right: string): number {
+  const leftName = exchangeLabels[left] ?? left;
+  const rightName = exchangeLabels[right] ?? right;
+  return leftName.localeCompare(rightName, "en", { sensitivity: "base" });
 }
 
 type PairSpreadLegRoute = {
@@ -429,6 +448,10 @@ export function InstrumentLookupPage() {
   const [trendType, setTrendType] = useState<MarketType>("future");
   const [trendHours, setTrendHours] = useState(24);
   const [trendCache, setTrendCache] = useState<Record<string, TrendState>>({});
+  const [hiddenSpreadTypes, setHiddenSpreadTypes] = useState<SpreadTypeFilter[]>([
+    "SS",
+    "reverse_sf"
+  ]);
   const [astroSymbol, setAstroSymbol] = useState("");
   const [astroSpread, setAstroSpread] = useState<InstrumentSpreadComparison | null>(null);
   const [astroPlan, setAstroPlan] = useState<AstroPairPlan | null>(null);
@@ -553,6 +576,16 @@ export function InstrumentLookupPage() {
     { spot: 0, future: 0 }
   ) ?? { spot: 0, future: 0 };
   const instrumentSpreads = result?.spreads ?? [];
+  const hiddenSpreadTypeSet = new Set(hiddenSpreadTypes);
+  const visibleInstrumentSpreads = instrumentSpreads.filter(
+    (spread) => !hiddenSpreadTypeSet.has(spreadTypeFilter(spread.opportunity_type))
+  );
+
+  const setSpreadTypeHidden = (type: SpreadTypeFilter, hidden: boolean) => {
+    setHiddenSpreadTypes((current) => hidden
+      ? current.includes(type) ? current : [...current, type]
+      : current.filter((item) => item !== type));
+  };
 
   const openPairSpread = (spread: InstrumentSpreadComparison) => {
     if (!result) return;
@@ -773,6 +806,7 @@ export function InstrumentLookupPage() {
       title: "买入市场",
       key: "buy_market",
       width: 170,
+      sorter: (left, right) => exchangeNameOrder(left.buy_exchange, right.buy_exchange),
       render: (_, spread) => (
         <Space size={6}>
           <Typography.Text strong>{exchangeLabels[spread.buy_exchange] ?? spread.buy_exchange}</Typography.Text>
@@ -791,6 +825,7 @@ export function InstrumentLookupPage() {
       title: "卖出市场",
       key: "sell_market",
       width: 170,
+      sorter: (left, right) => exchangeNameOrder(left.sell_exchange, right.sell_exchange),
       render: (_, spread) => (
         <Space size={6}>
           <Typography.Text strong>{exchangeLabels[spread.sell_exchange] ?? spread.sell_exchange}</Typography.Text>
@@ -939,17 +974,29 @@ export function InstrumentLookupPage() {
 
       {instrumentSpreads.length > 0 ? (
         <section className="instrument-market-table">
-          <div className="instrument-section-head">
+          <div className="instrument-section-head instrument-spread-head">
             <div>
               <Typography.Title level={4}>跨市场差价</Typography.Title>
               <Typography.Text type="secondary">按买入 Ask、卖出 Bid 计算，每组市场保留较优方向</Typography.Text>
             </div>
-            <Tag>{instrumentSpreads.length} 组</Tag>
+            <Space size={[10, 4]} wrap className="instrument-spread-filters">
+              <Typography.Text type="secondary">屏蔽类型</Typography.Text>
+              {spreadTypeFilterOptions.map((option) => (
+                <Checkbox
+                  key={option.value}
+                  checked={hiddenSpreadTypeSet.has(option.value)}
+                  onChange={(event) => setSpreadTypeHidden(option.value, event.target.checked)}
+                >
+                  {option.label}
+                </Checkbox>
+              ))}
+              <Tag>{visibleInstrumentSpreads.length} / {instrumentSpreads.length} 组</Tag>
+            </Space>
           </div>
           <Table<InstrumentSpreadComparison>
             rowKey="id"
             columns={spreadColumns}
-            dataSource={instrumentSpreads}
+            dataSource={visibleInstrumentSpreads}
             pagination={false}
             size="small"
             scroll={{ x: 1160 }}
