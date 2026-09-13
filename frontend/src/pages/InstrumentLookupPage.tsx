@@ -146,6 +146,49 @@ function spreadTypeOrder(value: InstrumentSpreadComparison["opportunity_type"]):
   return 3;
 }
 
+type PairSpreadLegRoute = {
+  symbol: string;
+  dex: string | null;
+};
+
+function pairSpreadLegRoute(
+  result: InstrumentLookupResult,
+  exchange: string,
+  marketType: MarketType
+): PairSpreadLegRoute {
+  const exchangeSnapshot = result.exchanges.find((item) => item.exchange === exchange);
+  const market = marketType === "spot" ? exchangeSnapshot?.spot : exchangeSnapshot?.future;
+  const aliasSymbol = market?.symbol_alias_original_symbol?.trim() || "";
+  const rawSymbol = market?.raw_symbol.trim() || "";
+  if (exchange === "hyperliquid" && marketType === "future") {
+    const separatorIndex = rawSymbol.indexOf(":");
+    if (separatorIndex > 0) {
+      return {
+        symbol: rawSymbol.slice(separatorIndex + 1).trim() || aliasSymbol || result.symbol,
+        dex: rawSymbol.slice(0, separatorIndex).trim().toLowerCase() || "main"
+      };
+    }
+    return {
+      symbol: rawSymbol || aliasSymbol || result.symbol,
+      dex: "main"
+    };
+  }
+  return {
+    symbol: aliasSymbol || rawSymbol || result.symbol,
+    dex: null
+  };
+}
+
+function pairSpreadBlocker(spread: InstrumentSpreadComparison): string | null {
+  const unsupported = [
+    { exchange: spread.buy_exchange, marketType: spread.buy_market_type },
+    { exchange: spread.sell_exchange, marketType: spread.sell_market_type }
+  ].find((leg) => !chartExchanges[leg.marketType].has(leg.exchange));
+  if (!unsupported) return null;
+  const exchange = exchangeLabels[unsupported.exchange] ?? unsupported.exchange;
+  return `价差查询暂不支持 ${exchange} ${marketTypeLabel(unsupported.marketType)}`;
+}
+
 function astroRoute(symbol: string, spread: InstrumentSpreadComparison): AstroInstrumentRouteRequest {
   return {
     symbol,
@@ -511,6 +554,38 @@ export function InstrumentLookupPage() {
   ) ?? { spot: 0, future: 0 };
   const instrumentSpreads = result?.spreads ?? [];
 
+  const openPairSpread = (spread: InstrumentSpreadComparison) => {
+    if (!result) return;
+    const url = new URL(window.location.href);
+    url.searchParams.set("page", "pair-monitor");
+    url.searchParams.delete("symbol");
+    const legs = [
+      pairSpreadLegRoute(result, spread.buy_exchange, spread.buy_market_type),
+      pairSpreadLegRoute(result, spread.sell_exchange, spread.sell_market_type)
+    ];
+    [
+      { exchange: spread.buy_exchange, marketType: spread.buy_market_type },
+      { exchange: spread.sell_exchange, marketType: spread.sell_market_type }
+    ].forEach((leg, index) => {
+      const key = index + 1;
+      const route = legs[index];
+      url.searchParams.set(`leg${key}_exchange`, leg.exchange);
+      url.searchParams.set(`leg${key}_market_type`, leg.marketType);
+      url.searchParams.set(`leg${key}_symbol`, route.symbol);
+      if (route.dex) {
+        url.searchParams.set(`leg${key}_dex`, route.dex);
+      } else {
+        url.searchParams.delete(`leg${key}_dex`);
+      }
+    });
+    url.searchParams.set("leg2_multiplier", "1");
+    url.searchParams.set("hours", "4");
+    url.searchParams.set("interval_seconds", "60");
+    url.searchParams.delete("interval_minutes");
+    window.history.pushState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    window.dispatchEvent(new Event("taoli1:navigate"));
+  };
+
   const closeAstroPreview = () => {
     if (astroSubmitLoading) return;
     astroPreviewRequestIdRef.current += 1;
@@ -761,21 +836,39 @@ export function InstrumentLookupPage() {
       title: "操作",
       key: "action",
       fixed: "right",
-      width: 96,
-      render: (_, spread) => spread.astro_supported ? (
-        <Button
-          size="small"
-          type="primary"
-          icon={<PlusOutlined />}
-          onClick={() => void openAstroPreview(spread)}
-        >
-          建卡
-        </Button>
-      ) : (
-        <Tooltip title={spread.astro_blocker}>
-          <span><Button size="small" icon={<PlusOutlined />} disabled>建卡</Button></span>
-        </Tooltip>
-      )
+      width: 132,
+      render: (_, spread) => {
+        const blocker = pairSpreadBlocker(spread);
+        return (
+          <Space size={4}>
+            <Tooltip title={blocker ?? "在价差查询查看走势图"}>
+              <span>
+                <Button
+                  aria-label={`价差查询 ${result?.symbol ?? ""} ${spread.id}`}
+                  size="small"
+                  icon={<LineChartOutlined />}
+                  disabled={Boolean(blocker)}
+                  onClick={() => openPairSpread(spread)}
+                />
+              </span>
+            </Tooltip>
+            {spread.astro_supported ? (
+              <Button
+                size="small"
+                type="primary"
+                icon={<PlusOutlined />}
+                onClick={() => void openAstroPreview(spread)}
+              >
+                建卡
+              </Button>
+            ) : (
+              <Tooltip title={spread.astro_blocker}>
+                <span><Button size="small" icon={<PlusOutlined />} disabled>建卡</Button></span>
+              </Tooltip>
+            )}
+          </Space>
+        );
+      }
     }
   ];
 

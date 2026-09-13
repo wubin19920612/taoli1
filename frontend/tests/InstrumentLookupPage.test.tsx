@@ -319,6 +319,165 @@ describe("InstrumentLookupPage", () => {
     ]);
   });
 
+  it("opens the selected market pair in the spread query", async () => {
+    window.history.replaceState({}, "", "/?page=instrument&symbol=BTCUSDT&leg1_dex=stale&leg2_dex=stale");
+    const navigate = vi.fn();
+    window.addEventListener("taoli1:navigate", navigate);
+    render(<InstrumentLookupPage />);
+
+    await screen.findByText("跨市场差价");
+    await userEvent.click(screen.getByRole("button", {
+      name: "价差查询 BTCUSDT okx:future->binance:future"
+    }));
+
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("page")).toBe("pair-monitor");
+    expect(params.get("symbol")).toBeNull();
+    expect(params.get("leg1_exchange")).toBe("okx");
+    expect(params.get("leg1_market_type")).toBe("future");
+    expect(params.get("leg1_symbol")).toBe("BTC-USDT-SWAP");
+    expect(params.get("leg1_dex")).toBeNull();
+    expect(params.get("leg2_exchange")).toBe("binance");
+    expect(params.get("leg2_market_type")).toBe("future");
+    expect(params.get("leg2_symbol")).toBe("BTCUSDT");
+    expect(params.get("leg2_dex")).toBeNull();
+    expect(params.get("leg2_multiplier")).toBe("1");
+    expect(params.get("hours")).toBe("4");
+    expect(params.get("interval_seconds")).toBe("60");
+    expect(navigate).toHaveBeenCalledOnce();
+    window.removeEventListener("taoli1:navigate", navigate);
+  });
+
+  it("preserves a Hyperliquid sub-DEX when opening its spread", async () => {
+    const hyperliquidResult = {
+      ...lookupResult,
+      query: "ANTHROPICUSDT",
+      symbol: "ANTHROPICUSDT",
+      base: "ANTHROPIC",
+      exchanges: [
+        {
+          exchange: "hyperliquid",
+          spot: null,
+          future: {
+            ...lookupResult.exchanges[0].future,
+            symbol: "ANTHROPICUSDT",
+            base: "ANTHROPIC",
+            exchange: "hyperliquid",
+            raw_symbol: "io:ANTH",
+            symbol_alias_original_symbol: "ANTHUSDT"
+          },
+          error: null
+        },
+        {
+          exchange: "bitget",
+          spot: null,
+          future: {
+            ...lookupResult.exchanges[0].future,
+            symbol: "ANTHROPICUSDT",
+            base: "ANTHROPIC",
+            exchange: "bitget",
+            raw_symbol: "ANTHROPICUSDT"
+          },
+          error: null
+        }
+      ],
+      spreads: [{
+        ...lookupResult.spreads[0],
+        id: "hyperliquid:future->bitget:future",
+        buy_exchange: "hyperliquid",
+        buy_market_type: "future" as const,
+        sell_exchange: "bitget",
+        sell_market_type: "future" as const
+      }]
+    };
+    (fetch as ReturnType<typeof vi.fn>).mockImplementation(async (input: RequestInfo | URL) => {
+      if (String(input).includes("/instruments/")) return Response.json(hyperliquidResult);
+      return Response.json({});
+    });
+    render(<InstrumentLookupPage />);
+
+    await screen.findByText("跨市场差价");
+    await userEvent.click(screen.getByRole("button", {
+      name: "价差查询 ANTHROPICUSDT hyperliquid:future->bitget:future"
+    }));
+
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("leg1_symbol")).toBe("ANTH");
+    expect(params.get("leg1_dex")).toBe("io");
+    expect(params.get("leg2_symbol")).toBe("ANTHROPICUSDT");
+    expect(params.get("leg2_dex")).toBeNull();
+  });
+
+  it("selects the Hyperliquid main DEX instead of keeping a stale DEX", async () => {
+    window.history.replaceState({}, "", "/?page=instrument&symbol=BTCUSDT&leg1_dex=io");
+    const hyperliquidMainResult = {
+      ...lookupResult,
+      exchanges: [
+        {
+          exchange: "hyperliquid",
+          spot: null,
+          future: {
+            ...lookupResult.exchanges[0].future,
+            exchange: "hyperliquid",
+            raw_symbol: "BTC"
+          },
+          error: null
+        },
+        lookupResult.exchanges[0]
+      ],
+      spreads: [{
+        ...lookupResult.spreads[0],
+        id: "hyperliquid:future->binance:future",
+        buy_exchange: "hyperliquid",
+        buy_market_type: "future" as const
+      }]
+    };
+    (fetch as ReturnType<typeof vi.fn>).mockImplementation(async (input: RequestInfo | URL) => {
+      if (String(input).includes("/instruments/")) return Response.json(hyperliquidMainResult);
+      return Response.json({});
+    });
+    render(<InstrumentLookupPage />);
+
+    await screen.findByText("跨市场差价");
+    await userEvent.click(screen.getByRole("button", {
+      name: "价差查询 BTCUSDT hyperliquid:future->binance:future"
+    }));
+
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("leg1_symbol")).toBe("BTC");
+    expect(params.get("leg1_dex")).toBe("main");
+  });
+
+  it("disables spread queries with unsupported spot legs", async () => {
+    const unsupportedResult = {
+      ...lookupResult,
+      exchanges: lookupResult.exchanges.map((item) => item.exchange === "aster" ? {
+        ...item,
+        spot: {
+          ...lookupResult.exchanges[0].spot,
+          exchange: "aster",
+          raw_symbol: "BTCUSDT"
+        }
+      } : item),
+      spreads: [{
+        ...lookupResult.spreads[0],
+        id: "aster:spot->binance:future",
+        buy_exchange: "aster",
+        buy_market_type: "spot" as const
+      }]
+    };
+    (fetch as ReturnType<typeof vi.fn>).mockImplementation(async (input: RequestInfo | URL) => {
+      if (String(input).includes("/instruments/")) return Response.json(unsupportedResult);
+      return Response.json({});
+    });
+    render(<InstrumentLookupPage />);
+
+    await screen.findByText("跨市场差价");
+    expect(screen.getByRole<HTMLButtonElement>("button", {
+      name: "价差查询 BTCUSDT aster:spot->binance:future"
+    }).disabled).toBe(true);
+  });
+
   it("ignores an older preview response after another route is selected", async () => {
     const pendingPreviews: Array<(response: Response) => void> = [];
     (fetch as ReturnType<typeof vi.fn>).mockImplementation(async (input: RequestInfo | URL) => {
