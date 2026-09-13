@@ -2,6 +2,7 @@ import {
   DeleteOutlined,
   LineChartOutlined,
   ReloadOutlined,
+  PushpinOutlined,
   SaveOutlined,
   SearchOutlined,
   SwapOutlined
@@ -62,6 +63,7 @@ import type {
   PremiumIndexQueryResult
 } from "../api/types";
 import { resolveHistoryIntervalSeconds } from "../constants/queryLimits";
+import { addFloatingWatchPair } from "../utils/floatingWatch";
 
 dayjs.extend(utc);
 
@@ -4126,6 +4128,7 @@ export function PairMonitorPage() {
   const [diagnosticThresholdPct, setDiagnosticThresholdPct] = useState(loadDiagnosticThreshold);
   const [savedPresets, setSavedPresets] = useState<SavedPairSpreadPreset[]>(() => loadSavedPairPresets());
   const [presetSyncError, setPresetSyncError] = useState("");
+  const [watchSaving, setWatchSaving] = useState(false);
   const presetSyncStartedRef = useRef(false);
   const presetMutationVersionRef = useRef(0);
   const [hyperliquidMarkets, setHyperliquidMarkets] = useState<HyperliquidDexMarket[]>([]);
@@ -4942,6 +4945,46 @@ export function PairMonitorPage() {
     }
   };
 
+  const addCurrentPairToWatch = async () => {
+    if (!result) {
+      setPresetSyncError("请先查询交易对，再加入关注浮窗。");
+      return;
+    }
+    setWatchSaving(true);
+    try {
+      const values = pairFormFromResult(result);
+      const preset: SavedPairSpreadPreset = {
+        ...values,
+        id: pairConfigId(values),
+        hours: result.hours,
+        intervalSeconds: resultIntervalSeconds(result),
+        showDayCompare,
+        dayCompareDays: clampDayCompareDays(dayCompareDays),
+        dayCompareMode: dayCompareSettings.mode,
+        dayCompareStartTime: dayCompareSettings.startTime,
+        dayCompareEndTime: dayCompareSettings.endTime,
+        savedAt: new Date().toISOString()
+      };
+      presetMutationVersionRef.current += 1;
+      const savedPreset = normalizeSavedPreset(await upsertPairSpreadPreset(preset));
+      setSavedPresets((currentPresets) => {
+        const next = [
+          savedPreset,
+          ...currentPresets.filter((item) => item.id !== savedPreset.id)
+        ].slice(0, MAX_SAVED_PAIR_PRESETS);
+        storeSavedPairPresets(next);
+        return next;
+      });
+      await addFloatingWatchPair(savedPreset.id);
+      setPresetSyncError("");
+    } catch (exc) {
+      const detail = exc instanceof Error ? exc.message : String(exc);
+      setPresetSyncError(`加入关注浮窗失败：${detail}`);
+    } finally {
+      setWatchSaving(false);
+    }
+  };
+
   const removeSavedPreset = async (id: string) => {
     presetMutationVersionRef.current += 1;
     try {
@@ -5221,6 +5264,14 @@ export function PairMonitorPage() {
               </Button>
               <Button icon={<SaveOutlined />} disabled={loading} onClick={() => void saveCurrentPreset()}>
                 保存
+              </Button>
+              <Button
+                icon={<PushpinOutlined />}
+                loading={watchSaving}
+                disabled={!result || loading}
+                onClick={() => void addCurrentPairToWatch()}
+              >
+                加入浮窗
               </Button>
             </div>
           </div>

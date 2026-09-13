@@ -8,6 +8,8 @@ from app.models.settings import (
     AlertMessageTemplateSettings,
     AstroAutomationSettings,
     AstroCardSettings,
+    FloatingWatchMutation,
+    FloatingWatchSettings,
     LivePilotPreview,
     LivePilotPreviewItem,
     LivePilotSettings,
@@ -32,6 +34,24 @@ def _settings_repo(request: Request) -> SettingsRepository:
     if repo is None:
         raise HTTPException(status_code=503, detail="Settings repository is not ready")
     return repo
+
+
+@router.get("/floating-watch", response_model=FloatingWatchSettings)
+async def get_floating_watch_settings(request: Request) -> FloatingWatchSettings:
+    return await _settings_repo(request).get_floating_watch_settings()
+
+
+@router.post("/floating-watch/items", response_model=FloatingWatchSettings)
+async def mutate_floating_watch_settings(
+    mutation: FloatingWatchMutation,
+    request: Request,
+    password: str | None = Depends(dashboard_password_header),
+) -> FloatingWatchSettings:
+    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
+    try:
+        return await _settings_repo(request).mutate_floating_watch_settings(mutation)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/risk", response_model=RiskSettings)

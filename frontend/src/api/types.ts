@@ -1081,6 +1081,11 @@ export interface PairSpreadPreset {
   savedAt: string;
 }
 
+export interface FloatingWatchSettings {
+  symbols: string[];
+  pair_ids: string[];
+}
+
 export interface HyperliquidMarketAsset {
   raw_symbol: string;
   symbol: string;

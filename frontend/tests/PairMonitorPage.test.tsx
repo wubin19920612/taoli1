@@ -527,6 +527,10 @@ describe("PairMonitorPage", () => {
           fundingRecordWatched = init?.method !== "DELETE";
           return Response.json(pairFundingRecordStatus(fundingRecordWatched));
         }
+        if (url.pathname.endsWith("/settings/floating-watch/items") && init?.method === "POST") {
+          const mutation = JSON.parse(String(init.body)) as { value: string };
+          return Response.json({ symbols: [], pair_ids: [mutation.value] });
+        }
         return Response.json({});
       })
     );
@@ -602,6 +606,28 @@ describe("PairMonitorPage", () => {
     fireEvent.click(closeButton as Element);
     await waitFor(() => expect(serverPresets).toHaveLength(0));
     expect(document.querySelectorAll(".pair-saved-tag")).toHaveLength(0);
+  });
+
+  it("saves and adds the queried pair to the floating watch", async () => {
+    const user = userEvent.setup();
+    render(<PairMonitorPage />);
+
+    await user.click(screen.getByRole("button", { name: /查询/ }));
+    const addButton = screen.getByRole("button", { name: /加入浮窗/ });
+    await waitFor(() => expect(addButton.hasAttribute("disabled")).toBe(false));
+    await user.click(addButton);
+
+    await waitFor(() => {
+      const request = (fetch as ReturnType<typeof vi.fn>).mock.calls.find(
+        ([input, init]) => String(input).includes("/settings/floating-watch/items") && init?.method === "POST"
+      );
+      const mutation = JSON.parse(String(request?.[1]?.body)) as Record<string, unknown>;
+      expect(mutation).toEqual({
+        action: "add",
+        item_type: "pair",
+        value: serverPresets[0]?.id
+      });
+    });
   });
 
   it("keeps local presets visible when the server sync fails", async () => {

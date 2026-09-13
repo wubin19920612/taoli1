@@ -203,6 +203,9 @@ describe("InstrumentLookupPage", () => {
             warnings: ["订单簿深度不足；本次为人工建卡，仅作风险提示，未拦截创建"]
           });
         }
+        if (url.includes("/settings/floating-watch/items") && init?.method === "POST") {
+          return Response.json({ symbols: ["BTCUSDT"], pair_ids: [] });
+        }
         if (url.includes("/pair-spread/symbol-query")) return Response.json(trendResult);
         if (url.includes("/instruments/")) return Response.json(lookupResult);
         return Response.json({});
@@ -225,6 +228,24 @@ describe("InstrumentLookupPage", () => {
     expect(screen.getAllByText("Binance").length).toBeGreaterThan(0);
     expect(screen.getAllByText("暂无数据").length).toBeGreaterThan(0);
     expect(String((fetch as ReturnType<typeof vi.fn>).mock.calls[0][0])).toContain("/instruments/BTCUSDT");
+  });
+
+  it("adds the current symbol to the floating watch", async () => {
+    render(<InstrumentLookupPage />);
+    await screen.findByText("BTC / USDT");
+
+    await userEvent.click(screen.getByRole("button", { name: /加入浮窗/ }));
+
+    await waitFor(() => {
+      const request = (fetch as ReturnType<typeof vi.fn>).mock.calls.find(
+        ([input, init]) => String(input).includes("/settings/floating-watch/items") && init?.method === "POST"
+      );
+      expect(JSON.parse(String(request?.[1]?.body))).toEqual({
+        action: "add",
+        item_type: "symbol",
+        value: "BTCUSDT"
+      });
+    });
   });
 
   it("loads trend history only after the section is expanded", async () => {

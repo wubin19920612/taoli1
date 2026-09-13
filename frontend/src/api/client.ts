@@ -22,6 +22,7 @@ import type {
   FundingResearchPaperTrade,
   FundingResearchPaperTradeSummary,
   FundingResearchRunResult,
+  FloatingWatchSettings,
   FatFingerBacktestRequest,
   FatFingerBacktestResult,
   GateTwapJobStatus,
@@ -166,6 +167,33 @@ export function listMarkets(filters: MarketFilters = {}): Promise<MarketSnapshot
 
 export function lookupInstrument(symbol: string): Promise<InstrumentLookupResult> {
   return fetchJson<InstrumentLookupResult>(`/instruments/${encodeURIComponent(symbol)}`);
+}
+
+export async function getFloatingWatchSettings(): Promise<FloatingWatchSettings> {
+  const value = await fetchJson<unknown>("/settings/floating-watch");
+  if (!value || typeof value !== "object") {
+    return { symbols: [], pair_ids: [] };
+  }
+  const candidate = value as Partial<FloatingWatchSettings>;
+  return {
+    symbols: Array.isArray(candidate.symbols)
+      ? candidate.symbols.filter((item): item is string => typeof item === "string")
+      : [],
+    pair_ids: Array.isArray(candidate.pair_ids)
+      ? candidate.pair_ids.filter((item): item is string => typeof item === "string")
+      : []
+  };
+}
+
+export async function mutateFloatingWatchItem(
+  action: "add" | "remove",
+  itemType: "symbol" | "pair",
+  value: string
+): Promise<FloatingWatchSettings> {
+  return fetchJson<FloatingWatchSettings>("/settings/floating-watch/items", {
+    method: "POST",
+    body: JSON.stringify({ action, item_type: itemType, value })
+  });
 }
 
 export async function getHealth(): Promise<HealthStatus> {

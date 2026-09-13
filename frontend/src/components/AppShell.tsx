@@ -14,6 +14,7 @@ import {
   NotificationOutlined,
   NodeIndexOutlined,
   OrderedListOutlined,
+  PushpinOutlined,
   RadarChartOutlined,
   SearchOutlined,
   StockOutlined,
@@ -33,6 +34,10 @@ import {
   type LazyExoticComponent,
   type ReactNode
 } from "react";
+
+import { FloatingWatchPanel } from "./FloatingWatchPanel";
+import { getFloatingWatchSettings } from "../api/client";
+import { FLOATING_WATCH_UPDATED_EVENT } from "../utils/floatingWatch";
 
 type PageKey =
   | "dashboard"
@@ -161,6 +166,7 @@ const lazyPages: Record<PageKey, LazyPage> = {
 const pageKeys = Object.keys(lazyPages) as PageKey[];
 const appearanceModeStorageKey = "taoli1:appearance-mode";
 const navigationOrderStorageKey = "taoli1:navigation-order.v1";
+const floatingWatchVisibleStorageKey = "taoli1:floating-watch-visible.v1";
 
 const defaultNavigationItems: NavigationItem[] = [
   { key: "dashboard", icon: <DashboardOutlined />, label: "实时机会" },
@@ -305,6 +311,9 @@ export function AppShell() {
   const [draftNavigationOrder, setDraftNavigationOrder] = useState<PageKey[]>(initialNavigationOrder);
   const [navigationOrderOpen, setNavigationOrderOpen] = useState(false);
   const [draggingPage, setDraggingPage] = useState<PageKey | null>(null);
+  const [floatingWatchVisible, setFloatingWatchVisible] = useState(
+    () => window.localStorage.getItem(floatingWatchVisibleStorageKey) === "1"
+  );
   const CurrentPage = useMemo(() => lazyPages[page], [page]);
   const navigationItems = useMemo(
     () => navigationOrder.map((key) => navigationItemsByKey.get(key)).filter((item): item is NavigationItem => Boolean(item)),
@@ -341,6 +350,29 @@ export function AppShell() {
       window.removeEventListener("popstate", syncPageFromUrl);
       window.removeEventListener("taoli1:navigate", syncPageFromUrl);
     };
+  }, []);
+
+  useEffect(() => {
+    const showFloatingWatch = () => {
+      setFloatingWatchVisible(true);
+      window.localStorage.setItem(floatingWatchVisibleStorageKey, "1");
+    };
+    window.addEventListener(FLOATING_WATCH_UPDATED_EVENT, showFloatingWatch);
+    return () => window.removeEventListener(FLOATING_WATCH_UPDATED_EVENT, showFloatingWatch);
+  }, []);
+
+  useEffect(() => {
+    if (window.localStorage.getItem(floatingWatchVisibleStorageKey) !== null) return;
+    void getFloatingWatchSettings()
+      .then((settings) => {
+        if (settings.symbols.length + settings.pair_ids.length > 0) {
+          setFloatingWatchVisible(true);
+          window.localStorage.setItem(floatingWatchVisibleStorageKey, "1");
+        }
+      })
+      .catch(() => {
+        // The header button remains available when the initial sync is unavailable.
+      });
   }, []);
 
   return (
@@ -380,19 +412,35 @@ export function AppShell() {
         <Layout>
           <Layout.Header className="app-header">
             <Typography.Title level={3}>{quietMode ? "数据工作台" : "CEX 套利雷达"}</Typography.Title>
-            <Tooltip title="切换显示配色">
-              <Segmented
-                className="appearance-switch"
-                size="small"
-                aria-label="显示配色"
-                value={appearanceMode}
-                options={[
-                  { label: "低调", value: "quiet", icon: <EyeInvisibleOutlined /> },
-                  { label: "原配色", value: "standard", icon: <BgColorsOutlined /> }
-                ]}
-                onChange={(value) => setAppearanceMode(value as AppearanceMode)}
-              />
-            </Tooltip>
+            <Space className="app-header-tools" size={10}>
+              <Tooltip title={floatingWatchVisible ? "隐藏关注浮窗" : "打开关注浮窗"}>
+                <Button
+                  aria-label={floatingWatchVisible ? "隐藏关注浮窗" : "打开关注浮窗"}
+                  type={floatingWatchVisible ? "primary" : "default"}
+                  icon={<PushpinOutlined />}
+                  onClick={() => {
+                    const next = !floatingWatchVisible;
+                    setFloatingWatchVisible(next);
+                    window.localStorage.setItem(floatingWatchVisibleStorageKey, next ? "1" : "0");
+                  }}
+                >
+                  关注
+                </Button>
+              </Tooltip>
+              <Tooltip title="切换显示配色">
+                <Segmented
+                  className="appearance-switch"
+                  size="small"
+                  aria-label="显示配色"
+                  value={appearanceMode}
+                  options={[
+                    { label: "低调", value: "quiet", icon: <EyeInvisibleOutlined /> },
+                    { label: "原配色", value: "standard", icon: <BgColorsOutlined /> }
+                  ]}
+                  onChange={(value) => setAppearanceMode(value as AppearanceMode)}
+                />
+              </Tooltip>
+            </Space>
           </Layout.Header>
           <Layout.Content className="app-content">
             <Suspense
@@ -499,6 +547,13 @@ export function AppShell() {
             })}
           </ol>
         </Modal>
+        <FloatingWatchPanel
+          visible={floatingWatchVisible}
+          onClose={() => {
+            setFloatingWatchVisible(false);
+            window.localStorage.setItem(floatingWatchVisibleStorageKey, "0");
+          }}
+        />
       </Layout>
     </ConfigProvider>
   );

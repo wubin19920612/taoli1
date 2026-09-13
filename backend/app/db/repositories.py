@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime
 
@@ -36,6 +37,10 @@ from app.models.settings import (
     AlertMessageTemplateSettings,
     AstroAutomationSettings,
     AstroCardSettings,
+    FloatingWatchMutation,
+    FloatingWatchSettings,
+    MAX_FLOATING_WATCH_PAIRS,
+    MAX_FLOATING_WATCH_SYMBOLS,
     LivePilotSettings,
     MinuteSignalSettings,
     RiskSettings,
@@ -1070,6 +1075,50 @@ class OilNewsRepository:
 class SettingsRepository:
     def __init__(self, db: aiosqlite.Connection):
         self.db = db
+        self._floating_watch_lock = asyncio.Lock()
+
+    async def get_floating_watch_settings(self) -> FloatingWatchSettings:
+        cursor = await self.db.execute(
+            "SELECT payload FROM app_settings WHERE key = ?",
+            ("floating_watch",),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return FloatingWatchSettings()
+        return FloatingWatchSettings.model_validate(json.loads(row["payload"]))
+
+    async def mutate_floating_watch_settings(
+        self,
+        mutation: FloatingWatchMutation,
+    ) -> FloatingWatchSettings:
+        async with self._floating_watch_lock:
+            settings = await self.get_floating_watch_settings()
+            symbols = list(settings.symbols)
+            pair_ids = list(settings.pair_ids)
+            target = symbols if mutation.item_type == "symbol" else pair_ids
+            limit = (
+                MAX_FLOATING_WATCH_SYMBOLS
+                if mutation.item_type == "symbol"
+                else MAX_FLOATING_WATCH_PAIRS
+            )
+            if mutation.action == "add" and mutation.value not in target:
+                if len(target) >= limit:
+                    item_label = "标的" if mutation.item_type == "symbol" else "交易对"
+                    raise ValueError(f"浮窗最多关注 {limit} 个{item_label}")
+                target.append(mutation.value)
+            elif mutation.action == "remove":
+                target[:] = [item for item in target if item != mutation.value]
+            updated = FloatingWatchSettings(symbols=symbols, pair_ids=pair_ids)
+            await self.db.execute(
+                """
+                INSERT INTO app_settings (key, payload)
+                VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
+                """,
+                ("floating_watch", updated.model_dump_json()),
+            )
+            await self.db.commit()
+            return updated
 
     async def get_risk_settings(self) -> RiskSettings:
         cursor = await self.db.execute("SELECT payload FROM app_settings WHERE key = ?", ("risk",))

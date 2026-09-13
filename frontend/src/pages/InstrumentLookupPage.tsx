@@ -2,6 +2,7 @@ import {
   DownOutlined,
   LineChartOutlined,
   PlusOutlined,
+  PushpinOutlined,
   ReloadOutlined,
   RightOutlined,
   SearchOutlined,
@@ -52,6 +53,7 @@ import type {
   SymbolSpreadQueryResult
 } from "../api/types";
 import { resolveHistoryIntervalSeconds } from "../constants/queryLimits";
+import { addFloatingWatchSymbol } from "../utils/floatingWatch";
 
 dayjs.extend(utc);
 
@@ -442,6 +444,7 @@ export function InstrumentLookupPage() {
   const [result, setResult] = useState<InstrumentLookupResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [watchSaving, setWatchSaving] = useState(false);
   const [error, setError] = useState("");
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [trendOpen, setTrendOpen] = useState(false);
@@ -504,6 +507,15 @@ export function InstrumentLookupPage() {
   useEffect(() => {
     void runLookup(startingSymbol);
   }, [runLookup, startingSymbol]);
+
+  useEffect(() => {
+    const handleNavigation = () => {
+      const next = new URLSearchParams(window.location.search).get("symbol");
+      if (next && normalizeSymbol(next) !== activeSymbol) void runLookup(next);
+    };
+    window.addEventListener("taoli1:navigate", handleNavigation);
+    return () => window.removeEventListener("taoli1:navigate", handleNavigation);
+  }, [activeSymbol, runLookup]);
 
   useEffect(() => {
     if (!autoRefresh || !activeSymbol) return undefined;
@@ -585,6 +597,19 @@ export function InstrumentLookupPage() {
     setHiddenSpreadTypes((current) => hidden
       ? current.includes(type) ? current : [...current, type]
       : current.filter((item) => item !== type));
+  };
+
+  const addCurrentSymbolToWatch = async () => {
+    if (!result) return;
+    setWatchSaving(true);
+    try {
+      await addFloatingWatchSymbol(result.symbol);
+      message.success(`${result.base} 已加入关注浮窗`);
+    } catch (exc) {
+      message.error(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setWatchSaving(false);
+    }
   };
 
   const openPairSpread = (spread: InstrumentSpreadComparison) => {
@@ -939,6 +964,14 @@ export function InstrumentLookupPage() {
             disabled={loading}
           />
           <Button type="primary" icon={<SearchOutlined />} loading={loading} onClick={() => void runLookup(query)}>查询</Button>
+          <Button
+            icon={<PushpinOutlined />}
+            loading={watchSaving}
+            disabled={!result || loading}
+            onClick={() => void addCurrentSymbolToWatch()}
+          >
+            加入浮窗
+          </Button>
           <Tooltip title="立即刷新"><Button aria-label="立即刷新" icon={<ReloadOutlined spin={refreshing} />} disabled={!activeSymbol || loading} onClick={() => void runLookup(activeSymbol, true)} /></Tooltip>
           <Space size={6}><Switch size="small" checked={autoRefresh} onChange={setAutoRefresh} /><Typography.Text type="secondary">自动刷新</Typography.Text></Space>
         </div>

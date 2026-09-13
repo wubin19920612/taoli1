@@ -1,3 +1,5 @@
+from typing import Any, Literal
+
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.models.market import MarketType
@@ -12,6 +14,9 @@ DEFAULT_HIDDEN_RISK_LABELS = [
     "TRANSIENT_SIGNAL",
 ]
 
+MAX_FLOATING_WATCH_SYMBOLS = 12
+MAX_FLOATING_WATCH_PAIRS = 12
+
 
 def _normalize_alias_symbol(value: str) -> str:
     normalized = value.strip().upper().replace("_", "-").replace("/", "-")
@@ -21,6 +26,59 @@ def _normalize_alias_symbol(value: str) -> str:
     if not compact:
         raise ValueError("symbol is required")
     return compact if compact.endswith("USDT") else f"{compact}USDT"
+
+
+class FloatingWatchSettings(BaseModel):
+    symbols: list[str] = Field(default_factory=list, max_length=MAX_FLOATING_WATCH_SYMBOLS)
+    pair_ids: list[str] = Field(default_factory=list, max_length=MAX_FLOATING_WATCH_PAIRS)
+
+    @field_validator("symbols", mode="before")
+    @classmethod
+    def normalize_symbols(cls, value: Any) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        normalized: list[str] = []
+        for item in value:
+            if not isinstance(item, str) or not item.strip():
+                continue
+            symbol = _normalize_alias_symbol(item)
+            if symbol not in normalized:
+                normalized.append(symbol)
+        return normalized
+
+    @field_validator("pair_ids", mode="before")
+    @classmethod
+    def normalize_pair_ids(cls, value: Any) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        normalized: list[str] = []
+        for item in value:
+            pair_id = item.strip() if isinstance(item, str) else ""
+            if len(pair_id) > 512:
+                raise ValueError("pair id must not exceed 512 characters")
+            if pair_id and pair_id not in normalized:
+                normalized.append(pair_id)
+        return normalized
+
+
+class FloatingWatchMutation(BaseModel):
+    action: Literal["add", "remove"]
+    item_type: Literal["symbol", "pair"]
+    value: str = Field(min_length=1, max_length=512)
+
+    @model_validator(mode="after")
+    def normalize_value(self) -> "FloatingWatchMutation":
+        normalized = (
+            _normalize_alias_symbol(self.value)
+            if self.item_type == "symbol"
+            else self.value.strip()
+        )
+        if not normalized:
+            raise ValueError("watch item value is required")
+        if self.item_type == "symbol" and len(normalized) > 128:
+            raise ValueError("symbol must not exceed 128 characters")
+        self.value = normalized
+        return self
 
 
 class SymbolAlias(BaseModel):
