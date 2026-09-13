@@ -168,8 +168,8 @@ async def _refresh_astro_runtime_settings(app: FastAPI, settings_repo: SettingsR
         astro_alert_service.live_pilot_settings = LivePilotSettings()
         if fallback_automation is not None:
             astro_alert_service.alert_auto_create_enabled = fallback_automation.alert_auto_create
-            astro_alert_service.allow_same_name_different_type = (
-                fallback_automation.allow_same_name_different_type
+            astro_alert_service.allow_same_name_variants = (
+                fallback_automation.allow_same_name_variants
             )
         return
     find_settings = getattr(settings_repo, "find_astro_card_settings", None)
@@ -190,13 +190,13 @@ async def _refresh_astro_runtime_settings(app: FastAPI, settings_repo: SettingsR
     stored_automation = await find_automation() if find_automation is not None else None
     if stored_automation is not None:
         astro_alert_service.alert_auto_create_enabled = stored_automation.alert_auto_create
-        astro_alert_service.allow_same_name_different_type = (
-            stored_automation.allow_same_name_different_type
+        astro_alert_service.allow_same_name_variants = (
+            stored_automation.allow_same_name_variants
         )
     elif fallback_automation is not None:
         astro_alert_service.alert_auto_create_enabled = fallback_automation.alert_auto_create
-        astro_alert_service.allow_same_name_different_type = (
-            fallback_automation.allow_same_name_different_type
+        astro_alert_service.allow_same_name_variants = (
+            fallback_automation.allow_same_name_variants
         )
     get_live_pilot_settings = getattr(settings_repo, "get_live_pilot_settings", None)
     astro_alert_service.live_pilot_settings = (

@@ -701,7 +701,7 @@ export interface AlertMessageTemplateSettings {
 
 export interface AstroAutomationSettings {
   alert_auto_create: boolean;
-  allow_same_name_different_type: boolean;
+  allow_same_name_variants: boolean;
 }
 
 export interface AlertRule {

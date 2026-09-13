@@ -125,8 +125,8 @@ class AstroAlertService:
         self.new_listing_card_settings = new_listing_card_settings or settings.astro_new_listing_card_settings
         self.live_pilot_settings = live_pilot_settings or LivePilotSettings()
         self.alert_auto_create_enabled = settings.astro_alert_auto_create
-        self.allow_same_name_different_type = (
-            settings.astro_automation_settings.allow_same_name_different_type
+        self.allow_same_name_variants = (
+            settings.astro_automation_settings.allow_same_name_variants
         )
         self.add_restart_delay_seconds = add_restart_delay_seconds
         self.risk_settings_loader = risk_settings_loader
@@ -260,15 +260,15 @@ class AstroAlertService:
         conflicting_pairs = [
             existing
             for existing in same_name_pairs
-            if existing.get("type") != pair_type
+            if not any(_same_route(existing, planned) for planned in pair_variants)
         ]
-        if conflicting_pairs and not self.allow_same_name_different_type:
+        if conflicting_pairs and not self.allow_same_name_variants:
             return AstroAlertActionResult(
                 enabled=True,
                 status="skipped",
                 action="conflict",
                 message=(
-                    f"已跳过，Astro 已存在同名 {pair_name} 但类型不同："
+                    f"已跳过，Astro 已存在同名 {pair_name} 但类型或交易所不同："
                     f"{_routes(conflicting_pairs)}"
                 ),
                 pair_name=pair_name,

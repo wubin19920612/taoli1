@@ -460,7 +460,7 @@ export function SettingsPage() {
     templateForm.setFieldsValue(defaultAlertMessageTemplate);
     astroAutomationForm.setFieldsValue({
       alert_auto_create: false,
-      allow_same_name_different_type: false
+      allow_same_name_variants: false
     });
     livePilotForm.setFieldsValue(defaultLivePilotSettings);
     astroCardForm.setFieldsValue(defaultAstroCardSettings);
@@ -937,10 +937,10 @@ export function SettingsPage() {
             <Switch checkedChildren="开启" unCheckedChildren="关闭" />
           </Form.Item>
           <Form.Item
-            label="允许同名不同类型卡片"
-            name="allow_same_name_different_type"
+            label="允许同名不同类型或路线卡片"
+            name="allow_same_name_variants"
             valuePropName="checked"
-            help="开启后，同名但类型不同的卡片也会继续创建；名称、类型和交易所路线完全相同时仍会跳过。"
+            help="开启后，同名但类型或交易所路线不同的卡片会继续创建；名称、类型和路线完全相同时仍会跳过。"
           >
             <Switch checkedChildren="允许" unCheckedChildren="跳过" />
           </Form.Item>
