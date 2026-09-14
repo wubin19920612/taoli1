@@ -148,6 +148,7 @@ const astroPairs = [
     bExPosition: 400,
     avgOpenAExPrice: 190,
     avgOpenBExPrice: 21,
+    profit: -1.3,
     realizedProfit: 10
   },
   {
@@ -348,11 +349,12 @@ describe("FloatingWatchPanel", () => {
     expect(within(panel).getByText("仅平仓")).not.toBeNull();
     expect(await within(panel).findByText("开 10.1005 / 平 9.9005")).not.toBeNull();
     expect(within(panel).getByText("开 9.70443 / 平 9.7912")).not.toBeNull();
-    expect(within(panel).getAllByText("8,000.00 U")).toHaveLength(2);
-    expect(within(panel).getByText("16,000.00 U")).not.toBeNull();
-    expect(within(panel).getByText("+720.00 U")).not.toBeNull();
+    expect(within(panel).getByText("7,600 U")).not.toBeNull();
+    expect(within(panel).getByText("8,400 U")).not.toBeNull();
+    expect(within(panel).getByText("-1.30 U")).not.toBeNull();
     expect(within(panel).getByText("+10.00 U")).not.toBeNull();
-    expect(within(panel).getByText("+730.00 U")).not.toBeNull();
+    expect(within(panel).queryByText("+720.00 U")).toBeNull();
+    expect(within(panel).queryByText("+730.00 U")).toBeNull();
     expect(within(panel).getByText("开 +0.995% / 平 +2.985%")).not.toBeNull();
     expect(within(panel).getByText("开 0.003 / 平 -0.0015")).not.toBeNull();
     expect(within(panel).queryByText("STEEM")).toBeNull();

@@ -394,6 +394,11 @@ body {
   color: #9a5b13;
 }
 
+.floating-watch-astro-profit-note {
+  margin-top: 3px;
+  color: #9a5b13;
+}
+
 .floating-watch-astro-metrics {
   display: grid;
   grid-column: 1 / -1;

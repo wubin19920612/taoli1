@@ -1640,6 +1640,7 @@ export interface AstroPairStatus {
   avgCloseAExPrice?: string | number | null;
   avgCloseBExPrice?: string | number | null;
   positionRate?: string | number | null;
+  profit?: string | number | null;
   realizedProfit?: string | number | null;
   aHlDex?: string | null;
   bHlDex?: string | null;
