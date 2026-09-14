@@ -323,6 +323,66 @@ body {
   cursor: default;
 }
 
+.floating-watch-astro-row {
+  grid-template-columns: minmax(0, 1fr);
+  min-height: 76px;
+}
+
+.floating-watch-astro-row-main {
+  padding: 8px 4px;
+  cursor: default;
+}
+
+.floating-watch-astro-row-main:hover {
+  background: transparent;
+}
+
+.floating-watch-astro-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.floating-watch-astro-title > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.floating-watch-astro-type {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  color: #52615c;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  background: #edf2f0;
+  border: 1px solid #d8e1de;
+  border-radius: 4px;
+}
+
+.floating-watch-astro-position {
+  margin-top: 1px;
+  color: #52615c;
+}
+
+.floating-watch-astro-state {
+  font-size: 12px;
+}
+
+.floating-watch-astro-state-positive {
+  color: #0f766e;
+}
+
+.floating-watch-astro-state-neutral {
+  color: #2563eb;
+}
+
+.floating-watch-astro-state-warning {
+  color: #9a5b13;
+}
+
 .floating-watch-footer {
   text-align: right;
 }

@@ -132,6 +132,49 @@ const pairResult = {
   warnings: []
 };
 
+const astroPairs = [
+  {
+    id: "active-position",
+    name: "ANTHROPIC-ANTHROPIC",
+    type: "FR",
+    status: true,
+    disableOpen: false,
+    disableClose: false,
+    buyEx: "bitget",
+    sellEx: "gc-okx",
+    openPosition: 9.704433,
+    closePosition: 9.791203,
+    aExPosition: 0.04,
+    bExPosition: 0.477,
+    realizedProfit: 1.25
+  },
+  {
+    id: "active-close-only",
+    name: "OPENAI",
+    type: "FF",
+    status: true,
+    disableOpen: true,
+    disableClose: false,
+    buyEx: "gc-binance",
+    sellEx: "gc-gate",
+    openPosition: "0.0030",
+    closePosition: "-0.0015",
+    aExPosition: 0,
+    bExPosition: 0,
+    realizedProfit: 0
+  },
+  {
+    id: "paused",
+    name: "STEEM",
+    type: "FF",
+    status: false,
+    disableOpen: true,
+    disableClose: false,
+    buyEx: "gate",
+    sellEx: "bybit"
+  }
+];
+
 describe("FloatingWatchPanel", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -158,6 +201,7 @@ describe("FloatingWatchPanel", () => {
         return Response.json(settings);
       }
       if (url.includes("/settings/floating-watch")) return Response.json(settings);
+      if (url.includes("/astro/pairs")) return Response.json(astroPairs);
       if (url.includes("/pair-spread/presets")) return Response.json([preset]);
       if (url.includes("/pair-spread/query")) return Response.json(pairResult);
       if (url.includes("/instruments/")) return Response.json(instrument);
@@ -203,6 +247,21 @@ describe("FloatingWatchPanel", () => {
       item_type: "symbol",
       value: "BTCUSDT"
     });
+  });
+
+  it("shows only running Astro cards with runtime and position status", async () => {
+    render(<FloatingWatchPanel visible onClose={vi.fn()} />);
+    const panel = await screen.findByRole("complementary", { name: "关注浮窗" });
+
+    await userEvent.click(await within(panel).findByText("Astro 2"));
+
+    expect(await within(panel).findByText("ANTHROPIC-ANTHROPIC")).not.toBeNull();
+    expect(within(panel).getByText("持仓中")).not.toBeNull();
+    expect(within(panel).getByText("仅平仓")).not.toBeNull();
+    expect(within(panel).getByText("bitget → gc-okx · 开 9.70443 / 平 9.7912")).not.toBeNull();
+    expect(within(panel).getByText("仓位 0.04 / 0.477 · 已实现 1.25")).not.toBeNull();
+    expect(within(panel).queryByText("STEEM")).toBeNull();
+    expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("/astro/pairs"))).toBe(true);
   });
 
   it("opens a dedicated watch window and closes the embedded panel", async () => {

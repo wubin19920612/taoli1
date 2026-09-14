@@ -13,12 +13,14 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 
 import {
   getFloatingWatchSettings,
+  listAstroPairs,
   listPairSpreadPresets,
   lookupInstrument,
   queryPairSpread
 } from "../api/client";
 import type {
   FloatingWatchSettings,
+  AstroPairStatus,
   InstrumentLookupResult,
   MarketSnapshot,
   PairSpreadPreset,
@@ -49,7 +51,7 @@ const exchangeLabels: Record<string, string> = {
   okx: "OKX"
 };
 
-type WatchMode = "symbols" | "pairs";
+type WatchMode = "symbols" | "pairs" | "astro";
 type SavedPosition = { left: number; top: number };
 type InstrumentState = { result: InstrumentLookupResult | null; error: string };
 type PairState = { result: PairSpreadQueryResult | null; error: string };
@@ -112,7 +114,7 @@ function price(value: number | null | undefined): string {
   if (absolute >= 10_000) return value.toLocaleString("en-US", { maximumFractionDigits: 2 });
   if (absolute >= 100) return value.toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
   if (absolute >= 1) return value.toFixed(5).replace(/0+$/, "").replace(/\.$/, "");
-  return value.toPrecision(6);
+  return value.toPrecision(6).replace(/0+$/, "").replace(/\.$/, "");
 }
 
 function signedPct(value: number | null | undefined): string {
@@ -123,6 +125,36 @@ function signedPct(value: number | null | undefined): string {
 function tone(value: number | null | undefined): string {
   if (typeof value !== "number" || !Number.isFinite(value)) return "neutral";
   return value > 0 ? "positive" : value < 0 ? "negative" : "neutral";
+}
+
+function finiteNumber(value: unknown): number | null {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value !== "string" || value.trim() === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function astroValue(value: unknown): string {
+  const parsed = finiteNumber(value);
+  if (parsed !== null) return price(parsed);
+  return typeof value === "string" && value.trim() ? value : "-";
+}
+
+function astroHasPosition(pair: AstroPairStatus): boolean {
+  return [pair.aExPosition, pair.bExPosition].some((value) => {
+    const parsed = finiteNumber(value);
+    return parsed !== null && Math.abs(parsed) > 0;
+  });
+}
+
+function astroRuntimeState(pair: AstroPairStatus): { label: string; tone: "positive" | "neutral" | "warning" } {
+  if (astroHasPosition(pair) && pair.disableClose) return { label: "持仓·禁平", tone: "warning" };
+  if (astroHasPosition(pair) && pair.disableOpen) return { label: "持仓·禁开", tone: "warning" };
+  if (astroHasPosition(pair)) return { label: "持仓中", tone: "positive" };
+  if (pair.disableOpen && pair.disableClose) return { label: "已锁定", tone: "warning" };
+  if (pair.disableOpen) return { label: "仅平仓", tone: "warning" };
+  if (pair.disableClose) return { label: "仅开仓", tone: "warning" };
+  return { label: "监控中", tone: "neutral" };
 }
 
 function marketLabel(value: string): string {
@@ -212,8 +244,10 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
   const [presets, setPresets] = useState<PairSpreadPreset[]>([]);
   const [instruments, setInstruments] = useState<Record<string, InstrumentState>>({});
   const [pairs, setPairs] = useState<Record<string, PairState>>({});
+  const [astroPairs, setAstroPairs] = useState<AstroPairStatus[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [astroError, setAstroError] = useState("");
   const [removing, setRemoving] = useState("");
   const panelRef = useRef<HTMLElement | null>(null);
   const refreshQueue = useRef<Promise<void>>(Promise.resolve());
@@ -222,6 +256,12 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
     const run = async () => {
       setLoading(true);
       try {
+        const astroResultPromise = listAstroPairs()
+          .then((items) => ({ items, error: "" }))
+          .catch((caught) => ({
+            items: null,
+            error: caught instanceof Error ? caught.message : String(caught)
+          }));
         const nextSettings = await getFloatingWatchSettings();
         setSettings(nextSettings);
         if (requestedMode === "symbols") {
@@ -237,7 +277,7 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
             }
           );
           setInstruments(Object.fromEntries(instrumentEntries));
-        } else {
+        } else if (requestedMode === "pairs") {
           const allPresets = await listPairSpreadPresets();
           const watchedPresets = nextSettings.pair_ids
             .map((id) => allPresets.find((preset) => preset.id === id))
@@ -270,6 +310,9 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
           setPresets(watchedPresets);
           setPairs(Object.fromEntries(pairEntries));
         }
+        const astroResult = await astroResultPromise;
+        if (astroResult.items) setAstroPairs(astroResult.items);
+        setAstroError(astroResult.error);
         setError("");
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : String(caught));
@@ -334,6 +377,10 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
   const missingPairIds = useMemo(
     () => settings.pair_ids.filter((id) => !presets.some((preset) => preset.id === id)),
     [presets, settings.pair_ids]
+  );
+  const runningAstroPairs = useMemo(
+    () => astroPairs.filter((pair) => pair.status === true),
+    [astroPairs]
   );
 
   if (!visible) return null;
@@ -491,12 +538,18 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
             value={mode}
             options={[
               { label: `标的 ${settings.symbols.length}`, value: "symbols" },
-              { label: `交易对 ${settings.pair_ids.length}`, value: "pairs" }
+              { label: `交易对 ${settings.pair_ids.length}`, value: "pairs" },
+              { label: `Astro ${runningAstroPairs.length}`, value: "astro" }
             ]}
             onChange={(value) => setMode(value as WatchMode)}
           />
           {error ? <Alert type="warning" showIcon message={error} /> : null}
-          {loading && settings.symbols.length + settings.pair_ids.length === 0 ? <Spin className="floating-watch-loading" /> : null}
+          {mode === "astro" && astroError ? <Alert type="warning" showIcon message={`Astro 卡片读取失败：${astroError}`} /> : null}
+          {loading && (
+            (mode === "symbols" && settings.symbols.length === 0)
+            || (mode === "pairs" && settings.pair_ids.length === 0)
+            || (mode === "astro" && runningAstroPairs.length === 0)
+          ) ? <Spin className="floating-watch-loading" /> : null}
           {mode === "symbols" ? (
             <div className="floating-watch-list">
               {settings.symbols.map((symbol) => {
@@ -528,7 +581,7 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
               })}
               {!loading && settings.symbols.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有关注标的" /> : null}
             </div>
-          ) : (
+          ) : mode === "pairs" ? (
             <div className="floating-watch-list">
               {presets.map((preset) => {
                 const state = pairs[preset.id];
@@ -566,9 +619,45 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
               ))}
               {!loading && settings.pair_ids.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有关注交易对" /> : null}
             </div>
+          ) : (
+            <div className="floating-watch-list">
+              {runningAstroPairs.map((pair, index) => {
+                const runtime = astroRuntimeState(pair);
+                const aPosition = finiteNumber(pair.aExPosition) ?? 0;
+                const bPosition = finiteNumber(pair.bExPosition) ?? 0;
+                const realizedProfit = finiteNumber(pair.realizedProfit);
+                const hasPosition = astroHasPosition(pair);
+                const route = `${pair.buyEx || "-"} → ${pair.sellEx || "-"}`;
+                return (
+                  <div className="floating-watch-row floating-watch-astro-row" key={pair.id || `${pair.name || "astro"}-${index}`}>
+                    <div className="floating-watch-row-main floating-watch-astro-row-main">
+                      <span className="floating-watch-row-title floating-watch-astro-title" title={pair.name || "未命名卡片"}>
+                        <span>{pair.name || "未命名卡片"}</span>
+                        <span className="floating-watch-astro-type">{pair.type || "-"}</span>
+                      </span>
+                      <span className={`floating-watch-value floating-watch-astro-state floating-watch-astro-state-${runtime.tone}`}>
+                        {runtime.label}
+                      </span>
+                      <span className="floating-watch-row-sub" title={route}>
+                        {route} · 开 {astroValue(pair.openPosition)} / 平 {astroValue(pair.closePosition)}
+                      </span>
+                      <span className="floating-watch-row-sub floating-watch-astro-position">
+                        {hasPosition ? `仓位 ${price(aPosition)} / ${price(bPosition)}` : "无持仓"}
+                        {realizedProfit !== null ? ` · 已实现 ${price(realizedProfit)}` : ""}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+              {!loading && !astroError && runningAstroPairs.length === 0 ? (
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有正在运行的 Astro 卡片" />
+              ) : null}
+            </div>
           )}
           <div className="floating-watch-footer">
-            <Typography.Text type="secondary">每 10 秒刷新 · 点击行查看详情</Typography.Text>
+            <Typography.Text type="secondary">
+              {mode === "astro" ? "每 10 秒同步 Astro 运行状态" : "每 10 秒刷新 · 点击行查看详情"}
+            </Typography.Text>
           </div>
         </div>
       ) : null}

@@ -11,6 +11,7 @@ import type {
   AstroInstrumentRouteRequest,
   AstroCardSettings,
   AstroNewListingCardSettings,
+  AstroPairStatus,
   AstroPairPlan,
   AstroSdkStatus,
   FundingArbitragePreview,
@@ -1378,8 +1379,12 @@ export async function createInstrumentAstroCard(
   });
 }
 
-export async function listAstroPairs(): Promise<Record<string, unknown>[]> {
-  return fetchJson<Record<string, unknown>[]>("/astro/pairs");
+export async function listAstroPairs(): Promise<AstroPairStatus[]> {
+  const value = await fetchJson<unknown>("/astro/pairs");
+  if (!Array.isArray(value)) throw new Error("Astro 卡片列表格式无效");
+  return value.filter(
+    (item): item is AstroPairStatus => typeof item === "object" && item !== null && !Array.isArray(item)
+  );
 }
 
 export function saveDashboardPassword(password: string): void {

@@ -1622,6 +1622,28 @@ export interface AstroActionResult {
   warnings?: string[];
 }
 
+export interface AstroPairStatus {
+  id?: string;
+  name?: string;
+  type?: string;
+  status?: boolean;
+  disableOpen?: boolean;
+  disableClose?: boolean;
+  buyEx?: string;
+  sellEx?: string;
+  openPosition?: string | number | null;
+  closePosition?: string | number | null;
+  aExPosition?: string | number | null;
+  bExPosition?: string | number | null;
+  positionRate?: string | number | null;
+  realizedProfit?: string | number | null;
+  maxTradeUSDT?: string | number | null;
+  leverage?: string | number | null;
+  minNotional?: string | number | null;
+  maxNotional?: string | number | null;
+  [key: string]: unknown;
+}
+
 export interface AstroSdkStatus {
   configured: boolean;
   dry_run_only: boolean;
