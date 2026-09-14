@@ -1685,70 +1685,17 @@ body {
 
 .pair-query-bar {
   display: grid;
-  grid-template-columns:
-    minmax(112px, 0.66fr)
-    minmax(76px, 0.38fr)
-    minmax(168px, 1fr)
-    minmax(112px, 0.66fr)
-    minmax(76px, 0.38fr)
-    minmax(92px, 0.5fr)
-    minmax(108px, 0.58fr)
-    minmax(68px, 0.36fr)
-    minmax(264px, 1.3fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   align-items: start;
 }
 
 .pair-query-bar-same-symbol {
-  grid-template-columns:
-    minmax(168px, 1.08fr)
-    minmax(0, 2fr)
-    minmax(92px, 0.5fr)
-    minmax(108px, 0.58fr)
-    minmax(68px, 0.36fr)
-    minmax(264px, 1.3fr);
-}
-
-.pair-query-bar-same-symbol.pair-query-bar-custom-interval {
-  grid-template-columns:
-    minmax(168px, 1fr)
-    minmax(0, 2fr)
-    minmax(92px, 0.5fr)
-    minmax(108px, 0.58fr)
-    minmax(120px, 0.64fr)
-    minmax(68px, 0.36fr)
-    minmax(264px, 1.3fr);
+  grid-template-columns: minmax(180px, 0.5fr) minmax(440px, 1.35fr) minmax(320px, 0.75fr);
 }
 
 .pair-query-bar-custom-symbol {
-  grid-template-columns:
-    minmax(112px, 0.66fr)
-    minmax(76px, 0.38fr)
-    minmax(168px, 1fr)
-    minmax(112px, 0.66fr)
-    minmax(76px, 0.38fr)
-    minmax(168px, 1fr)
-    minmax(148px, 0.78fr)
-    minmax(92px, 0.5fr)
-    minmax(108px, 0.58fr)
-    minmax(68px, 0.36fr)
-    minmax(264px, 1.3fr);
-}
-
-.pair-query-bar-custom-symbol.pair-query-bar-custom-interval {
-  grid-template-columns:
-    minmax(112px, 0.66fr)
-    minmax(76px, 0.38fr)
-    minmax(168px, 1fr)
-    minmax(112px, 0.66fr)
-    minmax(76px, 0.38fr)
-    minmax(168px, 1fr)
-    minmax(148px, 0.78fr)
-    minmax(92px, 0.5fr)
-    minmax(108px, 0.58fr)
-    minmax(120px, 0.64fr)
-    minmax(68px, 0.36fr)
-    minmax(164px, 0.86fr);
+  grid-template-columns: minmax(460px, 1fr) minmax(540px, 1.16fr) minmax(320px, 0.68fr);
 }
 
 .pair-query-bar .ant-form-item {
@@ -1765,12 +1712,84 @@ body {
   border-radius: 6px;
 }
 
-.pair-query-contract .ant-input-group-addon,
-.pair-query-multiplier .ant-input-number-group-addon {
-  min-width: 64px;
-  color: #24352f;
-  font-weight: 600;
-  background: #f8faf9;
+.pair-query-field {
+  display: grid;
+  align-content: end;
+  gap: 4px;
+  min-width: 0;
+}
+
+.pair-query-field-label {
+  overflow: hidden;
+  color: #6a7974;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pair-query-leg-group,
+.pair-query-range-group {
+  min-width: 0;
+  height: 100%;
+  margin: 0;
+  padding: 4px 9px 9px;
+  border: 1px solid #dfe7e3;
+  border-radius: 6px;
+  background: #fbfcfc;
+}
+
+.pair-query-leg-group legend,
+.pair-query-range-group legend {
+  width: auto;
+  margin: 0 0 0 2px;
+  padding: 0 6px;
+  color: #344740;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.pair-query-leg-fields,
+.pair-query-range-fields {
+  display: grid;
+  align-items: end;
+  gap: 7px;
+  min-width: 0;
+}
+
+.pair-query-leg-fields {
+  grid-template-columns: minmax(112px, 1fr) minmax(78px, 0.62fr) minmax(140px, 1.12fr);
+}
+
+.pair-query-leg-fields-with-dex {
+  grid-template-columns: minmax(112px, 1fr) minmax(78px, 0.62fr) minmax(120px, 0.94fr) minmax(140px, 1.12fr);
+}
+
+.pair-query-leg-fields-right {
+  grid-template-columns: minmax(112px, 1fr) minmax(78px, 0.62fr) minmax(140px, 1.12fr) minmax(78px, 0.56fr);
+}
+
+.pair-query-leg-fields-right.pair-query-leg-fields-with-dex {
+  grid-template-columns:
+    minmax(112px, 1fr)
+    minmax(78px, 0.62fr)
+    minmax(112px, 0.92fr)
+    minmax(130px, 1.08fr)
+    minmax(78px, 0.56fr);
+}
+
+.pair-query-range-fields {
+  grid-template-columns: minmax(72px, 0.58fr) minmax(112px, 1fr) auto;
+}
+
+.pair-query-bar-custom-interval .pair-query-range-fields {
+  grid-template-columns: minmax(72px, 0.58fr) minmax(112px, 1fr) minmax(96px, 0.8fr) auto;
+}
+
+.pair-query-primary-symbol {
+  padding-top: 6px;
 }
 
 .pair-query-multiplier .ant-input-number-group-wrapper,
@@ -1794,15 +1813,21 @@ body {
 .pair-query-refresh {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   min-height: 34px;
+}
+
+.pair-query-refresh-field {
+  justify-items: start;
 }
 
 .pair-query-actions {
   display: grid;
+  grid-column: 1 / -1;
   grid-template-columns: repeat(3, minmax(82px, 1fr));
   gap: 8px;
   min-width: 0;
+  width: min(100%, 360px);
 }
 
 .pair-query-options {
@@ -4649,6 +4674,17 @@ body {
   min-width: 0;
 }
 
+@media (max-width: 1600px) {
+  .pair-query-bar-same-symbol,
+  .pair-query-bar-custom-symbol {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .pair-query-range-group {
+    grid-column: 1 / -1;
+  }
+}
+
 @media (max-width: 1500px) {
   .negative-basis-form-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -4666,8 +4702,13 @@ body {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
-  .pair-query-bar {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+  .pair-query-bar-same-symbol,
+  .pair-query-bar-custom-symbol {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .pair-query-range-group {
+    grid-column: 1 / -1;
   }
 
   .pair-query-actions {
@@ -4688,6 +4729,12 @@ body {
 
   .premium-query-actions {
     grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 1400px) {
+  .pair-query-bar-custom-symbol {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -5422,6 +5469,10 @@ body {
     padding: 12px;
   }
 
+  .pair-monitor-page {
+    padding-top: 44px;
+  }
+
   .new-listing-layout {
     grid-template-columns: 1fr;
   }
@@ -5516,10 +5567,11 @@ body {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .pair-query-bar,
+  .pair-query-bar-same-symbol,
+  .pair-query-bar-custom-symbol,
   .symbol-spread-query-bar,
   .premium-query-bar {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .pair-query-actions,
@@ -5664,7 +5716,7 @@ body {
 
   .pair-query-bar,
   .premium-query-bar {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .pair-query-actions,
@@ -5828,6 +5880,19 @@ body {
   .symbol-spread-query-bar,
   .premium-query-bar {
     grid-template-columns: 1fr;
+  }
+
+  .pair-query-leg-fields,
+  .pair-query-leg-fields-with-dex,
+  .pair-query-leg-fields-right,
+  .pair-query-leg-fields-right.pair-query-leg-fields-with-dex,
+  .pair-query-range-fields,
+  .pair-query-bar-custom-interval .pair-query-range-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .pair-query-field-symbol {
+    grid-column: 1 / -1;
   }
 
   .pair-position-stats {

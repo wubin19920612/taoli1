@@ -5106,6 +5106,8 @@ export function PairMonitorPage() {
     }
   }, [dayCompareRangeTag, dayCompareSettings, hours, intervalSeconds, result]);
   const sameSymbolMode = pairSymbolMode === "same";
+  const leg1UsesDex = isHyperliquidFuture(watchedLeg1Exchange, watchedLeg1MarketType);
+  const leg2UsesDex = isHyperliquidFuture(watchedLeg2Exchange, watchedLeg2MarketType);
   const queryBarClassName = [
     "pair-query-bar",
     sameSymbolMode ? "pair-query-bar-same-symbol" : "pair-query-bar-custom-symbol",
@@ -5126,13 +5128,16 @@ export function PairMonitorPage() {
           <div className={queryBarClassName}>
             {sameSymbolMode ? (
               <>
-                <Form.Item name="leg1_symbol" rules={[{ required: true, message: "请输入标的" }]} className="pair-query-contract">
-                  <Input
-                    addonBefore="标的"
-                    placeholder="SKHY"
-                    list={isHyperliquidFuture(watchedLeg1Exchange, watchedLeg1MarketType) ? "pair-hyperliquid-assets-leg1" : undefined}
-                  />
-                </Form.Item>
+                <div className="pair-query-field pair-query-primary-symbol">
+                  <Typography.Text className="pair-query-field-label">标的</Typography.Text>
+                  <Form.Item name="leg1_symbol" rules={[{ required: true, message: "请输入标的" }]} className="pair-query-contract">
+                    <Input
+                      aria-label="标的"
+                      placeholder="SKHY"
+                      list={leg1UsesDex ? "pair-hyperliquid-assets-leg1" : undefined}
+                    />
+                  </Form.Item>
+                </div>
                 <div className="pair-query-venues">
                   <div className="pair-query-venue">
                     <Typography.Text className="pair-query-venue-label">左交易所</Typography.Text>
@@ -5142,7 +5147,7 @@ export function PairMonitorPage() {
                     <Form.Item name="leg1_market_type" rules={[{ required: true }]} className="pair-query-market-type">
                       <Select options={marketTypeOptions} />
                     </Form.Item>
-                    {isHyperliquidFuture(watchedLeg1Exchange, watchedLeg1MarketType) ? (
+                    {leg1UsesDex ? (
                       <Form.Item name="leg1_dex" className="pair-query-dex">
                         <Select options={hyperliquidDexOptions} showSearch placeholder="选择 DEX" />
                       </Form.Item>
@@ -5156,7 +5161,7 @@ export function PairMonitorPage() {
                     <Form.Item name="leg2_market_type" rules={[{ required: true }]} className="pair-query-market-type">
                       <Select options={marketTypeOptions} />
                     </Form.Item>
-                    {isHyperliquidFuture(watchedLeg2Exchange, watchedLeg2MarketType) ? (
+                    {leg2UsesDex ? (
                       <Form.Item name="leg2_dex" className="pair-query-dex">
                         <Select options={hyperliquidDexOptions} showSearch placeholder="选择 DEX" />
                       </Form.Item>
@@ -5166,49 +5171,86 @@ export function PairMonitorPage() {
               </>
             ) : (
               <>
-                <Form.Item name="leg1_exchange" rules={[{ required: true }]} className="pair-query-item">
-                  <Select options={exchangeOptions} showSearch />
-                </Form.Item>
-                <Form.Item name="leg1_market_type" rules={[{ required: true }]} className="pair-query-market-type">
-                  <Select options={marketTypeOptions} />
-                </Form.Item>
-                {isHyperliquidFuture(watchedLeg1Exchange, watchedLeg1MarketType) ? (
-                  <Form.Item name="leg1_dex" className="pair-query-dex">
-                    <Select options={hyperliquidDexOptions} showSearch placeholder="选择 DEX" />
-                  </Form.Item>
-                ) : null}
-                <Form.Item name="leg1_symbol" rules={[{ required: true, message: "请输入左标的" }]} className="pair-query-contract">
-                  <Input
-                    addonBefore="左标的"
-                    placeholder="SKHY"
-                    list={isHyperliquidFuture(watchedLeg1Exchange, watchedLeg1MarketType) ? "pair-hyperliquid-assets-leg1" : undefined}
-                  />
-                </Form.Item>
-                <Form.Item name="leg2_exchange" rules={[{ required: true }]} className="pair-query-item">
-                  <Select options={exchangeOptions} showSearch />
-                </Form.Item>
-                <Form.Item name="leg2_market_type" rules={[{ required: true }]} className="pair-query-market-type">
-                  <Select options={marketTypeOptions} />
-                </Form.Item>
-                {isHyperliquidFuture(watchedLeg2Exchange, watchedLeg2MarketType) ? (
-                  <Form.Item name="leg2_dex" className="pair-query-dex">
-                    <Select options={hyperliquidDexOptions} showSearch placeholder="选择 DEX" />
-                  </Form.Item>
-                ) : null}
-                <Form.Item name="leg2_symbol" rules={[{ required: true, message: "请输入右标的" }]} className="pair-query-contract">
-                  <Input
-                    addonBefore="右标的"
-                    placeholder="SKHYNIX"
-                    list={isHyperliquidFuture(watchedLeg2Exchange, watchedLeg2MarketType) ? "pair-hyperliquid-assets-leg2" : undefined}
-                  />
-                </Form.Item>
-                <Form.Item
-                  name="leg2_multiplier"
-                  rules={[{ required: true, type: "number", min: 0.000001, message: "倍率必须大于0" }]}
-                  className="pair-query-multiplier"
-                >
-                  <InputNumber addonBefore="右侧倍率" min={0.000001} step={1} />
-                </Form.Item>
+                <fieldset className="pair-query-leg-group pair-query-leg-group-left">
+                  <legend>左腿</legend>
+                  <div className={`pair-query-leg-fields${leg1UsesDex ? " pair-query-leg-fields-with-dex" : ""}`}>
+                    <div className="pair-query-field">
+                      <Typography.Text className="pair-query-field-label">交易所</Typography.Text>
+                      <Form.Item name="leg1_exchange" rules={[{ required: true }]} className="pair-query-item">
+                        <Select aria-label="左侧交易所" options={exchangeOptions} showSearch />
+                      </Form.Item>
+                    </div>
+                    <div className="pair-query-field">
+                      <Typography.Text className="pair-query-field-label">市场</Typography.Text>
+                      <Form.Item name="leg1_market_type" rules={[{ required: true }]} className="pair-query-market-type">
+                        <Select aria-label="左侧市场" options={marketTypeOptions} />
+                      </Form.Item>
+                    </div>
+                    {leg1UsesDex ? (
+                      <div className="pair-query-field">
+                        <Typography.Text className="pair-query-field-label">DEX</Typography.Text>
+                        <Form.Item name="leg1_dex" className="pair-query-dex">
+                          <Select aria-label="左侧 DEX" options={hyperliquidDexOptions} showSearch placeholder="选择 DEX" />
+                        </Form.Item>
+                      </div>
+                    ) : null}
+                    <div className="pair-query-field pair-query-field-symbol">
+                      <Typography.Text className="pair-query-field-label">标的</Typography.Text>
+                      <Form.Item name="leg1_symbol" rules={[{ required: true, message: "请输入左标的" }]} className="pair-query-contract">
+                        <Input
+                          aria-label="左侧标的"
+                          placeholder="SKHY"
+                          list={leg1UsesDex ? "pair-hyperliquid-assets-leg1" : undefined}
+                        />
+                      </Form.Item>
+                    </div>
+                  </div>
+                </fieldset>
+                <fieldset className="pair-query-leg-group pair-query-leg-group-right">
+                  <legend>右腿</legend>
+                  <div className={`pair-query-leg-fields pair-query-leg-fields-right${leg2UsesDex ? " pair-query-leg-fields-with-dex" : ""}`}>
+                    <div className="pair-query-field">
+                      <Typography.Text className="pair-query-field-label">交易所</Typography.Text>
+                      <Form.Item name="leg2_exchange" rules={[{ required: true }]} className="pair-query-item">
+                        <Select aria-label="右侧交易所" options={exchangeOptions} showSearch />
+                      </Form.Item>
+                    </div>
+                    <div className="pair-query-field">
+                      <Typography.Text className="pair-query-field-label">市场</Typography.Text>
+                      <Form.Item name="leg2_market_type" rules={[{ required: true }]} className="pair-query-market-type">
+                        <Select aria-label="右侧市场" options={marketTypeOptions} />
+                      </Form.Item>
+                    </div>
+                    {leg2UsesDex ? (
+                      <div className="pair-query-field">
+                        <Typography.Text className="pair-query-field-label">DEX</Typography.Text>
+                        <Form.Item name="leg2_dex" className="pair-query-dex">
+                          <Select aria-label="右侧 DEX" options={hyperliquidDexOptions} showSearch placeholder="选择 DEX" />
+                        </Form.Item>
+                      </div>
+                    ) : null}
+                    <div className="pair-query-field pair-query-field-symbol">
+                      <Typography.Text className="pair-query-field-label">标的</Typography.Text>
+                      <Form.Item name="leg2_symbol" rules={[{ required: true, message: "请输入右标的" }]} className="pair-query-contract">
+                        <Input
+                          aria-label="右侧标的"
+                          placeholder="SKHYNIX"
+                          list={leg2UsesDex ? "pair-hyperliquid-assets-leg2" : undefined}
+                        />
+                      </Form.Item>
+                    </div>
+                    <div className="pair-query-field pair-query-field-multiplier">
+                      <Typography.Text className="pair-query-field-label">倍率</Typography.Text>
+                      <Form.Item
+                        name="leg2_multiplier"
+                        rules={[{ required: true, type: "number", min: 0.000001, message: "倍率必须大于0" }]}
+                        className="pair-query-multiplier"
+                      >
+                        <InputNumber aria-label="右侧倍率" min={0.000001} step={1} />
+                      </Form.Item>
+                    </div>
+                  </div>
+                </fieldset>
               </>
             )}
             <datalist id="pair-hyperliquid-assets-leg1">
@@ -5217,47 +5259,70 @@ export function PairMonitorPage() {
             <datalist id="pair-hyperliquid-assets-leg2">
               {leg2HyperliquidAssets.map((asset) => <option key={asset} value={asset} />)}
             </datalist>
-            <InputNumber
-              addonBefore="小时"
-              className="pair-query-hours"
-              min={1}
-              precision={0}
-              step={1}
-              value={hours}
-              onChange={(value) => setHours(clampHours(value))}
-            />
-            <Select
-              className="pair-query-select"
-              value={customInterval ? CUSTOM_INTERVAL_VALUE : intervalSelectValue(intervalSeconds)}
-              options={[
-                ...intervalOptions,
-                { label: "自定义", value: CUSTOM_INTERVAL_VALUE }
-              ]}
-              onChange={(value) => {
-                if (value === CUSTOM_INTERVAL_VALUE) {
-                  setCustomInterval(true);
-                } else {
-                  setCustomInterval(false);
-                  setIntervalSeconds(value);
-                }
-              }}
-            />
-            {customInterval ? (
-              <InputNumber
-                addonBefore="自定义秒"
-                aria-label="自定义秒"
-                className="pair-query-custom-interval"
-                min={5}
-                max={86_400}
-                precision={0}
-                step={1}
-                value={intervalSeconds}
-                onChange={(value) => setIntervalSeconds(clampIntervalSeconds(value))}
-              />
-            ) : null}
-            <Form.Item className="pair-query-refresh">
-              <Switch checked={autoRefresh} checkedChildren="自动" unCheckedChildren="手动" onChange={setAutoRefresh} />
-            </Form.Item>
+            <fieldset className="pair-query-range-group">
+              <legend>查询范围</legend>
+              <div className="pair-query-range-fields">
+                <div className="pair-query-field">
+                  <Typography.Text className="pair-query-field-label">小时</Typography.Text>
+                  <InputNumber
+                    aria-label="查询小时"
+                    className="pair-query-hours"
+                    min={1}
+                    precision={0}
+                    step={1}
+                    value={hours}
+                    onChange={(value) => setHours(clampHours(value))}
+                  />
+                </div>
+                <div className="pair-query-field">
+                  <Typography.Text className="pair-query-field-label">采样</Typography.Text>
+                  <Select
+                    aria-label="采样间隔"
+                    className="pair-query-select"
+                    value={customInterval ? CUSTOM_INTERVAL_VALUE : intervalSelectValue(intervalSeconds)}
+                    options={[
+                      ...intervalOptions,
+                      { label: "自定义", value: CUSTOM_INTERVAL_VALUE }
+                    ]}
+                    onChange={(value) => {
+                      if (value === CUSTOM_INTERVAL_VALUE) {
+                        setCustomInterval(true);
+                      } else {
+                        setCustomInterval(false);
+                        setIntervalSeconds(value);
+                      }
+                    }}
+                  />
+                </div>
+                {customInterval ? (
+                  <div className="pair-query-field">
+                    <Typography.Text className="pair-query-field-label">自定义秒</Typography.Text>
+                    <InputNumber
+                      aria-label="自定义秒"
+                      className="pair-query-custom-interval"
+                      min={5}
+                      max={86_400}
+                      precision={0}
+                      step={1}
+                      value={intervalSeconds}
+                      onChange={(value) => setIntervalSeconds(clampIntervalSeconds(value))}
+                    />
+                  </div>
+                ) : null}
+                <div className="pair-query-field pair-query-refresh-field">
+                  <Typography.Text className="pair-query-field-label">刷新</Typography.Text>
+                  <Form.Item className="pair-query-refresh">
+                    <Switch
+                      aria-label="自动刷新"
+                      checked={autoRefresh}
+                      checkedChildren="自动"
+                      unCheckedChildren="手动"
+                      onChange={setAutoRefresh}
+                    />
+                  </Form.Item>
+                </div>
+              </div>
+            </fieldset>
             <div className="pair-query-actions">
               <Button type="primary" icon={<SearchOutlined />} loading={loading} onClick={() => void runQuery()}>
                 查询
