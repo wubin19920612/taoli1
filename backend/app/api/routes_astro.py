@@ -384,8 +384,9 @@ async def _create_astro_card(
     saved_settings, settings_warnings = await _manual_astro_card_settings(request)
     warnings.extend(settings_warnings)
     effective_settings = _settings_with_create_overrides(saved_settings, card_request)
+    settings_for_service = saved_settings if not settings_warnings else None
     if card_request is not None and card_request.save_as_default:
-        saved_settings = saved_settings.model_copy(
+        requested_default_settings = saved_settings.model_copy(
             update={
                 "max_trade_usdt": effective_settings.max_trade_usdt,
                 "leverage": effective_settings.leverage,
@@ -396,25 +397,32 @@ async def _create_astro_card(
         )
         if settings_repo is not None:
             try:
-                await settings_repo.set_astro_card_settings(saved_settings)
+                await settings_repo.set_astro_card_settings(requested_default_settings)
+                settings_for_service = requested_default_settings
             except Exception:  # noqa: BLE001 - the requested card can still be created.
                 warnings.append(
                     _manual_override_warning(
                         "保存 Astro 默认建卡设置失败，本次卡片仍使用当前填写的参数"
                     )
                 )
+        else:
+            settings_for_service = requested_default_settings
     service = getattr(request.app.state, "astro_alert_service", None)
     if service is None:
         raise HTTPException(status_code=503, detail="Astro submit service is not ready")
-    if hasattr(service, "card_settings"):
-        service.card_settings = saved_settings
+    if hasattr(service, "card_settings") and settings_for_service is not None:
+        service.card_settings = settings_for_service
     depth_failure = await _validate_order_book_before_create(
         request,
         opportunity,
         risk_settings,
         effective_settings,
     )
-    result = await service.handle_manual_create(opportunity, card_request)
+    result = await service.handle_manual_create(
+        opportunity,
+        card_request,
+        card_settings=effective_settings,
+    )
     if depth_failure is not None:
         warnings.append(
             _manual_override_warning(_format_depth_validation_message(depth_failure))

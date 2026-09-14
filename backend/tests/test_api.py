@@ -337,7 +337,12 @@ class FakeAstroSubmitService:
         self.requests: list[object] = []
         self.card_settings = AstroCardSettings()
 
-    async def handle_manual_create(self, opportunity: Opportunity, card_request=None):
+    async def handle_manual_create(
+        self,
+        opportunity: Opportunity,
+        card_request=None,
+        card_settings=None,
+    ):
         self.calls.append(opportunity)
         self.requests.append(card_request)
         from app.models.astro import AstroAlertActionResult

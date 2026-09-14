@@ -160,12 +160,14 @@ class AstroAlertService:
         self,
         opportunity: Opportunity,
         card_request: AstroCardCreateRequest | None = None,
+        card_settings: AstroCardSettings | None = None,
     ) -> AstroAlertActionResult:
         return await self._handle(
             opportunity,
             enabled=self.settings.astro_manual_card_create,
             disabled_message="Manual card creation is disabled.",
             card_request=card_request,
+            card_settings_override=card_settings,
             manual_override=True,
         )
 
@@ -175,6 +177,7 @@ class AstroAlertService:
         enabled: bool,
         disabled_message: str,
         card_request: AstroCardCreateRequest | None = None,
+        card_settings_override: AstroCardSettings | None = None,
         live_pilot: bool = False,
         auto_open_new_listing: bool = False,
         add_restart_delay_seconds: float | None = None,
@@ -239,7 +242,13 @@ class AstroAlertService:
             )
 
         use_new_listing_settings = auto_open_new_listing and is_new_listing_opportunity(opportunity)
-        base_card_settings = self.new_listing_card_settings if use_new_listing_settings else self.card_settings
+        base_card_settings = (
+            card_settings_override
+            if card_settings_override is not None
+            else self.new_listing_card_settings
+            if use_new_listing_settings
+            else self.card_settings
+        )
         effective_card_settings = _settings_with_create_overrides(base_card_settings, card_request)
         if use_new_listing_settings:
             effective_card_settings = effective_card_settings.model_copy(update={"open_enabled": True})

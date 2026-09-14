@@ -47,12 +47,14 @@ class FakeAstroSubmitService:
     def __init__(self) -> None:
         self.calls = []
         self.requests = []
+        self.settings_requests = []
         self.card_settings = AstroCardSettings()
         self.risk_settings_loader = None
 
-    async def handle_manual_create(self, opportunity, card_request):
+    async def handle_manual_create(self, opportunity, card_request, card_settings=None):
         self.calls.append(opportunity)
         self.requests.append(card_request)
+        self.settings_requests.append(card_settings)
         return AstroAlertActionResult(
             enabled=True,
             status="created",
@@ -94,6 +96,14 @@ class FailingRiskSettingsRepository(RiskSettingsRepository):
 
     async def find_astro_card_settings(self):
         raise RuntimeError("database unavailable")
+
+    async def set_astro_card_settings(self, settings: AstroCardSettings):
+        raise RuntimeError("database unavailable")
+
+
+class FailingAstroSettingsWriteRepository(RiskSettingsRepository):
+    async def find_astro_card_settings(self):
+        return AstroCardSettings(max_trade_usdt=11, leverage=3)
 
     async def set_astro_card_settings(self, settings: AstroCardSettings):
         raise RuntimeError("database unavailable")
@@ -386,6 +396,8 @@ def test_instrument_astro_create_warns_for_spread_drift_and_continues() -> None:
 def test_instrument_astro_create_warns_when_risk_settings_cannot_be_loaded() -> None:
     app = instrument_app(dashboard_password="secret")
     service = FakeAstroSubmitService()
+    cached_settings = AstroCardSettings(max_trade_usdt=1000, leverage=5, open_enabled=True)
+    service.card_settings = cached_settings
     app.state.astro_alert_service = service
 
     with TestClient(app) as client:
@@ -395,7 +407,7 @@ def test_instrument_astro_create_warns_when_risk_settings_cannot_be_loaded() -> 
             headers={"X-Dashboard-Password": "secret"},
             json={
                 "route": route(),
-                "card": {},
+                "card": {"leverage": 2},
                 "expected_open_spread_pct": 1,
             },
         )
@@ -404,6 +416,10 @@ def test_instrument_astro_create_warns_when_risk_settings_cannot_be_loaded() -> 
     payload = response.json()
     assert payload["status"] == "created"
     assert len(service.calls) == 1
+    assert service.card_settings == cached_settings
+    assert service.settings_requests == [
+        app.state.settings.astro_card_settings.model_copy(update={"leverage": 2})
+    ]
     assert any("读取全局风险设置失败" in warning for warning in payload["warnings"])
     assert any("读取 Astro 建卡设置失败" in warning for warning in payload["warnings"])
 
@@ -411,10 +427,12 @@ def test_instrument_astro_create_warns_when_risk_settings_cannot_be_loaded() -> 
 def test_instrument_astro_create_warns_when_default_settings_cannot_be_saved() -> None:
     app = instrument_app(dashboard_password="secret", astro_dry_run_only=False)
     service = FakeAstroSubmitService()
+    original_settings = AstroCardSettings(max_trade_usdt=11, leverage=3)
+    service.card_settings = original_settings
     app.state.astro_alert_service = service
 
     with TestClient(app) as client:
-        app.state.settings_repo = FailingRiskSettingsRepository()
+        app.state.settings_repo = FailingAstroSettingsWriteRepository()
         response = client.post(
             "/api/astro/instrument/card",
             headers={"X-Dashboard-Password": "secret"},
@@ -432,4 +450,7 @@ def test_instrument_astro_create_warns_when_default_settings_cannot_be_saved() -
     payload = response.json()
     assert payload["status"] == "created"
     assert len(service.calls) == 1
+    assert len(service.requests) == 1
+    assert service.requests[0].max_trade_usdt == 25
+    assert service.card_settings == original_settings
     assert any("保存 Astro 默认建卡设置失败" in warning for warning in payload["warnings"])
