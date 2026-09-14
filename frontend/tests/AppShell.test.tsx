@@ -83,6 +83,7 @@ describe("AppShell", () => {
 
   afterEach(() => {
     cleanup();
+    vi.unstubAllGlobals();
   });
 
   it("switches to the quiet palette and persists the selection", async () => {
@@ -196,5 +197,62 @@ describe("AppShell", () => {
     expect(labels.slice(0, 2)).toEqual(["告警历史", "实时机会"]);
     expect(labels).toHaveLength(20);
     expect(labels).toContain("参数与告警");
+  });
+
+  it("renders only the dedicated watch panel for the standalone window URL", async () => {
+    window.history.replaceState({}, "", "/?floating_watch=standalone");
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ symbols: [], pair_ids: [] })));
+    const close = vi.spyOn(window, "close").mockImplementation(() => undefined);
+
+    const { container } = render(<AppShell />);
+
+    expect(screen.getByRole("complementary", { name: "独立关注窗口" })).not.toBeNull();
+    expect(container.querySelector(".floating-watch-standalone-shell")).not.toBeNull();
+    expect(screen.queryByRole("heading", { name: "CEX 套利雷达" })).toBeNull();
+    expect(screen.queryByRole("menu")).toBeNull();
+
+    window.localStorage.setItem("taoli1:floating-watch-visible.v1", "0");
+    window.dispatchEvent(new CustomEvent("taoli1:floating-watch-updated", {
+      detail: { symbols: [], pair_ids: [] }
+    }));
+    expect(window.localStorage.getItem("taoli1:floating-watch-visible.v1")).toBe("0");
+
+    await userEvent.click(screen.getByRole("button", { name: "关闭独立关注窗口" }));
+    await waitFor(() => {
+      expect(container.querySelector(".floating-watch-standalone-shell")).toBeNull();
+    });
+    expect(screen.getByRole("heading", { name: "CEX 套利雷达" })).not.toBeNull();
+    expect(new URLSearchParams(window.location.search).get("floating_watch")).toBeNull();
+    expect(new URLSearchParams(window.location.search).get("page")).toBe("dashboard");
+    close.mockRestore();
+  });
+
+  it("dispatches navigation for consecutive same-page selections from the dedicated watch window", async () => {
+    render(<AppShell />);
+    const navigations: string[] = [];
+    const recordNavigation = () => navigations.push(window.location.search);
+    window.addEventListener("taoli1:navigate", recordNavigation);
+
+    window.dispatchEvent(new MessageEvent("message", {
+      origin: window.location.origin,
+      data: {
+        type: "taoli1:floating-watch-navigate",
+        destination: "/?page=dashboard&symbol=BTCUSDT"
+      }
+    }));
+    window.dispatchEvent(new MessageEvent("message", {
+      origin: window.location.origin,
+      data: {
+        type: "taoli1:floating-watch-navigate",
+        destination: "/?page=dashboard&symbol=ETHUSDT"
+      }
+    }));
+
+    await waitFor(() => {
+      expect(new URLSearchParams(window.location.search).get("symbol")).toBe("ETHUSDT");
+    });
+    expect(new URLSearchParams(window.location.search).get("page")).toBe("dashboard");
+    expect(navigations).toHaveLength(2);
+    window.removeEventListener("taoli1:navigate", recordNavigation);
   });
 });

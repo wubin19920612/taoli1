@@ -167,6 +167,7 @@ describe("FloatingWatchPanel", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllGlobals();
   });
 
   it("shows live symbols and pairs and opens their detail pages", async () => {
@@ -202,6 +203,95 @@ describe("FloatingWatchPanel", () => {
       item_type: "symbol",
       value: "BTCUSDT"
     });
+  });
+
+  it("opens a dedicated watch window and closes the embedded panel", async () => {
+    const focus = vi.fn();
+    const open = vi.spyOn(window, "open").mockReturnValue({ focus } as unknown as Window);
+    const onClose = vi.fn();
+    render(<FloatingWatchPanel visible onClose={onClose} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "打开独立关注窗口" }));
+
+    expect(open).toHaveBeenCalledWith(
+      expect.stringContaining("floating_watch=standalone"),
+      "taoli1-floating-watch",
+      expect.stringContaining("popup=yes")
+    );
+    expect(focus).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledOnce();
+    open.mockRestore();
+  });
+
+  it("keeps the embedded panel open when the browser blocks the dedicated window", async () => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    const onClose = vi.fn();
+    render(<FloatingWatchPanel visible onClose={onClose} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "打开独立关注窗口" }));
+
+    expect(await screen.findByText("浏览器拦截了独立窗口，请允许本站打开弹出窗口。")).not.toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+    open.mockRestore();
+  });
+
+  it("renders a full-window standalone panel without detach or collapse controls", async () => {
+    const onClose = vi.fn();
+    window.localStorage.setItem("taoli1:floating-watch-collapsed.v1", "1");
+    render(<FloatingWatchPanel visible standalone onClose={onClose} />);
+
+    const panel = await screen.findByRole("complementary", { name: "独立关注窗口" });
+    expect(panel.classList.contains("floating-watch-panel-standalone")).toBe(true);
+    expect(within(panel).queryByRole("button", { name: "打开独立关注窗口" })).toBeNull();
+    expect(within(panel).queryByRole("button", { name: "收起关注浮窗" })).toBeNull();
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent("taoli1:floating-watch-updated", {
+        detail: { symbols: ["BTCUSDT"], pair_ids: [preset.id] }
+      }));
+    });
+    expect(window.localStorage.getItem("taoli1:floating-watch-collapsed.v1")).toBe("1");
+    await userEvent.click(within(panel).getByRole("button", { name: "关闭独立关注窗口" }));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("sends detail navigation to a same-origin opener", async () => {
+    const postMessage = vi.fn();
+    const focus = vi.fn();
+    vi.stubGlobal("opener", {
+      closed: false,
+      focus,
+      location: { origin: window.location.origin },
+      postMessage
+    });
+    render(<FloatingWatchPanel visible standalone onClose={vi.fn()} />);
+
+    await userEvent.click(await screen.findByText("BTC"));
+
+    expect(postMessage).toHaveBeenCalledWith({
+      type: "taoli1:floating-watch-navigate",
+      destination: "/?page=instrument&symbol=BTCUSDT"
+    }, window.location.origin);
+    expect(focus).toHaveBeenCalledOnce();
+  });
+
+  it("opens a new app page when the original opener is now cross-origin", async () => {
+    const openerPostMessage = vi.fn();
+    vi.stubGlobal("opener", {
+      closed: false,
+      focus: vi.fn(),
+      location: { origin: "https://example.com" },
+      postMessage: openerPostMessage
+    });
+    const focus = vi.fn();
+    const open = vi.spyOn(window, "open").mockReturnValue({ focus } as unknown as Window);
+    render(<FloatingWatchPanel visible standalone onClose={vi.fn()} />);
+
+    await userEvent.click(await screen.findByText("BTC"));
+
+    expect(openerPostMessage).not.toHaveBeenCalled();
+    expect(open).toHaveBeenCalledWith("/?page=instrument&symbol=BTCUSDT", "_blank");
+    expect(focus).toHaveBeenCalledOnce();
+    open.mockRestore();
   });
 
   it("waits for a slow refresh before scheduling the next poll", async () => {

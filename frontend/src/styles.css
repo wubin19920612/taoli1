@@ -342,6 +342,48 @@ body {
   background: #e5e9e7;
 }
 
+.floating-watch-standalone-shell {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: #eef3f1;
+}
+
+.floating-watch-panel-standalone,
+.floating-watch-panel-standalone.floating-watch-panel-collapsed {
+  position: static;
+  display: flex;
+  flex-direction: column;
+  width: 100vw;
+  height: 100vh;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.floating-watch-panel-standalone .floating-watch-header {
+  flex: 0 0 auto;
+  cursor: default;
+}
+
+.floating-watch-panel-standalone .floating-watch-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.floating-watch-panel-standalone .floating-watch-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+}
+
+.app-shell-quiet.floating-watch-standalone-shell {
+  background: #ecefed;
+}
+
 @media (max-width: 600px) {
   .floating-watch-panel,
   .floating-watch-panel-collapsed {
@@ -350,6 +392,13 @@ body {
     left: 8px !important;
     top: auto !important;
     width: auto;
+  }
+
+  .floating-watch-panel-standalone,
+  .floating-watch-panel-standalone.floating-watch-panel-collapsed {
+    position: static;
+    width: 100vw;
+    height: 100vh;
   }
 
   .floating-watch-list {

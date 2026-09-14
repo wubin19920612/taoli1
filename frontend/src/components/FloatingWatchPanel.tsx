@@ -2,6 +2,7 @@ import {
   CloseOutlined,
   DeleteOutlined,
   DragOutlined,
+  ExportOutlined,
   LineChartOutlined,
   MinusOutlined,
   PushpinOutlined,
@@ -24,6 +25,7 @@ import type {
   PairSpreadQueryResult
 } from "../api/types";
 import {
+  FLOATING_WATCH_NAVIGATE_MESSAGE,
   FLOATING_WATCH_UPDATED_EVENT,
   removeFloatingWatchPair,
   removeFloatingWatchSymbol
@@ -32,6 +34,9 @@ import {
 const REFRESH_INTERVAL_MS = 10_000;
 const POSITION_STORAGE_KEY = "taoli1:floating-watch-position.v1";
 const COLLAPSED_STORAGE_KEY = "taoli1:floating-watch-collapsed.v1";
+const STANDALONE_QUERY_PARAM = "floating_watch";
+const STANDALONE_QUERY_VALUE = "standalone";
+const STANDALONE_WINDOW_NAME = "taoli1-floating-watch";
 const emptySettings: FloatingWatchSettings = { symbols: [], pair_ids: [] };
 const exchangeLabels: Record<string, string> = {
   aster: "Aster",
@@ -133,15 +138,46 @@ function pairLegLabel(preset: PairSpreadPreset, side: 1 | 2): string {
   return `${venue} ${marketLabel(preset[`leg${side}_market_type`])}`;
 }
 
-function openInstrument(symbol: string): void {
-  const url = new URL(window.location.href);
-  url.searchParams.set("page", "instrument");
-  url.searchParams.set("symbol", symbol);
-  window.history.pushState({}, "", `${url.pathname}${url.search}${url.hash}`);
+function navigateFromWatch(url: URL, standalone: boolean): void {
+  url.searchParams.delete(STANDALONE_QUERY_PARAM);
+  const destination = `${url.pathname}${url.search}${url.hash}`;
+  if (standalone) {
+    try {
+      if (
+        window.opener
+        && !window.opener.closed
+        && window.opener.location.origin === window.location.origin
+      ) {
+        window.opener.postMessage({
+          type: FLOATING_WATCH_NAVIGATE_MESSAGE,
+          destination
+        }, window.location.origin);
+        window.opener.focus();
+        return;
+      }
+    } catch {
+      // Fall through when the opener is no longer same-origin or accessible.
+    }
+    const appWindow = window.open(destination, "_blank");
+    if (appWindow) {
+      appWindow.focus();
+      return;
+    }
+    window.location.assign(destination);
+    return;
+  }
+  window.history.pushState({}, "", destination);
   window.dispatchEvent(new Event("taoli1:navigate"));
 }
 
-function openPair(preset: PairSpreadPreset): void {
+function openInstrument(symbol: string, standalone: boolean): void {
+  const url = new URL(window.location.href);
+  url.searchParams.set("page", "instrument");
+  url.searchParams.set("symbol", symbol);
+  navigateFromWatch(url, standalone);
+}
+
+function openPair(preset: PairSpreadPreset, standalone: boolean): void {
   const url = new URL(window.location.href);
   url.searchParams.set("page", "pair-monitor");
   url.searchParams.delete("symbol");
@@ -157,13 +193,20 @@ function openPair(preset: PairSpreadPreset): void {
   url.searchParams.set("hours", String(preset.hours));
   url.searchParams.set("interval_seconds", String(preset.intervalSeconds));
   url.searchParams.delete("interval_minutes");
-  window.history.pushState({}, "", `${url.pathname}${url.search}${url.hash}`);
-  window.dispatchEvent(new Event("taoli1:navigate"));
+  navigateFromWatch(url, standalone);
 }
 
-export function FloatingWatchPanel({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+type FloatingWatchPanelProps = {
+  visible: boolean;
+  onClose: () => void;
+  standalone?: boolean;
+};
+
+export function FloatingWatchPanel({ visible, onClose, standalone = false }: FloatingWatchPanelProps) {
   const [mode, setMode] = useState<WatchMode>("symbols");
-  const [collapsed, setCollapsed] = useState(() => window.localStorage.getItem(COLLAPSED_STORAGE_KEY) === "1");
+  const [collapsed, setCollapsed] = useState(
+    () => !standalone && window.localStorage.getItem(COLLAPSED_STORAGE_KEY) === "1"
+  );
   const [position, setPosition] = useState<SavedPosition | null>(loadPosition);
   const [settings, setSettings] = useState<FloatingWatchSettings>(emptySettings);
   const [presets, setPresets] = useState<PairSpreadPreset[]>([]);
@@ -258,16 +301,18 @@ export function FloatingWatchPanel({ visible, onClose }: { visible: boolean; onC
     const handleUpdate = (event: Event) => {
       const updated = (event as CustomEvent<FloatingWatchSettings>).detail;
       if (updated) setSettings(updated);
-      setCollapsed(false);
-      window.localStorage.setItem(COLLAPSED_STORAGE_KEY, "0");
+      if (!standalone) {
+        setCollapsed(false);
+        window.localStorage.setItem(COLLAPSED_STORAGE_KEY, "0");
+      }
       if (visible) void refresh(mode);
     };
     window.addEventListener(FLOATING_WATCH_UPDATED_EVENT, handleUpdate);
     return () => window.removeEventListener(FLOATING_WATCH_UPDATED_EVENT, handleUpdate);
-  }, [mode, refresh, visible]);
+  }, [mode, refresh, standalone, visible]);
 
   useEffect(() => {
-    if (!visible || !position) return undefined;
+    if (!visible || standalone || !position) return undefined;
     const keepPanelInViewport = () => {
       if (window.innerWidth <= 600) return;
       const panel = panelRef.current;
@@ -284,7 +329,7 @@ export function FloatingWatchPanel({ visible, onClose }: { visible: boolean; onC
     keepPanelInViewport();
     window.addEventListener("resize", keepPanelInViewport);
     return () => window.removeEventListener("resize", keepPanelInViewport);
-  }, [collapsed, position, visible]);
+  }, [collapsed, position, standalone, visible]);
 
   const missingPairIds = useMemo(
     () => settings.pair_ids.filter((id) => !presets.some((preset) => preset.id === id)),
@@ -293,11 +338,12 @@ export function FloatingWatchPanel({ visible, onClose }: { visible: boolean; onC
 
   if (!visible) return null;
 
-  const panelStyle: CSSProperties | undefined = position
+  const panelStyle: CSSProperties | undefined = !standalone && position
     ? { left: position.left, top: position.top, right: "auto", bottom: "auto" }
     : undefined;
 
   const startDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (standalone) return;
     if ((event.target as HTMLElement).closest("button")) return;
     if (window.innerWidth <= 600) return;
     const panel = event.currentTarget.closest<HTMLElement>(".floating-watch-panel");
@@ -330,6 +376,28 @@ export function FloatingWatchPanel({ visible, onClose }: { visible: boolean; onC
   const setPanelCollapsed = (next: boolean) => {
     setCollapsed(next);
     window.localStorage.setItem(COLLAPSED_STORAGE_KEY, next ? "1" : "0");
+  };
+
+  const openStandaloneWindow = () => {
+    const url = new URL(window.location.href);
+    url.search = "";
+    url.hash = "";
+    url.searchParams.set(STANDALONE_QUERY_PARAM, STANDALONE_QUERY_VALUE);
+    const width = 420;
+    const height = Math.max(420, Math.min(720, window.screen.availHeight - 80));
+    const left = Math.max(0, window.screen.availWidth - width - 24);
+    const top = Math.max(0, Math.min(64, window.screen.availHeight - height));
+    const popup = window.open(
+      url.toString(),
+      STANDALONE_WINDOW_NAME,
+      `popup=yes,width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=no`
+    );
+    if (!popup) {
+      setError("浏览器拦截了独立窗口，请允许本站打开弹出窗口。");
+      return;
+    }
+    popup.focus();
+    onClose();
   };
 
   const removeSymbol = async (symbol: string) => {
@@ -367,12 +435,12 @@ export function FloatingWatchPanel({ visible, onClose }: { visible: boolean; onC
   return (
     <aside
       ref={panelRef}
-      className={`floating-watch-panel${collapsed ? " floating-watch-panel-collapsed" : ""}`}
+      className={`floating-watch-panel${collapsed ? " floating-watch-panel-collapsed" : ""}${standalone ? " floating-watch-panel-standalone" : ""}`}
       style={panelStyle}
-      aria-label="关注浮窗"
+      aria-label={standalone ? "独立关注窗口" : "关注浮窗"}
     >
       <div className="floating-watch-header" onPointerDown={startDrag}>
-        <span className="floating-watch-drag" aria-hidden="true"><DragOutlined /></span>
+        {!standalone ? <span className="floating-watch-drag" aria-hidden="true"><DragOutlined /></span> : null}
         <PushpinOutlined />
         <Typography.Text strong>关注行情</Typography.Text>
         <Tag>{settings.symbols.length + settings.pair_ids.length}</Tag>
@@ -382,17 +450,36 @@ export function FloatingWatchPanel({ visible, onClose }: { visible: boolean; onC
               <Button aria-label="刷新关注行情" type="text" size="small" icon={<ReloadOutlined spin={loading} />} onClick={() => void refresh(mode)} />
             </Tooltip>
           ) : null}
-          <Tooltip title={collapsed ? "展开" : "收起"}>
+          {!standalone ? (
+            <Tooltip title="打开独立窗口">
+              <Button
+                aria-label="打开独立关注窗口"
+                type="text"
+                size="small"
+                icon={<ExportOutlined />}
+                onClick={openStandaloneWindow}
+              />
+            </Tooltip>
+          ) : null}
+          {!standalone ? (
+            <Tooltip title={collapsed ? "展开" : "收起"}>
+              <Button
+                aria-label={collapsed ? "展开关注浮窗" : "收起关注浮窗"}
+                type="text"
+                size="small"
+                icon={collapsed ? <LineChartOutlined /> : <MinusOutlined />}
+                onClick={() => setPanelCollapsed(!collapsed)}
+              />
+            </Tooltip>
+          ) : null}
+          <Tooltip title={standalone ? "关闭窗口" : "隐藏"}>
             <Button
-              aria-label={collapsed ? "展开关注浮窗" : "收起关注浮窗"}
+              aria-label={standalone ? "关闭独立关注窗口" : "隐藏关注浮窗"}
               type="text"
               size="small"
-              icon={collapsed ? <LineChartOutlined /> : <MinusOutlined />}
-              onClick={() => setPanelCollapsed(!collapsed)}
+              icon={<CloseOutlined />}
+              onClick={onClose}
             />
-          </Tooltip>
-          <Tooltip title="隐藏">
-            <Button aria-label="隐藏关注浮窗" type="text" size="small" icon={<CloseOutlined />} onClick={onClose} />
           </Tooltip>
         </span>
       </div>
@@ -420,7 +507,7 @@ export function FloatingWatchPanel({ visible, onClose }: { visible: boolean; onC
                   : null;
                 return (
                   <div className="floating-watch-row" key={symbol}>
-                    <button className="floating-watch-row-main" type="button" onClick={() => openInstrument(symbol)}>
+                    <button className="floating-watch-row-main" type="button" onClick={() => openInstrument(symbol, standalone)}>
                       <span className="floating-watch-row-title">{symbol.replace(/USDT$/, "")}</span>
                       <span className="floating-watch-row-sub">{range ? `${price(range.min)} - ${price(range.max)}` : state?.error || "等待刷新"}</span>
                       <span className={`floating-watch-value floating-watch-value-${tone(bestSpread)}`}>{signedPct(bestSpread)}</span>
@@ -449,7 +536,7 @@ export function FloatingWatchPanel({ visible, onClose }: { visible: boolean; onC
                 const spread = current?.open_spread_pct ?? current?.spread_pct ?? null;
                 return (
                   <div className="floating-watch-row floating-watch-pair-row" key={preset.id}>
-                    <button className="floating-watch-row-main" type="button" onClick={() => openPair(preset)}>
+                    <button className="floating-watch-row-main" type="button" onClick={() => openPair(preset, standalone)}>
                       <span className="floating-watch-row-title">{preset.leg1_symbol.replace(/USDT$/, "")} / {preset.leg2_symbol.replace(/USDT$/, "")}</span>
                       <span className="floating-watch-row-sub">{pairLegLabel(preset, 1)} {price(current?.leg1.price)} → {pairLegLabel(preset, 2)} {price(current?.leg2.price)}</span>
                       <span className={`floating-watch-value floating-watch-value-${tone(spread)}`}>{state?.error ? "异常" : signedPct(spread)}</span>

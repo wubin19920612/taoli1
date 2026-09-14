@@ -37,7 +37,10 @@ import {
 
 import { FloatingWatchPanel } from "./FloatingWatchPanel";
 import { getFloatingWatchSettings } from "../api/client";
-import { FLOATING_WATCH_UPDATED_EVENT } from "../utils/floatingWatch";
+import {
+  FLOATING_WATCH_NAVIGATE_MESSAGE,
+  FLOATING_WATCH_UPDATED_EVENT
+} from "../utils/floatingWatch";
 
 type PageKey =
   | "dashboard"
@@ -167,6 +170,7 @@ const pageKeys = Object.keys(lazyPages) as PageKey[];
 const appearanceModeStorageKey = "taoli1:appearance-mode";
 const navigationOrderStorageKey = "taoli1:navigation-order.v1";
 const floatingWatchVisibleStorageKey = "taoli1:floating-watch-visible.v1";
+const standaloneFloatingWatchParam = "floating_watch";
 
 const defaultNavigationItems: NavigationItem[] = [
   { key: "dashboard", icon: <DashboardOutlined />, label: "实时机会" },
@@ -295,6 +299,13 @@ function pageFromUrl(): PageKey | null {
   return isPageKey(requested) ? requested : null;
 }
 
+function isStandaloneFloatingWatchWindow(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  return new URLSearchParams(window.location.search).get(standaloneFloatingWatchParam) === "standalone";
+}
+
 function pushPageToUrl(page: PageKey): void {
   if (typeof window === "undefined") {
     return;
@@ -305,6 +316,7 @@ function pushPageToUrl(page: PageKey): void {
 }
 
 export function AppShell() {
+  const [standaloneFloatingWatch, setStandaloneFloatingWatch] = useState(isStandaloneFloatingWatchWindow);
   const [page, setPage] = useState<PageKey>(() => pageFromUrl() ?? "dashboard");
   const [appearanceMode, setAppearanceMode] = useState<AppearanceMode>(initialAppearanceMode);
   const [navigationOrder, setNavigationOrder] = useState<PageKey[]>(initialNavigationOrder);
@@ -353,15 +365,37 @@ export function AppShell() {
   }, []);
 
   useEffect(() => {
+    const navigateFromFloatingWatch = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+      const data = event.data as { type?: unknown; destination?: unknown } | null;
+      if (
+        !data
+        || data.type !== FLOATING_WATCH_NAVIGATE_MESSAGE
+        || typeof data.destination !== "string"
+      ) {
+        return;
+      }
+      const destination = new URL(data.destination, window.location.origin);
+      if (destination.origin !== window.location.origin) return;
+      window.history.pushState({}, "", `${destination.pathname}${destination.search}${destination.hash}`);
+      window.dispatchEvent(new Event("taoli1:navigate"));
+    };
+    window.addEventListener("message", navigateFromFloatingWatch);
+    return () => window.removeEventListener("message", navigateFromFloatingWatch);
+  }, []);
+
+  useEffect(() => {
+    if (standaloneFloatingWatch) return undefined;
     const showFloatingWatch = () => {
       setFloatingWatchVisible(true);
       window.localStorage.setItem(floatingWatchVisibleStorageKey, "1");
     };
     window.addEventListener(FLOATING_WATCH_UPDATED_EVENT, showFloatingWatch);
     return () => window.removeEventListener(FLOATING_WATCH_UPDATED_EVENT, showFloatingWatch);
-  }, []);
+  }, [standaloneFloatingWatch]);
 
   useEffect(() => {
+    if (standaloneFloatingWatch) return;
     if (window.localStorage.getItem(floatingWatchVisibleStorageKey) !== null) return;
     void getFloatingWatchSettings()
       .then((settings) => {
@@ -373,7 +407,32 @@ export function AppShell() {
       .catch(() => {
         // The header button remains available when the initial sync is unavailable.
       });
-  }, []);
+  }, [standaloneFloatingWatch]);
+
+  if (standaloneFloatingWatch) {
+    const closeStandaloneWindow = () => {
+      window.close();
+      window.setTimeout(() => {
+        if (window.closed) return;
+        const url = new URL(window.location.href);
+        url.searchParams.delete(standaloneFloatingWatchParam);
+        if (!url.searchParams.has("page")) url.searchParams.set("page", "dashboard");
+        window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+        setStandaloneFloatingWatch(false);
+      }, 0);
+    };
+    return (
+      <ConfigProvider theme={quietMode ? quietTheme : undefined}>
+        <main className={`floating-watch-standalone-shell app-shell-${appearanceMode}`}>
+          <FloatingWatchPanel
+            visible
+            standalone
+            onClose={closeStandaloneWindow}
+          />
+        </main>
+      </ConfigProvider>
+    );
+  }
 
   return (
     <ConfigProvider theme={quietMode ? quietTheme : undefined}>

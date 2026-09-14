@@ -2,6 +2,7 @@ import { mutateFloatingWatchItem } from "../api/client";
 import type { FloatingWatchSettings } from "../api/types";
 
 export const FLOATING_WATCH_UPDATED_EVENT = "taoli1:floating-watch-updated";
+export const FLOATING_WATCH_NAVIGATE_MESSAGE = "taoli1:floating-watch-navigate";
 
 function announce(settings: FloatingWatchSettings): void {
   window.dispatchEvent(new CustomEvent<FloatingWatchSettings>(FLOATING_WATCH_UPDATED_EVENT, {
