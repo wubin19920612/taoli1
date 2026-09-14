@@ -397,9 +397,14 @@ export function AppShell() {
   useEffect(() => {
     if (standaloneFloatingWatch) return;
     if (window.localStorage.getItem(floatingWatchVisibleStorageKey) !== null) return;
+    let cancelled = false;
     void getFloatingWatchSettings()
       .then((settings) => {
-        if (settings.symbols.length + settings.pair_ids.length > 0) {
+        if (
+          !cancelled
+          && window.localStorage.getItem(floatingWatchVisibleStorageKey) === null
+          && settings.symbols.length + settings.pair_ids.length > 0
+        ) {
           setFloatingWatchVisible(true);
           window.localStorage.setItem(floatingWatchVisibleStorageKey, "1");
         }
@@ -407,6 +412,9 @@ export function AppShell() {
       .catch(() => {
         // The header button remains available when the initial sync is unavailable.
       });
+    return () => {
+      cancelled = true;
+    };
   }, [standaloneFloatingWatch]);
 
   if (standaloneFloatingWatch) {

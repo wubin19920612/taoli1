@@ -1,4 +1,4 @@
-import { cleanup, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -254,5 +254,23 @@ describe("AppShell", () => {
     expect(new URLSearchParams(window.location.search).get("page")).toBe("dashboard");
     expect(navigations).toHaveLength(2);
     window.removeEventListener("taoli1:navigate", recordNavigation);
+  });
+
+  it("does not reopen the embedded watch after a delayed initial settings response", async () => {
+    let resolveSettings: ((response: Response) => void) | undefined;
+    const settingsResponse = new Promise<Response>((resolve) => {
+      resolveSettings = resolve;
+    });
+    vi.stubGlobal("fetch", vi.fn(() => settingsResponse));
+    render(<AppShell />);
+
+    await waitFor(() => expect(fetch).toHaveBeenCalled());
+    window.localStorage.setItem("taoli1:floating-watch-visible.v1", "0");
+    await act(async () => {
+      resolveSettings?.(Response.json({ symbols: ["BTCUSDT"], pair_ids: [] }));
+      await settingsResponse;
+    });
+    expect(window.localStorage.getItem("taoli1:floating-watch-visible.v1")).toBe("0");
+    expect(screen.queryByRole("complementary", { name: "关注浮窗" })).toBeNull();
   });
 });
