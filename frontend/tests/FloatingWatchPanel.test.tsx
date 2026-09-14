@@ -352,11 +352,15 @@ describe("FloatingWatchPanel", () => {
     expect(within(panel).getByText("7,600 U")).not.toBeNull();
     expect(within(panel).getByText("8,400 U")).not.toBeNull();
     expect(within(panel).getByText("-1.30 U")).not.toBeNull();
-    expect(within(panel).getByText("+10.00 U")).not.toBeNull();
+    const positionedCard = within(panel).getByText("ANTHROPIC-ANTHROPIC").closest(".floating-watch-astro-row");
+    expect(positionedCard).not.toBeNull();
+    expect(within(positionedCard as HTMLElement).getByText("--")).not.toBeNull();
+    expect(within(panel).queryByText("+10.00 U")).toBeNull();
     expect(within(panel).queryByText("+720.00 U")).toBeNull();
     expect(within(panel).queryByText("+730.00 U")).toBeNull();
     expect(within(panel).getByText("开 +0.995% / 平 +2.985%")).not.toBeNull();
     expect(within(panel).getByText("开 0.003 / 平 -0.0015")).not.toBeNull();
+    expect(within(panel).getByText("当前无持仓 · 已实现 --")).not.toBeNull();
     expect(within(panel).queryByText("STEEM")).toBeNull();
     expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("/astro/pairs"))).toBe(true);
     expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("/instruments/ANTHROPICUSDT"))).toBe(true);

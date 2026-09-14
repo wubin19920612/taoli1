@@ -172,6 +172,14 @@ function astroPositionMetrics(pair: AstroPairStatus): AstroPositionMetrics {
   };
 }
 
+function astroRealizedProfit(pair: AstroPairStatus): number | null {
+  const averageCloseBuy = positivePrice(finiteNumber(pair.avgCloseAExPrice));
+  const averageCloseSell = positivePrice(finiteNumber(pair.avgCloseBExPrice));
+  return averageCloseBuy !== null && averageCloseSell !== null
+    ? finiteNumber(pair.realizedProfit)
+    : null;
+}
+
 function astroRuntimeState(pair: AstroPairStatus): { label: string; tone: "positive" | "neutral" | "warning" } {
   if (astroHasPosition(pair) && pair.disableClose) return { label: "持仓·禁平", tone: "warning" };
   if (astroHasPosition(pair) && pair.disableOpen) return { label: "持仓·禁开", tone: "warning" };
@@ -290,6 +298,10 @@ function usdt(value: number | null, signed = false): string {
 
 function astroPositionUsdt(value: number): string {
   return `${Math.trunc(value).toLocaleString("en-US")} U`;
+}
+
+function astroProfitUsdt(value: number | null): string {
+  return value === null ? "--" : usdt(value, true);
 }
 
 function astroLegLabel(leg: AstroLeg): string {
@@ -788,7 +800,7 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
               {runningAstroPairs.map((pair, index) => {
                 const runtime = astroRuntimeState(pair);
                 const estimatedProfit = finiteNumber(pair.profit);
-                const realizedProfit = finiteNumber(pair.realizedProfit);
+                const realizedProfit = astroRealizedProfit(pair);
                 const hasPosition = astroHasPosition(pair);
                 const position = astroPositionMetrics(pair);
                 const live = astroMetrics(pair, astroInstruments);
@@ -831,9 +843,9 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
                             <span><span>买腿仓位</span><strong>{astroPositionUsdt(position.buyNotional)}</strong></span>
                             <span><span>卖腿仓位</span><strong>{astroPositionUsdt(position.sellNotional)}</strong></span>
                           <span className={`floating-watch-astro-profit floating-watch-value-${profitTone}`}>
-                              <span>Astro 预估</span><strong>{usdt(estimatedProfit, true)}</strong>
+                              <span>Astro 预估</span><strong>{astroProfitUsdt(estimatedProfit)}</strong>
                           </span>
-                          <span><span>已实现</span><strong>{usdt(realizedProfit, true)}</strong></span>
+                          <span><span>已实现</span><strong>{astroProfitUsdt(realizedProfit)}</strong></span>
                           </div>
                           {estimatedProfit === null ? (
                             <span className="floating-watch-row-sub floating-watch-astro-profit-note">
@@ -843,7 +855,7 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
                         </>
                       ) : (
                         <span className="floating-watch-row-sub floating-watch-astro-position">
-                          当前无持仓 · 已实现 {usdt(realizedProfit, true)}
+                          当前无持仓 · 已实现 {astroProfitUsdt(realizedProfit)}
                         </span>
                       )}
                     </div>
