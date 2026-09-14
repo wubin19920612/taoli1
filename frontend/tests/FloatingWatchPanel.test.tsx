@@ -144,9 +144,11 @@ const astroPairs = [
     sellEx: "gc-okx",
     openPosition: 9.704433,
     closePosition: 9.791203,
-    aExPosition: 0.04,
-    bExPosition: 0.477,
-    realizedProfit: 1.25
+    aExPosition: 40,
+    bExPosition: 400,
+    avgOpenAExPrice: 190,
+    avgOpenBExPrice: 21,
+    realizedProfit: 10
   },
   {
     id: "active-close-only",
@@ -174,6 +176,90 @@ const astroPairs = [
     sellEx: "bybit"
   }
 ];
+
+const astroAnthropicInstrument = {
+  ...instrument,
+  query: "ANTHROPICUSDT",
+  symbol: "ANTHROPICUSDT",
+  base: "ANTHROPIC",
+  exchanges: [
+    {
+      exchange: "bitget",
+      spot: null,
+      future: {
+        symbol: "ANTHROPICUSDT",
+        base: "ANTHROPIC",
+        quote: "USDT",
+        exchange: "bitget",
+        market_type: "future",
+        bid: 199,
+        ask: 201,
+        timestamp: "2026-09-13T01:00:00Z",
+        raw_symbol: "ANTHROPICUSDT"
+      },
+      error: null
+    },
+    {
+      exchange: "okx",
+      spot: null,
+      future: {
+        symbol: "ANTHROPICUSDT",
+        base: "ANTHROPIC",
+        quote: "USDT",
+        exchange: "okx",
+        market_type: "future",
+        bid: 19.9,
+        ask: 20.1,
+        timestamp: "2026-09-13T01:00:00Z",
+        raw_symbol: "ANTHROPIC-USDT-SWAP"
+      },
+      error: null
+    }
+  ],
+  spreads: []
+};
+
+const astroOpenAiInstrument = {
+  ...instrument,
+  query: "OPENAIUSDT",
+  symbol: "OPENAIUSDT",
+  base: "OPENAI",
+  exchanges: [
+    {
+      exchange: "binance",
+      spot: null,
+      future: {
+        symbol: "OPENAIUSDT",
+        base: "OPENAI",
+        quote: "USDT",
+        exchange: "binance",
+        market_type: "future",
+        bid: 99,
+        ask: 100,
+        timestamp: "2026-09-13T01:00:00Z",
+        raw_symbol: "OPENAIUSDT"
+      },
+      error: null
+    },
+    {
+      exchange: "gate",
+      spot: null,
+      future: {
+        symbol: "OPENAIUSDT",
+        base: "OPENAI",
+        quote: "USDT",
+        exchange: "gate",
+        market_type: "future",
+        bid: 101,
+        ask: 102,
+        timestamp: "2026-09-13T01:00:00Z",
+        raw_symbol: "OPENAI_USDT"
+      },
+      error: null
+    }
+  ],
+  spreads: []
+};
 
 describe("FloatingWatchPanel", () => {
   beforeEach(() => {
@@ -204,6 +290,8 @@ describe("FloatingWatchPanel", () => {
       if (url.includes("/astro/pairs")) return Response.json(astroPairs);
       if (url.includes("/pair-spread/presets")) return Response.json([preset]);
       if (url.includes("/pair-spread/query")) return Response.json(pairResult);
+      if (url.includes("/instruments/ANTHROPICUSDT")) return Response.json(astroAnthropicInstrument);
+      if (url.includes("/instruments/OPENAIUSDT")) return Response.json(astroOpenAiInstrument);
       if (url.includes("/instruments/")) return Response.json(instrument);
       return Response.json({});
     }));
@@ -258,10 +346,18 @@ describe("FloatingWatchPanel", () => {
     expect(await within(panel).findByText("ANTHROPIC-ANTHROPIC")).not.toBeNull();
     expect(within(panel).getByText("持仓中")).not.toBeNull();
     expect(within(panel).getByText("仅平仓")).not.toBeNull();
-    expect(within(panel).getByText("bitget → gc-okx · 开 9.70443 / 平 9.7912")).not.toBeNull();
-    expect(within(panel).getByText("仓位 0.04 / 0.477 · 已实现 1.25")).not.toBeNull();
+    expect(await within(panel).findByText("开 10.1005 / 平 9.9005")).not.toBeNull();
+    expect(within(panel).getByText("开 9.70443 / 平 9.7912")).not.toBeNull();
+    expect(within(panel).getAllByText("8,000.00 U")).toHaveLength(2);
+    expect(within(panel).getByText("16,000.00 U")).not.toBeNull();
+    expect(within(panel).getByText("+720.00 U")).not.toBeNull();
+    expect(within(panel).getByText("+10.00 U")).not.toBeNull();
+    expect(within(panel).getByText("+730.00 U")).not.toBeNull();
+    expect(within(panel).getByText("开 +0.995% / 平 +2.985%")).not.toBeNull();
+    expect(within(panel).getByText("开 0.003 / 平 -0.0015")).not.toBeNull();
     expect(within(panel).queryByText("STEEM")).toBeNull();
     expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("/astro/pairs"))).toBe(true);
+    expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("/instruments/ANTHROPICUSDT"))).toBe(true);
   });
 
   it("opens a dedicated watch window and closes the embedded panel", async () => {

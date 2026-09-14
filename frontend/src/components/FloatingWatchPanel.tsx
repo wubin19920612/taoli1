@@ -22,6 +22,7 @@ import type {
   FloatingWatchSettings,
   AstroPairStatus,
   InstrumentLookupResult,
+  MarketType,
   MarketSnapshot,
   PairSpreadPreset,
   PairSpreadQueryResult
@@ -55,6 +56,21 @@ type WatchMode = "symbols" | "pairs" | "astro";
 type SavedPosition = { left: number; top: number };
 type InstrumentState = { result: InstrumentLookupResult | null; error: string };
 type PairState = { result: PairSpreadQueryResult | null; error: string };
+type AstroLeg = {
+  exchange: string;
+  marketType: MarketType;
+  symbol: string;
+  dex: string;
+};
+type AstroMetrics = {
+  legs: [AstroLeg, AstroLeg];
+  markets: [MarketSnapshot, MarketSnapshot];
+  openMetric: number;
+  closeMetric: number;
+  buyNotional: number;
+  sellNotional: number;
+  unrealizedProfit: number | null;
+};
 
 async function mapWithConcurrency<T, R>(
   items: T[],
@@ -157,6 +173,134 @@ function astroRuntimeState(pair: AstroPairStatus): { label: string; tone: "posit
   return { label: "监控中", tone: "neutral" };
 }
 
+function astroExchange(value: string | undefined): string {
+  const normalized = (value || "").trim().toLowerCase().replace(/^gc-/, "");
+  if (normalized === "hl") return "hyperliquid";
+  if (normalized === "bitgetr") return "bitget";
+  return normalized;
+}
+
+function astroSymbol(base: string): string {
+  const normalized = base.trim().toUpperCase().replace(/[-_/]/g, "");
+  return /(?:USDT|USDC|USD)$/.test(normalized) ? normalized : `${normalized}USDT`;
+}
+
+function astroPairBases(pair: AstroPairStatus): [string, string] | null {
+  const name = pair.name?.trim();
+  if (!name) return null;
+  if (!pair.type?.toUpperCase().endsWith("R")) return [name, name];
+  const separator = name.indexOf("-");
+  if (separator <= 0 || separator >= name.length - 1) return null;
+  return [name.slice(0, separator), name.slice(separator + 1)];
+}
+
+function astroLegs(pair: AstroPairStatus): [AstroLeg, AstroLeg] | null {
+  const bases = astroPairBases(pair);
+  if (!bases) return null;
+  const type = pair.type?.toUpperCase() || "FF";
+  const dexes = [
+    pair.aEffectiveHlDex || pair.aHlDex || "",
+    pair.bEffectiveHlDex || pair.bHlDex || ""
+  ];
+  return ([0, 1] as const).map((index) => ({
+    exchange: astroExchange(index === 0 ? pair.buyEx : pair.sellEx),
+    marketType: type[index] === "S" ? "spot" : "future",
+    symbol: astroSymbol(bases[index]),
+    dex: dexes[index]
+  })) as [AstroLeg, AstroLeg];
+}
+
+function astroMarket(
+  leg: AstroLeg,
+  states: Record<string, InstrumentState>
+): MarketSnapshot | null {
+  const exchange = states[leg.symbol]?.result?.exchanges.find((item) => item.exchange === leg.exchange);
+  return leg.marketType === "spot" ? exchange?.spot ?? null : exchange?.future ?? null;
+}
+
+function positivePrice(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function executablePrice(market: MarketSnapshot, side: "bid" | "ask"): number | null {
+  return positivePrice(market[side]) ?? positivePrice(marketPrice(market));
+}
+
+function spreadPct(left: number, right: number): number {
+  return (right - left) / ((left + right) / 2) * 100;
+}
+
+function astroMetrics(
+  pair: AstroPairStatus,
+  states: Record<string, InstrumentState>
+): { value: AstroMetrics | null; error: string } {
+  const legs = astroLegs(pair);
+  if (!legs) return { value: null, error: "无法从卡片名称识别两腿标的" };
+  const markets = legs.map((leg) => astroMarket(leg, states)) as [MarketSnapshot | null, MarketSnapshot | null];
+  const missingIndex = markets.findIndex((market) => !market);
+  if (missingIndex >= 0) {
+    const leg = legs[missingIndex];
+    const state = states[leg.symbol];
+    if (!state) return { value: null, error: "实时行情刷新中" };
+    const venue = exchangeLabels[leg.exchange] ?? leg.exchange;
+    return {
+      value: null,
+      error: state.error || `未找到 ${venue} ${marketLabel(leg.marketType)}实时行情`
+    };
+  }
+  const completeMarkets = markets as [MarketSnapshot, MarketSnapshot];
+  const buyOpen = executablePrice(completeMarkets[0], "ask");
+  const sellOpen = executablePrice(completeMarkets[1], "bid");
+  const buyClose = executablePrice(completeMarkets[0], "bid");
+  const sellClose = executablePrice(completeMarkets[1], "ask");
+  const buyReference = positivePrice(marketPrice(completeMarkets[0]));
+  const sellReference = positivePrice(marketPrice(completeMarkets[1]));
+  if ([buyOpen, sellOpen, buyClose, sellClose, buyReference, sellReference].some((value) => value === null)) {
+    return { value: null, error: "实时行情缺少有效买卖价" };
+  }
+  const ratioMode = pair.type?.toUpperCase().endsWith("R") === true;
+  const buyQuantity = Math.abs(finiteNumber(pair.aExPosition) ?? 0);
+  const sellQuantity = Math.abs(finiteNumber(pair.bExPosition) ?? 0);
+  const averageBuy = positivePrice(finiteNumber(pair.avgOpenAExPrice));
+  const averageSell = positivePrice(finiteNumber(pair.avgOpenBExPrice));
+  const buyPnl = buyQuantity === 0
+    ? 0
+    : averageBuy === null ? null : (buyClose! - averageBuy) * buyQuantity;
+  const sellPnl = sellQuantity === 0
+    ? 0
+    : averageSell === null ? null : (averageSell - sellClose!) * sellQuantity;
+  return {
+    value: {
+      legs,
+      markets: completeMarkets,
+      openMetric: ratioMode ? buyOpen! / sellOpen! : spreadPct(buyOpen!, sellOpen!),
+      closeMetric: ratioMode ? buyClose! / sellClose! : spreadPct(buyClose!, sellClose!),
+      buyNotional: buyQuantity * buyReference!,
+      sellNotional: sellQuantity * sellReference!,
+      unrealizedProfit: buyPnl === null || sellPnl === null ? null : buyPnl + sellPnl
+    },
+    error: ""
+  };
+}
+
+function astroMetric(pair: AstroPairStatus, value: number | null): string {
+  if (value === null) return "-";
+  return pair.type?.toUpperCase().endsWith("R") ? price(value) : signedPct(value);
+}
+
+function usdt(value: number | null, signed = false): string {
+  if (value === null || !Number.isFinite(value)) return "-";
+  const prefix = signed && value > 0 ? "+" : "";
+  return `${prefix}${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} U`;
+}
+
+function astroLegLabel(leg: AstroLeg): string {
+  const venue = leg.exchange === "hyperliquid" && leg.dex
+    ? `Hyperliquid ${leg.dex}`
+    : exchangeLabels[leg.exchange] ?? leg.exchange;
+  return `${venue} ${marketLabel(leg.marketType)}`;
+}
+
 function marketLabel(value: string): string {
   return value === "spot" ? "现货" : "永续";
 }
@@ -245,6 +389,7 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
   const [instruments, setInstruments] = useState<Record<string, InstrumentState>>({});
   const [pairs, setPairs] = useState<Record<string, PairState>>({});
   const [astroPairs, setAstroPairs] = useState<AstroPairStatus[]>([]);
+  const [astroInstruments, setAstroInstruments] = useState<Record<string, InstrumentState>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [astroError, setAstroError] = useState("");
@@ -311,7 +456,28 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
           setPairs(Object.fromEntries(pairEntries));
         }
         const astroResult = await astroResultPromise;
-        if (astroResult.items) setAstroPairs(astroResult.items);
+        if (astroResult.items) {
+          setAstroPairs(astroResult.items);
+          if (requestedMode === "astro") {
+            const symbols = Array.from(new Set(
+              astroResult.items
+                .filter((pair) => pair.status === true)
+                .flatMap((pair) => astroLegs(pair)?.map((leg) => leg.symbol) ?? [])
+            ));
+            const instrumentEntries = await mapWithConcurrency(
+              symbols,
+              3,
+              async (symbol): Promise<[string, InstrumentState]> => {
+                try {
+                  return [symbol, { result: await lookupInstrument(symbol), error: "" }];
+                } catch (caught) {
+                  return [symbol, { result: null, error: caught instanceof Error ? caught.message : String(caught) }];
+                }
+              }
+            );
+            setAstroInstruments(Object.fromEntries(instrumentEntries));
+          }
+        }
         setAstroError(astroResult.error);
         setError("");
       } catch (caught) {
@@ -623,11 +789,16 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
             <div className="floating-watch-list">
               {runningAstroPairs.map((pair, index) => {
                 const runtime = astroRuntimeState(pair);
-                const aPosition = finiteNumber(pair.aExPosition) ?? 0;
-                const bPosition = finiteNumber(pair.bExPosition) ?? 0;
                 const realizedProfit = finiteNumber(pair.realizedProfit);
                 const hasPosition = astroHasPosition(pair);
-                const route = `${pair.buyEx || "-"} → ${pair.sellEx || "-"}`;
+                const live = astroMetrics(pair, astroInstruments);
+                const totalNotional = live.value ? live.value.buyNotional + live.value.sellNotional : null;
+                const unrealizedProfit = live.value?.unrealizedProfit ?? null;
+                const totalProfit = unrealizedProfit !== null && realizedProfit !== null
+                  ? unrealizedProfit + realizedProfit
+                  : null;
+                const profitTone = tone(totalProfit ?? unrealizedProfit);
+                const ratioMode = pair.type?.toUpperCase().endsWith("R") === true;
                 return (
                   <div className="floating-watch-row floating-watch-astro-row" key={pair.id || `${pair.name || "astro"}-${index}`}>
                     <div className="floating-watch-row-main floating-watch-astro-row-main">
@@ -638,13 +809,45 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
                       <span className={`floating-watch-value floating-watch-astro-state floating-watch-astro-state-${runtime.tone}`}>
                         {runtime.label}
                       </span>
-                      <span className="floating-watch-row-sub" title={route}>
-                        {route} · 开 {astroValue(pair.openPosition)} / 平 {astroValue(pair.closePosition)}
+                      {live.value ? (
+                        <>
+                          <span className="floating-watch-row-sub floating-watch-astro-route">
+                            {astroLegLabel(live.value.legs[0])} {price(marketPrice(live.value.markets[0]))}
+                            <span aria-hidden="true"> → </span>
+                            {astroLegLabel(live.value.legs[1])} {price(marketPrice(live.value.markets[1]))}
+                          </span>
+                          <span className="floating-watch-row-sub floating-watch-astro-spread">
+                            <span>{ratioMode ? "当前比价" : "当前价差"}</span>
+                            <strong className={ratioMode ? undefined : `floating-watch-value-${tone(live.value.openMetric)}`}>
+                              开 {astroMetric(pair, live.value.openMetric)} / 平 {astroMetric(pair, live.value.closeMetric)}
+                            </strong>
+                          </span>
+                        </>
+                      ) : (
+                        <span className="floating-watch-row-sub floating-watch-astro-error">{live.error || "实时行情刷新中"}</span>
+                      )}
+                      <span className="floating-watch-row-sub floating-watch-astro-spread">
+                        <span>Astro 阈值</span>
+                        <strong>开 {astroValue(pair.openPosition)} / 平 {astroValue(pair.closePosition)}</strong>
                       </span>
-                      <span className="floating-watch-row-sub floating-watch-astro-position">
-                        {hasPosition ? `仓位 ${price(aPosition)} / ${price(bPosition)}` : "无持仓"}
-                        {realizedProfit !== null ? ` · 已实现 ${price(realizedProfit)}` : ""}
-                      </span>
+                      {hasPosition && live.value ? (
+                        <div className="floating-watch-astro-metrics">
+                          <span><span>买腿仓位</span><strong>{usdt(live.value.buyNotional)}</strong></span>
+                          <span><span>卖腿仓位</span><strong>{usdt(live.value.sellNotional)}</strong></span>
+                          <span><span>合计仓位</span><strong>{usdt(totalNotional)}</strong></span>
+                          <span className={`floating-watch-astro-profit floating-watch-value-${profitTone}`}>
+                            <span>浮盈估算</span><strong>{usdt(live.value.unrealizedProfit, true)}</strong>
+                          </span>
+                          <span><span>已实现</span><strong>{usdt(realizedProfit, true)}</strong></span>
+                          <span className={`floating-watch-astro-profit floating-watch-value-${profitTone}`}>
+                            <span>总盈利</span><strong>{usdt(totalProfit, true)}</strong>
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="floating-watch-row-sub floating-watch-astro-position">
+                          {hasPosition ? "持仓实时估值暂不可用" : "当前无持仓"} · 已实现 {usdt(realizedProfit, true)}
+                        </span>
+                      )}
                     </div>
                   </div>
                 );

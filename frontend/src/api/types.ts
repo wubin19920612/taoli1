@@ -1635,8 +1635,16 @@ export interface AstroPairStatus {
   closePosition?: string | number | null;
   aExPosition?: string | number | null;
   bExPosition?: string | number | null;
+  avgOpenAExPrice?: string | number | null;
+  avgOpenBExPrice?: string | number | null;
+  avgCloseAExPrice?: string | number | null;
+  avgCloseBExPrice?: string | number | null;
   positionRate?: string | number | null;
   realizedProfit?: string | number | null;
+  aHlDex?: string | null;
+  bHlDex?: string | null;
+  aEffectiveHlDex?: string | null;
+  bEffectiveHlDex?: string | null;
   maxTradeUSDT?: string | number | null;
   leverage?: string | number | null;
   minNotional?: string | number | null;
