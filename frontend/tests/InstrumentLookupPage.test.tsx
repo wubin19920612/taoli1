@@ -297,6 +297,83 @@ describe("InstrumentLookupPage", () => {
     expect(screen.getByText(/人工建卡，仅作风险提示，未拦截创建/)).not.toBeNull();
   });
 
+  it("reverses both route legs and uses the reverse ask and bid when creating a card", async () => {
+    (fetch as ReturnType<typeof vi.fn>).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/astro/instrument/preview")) {
+        return Response.json({
+          ...astroPlan,
+          source_open_spread_pct: -0.1199,
+          pair: {
+            ...astroPlan.pair,
+            type: "FS",
+            buyEx: "binance",
+            sellEx: "binance",
+            openPosition: "-0.001199",
+            closePosition: "-0.002199"
+          },
+          warnings: ["人工建卡风险提示：反向 SF；本次为人工建卡，仅作风险提示，未拦截创建。"]
+        });
+      }
+      if (url.includes("/astro/instrument/card")) {
+        return Response.json({
+          enabled: true,
+          status: "created",
+          action: "add",
+          message: "反向卡片创建完成",
+          pair_name: "BTC",
+          pair_type: "FS",
+          warnings: []
+        });
+      }
+      if (url.includes("/instruments/")) return Response.json(lookupResult);
+      return Response.json({});
+    });
+    render(<InstrumentLookupPage />);
+
+    await screen.findByText("跨市场差价");
+    expect(screen.getAllByRole("button", { name: /反向/ })).toHaveLength(3);
+    await userEvent.click(screen.getAllByRole("button", { name: /反向/ })[0]);
+
+    expect(await screen.findByText("反向创建 Astro 卡片")).not.toBeNull();
+    expect(screen.getByText("FS")).not.toBeNull();
+    expect(screen.getByText("Binance · 永续 · Ask 100,110")).not.toBeNull();
+    expect(screen.getByText("Binance · 现货 · Bid 99,990")).not.toBeNull();
+    expect(screen.getByText("当前为反向建卡")).not.toBeNull();
+    expect(screen.getByText(/主动承受当前可成交价差/)).not.toBeNull();
+    expect(screen.getByText(/现货侧有可卖余额或借币能力/)).not.toBeNull();
+
+    const previewCall = (fetch as ReturnType<typeof vi.fn>).mock.calls.find(([input]) =>
+      String(input).includes("/astro/instrument/preview")
+    );
+    expect(JSON.parse(String(previewCall?.[1]?.body))).toEqual({
+      symbol: "BTCUSDT",
+      buy_exchange: "binance",
+      buy_market_type: "future",
+      sell_exchange: "binance",
+      sell_market_type: "spot"
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "确认创建" }));
+    await waitFor(() => {
+      expect((fetch as ReturnType<typeof vi.fn>).mock.calls.some(([input]) =>
+        String(input).includes("/astro/instrument/card")
+      )).toBe(true);
+    });
+    const createCall = (fetch as ReturnType<typeof vi.fn>).mock.calls.find(([input]) =>
+      String(input).includes("/astro/instrument/card")
+    );
+    const payload = JSON.parse(String(createCall?.[1]?.body));
+    expect(payload.route).toEqual({
+      symbol: "BTCUSDT",
+      buy_exchange: "binance",
+      buy_market_type: "future",
+      sell_exchange: "binance",
+      sell_market_type: "spot"
+    });
+    expect(payload.expected_open_spread_pct).toBe(-0.1199);
+  });
+
   it("hides uncommon spread types by default and can reveal and sort every spread", async () => {
     const spreadTypes = ["SF", "FF", "SS", null] as const;
     const manySpreads = Array.from({ length: 13 }, (_, index) => ({

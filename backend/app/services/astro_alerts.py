@@ -166,6 +166,7 @@ class AstroAlertService:
             enabled=self.settings.astro_manual_card_create,
             disabled_message="Manual card creation is disabled.",
             card_request=card_request,
+            manual_override=True,
         )
 
     async def _handle(
@@ -177,6 +178,7 @@ class AstroAlertService:
         live_pilot: bool = False,
         auto_open_new_listing: bool = False,
         add_restart_delay_seconds: float | None = None,
+        manual_override: bool = False,
     ) -> AstroAlertActionResult:
         if not enabled:
             return AstroAlertActionResult(
@@ -185,29 +187,55 @@ class AstroAlertService:
                 action="none",
                 message=disabled_message,
             )
+        manual_warnings: list[str] = []
+
+        def with_manual_warnings(result: AstroAlertActionResult) -> AstroAlertActionResult:
+            if not manual_warnings:
+                return result
+            return result.model_copy(
+                update={
+                    "warnings": list(dict.fromkeys([*result.warnings, *manual_warnings]))
+                }
+            )
+
         if self.risk_settings_loader is not None:
             try:
                 risk_settings = await self.risk_settings_loader()
-            except Exception as exc:  # noqa: BLE001 - fail closed before writing to Astro.
-                return AstroAlertActionResult(
-                    enabled=True,
-                    status="failed",
-                    action="risk_settings",
-                    message=f"读取全局黑名单失败，已阻止创建 Astro 卡片：{exc}",
-                )
-            if symbol_is_excluded(opportunity.symbol, risk_settings):
-                return AstroAlertActionResult(
+            except Exception as exc:  # noqa: BLE001 - automatic writes fail closed.
+                if manual_override:
+                    manual_warnings.append(
+                        "读取全局黑名单失败，无法完成风险校验；"
+                        f"本次为人工建卡，仅作风险提示，未拦截创建：{exc}"
+                    )
+                    risk_settings = None
+                else:
+                    return AstroAlertActionResult(
+                        enabled=True,
+                        status="failed",
+                        action="risk_settings",
+                        message=f"读取全局黑名单失败，已阻止创建 Astro 卡片：{exc}",
+                    )
+            if risk_settings is not None and symbol_is_excluded(opportunity.symbol, risk_settings):
+                if manual_override:
+                    manual_warnings.append(
+                        f"{opportunity.symbol} 已在全局黑名单；"
+                        "本次为人工建卡，仅作风险提示，未拦截创建"
+                    )
+                else:
+                    return AstroAlertActionResult(
+                        enabled=True,
+                        status="skipped",
+                        action="excluded_symbol",
+                        message=f"{opportunity.symbol} 已在全局黑名单，未创建 Astro 卡片",
+                    )
+        if self.settings.astro_dry_run_only:
+            return with_manual_warnings(
+                AstroAlertActionResult(
                     enabled=True,
                     status="skipped",
-                    action="excluded_symbol",
-                    message=f"{opportunity.symbol} 已在全局黑名单，未创建 Astro 卡片",
+                    action="dry_run",
+                    message="dry-run 模式开启，未写入 Astro",
                 )
-        if self.settings.astro_dry_run_only:
-            return AstroAlertActionResult(
-                enabled=True,
-                status="skipped",
-                action="dry_run",
-                message="dry-run 模式开启，未写入 Astro",
             )
 
         use_new_listing_settings = auto_open_new_listing and is_new_listing_opportunity(opportunity)
@@ -223,14 +251,22 @@ class AstroAlertService:
         planner = self.planner or AstroPairPlanner(
             AstroPlannerConfig.from_card_settings(effective_card_settings)
         )
-        plan = planner.plan(opportunity)
+        plan = planner.plan(opportunity, allow_manual_override=manual_override)
+        if manual_override:
+            manual_warnings.extend(
+                warning
+                for warning in plan.warnings
+                if warning.startswith("人工建卡风险提示：")
+            )
         if not plan.can_submit or plan.pair is None:
             reason = "；".join(plan.blockers) if plan.blockers else "当前机会无法提交 Astro"
-            return AstroAlertActionResult(
-                enabled=True,
-                status="skipped",
-                action="unsupported",
-                message=reason,
+            return with_manual_warnings(
+                AstroAlertActionResult(
+                    enabled=True,
+                    status="skipped",
+                    action="unsupported",
+                    message=reason,
+                )
             )
 
         if use_new_listing_settings:
@@ -247,13 +283,15 @@ class AstroAlertService:
         try:
             existing_pairs = await self.client.list_pairs()
         except AstroClientError as exc:
-            return AstroAlertActionResult(
-                enabled=True,
-                status="failed",
-                action="list",
-                message=f"查询现有卡片失败，{exc.message}",
-                pair_name=pair_name,
-                pair_type=pair_type,
+            return with_manual_warnings(
+                AstroAlertActionResult(
+                    enabled=True,
+                    status="failed",
+                    action="list",
+                    message=f"查询现有卡片失败，{exc.message}",
+                    pair_name=pair_name,
+                    pair_type=pair_type,
+                )
             )
 
         same_name_pairs = [item for item in existing_pairs if item.get("name") == pair_name]
@@ -262,7 +300,7 @@ class AstroAlertService:
             for existing in same_name_pairs
             if not any(_same_route(existing, planned) for planned in pair_variants)
         ]
-        if conflicting_pairs and not self.allow_same_name_variants:
+        if conflicting_pairs and not self.allow_same_name_variants and not manual_override:
             return AstroAlertActionResult(
                 enabled=True,
                 status="skipped",
@@ -273,6 +311,11 @@ class AstroAlertService:
                 ),
                 pair_name=pair_name,
                 pair_type=pair_type,
+            )
+        if conflicting_pairs and manual_override:
+            manual_warnings.append(
+                f"Astro 已存在同名 {pair_name} 但类型或交易所不同："
+                f"{_routes(conflicting_pairs)}；本次为人工建卡，仅作风险提示，未拦截创建"
             )
 
         existing_variants = [
@@ -286,16 +329,18 @@ class AstroAlertService:
             if not any(_same_route(existing, planned) for existing in same_name_pairs)
         ]
         if not missing_variants:
-            return AstroAlertActionResult(
-                enabled=True,
-                status="skipped",
-                action="existing",
-                message=(
-                    f"已跳过，Astro 已存在卡片 {pair_name} {pair_type} "
-                    f"{_routes(existing_variants)}"
-                ),
-                pair_name=pair_name,
-                pair_type=pair_type,
+            return with_manual_warnings(
+                AstroAlertActionResult(
+                    enabled=True,
+                    status="skipped",
+                    action="existing",
+                    message=(
+                        f"已跳过，Astro 已存在卡片 {pair_name} {pair_type} "
+                        f"{_routes(existing_variants)}"
+                    ),
+                    pair_name=pair_name,
+                    pair_type=pair_type,
+                )
             )
 
         created_variants: list[dict] = []
@@ -310,26 +355,30 @@ class AstroAlertService:
             except AstroClientError as exc:
                 failed_route = _route(planned)
                 if created_variants:
-                    return AstroAlertActionResult(
+                    return with_manual_warnings(
+                        AstroAlertActionResult(
+                            enabled=True,
+                            status="failed",
+                            action="add_partial",
+                            message=(
+                                f"部分创建成功：已创建 {_routes(created_variants)}；"
+                                f"{failed_route} 创建失败，{exc.message}。"
+                                f"卡片状态为{_card_state_message(pair_enabled)}，"
+                                f"{_disable_open_message(pair_enabled)}"
+                            ),
+                            pair_name=pair_name,
+                            pair_type=pair_type,
+                        )
+                    )
+                return with_manual_warnings(
+                    AstroAlertActionResult(
                         enabled=True,
                         status="failed",
-                        action="add_partial",
-                        message=(
-                            f"部分创建成功：已创建 {_routes(created_variants)}；"
-                            f"{failed_route} 创建失败，{exc.message}。"
-                            f"卡片状态为{_card_state_message(pair_enabled)}，"
-                            f"{_disable_open_message(pair_enabled)}"
-                        ),
+                        action="add",
+                        message=f"创建 {failed_route} 失败，{exc.message}",
                         pair_name=pair_name,
                         pair_type=pair_type,
                     )
-                return AstroAlertActionResult(
-                    enabled=True,
-                    status="failed",
-                    action="add",
-                    message=f"创建 {failed_route} 失败，{exc.message}",
-                    pair_name=pair_name,
-                    pair_type=pair_type,
                 )
             created_variants.append(planned)
             is_last_add = index == len(missing_variants) - 1
@@ -348,11 +397,13 @@ class AstroAlertService:
             )
         if existing_variants:
             message += f"；已存在 {_routes(existing_variants)}"
-        return AstroAlertActionResult(
-            enabled=True,
-            status="created",
-            action="add",
-            message=message,
-            pair_name=pair_name,
-            pair_type=pair_type,
+        return with_manual_warnings(
+            AstroAlertActionResult(
+                enabled=True,
+                status="created",
+                action="add",
+                message=message,
+                pair_name=pair_name,
+                pair_type=pair_type,
+            )
         )

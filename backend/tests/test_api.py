@@ -3320,7 +3320,7 @@ def test_astro_manual_card_create_endpoint_returns_action_result_for_seeded_oppo
     assert service.requests[0] is None
 
 
-def test_astro_manual_card_create_endpoint_skips_globally_blocked_symbol() -> None:
+def test_astro_manual_card_create_endpoint_warns_for_globally_blocked_symbol() -> None:
     store = SnapshotStore()
     store.set_opportunities([make_opportunity()])
     app = create_app(
@@ -3341,10 +3341,11 @@ def test_astro_manual_card_create_endpoint_skips_globally_blocked_symbol() -> No
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["status"] == "skipped"
-    assert payload["action"] == "excluded_symbol"
-    assert "已在全局黑名单" in payload["message"]
-    assert service.calls == []
+    assert payload["status"] == "created"
+    assert payload["action"] == "add"
+    assert len(service.calls) == 1
+    assert any("已在全局黑名单" in warning for warning in payload["warnings"])
+    assert any("仅作风险提示，未拦截创建" in warning for warning in payload["warnings"])
 
 
 def test_astro_manual_card_create_endpoint_forwards_overrides_and_saves_defaults() -> None:

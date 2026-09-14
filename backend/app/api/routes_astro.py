@@ -20,7 +20,7 @@ from app.services.astro_client import AstroClientError, AstroSdkClient
 from app.services.data_filters import ignored_exchange_set, symbol_is_excluded
 from app.services.astro_planner import AstroPairPlanner, AstroPlannerConfig
 from app.services.instrument_spreads import instrument_market_age_seconds
-from app.services.spread_engine import build_opportunities
+from app.services.spread_engine import Mode, build_directional_opportunity
 
 router = APIRouter(prefix="/astro")
 
@@ -50,17 +50,22 @@ def _find_opportunity(request: Request, opportunity_id: str):
     return opportunity
 
 
-def _instrument_opportunity_type(route: AstroInstrumentRouteRequest) -> str:
+def _manual_override_warning(message: str) -> str:
+    return f"{message}；本次为人工建卡，仅作风险提示，未拦截创建"
+
+
+def _unique_warnings(warnings: list[str]) -> list[str]:
+    return list(dict.fromkeys(warnings))
+
+
+def _instrument_opportunity_type(route: AstroInstrumentRouteRequest) -> Mode:
     if route.buy_market_type == MarketType.FUTURE and route.sell_market_type == MarketType.FUTURE:
         return "FF"
     if route.buy_market_type == MarketType.SPOT and route.sell_market_type == MarketType.SPOT:
         return "SS"
     if route.buy_market_type == MarketType.SPOT and route.sell_market_type == MarketType.FUTURE:
         return "SF"
-    raise HTTPException(
-        status_code=422,
-        detail="Astro 暂不支持买永续、卖现货的反向现永卡片",
-    )
+    return "SF"
 
 
 def _latest_instrument_market(
@@ -83,7 +88,7 @@ def _latest_instrument_market(
 async def _find_instrument_opportunity(
     request: Request,
     route: AstroInstrumentRouteRequest,
-) -> Opportunity:
+) -> tuple[Opportunity, list[str]]:
     try:
         symbol = normalize_pair_spread_symbol(route.symbol)
     except ValueError as exc:
@@ -96,13 +101,14 @@ async def _find_instrument_opportunity(
     if buy_exchange == sell_exchange and route.buy_market_type == route.sell_market_type:
         raise HTTPException(status_code=422, detail="买入侧和卖出侧不能是同一个市场")
 
-    risk_settings = await _effective_risk_settings(request)
+    risk_settings, warnings = await _manual_risk_settings(request)
     ignored_exchanges = ignored_exchange_set(risk_settings)
     selected_ignored = sorted({buy_exchange, sell_exchange} & ignored_exchanges)
     if selected_ignored:
-        raise HTTPException(
-            status_code=422,
-            detail=f"{'、'.join(selected_ignored)} 已在全局忽略交易所列表，已停止建卡",
+        warnings.append(
+            _manual_override_warning(
+                f"{'、'.join(selected_ignored)} 已在全局忽略交易所列表"
+            )
         )
 
     store = getattr(request.app.state, "snapshot_store", None)
@@ -140,37 +146,27 @@ async def _find_instrument_opportunity(
                 f"{side} {exchange} {market.market_type.value} 行情已过期 {age_seconds:.1f} 秒"
             )
     if stale:
-        raise HTTPException(
-            status_code=422,
-            detail=f"{'；'.join(stale)}，已停止建卡",
-        )
+        warnings.append(_manual_override_warning("；".join(stale)))
 
     mode = _instrument_opportunity_type(route)
     fees = FeeSettings()
-    opportunities = build_opportunities(
-        [buy_market, sell_market],
+    opportunity = build_directional_opportunity(
+        buy_market,
+        sell_market,
         mode=mode,
-        buy_fee_pct=fees.spot_fee_pct if mode in {"SF", "SS"} else fees.future_fee_pct,
-        sell_fee_pct=fees.future_fee_pct if mode in {"SF", "FF"} else fees.spot_fee_pct,
+        buy_fee_pct=(
+            fees.spot_fee_pct
+            if buy_market.market_type == MarketType.SPOT
+            else fees.future_fee_pct
+        ),
+        sell_fee_pct=(
+            fees.spot_fee_pct
+            if sell_market.market_type == MarketType.SPOT
+            else fees.future_fee_pct
+        ),
         safety_slippage_pct=fees.safety_slippage_pct,
     )
-    opportunity = next(
-        (
-            item
-            for item in opportunities
-            if item.buy_exchange.lower() == buy_exchange
-            and item.buy_market_type == route.buy_market_type
-            and item.sell_exchange.lower() == sell_exchange
-            and item.sell_market_type == route.sell_market_type
-        ),
-        None,
-    )
-    if opportunity is None:
-        raise HTTPException(
-            status_code=422,
-            detail="所选方向当前没有正向可成交价差，已停止建卡",
-        )
-    return opportunity
+    return opportunity, warnings
 
 
 def _settings_repo(request: Request) -> SettingsRepository:
@@ -224,10 +220,38 @@ async def _effective_risk_settings(request: Request) -> RiskSettings:
     return await repo.get_risk_settings()
 
 
-async def _build_astro_preview(request: Request, opportunity: Opportunity) -> AstroPairPlan:
-    settings = await _effective_astro_card_settings(request)
+async def _manual_risk_settings(request: Request) -> tuple[RiskSettings, list[str]]:
+    try:
+        return await _effective_risk_settings(request), []
+    except Exception:  # noqa: BLE001 - manual writes may continue with a visible warning.
+        return RiskSettings(), [
+            _manual_override_warning(
+                "读取全局风险设置失败，无法完成黑名单、忽略交易所和行情时效校验"
+            )
+        ]
+
+
+async def _manual_astro_card_settings(
+    request: Request,
+) -> tuple[AstroCardSettings, list[str]]:
+    try:
+        return await _effective_astro_card_settings(request), []
+    except Exception:  # noqa: BLE001 - manual writes may continue with a visible warning.
+        return request.app.state.settings.astro_card_settings, [
+            _manual_override_warning(
+                "读取 Astro 建卡设置失败，已使用应用默认建卡设置"
+            )
+        ]
+
+
+async def _build_astro_preview(
+    request: Request,
+    opportunity: Opportunity,
+    manual_warnings: list[str] | None = None,
+) -> AstroPairPlan:
+    settings, settings_warnings = await _manual_astro_card_settings(request)
     planner = AstroPairPlanner(AstroPlannerConfig.from_card_settings(settings))
-    plan = planner.plan(opportunity)
+    plan = planner.plan(opportunity, allow_manual_override=True)
     preview_warning = (
         "系统当前处于 dry-run 模式；点击确认也不会写入 Astro。"
         if request.app.state.settings.astro_dry_run_only
@@ -237,6 +261,8 @@ async def _build_astro_preview(request: Request, opportunity: Opportunity) -> As
         update={
             "warnings": [
                 preview_warning,
+                *(manual_warnings or []),
+                *settings_warnings,
                 *(
                     warning
                     for warning in plan.warnings
@@ -245,16 +271,22 @@ async def _build_astro_preview(request: Request, opportunity: Opportunity) -> As
             ]
         }
     )
-    risk_settings = await _effective_risk_settings(request)
+    risk_settings, risk_warnings = await _manual_risk_settings(request)
+    plan = plan.model_copy(
+        update={"warnings": _unique_warnings([*plan.warnings, *risk_warnings])}
+    )
     if not symbol_is_excluded(opportunity.symbol, risk_settings):
-        return plan
+        return plan.model_copy(update={"warnings": _unique_warnings(plan.warnings)})
     return plan.model_copy(
         update={
-            "can_submit": False,
-            "blockers": [
-                f"{opportunity.symbol} 已在全局黑名单，未创建 Astro 卡片",
-                *plan.blockers,
-            ],
+            "warnings": _unique_warnings(
+                [
+                    _manual_override_warning(
+                        f"{opportunity.symbol} 已在全局黑名单"
+                    ),
+                    *plan.warnings,
+                ]
+            ),
         }
     )
 
@@ -332,27 +364,25 @@ async def preview_astro_instrument_pair(
     route: AstroInstrumentRouteRequest,
     request: Request,
 ) -> AstroPairPlan:
-    opportunity = await _find_instrument_opportunity(request, route)
-    return await _build_astro_preview(request, opportunity)
+    opportunity, warnings = await _find_instrument_opportunity(request, route)
+    return await _build_astro_preview(request, opportunity, warnings)
 
 
 async def _create_astro_card(
     request: Request,
     opportunity: Opportunity,
     card_request: AstroCardCreateRequest | None,
+    manual_warnings: list[str] | None = None,
 ) -> AstroAlertActionResult:
-    risk_settings = await _effective_risk_settings(request)
+    risk_settings, risk_warnings = await _manual_risk_settings(request)
+    warnings = [*(manual_warnings or []), *risk_warnings]
     if symbol_is_excluded(opportunity.symbol, risk_settings):
-        return AstroAlertActionResult(
-            enabled=True,
-            status="skipped",
-            action="excluded_symbol",
-            message=f"{opportunity.symbol} 已在全局黑名单，未创建 Astro 卡片",
-            pair_name=opportunity.symbol.removesuffix("USDT"),
-            pair_type=str(opportunity.type),
+        warnings.append(
+            _manual_override_warning(f"{opportunity.symbol} 已在全局黑名单")
         )
     settings_repo = _optional_settings_repo(request)
-    saved_settings = await _effective_astro_card_settings(request)
+    saved_settings, settings_warnings = await _manual_astro_card_settings(request)
+    warnings.extend(settings_warnings)
     effective_settings = _settings_with_create_overrides(saved_settings, card_request)
     if card_request is not None and card_request.save_as_default:
         saved_settings = saved_settings.model_copy(
@@ -365,7 +395,14 @@ async def _create_astro_card(
             }
         )
         if settings_repo is not None:
-            await settings_repo.set_astro_card_settings(saved_settings)
+            try:
+                await settings_repo.set_astro_card_settings(saved_settings)
+            except Exception:  # noqa: BLE001 - the requested card can still be created.
+                warnings.append(
+                    _manual_override_warning(
+                        "保存 Astro 默认建卡设置失败，本次卡片仍使用当前填写的参数"
+                    )
+                )
     service = getattr(request.app.state, "astro_alert_service", None)
     if service is None:
         raise HTTPException(status_code=503, detail="Astro submit service is not ready")
@@ -378,15 +415,16 @@ async def _create_astro_card(
         effective_settings,
     )
     result = await service.handle_manual_create(opportunity, card_request)
-    if depth_failure is None:
-        return result
-    depth_warning = _format_depth_validation_message(depth_failure)
+    if depth_failure is not None:
+        warnings.append(
+            _manual_override_warning(_format_depth_validation_message(depth_failure))
+        )
     return result.model_copy(
         update={
-            "warnings": [
+            "warnings": _unique_warnings([
                 *result.warnings,
-                f"{depth_warning}；本次为人工建卡，仅作风险提示，未拦截创建",
-            ]
+                *warnings,
+            ])
         }
     )
 
@@ -410,16 +448,15 @@ async def create_astro_card_from_instrument(
     password: str | None = Depends(dashboard_password_header),
 ) -> AstroAlertActionResult:
     _require_dashboard_password(request, password)
-    opportunity = await _find_instrument_opportunity(request, payload.route)
+    opportunity, warnings = await _find_instrument_opportunity(request, payload.route)
     allowed_drift_pct = max(0.02, abs(payload.expected_open_spread_pct) * 0.1)
     actual_drift_pct = abs(opportunity.open_spread_pct - payload.expected_open_spread_pct)
     if actual_drift_pct > allowed_drift_pct:
-        raise HTTPException(
-            status_code=409,
-            detail=(
+        warnings.append(
+            _manual_override_warning(
                 "预览后可成交价差变化过大："
                 f"预览 {payload.expected_open_spread_pct:+.3f}%，"
-                f"当前 {opportunity.open_spread_pct:+.3f}%，请重新预览后再创建"
-            ),
+                f"当前 {opportunity.open_spread_pct:+.3f}%"
+            )
         )
-    return await _create_astro_card(request, opportunity, payload.card)
+    return await _create_astro_card(request, opportunity, payload.card, warnings)

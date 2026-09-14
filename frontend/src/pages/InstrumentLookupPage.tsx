@@ -6,6 +6,7 @@ import {
   ReloadOutlined,
   RightOutlined,
   SearchOutlined,
+  SwapOutlined,
   WarningOutlined
 } from "@ant-design/icons";
 import {
@@ -217,6 +218,51 @@ function astroRoute(symbol: string, spread: InstrumentSpreadComparison): AstroIn
     buy_market_type: spread.buy_market_type,
     sell_exchange: spread.sell_exchange,
     sell_market_type: spread.sell_market_type
+  };
+}
+
+function instrumentMarket(
+  result: InstrumentLookupResult,
+  exchange: string,
+  marketType: MarketType
+): MarketSnapshot | null {
+  const snapshot = result.exchanges.find((item) => item.exchange === exchange);
+  return (marketType === "spot" ? snapshot?.spot : snapshot?.future) ?? null;
+}
+
+function directionalOpportunityType(
+  buyMarketType: MarketType,
+  sellMarketType: MarketType
+): InstrumentSpreadComparison["opportunity_type"] {
+  if (buyMarketType === "future" && sellMarketType === "future") return "FF";
+  if (buyMarketType === "spot" && sellMarketType === "spot") return "SS";
+  if (buyMarketType === "spot" && sellMarketType === "future") return "SF";
+  return null;
+}
+
+function reverseInstrumentSpread(
+  result: InstrumentLookupResult,
+  spread: InstrumentSpreadComparison
+): InstrumentSpreadComparison | null {
+  const buyMarket = instrumentMarket(result, spread.sell_exchange, spread.sell_market_type);
+  const sellMarket = instrumentMarket(result, spread.buy_exchange, spread.buy_market_type);
+  if (!buyMarket || !sellMarket) return null;
+  const buyMid = (buyMarket.bid + buyMarket.ask) / 2;
+  const sellMid = (sellMarket.bid + sellMarket.ask) / 2;
+  return {
+    id: `${buyMarket.exchange}:${buyMarket.market_type}->${sellMarket.exchange}:${sellMarket.market_type}`,
+    buy_exchange: buyMarket.exchange,
+    buy_market_type: buyMarket.market_type,
+    buy_ask: buyMarket.ask,
+    sell_exchange: sellMarket.exchange,
+    sell_market_type: sellMarket.market_type,
+    sell_bid: sellMarket.bid,
+    price_difference: sellMarket.bid - buyMarket.ask,
+    executable_spread_pct: 2 * (sellMarket.bid - buyMarket.ask) / (buyMarket.ask + sellMarket.bid) * 100,
+    mid_spread_pct: 2 * (sellMid - buyMid) / (buyMid + sellMid) * 100,
+    opportunity_type: directionalOpportunityType(buyMarket.market_type, sellMarket.market_type),
+    astro_supported: true,
+    astro_blocker: null
   };
 }
 
@@ -457,6 +503,7 @@ export function InstrumentLookupPage() {
   ]);
   const [astroSymbol, setAstroSymbol] = useState("");
   const [astroSpread, setAstroSpread] = useState<InstrumentSpreadComparison | null>(null);
+  const [astroReversed, setAstroReversed] = useState(false);
   const [astroPlan, setAstroPlan] = useState<AstroPairPlan | null>(null);
   const [astroPreviewLoading, setAstroPreviewLoading] = useState(false);
   const [astroPreviewError, setAstroPreviewError] = useState("");
@@ -650,6 +697,7 @@ export function InstrumentLookupPage() {
     astroSubmitRequestIdRef.current += 1;
     setAstroSymbol("");
     setAstroSpread(null);
+    setAstroReversed(false);
     setAstroPlan(null);
     setAstroPreviewLoading(false);
     setAstroPreviewError("");
@@ -659,20 +707,29 @@ export function InstrumentLookupPage() {
     astroSizingForm.resetFields();
   };
 
-  const openAstroPreview = async (spread: InstrumentSpreadComparison) => {
+  const openAstroPreview = async (
+    spread: InstrumentSpreadComparison,
+    reversed = false
+  ) => {
     if (!result || astroSubmitLoading) return;
+    const selectedSpread = reversed ? reverseInstrumentSpread(result, spread) : spread;
+    if (!selectedSpread) {
+      message.error("无法读取反向路线的最新盘口，请刷新后重试");
+      return;
+    }
     const requestId = ++astroPreviewRequestIdRef.current;
     astroSubmitRequestIdRef.current += 1;
     const symbol = result.symbol;
     setAstroSymbol(symbol);
-    setAstroSpread(spread);
+    setAstroSpread(selectedSpread);
+    setAstroReversed(reversed);
     setAstroPlan(null);
     setAstroPreviewError("");
     setAstroSubmitResult(null);
     setAstroSubmitError("");
     setAstroPreviewLoading(true);
     try {
-      const plan = await previewInstrumentAstroPair(astroRoute(symbol, spread));
+      const plan = await previewInstrumentAstroPair(astroRoute(symbol, selectedSpread));
       if (requestId !== astroPreviewRequestIdRef.current) return;
       setAstroPlan(plan);
       if (plan.pair) {
@@ -699,7 +756,7 @@ export function InstrumentLookupPage() {
     if (
       !astroSymbol
       || !astroSpread
-      || !astroPlan?.can_submit
+      || !astroPlan?.pair
       || astroPlan.source_open_spread_pct === null
     ) return;
     const requestId = ++astroSubmitRequestIdRef.current;
@@ -896,7 +953,7 @@ export function InstrumentLookupPage() {
       title: "操作",
       key: "action",
       fixed: "right",
-      width: 132,
+      width: 218,
       render: (_, spread) => {
         const blocker = pairSpreadBlocker(spread);
         return (
@@ -912,7 +969,7 @@ export function InstrumentLookupPage() {
                 />
               </span>
             </Tooltip>
-            {spread.astro_supported ? (
+            <Tooltip title={spread.astro_blocker ? `${spread.astro_blocker}；人工建卡仅提示，不会拦截` : "按当前方向创建卡片"}>
               <Button
                 size="small"
                 type="primary"
@@ -921,11 +978,16 @@ export function InstrumentLookupPage() {
               >
                 建卡
               </Button>
-            ) : (
-              <Tooltip title={spread.astro_blocker}>
-                <span><Button size="small" icon={<PlusOutlined />} disabled>建卡</Button></span>
-              </Tooltip>
-            )}
+            </Tooltip>
+            <Tooltip title="交换买卖方向，按反向盘口创建卡片">
+              <Button
+                size="small"
+                icon={<SwapOutlined />}
+                onClick={() => void openAstroPreview(spread, true)}
+              >
+                反向
+              </Button>
+            </Tooltip>
           </Space>
         );
       }
@@ -1101,7 +1163,7 @@ export function InstrumentLookupPage() {
 
       <Modal
         open={astroSpread !== null}
-        title="创建 Astro 卡片"
+        title={astroReversed ? "反向创建 Astro 卡片" : "创建 Astro 卡片"}
         width={760}
         onCancel={closeAstroPreview}
         closable={!astroSubmitLoading}
@@ -1113,7 +1175,7 @@ export function InstrumentLookupPage() {
             key="submit"
             type="primary"
             loading={astroSubmitLoading}
-            disabled={astroPreviewLoading || astroSubmitLoading || !astroPlan?.can_submit}
+            disabled={astroPreviewLoading || astroSubmitLoading || !astroPlan?.pair}
             onClick={() => void submitAstroCard()}
           >
             确认创建
@@ -1141,6 +1203,16 @@ export function InstrumentLookupPage() {
               <Descriptions.Item label="允许提交">{astroPlan?.can_submit ? "是" : "否"}</Descriptions.Item>
             </Descriptions>
             {astroPreviewLoading ? <Alert type="info" showIcon message="正在按最新行情生成卡片预览" /> : null}
+            {astroReversed ? (
+              <Alert
+                type="warning"
+                showIcon
+                message="当前为反向建卡"
+                description={astroPlan?.pair?.type === "FS"
+                  ? "将使用 FS 类型买入永续、卖出现货，并主动承受当前可成交价差；请确认现货侧有可卖余额或借币能力。"
+                  : "将交换买卖方向并主动承受当前可成交价差；请核对开平仓阈值和资金费率。"}
+              />
+            ) : null}
             {astroPreviewError ? <Alert type="error" showIcon message={astroPreviewError} /> : null}
             {astroSubmitError ? <Alert type="error" showIcon message={astroSubmitError} /> : null}
             {astroSubmitResult ? (

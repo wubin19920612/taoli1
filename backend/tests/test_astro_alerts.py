@@ -125,10 +125,9 @@ async def test_dry_run_mode_skips_astro_writes() -> None:
         "handle_alert",
         "handle_new_listing_alert",
         "handle_live_pilot",
-        "handle_manual_create",
     ],
 )
-async def test_global_blacklist_blocks_every_astro_create_path(handler_name: str) -> None:
+async def test_global_blacklist_blocks_automatic_astro_create_paths(handler_name: str) -> None:
     async def load_risk_settings() -> RiskSettings:
         return RiskSettings(excluded_symbols=["BTCUSDT"])
 
@@ -151,6 +150,27 @@ async def test_global_blacklist_blocks_every_astro_create_path(handler_name: str
     assert "BTCUSDT 已在全局黑名单" in result.message
     assert client.list_calls == 0
     assert not client.added
+
+
+@pytest.mark.asyncio
+async def test_global_blacklist_warns_but_does_not_block_manual_create() -> None:
+    async def load_risk_settings() -> RiskSettings:
+        return RiskSettings(excluded_symbols=["BTCUSDT"])
+
+    client = FakeAstroClient()
+    service = AstroAlertService(
+        client,
+        Settings(astro_manual_card_create=True, astro_dry_run_only=False),
+        risk_settings_loader=load_risk_settings,
+        add_restart_delay_seconds=0,
+    )
+
+    result = await service.handle_manual_create(opportunity())
+
+    assert result.status == "created"
+    assert client.added
+    assert any("BTCUSDT 已在全局黑名单" in warning for warning in result.warnings)
+    assert any("仅作风险提示，未拦截创建" in warning for warning in result.warnings)
 
 
 @pytest.mark.asyncio
@@ -235,6 +255,34 @@ async def test_manual_create_can_override_open_enabled() -> None:
     assert result.status == "created"
     assert client.added[0]["status"] is True
     assert client.added[0]["disableOpen"] is False
+
+
+@pytest.mark.asyncio
+async def test_manual_create_allows_reverse_sf_with_negative_open_spread() -> None:
+    client = FakeAstroClient()
+    service = AstroAlertService(
+        client,
+        Settings(astro_manual_card_create=True, astro_dry_run_only=False),
+        add_restart_delay_seconds=0,
+    )
+    reverse_sf = opportunity(
+        OpportunityType.SF,
+        MarketType.FUTURE,
+        MarketType.SPOT,
+    ).model_copy(
+        update={
+            "open_spread_pct": -0.8,
+            "close_spread_pct": -0.35,
+        }
+    )
+
+    result = await service.handle_manual_create(reverse_sf)
+
+    assert result.status == "created"
+    assert client.added[0]["type"] == "FS"
+    assert client.added[0]["openPosition"] == "-0.008000"
+    assert client.added[0]["closePosition"] == "-0.009000"
+    assert any("Astro FS" in warning for warning in result.warnings)
 
 
 @pytest.mark.asyncio
@@ -650,6 +698,35 @@ async def test_existing_same_name_different_type_is_not_overwritten() -> None:
     assert "同名 BTC" in result.message
     assert not client.added
     assert not client.updated
+
+
+@pytest.mark.asyncio
+async def test_manual_create_warns_for_same_name_conflict_and_adds_new_route() -> None:
+    client = FakeAstroClient(
+        [
+            {
+                "name": "BTC",
+                "type": "SF",
+                "buyEx": "gate",
+                "sellEx": "bybit",
+            }
+        ]
+    )
+    service = AstroAlertService(
+        client,
+        Settings(astro_manual_card_create=True, astro_dry_run_only=False),
+        add_restart_delay_seconds=0,
+    )
+
+    result = await service.handle_manual_create(opportunity())
+
+    assert result.status == "created"
+    assert [(item["buyEx"], item["sellEx"]) for item in client.added] == [
+        ("binance", "okx"),
+        ("gc-binance", "gc-okx"),
+    ]
+    assert any("Astro 已存在同名 BTC" in warning for warning in result.warnings)
+    assert any("仅作风险提示，未拦截创建" in warning for warning in result.warnings)
 
 
 @pytest.mark.asyncio

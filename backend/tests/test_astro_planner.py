@@ -84,6 +84,33 @@ def test_ss_opportunity_is_blocked_because_astro_sdk_does_not_document_ss() -> N
     assert any("SS" in blocker for blocker in plan.blockers)
 
 
+def test_manual_reverse_sf_builds_fs_pair_and_turns_risks_into_warnings() -> None:
+    planner = AstroPairPlanner(AstroPlannerConfig())
+    reverse_sf = opportunity(
+        OpportunityType.SF,
+        MarketType.FUTURE,
+        MarketType.SPOT,
+    ).model_copy(
+        update={
+            "open_spread_pct": -0.8,
+            "close_spread_pct": -0.35,
+        }
+    )
+
+    plan = planner.plan(reverse_sf, allow_manual_override=True)
+
+    assert plan.can_submit is True
+    assert plan.blockers == []
+    assert plan.pair is not None
+    assert plan.pair["type"] == "FS"
+    assert plan.pair["buyEx"] == "binance"
+    assert plan.pair["sellEx"] == "okx"
+    assert plan.pair["openPosition"] == "-0.008000"
+    assert plan.pair["closePosition"] == "-0.009000"
+    assert any("Astro FS" in warning for warning in plan.warnings)
+    assert any("Open spread must be positive" in warning for warning in plan.warnings)
+
+
 def test_sf_opportunity_maps_spot_to_future() -> None:
     planner = AstroPairPlanner(AstroPlannerConfig(default_max_trade_usdt=25))
 
@@ -171,6 +198,53 @@ def test_aliased_future_pair_builds_fr_card_with_ratio_positions() -> None:
     )
 
 
+def test_fr_zero_close_buffer_still_preserves_strict_astro_order() -> None:
+    planner = AstroPairPlanner(AstroPlannerConfig(default_close_position_buffer_pct=0))
+    aliased = opportunity().model_copy(
+        update={
+            "symbol": "OPENAIUSDT",
+            "buy_raw_symbol": "OPENAIUSDT",
+            "sell_raw_symbol": "io:OAI",
+            "open_spread_pct": 0.88,
+            "close_spread_pct": 0.94,
+            "net_funding_next_pct": -1.6,
+        }
+    )
+
+    plan = planner.plan(aliased)
+
+    assert plan.can_submit is True
+    assert plan.pair is not None
+    assert plan.pair["type"] == "FR"
+    assert plan.pair["openPosition"] == "1.008839"
+    assert plan.pair["closePosition"] == "1.008838"
+    assert any("precision unit" in warning for warning in plan.warnings)
+
+
+def test_fr_sub_precision_close_buffer_still_preserves_strict_order() -> None:
+    planner = AstroPairPlanner(
+        AstroPlannerConfig(default_close_position_buffer_pct=0.00001)
+    )
+    aliased = opportunity().model_copy(
+        update={
+            "symbol": "OPENAIUSDT",
+            "buy_raw_symbol": "OPENAIUSDT",
+            "sell_raw_symbol": "io:OAI",
+            "open_spread_pct": 0.88,
+            "close_spread_pct": 0.94,
+            "net_funding_next_pct": -1.6,
+        }
+    )
+
+    plan = planner.plan(aliased)
+
+    assert plan.can_submit is True
+    assert plan.pair is not None
+    assert plan.pair["type"] == "FR"
+    assert plan.pair["openPosition"] == "1.008839"
+    assert plan.pair["closePosition"] == "1.008838"
+
+
 def test_standard_exchange_raw_symbols_stay_an_ff_card() -> None:
     planner = AstroPairPlanner(AstroPlannerConfig())
     standard_pair = opportunity().model_copy(
@@ -256,6 +330,47 @@ def test_close_position_adjustment_uses_configured_buffer() -> None:
     assert plan.can_submit is True
     assert plan.pair is not None
     assert plan.pair["closePosition"] == "0.006800"
+
+
+def test_zero_close_position_buffer_still_preserves_strict_astro_order() -> None:
+    planner = AstroPairPlanner(AstroPlannerConfig(default_close_position_buffer_pct=0))
+
+    plan = planner.plan(
+        opportunity().model_copy(
+            update={
+                "open_spread_pct": 0.88,
+                "close_spread_pct": 0.94,
+                "net_funding_next_pct": -1.6,
+            }
+        )
+    )
+
+    assert plan.can_submit is True
+    assert plan.pair is not None
+    assert plan.pair["openPosition"] == "0.008800"
+    assert plan.pair["closePosition"] == "0.008799"
+    assert any("precision unit" in warning for warning in plan.warnings)
+
+
+def test_sub_precision_close_position_buffer_still_preserves_strict_order() -> None:
+    planner = AstroPairPlanner(
+        AstroPlannerConfig(default_close_position_buffer_pct=0.00001)
+    )
+
+    plan = planner.plan(
+        opportunity().model_copy(
+            update={
+                "open_spread_pct": 0.88,
+                "close_spread_pct": 0.94,
+                "net_funding_next_pct": -1.6,
+            }
+        )
+    )
+
+    assert plan.can_submit is True
+    assert plan.pair is not None
+    assert plan.pair["openPosition"] == "0.008800"
+    assert plan.pair["closePosition"] == "0.008799"
 
 
 def test_unfavorable_predicted_funding_raises_close_position() -> None:

@@ -88,6 +88,17 @@ class RiskSettingsRepository:
         return None
 
 
+class FailingRiskSettingsRepository(RiskSettingsRepository):
+    async def get_risk_settings(self) -> RiskSettings:
+        raise RuntimeError("database unavailable")
+
+    async def find_astro_card_settings(self):
+        raise RuntimeError("database unavailable")
+
+    async def set_astro_card_settings(self, settings: AstroCardSettings):
+        raise RuntimeError("database unavailable")
+
+
 def instrument_app(*, dashboard_password: str = "", astro_dry_run_only: bool = True):
     store = SnapshotStore()
     store.set_all_markets(
@@ -142,8 +153,81 @@ def test_instrument_astro_preview_surfaces_global_blacklist() -> None:
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["can_submit"] is False
-    assert "BTCUSDT 已在全局黑名单" in payload["blockers"][0]
+    assert payload["can_submit"] is True
+    assert payload["pair"] is not None
+    assert payload["blockers"] == []
+    assert any("BTCUSDT 已在全局黑名单" in warning for warning in payload["warnings"])
+    assert any("仅作风险提示，未拦截创建" in warning for warning in payload["warnings"])
+
+
+def test_instrument_astro_preview_allows_selected_negative_spread_direction() -> None:
+    app = instrument_app()
+    reverse_route = {
+        **route(),
+        "buy_exchange": "binance",
+        "sell_exchange": "okx",
+    }
+
+    with TestClient(app) as client:
+        response = client.post("/api/astro/instrument/preview", json=reverse_route)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["can_submit"] is True
+    assert payload["pair"]["buyEx"] == "binance"
+    assert payload["pair"]["sellEx"] == "okx"
+    assert payload["pair"]["openPosition"] == "-0.029851"
+    assert payload["pair"]["closePosition"] == "-0.030851"
+    assert any("Open spread must be positive" in warning for warning in payload["warnings"])
+
+
+def test_instrument_astro_preview_maps_future_to_spot_route_to_fs() -> None:
+    app = instrument_app()
+    app.state.snapshot_store.set_all_markets(
+        [
+            market("binance", bid=99, ask=100),
+            market("okx", bid=101, ask=102).model_copy(
+                update={"market_type": MarketType.SPOT}
+            ),
+        ]
+    )
+    reverse_sf_route = {
+        "symbol": "BTCUSDT",
+        "buy_exchange": "binance",
+        "buy_market_type": "future",
+        "sell_exchange": "okx",
+        "sell_market_type": "spot",
+    }
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/astro/instrument/preview",
+            json=reverse_sf_route,
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["can_submit"] is True
+    assert payload["pair"]["type"] == "FS"
+    assert payload["pair"]["buyEx"] == "binance"
+    assert payload["pair"]["sellEx"] == "okx"
+    assert any("Astro FS" in warning for warning in payload["warnings"])
+
+
+def test_instrument_astro_preview_warns_when_risk_settings_cannot_be_loaded() -> None:
+    app = instrument_app()
+
+    with TestClient(app) as client:
+        app.state.settings_repo = FailingRiskSettingsRepository()
+        response = client.post("/api/astro/instrument/preview", json=route())
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["can_submit"] is True
+    assert payload["pair"] is not None
+    assert any("读取全局风险设置失败" in warning for warning in payload["warnings"])
+    assert any("读取 Astro 建卡设置失败" in warning for warning in payload["warnings"])
+    assert any("仅作风险提示，未拦截创建" in warning for warning in payload["warnings"])
 
 
 def test_instrument_astro_create_rebuilds_route_and_passes_sizing_to_shared_service() -> None:
@@ -239,7 +323,7 @@ def test_instrument_astro_create_requires_dashboard_password() -> None:
     assert response.status_code == 401
 
 
-def test_instrument_astro_preview_rejects_ignored_exchange() -> None:
+def test_instrument_astro_preview_warns_for_ignored_exchange_without_blocking() -> None:
     app = instrument_app()
 
     with TestClient(app) as client:
@@ -248,11 +332,14 @@ def test_instrument_astro_preview_rejects_ignored_exchange() -> None:
         )
         response = client.post("/api/astro/instrument/preview", json=route())
 
-    assert response.status_code == 422
-    assert "okx 已在全局忽略交易所列表" in response.json()["detail"]
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["can_submit"] is True
+    assert payload["pair"] is not None
+    assert any("okx 已在全局忽略交易所列表" in warning for warning in payload["warnings"])
 
 
-def test_instrument_astro_preview_rejects_stale_market_snapshot() -> None:
+def test_instrument_astro_preview_warns_for_stale_market_snapshot_without_blocking() -> None:
     app = instrument_app()
     now = datetime.now(UTC)
     app.state.snapshot_store.set_all_markets(
@@ -265,13 +352,17 @@ def test_instrument_astro_preview_rejects_stale_market_snapshot() -> None:
     with TestClient(app) as client:
         response = client.post("/api/astro/instrument/preview", json=route())
 
-    assert response.status_code == 422
-    assert "买入侧 okx future 行情已过期" in response.json()["detail"]
-    assert "已停止建卡" in response.json()["detail"]
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["can_submit"] is True
+    assert payload["pair"] is not None
+    assert any("买入侧 okx future 行情已过期" in warning for warning in payload["warnings"])
 
 
-def test_instrument_astro_create_rejects_spread_drift_after_preview() -> None:
+def test_instrument_astro_create_warns_for_spread_drift_and_continues() -> None:
     app = instrument_app(dashboard_password="secret")
+    service = FakeAstroSubmitService()
+    app.state.astro_alert_service = service
 
     with TestClient(app) as client:
         response = client.post(
@@ -284,5 +375,61 @@ def test_instrument_astro_create_rejects_spread_drift_after_preview() -> None:
             },
         )
 
-    assert response.status_code == 409
-    assert "预览后可成交价差变化过大" in response.json()["detail"]
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "created"
+    assert len(service.calls) == 1
+    assert any("预览后可成交价差变化过大" in warning for warning in payload["warnings"])
+    assert any("仅作风险提示，未拦截创建" in warning for warning in payload["warnings"])
+
+
+def test_instrument_astro_create_warns_when_risk_settings_cannot_be_loaded() -> None:
+    app = instrument_app(dashboard_password="secret")
+    service = FakeAstroSubmitService()
+    app.state.astro_alert_service = service
+
+    with TestClient(app) as client:
+        app.state.settings_repo = FailingRiskSettingsRepository()
+        response = client.post(
+            "/api/astro/instrument/card",
+            headers={"X-Dashboard-Password": "secret"},
+            json={
+                "route": route(),
+                "card": {},
+                "expected_open_spread_pct": 1,
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "created"
+    assert len(service.calls) == 1
+    assert any("读取全局风险设置失败" in warning for warning in payload["warnings"])
+    assert any("读取 Astro 建卡设置失败" in warning for warning in payload["warnings"])
+
+
+def test_instrument_astro_create_warns_when_default_settings_cannot_be_saved() -> None:
+    app = instrument_app(dashboard_password="secret", astro_dry_run_only=False)
+    service = FakeAstroSubmitService()
+    app.state.astro_alert_service = service
+
+    with TestClient(app) as client:
+        app.state.settings_repo = FailingRiskSettingsRepository()
+        response = client.post(
+            "/api/astro/instrument/card",
+            headers={"X-Dashboard-Password": "secret"},
+            json={
+                "route": route(),
+                "card": {
+                    "max_trade_usdt": 25,
+                    "save_as_default": True,
+                },
+                "expected_open_spread_pct": 1,
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "created"
+    assert len(service.calls) == 1
+    assert any("保存 Astro 默认建卡设置失败" in warning for warning in payload["warnings"])
