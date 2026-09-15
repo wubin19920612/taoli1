@@ -151,12 +151,6 @@ function finiteNumber(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function astroValue(value: unknown): string {
-  const parsed = finiteNumber(value);
-  if (parsed !== null) return price(parsed);
-  return typeof value === "string" && value.trim() ? value : "-";
-}
-
 function astroHasPosition(pair: AstroPairStatus): boolean {
   return [pair.aExPosition, pair.bExPosition].some((value) => {
     const parsed = finiteNumber(value);
@@ -250,6 +244,10 @@ function spreadPct(left: number, right: number): number {
   return (right - left) / ((left + right) / 2) * 100;
 }
 
+function astroRatioReference(pair: AstroPairStatus): number {
+  return positivePrice(finiteNumber(pair.regressionValue)) ?? 1;
+}
+
 function astroMetrics(
   pair: AstroPairStatus,
   states: Record<string, InstrumentState>
@@ -277,12 +275,17 @@ function astroMetrics(
     return { value: null, error: "实时行情缺少有效买卖价" };
   }
   const ratioMode = pair.type?.toUpperCase().endsWith("R") === true;
+  const ratioReference = astroRatioReference(pair);
   return {
     value: {
       legs,
       markets: completeMarkets,
-      openMetric: ratioMode ? buyOpen! / sellOpen! : spreadPct(buyOpen!, sellOpen!),
-      closeMetric: ratioMode ? buyClose! / sellClose! : spreadPct(buyClose!, sellClose!),
+      openMetric: ratioMode
+        ? spreadPct(buyOpen!, sellOpen! * ratioReference)
+        : spreadPct(buyOpen!, sellOpen!),
+      closeMetric: ratioMode
+        ? spreadPct(buyClose!, sellClose! * ratioReference)
+        : spreadPct(buyClose!, sellClose!),
       buyClose: buyClose!,
       sellClose: sellClose!
     },
@@ -317,9 +320,20 @@ function astroLocalProfitEstimate(
   return { value: buyProfit + sellProfit - fee, feeRate };
 }
 
-function astroMetric(pair: AstroPairStatus, value: number | null): string {
-  if (value === null) return "-";
-  return pair.type?.toUpperCase().endsWith("R") ? price(value) : signedPct(value);
+function astroSpreadMetric(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return "-";
+  const displayValue = Math.abs(value) < 0.005 ? 0 : value;
+  return `${displayValue.toFixed(2)}%`;
+}
+
+function astroThresholdMetric(pair: AstroPairStatus, value: unknown): string {
+  const parsed = finiteNumber(value);
+  if (parsed === null) return "-";
+  const ratioMode = pair.type?.toUpperCase().endsWith("R") === true;
+  const percentage = ratioMode
+    ? spreadPct(parsed, astroRatioReference(pair))
+    : parsed * 100;
+  return astroSpreadMetric(percentage);
 }
 
 function usdt(value: number | null, signed = false): string {
@@ -860,9 +874,9 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
                             {astroLegLabel(live.value.legs[1])} {price(marketPrice(live.value.markets[1]))}
                           </span>
                           <span className="floating-watch-row-sub floating-watch-astro-spread">
-                            <span>{ratioMode ? "当前比价" : "当前价差"}</span>
+                            <span>当前价差</span>
                             <strong className={ratioMode ? undefined : `floating-watch-value-${tone(live.value.openMetric)}`}>
-                              开 {astroMetric(pair, live.value.openMetric)} / 平 {astroMetric(pair, live.value.closeMetric)}
+                              开 {astroSpreadMetric(live.value.openMetric)} / 平 {astroSpreadMetric(live.value.closeMetric)}
                             </strong>
                           </span>
                         </>
@@ -870,8 +884,10 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
                         <span className="floating-watch-row-sub floating-watch-astro-error">{live.error || "实时行情刷新中"}</span>
                       )}
                       <span className="floating-watch-row-sub floating-watch-astro-spread">
-                        <span>Astro 阈值</span>
-                        <strong>开 {astroValue(pair.openPosition)} / 平 {astroValue(pair.closePosition)}</strong>
+                        <span>
+                          开清条件 {ratioMode ? <span className="floating-watch-astro-type">1:{price(astroRatioReference(pair))}</span> : null}
+                        </span>
+                        <strong>开 {astroThresholdMetric(pair, pair.openPosition)} / 平 {astroThresholdMetric(pair, pair.closePosition)}</strong>
                       </span>
                       {hasPosition ? (
                         <>

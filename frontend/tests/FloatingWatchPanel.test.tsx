@@ -142,8 +142,9 @@ const astroPairs = [
     disableClose: false,
     buyEx: "bitget",
     sellEx: "gc-okx",
-    openPosition: 9.704433,
-    closePosition: 9.791203,
+    openPosition: 9.706375012316485,
+    closePosition: 9.71900419028839,
+    regressionValue: 10,
     aExPosition: 40,
     bExPosition: 400,
     avgOpenAExPrice: 190,
@@ -379,8 +380,9 @@ describe("FloatingWatchPanel", () => {
     expect(await within(panel).findByText("ANTHROPIC-ANTHROPIC")).not.toBeNull();
     expect(within(panel).getByText("持仓中")).not.toBeNull();
     expect(within(panel).getByText("仅平仓")).not.toBeNull();
-    expect(await within(panel).findByText("开 10.1005 / 平 9.9005")).not.toBeNull();
-    expect(within(panel).getByText("开 9.70443 / 平 9.7912")).not.toBeNull();
+    expect(await within(panel).findByText("开 -1.00% / 平 1.00%")).not.toBeNull();
+    expect(within(panel).getByText("开 2.98% / 平 2.85%")).not.toBeNull();
+    expect(within(panel).getByText("1:10")).not.toBeNull();
     expect(within(panel).getByText("7,600 U")).not.toBeNull();
     expect(within(panel).getByText("8,400 U")).not.toBeNull();
     expect(within(panel).getByText("-1.30 U")).not.toBeNull();
@@ -392,8 +394,8 @@ describe("FloatingWatchPanel", () => {
     expect(within(panel).queryByText("+10.00 U")).toBeNull();
     expect(within(panel).queryByText("+720.00 U")).toBeNull();
     expect(within(panel).queryByText("+730.00 U")).toBeNull();
-    expect(within(panel).getByText("开 +0.995% / 平 +2.985%")).not.toBeNull();
-    expect(within(panel).getByText("开 0.003 / 平 -0.0015")).not.toBeNull();
+    expect(within(panel).getByText("开 1.00% / 平 2.99%")).not.toBeNull();
+    expect(within(panel).getByText("开 0.30% / 平 -0.15%")).not.toBeNull();
     expect(within(panel).getByText("当前无持仓 · 已实现 --")).not.toBeNull();
     expect(within(panel).queryByText("STEEM")).toBeNull();
     expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("/astro/pairs"))).toBe(true);
