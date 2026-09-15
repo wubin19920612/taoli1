@@ -11,6 +11,7 @@ from app.exchanges.bitget import BitgetAdapter
 from app.exchanges.bybit import BybitAdapter
 from app.exchanges.gate import GateAdapter
 from app.exchanges.hyperliquid import HyperliquidAdapter
+from app.exchanges.lighter import LighterAdapter
 from app.exchanges.htx import HTXAdapter
 from app.exchanges.okx import OKXAdapter
 from app.models.market import MarketSnapshot
@@ -117,6 +118,7 @@ def default_exchange_adapters() -> list[ExchangeAdapter]:
         HTXAdapter(),
         AsterAdapter(),
         HyperliquidAdapter(),
+        LighterAdapter(),
     ]
 
 

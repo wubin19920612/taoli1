@@ -30,7 +30,7 @@ import type {
   OpportunityRadarSignalLevel
 } from "../api/types";
 
-const exchangeOptions = ["bybit", "binance", "okx", "gate", "bitget", "aster", "hyperliquid"].map(
+const exchangeOptions = ["bybit", "binance", "okx", "gate", "bitget", "aster", "hyperliquid", "lighter"].map(
   (value) => ({ label: value, value })
 );
 

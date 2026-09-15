@@ -20,6 +20,7 @@ from app.exchanges.base import (
     utc_now,
 )
 from app.exchanges.okx import okx_ticker_volume_24h_usdt
+from app.exchanges.lighter import LIGHTER_URL, lighter_best_prices, lighter_symbol
 from app.models.market import MarketType
 from app.models.pair_spread import (
     PairSpreadCurrentLeg,
@@ -959,6 +960,8 @@ class PairSpreadQueryService:
         self._hyperliquid_dex_details: dict[str, str] = {}
         self._hyperliquid_meta_contexts_by_dex: dict[str, tuple[dict[str, Any], list[Any]]] = {}
         self._hyperliquid_coin_by_base: dict[tuple[str, str], tuple[str, str]] = {}
+        self._lighter_markets: dict[tuple[MarketType, str], dict[str, Any]] | None = None
+        self._lighter_markets_at: datetime | None = None
 
     async def aclose(self) -> None:
         if self._owns_client and not self.client.is_closed:
@@ -1899,6 +1902,7 @@ class PairSpreadQueryService:
                 "bybit": self._fetch_bybit_spot_klines,
                 "gate": self._fetch_gate_spot_klines,
                 "bitget": self._fetch_bitget_spot_klines,
+                "lighter": lambda s, a, b, i: self._fetch_lighter_klines(s, a, b, i, market_type=MarketType.SPOT),
             }
             handler = spot_handlers.get(exchange)
             if handler is None:
@@ -1925,6 +1929,7 @@ class PairSpreadQueryService:
             "gate": self._fetch_gate_klines,
             "bitget": self._fetch_bitget_klines,
             "hyperliquid": self._fetch_hyperliquid_klines,
+            "lighter": self._fetch_lighter_klines,
         }
         return await futures_handlers[exchange](symbol, start, end, interval_minutes)
 
@@ -1975,6 +1980,7 @@ class PairSpreadQueryService:
                 "bybit": self._fetch_bybit_spot_current,
                 "gate": self._fetch_gate_spot_current,
                 "bitget": self._fetch_bitget_spot_current,
+                "lighter": lambda s: self._fetch_lighter_current(s, market_type=MarketType.SPOT),
             }
             handler = spot_handlers.get(exchange)
             if handler is None:
@@ -1989,6 +1995,7 @@ class PairSpreadQueryService:
             "gate": self._fetch_gate_current,
             "bitget": self._fetch_bitget_current,
             "hyperliquid": self._fetch_hyperliquid_current,
+            "lighter": self._fetch_lighter_current,
         }
         return await futures_handlers[exchange](symbol)
 
@@ -2019,6 +2026,7 @@ class PairSpreadQueryService:
             "gate": self._fetch_gate_funding,
             "bitget": self._fetch_bitget_funding,
             "hyperliquid": self._fetch_hyperliquid_funding,
+            "lighter": self._fetch_lighter_funding,
         }
         return await handlers[exchange](symbol, start, end)
 
@@ -2564,6 +2572,136 @@ class PairSpreadQueryService:
                 break
             cursor = next_cursor
         return _dedupe_sorted(points)
+
+    async def _lighter_market(self, symbol: str, market_type: MarketType) -> dict[str, Any]:
+        if self._lighter_markets_at is None or utc_now() - self._lighter_markets_at > timedelta(minutes=1):
+            payload = await self._get_json(f"{LIGHTER_URL}/orderBookDetails")
+            if not isinstance(payload, dict) or payload.get("code") != 200:
+                raise RuntimeError("invalid Lighter market details")
+            markets: dict[tuple[MarketType, str], dict[str, Any]] = {}
+            for kind, key in (
+                (MarketType.FUTURE, "order_book_details"),
+                (MarketType.SPOT, "spot_order_book_details"),
+            ):
+                for item in payload.get(key, []):
+                    if not isinstance(item, dict) or item.get("status") != "active" or not isinstance(item.get("market_id"), int):
+                        continue
+                    resolved = lighter_symbol(str(item.get("symbol", "")), kind)
+                    if resolved:
+                        markets[(kind, resolved[0])] = item
+            self._lighter_markets = markets
+            self._lighter_markets_at = utc_now()
+        market = (self._lighter_markets or {}).get((market_type, _compact_symbol(symbol)))
+        if market is None:
+            raise RuntimeError(f"Lighter {market_type.value} symbol not found: {symbol}")
+        return market
+
+    async def _fetch_lighter_klines(
+        self,
+        symbol: str,
+        start: datetime,
+        end: datetime,
+        interval_minutes: int,
+        *,
+        market_type: MarketType = MarketType.FUTURE,
+    ) -> list[PairSpreadKlinePoint]:
+        resolution = {1: "1m", 5: "5m", 15: "15m", 60: "1h", 240: "4h", 1440: "1d"}.get(interval_minutes)
+        if resolution is None:
+            raise RuntimeError(f"Lighter does not support {interval_minutes} minute candles")
+        market_id = (await self._lighter_market(symbol, market_type))["market_id"]
+        interval_seconds = interval_minutes * 60
+        cursor = int(start.timestamp())
+        end_seconds = int(end.timestamp())
+        points: list[PairSpreadKlinePoint] = []
+        while cursor <= end_seconds:
+            chunk_end = min(end_seconds, cursor + 499 * interval_seconds)
+            payload = await self._get_json(
+                f"{LIGHTER_URL}/candles?market_id={market_id}&resolution={resolution}"
+                f"&start_timestamp={cursor}&end_timestamp={chunk_end}&count_back=0"
+            )
+            if not isinstance(payload, dict) or payload.get("code") != 200:
+                raise RuntimeError("invalid Lighter candles response")
+            for row in payload.get("c", []):
+                if not isinstance(row, dict):
+                    continue
+                point = _parse_dict_kline(row, ("t",), ("c",), quote_volume_keys=("V",), base_volume_keys=("v",))
+                if point is not None and start <= point.bucket_at <= end:
+                    points.append(point)
+            cursor = chunk_end + interval_seconds
+        return _dedupe_sorted(points)
+
+    async def _fetch_lighter_current(
+        self, symbol: str, *, market_type: MarketType = MarketType.FUTURE
+    ) -> PairSpreadCurrentLeg:
+        market = await self._lighter_market(symbol, market_type)
+        market_id = market["market_id"]
+        book, rates = await asyncio.gather(
+            self._get_json(f"{LIGHTER_URL}/orderBookOrders?market_id={market_id}&limit=20"),
+            self._get_json_optional(f"{LIGHTER_URL}/funding-rates") if market_type == MarketType.FUTURE else asyncio.sleep(0, result=None),
+        )
+        prices = lighter_best_prices(book)
+        if prices is None:
+            raise RuntimeError(f"no usable Lighter order book for {symbol}")
+        bid, ask, _, _ = prices
+        funding: float | None = None
+        if isinstance(rates, dict) and rates.get("code") == 200:
+            funding = next(
+                (
+                    parsed
+                    for row in rates.get("funding_rates", [])
+                    if isinstance(row, dict) and row.get("exchange") == "lighter" and row.get("market_id") == market_id
+                    if (parsed := parse_float(row.get("rate"))) is not None
+                ),
+                None,
+            )
+        mark = parse_float(market.get("mark_price"))
+        open_interest = parse_float(market.get("open_interest"))
+        return _current_leg(
+            exchange="lighter", symbol=symbol, market_type=market_type,
+            raw_symbol=str(market["symbol"]), bid_price=bid, ask_price=ask,
+            mid_price=(bid + ask) / 2, mark_price=mark,
+            index_price=parse_float(market.get("index_price")),
+            last_price=parse_float(market.get("last_trade_price")),
+            funding_rate_pct=funding * 100 if funding is not None else None,
+            funding_next_rate_pct=None,
+            funding_next_time=next_aligned_funding_time(utc_now(), 1) if market_type == MarketType.FUTURE else None,
+            funding_interval_hours=1 if market_type == MarketType.FUTURE else None,
+            volume_24h_usdt=parse_float(market.get("daily_quote_token_volume")),
+            open_interest_contracts=open_interest if market_type == MarketType.FUTURE else None,
+            open_interest_usdt=open_interest * mark if open_interest is not None and mark is not None and market_type == MarketType.FUTURE else None,
+        )
+
+    async def _fetch_lighter_funding(
+        self, symbol: str, start: datetime, end: datetime
+    ) -> list[PairSpreadFundingPoint]:
+        market_id = (await self._lighter_market(symbol, MarketType.FUTURE))["market_id"]
+        cursor = int(start.timestamp())
+        end_seconds = int(end.timestamp())
+        points: list[PairSpreadFundingPoint] = []
+        while cursor <= end_seconds:
+            chunk_end = min(end_seconds, cursor + 700 * 3600)
+            payload = await self._get_json(
+                f"{LIGHTER_URL}/fundings?market_id={market_id}&resolution=1h"
+                f"&start_timestamp={cursor}&end_timestamp={chunk_end}&count_back=0"
+            )
+            if not isinstance(payload, dict) or payload.get("code") != 200:
+                raise RuntimeError("invalid Lighter fundings response")
+            for row in payload.get("fundings", []):
+                if not isinstance(row, dict):
+                    continue
+                timestamp = parse_datetime_seconds(row.get("timestamp"))
+                rate_pct = parse_float(row.get("rate"))
+                direction = row.get("direction")
+                if timestamp is None or rate_pct is None or direction not in {"long", "short"}:
+                    continue
+                if start <= timestamp <= end:
+                    # Historical rates are already percentages; "direction" identifies the paying side.
+                    points.append(PairSpreadFundingPoint(
+                        exchange="lighter", symbol=_compact_symbol(symbol), funding_time=timestamp,
+                        funding_rate_pct=rate_pct if direction == "long" else -rate_pct,
+                    ))
+            cursor = chunk_end + 1
+        return sorted(points, key=lambda point: point.funding_time)
 
     async def _fetch_hyperliquid_klines(
         self,

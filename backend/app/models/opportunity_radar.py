@@ -12,6 +12,7 @@ SUPPORTED_RADAR_EXCHANGES: tuple[str, ...] = (
     "bitget",
     "aster",
     "hyperliquid",
+    "lighter",
 )
 
 PremiumDirection = Literal["negative", "positive", "both"]

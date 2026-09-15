@@ -671,6 +671,19 @@ describe("PairMonitorPage", () => {
     expect((await screen.findAllByText("Bitget · 现货 · SKHYUSDT")).length).toBeGreaterThan(0);
   });
 
+  it("queries Lighter when selected as a spread leg", async () => {
+    const user = userEvent.setup();
+    render(<PairMonitorPage />);
+
+    await user.click(screen.getAllByRole("combobox")[0]);
+    await user.click(await screen.findByText("Lighter"));
+    await user.click(screen.getByRole("button", { name: /查询/ }));
+
+    await waitFor(() => {
+      expect(requests.some((request) => request.includes("leg1_exchange=lighter"))).toBe(true);
+    });
+  });
+
   it("loads old saved presets as future contracts", () => {
     window.localStorage.setItem(
       "taoli1.pairSpread.presets.v1",

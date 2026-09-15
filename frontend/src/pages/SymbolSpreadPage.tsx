@@ -43,8 +43,8 @@ type TimeAxisTick = {
   value: string;
 };
 
-const futuresExchanges = ["binance", "okx", "bybit", "gate", "bitget", "aster", "hyperliquid"];
-const spotExchanges = ["binance", "okx", "bybit", "gate", "bitget"];
+const futuresExchanges = ["binance", "okx", "bybit", "gate", "bitget", "aster", "hyperliquid", "lighter"];
+const spotExchanges = ["binance", "okx", "bybit", "gate", "bitget", "lighter"];
 const exchangeLabels: Record<string, string> = {
   aster: "Aster",
   binance: "Binance",
@@ -52,6 +52,7 @@ const exchangeLabels: Record<string, string> = {
   bybit: "Bybit",
   gate: "Gate",
   hyperliquid: "Hyperliquid",
+  lighter: "Lighter",
   okx: "OKX"
 };
 const exchangeShortLabels: Record<string, string> = {
@@ -61,6 +62,7 @@ const exchangeShortLabels: Record<string, string> = {
   bybit: "BB",
   gate: "Gate",
   hyperliquid: "HL",
+  lighter: "LI",
   okx: "OKX"
 };
 const seriesColors = ["#2563eb", "#f97316", "#0f766e", "#7c3aed", "#b42318", "#0891b2", "#64748b"];

@@ -71,11 +71,12 @@ const exchangeLabels: Record<string, string> = {
   bybit: "Bybit",
   gate: "Gate",
   hyperliquid: "Hyperliquid",
+  lighter: "Lighter",
   okx: "OKX"
 };
 const chartExchanges: Record<MarketType, Set<string>> = {
-  spot: new Set(["binance", "okx", "bybit", "gate", "bitget"]),
-  future: new Set(["binance", "okx", "bybit", "gate", "bitget", "aster", "hyperliquid"])
+  spot: new Set(["binance", "okx", "bybit", "gate", "bitget", "lighter"]),
+  future: new Set(["binance", "okx", "bybit", "gate", "bitget", "aster", "hyperliquid", "lighter"])
 };
 const seriesColors = ["#0f766e", "#2563eb", "#d97706", "#b42318", "#7c3aed", "#0891b2", "#475569"];
 
@@ -212,6 +213,9 @@ function pairSpreadLegRoute(
       symbol: rawSymbol || aliasSymbol || result.symbol,
       dex: "main"
     };
+  }
+  if (exchange === "lighter" && marketType === "spot") {
+    return { symbol: aliasSymbol || result.symbol, dex: null };
   }
   return {
     symbol: aliasSymbol || rawSymbol || result.symbol,

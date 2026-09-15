@@ -194,7 +194,8 @@ const exchangeLabels: Record<string, string> = {
   gate: "Gate",
   bitget: "Bitget",
   aster: "Aster",
-  hyperliquid: "Hyperliquid"
+  hyperliquid: "Hyperliquid",
+  lighter: "Lighter"
 };
 
 const exchangeOptions = [
@@ -205,7 +206,8 @@ const exchangeOptions = [
   "gate",
   "bitget",
   "aster",
-  "hyperliquid"
+  "hyperliquid",
+  "lighter"
 ].map((value) => ({ label: exchangeLabels[value] ?? value, value }));
 
 const intervalOptions = [
@@ -1081,7 +1083,7 @@ function leftLegLabel(result: PairSpreadQueryResult | null): string {
 
 function exchangeToneClass(exchange: string): string {
   const normalized = exchange.trim().toLowerCase().replace(/_/g, "-");
-  if (["aster", "gate", "hyperliquid", "bybit", "bitget", "binance", "okx", "binance-alpha"].includes(normalized)) {
+  if (["aster", "gate", "hyperliquid", "lighter", "bybit", "bitget", "binance", "okx", "binance-alpha"].includes(normalized)) {
     return `pair-exchange-${normalized}`;
   }
   return "pair-exchange-default";
@@ -1093,6 +1095,7 @@ function exchangeShortLabel(exchange: string): string {
     aster: "as",
     gate: "gt",
     hyperliquid: "hl",
+    lighter: "li",
     bybit: "by",
     bitget: "bg",
     binance: "bn",

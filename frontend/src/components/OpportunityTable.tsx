@@ -60,6 +60,7 @@ const EXCHANGE_LABELS: Record<string, string> = {
   gate: "Gate",
   htx: "HTX",
   hyperliquid: "Hyper",
+  lighter: "Lighter",
   okx: "OKX"
 };
 

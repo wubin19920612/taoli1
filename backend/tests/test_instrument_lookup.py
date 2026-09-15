@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from app.core.config import Settings
 from app.main import create_app
+from app.models.instrument import INSTRUMENT_LOOKUP_EXCHANGES
 from app.models.market import MarketSnapshot, MarketType
 from app.models.settings import RiskSettings
 from app.services.snapshot_store import SnapshotStore
@@ -56,13 +57,14 @@ def test_instrument_lookup_groups_exact_symbol_across_all_exchanges() -> None:
     assert payload["symbol"] == "BTCUSDT"
     assert payload["exchange_count"] == 2
     assert payload["market_count"] == 3
-    assert len(payload["exchanges"]) == 7
+    assert len(payload["exchanges"]) == len(INSTRUMENT_LOOKUP_EXCHANGES)
     exchanges = {item["exchange"]: item for item in payload["exchanges"]}
     assert "htx" not in exchanges
     assert exchanges["binance"]["spot"]["bid"] == 99_999
     assert exchanges["binance"]["future"]["ask"] == 100_101
     assert exchanges["okx"]["spot"] is None
     assert exchanges["bitget"]["error"] == "temporary timeout"
+    assert exchanges["lighter"]["future"] is None
     assert payload["observed_at"] == (now + timedelta(seconds=1)).isoformat().replace("+00:00", "Z")
     assert len(payload["spreads"]) == 3
     assert payload["spreads"][0]["buy_exchange"] == "binance"

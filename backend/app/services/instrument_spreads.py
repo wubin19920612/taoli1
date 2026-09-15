@@ -33,7 +33,11 @@ def _opportunity_type(
 def _astro_support(
     opportunity_type: OpportunityType | None,
     executable_spread_pct: float,
+    buy_market: MarketSnapshot,
+    sell_market: MarketSnapshot,
 ) -> tuple[bool, str | None]:
+    if "lighter" in {buy_market.exchange, sell_market.exchange}:
+        return False, "Astro 暂不支持 Lighter 交易所下单"
     if executable_spread_pct <= 0:
         return False, "当前买一卖一没有正向可成交价差"
     if opportunity_type in {OpportunityType.SF, OpportunityType.FF}:
@@ -101,6 +105,8 @@ def build_instrument_spreads(
         astro_supported, astro_blocker = _astro_support(
             opportunity_type,
             executable_spread_pct,
+            buy_market,
+            sell_market,
         )
         comparisons.append(
             InstrumentSpreadComparison(

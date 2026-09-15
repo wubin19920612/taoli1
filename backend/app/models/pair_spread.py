@@ -16,6 +16,7 @@ SUPPORTED_PAIR_SPREAD_EXCHANGES: tuple[str, ...] = (
     "bitget",
     "aster",
     "hyperliquid",
+    "lighter",
 )
 SUPPORTED_SYMBOL_SPREAD_EXCHANGES: tuple[str, ...] = tuple(
     exchange for exchange in SUPPORTED_PAIR_SPREAD_EXCHANGES if exchange != "binance_alpha"

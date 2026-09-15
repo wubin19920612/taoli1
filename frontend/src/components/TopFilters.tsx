@@ -15,7 +15,7 @@ interface TopFiltersProps {
   onRefreshIntervalChange: (intervalMs: number) => void;
 }
 
-const exchanges = ["binance", "okx", "bybit", "gate", "bitget", "htx", "aster", "hyperliquid"];
+const exchanges = ["binance", "okx", "bybit", "gate", "bitget", "htx", "aster", "hyperliquid", "lighter"];
 const refreshIntervalOptions = [
   { label: "8s", value: 8000 },
   { label: "15s", value: 15000 },

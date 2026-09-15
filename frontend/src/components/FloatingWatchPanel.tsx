@@ -49,6 +49,7 @@ const exchangeLabels: Record<string, string> = {
   bybit: "Bybit",
   gate: "Gate",
   hyperliquid: "Hyperliquid",
+  lighter: "Lighter",
   okx: "OKX"
 };
 
