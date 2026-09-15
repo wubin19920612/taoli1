@@ -10,7 +10,79 @@ from pydantic import BaseModel, Field, field_validator
 class AnnouncementKind(StrEnum):
     LISTING = "listing"
     DELISTING = "delisting"
+    LAUNCHPOOL = "launchpool"
     OTHER = "other"
+
+
+class AnnouncementEventScheduleItem(BaseModel):
+    symbol: str
+    event_time: datetime
+    note: str | None = None
+
+    @field_validator("symbol")
+    @classmethod
+    def normalize_symbol(cls, value: str) -> str:
+        text = value.strip().upper()
+        if not text:
+            raise ValueError("symbol must not be empty")
+        return text
+
+    @field_validator("note")
+    @classmethod
+    def normalize_note(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        text = value.strip()
+        return text or None
+
+
+class AnnouncementResearchSource(BaseModel):
+    title: str
+    url: str
+
+    @field_validator("title", "url")
+    @classmethod
+    def normalize_text(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("research source text must not be empty")
+        return text
+
+
+class AnnouncementAssetResearch(BaseModel):
+    symbol: str
+    canonical_symbol: str | None = None
+    asset_type: str = "unknown"
+    name: str | None = None
+    summary: str | None = None
+    business: str | None = None
+    sources: list[AnnouncementResearchSource] = Field(default_factory=list)
+    status: str = "not_found"
+    searched_at: datetime
+
+    @field_validator("symbol", "canonical_symbol")
+    @classmethod
+    def normalize_symbols(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        text = value.strip().upper()
+        return text or None
+
+    @field_validator("asset_type", "status")
+    @classmethod
+    def normalize_labels(cls, value: str) -> str:
+        text = value.strip().lower()
+        if not text:
+            raise ValueError("research label must not be empty")
+        return text
+
+    @field_validator("name", "summary", "business")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        text = value.strip()
+        return text or None
 
 
 class ExchangeAnnouncement(BaseModel):
@@ -25,7 +97,9 @@ class ExchangeAnnouncement(BaseModel):
     symbols: list[str] = Field(default_factory=list)
     market_type: str | None = None
     event_time: datetime | None = None
+    event_schedule: list[AnnouncementEventScheduleItem] = Field(default_factory=list)
     summary: str | None = None
+    asset_research: list[AnnouncementAssetResearch] = Field(default_factory=list)
     published_at: datetime
     fetched_at: datetime
     alert_status: str = "pending"
@@ -78,10 +152,13 @@ class ExchangeAnnouncement(BaseModel):
 class AnnouncementSettings(BaseModel):
     enabled: bool = True
     poll_interval_seconds: int = Field(default=300, ge=30, le=86_400)
+    alert_max_age_minutes: int = Field(default=30, ge=1, le=10_080)
     record_exchanges: list[str] = Field(
         default_factory=lambda: ["binance", "okx", "bybit", "gate", "bitget", "hyperliquid"]
     )
     alert_exchanges: list[str] = Field(default_factory=list)
+    listing_delisting_alerts_enabled: bool = True
+    launchpool_alerts_enabled: bool = True
     bootstrap_alerts_enabled: bool = False
     event_reminders_enabled: bool = True
     event_reminder_minutes_before: int = Field(default=30, ge=1, le=10_080)

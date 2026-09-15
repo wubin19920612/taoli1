@@ -1,0 +1,537 @@
+import { LineChartOutlined, ReloadOutlined, SaveOutlined, ThunderboltOutlined } from "@ant-design/icons";
+import {
+  Alert,
+  Button,
+  Card,
+  Col,
+  Form,
+  InputNumber,
+  Row,
+  Space,
+  Statistic,
+  Switch,
+  Table,
+  Tag,
+  Tooltip,
+  Typography,
+  message
+} from "antd";
+import type { ColumnsType } from "antd/es/table";
+import { useCallback, useEffect, useState } from "react";
+
+import { getMinuteSignalSettings, scanMinuteSignalUniverse, updateMinuteSignalSettings } from "../api/client";
+import type {
+  MinuteSignalEventType,
+  MinuteSignalSettings,
+  MinuteSignalUniverseCandidate,
+  MinuteSignalUniverseScanResult
+} from "../api/types";
+
+type FormValues = MinuteSignalSettings;
+
+const defaultValues: FormValues = {
+  hours: 4,
+  max_symbols: 30,
+  min_volume_24h_usdt: 100_000,
+  alert_cooldown_minutes: 60,
+  max_entry_basis_bps: 45,
+  require_negative_premium_when_spot_above: true,
+  max_premium_when_spot_above_bps: -5
+};
+
+function normalizeSettings(values: Partial<FormValues> = {}): FormValues {
+  const merged = { ...defaultValues, ...values };
+  return {
+    hours: Number(merged.hours),
+    max_symbols: Number(merged.max_symbols),
+    min_volume_24h_usdt: Number(merged.min_volume_24h_usdt),
+    alert_cooldown_minutes: Number(merged.alert_cooldown_minutes),
+    max_entry_basis_bps: Number(merged.max_entry_basis_bps),
+    require_negative_premium_when_spot_above: Boolean(merged.require_negative_premium_when_spot_above),
+    max_premium_when_spot_above_bps: Number(merged.max_premium_when_spot_above_bps)
+  };
+}
+
+const eventLabels: Record<MinuteSignalEventType, string> = {
+  SHOCK_ALERT: "价差冲击",
+  ENTRY: "候选入场",
+  TAKE_PROFIT: "价差收敛",
+  STOP_LOSS: "止损",
+  TIME_EXIT: "超时退出"
+};
+
+const eventColors: Record<MinuteSignalEventType, string> = {
+  SHOCK_ALERT: "orange",
+  ENTRY: "blue",
+  TAKE_PROFIT: "green",
+  STOP_LOSS: "red",
+  TIME_EXIT: "default"
+};
+
+const reasonLabels: Record<string, string> = {
+  shock_compressed_and_entry_confirmed: "价差冲击后回压，确认候选入场",
+  basis_expansion_with_negative_premium: "价差扩大，且合约溢价为负",
+  new_shock_after_expiry: "原冲击过期后再次出现新冲击",
+  basis_converged: "价差已收敛，达到止盈条件",
+  basis_reversed: "价差方向反转，触发止损",
+  no_confirmed_signal: "尚未确认信号",
+  scan_failed: "扫描失败"
+};
+
+function formatTime(value: string | null | undefined, includeSeconds = false): string {
+  if (!value) {
+    return "-";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value.replace("T", " ").replace(/([+-]\d{2}:\d{2}|Z)$/, "");
+  }
+  const parts = new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    ...(includeSeconds ? { second: "2-digit" } : {})
+  }).formatToParts(date);
+  const part = (type: string) => parts.find((item) => item.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")} ${part("hour")}:${part("minute")}${
+    includeSeconds ? `:${part("second")}` : ""
+  }`;
+}
+
+function reasonLabel(value: string): string {
+  return reasonLabels[value] ?? `检测条件：${value.replace(/_/g, " ")}`;
+}
+
+function bps(value: number | null | undefined): string {
+  return typeof value === "number" && Number.isFinite(value)
+    ? `${value >= 0 ? "+" : ""}${value.toFixed(2)} bps`
+    : "-";
+}
+
+function volume(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "-";
+  }
+  if (value >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(2)}M`;
+  }
+  if (value >= 1_000) {
+    return `${(value / 1_000).toFixed(0)}K`;
+  }
+  return value.toFixed(0);
+}
+
+function eventTag(eventType: MinuteSignalEventType | null) {
+  if (!eventType) {
+    return <Tag>观察</Tag>;
+  }
+  return <Tag color={eventColors[eventType]}>{eventLabels[eventType]}</Tag>;
+}
+
+function parameterTitle(label: string, description: string) {
+  return (
+    <Tooltip title={description}>
+      <span style={{ cursor: "help", borderBottom: "1px dashed currentColor" }}>{label}</span>
+    </Tooltip>
+  );
+}
+
+function openPairSpread(row: MinuteSignalUniverseCandidate) {
+  const url = new URL(window.location.href);
+  url.searchParams.set("page", "pair-monitor");
+  url.searchParams.set("leg1_exchange", "binance");
+  url.searchParams.set("leg1_market_type", "future");
+  url.searchParams.set("leg1_symbol", row.futures_symbol);
+  url.searchParams.set("leg2_exchange", "binance_alpha");
+  url.searchParams.set("leg2_market_type", "spot");
+  url.searchParams.set("leg2_symbol", row.alpha_symbol);
+  url.searchParams.set("leg2_multiplier", "1");
+  url.searchParams.set("hours", "4");
+  url.searchParams.set("interval_minutes", "1");
+  window.history.pushState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  window.dispatchEvent(new Event("taoli1:navigate"));
+}
+
+const candidateColumns: ColumnsType<MinuteSignalUniverseCandidate> = [
+  {
+    title: parameterTitle(
+      "合约标的",
+      "显示全局统一币名；查询时会按“参数与告警”中的币名映射自动切换到 Binance Futures 的实际合约代码。"
+    ),
+    dataIndex: "futures_symbol",
+    fixed: "left",
+    width: 170,
+    render: (value: string, row) => (
+      <Space direction="vertical" size={0}>
+        <Tag color="purple">Binance Futures 永续</Tag>
+        <Typography.Text strong>{value}</Typography.Text>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          基础币：{row.base_asset}
+        </Typography.Text>
+      </Space>
+    )
+  },
+  {
+    title: parameterTitle(
+      "Alpha 现货标的",
+      "显示全局统一币名；查询时会按“参数与告警”中的币名映射自动切换到 Binance Alpha 的实际交易对。"
+    ),
+    dataIndex: "alpha_symbol",
+    width: 190,
+    render: (value: string) => (
+      <Space direction="vertical" size={0}>
+        <Tag color="blue">Binance Alpha 现货</Tag>
+        <Tooltip
+          title={`${value} 为全局统一币名，系统会按币名映射请求对应的 Binance Alpha 实际交易对。`}
+        >
+          <Tag color="geekblue" style={{ cursor: "help" }}>
+            {value}
+          </Tag>
+        </Tooltip>
+      </Space>
+    )
+  },
+  {
+    title: "事件",
+    dataIndex: "event_type",
+    width: 120,
+    render: (value: MinuteSignalEventType | null) => eventTag(value)
+  },
+  {
+    title: parameterTitle("信号时间", "北京时间；对应触发信号的 1 分钟 K 线起始时间"),
+    dataIndex: "signal_time_cst",
+    width: 155,
+    render: (value: string | null) => formatTime(value)
+  },
+  {
+    title: parameterTitle(
+      "现货-合约价差（basis）",
+      "Alpha 现货相对 Futures 合约标记价的价差；正数表示现货高于合约。1 bps = 0.01%。"
+    ),
+    dataIndex: "basis_bps",
+    align: "right",
+    width: 155,
+    render: (value: number | null) => bps(value)
+  },
+  {
+    title: parameterTitle(
+      "合约溢价（premium）",
+      "Futures 合约标记价相对指数价的偏离；负数表示合约低于指数。1 bps = 0.01%。"
+    ),
+    dataIndex: "premium_bps",
+    align: "right",
+    width: 155,
+    render: (value: number | null) => bps(value)
+  },
+  {
+    title: parameterTitle("60 分钟价差峰值", "最近 60 分钟内观测到的最高 basis。"),
+    dataIndex: "basis_peak_60m_bps",
+    align: "right",
+    width: 140,
+    render: (value: number | null) => bps(value)
+  },
+  {
+    title: parameterTitle(
+      "价差压缩比例",
+      "从最近 60 分钟 basis 峰值回落的比例；例如 26.9% 表示已从峰值回落约 26.9%。"
+    ),
+    dataIndex: "compression_ratio",
+    align: "right",
+    width: 125,
+    render: (value: number | null) =>
+      typeof value === "number" && Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : "-"
+  },
+  {
+    title: parameterTitle("24 小时成交额", "Futures 合约最近 24 小时的 USDT 计价成交额，用于衡量流动性。"),
+    dataIndex: "volume_24h_usdt",
+    align: "right",
+    width: 140,
+    render: (value: number) => `${volume(value)} USDT`
+  },
+  {
+    title: "价差",
+    key: "pair_spread",
+    fixed: "right",
+    width: 110,
+    render: (_, row) => (
+      <Tooltip title="跳到价差查询，查看 Binance Alpha 现货 - Binance Futures 永续 的价差曲线">
+        <Button
+          size="small"
+          type="link"
+          icon={<LineChartOutlined />}
+          onClick={() => openPairSpread(row)}
+        >
+          查看价差
+        </Button>
+      </Tooltip>
+    )
+  },
+  {
+    title: "说明",
+    dataIndex: "reason",
+    width: 280,
+    render: (value: string, row) => (
+      <Space direction="vertical" size={0}>
+        <Typography.Text type={row.error ? "danger" : "secondary"}>
+          {row.error ? `扫描失败：${row.error}` : reasonLabel(value)}
+        </Typography.Text>
+        {row.planned_execution_time_cst ? (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            计划执行：{formatTime(row.planned_execution_time_cst)}
+          </Typography.Text>
+        ) : null}
+      </Space>
+    )
+  }
+];
+
+export function MinuteSignalPage() {
+  const [form] = Form.useForm<FormValues>();
+  const [result, setResult] = useState<MinuteSignalUniverseScanResult | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [error, setError] = useState("");
+
+  const load = useCallback(
+    async (values: Partial<FormValues> = form.getFieldsValue()) => {
+      setLoading(true);
+      setError("");
+      try {
+        const normalized = normalizeSettings(values);
+        setResult(await scanMinuteSignalUniverse(normalized));
+      } catch (exc) {
+        setError(exc instanceof Error ? exc.message : String(exc));
+      } finally {
+        setLoading(false);
+      }
+    },
+    [form]
+  );
+
+  useEffect(() => {
+    let alive = true;
+    const init = async () => {
+      try {
+        const saved = normalizeSettings(await getMinuteSignalSettings());
+        if (!alive) {
+          return;
+        }
+        form.setFieldsValue(saved);
+        await load(saved);
+      } catch (exc) {
+        if (!alive) {
+          return;
+        }
+        form.setFieldsValue(defaultValues);
+        setError(exc instanceof Error ? exc.message : String(exc));
+        await load(defaultValues);
+      }
+    };
+    void init();
+    return () => {
+      alive = false;
+    };
+  }, [form, load]);
+
+  const saveSettings = async () => {
+    setSaving(true);
+    setError("");
+    try {
+      const values = normalizeSettings(await form.validateFields());
+      const saved = normalizeSettings(await updateMinuteSignalSettings(values));
+      form.setFieldsValue(saved);
+      message.success("分钟价差信号参数已保存");
+      await load(saved);
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!autoRefresh || loading) {
+      return undefined;
+    }
+    const timer = window.setInterval(() => {
+      void load();
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, [autoRefresh, load, loading]);
+
+  return (
+    <div className="page minute-signal-page">
+      {error ? <Alert className="page-alert" type="error" showIcon message={error} /> : null}
+
+      <section className="toolbar">
+        <div className="toolbar-controls">
+          <Typography.Title level={4} style={{ margin: 0 }}>
+            1 分钟全网价差信号
+          </Typography.Title>
+          <Typography.Text type="secondary">
+            自动发现候选标的，不需要手工填写币种；系统先扫描候选池，再用 1 分钟 K 线复核冲击、回压和入场信号。
+          </Typography.Text>
+          <Typography.Text type="secondary">
+            当前价差方向为 Binance Alpha 现货 - Binance Futures 永续；ALPHA_331USDT 这类名称是
+            Binance Alpha 内部现货交易对名，不是普通 Binance Spot。
+          </Typography.Text>
+        </div>
+        <Space className="toolbar-actions" wrap>
+          <Space size={6}>
+            <Typography.Text type="secondary">每 60 秒自动刷新</Typography.Text>
+            <Switch checked={autoRefresh} onChange={setAutoRefresh} />
+          </Space>
+          <Button
+            type="primary"
+            icon={<ReloadOutlined />}
+            loading={loading}
+            onClick={() => void load()}
+          >
+            扫描全市场
+          </Button>
+        </Space>
+      </section>
+
+      <Card size="small">
+        <Form
+          form={form}
+          layout="inline"
+          initialValues={defaultValues}
+          onFinish={(values) => void load(values)}
+        >
+          <Form.Item label="回看小时" name="hours" rules={[{ required: true }]}>
+            <InputNumber min={1} max={24} style={{ width: 100 }} />
+          </Form.Item>
+          <Form.Item label="复核候选数" name="max_symbols" rules={[{ required: true }]}>
+            <InputNumber min={5} max={100} style={{ width: 110 }} />
+          </Form.Item>
+          <Form.Item label="最低24h成交额" name="min_volume_24h_usdt" rules={[{ required: true }]}>
+            <InputNumber
+              min={0}
+              step={100_000}
+              style={{ width: 150 }}
+              formatter={(value) => `${value ?? ""}`}
+            />
+          </Form.Item>
+          <Form.Item
+            label={parameterTitle(
+              "飞书冷却分钟",
+              "同一个 Binance Futures / Binance Alpha 交易对在冷却期内最多推送一次 1 分钟价差信号。"
+            )}
+            name="alert_cooldown_minutes"
+            rules={[{ required: true }]}
+          >
+            <InputNumber min={1} max={10_080} step={5} style={{ width: 130 }} />
+          </Form.Item>
+          <Form.Item
+            label={parameterTitle(
+              "入场 basis 上限",
+              "Alpha 现货高于合约太多时不适合买现货、空合约；默认 45 bps 约等于 0.45%，更接近平价。"
+            )}
+            name="max_entry_basis_bps"
+            rules={[{ required: true }]}
+          >
+            <InputNumber min={-10_000} max={10_000} step={5} suffix="bps" style={{ width: 130 }} />
+          </Form.Item>
+          <Form.Item
+            label={parameterTitle(
+              "现货高于合约需负溢价",
+              "开启后，如果 Alpha 现货仍高于合约，必须看到合约 premium 足够为负，避免只因为持久现货/合约基差入选。"
+            )}
+            name="require_negative_premium_when_spot_above"
+            valuePropName="checked"
+          >
+            <Switch checkedChildren="开启" unCheckedChildren="关闭" />
+          </Form.Item>
+          <Form.Item
+            label={parameterTitle(
+              "合约负溢价阈值",
+              "现货高于合约时，Futures premium 必须小于等于该值才保留；-5 bps 表示合约相对指数至少低 0.05%。"
+            )}
+            name="max_premium_when_spot_above_bps"
+            rules={[{ required: true }]}
+          >
+            <InputNumber max={0} step={5} suffix="bps" style={{ width: 140 }} />
+          </Form.Item>
+          <Form.Item>
+            <Button htmlType="submit" icon={<ThunderboltOutlined />} loading={loading}>
+              执行扫描
+            </Button>
+          </Form.Item>
+          <Form.Item>
+            <Button icon={<SaveOutlined />} loading={saving} onClick={() => void saveSettings()}>
+              保存参数
+            </Button>
+          </Form.Item>
+        </Form>
+      </Card>
+
+      <section className="metric-row">
+        <Row gutter={[16, 12]}>
+          <Col xs={12} sm={6}>
+            <Statistic title="全市场映射" value={result?.universe_count ?? 0} suffix="个" />
+          </Col>
+          <Col xs={12} sm={6}>
+            <Statistic title="符合初筛" value={result?.eligible_count ?? 0} suffix="个" />
+          </Col>
+          <Col xs={12} sm={6}>
+            <Statistic title="1m复核" value={result?.scanned_count ?? 0} suffix="个" />
+          </Col>
+          <Col xs={12} sm={6}>
+            <Statistic title="当前信号" value={result?.signal_count ?? 0} suffix="个" />
+          </Col>
+        </Row>
+      </section>
+
+      <section className="panel">
+        <Space direction="vertical" size={8} style={{ width: "100%" }}>
+          <Space wrap>
+            <Typography.Title level={5} style={{ margin: 0 }}>
+              自动发现候选
+            </Typography.Title>
+            <Tag color="blue">
+              {result ? `观察时间（北京时间）${formatTime(result.observed_at, true)}` : "尚未扫描"}
+            </Tag>
+            {result?.error_count ? <Tag color="red">{result.error_count} 个扫描失败</Tag> : null}
+            {result ? <Tag color="gold">飞书冷却 {result.alert_cooldown_minutes} 分钟</Tag> : null}
+            {result ? <Tag color="cyan">入场 basis ≤ {bps(result.max_entry_basis_bps)}</Tag> : null}
+            {result?.require_negative_premium_when_spot_above ? (
+              <Tag color="magenta">现货高于合约需 premium ≤ {bps(result.max_premium_when_spot_above_bps)}</Tag>
+            ) : null}
+            {result ? <Tag color="orange">basis 过滤 {result.filtered_by_basis_count} 个</Tag> : null}
+            {result ? <Tag color="orange">premium 过滤 {result.filtered_by_premium_count} 个</Tag> : null}
+          </Space>
+          <Table<MinuteSignalUniverseCandidate>
+            className="opportunity-table"
+            rowKey={(row) => `${row.futures_symbol}-${row.alpha_symbol}`}
+            columns={candidateColumns}
+            dataSource={result?.candidates ?? []}
+            loading={loading}
+            pagination={{ pageSize: 20, showSizeChanger: true }}
+            scroll={{ x: 1750 }}
+            size="small"
+          />
+        </Space>
+      </section>
+
+      {result?.warnings.length ? (
+        <Alert
+          type="warning"
+          showIcon
+          message="扫描范围与执行边界"
+          description={
+            <ul style={{ margin: 0, paddingLeft: 20 }}>
+              {result.warnings.map((warning) => (
+                <li key={warning}>{warning}</li>
+              ))}
+            </ul>
+          }
+        />
+      ) : null}
+    </div>
+  );
+}

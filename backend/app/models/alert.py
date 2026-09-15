@@ -43,6 +43,10 @@ class AlertRule(BaseModel):
         default_factory=lambda: ["SF", "FF", "SS"],
         description="要监控的套利类型。SF=现货买入 / 永续卖出，FF=永续买入 / 永续卖出，SS=现货买入 / 现货卖出。",
     )
+    suppress_sf_negative_funding: bool = Field(
+        default=True,
+        description="SF 卖出侧下一结算周期资金费率为负时不发告警；预测缺失时使用当前费率。",
+    )
     include_exchanges: list[str] = Field(
         default_factory=list,
         description="只匹配这些交易所，留空表示不限制。",
@@ -57,6 +61,11 @@ class AlertRule(BaseModel):
         description="兼容字段，实际筛选以实时机会页隐藏黑名单为准。",
     )
     min_open_spread_pct: float = Field(default=0.0, description="开仓价差达到这个百分比才算命中。")
+    favorable_funding_open_spread_pct: float | None = Field(
+        default=0.9,
+        ge=0,
+        description="满足正做空费率或做多费率更低条件时的较低正开仓价差阈值；留空关闭。",
+    )
     min_fee_adjusted_open_pct: float = Field(
         default=0.0,
         description="扣除手续费、滑点并叠加资金费率差后的综合开仓阈值。",

@@ -1,0 +1,2 @@
+independent_trading_days,abs_difference_le_0_5_pct,abs_difference_le_1_0_pct,hyper_trade_minute_pct,difference_sym_minutes,difference_sym_mean,difference_sym_std,difference_sym_p05,difference_sym_p25,difference_sym_median,difference_sym_p75,difference_sym_p95,difference_sym_min,difference_sym_max
+3,83.02945302,98.31697055,67.18092567,713,-0.07347747,0.37430413,-0.72105196,-0.30229223,-0.05525325,0.18930838,0.51040981,-1.59014148,1.01528837

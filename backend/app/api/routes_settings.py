@@ -3,12 +3,17 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from app.core.security import dashboard_password_header, verify_dashboard_password
 from app.db.repositories import SettingsRepository
 from app.models.announcement import AnnouncementSettings
+from app.models.oil_news import OilNewsSettings
 from app.models.settings import (
     AlertMessageTemplateSettings,
+    AstroAutomationSettings,
     AstroCardSettings,
+    FloatingWatchMutation,
+    FloatingWatchSettings,
     LivePilotPreview,
     LivePilotPreviewItem,
     LivePilotSettings,
+    MinuteSignalSettings,
     RiskSettings,
 )
 from app.services.alert_metrics import combined_open_edge_pct
@@ -29,6 +34,24 @@ def _settings_repo(request: Request) -> SettingsRepository:
     if repo is None:
         raise HTTPException(status_code=503, detail="Settings repository is not ready")
     return repo
+
+
+@router.get("/floating-watch", response_model=FloatingWatchSettings)
+async def get_floating_watch_settings(request: Request) -> FloatingWatchSettings:
+    return await _settings_repo(request).get_floating_watch_settings()
+
+
+@router.post("/floating-watch/items", response_model=FloatingWatchSettings)
+async def mutate_floating_watch_settings(
+    mutation: FloatingWatchMutation,
+    request: Request,
+    password: str | None = Depends(dashboard_password_header),
+) -> FloatingWatchSettings:
+    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
+    try:
+        return await _settings_repo(request).mutate_floating_watch_settings(mutation)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/risk", response_model=RiskSettings)
@@ -71,6 +94,26 @@ async def get_astro_card_settings(request: Request) -> AstroCardSettings:
     return stored
 
 
+@router.get("/astro-new-listing-card", response_model=AstroCardSettings)
+async def get_astro_new_listing_card_settings(request: Request) -> AstroCardSettings:
+    repo = _settings_repo(request)
+    find_settings = getattr(repo, "find_astro_new_listing_card_settings", None)
+    stored = await find_settings() if find_settings is not None else None
+    if stored is not None:
+        return stored
+    find_card_settings = getattr(repo, "find_astro_card_settings", None)
+    stored_card = await find_card_settings() if find_card_settings is not None else None
+    fallback_card = stored_card or request.app.state.settings.astro_card_settings
+    apply_new_listing_overrides = getattr(
+        request.app.state.settings,
+        "astro_new_listing_card_settings_from",
+        None,
+    )
+    if apply_new_listing_overrides is None:
+        return getattr(request.app.state.settings, "astro_new_listing_card_settings", fallback_card)
+    return apply_new_listing_overrides(fallback_card)
+
+
 @router.put("/astro-card", response_model=AstroCardSettings)
 async def update_astro_card_settings(
     settings: AstroCardSettings,
@@ -79,6 +122,42 @@ async def update_astro_card_settings(
 ) -> AstroCardSettings:
     verify_dashboard_password(request.app.state.settings.dashboard_password, password)
     return await _settings_repo(request).set_astro_card_settings(settings)
+
+
+@router.put("/astro-new-listing-card", response_model=AstroCardSettings)
+async def update_astro_new_listing_card_settings(
+    settings: AstroCardSettings,
+    request: Request,
+    password: str | None = Depends(dashboard_password_header),
+) -> AstroCardSettings:
+    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
+    return await _settings_repo(request).set_astro_new_listing_card_settings(settings)
+
+
+@router.get("/astro-automation", response_model=AstroAutomationSettings)
+async def get_astro_automation_settings(request: Request) -> AstroAutomationSettings:
+    repo = _settings_repo(request)
+    find_settings = getattr(repo, "find_astro_automation_settings", None)
+    stored = await find_settings() if find_settings is not None else None
+    if stored is None:
+        return request.app.state.settings.astro_automation_settings
+    return stored
+
+
+@router.put("/astro-automation", response_model=AstroAutomationSettings)
+async def update_astro_automation_settings(
+    settings: AstroAutomationSettings,
+    request: Request,
+    password: str | None = Depends(dashboard_password_header),
+) -> AstroAutomationSettings:
+    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
+    saved = await _settings_repo(request).set_astro_automation_settings(settings)
+    service = getattr(request.app.state, "astro_alert_service", None)
+    if service is not None and hasattr(service, "alert_auto_create_enabled"):
+        service.alert_auto_create_enabled = saved.alert_auto_create
+    if service is not None and hasattr(service, "allow_same_name_variants"):
+        service.allow_same_name_variants = saved.allow_same_name_variants
+    return saved
 
 
 @router.get("/live-pilot", response_model=LivePilotSettings)
@@ -153,6 +232,21 @@ async def update_live_pilot_settings(
     return await _settings_repo(request).set_live_pilot_settings(settings)
 
 
+@router.get("/minute-signals", response_model=MinuteSignalSettings)
+async def get_minute_signal_settings(request: Request) -> MinuteSignalSettings:
+    return await _settings_repo(request).get_minute_signal_settings()
+
+
+@router.put("/minute-signals", response_model=MinuteSignalSettings)
+async def update_minute_signal_settings(
+    settings: MinuteSignalSettings,
+    request: Request,
+    password: str | None = Depends(dashboard_password_header),
+) -> MinuteSignalSettings:
+    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
+    return await _settings_repo(request).set_minute_signal_settings(settings)
+
+
 @router.get("/announcements", response_model=AnnouncementSettings)
 async def get_announcement_settings(request: Request) -> AnnouncementSettings:
     return await _settings_repo(request).get_announcement_settings()
@@ -166,3 +260,18 @@ async def update_announcement_settings(
 ) -> AnnouncementSettings:
     verify_dashboard_password(request.app.state.settings.dashboard_password, password)
     return await _settings_repo(request).set_announcement_settings(settings)
+
+
+@router.get("/oil-news", response_model=OilNewsSettings)
+async def get_oil_news_settings(request: Request) -> OilNewsSettings:
+    return await _settings_repo(request).get_oil_news_settings()
+
+
+@router.put("/oil-news", response_model=OilNewsSettings)
+async def update_oil_news_settings(
+    settings: OilNewsSettings,
+    request: Request,
+    password: str | None = Depends(dashboard_password_header),
+) -> OilNewsSettings:
+    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
+    return await _settings_repo(request).set_oil_news_settings(settings)

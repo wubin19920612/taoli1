@@ -13,6 +13,28 @@ from app.models.market import MarketSnapshot, MarketType
 from app.models.orderbook import OrderBookSnapshot
 
 
+def okx_ticker_volume_24h_usdt(item: dict, market_type: MarketType) -> float | None:
+    quote_volume = parse_float(item.get("volCcyQuote24h"))
+    if quote_volume is not None and quote_volume >= 0:
+        return quote_volume
+
+    volume = parse_float(item.get("volCcy24h"))
+    if volume is None or volume < 0:
+        return None
+    if market_type == MarketType.SPOT:
+        return volume
+
+    price = parse_float(item.get("last"))
+    if price is None or price <= 0:
+        bid = parse_float(item.get("bidPx"))
+        ask = parse_float(item.get("askPx"))
+        if bid is not None and bid > 0 and ask is not None and ask > 0:
+            price = (bid + ask) / 2
+    if price is None or price <= 0:
+        return None
+    return volume * price
+
+
 class OKXAdapter(ExchangeAdapter):
     name = "okx"
 
@@ -117,7 +139,7 @@ class OKXAdapter(ExchangeAdapter):
                     ask=ask,
                     bid_size=parse_float(item.get("bidSz")),
                     ask_size=parse_float(item.get("askSz")),
-                    volume_24h_usdt=parse_float(item.get("volCcy24h")),
+                    volume_24h_usdt=okx_ticker_volume_24h_usdt(item, market_type),
                     timestamp=now,
                     raw_symbol=raw,
                 )

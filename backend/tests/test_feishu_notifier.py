@@ -116,10 +116,10 @@ def test_build_payload_explains_rule_parameters() -> None:
     assert "连续命中：3 次" in text
     assert "冷却时间：300s" in text
     assert "【行情快照】" in text
-    assert "买入腿：binance future" in text
-    assert "卖出腿：okx future" in text
-    assert "价差对：BTCUSDT | binance future -> okx future" in text
-    assert "方向：买入 binance future BTCUSDT，卖出 okx future BTCUSDT" in text
+    assert "买入腿：binance 合约" in text
+    assert "卖出腿：okx 合约" in text
+    assert "价差对：BTCUSDT | binance 合约 -> okx 合约" in text
+    assert "方向：买入 binance 合约 BTCUSDT，卖出 okx 合约 BTCUSDT" in text
     assert "价差：开仓 0.800% / 平仓 0.500%" in text
     assert "资金费率差（周期）：当前 -0.03% / 预测 0.01%" in text
     assert "结算周期：8h / 8h" in text
@@ -147,6 +147,16 @@ def test_build_payload_can_use_prebuilt_alert_text() -> None:
     )
 
 
+@pytest.mark.asyncio
+async def test_notifier_raises_without_creating_http_client_when_webhook_is_missing() -> None:
+    notifier = FeishuNotifier(FeishuConfig(webhook_url=""))
+
+    with pytest.raises(RuntimeError, match="webhook is not configured"):
+        await notifier.send_text("fail")
+
+    assert notifier._client is None
+
+
 def test_alert_message_falls_back_to_current_cycle_when_next_funding_is_missing() -> None:
     rule = AlertRule(name="interval adjusted")
     opportunity = make_opportunity().model_copy(
@@ -168,9 +178,55 @@ def test_alert_message_falls_back_to_current_cycle_when_next_funding_is_missing(
 
     text = build_alert_message(rule, opportunity)
 
-    assert "资金费率差（周期）：当前 -0.06% / 预测 -0.06%" in text
-    assert "结算周期：8h / 1h" in text
+    assert "资金费率差（异周期原值相减）：当前 -0.06% / 各腿下次结算估算 -0.06%" in text
+    assert "买入腿、卖出腿缺预测，按当前费率代入" in text
+    assert "同口径资金差（按小时线性估算）：当前 +0.010%/h / 下期 +0.010%/h" in text
+    assert "结算周期：买入 8h / 卖出 1h" in text
+    assert "综合开仓（含异周期原值资金差）：0.540%" in text
     assert "资金费率差（日化）" not in text
+
+
+def test_alert_message_explains_mixed_settlement_cycles_and_observations() -> None:
+    opportunity = make_opportunity().model_copy(
+        update={
+            "symbol": "CVCUSDT",
+            "buy_exchange": "bitget",
+            "sell_exchange": "gate",
+            "fee_adjusted_open_pct": 0.896,
+            "funding_rate_buy_pct": -0.83,
+            "funding_rate_sell_pct": -0.17,
+            "funding_next_rate_buy_pct": None,
+            "funding_next_rate_sell_pct": -0.17,
+            "net_funding_pct": 0.66,
+            "net_funding_next_pct": None,
+            "buy_funding_interval_hours": 4,
+            "sell_funding_interval_hours": 1,
+            "funding_next_time_buy": datetime(2026, 9, 15, 12, 0, tzinfo=UTC),
+            "funding_next_time_sell": datetime(2026, 9, 15, 9, 0, tzinfo=UTC),
+        }
+    )
+    observations = [
+        SimpleNamespace(
+            observed_at=datetime(2026, 9, 15, 8, 7, tzinfo=UTC),
+            open_spread_pct=1.044,
+            fee_adjusted_open_pct=0.896,
+            funding_edge_pct=0.66,
+            combined_open_edge_pct=1.556,
+        )
+    ]
+
+    text = build_alert_message(AlertRule(name="CVC FF"), opportunity, observations=observations)
+
+    assert "当前资金费率（每腿每次结算）：买入 bitget -0.83%/4h；卖出 gate -0.17%/1h" in text
+    assert "预测资金费率（每腿每次结算）：买入 bitget -/4h；卖出 gate -0.17%/1h" in text
+    assert "资金费率差（异周期原值相减）：当前 +0.66% / 各腿下次结算估算 +0.66%" in text
+    assert "买入腿缺预测，按当前费率代入" in text
+    assert "同口径资金差（按小时线性估算）：当前 +0.038%/h / 下期 +0.038%/h" in text
+    assert "下一次结算：买入 20:00 / 卖出 17:00" in text
+    assert "结算周期：买入 4h / 卖出 1h" in text
+    assert "综合开仓（含异周期原值资金差）：1.556%" in text
+    assert "资金差（异周期原值） 0.66% | 综合（含异周期原值差） 1.556%" in text
+    assert "不代表同一持仓时长的实际收益" in text
 
 
 def test_alert_message_formats_market_times_in_utc_plus_8() -> None:
@@ -236,7 +292,7 @@ def test_build_payload_honors_alert_message_template_blocks() -> None:
     text = payload["content"]["text"]
     assert "【告警触发】" in text
     assert "compact alert" in text
-    assert "价差对：BTCUSDT | binance future -> okx future" in text
+    assert "价差对：BTCUSDT | binance 合约 -> okx 合约" in text
     assert "开仓 0.800%" in text
     assert "【规则参数】" not in text
     assert "资金费率" not in text
@@ -282,7 +338,7 @@ class FakeFeishuOpenClient:
 
 
 class FakeFeishuResponse:
-    def __init__(self, payload: dict):
+    def __init__(self, payload):
         self.payload = payload
 
     def raise_for_status(self) -> None:
@@ -290,6 +346,58 @@ class FakeFeishuResponse:
 
     def json(self) -> dict:
         return self.payload
+
+
+class FakeFeishuWebhookClient:
+    def __init__(self, payload):
+        self.payload = payload
+        self.requests: list[tuple[str, dict]] = []
+
+    async def post(self, url: str, **kwargs):
+        self.requests.append((url, kwargs["json"]))
+        return FakeFeishuResponse(self.payload)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"code": 0, "msg": "success"},
+        {"StatusCode": 0, "StatusMessage": "success"},
+    ],
+)
+async def test_send_text_accepts_successful_webhook_business_response(payload: dict) -> None:
+    client = FakeFeishuWebhookClient(payload)
+    notifier = FeishuNotifier(
+        FeishuConfig(webhook_url="https://open.feishu.cn/open-apis/bot/v2/hook/test"),
+        client=client,
+    )
+
+    await notifier.send_text("test message")
+
+    assert client.requests[0][1] == {
+        "msg_type": "text",
+        "content": {"text": "test message"},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"code": 19002, "msg": "sign match fail"},
+        {"StatusCode": 9499, "StatusMessage": "Bad Request"},
+    ],
+)
+async def test_send_text_raises_on_webhook_business_error(payload: dict) -> None:
+    client = FakeFeishuWebhookClient(payload)
+    notifier = FeishuNotifier(
+        FeishuConfig(webhook_url="https://open.feishu.cn/open-apis/bot/v2/hook/test"),
+        client=client,
+    )
+
+    with pytest.raises(RuntimeError, match="Feishu webhook send text failed"):
+        await notifier.send_text("test message")
 
 
 @pytest.mark.asyncio

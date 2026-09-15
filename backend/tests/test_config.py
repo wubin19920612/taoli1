@@ -31,7 +31,20 @@ def test_get_settings_loads_dotenv_from_parent_directory(
 
     assert settings.feishu_webhook_url == "https://example.test/hook"
     assert settings.feishu_secret == "local-secret"
+    assert settings.feishu_live_send_enabled is False
     assert settings.dashboard_password == "dashboard-pass"
+
+
+def test_get_settings_requires_explicit_opt_in_for_live_feishu(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / ".env").write_text("FEISHU_LIVE_SEND_ENABLED=true", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("FEISHU_LIVE_SEND_ENABLED", raising=False)
+    get_settings.cache_clear()
+
+    try:
+        assert get_settings().feishu_live_send_enabled is True
+    finally:
+        get_settings.cache_clear()
 
 
 def test_get_settings_prefers_local_database_copy_when_docker_path_is_loaded(
@@ -77,6 +90,7 @@ def test_get_settings_loads_astro_sdk_configuration(
                 "ASTRO_ADMIN_PREFIX=admin",
                 "ASTRO_API_KEY=secret",
                 "ASTRO_VERIFY_TLS=false",
+                "ASTRO_CA_BUNDLE=/certs/astro-ca.pem",
                 "ASTRO_ALERT_AUTO_CREATE=true",
                 "ASTRO_MANUAL_CARD_CREATE=true",
                 "ASTRO_DEFAULT_MAX_TRADE_USDT=25",
@@ -93,6 +107,7 @@ def test_get_settings_loads_astro_sdk_configuration(
         "ASTRO_ADMIN_PREFIX",
         "ASTRO_API_KEY",
         "ASTRO_VERIFY_TLS",
+        "ASTRO_CA_BUNDLE",
         "ASTRO_ALERT_AUTO_CREATE",
         "ASTRO_MANUAL_CARD_CREATE",
         "ASTRO_DEFAULT_MAX_TRADE_USDT",
@@ -109,6 +124,7 @@ def test_get_settings_loads_astro_sdk_configuration(
         assert settings.astro_admin_prefix == "admin"
         assert settings.astro_api_key == "secret"
         assert settings.astro_verify_tls is False
+        assert settings.astro_ca_bundle == "/certs/astro-ca.pem"
         assert settings.astro_alert_auto_create is True
         assert settings.astro_manual_card_create is True
         assert settings.astro_default_max_trade_usdt == 25

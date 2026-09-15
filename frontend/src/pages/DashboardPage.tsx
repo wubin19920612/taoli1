@@ -5,6 +5,7 @@ import {
   Col,
   Descriptions,
   Form,
+  Input,
   InputNumber,
   Modal,
   Row,
@@ -14,13 +15,14 @@ import {
   Switch,
   Table,
   Tag,
+  Tooltip,
   Typography,
   message
 } from "antd";
 import { useEffect, useMemo, useState } from "react";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
-import { EyeOutlined } from "@ant-design/icons";
+import { EyeOutlined, StopOutlined } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 
 import {
@@ -52,13 +54,18 @@ import { useRadarStore } from "../state/useRadarStore";
 dayjs.extend(utc);
 
 function normalizeSymbol(value: string): string {
-  return value.toUpperCase().replace(/[-_]/g, "");
+  return value.trim().toUpperCase().replace(/[-_]/g, "");
 }
 
 function normalizeSymbols(values: string[] | undefined): string[] {
   return Array.from(
     new Set((values ?? []).map((item) => normalizeSymbol(item)).filter((item) => item.length > 0))
   );
+}
+
+function normalizeManualBlockSymbol(value: string): string {
+  const normalized = normalizeSymbol(value);
+  return normalized && !normalized.endsWith("USDT") ? `${normalized}USDT` : normalized;
 }
 
 function jsonBlock(value: unknown): string {
@@ -128,7 +135,8 @@ function defaultDashboardFilters(): OpportunityFilters {
   return {
     include_risky: false,
     hidden_risk_labels: defaultHiddenRiskLabels,
-    exclude_types: []
+    exclude_types: [],
+    limit: 120
   };
 }
 
@@ -521,6 +529,7 @@ export function DashboardPage() {
   const [filters, setFilters] = useState<OpportunityFilters>(() => initialDashboardFilters());
   const [riskSettings, setRiskSettings] = useState<RiskSettings | null>(null);
   const [savingSymbol, setSavingSymbol] = useState<string | null>(null);
+  const [manualBlockSymbol, setManualBlockSymbol] = useState("");
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [astroPreviewOpportunity, setAstroPreviewOpportunity] = useState<Opportunity | null>(null);
   const [astroPreviewPlan, setAstroPreviewPlan] = useState<AstroPairPlan | null>(null);
@@ -534,7 +543,13 @@ export function DashboardPage() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [historyHours, setHistoryHours] = useState(168);
-  const { opportunities, health, loading, error, refresh } = useRadarStore(filters, settingsLoaded);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [refreshIntervalMs, setRefreshIntervalMs] = useState(8000);
+  const { opportunities, health, loading, error, refresh } = useRadarStore(
+    filters,
+    settingsLoaded,
+    { autoRefresh, refreshIntervalMs }
+  );
   const errors = health?.exchange_errors ?? {};
   const exchangeStates = useMemo(
     () =>
@@ -545,6 +560,7 @@ export function DashboardPage() {
     [health]
   );
   const blockedSymbols = riskSettings ? normalizeSymbols(riskSettings.excluded_symbols) : [];
+  const manualBlockCandidate = normalizeManualBlockSymbol(manualBlockSymbol);
   const astroPreviewSymbol = useMemo(
     () => (astroPreviewOpportunity ? normalizeSymbol(astroPreviewOpportunity.symbol) : null),
     [astroPreviewOpportunity]
@@ -585,15 +601,19 @@ export function DashboardPage() {
     };
   }, []);
 
-  const toggleBlockedSymbol = async (symbol: string, block: boolean) => {
+  const toggleBlockedSymbol = async (symbol: string, block: boolean): Promise<boolean> => {
     if (!riskSettings) {
-      return;
+      return false;
     }
     const normalizedSymbol = normalizeSymbol(symbol);
     if (!normalizedSymbol) {
-      return;
+      return false;
     }
     const currentExcluded = normalizeSymbols(riskSettings.excluded_symbols);
+    if (block && currentExcluded.includes(normalizedSymbol)) {
+      message.info(`${normalizedSymbol} 已在全局黑名单`);
+      return true;
+    }
     const nextExcluded = block
       ? normalizeSymbols([...currentExcluded, normalizedSymbol])
       : currentExcluded.filter((item) => item !== normalizedSymbol);
@@ -609,11 +629,23 @@ export function DashboardPage() {
       };
       setRiskSettings(normalizedSaved);
       message.success(block ? `Blocked ${normalizedSymbol}` : `Unblocked ${normalizedSymbol}`);
-      await refresh();
+      await refresh({ force: true, showLoading: true });
+      return true;
     } catch (exc) {
       message.error(exc instanceof Error ? exc.message : String(exc));
+      return false;
     } finally {
       setSavingSymbol(null);
+    }
+  };
+
+  const blockManualSymbol = async () => {
+    const normalizedSymbol = normalizeManualBlockSymbol(manualBlockSymbol);
+    if (!normalizedSymbol) {
+      return;
+    }
+    if (await toggleBlockedSymbol(normalizedSymbol, true)) {
+      setManualBlockSymbol("");
     }
   };
 
@@ -721,10 +753,38 @@ export function DashboardPage() {
 
   return (
     <div className="page">
-      <TopFilters filters={filters} loading={loading} onChange={changeFilters} onRefresh={refresh} />
-      {blockedSymbols.length > 0 ? (
-        <div className="blocked-strip">
-          <Typography.Text className="blocked-strip-title">Blocked symbols</Typography.Text>
+      <TopFilters
+        filters={filters}
+        loading={loading}
+        autoRefresh={autoRefresh}
+        refreshIntervalMs={refreshIntervalMs}
+        onChange={changeFilters}
+        onRefresh={() => void refresh({ force: true, showLoading: true })}
+        onAutoRefreshChange={setAutoRefresh}
+        onRefreshIntervalChange={setRefreshIntervalMs}
+      />
+      <div className="blocked-strip">
+        <Typography.Text className="blocked-strip-title">全局屏蔽</Typography.Text>
+        <Space.Compact className="blocked-strip-input">
+          <Input
+            aria-label="输入要屏蔽的标的"
+            placeholder="PURRUSDT"
+            value={manualBlockSymbol}
+            disabled={!riskSettings || savingSymbol !== null}
+            onChange={(event) => setManualBlockSymbol(event.target.value)}
+            onPressEnter={() => void blockManualSymbol()}
+          />
+          <Tooltip title="屏蔽标的">
+            <Button
+              aria-label="屏蔽输入标的"
+              icon={<StopOutlined />}
+              loading={savingSymbol === manualBlockCandidate && Boolean(manualBlockCandidate)}
+              disabled={!riskSettings || savingSymbol !== null || !manualBlockCandidate}
+              onClick={() => void blockManualSymbol()}
+            />
+          </Tooltip>
+        </Space.Compact>
+        {blockedSymbols.length > 0 ? (
           <Space size={8} wrap className="blocked-strip-list">
             {blockedSymbols.map((symbol) => (
               <Button
@@ -741,8 +801,8 @@ export function DashboardPage() {
               </Button>
             ))}
           </Space>
-        </div>
-      ) : null}
+        ) : null}
+      </div>
       <Row gutter={[12, 12]} className="metric-row">
         <Col xs={12} md={6}>
           <Statistic title="Opportunities" value={opportunities.length} />
@@ -898,7 +958,7 @@ export function DashboardPage() {
             loading={astroSubmitLoading}
             onClick={() => void submitAstroCard()}
           >
-            创建/更新暂停卡片
+            创建卡片
           </Button>
         ]}
         destroyOnHidden
@@ -931,6 +991,13 @@ export function DashboardPage() {
                 }
                 showIcon
                 message={astroSubmitResult.message}
+              />
+            ) : null}
+            {astroSubmitResult?.warnings?.length ? (
+              <Alert
+                type="warning"
+                showIcon
+                message={astroSubmitResult.warnings.join(" | ")}
               />
             ) : null}
             {astroPreviewPlan ? (
@@ -975,8 +1042,8 @@ export function DashboardPage() {
                         <Form.Item label="Maximum notional USDT" name="max_notional" rules={[{ required: true }]}>
                           <InputNumber min={0.01} step={1} className="wide-input" />
                         </Form.Item>
-                        <Form.Item label="Open after create" name="open_enabled" valuePropName="checked">
-                          <Switch checkedChildren="on" unCheckedChildren="off" />
+                        <Form.Item label="创建后允许开仓" name="open_enabled" valuePropName="checked">
+                          <Switch checkedChildren="开启" unCheckedChildren="关闭" />
                         </Form.Item>
                       </div>
                       <Form.Item name="save_as_default" valuePropName="checked">

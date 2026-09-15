@@ -289,6 +289,8 @@ class HyperliquidAdapter(ExchangeAdapter):
         for asset, item in zip(universe, contexts):
             if not isinstance(asset, dict):
                 continue
+            if asset.get("isDelisted") is True:
+                continue
             raw_coin = str(asset.get("name", "")).strip()
             if not raw_coin or raw_coin.startswith("@") or "/" in raw_coin:
                 continue

@@ -778,6 +778,57 @@ async def test_bitget_provider_parses_index_components() -> None:
 
 
 @pytest.mark.asyncio
+async def test_bitget_provider_parses_component_list_payload() -> None:
+    url = "https://api.bitget.com/api/v3/market/index-components?symbol=ESPORTSUSDT"
+    client = FakeIndexComponentClient(
+        {
+            url: {
+                "code": "00000",
+                "data": {
+                    "symbol": "ESPORTSUSDT",
+                    "ts": "1745401553408",
+                    "componentList": [
+                        {
+                            "exchange": "BITGET_FUTURE",
+                            "spotPair": "ESPORTS/USDT",
+                            "equivalentPrice": "0.24936",
+                            "weight": "0.6",
+                        },
+                        {
+                            "exchange": "1INCH_BSC",
+                            "spotPair": "ESPORTS/USD",
+                            "equivalentPrice": "0.24254",
+                            "weight": "0.35",
+                        },
+                        {
+                            "exchange": "BINANCE_INDEX",
+                            "spotPair": "ESPORTS/USDT",
+                            "equivalentPrice": "0.24264",
+                            "weight": "0.05",
+                        },
+                    ],
+                },
+            }
+        }
+    )
+    provider = BitgetIndexComponentProvider(client=client)
+
+    snapshots = await provider.fetch_components([market(exchange="bitget", symbol="ESPORTSUSDT")])
+
+    assert client.urls == [url]
+    assert len(snapshots) == 1
+    assert snapshots[0].exchange == "bitget"
+    assert snapshots[0].symbol == "ESPORTSUSDT"
+    assert [item.identity() for item in snapshots[0].components] == [
+        "1inch_bsc:ESPORTS/USD",
+        "binance_index:ESPORTS/USDT",
+        "bitget_future:ESPORTS/USDT",
+    ]
+    assert [item.weight for item in snapshots[0].components] == [0.35, 0.05, 0.6]
+    assert [item.price for item in snapshots[0].components] == [0.24254, 0.24264, 0.24936]
+
+
+@pytest.mark.asyncio
 async def test_gate_provider_parses_index_constituents() -> None:
     url = "https://api.gateio.ws/api/v4/futures/usdt/index_constituents/BTC_USDT"
     client = FakeIndexComponentClient(

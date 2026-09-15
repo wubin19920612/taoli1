@@ -33,6 +33,7 @@ async def list_opportunities(
     include_risky: bool = Query(default=False),
     hidden_risk_labels: str | None = Query(default=None),
     min_volume_24h_k: float | None = Query(default=None, ge=0),
+    limit: int | None = Query(default=None, ge=1, le=1000),
 ) -> list[Opportunity]:
     settings = await _risk_settings(request)
     opportunities = filter_opportunities(
@@ -83,6 +84,8 @@ async def list_opportunities(
         opportunities = [
             item for item in opportunities if not has_non_actionable_risk(item, hidden_labels)
         ]
+    if limit is not None:
+        opportunities = opportunities[:limit]
     return opportunities
 
 

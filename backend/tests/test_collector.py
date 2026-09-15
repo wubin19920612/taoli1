@@ -638,6 +638,7 @@ async def test_collector_skips_ignored_exchanges_and_blacklisted_symbols() -> No
 
     assert [item.symbol for item in result.markets] == ["BTCUSDT"]
     assert [item.symbol for item in store.get_markets()] == ["BTCUSDT"]
+    assert [item.symbol for item in store.get_all_markets()] == ["BTCUSDT", "BADUSDT"]
     assert active.spot_calls == 1
     assert active.future_calls == 1
     assert ignored.spot_calls == 0

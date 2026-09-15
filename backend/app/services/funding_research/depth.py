@@ -6,6 +6,7 @@ from app.models.orderbook import OrderBookLevel, OrderBookSnapshot
 from app.services.funding_research.models import FundingResearchCandidate, FundingResearchDepthStats
 
 EPSILON = 1e-9
+BookCacheKey = tuple[str, str, str, str, int]
 
 
 class FundingDepthAdapter(Protocol):
@@ -96,6 +97,7 @@ async def orderbook_depth_stats_for_candidate(
     *,
     target_notional_usdt: float,
     levels: int = 20,
+    book_cache: dict[BookCacheKey, OrderBookSnapshot | None] | None = None,
 ) -> FundingResearchDepthStats | None:
     adapter_by_exchange = {adapter.name.lower(): adapter for adapter in adapters}
     market_by_exchange = {market.exchange.lower(): market for market in markets if market.symbol == candidate.symbol}
@@ -105,17 +107,17 @@ async def orderbook_depth_stats_for_candidate(
     short_adapter = adapter_by_exchange.get(candidate.short_exchange.lower())
     if long_market is None or short_market is None or long_adapter is None or short_adapter is None:
         return None
-    long_book = await long_adapter.fetch_order_book(
-        candidate.symbol,
-        long_market.market_type,
-        long_market.raw_symbol,
-        limit=levels,
+    long_book = await _fetch_order_book(
+        long_adapter,
+        long_market,
+        levels=levels,
+        book_cache=book_cache,
     )
-    short_book = await short_adapter.fetch_order_book(
-        candidate.symbol,
-        short_market.market_type,
-        short_market.raw_symbol,
-        limit=levels,
+    short_book = await _fetch_order_book(
+        short_adapter,
+        short_market,
+        levels=levels,
+        book_cache=book_cache,
     )
     if long_book is None or short_book is None:
         return None
@@ -125,3 +127,30 @@ async def orderbook_depth_stats_for_candidate(
         target_notional_usdt=target_notional_usdt,
         levels=levels,
     )
+
+
+async def _fetch_order_book(
+    adapter: FundingDepthAdapter,
+    market: MarketSnapshot,
+    *,
+    levels: int,
+    book_cache: dict[BookCacheKey, OrderBookSnapshot | None] | None,
+) -> OrderBookSnapshot | None:
+    key = (
+        adapter.name.lower(),
+        market.symbol,
+        market.market_type.value,
+        market.raw_symbol,
+        levels,
+    )
+    if book_cache is not None and key in book_cache:
+        return book_cache[key]
+    book = await adapter.fetch_order_book(
+        market.symbol,
+        market.market_type,
+        market.raw_symbol,
+        limit=levels,
+    )
+    if book_cache is not None:
+        book_cache[key] = book
+    return book

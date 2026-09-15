@@ -1,0 +1,6 @@
+event,independent_events,difference_convergence_rate_pct,price_win_rate_pct,after_funding_and_10bp_fees_win_rate_pct,mean_price_return_pct,mean_after_funding_and_10bp_fees_pct,minimum_after_funding_and_10bp_fees_pct,maximum_after_funding_and_10bp_fees_pct,worst_intraperiod_price_return_pct
+late_2105_to_next_open,3,66.66666667,33.33333333,33.33333333,0.45118154,0.21472361,-0.69284270,1.86523693,-1.06390176
+a_lunch_to_pm_reopen,3,33.33333333,0.00000000,0.00000000,-0.16704701,-0.22847548,-0.36569233,-0.10085812,-0.65800061
+a_close_to_hk_close,3,0.00000000,33.33333333,33.33333333,-0.19819753,-0.31316330,-0.69803733,0.26638897,-0.75678519
+hk_close_to_next_open,2,50.00000000,50.00000000,50.00000000,0.69795956,0.52658111,-0.81337970,1.86654193,-1.22909361
+evening_1822_to_next_open,2,100.00000000,50.00000000,50.00000000,0.65402182,0.46327712,-1.35822773,2.28478197,-1.76177644

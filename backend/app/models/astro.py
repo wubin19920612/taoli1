@@ -1,6 +1,9 @@
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
+from app.models.market import MarketType
 
 
 class AstroFieldAssumption(BaseModel):
@@ -14,6 +17,8 @@ class AstroFieldAssumption(BaseModel):
 class AstroPairPlan(BaseModel):
     opportunity_id: str
     symbol: str
+    source_open_spread_pct: float | None = None
+    quoted_at: datetime | None = None
     mode: Literal["dry_run"] = "dry_run"
     can_submit: bool
     pair: dict[str, Any] | None = None
@@ -29,6 +34,8 @@ class AstroSdkStatus(BaseModel):
     base_url: str
     admin_prefix: str
     api_key_configured: bool
+    verify_tls: bool = True
+    ca_bundle_configured: bool = False
     list_path: str
     pair_path: str
     message_path: str
@@ -44,6 +51,20 @@ class AstroCardCreateRequest(BaseModel):
     save_as_default: bool = False
 
 
+class AstroInstrumentRouteRequest(BaseModel):
+    symbol: str = Field(min_length=1)
+    buy_exchange: str = Field(min_length=1)
+    buy_market_type: MarketType
+    sell_exchange: str = Field(min_length=1)
+    sell_market_type: MarketType
+
+
+class AstroInstrumentCardCreateRequest(BaseModel):
+    route: AstroInstrumentRouteRequest
+    card: AstroCardCreateRequest = Field(default_factory=AstroCardCreateRequest)
+    expected_open_spread_pct: float
+
+
 class AstroAlertActionResult(BaseModel):
     enabled: bool
     status: Literal["disabled", "skipped", "created", "updated", "failed"]
@@ -51,6 +72,7 @@ class AstroAlertActionResult(BaseModel):
     message: str
     pair_name: str | None = None
     pair_type: str | None = None
+    warnings: list[str] = Field(default_factory=list)
 
     def format_message(self) -> str:
         return f"Astro: {self.message}"

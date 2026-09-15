@@ -1,9 +1,24 @@
 from datetime import UTC, datetime
 
+import pytest
+
 from app.models.market import MarketSnapshot, MarketType
+from app.models.pair_spread import (
+    PairSpreadCurrentLeg,
+    PairSpreadCurrentSnapshot,
+    PairSpreadLegQuery,
+    PairSpreadPoint,
+    PairSpreadPriceField,
+    PairSpreadQueryResult,
+    PairSpreadValueStats,
+)
 from app.models.settings import RiskSettings, SymbolAlias
 from app.services.spread_engine import build_opportunities
-from app.services.symbol_aliases import apply_symbol_aliases
+from app.services.symbol_aliases import (
+    apply_pair_spread_symbol_aliases,
+    apply_symbol_aliases,
+    resolve_symbol_alias,
+)
 
 
 def snapshot(
@@ -36,6 +51,8 @@ def test_default_symbol_alias_maps_gate_edgex_to_edge() -> None:
     assert aliased[0].symbol == "EDGEUSDT"
     assert aliased[0].base == "EDGE"
     assert aliased[0].raw_symbol == "EDGEX_USDT"
+    assert aliased[0].symbol_alias_original_symbol == "EDGEXUSDT"
+    assert aliased[0].symbol_alias_price_multiplier == 1
     assert aliased[1].symbol == "EDGEXUSDT"
 
 
@@ -53,6 +70,213 @@ def test_symbol_alias_normalizes_case_and_optional_market_type() -> None:
 
     assert aliased[0].symbol == "EDGEXUSDT"
     assert aliased[1].symbol == "EDGEUSDT"
+
+
+def test_symbol_alias_price_multiplier_scales_prices_but_not_usdt_volume() -> None:
+    nex = snapshot("bitget", "NEXUSDT", MarketType.SPOT, "NEXUSDT").model_copy(
+        update={
+            "bid": 0.0101,
+            "ask": 0.0102,
+            "bid_size": 20_000,
+            "ask_size": 30_000,
+            "mark_price": None,
+            "index_price": 0.01015,
+            "volume_24h_usdt": 123_456,
+        }
+    )
+    aliased = apply_symbol_aliases(
+        [nex],
+        [
+            SymbolAlias(
+                exchange="bitget",
+                symbol="NEX",
+                canonical_symbol="10000NEX",
+                market_type=MarketType.SPOT,
+                price_multiplier=10_000,
+            )
+        ],
+    )
+
+    assert aliased[0].symbol == "10000NEXUSDT"
+    assert aliased[0].base == "10000NEX"
+    assert aliased[0].bid == pytest.approx(101)
+    assert aliased[0].ask == pytest.approx(102)
+    assert aliased[0].bid_size == pytest.approx(2)
+    assert aliased[0].ask_size == pytest.approx(3)
+    assert aliased[0].index_price == pytest.approx(101.5)
+    assert aliased[0].volume_24h_usdt == pytest.approx(123_456)
+    assert aliased[0].symbol_alias_original_symbol == "NEXUSDT"
+    assert aliased[0].symbol_alias_price_multiplier == pytest.approx(10_000)
+
+
+def test_pair_spread_alias_multiplier_recalculates_executable_spreads() -> None:
+    observed_at = datetime(2026, 9, 12, tzinfo=UTC)
+    leg1_query = PairSpreadLegQuery(
+        exchange="bitget",
+        symbol="NEXUSDT",
+        market_type=MarketType.SPOT,
+    )
+    leg2_query = PairSpreadLegQuery(exchange="gate", symbol="10000NEXUSDT")
+    leg1 = PairSpreadCurrentLeg(
+        exchange="bitget",
+        symbol="NEXUSDT",
+        market_type=MarketType.SPOT,
+        raw_symbol="NEXUSDT",
+        price=0.0104,
+        price_field=PairSpreadPriceField.MID_PRICE,
+        bid_price=0.0103,
+        ask_price=0.0105,
+        mark_price=0.0102,
+        mid_price=0.0104,
+        timestamp=observed_at,
+    )
+    leg2 = PairSpreadCurrentLeg(
+        exchange="gate",
+        symbol="10000NEXUSDT",
+        raw_symbol="10000NEX_USDT",
+        price=100,
+        price_field=PairSpreadPriceField.MID_PRICE,
+        bid_price=99,
+        ask_price=101,
+        mark_price=98,
+        mid_price=100,
+        timestamp=observed_at,
+    )
+    result = PairSpreadQueryResult(
+        leg1=leg1_query,
+        leg2=leg2_query,
+        hours=1,
+        observed_at=observed_at,
+        point_count=1,
+        first_seen_at=observed_at,
+        last_seen_at=observed_at,
+        spread_abs=PairSpreadValueStats(current=99.9896),
+        spread_pct=PairSpreadValueStats(current=199.9584),
+        current=PairSpreadCurrentSnapshot(
+            observed_at=observed_at,
+            leg1=leg1,
+            leg2=leg2,
+            spread_abs=99.9896,
+            spread_pct=199.9584,
+        ),
+        points=[
+            PairSpreadPoint(
+                bucket_at=observed_at,
+                leg1_close=0.0104,
+                leg2_close=100,
+                spread_abs=99.9896,
+                spread_pct=199.9584,
+            )
+        ],
+    )
+    aliases = [
+        SymbolAlias(
+            exchange="bitget",
+            symbol="NEX",
+            canonical_symbol="10000NEX",
+            market_type=MarketType.SPOT,
+            price_multiplier=10_000,
+        )
+    ]
+
+    aliased = apply_pair_spread_symbol_aliases(
+        result,
+        leg1_alias=resolve_symbol_alias(
+            aliases,
+            exchange="bitget",
+            symbol="10000NEX",
+            market_type=MarketType.SPOT,
+        ),
+        leg2_alias=resolve_symbol_alias(
+            aliases,
+            exchange="gate",
+            symbol="10000NEX",
+            market_type=MarketType.FUTURE,
+        ),
+    )
+
+    assert aliased.current is not None
+    assert aliased.current.leg1.bid_price == pytest.approx(103)
+    assert aliased.current.leg1.ask_price == pytest.approx(105)
+    assert aliased.current.leg1.mark_price == pytest.approx(102)
+    assert aliased.current.open_spread_abs == pytest.approx(-6)
+    assert aliased.current.open_spread_pct == pytest.approx(-6 / 102 * 100)
+    assert aliased.current.close_spread_abs == pytest.approx(-2)
+    assert aliased.current.close_spread_pct == pytest.approx(-2 / 102 * 100)
+    assert aliased.current.mark_spread_abs == pytest.approx(-4)
+    assert aliased.current.mark_spread_pct == pytest.approx(-4 / 100 * 100)
+
+
+def test_symbol_alias_resolver_accepts_canonical_or_raw_symbol() -> None:
+    aliases = [
+        SymbolAlias(
+            exchange="gate",
+            symbol="NEX",
+            canonical_symbol="10000NEX",
+            market_type=MarketType.FUTURE,
+            price_multiplier=10_000,
+        )
+    ]
+
+    from_canonical = resolve_symbol_alias(
+        aliases,
+        exchange="gate",
+        symbol="10000NEX",
+        market_type=MarketType.FUTURE,
+    )
+    from_raw = resolve_symbol_alias(
+        aliases,
+        exchange="gate",
+        symbol="NEX",
+        market_type=MarketType.FUTURE,
+    )
+
+    assert from_canonical.raw_symbol == "NEXUSDT"
+    assert from_canonical.canonical_symbol == "10000NEXUSDT"
+    assert from_canonical.price_multiplier == pytest.approx(10_000)
+    assert from_raw.requested_symbol == "NEXUSDT"
+    assert from_raw.raw_symbol == from_canonical.raw_symbol
+    assert from_raw.canonical_symbol == from_canonical.canonical_symbol
+    assert from_raw.price_multiplier == from_canonical.price_multiplier
+
+
+def test_known_hyperliquid_anth_alias_resolves_canonical_symbol_and_dex() -> None:
+    resolved = resolve_symbol_alias(
+        [],
+        exchange="hyperliquid",
+        symbol="ANTHROPIC",
+        market_type=MarketType.FUTURE,
+    )
+
+    assert resolved.raw_symbol == "ANTHUSDT"
+    assert resolved.canonical_symbol == "ANTHROPICUSDT"
+    assert resolved.dex == "io"
+
+    market = snapshot(
+        "hyperliquid",
+        "ANTHUSDT",
+        MarketType.FUTURE,
+        raw_symbol="io:ANTH",
+    )
+    [aliased] = apply_symbol_aliases([market], [])
+
+    assert aliased.symbol == "ANTHROPICUSDT"
+    assert aliased.raw_symbol == "io:ANTH"
+    assert aliased.symbol_alias_original_symbol == "ANTHUSDT"
+
+
+def test_known_hyperliquid_anth_alias_does_not_override_explicit_other_dex() -> None:
+    resolved = resolve_symbol_alias(
+        [],
+        exchange="hyperliquid",
+        symbol="ANTHROPIC",
+        market_type=MarketType.FUTURE,
+        dex="main",
+    )
+
+    assert resolved.raw_symbol == "ANTHROPICUSDT"
+    assert resolved.canonical_symbol == "ANTHROPICUSDT"
+    assert resolved.dex == "main"
 
 
 def test_alias_enables_cross_exchange_opportunity_with_raw_leg_symbols() -> None:
