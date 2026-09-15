@@ -168,6 +168,22 @@ const astroPairs = [
     realizedProfit: 0
   },
   {
+    id: "active-invalid-ratio-threshold",
+    name: "OPENAI-OAI",
+    type: "FR",
+    status: true,
+    disableOpen: false,
+    disableClose: false,
+    buyEx: "gc-gate",
+    sellEx: "hl",
+    openPosition: "0",
+    closePosition: "Infinity",
+    regressionValue: 1,
+    aExPosition: 0,
+    bExPosition: 0,
+    realizedProfit: 0
+  },
+  {
     id: "paused",
     name: "STEEM",
     type: "FF",
@@ -375,7 +391,7 @@ describe("FloatingWatchPanel", () => {
     render(<FloatingWatchPanel visible onClose={vi.fn()} />);
     const panel = await screen.findByRole("complementary", { name: "关注浮窗" });
 
-    await userEvent.click(await within(panel).findByText("Astro 2"));
+    await userEvent.click(await within(panel).findByText("Astro 3"));
 
     expect(await within(panel).findByText("ANTHROPIC-ANTHROPIC")).not.toBeNull();
     expect(within(panel).getByText("持仓中")).not.toBeNull();
@@ -396,7 +412,10 @@ describe("FloatingWatchPanel", () => {
     expect(within(panel).queryByText("+730.00 U")).toBeNull();
     expect(within(panel).getByText("开 1.00% / 平 2.99%")).not.toBeNull();
     expect(within(panel).getByText("开 0.30% / 平 -0.15%")).not.toBeNull();
-    expect(within(panel).getByText("当前无持仓 · 已实现 --")).not.toBeNull();
+    const invalidThresholdCard = within(panel).getByText("OPENAI-OAI").closest(".floating-watch-astro-row");
+    expect(invalidThresholdCard).not.toBeNull();
+    expect(within(invalidThresholdCard as HTMLElement).getByText("开 - / 平 -")).not.toBeNull();
+    expect(within(panel).getAllByText("当前无持仓 · 已实现 --")).toHaveLength(2);
     expect(within(panel).queryByText("STEEM")).toBeNull();
     expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("/astro/pairs"))).toBe(true);
     expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("/instruments/ANTHROPICUSDT"))).toBe(true);

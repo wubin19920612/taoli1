@@ -330,10 +330,12 @@ function astroThresholdMetric(pair: AstroPairStatus, value: unknown): string {
   const parsed = finiteNumber(value);
   if (parsed === null) return "-";
   const ratioMode = pair.type?.toUpperCase().endsWith("R") === true;
-  const percentage = ratioMode
-    ? spreadPct(parsed, astroRatioReference(pair))
-    : parsed * 100;
-  return astroSpreadMetric(percentage);
+  if (ratioMode) {
+    const ratioThreshold = positivePrice(parsed);
+    if (ratioThreshold === null) return "-";
+    return astroSpreadMetric(spreadPct(ratioThreshold, astroRatioReference(pair)));
+  }
+  return astroSpreadMetric(parsed * 100);
 }
 
 function usdt(value: number | null, signed = false): string {
