@@ -75,6 +75,7 @@ const defaultRule: AlertRule = {
   include_symbols: [],
   exclude_symbols: [],
   min_open_spread_pct: 0.5,
+  favorable_funding_open_spread_pct: 0.9,
   min_fee_adjusted_open_pct: 0.25,
   min_volume_24h_usdt: 1000000,
   max_data_age_seconds: 600,
@@ -188,15 +189,19 @@ function ruleToForm(rule: AlertRule): AlertRuleFormValues {
   return {
     ...rule,
     suppress_sf_negative_funding: rule.suppress_sf_negative_funding ?? true,
+    favorable_funding_open_spread_pct: rule.favorable_funding_open_spread_pct === undefined
+      ? 0.9
+      : rule.favorable_funding_open_spread_pct,
     min_volume_24h_k: Math.round(rule.min_volume_24h_usdt / 1000)
   };
 }
 
 function ruleFromForm(values: AlertRuleFormValues, defaults: AlertRule): AlertRule {
-  const { min_volume_24h_k: minVolumeK, ...rule } = values;
+  const { min_volume_24h_k: minVolumeK, favorable_funding_open_spread_pct: relaxedSpread, ...rule } = values;
   return {
     ...defaults,
     ...rule,
+    favorable_funding_open_spread_pct: relaxedSpread ?? null,
     exclude_symbols: defaults.exclude_symbols,
     min_volume_24h_usdt: (minVolumeK ?? 0) * 1000
   };
@@ -611,6 +616,11 @@ export function SettingsPage() {
     { title: "规则", dataIndex: "name" },
     { title: "类型", dataIndex: "types", render: (types: string[]) => types.join(",") },
     { title: "开仓阈值", dataIndex: "min_open_spread_pct", render: (value: number) => `${value}%` },
+    {
+      title: "资金费率条件阈值",
+      dataIndex: "favorable_funding_open_spread_pct",
+      render: (value: number | null | undefined) => value === null ? "关闭" : `${value ?? 0.9}%`
+    },
     { title: "综合阈值", dataIndex: "min_fee_adjusted_open_pct", render: (value: number) => `${value}%` },
     { title: "连续命中", dataIndex: "consecutive_hits" },
     { title: "冷却", dataIndex: "cooldown_seconds", render: (value: number) => `${value}s` },
@@ -1267,6 +1277,13 @@ export function SettingsPage() {
               help={alertRuleFieldHelp.min_open_spread_pct}
             >
               <InputNumber min={0} step={0.1} suffix="%" className="wide-input" />
+            </Form.Item>
+            <Form.Item
+              label="资金费率条件开仓阈值"
+              name="favorable_funding_open_spread_pct"
+              help={alertRuleFieldHelp.favorable_funding_open_spread_pct}
+            >
+              <InputNumber min={0} step={0.1} suffix="%" placeholder="留空关闭" className="wide-input" />
             </Form.Item>
             <Form.Item
               label="综合开仓阈值"

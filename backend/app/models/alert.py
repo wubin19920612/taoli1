@@ -61,6 +61,11 @@ class AlertRule(BaseModel):
         description="兼容字段，实际筛选以实时机会页隐藏黑名单为准。",
     )
     min_open_spread_pct: float = Field(default=0.0, description="开仓价差达到这个百分比才算命中。")
+    favorable_funding_open_spread_pct: float | None = Field(
+        default=0.9,
+        ge=0,
+        description="满足正做空费率或做多费率更低条件时的较低正开仓价差阈值；留空关闭。",
+    )
     min_fee_adjusted_open_pct: float = Field(
         default=0.0,
         description="扣除手续费、滑点并叠加资金费率差后的综合开仓阈值。",

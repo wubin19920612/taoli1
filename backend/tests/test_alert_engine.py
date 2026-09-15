@@ -6,7 +6,7 @@ from app.models.alert import AlertRule
 from app.models.market import MarketType
 from app.models.opportunity import Opportunity, OpportunityType
 from app.models.settings import RiskSettings
-from app.services.alert_engine import AlertEngine
+from app.services.alert_engine import AlertEngine, required_open_spread_pct
 
 
 def opportunity(spread: float = 0.8) -> Opportunity:
@@ -462,6 +462,85 @@ def test_legacy_alert_rule_defaults_to_suppressing_sf_negative_funding() -> None
     rule = AlertRule.model_validate({"name": "legacy"})
 
     assert rule.suppress_sf_negative_funding is True
+    assert rule.favorable_funding_open_spread_pct == 0.9
+
+
+def test_positive_sf_funding_relaxes_only_the_spread_gate() -> None:
+    rule = AlertRule(
+        name="positive SF funding",
+        types=["SF"],
+        min_open_spread_pct=1.0,
+        min_fee_adjusted_open_pct=0.7,
+        favorable_funding_open_spread_pct=0.9,
+        consecutive_hits=1,
+    )
+    sf = opportunity(spread=0.9).model_copy(
+        update={
+            "type": OpportunityType.SF,
+            "buy_market_type": MarketType.SPOT,
+            "fee_adjusted_open_pct": 0.75,
+            "funding_next_rate_sell_pct": 0.01,
+        }
+    )
+    engine = AlertEngine()
+
+    assert len(engine.evaluate([sf], [rule], now=datetime.now(UTC))) == 1
+    assert engine.evaluate([sf.model_copy(update={"id": "below", "open_spread_pct": 0.89})], [rule]) == []
+    assert engine.evaluate([sf.model_copy(update={"id": "low-net", "fee_adjusted_open_pct": 0.6})], [rule]) == []
+    assert required_open_spread_pct(rule, sf.model_copy(update={"funding_next_rate_sell_pct": -0.01})) == 1.0
+    assert required_open_spread_pct(rule, sf.model_copy(update={"funding_next_rate_sell_pct": None})) == 0.9
+
+
+def test_ff_long_lower_funding_relaxes_spread_with_interval_normalization() -> None:
+    rule = AlertRule(name="FF funding", types=["FF"], min_open_spread_pct=1.0, consecutive_hits=1)
+    ff = opportunity(spread=0.9).model_copy(
+        update={
+            "fee_adjusted_open_pct": 0.75,
+            "funding_next_rate_buy_pct": -0.01,
+            "funding_next_rate_sell_pct": -0.04,
+            "buy_funding_interval_hours": 1,
+            "sell_funding_interval_hours": 8,
+        }
+    )
+
+    assert required_open_spread_pct(rule, ff) == 0.9
+    assert len(AlertEngine().evaluate([ff], [rule], now=datetime.now(UTC))) == 1
+    assert required_open_spread_pct(rule, ff.model_copy(update={"sell_funding_interval_hours": 1})) == 1.0
+    assert required_open_spread_pct(rule, ff.model_copy(update={"sell_funding_interval_hours": None})) == 1.0
+    assert required_open_spread_pct(rule, ff.model_copy(update={"funding_next_rate_buy_pct": None})) == 1.0
+    assert required_open_spread_pct(
+        rule,
+        ff.model_copy(update={"funding_next_rate_buy_pct": None, "funding_rate_buy_pct": None}),
+    ) == 1.0
+    assert required_open_spread_pct(rule.model_copy(update={"favorable_funding_open_spread_pct": None}), ff) == 1.0
+    assert required_open_spread_pct(rule.model_copy(update={"favorable_funding_open_spread_pct": 0.85}), ff) == 0.85
+    assert required_open_spread_pct(rule.model_copy(update={"min_open_spread_pct": 0.5}), ff) == 0.5
+
+
+def test_ff_both_negative_rates_can_qualify_when_long_rate_is_smaller() -> None:
+    rule = AlertRule(name="FF funding", types=["FF"], min_open_spread_pct=1.0)
+    ff = opportunity(spread=0.9).model_copy(
+        update={
+            "funding_rate_buy_pct": -0.03,
+            "funding_rate_sell_pct": -0.01,
+            "funding_next_rate_buy_pct": None,
+            "funding_next_rate_sell_pct": None,
+        }
+    )
+
+    assert required_open_spread_pct(rule, ff) == 0.9
+    assert required_open_spread_pct(rule, ff.model_copy(update={"funding_rate_buy_pct": None})) == 1.0
+    assert required_open_spread_pct(rule, ff.model_copy(update={"type": OpportunityType.SS})) == 1.0
+
+
+def test_ff_positive_short_funding_qualifies_even_when_long_rate_is_higher() -> None:
+    rule = AlertRule(name="FF funding", types=["FF"], min_open_spread_pct=1.0)
+    ff = opportunity(spread=0.9).model_copy(
+        update={"funding_rate_buy_pct": 0.04, "funding_rate_sell_pct": 0.02}
+    )
+
+    assert required_open_spread_pct(rule, ff) == 0.9
+    assert required_open_spread_pct(rule, ff.model_copy(update={"funding_next_rate_sell_pct": -0.01})) == 1.0
 
 
 def test_all_missing_volume_does_not_block_alert_when_rule_requires_volume() -> None:

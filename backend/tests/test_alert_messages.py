@@ -45,6 +45,7 @@ def test_alert_message_distinguishes_market_types_and_bitget_stock_spot() -> Non
 
     assert "价差对：SOXLUSDT | bitget 股票现货 -> okx 合约" in text
     assert "方向：买入 bitget 股票现货 SOXLUSDT，卖出 okx 合约 SOXLUSDT" in text
+    assert "资金费率条件开仓阈值：>= 0.900%" in text
     assert "买入腿：bitget 股票现货" in text
     assert "卖出腿：okx 合约" in text
     assert "买入原始标的：bitget RSOXLUSDT" in text

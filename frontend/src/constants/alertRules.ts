@@ -23,6 +23,7 @@ export const alertRuleFieldHelp = {
   include_symbols: "只匹配这些标的，留空表示不限制。",
   exclude_symbols: "排除标的直接继承实时机会页隐藏的黑名单，无需单独填写。",
   min_open_spread_pct: "原始开仓价差的基础门槛，用来避免完全没有价差的机会触发。",
+  favorable_funding_open_spread_pct: "仅降低正价差的基础门槛：SF/FF 做空永续腿资金费率为正，或 FF 做多腿资金费率低于做空腿时生效。优先用预测费率，缺失时用当前费率；比较两腿时，双方结算周期已知则按每小时比较。不放宽综合收益、风险、连续命中和冷却条件。留空关闭。",
   min_fee_adjusted_open_pct: "扣除手续费、滑点后，再叠加下一结算周期资金费差；优先使用预测值，缺失时用标记价/指数价偏离估算。正资金费率会加分，逆风资金费率会扣分。",
   min_volume_24h_usdt: "买卖两侧较小的 24h 成交额必须达到这个值。",
   consecutive_hits: "同一机会需要连续满足多少轮才触发。",

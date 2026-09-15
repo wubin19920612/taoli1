@@ -715,6 +715,7 @@ export interface AlertRule {
   include_symbols: string[];
   exclude_symbols: string[];
   min_open_spread_pct: number;
+  favorable_funding_open_spread_pct: number | null;
   min_fee_adjusted_open_pct: number;
   min_volume_24h_usdt: number;
   max_data_age_seconds: number;

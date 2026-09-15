@@ -242,6 +242,7 @@ describe("SettingsPage", () => {
     expect(screen.getAllByText(/SF=现货买入 \/ 永续卖出/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/info=仅记录，warning=普通告警，critical=强提醒/).length).toBeGreaterThan(0);
     expect(screen.getByText("综合开仓阈值")).toBeTruthy();
+    expect(screen.getByText("资金费率条件开仓阈值")).toBeTruthy();
     expect(screen.getAllByText(/正资金费率会加分，逆风资金费率会扣分/).length).toBeGreaterThan(0);
     expect(screen.getByLabelText("SF 负资金费率不通知").getAttribute("aria-checked")).toBe("true");
     expect(screen.getByText(/卖出侧下一结算周期资金费率小于 0 时不通知/)).toBeTruthy();
@@ -268,6 +269,11 @@ describe("SettingsPage", () => {
         return init?.method === "POST" && String(init.body).includes('"suppress_sf_negative_funding":true');
       })
     ).toBe(true);
+    expect(
+      vi.mocked(fetch).mock.calls.some(([, init]) =>
+        init?.method === "POST" && String(init.body).includes('"favorable_funding_open_spread_pct":0.9')
+      )
+    ).toBe(true);
   }, 15000);
 
   it("edits an existing alert rule in place", async () => {
@@ -278,6 +284,7 @@ describe("SettingsPage", () => {
     expect(screen.getByText("编辑告警规则")).toBeTruthy();
     expect((screen.getByLabelText("告警规则名称") as HTMLInputElement).value).toBe("Existing FF");
     expect(screen.getByLabelText("SF 负资金费率不通知").getAttribute("aria-checked")).toBe("true");
+    expect((screen.getByLabelText("资金费率条件开仓阈值") as HTMLInputElement).value).toBe("0.9");
     await waitFor(() => {
       expect((screen.getByLabelText("最低成交额 (K)") as HTMLInputElement).value).toBe("2500");
     });
@@ -286,6 +293,9 @@ describe("SettingsPage", () => {
     const threshold = screen.getByLabelText("开仓阈值");
     await userEvent.clear(threshold);
     await userEvent.type(threshold, "1.1");
+    const favorableThreshold = screen.getByLabelText("资金费率条件开仓阈值");
+    await userEvent.clear(favorableThreshold);
+    await userEvent.type(favorableThreshold, "0.85");
     await userEvent.click(screen.getByRole("button", { name: "保存修改" }));
 
     await waitFor(() => {
@@ -307,8 +317,32 @@ describe("SettingsPage", () => {
         return init?.method === "PUT" && String(init.body).includes('"suppress_sf_negative_funding":false');
       })
     ).toBe(true);
+    expect(
+      vi.mocked(fetch).mock.calls.some(([, init]) =>
+        init?.method === "PUT" && String(init.body).includes('"favorable_funding_open_spread_pct":0.85')
+      )
+    ).toBe(true);
     expect(screen.getByText("新增告警规则")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "保存修改" })).toBeNull();
+  }, 15000);
+
+  it("can disable the favorable funding spread threshold by clearing it", async () => {
+    render(<SettingsPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "编辑规则 Existing FF" }));
+
+    const favorableThreshold = screen.getByLabelText("资金费率条件开仓阈值");
+    await userEvent.clear(favorableThreshold);
+    await userEvent.click(screen.getByRole("button", { name: "保存修改" }));
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/alerts/rules/rule-existing"),
+        expect.objectContaining({
+          method: "PUT",
+          body: expect.stringContaining('"favorable_funding_open_spread_pct":null')
+        })
+      );
+    });
   }, 15000);
 
   it("quickly updates SF negative funding notifications from the rule list", async () => {

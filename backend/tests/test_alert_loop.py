@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 import pytest
 from fastapi import FastAPI
 
-from app.main import _handle_new_listing_astro_alert, _run_alert_loop
+from app.main import _handle_new_listing_astro_alert, _latest_signal_validation_failure, _run_alert_loop
 from app.models.alert import AlertEvent, AlertRule
 from app.models.announcement import AnnouncementKind, ExchangeAnnouncement
 from app.models.astro import AstroAlertActionResult
@@ -14,6 +14,26 @@ from app.models.orderbook import DepthValidationResult
 from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, LivePilotSettings, RiskSettings
 from app.services.alert_engine import AlertMatch
 from app.services.snapshot_store import SnapshotStore
+
+
+def test_latest_signal_recheck_uses_favorable_funding_threshold() -> None:
+    rule = AlertRule(name="FF funding", types=["FF"], min_open_spread_pct=1.0)
+    latest = opportunity().model_copy(
+        update={
+            "open_spread_pct": 0.9,
+            "fee_adjusted_open_pct": 0.75,
+            "funding_rate_buy_pct": 0.01,
+            "funding_rate_sell_pct": 0.04,
+            "risk_labels": [],
+        }
+    )
+    match = AlertMatch(rule, latest, [])
+
+    assert _latest_signal_validation_failure(match, latest, RiskSettings(), datetime.now(UTC)) is None
+    reversed_funding = latest.model_copy(
+        update={"funding_rate_buy_pct": 0.05, "funding_rate_sell_pct": -0.01}
+    )
+    assert "1.000%" in (_latest_signal_validation_failure(match, reversed_funding, RiskSettings(), datetime.now(UTC)) or "")
 
 
 def opportunity() -> Opportunity:

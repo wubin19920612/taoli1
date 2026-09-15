@@ -44,6 +44,12 @@ def build_alert_message(
                 f"包含标的：{_describe_values(rule.include_symbols)}",
                 "排除标的：继承实时机会页隐藏黑名单",
                 f"开仓阈值：>= {_format_percent(rule.min_open_spread_pct)}",
+                (
+                    "资金费率条件开仓阈值："
+                    f">= {_format_percent(rule.favorable_funding_open_spread_pct)}"
+                    if rule.favorable_funding_open_spread_pct is not None
+                    else "资金费率条件开仓阈值：关闭"
+                ),
                 f"综合开仓阈值：>= {_format_percent(rule.min_fee_adjusted_open_pct)}",
                 f"最低成交额：>= {_format_volume_k(rule.min_volume_24h_usdt)}",
                 f"数据时效：<= {rule.max_data_age_seconds}s",

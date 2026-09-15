@@ -55,7 +55,7 @@ from app.models.orderbook import DepthValidationResult
 from app.models.opportunity import Opportunity
 from app.models.phone_alert import PhonePriceAlertEvent
 from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, LivePilotSettings, RiskSettings
-from app.services.alert_engine import AlertEngine, AlertMatch, observations_are_stable
+from app.services.alert_engine import AlertEngine, AlertMatch, observations_are_stable, required_open_spread_pct
 from app.services.alert_messages import build_alert_message
 from app.services.alert_metrics import observe_alert_metrics
 from app.services.announcements import (
@@ -385,10 +385,11 @@ def _latest_signal_validation_failure(
 ) -> str | None:
     if latest is None:
         return "最新快照中已找不到该机会"
-    if latest.open_spread_pct + 1e-9 < match.rule.min_open_spread_pct:
+    required_spread = required_open_spread_pct(match.rule, latest)
+    if latest.open_spread_pct + 1e-9 < required_spread:
         return (
             f"开仓价差 {latest.open_spread_pct:.3f}% 低于规则阈值 "
-            f"{match.rule.min_open_spread_pct:.3f}%"
+            f"{required_spread:.3f}%"
         )
     effective_edge = effective_open_edge_pct(latest, settings)
     required_edge = max(match.rule.min_fee_adjusted_open_pct, settings.min_effective_open_pct)
