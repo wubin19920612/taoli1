@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, urlparse
 
@@ -126,5 +127,37 @@ async def test_lighter_pair_query_current_candles_and_signed_historical_funding(
         assert candles[0].volume_usdt == 1200
         funding = await service._fetch_lighter_funding("ETHUSDT", start, end)
         assert [point.funding_rate_pct for point in funding] == [0.0009, -0.0005]
+    finally:
+        await service.aclose()
+
+
+@pytest.mark.asyncio
+async def test_lighter_pair_legs_share_one_market_details_request(monkeypatch) -> None:
+    service = PairSpreadQueryService()
+    details_calls = 0
+
+    async def fake_get(url: str):
+        nonlocal details_calls
+        if url.endswith("orderBookDetails"):
+            details_calls += 1
+            if details_calls > 1:
+                raise RuntimeError("simultaneous market details request rejected")
+            await asyncio.sleep(0)
+            return {"code": 200, "order_book_details": [detail("ETH", 0)],
+                    "spot_order_book_details": [detail("ETH/USDC", 2048, "spot")]}
+        if "orderBookOrders" in url:
+            return book()
+        return {"code": 200, "funding_rates": []}
+
+    monkeypatch.setattr(service, "_get_json", fake_get)
+    monkeypatch.setattr(service, "_get_json_optional", fake_get)
+    try:
+        future, spot = await asyncio.gather(
+            service._fetch_lighter_current("ETHUSDT"),
+            service._fetch_lighter_current("ETHUSDT", market_type=MarketType.SPOT),
+        )
+        assert future.market_type == MarketType.FUTURE
+        assert spot.raw_symbol == "ETH/USDC"
+        assert details_calls == 1
     finally:
         await service.aclose()

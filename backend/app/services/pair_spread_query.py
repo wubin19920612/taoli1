@@ -962,6 +962,7 @@ class PairSpreadQueryService:
         self._hyperliquid_coin_by_base: dict[tuple[str, str], tuple[str, str]] = {}
         self._lighter_markets: dict[tuple[MarketType, str], dict[str, Any]] | None = None
         self._lighter_markets_at: datetime | None = None
+        self._lighter_markets_lock = asyncio.Lock()
 
     async def aclose(self) -> None:
         if self._owns_client and not self.client.is_closed:
@@ -2575,22 +2576,24 @@ class PairSpreadQueryService:
 
     async def _lighter_market(self, symbol: str, market_type: MarketType) -> dict[str, Any]:
         if self._lighter_markets_at is None or utc_now() - self._lighter_markets_at > timedelta(minutes=1):
-            payload = await self._get_json(f"{LIGHTER_URL}/orderBookDetails")
-            if not isinstance(payload, dict) or payload.get("code") != 200:
-                raise RuntimeError("invalid Lighter market details")
-            markets: dict[tuple[MarketType, str], dict[str, Any]] = {}
-            for kind, key in (
-                (MarketType.FUTURE, "order_book_details"),
-                (MarketType.SPOT, "spot_order_book_details"),
-            ):
-                for item in payload.get(key, []):
-                    if not isinstance(item, dict) or item.get("status") != "active" or not isinstance(item.get("market_id"), int):
-                        continue
-                    resolved = lighter_symbol(str(item.get("symbol", "")), kind)
-                    if resolved:
-                        markets[(kind, resolved[0])] = item
-            self._lighter_markets = markets
-            self._lighter_markets_at = utc_now()
+            async with self._lighter_markets_lock:
+                if self._lighter_markets_at is None or utc_now() - self._lighter_markets_at > timedelta(minutes=1):
+                    payload = await self._get_json(f"{LIGHTER_URL}/orderBookDetails")
+                    if not isinstance(payload, dict) or payload.get("code") != 200:
+                        raise RuntimeError("invalid Lighter market details")
+                    markets: dict[tuple[MarketType, str], dict[str, Any]] = {}
+                    for kind, key in (
+                        (MarketType.FUTURE, "order_book_details"),
+                        (MarketType.SPOT, "spot_order_book_details"),
+                    ):
+                        for item in payload.get(key, []):
+                            if not isinstance(item, dict) or item.get("status") != "active" or not isinstance(item.get("market_id"), int):
+                                continue
+                            resolved = lighter_symbol(str(item.get("symbol", "")), kind)
+                            if resolved:
+                                markets[(kind, resolved[0])] = item
+                    self._lighter_markets = markets
+                    self._lighter_markets_at = utc_now()
         market = (self._lighter_markets or {}).get((market_type, _compact_symbol(symbol)))
         if market is None:
             raise RuntimeError(f"Lighter {market_type.value} symbol not found: {symbol}")
