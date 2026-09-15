@@ -1,6 +1,8 @@
 from datetime import UTC, datetime, timedelta, timezone
+from decimal import Decimal
 
 from app.models.alert import ALERT_SEVERITY_DESCRIPTIONS, ALERT_TYPE_DESCRIPTIONS, AlertRule
+from app.models.market import MarketType
 from app.models.opportunity import Opportunity
 from app.models.settings import AlertMessageTemplateSettings
 from app.services.alert_metrics import AlertObservation, combined_open_edge_pct
@@ -19,6 +21,7 @@ def build_alert_message(
 ) -> str:
     settings = template or AlertMessageTemplateSettings()
     lines: list[str] = []
+    mixed_funding_intervals = _has_mixed_funding_intervals(opportunity)
 
     if settings.include_trigger_summary:
         _append_block(
@@ -107,41 +110,47 @@ def build_alert_message(
                 f"开仓价差：{_format_percent(opportunity.open_spread_pct)}",
                 f"平仓价差：{_format_percent(opportunity.close_spread_pct)}",
                 f"净估算：{_format_percent(opportunity.fee_adjusted_open_pct)}",
-                f"综合开仓：{_format_percent(combined_open_edge_pct(opportunity))}",
+                (
+                    "综合开仓（含异周期原值资金差）："
+                    if mixed_funding_intervals else "综合开仓："
+                ) + _format_percent(combined_open_edge_pct(opportunity)),
             ]
         )
     if settings.include_funding:
-        snapshot_lines.extend(
-            [
-                (
-                    "资金费率差（周期）："
-                    f"当前 {_format_percent(_current_funding_cycle_pct(opportunity), digits=2)} / "
-                    f"预测 {_format_percent(_next_funding_cycle_pct(opportunity), digits=2)}"
-                ),
-                (
-                    "资金费率："
-                    f"{_format_percent(opportunity.funding_rate_buy_pct, digits=2)} / "
-                    f"{_format_percent(opportunity.funding_rate_sell_pct, digits=2)}"
-                    f"（周期净：{_format_percent(_current_funding_cycle_pct(opportunity), digits=2)}）"
-                ),
-                (
-                    "预测资金费率："
-                    f"{_format_percent(opportunity.funding_next_rate_buy_pct, digits=2)} / "
-                    f"{_format_percent(opportunity.funding_next_rate_sell_pct, digits=2)}"
-                    f"（周期净：{_format_percent(_next_funding_cycle_pct(opportunity), digits=2)}）"
-                ),
-                (
-                    "下一次结算："
-                    f"{_format_time(opportunity.funding_next_time_buy)} / "
-                    f"{_format_time(opportunity.funding_next_time_sell)}"
-                ),
-                (
-                    "结算周期："
-                    f"{_format_interval(opportunity.buy_funding_interval_hours)} / "
-                    f"{_format_interval(opportunity.sell_funding_interval_hours)}"
-                ),
-            ]
-        )
+        if mixed_funding_intervals:
+            snapshot_lines.extend(_mixed_interval_funding_lines(opportunity))
+        else:
+            snapshot_lines.extend(
+                [
+                    (
+                        "资金费率差（周期）："
+                        f"当前 {_format_percent(_current_funding_cycle_pct(opportunity), digits=2)} / "
+                        f"预测 {_format_percent(_next_funding_cycle_pct(opportunity), digits=2)}"
+                    ),
+                    (
+                        "资金费率："
+                        f"{_format_percent(opportunity.funding_rate_buy_pct, digits=2)} / "
+                        f"{_format_percent(opportunity.funding_rate_sell_pct, digits=2)}"
+                        f"（周期净：{_format_percent(_current_funding_cycle_pct(opportunity), digits=2)}）"
+                    ),
+                    (
+                        "预测资金费率："
+                        f"{_format_percent(opportunity.funding_next_rate_buy_pct, digits=2)} / "
+                        f"{_format_percent(opportunity.funding_next_rate_sell_pct, digits=2)}"
+                        f"（周期净：{_format_percent(_next_funding_cycle_pct(opportunity), digits=2)}）"
+                    ),
+                    (
+                        "下一次结算："
+                        f"{_format_time(opportunity.funding_next_time_buy)} / "
+                        f"{_format_time(opportunity.funding_next_time_sell)}"
+                    ),
+                    (
+                        "结算周期："
+                        f"{_format_interval(opportunity.buy_funding_interval_hours)} / "
+                        f"{_format_interval(opportunity.sell_funding_interval_hours)}"
+                    ),
+                ]
+            )
     if settings.include_volume:
         snapshot_lines.append(
             "成交额："
@@ -157,13 +166,15 @@ def build_alert_message(
     if settings.include_observations and observations:
         observation_lines = []
         selected_observations = observations[-settings.observation_limit :]
+        funding_label = "资金差（异周期原值）" if mixed_funding_intervals else "资金差（周期）"
+        combined_label = "综合（含异周期原值差）" if mixed_funding_intervals else "综合"
         for index, item in enumerate(selected_observations, start=1):
             observation_lines.append(
                 f"{index}. {_format_time_with_seconds(item.observed_at)} | "
                 f"价差 {_format_percent(item.open_spread_pct)} | "
                 f"净估算 {_format_percent(item.fee_adjusted_open_pct)} | "
-                f"资金差（周期） {_format_percent(item.funding_edge_pct, digits=2)} | "
-                f"综合 {_format_percent(item.combined_open_edge_pct)}"
+                f"{funding_label} {_format_percent(item.funding_edge_pct, digits=2)} | "
+                f"{combined_label} {_format_percent(item.combined_open_edge_pct)}"
             )
         _append_block(lines, "【连续监测】", observation_lines)
 
@@ -188,6 +199,104 @@ def _format_percent(value: float | None, digits: int = 3) -> str:
     if value is None:
         return "-"
     return f"{value:.{digits}f}%"
+
+
+def _format_signed_percent(value: float | Decimal | None, digits: int = 3) -> str:
+    if value is None:
+        return "-"
+    return f"{value:+.{digits}f}%"
+
+
+def _has_mixed_funding_intervals(opportunity: Opportunity) -> bool:
+    buy_interval = opportunity.buy_funding_interval_hours
+    sell_interval = opportunity.sell_funding_interval_hours
+    return (
+        opportunity.buy_market_type == opportunity.sell_market_type == MarketType.FUTURE
+        and buy_interval is not None
+        and sell_interval is not None
+        and buy_interval > 0
+        and sell_interval > 0
+        and buy_interval != sell_interval
+    )
+
+
+def _hourly_funding_difference(opportunity: Opportunity, *, next_cycle: bool) -> Decimal | None:
+    buy_rate = opportunity.funding_rate_buy_pct
+    sell_rate = opportunity.funding_rate_sell_pct
+    if next_cycle:
+        buy_rate = (
+            opportunity.funding_next_rate_buy_pct
+            if opportunity.funding_next_rate_buy_pct is not None else buy_rate
+        )
+        sell_rate = (
+            opportunity.funding_next_rate_sell_pct
+            if opportunity.funding_next_rate_sell_pct is not None else sell_rate
+        )
+    buy_interval = opportunity.buy_funding_interval_hours
+    sell_interval = opportunity.sell_funding_interval_hours
+    if buy_rate is None or sell_rate is None or not buy_interval or not sell_interval:
+        return None
+    return Decimal(str(sell_rate)) / sell_interval - Decimal(str(buy_rate)) / buy_interval
+
+
+def _mixed_interval_funding_lines(opportunity: Opportunity) -> list[str]:
+    buy_interval = _format_interval(opportunity.buy_funding_interval_hours)
+    sell_interval = _format_interval(opportunity.sell_funding_interval_hours)
+    fallback_legs: list[str] = []
+    missing_legs: list[str] = []
+    for label, predicted_rate, current_rate in (
+        ("买入腿", opportunity.funding_next_rate_buy_pct, opportunity.funding_rate_buy_pct),
+        ("卖出腿", opportunity.funding_next_rate_sell_pct, opportunity.funding_rate_sell_pct),
+    ):
+        if predicted_rate is None:
+            if current_rate is None:
+                missing_legs.append(label)
+            else:
+                fallback_legs.append(label)
+    fallback_note = (
+        f"（{'、'.join(fallback_legs)}缺预测，按当前费率代入）"
+        if fallback_legs else ""
+    )
+    if missing_legs:
+        fallback_note += f"（{'、'.join(missing_legs)}当前与预测费率均缺失）"
+    return [
+        (
+            "资金费率差（异周期原值相减）："
+            f"当前 {_format_signed_percent(_current_funding_cycle_pct(opportunity), digits=2)} / "
+            f"各腿下次结算估算 {_format_signed_percent(_next_funding_cycle_pct(opportunity), digits=2)}"
+            f"{fallback_note}"
+        ),
+        (
+            "当前资金费率（每腿每次结算）："
+            f"买入 {opportunity.buy_exchange} "
+            f"{_format_percent(opportunity.funding_rate_buy_pct, digits=2)}/{buy_interval}；"
+            f"卖出 {opportunity.sell_exchange} "
+            f"{_format_percent(opportunity.funding_rate_sell_pct, digits=2)}/{sell_interval}"
+        ),
+        (
+            "预测资金费率（每腿每次结算）："
+            f"买入 {opportunity.buy_exchange} "
+            f"{_format_percent(opportunity.funding_next_rate_buy_pct, digits=2)}/{buy_interval}；"
+            f"卖出 {opportunity.sell_exchange} "
+            f"{_format_percent(opportunity.funding_next_rate_sell_pct, digits=2)}/{sell_interval}"
+        ),
+        (
+            "同口径资金差（按小时线性估算）："
+            f"当前 {_format_signed_percent(_hourly_funding_difference(opportunity, next_cycle=False))}/h / "
+            f"下期 {_format_signed_percent(_hourly_funding_difference(opportunity, next_cycle=True))}/h"
+        ),
+        (
+            "下一次结算："
+            f"买入 {_format_time(opportunity.funding_next_time_buy)} / "
+            f"卖出 {_format_time(opportunity.funding_next_time_sell)}"
+        ),
+        f"结算周期：买入 {buy_interval} / 卖出 {sell_interval}",
+        (
+            "提示：异周期原值差仅是两腿各一次结算费率相减；"
+            "综合开仓和连续监测也使用该原值差，不代表同一持仓时长的实际收益。"
+            "小时口径仅供比较，实际收益取决于结算时点及后续费率。"
+        ),
+    ]
 
 
 def _format_volume_k(value: float | None) -> str:

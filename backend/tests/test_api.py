@@ -2962,6 +2962,59 @@ def test_alert_history_endpoint_enriches_legacy_short_messages() -> None:
     assert "3. 20:39:17 | 价差 1.007% | 净估算 0.807% | 资金差（周期） 0.01% | 综合 0.817%" in text
 
 
+def test_alert_history_endpoint_explains_mismatched_funding_intervals() -> None:
+    app = create_app()
+    rule = AlertRule(id="rule-cvc", name="CVC FF", types=["FF"], consecutive_hits=1)
+    event = AlertEvent(
+        id="evt-cvc",
+        rule_id="rule-cvc",
+        opportunity_id="opp-cvc",
+        symbol="CVCUSDT",
+        status="sent",
+        message="资金费率差（周期）：当前 0.66% / 预测 0.66%",
+        created_at=datetime(2026, 9, 15, 8, 7, tzinfo=UTC),
+    )
+    history_row = OpportunityHistoryRow(
+        observed_at=datetime(2026, 9, 15, 8, 7, tzinfo=UTC),
+        opportunity_id="opp-cvc",
+        type=OpportunityType.FF,
+        symbol="CVCUSDT",
+        buy_exchange="bitget",
+        buy_market_type=MarketType.FUTURE,
+        sell_exchange="gate",
+        sell_market_type=MarketType.FUTURE,
+        open_spread_pct=1.044,
+        close_spread_pct=1.203,
+        fee_adjusted_open_pct=0.896,
+        spread_width_pct=0.159,
+        funding_rate_buy_pct=-0.83,
+        funding_rate_sell_pct=-0.17,
+        funding_next_rate_buy_pct=None,
+        funding_next_rate_sell_pct=-0.17,
+        funding_next_time_buy=datetime(2026, 9, 15, 12, 0, tzinfo=UTC),
+        funding_next_time_sell=datetime(2026, 9, 15, 9, 0, tzinfo=UTC),
+        net_funding_pct=0.66,
+        net_funding_next_pct=None,
+        buy_funding_interval_hours=4,
+        sell_funding_interval_hours=1,
+        buy_volume_24h_usdt=14_822_000,
+        sell_volume_24h_usdt=10_308_000,
+        risk_labels=[],
+    )
+    app.state.alert_rule_repo = FakeAlertRuleRepository(rule)
+    app.state.alert_event_repo = FakeAlertEventRepository([event])
+    app.state.history_repo = FakeHistoryRepository([history_row])
+
+    response = TestClient(app).get("/api/alerts/events")
+
+    assert response.status_code == 200
+    text = response.json()[0]["message"]
+    assert "当前资金费率（每腿每次结算）：买入 bitget -0.83%/4h；卖出 gate -0.17%/1h" in text
+    assert "同口径资金差（按小时线性估算）：当前 +0.038%/h" in text
+    assert "综合开仓（含异周期原值资金差）：1.556%" in text
+    assert "资金费率差（周期）：当前 0.66% / 预测 0.66%" not in text
+
+
 def test_alert_history_endpoint_rebuilds_stored_full_messages_with_utc_plus_8() -> None:
     app = create_app()
     rule = AlertRule(
