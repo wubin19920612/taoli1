@@ -647,15 +647,22 @@ class AnnouncementRepository:
         symbols_json = json.dumps(announcement.symbols, ensure_ascii=False, sort_keys=True)
         event_time = _serialize_datetime(announcement.event_time)
         event_schedule_json = _event_schedule_json(announcement)
+        clear_unverified_bybit_time = (
+            announcement.exchange == "bybit"
+            and announcement.kind == AnnouncementKind.LISTING
+            and event_time is None
+            and announcement.event_reminder_status == "not_applicable"
+        )
         await self.db.execute(
             """
             UPDATE exchange_announcements
             SET
               symbols_json = CASE WHEN ? != '[]' THEN ? ELSE symbols_json END,
               market_type = COALESCE(?, market_type),
-              event_time = COALESCE(?, event_time),
-              event_schedule_json = CASE WHEN ? != '[]' THEN ? ELSE event_schedule_json END,
+              event_time = CASE WHEN ? THEN NULL ELSE COALESCE(?, event_time) END,
+              event_schedule_json = CASE WHEN ? THEN ? WHEN ? != '[]' THEN ? ELSE event_schedule_json END,
               summary = CASE
+                WHEN ? THEN ?
                 WHEN ? IS NOT NULL AND (? IS NOT NULL OR ? != '[]' OR summary IS NULL) THEN ?
                 ELSE summary
               END,
@@ -664,6 +671,7 @@ class AnnouncementRepository:
                 ELSE asset_research_json
               END,
               event_reminder_status = CASE
+                WHEN ? AND event_reminder_status != 'sent' THEN 'not_applicable'
                 WHEN ? IS NOT NULL AND ? = 'pending' AND event_reminder_status != 'sent' THEN 'pending'
                 ELSE event_reminder_status
               END
@@ -673,15 +681,21 @@ class AnnouncementRepository:
                 symbols_json,
                 symbols_json,
                 announcement.market_type,
+                clear_unverified_bybit_time,
                 event_time,
+                clear_unverified_bybit_time,
                 event_schedule_json,
                 event_schedule_json,
+                event_schedule_json,
+                clear_unverified_bybit_time,
+                announcement.summary,
                 announcement.summary,
                 event_time,
                 event_schedule_json,
                 announcement.summary,
                 _asset_research_json(announcement),
                 _asset_research_json(announcement),
+                clear_unverified_bybit_time,
                 event_time,
                 announcement.event_reminder_status,
                 announcement.exchange,

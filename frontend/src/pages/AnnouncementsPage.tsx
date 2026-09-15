@@ -245,6 +245,10 @@ function hasAnnouncementStages(row: ExchangeAnnouncement): boolean {
   return eventSchedule(row).some((item) => Boolean(item.note));
 }
 
+function tradingOpenLabel(row: ExchangeAnnouncement): string | null {
+  return eventSchedule(row).find((item) => item.note?.endsWith("交易开盘"))?.note ?? null;
+}
+
 function eventScheduleTimeRange(row: ExchangeAnnouncement): { first: string; last: string; count: number } | null {
   const schedule = eventSchedule(row);
   if (schedule.length === 0) {
@@ -260,7 +264,10 @@ function eventScheduleTimeRange(row: ExchangeAnnouncement): { first: string; las
 
 function eventTimeText(row: ExchangeAnnouncement): string {
   if (hasAnnouncementStages(row)) {
-    return row.event_time ? `现货交易开盘 ${formatUtcPlus8(row.event_time)} UTC+8` : "公告未给出现货开盘时间";
+    const opening = tradingOpenLabel(row);
+    return row.event_time
+      ? `${opening ?? "事件时间"} ${formatUtcPlus8(row.event_time)} UTC+8`
+      : "当前未确认明确交易开盘时间";
   }
   const range = eventScheduleTimeRange(row);
   if (range && range.count > 1) {
@@ -275,7 +282,7 @@ function eventTimeText(row: ExchangeAnnouncement): string {
     return `${formatUtcPlus8(row.event_time)} UTC+8`;
   }
   if (row.kind === "listing") {
-    return "公告未给出具体上币时间";
+    return "当前未确认具体上币时间";
   }
   if (row.kind === "delisting") {
     return "公告未给出具体下币时间";
@@ -429,7 +436,7 @@ function rowSummary(row: ExchangeAnnouncement): string {
   if (row.event_time) {
     const range = eventScheduleTimeRange(row);
     if (hasAnnouncementStages(row)) {
-      pieces.push(`现货交易开盘 ${formatUtcPlus8(row.event_time)} UTC+8`);
+      pieces.push(`${tradingOpenLabel(row) ?? "事件时间"} ${formatUtcPlus8(row.event_time)} UTC+8`);
     } else if (range && range.count > 1) {
       pieces.push(`分批 ${formatUtcPlus8(range.first)} - ${formatUtcPlus8(range.last)} UTC+8`);
     } else {

@@ -20,6 +20,7 @@ from app.services.announcements import (
     classify_announcement,
     extract_event_schedule,
     extract_event_time,
+    extract_listing_stages,
     infer_market_type,
     infer_symbols,
 )
@@ -130,6 +131,24 @@ def test_event_schedule_parser_extracts_per_symbol_times() -> None:
         ("SMH", datetime(2026, 6, 18, 9, 0, tzinfo=UTC)),
         ("EWZ", datetime(2026, 6, 18, 9, 15, tzinfo=UTC)),
     ]
+
+
+def test_listing_pre_open_range_respects_source_timezone() -> None:
+    utc = extract_listing_stages(
+        "PONS pre-open will start at 2026-09-15 13:30 UTC to 14:30 UTC. "
+        "Spot trading will open at 2026-09-15 14:30 UTC.",
+        "PONS", "spot",
+    )
+    local = extract_listing_stages(
+        "PONS pre-open will start at 2026-09-15 21:30 to 22:30 (UTC+8). "
+        "PONS 现货交易开盘时间：2026年09月15日 22:30 (UTC+8)",
+        "PONS", "spot",
+    )
+    for schedule in (utc, local):
+        assert schedule[0].event_time == datetime(2026, 9, 15, 13, 30, tzinfo=UTC)
+        assert schedule[0].note == "提前挂单（至 2026-09-15 22:30 UTC+8）"
+        assert schedule[1].note == "现货交易开盘"
+        assert schedule[1].event_time == datetime(2026, 9, 15, 14, 30, tzinfo=UTC)
 
 
 def test_okx_spot_notice_reports_each_stage_and_reminds_on_trading_open() -> None:
@@ -357,6 +376,34 @@ async def test_repository_enriches_existing_announcement_metadata() -> None:
         ]
         assert rows[0].summary == "listing: symbols=TEST; market=spot; event_time=2026-05-30T09:00:00+00:00"
         assert rows[0].event_reminder_status == "pending"
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_repository_discards_unverified_bybit_time_without_resending_history() -> None:
+    db = await connect_database(":memory:")
+    try:
+        await initialize_schema(db)
+        repo = AnnouncementRepository(db)
+        for identity, status in (("pending-time", "pending"), ("sent-time", "sent")):
+            previous = announcement(
+                exchange="bybit", source="bybit-v5-announcements", announcement_id=identity
+            ).model_copy(update={"event_reminder_status": status})
+            corrected = previous.model_copy(update={
+                "id": f"new-{identity}", "event_time": None,
+                "summary": "listing: symbols=TEST; market=spot",
+                "event_reminder_status": "not_applicable",
+            })
+            await repo.create_if_new(previous)
+            assert await repo.create_if_new(corrected) is None
+
+        rows = {row.announcement_id: row for row in await repo.list(exchange="bybit", limit=10)}
+        assert rows["pending-time"].event_time is None
+        assert rows["pending-time"].summary == "listing: symbols=TEST; market=spot"
+        assert rows["pending-time"].event_reminder_status == "not_applicable"
+        assert rows["sent-time"].event_time is None
+        assert rows["sent-time"].event_reminder_status == "sent"
     finally:
         await db.close()
 
@@ -964,6 +1011,50 @@ def test_binance_provider_parses_listing_and_delisting_catalogs() -> None:
     assert delivery.symbols == ["BTCUSDT", "ETHUSDT", "BTCUSD", "ETHUSD"]
 
 
+def test_binance_listing_timeline_uses_trading_open_and_shows_other_times() -> None:
+    provider = BinanceAnnouncementProvider(client=None, now_fn=lambda: datetime(2026, 9, 15, 7, 0, tzinfo=UTC))
+    row = provider._announcement_from_row(
+        {"code": "spot-timeline", "title": "Binance Will List PONS (PONS) for Spot Trading",
+         "releaseDate": 1789459200000},
+        "48", "New Cryptocurrency Listing",
+        content=(
+            "Deposits will open at 2026-09-15 08:00 (UTC). "
+            "Binance will open trading at 2026-09-15 14:30 (UTC). "
+            "Withdrawals will open at 2026-09-16 16:30 (UTC)."
+        ),
+    )
+    assert row is not None
+    assert row.event_time == datetime(2026, 9, 15, 14, 30, tzinfo=UTC)
+    assert [item.note for item in row.event_schedule] == ["充币开放", "现货交易开盘", "提币开放"]
+    message = build_announcement_alert_message(row)
+    assert "现货交易开盘: 2026-09-15 22:30:00 UTC+8" in message
+    assert "- PONS 充币开放: 2026-09-15 16:00:00 UTC+8" in message
+    assert "- PONS 提币开放: 2026-09-17 00:30:00 UTC+8" in message
+
+
+def test_binance_deposit_without_trading_time_does_not_create_reminder() -> None:
+    provider = BinanceAnnouncementProvider(client=None, now_fn=lambda: datetime(2026, 9, 15, 7, 0, tzinfo=UTC))
+    row = provider._announcement_from_row(
+        {"code": "deposit-only", "title": "Binance Will List PONS (PONS) for Spot Trading"},
+        "48", "New Cryptocurrency Listing",
+        content="Deposits will open at 2026-09-15 08:00 (UTC).",
+    )
+    assert row is not None
+    assert row.event_time is None
+    assert row.event_reminder_status == "not_applicable"
+    assert row.event_schedule[0].note == "充币开放"
+    assert "交易开盘: 当前未确认明确时间" in build_announcement_alert_message(row)
+
+    ambiguous = provider._announcement_from_row(
+        {"code": "deposit-availability", "title": "Binance Will List PONS (PONS) for Spot Trading"},
+        "48", "New Cryptocurrency Listing",
+        content="PONS deposit availability: 2026-09-15 08:00 (UTC).",
+    )
+    assert ambiguous is not None
+    assert ambiguous.event_time is None
+    assert ambiguous.event_reminder_status == "not_applicable"
+
+
 def test_bybit_provider_parses_announcement_payload() -> None:
     provider = BybitAnnouncementProvider(client=None)
     listing_payload = {
@@ -1030,6 +1121,59 @@ def test_bybit_provider_tolerates_alternate_article_fields() -> None:
     assert rows[0].symbols == ["ALTUSDT"]
     assert rows[0].market_type == "futures"
     assert rows[0].url == "https://announcements.bybit.com/en/article/alt-new/"
+
+
+def test_bybit_uses_description_stages_and_ignores_copied_list_timestamp() -> None:
+    provider = BybitAnnouncementProvider(client=None, now_fn=lambda: datetime(2026, 9, 15, 7, 0, tzinfo=UTC))
+    url = "https://announcements.bybit.com/en-US/article/test-listing/"
+    row = {
+        "title": "New listing: WDCUSDT Perpetual Contract", "url": url,
+        "dateTimestamp": 1789459200000, "startDateTimestamp": 1789459200000,
+        "endDateTimestamp": 1789459200000, "publishTime": 1789462800000,
+        "description": "WDCUSDT Futures trading will open at 2026-09-15 14:30 (UTC).",
+    }
+    parsed = provider._parse_payload({"result": {"list": [row]}}, "new_crypto")[0]
+    assert parsed.event_time == datetime(2026, 9, 15, 14, 30, tzinfo=UTC)
+    assert parsed.event_schedule[0].note == "合约交易开盘"
+    assert "合约交易开盘: 2026-09-15 22:30:00 UTC+8" in build_announcement_alert_message(parsed)
+
+    row["description"] = ""
+    without_schedule = provider._parse_payload({"result": {"list": [row]}}, "new_crypto")[0]
+    assert without_schedule.event_time is None
+    assert without_schedule.event_reminder_status == "not_applicable"
+
+
+@pytest.mark.asyncio
+async def test_bybit_fetches_article_when_available_and_falls_back_on_403() -> None:
+    url = "https://announcements.bybit.com/en-US/article/wdc-listing/"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "announcements.bybit.com":
+            return httpx.Response(200, text="<article>WDCUSDT Futures trading will open at 2026-09-15 14:30 (UTC).</article>")
+        if request.url.params.get("type") == "delistings":
+            return httpx.Response(200, json={"result": {"list": []}})
+        return httpx.Response(200, json={"result": {"list": [{
+            "title": "New listing: WDCUSDT Perpetual Contract", "url": url,
+            "dateTimestamp": 1789459200000, "startDateTimestamp": 1789459200000,
+            "description": "",
+        }]}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = BybitAnnouncementProvider(client=client, now_fn=lambda: datetime(2026, 9, 15, 7, 0, tzinfo=UTC))
+        rows = await provider.fetch()
+    assert len(rows) == 1
+    assert rows[0].event_time == datetime(2026, 9, 15, 14, 30, tzinfo=UTC)
+    assert rows[0].event_schedule[0].note == "合约交易开盘"
+
+    def blocked(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "announcements.bybit.com":
+            return httpx.Response(403)
+        return handler(request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(blocked)) as client:
+        rows = await BybitAnnouncementProvider(client=client).fetch()
+    assert rows[0].event_time is None
+    assert "交易开盘: 当前未确认明确时间" in build_announcement_alert_message(rows[0])
 
 
 def test_bitget_provider_parses_and_classifies_payload() -> None:
@@ -1111,6 +1255,42 @@ def test_bitget_provider_parses_and_classifies_payload() -> None:
     )
     assert generic_rows[0].symbols == ["RE/USDT", "UAI/USDT", "PUMPBTC/USDT", "AEVO/USDT", "STABLE/USDT"]
     assert generic_rows[0].market_type == "spot margin"
+
+
+def test_bitget_spot_listing_distinguishes_trading_withdrawal_and_earn() -> None:
+    provider = BitgetAnnouncementProvider(client=None, now_fn=lambda: datetime(2026, 9, 7, 0, 0, tzinfo=UTC))
+    url = "https://www.bitget.com/en/support/articles/12560603894378"
+    parsed = provider._parse_payload(
+        {"data": [{"annId": "pons", "annTitle": "Bitget to list Pons (PONS)",
+                   "annUrl": url, "annType": "coin_listings"}]},
+        "coin_listings", content_by_key={"pons": (
+            "Pons will be listed in the spot market. Deposit: Open "
+            "Trading: Opens on September 7, 2026, 14:00 (UTC) "
+            "Withdrawal: Opens on September 8, 2026, 15:00 (UTC) "
+            "Simple Earn: Opens on September 7, 2026, 15:00 (UTC)."
+        )},
+    )[0]
+    assert parsed.event_time == datetime(2026, 9, 7, 14, 0, tzinfo=UTC)
+    assert [item.note for item in parsed.event_schedule] == ["现货交易开盘", "提币开放"]
+    assert "提币开放: 2026-09-08 23:00:00 UTC+8" in build_announcement_alert_message(parsed)
+
+
+@pytest.mark.asyncio
+async def test_bitget_fetches_detail_for_named_spot_listings(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = BitgetAnnouncementProvider(client=None)
+    url = "https://www.bitget.com/en/support/articles/12560603894378"
+    payload = {"data": [{"annId": "pons", "annTitle": "Bitget to list Pons (PONS)",
+                         "annUrl": url, "annType": "coin_listings"}]}
+    requested: list[str] = []
+
+    async def article_text(article_url: str) -> str:
+        requested.append(article_url)
+        return "Trading: Opens on September 7, 2026, 14:00 (UTC)"
+
+    monkeypatch.setattr(provider, "_fetch_article_text", article_text)
+    contents = await provider._fetch_detail_content_for_payload(payload, "coin_listings")
+    assert requested == [url]
+    assert contents == {"pons": await article_text(url)}
 
 
 def test_bitget_provider_tolerates_alternate_article_fields() -> None:
@@ -1208,6 +1388,8 @@ def test_gate_provider_parses_next_data_listing_and_delisting_pages() -> None:
     assert rows[0].url == "https://www.gate.com/announcements/article/51434"
     assert rows[0].published_at.isoformat() == "2026-05-28T15:00:55+00:00"
     assert rows[0].event_time.isoformat() == "2026-05-28T15:20:00+00:00"
+    assert rows[0].event_schedule[0].note == "现货交易开盘"
+    assert "现货交易开盘: 2026-05-28 23:20:00 UTC+8" in build_announcement_alert_message(rows[0])
     assert rows[1].title == "Gate Launchpool Project #363"
 
 
@@ -1228,6 +1410,41 @@ def test_gate_provider_finds_nested_article_lists() -> None:
     assert rows[0].symbols == ["NEST"]
     assert rows[0].market_type == "spot"
     assert rows[0].event_time == datetime(2026, 5, 30, 10, 0, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+async def test_gate_fetches_article_and_continues_if_other_category_fails() -> None:
+    url = "https://www.gate.com/announcements/article/60001"
+    page = """<script id="__NEXT_DATA__" type="application/json">
+    {"props":{"pageProps":{"listData":{"list":[
+      {"id":60001,"title":"Gate to List NEST (NEST) for Spot Trading",
+       "brief":"NEST Spot Trading Start Time: May 30, 2026, 10:00 (UTC)",
+       "url":"/announcements/article/60001","release_timestamp":"1780134000"}
+    ]}}}}</script>"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == url:
+            return httpx.Response(200, text=(
+                "<article>Deposits will open at May 30, 2026 08:00 (UTC). "
+                "Spot trading will open at May 30, 2026 10:00 (UTC). "
+                "Withdrawals will open at May 31, 2026 10:00 (UTC).</article>"
+            ))
+        if str(request.url).endswith("/newspotlistings"):
+            return httpx.Response(200, text=page)
+        return httpx.Response(567)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        rows = await GateAnnouncementProvider(client=client, now_fn=lambda: datetime(2026, 5, 30, 7, 0, tzinfo=UTC)).fetch()
+    assert len(rows) == 1
+    assert [item.note for item in rows[0].event_schedule] == ["充币开放", "现货交易开盘", "提币开放"]
+    assert rows[0].event_time == datetime(2026, 5, 30, 10, 0, tzinfo=UTC)
+
+
+def test_hyperliquid_state_change_notification_uses_observation_time() -> None:
+    row = announcement(exchange="hyperliquid", source="hyperliquid-meta-universe")
+    message = build_announcement_alert_message(row)
+    assert "监测时间: 2026-05-30 16:00:00 UTC+8" in message
+    assert "公告时间:" not in message
 
 
 @pytest.mark.asyncio

@@ -736,6 +736,84 @@ def extract_event_schedule(text: str, symbols: list[str]) -> list[AnnouncementEv
     )
 
 
+LISTING_STAGE_CUES: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("充币开放", re.compile(
+        r"(?:\bdeposits?\s*(?:for\s+[A-Z0-9/]+\s*)?(?:will\s+)?(?:open|start)\b|"
+        r"\bdeposit\s*(?:open|start)\s*(?:time)?\b|充币\s*(?:开放|开启|时间)|开放\s*充币)", re.I,
+    )),
+    ("提币开放", re.compile(
+        r"(?:\bwithdrawals?\s*(?:will\s+)?(?:open|start|opens)\b|"
+        r"\bwithdrawals?\s*:\s*opens?\b|\bwithdrawals?\s*(?:open|start)\s*time\b|"
+        r"提币\s*(?:开放|开启|时间)|开放\s*提币)", re.I,
+    )),
+    ("提前挂单", re.compile(
+        r"(?:\bpre-open(?:ing)?\s*(?:period|session)?\s*(?:will\s+)?(?:start|begin|commence|open|opens|from)\b|"
+        r"提前挂单\s*(?:时间|开始|开放))", re.I,
+    )),
+    ("交易开盘", re.compile(
+        r"(?:\b(?:spot|futures|perpetual|margin)?\s*trading\s*(?:will\s+)?(?:open|start|commence|opens|starts)\b|"
+        r"\btrading\s*:\s*opens?\b|\b(?:spot\s*)?trading\s*(?:start|open)\s*time\b|"
+        r"\b(?:will\s+)?open\s+trading\b|\btrading\s+will\s+be\s+enabled\b|"
+        r"\b(?:will\s+)?(?:start|begin|commence)\s+trading\b|"
+        r"(?:现货|合约|永续)?交易\s*(?:开盘|开始|时间)|\btrading\s+pairs?\s+will\s+be\s+available\b)", re.I,
+    )),
+)
+
+
+def extract_listing_stages(
+    text: str, symbol: str, market_type: str | None,
+) -> list[AnnouncementEventScheduleItem]:
+    normalized = _clean_text(re.sub(r"\s+", " ", text))
+    if not normalized or not symbol:
+        return []
+    stages: list[AnnouncementEventScheduleItem] = []
+    previous_end = 0
+    for start, end, event_time, matched_text in _datetime_candidates(normalized):
+        prefix = normalized[max(previous_end, start - 135) : start]
+        previous_end = end
+        cues = [
+            (match.end(), label)
+            for label, pattern in LISTING_STAGE_CUES
+            for match in pattern.finditer(prefix)
+            if len(prefix) - match.end() <= 55
+        ]
+        if not cues:
+            continue
+        label = max(cues, key=lambda cue: cue[0])[1]
+        note = label
+        if label == "提前挂单":
+            suffix = normalized[end : end + 65]
+            uses_utc_plus_8 = "utc+8" in (matched_text + suffix).lower().replace(" ", "")
+            if "utc+8" not in matched_text.lower().replace(" ", "") and uses_utc_plus_8:
+                event_time = _apply_timezone_hint(event_time, "UTC+8")
+            end_match = re.search(r"(?:\bto\b|至)\s*(\d{1,2}):(\d{2})", suffix, re.I)
+            if end_match:
+                start_clock = event_time + timedelta(hours=8) if uses_utc_plus_8 else event_time
+                end_clock = _datetime_from_parts(
+                    start_clock.year, start_clock.month, start_clock.day,
+                    int(end_match[1]), int(end_match[2]),
+                )
+                if end_clock:
+                    if end_clock <= start_clock:
+                        end_clock += timedelta(days=1)
+                    display_end = end_clock if uses_utc_plus_8 else end_clock + timedelta(hours=8)
+                    note = f"提前挂单（至 {display_end.strftime('%Y-%m-%d %H:%M')} UTC+8）"
+        if label == "交易开盘":
+            if "spot" in (market_type or "").lower():
+                label = "现货交易开盘"
+            elif "futures" in (market_type or "").lower():
+                label = "合约交易开盘"
+            note = label
+        if not any(item.note == note and item.event_time == event_time for item in stages):
+            stages.append(AnnouncementEventScheduleItem(symbol=symbol, event_time=event_time, note=note))
+    stages.sort(key=lambda item: item.event_time)
+    return stages
+
+
+def _listing_has_nontrading_timeline(text: str) -> bool:
+    return bool(re.search(r"\b(?:deposit|withdrawal)s?\b|充币|提币", text, re.I))
+
+
 def _okx_spot_stages(text: str, symbol: str) -> list[AnnouncementEventScheduleItem]:
     normalized = _clean_text(re.sub(r"\s+", " ", text))
     base = _normalize_symbol(symbol).split("/", 1)[0]
@@ -1007,15 +1085,18 @@ def build_announcement_alert_message(announcement: ExchangeAnnouncement) -> str:
     }[announcement.kind]
     lines = [
         f"[{announcement.exchange.upper()}] {kind_label}公告",
-        f"公告时间: {_display_time(announcement.published_at)} UTC+8",
+        f"{'监测时间' if announcement.exchange == 'hyperliquid' else '公告时间'}: {_display_time(announcement.published_at)} UTC+8",
     ]
     if announcement.symbols:
         lines.append(f"{_announcement_asset_label(announcement)}: {', '.join(announcement.symbols)}")
     if announcement.market_type:
         lines.append(f"市场: {_announcement_market_type_label(announcement)}")
     if announcement.event_time:
-        event_label = "现货交易开盘" if any(item.note == "现货交易开盘" for item in announcement.event_schedule) else "事件时间"
-        lines.append(f"{event_label}: {_display_time(announcement.event_time)} UTC+8")
+        lines.append(f"{_announcement_event_label(announcement)}: {_display_time(announcement.event_time)} UTC+8")
+    elif announcement.kind == AnnouncementKind.LISTING and announcement.exchange != "hyperliquid" and (
+        not announcement.market_type or "spot" in announcement.market_type or "futures" in announcement.market_type
+    ):
+        lines.append("交易开盘: 当前未确认明确时间")
     lines.extend(_announcement_schedule_lines(announcement))
     lines.append(f"标题: {announcement.title}")
     if announcement.category:
@@ -1044,8 +1125,7 @@ def build_announcement_event_reminder_message(
     if announcement.event_time:
         remaining_seconds = max(0, int((announcement.event_time - now).total_seconds()))
         remaining_minutes = max(0, remaining_seconds // 60)
-        event_label = "现货交易开盘" if any(item.note == "现货交易开盘" for item in announcement.event_schedule) else "事件时间"
-        lines.append(f"{event_label}: {_display_time(announcement.event_time)} UTC+8")
+        lines.append(f"{_announcement_event_label(announcement)}: {_display_time(announcement.event_time)} UTC+8")
         lines.append(f"剩余: 约 {remaining_minutes} 分钟")
     lines.extend(_announcement_schedule_lines(announcement))
     if announcement.symbols:
@@ -1055,6 +1135,11 @@ def build_announcement_event_reminder_message(
     lines.append(f"标题: {announcement.title}")
     lines.append(f"链接: {announcement.url}")
     return "\n".join(lines)
+
+
+def _announcement_event_label(announcement: ExchangeAnnouncement) -> str:
+    opening = next((item.note for item in announcement.event_schedule if item.note and item.note.endswith("交易开盘")), None)
+    return opening or "事件时间"
 
 
 def _announcement_schedule_lines(announcement: ExchangeAnnouncement) -> list[str]:
@@ -1144,14 +1229,24 @@ class HttpAnnouncementProvider(AnnouncementProvider):
         inferred_market_type = market_type or infer_market_type(title, category)
         if inferred_market_type is None and content:
             inferred_market_type = infer_market_type(searchable_text, category)
-        inferred_event_schedule = event_schedule or (
-            extract_event_schedule(content, inferred_symbols) if content else []
+        inferred_event_schedule = event_schedule or []
+        if not inferred_event_schedule and content and kind == AnnouncementKind.LISTING and len(inferred_symbols) == 1:
+            inferred_event_schedule = extract_listing_stages(content, inferred_symbols[0], inferred_market_type)
+        ambiguous_listing_time = bool(
+            content and kind == AnnouncementKind.LISTING and len(inferred_symbols) == 1
+            and not inferred_event_schedule and _listing_has_nontrading_timeline(content)
         )
-        inferred_event_time = event_time
+        if not inferred_event_schedule and content and not ambiguous_listing_time:
+            inferred_event_schedule = extract_event_schedule(content, inferred_symbols)
         has_stages = any(item.note for item in inferred_event_schedule)
+        opening = next(
+            (item.event_time for item in inferred_event_schedule if item.note and item.note.endswith("交易开盘")),
+            None,
+        )
+        inferred_event_time = opening or (event_time if not has_stages and not ambiguous_listing_time else None)
         if inferred_event_time is None and inferred_event_schedule and not has_stages:
             inferred_event_time = min(item.event_time for item in inferred_event_schedule)
-        if inferred_event_time is None and not has_stages:
+        if inferred_event_time is None and not has_stages and not ambiguous_listing_time:
             inferred_event_time = extract_event_time(searchable_text)
         summary = _announcement_summary(
             kind=kind,
@@ -1499,10 +1594,46 @@ class BybitAnnouncementProvider(HttpAnnouncementProvider):
         for announcement_type in self.announcement_types:
             query = f"locale=en-US&type={quote_plus(announcement_type)}&limit=20"
             payload = await self._get_json(f"{self.base_url}?{query}")
-            announcements.extend(self._parse_payload(payload, announcement_type))
+            content_by_key = await self._fetch_detail_content_for_payload(payload)
+            announcements.extend(self._parse_payload(payload, announcement_type, content_by_key=content_by_key))
         return announcements
 
-    def _parse_payload(self, payload: object, fallback_category: str) -> list[ExchangeAnnouncement]:
+    async def _fetch_detail_content_for_payload(self, payload: object) -> dict[str, str]:
+        rows = payload.get("result", {}).get("list") if isinstance(payload, dict) and isinstance(payload.get("result"), dict) else None
+        if not isinstance(rows, list):
+            return {}
+        requests = [
+            (self._row_content_key(row), _clean_text(row.get("url") or row.get("articleUrl")))
+            for row in rows
+            if isinstance(row, dict)
+            and classify_announcement(_clean_text(row.get("title") or row.get("name")), _category_text(row.get("type"), "new_crypto"))
+            in {AnnouncementKind.LISTING, AnnouncementKind.DELISTING}
+            and _clean_text(row.get("url") or row.get("articleUrl")).startswith("https://announcements.bybit.com/")
+        ][:8]
+        semaphore = asyncio.Semaphore(4)
+
+        async def fetch_detail(url: str) -> str | None:
+            async with semaphore:
+                return await self._fetch_article_text(url)
+
+        contents = await asyncio.gather(*(fetch_detail(url) for _, url in requests))
+        return {key: content for (key, _), content in zip(requests, contents, strict=False) if content}
+
+    async def _fetch_article_text(self, url: str) -> str | None:
+        try:
+            html = await self._get_text(url)
+        except Exception:
+            logger.debug("failed to fetch bybit announcement detail: %s", url, exc_info=True)
+            return None
+        visible = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", html, flags=re.I | re.S)
+        return _strip_html(visible) or None
+
+    def _row_content_key(self, row: dict[str, object]) -> str:
+        return _clean_text(row.get("id")) or _clean_text(row.get("url") or row.get("articleUrl"))
+
+    def _parse_payload(
+        self, payload: object, fallback_category: str, *, content_by_key: dict[str, str] | None = None,
+    ) -> list[ExchangeAnnouncement]:
         if not isinstance(payload, dict):
             return []
         result = payload.get("result")
@@ -1521,13 +1652,19 @@ class BybitAnnouncementProvider(HttpAnnouncementProvider):
             )
             published_at = _parse_datetime_ms(row.get("publishTime") or row.get("dateTimestamp"))
             announcement_id = _clean_text(row.get("id")) or url.rstrip("/").rsplit("/", 1)[-1]
+            event_time = _event_time_from_row(row)
+            if row.get("dateTimestamp") is not None and row.get("dateTimestamp") in (
+                row.get("startDateTimestamp"), row.get("endDateTimestamp")
+            ):
+                event_time = None
             announcement = self._announcement(
                 announcement_id=announcement_id,
                 title=title,
                 url=url,
                 category=category,
                 published_at=published_at,
-                event_time=_event_time_from_row(row),
+                content=(content_by_key or {}).get(self._row_content_key(row)) or _clean_text(row.get("description") or row.get("brief")),
+                event_time=event_time,
             )
             if announcement is not None:
                 announcements.append(announcement)
@@ -1563,25 +1700,38 @@ class BitgetAnnouncementProvider(HttpAnnouncementProvider):
         payload: object,
         fallback_category: str,
     ) -> dict[str, str]:
-        content_by_key: dict[str, str] = {}
+        requests: list[tuple[str, str]] = []
         for row in self._rows_from_payload(payload):
             title = _clean_text(row.get("annTitle") or row.get("title"))
             category = (
                 _clean_text(row.get("annType") or row.get("type") or row.get("category"))
                 or fallback_category
             )
-            if classify_announcement(title, category) not in {
+            kind = classify_announcement(title, category)
+            if kind not in {
                 AnnouncementKind.LISTING,
                 AnnouncementKind.DELISTING,
                 AnnouncementKind.LAUNCHPOOL,
             }:
                 continue
             url = _clean_text(row.get("annUrl") or row.get("url"))
-            if not url or not self._should_fetch_detail_content(title):
+            if not url.startswith("https://www.bitget.com/") or (
+                kind == AnnouncementKind.LAUNCHPOOL and not self._should_fetch_detail_content(title)
+            ):
                 continue
-            content = await self._fetch_article_text(url)
+            requests.append((self._row_content_key(row), url))
+
+        semaphore = asyncio.Semaphore(4)
+
+        async def fetch_detail(url: str) -> str | None:
+            async with semaphore:
+                return await self._fetch_article_text(url)
+
+        content_by_key: dict[str, str] = {}
+        contents = await asyncio.gather(*(fetch_detail(url) for _, url in requests))
+        for (key, _), content in zip(requests, contents, strict=False):
             if content:
-                content_by_key[self._row_content_key(row)] = content
+                content_by_key[key] = content
         return content_by_key
 
     def _rows_from_payload(self, payload: object) -> list[dict]:
@@ -1666,12 +1816,50 @@ class GateAnnouncementProvider(HttpAnnouncementProvider):
     async def fetch(self) -> list[ExchangeAnnouncement]:
         announcements: list[ExchangeAnnouncement] = []
         for category in self.categories:
-            response = await self.client.get(f"{self.page_base_url}/{category}")
-            response.raise_for_status()
-            announcements.extend(self._parse_page(response.text, category))
+            try:
+                response = await self.client.get(f"{self.page_base_url}/{category}")
+                response.raise_for_status()
+            except Exception:
+                logger.warning("failed to fetch gate announcement category: %s", category, exc_info=True)
+                continue
+            page_rows = self._parse_page(response.text, category)
+            content_by_key = await self._fetch_detail_content_for_page(page_rows)
+            announcements.extend(self._parse_page(response.text, category, content_by_key=content_by_key))
         return announcements
 
-    def _parse_page(self, html: str, fallback_category: str) -> list[ExchangeAnnouncement]:
+    async def _fetch_detail_content_for_page(self, rows: list[ExchangeAnnouncement]) -> dict[str, str]:
+        requests = [
+            (row.announcement_id, row.url)
+            for row in rows
+            if row.kind in {AnnouncementKind.LISTING, AnnouncementKind.DELISTING}
+            and row.url.startswith("https://www.gate.com/announcements/article/")
+        ][:8]
+        semaphore = asyncio.Semaphore(4)
+
+        async def fetch_detail(url: str) -> str | None:
+            async with semaphore:
+                return await self._fetch_article_text(url)
+
+        contents = await asyncio.gather(*(fetch_detail(url) for _, url in requests))
+        return {key: content for (key, _), content in zip(requests, contents, strict=False) if content}
+
+    async def _fetch_article_text(self, url: str) -> str | None:
+        try:
+            html = await self._get_text(url)
+        except Exception:
+            logger.debug("failed to fetch gate announcement detail: %s", url, exc_info=True)
+            return None
+        article = _json_object_after_key(html, "articleDetail")
+        if article:
+            body = article.get("content") or article.get("body")
+            if body:
+                return _strip_html(body)
+        visible = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", html, flags=re.I | re.S)
+        return _strip_html(visible) or None
+
+    def _parse_page(
+        self, html: str, fallback_category: str, *, content_by_key: dict[str, str] | None = None,
+    ) -> list[ExchangeAnnouncement]:
         payload = self._next_data(html)
         if payload is None:
             return []
@@ -1708,7 +1896,7 @@ class GateAnnouncementProvider(HttpAnnouncementProvider):
                 url=url,
                 category=category,
                 published_at=_parse_datetime_seconds(row.get("release_timestamp") or row.get("created_t")),
-                content=brief,
+                content=(content_by_key or {}).get(article_id or url) or brief,
                 symbols=infer_symbols(f"{title} {_clean_text(row.get('tags'))}"),
                 event_time=_event_time_from_row(row),
             )

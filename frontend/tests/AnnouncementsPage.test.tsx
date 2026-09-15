@@ -192,4 +192,27 @@ describe("AnnouncementsPage", () => {
     expect(await screen.findByText("提前挂单（至 2026-09-15 22:30 UTC+8）")).toBeTruthy();
     expect(await screen.findByText("提币开放")).toBeTruthy();
   });
+
+  it("labels derivatives opening as derivatives, not spot or batches", async () => {
+    const originalFetch = vi.mocked(fetch);
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (!String(input).includes("/announcements?")) {
+        return originalFetch(input, init);
+      }
+      return Response.json([{
+        id: "wdc", exchange: "bybit", announcement_id: "wdc", kind: "listing",
+        title: "New listing: WDCUSDT Perpetual Contract", url: "https://announcements.bybit.com/article/wdc",
+        source: "bybit", category: "new_crypto", symbols: ["WDCUSDT"], market_type: "futures",
+        asset_research: [], event_time: "2026-09-15T14:30:00Z",
+        event_schedule: [{ symbol: "WDCUSDT", event_time: "2026-09-15T14:30:00Z", note: "合约交易开盘" }],
+        published_at: "2026-09-15T08:00:00Z", fetched_at: "2026-09-15T08:01:00Z",
+        alert_status: "sent", event_reminder_status: "pending", event_reminder_sent_at: null
+      }]);
+    }));
+
+    render(<AnnouncementsPage />);
+    expect(await screen.findByText("合约交易开盘 09-15 22:30:00 UTC+8")).toBeTruthy();
+    expect(screen.queryByText(/分批/)).toBeNull();
+    expect(screen.queryByText(/现货交易开盘/)).toBeNull();
+  });
 });
