@@ -262,6 +262,38 @@ const astroOpenAiInstrument = {
   spreads: []
 };
 
+function astroFutureVenue(exchange: string, symbol: string, bid: number, ask: number) {
+  return {
+    exchange,
+    spot: null,
+    future: {
+      symbol,
+      base: symbol.replace(/USDT$/, ""),
+      quote: "USDT",
+      exchange,
+      market_type: "future",
+      bid,
+      ask,
+      timestamp: "2026-09-13T01:00:00Z",
+      raw_symbol: symbol
+    },
+    error: null
+  };
+}
+
+function astroInstrument(symbol: string, exchanges: ReturnType<typeof astroFutureVenue>[]) {
+  return {
+    ...instrument,
+    query: symbol,
+    symbol,
+    base: symbol.replace(/USDT$/, ""),
+    exchange_count: exchanges.length,
+    market_count: exchanges.length,
+    exchanges,
+    spreads: []
+  };
+}
+
 describe("FloatingWatchPanel", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -354,6 +386,8 @@ describe("FloatingWatchPanel", () => {
     expect(within(panel).getByText("-1.30 U")).not.toBeNull();
     const positionedCard = within(panel).getByText("ANTHROPIC-ANTHROPIC").closest(".floating-watch-astro-row");
     expect(positionedCard).not.toBeNull();
+    expect(within(positionedCard as HTMLElement).getByText("Astro 预估")).not.toBeNull();
+    expect(within(positionedCard as HTMLElement).queryByText(/本地估算/)).toBeNull();
     expect(within(positionedCard as HTMLElement).getByText("--")).not.toBeNull();
     expect(within(panel).queryByText("+10.00 U")).toBeNull();
     expect(within(panel).queryByText("+720.00 U")).toBeNull();
@@ -364,6 +398,104 @@ describe("FloatingWatchPanel", () => {
     expect(within(panel).queryByText("STEEM")).toBeNull();
     expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("/astro/pairs"))).toBe(true);
     expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("/instruments/ANTHROPICUSDT"))).toBe(true);
+  });
+
+  it("estimates missing Astro profit with exchange-specific fees and labels the fallback", async () => {
+    const fallbackPairs = [
+      {
+        id: "standard-fee",
+        name: "STANDARD",
+        type: "FF",
+        status: true,
+        buyEx: "bitget",
+        sellEx: "gc-okx",
+        aExPosition: 40,
+        bExPosition: 400,
+        avgOpenAExPrice: 190,
+        avgOpenBExPrice: 21
+      },
+      {
+        id: "one-hl-fee",
+        name: "ONEHL",
+        type: "FF",
+        status: true,
+        buyEx: "hl",
+        sellEx: "gc-okx",
+        aExPosition: 40,
+        bExPosition: 400,
+        avgOpenAExPrice: 190,
+        avgOpenBExPrice: 21
+      },
+      {
+        id: "two-hl-fee",
+        name: "BOTHHL",
+        type: "FF",
+        status: true,
+        buyEx: "hl",
+        sellEx: "gc-hl",
+        aExPosition: 40,
+        bExPosition: 40,
+        avgOpenAExPrice: 190,
+        avgOpenBExPrice: 210
+      },
+      {
+        id: "missing-market",
+        name: "NOLIVE",
+        type: "FF",
+        status: true,
+        buyEx: "bitget",
+        sellEx: "okx",
+        aExPosition: 40,
+        bExPosition: 400,
+        avgOpenAExPrice: 190,
+        avgOpenBExPrice: 21
+      }
+    ];
+    const instruments = new Map([
+      ["STANDARDUSDT", astroInstrument("STANDARDUSDT", [
+        astroFutureVenue("bitget", "STANDARDUSDT", 199, 201),
+        astroFutureVenue("okx", "STANDARDUSDT", 19.9, 20.1)
+      ])],
+      ["ONEHLUSDT", astroInstrument("ONEHLUSDT", [
+        astroFutureVenue("hyperliquid", "ONEHLUSDT", 199, 201),
+        astroFutureVenue("okx", "ONEHLUSDT", 19.9, 20.1)
+      ])],
+      ["BOTHHLUSDT", astroInstrument("BOTHHLUSDT", [
+        astroFutureVenue("hyperliquid", "BOTHHLUSDT", 199, 201)
+      ])],
+      ["NOLIVEUSDT", astroInstrument("NOLIVEUSDT", [])]
+    ]);
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/settings/floating-watch")) return Response.json({ symbols: [], pair_ids: [] });
+      if (url.includes("/astro/pairs")) return Response.json(fallbackPairs);
+      if (url.includes("/pair-spread/presets")) return Response.json([]);
+      for (const [symbol, result] of instruments) {
+        if (url.includes(`/instruments/${symbol}`)) return Response.json(result);
+      }
+      return Response.json({});
+    });
+
+    render(<FloatingWatchPanel visible onClose={vi.fn()} />);
+    const panel = await screen.findByRole("complementary", { name: "关注浮窗" });
+    await userEvent.click(await within(panel).findByText("Astro 4"));
+
+    const standardCard = within(panel).getByText("STANDARD").closest(".floating-watch-astro-row") as HTMLElement;
+    expect(await within(standardCard).findByText("+688.00 U")).not.toBeNull();
+    expect(within(standardCard).getByText("本地预估")).not.toBeNull();
+    expect(within(standardCard).getByText("本地估算 · 已按双腿仓位扣 0.20% 手续费")).not.toBeNull();
+
+    const oneHlCard = within(panel).getByText("ONEHL").closest(".floating-watch-astro-row") as HTMLElement;
+    expect(within(oneHlCard).getByText("+699.20 U")).not.toBeNull();
+    expect(within(oneHlCard).getByText("本地估算 · 已按双腿仓位扣 0.13% 手续费")).not.toBeNull();
+
+    const bothHlCard = within(panel).getByText("BOTHHL").closest(".floating-watch-astro-row") as HTMLElement;
+    expect(within(bothHlCard).getByText("+712.00 U")).not.toBeNull();
+    expect(within(bothHlCard).getByText("本地估算 · 已按双腿仓位扣 0.05% 手续费")).not.toBeNull();
+
+    const noLiveCard = within(panel).getByText("NOLIVE").closest(".floating-watch-astro-row") as HTMLElement;
+    expect(within(noLiveCard).getByText("本地预估").parentElement?.textContent).toBe("本地预估--");
+    expect(within(noLiveCard).getByText("Astro 未返回，等待实时行情后本地估算")).not.toBeNull();
   });
 
   it("opens a dedicated watch window and closes the embedded panel", async () => {

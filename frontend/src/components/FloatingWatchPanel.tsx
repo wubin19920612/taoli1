@@ -67,8 +67,11 @@ type AstroMetrics = {
   markets: [MarketSnapshot, MarketSnapshot];
   openMetric: number;
   closeMetric: number;
+  buyClose: number;
+  sellClose: number;
 };
 type AstroPositionMetrics = { buyNotional: number; sellNotional: number };
+type AstroProfitEstimate = { value: number; feeRate: number };
 
 async function mapWithConcurrency<T, R>(
   items: T[],
@@ -279,10 +282,39 @@ function astroMetrics(
       legs,
       markets: completeMarkets,
       openMetric: ratioMode ? buyOpen! / sellOpen! : spreadPct(buyOpen!, sellOpen!),
-      closeMetric: ratioMode ? buyClose! / sellClose! : spreadPct(buyClose!, sellClose!)
+      closeMetric: ratioMode ? buyClose! / sellClose! : spreadPct(buyClose!, sellClose!),
+      buyClose: buyClose!,
+      sellClose: sellClose!
     },
     error: ""
   };
+}
+
+function astroProfitFeeRate(legs: [AstroLeg, AstroLeg]): number {
+  const hyperliquidLegs = legs.filter((leg) => leg.exchange === "hyperliquid").length;
+  if (hyperliquidLegs === 2) return 0.0005;
+  if (hyperliquidLegs === 1) return 0.0013;
+  return 0.002;
+}
+
+function astroLocalProfitEstimate(
+  pair: AstroPairStatus,
+  metrics: AstroMetrics,
+  position: AstroPositionMetrics
+): AstroProfitEstimate | null {
+  const buyQuantity = Math.abs(finiteNumber(pair.aExPosition) ?? 0);
+  const sellQuantity = Math.abs(finiteNumber(pair.bExPosition) ?? 0);
+  if (buyQuantity === 0 && sellQuantity === 0) return null;
+
+  const averageBuy = positivePrice(finiteNumber(pair.avgOpenAExPrice));
+  const averageSell = positivePrice(finiteNumber(pair.avgOpenBExPrice));
+  if ((buyQuantity > 0 && averageBuy === null) || (sellQuantity > 0 && averageSell === null)) return null;
+
+  const buyProfit = buyQuantity === 0 ? 0 : (metrics.buyClose - averageBuy!) * buyQuantity;
+  const sellProfit = sellQuantity === 0 ? 0 : (averageSell! - metrics.sellClose) * sellQuantity;
+  const feeRate = astroProfitFeeRate(metrics.legs);
+  const fee = (position.buyNotional + position.sellNotional) * feeRate;
+  return { value: buyProfit + sellProfit - fee, feeRate };
 }
 
 function astroMetric(pair: AstroPairStatus, value: number | null): string {
@@ -799,11 +831,15 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
             <div className="floating-watch-list">
               {runningAstroPairs.map((pair, index) => {
                 const runtime = astroRuntimeState(pair);
-                const estimatedProfit = finiteNumber(pair.profit);
+                const astroProfit = finiteNumber(pair.profit);
                 const realizedProfit = astroRealizedProfit(pair);
                 const hasPosition = astroHasPosition(pair);
                 const position = astroPositionMetrics(pair);
                 const live = astroMetrics(pair, astroInstruments);
+                const localProfit = astroProfit === null && live.value
+                  ? astroLocalProfitEstimate(pair, live.value, position)
+                  : null;
+                const estimatedProfit = astroProfit ?? localProfit?.value ?? null;
                 const profitTone = tone(estimatedProfit);
                 const ratioMode = pair.type?.toUpperCase().endsWith("R") === true;
                 return (
@@ -842,14 +878,17 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
                           <div className="floating-watch-astro-metrics">
                             <span><span>买腿仓位</span><strong>{astroPositionUsdt(position.buyNotional)}</strong></span>
                             <span><span>卖腿仓位</span><strong>{astroPositionUsdt(position.sellNotional)}</strong></span>
-                          <span className={`floating-watch-astro-profit floating-watch-value-${profitTone}`}>
-                              <span>Astro 预估</span><strong>{astroProfitUsdt(estimatedProfit)}</strong>
-                          </span>
-                          <span><span>已实现</span><strong>{astroProfitUsdt(realizedProfit)}</strong></span>
+                            <span className={`floating-watch-astro-profit floating-watch-value-${profitTone}`}>
+                              <span>{astroProfit !== null ? "Astro 预估" : "本地预估"}</span>
+                              <strong>{astroProfitUsdt(estimatedProfit)}</strong>
+                            </span>
+                            <span><span>已实现</span><strong>{astroProfitUsdt(realizedProfit)}</strong></span>
                           </div>
-                          {estimatedProfit === null ? (
+                          {astroProfit === null ? (
                             <span className="floating-watch-row-sub floating-watch-astro-profit-note">
-                              Astro SDK 暂未返回卡片预估盈利
+                              {localProfit
+                                ? `本地估算 · 已按双腿仓位扣 ${(localProfit.feeRate * 100).toFixed(2)}% 手续费`
+                                : "Astro 未返回，等待实时行情后本地估算"}
                             </span>
                           ) : null}
                         </>
