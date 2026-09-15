@@ -776,6 +776,46 @@ def _okx_spot_stages(text: str, symbol: str) -> list[AnnouncementEventScheduleIt
                         note = f"提前挂单（至 {local_end.strftime('%Y-%m-%d %H:%M')} UTC+8）"
             stages.append(AnnouncementEventScheduleItem(symbol=symbol, event_time=start_time, note=note))
             break
+
+    alias = rf"(?<![A-Z0-9]){re.escape(base)}\s*(?:/\s*[A-Z0-9Ⓢ]+)?\s*"
+    english_labels = (
+        ("充币开放", r"deposits?\s+will\s+open\s+at"),
+        ("现货交易开盘", r"spot\s+trading\s+will\s+open\s+at"),
+        ("提币开放", r"withdrawals?\s+will\s+open\s+at"),
+    )
+    for label, cue in english_labels:
+        if any(item.note == label for item in stages):
+            continue
+        for match in re.finditer(alias + cue, normalized, re.I):
+            candidates = _datetime_candidates(normalized[match.end() : match.end() + 85])
+            if candidates and candidates[0][0] <= 24:
+                stages.append(AnnouncementEventScheduleItem(symbol=symbol, event_time=candidates[0][2], note=label))
+                break
+
+    if not any(item.note and item.note.startswith("提前挂单") for item in stages):
+        pre_open = re.compile(
+            alias + r"pre-open\s+will\s+take\s+place\s+from\s+(?:from\s+)?"
+            r"(\d{1,2}):(\d{2})\s+to\s+(\d{1,2}):(\d{2})\s+UTC\s+on\s+"
+            r"([A-Za-z]+)\s+(\d{1,2}),?\s+(20\d{2})",
+            re.I,
+        )
+        for match in pre_open.finditer(normalized):
+            month = MONTHS.get(match[5].lower())
+            if month is None:
+                continue
+            start = _datetime_from_parts(int(match[7]), month, int(match[6]), int(match[1]), int(match[2]))
+            end = _datetime_from_parts(int(match[7]), month, int(match[6]), int(match[3]), int(match[4]))
+            if start is None or end is None:
+                continue
+            if end <= start:
+                end += timedelta(days=1)
+            stages.append(AnnouncementEventScheduleItem(
+                symbol=symbol, event_time=start,
+                note=f"提前挂单（至 {_display_time(end)[:16]} UTC+8）",
+            ))
+            break
+    order = {label: index for index, (label, _) in enumerate(labels)}
+    stages.sort(key=lambda item: order.get("提前挂单" if item.note and item.note.startswith("提前挂单") else item.note or "", 4))
     return stages
 
 
