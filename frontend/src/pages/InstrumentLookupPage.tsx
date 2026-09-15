@@ -1,10 +1,12 @@
 import {
+  CloseOutlined,
   DownOutlined,
   LineChartOutlined,
   PlusOutlined,
   PushpinOutlined,
   ReloadOutlined,
   RightOutlined,
+  SaveOutlined,
   SearchOutlined,
   SwapOutlined,
   WarningOutlined
@@ -59,6 +61,8 @@ import { addFloatingWatchSymbol } from "../utils/floatingWatch";
 dayjs.extend(utc);
 
 const LAST_SYMBOL_KEY = "taoli1.instrumentLookup.lastSymbol.v1";
+const SAVED_SYMBOLS_KEY = "taoli1.instrumentLookup.savedSymbols.v1";
+const MAX_SAVED_SYMBOLS = 30;
 const AUTO_REFRESH_MS = 10_000;
 const exchangeLabels: Record<string, string> = {
   aster: "Aster",
@@ -113,6 +117,20 @@ function normalizeSymbol(value: string): string {
     return "";
   }
   return compact.endsWith("USDT") ? compact : `${compact}USDT`;
+}
+
+function readSavedSymbols(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(SAVED_SYMBOLS_KEY) ?? "[]");
+    if (!Array.isArray(stored)) return [];
+    return [...new Set(stored
+      .filter((value): value is string => typeof value === "string")
+      .map(normalizeSymbol)
+      .filter((value) => /^[A-Z0-9]+USDT$/.test(value) && value.length <= 50))].slice(0, MAX_SAVED_SYMBOLS);
+  } catch {
+    return [];
+  }
 }
 
 function price(value: number | null | undefined): string {
@@ -487,6 +505,7 @@ export function InstrumentLookupPage() {
   const startingSymbol = useMemo(initialSymbol, []);
   const [query, setQuery] = useState(startingSymbol);
   const [activeSymbol, setActiveSymbol] = useState("");
+  const [savedSymbols, setSavedSymbols] = useState(readSavedSymbols);
   const [result, setResult] = useState<InstrumentLookupResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -656,6 +675,28 @@ export function InstrumentLookupPage() {
       message.error(exc instanceof Error ? exc.message : String(exc));
     } finally {
       setWatchSaving(false);
+    }
+  };
+
+  const saveCurrentSymbol = () => {
+    if (!result || normalizeSymbol(query) !== result.symbol || savedSymbols.includes(result.symbol)) return;
+    const next = [result.symbol, ...savedSymbols].slice(0, MAX_SAVED_SYMBOLS);
+    try {
+      window.localStorage.setItem(SAVED_SYMBOLS_KEY, JSON.stringify(next));
+      setSavedSymbols(next);
+      message.success(`${result.symbol} 已保存`);
+    } catch {
+      message.error("保存失败，请检查浏览器存储权限");
+    }
+  };
+
+  const removeSavedSymbol = (symbol: string) => {
+    const next = savedSymbols.filter((item) => item !== symbol);
+    try {
+      window.localStorage.setItem(SAVED_SYMBOLS_KEY, JSON.stringify(next));
+      setSavedSymbols(next);
+    } catch {
+      message.error("移除失败，请检查浏览器存储权限");
     }
   };
 
@@ -1027,6 +1068,14 @@ export function InstrumentLookupPage() {
           />
           <Button type="primary" icon={<SearchOutlined />} loading={loading} onClick={() => void runLookup(query)}>查询</Button>
           <Button
+            icon={<SaveOutlined />}
+            aria-label="保存当前标的"
+            disabled={!result || loading || normalizeSymbol(query) !== result.symbol || savedSymbols.includes(result.symbol)}
+            onClick={saveCurrentSymbol}
+          >
+            保存
+          </Button>
+          <Button
             icon={<PushpinOutlined />}
             loading={watchSaving}
             disabled={!result || loading}
@@ -1038,6 +1087,30 @@ export function InstrumentLookupPage() {
           <Space size={6}><Switch size="small" checked={autoRefresh} onChange={setAutoRefresh} /><Typography.Text type="secondary">自动刷新</Typography.Text></Space>
         </div>
       </div>
+
+      {savedSymbols.length > 0 ? (
+        <div className="instrument-saved-symbols">
+          <Typography.Text type="secondary">已保存</Typography.Text>
+          <div className="instrument-saved-symbol-list">
+            {savedSymbols.map((symbol) => (
+              <div className="instrument-saved-symbol" key={symbol}>
+                <Button size="small" type="text" disabled={loading} onClick={() => void runLookup(symbol)}>
+                  {symbol}
+                </Button>
+                <Tooltip title={`移除 ${symbol}`}>
+                  <Button
+                    size="small"
+                    type="text"
+                    aria-label={`移除已保存标的 ${symbol}`}
+                    icon={<CloseOutlined />}
+                    onClick={() => removeSavedSymbol(symbol)}
+                  />
+                </Tooltip>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       {error ? <Alert type="error" showIcon message={error} /> : null}
       {result && result.exchange_count === 0 ? <Alert type="warning" showIcon message={`当前聚合行情中没有 ${result.symbol} 的精确匹配数据`} /> : null}

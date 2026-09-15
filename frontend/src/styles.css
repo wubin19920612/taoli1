@@ -583,6 +583,49 @@ body {
   width: 280px;
 }
 
+.instrument-saved-symbols,
+.instrument-saved-symbol-list {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.instrument-saved-symbols {
+  padding-bottom: 10px;
+  border-bottom: 1px solid #e5ebe9;
+}
+
+.instrument-saved-symbols > .ant-typography {
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.instrument-saved-symbol {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #dce4e1;
+  border-radius: 4px;
+  background: #fff;
+}
+
+.instrument-saved-symbol .ant-btn {
+  height: 28px;
+}
+
+.instrument-saved-symbol .ant-btn:first-child {
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.instrument-saved-symbol .ant-btn:last-child {
+  width: 28px;
+  padding: 0;
+  color: #64716d;
+}
+
 .instrument-summary-band {
   display: grid;
   grid-template-columns: repeat(6, minmax(130px, 1fr));

@@ -248,6 +248,57 @@ describe("InstrumentLookupPage", () => {
     });
   });
 
+  it("saves queried symbols for one-click lookup after reopening the page", async () => {
+    (fetch as ReturnType<typeof vi.fn>).mockImplementation(async (input: RequestInfo | URL) => {
+      const symbol = String(input).includes("/instruments/ETHUSDT") ? "ETHUSDT" : "BTCUSDT";
+      return Response.json({
+        ...lookupResult,
+        symbol,
+        base: symbol.slice(0, -4),
+        query: symbol
+      });
+    });
+    const page = render(<InstrumentLookupPage />);
+    await screen.findByText("BTC / USDT");
+
+    await userEvent.click(screen.getByRole("button", { name: "保存当前标的" }));
+    expect(JSON.parse(window.localStorage.getItem("taoli1.instrumentLookup.savedSymbols.v1") ?? "null")).toEqual(["BTCUSDT"]);
+    expect(screen.getByRole("button", { name: "保存当前标的" }).hasAttribute("disabled")).toBe(true);
+
+    await userEvent.clear(screen.getByRole("textbox", { name: "查询标的" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "查询标的" }), "eth{enter}");
+    await screen.findByText("ETH / USDT");
+    await userEvent.click(screen.getByRole("button", { name: "保存当前标的" }));
+    expect(JSON.parse(window.localStorage.getItem("taoli1.instrumentLookup.savedSymbols.v1") ?? "null")).toEqual(["ETHUSDT", "BTCUSDT"]);
+
+    page.unmount();
+    window.history.replaceState({}, "", "/?page=instrument&symbol=ETHUSDT");
+    render(<InstrumentLookupPage />);
+    await screen.findByText("ETH / USDT");
+    const btcLookupCount = (fetch as ReturnType<typeof vi.fn>).mock.calls.filter(([input]) => String(input).includes("/instruments/BTCUSDT")).length;
+    await userEvent.click(screen.getByRole("button", { name: "BTCUSDT" }));
+    await waitFor(() => {
+      expect((fetch as ReturnType<typeof vi.fn>).mock.calls.filter(([input]) => String(input).includes("/instruments/BTCUSDT")).length).toBe(btcLookupCount + 1);
+      expect(screen.getByRole<HTMLInputElement>("textbox", { name: "查询标的" }).value).toBe("BTCUSDT");
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "移除已保存标的 BTCUSDT" }));
+    expect(screen.queryByRole("button", { name: "BTCUSDT" })).toBeNull();
+    expect(JSON.parse(window.localStorage.getItem("taoli1.instrumentLookup.savedSymbols.v1") ?? "null")).toEqual(["ETHUSDT"]);
+  });
+
+  it("does not save a typed symbol until it has been looked up and tolerates invalid saved data", async () => {
+    window.localStorage.setItem("taoli1.instrumentLookup.savedSymbols.v1", "invalid JSON");
+    render(<InstrumentLookupPage />);
+    await screen.findByText("BTC / USDT");
+    expect(screen.queryByText("已保存")).toBeNull();
+
+    await userEvent.clear(screen.getByRole("textbox", { name: "查询标的" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "查询标的" }), "ETH");
+    expect(screen.getByRole("button", { name: "保存当前标的" }).hasAttribute("disabled")).toBe(true);
+    expect(window.localStorage.getItem("taoli1.instrumentLookup.savedSymbols.v1")).toBe("invalid JSON");
+  });
+
   it("loads trend history only after the section is expanded", async () => {
     render(<InstrumentLookupPage />);
     await screen.findByText("BTC / USDT");
