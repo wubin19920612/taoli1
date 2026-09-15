@@ -736,6 +736,49 @@ def extract_event_schedule(text: str, symbols: list[str]) -> list[AnnouncementEv
     )
 
 
+def _okx_spot_stages(text: str, symbol: str) -> list[AnnouncementEventScheduleItem]:
+    normalized = _clean_text(re.sub(r"\s+", " ", text))
+    base = _normalize_symbol(symbol).split("/", 1)[0]
+    if not normalized or not base:
+        return []
+    labels = (
+        ("充币开放", r"开放\s*充币\s*时间"),
+        ("提前挂单", r"提前挂单\s*时间段"),
+        ("现货交易开盘", r"现货交易开盘\s*时间"),
+        ("提币开放", r"开放\s*提币\s*时间"),
+    )
+    stages: list[AnnouncementEventScheduleItem] = []
+    for label, cue in labels:
+        pattern = re.compile(
+            rf"(?<![A-Z0-9]){re.escape(base)}\s*(?:/\s*[A-Z0-9Ⓢ]+)?\s*{cue}\s*[:：]",
+            re.I,
+        )
+        for match in pattern.finditer(normalized):
+            after_label = normalized[match.end() : match.end() + 100]
+            candidates = _datetime_candidates(after_label)
+            if not candidates or candidates[0][0] > 24:
+                continue
+            _, end, start_time, _ = candidates[0]
+            if label == "提前挂单" and "utc+8" in after_label[end : end + 55].lower().replace(" ", ""):
+                start_time = _apply_timezone_hint(start_time, "UTC+8")
+            note = label
+            if label == "提前挂单":
+                end_match = re.match(r"\s*至\s*(\d{1,2}):(\d{2})", after_label[end:])
+                if end_match:
+                    local_start = start_time + timedelta(hours=8)
+                    local_end = _datetime_from_parts(
+                        local_start.year, local_start.month, local_start.day,
+                        int(end_match[1]), int(end_match[2]),
+                    )
+                    if local_end:
+                        if local_end <= local_start:
+                            local_end += timedelta(days=1)
+                        note = f"提前挂单（至 {local_end.strftime('%Y-%m-%d %H:%M')} UTC+8）"
+            stages.append(AnnouncementEventScheduleItem(symbol=symbol, event_time=start_time, note=note))
+            break
+    return stages
+
+
 def _event_time_from_row(row: dict) -> datetime | None:
     for key in (
         "startTime",
@@ -931,15 +974,9 @@ def build_announcement_alert_message(announcement: ExchangeAnnouncement) -> str:
     if announcement.market_type:
         lines.append(f"市场: {_announcement_market_type_label(announcement)}")
     if announcement.event_time:
-        lines.append(f"事件时间: {_display_time(announcement.event_time)} UTC+8")
-    if announcement.event_schedule:
-        lines.append(
-            "分项时间: "
-            + "; ".join(
-                f"{item.symbol} {_display_time(item.event_time)} UTC+8"
-                for item in announcement.event_schedule[:12]
-            )
-        )
+        event_label = "现货交易开盘" if any(item.note == "现货交易开盘" for item in announcement.event_schedule) else "事件时间"
+        lines.append(f"{event_label}: {_display_time(announcement.event_time)} UTC+8")
+    lines.extend(_announcement_schedule_lines(announcement))
     lines.append(f"标题: {announcement.title}")
     if announcement.category:
         lines.append(f"分类: {announcement.category}")
@@ -967,16 +1004,10 @@ def build_announcement_event_reminder_message(
     if announcement.event_time:
         remaining_seconds = max(0, int((announcement.event_time - now).total_seconds()))
         remaining_minutes = max(0, remaining_seconds // 60)
-        lines.append(f"事件时间: {_display_time(announcement.event_time)} UTC+8")
+        event_label = "现货交易开盘" if any(item.note == "现货交易开盘" for item in announcement.event_schedule) else "事件时间"
+        lines.append(f"{event_label}: {_display_time(announcement.event_time)} UTC+8")
         lines.append(f"剩余: 约 {remaining_minutes} 分钟")
-    if announcement.event_schedule:
-        lines.append(
-            "分项时间: "
-            + "; ".join(
-                f"{item.symbol} {_display_time(item.event_time)} UTC+8"
-                for item in announcement.event_schedule[:12]
-            )
-        )
+    lines.extend(_announcement_schedule_lines(announcement))
     if announcement.symbols:
         lines.append(f"{_announcement_asset_label(announcement)}: {', '.join(announcement.symbols)}")
     if announcement.market_type:
@@ -984,6 +1015,24 @@ def build_announcement_event_reminder_message(
     lines.append(f"标题: {announcement.title}")
     lines.append(f"链接: {announcement.url}")
     return "\n".join(lines)
+
+
+def _announcement_schedule_lines(announcement: ExchangeAnnouncement) -> list[str]:
+    schedule = announcement.event_schedule[:12]
+    if not schedule:
+        return []
+    if not any(item.note for item in schedule):
+        return ["分项时间: " + "; ".join(
+            f"{item.symbol} {_display_time(item.event_time)} UTC+8" for item in schedule
+        )]
+    lines = ["公告时间安排:"]
+    for item in schedule:
+        if item.note and item.note.startswith("提前挂单（至 "):
+            end = item.note.removeprefix("提前挂单（至 ").removesuffix("）")
+            lines.append(f"- {item.symbol} 提前挂单: {_display_time(item.event_time)} UTC+8 至 {end}")
+        else:
+            lines.append(f"- {item.symbol} {item.note or '交易时间'}: {_display_time(item.event_time)} UTC+8")
+    return lines
 
 
 class AnnouncementProvider:
@@ -1059,9 +1108,10 @@ class HttpAnnouncementProvider(AnnouncementProvider):
             extract_event_schedule(content, inferred_symbols) if content else []
         )
         inferred_event_time = event_time
-        if inferred_event_time is None and inferred_event_schedule:
+        has_stages = any(item.note for item in inferred_event_schedule)
+        if inferred_event_time is None and inferred_event_schedule and not has_stages:
             inferred_event_time = min(item.event_time for item in inferred_event_schedule)
-        if inferred_event_time is None:
+        if inferred_event_time is None and not has_stages:
             inferred_event_time = extract_event_time(searchable_text)
         summary = _announcement_summary(
             kind=kind,
@@ -1199,7 +1249,12 @@ class OKXAnnouncementProvider(HttpAnnouncementProvider):
             except Exception:
                 logger.debug("failed to fetch okx latest announcements page: %s", url, exc_info=True)
                 continue
-            announcements.extend(self._parse_latest_page(html, "announcements-latest"))
+            known_urls = {item.url.rstrip("/").rsplit("/", 1)[-1] for item in announcements}
+            for item in self._parse_latest_page(html, "announcements-latest"):
+                slug = item.url.rstrip("/").rsplit("/", 1)[-1]
+                if slug not in known_urls:
+                    announcements.append(item)
+                    known_urls.add(slug)
         return announcements
 
     def _parse_latest_page(self, html: str, fallback_category: str) -> list[ExchangeAnnouncement]:
@@ -1261,10 +1316,14 @@ class OKXAnnouncementProvider(HttpAnnouncementProvider):
     async def _fetch_detail_content_for_payload(self, payload: object, fallback_category: str) -> dict[str, str]:
         requests: list[tuple[str, str]] = []
         for row in self._rows_from_payload(payload):
-            if _event_time_from_row(row) is not None:
-                continue
             title = _clean_text(row.get("title") or row.get("annTitle") or row.get("name"))
             category = _clean_text(row.get("annType") or row.get("category") or row.get("type")) or fallback_category
+            if _event_time_from_row(row) is not None and not (
+                classify_announcement(title, category) == AnnouncementKind.LISTING
+                and infer_market_type(title, category) == "spot"
+                and len(infer_symbols(title)) == 1
+            ):
+                continue
             if classify_announcement(title, category) not in {
                 AnnouncementKind.LISTING,
                 AnnouncementKind.DELISTING,
@@ -1366,6 +1425,14 @@ class OKXAnnouncementProvider(HttpAnnouncementProvider):
             content = (content_by_key or {}).get(self._row_content_key(row)) or _clean_text(
                 row.get("desc") or row.get("summary") or row.get("brief")
             )
+            symbols = infer_symbols(title)
+            spot_stages = (
+                _okx_spot_stages(content, symbols[0])
+                if content and len(symbols) == 1 and classify_announcement(title, category) == AnnouncementKind.LISTING
+                and infer_market_type(title, category) == "spot"
+                else []
+            )
+            opening = next((item.event_time for item in spot_stages if item.note == "现货交易开盘"), None)
             announcement = self._announcement(
                 announcement_id=announcement_id,
                 title=title,
@@ -1373,7 +1440,8 @@ class OKXAnnouncementProvider(HttpAnnouncementProvider):
                 category=category,
                 published_at=published_at,
                 content=content,
-                event_time=_event_time_from_row(row),
+                event_time=opening or (_event_time_from_row(row) if not spot_stages else None),
+                event_schedule=spot_stages or None,
             )
             if announcement is not None:
                 announcements.append(announcement)

@@ -132,6 +132,79 @@ def test_event_schedule_parser_extracts_per_symbol_times() -> None:
     ]
 
 
+def test_okx_spot_notice_reports_each_stage_and_reminds_on_trading_open() -> None:
+    provider = OKXAnnouncementProvider(client=None, now_fn=lambda: datetime(2026, 9, 15, 8, 0, tzinfo=UTC))
+    url = "https://www.okx.com/zh-hans/help/okx-to-list-pons-usdt-pons-family-for-spot-trading"
+    content = (
+        "上线时间 1. PONS 开放 充币 时间：2026年09月15日 16:00 (UTC+8) "
+        "2. PONS /USDT 提前挂单 时间段：2026 年 09 月 15 日 21:30 至 22:30 (UTC+8) "
+        "3. PONS /USDT 现货交易开盘时间：2026年09月15日 22:30 (UTC+8) "
+        "4. PONS 开放 提币 时间：2026年09月16日 00:30 (UTC+8)"
+    )
+    payload = {"data": [{"details": [{
+        "title": "欧易关于上线 PONS/USDT (Pons Family) 现货交易的公告",
+        "url": url, "pTime": "1789459209000", "annType": "announcements-new-listings",
+        "onlineTime": "2026-09-15T08:00:00Z",
+    }]}]}
+    rows = provider._parse_payload(payload, "announcements-new-listings", content_by_key={url: content})
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.event_time == datetime(2026, 9, 15, 14, 30, tzinfo=UTC)
+    assert [(item.note, item.event_time) for item in row.event_schedule] == [
+        ("充币开放", datetime(2026, 9, 15, 8, 0, tzinfo=UTC)),
+        ("提前挂单（至 2026-09-15 22:30 UTC+8）", datetime(2026, 9, 15, 13, 30, tzinfo=UTC)),
+        ("现货交易开盘", datetime(2026, 9, 15, 14, 30, tzinfo=UTC)),
+        ("提币开放", datetime(2026, 9, 15, 16, 30, tzinfo=UTC)),
+    ]
+    assert row.event_reminder_status == "pending"
+    for message in (
+        build_announcement_alert_message(row),
+        build_announcement_event_reminder_message(
+            row, minutes_before=30, now=datetime(2026, 9, 15, 14, 0, tzinfo=UTC)
+        ),
+    ):
+        assert "现货交易开盘: 2026-09-15 22:30:00 UTC+8" in message
+        assert "- PONS/USDT 充币开放: 2026-09-15 16:00:00 UTC+8" in message
+        assert "- PONS/USDT 提前挂单: 2026-09-15 21:30:00 UTC+8 至 2026-09-15 22:30 UTC+8" in message
+        assert "- PONS/USDT 现货交易开盘: 2026-09-15 22:30:00 UTC+8" in message
+        assert "- PONS/USDT 提币开放: 2026-09-16 00:30:00 UTC+8" in message
+
+
+def test_okx_spot_deposit_only_does_not_schedule_trading_reminder() -> None:
+    provider = OKXAnnouncementProvider(client=None, now_fn=lambda: datetime(2026, 9, 15, 7, 0, tzinfo=UTC))
+    url = "https://www.okx.com/help/okx-to-list-pons-usdt"
+    rows = provider._parse_payload(
+        {"data": [{"details": [{"title": "OKX to list PONS/USDT for spot trading", "url": url,
+                              "onlineTime": "2026-09-15T08:00:00Z"}]}]},
+        "announcements-new-listings",
+        content_by_key={url: "PONS 开放充币时间：2026年09月15日 16:00 (UTC+8)"},
+    )
+    assert len(rows) == 1
+    assert rows[0].event_time is None
+    assert rows[0].event_reminder_status == "not_applicable"
+
+
+@pytest.mark.asyncio
+async def test_okx_fetches_spot_article_even_if_api_contains_a_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = OKXAnnouncementProvider(client=None)
+    url = "https://www.okx.com/help/okx-to-list-pons-usdt"
+    payload = {"data": [{"details": [{
+        "title": "OKX to list PONS/USDT for spot trading", "url": url,
+        "onlineTime": "2026-09-15T08:00:00Z",
+    }]}]}
+
+    async def article_text(article_url: str) -> str:
+        assert article_url == url
+        return "PONS/USDT 现货交易开盘时间：2026年09月15日 22:30 (UTC+8)"
+
+    monkeypatch.setattr(provider, "_fetch_article_text", article_text)
+    content = await provider._fetch_detail_content_for_payload(payload, "announcements-new-listings")
+    assert content == {url: await article_text(url)}
+    assert provider._parse_payload(payload, "announcements-new-listings", content_by_key=content)[0].event_time == (
+        datetime(2026, 9, 15, 14, 30, tzinfo=UTC)
+    )
+
+
 def test_announcement_alert_message_is_readable() -> None:
     message = build_announcement_alert_message(
         announcement(

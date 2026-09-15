@@ -241,6 +241,10 @@ function eventSchedule(row: ExchangeAnnouncement) {
   return row.event_schedule ?? [];
 }
 
+function hasAnnouncementStages(row: ExchangeAnnouncement): boolean {
+  return eventSchedule(row).some((item) => Boolean(item.note));
+}
+
 function eventScheduleTimeRange(row: ExchangeAnnouncement): { first: string; last: string; count: number } | null {
   const schedule = eventSchedule(row);
   if (schedule.length === 0) {
@@ -255,6 +259,9 @@ function eventScheduleTimeRange(row: ExchangeAnnouncement): { first: string; las
 }
 
 function eventTimeText(row: ExchangeAnnouncement): string {
+  if (hasAnnouncementStages(row)) {
+    return row.event_time ? `现货交易开盘 ${formatUtcPlus8(row.event_time)} UTC+8` : "公告未给出现货开盘时间";
+  }
   const range = eventScheduleTimeRange(row);
   if (range && range.count > 1) {
     const first = formatUtcPlus8(range.first);
@@ -284,7 +291,7 @@ function eventScheduleList(row: ExchangeAnnouncement) {
   return (
     <div className="announcement-schedule-list">
       {schedule.map((item) => (
-        <div key={`${item.symbol}-${item.event_time}`} className="announcement-schedule-item">
+        <div key={`${item.symbol}-${item.event_time}-${item.note ?? ""}`} className="announcement-schedule-item">
           <Tag color="purple">{item.symbol}</Tag>
           <Typography.Text>{formatUtcPlus8(item.event_time)} UTC+8</Typography.Text>
           {item.note ? <Typography.Text type="secondary">{item.note}</Typography.Text> : null}
@@ -421,7 +428,9 @@ function rowSummary(row: ExchangeAnnouncement): string {
   }
   if (row.event_time) {
     const range = eventScheduleTimeRange(row);
-    if (range && range.count > 1) {
+    if (hasAnnouncementStages(row)) {
+      pieces.push(`现货交易开盘 ${formatUtcPlus8(row.event_time)} UTC+8`);
+    } else if (range && range.count > 1) {
       pieces.push(`分批 ${formatUtcPlus8(range.first)} - ${formatUtcPlus8(range.last)} UTC+8`);
     } else {
       pieces.push(`事件时间 ${formatUtcPlus8(row.event_time)} UTC+8`);
@@ -489,7 +498,7 @@ function announcementDetails(row: ExchangeAnnouncement) {
         <Descriptions.Item label="公告时间">{formatUtcPlus8(row.published_at)} UTC+8</Descriptions.Item>
         <Descriptions.Item label="事件时间">{eventTimeText(row)}</Descriptions.Item>
         {eventSchedule(row).length > 0 ? (
-          <Descriptions.Item label="逐项时间">{eventScheduleList(row)}</Descriptions.Item>
+          <Descriptions.Item label={hasAnnouncementStages(row) ? "公告时间安排" : "逐项时间"}>{eventScheduleList(row)}</Descriptions.Item>
         ) : null}
         <Descriptions.Item label="抓取时间">{formatUtcPlus8(row.fetched_at)} UTC+8</Descriptions.Item>
         <Descriptions.Item label="交易所">{row.exchange.toUpperCase()}</Descriptions.Item>

@@ -160,4 +160,36 @@ describe("AnnouncementsPage", () => {
       });
     });
   });
+
+  it("shows spot trading open separately from the notice's other stages", async () => {
+    const originalFetch = vi.mocked(fetch);
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (!String(input).includes("/announcements?")) {
+        return originalFetch(input, init);
+      }
+      return Response.json([{
+        id: "pons", exchange: "okx", announcement_id: "pons", kind: "listing",
+        title: "欧易关于上线 PONS/USDT 现货交易的公告", url: "https://www.okx.com/help/pons",
+        source: "okx", category: "announcements-new-listings", symbols: ["PONS/USDT"],
+        market_type: "spot", asset_research: [], event_time: "2026-09-15T14:30:00Z",
+        event_schedule: [
+          { symbol: "PONS/USDT", event_time: "2026-09-15T08:00:00Z", note: "充币开放" },
+          { symbol: "PONS/USDT", event_time: "2026-09-15T13:30:00Z", note: "提前挂单（至 2026-09-15 22:30 UTC+8）" },
+          { symbol: "PONS/USDT", event_time: "2026-09-15T14:30:00Z", note: "现货交易开盘" },
+          { symbol: "PONS/USDT", event_time: "2026-09-15T16:30:00Z", note: "提币开放" }
+        ],
+        published_at: "2026-09-15T08:00:09Z", fetched_at: "2026-09-15T08:01:00Z",
+        alert_status: "sent", event_reminder_status: "pending", event_reminder_sent_at: null
+      }]);
+    }));
+
+    render(<AnnouncementsPage />);
+    expect(await screen.findByText("现货交易开盘 09-15 22:30:00 UTC+8")).toBeTruthy();
+    expect(screen.queryByText(/分批/)).toBeNull();
+    fireEvent.click(screen.getByLabelText("Expand row"));
+    expect(await screen.findByText("公告时间安排")).toBeTruthy();
+    expect(await screen.findByText("充币开放")).toBeTruthy();
+    expect(await screen.findByText("提前挂单（至 2026-09-15 22:30 UTC+8）")).toBeTruthy();
+    expect(await screen.findByText("提币开放")).toBeTruthy();
+  });
 });
