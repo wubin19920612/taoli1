@@ -30,6 +30,7 @@ from app.models.oil_news import (
     OilNewsSeverity,
 )
 from app.models.opportunity import Opportunity, OpportunityType
+from app.models.astro_preadd import AstroPreaddSettings
 from app.models.funding_arbitrage import FundingArbitrageSettings
 from app.models.opportunity_radar import OpportunityRadarSettings
 from app.models.phone_alert import PhonePriceAlertEvent, PhonePriceAlertRule
@@ -1336,6 +1337,24 @@ class SettingsRepository:
             ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
             """,
             ("funding_arbitrage", settings.model_dump_json()),
+        )
+        await self.db.commit()
+        return settings
+
+    async def get_astro_preadd_settings(self) -> AstroPreaddSettings:
+        cursor = await self.db.execute(
+            "SELECT payload FROM app_settings WHERE key = ?", ("astro_preadd",)
+        )
+        row = await cursor.fetchone()
+        return AstroPreaddSettings.model_validate_json(row["payload"]) if row else AstroPreaddSettings()
+
+    async def set_astro_preadd_settings(self, settings: AstroPreaddSettings) -> AstroPreaddSettings:
+        await self.db.execute(
+            """
+            INSERT INTO app_settings (key, payload) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
+            """,
+            ("astro_preadd", settings.model_dump_json()),
         )
         await self.db.commit()
         return settings

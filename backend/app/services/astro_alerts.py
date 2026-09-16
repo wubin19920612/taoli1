@@ -171,6 +171,19 @@ class AstroAlertService:
             manual_override=True,
         )
 
+    async def handle_preadd(
+        self,
+        opportunity: Opportunity,
+        card_settings: AstroCardSettings,
+    ) -> AstroAlertActionResult:
+        return await self._handle(
+            opportunity,
+            enabled=True,
+            disabled_message="预建卡片未开启",
+            card_settings_override=card_settings.model_copy(update={"open_enabled": False}),
+            allow_route_variants=True,
+        )
+
     async def _handle(
         self,
         opportunity: Opportunity,
@@ -182,6 +195,7 @@ class AstroAlertService:
         auto_open_new_listing: bool = False,
         add_restart_delay_seconds: float | None = None,
         manual_override: bool = False,
+        allow_route_variants: bool = False,
     ) -> AstroAlertActionResult:
         if not enabled:
             return AstroAlertActionResult(
@@ -325,7 +339,11 @@ class AstroAlertService:
                 and "lighter" in {existing.get("buyEx"), existing.get("sellEx")}
             )
         ]
-        if conflicting_pairs and not self.allow_same_name_variants and not manual_override:
+        if (
+            conflicting_pairs
+            and not (self.allow_same_name_variants or allow_route_variants)
+            and not manual_override
+        ):
             return AstroAlertActionResult(
                 enabled=True,
                 status="skipped",

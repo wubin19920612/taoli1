@@ -67,6 +67,7 @@ from app.services.announcement_research import AnnouncementResearchService
 from app.services.astro_alerts import AstroAlertService, live_pilot_card_settings
 from app.services.astro_client import AstroSdkClient, AstroSdkConfig
 from app.services.astro_planner import AstroPairPlanner, AstroPlannerConfig
+from app.services.astro_preadd import AstroPreaddService
 from app.services.collector import MarketCollector, default_exchange_adapters, run_collector_loop
 from app.services.data_filters import filter_markets, filter_opportunities, symbol_is_excluded
 from app.services.feishu import FeishuConfig, FeishuNotifier
@@ -881,6 +882,9 @@ def create_app(
         app.state.astro_alert_service.risk_settings_loader = (
             app.state.settings_repo.get_risk_settings
         )
+        app.state.astro_preadd_service = AstroPreaddService(
+            store, app.state.settings_repo, app.state.astro_alert_service
+        )
         app.state.history_repo = OpportunityHistoryRepository(db)
         app.state.funding_research_repo = FundingResearchRepository(db)
         app.state.index_component_repo = IndexComponentRepository(db)
@@ -988,6 +992,11 @@ def create_app(
                 tasks,
                 run_collector_loop(collector, app_settings.poll_interval_seconds, stop_event),
                 name="market-collector",
+            )
+            _start_background_task(
+                tasks,
+                app.state.astro_preadd_service.run_loop(stop_event),
+                name="astro-preadd-loop",
             )
             _start_background_task(
                 tasks,
@@ -1123,6 +1132,7 @@ def create_app(
         )
     )
     app.state.astro_alert_service = AstroAlertService(app.state.astro_client, app_settings)
+    app.state.astro_preadd_service = None
     app.state.service_controller = DockerServiceController(
         ServiceControlConfig(
             enabled=app_settings.service_control_enabled,

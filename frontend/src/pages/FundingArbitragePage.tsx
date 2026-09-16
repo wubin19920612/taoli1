@@ -1,4 +1,4 @@
-import { AreaChartOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
+import { AreaChartOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
 import {
   Alert,
   Button,
@@ -6,6 +6,7 @@ import {
   InputNumber,
   Modal,
   Segmented,
+  Select,
   Space,
   Statistic,
   Switch,
@@ -20,13 +21,22 @@ import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 
 import {
+  getAstroPreaddExchanges,
+  getAstroPreaddPreview,
+  getAstroPreaddSettings,
   getOpportunityHistoryStats,
   getFundingArbitragePreview,
   getFundingArbitrageSettings,
-  updateFundingArbitrageSettings
+  updateAstroPreaddSettings,
+  updateFundingArbitrageSettings,
+  runAstroPreadd
 } from "../api/client";
 import type {
   AdlRiskLevel,
+  AstroPreaddCandidate,
+  AstroPreaddPreview,
+  AstroPreaddRunResult,
+  AstroPreaddSettings,
   FundingArbitrageCandidate,
   FundingArbitrageDecision,
   FundingArbitragePreview,
@@ -66,6 +76,22 @@ const defaultFundingSettings: FundingArbitrageSettings = {
   formula_divergence_min_funding_pct: 0.25,
   conflicted_basis_min_check_pct: 0.3,
   min_conflicted_reward_risk_ratio: 1
+};
+
+const defaultPreaddSettings: AstroPreaddSettings = {
+  enabled: false,
+  exchanges: ["bitget", "binance"],
+  funding_threshold_pct: 0.6,
+  premium_threshold_pct: 1,
+  open_spread_threshold_pct: 0.9,
+  scan_interval_seconds: 60,
+  max_routes_per_run: 5,
+  stale_after_seconds: 30
+};
+
+const preaddExchangeLabels: Record<string, string> = {
+  bitget: "Bitget", binance: "Binance", bybit: "Bybit", gate: "Gate",
+  okx: "OKX", hyperliquid: "HL", lighter: "Lighter"
 };
 
 type FundingSettingsForm = Omit<FundingArbitrageSettings, "min_volume_24h_usdt"> & {
@@ -378,6 +404,7 @@ const historyColumns: ColumnsType<OpportunityHistoryPoint> = [
 
 export function FundingArbitragePage() {
   const [form] = Form.useForm<FundingSettingsForm>();
+  const [preaddForm] = Form.useForm<AstroPreaddSettings>();
   const [settings, setSettings] = useState<FundingArbitrageSettings>(defaultFundingSettings);
   const [preview, setPreview] = useState<FundingArbitragePreview | null>(null);
   const [historyCandidate, setHistoryCandidate] = useState<FundingArbitrageCandidate | null>(null);
@@ -388,6 +415,14 @@ export function FundingArbitragePage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [preaddSettings, setPreaddSettings] = useState(defaultPreaddSettings);
+  const [preaddExchanges, setPreaddExchanges] = useState<string[]>([]);
+  const [preaddPreview, setPreaddPreview] = useState<AstroPreaddPreview | null>(null);
+  const [preaddResult, setPreaddResult] = useState<AstroPreaddRunResult | null>(null);
+  const [preaddError, setPreaddError] = useState("");
+  const [preaddLoading, setPreaddLoading] = useState(false);
+  const [preaddSaving, setPreaddSaving] = useState(false);
+  const [preaddRunning, setPreaddRunning] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -408,10 +443,71 @@ export function FundingArbitragePage() {
     }
   }, [form]);
 
+  const loadPreadd = useCallback(async () => {
+    setPreaddLoading(true);
+    setPreaddError("");
+    try {
+      const [nextSettings, exchanges, nextPreview] = await Promise.all([
+        getAstroPreaddSettings(), getAstroPreaddExchanges(), getAstroPreaddPreview()
+      ]);
+      setPreaddSettings(nextSettings);
+      setPreaddExchanges(exchanges);
+      setPreaddPreview(nextPreview);
+      preaddForm.setFieldsValue(nextSettings);
+    } catch (exc) {
+      setPreaddError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setPreaddLoading(false);
+    }
+  }, [preaddForm]);
+
   useEffect(() => {
     form.setFieldsValue(settingsToForm(defaultFundingSettings));
     void load();
   }, [form, load]);
+
+  useEffect(() => {
+    preaddForm.setFieldsValue(defaultPreaddSettings);
+    void loadPreadd();
+  }, [preaddForm, loadPreadd]);
+
+  const savePreadd = async () => {
+    setPreaddSaving(true);
+    setPreaddError("");
+    try {
+      const saved = await updateAstroPreaddSettings(await preaddForm.validateFields());
+      setPreaddSettings(saved);
+      preaddForm.setFieldsValue(saved);
+      setPreaddPreview(await getAstroPreaddPreview());
+      message.success("预建规则已保存");
+    } catch (exc) {
+      setPreaddError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setPreaddSaving(false);
+    }
+  };
+
+  const confirmPreadd = (candidate?: AstroPreaddCandidate) => {
+    Modal.confirm({
+      title: candidate ? `预建 ${candidate.symbol} 卡片` : "预建当前候选卡片",
+      content: "卡片将以暂停、禁开状态创建；不会开启仓位。",
+      okText: "确认预建",
+      cancelText: "取消",
+      onOk: async () => {
+        setPreaddRunning(true);
+        setPreaddError("");
+        try {
+          const outcome = await runAstroPreadd(candidate ? [candidate.id] : undefined);
+          setPreaddResult(outcome);
+          setPreaddPreview(await getAstroPreaddPreview());
+        } catch (exc) {
+          setPreaddError(exc instanceof Error ? exc.message : String(exc));
+        } finally {
+          setPreaddRunning(false);
+        }
+      }
+    });
+  };
 
   const openHistory = useCallback(async (candidate: FundingArbitrageCandidate, hours = historyHours) => {
     setHistoryCandidate(candidate);
@@ -583,6 +679,111 @@ export function FundingArbitragePage() {
             {"\u4fdd\u5b58\u7b56\u7565\u53c2\u6570"}
           </Button>
         </Form>
+      </section>
+
+      <section className="panel panel-wide">
+        <div className="toolbar">
+          <div className="toolbar-controls">
+            <Typography.Title level={5}>Astro 交易对预建</Typography.Title>
+            <Tag color={preaddSettings.enabled ? "green" : "default"}>
+              {preaddSettings.enabled ? "自动监测中" : "自动监测关闭"}
+            </Tag>
+          </div>
+          <div className="toolbar-actions">
+            <Button icon={<ReloadOutlined />} onClick={() => void loadPreadd()} loading={preaddLoading}>
+              刷新候选
+            </Button>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              disabled={!preaddPreview?.items.length || preaddRunning}
+              loading={preaddRunning}
+              onClick={() => confirmPreadd()}
+            >
+              立即预建
+            </Button>
+          </div>
+        </div>
+        {preaddError ? <Alert type="error" showIcon message={preaddError} /> : null}
+        {preaddResult ? (
+          <Alert
+            showIcon
+            type={preaddResult.failed ? "error" : preaddResult.created ? "success" : "warning"}
+            message={`预建 ${preaddResult.created} 路线，跳过 ${preaddResult.skipped}，失败 ${preaddResult.failed}`}
+            description={[...preaddResult.warnings, ...preaddResult.results].join("；")}
+          />
+        ) : null}
+        {preaddPreview?.warnings.length ? (
+          <Alert type="warning" showIcon message={preaddPreview.warnings.join("；")} />
+        ) : null}
+        <Form form={preaddForm} layout="vertical" disabled={preaddLoading || preaddSaving}>
+          <div className="funding-settings-grid">
+            <Form.Item label="自动预建" name="enabled" valuePropName="checked">
+              <Switch />
+            </Form.Item>
+            <Form.Item
+              label="预建交易所"
+              name="exchanges"
+              rules={[{ required: true, type: "array", min: 2, message: "至少选择两个交易所" }]}
+            >
+              <Select
+                mode="multiple"
+                options={preaddExchanges.map((exchange) => ({
+                  label: preaddExchangeLabels[exchange] ?? exchange, value: exchange
+                }))}
+              />
+            </Form.Item>
+            <Form.Item label="资金费绝对值（单次结算）" name="funding_threshold_pct" rules={[{ required: true }]}>
+              <InputNumber min={0.001} max={100} step={0.05} suffix="%" className="wide-input" />
+            </Form.Item>
+            <Form.Item label="溢价近似绝对值（标记/指数）" name="premium_threshold_pct" rules={[{ required: true }]}>
+              <InputNumber min={0.001} max={100} step={0.1} suffix="%" className="wide-input" />
+            </Form.Item>
+            <Form.Item label="预建开仓价差阈值" name="open_spread_threshold_pct" rules={[{ required: true }]}>
+              <InputNumber min={0.001} max={100} step={0.1} suffix="%" className="wide-input" />
+            </Form.Item>
+            <Form.Item label="自动扫描间隔" name="scan_interval_seconds" rules={[{ required: true }]}>
+              <InputNumber min={30} max={3600} step={30} suffix="秒" className="wide-input" />
+            </Form.Item>
+            <Form.Item label="每轮最多路线" name="max_routes_per_run" rules={[{ required: true }]}>
+              <InputNumber min={1} max={20} className="wide-input" />
+            </Form.Item>
+            <Form.Item label="行情最大延迟" name="stale_after_seconds" rules={[{ required: true }]}>
+              <InputNumber min={5} max={300} suffix="秒" className="wide-input" />
+            </Form.Item>
+          </div>
+          <Button icon={<SaveOutlined />} onClick={() => void savePreadd()} loading={preaddSaving}>
+            保存预建规则
+          </Button>
+        </Form>
+        <Table<AstroPreaddCandidate>
+          className="opportunity-table funding-table"
+          size="small"
+          rowKey="id"
+          dataSource={preaddPreview?.items ?? []}
+          loading={preaddLoading}
+          pagination={{ pageSize: 10 }}
+          scroll={{ x: 810 }}
+          columns={[
+            { title: "标的", dataIndex: "symbol", width: 140 },
+            { title: "信号", width: 220, render: (_, row) => row.signal_type === "funding"
+              ? `${row.signal_exchange} ${row.funding_source === "predicted" ? "下期" : "当前"} ${signedPct(row.signal_value_pct)} / ${row.funding_interval_hours ?? "?"}h`
+              : `${row.signal_exchange} 溢价近似 ${signedPct(row.signal_value_pct)}` },
+            { title: "预建方向", width: 180, render: (_, row) => `${row.buy_exchange} → ${row.sell_exchange}` },
+            { title: "当前可成交价差", width: 150, render: (_, row) => signedPct(row.live_spread_pct) },
+            { title: "行情时间", width: 150, render: (_, row) => settlementTime(row.observed_at) },
+            { title: "操作", width: 80, render: (_, row) => (
+              <Button
+                type="link"
+                icon={<PlusOutlined />}
+                title="预建这条暂停卡片"
+                aria-label={`预建 ${row.symbol} ${row.buy_exchange} 到 ${row.sell_exchange}`}
+                disabled={preaddRunning}
+                onClick={() => confirmPreadd(row)}
+              />
+            ) }
+          ]}
+        />
       </section>
 
       <Table

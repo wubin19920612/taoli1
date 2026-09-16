@@ -9,6 +9,13 @@ from app.models.astro import (
     AstroPairPlan,
 )
 from app.models.astro import AstroSdkStatus
+from app.models.astro_preadd import (
+    PREADD_EXCHANGES,
+    AstroPreaddPreview,
+    AstroPreaddRunRequest,
+    AstroPreaddRunResult,
+    AstroPreaddSettings,
+)
 from app.models.instrument import INSTRUMENT_LOOKUP_EXCHANGES
 from app.models.market import MarketSnapshot, MarketType
 from app.models.opportunity import Opportunity
@@ -19,6 +26,7 @@ from app.core.security import dashboard_password_header, verify_dashboard_passwo
 from app.services.astro_client import AstroClientError, AstroSdkClient
 from app.services.data_filters import ignored_exchange_set, symbol_is_excluded
 from app.services.astro_planner import AstroPairPlanner, AstroPlannerConfig
+from app.services.astro_preadd import AstroPreaddService
 from app.services.instrument_spreads import instrument_market_age_seconds
 from app.services.spread_engine import Mode, build_directional_opportunity
 
@@ -338,6 +346,48 @@ async def _validate_order_book_before_create(
 async def get_astro_status(request: Request) -> AstroSdkStatus:
     client = _astro_client(request)
     return AstroSdkStatus.model_validate(client.status(request.app.state.settings.astro_dry_run_only))
+
+
+def _preadd_service(request: Request) -> AstroPreaddService:
+    service = getattr(request.app.state, "astro_preadd_service", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="预建卡片服务还没有准备好")
+    return service
+
+
+@router.get("/preadd/exchanges", response_model=list[str])
+async def preadd_exchanges() -> list[str]:
+    return list(PREADD_EXCHANGES)
+
+
+@router.get("/preadd/settings", response_model=AstroPreaddSettings)
+async def preadd_settings(request: Request) -> AstroPreaddSettings:
+    return await _settings_repo(request).get_astro_preadd_settings()
+
+
+@router.put("/preadd/settings", response_model=AstroPreaddSettings)
+async def save_preadd_settings(
+    settings: AstroPreaddSettings,
+    request: Request,
+    password: str | None = Depends(dashboard_password_header),
+) -> AstroPreaddSettings:
+    _require_dashboard_password(request, password)
+    return await _settings_repo(request).set_astro_preadd_settings(settings)
+
+
+@router.get("/preadd/preview", response_model=AstroPreaddPreview)
+async def preview_preadd(request: Request) -> AstroPreaddPreview:
+    return await _preadd_service(request).preview()
+
+
+@router.post("/preadd/run", response_model=AstroPreaddRunResult)
+async def run_preadd(
+    request: Request,
+    payload: AstroPreaddRunRequest | None = None,
+    password: str | None = Depends(dashboard_password_header),
+) -> AstroPreaddRunResult:
+    _require_dashboard_password(request, password)
+    return await _preadd_service(request).run(payload.candidate_ids if payload else None)
 
 
 @router.get("/pairs")

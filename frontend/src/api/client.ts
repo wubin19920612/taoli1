@@ -13,6 +13,9 @@ import type {
   AstroNewListingCardSettings,
   AstroPairStatus,
   AstroPairPlan,
+  AstroPreaddPreview,
+  AstroPreaddRunResult,
+  AstroPreaddSettings,
   AstroSdkStatus,
   FundingArbitragePreview,
   FundingArbitrageSettings,
@@ -352,6 +355,30 @@ export async function updateFundingArbitrageSettings(
 
 export async function getFundingArbitragePreview(): Promise<FundingArbitragePreview> {
   return fetchJson<FundingArbitragePreview>("/funding-arbitrage/preview");
+}
+
+export async function getAstroPreaddExchanges(): Promise<string[]> {
+  return fetchJson<string[]>("/astro/preadd/exchanges");
+}
+
+export async function getAstroPreaddSettings(): Promise<AstroPreaddSettings> {
+  return fetchJson<AstroPreaddSettings>("/astro/preadd/settings");
+}
+
+export async function updateAstroPreaddSettings(settings: AstroPreaddSettings): Promise<AstroPreaddSettings> {
+  return fetchJson<AstroPreaddSettings>("/astro/preadd/settings", {
+    method: "PUT", body: JSON.stringify(settings)
+  });
+}
+
+export async function getAstroPreaddPreview(): Promise<AstroPreaddPreview> {
+  return fetchJson<AstroPreaddPreview>("/astro/preadd/preview");
+}
+
+export async function runAstroPreadd(candidateIds?: string[]): Promise<AstroPreaddRunResult> {
+  return fetchJson<AstroPreaddRunResult>("/astro/preadd/run", {
+    method: "POST", body: JSON.stringify({ candidate_ids: candidateIds ?? null })
+  });
 }
 
 export async function getOpportunityRadarSettings(): Promise<OpportunityRadarSettings> {

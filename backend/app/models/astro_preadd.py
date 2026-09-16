@@ -1,0 +1,58 @@
+from datetime import datetime
+from typing import Literal
+
+from pydantic import BaseModel, Field, field_validator
+
+PREADD_EXCHANGES = ("bitget", "binance", "bybit", "gate", "okx", "hyperliquid", "lighter")
+
+
+class AstroPreaddSettings(BaseModel):
+    enabled: bool = False
+    exchanges: list[str] = Field(default_factory=lambda: ["bitget", "binance"])
+    funding_threshold_pct: float = Field(default=0.6, gt=0, le=100)
+    premium_threshold_pct: float = Field(default=1.0, gt=0, le=100)
+    open_spread_threshold_pct: float = Field(default=0.9, gt=0, le=100)
+    scan_interval_seconds: int = Field(default=60, ge=30, le=3600)
+    max_routes_per_run: int = Field(default=5, ge=1, le=20)
+    stale_after_seconds: int = Field(default=30, ge=5, le=300)
+
+    @field_validator("exchanges")
+    @classmethod
+    def valid_exchanges(cls, exchanges: list[str]) -> list[str]:
+        selected = list(dict.fromkeys(item.strip().lower() for item in exchanges))
+        if len(selected) < 2 or any(item not in PREADD_EXCHANGES for item in selected):
+            raise ValueError("至少选择两个支持的预建交易所")
+        return selected
+
+
+class AstroPreaddCandidate(BaseModel):
+    id: str
+    symbol: str
+    buy_exchange: str
+    sell_exchange: str
+    signal_exchange: str
+    signal_type: Literal["funding", "premium_proxy"]
+    signal_value_pct: float
+    funding_source: Literal["predicted", "current", "missing"]
+    funding_interval_hours: int | None = None
+    live_spread_pct: float
+    observed_at: datetime
+
+
+class AstroPreaddPreview(BaseModel):
+    items: list[AstroPreaddCandidate]
+    warnings: list[str] = Field(default_factory=list)
+    total_matches: int = 0
+
+
+class AstroPreaddRunRequest(BaseModel):
+    candidate_ids: list[str] | None = None
+
+
+class AstroPreaddRunResult(BaseModel):
+    attempted: int = 0
+    created: int = 0
+    skipped: int = 0
+    failed: int = 0
+    results: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)

@@ -1693,6 +1693,47 @@ export interface ServiceRestartResult {
 }
 
 export type FundingArbitrageDecision = "ENTER" | "HOLD" | "EXIT_SOON" | "EXIT_NOW" | "BLOCKED";
+
+export interface AstroPreaddSettings {
+  enabled: boolean;
+  exchanges: string[];
+  funding_threshold_pct: number;
+  premium_threshold_pct: number;
+  open_spread_threshold_pct: number;
+  scan_interval_seconds: number;
+  max_routes_per_run: number;
+  stale_after_seconds: number;
+}
+
+export interface AstroPreaddCandidate {
+  id: string;
+  symbol: string;
+  buy_exchange: string;
+  sell_exchange: string;
+  signal_exchange: string;
+  signal_type: "funding" | "premium_proxy";
+  signal_value_pct: number;
+  funding_source: "predicted" | "current" | "missing";
+  funding_interval_hours: number | null;
+  live_spread_pct: number;
+  observed_at: string;
+}
+
+export interface AstroPreaddPreview {
+  items: AstroPreaddCandidate[];
+  warnings: string[];
+  total_matches: number;
+}
+
+export interface AstroPreaddRunResult {
+  attempted: number;
+  created: number;
+  skipped: number;
+  failed: number;
+  results: string[];
+  warnings: string[];
+}
+
 export type FundingSource = "predicted" | "fallback_current" | "missing";
 export type AdlRiskLevel = "LOW" | "MEDIUM" | "HIGH" | "BLOCKED";
 
