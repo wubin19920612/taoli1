@@ -30,6 +30,10 @@ describe("Astro preadd controls", () => {
           id: "eth-bitget-binance", symbol: "ETHUSDT", buy_exchange: "binance",
           sell_exchange: "bitget", signal_exchange: "bitget", signal_type: "funding",
           signal_value_pct: 0.8, funding_source: "predicted", funding_interval_hours: 8,
+          buy_leg: { exchange: "binance", premium_index_pct: -0.12, funding_rate_pct: 0.01,
+            funding_interval_hours: 8, volume_24h_usdt: 12_500_000 },
+          sell_leg: { exchange: "bitget", premium_index_pct: 1.25, funding_rate_pct: 0.08,
+            funding_interval_hours: 4, volume_24h_usdt: 8_400_000 },
           live_spread_pct: -0.2, observed_at: "2026-09-16T02:00:00Z"
         }] });
       }
@@ -54,6 +58,12 @@ describe("Astro preadd controls", () => {
     render(<FundingArbitragePage />);
     expect(await screen.findByText("Astro 交易对预建")).toBeTruthy();
     expect(await screen.findByText("bitget 下期 +0.800% / 8h")).toBeTruthy();
+    expect(screen.getByText("溢价 -0.120%")).toBeTruthy();
+    expect(screen.getByText("资金费 +0.0100% / 8h")).toBeTruthy();
+    expect(screen.getByText("24h 12.50M USDT")).toBeTruthy();
+    expect(screen.getByText("溢价 +1.250%")).toBeTruthy();
+    expect(screen.getByText("资金费 +0.0800% / 4h")).toBeTruthy();
+    expect(screen.getByText("24h 8.40M USDT")).toBeTruthy();
     expect(screen.getByText("自动监测关闭")).toBeTruthy();
 
     const fundingInput = screen.getByLabelText("资金费绝对值（单次结算）");

@@ -9,6 +9,7 @@ from time import monotonic
 
 from app.models.astro_preadd import (
     AstroPreaddCandidate,
+    AstroPreaddLegSnapshot,
     AstroPreaddPreview,
     AstroPreaddRunResult,
     AstroPreaddSettings,
@@ -37,6 +38,20 @@ def _premium_proxy(market: MarketSnapshot) -> float | None:
         return None
     value = (market.mark_price / market.index_price - 1) * 100
     return value if isfinite(value) else None
+
+
+def _finite_or_none(value: float | None) -> float | None:
+    return value if value is not None and isfinite(value) else None
+
+
+def _leg_snapshot(market: MarketSnapshot) -> AstroPreaddLegSnapshot:
+    return AstroPreaddLegSnapshot(
+        exchange=market.exchange,
+        premium_index_pct=_premium_proxy(market),
+        funding_rate_pct=_finite_or_none(market.funding_rate_pct),
+        funding_interval_hours=market.funding_interval_hours,
+        volume_24h_usdt=_finite_or_none(market.volume_24h_usdt),
+    )
 
 
 def _candidate_id(symbol: str, buy: str, sell: str) -> str:
@@ -114,6 +129,8 @@ def find_preadd_candidates(
                 signal_value_pct=value,
                 funding_source=source,
                 funding_interval_hours=signal_market.funding_interval_hours if kind == "funding" else None,
+                buy_leg=_leg_snapshot(buy),
+                sell_leg=_leg_snapshot(sell),
                 live_spread_pct=spread,
                 observed_at=min(left.timestamp, right.timestamp),
             )))

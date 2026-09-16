@@ -23,6 +23,7 @@ def market(
     interval: int = 8,
     mark: float = 100,
     index: float = 100,
+    volume: float | None = 1_000_000,
     timestamp: datetime | None = None,
 ) -> MarketSnapshot:
     return MarketSnapshot(
@@ -30,6 +31,7 @@ def market(
         market_type=MarketType.FUTURE, bid=99, ask=101,
         funding_rate_pct=funding, funding_next_rate_pct=predicted,
         funding_interval_hours=interval, mark_price=mark, index_price=index,
+        volume_24h_usdt=volume,
         raw_symbol=symbol, timestamp=timestamp or datetime.now(UTC),
     )
 
@@ -84,6 +86,14 @@ def test_preadd_funding_uses_prediction_then_current_with_explicit_cycle():
     assert item.funding_source == "predicted"
     assert item.funding_interval_hours == 4
     assert (item.buy_exchange, item.sell_exchange) == ("binance", "bitget")
+    assert item.buy_leg.exchange == "binance"
+    assert item.buy_leg.funding_rate_pct == pytest.approx(0.01)
+    assert item.buy_leg.funding_interval_hours == 8
+    assert item.buy_leg.premium_index_pct == pytest.approx(0)
+    assert item.buy_leg.volume_24h_usdt == pytest.approx(1_000_000)
+    assert item.sell_leg.exchange == "bitget"
+    assert item.sell_leg.funding_rate_pct == pytest.approx(-0.1)
+    assert item.sell_leg.funding_interval_hours == 4
     rows[0] = market("bitget", funding=-0.75, interval=8)
     [item] = find_preadd_candidates(rows, AstroPreaddSettings()).items
     assert item.funding_source == "current"
@@ -98,6 +108,7 @@ def test_preadd_proxy_and_conflicting_or_stale_signals_fail_closed():
     assert item.signal_type == "premium_proxy"
     assert item.signal_value_pct == pytest.approx(2)
     assert item.sell_exchange == "bitget"
+    assert item.sell_leg.premium_index_pct == pytest.approx(2)
     conflicting = find_preadd_candidates([
         market("bitget", predicted=0.8), market("binance", predicted=0.9)
     ], config)

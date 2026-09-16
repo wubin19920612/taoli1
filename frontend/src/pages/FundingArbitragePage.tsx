@@ -34,6 +34,7 @@ import {
 import type {
   AdlRiskLevel,
   AstroPreaddCandidate,
+  AstroPreaddLegSnapshot,
   AstroPreaddPreview,
   AstroPreaddRunResult,
   AstroPreaddSettings,
@@ -175,6 +176,20 @@ function compactMoney(value: number | null | undefined): string {
     return `${(value / 1_000).toFixed(1)}K`;
   }
   return value.toFixed(0);
+}
+
+function preaddLegCell(snapshot: AstroPreaddLegSnapshot, side: "buy" | "sell") {
+  return (
+    <Space direction="vertical" size={0}>
+      <Space size={4}>
+        <Tag color={side === "buy" ? "green" : "red"}>{side === "buy" ? "多" : "空"}</Tag>
+        <Typography.Text strong>{preaddExchangeLabels[snapshot.exchange] ?? snapshot.exchange}</Typography.Text>
+      </Space>
+      <Typography.Text>{`溢价 ${signedPct(snapshot.premium_index_pct)}`}</Typography.Text>
+      <Typography.Text>{`资金费 ${signedPct(snapshot.funding_rate_pct, 4)} / ${intervalHours(snapshot.funding_interval_hours)}`}</Typography.Text>
+      <Typography.Text type="secondary">{`24h ${compactMoney(snapshot.volume_24h_usdt)} USDT`}</Typography.Text>
+    </Space>
+  );
 }
 
 function leg(
@@ -763,13 +778,14 @@ export function FundingArbitragePage() {
           dataSource={preaddPreview?.items ?? []}
           loading={preaddLoading}
           pagination={{ pageSize: 10 }}
-          scroll={{ x: 810 }}
+          scroll={{ x: 1240 }}
           columns={[
             { title: "标的", dataIndex: "symbol", width: 140 },
             { title: "信号", width: 220, render: (_, row) => row.signal_type === "funding"
               ? `${row.signal_exchange} ${row.funding_source === "predicted" ? "下期" : "当前"} ${signedPct(row.signal_value_pct)} / ${row.funding_interval_hours ?? "?"}h`
               : `${row.signal_exchange} 溢价近似 ${signedPct(row.signal_value_pct)}` },
-            { title: "预建方向", width: 180, render: (_, row) => `${row.buy_exchange} → ${row.sell_exchange}` },
+            { title: "做多侧行情", width: 220, render: (_, row) => preaddLegCell(row.buy_leg, "buy") },
+            { title: "做空侧行情", width: 220, render: (_, row) => preaddLegCell(row.sell_leg, "sell") },
             { title: "当前可成交价差", width: 150, render: (_, row) => signedPct(row.live_spread_pct) },
             { title: "行情时间", width: 150, render: (_, row) => settlementTime(row.observed_at) },
             { title: "操作", width: 80, render: (_, row) => (

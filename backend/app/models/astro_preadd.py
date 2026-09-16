@@ -25,6 +25,14 @@ class AstroPreaddSettings(BaseModel):
         return selected
 
 
+class AstroPreaddLegSnapshot(BaseModel):
+    exchange: str
+    premium_index_pct: float | None = None
+    funding_rate_pct: float | None = None
+    funding_interval_hours: int | None = None
+    volume_24h_usdt: float | None = None
+
+
 class AstroPreaddCandidate(BaseModel):
     id: str
     symbol: str
@@ -35,6 +43,8 @@ class AstroPreaddCandidate(BaseModel):
     signal_value_pct: float
     funding_source: Literal["predicted", "current", "missing"]
     funding_interval_hours: int | None = None
+    buy_leg: AstroPreaddLegSnapshot
+    sell_leg: AstroPreaddLegSnapshot
     live_spread_pct: float
     observed_at: datetime
 

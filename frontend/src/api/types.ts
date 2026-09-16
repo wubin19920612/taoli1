@@ -1705,6 +1705,14 @@ export interface AstroPreaddSettings {
   stale_after_seconds: number;
 }
 
+export interface AstroPreaddLegSnapshot {
+  exchange: string;
+  premium_index_pct: number | null;
+  funding_rate_pct: number | null;
+  funding_interval_hours: number | null;
+  volume_24h_usdt: number | null;
+}
+
 export interface AstroPreaddCandidate {
   id: string;
   symbol: string;
@@ -1715,6 +1723,8 @@ export interface AstroPreaddCandidate {
   signal_value_pct: number;
   funding_source: "predicted" | "current" | "missing";
   funding_interval_hours: number | null;
+  buy_leg: AstroPreaddLegSnapshot;
+  sell_leg: AstroPreaddLegSnapshot;
   live_spread_pct: number;
   observed_at: string;
 }
