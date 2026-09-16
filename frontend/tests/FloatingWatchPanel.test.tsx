@@ -391,7 +391,7 @@ describe("FloatingWatchPanel", () => {
     render(<FloatingWatchPanel visible onClose={vi.fn()} />);
     const panel = await screen.findByRole("complementary", { name: "关注浮窗" });
 
-    await userEvent.click(await within(panel).findByText("Astro 3"));
+    await userEvent.click(await within(panel).findByText("Astro 3 · 1 持仓"));
 
     expect(await within(panel).findByText("ANTHROPIC-ANTHROPIC")).not.toBeNull();
     expect(within(panel).getByText("持仓中")).not.toBeNull();
@@ -419,6 +419,35 @@ describe("FloatingWatchPanel", () => {
     expect(within(panel).queryByText("STEEM")).toBeNull();
     expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("/astro/pairs"))).toBe(true);
     expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("/instruments/ANTHROPICUSDT"))).toBe(true);
+  });
+
+  it("marks watched symbols that have an active Astro position as trading", async () => {
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/settings/floating-watch")) {
+        return Response.json({ symbols: ["ANTHROPICUSDT", "OPENAIUSDT", "STEEMUSDT"], pair_ids: [] });
+      }
+      if (url.includes("/astro/pairs")) return Response.json(astroPairs);
+      if (url.includes("/instruments/ANTHROPICUSDT")) return Response.json(astroAnthropicInstrument);
+      if (url.includes("/instruments/OPENAIUSDT")) return Response.json(astroOpenAiInstrument);
+      if (url.includes("/instruments/")) return Response.json(instrument);
+      return Response.json({});
+    });
+
+    render(<FloatingWatchPanel visible onClose={vi.fn()} />);
+    const panel = await screen.findByRole("complementary", { name: "关注浮窗" });
+    const anthropic = await within(panel).findByText("ANTHROPIC");
+    const openAi = within(panel).getByText("OPENAI");
+    const steem = within(panel).getByText("STEEM");
+    const anthropicRow = anthropic.closest(".floating-watch-row") as HTMLElement;
+    const openAiRow = openAi.closest(".floating-watch-row") as HTMLElement;
+    const steemRow = steem.closest(".floating-watch-row") as HTMLElement;
+
+    expect(within(anthropicRow).getByText("交易中")).not.toBeNull();
+    expect(anthropicRow.classList.contains("floating-watch-row-trading")).toBe(true);
+    expect(within(openAiRow).queryByText("交易中")).toBeNull();
+    expect(within(steemRow).queryByText("交易中")).toBeNull();
+    expect(within(panel).getByText("Astro 3 · 1 持仓")).not.toBeNull();
   });
 
   it("estimates missing Astro profit with exchange-specific fees and labels the fallback", async () => {
@@ -499,7 +528,7 @@ describe("FloatingWatchPanel", () => {
 
     render(<FloatingWatchPanel visible onClose={vi.fn()} />);
     const panel = await screen.findByRole("complementary", { name: "关注浮窗" });
-    await userEvent.click(await within(panel).findByText("Astro 4"));
+    await userEvent.click(await within(panel).findByText("Astro 4 · 4 持仓"));
 
     const standardCard = within(panel).getByText("STANDARD").closest(".floating-watch-astro-row") as HTMLElement;
     expect(await within(standardCard).findByText("+688.00 U")).not.toBeNull();

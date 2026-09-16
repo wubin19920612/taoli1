@@ -607,6 +607,16 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
     () => astroPairs.filter((pair) => pair.status === true),
     [astroPairs]
   );
+  const tradingAstroPairs = useMemo(
+    () => runningAstroPairs.filter(astroHasPosition),
+    [runningAstroPairs]
+  );
+  const tradingSymbols = useMemo(
+    () => new Set(
+      tradingAstroPairs.flatMap((pair) => astroLegs(pair)?.map((leg) => leg.symbol) ?? [])
+    ),
+    [tradingAstroPairs]
+  );
 
   if (!visible) return null;
 
@@ -764,7 +774,10 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
             options={[
               { label: `标的 ${settings.symbols.length}`, value: "symbols" },
               { label: `交易对 ${settings.pair_ids.length}`, value: "pairs" },
-              { label: `Astro ${runningAstroPairs.length}`, value: "astro" }
+              {
+                label: `Astro ${runningAstroPairs.length}${tradingAstroPairs.length ? ` · ${tradingAstroPairs.length} 持仓` : ""}`,
+                value: "astro"
+              }
             ]}
             onChange={(value) => setMode(value as WatchMode)}
           />
@@ -780,13 +793,22 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
               {settings.symbols.map((symbol) => {
                 const state = instruments[symbol];
                 const range = instrumentPriceRange(state?.result ?? null);
+                const isTrading = tradingSymbols.has(astroSymbol(symbol));
                 const bestSpread = state?.result?.spreads.length
                   ? Math.max(...state.result.spreads.map((spread) => spread.executable_spread_pct))
                   : null;
                 return (
-                  <div className="floating-watch-row" key={symbol}>
+                  <div className={`floating-watch-row${isTrading ? " floating-watch-row-trading" : ""}`} key={symbol}>
                     <button className="floating-watch-row-main" type="button" onClick={() => openInstrument(symbol, standalone)}>
-                      <span className="floating-watch-row-title">{symbol.replace(/USDT$/, "")}</span>
+                      <span className="floating-watch-row-title floating-watch-symbol-title">
+                        <span>{symbol.replace(/USDT$/, "")}</span>
+                        {isTrading ? (
+                          <span className="floating-watch-trading-status">
+                            <span className="floating-watch-trading-dot" aria-hidden="true" />
+                            交易中
+                          </span>
+                        ) : null}
+                      </span>
                       <span className="floating-watch-row-sub">{range ? `${price(range.min)} - ${price(range.max)}` : state?.error || "等待刷新"}</span>
                       <span className={`floating-watch-value floating-watch-value-${tone(bestSpread)}`}>{signedPct(bestSpread)}</span>
                     </button>

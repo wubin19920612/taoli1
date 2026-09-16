@@ -265,6 +265,11 @@ body {
   border-bottom: 0;
 }
 
+.floating-watch-row-trading {
+  background: #f2faf6;
+  box-shadow: inset 3px 0 #16a34a;
+}
+
 .floating-watch-row-main {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -288,6 +293,37 @@ body {
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.floating-watch-symbol-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.floating-watch-symbol-title > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.floating-watch-trading-status {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  color: #0f766e;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.floating-watch-trading-dot {
+  width: 6px;
+  height: 6px;
+  background: #16a34a;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px rgb(22 163 74 / 14%);
 }
 
 .floating-watch-row-sub {
