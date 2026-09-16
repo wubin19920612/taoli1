@@ -356,6 +356,38 @@ async def test_missing_pair_creates_paused_disable_open_card() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("manual", [False, True])
+async def test_lighter_creation_writes_only_gc_routes_even_with_existing_plain_card(manual: bool) -> None:
+    client = FakeAstroClient(pairs=[{"name": "BTC", "type": "FF", "buyEx": "lighter", "sellEx": "okx"}])
+    service = AstroAlertService(
+        client,
+        Settings(astro_alert_auto_create=True, astro_manual_card_create=True, astro_dry_run_only=False),
+        add_restart_delay_seconds=0,
+    )
+    opp = opportunity().model_copy(update={"buy_exchange": "lighter"})
+    result = await (service.handle_manual_create(opp) if manual else service.handle_alert(opp))
+    assert result.status == "created"
+    assert [(pair["buyEx"], pair["sellEx"]) for pair in client.added] == [
+        ("gc-lighter", "gc-okx")
+    ]
+    assert client.updated == []
+
+
+@pytest.mark.asyncio
+async def test_lighter_unknown_counterparty_never_calls_astro() -> None:
+    client = FakeAstroClient()
+    service = AstroAlertService(
+        client, Settings(astro_manual_card_create=True, astro_dry_run_only=False)
+    )
+    result = await service.handle_manual_create(
+        opportunity().model_copy(update={"buy_exchange": "lighter", "sell_exchange": "aster"})
+    )
+    assert result.action == "unsupported"
+    assert client.list_calls == 0
+    assert client.added == []
+
+
+@pytest.mark.asyncio
 async def test_new_listing_alert_creates_open_card_even_when_default_is_paused() -> None:
     client = FakeAstroClient()
     service = AstroAlertService(

@@ -7,7 +7,7 @@ from app.models.market import MarketType
 from app.models.opportunity import Opportunity, OpportunityType
 from app.models.settings import AstroCardSettings
 from app.services.funding_edge import current_cycle_funding_edge_pct, next_cycle_funding_edge_pct
-from app.services.market_labels import astro_exchange_id
+from app.services.market_labels import astro_exchange_id, astro_exchange_route_variants
 from app.services.market_sessions import is_opportunity_tradable
 
 
@@ -309,6 +309,12 @@ class AstroPairPlanner:
             opportunity.sell_raw_symbol,
             opportunity.symbol,
         )
+        if "lighter" in {opportunity.buy_exchange.lower(), opportunity.sell_exchange.lower()}:
+            routes = astro_exchange_route_variants(buy_astro_exchange, sell_astro_exchange)
+            if routes:
+                buy_astro_exchange, sell_astro_exchange = routes[0]
+            else:
+                blockers.append("gc-lighter 仅支持与已知 GC 或 Bitget 路由配对，未提交未知路由。")
 
         assumptions = [
             AstroFieldAssumption(
@@ -346,7 +352,8 @@ class AstroPairPlanner:
                 assumed_value=f"{buy_astro_exchange}->{sell_astro_exchange}",
                 note=(
                     "Uses Astro exchange ids; Hyperliquid is mapped to hl and Bitget "
-                    "RToken stock spot is mapped from bitget to bitgetr."
+                    "RToken stock spot is mapped from bitget to bitgetr. "
+                    "Lighter cards use only gc-lighter, with a GC or Bitget counterparty."
                 ),
             ),
         ]

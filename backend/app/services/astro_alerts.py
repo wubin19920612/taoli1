@@ -286,6 +286,18 @@ class AstroAlertService:
             pair_enabled = effective_card_settings.open_enabled
         pair = _with_card_enabled(plan.pair, pair_enabled)
         pair_variants = _pair_variants(pair)
+        if not pair_variants or any(
+            "lighter" in {planned["buyEx"], planned["sellEx"]}
+            for planned in pair_variants
+        ):
+            return with_manual_warnings(
+                AstroAlertActionResult(
+                    enabled=True,
+                    status="skipped",
+                    action="unsupported",
+                    message="Lighter 卡片只允许 gc-lighter 路由，未提交普通 lighter 或未知配对",
+                )
+            )
         pair_name = str(pair.get("name", ""))
         pair_type = str(pair.get("type", ""))
 
@@ -308,6 +320,10 @@ class AstroAlertService:
             existing
             for existing in same_name_pairs
             if not any(_same_route(existing, planned) for planned in pair_variants)
+            and not (
+                any("gc-lighter" in {planned["buyEx"], planned["sellEx"]} for planned in pair_variants)
+                and "lighter" in {existing.get("buyEx"), existing.get("sellEx")}
+            )
         ]
         if conflicting_pairs and not self.allow_same_name_variants and not manual_override:
             return AstroAlertActionResult(

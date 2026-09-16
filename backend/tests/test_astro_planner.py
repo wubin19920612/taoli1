@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from app.models.market import MarketType
 from app.models.opportunity import Opportunity, OpportunityType
 from app.services.astro_planner import AstroPairPlanner, AstroPlannerConfig
+from app.services.market_labels import astro_exchange_route_variants
 
 
 def opportunity(
@@ -72,6 +73,31 @@ def test_ff_opportunity_builds_safe_dry_run_pair() -> None:
     assert any(item.field == "openPosition" and item.assumed_value == "0.008000" for item in plan.assumptions)
     assert any(item.field == "closePosition" and "predicted funding is favorable" in item.note for item in plan.assumptions)
     assert any(item.field == "name" and item.needs_verification for item in plan.assumptions)
+
+
+def test_lighter_preview_routes_only_to_gc_lighter() -> None:
+    planner = AstroPairPlanner()
+    for buy, sell, expected in (
+        ("lighter", "binance", ("gc-lighter", "gc-binance")),
+        ("bitget", "lighter", ("bitget", "gc-lighter")),
+        ("lighter", "lighter", ("gc-lighter", "gc-lighter")),
+    ):
+        plan = planner.plan(opportunity().model_copy(update={"buy_exchange": buy, "sell_exchange": sell}))
+        assert plan.can_submit is True
+        assert (plan.pair["buyEx"], plan.pair["sellEx"]) == expected
+        assert astro_exchange_route_variants(*expected) == [expected]
+    assert astro_exchange_route_variants("lighter", "okx") == [("gc-lighter", "gc-okx")]
+    assert astro_exchange_route_variants("okx", "lighter") == [("gc-okx", "gc-lighter")]
+
+
+def test_lighter_unknown_counterparty_is_blocked_even_for_manual_preview() -> None:
+    plan = AstroPairPlanner().plan(
+        opportunity().model_copy(update={"buy_exchange": "lighter", "sell_exchange": "aster"}),
+        allow_manual_override=True,
+    )
+    assert not plan.can_submit
+    assert plan.pair is None
+    assert "gc-lighter" in plan.blockers[0]
 
 
 def test_ss_opportunity_is_blocked_because_astro_sdk_does_not_document_ss() -> None:

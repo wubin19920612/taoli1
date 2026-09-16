@@ -4,6 +4,7 @@ from itertools import combinations
 from app.models.instrument import InstrumentSpreadComparison
 from app.models.market import MarketSnapshot, MarketType
 from app.models.opportunity import OpportunityType
+from app.services.market_labels import astro_exchange_route_variants
 from app.services.spread_engine import midpoint_spread_pct
 
 
@@ -36,8 +37,10 @@ def _astro_support(
     buy_market: MarketSnapshot,
     sell_market: MarketSnapshot,
 ) -> tuple[bool, str | None]:
-    if "lighter" in {buy_market.exchange, sell_market.exchange}:
-        return False, "Astro 暂不支持 Lighter 交易所下单"
+    if "lighter" in {buy_market.exchange, sell_market.exchange} and not astro_exchange_route_variants(
+        buy_market.exchange, sell_market.exchange
+    ):
+        return False, "gc-lighter 仅支持与已知 GC 或 Bitget 路由配对"
     if executable_spread_pct <= 0:
         return False, "当前买一卖一没有正向可成交价差"
     if opportunity_type in {OpportunityType.SF, OpportunityType.FF}:

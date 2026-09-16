@@ -4,7 +4,16 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import Any
 
-from app.exchanges.base import ExchangeAdapter, next_aligned_funding_time, order_book_snapshot, parse_float, utc_now
+import httpx
+
+from app.exchanges.base import (
+    ExchangeAdapter,
+    ExchangeRequestError,
+    next_aligned_funding_time,
+    order_book_snapshot,
+    parse_float,
+    utc_now,
+)
 from app.models.market import MarketSnapshot, MarketType
 from app.models.orderbook import OrderBookSnapshot
 
@@ -52,14 +61,71 @@ def lighter_best_prices(payload: Any) -> tuple[float, float, float, float] | Non
 
 class LighterAdapter(ExchangeAdapter):
     name = "lighter"
-    max_concurrent_books = 8
+    max_concurrent_books = 4
     book_refresh_seconds = 12
+    details_refresh_seconds = 60
+    details_fallback_seconds = 300
     max_scanner_perp_markets = 48
 
     def __init__(self, client=None):
         super().__init__(client)
+        self._owns_client = client is None
         self._markets: dict[tuple[MarketType, str], int] = {}
         self._cached: dict[MarketType, tuple[datetime, list[MarketSnapshot]]] = {}
+        self._details: tuple[datetime, dict[str, Any]] | None = None
+        self._details_retry_after: datetime | None = None
+        self._details_lock = asyncio.Lock()
+
+    async def _market_details(self) -> dict[str, Any]:
+        async with self._details_lock:
+            now = utc_now()
+            cached = self._details
+            if cached and (
+                now - cached[0] < timedelta(seconds=self.details_refresh_seconds)
+                or self._details_retry_after is not None
+                and now < self._details_retry_after
+                and now - cached[0] < timedelta(seconds=self.details_fallback_seconds)
+            ):
+                return cached[1]
+            try:
+                details = await self.get_json(f"{LIGHTER_URL}/orderBookDetails")
+            except ExchangeRequestError as exc:
+                status_405 = (
+                    isinstance(exc.original, httpx.HTTPStatusError)
+                    and exc.original.response.status_code == 405
+                )
+                if not status_405:
+                    raise
+                if self._owns_client:
+                    await self.reset_client()
+                    try:
+                        details = await self.get_json(f"{LIGHTER_URL}/orderBookDetails")
+                    except (ExchangeRequestError, httpx.HTTPError, ValueError):
+                        details = None
+                else:
+                    details = None
+                if details is None:
+                    if cached and now - cached[0] < timedelta(seconds=self.details_fallback_seconds):
+                        self._details_retry_after = now + timedelta(seconds=30)
+                        return cached[1]
+                    raise
+            if not isinstance(details, dict) or details.get("code") != 200:
+                raise RuntimeError("invalid Lighter orderBookDetails response")
+            if not all(isinstance(details.get(key), list) for key in (
+                "order_book_details", "spot_order_book_details"
+            )):
+                raise RuntimeError("missing Lighter market details")
+            self._details = (utc_now(), details)
+            self._details_retry_after = None
+            self._markets.clear()
+            for market_type, key in (
+                (MarketType.FUTURE, "order_book_details"),
+                (MarketType.SPOT, "spot_order_book_details"),
+            ):
+                for row in details[key]:
+                    if isinstance(row, dict) and row.get("status") == "active" and isinstance(row.get("market_id"), int):
+                        self._markets[(market_type, str(row.get("symbol", "")))] = row["market_id"]
+            return details
 
     async def fetch_spot_tickers(self) -> list[MarketSnapshot]:
         return await self._fetch_tickers(MarketType.SPOT)
@@ -73,9 +139,7 @@ class LighterAdapter(ExchangeAdapter):
         if cached and now - cached[0] < timedelta(seconds=self.book_refresh_seconds):
             return cached[1]
 
-        details = await self.get_json(f"{LIGHTER_URL}/orderBookDetails")
-        if not isinstance(details, dict) or details.get("code") != 200:
-            raise RuntimeError("invalid Lighter orderBookDetails response")
+        details = await self._market_details()
         key = "spot_order_book_details" if market_type == MarketType.SPOT else "order_book_details"
         rows = details.get(key)
         if not isinstance(rows, list):
@@ -154,9 +218,9 @@ class LighterAdapter(ExchangeAdapter):
     ) -> OrderBookSnapshot | None:
         market_id = self._markets.get((market_type, raw_symbol))
         if market_id is None:
-            details = await self.get_json(f"{LIGHTER_URL}/orderBookDetails")
+            details = await self._market_details()
             key = "spot_order_book_details" if market_type == MarketType.SPOT else "order_book_details"
-            for row in details.get(key, []) if isinstance(details, dict) else []:
+            for row in details.get(key, []) if isinstance(details.get(key), list) else []:
                 if isinstance(row, dict) and row.get("symbol") == raw_symbol and row.get("status") == "active":
                     market_id = row.get("market_id")
                     break

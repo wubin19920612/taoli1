@@ -144,6 +144,22 @@ def test_instrument_astro_preview_uses_selected_live_market_direction() -> None:
     assert not any("Dry-run only" in warning for warning in payload["warnings"])
 
 
+def test_instrument_astro_preview_never_offers_plain_lighter_route() -> None:
+    app = instrument_app()
+    app.state.snapshot_store.set_all_markets([
+        market("lighter", bid=99, ask=100), market("binance", bid=101, ask=102)
+    ])
+    selected = {
+        **route(), "buy_exchange": "lighter", "sell_exchange": "binance"
+    }
+    with TestClient(app) as client:
+        response = client.post("/api/astro/instrument/preview", json=selected)
+    assert response.status_code == 200
+    pair = response.json()["pair"]
+    assert pair["buyEx"] == "gc-lighter"
+    assert pair["sellEx"] == "gc-binance"
+
+
 def test_instrument_astro_preview_explains_when_confirm_will_write_to_astro() -> None:
     app = instrument_app(astro_dry_run_only=False)
 

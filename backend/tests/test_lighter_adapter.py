@@ -2,8 +2,10 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, urlparse
 
+import httpx
 import pytest
 
+from app.exchanges.base import ExchangeRequestError
 from app.exchanges.lighter import LighterAdapter, lighter_best_prices
 from app.models.market import MarketType
 from app.models.pair_spread import PairSpreadLegQuery
@@ -65,6 +67,7 @@ async def test_lighter_collects_active_perps_and_spot_with_real_book_and_funding
         assert spot[0].raw_symbol == "ETH/USDC"
         assert spot[0].funding_rate_pct is None
         assert "market_id=5" not in " ".join(urls)
+        assert len([url for url in urls if url.endswith("orderBookDetails")]) == 1
     finally:
         await adapter.client.aclose()
 
@@ -72,7 +75,8 @@ async def test_lighter_collects_active_perps_and_spot_with_real_book_and_funding
 @pytest.mark.asyncio
 async def test_lighter_order_book_uses_market_id_and_remaining_size(monkeypatch) -> None:
     async def fake_get(self, url: str):
-        return {"code": 200, "order_book_details": [detail("ETH", 0)]} if url.endswith("orderBookDetails") else book()
+        return {"code": 200, "order_book_details": [detail("ETH", 0)],
+                "spot_order_book_details": []} if url.endswith("orderBookDetails") else book()
 
     monkeypatch.setattr(LighterAdapter, "get_json", fake_get)
     adapter = LighterAdapter()
@@ -81,6 +85,105 @@ async def test_lighter_order_book_uses_market_id_and_remaining_size(monkeypatch)
         assert result is not None
         assert result.bids[0].size == 2
         assert result.raw_symbol == "ETH"
+    finally:
+        await adapter.client.aclose()
+
+
+def details_405() -> ExchangeRequestError:
+    request = httpx.Request("GET", "https://mainnet.zklighter.elliot.ai/api/v1/orderBookDetails")
+    response = httpx.Response(405, request=request)
+    return ExchangeRequestError("GET", str(request.url), httpx.HTTPStatusError("405", request=request, response=response))
+
+
+@pytest.mark.asyncio
+async def test_lighter_concurrent_market_types_share_details_fetch(monkeypatch) -> None:
+    calls = 0
+
+    async def fake_get(self, url: str):
+        nonlocal calls
+        if url.endswith("orderBookDetails"):
+            calls += 1
+            await asyncio.sleep(0)
+            return {"code": 200, "order_book_details": [detail("ETH", 0)],
+                    "spot_order_book_details": [detail("ETH/USDC", 2048, "spot")]}
+        if url.endswith("funding-rates"):
+            return {"code": 200, "funding_rates": []}
+        return book()
+
+    monkeypatch.setattr(LighterAdapter, "get_json", fake_get)
+    adapter = LighterAdapter()
+    try:
+        future, spot = await asyncio.gather(adapter.fetch_future_tickers(), adapter.fetch_spot_tickers())
+        assert future and spot
+        assert calls == 1
+    finally:
+        await adapter.client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_lighter_405_uses_short_lived_details_but_refreshes_prices_and_recovers(monkeypatch) -> None:
+    calls = 0
+    price = "99"
+    rejecting = False
+    resets = 0
+
+    async def fake_get(self, url: str):
+        nonlocal calls
+        if url.endswith("orderBookDetails"):
+            calls += 1
+            if rejecting:
+                raise details_405()
+            return {"code": 200, "order_book_details": [detail("ETH", 0)], "spot_order_book_details": []}
+        if url.endswith("funding-rates"):
+            return {"code": 200, "funding_rates": []}
+        return book(bid=price)
+
+    async def fake_reset(self):
+        nonlocal resets
+        resets += 1
+
+    monkeypatch.setattr(LighterAdapter, "get_json", fake_get)
+    monkeypatch.setattr(LighterAdapter, "reset_client", fake_reset)
+    adapter = LighterAdapter()
+    try:
+        first = await adapter.fetch_future_tickers()
+        assert first[0].bid == 99
+        adapter._details = (datetime.now(UTC) - timedelta(seconds=61), adapter._details[1])
+        adapter._cached.clear()
+        price, rejecting = "98", True
+        fallback = await adapter.fetch_future_tickers()
+        assert fallback[0].bid == 98
+        assert fallback[0].timestamp >= first[0].timestamp
+        assert calls == 3 and resets == 1
+        adapter._cached.clear()
+        await adapter.fetch_future_tickers()
+        assert calls == 3  # 30-second cooldown, books still refresh.
+        adapter._details_retry_after = datetime.now(UTC) - timedelta(seconds=1)
+        adapter._cached.clear()
+        rejecting = False
+        await adapter.fetch_future_tickers()
+        assert calls == 4
+        assert adapter._details_retry_after is None
+    finally:
+        await adapter.client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_lighter_405_without_recent_details_fails_closed(monkeypatch) -> None:
+    async def fake_get(self, url: str):
+        if url.endswith("orderBookDetails"):
+            raise details_405()
+        return book()
+
+    async def fake_reset(self):
+        return None
+
+    monkeypatch.setattr(LighterAdapter, "get_json", fake_get)
+    monkeypatch.setattr(LighterAdapter, "reset_client", fake_reset)
+    adapter = LighterAdapter()
+    try:
+        with pytest.raises(ExchangeRequestError):
+            await adapter.fetch_future_tickers()
     finally:
         await adapter.client.aclose()
 

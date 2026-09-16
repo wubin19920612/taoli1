@@ -88,7 +88,7 @@ def test_build_instrument_spreads_excludes_stale_market_snapshots() -> None:
     assert comparisons == []
 
 
-def test_lighter_spread_is_visible_but_not_astro_executable() -> None:
+def test_lighter_spread_is_visible_with_gc_route() -> None:
     now = datetime(2026, 9, 13, tzinfo=UTC)
     [comparison] = build_instrument_spreads(
         [
@@ -99,5 +99,5 @@ def test_lighter_spread_is_visible_but_not_astro_executable() -> None:
     )
 
     assert comparison.executable_spread_pct > 0
-    assert comparison.astro_supported is False
-    assert "Lighter" in comparison.astro_blocker
+    assert comparison.astro_supported is True
+    assert comparison.astro_blocker is None
