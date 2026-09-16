@@ -882,8 +882,17 @@ def create_app(
         app.state.astro_alert_service.risk_settings_loader = (
             app.state.settings_repo.get_risk_settings
         )
+        preadd_notifier = getattr(app.state, "feishu_notifier", None)
+        preadd_alert_sender = (
+            preadd_notifier.send_text
+            if getattr(getattr(preadd_notifier, "config", None), "webhook_url", "")
+            else None
+        )
         app.state.astro_preadd_service = AstroPreaddService(
-            store, app.state.settings_repo, app.state.astro_alert_service
+            store,
+            app.state.settings_repo,
+            app.state.astro_alert_service,
+            alert_sender=preadd_alert_sender,
         )
         app.state.history_repo = OpportunityHistoryRepository(db)
         app.state.funding_research_repo = FundingResearchRepository(db)

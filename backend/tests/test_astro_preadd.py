@@ -72,11 +72,14 @@ class FakeClient:
 
 def test_preadd_settings_validate_supported_exchanges_and_positive_thresholds():
     assert AstroPreaddSettings().exchanges == ["bitget", "binance"]
+    assert AstroPreaddSettings().min_volume_24h_usdt == 0
     assert AstroPreaddSettings(exchanges=["Bitget", "binance", "bitget"]).exchanges == ["bitget", "binance"]
     with pytest.raises(ValidationError):
         AstroPreaddSettings(exchanges=["bitget", "aster"])
     with pytest.raises(ValidationError):
         AstroPreaddSettings(funding_threshold_pct=0)
+    with pytest.raises(ValidationError):
+        AstroPreaddSettings(min_volume_24h_usdt=-1)
 
 
 def test_preadd_funding_uses_prediction_then_current_with_explicit_cycle():
@@ -123,17 +126,41 @@ def test_preadd_proxy_and_conflicting_or_stale_signals_fail_closed():
     ], config).items == []
 
 
+def test_preadd_requires_both_legs_to_meet_24h_volume_threshold():
+    config = AstroPreaddSettings(min_volume_24h_usdt=500_000)
+    assert find_preadd_candidates([
+        market("bitget", predicted=0.8, volume=600_000),
+        market("binance", volume=499_999),
+    ], config).items == []
+    assert find_preadd_candidates([
+        market("bitget", predicted=0.8, volume=600_000),
+        market("binance", volume=None),
+    ], config).items == []
+    assert len(find_preadd_candidates([
+        market("bitget", predicted=0.8, volume=600_000),
+        market("binance", volume=500_000),
+    ], config).items) == 1
+
+
 @pytest.mark.asyncio
 async def test_preadd_creates_only_paused_bgbn_cards_and_never_updates_existing():
     store = SnapshotStore()
-    store.set_all_markets([market("bitget", predicted=0.8), market("binance")])
+    store.set_all_markets([
+        market("bitget", funding=0.08, predicted=0.8, volume=2_000_000),
+        market("binance", funding=0.01, volume=3_000_000),
+    ])
     repo = FakeRepo()
     client = FakeClient()
     service = AstroAlertService(
         client, Settings(astro_alert_auto_create=False, astro_dry_run_only=False),
         add_restart_delay_seconds=0, risk_settings_loader=repo.get_risk_settings,
     )
-    preparer = AstroPreaddService(store, repo, service)
+    messages: list[str] = []
+
+    async def send_message(message: str) -> None:
+        messages.append(message)
+
+    preparer = AstroPreaddService(store, repo, service, alert_sender=send_message)
     first = await preparer.run()
     assert first.created == 1 and first.failed == 0
     assert [(pair["buyEx"], pair["sellEx"]) for pair in client.added] == [
@@ -141,9 +168,17 @@ async def test_preadd_creates_only_paused_bgbn_cards_and_never_updates_existing(
     ]
     assert all(pair["status"] is False and pair["disableOpen"] is True for pair in client.added)
     assert all(pair["openPosition"] == "0.009000" for pair in client.added)
+    assert len(messages) == 1
+    assert "[Astro 预建] 已创建暂停卡片" in messages[0]
+    assert "方向：做多 binance → 做空 bitget" in messages[0]
+    assert "做多侧 binance：溢价 +0.000%，当前资金费 +0.0100% / 8h，24h 3.00M USDT" in messages[0]
+    assert "做空侧 bitget：溢价 +0.000%，当前资金费 +0.0800% / 8h，24h 2.00M USDT" in messages[0]
+    assert "卡片开仓价差阈值：0.900%" in messages[0]
+    assert "卡片状态：暂停、禁开" in messages[0]
     second = await preparer.run()
     assert second.created == 0 and second.skipped == 1
     assert len(client.added) == 2
+    assert len(messages) == 1
 
 
 @pytest.mark.asyncio
@@ -164,6 +199,27 @@ async def test_preadd_respects_ignored_exchanges_and_dry_run():
     assert client.list_calls == 0
 
 
+@pytest.mark.asyncio
+async def test_preadd_notification_failure_does_not_change_created_result():
+    store = SnapshotStore()
+    store.set_all_markets([market("bitget", predicted=0.8), market("binance")])
+    repo = FakeRepo()
+    client = FakeClient()
+    service = AstroAlertService(
+        client, Settings(astro_dry_run_only=False), add_restart_delay_seconds=0,
+    )
+
+    async def fail_notification(_: str) -> None:
+        raise RuntimeError("webhook unavailable")
+
+    result = await AstroPreaddService(
+        store, repo, service, alert_sender=fail_notification,
+    ).run()
+    assert result.created == 1
+    assert result.failed == 0
+    assert "卡片已创建，但飞书通知失败" in result.warnings[-1]
+
+
 def test_preadd_api_saves_rule_with_auth_and_previews_without_writing_astro():
     store = SnapshotStore()
     store.set_all_markets([market("bitget", predicted=0.8), market("binance")])
@@ -178,11 +234,15 @@ def test_preadd_api_saves_rule_with_auth_and_previews_without_writing_astro():
         assert client.put("/api/astro/preadd/settings", json=AstroPreaddSettings().model_dump()).status_code == 401
         saved = client.put(
             "/api/astro/preadd/settings",
-            json=AstroPreaddSettings(funding_threshold_pct=0.7).model_dump(),
+            json=AstroPreaddSettings(
+                funding_threshold_pct=0.7,
+                min_volume_24h_usdt=500_000,
+            ).model_dump(),
             headers={"x-dashboard-password": "test-pass"},
         )
         assert saved.status_code == 200
         assert client.get("/api/astro/preadd/settings").json()["funding_threshold_pct"] == 0.7
+        assert client.get("/api/astro/preadd/settings").json()["min_volume_24h_usdt"] == 500_000
         result = client.post("/api/astro/preadd/run", headers={"x-dashboard-password": "test-pass"})
         assert result.status_code == 200
         assert result.json()["created"] == 0

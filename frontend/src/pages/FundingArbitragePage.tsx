@@ -85,6 +85,7 @@ const defaultPreaddSettings: AstroPreaddSettings = {
   funding_threshold_pct: 0.6,
   premium_threshold_pct: 1,
   open_spread_threshold_pct: 0.9,
+  min_volume_24h_usdt: 0,
   scan_interval_seconds: 60,
   max_routes_per_run: 5,
   stale_after_seconds: 30
@@ -732,6 +733,13 @@ export function FundingArbitragePage() {
           <Alert type="warning" showIcon message={preaddPreview.warnings.join("；")} />
         ) : null}
         <Form form={preaddForm} layout="vertical" disabled={preaddLoading || preaddSaving}>
+          <Alert
+            className="rule-guide"
+            type="info"
+            showIcon
+            message="候选判定说明"
+            description="资金费和溢价是“或”关系，任意一边达到任一阈值即可进入候选；资金费按单次结算原值比较，不按周期换算。两类信号方向冲突时不会预建。修改参数后需要先保存才会生效。"
+          />
           <div className="funding-settings-grid">
             <Form.Item label="自动预建" name="enabled" valuePropName="checked">
               <Switch />
@@ -748,14 +756,37 @@ export function FundingArbitragePage() {
                 }))}
               />
             </Form.Item>
-            <Form.Item label="资金费绝对值（单次结算）" name="funding_threshold_pct" rules={[{ required: true }]}>
+            <Form.Item
+              label="资金费绝对值（单次结算）"
+              name="funding_threshold_pct"
+              rules={[{ required: true }]}
+              extra="任一边的下期预测资金费达到此值即触发；没有预测值时使用当前资金费。正负都按绝对值判断。"
+            >
               <InputNumber min={0.001} max={100} step={0.05} suffix="%" className="wide-input" />
             </Form.Item>
-            <Form.Item label="溢价近似绝对值（标记/指数）" name="premium_threshold_pct" rules={[{ required: true }]}>
+            <Form.Item
+              label="溢价近似绝对值（标记/指数）"
+              name="premium_threshold_pct"
+              rules={[{ required: true }]}
+              extra="任一边的 |标记价格 ÷ 指数价格 - 1| 达到此值即触发。正溢价倾向做空该侧，负溢价倾向做多该侧。"
+            >
               <InputNumber min={0.001} max={100} step={0.1} suffix="%" className="wide-input" />
             </Form.Item>
-            <Form.Item label="预建开仓价差阈值" name="open_spread_threshold_pct" rules={[{ required: true }]}>
+            <Form.Item
+              label="预建开仓价差阈值"
+              name="open_spread_threshold_pct"
+              rules={[{ required: true }]}
+              extra="只写入新建 Astro 卡片的开仓参数，不筛选当前候选。预建卡片仍为暂停、禁开状态。"
+            >
               <InputNumber min={0.001} max={100} step={0.1} suffix="%" className="wide-input" />
+            </Form.Item>
+            <Form.Item
+              label="单边24h最低成交量"
+              name="min_volume_24h_usdt"
+              rules={[{ required: true }]}
+              extra="做多侧和做空侧都必须达到此 USDT 成交量；设为 0 表示不限制。缺少成交量的数据在阈值大于 0 时会被排除。"
+            >
+              <InputNumber min={0} max={1_000_000_000_000} step={100_000} suffix="USDT" className="wide-input" />
             </Form.Item>
             <Form.Item label="自动扫描间隔" name="scan_interval_seconds" rules={[{ required: true }]}>
               <InputNumber min={30} max={3600} step={30} suffix="秒" className="wide-input" />

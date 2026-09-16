@@ -12,6 +12,7 @@ class AstroPreaddSettings(BaseModel):
     funding_threshold_pct: float = Field(default=0.6, gt=0, le=100)
     premium_threshold_pct: float = Field(default=1.0, gt=0, le=100)
     open_spread_threshold_pct: float = Field(default=0.9, gt=0, le=100)
+    min_volume_24h_usdt: float = Field(default=0, ge=0, le=1_000_000_000_000)
     scan_interval_seconds: int = Field(default=60, ge=30, le=3600)
     max_routes_per_run: int = Field(default=5, ge=1, le=20)
     stale_after_seconds: int = Field(default=30, ge=5, le=300)

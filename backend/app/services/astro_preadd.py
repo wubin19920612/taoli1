@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from collections import defaultdict
 from datetime import UTC, datetime
 from hashlib import sha1
@@ -58,6 +59,66 @@ def _candidate_id(symbol: str, buy: str, sell: str) -> str:
     return sha1(f"{symbol}:{buy}->{sell}".encode()).hexdigest()[:16]
 
 
+def _fmt_pct(value: float | None, digits: int = 3) -> str:
+    if value is None or not isfinite(value):
+        return "-"
+    return f"{value:+.{digits}f}%"
+
+
+def _fmt_volume(value: float | None) -> str:
+    if value is None or not isfinite(value):
+        return "-"
+    if value >= 1_000_000:
+        return f"{value / 1_000_000:.2f}M USDT"
+    if value >= 1_000:
+        return f"{value / 1_000:.1f}K USDT"
+    return f"{value:.0f} USDT"
+
+
+def build_preadd_created_message(
+    item: AstroPreaddCandidate,
+    open_spread_threshold_pct: float,
+    action_message: str,
+) -> str:
+    signal_name = "资金费" if item.signal_type == "funding" else "溢价近似"
+    signal_source = ""
+    if item.signal_type == "funding":
+        signal_source = (
+            "下期" if item.funding_source == "predicted"
+            else "当前" if item.funding_source == "current"
+            else ""
+        )
+    signal_cycle = (
+        f" / {item.funding_interval_hours}h"
+        if item.signal_type == "funding" and item.funding_interval_hours
+        else ""
+    )
+
+    def leg_text(label: str, leg: AstroPreaddLegSnapshot) -> str:
+        cycle = f"{leg.funding_interval_hours}h" if leg.funding_interval_hours else "-"
+        return (
+            f"{label} {leg.exchange}：溢价 {_fmt_pct(leg.premium_index_pct)}，"
+            f"当前资金费 {_fmt_pct(leg.funding_rate_pct, 4)} / {cycle}，"
+            f"24h {_fmt_volume(leg.volume_24h_usdt)}"
+        )
+
+    return "\n".join([
+        "[Astro 预建] 已创建暂停卡片",
+        f"标的：{item.symbol}",
+        f"方向：做多 {item.buy_exchange} → 做空 {item.sell_exchange}",
+        (
+            f"触发：{item.signal_exchange} {signal_source}{signal_name} "
+            f"{_fmt_pct(item.signal_value_pct)}{signal_cycle}"
+        ),
+        leg_text("做多侧", item.buy_leg),
+        leg_text("做空侧", item.sell_leg),
+        f"当前可成交价差：{_fmt_pct(item.live_spread_pct)}",
+        f"卡片开仓价差阈值：{open_spread_threshold_pct:.3f}%",
+        "卡片状态：暂停、禁开，不会自动开仓",
+        f"Astro：{action_message}",
+    ])
+
+
 def find_preadd_candidates(
     markets: list[MarketSnapshot],
     settings: AstroPreaddSettings,
@@ -88,6 +149,13 @@ def find_preadd_candidates(
             if max(mids) / min(mids) > 3:
                 if len(warnings) < 10:
                     warnings.append(f"{symbol} {left.exchange}/{right.exchange} 价格倍率未校准，未预建")
+                continue
+            if settings.min_volume_24h_usdt > 0 and any(
+                market.volume_24h_usdt is None
+                or not isfinite(market.volume_24h_usdt)
+                or market.volume_24h_usdt < settings.min_volume_24h_usdt
+                for market in (left, right)
+            ):
                 continue
             signals: list[tuple[float, int, MarketSnapshot, str, float, str]] = []
             for market in (left, right):
@@ -143,10 +211,17 @@ def find_preadd_candidates(
 
 
 class AstroPreaddService:
-    def __init__(self, store, settings_repo, astro_service: AstroAlertService):
+    def __init__(
+        self,
+        store,
+        settings_repo,
+        astro_service: AstroAlertService,
+        alert_sender: Callable[[str], Awaitable[None]] | None = None,
+    ):
         self.store = store
         self.settings_repo = settings_repo
         self.astro_service = astro_service
+        self.alert_sender = alert_sender
         self._lock = asyncio.Lock()
 
     async def run_loop(self, stop_event: asyncio.Event) -> None:
@@ -244,6 +319,16 @@ class AstroPreaddService:
                 result.skipped += action.status == "skipped"
                 result.failed += action.status == "failed"
                 result.results.append(f"{item.symbol} {buy.exchange}->{sell.exchange}: {action.message}")
+                if action.status == "created" and self.alert_sender is not None:
+                    try:
+                        await self.alert_sender(build_preadd_created_message(
+                            item,
+                            config.open_spread_threshold_pct,
+                            action.message,
+                        ))
+                    except Exception as exc:  # Card creation must not be rolled back by notification failure.
+                        logger.exception("Astro preadd creation notification failed")
+                        result.warnings.append(f"{item.symbol} 卡片已创建，但飞书通知失败：{exc}")
                 if action.status == "failed":
                     break
             return result

@@ -1700,6 +1700,7 @@ export interface AstroPreaddSettings {
   funding_threshold_pct: number;
   premium_threshold_pct: number;
   open_spread_threshold_pct: number;
+  min_volume_24h_usdt: number;
   scan_interval_seconds: number;
   max_routes_per_run: number;
   stale_after_seconds: number;

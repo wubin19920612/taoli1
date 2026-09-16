@@ -10,6 +10,7 @@ const preaddSettings = {
   funding_threshold_pct: 0.6,
   premium_threshold_pct: 1,
   open_spread_threshold_pct: 0.9,
+  min_volume_24h_usdt: 0,
   scan_interval_seconds: 60,
   max_routes_per_run: 5,
   stale_after_seconds: 30
@@ -65,17 +66,25 @@ describe("Astro preadd controls", () => {
     expect(screen.getByText("资金费 +0.0800% / 4h")).toBeTruthy();
     expect(screen.getByText("24h 8.40M USDT")).toBeTruthy();
     expect(screen.getByText("自动监测关闭")).toBeTruthy();
+    expect(screen.getByText("候选判定说明")).toBeTruthy();
+    expect(screen.getByText(/资金费和溢价是“或”关系/)).toBeTruthy();
+    expect(screen.getByText(/只写入新建 Astro 卡片的开仓参数/)).toBeTruthy();
 
     const fundingInput = screen.getByLabelText("资金费绝对值（单次结算）");
+    const volumeInput = screen.getByLabelText("单边24h最低成交量");
     await user.clear(fundingInput);
     await user.type(fundingInput, "1.2");
+    await user.clear(volumeInput);
+    await user.type(volumeInput, "500000");
     await user.click(screen.getByRole("button", { name: /保存预建规则/ }));
     await waitFor(() => {
       const saved = vi.mocked(fetch).mock.calls.find(([url, init]) =>
         String(url).includes("/astro/preadd/settings") && init?.method === "PUT"
       );
       expect(JSON.parse(String(saved?.[1]?.body))).toMatchObject({
-        exchanges: ["bitget", "binance"], funding_threshold_pct: 1.2
+        exchanges: ["bitget", "binance"],
+        funding_threshold_pct: 1.2,
+        min_volume_24h_usdt: 500_000
       });
     });
     expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes("/astro/preadd/run"))).toBe(false);
