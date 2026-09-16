@@ -93,6 +93,11 @@ def build_preadd_created_message(
         if item.signal_type == "funding" and item.funding_interval_hours
         else ""
     )
+    strategy = (
+        "Bybit 资金费优先，反向开仓（不做价差收敛）"
+        if item.entry_mode == "bybit_funding_reverse"
+        else "价差收敛"
+    )
 
     def leg_text(label: str, leg: AstroPreaddLegSnapshot) -> str:
         cycle = f"{leg.funding_interval_hours}h" if leg.funding_interval_hours else "-"
@@ -106,6 +111,7 @@ def build_preadd_created_message(
         "[Astro 预建] 已创建暂停卡片",
         f"标的：{item.symbol}",
         f"方向：做多 {item.buy_exchange} → 做空 {item.sell_exchange}",
+        f"策略：{strategy}",
         (
             f"触发：{item.signal_exchange} {signal_source}{signal_name} "
             f"{_fmt_pct(item.signal_value_pct)}{signal_cycle}"
@@ -113,7 +119,7 @@ def build_preadd_created_message(
         leg_text("做多侧", item.buy_leg),
         leg_text("做空侧", item.sell_leg),
         f"当前可成交价差：{_fmt_pct(item.live_spread_pct)}",
-        f"卡片开仓价差阈值：{open_spread_threshold_pct:.3f}%",
+        f"卡片开仓价差阈值：{open_spread_threshold_pct:+.3f}%",
         "卡片状态：暂停、禁开，不会自动开仓",
         f"Astro：{action_message}",
     ])
@@ -173,16 +179,26 @@ def find_preadd_candidates(
                     ))
             if not signals:
                 continue
+
+            bybit_funding_signals = [
+                signal
+                for signal in signals
+                if signal[2].exchange == "bybit" and signal[3] == "funding"
+            ]
+            effective_signals = bybit_funding_signals or signals
+            entry_mode = (
+                "bybit_funding_reverse" if bybit_funding_signals else "convergence"
+            )
             directions = {
                 market.exchange if value < 0 else (right if market is left else left).exchange
-                for _, _, market, _, value, _ in signals
+                for _, _, market, _, value, _ in effective_signals
             }
             if len(directions) != 1:
                 if len(warnings) < 10:
                     warnings.append(f"{symbol} {left.exchange}/{right.exchange} 信号方向冲突，未预建")
                 continue
             strength, _, signal_market, kind, value, source = max(
-                signals, key=lambda signal: (signal[0], signal[1])
+                effective_signals, key=lambda signal: (signal[0], signal[1])
             )
             buy = next(market for market in (left, right) if market.exchange in directions)
             sell = right if buy is left else left
@@ -197,6 +213,12 @@ def find_preadd_candidates(
                 signal_value_pct=value,
                 funding_source=source,
                 funding_interval_hours=signal_market.funding_interval_hours if kind == "funding" else None,
+                entry_mode=entry_mode,
+                card_open_spread_pct=(
+                    -settings.open_spread_threshold_pct
+                    if entry_mode == "bybit_funding_reverse"
+                    else settings.open_spread_threshold_pct
+                ),
                 buy_leg=_leg_snapshot(buy),
                 sell_leg=_leg_snapshot(sell),
                 live_spread_pct=spread,
@@ -276,10 +298,15 @@ class AstroPreaddService:
             card_settings = await self.settings_repo.get_astro_card_settings()
             for item in selected:
                 fresh = await self.preview(config)
-                if item.id not in {candidate.id for candidate in fresh.items}:
+                fresh_item = next(
+                    (candidate for candidate in fresh.items if candidate.id == item.id),
+                    None,
+                )
+                if fresh_item is None:
                     result.skipped += 1
                     result.results.append(f"{item.symbol} 信号已消失或交易所被忽略，未预建")
                     continue
+                item = fresh_item
                 by_market: dict[tuple[str, str], MarketSnapshot] = {}
                 for market in self.store.get_all_markets():
                     if market.market_type != MarketType.FUTURE:
@@ -304,16 +331,20 @@ class AstroPreaddService:
                     buy_exchange=buy.exchange, buy_market_type=MarketType.FUTURE,
                     buy_raw_symbol=buy.raw_symbol, sell_exchange=sell.exchange,
                     sell_market_type=MarketType.FUTURE, sell_raw_symbol=sell.raw_symbol,
-                    open_spread_pct=config.open_spread_threshold_pct,
+                    open_spread_pct=item.card_open_spread_pct,
                     close_spread_pct=0,
-                    fee_adjusted_open_pct=config.open_spread_threshold_pct,
-                    spread_width_pct=config.open_spread_threshold_pct,
+                    fee_adjusted_open_pct=item.card_open_spread_pct,
+                    spread_width_pct=abs(item.card_open_spread_pct),
                     buy_bid=buy.bid, buy_ask=buy.ask, sell_bid=sell.bid, sell_ask=sell.ask,
                     buy_volume_24h_usdt=buy.volume_24h_usdt,
                     sell_volume_24h_usdt=sell.volume_24h_usdt,
                     risk_labels=[], last_seen_at=observed,
                 )
-                action = await self.astro_service.handle_preadd(opportunity, card_settings)
+                action = await self.astro_service.handle_preadd(
+                    opportunity,
+                    card_settings,
+                    allow_reverse_entry=item.entry_mode == "bybit_funding_reverse",
+                )
                 result.attempted += 1
                 result.created += action.status == "created"
                 result.skipped += action.status == "skipped"
@@ -323,7 +354,7 @@ class AstroPreaddService:
                     try:
                         await self.alert_sender(build_preadd_created_message(
                             item,
-                            config.open_spread_threshold_pct,
+                            item.card_open_spread_pct,
                             action.message,
                         ))
                     except Exception as exc:  # Card creation must not be rolled back by notification failure.

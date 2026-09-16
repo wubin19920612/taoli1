@@ -1724,6 +1724,8 @@ export interface AstroPreaddCandidate {
   signal_value_pct: number;
   funding_source: "predicted" | "current" | "missing";
   funding_interval_hours: number | null;
+  entry_mode: "convergence" | "bybit_funding_reverse";
+  card_open_spread_pct: number;
   buy_leg: AstroPreaddLegSnapshot;
   sell_leg: AstroPreaddLegSnapshot;
   live_spread_pct: number;

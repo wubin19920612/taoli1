@@ -75,6 +75,25 @@ def test_ff_opportunity_builds_safe_dry_run_pair() -> None:
     assert any(item.field == "name" and item.needs_verification for item in plan.assumptions)
 
 
+def test_negative_ff_open_requires_explicit_funding_reverse_mode() -> None:
+    planner = AstroPairPlanner(AstroPlannerConfig())
+    reverse_entry = opportunity().model_copy(
+        update={"open_spread_pct": -0.9, "close_spread_pct": 0}
+    )
+
+    blocked = planner.plan(reverse_entry)
+    allowed = planner.plan(reverse_entry, allow_negative_open=True)
+
+    assert blocked.can_submit is False
+    assert any("Open spread must be positive" in blocker for blocker in blocked.blockers)
+    assert allowed.can_submit is True
+    assert allowed.pair is not None
+    assert allowed.pair["type"] == "FF"
+    assert allowed.pair["openPosition"] == "-0.009000"
+    assert allowed.pair["closePosition"] == "-0.010000"
+    assert any("funding-only reverse-entry" in warning for warning in allowed.warnings)
+
+
 def test_lighter_preview_routes_only_to_gc_lighter() -> None:
     planner = AstroPairPlanner()
     for buy, sell, expected in (

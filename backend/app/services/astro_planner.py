@@ -235,6 +235,7 @@ class AstroPairPlanner:
         now: datetime | None = None,
         *,
         allow_manual_override: bool = False,
+        allow_negative_open: bool = False,
     ) -> AstroPairPlan:
         is_reverse_sf = (
             opportunity.type == OpportunityType.SF
@@ -242,9 +243,9 @@ class AstroPairPlanner:
             and opportunity.sell_market_type == MarketType.SPOT
         )
         blockers = _type_blockers(opportunity, now=now)
-        if opportunity.open_spread_pct <= 0:
+        if opportunity.open_spread_pct <= 0 and not allow_negative_open:
             blockers.append("Open spread must be positive before building an Astro pair.")
-        if opportunity.close_spread_pct < 0:
+        if opportunity.close_spread_pct < 0 and not allow_negative_open:
             blockers.append("Close spread is negative; closePosition mapping needs manual review.")
 
         manual_risk_warnings: list[str] = []
@@ -268,7 +269,7 @@ class AstroPairPlanner:
         close_decision = _astro_close_decision(
             opportunity,
             self.config,
-            allow_negative=allow_manual_override,
+            allow_negative=allow_manual_override or allow_negative_open,
         )
         fr_pair_bases = _fr_pair_bases(opportunity)
         pair_type = (
@@ -363,6 +364,10 @@ class AstroPairPlanner:
             "Astro SDK add action restarts astro-core; existing pairs are skipped instead of updated.",
             *manual_risk_warnings,
         ]
+        if allow_negative_open and opportunity.open_spread_pct < 0:
+            warnings.append(
+                "Negative openPosition was explicitly enabled for a funding-only reverse-entry card."
+            )
         if close_decision.adjusted_for_astro:
             warnings.append(
                 "closePosition was adjusted below openPosition because the live close spread is not lower than the open spread."

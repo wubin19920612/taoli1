@@ -738,7 +738,7 @@ export function FundingArbitragePage() {
             type="info"
             showIcon
             message="候选判定说明"
-            description="资金费和溢价是“或”关系，任意一边达到任一阈值即可进入候选；资金费按单次结算原值比较，不按周期换算。两类信号方向冲突时不会预建。修改参数后需要先保存才会生效。"
+            description="资金费和溢价是“或”关系，任意一边达到任一阈值即可进入候选；资金费按单次结算原值比较，不按周期换算。Bybit 自身达到资金费阈值时只按收资金费方向，忽略相反的溢价收敛信号，并使用负价差阈值反向开仓；其他情况的信号方向冲突时不会预建。修改参数后需要先保存才会生效。"
           />
           <div className="funding-settings-grid">
             <Form.Item label="自动预建" name="enabled" valuePropName="checked">
@@ -773,10 +773,10 @@ export function FundingArbitragePage() {
               <InputNumber min={0.001} max={100} step={0.1} suffix="%" className="wide-input" />
             </Form.Item>
             <Form.Item
-              label="预建开仓价差阈值"
+              label="预建开仓价差阈值绝对值"
               name="open_spread_threshold_pct"
               rules={[{ required: true }]}
-              extra="只写入新建 Astro 卡片的开仓参数，不筛选当前候选。预建卡片仍为暂停、禁开状态。"
+              extra="普通候选写入正阈值；Bybit 资金费候选写入同绝对值的负阈值，按资金费方向反向开仓。预建卡片仍为暂停、禁开状态。"
             >
               <InputNumber min={0.001} max={100} step={0.1} suffix="%" className="wide-input" />
             </Form.Item>
@@ -815,6 +815,17 @@ export function FundingArbitragePage() {
             { title: "信号", width: 220, render: (_, row) => row.signal_type === "funding"
               ? `${row.signal_exchange} ${row.funding_source === "predicted" ? "下期" : "当前"} ${signedPct(row.signal_value_pct)} / ${row.funding_interval_hours ?? "?"}h`
               : `${row.signal_exchange} 溢价近似 ${signedPct(row.signal_value_pct)}` },
+            { title: "开仓方式", width: 170, render: (_, row) => (
+              <Space direction="vertical" size={0}>
+                <Tag color={row.entry_mode === "bybit_funding_reverse" ? "gold" : "blue"}>
+                  {row.entry_mode === "bybit_funding_reverse" ? "反向开仓" : "价差收敛"}
+                </Tag>
+                <Typography.Text type="secondary">
+                  {row.entry_mode === "bybit_funding_reverse" ? "仅做 Bybit 资金费" : "等待价差收敛"}
+                </Typography.Text>
+                <Typography.Text>{`卡片 ${signedPct(row.card_open_spread_pct)}`}</Typography.Text>
+              </Space>
+            ) },
             { title: "做多侧行情", width: 220, render: (_, row) => preaddLegCell(row.buy_leg, "buy") },
             { title: "做空侧行情", width: 220, render: (_, row) => preaddLegCell(row.sell_leg, "sell") },
             { title: "当前可成交价差", width: 150, render: (_, row) => signedPct(row.live_spread_pct) },
@@ -840,7 +851,7 @@ export function FundingArbitragePage() {
         loading={loading}
         rowKey="id"
         pagination={{ pageSize: 50, showSizeChanger: true }}
-        scroll={{ x: 1240 }}
+        scroll={{ x: 1410 }}
         size="small"
         tableLayout="fixed"
         expandable={{

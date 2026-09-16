@@ -44,6 +44,8 @@ class AstroPreaddCandidate(BaseModel):
     signal_value_pct: float
     funding_source: Literal["predicted", "current", "missing"]
     funding_interval_hours: int | None = None
+    entry_mode: Literal["convergence", "bybit_funding_reverse"] = "convergence"
+    card_open_spread_pct: float
     buy_leg: AstroPreaddLegSnapshot
     sell_leg: AstroPreaddLegSnapshot
     live_spread_pct: float

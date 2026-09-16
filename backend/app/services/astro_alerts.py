@@ -175,6 +175,8 @@ class AstroAlertService:
         self,
         opportunity: Opportunity,
         card_settings: AstroCardSettings,
+        *,
+        allow_reverse_entry: bool = False,
     ) -> AstroAlertActionResult:
         return await self._handle(
             opportunity,
@@ -182,6 +184,7 @@ class AstroAlertService:
             disabled_message="预建卡片未开启",
             card_settings_override=card_settings.model_copy(update={"open_enabled": False}),
             allow_route_variants=True,
+            allow_reverse_entry=allow_reverse_entry,
         )
 
     async def _handle(
@@ -196,6 +199,7 @@ class AstroAlertService:
         add_restart_delay_seconds: float | None = None,
         manual_override: bool = False,
         allow_route_variants: bool = False,
+        allow_reverse_entry: bool = False,
     ) -> AstroAlertActionResult:
         if not enabled:
             return AstroAlertActionResult(
@@ -274,7 +278,11 @@ class AstroAlertService:
         planner = self.planner or AstroPairPlanner(
             AstroPlannerConfig.from_card_settings(effective_card_settings)
         )
-        plan = planner.plan(opportunity, allow_manual_override=manual_override)
+        plan = planner.plan(
+            opportunity,
+            allow_manual_override=manual_override,
+            allow_negative_open=allow_reverse_entry,
+        )
         if manual_override:
             manual_warnings.extend(
                 warning

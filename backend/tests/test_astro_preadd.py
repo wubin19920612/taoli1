@@ -97,10 +97,57 @@ def test_preadd_funding_uses_prediction_then_current_with_explicit_cycle():
     assert item.sell_leg.exchange == "bitget"
     assert item.sell_leg.funding_rate_pct == pytest.approx(-0.1)
     assert item.sell_leg.funding_interval_hours == 4
+    assert item.entry_mode == "convergence"
+    assert item.card_open_spread_pct == pytest.approx(0.9)
     rows[0] = market("bitget", funding=-0.75, interval=8)
     [item] = find_preadd_candidates(rows, AstroPreaddSettings()).items
     assert item.funding_source == "current"
     assert (item.buy_exchange, item.sell_exchange) == ("bitget", "binance")
+
+
+def test_bybit_funding_overrides_convergence_signal_and_uses_reverse_entry():
+    config = AstroPreaddSettings(exchanges=["bybit", "binance"])
+
+    [item] = find_preadd_candidates([
+        market("bybit", funding=0.8, mark=98, index=100),
+        market("binance", funding=0.01, mark=100, index=100),
+    ], config).items
+
+    assert item.signal_exchange == "bybit"
+    assert item.signal_type == "funding"
+    assert (item.buy_exchange, item.sell_exchange) == ("binance", "bybit")
+    assert item.entry_mode == "bybit_funding_reverse"
+    assert item.card_open_spread_pct == pytest.approx(-0.9)
+
+
+def test_bybit_negative_funding_reverses_into_long_bybit():
+    config = AstroPreaddSettings(exchanges=["bybit", "binance"])
+
+    [item] = find_preadd_candidates([
+        market("bybit", funding=-0.8, mark=102, index=100),
+        market("binance", funding=0.01, mark=100, index=100),
+    ], config).items
+
+    assert item.signal_exchange == "bybit"
+    assert item.signal_type == "funding"
+    assert (item.buy_exchange, item.sell_exchange) == ("bybit", "binance")
+    assert item.entry_mode == "bybit_funding_reverse"
+    assert item.card_open_spread_pct == pytest.approx(-0.9)
+
+
+def test_bybit_premium_only_candidate_keeps_convergence_mode():
+    config = AstroPreaddSettings(exchanges=["bybit", "binance"])
+
+    [item] = find_preadd_candidates([
+        market("bybit", funding=0.1, mark=102, index=100),
+        market("binance", funding=0.01, mark=100, index=100),
+    ], config).items
+
+    assert item.signal_exchange == "bybit"
+    assert item.signal_type == "premium_proxy"
+    assert (item.buy_exchange, item.sell_exchange) == ("binance", "bybit")
+    assert item.entry_mode == "convergence"
+    assert item.card_open_spread_pct == pytest.approx(0.9)
 
 
 def test_preadd_proxy_and_conflicting_or_stale_signals_fail_closed():
@@ -171,14 +218,88 @@ async def test_preadd_creates_only_paused_bgbn_cards_and_never_updates_existing(
     assert len(messages) == 1
     assert "[Astro 预建] 已创建暂停卡片" in messages[0]
     assert "方向：做多 binance → 做空 bitget" in messages[0]
+    assert "策略：价差收敛" in messages[0]
     assert "做多侧 binance：溢价 +0.000%，当前资金费 +0.0100% / 8h，24h 3.00M USDT" in messages[0]
     assert "做空侧 bitget：溢价 +0.000%，当前资金费 +0.0800% / 8h，24h 2.00M USDT" in messages[0]
-    assert "卡片开仓价差阈值：0.900%" in messages[0]
+    assert "卡片开仓价差阈值：+0.900%" in messages[0]
     assert "卡片状态：暂停、禁开" in messages[0]
     second = await preparer.run()
     assert second.created == 0 and second.skipped == 1
     assert len(client.added) == 2
     assert len(messages) == 1
+
+
+@pytest.mark.asyncio
+async def test_preadd_creates_bybit_funding_card_with_negative_open_threshold():
+    store = SnapshotStore()
+    store.set_all_markets([
+        market("bybit", funding=0.8, mark=98, index=100),
+        market("binance", funding=0.01, mark=100, index=100),
+    ])
+    repo = FakeRepo(AstroPreaddSettings(exchanges=["bybit", "binance"]))
+    client = FakeClient()
+    service = AstroAlertService(
+        client, Settings(astro_alert_auto_create=False, astro_dry_run_only=False),
+        add_restart_delay_seconds=0, risk_settings_loader=repo.get_risk_settings,
+    )
+    messages: list[str] = []
+
+    async def send_message(message: str) -> None:
+        messages.append(message)
+
+    result = await AstroPreaddService(store, repo, service, alert_sender=send_message).run()
+
+    assert result.created == 1 and result.failed == 0
+    assert [(pair["buyEx"], pair["sellEx"]) for pair in client.added] == [
+        ("binance", "bybit"), ("gc-binance", "gc-bybit")
+    ]
+    assert all(pair["openPosition"] == "-0.009000" for pair in client.added)
+    assert all(pair["closePosition"] == "-0.010000" for pair in client.added)
+    assert all(pair["status"] is False and pair["disableOpen"] is True for pair in client.added)
+    assert len(messages) == 1
+    assert "策略：Bybit 资金费优先，反向开仓（不做价差收敛）" in messages[0]
+    assert "卡片开仓价差阈值：-0.900%" in messages[0]
+    assert "[Astro 预建] 已创建暂停卡片" in messages[0]
+    assert "方向：做多 binance → 做空 bybit" in messages[0]
+    assert "做多侧 binance：溢价 +0.000%，当前资金费 +0.0100% / 8h，24h 1.00M USDT" in messages[0]
+    assert "做空侧 bybit：溢价 -2.000%，当前资金费 +0.8000% / 8h，24h 1.00M USDT" in messages[0]
+    assert "卡片状态：暂停、禁开" in messages[0]
+
+
+@pytest.mark.asyncio
+async def test_preadd_uses_fresh_entry_mode_when_signal_changes_before_creation():
+    store = SnapshotStore()
+    initial_markets = [
+        market("bybit", funding=0.8, mark=102, index=100),
+        market("binance", funding=0.01, mark=100, index=100),
+    ]
+    fresh_markets = [
+        market("bybit", funding=0.1, mark=102, index=100),
+        market("binance", funding=0.01, mark=100, index=100),
+    ]
+    store.set_all_markets(initial_markets)
+    repo = FakeRepo(AstroPreaddSettings(exchanges=["bybit", "binance"]))
+    client = FakeClient()
+    service = AstroAlertService(
+        client, Settings(astro_alert_auto_create=False, astro_dry_run_only=False),
+        add_restart_delay_seconds=0, risk_settings_loader=repo.get_risk_settings,
+    )
+    preparer = AstroPreaddService(store, repo, service)
+    original_preview = preparer.preview
+    preview_calls = 0
+
+    async def changing_preview(settings=None):
+        nonlocal preview_calls
+        preview_calls += 1
+        if preview_calls == 2:
+            store.set_all_markets(fresh_markets)
+        return await original_preview(settings)
+
+    preparer.preview = changing_preview
+    result = await preparer.run()
+
+    assert result.created == 1 and result.failed == 0
+    assert all(pair["openPosition"] == "0.009000" for pair in client.added)
 
 
 @pytest.mark.asyncio
