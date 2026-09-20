@@ -73,6 +73,40 @@ async def test_lighter_collects_active_perps_and_spot_with_real_book_and_funding
 
 
 @pytest.mark.asyncio
+async def test_lighter_always_scans_priority_hood_market_within_perp_limit(monkeypatch) -> None:
+    requested_market_ids: list[int] = []
+
+    async def fake_get(self, url: str):
+        if url.endswith("orderBookDetails"):
+            btc = detail("BTC", 1)
+            btc["daily_quote_token_volume"] = "3000000"
+            eth = detail("ETH", 2)
+            eth["daily_quote_token_volume"] = "2000000"
+            hood = detail("HOOD", 108)
+            hood["daily_quote_token_volume"] = "1000"
+            return {
+                "code": 200,
+                "order_book_details": [btc, eth, hood],
+                "spot_order_book_details": [],
+            }
+        if url.endswith("funding-rates"):
+            return {"code": 200, "funding_rates": []}
+        market_id = int(parse_qs(urlparse(url).query)["market_id"][0])
+        requested_market_ids.append(market_id)
+        return book()
+
+    monkeypatch.setattr(LighterAdapter, "get_json", fake_get)
+    adapter = LighterAdapter()
+    adapter.max_scanner_perp_markets = 2
+    try:
+        perps = await adapter.fetch_future_tickers()
+        assert [row.symbol for row in perps] == ["BTCUSDT", "HOODUSDT"]
+        assert requested_market_ids == [1, 108]
+    finally:
+        await adapter.client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_lighter_order_book_uses_market_id_and_remaining_size(monkeypatch) -> None:
     async def fake_get(self, url: str):
         return {"code": 200, "order_book_details": [detail("ETH", 0)],

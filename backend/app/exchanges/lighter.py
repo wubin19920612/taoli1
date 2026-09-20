@@ -66,6 +66,7 @@ class LighterAdapter(ExchangeAdapter):
     details_refresh_seconds = 60
     details_fallback_seconds = 300
     max_scanner_perp_markets = 48
+    priority_perp_symbols = frozenset({"HOOD"})
 
     def __init__(self, client=None):
         super().__init__(client)
@@ -171,9 +172,16 @@ class LighterAdapter(ExchangeAdapter):
             symbol, base = resolved
             markets.append((item, symbol, base, market_id))
         if market_type == MarketType.FUTURE:
-            # The REST book is per market; bound automatic polling to liquid markets.
+            # The REST book is per market; keep polling bounded while reserving
+            # slots for explicitly monitored contracts outside the volume leaders.
             markets.sort(key=lambda row: parse_float(row[0].get("daily_quote_token_volume")) or 0, reverse=True)
-            markets = markets[: self.max_scanner_perp_markets]
+            priority = [row for row in markets if row[2] in self.priority_perp_symbols]
+            remaining = [row for row in markets if row[2] not in self.priority_perp_symbols]
+            markets = [
+                *priority[: self.max_scanner_perp_markets],
+                *remaining[: max(0, self.max_scanner_perp_markets - len(priority))],
+            ]
+            markets.sort(key=lambda row: parse_float(row[0].get("daily_quote_token_volume")) or 0, reverse=True)
         semaphore = asyncio.Semaphore(self.max_concurrent_books)
 
         async def fetch(row: tuple[dict, str, str, int]) -> MarketSnapshot | None:
