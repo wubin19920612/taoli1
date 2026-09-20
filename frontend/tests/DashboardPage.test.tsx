@@ -44,6 +44,18 @@ const baseOpportunity: Opportunity = {
   last_seen_at: "2026-05-15T02:00:00Z"
 };
 
+const lighterHoodOpportunity: Opportunity = {
+  ...baseOpportunity,
+  id: "lighter-hood",
+  symbol: "HOODUSDT",
+  buy_exchange: "lighter",
+  buy_raw_symbol: "HOOD",
+  sell_exchange: "bitget",
+  sell_raw_symbol: "HOODUSDT",
+  open_spread_pct: 0.05,
+  fee_adjusted_open_pct: -0.1
+};
+
 describe("DashboardPage", () => {
   beforeEach(() => {
     window.localStorage.clear();
@@ -219,6 +231,65 @@ describe("DashboardPage", () => {
       expect(calls.some((url) => url.includes("/opportunities"))).toBe(true);
     });
     expect(calls.find((url) => url.includes("/opportunities"))).toContain("min_volume_24h_k=100");
+  });
+
+  it("keeps the priority Robinhood Lighter route visible outside the ranked row limit", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        calls.push(url);
+        if (url.includes("/settings/risk")) {
+          return Response.json({
+            min_volume_24h_usdt: 100000,
+            stale_after_seconds: 30,
+            huge_spread_pct: 10,
+            wide_spread_pct: 3,
+            mark_index_deviation_pct: 1,
+            funding_against_pct: 0.01,
+            ticker_collision_symbols: [],
+            excluded_symbols: [],
+            ignored_exchanges: []
+          });
+        }
+        if (url.includes("/health")) {
+          return Response.json({
+            status: "ok",
+            markets: 5000,
+            opportunities: 3000,
+            exchange_errors: {}
+          });
+        }
+        if (url.includes("/opportunities")) {
+          const params = new URL(url).searchParams;
+          return Response.json(
+            params.get("symbol") === "HOODUSDT" && params.get("exchange") === "lighter"
+              ? [lighterHoodOpportunity]
+              : [baseOpportunity]
+          );
+        }
+        return Response.json({});
+      })
+    );
+
+    render(<DashboardPage />);
+
+    const hoodSymbol = await screen.findByText("HOODUSDT");
+    const hoodRow = hoodSymbol.closest("tr");
+    expect(hoodRow?.textContent).toContain("Robinhood / 罗宾汉");
+    expect(hoodRow?.textContent).toContain("Lighter");
+    expect(
+      document.querySelector(".opportunity-table tbody tr.ant-table-row")?.textContent
+    ).toContain("HOODUSDT");
+    await waitFor(() => {
+      expect(
+        calls.some((url) => {
+          const params = new URL(url).searchParams;
+          return params.get("symbol") === "HOODUSDT" && params.get("exchange") === "lighter";
+        })
+      ).toBe(true);
+    });
   });
 
   it("adds a row symbol to the global blacklist from the table action", async () => {

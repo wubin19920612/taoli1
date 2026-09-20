@@ -11,6 +11,10 @@ import dayjs from "dayjs";
 
 import type { Opportunity } from "../api/types";
 import { marketTypeText } from "../constants/marketLabels";
+import {
+  dashboardOpportunityPriority,
+  priorityOpportunityDisplayName
+} from "../constants/priorityOpportunities";
 import { RiskTags } from "./RiskTags";
 
 interface OpportunityTableProps {
@@ -304,12 +308,18 @@ function buildColumns(
       dataIndex: "symbol",
       fixed: "left",
       width: 118,
-      render: (_, row) => (
-        <Space direction="vertical" size={2} className="symbol-cell">
-          <Typography.Text strong>{row.symbol}</Typography.Text>
-          <Tag>{row.type}</Tag>
-        </Space>
-      )
+      render: (_, row) => {
+        const priorityDisplayName = priorityOpportunityDisplayName(row);
+        return (
+          <Space direction="vertical" size={2} className="symbol-cell">
+            <Typography.Text strong>{row.symbol}</Typography.Text>
+            {priorityDisplayName ? (
+              <Typography.Text type="secondary">{priorityDisplayName}</Typography.Text>
+            ) : null}
+            <Tag>{row.type}</Tag>
+          </Space>
+        );
+      }
     },
     {
       title: "买入交易所",
@@ -326,7 +336,9 @@ function buildColumns(
       dataIndex: "open_spread_pct",
       width: 108,
       align: "right",
-      sorter: (a, b) => a.open_spread_pct - b.open_spread_pct,
+      sorter: (a, b) =>
+        dashboardOpportunityPriority(a) - dashboardOpportunityPriority(b) ||
+        a.open_spread_pct - b.open_spread_pct,
       defaultSortOrder: "descend",
       render: (value: number) => <Typography.Text strong>{pct(value)}</Typography.Text>
     },

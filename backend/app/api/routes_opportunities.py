@@ -8,11 +8,23 @@ from app.services.risk_labels import has_non_actionable_risk, known_volume_24h_u
 
 router = APIRouter()
 
+_OPPORTUNITY_SYMBOL_SEARCH_ALIASES = {
+    "RH": "HOODUSDT",
+    "ROBINHOOD": "HOODUSDT",
+    "ROBINHOODUSDT": "HOODUSDT",
+    "罗宾汉": "HOODUSDT",
+}
+
 
 def _parse_csv(value: str | None, default: list[str]) -> list[str]:
     if value is None:
         return default
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _normalize_opportunity_symbol_query(value: str) -> str:
+    normalized = value.strip().upper().replace("-", "").replace("_", "")
+    return _OPPORTUNITY_SYMBOL_SEARCH_ALIASES.get(normalized, normalized)
 
 
 async def _risk_settings(request: Request) -> RiskSettings:
@@ -53,7 +65,7 @@ async def list_opportunities(
             item for item in opportunities if item.type.value not in excluded_types
         ]
     if symbol:
-        wanted = symbol.upper().replace("-", "").replace("_", "")
+        wanted = _normalize_opportunity_symbol_query(symbol)
         opportunities = [item for item in opportunities if wanted in item.symbol]
     if exchange:
         wanted_exchange = exchange.lower()

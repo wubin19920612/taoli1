@@ -796,6 +796,37 @@ def test_opportunities_endpoint_applies_limit_after_filtering() -> None:
     assert [item["symbol"] for item in response.json()] == ["ONEUSDT", "TWOUSDT"]
 
 
+@pytest.mark.parametrize("symbol_query", ["RH", "robinhood", "RobinhoodUSDT", "罗宾汉", "HOOD"])
+def test_opportunities_endpoint_resolves_robinhood_search_aliases(symbol_query: str) -> None:
+    lighter_hood = make_opportunity().model_copy(
+        update={
+            "id": "lighter-hood",
+            "symbol": "HOODUSDT",
+            "buy_exchange": "lighter",
+            "buy_raw_symbol": "HOOD",
+            "sell_exchange": "bitget",
+            "sell_raw_symbol": "HOODUSDT",
+        }
+    )
+    store = SnapshotStore()
+    store.set_opportunities(
+        [
+            make_opportunity().model_copy(update={"id": "btc", "symbol": "BTCUSDT"}),
+            lighter_hood,
+        ]
+    )
+    app = create_app(snapshot_store=store)
+    client = TestClient(app)
+
+    response = client.get(
+        "/api/opportunities",
+        params={"symbol": symbol_query, "exchange": "lighter", "limit": 1},
+    )
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()] == ["lighter-hood"]
+
+
 def test_pair_spread_query_endpoint_uses_on_demand_service() -> None:
     fixed_now = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
 

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { getHealth, listOpportunities } from "../api/client";
 import type { HealthStatus, Opportunity, OpportunityFilters } from "../api/types";
+import { priorityRoutesForFilters } from "../constants/priorityOpportunities";
 
 interface RadarState {
   opportunities: Opportunity[];
@@ -19,6 +20,26 @@ interface RefreshOptions {
 interface RadarStoreOptions {
   autoRefresh?: boolean;
   refreshIntervalMs?: number;
+}
+
+async function listDashboardOpportunities(filters: OpportunityFilters): Promise<Opportunity[]> {
+  const priorityRequests = priorityRoutesForFilters(filters).map((route) =>
+    listOpportunities({
+      ...filters,
+      symbol: route.symbol,
+      exchange: route.exchange,
+      limit: 20
+    })
+  );
+  const [rankedRows, ...priorityRows] = await Promise.all([
+    listOpportunities(filters),
+    ...priorityRequests
+  ]);
+  const uniqueRows = new Map<string, Opportunity>();
+  for (const row of [...rankedRows, ...priorityRows.flat()]) {
+    uniqueRows.set(row.id, row);
+  }
+  return [...uniqueRows.values()];
 }
 
 export function useRadarStore(
@@ -56,7 +77,7 @@ export function useRadarStore(
     try {
       const [nextHealth, rows] = await Promise.all([
         getHealth(),
-        listOpportunities(stableFilters)
+        listDashboardOpportunities(stableFilters)
       ]);
       if (requestId !== requestIdRef.current) {
         return;
