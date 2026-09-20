@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timedelta
 from typing import Any
 
 import httpx
+from websockets.asyncio.client import connect as websocket_connect
 
 from app.exchanges.base import (
     ExchangeAdapter,
@@ -18,6 +20,7 @@ from app.models.market import MarketSnapshot, MarketType
 from app.models.orderbook import OrderBookSnapshot
 
 LIGHTER_URL = "https://mainnet.zklighter.elliot.ai/api/v1"
+LIGHTER_WS_URL = "wss://mainnet.zklighter.elliot.ai/stream"
 
 
 def lighter_symbol(raw: str, market_type: MarketType) -> tuple[str, str] | None:
@@ -37,7 +40,7 @@ def lighter_book_levels(rows: Any) -> list[tuple[float, float]]:
         if not isinstance(row, dict):
             continue
         price = parse_float(row.get("price"))
-        size = parse_float(row.get("remaining_base_amount"))
+        size = parse_float(row.get("remaining_base_amount", row.get("size")))
         if price is not None and size is not None and price > 0 and size > 0:
             levels.append((price, size))
     return levels
@@ -59,9 +62,79 @@ def lighter_best_prices(payload: Any) -> tuple[float, float, float, float] | Non
     )
 
 
+# One subscription connection avoids the per-market REST bursts that trigger
+# Lighter's AWS WAF while preserving executable bid/ask prices.
+async def lighter_order_books(
+    market_ids: list[int],
+    *,
+    timeout_seconds: float = 12,
+) -> dict[int, dict[str, Any]]:
+    requested = list(dict.fromkeys(market_ids))
+    if not requested:
+        return {}
+
+    pending = set(requested)
+    snapshots: dict[int, dict[str, Any]] = {}
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_seconds
+    async with websocket_connect(
+        LIGHTER_WS_URL,
+        open_timeout=min(timeout_seconds, 10),
+        close_timeout=3,
+    ) as websocket:
+        subscribed = False
+        while pending:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                break
+            try:
+                raw_message = await asyncio.wait_for(websocket.recv(), timeout=remaining)
+            except TimeoutError:
+                break
+            message = json.loads(raw_message)
+            if not isinstance(message, dict):
+                continue
+            message_type = message.get("type")
+            if message_type == "connected" and not subscribed:
+                for market_id in requested:
+                    await websocket.send(
+                        json.dumps(
+                            {
+                                "type": "subscribe",
+                                "channel": f"order_book/{market_id}",
+                            }
+                        )
+                    )
+                subscribed = True
+                continue
+            if message_type == "ping":
+                await websocket.send(json.dumps({"type": "pong"}))
+                continue
+            if message_type != "subscribed/order_book":
+                continue
+            channel = str(message.get("channel", ""))
+            prefix, separator, raw_market_id = channel.partition(":")
+            if prefix != "order_book" or not separator:
+                continue
+            try:
+                market_id = int(raw_market_id)
+            except ValueError:
+                continue
+            order_book = message.get("order_book")
+            if market_id not in pending or not isinstance(order_book, dict):
+                continue
+            snapshots[market_id] = {**order_book, "code": 200}
+            pending.remove(market_id)
+
+    if not snapshots:
+        raise RuntimeError(
+            f"Lighter websocket returned no order books for {len(requested)} markets"
+        )
+    return snapshots
+
+
 class LighterAdapter(ExchangeAdapter):
     name = "lighter"
-    max_concurrent_books = 4
     book_refresh_seconds = 12
     details_refresh_seconds = 60
     details_fallback_seconds = 300
@@ -171,52 +244,71 @@ class LighterAdapter(ExchangeAdapter):
                 continue
             symbol, base = resolved
             markets.append((item, symbol, base, market_id))
+        priority_symbols = (
+            self.priority_perp_symbols
+            if market_type == MarketType.FUTURE
+            else frozenset()
+        )
         if market_type == MarketType.FUTURE:
-            # The REST book is per market; keep polling bounded while reserving
+            # Keep automatic subscriptions bounded while reserving
             # slots for explicitly monitored contracts outside the volume leaders.
             markets.sort(key=lambda row: parse_float(row[0].get("daily_quote_token_volume")) or 0, reverse=True)
-            priority = [row for row in markets if row[2] in self.priority_perp_symbols]
-            remaining = [row for row in markets if row[2] not in self.priority_perp_symbols]
+            priority = [row for row in markets if row[2] in priority_symbols]
+            remaining = [row for row in markets if row[2] not in priority_symbols]
             markets = [
                 *priority[: self.max_scanner_perp_markets],
                 *remaining[: max(0, self.max_scanner_perp_markets - len(priority))],
             ]
             markets.sort(key=lambda row: parse_float(row[0].get("daily_quote_token_volume")) or 0, reverse=True)
-        semaphore = asyncio.Semaphore(self.max_concurrent_books)
-
-        async def fetch(row: tuple[dict, str, str, int]) -> MarketSnapshot | None:
+        requested_books = sorted(
+            markets,
+            key=lambda row: row[2] not in priority_symbols,
+        )
+        books = await lighter_order_books([row[3] for row in requested_books])
+        missing_priority = [
+            row[2]
+            for row in requested_books
+            if row[2] in priority_symbols and row[3] not in books
+        ]
+        if missing_priority:
+            raise RuntimeError(
+                f"missing Lighter priority order books: {', '.join(missing_priority)}"
+            )
+        snapshots: list[MarketSnapshot] = []
+        for row in markets:
             item, symbol, base, market_id = row
-            async with semaphore:
-                try:
-                    book = await self.get_json(f"{LIGHTER_URL}/orderBookOrders?market_id={market_id}&limit=20")
-                except Exception:
-                    return None
+            book = books.get(market_id)
             prices = lighter_best_prices(book)
             if prices is None:
-                return None
+                continue
             bid, ask, bid_size, ask_size = prices
             rate = funding.get(market_id)
-            return MarketSnapshot(
-                symbol=symbol,
-                base=base,
-                quote="USDT",
-                exchange=self.name,
-                market_type=market_type,
-                bid=bid,
-                ask=ask,
-                bid_size=bid_size,
-                ask_size=ask_size,
-                volume_24h_usdt=parse_float(item.get("daily_quote_token_volume")),
-                funding_rate_pct=rate * 100 if rate is not None else None,
-                funding_interval_hours=1 if market_type == MarketType.FUTURE else None,
-                funding_next_time=next_aligned_funding_time(now, 1) if market_type == MarketType.FUTURE else None,
-                mark_price=parse_float(item.get("mark_price")),
-                index_price=parse_float(item.get("index_price")),
-                timestamp=utc_now(),
-                raw_symbol=str(item["symbol"]),
+            snapshots.append(
+                MarketSnapshot(
+                    symbol=symbol,
+                    base=base,
+                    quote="USDT",
+                    exchange=self.name,
+                    market_type=market_type,
+                    bid=bid,
+                    ask=ask,
+                    bid_size=bid_size,
+                    ask_size=ask_size,
+                    volume_24h_usdt=parse_float(item.get("daily_quote_token_volume")),
+                    funding_rate_pct=rate * 100 if rate is not None else None,
+                    funding_interval_hours=1 if market_type == MarketType.FUTURE else None,
+                    funding_next_time=(
+                        next_aligned_funding_time(now, 1)
+                        if market_type == MarketType.FUTURE
+                        else None
+                    ),
+                    mark_price=parse_float(item.get("mark_price")),
+                    index_price=parse_float(item.get("index_price")),
+                    timestamp=utc_now(),
+                    raw_symbol=str(item["symbol"]),
+                )
             )
 
-        snapshots = [market for market in await asyncio.gather(*(fetch(row) for row in markets)) if market]
         self._markets.update({(market_type, row[0]["symbol"]): row[3] for row in markets})
         self._cached[market_type] = (utc_now(), snapshots)
         return snapshots
@@ -234,14 +326,14 @@ class LighterAdapter(ExchangeAdapter):
                     break
         if not isinstance(market_id, int):
             return None
-        payload = await self.get_json(f"{LIGHTER_URL}/orderBookOrders?market_id={market_id}&limit={max(1, min(limit, 100))}")
-        if not isinstance(payload, dict) or payload.get("code") != 200:
+        payload = (await lighter_order_books([market_id])).get(market_id)
+        if payload is None:
             return None
         return order_book_snapshot(
             exchange=self.name,
             market_type=market_type,
             symbol=symbol,
             raw_symbol=raw_symbol,
-            bids=lighter_book_levels(payload.get("bids")),
-            asks=lighter_book_levels(payload.get("asks")),
+            bids=lighter_book_levels(payload.get("bids"))[: max(1, min(limit, 100))],
+            asks=lighter_book_levels(payload.get("asks"))[: max(1, min(limit, 100))],
         )

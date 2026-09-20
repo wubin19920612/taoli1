@@ -19,10 +19,23 @@ from app.exchanges.base import (
     parse_float,
     utc_now,
 )
+from app.exchanges.lighter import (
+    LIGHTER_URL,
+    lighter_best_prices,
+    lighter_order_books,
+    lighter_symbol,
+)
 from app.exchanges.okx import okx_ticker_volume_24h_usdt
-from app.exchanges.lighter import LIGHTER_URL, lighter_best_prices, lighter_symbol
 from app.models.market import MarketType
 from app.models.pair_spread import (
+    HYPERLIQUID_MAIN_DEX,
+    PAIR_SPREAD_DAILY_INTERVAL_SECONDS,
+    PAIR_SPREAD_DAILY_THRESHOLD_HOURS,
+    PAIR_SPREAD_HOURLY_INTERVAL_SECONDS,
+    PAIR_SPREAD_HOURLY_THRESHOLD_HOURS,
+    SUPPORTED_SYMBOL_SPREAD_EXCHANGES,
+    HyperliquidDexMarket,
+    HyperliquidMarketAsset,
     PairSpreadCurrentLeg,
     PairSpreadCurrentSnapshot,
     PairSpreadFundingHistoryResult,
@@ -36,14 +49,6 @@ from app.models.pair_spread import (
     PairSpreadQueryResult,
     PairSpreadRealtimeFundingPoint,
     PairSpreadValueStats,
-    HYPERLIQUID_MAIN_DEX,
-    HyperliquidDexMarket,
-    HyperliquidMarketAsset,
-    PAIR_SPREAD_DAILY_INTERVAL_SECONDS,
-    PAIR_SPREAD_DAILY_THRESHOLD_HOURS,
-    PAIR_SPREAD_HOURLY_INTERVAL_SECONDS,
-    PAIR_SPREAD_HOURLY_THRESHOLD_HOURS,
-    SUPPORTED_SYMBOL_SPREAD_EXCHANGES,
     SymbolExchangePriceSnapshot,
     SymbolSpreadPoint,
     SymbolSpreadQueryResult,
@@ -2638,10 +2643,11 @@ class PairSpreadQueryService:
     ) -> PairSpreadCurrentLeg:
         market = await self._lighter_market(symbol, market_type)
         market_id = market["market_id"]
-        book, rates = await asyncio.gather(
-            self._get_json(f"{LIGHTER_URL}/orderBookOrders?market_id={market_id}&limit=20"),
+        books, rates = await asyncio.gather(
+            lighter_order_books([market_id]),
             self._get_json_optional(f"{LIGHTER_URL}/funding-rates") if market_type == MarketType.FUTURE else asyncio.sleep(0, result=None),
         )
+        book = books.get(market_id)
         prices = lighter_best_prices(book)
         if prices is None:
             raise RuntimeError(f"no usable Lighter order book for {symbol}")
