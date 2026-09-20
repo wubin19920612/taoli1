@@ -4,15 +4,17 @@ from datetime import UTC, datetime
 import pytest
 from fastapi import FastAPI
 
+from app.core.config import Settings
 from app.main import _handle_new_listing_astro_alert, _latest_signal_validation_failure, _run_alert_loop
 from app.models.alert import AlertEvent, AlertRule
 from app.models.announcement import AnnouncementKind, ExchangeAnnouncement
 from app.models.astro import AstroAlertActionResult
-from app.models.market import MarketType
+from app.models.market import MarketSnapshot, MarketType
 from app.models.opportunity import Opportunity, OpportunityType
 from app.models.orderbook import DepthValidationResult
 from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, LivePilotSettings, RiskSettings
 from app.services.alert_engine import AlertMatch
+from app.services.alert_messages import build_alert_message
 from app.services.snapshot_store import SnapshotStore
 
 
@@ -310,6 +312,67 @@ async def test_new_listing_astro_handler_skips_globally_blocked_symbol() -> None
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("hl_side", ["buy", "sell"])
+async def test_new_listing_card_recovers_fresh_hl_market_from_snapshot(hl_side: str) -> None:
+    app = FastAPI()
+    service = NewListingAwareAstroAlertService()
+    service.settings = Settings(astro_alert_auto_create=True, astro_dry_run_only=False)
+    service.alert_auto_create_enabled = True
+    service.new_listing_card_settings = AstroCardSettings(max_notional=10)
+    service.handle_new_listing_alert = service.handle_alert
+    app.state.astro_alert_service = service
+    store = SnapshotStore()
+    store.set_all_markets([
+        MarketSnapshot(
+            symbol="TTWOUSDT", base="TTWO", exchange="hyperliquid",
+            market_type=MarketType.FUTURE, bid=99, ask=100,
+            timestamp=datetime.now(UTC), raw_symbol="para:TTWO",
+        )
+    ])
+    app.state.snapshot_store = store
+    pair = opportunity().model_copy(
+        update={"symbol": "TTWOUSDT", f"{hl_side}_exchange": "hyperliquid"}
+    )
+
+    result = await _handle_new_listing_astro_alert(app, pair, require_depth=False)
+
+    assert result.status == "created"
+    assert getattr(service.opportunities[0], f"{hl_side}_raw_symbol") == "para:TTWO"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("market_raw_symbols", [[], ["TTWO", "para:TTWO"]])
+async def test_new_listing_card_skips_unconfirmed_hl_market(market_raw_symbols: list[str]) -> None:
+    app = FastAPI()
+    service = NewListingAwareAstroAlertService()
+    service.settings = Settings(astro_alert_auto_create=True, astro_dry_run_only=False)
+    service.alert_auto_create_enabled = True
+    service.new_listing_card_settings = AstroCardSettings(max_notional=10)
+    service.handle_new_listing_alert = service.handle_alert
+    app.state.astro_alert_service = service
+    store = SnapshotStore()
+    store.set_all_markets([
+        MarketSnapshot(
+            symbol="TTWOUSDT", base="TTWO", exchange="hyperliquid",
+            market_type=MarketType.FUTURE, bid=99, ask=100,
+            timestamp=datetime.now(UTC), raw_symbol=raw_symbol,
+        )
+        for raw_symbol in market_raw_symbols
+    ])
+    app.state.snapshot_store = store
+    pair = opportunity().model_copy(
+        update={"symbol": "TTWOUSDT", "sell_exchange": "hyperliquid"}
+    )
+
+    result = await _handle_new_listing_astro_alert(app, pair, require_depth=False)
+
+    assert result.status == "skipped"
+    assert result.action == "hl_market"
+    assert "HL 市场未确认" in result.message
+    assert not service.opportunities
+
+
+@pytest.mark.asyncio
 async def test_live_pilot_alert_loop_filters_candidates_by_alert_rules_before_selection() -> None:
     stop_event = asyncio.Event()
     app = FastAPI()
@@ -514,6 +577,7 @@ async def test_alert_loop_appends_astro_result_to_feishu_and_event_message() -> 
     await asyncio.wait_for(_run_alert_loop(app, 60, stop_event), timeout=2)
 
     assert "Astro: 已创建暂停卡片 BTC FF binance->okx，禁开=true" in event_repo.events[0].message
+    assert event_repo.events[0].message.startswith("【需评估】BTCUSDT FF binance→okx")
     assert feishu.sent_texts[0] is not None
     assert "Astro: 已创建暂停卡片 BTC FF binance->okx，禁开=true" in feishu.sent_texts[0]
 
@@ -750,8 +814,47 @@ async def test_alert_loop_skips_astro_create_when_latest_signal_collapsed() -> N
 
     assert service.calls == []
     assert event_repo.events[0].status == "muted"
+    assert "开仓价差：0.100%" in event_repo.events[0].message
     assert "Astro: 最新信号校验未通过" in event_repo.events[0].message
     assert feishu.sent_texts == []
+
+
+@pytest.mark.asyncio
+async def test_alert_loop_rating_and_message_use_same_latest_snapshot() -> None:
+    stop_event = asyncio.Event()
+    app = FastAPI()
+    rule = AlertRule(name="FF spread", min_open_spread_pct=0.5)
+    original = opportunity().model_copy(update={
+        "buy_funding_interval_hours": 8,
+        "sell_funding_interval_hours": 8,
+        "funding_rate_sell_pct": 0.05,
+        "net_funding_pct": 0.04,
+        "net_funding_next_pct": 0.04,
+    })
+    latest = original.model_copy(update={
+        "open_spread_pct": 0.65,
+        "fee_adjusted_open_pct": 0.45,
+        "funding_rate_sell_pct": 0.01,
+        "net_funding_pct": 0,
+        "net_funding_next_pct": 0,
+    })
+    events = FakeEventRepo(stop_event)
+    notifier = FakeFeishuNotifier()
+    app.state.alert_rule_repo = FakeRuleRepo([rule])
+    app.state.alert_event_repo = events
+    app.state.settings_repo = FakeSettingsRepo()
+    app.state.snapshot_store = RevalidatingSnapshotStore(original, latest)
+    app.state.alert_engine = FakeAlertEngine(AlertMatch(rule, original, []))
+    app.state.feishu_notifier = notifier
+    app.state.astro_alert_service = FakeAstroAlertService()
+
+    await asyncio.wait_for(_run_alert_loop(app, 60, stop_event), timeout=2)
+
+    assert build_alert_message(rule, original).startswith("【强烈推荐】")
+    assert events.events[0].message.startswith("【推荐】BTCUSDT FF binance→okx")
+    assert "开仓价差：0.650%" in events.events[0].message
+    assert "资金费率差（周期）：当前 0.00% / 预测 0.00%" in events.events[0].message
+    assert notifier.sent_texts == [events.events[0].message]
 
 
 @pytest.mark.asyncio
@@ -810,6 +913,8 @@ async def test_alert_loop_skips_astro_create_when_order_book_validation_fails() 
     assert validator.calls[0][2].max_trade_usdt == 50
     assert event_repo.events[0].status == "sent"
     assert "Astro: 订单簿校验未通过" in event_repo.events[0].message
+    assert event_repo.events[0].message.startswith("【需评估】BTCUSDT FF binance→okx")
+    assert "评级依据：最新信号或建卡校验未通过" in event_repo.events[0].message
     assert feishu.sent_texts[0] is not None
     assert "Astro: 订单簿校验未通过" in feishu.sent_texts[0]
     assert "买入侧深度不足" in event_repo.events[0].message
@@ -818,6 +923,45 @@ async def test_alert_loop_skips_astro_create_when_order_book_validation_fails() 
     assert "资金费边际 -0.050%" in event_repo.events[0].message
     assert "滑点缓冲 -0.050%" in event_repo.events[0].message
     assert "实际可成交有效收益 -0.100%" in event_repo.events[0].message
+
+
+@pytest.mark.asyncio
+async def test_alert_loop_downgrades_strong_rating_when_order_book_validation_fails() -> None:
+    stop_event = asyncio.Event()
+    app = FastAPI()
+    rule = AlertRule(name="high volume spread", min_volume_24h_usdt=1_000_000)
+    opp = opportunity().model_copy(update={
+        "funding_rate_sell_pct": 0.05,
+        "net_funding_pct": 0.04,
+        "net_funding_next_pct": 0.04,
+        "buy_funding_interval_hours": 8,
+        "sell_funding_interval_hours": 8,
+    })
+    store = SnapshotStore()
+    store.set_opportunities([opp])
+    events = FakeEventRepo(stop_event)
+    notifier = FakeFeishuNotifier()
+    app.state.alert_rule_repo = FakeRuleRepo([rule])
+    app.state.alert_event_repo = events
+    app.state.settings_repo = FakeSettingsRepo()
+    app.state.snapshot_store = store
+    app.state.alert_engine = FakeAlertEngine(AlertMatch(rule, opp, []))
+    app.state.feishu_notifier = notifier
+    app.state.astro_alert_service = FakeAstroAlertService()
+    app.state.orderbook_validator = FakeOrderBookValidator(DepthValidationResult(
+        passed=False, target_notional_usdt=20, buy_filled_usdt=20, sell_filled_usdt=20,
+        buy_vwap=100, sell_vwap=100.1, quoted_open_pct=0.8,
+        executable_open_pct=0.1, effective_executable_edge_pct=-0.2,
+        slippage_loss_pct=0.7,
+        blockers=["实际可成交有效收益不足"], warnings=[],
+    ))
+
+    await asyncio.wait_for(_run_alert_loop(app, 60, stop_event), timeout=2)
+
+    assert build_alert_message(rule, opp).startswith("【强烈推荐】")
+    assert events.events[0].message.startswith("【需评估】BTCUSDT FF binance→okx")
+    assert "实际可成交有效收益不足" in events.events[0].message
+    assert notifier.sent_texts[0] == events.events[0].message
 
 
 @pytest.mark.asyncio
@@ -994,6 +1138,7 @@ async def test_alert_loop_keeps_alert_when_astro_service_raises() -> None:
 
     assert event_repo.events[0].status == "sent"
     assert "Astro: 处理失败，unexpected astro failure" in event_repo.events[0].message
+    assert "评级依据：最新信号或建卡校验未通过" in event_repo.events[0].message
     assert feishu.sent_texts[0] is not None
     assert "Astro: 处理失败，unexpected astro failure" in feishu.sent_texts[0]
 

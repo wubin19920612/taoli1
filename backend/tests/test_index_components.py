@@ -3,26 +3,31 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from app.db.database import connect_database
-from app.db.repositories import IndexComponentRepository
+from app.db.repositories import IndexComponentRepository, SettingsRepository
 from app.db.schema import initialize_schema
 from app.models.index_component import (
     IndexComponent,
     IndexComponentChange,
     IndexComponentSnapshot,
+    IndexComponentAutoWatchSettings,
     IndexComponentWatchItem,
     stable_component_hash,
 )
 from app.models.market import MarketSnapshot, MarketType
+from app.models.pair_spread import PairSpreadPreset
+from app.models.settings import FloatingWatchMutation
 from app.services.index_components import (
     BitgetIndexComponentProvider,
     BinanceIndexComponentProvider,
     BybitIndexComponentProvider,
     GateIndexComponentProvider,
     IndexComponentMonitor,
+    IndexComponentAutoWatchService,
     MultiIndexComponentProvider,
     OKXIndexComponentProvider,
     build_index_component_alert_message,
 )
+from app.services.pair_spread_presets import PairSpreadPresetRepository
 
 
 BASE_TIME = datetime(2026, 5, 27, 8, 0, tzinfo=UTC)
@@ -338,6 +343,167 @@ async def test_monitor_sends_component_change_alerts_for_watched_symbols() -> No
 
 
 @pytest.mark.asyncio
+async def test_component_change_alert_includes_live_index_trend_and_followup_after_15_minutes() -> None:
+    db = await connect_database(":memory:")
+    alerts: list[str] = []
+    clock = [BASE_TIME - timedelta(minutes=15)]
+    try:
+        await initialize_schema(db)
+        repo = IndexComponentRepository(db)
+        await repo.create_watch_item(IndexComponentWatchItem(symbol="VANRY"))
+        monitor = IndexComponentMonitor(repo, alert_sender=alerts.append, now_fn=lambda: clock[0])
+
+        def market(price: float) -> MarketSnapshot:
+            return MarketSnapshot(
+                symbol="VANRYUSDT", base="VANRY", exchange="binance",
+                market_type=MarketType.FUTURE, bid=price, ask=price,
+                index_price=price, mark_price=price, raw_symbol="VANRYUSDT",
+                timestamp=clock[0],
+            )
+
+        await monitor.observe_markets([market(98)])
+        await monitor.process_snapshots([snapshot([component("binance", "VANRYUSDT", 1)])])
+        clock[0] = BASE_TIME - timedelta(minutes=5)
+        await monitor.observe_markets([market(99)])
+        clock[0] = BASE_TIME
+        await monitor.observe_markets([market(100)])
+        changes = await monitor.process_snapshots(
+            [snapshot([component("binance", "VANRYUSDT", 0.7),
+                       component("gate", "VANRYUSDT", 0.3)])]
+        )
+        assert changes[0].alert_status == "sent"
+        assert "发现变更时指数价 100" in alerts[0]
+        assert "检测前约5分钟 上涨 +1.010%" in alerts[0]
+        assert "检测前约15分钟 上涨 +2.041%" in alerts[0]
+        assert "近况不代表变更后走势" in alerts[0]
+
+        # A new monitor simulates restart: the follow-up must survive in the database.
+        restarted = IndexComponentMonitor(repo, alert_sender=alerts.append, now_fn=lambda: clock[0])
+        clock[0] = BASE_TIME + timedelta(minutes=5)
+        await restarted.observe_markets([market(101)])
+        assert len(alerts) == 1
+        clock[0] = BASE_TIME + timedelta(minutes=15)
+        await restarted.observe_markets([market(103)])
+        assert len(alerts) == 2
+        assert "发现成分变更后的指数走势（实测）" in alerts[1]
+        assert "发现变更后约5分钟 101（上涨 +1.000%）" in alerts[1]
+        assert "发现变更后约15分钟 103（上涨 +3.000%）" in alerts[1]
+        await restarted.observe_markets([market(104)])
+        assert len(alerts) == 2
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_component_trend_never_uses_stale_prices_or_notifies_after_unwatch() -> None:
+    db = await connect_database(":memory:")
+    alerts: list[str] = []
+    clock = [BASE_TIME]
+    try:
+        await initialize_schema(db)
+        repo = IndexComponentRepository(db)
+        item = await repo.create_watch_item(IndexComponentWatchItem(symbol="VANRY"))
+        monitor = IndexComponentMonitor(repo, alert_sender=alerts.append, now_fn=lambda: clock[0])
+        stale = MarketSnapshot(
+            symbol="VANRYUSDT", base="VANRY", exchange="binance",
+            market_type=MarketType.FUTURE, bid=100, ask=100,
+            index_price=100, raw_symbol="VANRYUSDT",
+            timestamp=BASE_TIME - timedelta(minutes=10),
+        )
+        await monitor.observe_markets([stale])
+        await monitor.process_snapshots([snapshot([component("binance", "VANRYUSDT", 1)])])
+        await monitor.process_snapshots([snapshot([component("gate", "VANRYUSDT", 1)])])
+        assert "暂无新鲜指数价" in alerts[0]
+        assert await repo.list_due_trend_followups(clock[0] + timedelta(hours=1)) == []
+
+        fresh = stale.model_copy(update={"timestamp": clock[0]})
+        await monitor.observe_markets([fresh])
+        await monitor.process_snapshots([snapshot([component("binance", "VANRYUSDT", 1)])])
+        assert "发现变更时指数价 100" in alerts[1]
+        assert "样本不足" in alerts[1]
+        await repo.delete_watch_item(item.id)
+        clock[0] += timedelta(minutes=15)
+        await monitor.observe_markets([fresh.model_copy(update={"timestamp": clock[0], "index_price": 110})])
+        assert len(alerts) == 2
+        assert await repo.list_due_trend_followups(clock[0]) == []
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_index_trend_uses_real_sample_time_and_unscaled_exchange_price() -> None:
+    db = await connect_database(":memory:")
+    alerts: list[str] = []
+    clock = [BASE_TIME + timedelta(seconds=37)]
+    try:
+        await initialize_schema(db)
+        repo = IndexComponentRepository(db)
+        await repo.create_watch_item(IndexComponentWatchItem(symbol="1000PEPE"))
+        monitor = IndexComponentMonitor(repo, alert_sender=alerts.append, now_fn=lambda: clock[0])
+
+        def aliased_market(price: float) -> MarketSnapshot:
+            return MarketSnapshot(
+                symbol="PEPEUSDT", base="PEPE", exchange="binance",
+                market_type=MarketType.FUTURE, bid=price, ask=price,
+                index_price=price, raw_symbol="1000PEPEUSDT", timestamp=clock[0],
+                symbol_alias_original_symbol="1000PEPEUSDT",
+                symbol_alias_price_multiplier=10,
+            )
+
+        await monitor.observe_markets([aliased_market(100)])
+        await monitor.process_snapshots([snapshot(
+            [component("binance", "1000PEPEUSDT", 1)], symbol="1000PEPEUSDT"
+        )])
+        await monitor.process_snapshots([snapshot(
+            [component("bybit", "1000PEPEUSDT", 1)], symbol="1000PEPEUSDT"
+        )])
+        assert "发现变更时指数价 10" in alerts[0]
+
+        clock[0] = BASE_TIME + timedelta(minutes=15, seconds=20)
+        await monitor.observe_markets([aliased_market(110)])
+        clock[0] = BASE_TIME + timedelta(minutes=15, seconds=37)
+        await monitor.observe_markets([aliased_market(110)])
+        assert len(alerts) == 1  # The 15-minute sample is 17 seconds before the target.
+        clock[0] = BASE_TIME + timedelta(minutes=16)
+        await monitor.observe_markets([aliased_market(120)])
+        assert len(alerts) == 2
+        assert "发现变更后约15分钟 12（上涨 +20.000%）" in alerts[1]
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_index_change_alert_survives_trend_history_failure(monkeypatch) -> None:
+    db = await connect_database(":memory:")
+    alerts: list[str] = []
+    try:
+        await initialize_schema(db)
+        repo = IndexComponentRepository(db)
+        await repo.create_watch_item(IndexComponentWatchItem(symbol="VANRY"))
+        monitor = IndexComponentMonitor(repo, alert_sender=alerts.append, now_fn=lambda: BASE_TIME)
+        live = MarketSnapshot(
+            symbol="VANRYUSDT", base="VANRY", exchange="binance",
+            market_type=MarketType.FUTURE, bid=100, ask=100,
+            index_price=100, raw_symbol="VANRYUSDT", timestamp=BASE_TIME,
+        )
+        await monitor.observe_markets([live])
+        await monitor.process_snapshots([snapshot([component("binance", "VANRYUSDT", 1)])])
+
+        async def unavailable(*args):
+            raise RuntimeError("history temporarily unavailable")
+
+        monkeypatch.setattr(repo, "list_index_prices", unavailable)
+        changes = await monitor.process_snapshots([snapshot([component("gate", "VANRYUSDT", 1)])])
+        assert changes[0].alert_status == "sent"
+        assert "指数价数据暂不可用" in alerts[0]
+        assert await repo.get_snapshot("binance", "VANRYUSDT") == snapshot(
+            [component("gate", "VANRYUSDT", 1)]
+        )
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
 async def test_monitor_reports_only_watchlist_symbols() -> None:
     db = await connect_database(":memory:")
     try:
@@ -348,6 +514,133 @@ async def test_monitor_reports_only_watchlist_symbols() -> None:
         await repo.upsert_snapshot(snapshot([component("binance", "BTCUSDT", weight=1)], symbol="BTCUSDT"))
 
         assert await monitor.watched_symbols() == {"VANRY"}
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_auto_watch_tracks_floating_pairs_running_cards_and_positions() -> None:
+    db = await connect_database(":memory:")
+    try:
+        await initialize_schema(db)
+        repo = IndexComponentRepository(db)
+        settings = SettingsRepository(db)
+        presets = PairSpreadPresetRepository(db)
+        await repo.create_watch_item(IndexComponentWatchItem(symbol="MANUAL"))
+        await repo.create_watch_item(IndexComponentWatchItem(symbol="VANRY"))
+        await settings.mutate_floating_watch_settings(
+            FloatingWatchMutation(action="add", item_type="symbol", value="ttwo")
+        )
+        await settings.mutate_floating_watch_settings(
+            FloatingWatchMutation(action="add", item_type="pair", value="pair-1")
+        )
+        await presets.upsert(PairSpreadPreset(
+            id="pair-1", leg1_exchange="binance", leg1_symbol="OPENAIUSDT",
+            leg2_exchange="hyperliquid", leg2_symbol="io:OAI",
+            saved_at=BASE_TIME,
+        ))
+
+        class Astro:
+            pairs = [
+                {"name": "BTC", "type": "FF", "status": True, "aExPosition": "0"},
+                {"name": "VANRY", "type": "FF", "status": False, "aExPosition": "-1"},
+                {"name": "OPENAI-OAI", "type": "FR", "status": True},
+                {"name": "UNUSED", "type": "FF", "status": False},
+            ]
+            fail = False
+
+            async def list_pairs(self):
+                if self.fail:
+                    raise RuntimeError("Astro temporarily unavailable")
+                return self.pairs
+
+        astro = Astro()
+        auto = IndexComponentAutoWatchService(repo, settings, presets, astro)
+        alerts: list[str] = []
+        monitor = IndexComponentMonitor(repo, alert_sender=alerts.append, auto_watch=auto)
+        assert await monitor.watched_symbols() == {"MANUAL", "VANRY"}
+
+        enabled = await auto.configure(IndexComponentAutoWatchSettings(enabled=True))
+        by_source = {}
+        for item in enabled.items:
+            by_source.setdefault(item.source, set()).add(item.symbol)
+        assert by_source == {
+            "floating_symbols": {"TTWOUSDT"},
+            "floating_pairs": {"OPENAIUSDT", "OAIUSDT"},
+            "astro_cards": {"BTCUSDT", "OPENAIUSDT", "OAIUSDT"},
+            "positions": {"VANRYUSDT"},
+        }
+        assert await repo.is_symbol_watched("TTWOUSDT")
+        assert await repo.is_symbol_watched("VANRYUSDT")
+        assert not await repo.is_symbol_watched("TTWOXUSDT")
+        await monitor.process_snapshots([
+            snapshot([component("binance", "TTWOUSDT", weight=0.7)], symbol="TTWOUSDT")
+        ])
+        notified = await monitor.process_snapshots([
+            snapshot(
+                [component("binance", "TTWOUSDT", weight=0.6)],
+                symbol="TTWOUSDT", observed_at=BASE_TIME + timedelta(minutes=5),
+            )
+        ])
+        assert notified[0].alert_status == "sent"
+        assert len(alerts) == 1
+
+        await settings.mutate_floating_watch_settings(
+            FloatingWatchMutation(action="remove", item_type="symbol", value="ttwo")
+        )
+        await settings.mutate_floating_watch_settings(
+            FloatingWatchMutation(action="remove", item_type="pair", value="pair-1")
+        )
+        astro.pairs = [{"name": "BTC", "type": "FF", "status": False}]
+        await auto.sync(force=True)
+        assert await monitor.watched_symbols() == {"MANUAL", "VANRY"}
+        assert not await repo.is_symbol_watched("TTWOUSDT")
+        assert await repo.is_symbol_watched("MANUALUSDT")
+        assert await repo.is_symbol_watched("VANRYUSDT")
+        muted = await monitor.process_snapshots([
+            snapshot(
+                [component("binance", "TTWOUSDT", weight=0.5)],
+                symbol="TTWOUSDT", observed_at=BASE_TIME + timedelta(minutes=10),
+            )
+        ])
+        assert muted[0].alert_status == "muted"
+        assert len(alerts) == 1
+
+        await auto.configure(IndexComponentAutoWatchSettings(enabled=False))
+        assert await repo.list_auto_watch_items() == []
+        assert {item.symbol for item in await repo.list_watch_items()} == {"MANUAL", "VANRY"}
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_auto_watch_preserves_positions_when_astro_fails() -> None:
+    db = await connect_database(":memory:")
+    try:
+        await initialize_schema(db)
+        repo = IndexComponentRepository(db)
+        settings = SettingsRepository(db)
+        presets = PairSpreadPresetRepository(db)
+
+        class Astro:
+            fail = False
+
+            async def list_pairs(self):
+                if self.fail:
+                    raise RuntimeError("offline")
+                return [{"name": "TTWO", "type": "FF", "status": False, "bExPosition": "2"}]
+
+        astro = Astro()
+        auto = IndexComponentAutoWatchService(repo, settings, presets, astro)
+        await auto.configure(IndexComponentAutoWatchSettings(enabled=True))
+        astro.fail = True
+        status = await auto.sync(force=True)
+
+        assert status.error and "Astro" in status.error
+        assert [(item.source, item.symbol) for item in status.items] == [
+            ("positions", "TTWOUSDT")
+        ]
+        assert await repo.is_symbol_watched("TTWOUSDT")
     finally:
         await db.close()
 

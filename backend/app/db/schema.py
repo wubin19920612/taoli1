@@ -236,6 +236,31 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_index_component_changes_time
           ON index_component_changes(created_at DESC);
 
+        CREATE TABLE IF NOT EXISTS index_component_price_samples (
+          exchange TEXT NOT NULL,
+          symbol TEXT NOT NULL,
+          bucket_at TEXT NOT NULL,
+          observed_at TEXT NOT NULL,
+          index_price REAL NOT NULL,
+          PRIMARY KEY (exchange, symbol, bucket_at)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_index_component_price_samples_time
+          ON index_component_price_samples(observed_at);
+
+        CREATE TABLE IF NOT EXISTS index_component_trend_followups (
+          change_id TEXT PRIMARY KEY,
+          exchange TEXT NOT NULL,
+          symbol TEXT NOT NULL,
+          detected_at TEXT NOT NULL,
+          due_at TEXT NOT NULL,
+          baseline_price REAL NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending'
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_index_component_trend_followups_due
+          ON index_component_trend_followups(status, due_at);
+
         CREATE TABLE IF NOT EXISTS index_component_watchlist (
           id TEXT PRIMARY KEY,
           symbol TEXT NOT NULL UNIQUE,
@@ -245,6 +270,13 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_index_component_watchlist_symbol
           ON index_component_watchlist(symbol);
+
+        CREATE TABLE IF NOT EXISTS index_component_auto_watchlist (
+          source TEXT NOT NULL,
+          symbol TEXT NOT NULL,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (source, symbol)
+        );
 
         CREATE TABLE IF NOT EXISTS exchange_announcements (
           id TEXT PRIMARY KEY,
@@ -559,6 +591,24 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
           ON new_listing_alert_events(watch_id, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_new_listing_events_time
           ON new_listing_alert_events(created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS new_listing_alert_cooldowns (
+          watch_id TEXT NOT NULL,
+          market_type TEXT NOT NULL,
+          buy_exchange TEXT NOT NULL,
+          sell_exchange TEXT NOT NULL,
+          last_sent_at TEXT NOT NULL,
+          PRIMARY KEY (watch_id, market_type, buy_exchange, sell_exchange),
+          FOREIGN KEY (watch_id) REFERENCES new_listing_watchlist(id) ON DELETE CASCADE
+        );
+
+        INSERT OR IGNORE INTO new_listing_alert_cooldowns (
+          watch_id, market_type, buy_exchange, sell_exchange, last_sent_at
+        )
+        SELECT
+          watch_id, market_type, buy_exchange, sell_exchange, MAX(created_at)
+        FROM new_listing_alert_events
+        GROUP BY watch_id, market_type, buy_exchange, sell_exchange;
 
         CREATE TABLE IF NOT EXISTS negative_basis_watchlist (
           id TEXT PRIMARY KEY,

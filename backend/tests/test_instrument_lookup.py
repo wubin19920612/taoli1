@@ -124,6 +124,47 @@ def test_instrument_lookup_resolves_exchange_alias_to_canonical_symbol() -> None
     assert exchanges["gate"]["future"]["raw_symbol"] == "EDGEX_USDT"
 
 
+def test_instrument_lookup_resolves_hyperliquid_raw_alias_and_exact_dex() -> None:
+    now = datetime(2026, 9, 20, 4, 0, tzinfo=UTC)
+    store = SnapshotStore()
+    store.set_all_markets(
+        [
+            market("ANTHROPICUSDT", "bitget", MarketType.FUTURE, 2_090, now),
+            market("ANTHROPICUSDT", "hyperliquid", MarketType.FUTURE, 216, now).model_copy(
+                update={"raw_symbol": "io:ANTH"}
+            ),
+            market(
+                "ANTHROPICUSDT",
+                "hyperliquid",
+                MarketType.FUTURE,
+                999,
+                now + timedelta(seconds=5),
+            ).model_copy(update={"raw_symbol": "xyz:ANTH"}),
+        ]
+    )
+    app = create_app(
+        snapshot_store=store,
+        settings=Settings(database_url="sqlite:///:memory:"),
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/api/instruments/ANTH?dex=io")
+        inferred_response = client.get("/api/instruments/ANTH")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["symbol"] == "ANTHROPICUSDT"
+    exchanges = {item["exchange"]: item for item in payload["exchanges"]}
+    assert exchanges["bitget"]["future"]["raw_symbol"] == "ANTHROPICUSDT"
+    assert exchanges["hyperliquid"]["future"]["raw_symbol"] == "io:ANTH"
+    assert exchanges["hyperliquid"]["future"]["bid"] == 215
+    assert inferred_response.status_code == 200
+    inferred_exchanges = {
+        item["exchange"]: item for item in inferred_response.json()["exchanges"]
+    }
+    assert inferred_exchanges["hyperliquid"]["future"]["raw_symbol"] == "io:ANTH"
+
+
 def test_instrument_lookup_keeps_ignored_exchange_basics_but_excludes_its_spreads() -> None:
     now = datetime.now(UTC)
     store = SnapshotStore()

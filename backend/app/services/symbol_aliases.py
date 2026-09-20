@@ -82,7 +82,40 @@ class SymbolAliasResolver:
                     (exchange, symbol, None, None),
                 ]
             )
-        return next((self._by_key[key] for key in keys if key in self._by_key), None)
+        direct = next((self._by_key[key] for key in keys if key in self._by_key), None)
+        if direct is not None or dex is not None:
+            return direct
+
+        # A raw HIP-3 ticker can safely imply its DEX only when the configured
+        # alias is unique. Multiple DEX matches remain unresolved until the
+        # caller supplies an explicit DEX.
+        exact_market = [
+            alias
+            for (
+                alias_exchange,
+                alias_symbol,
+                alias_market_type,
+                alias_dex,
+            ), alias in self._by_key.items()
+            if alias_exchange == exchange
+            and alias_symbol == symbol
+            and alias_market_type == market_type
+            and alias_dex is not None
+        ]
+        candidates = exact_market or [
+            alias
+            for (
+                alias_exchange,
+                alias_symbol,
+                alias_market_type,
+                alias_dex,
+            ), alias in self._by_key.items()
+            if alias_exchange == exchange
+            and alias_symbol == symbol
+            and alias_market_type is None
+            and alias_dex is not None
+        ]
+        return candidates[0] if len(candidates) == 1 else None
 
     def alias_for(self, market: MarketSnapshot) -> SymbolAlias | None:
         exchange = market.exchange.lower()
@@ -135,13 +168,21 @@ class SymbolAliasResolver:
                 price_multiplier=direct.price_multiplier,
             )
 
-        for alias in reversed(tuple(self._by_key.values())):
-            if alias.exchange != normalized_exchange or alias.canonical_symbol != requested_symbol:
-                continue
-            if alias.market_type is not None and alias.market_type != market_type:
-                continue
-            if normalized_dex is not None and alias.dex is not None and alias.dex != normalized_dex:
-                continue
+        reverse_candidates = [
+            alias
+            for alias in self._by_key.values()
+            if alias.exchange == normalized_exchange
+            and alias.canonical_symbol == requested_symbol
+            and (alias.market_type is None or alias.market_type == market_type)
+            and (
+                normalized_dex is None
+                or alias.dex is None
+                or alias.dex == normalized_dex
+            )
+        ]
+        if normalized_dex is None and len({alias.dex for alias in reverse_candidates}) > 1:
+            reverse_candidates = []
+        for alias in reversed(reverse_candidates):
             return ResolvedSymbolAlias(
                 exchange=normalized_exchange,
                 market_type=market_type,

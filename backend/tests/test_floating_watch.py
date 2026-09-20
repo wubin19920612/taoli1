@@ -79,3 +79,38 @@ def test_floating_watch_api_syncs_devices_and_protects_writes() -> None:
 
         second_device = client.get("/api/settings/floating-watch")
         assert second_device.json() == pair_saved.json()
+
+
+def test_index_component_auto_watch_switch_syncs_server_watchlist() -> None:
+    app = create_app(settings=Settings(dashboard_password="secret", database_url="sqlite:///:memory:"))
+    with TestClient(app) as client:
+        async def astro_pairs():
+            return [{"name": "VANRY", "type": "FF", "status": False, "aExPosition": "1"}]
+
+        app.state.astro_client.list_pairs = astro_pairs
+        assert client.get("/api/index-components/auto-watch").status_code == 401
+        headers = {"X-Dashboard-Password": "secret"}
+        assert client.get("/api/index-components/auto-watch", headers=headers).json() == {
+            "enabled": False, "items": [], "error": None
+        }
+        unauthorized = client.put("/api/index-components/auto-watch", json={"enabled": True})
+        assert unauthorized.status_code == 401
+        client.post(
+            "/api/settings/floating-watch/items", headers=headers,
+            json={"action": "add", "item_type": "symbol", "value": "ttwo"},
+        )
+
+        enabled = client.put(
+            "/api/index-components/auto-watch", headers=headers, json={"enabled": True}
+        )
+        assert enabled.status_code == 200
+        assert {(item["source"], item["symbol"]) for item in enabled.json()["items"]} == {
+            ("floating_symbols", "TTWOUSDT"), ("positions", "VANRYUSDT")
+        }
+        assert client.get("/api/index-components/auto-watch", headers=headers).json()["enabled"] is True
+        assert client.post("/api/index-components/auto-watch/sync").status_code == 401
+
+        disabled = client.put(
+            "/api/index-components/auto-watch", headers=headers, json={"enabled": False}
+        )
+        assert disabled.json()["items"] == []

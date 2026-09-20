@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
+from math import isfinite
 
 from app.models.alert import ALERT_SEVERITY_DESCRIPTIONS, ALERT_TYPE_DESCRIPTIONS, AlertRule
 from app.models.market import MarketType
@@ -10,6 +11,61 @@ from app.services.funding_edge import current_cycle_funding_edge_pct, next_cycle
 from app.services.market_labels import is_bitget_rtoken_spot, market_leg_label
 
 ALERT_DISPLAY_TIMEZONE = timezone(timedelta(hours=8), "UTC+8")
+HIGH_VOLUME_24H_USDT = 10_000_000
+NEUTRAL_FUNDING_PCT = 0.005
+
+
+def build_alert_rating_header(
+    rule: AlertRule,
+    opportunity: Opportunity,
+    *,
+    validation_failed: bool = False,
+    include_reason: bool = True,
+) -> str:
+    funding = next_cycle_funding_edge_pct(opportunity)
+    volumes = (opportunity.buy_volume_24h_usdt, opportunity.sell_volume_24h_usdt)
+    high_volume_threshold = max(HIGH_VOLUME_24H_USDT, rule.min_volume_24h_usdt * 2)
+    if validation_failed:
+        rating, reason = "需评估", "最新信号或建卡校验未通过，请看下方详情"
+    elif not isfinite(opportunity.open_spread_pct) or opportunity.open_spread_pct <= 0:
+        rating, reason = "需评估", "开仓价差不为正"
+    elif not isfinite(opportunity.fee_adjusted_open_pct) or opportunity.fee_adjusted_open_pct <= 0:
+        rating, reason = "需评估", "扣除基础成本后开仓收益不为正"
+    elif opportunity.risk_labels:
+        rating, reason = "需评估", f"存在风险标签：{', '.join(opportunity.risk_labels)}"
+    elif _has_mixed_funding_intervals(opportunity):
+        rating, reason = "需评估", "两腿结算周期不同，原值资金差不可直接比较"
+    elif any(
+        market_type == MarketType.FUTURE and (interval is None or interval <= 0)
+        for market_type, interval in (
+            (opportunity.buy_market_type, opportunity.buy_funding_interval_hours),
+            (opportunity.sell_market_type, opportunity.sell_funding_interval_hours),
+        )
+    ):
+        rating, reason = "需评估", "合约资金费率结算周期未知"
+    elif funding is None or not isfinite(funding):
+        rating, reason = "需评估", "资金费率数据不足"
+    elif funding < -NEUTRAL_FUNDING_PCT:
+        rating, reason = "需评估", "资金费率与正开仓价差方向相反"
+    elif abs(funding) <= NEUTRAL_FUNDING_PCT:
+        rating, reason = "推荐", "正开仓价差，资金差接近零"
+    elif all(
+        volume is not None and isfinite(volume) and volume >= high_volume_threshold
+        for volume in volumes
+    ):
+        rating = "强烈推荐"
+        reason = (
+            "正开仓价差、正资金差，双边24h成交额均不低于"
+            f"{high_volume_threshold / 10_000:,.0f}万USDT"
+        )
+    else:
+        rating = "推荐"
+        reason = "正开仓价差与资金差同向，双边成交额未达到高成交门槛或数据不全"
+    title = (
+        f"【{rating}】{opportunity.symbol} {opportunity.type} "
+        f"{opportunity.buy_exchange}→{opportunity.sell_exchange}"
+    )
+    return f"{title}\n评级依据：{reason}（信号分级，非实际收益保证）" if include_reason else title
 
 
 def build_alert_message(
@@ -18,9 +74,20 @@ def build_alert_message(
     dashboard_url: str = "",
     observations: list[AlertObservation] | None = None,
     template: AlertMessageTemplateSettings | None = None,
+    include_rating: bool = True,
 ) -> str:
     settings = template or AlertMessageTemplateSettings()
     lines: list[str] = []
+    if include_rating:
+        lines.append(
+            build_alert_rating_header(
+                rule,
+                opportunity,
+                include_reason=(
+                    settings.include_funding and settings.include_volume and settings.include_risk
+                ),
+            )
+        )
     mixed_funding_intervals = _has_mixed_funding_intervals(opportunity)
 
     if settings.include_trigger_summary:

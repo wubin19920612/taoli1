@@ -601,6 +601,85 @@ async def test_existing_same_route_pair_is_skipped_without_update() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("existing_dex,expected_action", [("para", "existing"), ("main", "conflict")])
+async def test_existing_hl_card_must_match_dex_even_when_route_variants_allowed(
+    existing_dex: str, expected_action: str
+) -> None:
+    existing = [
+        {
+            "name": "TTWO", "type": "FF", "buyEx": "binance", "sellEx": "hl",
+            "bEffectiveHlDex": existing_dex,
+        },
+        {
+            "name": "TTWO", "type": "FF", "buyEx": "gc-binance", "sellEx": "gc-hl",
+            "bEffectiveHlDex": existing_dex,
+        },
+    ]
+    client = FakeAstroClient(existing)
+    service = AstroAlertService(
+        client,
+        Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
+        add_restart_delay_seconds=0,
+    )
+    service.allow_same_name_variants = True
+    pair = opportunity().model_copy(
+        update={
+            "symbol": "TTWOUSDT", "sell_exchange": "hyperliquid",
+            "sell_raw_symbol": "para:TTWO",
+        }
+    )
+
+    result = await service.handle_alert(pair)
+
+    assert result.status == "skipped"
+    assert result.action == expected_action
+    assert not client.added
+    assert "hl(para)" in result.message
+    if expected_action == "conflict":
+        assert "hl(main)" in result.message
+
+
+@pytest.mark.asyncio
+async def test_manual_hl_card_without_market_does_not_use_astro_default() -> None:
+    client = FakeAstroClient()
+    service = AstroAlertService(
+        client,
+        Settings(astro_manual_card_create=True, astro_dry_run_only=False),
+        add_restart_delay_seconds=0,
+    )
+    pair = opportunity().model_copy(update={"sell_exchange": "hyperliquid"})
+
+    result = await service.handle_manual_create(pair)
+
+    assert result.status == "skipped"
+    assert "HL 市场未确认" in result.message
+    assert not client.added
+
+
+@pytest.mark.asyncio
+async def test_ff_hl_card_submits_para_market_on_base_and_gc_routes() -> None:
+    client = FakeAstroClient()
+    service = AstroAlertService(
+        client,
+        Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
+        add_restart_delay_seconds=0,
+    )
+    pair = opportunity().model_copy(
+        update={
+            "symbol": "TTWOUSDT", "sell_exchange": "hyperliquid",
+            "sell_raw_symbol": "para:TTWO",
+        }
+    )
+
+    result = await service.handle_alert(pair)
+
+    assert result.status == "created"
+    assert [(card["sellEx"], card["bHlDex"]) for card in client.added] == [
+        ("hl", "para"), ("gc-hl", "para")
+    ]
+
+
+@pytest.mark.asyncio
 async def test_existing_base_and_gc_routes_are_both_skipped_when_variants_allowed() -> None:
     client = FakeAstroClient(
         [

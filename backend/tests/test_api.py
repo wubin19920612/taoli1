@@ -3015,6 +3015,26 @@ def test_alert_history_endpoint_explains_mismatched_funding_intervals() -> None:
     assert "资金费率差（周期）：当前 0.66% / 预测 0.66%" not in text
 
 
+def test_alert_history_preserves_rated_title_and_failed_order_book_details() -> None:
+    app = create_app()
+    saved = (
+        "【需评估】BTCUSDT FF binance→okx\n"
+        "评级依据：最新信号或建卡校验未通过\n\n"
+        "【告警触发】\n规则：测试\n\n"
+        "Astro: 订单簿校验未通过：实际可成交有效收益不足"
+    )
+    event = AlertEvent(
+        rule_id="rating-rule", opportunity_id="rating-opp", symbol="BTCUSDT",
+        status="sent", message=saved, created_at=datetime(2026, 9, 16, tzinfo=UTC),
+    )
+    app.state.alert_event_repo = FakeAlertEventRepository([event])
+
+    response = TestClient(app).get("/api/alerts/events")
+
+    assert response.status_code == 200
+    assert response.json()[0]["message"] == saved
+
+
 def test_alert_history_endpoint_rebuilds_stored_full_messages_with_utc_plus_8() -> None:
     app = create_app()
     rule = AlertRule(
@@ -3080,6 +3100,7 @@ def test_alert_history_endpoint_rebuilds_stored_full_messages_with_utc_plus_8() 
 
     assert response.status_code == 200
     text = response.json()[0]["message"]
+    assert text.startswith("【告警触发】")
     assert "1. 20:39:17 | 价差 1.007% | 净估算 0.807%" in text
     assert "1. 12:39:17 |" not in text
     assert "资金差（周期） 0.01%" in text

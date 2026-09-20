@@ -710,6 +710,22 @@ async def test_collector_limits_index_component_fetches_to_watched_symbols() -> 
 
 
 @pytest.mark.asyncio
+async def test_collector_matches_index_component_watch_against_original_alias_symbol() -> None:
+    store = SnapshotStore()
+    provider = FakeIndexComponentProvider()
+    monitor = FakeTrackedIndexComponentMonitor({"1000PEPEUSDT"})
+    aliased = market_on("binance", "PEPEUSDT").model_copy(update={
+        "market_type": MarketType.FUTURE,
+        "symbol_alias_original_symbol": "1000PEPEUSDT",
+        "symbol_alias_price_multiplier": 10,
+    })
+    collector = MarketCollector(
+        [], store, index_component_provider=provider, index_component_monitor=monitor
+    )
+    assert await collector._index_component_markets([aliased]) == [aliased]
+
+
+@pytest.mark.asyncio
 async def test_collector_skips_index_component_fetch_when_no_symbols_are_watched() -> None:
     store = SnapshotStore()
     provider = FakeIndexComponentProvider()

@@ -10,11 +10,21 @@ from app.db.schema import initialize_schema
 from app.main import create_app
 from app.models.announcement import AnnouncementKind, AnnouncementSettings, ExchangeAnnouncement
 from app.models.astro import AstroAlertActionResult
-from app.models.new_listing import NewListingSpreadSample, NewListingWatchItem
+from app.models.new_listing import (
+    NewListingAlertEvent,
+    NewListingSpreadSample,
+    NewListingWatchItem,
+)
 from app.models.second_level_sampling import SecondLevelMarketSample
 from app.services.announcements import AnnouncementMonitor
-from app.services.new_listing_monitor import NewListingMonitor, NewListingMonitorRepository
-from app.services.new_listing_monitor import NewListingPrewarmer
+from app.services.new_listing_monitor import (
+    NewListingAnnouncementCardPreparer,
+    NewListingMonitor,
+    NewListingMonitorRepository,
+    NewListingPrewarmer,
+    _direction_sample,
+    _opportunity_from_new_listing_sample,
+)
 
 
 class UnitreeFetcher:
@@ -90,6 +100,25 @@ def test_new_listing_watch_item_normalizes_parameters() -> None:
 
     assert item.symbol == "UNITREEUSDT"
     assert item.exchanges == ["bybit", "gate"]
+
+
+def test_new_listing_sample_keeps_hyperliquid_market_for_card() -> None:
+    now = datetime.now(UTC)
+    item = NewListingWatchItem(symbol="TTWO", exchanges=["binance", "hyperliquid"])
+    buy = SecondLevelMarketSample(
+        observed_at=now, exchange="binance", symbol="TTWOUSDT", status="ok",
+        raw_future_symbol="TTWOUSDT", future_bid=99, future_ask=100,
+    )
+    sell = SecondLevelMarketSample(
+        observed_at=now, exchange="hyperliquid", symbol="TTWOUSDT", status="ok",
+        raw_future_symbol="para:TTWO", future_bid=102, future_ask=103,
+    )
+
+    sample = _direction_sample(item, buy, sell, observed_at=now)
+
+    assert sample is not None
+    assert sample.sell_raw_symbol == "para:TTWO"
+    assert _opportunity_from_new_listing_sample(sample).sell_raw_symbol == "para:TTWO"
 
 
 @pytest.mark.asyncio
@@ -204,8 +233,18 @@ async def test_announcement_monitor_prewarms_new_listing_watchlist() -> None:
     await initialize_schema(db)
     announcement_repo = AnnouncementRepository(db)
     watch_repo = NewListingMonitorRepository(db)
+    prepared_items: list[tuple[str, str]] = []
+
+    async def prepare_cards(
+        announcement: ExchangeAnnouncement,
+        item: NewListingWatchItem,
+    ) -> list[AstroAlertActionResult]:
+        prepared_items.append((announcement.announcement_id, item.symbol))
+        return []
+
     prewarmer = NewListingPrewarmer(
         watch_repo,
+        card_preparer=prepare_cards,
         now_fn=lambda: datetime(2026, 8, 18, 10, 0, tzinfo=UTC),
     )
     monitor = AnnouncementMonitor(
@@ -248,6 +287,7 @@ async def test_announcement_monitor_prewarms_new_listing_watchlist() -> None:
     assert watch_items[0].exchanges[0] == "okx"
     assert watch_items[0].start_at == datetime(2026, 8, 18, 10, 0, tzinfo=UTC)
     assert watch_items[0].stop_at == datetime(2026, 8, 18, 12, 5, tzinfo=UTC)
+    assert prepared_items == [("cxmt-listing", "CXMTUSDT")]
 
 
 @pytest.mark.asyncio
@@ -367,6 +407,201 @@ def test_new_listing_monitor_keeps_level_fluctuations_in_the_same_cooldown() -> 
     assert normal_during_cooldown.alert_triggered is False
     assert normal_during_cooldown.no_alert_reason == "冷却中，约 50 秒后可再次提醒"
     assert normal_after_cooldown.alert_triggered is True
+
+
+@pytest.mark.asyncio
+async def test_new_listing_monitor_restores_route_cooldown_after_restart(monkeypatch) -> None:
+    db = await connect_database(":memory:")
+    await initialize_schema(db)
+    repo = NewListingMonitorRepository(db)
+    item = NewListingWatchItem(
+        id="unitree-restart-watch",
+        symbol="UNITREE",
+        exchanges=["gate", "bybit"],
+        normal_threshold_pct=3,
+        strong_threshold_pct=8,
+        extreme_threshold_pct=15,
+        normal_consecutive_hits=1,
+        strong_consecutive_hits=1,
+        extreme_consecutive_hits=1,
+        cooldown_seconds=60,
+    )
+    await repo.upsert_watch_item(item)
+    current_time = [datetime(2026, 9, 12, 10, 35, tzinfo=UTC)]
+    monkeypatch.setattr(
+        "app.services.new_listing_monitor.utc_now",
+        lambda: current_time[0],
+    )
+
+    first_monitor = NewListingMonitor(repo, fetcher=UnitreeFetcher())  # type: ignore[arg-type]
+    try:
+        first_samples = await first_monitor.collect_watch_item(item)
+    finally:
+        await first_monitor.aclose()
+
+    current_time[0] += timedelta(seconds=10)
+    restarted_monitor = NewListingMonitor(repo, fetcher=UnitreeFetcher())  # type: ignore[arg-type]
+    try:
+        second_samples = await restarted_monitor.collect_watch_item(item)
+        events = await repo.list_events(watch_id=item.id)
+    finally:
+        await restarted_monitor.aclose()
+        await db.close()
+
+    assert first_samples[0].alert_triggered is True
+    assert second_samples[0].alert_triggered is False
+    assert second_samples[0].no_alert_reason == "冷却中，约 50 秒后可再次提醒"
+    assert len(events) == 1
+
+
+@pytest.mark.asyncio
+async def test_schema_backfills_route_cooldown_from_existing_alert_events() -> None:
+    db = await connect_database(":memory:")
+    await initialize_schema(db)
+    repo = NewListingMonitorRepository(db)
+    item = await repo.upsert_watch_item(
+        NewListingWatchItem(
+            id="legacy-flock-watch",
+            symbol="FLOCK",
+            exchanges=["binance", "gate"],
+        )
+    )
+    await db.execute("DROP TABLE new_listing_alert_cooldowns")
+    sent_at = datetime(2026, 9, 12, 10, 35, 5, tzinfo=UTC)
+    await repo.create_event(
+        NewListingAlertEvent(
+            watch_id=item.id,
+            symbol=item.symbol,
+            market_type=item.market_type,
+            level="normal",
+            buy_exchange="binance",
+            sell_exchange="gate",
+            net_spread_pct=1.049,
+            raw_spread_pct=1.249,
+            executable_notional_usdt=316.21,
+            message="legacy event",
+            created_at=sent_at,
+        )
+    )
+
+    try:
+        await initialize_schema(db)
+        cooldowns = await repo.list_alert_cooldowns()
+    finally:
+        await db.close()
+
+    assert cooldowns == {
+        "legacy-flock-watch:future:binance->gate": sent_at,
+    }
+
+
+@pytest.mark.asyncio
+async def test_listing_announcement_prepares_bidirectional_cards_for_source_exchange() -> None:
+    prepared_opportunities = []
+
+    async def prepare_card(opportunity) -> AstroAlertActionResult:
+        prepared_opportunities.append(opportunity)
+        return AstroAlertActionResult(
+            enabled=True,
+            status="created",
+            action="add",
+            message="created",
+        )
+
+    preparer = NewListingAnnouncementCardPreparer(prepare_card)
+    announcement = ExchangeAnnouncement(
+        exchange="gate",
+        announcement_id="flock-futures-listing",
+        kind=AnnouncementKind.LISTING,
+        title="Gate to list FLOCKUSDT perpetual futures",
+        url="https://www.gate.com/announcements/flock",
+        source="gate-announcements",
+        symbols=["FLOCK"],
+        market_type="futures",
+        event_time=datetime(2026, 9, 12, 10, 40, tzinfo=UTC),
+        published_at=datetime(2026, 9, 12, 10, 30, tzinfo=UTC),
+        fetched_at=datetime(2026, 9, 12, 10, 30, tzinfo=UTC),
+        alert_status="pending",
+    )
+    item = NewListingWatchItem(
+        id="flock-watch",
+        symbol="FLOCK",
+        market_type="future",
+        exchanges=["gate", "bitget", "okx"],
+        normal_threshold_pct=1,
+        buy_fee_pct=0.05,
+        sell_fee_pct=0.05,
+        slippage_buffer_pct=0.1,
+    )
+
+    first_results = await preparer.prepare_from_announcement(announcement, item)
+    second_results = await preparer.prepare_from_announcement(announcement, item)
+
+    assert len(first_results) == 4
+    assert second_results == []
+    assert [
+        (opportunity.buy_exchange, opportunity.sell_exchange)
+        for opportunity in prepared_opportunities
+    ] == [
+        ("gate", "bitget"),
+        ("bitget", "gate"),
+        ("gate", "okx"),
+        ("okx", "gate"),
+    ]
+    assert all(opportunity.type.value == "FF" for opportunity in prepared_opportunities)
+    assert all(opportunity.risk_labels == ["NEW_LISTING"] for opportunity in prepared_opportunities)
+    assert all(
+        opportunity.open_spread_pct == pytest.approx(1.2)
+        for opportunity in prepared_opportunities
+    )
+
+
+@pytest.mark.asyncio
+async def test_far_future_listing_announcement_prepares_cards_without_saving_watch() -> None:
+    db = await connect_database(":memory:")
+    await initialize_schema(db)
+    repo = NewListingMonitorRepository(db)
+    prepared_items: list[NewListingWatchItem] = []
+    now = datetime(2026, 9, 12, 10, 30, tzinfo=UTC)
+
+    async def prepare_cards(
+        announcement: ExchangeAnnouncement,
+        item: NewListingWatchItem,
+    ) -> list[AstroAlertActionResult]:
+        prepared_items.append(item)
+        return []
+
+    prewarmer = NewListingPrewarmer(
+        repo,
+        card_preparer=prepare_cards,
+        now_fn=lambda: now,
+    )
+    announcement = ExchangeAnnouncement(
+        exchange="okx",
+        announcement_id="future-listing",
+        kind=AnnouncementKind.LISTING,
+        title="OKX to list FUTUREUSDT perpetual futures",
+        url="https://www.okx.com/help/future-listing",
+        source="okx-help",
+        symbols=["FUTURE"],
+        market_type="futures",
+        event_time=now + timedelta(days=7),
+        published_at=now,
+        fetched_at=now,
+        alert_status="pending",
+    )
+
+    try:
+        saved = await prewarmer.prewarm_from_announcement(announcement)
+        watch_items = await repo.list_watch_items()
+    finally:
+        await db.close()
+
+    assert saved == []
+    assert watch_items == []
+    assert len(prepared_items) == 1
+    assert prepared_items[0].symbol == "FUTUREUSDT"
+    assert prepared_items[0].exchanges[0] == "okx"
 
 
 @pytest.mark.asyncio

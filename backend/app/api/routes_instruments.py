@@ -8,7 +8,7 @@ from app.models.instrument import (
     InstrumentLookupResult,
 )
 from app.models.market import MarketSnapshot, MarketType
-from app.models.pair_spread import normalize_pair_spread_symbol
+from app.models.pair_spread import normalize_hyperliquid_dex, normalize_pair_spread_symbol
 from app.models.settings import RiskSettings
 from app.services.data_filters import ignored_exchange_set
 from app.services.instrument_spreads import build_instrument_spreads
@@ -37,6 +37,7 @@ def _exchange_error(errors: dict[str, str], exchange: str) -> str | None:
 def _candidate_symbols(
     requested_symbol: str,
     settings: RiskSettings,
+    hyperliquid_dex: str | None = None,
 ) -> list[str]:
     resolver = SymbolAliasResolver(settings.symbol_aliases)
     candidates = [requested_symbol]
@@ -46,6 +47,7 @@ def _candidate_symbols(
                 exchange=exchange,
                 symbol=requested_symbol,
                 market_type=market_type,
+                dex=hyperliquid_dex if exchange == "hyperliquid" else None,
             )
             if resolved.canonical_symbol not in candidates:
                 candidates.append(resolved.canonical_symbol)
@@ -57,23 +59,50 @@ def _best_symbol(candidates: list[str], markets: Iterable[MarketSnapshot]) -> st
     return max(candidates, key=lambda candidate: market_symbols.count(candidate))
 
 
+def _market_hyperliquid_dex(market: MarketSnapshot) -> str:
+    if ":" not in market.raw_symbol:
+        return "main"
+    return market.raw_symbol.split(":", 1)[0].strip().lower() or "main"
+
+
+def _matches_hyperliquid_dex(market: MarketSnapshot, dex: str | None) -> bool:
+    return (
+        dex is None
+        or market.exchange.lower() != "hyperliquid"
+        or _market_hyperliquid_dex(market) == dex
+    )
+
+
 @router.get("/{symbol}", response_model=InstrumentLookupResult)
-async def lookup_instrument(symbol: str, request: Request) -> InstrumentLookupResult:
+async def lookup_instrument(
+    symbol: str,
+    request: Request,
+    dex: str | None = None,
+) -> InstrumentLookupResult:
     try:
         requested_symbol = normalize_pair_spread_symbol(symbol)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="请输入有效标的，例如 BTC 或 BTCUSDT") from exc
 
+    settings = await _risk_settings(request)
+    requested_hyperliquid_dex = normalize_hyperliquid_dex(dex)
+    resolved_hyperliquid = SymbolAliasResolver(settings.symbol_aliases).resolve(
+        exchange="hyperliquid",
+        symbol=requested_symbol,
+        market_type=MarketType.FUTURE,
+        dex=requested_hyperliquid_dex,
+    )
+    hyperliquid_dex = requested_hyperliquid_dex or resolved_hyperliquid.dex
     store = request.app.state.snapshot_store
     allowed_exchanges = set(INSTRUMENT_LOOKUP_EXCHANGES)
     all_markets = [
         market
         for market in store.get_all_markets()
         if market.exchange.lower() in allowed_exchanges
+        and _matches_hyperliquid_dex(market, hyperliquid_dex)
     ]
-    settings = await _risk_settings(request)
     canonical_symbol = _best_symbol(
-        _candidate_symbols(requested_symbol, settings),
+        _candidate_symbols(requested_symbol, settings, hyperliquid_dex),
         all_markets,
     )
     matching = [market for market in all_markets if market.symbol.upper() == canonical_symbol]

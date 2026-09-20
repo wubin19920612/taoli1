@@ -51,12 +51,13 @@ from app.db.schema import initialize_schema
 from app.models.alert import AlertEvent
 from app.models.announcement import AnnouncementKind
 from app.models.astro import AstroAlertActionResult
+from app.models.market import MarketType
 from app.models.orderbook import DepthValidationResult
 from app.models.opportunity import Opportunity
 from app.models.phone_alert import PhonePriceAlertEvent
 from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, LivePilotSettings, RiskSettings
 from app.services.alert_engine import AlertEngine, AlertMatch, observations_are_stable, required_open_spread_pct
-from app.services.alert_messages import build_alert_message
+from app.services.alert_messages import build_alert_message, build_alert_rating_header
 from app.services.alert_metrics import observe_alert_metrics
 from app.services.announcements import (
     AnnouncementMonitor,
@@ -79,6 +80,7 @@ from app.services.funding_research import (
 from app.services.gate_twap import GateTwapClient, GateTwapJobManager
 from app.services.history import OpportunityHistoryRecorder
 from app.services.index_components import (
+    IndexComponentAutoWatchService,
     BinanceIndexComponentProvider,
     BitgetIndexComponentProvider,
     BybitIndexComponentProvider,
@@ -94,7 +96,12 @@ from app.services.live_pilot import (
 )
 from app.services.minute_signal_scan import MinuteSignalAlertEngine
 from app.services.negative_basis_monitor import NegativeBasisMonitor, NegativeBasisMonitorRepository
-from app.services.new_listing_monitor import NewListingMonitor, NewListingMonitorRepository, NewListingPrewarmer
+from app.services.new_listing_monitor import (
+    NewListingAnnouncementCardPreparer,
+    NewListingMonitor,
+    NewListingMonitorRepository,
+    NewListingPrewarmer,
+)
 from app.services.oil_news import (
     OilNewsMonitor,
     OilNewsProvider,
@@ -207,7 +214,13 @@ async def _refresh_astro_runtime_settings(app: FastAPI, settings_repo: SettingsR
     )
 
 
-async def _handle_new_listing_astro_alert(app: FastAPI, opportunity: Opportunity) -> AstroAlertActionResult:
+async def _handle_new_listing_astro_alert(
+    app: FastAPI,
+    opportunity: Opportunity,
+    *,
+    require_depth: bool = True,
+    wait_after_add: bool = False,
+) -> AstroAlertActionResult:
     settings_repo: SettingsRepository | None = getattr(app.state, "settings_repo", None)
     risk_settings = (
         await settings_repo.get_risk_settings()
@@ -232,21 +245,58 @@ async def _handle_new_listing_astro_alert(app: FastAPI, opportunity: Opportunity
             action="none",
             message="Astro 自动建卡服务未初始化",
         )
-    if not astro_alert_service.alert_auto_create_enabled or astro_alert_service.settings.astro_dry_run_only:
+    if (
+        not astro_alert_service.alert_auto_create_enabled
+        or astro_alert_service.settings.astro_dry_run_only
+    ):
         return await astro_alert_service.handle_alert(opportunity)
-    executable_depth = opportunity.min_open_depth_usdt
-    required_depth = astro_alert_service.new_listing_card_settings.max_notional
-    if executable_depth is None or executable_depth + 1e-9 < required_depth:
-        depth_text = "深度未知" if executable_depth is None else f"{executable_depth:.2f} USDT"
-        return AstroAlertActionResult(
-            enabled=True,
-            status="skipped",
-            action="depth",
-            message=(
-                f"可成交盘口 {depth_text} 低于新币卡片最大金额 "
-                f"{required_depth:.2f} USDT，未自动建卡"
-            ),
+    missing_hl_sides = [
+        side
+        for side in ("buy", "sell")
+        if getattr(opportunity, f"{side}_exchange").lower() in {"hyperliquid", "hyper", "hl"}
+        and not getattr(opportunity, f"{side}_raw_symbol")
+    ]
+    if missing_hl_sides:
+        store: SnapshotStore | None = getattr(app.state, "snapshot_store", None)
+        now = datetime.now(UTC)
+        matching = [
+            market
+            for market in (store.get_all_markets() if store is not None else [])
+            if market.exchange.lower() == "hyperliquid"
+            and market.market_type == MarketType.FUTURE
+            and market.symbol.upper() == opportunity.symbol.upper()
+            and -5 <= (now - _datetime_as_utc(market.timestamp)).total_seconds() <= 60
+            and market.raw_symbol.strip()
+        ]
+        raw_symbols = {market.raw_symbol for market in matching}
+        if len(raw_symbols) != 1:
+            reason = "有多个 HL 市场" if raw_symbols else "没有近期 HL 合约行情"
+            return AstroAlertActionResult(
+                enabled=True,
+                status="skipped",
+                action="hl_market",
+                message=f"{opportunity.symbol} HL 市场未确认（{reason}），未按默认市场建卡",
+            )
+        raw_symbol = raw_symbols.pop()
+        opportunity = opportunity.model_copy(
+            update={f"{side}_raw_symbol": raw_symbol for side in missing_hl_sides}
         )
+    if require_depth:
+        executable_depth = opportunity.min_open_depth_usdt
+        required_depth = astro_alert_service.new_listing_card_settings.max_notional
+        if executable_depth is None or executable_depth + 1e-9 < required_depth:
+            depth_text = "深度未知" if executable_depth is None else f"{executable_depth:.2f} USDT"
+            return AstroAlertActionResult(
+                enabled=True,
+                status="skipped",
+                action="depth",
+                message=(
+                    f"可成交盘口 {depth_text} 低于新币卡片最大金额 "
+                    f"{required_depth:.2f} USDT，未自动建卡"
+                ),
+            )
+    if wait_after_add:
+        return await astro_alert_service.handle_alert(opportunity)
     return await astro_alert_service.handle_new_listing_alert(opportunity)
 
 
@@ -592,15 +642,16 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                 existing_card_skipped = False
                 signal_condition_failure = False
                 is_live_pilot_match = (match.rule.id, match.opportunity.id) in live_pilot_match_keys
-                message = build_alert_message(
-                    match.rule,
-                    match.opportunity,
-                    observations=match.observations,
-                    template=alert_template,
-                )
                 latest_opportunity = _inherit_new_listing_label(
                     match.opportunity,
                     _find_latest_opportunity(app, match.opportunity.id),
+                )
+                message = build_alert_message(
+                    match.rule,
+                    latest_opportunity or match.opportunity,
+                    observations=match.observations,
+                    template=alert_template,
+                    include_rating=False,
                 )
                 validation_failure = _latest_signal_validation_failure(
                     match,
@@ -619,6 +670,7 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                     "astro_alert_service",
                     None,
                 )
+                astro_processing_failed = False
                 if astro_alert_service is not None and not signal_condition_failure:
                     try:
                         card_settings = _astro_card_settings_for_opportunity(
@@ -674,7 +726,24 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                                 message = f"{message}\n\n{astro_result.format_message()}"
                     except Exception as exc:  # noqa: BLE001 - keep alert delivery independent.
                         logger.exception("astro alert follow-up failed")
+                        astro_processing_failed = True
                         message = f"{message}\n\nAstro: 处理失败，{_exception_message(exc)}"
+                rating_header = build_alert_rating_header(
+                    match.rule,
+                    latest_opportunity or match.opportunity,
+                    include_reason=(
+                        alert_template.include_funding
+                        and alert_template.include_volume
+                        and alert_template.include_risk
+                    ),
+                    validation_failed=(
+                        signal_condition_failure
+                        or card_condition_failure
+                        or existing_card_skipped
+                        or astro_processing_failed
+                    ),
+                )
+                message = f"{rating_header}\n\n{message}"
                 if signal_condition_failure or existing_card_skipped:
                     status = "muted"
                 elif alert_template.suppress_when_card_conditions_fail and card_condition_failure:
@@ -904,7 +973,18 @@ def create_app(
             risk_settings_loader=app.state.settings_repo.get_risk_settings,
         )
         new_listing_repo = NewListingMonitorRepository(db)
-        app.state.new_listing_prewarmer = NewListingPrewarmer(new_listing_repo)
+        new_listing_card_preparer = NewListingAnnouncementCardPreparer(
+            lambda opportunity: _handle_new_listing_astro_alert(
+                app,
+                opportunity,
+                require_depth=False,
+                wait_after_add=True,
+            )
+        )
+        app.state.new_listing_prewarmer = NewListingPrewarmer(
+            new_listing_repo,
+            card_preparer=new_listing_card_preparer.prepare_from_announcement,
+        )
         text_alert_sender = (
             (lambda message: _send_index_component_alert(app, message))
             if app_settings.feishu_live_send_enabled
@@ -936,6 +1016,12 @@ def create_app(
         )
         app.state.pair_spread_funding_recorder = PairSpreadFundingRecorder(PairSpreadFundingRepository(db))
         app.state.pair_spread_preset_repo = PairSpreadPresetRepository(db)
+        app.state.index_component_auto_watch = IndexComponentAutoWatchService(
+            app.state.index_component_repo,
+            app.state.settings_repo,
+            app.state.pair_spread_preset_repo,
+            app.state.astro_client,
+        )
         tasks: list[asyncio.Task] = []
         if start_background_workers:
             await app.state.second_level_sampler.initialize()
@@ -967,6 +1053,7 @@ def create_app(
             index_component_monitor = IndexComponentMonitor(
                 app.state.index_component_repo,
                 alert_sender=text_alert_sender,
+                auto_watch=app.state.index_component_auto_watch,
             )
             app.state.index_component_monitor = index_component_monitor
             index_component_provider_classes = {
@@ -1120,6 +1207,7 @@ def create_app(
     app.state.premium_index_query_service_factory = None
     app.state.pair_spread_funding_recorder = None
     app.state.pair_spread_preset_repo = None
+    app.state.index_component_auto_watch = None
     app.state.minute_signal_scan_service_factory = None
     app.state.minute_signal_alert_engine = MinuteSignalAlertEngine()
     app.state.second_level_sampler = None

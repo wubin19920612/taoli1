@@ -825,6 +825,12 @@ export interface IndexComponentWatchItem {
   created_at: string;
 }
 
+export interface IndexComponentAutoWatchStatus {
+  enabled: boolean;
+  items: { source: string; symbol: string }[];
+  error: string | null;
+}
+
 export interface IndexComponentChangeFilters {
   symbol?: string;
   exchange?: string;

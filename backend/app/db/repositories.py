@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import aiosqlite
 
@@ -17,9 +17,13 @@ from app.models.announcement import (
 from app.models.history import OpportunityHistoryRow
 from app.models.index_component import (
     IndexComponent,
+    IndexComponentAutoWatchItem,
+    IndexComponentAutoWatchSettings,
     IndexComponentChange,
     IndexComponentSnapshot,
+    IndexComponentTrendFollowup,
     IndexComponentWatchItem,
+    index_watch_symbol,
 )
 from app.models.market import MarketType
 from app.models.oil_news import (
@@ -366,6 +370,76 @@ class IndexComponentRepository:
     def __init__(self, db: aiosqlite.Connection):
         self.db = db
 
+    async def record_index_prices(self, samples: list[tuple[str, str, datetime, float]]) -> None:
+        if not samples:
+            return
+        await self.db.executemany(
+            """INSERT OR IGNORE INTO index_component_price_samples
+               (exchange, symbol, bucket_at, observed_at, index_price) VALUES (?, ?, ?, ?, ?)""",
+            [(exchange, symbol, observed_at.replace(second=0, microsecond=0).isoformat(),
+              observed_at.isoformat(), price)
+             for exchange, symbol, observed_at, price in samples],
+        )
+        await self.db.commit()
+
+    async def list_index_prices(
+        self, exchange: str, symbol: str, since: datetime, until: datetime
+    ) -> list[tuple[datetime, float]]:
+        cursor = await self.db.execute(
+            """SELECT observed_at, index_price FROM index_component_price_samples
+               WHERE exchange = ? AND symbol = ? AND observed_at >= ? AND observed_at <= ?
+               ORDER BY observed_at""",
+            (exchange, index_watch_symbol(symbol), since.isoformat(), until.isoformat()),
+        )
+        return [(datetime.fromisoformat(row["observed_at"]), row["index_price"])
+                for row in await cursor.fetchall()]
+
+    async def prune_index_prices(self, before: datetime) -> None:
+        await self.db.execute(
+            "DELETE FROM index_component_price_samples WHERE observed_at < ?",
+            (before.isoformat(),),
+        )
+        await self.db.execute(
+            """DELETE FROM index_component_trend_followups
+               WHERE status != 'pending' AND due_at < ?""",
+            ((before - timedelta(days=7)).isoformat(),),
+        )
+        await self.db.commit()
+
+    async def queue_trend_followup(
+        self, change: IndexComponentChange, detected_at: datetime, baseline_price: float
+    ) -> None:
+        due_at = detected_at + timedelta(minutes=15)
+        await self.db.execute(
+            """INSERT INTO index_component_trend_followups
+               (change_id, exchange, symbol, detected_at, due_at, baseline_price)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (change.id, change.exchange, index_watch_symbol(change.symbol),
+             detected_at.isoformat(), due_at.isoformat(), baseline_price),
+        )
+        await self.db.commit()
+
+    async def list_due_trend_followups(self, now: datetime) -> list[IndexComponentTrendFollowup]:
+        cursor = await self.db.execute(
+            """SELECT change_id, exchange, symbol, detected_at, due_at, baseline_price
+               FROM index_component_trend_followups
+               WHERE status = 'pending' AND due_at <= ?
+               ORDER BY due_at LIMIT 100""",
+            (now.isoformat(),),
+        )
+        return [IndexComponentTrendFollowup(
+            change_id=row["change_id"], exchange=row["exchange"], symbol=row["symbol"],
+            detected_at=datetime.fromisoformat(row["detected_at"]),
+            due_at=datetime.fromisoformat(row["due_at"]), baseline_price=row["baseline_price"],
+        ) for row in await cursor.fetchall()]
+
+    async def finish_trend_followup(self, change_id: str, status: str) -> None:
+        await self.db.execute(
+            "UPDATE index_component_trend_followups SET status = ? WHERE change_id = ?",
+            (status, change_id),
+        )
+        await self.db.commit()
+
     async def get_snapshot(self, exchange: str, symbol: str) -> IndexComponentSnapshot | None:
         cursor = await self.db.execute(
             """
@@ -558,12 +632,42 @@ class IndexComponentRepository:
         )
         await self.db.commit()
 
+    async def list_auto_watch_items(self) -> list[IndexComponentAutoWatchItem]:
+        cursor = await self.db.execute(
+            "SELECT source, symbol FROM index_component_auto_watchlist ORDER BY symbol, source"
+        )
+        return [IndexComponentAutoWatchItem(**row) for row in await cursor.fetchall()]
+
+    async def replace_auto_watch_source(self, source: str, symbols: set[str]) -> None:
+        normalized = {index_watch_symbol(symbol) for symbol in symbols}
+        cursor = await self.db.execute(
+            "SELECT symbol FROM index_component_auto_watchlist WHERE source = ?", (source,)
+        )
+        current = {row["symbol"] for row in await cursor.fetchall()}
+        if current == normalized:
+            return
+        await self.db.executemany(
+            "DELETE FROM index_component_auto_watchlist WHERE source = ? AND symbol = ?",
+            [(source, symbol) for symbol in current - normalized],
+        )
+        await self.db.executemany(
+            "INSERT INTO index_component_auto_watchlist (source, symbol) VALUES (?, ?)",
+            [(source, symbol) for symbol in normalized - current],
+        )
+        await self.db.commit()
+
+    async def clear_auto_watch_items(self) -> None:
+        await self.db.execute("DELETE FROM index_component_auto_watchlist")
+        await self.db.commit()
+
     async def is_symbol_watched(self, symbol: str) -> bool:
         watched_items = await self.list_watch_items()
-        if not watched_items:
-            return False
-        normalized = symbol.strip().upper()
-        return any(normalized.startswith(item.symbol) for item in watched_items)
+        auto_items = await self.list_auto_watch_items()
+        normalized = index_watch_symbol(symbol)
+        return any(
+            index_watch_symbol(item.symbol) == normalized
+            for item in [*watched_items, *auto_items]
+        )
 
     def _snapshot_from_db(self, row: aiosqlite.Row) -> IndexComponentSnapshot:
         return IndexComponentSnapshot(
@@ -1091,6 +1195,27 @@ class SettingsRepository:
     def __init__(self, db: aiosqlite.Connection):
         self.db = db
         self._floating_watch_lock = asyncio.Lock()
+
+    async def get_index_component_auto_watch_settings(self) -> IndexComponentAutoWatchSettings:
+        cursor = await self.db.execute(
+            "SELECT payload FROM app_settings WHERE key = ?", ("index_component_auto_watch",)
+        )
+        row = await cursor.fetchone()
+        return (
+            IndexComponentAutoWatchSettings.model_validate_json(row["payload"])
+            if row is not None else IndexComponentAutoWatchSettings()
+        )
+
+    async def set_index_component_auto_watch_settings(
+        self, settings: IndexComponentAutoWatchSettings
+    ) -> IndexComponentAutoWatchSettings:
+        await self.db.execute(
+            """INSERT INTO app_settings (key, payload) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET payload = excluded.payload""",
+            ("index_component_auto_watch", settings.model_dump_json()),
+        )
+        await self.db.commit()
+        return settings
 
     async def get_floating_watch_settings(self) -> FloatingWatchSettings:
         cursor = await self.db.execute(

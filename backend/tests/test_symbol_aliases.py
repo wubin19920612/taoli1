@@ -265,6 +265,57 @@ def test_known_hyperliquid_anth_alias_resolves_canonical_symbol_and_dex() -> Non
     assert aliased.symbol_alias_original_symbol == "ANTHUSDT"
 
 
+def test_known_hyperliquid_raw_anth_alias_infers_unique_dex() -> None:
+    resolved = resolve_symbol_alias(
+        [],
+        exchange="hyperliquid",
+        symbol="ANTH",
+        market_type=MarketType.FUTURE,
+    )
+
+    assert resolved.raw_symbol == "ANTHUSDT"
+    assert resolved.canonical_symbol == "ANTHROPICUSDT"
+    assert resolved.dex == "io"
+
+
+def test_hyperliquid_alias_does_not_guess_between_multiple_dexes() -> None:
+    aliases = [
+        SymbolAlias(
+            exchange="hyperliquid",
+            dex="io",
+            symbol="COIN",
+            canonical_symbol="ASSET",
+            market_type=MarketType.FUTURE,
+        ),
+        SymbolAlias(
+            exchange="hyperliquid",
+            dex="xyz",
+            symbol="COIN2",
+            canonical_symbol="ASSET",
+            market_type=MarketType.FUTURE,
+        ),
+    ]
+
+    ambiguous = resolve_symbol_alias(
+        aliases,
+        exchange="hyperliquid",
+        symbol="ASSET",
+        market_type=MarketType.FUTURE,
+    )
+    explicit = resolve_symbol_alias(
+        aliases,
+        exchange="hyperliquid",
+        symbol="ASSET",
+        market_type=MarketType.FUTURE,
+        dex="io",
+    )
+
+    assert ambiguous.raw_symbol == "ASSETUSDT"
+    assert ambiguous.dex is None
+    assert explicit.raw_symbol == "COINUSDT"
+    assert explicit.dex == "io"
+
+
 def test_known_hyperliquid_anth_alias_does_not_override_explicit_other_dex() -> None:
     resolved = resolve_symbol_alias(
         [],

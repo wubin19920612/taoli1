@@ -112,6 +112,8 @@ class NewListingSpreadSample(BaseModel):
     market_type: MarketType
     buy_exchange: str
     sell_exchange: str
+    buy_raw_symbol: str | None = None
+    sell_raw_symbol: str | None = None
     buy_bid: float | None = None
     buy_ask: float | None = None
     buy_bid_size: float | None = None

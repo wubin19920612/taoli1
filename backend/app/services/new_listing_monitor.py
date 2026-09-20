@@ -176,8 +176,30 @@ class NewListingMonitorRepository:
         return [_watch_from_row(row) for row in rows]
 
     async def delete_watch_item(self, item_id: str) -> None:
+        await self.db.execute(
+            "DELETE FROM new_listing_alert_cooldowns WHERE watch_id = ?",
+            (item_id,),
+        )
         await self.db.execute("DELETE FROM new_listing_watchlist WHERE id = ?", (item_id,))
         await self.db.commit()
+
+    async def list_alert_cooldowns(self) -> dict[str, datetime]:
+        cursor = await self.db.execute(
+            """
+            SELECT watch_id, market_type, buy_exchange, sell_exchange, last_sent_at
+            FROM new_listing_alert_cooldowns
+            """
+        )
+        rows = await cursor.fetchall()
+        return {
+            _route_state_key(
+                watch_id=row["watch_id"],
+                market_type=row["market_type"],
+                buy_exchange=row["buy_exchange"],
+                sell_exchange=row["sell_exchange"],
+            ): _as_utc(datetime.fromisoformat(row["last_sent_at"]))
+            for row in rows
+        }
 
     async def insert_samples(self, samples: list[NewListingSpreadSample]) -> None:
         if not samples:
@@ -226,6 +248,28 @@ class NewListingMonitorRepository:
                 for item in samples
             ],
         )
+        triggered = [item for item in samples if item.alert_triggered]
+        if triggered:
+            await self.db.executemany(
+                """
+                INSERT INTO new_listing_alert_cooldowns (
+                  watch_id, market_type, buy_exchange, sell_exchange, last_sent_at
+                )
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(watch_id, market_type, buy_exchange, sell_exchange)
+                DO UPDATE SET last_sent_at = excluded.last_sent_at
+                """,
+                [
+                    (
+                        item.watch_id,
+                        item.market_type.value,
+                        item.buy_exchange,
+                        item.sell_exchange,
+                        _as_utc(item.observed_at).isoformat(),
+                    )
+                    for item in triggered
+                ],
+            )
         await self.db.commit()
 
     async def create_event(self, event: NewListingAlertEvent) -> NewListingAlertEvent:
@@ -503,14 +547,126 @@ def _watch_is_active(item: NewListingWatchItem, now: datetime) -> bool:
     return True
 
 
+def _new_auto_prewarm_watch_item(
+    announcement: ExchangeAnnouncement,
+    *,
+    symbol: str,
+    market_type: MarketType,
+    now: datetime,
+) -> NewListingWatchItem:
+    return NewListingWatchItem(
+        id=_prewarm_watch_id(symbol, market_type),
+        enabled=True,
+        symbol=symbol,
+        market_type=market_type,
+        exchanges=_prewarm_exchanges(announcement),
+        interval_seconds=1,
+        retention_hours=72,
+        normal_threshold_pct=1,
+        strong_threshold_pct=3,
+        extreme_threshold_pct=8,
+        min_executable_notional_usdt=50,
+        depth_validation_notional_usdt=100,
+        allow_low_liquidity_alert=True,
+        normal_consecutive_hits=1,
+        strong_consecutive_hits=1,
+        extreme_consecutive_hits=1,
+        cooldown_seconds=DEFAULT_NEW_LISTING_ALERT_COOLDOWN_SECONDS,
+        buy_fee_pct=0.05,
+        sell_fee_pct=0.05,
+        slippage_buffer_pct=0.10,
+        start_at=_prewarm_start_at(announcement, symbol, now),
+        stop_at=_prewarm_stop_at(announcement, symbol),
+        note=_prewarm_note(announcement, symbol),
+    )
+
+
+def _announcement_was_just_published(
+    announcement: ExchangeAnnouncement,
+    now: datetime,
+) -> bool:
+    published_at = _as_utc(announcement.published_at)
+    return (
+        now - timedelta(hours=NEW_LISTING_PREWARM_LOOKBACK_HOURS)
+        <= published_at
+        <= now + timedelta(minutes=5)
+    )
+
+
+class NewListingAnnouncementCardPreparer:
+    def __init__(
+        self,
+        card_handler: Callable[[Opportunity], Awaitable[AstroAlertActionResult]],
+    ) -> None:
+        self.card_handler = card_handler
+        self._completed: set[str] = set()
+
+    async def prepare_from_announcement(
+        self,
+        announcement: ExchangeAnnouncement,
+        item: NewListingWatchItem,
+    ) -> list[AstroAlertActionResult]:
+        if announcement.kind != AnnouncementKind.LISTING or item.market_type != MarketType.FUTURE:
+            return []
+        source_exchange = announcement.exchange.strip().lower()
+        if source_exchange not in item.exchanges:
+            return []
+        key = (
+            f"{announcement.exchange}:{announcement.source}:{announcement.announcement_id}:"
+            f"{item.symbol}:{item.market_type.value}"
+        )
+        if key in self._completed:
+            return []
+
+        results: list[AstroAlertActionResult] = []
+        handler_failed = False
+        for counterpart in item.exchanges:
+            if counterpart == source_exchange:
+                continue
+            for buy_exchange, sell_exchange in (
+                (source_exchange, counterpart),
+                (counterpart, source_exchange),
+            ):
+                opportunity = _opportunity_from_new_listing_announcement(
+                    item,
+                    buy_exchange=buy_exchange,
+                    sell_exchange=sell_exchange,
+                    observed_at=announcement.published_at,
+                )
+                try:
+                    results.append(await self.card_handler(opportunity))
+                except Exception:
+                    handler_failed = True
+                    logger.exception(
+                        "new listing announcement card precreate failed symbol=%s route=%s->%s",
+                        item.symbol,
+                        buy_exchange,
+                        sell_exchange,
+                    )
+
+        if results and not handler_failed and all(
+            result.status == "created"
+            or (result.status == "skipped" and result.action == "existing")
+            for result in results
+        ):
+            self._completed.add(key)
+        return results
+
+
 class NewListingPrewarmer:
     def __init__(
         self,
         repo: NewListingMonitorRepository,
         *,
+        card_preparer: Callable[
+            [ExchangeAnnouncement, NewListingWatchItem],
+            Awaitable[list[AstroAlertActionResult]],
+        ]
+        | None = None,
         now_fn: Callable[[], datetime] | None = None,
     ) -> None:
         self.repo = repo
+        self.card_preparer = card_preparer
         self._now_fn = now_fn or utc_now
 
     async def backfill_auto_watch_windows(self) -> list[NewListingWatchItem]:
@@ -542,6 +698,11 @@ class NewListingPrewarmer:
             return []
         now = self._now_fn()
         if not _is_prewarm_window(announcement, now):
+            await self._prepare_fresh_announcement_cards(
+                announcement,
+                market_type=market_type,
+                now=now,
+            )
             return []
 
         saved: list[NewListingWatchItem] = []
@@ -565,31 +726,13 @@ class NewListingPrewarmer:
             note = _prewarm_note(announcement, symbol)
             start_at = _prewarm_start_at(announcement, symbol, now)
             stop_at = _prewarm_stop_at(announcement, symbol)
+            should_save = existing is None
             if existing is None:
-                item = NewListingWatchItem(
-                    id=_prewarm_watch_id(symbol, market_type),
-                    enabled=True,
+                item = _new_auto_prewarm_watch_item(
+                    announcement,
                     symbol=symbol,
                     market_type=market_type,
-                    exchanges=exchanges,
-                    interval_seconds=1,
-                    retention_hours=72,
-                    normal_threshold_pct=1,
-                    strong_threshold_pct=3,
-                    extreme_threshold_pct=8,
-                    min_executable_notional_usdt=50,
-                    depth_validation_notional_usdt=100,
-                    allow_low_liquidity_alert=True,
-                    normal_consecutive_hits=1,
-                    strong_consecutive_hits=1,
-                    extreme_consecutive_hits=1,
-                    cooldown_seconds=DEFAULT_NEW_LISTING_ALERT_COOLDOWN_SECONDS,
-                    buy_fee_pct=0.05,
-                    sell_fee_pct=0.05,
-                    slippage_buffer_pct=0.10,
-                    start_at=start_at,
-                    stop_at=stop_at,
-                    note=note,
+                    now=now,
                 )
             else:
                 merged_exchanges = [*existing.exchanges]
@@ -610,13 +753,58 @@ class NewListingPrewarmer:
                         updates["stop_at"] = next_stop_at
                     if existing.cooldown_seconds == LEGACY_NEW_LISTING_PREWARM_COOLDOWN_SECONDS:
                         updates["cooldown_seconds"] = DEFAULT_NEW_LISTING_ALERT_COOLDOWN_SECONDS
-                if not updates:
-                    continue
-                item = existing.model_copy(update=updates)
-            saved_item = await self.repo.upsert_watch_item(item)
-            saved.append(saved_item)
-            existing_items.append(saved_item)
+                item = existing.model_copy(update=updates) if updates else existing
+                should_save = bool(updates)
+            if should_save:
+                item = await self.repo.upsert_watch_item(item)
+                saved.append(item)
+                existing_items.append(item)
+            if self.card_preparer is not None:
+                await self.card_preparer(announcement, item)
         return saved
+
+    async def _prepare_fresh_announcement_cards(
+        self,
+        announcement: ExchangeAnnouncement,
+        *,
+        market_type: MarketType,
+        now: datetime,
+    ) -> None:
+        if (
+            self.card_preparer is None
+            or market_type != MarketType.FUTURE
+            or not _announcement_was_just_published(announcement, now)
+        ):
+            return
+        existing_items = await self.repo.list_watch_items()
+        exchanges = _prewarm_exchanges(announcement)
+        for raw_symbol in announcement.symbols:
+            try:
+                symbol = normalize_pair_spread_symbol(raw_symbol)
+            except ValueError:
+                continue
+            existing = next(
+                (
+                    item
+                    for item in existing_items
+                    if item.symbol == symbol and item.market_type == market_type
+                ),
+                None,
+            )
+            if existing is None:
+                item = _new_auto_prewarm_watch_item(
+                    announcement,
+                    symbol=symbol,
+                    market_type=market_type,
+                    now=now,
+                )
+            else:
+                merged_exchanges = [*existing.exchanges]
+                merged_exchanges.extend(
+                    exchange for exchange in exchanges if exchange not in merged_exchanges
+                )
+                item = existing.model_copy(update={"exchanges": merged_exchanges})
+            await self.card_preparer(announcement, item)
 
 
 class NewListingMonitor:
@@ -635,6 +823,8 @@ class NewListingMonitor:
         self.astro_alert_handler = astro_alert_handler
         self._hits: dict[str, int] = {}
         self._last_sent: dict[str, datetime] = {}
+        self._cooldowns_loaded = False
+        self._cooldowns_load_lock = asyncio.Lock()
         self._last_run_at: dict[str, datetime] = {}
         self._latest_error: str | None = None
         self._running = False
@@ -689,6 +879,7 @@ class NewListingMonitor:
         return [sample for batch in batches for sample in batch]
 
     async def collect_watch_item(self, item: NewListingWatchItem) -> list[NewListingSpreadSample]:
+        await self._ensure_cooldowns_loaded()
         started = time.perf_counter()
         observed_at = utc_now()
         resolver = SymbolAliasResolver([])
@@ -770,6 +961,15 @@ class NewListingMonitor:
             time.perf_counter() - started,
         )
         return samples
+
+    async def _ensure_cooldowns_loaded(self) -> None:
+        if self._cooldowns_loaded:
+            return
+        async with self._cooldowns_load_lock:
+            if self._cooldowns_loaded:
+                return
+            self._last_sent.update(await self.repo.list_alert_cooldowns())
+            self._cooldowns_loaded = True
 
     async def status(self) -> NewListingMonitorStatus:
         watchlist = await self.repo.list_watch_items()
@@ -990,6 +1190,12 @@ def _direction_sample(
         market_type=item.market_type,
         buy_exchange=buy.exchange,
         sell_exchange=sell.exchange,
+        buy_raw_symbol=(
+            buy.raw_future_symbol if item.market_type == MarketType.FUTURE else buy.raw_spot_symbol
+        ),
+        sell_raw_symbol=(
+            sell.raw_future_symbol if item.market_type == MarketType.FUTURE else sell.raw_spot_symbol
+        ),
         buy_bid=_leg_bid(buy, item.market_type),
         buy_ask=buy_ask,
         buy_bid_size=_leg_bid_size(buy, item.market_type),
@@ -1114,10 +1320,10 @@ def _opportunity_from_new_listing_sample(sample: NewListingSpreadSample) -> Oppo
         symbol=sample.symbol,
         buy_exchange=sample.buy_exchange,
         buy_market_type=sample.market_type,
-        buy_raw_symbol=None,
+        buy_raw_symbol=sample.buy_raw_symbol,
         sell_exchange=sample.sell_exchange,
         sell_market_type=sample.market_type,
-        sell_raw_symbol=None,
+        sell_raw_symbol=sample.sell_raw_symbol,
         open_spread_pct=sample.raw_spread_pct,
         close_spread_pct=0,
         fee_adjusted_open_pct=sample.net_spread_pct,
@@ -1154,8 +1360,66 @@ def _opportunity_from_new_listing_sample(sample: NewListingSpreadSample) -> Oppo
     )
 
 
+def _opportunity_from_new_listing_announcement(
+    item: NewListingWatchItem,
+    *,
+    buy_exchange: str,
+    sell_exchange: str,
+    observed_at: datetime,
+) -> Opportunity:
+    raw_spread_pct = max(
+        item.normal_threshold_pct
+        + item.buy_fee_pct
+        + item.sell_fee_pct
+        + item.slippage_buffer_pct,
+        0.000001,
+    )
+    buy_price = 100.0
+    sell_price = buy_price * (1 + raw_spread_pct / 100)
+    return Opportunity(
+        id=(
+            f"new-listing-announcement:{item.id}:{item.market_type.value}:"
+            f"{buy_exchange}->{sell_exchange}"
+        ),
+        type=OpportunityType.FF,
+        symbol=item.symbol,
+        buy_exchange=buy_exchange,
+        buy_market_type=MarketType.FUTURE,
+        buy_raw_symbol=None,
+        sell_exchange=sell_exchange,
+        sell_market_type=MarketType.FUTURE,
+        sell_raw_symbol=None,
+        open_spread_pct=raw_spread_pct,
+        close_spread_pct=0,
+        fee_adjusted_open_pct=item.normal_threshold_pct,
+        spread_width_pct=raw_spread_pct,
+        buy_bid=buy_price,
+        buy_ask=buy_price,
+        sell_bid=sell_price,
+        sell_ask=sell_price,
+        min_open_depth_usdt=None,
+        buy_volume_24h_usdt=None,
+        sell_volume_24h_usdt=None,
+        risk_labels=[NEW_LISTING_RISK_LABEL],
+        last_seen_at=_as_utc(observed_at),
+    )
+
+
+def _route_state_key(
+    *,
+    watch_id: str,
+    market_type: MarketType | str,
+    buy_exchange: str,
+    sell_exchange: str,
+) -> str:
+    market_value = getattr(market_type, "value", market_type)
+    return f"{watch_id}:{market_value}:{buy_exchange}->{sell_exchange}"
+
+
 def _hit_key(sample: NewListingSpreadSample) -> str:
-    return (
-        f"{sample.watch_id}:{sample.market_type.value}:"
-        f"{sample.buy_exchange}->{sample.sell_exchange}"
+    return _route_state_key(
+        watch_id=sample.watch_id,
+        market_type=sample.market_type,
+        buy_exchange=sample.buy_exchange,
+        sell_exchange=sample.sell_exchange,
     )

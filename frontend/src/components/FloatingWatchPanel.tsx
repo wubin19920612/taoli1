@@ -225,11 +225,18 @@ function astroLegs(pair: AstroPairStatus): [AstroLeg, AstroLeg] | null {
   })) as [AstroLeg, AstroLeg];
 }
 
+function astroInstrumentKey(leg: AstroLeg): string {
+  const dex = leg.exchange === "hyperliquid" ? leg.dex.trim().toLowerCase() : "";
+  return `${leg.symbol}|${dex}`;
+}
+
 function astroMarket(
   leg: AstroLeg,
   states: Record<string, InstrumentState>
 ): MarketSnapshot | null {
-  const exchange = states[leg.symbol]?.result?.exchanges.find((item) => item.exchange === leg.exchange);
+  const exchange = states[astroInstrumentKey(leg)]?.result?.exchanges.find(
+    (item) => item.exchange === leg.exchange
+  );
   return leg.marketType === "spot" ? exchange?.spot ?? null : exchange?.future ?? null;
 }
 
@@ -259,7 +266,7 @@ function astroMetrics(
   const missingIndex = markets.findIndex((market) => !market);
   if (missingIndex >= 0) {
     const leg = legs[missingIndex];
-    const state = states[leg.symbol];
+    const state = states[astroInstrumentKey(leg)];
     if (!state) return { value: null, error: "实时行情刷新中" };
     const venue = exchangeLabels[leg.exchange] ?? leg.exchange;
     return {
@@ -518,19 +525,30 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
         if (astroResult.items) {
           setAstroPairs(astroResult.items);
           if (requestedMode === "astro") {
-            const symbols = Array.from(new Set(
+            const legs = Array.from(new Map(
               astroResult.items
                 .filter((pair) => pair.status === true)
-                .flatMap((pair) => astroLegs(pair)?.map((leg) => leg.symbol) ?? [])
-            ));
+                .flatMap((pair) => astroLegs(pair) ?? [])
+                .map((leg): [string, AstroLeg] => [astroInstrumentKey(leg), leg])
+            ).values());
             const instrumentEntries = await mapWithConcurrency(
-              symbols,
+              legs,
               3,
-              async (symbol): Promise<[string, InstrumentState]> => {
+              async (leg): Promise<[string, InstrumentState]> => {
+                const key = astroInstrumentKey(leg);
                 try {
-                  return [symbol, { result: await lookupInstrument(symbol), error: "" }];
+                  return [key, {
+                    result: await lookupInstrument(
+                      leg.symbol,
+                      leg.exchange === "hyperliquid" ? (leg.dex || undefined) : undefined
+                    ),
+                    error: ""
+                  }];
                 } catch (caught) {
-                  return [symbol, { result: null, error: caught instanceof Error ? caught.message : String(caught) }];
+                  return [key, {
+                    result: null,
+                    error: caught instanceof Error ? caught.message : String(caught)
+                  }];
                 }
               }
             );

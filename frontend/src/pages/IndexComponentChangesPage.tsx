@@ -1,5 +1,5 @@
 import { DeleteOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
-import { Button, Input, Select, Space, Table, Tag, Typography, message } from "antd";
+import { Alert, Button, Input, Select, Space, Switch, Table, Tag, Tooltip, Typography, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
@@ -8,12 +8,16 @@ import { useEffect, useState } from "react";
 import {
   createIndexComponentWatchItem,
   deleteIndexComponentWatchItem,
+  getIndexComponentAutoWatch,
   listIndexComponentChanges,
   listIndexComponentSnapshots,
   listIndexComponentWatchlist,
-  listMarkets
+  listMarkets,
+  syncIndexComponentAutoWatch,
+  updateIndexComponentAutoWatch
 } from "../api/client";
 import type {
+  IndexComponentAutoWatchStatus,
   IndexComponent,
   IndexComponentChange,
   IndexComponentSnapshot,
@@ -34,6 +38,13 @@ const EXCHANGE_OPTIONS = [
   { label: "Aster", value: "aster" },
   { label: "Hyperliquid", value: "hyperliquid" }
 ];
+
+const AUTO_WATCH_SOURCES: Record<string, string> = {
+  floating_symbols: "浮窗标的",
+  floating_pairs: "浮窗交易对",
+  astro_cards: "运行卡片",
+  positions: "持仓"
+};
 
 function formatUtcPlus8(value: string): string {
   return dayjs.utc(value).utcOffset(8).format("MM-DD HH:mm:ss");
@@ -490,6 +501,7 @@ export function IndexComponentChangesPage() {
   const [snapshots, setSnapshots] = useState<IndexComponentSnapshot[]>([]);
   const [referenceSnapshots, setReferenceSnapshots] = useState<IndexComponentSnapshot[]>([]);
   const [watchItems, setWatchItems] = useState<IndexComponentWatchItem[]>([]);
+  const [autoWatch, setAutoWatch] = useState<IndexComponentAutoWatchStatus | null>(null);
   const [markets, setMarkets] = useState<MarketSnapshot[]>([]);
   const [loading, setLoading] = useState(false);
   const [watchLoading, setWatchLoading] = useState(false);
@@ -500,7 +512,34 @@ export function IndexComponentChangesPage() {
   const loadWatchlist = async () => {
     setWatchLoading(true);
     try {
-      setWatchItems(await listIndexComponentWatchlist());
+      const [manual, automatic] = await Promise.allSettled([
+        listIndexComponentWatchlist(), getIndexComponentAutoWatch()
+      ]);
+      if (manual.status === "fulfilled") setWatchItems(manual.value);
+      else message.error(manual.reason instanceof Error ? manual.reason.message : String(manual.reason));
+      if (automatic.status === "fulfilled") setAutoWatch(automatic.value);
+      else message.error(automatic.reason instanceof Error ? automatic.reason.message : String(automatic.reason));
+    } finally {
+      setWatchLoading(false);
+    }
+  };
+
+  const toggleAutoWatch = async (enabled: boolean) => {
+    setWatchLoading(true);
+    try {
+      setAutoWatch(await updateIndexComponentAutoWatch(enabled));
+      message.success(enabled ? "已开启自动联动" : "已关闭自动联动");
+    } catch (exc) {
+      message.error(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setWatchLoading(false);
+    }
+  };
+
+  const syncAutoWatch = async () => {
+    setWatchLoading(true);
+    try {
+      setAutoWatch(await syncIndexComponentAutoWatch());
     } catch (exc) {
       message.error(exc instanceof Error ? exc.message : String(exc));
     } finally {
@@ -589,6 +628,10 @@ export function IndexComponentChangesPage() {
   useEffect(() => {
     void load();
     void loadWatchlist();
+    const timer = window.setInterval(() => {
+      void getIndexComponentAutoWatch().then(setAutoWatch).catch(() => undefined);
+    }, 15_000);
+    return () => window.clearInterval(timer);
     // Initial load only; filter changes are applied by the query button.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -626,7 +669,7 @@ export function IndexComponentChangesPage() {
         <div className="index-component-watch-head">
           <div>
             <Typography.Title level={5}>监控标的</Typography.Title>
-            <Typography.Text type="secondary">只对这里的标的发送指数成分变更告警，未监控的变更仍记录为 muted。</Typography.Text>
+            <Typography.Text type="secondary">手动监控与自动联动的标的会接收成分变更通知。</Typography.Text>
           </div>
           <Space.Compact className="index-component-watch-add">
             <Input
@@ -641,6 +684,30 @@ export function IndexComponentChangesPage() {
             </Button>
           </Space.Compact>
         </div>
+        <div className="index-component-auto-controls">
+          <Typography.Text strong>自动联动</Typography.Text>
+          <Switch
+            checked={autoWatch?.enabled ?? false}
+            loading={watchLoading && autoWatch === null}
+            disabled={watchLoading || autoWatch === null}
+            onChange={(enabled) => void toggleAutoWatch(enabled)}
+            aria-label="自动联动浮窗关注和 Astro 卡片持仓"
+          />
+          {autoWatch?.enabled ? (
+            <Tooltip title="立即同步自动监控标的">
+              <Button
+                type="text"
+                size="small"
+                icon={<ReloadOutlined spin={watchLoading} />}
+                aria-label="同步自动监控标的"
+                disabled={watchLoading}
+                onClick={() => void syncAutoWatch()}
+              />
+            </Tooltip>
+          ) : null}
+          <Typography.Text type="secondary">浮窗 · 运行卡片 · 持仓</Typography.Text>
+        </div>
+        {autoWatch?.error ? <Alert type="warning" showIcon message={autoWatch.error} /> : null}
         <div className="index-component-watch-list">
           {watchItems.length > 0 ? (
             watchItems.map((item) => (
@@ -666,8 +733,16 @@ export function IndexComponentChangesPage() {
               </Tag>
             ))
           ) : (
-            <Typography.Text type="secondary">暂无监控标的</Typography.Text>
+            autoWatch?.items?.length ? null : <Typography.Text type="secondary">暂无监控标的</Typography.Text>
           )}
+          {autoWatch?.items?.map((item) => (
+            <Tag className="index-component-watch-tag" key={`${item.source}:${item.symbol}`} color="blue">
+              <Space size={6}>
+                <Typography.Text strong>{item.symbol}</Typography.Text>
+                <Typography.Text type="secondary">{AUTO_WATCH_SOURCES[item.source] ?? item.source}</Typography.Text>
+              </Space>
+            </Tag>
+          ))}
         </div>
       </section>
       <IndexComponentMarketChart

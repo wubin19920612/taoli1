@@ -5532,6 +5532,13 @@ body {
   min-width: 0;
 }
 
+.index-component-auto-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
 .index-component-watch-list {
   display: flex;
   flex-wrap: wrap;
@@ -6041,7 +6048,16 @@ body {
     flex-direction: column;
   }
 
-  .index-component-watch-add,
+  .index-component-watch-add {
+    width: 100%;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .index-component-watch-add .ant-input-affix-wrapper {
+    width: 100%;
+  }
+
   .index-component-watch-add .ant-btn {
     width: 100%;
   }
@@ -6189,8 +6205,7 @@ body {
   .pair-query-actions .ant-btn,
   .symbol-spread-actions .ant-btn,
   .premium-query-actions .ant-btn,
-  .index-component-watch-add,
-  .index-component-watch-add .ant-btn {
+  .index-component-watch-add {
     width: 100%;
   }
 

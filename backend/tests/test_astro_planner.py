@@ -199,13 +199,51 @@ def test_hyperliquid_opportunity_maps_to_astro_hl() -> None:
     planner = AstroPairPlanner(AstroPlannerConfig())
 
     plan = planner.plan(
-        opportunity().model_copy(update={"buy_exchange": "hyperliquid"})
+        opportunity().model_copy(
+            update={"buy_exchange": "hyperliquid", "buy_raw_symbol": "BTC"}
+        )
     )
 
     assert plan.can_submit is True
     assert plan.pair is not None
     assert plan.pair["buyEx"] == "hl"
     assert plan.pair["sellEx"] == "okx"
+    assert "aHlDex" not in plan.pair
+
+
+def test_cifr_ff_uses_para_market_on_the_correct_hyperliquid_leg() -> None:
+    planner = AstroPairPlanner(AstroPlannerConfig())
+    for hl_side, astro_key in (("buy", "aHlDex"), ("sell", "bHlDex")):
+        pair = opportunity().model_copy(
+            update={
+                "symbol": "CIFRUSDT",
+                f"{hl_side}_exchange": "hyperliquid",
+                f"{hl_side}_raw_symbol": "para:CIFR",
+            }
+        )
+
+        plan = planner.plan(pair)
+
+        assert plan.can_submit is True
+        assert plan.pair is not None
+        assert plan.pair["type"] == "FF"
+        assert plan.pair[astro_key] == "para"
+        assert ("aHlDex" if hl_side == "sell" else "bHlDex") not in plan.pair
+
+
+def test_auto_card_does_not_guess_hyperliquid_market() -> None:
+    planner = AstroPairPlanner(AstroPlannerConfig())
+    missing_market = opportunity().model_copy(
+        update={"sell_exchange": "hyperliquid", "sell_raw_symbol": None}
+    )
+
+    plan = planner.plan(missing_market)
+    manual_plan = planner.plan(missing_market, allow_manual_override=True)
+
+    assert plan.can_submit is False
+    assert any("HL 市场未确认" in blocker for blocker in plan.blockers)
+    assert manual_plan.can_submit is False
+    assert any("HL 市场未确认" in blocker for blocker in manual_plan.blockers)
 
 
 def test_aliased_future_pair_builds_fr_card_with_ratio_positions() -> None:

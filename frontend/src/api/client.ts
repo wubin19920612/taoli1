@@ -38,6 +38,7 @@ import type {
   HyperliquidDexMarket,
   ExchangeAnnouncement,
   IndexComponentChange,
+  IndexComponentAutoWatchStatus,
   IndexComponentChangeFilters,
   IndexComponentSnapshot,
   IndexComponentSnapshotFilters,
@@ -169,8 +170,11 @@ export function listMarkets(filters: MarketFilters = {}): Promise<MarketSnapshot
   });
 }
 
-export function lookupInstrument(symbol: string): Promise<InstrumentLookupResult> {
-  return fetchJson<InstrumentLookupResult>(`/instruments/${encodeURIComponent(symbol)}`);
+export function lookupInstrument(symbol: string, hyperliquidDex?: string): Promise<InstrumentLookupResult> {
+  const params = new URLSearchParams();
+  if (hyperliquidDex) params.set("dex", hyperliquidDex);
+  const query = params.size ? `?${params.toString()}` : "";
+  return fetchJson<InstrumentLookupResult>(`/instruments/${encodeURIComponent(symbol)}${query}`);
 }
 
 export async function getFloatingWatchSettings(): Promise<FloatingWatchSettings> {
@@ -691,6 +695,20 @@ export async function listIndexComponentSnapshots(
 
 export async function listIndexComponentWatchlist(): Promise<IndexComponentWatchItem[]> {
   return fetchJson<IndexComponentWatchItem[]>("/index-components/watchlist");
+}
+
+export async function getIndexComponentAutoWatch(): Promise<IndexComponentAutoWatchStatus> {
+  return fetchJson<IndexComponentAutoWatchStatus>("/index-components/auto-watch");
+}
+
+export async function updateIndexComponentAutoWatch(enabled: boolean): Promise<IndexComponentAutoWatchStatus> {
+  return fetchJson<IndexComponentAutoWatchStatus>("/index-components/auto-watch", {
+    method: "PUT", body: JSON.stringify({ enabled })
+  });
+}
+
+export async function syncIndexComponentAutoWatch(): Promise<IndexComponentAutoWatchStatus> {
+  return fetchJson<IndexComponentAutoWatchStatus>("/index-components/auto-watch/sync", { method: "POST" });
 }
 
 export async function createIndexComponentWatchItem(

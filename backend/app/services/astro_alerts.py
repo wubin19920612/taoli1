@@ -25,6 +25,21 @@ class AstroPairClient(Protocol):
 
 
 def _same_route(existing: dict, planned: dict) -> bool:
+    if not _same_exchange_route(existing, planned):
+        return False
+    for exchange_key, dex_key, effective_key in (
+        ("buyEx", "aHlDex", "aEffectiveHlDex"),
+        ("sellEx", "bHlDex", "bEffectiveHlDex"),
+    ):
+        if existing.get(exchange_key) in {"hl", "gc-hl"}:
+            existing_dex = existing.get(effective_key) or existing.get(dex_key) or "main"
+            planned_dex = planned.get(dex_key) or "main"
+            if str(existing_dex).strip().lower() != str(planned_dex).strip().lower():
+                return False
+    return True
+
+
+def _same_exchange_route(existing: dict, planned: dict) -> bool:
     return (
         existing.get("name") == planned.get("name")
         and existing.get("type") == planned.get("type")
@@ -54,7 +69,15 @@ def _pair_variants(pair: dict) -> list[dict]:
 
 
 def _route(pair: dict) -> str:
-    return f"{pair.get('buyEx')}->{pair.get('sellEx')}"
+    def leg(exchange_key: str, dex_key: str, effective_key: str) -> str:
+        exchange = str(pair.get(exchange_key, ""))
+        if exchange not in {"hl", "gc-hl"}:
+            return exchange
+        return f"{exchange}({pair.get(effective_key) or pair.get(dex_key) or 'main'})"
+
+    buy_leg = leg("buyEx", "aHlDex", "aEffectiveHlDex")
+    sell_leg = leg("sellEx", "bHlDex", "bEffectiveHlDex")
+    return f"{buy_leg}->{sell_leg}"
 
 
 def _routes(pairs: list[dict]) -> str:
@@ -338,6 +361,27 @@ class AstroAlertService:
             )
 
         same_name_pairs = [item for item in existing_pairs if item.get("name") == pair_name]
+        hl_market_conflicts = [
+            existing
+            for existing in same_name_pairs
+            if any(
+                _same_exchange_route(existing, planned) and not _same_route(existing, planned)
+                for planned in pair_variants
+            )
+        ]
+        if hl_market_conflicts:
+            return AstroAlertActionResult(
+                enabled=True,
+                status="skipped",
+                action="conflict",
+                message=(
+                    f"已跳过，Astro 同名同交易所路线的 HL 市场不同："
+                    f"现有 {_routes(hl_market_conflicts)}；目标 {_routes(pair_variants)}。"
+                    "请核实已有卡片市场，未自动创建重复卡片"
+                ),
+                pair_name=pair_name,
+                pair_type=pair_type,
+            )
         conflicting_pairs = [
             existing
             for existing in same_name_pairs

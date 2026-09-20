@@ -421,6 +421,54 @@ describe("FloatingWatchPanel", () => {
     expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("/instruments/ANTHROPICUSDT"))).toBe(true);
   });
 
+  it("uses the Astro Hyperliquid DEX when loading an aliased HIP-3 leg", async () => {
+    const hip3Pair = [{
+      id: "anthropic-io",
+      name: "ANTHROPIC-ANTH",
+      type: "FR",
+      status: true,
+      buyEx: "bitget",
+      sellEx: "hl",
+      bEffectiveHlDex: "io",
+      regressionValue: 10,
+      aExPosition: 0,
+      bExPosition: 0
+    }];
+    const hyperliquidVenue = astroFutureVenue("hyperliquid", "ANTHROPICUSDT", 215, 216);
+    const hyperliquidAnth = astroInstrument("ANTHROPICUSDT", [{
+      ...hyperliquidVenue,
+      future: {
+        ...hyperliquidVenue.future,
+        raw_symbol: "io:ANTH"
+      }
+    }]);
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/settings/floating-watch")) return Response.json({ symbols: [], pair_ids: [] });
+      if (url.includes("/astro/pairs")) return Response.json(hip3Pair);
+      if (url.includes("/instruments/ANTHROPICUSDT")) return Response.json(astroAnthropicInstrument);
+      if (url.includes("/instruments/ANTHUSDT") && url.includes("dex=io")) {
+        return Response.json(hyperliquidAnth);
+      }
+      return Response.json({});
+    });
+
+    render(<FloatingWatchPanel visible onClose={vi.fn()} />);
+    const panel = await screen.findByRole("complementary", { name: "关注浮窗" });
+    await userEvent.click(await within(panel).findByText("Astro 1"));
+
+    const card = within(panel).getByText("ANTHROPIC-ANTH").closest(".floating-watch-astro-row") as HTMLElement;
+    await waitFor(() => {
+      expect(card.querySelector(".floating-watch-astro-route")?.textContent)
+        .toBe("Bitget 永续 200 → Hyperliquid io 永续 215.5");
+    });
+    expect(within(card).queryByText(/未找到.*实时行情/)).toBeNull();
+    expect(vi.mocked(fetch).mock.calls.some(([input]) => {
+      const url = new URL(String(input));
+      return url.pathname === "/api/instruments/ANTHUSDT" && url.searchParams.get("dex") === "io";
+    })).toBe(true);
+  });
+
   it("marks watched symbols that have an active Astro position as trading", async () => {
     vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);

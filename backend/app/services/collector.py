@@ -14,6 +14,7 @@ from app.exchanges.hyperliquid import HyperliquidAdapter
 from app.exchanges.lighter import LighterAdapter
 from app.exchanges.htx import HTXAdapter
 from app.exchanges.okx import OKXAdapter
+from app.models.index_component import index_watch_symbol
 from app.models.market import MarketSnapshot
 from app.models.opportunity import Opportunity
 from app.models.settings import FeeSettings, RiskSettings
@@ -220,6 +221,9 @@ class MarketCollector:
             return
         try:
             markets = await self._index_component_markets(markets)
+            observe_markets = getattr(self.index_component_monitor, "observe_markets", None)
+            if observe_markets is not None:
+                await observe_markets(markets)
             if not markets:
                 return
             snapshots = await self.index_component_provider.fetch_components(markets)
@@ -236,6 +240,12 @@ class MarketCollector:
             market
             for market in markets
             if self._index_component_symbol_is_watched(market.symbol, watched_symbols)
+            or (
+                market.symbol_alias_original_symbol is not None
+                and self._index_component_symbol_is_watched(
+                    market.symbol_alias_original_symbol, watched_symbols
+                )
+            )
         ]
 
     async def _index_component_watched_symbols(self) -> set[str] | None:
@@ -246,8 +256,8 @@ class MarketCollector:
         return {symbol.strip().upper() for symbol in symbols if symbol and symbol.strip()}
 
     def _index_component_symbol_is_watched(self, symbol: str, watched_symbols: set[str]) -> bool:
-        normalized = symbol.strip().upper()
-        return any(normalized.startswith(watched) for watched in watched_symbols)
+        normalized = index_watch_symbol(symbol)
+        return any(index_watch_symbol(watched) == normalized for watched in watched_symbols)
 
     def _state_for(self, exchange_name: str) -> ExchangePollState:
         state = self._poll_states.get(exchange_name)

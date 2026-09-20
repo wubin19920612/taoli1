@@ -265,6 +265,14 @@ class AstroPairPlanner:
                 for blocker in blockers
             )
             blockers = []
+        if any(
+            exchange.lower() in {"hyperliquid", "hyper", "hl"} and not raw_symbol
+            for exchange, raw_symbol in (
+                (opportunity.buy_exchange, opportunity.buy_raw_symbol),
+                (opportunity.sell_exchange, opportunity.sell_raw_symbol),
+            )
+        ):
+            blockers.append("HL 市场未确认，缺少原始合约标识，不能按默认市场建卡。")
 
         close_decision = _astro_close_decision(
             opportunity,
@@ -413,12 +421,12 @@ class AstroPairPlanner:
         }
         if fr_pair_bases is not None:
             pair.update({"regressionValue": "1", "rateMultiply": "1"})
-            buy_hl_dex = _hyperliquid_dex(opportunity.buy_raw_symbol)
-            sell_hl_dex = _hyperliquid_dex(opportunity.sell_raw_symbol)
-            if buy_astro_exchange == "hl" and buy_hl_dex is not None:
-                pair["aHlDex"] = buy_hl_dex
-            if sell_astro_exchange == "hl" and sell_hl_dex is not None:
-                pair["bHlDex"] = sell_hl_dex
+        buy_hl_dex = _hyperliquid_dex(opportunity.buy_raw_symbol)
+        sell_hl_dex = _hyperliquid_dex(opportunity.sell_raw_symbol)
+        if buy_astro_exchange == "hl" and buy_hl_dex is not None:
+            pair["aHlDex"] = buy_hl_dex
+        if sell_astro_exchange == "hl" and sell_hl_dex is not None:
+            pair["bHlDex"] = sell_hl_dex
         return AstroPairPlan(
             opportunity_id=opportunity.id,
             symbol=opportunity.symbol,
