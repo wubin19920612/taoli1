@@ -8,10 +8,10 @@
 
 诊断严格保留 `exchange + market_type + raw_symbol`；Hyperliquid 额外保留具体 `dex`。每个原始市场分别判断：
 
-- 普通买入 / 做多；
-- 普通卖出 / 做空；
-- Buy Reduce Only 平空；
-- Sell Reduce Only 平多。
+- 普通买入（非 Reduce Only）；
+- 普通卖出（非 Reduce Only）；
+- 买入平空（Reduce Only）；
+- 卖出平多（Reduce Only）。
 
 系统不接入交易账户、不签名、不发送探测订单。公开市场限制、未核验的账户级条件和未提供的真实订单错误分别展示，不能把公开状态解释为特定账户一定可成交。
 
@@ -21,6 +21,8 @@
 - 开始基线：`7225db9831521471deb8bcc85c6151aeb48e4682`
 - 功能提交：`18ad979429cbd609ba18ff0b58096966d63c45c9`
 - 功能提交说明：`feat: diagnose exchange trade availability`
+- 动作文案修正提交：`693cda8b687530a004ce46667d5129c780451114`
+- 动作文案修正说明：`fix: clarify trade action labels`
 
 ## 已完成功能
 
@@ -29,7 +31,7 @@
 - Hyperliquid 复用 OI cap、下架状态和 `l2Book` 逻辑，严格保留具体 DEX 与原始市场。
 - Aster 使用 Binance 兼容的 `exchangeInfo`、24h ticker、premium index 和实时订单簿；补充行情失败时局部降级。
 - Lighter 识别 `active`、`is_frozen`、`force_reduce_only`，并使用 WebSocket 实时订单簿。
-- 现货 Reduce Only 显示 `not_applicable`；永续 Reduce Only 在公开状态和盘口允许时显示账户条件 `conditional`。
+- API 对现货 Reduce Only 保留结构化 `not_applicable`，前端现货行不渲染两种 Reduce Only 单元格；永续 Reduce Only 在公开状态和盘口允许时显示账户条件 `conditional`。
 - 每个市场固定包含 `public_market`、`account`、`order_error` 三类诊断证据。没有私有授权或真实订单错误时明确显示 `not_checked` / `not_provided`。
 - 展示实际买一卖一、1% 双边深度、24h 成交额、资金费率及周期、标记价、指数价、Maker/Taker 公开费率、手续费是否计入、价格倍率、合约数量乘数和三类更新时间。
 - OKX 永续深度按 `ctVal * ctMult` 换算；Gate 永续深度按 `quanto_multiplier` 换算。
@@ -89,7 +91,7 @@ trade_availability_watchlist
 
 - 后端全量：`735 passed, 13 warnings`。
 - 全交易所与 Hyperliquid 专项：`10 passed, 2 warnings`。
-- 标的查询页专项：`18 passed`。
+- 标的查询页专项：动作文案修正后 `19 passed`。
 - 前端生产构建：通过。
 - Ruff 本模块专项：通过。
 - `git diff --check`：通过。
@@ -99,17 +101,18 @@ trade_availability_watchlist
 浏览器检查：
 
 - 桌面 `1440 x 1000`：14 个原始市场正常展示，市场列和恢复监控列固定。
-- 手机 `390 x 844`：页面宽度正常，诊断表保留横向滚动。
-- 线上截图：`output/trade-availability-deployed-desktop-final.png`、`output/trade-availability-deployed-mobile-final.png`，仅作为未跟踪验证产物。
+- 动作文案修正后的桌面页显示“普通买入（非 Reduce Only）”“普通卖出（非 Reduce Only）”“买入平空（Reduce Only）”“卖出平多（Reduce Only）”；现货行的两种 Reduce Only 单元格为空，永续行继续显示买入平空和卖出平多。
+- 手机 `390 x 844`：页面宽度正常，诊断表保留横向滚动；既有关注行情浮窗打开时会覆盖表格区域。
+- 最新线上截图：`output/trade-availability-action-labels-deployed-desktop.png`、`output/trade-availability-action-labels-deployed-mobile.png`，仅作为未跟踪验证产物。
 
 ## 生产备份与部署
 
-- 部署前数据库备份：`backups/radar-20260921T072221Z.db`
-- 大小：`713338880` 字节
-- SHA-256：`1ebc1ec420c30d8a8d2d623d6d4b3019d91e43affa9d0151978f689945cd0fe3`
+- 动作文案修正部署前数据库备份：`backups/radar-20260921T081155Z.db`
+- 大小：`707584000` 字节
+- SHA-256：`df421baecbe6a291e29f1508f609102c73b0cecbd530c9e9fe5ff383ce14469a`
 - 源数据库 `PRAGMA quick_check = ok`
 - 备份数据库 `PRAGMA quick_check = ok`
-- 服务器使用 `git pull --ff-only` 更新到 `18ad979429cbd609ba18ff0b58096966d63c45c9`。
+- 服务器使用 `git pull --ff-only` 确认更新到 `693cda8b687530a004ce46667d5129c780451114`。
 - 使用 `docker compose build --pull` 和 `docker compose up -d --remove-orphans` 重建，没有执行 `down -v`。
 - 前后端容器均为 `healthy`。
 - `/api/health` 返回 `status=ok`，八家交易所采集状态均为 `healthy`。
@@ -125,6 +128,8 @@ BTC 查询返回 14 个原始市场，`errors={}`，包括：
 - Lighter 永续。
 
 所有返回项均保留 `exchange + market_type + raw_symbol`，Hyperliquid 保留 `dex=main`；每项均有四个动作、三类诊断证据、买一卖一、1% 深度、24h 成交额、手续费未计入、倍率和更新时间。线上观察到 OKX 永续数量乘数为 `0.01`、Gate 永续为 `0.0001`，Hyperliquid 和 Lighter 资金周期为 1 小时。验证期间未发送任何订单。
+
+前端不再把普通卖出描述为做空，也不在现货行显示“平空/平多不适用”。现货仍正常展示普通 `Buy` 和 `Sell`；只有永续及其他有持仓语义的市场展示 `Buy / 平空` 和 `Sell / 平多`。
 
 监控列表当时为空，没有人为制造不可用/恢复切换，因此没有发送生产飞书测试消息。恢复通知状态机和飞书失败重试由自动化测试覆盖；真实通知仍依赖生产 `feishu_live_send_enabled` 与 Webhook 配置，以及未来真实状态切换。
 
