@@ -732,8 +732,7 @@ export function InstrumentLookupPage() {
     url.searchParams.set("hours", "4");
     url.searchParams.set("interval_seconds", "60");
     url.searchParams.delete("interval_minutes");
-    window.history.pushState({}, "", `${url.pathname}${url.search}${url.hash}`);
-    window.dispatchEvent(new Event("taoli1:navigate"));
+    window.open(url.toString(), "_blank", "noopener,noreferrer");
   };
 
   const closeAstroPreview = () => {

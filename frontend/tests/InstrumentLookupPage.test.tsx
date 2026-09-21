@@ -500,18 +500,28 @@ describe("InstrumentLookupPage", () => {
     expect(sellMarkets).toEqual(["Binance永续", "Binance永续", "OKX永续"]);
   });
 
-  it("opens the selected market pair in the spread query", async () => {
+  it("opens every selected market pair in a separate isolated tab without changing the lookup page", async () => {
     window.history.replaceState({}, "", "/?page=instrument&symbol=BTCUSDT&leg1_dex=stale&leg2_dex=stale");
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
     const navigate = vi.fn();
     window.addEventListener("taoli1:navigate", navigate);
     render(<InstrumentLookupPage />);
 
     await screen.findByText("跨市场差价");
-    await userEvent.click(screen.getByRole("button", {
+    const chartButton = screen.getByRole("button", {
       name: "价差查询 BTCUSDT okx:future->binance:future"
-    }));
+    });
+    const currentUrl = window.location.href;
+    await userEvent.click(chartButton);
+    await userEvent.click(chartButton);
 
-    const params = new URLSearchParams(window.location.search);
+    expect(open).toHaveBeenCalledTimes(2);
+    expect(open.mock.calls[0][1]).toBe("_blank");
+    expect(open.mock.calls[0][2]).toBe("noopener,noreferrer");
+    expect(open.mock.calls[1][1]).toBe("_blank");
+    expect(open.mock.calls[1][2]).toBe("noopener,noreferrer");
+    expect(window.location.href).toBe(currentUrl);
+    const params = new URL(String(open.mock.calls[0][0])).searchParams;
     expect(params.get("page")).toBe("pair-monitor");
     expect(params.get("symbol")).toBeNull();
     expect(params.get("leg1_exchange")).toBe("okx");
@@ -525,8 +535,49 @@ describe("InstrumentLookupPage", () => {
     expect(params.get("leg2_multiplier")).toBe("1");
     expect(params.get("hours")).toBe("4");
     expect(params.get("interval_seconds")).toBe("60");
-    expect(navigate).toHaveBeenCalledOnce();
+    expect(navigate).not.toHaveBeenCalled();
     window.removeEventListener("taoli1:navigate", navigate);
+    open.mockRestore();
+  });
+
+  it("keeps the reverse spot-future route direction in the new tab", async () => {
+    const reverseResult = {
+      ...lookupResult,
+      spreads: [{
+        ...lookupResult.spreads[0],
+        id: "binance:future->binance:spot",
+        buy_exchange: "binance",
+        buy_market_type: "future" as const,
+        sell_exchange: "binance",
+        sell_market_type: "spot" as const,
+        opportunity_type: null
+      }]
+    };
+    (fetch as ReturnType<typeof vi.fn>).mockImplementation(async (input: RequestInfo | URL) => {
+      if (String(input).includes("/instruments/")) return Response.json(reverseResult);
+      return Response.json({});
+    });
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    render(<InstrumentLookupPage />);
+
+    await screen.findByText("跨市场差价");
+    await userEvent.click(screen.getByRole("checkbox", { name: "反向 SF" }));
+    const currentUrl = window.location.href;
+    await userEvent.click(screen.getByRole("button", {
+      name: "价差查询 BTCUSDT binance:future->binance:spot"
+    }));
+
+    expect(window.location.href).toBe(currentUrl);
+    const params = new URL(String(open.mock.calls[0][0])).searchParams;
+    expect(params.get("leg1_exchange")).toBe("binance");
+    expect(params.get("leg1_market_type")).toBe("future");
+    expect(params.get("leg1_symbol")).toBe("BTCUSDT");
+    expect(params.get("leg2_exchange")).toBe("binance");
+    expect(params.get("leg2_market_type")).toBe("spot");
+    expect(params.get("leg2_symbol")).toBe("BTCUSDT");
+    expect(params.get("leg2_multiplier")).toBe("1");
+    expect(open).toHaveBeenCalledWith(expect.any(String), "_blank", "noopener,noreferrer");
+    open.mockRestore();
   });
 
   it("preserves a Hyperliquid sub-DEX when opening its spread", async () => {
@@ -575,6 +626,7 @@ describe("InstrumentLookupPage", () => {
       if (String(input).includes("/instruments/")) return Response.json(hyperliquidResult);
       return Response.json({});
     });
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
     render(<InstrumentLookupPage />);
 
     await screen.findByText("跨市场差价");
@@ -582,11 +634,12 @@ describe("InstrumentLookupPage", () => {
       name: "价差查询 ANTHROPICUSDT hyperliquid:future->bitget:future"
     }));
 
-    const params = new URLSearchParams(window.location.search);
+    const params = new URL(String(open.mock.calls[0][0])).searchParams;
     expect(params.get("leg1_symbol")).toBe("ANTH");
     expect(params.get("leg1_dex")).toBe("io");
     expect(params.get("leg2_symbol")).toBe("ANTHROPICUSDT");
     expect(params.get("leg2_dex")).toBeNull();
+    open.mockRestore();
   });
 
   it("selects the Hyperliquid main DEX instead of keeping a stale DEX", async () => {
@@ -617,6 +670,7 @@ describe("InstrumentLookupPage", () => {
       if (String(input).includes("/instruments/")) return Response.json(hyperliquidMainResult);
       return Response.json({});
     });
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
     render(<InstrumentLookupPage />);
 
     await screen.findByText("跨市场差价");
@@ -624,9 +678,10 @@ describe("InstrumentLookupPage", () => {
       name: "价差查询 BTCUSDT hyperliquid:future->binance:future"
     }));
 
-    const params = new URLSearchParams(window.location.search);
+    const params = new URL(String(open.mock.calls[0][0])).searchParams;
     expect(params.get("leg1_symbol")).toBe("BTC");
     expect(params.get("leg1_dex")).toBe("main");
+    open.mockRestore();
   });
 
   it("disables spread queries with unsupported spot legs", async () => {
