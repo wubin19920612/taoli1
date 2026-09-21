@@ -107,7 +107,7 @@
 - backend 和 frontend 代理的 `/api/health` 均返回 `status=ok`；验收时 8 个公共行情交易所状态均为 `healthy`，`exchange_errors={}`。
 - backend 和 frontend 代理的 `/api/account-positions` 均正常返回。
 - 生产 `.env` 和运行容器未检测到非空 `GATE_API_KEY`、`GATE_API_SECRET` 或 `GATE_ACCOUNT_ID`，因此真实结果为 `positions=[]`、Gate `configured=false`、`state=not_configured`、消息“尚未配置账户凭据”。这不是“账户已核验且当前无持仓”。
-- 生产 Astro 返回 1 张非零仓位卡片 `ZETA`，买腿 `gc-okx`、卖腿 `gc-hl`，两腿卡片数量均为 `6950`。当前 Astro SDK 只有卡片列表/更新能力，没有专用的完整账户持仓端点，也没有向本应用提供对应 OKX 私有账户凭据或 Hyperliquid 账户地址；因此该卡片只能在 Astro 栏展示，不能冒充账户仓位。
+- 生产 Astro 返回 1 张非零仓位卡片 `ZETA`，买腿 `gc-okx`、卖腿 `gc-hl`；最终复核时两腿卡片数量均为 `15400`（该策略状态会动态变化，早先验收快照为 `6950`）。当前 Astro SDK 只有卡片列表/更新能力，没有专用的完整账户持仓端点，也没有向本应用提供对应 OKX 私有账户凭据或 Hyperliquid 账户地址；因此该卡片只能在 Astro 栏展示，不能冒充账户仓位。
 - 在线屏蔽持久化使用一个明确标记的合成身份验证：初始 0，屏蔽后 1，重启 backend 后仍为 1，执行一次关注标的更新后仍为 1，恢复后回到 0；没有改变原有配置，也没有触发任何交易行为。
 - 生产截图保存在未跟踪的 `output/floating-account-positions-production-desktop.png`、`output/floating-account-positions-production-mobile.png` 和 `output/floating-account-positions-production-mobile-dust-filter.png`。
 
