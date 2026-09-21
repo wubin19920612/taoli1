@@ -12,7 +12,8 @@
 - 开始基线：`4429560`（`docs: update trade alert diagnostics handoff`）
 - 功能提交：`1430d60`（`feat: show account positions in floating watch`）
 - 持久化修复：`92ec702`（`fix: preserve hidden positions on watch updates`）
-- 最终生产版本：`92ec70262146932186c2281188aa30c77a7f6850`
+- 小额持仓过滤与空状态澄清：`1a08762`（`fix: clarify account positions and hide dust`）
+- 当前功能代码生产版本：`1a08762bbf376a970da4b3e662f26c4ce77025db`
 
 ## 已完成功能
 
@@ -28,6 +29,10 @@
 - “已屏蔽”入口显示完整持仓身份并支持逐个恢复；已平仓身份继续保存在 SQLite，未来相同身份重新开仓仍保持屏蔽。
 - 屏蔽配置保存在现有 SQLite `app_settings` 中；已验证页面刷新、独立窗口、服务重启以及增删关注标的后仍然保留。
 - 账户标识使用配置别名的不可逆短哈希；API、页面和日志不返回 API Key、Secret 或上游敏感错误正文。
+- 已知名义价值且严格小于 `1 USDT` 的持仓默认隐藏；名义价值未知的持仓仍显示，恰好 `1 USDT` 的持仓也显示，避免把未核验数据误当作小额仓位。
+- 持仓工具栏新增漏斗图标和 Tooltip，可临时显示或重新隐藏 `< 1 USDT` 持仓；选择保存在浏览器 `localStorage` 的 `taoli1:floating-watch-show-dust-positions.v1`，页面刷新和重新打开独立浮窗后继续生效。
+- 小额自动过滤与基于完整持仓身份的手动屏蔽互相独立；当所有未手动屏蔽持仓均小于 `1 USDT` 时明确显示“当前持仓均小于 1 USDT，已默认隐藏”。
+- 未配置账户时明确显示“未配置交易所账户持仓读取凭据”和“Astro 卡片状态不作为账户仓位来源”，不再让 `持仓 0` 被误解为已经核验账户且没有仓位。
 
 ## 关键代码入口
 
@@ -63,21 +68,29 @@
 - 价格口径固定显示 `Gate 标记价（mark_price）`；名义价值优先使用交易所 `value`，缺失且倍率、标记价可用时才估算并标记估算字段。
 - 只有一次真实账户接口成功返回空列表才能标记 `empty`；未配置、无权限、超时和接口错误都不能显示为“当前无持仓”。
 - 屏蔽配置最多保存 200 个完整身份，只影响前端浮窗过滤；后端仍持续查询该持仓。
+- Astro 卡片的 `aExPosition` / `bExPosition` 是策略卡片状态，不是交易所账户完整私有仓位快照。它既不能覆盖非 Astro 或手工持仓，也没有本应用持仓身份所需的完整账户信息，因此不得回填到 `/api/account-positions`。
 
 ## 测试结果
 
 - 后端全量测试：`746 passed, 11 warnings in 1160.20s`。
 - 最终持久化修复后的专项测试：`backend/tests/test_account_positions.py backend/tests/test_floating_watch.py` 为 `8 passed, 2 warnings in 49.97s`。
-- 前端浮窗专项测试：`FloatingWatchPanel.test.tsx` 为 `21 passed`。
-- 前端全量测试：`164 passed, 1 failed`；唯一失败是既有 `SettingsPage` 用例仍查找旧文案“实盘灰度”，与本任务文件和调用链无关。
+- 前端浮窗专项测试：`FloatingWatchPanel.test.tsx` 为 `22 passed`，新增覆盖 `< 1 USDT` 默认过滤、未知名义价值保留、`1 USDT` 边界、开关恢复显示及 `localStorage` 持久化。
+- 前端全量测试：`169 passed, 2 failed`。一个既有 `SettingsPage` 用例仍查找旧文案“实盘灰度”；另一个设置页用例在全量测试和构建并行运行时超时，随后单独重跑 `loads risk settings and can submit an alert rule` 在 `5.775s` 通过。两项均不在本任务文件和调用链内。
 - `npm run build`：TypeScript 检查和 Vite 生产构建通过；服务器 Docker 前后端生产构建也通过。
 - `git diff --check`：功能提交和修复提交前均通过。
 - 本地视觉检查：900px 和 390px 均无文字重叠或页面级横向溢出；模拟真实持仓卡片覆盖长原始市场、不同市场身份和屏蔽/恢复视图。
-- 生产视觉检查：900px 与 390px 的 `document.scrollWidth === clientWidth`，四个标签均完整；390px 下每个标签宽 92px，页面显示明确的“尚未配置支持持仓读取的账户”状态。
+- 生产视觉检查：900px 与 390px 的 `document.scrollWidth === clientWidth`，四个标签均完整；最终 390px 检查为 `clientWidth=scrollWidth=390`、每个标签宽 92px，并确认未配置原因、小额过滤按钮和已屏蔽管理按钮均存在。
 
 ## 数据库备份
 
 最终部署前使用 SQLite Backup API 创建一致性备份：
+
+- 文件：`backups/radar-20260921T115549Z-pre-position-dust-filter.db`
+- 大小：`630489088` 字节
+- SHA-256：`e696888057d429c415c292eb22180759c186de7c49768a57ed1cf8b9c86d75fe`
+- SQLite `PRAGMA quick_check`：`ok`
+
+首次账户持仓功能最终修复部署前的备份：
 
 - 文件：`backups/radar-20260921T112742Z-pre-account-positions-final.db`
 - 大小：`636829696` 字节
@@ -88,18 +101,20 @@
 
 ## 线上状态
 
-- 服务器通过 `git pull --ff-only origin codex/frontend-localization-polish` 更新到 `92ec70262146932186c2281188aa30c77a7f6850`。
-- 首次部署执行完整 `docker compose build --pull`；最终修复部署重建 backend，并执行 `docker compose up -d --remove-orphans`。没有执行 `docker compose down -v`。
+- 服务器通过 `git pull --ff-only origin codex/frontend-localization-polish` 更新到功能版本 `1a08762bbf376a970da4b3e662f26c4ce77025db`。
+- 首次部署执行完整 `docker compose build --pull`；持久化修复部署重建 backend；小额过滤部署执行 `docker compose build --pull frontend` 和 `docker compose up -d --remove-orphans`。全程没有执行 `docker compose down -v`。
 - backend、frontend 容器均为 `healthy`。
 - backend 和 frontend 代理的 `/api/health` 均返回 `status=ok`；验收时 8 个公共行情交易所状态均为 `healthy`，`exchange_errors={}`。
 - backend 和 frontend 代理的 `/api/account-positions` 均正常返回。
 - 生产 `.env` 和运行容器未检测到非空 `GATE_API_KEY`、`GATE_API_SECRET` 或 `GATE_ACCOUNT_ID`，因此真实结果为 `positions=[]`、Gate `configured=false`、`state=not_configured`、消息“尚未配置账户凭据”。这不是“账户已核验且当前无持仓”。
+- 生产 Astro 返回 1 张非零仓位卡片 `ZETA`，买腿 `gc-okx`、卖腿 `gc-hl`，两腿卡片数量均为 `6950`。当前 Astro SDK 只有卡片列表/更新能力，没有专用的完整账户持仓端点，也没有向本应用提供对应 OKX 私有账户凭据或 Hyperliquid 账户地址；因此该卡片只能在 Astro 栏展示，不能冒充账户仓位。
 - 在线屏蔽持久化使用一个明确标记的合成身份验证：初始 0，屏蔽后 1，重启 backend 后仍为 1，执行一次关注标的更新后仍为 1，恢复后回到 0；没有改变原有配置，也没有触发任何交易行为。
-- 生产截图保存在未跟踪的 `output/floating-account-positions-production-desktop.png` 和 `output/floating-account-positions-production-mobile.png`。
+- 生产截图保存在未跟踪的 `output/floating-account-positions-production-desktop.png`、`output/floating-account-positions-production-mobile.png` 和 `output/floating-account-positions-production-mobile-dust-filter.png`。
 
 ## 已知问题与残余风险
 
 - 当前只有 Gate 具备项目内已实现、已验证的私有持仓 provider；其他交易所只有公共行情能力时不会出现在账户持仓中。新增交易所必须先实现并验证其真实私有账户接口、权限错误、市场身份和双向持仓语义。
+- 当前 Astro 的 `ZETA` 卡片涉及 OKX 与 Hyperliquid，但本应用没有这两个账户的私有持仓连接。要让真实仓位进入“持仓”栏目，需要配置并实现 OKX 只读私有凭据和 Hyperliquid 账户地址，或由 Astro 提供经过验证、包含完整账户/交易所/原始市场/方向/具体 DEX 身份的专用账户持仓 API。
 - 生产没有配置 Gate 凭据，因此无法在线验证真实 Gate 持仓字段，也无法在生产 UI 点击真实持仓的屏蔽按钮。真实数据解析、同 ticker 不同市场、双向持仓、屏蔽和恢复由专项测试及本地模拟真实卡片覆盖；配置只读凭据后仍应补一次真实账户验收。
 - 成功快照缓存当前仅在 backend 进程内；服务重启后第一次查询失败时没有可展示的旧快照，但会明确返回错误而不是“无持仓”。
 - 前端全量测试仍有上述设置页旧文案基线失败，应在独立设置模块任务中处理。
@@ -112,6 +127,7 @@
 - `output/floating-account-positions-local-mobile.png`
 - `output/floating-account-positions-production-desktop.png`
 - `output/floating-account-positions-production-mobile.png`
+- `output/floating-account-positions-production-mobile-dust-filter.png`
 - `output/edge-account-position-visual/`
 
 其他既有未跟踪产物仍保留，包括：
@@ -133,5 +149,6 @@
 ## 下一步建议
 
 - 配置 Gate 只读 API Key、Secret 和稳定的 `GATE_ACCOUNT_ID` 后，重新验证真实多/空持仓字段、权限状态、屏蔽、恢复以及同一身份平仓后再开仓的行为。
+- 若优先接入用户当前 Astro 使用的账户，应先提供 OKX 只读私有账户凭据和 Hyperliquid 公共账户地址（不需要私钥），分别实现账户 provider；若改由 Astro 提供数据，则必须新增完整账户持仓端点，不能继续使用卡片腿数量替代。
 - 后续增加其他交易所账户持仓时，每个交易所单独实现 provider 和契约测试；Hyperliquid 必须把 `main` 与每个 builder-deployed DEX 分开。
 - 下一个功能模块请新建 Codex 任务，并同时提供根目录 `AGENTS.md`、平台总交接文档和本文件。

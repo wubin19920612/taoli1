@@ -634,6 +634,18 @@ describe("FloatingWatchPanel", () => {
       symbol: "UNKNOWNUSDT",
       notional_usdt: null
     });
+    const thresholdPosition = accountPosition({
+      id: "position_gate_threshold_long",
+      raw_symbol: "ONE_USDT",
+      symbol: "ONEUSDT",
+      quantity: 1,
+      quantity_unit: "ONE",
+      contract_quantity: 1,
+      contract_multiplier: 1,
+      entry_price: 1,
+      mark_price: 1,
+      notional_usdt: 1
+    });
     vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("/settings/floating-watch")) {
@@ -641,7 +653,7 @@ describe("FloatingWatchPanel", () => {
       }
       if (url.includes("/account-positions")) {
         return Response.json({
-          positions: [dustPosition, unknownNotionalPosition],
+          positions: [dustPosition, thresholdPosition, unknownNotionalPosition],
           accounts: [{
             account_id: "gate:primary",
             account_label: "主账户",
@@ -649,7 +661,7 @@ describe("FloatingWatchPanel", () => {
             configured: true,
             state: "ok",
             message: "持仓读取成功",
-            position_count: 2,
+            position_count: 3,
             queried_at: "2026-09-21T08:00:02Z",
             data_updated_at: "2026-09-21T08:00:00Z",
             age_seconds: 2
@@ -666,13 +678,14 @@ describe("FloatingWatchPanel", () => {
     await userEvent.click(await within(panel).findByText("持仓 0"));
 
     expect(await within(panel).findByText("UNKNOWN_USDT")).not.toBeNull();
+    expect(within(panel).getByText("ONE_USDT")).not.toBeNull();
     expect(within(panel).queryByText("DUST_USDT")).toBeNull();
-    expect(within(panel).getByText("持仓 1")).not.toBeNull();
+    expect(within(panel).getByText("持仓 2")).not.toBeNull();
     await userEvent.click(within(panel).getByRole("button", {
       name: "显示小于 1 USDT 的持仓（1）"
     }));
     expect(await within(panel).findByText("DUST_USDT")).not.toBeNull();
-    expect(within(panel).getByText("持仓 2")).not.toBeNull();
+    expect(within(panel).getByText("持仓 3")).not.toBeNull();
     expect(window.localStorage.getItem("taoli1:floating-watch-show-dust-positions.v1")).toBe("1");
     first.unmount();
 
