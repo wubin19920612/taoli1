@@ -4,6 +4,7 @@ import {
   DragOutlined,
   EyeInvisibleOutlined,
   ExportOutlined,
+  FilterOutlined,
   LineChartOutlined,
   MinusOutlined,
   PushpinOutlined,
@@ -44,6 +45,8 @@ import {
 const REFRESH_INTERVAL_MS = 10_000;
 const POSITION_STORAGE_KEY = "taoli1:floating-watch-position.v1";
 const COLLAPSED_STORAGE_KEY = "taoli1:floating-watch-collapsed.v1";
+const SHOW_DUST_POSITIONS_STORAGE_KEY = "taoli1:floating-watch-show-dust-positions.v1";
+const MIN_VISIBLE_POSITION_NOTIONAL_USDT = 1;
 const STANDALONE_QUERY_PARAM = "floating_watch";
 const STANDALONE_QUERY_VALUE = "standalone";
 const STANDALONE_WINDOW_NAME = "taoli1-floating-watch";
@@ -594,6 +597,9 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
   const [astroError, setAstroError] = useState("");
   const [removing, setRemoving] = useState("");
   const [positionMutation, setPositionMutation] = useState("");
+  const [showDustPositions, setShowDustPositions] = useState(
+    () => window.localStorage.getItem(SHOW_DUST_POSITIONS_STORAGE_KEY) === "1"
+  );
   const panelRef = useRef<HTMLElement | null>(null);
   const refreshQueue = useRef<Promise<void>>(Promise.resolve());
 
@@ -786,9 +792,25 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
     () => new Set(hiddenPositions.map((accountPosition) => accountPosition.id)),
     [hiddenPositions]
   );
-  const visibleAccountPositions = useMemo(
+  const unhiddenAccountPositions = useMemo(
     () => (accountPositions?.positions ?? []).filter((item) => !hiddenPositionIds.has(item.id)),
     [accountPositions, hiddenPositionIds]
+  );
+  const dustAccountPositions = useMemo(
+    () => unhiddenAccountPositions.filter(
+      (item) => item.notional_usdt !== null
+        && item.notional_usdt < MIN_VISIBLE_POSITION_NOTIONAL_USDT
+    ),
+    [unhiddenAccountPositions]
+  );
+  const visibleAccountPositions = useMemo(
+    () => showDustPositions
+      ? unhiddenAccountPositions
+      : unhiddenAccountPositions.filter(
+        (item) => item.notional_usdt === null
+          || item.notional_usdt >= MIN_VISIBLE_POSITION_NOTIONAL_USDT
+      ),
+    [showDustPositions, unhiddenAccountPositions]
   );
   const positionIssueAccounts = useMemo(
     () => (accountPositions?.accounts ?? []).filter(
@@ -841,6 +863,14 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
   const setPanelCollapsed = (next: boolean) => {
     setCollapsed(next);
     window.localStorage.setItem(COLLAPSED_STORAGE_KEY, next ? "1" : "0");
+  };
+
+  const toggleDustPositions = () => {
+    setShowDustPositions((current) => {
+      const next = !current;
+      window.localStorage.setItem(SHOW_DUST_POSITIONS_STORAGE_KEY, next ? "1" : "0");
+      return next;
+    });
   };
 
   const openStandaloneWindow = () => {
@@ -1189,17 +1219,30 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
                 <Typography.Text type="secondary">
                   已配置账户 {configuredPositionAccounts.length} / {accountPositions?.accounts.length ?? 0}
                 </Typography.Text>
-                <Tooltip title={managingHiddenPositions ? "返回当前持仓" : "管理已屏蔽持仓"}>
-                  <Button
-                    aria-label={managingHiddenPositions ? "返回当前持仓" : "管理已屏蔽持仓"}
-                    type={managingHiddenPositions ? "default" : "text"}
-                    size="small"
-                    icon={<EyeInvisibleOutlined />}
-                    onClick={() => setManagingHiddenPositions((current) => !current)}
-                  >
-                    {hiddenPositions.length}
-                  </Button>
-                </Tooltip>
+                <span className="floating-watch-position-actions">
+                  <Tooltip title={showDustPositions ? "隐藏小于 1 USDT 的持仓" : "显示小于 1 USDT 的持仓"}>
+                    <Button
+                      aria-label={`${showDustPositions ? "隐藏" : "显示"}小于 1 USDT 的持仓（${dustAccountPositions.length}）`}
+                      type={showDustPositions ? "default" : "text"}
+                      size="small"
+                      icon={<FilterOutlined />}
+                      onClick={toggleDustPositions}
+                    >
+                      {dustAccountPositions.length}
+                    </Button>
+                  </Tooltip>
+                  <Tooltip title={managingHiddenPositions ? "返回当前持仓" : "管理已屏蔽持仓"}>
+                    <Button
+                      aria-label={managingHiddenPositions ? "返回当前持仓" : "管理已屏蔽持仓"}
+                      type={managingHiddenPositions ? "default" : "text"}
+                      size="small"
+                      icon={<EyeInvisibleOutlined />}
+                      onClick={() => setManagingHiddenPositions((current) => !current)}
+                    >
+                      {hiddenPositions.length}
+                    </Button>
+                  </Tooltip>
+                </span>
               </div>
               {managingHiddenPositions ? (
                 <div className="floating-watch-hidden-positions" aria-label="已屏蔽持仓">
@@ -1300,7 +1343,15 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
                 );
               }) : null}
               {!loading && !managingHiddenPositions && configuredPositionAccounts.length === 0 ? (
-                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未配置支持持仓读取的账户" />
+                <Empty
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  description={(
+                    <span className="floating-watch-position-empty-copy">
+                      <span>未配置交易所账户持仓读取凭据</span>
+                      <small>Astro 卡片状态不作为账户仓位来源</small>
+                    </span>
+                  )}
+                />
               ) : null}
               {!loading
                 && !managingHiddenPositions
@@ -1320,7 +1371,12 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
                 && !managingHiddenPositions
                 && (accountPositions?.positions.length ?? 0) > 0
                 && visibleAccountPositions.length === 0 ? (
-                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前持仓均已在浮窗中屏蔽" />
+                  <Empty
+                    image={Empty.PRESENTED_IMAGE_SIMPLE}
+                    description={unhiddenAccountPositions.length > 0
+                      ? "当前持仓均小于 1 USDT，已默认隐藏"
+                      : "当前持仓均已在浮窗中屏蔽"}
+                  />
                 ) : null}
             </div>
           )}

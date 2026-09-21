@@ -615,6 +615,76 @@ describe("FloatingWatchPanel", () => {
     expect(hiddenPositions).toEqual([]);
   });
 
+  it("hides positions below 1 USDT by default and keeps unknown notionals visible", async () => {
+    const dustPosition = accountPosition({
+      id: "position_gate_dust_long",
+      raw_symbol: "DUST_USDT",
+      symbol: "DUSTUSDT",
+      quantity: 0.5,
+      quantity_unit: "DUST",
+      contract_quantity: 0.5,
+      contract_multiplier: 1,
+      entry_price: 1,
+      mark_price: 1,
+      notional_usdt: 0.5
+    });
+    const unknownNotionalPosition = accountPosition({
+      id: "position_gate_unknown_long",
+      raw_symbol: "UNKNOWN_USDT",
+      symbol: "UNKNOWNUSDT",
+      notional_usdt: null
+    });
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/settings/floating-watch")) {
+        return Response.json({ symbols: [], pair_ids: [], hidden_positions: [] });
+      }
+      if (url.includes("/account-positions")) {
+        return Response.json({
+          positions: [dustPosition, unknownNotionalPosition],
+          accounts: [{
+            account_id: "gate:primary",
+            account_label: "主账户",
+            exchange: "gate",
+            configured: true,
+            state: "ok",
+            message: "持仓读取成功",
+            position_count: 2,
+            queried_at: "2026-09-21T08:00:02Z",
+            data_updated_at: "2026-09-21T08:00:00Z",
+            age_seconds: 2
+          }],
+          queried_at: "2026-09-21T08:00:02Z"
+        });
+      }
+      if (url.includes("/astro/pairs")) return Response.json([]);
+      return Response.json({});
+    });
+
+    const first = render(<FloatingWatchPanel visible onClose={vi.fn()} />);
+    let panel = await screen.findByRole("complementary", { name: "关注浮窗" });
+    await userEvent.click(await within(panel).findByText("持仓 0"));
+
+    expect(await within(panel).findByText("UNKNOWN_USDT")).not.toBeNull();
+    expect(within(panel).queryByText("DUST_USDT")).toBeNull();
+    expect(within(panel).getByText("持仓 1")).not.toBeNull();
+    await userEvent.click(within(panel).getByRole("button", {
+      name: "显示小于 1 USDT 的持仓（1）"
+    }));
+    expect(await within(panel).findByText("DUST_USDT")).not.toBeNull();
+    expect(within(panel).getByText("持仓 2")).not.toBeNull();
+    expect(window.localStorage.getItem("taoli1:floating-watch-show-dust-positions.v1")).toBe("1");
+    first.unmount();
+
+    render(<FloatingWatchPanel visible onClose={vi.fn()} />);
+    panel = await screen.findByRole("complementary", { name: "关注浮窗" });
+    await userEvent.click(await within(panel).findByText("持仓 0"));
+    expect(await within(panel).findByText("DUST_USDT")).not.toBeNull();
+    expect(within(panel).getByRole("button", {
+      name: "隐藏小于 1 USDT 的持仓（1）"
+    })).not.toBeNull();
+  });
+
   it("distinguishes an unconfigured account from a verified empty account", async () => {
     let accountState = "not_configured";
     vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
@@ -647,7 +717,8 @@ describe("FloatingWatchPanel", () => {
     const view = render(<FloatingWatchPanel visible onClose={vi.fn()} />);
     let panel = await screen.findByRole("complementary", { name: "关注浮窗" });
     await userEvent.click(await within(panel).findByText("持仓 0"));
-    expect(await within(panel).findByText("尚未配置支持持仓读取的账户")).not.toBeNull();
+    expect(await within(panel).findByText("未配置交易所账户持仓读取凭据")).not.toBeNull();
+    expect(within(panel).getByText("Astro 卡片状态不作为账户仓位来源")).not.toBeNull();
 
     accountState = "empty";
     view.unmount();
