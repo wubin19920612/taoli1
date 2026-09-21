@@ -337,6 +337,36 @@ function astroInstrument(
   };
 }
 
+function accountPosition(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "position_gate_btc_long",
+    account_id: "gate:primary",
+    account_label: "主账户",
+    exchange: "gate",
+    market_type: "future",
+    raw_symbol: "BTC_USDT",
+    symbol: "BTCUSDT",
+    side: "long",
+    dex: null,
+    quantity: 0.02,
+    quantity_unit: "BTC",
+    contract_quantity: 20,
+    contract_multiplier: 0.001,
+    entry_price: 60000,
+    mark_price: 61000,
+    notional_usdt: 1220,
+    unrealized_pnl_usdt: 20,
+    roi_pct: 8.197,
+    leverage: 5,
+    price_basis: "Gate 标记价（mark_price）",
+    estimated_fields: ["roi_pct"],
+    updated_at: "2026-09-21T08:00:00Z",
+    freshness: "fresh",
+    age_seconds: 2,
+    ...overrides
+  };
+}
+
 describe("FloatingWatchPanel", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -411,6 +441,220 @@ describe("FloatingWatchPanel", () => {
       item_type: "symbol",
       value: "BTCUSDT"
     });
+  });
+
+  it("shows real account fields, partial failures, and distinct same-ticker Hyperliquid DEX positions", async () => {
+    const positions = [
+      accountPosition(),
+      accountPosition({
+        id: "position_hl_btc_main_short",
+        account_id: "hl:primary",
+        account_label: "策略账户",
+        exchange: "hyperliquid",
+        raw_symbol: "BTC",
+        side: "short",
+        dex: "main",
+        quantity: 0.3,
+        contract_quantity: null,
+        contract_multiplier: null,
+        entry_price: null,
+        mark_price: 61050,
+        notional_usdt: 18315,
+        unrealized_pnl_usdt: -15,
+        roi_pct: null,
+        leverage: null,
+        price_basis: "Hyperliquid markPx",
+        estimated_fields: [],
+        freshness: "stale",
+        age_seconds: 75
+      }),
+      accountPosition({
+        id: "position_hl_btc_xyz_long",
+        account_id: "hl:primary",
+        account_label: "策略账户",
+        exchange: "hyperliquid",
+        raw_symbol: "xyz:BTC",
+        side: "long",
+        dex: "xyz",
+        quantity: 0.1,
+        contract_quantity: null,
+        contract_multiplier: 1,
+        entry_price: 60900,
+        mark_price: 61040,
+        notional_usdt: 6104,
+        unrealized_pnl_usdt: 14,
+        roi_pct: 1.15,
+        leverage: 5,
+        price_basis: "Hyperliquid markPx"
+      })
+    ];
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/settings/floating-watch")) {
+        return Response.json({ symbols: [], pair_ids: [], hidden_positions: [] });
+      }
+      if (url.includes("/account-positions")) {
+        return Response.json({
+          positions,
+          accounts: [
+            {
+              account_id: "gate:primary",
+              account_label: "主账户",
+              exchange: "gate",
+              configured: true,
+              state: "ok",
+              message: "持仓读取成功",
+              position_count: 1,
+              queried_at: "2026-09-21T08:00:02Z",
+              data_updated_at: "2026-09-21T08:00:00Z",
+              age_seconds: 2
+            },
+            {
+              account_id: "hl:primary",
+              account_label: "策略账户",
+              exchange: "hyperliquid",
+              configured: true,
+              state: "stale",
+              message: "账户持仓接口查询失败；当前显示最近一次成功快照",
+              position_count: 2,
+              queried_at: "2026-09-21T08:01:15Z",
+              data_updated_at: "2026-09-21T08:00:00Z",
+              age_seconds: 75
+            }
+          ],
+          queried_at: "2026-09-21T08:01:15Z"
+        });
+      }
+      if (url.includes("/astro/pairs")) return Response.json([]);
+      return Response.json({});
+    });
+
+    render(<FloatingWatchPanel visible onClose={vi.fn()} />);
+    const panel = await screen.findByRole("complementary", { name: "关注浮窗" });
+    await userEvent.click(await within(panel).findByText("持仓 0"));
+
+    expect(await within(panel).findByText("BTC_USDT")).not.toBeNull();
+    expect(within(panel).getByText("xyz:BTC")).not.toBeNull();
+    expect(within(panel).getByText("永续 · main")).not.toBeNull();
+    expect(within(panel).getByText("永续 · xyz")).not.toBeNull();
+    expect(within(panel).getAllByText("收益率（估）")).toHaveLength(2);
+    expect(within(panel).getAllByText("--").length).toBeGreaterThan(1);
+    expect(within(panel).getByText("过期 · 75s")).not.toBeNull();
+    expect(within(panel).getByText(/账户持仓接口查询失败；当前显示最近一次成功快照/)).not.toBeNull();
+    expect(within(panel).getByText("持仓 3")).not.toBeNull();
+  });
+
+  it("persists one exact hidden position across remount and restores it", async () => {
+    const gatePosition = accountPosition();
+    const otherMarket = accountPosition({
+      id: "position_hl_btc_main_long",
+      account_id: "hl:primary",
+      account_label: "策略账户",
+      exchange: "hyperliquid",
+      raw_symbol: "BTC",
+      dex: "main"
+    });
+    let hiddenPositions: Array<Record<string, unknown>> = [];
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/settings/floating-watch/positions") && init?.method === "POST") {
+        const mutation = JSON.parse(String(init.body)) as {
+          action: "add" | "remove";
+          position: Record<string, unknown>;
+        };
+        hiddenPositions = mutation.action === "add"
+          ? [mutation.position]
+          : hiddenPositions.filter((item) => item.id !== mutation.position.id);
+        return Response.json({ symbols: [], pair_ids: [], hidden_positions: hiddenPositions });
+      }
+      if (url.includes("/settings/floating-watch")) {
+        return Response.json({ symbols: [], pair_ids: [], hidden_positions: hiddenPositions });
+      }
+      if (url.includes("/account-positions")) {
+        return Response.json({
+          positions: [gatePosition, otherMarket],
+          accounts: [{
+            account_id: "gate:primary",
+            account_label: "主账户",
+            exchange: "gate",
+            configured: true,
+            state: "ok",
+            message: "持仓读取成功",
+            position_count: 2,
+            queried_at: "2026-09-21T08:00:02Z",
+            data_updated_at: "2026-09-21T08:00:00Z",
+            age_seconds: 2
+          }],
+          queried_at: "2026-09-21T08:00:02Z"
+        });
+      }
+      if (url.includes("/astro/pairs")) return Response.json([]);
+      return Response.json({});
+    });
+
+    const first = render(<FloatingWatchPanel visible onClose={vi.fn()} />);
+    let panel = await screen.findByRole("complementary", { name: "关注浮窗" });
+    await userEvent.click(await within(panel).findByText("持仓 0"));
+    const hideGate = await within(panel).findByRole("button", {
+      name: /在浮窗中屏蔽持仓 Gate 主账户 · BTC_USDT/
+    });
+    await userEvent.click(hideGate);
+    await waitFor(() => expect(within(panel).queryByText("BTC_USDT")).toBeNull());
+    expect(within(panel).getByText("BTC")).not.toBeNull();
+    first.unmount();
+
+    render(<FloatingWatchPanel visible onClose={vi.fn()} />);
+    panel = await screen.findByRole("complementary", { name: "关注浮窗" });
+    await userEvent.click(await within(panel).findByText("持仓 0"));
+    expect(await within(panel).findByText("持仓 1")).not.toBeNull();
+    expect(within(panel).queryByText("BTC_USDT")).toBeNull();
+    await userEvent.click(within(panel).getByRole("button", { name: "管理已屏蔽持仓" }));
+    expect(within(panel).getByText("BTC_USDT")).not.toBeNull();
+    await userEvent.click(within(panel).getByRole("button", { name: /恢复持仓 Gate 主账户/ }));
+    await waitFor(() => expect(within(panel).getByText("持仓 2")).not.toBeNull());
+    expect(hiddenPositions).toEqual([]);
+  });
+
+  it("distinguishes an unconfigured account from a verified empty account", async () => {
+    let accountState = "not_configured";
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/settings/floating-watch")) {
+        return Response.json({ symbols: [], pair_ids: [], hidden_positions: [] });
+      }
+      if (url.includes("/account-positions")) {
+        return Response.json({
+          positions: [],
+          accounts: [{
+            account_id: "gate:default",
+            account_label: "默认账户",
+            exchange: "gate",
+            configured: accountState !== "not_configured",
+            state: accountState,
+            message: accountState === "empty" ? "账户已核验，当前无未平仓持仓" : "尚未配置账户凭据",
+            position_count: 0,
+            queried_at: "2026-09-21T08:00:02Z",
+            data_updated_at: null,
+            age_seconds: null
+          }],
+          queried_at: "2026-09-21T08:00:02Z"
+        });
+      }
+      if (url.includes("/astro/pairs")) return Response.json([]);
+      return Response.json({});
+    });
+
+    const view = render(<FloatingWatchPanel visible onClose={vi.fn()} />);
+    let panel = await screen.findByRole("complementary", { name: "关注浮窗" });
+    await userEvent.click(await within(panel).findByText("持仓 0"));
+    expect(await within(panel).findByText("尚未配置支持持仓读取的账户")).not.toBeNull();
+
+    accountState = "empty";
+    view.unmount();
+    render(<FloatingWatchPanel visible onClose={vi.fn()} />);
+    panel = await screen.findByRole("complementary", { name: "关注浮窗" });
+    await userEvent.click(await within(panel).findByText("持仓 0"));
+    expect(await within(panel).findByText("当前无持仓")).not.toBeNull();
   });
 
   it("shows only running Astro cards with runtime and position status", async () => {

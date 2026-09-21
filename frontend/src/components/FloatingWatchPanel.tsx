@@ -2,23 +2,30 @@ import {
   CloseOutlined,
   DeleteOutlined,
   DragOutlined,
+  EyeInvisibleOutlined,
   ExportOutlined,
   LineChartOutlined,
   MinusOutlined,
   PushpinOutlined,
-  ReloadOutlined
+  ReloadOutlined,
+  UndoOutlined
 } from "@ant-design/icons";
 import { Alert, Button, Empty, Segmented, Spin, Tag, Tooltip, Typography } from "antd";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 
 import {
   getFloatingWatchSettings,
+  listAccountPositions,
   listAstroPairs,
   listPairSpreadPresets,
   lookupInstrument,
-  queryPairSpread
+  queryPairSpread,
+  mutateFloatingWatchPosition
 } from "../api/client";
 import type {
+  AccountPositionAccountStatus,
+  AccountPositionIdentity,
+  AccountPositionSnapshot,
   FloatingWatchSettings,
   AstroPairStatus,
   InstrumentLookupResult,
@@ -40,7 +47,7 @@ const COLLAPSED_STORAGE_KEY = "taoli1:floating-watch-collapsed.v1";
 const STANDALONE_QUERY_PARAM = "floating_watch";
 const STANDALONE_QUERY_VALUE = "standalone";
 const STANDALONE_WINDOW_NAME = "taoli1-floating-watch";
-const emptySettings: FloatingWatchSettings = { symbols: [], pair_ids: [] };
+const emptySettings: FloatingWatchSettings = { symbols: [], pair_ids: [], hidden_positions: [] };
 const exchangeLabels: Record<string, string> = {
   aster: "Aster",
   binance: "Binance",
@@ -53,7 +60,7 @@ const exchangeLabels: Record<string, string> = {
   okx: "OKX"
 };
 
-type WatchMode = "symbols" | "pairs" | "astro";
+type WatchMode = "symbols" | "pairs" | "astro" | "positions";
 type SavedPosition = { left: number; top: number };
 type InstrumentState = { result: InstrumentLookupResult | null; error: string };
 type PairState = { result: PairSpreadQueryResult | null; error: string };
@@ -154,6 +161,49 @@ function finiteNumber(value: unknown): number | null {
   if (typeof value !== "string" || value.trim() === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function positionMetric(value: number | null | undefined, suffix = ""): string {
+  return typeof value === "number" && Number.isFinite(value) ? `${price(value)}${suffix}` : "--";
+}
+
+function positionPnl(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "--";
+  return `${value >= 0 ? "+" : ""}${price(value)} U`;
+}
+
+function positionPct(value: number | null | undefined): string {
+  return typeof value === "number" && Number.isFinite(value) ? signedPct(value) : "--";
+}
+
+function positionUpdatedAt(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.valueOf())) return "更新时间未知";
+  return parsed.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false
+  });
+}
+
+function positionMarketLabel(position: AccountPositionIdentity): string {
+  const marketType = position.market_type === "spot" ? "现货" : "永续";
+  const dex = position.exchange === "hyperliquid" ? ` · ${position.dex || "DEX 未知"}` : "";
+  return `${marketType}${dex}`;
+}
+
+function positionIdentityLabel(position: AccountPositionIdentity): string {
+  const exchange = exchangeLabels[position.exchange] || position.exchange;
+  const side = position.side === "long" ? "多" : "空";
+  return `${exchange} ${position.account_label} · ${position.raw_symbol} · ${positionMarketLabel(position)} · ${side}`;
+}
+
+function accountStatusLabel(status: AccountPositionAccountStatus): string {
+  const exchange = exchangeLabels[status.exchange] || status.exchange;
+  return `${exchange} ${status.account_label}：${status.message}`;
 }
 
 function astroHasPosition(pair: AstroPairStatus): boolean {
@@ -536,10 +586,14 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
   const [pairs, setPairs] = useState<Record<string, PairState>>({});
   const [astroPairs, setAstroPairs] = useState<AstroPairStatus[]>([]);
   const [astroInstruments, setAstroInstruments] = useState<Record<string, InstrumentState>>({});
+  const [accountPositions, setAccountPositions] = useState<AccountPositionSnapshot | null>(null);
+  const [accountPositionError, setAccountPositionError] = useState("");
+  const [managingHiddenPositions, setManagingHiddenPositions] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [astroError, setAstroError] = useState("");
   const [removing, setRemoving] = useState("");
+  const [positionMutation, setPositionMutation] = useState("");
   const panelRef = useRef<HTMLElement | null>(null);
   const refreshQueue = useRef<Promise<void>>(Promise.resolve());
 
@@ -600,6 +654,13 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
           );
           setPresets(watchedPresets);
           setPairs(Object.fromEntries(pairEntries));
+        } else if (requestedMode === "positions") {
+          try {
+            setAccountPositions(await listAccountPositions());
+            setAccountPositionError("");
+          } catch (caught) {
+            setAccountPositionError(caught instanceof Error ? caught.message : String(caught));
+          }
         }
         const astroResult = await astroResultPromise;
         if (astroResult.items) {
@@ -666,7 +727,12 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
   useEffect(() => {
     const handleUpdate = (event: Event) => {
       const updated = (event as CustomEvent<FloatingWatchSettings>).detail;
-      if (updated) setSettings(updated);
+      if (updated) {
+        setSettings({
+          ...updated,
+          hidden_positions: Array.isArray(updated.hidden_positions) ? updated.hidden_positions : []
+        });
+      }
       if (!standalone) {
         setCollapsed(false);
         window.localStorage.setItem(COLLAPSED_STORAGE_KEY, "0");
@@ -714,6 +780,25 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
       tradingAstroPairs.flatMap((pair) => astroLegs(pair)?.map((leg) => leg.symbol) ?? [])
     ),
     [tradingAstroPairs]
+  );
+  const hiddenPositions = settings.hidden_positions ?? [];
+  const hiddenPositionIds = useMemo(
+    () => new Set(hiddenPositions.map((accountPosition) => accountPosition.id)),
+    [hiddenPositions]
+  );
+  const visibleAccountPositions = useMemo(
+    () => (accountPositions?.positions ?? []).filter((item) => !hiddenPositionIds.has(item.id)),
+    [accountPositions, hiddenPositionIds]
+  );
+  const positionIssueAccounts = useMemo(
+    () => (accountPositions?.accounts ?? []).filter(
+      (account) => ["permission_denied", "error", "stale"].includes(account.state)
+    ),
+    [accountPositions]
+  );
+  const configuredPositionAccounts = useMemo(
+    () => (accountPositions?.accounts ?? []).filter((account) => account.configured),
+    [accountPositions]
   );
 
   if (!visible) return null;
@@ -784,7 +869,12 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
     setRemoving(`symbol:${symbol}`);
     try {
       const next = await removeFloatingWatchSymbol(symbol);
-      setSettings(next);
+      setSettings((current) => ({
+        ...next,
+        hidden_positions: Array.isArray(next.hidden_positions)
+          ? next.hidden_positions
+          : current.hidden_positions ?? []
+      }));
       setInstruments((current) => {
         const copy = { ...current };
         delete copy[symbol];
@@ -802,13 +892,37 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
     setRemoving(`pair:${pairId}`);
     try {
       const next = await removeFloatingWatchPair(pairId);
-      setSettings(next);
+      setSettings((current) => ({
+        ...next,
+        hidden_positions: Array.isArray(next.hidden_positions)
+          ? next.hidden_positions
+          : current.hidden_positions ?? []
+      }));
       setPresets((current) => current.filter((preset) => preset.id !== pairId));
       setError("");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
       setRemoving("");
+    }
+  };
+
+  const changePositionVisibility = async (
+    action: "add" | "remove",
+    accountPosition: AccountPositionIdentity
+  ) => {
+    setPositionMutation(accountPosition.id);
+    try {
+      const next = await mutateFloatingWatchPosition(action, accountPosition);
+      setSettings({
+        ...next,
+        hidden_positions: Array.isArray(next.hidden_positions) ? next.hidden_positions : []
+      });
+      setError("");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setPositionMutation("");
     }
   };
 
@@ -875,16 +989,21 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
               {
                 label: `Astro ${runningAstroPairs.length}${tradingAstroPairs.length ? ` · ${tradingAstroPairs.length} 持仓` : ""}`,
                 value: "astro"
-              }
+              },
+              { label: `持仓 ${visibleAccountPositions.length}`, value: "positions" }
             ]}
             onChange={(value) => setMode(value as WatchMode)}
           />
           {error ? <Alert type="warning" showIcon message={error} /> : null}
           {mode === "astro" && astroError ? <Alert type="warning" showIcon message={`Astro 卡片读取失败：${astroError}`} /> : null}
+          {mode === "positions" && accountPositionError ? (
+            <Alert type="warning" showIcon message={`账户持仓读取失败：${accountPositionError}`} />
+          ) : null}
           {loading && (
             (mode === "symbols" && settings.symbols.length === 0)
             || (mode === "pairs" && settings.pair_ids.length === 0)
             || (mode === "astro" && runningAstroPairs.length === 0)
+            || (mode === "positions" && accountPositions === null)
           ) ? <Spin className="floating-watch-loading" /> : null}
           {mode === "symbols" ? (
             <div className="floating-watch-list">
@@ -964,7 +1083,7 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
               ))}
               {!loading && settings.pair_ids.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有关注交易对" /> : null}
             </div>
-          ) : (
+          ) : mode === "astro" ? (
             <div className="floating-watch-list">
               {runningAstroPairs.map((pair, index) => {
                 const runtime = astroRuntimeState(pair);
@@ -1064,10 +1183,154 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
                 <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有正在运行的 Astro 卡片" />
               ) : null}
             </div>
+          ) : (
+            <div className="floating-watch-list floating-watch-position-list">
+              <div className="floating-watch-position-toolbar">
+                <Typography.Text type="secondary">
+                  已配置账户 {configuredPositionAccounts.length} / {accountPositions?.accounts.length ?? 0}
+                </Typography.Text>
+                <Tooltip title={managingHiddenPositions ? "返回当前持仓" : "管理已屏蔽持仓"}>
+                  <Button
+                    aria-label={managingHiddenPositions ? "返回当前持仓" : "管理已屏蔽持仓"}
+                    type={managingHiddenPositions ? "default" : "text"}
+                    size="small"
+                    icon={<EyeInvisibleOutlined />}
+                    onClick={() => setManagingHiddenPositions((current) => !current)}
+                  >
+                    {hiddenPositions.length}
+                  </Button>
+                </Tooltip>
+              </div>
+              {managingHiddenPositions ? (
+                <div className="floating-watch-hidden-positions" aria-label="已屏蔽持仓">
+                  {hiddenPositions.map((hiddenPosition) => (
+                    <div className="floating-watch-hidden-position" key={hiddenPosition.id}>
+                      <span>
+                        <strong>{hiddenPosition.raw_symbol}</strong>
+                        <small>{positionIdentityLabel(hiddenPosition)}</small>
+                      </span>
+                      <Tooltip title="恢复到浮窗">
+                        <Button
+                          aria-label={`恢复持仓 ${positionIdentityLabel(hiddenPosition)}`}
+                          type="text"
+                          size="small"
+                          icon={<UndoOutlined />}
+                          loading={positionMutation === hiddenPosition.id}
+                          onClick={() => void changePositionVisibility("remove", hiddenPosition)}
+                        />
+                      </Tooltip>
+                    </div>
+                  ))}
+                  {hiddenPositions.length === 0 ? (
+                    <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有已屏蔽持仓" />
+                  ) : null}
+                </div>
+              ) : null}
+              {positionIssueAccounts.map((account) => (
+                <Alert
+                  className="floating-watch-position-alert"
+                  key={`${account.exchange}:${account.account_id}`}
+                  type="warning"
+                  showIcon
+                  message={accountStatusLabel(account)}
+                />
+              ))}
+              {!managingHiddenPositions ? visibleAccountPositions.map((accountPosition) => {
+                const sideLabel = accountPosition.side === "long" ? "多" : "空";
+                const estimatedRoi = accountPosition.estimated_fields.includes("roi_pct");
+                const multiplier = accountPosition.contract_multiplier === null
+                  ? "--"
+                  : `${price(accountPosition.contract_multiplier)} ${accountPosition.quantity_unit}/张`;
+                return (
+                  <article
+                    className={`floating-watch-account-position floating-watch-account-position-${accountPosition.freshness}`}
+                    key={accountPosition.id}
+                  >
+                    <div className="floating-watch-account-position-head">
+                      <span className="floating-watch-account-position-title">
+                        <strong title={accountPosition.raw_symbol}>{accountPosition.raw_symbol}</strong>
+                        <small>{accountPosition.symbol}</small>
+                      </span>
+                      <Tag color={accountPosition.side === "long" ? "green" : "red"}>{sideLabel}</Tag>
+                      <Tooltip title="仅在关注浮窗中屏蔽，不会修改交易所仓位">
+                        <Button
+                          aria-label={`在浮窗中屏蔽持仓 ${positionIdentityLabel(accountPosition)}`}
+                          type="text"
+                          size="small"
+                          icon={<EyeInvisibleOutlined />}
+                          loading={positionMutation === accountPosition.id}
+                          onClick={() => void changePositionVisibility("add", accountPosition)}
+                        />
+                      </Tooltip>
+                    </div>
+                    <div className="floating-watch-account-position-route">
+                      <span>{exchangeLabels[accountPosition.exchange] || accountPosition.exchange}</span>
+                      <span>{accountPosition.account_label}</span>
+                      <span>{positionMarketLabel(accountPosition)}</span>
+                    </div>
+                    <div className="floating-watch-account-position-metrics">
+                      <span><small>数量</small><strong>{positionMetric(accountPosition.quantity)} {accountPosition.quantity_unit}</strong></span>
+                      <span><small>开仓均价</small><strong>{positionMetric(accountPosition.entry_price)}</strong></span>
+                      <span><small>标记价</small><strong>{positionMetric(accountPosition.mark_price)}</strong></span>
+                      <span><small>名义价值</small><strong>{positionMetric(accountPosition.notional_usdt, " U")}</strong></span>
+                      <span className={`floating-watch-value-${tone(accountPosition.unrealized_pnl_usdt)}`}>
+                        <small>未实现盈亏</small><strong>{positionPnl(accountPosition.unrealized_pnl_usdt)}</strong>
+                      </span>
+                      <span className={`floating-watch-value-${tone(accountPosition.roi_pct)}`}>
+                        <small>收益率{estimatedRoi ? "（估）" : ""}</small><strong>{positionPct(accountPosition.roi_pct)}</strong>
+                      </span>
+                      <span><small>杠杆</small><strong>{positionMetric(accountPosition.leverage, "x")}</strong></span>
+                      <span><small>市场倍率</small><strong>{multiplier}</strong></span>
+                    </div>
+                    <div className="floating-watch-account-position-basis">
+                      <span>{accountPosition.price_basis}</span>
+                      {accountPosition.contract_quantity !== null ? (
+                        <span>{positionMetric(accountPosition.contract_quantity)} 张</span>
+                      ) : null}
+                    </div>
+                    <div className="floating-watch-account-position-update">
+                      <span>{positionUpdatedAt(accountPosition.updated_at)}</span>
+                      <Tag color={accountPosition.freshness === "fresh" ? "green" : "orange"}>
+                        {accountPosition.freshness === "fresh"
+                          ? `新鲜 · ${Math.round(accountPosition.age_seconds)}s`
+                          : `过期 · ${Math.round(accountPosition.age_seconds)}s`}
+                      </Tag>
+                    </div>
+                  </article>
+                );
+              }) : null}
+              {!loading && !managingHiddenPositions && configuredPositionAccounts.length === 0 ? (
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未配置支持持仓读取的账户" />
+              ) : null}
+              {!loading
+                && !managingHiddenPositions
+                && configuredPositionAccounts.length > 0
+                && (accountPositions?.positions.length ?? 0) === 0
+                && positionIssueAccounts.length === 0 ? (
+                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前无持仓" />
+                ) : null}
+              {!loading
+                && !managingHiddenPositions
+                && configuredPositionAccounts.length > 0
+                && (accountPositions?.positions.length ?? 0) === 0
+                && positionIssueAccounts.length > 0 ? (
+                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="账户状态未确认，不能判定为无持仓" />
+                ) : null}
+              {!loading
+                && !managingHiddenPositions
+                && (accountPositions?.positions.length ?? 0) > 0
+                && visibleAccountPositions.length === 0 ? (
+                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前持仓均已在浮窗中屏蔽" />
+                ) : null}
+            </div>
           )}
           <div className="floating-watch-footer">
             <Typography.Text type="secondary">
-              {mode === "astro" ? "每 10 秒同步 Astro 运行状态" : "每 10 秒刷新 · 点击行查看详情"}
+              {mode === "astro"
+                ? "每 10 秒同步 Astro 运行状态"
+                : mode === "positions"
+                  ? "每 10 秒查询已配置账户 · 屏蔽仅影响本浮窗"
+                  : "每 10 秒刷新 · 点击行查看详情"}
             </Typography.Text>
           </div>
         </div>

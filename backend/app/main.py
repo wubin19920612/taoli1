@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import (
+    routes_account_positions,
     routes_announcements,
     routes_astro,
     routes_admin,
@@ -59,6 +60,7 @@ from app.models.orderbook import DepthValidationResult
 from app.models.opportunity import Opportunity
 from app.models.phone_alert import PhonePriceAlertEvent
 from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, LivePilotSettings, RiskSettings
+from app.services.account_positions import AccountPositionService, GateAccountPositionProvider
 from app.services.alert_engine import AlertEngine, AlertMatch, observations_are_stable, required_open_spread_pct
 from app.services.alert_messages import build_alert_message, build_alert_rating_header
 from app.services.alert_metrics import observe_alert_metrics
@@ -1316,6 +1318,7 @@ def create_app(
     app.state.new_listing_monitor = None
     app.state.negative_basis_monitor = None
     app.state.trade_availability_service = None
+    app.state.account_position_service = None
     app.state.alert_engine = AlertEngine()
     app.state.phone_price_alert_engine = PhonePriceAlertEngine()
     app.state.opportunity_radar_alert_engine = OpportunityRadarAlertEngine()
@@ -1341,7 +1344,11 @@ def create_app(
             restart_delay_seconds=app_settings.service_control_restart_delay_seconds,
         )
     )
-    app.state.gate_twap_manager = GateTwapJobManager(GateTwapClient())
+    gate_twap_client = GateTwapClient()
+    app.state.gate_twap_manager = GateTwapJobManager(gate_twap_client)
+    app.state.account_position_service = AccountPositionService(
+        [GateAccountPositionProvider(gate_twap_client)]
+    )
     app.state.feishu_live_send_enabled = app_settings.feishu_live_send_enabled
     feishu_text_send_enabled = (
         app_settings.feishu_live_send_enabled
@@ -1371,6 +1378,7 @@ def create_app(
         allow_headers=["*"],
     )
     app.include_router(routes_health.router, prefix="/api")
+    app.include_router(routes_account_positions.router, prefix="/api")
     app.include_router(routes_astro.router, prefix="/api")
     app.include_router(routes_opportunities.router, prefix="/api")
     app.include_router(routes_opportunity_radar.router, prefix="/api")

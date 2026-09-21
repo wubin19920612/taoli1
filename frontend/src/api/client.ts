@@ -1,4 +1,6 @@
 import type {
+  AccountPositionIdentity,
+  AccountPositionSnapshot,
   AlertEvent,
   AlertMessageTemplateSettings,
   AlertRule,
@@ -265,7 +267,7 @@ export function deleteTradeAvailabilityWatch(watchId: string): Promise<{ status:
 export async function getFloatingWatchSettings(): Promise<FloatingWatchSettings> {
   const value = await fetchJson<unknown>("/settings/floating-watch");
   if (!value || typeof value !== "object") {
-    return { symbols: [], pair_ids: [] };
+    return { symbols: [], pair_ids: [], hidden_positions: [] };
   }
   const candidate = value as Partial<FloatingWatchSettings>;
   return {
@@ -274,6 +276,15 @@ export async function getFloatingWatchSettings(): Promise<FloatingWatchSettings>
       : [],
     pair_ids: Array.isArray(candidate.pair_ids)
       ? candidate.pair_ids.filter((item): item is string => typeof item === "string")
+      : [],
+    hidden_positions: Array.isArray(candidate.hidden_positions)
+      ? candidate.hidden_positions.filter(
+        (item): item is AccountPositionIdentity => Boolean(
+          item
+          && typeof item === "object"
+          && typeof (item as AccountPositionIdentity).id === "string"
+        )
+      )
       : []
   };
 }
@@ -286,6 +297,29 @@ export async function mutateFloatingWatchItem(
   return fetchJson<FloatingWatchSettings>("/settings/floating-watch/items", {
     method: "POST",
     body: JSON.stringify({ action, item_type: itemType, value })
+  });
+}
+
+export async function listAccountPositions(): Promise<AccountPositionSnapshot> {
+  const value = await fetchJson<unknown>("/account-positions");
+  if (
+    !value
+    || typeof value !== "object"
+    || !Array.isArray((value as AccountPositionSnapshot).positions)
+    || !Array.isArray((value as AccountPositionSnapshot).accounts)
+  ) {
+    throw new Error("账户持仓响应格式无效");
+  }
+  return value as AccountPositionSnapshot;
+}
+
+export async function mutateFloatingWatchPosition(
+  action: "add" | "remove",
+  position: AccountPositionIdentity
+): Promise<FloatingWatchSettings> {
+  return fetchJson<FloatingWatchSettings>("/settings/floating-watch/positions", {
+    method: "POST",
+    body: JSON.stringify({ action, position })
   });
 }
 

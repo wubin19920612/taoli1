@@ -43,8 +43,10 @@ from app.models.settings import (
     AlertMessageTemplateSettings,
     AstroAutomationSettings,
     AstroCardSettings,
+    FloatingWatchPositionMutation,
     FloatingWatchMutation,
     FloatingWatchSettings,
+    MAX_FLOATING_WATCH_HIDDEN_POSITIONS,
     MAX_FLOATING_WATCH_PAIRS,
     MAX_FLOATING_WATCH_SYMBOLS,
     LivePilotSettings,
@@ -1250,6 +1252,38 @@ class SettingsRepository:
             elif mutation.action == "remove":
                 target[:] = [item for item in target if item != mutation.value]
             updated = FloatingWatchSettings(symbols=symbols, pair_ids=pair_ids)
+            await self.db.execute(
+                """
+                INSERT INTO app_settings (key, payload)
+                VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
+                """,
+                ("floating_watch", updated.model_dump_json()),
+            )
+            await self.db.commit()
+            return updated
+
+    async def mutate_floating_watch_position_settings(
+        self,
+        mutation: FloatingWatchPositionMutation,
+    ) -> FloatingWatchSettings:
+        async with self._floating_watch_lock:
+            settings = await self.get_floating_watch_settings()
+            hidden_positions = list(settings.hidden_positions)
+            if mutation.action == "add":
+                hidden_positions = [
+                    item for item in hidden_positions if item.id != mutation.position.id
+                ]
+                if len(hidden_positions) >= MAX_FLOATING_WATCH_HIDDEN_POSITIONS:
+                    raise ValueError(
+                        f"浮窗最多屏蔽 {MAX_FLOATING_WATCH_HIDDEN_POSITIONS} 个持仓身份"
+                    )
+                hidden_positions.append(mutation.position)
+            else:
+                hidden_positions = [
+                    item for item in hidden_positions if item.id != mutation.position.id
+                ]
+            updated = settings.model_copy(update={"hidden_positions": hidden_positions})
             await self.db.execute(
                 """
                 INSERT INTO app_settings (key, payload)

@@ -9,6 +9,7 @@ from app.models.settings import (
     AstroAutomationSettings,
     AstroCardSettings,
     FloatingWatchMutation,
+    FloatingWatchPositionMutation,
     FloatingWatchSettings,
     LivePilotPreview,
     LivePilotPreviewItem,
@@ -50,6 +51,19 @@ async def mutate_floating_watch_settings(
     verify_dashboard_password(request.app.state.settings.dashboard_password, password)
     try:
         return await _settings_repo(request).mutate_floating_watch_settings(mutation)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/floating-watch/positions", response_model=FloatingWatchSettings)
+async def mutate_floating_watch_position_settings(
+    mutation: FloatingWatchPositionMutation,
+    request: Request,
+    password: str | None = Depends(dashboard_password_header),
+) -> FloatingWatchSettings:
+    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
+    try:
+        return await _settings_repo(request).mutate_floating_watch_position_settings(mutation)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

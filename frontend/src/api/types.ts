@@ -1281,6 +1281,66 @@ export interface PairSpreadPreset {
 export interface FloatingWatchSettings {
   symbols: string[];
   pair_ids: string[];
+  hidden_positions: AccountPositionIdentity[];
+}
+
+export type AccountPositionSide = "long" | "short";
+export type AccountPositionFreshness = "fresh" | "stale";
+export type AccountPositionAccountState =
+  | "not_configured"
+  | "ok"
+  | "empty"
+  | "permission_denied"
+  | "error"
+  | "stale";
+
+export interface AccountPositionIdentity {
+  id: string;
+  account_id: string;
+  account_label: string;
+  exchange: string;
+  market_type: MarketType;
+  raw_symbol: string;
+  symbol: string;
+  side: AccountPositionSide;
+  dex: string | null;
+}
+
+export interface AccountPosition extends AccountPositionIdentity {
+  quantity: number;
+  quantity_unit: string;
+  contract_quantity: number | null;
+  contract_multiplier: number | null;
+  entry_price: number | null;
+  mark_price: number | null;
+  notional_usdt: number | null;
+  unrealized_pnl_usdt: number | null;
+  roi_pct: number | null;
+  leverage: number | null;
+  price_basis: string;
+  estimated_fields: string[];
+  updated_at: string;
+  freshness: AccountPositionFreshness;
+  age_seconds: number;
+}
+
+export interface AccountPositionAccountStatus {
+  account_id: string;
+  account_label: string;
+  exchange: string;
+  configured: boolean;
+  state: AccountPositionAccountState;
+  message: string;
+  position_count: number;
+  queried_at: string;
+  data_updated_at: string | null;
+  age_seconds: number | null;
+}
+
+export interface AccountPositionSnapshot {
+  positions: AccountPosition[];
+  accounts: AccountPositionAccountStatus[];
+  queried_at: string;
 }
 
 export interface HyperliquidMarketAsset {

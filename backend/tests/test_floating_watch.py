@@ -51,6 +51,7 @@ def test_floating_watch_api_syncs_devices_and_protects_writes() -> None:
         assert client.get("/api/settings/floating-watch").json() == {
             "symbols": [],
             "pair_ids": [],
+            "hidden_positions": [],
         }
 
         unauthorized = client.post(
@@ -68,6 +69,7 @@ def test_floating_watch_api_syncs_devices_and_protects_writes() -> None:
         assert saved.json() == {
             "symbols": ["BTCUSDT"],
             "pair_ids": [],
+            "hidden_positions": [],
         }
 
         pair_saved = client.post(

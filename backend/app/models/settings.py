@@ -2,6 +2,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.models.account_position import AccountPositionIdentity
 from app.models.market import MarketType
 
 DEFAULT_HIDDEN_RISK_LABELS = [
@@ -16,6 +17,7 @@ DEFAULT_HIDDEN_RISK_LABELS = [
 
 MAX_FLOATING_WATCH_SYMBOLS = 12
 MAX_FLOATING_WATCH_PAIRS = 12
+MAX_FLOATING_WATCH_HIDDEN_POSITIONS = 200
 
 
 def _normalize_alias_symbol(value: str) -> str:
@@ -31,6 +33,10 @@ def _normalize_alias_symbol(value: str) -> str:
 class FloatingWatchSettings(BaseModel):
     symbols: list[str] = Field(default_factory=list, max_length=MAX_FLOATING_WATCH_SYMBOLS)
     pair_ids: list[str] = Field(default_factory=list, max_length=MAX_FLOATING_WATCH_PAIRS)
+    hidden_positions: list[AccountPositionIdentity] = Field(
+        default_factory=list,
+        max_length=MAX_FLOATING_WATCH_HIDDEN_POSITIONS,
+    )
 
     @field_validator("symbols", mode="before")
     @classmethod
@@ -60,6 +66,21 @@ class FloatingWatchSettings(BaseModel):
                 normalized.append(pair_id)
         return normalized
 
+    @field_validator("hidden_positions", mode="before")
+    @classmethod
+    def normalize_hidden_positions(cls, value: Any) -> list[Any]:
+        if not isinstance(value, list):
+            return []
+        normalized: list[Any] = []
+        seen_ids: set[str] = set()
+        for item in value:
+            position_id = item.get("id") if isinstance(item, dict) else getattr(item, "id", None)
+            if not isinstance(position_id, str) or position_id in seen_ids:
+                continue
+            normalized.append(item)
+            seen_ids.add(position_id)
+        return normalized
+
 
 class FloatingWatchMutation(BaseModel):
     action: Literal["add", "remove"]
@@ -79,6 +100,11 @@ class FloatingWatchMutation(BaseModel):
             raise ValueError("symbol must not exceed 128 characters")
         self.value = normalized
         return self
+
+
+class FloatingWatchPositionMutation(BaseModel):
+    action: Literal["add", "remove"]
+    position: AccountPositionIdentity
 
 
 class SymbolAlias(BaseModel):

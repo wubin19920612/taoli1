@@ -32,7 +32,9 @@ GATE_API_BASE = "https://api.gateio.ws/api/v4"
 
 
 class GateTwapError(RuntimeError):
-    pass
+    def __init__(self, message: str, status_code: int | None = None):
+        self.status_code = status_code
+        super().__init__(message)
 
 
 def utc_now() -> datetime:
@@ -184,7 +186,10 @@ class GateTwapClient:
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            raise GateTwapError(f"Gate API {method} {path} failed: {response.text}") from exc
+            raise GateTwapError(
+                f"Gate API {method} {path} failed (HTTP {response.status_code})",
+                status_code=response.status_code,
+            ) from exc
         if not response.content:
             return None
         return response.json()
@@ -209,6 +214,17 @@ class GateTwapClient:
 
     async def get_position(self, settle: str, contract: str) -> dict[str, Any]:
         return await self.request("GET", f"/futures/{settle}/positions/{contract}", auth=True)
+
+    async def list_positions(self, settle: str) -> list[dict[str, Any]]:
+        return await self.request(
+            "GET",
+            f"/futures/{settle}/positions",
+            params={"holding": "true"},
+            auth=True,
+        )
+
+    async def list_contracts(self, settle: str) -> list[dict[str, Any]]:
+        return await self.request("GET", f"/futures/{settle}/contracts")
 
     async def create_futures_order(self, settle: str, order: dict[str, Any]) -> dict[str, Any]:
         return await self.request("POST", f"/futures/{settle}/orders", body=order, auth=True)
