@@ -18,6 +18,7 @@ from app.api import (
     routes_gate_twap,
     routes_health,
     routes_history,
+    routes_hyperliquid_trade_status,
     routes_index_components,
     routes_instruments,
     routes_minute_signals,
@@ -79,6 +80,11 @@ from app.services.funding_research import (
 )
 from app.services.gate_twap import GateTwapClient, GateTwapJobManager
 from app.services.history import OpportunityHistoryRecorder
+from app.services.hyperliquid_trade_status import (
+    HyperliquidTradeStatusMonitor,
+    HyperliquidTradeStatusService,
+    HyperliquidTradeStatusWatchRepository,
+)
 from app.services.index_components import (
     IndexComponentAutoWatchService,
     BinanceIndexComponentProvider,
@@ -947,6 +953,7 @@ def create_app(
         app.state.alert_event_repo = AlertEventRepository(db)
         app.state.phone_price_alert_rule_repo = PhonePriceAlertRuleRepository(db)
         app.state.phone_price_alert_event_repo = PhonePriceAlertEventRepository(db)
+        app.state.hyperliquid_trade_status_watch_repo = HyperliquidTradeStatusWatchRepository(db)
         app.state.settings_repo = SettingsRepository(db)
         app.state.astro_alert_service.risk_settings_loader = (
             app.state.settings_repo.get_risk_settings
@@ -1022,6 +1029,11 @@ def create_app(
             app.state.pair_spread_preset_repo,
             app.state.astro_client,
         )
+        app.state.hyperliquid_trade_status_monitor = HyperliquidTradeStatusMonitor(
+            app.state.hyperliquid_trade_status_watch_repo,
+            app.state.hyperliquid_trade_status_service,
+            alert_sender=text_alert_sender,
+        )
         tasks: list[asyncio.Task] = []
         if start_background_workers:
             await app.state.second_level_sampler.initialize()
@@ -1040,6 +1052,11 @@ def create_app(
                 tasks,
                 app.state.pair_spread_funding_recorder.run(stop_event),
                 name="pair-spread-funding-recorder",
+            )
+            _start_background_task(
+                tasks,
+                app.state.hyperliquid_trade_status_monitor.run(stop_event),
+                name="hyperliquid-trade-status-monitor",
             )
         collector: MarketCollector | None = None
         announcement_provider = None
@@ -1193,6 +1210,7 @@ def create_app(
                 "negative_basis_monitor",
                 "pair_spread_funding_recorder",
                 "oil_news_monitor",
+                "hyperliquid_trade_status_service",
                 "feishu_notifier",
             )
             await db.close()
@@ -1208,6 +1226,8 @@ def create_app(
     app.state.pair_spread_funding_recorder = None
     app.state.pair_spread_preset_repo = None
     app.state.index_component_auto_watch = None
+    app.state.hyperliquid_trade_status_watch_repo = None
+    app.state.hyperliquid_trade_status_monitor = None
     app.state.minute_signal_scan_service_factory = None
     app.state.minute_signal_alert_engine = MinuteSignalAlertEngine()
     app.state.second_level_sampler = None
@@ -1218,6 +1238,7 @@ def create_app(
     app.state.alert_engine = AlertEngine()
     app.state.phone_price_alert_engine = PhonePriceAlertEngine()
     app.state.opportunity_radar_alert_engine = OpportunityRadarAlertEngine()
+    app.state.hyperliquid_trade_status_service = HyperliquidTradeStatusService()
     app.state.astro_client = AstroSdkClient(
         AstroSdkConfig(
             base_url=app_settings.astro_sdk_base_url,
@@ -1273,6 +1294,7 @@ def create_app(
     app.include_router(routes_opportunities.router, prefix="/api")
     app.include_router(routes_opportunity_radar.router, prefix="/api")
     app.include_router(routes_history.router, prefix="/api")
+    app.include_router(routes_hyperliquid_trade_status.router, prefix="/api")
     app.include_router(routes_instruments.router, prefix="/api")
     app.include_router(routes_pair_spread.router, prefix="/api")
     app.include_router(routes_premium_index.router, prefix="/api")

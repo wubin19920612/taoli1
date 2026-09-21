@@ -36,6 +36,8 @@ import type {
   GateTwapRunRequest,
   HealthStatus,
   HyperliquidDexMarket,
+  HyperliquidTradeStatusResult,
+  HyperliquidTradeStatusWatch,
   ExchangeAnnouncement,
   IndexComponentChange,
   IndexComponentAutoWatchStatus,
@@ -175,6 +177,50 @@ export function lookupInstrument(symbol: string, hyperliquidDex?: string): Promi
   if (hyperliquidDex) params.set("dex", hyperliquidDex);
   const query = params.size ? `?${params.toString()}` : "";
   return fetchJson<InstrumentLookupResult>(`/instruments/${encodeURIComponent(symbol)}${query}`);
+}
+
+export async function getHyperliquidTradeStatus(
+  symbol: string,
+  dex?: string,
+  rawSymbol?: string
+): Promise<HyperliquidTradeStatusResult> {
+  const params = new URLSearchParams();
+  if (dex) params.set("dex", dex);
+  if (rawSymbol) params.set("raw_symbol", rawSymbol);
+  const query = params.size ? `?${params.toString()}` : "";
+  const value = await fetchJson<unknown>(
+    `/hyperliquid/trade-status/${encodeURIComponent(symbol)}${query}`
+  );
+  if (!value || typeof value !== "object" || !Array.isArray((value as HyperliquidTradeStatusResult).markets)) {
+    throw new Error("Hyperliquid 交易状态响应格式无效");
+  }
+  return value as HyperliquidTradeStatusResult;
+}
+
+export async function listHyperliquidTradeStatusWatches(): Promise<HyperliquidTradeStatusWatch[]> {
+  const value = await fetchJson<unknown>("/hyperliquid/trade-status/watches/list");
+  if (!Array.isArray(value)) throw new Error("Hyperliquid 恢复监控响应格式无效");
+  return value as HyperliquidTradeStatusWatch[];
+}
+
+export function createHyperliquidTradeStatusWatch(payload: {
+  symbol: string;
+  dex: string;
+  raw_symbol: string;
+  monitor_buy?: boolean;
+  monitor_sell?: boolean;
+}): Promise<HyperliquidTradeStatusWatch> {
+  return fetchJson<HyperliquidTradeStatusWatch>("/hyperliquid/trade-status/watches", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function deleteHyperliquidTradeStatusWatch(watchId: string): Promise<{ status: string }> {
+  return fetchJson<{ status: string }>(
+    `/hyperliquid/trade-status/watches/${encodeURIComponent(watchId)}`,
+    { method: "DELETE" }
+  );
 }
 
 export async function getFloatingWatchSettings(): Promise<FloatingWatchSettings> {

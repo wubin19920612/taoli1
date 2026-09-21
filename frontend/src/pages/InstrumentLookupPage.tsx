@@ -1,4 +1,5 @@
 import {
+  BellOutlined,
   CloseOutlined,
   DownOutlined,
   LineChartOutlined,
@@ -37,7 +38,11 @@ import utc from "dayjs/plugin/utc";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  createHyperliquidTradeStatusWatch,
   createInstrumentAstroCard,
+  deleteHyperliquidTradeStatusWatch,
+  getHyperliquidTradeStatus,
+  listHyperliquidTradeStatusWatches,
   lookupInstrument,
   previewInstrumentAstroPair,
   querySymbolExchangeSpreads
@@ -47,6 +52,10 @@ import type {
   AstroCardCreateRequest,
   AstroInstrumentRouteRequest,
   AstroPairPlan,
+  HyperliquidMarketTradeStatus,
+  HyperliquidTradeActionStatus,
+  HyperliquidTradeStatusResult,
+  HyperliquidTradeStatusWatch,
   InstrumentExchangeSnapshot,
   InstrumentLookupResult,
   InstrumentSpreadComparison,
@@ -356,6 +365,40 @@ function MarketCell({ market }: { market: MarketSnapshot | null }) {
   );
 }
 
+function hyperliquidDex(rawSymbol: string): string {
+  const separator = rawSymbol.indexOf(":");
+  return separator > 0 ? rawSymbol.slice(0, separator).toLowerCase() : "main";
+}
+
+function tradeActionTag(action: HyperliquidTradeActionStatus) {
+  const config = {
+    available: { color: "green", label: "公开可用" },
+    blocked: { color: "red", label: "已阻止" },
+    conditional: { color: "gold", label: "有条件" },
+    unknown: { color: "default", label: "未知" }
+  }[action.state];
+  return <Tooltip title={action.reason}><Tag color={config.color}>{config.label}</Tag></Tooltip>;
+}
+
+function TradeActionCell({
+  action,
+  label
+}: {
+  action: HyperliquidTradeActionStatus;
+  label: string;
+}) {
+  return (
+    <div className="instrument-hl-action">
+      <div><span>{label}</span>{tradeActionTag(action)}</div>
+      <span>价格 {price(action.executable_price)}</span>
+      <span>1% 深度 {compactUsdt(action.depth_1pct_usdt)}</span>
+      <Tooltip title={action.reason}>
+        <span className="instrument-hl-reason">{action.reason}</span>
+      </Tooltip>
+    </div>
+  );
+}
+
 function resultPriceRange(result: InstrumentLookupResult | null): { min: number; max: number } | null {
   if (!result) return null;
   const values = result.exchanges
@@ -511,6 +554,10 @@ export function InstrumentLookupPage() {
   const [activeSymbol, setActiveSymbol] = useState("");
   const [savedSymbols, setSavedSymbols] = useState(readSavedSymbols);
   const [result, setResult] = useState<InstrumentLookupResult | null>(null);
+  const [hyperliquidStatus, setHyperliquidStatus] = useState<HyperliquidTradeStatusResult | null>(null);
+  const [hyperliquidWatches, setHyperliquidWatches] = useState<HyperliquidTradeStatusWatch[]>([]);
+  const [hyperliquidError, setHyperliquidError] = useState("");
+  const [hyperliquidWatchSaving, setHyperliquidWatchSaving] = useState("");
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [watchSaving, setWatchSaving] = useState(false);
@@ -551,6 +598,26 @@ export function InstrumentLookupPage() {
       const next = await lookupInstrument(normalized);
       if (requestId !== requestIdRef.current) return;
       setResult(next);
+      const hyperliquidMarket = next.exchanges.find((item) => item.exchange === "hyperliquid")?.future;
+      if (hyperliquidMarket) {
+        const rawSymbol = hyperliquidMarket.raw_symbol;
+        const [statusResult, watchesResult] = await Promise.allSettled([
+          getHyperliquidTradeStatus(next.symbol, hyperliquidDex(rawSymbol), rawSymbol),
+          listHyperliquidTradeStatusWatches()
+        ]);
+        if (requestId !== requestIdRef.current) return;
+        if (statusResult.status === "fulfilled") {
+          setHyperliquidStatus(statusResult.value);
+          setHyperliquidError("");
+        } else {
+          setHyperliquidStatus(null);
+          setHyperliquidError(statusResult.reason instanceof Error ? statusResult.reason.message : String(statusResult.reason));
+        }
+        if (watchesResult.status === "fulfilled") setHyperliquidWatches(watchesResult.value);
+      } else {
+        setHyperliquidStatus(null);
+        setHyperliquidError("");
+      }
       setQuery(next.symbol);
       setActiveSymbol(next.symbol);
       if (!background) {
@@ -662,6 +729,42 @@ export function InstrumentLookupPage() {
   const visibleInstrumentSpreads = instrumentSpreads.filter(
     (spread) => !hiddenSpreadTypeSet.has(spreadTypeFilter(spread.opportunity_type))
   );
+  const cappedHyperliquidMarkets = hyperliquidStatus?.markets.filter(
+    (market) => market.at_open_interest_cap
+  ) ?? [];
+
+  const hyperliquidWatchFor = (market: HyperliquidMarketTradeStatus) => hyperliquidWatches.find(
+    (watch) => watch.dex === market.dex && watch.raw_symbol.toUpperCase() === market.raw_symbol.toUpperCase()
+  );
+
+  const toggleHyperliquidWatch = async (market: HyperliquidMarketTradeStatus) => {
+    const existing = hyperliquidWatchFor(market);
+    setHyperliquidWatchSaving(market.raw_symbol);
+    try {
+      if (existing) {
+        await deleteHyperliquidTradeStatusWatch(existing.id);
+        setHyperliquidWatches((current) => current.filter((watch) => watch.id !== existing.id));
+        message.success(`${market.raw_symbol} 已停止恢复监控`);
+      } else {
+        const saved = await createHyperliquidTradeStatusWatch({
+          symbol: market.symbol,
+          dex: market.dex,
+          raw_symbol: market.raw_symbol,
+          monitor_buy: true,
+          monitor_sell: true
+        });
+        setHyperliquidWatches((current) => [
+          saved,
+          ...current.filter((watch) => watch.id !== saved.id)
+        ]);
+        message.success(`${market.raw_symbol} 已监控增仓恢复`);
+      }
+    } catch (exc) {
+      message.error(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setHyperliquidWatchSaving("");
+    }
+  };
 
   const setSpreadTypeHidden = (type: SpreadTypeFilter, hidden: boolean) => {
     setHiddenSpreadTypes((current) => hidden
@@ -916,6 +1019,106 @@ export function InstrumentLookupPage() {
     }
   ], []);
 
+  const hyperliquidColumns: ColumnsType<HyperliquidMarketTradeStatus> = [
+    {
+      title: "市场",
+      key: "market",
+      fixed: "left",
+      width: 145,
+      render: (_, market) => (
+        <div className="instrument-funding-cell">
+          <Typography.Text strong>{market.raw_symbol}</Typography.Text>
+          <span>DEX {market.dex}</span>
+          <span>{market.max_leverage ? `${market.max_leverage}x` : "杠杆 -"} · 倍率 {market.market_multiplier}x</span>
+        </div>
+      )
+    },
+    {
+      title: "平台限制",
+      key: "restrictions",
+      width: 170,
+      render: (_, market) => (
+        <Space size={[4, 4]} wrap>
+          {market.at_open_interest_cap === true ? <Tag color="red">OI 已达上限</Tag> : null}
+          {market.at_open_interest_cap === false ? <Tag color="green">OI 未达上限</Tag> : null}
+          {market.at_open_interest_cap === null ? <Tag>OI 状态未知</Tag> : null}
+          {market.is_delisted ? <Tag color="red">已下架</Tag> : null}
+          {market.only_isolated ? <Tag color="gold">仅逐仓</Tag> : <Tag>支持全仓</Tag>}
+        </Space>
+      )
+    },
+    {
+      title: "普通买入 / 做多",
+      key: "buy_open",
+      width: 235,
+      render: (_, market) => <TradeActionCell action={market.buy_open} label="Buy / Long" />
+    },
+    {
+      title: "普通卖出 / 做空",
+      key: "sell_open",
+      width: 235,
+      render: (_, market) => <TradeActionCell action={market.sell_open} label="Sell / Short" />
+    },
+    {
+      title: "Reduce Only 平仓",
+      key: "reduce_only",
+      width: 250,
+      render: (_, market) => (
+        <div className="instrument-hl-reduce">
+          <TradeActionCell action={market.buy_reduce_only} label="买入平空" />
+          <TradeActionCell action={market.sell_reduce_only} label="卖出平多" />
+        </div>
+      )
+    },
+    {
+      title: "市场规模",
+      key: "market_size",
+      width: 170,
+      render: (_, market) => (
+        <div className="instrument-funding-cell">
+          <span>OI {compactUsdt(market.open_interest_usdt)}</span>
+          <span>24h {compactUsdt(market.volume_24h_usdt)}</span>
+          <span>标记 {price(market.mark_price)}</span>
+          <span>预言机 {price(market.oracle_price)}</span>
+        </div>
+      )
+    },
+    {
+      title: "费率 / 成本",
+      key: "cost",
+      width: 190,
+      render: (_, market) => (
+        <div className="instrument-funding-cell">
+          <span>资金 {signedPct(market.funding_rate_pct, 6)} / {market.funding_interval_hours}h</span>
+          <Tooltip title={market.fee_note}><span>手续费 未计入</span></Tooltip>
+          <span>盘口为实时快照</span>
+        </div>
+      )
+    },
+    {
+      title: "恢复监控",
+      key: "watch",
+      fixed: "right",
+      width: 128,
+      render: (_, market) => {
+        const watch = hyperliquidWatchFor(market);
+        return (
+          <Tooltip title={watch?.last_error || (watch ? "停止服务端飞书恢复监控" : "OI 上限解除、普通增仓恢复时飞书提醒")}>
+            <Button
+              size="small"
+              type={watch ? "default" : "primary"}
+              icon={watch ? <CloseOutlined /> : <BellOutlined />}
+              loading={hyperliquidWatchSaving === market.raw_symbol}
+              onClick={() => void toggleHyperliquidWatch(market)}
+            >
+              {watch ? "停止" : "监控"}
+            </Button>
+          </Tooltip>
+        );
+      }
+    }
+  ];
+
   const spreadColumns: ColumnsType<InstrumentSpreadComparison> = [
     {
       title: "差价类型",
@@ -1126,6 +1329,52 @@ export function InstrumentLookupPage() {
         <div><span>最大现永基差</span><strong className={`instrument-rate-${tone(strongestBasis?.value ?? null)}`}>{strongestBasis ? `${signedPct(strongestBasis.value)} · ${exchangeLabels[strongestBasis.exchange]}` : "-"}</strong></div>
         <div><span>快照时间</span><strong>{fullTime(result?.observed_at)}</strong></div>
       </section>
+
+      {hyperliquidError ? (
+        <Alert
+          type="warning"
+          showIcon
+          message="Hyperliquid 交易状态诊断失败"
+          description={hyperliquidError}
+        />
+      ) : null}
+
+      {hyperliquidStatus?.markets.length ? (
+        <section className="instrument-market-table instrument-hl-status">
+          <div className="instrument-section-head instrument-hl-status-head">
+            <div>
+              <Typography.Title level={4}>Hyperliquid 交易状态</Typography.Title>
+              <Typography.Text type="secondary">
+                {hyperliquidStatus.source} · {fullTime(hyperliquidStatus.observed_at)}
+              </Typography.Text>
+            </div>
+            <Space size={6} wrap>
+              <Tag>{hyperliquidStatus.markets.length} 个原始市场</Tag>
+              {cappedHyperliquidMarkets.length ? <Tag color="red">{cappedHyperliquidMarkets.length} 个 OI 达上限</Tag> : <Tag color="green">普通增仓公开可用</Tag>}
+            </Space>
+          </div>
+          {cappedHyperliquidMarkets.length ? (
+            <Alert
+              className="instrument-hl-alert"
+              type="error"
+              showIcon
+              message={`${cappedHyperliquidMarkets.map((market) => market.raw_symbol).join("、")} 未平仓量已达上限，普通增仓订单会被拒绝`}
+              description="平空使用 Buy / Long 并勾选 Reduce Only；平多使用 Sell / Short 并勾选 Reduce Only。数量不能超过实际持仓，并确认当前钱包、子账户和具体 DEX 一致。"
+            />
+          ) : null}
+          <Table<HyperliquidMarketTradeStatus>
+            rowKey={(market) => `${market.dex}:${market.raw_symbol}`}
+            columns={hyperliquidColumns}
+            dataSource={hyperliquidStatus.markets}
+            pagination={false}
+            size="small"
+            scroll={{ x: 1530 }}
+          />
+          <div className="instrument-hl-limitations">
+            {hyperliquidStatus.limitations.map((item) => <span key={item}>{item}</span>)}
+          </div>
+        </section>
+      ) : null}
 
       <section className="instrument-market-table">
         <div className="instrument-section-head">

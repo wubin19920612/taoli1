@@ -183,6 +183,72 @@ const trendResult = {
   ]
 };
 
+const hyperliquidTradeStatus = {
+  query: "ZETAUSDT",
+  observed_at: "2026-09-21T04:54:00Z",
+  source: "Hyperliquid public info API",
+  limitations: [
+    "公开接口只能判断市场级限制；账户级限制需结合真实订单错误确认。",
+    "1% 深度来自当前公开盘口快照，不是成交保证；手续费未计入。"
+  ],
+  markets: [
+    {
+      symbol: "ZETAUSDT",
+      dex: "main",
+      raw_symbol: "ZETA",
+      observed_at: "2026-09-21T04:54:00Z",
+      at_open_interest_cap: true,
+      is_delisted: false,
+      only_isolated: false,
+      margin_mode: null,
+      max_leverage: 3,
+      size_decimals: 1,
+      best_bid: 0.06802,
+      best_ask: 0.06803,
+      bid_depth_1pct_usdt: 18000,
+      ask_depth_1pct_usdt: 22000,
+      mark_price: 0.06802,
+      oracle_price: 0.06802,
+      open_interest: 34225314.8,
+      open_interest_usdt: 2328000,
+      volume_24h_usdt: 1183442,
+      funding_rate_pct: 0.00755,
+      funding_interval_hours: 1,
+      market_multiplier: 1,
+      fees_included: false,
+      fee_note: "手续费未计入；实际费率取决于账户等级和订单类型",
+      buy_open: {
+        state: "blocked",
+        reason_code: "OPEN_INTEREST_CAP",
+        reason: "官方未平仓量已达上限；普通订单不能新开或增加仓位",
+        executable_price: null,
+        depth_1pct_usdt: null
+      },
+      sell_open: {
+        state: "blocked",
+        reason_code: "OPEN_INTEREST_CAP",
+        reason: "官方未平仓量已达上限；普通订单不能新开或增加仓位",
+        executable_price: null,
+        depth_1pct_usdt: null
+      },
+      buy_reduce_only: {
+        state: "conditional",
+        reason_code: "REDUCE_ONLY_REQUIRES_POSITION",
+        reason: "原则上可用于平空，但必须勾选 Reduce Only，且数量不能超过对应持仓",
+        executable_price: 0.06803,
+        depth_1pct_usdt: 22000
+      },
+      sell_reduce_only: {
+        state: "conditional",
+        reason_code: "REDUCE_ONLY_REQUIRES_POSITION",
+        reason: "原则上可用于平多，但必须勾选 Reduce Only，且数量不能超过对应持仓",
+        executable_price: 0.06802,
+        depth_1pct_usdt: 18000
+      }
+    }
+  ]
+};
+
 describe("InstrumentLookupPage", () => {
   beforeEach(() => {
     window.localStorage.clear();
@@ -228,6 +294,82 @@ describe("InstrumentLookupPage", () => {
     expect(screen.getAllByText("Binance").length).toBeGreaterThan(0);
     expect(screen.getAllByText("暂无数据").length).toBeGreaterThan(0);
     expect(String((fetch as ReturnType<typeof vi.fn>).mock.calls[0][0])).toContain("/instruments/BTCUSDT");
+  });
+
+  it("shows the official Hyperliquid OI-cap reason and creates a recovery watch", async () => {
+    const zetaLookup = {
+      ...lookupResult,
+      query: "ZETAUSDT",
+      symbol: "ZETAUSDT",
+      base: "ZETA",
+      exchanges: lookupResult.exchanges.map((exchange) => exchange.exchange === "hyperliquid" ? {
+        ...exchange,
+        future: {
+          symbol: "ZETAUSDT",
+          base: "ZETA",
+          quote: "USDT",
+          exchange: "hyperliquid",
+          market_type: "future",
+          bid: 0.06802,
+          ask: 0.06803,
+          volume_24h_usdt: 1183442,
+          funding_rate_pct: 0.00755,
+          funding_interval_hours: 1,
+          mark_price: 0.06802,
+          index_price: 0.06802,
+          timestamp: "2026-09-21T04:54:00Z",
+          raw_symbol: "ZETA"
+        }
+      } : exchange)
+    };
+    const savedWatch = {
+      id: "watch-zeta",
+      symbol: "ZETAUSDT",
+      dex: "main",
+      raw_symbol: "ZETA",
+      monitor_buy: true,
+      monitor_sell: true,
+      enabled: true,
+      last_buy_state: "blocked",
+      last_sell_state: "blocked",
+      last_checked_at: "2026-09-21T04:54:00Z",
+      last_notified_at: null,
+      last_error: null,
+      created_at: "2026-09-21T04:54:00Z",
+      updated_at: "2026-09-21T04:54:00Z"
+    };
+    (fetch as ReturnType<typeof vi.fn>).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/hyperliquid/trade-status/watches/list")) return Response.json([]);
+      if (url.includes("/hyperliquid/trade-status/watches") && init?.method === "POST") return Response.json(savedWatch);
+      if (url.includes("/hyperliquid/trade-status/")) return Response.json(hyperliquidTradeStatus);
+      if (url.includes("/instruments/")) return Response.json(zetaLookup);
+      return Response.json({});
+    });
+    window.history.replaceState({}, "", "/?page=instrument&symbol=ZETAUSDT");
+
+    render(<InstrumentLookupPage />);
+
+    expect(await screen.findByText("Hyperliquid 交易状态")).not.toBeNull();
+    expect(screen.getByText("ZETA 未平仓量已达上限，普通增仓订单会被拒绝")).not.toBeNull();
+    expect(screen.getAllByText("已阻止")).toHaveLength(2);
+    expect(screen.getAllByText("有条件")).toHaveLength(2);
+    expect(screen.getByText(/平空使用 Buy \/ Long 并勾选 Reduce Only/)).not.toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: /监控/ }));
+    await waitFor(() => {
+      const request = (fetch as ReturnType<typeof vi.fn>).mock.calls.find(
+        ([input, init]) => String(input).includes("/hyperliquid/trade-status/watches") && init?.method === "POST"
+      );
+      expect(JSON.parse(String(request?.[1]?.body))).toEqual({
+        symbol: "ZETAUSDT",
+        dex: "main",
+        raw_symbol: "ZETA",
+        monitor_buy: true,
+        monitor_sell: true
+      });
+    });
+    expect(screen.getByRole("button", { name: /停止/ })).not.toBeNull();
   });
 
   it("adds the current symbol to the floating watch", async () => {

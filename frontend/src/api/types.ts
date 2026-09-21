@@ -135,6 +135,72 @@ export interface InstrumentLookupResult {
   spreads: InstrumentSpreadComparison[];
 }
 
+export type HyperliquidActionState = "available" | "blocked" | "conditional" | "unknown";
+
+export interface HyperliquidTradeActionStatus {
+  state: HyperliquidActionState;
+  reason_code: string;
+  reason: string;
+  executable_price: number | null;
+  depth_1pct_usdt: number | null;
+}
+
+export interface HyperliquidMarketTradeStatus {
+  symbol: string;
+  dex: string;
+  raw_symbol: string;
+  observed_at: string;
+  at_open_interest_cap: boolean | null;
+  is_delisted: boolean;
+  only_isolated: boolean;
+  margin_mode: string | null;
+  max_leverage: number | null;
+  size_decimals: number | null;
+  best_bid: number | null;
+  best_ask: number | null;
+  bid_depth_1pct_usdt: number | null;
+  ask_depth_1pct_usdt: number | null;
+  mark_price: number | null;
+  oracle_price: number | null;
+  open_interest: number | null;
+  open_interest_usdt: number | null;
+  volume_24h_usdt: number | null;
+  funding_rate_pct: number | null;
+  funding_interval_hours: number;
+  market_multiplier: number;
+  fees_included: boolean;
+  fee_note: string;
+  buy_open: HyperliquidTradeActionStatus;
+  sell_open: HyperliquidTradeActionStatus;
+  buy_reduce_only: HyperliquidTradeActionStatus;
+  sell_reduce_only: HyperliquidTradeActionStatus;
+}
+
+export interface HyperliquidTradeStatusResult {
+  query: string;
+  observed_at: string;
+  source: string;
+  markets: HyperliquidMarketTradeStatus[];
+  limitations: string[];
+}
+
+export interface HyperliquidTradeStatusWatch {
+  id: string;
+  symbol: string;
+  dex: string;
+  raw_symbol: string;
+  monitor_buy: boolean;
+  monitor_sell: boolean;
+  enabled: boolean;
+  last_buy_state: HyperliquidActionState | null;
+  last_sell_state: HyperliquidActionState | null;
+  last_checked_at: string | null;
+  last_notified_at: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface SecondLevelSamplingConfig {
   enabled: boolean;
   interval_seconds: number;
