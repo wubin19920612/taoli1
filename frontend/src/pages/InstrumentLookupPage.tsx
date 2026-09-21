@@ -1076,28 +1076,32 @@ export function InstrumentLookupPage() {
       )
     },
     {
-      title: "普通买入 / 做多",
+      title: "普通买入（非 Reduce Only）",
       key: "buy_open",
       width: 235,
-      render: (_, market) => <TradeActionCell action={market.buy_open} label="Buy / Long" />
+      render: (_, market) => <TradeActionCell action={market.buy_open} label="Buy" />
     },
     {
-      title: "普通卖出 / 做空",
+      title: "普通卖出（非 Reduce Only）",
       key: "sell_open",
       width: 235,
-      render: (_, market) => <TradeActionCell action={market.sell_open} label="Sell / Short" />
+      render: (_, market) => <TradeActionCell action={market.sell_open} label="Sell" />
     },
     {
-      title: "Reduce Only 平空",
+      title: "买入平空（Reduce Only）",
       key: "buy_reduce_only",
       width: 230,
-      render: (_, market) => <TradeActionCell action={market.buy_reduce_only} label="Buy / 平空" />
+      render: (_, market) => market.market_type === "spot"
+        ? null
+        : <TradeActionCell action={market.buy_reduce_only} label="Buy / 平空" />
     },
     {
-      title: "Reduce Only 平多",
+      title: "卖出平多（Reduce Only）",
       key: "sell_reduce_only",
       width: 230,
-      render: (_, market) => <TradeActionCell action={market.sell_reduce_only} label="Sell / 平多" />
+      render: (_, market) => market.market_type === "spot"
+        ? null
+        : <TradeActionCell action={market.sell_reduce_only} label="Sell / 平多" />
     },
     {
       title: "实时盘口",

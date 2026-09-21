@@ -391,6 +391,10 @@ describe("InstrumentLookupPage", () => {
     expect(screen.getByText("DEX main")).not.toBeNull();
     expect(screen.getByText("账户 未核验")).not.toBeNull();
     expect(screen.getByText("订单 未提供")).not.toBeNull();
+    expect(screen.getAllByText("普通买入（非 Reduce Only）").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("普通卖出（非 Reduce Only）").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("买入平空（Reduce Only）").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("卖出平多（Reduce Only）").length).toBeGreaterThan(0);
     expect(screen.getAllByText("已阻止")).toHaveLength(2);
     expect(screen.getAllByText("有条件")).toHaveLength(2);
 
@@ -410,6 +414,72 @@ describe("InstrumentLookupPage", () => {
       });
     });
     expect(screen.getByRole("button", { name: /停止/ })).not.toBeNull();
+  });
+
+  it("hides Reduce Only actions for spot markets", async () => {
+    const spotMarket = {
+      ...tradeAvailabilityStatus.markets[0],
+      exchange: "binance",
+      market_type: "spot",
+      symbol: "BTCUSDT",
+      dex: null,
+      raw_symbol: "BTCUSDT",
+      coverage_tier: "core",
+      public_status_code: "TRADING",
+      public_status_source: "Binance spot exchangeInfo",
+      public_restrictions: [],
+      buy_open: {
+        state: "available",
+        reason_code: "PUBLIC_MARKET_AVAILABLE",
+        reason: "公开市场状态允许且实时盘口有报价",
+        scope: "public_market",
+        executable_price: 100001,
+        depth_1pct_usdt: 22000
+      },
+      sell_open: {
+        state: "available",
+        reason_code: "PUBLIC_MARKET_AVAILABLE",
+        reason: "公开市场状态允许且实时盘口有报价",
+        scope: "public_market",
+        executable_price: 100000,
+        depth_1pct_usdt: 18000
+      },
+      buy_reduce_only: {
+        state: "not_applicable",
+        reason_code: "REDUCE_ONLY_NOT_SUPPORTED_FOR_SPOT",
+        reason: "现货市场没有 Reduce Only 持仓语义",
+        scope: "platform_capability",
+        executable_price: null,
+        depth_1pct_usdt: null
+      },
+      sell_reduce_only: {
+        state: "not_applicable",
+        reason_code: "REDUCE_ONLY_NOT_SUPPORTED_FOR_SPOT",
+        reason: "现货市场没有 Reduce Only 持仓语义",
+        scope: "platform_capability",
+        executable_price: null,
+        depth_1pct_usdt: null
+      }
+    };
+    (fetch as ReturnType<typeof vi.fn>).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/trade-status/watches/list")) return Response.json([]);
+      if (url.includes("/trade-status/")) return Response.json({
+        ...tradeAvailabilityStatus,
+        query: "BTCUSDT",
+        markets: [spotMarket]
+      });
+      if (url.includes("/instruments/")) return Response.json(lookupResult);
+      return Response.json({});
+    });
+
+    render(<InstrumentLookupPage />);
+
+    expect(await screen.findByText("全交易所交易可用性")).not.toBeNull();
+    expect(screen.queryByText("不适用")).toBeNull();
+    expect(screen.queryByText("Buy / 平空")).toBeNull();
+    expect(screen.queryByText("Sell / 平多")).toBeNull();
+    expect(screen.queryByText("Sell / Short")).toBeNull();
   });
 
   it("adds the current symbol to the floating watch", async () => {
