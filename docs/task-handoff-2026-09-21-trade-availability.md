@@ -25,6 +25,8 @@
 - 动作文案修正说明：`fix: clarify trade action labels`
 - 现货充提与告警订阅提交：`4a098874e7e1d3f1ef3f0400dd18dccb62df15a6`
 - 现货充提与告警订阅提交说明：`feat: expose spot transfer availability`
+- 飞书机会告警诊断提交：`6ab3eb77fce5c1b4b06b9102d2330b0b7ab81095`
+- 飞书机会告警诊断提交说明：`feat: include trade availability in alerts`
 
 ## 已完成功能
 
@@ -43,6 +45,9 @@
 - 标的查询页新增统一诊断表、限制告警、精确原始市场监控按钮，以及桌面/手机横向表格和固定关键列。顶部公开交易限制告警逐市场直接提供“订阅恢复通知”或“取消恢复通知”按钮，复用同一个精确市场监控，不需要先在宽表中定位操作列。
 - 现货市场新增 `spot_transfer` 诊断，展示币种、充币状态、提币状态、是否全部开放、逐链开关、来源和检测时间；接口失败只让充提诊断降级，不丢失该市场的交易状态和订单簿结果。
 - Binance 使用匿名 public asset service、Gate 使用公开 spot currencies、Bitget 使用公开 public coins 获取逐链开关。OKX 和 Bybit 的官方币种接口需要 API Key，Aster 没有验证到可靠匿名公开逐币接口，因此三者明确显示未知/需鉴权，不猜测为关闭。
+- 所有机会飞书告警和告警历史消息追加“交易与充提状态”区块，同时展示两条腿的开仓路径、平仓路径、精确原始市场动作和基础资产充提状态；即使两条腿都是永续，也会单独查询该交易所的资产级充提状态。
+- 永续腿分别显示开多、开空、平空和平多；平空明确对应 Buy + Reduce Only，平多明确对应 Sell + Reduce Only。现货腿只显示买入和卖出，不出现做空、Reduce Only 或“不适用”。
+- 任一开仓必需动作公开受限或未知时，告警评级降为“需评估”。单个交易所诊断失败时只将对应腿降级为未知，原始飞书告警仍会发送。
 
 ## API 与代码入口
 
@@ -59,6 +64,7 @@ DELETE /api/trade-status/watches/{watch_id}
 
 - `backend/app/models/trade_availability.py`
 - `backend/app/services/trade_availability.py`
+- `backend/app/services/opportunity_trade_availability.py`
 - `backend/app/api/routes_trade_availability.py`
 - `backend/app/db/schema.py`
 - `backend/app/main.py`
@@ -96,7 +102,8 @@ trade_availability_watchlist
 ## 本地验证
 
 - 后端充提专项：`7 passed`。
-- 后端全量：`737 passed, 11 warnings`，耗时 `920.98` 秒。
+- 后端全量：`742 passed, 13 warnings`，耗时 `765.98` 秒。
+- 飞书交易与充提消息专项：`35 passed, 2 warnings`；部署前再次执行结果相同。
 - 标的查询页专项：`19 passed`，覆盖告警内精确订阅请求和现货充提状态展示。
 - 前端生产构建：通过。
 - Ruff：`All checks passed`。
@@ -113,6 +120,10 @@ trade_availability_watchlist
 
 ## 生产备份与部署
 
+- 飞书机会告警扩展部署前数据库备份：`backups/radar-20260921T103705Z.db`
+- 最新备份大小：`675831808` 字节
+- 最新备份 SHA-256：`f7a36bf38fe6ffb553a27d95f0ec2573b7176f7dd297e185d7bb4e9c991f873e`
+- 最新备份的源库、容器内备份和主机备份 `PRAGMA quick_check` 均为 `ok`；使用 SQLite 在线 backup API，校验后删除了卷内临时副本。
 - 本轮部署前数据库备份：`backups/radar-20260921T092258Z.db`
 - 大小：`698052608` 字节
 - SHA-256：`aed4c266a8fc6c12b3efc0f7010f689f4fffcd124c01caa7e77bdd137f0bf26f`
@@ -120,6 +131,7 @@ trade_availability_watchlist
 - 备份数据库 `PRAGMA quick_check = ok`
 - 备份使用 SQLite 在线 backup API，已复制到服务器仓库的 `backups/`；本次创建的卷内临时副本在校验主机副本后已删除，线上源库未改动。
 - 服务器使用 `git pull --ff-only` 确认更新到 `4a098874e7e1d3f1ef3f0400dd18dccb62df15a6`。
+- 飞书机会告警扩展使用 `git pull --ff-only` 更新到 `6ab3eb77fce5c1b4b06b9102d2330b0b7ab81095`。
 - 使用 `docker compose build --pull` 和 `docker compose up -d --remove-orphans` 重建，没有执行 `down -v`。
 - 前后端容器均为 `healthy`。
 - `/api/health` 返回 `status=ok`，八家交易所采集状态均为 `healthy`。
@@ -142,6 +154,15 @@ BTC 线上查询返回 14 个市场且 `errors={}`。现货充提结果为：Bin
 
 ZETA 线上查询返回 11 个市场且 `errors={}`，唯一公开受限市场仍为 `Hyperliquid / future / main / ZETA / OPEN_INTEREST_CAP`，`dex=main` 和 `raw_symbol=ZETA` 均保留。线上监控列表有 1 条启用订阅，精确对应 `ZETAUSDT + hyperliquid + future + ZETA + main`，最近状态为买卖均 `blocked`，没有通知错误；本轮验收只读查询，没有新增、删除或点击生产订阅。
 
+使用线上只读接口数据和部署后的消息构建模块生成 ZETA 告警预览，结果包含：
+
+- 开仓路径为“不可用”：买入腿 Hyperliquid 开多因 `OPEN_INTEREST_CAP` 公开受限，卖出腿 Binance 开空公开可用；
+- 平仓路径为“有条件”：买入腿平多和卖出腿平空都需要对应账户持仓、方向、数量及 Reduce Only，公开接口不能把它们确认成账户可成交；
+- Hyperliquid 同时显示 `DEX main`、`raw_symbol=ZETA`、开多/开空公开受限，以及平空/平多账户有条件；
+- 充提参考同时显示 Hyperliquid 和 Binance 的 ZETA。两家本次均为未知，并附带“没有匿名逐链状态”或“公开币种列表未返回该资产”的原因，没有误报为关闭。
+
+本轮线上健康检查返回 `status=ok`、八家采集器均为 `healthy`；BTC 仍返回 14 个原始市场且 `errors={}`，买一卖一、1% 深度、24h 成交额、资金费率及周期、手续费是否计入、倍率和更新时间字段均存在。前后端容器均为 `healthy`，验证脚本没有调用飞书通知器或订单接口。
+
 没有人为制造不可用/恢复切换，因此没有发送生产飞书测试消息。恢复通知状态机和飞书失败重试由自动化测试覆盖；真实通知仍依赖生产 `feishu_live_send_enabled` 与 Webhook 配置，以及未来真实状态切换。
 
 ## 已知问题与残余风险
@@ -150,6 +171,7 @@ ZETA 线上查询返回 11 个市场且 `errors={}`，唯一公开受限市场�
 - 公共 API 无法确认账户余额、仓位、保证金、地区、权限、nonce、签名或账户风控。若真实订单失败，应保留原始错误并按 `order_error` 证据单独分析。
 - OKX、Bybit 现货充提官方接口需私有鉴权，Aster 尚无已验证匿名公开逐币接口；当前只能明确展示未知。Binance、Gate、Bitget 的公开开关也可能与账户、地区、维护窗口或具体地址可用性不同。
 - 飞书真实发送未通过伪造市场状态验证，避免产生误通知；生产配置和下一次真实恢复事件仍是外部依赖。
+- 机会告警的交易与充提诊断会并发访问两家交易所公开接口；单次诊断设有 15 秒超时，极端上游故障时会延迟告警但不会丢弃原始告警。
 - 后端启动日志仍有既存 Gate 公告接口 HTTP 567，与交易可用性接口无关；本任务接口返回 200 且 `errors={}`。
 - 前端全量测试保留一个与本模块无关的旧文案失败，以及既有 Ant Design 弃用和 `act(...)` 警告。
 - 手机首屏会被既有“关注行情”浮动面板遮住部分横向表格，关闭或最小化面板后可查看；诊断表本身支持横向滚动。
@@ -160,6 +182,9 @@ ZETA 线上查询返回 11 个市场且 `errors={}`，唯一公开受限市场�
 
 - `output/**`
 - `script/dexe_bybit_bitget_chain.py`
+- 账户持仓相关的 `backend/app/api/routes_account_positions.py`、`backend/app/models/account_position.py`、`backend/app/services/account_positions.py`、`backend/tests/test_account_positions.py`。
+- 其他并行任务在 `backend/app/api/routes_settings.py`、`backend/app/db/repositories.py`、`backend/app/main.py`、`backend/app/models/settings.py`、`backend/app/services/gate_twap.py` 和 `backend/tests/test_floating_watch.py` 中的本地未提交修改。
+- 其他并行任务在 `frontend/src/api/client.ts`、`frontend/src/api/types.ts`、`frontend/src/components/FloatingWatchPanel.tsx`、`frontend/src/styles.css` 和 `frontend/tests/FloatingWatchPanel.test.tsx` 中的本地未提交修改。
 
 服务器上的 `.env.backup-codex-20260911-1425`、`.env.backup-poll-8-20260911` 和 `CACHED` 保持不动。
 
