@@ -805,10 +805,23 @@ body {
 
 .instrument-hl-action,
 .instrument-hl-reduce,
+.instrument-trade-evidence,
 .instrument-hl-limitations {
   display: grid;
   gap: 3px;
   min-width: 0;
+}
+
+.instrument-trade-evidence > div:first-child {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.instrument-trade-evidence > span {
+  color: #66736f;
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .instrument-hl-action > div:first-child {

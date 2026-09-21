@@ -32,8 +32,9 @@ from app.api import (
     routes_phone_alerts,
     routes_settings,
     routes_second_level_sampling,
-    stream,
+    routes_trade_availability,
     routes_tradfi_perp_monitor,
+    stream,
 )
 from app.core.config import Settings, get_settings
 from app.db.database import connect_database
@@ -134,6 +135,11 @@ from app.services.risk_labels import (
 from app.services.snapshot_store import SnapshotStore
 from app.services.service_control import DockerServiceController, ServiceControlConfig
 from app.services.second_level_sampler import SecondLevelSampler, SecondLevelSamplingRepository
+from app.services.trade_availability import (
+    TradeAvailabilityMonitor,
+    TradeAvailabilityService,
+    TradeAvailabilityWatchRepository,
+)
 
 logger = logging.getLogger(__name__)
 NEW_LISTING_ANNOUNCEMENT_LOOKBACK_HOURS = 72
@@ -975,6 +981,13 @@ def create_app(
         app.state.phone_price_alert_rule_repo = PhonePriceAlertRuleRepository(db)
         app.state.phone_price_alert_event_repo = PhonePriceAlertEventRepository(db)
         app.state.hyperliquid_trade_status_watch_repo = HyperliquidTradeStatusWatchRepository(db)
+        app.state.trade_availability_watch_repo = TradeAvailabilityWatchRepository(db)
+        if app.state.trade_availability_service is None:
+            app.state.trade_availability_service = TradeAvailabilityService(
+                store,
+                default_exchange_adapters(),
+                app.state.hyperliquid_trade_status_service,
+            )
         app.state.settings_repo = SettingsRepository(db)
         app.state.astro_alert_service.risk_settings_loader = (
             app.state.settings_repo.get_risk_settings
@@ -1057,6 +1070,11 @@ def create_app(
             app.state.hyperliquid_trade_status_service,
             alert_sender=text_alert_sender,
         )
+        app.state.trade_availability_monitor = TradeAvailabilityMonitor(
+            app.state.trade_availability_watch_repo,
+            app.state.trade_availability_service,
+            alert_sender=text_alert_sender,
+        )
         tasks: list[asyncio.Task] = []
         if start_background_workers:
             await app.state.second_level_sampler.initialize()
@@ -1080,6 +1098,11 @@ def create_app(
                 tasks,
                 app.state.hyperliquid_trade_status_monitor.run(stop_event),
                 name="hyperliquid-trade-status-monitor",
+            )
+            _start_background_task(
+                tasks,
+                app.state.trade_availability_monitor.run(stop_event),
+                name="trade-availability-monitor",
             )
         collector: MarketCollector | None = None
         announcement_provider = None
@@ -1233,6 +1256,7 @@ def create_app(
                 "negative_basis_monitor",
                 "pair_spread_funding_recorder",
                 "oil_news_monitor",
+                "trade_availability_service",
                 "hyperliquid_trade_status_service",
                 "feishu_notifier",
             )
@@ -1251,6 +1275,8 @@ def create_app(
     app.state.index_component_auto_watch = None
     app.state.hyperliquid_trade_status_watch_repo = None
     app.state.hyperliquid_trade_status_monitor = None
+    app.state.trade_availability_watch_repo = None
+    app.state.trade_availability_monitor = None
     app.state.minute_signal_scan_service_factory = None
     app.state.minute_signal_alert_engine = MinuteSignalAlertEngine()
     app.state.second_level_sampler = None
@@ -1258,6 +1284,7 @@ def create_app(
     app.state.new_listing_prewarmer = None
     app.state.new_listing_monitor = None
     app.state.negative_basis_monitor = None
+    app.state.trade_availability_service = None
     app.state.alert_engine = AlertEngine()
     app.state.phone_price_alert_engine = PhonePriceAlertEngine()
     app.state.opportunity_radar_alert_engine = OpportunityRadarAlertEngine()
@@ -1318,6 +1345,7 @@ def create_app(
     app.include_router(routes_opportunity_radar.router, prefix="/api")
     app.include_router(routes_history.router, prefix="/api")
     app.include_router(routes_hyperliquid_trade_status.router, prefix="/api")
+    app.include_router(routes_trade_availability.router, prefix="/api")
     app.include_router(routes_instruments.router, prefix="/api")
     app.include_router(routes_pair_spread.router, prefix="/api")
     app.include_router(routes_premium_index.router, prefix="/api")

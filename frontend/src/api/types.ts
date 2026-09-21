@@ -201,6 +201,103 @@ export interface HyperliquidTradeStatusWatch {
   updated_at: string;
 }
 
+export type TradeAvailabilityState = "available" | "blocked" | "conditional" | "unknown" | "not_applicable";
+export type TradeEvidenceScope = "public_market" | "account" | "order_error" | "platform_capability" | "none";
+export type TradeEvidenceState = "confirmed" | "not_checked" | "not_provided" | "error";
+
+export interface TradeActionStatus {
+  state: TradeAvailabilityState;
+  reason_code: string;
+  reason: string;
+  scope: TradeEvidenceScope;
+  executable_price: number | null;
+  depth_1pct_usdt: number | null;
+}
+
+export interface TradeDiagnosticEvidence {
+  scope: TradeEvidenceScope;
+  state: TradeEvidenceState;
+  reason_code: string;
+  message: string;
+  source: string | null;
+  raw_error: string | null;
+}
+
+export interface MarketTradeAvailability {
+  exchange: string;
+  market_type: MarketType;
+  symbol: string;
+  raw_symbol: string;
+  dex: string | null;
+  coverage_tier: "core" | "existing" | "evaluated";
+  observed_at: string;
+  market_data_updated_at: string;
+  orderbook_updated_at: string | null;
+  orderbook_source: string;
+  public_status_code: string;
+  public_status_source: string;
+  public_restrictions: string[];
+  diagnostics: TradeDiagnosticEvidence[];
+  best_bid: number | null;
+  best_ask: number | null;
+  bid_depth_1pct_usdt: number | null;
+  ask_depth_1pct_usdt: number | null;
+  volume_24h_usdt: number | null;
+  funding_rate_pct: number | null;
+  funding_next_rate_pct: number | null;
+  funding_interval_hours: number | null;
+  funding_next_time: string | null;
+  mark_price: number | null;
+  index_price: number | null;
+  maker_fee_pct: number | null;
+  taker_fee_pct: number | null;
+  fees_included: boolean;
+  fee_note: string;
+  market_multiplier: number;
+  contract_size_multiplier: number;
+  buy_open: TradeActionStatus;
+  sell_open: TradeActionStatus;
+  buy_reduce_only: TradeActionStatus;
+  sell_reduce_only: TradeActionStatus;
+}
+
+export interface TradeAvailabilityCoverage {
+  exchange: string;
+  tier: "core" | "existing" | "evaluated";
+  public_status_supported: boolean;
+  orderbook_supported: boolean;
+  note: string;
+}
+
+export interface TradeAvailabilityResult {
+  query: string;
+  observed_at: string;
+  source: string;
+  markets: MarketTradeAvailability[];
+  coverage: TradeAvailabilityCoverage[];
+  errors: Record<string, string>;
+  limitations: string[];
+}
+
+export interface TradeAvailabilityWatch {
+  id: string;
+  symbol: string;
+  exchange: string;
+  market_type: MarketType;
+  raw_symbol: string;
+  dex: string | null;
+  monitor_buy: boolean;
+  monitor_sell: boolean;
+  enabled: boolean;
+  last_buy_state: TradeAvailabilityState | null;
+  last_sell_state: TradeAvailabilityState | null;
+  last_checked_at: string | null;
+  last_notified_at: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface SecondLevelSamplingConfig {
   enabled: boolean;
   interval_seconds: number;

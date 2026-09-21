@@ -727,6 +727,21 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_hl_trade_status_watch_updated
           ON hyperliquid_trade_status_watchlist(updated_at DESC);
+
+        CREATE TABLE IF NOT EXISTS trade_availability_watchlist (
+          id TEXT PRIMARY KEY,
+          exchange TEXT NOT NULL,
+          market_type TEXT NOT NULL,
+          raw_symbol TEXT NOT NULL,
+          dex TEXT NOT NULL DEFAULT '',
+          payload TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(exchange, market_type, raw_symbol, dex)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_trade_availability_watch_updated
+          ON trade_availability_watchlist(updated_at DESC);
         """
     )
     await _ensure_opportunity_history_columns(db)

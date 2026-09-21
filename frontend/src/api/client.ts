@@ -96,6 +96,8 @@ import type {
   ServiceControlStatus,
   ServiceRestartResult,
   SymbolSpreadQueryResult,
+  TradeAvailabilityResult,
+  TradeAvailabilityWatch,
   TradfiPerpMonitorPreview
 } from "./types";
 
@@ -220,6 +222,42 @@ export function createHyperliquidTradeStatusWatch(payload: {
 export function deleteHyperliquidTradeStatusWatch(watchId: string): Promise<{ status: string }> {
   return fetchJson<{ status: string }>(
     `/hyperliquid/trade-status/watches/${encodeURIComponent(watchId)}`,
+    { method: "DELETE" }
+  );
+}
+
+export async function getTradeAvailability(symbol: string): Promise<TradeAvailabilityResult> {
+  const value = await fetchJson<unknown>(`/trade-status/${encodeURIComponent(symbol)}`);
+  if (!value || typeof value !== "object" || !Array.isArray((value as TradeAvailabilityResult).markets)) {
+    throw new Error("全交易所交易可用性响应格式无效");
+  }
+  return value as TradeAvailabilityResult;
+}
+
+export async function listTradeAvailabilityWatches(): Promise<TradeAvailabilityWatch[]> {
+  const value = await fetchJson<unknown>("/trade-status/watches/list");
+  if (!Array.isArray(value)) throw new Error("交易可用性恢复监控响应格式无效");
+  return value as TradeAvailabilityWatch[];
+}
+
+export function createTradeAvailabilityWatch(payload: {
+  symbol: string;
+  exchange: string;
+  market_type: MarketType;
+  raw_symbol: string;
+  dex?: string | null;
+  monitor_buy?: boolean;
+  monitor_sell?: boolean;
+}): Promise<TradeAvailabilityWatch> {
+  return fetchJson<TradeAvailabilityWatch>("/trade-status/watches", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function deleteTradeAvailabilityWatch(watchId: string): Promise<{ status: string }> {
+  return fetchJson<{ status: string }>(
+    `/trade-status/watches/${encodeURIComponent(watchId)}`,
     { method: "DELETE" }
   );
 }
