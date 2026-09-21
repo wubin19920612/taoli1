@@ -126,19 +126,37 @@ function authHeaders(): HeadersInit {
   return password ? { "X-Dashboard-Password": password } : {};
 }
 
+const PROXY_ERROR_MESSAGES: Partial<Record<number, string>> = {
+  502: "后端服务暂时不可用，可能正在重启，请稍后重试。",
+  503: "服务正在启动或暂时不可用，请稍后重试。",
+  504: "后端服务响应超时，请稍后重试。"
+};
+
+function looksLikeHtmlError(text: string): boolean {
+  return /<(?:!doctype\s+)?html(?:\s|>)|<head(?:\s|>)|<body(?:\s|>)/i.test(text);
+}
+
 function extractErrorMessage(text: string, status: number): string {
-  if (!text) {
-    return `Request failed: ${status}`;
+  const normalized = text.trim();
+  if (!normalized) {
+    return PROXY_ERROR_MESSAGES[status] ?? `请求失败（HTTP ${status}）`;
   }
   try {
-    const parsed = JSON.parse(text) as { detail?: unknown };
+    const parsed = JSON.parse(normalized) as { detail?: unknown };
     if (parsed && typeof parsed.detail === "string" && parsed.detail.trim()) {
       return parsed.detail;
     }
   } catch {
-    // Fall through to raw text.
+    // Non-JSON responses are handled below.
   }
-  return text;
+  const isStandardProxyText = /^(?:502\s+)?bad gateway$/i.test(normalized)
+    || /^(?:503\s+)?service unavailable$/i.test(normalized)
+    || /^(?:504\s+)?gateway time-?out$/i.test(normalized);
+  if (looksLikeHtmlError(normalized) || isStandardProxyText) {
+    return PROXY_ERROR_MESSAGES[status]
+      ?? `服务返回了无法显示的错误页面（HTTP ${status}），请稍后重试。`;
+  }
+  return normalized;
 }
 
 async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -161,7 +179,7 @@ export function listOpportunities(filters: OpportunityFilters): Promise<Opportun
   const url = buildUrl("/opportunities", filters);
   return fetch(url, { headers: authHeaders() }).then(async (response) => {
     if (!response.ok) {
-      throw new Error(await response.text());
+      throw new Error(extractErrorMessage(await response.text(), response.status));
     }
     return response.json() as Promise<Opportunity[]>;
   });
@@ -171,7 +189,7 @@ export function listMarkets(filters: MarketFilters = {}): Promise<MarketSnapshot
   const url = buildUrl("/markets", filters);
   return fetch(url, { headers: authHeaders() }).then(async (response) => {
     if (!response.ok) {
-      throw new Error(await response.text());
+      throw new Error(extractErrorMessage(await response.text(), response.status));
     }
     return response.json() as Promise<MarketSnapshot[]>;
   });
@@ -429,7 +447,7 @@ export async function listAnnouncements(filters: AnnouncementFilters = {}): Prom
   const url = buildUrl("/announcements", { limit: 100, ...filters });
   return fetch(url, { headers: authHeaders() }).then(async (response) => {
     if (!response.ok) {
-      throw new Error(await response.text());
+      throw new Error(extractErrorMessage(await response.text(), response.status));
     }
     return response.json() as Promise<ExchangeAnnouncement[]>;
   });
@@ -537,7 +555,7 @@ export async function getTradfiPerpMonitorPreview(params: {
   const url = buildUrl("/tradfi-perp-monitor/preview", params);
   return fetch(url, { headers: authHeaders() }).then(async (response) => {
     if (!response.ok) {
-      throw new Error(await response.text());
+      throw new Error(extractErrorMessage(await response.text(), response.status));
     }
     return response.json() as Promise<TradfiPerpMonitorPreview>;
   });
@@ -558,7 +576,7 @@ export async function refreshTradfiPerpMonitorPreview(params: {
     body: JSON.stringify({})
   }).then(async (response) => {
     if (!response.ok) {
-      throw new Error(await response.text());
+      throw new Error(extractErrorMessage(await response.text(), response.status));
     }
     return response.json() as Promise<TradfiPerpMonitorPreview>;
   });
@@ -578,7 +596,7 @@ export async function runFundingResearch(params: {
     body: JSON.stringify({})
   }).then(async (response) => {
     if (!response.ok) {
-      throw new Error(await response.text());
+      throw new Error(extractErrorMessage(await response.text(), response.status));
     }
     return response.json() as Promise<FundingResearchRunResult>;
   });
@@ -592,7 +610,7 @@ export async function listFundingResearchCandidates(params: {
   const url = buildUrl("/funding-research/candidates", params);
   return fetch(url, { headers: authHeaders() }).then(async (response) => {
     if (!response.ok) {
-      throw new Error(await response.text());
+      throw new Error(extractErrorMessage(await response.text(), response.status));
     }
     return response.json() as Promise<FundingResearchCandidate[]>;
   });
@@ -607,7 +625,7 @@ export async function listFundingResearchCandidateSnapshots(params: {
   const url = buildUrl("/funding-research/candidate-snapshots", params);
   return fetch(url, { headers: authHeaders() }).then(async (response) => {
     if (!response.ok) {
-      throw new Error(await response.text());
+      throw new Error(extractErrorMessage(await response.text(), response.status));
     }
     return response.json() as Promise<FundingResearchCandidateSnapshot[]>;
   });
@@ -621,7 +639,7 @@ export async function listFundingResearchPaperTrades(params: {
   const url = buildUrl("/funding-research/paper-trades", params);
   return fetch(url, { headers: authHeaders() }).then(async (response) => {
     if (!response.ok) {
-      throw new Error(await response.text());
+      throw new Error(extractErrorMessage(await response.text(), response.status));
     }
     return response.json() as Promise<FundingResearchPaperTrade[]>;
   });
@@ -652,7 +670,7 @@ export async function closeFundingResearchPaperTrade(
     body: JSON.stringify({})
   }).then(async (response) => {
     if (!response.ok) {
-      throw new Error(await response.text());
+      throw new Error(extractErrorMessage(await response.text(), response.status));
     }
     return response.json() as Promise<FundingResearchPaperTrade>;
   });
@@ -668,7 +686,7 @@ export async function getFundingResearchPaperTradeSummary(
   });
   return fetch(url, { headers: authHeaders() }).then(async (response) => {
     if (!response.ok) {
-      throw new Error(await response.text());
+      throw new Error(extractErrorMessage(await response.text(), response.status));
     }
     return response.json() as Promise<FundingResearchPaperTradeSummary>;
   });
@@ -680,7 +698,7 @@ export async function getFundingResearchLegacyBacktest(
   const url = buildUrl("/funding-research/legacy-backtest", query);
   return fetch(url, { headers: authHeaders() }).then(async (response) => {
     if (!response.ok) {
-      throw new Error(await response.text());
+      throw new Error(extractErrorMessage(await response.text(), response.status));
     }
     return response.json() as Promise<FundingResearchLegacyBacktestSummary>;
   });
@@ -693,7 +711,7 @@ export async function getGateTwapMarket(params: {
   const url = buildUrl("/gate-twap/market", params);
   return fetch(url, { headers: authHeaders() }).then(async (response) => {
     if (!response.ok) {
-      throw new Error(await response.text());
+      throw new Error(extractErrorMessage(await response.text(), response.status));
     }
     return response.json() as Promise<GateTwapMarketSnapshot>;
   });
@@ -794,7 +812,7 @@ export async function listIndexComponentChanges(
   const url = buildUrl("/index-components/changes", { limit: 100, ...filters });
   return fetch(url, { headers: authHeaders() }).then(async (response) => {
     if (!response.ok) {
-      throw new Error(await response.text());
+      throw new Error(extractErrorMessage(await response.text(), response.status));
     }
     return response.json() as Promise<IndexComponentChange[]>;
   });
@@ -806,7 +824,7 @@ export async function listIndexComponentSnapshots(
   const url = buildUrl("/index-components/snapshots", { limit: 500, ...filters });
   return fetch(url, { headers: authHeaders() }).then(async (response) => {
     if (!response.ok) {
-      throw new Error(await response.text());
+      throw new Error(extractErrorMessage(await response.text(), response.status));
     }
     return response.json() as Promise<IndexComponentSnapshot[]>;
   });
@@ -849,7 +867,7 @@ export async function getOpportunityHistoryStats(
   const url = buildUrl("/history/opportunities/stats", query);
   return fetch(url, { headers: authHeaders() }).then(async (response) => {
     if (!response.ok) {
-      throw new Error(await response.text());
+      throw new Error(extractErrorMessage(await response.text(), response.status));
     }
     return response.json() as Promise<OpportunityHistoryStats>;
   });
