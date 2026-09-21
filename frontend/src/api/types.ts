@@ -493,7 +493,12 @@ export interface NewListingAlertEvent {
   created_at: string;
 }
 
+export interface NewListingMonitorSettings {
+  enabled: boolean;
+}
+
 export interface NewListingMonitorStatus {
+  enabled: boolean;
   running: boolean;
   watch_count: number;
   enabled_watch_count: number;

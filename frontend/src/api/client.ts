@@ -84,6 +84,7 @@ import type {
   NegativeBasisWatchItem,
   NewListingAlertEvent,
   NewListingHistoryResult,
+  NewListingMonitorSettings,
   NewListingMonitorStatus,
   NewListingSpreadSample,
   NewListingWatchItem,
@@ -1107,6 +1108,15 @@ export async function listNewListingMonitorExchanges(): Promise<string[]> {
 
 export async function getNewListingMonitorStatus(): Promise<NewListingMonitorStatus> {
   return fetchJson<NewListingMonitorStatus>("/new-listing-monitor/status");
+}
+
+export async function updateNewListingMonitorSettings(
+  settings: NewListingMonitorSettings
+): Promise<NewListingMonitorSettings> {
+  return fetchJson<NewListingMonitorSettings>("/new-listing-monitor/settings", {
+    method: "PUT",
+    body: JSON.stringify(settings)
+  });
 }
 
 export async function listNewListingWatchlist(): Promise<NewListingWatchItem[]> {

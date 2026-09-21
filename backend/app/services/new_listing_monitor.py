@@ -23,6 +23,7 @@ from app.models.new_listing import (
     NewListingAlertEvent,
     NewListingAlertLevel,
     NewListingHistoryResult,
+    NewListingMonitorSettings,
     NewListingMonitorStatus,
     NewListingSpreadSample,
     NewListingWatchItem,
@@ -41,6 +42,7 @@ NEW_LISTING_PREWARM_LOOKBACK_HOURS = 2
 NEW_LISTING_PREWARM_FUTURE_HOURS = 72
 NEW_LISTING_PREWARM_POST_LISTING_HOURS = 2
 LEGACY_NEW_LISTING_PREWARM_COOLDOWN_SECONDS = 5
+NewListingSettingsLoader = Callable[[], Awaitable[NewListingMonitorSettings]]
 
 
 def utc_now() -> datetime:
@@ -663,11 +665,18 @@ class NewListingPrewarmer:
             Awaitable[list[AstroAlertActionResult]],
         ]
         | None = None,
+        settings_loader: NewListingSettingsLoader | None = None,
         now_fn: Callable[[], datetime] | None = None,
     ) -> None:
         self.repo = repo
         self.card_preparer = card_preparer
+        self.settings_loader = settings_loader
         self._now_fn = now_fn or utc_now
+
+    async def is_enabled(self) -> bool:
+        if self.settings_loader is None:
+            return True
+        return (await self.settings_loader()).enabled
 
     async def backfill_auto_watch_windows(self) -> list[NewListingWatchItem]:
         saved: list[NewListingWatchItem] = []
@@ -691,6 +700,8 @@ class NewListingPrewarmer:
         return saved
 
     async def prewarm_from_announcement(self, announcement: ExchangeAnnouncement) -> list[NewListingWatchItem]:
+        if not await self.is_enabled():
+            return []
         if announcement.kind != AnnouncementKind.LISTING:
             return []
         market_type = _market_type_from_announcement(announcement)
@@ -815,12 +826,14 @@ class NewListingMonitor:
         alert_sender: Callable[[str], Awaitable[None]] | None = None,
         risk_settings_loader: Callable[[], Awaitable[RiskSettings]] | None = None,
         astro_alert_handler: Callable[[Opportunity], Awaitable[AstroAlertActionResult]] | None = None,
+        settings_loader: NewListingSettingsLoader | None = None,
     ) -> None:
         self.repo = repo
         self.fetcher = fetcher or SecondLevelMarketFetcher()
         self.alert_sender = alert_sender
         self.risk_settings_loader = risk_settings_loader
         self.astro_alert_handler = astro_alert_handler
+        self.settings_loader = settings_loader
         self._hits: dict[str, int] = {}
         self._last_sent: dict[str, datetime] = {}
         self._cooldowns_loaded = False
@@ -831,6 +844,11 @@ class NewListingMonitor:
 
     def running(self) -> bool:
         return self._running
+
+    async def is_enabled(self) -> bool:
+        if self.settings_loader is None:
+            return True
+        return (await self.settings_loader()).enabled
 
     async def aclose(self) -> None:
         await self.fetcher.aclose()
@@ -861,6 +879,8 @@ class NewListingMonitor:
             self._running = False
 
     async def collect_due(self) -> list[NewListingSpreadSample]:
+        if not await self.is_enabled():
+            return []
         now = utc_now()
         items = [
             item
@@ -973,12 +993,18 @@ class NewListingMonitor:
 
     async def status(self) -> NewListingMonitorStatus:
         watchlist = await self.repo.list_watch_items()
+        enabled = await self.is_enabled()
         now = utc_now()
         return NewListingMonitorStatus(
+            enabled=enabled,
             running=self.running(),
             watch_count=len(watchlist),
             enabled_watch_count=sum(1 for item in watchlist if item.enabled),
-            active_watch_count=sum(1 for item in watchlist if _watch_is_active(item, now)),
+            active_watch_count=(
+                sum(1 for item in watchlist if _watch_is_active(item, now))
+                if enabled
+                else 0
+            ),
             sample_count=await self.repo.count_samples(),
             event_count=await self.repo.count_events(),
             latest_error=self._latest_error,

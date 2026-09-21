@@ -5,9 +5,11 @@ from datetime import UTC, datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.core.security import dashboard_password_header, verify_dashboard_password
+from app.db.repositories import SettingsRepository
 from app.models.new_listing import (
     NewListingAlertEvent,
     NewListingHistoryResult,
+    NewListingMonitorSettings,
     NewListingMonitorStatus,
     NewListingSpreadSample,
     NewListingWatchItem,
@@ -26,6 +28,13 @@ def _monitor(request: Request) -> NewListingMonitor:
     return monitor
 
 
+def _settings_repo(request: Request) -> SettingsRepository:
+    repo = getattr(request.app.state, "settings_repo", None)
+    if repo is None:
+        raise HTTPException(status_code=503, detail="配置存储还没有准备好")
+    return repo
+
+
 def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
@@ -35,6 +44,21 @@ def _as_utc(value: datetime) -> datetime:
 @router.get("/exchanges", response_model=list[str])
 async def list_new_listing_exchanges() -> list[str]:
     return list(SUPPORTED_SECOND_LEVEL_EXCHANGES)
+
+
+@router.get("/settings", response_model=NewListingMonitorSettings)
+async def get_new_listing_monitor_settings(request: Request) -> NewListingMonitorSettings:
+    return await _settings_repo(request).get_new_listing_monitor_settings()
+
+
+@router.put("/settings", response_model=NewListingMonitorSettings)
+async def update_new_listing_monitor_settings(
+    settings: NewListingMonitorSettings,
+    request: Request,
+    password: str | None = Depends(dashboard_password_header),
+) -> NewListingMonitorSettings:
+    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
+    return await _settings_repo(request).set_new_listing_monitor_settings(settings)
 
 
 @router.get("/watchlist", response_model=list[NewListingWatchItem])
@@ -71,6 +95,8 @@ async def collect_new_listing_watch_item(
 ) -> list[NewListingSpreadSample]:
     verify_dashboard_password(request.app.state.settings.dashboard_password, password)
     monitor = _monitor(request)
+    if not await monitor.is_enabled():
+        raise HTTPException(status_code=409, detail="新币极速总开关已关闭")
     item = await monitor.repo.get_watch_item(item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="监控标的不存在")

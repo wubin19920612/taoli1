@@ -150,7 +150,12 @@ class NewListingAlertEvent(BaseModel):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class NewListingMonitorSettings(BaseModel):
+    enabled: bool = Field(default=True, description="是否启用新币极速监控、公告预热和自动建卡。")
+
+
 class NewListingMonitorStatus(BaseModel):
+    enabled: bool
     running: bool
     watch_count: int
     enabled_watch_count: int

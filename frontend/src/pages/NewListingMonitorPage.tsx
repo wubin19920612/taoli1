@@ -36,6 +36,7 @@ import {
   getNewListingMonitorStatus,
   listNewListingMonitorExchanges,
   queryNewListingHistory,
+  updateNewListingMonitorSettings,
   upsertNewListingWatchItem
 } from "../api/client";
 import type {
@@ -285,6 +286,7 @@ export function NewListingMonitorPage() {
   const [range, setRange] = useState<[dayjs.Dayjs, dayjs.Dayjs] | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [monitorSettingsSaving, setMonitorSettingsSaving] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -369,6 +371,19 @@ export function NewListingMonitorPage() {
       await refresh();
     } catch (exc) {
       message.error(exc instanceof Error ? exc.message : String(exc));
+    }
+  };
+
+  const toggleMonitor = async (enabled: boolean) => {
+    setMonitorSettingsSaving(true);
+    try {
+      await updateNewListingMonitorSettings({ enabled });
+      message.success(enabled ? "新币极速总开关已开启" : "新币极速总开关已关闭");
+      await refresh();
+    } catch (exc) {
+      message.error(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setMonitorSettingsSaving(false);
     }
   };
 
@@ -486,7 +501,12 @@ export function NewListingMonitorPage() {
       render: (_, item) => (
         <Space size={4}>
           <Button icon={<EditOutlined />} size="small" onClick={() => editWatch(item)} />
-          <Button icon={<PlayCircleOutlined />} size="small" onClick={() => void collectNow(item)} />
+          <Button
+            icon={<PlayCircleOutlined />}
+            size="small"
+            disabled={status?.enabled === false}
+            onClick={() => void collectNow(item)}
+          />
           <Popconfirm title="删除这个新币监控？" onConfirm={() => void deleteWatch(item)}>
             <Button icon={<DeleteOutlined />} size="small" danger />
           </Popconfirm>
@@ -585,16 +605,37 @@ export function NewListingMonitorPage() {
           <Typography.Title level={4}>新币极速监控</Typography.Title>
           <Typography.Text type="secondary">秒级记录跨所可成交价差，低流动性不隐藏，只作为风险提示。</Typography.Text>
         </div>
-        <Space>
+        <Space wrap>
+          <Space size={6}>
+            <Typography.Text type="secondary">总开关</Typography.Text>
+            <Switch
+              aria-label="新币极速总开关"
+              checked={status?.enabled ?? false}
+              disabled={!status}
+              loading={monitorSettingsSaving || (!status && loading)}
+              onChange={(checked) => void toggleMonitor(checked)}
+            />
+          </Space>
           <Button icon={<PlusOutlined />} onClick={createWatch}>新增标的</Button>
           <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void refresh()}>刷新</Button>
         </Space>
       </div>
 
+      {status?.enabled === false ? (
+        <Alert
+          type="warning"
+          showIcon
+          message="新币极速总开关已关闭"
+          description="自动采样、公告预热和新币自动建卡均已停止；已有标的配置会保留。"
+        />
+      ) : null}
       {status?.latest_error ? <Alert type="warning" showIcon message={status.latest_error} /> : null}
 
       <div className="new-listing-metrics">
-        <Statistic title="后台状态" value={status?.running ? "运行中" : "未运行"} />
+        <Statistic
+          title="监控状态"
+          value={!status ? "-" : status.enabled ? (status.running ? "运行中" : "未运行") : "总开关已关闭"}
+        />
         <Statistic
           title="活跃标的"
           value={status?.active_watch_count ?? 0}
@@ -682,7 +723,11 @@ export function NewListingMonitorPage() {
                 保存参数
               </Button>
               {selectedWatch ? (
-                <Button icon={<PlayCircleOutlined />} onClick={() => void collectNow(selectedWatch)}>
+                <Button
+                  icon={<PlayCircleOutlined />}
+                  disabled={status?.enabled === false}
+                  onClick={() => void collectNow(selectedWatch)}
+                >
                   立即采样
                 </Button>
               ) : null}

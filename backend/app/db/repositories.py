@@ -26,6 +26,7 @@ from app.models.index_component import (
     index_watch_symbol,
 )
 from app.models.market import MarketType
+from app.models.new_listing import NewListingMonitorSettings
 from app.models.oil_news import (
     OilMarketSnapshot,
     OilNewsDirection,
@@ -1530,6 +1531,31 @@ class SettingsRepository:
             ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
             """,
             ("announcements", settings.model_dump_json()),
+        )
+        await self.db.commit()
+        return settings
+
+    async def get_new_listing_monitor_settings(self) -> NewListingMonitorSettings:
+        cursor = await self.db.execute(
+            "SELECT payload FROM app_settings WHERE key = ?",
+            ("new_listing_monitor",),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return NewListingMonitorSettings()
+        return NewListingMonitorSettings.model_validate(json.loads(row["payload"]))
+
+    async def set_new_listing_monitor_settings(
+        self,
+        settings: NewListingMonitorSettings,
+    ) -> NewListingMonitorSettings:
+        await self.db.execute(
+            """
+            INSERT INTO app_settings (key, payload)
+            VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
+            """,
+            ("new_listing_monitor", settings.model_dump_json()),
         )
         await self.db.commit()
         return settings

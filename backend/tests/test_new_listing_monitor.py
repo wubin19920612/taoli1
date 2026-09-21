@@ -1,17 +1,24 @@
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import Settings
 from app.db.database import connect_database
-from app.db.repositories import AnnouncementRepository
+from app.db.repositories import AnnouncementRepository, SettingsRepository
 from app.db.schema import initialize_schema
-from app.main import create_app
+from app.main import (
+    _handle_new_listing_astro_alert,
+    _prewarm_recent_listing_announcements,
+    _tag_recent_listing_opportunities,
+    create_app,
+)
 from app.models.announcement import AnnouncementKind, AnnouncementSettings, ExchangeAnnouncement
 from app.models.astro import AstroAlertActionResult
 from app.models.new_listing import (
     NewListingAlertEvent,
+    NewListingMonitorSettings,
     NewListingSpreadSample,
     NewListingWatchItem,
 )
@@ -100,6 +107,26 @@ def test_new_listing_watch_item_normalizes_parameters() -> None:
 
     assert item.symbol == "UNITREEUSDT"
     assert item.exchanges == ["bybit", "gate"]
+
+
+@pytest.mark.asyncio
+async def test_new_listing_monitor_settings_persist() -> None:
+    db = await connect_database(":memory:")
+    await initialize_schema(db)
+    repo = SettingsRepository(db)
+
+    try:
+        defaults = await repo.get_new_listing_monitor_settings()
+        saved = await repo.set_new_listing_monitor_settings(
+            NewListingMonitorSettings(enabled=False)
+        )
+        loaded = await repo.get_new_listing_monitor_settings()
+    finally:
+        await db.close()
+
+    assert defaults.enabled is True
+    assert saved.enabled is False
+    assert loaded.enabled is False
 
 
 def test_new_listing_sample_keeps_hyperliquid_market_for_card() -> None:
@@ -225,6 +252,142 @@ async def test_new_listing_monitor_skips_watch_item_after_stop_at(monkeypatch) -
     assert samples == []
     assert status.enabled_watch_count == 1
     assert status.active_watch_count == 0
+
+
+@pytest.mark.asyncio
+async def test_new_listing_master_switch_stops_sampling_and_reports_no_active_watches() -> None:
+    db = await connect_database(":memory:")
+    await initialize_schema(db)
+    repo = NewListingMonitorRepository(db)
+    item = NewListingWatchItem(symbol="UNITREE", exchanges=["bybit", "gate"])
+    await repo.upsert_watch_item(item)
+
+    async def disabled_settings() -> NewListingMonitorSettings:
+        return NewListingMonitorSettings(enabled=False)
+
+    monitor = NewListingMonitor(
+        repo,
+        fetcher=PendingFetcher(),  # type: ignore[arg-type]
+        settings_loader=disabled_settings,
+    )
+
+    try:
+        samples = await monitor.collect_due()
+        status = await monitor.status()
+    finally:
+        await monitor.aclose()
+        await db.close()
+
+    assert samples == []
+    assert status.enabled is False
+    assert status.enabled_watch_count == 1
+    assert status.active_watch_count == 0
+
+
+@pytest.mark.asyncio
+async def test_new_listing_master_switch_stops_announcement_prewarm_and_cards() -> None:
+    db = await connect_database(":memory:")
+    await initialize_schema(db)
+    repo = NewListingMonitorRepository(db)
+    prepared_items: list[NewListingWatchItem] = []
+    now = datetime(2026, 8, 18, 10, 0, tzinfo=UTC)
+
+    async def disabled_settings() -> NewListingMonitorSettings:
+        return NewListingMonitorSettings(enabled=False)
+
+    async def prepare_cards(
+        announcement: ExchangeAnnouncement,
+        item: NewListingWatchItem,
+    ) -> list[AstroAlertActionResult]:
+        prepared_items.append(item)
+        return []
+
+    prewarmer = NewListingPrewarmer(
+        repo,
+        card_preparer=prepare_cards,
+        settings_loader=disabled_settings,
+        now_fn=lambda: now,
+    )
+    announcement = ExchangeAnnouncement(
+        exchange="okx",
+        announcement_id="disabled-listing",
+        kind=AnnouncementKind.LISTING,
+        title="OKX to list DISABLEDUSDT perpetual futures",
+        url="https://www.okx.com/help/disabled-listing",
+        source="okx-help",
+        symbols=["DISABLED"],
+        market_type="futures",
+        event_time=now + timedelta(minutes=5),
+        published_at=now,
+        fetched_at=now,
+    )
+
+    try:
+        saved = await prewarmer.prewarm_from_announcement(announcement)
+        watch_items = await repo.list_watch_items()
+    finally:
+        await db.close()
+
+    assert saved == []
+    assert watch_items == []
+    assert prepared_items == []
+
+
+@pytest.mark.asyncio
+async def test_new_listing_master_switch_skips_startup_announcement_scan() -> None:
+    async def disabled_settings() -> NewListingMonitorSettings:
+        return NewListingMonitorSettings(enabled=False)
+
+    class UnexpectedAnnouncementRepository:
+        async def list(self, **kwargs):
+            raise AssertionError(f"announcement scan should not run: {kwargs}")
+
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            settings_repo=SimpleNamespace(
+                get_new_listing_monitor_settings=disabled_settings,
+            ),
+            announcement_repo=UnexpectedAnnouncementRepository(),
+            new_listing_prewarmer=object(),
+        )
+    )
+
+    await _prewarm_recent_listing_announcements(app)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_new_listing_master_switch_skips_alert_tagging_and_astro_cards() -> None:
+    async def disabled_settings() -> NewListingMonitorSettings:
+        return NewListingMonitorSettings(enabled=False)
+
+    class UnexpectedAnnouncementRepository:
+        async def list(self, **kwargs):
+            raise AssertionError(f"announcement scan should not run: {kwargs}")
+
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            settings_repo=SimpleNamespace(
+                get_new_listing_monitor_settings=disabled_settings,
+            ),
+            announcement_repo=UnexpectedAnnouncementRepository(),
+        )
+    )
+    opportunities = [object()]
+
+    tagged = await _tag_recent_listing_opportunities(
+        app,  # type: ignore[arg-type]
+        opportunities,
+        datetime(2026, 8, 18, 10, 0, tzinfo=UTC),
+    )
+    astro_result = await _handle_new_listing_astro_alert(
+        app,  # type: ignore[arg-type]
+        object(),  # type: ignore[arg-type]
+    )
+
+    assert tagged is opportunities
+    assert astro_result.enabled is False
+    assert astro_result.status == "disabled"
+    assert "总开关已关闭" in astro_result.message
 
 
 @pytest.mark.asyncio
@@ -715,11 +878,26 @@ def test_new_listing_monitor_api_saves_watch_item() -> None:
                 "updated_at": "2026-08-04T10:00:00Z",
             },
         )
+        settings_response = client.put(
+            "/api/new-listing-monitor/settings",
+            headers=headers,
+            json={"enabled": False},
+        )
         status_response = client.get("/api/new-listing-monitor/status")
+        collect_response = client.post(
+            "/api/new-listing-monitor/watchlist/unitree-watch/collect",
+            headers=headers,
+        )
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["symbol"] == "UNITREEUSDT"
     assert payload["exchanges"] == ["bybit", "gate"]
+    assert settings_response.status_code == 200
+    assert settings_response.json() == {"enabled": False}
     assert status_response.status_code == 200
     assert status_response.json()["watch_count"] == 1
+    assert status_response.json()["enabled"] is False
+    assert status_response.json()["active_watch_count"] == 0
+    assert collect_response.status_code == 409
+    assert collect_response.json()["detail"] == "新币极速总开关已关闭"

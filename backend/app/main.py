@@ -53,6 +53,7 @@ from app.models.alert import AlertEvent
 from app.models.announcement import AnnouncementKind
 from app.models.astro import AstroAlertActionResult
 from app.models.market import MarketType
+from app.models.new_listing import NewListingMonitorSettings
 from app.models.orderbook import DepthValidationResult
 from app.models.opportunity import Opportunity
 from app.models.phone_alert import PhonePriceAlertEvent
@@ -228,6 +229,13 @@ async def _handle_new_listing_astro_alert(
     wait_after_add: bool = False,
 ) -> AstroAlertActionResult:
     settings_repo: SettingsRepository | None = getattr(app.state, "settings_repo", None)
+    if not await _new_listing_monitor_enabled(app):
+        return AstroAlertActionResult(
+            enabled=False,
+            status="disabled",
+            action="none",
+            message="新币极速总开关已关闭，未创建 Astro 卡片",
+        )
     risk_settings = (
         await settings_repo.get_risk_settings()
         if settings_repo is not None
@@ -307,6 +315,8 @@ async def _handle_new_listing_astro_alert(
 
 
 async def _prewarm_recent_listing_announcements(app: FastAPI) -> None:
+    if not await _new_listing_monitor_enabled(app):
+        return
     announcement_repo: AnnouncementRepository | None = getattr(
         app.state,
         "announcement_repo",
@@ -423,6 +433,8 @@ async def _recent_listing_symbol_keys(app: FastAPI, now: datetime) -> set[str]:
 
 
 async def _tag_recent_listing_opportunities(app: FastAPI, opportunities: list, now: datetime) -> list:
+    if not await _new_listing_monitor_enabled(app):
+        return opportunities
     listing_symbol_keys = await _recent_listing_symbol_keys(app, now)
     if not listing_symbol_keys:
         return opportunities
@@ -432,6 +444,15 @@ async def _tag_recent_listing_opportunities(app: FastAPI, opportunities: list, n
         else opportunity
         for opportunity in opportunities
     ]
+
+
+async def _new_listing_monitor_enabled(app: FastAPI) -> bool:
+    settings_repo = getattr(app.state, "settings_repo", None)
+    get_settings = getattr(settings_repo, "get_new_listing_monitor_settings", None)
+    if get_settings is None:
+        return True
+    settings: NewListingMonitorSettings = await get_settings()
+    return settings.enabled
 
 
 def _latest_signal_validation_failure(
@@ -991,6 +1012,7 @@ def create_app(
         app.state.new_listing_prewarmer = NewListingPrewarmer(
             new_listing_repo,
             card_preparer=new_listing_card_preparer.prepare_from_announcement,
+            settings_loader=app.state.settings_repo.get_new_listing_monitor_settings,
         )
         text_alert_sender = (
             (lambda message: _send_index_component_alert(app, message))
@@ -1014,6 +1036,7 @@ def create_app(
             alert_sender=text_alert_sender,
             risk_settings_loader=app.state.settings_repo.get_risk_settings,
             astro_alert_handler=lambda opportunity: _handle_new_listing_astro_alert(app, opportunity),
+            settings_loader=app.state.settings_repo.get_new_listing_monitor_settings,
         )
         app.state.negative_basis_monitor = NegativeBasisMonitor(
             NegativeBasisMonitorRepository(db),
