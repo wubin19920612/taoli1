@@ -23,6 +23,8 @@
 - 功能提交说明：`feat: diagnose exchange trade availability`
 - 动作文案修正提交：`693cda8b687530a004ce46667d5129c780451114`
 - 动作文案修正说明：`fix: clarify trade action labels`
+- 现货充提与告警订阅提交：`4a098874e7e1d3f1ef3f0400dd18dccb62df15a6`
+- 现货充提与告警订阅提交说明：`feat: expose spot transfer availability`
 
 ## 已完成功能
 
@@ -38,7 +40,9 @@
 - 实时订单簿失败时可展示聚合行情回退，但普通动作不会因此被误判为公开可用。
 - 新增统一恢复监控表和后台轮询。普通买卖状态从非 `available` 恢复为 `available` 时发送一次飞书；不监控 Reduce Only。
 - 飞书发送失败时恢复旧状态并记录错误，使后续轮询能够重试同一次恢复通知。
-- 标的查询页新增统一诊断表、限制告警、精确原始市场监控按钮，以及桌面/手机横向表格和固定关键列。
+- 标的查询页新增统一诊断表、限制告警、精确原始市场监控按钮，以及桌面/手机横向表格和固定关键列。顶部公开交易限制告警逐市场直接提供“订阅恢复通知”或“取消恢复通知”按钮，复用同一个精确市场监控，不需要先在宽表中定位操作列。
+- 现货市场新增 `spot_transfer` 诊断，展示币种、充币状态、提币状态、是否全部开放、逐链开关、来源和检测时间；接口失败只让充提诊断降级，不丢失该市场的交易状态和订单簿结果。
+- Binance 使用匿名 public asset service、Gate 使用公开 spot currencies、Bitget 使用公开 public coins 获取逐链开关。OKX 和 Bybit 的官方币种接口需要 API Key，Aster 没有验证到可靠匿名公开逐币接口，因此三者明确显示未知/需鉴权，不猜测为关闭。
 
 ## API 与代码入口
 
@@ -86,33 +90,36 @@ trade_availability_watchlist
 - 1% 深度是订单簿快照而不是成交承诺；盘口价格和状态未计入手续费。
 - 资金费率必须与 `funding_interval_hours` 一起解释；预估费率与当前费率分开显示。
 - 恢复监控只比较普通买卖，不会用公开 Reduce Only 状态替代账户级判断。
+- 现货充提汇总只有在所有返回链均开启时才为 `enabled`；部分链开启为 `partial`，全部关闭为 `disabled`，字段缺失、接口不可公开访问或未验证时为 `unknown`。任一侧明确为部分开放或关闭时，`all_enabled=false`，不会因另一侧未知而误报全开。
+- 充提状态是交易所公开币种/网络状态，不代表某个账户、地区或地址当前一定可以充提；系统没有使用私有 API Key，也没有发起充提或下单探测。
 
 ## 本地验证
 
-- 后端全量：`735 passed, 13 warnings`。
-- 全交易所与 Hyperliquid 专项：`10 passed, 2 warnings`。
-- 标的查询页专项：动作文案修正后 `19 passed`。
+- 后端充提专项：`7 passed`。
+- 后端全量：`737 passed, 11 warnings`，耗时 `920.98` 秒。
+- 标的查询页专项：`19 passed`，覆盖告警内精确订阅请求和现货充提状态展示。
 - 前端生产构建：通过。
-- Ruff 本模块专项：通过。
+- Ruff：`All checks passed`。
 - `git diff --check`：通过。
-- 两个曾因并行资源争用超时的 Settings 用例串行复跑均通过。
-- 前端全量：`155 passed, 1 failed`。唯一失败是既有 Settings 测试仍查找旧文案“实盘灰度”，页面现文案为“正差价正费率实盘实验”；本任务未修改 Settings 模块。
+- 前端全量：`160 passed, 1 failed`。唯一失败是既有 Settings 测试仍查找旧文案“实盘灰度”，页面现文案为“正差价正费率实盘实验”；本任务未修改 Settings 模块。
 
 浏览器检查：
 
 - 桌面 `1440 x 1000`：14 个原始市场正常展示，市场列和恢复监控列固定。
 - 动作文案修正后的桌面页显示“普通买入（非 Reduce Only）”“普通卖出（非 Reduce Only）”“买入平空（Reduce Only）”“卖出平多（Reduce Only）”；现货行的两种 Reduce Only 单元格为空，永续行继续显示买入平空和卖出平多。
-- 手机 `390 x 844`：页面宽度正常，诊断表保留横向滚动；既有关注行情浮窗打开时会覆盖表格区域。
-- 最新线上截图：`output/trade-availability-action-labels-deployed-desktop.png`、`output/trade-availability-action-labels-deployed-mobile.png`，仅作为未跟踪验证产物。
+- ZETA 桌面页的公开限制告警直接显示“取消恢复通知”，与线上已有的精确 ZETA 订阅一致；未点击或修改生产订阅。
+- BTC 桌面页可见“现货充提”列和实际状态；手机 `390 x 844` 页面宽度为 `390`、文档滚动宽度为 `390`，没有整页横向溢出，宽表内部继续横向滚动。
+- 最新线上截图：`output/trade-availability-transfer-zeta-deployed-desktop.png`、`output/trade-availability-transfer-btc-deployed-desktop.png`、`output/trade-availability-transfer-deployed-mobile.png`、`output/trade-availability-transfer-column-deployed-desktop.png`、`output/trade-availability-transfer-column-deployed-mobile.png`，仅作为未跟踪验证产物。
 
 ## 生产备份与部署
 
-- 动作文案修正部署前数据库备份：`backups/radar-20260921T081155Z.db`
-- 大小：`707584000` 字节
-- SHA-256：`df421baecbe6a291e29f1508f609102c73b0cecbd530c9e9fe5ff383ce14469a`
+- 本轮部署前数据库备份：`backups/radar-20260921T092258Z.db`
+- 大小：`698052608` 字节
+- SHA-256：`aed4c266a8fc6c12b3efc0f7010f689f4fffcd124c01caa7e77bdd137f0bf26f`
 - 源数据库 `PRAGMA quick_check = ok`
 - 备份数据库 `PRAGMA quick_check = ok`
-- 服务器使用 `git pull --ff-only` 确认更新到 `693cda8b687530a004ce46667d5129c780451114`。
+- 备份使用 SQLite 在线 backup API，已复制到服务器仓库的 `backups/`；本次创建的卷内临时副本在校验主机副本后已删除，线上源库未改动。
+- 服务器使用 `git pull --ff-only` 确认更新到 `4a098874e7e1d3f1ef3f0400dd18dccb62df15a6`。
 - 使用 `docker compose build --pull` 和 `docker compose up -d --remove-orphans` 重建，没有执行 `down -v`。
 - 前后端容器均为 `healthy`。
 - `/api/health` 返回 `status=ok`，八家交易所采集状态均为 `healthy`。
@@ -131,12 +138,17 @@ BTC 查询返回 14 个原始市场，`errors={}`，包括：
 
 前端不再把普通卖出描述为做空，也不在现货行显示“平空/平多不适用”。现货仍正常展示普通 `Buy` 和 `Sell`；只有永续及其他有持仓语义的市场展示 `Buy / 平空` 和 `Sell / 平多`。
 
-监控列表当时为空，没有人为制造不可用/恢复切换，因此没有发送生产飞书测试消息。恢复通知状态机和飞书失败重试由自动化测试覆盖；真实通知仍依赖生产 `feishu_live_send_enabled` 与 Webhook 配置，以及未来真实状态切换。
+BTC 线上查询返回 14 个市场且 `errors={}`。现货充提结果为：Binance `enabled / partial`（5 条链）、Gate `enabled / enabled`（2 条链）、Bitget `partial / partial`（3 条链）；OKX、Bybit、Aster 均为 `unknown / unknown`，并带有需鉴权或缺少已验证匿名接口的来源说明。永续行不展示充提内容。
+
+ZETA 线上查询返回 11 个市场且 `errors={}`，唯一公开受限市场仍为 `Hyperliquid / future / main / ZETA / OPEN_INTEREST_CAP`，`dex=main` 和 `raw_symbol=ZETA` 均保留。线上监控列表有 1 条启用订阅，精确对应 `ZETAUSDT + hyperliquid + future + ZETA + main`，最近状态为买卖均 `blocked`，没有通知错误；本轮验收只读查询，没有新增、删除或点击生产订阅。
+
+没有人为制造不可用/恢复切换，因此没有发送生产飞书测试消息。恢复通知状态机和飞书失败重试由自动化测试覆盖；真实通知仍依赖生产 `feishu_live_send_enabled` 与 Webhook 配置，以及未来真实状态切换。
 
 ## 已知问题与残余风险
 
 - Aster、Lighter 或其他公开 API 可能偶发超时；单市场会显示降级错误，不拖累其他交易所。
 - 公共 API 无法确认账户余额、仓位、保证金、地区、权限、nonce、签名或账户风控。若真实订单失败，应保留原始错误并按 `order_error` 证据单独分析。
+- OKX、Bybit 现货充提官方接口需私有鉴权，Aster 尚无已验证匿名公开逐币接口；当前只能明确展示未知。Binance、Gate、Bitget 的公开开关也可能与账户、地区、维护窗口或具体地址可用性不同。
 - 飞书真实发送未通过伪造市场状态验证，避免产生误通知；生产配置和下一次真实恢复事件仍是外部依赖。
 - 后端启动日志仍有既存 Gate 公告接口 HTTP 567，与交易可用性接口无关；本任务接口返回 200 且 `errors={}`。
 - 前端全量测试保留一个与本模块无关的旧文案失败，以及既有 Ant Design 弃用和 `act(...)` 警告。
