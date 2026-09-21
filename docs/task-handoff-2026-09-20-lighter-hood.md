@@ -1,16 +1,17 @@
 # 交接：Lighter Robinhood（HOOD）套利接入
 
-日期：2026-09-20（2026-09-21 更新实时机会排序纠偏）
+日期：2026-09-20（2026-09-21 更新实时机会排序与资金费率展示纠偏）
 
 ## 目标与范围
 
-本任务只处理 Astro、浮窗与 Lighter 路由模块中的 Robinhood `HOOD` 市场接入，不扩展其他交易所或功能模块。
+本任务只处理 Astro、浮窗与 Lighter 路由模块中的 Robinhood 链/`HOOD` 标的行情接入，不扩展其他交易所或功能模块。业务定义是：Lighter `HOOD` 是用于和其他等价市场比较的真实行情腿，不是一个需要固定展示的“机会”。
 
 验收目标：
 
 - Lighter `HOOD` 即使不在成交额前 48 名，也必须进入自动套利扫描。
 - 行情必须来自真实订单簿，包含 bid、ask、盘口数量、24h 成交额、资金费率及其周期。
 - 与 Binance、Bitget 等同一规范标的 `HOODUSDT` 正确配对，并保留 Lighter 原始市场 `HOOD`。
+- 只有真实价差、扣费后收益或标准化资金费率达到现有筛选条件时，相关路线才作为机会出现。
 - 可用路线继续使用 Astro `gc-lighter`，不创建普通 `lighter` 卡片。
 - 实时机会默认列表必须继续服从全市场筛选和价差排名；不能为了证明接入成功而补取或置顶没有实际优势的 HOOD/Lighter 路线。
 - 完成测试、提交、推送、生产数据库备份、部署和线上接口验证。
@@ -23,6 +24,7 @@
 - WebSocket 功能提交：`f591fbb808d901d41d173dbf8bb481d60993d700`（Lighter 实时订单簿改用官方 WebSocket）
 - 已撤销的实时机会可见性提交：`d19e6d5`（曾默认补取并置顶 HOOD/Lighter，同时加入 Robinhood 别名搜索）
 - 排名逻辑纠偏提交：`35b804d3c63612d0998520661790f76e2b5088c5`（删除默认补取和强制置顶，保留主动搜索别名）
+- 资金费率展示纠偏提交：`9111648`（不同结算周期统一显示为每小时净值和 24 小时净值）
 
 ## 已完成功能
 
@@ -36,6 +38,7 @@
 - 表格继续按 `open_spread_pct` 正常排序。HOOD/Lighter 只有在满足当前筛选并进入全市场前 120 名时才会出现在默认列表，不享有特殊优先级。
 - 标的搜索支持 `RH`、`Robinhood`、`RobinhoodUSDT`、`罗宾汉` 和 `HOOD`，都返回规范标的 `HOODUSDT`。
 - 主动搜索结果仍使用通用机会表格，展示规范标的、交易所及原始市场、双方成交额、实际 bid/ask 计算的价差、扣费收益、资金费率周期和风险标签；不再给 HOOD 添加特殊显示名或专属样式。
+- 机会表不再把 Lighter `1h` 和 Binance/Bitget `8h` 的原始费率直接相减为“周期净”。页面优先使用后端的 `net_funding_next_hourly_pct`、`net_funding_next_daily_pct`，缺少下期值时回退到当前标准化字段，并显示“每小时净”和“24h净”。
 
 ## 关键代码入口
 
@@ -55,24 +58,29 @@
   - 每轮只按当前筛选请求一次机会列表；不再发送 HOOD/Lighter 补充请求。
 - `frontend/src/components/OpportunityTable.tsx`
   - `Open spread` 使用通用数值排序；没有 HOOD/Lighter 特殊优先级。
+  - `normalizedFundingEdges` 使用后端标准化后的小时和 24 小时资金费率差，不直接比较不同结算周期的原始值。
 - `frontend/tests/DashboardPage.test.tsx`
   - 回归检查默认机会请求不包含 `symbol`、`exchange`，并保持 `limit=120`。
+- `frontend/tests/OpportunityTable.test.tsx`
+  - 回归检查 Lighter `1h` 与 Bitget `8h` 混合周期时只展示标准化净值，不展示原始费率直接差。
 
 ## 重要业务规则
 
+- Robinhood 链/`HOOD` 是目标标的，Lighter 是本任务需要采集的行情来源之一。它必须作为比较腿参与价差和资金费率计算，但接入成功本身不构成套利机会。
 - Lighter 规范标的是 `HOODUSDT`，原始市场必须保留为 `HOOD`；不要把原始市场字段覆盖掉。
 - Lighter Astro 路由仍只能使用 `gc-lighter`，且仅与已知 GC 或 Bitget 路由配对。
-- 资金费率不能脱离周期比较。线上验收时 Lighter 为 1 小时周期，Bitget 为 8 小时周期。
+- 资金费率不能脱离周期比较。双方原始费率和 `1h`、`8h` 等结算周期继续展示，但净收益比较必须使用标准化的每小时或 24 小时值。
 - 套利判断继续使用真实 bid/ask。mark/index 仅用于风险信息，不能代替可成交价。
 - 页面出现正价差不等于扣费后盈利。线上验收样本的 Lighter -> Bitget 开仓价差约 `0.036%`，但扣除手续费和滑点后的 `fee_adjusted_open_pct` 为负，不应视为交易建议。
 - 接入和可搜索不等于默认展示。没有进入当前筛选后全市场前 120 名的路线不得通过前端附加请求绕过排名。
+- 最终交易判断必须同时检查实际可成交价格、手续费和滑点、市场倍率、双方成交额和盘口深度、资金费率周期与结算时间、风险标签，以及数据是否为预估。
 
 ## 本地验证
 
 - Lighter WebSocket 阶段专项测试：`11 passed`。
 - 最新后端全量测试：`720 passed, 11 warnings`，耗时约 4 分 46 秒。
 - Robinhood 别名与筛选顺序专项：`6 passed`。
-- 排名纠偏前端专项：`DashboardPage.test.tsx` 与 `OpportunityTable.test.tsx` 共 `23 passed`（其中 Dashboard `16`、机会表格 `7`）。
+- 最新前端专项：`DashboardPage.test.tsx` 与 `OpportunityTable.test.tsx` 共 `24 passed`，包含 Lighter `1h` 与 Bitget `8h` 混合周期标准化回归用例。
 - 前端生产构建：通过，包含 TypeScript 检查和 Vite build。
 - 排名纠偏没有重跑前端全量；最近一次全量为 `150 passed, 1 failed`。唯一失败仍是既有 `SettingsPage` 旧文案断言，测试查找“实盘灰度”，页面已更名为“正差价正费率实盘实验”；与本模块无关。
 - `python -m compileall`：通过。
@@ -83,6 +91,13 @@
 - 本机真实行情验证：Lighter 返回 48 个永续市场并包含 `HOODUSDT`；单标的查询返回真实 bid/ask、24h 成交额和 1 小时资金费率。
 
 ## 数据库备份
+
+资金费率标准化展示部署前备份：
+
+- 文件：`backups/radar-20260921T005449Z-pre-normalized-funding-display.db`
+- 大小：`720613376` 字节。
+- SHA-256：`9f1b9e4af53101c6ce7d3be59f2575916d4ed42db4fc9554ed621c849a3a68ab`
+- SQLite `PRAGMA quick_check`：`ok`。
 
 排名逻辑纠偏部署前备份：
 
@@ -114,9 +129,9 @@
 
 ## 线上状态
 
-- 服务器使用 `git pull --ff-only` 更新到排名逻辑纠偏提交 `35b804d`。
+- 服务器使用 `git pull --ff-only` 更新到资金费率展示纠偏提交 `9111648`。
 - `docker compose build --pull` 和 `up -d --remove-orphans` 成功；没有执行 `down -v`。
-- 前端、后端容器均为 `healthy`，`/api/health` 返回 `status=ok`。
+- 前端、后端容器均为 `healthy`，`/api/health` 返回 `status=ok`；验收时 `lighter=healthy`、`exchange_errors={}`。
 - 连续跨三个采集时点检查：冷启动首轮市场元数据遇到一次 405，下一轮自动恢复；之后两轮 `lighter=healthy`、失败次数为 0、错误为空，`HOOD` 均持续存在。
 - `/api/markets?exchange=lighter&symbol=HOOD` 返回 `HOODUSDT`、`raw_symbol=HOOD`、非交叉 bid/ask、盘口数量、24h 成交额、资金费率和 1 小时周期。
 - `/api/instruments/HOOD` 返回 8 个交易所、10 个市场，并生成 9 条含 Lighter 的实时路线（数量随行情变化）。
@@ -124,8 +139,10 @@
 - 对应 `/api/astro/preview/{opportunity_id}` 返回 `gc-lighter -> bitget`、类型 `FF`、`can_submit=true`、无 blocker；本任务只验证预览，没有实际创建卡片。
 - 前端 3000 端口代理能返回同一 Lighter `HOOD` 市场。
 - 部署后日志中 `orderBookOrders` 调用为 0，Lighter WebSocket 错误为 0。
-- 线上 `/api/opportunities` 对 `RH`、`Robinhood`、`罗宾汉`、`HOOD` 主动查询均能返回 `HOODUSDT + Lighter` 路线；2026-09-21 验收时在 `include_risky=true` 下各为 6 条，数量随行情变化，别名筛选在 `limit` 之前生效。
+- 线上 `/api/opportunities` 对 `RH`、`Robinhood`、`罗宾汉`、`HOOD` 主动查询均能返回 `HOODUSDT` 比较路线，别名筛选在 `limit` 之前生效。最新浏览器实测输入 `RH` 返回 12 条 HOOD 路线，其中 3 条包含 Lighter；路线数量会随行情和筛选结果动态变化。
 - 线上 Lighter `HOOD` 验收样本包含非交叉 bid/ask、双边成交额、Lighter `1h` 资金费率周期和对手方周期；价格和费率会随市场变化。
+- 浏览器实测的资金费率区域已显示“每小时净”和“24h净”，不再显示会误导混合周期比较的“周期净”。
+- 一次资金费率引擎诊断中，精确 `HOODUSDT` 找到 10 个等价市场并生成 44 个比较对，其中 9 个包含 Lighter；当时完整成本后的候选为 `EXIT_NOW`，说明接入已参与计算，但当时并不存在可执行套利。该结果和数值均会随行情变化。
 - 生产前端代理的默认机会请求返回 120 条，按 `open_spread_pct` 降序；验收时末位约 `0.369%`，HOOD/Lighter 为 0 条。
 - 浏览器网络日志只出现标准的 `limit=120` 机会 URL，没有 `symbol=HOOD` 或 `exchange=lighter` 补取请求。自动刷新会重复同一个标准 URL，不会增加重点路线请求。
 - 部署后截图显示 `Opportunities 120`，首行按正常价差排名展示 `BPUSDT`，没有 HOOD/Lighter 强制置顶；Lighter 状态为 `healthy`，页面无明显重叠或截断。
