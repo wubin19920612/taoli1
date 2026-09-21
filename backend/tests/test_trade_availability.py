@@ -253,6 +253,33 @@ async def test_spot_transfer_status_distinguishes_public_data_and_auth_only_sour
 
 
 @pytest.mark.asyncio
+async def test_transfer_status_uses_future_market_when_no_spot_pair_exists() -> None:
+    snapshot = _snapshot("binance", MarketType.FUTURE, "BTCUSDT")
+    store = SnapshotStore()
+    store.set_all_markets([snapshot])
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_metadata_handler))
+    service = TradeAvailabilityService(
+        store,
+        [FakeAdapter("binance")],
+        AsyncMock(),
+        client,
+    )
+
+    transfer = await service.fetch_transfer_status(
+        "BTCUSDT",
+        exchange="binance",
+        raw_symbol="BTCUSDT",
+    )
+
+    assert transfer.asset == "BTC"
+    assert transfer.deposit_state == TransferAvailabilityState.PARTIAL
+    assert transfer.withdraw_state == TransferAvailabilityState.ENABLED
+    assert len(transfer.networks) == 2
+    await service.aclose()
+    await client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_spot_transfer_failure_is_unknown_without_dropping_trade_diagnostics() -> None:
     def failing_transfer_handler(request: httpx.Request) -> httpx.Response:
         if "/spot/currencies/BTC" in str(request.url):

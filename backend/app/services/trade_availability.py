@@ -431,6 +431,43 @@ class TradeAvailabilityService:
             ],
         )
 
+    async def fetch_transfer_status(
+        self,
+        symbol: str,
+        *,
+        exchange: str,
+        raw_symbol: str | None = None,
+    ) -> SpotTransferAvailability:
+        normalized = normalize_pair_spread_symbol(symbol)
+        selected_exchange = exchange.strip().lower()
+        candidates = self._matching_markets(
+            normalized,
+            exchange=selected_exchange,
+            market_type=None,
+            raw_symbol=None,
+            dex=None,
+        )
+        if not candidates:
+            raise ValueError(f"未找到 {selected_exchange} {symbol} 的资产参考市场")
+        expected_asset = normalized.removesuffix("USDT")
+        preferred = next(
+            (
+                market
+                for market in candidates
+                if market.market_type == MarketType.SPOT
+                and _spot_asset(market) == expected_asset
+            ),
+            None,
+        )
+        selected_raw = raw_symbol.strip().upper() if raw_symbol else None
+        if preferred is None and selected_raw:
+            preferred = next(
+                (market for market in candidates if market.raw_symbol.upper() == selected_raw),
+                None,
+            )
+        reference = preferred or max(candidates, key=lambda market: market.timestamp)
+        return await self._spot_transfer_info(reference)
+
     def _matching_markets(
         self,
         symbol: str,

@@ -118,6 +118,10 @@ from app.services.oil_news import (
     run_oil_news_translation_loop,
 )
 from app.services.orderbook_validator import OrderBookDepthValidator
+from app.services.opportunity_trade_availability import (
+    OpportunityTradeAvailabilityReport,
+    build_opportunity_trade_availability_report,
+)
 from app.services.opportunity_radar import (
     OpportunityRadarAlertEngine,
     build_opportunity_radar_alert_message,
@@ -686,6 +690,29 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                     template=alert_template,
                     include_rating=False,
                 )
+                availability_report = None
+                trade_availability_service = getattr(
+                    app.state,
+                    "trade_availability_service",
+                    None,
+                )
+                if trade_availability_service is not None:
+                    try:
+                        availability_report = await build_opportunity_trade_availability_report(
+                            trade_availability_service,
+                            latest_opportunity or match.opportunity,
+                        )
+                    except Exception as exc:  # Keep the original alert deliverable.
+                        logger.exception("trade availability alert enrichment failed")
+                        availability_report = OpportunityTradeAvailabilityReport(
+                            text=(
+                                "【交易与充提状态】\n"
+                                f"诊断：未知（{_exception_message(exc)}）\n"
+                                "口径：诊断失败不等于交易或充提关闭；未发送探测订单。"
+                            ),
+                            opening_restricted=True,
+                        )
+                    message = f"{message}\n\n{availability_report.text}"
                 validation_failure = _latest_signal_validation_failure(
                     match,
                     latest_opportunity,
@@ -774,6 +801,10 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                         or card_condition_failure
                         or existing_card_skipped
                         or astro_processing_failed
+                        or (
+                            availability_report is not None
+                            and availability_report.opening_restricted
+                        )
                     ),
                 )
                 message = f"{rating_header}\n\n{message}"

@@ -5,16 +5,26 @@ import pytest
 from fastapi import FastAPI
 
 from app.core.config import Settings
-from app.main import _handle_new_listing_astro_alert, _latest_signal_validation_failure, _run_alert_loop
+from app.main import (
+    _handle_new_listing_astro_alert,
+    _latest_signal_validation_failure,
+    _run_alert_loop,
+)
 from app.models.alert import AlertEvent, AlertRule
 from app.models.announcement import AnnouncementKind, ExchangeAnnouncement
 from app.models.astro import AstroAlertActionResult
 from app.models.market import MarketSnapshot, MarketType
 from app.models.opportunity import Opportunity, OpportunityType
 from app.models.orderbook import DepthValidationResult
-from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, LivePilotSettings, RiskSettings
+from app.models.settings import (
+    AlertMessageTemplateSettings,
+    AstroCardSettings,
+    LivePilotSettings,
+    RiskSettings,
+)
 from app.services.alert_engine import AlertMatch
 from app.services.alert_messages import build_alert_message
+from app.services.opportunity_trade_availability import OpportunityTradeAvailabilityReport
 from app.services.snapshot_store import SnapshotStore
 
 
@@ -548,7 +558,9 @@ async def test_live_pilot_experiment_processes_its_route_before_the_same_symbol(
 
 
 @pytest.mark.asyncio
-async def test_alert_loop_appends_astro_result_to_feishu_and_event_message() -> None:
+async def test_alert_loop_appends_astro_result_and_trade_status_to_feishu_and_event_message(
+    monkeypatch,
+) -> None:
     stop_event = asyncio.Event()
     app = FastAPI()
     rule = AlertRule(
@@ -573,13 +585,25 @@ async def test_alert_loop_appends_astro_result_to_feishu_and_event_message() -> 
     app.state.alert_engine = FakeAlertEngine(AlertMatch(rule, opp, []))
     app.state.feishu_notifier = feishu
     app.state.astro_alert_service = FakeAstroAlertService()
+    app.state.trade_availability_service = object()
+
+    async def report(*args, **kwargs):
+        return OpportunityTradeAvailabilityReport(
+            text="【交易与充提状态】\n开仓路径：不可用（买入腿开多 公开受限）",
+            opening_restricted=True,
+        )
+
+    monkeypatch.setattr("app.main.build_opportunity_trade_availability_report", report)
 
     await asyncio.wait_for(_run_alert_loop(app, 60, stop_event), timeout=2)
 
     assert "Astro: 已创建暂停卡片 BTC FF binance->okx，禁开=true" in event_repo.events[0].message
+    assert "【交易与充提状态】" in event_repo.events[0].message
+    assert "开仓路径：不可用" in event_repo.events[0].message
     assert event_repo.events[0].message.startswith("【需评估】BTCUSDT FF binance→okx")
     assert feishu.sent_texts[0] is not None
     assert "Astro: 已创建暂停卡片 BTC FF binance->okx，禁开=true" in feishu.sent_texts[0]
+    assert "【交易与充提状态】" in feishu.sent_texts[0]
 
 
 @pytest.mark.asyncio
