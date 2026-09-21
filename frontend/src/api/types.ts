@@ -223,6 +223,27 @@ export interface TradeDiagnosticEvidence {
   raw_error: string | null;
 }
 
+export type TransferAvailabilityState = "enabled" | "partial" | "disabled" | "unknown";
+
+export interface SpotTransferNetworkStatus {
+  network: string;
+  deposit_enabled: boolean | null;
+  withdraw_enabled: boolean | null;
+}
+
+export interface SpotTransferAvailability {
+  asset: string;
+  deposit_state: TransferAvailabilityState;
+  withdraw_state: TransferAvailabilityState;
+  all_enabled: boolean | null;
+  publicly_queryable: boolean;
+  source: string;
+  observed_at: string | null;
+  networks: SpotTransferNetworkStatus[];
+  note: string;
+  error: string | null;
+}
+
 export interface MarketTradeAvailability {
   exchange: string;
   market_type: MarketType;
@@ -255,6 +276,7 @@ export interface MarketTradeAvailability {
   fee_note: string;
   market_multiplier: number;
   contract_size_multiplier: number;
+  spot_transfer: SpotTransferAvailability | null;
   buy_open: TradeActionStatus;
   sell_open: TradeActionStatus;
   buy_reduce_only: TradeActionStatus;

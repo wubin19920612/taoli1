@@ -844,6 +844,43 @@ body {
   border-radius: 0;
 }
 
+.instrument-trade-restriction-list,
+.instrument-transfer-cell,
+.instrument-transfer-networks {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.instrument-trade-restriction-list > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.instrument-trade-restriction-list > div > span {
+  min-width: 0;
+  line-height: 1.45;
+}
+
+.instrument-trade-restriction-list .ant-btn {
+  flex: 0 0 auto;
+}
+
+.instrument-transfer-cell > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.instrument-transfer-cell > span,
+.instrument-transfer-networks > span {
+  color: #66736f;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .instrument-hl-action,
 .instrument-hl-reduce,
 .instrument-trade-evidence,
@@ -1060,6 +1097,15 @@ body {
   .instrument-hl-status-head {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .instrument-trade-restriction-list > div {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .instrument-trade-restriction-list .ant-btn {
+    width: 100%;
   }
 
   .instrument-spread-filters {

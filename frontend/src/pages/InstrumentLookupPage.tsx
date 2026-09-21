@@ -58,6 +58,7 @@ import type {
   MarketTradeAvailability,
   MarketSnapshot,
   MarketType,
+  SpotTransferAvailability,
   SymbolSpreadPoint,
   SymbolSpreadQueryResult,
   TradeActionStatus,
@@ -402,6 +403,46 @@ function TradeActionCell({
   );
 }
 
+function transferStateTag(label: string, state: SpotTransferAvailability["deposit_state"]) {
+  const config = {
+    enabled: { color: "green", text: "全开" },
+    partial: { color: "gold", text: "部分开放" },
+    disabled: { color: "red", text: "已关闭" },
+    unknown: { color: "default", text: "未知" }
+  }[state];
+  return <Tag color={config.color}>{label} {config.text}</Tag>;
+}
+
+function SpotTransferCell({ transfer }: { transfer: SpotTransferAvailability | null }) {
+  if (!transfer) return null;
+  const enabledLabel = (value: boolean | null) => value === null ? "未知" : value ? "开放" : "关闭";
+  const networkDetails = transfer.networks.length ? (
+    <div className="instrument-transfer-networks">
+      {transfer.networks.map((network, index) => (
+        <span key={`${network.network}:${index}`}>
+          {network.network}: 充币 {enabledLabel(network.deposit_enabled)} · 提币 {enabledLabel(network.withdraw_enabled)}
+        </span>
+      ))}
+    </div>
+  ) : transfer.note;
+  return (
+    <div className="instrument-transfer-cell">
+      <strong>{transfer.asset}</strong>
+      <div>
+        {transferStateTag("充币", transfer.deposit_state)}
+        {transferStateTag("提币", transfer.withdraw_state)}
+      </div>
+      <Tooltip title={networkDetails}>
+        <span>{transfer.networks.length ? `${transfer.networks.length} 条链` : transfer.publicly_queryable ? "未取得数据" : "公开接口需鉴权或未提供"}</span>
+      </Tooltip>
+      <Tooltip title={transfer.error || transfer.note || transfer.source}>
+        <span>{transfer.source}</span>
+      </Tooltip>
+      <span>检测 {ageText(transfer.observed_at)}</span>
+    </div>
+  );
+}
+
 function resultPriceRange(result: InstrumentLookupResult | null): { min: number; max: number } | null {
   if (!result) return null;
   const values = result.exchanges
@@ -732,6 +773,12 @@ export function InstrumentLookupPage() {
   );
   const blockedTradeMarkets = tradeStatus?.markets.filter(
     (market) => market.buy_open.state === "blocked" || market.sell_open.state === "blocked"
+  ) ?? [];
+  const spotTransferIssueMarkets = tradeStatus?.markets.filter(
+    (market) => market.market_type === "spot" && market.spot_transfer?.all_enabled === false
+  ) ?? [];
+  const spotTransferUnknownMarkets = tradeStatus?.markets.filter(
+    (market) => market.market_type === "spot" && market.spot_transfer?.all_enabled == null
   ) ?? [];
 
   const tradeMarketKey = (market: MarketTradeAvailability) => (
@@ -1104,6 +1151,14 @@ export function InstrumentLookupPage() {
         : <TradeActionCell action={market.sell_reduce_only} label="Sell / 平多" />
     },
     {
+      title: "现货充提",
+      key: "spot_transfer",
+      width: 255,
+      render: (_, market) => market.market_type === "spot"
+        ? <SpotTransferCell transfer={market.spot_transfer} />
+        : null
+    },
+    {
       title: "实时盘口",
       key: "book",
       width: 190,
@@ -1170,10 +1225,11 @@ export function InstrumentLookupPage() {
               size="small"
               type={watch ? "default" : "primary"}
               icon={watch ? <CloseOutlined /> : <BellOutlined />}
+              aria-label={`市场 ${exchangeLabels[market.exchange] ?? market.exchange} ${market.market_type} ${market.dex ? `${market.dex} ` : ""}${market.raw_symbol} ${watch ? "取消恢复通知" : "订阅恢复通知"}`}
               loading={tradeWatchSaving === tradeMarketKey(market)}
               onClick={() => void toggleTradeWatch(market)}
             >
-              {watch ? "停止" : "监控"}
+              {watch ? "取消" : "订阅"}
             </Button>
           </Tooltip>
         );
@@ -1415,6 +1471,8 @@ export function InstrumentLookupPage() {
               <Tag color="blue">5 家核心覆盖</Tag>
               <Tag color="gold">Aster / Lighter 已评估</Tag>
               {blockedTradeMarkets.length ? <Tag color="red">{blockedTradeMarkets.length} 个市场有限制</Tag> : <Tag color="green">未发现公开普通交易限制</Tag>}
+              {spotTransferIssueMarkets.length ? <Tag color="red">{spotTransferIssueMarkets.length} 个现货充提非全开</Tag> : null}
+              {spotTransferUnknownMarkets.length ? <Tag>{spotTransferUnknownMarkets.length} 个现货充提未知</Tag> : null}
             </Space>
           </div>
           {blockedTradeMarkets.length ? (
@@ -1423,9 +1481,29 @@ export function InstrumentLookupPage() {
               type="error"
               showIcon
               message={`${blockedTradeMarkets.length} 个原始市场存在公开普通交易限制`}
-              description={blockedTradeMarkets.map((market) => (
-                `${exchangeLabels[market.exchange] ?? market.exchange} / ${market.market_type} / ${market.dex ? `${market.dex} / ` : ""}${market.raw_symbol}: ${market.public_restrictions.join("；") || market.public_status_code}`
-              )).join(" | ")}
+              description={(
+                <div className="instrument-trade-restriction-list">
+                  {blockedTradeMarkets.map((market) => {
+                    const watch = tradeWatchFor(market);
+                    const marketLabel = `${exchangeLabels[market.exchange] ?? market.exchange} / ${market.market_type} / ${market.dex ? `${market.dex} / ` : ""}${market.raw_symbol}`;
+                    return (
+                      <div key={tradeMarketKey(market)}>
+                        <span>{marketLabel}: {market.public_restrictions.join("；") || market.public_status_code}</span>
+                        <Button
+                          size="small"
+                          type={watch ? "default" : "primary"}
+                          icon={watch ? <CloseOutlined /> : <BellOutlined />}
+                          aria-label={`告警 ${marketLabel} ${watch ? "取消恢复通知" : "订阅恢复通知"}`}
+                          loading={tradeWatchSaving === tradeMarketKey(market)}
+                          onClick={() => void toggleTradeWatch(market)}
+                        >
+                          {watch ? "取消恢复通知" : "订阅恢复通知"}
+                        </Button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             />
           ) : null}
           {Object.keys(tradeStatus.errors).length ? (
@@ -1444,7 +1522,7 @@ export function InstrumentLookupPage() {
             pagination={false}
             size="small"
             sticky={{ offsetHeader: 55 }}
-            scroll={{ x: 2260 }}
+            scroll={{ x: 2515 }}
           />
           <div className="instrument-hl-limitations">
             {tradeStatus.limitations.map((item) => <span key={item}>{item}</span>)}

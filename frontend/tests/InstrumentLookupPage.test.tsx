@@ -237,6 +237,7 @@ const tradeAvailabilityStatus = {
       taker_fee_pct: null,
       fees_included: false,
       fee_note: "手续费未计入；实际费率取决于账户等级和订单类型",
+      spot_transfer: null,
       buy_open: {
         state: "blocked",
         reason_code: "OPEN_INTEREST_CAP",
@@ -398,7 +399,11 @@ describe("InstrumentLookupPage", () => {
     expect(screen.getAllByText("已阻止")).toHaveLength(2);
     expect(screen.getAllByText("有条件")).toHaveLength(2);
 
-    await userEvent.click(screen.getByRole("button", { name: /监控/ }));
+    const alertWatchButton = screen.getByRole("button", {
+      name: "告警 Hyperliquid / future / main / ZETA 订阅恢复通知"
+    });
+    expect(alertWatchButton).not.toBeNull();
+    await userEvent.click(alertWatchButton);
     await waitFor(() => {
       const request = (fetch as ReturnType<typeof vi.fn>).mock.calls.find(
         ([input, init]) => String(input).includes("/trade-status/watches") && init?.method === "POST"
@@ -413,7 +418,9 @@ describe("InstrumentLookupPage", () => {
         monitor_sell: true
       });
     });
-    expect(screen.getByRole("button", { name: /停止/ })).not.toBeNull();
+    expect(screen.getByRole("button", {
+      name: "告警 Hyperliquid / future / main / ZETA 取消恢复通知"
+    })).not.toBeNull();
   });
 
   it("hides Reduce Only actions for spot markets", async () => {
@@ -428,6 +435,21 @@ describe("InstrumentLookupPage", () => {
       public_status_code: "TRADING",
       public_status_source: "Binance spot exchangeInfo",
       public_restrictions: [],
+      spot_transfer: {
+        asset: "BTC",
+        deposit_state: "partial",
+        withdraw_state: "enabled",
+        all_enabled: false,
+        publicly_queryable: true,
+        source: "Binance public asset service",
+        observed_at: "2026-09-21T04:54:00Z",
+        networks: [
+          { network: "BTC", deposit_enabled: true, withdraw_enabled: true },
+          { network: "BSC", deposit_enabled: false, withdraw_enabled: true }
+        ],
+        note: "按公开返回的逐链开关汇总",
+        error: null
+      },
       buy_open: {
         state: "available",
         reason_code: "PUBLIC_MARKET_AVAILABLE",
@@ -480,6 +502,10 @@ describe("InstrumentLookupPage", () => {
     expect(screen.queryByText("Buy / 平空")).toBeNull();
     expect(screen.queryByText("Sell / 平多")).toBeNull();
     expect(screen.queryByText("Sell / Short")).toBeNull();
+    expect(screen.getByText("充币 部分开放")).not.toBeNull();
+    expect(screen.getByText("提币 全开")).not.toBeNull();
+    expect(screen.getByText("2 条链")).not.toBeNull();
+    expect(screen.getByText("1 个现货充提非全开")).not.toBeNull();
   });
 
   it("adds the current symbol to the floating watch", async () => {

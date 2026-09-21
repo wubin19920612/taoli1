@@ -31,6 +31,32 @@ class TradeEvidenceState(StrEnum):
     ERROR = "error"
 
 
+class TransferAvailabilityState(StrEnum):
+    ENABLED = "enabled"
+    PARTIAL = "partial"
+    DISABLED = "disabled"
+    UNKNOWN = "unknown"
+
+
+class SpotTransferNetworkStatus(BaseModel):
+    network: str
+    deposit_enabled: bool | None = None
+    withdraw_enabled: bool | None = None
+
+
+class SpotTransferAvailability(BaseModel):
+    asset: str
+    deposit_state: TransferAvailabilityState
+    withdraw_state: TransferAvailabilityState
+    all_enabled: bool | None = None
+    publicly_queryable: bool = True
+    source: str
+    observed_at: datetime | None = None
+    networks: list[SpotTransferNetworkStatus] = Field(default_factory=list)
+    note: str = ""
+    error: str | None = None
+
+
 class TradeActionStatus(BaseModel):
     state: TradeAvailabilityState
     reason_code: str
@@ -81,6 +107,7 @@ class MarketTradeAvailability(BaseModel):
     fee_note: str = "手续费未计入状态与盘口价格；实际费率取决于账户等级和订单类型"
     market_multiplier: float = Field(default=1.0, gt=0)
     contract_size_multiplier: float = Field(default=1.0, gt=0)
+    spot_transfer: SpotTransferAvailability | None = None
     buy_open: TradeActionStatus
     sell_open: TradeActionStatus
     buy_reduce_only: TradeActionStatus
@@ -98,7 +125,7 @@ class TradeAvailabilityCoverage(BaseModel):
 class TradeAvailabilityResult(BaseModel):
     query: str
     observed_at: datetime
-    source: str = "各交易所公开市场元数据与实时订单簿；未发送订单"
+    source: str = "各交易所公开市场元数据、实时订单簿与可匿名取得的现货充提状态；未发送订单"
     markets: list[MarketTradeAvailability] = Field(default_factory=list)
     coverage: list[TradeAvailabilityCoverage] = Field(default_factory=list)
     errors: dict[str, str] = Field(default_factory=dict)

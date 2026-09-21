@@ -24,6 +24,7 @@ from app.models.trade_availability import (
     TradeAvailabilityResult,
     TradeAvailabilityState,
     TradeAvailabilityWatch,
+    TransferAvailabilityState,
 )
 from app.services.snapshot_store import SnapshotStore
 from app.services.trade_availability import (
@@ -80,6 +81,17 @@ def _snapshot(exchange: str, market_type: MarketType, raw_symbol: str) -> Market
 
 def _metadata_handler(request: httpx.Request) -> httpx.Response:
     url = str(request.url)
+    if "www.binance.com/bapi/capital" in url:
+        return httpx.Response(200, json={
+            "code": "000000",
+            "data": [{
+                "coin": "BTC",
+                "networkList": [
+                    {"network": "BTC", "depositEnable": True, "withdrawEnable": True},
+                    {"network": "BSC", "depositEnable": False, "withdrawEnable": True},
+                ],
+            }],
+        })
     if "binance.vision" in url:
         return httpx.Response(200, json={"symbols": [{
             "symbol": "BTCUSDT", "status": "TRADING", "isSpotTradingAllowed": True,
@@ -94,8 +106,36 @@ def _metadata_handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={
             "result": {"list": [{"symbol": "BTCUSDT", "status": "Trading"}]},
         })
+    if "gateio.ws/api/v4/spot/currencies/" in url:
+        return httpx.Response(200, json={
+            "currency": "BTC",
+            "chains": [{
+                "name": "BTC",
+                "deposit_disabled": False,
+                "withdraw_disabled": False,
+            }],
+        })
     if "gateio.ws/api/v4/spot" in url:
         return httpx.Response(200, json={"id": "BTC_USDT", "trade_status": "buyable", "fee": "0.2"})
+    if "bitget.com/api/v2/spot/public/coins" in url:
+        return httpx.Response(200, json={
+            "code": "00000",
+            "data": [{
+                "coin": "BTC",
+                "chains": [{
+                    "chain": "BTC",
+                    "rechargeable": "false",
+                    "withdrawable": "true",
+                }],
+            }],
+        })
+    if "bitget.com/api/v2/spot/public/symbols" in url:
+        return httpx.Response(200, json={"data": [{
+            "symbol": "BTCUSDT",
+            "status": "online",
+            "makerFeeRate": "0.001",
+            "takerFeeRate": "0.001",
+        }]})
     if "bitget.com/api/v2/mix" in url:
         return httpx.Response(200, json={"data": [{
             "symbol": "BTCUSDT",
@@ -148,12 +188,20 @@ async def test_trade_status_covers_core_exchanges_and_evaluated_venues() -> None
     by_key = {(market.exchange, market.market_type): market for market in result.markets}
     assert by_key[("binance", MarketType.SPOT)].buy_open.state == TradeAvailabilityState.AVAILABLE
     assert by_key[("binance", MarketType.SPOT)].buy_reduce_only.state == TradeAvailabilityState.NOT_APPLICABLE
+    assert by_key[("binance", MarketType.SPOT)].spot_transfer is not None
+    assert (
+        by_key[("binance", MarketType.SPOT)].spot_transfer.deposit_state
+        == TransferAvailabilityState.PARTIAL
+    )
+    assert by_key[("binance", MarketType.SPOT)].spot_transfer.withdraw_state == TransferAvailabilityState.ENABLED
     assert by_key[("okx", MarketType.FUTURE)].contract_size_multiplier == pytest.approx(0.01)
     assert by_key[("okx", MarketType.FUTURE)].bid_depth_1pct_usdt == pytest.approx(
         (100 * 10 + 99.5 * 5) * 0.01
     )
     assert by_key[("gate", MarketType.SPOT)].buy_open.state == TradeAvailabilityState.AVAILABLE
     assert by_key[("gate", MarketType.SPOT)].sell_open.state == TradeAvailabilityState.BLOCKED
+    assert by_key[("gate", MarketType.SPOT)].spot_transfer is not None
+    assert by_key[("gate", MarketType.SPOT)].spot_transfer.all_enabled is True
     assert by_key[("bitget", MarketType.FUTURE)].taker_fee_pct == pytest.approx(0.06)
     assert by_key[("aster", MarketType.SPOT)].coverage_tier == "evaluated"
     lighter = by_key[("lighter", MarketType.FUTURE)]
@@ -164,6 +212,70 @@ async def test_trade_status_covers_core_exchanges_and_evaluated_venues() -> None
     assert {item.scope.value for item in result.markets[0].diagnostics} == {
         "public_market", "account", "order_error",
     }
+    await service.aclose()
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_spot_transfer_status_distinguishes_public_data_and_auth_only_sources() -> None:
+    snapshots = [
+        _snapshot("okx", MarketType.SPOT, "BTC-USDT"),
+        _snapshot("bybit", MarketType.SPOT, "BTCUSDT"),
+        _snapshot("bitget", MarketType.SPOT, "BTCUSDT"),
+        _snapshot("aster", MarketType.SPOT, "BTCUSDT"),
+    ]
+    store = SnapshotStore()
+    store.set_all_markets(snapshots)
+    adapters = [FakeAdapter(snapshot.exchange) for snapshot in snapshots]
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_metadata_handler))
+    service = TradeAvailabilityService(store, adapters, AsyncMock(), client)
+
+    result = await service.fetch_status("BTCUSDT")
+
+    by_exchange = {market.exchange: market for market in result.markets}
+    bitget = by_exchange["bitget"].spot_transfer
+    assert bitget is not None
+    assert bitget.asset == "BTC"
+    assert bitget.deposit_state == TransferAvailabilityState.DISABLED
+    assert bitget.withdraw_state == TransferAvailabilityState.ENABLED
+    assert bitget.all_enabled is False
+    assert bitget.networks[0].network == "BTC"
+    for exchange in ("okx", "bybit", "aster"):
+        transfer = by_exchange[exchange].spot_transfer
+        assert transfer is not None
+        assert transfer.publicly_queryable is False
+        assert transfer.deposit_state == TransferAvailabilityState.UNKNOWN
+        assert transfer.withdraw_state == TransferAvailabilityState.UNKNOWN
+        assert transfer.all_enabled is None
+        assert transfer.observed_at is None
+    await service.aclose()
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_spot_transfer_failure_is_unknown_without_dropping_trade_diagnostics() -> None:
+    def failing_transfer_handler(request: httpx.Request) -> httpx.Response:
+        if "/spot/currencies/BTC" in str(request.url):
+            return httpx.Response(503, json={"message": "maintenance"})
+        return _metadata_handler(request)
+
+    snapshot = _snapshot("gate", MarketType.SPOT, "BTC_USDT")
+    store = SnapshotStore()
+    store.set_all_markets([snapshot])
+    client = httpx.AsyncClient(transport=httpx.MockTransport(failing_transfer_handler))
+    service = TradeAvailabilityService(store, [FakeAdapter("gate")], AsyncMock(), client)
+
+    result = await service.fetch_status("BTCUSDT")
+
+    assert len(result.markets) == 1
+    market = result.markets[0]
+    assert market.buy_open.state == TradeAvailabilityState.AVAILABLE
+    assert market.spot_transfer is not None
+    assert market.spot_transfer.publicly_queryable is True
+    assert market.spot_transfer.deposit_state == TransferAvailabilityState.UNKNOWN
+    assert market.spot_transfer.all_enabled is None
+    assert "现货充提状态请求失败" in (market.spot_transfer.error or "")
+    assert "gate:spot:BTC_USDT" in result.errors
     await service.aclose()
     await client.aclose()
 

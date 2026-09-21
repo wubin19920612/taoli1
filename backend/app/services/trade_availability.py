@@ -17,6 +17,8 @@ from app.models.orderbook import OrderBookSnapshot
 from app.models.pair_spread import normalize_pair_spread_symbol
 from app.models.trade_availability import (
     MarketTradeAvailability,
+    SpotTransferAvailability,
+    SpotTransferNetworkStatus,
     TradeActionStatus,
     TradeAvailabilityCoverage,
     TradeAvailabilityResult,
@@ -26,6 +28,7 @@ from app.models.trade_availability import (
     TradeDiagnosticEvidence,
     TradeEvidenceScope,
     TradeEvidenceState,
+    TransferAvailabilityState,
 )
 from app.services.hyperliquid_trade_status import HyperliquidTradeStatusService
 from app.services.snapshot_store import SnapshotStore
@@ -35,6 +38,7 @@ logger = logging.getLogger(__name__)
 AlertSender = Callable[[str], Awaitable[None]]
 CORE_EXCHANGES = ("binance", "okx", "bybit", "gate", "bitget")
 EXCHANGE_ORDER = (*CORE_EXCHANGES, "hyperliquid", "aster", "lighter")
+PUBLIC_TRANSFER_EXCHANGES = {"binance", "gate", "bitget"}
 
 
 @dataclass
@@ -66,13 +70,13 @@ def _coverage_tier(exchange: str) -> str:
 
 def _coverage() -> list[TradeAvailabilityCoverage]:
     notes = {
-        "binance": "exchangeInfo 交易状态 + 实时深度",
-        "okx": "public instruments state + 实时深度",
-        "bybit": "instruments-info 状态 + 实时深度",
-        "gate": "现货方向状态/永续合约状态 + 实时深度",
-        "bitget": "symbols/contracts 状态 + 实时深度",
+        "binance": "exchangeInfo + 实时深度 + 匿名公开逐链充提状态",
+        "okx": "public instruments + 实时深度；充提状态官方接口需 API Key",
+        "bybit": "instruments-info + 实时深度；充提状态官方接口需 API Key",
+        "gate": "现货方向/永续状态 + 实时深度 + 匿名公开逐链充提状态",
+        "bitget": "symbols/contracts + 实时深度 + 匿名公开逐链充提状态",
         "hyperliquid": "DEX 原始市场、OI cap 与 l2Book",
-        "aster": "已验证 Binance 兼容 exchangeInfo 与深度接口",
+        "aster": "已验证 Binance 兼容交易与深度接口；未验证匿名公开充提接口",
         "lighter": "已验证 active/frozen/force_reduce_only 与 WebSocket 深度",
     }
     return [
@@ -237,6 +241,77 @@ def _book_metrics(
     return best_bid, best_ask, bid_depth, ask_depth
 
 
+def _optional_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized == "true":
+            return True
+        if normalized == "false":
+            return False
+    return None
+
+
+def _transfer_state(
+    networks: list[SpotTransferNetworkStatus],
+    field_name: str,
+) -> TransferAvailabilityState:
+    values = [getattr(network, field_name) for network in networks]
+    if not values or any(value is None for value in values):
+        return TransferAvailabilityState.UNKNOWN
+    if all(values):
+        return TransferAvailabilityState.ENABLED
+    if any(values):
+        return TransferAvailabilityState.PARTIAL
+    return TransferAvailabilityState.DISABLED
+
+
+def _spot_asset(market: MarketSnapshot) -> str:
+    raw = market.raw_symbol.strip().upper()
+    for separator in ("-", "_"):
+        parts = raw.split(separator)
+        if len(parts) > 1 and parts[-1] == market.quote.upper():
+            return separator.join(parts[:-1])
+    quote_asset = market.quote.upper()
+    if raw.endswith(quote_asset) and len(raw) > len(quote_asset):
+        return raw[: -len(quote_asset)]
+    return market.base.upper()
+
+
+def _spot_transfer_status(
+    *,
+    asset: str,
+    source: str,
+    networks: list[SpotTransferNetworkStatus],
+    publicly_queryable: bool = True,
+    note: str = "",
+    error: str | None = None,
+    observed_at: datetime | None = None,
+) -> SpotTransferAvailability:
+    deposit_state = _transfer_state(networks, "deposit_enabled")
+    withdraw_state = _transfer_state(networks, "withdraw_enabled")
+    states = {deposit_state, withdraw_state}
+    if states == {TransferAvailabilityState.ENABLED}:
+        all_enabled = True
+    elif states & {TransferAvailabilityState.PARTIAL, TransferAvailabilityState.DISABLED}:
+        all_enabled = False
+    else:
+        all_enabled = None
+    return SpotTransferAvailability(
+        asset=asset,
+        deposit_state=deposit_state,
+        withdraw_state=withdraw_state,
+        all_enabled=all_enabled,
+        publicly_queryable=publicly_queryable,
+        source=source,
+        observed_at=observed_at,
+        networks=networks,
+        note=note,
+        error=error,
+    )
+
+
 class TradeAvailabilityService:
     def __init__(
         self,
@@ -268,12 +343,18 @@ class TradeAvailabilityService:
             if client is not None and not client.is_closed:
                 await client.aclose()
 
-    async def _get_json(self, url: str, *, cache_key: str | None = None) -> Any:
+    async def _get_json(
+        self,
+        url: str,
+        *,
+        cache_key: str | None = None,
+        cache_seconds: float = 20,
+    ) -> Any:
         now = datetime.now(UTC)
         key = cache_key or url
         async with self._cache_lock:
             cached = self._cache.get(key)
-            if cached and now - cached[0] < timedelta(seconds=20):
+            if cached and now - cached[0] < timedelta(seconds=cache_seconds):
                 return cached[1]
         last_error: Exception | None = None
         for attempt in range(2):
@@ -346,6 +427,7 @@ class TradeAvailabilityService:
                 "公开状态不等于账户可下单：余额、仓位、保证金、地区、权限和风控需要私有账户或真实订单错误才能确认。",
                 "系统不发送探测订单；Reduce Only 仅表示公开市场原则上支持，仍必须有方向和数量匹配的真实持仓。",
                 "1% 深度为本次订单簿快照且手续费未计入，不构成成交保证。",
+                "现货充提按公开逐链开关汇总；未知不等于关闭，账户、地区、地址与维护提示仍可能影响实际充提。",
             ],
         )
 
@@ -405,11 +487,14 @@ class TradeAvailabilityService:
     ) -> tuple[MarketTradeAvailability, str | None]:
         if market.exchange.lower() == "hyperliquid":
             return await self._diagnose_hyperliquid(market), None
-        info_result, book_result = await asyncio.gather(
-            self._public_market_info(market),
-            self._fetch_book(market),
+        requests = [self._public_market_info(market), self._fetch_book(market)]
+        if market.market_type == MarketType.SPOT:
+            requests.append(self._spot_transfer_info(market))
+        results = await asyncio.gather(
+            *requests,
             return_exceptions=True,
         )
+        info_result, book_result = results[:2]
         metadata_error = None
         if isinstance(info_result, BaseException):
             metadata_error = f"公开状态请求失败：{info_result.__class__.__name__}: {info_result}"
@@ -433,6 +518,22 @@ class TradeAvailabilityService:
             if book is None:
                 book_error = "实时订单簿接口未返回该原始市场"
 
+        transfer_error = None
+        spot_transfer: SpotTransferAvailability | None = None
+        if market.market_type == MarketType.SPOT:
+            transfer_result = results[2]
+            if isinstance(transfer_result, BaseException):
+                transfer_error = (
+                    "现货充提状态请求失败："
+                    f"{transfer_result.__class__.__name__}: {transfer_result}"
+                )
+                spot_transfer = self._unknown_spot_transfer(
+                    market,
+                    error=transfer_error,
+                )
+            else:
+                spot_transfer = transfer_result
+
         best_bid, best_ask, bid_depth, ask_depth = _book_metrics(
             book,
             contract_size_multiplier=info.contract_size_multiplier,
@@ -443,7 +544,9 @@ class TradeAvailabilityService:
         if book_error:
             restrictions.append(f"{book_error}；买一卖一回退为聚合行情快照")
         now = datetime.now(UTC)
-        combined_error = "；".join(item for item in (metadata_error, book_error) if item) or None
+        combined_error = "；".join(
+            item for item in (metadata_error, book_error, transfer_error) if item
+        ) or None
         result = MarketTradeAvailability(
             exchange=market.exchange.lower(),
             market_type=market.market_type,
@@ -478,6 +581,7 @@ class TradeAvailabilityService:
             taker_fee_pct=info.taker_fee_pct,
             market_multiplier=market.symbol_alias_price_multiplier,
             contract_size_multiplier=info.contract_size_multiplier,
+            spot_transfer=spot_transfer,
             buy_open=_open_action(
                 side="buy",
                 info=info,
@@ -600,6 +704,161 @@ class TradeAvailabilityService:
             sell_open=action(source.sell_open),
             buy_reduce_only=action(source.buy_reduce_only),
             sell_reduce_only=action(source.sell_reduce_only),
+        )
+
+    def _unknown_spot_transfer(
+        self,
+        market: MarketSnapshot,
+        *,
+        error: str | None = None,
+        note: str | None = None,
+    ) -> SpotTransferAvailability:
+        exchange = market.exchange.lower()
+        sources = {
+            "binance": "Binance public asset service",
+            "okx": "OKX asset currencies（需 API Key）",
+            "bybit": "Bybit coin info（需 API Key）",
+            "gate": "Gate spot currencies",
+            "bitget": "Bitget spot public coins",
+            "aster": "Aster 公开接口",
+            "lighter": "Lighter 公开接口",
+        }
+        unsupported_notes = {
+            "okx": "官方充提币种接口需要 API Key；当前未接入账户凭据，不能公开核验",
+            "bybit": "官方充提币种接口需要 API Key；当前未接入账户凭据，不能公开核验",
+            "aster": "尚未找到已验证、可匿名访问的官方逐币充提状态接口",
+            "lighter": "尚未接入可按现货币种核验的公开充提状态接口",
+        }
+        return _spot_transfer_status(
+            asset=_spot_asset(market),
+            source=sources.get(exchange, f"{market.exchange} 公开接口"),
+            networks=[],
+            publicly_queryable=exchange in PUBLIC_TRANSFER_EXCHANGES,
+            note=note or unsupported_notes.get(exchange, "公开接口未返回可核验的逐链充提状态"),
+            error=error,
+        )
+
+    async def _spot_transfer_info(self, market: MarketSnapshot) -> SpotTransferAvailability:
+        exchange = market.exchange.lower()
+        handler = getattr(self, f"_transfer_{exchange}", None)
+        if handler is None:
+            return self._unknown_spot_transfer(market)
+        return await handler(market)
+
+    async def _transfer_binance(self, market: MarketSnapshot) -> SpotTransferAvailability:
+        asset = _spot_asset(market)
+        payload = await self._get_json(
+            "https://www.binance.com/bapi/capital/v1/public/capital/getNetworkCoinAll",
+            cache_key="binance:spot:transfer-assets",
+            cache_seconds=60,
+        )
+        if not isinstance(payload, dict) or str(payload.get("code")) != "000000":
+            raise RuntimeError("Binance public asset service 返回异常")
+        row = self._find(payload.get("data", []), "coin", asset)
+        if row is None:
+            return self._unknown_spot_transfer(
+                market,
+                note="Binance 公开币种列表未返回该现货资产",
+            )
+        networks = [
+            SpotTransferNetworkStatus(
+                network=str(item.get("networkDisplay") or item.get("network") or "UNKNOWN"),
+                deposit_enabled=_optional_bool(item.get("depositEnable")),
+                withdraw_enabled=_optional_bool(item.get("withdrawEnable")),
+            )
+            for item in row.get("networkList", [])
+            if isinstance(item, dict)
+        ]
+        if not networks:
+            networks = [
+                SpotTransferNetworkStatus(
+                    network="全部网络",
+                    deposit_enabled=_optional_bool(row.get("depositAllEnable")),
+                    withdraw_enabled=_optional_bool(row.get("withdrawAllEnable")),
+                )
+            ]
+        return _spot_transfer_status(
+            asset=asset,
+            source="Binance public asset service",
+            networks=networks,
+            note="按公开返回的逐链开关汇总；账户、地区和地址限制未核验",
+            observed_at=datetime.now(UTC),
+        )
+
+    async def _transfer_gate(self, market: MarketSnapshot) -> SpotTransferAvailability:
+        asset = _spot_asset(market)
+        payload = await self._get_json(
+            f"https://api.gateio.ws/api/v4/spot/currencies/{quote(asset)}",
+            cache_key=f"gate:spot:transfer:{asset}",
+            cache_seconds=60,
+        )
+        if not isinstance(payload, dict):
+            raise TypeError("Gate spot currencies 返回异常")
+        networks = [
+            SpotTransferNetworkStatus(
+                network=str(item.get("name") or "UNKNOWN"),
+                deposit_enabled=(
+                    None
+                    if _optional_bool(item.get("deposit_disabled")) is None
+                    else not bool(_optional_bool(item.get("deposit_disabled")))
+                ),
+                withdraw_enabled=(
+                    None
+                    if _optional_bool(item.get("withdraw_disabled")) is None
+                    else not bool(_optional_bool(item.get("withdraw_disabled")))
+                ),
+            )
+            for item in payload.get("chains", [])
+            if isinstance(item, dict)
+        ]
+        if not networks:
+            deposit_disabled = _optional_bool(payload.get("deposit_disabled"))
+            withdraw_disabled = _optional_bool(payload.get("withdraw_disabled"))
+            networks = [
+                SpotTransferNetworkStatus(
+                    network=str(payload.get("chain") or "默认网络"),
+                    deposit_enabled=None if deposit_disabled is None else not deposit_disabled,
+                    withdraw_enabled=None if withdraw_disabled is None else not withdraw_disabled,
+                )
+            ]
+        return _spot_transfer_status(
+            asset=asset,
+            source="Gate spot currencies",
+            networks=networks,
+            note="按公开返回的逐链开关汇总；延迟提现仍按开放处理并需结合平台提示",
+            observed_at=datetime.now(UTC),
+        )
+
+    async def _transfer_bitget(self, market: MarketSnapshot) -> SpotTransferAvailability:
+        asset = _spot_asset(market)
+        payload = await self._get_json(
+            f"https://api.bitget.com/api/v2/spot/public/coins?coin={quote(asset)}",
+            cache_key=f"bitget:spot:transfer:{asset}",
+            cache_seconds=60,
+        )
+        if not isinstance(payload, dict) or str(payload.get("code")) != "00000":
+            raise RuntimeError("Bitget spot public coins 返回异常")
+        row = self._find(payload.get("data", []), "coin", asset)
+        if row is None:
+            return self._unknown_spot_transfer(
+                market,
+                note="Bitget 公开币种列表未返回该现货资产",
+            )
+        networks = [
+            SpotTransferNetworkStatus(
+                network=str(item.get("chain") or "UNKNOWN"),
+                deposit_enabled=_optional_bool(item.get("rechargeable")),
+                withdraw_enabled=_optional_bool(item.get("withdrawable")),
+            )
+            for item in row.get("chains", [])
+            if isinstance(item, dict)
+        ]
+        return _spot_transfer_status(
+            asset=asset,
+            source="Bitget spot public coins",
+            networks=networks,
+            note="按公开返回的逐链 rechargeable / withdrawable 开关汇总",
+            observed_at=datetime.now(UTC),
         )
 
     async def _public_market_info(self, market: MarketSnapshot) -> _PublicMarketInfo:
