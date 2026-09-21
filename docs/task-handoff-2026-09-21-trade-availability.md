@@ -27,6 +27,8 @@
 - 现货充提与告警订阅提交说明：`feat: expose spot transfer availability`
 - 飞书机会告警诊断提交：`6ab3eb77fce5c1b4b06b9102d2330b0b7ab81095`
 - 飞书机会告警诊断提交说明：`feat: include trade availability in alerts`
+- 代理错误提示修复提交：`74783b89f5795d6bf1bb562b6a1b747aabe39fa8`
+- 代理错误提示修复说明：`fix: show readable proxy errors`
 
 ## 已完成功能
 
@@ -176,15 +178,22 @@ ZETA 线上查询返回 11 个市场且 `errors={}`，唯一公开受限市场�
 - 前端全量测试保留一个与本模块无关的旧文案失败，以及既有 Ant Design 弃用和 `act(...)` 警告。
 - 手机首屏会被既有“关注行情”浮动面板遮住部分横向表格，关闭或最小化面板后可查看；诊断表本身支持横向滚动。
 
+## 代理错误提示修复
+
+- 前端公共 API 客户端会识别 Nginx 或其他代理返回的 HTML `502/503/504` 页面，分别显示“后端服务暂时不可用”“服务正在启动或暂时不可用”或“后端服务响应超时”，不再把完整 HTML 暴露给用户。
+- 后端返回 JSON `detail` 时仍优先保留真实业务错误；普通文本错误也保持原样。此前绕过公共 `fetchJson`、直接抛出 `response.text()` 的请求已统一接入相同解析器。
+- 新增客户端专项测试：`6 passed`；标的查询页：`19 passed`；前端生产构建：通过。
+- 前端全量测试：`168 passed, 2 failed`。其中 Settings 页“实盘灰度”旧文案失败为既有问题；另一个 15 秒超时用例单独重跑为 `1 passed`，确认不是本次回归。
+- 部署前数据库备份：`backups/radar-20260921T114448Z.db`，大小 `634888192` 字节，SHA-256 `0dd81dd2ed4a35869535bf9b7bc5f773485cad1de6008ca7ff8b37fd16cb533b`；源库、容器内备份和主机备份的 `PRAGMA quick_check` 均为 `ok`。
+- 服务器使用 `git pull --ff-only` 更新并执行 `docker compose build --pull`、`docker compose up -d --remove-orphans`；前后端容器均为 `healthy`，没有删除数据卷。
+- 线上首页、代理 `/api/health` 和 `/api/instruments/ZETAUSDT` 均返回 HTTP 200；生产实际加载的 JavaScript bundle 已确认包含新的友好 502 提示。
+
 ## 工作区保护项
 
 以下既有或验证产物未提交、未删除、未覆盖：
 
 - `output/**`
 - `script/dexe_bybit_bitget_chain.py`
-- 账户持仓相关的 `backend/app/api/routes_account_positions.py`、`backend/app/models/account_position.py`、`backend/app/services/account_positions.py`、`backend/tests/test_account_positions.py`。
-- 其他并行任务在 `backend/app/api/routes_settings.py`、`backend/app/db/repositories.py`、`backend/app/main.py`、`backend/app/models/settings.py`、`backend/app/services/gate_twap.py` 和 `backend/tests/test_floating_watch.py` 中的本地未提交修改。
-- 其他并行任务在 `frontend/src/api/client.ts`、`frontend/src/api/types.ts`、`frontend/src/components/FloatingWatchPanel.tsx`、`frontend/src/styles.css` 和 `frontend/tests/FloatingWatchPanel.test.tsx` 中的本地未提交修改。
 
 服务器上的 `.env.backup-codex-20260911-1425`、`.env.backup-poll-8-20260911` 和 `CACHED` 保持不动。
 
