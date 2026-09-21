@@ -66,9 +66,47 @@ describe("OpportunityTable", () => {
     expect(screen.getByText("0.620%")).toBeTruthy();
     expect(screen.getByText("当前")).toBeTruthy();
     expect(screen.getByText("预测")).toBeTruthy();
-    expect(screen.getByText("周期净")).toBeTruthy();
+    expect(screen.getByText("每小时净")).toBeTruthy();
+    expect(screen.getByText("24h净")).toBeTruthy();
     expect(screen.getByText("0.015% / 0.025%")).toBeTruthy();
-    expect(screen.getByText("0.010%")).toBeTruthy();
+    expect(screen.getByText("0.001%/h")).toBeTruthy();
+    expect(screen.getByText("0.030%/24h")).toBeTruthy();
+  });
+
+  it("normalizes mixed funding intervals instead of displaying their raw difference", () => {
+    render(
+      <OpportunityTable
+        opportunities={[
+          {
+            ...row,
+            id: "lighter-hood",
+            symbol: "HOODUSDT",
+            buy_exchange: "lighter",
+            buy_raw_symbol: "HOOD",
+            sell_exchange: "bitget",
+            sell_raw_symbol: "HOODUSDT",
+            funding_rate_buy_pct: 0.0032,
+            funding_rate_sell_pct: 0.0507,
+            funding_next_rate_buy_pct: null,
+            funding_next_rate_sell_pct: null,
+            net_funding_pct: 0.0475,
+            net_funding_next_pct: null,
+            buy_funding_interval_hours: 1,
+            sell_funding_interval_hours: 8,
+            net_funding_hourly_pct: 0.0031375,
+            net_funding_daily_pct: 0.0753,
+            net_funding_next_hourly_pct: null,
+            net_funding_next_daily_pct: null
+          }
+        ]}
+        loading={false}
+      />
+    );
+
+    expect(screen.getAllByText("0.003% / 0.051%")).toHaveLength(2);
+    expect(screen.getByText("0.003%/h")).toBeTruthy();
+    expect(screen.getByText("0.075%/24h")).toBeTruthy();
+    expect(screen.queryByText("0.048%")).toBeNull();
   });
 
   it("renders signal validation risk labels in Chinese", () => {
@@ -100,6 +138,10 @@ describe("OpportunityTable", () => {
       funding_next_rate_buy_pct: null,
       funding_next_rate_sell_pct: 0.12,
       net_funding_next_pct: null,
+      net_funding_hourly_pct: 0.00125,
+      net_funding_daily_pct: 0.03,
+      net_funding_next_hourly_pct: null,
+      net_funding_next_daily_pct: null,
       mark_index_diff_buy_pct: 9.99,
       mark_index_diff_sell_pct: 0.01,
       funding_rate_buy_pct: 0.01,
@@ -108,8 +150,9 @@ describe("OpportunityTable", () => {
 
     render(<OpportunityTable opportunities={[missingNextFunding]} loading={false} />);
 
-    expect(screen.getByText("0.110%")).toBeTruthy();
-    expect(screen.queryByText("-9.870%")).toBeNull();
+    expect(screen.getByText("0.001%/h")).toBeTruthy();
+    expect(screen.getByText("0.030%/24h")).toBeTruthy();
+    expect(screen.queryByText("-9.870%/h")).toBeNull();
   });
 
   it("opens spread history from a row action", async () => {

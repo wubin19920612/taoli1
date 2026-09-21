@@ -122,24 +122,24 @@ function sideCurrentFundingRate(
   return marketType === "spot" ? 0 : (typeof currentRate === "number" ? currentRate : null);
 }
 
-function nextCycleFundingEdge(row: Opportunity): number | null {
-  if (typeof row.net_funding_next_pct === "number") {
-    return row.net_funding_next_pct;
-  }
-  const buyRate = sideNextCycleFundingRate(
-    row.buy_market_type,
-    row.funding_next_rate_buy_pct,
-    row.funding_rate_buy_pct
-  );
-  const sellRate = sideNextCycleFundingRate(
-    row.sell_market_type,
-    row.funding_next_rate_sell_pct,
-    row.funding_rate_sell_pct
-  );
-  if (typeof buyRate === "number" && typeof sellRate === "number") {
-    return sellRate - buyRate;
-  }
-  return row.net_funding_pct;
+function normalizedFundingEdges(row: Opportunity): { hourly: number | null; daily: number | null } {
+  const hourly =
+    typeof row.net_funding_next_hourly_pct === "number"
+      ? row.net_funding_next_hourly_pct
+      : row.net_funding_hourly_pct;
+  const daily =
+    typeof row.net_funding_next_daily_pct === "number"
+      ? row.net_funding_next_daily_pct
+      : typeof row.net_funding_daily_pct === "number"
+        ? row.net_funding_daily_pct
+        : typeof hourly === "number"
+          ? hourly * 24
+          : null;
+  return { hourly, daily };
+}
+
+function periodFundingPct(value: number | null, period: string): string {
+  return typeof value === "number" ? `${pct(value)}/${period}` : "-";
 }
 
 function normalizeSymbol(value: string): string {
@@ -173,9 +173,11 @@ function openPairSpread(row: Opportunity): void {
 }
 
 function FundingCell({ row }: { row: Opportunity }) {
-  const cycleFundingEdge = nextCycleFundingEdge(row);
-  const cycleType =
-    typeof cycleFundingEdge === "number" && cycleFundingEdge < 0 ? "danger" : "secondary";
+  const normalizedFunding = normalizedFundingEdges(row);
+  const normalizedType =
+    typeof normalizedFunding.hourly === "number" && normalizedFunding.hourly < 0
+      ? "danger"
+      : "secondary";
   const currentBuyRate = sideCurrentFundingRate(row.buy_market_type, row.funding_rate_buy_pct);
   const currentSellRate = sideCurrentFundingRate(row.sell_market_type, row.funding_rate_sell_pct);
   const predictedBuyRate = sideNextCycleFundingRate(
@@ -203,9 +205,15 @@ function FundingCell({ row }: { row: Opportunity }) {
         </Typography.Text>
       </div>
       <div className="funding-row">
-        <span className="funding-label">{"\u5468\u671f\u51c0"}</span>
-        <Typography.Text className="funding-value" type={cycleType}>
-          {pct(cycleFundingEdge)}
+        <span className="funding-label">{"\u6bcf\u5c0f\u65f6\u51c0"}</span>
+        <Typography.Text className="funding-value" type={normalizedType}>
+          {periodFundingPct(normalizedFunding.hourly, "h")}
+        </Typography.Text>
+      </div>
+      <div className="funding-row">
+        <span className="funding-label">24h净</span>
+        <Typography.Text className="funding-value" type={normalizedType}>
+          {periodFundingPct(normalizedFunding.daily, "24h")}
         </Typography.Text>
       </div>
       <div className="funding-row">
