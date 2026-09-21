@@ -212,6 +212,8 @@ const astroAnthropicInstrument = {
         market_type: "future",
         bid: 199,
         ask: 201,
+        funding_rate_pct: 0.01234,
+        funding_interval_hours: 8,
         timestamp: "2026-09-13T01:00:00Z",
         raw_symbol: "ANTHROPICUSDT"
       },
@@ -228,6 +230,8 @@ const astroAnthropicInstrument = {
         market_type: "future",
         bid: 19.9,
         ask: 20.1,
+        funding_rate_pct: -0.00456,
+        funding_interval_hours: 4,
         timestamp: "2026-09-13T01:00:00Z",
         raw_symbol: "ANTHROPIC-USDT-SWAP"
       },
@@ -298,7 +302,29 @@ function astroFutureVenue(exchange: string, symbol: string, bid: number, ask: nu
   };
 }
 
-function astroInstrument(symbol: string, exchanges: ReturnType<typeof astroFutureVenue>[]) {
+function astroSpotVenue(exchange: string, symbol: string, bid: number, ask: number) {
+  return {
+    exchange,
+    spot: {
+      symbol,
+      base: symbol.replace(/USDT$/, ""),
+      quote: "USDT",
+      exchange,
+      market_type: "spot",
+      bid,
+      ask,
+      timestamp: "2026-09-13T01:00:00Z",
+      raw_symbol: symbol
+    },
+    future: null,
+    error: null
+  };
+}
+
+function astroInstrument(
+  symbol: string,
+  exchanges: Array<ReturnType<typeof astroFutureVenue> | ReturnType<typeof astroSpotVenue>>
+) {
   return {
     ...instrument,
     query: symbol,
@@ -398,6 +424,7 @@ describe("FloatingWatchPanel", () => {
     expect(within(panel).getByText("仅平仓")).not.toBeNull();
     expect(await within(panel).findByText("开 -1.00% / 平 1.00%")).not.toBeNull();
     expect(within(panel).getByText("开 2.98% / 平 2.85%")).not.toBeNull();
+    expect(within(panel).getByText("买 +0.0123%/8h · 卖 -0.0046%/4h")).not.toBeNull();
     expect(within(panel).getByText("1:10")).not.toBeNull();
     expect(within(panel).getByText("7,600 U")).not.toBeNull();
     expect(within(panel).getByText("8,400 U")).not.toBeNull();
@@ -419,6 +446,36 @@ describe("FloatingWatchPanel", () => {
     expect(within(panel).queryByText("STEEM")).toBeNull();
     expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("/astro/pairs"))).toBe(true);
     expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("/instruments/ANTHROPICUSDT"))).toBe(true);
+  });
+
+  it("shows spot legs and unavailable perpetual funding without implying a zero rate", async () => {
+    const mixedPair = [{
+      id: "spot-future",
+      name: "MIXED",
+      type: "SF",
+      status: true,
+      buyEx: "bitget",
+      sellEx: "okx",
+      aExPosition: 0,
+      bExPosition: 0
+    }];
+    const mixedInstrument = astroInstrument("MIXEDUSDT", [
+      astroSpotVenue("bitget", "MIXEDUSDT", 99, 100),
+      astroFutureVenue("okx", "MIXEDUSDT", 101, 102)
+    ]);
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/settings/floating-watch")) return Response.json({ symbols: [], pair_ids: [] });
+      if (url.includes("/astro/pairs")) return Response.json(mixedPair);
+      if (url.includes("/instruments/MIXEDUSDT")) return Response.json(mixedInstrument);
+      return Response.json({});
+    });
+
+    render(<FloatingWatchPanel visible onClose={vi.fn()} />);
+    const panel = await screen.findByRole("complementary", { name: "关注浮窗" });
+    await userEvent.click(await within(panel).findByText("Astro 1"));
+
+    expect(await within(panel).findByText("买 现货 · 卖 --/?h")).not.toBeNull();
   });
 
   it("uses the Astro Hyperliquid DEX when loading an aliased HIP-3 leg", async () => {

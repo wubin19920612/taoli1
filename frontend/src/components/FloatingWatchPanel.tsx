@@ -334,6 +334,19 @@ function astroSpreadMetric(value: number | null): string {
   return `${displayValue.toFixed(2)}%`;
 }
 
+function compactHours(value: unknown): string {
+  const parsed = finiteNumber(value);
+  if (parsed === null || parsed <= 0) return "?h";
+  return `${parsed.toFixed(2).replace(/\.?0+$/, "")}h`;
+}
+
+function astroFundingMetric(market: MarketSnapshot): string {
+  if (market.market_type === "spot") return "现货";
+  const rate = finiteNumber(market.funding_rate_pct);
+  const rateText = rate === null ? "--" : `${rate >= 0 ? "+" : ""}${rate.toFixed(4)}%`;
+  return `${rateText}/${compactHours(market.funding_interval_hours)}`;
+}
+
 function astroThresholdMetric(pair: AstroPairStatus, value: unknown): string {
   const parsed = finiteNumber(value);
   if (parsed === null) return "-";
@@ -920,6 +933,15 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
                             <span>当前价差</span>
                             <strong className={ratioMode ? undefined : `floating-watch-value-${tone(live.value.openMetric)}`}>
                               开 {astroSpreadMetric(live.value.openMetric)} / 平 {astroSpreadMetric(live.value.closeMetric)}
+                            </strong>
+                          </span>
+                          <span
+                            className="floating-watch-row-sub floating-watch-astro-spread floating-watch-astro-funding"
+                            title="当前单次结算资金费率 / 结算周期"
+                          >
+                            <span>资金费率</span>
+                            <strong>
+                              买 {astroFundingMetric(live.value.markets[0])} · 卖 {astroFundingMetric(live.value.markets[1])}
                             </strong>
                           </span>
                         </>
