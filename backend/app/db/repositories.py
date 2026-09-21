@@ -1251,7 +1251,11 @@ class SettingsRepository:
                 target.append(mutation.value)
             elif mutation.action == "remove":
                 target[:] = [item for item in target if item != mutation.value]
-            updated = FloatingWatchSettings(symbols=symbols, pair_ids=pair_ids)
+            updated = FloatingWatchSettings(
+                symbols=symbols,
+                pair_ids=pair_ids,
+                hidden_positions=settings.hidden_positions,
+            )
             await self.db.execute(
                 """
                 INSERT INTO app_settings (key, payload)
