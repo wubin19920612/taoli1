@@ -448,6 +448,151 @@ describe("FloatingWatchPanel", () => {
     expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("/instruments/ANTHROPICUSDT"))).toBe(true);
   });
 
+  it("opens an Astro ratio card with its actual legs, original symbols, and market multiplier", async () => {
+    window.history.replaceState({}, "", "/?page=dashboard&leg1_dex=stale&leg2_dex=stale");
+    render(<FloatingWatchPanel visible onClose={vi.fn()} />);
+    const panel = await screen.findByRole("complementary", { name: "关注浮窗" });
+    await userEvent.click(await within(panel).findByText("Astro 3 · 1 持仓"));
+    const link = await within(panel).findByRole("button", {
+      name: "打开 Astro 交易对 ANTHROPIC-ANTHROPIC 的价差查询"
+    });
+    await waitFor(() => expect((link as HTMLButtonElement).disabled).toBe(false));
+
+    await userEvent.click(link);
+
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("page")).toBe("pair-monitor");
+    expect(params.get("leg1_exchange")).toBe("bitget");
+    expect(params.get("leg1_market_type")).toBe("future");
+    expect(params.get("leg1_symbol")).toBe("ANTHROPICUSDT");
+    expect(params.get("leg1_dex")).toBeNull();
+    expect(params.get("leg2_exchange")).toBe("okx");
+    expect(params.get("leg2_market_type")).toBe("future");
+    expect(params.get("leg2_symbol")).toBe("ANTHROPIC-USDT-SWAP");
+    expect(params.get("leg2_dex")).toBeNull();
+    expect(params.get("leg2_multiplier")).toBe("0.1");
+    expect(params.get("hours")).toBe("4");
+    expect(params.get("interval_seconds")).toBe("60");
+  });
+
+  it("keeps the buy and sell legs for forward and reverse Astro cards", async () => {
+    const zetaPairs = [
+      {
+        id: "zeta-forward",
+        name: "ZETA",
+        type: "FF",
+        status: true,
+        buyEx: "gc-okx",
+        sellEx: "gc-hl",
+        aExPosition: 0,
+        bExPosition: 0
+      },
+      {
+        id: "zeta-reverse",
+        name: "ZETA",
+        type: "FF",
+        status: true,
+        buyEx: "hl",
+        sellEx: "okx",
+        aExPosition: 0,
+        bExPosition: 0
+      }
+    ];
+    const zetaInstrument = astroInstrument("ZETAUSDT", [
+      {
+        ...astroFutureVenue("okx", "ZETAUSDT", 0.061, 0.062),
+        future: {
+          ...astroFutureVenue("okx", "ZETAUSDT", 0.061, 0.062).future,
+          raw_symbol: "ZETA-USDT-SWAP"
+        }
+      },
+      {
+        ...astroFutureVenue("hyperliquid", "ZETAUSDT", 0.063, 0.064),
+        future: {
+          ...astroFutureVenue("hyperliquid", "ZETAUSDT", 0.063, 0.064).future,
+          raw_symbol: "ZETA"
+        }
+      }
+    ]);
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/settings/floating-watch")) return Response.json({ symbols: [], pair_ids: [] });
+      if (url.includes("/astro/pairs")) return Response.json(zetaPairs);
+      if (url.includes("/instruments/ZETAUSDT")) return Response.json(zetaInstrument);
+      return Response.json({});
+    });
+    render(<FloatingWatchPanel visible onClose={vi.fn()} />);
+    const panel = await screen.findByRole("complementary", { name: "关注浮窗" });
+    await userEvent.click(await within(panel).findByText("Astro 2"));
+    const links = await within(panel).findAllByRole("button", {
+      name: "打开 Astro 交易对 ZETA 的价差查询"
+    });
+    await waitFor(() => expect(links.every((link) => !(link as HTMLButtonElement).disabled)).toBe(true));
+
+    await userEvent.click(links[0]);
+    let params = new URLSearchParams(window.location.search);
+    expect(params.get("leg1_exchange")).toBe("okx");
+    expect(params.get("leg1_symbol")).toBe("ZETA-USDT-SWAP");
+    expect(params.get("leg1_dex")).toBeNull();
+    expect(params.get("leg2_exchange")).toBe("hyperliquid");
+    expect(params.get("leg2_symbol")).toBe("ZETA");
+    expect(params.get("leg2_dex")).toBe("main");
+
+    await userEvent.click(links[1]);
+    params = new URLSearchParams(window.location.search);
+    expect(params.get("leg1_exchange")).toBe("hyperliquid");
+    expect(params.get("leg1_symbol")).toBe("ZETA");
+    expect(params.get("leg1_dex")).toBe("main");
+    expect(params.get("leg2_exchange")).toBe("okx");
+    expect(params.get("leg2_symbol")).toBe("ZETA-USDT-SWAP");
+    expect(params.get("leg2_dex")).toBeNull();
+  });
+
+  it("preserves spot and perpetual types for an SR Astro card", async () => {
+    const lskPair = [{
+      id: "lsk-sr",
+      name: "LSK-LSK",
+      type: "SR",
+      status: true,
+      buyEx: "gc-okx",
+      sellEx: "gc-binance",
+      regressionValue: 1,
+      aExPosition: 0,
+      bExPosition: 0
+    }];
+    const okxSpot = astroSpotVenue("okx", "LSKUSDT", 0.4, 0.41);
+    const binanceFuture = astroFutureVenue("binance", "LSKUSDT", 0.42, 0.43);
+    const lskInstrument = astroInstrument("LSKUSDT", [
+      { ...okxSpot, spot: { ...okxSpot.spot, raw_symbol: "LSK-USDT" } },
+      binanceFuture
+    ]);
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/settings/floating-watch")) return Response.json({ symbols: [], pair_ids: [] });
+      if (url.includes("/astro/pairs")) return Response.json(lskPair);
+      if (url.includes("/instruments/LSKUSDT")) return Response.json(lskInstrument);
+      return Response.json({});
+    });
+    render(<FloatingWatchPanel visible onClose={vi.fn()} />);
+    const panel = await screen.findByRole("complementary", { name: "关注浮窗" });
+    await userEvent.click(await within(panel).findByText("Astro 1"));
+    const link = await within(panel).findByRole("button", {
+      name: "打开 Astro 交易对 LSK-LSK 的价差查询"
+    });
+    await waitFor(() => expect((link as HTMLButtonElement).disabled).toBe(false));
+
+    await userEvent.click(link);
+
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("leg1_exchange")).toBe("okx");
+    expect(params.get("leg1_market_type")).toBe("spot");
+    expect(params.get("leg1_symbol")).toBe("LSK-USDT");
+    expect(params.get("leg2_exchange")).toBe("binance");
+    expect(params.get("leg2_market_type")).toBe("future");
+    expect(params.get("leg2_symbol")).toBe("LSKUSDT");
+    expect(params.get("leg2_multiplier")).toBe("1");
+  });
+
   it("shows spot legs and unavailable perpetual funding without implying a zero rate", async () => {
     const mixedPair = [{
       id: "spot-future",
@@ -524,6 +669,61 @@ describe("FloatingWatchPanel", () => {
       const url = new URL(String(input));
       return url.pathname === "/api/instruments/ANTHUSDT" && url.searchParams.get("dex") === "io";
     })).toBe(true);
+  });
+
+  it("opens an Astro spread in a new tab without replacing an orphaned standalone window", async () => {
+    window.history.replaceState({}, "", "/?floating_watch=standalone");
+    const hip3Pair = [{
+      id: "anthropic-io",
+      name: "ANTHROPIC-ANTH",
+      type: "FR",
+      status: true,
+      buyEx: "bitget",
+      sellEx: "hl",
+      bEffectiveHlDex: "io",
+      regressionValue: 1,
+      aExPosition: 0,
+      bExPosition: 0
+    }];
+    const hyperliquidVenue = astroFutureVenue("hyperliquid", "ANTHROPICUSDT", 215, 216);
+    const hyperliquidAnth = astroInstrument("ANTHROPICUSDT", [{
+      ...hyperliquidVenue,
+      future: { ...hyperliquidVenue.future, raw_symbol: "io:ANTH" }
+    }]);
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/settings/floating-watch")) return Response.json({ symbols: [], pair_ids: [] });
+      if (url.includes("/astro/pairs")) return Response.json(hip3Pair);
+      if (url.includes("/instruments/ANTHROPICUSDT")) return Response.json(astroAnthropicInstrument);
+      if (url.includes("/instruments/ANTHUSDT") && url.includes("dex=io")) return Response.json(hyperliquidAnth);
+      return Response.json({});
+    });
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    render(<FloatingWatchPanel visible standalone onClose={vi.fn()} />);
+    const panel = await screen.findByRole("complementary", { name: "独立关注窗口" });
+    await userEvent.click(await within(panel).findByText("Astro 1"));
+    const link = await within(panel).findByRole("button", {
+      name: "打开 Astro 交易对 ANTHROPIC-ANTH 的价差查询"
+    });
+    await waitFor(() => expect((link as HTMLButtonElement).disabled).toBe(false));
+
+    await userEvent.click(link);
+
+    expect(window.location.search).toBe("?floating_watch=standalone");
+    expect(open).toHaveBeenCalledOnce();
+    const [destination, target, features] = open.mock.calls[0];
+    const url = new URL(String(destination), window.location.origin);
+    expect(target).toBe("_blank");
+    expect(features).toBe("noopener,noreferrer");
+    expect(url.searchParams.get("floating_watch")).toBeNull();
+    expect(url.searchParams.get("page")).toBe("pair-monitor");
+    expect(url.searchParams.get("leg1_exchange")).toBe("bitget");
+    expect(url.searchParams.get("leg1_symbol")).toBe("ANTHROPICUSDT");
+    expect(url.searchParams.get("leg2_exchange")).toBe("hyperliquid");
+    expect(url.searchParams.get("leg2_symbol")).toBe("ANTH");
+    expect(url.searchParams.get("leg2_dex")).toBe("io");
+    expect(url.searchParams.get("leg2_multiplier")).toBe("1");
+    open.mockRestore();
   });
 
   it("marks watched symbols that have an active Astro position as trading", async () => {

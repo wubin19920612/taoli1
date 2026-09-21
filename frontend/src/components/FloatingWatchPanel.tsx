@@ -73,6 +73,10 @@ type AstroMetrics = {
 };
 type AstroPositionMetrics = { buyNotional: number; sellNotional: number };
 type AstroProfitEstimate = { value: number; feeRate: number };
+type AstroNavigationRoute = {
+  legs: [AstroLeg, AstroLeg];
+  markets: [MarketSnapshot, MarketSnapshot];
+};
 
 async function mapWithConcurrency<T, R>(
   items: T[],
@@ -240,6 +244,18 @@ function astroMarket(
   return leg.marketType === "spot" ? exchange?.spot ?? null : exchange?.future ?? null;
 }
 
+function astroNavigationRoute(
+  pair: AstroPairStatus,
+  states: Record<string, InstrumentState>
+): AstroNavigationRoute | null {
+  const legs = astroLegs(pair);
+  if (!legs) return null;
+  const markets = legs.map((leg) => astroMarket(leg, states));
+  return markets.every((market): market is MarketSnapshot => market !== null)
+    ? { legs, markets: markets as [MarketSnapshot, MarketSnapshot] }
+    : null;
+}
+
 function positivePrice(value: number | null | undefined): number | null {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
 }
@@ -393,7 +409,7 @@ function pairLegLabel(preset: PairSpreadPreset, side: 1 | 2): string {
   return `${venue} ${marketLabel(preset[`leg${side}_market_type`])}`;
 }
 
-function navigateFromWatch(url: URL, standalone: boolean): void {
+function navigateFromWatch(url: URL, standalone: boolean, preserveStandalone = false): void {
   url.searchParams.delete(STANDALONE_QUERY_PARAM);
   const destination = `${url.pathname}${url.search}${url.hash}`;
   if (standalone) {
@@ -413,6 +429,10 @@ function navigateFromWatch(url: URL, standalone: boolean): void {
     } catch {
       // Fall through when the opener is no longer same-origin or accessible.
     }
+    if (preserveStandalone) {
+      window.open(destination, "_blank", "noopener,noreferrer");
+      return;
+    }
     const appWindow = window.open(destination, "_blank");
     if (appWindow) {
       appWindow.focus();
@@ -430,6 +450,53 @@ function openInstrument(symbol: string, standalone: boolean): void {
   url.searchParams.set("page", "instrument");
   url.searchParams.set("symbol", symbol);
   navigateFromWatch(url, standalone);
+}
+
+function astroPairSpreadLegRoute(leg: AstroLeg, market: MarketSnapshot): { symbol: string; dex: string } {
+  const aliasSymbol = market.symbol_alias_original_symbol?.trim() || "";
+  const rawSymbol = market.raw_symbol.trim();
+  if (leg.exchange === "hyperliquid" && leg.marketType === "future") {
+    const separatorIndex = rawSymbol.indexOf(":");
+    if (separatorIndex > 0) {
+      return {
+        symbol: rawSymbol.slice(separatorIndex + 1).trim() || aliasSymbol || leg.symbol,
+        dex: rawSymbol.slice(0, separatorIndex).trim().toLowerCase() || leg.dex || "main"
+      };
+    }
+    return { symbol: rawSymbol || aliasSymbol || leg.symbol, dex: leg.dex || "main" };
+  }
+  return { symbol: aliasSymbol || rawSymbol || leg.symbol, dex: "" };
+}
+
+function astroPairSpreadMultiplier(pair: AstroPairStatus): number {
+  if (!pair.type?.toUpperCase().endsWith("R")) return 1;
+  const regressionValue = astroRatioReference(pair);
+  // Astro multiplies the sell leg; pair spread expresses the same ratio by dividing leg 2.
+  return 1 / regressionValue;
+}
+
+function openAstroPair(
+  pair: AstroPairStatus,
+  route: AstroNavigationRoute,
+  standalone: boolean
+): void {
+  const url = new URL(window.location.href);
+  url.searchParams.set("page", "pair-monitor");
+  url.searchParams.delete("symbol");
+  route.legs.forEach((leg, index) => {
+    const key = index + 1;
+    const marketRoute = astroPairSpreadLegRoute(leg, route.markets[index]);
+    url.searchParams.set(`leg${key}_exchange`, leg.exchange);
+    url.searchParams.set(`leg${key}_market_type`, leg.marketType);
+    url.searchParams.set(`leg${key}_symbol`, marketRoute.symbol);
+    if (marketRoute.dex) url.searchParams.set(`leg${key}_dex`, marketRoute.dex);
+    else url.searchParams.delete(`leg${key}_dex`);
+  });
+  url.searchParams.set("leg2_multiplier", String(astroPairSpreadMultiplier(pair)));
+  url.searchParams.set("hours", "4");
+  url.searchParams.set("interval_seconds", "60");
+  url.searchParams.delete("interval_minutes");
+  navigateFromWatch(url, standalone, true);
 }
 
 function openPair(preset: PairSpreadPreset, standalone: boolean): void {
@@ -912,11 +979,22 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
                 const estimatedProfit = astroProfit ?? localProfit?.value ?? null;
                 const profitTone = tone(estimatedProfit);
                 const ratioMode = pair.type?.toUpperCase().endsWith("R") === true;
+                const navigationRoute = astroNavigationRoute(pair, astroInstruments);
                 return (
                   <div className="floating-watch-row floating-watch-astro-row" key={pair.id || `${pair.name || "astro"}-${index}`}>
                     <div className="floating-watch-row-main floating-watch-astro-row-main">
                       <span className="floating-watch-row-title floating-watch-astro-title" title={pair.name || "未命名卡片"}>
-                        <span>{pair.name || "未命名卡片"}</span>
+                        <button
+                          className="floating-watch-astro-link"
+                          type="button"
+                          aria-label={`打开 Astro 交易对 ${pair.name || "未命名卡片"} 的价差查询`}
+                          title={navigationRoute ? "打开价差查询" : "等待双方市场信息后可打开价差查询"}
+                          disabled={!navigationRoute}
+                          onClick={() => navigationRoute && openAstroPair(pair, navigationRoute, standalone)}
+                        >
+                          <span>{pair.name || "未命名卡片"}</span>
+                          <LineChartOutlined aria-hidden="true" />
+                        </button>
                         <span className="floating-watch-astro-type">{pair.type || "-"}</span>
                       </span>
                       <span className={`floating-watch-value floating-watch-astro-state floating-watch-astro-state-${runtime.tone}`}>
