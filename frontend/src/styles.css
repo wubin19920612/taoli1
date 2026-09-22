@@ -1396,6 +1396,68 @@ body {
   justify-content: flex-end;
 }
 
+.instrument-spread-type-tag.ant-tag {
+  display: inline-grid;
+  gap: 2px;
+  min-width: 104px;
+  margin-inline-end: 0;
+  padding: 4px 8px;
+  border-width: 1px;
+  border-style: solid;
+  border-radius: 4px;
+  line-height: 1.2;
+}
+
+.instrument-spread-type-tag strong {
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.instrument-spread-type-tag span {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.instrument-spread-type-tag--ff.ant-tag,
+.instrument-market-type-tag--future.ant-tag {
+  color: #174f7d;
+  background: #eaf3fc;
+  border-color: #79a9cf;
+}
+
+.instrument-spread-type-tag--sf.ant-tag,
+.instrument-market-type-tag--spot.ant-tag {
+  color: #17633a;
+  background: #eaf7ef;
+  border-color: #75bd91;
+}
+
+.instrument-spread-type-tag--ss.ant-tag {
+  color: #72510b;
+  background: #fff7dc;
+  border-color: #d8b95e;
+}
+
+.instrument-spread-type-tag--reverse-sf.ant-tag {
+  color: #8a3025;
+  background: #fff0ed;
+  border-color: #df978e;
+}
+
+.instrument-market-type-tag.ant-tag {
+  margin-inline-end: 0;
+  padding: 2px 7px;
+  border-width: 1px;
+  border-style: solid;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.45;
+  white-space: nowrap;
+}
+
 .instrument-market-cell,
 .instrument-funding-cell {
   display: grid;

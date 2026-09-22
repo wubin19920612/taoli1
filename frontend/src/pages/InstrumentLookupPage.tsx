@@ -106,10 +106,10 @@ type AstroSizingFormValues = Required<Omit<AstroCardCreateRequest, "save_as_defa
 type SpreadTypeFilter = "FF" | "SF" | "SS" | "reverse_sf";
 
 const spreadTypeFilterOptions: Array<{ label: string; value: SpreadTypeFilter }> = [
-  { label: "FF", value: "FF" },
-  { label: "SF", value: "SF" },
-  { label: "SS", value: "SS" },
-  { label: "反向 SF", value: "reverse_sf" }
+  { label: "FF 合约-合约", value: "FF" },
+  { label: "SF 现货-合约", value: "SF" },
+  { label: "SS 现货-现货", value: "SS" },
+  { label: "反向 SF 合约-现货", value: "reverse_sf" }
 ];
 
 function initialSymbol(): string {
@@ -174,8 +174,29 @@ function marketTypeLabel(value: MarketType): string {
   return value === "spot" ? "现货" : "永续";
 }
 
-function spreadTypeLabel(value: InstrumentSpreadComparison["opportunity_type"]): string {
-  return value ?? "反向 SF";
+function MarketTypeTag({ value }: { value: MarketType }) {
+  const isSpot = value === "spot";
+  return (
+    <Tag className={`instrument-market-type-tag instrument-market-type-tag--${isSpot ? "spot" : "future"}`}>
+      {isSpot ? "现货" : "永续合约"}
+    </Tag>
+  );
+}
+
+function SpreadTypeTag({ value }: { value: InstrumentSpreadComparison["opportunity_type"] }) {
+  const presentation = value === "FF"
+    ? { code: "FF", route: "合约 → 合约", tone: "ff" }
+    : value === "SF"
+      ? { code: "SF", route: "现货 → 合约", tone: "sf" }
+      : value === "SS"
+        ? { code: "SS", route: "现货 → 现货", tone: "ss" }
+        : { code: "反向 SF", route: "合约 → 现货", tone: "reverse-sf" };
+  return (
+    <Tag className={`instrument-spread-type-tag instrument-spread-type-tag--${presentation.tone}`}>
+      <strong>{presentation.code}</strong>
+      <span>{presentation.route}</span>
+    </Tag>
+  );
 }
 
 function spreadTypeOrder(value: InstrumentSpreadComparison["opportunity_type"]): number {
@@ -1007,12 +1028,12 @@ export function InstrumentLookupPage() {
     {
       title: "差价类型",
       dataIndex: "opportunity_type",
-      width: 108,
+      width: 132,
       sorter: (left, right) => (
         spreadTypeOrder(left.opportunity_type) - spreadTypeOrder(right.opportunity_type)
       ),
       render: (value: InstrumentSpreadComparison["opportunity_type"]) => (
-        <Tag>{spreadTypeLabel(value)}</Tag>
+        <SpreadTypeTag value={value} />
       )
     },
     {
@@ -1023,7 +1044,7 @@ export function InstrumentLookupPage() {
       render: (_, spread) => (
         <Space size={6}>
           <Typography.Text strong>{exchangeLabels[spread.buy_exchange] ?? spread.buy_exchange}</Typography.Text>
-          <Tag>{marketTypeLabel(spread.buy_market_type)}</Tag>
+          <MarketTypeTag value={spread.buy_market_type} />
         </Space>
       )
     },
@@ -1042,7 +1063,7 @@ export function InstrumentLookupPage() {
       render: (_, spread) => (
         <Space size={6}>
           <Typography.Text strong>{exchangeLabels[spread.sell_exchange] ?? spread.sell_exchange}</Typography.Text>
-          <Tag>{marketTypeLabel(spread.sell_market_type)}</Tag>
+          <MarketTypeTag value={spread.sell_market_type} />
         </Space>
       )
     },

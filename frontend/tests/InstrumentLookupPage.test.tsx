@@ -790,8 +790,8 @@ describe("InstrumentLookupPage", () => {
     render(<InstrumentLookupPage />);
 
     await screen.findByText("跨市场差价");
-    const ssFilter = screen.getByRole<HTMLInputElement>("checkbox", { name: "SS" });
-    const reverseSfFilter = screen.getByRole<HTMLInputElement>("checkbox", { name: "反向 SF" });
+    const ssFilter = screen.getByRole<HTMLInputElement>("checkbox", { name: "SS 现货-现货" });
+    const reverseSfFilter = screen.getByRole<HTMLInputElement>("checkbox", { name: "反向 SF 合约-现货" });
     expect(ssFilter.checked).toBe(true);
     expect(reverseSfFilter.checked).toBe(true);
     expect(screen.getAllByRole("button", { name: /建卡/ })).toHaveLength(7);
@@ -810,10 +810,10 @@ describe("InstrumentLookupPage", () => {
       (row) => row.querySelector("td")?.textContent
     );
     expect(ascendingTypes).toEqual([
-      "FF", "FF", "FF",
-      "SF", "SF", "SF", "SF",
-      "SS", "SS", "SS",
-      "反向 SF", "反向 SF", "反向 SF"
+      "FF合约 → 合约", "FF合约 → 合约", "FF合约 → 合约",
+      "SF现货 → 合约", "SF现货 → 合约", "SF现货 → 合约", "SF现货 → 合约",
+      "SS现货 → 现货", "SS现货 → 现货", "SS现货 → 现货",
+      "反向 SF合约 → 现货", "反向 SF合约 → 现货", "反向 SF合约 → 现货"
     ]);
 
     await userEvent.click(typeHeader);
@@ -821,10 +821,31 @@ describe("InstrumentLookupPage", () => {
       (row) => row.querySelector("td")?.textContent
     );
     expect(descendingTypes).toEqual([
-      "反向 SF", "反向 SF", "反向 SF",
-      "SS", "SS", "SS",
-      "SF", "SF", "SF", "SF",
-      "FF", "FF", "FF"
+      "反向 SF合约 → 现货", "反向 SF合约 → 现货", "反向 SF合约 → 现货",
+      "SS现货 → 现货", "SS现货 → 现货", "SS现货 → 现货",
+      "SF现货 → 合约", "SF现货 → 合约", "SF现货 → 合约", "SF现货 → 合约",
+      "FF合约 → 合约", "FF合约 → 合约", "FF合约 → 合约"
+    ]);
+  });
+
+  it("spells out spread routes and visually distinguishes spot from perpetual markets", async () => {
+    render(<InstrumentLookupPage />);
+
+    await screen.findByText("跨市场差价");
+    const spreadTags = Array.from(document.querySelectorAll(".instrument-spread-type-tag"));
+    expect(spreadTags.map((tag) => tag.textContent)).toEqual([
+      "SF现货 → 合约",
+      "FF合约 → 合约",
+      "SF现货 → 合约"
+    ]);
+
+    const marketTags = Array.from(document.querySelectorAll(".instrument-market-type-tag"));
+    expect(marketTags.filter((tag) => tag.classList.contains("instrument-market-type-tag--spot"))).toHaveLength(2);
+    expect(marketTags.filter((tag) => tag.classList.contains("instrument-market-type-tag--future"))).toHaveLength(4);
+    expect(marketTags.map((tag) => tag.textContent)).toEqual([
+      "现货", "永续合约",
+      "永续合约", "永续合约",
+      "现货", "永续合约"
     ]);
   });
 
@@ -838,14 +859,14 @@ describe("InstrumentLookupPage", () => {
     const buyMarkets = Array.from(table?.querySelectorAll("tbody tr.ant-table-row") ?? []).map(
       (row) => row.querySelectorAll("td")[1]?.textContent
     );
-    expect(buyMarkets).toEqual(["Binance现货", "Binance现货", "OKX永续"]);
+    expect(buyMarkets).toEqual(["Binance现货", "Binance现货", "OKX永续合约"]);
 
     const sellHeader = screen.getByRole("columnheader", { name: /卖出市场/ });
     await userEvent.click(sellHeader);
     const sellMarkets = Array.from(table?.querySelectorAll("tbody tr.ant-table-row") ?? []).map(
       (row) => row.querySelectorAll("td")[3]?.textContent
     );
-    expect(sellMarkets).toEqual(["Binance永续", "Binance永续", "OKX永续"]);
+    expect(sellMarkets).toEqual(["Binance永续合约", "Binance永续合约", "OKX永续合约"]);
   });
 
   it("opens every selected market pair in a separate isolated tab without changing the lookup page", async () => {
@@ -909,7 +930,7 @@ describe("InstrumentLookupPage", () => {
     render(<InstrumentLookupPage />);
 
     await screen.findByText("跨市场差价");
-    await userEvent.click(screen.getByRole("checkbox", { name: "反向 SF" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "反向 SF 合约-现货" }));
     const currentUrl = window.location.href;
     await userEvent.click(screen.getByRole("button", {
       name: "价差查询 BTCUSDT binance:future->binance:spot"
