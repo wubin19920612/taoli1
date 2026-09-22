@@ -17,8 +17,9 @@
 
 - 分支：`codex/frontend-localization-polish`
 - 开始基线：`b76fdbc752b915dea9341dfb53b6bf415e276076`
-- 功能提交：部署完成后补充
-- 文档提交：部署完成后补充
+- 功能提交：`2ef7ad9f79eddb35aa9d4e72f2fcca807c77659a`
+- 功能提交说明：`feat: finalize trade availability diagnostics`
+- 功能提交已推送到 `origin/codex/frontend-localization-polish`。
 
 ## 已完成功能
 
@@ -116,14 +117,28 @@ Playwright 使用真实 BTC 数据验证：
 - Hyperliquid：`not_returned`，`metaAndAssetCtxs` 不提供成分和权重；身份保留 `main / BTC`。
 - Lighter：`not_returned`，`orderBookDetails` 提供 `index_price` 但不提供成分和权重；身份保留原始 `BTC`。
 - 本地 `/api/health` 八家采集器均为 healthy 且均产生过成功时间；BTC 返回 14 个精确市场。
-- 本地网络代理有间歇性 `PoolTimeout/ConnectTimeout`，受影响的公开状态正确降级为未知，没有误报可用；生产环境仍需重新验证。
+- 本地网络代理有间歇性 `PoolTimeout/ConnectTimeout`，受影响的公开状态正确降级为未知，没有误报可用；生产环境已另外完成真实接口验证。
 
 ## 生产备份与部署
 
-- 数据库备份：待执行。
-- SHA-256、大小、源库/备份 `PRAGMA quick_check`：待执行。
-- `git pull --ff-only`、Docker Compose 构建与启动：待执行。
-- 容器、`/api/health`、页面、BTC/ZETA 和八家采集器验证：待执行。
+- 部署前数据库备份：`backups/radar-20260922T084651Z.db`。
+- 备份大小：`600698880` 字节。
+- SHA-256：`e1cff5df39b35657c5005b9e01e084b3224fe66d425f3545413bf480131932d9`。
+- 源库、容器内在线备份和主机备份的 `PRAGMA quick_check` 均为 `ok`；主机备份校验后删除了容器内临时副本，线上 `/data/radar.db` 未替换或删除。
+- 服务器使用 `git pull --ff-only` 快进到 `2ef7ad9f79eddb35aa9d4e72f2fcca807c77659a`。
+- 使用 `docker compose build --pull` 和 `docker compose up -d --remove-orphans` 完成重建；没有执行 `down -v`。
+- 前后端容器均为 `healthy`，生产前端根页面返回 HTTP 200。
+
+## 生产验证
+
+- `/api/health` 返回 `status=ok`；Binance、OKX、Bybit、Gate、Bitget、Aster、Hyperliquid、Lighter 八家采集器均为 `healthy`、有最新成功时间、连续失败数为 0。
+- `/api/trade-status/BTCUSDT` 返回 HTTP 200、`errors={}`、14 个精确市场和 8 个指数面板；每个市场都保留 `exchange + market_type + raw_symbol`，Hyperliquid 精确保留 `dex=main / raw_symbol=BTC`。
+- BTC 的 Binance、OKX、Bybit、Gate、Bitget 官方指数成分分别为 8、5、6、6、6 个，权重合计分别为 `0.99999999`、`1.0`、`1.0`、`1.0002`、`1.0`。31 个官方成分均包含来源交易所、市场类型、原始符号、价格和权重。
+- Aster、Hyperliquid、Lighter 指数面板均为 `not_returned`；其中 Aster 和 Lighter 只展示官方已返回的指数价格，Hyperliquid 保留 `main / BTC`，三家都没有推测或补算成分。
+- BTC 逐链数据实际返回 Binance 5 条、Gate 2 条、Bitget 3 条；OKX、Bybit、Aster 没有公开链列表，保持未知并展示相应官方来源说明。
+- `/api/trade-status/ZETAUSDT` 返回 HTTP 200、`errors={}`、11 个精确市场和 6 个指数面板。Hyperliquid 身份为 `future / main / ZETA`，验收时开多、开空、平空、平多均为可用；这是查询时公开状态快照，不代表特定账户订单一定成交。
+- `/api/trade-status/watches/list` 返回 HTTP 200。生产已有 SAGA、ZETA 两条 Hyperliquid `main` 订阅，本轮只读检查，没有新增、删除或修改订阅，也没有发送订单或人为触发恢复通知。
+- 生产 Playwright 验收覆盖 `1440px / 1000px / 390px`：指数面板分别为 3/2/1 列；整页及四个栏目 `scrollWidth === clientWidth`，没有栏目重叠或可见文字溢出；三个视口均渲染 8 个指数面板和 14 个精确市场，并显示统一账户数据说明。
 
 ## 已知问题与残余风险
 
@@ -142,16 +157,21 @@ Playwright 使用真实 BTC 数据验证：
 - `backend/app/models/instrument.py`
 - `backend/app/models/market.py`
 - `backend/app/models/opportunity.py`
+- `backend/app/models/pair_spread.py`
 - `backend/app/services/collector.py`
 - `backend/app/services/instrument_spreads.py`
 - `backend/app/services/spread_engine.py`
 - `backend/app/services/symbol_aliases.py`
+- `backend/tests/test_instrument_lookup.py`
+- `backend/tests/test_instrument_spreads.py`
+- `backend/tests/test_lighter_adapter.py`
+- `backend/tests/test_spread_engine.py`
+- `backend/tests/test_symbol_aliases.py`
 
 既有 `output/**`、浏览器 profile、pytest 临时目录和 `script/dexe_bybit_bitget_chain.py` 也保持未跟踪，不纳入提交。
 
 ## 下一步
 
-- 完成当前分支提交和推送。
-- 部署前使用 SQLite 在线 backup API 备份 `/data/radar.db`，记录大小、SHA-256 及源库/备份 `PRAGMA quick_check`。
-- 服务器使用 `git pull --ff-only`、`docker compose build --pull`、`docker compose up -d --remove-orphans`，禁止 `down -v`。
-- 验证前后端容器、`/api/health`、BTC/ZETA 页面和接口、恢复监控列表及八家采集器，不点击生产订阅、不发送订单、不人为触发通知。
+- 等待真实受限或未知动作恢复，核对下一次生产飞书通知是否同时包含全部开仓/平仓动作和逐链充提状态；不要人为制造状态切换。
+- 若要接入特定账户的仓位、风控或真实订单错误，应新建独立任务并明确只读授权与秘密管理边界。
+- Settings 页旧文案测试属于其他模块，应在新任务中单独处理。
