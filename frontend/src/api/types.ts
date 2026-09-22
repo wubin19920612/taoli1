@@ -1328,6 +1328,8 @@ export interface AccountPositionAccountStatus {
   account_id: string;
   account_label: string;
   exchange: string;
+  market_type: MarketType;
+  dex: string | null;
   configured: boolean;
   state: AccountPositionAccountState;
   message: string;
@@ -1341,6 +1343,79 @@ export interface AccountPositionSnapshot {
   positions: AccountPosition[];
   accounts: AccountPositionAccountStatus[];
   queried_at: string;
+}
+
+export type AccountConnectionExchange =
+  | "binance"
+  | "okx"
+  | "bybit"
+  | "gate"
+  | "bitget"
+  | "hyperliquid";
+
+export interface SupportedAccountExchange {
+  exchange: AccountConnectionExchange;
+  label: string;
+  supports_spot: boolean;
+  supports_futures: boolean;
+  requires_passphrase: boolean;
+  uses_public_address: boolean;
+  note: string;
+}
+
+export interface AccountConnection {
+  id: string;
+  exchange: AccountConnectionExchange;
+  account_label: string;
+  enabled: boolean;
+  include_spot: boolean;
+  include_futures: boolean;
+  dex: string | null;
+  credential_hint: string;
+  last_test_state: AccountPositionAccountState | null;
+  last_test_message: string | null;
+  last_tested_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AccountConnectionOverview {
+  storage_ready: boolean;
+  storage_message: string;
+  supported_exchanges: SupportedAccountExchange[];
+  connections: AccountConnection[];
+}
+
+export interface AccountConnectionWrite {
+  exchange: AccountConnectionExchange;
+  account_label: string;
+  enabled: boolean;
+  include_spot: boolean;
+  include_futures: boolean;
+  dex?: string | null;
+  api_key?: string;
+  api_secret?: string;
+  passphrase?: string;
+  public_address?: string;
+}
+
+export type AccountConnectionUpdate = Partial<Omit<AccountConnectionWrite, "exchange">>;
+
+export interface AccountConnectionTestScope {
+  market_type: MarketType;
+  dex: string | null;
+  state: AccountPositionAccountState;
+  message: string;
+  position_count: number;
+}
+
+export interface AccountConnectionTestResult {
+  connection_id: string | null;
+  exchange: AccountConnectionExchange;
+  account_label: string;
+  success: boolean;
+  scopes: AccountConnectionTestScope[];
+  tested_at: string;
 }
 
 export interface HyperliquidMarketAsset {

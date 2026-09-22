@@ -10,6 +10,7 @@ import {
   ExperimentOutlined,
   FundProjectionScreenOutlined,
   HolderOutlined,
+  KeyOutlined,
   LineChartOutlined,
   NotificationOutlined,
   NodeIndexOutlined,
@@ -61,6 +62,7 @@ type PageKey =
   | "index-components"
   | "announcements"
   | "oil-news"
+  | "account-connections"
   | "settings"
   | "history";
 
@@ -158,6 +160,11 @@ const lazyPages: Record<PageKey, LazyPage> = {
       default: module.OilNewsPage
     }))
   ),
+  "account-connections": lazy(() =>
+    import("../pages/AccountConnectionsPage").then((module) => ({
+      default: module.AccountConnectionsPage
+    }))
+  ),
   settings: lazy(() =>
     import("../pages/SettingsPage").then((module) => ({ default: module.SettingsPage }))
   ),
@@ -191,6 +198,7 @@ const defaultNavigationItems: NavigationItem[] = [
   { key: "index-components", icon: <NodeIndexOutlined />, label: "指数成分变更" },
   { key: "announcements", icon: <NotificationOutlined />, label: "交易所公告" },
   { key: "oil-news", icon: <NotificationOutlined />, label: "原油新闻" },
+  { key: "account-connections", icon: <KeyOutlined />, label: "账户连接" },
   { key: "settings", icon: <SettingOutlined />, label: "参数与告警" },
   { key: "history", icon: <BellOutlined />, label: "告警历史" }
 ];

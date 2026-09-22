@@ -28,6 +28,7 @@ const defaultNavigationOrder = [
   "index-components",
   "announcements",
   "oil-news",
+  "account-connections",
   "settings",
   "history"
 ];
@@ -195,7 +196,8 @@ describe("AppShell", () => {
 
     const labels = visibleMenuLabels();
     expect(labels.slice(0, 2)).toEqual(["告警历史", "实时机会"]);
-    expect(labels).toHaveLength(20);
+    expect(labels).toHaveLength(21);
+    expect(labels).toContain("账户连接");
     expect(labels).toContain("参数与告警");
   });
 

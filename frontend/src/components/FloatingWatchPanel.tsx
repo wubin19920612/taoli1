@@ -206,7 +206,9 @@ function positionIdentityLabel(position: AccountPositionIdentity): string {
 
 function accountStatusLabel(status: AccountPositionAccountStatus): string {
   const exchange = exchangeLabels[status.exchange] || status.exchange;
-  return `${exchange} ${status.account_label}：${status.message}`;
+  const marketType = status.market_type === "spot" ? "现货" : "永续";
+  const dex = status.exchange === "hyperliquid" ? ` · ${status.dex || "DEX 未知"}` : "";
+  return `${exchange} ${status.account_label} · ${marketType}${dex}：${status.message}`;
 }
 
 function astroHasPosition(pair: AstroPairStatus): boolean {
@@ -822,6 +824,14 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
     () => (accountPositions?.accounts ?? []).filter((account) => account.configured),
     [accountPositions]
   );
+  const configuredPositionAccountCount = useMemo(
+    () => new Set(configuredPositionAccounts.map((account) => account.account_id)).size,
+    [configuredPositionAccounts]
+  );
+  const positionAccountCount = useMemo(
+    () => new Set((accountPositions?.accounts ?? []).map((account) => account.account_id)).size,
+    [accountPositions]
+  );
 
   if (!visible) return null;
 
@@ -1217,7 +1227,7 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
             <div className="floating-watch-list floating-watch-position-list">
               <div className="floating-watch-position-toolbar">
                 <Typography.Text type="secondary">
-                  已配置账户 {configuredPositionAccounts.length} / {accountPositions?.accounts.length ?? 0}
+                  已配置账户 {configuredPositionAccountCount} / {positionAccountCount}
                 </Typography.Text>
                 <span className="floating-watch-position-actions">
                   <Tooltip title={showDustPositions ? "隐藏小于 1 USDT 的持仓" : "显示小于 1 USDT 的持仓"}>
@@ -1272,7 +1282,7 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
               {positionIssueAccounts.map((account) => (
                 <Alert
                   className="floating-watch-position-alert"
-                  key={`${account.exchange}:${account.account_id}`}
+                  key={`${account.exchange}:${account.account_id}:${account.market_type}:${account.dex ?? ""}`}
                   type="warning"
                   showIcon
                   message={accountStatusLabel(account)}
@@ -1281,6 +1291,9 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
               {!managingHiddenPositions ? visibleAccountPositions.map((accountPosition) => {
                 const sideLabel = accountPosition.side === "long" ? "多" : "空";
                 const estimatedRoi = accountPosition.estimated_fields.includes("roi_pct");
+                const estimatedMark = accountPosition.estimated_fields.includes("mark_price");
+                const estimatedNotional = accountPosition.estimated_fields.includes("notional_usdt");
+                const estimatedPnl = accountPosition.estimated_fields.includes("unrealized_pnl_usdt");
                 const multiplier = accountPosition.contract_multiplier === null
                   ? "--"
                   : `${price(accountPosition.contract_multiplier)} ${accountPosition.quantity_unit}/张`;
@@ -1314,10 +1327,10 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
                     <div className="floating-watch-account-position-metrics">
                       <span><small>数量</small><strong>{positionMetric(accountPosition.quantity)} {accountPosition.quantity_unit}</strong></span>
                       <span><small>开仓均价</small><strong>{positionMetric(accountPosition.entry_price)}</strong></span>
-                      <span><small>标记价</small><strong>{positionMetric(accountPosition.mark_price)}</strong></span>
-                      <span><small>名义价值</small><strong>{positionMetric(accountPosition.notional_usdt, " U")}</strong></span>
+                      <span><small>标记价{estimatedMark ? "（估）" : ""}</small><strong>{positionMetric(accountPosition.mark_price)}</strong></span>
+                      <span><small>名义价值{estimatedNotional ? "（估）" : ""}</small><strong>{positionMetric(accountPosition.notional_usdt, " U")}</strong></span>
                       <span className={`floating-watch-value-${tone(accountPosition.unrealized_pnl_usdt)}`}>
-                        <small>未实现盈亏</small><strong>{positionPnl(accountPosition.unrealized_pnl_usdt)}</strong>
+                        <small>未实现盈亏{estimatedPnl ? "（估）" : ""}</small><strong>{positionPnl(accountPosition.unrealized_pnl_usdt)}</strong>
                       </span>
                       <span className={`floating-watch-value-${tone(accountPosition.roi_pct)}`}>
                         <small>收益率{estimatedRoi ? "（估）" : ""}</small><strong>{positionPct(accountPosition.roi_pct)}</strong>

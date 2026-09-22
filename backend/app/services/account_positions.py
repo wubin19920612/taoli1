@@ -3,6 +3,7 @@ import hashlib
 import logging
 import math
 import os
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -18,7 +19,6 @@ from app.models.account_position import (
 )
 from app.models.market import MarketType
 from app.services.gate_twap import GateTwapClient, GateTwapError
-
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +44,8 @@ class AccountPositionProvider(Protocol):
     exchange: str
     account_id: str
     account_label: str
+    market_type: MarketType
+    dex: str | None
 
     @property
     def configured(self) -> bool: ...
@@ -53,6 +55,8 @@ class AccountPositionProvider(Protocol):
 
 class GateAccountPositionProvider:
     exchange = "gate"
+    market_type = MarketType.FUTURE
+    dex = None
 
     def __init__(
         self,
@@ -218,15 +222,45 @@ class AccountPositionService:
         providers: list[AccountPositionProvider],
         *,
         timeout_seconds: float = 8.0,
+        dynamic_provider_loader: Callable[[], Awaitable[list[AccountPositionProvider]]] | None = None,
     ):
         self.providers = providers
         self.timeout_seconds = timeout_seconds
-        self._cache: dict[tuple[str, str], _CachedAccountPositions] = {}
+        self.dynamic_provider_loader = dynamic_provider_loader
+        self._cache: dict[tuple[str, str, str, str], _CachedAccountPositions] = {}
+
+    def set_dynamic_provider_loader(
+        self,
+        loader: Callable[[], Awaitable[list[AccountPositionProvider]]] | None,
+    ) -> None:
+        self.dynamic_provider_loader = loader
+
+    async def _providers(self) -> list[AccountPositionProvider]:
+        dynamic: list[AccountPositionProvider] = []
+        if self.dynamic_provider_loader is not None:
+            try:
+                dynamic = await self.dynamic_provider_loader()
+            except Exception as exc:  # noqa: BLE001 - keep legacy providers available.
+                logger.warning(
+                    "account connection provider reload failed failure_type=%s",
+                    exc.__class__.__name__,
+                )
+        dynamic_scopes = {
+            (item.exchange, item.market_type, item.dex or "")
+            for item in dynamic
+        }
+        static = [
+            item
+            for item in self.providers
+            if (item.exchange, item.market_type, item.dex or "") not in dynamic_scopes
+        ]
+        return [*static, *dynamic]
 
     async def snapshot(self) -> AccountPositionSnapshot:
         queried_at = utc_now()
+        providers = await self._providers()
         results = await asyncio.gather(
-            *(self._query_provider(provider, queried_at) for provider in self.providers)
+            *(self._query_provider(provider, queried_at) for provider in providers)
         )
         positions = [position for provider_positions, _ in results for position in provider_positions]
         accounts = [status for _, status in results]
@@ -252,7 +286,12 @@ class AccountPositionService:
         provider: AccountPositionProvider,
         queried_at: datetime,
     ) -> tuple[list[AccountPosition], AccountPositionAccountStatus]:
-        key = (provider.exchange, provider.account_id)
+        key = (
+            provider.exchange,
+            provider.account_id,
+            provider.market_type.value,
+            provider.dex or "",
+        )
         if not provider.configured:
             return [], self._status(
                 provider,
@@ -311,7 +350,7 @@ class AccountPositionService:
                 AccountPositionAccountState.ERROR,
                 "账户持仓接口查询超时",
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - isolate failures to one account scope.
             logger.warning(
                 "account position query failed exchange=%s account_id=%s failure_type=%s",
                 provider.exchange,
@@ -330,7 +369,7 @@ class AccountPositionService:
         self,
         provider: AccountPositionProvider,
         queried_at: datetime,
-        key: tuple[str, str],
+        key: tuple[str, str, str, str],
         failure_state: AccountPositionAccountState,
         failure_message: str,
     ) -> tuple[list[AccountPosition], AccountPositionAccountStatus]:
@@ -380,6 +419,8 @@ class AccountPositionService:
             account_id=provider.account_id,
             account_label=provider.account_label,
             exchange=provider.exchange,
+            market_type=provider.market_type,
+            dex=provider.dex,
             configured=configured,
             state=state,
             message=message,

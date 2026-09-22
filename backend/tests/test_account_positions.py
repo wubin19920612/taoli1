@@ -19,7 +19,6 @@ from app.services.account_positions import (
     GateAccountPositionProvider,
 )
 
-
 NOW = datetime(2026, 9, 21, 8, 0, tzinfo=UTC)
 
 
@@ -77,10 +76,13 @@ class FakeProvider:
         positions: list[AccountPosition],
         *,
         configured: bool = True,
+        market_type: MarketType = MarketType.FUTURE,
     ):
         self.exchange = exchange
         self.account_id = account_id
         self.account_label = account_label
+        self.market_type = market_type
+        self.dex = None
         self.positions = positions
         self.configured = configured
         self.error: Exception | None = None
@@ -181,6 +183,50 @@ async def test_account_position_aggregation_isolates_failures_and_marks_cached_d
     assert second.accounts[0].state == AccountPositionAccountState.STALE
     assert "最近一次成功快照" in second.accounts[0].message
     assert "API key" not in second.accounts[0].message
+
+
+@pytest.mark.asyncio
+async def test_same_account_spot_and_futures_fail_independently() -> None:
+    spot_position = position().model_copy(
+        update={
+            "id": account_position_id(
+                account_id="okx:shared",
+                exchange="okx",
+                market_type=MarketType.SPOT,
+                raw_symbol="BTC-USDT",
+                side="long",
+                dex=None,
+            ),
+            "account_id": "okx:shared",
+            "exchange": "okx",
+            "market_type": MarketType.SPOT,
+            "raw_symbol": "BTC-USDT",
+            "contract_quantity": None,
+            "contract_multiplier": None,
+        }
+    )
+    spot = FakeProvider(
+        "okx",
+        "okx:shared",
+        "共享账户",
+        [spot_position],
+        market_type=MarketType.SPOT,
+    )
+    futures = FakeProvider("okx", "okx:shared", "共享账户", [])
+    futures.error = AccountPositionPermissionError("upstream detail")
+    service = AccountPositionService([], dynamic_provider_loader=lambda: _providers(spot, futures))
+
+    snapshot = await service.snapshot()
+
+    assert len(snapshot.positions) == 1
+    assert [(item.market_type, item.state) for item in snapshot.accounts] == [
+        (MarketType.SPOT, AccountPositionAccountState.OK),
+        (MarketType.FUTURE, AccountPositionAccountState.PERMISSION_DENIED),
+    ]
+
+
+async def _providers(*providers: FakeProvider) -> list[FakeProvider]:
+    return list(providers)
 
 
 class FakeGateClient:

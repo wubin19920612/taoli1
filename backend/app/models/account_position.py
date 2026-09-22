@@ -6,7 +6,6 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.models.market import MarketType
 
-
 PositionSide = Literal["long", "short"]
 
 
@@ -121,6 +120,8 @@ class AccountPositionAccountStatus(BaseModel):
     account_id: str
     account_label: str
     exchange: str
+    market_type: MarketType
+    dex: str | None = None
     configured: bool
     state: AccountPositionAccountState
     message: str

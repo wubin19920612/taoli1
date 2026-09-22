@@ -1,4 +1,9 @@
 import type {
+  AccountConnection,
+  AccountConnectionOverview,
+  AccountConnectionTestResult,
+  AccountConnectionUpdate,
+  AccountConnectionWrite,
   AccountPositionIdentity,
   AccountPositionSnapshot,
   AlertEvent,
@@ -329,6 +334,57 @@ export async function listAccountPositions(): Promise<AccountPositionSnapshot> {
     throw new Error("账户持仓响应格式无效");
   }
   return value as AccountPositionSnapshot;
+}
+
+export function listAccountConnections(): Promise<AccountConnectionOverview> {
+  return fetchJson<AccountConnectionOverview>("/account-connections");
+}
+
+export function createAccountConnection(
+  payload: AccountConnectionWrite
+): Promise<AccountConnection> {
+  return fetchJson<AccountConnection>("/account-connections", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function updateAccountConnection(
+  connectionId: string,
+  payload: AccountConnectionUpdate
+): Promise<AccountConnection> {
+  return fetchJson<AccountConnection>(`/account-connections/${encodeURIComponent(connectionId)}`, {
+    method: "PUT",
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function deleteAccountConnection(connectionId: string): Promise<void> {
+  const response = await fetch(buildUrl(`/account-connections/${encodeURIComponent(connectionId)}`), {
+    method: "DELETE",
+    headers: authHeaders()
+  });
+  if (!response.ok) {
+    throw new Error(extractErrorMessage(await response.text(), response.status));
+  }
+}
+
+export function testSavedAccountConnection(
+  connectionId: string
+): Promise<AccountConnectionTestResult> {
+  return fetchJson<AccountConnectionTestResult>(
+    `/account-connections/${encodeURIComponent(connectionId)}/test`,
+    { method: "POST" }
+  );
+}
+
+export function testDraftAccountConnection(
+  payload: AccountConnectionWrite
+): Promise<AccountConnectionTestResult> {
+  return fetchJson<AccountConnectionTestResult>("/account-connections/test", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
 }
 
 export async function mutateFloatingWatchPosition(

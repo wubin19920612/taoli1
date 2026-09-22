@@ -160,6 +160,26 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
           payload TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS account_connections (
+          id TEXT PRIMARY KEY,
+          exchange TEXT NOT NULL,
+          account_label TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          include_spot INTEGER NOT NULL DEFAULT 1,
+          include_futures INTEGER NOT NULL DEFAULT 1,
+          dex TEXT,
+          credential_hint TEXT NOT NULL,
+          encrypted_credentials TEXT NOT NULL,
+          last_test_state TEXT,
+          last_test_message TEXT,
+          last_tested_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_account_connections_exchange
+          ON account_connections(exchange, updated_at DESC);
+
         CREATE TABLE IF NOT EXISTS opportunity_history (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           observed_at TEXT NOT NULL,

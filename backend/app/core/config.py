@@ -30,6 +30,7 @@ class Settings:
     feishu_live_send_enabled: bool = False
     oil_news_feishu_live_send_enabled: bool = False
     dashboard_password: str = ""
+    account_credentials_master_key: str = ""
     history_enabled: bool = True
     history_sample_seconds: int = 120
     history_retention_days: int = 3
@@ -219,6 +220,7 @@ def get_settings() -> Settings:
             feishu_live_send_enabled,
         ),
         dashboard_password=os.getenv("DASHBOARD_PASSWORD", ""),
+        account_credentials_master_key=os.getenv("ACCOUNT_CREDENTIALS_MASTER_KEY", "").strip(),
         history_enabled=bool_env("HISTORY_ENABLED", True),
         history_sample_seconds=int(os.getenv("HISTORY_SAMPLE_SECONDS", "120")),
         history_retention_days=int(os.getenv("HISTORY_RETENTION_DAYS", "3")),

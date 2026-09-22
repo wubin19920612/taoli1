@@ -7,6 +7,10 @@ from datetime import UTC, datetime, timedelta
 import aiosqlite
 
 from app.models.alert import AlertEvent, AlertRule
+from app.models.account_connection import (
+    AccountConnectionExchange,
+    StoredAccountConnection,
+)
 from app.models.announcement import (
     AnnouncementAssetResearch,
     AnnouncementEventScheduleItem,
@@ -1818,4 +1822,92 @@ class OpportunityHistoryRepository:
             buy_volume_24h_usdt=row["buy_volume_24h_usdt"],
             sell_volume_24h_usdt=row["sell_volume_24h_usdt"],
             risk_labels=_risk_labels_from_mask(row["risk_label_mask"]),
+        )
+
+
+class AccountConnectionRepository:
+    def __init__(self, db: aiosqlite.Connection):
+        self.db = db
+
+    async def list(self) -> list[StoredAccountConnection]:
+        cursor = await self.db.execute(
+            "SELECT * FROM account_connections ORDER BY exchange, account_label, created_at"
+        )
+        return [self._row(item) for item in await cursor.fetchall()]
+
+    async def get(self, connection_id: str) -> StoredAccountConnection | None:
+        cursor = await self.db.execute(
+            "SELECT * FROM account_connections WHERE id = ?",
+            (connection_id,),
+        )
+        row = await cursor.fetchone()
+        return self._row(row) if row is not None else None
+
+    async def save(self, connection: StoredAccountConnection) -> StoredAccountConnection:
+        await self.db.execute(
+            """
+            INSERT INTO account_connections (
+              id, exchange, account_label, enabled, include_spot, include_futures,
+              dex, credential_hint, encrypted_credentials, last_test_state,
+              last_test_message, last_tested_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              exchange = excluded.exchange,
+              account_label = excluded.account_label,
+              enabled = excluded.enabled,
+              include_spot = excluded.include_spot,
+              include_futures = excluded.include_futures,
+              dex = excluded.dex,
+              credential_hint = excluded.credential_hint,
+              encrypted_credentials = excluded.encrypted_credentials,
+              last_test_state = excluded.last_test_state,
+              last_test_message = excluded.last_test_message,
+              last_tested_at = excluded.last_tested_at,
+              updated_at = excluded.updated_at
+            """,
+            (
+                connection.id,
+                connection.exchange.value,
+                connection.account_label,
+                int(connection.enabled),
+                int(connection.include_spot),
+                int(connection.include_futures),
+                connection.dex,
+                connection.credential_hint,
+                connection.encrypted_credentials,
+                connection.last_test_state.value if connection.last_test_state else None,
+                connection.last_test_message,
+                connection.last_tested_at.isoformat() if connection.last_tested_at else None,
+                connection.created_at.isoformat(),
+                connection.updated_at.isoformat(),
+            ),
+        )
+        await self.db.commit()
+        return connection
+
+    async def delete(self, connection_id: str) -> bool:
+        cursor = await self.db.execute(
+            "DELETE FROM account_connections WHERE id = ?",
+            (connection_id,),
+        )
+        await self.db.commit()
+        return bool(cursor.rowcount)
+
+    @staticmethod
+    def _row(row: aiosqlite.Row) -> StoredAccountConnection:
+        return StoredAccountConnection(
+            id=row["id"],
+            exchange=AccountConnectionExchange(row["exchange"]),
+            account_label=row["account_label"],
+            enabled=bool(row["enabled"]),
+            include_spot=bool(row["include_spot"]),
+            include_futures=bool(row["include_futures"]),
+            dex=row["dex"],
+            credential_hint=row["credential_hint"],
+            encrypted_credentials=row["encrypted_credentials"],
+            last_test_state=row["last_test_state"],
+            last_test_message=row["last_test_message"],
+            last_tested_at=row["last_tested_at"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
         )

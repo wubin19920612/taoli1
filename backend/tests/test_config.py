@@ -16,6 +16,7 @@ def test_get_settings_loads_dotenv_from_parent_directory(
                 "FEISHU_WEBHOOK_URL=https://example.test/hook",
                 "FEISHU_SECRET=local-secret",
                 "DASHBOARD_PASSWORD=dashboard-pass",
+                "ACCOUNT_CREDENTIALS_MASTER_KEY=encrypted-storage-key",
             ]
         ),
         encoding="utf-8",
@@ -25,6 +26,7 @@ def test_get_settings_loads_dotenv_from_parent_directory(
     monkeypatch.delenv("FEISHU_WEBHOOK_URL", raising=False)
     monkeypatch.delenv("FEISHU_SECRET", raising=False)
     monkeypatch.delenv("DASHBOARD_PASSWORD", raising=False)
+    monkeypatch.delenv("ACCOUNT_CREDENTIALS_MASTER_KEY", raising=False)
     get_settings.cache_clear()
 
     settings = get_settings()
@@ -33,6 +35,7 @@ def test_get_settings_loads_dotenv_from_parent_directory(
     assert settings.feishu_secret == "local-secret"
     assert settings.feishu_live_send_enabled is False
     assert settings.dashboard_password == "dashboard-pass"
+    assert settings.account_credentials_master_key == "encrypted-storage-key"
 
 
 def test_get_settings_requires_explicit_opt_in_for_live_feishu(tmp_path: Path, monkeypatch) -> None:

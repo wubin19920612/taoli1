@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import (
+    routes_account_connections,
     routes_account_positions,
     routes_announcements,
     routes_astro,
@@ -40,6 +41,7 @@ from app.api import (
 from app.core.config import Settings, get_settings
 from app.db.database import connect_database
 from app.db.repositories import (
+    AccountConnectionRepository,
     AlertEventRepository,
     AnnouncementRepository,
     IndexComponentRepository,
@@ -61,6 +63,7 @@ from app.models.opportunity import Opportunity
 from app.models.phone_alert import PhonePriceAlertEvent
 from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, LivePilotSettings, RiskSettings
 from app.services.account_positions import AccountPositionService, GateAccountPositionProvider
+from app.services.account_connections import AccountConnectionService
 from app.services.alert_engine import AlertEngine, AlertMatch, observations_are_stable, required_open_spread_pct
 from app.services.alert_messages import build_alert_message, build_alert_rating_header
 from app.services.alert_metrics import observe_alert_metrics
@@ -1022,6 +1025,14 @@ def create_app(
                 app.state.hyperliquid_trade_status_service,
             )
         app.state.settings_repo = SettingsRepository(db)
+        app.state.account_connection_service = AccountConnectionService(
+            AccountConnectionRepository(db),
+            master_key=app_settings.account_credentials_master_key,
+            dashboard_password=app_settings.dashboard_password,
+        )
+        app.state.account_position_service.set_dynamic_provider_loader(
+            app.state.account_connection_service.providers
+        )
         app.state.astro_alert_service.risk_settings_loader = (
             app.state.settings_repo.get_risk_settings
         )
@@ -1291,6 +1302,7 @@ def create_app(
                 "oil_news_monitor",
                 "trade_availability_service",
                 "hyperliquid_trade_status_service",
+                "account_connection_service",
                 "feishu_notifier",
             )
             await db.close()
@@ -1319,6 +1331,7 @@ def create_app(
     app.state.negative_basis_monitor = None
     app.state.trade_availability_service = None
     app.state.account_position_service = None
+    app.state.account_connection_service = None
     app.state.alert_engine = AlertEngine()
     app.state.phone_price_alert_engine = PhonePriceAlertEngine()
     app.state.opportunity_radar_alert_engine = OpportunityRadarAlertEngine()
@@ -1378,6 +1391,7 @@ def create_app(
         allow_headers=["*"],
     )
     app.include_router(routes_health.router, prefix="/api")
+    app.include_router(routes_account_connections.router, prefix="/api")
     app.include_router(routes_account_positions.router, prefix="/api")
     app.include_router(routes_astro.router, prefix="/api")
     app.include_router(routes_opportunities.router, prefix="/api")
