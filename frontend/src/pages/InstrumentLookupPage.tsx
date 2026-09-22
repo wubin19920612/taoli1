@@ -58,7 +58,6 @@ import type {
   MarketTradeAvailability,
   MarketSnapshot,
   MarketType,
-  SpotTransferAvailability,
   SymbolSpreadPoint,
   SymbolSpreadQueryResult,
   TradeActionStatus,
@@ -366,81 +365,66 @@ function MarketCell({ market }: { market: MarketSnapshot | null }) {
   );
 }
 
-function tradeActionTag(action: TradeActionStatus) {
+function tradeActionMeta(action: TradeActionStatus) {
   const config = {
-    available: { color: "green", label: "公开可用" },
-    blocked: { color: "red", label: "已阻止" },
-    conditional: { color: "gold", label: "有条件" },
-    unknown: { color: "default", label: "未知" },
-    not_applicable: { color: "default", label: "不适用" }
+    available: { color: "green", label: "公开可用", tone: "available" },
+    blocked: { color: "red", label: "公开受限", tone: "blocked" },
+    conditional: { color: "gold", label: "账户有条件", tone: "conditional" },
+    unknown: { color: "default", label: "状态未知", tone: "unknown" },
+    not_applicable: { color: "default", label: "不适用", tone: "unknown" }
   }[action.state];
-  return <Tooltip title={action.reason}><Tag color={config.color}>{config.label}</Tag></Tooltip>;
+  return config;
 }
 
-function TradeActionCell({
+function TradeActionTile({
   action,
   label
 }: {
   action: TradeActionStatus;
   label: string;
 }) {
+  const config = tradeActionMeta(action);
   return (
-    <div className="instrument-hl-action">
-      <div><span>{label}</span>{tradeActionTag(action)}</div>
-      <span>价格 {price(action.executable_price)}</span>
-      <span>1% 深度 {compactUsdt(action.depth_1pct_usdt)}</span>
-      <span>证据 {({
-        public_market: "公开市场",
-        account: "账户条件",
-        order_error: "真实订单错误",
-        platform_capability: "平台能力",
-        none: "无"
-      } as const)[action.scope]}</span>
+    <div className={`instrument-trade-action instrument-trade-action-${config.tone}`}>
+      <span>{label}</span>
       <Tooltip title={action.reason}>
-        <span className="instrument-hl-reason">{action.reason}</span>
+        <Tag color={config.color}>{config.label}</Tag>
       </Tooltip>
     </div>
   );
 }
 
-function transferStateTag(label: string, state: SpotTransferAvailability["deposit_state"]) {
-  const config = {
-    enabled: { color: "green", text: "全开" },
-    partial: { color: "gold", text: "部分开放" },
-    disabled: { color: "red", text: "已关闭" },
-    unknown: { color: "default", text: "未知" }
-  }[state];
-  return <Tag color={config.color}>{label} {config.text}</Tag>;
-}
-
-function SpotTransferCell({ transfer }: { transfer: SpotTransferAvailability | null }) {
-  if (!transfer) return null;
-  const enabledLabel = (value: boolean | null) => value === null ? "未知" : value ? "开放" : "关闭";
-  const networkDetails = transfer.networks.length ? (
-    <div className="instrument-transfer-networks">
-      {transfer.networks.map((network, index) => (
-        <span key={`${network.network}:${index}`}>
-          {network.network}: 充币 {enabledLabel(network.deposit_enabled)} · 提币 {enabledLabel(network.withdraw_enabled)}
-        </span>
-      ))}
-    </div>
-  ) : transfer.note;
+function TradeEvidenceTag({ evidence }: { evidence: MarketTradeAvailability["diagnostics"][number] }) {
+  const scopeLabel = {
+    public_market: "公开市场",
+    account: "账户",
+    order_error: "真实订单",
+    platform_capability: "平台能力",
+    none: "其他"
+  }[evidence.scope];
+  const stateConfig = {
+    confirmed: { color: "green", label: "已确认" },
+    not_checked: { color: "default", label: "未核验" },
+    not_provided: { color: "default", label: "未提供" },
+    error: { color: "red", label: "错误" }
+  }[evidence.state];
+  const detail = evidence.raw_error
+    ? `${evidence.message}\n${evidence.raw_error}`
+    : evidence.message;
   return (
-    <div className="instrument-transfer-cell">
-      <strong>{transfer.asset}</strong>
-      <div>
-        {transferStateTag("充币", transfer.deposit_state)}
-        {transferStateTag("提币", transfer.withdraw_state)}
-      </div>
-      <Tooltip title={networkDetails}>
-        <span>{transfer.networks.length ? `${transfer.networks.length} 条链` : transfer.publicly_queryable ? "未取得数据" : "公开接口需鉴权或未提供"}</span>
-      </Tooltip>
-      <Tooltip title={transfer.error || transfer.note || transfer.source}>
-        <span>{transfer.source}</span>
-      </Tooltip>
-      <span>检测 {ageText(transfer.observed_at)}</span>
-    </div>
+    <Tooltip title={detail}>
+      <Tag color={stateConfig.color}>{scopeLabel} {stateConfig.label}</Tag>
+    </Tooltip>
   );
+}
+
+function TransferNetworkState({ value }: { value: boolean | null }) {
+  const config = value === true
+    ? { className: "enabled", label: "开启" }
+    : value === false
+      ? { className: "paused", label: "暂停" }
+      : { className: "unknown", label: "未知" };
+  return <span className={`instrument-transfer-state instrument-transfer-state-${config.className}`}>{config.label}</span>;
 }
 
 function resultPriceRange(result: InstrumentLookupResult | null): { min: number; max: number } | null {
@@ -780,6 +764,9 @@ export function InstrumentLookupPage() {
   const spotTransferUnknownMarkets = tradeStatus?.markets.filter(
     (market) => market.market_type === "spot" && market.spot_transfer?.all_enabled == null
   ) ?? [];
+  const spotTransferMarkets = tradeStatus?.markets.filter(
+    (market) => market.market_type === "spot"
+  ) ?? [];
 
   const tradeMarketKey = (market: MarketTradeAvailability) => (
     `${market.exchange}:${market.market_type}:${market.dex ?? ""}:${market.raw_symbol}`
@@ -1076,167 +1063,6 @@ export function InstrumentLookupPage() {
     }
   ], []);
 
-  const tradeStatusColumns: ColumnsType<MarketTradeAvailability> = [
-    {
-      title: "市场",
-      key: "market",
-      fixed: "left",
-      width: 160,
-      render: (_, market) => (
-        <div className="instrument-funding-cell">
-          <Typography.Text strong>{exchangeLabels[market.exchange] ?? market.exchange}</Typography.Text>
-          <span>{marketTypeLabel(market.market_type)} · {market.raw_symbol}</span>
-          {market.dex ? <span>DEX {market.dex}</span> : null}
-          <Tag color={market.coverage_tier === "core" ? "blue" : market.coverage_tier === "evaluated" ? "gold" : "cyan"}>
-            {market.coverage_tier === "core" ? "核心覆盖" : market.coverage_tier === "evaluated" ? "评估接入" : "既有接入"}
-          </Tag>
-        </div>
-      )
-    },
-    {
-      title: "诊断证据",
-      key: "diagnostics",
-      width: 260,
-      render: (_, market) => (
-        <div className="instrument-trade-evidence">
-          <div>
-            <Tooltip title={market.public_status_source}>
-              <Tag color={
-                market.buy_open.state === "blocked" || market.sell_open.state === "blocked"
-                  ? "red"
-                  : market.buy_open.state === "unknown" || market.sell_open.state === "unknown"
-                    ? "gold"
-                    : "green"
-              }>
-                公开 {market.public_status_code}
-              </Tag>
-            </Tooltip>
-            <Tag>账户 未核验</Tag>
-            <Tag>订单 未提供</Tag>
-          </div>
-          <Tooltip title={market.public_restrictions.join("；") || "公开元数据未报告限制"}>
-            <span className="instrument-hl-reason">
-              {market.public_restrictions.join("；") || "公开元数据未报告限制"}
-            </span>
-          </Tooltip>
-        </div>
-      )
-    },
-    {
-      title: "普通买入（非 Reduce Only）",
-      key: "buy_open",
-      width: 235,
-      render: (_, market) => <TradeActionCell action={market.buy_open} label="Buy" />
-    },
-    {
-      title: "普通卖出（非 Reduce Only）",
-      key: "sell_open",
-      width: 235,
-      render: (_, market) => <TradeActionCell action={market.sell_open} label="Sell" />
-    },
-    {
-      title: "买入平空（Reduce Only）",
-      key: "buy_reduce_only",
-      width: 230,
-      render: (_, market) => market.market_type === "spot"
-        ? null
-        : <TradeActionCell action={market.buy_reduce_only} label="Buy / 平空" />
-    },
-    {
-      title: "卖出平多（Reduce Only）",
-      key: "sell_reduce_only",
-      width: 230,
-      render: (_, market) => market.market_type === "spot"
-        ? null
-        : <TradeActionCell action={market.sell_reduce_only} label="Sell / 平多" />
-    },
-    {
-      title: "现货充提",
-      key: "spot_transfer",
-      width: 255,
-      render: (_, market) => market.market_type === "spot"
-        ? <SpotTransferCell transfer={market.spot_transfer} />
-        : null
-    },
-    {
-      title: "实时盘口",
-      key: "book",
-      width: 190,
-      render: (_, market) => (
-        <div className="instrument-funding-cell">
-          <span>买一 {price(market.best_bid)}</span>
-          <span>卖一 {price(market.best_ask)}</span>
-          <span>买深 {compactUsdt(market.bid_depth_1pct_usdt)}</span>
-          <span>卖深 {compactUsdt(market.ask_depth_1pct_usdt)}</span>
-          <Tooltip title={market.orderbook_source}><span>{market.orderbook_source}</span></Tooltip>
-        </div>
-      )
-    },
-    {
-      title: "成交 / 资金",
-      key: "market_size",
-      width: 200,
-      render: (_, market) => (
-        <div className="instrument-funding-cell">
-          <span>24h {compactUsdt(market.volume_24h_usdt)}</span>
-          <span>标记 {price(market.mark_price)}</span>
-          <span>指数 {price(market.index_price)}</span>
-          <span>资金 {signedPct(market.funding_rate_pct, 6)} / {market.funding_interval_hours ? `${market.funding_interval_hours}h` : "-"}</span>
-          {market.funding_next_rate_pct !== null ? <span>预估 {signedPct(market.funding_next_rate_pct, 6)}</span> : null}
-        </div>
-      )
-    },
-    {
-      title: "手续费 / 倍率",
-      key: "cost",
-      width: 190,
-      render: (_, market) => (
-        <div className="instrument-funding-cell">
-          <Tooltip title={market.fee_note}><span>手续费 {market.fees_included ? "已计入" : "未计入"}</span></Tooltip>
-          <span>Maker {market.maker_fee_pct === null ? "-" : signedPct(market.maker_fee_pct, 4)}</span>
-          <span>Taker {market.taker_fee_pct === null ? "-" : signedPct(market.taker_fee_pct, 4)}</span>
-          <span>价格倍率 {market.market_multiplier}x</span>
-          <span>数量乘数 {market.contract_size_multiplier}</span>
-        </div>
-      )
-    },
-    {
-      title: "更新时间",
-      key: "updated",
-      width: 175,
-      render: (_, market) => (
-        <div className="instrument-funding-cell">
-          <Tooltip title={fullTime(market.orderbook_updated_at)}><span>盘口 {ageText(market.orderbook_updated_at)}</span></Tooltip>
-          <Tooltip title={fullTime(market.market_data_updated_at)}><span>行情 {ageText(market.market_data_updated_at)}</span></Tooltip>
-          <Tooltip title={fullTime(market.observed_at)}><span>诊断 {ageText(market.observed_at)}</span></Tooltip>
-        </div>
-      )
-    },
-    {
-      title: "恢复监控",
-      key: "watch",
-      fixed: "right",
-      width: 82,
-      render: (_, market) => {
-        const watch = tradeWatchFor(market);
-        return (
-          <Tooltip title={watch?.last_error || (watch ? "停止服务端飞书恢复监控" : "普通买卖从不可用恢复为公开可用时飞书提醒")}>
-            <Button
-              size="small"
-              type={watch ? "default" : "primary"}
-              icon={watch ? <CloseOutlined /> : <BellOutlined />}
-              aria-label={`市场 ${exchangeLabels[market.exchange] ?? market.exchange} ${market.market_type} ${market.dex ? `${market.dex} ` : ""}${market.raw_symbol} ${watch ? "取消恢复通知" : "订阅恢复通知"}`}
-              loading={tradeWatchSaving === tradeMarketKey(market)}
-              onClick={() => void toggleTradeWatch(market)}
-            >
-              {watch ? "取消" : "订阅"}
-            </Button>
-          </Tooltip>
-        );
-      }
-    }
-  ];
-
   const spreadColumns: ColumnsType<InstrumentSpreadComparison> = [
     {
       title: "差价类型",
@@ -1471,7 +1297,7 @@ export function InstrumentLookupPage() {
               <Tag color="blue">5 家核心覆盖</Tag>
               <Tag color="gold">Aster / Lighter 已评估</Tag>
               {blockedTradeMarkets.length ? <Tag color="red">{blockedTradeMarkets.length} 个市场有限制</Tag> : <Tag color="green">未发现公开普通交易限制</Tag>}
-              {spotTransferIssueMarkets.length ? <Tag color="red">{spotTransferIssueMarkets.length} 个现货充提非全开</Tag> : null}
+              {spotTransferIssueMarkets.length ? <Tag color="red">{spotTransferIssueMarkets.length} 个现货充提有异常</Tag> : null}
               {spotTransferUnknownMarkets.length ? <Tag>{spotTransferUnknownMarkets.length} 个现货充提未知</Tag> : null}
             </Space>
           </div>
@@ -1515,17 +1341,159 @@ export function InstrumentLookupPage() {
               description={Object.entries(tradeStatus.errors).map(([key, value]) => `${key}: ${value}`).join(" | ")}
             />
           ) : null}
-          <Table<MarketTradeAvailability>
-            rowKey={tradeMarketKey}
-            columns={tradeStatusColumns}
-            dataSource={tradeStatus.markets}
-            pagination={false}
-            size="small"
-            sticky={{ offsetHeader: 55 }}
-            scroll={{ x: 2515 }}
-          />
+          <div className="instrument-trade-market-list" role="table" aria-label="全交易所交易可用性明细">
+            <div className="instrument-trade-market-head" role="row">
+              <span>市场</span>
+              <span>公开状态与诊断</span>
+              <span>交易动作</span>
+              <span>恢复监控</span>
+            </div>
+            {tradeStatus.markets.map((market) => {
+              const watch = tradeWatchFor(market);
+              const hasIssue = market.buy_open.state !== "available" || market.sell_open.state !== "available";
+              const publicTone = market.buy_open.state === "blocked" || market.sell_open.state === "blocked"
+                ? "red"
+                : market.buy_open.state === "unknown" || market.sell_open.state === "unknown"
+                  ? "gold"
+                  : "green";
+              return (
+                <article
+                  className={`instrument-trade-market-row${hasIssue ? " instrument-trade-market-row-issue" : ""}`}
+                  key={tradeMarketKey(market)}
+                  role="row"
+                >
+                  <div className="instrument-trade-market-main">
+                    <div className="instrument-trade-market-identity" role="cell">
+                      <strong>{exchangeLabels[market.exchange] ?? market.exchange}</strong>
+                      <span>{marketTypeLabel(market.market_type)} · {market.dex ? `DEX ${market.dex} · ` : ""}{market.raw_symbol}</span>
+                      <span>{market.market_type} / {market.dex ? `${market.dex} / ` : ""}{market.raw_symbol}</span>
+                      <Tag color={market.coverage_tier === "core" ? "blue" : market.coverage_tier === "evaluated" ? "gold" : "cyan"}>
+                        {market.coverage_tier === "core" ? "核心覆盖" : market.coverage_tier === "evaluated" ? "评估接入" : "既有接入"}
+                      </Tag>
+                    </div>
+                    <div className="instrument-trade-public-state" role="cell">
+                      <div>
+                        <Tooltip title={market.public_status_source}>
+                          <Tag color={publicTone}>公开 {market.public_status_code}</Tag>
+                        </Tooltip>
+                        {market.diagnostics
+                          .filter((evidence) => evidence.scope !== "public_market")
+                          .map((evidence) => <TradeEvidenceTag key={`${evidence.scope}:${evidence.reason_code}`} evidence={evidence} />)}
+                      </div>
+                      <Tooltip title={market.public_restrictions.join("；") || "公开元数据未报告限制"}>
+                        <span>{market.public_restrictions.join("；") || "公开元数据未报告限制"}</span>
+                      </Tooltip>
+                    </div>
+                    <div className="instrument-trade-actions" role="cell">
+                      <div className={`instrument-trade-action-groups${market.market_type === "spot" ? " instrument-trade-action-groups-spot" : ""}`}>
+                        <span>{market.market_type === "spot" ? "现货交易" : "普通开仓"}</span>
+                        {market.market_type === "future" ? <span>Reduce Only 平仓</span> : null}
+                      </div>
+                      <div className={`instrument-trade-action-grid${market.market_type === "spot" ? " instrument-trade-action-grid-spot" : ""}`}>
+                        <TradeActionTile action={market.buy_open} label={market.market_type === "spot" ? "买入" : "开多"} />
+                        <TradeActionTile action={market.sell_open} label={market.market_type === "spot" ? "卖出" : "开空"} />
+                        {market.market_type === "future" ? (
+                          <>
+                            <TradeActionTile action={market.buy_reduce_only} label="平空 · Buy" />
+                            <TradeActionTile action={market.sell_reduce_only} label="平多 · Sell" />
+                          </>
+                        ) : null}
+                      </div>
+                    </div>
+                    <div className="instrument-trade-watch" role="cell">
+                      {hasIssue || watch ? (
+                        <Tooltip title={watch?.last_error || (watch ? "停止服务端飞书恢复监控" : "普通开仓从不可用恢复为公开可用时发送飞书提醒")}>
+                          <Button
+                            size="small"
+                            type={watch ? "default" : "primary"}
+                            icon={watch ? <CloseOutlined /> : <BellOutlined />}
+                            aria-label={`市场 ${exchangeLabels[market.exchange] ?? market.exchange} ${market.market_type} ${market.dex ? `${market.dex} ` : ""}${market.raw_symbol} ${watch ? "取消恢复通知" : "订阅恢复通知"}`}
+                            loading={tradeWatchSaving === tradeMarketKey(market)}
+                            onClick={() => void toggleTradeWatch(market)}
+                          >
+                            {watch ? "已订阅" : "订阅恢复"}
+                          </Button>
+                        </Tooltip>
+                      ) : <Tag color="green">正常</Tag>}
+                    </div>
+                  </div>
+                  <div className="instrument-trade-metrics">
+                    <span><b>买一</b> {price(market.best_bid)}</span>
+                    <span><b>卖一</b> {price(market.best_ask)}</span>
+                    <span><b>1% 深度</b> 买 {compactUsdt(market.bid_depth_1pct_usdt)} / 卖 {compactUsdt(market.ask_depth_1pct_usdt)}</span>
+                    <span><b>24h</b> {compactUsdt(market.volume_24h_usdt)}</span>
+                    {market.market_type === "future" ? (
+                      <span><b>资金</b> {signedPct(market.funding_rate_pct, 6)} / {market.funding_interval_hours ? `${market.funding_interval_hours}h` : "-"}</span>
+                    ) : null}
+                    {market.funding_next_rate_pct !== null ? <span><b>预估资金</b> {signedPct(market.funding_next_rate_pct, 6)}</span> : null}
+                    <span><b>Maker / Taker</b> {market.maker_fee_pct === null ? "-" : signedPct(market.maker_fee_pct, 4)} / {market.taker_fee_pct === null ? "-" : signedPct(market.taker_fee_pct, 4)}</span>
+                    <Tooltip title={market.fee_note}><span><b>手续费</b> {market.fees_included ? "已计入" : "未计入"}</span></Tooltip>
+                    <span><b>价格倍率</b> {market.market_multiplier}x</span>
+                    <span><b>数量乘数</b> {market.contract_size_multiplier}</span>
+                    {market.mark_price !== null ? <span><b>标记 / 指数</b> {price(market.mark_price)} / {price(market.index_price)}</span> : null}
+                    <Tooltip title={market.orderbook_source}><span><b>盘口源</b> {market.orderbook_source}</span></Tooltip>
+                    <Tooltip title={`盘口 ${fullTime(market.orderbook_updated_at)}；行情 ${fullTime(market.market_data_updated_at)}；诊断 ${fullTime(market.observed_at)}`}>
+                      <span><b>更新</b> 盘口 {ageText(market.orderbook_updated_at)} / 行情 {ageText(market.market_data_updated_at)} / 诊断 {ageText(market.observed_at)}</span>
+                    </Tooltip>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
           <div className="instrument-hl-limitations">
             {tradeStatus.limitations.map((item) => <span key={item}>{item}</span>)}
+          </div>
+        </section>
+      ) : null}
+
+      {spotTransferMarkets.length ? (
+        <section className="instrument-market-table instrument-transfer-status">
+          <div className="instrument-section-head">
+            <div>
+              <Typography.Title level={4}>现货充提状态</Typography.Title>
+              <Typography.Text type="secondary">每条网络独立展示公开充币与提币状态</Typography.Text>
+            </div>
+            <Tag>{spotTransferMarkets.length} 个现货市场</Tag>
+          </div>
+          <div className="instrument-transfer-grid" role="table" aria-label="现货逐链充提状态">
+            <div className="instrument-transfer-grid-head" role="row">
+              <span>交易所</span>
+              <span>资产</span>
+              <span>网络</span>
+              <span>充币</span>
+              <span>提币</span>
+              <span>数据来源</span>
+              <span>更新时间</span>
+            </div>
+            {spotTransferMarkets.flatMap((market) => {
+              const transfer = market.spot_transfer;
+              const networks = transfer?.networks.length
+                ? transfer.networks
+                : [{ network: "未返回链列表", deposit_enabled: null, withdraw_enabled: null }];
+              const sourceDetail = transfer?.error || transfer?.note || transfer?.source || "没有可公开核验的逐链状态";
+              return networks.map((network, index) => (
+                <div
+                  className={`instrument-transfer-grid-row${index === 0 ? " instrument-transfer-grid-row-start" : ""}`}
+                  key={`${tradeMarketKey(market)}:${network.network}:${index}`}
+                  role="row"
+                >
+                  <div data-label="交易所" role="cell">
+                    <strong>{exchangeLabels[market.exchange] ?? market.exchange}</strong>
+                    <span>{market.raw_symbol}</span>
+                  </div>
+                  <div data-label="资产" role="cell"><strong>{transfer?.asset ?? "-"}</strong></div>
+                  <div data-label="网络" role="cell"><strong>{network.network}</strong></div>
+                  <div data-label="充币" role="cell"><TransferNetworkState value={network.deposit_enabled} /></div>
+                  <div data-label="提币" role="cell"><TransferNetworkState value={network.withdraw_enabled} /></div>
+                  <div data-label="数据来源" role="cell">
+                    <Tooltip title={sourceDetail}><span>{transfer?.source || sourceDetail}</span></Tooltip>
+                  </div>
+                  <div data-label="更新时间" role="cell">
+                    <Tooltip title={fullTime(transfer?.observed_at)}><span>{ageText(transfer?.observed_at)}</span></Tooltip>
+                  </div>
+                </div>
+              ));
+            })}
           </div>
         </section>
       ) : null}

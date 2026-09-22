@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -389,15 +389,17 @@ describe("InstrumentLookupPage", () => {
 
     expect(await screen.findByText("全交易所交易可用性")).not.toBeNull();
     expect(screen.getByText("官方 OI 已达上限，普通增仓受限")).not.toBeNull();
-    expect(screen.getByText("DEX main")).not.toBeNull();
+    expect(screen.getByText(/DEX main/)).not.toBeNull();
     expect(screen.getByText("账户 未核验")).not.toBeNull();
-    expect(screen.getByText("订单 未提供")).not.toBeNull();
-    expect(screen.getAllByText("普通买入（非 Reduce Only）").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("普通卖出（非 Reduce Only）").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("买入平空（Reduce Only）").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("卖出平多（Reduce Only）").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("已阻止")).toHaveLength(2);
-    expect(screen.getAllByText("有条件")).toHaveLength(2);
+    expect(screen.getByText("真实订单 未提供")).not.toBeNull();
+    expect(screen.getByText("普通开仓")).not.toBeNull();
+    expect(screen.getByText("Reduce Only 平仓")).not.toBeNull();
+    expect(screen.getByText("开多")).not.toBeNull();
+    expect(screen.getByText("开空")).not.toBeNull();
+    expect(screen.getByText("平空 · Buy")).not.toBeNull();
+    expect(screen.getByText("平多 · Sell")).not.toBeNull();
+    expect(screen.getAllByText("公开受限")).toHaveLength(2);
+    expect(screen.getAllByText("账户有条件")).toHaveLength(2);
 
     const alertWatchButton = screen.getByRole("button", {
       name: "告警 Hyperliquid / future / main / ZETA 订阅恢复通知"
@@ -499,13 +501,20 @@ describe("InstrumentLookupPage", () => {
 
     expect(await screen.findByText("全交易所交易可用性")).not.toBeNull();
     expect(screen.queryByText("不适用")).toBeNull();
-    expect(screen.queryByText("Buy / 平空")).toBeNull();
-    expect(screen.queryByText("Sell / 平多")).toBeNull();
+    expect(screen.queryByText("平空 · Buy")).toBeNull();
+    expect(screen.queryByText("平多 · Sell")).toBeNull();
+    expect(screen.queryByText("Reduce Only 平仓")).toBeNull();
     expect(screen.queryByText("Sell / Short")).toBeNull();
-    expect(screen.getByText("充币 部分开放")).not.toBeNull();
-    expect(screen.getByText("提币 全开")).not.toBeNull();
-    expect(screen.getByText("2 条链")).not.toBeNull();
-    expect(screen.getByText("1 个现货充提非全开")).not.toBeNull();
+    expect(screen.getByText("买入")).not.toBeNull();
+    expect(screen.getByText("卖出")).not.toBeNull();
+    const transferTable = screen.getByRole("table", { name: "现货逐链充提状态" });
+    expect(within(transferTable).getAllByText("BTC").length).toBeGreaterThan(0);
+    expect(within(transferTable).getByText("BSC")).not.toBeNull();
+    expect(within(transferTable).getAllByText("开启")).toHaveLength(3);
+    expect(within(transferTable).getByText("暂停")).not.toBeNull();
+    expect(within(transferTable).queryByText("部分开放")).toBeNull();
+    expect(within(transferTable).queryByText("2 条链")).toBeNull();
+    expect(screen.getByText("1 个现货充提有异常")).not.toBeNull();
   });
 
   it("adds the current symbol to the floating watch", async () => {
