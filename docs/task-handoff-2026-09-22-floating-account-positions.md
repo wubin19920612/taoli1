@@ -18,7 +18,7 @@
 - 分支：`codex/frontend-localization-polish`
 - 开始基线：`55a081a`（浮窗账户持仓交付后的文档提交）
 - 开发期间分支吸收了同分支已推送的交易可用性改版、交付文档及状态指标改版，最终代码基线为 `5ec8ed7`。
-- 本任务功能提交和最终部署提交：部署完成后补充。
+- 功能提交和生产功能镜像：`c1a8c18`（`feat: add direct account position connections`）。
 
 ## 已完成功能
 
@@ -83,10 +83,14 @@
 
 ## 线上状态
 
-- 数据库备份：部署完成后补充文件名、大小、SHA-256 和 `PRAGMA quick_check`。
-- 部署版本和容器状态：部署完成后补充。
-- `/api/health`、账户连接接口、持仓接口和重启持久化：部署完成后补充。
-- 真实账户持仓只有在用户通过新页面填写只读凭据或公开地址后才能核验；未填写前不能把空结果解释为“没有持仓”。
+- 数据库在线备份：`backups/radar-20260922T043320Z-pre-floating-account-positions.db`，`599015424` 字节，SHA-256 `08fbac98684a4d94070ce86ddd58aac16d0d19d9543d8ab054050588bb7dfd8d`，`PRAGMA quick_check=ok`。
+- 修改生产 `.env` 前另存 `.env.backup-floating-account-positions-20260922T043522Z`；生产已配置非空 `DASHBOARD_PASSWORD` 和新生成的 Fernet 主密钥，二者均未写入仓库或本文档。
+- 服务器已执行 `git pull --ff-only origin codex/frontend-localization-polish`，并使用 `docker compose build --pull`、`docker compose up -d --remove-orphans` 重建；没有执行 `down -v`。
+- 功能镜像版本为 `c1a8c18`；前后端容器均为 `healthy`，`/api/health` 返回 `status=ok`，8 个行情交易所均为 `healthy`、`exchange_errors={}`。
+- 鉴权后的 `/api/account-connections` 返回 HTTP 200、`storage_ready=true`；`/api/account-positions` 返回 HTTP 200。
+- 使用明确标记的 Hyperliquid 零地址临时连接验证官方接口：测试读取成功并得到已核验空仓；后端重启后连接仍存在，随后删除，生产连接数恢复为 0。
+- 使用临时完整持仓身份验证浮窗屏蔽和恢复接口，写入与移除均返回 HTTP 200，清理后屏蔽列表数量恢复原值。
+- 用户真实账户尚未在新页面填写，因此当前 `position_count=0` 只能解释为“尚未配置真实账户”，不能解释为“真实账户没有持仓”。
 
 ## 已知问题与残余风险
 
