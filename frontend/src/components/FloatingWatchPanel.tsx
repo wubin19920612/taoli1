@@ -293,9 +293,19 @@ function astroMarket(
   leg: AstroLeg,
   states: Record<string, InstrumentState>
 ): MarketSnapshot | null {
-  const exchange = states[astroInstrumentKey(leg)]?.result?.exchanges.find(
-    (item) => item.exchange === leg.exchange
-  );
+  const result = states[astroInstrumentKey(leg)]?.result;
+  const exact = result?.markets?.find((market) => {
+    const rawDex = market.raw_symbol.includes(":") ? market.raw_symbol.split(":", 1)[0].toLowerCase() : "";
+    const marketDex = market.dex?.toLowerCase() || (market.exchange === "hyperliquid" ? rawDex || "main" : "");
+    const requestedDex = leg.exchange === "hyperliquid" ? leg.dex.trim().toLowerCase() || "main" : "";
+    return market.exchange === leg.exchange
+      && market.market_type === leg.marketType
+      && marketDex === requestedDex
+      && market.data_status === "live";
+  });
+  if (exact) return exact;
+  if (result?.markets?.length) return null;
+  const exchange = result?.exchanges.find((item) => item.exchange === leg.exchange);
   return leg.marketType === "spot" ? exchange?.spot ?? null : exchange?.future ?? null;
 }
 
@@ -327,6 +337,15 @@ function astroRatioReference(pair: AstroPairStatus): number {
   return positivePrice(finiteNumber(pair.regressionValue)) ?? 1;
 }
 
+function astroEffectiveRatioReference(
+  pair: AstroPairStatus,
+  markets: [MarketSnapshot, MarketSnapshot]
+): number {
+  const buyAliasMultiplier = positivePrice(markets[0].symbol_alias_price_multiplier) ?? 1;
+  const sellAliasMultiplier = positivePrice(markets[1].symbol_alias_price_multiplier) ?? 1;
+  return astroRatioReference(pair) * buyAliasMultiplier / sellAliasMultiplier;
+}
+
 function astroMetrics(
   pair: AstroPairStatus,
   states: Record<string, InstrumentState>
@@ -337,6 +356,12 @@ function astroMetrics(
   const missingIndex = markets.findIndex((market) => !market);
   if (missingIndex >= 0) {
     const leg = legs[missingIndex];
+    if (leg.exchange === "rh-lighter") {
+      return {
+        value: null,
+        error: "RH-Lighter 仅为 Astro 路由；没有已验证的独立公开实时行情"
+      };
+    }
     const state = states[astroInstrumentKey(leg)];
     if (!state) return { value: null, error: "实时行情刷新中" };
     const venue = exchangeLabels[leg.exchange] ?? leg.exchange;
@@ -354,7 +379,7 @@ function astroMetrics(
     return { value: null, error: "实时行情缺少有效买卖价" };
   }
   const ratioMode = pair.type?.toUpperCase().endsWith("R") === true;
-  const ratioReference = astroRatioReference(pair);
+  const ratioReference = astroEffectiveRatioReference(pair, completeMarkets);
   return {
     value: {
       legs,
@@ -508,26 +533,27 @@ function openInstrument(symbol: string, standalone: boolean): void {
 }
 
 function astroPairSpreadLegRoute(leg: AstroLeg, market: MarketSnapshot): { symbol: string; dex: string } {
-  const aliasSymbol = market.symbol_alias_original_symbol?.trim() || "";
   const rawSymbol = market.raw_symbol.trim();
   if (leg.exchange === "hyperliquid" && leg.marketType === "future") {
     const separatorIndex = rawSymbol.indexOf(":");
     if (separatorIndex > 0) {
       return {
-        symbol: rawSymbol.slice(separatorIndex + 1).trim() || aliasSymbol || leg.symbol,
+        symbol: rawSymbol.slice(separatorIndex + 1).trim() || leg.symbol,
         dex: rawSymbol.slice(0, separatorIndex).trim().toLowerCase() || leg.dex || "main"
       };
     }
-    return { symbol: rawSymbol || aliasSymbol || leg.symbol, dex: leg.dex || "main" };
+    return { symbol: rawSymbol || leg.symbol, dex: leg.dex || "main" };
   }
-  return { symbol: aliasSymbol || rawSymbol || leg.symbol, dex: "" };
+  return { symbol: rawSymbol || leg.symbol, dex: "" };
 }
 
-function astroPairSpreadMultiplier(pair: AstroPairStatus): number {
+function astroPairSpreadMultiplier(pair: AstroPairStatus, markets: [MarketSnapshot, MarketSnapshot]): number {
   if (!pair.type?.toUpperCase().endsWith("R")) return 1;
   const regressionValue = astroRatioReference(pair);
-  // Astro multiplies the sell leg; pair spread expresses the same ratio by dividing leg 2.
-  return 1 / regressionValue;
+  const buyAliasMultiplier = positivePrice(markets[0].symbol_alias_price_multiplier) ?? 1;
+  const sellAliasMultiplier = positivePrice(markets[1].symbol_alias_price_multiplier) ?? 1;
+  // Pair spread applies market aliases separately, then expresses Astro's ratio by dividing leg 2.
+  return sellAliasMultiplier / (regressionValue * buyAliasMultiplier);
 }
 
 function openAstroPair(
@@ -544,10 +570,23 @@ function openAstroPair(
     url.searchParams.set(`leg${key}_exchange`, leg.exchange);
     url.searchParams.set(`leg${key}_market_type`, leg.marketType);
     url.searchParams.set(`leg${key}_symbol`, marketRoute.symbol);
+    url.searchParams.set(`leg${key}_raw_symbol`, route.markets[index].raw_symbol);
+    url.searchParams.set(
+      `leg${key}_price_multiplier`,
+      String(route.markets[index].symbol_alias_price_multiplier ?? 1)
+    );
+    if (route.markets[index].contract_size_multiplier !== null && route.markets[index].contract_size_multiplier !== undefined) {
+      url.searchParams.set(
+        `leg${key}_contract_size_multiplier`,
+        String(route.markets[index].contract_size_multiplier)
+      );
+    } else {
+      url.searchParams.delete(`leg${key}_contract_size_multiplier`);
+    }
     if (marketRoute.dex) url.searchParams.set(`leg${key}_dex`, marketRoute.dex);
     else url.searchParams.delete(`leg${key}_dex`);
   });
-  url.searchParams.set("leg2_multiplier", String(astroPairSpreadMultiplier(pair)));
+  url.searchParams.set("leg2_multiplier", String(astroPairSpreadMultiplier(pair, route.markets)));
   url.searchParams.set("hours", "4");
   url.searchParams.set("interval_seconds", "60");
   url.searchParams.delete("interval_minutes");
@@ -565,6 +604,21 @@ function openPair(preset: PairSpreadPreset, standalone: boolean): void {
     const dex = preset[`leg${side}_dex`];
     if (dex) url.searchParams.set(`leg${side}_dex`, dex);
     else url.searchParams.delete(`leg${side}_dex`);
+    const rawSymbol = preset[`leg${side}_raw_symbol`];
+    if (rawSymbol) url.searchParams.set(`leg${side}_raw_symbol`, rawSymbol);
+    else url.searchParams.delete(`leg${side}_raw_symbol`);
+    const priceMultiplier = preset[`leg${side}_price_multiplier`];
+    if (typeof priceMultiplier === "number") {
+      url.searchParams.set(`leg${side}_price_multiplier`, String(priceMultiplier));
+    } else {
+      url.searchParams.delete(`leg${side}_price_multiplier`);
+    }
+    const contractMultiplier = preset[`leg${side}_contract_size_multiplier`];
+    if (typeof contractMultiplier === "number") {
+      url.searchParams.set(`leg${side}_contract_size_multiplier`, String(contractMultiplier));
+    } else {
+      url.searchParams.delete(`leg${side}_contract_size_multiplier`);
+    }
   });
   url.searchParams.set("leg2_multiplier", String(preset.leg2_multiplier));
   url.searchParams.set("hours", String(preset.hours));

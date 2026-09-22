@@ -38,9 +38,9 @@ def test_build_instrument_spreads_keeps_best_executable_direction_and_sorts() ->
 
     assert len(comparisons) == 3
     assert [item.id for item in comparisons] == [
-        "okx:future->binance:future",
-        "binance:spot->binance:future",
-        "okx:future->binance:spot",
+        "okx:future::BTCUSDT:1->binance:future::BTCUSDT:1",
+        "binance:spot::BTCUSDT:1->binance:future::BTCUSDT:1",
+        "okx:future::BTCUSDT:1->binance:spot::BTCUSDT:1",
     ]
     assert comparisons[0].executable_spread_pct == pytest.approx(2.0)
     assert comparisons[0].price_difference == 2
@@ -64,7 +64,7 @@ def test_build_instrument_spreads_lists_spot_pair_but_marks_astro_unsupported() 
         now=now,
     )
 
-    assert comparison.id == "binance:spot->gate:spot"
+    assert comparison.id == "binance:spot::BTCUSDT:1->gate:spot::BTCUSDT:1"
     assert comparison.opportunity_type == "SS"
     assert comparison.astro_supported is False
     assert comparison.astro_blocker == "Astro 暂不支持现货对现货卡片"
@@ -86,6 +86,22 @@ def test_build_instrument_spreads_excludes_stale_market_snapshots() -> None:
     )
 
     assert comparisons == []
+
+
+def test_build_instrument_spreads_uses_upstream_timestamp_for_freshness() -> None:
+    now = datetime(2026, 9, 13, 1, tzinfo=UTC)
+    delayed = market("lighter", MarketType.FUTURE, bid=101, ask=102).model_copy(
+        update={"timestamp": now, "upstream_timestamp": now - timedelta(seconds=31)}
+    )
+    fresh = market("binance", MarketType.FUTURE, bid=98, ask=99).model_copy(
+        update={"timestamp": now}
+    )
+
+    assert build_instrument_spreads(
+        [delayed, fresh],
+        stale_after_seconds=30,
+        now=now,
+    ) == []
 
 
 def test_lighter_spread_is_visible_with_gc_route() -> None:

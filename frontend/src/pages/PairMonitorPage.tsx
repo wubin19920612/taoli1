@@ -85,6 +85,16 @@ type LegacyPairSpreadFormValues = Omit<
 > &
   Partial<Pick<PairSpreadFormValues, "leg1_market_type" | "leg2_market_type" | "leg1_dex" | "leg2_dex">>;
 
+type PairSpreadIdentityMetadata = Pick<
+  PairSpreadPreset,
+  | "leg1_raw_symbol"
+  | "leg1_price_multiplier"
+  | "leg1_contract_size_multiplier"
+  | "leg2_raw_symbol"
+  | "leg2_price_multiplier"
+  | "leg2_contract_size_multiplier"
+>;
+
 type SavedPairSpreadPreset = PairSpreadPreset;
 
 type SavedPairSpreadGroup = {
@@ -95,7 +105,7 @@ type SavedPairSpreadGroup = {
   latestSavedAt: string;
 };
 
-type LegacySavedPairSpreadPreset = LegacyPairSpreadFormValues & {
+type LegacySavedPairSpreadPreset = LegacyPairSpreadFormValues & Partial<PairSpreadIdentityMetadata> & {
   id: string;
   hours: number;
   intervalMinutes?: number;
@@ -703,6 +713,91 @@ function pairQueryFromUrl(): { values: PairSpreadFormValues; hours: number; inte
   };
 }
 
+function positiveUrlNumber(params: URLSearchParams, key: string): number | null {
+  const raw = params.get(key);
+  if (raw === null || raw.trim() === "") return null;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function pairIdentityMetadataFromUrl(): PairSpreadIdentityMetadata {
+  const params = new URLSearchParams(window.location.search);
+  return {
+    leg1_raw_symbol: params.get("leg1_raw_symbol"),
+    leg1_price_multiplier: positiveUrlNumber(params, "leg1_price_multiplier") ?? 1,
+    leg1_contract_size_multiplier: positiveUrlNumber(params, "leg1_contract_size_multiplier"),
+    leg2_raw_symbol: params.get("leg2_raw_symbol"),
+    leg2_price_multiplier: positiveUrlNumber(params, "leg2_price_multiplier") ?? 1,
+    leg2_contract_size_multiplier: positiveUrlNumber(params, "leg2_contract_size_multiplier")
+  };
+}
+
+function pairIdentityMetadataFromResult(result: PairSpreadQueryResult): PairSpreadIdentityMetadata {
+  return {
+    leg1_raw_symbol: result.current?.leg1.raw_symbol ?? null,
+    leg1_price_multiplier: result.current?.leg1.price_multiplier ?? 1,
+    leg1_contract_size_multiplier: result.current?.leg1.contract_size_multiplier ?? null,
+    leg2_raw_symbol: result.current?.leg2.raw_symbol ?? null,
+    leg2_price_multiplier: result.current?.leg2.price_multiplier ?? 1,
+    leg2_contract_size_multiplier: result.current?.leg2.contract_size_multiplier ?? null
+  };
+}
+
+function pairIdentityMetadataFromUrlOrResult(
+  result: PairSpreadQueryResult
+): PairSpreadIdentityMetadata {
+  const params = new URLSearchParams(window.location.search);
+  const resolved = pairIdentityMetadataFromResult(result);
+  ([1, 2] as const).forEach((side) => {
+    const rawSymbol = params.get(`leg${side}_raw_symbol`)?.trim();
+    if (rawSymbol) resolved[`leg${side}_raw_symbol`] = rawSymbol;
+    const priceMultiplier = positiveUrlNumber(params, `leg${side}_price_multiplier`);
+    if (params.has(`leg${side}_price_multiplier`) && priceMultiplier !== null) {
+      resolved[`leg${side}_price_multiplier`] = priceMultiplier;
+    }
+    const contractMultiplier = positiveUrlNumber(params, `leg${side}_contract_size_multiplier`);
+    if (params.has(`leg${side}_contract_size_multiplier`) && contractMultiplier !== null) {
+      resolved[`leg${side}_contract_size_multiplier`] = contractMultiplier;
+    }
+  });
+  return resolved;
+}
+
+function urlIdentityMatchesPair(values: PairSpreadFormValues): boolean {
+  const params = new URLSearchParams(window.location.search);
+  const hasIdentity = ([1, 2] as const).some((side) => (
+    params.has(`leg${side}_raw_symbol`)
+    || params.has(`leg${side}_price_multiplier`)
+    || params.has(`leg${side}_contract_size_multiplier`)
+  ));
+  if (!hasIdentity) return false;
+  const urlQuery = pairQueryFromUrl();
+  return Boolean(urlQuery && pairConfigId(urlQuery.values) === pairConfigId(values));
+}
+
+function replacePairIdentityMetadataInUrl(identity: Partial<PairSpreadIdentityMetadata>): void {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  ([1, 2] as const).forEach((side) => {
+    const rawSymbol = identity[`leg${side}_raw_symbol`]?.trim();
+    if (rawSymbol) url.searchParams.set(`leg${side}_raw_symbol`, rawSymbol);
+    else url.searchParams.delete(`leg${side}_raw_symbol`);
+    const priceMultiplier = identity[`leg${side}_price_multiplier`];
+    if (typeof priceMultiplier === "number" && Number.isFinite(priceMultiplier) && priceMultiplier > 0) {
+      url.searchParams.set(`leg${side}_price_multiplier`, String(priceMultiplier));
+    } else {
+      url.searchParams.delete(`leg${side}_price_multiplier`);
+    }
+    const contractMultiplier = identity[`leg${side}_contract_size_multiplier`];
+    if (typeof contractMultiplier === "number" && Number.isFinite(contractMultiplier) && contractMultiplier > 0) {
+      url.searchParams.set(`leg${side}_contract_size_multiplier`, String(contractMultiplier));
+    } else {
+      url.searchParams.delete(`leg${side}_contract_size_multiplier`);
+    }
+  });
+  window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
 function pairPresetId(values: PairSpreadFormValues): string {
   const normalized = normalizePairForm(values);
   return [
@@ -778,6 +873,22 @@ function replacePairQueryInUrl(values: PairSpreadFormValues, hours: number, inte
   url.searchParams.delete("symbol");
   url.searchParams.delete("from");
   applyPairQueryParams(url, values, hours, intervalSeconds);
+  window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+function swapPairIdentityMetadataInUrl(): void {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  ["raw_symbol", "price_multiplier", "contract_size_multiplier"].forEach((field) => {
+    const leftKey = `leg1_${field}`;
+    const rightKey = `leg2_${field}`;
+    const left = url.searchParams.get(leftKey);
+    const right = url.searchParams.get(rightKey);
+    if (right === null) url.searchParams.delete(leftKey);
+    else url.searchParams.set(leftKey, right);
+    if (left === null) url.searchParams.delete(rightKey);
+    else url.searchParams.set(rightKey, left);
+  });
   window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
 }
 
@@ -1897,6 +2008,53 @@ function PairPositionStatsCard({ result }: { result: PairSpreadQueryResult | nul
       <div className="pair-position-grid">
         <PairPositionLeg leg={current.leg1} />
         <PairPositionLeg leg={current.leg2} />
+      </div>
+    </section>
+  );
+}
+
+function PairMarketDataLeg({ leg, side }: { leg: PairSpreadCurrentLeg; side: "左腿" | "右腿" }) {
+  const estimatedFields = leg.estimated_fields ?? [];
+  const sourceTime = leg.upstream_timestamp ?? leg.timestamp;
+  return (
+    <article className="pair-market-data-leg">
+      <div className="pair-market-data-leg-head">
+        <div>
+          <span>{side}</span>
+          <strong>{legDisplay(leg.exchange, leg.market_type, leg.symbol, "", leg.dex)}</strong>
+          <small>{leg.raw_symbol}</small>
+        </div>
+        <Tag color={leg.is_estimated || estimatedFields.length ? "gold" : "green"}>
+          {leg.is_estimated || estimatedFields.length ? "含估算" : "真实行情"}
+        </Tag>
+      </div>
+      <div className="pair-market-data-grid">
+        <span><small>Bid / Ask</small><strong>{price(leg.bid_price)} / {price(leg.ask_price)}</strong></span>
+        <span><small>24h 成交额</small><strong>{compactUsdt(leg.volume_24h_usdt)} USDT</strong></span>
+        <span><small>资金费率 / 周期</small><strong>{leg.market_type === "spot" ? "现货" : `${signedPct(leg.funding_rate_pct, 6)} / ${leg.funding_interval_hours ? `${compactNumber(leg.funding_interval_hours, 2)}h` : "-"}`}</strong></span>
+        <span><small>价格 / 数量倍率</small><strong>{compactNumber(leg.price_multiplier ?? 1, 6)}x / {compactNumber(leg.contract_size_multiplier, 6)}</strong></span>
+        <span><small>Taker 手续费</small><strong>{signedPct(leg.estimated_taker_fee_pct, 4)}{leg.fee_is_estimated ? "（估算）" : ""}</strong></span>
+        <span><small>上游时间</small><strong title={fullTime(sourceTime)}>{fullTime(sourceTime)}</strong></span>
+      </div>
+      <div className="pair-market-data-source">
+        <span title={leg.data_source ?? undefined}>来源：{leg.data_source || "未标注"}</span>
+        <span>估算字段：{estimatedFields.length ? estimatedFields.join("、") : "无"}</span>
+      </div>
+    </article>
+  );
+}
+
+function PairMarketDataCard({ result }: { result: PairSpreadQueryResult | null }) {
+  if (!result?.current) return null;
+  return (
+    <section className="pair-market-data-card">
+      <div className="pair-position-head">
+        <Typography.Title level={5}>双腿市场身份与行情质量</Typography.Title>
+        <Tag>{fullTime(result.current.observed_at)}</Tag>
+      </div>
+      <div className="pair-market-data-legs">
+        <PairMarketDataLeg leg={result.current.leg1} side="左腿" />
+        <PairMarketDataLeg leg={result.current.leg2} side="右腿" />
       </div>
     </section>
   );
@@ -4630,6 +4788,7 @@ export function PairMonitorPage() {
       const queryShowDayCompare = override?.dayCompareEnabled ?? showDayCompare;
       const queryDayCompareDays = clampDayCompareDays(override?.dayCompareDays ?? dayCompareDays);
       const queryDayCompareSettings = normalizeDayCompareSettings(override?.dayCompareSettings ?? dayCompareSettings);
+      const preserveUrlIdentity = urlIdentityMatchesPair(values);
       const next = await queryPairSpread({
         leg1_exchange: values.leg1_exchange,
         leg1_market_type: values.leg1_market_type,
@@ -4662,6 +4821,11 @@ export function PairMonitorPage() {
       );
       loadedUrlQueryRef.current = pairQueryKey(resultValues, next.hours, actualIntervalSeconds);
       replacePairQueryInUrl(resultValues, next.hours, actualIntervalSeconds);
+      replacePairIdentityMetadataInUrl(
+        preserveUrlIdentity
+          ? pairIdentityMetadataFromUrlOrResult(next)
+          : pairIdentityMetadataFromResult(next)
+      );
       if (queryShowPremiumCompare) {
         if (override?.premiumMode === "current" && premiumCompare) {
           await refreshPremiumCompareCurrent(next);
@@ -4706,7 +4870,7 @@ export function PairMonitorPage() {
     const currentValues = normalizePairForm(form.getFieldsValue(true) as LegacyPairSpreadFormValues);
     const leftSymbol = currentValues.leg1_symbol;
     const rightSymbol = pairSymbolMode === "same" ? leftSymbol : currentValues.leg2_symbol;
-    form.setFieldsValue({
+    const swappedValues: PairSpreadFormValues = {
       leg1_exchange: currentValues.leg2_exchange,
       leg1_market_type: currentValues.leg2_market_type,
       leg1_dex: currentValues.leg2_dex,
@@ -4716,9 +4880,12 @@ export function PairMonitorPage() {
       leg2_dex: currentValues.leg1_dex,
       leg2_symbol: leftSymbol,
       leg2_multiplier: 1
-    });
-    await runQuery();
-  }, [form, pairSymbolMode, runQuery]);
+    };
+    form.setFieldsValue(swappedValues);
+    replacePairQueryInUrl(swappedValues, hours, intervalSeconds);
+    swapPairIdentityMetadataInUrl();
+    await runQuery({ values: swappedValues });
+  }, [form, hours, intervalSeconds, pairSymbolMode, runQuery]);
 
   useEffect(() => {
     setFundingSummaryRows(null);
@@ -4919,6 +5086,9 @@ export function PairMonitorPage() {
       );
       const preset: SavedPairSpreadPreset = {
         ...values,
+        ...(result?.current
+          ? pairIdentityMetadataFromUrlOrResult(result)
+          : pairIdentityMetadataFromUrl()),
         id: pairConfigId(values),
         hours: clampHours(hours),
         intervalSeconds: clampIntervalSeconds(intervalSeconds),
@@ -4956,8 +5126,10 @@ export function PairMonitorPage() {
     setWatchSaving(true);
     try {
       const values = pairFormFromResult(result);
+      const identity = pairIdentityMetadataFromUrlOrResult(result);
       const preset: SavedPairSpreadPreset = {
         ...values,
+        ...identity,
         id: pairConfigId(values),
         hours: result.hours,
         intervalSeconds: resultIntervalSeconds(result),
@@ -5017,6 +5189,7 @@ export function PairMonitorPage() {
       endTime: preset.dayCompareEndTime
     });
     form.setFieldsValue(values);
+    replacePairIdentityMetadataInUrl(preset);
     setHours(nextHours);
     setIntervalSeconds(nextIntervalSeconds);
     setCustomInterval(intervalSelectValue(nextIntervalSeconds) === CUSTOM_INTERVAL_VALUE);
@@ -5700,6 +5873,7 @@ export function PairMonitorPage() {
         />
       </section>
 
+      <PairMarketDataCard result={result} />
       <PairPositionStatsCard result={result} />
       <PairOpenInterestChart result={result} />
       <PairHourlyVolumeCard result={result} />

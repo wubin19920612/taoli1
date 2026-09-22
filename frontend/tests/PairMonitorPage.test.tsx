@@ -226,6 +226,14 @@ function pairSpreadResult(params?: URLSearchParams) {
             market_type: leg1MarketType,
             ...(leg1Dex ? { dex: leg1Dex } : {}),
             raw_symbol: leg1Symbol,
+            price_multiplier: 1,
+            contract_size_multiplier: 1,
+            data_source: "Left public order book",
+            upstream_timestamp: "2026-07-24T01:59:59Z",
+            is_estimated: false,
+            estimated_fields: [],
+            estimated_taker_fee_pct: leg1MarketType === "spot" ? 0.1 : 0.05,
+            fee_is_estimated: true,
             price: leg1Price,
             price_field: "mid_price" as const,
             bid_price: leg1Price - 0.1,
@@ -249,6 +257,14 @@ function pairSpreadResult(params?: URLSearchParams) {
             market_type: leg2MarketType,
             ...(leg2Dex ? { dex: leg2Dex } : {}),
             raw_symbol: leg2Symbol,
+            price_multiplier: leg2Exchange === "okx" && leg2Symbol === "ANTHROPICUSDT" ? 10 : 1,
+            contract_size_multiplier: 0.01,
+            data_source: "Right public order book",
+            upstream_timestamp: "2026-07-24T01:59:58Z",
+            is_estimated: false,
+            estimated_fields: ["funding_next_time"],
+            estimated_taker_fee_pct: leg2MarketType === "spot" ? 0.1 : 0.05,
+            fee_is_estimated: true,
             price: leg2Price,
             price_field: "mid_price" as const,
             bid_price: leg2Price - 0.1,
@@ -610,6 +626,15 @@ describe("PairMonitorPage", () => {
 
   it("saves and adds the queried pair to the floating watch", async () => {
     const user = userEvent.setup();
+    window.history.pushState(
+      {},
+      "",
+      "/?page=pair-monitor&leg1_exchange=bitget&leg1_market_type=future&leg1_symbol=SKHY" +
+        "&leg1_raw_symbol=SKHYUSDT&leg1_price_multiplier=1&leg1_contract_size_multiplier=1" +
+        "&leg2_exchange=bitget&leg2_market_type=future&leg2_symbol=SKHY" +
+        "&leg2_raw_symbol=SKHYNIXUSDT&leg2_price_multiplier=1&leg2_contract_size_multiplier=0.01" +
+        "&hours=4&interval_seconds=5"
+    );
     render(<PairMonitorPage />);
 
     await user.click(screen.getByRole("button", { name: /查询/ }));
@@ -627,6 +652,14 @@ describe("PairMonitorPage", () => {
         item_type: "pair",
         value: serverPresets[0]?.id
       });
+    });
+    expect(serverPresets[0]).toMatchObject({
+      leg1_raw_symbol: "SKHYUSDT",
+      leg1_price_multiplier: 1,
+      leg1_contract_size_multiplier: 1,
+      leg2_raw_symbol: "SKHYNIXUSDT",
+      leg2_price_multiplier: 1,
+      leg2_contract_size_multiplier: 0.01
     });
   });
 
@@ -744,6 +777,21 @@ describe("PairMonitorPage", () => {
     expect(screen.getByText("+1.40%")).toBeTruthy();
     expect(screen.getByText(/左 ask .*右 bid/)).toBeTruthy();
     expect(screen.getByText(/左 bid .*右 ask/)).toBeTruthy();
+  });
+
+  it("shows exact leg identity, source, multipliers, timestamps, and estimated fields", async () => {
+    const user = userEvent.setup();
+    render(<PairMonitorPage />);
+
+    await user.click(screen.getByRole("button", { name: /查询/ }));
+
+    expect(await screen.findByText("双腿市场身份与行情质量")).toBeTruthy();
+    expect(screen.getByText("来源：Left public order book")).toBeTruthy();
+    expect(screen.getByText("来源：Right public order book")).toBeTruthy();
+    expect(screen.getByText("估算字段：funding_next_time")).toBeTruthy();
+    expect(screen.getAllByText("+0.0500%（估算）")).toHaveLength(2);
+    expect(screen.getByText("1x / 0.01")).toBeTruthy();
+    expect(screen.getByTitle("07-24 09:59:58")).toBeTruthy();
   });
 
   it("uses hourly history for query windows longer than 7 days", async () => {
@@ -936,7 +984,10 @@ describe("PairMonitorPage", () => {
       {},
       "",
       "/?page=pair-monitor&leg1_exchange=bitget&leg1_market_type=future&leg1_symbol=SKHY" +
-        "&leg2_exchange=bybit&leg2_market_type=future&leg2_symbol=SKHY&hours=4&interval_seconds=60"
+        "&leg1_raw_symbol=SKHYUSDT&leg1_price_multiplier=1&leg1_contract_size_multiplier=0.01" +
+        "&leg2_exchange=bybit&leg2_market_type=future&leg2_symbol=SKHY" +
+        "&leg2_raw_symbol=SKHY-PERP&leg2_price_multiplier=10&leg2_contract_size_multiplier=1" +
+        "&hours=4&interval_seconds=60"
     );
     render(<PairMonitorPage />);
 
@@ -956,6 +1007,13 @@ describe("PairMonitorPage", () => {
       expect(swappedRequest?.searchParams.get("leg1_symbol")).toBe("SKHYUSDT");
       expect(swappedRequest?.searchParams.get("leg2_symbol")).toBe("SKHYUSDT");
       expect(swappedRequest?.searchParams.get("leg2_multiplier")).toBe("1");
+      const locationParams = new URLSearchParams(window.location.search);
+      expect(locationParams.get("leg1_raw_symbol")).toBe("SKHY-PERP");
+      expect(locationParams.get("leg1_price_multiplier")).toBe("10");
+      expect(locationParams.get("leg1_contract_size_multiplier")).toBe("1");
+      expect(locationParams.get("leg2_raw_symbol")).toBe("SKHYUSDT");
+      expect(locationParams.get("leg2_price_multiplier")).toBe("1");
+      expect(locationParams.get("leg2_contract_size_multiplier")).toBe("0.01");
     });
   });
 

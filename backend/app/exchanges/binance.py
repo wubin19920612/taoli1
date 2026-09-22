@@ -26,6 +26,7 @@ class BinanceAdapter(ExchangeAdapter):
         premium = await self.get_json(f"{self.futures_base_url}/fapi/v1/premiumIndex")
         interval_by_symbol = await self._fetch_funding_intervals()
         volume_by_symbol = await self._fetch_future_24h_volumes()
+        contract_multipliers = await self._fetch_contract_multipliers()
         premium_by_symbol = {item["symbol"]: item for item in premium if item.get("symbol")}
         snapshots = self._parse_book_tickers(book, MarketType.FUTURE)
         now = utc_now()
@@ -48,15 +49,37 @@ class BinanceAdapter(ExchangeAdapter):
                         "mark_price": parse_float(item.get("markPrice")),
                         "index_price": parse_float(item.get("indexPrice")),
                         "volume_24h_usdt": volume_by_symbol.get(snapshot.raw_symbol),
+                        "contract_size_multiplier": contract_multipliers.get(
+                            snapshot.raw_symbol
+                        ),
+                        "data_source": (
+                            "Binance public bookTicker + premiumIndex + exchangeInfo"
+                        ),
+                        "upstream_timestamp": parse_datetime_ms(item.get("time")),
                     }
                 )
             )
         return enriched
 
+    async def _fetch_contract_multipliers(self) -> dict[str, float]:
+        try:
+            payload = await self.get_json(f"{self.futures_base_url}/fapi/v1/exchangeInfo")
+        except Exception:  # noqa: BLE001 - metadata failure must not hide a usable book.
+            return {}
+        rows = payload.get("symbols", []) if isinstance(payload, dict) else []
+        return {
+            str(item["symbol"]): 1.0
+            for item in rows
+            if isinstance(item, dict)
+            and item.get("symbol")
+            and item.get("contractType")
+            and item.get("status") == "TRADING"
+        }
+
     async def _fetch_future_24h_volumes(self) -> dict[str, float]:
         try:
             rows = await self.get_json(f"{self.futures_base_url}/fapi/v1/ticker/24hr")
-        except Exception:
+        except Exception:  # noqa: BLE001 - volume is supplementary market metadata.
             return {}
         volumes: dict[str, float] = {}
         for item in rows if isinstance(rows, list) else []:
@@ -91,7 +114,7 @@ class BinanceAdapter(ExchangeAdapter):
     async def _fetch_funding_intervals(self) -> dict[str, int]:
         try:
             rows = await self.get_json(f"{self.futures_base_url}/fapi/v1/fundingInfo")
-        except Exception:
+        except Exception:  # noqa: BLE001 - interval metadata is supplementary.
             return {}
         intervals: dict[str, int] = {}
         for item in rows if isinstance(rows, list) else []:
@@ -128,6 +151,7 @@ class BinanceAdapter(ExchangeAdapter):
                     ask_size=ask_size,
                     timestamp=now,
                     raw_symbol=raw_symbol,
+                    data_source="Binance public bookTicker",
                 )
             )
         return rows

@@ -19,9 +19,27 @@ export interface Opportunity {
   buy_exchange: string;
   buy_market_type: MarketType;
   buy_raw_symbol?: string | null;
+  buy_dex?: string | null;
+  buy_price_multiplier?: number;
+  buy_contract_size_multiplier?: number | null;
+  buy_timestamp?: string | null;
+  buy_data_source?: string | null;
+  buy_is_estimated?: boolean;
+  buy_estimated_fields?: string[];
   sell_exchange: string;
   sell_market_type: MarketType;
   sell_raw_symbol?: string | null;
+  sell_dex?: string | null;
+  sell_price_multiplier?: number;
+  sell_contract_size_multiplier?: number | null;
+  sell_timestamp?: string | null;
+  sell_data_source?: string | null;
+  sell_is_estimated?: boolean;
+  sell_estimated_fields?: string[];
+  buy_fee_pct?: number;
+  sell_fee_pct?: number;
+  safety_slippage_pct?: number;
+  fees_are_estimated?: boolean;
   open_spread_pct: number;
   close_spread_pct: number;
   fee_adjusted_open_pct: number;
@@ -96,8 +114,39 @@ export interface MarketSnapshot {
   index_price?: number | null;
   timestamp: string;
   raw_symbol: string;
+  dex?: string | null;
+  contract_size_multiplier?: number | null;
+  data_source?: string | null;
+  upstream_timestamp?: string | null;
+  is_estimated?: boolean;
+  estimated_fields?: string[];
   symbol_alias_original_symbol?: string | null;
-  symbol_alias_price_multiplier?: number | null;
+  symbol_alias_price_multiplier?: number;
+}
+
+export interface InstrumentMarketCandidate extends MarketSnapshot {
+  data_status: "live" | "stale";
+  age_seconds: number;
+  stale_after_seconds: number;
+  error: string | null;
+}
+
+export interface InstrumentRouteStatus {
+  card_id: string | null;
+  card_name: string;
+  side: "buy" | "sell";
+  route: string;
+  exchange: string | null;
+  market_type: MarketType;
+  astro_raw_symbol: string;
+  canonical_symbol: string;
+  dex: string | null;
+  counterparty_route: string;
+  status: "live_market" | "market_missing" | "route_only";
+  live_data_supported: boolean;
+  matched_raw_symbol: string | null;
+  source: string;
+  reason: string;
 }
 
 export interface InstrumentExchangeSnapshot {
@@ -111,10 +160,30 @@ export interface InstrumentSpreadComparison {
   id: string;
   buy_exchange: string;
   buy_market_type: MarketType;
+  buy_raw_symbol: string;
+  buy_dex: string | null;
+  buy_price_multiplier: number;
+  buy_contract_size_multiplier: number | null;
   buy_ask: number;
+  buy_volume_24h_usdt: number | null;
+  buy_funding_rate_pct: number | null;
+  buy_funding_interval_hours: number | null;
+  buy_timestamp: string;
+  buy_data_source: string | null;
+  buy_is_estimated: boolean;
   sell_exchange: string;
   sell_market_type: MarketType;
+  sell_raw_symbol: string;
+  sell_dex: string | null;
+  sell_price_multiplier: number;
+  sell_contract_size_multiplier: number | null;
   sell_bid: number;
+  sell_volume_24h_usdt: number | null;
+  sell_funding_rate_pct: number | null;
+  sell_funding_interval_hours: number | null;
+  sell_timestamp: string;
+  sell_data_source: string | null;
+  sell_is_estimated: boolean;
   price_difference: number;
   executable_spread_pct: number;
   mid_spread_pct: number;
@@ -131,6 +200,9 @@ export interface InstrumentLookupResult {
   observed_at: string | null;
   exchange_count: number;
   market_count: number;
+  markets: InstrumentMarketCandidate[];
+  astro_routes: InstrumentRouteStatus[];
+  route_errors: Record<string, string>;
   exchanges: InstrumentExchangeSnapshot[];
   spreads: InstrumentSpreadComparison[];
 }
@@ -1292,10 +1364,16 @@ export interface PairSpreadPreset {
   leg1_market_type: MarketType;
   leg1_dex: string;
   leg1_symbol: string;
+  leg1_raw_symbol?: string | null;
+  leg1_price_multiplier?: number;
+  leg1_contract_size_multiplier?: number | null;
   leg2_exchange: string;
   leg2_market_type: MarketType;
   leg2_dex: string;
   leg2_symbol: string;
+  leg2_raw_symbol?: string | null;
+  leg2_price_multiplier?: number;
+  leg2_contract_size_multiplier?: number | null;
   leg2_multiplier: number;
   hours: number;
   intervalSeconds: number;
@@ -1536,6 +1614,14 @@ export interface PairSpreadCurrentLeg {
   market_type: MarketType;
   dex?: string | null;
   raw_symbol: string;
+  price_multiplier: number;
+  contract_size_multiplier: number | null;
+  data_source: string | null;
+  upstream_timestamp: string | null;
+  is_estimated: boolean;
+  estimated_fields: string[];
+  estimated_taker_fee_pct: number | null;
+  fee_is_estimated: boolean;
   price: number;
   price_field: PairSpreadPriceField;
   bid_price: number | null;

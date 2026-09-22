@@ -1150,6 +1150,164 @@ describe("InstrumentLookupPage", () => {
     expect(await screen.findByText("创建完成")).not.toBeNull();
   });
 
+  it("shows exact ANTHROPIC markets and route-only RH-Lighter evidence with exact spread navigation", async () => {
+    const now = "2026-09-22T09:00:00Z";
+    const lighterMarket = {
+      symbol: "ANTHROPICUSDT",
+      base: "ANTHROPIC",
+      quote: "USDT",
+      exchange: "lighter",
+      market_type: "future" as const,
+      bid: 2166,
+      ask: 2168,
+      bid_size: 2,
+      ask_size: 3,
+      volume_24h_usdt: 2_500_000,
+      funding_rate_pct: 0.003,
+      funding_interval_hours: 1,
+      funding_next_time: "2026-09-22T10:00:00Z",
+      mark_price: 2167,
+      index_price: 2166.5,
+      timestamp: now,
+      raw_symbol: "ANTHROPIC",
+      dex: null,
+      contract_size_multiplier: 1,
+      data_source: "Lighter public API",
+      upstream_timestamp: now,
+      is_estimated: false,
+      estimated_fields: ["funding_next_time"],
+      symbol_alias_price_multiplier: 1,
+      data_status: "live" as const,
+      age_seconds: 1,
+      stale_after_seconds: 30,
+      error: null
+    };
+    const hyperMarket = {
+      ...lighterMarket,
+      exchange: "hyperliquid",
+      bid: 2169,
+      ask: 2170,
+      raw_symbol: "io:ANTH",
+      dex: "io",
+      data_source: "Hyperliquid io metaAndAssetCtxs + l2Book",
+      estimated_fields: []
+    };
+    const binanceMarket = {
+      ...lighterMarket,
+      exchange: "binance",
+      bid: 2172,
+      ask: 2173,
+      raw_symbol: "ANTHROPICUSDT",
+      data_source: "Binance public futures API",
+      estimated_fields: []
+    };
+    const spread = {
+      ...lookupResult.spreads[0],
+      id: "lighter:future::ANTHROPIC:1->hyperliquid:future:io:io:ANTH:1",
+      buy_exchange: "lighter",
+      buy_market_type: "future" as const,
+      buy_raw_symbol: "ANTHROPIC",
+      buy_dex: null,
+      buy_price_multiplier: 1,
+      buy_contract_size_multiplier: 1,
+      buy_ask: 2168,
+      buy_volume_24h_usdt: 2_500_000,
+      buy_funding_rate_pct: 0.003,
+      buy_funding_interval_hours: 1,
+      buy_timestamp: now,
+      buy_data_source: "Lighter public API",
+      buy_is_estimated: false,
+      sell_exchange: "hyperliquid",
+      sell_market_type: "future" as const,
+      sell_raw_symbol: "io:ANTH",
+      sell_dex: "io",
+      sell_price_multiplier: 1,
+      sell_contract_size_multiplier: 1,
+      sell_bid: 2169,
+      sell_volume_24h_usdt: 3_000_000,
+      sell_funding_rate_pct: -0.002,
+      sell_funding_interval_hours: 1,
+      sell_timestamp: now,
+      sell_data_source: "Hyperliquid public API",
+      sell_is_estimated: false
+    };
+    const anthropicLookup = {
+      ...lookupResult,
+      query: "ANTH",
+      symbol: "ANTHROPICUSDT",
+      base: "ANTHROPIC",
+      exchange_count: 3,
+      market_count: 3,
+      markets: [lighterMarket, hyperMarket, binanceMarket],
+      astro_routes: [
+        {
+          card_id: "anth-route",
+          card_name: "ANTHROPIC",
+          side: "buy",
+          route: "lighter",
+          exchange: "lighter",
+          market_type: "future",
+          astro_raw_symbol: "ANTHROPICUSDT",
+          canonical_symbol: "ANTHROPICUSDT",
+          dex: null,
+          counterparty_route: "rh-lighter",
+          status: "live_market",
+          live_data_supported: true,
+          matched_raw_symbol: "ANTHROPIC",
+          source: "Astro card response (route discovery only)",
+          reason: "已匹配真实公开行情"
+        },
+        {
+          card_id: "anth-route",
+          card_name: "ANTHROPIC",
+          side: "sell",
+          route: "rh-lighter",
+          exchange: null,
+          market_type: "future",
+          astro_raw_symbol: "ANTHROPICUSDT",
+          canonical_symbol: "ANTHROPICUSDT",
+          dex: null,
+          counterparty_route: "lighter",
+          status: "route_only",
+          live_data_supported: false,
+          matched_raw_symbol: null,
+          source: "Astro card response (route discovery only)",
+          reason: "没有独立 rh-lighter 行情源；不复制 Lighter 行情"
+        }
+      ],
+      route_errors: {},
+      spreads: [spread]
+    };
+    const fallbackFetch = vi.mocked(fetch).getMockImplementation();
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("/instruments/")) return Response.json(anthropicLookup);
+      return fallbackFetch!(input, init);
+    });
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    window.history.replaceState({}, "", "/?page=instrument&symbol=ANTH");
+
+    render(<InstrumentLookupPage />);
+
+    const exactTable = await screen.findByRole("table", { name: "精确行情市场" });
+    expect(within(exactTable).getByText("Lighter")).toBeTruthy();
+    expect(within(exactTable).getByText(/DEX io/)).toBeTruthy();
+    expect(within(exactTable).getAllByText(/ANTHROPIC/).length).toBeGreaterThan(0);
+    expect(screen.getByText("仅 Astro 路由")).toBeTruthy();
+    expect(screen.getByText("没有独立 rh-lighter 行情源；不复制 Lighter 行情")).toBeTruthy();
+
+    await userEvent.click(screen.getByRole("button", {
+      name: `价差查询 ANTHROPICUSDT ${spread.id}`
+    }));
+    const params = new URL(String(open.mock.calls[0][0])).searchParams;
+    expect(params.get("leg1_raw_symbol")).toBe("ANTHROPIC");
+    expect(params.get("leg1_price_multiplier")).toBe("1");
+    expect(params.get("leg2_symbol")).toBe("ANTH");
+    expect(params.get("leg2_raw_symbol")).toBe("io:ANTH");
+    expect(params.get("leg2_dex")).toBe("io");
+    expect(params.get("leg2_contract_size_multiplier")).toBe("1");
+    open.mockRestore();
+  });
+
   it("queries a new normalized symbol from the keyboard", async () => {
     render(<InstrumentLookupPage />);
     const input = await screen.findByLabelText("查询标的");

@@ -1,8 +1,8 @@
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Callable
 
 from app.exchanges.aster import AsterAdapter
 from app.exchanges.base import ExchangeAdapter
@@ -10,9 +10,9 @@ from app.exchanges.binance import BinanceAdapter
 from app.exchanges.bitget import BitgetAdapter
 from app.exchanges.bybit import BybitAdapter
 from app.exchanges.gate import GateAdapter
+from app.exchanges.htx import HTXAdapter
 from app.exchanges.hyperliquid import HyperliquidAdapter
 from app.exchanges.lighter import LighterAdapter
-from app.exchanges.htx import HTXAdapter
 from app.exchanges.okx import OKXAdapter
 from app.models.index_component import index_watch_symbol
 from app.models.market import MarketSnapshot
@@ -330,6 +330,8 @@ class MarketCollector:
         state = self._state_for(exchange_name)
         state.in_flight = False
         if result.errors:
+            if result.markets and not result.should_cool_down:
+                self._exchange_snapshots[exchange_name] = result.markets
             self._exchange_errors[exchange_name] = result.errors
             state.last_error_at = now
             state.consecutive_failures += 1
@@ -386,7 +388,7 @@ class MarketCollector:
     ) -> tuple[list[MarketSnapshot], dict[str, str]]:
         try:
             return await self._fetch_adapter(adapter)
-        except Exception as exc:  # noqa: BLE001 - isolate flaky public APIs per exchange.
+        except Exception as exc:
             logger.warning("exchange adapter failed: %s", adapter.name, exc_info=exc)
             return [], {adapter.name: _error_message(exc)}
 
@@ -425,6 +427,15 @@ class MarketCollector:
                 markets.extend(await fetcher())
             except Exception as exc:  # noqa: BLE001 - isolate flaky public APIs per market.
                 errors[f"{adapter.name}:{label}"] = _error_message(exc)
+        market_errors = getattr(adapter, "market_errors", None)
+        if isinstance(market_errors, dict):
+            errors.update(
+                {
+                    str(key): str(value)
+                    for key, value in market_errors.items()
+                    if str(key).strip() and str(value).strip()
+                }
+            )
         return markets, errors
 
     def _build_labeled_opportunities(
@@ -445,6 +456,7 @@ class MarketCollector:
                     sell_fee_pct=sell_fee,
                     safety_slippage_pct=self.fee_settings.safety_slippage_pct,
                     now=current,
+                    stale_after_seconds=self.risk_settings.stale_after_seconds,
                 )
             )
         labeled = [

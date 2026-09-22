@@ -7,7 +7,12 @@ import httpx
 import pytest
 
 from app.exchanges.base import ExchangeRequestError
-from app.exchanges.lighter import LighterAdapter, lighter_best_prices, lighter_order_books
+from app.exchanges.lighter import (
+    LighterAdapter,
+    lighter_best_prices,
+    lighter_order_books,
+    lighter_upstream_timestamp,
+)
 from app.models.market import MarketType
 from app.models.pair_spread import PairSpreadLegQuery
 from app.services.pair_spread_query import PairSpreadQueryService
@@ -30,6 +35,12 @@ def book(bid: str = "99", ask: str = "101") -> dict:
         ],
         "asks": [{"price": ask, "remaining_base_amount": "4"}],
     }
+
+
+def test_lighter_upstream_timestamp_parses_websocket_microseconds() -> None:
+    timestamp = lighter_upstream_timestamp({"last_updated_at": 1_790_065_690_229_022})
+
+    assert timestamp == datetime.fromtimestamp(1_790_065_690.229022, UTC)
 
 
 @pytest.mark.asyncio
@@ -108,6 +119,55 @@ async def test_lighter_always_scans_priority_hood_market_within_perp_limit(monke
         perps = await adapter.fetch_future_tickers()
         assert [row.symbol for row in perps] == ["BTCUSDT", "HOODUSDT"]
         assert requested_market_ids == [108, 1]
+    finally:
+        await adapter.client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_lighter_always_scans_anthropic_without_fabricating_rh_market(monkeypatch) -> None:
+    requested_market_ids: list[int] = []
+
+    async def fake_books(market_ids: list[int]):
+        requested_market_ids.extend(market_ids)
+        payload = book()
+        payload["last_updated_at"] = 1_790_065_690_229_022
+        return {market_id: payload for market_id in market_ids}
+
+    async def fake_get(self, url: str):
+        if url.endswith("orderBookDetails"):
+            btc = detail("BTC", 1)
+            btc["daily_quote_token_volume"] = "9000000"
+            anthropic = detail("ANTHROPIC", 193)
+            anthropic["daily_quote_token_volume"] = "1000"
+            return {
+                "code": 200,
+                "order_book_details": [btc, anthropic],
+                "spot_order_book_details": [],
+            }
+        if url.endswith("funding-rates"):
+            return {
+                "code": 200,
+                "funding_rates": [
+                    {"exchange": "binance", "market_id": 193, "rate": 0.5},
+                    {"exchange": "lighter", "market_id": 193, "rate": 0.00001},
+                ],
+            }
+        raise AssertionError(url)
+
+    monkeypatch.setattr(LighterAdapter, "get_json", fake_get)
+    monkeypatch.setattr("app.exchanges.lighter.lighter_order_books", fake_books)
+    adapter = LighterAdapter()
+    adapter.max_scanner_perp_markets = 1
+    try:
+        [market] = await adapter.fetch_future_tickers()
+        assert requested_market_ids == [193]
+        assert market.exchange == "lighter"
+        assert market.symbol == "ANTHROPICUSDT"
+        assert market.raw_symbol == "ANTHROPIC"
+        assert market.contract_size_multiplier == 1
+        assert market.funding_rate_pct == pytest.approx(0.001)
+        assert market.upstream_timestamp is not None
+        assert "rh-lighter" not in market.model_dump_json()
     finally:
         await adapter.client.aclose()
 
@@ -364,6 +424,9 @@ async def test_lighter_pair_query_current_candles_and_signed_historical_funding(
         assert current.price == 100
         assert current.funding_rate_pct == pytest.approx(-0.01)
         assert current.open_interest_usdt == 1000
+        assert current.contract_size_multiplier == 1
+        assert current.data_source == "Lighter public orderBookDetails + WebSocket order_book"
+        assert current.is_estimated is False
         assert not any("orderBookOrders" in url for url in requested)
         candles = await service._fetch_lighter_klines("ETHUSDT", start, end, 1)
         assert len([url for url in requested if "/candles?" in url]) == 2

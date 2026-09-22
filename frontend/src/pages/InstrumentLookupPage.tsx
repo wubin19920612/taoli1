@@ -53,6 +53,7 @@ import type {
   AstroPairPlan,
   InstrumentExchangeSnapshot,
   InstrumentLookupResult,
+  InstrumentMarketCandidate,
   InstrumentSpreadComparison,
   MarketTradeAvailability,
   MarketSnapshot,
@@ -216,40 +217,47 @@ function exchangeNameOrder(left: string, right: string): number {
   return leftName.localeCompare(rightName, "en", { sensitivity: "base" });
 }
 
-type PairSpreadLegRoute = {
-  symbol: string;
-  dex: string | null;
-};
+function exactMarkets(result: InstrumentLookupResult | null): InstrumentMarketCandidate[] {
+  if (!result) return [];
+  if (Array.isArray(result.markets) && result.markets.length > 0) return result.markets;
+  return result.exchanges.flatMap((snapshot) => [snapshot.spot, snapshot.future]
+    .filter((market): market is MarketSnapshot => market !== null)
+    .map((market) => ({
+      ...market,
+      data_status: "live" as const,
+      age_seconds: Math.max(0, dayjs().diff(dayjs.utc(market.timestamp), "second")),
+      stale_after_seconds: 30,
+      error: snapshot.error
+    })));
+}
 
-function pairSpreadLegRoute(
+function marketDex(market: MarketSnapshot): string | null {
+  if (market.dex) return market.dex;
+  if (market.exchange !== "hyperliquid" || market.market_type !== "future") return null;
+  const separator = market.raw_symbol.indexOf(":");
+  return separator > 0 ? market.raw_symbol.slice(0, separator).toLowerCase() : "main";
+}
+
+function pairSpreadSymbol(exchange: string, rawSymbol: string | null | undefined, fallback: string): string {
+  const value = rawSymbol?.trim() || fallback;
+  if (exchange !== "hyperliquid") return value;
+  const separator = value.indexOf(":");
+  return separator > 0 ? value.slice(separator + 1) : value;
+}
+
+function exactSpreadMarket(
   result: InstrumentLookupResult,
   exchange: string,
-  marketType: MarketType
-): PairSpreadLegRoute {
-  const exchangeSnapshot = result.exchanges.find((item) => item.exchange === exchange);
-  const market = marketType === "spot" ? exchangeSnapshot?.spot : exchangeSnapshot?.future;
-  const aliasSymbol = market?.symbol_alias_original_symbol?.trim() || "";
-  const rawSymbol = market?.raw_symbol.trim() || "";
-  if (exchange === "hyperliquid" && marketType === "future") {
-    const separatorIndex = rawSymbol.indexOf(":");
-    if (separatorIndex > 0) {
-      return {
-        symbol: rawSymbol.slice(separatorIndex + 1).trim() || aliasSymbol || result.symbol,
-        dex: rawSymbol.slice(0, separatorIndex).trim().toLowerCase() || "main"
-      };
-    }
-    return {
-      symbol: rawSymbol || aliasSymbol || result.symbol,
-      dex: "main"
-    };
-  }
-  if (exchange === "lighter" && marketType === "spot") {
-    return { symbol: aliasSymbol || result.symbol, dex: null };
-  }
-  return {
-    symbol: aliasSymbol || rawSymbol || result.symbol,
-    dex: null
-  };
+  marketType: MarketType,
+  rawSymbol: string,
+  dex: string | null
+): InstrumentMarketCandidate | null {
+  return exactMarkets(result).find((market) => (
+    market.exchange === exchange
+    && market.market_type === marketType
+    && market.raw_symbol === rawSymbol
+    && (marketDex(market) ?? "") === (dex ?? "")
+  )) ?? null;
 }
 
 function pairSpreadBlocker(spread: InstrumentSpreadComparison): string | null {
@@ -295,19 +303,51 @@ function reverseInstrumentSpread(
   result: InstrumentLookupResult,
   spread: InstrumentSpreadComparison
 ): InstrumentSpreadComparison | null {
-  const buyMarket = instrumentMarket(result, spread.sell_exchange, spread.sell_market_type);
-  const sellMarket = instrumentMarket(result, spread.buy_exchange, spread.buy_market_type);
+  const buyMarket = exactSpreadMarket(
+    result,
+    spread.sell_exchange,
+    spread.sell_market_type,
+    spread.sell_raw_symbol,
+    spread.sell_dex
+  ) ?? instrumentMarket(result, spread.sell_exchange, spread.sell_market_type);
+  const sellMarket = exactSpreadMarket(
+    result,
+    spread.buy_exchange,
+    spread.buy_market_type,
+    spread.buy_raw_symbol,
+    spread.buy_dex
+  ) ?? instrumentMarket(result, spread.buy_exchange, spread.buy_market_type);
   if (!buyMarket || !sellMarket) return null;
   const buyMid = (buyMarket.bid + buyMarket.ask) / 2;
   const sellMid = (sellMarket.bid + sellMarket.ask) / 2;
   return {
-    id: `${buyMarket.exchange}:${buyMarket.market_type}->${sellMarket.exchange}:${sellMarket.market_type}`,
+    id: `${buyMarket.exchange}:${buyMarket.market_type}:${marketDex(buyMarket) ?? ""}:${buyMarket.raw_symbol}->${sellMarket.exchange}:${sellMarket.market_type}:${marketDex(sellMarket) ?? ""}:${sellMarket.raw_symbol}`,
     buy_exchange: buyMarket.exchange,
     buy_market_type: buyMarket.market_type,
+    buy_raw_symbol: buyMarket.raw_symbol,
+    buy_dex: marketDex(buyMarket),
+    buy_price_multiplier: buyMarket.symbol_alias_price_multiplier ?? 1,
+    buy_contract_size_multiplier: buyMarket.contract_size_multiplier ?? null,
     buy_ask: buyMarket.ask,
+    buy_volume_24h_usdt: buyMarket.volume_24h_usdt ?? null,
+    buy_funding_rate_pct: buyMarket.funding_rate_pct ?? null,
+    buy_funding_interval_hours: buyMarket.funding_interval_hours ?? null,
+    buy_timestamp: buyMarket.timestamp,
+    buy_data_source: buyMarket.data_source ?? null,
+    buy_is_estimated: buyMarket.is_estimated ?? false,
     sell_exchange: sellMarket.exchange,
     sell_market_type: sellMarket.market_type,
+    sell_raw_symbol: sellMarket.raw_symbol,
+    sell_dex: marketDex(sellMarket),
+    sell_price_multiplier: sellMarket.symbol_alias_price_multiplier ?? 1,
+    sell_contract_size_multiplier: sellMarket.contract_size_multiplier ?? null,
     sell_bid: sellMarket.bid,
+    sell_volume_24h_usdt: sellMarket.volume_24h_usdt ?? null,
+    sell_funding_rate_pct: sellMarket.funding_rate_pct ?? null,
+    sell_funding_interval_hours: sellMarket.funding_interval_hours ?? null,
+    sell_timestamp: sellMarket.timestamp,
+    sell_data_source: sellMarket.data_source ?? null,
+    sell_is_estimated: sellMarket.is_estimated ?? false,
     price_difference: sellMarket.bid - buyMarket.ask,
     executable_spread_pct: 2 * (sellMarket.bid - buyMarket.ask) / (buyMarket.ask + sellMarket.bid) * 100,
     mid_spread_pct: 2 * (sellMid - buyMid) / (buyMid + sellMid) * 100,
@@ -468,8 +508,8 @@ function weightPct(value: number | null): string {
 
 function resultPriceRange(result: InstrumentLookupResult | null): { min: number; max: number } | null {
   if (!result) return null;
-  const values = result.exchanges
-    .flatMap((item) => [displayPrice(item.spot), displayPrice(item.future)])
+  const values = exactMarkets(result)
+    .map((market) => displayPrice(market))
     .filter((value): value is number => value !== null && Number.isFinite(value));
   return values.length ? { min: Math.min(...values), max: Math.max(...values) } : null;
 }
@@ -788,10 +828,16 @@ export function InstrumentLookupPage() {
 
   const priceRange = resultPriceRange(result);
   const strongestBasis = maxBasis(result);
-  const marketCounts = result?.exchanges.reduce(
-    (counts, item) => ({ spot: counts.spot + Number(Boolean(item.spot)), future: counts.future + Number(Boolean(item.future)) }),
+  const instrumentMarkets = exactMarkets(result);
+  const marketCounts = instrumentMarkets.reduce(
+    (counts, market) => ({
+      spot: counts.spot + Number(market.market_type === "spot"),
+      future: counts.future + Number(market.market_type === "future")
+    }),
     { spot: 0, future: 0 }
-  ) ?? { spot: 0, future: 0 };
+  );
+  const astroRoutes = result?.astro_routes ?? [];
+  const routeErrors = result?.route_errors ?? {};
   const instrumentSpreads = result?.spreads ?? [];
   const hiddenSpreadTypeSet = new Set(hiddenSpreadTypes);
   const visibleInstrumentSpreads = instrumentSpreads.filter(
@@ -898,21 +944,40 @@ export function InstrumentLookupPage() {
     const url = new URL(window.location.href);
     url.searchParams.set("page", "pair-monitor");
     url.searchParams.delete("symbol");
+    const fallbackBuyMarket = instrumentMarket(result, spread.buy_exchange, spread.buy_market_type);
+    const fallbackSellMarket = instrumentMarket(result, spread.sell_exchange, spread.sell_market_type);
     const legs = [
-      pairSpreadLegRoute(result, spread.buy_exchange, spread.buy_market_type),
-      pairSpreadLegRoute(result, spread.sell_exchange, spread.sell_market_type)
+      {
+        exchange: spread.buy_exchange,
+        marketType: spread.buy_market_type,
+        rawSymbol: spread.buy_raw_symbol || fallbackBuyMarket?.raw_symbol || result.symbol,
+        dex: spread.buy_dex ?? (fallbackBuyMarket ? marketDex(fallbackBuyMarket) : null),
+        priceMultiplier: spread.buy_price_multiplier ?? fallbackBuyMarket?.symbol_alias_price_multiplier ?? 1,
+        contractSizeMultiplier: spread.buy_contract_size_multiplier ?? fallbackBuyMarket?.contract_size_multiplier ?? null
+      },
+      {
+        exchange: spread.sell_exchange,
+        marketType: spread.sell_market_type,
+        rawSymbol: spread.sell_raw_symbol || fallbackSellMarket?.raw_symbol || result.symbol,
+        dex: spread.sell_dex ?? (fallbackSellMarket ? marketDex(fallbackSellMarket) : null),
+        priceMultiplier: spread.sell_price_multiplier ?? fallbackSellMarket?.symbol_alias_price_multiplier ?? 1,
+        contractSizeMultiplier: spread.sell_contract_size_multiplier ?? fallbackSellMarket?.contract_size_multiplier ?? null
+      }
     ];
-    [
-      { exchange: spread.buy_exchange, marketType: spread.buy_market_type },
-      { exchange: spread.sell_exchange, marketType: spread.sell_market_type }
-    ].forEach((leg, index) => {
+    legs.forEach((leg, index) => {
       const key = index + 1;
-      const route = legs[index];
       url.searchParams.set(`leg${key}_exchange`, leg.exchange);
       url.searchParams.set(`leg${key}_market_type`, leg.marketType);
-      url.searchParams.set(`leg${key}_symbol`, route.symbol);
-      if (route.dex) {
-        url.searchParams.set(`leg${key}_dex`, route.dex);
+      url.searchParams.set(`leg${key}_symbol`, pairSpreadSymbol(leg.exchange, leg.rawSymbol, result.symbol));
+      url.searchParams.set(`leg${key}_raw_symbol`, leg.rawSymbol);
+      url.searchParams.set(`leg${key}_price_multiplier`, String(leg.priceMultiplier));
+      if (leg.contractSizeMultiplier !== null) {
+        url.searchParams.set(`leg${key}_contract_size_multiplier`, String(leg.contractSizeMultiplier));
+      } else {
+        url.searchParams.delete(`leg${key}_contract_size_multiplier`);
+      }
+      if (leg.dex) {
+        url.searchParams.set(`leg${key}_dex`, leg.dex);
       } else {
         url.searchParams.delete(`leg${key}_dex`);
       }
@@ -1042,10 +1107,16 @@ export function InstrumentLookupPage() {
       width: 170,
       sorter: (left, right) => exchangeNameOrder(left.buy_exchange, right.buy_exchange),
       render: (_, spread) => (
-        <Space size={6}>
-          <Typography.Text strong>{exchangeLabels[spread.buy_exchange] ?? spread.buy_exchange}</Typography.Text>
-          <MarketTypeTag value={spread.buy_market_type} />
-        </Space>
+        <div className="instrument-market-cell">
+          <Space size={6}>
+            <Typography.Text strong>{exchangeLabels[spread.buy_exchange] ?? spread.buy_exchange}</Typography.Text>
+            <MarketTypeTag value={spread.buy_market_type} />
+          </Space>
+          {spread.buy_raw_symbol ? <span>{spread.buy_dex ? `DEX ${spread.buy_dex} · ` : ""}{spread.buy_raw_symbol}</span> : null}
+          {spread.buy_price_multiplier !== undefined || spread.buy_contract_size_multiplier !== undefined ? (
+            <span>价格倍率 {spread.buy_price_multiplier ?? 1}x · 数量乘数 {spread.buy_contract_size_multiplier ?? "-"}</span>
+          ) : null}
+        </div>
       )
     },
     {
@@ -1053,7 +1124,14 @@ export function InstrumentLookupPage() {
       dataIndex: "buy_ask",
       width: 130,
       align: "right",
-      render: (value: number) => price(value)
+      render: (value: number, spread) => (
+        <div className="instrument-market-cell">
+          <strong>{price(value)}</strong>
+          <span>24h {compactUsdt(spread.buy_volume_24h_usdt)}</span>
+          <span>资金 {signedPct(spread.buy_funding_rate_pct, 6)} / {spread.buy_funding_interval_hours ? `${spread.buy_funding_interval_hours}h` : "-"}</span>
+          <span title={fullTime(spread.buy_timestamp)}>更新 {ageText(spread.buy_timestamp)}</span>
+        </div>
+      )
     },
     {
       title: "卖出市场",
@@ -1061,10 +1139,16 @@ export function InstrumentLookupPage() {
       width: 170,
       sorter: (left, right) => exchangeNameOrder(left.sell_exchange, right.sell_exchange),
       render: (_, spread) => (
-        <Space size={6}>
-          <Typography.Text strong>{exchangeLabels[spread.sell_exchange] ?? spread.sell_exchange}</Typography.Text>
-          <MarketTypeTag value={spread.sell_market_type} />
-        </Space>
+        <div className="instrument-market-cell">
+          <Space size={6}>
+            <Typography.Text strong>{exchangeLabels[spread.sell_exchange] ?? spread.sell_exchange}</Typography.Text>
+            <MarketTypeTag value={spread.sell_market_type} />
+          </Space>
+          {spread.sell_raw_symbol ? <span>{spread.sell_dex ? `DEX ${spread.sell_dex} · ` : ""}{spread.sell_raw_symbol}</span> : null}
+          {spread.sell_price_multiplier !== undefined || spread.sell_contract_size_multiplier !== undefined ? (
+            <span>价格倍率 {spread.sell_price_multiplier ?? 1}x · 数量乘数 {spread.sell_contract_size_multiplier ?? "-"}</span>
+          ) : null}
+        </div>
       )
     },
     {
@@ -1072,7 +1156,14 @@ export function InstrumentLookupPage() {
       dataIndex: "sell_bid",
       width: 130,
       align: "right",
-      render: (value: number) => price(value)
+      render: (value: number, spread) => (
+        <div className="instrument-market-cell">
+          <strong>{price(value)}</strong>
+          <span>24h {compactUsdt(spread.sell_volume_24h_usdt)}</span>
+          <span>资金 {signedPct(spread.sell_funding_rate_pct, 6)} / {spread.sell_funding_interval_hours ? `${spread.sell_funding_interval_hours}h` : "-"}</span>
+          <span title={fullTime(spread.sell_timestamp)}>更新 {ageText(spread.sell_timestamp)}</span>
+        </div>
+      )
     },
     {
       title: "可成交差价",
@@ -1239,6 +1330,113 @@ export function InstrumentLookupPage() {
         <div><span>最大现永基差</span><strong className={`instrument-rate-${tone(strongestBasis?.value ?? null)}`}>{strongestBasis ? `${signedPct(strongestBasis.value)} · ${exchangeLabels[strongestBasis.exchange]}` : "-"}</strong></div>
         <div><span>快照时间</span><strong>{fullTime(result?.observed_at)}</strong></div>
       </section>
+
+      {instrumentMarkets.length ? (
+        <section className="instrument-market-table instrument-exact-markets">
+          <div className="instrument-section-head">
+            <div>
+              <Typography.Title level={4}>精确行情市场</Typography.Title>
+              <Typography.Text type="secondary">按交易所、市场类型、原始市场和 DEX 分开；缺失字段不补零</Typography.Text>
+            </div>
+            <Tag>{instrumentMarkets.length} 个真实市场</Tag>
+          </div>
+          <div className="instrument-market-data-list" role="table" aria-label="精确行情市场">
+            <div className="instrument-market-data-head" role="row">
+              <span>市场身份</span><span>可成交价格</span><span>成交额</span><span>资金费率</span><span>倍率</span><span>数据状态</span>
+            </div>
+            {instrumentMarkets.map((market) => {
+              const dex = marketDex(market);
+              const priceMultiplier = market.symbol_alias_price_multiplier ?? 1;
+              const qualityTimestamp = market.upstream_timestamp ?? market.timestamp;
+              return (
+                <article
+                  className={`instrument-market-data-row${market.data_status === "stale" ? " instrument-market-data-row-stale" : ""}`}
+                  key={`${market.exchange}:${market.market_type}:${dex ?? ""}:${market.raw_symbol}`}
+                  role="row"
+                >
+                  <div className="instrument-market-data-identity" role="cell">
+                    <strong>{exchangeLabels[market.exchange] ?? market.exchange}</strong>
+                    <span>{marketTypeLabel(market.market_type)} · {dex ? `DEX ${dex} · ` : ""}{market.raw_symbol}</span>
+                    <span>规范标的 {market.symbol}</span>
+                    <Tag color={market.data_status === "live" ? "green" : "red"}>
+                      {market.data_status === "live" ? "实时" : "已过期"}
+                    </Tag>
+                  </div>
+                  <div className="instrument-market-data-group" role="cell">
+                    <span className="instrument-market-data-group-name">可成交价格</span>
+                    <TradeMetric label="买一 Bid" value={price(market.bid)} tone="bid" />
+                    <TradeMetric label="卖一 Ask" value={price(market.ask)} tone="ask" />
+                    <TradeMetric label="标记 / 指数" value={`${price(market.mark_price)} / ${price(market.index_price)}`} />
+                  </div>
+                  <div className="instrument-market-data-group" role="cell">
+                    <span className="instrument-market-data-group-name">成交额</span>
+                    <TradeMetric label="24h 成交额" value={compactUsdt(market.volume_24h_usdt)} />
+                    <TradeMetric label="买一数量" value={market.bid_size === null || market.bid_size === undefined ? "-" : String(market.bid_size)} />
+                    <TradeMetric label="卖一数量" value={market.ask_size === null || market.ask_size === undefined ? "-" : String(market.ask_size)} />
+                  </div>
+                  <div className="instrument-market-data-group" role="cell">
+                    <span className="instrument-market-data-group-name">资金费率</span>
+                    <TradeMetric label="当前 / 周期" value={market.market_type === "spot" ? "现货" : `${signedPct(market.funding_rate_pct, 6)} / ${market.funding_interval_hours ? `${market.funding_interval_hours}h` : "-"}`} />
+                    <TradeMetric label="下期预估" value={market.market_type === "spot" ? "-" : signedPct(market.funding_next_rate_pct, 6)} />
+                    <TradeMetric label="下次结算" value={market.market_type === "spot" ? "-" : fullTime(market.funding_next_time)} />
+                  </div>
+                  <div className="instrument-market-data-group" role="cell">
+                    <span className="instrument-market-data-group-name">倍率</span>
+                    <TradeMetric label="价格倍率" value={`${priceMultiplier}x`} />
+                    <TradeMetric label="合约数量乘数" value={market.contract_size_multiplier === null || market.contract_size_multiplier === undefined ? "-" : String(market.contract_size_multiplier)} />
+                    <TradeMetric label="价格口径" value={priceMultiplier === 1 ? "原始 = 规范" : `原始 x ${priceMultiplier}`} />
+                  </div>
+                  <div className="instrument-market-data-group" role="cell">
+                    <span className="instrument-market-data-group-name">数据状态</span>
+                    <TradeMetric label="来源" value={market.data_source || "未标注"} tooltip={market.data_source || undefined} />
+                    <TradeMetric label="更新时间" value={ageText(qualityTimestamp)} tooltip={fullTime(qualityTimestamp)} />
+                    <TradeMetric label="估算字段" value={market.estimated_fields?.length ? market.estimated_fields.join("、") : "无"} />
+                    {market.error ? <TradeMetric label="上游错误" value={market.error} tooltip={market.error} tone="negative" /> : null}
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
+
+      {astroRoutes.length || Object.keys(routeErrors).length ? (
+        <section className="instrument-market-table instrument-route-evidence">
+          <div className="instrument-section-head">
+            <div>
+              <Typography.Title level={4}>Astro 路由证据</Typography.Title>
+              <Typography.Text type="secondary">仅用于发现真实腿；Astro 卡片不提供实时行情</Typography.Text>
+            </div>
+            <Tag>{astroRoutes.length} 条路由腿</Tag>
+          </div>
+          {Object.entries(routeErrors).map(([source, routeError]) => (
+            <Alert key={source} type="warning" showIcon message={`${source} 路由读取失败`} description={routeError} />
+          ))}
+          <div className="instrument-route-list">
+            {astroRoutes.map((route, index) => (
+              <article
+                className="instrument-route-row"
+                key={`${route.card_id ?? route.card_name}:${route.side}:${route.route}:${route.dex ?? ""}:${index}`}
+              >
+                <div>
+                  <strong>{route.route}</strong>
+                  <span>{route.card_name} · {route.side === "buy" ? "买腿" : "卖腿"} · 对手 {route.counterparty_route}</span>
+                </div>
+                <div>
+                  <span>{marketTypeLabel(route.market_type)} · {route.dex ? `DEX ${route.dex} · ` : ""}{route.astro_raw_symbol}</span>
+                  <span>规范 {route.canonical_symbol}{route.matched_raw_symbol ? ` · 匹配 ${route.matched_raw_symbol}` : ""}</span>
+                </div>
+                <Tag color={route.status === "live_market" ? "green" : route.status === "route_only" ? "gold" : "red"}>
+                  {route.status === "live_market" ? "真实行情已匹配" : route.status === "route_only" ? "仅 Astro 路由" : "真实市场缺失"}
+                </Tag>
+                <Tooltip title={`${route.reason}；证据来源：${route.source}`}>
+                  <span className="instrument-route-reason">{route.reason}</span>
+                </Tooltip>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       {tradeStatusError ? (
         <Alert

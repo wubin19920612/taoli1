@@ -11,31 +11,34 @@ from app.db.schema import initialize_schema
 from app.models.market import MarketType
 from app.models.pair_spread import (
     PairSpreadCurrentLeg,
-    PairSpreadFundingRecordRequest,
     PairSpreadFundingPoint,
+    PairSpreadFundingRecordRequest,
     PairSpreadKlinePoint,
     PairSpreadLegQuery,
     PairSpreadOpenInterestPoint,
     PairSpreadPriceField,
 )
+from app.services.pair_spread_funding_recorder import (
+    PairSpreadFundingRecorder,
+    PairSpreadFundingRepository,
+)
 from app.services.pair_spread_query import (
-    PairSpreadQueryError,
-    PairSpreadQueryService,
     _REALTIME_PAIR_FUNDING_CACHE,
     _REALTIME_PAIR_OPEN_INTEREST_CACHE,
     _REALTIME_PAIR_SPREAD_CACHE,
     _REALTIME_SYMBOL_SPREAD_CACHE,
-    _hyperliquid_history_limit_warning,
+    PairSpreadQueryError,
+    PairSpreadQueryService,
+    _append_realtime_open_interest_point,
+    _current_leg,
     _historical_interval_adjustment_warning,
+    _hyperliquid_history_limit_warning,
     _resolve_historical_interval_seconds,
     build_pair_hourly_volume_points,
     build_pair_open_interest_points,
-    _append_realtime_open_interest_point,
     build_pair_spread_points,
     build_symbol_spread_points,
-    _current_leg,
 )
-from app.services.pair_spread_funding_recorder import PairSpreadFundingRecorder, PairSpreadFundingRepository
 
 
 def kline(minutes: int, close: float) -> PairSpreadKlinePoint:
@@ -1520,6 +1523,7 @@ async def test_binance_like_current_uses_funding_info_for_interval_and_limits(mo
                 "symbol": "HOMEUSDT",
                 "bidPrice": "0.00910",
                 "askPrice": "0.009115",
+                "time": "1790092800123",
             }
         if "fundingInfo" in url:
             return [
@@ -1543,6 +1547,17 @@ async def test_binance_like_current_uses_funding_info_for_interval_and_limits(mo
                     "longShortRatio": "1.1739",
                 }
             ]
+        if "exchangeInfo" in url:
+            return {
+                "symbols": [
+                    {
+                        "symbol": "HOMEUSDT",
+                        "contractType": "PERPETUAL",
+                        "status": "TRADING",
+                        "baseAsset": "HOME",
+                    }
+                ]
+            }
         raise AssertionError(f"unexpected url: {url}")
 
     service._get_json = fake_get_json  # type: ignore[method-assign]
@@ -1563,6 +1578,9 @@ async def test_binance_like_current_uses_funding_info_for_interval_and_limits(mo
     assert leg.long_account_pct == pytest.approx(54)
     assert leg.short_account_pct == pytest.approx(46)
     assert leg.long_short_ratio == pytest.approx(1.1739)
+    assert leg.contract_size_multiplier == 1
+    assert leg.upstream_timestamp == datetime(2026, 9, 22, 16, 0, 0, 123000, tzinfo=UTC)
+    assert leg.data_source == "binance public premiumIndex + bookTicker + exchangeInfo"
 
 
 @pytest.mark.asyncio
@@ -1615,6 +1633,16 @@ async def test_okx_current_uses_funding_interval_and_limits() -> None:
                     ["1784253900000", "1.25"],
                 ]
             }
+        if "public/instruments" in url:
+            return {
+                "data": [
+                    {
+                        "instId": "O-USDT-SWAP",
+                        "ctVal": "1",
+                        "ctMult": "1",
+                    }
+                ]
+            }
         raise AssertionError(f"unexpected url: {url}")
 
     service._get_json = fake_get_json  # type: ignore[method-assign]
@@ -1639,6 +1667,8 @@ async def test_okx_current_uses_funding_interval_and_limits() -> None:
     assert leg.long_account_pct == pytest.approx(1.25 / 2.25 * 100)
     assert leg.short_account_pct == pytest.approx(1 / 2.25 * 100)
     assert leg.long_short_ratio == pytest.approx(1.25)
+    assert leg.contract_size_multiplier == 1
+    assert leg.data_source == "OKX public ticker + funding-rate + instruments"
 
 
 @pytest.mark.asyncio
@@ -1668,6 +1698,7 @@ async def test_gate_current_uses_contract_interval_and_limit() -> None:
                 "funding_interval": 14400,
                 "funding_next_apply": int(next_funding_time.timestamp()),
                 "funding_rate_limit": "0.020000",
+                "quanto_multiplier": "0.01",
             }
         if "contract_stats" in url:
             return {
@@ -1701,6 +1732,8 @@ async def test_gate_current_uses_contract_interval_and_limit() -> None:
     assert leg.long_account_pct == pytest.approx(17603 / (17603 + 19093) * 100)
     assert leg.short_account_pct == pytest.approx(19093 / (17603 + 19093) * 100)
     assert leg.long_short_ratio == pytest.approx(0.921960928)
+    assert leg.contract_size_multiplier == pytest.approx(0.01)
+    assert leg.data_source == "Gate public futures ticker + contract metadata"
 
 
 @pytest.mark.asyncio
@@ -1752,6 +1785,15 @@ async def test_bitget_current_uses_ticker_holding_and_account_ratio() -> None:
                     },
                 ]
             }
+        if "mix/market/contracts" in url:
+            return {
+                "data": [
+                    {
+                        "symbol": "BTCUSDT",
+                        "sizeMultiplier": "0.01",
+                    }
+                ]
+            }
         raise AssertionError(f"unexpected url: {url}")
 
     service._get_json = fake_get_json  # type: ignore[method-assign]
@@ -1770,6 +1812,8 @@ async def test_bitget_current_uses_ticker_holding_and_account_ratio() -> None:
     assert leg.long_account_pct == pytest.approx(57.34)
     assert leg.short_account_pct == pytest.approx(42.66)
     assert leg.long_short_ratio == pytest.approx(1.3441)
+    assert leg.contract_size_multiplier == pytest.approx(0.01)
+    assert leg.data_source == "Bitget public ticker + funding + contracts"
 
 
 @pytest.mark.asyncio
@@ -1826,6 +1870,49 @@ async def test_hyperliquid_current_sets_hourly_interval_and_limits(monkeypatch: 
     assert leg.funding_rate_lower_pct == pytest.approx(-4)
     assert leg.open_interest_contracts == pytest.approx(12345.6)
     assert leg.open_interest_usdt == pytest.approx(12345.6 * 101)
+    assert leg.contract_size_multiplier == 1
+    assert leg.upstream_timestamp == now
+    assert leg.is_estimated is False
+    assert leg.estimated_fields == []
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_current_marks_missing_l2_book_as_estimated() -> None:
+    class FakePairSpreadService(PairSpreadQueryService):
+        async def _resolve_hyperliquid_coin(self, symbol: str, *, dex: str | None = None):
+            assert dex == "io"
+            return "io:ANTH", "io"
+
+        async def _fetch_hyperliquid_meta_contexts(self, dex: str = ""):
+            return (
+                {"universe": [{"name": "io:ANTH"}]},
+                [
+                    {
+                        "markPx": "2155",
+                        "oraclePx": "2152.8",
+                        "midPx": "2155.85",
+                        "funding": "0.0000126639",
+                    }
+                ],
+            )
+
+        async def _post_json(self, url: str, body: dict[str, Any]):
+            raise TimeoutError("l2Book timeout")
+
+    service = FakePairSpreadService()
+    try:
+        leg = await service._fetch_hyperliquid_current("ANTHROPICUSDT", dex="io")
+    finally:
+        await service.aclose()
+
+    assert leg.dex == "io"
+    assert leg.raw_symbol == "io:ANTH"
+    assert leg.price == pytest.approx(2155.85)
+    assert leg.bid_price is None
+    assert leg.ask_price is None
+    assert leg.is_estimated is True
+    assert leg.estimated_fields == ["bid", "ask"]
+    assert leg.data_source == "Hyperliquid public metaAndAssetCtxs; l2Book unavailable"
 
 
 def test_pair_spread_rejects_htx() -> None:

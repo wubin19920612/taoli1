@@ -21,9 +21,15 @@ def _preset(
         leg1_exchange="binance",
         leg1_market_type="future",
         leg1_symbol=f"{preset_id}USDT",
+        leg1_raw_symbol=f"{preset_id}USDT",
+        leg1_price_multiplier=1,
+        leg1_contract_size_multiplier=0.01,
         leg2_exchange="okx",
         leg2_market_type="future",
         leg2_symbol=f"{preset_id}USDT",
+        leg2_raw_symbol=f"{preset_id}-USDT-SWAP",
+        leg2_price_multiplier=10,
+        leg2_contract_size_multiplier=1,
         leg2_multiplier=1,
         hours=hours,
         interval_seconds=60,
@@ -95,6 +101,10 @@ def test_pair_spread_preset_api_syncs_devices_and_protects_writes() -> None:
         assert merged.status_code == 200
         assert merged.json()[0]["id"] == "BTC"
         assert merged.json()[0]["intervalSeconds"] == 60
+        assert merged.json()[0]["leg1_raw_symbol"] == "BTCUSDT"
+        assert merged.json()[0]["leg1_contract_size_multiplier"] == 0.01
+        assert merged.json()[0]["leg2_raw_symbol"] == "BTC-USDT-SWAP"
+        assert merged.json()[0]["leg2_price_multiplier"] == 10
 
         # A second device reads the same server-side list without browser storage.
         second_device = client.get("/api/pair-spread/presets")

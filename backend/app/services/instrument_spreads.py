@@ -51,10 +51,29 @@ def _astro_support(
 
 
 def _comparison_id(buy_market: MarketSnapshot, sell_market: MarketSnapshot) -> str:
-    return (
-        f"{buy_market.exchange}:{buy_market.market_type.value}->"
-        f"{sell_market.exchange}:{sell_market.market_type.value}"
-    )
+    def identity(market: MarketSnapshot) -> str:
+        dex = market.dex or (
+            market.raw_symbol.split(":", 1)[0]
+            if market.exchange == "hyperliquid" and ":" in market.raw_symbol
+            else "main" if market.exchange == "hyperliquid" else ""
+        )
+        value = (
+            f"{market.exchange}:{market.market_type.value}:{dex}:"
+            f"{market.raw_symbol}:{market.symbol_alias_price_multiplier:.12g}"
+        )
+        if market.contract_size_multiplier is not None:
+            value = f"{value}:{market.contract_size_multiplier:.12g}"
+        return value
+
+    return f"{identity(buy_market)}->{identity(sell_market)}"
+
+
+def _market_dex(market: MarketSnapshot) -> str | None:
+    if market.dex:
+        return market.dex
+    if market.exchange != "hyperliquid" or market.market_type != MarketType.FUTURE:
+        return None
+    return market.raw_symbol.split(":", 1)[0] if ":" in market.raw_symbol else "main"
 
 
 def instrument_market_age_seconds(
@@ -63,7 +82,7 @@ def instrument_market_age_seconds(
     now: datetime | None = None,
 ) -> float:
     current = now or datetime.now(UTC)
-    observed_at = market.timestamp
+    observed_at = market.upstream_timestamp or market.timestamp
     if current.tzinfo is None:
         current = current.replace(tzinfo=UTC)
     if observed_at.tzinfo is None:
@@ -116,10 +135,30 @@ def build_instrument_spreads(
                 id=_comparison_id(buy_market, sell_market),
                 buy_exchange=buy_market.exchange,
                 buy_market_type=buy_market.market_type,
+                buy_raw_symbol=buy_market.raw_symbol,
+                buy_dex=_market_dex(buy_market),
+                buy_price_multiplier=buy_market.symbol_alias_price_multiplier,
+                buy_contract_size_multiplier=buy_market.contract_size_multiplier,
                 buy_ask=buy_market.ask,
+                buy_volume_24h_usdt=buy_market.volume_24h_usdt,
+                buy_funding_rate_pct=buy_market.funding_rate_pct,
+                buy_funding_interval_hours=buy_market.funding_interval_hours,
+                buy_timestamp=buy_market.upstream_timestamp or buy_market.timestamp,
+                buy_data_source=buy_market.data_source,
+                buy_is_estimated=buy_market.is_estimated,
                 sell_exchange=sell_market.exchange,
                 sell_market_type=sell_market.market_type,
+                sell_raw_symbol=sell_market.raw_symbol,
+                sell_dex=_market_dex(sell_market),
+                sell_price_multiplier=sell_market.symbol_alias_price_multiplier,
+                sell_contract_size_multiplier=sell_market.contract_size_multiplier,
                 sell_bid=sell_market.bid,
+                sell_volume_24h_usdt=sell_market.volume_24h_usdt,
+                sell_funding_rate_pct=sell_market.funding_rate_pct,
+                sell_funding_interval_hours=sell_market.funding_interval_hours,
+                sell_timestamp=sell_market.upstream_timestamp or sell_market.timestamp,
+                sell_data_source=sell_market.data_source,
+                sell_is_estimated=sell_market.is_estimated,
                 price_difference=sell_market.bid - buy_market.ask,
                 executable_spread_pct=executable_spread_pct,
                 mid_spread_pct=_mid_spread_pct(buy_market, sell_market),

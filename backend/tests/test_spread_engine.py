@@ -1,9 +1,9 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from app.models.market import MarketSnapshot, MarketType
-from app.services.spread_engine import build_opportunities, midpoint_spread_pct
+from app.services.spread_engine import _market_identity, build_opportunities, midpoint_spread_pct
 
 
 def snapshot(exchange: str, market_type: MarketType, bid: float, ask: float) -> MarketSnapshot:
@@ -61,6 +61,125 @@ def test_builds_ff_opportunity_and_orients_positive_spread() -> None:
     assert opportunities[0].buy_exchange == "binance"
     assert opportunities[0].sell_exchange == "okx"
     assert opportunities[0].open_spread_pct > 0
+
+
+def test_opportunity_identity_keeps_raw_market_dex_and_multiplier() -> None:
+    io_market = snapshot("hyperliquid", MarketType.FUTURE, bid=102, ask=103).model_copy(
+        update={"raw_symbol": "io:ANTH", "dex": "io"}
+    )
+    xyz_market = snapshot("hyperliquid", MarketType.FUTURE, bid=104, ask=105).model_copy(
+        update={
+            "raw_symbol": "xyz:ANTH",
+            "dex": "xyz",
+            "symbol_alias_price_multiplier": 10,
+        }
+    )
+    lighter = snapshot("lighter", MarketType.FUTURE, bid=99, ask=100).model_copy(
+        update={"raw_symbol": "ANTHROPIC", "contract_size_multiplier": 1}
+    )
+
+    opportunities = build_opportunities([lighter, io_market, xyz_market], mode="FF")
+
+    lighter_routes = [item for item in opportunities if item.buy_exchange == "lighter"]
+    assert len(lighter_routes) == 2
+    assert {item.sell_dex for item in lighter_routes} == {"io", "xyz"}
+    assert {item.sell_raw_symbol for item in lighter_routes} == {"io:ANTH", "xyz:ANTH"}
+    assert len({item.id for item in lighter_routes}) == 2
+    assert {item.sell_price_multiplier for item in lighter_routes} == {1, 10}
+
+
+def test_opportunity_identity_keeps_contract_size_multiplier() -> None:
+    buy_one = snapshot("lighter", MarketType.FUTURE, bid=99, ask=100).model_copy(
+        update={"raw_symbol": "ANTHROPIC", "contract_size_multiplier": 1}
+    )
+    buy_cent = buy_one.model_copy(update={"contract_size_multiplier": 0.01})
+    sell = snapshot("binance", MarketType.FUTURE, bid=102, ask=103).model_copy(
+        update={"raw_symbol": "ANTHROPICUSDT"}
+    )
+
+    [one] = build_opportunities([buy_one, sell], mode="FF")
+    [cent] = build_opportunities([buy_cent, sell], mode="FF")
+
+    assert one.id != cent.id
+    assert one.buy_contract_size_multiplier == 1
+    assert cent.buy_contract_size_multiplier == 0.01
+
+
+def test_market_identity_does_not_append_empty_contract_multiplier() -> None:
+    without_multiplier = snapshot("binance", MarketType.FUTURE, bid=99, ask=100)
+    with_multiplier = without_multiplier.model_copy(update={"contract_size_multiplier": 1})
+
+    assert _market_identity(without_multiplier) == (
+        "binance",
+        "future",
+        "BTCUSDT",
+        "",
+        "1",
+    )
+    assert _market_identity(with_multiplier) == (
+        "binance",
+        "future",
+        "BTCUSDT",
+        "",
+        "1",
+        "1",
+    )
+
+
+def test_stale_market_does_not_generate_realtime_opportunity() -> None:
+    now = datetime(2026, 9, 22, 8, 0, tzinfo=UTC)
+    fresh = snapshot("lighter", MarketType.FUTURE, bid=99, ask=100).model_copy(
+        update={"timestamp": now - timedelta(seconds=5), "raw_symbol": "ANTHROPIC"}
+    )
+    stale = snapshot("binance", MarketType.FUTURE, bid=102, ask=103).model_copy(
+        update={"timestamp": now - timedelta(seconds=31), "raw_symbol": "ANTHROPICUSDT"}
+    )
+
+    opportunities = build_opportunities(
+        [fresh, stale],
+        mode="FF",
+        now=now,
+        stale_after_seconds=30,
+    )
+
+    assert opportunities == []
+
+
+def test_upstream_timestamp_controls_realtime_freshness() -> None:
+    now = datetime(2026, 9, 22, 8, 0, tzinfo=UTC)
+    delayed = snapshot("lighter", MarketType.FUTURE, bid=99, ask=100).model_copy(
+        update={
+            "timestamp": now,
+            "upstream_timestamp": now - timedelta(seconds=31),
+            "raw_symbol": "ANTHROPIC",
+        }
+    )
+    fresh = snapshot("binance", MarketType.FUTURE, bid=102, ask=103).model_copy(
+        update={"timestamp": now, "raw_symbol": "ANTHROPICUSDT"}
+    )
+
+    assert build_opportunities(
+        [delayed, fresh],
+        mode="FF",
+        now=now,
+        stale_after_seconds=30,
+    ) == []
+
+
+def test_estimated_bid_or_ask_does_not_generate_realtime_opportunity() -> None:
+    estimated = snapshot("hyperliquid", MarketType.FUTURE, bid=99, ask=100).model_copy(
+        update={
+            "raw_symbol": "io:ANTH",
+            "dex": "io",
+            "is_estimated": True,
+            "estimated_fields": ["bid", "ask"],
+        }
+    )
+    real = snapshot("lighter", MarketType.FUTURE, bid=102, ask=103).model_copy(
+        update={"raw_symbol": "ANTHROPIC"}
+    )
+
+    assert build_opportunities([estimated, real], mode="FF") == []
 
 
 def test_skips_symbols_without_two_matching_markets() -> None:

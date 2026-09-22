@@ -165,6 +165,137 @@ def test_instrument_lookup_resolves_hyperliquid_raw_alias_and_exact_dex() -> Non
     assert inferred_exchanges["hyperliquid"]["future"]["raw_symbol"] == "io:ANTH"
 
 
+def test_anthropic_lookup_lists_lighter_hl_and_route_only_rh_evidence() -> None:
+    now = datetime.now(UTC).replace(microsecond=0)
+    store = SnapshotStore()
+    store.set_all_markets(
+        [
+            market("ANTHROPICUSDT", "lighter", MarketType.FUTURE, 2_170, now).model_copy(
+                update={
+                    "raw_symbol": "ANTHROPIC",
+                    "contract_size_multiplier": 1,
+                    "data_source": "Lighter public orderBookDetails + WebSocket order_book",
+                }
+            ),
+            market("ANTHROPICUSDT", "binance", MarketType.FUTURE, 2_160, now).model_copy(
+                update={"raw_symbol": "ANTHROPICUSDT"}
+            ),
+            market("ANTHROPICUSDT", "hyperliquid", MarketType.FUTURE, 2_165, now).model_copy(
+                update={"raw_symbol": "io:ANTH", "dex": "io"}
+            ),
+        ]
+    )
+    app = create_app(
+        snapshot_store=store,
+        settings=Settings(database_url="sqlite:///:memory:"),
+    )
+
+    class Astro:
+        async def list_pairs(self):
+            return [
+                {
+                    "id": "lighter-rh",
+                    "name": "ANTHROPIC",
+                    "type": "FF",
+                    "buyEx": "lighter",
+                    "sellEx": "rh-lighter",
+                },
+                {
+                    "id": "hl-rh",
+                    "name": "ANTH-ANTHROPIC",
+                    "type": "FR",
+                    "buyEx": "hl",
+                    "sellEx": "rh-lighter",
+                    "aHlDex": "io",
+                },
+            ]
+
+    app.state.astro_client = Astro()
+
+    with TestClient(app) as client:
+        responses = [
+            client.get(f"/api/instruments/{symbol}")
+            for symbol in ("ANTH", "ANTHROPIC", "ANTHROPICUSDT")
+        ]
+
+    assert all(response.status_code == 200 for response in responses)
+    for response in responses:
+        payload = response.json()
+        assert payload["symbol"] == "ANTHROPICUSDT"
+        identities = {
+            (item["exchange"], item["market_type"], item["raw_symbol"], item["dex"])
+            for item in payload["markets"]
+        }
+        assert identities == {
+            ("binance", "future", "ANTHROPICUSDT", None),
+            ("hyperliquid", "future", "io:ANTH", "io"),
+            ("lighter", "future", "ANTHROPIC", None),
+        }
+        lighter = next(item for item in payload["markets"] if item["exchange"] == "lighter")
+        assert lighter["contract_size_multiplier"] == 1
+        assert lighter["data_status"] == "live"
+        route_only = [item for item in payload["astro_routes"] if item["route"] == "rh-lighter"]
+        assert len(route_only) == 2
+        assert all(item["status"] == "route_only" for item in route_only)
+        assert all(item["live_data_supported"] is False for item in route_only)
+        assert all("不复制 Lighter 行情" in item["reason"] for item in route_only)
+
+
+def test_instrument_lookup_lists_multiple_hyperliquid_dex_candidates() -> None:
+    now = datetime.now(UTC)
+    store = SnapshotStore()
+    store.set_all_markets(
+        [
+            market("ASSETUSDT", "hyperliquid", MarketType.FUTURE, 100, now).model_copy(
+                update={"raw_symbol": "io:COIN", "dex": "io"}
+            ),
+            market("ASSETUSDT", "hyperliquid", MarketType.FUTURE, 101, now).model_copy(
+                update={"raw_symbol": "xyz:COIN2", "dex": "xyz"}
+            ),
+        ]
+    )
+    app = create_app(
+        snapshot_store=store,
+        settings=Settings(database_url="sqlite:///:memory:"),
+    )
+
+    class SettingsRepository:
+        async def get_risk_settings(self) -> RiskSettings:
+            from app.models.settings import SymbolAlias
+
+            return RiskSettings(
+                symbol_aliases=[
+                    SymbolAlias(
+                        exchange="hyperliquid",
+                        dex="io",
+                        symbol="COIN",
+                        canonical_symbol="ASSET",
+                        market_type=MarketType.FUTURE,
+                    ),
+                    SymbolAlias(
+                        exchange="hyperliquid",
+                        dex="xyz",
+                        symbol="COIN2",
+                        canonical_symbol="ASSET",
+                        market_type=MarketType.FUTURE,
+                    ),
+                ]
+            )
+
+    app.state.settings_repo = SettingsRepository()
+
+    with TestClient(app) as client:
+        response = client.get("/api/instruments/ASSET")
+
+    assert response.status_code == 200
+    markets = response.json()["markets"]
+    assert {(item["dex"], item["raw_symbol"]) for item in markets} == {
+        ("io", "io:COIN"),
+        ("xyz", "xyz:COIN2"),
+    }
+    assert response.json()["market_count"] == 2
+
+
 def test_instrument_lookup_keeps_ignored_exchange_basics_but_excludes_its_spreads() -> None:
     now = datetime.now(UTC)
     store = SnapshotStore()

@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime
 from time import monotonic
 
 from app.exchanges.base import (
@@ -12,7 +13,6 @@ from app.exchanges.base import (
 )
 from app.models.market import MarketSnapshot, MarketType
 from app.models.orderbook import OrderBookSnapshot
-
 
 RTOKEN_SYMBOL_REFRESH_SECONDS = 300.0
 
@@ -92,13 +92,23 @@ class BitgetAdapter(ExchangeAdapter):
             payload.get("data", []),
             MarketType.SPOT,
             rtoken_symbols=rtoken_symbols,
+            upstream_timestamp=parse_datetime_ms(
+                payload.get("requestTime") or payload.get("ts")
+            ),
         )
 
     async def fetch_future_tickers(self) -> list[MarketSnapshot]:
         url = "https://api.bitget.com/api/v2/mix/market/tickers?productType=USDT-FUTURES"
         payload = await self.get_json(url)
-        tickers = self._parse(payload.get("data", []), MarketType.FUTURE)
+        tickers = self._parse(
+            payload.get("data", []),
+            MarketType.FUTURE,
+            upstream_timestamp=parse_datetime_ms(
+                payload.get("requestTime") or payload.get("ts")
+            ),
+        )
         funding = await self._fetch_funding_rates()
+        contract_multipliers = await self._fetch_contract_multipliers()
         enriched: list[MarketSnapshot] = []
         for row in tickers:
             item = funding.get(row.raw_symbol, {})
@@ -112,10 +122,30 @@ class BitgetAdapter(ExchangeAdapter):
                         "funding_next_rate_pct": None,
                         "funding_interval_hours": int(interval_hours) if interval_hours is not None else row.funding_interval_hours,
                         "funding_next_time": next_time,
+                        "contract_size_multiplier": contract_multipliers.get(
+                            row.raw_symbol
+                        ),
                     }
                 )
             )
         return enriched
+
+    async def _fetch_contract_multipliers(self) -> dict[str, float]:
+        try:
+            payload = await self.get_json(
+                "https://api.bitget.com/api/v2/mix/market/contracts?productType=USDT-FUTURES"
+            )
+        except Exception:  # noqa: BLE001 - metadata failure must not hide a usable book.
+            return {}
+        rows = payload.get("data", []) if isinstance(payload, dict) else []
+        multipliers: dict[str, float] = {}
+        for item in rows if isinstance(rows, list) else []:
+            if not isinstance(item, dict) or not item.get("symbol"):
+                continue
+            multiplier = parse_float(item.get("sizeMultiplier"))
+            if multiplier is not None and multiplier > 0:
+                multipliers[str(item["symbol"])] = multiplier
+        return multipliers
 
     async def fetch_order_book(
         self,
@@ -162,7 +192,7 @@ class BitgetAdapter(ExchangeAdapter):
             payload = await self.get_json("https://api.bitget.com/api/v2/spot/public/symbols")
             rows = payload.get("data", []) if isinstance(payload, dict) else []
             discovered = rtoken_spot_symbols(rows if isinstance(rows, list) else [])
-        except Exception:
+        except Exception:  # noqa: BLE001 - retain the last verified product metadata.
             return self._rtoken_spot_symbols
 
         self._rtoken_spot_symbols = discovered or set(KNOWN_RTOKEN_SPOT_SYMBOLS)
@@ -175,6 +205,7 @@ class BitgetAdapter(ExchangeAdapter):
         market_type: MarketType,
         *,
         rtoken_symbols: set[str] | None = None,
+        upstream_timestamp: datetime | None = None,
     ) -> list[MarketSnapshot]:
         rows: list[MarketSnapshot] = []
         now = utc_now()
@@ -212,6 +243,8 @@ class BitgetAdapter(ExchangeAdapter):
                     index_price=parse_float(item.get("indexPrice")),
                     timestamp=now,
                     raw_symbol=raw,
+                    data_source=f"Bitget public {market_type.value} tickers",
+                    upstream_timestamp=upstream_timestamp,
                     symbol_alias_original_symbol=raw if is_rtoken_spot else None,
                 )
             )

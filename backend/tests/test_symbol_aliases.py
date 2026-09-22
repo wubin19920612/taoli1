@@ -278,6 +278,47 @@ def test_known_hyperliquid_raw_anth_alias_infers_unique_dex() -> None:
     assert resolved.dex == "io"
 
 
+@pytest.mark.parametrize("symbol", ["ANTH", "ANTHROPIC", "ANTHROPICUSDT"])
+def test_anthropic_query_alias_resolves_lighter_public_market(symbol: str) -> None:
+    resolved = resolve_symbol_alias(
+        [],
+        exchange="lighter",
+        symbol=symbol,
+        market_type=MarketType.FUTURE,
+    )
+
+    assert resolved.raw_symbol == "ANTHROPICUSDT"
+    assert resolved.canonical_symbol == "ANTHROPICUSDT"
+    assert resolved.dex is None
+
+
+def test_known_okx_anthropic_tenth_price_is_scaled_to_canonical_unit() -> None:
+    resolved = resolve_symbol_alias(
+        [],
+        exchange="okx",
+        symbol="ANTHROPIC",
+        market_type=MarketType.FUTURE,
+    )
+    market = snapshot(
+        "okx",
+        "ANTHROPICUSDT",
+        MarketType.FUTURE,
+        raw_symbol="ANTHROPIC-USDT-SWAP",
+    ).model_copy(update={"bid": 216.4, "ask": 216.5, "bid_size": 10, "ask_size": 20})
+
+    [aliased] = apply_symbol_aliases([market], [])
+
+    assert resolved.price_multiplier == 10
+    assert resolved.raw_symbol == "ANTHROPICUSDT"
+    assert aliased.symbol == "ANTHROPICUSDT"
+    assert aliased.raw_symbol == "ANTHROPIC-USDT-SWAP"
+    assert aliased.bid == pytest.approx(2164)
+    assert aliased.ask == pytest.approx(2165)
+    assert aliased.bid_size == pytest.approx(1)
+    assert aliased.ask_size == pytest.approx(2)
+    assert aliased.symbol_alias_price_multiplier == 10
+
+
 def test_hyperliquid_alias_does_not_guess_between_multiple_dexes() -> None:
     aliases = [
         SymbolAlias(

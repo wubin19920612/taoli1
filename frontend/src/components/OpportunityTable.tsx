@@ -9,7 +9,7 @@ import { Button, Space, Table, Tag, Tooltip, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
 
-import type { Opportunity } from "../api/types";
+import type { MarketType, Opportunity } from "../api/types";
 import { marketTypeText } from "../constants/marketLabels";
 import { RiskTags } from "./RiskTags";
 
@@ -76,14 +76,25 @@ function leg(
   exchange: string,
   marketType: string,
   rawSymbol?: string | null,
-  canonicalSymbol?: string
+  canonicalSymbol?: string,
+  dex?: string | null,
+  priceMultiplier?: number,
+  contractSizeMultiplier?: number | null
 ) {
   const rawSuffix =
     rawSymbol && canonicalSymbol && normalizeSymbol(rawSymbol) !== normalizeSymbol(canonicalSymbol)
       ? rawSymbol
       : "";
   const marketLabel = marketTypeText(exchange, marketType, rawSymbol, canonicalSymbol);
-  const meta = [marketLabel, rawSuffix ? `原始 ${rawSuffix}` : ""].filter(Boolean).join(" ");
+  const meta = [
+    marketLabel,
+    dex ? `DEX ${dex}` : "",
+    rawSuffix ? `原始 ${rawSuffix}` : "",
+    priceMultiplier !== undefined ? `价格倍率 ${priceMultiplier}x` : "",
+    contractSizeMultiplier !== undefined && contractSizeMultiplier !== null
+      ? `数量乘数 ${contractSizeMultiplier}`
+      : ""
+  ].filter(Boolean).join(" ");
   const fullName = [exchange, meta].filter(Boolean).join(" ");
   return (
     <div className="leg-cell">
@@ -151,20 +162,61 @@ function isBlocked(symbol: string, blockedSymbols: string[] | undefined): boolea
   return (blockedSymbols ?? []).some((item) => normalizeSymbol(item) === normalized);
 }
 
-function routeSymbol(rawSymbol: string | null | undefined, canonicalSymbol: string): string {
+function routeSymbol(exchange: string, rawSymbol: string | null | undefined, canonicalSymbol: string): string {
   const value = rawSymbol?.trim() || canonicalSymbol;
-  return value.toUpperCase();
+  const separator = exchange === "hyperliquid" ? value.indexOf(":") : -1;
+  return (separator > 0 ? value.slice(separator + 1) : value).toUpperCase();
+}
+
+function setLegIdentityParams(
+  url: URL,
+  key: 1 | 2,
+  leg: {
+    exchange: string;
+    marketType: MarketType;
+    rawSymbol?: string | null;
+    canonicalSymbol: string;
+    dex?: string | null;
+    priceMultiplier?: number;
+    contractSizeMultiplier?: number | null;
+  }
+): void {
+  const rawSymbol = leg.rawSymbol?.trim() || leg.canonicalSymbol;
+  url.searchParams.set(`leg${key}_exchange`, leg.exchange);
+  url.searchParams.set(`leg${key}_market_type`, leg.marketType);
+  url.searchParams.set(`leg${key}_symbol`, routeSymbol(leg.exchange, rawSymbol, leg.canonicalSymbol));
+  url.searchParams.set(`leg${key}_raw_symbol`, rawSymbol);
+  url.searchParams.set(`leg${key}_price_multiplier`, String(leg.priceMultiplier ?? 1));
+  if (leg.dex) url.searchParams.set(`leg${key}_dex`, leg.dex);
+  else url.searchParams.delete(`leg${key}_dex`);
+  if (leg.contractSizeMultiplier !== null && leg.contractSizeMultiplier !== undefined) {
+    url.searchParams.set(`leg${key}_contract_size_multiplier`, String(leg.contractSizeMultiplier));
+  } else {
+    url.searchParams.delete(`leg${key}_contract_size_multiplier`);
+  }
 }
 
 function openPairSpread(row: Opportunity): void {
   const url = new URL(window.location.href);
   url.searchParams.set("page", "pair-monitor");
-  url.searchParams.set("leg1_exchange", row.buy_exchange);
-  url.searchParams.set("leg1_market_type", row.buy_market_type);
-  url.searchParams.set("leg1_symbol", routeSymbol(row.buy_raw_symbol, row.symbol));
-  url.searchParams.set("leg2_exchange", row.sell_exchange);
-  url.searchParams.set("leg2_market_type", row.sell_market_type);
-  url.searchParams.set("leg2_symbol", routeSymbol(row.sell_raw_symbol, row.symbol));
+  setLegIdentityParams(url, 1, {
+    exchange: row.buy_exchange,
+    marketType: row.buy_market_type,
+    rawSymbol: row.buy_raw_symbol,
+    canonicalSymbol: row.symbol,
+    dex: row.buy_dex,
+    priceMultiplier: row.buy_price_multiplier,
+    contractSizeMultiplier: row.buy_contract_size_multiplier
+  });
+  setLegIdentityParams(url, 2, {
+    exchange: row.sell_exchange,
+    marketType: row.sell_market_type,
+    rawSymbol: row.sell_raw_symbol,
+    canonicalSymbol: row.symbol,
+    dex: row.sell_dex,
+    priceMultiplier: row.sell_price_multiplier,
+    contractSizeMultiplier: row.sell_contract_size_multiplier
+  });
   url.searchParams.set("leg2_multiplier", "1");
   url.searchParams.set("hours", "4");
   url.searchParams.set("interval_minutes", "5");
@@ -322,12 +374,28 @@ function buildColumns(
     {
       title: "买入交易所",
       width: 104,
-      render: (_, row) => leg(row.buy_exchange, row.buy_market_type, row.buy_raw_symbol, row.symbol)
+      render: (_, row) => leg(
+        row.buy_exchange,
+        row.buy_market_type,
+        row.buy_raw_symbol,
+        row.symbol,
+        row.buy_dex,
+        row.buy_price_multiplier,
+        row.buy_contract_size_multiplier
+      )
     },
     {
       title: "卖出交易所",
       width: 104,
-      render: (_, row) => leg(row.sell_exchange, row.sell_market_type, row.sell_raw_symbol, row.symbol)
+      render: (_, row) => leg(
+        row.sell_exchange,
+        row.sell_market_type,
+        row.sell_raw_symbol,
+        row.symbol,
+        row.sell_dex,
+        row.sell_price_multiplier,
+        row.sell_contract_size_multiplier
+      )
     },
     {
       title: "Open spread",

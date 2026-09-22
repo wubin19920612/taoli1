@@ -6,7 +6,6 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validat
 
 from app.models.market import MarketType
 
-
 SUPPORTED_PAIR_SPREAD_EXCHANGES: tuple[str, ...] = (
     "binance",
     "binance_alpha",
@@ -33,6 +32,7 @@ PAIR_SPREAD_MAX_INTERVAL_SECONDS = 86_400
 PAIR_SPREAD_FUNDING_RECORD_INTERVAL_SECONDS = 60
 MAX_PAIR_SPREAD_PRESETS = 24
 HYPERLIQUID_MAIN_DEX = "main"
+PAIR_SPREAD_ROUTE_ONLY_EXCHANGES: tuple[str, ...] = ("rh-lighter",)
 
 
 class PairSpreadPriceField(StrEnum):
@@ -112,6 +112,11 @@ class PairSpreadLegQuery(BaseModel):
     @classmethod
     def normalize_exchange(cls, value: str) -> str:
         normalized = value.strip().lower()
+        if normalized in PAIR_SPREAD_ROUTE_ONLY_EXCHANGES:
+            raise ValueError(
+                "route unsupported: rh-lighter is an Astro route name without a verified "
+                "independent public market-data source"
+            )
         if normalized not in SUPPORTED_PAIR_SPREAD_EXCHANGES:
             allowed = ", ".join(SUPPORTED_PAIR_SPREAD_EXCHANGES)
             raise ValueError(f"unsupported exchange: {value}; allowed: {allowed}")
@@ -245,10 +250,16 @@ class PairSpreadPreset(BaseModel):
     leg1_market_type: MarketType = MarketType.FUTURE
     leg1_dex: str = Field(default="", max_length=64)
     leg1_symbol: str = Field(min_length=1, max_length=128)
+    leg1_raw_symbol: str | None = Field(default=None, max_length=128)
+    leg1_price_multiplier: float = Field(default=1.0, gt=0)
+    leg1_contract_size_multiplier: float | None = Field(default=None, gt=0)
     leg2_exchange: str = Field(min_length=1, max_length=32)
     leg2_market_type: MarketType = MarketType.FUTURE
     leg2_dex: str = Field(default="", max_length=64)
     leg2_symbol: str = Field(min_length=1, max_length=128)
+    leg2_raw_symbol: str | None = Field(default=None, max_length=128)
+    leg2_price_multiplier: float = Field(default=1.0, gt=0)
+    leg2_contract_size_multiplier: float | None = Field(default=None, gt=0)
     leg2_multiplier: float = Field(default=1.0, gt=0)
     hours: int = Field(default=4, ge=PAIR_SPREAD_MIN_HOURS)
     interval_seconds: int = Field(
@@ -282,6 +293,14 @@ class PairSpreadPreset(BaseModel):
     def normalize_preset_symbol(cls, value: object) -> object:
         return value.strip().upper() if isinstance(value, str) else value
 
+    @field_validator("leg1_raw_symbol", "leg2_raw_symbol", mode="before")
+    @classmethod
+    def normalize_preset_raw_symbol(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        normalized = value.strip()
+        return normalized or None
+
     @field_validator("saved_at")
     @classmethod
     def normalize_preset_saved_at(cls, value: datetime) -> datetime:
@@ -300,6 +319,14 @@ class PairSpreadCurrentLeg(BaseModel):
     market_type: MarketType = MarketType.FUTURE
     dex: str | None = None
     raw_symbol: str
+    price_multiplier: float = Field(default=1.0, gt=0)
+    contract_size_multiplier: float | None = Field(default=None, gt=0)
+    data_source: str | None = None
+    upstream_timestamp: datetime | None = None
+    is_estimated: bool = False
+    estimated_fields: list[str] = Field(default_factory=list)
+    estimated_taker_fee_pct: float | None = Field(default=None, ge=0)
+    fee_is_estimated: bool = True
     price: float
     price_field: PairSpreadPriceField
     bid_price: float | None = None

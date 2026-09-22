@@ -220,6 +220,10 @@
   border-bottom: 0;
 }
 
+.instrument-market-data-row-stale {
+  background: #fff8f6;
+}
+
 .instrument-market-data-identity,
 .instrument-market-data-group {
   display: grid;
@@ -278,6 +282,50 @@
 .instrument-market-data-group .instrument-trade-metric-ask strong,
 .instrument-market-data-group .instrument-trade-metric-negative strong {
   color: #d92d20;
+}
+
+.instrument-route-list {
+  display: grid;
+}
+
+.instrument-route-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.8fr) minmax(180px, 1fr) auto minmax(240px, 1.4fr);
+  gap: 12px;
+  align-items: center;
+  min-width: 0;
+  padding: 10px 12px;
+  border-bottom: 1px solid #e5ebe9;
+}
+
+.instrument-route-row:last-child {
+  border-bottom: 0;
+}
+
+.instrument-route-row > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.instrument-route-row strong {
+  color: #172026;
+  overflow-wrap: anywhere;
+}
+
+.instrument-route-row span {
+  min-width: 0;
+  color: #66736f;
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.instrument-route-reason {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 @media (max-width: 1150px) and (min-width: 701px) {
@@ -370,6 +418,22 @@
 
   .instrument-market-data-group-name {
     display: block;
+  }
+
+  .instrument-route-evidence .instrument-section-head,
+  .instrument-exact-markets .instrument-section-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .instrument-route-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+  }
+
+  .instrument-route-row > div:nth-child(2),
+  .instrument-route-reason {
+    grid-column: 1 / -1;
   }
 }
 
@@ -3997,6 +4061,98 @@ body {
   box-shadow: 0 1px 4px rgba(15, 23, 42, 0.04);
 }
 
+.pair-market-data-card {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  background: #ffffff;
+  border: 1px solid #e2e8e5;
+  border-radius: 6px;
+}
+
+.pair-market-data-legs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  min-width: 0;
+  border: 1px solid #e5ebe9;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.pair-market-data-leg {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+}
+
+.pair-market-data-leg + .pair-market-data-leg {
+  border-left: 1px solid #e5ebe9;
+}
+
+.pair-market-data-leg-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.pair-market-data-leg-head > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.pair-market-data-leg-head span,
+.pair-market-data-leg-head small,
+.pair-market-data-grid small,
+.pair-market-data-source {
+  color: #687872;
+  font-size: 11px;
+}
+
+.pair-market-data-leg-head strong,
+.pair-market-data-leg-head small,
+.pair-market-data-source span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.pair-market-data-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.pair-market-data-grid > span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 7px 8px;
+  background: #f7faf8;
+  border: 1px solid #edf1ef;
+  border-radius: 4px;
+}
+
+.pair-market-data-grid strong {
+  min-width: 0;
+  color: #172026;
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.pair-market-data-source {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  padding-top: 8px;
+  border-top: 1px solid #edf1ef;
+}
+
 .pair-position-head,
 .pair-position-leg-head {
   display: flex;
@@ -7013,6 +7169,15 @@ body {
     grid-template-columns: 1fr;
   }
 
+  .pair-market-data-legs {
+    grid-template-columns: 1fr;
+  }
+
+  .pair-market-data-leg + .pair-market-data-leg {
+    border-top: 1px solid #e5ebe9;
+    border-left: 0;
+  }
+
   .pair-position-leg + .pair-position-leg {
     padding-top: 14px;
     border-top: 1px solid #e2e8e5;
@@ -7368,6 +7533,14 @@ body {
 
   .pair-position-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .pair-market-data-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .pair-market-data-source {
+    flex-direction: column;
   }
 
   .pair-position-leg {

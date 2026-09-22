@@ -10,10 +10,16 @@ const preset = {
   leg1_market_type: "future",
   leg1_dex: "",
   leg1_symbol: "BTCUSDT",
+  leg1_raw_symbol: "BTCUSDT",
+  leg1_price_multiplier: 1,
+  leg1_contract_size_multiplier: 0.001,
   leg2_exchange: "okx",
   leg2_market_type: "future",
   leg2_dex: "",
   leg2_symbol: "BTCUSDT",
+  leg2_raw_symbol: "BTC-USDT-SWAP",
+  leg2_price_multiplier: 10,
+  leg2_contract_size_multiplier: 1,
   leg2_multiplier: 1,
   hours: 4,
   intervalSeconds: 60,
@@ -424,6 +430,10 @@ describe("FloatingWatchPanel", () => {
     expect(new URLSearchParams(window.location.search).get("page")).toBe("pair-monitor");
     expect(new URLSearchParams(window.location.search).get("leg1_exchange")).toBe("binance");
     expect(new URLSearchParams(window.location.search).get("leg2_exchange")).toBe("okx");
+    expect(new URLSearchParams(window.location.search).get("leg1_raw_symbol")).toBe("BTCUSDT");
+    expect(new URLSearchParams(window.location.search).get("leg1_contract_size_multiplier")).toBe("0.001");
+    expect(new URLSearchParams(window.location.search).get("leg2_raw_symbol")).toBe("BTC-USDT-SWAP");
+    expect(new URLSearchParams(window.location.search).get("leg2_price_multiplier")).toBe("10");
   });
 
   it("removes a watched symbol from the server-synced list", async () => {
@@ -1238,6 +1248,121 @@ describe("FloatingWatchPanel", () => {
     expect(window.localStorage.getItem("taoli1:floating-watch-collapsed.v1")).toBe("1");
     await userEvent.click(within(panel).getByRole("button", { name: "关闭独立关注窗口" }));
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("marks RH-Lighter as route-only and never borrows the real Lighter quote", async () => {
+    const routePair = [{
+      id: "anth-rh-lighter",
+      name: "ANTHROPIC",
+      type: "FF",
+      status: true,
+      buyEx: "lighter",
+      sellEx: "rh-lighter",
+      aExPosition: 0,
+      bExPosition: 0
+    }];
+    const lighterOnly = {
+      ...astroAnthropicInstrument,
+      exchanges: [{
+        exchange: "lighter",
+        spot: null,
+        future: {
+          symbol: "ANTHROPICUSDT",
+          base: "ANTHROPIC",
+          quote: "USDT",
+          exchange: "lighter",
+          market_type: "future",
+          bid: 2166,
+          ask: 2168,
+          timestamp: "2026-09-22T09:00:00Z",
+          raw_symbol: "ANTHROPIC"
+        },
+        error: null
+      }]
+    };
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/settings/floating-watch")) return Response.json({ symbols: [], pair_ids: [] });
+      if (url.includes("/astro/pairs")) return Response.json(routePair);
+      if (url.includes("/instruments/ANTHROPICUSDT")) return Response.json(lighterOnly);
+      return Response.json({});
+    });
+
+    render(<FloatingWatchPanel visible onClose={vi.fn()} />);
+    const panel = await screen.findByRole("complementary", { name: "关注浮窗" });
+    await userEvent.click(await within(panel).findByText("Astro 1"));
+
+    expect(await within(panel).findByText("RH-Lighter 仅为 Astro 路由；没有已验证的独立公开实时行情")).toBeTruthy();
+    const link = within(panel).getByRole("button", {
+      name: "打开 Astro 交易对 ANTHROPIC 的价差查询"
+    }) as HTMLButtonElement;
+    expect(link.disabled).toBe(true);
+  });
+
+  it("does not apply an Astro ratio twice after an exchange alias normalized the price", async () => {
+    const ratioPair = [{
+      id: "anth-normalized-ratio",
+      name: "ANTHROPIC-ANTHROPIC",
+      type: "FR",
+      status: true,
+      buyEx: "bitget",
+      sellEx: "okx",
+      regressionValue: 10,
+      aExPosition: 0,
+      bExPosition: 0
+    }];
+    const normalizedMarkets = [
+      {
+        ...astroAnthropicInstrument.exchanges[0].future,
+        symbol_alias_price_multiplier: 1,
+        contract_size_multiplier: 0.01,
+        data_status: "live",
+        age_seconds: 1,
+        stale_after_seconds: 30,
+        error: null
+      },
+      {
+        ...astroAnthropicInstrument.exchanges[1].future,
+        bid: 199,
+        ask: 201,
+        symbol_alias_price_multiplier: 10,
+        contract_size_multiplier: 1,
+        data_status: "live",
+        age_seconds: 1,
+        stale_after_seconds: 30,
+        error: null
+      }
+    ];
+    const normalizedInstrument = {
+      ...astroAnthropicInstrument,
+      markets: normalizedMarkets,
+      astro_routes: [],
+      route_errors: {}
+    };
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/settings/floating-watch")) return Response.json({ symbols: [], pair_ids: [] });
+      if (url.includes("/astro/pairs")) return Response.json(ratioPair);
+      if (url.includes("/instruments/ANTHROPICUSDT")) return Response.json(normalizedInstrument);
+      return Response.json({});
+    });
+
+    render(<FloatingWatchPanel visible onClose={vi.fn()} />);
+    const panel = await screen.findByRole("complementary", { name: "关注浮窗" });
+    await userEvent.click(await within(panel).findByText("Astro 1"));
+    const link = await within(panel).findByRole("button", {
+      name: "打开 Astro 交易对 ANTHROPIC-ANTHROPIC 的价差查询"
+    });
+    await waitFor(() => expect((link as HTMLButtonElement).disabled).toBe(false));
+
+    await userEvent.click(link);
+
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("leg1_raw_symbol")).toBe("ANTHROPICUSDT");
+    expect(params.get("leg1_price_multiplier")).toBe("1");
+    expect(params.get("leg2_raw_symbol")).toBe("ANTHROPIC-USDT-SWAP");
+    expect(params.get("leg2_price_multiplier")).toBe("10");
+    expect(params.get("leg2_multiplier")).toBe("1");
   });
 
   it("sends detail navigation to a same-origin opener", async () => {

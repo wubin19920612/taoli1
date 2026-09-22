@@ -2,14 +2,13 @@ from dataclasses import dataclass
 
 from app.models.market import MarketSnapshot, MarketType
 from app.models.pair_spread import (
+    HYPERLIQUID_MAIN_DEX,
     PairSpreadCurrentLeg,
     PairSpreadCurrentSnapshot,
     PairSpreadFundingHistoryResult,
     PairSpreadFundingPoint,
-    PairSpreadPoint,
     PairSpreadQueryResult,
     PairSpreadValueStats,
-    HYPERLIQUID_MAIN_DEX,
     normalize_pair_spread_symbol,
     split_hyperliquid_symbol,
 )
@@ -20,7 +19,6 @@ from app.models.premium_index import (
 )
 from app.models.settings import SymbolAlias
 
-
 KNOWN_SYMBOL_ALIASES: tuple[SymbolAlias, ...] = (
     SymbolAlias(
         exchange="hyperliquid",
@@ -29,7 +27,18 @@ KNOWN_SYMBOL_ALIASES: tuple[SymbolAlias, ...] = (
         canonical_symbol="ANTHROPIC",
         market_type=MarketType.FUTURE,
     ),
+    SymbolAlias(
+        exchange="okx",
+        symbol="ANTHROPIC",
+        canonical_symbol="ANTHROPIC",
+        market_type=MarketType.FUTURE,
+        price_multiplier=10,
+    ),
 )
+
+KNOWN_QUERY_SYMBOL_ALIASES: dict[str, str] = {
+    "ANTHUSDT": "ANTHROPICUSDT",
+}
 
 
 @dataclass(frozen=True)
@@ -54,6 +63,11 @@ def _alias_key(alias: SymbolAlias) -> tuple[str, str, str | None, str | None]:
 
 def _base_from_symbol(symbol: str) -> str:
     return symbol.removesuffix("USDT")
+
+
+def canonical_query_symbol(symbol: str) -> str:
+    normalized = normalize_pair_spread_symbol(symbol)
+    return KNOWN_QUERY_SYMBOL_ALIASES.get(normalized, normalized)
 
 
 class SymbolAliasResolver:
@@ -168,6 +182,8 @@ class SymbolAliasResolver:
                 price_multiplier=direct.price_multiplier,
             )
 
+        requested_symbol = canonical_query_symbol(requested_symbol)
+
         reverse_candidates = [
             alias
             for alias in self._by_key.values()
@@ -265,6 +281,7 @@ def _scale_current_leg(
     return leg.model_copy(
         update={
             "symbol": alias.canonical_symbol,
+            "price_multiplier": alias.price_multiplier,
             "price": leg.price * multiplier,
             "bid_price": scale(leg.bid_price),
             "ask_price": scale(leg.ask_price),

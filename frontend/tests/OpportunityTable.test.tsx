@@ -205,6 +205,40 @@ describe("OpportunityTable", () => {
     expect(params.get("interval_minutes")).toBe("5");
   });
 
+  it("preserves raw markets, Hyperliquid DEX, and market multipliers in opportunity navigation", async () => {
+    render(
+      <OpportunityTable
+        opportunities={[{
+          ...row,
+          symbol: "ANTHROPICUSDT",
+          buy_exchange: "lighter",
+          buy_raw_symbol: "ANTHROPIC",
+          buy_dex: null,
+          buy_price_multiplier: 1,
+          buy_contract_size_multiplier: 1,
+          sell_exchange: "hyperliquid",
+          sell_raw_symbol: "io:ANTH",
+          sell_dex: "io",
+          sell_price_multiplier: 1,
+          sell_contract_size_multiplier: 1
+        }]}
+        loading={false}
+      />
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "价差查询 ANTHROPICUSDT" }));
+
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("leg1_symbol")).toBe("ANTHROPIC");
+    expect(params.get("leg1_raw_symbol")).toBe("ANTHROPIC");
+    expect(params.get("leg1_price_multiplier")).toBe("1");
+    expect(params.get("leg2_symbol")).toBe("ANTH");
+    expect(params.get("leg2_raw_symbol")).toBe("io:ANTH");
+    expect(params.get("leg2_dex")).toBe("io");
+    expect(params.get("leg2_price_multiplier")).toBe("1");
+    expect(params.get("leg2_contract_size_multiplier")).toBe("1");
+  });
+
   it("shows raw leg symbols for aliased opportunities in leg titles", () => {
     render(
       <OpportunityTable

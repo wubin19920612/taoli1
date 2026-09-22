@@ -24,6 +24,7 @@ from app.exchanges.lighter import (
     lighter_best_prices,
     lighter_order_books,
     lighter_symbol,
+    lighter_upstream_timestamp,
 )
 from app.exchanges.okx import okx_ticker_volume_24h_usdt
 from app.models.market import MarketType
@@ -361,7 +362,7 @@ def _next_aligned_funding_time_from_hours(now: datetime, interval_hours: float |
     interval = _positive(interval_hours)
     if interval is None:
         return None
-    rounded = int(round(interval))
+    rounded = round(interval)
     if rounded <= 0 or abs(interval - rounded) > 1e-9:
         return None
     return next_aligned_funding_time(now, rounded)
@@ -2674,6 +2675,10 @@ class PairSpreadQueryService:
             funding_rate_pct=funding * 100 if funding is not None else None,
             funding_next_rate_pct=None,
             funding_next_time=next_aligned_funding_time(utc_now(), 1) if market_type == MarketType.FUTURE else None,
+            contract_size_multiplier=1.0,
+            data_source="Lighter public orderBookDetails + WebSocket order_book",
+            upstream_timestamp=lighter_upstream_timestamp(book),
+            estimated_fields=["funding_next_time"] if market_type == MarketType.FUTURE else [],
             funding_interval_hours=1 if market_type == MarketType.FUTURE else None,
             volume_24h_usdt=parse_float(market.get("daily_quote_token_volume")),
             open_interest_contracts=open_interest if market_type == MarketType.FUTURE else None,
@@ -2774,6 +2779,7 @@ class PairSpreadQueryService:
             ticker_payload,
             open_interest_payload,
             account_ratio_payload,
+            contract_info,
         ) = await asyncio.gather(
             self._get_json(f"{base_url}/fapi/v1/premiumIndex?symbol={raw}"),
             self._get_json(f"{base_url}/fapi/v1/ticker/bookTicker?symbol={raw}"),
@@ -2783,6 +2789,7 @@ class PairSpreadQueryService:
             self._get_json_optional(
                 f"{base_url}/futures/data/globalLongShortAccountRatio?symbol={raw}&period=5m&limit=1"
             ),
+            self._fetch_binance_like_contract_info(base_url, raw),
         )
         mark = _positive(parse_float(premium.get("markPrice"))) if isinstance(premium, dict) else None
         index = _positive(parse_float(premium.get("indexPrice"))) if isinstance(premium, dict) else None
@@ -2827,6 +2834,11 @@ class PairSpreadQueryService:
             funding_rate_pct=funding * 100 if funding is not None else None,
             funding_next_rate_pct=None,
             funding_next_time=funding_next_time,
+            contract_size_multiplier=1.0 if contract_info else None,
+            data_source=f"{exchange} public premiumIndex + bookTicker + exchangeInfo",
+            upstream_timestamp=parse_datetime_ms(
+                book.get("time") or book.get("E") or premium.get("time")
+            ),
             funding_interval_hours=funding_interval_hours,
             funding_rate_upper_pct=_rate_pct_from_row(
                 funding_info,
@@ -2902,12 +2914,38 @@ class PairSpreadQueryService:
                 return row
         return {}
 
+    async def _fetch_binance_like_contract_info(
+        self,
+        base_url: str,
+        raw_symbol: str,
+    ) -> dict[str, Any]:
+        try:
+            payload = await self._get_json(f"{base_url}/fapi/v1/exchangeInfo")
+        except Exception:  # noqa: BLE001 - metadata must not hide an otherwise usable book.
+            return {}
+        rows = payload.get("symbols", []) if isinstance(payload, dict) else []
+        for row in rows if isinstance(rows, list) else []:
+            if (
+                isinstance(row, dict)
+                and row.get("symbol") == raw_symbol
+                and row.get("contractType")
+                and row.get("status") == "TRADING"
+            ):
+                return row
+        return {}
+
     async def _fetch_okx_current(self, symbol: str) -> PairSpreadCurrentLeg:
         inst_id = _okx_inst_id(symbol)
         _, base, _ = normalize_usdt_symbol(symbol)
         end_ms = _to_ms(utc_now())
         begin_ms = end_ms - 10 * MINUTE_MS
-        ticker_payload, funding_payload, open_interest_payload, account_ratio_payload = await asyncio.gather(
+        (
+            ticker_payload,
+            funding_payload,
+            open_interest_payload,
+            account_ratio_payload,
+            instrument_payload,
+        ) = await asyncio.gather(
             self._get_json(f"https://www.okx.com/api/v5/market/ticker?instId={inst_id}"),
             self._get_json(f"https://www.okx.com/api/v5/public/funding-rate?instId={inst_id}"),
             self._get_json_optional(
@@ -2916,6 +2954,9 @@ class PairSpreadQueryService:
             self._get_json_optional(
                 "https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio"
                 f"?ccy={base}&period=5m&begin={begin_ms}&end={end_ms}"
+            ),
+            self._get_json_optional(
+                f"https://www.okx.com/api/v5/public/instruments?instType=SWAP&instId={inst_id}"
             ),
         )
         ticker = _first_row(ticker_payload.get("data", [])) if isinstance(ticker_payload, dict) else {}
@@ -2944,6 +2985,18 @@ class PairSpreadQueryService:
         account_ratio = _okx_rubik_latest_ratio(account_ratio_payload)
         account_long_pct = account_ratio / (1 + account_ratio) * 100 if account_ratio is not None else None
         account_short_pct = 100 / (1 + account_ratio) if account_ratio is not None else None
+        instrument = (
+            _first_row(instrument_payload.get("data", []))
+            if isinstance(instrument_payload, dict)
+            else {}
+        )
+        contract_value = _positive(parse_float(instrument.get("ctVal")))
+        contract_multiple = _positive(parse_float(instrument.get("ctMult")))
+        contract_size_multiplier = (
+            contract_value * contract_multiple
+            if contract_value is not None and contract_multiple is not None
+            else contract_value
+        )
         return _current_leg(
             exchange="okx",
             symbol=symbol,
@@ -2963,6 +3016,9 @@ class PairSpreadQueryService:
             funding_rate_pct=funding * 100 if funding is not None else None,
             funding_next_rate_pct=next_funding * 100 if next_funding is not None else None,
             funding_next_time=funding_next_time,
+            contract_size_multiplier=contract_size_multiplier,
+            data_source="OKX public ticker + funding-rate + instruments",
+            upstream_timestamp=parse_datetime_ms(ticker.get("ts")),
             funding_interval_hours=_funding_interval_hours_from_row(funding_row),
             funding_rate_upper_pct=_rate_pct_from_row(
                 funding_row,
@@ -3177,6 +3233,13 @@ class PairSpreadQueryService:
             funding_rate_pct=funding * 100 if funding is not None else None,
             funding_next_rate_pct=next_funding * 100 if next_funding is not None else None,
             funding_next_time=funding_next_time,
+            contract_size_multiplier=_positive(
+                parse_float(contract_row.get("quanto_multiplier"))
+            ),
+            data_source="Gate public futures ticker + contract metadata",
+            upstream_timestamp=parse_datetime_seconds(
+                row.get("time") or row.get("update_time")
+            ),
             funding_interval_hours=funding_interval_hours,
             funding_rate_upper_pct=_rate_pct_from_row(
                 contract_row,
@@ -3227,7 +3290,7 @@ class PairSpreadQueryService:
 
     async def _fetch_bitget_current(self, symbol: str) -> PairSpreadCurrentLeg:
         raw = _compact_symbol(symbol)
-        ticker_payload, funding_payload, account_ratio_payload = await asyncio.gather(
+        ticker_payload, funding_payload, account_ratio_payload, contracts_payload = await asyncio.gather(
             self._get_json(
                 "https://api.bitget.com/api/v2/mix/market/ticker"
                 f"?symbol={raw}&productType=USDT-FUTURES"
@@ -3240,10 +3303,15 @@ class PairSpreadQueryService:
                 "https://api.bitget.com/api/v2/mix/market/account-long-short"
                 f"?symbol={raw}&productType=USDT-FUTURES&period=5m"
             ),
+            self._get_json_optional(
+                "https://api.bitget.com/api/v2/mix/market/contracts"
+                f"?symbol={raw}&productType=USDT-FUTURES"
+            ),
         )
         ticker = _payload_data_row(ticker_payload)
         funding_row = _payload_data_row(funding_payload)
         account_row = _payload_data_latest_row(account_ratio_payload, "ts", "timestamp")
+        contract_row = _payload_data_row(contracts_payload)
         mark = _positive(parse_float(ticker.get("markPrice")))
         index = _positive(parse_float(ticker.get("indexPrice")))
         bid = parse_float(ticker.get("bidPr") or ticker.get("bid"))
@@ -3274,6 +3342,13 @@ class PairSpreadQueryService:
             funding_rate_pct=funding * 100 if funding is not None else None,
             funding_next_rate_pct=None,
             funding_next_time=parse_datetime_ms(funding_row.get("nextUpdate") or ticker.get("nextUpdate")),
+            contract_size_multiplier=_positive(
+                parse_float(contract_row.get("sizeMultiplier"))
+            ),
+            data_source="Bitget public ticker + funding + contracts",
+            upstream_timestamp=parse_datetime_ms(
+                ticker.get("ts") or ticker.get("timestamp")
+            ),
         )
 
     async def _fetch_bitget_spot_current(self, symbol: str) -> PairSpreadCurrentLeg:
@@ -3311,7 +3386,7 @@ class PairSpreadQueryService:
             resolved_coin, resolved_dex = await self._resolve_hyperliquid_coin(symbol, dex=dex)
         else:
             resolved_coin, resolved_dex = await self._resolve_hyperliquid_coin(symbol)
-        (meta, contexts), (bid, ask) = await asyncio.gather(
+        (meta, contexts), (bid, ask, book_timestamp) = await asyncio.gather(
             self._fetch_hyperliquid_meta_contexts(resolved_dex),
             self._fetch_hyperliquid_best_prices(resolved_coin),
         )
@@ -3327,6 +3402,7 @@ class PairSpreadQueryService:
             mark = _positive(parse_float(context.get("markPx")))
             index = _positive(parse_float(context.get("oraclePx")))
             mid = _mid_price(bid, ask) or _positive(parse_float(context.get("midPx")))
+            has_executable_book = bid is not None and ask is not None
             open_interest_contracts = _nonnegative(parse_float(context.get("openInterest")))
             return _current_leg(
                 exchange="hyperliquid",
@@ -3348,6 +3424,15 @@ class PairSpreadQueryService:
                 funding_rate_pct=funding * 100 if funding is not None else None,
                 funding_next_rate_pct=None,
                 funding_next_time=next_aligned_funding_time(now, 1),
+                contract_size_multiplier=1.0,
+                data_source=(
+                    "Hyperliquid public metaAndAssetCtxs + l2Book"
+                    if has_executable_book
+                    else "Hyperliquid public metaAndAssetCtxs; l2Book unavailable"
+                ),
+                upstream_timestamp=book_timestamp,
+                is_estimated=not has_executable_book,
+                estimated_fields=[] if has_executable_book else ["bid", "ask"],
                 funding_interval_hours=1,
                 funding_rate_upper_pct=4.0,
                 funding_rate_lower_pct=-4.0,
@@ -3357,22 +3442,26 @@ class PairSpreadQueryService:
     async def _fetch_hyperliquid_best_prices(
         self,
         raw_coin: str,
-    ) -> tuple[float | None, float | None]:
+    ) -> tuple[float | None, float | None, datetime | None]:
         try:
             payload = await self._post_json(
                 "https://api.hyperliquid.xyz/info",
                 {"type": "l2Book", "coin": raw_coin},
             )
         except Exception:  # noqa: BLE001 - the context midpoint remains a usable fallback.
-            return None, None
+            return None, None, None
         if not isinstance(payload, dict):
-            return None, None
+            return None, None, None
         levels = payload.get("levels")
         if not isinstance(levels, list) or len(levels) < 2:
-            return None, None
+            return None, None, parse_datetime_ms(payload.get("time"))
         bid_row = _first_row(levels[0])
         ask_row = _first_row(levels[1])
-        return _positive(parse_float(bid_row.get("px"))), _positive(parse_float(ask_row.get("px")))
+        return (
+            _positive(parse_float(bid_row.get("px"))),
+            _positive(parse_float(ask_row.get("px"))),
+            parse_datetime_ms(payload.get("time")),
+        )
 
     async def _fetch_hyperliquid_dex_names(self) -> list[str]:
         if self._hyperliquid_dex_names is not None:
@@ -3409,7 +3498,7 @@ class PairSpreadQueryService:
                 base = _hyperliquid_base_from_raw(raw_symbol).upper()
                 try:
                     symbol = normalize_pair_spread_symbol(base)
-                except Exception:
+                except ValueError:
                     continue
                 assets.append(
                     HyperliquidMarketAsset(
@@ -3921,6 +4010,11 @@ def _current_leg(
     funding_rate_pct: float | None,
     funding_next_rate_pct: float | None,
     funding_next_time: datetime | None,
+    contract_size_multiplier: float | None = None,
+    data_source: str | None = None,
+    upstream_timestamp: datetime | None = None,
+    is_estimated: bool = False,
+    estimated_fields: list[str] | None = None,
     funding_interval_hours: float | None = None,
     funding_rate_upper_pct: float | None = None,
     funding_rate_lower_pct: float | None = None,
@@ -3952,6 +4046,13 @@ def _current_leg(
                 market_type=market_type,
                 dex=dex,
                 raw_symbol=raw_symbol,
+                contract_size_multiplier=contract_size_multiplier,
+                data_source=data_source,
+                upstream_timestamp=upstream_timestamp,
+                is_estimated=is_estimated,
+                estimated_fields=estimated_fields or [],
+                estimated_taker_fee_pct=0.1 if market_type == MarketType.SPOT else 0.05,
+                fee_is_estimated=True,
                 price=resolved,
                 price_field=field,
                 bid_price=_positive(bid_price),

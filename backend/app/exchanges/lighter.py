@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -21,6 +21,20 @@ from app.models.orderbook import OrderBookSnapshot
 
 LIGHTER_URL = "https://mainnet.zklighter.elliot.ai/api/v1"
 LIGHTER_WS_URL = "wss://mainnet.zklighter.elliot.ai/stream"
+
+
+def lighter_upstream_timestamp(payload: Any) -> datetime | None:
+    if not isinstance(payload, dict):
+        return None
+    value = parse_float(payload.get("last_updated_at"))
+    if value is None or value <= 0:
+        return None
+    # Lighter order-book snapshots currently expose microseconds since epoch.
+    seconds = value / 1_000_000 if value >= 10**14 else value / 1_000
+    try:
+        return datetime.fromtimestamp(seconds, UTC)
+    except (OSError, OverflowError, ValueError):
+        return None
 
 
 def lighter_symbol(raw: str, market_type: MarketType) -> tuple[str, str] | None:
@@ -139,7 +153,7 @@ class LighterAdapter(ExchangeAdapter):
     details_refresh_seconds = 60
     details_fallback_seconds = 300
     max_scanner_perp_markets = 48
-    priority_perp_symbols = frozenset({"HOOD"})
+    priority_perp_symbols = frozenset({"ANTHROPIC", "HOOD"})
 
     def __init__(self, client=None):
         super().__init__(client)
@@ -217,7 +231,7 @@ class LighterAdapter(ExchangeAdapter):
         key = "spot_order_book_details" if market_type == MarketType.SPOT else "order_book_details"
         rows = details.get(key)
         if not isinstance(rows, list):
-            raise RuntimeError("missing Lighter market details")
+            raise RuntimeError("missing Lighter market details")  # noqa: TRY004
         funding: dict[int, float] = {}
         if market_type == MarketType.FUTURE:
             try:
@@ -231,7 +245,7 @@ class LighterAdapter(ExchangeAdapter):
                         and isinstance(item.get("market_id"), int)
                         if (rate := parse_float(item.get("rate"))) is not None
                     }
-            except Exception:
+            except Exception:  # noqa: BLE001, S110 - funding is supplementary.
                 pass
 
         markets: list[tuple[dict, str, str, int]] = []
@@ -306,6 +320,12 @@ class LighterAdapter(ExchangeAdapter):
                     index_price=parse_float(item.get("index_price")),
                     timestamp=utc_now(),
                     raw_symbol=str(item["symbol"]),
+                    contract_size_multiplier=1.0,
+                    data_source="Lighter public orderBookDetails + WebSocket order_book",
+                    upstream_timestamp=lighter_upstream_timestamp(book),
+                    estimated_fields=(
+                        ["funding_next_time"] if market_type == MarketType.FUTURE else []
+                    ),
                 )
             )
 
