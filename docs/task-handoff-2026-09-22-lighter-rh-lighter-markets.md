@@ -30,9 +30,11 @@
 
 Astro 列表响应没有独立的 `aSymbol`、`bSymbol`、`buySymbol` 或 `sellSymbol` 原始腿字段；当前能够确认的腿身份来自 `name + type + buyEx/sellEx + aHlDex/bHlDex`。Astro 响应仅用于发现路由，不作为价格、成交额或资金费率来源。
 
-Lighter 官方 `funding-rates` 对 ANTHROPIC 的 `market_id=193` 只返回 `lighter`、`binance`、`bybit` 等来源，没有独立的 `rh-lighter` 市场或行情源。现有公开市场元数据和订单簿接口也没有 `rh-lighter`。
+Lighter 官方 `funding-rates` 对 ANTHROPIC 的 `market_id=193` 只返回 `lighter`、`binance`、`bybit` 等来源；现有 Lighter 公开市场元数据和订单簿接口也没有名为 `rh-lighter` 的市场。这只能证明**未发现 Lighter 公开 `rh-lighter` 接口**，不能证明 Astro 内部没有 RH-Lighter 实时数据源。
 
-因此本任务把 `rh-lighter` 建模为 `route_only`：
+后续来源调查已在 Astro Hub 的鉴权后 Dashboard 构建产物中定位到独立的 `rh-lighter` 行情键、`POST /<admin-prefix>/api/funding` 请求构造，以及通过 `WSS /<admin-prefix>/ws/logs` 接收 `updateFuturePrice: rh-lighter:<symbol>:<price>` 的实时链路。该链路目前仍缺少可公开验证的上游市场身份、价格字段语义、bid/ask 和上游时间戳，且现有 HMAC SDK 的 `list` 响应不返回实时价。
+
+因此本任务把 `rh-lighter` 建模为 `route_only`，这里的 `route_only` 是**本项目当前可验证接入能力**，不是对 Astro 内部数据源不存在的判断：
 
 - 标的查询展示 Astro 路由证据，并明确说明不支持独立实时行情。
 - Pair 精确查询 `rh-lighter` 返回 HTTP 422，错误说明它是没有已验证独立公开行情源的 Astro 路由。
@@ -175,7 +177,7 @@ Lighter 官方 `funding-rates` 对 ANTHROPIC 的 `market_id=193` 只返回 `ligh
 
 ## 已知问题与残余风险
 
-- RH-Lighter 没有独立公开实时行情，只能作为 Astro 路由证据；除非未来找到可验证的独立官方市场接口，否则不能把它升级为实时市场。
+- 未发现 Lighter 官方公开接口中的独立 RH-Lighter 市场；但 Astro Hub 鉴权后前端明确支持 `rh-lighter` 实时价格推送。由于其上游身份、单价字段语义、可成交 bid/ask 和上游时间戳仍未验证，本项目当前只能把它作为 Astro 路由证据，不能把它升级为可参与价差或交易判断的实时市场。
 - Astro 当前列表没有独立原始腿字段；现有卡片身份依赖 `name + type + buyEx/sellEx + HL DEX`。若 Astro SDK 后续增加原始腿字段，应优先改用新字段。
 - 三张 RH-Lighter 目标卡在验收时均为暂停状态，生产浮窗无法在不改变业务状态的情况下完成真实点击；本任务没有擅自启用、暂停或重建卡片。
 - Lighter WebSocket、订单簿详情和 HL `l2Book` 可能偶发超时。代码会隔离单市场失败并禁止估算盘口进入机会，但短时可能看不到 ANTHROPIC 路线。
@@ -187,5 +189,6 @@ Lighter 官方 `funding-rates` 对 ANTHROPIC 的 `market_id=193` 只返回 `ligh
 ## 下一步建议
 
 - 等待真实 ANTHROPIC 市场变化，继续观察 Lighter WebSocket 和 HL `io:ANTH` 的上游稳定性与时间戳。
-- 若发现 RH-Lighter 独立官方接口，应新建独立任务重新验证市场身份、合约单位和数据来源，不在现有 Lighter 快照上复制一条路线。
+- 后续若取得 Astro 官方只读行情接口或可审计的鉴权后样本，应在独立任务中验证 RH-Lighter 的上游身份、价格字段语义、合约单位、时间戳和更新频率；在这些证据齐全前，不在现有 Lighter 快照上复制一条路线。
+- 更完整的来源调查见 `docs/task-handoff-2026-09-22-rh-lighter-data-provenance.md`。
 - 下一个无直接依赖的功能模块应在新的 Codex 任务中继续，并以本文档和最新分支为交接基线。
