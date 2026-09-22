@@ -57,9 +57,13 @@ def _float_or_none(value: Any) -> float | None:
     return parse_float(value)
 
 
-def _book_side(levels: object, *, is_buy: bool) -> tuple[float | None, float | None]:
+def _book_side(
+    levels: object,
+    *,
+    is_buy: bool,
+) -> tuple[float | None, float | None, float | None]:
     if not isinstance(levels, list):
-        return None, None
+        return None, None, None
     parsed: list[tuple[float, float]] = []
     for item in levels:
         if not isinstance(item, dict):
@@ -70,15 +74,21 @@ def _book_side(levels: object, *, is_buy: bool) -> tuple[float | None, float | N
             continue
         parsed.append((price, size))
     if not parsed:
-        return None, None
+        return None, None, None
     best = parsed[0][0]
-    boundary = best * (1.01 if is_buy else 0.99)
-    depth = sum(
+    boundary_01 = best * (1.001 if is_buy else 0.999)
+    boundary_1 = best * (1.01 if is_buy else 0.99)
+    depth_01 = sum(
         price * size
         for price, size in parsed
-        if (price <= boundary if is_buy else price >= boundary)
+        if (price <= boundary_01 if is_buy else price >= boundary_01)
     )
-    return best, depth
+    depth_1 = sum(
+        price * size
+        for price, size in parsed
+        if (price <= boundary_1 if is_buy else price >= boundary_1)
+    )
+    return best, depth_01, depth_1
 
 
 def _blocked_action(reason_code: str, reason: str) -> HyperliquidTradeActionStatus:
@@ -142,9 +152,9 @@ def _reduce_action(
             reason="当前公开订单簿没有这一侧报价，无法确认可成交",
         )
     return HyperliquidTradeActionStatus(
-        state=HyperliquidActionState.CONDITIONAL,
-        reason_code="REDUCE_ONLY_REQUIRES_POSITION",
-        reason=f"原则上可用于平{closes}，但必须勾选 Reduce Only，且数量不能超过对应持仓",
+        state=HyperliquidActionState.AVAILABLE,
+        reason_code="REDUCE_ONLY_AVAILABLE",
+        reason=f"公开规则允许已有对应{closes}仓时使用 Reduce Only 平{closes}",
         executable_price=price,
         depth_1pct_usdt=depth,
     )
@@ -312,8 +322,8 @@ class HyperliquidTradeStatusService:
         levels = book.get("levels", []) if isinstance(book, dict) else []
         bids = levels[0] if isinstance(levels, list) and len(levels) > 0 else []
         asks = levels[1] if isinstance(levels, list) and len(levels) > 1 else []
-        best_bid, bid_depth = _book_side(bids, is_buy=False)
-        best_ask, ask_depth = _book_side(asks, is_buy=True)
+        best_bid, bid_depth_01, bid_depth = _book_side(bids, is_buy=False)
+        best_ask, ask_depth_01, ask_depth = _book_side(asks, is_buy=True)
         mark_price = _float_or_none(context.get("markPx"))
         open_interest = _float_or_none(context.get("openInterest"))
         at_cap = raw_symbol.upper() in caps if caps is not None else None
@@ -340,6 +350,8 @@ class HyperliquidTradeStatusService:
             else None,
             best_bid=best_bid,
             best_ask=best_ask,
+            bid_depth_01pct_usdt=bid_depth_01,
+            ask_depth_01pct_usdt=ask_depth_01,
             bid_depth_1pct_usdt=bid_depth,
             ask_depth_1pct_usdt=ask_depth,
             mark_price=mark_price,

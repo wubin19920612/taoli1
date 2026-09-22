@@ -193,6 +193,46 @@ const tradeAvailabilityStatus = {
     "公开接口只能判断市场级限制；账户级限制需结合真实订单错误确认。",
     "1% 深度来自当前公开盘口快照，不是成交保证；手续费未计入。"
   ],
+  index_compositions: [
+    {
+      exchange: "binance",
+      market_type: "future",
+      symbol: "ZETAUSDT",
+      raw_symbol: "ZETAUSDT",
+      dex: null,
+      status: "available",
+      source: "Binance fapi constituents",
+      index_price: 0.068025,
+      observed_at: "2026-09-21T04:54:00Z",
+      weight_total: 1,
+      components: [
+        {
+          source_exchange: "Coinbase",
+          market_type: "spot",
+          raw_symbol: "ZETA-USD",
+          weight: 0.45,
+          price: 0.06801
+        }
+      ],
+      note: "仅展示官方指数成分接口原始返回",
+      error: null
+    },
+    {
+      exchange: "hyperliquid",
+      market_type: "future",
+      symbol: "ZETAUSDT",
+      raw_symbol: "ZETA",
+      dex: "main",
+      status: "not_returned",
+      source: "Hyperliquid metaAndAssetCtxs",
+      index_price: null,
+      observed_at: "2026-09-21T04:54:00Z",
+      weight_total: null,
+      components: [],
+      note: "官方未返回可核验的加权指数成分与权重",
+      error: null
+    }
+  ],
   markets: [
     {
       exchange: "hyperliquid",
@@ -221,6 +261,8 @@ const tradeAvailabilityStatus = {
       size_decimals: 1,
       best_bid: 0.06802,
       best_ask: 0.06803,
+      bid_depth_01pct_usdt: 9000,
+      ask_depth_01pct_usdt: 11000,
       bid_depth_1pct_usdt: 18000,
       ask_depth_1pct_usdt: 22000,
       mark_price: 0.06802,
@@ -255,18 +297,18 @@ const tradeAvailabilityStatus = {
         depth_1pct_usdt: null
       },
       buy_reduce_only: {
-        state: "conditional",
-        reason_code: "REDUCE_ONLY_REQUIRES_POSITION",
-        reason: "原则上可用于平空，但必须勾选 Reduce Only，且数量不能超过对应持仓",
-        scope: "account",
+        state: "available",
+        reason_code: "REDUCE_ONLY_AVAILABLE",
+        reason: "公开规则允许已有对应空仓使用 Reduce Only 减仓",
+        scope: "public_market",
         executable_price: 0.06803,
         depth_1pct_usdt: 22000
       },
       sell_reduce_only: {
-        state: "conditional",
-        reason_code: "REDUCE_ONLY_REQUIRES_POSITION",
-        reason: "原则上可用于平多，但必须勾选 Reduce Only，且数量不能超过对应持仓",
-        scope: "account",
+        state: "available",
+        reason_code: "REDUCE_ONLY_AVAILABLE",
+        reason: "公开规则允许已有对应多仓使用 Reduce Only 减仓",
+        scope: "public_market",
         executable_price: 0.06802,
         depth_1pct_usdt: 18000
       }
@@ -303,6 +345,7 @@ describe("InstrumentLookupPage", () => {
           observed_at: "2026-09-21T04:54:00Z",
           source: "各交易所公开市场元数据与实时订单簿；未发送订单",
           markets: [],
+          index_compositions: [],
           coverage: [],
           errors: {},
           limitations: []
@@ -321,13 +364,9 @@ describe("InstrumentLookupPage", () => {
     expect(screen.getByText("2 / 7")).not.toBeNull();
     expect(screen.queryByText("HTX")).toBeNull();
     expect(screen.getByText("1 现货 · 2 永续")).not.toBeNull();
-    expect(screen.getAllByText("盘口中价")).toHaveLength(3);
-    expect(screen.getByText("标记价 100,180")).not.toBeNull();
     expect(screen.getByText("100,000 - 100,100")).not.toBeNull();
     expect(screen.getByText("+0.100% · Binance")).not.toBeNull();
-    expect(screen.getByText(/BTC-USDT-SWAP/)).not.toBeNull();
     expect(screen.getAllByText("Binance").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("暂无数据").length).toBeGreaterThan(0);
     expect(String((fetch as ReturnType<typeof vi.fn>).mock.calls[0][0])).toContain("/instruments/BTCUSDT");
   });
 
@@ -369,6 +408,8 @@ describe("InstrumentLookupPage", () => {
       enabled: true,
       last_buy_state: "blocked",
       last_sell_state: "blocked",
+      last_buy_reduce_only_state: "available",
+      last_sell_reduce_only_state: "available",
       last_checked_at: "2026-09-21T04:54:00Z",
       last_notified_at: null,
       last_error: null,
@@ -387,23 +428,39 @@ describe("InstrumentLookupPage", () => {
 
     render(<InstrumentLookupPage />);
 
-    expect(await screen.findByText("全交易所交易可用性")).not.toBeNull();
+    expect(await screen.findByText("交易可用性")).not.toBeNull();
+    expect(screen.getByText("账户数据未接入 · 未发送探测订单 · 当前仅依据公开市场数据判断")).not.toBeNull();
     expect(screen.getByText("官方 OI 已达上限，普通增仓受限")).not.toBeNull();
-    expect(screen.getByText(/DEX main/)).not.toBeNull();
-    expect(screen.getByText("账户未接入")).not.toBeNull();
-    expect(screen.getByText("真实订单 未提供")).not.toBeNull();
-    expect(screen.getByText("普通开仓")).not.toBeNull();
-    expect(screen.getByText("Reduce Only")).not.toBeNull();
+    expect(screen.getAllByText(/DEX main/).length).toBeGreaterThanOrEqual(3);
+    expect(screen.queryByText("账户未接入")).toBeNull();
+    expect(screen.queryByText("真实订单 未提供")).toBeNull();
     expect(screen.getByText("开多")).not.toBeNull();
     expect(screen.getByText("开空")).not.toBeNull();
-    expect(screen.getByText("平空 · Buy")).not.toBeNull();
-    expect(screen.getByText("平多 · Sell")).not.toBeNull();
-    expect(screen.getAllByText("公开受限")).toHaveLength(2);
-    expect(screen.getByText("需空仓")).not.toBeNull();
-    expect(screen.getByText("需多仓")).not.toBeNull();
+    expect(screen.getByText("平空")).not.toBeNull();
+    expect(screen.getByText("平多")).not.toBeNull();
+    expect(screen.getByText("Reduce Only Buy")).not.toBeNull();
+    expect(screen.getByText("Reduce Only Sell")).not.toBeNull();
+    expect(screen.getAllByText("受限")).toHaveLength(2);
+    expect(screen.getAllByText("可用")).toHaveLength(2);
+    expect(screen.getByText("合约指数成分")).not.toBeNull();
+    expect(screen.getByText("45.00%")).not.toBeNull();
+    expect(screen.getByText("ZETA-USD")).not.toBeNull();
+    expect(screen.getByText("Coinbase · 现货")).not.toBeNull();
+    expect(screen.getAllByText("未返回").length).toBeGreaterThan(0);
+
+    const tradeTable = screen.getByRole("table", { name: "全交易所交易可用性明细" });
+    expect(within(tradeTable).queryByText("实际买一")).toBeNull();
+    expect(within(tradeTable).queryByText("0.1% 买深度")).toBeNull();
+    expect(within(tradeTable).queryByText("资金费率 / 周期")).toBeNull();
+    const marketTable = screen.getByRole("table", { name: "交易所市场行情与规格" });
+    expect(within(marketTable).getByText("实际买一")).not.toBeNull();
+    expect(within(marketTable).getByText("0.1% 买深度")).not.toBeNull();
+    expect(within(marketTable).getByText("0.1% 卖深度")).not.toBeNull();
+    expect(within(marketTable).getByText("1% 买深度")).not.toBeNull();
+    expect(within(marketTable).getByText("1% 卖深度")).not.toBeNull();
 
     const alertWatchButton = screen.getByRole("button", {
-      name: "告警 Hyperliquid / future / main / ZETA 订阅恢复通知"
+      name: "市场 Hyperliquid future main ZETA 订阅恢复通知"
     });
     expect(alertWatchButton).not.toBeNull();
     await userEvent.click(alertWatchButton);
@@ -422,7 +479,7 @@ describe("InstrumentLookupPage", () => {
       });
     });
     expect(screen.getByRole("button", {
-      name: "告警 Hyperliquid / future / main / ZETA 取消恢复通知"
+      name: "市场 Hyperliquid future main ZETA 取消恢复通知"
     })).not.toBeNull();
   });
 
@@ -500,11 +557,12 @@ describe("InstrumentLookupPage", () => {
 
     render(<InstrumentLookupPage />);
 
-    expect(await screen.findByText("全交易所交易可用性")).not.toBeNull();
+    expect(await screen.findByText("交易可用性")).not.toBeNull();
     expect(screen.queryByText("不适用")).toBeNull();
-    expect(screen.queryByText("平空 · Buy")).toBeNull();
-    expect(screen.queryByText("平多 · Sell")).toBeNull();
-    expect(screen.queryByText("Reduce Only")).toBeNull();
+    expect(screen.queryByText("平空")).toBeNull();
+    expect(screen.queryByText("平多")).toBeNull();
+    expect(screen.queryByText("Reduce Only Buy")).toBeNull();
+    expect(screen.queryByText("Reduce Only Sell")).toBeNull();
     expect(screen.queryByText("Sell / Short")).toBeNull();
     expect(screen.getByText("买入")).not.toBeNull();
     expect(screen.getByText("卖出")).not.toBeNull();
@@ -515,7 +573,9 @@ describe("InstrumentLookupPage", () => {
     expect(within(transferTable).getByText("暂停")).not.toBeNull();
     expect(within(transferTable).queryByText("部分开放")).toBeNull();
     expect(within(transferTable).queryByText("2 条链")).toBeNull();
-    expect(screen.getByText("1 个现货充提有异常")).not.toBeNull();
+    expect(screen.getByText("现货充提通道")).not.toBeNull();
+    expect(screen.getByText("合约指数成分")).not.toBeNull();
+    expect(screen.getByText("交易所市场")).not.toBeNull();
   });
 
   it("adds the current symbol to the floating watch", async () => {

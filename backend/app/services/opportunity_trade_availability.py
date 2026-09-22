@@ -277,12 +277,14 @@ def _path_state(states: list[TradeAvailabilityState | None]) -> str:
         return "不可用"
     if any(
         state is None
-        or state in {TradeAvailabilityState.UNKNOWN, TradeAvailabilityState.NOT_APPLICABLE}
+        or state in {
+            TradeAvailabilityState.CONDITIONAL,
+            TradeAvailabilityState.UNKNOWN,
+            TradeAvailabilityState.NOT_APPLICABLE,
+        }
         for state in states
     ):
         return "未知"
-    if any(state == TradeAvailabilityState.CONDITIONAL for state in states):
-        return "有条件"
     return "公开可用"
 
 
@@ -302,7 +304,7 @@ def _state_label(state: TradeAvailabilityState | None) -> str:
     return {
         TradeAvailabilityState.AVAILABLE: "公开可用",
         TradeAvailabilityState.BLOCKED: "公开受限",
-        TradeAvailabilityState.CONDITIONAL: "有条件",
+        TradeAvailabilityState.CONDITIONAL: "未知",
         TradeAvailabilityState.UNKNOWN: "未知",
         TradeAvailabilityState.NOT_APPLICABLE: "不适用",
         None: "未知",

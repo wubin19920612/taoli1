@@ -34,6 +34,8 @@ class HyperliquidMarketTradeStatus(BaseModel):
     size_decimals: int | None = None
     best_bid: float | None = None
     best_ask: float | None = None
+    bid_depth_01pct_usdt: float | None = Field(default=None, ge=0)
+    ask_depth_01pct_usdt: float | None = Field(default=None, ge=0)
     bid_depth_1pct_usdt: float | None = Field(default=None, ge=0)
     ask_depth_1pct_usdt: float | None = Field(default=None, ge=0)
     mark_price: float | None = None

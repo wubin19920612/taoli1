@@ -93,6 +93,8 @@ async def create_watch(
         "monitor_sell": payload.monitor_sell,
         "last_buy_state": market.buy_open.state,
         "last_sell_state": market.sell_open.state,
+        "last_buy_reduce_only_state": market.buy_reduce_only.state,
+        "last_sell_reduce_only_state": market.sell_reduce_only.state,
         "last_checked_at": now,
         "created_at": existing.created_at if existing else now,
         "updated_at": now,

@@ -73,6 +73,7 @@ class IndexComponentSnapshot(BaseModel):
     component_hash: str
     source: str
     observed_at: datetime
+    index_price: float | None = None
 
     @field_validator("exchange")
     @classmethod
@@ -93,7 +94,8 @@ class IndexComponentSnapshot(BaseModel):
         components: list[IndexComponent],
         source: str,
         observed_at: datetime,
-    ) -> "IndexComponentSnapshot":
+        index_price: float | None = None,
+    ) -> IndexComponentSnapshot:
         normalized_components = normalize_components(components)
         return cls(
             exchange=exchange,
@@ -102,6 +104,7 @@ class IndexComponentSnapshot(BaseModel):
             component_hash=stable_component_hash(normalized_components),
             source=source,
             observed_at=observed_at,
+            index_price=index_price,
         )
 
 

@@ -510,6 +510,14 @@ class ExchangeIndexComponentProvider:
                 snapshots.append(snapshot)
         return snapshots
 
+    async def fetch_market_component(
+        self,
+        market: MarketSnapshot,
+    ) -> IndexComponentSnapshot | None:
+        """Fetch one exact market without the collector's refresh throttling."""
+        payload = await self.client.get_json(self._url(market))
+        return self._snapshot_from_payload(market, payload)
+
     def _request_symbol(self, market: MarketSnapshot) -> str:
         return market.raw_symbol
 
@@ -611,6 +619,7 @@ class BinanceIndexComponentProvider(ExchangeIndexComponentProvider):
             components=components,
             source=self.source,
             observed_at=observed_at,
+            index_price=parse_float(payload.get("indexPrice")),
         )
 
     def _extra(self, row: dict) -> dict[str, object]:
@@ -696,6 +705,7 @@ class OKXIndexComponentProvider(ExchangeIndexComponentProvider):
             components=components,
             source=self.source,
             observed_at=observed_at,
+            index_price=parse_float(row.get("last") or row.get("indexPx")),
         )
 
 
@@ -715,8 +725,11 @@ class BybitIndexComponentProvider(ExchangeIndexComponentProvider):
         market: MarketSnapshot,
         payload: object,
     ) -> IndexComponentSnapshot | None:
-        row = _first_row(payload)
-        if row is None or not isinstance(payload, dict):
+        if not isinstance(payload, dict):
+            return None
+        result = payload.get("result")
+        row = result if isinstance(result, dict) and isinstance(result.get("components"), list) else _first_row(payload)
+        if row is None:
             return None
         rows = row.get("quote") or row.get("components") or row.get("constituents")
         if not isinstance(rows, list):
@@ -726,7 +739,12 @@ class BybitIndexComponentProvider(ExchangeIndexComponentProvider):
             if not isinstance(item, dict):
                 continue
             source = item.get("exchange") or item.get("exch")
-            symbol = item.get("quoteSymbol") or item.get("symbol") or item.get("indexSymbol")
+            symbol = (
+                item.get("quoteSymbol")
+                or item.get("spotPair")
+                or item.get("symbol")
+                or item.get("indexSymbol")
+            )
             if not source or not symbol:
                 continue
             components.append(
@@ -735,18 +753,19 @@ class BybitIndexComponentProvider(ExchangeIndexComponentProvider):
                     symbol=str(symbol),
                     weight=parse_float(item.get("weight") or item.get("wgt")),
                     price=parse_float(item.get("price") or item.get("quotePrice") or item.get("px")),
-                    extra=_component_extra(item, {"exchange", "exch", "quoteSymbol", "symbol", "indexSymbol", "weight", "wgt", "price", "quotePrice", "px"}),
+                    extra=_component_extra(item, {"exchange", "exch", "quoteSymbol", "spotPair", "symbol", "indexSymbol", "weight", "wgt", "price", "quotePrice", "equivalentPrice", "px"}),
                 )
             )
         if not components:
             return None
-        observed_at = parse_datetime_ms(payload.get("time")) or utc_now()
+        observed_at = parse_datetime_ms(row.get("updateTime") or payload.get("time")) or utc_now()
         return IndexComponentSnapshot.from_components(
             exchange=self.exchange,
             symbol=market.symbol,
             components=components,
             source=self.source,
             observed_at=observed_at,
+            index_price=parse_float(row.get("lastPrice")),
         )
 
 
@@ -811,13 +830,18 @@ class BitgetIndexComponentProvider(ExchangeIndexComponentProvider):
             )
         if not components:
             return None
-        observed_at = parse_datetime_ms(row.get("ts") or row.get("time")) or utc_now()
+        observed_at = (
+            parse_datetime_ms(row.get("ts") or row.get("time") or payload.get("requestTime"))
+            if isinstance(payload, dict)
+            else None
+        ) or utc_now()
         return IndexComponentSnapshot.from_components(
             exchange=self.exchange,
             symbol=market.symbol,
             components=components,
             source=self.source,
             observed_at=observed_at,
+            index_price=parse_float(row.get("indexPrice") or row.get("lastPrice")),
         )
 
 
@@ -847,7 +871,13 @@ class GateIndexComponentProvider(ExchangeIndexComponentProvider):
             if not isinstance(item, dict):
                 continue
             source = item.get("exchange") or item.get("exch")
-            symbol = item.get("name") or item.get("symbol") or item.get("contract")
+            symbols = item.get("symbols")
+            symbol = (
+                item.get("name")
+                or item.get("symbol")
+                or item.get("contract")
+                or (symbols[0] if isinstance(symbols, list) and symbols else None)
+            )
             if not source or not symbol:
                 continue
             components.append(
@@ -856,16 +886,21 @@ class GateIndexComponentProvider(ExchangeIndexComponentProvider):
                     symbol=str(symbol),
                     weight=parse_float(item.get("weight") or item.get("wgt")),
                     price=parse_float(item.get("index_price") or item.get("price") or item.get("px")),
-                    extra=_component_extra(item, {"exchange", "exch", "name", "symbol", "contract", "weight", "wgt", "index_price", "price", "px"}),
+                    extra=_component_extra(item, {"exchange", "exch", "name", "symbol", "symbols", "contract", "weight", "wgt", "index_price", "price", "px"}),
                 )
             )
         if not components:
             return None
-        observed_at = parse_datetime_seconds(payload.get("timestamp")) or parse_datetime_ms(payload.get("ts")) or utc_now()
+        observed_at = (
+            parse_datetime_seconds(payload.get("timestamp"))
+            or parse_datetime_ms(payload.get("time") or payload.get("ts"))
+            or utc_now()
+        )
         return IndexComponentSnapshot.from_components(
             exchange=self.exchange,
             symbol=market.symbol,
             components=components,
             source=self.source,
             observed_at=observed_at,
+            index_price=parse_float(payload.get("index_price") or payload.get("last")),
         )

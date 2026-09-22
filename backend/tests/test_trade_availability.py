@@ -20,6 +20,8 @@ from app.models.market import MarketSnapshot, MarketType
 from app.models.orderbook import OrderBookLevel, OrderBookSnapshot
 from app.models.trade_availability import (
     MarketTradeAvailability,
+    SpotTransferAvailability,
+    SpotTransferNetworkStatus,
     TradeActionStatus,
     TradeAvailabilityResult,
     TradeAvailabilityState,
@@ -207,7 +209,23 @@ async def test_trade_status_covers_core_exchanges_and_evaluated_venues() -> None
     lighter = by_key[("lighter", MarketType.FUTURE)]
     assert lighter.coverage_tier == "evaluated"
     assert lighter.buy_open.reason_code == "FORCE_REDUCE_ONLY"
-    assert lighter.buy_reduce_only.state == TradeAvailabilityState.CONDITIONAL
+    assert lighter.buy_reduce_only.state == TradeAvailabilityState.AVAILABLE
+    assert lighter.sell_reduce_only.state == TradeAvailabilityState.AVAILABLE
+    assert by_key[("okx", MarketType.FUTURE)].bid_depth_01pct_usdt == pytest.approx(
+        100 * 10 * 0.01
+    )
+    assert {
+        (item.exchange, item.market_type, item.raw_symbol, item.dex)
+        for item in result.index_compositions
+    } == {
+        ("okx", MarketType.FUTURE, "BTC-USDT-SWAP", None),
+        ("bybit", MarketType.FUTURE, "BTCUSDT", None),
+        ("bitget", MarketType.FUTURE, "BTCUSDT", None),
+        ("lighter", MarketType.FUTURE, "BTC", None),
+    }
+    lighter_index = next(item for item in result.index_compositions if item.exchange == "lighter")
+    assert lighter_index.status == "not_returned"
+    assert "未返回成分" in lighter_index.note
     assert all(market.fees_included is False for market in result.markets)
     assert {item.scope.value for item in result.markets[0].diagnostics} == {
         "public_market", "account", "order_error",
@@ -372,8 +390,8 @@ def _available_market(state: TradeAvailabilityState) -> MarketTradeAvailability:
         depth_1pct_usdt=1_000 if state == TradeAvailabilityState.AVAILABLE else None,
     )
     reduce_action = TradeActionStatus(
-        state=TradeAvailabilityState.CONDITIONAL,
-        reason_code="REDUCE_ONLY_REQUIRES_POSITION",
+        state=TradeAvailabilityState.AVAILABLE,
+        reason_code="REDUCE_ONLY_AVAILABLE",
         reason="test",
         executable_price=101,
         depth_1pct_usdt=1_000,
@@ -417,6 +435,8 @@ async def test_monitor_notifies_once_on_unavailable_to_available_transition() ->
         raw_symbol="BTC-USDT-SWAP",
         last_buy_state=TradeAvailabilityState.BLOCKED,
         last_sell_state=TradeAvailabilityState.UNKNOWN,
+        last_buy_reduce_only_state=TradeAvailabilityState.UNKNOWN,
+        last_sell_reduce_only_state=TradeAvailabilityState.BLOCKED,
         created_at=now,
         updated_at=now,
     ))
@@ -425,6 +445,21 @@ async def test_monitor_notifies_once_on_unavailable_to_available_transition() ->
         query="BTCUSDT",
         observed_at=now,
         markets=[_available_market(TradeAvailabilityState.AVAILABLE)],
+    )
+    service.fetch_transfer_status.return_value = SpotTransferAvailability(
+        asset="BTC",
+        deposit_state=TransferAvailabilityState.ENABLED,
+        withdraw_state=TransferAvailabilityState.DISABLED,
+        all_enabled=False,
+        source="official asset endpoint",
+        observed_at=now,
+        networks=[
+            SpotTransferNetworkStatus(
+                network="BTC",
+                deposit_enabled=True,
+                withdraw_enabled=False,
+            )
+        ],
     )
     sender = AsyncMock()
     monitor = TradeAvailabilityMonitor(repository, service, sender)
@@ -437,7 +472,9 @@ async def test_monitor_notifies_once_on_unavailable_to_available_transition() ->
     sender.assert_awaited_once()
     message = sender.await_args.args[0]
     assert "okx / future / BTC-USDT-SWAP" in message
-    assert "手续费：未计入" in message
+    assert "开多 可用；开空 可用；平空 可用；平多 可用" in message
+    assert "充币 开启；提币 暂停" in message
+    assert "BTC：充币 开启；提币 暂停" in message
     await db.close()
 
 
@@ -511,5 +548,6 @@ def test_trade_status_routes_return_exact_market_and_persist_watch() -> None:
     assert response.json()["markets"][0]["raw_symbol"] == "BTC-USDT-SWAP"
     assert created.status_code == 200
     assert created.json()["last_buy_state"] == "available"
+    assert created.json()["last_buy_reduce_only_state"] == "available"
     assert len(watches.json()) == 1
     assert deleted.status_code == 200

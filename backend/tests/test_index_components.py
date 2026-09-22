@@ -7,9 +7,9 @@ from app.db.repositories import IndexComponentRepository, SettingsRepository
 from app.db.schema import initialize_schema
 from app.models.index_component import (
     IndexComponent,
+    IndexComponentAutoWatchSettings,
     IndexComponentChange,
     IndexComponentSnapshot,
-    IndexComponentAutoWatchSettings,
     IndexComponentWatchItem,
     stable_component_hash,
 )
@@ -17,18 +17,17 @@ from app.models.market import MarketSnapshot, MarketType
 from app.models.pair_spread import PairSpreadPreset
 from app.models.settings import FloatingWatchMutation
 from app.services.index_components import (
-    BitgetIndexComponentProvider,
     BinanceIndexComponentProvider,
+    BitgetIndexComponentProvider,
     BybitIndexComponentProvider,
     GateIndexComponentProvider,
-    IndexComponentMonitor,
     IndexComponentAutoWatchService,
+    IndexComponentMonitor,
     MultiIndexComponentProvider,
     OKXIndexComponentProvider,
     build_index_component_alert_message,
 )
 from app.services.pair_spread_presets import PairSpreadPresetRepository
-
 
 BASE_TIME = datetime(2026, 5, 27, 8, 0, tzinfo=UTC)
 
@@ -1025,6 +1024,41 @@ async def test_bybit_provider_parses_index_price_components() -> None:
 
 
 @pytest.mark.asyncio
+async def test_bybit_provider_parses_current_direct_components_payload() -> None:
+    url = "https://api.bybit.com/v5/market/index-price-components?indexName=BTCUSDT"
+    client = FakeIndexComponentClient(
+        {
+            url: {
+                "retCode": 0,
+                "result": {
+                    "indexName": "BTCUSDT",
+                    "lastPrice": "85465.11",
+                    "updateTime": "1790059650034",
+                    "components": [
+                        {
+                            "exchange": "GateIO",
+                            "spotPair": "BTC_USDT",
+                            "equivalentPrice": "85467",
+                            "price": "85467",
+                            "weight": "0.1777",
+                        }
+                    ],
+                },
+                "time": 1790059650137,
+            }
+        }
+    )
+    provider = BybitIndexComponentProvider(client=client)
+
+    snapshots = await provider.fetch_components([market(exchange="bybit", symbol="BTCUSDT")])
+
+    assert snapshots[0].index_price == pytest.approx(85465.11)
+    assert snapshots[0].components[0].identity() == "gateio:BTC_USDT"
+    assert snapshots[0].components[0].price == pytest.approx(85467)
+    assert snapshots[0].components[0].weight == pytest.approx(0.1777)
+
+
+@pytest.mark.asyncio
 async def test_bitget_provider_parses_index_components() -> None:
     url = "https://api.bitget.com/api/v3/market/index-components?symbol=BTCUSDT"
     client = FakeIndexComponentClient(
@@ -1164,6 +1198,36 @@ async def test_gate_provider_parses_index_constituents() -> None:
     ]
     assert snapshots[0].components[0].weight == 0.51282051
     assert snapshots[0].components[0].price == 94057.03
+
+
+@pytest.mark.asyncio
+async def test_gate_provider_parses_current_symbols_array_payload() -> None:
+    url = "https://api.gateio.ws/api/v4/futures/usdt/index_constituents/BTC_USDT"
+    client = FakeIndexComponentClient(
+        {
+            url: {
+                "index": "BTC_USDT",
+                "time": 1790059649000,
+                "constituents": [
+                    {
+                        "exchange": "Binance",
+                        "symbols": ["BTC_USDT"],
+                        "price": "85464.01",
+                        "weight": "0.1667",
+                    }
+                ],
+            }
+        }
+    )
+    provider = GateIndexComponentProvider(client=client)
+
+    snapshots = await provider.fetch_components(
+        [market(exchange="gate", symbol="BTCUSDT", raw_symbol="BTC_USDT")]
+    )
+
+    assert snapshots[0].observed_at.isoformat() == "2026-09-22T06:47:29+00:00"
+    assert snapshots[0].components[0].identity() == "binance:BTC_USDT"
+    assert snapshots[0].components[0].price == pytest.approx(85464.01)
 
 
 @pytest.mark.asyncio

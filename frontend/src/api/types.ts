@@ -261,6 +261,8 @@ export interface MarketTradeAvailability {
   diagnostics: TradeDiagnosticEvidence[];
   best_bid: number | null;
   best_ask: number | null;
+  bid_depth_01pct_usdt: number | null;
+  ask_depth_01pct_usdt: number | null;
   bid_depth_1pct_usdt: number | null;
   ask_depth_1pct_usdt: number | null;
   volume_24h_usdt: number | null;
@@ -283,6 +285,30 @@ export interface MarketTradeAvailability {
   sell_reduce_only: TradeActionStatus;
 }
 
+export interface ContractIndexComponent {
+  source_exchange: string;
+  market_type: MarketType | null;
+  raw_symbol: string;
+  weight: number | null;
+  price: number | null;
+}
+
+export interface ContractIndexComposition {
+  exchange: string;
+  market_type: MarketType;
+  symbol: string;
+  raw_symbol: string;
+  dex: string | null;
+  status: "available" | "not_returned" | "error";
+  source: string;
+  index_price: number | null;
+  observed_at: string | null;
+  weight_total: number | null;
+  components: ContractIndexComponent[];
+  note: string;
+  error: string | null;
+}
+
 export interface TradeAvailabilityCoverage {
   exchange: string;
   tier: "core" | "existing" | "evaluated";
@@ -296,6 +322,7 @@ export interface TradeAvailabilityResult {
   observed_at: string;
   source: string;
   markets: MarketTradeAvailability[];
+  index_compositions: ContractIndexComposition[];
   coverage: TradeAvailabilityCoverage[];
   errors: Record<string, string>;
   limitations: string[];
@@ -313,6 +340,8 @@ export interface TradeAvailabilityWatch {
   enabled: boolean;
   last_buy_state: TradeAvailabilityState | null;
   last_sell_state: TradeAvailabilityState | null;
+  last_buy_reduce_only_state: TradeAvailabilityState | null;
+  last_sell_reduce_only_state: TradeAvailabilityState | null;
   last_checked_at: string | null;
   last_notified_at: string | null;
   last_error: string | null;

@@ -16,6 +16,8 @@ from app.models.market import MarketSnapshot, MarketType
 from app.models.orderbook import OrderBookSnapshot
 from app.models.pair_spread import normalize_pair_spread_symbol
 from app.models.trade_availability import (
+    ContractIndexComponent,
+    ContractIndexComposition,
     MarketTradeAvailability,
     SpotTransferAvailability,
     SpotTransferNetworkStatus,
@@ -31,6 +33,13 @@ from app.models.trade_availability import (
     TransferAvailabilityState,
 )
 from app.services.hyperliquid_trade_status import HyperliquidTradeStatusService
+from app.services.index_components import (
+    BinanceIndexComponentProvider,
+    BitgetIndexComponentProvider,
+    BybitIndexComponentProvider,
+    GateIndexComponentProvider,
+    OKXIndexComponentProvider,
+)
 from app.services.snapshot_store import SnapshotStore
 
 logger = logging.getLogger(__name__)
@@ -39,6 +48,23 @@ AlertSender = Callable[[str], Awaitable[None]]
 CORE_EXCHANGES = ("binance", "okx", "bybit", "gate", "bitget")
 EXCHANGE_ORDER = (*CORE_EXCHANGES, "hyperliquid", "aster", "lighter")
 PUBLIC_TRANSFER_EXCHANGES = {"binance", "gate", "bitget"}
+INDEX_PROVIDER_CLASSES = {
+    "binance": BinanceIndexComponentProvider,
+    "okx": OKXIndexComponentProvider,
+    "bybit": BybitIndexComponentProvider,
+    "gate": GateIndexComponentProvider,
+    "bitget": BitgetIndexComponentProvider,
+}
+INDEX_SOURCE_LABELS = {
+    "binance": "Binance fapi constituents",
+    "okx": "OKX index-components",
+    "bybit": "Bybit index-price-components",
+    "gate": "Gate index_constituents",
+    "bitget": "Bitget index-components",
+    "aster": "Aster premiumIndex",
+    "hyperliquid": "Hyperliquid metaAndAssetCtxs",
+    "lighter": "Lighter orderBookDetails",
+}
 
 
 @dataclass
@@ -174,6 +200,7 @@ def _open_action(
 def _reduce_action(
     *,
     market_type: MarketType,
+    side: str,
     closes: str,
     info: _PublicMarketInfo,
     price: float | None,
@@ -186,12 +213,29 @@ def _reduce_action(
             reason="现货市场没有 Reduce Only 持仓语义",
             scope=TradeEvidenceScope.PLATFORM_CAPABILITY,
         )
-    if info.trading is False and not info.force_reduce_only:
+    allowed = info.buy_allowed if side == "buy" else info.sell_allowed
+    if info.force_reduce_only:
+        if price is None:
+            return TradeActionStatus(
+                state=TradeAvailabilityState.UNKNOWN,
+                reason_code="LIVE_ORDERBOOK_UNAVAILABLE",
+                reason=f"公开规则允许 Reduce Only，但未取得平{closes}方向实时盘口",
+                scope=TradeEvidenceScope.PUBLIC_MARKET,
+            )
+        return TradeActionStatus(
+            state=TradeAvailabilityState.AVAILABLE,
+            reason_code="REDUCE_ONLY_AVAILABLE",
+            reason=f"公开规则明确只限制增仓；已有对应{closes}仓时允许 Reduce Only 减仓",
+            scope=TradeEvidenceScope.PUBLIC_MARKET,
+            executable_price=price,
+            depth_1pct_usdt=depth,
+        )
+    if info.trading is False or allowed is False:
         return _blocked(
             "PUBLIC_MARKET_RESTRICTED",
-            "公开合约状态未表明仍可 Reduce Only；需以平台处置规则或真实订单错误为准",
+            f"公开合约状态不允许平{closes}方向交易",
         )
-    if info.trading is None:
+    if info.trading is None or allowed is None:
         return TradeActionStatus(
             state=TradeAvailabilityState.UNKNOWN,
             reason_code="PUBLIC_STATUS_UNKNOWN",
@@ -206,10 +250,10 @@ def _reduce_action(
             scope=TradeEvidenceScope.PUBLIC_MARKET,
         )
     return TradeActionStatus(
-        state=TradeAvailabilityState.CONDITIONAL,
-        reason_code="REDUCE_ONLY_REQUIRES_POSITION",
-        reason=f"公开市场允许；账户必须有对应{closes}仓，数量不得超过持仓，并使用 Reduce Only",
-        scope=TradeEvidenceScope.ACCOUNT,
+        state=TradeAvailabilityState.AVAILABLE,
+        reason_code="REDUCE_ONLY_AVAILABLE",
+        reason=f"公开市场允许；已有对应{closes}仓时可使用 Reduce Only 平仓",
+        scope=TradeEvidenceScope.PUBLIC_MARKET,
         executable_price=price,
         depth_1pct_usdt=depth,
     )
@@ -219,26 +263,49 @@ def _book_metrics(
     book: OrderBookSnapshot | None,
     *,
     contract_size_multiplier: float,
-) -> tuple[float | None, float | None, float | None, float | None]:
+) -> tuple[
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+]:
     if book is None:
-        return None, None, None, None
+        return None, None, None, None, None, None
     bids = sorted(book.bids, key=lambda row: row.price, reverse=True)
     asks = sorted(book.asks, key=lambda row: row.price)
     best_bid = bids[0].price if bids else None
     best_ask = asks[0].price if asks else None
-    bid_floor = best_bid * 0.99 if best_bid is not None else None
-    ask_ceiling = best_ask * 1.01 if best_ask is not None else None
-    bid_depth = (
-        sum(row.price * row.size * contract_size_multiplier for row in bids if row.price >= bid_floor)
-        if bid_floor is not None
+    bid_floor_01 = best_bid * 0.999 if best_bid is not None else None
+    ask_ceiling_01 = best_ask * 1.001 if best_ask is not None else None
+    bid_floor_1 = best_bid * 0.99 if best_bid is not None else None
+    ask_ceiling_1 = best_ask * 1.01 if best_ask is not None else None
+    bid_depth_01 = (
+        sum(row.price * row.size * contract_size_multiplier for row in bids if row.price >= bid_floor_01)
+        if bid_floor_01 is not None
         else None
     )
-    ask_depth = (
-        sum(row.price * row.size * contract_size_multiplier for row in asks if row.price <= ask_ceiling)
-        if ask_ceiling is not None
+    ask_depth_01 = (
+        sum(row.price * row.size * contract_size_multiplier for row in asks if row.price <= ask_ceiling_01)
+        if ask_ceiling_01 is not None
         else None
     )
-    return best_bid, best_ask, bid_depth, ask_depth
+    bid_depth_1 = (
+        sum(
+            row.price * row.size * contract_size_multiplier
+            for row in bids
+            if row.price >= bid_floor_1
+        )
+        if bid_floor_1 is not None
+        else None
+    )
+    ask_depth_1 = (
+        sum(row.price * row.size * contract_size_multiplier for row in asks if row.price <= ask_ceiling_1)
+        if ask_ceiling_1 is not None
+        else None
+    )
+    return best_bid, best_ask, bid_depth_01, ask_depth_01, bid_depth_1, ask_depth_1
 
 
 def _optional_bool(value: Any) -> bool | None:
@@ -322,6 +389,11 @@ class TradeAvailabilityService:
     ) -> None:
         self.store = store
         self.adapters = {adapter.name.lower(): adapter for adapter in adapters}
+        self.index_component_providers = {
+            exchange: INDEX_PROVIDER_CLASSES[exchange](adapter)
+            for exchange, adapter in self.adapters.items()
+            if exchange in INDEX_PROVIDER_CLASSES
+        }
         self.hyperliquid_service = hyperliquid_service
         self._client = client or httpx.AsyncClient(
             timeout=httpx.Timeout(12.0, connect=5.0, read=10.0, write=5.0, pool=8.0),
@@ -397,6 +469,7 @@ class TradeAvailabilityService:
             return_exceptions=True,
         )
         markets: list[MarketTradeAvailability] = []
+        market_snapshots: dict[tuple[str, MarketType, str, str], MarketSnapshot] = {}
         errors: dict[str, str] = {}
         for snapshot, result in zip(candidates, results, strict=True):
             key = self._market_key(snapshot)
@@ -405,6 +478,14 @@ class TradeAvailabilityService:
             else:
                 market, market_error = result
                 markets.append(market)
+                market_snapshots[
+                    (
+                        market.exchange,
+                        market.market_type,
+                        market.raw_symbol.upper(),
+                        market.dex or "",
+                    )
+                ] = snapshot
                 if market_error:
                     errors[key] = market_error
         order = {name: index for index, name in enumerate(EXCHANGE_ORDER)}
@@ -416,19 +497,124 @@ class TradeAvailabilityService:
                 item.raw_symbol,
             )
         )
+        future_markets = [market for market in markets if market.market_type == MarketType.FUTURE]
+        index_compositions = await asyncio.gather(
+            *(
+                self._index_composition(
+                    market_snapshots[
+                        (
+                            market.exchange,
+                            market.market_type,
+                            market.raw_symbol.upper(),
+                            market.dex or "",
+                        )
+                    ],
+                    market,
+                )
+                for market in future_markets
+            )
+        )
         observed_at = max((item.observed_at for item in markets), default=datetime.now(UTC))
         return TradeAvailabilityResult(
             query=symbol,
             observed_at=observed_at,
             markets=markets,
+            index_compositions=index_compositions,
             coverage=_coverage(),
             errors=errors,
             limitations=[
                 "公开状态不等于账户可下单：余额、仓位、保证金、地区、权限和风控需要私有账户或真实订单错误才能确认。",
-                "系统不发送探测订单；Reduce Only 仅表示公开市场原则上支持，仍必须有方向和数量匹配的真实持仓。",
-                "1% 深度为本次订单簿快照且手续费未计入，不构成成交保证。",
+                "系统不发送探测订单；平仓状态回答已有对应仓位时公开市场是否允许 Reduce Only，未知不会推断为可用。",
+                "0.1% 与 1% 深度为本次订单簿快照且手续费未计入，不构成成交保证。",
                 "现货充提按公开逐链开关汇总；未知不等于关闭，账户、地区、地址与维护提示仍可能影响实际充提。",
             ],
+        )
+
+    async def _index_composition(
+        self,
+        snapshot: MarketSnapshot,
+        market: MarketTradeAvailability,
+    ) -> ContractIndexComposition:
+        exchange = market.exchange
+        source = INDEX_SOURCE_LABELS.get(exchange, f"{exchange} 官方指数接口")
+        provider = self.index_component_providers.get(exchange)
+        if provider is None:
+            notes = {
+                "aster": "官方 premiumIndex 仅返回指数价格，未返回成分、来源交易所和权重",
+                "hyperliquid": (
+                    "官方 metaAndAssetCtxs 返回 oraclePx，但未返回可核验的加权指数成分与权重"
+                ),
+                "lighter": "官方 orderBookDetails 返回 index_price，但未返回成分、来源交易所和权重",
+            }
+            return ContractIndexComposition(
+                exchange=exchange,
+                market_type=market.market_type,
+                symbol=market.symbol,
+                raw_symbol=market.raw_symbol,
+                dex=market.dex,
+                status="not_returned",
+                source=source,
+                index_price=market.index_price if exchange in {"aster", "lighter"} else None,
+                observed_at=market.market_data_updated_at,
+                note=notes.get(exchange, "官方公开接口未返回指数成分、价格和权重"),
+            )
+        try:
+            component_snapshot = await provider.fetch_market_component(snapshot)
+        except Exception as exc:  # noqa: BLE001 - index data must not drop trade diagnostics.
+            return ContractIndexComposition(
+                exchange=exchange,
+                market_type=market.market_type,
+                symbol=market.symbol,
+                raw_symbol=market.raw_symbol,
+                dex=market.dex,
+                status="error",
+                source=source,
+                index_price=market.index_price,
+                observed_at=market.market_data_updated_at,
+                note="官方指数成分接口本次查询失败，未使用其他行情推测成分",
+                error=f"{exc.__class__.__name__}: {exc}",
+            )
+        if component_snapshot is None or not component_snapshot.components:
+            return ContractIndexComposition(
+                exchange=exchange,
+                market_type=market.market_type,
+                symbol=market.symbol,
+                raw_symbol=market.raw_symbol,
+                dex=market.dex,
+                status="not_returned",
+                source=source,
+                index_price=market.index_price,
+                observed_at=market.market_data_updated_at,
+                note="官方指数成分接口未返回成分列表，未使用其他行情推测成分",
+            )
+        components = [
+            ContractIndexComponent(
+                source_exchange=item.source,
+                market_type=MarketType.SPOT,
+                raw_symbol=item.symbol,
+                weight=item.weight,
+                price=item.price,
+            )
+            for item in component_snapshot.components
+        ]
+        weights = [item.weight for item in components]
+        return ContractIndexComposition(
+            exchange=exchange,
+            market_type=market.market_type,
+            symbol=market.symbol,
+            raw_symbol=market.raw_symbol,
+            dex=market.dex,
+            status="available",
+            source=source,
+            index_price=component_snapshot.index_price or market.index_price,
+            observed_at=component_snapshot.observed_at,
+            weight_total=(
+                sum(weight for weight in weights if weight is not None)
+                if weights and all(weight is not None for weight in weights)
+                else None
+            ),
+            components=components,
+            note="仅展示官方指数成分接口原始返回；未补算缺失价格或权重",
         )
 
     async def fetch_transfer_status(
@@ -571,7 +757,7 @@ class TradeAvailabilityService:
             else:
                 spot_transfer = transfer_result
 
-        best_bid, best_ask, bid_depth, ask_depth = _book_metrics(
+        best_bid, best_ask, bid_depth_01, ask_depth_01, bid_depth, ask_depth = _book_metrics(
             book,
             contract_size_multiplier=info.contract_size_multiplier,
         )
@@ -601,6 +787,8 @@ class TradeAvailabilityService:
             diagnostics=_diagnostics(info, metadata_error),
             best_bid=display_bid,
             best_ask=display_ask,
+            bid_depth_01pct_usdt=bid_depth_01,
+            ask_depth_01pct_usdt=ask_depth_01,
             bid_depth_1pct_usdt=bid_depth,
             ask_depth_1pct_usdt=ask_depth,
             volume_24h_usdt=market.volume_24h_usdt or info.volume_24h_usdt,
@@ -633,6 +821,7 @@ class TradeAvailabilityService:
             ),
             buy_reduce_only=_reduce_action(
                 market_type=market.market_type,
+                side="buy",
                 closes="空",
                 info=info,
                 price=best_ask,
@@ -640,6 +829,7 @@ class TradeAvailabilityService:
             ),
             sell_reduce_only=_reduce_action(
                 market_type=market.market_type,
+                side="sell",
                 closes="多",
                 info=info,
                 price=best_bid,
@@ -678,15 +868,22 @@ class TradeAvailabilityService:
             raise RuntimeError("Hyperliquid 公开接口未返回指定 DEX 原始市场")
 
         def action(value: Any) -> TradeActionStatus:
+            state = TradeAvailabilityState(value.state.value)
+            if state == TradeAvailabilityState.CONDITIONAL:
+                state = TradeAvailabilityState.AVAILABLE
             return TradeActionStatus(
-                state=TradeAvailabilityState(value.state.value),
-                reason_code=value.reason_code,
-                reason=value.reason,
-                scope=(
-                    TradeEvidenceScope.ACCOUNT
+                state=state,
+                reason_code=(
+                    "REDUCE_ONLY_AVAILABLE"
                     if value.state.value == "conditional"
-                    else TradeEvidenceScope.PUBLIC_MARKET
+                    else value.reason_code
                 ),
+                reason=(
+                    "公开规则允许已有对应仓位使用 Reduce Only 减仓"
+                    if value.state.value == "conditional"
+                    else value.reason
+                ),
+                scope=TradeEvidenceScope.PUBLIC_MARKET,
                 executable_price=value.executable_price,
                 depth_1pct_usdt=value.depth_1pct_usdt,
             )
@@ -711,6 +908,7 @@ class TradeAvailabilityService:
             ),
             source="Hyperliquid public info API",
             restrictions=restrictions,
+            force_reduce_only=source.at_open_interest_cap is True,
         )
         return MarketTradeAvailability(
             exchange="hyperliquid",
@@ -729,6 +927,8 @@ class TradeAvailabilityService:
             diagnostics=_diagnostics(info, None),
             best_bid=source.best_bid,
             best_ask=source.best_ask,
+            bid_depth_01pct_usdt=source.bid_depth_01pct_usdt,
+            ask_depth_01pct_usdt=source.ask_depth_01pct_usdt,
             bid_depth_1pct_usdt=source.bid_depth_1pct_usdt,
             ask_depth_1pct_usdt=source.ask_depth_1pct_usdt,
             volume_24h_usdt=source.volume_24h_usdt,
@@ -1222,27 +1422,70 @@ class TradeAvailabilityWatchRepository:
 
 def build_trade_recovery_message(event: TradeAvailabilityWatchEvent) -> str:
     market = event.market
-    sides = "、".join("普通买入/做多" if side == "buy" else "普通卖出/做空" for side in event.recovered_sides)
+    action_labels = {
+        "buy_open": "买入" if market.market_type == MarketType.SPOT else "开多",
+        "sell_open": "卖出" if market.market_type == MarketType.SPOT else "开空",
+        "buy_reduce_only": "平空（Reduce Only Buy）",
+        "sell_reduce_only": "平多（Reduce Only Sell）",
+    }
+    recovered_actions = event.recovered_actions or [
+        "buy_open" if side == "buy" else "sell_open" for side in event.recovered_sides
+    ]
+    recovered = "、".join(action_labels[action] for action in recovered_actions)
     dex_text = f" / DEX {market.dex}" if market.dex else ""
-    funding = (
-        f"{market.funding_rate_pct:.6f}% / {market.funding_interval_hours}h"
-        if market.funding_rate_pct is not None and market.funding_interval_hours is not None
-        else "-"
-    )
-    return (
-        f"[交易可用性恢复] {market.exchange} / {market.market_type.value}{dex_text} / {market.raw_symbol}\n"
-        f"恢复方向：{sides}\n"
-        f"公开状态：{market.public_status_code}（{market.public_status_source}）\n"
-        f"买一/卖一：{market.best_bid or '-'} / {market.best_ask or '-'}\n"
-        f"1% 买盘/卖盘深度：{market.bid_depth_1pct_usdt or 0:.2f} / "
-        f"{market.ask_depth_1pct_usdt or 0:.2f} USDT\n"
-        f"24h 成交额：{market.volume_24h_usdt or 0:.2f} USDT\n"
-        f"资金费率：{funding}\n"
-        f"手续费：未计入；市场倍率：{market.market_multiplier:g}x；"
-        f"合约数量乘数：{market.contract_size_multiplier:g}\n"
-        f"数据时间：{market.observed_at.isoformat()}\n"
-        "说明：这是公开市场恢复信号，不代表账户权限或真实订单已经通过。"
-    )
+    state_labels = {
+        TradeAvailabilityState.AVAILABLE: "可用",
+        TradeAvailabilityState.BLOCKED: "受限",
+        TradeAvailabilityState.CONDITIONAL: "未知",
+        TradeAvailabilityState.UNKNOWN: "未知",
+        TradeAvailabilityState.NOT_APPLICABLE: "不适用",
+    }
+    if market.market_type == MarketType.SPOT:
+        action_line = (
+            f"买入 {state_labels[market.buy_open.state]}；"
+            f"卖出 {state_labels[market.sell_open.state]}"
+        )
+    else:
+        action_line = (
+            f"开多 {state_labels[market.buy_open.state]}；"
+            f"开空 {state_labels[market.sell_open.state]}；"
+            f"平空 {state_labels[market.buy_reduce_only.state]}；"
+            f"平多 {state_labels[market.sell_reduce_only.state]}"
+        )
+    transfer = event.spot_transfer
+    transfer_labels = {
+        TransferAvailabilityState.ENABLED: "开启",
+        TransferAvailabilityState.PARTIAL: "部分网络开启",
+        TransferAvailabilityState.DISABLED: "暂停",
+        TransferAvailabilityState.UNKNOWN: "未知",
+    }
+    if transfer is None:
+        transfer_lines = ["充提状态：充币 未知；提币 未知（本次未取得公开充提状态）"]
+    else:
+        transfer_lines = [
+            (
+                "充提状态："
+                f"充币 {transfer_labels[transfer.deposit_state]}；"
+                f"提币 {transfer_labels[transfer.withdraw_state]}；来源 {transfer.source}"
+            )
+        ]
+        transfer_lines.extend(
+            f"- {network.network}：充币 "
+            f"{'开启' if network.deposit_enabled is True else '暂停' if network.deposit_enabled is False else '未知'}；"
+            f"提币 {'开启' if network.withdraw_enabled is True else '暂停' if network.withdraw_enabled is False else '未知'}"
+            for network in transfer.networks
+        )
+        if not transfer.networks:
+            transfer_lines.append("- 未返回链列表：充币 未知；提币 未知")
+    return "\n".join([
+        f"[交易可用性恢复] {market.exchange} / {market.market_type.value}{dex_text} / {market.raw_symbol}",
+        f"恢复动作：{recovered}",
+        f"公开状态：{market.public_status_code}（{market.public_status_source}）",
+        f"交易动作：{action_line}",
+        *transfer_lines,
+        f"诊断时间：{market.observed_at.isoformat()}",
+        "说明：未发送探测订单；这是公开市场恢复信号，不代表特定账户订单已经通过。",
+    ])
 
 
 class TradeAvailabilityMonitor:
@@ -1284,6 +1527,7 @@ class TradeAvailabilityMonitor:
                 if market is None:
                     raise RuntimeError("聚合行情中未找到指定原始市场")
                 recovered: list[str] = []
+                recovered_actions: list[str] = []
                 if (
                     watch.monitor_buy
                     and watch.last_buy_state is not None
@@ -1291,6 +1535,7 @@ class TradeAvailabilityMonitor:
                     and market.buy_open.state == TradeAvailabilityState.AVAILABLE
                 ):
                     recovered.append("buy")
+                    recovered_actions.append("buy_open")
                 if (
                     watch.monitor_sell
                     and watch.last_sell_state is not None
@@ -1298,19 +1543,50 @@ class TradeAvailabilityMonitor:
                     and market.sell_open.state == TradeAvailabilityState.AVAILABLE
                 ):
                     recovered.append("sell")
+                    recovered_actions.append("sell_open")
+                if (
+                    watch.market_type == MarketType.FUTURE
+                    and watch.last_buy_reduce_only_state is not None
+                    and watch.last_buy_reduce_only_state != TradeAvailabilityState.AVAILABLE
+                    and market.buy_reduce_only.state == TradeAvailabilityState.AVAILABLE
+                ):
+                    recovered_actions.append("buy_reduce_only")
+                if (
+                    watch.market_type == MarketType.FUTURE
+                    and watch.last_sell_reduce_only_state is not None
+                    and watch.last_sell_reduce_only_state != TradeAvailabilityState.AVAILABLE
+                    and market.sell_reduce_only.state == TradeAvailabilityState.AVAILABLE
+                ):
+                    recovered_actions.append("sell_reduce_only")
+                transfer = None
+                if recovered_actions:
+                    try:
+                        transfer_result = await self.status_service.fetch_transfer_status(
+                            watch.symbol,
+                            exchange=watch.exchange,
+                            raw_symbol=watch.raw_symbol,
+                        )
+                        if isinstance(transfer_result, SpotTransferAvailability):
+                            transfer = transfer_result
+                    except Exception:
+                        logger.exception("trade recovery transfer status failed id=%s", watch.id)
                 event = (
                     TradeAvailabilityWatchEvent(
                         watch_id=watch.id,
                         recovered_sides=recovered,
+                        recovered_actions=recovered_actions,
                         market=market,
+                        spot_transfer=transfer,
                     )
-                    if recovered
+                    if recovered_actions
                     else None
                 )
                 updated = watch.model_copy(
                     update={
                         "last_buy_state": market.buy_open.state,
                         "last_sell_state": market.sell_open.state,
+                        "last_buy_reduce_only_state": market.buy_reduce_only.state,
+                        "last_sell_reduce_only_state": market.sell_reduce_only.state,
                         "last_checked_at": now,
                         "last_notified_at": now if event else watch.last_notified_at,
                         "last_error": None,

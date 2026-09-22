@@ -80,12 +80,6 @@ AVAILABLE = _action(
     "PUBLIC_MARKET_AVAILABLE",
     "公开市场状态允许且实时盘口有报价",
 )
-CONDITIONAL = _action(
-    TradeAvailabilityState.CONDITIONAL,
-    "REDUCE_ONLY_REQUIRES_POSITION",
-    "必须有对应持仓并使用 Reduce Only",
-    scope=TradeEvidenceScope.ACCOUNT,
-)
 NOT_APPLICABLE = _action(
     TradeAvailabilityState.NOT_APPLICABLE,
     "NOT_APPLICABLE",
@@ -103,8 +97,8 @@ def _market(
     status: str = "TRADING",
     buy_open: TradeActionStatus = AVAILABLE,
     sell_open: TradeActionStatus = AVAILABLE,
-    buy_reduce_only: TradeActionStatus = CONDITIONAL,
-    sell_reduce_only: TradeActionStatus = CONDITIONAL,
+    buy_reduce_only: TradeActionStatus = AVAILABLE,
+    sell_reduce_only: TradeActionStatus = AVAILABLE,
     restrictions: list[str] | None = None,
     transfer: SpotTransferAvailability | None = None,
 ) -> MarketTradeAvailability:
@@ -222,14 +216,14 @@ async def test_report_includes_exact_hyperliquid_actions_and_future_leg_transfer
 
     assert report.opening_restricted is True
     assert "开仓路径：不可用（买入腿开多 公开受限；卖出腿开空 公开可用）" in report.text
-    assert "平仓路径：有条件（买入腿平多 有条件；卖出腿平空 有条件）" in report.text
+    assert "平仓路径：公开可用（买入腿平多 公开可用；卖出腿平空 公开可用）" in report.text
     assert "买入腿：hyperliquid / future / DEX main / ZETA" in report.text
     assert (
-        "买入方向：开多 公开受限[OPEN_INTEREST_CAP]；平空 有条件[REDUCE_ONLY_REQUIRES_POSITION]"
+        "买入方向：开多 公开受限[OPEN_INTEREST_CAP]；平空 公开可用"
         in report.text
     )
     assert (
-        "卖出方向：开空 公开受限[OPEN_INTEREST_CAP]；平多 有条件[REDUCE_ONLY_REQUIRES_POSITION]"
+        "卖出方向：开空 公开受限[OPEN_INTEREST_CAP]；平多 公开可用"
         in report.text
     )
     assert "- hyperliquid / asset ZETA：充币 未知；提币 未知；0 条链" in report.text

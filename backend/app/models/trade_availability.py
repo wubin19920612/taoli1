@@ -57,6 +57,30 @@ class SpotTransferAvailability(BaseModel):
     error: str | None = None
 
 
+class ContractIndexComponent(BaseModel):
+    source_exchange: str
+    market_type: MarketType | None = None
+    raw_symbol: str
+    weight: float | None = None
+    price: float | None = None
+
+
+class ContractIndexComposition(BaseModel):
+    exchange: str
+    market_type: MarketType
+    symbol: str
+    raw_symbol: str
+    dex: str | None = None
+    status: Literal["available", "not_returned", "error"]
+    source: str
+    index_price: float | None = None
+    observed_at: datetime | None = None
+    weight_total: float | None = None
+    components: list[ContractIndexComponent] = Field(default_factory=list)
+    note: str = ""
+    error: str | None = None
+
+
 class TradeActionStatus(BaseModel):
     state: TradeAvailabilityState
     reason_code: str
@@ -92,6 +116,8 @@ class MarketTradeAvailability(BaseModel):
     diagnostics: list[TradeDiagnosticEvidence] = Field(default_factory=list)
     best_bid: float | None = None
     best_ask: float | None = None
+    bid_depth_01pct_usdt: float | None = Field(default=None, ge=0)
+    ask_depth_01pct_usdt: float | None = Field(default=None, ge=0)
     bid_depth_1pct_usdt: float | None = Field(default=None, ge=0)
     ask_depth_1pct_usdt: float | None = Field(default=None, ge=0)
     volume_24h_usdt: float | None = Field(default=None, ge=0)
@@ -127,6 +153,7 @@ class TradeAvailabilityResult(BaseModel):
     observed_at: datetime
     source: str = "各交易所公开市场元数据、实时订单簿与可匿名取得的现货充提状态；未发送订单"
     markets: list[MarketTradeAvailability] = Field(default_factory=list)
+    index_compositions: list[ContractIndexComposition] = Field(default_factory=list)
     coverage: list[TradeAvailabilityCoverage] = Field(default_factory=list)
     errors: dict[str, str] = Field(default_factory=dict)
     limitations: list[str] = Field(default_factory=list)
@@ -154,6 +181,8 @@ class TradeAvailabilityWatch(BaseModel):
     enabled: bool = True
     last_buy_state: TradeAvailabilityState | None = None
     last_sell_state: TradeAvailabilityState | None = None
+    last_buy_reduce_only_state: TradeAvailabilityState | None = None
+    last_sell_reduce_only_state: TradeAvailabilityState | None = None
     last_checked_at: datetime | None = None
     last_notified_at: datetime | None = None
     last_error: str | None = None
@@ -164,4 +193,8 @@ class TradeAvailabilityWatch(BaseModel):
 class TradeAvailabilityWatchEvent(BaseModel):
     watch_id: str
     recovered_sides: list[Literal["buy", "sell"]]
+    recovered_actions: list[
+        Literal["buy_open", "sell_open", "buy_reduce_only", "sell_reduce_only"]
+    ] = Field(default_factory=list)
     market: MarketTradeAvailability
+    spot_transfer: SpotTransferAvailability | None = None

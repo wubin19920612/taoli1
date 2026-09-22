@@ -86,9 +86,11 @@ async def test_hyperliquid_trade_status_uses_official_oi_cap_and_keeps_reduce_on
     assert market.buy_open.state == HyperliquidActionState.BLOCKED
     assert market.buy_open.reason_code == "OPEN_INTEREST_CAP"
     assert market.sell_open.state == HyperliquidActionState.BLOCKED
-    assert market.buy_reduce_only.state == HyperliquidActionState.CONDITIONAL
+    assert market.buy_reduce_only.state == HyperliquidActionState.AVAILABLE
     assert "平空" in market.buy_reduce_only.reason
-    assert market.sell_reduce_only.state == HyperliquidActionState.CONDITIONAL
+    assert market.sell_reduce_only.state == HyperliquidActionState.AVAILABLE
+    assert market.bid_depth_01pct_usdt == pytest.approx(0.06673 * 5994.3)
+    assert market.ask_depth_01pct_usdt == pytest.approx(0.06675 * 764.1)
     assert "平多" in market.sell_reduce_only.reason
     assert market.best_bid == pytest.approx(0.06673)
     assert market.best_ask == pytest.approx(0.06675)

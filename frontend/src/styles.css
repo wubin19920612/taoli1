@@ -2,6 +2,377 @@
   box-sizing: border-box;
 }
 
+/* Trade availability redesign: four independent, non-scrolling data sections. */
+.instrument-diagnostic-scope {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  min-width: 0;
+  padding: 9px 12px;
+  color: #425466;
+  background: #eef6ff;
+  border-left: 3px solid #1677ff;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.instrument-diagnostic-scope strong {
+  flex: 0 0 auto;
+  color: #173d5c;
+}
+
+.instrument-diagnostic-scope span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.instrument-trade-action > small {
+  min-width: 0;
+  overflow: hidden;
+  color: #728079;
+  font-size: 9px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.instrument-trade-normal {
+  color: #237804;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.instrument-index-card-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  min-width: 0;
+}
+
+.instrument-index-card {
+  min-width: 0;
+  padding: 11px 13px 9px;
+  border-right: 1px solid #e2e7eb;
+}
+
+.instrument-index-card:nth-child(3n) {
+  border-right: 0;
+}
+
+.instrument-index-card:nth-child(n + 4) {
+  border-top: 1px solid #e2e7eb;
+}
+
+.instrument-index-card-title {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.instrument-index-card-title > div:first-child {
+  min-width: 0;
+}
+
+.instrument-index-card-title strong,
+.instrument-index-card-title span,
+.instrument-index-price span,
+.instrument-index-price b {
+  display: block;
+}
+
+.instrument-index-card-title strong {
+  color: #172026;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.instrument-index-card-title span,
+.instrument-index-source {
+  margin-top: 2px;
+  color: #687682;
+  font-size: 10px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.instrument-index-price {
+  flex: 0 0 auto;
+  text-align: right;
+}
+
+.instrument-index-price span {
+  color: #77838e;
+  font-size: 9px;
+}
+
+.instrument-index-price b {
+  margin-top: 2px;
+  color: #1767bf;
+  font-size: 15px;
+}
+
+.instrument-index-source {
+  margin-top: 7px;
+}
+
+.instrument-index-component-head,
+.instrument-index-component-row {
+  display: grid;
+  grid-template-columns: 76px 100px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 8px;
+  min-width: 0;
+}
+
+.instrument-index-component-head {
+  margin-top: 8px;
+  padding: 5px 6px;
+  color: #75818c;
+  background: #f6f8fa;
+  font-size: 9px;
+}
+
+.instrument-index-component-row {
+  min-height: 35px;
+  padding: 5px 6px;
+  border-bottom: 1px solid #edf0f2;
+  font-size: 11px;
+}
+
+.instrument-index-component-row > strong {
+  min-width: 0;
+  color: #263238;
+  overflow-wrap: anywhere;
+}
+
+.instrument-index-component-row > span {
+  min-width: 0;
+}
+
+.instrument-index-component-row b,
+.instrument-index-component-row small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.instrument-index-component-row small {
+  margin-top: 1px;
+  color: #7a8792;
+  font-size: 9px;
+}
+
+.instrument-index-empty {
+  min-height: 70px;
+  padding: 22px 8px;
+  color: #7a6850;
+  background: #fffdf7;
+  font-size: 12px;
+  text-align: center;
+}
+
+.instrument-index-card-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 7px;
+  padding-top: 6px;
+  color: #74818c;
+  border-top: 1px solid #e1e6ea;
+  font-size: 9px;
+}
+
+.instrument-index-card-foot b {
+  color: #334657;
+}
+
+.instrument-market-data-head,
+.instrument-market-data-row {
+  display: grid;
+  grid-template-columns: minmax(170px, 0.95fr) minmax(135px, 1fr) minmax(155px, 1.15fr) minmax(155px, 1.15fr) minmax(100px, 0.68fr) minmax(145px, 1fr);
+  min-width: 0;
+}
+
+.instrument-market-data-head {
+  align-items: center;
+  min-height: 36px;
+  padding: 0 12px;
+  color: #64716d;
+  background: #fbfcfc;
+  border-bottom: 1px solid #e5ebe9;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.instrument-market-data-head > span {
+  min-width: 0;
+  padding: 0 8px;
+}
+
+.instrument-market-data-row {
+  border-bottom: 1px solid #e5ebe9;
+}
+
+.instrument-market-data-row:last-child {
+  border-bottom: 0;
+}
+
+.instrument-market-data-identity,
+.instrument-market-data-group {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+  padding: 11px 10px;
+  border-right: 1px solid #edf0f2;
+}
+
+.instrument-market-data-row > :last-child {
+  border-right: 0;
+}
+
+.instrument-market-data-identity > strong {
+  color: #172026;
+  font-size: 14px;
+}
+
+.instrument-market-data-identity > span {
+  min-width: 0;
+  color: #66736f;
+  font-size: 10px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.instrument-market-data-identity > .ant-tag {
+  width: max-content;
+  margin: 1px 0 0;
+}
+
+.instrument-market-data-group-name {
+  display: none;
+  color: #52615b;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.instrument-market-data-group .instrument-trade-metric {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.instrument-market-data-group .instrument-trade-metric strong {
+  max-width: 100%;
+  text-align: right;
+}
+
+.instrument-market-data-group .instrument-trade-metric-bid strong {
+  color: #057a55;
+}
+
+.instrument-market-data-group .instrument-trade-metric-ask strong,
+.instrument-market-data-group .instrument-trade-metric-negative strong {
+  color: #d92d20;
+}
+
+@media (max-width: 1150px) and (min-width: 701px) {
+  .instrument-index-card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .instrument-index-card:nth-child(3n) {
+    border-right: 1px solid #e2e7eb;
+  }
+
+  .instrument-index-card:nth-child(2n) {
+    border-right: 0;
+  }
+
+  .instrument-index-card:nth-child(n + 3) {
+    border-top: 1px solid #e2e7eb;
+  }
+
+  .instrument-market-data-head {
+    display: none;
+  }
+
+  .instrument-market-data-row {
+    grid-template-columns: minmax(180px, 0.8fr) repeat(2, minmax(0, 1fr));
+  }
+
+  .instrument-market-data-identity {
+    grid-row: span 3;
+  }
+
+  .instrument-market-data-group {
+    border-bottom: 1px solid #edf0f2;
+  }
+
+  .instrument-market-data-group-name {
+    display: block;
+  }
+}
+
+@media (max-width: 700px) {
+  .instrument-diagnostic-scope {
+    display: grid;
+    gap: 3px;
+  }
+
+  .instrument-index-card-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .instrument-index-card,
+  .instrument-index-card:nth-child(3n) {
+    border-right: 0;
+    border-bottom: 1px solid #e2e7eb;
+  }
+
+  .instrument-index-card:last-child {
+    border-bottom: 0;
+  }
+
+  .instrument-index-component-head,
+  .instrument-index-component-row {
+    grid-template-columns: 70px 92px minmax(0, 1fr);
+  }
+
+  .instrument-exchange-markets .instrument-section-head,
+  .instrument-index-compositions .instrument-section-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .instrument-market-data-head {
+    display: none;
+  }
+
+  .instrument-market-data-row {
+    display: block;
+  }
+
+  .instrument-market-data-identity,
+  .instrument-market-data-group {
+    padding: 10px 12px;
+    border-right: 0;
+    border-bottom: 1px solid #edf0f2;
+  }
+
+  .instrument-market-data-row > :last-child {
+    border-bottom: 0;
+  }
+
+  .instrument-market-data-group-name {
+    display: block;
+  }
+}
+
 body {
   margin: 0;
   min-width: 0;
@@ -1202,56 +1573,28 @@ body {
   min-width: 0;
 }
 
-.instrument-trade-action-grid {
-  display: flex;
-  gap: 6px;
-  min-width: 0;
-}
-
+.instrument-trade-action-grid,
 .instrument-trade-action-grid-spot {
-  width: min(100%, 380px);
-}
-
-.instrument-trade-action-section {
   display: grid;
-  grid-template-columns: minmax(60px, auto) repeat(2, minmax(72px, 1fr));
-  flex: 1 1 0;
-  min-width: 0;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  width: 100%;
   overflow: hidden;
-  background: #fbfcfc;
+  background: #fff;
   border: 1px solid #dce4e1;
   border-radius: 5px;
 }
 
-.instrument-trade-action-grid-spot .instrument-trade-action-section {
-  flex-basis: 100%;
-}
-
-.instrument-trade-action-section-label {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 0;
-  padding: 5px 7px;
-  color: #52615b;
-  background: #f2f6f4;
-  border-right: 1px solid #dce4e1;
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 1.2;
-  text-align: center;
-}
-
-.instrument-trade-action-section-reduce .instrument-trade-action-section-label {
-  color: #8a5b00;
-  background: #fff8e7;
+.instrument-trade-action-grid-spot {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: min(100%, 380px);
 }
 
 .instrument-trade-action {
   display: grid;
   gap: 3px;
   min-width: 0;
-  min-height: 44px;
+  min-height: 58px;
   padding: 5px 7px;
   align-content: center;
   border-right: 1px solid #e2e7e5;
@@ -1631,12 +1974,16 @@ body {
   .instrument-trade-action-grid,
   .instrument-trade-action-grid-spot {
     display: grid;
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     width: 100%;
   }
 
-  .instrument-trade-action-section {
-    grid-template-columns: 78px repeat(2, minmax(0, 1fr));
+  .instrument-trade-action:nth-child(2n) {
+    border-right: 0;
+  }
+
+  .instrument-trade-action:nth-child(n + 3) {
+    border-top: 1px solid #e2e7e5;
   }
 
   .instrument-trade-watch {
