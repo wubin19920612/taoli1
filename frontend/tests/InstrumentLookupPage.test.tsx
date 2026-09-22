@@ -390,16 +390,17 @@ describe("InstrumentLookupPage", () => {
     expect(await screen.findByText("全交易所交易可用性")).not.toBeNull();
     expect(screen.getByText("官方 OI 已达上限，普通增仓受限")).not.toBeNull();
     expect(screen.getByText(/DEX main/)).not.toBeNull();
-    expect(screen.getByText("账户 未核验")).not.toBeNull();
+    expect(screen.getByText("账户未接入")).not.toBeNull();
     expect(screen.getByText("真实订单 未提供")).not.toBeNull();
     expect(screen.getByText("普通开仓")).not.toBeNull();
-    expect(screen.getByText("Reduce Only 平仓")).not.toBeNull();
+    expect(screen.getByText("Reduce Only")).not.toBeNull();
     expect(screen.getByText("开多")).not.toBeNull();
     expect(screen.getByText("开空")).not.toBeNull();
     expect(screen.getByText("平空 · Buy")).not.toBeNull();
     expect(screen.getByText("平多 · Sell")).not.toBeNull();
     expect(screen.getAllByText("公开受限")).toHaveLength(2);
-    expect(screen.getAllByText("账户有条件")).toHaveLength(2);
+    expect(screen.getByText("需空仓")).not.toBeNull();
+    expect(screen.getByText("需多仓")).not.toBeNull();
 
     const alertWatchButton = screen.getByRole("button", {
       name: "告警 Hyperliquid / future / main / ZETA 订阅恢复通知"
@@ -503,7 +504,7 @@ describe("InstrumentLookupPage", () => {
     expect(screen.queryByText("不适用")).toBeNull();
     expect(screen.queryByText("平空 · Buy")).toBeNull();
     expect(screen.queryByText("平多 · Sell")).toBeNull();
-    expect(screen.queryByText("Reduce Only 平仓")).toBeNull();
+    expect(screen.queryByText("Reduce Only")).toBeNull();
     expect(screen.queryByText("Sell / Short")).toBeNull();
     expect(screen.getByText("买入")).not.toBeNull();
     expect(screen.getByText("卖出")).not.toBeNull();

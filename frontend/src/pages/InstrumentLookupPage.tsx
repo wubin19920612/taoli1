@@ -365,11 +365,11 @@ function MarketCell({ market }: { market: MarketSnapshot | null }) {
   );
 }
 
-function tradeActionMeta(action: TradeActionStatus) {
+function tradeActionMeta(action: TradeActionStatus, conditionalLabel?: string) {
   const config = {
     available: { color: "green", label: "公开可用", tone: "available" },
     blocked: { color: "red", label: "公开受限", tone: "blocked" },
-    conditional: { color: "gold", label: "账户有条件", tone: "conditional" },
+    conditional: { color: "gold", label: conditionalLabel ?? "需账户条件", tone: "conditional" },
     unknown: { color: "default", label: "状态未知", tone: "unknown" },
     not_applicable: { color: "default", label: "不适用", tone: "unknown" }
   }[action.state];
@@ -378,16 +378,21 @@ function tradeActionMeta(action: TradeActionStatus) {
 
 function TradeActionTile({
   action,
-  label
+  label,
+  conditionalLabel
 }: {
   action: TradeActionStatus;
   label: string;
+  conditionalLabel?: string;
 }) {
-  const config = tradeActionMeta(action);
+  const config = tradeActionMeta(action, conditionalLabel);
+  const detail = action.state === "conditional" && conditionalLabel
+    ? `${conditionalLabel}：${action.reason}。系统未读取账户实际仓位。`
+    : action.reason;
   return (
     <div className={`instrument-trade-action instrument-trade-action-${config.tone}`}>
       <span>{label}</span>
-      <Tooltip title={action.reason}>
+      <Tooltip title={detail}>
         <Tag color={config.color}>{config.label}</Tag>
       </Tooltip>
     </div>
@@ -411,11 +416,34 @@ function TradeEvidenceTag({ evidence }: { evidence: MarketTradeAvailability["dia
   const detail = evidence.raw_error
     ? `${evidence.message}\n${evidence.raw_error}`
     : evidence.message;
+  const label = evidence.scope === "account" && evidence.state === "not_checked"
+    ? "账户未接入"
+    : `${scopeLabel} ${stateConfig.label}`;
   return (
     <Tooltip title={detail}>
-      <Tag color={stateConfig.color}>{scopeLabel} {stateConfig.label}</Tag>
+      <Tag color={stateConfig.color}>{label}</Tag>
     </Tooltip>
   );
+}
+
+function TradeMetric({
+  label,
+  value,
+  tone,
+  tooltip
+}: {
+  label: string;
+  value: string;
+  tone?: "bid" | "ask" | "positive" | "negative";
+  tooltip?: string | null;
+}) {
+  const content = (
+    <span className={`instrument-trade-metric${tone ? ` instrument-trade-metric-${tone}` : ""}`}>
+      <small>{label}</small>
+      <strong>{value}</strong>
+    </span>
+  );
+  return tooltip ? <Tooltip title={tooltip}>{content}</Tooltip> : content;
 }
 
 function TransferNetworkState({ value }: { value: boolean | null }) {
@@ -1385,18 +1413,22 @@ export function InstrumentLookupPage() {
                       </Tooltip>
                     </div>
                     <div className="instrument-trade-actions" role="cell">
-                      <div className={`instrument-trade-action-groups${market.market_type === "spot" ? " instrument-trade-action-groups-spot" : ""}`}>
-                        <span>{market.market_type === "spot" ? "现货交易" : "普通开仓"}</span>
-                        {market.market_type === "future" ? <span>Reduce Only 平仓</span> : null}
-                      </div>
                       <div className={`instrument-trade-action-grid${market.market_type === "spot" ? " instrument-trade-action-grid-spot" : ""}`}>
-                        <TradeActionTile action={market.buy_open} label={market.market_type === "spot" ? "买入" : "开多"} />
-                        <TradeActionTile action={market.sell_open} label={market.market_type === "spot" ? "卖出" : "开空"} />
+                        <div className="instrument-trade-action-section">
+                          <span className="instrument-trade-action-section-label">
+                            {market.market_type === "spot" ? "现货" : "普通开仓"}
+                          </span>
+                          <TradeActionTile action={market.buy_open} label={market.market_type === "spot" ? "买入" : "开多"} />
+                          <TradeActionTile action={market.sell_open} label={market.market_type === "spot" ? "卖出" : "开空"} />
+                        </div>
                         {market.market_type === "future" ? (
-                          <>
-                            <TradeActionTile action={market.buy_reduce_only} label="平空 · Buy" />
-                            <TradeActionTile action={market.sell_reduce_only} label="平多 · Sell" />
-                          </>
+                          <div className="instrument-trade-action-section instrument-trade-action-section-reduce">
+                            <Tooltip title="Reduce Only 只减少已有仓位，不会反向开仓">
+                              <span className="instrument-trade-action-section-label">Reduce Only</span>
+                            </Tooltip>
+                            <TradeActionTile action={market.buy_reduce_only} label="平空 · Buy" conditionalLabel="需空仓" />
+                            <TradeActionTile action={market.sell_reduce_only} label="平多 · Sell" conditionalLabel="需多仓" />
+                          </div>
                         ) : null}
                       </div>
                     </div>
@@ -1418,23 +1450,37 @@ export function InstrumentLookupPage() {
                     </div>
                   </div>
                   <div className="instrument-trade-metrics">
-                    <span><b>买一</b> {price(market.best_bid)}</span>
-                    <span><b>卖一</b> {price(market.best_ask)}</span>
-                    <span><b>1% 深度</b> 买 {compactUsdt(market.bid_depth_1pct_usdt)} / 卖 {compactUsdt(market.ask_depth_1pct_usdt)}</span>
-                    <span><b>24h</b> {compactUsdt(market.volume_24h_usdt)}</span>
-                    {market.market_type === "future" ? (
-                      <span><b>资金</b> {signedPct(market.funding_rate_pct, 6)} / {market.funding_interval_hours ? `${market.funding_interval_hours}h` : "-"}</span>
-                    ) : null}
-                    {market.funding_next_rate_pct !== null ? <span><b>预估资金</b> {signedPct(market.funding_next_rate_pct, 6)}</span> : null}
-                    <span><b>Maker / Taker</b> {market.maker_fee_pct === null ? "-" : signedPct(market.maker_fee_pct, 4)} / {market.taker_fee_pct === null ? "-" : signedPct(market.taker_fee_pct, 4)}</span>
-                    <Tooltip title={market.fee_note}><span><b>手续费</b> {market.fees_included ? "已计入" : "未计入"}</span></Tooltip>
-                    <span><b>价格倍率</b> {market.market_multiplier}x</span>
-                    <span><b>数量乘数</b> {market.contract_size_multiplier}</span>
-                    {market.mark_price !== null ? <span><b>标记 / 指数</b> {price(market.mark_price)} / {price(market.index_price)}</span> : null}
-                    <Tooltip title={market.orderbook_source}><span><b>盘口源</b> {market.orderbook_source}</span></Tooltip>
-                    <Tooltip title={`盘口 ${fullTime(market.orderbook_updated_at)}；行情 ${fullTime(market.market_data_updated_at)}；诊断 ${fullTime(market.observed_at)}`}>
-                      <span><b>更新</b> 盘口 {ageText(market.orderbook_updated_at)} / 行情 {ageText(market.market_data_updated_at)} / 诊断 {ageText(market.observed_at)}</span>
-                    </Tooltip>
+                    <div className="instrument-trade-metric-group instrument-trade-metric-group-book">
+                      <TradeMetric label="买一" value={price(market.best_bid)} tone="bid" />
+                      <TradeMetric label="卖一" value={price(market.best_ask)} tone="ask" />
+                      <TradeMetric label="1% 深度" value={`买 ${compactUsdt(market.bid_depth_1pct_usdt)} / 卖 ${compactUsdt(market.ask_depth_1pct_usdt)}`} />
+                    </div>
+                    <div className="instrument-trade-metric-group instrument-trade-metric-group-cost">
+                      <TradeMetric label="24h 成交额" value={compactUsdt(market.volume_24h_usdt)} />
+                      {market.market_type === "future" ? (
+                        <TradeMetric
+                          label="资金费率"
+                          value={`${signedPct(market.funding_rate_pct, 6)} / ${market.funding_interval_hours ? `${market.funding_interval_hours}h` : "-"}`}
+                          tone={market.funding_rate_pct === null || market.funding_rate_pct === 0 ? undefined : market.funding_rate_pct > 0 ? "positive" : "negative"}
+                        />
+                      ) : null}
+                      {market.funding_next_rate_pct !== null ? <TradeMetric label="预估资金" value={signedPct(market.funding_next_rate_pct, 6)} /> : null}
+                      <TradeMetric label="Maker / Taker" value={`${market.maker_fee_pct === null ? "-" : signedPct(market.maker_fee_pct, 4)} / ${market.taker_fee_pct === null ? "-" : signedPct(market.taker_fee_pct, 4)}`} />
+                      <TradeMetric label="手续费" value={market.fees_included ? "已计入" : "未计入"} tooltip={market.fee_note} />
+                    </div>
+                    <div className="instrument-trade-metric-group instrument-trade-metric-group-contract">
+                      <TradeMetric label="价格倍率" value={`${market.market_multiplier}x`} />
+                      <TradeMetric label="数量乘数" value={`${market.contract_size_multiplier}`} />
+                      {market.mark_price !== null ? <TradeMetric label="标记 / 指数" value={`${price(market.mark_price)} / ${price(market.index_price)}`} /> : null}
+                    </div>
+                    <div className="instrument-trade-metric-group instrument-trade-metric-group-source">
+                      <TradeMetric label="盘口源" value={market.orderbook_source} tooltip={market.orderbook_source} />
+                      <TradeMetric
+                        label="数据更新"
+                        value={`盘口 ${ageText(market.orderbook_updated_at)} / 行情 ${ageText(market.market_data_updated_at)} / 诊断 ${ageText(market.observed_at)}`}
+                        tooltip={`盘口 ${fullTime(market.orderbook_updated_at)}；行情 ${fullTime(market.market_data_updated_at)}；诊断 ${fullTime(market.observed_at)}`}
+                      />
+                    </div>
                   </div>
                 </article>
               );
