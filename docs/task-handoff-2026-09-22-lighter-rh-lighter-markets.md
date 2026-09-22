@@ -17,8 +17,8 @@
 
 - 分支：`codex/frontend-localization-polish`
 - 开始基线：`583ffe35e61bb8fc3a0dd1b86c7c1d29e2584316`（`docs: record spread type label delivery`）
-- 功能提交：待部署后补充。
-- 生产部署提交：待部署后补充。
+- 功能提交：`cf12f7d4b3e7084f76aac955afb8ec22f475160f`（`feat: add verified Lighter market routing`）。
+- 生产运行代码：`cf12f7d4b3e7084f76aac955afb8ec22f475160f`。
 
 ## RH-Lighter 结论
 
@@ -137,18 +137,47 @@ Lighter 官方 `funding-rates` 对 ANTHROPIC 的 `market_id=193` 只返回 `ligh
 
 部署前只读检查发现生产风险设置的 `excluded_symbols` 包含 `ANTHROPICUSDT`。该项会在采集和机会 API 两层过滤 ANTHROPIC，因此与本任务“ANTHROPIC 应生成实时机会”的验收冲突。
 
-本任务将在完成生产数据库在线备份后，只从 `excluded_symbols` 移除 `ANTHROPICUSDT`；不改 `stale_after_seconds`、成交额阈值、价差阈值、手续费、滑点、告警阈值或任何交易设置。配置变更和线上机会结果待部署后补充。
+完成数据库在线备份后，已通过受密码保护的 Settings API 只从 `excluded_symbols` 移除 `ANTHROPICUSDT`：排除项数量从 14 变为 13，脚本逐字段断言其他风险配置完全不变。没有修改 `stale_after_seconds`、成交额阈值、价差阈值、手续费、滑点、告警阈值或交易设置。
 
-- 数据库在线备份：待补充。
-- 备份大小和 SHA-256：待补充。
-- 源库、容器内备份和主机备份 `PRAGMA quick_check`：待补充。
-- 服务器 Git 与 Docker Compose 部署：待补充。
-- 容器、`/api/health`、标的、Pair、机会和 Astro 线上验收：待补充。
+- 在线备份：`backups/radar-20260922T133053Z-pre-lighter-rh-lighter.db`。
+- 备份大小：`600522752` 字节。
+- SHA-256：`22b8b1425e9ae4c100a90e2742abaeca4e7a05aad3bae724db52a28a669ce0d2`。
+- 源库、容器内副本和主机副本的 `PRAGMA quick_check` 均为 `ok`，容器与主机副本大小及 SHA-256 一致。
+- 主机备份校验后删除了卷内临时副本 `/data/codex-radar-20260922T133053Z-pre-lighter-rh-lighter.db`；线上 `/data/radar.db` 未删除、替换或回滚。
+- 部署后再次确认 `/data/radar.db` 存在，大小 `598024192` 字节，`PRAGMA quick_check=ok`。
+- 服务器通过 `git pull --ff-only origin codex/frontend-localization-polish` 快进到 `cf12f7d`。
+- 执行了 `docker compose build --pull`；首次并行构建失去子进程后，使用 `COMPOSE_PARALLEL_LIMIT=1` 顺序重跑同一构建命令并成功生成前后端镜像。
+- 执行 `docker compose up -d --remove-orphans`，没有执行 `docker compose down -v`；前后端容器均为 `healthy`。
+
+### 线上接口验收
+
+- `/api/health` 返回 `status=ok`，8 个采集器全部为 `healthy`，验收时有 10965 个市场快照和 8734 个实时机会。
+- `/api/instruments/ANTH`、`ANTHROPIC`、`ANTHROPICUSDT` 均返回 `symbol=ANTHROPICUSDT` 和 8 个实时精确市场：Aster、Binance、Bitget、Bybit、Gate、Hyperliquid `io:ANTH`、Lighter、OKX。
+- 三种别名均显示 3 条 `rh-lighter` route-only 证据；RH-Lighter 没有出现在真实市场列表。
+- 精确规格包括：Binance 数量乘数 `1`、Bitget `0.01`、Gate `0.01`、Lighter `1`、HL io `1`、OKX 价格倍率 `10` 且数量乘数 `1`。
+- ANTHROPIC 机会接口返回 26 条机会；其中 7 条包含 Lighter、7 条包含 HL `io`，RH-Lighter 为 0 条。
+- Lighter -> Binance 当前 bid/ask 为 `2171.4 / 2174.3` 与 `2105.09 / 2105.77`，按 Lighter ask、Binance bid 得到开仓价差 `-3.234573%`。
+- Binance -> Lighter 使用相反方向的真实盘口，开仓价差 `+3.068852%`。
+- Lighter -> HL `io:ANTH` 返回真实 `l2Book`：HL bid/ask `2157.0 / 2157.1`，`dex=io`、`raw_symbol=io:ANTH`，没有估算 bid/ask。
+- OKX -> Lighter 保留 `raw_symbol=ANTHROPIC-USDT-SWAP` 和 `price_multiplier=10`，统一口径 bid/ask `2162.5 / 2163.0`。
+- RH-Lighter Pair 请求返回 HTTP 422，错误明确为 Astro route unsupported，不误报为“没有行情”。
+- 生产前端首页及标的、Pair 页面返回 HTTP 200。
+
+### 线上浏览器验收
+
+- 标的页 1280px：页面宽度 `1280/1280`，精确市场区 `1030/1030`，8 行均无内部溢出。
+- 标的页 390px：页面宽度 `390/390`，精确市场区 `372/372`，8 行均无内部溢出。
+- 两个视口都可见 Lighter、`io:ANTH` 和“仅 Astro 路由”。
+- Pair 390px：页面宽度 `390/390`，行情质量卡 `372/372`，可见 Lighter、`io:ANTH` 和“双腿市场身份与行情质量”，没有错误提示。
+- Astro 独立浮窗在 900px 和 390px 均无页面或卡片行横向溢出；输入生产面板密码后实际读取到 9 张运行卡，没有鉴权错误。
+- 三张目标 RH-Lighter 卡均真实存在，但生产 Astro 返回 `status=false`：`lighter/rh-lighter`、`hl(io:ANTH)/rh-lighter`、`binance/rh-lighter`。浮窗只展示运行卡，因此没有在生产中擅自启用卡片来制造点击样本；暂停路由的精确身份、禁用行为和跳转参数由前端自动化测试覆盖。
+- 生产截图保存在未跟踪的 `output/lighter-rh-lighter-production-*.png`，不提交仓库。
 
 ## 已知问题与残余风险
 
 - RH-Lighter 没有独立公开实时行情，只能作为 Astro 路由证据；除非未来找到可验证的独立官方市场接口，否则不能把它升级为实时市场。
 - Astro 当前列表没有独立原始腿字段；现有卡片身份依赖 `name + type + buyEx/sellEx + HL DEX`。若 Astro SDK 后续增加原始腿字段，应优先改用新字段。
+- 三张 RH-Lighter 目标卡在验收时均为暂停状态，生产浮窗无法在不改变业务状态的情况下完成真实点击；本任务没有擅自启用、暂停或重建卡片。
 - Lighter WebSocket、订单簿详情和 HL `l2Book` 可能偶发超时。代码会隔离单市场失败并禁止估算盘口进入机会，但短时可能看不到 ANTHROPIC 路线。
 - 资金费率下一结算时间在部分交易所是按已知周期推算，页面通过 `estimated_fields` 明确标记。
 - Pair 手续费当前使用按现货/永续区分的估算 taker 费率，不代表具体账户 VIP 费率。
