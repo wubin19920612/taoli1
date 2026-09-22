@@ -233,6 +233,22 @@ ZETA 线上查询返回 11 个市场且 `errors={}`，唯一公开受限市场�
 - `390px`：页面、交易区和充提区的 `scrollWidth` 均等于 `clientWidth`（`390/390`、`372/372`、`372/372`）。
 - 本轮截图保存在未跟踪的 `output/trade-availability-redesign-*.png`，不提交仓库。
 
-### 待交付状态
+### 生产交付
 
-- 功能提交、GitHub 推送、生产数据库备份、部署和线上验证将在本节后续补记。
+- 功能提交：`97b1c51 refactor: redesign trade availability layout`，已推送 `origin/codex/frontend-localization-polish`。
+- 部署前数据库备份：`backups/radar-20260922T025240Z.db`。
+- 备份大小：`630489088` 字节。
+- 备份 SHA-256：`8666a7a8d0d4af2e7fa3c774b224c3527fa1fa8dc282ab64a04ec06fb1f2a0b7`。
+- 源库、容器内在线备份和主机备份的 `PRAGMA quick_check` 均为 `ok`；主机备份校验通过后删除了卷内临时副本，线上 `/data/radar.db` 未删除或替换。
+- 服务器通过 `git pull --ff-only` 快进到 `97b1c51`，执行 `docker compose build --pull` 和 `docker compose up -d --remove-orphans`，没有执行 `down -v`。
+- 前后端容器均为 `healthy`；`/api/health` 返回 `status=ok`，八家交易所采集器全部为 `healthy`。
+
+### 线上验证
+
+- BTC 返回 14 个原始市场、6 个现货市场且无诊断错误；市场身份覆盖五家核心交易所现货/永续、Hyperliquid `main / BTC`、Aster 现货/永续和 Lighter 永续。
+- BTC 逐链区域实际显示 13 行：Binance 5 条、OKX 未返回链列表、Bybit 未返回链列表、Gate 2 条、Bitget 3 条、Aster 未返回链列表。Binance `SEGWITBTC` 提币和 Bitget `LIGHTNING` 充提在验收快照中显示“暂停”，其他已返回的开关按接口显示“开启”。
+- ZETA 返回 11 个原始市场；Hyperliquid 精确身份继续为 `exchange=hyperliquid / market_type=future / dex=main / raw_symbol=ZETA`。验收时普通开多和开空已恢复为 `available`，平空和平多仍为账户条件 `conditional`。
+- 生产页面和接口均返回 HTTP 200；桌面 `1440px` 与手机 `390px` 的页面级 `scrollWidth` 等于视口宽度。
+- 桌面交易区和充提区均为 `1190/1190`，手机交易区和充提区均为 `372/372`，确认没有横向拖动。
+- 生产截图保存在未跟踪的 `output/trade-availability-redesign-deployed-*.png`，不提交仓库。
+- 验收只执行公开只读查询，没有点击生产订阅、发送订单或人为切换市场状态。ZETA 在部署时已经恢复，因此本轮没有触发真实恢复飞书；状态机继续由既有自动化测试覆盖。
