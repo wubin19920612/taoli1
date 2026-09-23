@@ -14,7 +14,7 @@
 - 开始基线：`7624625ddc3df939f7f720757e5c682949bacfcf`
 - 上一功能提交：`cf12f7d4b3e7084f76aac955afb8ec22f475160f`
 - 来源调查提交：`7624625ddc3df939f7f720757e5c682949bacfcf`
-- 本次提交：部署后补充。
+- 功能提交：`debdf2ac7eb173fe32a249af5bc8f8e42316e7b4`。
 
 ## 核心结论
 
@@ -93,10 +93,34 @@
 
 ## 部署与线上状态
 
-- Git 提交/推送：交付后补充。
-- 数据库备份、大小、SHA-256、`PRAGMA quick_check`：部署前补充。
-- 服务器版本、容器健康和 `/api/health`：部署后补充。
-- RH Instrument、Pair、Opportunity、浮窗验证：部署后补充。
+- 功能提交 `debdf2a` 已推送到
+  `origin/codex/frontend-localization-polish`。
+- 部署前在线备份：
+  `/home/ubuntu/wubin/taoli1/backups/radar-20260923T021223Z-pre-rh-lighter.db`。
+  大小 `607465472` 字节，SHA-256
+  `d1950c0207795abb13f5295cad27a70a26cb6c8aba59dd08e75df90496ee2db4`；
+  源库、容器内备份和主机备份的 `PRAGMA quick_check` 均为 `ok`。校验后仅删除
+  `/data/codex-radar-20260923T021223Z-pre-rh-lighter.db` 临时副本，未删除或替换
+  `/data/radar.db`。
+- 服务器已用 `git pull --ff-only` 从 `39cb41e` 快进到 `debdf2a`。
+- `COMPOSE_PARALLEL_LIMIT=1 sudo docker compose build --pull` 实际仍并行启动前后端
+  BuildKit；构建在前端 TypeScript/Vite 和后端依赖安装期间造成宿主机持续资源饱和。
+  长时间无进展并影响线上响应后，SSH 客户端中止了构建会话。尚未执行
+  `docker compose up`，没有执行 `docker compose down` 或任何卷删除。
+- 中止后主机仍可 ICMP 响应、TCP/22 可连接，但 SSH 无法及时返回 banner，前端
+  `:3000`、后端 `:8000/api/health` 均超时。因此当前不能声称容器健康、功能已上线
+  或完成线上 RH 验收。
+
+主机恢复或经云控制台重启后，应按以下顺序继续：
+
+1. 检查并精确终止残留的 BuildKit、`npm run build`、`tsc`、`vite` 或 `pip install`
+   进程；先确认旧容器和 `/data/radar.db` 的 `PRAGMA quick_check`。
+2. 不并行构建两个服务，分别执行 `sudo docker compose build --pull backend` 和
+   `sudo docker compose build --pull frontend`；必要时先增加临时 swap，但不要删除卷。
+3. 执行 `sudo docker compose up -d --remove-orphans`，检查两个容器和
+   `/api/health`。
+4. 完成 RH Instrument、Pair、Opportunity、浮窗、三张暂停卡和建卡 422 的只读
+   线上验收，再把最终版本与结果写回本文。
 
 ## 已知问题
 
@@ -105,6 +129,8 @@
 - Astro 服务端内部是否直连官方 RH 主机没有公开证据；Radar 不依赖该内部链路。
 - 三张 RH Astro 卡当前暂停，本任务不改变业务状态，因此线上浮窗真实卡片行只能
   在卡片自然恢复运行后验证；接口、市场匹配和暂停状态可只读验证。
+- 本次部署构建触发宿主机资源饱和，线上端口当前不可达；需要宿主机恢复或由用户
+  通过云控制台重启后继续，不能把远端 Git 已更新等同于生产部署完成。
 - 工作区有既有 `output/**`、pytest 临时目录和
   `script/dexe_bybit_bitget_chain.py` 未跟踪产物，全部保留且不提交。
 
