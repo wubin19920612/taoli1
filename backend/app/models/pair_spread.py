@@ -16,6 +16,7 @@ SUPPORTED_PAIR_SPREAD_EXCHANGES: tuple[str, ...] = (
     "aster",
     "hyperliquid",
     "lighter",
+    "rh-lighter",
 )
 SUPPORTED_SYMBOL_SPREAD_EXCHANGES: tuple[str, ...] = tuple(
     exchange for exchange in SUPPORTED_PAIR_SPREAD_EXCHANGES if exchange != "binance_alpha"
@@ -32,7 +33,6 @@ PAIR_SPREAD_MAX_INTERVAL_SECONDS = 86_400
 PAIR_SPREAD_FUNDING_RECORD_INTERVAL_SECONDS = 60
 MAX_PAIR_SPREAD_PRESETS = 24
 HYPERLIQUID_MAIN_DEX = "main"
-PAIR_SPREAD_ROUTE_ONLY_EXCHANGES: tuple[str, ...] = ("rh-lighter",)
 
 
 class PairSpreadPriceField(StrEnum):
@@ -112,11 +112,6 @@ class PairSpreadLegQuery(BaseModel):
     @classmethod
     def normalize_exchange(cls, value: str) -> str:
         normalized = value.strip().lower()
-        if normalized in PAIR_SPREAD_ROUTE_ONLY_EXCHANGES:
-            raise ValueError(
-                "route unsupported: rh-lighter is an Astro route name without a verified "
-                "independent public market-data source"
-            )
         if normalized not in SUPPORTED_PAIR_SPREAD_EXCHANGES:
             allowed = ", ".join(SUPPORTED_PAIR_SPREAD_EXCHANGES)
             raise ValueError(f"unsupported exchange: {value}; allowed: {allowed}")

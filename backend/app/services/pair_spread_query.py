@@ -20,8 +20,8 @@ from app.exchanges.base import (
     utc_now,
 )
 from app.exchanges.lighter import (
-    LIGHTER_URL,
     lighter_best_prices,
+    lighter_endpoint_profile,
     lighter_order_books,
     lighter_symbol,
     lighter_upstream_timestamp,
@@ -966,8 +966,9 @@ class PairSpreadQueryService:
         self._hyperliquid_dex_details: dict[str, str] = {}
         self._hyperliquid_meta_contexts_by_dex: dict[str, tuple[dict[str, Any], list[Any]]] = {}
         self._hyperliquid_coin_by_base: dict[tuple[str, str], tuple[str, str]] = {}
-        self._lighter_markets: dict[tuple[MarketType, str], dict[str, Any]] | None = None
-        self._lighter_markets_at: datetime | None = None
+        self._lighter_markets: dict[
+            str, tuple[datetime, dict[tuple[MarketType, str], dict[str, Any]]]
+        ] = {}
         self._lighter_markets_lock = asyncio.Lock()
 
     async def aclose(self) -> None:
@@ -1909,7 +1910,12 @@ class PairSpreadQueryService:
                 "bybit": self._fetch_bybit_spot_klines,
                 "gate": self._fetch_gate_spot_klines,
                 "bitget": self._fetch_bitget_spot_klines,
-                "lighter": lambda s, a, b, i: self._fetch_lighter_klines(s, a, b, i, market_type=MarketType.SPOT),
+                "lighter": lambda s, a, b, i: self._fetch_lighter_klines(
+                    s, a, b, i, market_type=MarketType.SPOT, exchange="lighter"
+                ),
+                "rh-lighter": lambda s, a, b, i: self._fetch_lighter_klines(
+                    s, a, b, i, market_type=MarketType.SPOT, exchange="rh-lighter"
+                ),
             }
             handler = spot_handlers.get(exchange)
             if handler is None:
@@ -1937,6 +1943,9 @@ class PairSpreadQueryService:
             "bitget": self._fetch_bitget_klines,
             "hyperliquid": self._fetch_hyperliquid_klines,
             "lighter": self._fetch_lighter_klines,
+            "rh-lighter": lambda s, a, b, i: self._fetch_lighter_klines(
+                s, a, b, i, exchange="rh-lighter"
+            ),
         }
         return await futures_handlers[exchange](symbol, start, end, interval_minutes)
 
@@ -1987,7 +1996,12 @@ class PairSpreadQueryService:
                 "bybit": self._fetch_bybit_spot_current,
                 "gate": self._fetch_gate_spot_current,
                 "bitget": self._fetch_bitget_spot_current,
-                "lighter": lambda s: self._fetch_lighter_current(s, market_type=MarketType.SPOT),
+                "lighter": lambda s: self._fetch_lighter_current(
+                    s, market_type=MarketType.SPOT, exchange="lighter"
+                ),
+                "rh-lighter": lambda s: self._fetch_lighter_current(
+                    s, market_type=MarketType.SPOT, exchange="rh-lighter"
+                ),
             }
             handler = spot_handlers.get(exchange)
             if handler is None:
@@ -2003,6 +2017,9 @@ class PairSpreadQueryService:
             "bitget": self._fetch_bitget_current,
             "hyperliquid": self._fetch_hyperliquid_current,
             "lighter": self._fetch_lighter_current,
+            "rh-lighter": lambda s: self._fetch_lighter_current(
+                s, exchange="rh-lighter"
+            ),
         }
         return await futures_handlers[exchange](symbol)
 
@@ -2034,6 +2051,9 @@ class PairSpreadQueryService:
             "bitget": self._fetch_bitget_funding,
             "hyperliquid": self._fetch_hyperliquid_funding,
             "lighter": self._fetch_lighter_funding,
+            "rh-lighter": lambda s, a, b: self._fetch_lighter_funding(
+                s, a, b, exchange="rh-lighter"
+            ),
         }
         return await handlers[exchange](symbol, start, end)
 
@@ -2580,13 +2600,22 @@ class PairSpreadQueryService:
             cursor = next_cursor
         return _dedupe_sorted(points)
 
-    async def _lighter_market(self, symbol: str, market_type: MarketType) -> dict[str, Any]:
-        if self._lighter_markets_at is None or utc_now() - self._lighter_markets_at > timedelta(minutes=1):
+    async def _lighter_market(
+        self,
+        symbol: str,
+        market_type: MarketType,
+        *,
+        exchange: str = "lighter",
+    ) -> dict[str, Any]:
+        profile = lighter_endpoint_profile(exchange)
+        cached = self._lighter_markets.get(profile.exchange)
+        if cached is None or utc_now() - cached[0] > timedelta(minutes=1):
             async with self._lighter_markets_lock:
-                if self._lighter_markets_at is None or utc_now() - self._lighter_markets_at > timedelta(minutes=1):
-                    payload = await self._get_json(f"{LIGHTER_URL}/orderBookDetails")
+                cached = self._lighter_markets.get(profile.exchange)
+                if cached is None or utc_now() - cached[0] > timedelta(minutes=1):
+                    payload = await self._get_json(f"{profile.api_url}/orderBookDetails")
                     if not isinstance(payload, dict) or payload.get("code") != 200:
-                        raise RuntimeError("invalid Lighter market details")
+                        raise RuntimeError(f"invalid {profile.exchange} market details")
                     markets: dict[tuple[MarketType, str], dict[str, Any]] = {}
                     for kind, key in (
                         (MarketType.FUTURE, "order_book_details"),
@@ -2595,14 +2624,18 @@ class PairSpreadQueryService:
                         for item in payload.get(key, []):
                             if not isinstance(item, dict) or item.get("status") != "active" or not isinstance(item.get("market_id"), int):
                                 continue
-                            resolved = lighter_symbol(str(item.get("symbol", "")), kind)
+                            resolved = lighter_symbol(
+                                str(item.get("symbol", "")),
+                                kind,
+                                spot_quote=profile.spot_quote,
+                            )
                             if resolved:
                                 markets[(kind, resolved[0])] = item
-                    self._lighter_markets = markets
-                    self._lighter_markets_at = utc_now()
-        market = (self._lighter_markets or {}).get((market_type, _compact_symbol(symbol)))
+                    cached = (utc_now(), markets)
+                    self._lighter_markets[profile.exchange] = cached
+        market = cached[1].get((market_type, _compact_symbol(symbol)))
         if market is None:
-            raise RuntimeError(f"Lighter {market_type.value} symbol not found: {symbol}")
+            raise RuntimeError(f"{profile.exchange} {market_type.value} symbol not found: {symbol}")
         return market
 
     async def _fetch_lighter_klines(
@@ -2613,11 +2646,15 @@ class PairSpreadQueryService:
         interval_minutes: int,
         *,
         market_type: MarketType = MarketType.FUTURE,
+        exchange: str = "lighter",
     ) -> list[PairSpreadKlinePoint]:
+        profile = lighter_endpoint_profile(exchange)
         resolution = {1: "1m", 5: "5m", 15: "15m", 60: "1h", 240: "4h", 1440: "1d"}.get(interval_minutes)
         if resolution is None:
             raise RuntimeError(f"Lighter does not support {interval_minutes} minute candles")
-        market_id = (await self._lighter_market(symbol, market_type))["market_id"]
+        market_id = (await self._lighter_market(
+            symbol, market_type, exchange=profile.exchange
+        ))["market_id"]
         interval_seconds = interval_minutes * 60
         cursor = int(start.timestamp())
         end_seconds = int(end.timestamp())
@@ -2625,7 +2662,7 @@ class PairSpreadQueryService:
         while cursor <= end_seconds:
             chunk_end = min(end_seconds, cursor + 499 * interval_seconds)
             payload = await self._get_json(
-                f"{LIGHTER_URL}/candles?market_id={market_id}&resolution={resolution}"
+                f"{profile.api_url}/candles?market_id={market_id}&resolution={resolution}"
                 f"&start_timestamp={cursor}&end_timestamp={chunk_end}&count_back=0"
             )
             if not isinstance(payload, dict) or payload.get("code") != 200:
@@ -2640,13 +2677,22 @@ class PairSpreadQueryService:
         return _dedupe_sorted(points)
 
     async def _fetch_lighter_current(
-        self, symbol: str, *, market_type: MarketType = MarketType.FUTURE
+        self,
+        symbol: str,
+        *,
+        market_type: MarketType = MarketType.FUTURE,
+        exchange: str = "lighter",
     ) -> PairSpreadCurrentLeg:
-        market = await self._lighter_market(symbol, market_type)
+        profile = lighter_endpoint_profile(exchange)
+        market = await self._lighter_market(
+            symbol, market_type, exchange=profile.exchange
+        )
         market_id = market["market_id"]
         books, rates = await asyncio.gather(
-            lighter_order_books([market_id]),
-            self._get_json_optional(f"{LIGHTER_URL}/funding-rates") if market_type == MarketType.FUTURE else asyncio.sleep(0, result=None),
+            lighter_order_books([market_id], ws_url=profile.ws_url),
+            self._get_json_optional(f"{profile.api_url}/funding-rates")
+            if market_type == MarketType.FUTURE
+            else asyncio.sleep(0, result=None),
         )
         book = books.get(market_id)
         prices = lighter_best_prices(book)
@@ -2667,7 +2713,7 @@ class PairSpreadQueryService:
         mark = parse_float(market.get("mark_price"))
         open_interest = parse_float(market.get("open_interest"))
         return _current_leg(
-            exchange="lighter", symbol=symbol, market_type=market_type,
+            exchange=profile.exchange, symbol=symbol, market_type=market_type,
             raw_symbol=str(market["symbol"]), bid_price=bid, ask_price=ask,
             mid_price=(bid + ask) / 2, mark_price=mark,
             index_price=parse_float(market.get("index_price")),
@@ -2676,7 +2722,7 @@ class PairSpreadQueryService:
             funding_next_rate_pct=None,
             funding_next_time=next_aligned_funding_time(utc_now(), 1) if market_type == MarketType.FUTURE else None,
             contract_size_multiplier=1.0,
-            data_source="Lighter public orderBookDetails + WebSocket order_book",
+            data_source=profile.data_source,
             upstream_timestamp=lighter_upstream_timestamp(book),
             estimated_fields=["funding_next_time"] if market_type == MarketType.FUTURE else [],
             funding_interval_hours=1 if market_type == MarketType.FUTURE else None,
@@ -2686,16 +2732,24 @@ class PairSpreadQueryService:
         )
 
     async def _fetch_lighter_funding(
-        self, symbol: str, start: datetime, end: datetime
+        self,
+        symbol: str,
+        start: datetime,
+        end: datetime,
+        *,
+        exchange: str = "lighter",
     ) -> list[PairSpreadFundingPoint]:
-        market_id = (await self._lighter_market(symbol, MarketType.FUTURE))["market_id"]
+        profile = lighter_endpoint_profile(exchange)
+        market_id = (await self._lighter_market(
+            symbol, MarketType.FUTURE, exchange=profile.exchange
+        ))["market_id"]
         cursor = int(start.timestamp())
         end_seconds = int(end.timestamp())
         points: list[PairSpreadFundingPoint] = []
         while cursor <= end_seconds:
             chunk_end = min(end_seconds, cursor + 700 * 3600)
             payload = await self._get_json(
-                f"{LIGHTER_URL}/fundings?market_id={market_id}&resolution=1h"
+                f"{profile.api_url}/fundings?market_id={market_id}&resolution=1h"
                 f"&start_timestamp={cursor}&end_timestamp={chunk_end}&count_back=0"
             )
             if not isinstance(payload, dict) or payload.get("code") != 200:
@@ -2711,7 +2765,7 @@ class PairSpreadQueryService:
                 if start <= timestamp <= end:
                     # Historical rates are already percentages; "direction" identifies the paying side.
                     points.append(PairSpreadFundingPoint(
-                        exchange="lighter", symbol=_compact_symbol(symbol), funding_time=timestamp,
+                        exchange=profile.exchange, symbol=_compact_symbol(symbol), funding_time=timestamp,
                         funding_rate_pct=rate_pct if direction == "long" else -rate_pct,
                     ))
             cursor = chunk_end + 1

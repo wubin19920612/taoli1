@@ -61,6 +61,7 @@ const EXCHANGE_LABELS: Record<string, string> = {
   htx: "HTX",
   hyperliquid: "Hyper",
   lighter: "Lighter",
+  "rh-lighter": "RH Lighter",
   okx: "OKX"
 };
 

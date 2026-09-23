@@ -288,10 +288,12 @@ def test_error_message_includes_transport_cause() -> None:
     assert _error_message(exc) == "ConnectError: All connection attempts failed; caused by OSError: network unreachable"
 
 
-def test_default_exchange_adapters_include_hyperliquid() -> None:
+def test_default_exchange_adapters_include_hyperliquid_and_both_lighter_instances() -> None:
     names = [adapter.name for adapter in default_exchange_adapters()]
 
     assert "hyperliquid" in names
+    assert names.count("lighter") == 1
+    assert names.count("rh-lighter") == 1
 
 
 @pytest.mark.asyncio

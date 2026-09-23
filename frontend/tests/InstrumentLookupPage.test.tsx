@@ -1150,7 +1150,7 @@ describe("InstrumentLookupPage", () => {
     expect(await screen.findByText("创建完成")).not.toBeNull();
   });
 
-  it("shows exact ANTHROPIC markets and route-only RH-Lighter evidence with exact spread navigation", async () => {
+  it("shows exact ANTHROPIC markets and live RH-Lighter route evidence", async () => {
     const now = "2026-09-22T09:00:00Z";
     const lighterMarket = {
       symbol: "ANTHROPICUSDT",
@@ -1190,6 +1190,15 @@ describe("InstrumentLookupPage", () => {
       raw_symbol: "io:ANTH",
       dex: "io",
       data_source: "Hyperliquid io metaAndAssetCtxs + l2Book",
+      estimated_fields: []
+    };
+    const robinhoodMarket = {
+      ...lighterMarket,
+      exchange: "rh-lighter",
+      bid: 2193,
+      ask: 2193.1,
+      raw_symbol: "ANTHROPIC",
+      data_source: "Robinhood Lighter public API (USDG)",
       estimated_fields: []
     };
     const binanceMarket = {
@@ -1236,9 +1245,9 @@ describe("InstrumentLookupPage", () => {
       query: "ANTH",
       symbol: "ANTHROPICUSDT",
       base: "ANTHROPIC",
-      exchange_count: 3,
-      market_count: 3,
-      markets: [lighterMarket, hyperMarket, binanceMarket],
+      exchange_count: 4,
+      market_count: 4,
+      markets: [lighterMarket, robinhoodMarket, hyperMarket, binanceMarket],
       astro_routes: [
         {
           card_id: "anth-route",
@@ -1262,17 +1271,17 @@ describe("InstrumentLookupPage", () => {
           card_name: "ANTHROPIC",
           side: "sell",
           route: "rh-lighter",
-          exchange: null,
+          exchange: "rh-lighter",
           market_type: "future",
           astro_raw_symbol: "ANTHROPICUSDT",
           canonical_symbol: "ANTHROPICUSDT",
           dex: null,
           counterparty_route: "lighter",
-          status: "route_only",
-          live_data_supported: false,
-          matched_raw_symbol: null,
+          status: "live_market",
+          live_data_supported: true,
+          matched_raw_symbol: "ANTHROPIC",
           source: "Astro card response (route discovery only)",
-          reason: "没有独立 rh-lighter 行情源；不复制 Lighter 行情"
+          reason: "已匹配 Robinhood Lighter 真实公开行情"
         }
       ],
       route_errors: {},
@@ -1290,10 +1299,11 @@ describe("InstrumentLookupPage", () => {
 
     const exactTable = await screen.findByRole("table", { name: "精确行情市场" });
     expect(within(exactTable).getByText("Lighter")).toBeTruthy();
+    expect(within(exactTable).getByText("RH Lighter")).toBeTruthy();
     expect(within(exactTable).getByText(/DEX io/)).toBeTruthy();
     expect(within(exactTable).getAllByText(/ANTHROPIC/).length).toBeGreaterThan(0);
-    expect(screen.getByText("仅 Astro 路由")).toBeTruthy();
-    expect(screen.getByText("没有独立 rh-lighter 行情源；不复制 Lighter 行情")).toBeTruthy();
+    expect(screen.getAllByText("真实行情已匹配")).toHaveLength(2);
+    expect(screen.getByText("已匹配 Robinhood Lighter 真实公开行情")).toBeTruthy();
 
     await userEvent.click(screen.getByRole("button", {
       name: `价差查询 ANTHROPICUSDT ${spread.id}`

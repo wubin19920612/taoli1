@@ -12,7 +12,7 @@ from app.exchanges.bybit import BybitAdapter
 from app.exchanges.gate import GateAdapter
 from app.exchanges.htx import HTXAdapter
 from app.exchanges.hyperliquid import HyperliquidAdapter
-from app.exchanges.lighter import LighterAdapter
+from app.exchanges.lighter import LighterAdapter, RobinhoodLighterAdapter
 from app.exchanges.okx import OKXAdapter
 from app.models.index_component import index_watch_symbol
 from app.models.market import MarketSnapshot
@@ -120,6 +120,7 @@ def default_exchange_adapters() -> list[ExchangeAdapter]:
         AsterAdapter(),
         HyperliquidAdapter(),
         LighterAdapter(),
+        RobinhoodLighterAdapter(),
     ]
 
 

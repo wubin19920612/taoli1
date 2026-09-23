@@ -717,6 +717,21 @@ describe("PairMonitorPage", () => {
     });
   });
 
+  it("queries RH Lighter as an independent spread leg", async () => {
+    const user = userEvent.setup();
+    render(<PairMonitorPage />);
+
+    await user.click(screen.getAllByRole("combobox")[0]);
+    await user.click(await screen.findByText("RH Lighter"));
+    await user.click(screen.getByRole("button", { name: /查询/ }));
+
+    await waitFor(() => {
+      expect(
+        requests.some((request) => request.includes("leg1_exchange=rh-lighter"))
+      ).toBe(true);
+    });
+  });
+
   it("loads old saved presets as future contracts", () => {
     window.localStorage.setItem(
       "taoli1.pairSpread.presets.v1",

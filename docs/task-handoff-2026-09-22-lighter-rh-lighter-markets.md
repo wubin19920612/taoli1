@@ -2,6 +2,12 @@
 
 日期：2026-09-22
 
+> 2026-09-23 更正：本文最初只检查普通 Lighter 主网，遗漏了 Robinhood Lighter
+> 独立实例。当前结论和实现以
+> `docs/task-handoff-2026-09-22-rh-lighter-data-provenance.md` 及
+> `docs/task-handoff-2026-09-23-rh-lighter-public-market.md` 为准。下文标为
+> “2026-09-22 历史状态”的 route-only、接口和部署结果仅用于说明旧版本行为。
+
 ## 目标与范围
 
 本任务只处理 Lighter / RH-Lighter 行情采集、标的查询、精确双腿价差、实时机会以及 Astro 精确跳转。没有修改账户持仓连接、交易执行、告警阈值、Astro 下单、建卡、暂停、持仓或利润逻辑。
@@ -30,15 +36,19 @@
 
 Astro 列表响应没有独立的 `aSymbol`、`bSymbol`、`buySymbol` 或 `sellSymbol` 原始腿字段；当前能够确认的腿身份来自 `name + type + buyEx/sellEx + aHlDex/bHlDex`。Astro 响应仅用于发现路由，不作为价格、成交额或资金费率来源。
 
-Lighter 官方 `funding-rates` 对 ANTHROPIC 的 `market_id=193` 只返回 `lighter`、`binance`、`bybit` 等来源；现有 Lighter 公开市场元数据和订单簿接口也没有名为 `rh-lighter` 的市场。这只能证明**未发现 Lighter 公开 `rh-lighter` 接口**，不能证明 Astro 内部没有 RH-Lighter 实时数据源。
+旧调查只查询 `mainnet.zklighter.elliot.ai`，因此只能证明普通实例中没有名为
+`rh-lighter` 的市场。Lighter 官方 SDK 后续确认 `RH` 是 Robinhood，并提供独立的
+`https://api.rh.lighter.xyz` 和 `wss://api.rh.lighter.xyz/stream`。Robinhood
+Lighter 的 ANTHROPIC 是 `market_id=38`，普通 Lighter 是 `market_id=193`。
 
 后续来源调查已在 Astro Hub 的鉴权后 Dashboard 构建产物中定位到独立的 `rh-lighter` 行情键、`POST /<admin-prefix>/api/funding` 请求构造，以及通过 `WSS /<admin-prefix>/ws/logs` 接收 `updateFuturePrice: rh-lighter:<symbol>:<price>` 的实时链路。该链路目前仍缺少可公开验证的上游市场身份、价格字段语义、bid/ask 和上游时间戳，且现有 HMAC SDK 的 `list` 响应不返回实时价。
 
-因此本任务把 `rh-lighter` 建模为 `route_only`，这里的 `route_only` 是**本项目当前可验证接入能力**，不是对 Astro 内部数据源不存在的判断：
+2026-09-23 起，`rh-lighter` 已建模为独立公开市场：
 
-- 标的查询展示 Astro 路由证据，并明确说明不支持独立实时行情。
-- Pair 精确查询 `rh-lighter` 返回 HTTP 422，错误说明它是没有已验证独立公开行情源的 Astro 路由。
-- 不复制 Lighter 的价格、成交额、资金费率或盘口，不生成 RH-Lighter 实时机会或重复告警。
+- 标的查询和 Astro 路由匹配 RH 自身快照。
+- Pair 使用 RH 自身 REST/WS、市场缓存和 market ID。
+- 实时机会和浮窗使用 RH 真实 bid/ask，绝不复制普通 Lighter。
+- 只读市场接入不开放 Astro 建卡、账户连接或交易执行。
 
 ## 已完成功能
 
@@ -53,6 +63,7 @@ Lighter 官方 `funding-rates` 对 ANTHROPIC 的 `market_id=193` 只返回 `ligh
 ### 行情采集
 
 - Lighter 通过官方 `orderBookDetails` 发现市场，并通过官方 WebSocket `order_book/{market_id}` 获取真实 bid/ask 和盘口数量。
+- Robinhood Lighter 使用独立官方主机、USDG 资产和 `market_id=38`；与普通 Lighter 的缓存和 WebSocket 完全隔离。
 - Lighter 永续扫描仍限制为 48 个市场，但 `ANTHROPIC` 与既有 `HOOD` 一起占用优先槽位；缺少优先盘口时失败关闭，不以 mark/last 代替。
 - Hyperliquid `io:ANTH` 优先请求官方 `l2Book`。失败时保留元数据，但将 bid/ask 标记为估算、记录精确市场错误，并禁止生成实时机会。
 - Binance、OKX、Gate、Bitget 补充公开合约元数据中的数量乘数；市场元数据请求失败不会隐藏已经取得的真实盘口。
@@ -63,7 +74,7 @@ Lighter 官方 `funding-rates` 对 ANTHROPIC 的 `market_id=193` 只返回 `ligh
 
 - `/api/instruments/ANTH`、`ANTHROPIC`、`ANTHROPICUSDT` 返回相同规范标的和所有真实精确市场。
 - 每个市场返回并展示交易所、市场类型、原始市场、规范标的、HL DEX、价格倍率、数量乘数、bid/ask、24h 成交额、资金费率及周期、来源、上游时间、年龄和实时/过期状态。
-- Astro 路由单独展示；`route_only` 不混入真实市场列表。
+- Astro 路由仍单独展示；`rh-lighter` 可精确匹配真实 RH 市场。
 - 标的查询的正反向价差使用买入 ask 和卖出 bid。跳转 Pair 时保留双腿原始市场、市场类型、DEX、价格倍率和数量乘数。
 - Pair 当前行情展示双方 bid/ask、成交额、资金费率与周期、数据来源、上游时间、估算字段、估算 taker 手续费、价格倍率和数量乘数。
 - Pair URL、保存预设、浮窗预设打开和左右交换均保留上述市场身份。
@@ -73,7 +84,7 @@ Lighter 官方 `funding-rates` 对 ANTHROPIC 的 `market_id=193` 只返回 `ligh
 - 实时机会只接受具有真实 bid/ask 且未超过 `stale_after_seconds` 的市场。
 - 机会身份和去重键包含双方交易所、市场类型、原始市场、DEX、方向、价格倍率和已知数量乘数。
 - 机会展示和跳转保留双腿来源、时间、估算状态、手续费、倍率、成交额、资金费率及各自周期。
-- Astro 浮窗优先匹配精确市场列表；HL 使用卡片 `aHlDex/bHlDex`，RH-Lighter 明确显示仅路由且禁用伪实时价差入口。
+- Astro 浮窗优先匹配精确市场列表；HL 使用卡片 `aHlDex/bHlDex`，RH-Lighter 使用独立 RH bid/ask。
 - Astro 比率卡会把交换所价格别名倍率纳入换算，避免 OKX `10x` 等别名与 Astro `regressionValue` 重复应用。
 
 ## 关键代码入口
@@ -104,7 +115,7 @@ Lighter 官方 `funding-rates` 对 ANTHROPIC 的 `market_id=193` 只返回 `ligh
 
 上述样本只记录公开市场名、市场元数据、价格和数据时间，没有记录秘密或账户数据。
 
-## 本地验证
+## 2026-09-22 历史本地验证（已被 2026-09-23 结果取代）
 
 ### 自动化测试与静态检查
 
@@ -135,7 +146,7 @@ Lighter 官方 `funding-rates` 对 ANTHROPIC 的 `market_id=193` 只返回 `ligh
 - HL 或 Lighter 上游超时时页面显示具体上游失败，不统一误报为“没有行情”。
 - 本地截图位于未跟踪目录 `output/lighter-rh-lighter-local/`，不提交仓库。
 
-## 生产配置与部署
+## 2026-09-22 历史生产配置与部署（已被后续部署取代）
 
 部署前只读检查发现生产风险设置的 `excluded_symbols` 包含 `ANTHROPICUSDT`。该项会在采集和机会 API 两层过滤 ANTHROPIC，因此与本任务“ANTHROPIC 应生成实时机会”的验收冲突。
 
@@ -175,9 +186,10 @@ Lighter 官方 `funding-rates` 对 ANTHROPIC 的 `market_id=193` 只返回 `ligh
 - 三张目标 RH-Lighter 卡均真实存在，但生产 Astro 返回 `status=false`：`lighter/rh-lighter`、`hl(io:ANTH)/rh-lighter`、`binance/rh-lighter`。浮窗只展示运行卡，因此没有在生产中擅自启用卡片来制造点击样本；暂停路由的精确身份、禁用行为和跳转参数由前端自动化测试覆盖。
 - 生产截图保存在未跟踪的 `output/lighter-rh-lighter-production-*.png`，不提交仓库。
 
-## 已知问题与残余风险
+## 当前已知问题与残余风险
 
-- 未发现 Lighter 官方公开接口中的独立 RH-Lighter 市场；但 Astro Hub 鉴权后前端明确支持 `rh-lighter` 实时价格推送。由于其上游身份、单价字段语义、可成交 bid/ask 和上游时间戳仍未验证，本项目当前只能把它作为 Astro 路由证据，不能把它升级为可参与价差或交易判断的实时市场。
+- Robinhood Lighter 已由官方 SDK、独立 REST/WS、市场 ID、盘口和链签名域验证；Astro 服务端是否直接使用同一公共主机仍未公开验证。
+- RH 抵押/现货报价资产是 USDG。Radar 的规范 symbol/quote 用于跨市场比较，不表示 USDC、USDT、USDG 的资产风险和结算路径相同。
 - Astro 当前列表没有独立原始腿字段；现有卡片身份依赖 `name + type + buyEx/sellEx + HL DEX`。若 Astro SDK 后续增加原始腿字段，应优先改用新字段。
 - 三张 RH-Lighter 目标卡在验收时均为暂停状态，生产浮窗无法在不改变业务状态的情况下完成真实点击；本任务没有擅自启用、暂停或重建卡片。
 - Lighter WebSocket、订单簿详情和 HL `l2Book` 可能偶发超时。代码会隔离单市场失败并禁止估算盘口进入机会，但短时可能看不到 ANTHROPIC 路线。
@@ -189,6 +201,6 @@ Lighter 官方 `funding-rates` 对 ANTHROPIC 的 `market_id=193` 只返回 `ligh
 ## 下一步建议
 
 - 等待真实 ANTHROPIC 市场变化，继续观察 Lighter WebSocket 和 HL `io:ANTH` 的上游稳定性与时间戳。
-- 后续若取得 Astro 官方只读行情接口或可审计的鉴权后样本，应在独立任务中验证 RH-Lighter 的上游身份、价格字段语义、合约单位、时间戳和更新频率；在这些证据齐全前，不在现有 Lighter 快照上复制一条路线。
+- 持续同时采样 RH、普通 Lighter、Binance 和 HL `io:ANTH`，观察时延与相关性；任何时候都不得用普通 Lighter 快照替代 RH。
 - 更完整的来源调查见 `docs/task-handoff-2026-09-22-rh-lighter-data-provenance.md`。
 - 下一个无直接依赖的功能模块应在新的 Codex 任务中继续，并以本文档和最新分支为交接基线。

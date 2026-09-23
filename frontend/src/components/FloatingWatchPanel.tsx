@@ -60,6 +60,7 @@ const exchangeLabels: Record<string, string> = {
   gate: "Gate",
   hyperliquid: "Hyperliquid",
   lighter: "Lighter",
+  "rh-lighter": "RH Lighter",
   okx: "OKX"
 };
 
@@ -356,12 +357,6 @@ function astroMetrics(
   const missingIndex = markets.findIndex((market) => !market);
   if (missingIndex >= 0) {
     const leg = legs[missingIndex];
-    if (leg.exchange === "rh-lighter") {
-      return {
-        value: null,
-        error: "RH-Lighter 仅为 Astro 路由；没有已验证的独立公开实时行情"
-      };
-    }
     const state = states[astroInstrumentKey(leg)];
     if (!state) return { value: null, error: "实时行情刷新中" };
     const venue = exchangeLabels[leg.exchange] ?? leg.exchange;

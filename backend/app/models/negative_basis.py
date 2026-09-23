@@ -17,10 +17,14 @@ from app.models.pair_spread import (
 
 
 NEGATIVE_BASIS_SPOT_EXCHANGES: tuple[str, ...] = tuple(
-    exchange for exchange in SUPPORTED_PAIR_SPREAD_EXCHANGES if exchange != "hyperliquid"
+    exchange
+    for exchange in SUPPORTED_PAIR_SPREAD_EXCHANGES
+    if exchange not in {"hyperliquid", "rh-lighter"}
 )
 NEGATIVE_BASIS_FUTURE_EXCHANGES: tuple[str, ...] = tuple(
-    exchange for exchange in SUPPORTED_PAIR_SPREAD_EXCHANGES if exchange != "binance_alpha"
+    exchange
+    for exchange in SUPPORTED_PAIR_SPREAD_EXCHANGES
+    if exchange not in {"binance_alpha", "rh-lighter"}
 )
 DEFAULT_NEGATIVE_BASIS_BLOCKED_EXCHANGE_SYMBOLS: tuple[str, ...] = ("gate:EDGEUSDT",)
 

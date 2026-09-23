@@ -3831,6 +3831,11 @@ body {
   background: #f0fdf4;
 }
 
+.pair-exchange-rh-lighter {
+  color: #9f1239;
+  background: #fff1f2;
+}
+
 .pair-exchange-bybit {
   color: #92400e;
   background: #fffbeb;

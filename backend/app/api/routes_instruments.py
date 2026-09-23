@@ -124,8 +124,6 @@ def _astro_pair_bases(pair: dict[str, Any]) -> tuple[str, str] | None:
 
 def _astro_route_exchange(route: str) -> str | None:
     normalized = route.strip().lower()
-    if normalized == "rh-lighter":
-        return None
     if normalized.startswith("gc-"):
         normalized = normalized.removeprefix("gc-")
     return {"hl": "hyperliquid", "hyper": "hyperliquid", "bitgetr": "bitget"}.get(
@@ -224,13 +222,7 @@ async def _astro_route_statuses(
                 ),
                 None,
             )
-            if exchange is None:
-                status = "route_only"
-                reason = (
-                    "Astro 返回了 RH-Lighter 路由，但 Lighter 公开市场与资金接口没有独立 "
-                    "rh-lighter 行情源；不复制 Lighter 行情。"
-                )
-            elif match is None:
+            if match is None:
                 status = "market_missing"
                 reason = "Astro 路由已发现，但统一行情快照中没有匹配的精确实时市场。"
             else:

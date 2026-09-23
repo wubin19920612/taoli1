@@ -81,11 +81,12 @@ const exchangeLabels: Record<string, string> = {
   gate: "Gate",
   hyperliquid: "Hyperliquid",
   lighter: "Lighter",
+  "rh-lighter": "RH Lighter",
   okx: "OKX"
 };
 const chartExchanges: Record<MarketType, Set<string>> = {
-  spot: new Set(["binance", "okx", "bybit", "gate", "bitget", "lighter"]),
-  future: new Set(["binance", "okx", "bybit", "gate", "bitget", "aster", "hyperliquid", "lighter"])
+  spot: new Set(["binance", "okx", "bybit", "gate", "bitget", "lighter", "rh-lighter"]),
+  future: new Set(["binance", "okx", "bybit", "gate", "bitget", "aster", "hyperliquid", "lighter", "rh-lighter"])
 };
 const seriesColors = ["#0f766e", "#2563eb", "#d97706", "#b42318", "#7c3aed", "#0891b2", "#475569"];
 

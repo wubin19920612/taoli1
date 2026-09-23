@@ -388,6 +388,48 @@ async def test_lighter_unknown_counterparty_never_calls_astro() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "handler_name",
+    [
+        "handle_alert",
+        "handle_new_listing_alert",
+        "handle_live_pilot",
+        "handle_manual_create",
+        "handle_preadd",
+    ],
+)
+async def test_rh_lighter_is_read_only_across_all_astro_create_paths(
+    handler_name: str,
+) -> None:
+    client = FakeAstroClient()
+    service = AstroAlertService(
+        client,
+        Settings(
+            astro_alert_auto_create=True,
+            astro_manual_card_create=True,
+            astro_dry_run_only=False,
+        ),
+        live_pilot_settings=LivePilotSettings(enabled=True),
+    )
+    rh_opportunity = opportunity().model_copy(
+        update={"sell_exchange": "rh-lighter"}
+    )
+
+    if handler_name == "handle_preadd":
+        result = await service.handle_preadd(rh_opportunity, AstroCardSettings())
+    else:
+        result = await getattr(service, handler_name)(rh_opportunity)
+
+    assert result.status == "skipped"
+    assert result.action == "unsupported"
+    assert "公开只读行情" in result.message
+    assert "未开放 Astro 建卡或交易执行" in result.message
+    assert client.list_calls == 0
+    assert client.added == []
+    assert client.updated == []
+
+
+@pytest.mark.asyncio
 async def test_new_listing_alert_creates_open_card_even_when_default_is_paused() -> None:
     client = FakeAstroClient()
     service = AstroAlertService(

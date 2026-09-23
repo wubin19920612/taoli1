@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -21,6 +22,42 @@ from app.models.orderbook import OrderBookSnapshot
 
 LIGHTER_URL = "https://mainnet.zklighter.elliot.ai/api/v1"
 LIGHTER_WS_URL = "wss://mainnet.zklighter.elliot.ai/stream"
+RH_LIGHTER_URL = "https://api.rh.lighter.xyz/api/v1"
+RH_LIGHTER_WS_URL = "wss://api.rh.lighter.xyz/stream"
+
+
+@dataclass(frozen=True)
+class LighterEndpointProfile:
+    exchange: str
+    api_url: str
+    ws_url: str
+    spot_quote: str
+    data_source: str
+
+
+LIGHTER_ENDPOINTS = {
+    "lighter": LighterEndpointProfile(
+        exchange="lighter",
+        api_url=LIGHTER_URL,
+        ws_url=LIGHTER_WS_URL,
+        spot_quote="USDC",
+        data_source="Lighter public orderBookDetails + WebSocket order_book",
+    ),
+    "rh-lighter": LighterEndpointProfile(
+        exchange="rh-lighter",
+        api_url=RH_LIGHTER_URL,
+        ws_url=RH_LIGHTER_WS_URL,
+        spot_quote="USDG",
+        data_source="Robinhood Lighter public orderBookDetails + WebSocket order_book (USDG)",
+    ),
+}
+
+
+def lighter_endpoint_profile(exchange: str) -> LighterEndpointProfile:
+    try:
+        return LIGHTER_ENDPOINTS[exchange.strip().lower()]
+    except KeyError as exc:
+        raise ValueError(f"unsupported Lighter instance: {exchange}") from exc
 
 
 def lighter_upstream_timestamp(payload: Any) -> datetime | None:
@@ -37,12 +74,18 @@ def lighter_upstream_timestamp(payload: Any) -> datetime | None:
         return None
 
 
-def lighter_symbol(raw: str, market_type: MarketType) -> tuple[str, str] | None:
+def lighter_symbol(
+    raw: str,
+    market_type: MarketType,
+    *,
+    spot_quote: str = "USDC",
+) -> tuple[str, str] | None:
     name = raw.strip().upper()
     if market_type == MarketType.SPOT:
-        if not name.endswith("/USDC"):
+        suffix = f"/{spot_quote.upper()}"
+        if not name.endswith(suffix):
             return None
-        name = name.removesuffix("/USDC")
+        name = name.removesuffix(suffix)
     if not name or "/" in name or not name.isalnum():
         return None
     return f"{name}USDT", name
@@ -81,6 +124,7 @@ def lighter_best_prices(payload: Any) -> tuple[float, float, float, float] | Non
 async def lighter_order_books(
     market_ids: list[int],
     *,
+    ws_url: str = LIGHTER_WS_URL,
     timeout_seconds: float = 12,
 ) -> dict[int, dict[str, Any]]:
     requested = list(dict.fromkeys(market_ids))
@@ -92,7 +136,7 @@ async def lighter_order_books(
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout_seconds
     async with websocket_connect(
-        LIGHTER_WS_URL,
+        ws_url,
         open_timeout=min(timeout_seconds, 10),
         close_timeout=3,
     ) as websocket:
@@ -149,6 +193,10 @@ async def lighter_order_books(
 
 class LighterAdapter(ExchangeAdapter):
     name = "lighter"
+    api_url = LIGHTER_URL
+    ws_url = LIGHTER_WS_URL
+    spot_quote = "USDC"
+    data_source = LIGHTER_ENDPOINTS["lighter"].data_source
     book_refresh_seconds = 12
     details_refresh_seconds = 60
     details_fallback_seconds = 300
@@ -176,7 +224,7 @@ class LighterAdapter(ExchangeAdapter):
             ):
                 return cached[1]
             try:
-                details = await self.get_json(f"{LIGHTER_URL}/orderBookDetails")
+                details = await self.get_json(f"{self.api_url}/orderBookDetails")
             except ExchangeRequestError as exc:
                 status_405 = (
                     isinstance(exc.original, httpx.HTTPStatusError)
@@ -187,7 +235,7 @@ class LighterAdapter(ExchangeAdapter):
                 if self._owns_client:
                     await self.reset_client()
                     try:
-                        details = await self.get_json(f"{LIGHTER_URL}/orderBookDetails")
+                        details = await self.get_json(f"{self.api_url}/orderBookDetails")
                     except (ExchangeRequestError, httpx.HTTPError, ValueError):
                         details = None
                 else:
@@ -235,7 +283,7 @@ class LighterAdapter(ExchangeAdapter):
         funding: dict[int, float] = {}
         if market_type == MarketType.FUTURE:
             try:
-                rates = await self.get_json(f"{LIGHTER_URL}/funding-rates")
+                rates = await self.get_json(f"{self.api_url}/funding-rates")
                 if isinstance(rates, dict) and rates.get("code") == 200:
                     funding = {
                         item["market_id"]: rate
@@ -252,7 +300,9 @@ class LighterAdapter(ExchangeAdapter):
         for item in rows:
             if not isinstance(item, dict) or item.get("status") != "active":
                 continue
-            resolved = lighter_symbol(str(item.get("symbol", "")), market_type)
+            resolved = lighter_symbol(
+                str(item.get("symbol", "")), market_type, spot_quote=self.spot_quote
+            )
             market_id = item.get("market_id")
             if resolved is None or not isinstance(market_id, int):
                 continue
@@ -278,7 +328,9 @@ class LighterAdapter(ExchangeAdapter):
             markets,
             key=lambda row: row[2] not in priority_symbols,
         )
-        books = await lighter_order_books([row[3] for row in requested_books])
+        books = await lighter_order_books(
+            [row[3] for row in requested_books], ws_url=self.ws_url
+        )
         missing_priority = [
             row[2]
             for row in requested_books
@@ -321,7 +373,7 @@ class LighterAdapter(ExchangeAdapter):
                     timestamp=utc_now(),
                     raw_symbol=str(item["symbol"]),
                     contract_size_multiplier=1.0,
-                    data_source="Lighter public orderBookDetails + WebSocket order_book",
+                    data_source=self.data_source,
                     upstream_timestamp=lighter_upstream_timestamp(book),
                     estimated_fields=(
                         ["funding_next_time"] if market_type == MarketType.FUTURE else []
@@ -346,7 +398,7 @@ class LighterAdapter(ExchangeAdapter):
                     break
         if not isinstance(market_id, int):
             return None
-        payload = (await lighter_order_books([market_id])).get(market_id)
+        payload = (await lighter_order_books([market_id], ws_url=self.ws_url)).get(market_id)
         if payload is None:
             return None
         return order_book_snapshot(
@@ -357,3 +409,11 @@ class LighterAdapter(ExchangeAdapter):
             bids=lighter_book_levels(payload.get("bids"))[: max(1, min(limit, 100))],
             asks=lighter_book_levels(payload.get("asks"))[: max(1, min(limit, 100))],
         )
+
+
+class RobinhoodLighterAdapter(LighterAdapter):
+    name = "rh-lighter"
+    api_url = RH_LIGHTER_URL
+    ws_url = RH_LIGHTER_WS_URL
+    spot_quote = "USDG"
+    data_source = LIGHTER_ENDPOINTS["rh-lighter"].data_source

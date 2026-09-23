@@ -23,6 +23,7 @@ from app.models.orderbook import DepthValidationResult
 from app.models.pair_spread import normalize_pair_spread_symbol
 from app.models.settings import AstroCardSettings, FeeSettings, RiskSettings
 from app.core.security import dashboard_password_header, verify_dashboard_password
+from app.services.astro_alerts import READ_ONLY_ASTRO_MESSAGE, read_only_astro_exchanges
 from app.services.astro_client import AstroClientError, AstroSdkClient
 from app.services.data_filters import ignored_exchange_set, symbol_is_excluded
 from app.services.astro_planner import AstroPairPlanner, AstroPlannerConfig
@@ -283,6 +284,15 @@ async def _build_astro_preview(
     plan = plan.model_copy(
         update={"warnings": _unique_warnings([*plan.warnings, *risk_warnings])}
     )
+    if read_only_astro_exchanges(opportunity):
+        plan = plan.model_copy(
+            update={
+                "can_submit": False,
+                "blockers": _unique_warnings(
+                    [*plan.blockers, READ_ONLY_ASTRO_MESSAGE]
+                ),
+            }
+        )
     if not symbol_is_excluded(opportunity.symbol, risk_settings):
         return plan.model_copy(update={"warnings": _unique_warnings(plan.warnings)})
     return plan.model_copy(
@@ -424,6 +434,11 @@ async def _create_astro_card(
     card_request: AstroCardCreateRequest | None,
     manual_warnings: list[str] | None = None,
 ) -> AstroAlertActionResult:
+    if read_only_astro_exchanges(opportunity):
+        raise HTTPException(
+            status_code=422,
+            detail=READ_ONLY_ASTRO_MESSAGE,
+        )
     risk_settings, risk_warnings = await _manual_risk_settings(request)
     warnings = [*(manual_warnings or []), *risk_warnings]
     if symbol_is_excluded(opportunity.symbol, risk_settings):

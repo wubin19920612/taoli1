@@ -160,6 +160,39 @@ def test_instrument_astro_preview_never_offers_plain_lighter_route() -> None:
     assert pair["sellEx"] == "gc-binance"
 
 
+def test_rh_lighter_market_can_be_previewed_but_not_created() -> None:
+    app = instrument_app(dashboard_password="secret")
+    app.state.snapshot_store.set_all_markets([
+        market("rh-lighter", bid=99, ask=100), market("binance", bid=101, ask=102)
+    ])
+    service = FakeAstroSubmitService()
+    app.state.astro_alert_service = service
+    selected = {
+        **route(), "buy_exchange": "rh-lighter", "sell_exchange": "binance"
+    }
+
+    with TestClient(app) as client:
+        preview = client.post("/api/astro/instrument/preview", json=selected)
+        create = client.post(
+            "/api/astro/instrument/card",
+            headers={"X-Dashboard-Password": "secret"},
+            json={
+                "route": selected,
+                "card": {},
+                "expected_open_spread_pct": 1,
+            },
+        )
+
+    assert preview.status_code == 200
+    assert preview.json()["can_submit"] is False
+    assert "公开只读行情" in preview.json()["blockers"][0]
+    assert "未开放 Astro 建卡或交易执行" in preview.json()["blockers"][0]
+    assert create.status_code == 422
+    assert "公开只读行情" in create.json()["detail"]
+    assert "未开放 Astro 建卡或交易执行" in create.json()["detail"]
+    assert service.calls == []
+
+
 def test_instrument_astro_preview_explains_when_confirm_will_write_to_astro() -> None:
     app = instrument_app(astro_dry_run_only=False)
 

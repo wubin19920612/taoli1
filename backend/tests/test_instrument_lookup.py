@@ -165,7 +165,7 @@ def test_instrument_lookup_resolves_hyperliquid_raw_alias_and_exact_dex() -> Non
     assert inferred_exchanges["hyperliquid"]["future"]["raw_symbol"] == "io:ANTH"
 
 
-def test_anthropic_lookup_lists_lighter_hl_and_route_only_rh_evidence() -> None:
+def test_anthropic_lookup_matches_independent_robinhood_lighter_route() -> None:
     now = datetime.now(UTC).replace(microsecond=0)
     store = SnapshotStore()
     store.set_all_markets(
@@ -175,6 +175,13 @@ def test_anthropic_lookup_lists_lighter_hl_and_route_only_rh_evidence() -> None:
                     "raw_symbol": "ANTHROPIC",
                     "contract_size_multiplier": 1,
                     "data_source": "Lighter public orderBookDetails + WebSocket order_book",
+                }
+            ),
+            market("ANTHROPICUSDT", "rh-lighter", MarketType.FUTURE, 2_193, now).model_copy(
+                update={
+                    "raw_symbol": "ANTHROPIC",
+                    "contract_size_multiplier": 1,
+                    "data_source": "Robinhood Lighter public orderBookDetails + WebSocket order_book (USDG)",
                 }
             ),
             market("ANTHROPICUSDT", "binance", MarketType.FUTURE, 2_160, now).model_copy(
@@ -230,15 +237,18 @@ def test_anthropic_lookup_lists_lighter_hl_and_route_only_rh_evidence() -> None:
             ("binance", "future", "ANTHROPICUSDT", None),
             ("hyperliquid", "future", "io:ANTH", "io"),
             ("lighter", "future", "ANTHROPIC", None),
+            ("rh-lighter", "future", "ANTHROPIC", None),
         }
         lighter = next(item for item in payload["markets"] if item["exchange"] == "lighter")
         assert lighter["contract_size_multiplier"] == 1
         assert lighter["data_status"] == "live"
-        route_only = [item for item in payload["astro_routes"] if item["route"] == "rh-lighter"]
-        assert len(route_only) == 2
-        assert all(item["status"] == "route_only" for item in route_only)
-        assert all(item["live_data_supported"] is False for item in route_only)
-        assert all("不复制 Lighter 行情" in item["reason"] for item in route_only)
+        rh_routes = [item for item in payload["astro_routes"] if item["route"] == "rh-lighter"]
+        assert len(rh_routes) == 2
+        assert all(item["exchange"] == "rh-lighter" for item in rh_routes)
+        assert all(item["status"] == "live_market" for item in rh_routes)
+        assert all(item["live_data_supported"] is True for item in rh_routes)
+        assert all(item["matched_raw_symbol"] == "ANTHROPIC" for item in rh_routes)
+        assert all("真实公开行情" in item["reason"] for item in rh_routes)
 
 
 def test_instrument_lookup_lists_multiple_hyperliquid_dex_candidates() -> None:

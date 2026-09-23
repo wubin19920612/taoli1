@@ -8,12 +8,19 @@ import pytest
 
 from app.exchanges.base import ExchangeRequestError
 from app.exchanges.lighter import (
+    RH_LIGHTER_URL,
+    RH_LIGHTER_WS_URL,
     LighterAdapter,
+    RobinhoodLighterAdapter,
     lighter_best_prices,
     lighter_order_books,
     lighter_upstream_timestamp,
 )
 from app.models.market import MarketType
+from app.models.negative_basis import (
+    NEGATIVE_BASIS_FUTURE_EXCHANGES,
+    NEGATIVE_BASIS_SPOT_EXCHANGES,
+)
 from app.models.pair_spread import PairSpreadLegQuery
 from app.services.pair_spread_query import PairSpreadQueryService
 
@@ -47,7 +54,7 @@ def test_lighter_upstream_timestamp_parses_websocket_microseconds() -> None:
 async def test_lighter_collects_active_perps_and_spot_with_real_book_and_funding(monkeypatch) -> None:
     urls: list[str] = []
 
-    async def fake_books(market_ids: list[int]):
+    async def fake_books(market_ids: list[int], **_kwargs):
         return {market_id: book() for market_id in market_ids if market_id != 4}
 
     async def fake_get(self, url: str):
@@ -90,7 +97,7 @@ async def test_lighter_collects_active_perps_and_spot_with_real_book_and_funding
 async def test_lighter_always_scans_priority_hood_market_within_perp_limit(monkeypatch) -> None:
     requested_market_ids: list[int] = []
 
-    async def fake_books(market_ids: list[int]):
+    async def fake_books(market_ids: list[int], **_kwargs):
         requested_market_ids.extend(market_ids)
         return {market_id: book() for market_id in market_ids}
 
@@ -127,7 +134,7 @@ async def test_lighter_always_scans_priority_hood_market_within_perp_limit(monke
 async def test_lighter_always_scans_anthropic_without_fabricating_rh_market(monkeypatch) -> None:
     requested_market_ids: list[int] = []
 
-    async def fake_books(market_ids: list[int]):
+    async def fake_books(market_ids: list[int], **_kwargs):
         requested_market_ids.extend(market_ids)
         payload = book()
         payload["last_updated_at"] = 1_790_065_690_229_022
@@ -173,6 +180,52 @@ async def test_lighter_always_scans_anthropic_without_fabricating_rh_market(monk
 
 
 @pytest.mark.asyncio
+async def test_robinhood_lighter_uses_independent_rh_endpoints_and_usdg_spot(monkeypatch) -> None:
+    urls: list[str] = []
+    websocket_calls: list[tuple[list[int], str]] = []
+
+    async def fake_books(market_ids: list[int], **kwargs):
+        websocket_calls.append((market_ids, kwargs["ws_url"]))
+        payload = book("2193.0", "2193.1")
+        payload["last_updated_at"] = 1_790_065_690_229_022
+        return {market_id: payload for market_id in market_ids}
+
+    async def fake_get(self, url: str):
+        urls.append(url)
+        if url.endswith("orderBookDetails"):
+            return {
+                "code": 200,
+                "order_book_details": [detail("ANTHROPIC", 38)],
+                "spot_order_book_details": [detail("ETH/USDG", 2050, "spot")],
+            }
+        if url.endswith("funding-rates"):
+            return {"code": 200, "funding_rates": [
+                {"exchange": "lighter", "market_id": 38, "rate": 0.00002}
+            ]}
+        raise AssertionError(url)
+
+    monkeypatch.setattr(LighterAdapter, "get_json", fake_get)
+    monkeypatch.setattr("app.exchanges.lighter.lighter_order_books", fake_books)
+    adapter = RobinhoodLighterAdapter()
+    try:
+        [future] = await adapter.fetch_future_tickers()
+        [spot] = await adapter.fetch_spot_tickers()
+    finally:
+        await adapter.client.aclose()
+
+    assert adapter.name == "rh-lighter"
+    assert future.exchange == "rh-lighter"
+    assert future.raw_symbol == "ANTHROPIC"
+    assert future.bid == 2193.0
+    assert future.funding_rate_pct == pytest.approx(0.002)
+    assert future.data_source == "Robinhood Lighter public orderBookDetails + WebSocket order_book (USDG)"
+    assert spot.symbol == "ETHUSDT"
+    assert spot.raw_symbol == "ETH/USDG"
+    assert all(url.startswith(RH_LIGHTER_URL) for url in urls)
+    assert websocket_calls == [([38], RH_LIGHTER_WS_URL), ([2050], RH_LIGHTER_WS_URL)]
+
+
+@pytest.mark.asyncio
 async def test_lighter_fails_closed_when_priority_hood_book_is_missing(monkeypatch) -> None:
     async def fake_get(self, url: str):
         if url.endswith("orderBookDetails"):
@@ -185,7 +238,7 @@ async def test_lighter_fails_closed_when_priority_hood_book_is_missing(monkeypat
             return {"code": 200, "funding_rates": []}
         raise AssertionError(url)
 
-    async def fake_books(market_ids: list[int]):
+    async def fake_books(market_ids: list[int], **_kwargs):
         return {1: book()}
 
     monkeypatch.setattr(LighterAdapter, "get_json", fake_get)
@@ -200,7 +253,7 @@ async def test_lighter_fails_closed_when_priority_hood_book_is_missing(monkeypat
 
 @pytest.mark.asyncio
 async def test_lighter_order_book_uses_market_id_and_remaining_size(monkeypatch) -> None:
-    async def fake_books(market_ids: list[int]):
+    async def fake_books(market_ids: list[int], **_kwargs):
         return {market_id: book() for market_id in market_ids}
 
     async def fake_get(self, url: str):
@@ -288,7 +341,7 @@ def details_405() -> ExchangeRequestError:
 async def test_lighter_concurrent_market_types_share_details_fetch(monkeypatch) -> None:
     calls = 0
 
-    async def fake_books(market_ids: list[int]):
+    async def fake_books(market_ids: list[int], **_kwargs):
         return {market_id: book() for market_id in market_ids}
 
     async def fake_get(self, url: str):
@@ -320,7 +373,7 @@ async def test_lighter_405_uses_short_lived_details_but_refreshes_prices_and_rec
     rejecting = False
     resets = 0
 
-    async def fake_books(market_ids: list[int]):
+    async def fake_books(market_ids: list[int], **_kwargs):
         return {market_id: book(bid=price) for market_id in market_ids}
 
     async def fake_get(self, url: str):
@@ -388,6 +441,11 @@ async def test_lighter_405_without_recent_details_fails_closed(monkeypatch) -> N
 def test_lighter_rejects_crossed_book_and_accepts_pair_query() -> None:
     assert lighter_best_prices(book("101", "99")) is None
     assert PairSpreadLegQuery(exchange="lighter", symbol="ETH", market_type=MarketType.SPOT).symbol == "ETHUSDT"
+    assert PairSpreadLegQuery(
+        exchange="rh-lighter", symbol="ETH", market_type=MarketType.SPOT
+    ).symbol == "ETHUSDT"
+    assert "rh-lighter" not in NEGATIVE_BASIS_SPOT_EXCHANGES
+    assert "rh-lighter" not in NEGATIVE_BASIS_FUTURE_EXCHANGES
 
 
 @pytest.mark.asyncio
@@ -397,7 +455,7 @@ async def test_lighter_pair_query_current_candles_and_signed_historical_funding(
     end = start + timedelta(minutes=501)
     requested: list[str] = []
 
-    async def fake_books(market_ids: list[int]):
+    async def fake_books(market_ids: list[int], **_kwargs):
         return {market_id: book() for market_id in market_ids}
 
     async def fake_get(url: str):
@@ -442,7 +500,7 @@ async def test_lighter_pair_legs_share_one_market_details_request(monkeypatch) -
     service = PairSpreadQueryService()
     details_calls = 0
 
-    async def fake_books(market_ids: list[int]):
+    async def fake_books(market_ids: list[int], **_kwargs):
         return {market_id: book() for market_id in market_ids}
 
     async def fake_get(url: str):
@@ -469,3 +527,51 @@ async def test_lighter_pair_legs_share_one_market_details_request(monkeypatch) -
         assert details_calls == 1
     finally:
         await service.aclose()
+
+
+@pytest.mark.asyncio
+async def test_pair_query_keeps_lighter_instances_and_market_ids_isolated(monkeypatch) -> None:
+    service = PairSpreadQueryService()
+    detail_urls: list[str] = []
+    websocket_calls: list[tuple[list[int], str]] = []
+
+    async def fake_get(url: str):
+        if url.endswith("orderBookDetails"):
+            detail_urls.append(url)
+            market_id = 38 if url.startswith(RH_LIGHTER_URL) else 193
+            return {
+                "code": 200,
+                "order_book_details": [detail("ANTHROPIC", market_id)],
+                "spot_order_book_details": [],
+            }
+        if url.endswith("funding-rates"):
+            return {"code": 200, "funding_rates": []}
+        raise AssertionError(url)
+
+    async def fake_books(market_ids: list[int], **kwargs):
+        websocket_calls.append((market_ids, kwargs["ws_url"]))
+        bid = "2193.0" if market_ids == [38] else "2204.0"
+        ask = "2193.1" if market_ids == [38] else "2204.5"
+        return {market_ids[0]: book(bid, ask)}
+
+    monkeypatch.setattr(service, "_get_json", fake_get)
+    monkeypatch.setattr(service, "_get_json_optional", fake_get)
+    monkeypatch.setattr("app.services.pair_spread_query.lighter_order_books", fake_books)
+    try:
+        regular, robinhood = await asyncio.gather(
+            service._fetch_lighter_current("ANTHROPICUSDT"),
+            service._fetch_lighter_current("ANTHROPICUSDT", exchange="rh-lighter"),
+        )
+    finally:
+        await service.aclose()
+
+    assert regular.exchange == "lighter"
+    assert regular.bid_price == 2204.0
+    assert robinhood.exchange == "rh-lighter"
+    assert robinhood.bid_price == 2193.0
+    assert robinhood.data_source.endswith("(USDG)")
+    assert len(detail_urls) == 2
+    assert {market_ids[0] for market_ids, _ in websocket_calls} == {38, 193}
+    assert {ws_url for _, ws_url in websocket_calls} == {
+        "wss://mainnet.zklighter.elliot.ai/stream", RH_LIGHTER_WS_URL,
+    }

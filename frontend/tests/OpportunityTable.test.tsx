@@ -73,6 +73,25 @@ describe("OpportunityTable", () => {
     expect(screen.getByText("0.030%/24h")).toBeTruthy();
   });
 
+  it("labels Robinhood Lighter independently from regular Lighter", () => {
+    render(
+      <OpportunityTable
+        opportunities={[
+          {
+            ...row,
+            id: "rh-lighter-route",
+            buy_exchange: "lighter",
+            sell_exchange: "rh-lighter"
+          }
+        ]}
+        loading={false}
+      />
+    );
+
+    expect(screen.getByText("Lighter")).toBeTruthy();
+    expect(screen.getByText("RH Lighter")).toBeTruthy();
+  });
+
   it("normalizes mixed funding intervals instead of displaying their raw difference", () => {
     render(
       <OpportunityTable

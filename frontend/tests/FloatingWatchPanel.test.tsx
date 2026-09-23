@@ -1250,7 +1250,7 @@ describe("FloatingWatchPanel", () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it("marks RH-Lighter as route-only and never borrows the real Lighter quote", async () => {
+  it("uses the independent RH-Lighter quote for an Astro route", async () => {
     const routePair = [{
       id: "anth-rh-lighter",
       name: "ANTHROPIC",
@@ -1261,30 +1261,49 @@ describe("FloatingWatchPanel", () => {
       aExPosition: 0,
       bExPosition: 0
     }];
-    const lighterOnly = {
+    const lighterAndRobinhood = {
       ...astroAnthropicInstrument,
-      exchanges: [{
-        exchange: "lighter",
-        spot: null,
-        future: {
-          symbol: "ANTHROPICUSDT",
-          base: "ANTHROPIC",
-          quote: "USDT",
+      exchanges: [
+        {
           exchange: "lighter",
-          market_type: "future",
-          bid: 2166,
-          ask: 2168,
-          timestamp: "2026-09-22T09:00:00Z",
-          raw_symbol: "ANTHROPIC"
+          spot: null,
+          future: {
+            symbol: "ANTHROPICUSDT",
+            base: "ANTHROPIC",
+            quote: "USDT",
+            exchange: "lighter",
+            market_type: "future",
+            bid: 2166,
+            ask: 2168,
+            timestamp: "2026-09-22T09:00:00Z",
+            raw_symbol: "ANTHROPIC"
+          },
+          error: null
         },
-        error: null
-      }]
+        {
+          exchange: "rh-lighter",
+          spot: null,
+          future: {
+            symbol: "ANTHROPICUSDT",
+            base: "ANTHROPIC",
+            quote: "USDT",
+            exchange: "rh-lighter",
+            market_type: "future",
+            bid: 2193,
+            ask: 2193.1,
+            timestamp: "2026-09-22T09:00:00Z",
+            raw_symbol: "ANTHROPIC",
+            data_source: "Robinhood Lighter public API (USDG)"
+          },
+          error: null
+        }
+      ]
     };
     vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("/settings/floating-watch")) return Response.json({ symbols: [], pair_ids: [] });
       if (url.includes("/astro/pairs")) return Response.json(routePair);
-      if (url.includes("/instruments/ANTHROPICUSDT")) return Response.json(lighterOnly);
+      if (url.includes("/instruments/ANTHROPICUSDT")) return Response.json(lighterAndRobinhood);
       return Response.json({});
     });
 
@@ -1292,11 +1311,15 @@ describe("FloatingWatchPanel", () => {
     const panel = await screen.findByRole("complementary", { name: "关注浮窗" });
     await userEvent.click(await within(panel).findByText("Astro 1"));
 
-    expect(await within(panel).findByText("RH-Lighter 仅为 Astro 路由；没有已验证的独立公开实时行情")).toBeTruthy();
     const link = within(panel).getByRole("button", {
       name: "打开 Astro 交易对 ANTHROPIC 的价差查询"
     }) as HTMLButtonElement;
-    expect(link.disabled).toBe(true);
+    await waitFor(() => expect(link.disabled).toBe(false));
+    expect(within(panel).queryByText(/没有已验证的独立公开实时行情/)).toBeNull();
+    await userEvent.click(link);
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("leg1_exchange")).toBe("lighter");
+    expect(params.get("leg2_exchange")).toBe("rh-lighter");
   });
 
   it("does not apply an Astro ratio twice after an exchange alias normalized the price", async () => {
