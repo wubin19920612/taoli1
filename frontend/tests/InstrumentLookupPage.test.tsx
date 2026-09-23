@@ -1208,7 +1208,7 @@ describe("InstrumentLookupPage", () => {
     expect(await screen.findByText("创建完成")).not.toBeNull();
   });
 
-  it("shows exact ANTHROPIC markets and live RH-Lighter route evidence", async () => {
+  it("shows exact ANTHROPIC markets without a dedicated Astro route panel", async () => {
     const now = "2026-09-22T09:00:00Z";
     const lighterMarket = {
       symbol: "ANTHROPICUSDT",
@@ -1360,8 +1360,8 @@ describe("InstrumentLookupPage", () => {
     expect(within(exactTable).getByText("RH Lighter")).toBeTruthy();
     expect(within(exactTable).getByText(/DEX io/)).toBeTruthy();
     expect(within(exactTable).getAllByText(/ANTHROPIC/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText("真实行情已匹配")).toHaveLength(2);
-    expect(screen.getByText("已匹配 Robinhood Lighter 真实公开行情")).toBeTruthy();
+    expect(screen.queryByText("Astro 路由证据")).toBeNull();
+    expect(screen.queryByText("已匹配 Robinhood Lighter 真实公开行情")).toBeNull();
 
     await userEvent.click(screen.getByRole("button", {
       name: `价差查询 ANTHROPICUSDT ${spread.id}`

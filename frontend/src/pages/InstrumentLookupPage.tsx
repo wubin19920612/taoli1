@@ -839,8 +839,6 @@ export function InstrumentLookupPage() {
     }),
     { spot: 0, future: 0 }
   );
-  const astroRoutes = result?.astro_routes ?? [];
-  const routeErrors = result?.route_errors ?? {};
   const instrumentSpreads = result?.spreads ?? [];
   const hiddenSpreadTypeSet = new Set(hiddenSpreadTypes);
   const spreadExchanges = [...new Set(instrumentSpreads.flatMap(
@@ -1418,44 +1416,6 @@ export function InstrumentLookupPage() {
                 </article>
               );
             })}
-          </div>
-        </section>
-      ) : null}
-
-      {astroRoutes.length || Object.keys(routeErrors).length ? (
-        <section className="instrument-market-table instrument-route-evidence">
-          <div className="instrument-section-head">
-            <div>
-              <Typography.Title level={4}>Astro 路由证据</Typography.Title>
-              <Typography.Text type="secondary">仅用于发现真实腿；Astro 卡片不提供实时行情</Typography.Text>
-            </div>
-            <Tag>{astroRoutes.length} 条路由腿</Tag>
-          </div>
-          {Object.entries(routeErrors).map(([source, routeError]) => (
-            <Alert key={source} type="warning" showIcon message={`${source} 路由读取失败`} description={routeError} />
-          ))}
-          <div className="instrument-route-list">
-            {astroRoutes.map((route, index) => (
-              <article
-                className="instrument-route-row"
-                key={`${route.card_id ?? route.card_name}:${route.side}:${route.route}:${route.dex ?? ""}:${index}`}
-              >
-                <div>
-                  <strong>{route.route}</strong>
-                  <span>{route.card_name} · {route.side === "buy" ? "买腿" : "卖腿"} · 对手 {route.counterparty_route}</span>
-                </div>
-                <div>
-                  <span>{marketTypeLabel(route.market_type)} · {route.dex ? `DEX ${route.dex} · ` : ""}{route.astro_raw_symbol}</span>
-                  <span>规范 {route.canonical_symbol}{route.matched_raw_symbol ? ` · 匹配 ${route.matched_raw_symbol}` : ""}</span>
-                </div>
-                <Tag color={route.status === "live_market" ? "green" : route.status === "route_only" ? "gold" : "red"}>
-                  {route.status === "live_market" ? "真实行情已匹配" : route.status === "route_only" ? "仅 Astro 路由" : "真实市场缺失"}
-                </Tag>
-                <Tooltip title={`${route.reason}；证据来源：${route.source}`}>
-                  <span className="instrument-route-reason">{route.reason}</span>
-                </Tooltip>
-              </article>
-            ))}
           </div>
         </section>
       ) : null}
