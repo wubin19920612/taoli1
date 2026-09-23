@@ -696,6 +696,64 @@ describe("InstrumentLookupPage", () => {
     expect(screen.getByText(/人工建卡，仅作风险提示，未拦截创建/)).not.toBeNull();
   });
 
+  it("autocompletes exchange names and filters either spread leg alongside type filters", async () => {
+    const extendedLookup = {
+      ...lookupResult,
+      spreads: [
+        ...lookupResult.spreads,
+        {
+          ...lookupResult.spreads[1],
+          id: "lighter:future->okx:future",
+          buy_exchange: "lighter",
+          sell_exchange: "okx",
+          executable_spread_pct: 0.12
+        },
+        {
+          ...lookupResult.spreads[1],
+          id: "rh-lighter:future->binance:future",
+          buy_exchange: "rh-lighter",
+          sell_exchange: "binance",
+          executable_spread_pct: 0.2
+        }
+      ]
+    };
+    const fallbackFetch = vi.mocked(fetch).getMockImplementation();
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("/instruments/")) return Response.json(extendedLookup);
+      return fallbackFetch!(input, init);
+    });
+
+    render(<InstrumentLookupPage />);
+    const section = (await screen.findByText("跨市场差价")).closest("section")!;
+    const search = within(section).getByRole("combobox", { name: "搜索差价交易所" });
+    expect(within(section).getByText("5 / 5 组")).not.toBeNull();
+
+    await userEvent.type(search, "li");
+    expect(within(section).getByText("2 / 5 组")).not.toBeNull();
+    await waitFor(() => {
+      expect([...document.querySelectorAll(".ant-select-item-option")]
+        .map((option) => option.textContent?.trim())).toEqual(["Lighter", "RH Lighter"]);
+    });
+
+    const rhOption = [...document.querySelectorAll<HTMLElement>(".ant-select-item-option")]
+      .find((option) => option.textContent?.trim() === "RH Lighter");
+    expect(rhOption).toBeDefined();
+    await userEvent.click(rhOption!);
+    expect(within(section).getByText("1 / 5 组")).not.toBeNull();
+    expect(within(section).getByText("+0.200%")).not.toBeNull();
+
+    await userEvent.clear(search);
+    await userEvent.type(search, "lighter");
+    expect(within(section).getByText("1 / 5 组")).not.toBeNull();
+    await userEvent.clear(search);
+    await userEvent.type(search, "OKX");
+    expect(within(section).getByText("3 / 5 组")).not.toBeNull();
+    await userEvent.click(within(section).getByRole("checkbox", { name: "FF 合约-合约" }));
+    expect(within(section).getByText("1 / 5 组")).not.toBeNull();
+    await userEvent.clear(search);
+    expect(within(section).getByText("2 / 5 组")).not.toBeNull();
+  });
+
   it("reverses both route legs and uses the reverse ask and bid when creating a card", async () => {
     (fetch as ReturnType<typeof vi.fn>).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);

@@ -1460,6 +1460,10 @@ body {
   justify-content: flex-end;
 }
 
+.instrument-spread-exchange-search {
+  width: 200px;
+}
+
 .instrument-spread-type-tag.ant-tag {
   display: inline-grid;
   gap: 2px;

@@ -13,6 +13,7 @@ import {
 } from "@ant-design/icons";
 import {
   Alert,
+  AutoComplete,
   Button,
   Checkbox,
   Descriptions,
@@ -682,6 +683,7 @@ export function InstrumentLookupPage() {
     "SS",
     "reverse_sf"
   ]);
+  const [spreadExchangeSearch, setSpreadExchangeSearch] = useState("");
   const [astroSymbol, setAstroSymbol] = useState("");
   const [astroSpread, setAstroSpread] = useState<InstrumentSpreadComparison | null>(null);
   const [astroReversed, setAstroReversed] = useState(false);
@@ -841,8 +843,27 @@ export function InstrumentLookupPage() {
   const routeErrors = result?.route_errors ?? {};
   const instrumentSpreads = result?.spreads ?? [];
   const hiddenSpreadTypeSet = new Set(hiddenSpreadTypes);
+  const spreadExchanges = [...new Set(instrumentSpreads.flatMap(
+    (spread) => [spread.buy_exchange, spread.sell_exchange]
+  ))].sort(exchangeNameOrder);
+  const exchangeSearchTerm = spreadExchangeSearch.trim().toLowerCase();
+  const exactExchange = spreadExchanges.find((exchange) => (
+    exchange.toLowerCase() === exchangeSearchTerm
+    || (exchangeLabels[exchange] ?? exchange).toLowerCase() === exchangeSearchTerm
+  ));
+  const exchangeMatchesSearch = (exchange: string) => (
+    !exchangeSearchTerm
+    || (exactExchange
+      ? exchange === exactExchange
+      : exchange.toLowerCase().includes(exchangeSearchTerm)
+        || (exchangeLabels[exchange] ?? exchange).toLowerCase().includes(exchangeSearchTerm))
+  );
+  const spreadExchangeOptions = spreadExchanges
+    .filter(exchangeMatchesSearch)
+    .map((exchange) => ({ value: exchangeLabels[exchange] ?? exchange }));
   const visibleInstrumentSpreads = instrumentSpreads.filter(
     (spread) => !hiddenSpreadTypeSet.has(spreadTypeFilter(spread.opportunity_type))
+      && (exchangeMatchesSearch(spread.buy_exchange) || exchangeMatchesSearch(spread.sell_exchange))
   );
   const visibleTradeMarkets = tradeStatus?.markets.filter((market) => {
     if (tradeOnlyIssues && !tradeMarketHasIssue(market)) return false;
@@ -1749,6 +1770,19 @@ export function InstrumentLookupPage() {
               <Typography.Text type="secondary">按买入 Ask、卖出 Bid 计算，每组市场保留较优方向</Typography.Text>
             </div>
             <Space size={[10, 4]} wrap className="instrument-spread-filters">
+              <AutoComplete
+                className="instrument-spread-exchange-search"
+                value={spreadExchangeSearch}
+                options={spreadExchangeOptions}
+                onChange={setSpreadExchangeSearch}
+                allowClear
+              >
+                <Input
+                  aria-label="搜索差价交易所"
+                  prefix={<SearchOutlined />}
+                  placeholder="搜索交易所（买入或卖出）"
+                />
+              </AutoComplete>
               <Typography.Text type="secondary">屏蔽类型</Typography.Text>
               {spreadTypeFilterOptions.map((option) => (
                 <Checkbox
