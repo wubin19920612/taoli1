@@ -126,6 +126,25 @@ def test_cooldown_suppresses_repeated_alerts() -> None:
     assert len(engine.evaluate([opportunity()], [rule], now=now + timedelta(seconds=301))) == 1
 
 
+def test_batch_limit_does_not_cool_down_unsent_opportunity() -> None:
+    engine = AlertEngine()
+    rule = AlertRule(name="batch limit", types=["FF"], consecutive_hits=1, cooldown_seconds=300)
+    now = datetime.now(UTC)
+    candidates = [
+        opportunity(spread=0.8 + index / 10).model_copy(
+            update={"id": f"opp-{index}", "symbol": f"TOKEN{index}USDT"}
+        )
+        for index in range(11)
+    ]
+
+    first = engine.evaluate(candidates, [rule], now=now)
+    assert len(first) == 10
+    unsent = next(item for item in candidates if item.id not in {match.opportunity.id for match in first})
+
+    second = engine.evaluate(candidates, [rule], now=now + timedelta(seconds=5))
+    assert [match.opportunity.id for match in second] == [unsent.id]
+
+
 def test_decaying_signal_is_suppressed_after_consecutive_hits() -> None:
     engine = AlertEngine()
     rule = AlertRule(

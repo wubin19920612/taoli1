@@ -1,3 +1,5 @@
+from datetime import UTC, datetime, timedelta
+
 import httpx
 import pytest
 
@@ -10,7 +12,12 @@ from app.exchanges.gate import GateAdapter
 from app.exchanges.htx import HTXAdapter
 from app.exchanges.hyperliquid import HyperliquidAdapter
 from app.exchanges.okx import OKXAdapter, okx_ticker_volume_24h_usdt
-from app.models.market import MarketType
+from app.models.alert import AlertRule
+from app.models.market import MarketSnapshot, MarketType
+from app.models.settings import RiskSettings
+from app.services.alert_engine import AlertEngine
+from app.services.risk_labels import apply_risk_labels
+from app.services.spread_engine import build_opportunities
 
 
 class FakeResponse:
@@ -424,6 +431,8 @@ async def test_aster_uses_funding_info_interval_over_default() -> None:
                     "fundingIntervalHours": 4,
                 }
             ],
+            "premiumIndex": [],
+            "ticker/24hr": [],
         }
     )
     adapter = AsterAdapter(client=client)
@@ -432,6 +441,77 @@ async def test_aster_uses_funding_info_interval_over_default() -> None:
 
     assert rows[0].funding_interval_hours == 4
     assert any("fundingInfo" in url for url in client.urls)
+
+
+@pytest.mark.asyncio
+async def test_aster_futures_metadata_enables_gate_spot_alert() -> None:
+    client = FundingIntervalClient({
+        "ticker/bookTicker": [{
+            "symbol": "TAKEUSDT", "bidPrice": "0.160060", "askPrice": "0.160700",
+        }],
+        "fundingInfo": [{"symbol": "TAKEUSDT", "fundingIntervalHours": 4}],
+        "premiumIndex": [{
+            "symbol": "TAKEUSDT", "lastFundingRate": "0.00285410",
+            "nextFundingTime": 1790164800000, "time": 1790150955000,
+            "markPrice": "0.16581116", "indexPrice": "0.16535568",
+        }],
+        "ticker/24hr": [{"symbol": "TAKEUSDT", "quoteVolume": "4902707.75"}],
+    })
+    [future] = await AsterAdapter(client=client).fetch_future_tickers()
+
+    assert future.funding_rate_pct == pytest.approx(0.285410)
+    assert future.funding_next_rate_pct is None
+    assert future.funding_interval_hours == 4
+    assert future.funding_next_time == datetime.fromtimestamp(1790164800, UTC)
+    assert future.volume_24h_usdt == pytest.approx(4_902_707.75)
+    assert future.mark_price == pytest.approx(0.16581116)
+    assert future.index_price == pytest.approx(0.16535568)
+    assert future.upstream_timestamp is None
+
+    now = datetime.now(UTC)
+    spot = MarketSnapshot(
+        symbol="TAKEUSDT", base="TAKE", exchange="gate", market_type=MarketType.SPOT,
+        bid=0.157748, ask=0.158922, volume_24h_usdt=2_470_465,
+        timestamp=now, raw_symbol="TAKE_USDT",
+    )
+    settings = RiskSettings()
+    [opportunity] = build_opportunities([spot, future], mode="SF")
+    opportunity = apply_risk_labels(opportunity, settings, now=now)
+    assert "MISSING_FUNDING" not in opportunity.risk_labels
+    rule = AlertRule(
+        name="gate-aster", types=["SF"], min_open_spread_pct=1,
+        favorable_funding_open_spread_pct=0.7, min_volume_24h_usdt=1_000_000,
+        consecutive_hits=3, cooldown_seconds=300,
+    )
+    engine = AlertEngine()
+    for step in range(2):
+        assert engine.evaluate([opportunity], [rule], now=now + timedelta(seconds=step * 5), risk_settings=settings) == []
+    assert len(engine.evaluate([opportunity], [rule], now=now + timedelta(seconds=10), risk_settings=settings)) == 1
+
+
+@pytest.mark.asyncio
+async def test_aster_missing_premium_preserves_book() -> None:
+    client = FailingFragmentClient({
+        "ticker/bookTicker": [{
+            "symbol": "TAKEUSDT", "bidPrice": "0.160060", "askPrice": "0.160700",
+        }],
+        "fundingInfo": [{"symbol": "TAKEUSDT", "fundingIntervalHours": 4}],
+        "ticker/24hr": [{"symbol": "TAKEUSDT", "quoteVolume": "4902707.75"}],
+    }, failing_fragment="premiumIndex")
+    [future] = await AsterAdapter(client=client).fetch_future_tickers()
+
+    assert future.funding_rate_pct is None
+    assert future.volume_24h_usdt == pytest.approx(4_902_707.75)
+    now = datetime.now(UTC)
+    spot = MarketSnapshot(
+        symbol="TAKEUSDT", base="TAKE", exchange="gate", market_type=MarketType.SPOT,
+        bid=0.157748, ask=0.158922, volume_24h_usdt=2_470_465,
+        timestamp=now, raw_symbol="TAKE_USDT",
+    )
+    [candidate] = build_opportunities([spot, future], mode="SF")
+    candidate = apply_risk_labels(candidate, RiskSettings(), now=now)
+    assert "MISSING_FUNDING" in candidate.risk_labels
+    assert AlertEngine().evaluate([candidate], [AlertRule(name="default", consecutive_hits=1)], now=now) == []
 
 
 @pytest.mark.asyncio
@@ -447,6 +527,8 @@ async def test_aster_leaves_interval_unknown_when_funding_info_fails() -> None:
                     "askQty": "1",
                 }
             ],
+            "premiumIndex": [{"symbol": "SBETUSDT", "lastFundingRate": "0.0001"}],
+            "ticker/24hr": [],
         },
         failing_fragment="fundingInfo",
     )
@@ -455,6 +537,26 @@ async def test_aster_leaves_interval_unknown_when_funding_info_fails() -> None:
     rows = await adapter.fetch_future_tickers()
 
     assert rows[0].funding_interval_hours is None
+    assert rows[0].funding_rate_pct == pytest.approx(0.01)
+
+
+@pytest.mark.asyncio
+async def test_aster_24h_volume_failure_preserves_funding() -> None:
+    client = FailingFragmentClient(
+        {
+            "ticker/bookTicker": [
+                {"symbol": "TAKEUSDT", "bidPrice": "0.16", "askPrice": "0.161"}
+            ],
+            "fundingInfo": [{"symbol": "TAKEUSDT", "fundingIntervalHours": 4}],
+            "premiumIndex": [{"symbol": "TAKEUSDT", "lastFundingRate": "-0.0005"}],
+        },
+        failing_fragment="ticker/24hr",
+    )
+
+    [future] = await AsterAdapter(client=client).fetch_future_tickers()
+
+    assert future.funding_rate_pct == pytest.approx(-0.05)
+    assert future.volume_24h_usdt is None
 
 
 @pytest.mark.asyncio
@@ -991,7 +1093,7 @@ def test_exchange_adapters_use_shared_get_json(adapter_cls, monkeypatch) -> None
     asyncio.run(adapter.fetch_future_tickers())
 
     expected_calls_by_adapter = {
-        AsterAdapter: 3,
+        AsterAdapter: 5,
         BitgetAdapter: 5,
         BybitAdapter: 2,
         GateAdapter: 3,

@@ -5,7 +5,11 @@ from app.models.alert import AlertRule
 from app.models.market import MarketType
 from app.models.opportunity import Opportunity, OpportunityType
 from app.models.settings import RiskSettings
-from app.services.alert_metrics import AlertObservation, combined_open_edge_pct, observe_alert_metrics
+from app.services.alert_metrics import (
+    AlertObservation,
+    combined_open_edge_pct,
+    observe_alert_metrics,
+)
 from app.services.funding_edge import funding_edge_pct
 from app.services.risk_labels import effective_open_edge_pct, known_volume_24h_usdt
 
@@ -63,7 +67,6 @@ class AlertEngine:
                 last_sent = self._last_sent.get(key)
                 if last_sent and (current - last_sent).total_seconds() < rule.cooldown_seconds:
                     continue
-                self._last_sent[key] = current
                 matches.append(
                     AlertMatch(
                         rule=rule,
@@ -75,7 +78,10 @@ class AlertEngine:
             if key not in active_keys:
                 self._hits.pop(key, None)
                 self._observations.pop(key, None)
-        return _limit_matches_per_symbol(matches)
+        selected = _limit_matches_per_symbol(matches)
+        for match in selected:
+            self._last_sent[f"{match.rule.id}:{match.opportunity.id}"] = current
+        return selected
 
     def _matches(
         self,
@@ -155,9 +161,7 @@ def opportunity_matches_rule(
         return False
     if (now - opportunity.last_seen_at).total_seconds() > rule.max_data_age_seconds:
         return False
-    if set(opportunity.risk_labels).intersection(rule.excluded_risk_labels):
-        return False
-    return True
+    return not set(opportunity.risk_labels).intersection(rule.excluded_risk_labels)
 
 
 def observations_are_stable(observations: list[AlertObservation], settings: RiskSettings) -> bool:
