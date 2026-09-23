@@ -240,6 +240,54 @@ function marketDex(market: MarketSnapshot): string | null {
   return separator > 0 ? market.raw_symbol.slice(0, separator).toLowerCase() : "main";
 }
 
+function exactMarketKey(market: Pick<MarketSnapshot, "exchange" | "market_type" | "raw_symbol" | "dex">): string | null {
+  const rawSymbol = market.raw_symbol?.trim();
+  if (!rawSymbol || !market.exchange || !market.market_type) return null;
+  const prefix = market.exchange.toLowerCase() === "hyperliquid" && market.market_type === "future"
+    ? rawSymbol.includes(":") ? rawSymbol.split(":", 1)[0].toLowerCase() : "main"
+    : null;
+  const declaredDex = market.dex?.trim().toLowerCase() || null;
+  if (prefix && declaredDex && prefix !== declaredDex) return null;
+  return JSON.stringify([market.exchange.toLowerCase(), market.market_type, rawSymbol.toUpperCase(), declaredDex ?? prefix ?? ""]);
+}
+
+function associateMarkets(quotes: InstrumentMarketCandidate[], diagnostics: MarketTradeAvailability[]) {
+  const counts = (keys: Array<string | null>) => keys.reduce((result, key) => {
+    if (key) result.set(key, (result.get(key) ?? 0) + 1);
+    return result;
+  }, new Map<string, number>());
+  const quoteCounts = counts(quotes.map(exactMarketKey));
+  const diagnosticCounts = counts(diagnostics.map(exactMarketKey));
+  const uniqueDiagnostics = new Map(diagnostics.map((market) => [exactMarketKey(market), market]));
+  const rows: Array<{ quote: InstrumentMarketCandidate | null; diagnostic: MarketTradeAvailability | null }> = quotes.map((quote) => {
+    const key = exactMarketKey(quote);
+    return {
+      quote,
+      diagnostic: key && quoteCounts.get(key) === 1 && diagnosticCounts.get(key) === 1
+        ? uniqueDiagnostics.get(key) ?? null : null
+    };
+  });
+  for (const diagnostic of diagnostics) {
+    const key = exactMarketKey(diagnostic);
+    if (!key || quoteCounts.get(key) !== 1 || diagnosticCounts.get(key) !== 1) {
+      rows.push({ quote: null, diagnostic });
+    }
+  }
+  return rows;
+}
+
+function diagnosticFreshness(market: MarketTradeAvailability, quote: InstrumentMarketCandidate | null): string | null {
+  const observed = Date.parse(market.observed_at);
+  const quoteTime = quote ? Date.parse(quote.upstream_timestamp ?? quote.timestamp) : NaN;
+  const cutoff = (quote?.stale_after_seconds ?? 30) * 1000;
+  if (!Number.isFinite(observed)) return "诊断时间未知";
+  if (Date.now() - observed > cutoff) return "诊断已过期";
+  if (Number.isFinite(quoteTime) && quoteTime - observed > cutoff) return "诊断旧于行情";
+  if (!market.orderbook_updated_at || !Number.isFinite(Date.parse(market.orderbook_updated_at)) || Date.now() - Date.parse(market.orderbook_updated_at) > cutoff) return "盘口过期或缺失";
+  if (!Number.isFinite(Date.parse(market.market_data_updated_at)) || Date.now() - Date.parse(market.market_data_updated_at) > cutoff) return "诊断行情已过期";
+  return null;
+}
+
 function pairSpreadSymbol(exchange: string, rawSymbol: string | null | undefined, fallback: string): string {
   const value = rawSymbol?.trim() || fallback;
   if (exchange !== "hyperliquid") return value;
@@ -382,6 +430,10 @@ function fullTime(value: string | null | undefined): string {
   return value ? dayjs.utc(value).utcOffset(8).format("MM-DD HH:mm:ss") : "-";
 }
 
+function marketTime(value: string | null | undefined): string {
+  return value ? dayjs.utc(value).utcOffset(8).format("YYYY-MM-DD HH:mm:ss") : "-";
+}
+
 function ageText(value: string | null | undefined): string {
   if (!value) return "-";
   const seconds = Math.max(0, dayjs().diff(dayjs.utc(value), "second"));
@@ -501,6 +553,90 @@ function tradeMarketHasRestriction(market: MarketTradeAvailability): boolean {
 function tradeMarketHasUnknown(market: MarketTradeAvailability): boolean {
   return relevantTradeActions(market).some(
     (action) => action.state === "unknown" || action.state === "conditional"
+  );
+}
+
+function MarketDiagnosticDetails({
+  market, quote, source, watch, watchSaving, onToggleWatch
+}: {
+  market: MarketTradeAvailability;
+  quote: InstrumentMarketCandidate | null;
+  source: string;
+  watch: TradeAvailabilityWatch | undefined;
+  watchSaving: boolean;
+  onToggleWatch: () => void;
+}) {
+  const issue = tradeMarketHasIssue(market);
+  const restriction = tradeMarketHasRestriction(market);
+  const unknown = tradeMarketHasUnknown(market);
+  const reason = market.public_restrictions.join("；")
+    || (issue ? "公开接口未返回足够信息" : "未发现公开市场限制");
+  const freshness = diagnosticFreshness(market, quote);
+  return (
+    <details className="instrument-market-diagnostics" role="cell">
+      <summary>
+        市场诊断 · {ageText(market.observed_at)}
+        {freshness ? <Tag color="orange">{freshness}</Tag> : <Tag color="green">诊断新鲜</Tag>}
+        {restriction ? <Tag color="red">交易受限</Tag> : unknown ? <Tag color="gold">交易待核实</Tag> : null}
+      </summary>
+      <div className="instrument-market-diagnostic-meta">
+        <span>诊断来源：{source} · 公开状态来源：{market.public_status_source}</span>
+        <span>诊断时间：{marketTime(market.observed_at)} · 行情快照：{marketTime(market.market_data_updated_at)} · 盘口：{marketTime(market.orderbook_updated_at)}</span>
+        {quote ? <span>与上方行情时间分别记录，不视为同步报价（行情：{marketTime(quote.upstream_timestamp ?? quote.timestamp)}）</span> : null}
+      </div>
+      <div className="instrument-market-diagnostic-content">
+        <div className="instrument-market-data-group">
+          <span className="instrument-market-data-group-name">盘口与流动性</span>
+          <TradeMetric label="盘口实际买一 Bid" value={price(market.best_bid)} tone="bid" />
+          <TradeMetric label="盘口实际卖一 Ask" value={price(market.best_ask)} tone="ask" />
+          <TradeMetric label="0.1% 买深度" value={compactUsdt(market.bid_depth_01pct_usdt)} />
+          <TradeMetric label="0.1% 卖深度" value={compactUsdt(market.ask_depth_01pct_usdt)} />
+          <TradeMetric label="1% 买深度" value={compactUsdt(market.bid_depth_1pct_usdt)} />
+          <TradeMetric label="1% 卖深度" value={compactUsdt(market.ask_depth_1pct_usdt)} />
+          <TradeMetric label="诊断 24h 成交额" value={compactUsdt(market.volume_24h_usdt)} />
+        </div>
+        <div className="instrument-market-data-group">
+          <span className="instrument-market-data-group-name">交易限制</span>
+          <Tooltip title={market.public_status_source}><Tag color={restriction ? "red" : unknown ? "gold" : "green"}>公开 {market.public_status_code}</Tag></Tooltip>
+          <span>{reason}</span>
+          <div>
+            {market.diagnostics.filter((evidence) => evidence.scope !== "public_market" && ["confirmed", "error"].includes(evidence.state))
+              .map((evidence) => <TradeEvidenceTag key={evidence.scope + ":" + evidence.reason_code} evidence={evidence} />)}
+          </div>
+          <div className={market.market_type === "spot" ? "instrument-trade-action-grid-spot" : "instrument-trade-action-grid"}>
+            <TradeActionTile action={market.buy_open} label={market.market_type === "spot" ? "买入" : "开多"} />
+            <TradeActionTile action={market.sell_open} label={market.market_type === "spot" ? "卖出" : "开空"} />
+            {market.market_type === "future" ? <>
+              <TradeActionTile action={market.buy_reduce_only} label="平空" hint="Reduce Only Buy" />
+              <TradeActionTile action={market.sell_reduce_only} label="平多" hint="Reduce Only Sell" />
+            </> : null}
+          </div>
+          {issue || watch ? <Button
+            size="small" type={watch ? "default" : "primary"}
+            icon={watch ? <CloseOutlined /> : <BellOutlined />}
+            aria-label={"市场 " + (exchangeLabels[market.exchange] ?? market.exchange) + " " + market.market_type + " " + (market.dex ? market.dex + " " : "") + market.raw_symbol + " " + (watch ? "取消恢复通知" : "订阅恢复通知")}
+            loading={watchSaving} onClick={onToggleWatch}
+          >{watch ? "已订阅" : "订阅恢复"}</Button> : null}
+        </div>
+        <div className="instrument-market-data-group">
+          <span className="instrument-market-data-group-name">资金与费用（诊断口径）</span>
+          <TradeMetric label="资金费率 / 周期" value={market.market_type === "future" ? signedPct(market.funding_rate_pct, 6) + " / " + (market.funding_interval_hours ? market.funding_interval_hours + "h" : "未返回") : "-"} />
+          <TradeMetric label="预估资金费率" value={market.market_type === "future" ? signedPct(market.funding_next_rate_pct, 6) : "-"} />
+          <TradeMetric label="Maker / Taker" value={(market.maker_fee_pct === null ? "未返回" : signedPct(market.maker_fee_pct, 4)) + " / " + (market.taker_fee_pct === null ? "未返回" : signedPct(market.taker_fee_pct, 4))} />
+          <TradeMetric label="手续费计入情况" value={market.fees_included ? "已计入" : "未计入"} tooltip={market.fee_note} />
+          <span>{market.fee_note}</span>
+        </div>
+        <div className="instrument-market-data-group">
+          <span className="instrument-market-data-group-name">合约规格与数据质量</span>
+          <TradeMetric label="诊断价格倍率" value={market.market_multiplier + "x"} />
+          <TradeMetric label="诊断数量乘数" value={String(market.contract_size_multiplier)} />
+          <TradeMetric label="盘口来源" value={market.orderbook_source} tooltip={market.orderbook_source} />
+          <TradeMetric label="盘口更新时间" value={ageText(market.orderbook_updated_at)} tooltip={marketTime(market.orderbook_updated_at)} />
+          <TradeMetric label="诊断行情更新时间" value={ageText(market.market_data_updated_at)} tooltip={marketTime(market.market_data_updated_at)} />
+          <TradeMetric label="诊断更新时间" value={ageText(market.observed_at)} tooltip={marketTime(market.observed_at)} />
+        </div>
+      </div>
+    </details>
   );
 }
 
@@ -666,6 +802,7 @@ export function InstrumentLookupPage() {
   const [tradeStatus, setTradeStatus] = useState<TradeAvailabilityResult | null>(null);
   const [tradeWatches, setTradeWatches] = useState<TradeAvailabilityWatch[]>([]);
   const [tradeStatusError, setTradeStatusError] = useState("");
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
   const [tradeWatchSaving, setTradeWatchSaving] = useState("");
   const [tradeAvailabilityFilter, setTradeAvailabilityFilter] = useState<"all" | "blocked" | "unknown">("all");
   const [tradeOnlyIssues, setTradeOnlyIssues] = useState(false);
@@ -711,6 +848,9 @@ export function InstrumentLookupPage() {
       const next = await lookupInstrument(normalized);
       if (requestId !== requestIdRef.current) return;
       setResult(next);
+      setTradeStatus(null);
+      setTradeStatusError("");
+      setDiagnosticsLoading(next.market_count > 0);
       if (next.market_count > 0) {
         const [statusResult, watchesResult] = await Promise.allSettled([
           getTradeAvailability(next.symbol),
@@ -725,6 +865,7 @@ export function InstrumentLookupPage() {
           setTradeStatusError(statusResult.reason instanceof Error ? statusResult.reason.message : String(statusResult.reason));
         }
         if (watchesResult.status === "fulfilled") setTradeWatches(watchesResult.value);
+        setDiagnosticsLoading(false);
       } else {
         setTradeStatus(null);
         setTradeStatusError("");
@@ -863,17 +1004,18 @@ export function InstrumentLookupPage() {
     (spread) => !hiddenSpreadTypeSet.has(spreadTypeFilter(spread.opportunity_type))
       && (exchangeMatchesSearch(spread.buy_exchange) || exchangeMatchesSearch(spread.sell_exchange))
   );
-  const visibleTradeMarkets = tradeStatus?.markets.filter((market) => {
-    if (tradeOnlyIssues && !tradeMarketHasIssue(market)) return false;
-    if (tradeAvailabilityFilter === "blocked" && !tradeMarketHasRestriction(market)) return false;
-    if (tradeAvailabilityFilter === "unknown" && !tradeMarketHasUnknown(market)) return false;
+  const marketRows = associateMarkets(instrumentMarkets, tradeStatus && tradeStatus.query === result?.symbol ? tradeStatus.markets : []);
+  const visibleMarketRows = marketRows.filter(({ quote, diagnostic }) => {
+    const marketType = quote?.market_type ?? diagnostic?.market_type;
+    if (tradeMarketTypeFilter !== "all" && marketType !== tradeMarketTypeFilter) return false;
+    if (!diagnostic) return true;
+    if (tradeOnlyIssues && !tradeMarketHasIssue(diagnostic)) return false;
+    if (tradeAvailabilityFilter === "blocked" && !tradeMarketHasRestriction(diagnostic)) return false;
+    if (tradeAvailabilityFilter === "unknown" && !tradeMarketHasUnknown(diagnostic)) return false;
     return true;
-  }) ?? [];
+  });
   const spotTransferMarkets = tradeStatus?.markets.filter(
     (market) => market.market_type === "spot"
-  ) ?? [];
-  const visibleExchangeMarkets = tradeStatus?.markets.filter(
-    (market) => tradeMarketTypeFilter === "all" || market.market_type === tradeMarketTypeFilter
   ) ?? [];
 
   const tradeMarketKey = (market: MarketTradeAvailability) => (
@@ -1351,196 +1493,92 @@ export function InstrumentLookupPage() {
         <div><span>快照时间</span><strong>{fullTime(result?.observed_at)}</strong></div>
       </section>
 
-      {instrumentMarkets.length ? (
+      {marketRows.length > 0 ? (
         <section className="instrument-market-table instrument-exact-markets">
           <div className="instrument-section-head">
             <div>
               <Typography.Title level={4}>精确行情市场</Typography.Title>
-              <Typography.Text type="secondary">按交易所、市场类型、原始市场和 DEX 分开；缺失字段不补零</Typography.Text>
+              <Typography.Text type="secondary">逐个原始市场展示；盘口、公开限制及费用需展开查看，各自时间独立</Typography.Text>
             </div>
-            <Tag>{instrumentMarkets.length} 个真实市场</Tag>
-          </div>
-          <div className="instrument-market-data-list" role="table" aria-label="精确行情市场">
-            <div className="instrument-market-data-head" role="row">
-              <span>市场身份</span><span>可成交价格</span><span>成交额</span><span>资金费率</span><span>倍率</span><span>数据状态</span>
-            </div>
-            {instrumentMarkets.map((market) => {
-              const dex = marketDex(market);
-              const priceMultiplier = market.symbol_alias_price_multiplier ?? 1;
-              const qualityTimestamp = market.upstream_timestamp ?? market.timestamp;
-              return (
-                <article
-                  className={`instrument-market-data-row${market.data_status === "stale" ? " instrument-market-data-row-stale" : ""}`}
-                  key={`${market.exchange}:${market.market_type}:${dex ?? ""}:${market.raw_symbol}`}
-                  role="row"
-                >
-                  <div className="instrument-market-data-identity" role="cell">
-                    <strong>{exchangeLabels[market.exchange] ?? market.exchange}</strong>
-                    <span>{marketTypeLabel(market.market_type)} · {dex ? `DEX ${dex} · ` : ""}{market.raw_symbol}</span>
-                    <span>规范标的 {market.symbol}</span>
-                    <Tag color={market.data_status === "live" ? "green" : "red"}>
-                      {market.data_status === "live" ? "实时" : "已过期"}
-                    </Tag>
-                  </div>
-                  <div className="instrument-market-data-group" role="cell">
-                    <span className="instrument-market-data-group-name">可成交价格</span>
-                    <TradeMetric label="买一 Bid" value={price(market.bid)} tone="bid" />
-                    <TradeMetric label="卖一 Ask" value={price(market.ask)} tone="ask" />
-                    <TradeMetric label="标记 / 指数" value={`${price(market.mark_price)} / ${price(market.index_price)}`} />
-                  </div>
-                  <div className="instrument-market-data-group" role="cell">
-                    <span className="instrument-market-data-group-name">成交额</span>
-                    <TradeMetric label="24h 成交额" value={compactUsdt(market.volume_24h_usdt)} />
-                    <TradeMetric label="买一数量" value={market.bid_size === null || market.bid_size === undefined ? "-" : String(market.bid_size)} />
-                    <TradeMetric label="卖一数量" value={market.ask_size === null || market.ask_size === undefined ? "-" : String(market.ask_size)} />
-                  </div>
-                  <div className="instrument-market-data-group" role="cell">
-                    <span className="instrument-market-data-group-name">资金费率</span>
-                    <TradeMetric label="当前 / 周期" value={market.market_type === "spot" ? "现货" : `${signedPct(market.funding_rate_pct, 6)} / ${market.funding_interval_hours ? `${market.funding_interval_hours}h` : "-"}`} />
-                    <TradeMetric label="下期预估" value={market.market_type === "spot" ? "-" : signedPct(market.funding_next_rate_pct, 6)} />
-                    <TradeMetric label="下次结算" value={market.market_type === "spot" ? "-" : fullTime(market.funding_next_time)} />
-                  </div>
-                  <div className="instrument-market-data-group" role="cell">
-                    <span className="instrument-market-data-group-name">倍率</span>
-                    <TradeMetric label="价格倍率" value={`${priceMultiplier}x`} />
-                    <TradeMetric label="合约数量乘数" value={market.contract_size_multiplier === null || market.contract_size_multiplier === undefined ? "-" : String(market.contract_size_multiplier)} />
-                    <TradeMetric label="价格口径" value={priceMultiplier === 1 ? "原始 = 规范" : `原始 x ${priceMultiplier}`} />
-                  </div>
-                  <div className="instrument-market-data-group" role="cell">
-                    <span className="instrument-market-data-group-name">数据状态</span>
-                    <TradeMetric label="来源" value={market.data_source || "未标注"} tooltip={market.data_source || undefined} />
-                    <TradeMetric label="更新时间" value={ageText(qualityTimestamp)} tooltip={fullTime(qualityTimestamp)} />
-                    <TradeMetric label="估算字段" value={market.estimated_fields?.length ? market.estimated_fields.join("、") : "无"} />
-                    {market.error ? <TradeMetric label="上游错误" value={market.error} tooltip={market.error} tone="negative" /> : null}
-                  </div>
-                </article>
-              );
-            })}
-          </div>
-        </section>
-      ) : null}
-
-      {tradeStatusError ? (
-        <Alert
-          type="warning"
-          showIcon
-          message="全交易所交易可用性诊断失败"
-          description={tradeStatusError}
-        />
-      ) : null}
-
-      {tradeStatus?.markets.length ? (
-        <section className="instrument-market-table instrument-trade-status">
-          <div className="instrument-section-head instrument-hl-status-head">
-            <div>
-              <Typography.Title level={4}>交易可用性</Typography.Title>
-              <Typography.Text type="secondary">只判断每个交易动作能否执行；异常优先展示</Typography.Text>
-            </div>
-            <Space size={8} wrap>
-              <Segmented<"all" | "blocked" | "unknown">
-                size="small"
-                value={tradeAvailabilityFilter}
-                options={[
-                  { label: "全部", value: "all" },
-                  { label: "有限制", value: "blocked" },
-                  { label: "未知", value: "unknown" }
-                ]}
-                onChange={setTradeAvailabilityFilter}
-              />
-              <Space size={5}>
-                <Switch size="small" checked={tradeOnlyIssues} onChange={setTradeOnlyIssues} />
-                <Typography.Text>只看异常</Typography.Text>
-              </Space>
+            <Space size={[8, 4]} wrap>
+              <Segmented<"all" | MarketType> size="small" value={tradeMarketTypeFilter}
+                options={[{ label: "全部", value: "all" }, { label: "现货", value: "spot" }, { label: "永续", value: "future" }]}
+                onChange={setTradeMarketTypeFilter} />
+              <Segmented<"all" | "blocked" | "unknown"> size="small" value={tradeAvailabilityFilter}
+                options={[{ label: "全部状态", value: "all" }, { label: "有限制", value: "blocked" }, { label: "未知", value: "unknown" }]}
+                onChange={setTradeAvailabilityFilter} />
+              <Space size={5}><Switch size="small" checked={tradeOnlyIssues} onChange={setTradeOnlyIssues} /><Typography.Text>只看异常</Typography.Text></Space>
+              <Tag>{instrumentMarkets.length} 个行情市场</Tag>
             </Space>
           </div>
-          {Object.keys(tradeStatus.errors).length ? (
-            <Alert
-              className="instrument-hl-alert"
-              type="warning"
-              showIcon
-              message={`${Object.keys(tradeStatus.errors).length} 个市场诊断降级`}
-              description={Object.entries(tradeStatus.errors).map(([key, value]) => `${key}: ${value}`).join(" | ")}
-            />
-          ) : null}
-          <div className="instrument-trade-market-list" role="table" aria-label="全交易所交易可用性明细">
-            <div className="instrument-trade-market-head" role="row">
-              <span>市场</span>
-              <span>公开状态与诊断</span>
-              <span>交易动作</span>
-              <span>恢复监控</span>
+          {diagnosticsLoading ? <Alert type="info" showIcon message="市场诊断加载中；行情仍可单独查看" /> : null}
+          {tradeStatusError ? <Alert type="warning" showIcon message="市场诊断失败；行情仍可查看" description={tradeStatusError} /> : null}
+          {tradeStatus && Object.keys(tradeStatus.errors).length ? <Alert type="warning" showIcon
+            message={Object.keys(tradeStatus.errors).length + " 个市场诊断降级"}
+            description={Object.entries(tradeStatus.errors).map(([key, value]) => key + ": " + value).join(" | ")} /> : null}
+          <div className="instrument-market-data-list" role="table" aria-label="精确行情市场">
+            <div className="instrument-market-data-head" role="row">
+              <span>市场身份</span><span>行情 Bid / Ask</span><span>成交额</span><span>资金费率</span><span>倍率</span><span>行情数据状态</span>
             </div>
-            {visibleTradeMarkets.map((market) => {
-              const watch = tradeWatchFor(market);
-              const hasIssue = tradeMarketHasIssue(market);
-              const publicTone = tradeMarketHasRestriction(market)
-                ? "red"
-                : tradeMarketHasUnknown(market)
-                  ? "gold"
-                  : "green";
-              const publicReason = market.public_restrictions.join("；")
-                || (hasIssue ? "公开接口未返回足够信息" : "未发现公开市场限制");
+            {visibleMarketRows.map(({ quote, diagnostic }, index) => {
+              const market = quote ?? diagnostic!;
+              const dex = quote ? marketDex(quote) : diagnostic?.dex;
+              const priceMultiplier = quote?.symbol_alias_price_multiplier ?? 1;
+              const qualityTimestamp = quote?.upstream_timestamp ?? quote?.timestamp;
               return (
-                <article
-                  className={`instrument-trade-market-row${hasIssue ? " instrument-trade-market-row-issue" : ""}`}
-                  key={tradeMarketKey(market)}
-                  role="row"
-                >
-                  <div className="instrument-trade-market-main">
-                    <div className="instrument-trade-market-identity" role="cell">
-                      <strong>{exchangeLabels[market.exchange] ?? market.exchange}</strong>
-                      <span>{marketTypeLabel(market.market_type)} · {market.dex ? `DEX ${market.dex} · ` : ""}{market.raw_symbol}</span>
-                      <span>{market.market_type} / {market.dex ? `${market.dex} / ` : ""}{market.raw_symbol}</span>
-                    </div>
-                    <div className="instrument-trade-public-state" role="cell">
-                      <div>
-                        <Tooltip title={market.public_status_source}>
-                          <Tag color={publicTone}>公开 {market.public_status_code}</Tag>
-                        </Tooltip>
-                        {market.diagnostics
-                          .filter((evidence) => evidence.scope !== "public_market" && ["confirmed", "error"].includes(evidence.state))
-                          .map((evidence) => <TradeEvidenceTag key={`${evidence.scope}:${evidence.reason_code}`} evidence={evidence} />)}
-                      </div>
-                      <Tooltip title={publicReason}>
-                        <span>{publicReason}</span>
-                      </Tooltip>
-                    </div>
-                    <div className="instrument-trade-actions" role="cell">
-                      <div className={`instrument-trade-action-grid${market.market_type === "spot" ? " instrument-trade-action-grid-spot" : ""}`}>
-                        <TradeActionTile action={market.buy_open} label={market.market_type === "spot" ? "买入" : "开多"} />
-                        <TradeActionTile action={market.sell_open} label={market.market_type === "spot" ? "卖出" : "开空"} />
-                        {market.market_type === "future" ? (
-                          <>
-                            <TradeActionTile action={market.buy_reduce_only} label="平空" hint="Reduce Only Buy" />
-                            <TradeActionTile action={market.sell_reduce_only} label="平多" hint="Reduce Only Sell" />
-                          </>
-                        ) : null}
-                      </div>
-                    </div>
-                    <div className="instrument-trade-watch" role="cell">
-                      {hasIssue || watch ? (
-                        <Tooltip title={watch?.last_error || (watch ? "停止服务端飞书恢复监控" : "交易动作从受限或未知恢复为可用时发送飞书提醒")}>
-                          <Button
-                            size="small"
-                            type={watch ? "default" : "primary"}
-                            icon={watch ? <CloseOutlined /> : <BellOutlined />}
-                            aria-label={`市场 ${exchangeLabels[market.exchange] ?? market.exchange} ${market.market_type} ${market.dex ? `${market.dex} ` : ""}${market.raw_symbol} ${watch ? "取消恢复通知" : "订阅恢复通知"}`}
-                            loading={tradeWatchSaving === tradeMarketKey(market)}
-                            onClick={() => void toggleTradeWatch(market)}
-                          >
-                            {watch ? "已订阅" : "订阅恢复"}
-                          </Button>
-                        </Tooltip>
-                      ) : <span className="instrument-trade-normal">正常</span>}
-                    </div>
+                <article className={"instrument-market-data-row" + (quote?.data_status === "stale" ? " instrument-market-data-row-stale" : "")}
+                  key={(exactMarketKey(market) ?? "unmatched") + ":" + index} role="row">
+                  <div className="instrument-market-data-identity" role="cell">
+                    <strong>{exchangeLabels[market.exchange] ?? market.exchange}</strong>
+                    <span>{marketTypeLabel(market.market_type)} · {dex ? "DEX " + dex + " · " : ""}{market.raw_symbol}</span>
+                    <span>规范标的 {market.symbol}</span>
+                    {quote ? <Tag color={quote.data_status === "live" ? "green" : "red"}>{quote.data_status === "live" ? "行情实时" : "行情已过期"}</Tag>
+                      : <Tag color="orange">仅诊断，未可靠关联行情</Tag>}
+                    {diagnostic && quote && diagnosticFreshness(diagnostic, quote) ? <Tag color="orange">{diagnosticFreshness(diagnostic, quote)}</Tag> : null}
                   </div>
+                  <div className="instrument-market-data-group" role="cell">
+                    <span className="instrument-market-data-group-name">行情可成交价格</span>
+                    <TradeMetric label="买一 Bid" value={price(quote?.bid)} tone="bid" />
+                    <TradeMetric label="卖一 Ask" value={price(quote?.ask)} tone="ask" />
+                    <TradeMetric label="标记 / 指数" value={quote ? price(quote.mark_price) + " / " + price(quote.index_price) : "-"} />
+                  </div>
+                  <div className="instrument-market-data-group" role="cell">
+                    <span className="instrument-market-data-group-name">行情成交额</span>
+                    <TradeMetric label="24h 成交额" value={compactUsdt(quote?.volume_24h_usdt)} />
+                    <TradeMetric label="买一数量" value={quote?.bid_size == null ? "-" : String(quote.bid_size)} />
+                    <TradeMetric label="卖一数量" value={quote?.ask_size == null ? "-" : String(quote.ask_size)} />
+                  </div>
+                  <div className="instrument-market-data-group" role="cell">
+                    <span className="instrument-market-data-group-name">行情资金费率</span>
+                    <TradeMetric label="当前 / 周期" value={!quote ? "-" : quote.market_type === "spot" ? "现货" : signedPct(quote.funding_rate_pct, 6) + " / " + (quote.funding_interval_hours ? quote.funding_interval_hours + "h" : "-")} />
+                    <TradeMetric label="下期预估" value={quote?.market_type === "future" ? signedPct(quote.funding_next_rate_pct, 6) : "-"} />
+                    <TradeMetric label="下次结算" value={quote?.market_type === "future" ? fullTime(quote.funding_next_time) : "-"} />
+                  </div>
+                  <div className="instrument-market-data-group" role="cell">
+                    <span className="instrument-market-data-group-name">行情倍率</span>
+                    <TradeMetric label="价格倍率" value={quote ? priceMultiplier + "x" : "-"} />
+                    <TradeMetric label="合约数量乘数" value={quote?.contract_size_multiplier == null ? "-" : String(quote.contract_size_multiplier)} />
+                    <TradeMetric label="价格口径" value={!quote ? "-" : priceMultiplier === 1 ? "原始 = 规范" : "原始 x " + priceMultiplier} />
+                  </div>
+                  <div className="instrument-market-data-group" role="cell">
+                    <span className="instrument-market-data-group-name">行情数据状态</span>
+                    <TradeMetric label="行情来源" value={quote?.data_source || "未标注"} tooltip={quote?.data_source} />
+                    <TradeMetric label="行情更新时间" value={ageText(qualityTimestamp)} tooltip={fullTime(qualityTimestamp)} />
+                    <TradeMetric label="行情时间戳" value={marketTime(qualityTimestamp)} />
+                    <TradeMetric label="估算字段" value={quote ? quote.estimated_fields?.length ? quote.estimated_fields.join("、") : quote.is_estimated ? "含估算" : "无" : "-"} />
+                    {quote?.error ? <TradeMetric label="上游错误" value={quote.error} tooltip={quote.error} tone="negative" /> : null}
+                  </div>
+                  {diagnostic ? <MarketDiagnosticDetails market={diagnostic} quote={quote} source={tradeStatus?.source ?? "公开诊断接口"}
+                    watch={tradeWatchFor(diagnostic)} watchSaving={tradeWatchSaving === tradeMarketKey(diagnostic)}
+                    onToggleWatch={() => void toggleTradeWatch(diagnostic)} />
+                    : <div className="instrument-market-diagnostic-missing" role="cell">{diagnosticsLoading ? "诊断加载中" : tradeStatusError ? "诊断请求失败，未混用其他市场数据" : "无可靠关联的市场诊断"}</div>}
                 </article>
               );
             })}
-            {visibleTradeMarkets.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前筛选下没有市场" /> : null}
+            {visibleMarketRows.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前筛选下没有市场" /> : null}
           </div>
         </section>
       ) : null}
-
       {spotTransferMarkets.length ? (
         <section className="instrument-market-table instrument-transfer-status">
           <div className="instrument-section-head">
@@ -1647,80 +1685,6 @@ export function InstrumentLookupPage() {
           </div>
         </section>
       ) : null}
-
-      <section className="instrument-market-table instrument-exchange-markets">
-        <div className="instrument-section-head">
-          <div>
-            <Typography.Title level={4}>交易所市场</Typography.Title>
-            <Typography.Text type="secondary">集中展示行情、流动性、费率、手续费与合约规格</Typography.Text>
-          </div>
-          <Space size={8} wrap>
-            <Segmented<"all" | MarketType>
-              size="small"
-              value={tradeMarketTypeFilter}
-              options={[
-                { label: "全部", value: "all" },
-                { label: "现货", value: "spot" },
-                { label: "永续", value: "future" }
-              ]}
-              onChange={setTradeMarketTypeFilter}
-            />
-            <Tag>{visibleExchangeMarkets.length} 个市场</Tag>
-          </Space>
-        </div>
-        <div className="instrument-market-data-list" role="table" aria-label="交易所市场行情与规格">
-          <div className="instrument-market-data-head" role="row">
-            <span>市场</span><span>可成交价格</span><span>流动性</span><span>资金与费用</span><span>合约规格</span><span>数据质量</span>
-          </div>
-          {visibleExchangeMarkets.map((market) => (
-            <article className="instrument-market-data-row" key={tradeMarketKey(market)} role="row">
-              <div className="instrument-market-data-identity">
-                <strong>{exchangeLabels[market.exchange] ?? market.exchange}</strong>
-                <span>{marketTypeLabel(market.market_type)} · {market.dex ? `DEX ${market.dex} · ` : ""}{market.raw_symbol}</span>
-                <span>{market.market_type} / {market.dex ? `${market.dex} / ` : ""}{market.raw_symbol}</span>
-                <Tag color={market.market_type === "spot" ? "green" : "blue"}>{marketTypeLabel(market.market_type)}</Tag>
-              </div>
-              <div className="instrument-market-data-group">
-                <span className="instrument-market-data-group-name">可成交价格</span>
-                <TradeMetric label="实际买一" value={price(market.best_bid)} tone="bid" />
-                <TradeMetric label="实际卖一" value={price(market.best_ask)} tone="ask" />
-                <TradeMetric label="标记价 / 指数价" value={`${price(market.mark_price)} / ${price(market.index_price)}`} />
-              </div>
-              <div className="instrument-market-data-group">
-                <span className="instrument-market-data-group-name">流动性</span>
-                <TradeMetric label="0.1% 买深度" value={compactUsdt(market.bid_depth_01pct_usdt)} />
-                <TradeMetric label="0.1% 卖深度" value={compactUsdt(market.ask_depth_01pct_usdt)} />
-                <TradeMetric label="1% 买深度" value={compactUsdt(market.bid_depth_1pct_usdt)} />
-                <TradeMetric label="1% 卖深度" value={compactUsdt(market.ask_depth_1pct_usdt)} />
-                <TradeMetric label="24h 成交额" value={compactUsdt(market.volume_24h_usdt)} />
-              </div>
-              <div className="instrument-market-data-group">
-                <span className="instrument-market-data-group-name">资金与费用</span>
-                <TradeMetric
-                  label="资金费率 / 周期"
-                  value={market.market_type === "future" ? `${signedPct(market.funding_rate_pct, 6)} / ${market.funding_interval_hours ? `${market.funding_interval_hours}h` : "未返回"}` : "-"}
-                  tone={market.funding_rate_pct === null || market.funding_rate_pct === 0 ? undefined : market.funding_rate_pct > 0 ? "positive" : "negative"}
-                />
-                <TradeMetric label="预估资金费率" value={market.market_type === "future" ? signedPct(market.funding_next_rate_pct, 6) : "-"} />
-                <TradeMetric label="Maker / Taker" value={`${market.maker_fee_pct === null ? "未返回" : signedPct(market.maker_fee_pct, 4)} / ${market.taker_fee_pct === null ? "未返回" : signedPct(market.taker_fee_pct, 4)}`} />
-                <TradeMetric label="手续费" value={market.fees_included ? "已计入" : "未计入"} tooltip={market.fee_note} />
-              </div>
-              <div className="instrument-market-data-group">
-                <span className="instrument-market-data-group-name">合约规格</span>
-                <TradeMetric label="价格倍率" value={`${market.market_multiplier}x`} />
-                <TradeMetric label="数量乘数" value={`${market.contract_size_multiplier}`} />
-              </div>
-              <div className="instrument-market-data-group">
-                <span className="instrument-market-data-group-name">数据质量</span>
-                <TradeMetric label="盘口来源" value={market.orderbook_source} tooltip={market.orderbook_source} />
-                <TradeMetric label="盘口更新时间" value={ageText(market.orderbook_updated_at)} tooltip={fullTime(market.orderbook_updated_at)} />
-                <TradeMetric label="行情更新时间" value={ageText(market.market_data_updated_at)} tooltip={fullTime(market.market_data_updated_at)} />
-                <TradeMetric label="诊断更新时间" value={ageText(market.observed_at)} tooltip={fullTime(market.observed_at)} />
-              </div>
-            </article>
-          ))}
-        </div>
-      </section>
 
       {instrumentSpreads.length > 0 ? (
         <section className="instrument-market-table">

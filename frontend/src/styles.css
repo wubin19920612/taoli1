@@ -284,6 +284,50 @@
   color: #d92d20;
 }
 
+.instrument-market-diagnostics,
+.instrument-market-diagnostic-missing {
+  grid-column: 1 / -1;
+  min-width: 0;
+  padding: 10px 14px;
+  background: #f8faf9;
+}
+
+.instrument-market-diagnostics summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: #24536a;
+}
+
+.instrument-market-diagnostics summary .ant-tag {
+  margin-left: 8px;
+}
+
+.instrument-market-diagnostic-meta {
+  display: grid;
+  gap: 4px;
+  margin: 12px 0;
+  color: #52615b;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.instrument-market-diagnostic-content {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: 1px solid #e5ebe9;
+  background: #fff;
+}
+
+.instrument-market-diagnostic-content .instrument-market-data-group-name {
+  display: block;
+}
+
+@media (max-width: 1150px) {
+  .instrument-market-diagnostic-content {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 1150px) and (min-width: 701px) {
   .instrument-index-card-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -323,6 +367,10 @@
 }
 
 @media (max-width: 700px) {
+  .instrument-market-diagnostic-content {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .instrument-diagnostic-scope {
     display: grid;
     gap: 3px;

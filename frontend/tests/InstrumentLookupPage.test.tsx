@@ -428,10 +428,16 @@ describe("InstrumentLookupPage", () => {
 
     render(<InstrumentLookupPage />);
 
-    expect(await screen.findByText("交易可用性")).not.toBeNull();
+    const marketTable = await screen.findByRole("table", { name: "精确行情市场" });
+    const zetaRow = within(marketTable).getByText(/DEX main · ZETA/).closest("article")!;
+    await userEvent.click(within(zetaRow).getByText(/市场诊断/));
+    expect(within(zetaRow).getAllByText("诊断已过期").length).toBeGreaterThan(0);
+    expect(within(zetaRow).getByText(/与上方行情时间分别记录，不视为同步报价/)).not.toBeNull();
+    expect(within(zetaRow).getByText("Maker / Taker")).not.toBeNull();
+    expect(within(zetaRow).getByText("手续费未计入；实际费率取决于账户等级和订单类型")).not.toBeNull();
     expect(screen.getByText("账户数据未接入 · 未发送探测订单 · 当前仅依据公开市场数据判断")).not.toBeNull();
     expect(screen.getByText("官方 OI 已达上限，普通增仓受限")).not.toBeNull();
-    expect(screen.getAllByText(/DEX main/).length).toBeGreaterThanOrEqual(3);
+    expect(within(marketTable).getAllByText(/DEX main/)).toHaveLength(1);
     expect(screen.queryByText("账户未接入")).toBeNull();
     expect(screen.queryByText("真实订单 未提供")).toBeNull();
     expect(screen.getByText("开多")).not.toBeNull();
@@ -448,12 +454,8 @@ describe("InstrumentLookupPage", () => {
     expect(screen.getByText("Coinbase · 现货")).not.toBeNull();
     expect(screen.getAllByText("未返回").length).toBeGreaterThan(0);
 
-    const tradeTable = screen.getByRole("table", { name: "全交易所交易可用性明细" });
-    expect(within(tradeTable).queryByText("实际买一")).toBeNull();
-    expect(within(tradeTable).queryByText("0.1% 买深度")).toBeNull();
-    expect(within(tradeTable).queryByText("资金费率 / 周期")).toBeNull();
-    const marketTable = screen.getByRole("table", { name: "交易所市场行情与规格" });
-    expect(within(marketTable).getByText("实际买一")).not.toBeNull();
+    expect(screen.queryByRole("table", { name: "交易所市场行情与规格" })).toBeNull();
+    expect(within(zetaRow).getByText("盘口实际买一 Bid")).not.toBeNull();
     expect(within(marketTable).getByText("0.1% 买深度")).not.toBeNull();
     expect(within(marketTable).getByText("0.1% 卖深度")).not.toBeNull();
     expect(within(marketTable).getByText("1% 买深度")).not.toBeNull();
@@ -557,7 +559,9 @@ describe("InstrumentLookupPage", () => {
 
     render(<InstrumentLookupPage />);
 
-    expect(await screen.findByText("交易可用性")).not.toBeNull();
+    const marketTable = await screen.findByRole("table", { name: "精确行情市场" });
+    await waitFor(() => expect(within(marketTable).getByText(/^市场诊断 ·/)).not.toBeNull());
+    await userEvent.click(within(marketTable).getByText(/^市场诊断 ·/));
     expect(screen.queryByText("不适用")).toBeNull();
     expect(screen.queryByText("平空")).toBeNull();
     expect(screen.queryByText("平多")).toBeNull();
@@ -575,7 +579,7 @@ describe("InstrumentLookupPage", () => {
     expect(within(transferTable).queryByText("2 条链")).toBeNull();
     expect(screen.getByText("现货充提通道")).not.toBeNull();
     expect(screen.getByText("合约指数成分")).not.toBeNull();
-    expect(screen.getByText("交易所市场")).not.toBeNull();
+    expect(screen.queryByText("交易所市场")).toBeNull();
   });
 
   it("adds the current symbol to the floating watch", async () => {
@@ -1385,5 +1389,58 @@ describe("InstrumentLookupPage", () => {
     await waitFor(() => {
       expect((fetch as ReturnType<typeof vi.fn>).mock.calls.some(([value]) => String(value).includes("/instruments/ETHUSDT"))).toBe(true);
     });
+  });
+
+  it("pairs only the unique raw market and DEX, leaving unmatched diagnostics separate", async () => {
+    const quote = lookupResult.exchanges[0].future!;
+    const markets = [
+      { ...quote, exchange: "hyperliquid", raw_symbol: "ZETA", dex: "main", symbol: "ZETAUSDT", bid: 1, ask: 2, data_status: "live", stale_after_seconds: 30 },
+      { ...quote, exchange: "hyperliquid", raw_symbol: "io:ZETA", dex: "io", symbol: "ZETAUSDT", bid: 3, ask: 4, data_status: "live", stale_after_seconds: 30 }
+    ];
+    const diagnostics = [
+      { ...tradeAvailabilityStatus.markets[0], raw_symbol: "ZETA", dex: "main", best_bid: 1.1, public_restrictions: ["main 限制"] },
+      { ...tradeAvailabilityStatus.markets[0], raw_symbol: "io:ZETA", dex: "io", best_bid: 3.1, public_restrictions: ["io 限制"] },
+      { ...tradeAvailabilityStatus.markets[0], raw_symbol: "xyz:ZETA", dex: "xyz", best_bid: 5.1, public_restrictions: ["xyz 限制"] }
+    ];
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("/instruments/")) return Response.json({ ...lookupResult, symbol: "ZETAUSDT", base: "ZETA", market_count: 2, markets });
+      if (String(input).includes("/trade-status/") && !String(input).includes("/watches")) return Response.json({ ...tradeAvailabilityStatus, markets: diagnostics });
+      return fallback(input, init);
+    });
+    window.history.replaceState({}, "", "/?page=instrument&symbol=ZETAUSDT");
+    render(<InstrumentLookupPage />);
+    const table = await screen.findByRole("table", { name: "精确行情市场" });
+    await waitFor(() => expect(within(table).getAllByText(/市场诊断/)).toHaveLength(3));
+    const rows = within(table).getAllByRole("row").slice(1);
+    expect(rows).toHaveLength(3);
+    expect(within(rows[0]).getByText(/DEX main · ZETA/)).not.toBeNull();
+    expect(within(rows[0]).getByText("2")).not.toBeNull();
+    expect(within(rows[1]).getByText(/DEX io · io:ZETA/)).not.toBeNull();
+    expect(within(rows[1]).getByText("4")).not.toBeNull();
+    expect(within(rows[2]).getByText("仅诊断，未可靠关联行情")).not.toBeNull();
+    expect(within(rows[2]).getAllByText("-").length).toBeGreaterThan(0);
+    await userEvent.click(within(rows[0]).getByText(/市场诊断/));
+    expect(within(rows[0]).getByText("main 限制")).not.toBeNull();
+    expect(within(rows[0]).queryByText("io 限制")).toBeNull();
+    expect(within(rows[0]).getByText("1.1")).not.toBeNull();
+  });
+
+  it("keeps the quote through diagnostic loading and failure", async () => {
+    let failDiagnostic!: (error: Error) => void;
+    const pending = new Promise<Response>((_, reject) => { failDiagnostic = reject; });
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("/trade-status/") && !String(input).includes("/watches")) return pending;
+      return fallback(input, init);
+    });
+    render(<InstrumentLookupPage />);
+    const table = await screen.findByRole("table", { name: "精确行情市场" });
+    expect(within(table).getByText("100,090")).not.toBeNull();
+    expect(screen.getByText("市场诊断加载中；行情仍可单独查看")).not.toBeNull();
+    failDiagnostic(new Error("诊断服务不可用"));
+    expect(await screen.findByText("市场诊断失败；行情仍可查看")).not.toBeNull();
+    expect(within(table).getByText("100,090")).not.toBeNull();
+    expect(within(table).queryByText(/市场诊断 ·/)).toBeNull();
   });
 });
