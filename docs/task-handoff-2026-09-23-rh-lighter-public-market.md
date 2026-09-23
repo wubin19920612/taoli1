@@ -91,7 +91,7 @@
 - RH 可以只读预览且 `can_submit=false`；API 建卡返回 422，所有服务层建卡路径均
   返回 `unsupported`，不会调用 Astro `list/add/update`。
 
-## 部署与线上状态
+## 部署中断记录（已恢复）
 
 - 功能提交 `debdf2a` 已推送到
   `origin/codex/frontend-localization-polish`。
@@ -107,11 +107,10 @@
   BuildKit；构建在前端 TypeScript/Vite 和后端依赖安装期间造成宿主机持续资源饱和。
   长时间无进展并影响线上响应后，SSH 客户端中止了构建会话。尚未执行
   `docker compose up`，没有执行 `docker compose down` 或任何卷删除。
-- 中止后主机仍可 ICMP 响应、TCP/22 可连接，但 SSH 无法及时返回 banner，前端
-  `:3000`、后端 `:8000/api/health` 均超时。因此当前不能声称容器健康、功能已上线
-  或完成线上 RH 验收。
+- 中止后主机仍可 ICMP 响应、TCP/22 可连接，但当时 SSH 无法及时返回 banner，前端
+  `:3000`、后端 `:8000/api/health` 均超时。以下是当时的中断状态；后续已恢复。
 
-主机恢复或经云控制台重启后，应按以下顺序继续：
+当时记录的恢复顺序（下文已执行）：
 
 1. 检查并精确终止残留的 BuildKit、`npm run build`、`tsc`、`vite` 或 `pip install`
    进程；先确认旧容器和 `/data/radar.db` 的 `PRAGMA quick_check`。
@@ -122,15 +121,55 @@
 4. 完成 RH Instrument、Pair、Opportunity、浮窗、三张暂停卡和建卡 422 的只读
    线上验收，再把最终版本与结果写回本文。
 
+## 恢复部署与线上验收（2026-09-23）
+
+- SSH 已恢复，旧容器在重建前均为 `healthy`。服务器当时 uptime 约 10 天，
+  **本次没有执行宿主机重启**；没有残留构建进程。远端代码为功能提交 `debdf2a`，
+  工作树保留已有的 `.env` 备份和 `CACHED` 未跟踪项，未清理或提交。
+- 重建前后均对容器内现用 `/data/radar.db` 以 SQLite 只读连接执行
+  `PRAGMA quick_check`，结果均为 `ok`。部署前备份仍在，SHA-256 与上文一致。
+  没有替换或删除数据库，也没有删除 Compose 数据卷。
+- 服务器原为约 1.9 GiB 内存、无 swap。为降低构建时的 OOM 风险，临时启用
+  2 GiB swap，依次成功执行 `sudo docker compose build --pull backend`、
+  `sudo docker compose build --pull frontend`（前端 `tsc -b && vite build` 通过），
+  然后执行 `sudo docker compose up -d --remove-orphans`；确认资源余量后已卸载、
+  删除本次临时 swap。未执行 `docker compose down` 或清卷操作。
+- 正在运行的代码版本：`debdf2ac7eb173fe32a249af5bc8f8e42316e7b4`。
+  构建镜像 ID：backend `sha256:b206e657b4d954390ab9ed47a27a050d9d4db40acdca027a96a88871f73afa93`；
+  frontend `sha256:b60ea59b518f8512dd3d073be75dbd68f763b4205e3e3ff5b8e3048faa96d844`。
+  前后端容器均 `running/healthy`，本机 `/api/health`、前端 `/` 和前端代理
+  `/api/health` 均返回 200；清理 swap 后再次确认健康。
+- 线上 RH/普通 Lighter `ANTHROPIC` 都有不同的真实 bid/ask、独立来源和更新时间。
+  RH 来源明确为 `Robinhood Lighter public orderBookDetails + WebSocket order_book
+  (USDG)`；样本 RH bid/ask `2191.0/2191.2`、普通 Lighter `2202.2/2202.5`，
+  快照约 22 秒，`is_estimated=false`，均为 1 小时资金费率周期。
+  Instrument `ANTHROPICUSDT` 中 RH 市场为 `live`，RH 四条路由均匹配原始
+  `ANTHROPIC` 且为 `live_market`；Pair 两腿来源独立，返回 60 个历史点、双方
+  可成交价/24 小时成交额/费率周期，手续费字段标注为预估；RH 实时机会返回 8 条。
+  这些价格与数量仅为验收当时样本，不代表可执行利润或稳定币等价。
+- 通过 SSH 本地只读隧道使用无登录态浏览器打开生产页面：Instrument、精确 Pair
+  与实时机会页面分别出现 RH Lighter 标签且无页面 JS 异常；浮窗能打开并正常显示
+  模式导航。该无登录态浏览器的 Astro 计数为 0，**不能**据此判断真实 Astro
+  卡片数或证明卡片行已显示。
+- Astro RH 预览返回 `can_submit=false` 和只读 blocker；在确认此结果后，用容器
+  已配置凭据请求 RH 建卡端点，返回 HTTP 422 和只读提示，且请求前后目标三卡的
+  `status`、`disableOpen` 完全相同，没有建卡或修改卡片。
+- 需要重点确认的外部状态差异：此前验收记录为三张目标卡均 `status=false`；
+  本次只读 `action=list` 显示 `lighter → rh-lighter` 为 `false`、
+  `hl(io:ANTH) → rh-lighter` 为 **`true`**、`binance → rh-lighter` 为 `false`。
+  另外发现反方向 `rh-lighter → lighter` 卡 `status=true`。本任务没有改动这些
+  状态；请由卡片负责人确认开启是否预期，不应自动暂停或启用。
+
 ## 已知问题
 
-- 最后一次本地四源复核时，本地网络到 RH/Binance 短时连接超时；此前成功样本和
-  测试已确认接口契约，部署后需要从服务器复核持续连接。
+- 本地公网访问生产 `:8000` 仍超时；服务器本机与 SSH 隧道内的 API 和页面正常，
+  已从服务器核对 RH 最新样本。长期连接稳定性仍需后续监控。
 - Astro 服务端内部是否直连官方 RH 主机没有公开证据；Radar 不依赖该内部链路。
-- 三张 RH Astro 卡当前暂停，本任务不改变业务状态，因此线上浮窗真实卡片行只能
-  在卡片自然恢复运行后验证；接口、市场匹配和暂停状态可只读验证。
-- 本次部署构建触发宿主机资源饱和，线上端口当前不可达；需要宿主机恢复或由用户
-  通过云控制台重启后继续，不能把远端 Git 已更新等同于生产部署完成。
+- 三张目标卡中有一张本次查询为 `status=true`，与此前全部暂停的记录不符，
+  另外存在一张运行中的反向卡；需要卡片负责人核实。无登录态浮窗不能验证真实
+  Astro 卡片行与点击，因此这项 UI 验收仍有边界；没有因此修改卡片状态。
+- 机器只有约 1.9 GiB 内存，后续部署应继续单独构建 backend/frontend，必要时
+  临时加 swap；不要并行构建。
 - 工作区有既有 `output/**`、pytest 临时目录和
   `script/dexe_bybit_bitget_chain.py` 未跟踪产物，全部保留且不提交。
 
