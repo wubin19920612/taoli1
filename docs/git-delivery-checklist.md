@@ -100,14 +100,11 @@ git log -1 --oneline
 
 ## 服务器部署
 
-代码推送成功后，在服务器执行：
+代码推送成功且两份预构建镜像完成后，在服务器按 `docs/linux-deployment.md` 的流程备份并更新。2 GB 生产机禁止直接构建；下面的 `DEPLOY_COMMIT` 必须与已验证镜像的完整提交号一致：
 
 ```bash
 cd ~/wubin/taoli1
-git pull --ff-only
-git log -1 --oneline
-sudo docker compose up -d --build
-sudo docker compose ps
+DEPLOY_BRANCH=codex/server-low-memory DEPLOY_COMMIT=<full-reviewed-commit-sha> bash deploy/linux-update.sh
 ```
 
-服务器上的 `git pull` 不使用 `sudo`；只有 Docker Compose 使用 `sudo`。
+脚本中的 `git pull --ff-only` 不使用 `sudo`；只有 Docker Compose 使用 `sudo`。首次迁移旧服务器脚本时，先按 `docs/linux-deployment.md` 核对已有备份并快进到运维分支。

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from collections import OrderedDict
 from collections.abc import Callable
 from datetime import UTC, datetime
 from html import unescape
@@ -31,6 +32,7 @@ MAX_RESEARCH_BUSINESS_LENGTH = 700
 MAX_RESEARCH_SOURCES = 3
 MAX_SEARCH_RESULTS = 4
 DEFAULT_ASSET_TIMEOUT_SECONDS = 18.0
+DEFAULT_RESEARCH_CACHE_ENTRIES = 256
 
 
 def utc_now() -> datetime:
@@ -251,6 +253,7 @@ class AnnouncementResearchService:
         now_fn: Callable[[], datetime] | None = None,
         max_concurrency: int = 3,
         asset_timeout_seconds: float = DEFAULT_ASSET_TIMEOUT_SECONDS,
+        max_cache_entries: int = DEFAULT_RESEARCH_CACHE_ENTRIES,
     ) -> None:
         self.client = client or httpx.AsyncClient(
             timeout=httpx.Timeout(10.0, connect=3.0, read=7.0),
@@ -261,7 +264,14 @@ class AnnouncementResearchService:
         self._now_fn = now_fn or utc_now
         self._semaphore = asyncio.Semaphore(max(1, max_concurrency))
         self._asset_timeout_seconds = max(1.0, asset_timeout_seconds)
-        self._cache: dict[str, AnnouncementAssetResearch] = {}
+        self._max_cache_entries = max(1, max_cache_entries)
+        self._cache: OrderedDict[str, AnnouncementAssetResearch] = OrderedDict()
+
+    def _remember(self, key: str, result: AnnouncementAssetResearch) -> None:
+        self._cache[key] = result
+        self._cache.move_to_end(key)
+        if len(self._cache) > self._max_cache_entries:
+            self._cache.popitem(last=False)
 
     async def aclose(self) -> None:
         if self._owns_client:
@@ -345,6 +355,7 @@ class AnnouncementResearchService:
                 cache_key = self._cache_key(announcement, symbol, canonical_symbol)
                 cached = self._cache.get(cache_key)
                 if cached is not None:
+                    self._cache.move_to_end(cache_key)
                     return cached.model_copy(deep=True)
                 if stock_context:
                     result = await self._research_stock(
@@ -354,7 +365,7 @@ class AnnouncementResearchService:
                         name_hint=title_hint,
                     )
                     if result.status == "found":
-                        self._cache[cache_key] = result
+                        self._remember(cache_key, result)
                         return result.model_copy(deep=True)
                     if result.status == "partial":
                         return result.model_copy(deep=True)
@@ -367,7 +378,7 @@ class AnnouncementResearchService:
                     logger.info("CoinGecko lookup failed for %s", canonical_symbol, exc_info=True)
                     result = self._not_found(symbol, canonical_symbol)
                 if result.status == "found":
-                    self._cache[cache_key] = result
+                    self._remember(cache_key, result)
                     return result.model_copy(deep=True)
                 if result.status == "partial":
                     return result.model_copy(deep=True)
@@ -384,7 +395,7 @@ class AnnouncementResearchService:
                 result = self._not_found(symbol, canonical_symbol)
 
         if result.status == "found":
-            self._cache[cache_key] = result
+            self._remember(cache_key, result)
         return result.model_copy(deep=True)
 
     async def _is_verified_bitget_rtoken(
