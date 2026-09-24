@@ -147,6 +147,21 @@ def test_unsent_alert_retries_before_rule_cooldown(status: str) -> None:
     assert len(engine.evaluate([opportunity()], [rule], now=now + timedelta(seconds=61))) == 1
 
 
+def test_repeated_muted_alerts_back_off_without_full_cooldown() -> None:
+    engine = AlertEngine()
+    rule = AlertRule(name="muted retry", types=["FF"], consecutive_hits=1, cooldown_seconds=30000)
+    now = datetime.now(UTC)
+
+    first = engine.evaluate([opportunity()], [rule], now=now)
+    engine.record_delivery_result(first[0], "muted", now=now)
+    second_at = now + timedelta(seconds=61)
+    second = engine.evaluate([opportunity()], [rule], now=second_at)
+    engine.record_delivery_result(second[0], "muted", now=second_at)
+
+    assert engine.evaluate([opportunity()], [rule], now=second_at + timedelta(seconds=119)) == []
+    assert len(engine.evaluate([opportunity()], [rule], now=second_at + timedelta(seconds=121))) == 1
+
+
 def test_batch_limit_does_not_cool_down_unsent_opportunity() -> None:
     engine = AlertEngine()
     rule = AlertRule(name="batch limit", types=["FF"], consecutive_hits=1, cooldown_seconds=300)

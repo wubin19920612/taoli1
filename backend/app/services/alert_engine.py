@@ -16,6 +16,7 @@ from app.services.risk_labels import effective_open_edge_pct, known_volume_24h_u
 MAX_ALERTS_PER_SYMBOL = 3
 MAX_ALERTS_PER_EVALUATION = 10
 DELIVERY_RETRY_SECONDS = 60
+MAX_DELIVERY_RETRY_SECONDS = 900
 EPSILON = 1e-9
 
 
@@ -31,6 +32,7 @@ class AlertEngine:
         self._hits: dict[str, tuple[int, datetime]] = {}
         self._last_sent: dict[str, datetime] = {}
         self._retry_after: dict[str, datetime] = {}
+        self._retry_attempts: dict[str, int] = {}
         self._observations: dict[str, list[AlertObservation]] = {}
 
     def evaluate(
@@ -84,6 +86,8 @@ class AlertEngine:
             if key not in active_keys:
                 self._hits.pop(key, None)
                 self._observations.pop(key, None)
+                self._retry_after.pop(key, None)
+                self._retry_attempts.pop(key, None)
         return _limit_matches_per_symbol(matches)
 
     def record_delivery_result(
@@ -97,9 +101,16 @@ class AlertEngine:
         if status == "sent":
             self._last_sent[key] = current
             self._retry_after.pop(key, None)
+            self._retry_attempts.pop(key, None)
         elif status in {"failed", "muted"}:
+            attempts = self._retry_attempts.get(key, 0) + 1
+            self._retry_attempts[key] = attempts
             self._retry_after[key] = current + timedelta(
-                seconds=min(DELIVERY_RETRY_SECONDS, match.rule.cooldown_seconds)
+                seconds=min(
+                    DELIVERY_RETRY_SECONDS * (2 ** min(attempts - 1, 4)),
+                    MAX_DELIVERY_RETRY_SECONDS,
+                    match.rule.cooldown_seconds,
+                )
             )
         else:
             raise ValueError(f"Unsupported alert delivery status: {status}")
