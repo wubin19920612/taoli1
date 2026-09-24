@@ -275,6 +275,14 @@
   text-align: right;
 }
 
+.instrument-market-data-quality .instrument-trade-metric {
+  grid-template-columns: minmax(72px, 0.6fr) minmax(0, 1fr);
+}
+
+.instrument-market-data-quality .instrument-trade-metric strong {
+  overflow-wrap: anywhere;
+}
+
 .instrument-market-data-group .instrument-trade-metric-bid strong {
   color: #057a55;
 }

@@ -1560,7 +1560,7 @@ export function InstrumentLookupPage() {
                     <TradeMetric label="合约数量乘数" value={quote?.contract_size_multiplier == null ? "-" : String(quote.contract_size_multiplier)} />
                     <TradeMetric label="价格口径" value={!quote ? "-" : priceMultiplier === 1 ? "原始 = 规范" : "原始 x " + priceMultiplier} />
                   </div>
-                  <div className="instrument-market-data-group" role="cell">
+                  <div className="instrument-market-data-group instrument-market-data-quality" role="cell">
                     <span className="instrument-market-data-group-name">行情数据状态</span>
                     <TradeMetric label="行情来源" value={quote?.data_source || "未标注"} tooltip={quote?.data_source} />
                     <TradeMetric label="行情更新时间" value={ageText(qualityTimestamp)} tooltip={fullTime(qualityTimestamp)} />
