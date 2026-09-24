@@ -20,13 +20,17 @@
 ## 交付与上线
 
 - 定向后端测试 35 项通过。全量测试 784 项通过，11 项在系统临时目录创建夹具时因本机沙箱权限报错；改用可写临时目录重跑相关测试 13 项通过。生产 Compose 在服务器解析确认两个 `build` 均为空、内存上限为 768/96 MiB；发布脚本通过服务器 Bash 语法检查。
-- 镜像构建、推送、生产部署和线上行为结果仍待验证；不得把本地通过或健康检查当作告警恢复。
+- 实现提交 `f4fa38ee8e731d4b0a50e8947937a993e416ec2c` 已推送到 `origin/codex/server-low-memory`。GitHub Actions run `35947030288` 的前后端镜像构建均成功。生产机匿名读取镜像清单成功；后端 index digest 为 `sha256:09e764bab1b1539d4ebfafb35923f0b1bdea5ec4920fca4a74943bbe99e56cce`，前端为 `sha256:d8a5e7a601bcb79ace5ea641af2f0a7c5bac59eccef025918acd188518a79f21`。
+- 服务器从 `e4fc83f` 使用 `git pull --ff-only origin codex/server-low-memory` 仅快进到 `f4fa38e`。部署脚本新建 `backups/radar-before-f4fa38ee8e73-20260924T022853Z.db`，大小 605,343,744 字节，`integrity_check=ok`，容器内外 SHA-256 一致：`7722b693166d3ec472018864efbb9776dd115e4f7eb5244f5c717145536205ce`。此前备份 `radar-before-aster-alert-20260924T000714Z.db` 的 SHA-256 也再次核对一致；`.env` 备份、`CACHED` 和数据卷未清理。
+- 服务器仅执行 `compose pull` 与 `compose up -d --no-build --wait`；未运行本机构建或 `down -v`。两个容器使用 `f4fa38e` 镜像，健康检查正常，`OOMKilled=false`。启动约 9 分钟后后端约 347 MiB/768 MiB、前端约 3.6 MiB/96 MiB，主机 `MemAvailable` 约 999 MiB、根盘剩余约 7.7 GiB。这是短时观察，仍需持续看趋势。
+- 后端与前端代理 `/api/health` 均正常；Gate 现货、Gate 永续和 Aster 永续 `TAKEUSDT` 报价与成交额均有新数据，Aster 资金费率周期为 4 小时。新后端 02:29:42 UTC 启动后，最近 100 条告警事件中有 20 条新事件：`sent=15`、`muted=5`、`failed=0`。代码仅在飞书 webhook 返回成功后记为 `sent`，尚未验证用户终端实际收件。当前没有 `TAKEUSDT` 新事件；其 Gate 现货买入、Aster 永续卖出的盘口价差当时不是正值，不能人为制造告警验证。
+- 后端日志仍有 Gate 公告 API 返回 HTTP 567 的错误，与 Gate 行情采集及本次内存治理不同；属于后续独立模块问题。
 - 首次采用新脚本前，生产仓库仍在 `e4fc83f`，必须先核对现有数据库备份和 GHCR 镜像，再用 `git pull --ff-only origin codex/server-low-memory` 快进到这个分支的已审核提交。后续使用 `DEPLOY_BRANCH`、`DEPLOY_COMMIT` 运行脚本。
 - 生产 `.env`、其备份、`CACHED`、数据库卷与备份必须保留。不得执行 `down -v` 或把私钥、Webhook、令牌写入仓库。
 - 本地原开发分支的未跟踪告警交接文档、`output/` 和 `script/` 产物均属于其他任务，不纳入本分支。
 
 ## 下一步
 
-1. 验证 workflow 两项镜像构建均成功，并确认服务器可拉取固定 SHA 镜像；私有 GHCR 包需在服务器配置仅 `read:packages` 的访问令牌。
-2. 完成生产备份、快进与部署，记录提交号、镜像 digest、容器状态、内存、`/api/health`、Gate/Aster 行情和告警事件。
-3. 在无构建任务时观察后端 RSS 与容器内存趋势。若仍持续上涨，再对业务对象和缓存做定点剖析；当前证据不能认定业务轮询泄漏。
+1. 连续观察至少 24 小时的主机 `MemAvailable`、后端容器内存、OOM、健康检查与云盘读延迟。当前仅有约 9 分钟的上线后稳定数据，不能据此证明长期无泄漏。
+2. 后续发布继续使用已审核提交的 CI 镜像和 `--no-build` 脚本。不要在 2 GB 主机复现旧 `docker compose build --pull` 路径。
+3. 若没有构建任务时后端 RSS 持续上涨，再对业务对象与缓存做定点剖析。Gate 公告 API 567 和特定 TAKE 告警条件应分别在对应功能模块任务处理。
