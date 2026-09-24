@@ -64,7 +64,13 @@ from app.models.phone_alert import PhonePriceAlertEvent
 from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, LivePilotSettings, RiskSettings
 from app.services.account_positions import AccountPositionService, GateAccountPositionProvider
 from app.services.account_connections import AccountConnectionService
-from app.services.alert_engine import AlertEngine, AlertMatch, observations_are_stable, required_open_spread_pct
+from app.services.alert_engine import (
+    AlertEngine,
+    AlertMatch,
+    observations_are_stable,
+    required_open_spread_pct,
+    suppresses_sf_negative_funding,
+)
 from app.services.alert_messages import build_alert_message, build_alert_rating_header
 from app.services.alert_metrics import observe_alert_metrics
 from app.services.announcements import (
@@ -478,6 +484,8 @@ def _latest_signal_validation_failure(
 ) -> str | None:
     if latest is None:
         return "最新快照中已找不到该机会"
+    if suppresses_sf_negative_funding(match.rule, latest):
+        return "SF 卖出侧资金费率已转负"
     required_spread = required_open_spread_pct(match.rule, latest)
     if latest.open_spread_pct + 1e-9 < required_spread:
         return (
@@ -832,16 +840,16 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                     except Exception as exc:  # noqa: BLE001 - preserve event even when webhook fails.
                         status = "failed"
                         message = f"{message}\n\n飞书发送失败：{exc}"
-                await event_repo.create(
-                    AlertEvent(
-                        rule_id=match.rule.id,
-                        opportunity_id=match.opportunity.id,
-                        symbol=match.opportunity.symbol,
-                        status=status,
-                        message=message,
-                        created_at=datetime.now(UTC),
-                    )
+                event = AlertEvent(
+                    rule_id=match.rule.id,
+                    opportunity_id=match.opportunity.id,
+                    symbol=match.opportunity.symbol,
+                    status=status,
+                    message=message,
+                    created_at=datetime.now(UTC),
                 )
+                app.state.alert_engine.record_delivery_result(match, status, now=event.created_at)
+                await event_repo.create(event)
         except Exception:
             logger.exception("alert loop failed")
         try:

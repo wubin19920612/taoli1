@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from app.models.alert import AlertRule
 from app.models.market import MarketType
@@ -15,6 +15,7 @@ from app.services.risk_labels import effective_open_edge_pct, known_volume_24h_u
 
 MAX_ALERTS_PER_SYMBOL = 3
 MAX_ALERTS_PER_EVALUATION = 10
+DELIVERY_RETRY_SECONDS = 60
 EPSILON = 1e-9
 
 
@@ -29,6 +30,7 @@ class AlertEngine:
     def __init__(self) -> None:
         self._hits: dict[str, tuple[int, datetime]] = {}
         self._last_sent: dict[str, datetime] = {}
+        self._retry_after: dict[str, datetime] = {}
         self._observations: dict[str, list[AlertObservation]] = {}
 
     def evaluate(
@@ -47,7 +49,7 @@ class AlertEngine:
                 continue
             for opportunity in opportunities:
                 key = f"{rule.id}:{opportunity.id}"
-                if _suppresses_sf_negative_funding(rule, opportunity):
+                if suppresses_sf_negative_funding(rule, opportunity):
                     continue
                 if not self._matches(rule, opportunity, current, settings):
                     continue
@@ -67,6 +69,10 @@ class AlertEngine:
                 last_sent = self._last_sent.get(key)
                 if last_sent and (current - last_sent).total_seconds() < rule.cooldown_seconds:
                     continue
+                retry_after = self._retry_after.get(key)
+                if retry_after is not None and current < retry_after:
+                    continue
+                self._retry_after.pop(key, None)
                 matches.append(
                     AlertMatch(
                         rule=rule,
@@ -78,10 +84,25 @@ class AlertEngine:
             if key not in active_keys:
                 self._hits.pop(key, None)
                 self._observations.pop(key, None)
-        selected = _limit_matches_per_symbol(matches)
-        for match in selected:
-            self._last_sent[f"{match.rule.id}:{match.opportunity.id}"] = current
-        return selected
+        return _limit_matches_per_symbol(matches)
+
+    def record_delivery_result(
+        self,
+        match: AlertMatch,
+        status: str,
+        now: datetime | None = None,
+    ) -> None:
+        current = now or datetime.now(UTC)
+        key = f"{match.rule.id}:{match.opportunity.id}"
+        if status == "sent":
+            self._last_sent[key] = current
+            self._retry_after.pop(key, None)
+        elif status in {"failed", "muted"}:
+            self._retry_after[key] = current + timedelta(
+                seconds=min(DELIVERY_RETRY_SECONDS, match.rule.cooldown_seconds)
+            )
+        else:
+            raise ValueError(f"Unsupported alert delivery status: {status}")
 
     def _matches(
         self,
@@ -93,7 +114,7 @@ class AlertEngine:
         return opportunity_matches_rule(rule, opportunity, now, settings)
 
 
-def _suppresses_sf_negative_funding(rule: AlertRule, opportunity: Opportunity) -> bool:
+def suppresses_sf_negative_funding(rule: AlertRule, opportunity: Opportunity) -> bool:
     return (
         rule.suppress_sf_negative_funding
         and opportunity.type == OpportunityType.SF

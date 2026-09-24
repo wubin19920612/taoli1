@@ -121,9 +121,30 @@ def test_cooldown_suppresses_repeated_alerts() -> None:
     )
     now = datetime.now(UTC)
 
-    assert len(engine.evaluate([opportunity()], [rule], now=now)) == 1
+    fired = engine.evaluate([opportunity()], [rule], now=now)
+    assert len(fired) == 1
+    engine.record_delivery_result(fired[0], "sent", now=now)
     assert engine.evaluate([opportunity()], [rule], now=now + timedelta(seconds=60)) == []
     assert len(engine.evaluate([opportunity()], [rule], now=now + timedelta(seconds=301))) == 1
+
+
+@pytest.mark.parametrize("status", ["failed", "muted"])
+def test_unsent_alert_retries_before_rule_cooldown(status: str) -> None:
+    engine = AlertEngine()
+    rule = AlertRule(
+        name="delivery retry",
+        types=["FF"],
+        consecutive_hits=1,
+        cooldown_seconds=30000,
+    )
+    now = datetime.now(UTC)
+
+    fired = engine.evaluate([opportunity()], [rule], now=now)
+    assert len(fired) == 1
+    engine.record_delivery_result(fired[0], status, now=now)
+
+    assert engine.evaluate([opportunity()], [rule], now=now + timedelta(seconds=59)) == []
+    assert len(engine.evaluate([opportunity()], [rule], now=now + timedelta(seconds=61))) == 1
 
 
 def test_batch_limit_does_not_cool_down_unsent_opportunity() -> None:
@@ -140,6 +161,8 @@ def test_batch_limit_does_not_cool_down_unsent_opportunity() -> None:
     first = engine.evaluate(candidates, [rule], now=now)
     assert len(first) == 10
     unsent = next(item for item in candidates if item.id not in {match.opportunity.id for match in first})
+    for match in first:
+        engine.record_delivery_result(match, "sent", now=now)
 
     second = engine.evaluate(candidates, [rule], now=now + timedelta(seconds=5))
     assert [match.opportunity.id for match in second] == [unsent.id]
