@@ -50,7 +50,14 @@ def opportunity_is_excluded(
 
 
 def filter_markets(markets: list[MarketSnapshot], settings: RiskSettings) -> list[MarketSnapshot]:
-    return [market for market in markets if not market_is_excluded(market, settings)]
+    excluded = excluded_symbol_set(settings)
+    ignored = ignored_exchange_set(settings)
+    return [
+        market
+        for market in markets
+        if normalize_symbol(market.symbol) not in excluded
+        and normalize_exchange(market.exchange) not in ignored
+    ]
 
 
 def filter_opportunities(
@@ -58,10 +65,16 @@ def filter_opportunities(
     settings: RiskSettings,
     now: datetime | None = None,
 ) -> list[Opportunity]:
+    excluded = excluded_symbol_set(settings)
+    ignored = ignored_exchange_set(settings)
+    current = now or datetime.now(UTC)
     return [
         item
         for item in opportunities
-        if not opportunity_is_excluded(item, settings, now=now)
+        if normalize_symbol(item.symbol) not in excluded
+        and normalize_exchange(item.buy_exchange) not in ignored
+        and normalize_exchange(item.sell_exchange) not in ignored
+        and is_opportunity_tradable(item, current)
     ]
 
 

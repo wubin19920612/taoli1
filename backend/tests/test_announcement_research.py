@@ -20,7 +20,6 @@ from app.services.announcement_research import (
 )
 from app.services.announcements import AnnouncementMonitor, build_announcement_alert_message
 
-
 BASE_TIME = datetime(2026, 9, 9, 8, 0, tzinfo=UTC)
 
 
@@ -56,6 +55,30 @@ def _search_html(symbol: str, name: str, snippet: str) -> str:
       <div class="result__snippet">{snippet}</div>
     </html>
     """
+
+
+@pytest.mark.asyncio
+async def test_research_cache_evicts_least_recently_used_entry(monkeypatch: pytest.MonkeyPatch) -> None:
+    researched: list[str] = []
+
+    async def fake_research_crypto(symbol: str, canonical_symbol: str) -> AnnouncementAssetResearch:
+        researched.append(symbol)
+        return AnnouncementAssetResearch(
+            symbol=symbol,
+            canonical_symbol=canonical_symbol,
+            status="found",
+            searched_at=BASE_TIME,
+        )
+
+    service = AnnouncementResearchService(max_cache_entries=2)
+    monkeypatch.setattr(service, "_research_crypto", fake_research_crypto)
+    try:
+        for symbol in ("AAAUSDT", "BBBUSDT", "AAAUSDT", "CCCUSDT", "BBBUSDT"):
+            await service.research(listing_announcement(symbols=[symbol]))
+    finally:
+        await service.aclose()
+
+    assert researched == ["AAAUSDT", "BBBUSDT", "CCCUSDT", "BBBUSDT"]
 
 
 def test_unknown_bitget_r_prefixed_coin_is_not_assumed_to_be_a_stock_rtoken() -> None:
