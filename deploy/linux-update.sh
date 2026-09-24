@@ -106,6 +106,8 @@ echo "Pulling prebuilt images; no build runs on this server"
 "${compose[@]}" pull backend frontend
 "${compose[@]}" up -d --no-build --wait --wait-timeout 120 --remove-orphans
 
+python3 deploy/backup_retention.py --backup-dir "$ROOT_DIR/backups" --apply
+
 echo "Current containers"
 "${compose[@]}" ps
 sudo -n docker stats --no-stream

@@ -67,6 +67,17 @@ tags, and runs `docker compose up -d --no-build --wait`. Git runs as the normal
 user; Docker commands use passwordless `sudo`. It never removes volumes or the
 server's `.env`.
 
+After a successful Compose update, `deploy/backup_retention.py` removes only old
+deployment-created database backups. It keeps the latest three, one per UTC day
+for the past seven days, and one per UTC week for the preceding four weeks.
+Named manual backups are not removed automatically. Preview the exact deletion
+set with `python3 deploy/backup_retention.py --backup-dir backups` before any
+manual cleanup; `--include-legacy` includes older named snapshots. This is a
+local retention policy, not an off-host disaster-recovery backup. Use repeated
+`--protect BASENAME` options to preserve special historical restore points in a
+one-time legacy cleanup. Keep a verified off-host copy of critical data when one
+is available; do not mistake local snapshots for protection against host loss.
+
 After updating, verify the two containers, local `/api/health`, the relevant
 market data, and actual alert events. Healthy containers and successfully
 pulled images alone do not prove notifications work.
@@ -79,7 +90,8 @@ sudo docker stats --no-stream
 
 If a new image fails, use the previously recorded image tags with the production
 overlay and `up -d --no-build --wait`, after checking database compatibility.
-Retain the database backups, `.env` backups, and `CACHED`. Never use
+Retain the verified database restore points selected by the policy above,
+`.env` backups, and `CACHED`. Never use
 `docker compose down -v`.
 
 ## Reverse Proxy
