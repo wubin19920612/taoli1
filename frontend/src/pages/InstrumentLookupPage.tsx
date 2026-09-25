@@ -557,13 +557,14 @@ function tradeMarketHasUnknown(market: MarketTradeAvailability): boolean {
 }
 
 function MarketDiagnosticDetails({
-  market, quote, source, watch, watchSaving, onToggleWatch
+  market, quote, source, watch, watchSaving, refreshFailed, onToggleWatch
 }: {
   market: MarketTradeAvailability;
   quote: InstrumentMarketCandidate | null;
   source: string;
   watch: TradeAvailabilityWatch | undefined;
   watchSaving: boolean;
+  refreshFailed: boolean;
   onToggleWatch: () => void;
 }) {
   const issue = tradeMarketHasIssue(market);
@@ -576,7 +577,8 @@ function MarketDiagnosticDetails({
     <details className="instrument-market-diagnostics" role="cell">
       <summary>
         市场诊断 · {ageText(market.observed_at)}
-        {freshness ? <Tag color="orange">{freshness}</Tag> : <Tag color="green">诊断新鲜</Tag>}
+        {refreshFailed ? <Tag color="orange">{freshness ? `诊断未更新 · ${freshness}` : "诊断未更新"}</Tag>
+          : freshness ? <Tag color="orange">{freshness}</Tag> : <Tag color="green">诊断新鲜</Tag>}
         {restriction ? <Tag color="red">交易受限</Tag> : unknown ? <Tag color="gold">交易待核实</Tag> : null}
       </summary>
       <div className="instrument-market-diagnostic-meta">
@@ -801,7 +803,7 @@ export function InstrumentLookupPage() {
   const [result, setResult] = useState<InstrumentLookupResult | null>(null);
   const [tradeStatus, setTradeStatus] = useState<TradeAvailabilityResult | null>(null);
   const [tradeWatches, setTradeWatches] = useState<TradeAvailabilityWatch[]>([]);
-  const [tradeStatusError, setTradeStatusError] = useState("");
+  const [tradeStatusError, setTradeStatusError] = useState<{ symbol: string; message: string } | null>(null);
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
   const [tradeWatchSaving, setTradeWatchSaving] = useState("");
   const [tradeAvailabilityFilter, setTradeAvailabilityFilter] = useState<"all" | "blocked" | "unknown">("all");
@@ -831,6 +833,7 @@ export function InstrumentLookupPage() {
   const [astroSubmitResult, setAstroSubmitResult] = useState<AstroActionResult | null>(null);
   const [astroSubmitError, setAstroSubmitError] = useState("");
   const requestIdRef = useRef(0);
+  const autoRefreshPendingRef = useRef(false);
   const astroPreviewRequestIdRef = useRef(0);
   const astroSubmitRequestIdRef = useRef(0);
 
@@ -848,8 +851,8 @@ export function InstrumentLookupPage() {
       const next = await lookupInstrument(normalized);
       if (requestId !== requestIdRef.current) return;
       setResult(next);
-      setTradeStatus(null);
-      setTradeStatusError("");
+      setTradeStatus((current) => current?.query === next.symbol ? current : null);
+      setTradeStatusError((current) => current?.symbol === next.symbol ? current : null);
       setDiagnosticsLoading(next.market_count > 0);
       if (next.market_count > 0) {
         const [statusResult, watchesResult] = await Promise.allSettled([
@@ -859,16 +862,17 @@ export function InstrumentLookupPage() {
         if (requestId !== requestIdRef.current) return;
         if (statusResult.status === "fulfilled") {
           setTradeStatus(statusResult.value);
-          setTradeStatusError("");
+          setTradeStatusError(null);
         } else {
-          setTradeStatus(null);
-          setTradeStatusError(statusResult.reason instanceof Error ? statusResult.reason.message : String(statusResult.reason));
+          setTradeStatusError({
+            symbol: next.symbol,
+            message: statusResult.reason instanceof Error ? statusResult.reason.message : String(statusResult.reason)
+          });
         }
         if (watchesResult.status === "fulfilled") setTradeWatches(watchesResult.value);
-        setDiagnosticsLoading(false);
       } else {
         setTradeStatus(null);
-        setTradeStatusError("");
+        setTradeStatusError(null);
       }
       setQuery(next.symbol);
       setActiveSymbol(next.symbol);
@@ -887,6 +891,7 @@ export function InstrumentLookupPage() {
       if (requestId === requestIdRef.current) setError(exc instanceof Error ? exc.message : String(exc));
     } finally {
       if (requestId === requestIdRef.current) {
+        setDiagnosticsLoading(false);
         setLoading(false);
         setRefreshing(false);
       }
@@ -909,7 +914,9 @@ export function InstrumentLookupPage() {
   useEffect(() => {
     if (!autoRefresh || !activeSymbol) return undefined;
     const refresh = () => {
-      if (document.visibilityState !== "hidden") void runLookup(activeSymbol, true);
+      if (document.visibilityState === "hidden" || autoRefreshPendingRef.current) return;
+      autoRefreshPendingRef.current = true;
+      void runLookup(activeSymbol, true).finally(() => { autoRefreshPendingRef.current = false; });
     };
     const timer = window.setInterval(refresh, AUTO_REFRESH_MS);
     document.addEventListener("visibilitychange", refresh);
@@ -1004,7 +1011,9 @@ export function InstrumentLookupPage() {
     (spread) => !hiddenSpreadTypeSet.has(spreadTypeFilter(spread.opportunity_type))
       && (exchangeMatchesSearch(spread.buy_exchange) || exchangeMatchesSearch(spread.sell_exchange))
   );
-  const marketRows = associateMarkets(instrumentMarkets, tradeStatus && tradeStatus.query === result?.symbol ? tradeStatus.markets : []);
+  const currentTradeStatus = tradeStatus?.query === result?.symbol ? tradeStatus : null;
+  const currentTradeStatusError = tradeStatusError && tradeStatusError.symbol === result?.symbol ? tradeStatusError.message : "";
+  const marketRows = associateMarkets(instrumentMarkets, currentTradeStatus?.markets ?? []);
   const visibleMarketRows = marketRows.filter(({ quote, diagnostic }) => {
     const marketType = quote?.market_type ?? diagnostic?.market_type;
     if (tradeMarketTypeFilter !== "all" && marketType !== tradeMarketTypeFilter) return false;
@@ -1014,9 +1023,10 @@ export function InstrumentLookupPage() {
     if (tradeAvailabilityFilter === "unknown" && !tradeMarketHasUnknown(diagnostic)) return false;
     return true;
   });
-  const spotTransferMarkets = tradeStatus?.markets.filter(
+  const spotTransferMarkets = currentTradeStatus?.markets.filter(
     (market) => market.market_type === "spot"
   ) ?? [];
+  const marketRowKeys = new Map<string, number>();
 
   const tradeMarketKey = (market: MarketTradeAvailability) => (
     `${market.exchange}:${market.market_type}:${market.dex ?? ""}:${market.raw_symbol}`
@@ -1511,30 +1521,38 @@ export function InstrumentLookupPage() {
               <Tag>{instrumentMarkets.length} 个行情市场</Tag>
             </Space>
           </div>
-          {diagnosticsLoading ? <Alert type="info" showIcon message="市场诊断加载中；行情仍可单独查看" /> : null}
-          {tradeStatusError ? <Alert type="warning" showIcon message="市场诊断失败；行情仍可查看" description={tradeStatusError} /> : null}
-          {tradeStatus && Object.keys(tradeStatus.errors).length ? <Alert type="warning" showIcon
-            message={Object.keys(tradeStatus.errors).length + " 个市场诊断降级"}
-            description={Object.entries(tradeStatus.errors).map(([key, value]) => key + ": " + value).join(" | ")} /> : null}
+          {currentTradeStatusError ? <Alert type="warning" showIcon
+            message={currentTradeStatus ? "市场诊断刷新失败；显示上次诊断" : "市场诊断失败；行情仍可查看"}
+            description={currentTradeStatusError} /> : null}
+          {currentTradeStatus && Object.keys(currentTradeStatus.errors).length ? <Alert type="warning" showIcon
+            message={Object.keys(currentTradeStatus.errors).length + " 个市场诊断降级"}
+            description={Object.entries(currentTradeStatus.errors).map(([key, value]) => key + ": " + value).join(" | ")} /> : null}
           <div className="instrument-market-data-list" role="table" aria-label="精确行情市场">
             <div className="instrument-market-data-head" role="row">
               <span>市场身份</span><span>行情 Bid / Ask</span><span>成交额</span><span>资金费率</span><span>倍率</span><span>行情数据状态</span>
             </div>
-            {visibleMarketRows.map(({ quote, diagnostic }, index) => {
+            {visibleMarketRows.map(({ quote, diagnostic }) => {
               const market = quote ?? diagnostic!;
               const dex = quote ? marketDex(quote) : diagnostic?.dex;
               const priceMultiplier = quote?.symbol_alias_price_multiplier ?? 1;
               const qualityTimestamp = quote?.upstream_timestamp ?? quote?.timestamp;
+              const diagnosticStaleness = diagnostic && quote ? diagnosticFreshness(diagnostic, quote) : null;
+              const rowIdentity = `${quote ? "quote" : "diagnostic"}:${exactMarketKey(market) ?? JSON.stringify([market.exchange, market.market_type, market.raw_symbol, market.dex])}`;
+              const occurrence = marketRowKeys.get(rowIdentity) ?? 0;
+              marketRowKeys.set(rowIdentity, occurrence + 1);
               return (
                 <article className={"instrument-market-data-row" + (quote?.data_status === "stale" ? " instrument-market-data-row-stale" : "")}
-                  key={(exactMarketKey(market) ?? "unmatched") + ":" + index} role="row">
+                  key={`${rowIdentity}:${occurrence}`} role="row">
                   <div className="instrument-market-data-identity" role="cell">
                     <strong>{exchangeLabels[market.exchange] ?? market.exchange}</strong>
                     <span>{marketTypeLabel(market.market_type)} · {dex ? "DEX " + dex + " · " : ""}{market.raw_symbol}</span>
                     <span>规范标的 {market.symbol}</span>
                     {quote ? <Tag color={quote.data_status === "live" ? "green" : "red"}>{quote.data_status === "live" ? "行情实时" : "行情已过期"}</Tag>
                       : <Tag color="orange">仅诊断，未可靠关联行情</Tag>}
-                    {diagnostic && quote && diagnosticFreshness(diagnostic, quote) ? <Tag color="orange">{diagnosticFreshness(diagnostic, quote)}</Tag> : null}
+                    {diagnostic && quote && (currentTradeStatusError || diagnosticStaleness) ?
+                      <Tag color="orange">{currentTradeStatusError
+                        ? `诊断未更新${diagnosticStaleness ? ` · ${diagnosticStaleness}` : ""}`
+                        : diagnosticStaleness}</Tag> : null}
                   </div>
                   <div className="instrument-market-data-group" role="cell">
                     <span className="instrument-market-data-group-name">行情可成交价格</span>
@@ -1568,10 +1586,11 @@ export function InstrumentLookupPage() {
                     <TradeMetric label="估算字段" value={quote ? quote.estimated_fields?.length ? quote.estimated_fields.join("、") : quote.is_estimated ? "含估算" : "无" : "-"} />
                     {quote?.error ? <TradeMetric label="上游错误" value={quote.error} tooltip={quote.error} tone="negative" /> : null}
                   </div>
-                  {diagnostic ? <MarketDiagnosticDetails market={diagnostic} quote={quote} source={tradeStatus?.source ?? "公开诊断接口"}
+                  {diagnostic ? <MarketDiagnosticDetails market={diagnostic} quote={quote} source={currentTradeStatus?.source ?? "公开诊断接口"}
                     watch={tradeWatchFor(diagnostic)} watchSaving={tradeWatchSaving === tradeMarketKey(diagnostic)}
+                    refreshFailed={Boolean(currentTradeStatusError)}
                     onToggleWatch={() => void toggleTradeWatch(diagnostic)} />
-                    : <div className="instrument-market-diagnostic-missing" role="cell">{diagnosticsLoading ? "诊断加载中" : tradeStatusError ? "诊断请求失败，未混用其他市场数据" : "无可靠关联的市场诊断"}</div>}
+                    : <div className="instrument-market-diagnostic-missing" role="cell">{diagnosticsLoading && !currentTradeStatus ? "诊断加载中" : currentTradeStatusError ? "诊断请求失败，未混用其他市场数据" : "无可靠关联的市场诊断"}</div>}
                 </article>
               );
             })}
@@ -1631,7 +1650,7 @@ export function InstrumentLookupPage() {
         </section>
       ) : null}
 
-      {tradeStatus?.index_compositions?.length ? (
+      {currentTradeStatus?.index_compositions?.length ? (
         <section className="instrument-market-table instrument-index-compositions">
           <div className="instrument-section-head">
             <div>
@@ -1639,11 +1658,11 @@ export function InstrumentLookupPage() {
               <Typography.Text type="secondary">按合约交易所分组；仅展示官方接口真实返回</Typography.Text>
             </div>
             <Tag>
-              {tradeStatus.index_compositions.length} 个合约 · {tradeStatus.index_compositions.reduce((total, item) => total + item.components.length, 0)} 个成分
+              {currentTradeStatus.index_compositions.length} 个合约 · {currentTradeStatus.index_compositions.reduce((total, item) => total + item.components.length, 0)} 个成分
             </Tag>
           </div>
           <div className="instrument-index-card-grid">
-            {tradeStatus.index_compositions.map((composition) => (
+            {currentTradeStatus.index_compositions.map((composition) => (
               <article
                 className="instrument-index-card"
                 key={`${composition.exchange}:${composition.market_type}:${composition.dex ?? ""}:${composition.raw_symbol}`}

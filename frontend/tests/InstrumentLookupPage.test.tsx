@@ -1437,10 +1437,103 @@ describe("InstrumentLookupPage", () => {
     render(<InstrumentLookupPage />);
     const table = await screen.findByRole("table", { name: "精确行情市场" });
     expect(within(table).getByText("100,090")).not.toBeNull();
-    expect(screen.getByText("市场诊断加载中；行情仍可单独查看")).not.toBeNull();
+    expect(within(table).getAllByText("诊断加载中").length).toBeGreaterThan(0);
     failDiagnostic(new Error("诊断服务不可用"));
     expect(await screen.findByText("市场诊断失败；行情仍可查看")).not.toBeNull();
     expect(within(table).getByText("100,090")).not.toBeNull();
     expect(within(table).queryByText(/市场诊断 ·/)).toBeNull();
+  });
+
+  it("keeps expanded market diagnostics in place while background refreshes finish or fail", async () => {
+    const quote = {
+      ...lookupResult.exchanges[0].future!,
+      symbol: "ZETAUSDT", base: "ZETA", exchange: "hyperliquid", raw_symbol: "ZETA", dex: "main"
+    };
+    const zetaLookup = {
+      ...lookupResult,
+      query: "ZETAUSDT", symbol: "ZETAUSDT", base: "ZETA", exchange_count: 1, market_count: 1,
+      markets: [{ ...quote, data_status: "live", age_seconds: 1, stale_after_seconds: 30, error: null }],
+      exchanges: [{ exchange: "hyperliquid", spot: null, future: quote, error: null }],
+      spreads: []
+    };
+    let resolveSecond!: (response: Response) => void;
+    let rejectThird!: (error: Error) => void;
+    let diagnosticCalls = 0;
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/instruments/")) return Response.json(zetaLookup);
+      if (url.includes("/trade-status/") && !url.includes("/watches")) {
+        diagnosticCalls += 1;
+        if (diagnosticCalls === 2) return new Promise<Response>((resolve) => { resolveSecond = resolve; });
+        if (diagnosticCalls === 3) return new Promise<Response>((_, reject) => { rejectThird = reject; });
+        return Response.json(tradeAvailabilityStatus);
+      }
+      return fallback(input, init);
+    });
+    window.history.replaceState({}, "", "/?page=instrument&symbol=ZETAUSDT");
+
+    render(<InstrumentLookupPage />);
+    const table = await screen.findByRole("table", { name: "精确行情市场" });
+    const row = within(table).getByText(/DEX main · ZETA/).closest("article")!;
+    const summary = await within(row).findByText(/^市场诊断 ·/);
+    const details = summary.closest("details") as HTMLDetailsElement;
+    await userEvent.click(summary);
+    expect(details.open).toBe(true);
+
+    await userEvent.click(screen.getByRole("button", { name: "立即刷新" }));
+    await waitFor(() => expect(diagnosticCalls).toBe(2));
+    expect(within(table).getByText(/DEX main · ZETA/).closest("article")).toBe(row);
+    expect(row.contains(details)).toBe(true);
+    expect(details.open).toBe(true);
+    expect(within(row).queryByText("诊断加载中")).toBeNull();
+
+    resolveSecond(Response.json({ ...tradeAvailabilityStatus, source: "刷新后的诊断来源" }));
+    await waitFor(() => expect(within(details).getByText(/刷新后的诊断来源/)).not.toBeNull());
+    expect(details.open).toBe(true);
+
+    await userEvent.click(screen.getByRole("button", { name: "立即刷新" }));
+    await waitFor(() => expect(diagnosticCalls).toBe(3));
+    rejectThird(new Error("诊断接口超时"));
+    await screen.findByText("市场诊断刷新失败；显示上次诊断");
+    expect(within(details).getByText(/刷新后的诊断来源/)).not.toBeNull();
+    expect(within(details).getByText(/诊断未更新/)).not.toBeNull();
+    expect(details.open).toBe(true);
+  });
+
+  it("does not show the previous symbol's diagnostics while a new symbol loads", async () => {
+    const quote = {
+      ...lookupResult.exchanges[0].future!,
+      symbol: "ZETAUSDT", base: "ZETA", exchange: "hyperliquid", raw_symbol: "ZETA", dex: "main"
+    };
+    const zetaLookup = {
+      ...lookupResult,
+      query: "ZETAUSDT", symbol: "ZETAUSDT", base: "ZETA", market_count: 1,
+      markets: [{ ...quote, data_status: "live", age_seconds: 1, stale_after_seconds: 30, error: null }],
+      spreads: []
+    };
+    let resolveBtcDiagnostic!: (response: Response) => void;
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/instruments/ZETAUSDT")) return Response.json(zetaLookup);
+      if (url.includes("/instruments/BTCUSDT")) return Response.json(lookupResult);
+      if (url.includes("/trade-status/ZETAUSDT")) return Response.json(tradeAvailabilityStatus);
+      if (url.includes("/trade-status/BTCUSDT")) {
+        return new Promise<Response>((resolve) => { resolveBtcDiagnostic = resolve; });
+      }
+      return fallback(input, init);
+    });
+    window.history.replaceState({}, "", "/?page=instrument&symbol=ZETAUSDT");
+
+    render(<InstrumentLookupPage />);
+    await screen.findByText("合约指数成分");
+    fireEvent.change(screen.getByLabelText("查询标的"), { target: { value: "BTCUSDT" } });
+    await userEvent.click(screen.getByRole("button", { name: /查询$/ }));
+    await screen.findByText("BTC / USDT");
+    expect(screen.queryByText("合约指数成分")).toBeNull();
+    expect(screen.queryByText(/DEX main · ZETA/)).toBeNull();
+    expect(screen.getByRole("table", { name: "精确行情市场" }).querySelectorAll("details")).toHaveLength(0);
+    resolveBtcDiagnostic(Response.json({ ...tradeAvailabilityStatus, query: "BTCUSDT", markets: [], index_compositions: [] }));
   });
 });
