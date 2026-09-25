@@ -4,6 +4,18 @@
   padding: 16px 24px;
 }
 
+.squeeze-paper-details {
+  padding: 8px 0;
+}
+
+.squeeze-paper-details .ant-table {
+  margin: 8px 0 16px;
+}
+
+.squeeze-paper-view .ant-typography {
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 767px) {
   .squeeze-arbitrage-page {
     padding: 56px 16px 16px;

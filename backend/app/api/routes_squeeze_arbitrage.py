@@ -5,6 +5,8 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
+from app.services.squeeze_arbitrage.paper_report import build_paper_report
+from app.services.squeeze_arbitrage.paper_repository import SqueezePaperRepository
 from app.services.squeeze_arbitrage.repository import SqueezeRepository
 from app.services.squeeze_arbitrage.route_repository import SqueezeRouteRepository
 
@@ -25,6 +27,13 @@ def _route_repo(request: Request) -> SqueezeRouteRepository:
     return repo
 
 
+def _paper_repo(request: Request) -> SqueezePaperRepository:
+    repo = getattr(request.app.state, "squeeze_paper_repo", None)
+    if repo is None:
+        raise HTTPException(status_code=503, detail="Squeeze paper store is unavailable")
+    return repo
+
+
 @router.get("/status")
 async def get_status(request: Request) -> dict[str, Any]:
     status = await _repo(request).status(
@@ -36,6 +45,8 @@ async def get_status(request: Request) -> dict[str, Any]:
         await route_monitor.status() if route_monitor is not None
         else await _route_repo(request).status(enabled=False)
     )
+    paper_monitor = getattr(request.app.state, "squeeze_paper_monitor", None)
+    status["paper"] = await paper_monitor.status() if paper_monitor else None
     return status
 
 
@@ -79,4 +90,43 @@ async def get_route_events(
 ) -> list[dict[str, Any]]:
     return await _route_repo(request).list_events(
         limit=limit, offset=offset, include_inputs=include_inputs
+    )
+
+
+@router.get("/paper/status")
+async def get_paper_status(request: Request) -> dict[str, Any]:
+    monitor = getattr(request.app.state, "squeeze_paper_monitor", None)
+    if monitor is None:
+        raise HTTPException(status_code=503, detail="Squeeze paper monitor is unavailable")
+    return await monitor.status()
+
+
+@router.get("/paper/positions")
+async def get_paper_positions(
+    request: Request,
+    limit: int = Query(default=30, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> list[dict[str, Any]]:
+    trades = await _paper_repo(request).list_trades(
+        limit=limit, offset=offset, active_only=True
+    )
+    return [trade.model_dump(mode="json") for trade in trades]
+
+
+@router.get("/paper/trades")
+async def get_paper_trades(
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> list[dict[str, Any]]:
+    trades = await _paper_repo(request).list_trades(limit=limit, offset=offset)
+    return [trade.model_dump(mode="json") for trade in trades]
+
+
+@router.get("/paper/report")
+async def get_paper_report(request: Request) -> dict[str, Any]:
+    repo = _paper_repo(request)
+    return build_paper_report(
+        await repo.load_run(), await repo.list_report_trades(),
+        await repo.load_accounts(), datetime.now(UTC),
     )

@@ -109,6 +109,10 @@ from app.services.live_pilot import (
     select_live_pilot_matches,
 )
 from app.services.negative_basis_monitor import NegativeBasisMonitor, NegativeBasisMonitorRepository
+from app.services.squeeze_arbitrage.paper_repository import (
+    SqueezePaperRepository, initialize_paper_schema,
+)
+from app.services.squeeze_arbitrage.paper_runner import SqueezePaperMonitor
 from app.services.squeeze_arbitrage.repository import SqueezeRepository
 from app.services.squeeze_arbitrage.runner import SqueezeMonitor, SqueezeMonitorConfig
 from app.services.squeeze_arbitrage.route_repository import (
@@ -769,9 +773,16 @@ def create_app(
             await initialize_route_schema(route_db)
             await migrate_legacy_route_data(route_db, db_path)
             await route_db.execute("PRAGMA busy_timeout=500")
+        await initialize_paper_schema(route_db)
         app.state.db = db
         app.state.squeeze_repo = SqueezeRepository(db)
         app.state.squeeze_route_repo = SqueezeRouteRepository(route_db)
+        app.state.squeeze_paper_repo = SqueezePaperRepository(
+            route_db, app.state.squeeze_route_repo._lock
+        )
+        app.state.squeeze_paper_monitor = SqueezePaperMonitor(
+            app.state.squeeze_paper_repo, app.state.squeeze_route_repo
+        )
         app.state.alert_rule_repo = AlertRuleRepository(db)
         app.state.alert_event_repo = AlertEventRepository(db)
         app.state.phone_price_alert_rule_repo = PhonePriceAlertRuleRepository(db)
@@ -879,6 +890,11 @@ def create_app(
             _start_background_task(
                 tasks, app.state.squeeze_route_monitor.run(stop_event),
                 name="squeeze-route-monitor",
+            )
+        if start_collector and start_background_workers and app_settings.squeeze_paper_enabled:
+            _start_background_task(
+                tasks, app.state.squeeze_paper_monitor.run(stop_event),
+                name="squeeze-paper-monitor",
             )
         if start_background_workers:
             await app.state.second_level_sampler.initialize()
@@ -1057,6 +1073,7 @@ def create_app(
                 "negative_basis_monitor",
                 "squeeze_monitor",
                 "squeeze_route_monitor",
+                "squeeze_paper_monitor",
                 "pair_spread_funding_recorder",
                 "oil_news_monitor",
                 "trade_availability_service",
@@ -1093,6 +1110,8 @@ def create_app(
     app.state.squeeze_monitor_active = False
     app.state.squeeze_route_repo = None
     app.state.squeeze_route_monitor = None
+    app.state.squeeze_paper_repo = None
+    app.state.squeeze_paper_monitor = None
     app.state.trade_availability_service = None
     app.state.account_position_service = None
     app.state.account_connection_service = None

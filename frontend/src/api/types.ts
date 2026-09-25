@@ -2598,6 +2598,7 @@ export interface SqueezeStatus {
     dropped_scan_count: number;
     last_drop_at: string | null;
   };
+  paper?: SqueezePaperStatus | null;
   rule_version: string;
   last_attempt_at: string | null;
   last_success_at: string | null;
@@ -2628,6 +2629,122 @@ export interface SqueezeStatus {
     result_status: string;
     error: string | null;
   }>;
+}
+
+export interface SqueezePaperAccount {
+  exchange: string;
+  initial_balance: string;
+  cash_balance: string;
+  reserved_margin: string;
+  fees_paid: string;
+  funding_cashflow: string;
+  price_pnl: string;
+  updated_at: string;
+}
+
+export interface SqueezePaperStatus {
+  enabled: boolean;
+  source_capability: string;
+  rule_version: string;
+  started_at: string | null;
+  last_processed_at: string | null;
+  last_success_at: string | null;
+  last_error: string | null;
+  trade_counts: Record<string, number>;
+  unresolved_exposure_count: number;
+  accounts: SqueezePaperAccount[];
+}
+
+export interface SqueezePaperFill {
+  id: string;
+  role: string;
+  leg_key: string;
+  side: string;
+  quantity: string;
+  unit_price: string;
+  fee: string;
+  filled_at: string;
+}
+
+export interface SqueezePaperCashflow {
+  id: string;
+  leg_key: string;
+  kind: string;
+  amount: string;
+  occurred_at: string;
+  source: string;
+  mark_kind: string;
+}
+
+export interface SqueezePaperTrade {
+  id: string;
+  event_id: string;
+  route_id: string;
+  asset_id: string;
+  status: string;
+  signal_at: string;
+  opened_at: string | null;
+  closed_at: string | null;
+  expensive_key: string;
+  cheap_key: string;
+  target_quantity: string;
+  expensive_open_quantity: string;
+  cheap_open_quantity: string;
+  price_pnl: string;
+  entry_fees: string;
+  exit_fees: string;
+  funding_total: string;
+  borrow_total: string;
+  max_adverse_net: string | null;
+  minimum_expensive_free_balance: string | null;
+  minimum_cheap_free_balance: string | null;
+  funding_gap_at: string | null;
+  exit_reason: string | null;
+  last_error: string | null;
+  risk_labels: string[];
+  fills: SqueezePaperFill[];
+  cashflows: SqueezePaperCashflow[];
+}
+
+export interface SqueezePaperReport {
+  rule_version: string | null;
+  frozen_parameters: Record<string, string | number> | null;
+  started_at: string | null;
+  as_of: string;
+  elapsed_days: number;
+  independent_events: number;
+  minimum_days: number;
+  minimum_independent_events: number;
+  sample_status: "sample_insufficient" | "ready_for_review";
+  closed_trades: number;
+  closed_with_funding_gap: number;
+  unresolved_events: number;
+  unfinished_events: number;
+  funding_gap_trades: number;
+  single_leg_failure_rate: number | null;
+  closed_net_pnl: string;
+  net_per_closed_trade: string | null;
+  closed_trade_capital_return: string | null;
+  max_drawdown_closed_trade_only: string;
+  average_holding_seconds: number | null;
+  maximum_adverse_spread_expansion: string | null;
+  minimum_free_balance_by_leg: Record<string, string | null>;
+  funding_cashflow_actual_mark: string;
+  funding_cashflow_proxy_mark: string;
+  borrow_cost: string;
+  capacity_by_target_notional: Record<string, {
+    events: number;
+    depth_qualified: number;
+    cost_qualified: number;
+  }>;
+  by_route: Record<string, {
+    events: number;
+    closed: number;
+    failed_or_unfilled: number;
+    closed_net: string;
+  }>;
+  collateral_model_incomplete: boolean;
+  drawdown_excludes_open_positions: boolean;
 }
 
 export interface SqueezeRouteFill {

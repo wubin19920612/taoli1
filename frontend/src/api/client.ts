@@ -3,6 +3,8 @@ import type {
   SqueezeWatchEvent,
   SqueezeRouteRow,
   SqueezeRouteEvent,
+  SqueezePaperTrade,
+  SqueezePaperReport,
   AccountConnection,
   AccountConnectionOverview,
   AccountConnectionTestResult,
@@ -123,6 +125,18 @@ export async function getSqueezeRoutes(): Promise<SqueezeRouteRow[]> {
 
 export async function getSqueezeRouteEvents(): Promise<SqueezeRouteEvent[]> {
   return fetchJson<SqueezeRouteEvent[]>("/squeeze-arbitrage/route-events");
+}
+
+export async function getSqueezePaperPositions(): Promise<SqueezePaperTrade[]> {
+  return fetchJson<SqueezePaperTrade[]>("/squeeze-arbitrage/paper/positions");
+}
+
+export async function getSqueezePaperTrades(): Promise<SqueezePaperTrade[]> {
+  return fetchJson<SqueezePaperTrade[]>("/squeeze-arbitrage/paper/trades");
+}
+
+export async function getSqueezePaperReport(): Promise<SqueezePaperReport> {
+  return fetchJson<SqueezePaperReport>("/squeeze-arbitrage/paper/report");
 }
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "/api";

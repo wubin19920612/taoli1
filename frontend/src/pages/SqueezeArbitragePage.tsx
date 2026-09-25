@@ -7,12 +7,15 @@ import { useCallback, useEffect, useState } from "react";
 
 import {
   getSqueezeEvents, getSqueezeRouteEvents, getSqueezeRoutes,
-  getSqueezeStatus, getSqueezeWatchlist
+  getSqueezeStatus, getSqueezeWatchlist,
+  getSqueezePaperPositions, getSqueezePaperTrades, getSqueezePaperReport
 } from "../api/client";
 import type {
-  SqueezeRouteEvent, SqueezeRouteRow, SqueezeStatus, SqueezeWatchEvent
+  SqueezeRouteEvent, SqueezeRouteRow, SqueezeStatus, SqueezeWatchEvent,
+  SqueezePaperTrade, SqueezePaperReport
 } from "../api/types";
 import { SqueezeRoutesView } from "./SqueezeRoutesView";
+import { SqueezePaperView } from "./SqueezePaperView";
 import "./SqueezeArbitragePage.css";
 
 dayjs.extend(utc);
@@ -88,6 +91,10 @@ export function SqueezeArbitragePage() {
   const [events, setEvents] = useState<SqueezeWatchEvent[]>([]);
   const [routes, setRoutes] = useState<SqueezeRouteRow[]>([]);
   const [routeEvents, setRouteEvents] = useState<SqueezeRouteEvent[]>([]);
+  const [paperPositions, setPaperPositions] = useState<SqueezePaperTrade[]>([]);
+  const [paperTrades, setPaperTrades] = useState<SqueezePaperTrade[]>([]);
+  const [paperReport, setPaperReport] = useState<SqueezePaperReport | null>(null);
+  const [paperError, setPaperError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -104,6 +111,17 @@ export function SqueezeArbitragePage() {
       setRoutes(nextRoutes);
       setRouteEvents(nextRouteEvents);
       setError(null);
+      try {
+        const [nextPositions, nextTrades, nextReport] = await Promise.all([
+          getSqueezePaperPositions(), getSqueezePaperTrades(), getSqueezePaperReport()
+        ]);
+        setPaperPositions(nextPositions);
+        setPaperTrades(nextTrades);
+        setPaperReport(nextReport);
+        setPaperError(null);
+      } catch (cause) {
+        setPaperError(cause instanceof Error ? cause.message : "读取失败");
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "读取失败");
     } finally {
@@ -174,6 +192,11 @@ export function SqueezeArbitragePage() {
         {
           key: "routes", label: "路线研究",
           children: <SqueezeRoutesView routes={routes} events={routeEvents} loading={loading} />
+        },
+        {
+          key: "paper", label: "模拟账本",
+          children: <SqueezePaperView status={status?.paper} positions={paperPositions}
+            trades={paperTrades} report={paperReport} error={paperError} loading={loading} />
         }
       ]} />
     </div>

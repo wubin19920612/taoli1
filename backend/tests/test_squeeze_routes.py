@@ -376,6 +376,19 @@ async def test_legacy_route_data_moves_to_isolated_database(tmp_path) -> None:
         high, low = books()
         evaluation, transition = tracker.advance(ROUTE, high, low, NOW)
         await old_repo.save_scan(ROUTE, tracker, evaluation, high, low, transition)
+        old_latest = await legacy.execute(
+            "SELECT route_id,evaluated_at,evaluation_json FROM squeeze_route_latest"
+        )
+        old_latest_row = await old_latest.fetchone()
+        await legacy.execute("DROP TABLE squeeze_route_latest")
+        await legacy.execute(
+            """CREATE TABLE squeeze_route_latest (
+               route_id TEXT PRIMARY KEY, evaluated_at TEXT NOT NULL,
+               evaluation_json TEXT NOT NULL)"""
+        )
+        await legacy.execute(
+            "INSERT INTO squeeze_route_latest VALUES (?,?,?)", tuple(old_latest_row)
+        )
         await legacy.execute("DROP TABLE squeeze_route_worker_state")
         await legacy.execute(
             """CREATE TABLE squeeze_route_worker_state (
@@ -395,6 +408,7 @@ async def test_legacy_route_data_moves_to_isolated_database(tmp_path) -> None:
         assert (await new_repo.load_tracker(ROUTE.route_id)).phase == "dislocation"
         assert len(await new_repo.list_events()) == 1
         assert (await new_repo.list_routes())[0]["evaluation"]["route_id"] == ROUTE.route_id
+        assert await new_repo.latest_for_paper(ROUTE.route_id) is None
         assert (await new_repo.status(enabled=False))["last_success_at"] == NOW.isoformat()
 
         await legacy.execute("BEGIN IMMEDIATE")
