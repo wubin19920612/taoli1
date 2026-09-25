@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import sqlite3
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -232,6 +234,94 @@ async def test_provider_failure_clears_confirmation_state_on_disk() -> None:
         assert restored.confirmation_count == 0
         assert (await repo.status(enabled=True))["last_error"].startswith("TimeoutError")
     finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_route_write_rolls_back_partial_snapshot(monkeypatch, tmp_path) -> None:
+    db = await connect_database(str(tmp_path / "partial-route.db"))
+    try:
+        await initialize_schema(db)
+        repo = SqueezeRouteRepository(db)
+        tracker = RouteTracker(ROUTE.route_id, baseline=D(0), baseline_at=NOW)
+        high, low = books()
+        evaluation, transition = tracker.advance(ROUTE, high, low, NOW)
+        execute = db.execute
+
+        async def fail_latest(sql, parameters=None):
+            if "INSERT INTO squeeze_route_latest" in sql:
+                raise sqlite3.OperationalError("database is locked")
+            return await execute(sql, parameters)
+
+        monkeypatch.setattr(db, "execute", fail_latest)
+        with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+            await repo.save_scan(ROUTE, tracker, evaluation, high, low, transition)
+        assert (await repo.load_tracker(ROUTE.route_id)).phase == "watching"
+        assert await repo.list_routes() == []
+        assert await repo.list_events() == []
+        assert not db.in_transaction
+        monkeypatch.setattr(db, "execute", execute)
+        await repo.save_scan(ROUTE, tracker, evaluation, high, low, transition)
+        assert len(await repo.list_routes()) == 1
+        assert len(await repo.list_events()) == 1
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_locked_route_db_reports_error_and_worker_recovers(tmp_path) -> None:
+    path = str(tmp_path / "locked-route.db")
+    db = await connect_database(path)
+    holder = await connect_database(path)
+    stop_event = asyncio.Event()
+    task = None
+
+    class Provider:
+        sequence = 0
+
+        async def fetch_route(self, at):
+            self.sequence += 1
+            return ROUTE, *books(at, high_seq=self.sequence, low_seq=self.sequence)
+
+        async def aclose(self):
+            pass
+
+    try:
+        await initialize_schema(db)
+        repo = SqueezeRouteRepository(db)
+        await repo.save_tracker(
+            RouteTracker(ROUTE.route_id, baseline=D(0), baseline_at=NOW), NOW
+        )
+        await db.execute("PRAGMA busy_timeout=20")
+        await holder.execute("BEGIN IMMEDIATE")
+        monitor = SqueezeRouteMonitor(repo, RouteMonitorConfig(poll_seconds=3), Provider())
+        task = asyncio.create_task(monitor.run(stop_event))
+        for _ in range(80):
+            if monitor.last_error is not None:
+                break
+            await asyncio.sleep(0.05)
+        assert monitor.last_error == "OperationalError:database is locked"
+        assert not task.done()
+        status = await monitor.status()
+        assert status["enabled"] is True
+        assert status["last_error"] == monitor.last_error
+        assert status["last_attempt_at"] is not None
+        assert await repo.list_routes() == []
+        await holder.rollback()
+        for _ in range(100):
+            if monitor.last_error is None and (await repo.list_routes()):
+                break
+            await asyncio.sleep(0.05)
+        assert monitor.last_error is None
+        assert (await repo.status(enabled=True))["last_error"] is None
+        assert (await repo.load_tracker(ROUTE.route_id)).phase == "dislocation"
+        assert len(await repo.list_events()) == 1
+    finally:
+        stop_event.set()
+        if task is not None:
+            await task
+        await holder.rollback()
+        await holder.close()
         await db.close()
 
 

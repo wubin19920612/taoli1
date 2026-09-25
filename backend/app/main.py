@@ -759,6 +759,8 @@ def create_app(
         db = await connect_database(db_path)
         await initialize_schema(db)
         route_db = db if db_path == ":memory:" else await connect_database(db_path)
+        if route_db is not db:
+            await route_db.execute("PRAGMA busy_timeout=500")
         app.state.db = db
         app.state.squeeze_repo = SqueezeRepository(db)
         app.state.squeeze_route_repo = SqueezeRouteRepository(route_db)

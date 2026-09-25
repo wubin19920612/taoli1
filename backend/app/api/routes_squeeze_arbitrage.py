@@ -31,8 +31,10 @@ async def get_status(request: Request) -> dict[str, Any]:
         enabled=bool(getattr(getattr(request.app.state, "squeeze_monitor", None), "running", False)),
         now=datetime.now(UTC),
     )
-    status["routes"] = await _route_repo(request).status(
-        enabled=bool(getattr(getattr(request.app.state, "squeeze_route_monitor", None), "running", False))
+    route_monitor = getattr(request.app.state, "squeeze_route_monitor", None)
+    status["routes"] = (
+        await route_monitor.status() if route_monitor is not None
+        else await _route_repo(request).status(enabled=False)
     )
     return status
 

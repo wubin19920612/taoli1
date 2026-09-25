@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict
 from datetime import datetime
 from decimal import Decimal
@@ -63,21 +65,41 @@ class SqueezeRouteRepository:
         self.db = db
         self._lock = asyncio.Lock()
 
+    async def _write(self, operation: Callable[[], Awaitable[None]]) -> None:
+        async with self._lock:
+            for attempt in range(3):
+                try:
+                    await operation()
+                    await self.db.commit()
+                    return
+                except BaseException as exc:
+                    await self.db.rollback()
+                    locked = (
+                        isinstance(exc, sqlite3.OperationalError)
+                        and ("locked" in str(exc).lower() or "busy" in str(exc).lower())
+                    )
+                    if not locked or attempt == 2:
+                        raise
+                    await asyncio.sleep(0.2 * (attempt + 1))
+
     async def load_tracker(self, route_id: str) -> RouteTracker:
-        cursor = await self.db.execute(
-            "SELECT state_json FROM squeeze_route_state WHERE route_id=?", (route_id,)
-        )
-        row = await cursor.fetchone()
+        async with self._lock:
+            cursor = await self.db.execute(
+                "SELECT state_json FROM squeeze_route_state WHERE route_id=?", (route_id,)
+            )
+            row = await cursor.fetchone()
         return RouteTracker.from_dict(json.loads(row["state_json"])) if row else RouteTracker(route_id)
 
     async def save_tracker(self, tracker: RouteTracker, at: datetime) -> None:
-        await self.db.execute(
-            """INSERT INTO squeeze_route_state(route_id,state_json,updated_at)
-               VALUES (?,?,?) ON CONFLICT(route_id) DO UPDATE SET
-               state_json=excluded.state_json,updated_at=excluded.updated_at""",
-            (tracker.route_id, json.dumps(tracker.to_dict(), separators=(",", ":")), utc_iso(at)),
-        )
-        await self.db.commit()
+        async def write() -> None:
+            await self.db.execute(
+                """INSERT INTO squeeze_route_state(route_id,state_json,updated_at)
+                   VALUES (?,?,?) ON CONFLICT(route_id) DO UPDATE SET
+                   state_json=excluded.state_json,updated_at=excluded.updated_at""",
+                (tracker.route_id, json.dumps(tracker.to_dict(), separators=(",", ":")), utc_iso(at)),
+            )
+
+        await self._write(write)
 
     async def save_scan(
         self, route: Route, tracker: RouteTracker, evaluation: RouteEvaluation,
@@ -85,7 +107,8 @@ class SqueezeRouteRepository:
     ) -> None:
         at = utc_iso(evaluation.calculated_at)
         evaluation_json = json.dumps(evaluation.to_dict(), separators=(",", ":"))
-        async with self._lock:
+
+        async def write() -> None:
             await self.db.execute(
                 """INSERT INTO squeeze_route_state(route_id,state_json,updated_at)
                    VALUES (?,?,?) ON CONFLICT(route_id) DO UPDATE SET
@@ -115,21 +138,25 @@ class SqueezeRouteRepository:
                    last_error=NULL,last_route_id=excluded.last_route_id""",
                 (at, at, route.route_id),
             )
-            await self.db.commit()
+
+        await self._write(write)
 
     async def record_error(self, at: datetime, error: str) -> None:
-        await self.db.execute(
-            """INSERT INTO squeeze_route_worker_state
-               (id,last_attempt_at,last_success_at,last_error,last_route_id)
-               VALUES (1,?,NULL,?,NULL) ON CONFLICT(id) DO UPDATE SET
-               last_attempt_at=excluded.last_attempt_at,last_error=excluded.last_error""",
-            (utc_iso(at), error[:500]),
-        )
-        await self.db.commit()
+        async def write() -> None:
+            await self.db.execute(
+                """INSERT INTO squeeze_route_worker_state
+                   (id,last_attempt_at,last_success_at,last_error,last_route_id)
+                   VALUES (1,?,NULL,?,NULL) ON CONFLICT(id) DO UPDATE SET
+                   last_attempt_at=excluded.last_attempt_at,last_error=excluded.last_error""",
+                (utc_iso(at), error[:500]),
+            )
+
+        await self._write(write)
 
     async def status(self, *, enabled: bool) -> dict[str, Any]:
-        cursor = await self.db.execute("SELECT * FROM squeeze_route_worker_state WHERE id=1")
-        row = await cursor.fetchone()
+        async with self._lock:
+            cursor = await self.db.execute("SELECT * FROM squeeze_route_worker_state WHERE id=1")
+            row = await cursor.fetchone()
         return {
             "enabled": enabled,
             "source_capability": "research_only_public_rest",
@@ -140,12 +167,14 @@ class SqueezeRouteRepository:
         }
 
     async def list_routes(self, *, limit: int = 10, offset: int = 0) -> list[dict[str, Any]]:
-        cursor = await self.db.execute(
-            """SELECT l.route_id,l.evaluated_at,l.evaluation_json,s.state_json
-               FROM squeeze_route_latest l LEFT JOIN squeeze_route_state s USING(route_id)
-               ORDER BY l.evaluated_at DESC,l.route_id LIMIT ? OFFSET ?""",
-            (limit, offset),
-        )
+        async with self._lock:
+            cursor = await self.db.execute(
+                """SELECT l.route_id,l.evaluated_at,l.evaluation_json,s.state_json
+                   FROM squeeze_route_latest l LEFT JOIN squeeze_route_state s USING(route_id)
+                   ORDER BY l.evaluated_at DESC,l.route_id LIMIT ? OFFSET ?""",
+                (limit, offset),
+            )
+            rows = await cursor.fetchall()
         return [
             {
                 "route_id": row["route_id"],
@@ -153,19 +182,21 @@ class SqueezeRouteRepository:
                 "evaluation": json.loads(row["evaluation_json"]),
                 "state": json.loads(row["state_json"]) if row["state_json"] else None,
             }
-            for row in await cursor.fetchall()
+            for row in rows
         ]
 
     async def list_events(
         self, *, limit: int = 50, offset: int = 0, include_inputs: bool = False,
     ) -> list[dict[str, Any]]:
-        cursor = await self.db.execute(
-            """SELECT * FROM squeeze_route_events
-               ORDER BY occurred_at DESC,id DESC LIMIT ? OFFSET ?""",
-            (limit, offset),
-        )
+        async with self._lock:
+            cursor = await self.db.execute(
+                """SELECT * FROM squeeze_route_events
+                   ORDER BY occurred_at DESC,id DESC LIMIT ? OFFSET ?""",
+                (limit, offset),
+            )
+            rows = await cursor.fetchall()
         result = []
-        for row in await cursor.fetchall():
+        for row in rows:
             item = {
                 "id": row["id"], "route_id": row["route_id"], "phase": row["phase"],
                 "occurred_at": row["occurred_at"], "rule_version": row["rule_version"],
