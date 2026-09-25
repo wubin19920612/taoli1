@@ -123,7 +123,6 @@ async def test_dry_run_mode_skips_astro_writes() -> None:
     "handler_name",
     [
         "handle_alert",
-        "handle_new_listing_alert",
         "handle_live_pilot",
     ],
 )
@@ -392,7 +391,6 @@ async def test_lighter_unknown_counterparty_never_calls_astro() -> None:
     "handler_name",
     [
         "handle_alert",
-        "handle_new_listing_alert",
         "handle_live_pilot",
         "handle_manual_create",
         "handle_preadd",
@@ -430,7 +428,7 @@ async def test_rh_lighter_is_read_only_across_all_astro_create_paths(
 
 
 @pytest.mark.asyncio
-async def test_new_listing_alert_creates_open_card_even_when_default_is_paused() -> None:
+async def test_new_listing_risk_label_does_not_override_card_defaults() -> None:
     client = FakeAstroClient()
     service = AstroAlertService(
         client,
@@ -448,73 +446,9 @@ async def test_new_listing_alert_creates_open_card_even_when_default_is_paused()
     )
 
     assert result.status == "created"
-    assert "已创建开启卡片 UNITREE FF binance->okx，禁开=false" in result.message
-    assert client.added[0]["status"] is True
-    assert client.added[0]["disableOpen"] is False
-
-
-@pytest.mark.asyncio
-async def test_new_listing_alert_uses_new_listing_card_settings() -> None:
-    client = FakeAstroClient()
-    service = AstroAlertService(
-        client,
-        Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
-        card_settings=AstroCardSettings(max_trade_usdt=11, max_notional=11),
-        new_listing_card_settings=AstroCardSettings(
-            max_trade_usdt=45,
-            leverage=4,
-            min_notional=12,
-            max_notional=45,
-            open_enabled=False,
-        ),
-        live_pilot_settings=LivePilotSettings(
-            enabled=True,
-            notional_per_symbol_usdt=100,
-            create_cards_enabled=False,
-        ),
-        add_restart_delay_seconds=0,
-    )
-
-    result = await service.handle_alert(
-        opportunity().model_copy(
-            update={
-                "symbol": "UNITREEUSDT",
-                "risk_labels": ["NEW_LISTING"],
-            }
-        )
-    )
-
-    assert result.status == "created"
-    assert client.added[0]["maxTradeUSDT"] == "45"
-    assert client.added[0]["leverage"] == "4"
-    assert client.added[0]["minNotional"] == "12"
-    assert client.added[0]["maxNotional"] == "45"
-    assert client.added[0]["status"] is True
-    assert client.added[0]["disableOpen"] is False
-
-
-@pytest.mark.asyncio
-async def test_new_listing_alert_only_waits_between_gc_pair_adds(monkeypatch) -> None:
-    sleep_calls: list[float] = []
-
-    async def fake_sleep(seconds: float) -> None:
-        sleep_calls.append(seconds)
-
-    monkeypatch.setattr("app.services.astro_alerts.asyncio.sleep", fake_sleep)
-    client = FakeAstroClient()
-    service = AstroAlertService(
-        client,
-        Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
-        add_restart_delay_seconds=30,
-    )
-
-    result = await service.handle_new_listing_alert(
-        opportunity().model_copy(update={"risk_labels": ["NEW_LISTING"]})
-    )
-
-    assert result.status == "created"
-    assert len(client.added) == 2
-    assert sleep_calls == [30]
+    assert "已创建暂停卡片 UNITREE FF binance->okx，禁开=true" in result.message
+    assert client.added[0]["status"] is False
+    assert client.added[0]["disableOpen"] is True
 
 
 @pytest.mark.asyncio

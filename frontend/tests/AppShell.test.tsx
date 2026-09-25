@@ -18,9 +18,7 @@ const defaultNavigationOrder = [
   "pair-monitor",
   "symbol-spread",
   "premium-index",
-  "minute-signals",
   "negative-basis",
-  "new-listing",
   "second-sampling",
   "fat-finger",
   "tradfi-perp",
@@ -191,14 +189,26 @@ describe("AppShell", () => {
   });
 
   it("ignores invalid saved entries and appends newly available navigation items", () => {
-    window.localStorage.setItem(navigationOrderStorageKey, JSON.stringify(["history", "dashboard", "removed-page"]));
+    window.localStorage.setItem(navigationOrderStorageKey, JSON.stringify([
+      "history", "dashboard", "minute-signals", "new-listing", "removed-page"
+    ]));
     render(<AppShell />);
 
     const labels = visibleMenuLabels();
     expect(labels.slice(0, 2)).toEqual(["告警历史", "实时机会"]);
-    expect(labels).toHaveLength(21);
+    expect(labels).toHaveLength(defaultNavigationOrder.length);
+    expect(labels).not.toContain("1 分钟价差信号");
+    expect(labels).not.toContain("新币极速");
     expect(labels).toContain("账户连接");
     expect(labels).toContain("参数与告警");
+  });
+
+  it.each(["minute-signals", "new-listing"])("opens the default page for retired URL %s", (page) => {
+    window.history.replaceState({}, "", `/?page=${page}`);
+    render(<AppShell />);
+
+    expect(screen.getByText("Dashboard")).toBeTruthy();
+    expect(visibleMenuLabels()).toHaveLength(defaultNavigationOrder.length);
   });
 
   it("renders only the dedicated watch panel for the standalone window URL", async () => {

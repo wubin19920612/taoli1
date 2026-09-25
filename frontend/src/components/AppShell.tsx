@@ -52,9 +52,7 @@ type PageKey =
   | "pair-monitor"
   | "symbol-spread"
   | "premium-index"
-  | "minute-signals"
   | "negative-basis"
-  | "new-listing"
   | "second-sampling"
   | "fat-finger"
   | "tradfi-perp"
@@ -112,19 +110,9 @@ const lazyPages: Record<PageKey, LazyPage> = {
       default: module.PremiumIndexPage
     }))
   ),
-  "minute-signals": lazy(() =>
-    import("../pages/MinuteSignalPage").then((module) => ({
-      default: module.MinuteSignalPage
-    }))
-  ),
   "negative-basis": lazy(() =>
     import("../pages/NegativeBasisMonitorPage").then((module) => ({
       default: module.NegativeBasisMonitorPage
-    }))
-  ),
-  "new-listing": lazy(() =>
-    import("../pages/NewListingMonitorPage").then((module) => ({
-      default: module.NewListingMonitorPage
     }))
   ),
   "second-sampling": lazy(() =>
@@ -188,9 +176,7 @@ const defaultNavigationItems: NavigationItem[] = [
   { key: "pair-monitor", icon: <StockOutlined />, label: "价差查询" },
   { key: "symbol-spread", icon: <LineChartOutlined />, label: "跨所价差" },
   { key: "premium-index", icon: <LineChartOutlined />, label: "溢价指数" },
-  { key: "minute-signals", icon: <ThunderboltOutlined />, label: "1 分钟价差信号" },
   { key: "negative-basis", icon: <RadarChartOutlined />, label: "负基差埋伏" },
-  { key: "new-listing", icon: <ThunderboltOutlined />, label: "新币极速" },
   { key: "second-sampling", icon: <ThunderboltOutlined />, label: "1s 采样" },
   { key: "fat-finger", icon: <ExperimentOutlined />, label: "乌龙回测" },
   { key: "tradfi-perp", icon: <LineChartOutlined />, label: "TradFi 价差" },

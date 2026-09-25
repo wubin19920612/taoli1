@@ -10,7 +10,6 @@ from app.services.astro_client import AstroClientError
 from app.services.data_filters import symbol_is_excluded
 from app.services.market_labels import astro_exchange_route_variants
 from app.services.astro_planner import AstroPairPlanner, AstroPlannerConfig
-from app.services.risk_labels import is_new_listing_opportunity
 
 READ_ONLY_ASTRO_EXCHANGES = frozenset({"rh-lighter"})
 READ_ONLY_ASTRO_MESSAGE = (
@@ -148,7 +147,6 @@ class AstroAlertService:
         settings: Settings,
         planner: AstroPairPlanner | None = None,
         card_settings: AstroCardSettings | None = None,
-        new_listing_card_settings: AstroCardSettings | None = None,
         live_pilot_settings: LivePilotSettings | None = None,
         add_restart_delay_seconds: float = 3.0,
         risk_settings_loader: Callable[[], Awaitable[RiskSettings]] | None = None,
@@ -157,7 +155,6 @@ class AstroAlertService:
         self.settings = settings
         self.planner = planner
         self.card_settings = card_settings or settings.astro_card_settings
-        self.new_listing_card_settings = new_listing_card_settings or settings.astro_new_listing_card_settings
         self.live_pilot_settings = live_pilot_settings or LivePilotSettings()
         self.alert_auto_create_enabled = settings.astro_alert_auto_create
         self.allow_same_name_variants = (
@@ -171,16 +168,6 @@ class AstroAlertService:
             opportunity,
             enabled=self.alert_auto_create_enabled,
             disabled_message="自动创建卡片未开启",
-            auto_open_new_listing=True,
-        )
-
-    async def handle_new_listing_alert(self, opportunity: Opportunity) -> AstroAlertActionResult:
-        return await self._handle(
-            opportunity,
-            enabled=self.alert_auto_create_enabled,
-            disabled_message="自动创建卡片未开启",
-            auto_open_new_listing=True,
-            add_restart_delay_seconds=0,
         )
 
     async def handle_live_pilot(self, opportunity: Opportunity) -> AstroAlertActionResult:
@@ -230,7 +217,6 @@ class AstroAlertService:
         card_request: AstroCardCreateRequest | None = None,
         card_settings_override: AstroCardSettings | None = None,
         live_pilot: bool = False,
-        auto_open_new_listing: bool = False,
         add_restart_delay_seconds: float | None = None,
         manual_override: bool = False,
         allow_route_variants: bool = False,
@@ -301,18 +287,13 @@ class AstroAlertService:
                 )
             )
 
-        use_new_listing_settings = auto_open_new_listing and is_new_listing_opportunity(opportunity)
         base_card_settings = (
             card_settings_override
             if card_settings_override is not None
-            else self.new_listing_card_settings
-            if use_new_listing_settings
             else self.card_settings
         )
         effective_card_settings = _settings_with_create_overrides(base_card_settings, card_request)
-        if use_new_listing_settings:
-            effective_card_settings = effective_card_settings.model_copy(update={"open_enabled": True})
-        if live_pilot and not use_new_listing_settings:
+        if live_pilot:
             effective_card_settings = live_pilot_card_settings(
                 effective_card_settings,
                 self.live_pilot_settings,
@@ -342,9 +323,7 @@ class AstroAlertService:
                 )
             )
 
-        if use_new_listing_settings:
-            pair_enabled = True
-        elif live_pilot:
+        if live_pilot:
             pair_enabled = self.live_pilot_settings.create_cards_enabled
         else:
             pair_enabled = effective_card_settings.open_enabled

@@ -2085,13 +2085,11 @@ class AnnouncementMonitor:
         repository: AnnouncementRepository,
         *,
         alert_sender: AlertSender | None = None,
-        new_listing_prewarmer: Callable[[ExchangeAnnouncement], Awaitable[list[object]]] | None = None,
         asset_researcher: AssetResearcher | None = None,
         now_fn: Callable[[], datetime] | None = None,
     ) -> None:
         self.repository = repository
         self.alert_sender = alert_sender
-        self.new_listing_prewarmer = new_listing_prewarmer
         self.asset_researcher = asset_researcher
         self._now_fn = now_fn or utc_now
 
@@ -2190,11 +2188,6 @@ class AnnouncementMonitor:
                 except Exception:
                     logger.exception("asset research failed for announcement id=%s", research_target.id)
 
-            if self.new_listing_prewarmer is not None:
-                try:
-                    await self.new_listing_prewarmer(announcement)
-                except Exception:
-                    logger.exception("new listing watchlist prewarm failed")
             if inserted is None:
                 continue
             if inserted.alert_status == "pending":

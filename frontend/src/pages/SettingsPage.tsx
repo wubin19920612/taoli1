@@ -24,7 +24,6 @@ import {
   getAstroAutomationSettings,
   getAlertMessageTemplate,
   getAstroCardSettings,
-  getAstroNewListingCardSettings,
   getAstroStatus,
   getLivePilotPreview,
   getLivePilotSettings,
@@ -36,7 +35,6 @@ import {
   updateAlertMessageTemplate,
   updateAstroAutomationSettings,
   updateAstroCardSettings,
-  updateAstroNewListingCardSettings,
   updateLivePilotSettings,
   updateAlertRule,
   updateRiskSettings
@@ -47,7 +45,6 @@ import type {
   AstroAutomationSettings,
   AstroCardSettings,
   AstroSdkStatus,
-  AstroNewListingCardSettings,
   LivePilotPreview,
   LivePilotPreviewItem,
   LivePilotSettings,
@@ -377,7 +374,6 @@ export function SettingsPage() {
   const [templateForm] = Form.useForm<AlertMessageTemplateSettings>();
   const [astroAutomationForm] = Form.useForm<AstroAutomationSettings>();
   const [astroCardForm] = Form.useForm<AstroCardSettings>();
-  const [astroNewListingCardForm] = Form.useForm<AstroNewListingCardSettings>();
   const [livePilotForm] = Form.useForm<LivePilotSettings>();
   const [rules, setRules] = useState<AlertRule[]>([]);
   const [loading, setLoading] = useState(true);
@@ -419,7 +415,6 @@ export function SettingsPage() {
         alertTemplate,
         astroAutomation,
         astroCard,
-        astroNewListingCard,
         livePilot,
         pilotSelection,
         nextAstroStatus
@@ -430,7 +425,6 @@ export function SettingsPage() {
         getAlertMessageTemplate(),
         getAstroAutomationSettings(),
         getAstroCardSettings(),
-        getAstroNewListingCardSettings(),
         getLivePilotSettings(),
         getLivePilotPreview(),
         astroStatusRequest
@@ -443,7 +437,6 @@ export function SettingsPage() {
       templateForm.setFieldsValue(nextAlertTemplate);
       astroAutomationForm.setFieldsValue(astroAutomation);
       astroCardForm.setFieldsValue(astroCard);
-      astroNewListingCardForm.setFieldsValue(astroNewListingCard);
       livePilotForm.setFieldsValue(nextLivePilot);
       setRuleDefaults(nextRuleDefaults);
       setAlertTemplatePreview(nextAlertTemplate);
@@ -469,7 +462,6 @@ export function SettingsPage() {
     });
     livePilotForm.setFieldsValue(defaultLivePilotSettings);
     astroCardForm.setFieldsValue(defaultAstroCardSettings);
-    astroNewListingCardForm.setFieldsValue(defaultAstroCardSettings);
     void load();
   }, []);
 
@@ -498,13 +490,6 @@ export function SettingsPage() {
     const saved = await updateAstroCardSettings(normalizeAstroCardSettings(values));
     astroCardForm.setFieldsValue(saved);
     message.success("Astro 卡片默认参数已保存");
-  };
-
-  const saveAstroNewListingCardDefaults = async () => {
-    const values = await astroNewListingCardForm.validateFields();
-    const saved = await updateAstroNewListingCardSettings(normalizeAstroCardSettings(values));
-    astroNewListingCardForm.setFieldsValue(saved);
-    message.success("新币 Astro 默认参数已保存");
   };
 
   const saveAstroAutomation = async () => {
@@ -996,58 +981,6 @@ export function SettingsPage() {
           </div>
           <Button type="primary" htmlType="submit" icon={<SaveOutlined />}>
             保存 Astro 卡片默认参数
-          </Button>
-        </Form>
-      </section>
-      <section className="panel">
-        <Typography.Title level={4}>新币 Astro 默认参数</Typography.Title>
-        <Alert
-          className="rule-guide"
-          type="info"
-          showIcon
-          message="未单独保存前跟随 Astro 卡片默认参数"
-          description="保存后，新币上市告警自动创建的 Astro 卡片会使用这里的仓位、杠杆、名义金额和平仓参数；新币告警仍会按规则直接创建为开启卡片。"
-        />
-        <Form
-          name="astro-new-listing-card-defaults"
-          form={astroNewListingCardForm}
-          layout="vertical"
-          disabled={loading}
-          onFinish={saveAstroNewListingCardDefaults}
-        >
-          <div className="form-grid">
-            <Form.Item label="仓位金额 USDT" name="max_trade_usdt" rules={[{ required: true }]}>
-              <InputNumber min={0.01} step={1} className="wide-input" />
-            </Form.Item>
-            <Form.Item label="杠杆倍数" name="leverage" rules={[{ required: true }]}>
-              <InputNumber min={1} step={1} className="wide-input" />
-            </Form.Item>
-            <Form.Item label="最小名义金额 USDT" name="min_notional" rules={[{ required: true }]}>
-              <InputNumber min={0} step={1} className="wide-input" />
-            </Form.Item>
-            <Form.Item label="最大名义金额 USDT" name="max_notional" rules={[{ required: true }]}>
-              <InputNumber min={0.01} step={1} className="wide-input" />
-            </Form.Item>
-            <Form.Item
-              label="创建后允许开仓"
-              name="open_enabled"
-              valuePropName="checked"
-              help="新币上市告警会强制开启，这里保留同一套卡片参数结构。"
-            >
-              <Switch checkedChildren="开启" unCheckedChildren="关闭" />
-            </Form.Item>
-            <Form.Item label="平仓缓冲比例" name="close_position_buffer_pct" rules={[{ required: true }]}>
-              <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
-            </Form.Item>
-            <Form.Item label="不利资金费权重" name="unfavorable_funding_weight" rules={[{ required: true }]}>
-              <InputNumber min={0} step={0.1} className="wide-input" />
-            </Form.Item>
-            <Form.Item label="平仓下限比例" name="close_position_floor_pct" rules={[{ required: true }]}>
-              <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
-            </Form.Item>
-          </div>
-          <Button type="primary" htmlType="submit" icon={<SaveOutlined />}>
-            保存新币 Astro 默认参数
           </Button>
         </Form>
       </section>

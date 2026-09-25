@@ -6,7 +6,6 @@ export type PhonePriceAlertPriceField = "mark_price" | "index_price" | "mid_pric
 export type PairSpreadPriceField = "mark_price" | "mid_price" | "index_price" | "last_price";
 export type AnnouncementKind = "listing" | "delisting" | "launchpool" | "other";
 export type SecondLevelSampleStatus = "ok" | "partial" | "error";
-export type NewListingAlertLevel = "none" | "normal" | "strong" | "extreme";
 export type NegativeBasisSignalLevel = "none" | "watch" | "building" | "confirmed" | "strong" | "extreme";
 export type FatFingerMarketMode = "SF" | "FF";
 export type FatFingerMakerSide = "buy" | "sell";
@@ -638,111 +637,6 @@ export interface FatFingerBacktestResult {
   average_hedge_delay_seconds?: number | null;
   route_summaries: FatFingerBacktestRouteSummary[];
   trades: FatFingerBacktestTrade[];
-  warnings: string[];
-}
-
-export interface NewListingWatchItem {
-  id: string;
-  enabled: boolean;
-  symbol: string;
-  market_type: MarketType;
-  exchanges: string[];
-  interval_seconds: number;
-  retention_hours: number;
-  normal_threshold_pct: number;
-  strong_threshold_pct: number;
-  extreme_threshold_pct: number;
-  min_executable_notional_usdt: number;
-  depth_validation_notional_usdt: number;
-  allow_low_liquidity_alert: boolean;
-  normal_consecutive_hits: number;
-  strong_consecutive_hits: number;
-  extreme_consecutive_hits: number;
-  cooldown_seconds: number;
-  buy_fee_pct: number;
-  sell_fee_pct: number;
-  slippage_buffer_pct: number;
-  start_at: string | null;
-  stop_at: string | null;
-  note: string;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface NewListingSpreadSample {
-  id?: number | null;
-  watch_id: string;
-  observed_at: string;
-  symbol: string;
-  market_type: MarketType;
-  buy_exchange: string;
-  sell_exchange: string;
-  buy_bid?: number | null;
-  buy_ask?: number | null;
-  buy_bid_size?: number | null;
-  buy_ask_size?: number | null;
-  sell_bid?: number | null;
-  sell_ask?: number | null;
-  sell_bid_size?: number | null;
-  sell_ask_size?: number | null;
-  buy_price: number;
-  sell_price: number;
-  raw_spread_pct: number;
-  net_spread_pct: number;
-  executable_notional_usdt?: number | null;
-  buy_latency_ms?: number | null;
-  sell_latency_ms?: number | null;
-  alert_level: NewListingAlertLevel;
-  alert_triggered: boolean;
-  no_alert_reason?: string | null;
-  risk_labels: string[];
-}
-
-export interface NewListingAlertEvent {
-  id: string;
-  watch_id: string;
-  symbol: string;
-  market_type: MarketType;
-  level: NewListingAlertLevel;
-  buy_exchange: string;
-  sell_exchange: string;
-  net_spread_pct: number;
-  raw_spread_pct: number;
-  executable_notional_usdt?: number | null;
-  message: string;
-  created_at: string;
-}
-
-export interface NewListingMonitorSettings {
-  enabled: boolean;
-}
-
-export interface NewListingMonitorStatus {
-  enabled: boolean;
-  running: boolean;
-  watch_count: number;
-  enabled_watch_count: number;
-  active_watch_count: number;
-  sample_count: number;
-  event_count: number;
-  latest_error?: string | null;
-  watchlist: NewListingWatchItem[];
-  latest_samples: NewListingSpreadSample[];
-  latest_events: NewListingAlertEvent[];
-}
-
-export interface NewListingHistoryResult {
-  symbol?: string | null;
-  watch_id?: string | null;
-  start_at: string;
-  end_at: string;
-  sample_count: number;
-  event_count: number;
-  max_raw_spread_pct?: number | null;
-  max_net_spread_pct?: number | null;
-  max_sample?: NewListingSpreadSample | null;
-  samples: NewListingSpreadSample[];
-  events: NewListingAlertEvent[];
   warnings: string[];
 }
 
@@ -1868,106 +1762,6 @@ export interface PremiumIndexQueryResult {
   warnings: string[];
 }
 
-export type MinuteSignalEventType =
-  | "SHOCK_ALERT"
-  | "ENTRY"
-  | "TAKE_PROFIT"
-  | "STOP_LOSS"
-  | "TIME_EXIT";
-
-export interface MinuteSignalEvent {
-  event_type: MinuteSignalEventType;
-  state_before: string;
-  state_after: string;
-  signal_time_cst: string;
-  planned_execution_time_cst: string;
-  reason: string;
-  signal_basis_bps: number | null;
-  premium_bps: number | null;
-  premium_low_5m_bps: number | null;
-  premium_low_15m_bps: number | null;
-  basis_peak_60m_bps: number | null;
-  basis_drawdown_bps: number | null;
-  compression_ratio: number | null;
-  signal_entry_basis_bps: number | null;
-  signal_basis_gain_bps: number | null;
-}
-
-export interface MinuteSignalPoint {
-  time_cst: string;
-  basis_bps: number | null;
-  premium_bps: number | null;
-  basis_peak_60m_bps: number | null;
-  compression_ratio: number | null;
-}
-
-export interface MinuteSignalScanResult {
-  alpha_symbol: string;
-  futures_symbol: string;
-  hours: number;
-  observed_at: string;
-  bar_count: number;
-  latest: Record<string, unknown> | null;
-  points: MinuteSignalPoint[];
-  events: MinuteSignalEvent[];
-  warnings: string[];
-}
-
-export interface MinuteSignalUniverseCandidate {
-  base_asset: string;
-  alpha_id: string;
-  alpha_symbol: string;
-  futures_symbol: string;
-  alpha_price: number;
-  futures_price: number;
-  index_price: number | null;
-  volume_24h_usdt: number;
-  initial_basis_bps: number;
-  initial_premium_bps: number | null;
-  score: number;
-  event_type: MinuteSignalEventType | null;
-  signal_time_cst: string | null;
-  planned_execution_time_cst: string | null;
-  reason: string;
-  basis_bps: number | null;
-  premium_bps: number | null;
-  basis_peak_60m_bps: number | null;
-  compression_ratio: number | null;
-  bar_count: number;
-  recent_events: MinuteSignalEvent[];
-  error: string | null;
-}
-
-export interface MinuteSignalUniverseScanResult {
-  observed_at: string;
-  hours: number;
-  max_symbols: number;
-  min_volume_24h_usdt: number;
-  alert_cooldown_minutes: number;
-  max_entry_basis_bps: number;
-  require_negative_premium_when_spot_above: boolean;
-  max_premium_when_spot_above_bps: number;
-  universe_count: number;
-  eligible_count: number;
-  filtered_by_basis_count: number;
-  filtered_by_premium_count: number;
-  scanned_count: number;
-  signal_count: number;
-  error_count: number;
-  candidates: MinuteSignalUniverseCandidate[];
-  warnings: string[];
-}
-
-export interface MinuteSignalSettings {
-  hours: number;
-  max_symbols: number;
-  min_volume_24h_usdt: number;
-  alert_cooldown_minutes: number;
-  max_entry_basis_bps: number;
-  require_negative_premium_when_spot_above: boolean;
-  max_premium_when_spot_above_bps: number;
-}
-
 export interface AstroCardSettings {
   max_trade_usdt: number;
   leverage: number;
@@ -1978,8 +1772,6 @@ export interface AstroCardSettings {
   unfavorable_funding_weight: number;
   close_position_floor_pct: number;
 }
-
-export interface AstroNewListingCardSettings extends AstroCardSettings {}
 
 export interface LivePilotSettings {
   enabled: boolean;

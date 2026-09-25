@@ -69,21 +69,6 @@ describe("SettingsPage", () => {
             allow_same_name_variants: false
           });
         }
-        if (url.includes("/settings/astro-new-listing-card") && init?.method === "PUT") {
-          return Response.json(JSON.parse(String(init.body)));
-        }
-        if (url.includes("/settings/astro-new-listing-card")) {
-          return Response.json({
-            max_trade_usdt: 35,
-            leverage: 3,
-            min_notional: 10,
-            max_notional: 35,
-            open_enabled: false,
-            close_position_buffer_pct: 0.1,
-            unfavorable_funding_weight: 1,
-            close_position_floor_pct: 0
-          });
-        }
         if (url.includes("/settings/astro-card") && init?.method === "PUT") {
           return Response.json(JSON.parse(String(init.body)));
         }
@@ -452,31 +437,6 @@ describe("SettingsPage", () => {
     );
   }, 15000);
 
-  it("loads and saves new listing Astro card defaults", async () => {
-    render(<SettingsPage />);
-
-    expect(await screen.findByText("新币 Astro 默认参数")).toBeTruthy();
-    const positionInputs = await screen.findAllByLabelText("仓位金额 USDT");
-    const newListingPositionInput = positionInputs[1];
-    await waitFor(() => {
-      expect((newListingPositionInput as HTMLInputElement).value).toBe("35");
-    });
-
-    await userEvent.clear(newListingPositionInput);
-    await userEvent.type(newListingPositionInput, "120");
-    await userEvent.click(screen.getByRole("button", { name: /保存新币 Astro 默认参数/ }));
-
-    await waitFor(() => {
-      expect(fetch).toHaveBeenCalledWith(
-        expect.stringContaining("/settings/astro-new-listing-card"),
-        expect.objectContaining({
-          method: "PUT",
-          body: expect.stringContaining('"max_trade_usdt":120')
-        })
-      );
-    });
-  }, 15000);
-
   it("loads and saves symbol aliases with risk settings", async () => {
     render(<SettingsPage />);
 
@@ -506,7 +466,7 @@ describe("SettingsPage", () => {
   it("loads and saves Live Pilot settings", async () => {
     render(<SettingsPage />);
 
-    expect(await screen.findByText("实盘灰度")).toBeTruthy();
+    expect(await screen.findByText("正差价正费率实盘实验")).toBeTruthy();
     expect(screen.getByText("1000 USDT")).toBeTruthy();
     expect(await screen.findByText("当前候选 2/2")).toBeTruthy();
     expect(screen.getByText("BTCUSDT")).toBeTruthy();
@@ -518,17 +478,17 @@ describe("SettingsPage", () => {
     expect(screen.getByText("风险跳过 4")).toBeTruthy();
     expect(screen.getByText(/Astro dry-run 当前开启/)).toBeTruthy();
 
-    await userEvent.click(screen.getByLabelText("启用实盘灰度"));
+    await userEvent.click(screen.getByLabelText("启用实盘实验"));
     const symbolLimit = screen.getByLabelText("最多标的数");
     await userEvent.clear(symbolLimit);
     await userEvent.type(symbolLimit, "7");
     const notional = screen.getByLabelText("每标的资金 USDT");
     await userEvent.clear(notional);
     await userEvent.type(notional, "125");
-    const fundingFloor = screen.getByLabelText("强负资金跳过阈值");
+    const fundingFloor = screen.getByLabelText("最小下周期资金边际");
     await userEvent.clear(fundingFloor);
     await userEvent.type(fundingFloor, "-0.03");
-    await userEvent.click(screen.getByRole("button", { name: /保存实盘灰度/ }));
+    await userEvent.click(screen.getByRole("button", { name: /保存实盘实验/ }));
 
     await waitFor(() => {
       expect(fetch).toHaveBeenCalledWith(

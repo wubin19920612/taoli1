@@ -4,16 +4,13 @@ from datetime import UTC, datetime
 import pytest
 from fastapi import FastAPI
 
-from app.core.config import Settings
 from app.main import (
-    _handle_new_listing_astro_alert,
     _latest_signal_validation_failure,
     _run_alert_loop,
 )
 from app.models.alert import AlertEvent, AlertRule
-from app.models.announcement import AnnouncementKind, ExchangeAnnouncement
 from app.models.astro import AstroAlertActionResult
-from app.models.market import MarketSnapshot, MarketType
+from app.models.market import MarketType
 from app.models.opportunity import Opportunity, OpportunityType
 from app.models.orderbook import DepthValidationResult
 from app.models.settings import (
@@ -137,11 +134,9 @@ class FakeSettingsRepo:
         astro_card_settings: AstroCardSettings | None = None,
         live_pilot_settings: LivePilotSettings | None = None,
         alert_template: AlertMessageTemplateSettings | None = None,
-        astro_new_listing_card_settings: AstroCardSettings | None = None,
         risk_settings: RiskSettings | None = None,
     ):
         self.astro_card_settings = astro_card_settings
-        self.astro_new_listing_card_settings = astro_new_listing_card_settings
         self.live_pilot_settings = live_pilot_settings or LivePilotSettings()
         self.alert_template = alert_template or AlertMessageTemplateSettings()
         self.risk_settings = risk_settings or RiskSettings()
@@ -155,21 +150,8 @@ class FakeSettingsRepo:
     async def find_astro_card_settings(self) -> AstroCardSettings | None:
         return self.astro_card_settings
 
-    async def find_astro_new_listing_card_settings(self) -> AstroCardSettings | None:
-        return self.astro_new_listing_card_settings
-
     async def get_live_pilot_settings(self) -> LivePilotSettings:
         return self.live_pilot_settings
-
-
-class FakeAnnouncementRepo:
-    def __init__(self, announcements: list[ExchangeAnnouncement]):
-        self.announcements = announcements
-        self.calls: list[dict] = []
-
-    async def list(self, **kwargs) -> list[ExchangeAnnouncement]:
-        self.calls.append(kwargs)
-        return self.announcements
 
 
 class DeliveryRecordingEngine:
@@ -289,27 +271,6 @@ class ExistingAstroAlertService(FakeAstroAlertService):
         )
 
 
-class NewListingAwareAstroAlertService(FakeAstroAlertService):
-    def __init__(self):
-        super().__init__()
-        self.opportunities: list[Opportunity] = []
-
-    async def handle_alert(self, opportunity: Opportunity) -> AstroAlertActionResult:
-        self.calls.append(opportunity.id)
-        self.opportunities.append(opportunity)
-        opened = any(label.upper() == "NEW_LISTING" for label in opportunity.risk_labels)
-        state_text = "开启" if opened else "暂停"
-        disabled_text = "false" if opened else "true"
-        return AstroAlertActionResult(
-            enabled=True,
-            status="created",
-            action="add",
-            message=f"已创建{state_text}卡片 UNITREE FF binance->okx，禁开={disabled_text}",
-            pair_name="UNITREE",
-            pair_type="FF",
-        )
-
-
 class FakeOrderBookValidator:
     def __init__(self, result: DepthValidationResult):
         self.result = result
@@ -334,91 +295,6 @@ class FailingAstroAlertService:
 class BlankExceptionAstroAlertService:
     async def handle_alert(self, opportunity: Opportunity) -> AstroAlertActionResult:
         raise TimeoutError()
-
-
-@pytest.mark.asyncio
-async def test_new_listing_astro_handler_skips_globally_blocked_symbol() -> None:
-    app = FastAPI()
-    service = FakeAstroAlertService()
-    app.state.settings_repo = FakeSettingsRepo(
-        risk_settings=RiskSettings(excluded_symbols=["PURRUSDT"])
-    )
-    app.state.astro_alert_service = service
-    blocked = opportunity().model_copy(
-        update={
-            "id": "purr-new-listing",
-            "symbol": "PURRUSDT",
-            "min_open_depth_usdt": 100,
-        }
-    )
-
-    result = await _handle_new_listing_astro_alert(app, blocked)
-
-    assert result.status == "skipped"
-    assert result.action == "excluded_symbol"
-    assert "已在全局黑名单" in result.message
-    assert service.calls == []
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("hl_side", ["buy", "sell"])
-async def test_new_listing_card_recovers_fresh_hl_market_from_snapshot(hl_side: str) -> None:
-    app = FastAPI()
-    service = NewListingAwareAstroAlertService()
-    service.settings = Settings(astro_alert_auto_create=True, astro_dry_run_only=False)
-    service.alert_auto_create_enabled = True
-    service.new_listing_card_settings = AstroCardSettings(max_notional=10)
-    service.handle_new_listing_alert = service.handle_alert
-    app.state.astro_alert_service = service
-    store = SnapshotStore()
-    store.set_all_markets([
-        MarketSnapshot(
-            symbol="TTWOUSDT", base="TTWO", exchange="hyperliquid",
-            market_type=MarketType.FUTURE, bid=99, ask=100,
-            timestamp=datetime.now(UTC), raw_symbol="para:TTWO",
-        )
-    ])
-    app.state.snapshot_store = store
-    pair = opportunity().model_copy(
-        update={"symbol": "TTWOUSDT", f"{hl_side}_exchange": "hyperliquid"}
-    )
-
-    result = await _handle_new_listing_astro_alert(app, pair, require_depth=False)
-
-    assert result.status == "created"
-    assert getattr(service.opportunities[0], f"{hl_side}_raw_symbol") == "para:TTWO"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("market_raw_symbols", [[], ["TTWO", "para:TTWO"]])
-async def test_new_listing_card_skips_unconfirmed_hl_market(market_raw_symbols: list[str]) -> None:
-    app = FastAPI()
-    service = NewListingAwareAstroAlertService()
-    service.settings = Settings(astro_alert_auto_create=True, astro_dry_run_only=False)
-    service.alert_auto_create_enabled = True
-    service.new_listing_card_settings = AstroCardSettings(max_notional=10)
-    service.handle_new_listing_alert = service.handle_alert
-    app.state.astro_alert_service = service
-    store = SnapshotStore()
-    store.set_all_markets([
-        MarketSnapshot(
-            symbol="TTWOUSDT", base="TTWO", exchange="hyperliquid",
-            market_type=MarketType.FUTURE, bid=99, ask=100,
-            timestamp=datetime.now(UTC), raw_symbol=raw_symbol,
-        )
-        for raw_symbol in market_raw_symbols
-    ])
-    app.state.snapshot_store = store
-    pair = opportunity().model_copy(
-        update={"symbol": "TTWOUSDT", "sell_exchange": "hyperliquid"}
-    )
-
-    result = await _handle_new_listing_astro_alert(app, pair, require_depth=False)
-
-    assert result.status == "skipped"
-    assert result.action == "hl_market"
-    assert "HL 市场未确认" in result.message
-    assert not service.opportunities
 
 
 @pytest.mark.asyncio
@@ -705,93 +581,6 @@ async def test_alert_loop_retries_failed_delivery_without_success_cooldown() -> 
 
     assert event_repo.events[0].status == "failed"
     assert alert_engine.delivery_statuses == ["failed"]
-
-
-@pytest.mark.asyncio
-async def test_alert_loop_marks_recent_listing_announcements_for_open_astro_card() -> None:
-    stop_event = asyncio.Event()
-    app = FastAPI()
-    rule = AlertRule(
-        id="rule-1",
-        name="FF spread",
-        types=["FF"],
-        min_open_spread_pct=0.5,
-        min_fee_adjusted_open_pct=0.25,
-        min_volume_24h_usdt=1_000_000,
-        consecutive_hits=1,
-    )
-    now = datetime.now(UTC)
-    opp = opportunity().model_copy(
-        update={
-            "symbol": "UNITREEUSDT",
-            "id": "unitree-ff",
-        }
-    )
-    listing = ExchangeAnnouncement(
-        exchange="bybit",
-        announcement_id="listing-unitree",
-        kind=AnnouncementKind.LISTING,
-        title="New listing: UNITREEUSDT Perpetual Contract",
-        url="https://example.test/listing-unitree",
-        source="test",
-        symbols=["UNITREE"],
-        market_type="futures",
-        published_at=now,
-        fetched_at=now,
-        alert_status="sent",
-    )
-    store = SnapshotStore()
-    store.set_opportunities([opp])
-    event_repo = FakeEventRepo(stop_event)
-    feishu = FakeFeishuNotifier()
-    service = NewListingAwareAstroAlertService()
-    validator = FakeOrderBookValidator(
-        DepthValidationResult(
-            passed=True,
-            target_notional_usdt=1000,
-            buy_filled_usdt=1000,
-            sell_filled_usdt=1000,
-            buy_vwap=100,
-            sell_vwap=100.8,
-            quoted_open_pct=0.8,
-            executable_open_pct=0.8,
-            effective_executable_edge_pct=0.5,
-            slippage_loss_pct=0,
-            blockers=[],
-            warnings=[],
-        )
-    )
-
-    app.state.alert_rule_repo = FakeRuleRepo([rule])
-    app.state.alert_event_repo = event_repo
-    app.state.settings_repo = FakeSettingsRepo(
-        astro_card_settings=AstroCardSettings(max_trade_usdt=22, max_notional=22),
-        astro_new_listing_card_settings=AstroCardSettings(
-            max_trade_usdt=44,
-            leverage=5,
-            max_notional=44,
-            open_enabled=False,
-        ),
-    )
-    app.state.announcement_repo = FakeAnnouncementRepo([listing])
-    app.state.snapshot_store = store
-    app.state.alert_engine = EchoAlertEngine(rule)
-    app.state.feishu_notifier = feishu
-    app.state.astro_alert_service = service
-    app.state.orderbook_validator = validator
-
-    await asyncio.wait_for(_run_alert_loop(app, 60, stop_event), timeout=2)
-
-    assert service.calls == ["unitree-ff"]
-    assert service.opportunities[0].risk_labels == ["NEW_LISTING"]
-    assert service.new_listing_card_settings.max_trade_usdt == 44
-    assert validator.calls[0][2] is not None
-    assert validator.calls[0][2].max_trade_usdt == 44
-    assert validator.calls[0][2].leverage == 5
-    assert validator.calls[0][2].open_enabled is True
-    assert "Astro: 已创建开启卡片 UNITREE FF binance->okx，禁开=false" in event_repo.events[0].message
-    assert feishu.sent_texts[0] is not None
-    assert "Astro: 已创建开启卡片 UNITREE FF binance->okx，禁开=false" in feishu.sent_texts[0]
 
 
 @pytest.mark.asyncio

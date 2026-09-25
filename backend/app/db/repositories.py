@@ -30,7 +30,6 @@ from app.models.index_component import (
     index_watch_symbol,
 )
 from app.models.market import MarketType
-from app.models.new_listing import NewListingMonitorSettings
 from app.models.oil_news import (
     OilMarketSnapshot,
     OilNewsDirection,
@@ -54,7 +53,6 @@ from app.models.settings import (
     MAX_FLOATING_WATCH_PAIRS,
     MAX_FLOATING_WATCH_SYMBOLS,
     LivePilotSettings,
-    MinuteSignalSettings,
     RiskSettings,
 )
 
@@ -1376,35 +1374,6 @@ class SettingsRepository:
         await self.db.commit()
         return settings
 
-    async def get_astro_new_listing_card_settings(self) -> AstroCardSettings:
-        settings = await self.find_astro_new_listing_card_settings()
-        return settings or await self.get_astro_card_settings()
-
-    async def find_astro_new_listing_card_settings(self) -> AstroCardSettings | None:
-        cursor = await self.db.execute(
-            "SELECT payload FROM app_settings WHERE key = ?",
-            ("astro_new_listing_card",),
-        )
-        row = await cursor.fetchone()
-        if row is None:
-            return None
-        return AstroCardSettings.model_validate(json.loads(row["payload"]))
-
-    async def set_astro_new_listing_card_settings(
-        self,
-        settings: AstroCardSettings,
-    ) -> AstroCardSettings:
-        await self.db.execute(
-            """
-            INSERT INTO app_settings (key, payload)
-            VALUES (?, ?)
-            ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
-            """,
-            ("astro_new_listing_card", settings.model_dump_json()),
-        )
-        await self.db.commit()
-        return settings
-
     async def get_astro_automation_settings(self) -> AstroAutomationSettings:
         settings = await self.find_astro_automation_settings()
         return settings or AstroAutomationSettings()
@@ -1455,31 +1424,6 @@ class SettingsRepository:
             ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
             """,
             ("live_pilot", settings.model_dump_json()),
-        )
-        await self.db.commit()
-        return settings
-
-    async def get_minute_signal_settings(self) -> MinuteSignalSettings:
-        cursor = await self.db.execute(
-            "SELECT payload FROM app_settings WHERE key = ?",
-            ("minute_signals",),
-        )
-        row = await cursor.fetchone()
-        if row is None:
-            return MinuteSignalSettings()
-        return MinuteSignalSettings.model_validate(json.loads(row["payload"]))
-
-    async def set_minute_signal_settings(
-        self,
-        settings: MinuteSignalSettings,
-    ) -> MinuteSignalSettings:
-        await self.db.execute(
-            """
-            INSERT INTO app_settings (key, payload)
-            VALUES (?, ?)
-            ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
-            """,
-            ("minute_signals", settings.model_dump_json()),
         )
         await self.db.commit()
         return settings
@@ -1573,31 +1517,6 @@ class SettingsRepository:
             ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
             """,
             ("announcements", settings.model_dump_json()),
-        )
-        await self.db.commit()
-        return settings
-
-    async def get_new_listing_monitor_settings(self) -> NewListingMonitorSettings:
-        cursor = await self.db.execute(
-            "SELECT payload FROM app_settings WHERE key = ?",
-            ("new_listing_monitor",),
-        )
-        row = await cursor.fetchone()
-        if row is None:
-            return NewListingMonitorSettings()
-        return NewListingMonitorSettings.model_validate(json.loads(row["payload"]))
-
-    async def set_new_listing_monitor_settings(
-        self,
-        settings: NewListingMonitorSettings,
-    ) -> NewListingMonitorSettings:
-        await self.db.execute(
-            """
-            INSERT INTO app_settings (key, payload)
-            VALUES (?, ?)
-            ON CONFLICT(key) DO UPDATE SET payload = excluded.payload
-            """,
-            ("new_listing_monitor", settings.model_dump_json()),
         )
         await self.db.commit()
         return settings

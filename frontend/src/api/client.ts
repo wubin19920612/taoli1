@@ -17,7 +17,6 @@ import type {
   AstroCardCreateRequest,
   AstroInstrumentRouteRequest,
   AstroCardSettings,
-  AstroNewListingCardSettings,
   AstroPairStatus,
   AstroPairPlan,
   AstroPreaddPreview,
@@ -79,9 +78,6 @@ import type {
   PhonePriceAlertRule,
   PremiumIndexCurrentSnapshot,
   PremiumIndexQueryResult,
-  MinuteSignalScanResult,
-  MinuteSignalSettings,
-  MinuteSignalUniverseScanResult,
   NegativeBasisAlertEvent,
   NegativeBasisAnalysisResult,
   NegativeBasisAutoCandidate,
@@ -89,12 +85,6 @@ import type {
   NegativeBasisMonitorStatus,
   NegativeBasisSignalSample,
   NegativeBasisWatchItem,
-  NewListingAlertEvent,
-  NewListingHistoryResult,
-  NewListingMonitorSettings,
-  NewListingMonitorStatus,
-  NewListingSpreadSample,
-  NewListingWatchItem,
   RiskSettings,
   SecondLevelIndexComponentSample,
   SecondLevelMarketSample,
@@ -436,19 +426,6 @@ export async function updateAstroCardSettings(settings: AstroCardSettings): Prom
   });
 }
 
-export async function getAstroNewListingCardSettings(): Promise<AstroNewListingCardSettings> {
-  return fetchJson<AstroNewListingCardSettings>("/settings/astro-new-listing-card");
-}
-
-export async function updateAstroNewListingCardSettings(
-  settings: AstroNewListingCardSettings
-): Promise<AstroNewListingCardSettings> {
-  return fetchJson<AstroNewListingCardSettings>("/settings/astro-new-listing-card", {
-    method: "PUT",
-    body: JSON.stringify(settings)
-  });
-}
-
 export async function getAstroAutomationSettings(): Promise<AstroAutomationSettings> {
   return fetchJson<AstroAutomationSettings>("/settings/astro-automation");
 }
@@ -472,17 +449,6 @@ export async function getLivePilotPreview(): Promise<LivePilotPreview> {
 
 export async function updateLivePilotSettings(settings: LivePilotSettings): Promise<LivePilotSettings> {
   return fetchJson<LivePilotSettings>("/settings/live-pilot", {
-    method: "PUT",
-    body: JSON.stringify(settings)
-  });
-}
-
-export async function getMinuteSignalSettings(): Promise<MinuteSignalSettings> {
-  return fetchJson<MinuteSignalSettings>("/settings/minute-signals");
-}
-
-export async function updateMinuteSignalSettings(settings: MinuteSignalSettings): Promise<MinuteSignalSettings> {
-  return fetchJson<MinuteSignalSettings>("/settings/minute-signals", {
     method: "PUT",
     body: JSON.stringify(settings)
   });
@@ -1137,40 +1103,6 @@ export async function getCurrentPremiumIndex(query: {
   });
 }
 
-export async function scanMinuteSignals(query: {
-  symbol?: string;
-  alpha_symbol?: string;
-  hours?: number;
-} = {}): Promise<MinuteSignalScanResult> {
-  const url = buildUrl("/minute-signals/scan", query);
-  return fetch(url, { headers: authHeaders() }).then(async (response) => {
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(extractErrorMessage(text, response.status));
-    }
-    return response.json() as Promise<MinuteSignalScanResult>;
-  });
-}
-
-export async function scanMinuteSignalUniverse(query: {
-  hours?: number;
-  max_symbols?: number;
-  min_volume_24h_usdt?: number;
-  alert_cooldown_minutes?: number;
-  max_entry_basis_bps?: number;
-  require_negative_premium_when_spot_above?: boolean;
-  max_premium_when_spot_above_bps?: number;
-} = {}): Promise<MinuteSignalUniverseScanResult> {
-  const url = buildUrl("/minute-signals/scan-all", query);
-  return fetch(url, { headers: authHeaders() }).then(async (response) => {
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(extractErrorMessage(text, response.status));
-    }
-    return response.json() as Promise<MinuteSignalUniverseScanResult>;
-  });
-}
-
 export async function listSecondLevelSamplingExchanges(): Promise<string[]> {
   return fetchJson<string[]>("/second-level-sampling/exchanges");
 }
@@ -1245,101 +1177,6 @@ export async function runFatFingerBacktest(
   return fetchJson<FatFingerBacktestResult>("/second-level-sampling/fat-finger-backtest", {
     method: "POST",
     body: JSON.stringify(request)
-  });
-}
-
-export async function listNewListingMonitorExchanges(): Promise<string[]> {
-  return fetchJson<string[]>("/new-listing-monitor/exchanges");
-}
-
-export async function getNewListingMonitorStatus(): Promise<NewListingMonitorStatus> {
-  return fetchJson<NewListingMonitorStatus>("/new-listing-monitor/status");
-}
-
-export async function updateNewListingMonitorSettings(
-  settings: NewListingMonitorSettings
-): Promise<NewListingMonitorSettings> {
-  return fetchJson<NewListingMonitorSettings>("/new-listing-monitor/settings", {
-    method: "PUT",
-    body: JSON.stringify(settings)
-  });
-}
-
-export async function listNewListingWatchlist(): Promise<NewListingWatchItem[]> {
-  return fetchJson<NewListingWatchItem[]>("/new-listing-monitor/watchlist");
-}
-
-export async function upsertNewListingWatchItem(
-  item: NewListingWatchItem
-): Promise<NewListingWatchItem> {
-  return fetchJson<NewListingWatchItem>("/new-listing-monitor/watchlist", {
-    method: "POST",
-    body: JSON.stringify(item)
-  });
-}
-
-export async function deleteNewListingWatchItem(itemId: string): Promise<{ ok: boolean }> {
-  return fetchJson<{ ok: boolean }>(`/new-listing-monitor/watchlist/${itemId}`, {
-    method: "DELETE"
-  });
-}
-
-export async function collectNewListingWatchItem(
-  itemId: string
-): Promise<NewListingSpreadSample[]> {
-  return fetchJson<NewListingSpreadSample[]>(`/new-listing-monitor/watchlist/${itemId}/collect`, {
-    method: "POST",
-    body: JSON.stringify({})
-  });
-}
-
-export async function listNewListingSamples(query: {
-  watch_id?: string;
-  symbol?: string;
-  minutes?: number;
-  limit?: number;
-} = {}): Promise<NewListingSpreadSample[]> {
-  const url = buildUrl("/new-listing-monitor/samples", query);
-  return fetch(url, { headers: authHeaders() }).then(async (response) => {
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(extractErrorMessage(text, response.status));
-    }
-    return response.json() as Promise<NewListingSpreadSample[]>;
-  });
-}
-
-export async function listNewListingEvents(query: {
-  watch_id?: string;
-  symbol?: string;
-  minutes?: number;
-  limit?: number;
-} = {}): Promise<NewListingAlertEvent[]> {
-  const url = buildUrl("/new-listing-monitor/events", query);
-  return fetch(url, { headers: authHeaders() }).then(async (response) => {
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(extractErrorMessage(text, response.status));
-    }
-    return response.json() as Promise<NewListingAlertEvent[]>;
-  });
-}
-
-export async function queryNewListingHistory(query: {
-  watch_id?: string;
-  symbol?: string;
-  hours?: number;
-  start_at?: string;
-  end_at?: string;
-  limit?: number;
-}): Promise<NewListingHistoryResult> {
-  const url = buildUrl("/new-listing-monitor/history", query);
-  return fetch(url, { headers: authHeaders() }).then(async (response) => {
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(extractErrorMessage(text, response.status));
-    }
-    return response.json() as Promise<NewListingHistoryResult>;
   });
 }
 

@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager, suppress
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import AsyncIterator
 
 from fastapi import FastAPI
@@ -23,9 +23,7 @@ from app.api import (
     routes_hyperliquid_trade_status,
     routes_index_components,
     routes_instruments,
-    routes_minute_signals,
     routes_negative_basis_monitor,
-    routes_new_listing_monitor,
     routes_oil_news,
     routes_opportunities,
     routes_opportunity_radar,
@@ -54,12 +52,7 @@ from app.db.repositories import (
 )
 from app.db.schema import initialize_schema
 from app.models.alert import AlertEvent
-from app.models.announcement import AnnouncementKind
-from app.models.astro import AstroAlertActionResult
-from app.models.market import MarketType
-from app.models.new_listing import NewListingMonitorSettings
 from app.models.orderbook import DepthValidationResult
-from app.models.opportunity import Opportunity
 from app.models.phone_alert import PhonePriceAlertEvent
 from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, LivePilotSettings, RiskSettings
 from app.services.account_positions import AccountPositionService, GateAccountPositionProvider
@@ -84,7 +77,7 @@ from app.services.astro_client import AstroSdkClient, AstroSdkConfig
 from app.services.astro_planner import AstroPairPlanner, AstroPlannerConfig
 from app.services.astro_preadd import AstroPreaddService
 from app.services.collector import MarketCollector, default_exchange_adapters, run_collector_loop
-from app.services.data_filters import filter_markets, filter_opportunities, symbol_is_excluded
+from app.services.data_filters import filter_markets, filter_opportunities
 from app.services.feishu import FeishuConfig, FeishuNotifier
 from app.services.funding_research import (
     FundingResearchRepository,
@@ -113,14 +106,7 @@ from app.services.live_pilot import (
     filter_opportunities_by_alert_rules,
     select_live_pilot_matches,
 )
-from app.services.minute_signal_scan import MinuteSignalAlertEngine
 from app.services.negative_basis_monitor import NegativeBasisMonitor, NegativeBasisMonitorRepository
-from app.services.new_listing_monitor import (
-    NewListingAnnouncementCardPreparer,
-    NewListingMonitor,
-    NewListingMonitorRepository,
-    NewListingPrewarmer,
-)
 from app.services.oil_news import (
     OilNewsMonitor,
     OilNewsProvider,
@@ -141,12 +127,7 @@ from app.services.opportunity_radar import (
 from app.services.pair_spread_funding_recorder import PairSpreadFundingRecorder, PairSpreadFundingRepository
 from app.services.pair_spread_presets import PairSpreadPresetRepository
 from app.services.phone_price_alerts import PhonePriceAlertEngine, build_phone_price_alert_message
-from app.services.risk_labels import (
-    NEW_LISTING_RISK_LABEL,
-    effective_open_edge_pct,
-    is_new_listing_opportunity,
-    known_volume_24h_usdt,
-)
+from app.services.risk_labels import effective_open_edge_pct, known_volume_24h_usdt
 from app.services.snapshot_store import SnapshotStore
 from app.services.service_control import DockerServiceController, ServiceControlConfig
 from app.services.second_level_sampler import SecondLevelSampler, SecondLevelSamplingRepository
@@ -157,10 +138,6 @@ from app.services.trade_availability import (
 )
 
 logger = logging.getLogger(__name__)
-NEW_LISTING_ANNOUNCEMENT_LOOKBACK_HOURS = 72
-NEW_LISTING_ANNOUNCEMENT_FUTURE_HOURS = 24
-
-
 def _sqlite_path(settings: Settings) -> str:
     return settings.sqlite_path
 
@@ -188,11 +165,6 @@ async def _refresh_astro_runtime_settings(app: FastAPI, settings_repo: SettingsR
         "astro_card_settings",
         getattr(astro_alert_service, "card_settings", None),
     )
-    fallback_new_listing_settings = getattr(
-        getattr(app.state, "settings", None),
-        "astro_new_listing_card_settings",
-        getattr(astro_alert_service, "new_listing_card_settings", fallback_settings),
-    )
     fallback_automation = getattr(
         getattr(app.state, "settings", None),
         "astro_automation_settings",
@@ -200,7 +172,6 @@ async def _refresh_astro_runtime_settings(app: FastAPI, settings_repo: SettingsR
     )
     if settings_repo is None:
         astro_alert_service.card_settings = fallback_settings
-        astro_alert_service.new_listing_card_settings = fallback_new_listing_settings
         astro_alert_service.live_pilot_settings = LivePilotSettings()
         if fallback_automation is not None:
             astro_alert_service.alert_auto_create_enabled = fallback_automation.alert_auto_create
@@ -211,17 +182,6 @@ async def _refresh_astro_runtime_settings(app: FastAPI, settings_repo: SettingsR
     find_settings = getattr(settings_repo, "find_astro_card_settings", None)
     stored = await find_settings() if find_settings is not None else None
     astro_alert_service.card_settings = stored or fallback_settings
-    find_new_listing_settings = getattr(settings_repo, "find_astro_new_listing_card_settings", None)
-    stored_new_listing = await find_new_listing_settings() if find_new_listing_settings is not None else None
-    app_settings = getattr(app.state, "settings", None)
-    astro_alert_service.new_listing_card_settings = (
-        stored_new_listing
-        or (
-            app_settings.astro_new_listing_card_settings_from(astro_alert_service.card_settings)
-            if hasattr(app_settings, "astro_new_listing_card_settings_from")
-            else astro_alert_service.card_settings
-        )
-    )
     find_automation = getattr(settings_repo, "find_astro_automation_settings", None)
     stored_automation = await find_automation() if find_automation is not None else None
     if stored_automation is not None:
@@ -242,238 +202,11 @@ async def _refresh_astro_runtime_settings(app: FastAPI, settings_repo: SettingsR
     )
 
 
-async def _handle_new_listing_astro_alert(
-    app: FastAPI,
-    opportunity: Opportunity,
-    *,
-    require_depth: bool = True,
-    wait_after_add: bool = False,
-) -> AstroAlertActionResult:
-    settings_repo: SettingsRepository | None = getattr(app.state, "settings_repo", None)
-    if not await _new_listing_monitor_enabled(app):
-        return AstroAlertActionResult(
-            enabled=False,
-            status="disabled",
-            action="none",
-            message="新币极速总开关已关闭，未创建 Astro 卡片",
-        )
-    risk_settings = (
-        await settings_repo.get_risk_settings()
-        if settings_repo is not None
-        else RiskSettings()
-    )
-    if symbol_is_excluded(opportunity.symbol, risk_settings):
-        return AstroAlertActionResult(
-            enabled=True,
-            status="skipped",
-            action="excluded_symbol",
-            message=f"{opportunity.symbol} 已在全局黑名单，未创建 Astro 卡片",
-            pair_name=opportunity.symbol.removesuffix("USDT"),
-            pair_type=str(opportunity.type),
-        )
-    await _refresh_astro_runtime_settings(app, settings_repo)
-    astro_alert_service: AstroAlertService | None = getattr(app.state, "astro_alert_service", None)
-    if astro_alert_service is None:
-        return AstroAlertActionResult(
-            enabled=False,
-            status="disabled",
-            action="none",
-            message="Astro 自动建卡服务未初始化",
-        )
-    if (
-        not astro_alert_service.alert_auto_create_enabled
-        or astro_alert_service.settings.astro_dry_run_only
-    ):
-        return await astro_alert_service.handle_alert(opportunity)
-    missing_hl_sides = [
-        side
-        for side in ("buy", "sell")
-        if getattr(opportunity, f"{side}_exchange").lower() in {"hyperliquid", "hyper", "hl"}
-        and not getattr(opportunity, f"{side}_raw_symbol")
-    ]
-    if missing_hl_sides:
-        store: SnapshotStore | None = getattr(app.state, "snapshot_store", None)
-        now = datetime.now(UTC)
-        matching = [
-            market
-            for market in (store.get_all_markets() if store is not None else [])
-            if market.exchange.lower() == "hyperliquid"
-            and market.market_type == MarketType.FUTURE
-            and market.symbol.upper() == opportunity.symbol.upper()
-            and -5 <= (now - _datetime_as_utc(market.timestamp)).total_seconds() <= 60
-            and market.raw_symbol.strip()
-        ]
-        raw_symbols = {market.raw_symbol for market in matching}
-        if len(raw_symbols) != 1:
-            reason = "有多个 HL 市场" if raw_symbols else "没有近期 HL 合约行情"
-            return AstroAlertActionResult(
-                enabled=True,
-                status="skipped",
-                action="hl_market",
-                message=f"{opportunity.symbol} HL 市场未确认（{reason}），未按默认市场建卡",
-            )
-        raw_symbol = raw_symbols.pop()
-        opportunity = opportunity.model_copy(
-            update={f"{side}_raw_symbol": raw_symbol for side in missing_hl_sides}
-        )
-    if require_depth:
-        executable_depth = opportunity.min_open_depth_usdt
-        required_depth = astro_alert_service.new_listing_card_settings.max_notional
-        if executable_depth is None or executable_depth + 1e-9 < required_depth:
-            depth_text = "深度未知" if executable_depth is None else f"{executable_depth:.2f} USDT"
-            return AstroAlertActionResult(
-                enabled=True,
-                status="skipped",
-                action="depth",
-                message=(
-                    f"可成交盘口 {depth_text} 低于新币卡片最大金额 "
-                    f"{required_depth:.2f} USDT，未自动建卡"
-                ),
-            )
-    if wait_after_add:
-        return await astro_alert_service.handle_alert(opportunity)
-    return await astro_alert_service.handle_new_listing_alert(opportunity)
-
-
-async def _prewarm_recent_listing_announcements(app: FastAPI) -> None:
-    if not await _new_listing_monitor_enabled(app):
-        return
-    announcement_repo: AnnouncementRepository | None = getattr(
-        app.state,
-        "announcement_repo",
-        None,
-    )
-    prewarmer = getattr(app.state, "new_listing_prewarmer", None)
-    if announcement_repo is None or prewarmer is None:
-        return
-    try:
-        await prewarmer.backfill_auto_watch_windows()
-    except Exception:  # noqa: BLE001 - migration must never block application startup.
-        logger.exception("failed to backfill new listing prewarm windows")
-    try:
-        announcements = await announcement_repo.list(
-            kind=AnnouncementKind.LISTING,
-            limit=500,
-            demote_baseline=True,
-        )
-    except Exception:  # noqa: BLE001 - prewarm must never block application startup.
-        logger.exception("failed to load listing announcements for prewarm")
-        return
-    for announcement in announcements:
-        try:
-            await prewarmer.prewarm_from_announcement(announcement)
-        except Exception:  # noqa: BLE001 - continue with other listing announcements.
-            logger.exception("failed to prewarm listing announcement id=%s", announcement.id)
-
-
 def _find_latest_opportunity(app: FastAPI, opportunity_id: str):
     store = getattr(app.state, "snapshot_store", None)
     if store is None:
         return None
     return next((item for item in store.get_opportunities() if item.id == opportunity_id), None)
-
-
-def _datetime_as_utc(value: datetime) -> datetime:
-    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
-
-
-def _symbol_lookup_keys(value: str) -> set[str]:
-    normalized = value.strip().upper().replace("-", "").replace("_", "").replace("/", "")
-    if not normalized:
-        return set()
-    keys = {normalized}
-    quote_suffixes = ("USDT", "USDC", "USD")
-    has_quote_suffix = False
-    for suffix in quote_suffixes:
-        if normalized.endswith(suffix) and len(normalized) > len(suffix):
-            keys.add(normalized[: -len(suffix)])
-            has_quote_suffix = True
-    if not has_quote_suffix:
-        keys.update(f"{normalized}{suffix}" for suffix in quote_suffixes)
-    return keys
-
-
-def _has_new_listing_label(opportunity) -> bool:
-    return any(label.upper() == NEW_LISTING_RISK_LABEL for label in opportunity.risk_labels)
-
-
-def _with_new_listing_label(opportunity):
-    if _has_new_listing_label(opportunity):
-        return opportunity
-    return opportunity.model_copy(
-        update={"risk_labels": [*opportunity.risk_labels, NEW_LISTING_RISK_LABEL]}
-    )
-
-
-def _inherit_new_listing_label(source, target):
-    if target is None or not _has_new_listing_label(source):
-        return target
-    return _with_new_listing_label(target)
-
-
-def _announcement_time_candidates(announcement) -> list[datetime]:
-    candidates = [
-        getattr(announcement, "published_at", None),
-        getattr(announcement, "event_time", None),
-    ]
-    for item in getattr(announcement, "event_schedule", []) or []:
-        candidates.append(getattr(item, "event_time", None))
-    return [item for item in candidates if isinstance(item, datetime)]
-
-
-def _is_recent_listing_announcement(announcement, now: datetime) -> bool:
-    if getattr(announcement, "kind", None) != AnnouncementKind.LISTING:
-        return False
-    start_at = now - timedelta(hours=NEW_LISTING_ANNOUNCEMENT_LOOKBACK_HOURS)
-    end_at = now + timedelta(hours=NEW_LISTING_ANNOUNCEMENT_FUTURE_HOURS)
-    return any(start_at <= _datetime_as_utc(item) <= end_at for item in _announcement_time_candidates(announcement))
-
-
-async def _recent_listing_symbol_keys(app: FastAPI, now: datetime) -> set[str]:
-    repo = getattr(app.state, "announcement_repo", None)
-    list_announcements = getattr(repo, "list", None)
-    if list_announcements is None:
-        return set()
-    try:
-        announcements = await list_announcements(
-            kind=AnnouncementKind.LISTING,
-            limit=500,
-            demote_baseline=True,
-        )
-    except Exception:  # noqa: BLE001 - announcement enrichment must not break alert delivery.
-        logger.exception("failed to load recent listing announcements for alert labeling")
-        return set()
-
-    keys: set[str] = set()
-    for announcement in announcements:
-        if not _is_recent_listing_announcement(announcement, now):
-            continue
-        for symbol in getattr(announcement, "symbols", []) or []:
-            keys.update(_symbol_lookup_keys(str(symbol)))
-    return keys
-
-
-async def _tag_recent_listing_opportunities(app: FastAPI, opportunities: list, now: datetime) -> list:
-    if not await _new_listing_monitor_enabled(app):
-        return opportunities
-    listing_symbol_keys = await _recent_listing_symbol_keys(app, now)
-    if not listing_symbol_keys:
-        return opportunities
-    return [
-        _with_new_listing_label(opportunity)
-        if _symbol_lookup_keys(opportunity.symbol).intersection(listing_symbol_keys)
-        else opportunity
-        for opportunity in opportunities
-    ]
-
-
-async def _new_listing_monitor_enabled(app: FastAPI) -> bool:
-    settings_repo = getattr(app.state, "settings_repo", None)
-    get_settings = getattr(settings_repo, "get_new_listing_monitor_settings", None)
-    if get_settings is None:
-        return True
-    settings: NewListingMonitorSettings = await get_settings()
-    return settings.enabled
 
 
 def _latest_signal_validation_failure(
@@ -561,18 +294,7 @@ def _astro_card_settings_for_opportunity(
     astro_alert_service: AstroAlertService,
     opportunity,
 ) -> AstroCardSettings | None:
-    card_settings = getattr(astro_alert_service, "card_settings", None)
-    if not is_new_listing_opportunity(opportunity):
-        return card_settings
-    new_listing_settings = getattr(
-        astro_alert_service,
-        "new_listing_card_settings",
-        None,
-    )
-    effective_settings = new_listing_settings or card_settings
-    if effective_settings is None:
-        return None
-    return effective_settings.model_copy(update={"open_enabled": True})
+    return getattr(astro_alert_service, "card_settings", None)
 
 
 def _exception_message(exc: BaseException) -> str:
@@ -649,7 +371,6 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
             await _refresh_astro_runtime_settings(app, settings_repo)
             now = datetime.now(UTC)
             opportunities = filter_opportunities(app.state.snapshot_store.get_opportunities(), settings)
-            opportunities = await _tag_recent_listing_opportunities(app, opportunities, now)
             opportunities = filter_opportunities_by_alert_rules(
                 opportunities,
                 rules,
@@ -658,15 +379,7 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
             )
             matches = app.state.alert_engine.evaluate(opportunities, rules, now=now, risk_settings=settings)
             live_pilot_matches = (
-                select_live_pilot_matches(
-                    [
-                        match
-                        for match in matches
-                        if not is_new_listing_opportunity(match.opportunity)
-                    ],
-                    live_pilot_settings,
-                    settings,
-                )
+                select_live_pilot_matches(matches, live_pilot_settings, settings)
                 if live_pilot_settings.enabled
                 else []
             )
@@ -692,10 +405,7 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                 existing_card_skipped = False
                 signal_condition_failure = False
                 is_live_pilot_match = (match.rule.id, match.opportunity.id) in live_pilot_match_keys
-                latest_opportunity = _inherit_new_listing_label(
-                    match.opportunity,
-                    _find_latest_opportunity(app, match.opportunity.id),
-                )
+                latest_opportunity = _find_latest_opportunity(app, match.opportunity.id)
                 message = build_alert_message(
                     match.rule,
                     latest_opportunity or match.opportunity,
@@ -1065,20 +775,6 @@ def create_app(
             SecondLevelSamplingRepository(db),
             risk_settings_loader=app.state.settings_repo.get_risk_settings,
         )
-        new_listing_repo = NewListingMonitorRepository(db)
-        new_listing_card_preparer = NewListingAnnouncementCardPreparer(
-            lambda opportunity: _handle_new_listing_astro_alert(
-                app,
-                opportunity,
-                require_depth=False,
-                wait_after_add=True,
-            )
-        )
-        app.state.new_listing_prewarmer = NewListingPrewarmer(
-            new_listing_repo,
-            card_preparer=new_listing_card_preparer.prepare_from_announcement,
-            settings_loader=app.state.settings_repo.get_new_listing_monitor_settings,
-        )
         text_alert_sender = (
             (lambda message: _send_index_component_alert(app, message))
             if app_settings.feishu_live_send_enabled
@@ -1095,13 +791,6 @@ def create_app(
             OilNewsProvider(),
             alert_sender=oil_news_alert_sender,
             translator=OilNewsTranslator(),
-        )
-        app.state.new_listing_monitor = NewListingMonitor(
-            new_listing_repo,
-            alert_sender=text_alert_sender,
-            risk_settings_loader=app.state.settings_repo.get_risk_settings,
-            astro_alert_handler=lambda opportunity: _handle_new_listing_astro_alert(app, opportunity),
-            settings_loader=app.state.settings_repo.get_new_listing_monitor_settings,
         )
         app.state.negative_basis_monitor = NegativeBasisMonitor(
             NegativeBasisMonitorRepository(db),
@@ -1130,12 +819,6 @@ def create_app(
         tasks: list[asyncio.Task] = []
         if start_background_workers:
             await app.state.second_level_sampler.initialize()
-            await _prewarm_recent_listing_announcements(app)
-            _start_background_task(
-                tasks,
-                app.state.new_listing_monitor.run(stop_event),
-                name="new-listing-monitor",
-            )
             _start_background_task(
                 tasks,
                 app.state.negative_basis_monitor.run(stop_event),
@@ -1238,7 +921,6 @@ def create_app(
             announcement_monitor = AnnouncementMonitor(
                 app.state.announcement_repo,
                 alert_sender=text_alert_sender,
-                new_listing_prewarmer=app.state.new_listing_prewarmer.prewarm_from_announcement,
                 asset_researcher=announcement_research.research,
             )
             announcement_provider = default_announcement_provider(app.state.announcement_repo)
@@ -1304,7 +986,6 @@ def create_app(
                 "gate_twap_manager",
                 "tradfi_perp_live_fetcher",
                 "second_level_sampler",
-                "new_listing_monitor",
                 "negative_basis_monitor",
                 "pair_spread_funding_recorder",
                 "oil_news_monitor",
@@ -1330,12 +1011,8 @@ def create_app(
     app.state.hyperliquid_trade_status_monitor = None
     app.state.trade_availability_watch_repo = None
     app.state.trade_availability_monitor = None
-    app.state.minute_signal_scan_service_factory = None
-    app.state.minute_signal_alert_engine = MinuteSignalAlertEngine()
     app.state.second_level_sampler = None
     app.state.oil_news_monitor = None
-    app.state.new_listing_prewarmer = None
-    app.state.new_listing_monitor = None
     app.state.negative_basis_monitor = None
     app.state.trade_availability_service = None
     app.state.account_position_service = None
@@ -1410,9 +1087,7 @@ def create_app(
     app.include_router(routes_instruments.router, prefix="/api")
     app.include_router(routes_pair_spread.router, prefix="/api")
     app.include_router(routes_premium_index.router, prefix="/api")
-    app.include_router(routes_minute_signals.router, prefix="/api")
     app.include_router(routes_negative_basis_monitor.router, prefix="/api")
-    app.include_router(routes_new_listing_monitor.router, prefix="/api")
     app.include_router(routes_index_components.router, prefix="/api")
     app.include_router(routes_announcements.router, prefix="/api")
     app.include_router(routes_oil_news.router, prefix="/api")

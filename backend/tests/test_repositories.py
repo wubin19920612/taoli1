@@ -173,51 +173,23 @@ async def test_astro_card_settings_round_trip() -> None:
 
 
 @pytest.mark.asyncio
-async def test_astro_new_listing_card_settings_default_to_card_settings_and_round_trip() -> None:
+async def test_retired_new_listing_tables_are_not_created_or_dropped() -> None:
     db = await connect_database(":memory:")
     try:
         await initialize_schema(db)
-        repo = SettingsRepository(db)
-
-        defaults = await repo.get_astro_new_listing_card_settings()
-        assert defaults.max_trade_usdt == 10
-        assert defaults.max_notional == 10
-
-        await repo.set_astro_card_settings(
-            AstroCardSettings(
-                max_trade_usdt=60,
-                leverage=3,
-                min_notional=12,
-                max_notional=60,
-            )
+        tables = await db.execute_fetchall(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'new_listing_%'"
         )
-        inherited = await repo.get_astro_new_listing_card_settings()
+        assert tables == []
 
-        assert inherited.max_trade_usdt == 60
-        assert inherited.leverage == 3
-        assert inherited.max_notional == 60
-
-        saved = await repo.set_astro_new_listing_card_settings(
-            AstroCardSettings(
-                max_trade_usdt=25,
-                leverage=2,
-                min_notional=10,
-                max_notional=25,
-                close_position_buffer_pct=0.2,
-                unfavorable_funding_weight=1.5,
-                close_position_floor_pct=0.01,
-            )
+        await db.execute("CREATE TABLE new_listing_watchlist (id TEXT PRIMARY KEY, payload TEXT)")
+        await db.execute(
+            "INSERT INTO new_listing_watchlist (id, payload) VALUES (?, ?)",
+            ("legacy-watch", "{}"),
         )
-        loaded = await repo.get_astro_new_listing_card_settings()
-        ordinary = await repo.get_astro_card_settings()
-
-        assert saved.max_trade_usdt == 25
-        assert loaded.max_trade_usdt == 25
-        assert loaded.leverage == 2
-        assert loaded.max_notional == 25
-        assert loaded.close_position_buffer_pct == 0.2
-        assert loaded.unfavorable_funding_weight == 1.5
-        assert loaded.close_position_floor_pct == 0.01
-        assert ordinary.max_trade_usdt == 60
+        await db.commit()
+        await initialize_schema(db)
+        rows = await db.execute_fetchall("SELECT id, payload FROM new_listing_watchlist")
+        assert [(row["id"], row["payload"]) for row in rows] == [("legacy-watch", "{}")]
     finally:
         await db.close()

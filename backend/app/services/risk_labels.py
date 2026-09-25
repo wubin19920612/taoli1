@@ -6,8 +6,6 @@ from app.models.settings import RiskSettings
 from app.services.alert_metrics import combined_open_edge_pct
 from app.services.funding_edge import next_cycle_funding_edge_pct
 
-NEW_LISTING_RISK_LABEL = "NEW_LISTING"
-
 NON_ACTIONABLE_RISK_LABELS = frozenset(
     {
         "LOW_VOLUME",
@@ -59,17 +57,6 @@ def has_non_actionable_risk(
 ) -> bool:
     labels = hidden_labels if hidden_labels is not None else NON_ACTIONABLE_RISK_LABELS
     return bool(labels.intersection(opportunity.risk_labels))
-
-
-def has_risk_label(opportunity: Opportunity, label: str) -> bool:
-    normalized = label.strip().upper()
-    if not normalized:
-        return False
-    return any(item.upper() == normalized for item in opportunity.risk_labels)
-
-
-def is_new_listing_opportunity(opportunity: Opportunity) -> bool:
-    return has_risk_label(opportunity, NEW_LISTING_RISK_LABEL)
 
 
 def apply_risk_labels(
