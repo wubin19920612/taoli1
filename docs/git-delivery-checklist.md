@@ -100,11 +100,11 @@ git log -1 --oneline
 
 ## 服务器部署
 
-代码推送成功且两份预构建镜像完成后，在服务器按 `docs/linux-deployment.md` 的流程备份并更新。2 GB 生产机禁止直接构建；下面的 `DEPLOY_COMMIT` 必须与已验证镜像的完整提交号一致：
+代码推送成功且两份预构建镜像完成后，在服务器按 `docs/linux-deployment.md` 的流程备份并更新。Windows 工作站使用本机 `C:\Users\wubin\.ssh\config` 中的 `taoli1-prod` 别名，Codex 执行时显式传入 `ssh.exe -F C:\Users\wubin\.ssh\config taoli1-prod`；服务器地址与专用密钥路径只存放在受控本机配置中。2 GB 生产机禁止直接构建；`DEPLOY_BRANCH` 应为目标提交所在且远端指向该提交的分支，`DEPLOY_COMMIT` 必须与已验证镜像的完整提交号一致：
 
 ```bash
 cd ~/wubin/taoli1
-DEPLOY_BRANCH=codex/server-low-memory DEPLOY_COMMIT=<full-reviewed-commit-sha> bash deploy/linux-update.sh
+DEPLOY_BRANCH=<reviewed-branch> DEPLOY_COMMIT=<full-reviewed-commit-sha> bash deploy/linux-update.sh
 ```
 
 脚本中的 `git pull --ff-only` 不使用 `sudo`；只有 Docker Compose 使用 `sudo`。首次迁移旧服务器脚本时，先按 `docs/linux-deployment.md` 核对已有备份并快进到运维分支。

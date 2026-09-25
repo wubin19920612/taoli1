@@ -8,9 +8,9 @@ previously exhausted host memory while the application was running.
 
 The [production image workflow](../.github/workflows/build-production-images.yml)
 builds backend and frontend images on GitHub Actions for `linux/amd64`. A push to
-`codex/server-low-memory` builds that exact commit. A manual workflow dispatch
-can build another full 40-character commit SHA from this repository. Images are
-published as:
+`codex/server-low-memory` or `codex/frontend-localization-polish` builds that
+exact commit. A manual workflow dispatch can build another full 40-character
+commit SHA from this repository. Images are published as:
 
 ```text
 ghcr.io/wubin19920612/taoli1-backend:sha-<full-commit-sha>
@@ -21,6 +21,23 @@ Wait for **both** workflow jobs to finish and verify the two image tags before
 updating the server. If the GHCR packages are private, authenticate the server's
 Docker client using a token with `read:packages`; keep the token outside the
 repository. Public packages can be pulled without a token.
+
+## Windows Operator Access
+
+This workstation has a `taoli1-prod` SSH alias in the local, untracked
+`C:\Users\wubin\.ssh\config`. Its dedicated private key and pinned host-key
+record stay outside this repository. Codex runs under a different Windows home,
+so pass the config file explicitly and verify access with a read-only command:
+
+```powershell
+ssh.exe -F C:\Users\wubin\.ssh\config taoli1-prod "git -C ~/wubin/taoli1 rev-parse HEAD"
+```
+
+If the Codex sandbox cannot read the dedicated key, the SSH command needs
+approved access outside the workspace. Do not copy the key into the repository
+or substitute the default GitHub SSH key. The local alias enforces strict host-key
+checking. Before a deployment, confirm the target branch, commit, clean tracked
+worktree, running backend, database, disk space, and both prebuilt image tags.
 
 ## Server Configuration
 
@@ -55,10 +72,19 @@ running the new script.
 For subsequent updates, from the server repository:
 
 ```bash
-DEPLOY_BRANCH=codex/server-low-memory \
+DEPLOY_BRANCH=<reviewed-branch> \
 DEPLOY_COMMIT=<full-reviewed-commit-sha> \
 bash deploy/linux-update.sh
 ```
+
+On the Windows workstation, run that remote command through the verified alias:
+
+```powershell
+ssh.exe -F C:\Users\wubin\.ssh\config taoli1-prod "cd ~/wubin/taoli1 && DEPLOY_BRANCH=<reviewed-branch> DEPLOY_COMMIT=<full-reviewed-commit-sha> bash deploy/linux-update.sh"
+```
+
+Use the branch containing the reviewed commit at its remote tip. The script
+checks that exact branch/SHA pair before backing up and updating the server.
 
 The script requires a clean tracked worktree, checks the remote branch tip,
 checks free disk space, makes a SQLite backup with `integrity_check=ok` and a

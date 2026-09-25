@@ -25,11 +25,17 @@
 
 - 后端全量测试：755 项通过；另 11 项在 pytest 建立本机默认临时目录时遇到 Windows `PermissionError`，未进入测试逻辑。指定新的可写 `--basetemp` 后，对受影响的三个测试文件重跑，18 项全部通过。
 - 前端相关四个测试文件：59 项通过；`npm run build`（含 TypeScript 检查）通过；`git diff --check` 通过。
-- 本机 3000 端口的前端开发服务已加载新页面。8000 端口现有后端服务仍是旧进程，不能将其响应当作新后端验收。
+- 隔离本地预览 `127.0.0.1:3011` 配合独立数据库和 dry-run 后端 `:8011`：桌面、390px 手机没有横向溢出；设置页将 `gc` 保存、读回后恢复 `both`，均为 HTTP 200。
 
-## 线上状态与下一步
+## 线上交付与验收
 
-- 截至编写交接时尚未部署或在线创建卡片。当前环境对服务器的 SSH 主机密钥校验通过，但 `ubuntu` 身份认证返回 `Permission denied (publickey,password)`；生产运行版本、数据库备份及页面行为尚未在本任务中核验。
-- 代码推送后需确认该功能提交的 backend/frontend 两个预构建镜像成功。获得有效服务器 SSH 凭据后，按 `docs/linux-deployment.md` 用 `deploy/linux-update.sh` 先备份并校验 `/data/radar.db`，再 `git pull --ff-only`、拉取对应 SHA 的镜像并启动 Compose；生产机不现场构建，不执行 `docker compose down -v`。
-- 部署后检查双容器、`/api/health`、全局 Astro 设置读回、人工预览的 GC/非 GC 路线、桌面与窄屏选择器。不要为验收创建真实交易卡片。
-- 保留原有 `.worktrees/`、`output/`、其他模块交接文档、`script/` 和 pytest 临时目录等未跟踪产物；均不属于本模块提交。
+- 功能提交 `a8dbe13b842706f14d40c0caebecf6aeda706839` 已推送。GitHub Actions run `36087705445` 的 backend、frontend 镜像构建均成功，两份 GHCR manifest 均可读取。
+- 通过本机受控 `taoli1-prod` SSH 别名登录；Codex 使用 `ssh.exe -F C:\Users\wubin\.ssh\config taoli1-prod` 显式读取配置。别名内的服务器地址、私钥路径和已固定的主机公钥留在受控运行环境，不写入仓库。详情见 `docs/linux-deployment.md`。
+- 生产机原提交 `6ec13caee912924563c9d4dc5cd88ae25295bfdc`，跟踪文件干净、双容器 healthy、后端健康接口正常、磁盘可用约 24.9 GiB。`deploy/linux-update.sh` 于 2026-09-25 03:07:53 UTC 创建 `backups/radar-before-a8dbe13b8427-20260925T030753Z.db`，大小 598,233,088 字节；SQLite `integrity_check=ok`，容器与主机 SHA-256 一致，复核哈希为 `7b2a0adfd9c13b646ba98a713554a223fe277a1c38497464d0f3e05db6e2d188`。
+- 脚本 `git pull --ff-only` 后服务器仓库与两个运行镜像均为 `a8dbe13b842706f14d40c0caebecf6aeda706839`；两个容器 healthy，后端 `/api/health`、前端首页均返回 HTTP 200。脚本只拉取预构建镜像，没有在 2 GiB 生产机现场构建，也未删除数据库卷。备份保留策略保留新备份并清理一份较早的自动备份 `radar-before-c43d2f76a566-20260925T011420Z.db`。
+- 线上 `/api/settings/astro-card` 返回 `card_variant: "both"`。只读预览 `CATUSDT` 机会返回普通 `okx -> binance` 与 GC `gc-okx -> gc-binance` 两条路线；没有调用建卡接口。Playwright 在 1440px 与 390px 实测设置页三档选项可见、无横向溢出或脚本错误；截图位于本机 Codex 可视化目录的 `astro-card-variant-production-{desktop,mobile}.png`。
+
+## 已知限制与后续
+
+- 本次线上验收没有创建真实 Astro 卡片，外部 Astro SDK 的实际写入与重启行为仍需在正常业务流中观察；预览与设置接口的只读结果不能证明真实下单或通知成功。
+- 保留原有 `.worktrees/`、`output/`、其他模块交接文档、`script/` 和 pytest 临时目录等未跟踪产物；其他任务后续出现的已跟踪改动也未暂存、删除或回退。后续模块在新任务中继续。
