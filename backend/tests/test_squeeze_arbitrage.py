@@ -276,6 +276,15 @@ def test_api_only_never_starts_squeeze_worker_even_when_enabled(monkeypatch) -> 
     start_task.assert_not_called()
 
 
+def test_squeeze_config_accepts_single_character_raw_base_and_rejects_aliases() -> None:
+    config = SqueezeMonitorConfig(symbols=("GUSDT", "LSKUSDT"))
+    assert config.symbols == ("GUSDT", "LSKUSDT")
+    with pytest.raises(ValueError):
+        SqueezeMonitorConfig(symbols=("G/USDT",))
+    with pytest.raises(ValueError):
+        SqueezeMonitorConfig(symbols=("LSKUSDT", "LSKUSDT"))
+
+
 @pytest.mark.asyncio
 async def test_binance_public_provider_keeps_raw_oi_and_ratio_source_time() -> None:
     requested: list[str] = []

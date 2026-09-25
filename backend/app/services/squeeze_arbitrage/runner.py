@@ -27,7 +27,7 @@ class SqueezeMonitorConfig:
     def __post_init__(self) -> None:
         if not self.symbols or len(self.symbols) > 5 or len(set(self.symbols)) != len(self.symbols):
             raise ValueError("Squeeze monitor requires 1-5 unique symbols")
-        if any(not re.fullmatch(r"[A-Z0-9]{2,30}USDT", symbol) for symbol in self.symbols):
+        if any(not re.fullmatch(r"[A-Z0-9]{1,30}USDT", symbol) for symbol in self.symbols):
             raise ValueError("Squeeze monitor symbols must be raw Binance USDT symbols")
         if self.poll_seconds < 60 or self.max_active < 1 or self.max_active > 30:
             raise ValueError("Squeeze monitor resource budget is invalid")
