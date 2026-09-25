@@ -111,6 +111,8 @@ from app.services.live_pilot import (
 from app.services.negative_basis_monitor import NegativeBasisMonitor, NegativeBasisMonitorRepository
 from app.services.squeeze_arbitrage.repository import SqueezeRepository
 from app.services.squeeze_arbitrage.runner import SqueezeMonitor, SqueezeMonitorConfig
+from app.services.squeeze_arbitrage.route_repository import SqueezeRouteRepository
+from app.services.squeeze_arbitrage.route_runner import RouteMonitorConfig, SqueezeRouteMonitor
 from app.services.oil_news import (
     OilNewsMonitor,
     OilNewsProvider,
@@ -752,11 +754,14 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        _ensure_database_parent(_sqlite_path(app_settings))
-        db = await connect_database(_sqlite_path(app_settings))
+        db_path = _sqlite_path(app_settings)
+        _ensure_database_parent(db_path)
+        db = await connect_database(db_path)
         await initialize_schema(db)
+        route_db = db if db_path == ":memory:" else await connect_database(db_path)
         app.state.db = db
         app.state.squeeze_repo = SqueezeRepository(db)
+        app.state.squeeze_route_repo = SqueezeRouteRepository(route_db)
         app.state.alert_rule_repo = AlertRuleRepository(db)
         app.state.alert_event_repo = AlertEventRepository(db)
         app.state.phone_price_alert_rule_repo = PhonePriceAlertRuleRepository(db)
@@ -856,6 +861,14 @@ def create_app(
             app.state.squeeze_monitor_active = True
             _start_background_task(
                 tasks, app.state.squeeze_monitor.run(stop_event), name="squeeze-monitor"
+            )
+        if start_collector and start_background_workers and app_settings.squeeze_route_enabled:
+            app.state.squeeze_route_monitor = SqueezeRouteMonitor(
+                app.state.squeeze_route_repo, RouteMonitorConfig()
+            )
+            _start_background_task(
+                tasks, app.state.squeeze_route_monitor.run(stop_event),
+                name="squeeze-route-monitor",
             )
         if start_background_workers:
             await app.state.second_level_sampler.initialize()
@@ -1033,6 +1046,7 @@ def create_app(
                 "second_level_sampler",
                 "negative_basis_monitor",
                 "squeeze_monitor",
+                "squeeze_route_monitor",
                 "pair_spread_funding_recorder",
                 "oil_news_monitor",
                 "trade_availability_service",
@@ -1041,6 +1055,8 @@ def create_app(
                 "instrument_market_cap_service",
                 "feishu_notifier",
             )
+            if route_db is not db:
+                await route_db.close()
             await db.close()
 
     app = FastAPI(title=app_settings.app_name, lifespan=lifespan)
@@ -1065,6 +1081,8 @@ def create_app(
     app.state.squeeze_repo = None
     app.state.squeeze_monitor = None
     app.state.squeeze_monitor_active = False
+    app.state.squeeze_route_repo = None
+    app.state.squeeze_route_monitor = None
     app.state.trade_availability_service = None
     app.state.account_position_service = None
     app.state.account_connection_service = None

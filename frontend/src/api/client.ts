@@ -1,6 +1,8 @@
 import type {
   SqueezeStatus,
   SqueezeWatchEvent,
+  SqueezeRouteRow,
+  SqueezeRouteEvent,
   AccountConnection,
   AccountConnectionOverview,
   AccountConnectionTestResult,
@@ -113,6 +115,14 @@ export async function getSqueezeWatchlist(): Promise<SqueezeWatchEvent[]> {
 
 export async function getSqueezeEvents(limit = 50): Promise<SqueezeWatchEvent[]> {
   return fetchJson<SqueezeWatchEvent[]>(`/squeeze-arbitrage/events?limit=${limit}`);
+}
+
+export async function getSqueezeRoutes(): Promise<SqueezeRouteRow[]> {
+  return fetchJson<SqueezeRouteRow[]>("/squeeze-arbitrage/routes");
+}
+
+export async function getSqueezeRouteEvents(): Promise<SqueezeRouteEvent[]> {
+  return fetchJson<SqueezeRouteEvent[]>("/squeeze-arbitrage/route-events");
 }
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "/api";

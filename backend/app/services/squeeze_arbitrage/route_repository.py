@@ -1,0 +1,177 @@
+from __future__ import annotations
+
+import asyncio
+import json
+from dataclasses import asdict
+from datetime import datetime
+from decimal import Decimal
+from typing import Any
+
+import aiosqlite
+
+from .models import utc_iso
+from .route_engine import LegSnapshot, Route, RouteEvaluation
+from .route_tracker import RouteTracker
+
+
+async def initialize_route_schema(db: aiosqlite.Connection) -> None:
+    await db.executescript("""
+        CREATE TABLE IF NOT EXISTS squeeze_route_state (
+          route_id TEXT PRIMARY KEY, state_json TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS squeeze_route_latest (
+          route_id TEXT PRIMARY KEY, evaluated_at TEXT NOT NULL,
+          evaluation_json TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS squeeze_route_events (
+          id TEXT PRIMARY KEY, route_id TEXT NOT NULL, phase TEXT NOT NULL,
+          occurred_at TEXT NOT NULL, rule_version TEXT NOT NULL,
+          evaluation_json TEXT NOT NULL, inputs_json TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_squeeze_route_events_time
+          ON squeeze_route_events(occurred_at DESC);
+        CREATE TABLE IF NOT EXISTS squeeze_route_worker_state (
+          id INTEGER PRIMARY KEY CHECK(id = 1), last_attempt_at TEXT,
+          last_success_at TEXT, last_error TEXT, last_route_id TEXT
+        );
+    """)
+    await db.commit()
+
+
+def _json_default(value: Any) -> str:
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, datetime):
+        return utc_iso(value)
+    raise TypeError(f"cannot serialize {type(value).__name__}")
+
+
+def _inputs(route: Route, expensive: LegSnapshot, cheap: LegSnapshot) -> str:
+    return json.dumps(
+        {
+            "route": asdict(route),
+            "expensive": asdict(expensive),
+            "cheap": asdict(cheap),
+            "source": "public_rest_full_snapshots",
+        },
+        default=_json_default, separators=(",", ":"),
+    )
+
+
+class SqueezeRouteRepository:
+    def __init__(self, db: aiosqlite.Connection) -> None:
+        self.db = db
+        self._lock = asyncio.Lock()
+
+    async def load_tracker(self, route_id: str) -> RouteTracker:
+        cursor = await self.db.execute(
+            "SELECT state_json FROM squeeze_route_state WHERE route_id=?", (route_id,)
+        )
+        row = await cursor.fetchone()
+        return RouteTracker.from_dict(json.loads(row["state_json"])) if row else RouteTracker(route_id)
+
+    async def save_tracker(self, tracker: RouteTracker, at: datetime) -> None:
+        await self.db.execute(
+            """INSERT INTO squeeze_route_state(route_id,state_json,updated_at)
+               VALUES (?,?,?) ON CONFLICT(route_id) DO UPDATE SET
+               state_json=excluded.state_json,updated_at=excluded.updated_at""",
+            (tracker.route_id, json.dumps(tracker.to_dict(), separators=(",", ":")), utc_iso(at)),
+        )
+        await self.db.commit()
+
+    async def save_scan(
+        self, route: Route, tracker: RouteTracker, evaluation: RouteEvaluation,
+        expensive: LegSnapshot, cheap: LegSnapshot, transition: str | None,
+    ) -> None:
+        at = utc_iso(evaluation.calculated_at)
+        evaluation_json = json.dumps(evaluation.to_dict(), separators=(",", ":"))
+        async with self._lock:
+            await self.db.execute(
+                """INSERT INTO squeeze_route_state(route_id,state_json,updated_at)
+                   VALUES (?,?,?) ON CONFLICT(route_id) DO UPDATE SET
+                   state_json=excluded.state_json,updated_at=excluded.updated_at""",
+                (route.route_id, json.dumps(tracker.to_dict(), separators=(",", ":")), at),
+            )
+            await self.db.execute(
+                """INSERT INTO squeeze_route_latest(route_id,evaluated_at,evaluation_json)
+                   VALUES (?,?,?) ON CONFLICT(route_id) DO UPDATE SET
+                   evaluated_at=excluded.evaluated_at,evaluation_json=excluded.evaluation_json""",
+                (route.route_id, at, evaluation_json),
+            )
+            if transition is not None:
+                await self.db.execute(
+                    """INSERT OR IGNORE INTO squeeze_route_events
+                       (id,route_id,phase,occurred_at,rule_version,evaluation_json,inputs_json)
+                       VALUES (?,?,?,?,?,?,?)""",
+                    (f"{tracker.event_id}:{transition}", route.route_id, transition, at,
+                     evaluation.rule_version, evaluation_json, _inputs(route, expensive, cheap)),
+                )
+            await self.db.execute(
+                """INSERT INTO squeeze_route_worker_state
+                   (id,last_attempt_at,last_success_at,last_error,last_route_id)
+                   VALUES (1,?,?,NULL,?) ON CONFLICT(id) DO UPDATE SET
+                   last_attempt_at=excluded.last_attempt_at,
+                   last_success_at=excluded.last_success_at,
+                   last_error=NULL,last_route_id=excluded.last_route_id""",
+                (at, at, route.route_id),
+            )
+            await self.db.commit()
+
+    async def record_error(self, at: datetime, error: str) -> None:
+        await self.db.execute(
+            """INSERT INTO squeeze_route_worker_state
+               (id,last_attempt_at,last_success_at,last_error,last_route_id)
+               VALUES (1,?,NULL,?,NULL) ON CONFLICT(id) DO UPDATE SET
+               last_attempt_at=excluded.last_attempt_at,last_error=excluded.last_error""",
+            (utc_iso(at), error[:500]),
+        )
+        await self.db.commit()
+
+    async def status(self, *, enabled: bool) -> dict[str, Any]:
+        cursor = await self.db.execute("SELECT * FROM squeeze_route_worker_state WHERE id=1")
+        row = await cursor.fetchone()
+        return {
+            "enabled": enabled,
+            "source_capability": "research_only_public_rest",
+            "last_attempt_at": row["last_attempt_at"] if row else None,
+            "last_success_at": row["last_success_at"] if row else None,
+            "last_error": row["last_error"] if row else None,
+            "last_route_id": row["last_route_id"] if row else None,
+        }
+
+    async def list_routes(self, *, limit: int = 10, offset: int = 0) -> list[dict[str, Any]]:
+        cursor = await self.db.execute(
+            """SELECT l.route_id,l.evaluated_at,l.evaluation_json,s.state_json
+               FROM squeeze_route_latest l LEFT JOIN squeeze_route_state s USING(route_id)
+               ORDER BY l.evaluated_at DESC,l.route_id LIMIT ? OFFSET ?""",
+            (limit, offset),
+        )
+        return [
+            {
+                "route_id": row["route_id"],
+                "evaluated_at": row["evaluated_at"],
+                "evaluation": json.loads(row["evaluation_json"]),
+                "state": json.loads(row["state_json"]) if row["state_json"] else None,
+            }
+            for row in await cursor.fetchall()
+        ]
+
+    async def list_events(
+        self, *, limit: int = 50, offset: int = 0, include_inputs: bool = False,
+    ) -> list[dict[str, Any]]:
+        cursor = await self.db.execute(
+            """SELECT * FROM squeeze_route_events
+               ORDER BY occurred_at DESC,id DESC LIMIT ? OFFSET ?""",
+            (limit, offset),
+        )
+        result = []
+        for row in await cursor.fetchall():
+            item = {
+                "id": row["id"], "route_id": row["route_id"], "phase": row["phase"],
+                "occurred_at": row["occurred_at"], "rule_version": row["rule_version"],
+                "evaluation": json.loads(row["evaluation_json"]),
+            }
+            if include_inputs:
+                item["inputs"] = json.loads(row["inputs_json"])
+            result.append(item)
+        return result

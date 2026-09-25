@@ -5,8 +5,14 @@ import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 import { useCallback, useEffect, useState } from "react";
 
-import { getSqueezeEvents, getSqueezeStatus, getSqueezeWatchlist } from "../api/client";
-import type { SqueezeStatus, SqueezeWatchEvent } from "../api/types";
+import {
+  getSqueezeEvents, getSqueezeRouteEvents, getSqueezeRoutes,
+  getSqueezeStatus, getSqueezeWatchlist
+} from "../api/client";
+import type {
+  SqueezeRouteEvent, SqueezeRouteRow, SqueezeStatus, SqueezeWatchEvent
+} from "../api/types";
+import { SqueezeRoutesView } from "./SqueezeRoutesView";
 import "./SqueezeArbitragePage.css";
 
 dayjs.extend(utc);
@@ -80,18 +86,23 @@ export function SqueezeArbitragePage() {
   const [status, setStatus] = useState<SqueezeStatus | null>(null);
   const [watchlist, setWatchlist] = useState<SqueezeWatchEvent[]>([]);
   const [events, setEvents] = useState<SqueezeWatchEvent[]>([]);
+  const [routes, setRoutes] = useState<SqueezeRouteRow[]>([]);
+  const [routeEvents, setRouteEvents] = useState<SqueezeRouteEvent[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
+  const refresh = useCallback(async (showLoading = true) => {
+    if (showLoading) setLoading(true);
     try {
-      const [nextStatus, nextWatchlist, nextEvents] = await Promise.all([
-        getSqueezeStatus(), getSqueezeWatchlist(), getSqueezeEvents()
+      const [nextStatus, nextWatchlist, nextEvents, nextRoutes, nextRouteEvents] = await Promise.all([
+        getSqueezeStatus(), getSqueezeWatchlist(), getSqueezeEvents(),
+        getSqueezeRoutes(), getSqueezeRouteEvents()
       ]);
       setStatus(nextStatus);
       setWatchlist(nextWatchlist);
       setEvents(nextEvents);
+      setRoutes(nextRoutes);
+      setRouteEvents(nextRouteEvents);
       setError(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "读取失败");
@@ -102,6 +113,8 @@ export function SqueezeArbitragePage() {
 
   useEffect(() => {
     void refresh();
+    const timer = window.setInterval(() => void refresh(false), 15_000);
+    return () => window.clearInterval(timer);
   }, [refresh]);
 
   return (
@@ -116,8 +129,10 @@ export function SqueezeArbitragePage() {
         <Statistic title="观察中" value={status?.active_watch_count ?? 0} />
         <Statistic title="最近完整小时 (北京时间)" value={time(status?.last_bucket_at)} />
         <Statistic title="强平公开流" value={status?.liquidation_coverage.state === "throttled_public_stream" ? "节流观测" : "未连接"} />
+        <Statistic title="路线采集" value={status?.routes?.enabled ? "运行中" : "已关闭"} />
       </Space>
       {status?.last_error && <Alert type="warning" showIcon message={status.last_error} style={{ marginBottom: 16 }} />}
+      {status?.routes?.last_error && <Alert type="warning" showIcon message={status.routes.last_error} style={{ marginBottom: 16 }} />}
       <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
         已核验市场：{status?.verified_symbols.join("、") || "-"}。公开强平流仅为节流观测，缺失不能视为零；结构观察不代表可成交机会。
       </Typography.Paragraph>
@@ -146,6 +161,10 @@ export function SqueezeArbitragePage() {
         {
           key: "events", label: "事件记录",
           children: <Table rowKey="id" columns={columns} dataSource={events} loading={loading} size="small" scroll={{ x: 1080 }} pagination={{ pageSize: 20 }} locale={{ emptyText: <Empty description="暂无事件记录" /> }} />
+        },
+        {
+          key: "routes", label: "路线研究",
+          children: <SqueezeRoutesView routes={routes} events={routeEvents} loading={loading} />
         }
       ]} />
     </div>

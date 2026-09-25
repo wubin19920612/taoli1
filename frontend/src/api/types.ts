@@ -2583,6 +2583,14 @@ export interface SqueezeWatchEvent {
 
 export interface SqueezeStatus {
   enabled: boolean;
+  routes?: {
+    enabled: boolean;
+    source_capability: string;
+    last_attempt_at: string | null;
+    last_success_at: string | null;
+    last_error: string | null;
+    last_route_id: string | null;
+  };
   rule_version: string;
   last_attempt_at: string | null;
   last_success_at: string | null;
@@ -2613,4 +2621,94 @@ export interface SqueezeStatus {
     result_status: string;
     error: string | null;
   }>;
+}
+
+export interface SqueezeRouteFill {
+  base_quantity: string;
+  quote_notional: string;
+  unit_price: string;
+  best_unit_price: string;
+  impact_rate: string;
+}
+
+export interface SqueezeRouteCapacity {
+  target_notional: string;
+  base_quantity: string;
+  expensive_open_sell: SqueezeRouteFill | null;
+  expensive_close_buy: SqueezeRouteFill | null;
+  cheap_open_buy: SqueezeRouteFill | null;
+  cheap_close_sell: SqueezeRouteFill | null;
+  open_difference: string | null;
+  close_difference_now: string | null;
+  target_residual: string | null;
+  entry_fee: string | null;
+  estimated_exit_fee: string | null;
+  estimated_funding: string | null;
+  estimated_borrow: string | null;
+  latency_buffer: string | null;
+  estimated_net: string | null;
+  blockers: string[];
+}
+
+export interface SqueezeRouteEvaluation {
+  route_id: string;
+  rule_version: string;
+  calculated_at: string;
+  expensive_key: string;
+  cheap_key: string;
+  asset_id: string;
+  quote_asset: string;
+  quality: "blocked" | "research_only";
+  blockers: string[];
+  expensive_source_at: string | null;
+  cheap_source_at: string | null;
+  expensive_received_at: string;
+  cheap_received_at: string;
+  expensive_sequence: number | null;
+  cheap_sequence: number | null;
+  expensive_last_trade_at: string | null;
+  cheap_last_trade_at: string | null;
+  expensive_funding_rate: string | null;
+  cheap_funding_rate: string | null;
+  expensive_funding_kind: string;
+  cheap_funding_kind: string;
+  expensive_funding_source_at: string | null;
+  cheap_funding_source_at: string | null;
+  expensive_funding_interval_hours: number | null;
+  cheap_funding_interval_hours: number | null;
+  expensive_next_funding_at: string | null;
+  cheap_next_funding_at: string | null;
+  fee_assumption: string;
+  expensive_recent_trade_notional: string | null;
+  cheap_recent_trade_notional: string | null;
+  expensive_turnover_24h: string | null;
+  cheap_turnover_24h: string | null;
+  expensive_contract_base_qty: string;
+  cheap_contract_base_qty: string;
+  expensive_quantity_step: string;
+  cheap_quantity_step: string;
+  expensive_taker_fee_rate: string;
+  cheap_taker_fee_rate: string;
+  capacities: SqueezeRouteCapacity[];
+}
+
+export interface SqueezeRouteRow {
+  route_id: string;
+  evaluated_at: string;
+  evaluation: SqueezeRouteEvaluation;
+  state: {
+    phase: string;
+    baseline: string | null;
+    peak_difference: string | null;
+    confirmation_count: number;
+  } | null;
+}
+
+export interface SqueezeRouteEvent {
+  id: string;
+  route_id: string;
+  phase: string;
+  occurred_at: string;
+  rule_version: string;
+  evaluation: SqueezeRouteEvaluation;
 }

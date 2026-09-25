@@ -82,6 +82,9 @@ async def initialize_squeeze_schema(db: aiosqlite.Connection) -> None:
         await db.execute(
             "ALTER TABLE squeeze_positioning_samples ADD COLUMN account_ratio_event_time TEXT"
         )
+    from .route_repository import initialize_route_schema
+
+    await initialize_route_schema(db)
     await db.commit()
 
 

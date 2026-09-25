@@ -19,6 +19,7 @@ class Settings:
     funding_research_enabled: bool = False
     squeeze_monitor_enabled: bool = False
     squeeze_monitor_symbols: str = "LSKUSDT,TUTUSDT,GUSDT"
+    squeeze_route_enabled: bool = False
     funding_research_manage_paper_trades: bool = True
     funding_research_snapshot_retention_hours: float = 72.0
     feishu_webhook_url: str = ""
@@ -161,6 +162,7 @@ def get_settings() -> Settings:
         squeeze_monitor_symbols=os.getenv(
             "SQUEEZE_MONITOR_SYMBOLS", "LSKUSDT,TUTUSDT,GUSDT"
         ).strip(),
+        squeeze_route_enabled=bool_env("SQUEEZE_ROUTE_ENABLED", False),
         funding_research_manage_paper_trades=bool_env(
             "FUNDING_RESEARCH_MANAGE_PAPER_TRADES",
             True,
