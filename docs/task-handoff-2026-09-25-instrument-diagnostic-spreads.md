@@ -33,5 +33,10 @@
 - 功能提交 `632316d` 已推送；GitHub Actions run `36092243451` 的 backend、frontend 两个镜像构建成功，生产机可读取对应镜像 manifest。
 - 首次部署前脚本创建 `backups/radar-before-632316d4e38e-20260925T035640Z.db`，`integrity_check=ok`，容器与主机 SHA-256 一致：`fcb52cca42069d21b8f4ad55d5f99f15093bd658bd4463fea9c090ec0b413aef`。
 - 备份期间远端分支被并行文档提交推进到 `222b486`。生产仓库经 `git pull --ff-only` 到该提交后，脚本因 HEAD 不等于已验证镜像提交而停止，**未重启容器**；当时后端、前端仍运行健康的 `4e814fb` 镜像。
-- 下一步：为最新分支顶端构建并验证两份精确镜像，重新运行 `deploy/linux-update.sh`，检查容器、`/api/health`、`/api/instruments/{symbol}` 的新增字段与线上桌面/手机页面，然后在本文记录最终备份、部署版本和验收结果。
+- 交接文档提交 `3bed607d3d3700c2736154d7e6976ae8d3341370` 位于并行文档提交之后。GitHub Actions run `36092747195` 的 backend、frontend 构建均成功，生产机可读取两份精确镜像 manifest。
+- 第二次运行 `deploy/linux-update.sh` 成功：新备份 `backups/radar-before-3bed607d3d37-20260925T040313Z.db` 为 598,630,400 字节，`integrity_check=ok`，容器与主机 SHA-256 一致；部署后复核 SHA-256 为 `d2b0369abf7363b3e1e05f9341340b991ed16ba1137dbea854b178c5c94d32e0`。脚本的保留策略保留此备份及另外三份，删除两份到期的旧部署备份。
+- 生产仓库和前后端运行镜像均为 `3bed607d3d3700c2736154d7e6976ae8d3341370`；两个容器 healthy，后端及前端代理 `/api/health` 均返回 `status=ok`。服务器使用预构建镜像，没有现场构建或删除数据库卷。
+- 线上 `/api/instruments/OURAUSDT` 返回 6 个精确市场、15 组差价；首组包含 `buy_bid`、`sell_ask`、`close_spread_pct`，平仓公式复算一致。`/api/trade-status/OURAUSDT` 返回 6 个诊断市场，包含 Hyperliquid `DEX xyz` 原始符号 `xyz:OURA`。
+- 线上 Playwright 在 1440、390、320 px 检查真实页面：新旧列、交易所方向及诊断身份正确，无文档横向溢出、首行单元格截断或页面脚本错误。截图位于 Codex 可视化目录，文件名前缀 `instrument-layout-production-`。
+- 残余限制：公开盘口价差不包含手续费、滑点、资金费用或账户权限；市场报价和排序会随行情变化。生产界面验证的是展示与数据口径，不能证明真实订单可成交。
 - `.worktrees/`、`output/`、其他模块交接文档与脚本产物属于并行任务；本任务不暂存、删除或回退它们。后续其他功能模块请新开任务，并以本文件交接。
