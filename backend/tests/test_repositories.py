@@ -108,6 +108,7 @@ async def test_alert_message_template_repository_defaults_and_roundtrip() -> Non
         repo = SettingsRepository(db)
 
         template = await repo.get_alert_message_template()
+        assert template.format == "compact"
 
         assert template.include_trigger_summary is True
         assert template.include_observations is True

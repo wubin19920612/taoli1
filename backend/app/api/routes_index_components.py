@@ -6,12 +6,32 @@ from app.models.index_component import (
     IndexComponentAutoWatchSettings,
     IndexComponentAutoWatchStatus,
     IndexComponentChange,
+    IndexComponentNotificationSettings,
     IndexComponentSnapshot,
     IndexComponentWatchItem,
 )
 from app.services.index_components import IndexComponentAutoWatchService
 
 router = APIRouter(prefix="/index-components")
+
+
+@router.get("/notifications", response_model=IndexComponentNotificationSettings)
+async def get_index_component_notifications(
+    request: Request,
+    password: str | None = Depends(dashboard_password_header),
+) -> IndexComponentNotificationSettings:
+    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
+    return await request.app.state.settings_repo.get_index_component_notification_settings()
+
+
+@router.put("/notifications", response_model=IndexComponentNotificationSettings)
+async def update_index_component_notifications(
+    settings: IndexComponentNotificationSettings,
+    request: Request,
+    password: str | None = Depends(dashboard_password_header),
+) -> IndexComponentNotificationSettings:
+    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
+    return await request.app.state.settings_repo.set_index_component_notification_settings(settings)
 
 
 def _auto_watch(request: Request) -> IndexComponentAutoWatchService:

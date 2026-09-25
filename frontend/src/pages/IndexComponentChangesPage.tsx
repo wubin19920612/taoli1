@@ -9,15 +9,18 @@ import {
   createIndexComponentWatchItem,
   deleteIndexComponentWatchItem,
   getIndexComponentAutoWatch,
+  getIndexComponentNotifications,
   listIndexComponentChanges,
   listIndexComponentSnapshots,
   listIndexComponentWatchlist,
   listMarkets,
   syncIndexComponentAutoWatch,
-  updateIndexComponentAutoWatch
+  updateIndexComponentAutoWatch,
+  updateIndexComponentNotifications
 } from "../api/client";
 import type {
   IndexComponentAutoWatchStatus,
+  IndexComponentNotificationSettings,
   IndexComponent,
   IndexComponentChange,
   IndexComponentSnapshot,
@@ -502,9 +505,11 @@ export function IndexComponentChangesPage() {
   const [referenceSnapshots, setReferenceSnapshots] = useState<IndexComponentSnapshot[]>([]);
   const [watchItems, setWatchItems] = useState<IndexComponentWatchItem[]>([]);
   const [autoWatch, setAutoWatch] = useState<IndexComponentAutoWatchStatus | null>(null);
+  const [notifications, setNotifications] = useState<IndexComponentNotificationSettings | null>(null);
   const [markets, setMarkets] = useState<MarketSnapshot[]>([]);
   const [loading, setLoading] = useState(false);
   const [watchLoading, setWatchLoading] = useState(false);
+  const [notificationLoading, setNotificationLoading] = useState(false);
   const [symbol, setSymbol] = useState("");
   const [exchange, setExchange] = useState("");
   const [watchSymbol, setWatchSymbol] = useState("");
@@ -512,15 +517,29 @@ export function IndexComponentChangesPage() {
   const loadWatchlist = async () => {
     setWatchLoading(true);
     try {
-      const [manual, automatic] = await Promise.allSettled([
-        listIndexComponentWatchlist(), getIndexComponentAutoWatch()
+      const [manual, automatic, notificationSettings] = await Promise.allSettled([
+        listIndexComponentWatchlist(), getIndexComponentAutoWatch(), getIndexComponentNotifications()
       ]);
       if (manual.status === "fulfilled") setWatchItems(manual.value);
       else message.error(manual.reason instanceof Error ? manual.reason.message : String(manual.reason));
       if (automatic.status === "fulfilled") setAutoWatch(automatic.value);
       else message.error(automatic.reason instanceof Error ? automatic.reason.message : String(automatic.reason));
+      if (notificationSettings.status === "fulfilled") setNotifications(notificationSettings.value);
+      else message.error(notificationSettings.reason instanceof Error ? notificationSettings.reason.message : String(notificationSettings.reason));
     } finally {
       setWatchLoading(false);
+    }
+  };
+
+  const toggleNotifications = async (enabled: boolean) => {
+    setNotificationLoading(true);
+    try {
+      setNotifications(await updateIndexComponentNotifications(enabled));
+      message.success(enabled ? "已开启成分变化通知" : "已关闭成分变化通知");
+    } catch (exc) {
+      message.error(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setNotificationLoading(false);
     }
   };
 
@@ -669,7 +688,6 @@ export function IndexComponentChangesPage() {
         <div className="index-component-watch-head">
           <div>
             <Typography.Title level={5}>监控标的</Typography.Title>
-            <Typography.Text type="secondary">手动监控与自动联动的标的会接收成分变更通知。</Typography.Text>
           </div>
           <Space.Compact className="index-component-watch-add">
             <Input
@@ -683,6 +701,17 @@ export function IndexComponentChangesPage() {
               加入监控
             </Button>
           </Space.Compact>
+        </div>
+        <div className="index-component-auto-controls">
+          <Typography.Text strong>成分变化通知</Typography.Text>
+          <Switch
+            checked={notifications?.enabled ?? false}
+            loading={notificationLoading && notifications === null}
+            disabled={notificationLoading || notifications === null}
+            onChange={(enabled) => void toggleNotifications(enabled)}
+            aria-label="成分变化通知"
+          />
+          <Typography.Text type="secondary">飞书</Typography.Text>
         </div>
         <div className="index-component-auto-controls">
           <Typography.Text strong>自动联动</Typography.Text>

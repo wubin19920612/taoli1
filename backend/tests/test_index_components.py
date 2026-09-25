@@ -8,6 +8,7 @@ from app.db.schema import initialize_schema
 from app.models.index_component import (
     IndexComponent,
     IndexComponentAutoWatchSettings,
+    IndexComponentNotificationSettings,
     IndexComponentChange,
     IndexComponentSnapshot,
     IndexComponentWatchItem,
@@ -257,6 +258,39 @@ async def test_monitor_records_and_alerts_component_changes() -> None:
         latest = await repo.get_snapshot("binance", "VANRYUSDT")
         assert latest is not None
         assert latest.component_hash == changes[0].new_hash
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_notification_switch_mutes_new_component_changes_and_persists() -> None:
+    db = await connect_database(":memory:")
+    alerts: list[str] = []
+    try:
+        await initialize_schema(db)
+        repo = IndexComponentRepository(db)
+        settings_repo = SettingsRepository(db)
+        await repo.create_watch_item(IndexComponentWatchItem(symbol="VANRY"))
+        monitor = IndexComponentMonitor(
+            repo, alert_sender=alerts.append,
+            notification_settings_loader=settings_repo.get_index_component_notification_settings,
+        )
+        await monitor.process_snapshots([snapshot([component("binance", "VANRYUSDT", 1)])])
+        await settings_repo.set_index_component_notification_settings(
+            IndexComponentNotificationSettings(enabled=False)
+        )
+        assert not (await settings_repo.get_index_component_notification_settings()).enabled
+        muted = await monitor.process_snapshots([snapshot([component("gate", "VANRYUSDT", 1)])])
+        assert muted[0].alert_status == "muted"
+        assert alerts == []
+        assert len(await repo.list_changes(symbol="VANRY", exchange="binance", limit=10)) == 1
+
+        await settings_repo.set_index_component_notification_settings(
+            IndexComponentNotificationSettings(enabled=True)
+        )
+        sent = await monitor.process_snapshots([snapshot([component("bybit", "VANRYUSDT", 1)])])
+        assert sent[0].alert_status == "sent"
+        assert len(alerts) == 1
     finally:
         await db.close()
 

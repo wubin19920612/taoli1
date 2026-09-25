@@ -61,11 +61,12 @@ async def _resolve_event_message(request: Request, event: AlertEvent) -> str:
         return event.message
 
     observations = [observe_alert_metrics(row, row.observed_at) for row in reversed(rows)]
+    template = await _alert_message_template(request)
     return build_alert_message(
         rule,
         rows[0],
         observations=observations,
-        template=await _alert_message_template(request),
+        template=template.model_copy(update={"format": "detailed"}),
         include_rating=False,
     )
 

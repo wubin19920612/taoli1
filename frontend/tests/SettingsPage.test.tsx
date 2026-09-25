@@ -358,10 +358,18 @@ describe("SettingsPage", () => {
 
     expect(await screen.findByText("告警内容模板")).toBeTruthy();
     expect(screen.getByLabelText("只报告可建卡告警")).toBeTruthy();
+    await userEvent.click(screen.getByText("详细", { selector: ".ant-segmented-item-label" }));
     await userEvent.click(screen.getByLabelText("资金费率"));
     await userEvent.click(screen.getByRole("button", { name: /保存告警模板/ }));
 
     await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/settings/alert-message-template"),
+        expect.objectContaining({
+          method: "PUT",
+          body: expect.stringContaining('"format":"detailed"')
+        })
+      );
       expect(fetch).toHaveBeenCalledWith(
         expect.stringContaining("/settings/alert-message-template"),
         expect.objectContaining({

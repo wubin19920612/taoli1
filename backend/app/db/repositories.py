@@ -23,6 +23,7 @@ from app.models.index_component import (
     IndexComponent,
     IndexComponentAutoWatchItem,
     IndexComponentAutoWatchSettings,
+    IndexComponentNotificationSettings,
     IndexComponentChange,
     IndexComponentSnapshot,
     IndexComponentTrendFollowup,
@@ -1200,6 +1201,27 @@ class SettingsRepository:
     def __init__(self, db: aiosqlite.Connection):
         self.db = db
         self._floating_watch_lock = asyncio.Lock()
+
+    async def get_index_component_notification_settings(self) -> IndexComponentNotificationSettings:
+        cursor = await self.db.execute(
+            "SELECT payload FROM app_settings WHERE key = ?", ("index_component_notifications",)
+        )
+        row = await cursor.fetchone()
+        return (
+            IndexComponentNotificationSettings.model_validate_json(row["payload"])
+            if row is not None else IndexComponentNotificationSettings()
+        )
+
+    async def set_index_component_notification_settings(
+        self, settings: IndexComponentNotificationSettings
+    ) -> IndexComponentNotificationSettings:
+        await self.db.execute(
+            """INSERT INTO app_settings (key, payload) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET payload = excluded.payload""",
+            ("index_component_notifications", settings.model_dump_json()),
+        )
+        await self.db.commit()
+        return settings
 
     async def get_index_component_auto_watch_settings(self) -> IndexComponentAutoWatchSettings:
         cursor = await self.db.execute(

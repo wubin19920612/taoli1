@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -14,6 +15,7 @@ from app.services.announcements import (
     BybitAnnouncementProvider,
     GateAnnouncementProvider,
     HyperliquidAnnouncementProvider,
+    MultiAnnouncementProvider,
     OKXAnnouncementProvider,
     build_announcement_alert_message,
     build_announcement_event_reminder_message,
@@ -27,6 +29,61 @@ from app.services.announcements import (
 
 
 BASE_TIME = datetime(2026, 5, 30, 8, 0, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+async def test_fast_fetch_skips_binance_article_details() -> None:
+    provider = BinanceAnnouncementProvider(now_fn=lambda: BASE_TIME)
+    detail_calls = 0
+
+    async def get_json(_: str) -> dict:
+        return {"data": {"catalogs": [{"articles": [{
+            "code": "fast-listing", "title": "Binance Will List TEST (TEST)",
+            "releaseDate": int(BASE_TIME.timestamp() * 1000),
+        }]}]}}
+
+    async def fetch_detail(_: str) -> str | None:
+        nonlocal detail_calls
+        detail_calls += 1
+        return None
+
+    provider._get_json = get_json
+    provider._fetch_article_text = fetch_detail
+    try:
+        headlines = await provider.fetch_headlines()
+        assert headlines
+        assert all(item.announcement_id == "fast-listing" for item in headlines)
+        assert detail_calls == 0
+    finally:
+        await provider.aclose()
+
+
+@pytest.mark.asyncio
+async def test_fast_provider_batch_is_available_before_slow_exchange_finishes() -> None:
+    slow_started = asyncio.Event()
+    release_slow = asyncio.Event()
+
+    class StubProvider:
+        def __init__(self, exchange: str) -> None:
+            self.exchange = exchange
+
+        async def fetch_headlines(self) -> list[ExchangeAnnouncement]:
+            if self.exchange == "gate":
+                slow_started.set()
+                await release_slow.wait()
+            return [announcement(exchange=self.exchange)]
+
+        async def fetch(self) -> list[ExchangeAnnouncement]:
+            return await self.fetch_headlines()
+
+    provider = MultiAnnouncementProvider([StubProvider("gate"), StubProvider("okx")])
+    batches = provider.fetch_batches({"gate", "okx"}, headlines_only=True)
+    try:
+        first = await asyncio.wait_for(anext(batches), timeout=1)
+        assert await asyncio.wait_for(slow_started.wait(), timeout=1)
+        assert [item.exchange for item in first] == ["okx"]
+    finally:
+        await batches.aclose()
 
 
 def announcement(
@@ -454,6 +511,7 @@ async def test_settings_repository_round_trips_announcement_settings() -> None:
         assert defaults.listing_delisting_alerts_enabled is True
         assert defaults.launchpool_alerts_enabled is True
         assert defaults.alert_max_age_minutes == 30
+        assert defaults.poll_interval_seconds == 30
 
         settings = AnnouncementSettings(
             enabled=True,

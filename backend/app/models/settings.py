@@ -177,6 +177,7 @@ class RiskSettings(BaseModel):
 
 
 class AlertMessageTemplateSettings(BaseModel):
+    format: Literal["compact", "detailed"] = "compact"
     include_trigger_summary: bool = True
     include_rule_details: bool = True
     include_pair: bool = True

@@ -69,9 +69,9 @@ from app.services.alert_metrics import observe_alert_metrics
 from app.services.announcements import (
     AnnouncementMonitor,
     default_announcement_provider,
+    run_announcement_enrichment_loop,
     run_announcement_loop,
 )
-from app.services.announcement_research import AnnouncementResearchService
 from app.services.astro_alerts import AstroAlertService, live_pilot_card_settings
 from app.services.astro_client import AstroSdkClient, AstroSdkConfig
 from app.services.astro_planner import AstroPairPlanner, AstroPlannerConfig
@@ -402,6 +402,7 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
             ]
             for match in ordered_matches:
                 status = "sent"
+                card_summary = "未创建（自动建卡未启用）"
                 card_condition_failure = False
                 existing_card_skipped = False
                 signal_condition_failure = False
@@ -445,6 +446,7 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                 )
                 if validation_failure is not None:
                     signal_condition_failure = True
+                    card_summary = "未创建（最新信号校验未通过）"
                     message = (
                         f"{message}\n\n"
                         f"Astro: 最新信号校验未通过：{validation_failure}"
@@ -472,6 +474,7 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                         )
                         if plan_failure is not None:
                             card_condition_failure = True
+                            card_summary = "未创建（卡片参数校验未通过）"
                             message = (
                                 f"{message}\n\n"
                                 f"Astro: 卡片参数校验未通过：{plan_failure}"
@@ -490,6 +493,7 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                             )
                             if order_book_failure is not None:
                                 card_condition_failure = True
+                                card_summary = "未创建（订单簿校验未通过）"
                                 message = (
                                     f"{message}\n\n"
                                     f"Astro: 订单簿校验未通过：{order_book_failure}"
@@ -507,10 +511,19 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                                     card_condition_failure = True
                                 if astro_result.status == "skipped" and astro_result.action == "existing":
                                     existing_card_skipped = True
+                                if astro_result.status == "created":
+                                    card_summary = "已创建"
+                                elif astro_result.status == "updated":
+                                    card_summary = "已更新"
+                                elif astro_result.action == "existing":
+                                    card_summary = "已有卡片"
+                                else:
+                                    card_summary = f"未创建（{astro_result.message[:80]}）"
                                 message = f"{message}\n\n{astro_result.format_message()}"
                     except Exception as exc:  # noqa: BLE001 - keep alert delivery independent.
                         logger.exception("astro alert follow-up failed")
                         astro_processing_failed = True
+                        card_summary = "未创建（Astro 处理失败）"
                         message = f"{message}\n\nAstro: 处理失败，{_exception_message(exc)}"
                 rating_header = build_alert_rating_header(
                     match.rule,
@@ -532,6 +545,15 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                     ),
                 )
                 message = f"{rating_header}\n\n{message}"
+                if alert_template.format == "compact":
+                    message = build_alert_message(
+                        match.rule,
+                        latest_opportunity or match.opportunity,
+                        template=alert_template,
+                    )
+                    message += f"\n卡片：{card_summary}"
+                    if availability_report is not None and availability_report.opening_restricted:
+                        message += "\n交易状态：需核实开仓可用性"
                 if signal_condition_failure or existing_card_skipped:
                     status = "muted"
                 elif alert_template.suppress_when_card_conditions_fail and card_condition_failure:
@@ -842,7 +864,6 @@ def create_app(
             )
         collector: MarketCollector | None = None
         announcement_provider = None
-        announcement_research: AnnouncementResearchService | None = None
         if start_collector:
             exchange_adapters = default_exchange_adapters()
             history_recorder = OpportunityHistoryRecorder(
@@ -853,6 +874,7 @@ def create_app(
                 app.state.index_component_repo,
                 alert_sender=text_alert_sender,
                 auto_watch=app.state.index_component_auto_watch,
+                notification_settings_loader=app.state.settings_repo.get_index_component_notification_settings,
             )
             app.state.index_component_monitor = index_component_monitor
             index_component_provider_classes = {
@@ -917,12 +939,9 @@ def create_app(
                     ),
                     name="phone-price-alert-loop",
                 )
-            announcement_research = AnnouncementResearchService()
-            app.state.announcement_research = announcement_research
             announcement_monitor = AnnouncementMonitor(
                 app.state.announcement_repo,
                 alert_sender=text_alert_sender,
-                asset_researcher=announcement_research.research,
             )
             announcement_provider = default_announcement_provider(app.state.announcement_repo)
             app.state.announcement_monitor = announcement_monitor
@@ -936,6 +955,16 @@ def create_app(
                     stop_event,
                 ),
                 name="announcement-loop",
+            )
+            _start_background_task(
+                tasks,
+                run_announcement_enrichment_loop(
+                    announcement_provider,
+                    announcement_monitor,
+                    app.state.settings_repo.get_announcement_settings,
+                    stop_event,
+                ),
+                name="announcement-enrichment-loop",
             )
             _start_background_task(
                 tasks,
@@ -978,8 +1007,6 @@ def create_app(
                 await collector.close()
             if announcement_provider is not None:
                 await announcement_provider.aclose()
-            if announcement_research is not None:
-                await announcement_research.aclose()
             await _close_state_resources(
                 app,
                 "astro_client",

@@ -23,7 +23,7 @@ dayjs.extend(utc);
 
 const defaultAnnouncementSettings: AnnouncementSettings = {
   enabled: true,
-  poll_interval_seconds: 300,
+  poll_interval_seconds: 30,
   alert_max_age_minutes: 30,
   record_exchanges: ["binance", "okx", "bybit", "gate", "bitget", "hyperliquid"],
   alert_exchanges: [],

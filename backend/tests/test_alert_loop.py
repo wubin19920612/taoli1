@@ -138,7 +138,7 @@ class FakeSettingsRepo:
     ):
         self.astro_card_settings = astro_card_settings
         self.live_pilot_settings = live_pilot_settings or LivePilotSettings()
-        self.alert_template = alert_template or AlertMessageTemplateSettings()
+        self.alert_template = alert_template or AlertMessageTemplateSettings(format="detailed")
         self.risk_settings = risk_settings or RiskSettings()
 
     async def get_risk_settings(self) -> RiskSettings:
@@ -521,6 +521,39 @@ async def test_alert_loop_appends_astro_result_and_trade_status_to_feishu_and_ev
     assert "Astro: 已创建暂停卡片 BTC FF binance->okx，禁开=true" in feishu.sent_texts[0]
     assert "【交易与充提状态】" in feishu.sent_texts[0]
     assert alert_engine.delivery_statuses == ["sent"]
+
+
+@pytest.mark.asyncio
+async def test_alert_loop_sends_compact_message_with_card_result() -> None:
+    stop_event = asyncio.Event()
+    app = FastAPI()
+    rule = AlertRule(name="FF spread", min_open_spread_pct=0.5)
+    opp = opportunity()
+    store = SnapshotStore()
+    store.set_opportunities([opp])
+    events = FakeEventRepo(stop_event)
+    notifier = FakeFeishuNotifier()
+    app.state.alert_rule_repo = FakeRuleRepo([rule])
+    app.state.alert_event_repo = events
+    app.state.settings_repo = FakeSettingsRepo(
+        alert_template=AlertMessageTemplateSettings(format="compact")
+    )
+    app.state.snapshot_store = store
+    app.state.alert_engine = FakeAlertEngine(AlertMatch(rule, opp, []))
+    app.state.feishu_notifier = notifier
+    app.state.astro_alert_service = FakeAstroAlertService()
+
+    await asyncio.wait_for(_run_alert_loop(app, 60, stop_event), timeout=2)
+
+    text = events.events[0].message
+    assert notifier.sent_texts == [text]
+    assert "盘口价差：开仓 0.800% / 平仓 0.500%" in text
+    assert "资金费率：当前" in text
+    assert "24h成交额：买 10,000,000 USDT / 卖 12,000,000 USDT" in text
+    assert text.endswith("卡片：已创建")
+    assert "【告警触发】" not in text
+    assert "【规则参数】" not in text
+    assert "【连续监测】" not in text
 
 
 @pytest.mark.asyncio
@@ -945,7 +978,9 @@ async def test_alert_loop_mutes_when_astro_plan_cannot_create_card_and_filter_en
     app.state.alert_rule_repo = FakeRuleRepo([rule])
     app.state.alert_event_repo = event_repo
     app.state.settings_repo = FakeSettingsRepo(
-        alert_template=AlertMessageTemplateSettings(suppress_when_card_conditions_fail=True)
+        alert_template=AlertMessageTemplateSettings(
+            format="detailed", suppress_when_card_conditions_fail=True
+        )
     )
     app.state.snapshot_store = store
     app.state.alert_engine = FakeAlertEngine(AlertMatch(rule, opp, []))

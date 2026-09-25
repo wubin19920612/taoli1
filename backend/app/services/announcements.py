@@ -4,7 +4,8 @@ import asyncio
 import json
 import logging
 import re
-from collections.abc import Awaitable, Callable
+import time
+from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from html import unescape
 from inspect import isawaitable
@@ -1167,6 +1168,9 @@ class AnnouncementProvider:
     async def fetch(self) -> list[ExchangeAnnouncement]:
         raise NotImplementedError
 
+    async def fetch_headlines(self) -> list[ExchangeAnnouncement]:
+        return await self.fetch()
+
 
 class HttpAnnouncementProvider(AnnouncementProvider):
     def __init__(
@@ -1285,7 +1289,7 @@ class BinanceAnnouncementProvider(HttpAnnouncementProvider):
         (161, "Delisting"),
     )
 
-    async def fetch(self) -> list[ExchangeAnnouncement]:
+    async def fetch(self, *, include_details: bool = True) -> list[ExchangeAnnouncement]:
         announcements: list[ExchangeAnnouncement] = []
         for catalog_id, category in self.catalogs:
             query = f"type=1&catalogId={catalog_id}&pageNo=1&pageSize=20"
@@ -1293,11 +1297,14 @@ class BinanceAnnouncementProvider(HttpAnnouncementProvider):
             rows = self._rows_from_payload(payload)
             for row in rows:
                 code = _clean_text(row.get("code"))
-                content = await self._fetch_article_text(code) if code else None
+                content = await self._fetch_article_text(code) if include_details and code else None
                 announcement = self._announcement_from_row(row, str(catalog_id), category, content=content)
                 if announcement is not None:
                     announcements.append(announcement)
         return announcements
+
+    async def fetch_headlines(self) -> list[ExchangeAnnouncement]:
+        return await self.fetch(include_details=False)
 
     async def _fetch_article_text(self, code: str) -> str | None:
         try:
@@ -1372,11 +1379,14 @@ class OKXAnnouncementProvider(HttpAnnouncementProvider):
         "https://www.okx.com/help/section/announcements-latest-announcements",
     )
 
-    async def fetch(self) -> list[ExchangeAnnouncement]:
+    async def fetch(self, *, include_details: bool = True) -> list[ExchangeAnnouncement]:
         announcements: list[ExchangeAnnouncement] = []
         for ann_type in self.ann_types:
             payload = await self._get_json(f"{self.base_url}?annType={ann_type}&page=1")
-            content_by_key = await self._fetch_detail_content_for_payload(payload, ann_type)
+            content_by_key = (
+                await self._fetch_detail_content_for_payload(payload, ann_type)
+                if include_details else {}
+            )
             announcements.extend(self._parse_payload(payload, ann_type, content_by_key=content_by_key))
         for url in self.latest_urls:
             try:
@@ -1391,6 +1401,9 @@ class OKXAnnouncementProvider(HttpAnnouncementProvider):
                     announcements.append(item)
                     known_urls.add(slug)
         return announcements
+
+    async def fetch_headlines(self) -> list[ExchangeAnnouncement]:
+        return await self.fetch(include_details=False)
 
     def _parse_latest_page(self, html: str, fallback_category: str) -> list[ExchangeAnnouncement]:
         candidates: list[dict[str, object]] = []
@@ -1589,14 +1602,17 @@ class BybitAnnouncementProvider(HttpAnnouncementProvider):
     base_url = "https://api.bybit.com/v5/announcements/index"
     announcement_types = ("new_crypto", "delistings")
 
-    async def fetch(self) -> list[ExchangeAnnouncement]:
+    async def fetch(self, *, include_details: bool = True) -> list[ExchangeAnnouncement]:
         announcements: list[ExchangeAnnouncement] = []
         for announcement_type in self.announcement_types:
             query = f"locale=en-US&type={quote_plus(announcement_type)}&limit=20"
             payload = await self._get_json(f"{self.base_url}?{query}")
-            content_by_key = await self._fetch_detail_content_for_payload(payload)
+            content_by_key = await self._fetch_detail_content_for_payload(payload) if include_details else {}
             announcements.extend(self._parse_payload(payload, announcement_type, content_by_key=content_by_key))
         return announcements
+
+    async def fetch_headlines(self) -> list[ExchangeAnnouncement]:
+        return await self.fetch(include_details=False)
 
     async def _fetch_detail_content_for_payload(self, payload: object) -> dict[str, str]:
         rows = payload.get("result", {}).get("list") if isinstance(payload, dict) and isinstance(payload.get("result"), dict) else None
@@ -1677,12 +1693,15 @@ class BitgetAnnouncementProvider(HttpAnnouncementProvider):
     base_url = "https://api.bitget.com/api/v2/public/annoucements"
     ann_types = ("coin_listings", "symbol_delisting", "latest_news")
 
-    async def fetch(self) -> list[ExchangeAnnouncement]:
+    async def fetch(self, *, include_details: bool = True) -> list[ExchangeAnnouncement]:
         announcements: list[ExchangeAnnouncement] = []
         for ann_type in self.ann_types:
             query = f"language=en_US&annType={quote_plus(ann_type)}&limit=10"
             payload = await self._get_json(f"{self.base_url}?{query}")
-            content_by_key = await self._fetch_detail_content_for_payload(payload, ann_type)
+            content_by_key = (
+                await self._fetch_detail_content_for_payload(payload, ann_type)
+                if include_details else {}
+            )
             parsed = self._parse_payload(payload, ann_type, content_by_key=content_by_key)
             announcements.extend(
                 announcement
@@ -1694,6 +1713,9 @@ class BitgetAnnouncementProvider(HttpAnnouncementProvider):
                 }
             )
         return announcements
+
+    async def fetch_headlines(self) -> list[ExchangeAnnouncement]:
+        return await self.fetch(include_details=False)
 
     async def _fetch_detail_content_for_payload(
         self,
@@ -1813,7 +1835,7 @@ class GateAnnouncementProvider(HttpAnnouncementProvider):
         "new listing",
     )
 
-    async def fetch(self) -> list[ExchangeAnnouncement]:
+    async def fetch(self, *, include_details: bool = True) -> list[ExchangeAnnouncement]:
         announcements: list[ExchangeAnnouncement] = []
         for category in self.categories:
             try:
@@ -1823,9 +1845,12 @@ class GateAnnouncementProvider(HttpAnnouncementProvider):
                 logger.warning("failed to fetch gate announcement category: %s", category, exc_info=True)
                 continue
             page_rows = self._parse_page(response.text, category)
-            content_by_key = await self._fetch_detail_content_for_page(page_rows)
+            content_by_key = await self._fetch_detail_content_for_page(page_rows) if include_details else {}
             announcements.extend(self._parse_page(response.text, category, content_by_key=content_by_key))
         return announcements
+
+    async def fetch_headlines(self) -> list[ExchangeAnnouncement]:
+        return await self.fetch(include_details=False)
 
     async def _fetch_detail_content_for_page(self, rows: list[ExchangeAnnouncement]) -> dict[str, str]:
         requests = [
@@ -2072,6 +2097,30 @@ class MultiAnnouncementProvider:
                 logger.exception("announcement provider failed: %s", provider.exchange)
         return announcements
 
+    async def fetch_batches(
+        self, exchanges: set[str], *, headlines_only: bool = False
+    ) -> AsyncIterator[list[ExchangeAnnouncement]]:
+        async def fetch_one(provider: AnnouncementProvider) -> list[ExchangeAnnouncement]:
+            try:
+                return await (provider.fetch_headlines() if headlines_only else provider.fetch())
+            except Exception:
+                logger.exception("announcement provider failed: %s", provider.exchange)
+                return []
+
+        tasks = [
+            asyncio.create_task(fetch_one(provider))
+            for provider in self.providers if provider.exchange in exchanges
+        ]
+        try:
+            for task in asyncio.as_completed(tasks):
+                rows = await task
+                if rows:
+                    yield rows
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
     async def aclose(self) -> None:
         for provider in self.providers:
             close = getattr(provider, "aclose", None)
@@ -2116,6 +2165,7 @@ class AnnouncementMonitor:
         for announcement in sorted(
             announcements,
             key=lambda item: (item.published_at, item.exchange, item.announcement_id),
+            reverse=True,
         ):
             if announcement.exchange not in record_exchanges:
                 continue
@@ -2152,6 +2202,11 @@ class AnnouncementMonitor:
                 alert_status = "muted"
             candidate = announcement.model_copy(update={"alert_status": alert_status})
             inserted = await self.repository.create_if_new(candidate)
+            if inserted is not None and inserted.alert_status == "pending":
+                next_status = await self._send_alert(inserted)
+                if next_status != inserted.alert_status:
+                    inserted = inserted.model_copy(update={"alert_status": next_status})
+                    await self.repository.update_alert_status(inserted.id, next_status)
             research_target = inserted
             if (
                 research_target is None
@@ -2190,11 +2245,6 @@ class AnnouncementMonitor:
 
             if inserted is None:
                 continue
-            if inserted.alert_status == "pending":
-                next_status = await self._send_alert(inserted)
-                if next_status != inserted.alert_status:
-                    inserted = inserted.model_copy(update={"alert_status": next_status})
-                    await self.repository.update_alert_status(inserted.id, next_status)
             created.append(inserted)
         return created
 
@@ -2243,6 +2293,7 @@ class AnnouncementMonitor:
     async def _send_alert(self, announcement: ExchangeAnnouncement) -> str:
         if self.alert_sender is None:
             return "skipped"
+        started_at = time.monotonic()
         try:
             result = self.alert_sender(build_announcement_alert_message(announcement))
             if isawaitable(result):
@@ -2250,6 +2301,14 @@ class AnnouncementMonitor:
         except Exception:
             logger.exception("announcement alert failed")
             return "failed"
+        logger.info(
+            "announcement alert sent exchange=%s source=%s id=%s published_to_send_seconds=%.1f send_seconds=%.1f",
+            announcement.exchange,
+            announcement.source,
+            announcement.announcement_id,
+            max(0.0, (_as_utc(self._now_fn()) - _as_utc(announcement.published_at)).total_seconds()),
+            time.monotonic() - started_at,
+        )
         return "sent"
 
     async def _send_event_reminder(
@@ -2301,19 +2360,54 @@ async def run_announcement_loop(
     min_interval_seconds: float = 30.0,
 ) -> None:
     while not stop_event.is_set():
+        started_at = time.monotonic()
         interval = min_interval_seconds
         try:
             settings = await settings_loader()
             interval = max(min_interval_seconds, float(settings.poll_interval_seconds))
             if settings.enabled and settings.record_exchanges:
                 bootstrap = not await monitor.repository.has_any()
-                announcements = await provider.fetch(set(settings.record_exchanges))
-                await monitor.process(announcements, settings, bootstrap=bootstrap)
+                async for announcements in provider.fetch_batches(
+                    set(settings.record_exchanges), headlines_only=True
+                ):
+                    await monitor.process(announcements, settings, bootstrap=bootstrap)
                 await monitor.process_due_event_reminders(settings)
         except Exception:
             logger.exception("announcement loop failed")
         try:
-            await asyncio.wait_for(stop_event.wait(), timeout=interval)
+            await asyncio.wait_for(
+                stop_event.wait(), timeout=max(1.0, interval - (time.monotonic() - started_at))
+            )
+        except TimeoutError:
+            continue
+
+
+async def run_announcement_enrichment_loop(
+    provider: MultiAnnouncementProvider,
+    monitor: AnnouncementMonitor,
+    settings_loader: SettingsLoader,
+    stop_event: asyncio.Event,
+    *,
+    interval_seconds: float = 600.0,
+    startup_delay_seconds: float = 60.0,
+) -> None:
+    try:
+        await asyncio.wait_for(stop_event.wait(), timeout=startup_delay_seconds)
+        return
+    except TimeoutError:
+        pass
+    while not stop_event.is_set():
+        try:
+            settings = await settings_loader()
+            if settings.enabled and settings.record_exchanges:
+                bootstrap = not await monitor.repository.has_any()
+                exchanges = set(settings.record_exchanges) - {"hyperliquid"}
+                async for announcements in provider.fetch_batches(exchanges):
+                    await monitor.process(announcements, settings, bootstrap=bootstrap)
+        except Exception:
+            logger.exception("announcement enrichment loop failed")
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
         except TimeoutError:
             continue
 

@@ -2258,6 +2258,7 @@ def test_alert_message_template_settings_endpoint_roundtrips() -> None:
         response = client.get("/api/settings/alert-message-template")
         assert response.status_code == 200
         payload = response.json()
+        assert payload["format"] == "compact"
         assert payload["include_trigger_summary"] is True
         assert payload["include_observations"] is True
         assert payload["suppress_when_card_conditions_fail"] is False
@@ -2317,7 +2318,9 @@ def test_alert_loop_mutes_feishu_when_card_conditions_fail() -> None:
     app.state.alert_event_repo = event_repo
     app.state.settings_repo = FakeSettingsRepository(
         RiskSettings(),
-        AlertMessageTemplateSettings(suppress_when_card_conditions_fail=True),
+        AlertMessageTemplateSettings(
+            format="detailed", suppress_when_card_conditions_fail=True
+        ),
     )
     app.state.astro_alert_service = FakeAstroSubmitService()
     app.state.orderbook_validator = FakeOrderBookValidator(
@@ -2393,7 +2396,9 @@ def test_alert_loop_sends_feishu_when_card_condition_filter_is_disabled() -> Non
     app.state.alert_event_repo = event_repo
     app.state.settings_repo = FakeSettingsRepository(
         RiskSettings(),
-        AlertMessageTemplateSettings(suppress_when_card_conditions_fail=False),
+        AlertMessageTemplateSettings(
+            format="detailed", suppress_when_card_conditions_fail=False
+        ),
     )
     app.state.astro_alert_service = FakeAstroSubmitService()
     app.state.orderbook_validator = FakeOrderBookValidator(

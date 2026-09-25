@@ -23,6 +23,7 @@ from app.models.index_component import (
     IndexComponent,
     IndexComponentAutoWatchSettings,
     IndexComponentAutoWatchStatus,
+    IndexComponentNotificationSettings,
     IndexComponentChange,
     IndexComponentSnapshot,
     index_watch_symbol,
@@ -278,10 +279,12 @@ class IndexComponentMonitor:
         alert_sender: AlertSender | None = None,
         auto_watch: IndexComponentAutoWatchService | None = None,
         now_fn: Callable[[], datetime] | None = None,
+        notification_settings_loader: Callable[[], Awaitable[IndexComponentNotificationSettings]] | None = None,
     ) -> None:
         self.repository = repository
         self.alert_sender = alert_sender
         self.auto_watch = auto_watch
+        self.notification_settings_loader = notification_settings_loader
         self._now_fn = now_fn or utc_now
         self._latest_prices: dict[tuple[str, str], tuple[datetime, float]] = {}
         self._next_price_prune = 0.0
@@ -333,7 +336,7 @@ class IndexComponentMonitor:
 
     async def _send_due_trends(self, now: datetime) -> None:
         for pending in await self.repository.list_due_trend_followups(now):
-            if not await self._is_symbol_watched(pending.symbol):
+            if not await self._is_symbol_watched(pending.symbol) or not await self._notifications_enabled():
                 await self.repository.finish_trend_followup(pending.change_id, "muted")
                 continue
             samples = await self.repository.list_index_prices(
@@ -376,15 +379,16 @@ class IndexComponentMonitor:
 
             added, removed, changed = diff_components(baseline, snapshot)
             is_watched = await self._is_symbol_watched(snapshot.symbol)
+            should_alert = is_watched and await self._notifications_enabled()
             change = await self.repository.create_change(
                 baseline=baseline,
                 current=snapshot,
                 added_components=added,
                 removed_components=removed,
                 changed_components=changed,
-                alert_status="pending" if is_watched else "muted",
+                alert_status="pending" if should_alert else "muted",
             )
-            if is_watched:
+            if should_alert:
                 try:
                     trend_lines, baseline_price = await self._initial_trend(change)
                 except Exception:
@@ -397,7 +401,7 @@ class IndexComponentMonitor:
                     change = change.model_copy(update={"alert_status": alert_status})
                     await self.repository.update_change_alert_status(change.id, alert_status)
             await self.repository.upsert_snapshot(snapshot)
-            if is_watched and change.alert_status == "sent" and baseline_price is not None:
+            if should_alert and change.alert_status == "sent" and baseline_price is not None:
                 try:
                     await self.repository.queue_trend_followup(
                         change, _observed_at(self._now_fn()), baseline_price
@@ -412,6 +416,11 @@ class IndexComponentMonitor:
         if is_symbol_watched is None:
             return True
         return bool(await is_symbol_watched(symbol))
+
+    async def _notifications_enabled(self) -> bool:
+        if self.notification_settings_loader is None:
+            return True
+        return (await self.notification_settings_loader()).enabled
 
     async def watched_symbols(self) -> set[str]:
         if self.auto_watch is not None:

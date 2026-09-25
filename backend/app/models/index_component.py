@@ -158,6 +158,10 @@ class IndexComponentAutoWatchSettings(BaseModel):
     enabled: bool = False
 
 
+class IndexComponentNotificationSettings(BaseModel):
+    enabled: bool = True
+
+
 class IndexComponentAutoWatchItem(BaseModel):
     source: str
     symbol: str

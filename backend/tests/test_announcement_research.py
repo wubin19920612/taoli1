@@ -1,4 +1,5 @@
-from datetime import UTC, datetime
+import asyncio
+from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs
 
 import httpx
@@ -46,6 +47,46 @@ def listing_announcement(
         published_at=BASE_TIME,
         fetched_at=BASE_TIME,
     )
+
+
+@pytest.mark.asyncio
+async def test_announcement_alert_is_sent_before_slow_asset_research() -> None:
+    db = await connect_database(":memory:")
+    sent = asyncio.Event()
+    release_research = asyncio.Event()
+    messages: list[str] = []
+
+    async def send_alert(message: str) -> None:
+        messages.append(message)
+        sent.set()
+
+    async def slow_research(_: ExchangeAnnouncement) -> list[AnnouncementAssetResearch]:
+        await release_research.wait()
+        return []
+
+    try:
+        await initialize_schema(db)
+        repository = AnnouncementRepository(db)
+        await repository.create_if_new(listing_announcement().model_copy(update={
+            "announcement_id": "research-baseline",
+            "published_at": BASE_TIME - timedelta(minutes=1),
+            "alert_status": "muted",
+        }))
+        monitor = AnnouncementMonitor(
+            repository, alert_sender=send_alert,
+            asset_researcher=slow_research, now_fn=lambda: BASE_TIME,
+        )
+        task = asyncio.create_task(monitor.process(
+            [listing_announcement()], AnnouncementSettings(record_exchanges=["binance"]),
+        ))
+        await asyncio.wait_for(sent.wait(), timeout=1)
+        assert not task.done()
+        assert "公开资料" not in messages[0]
+        release_research.set()
+        await asyncio.wait_for(task, timeout=1)
+    finally:
+        release_research.set()
+        await db.close()
 
 
 def _search_html(symbol: str, name: str, snippet: str) -> str:

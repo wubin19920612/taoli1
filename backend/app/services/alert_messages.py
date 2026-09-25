@@ -76,7 +76,9 @@ def build_alert_message(
     template: AlertMessageTemplateSettings | None = None,
     include_rating: bool = True,
 ) -> str:
-    settings = template or AlertMessageTemplateSettings()
+    settings = template or AlertMessageTemplateSettings(format="detailed")
+    if settings.format == "compact":
+        return build_compact_alert_message(rule, opportunity, include_rating=include_rating)
     lines: list[str] = []
     if include_rating:
         lines.append(
@@ -250,6 +252,69 @@ def build_alert_message(
     if not lines:
         lines = [f"{opportunity.symbol} / {opportunity.type}"]
     return "\n".join(lines)
+
+
+def build_compact_alert_message(
+    rule: AlertRule,
+    opportunity: Opportunity,
+    *,
+    include_rating: bool = True,
+) -> str:
+    def leg(side: str) -> str:
+        exchange = getattr(opportunity, f"{side}_exchange")
+        market_type = getattr(opportunity, f"{side}_market_type")
+        raw_symbol = getattr(opportunity, f"{side}_raw_symbol")
+        dex = getattr(opportunity, f"{side}_dex")
+        price_multiplier = getattr(opportunity, f"{side}_price_multiplier")
+        contract_multiplier = getattr(opportunity, f"{side}_contract_size_multiplier")
+        identity = raw_symbol or opportunity.symbol
+        details = [f"DEX {dex}"] if dex else []
+        if price_multiplier != 1:
+            details.append(f"价格倍率 {price_multiplier:g}")
+        if contract_multiplier not in (None, 1):
+            details.append(f"合约倍率 {contract_multiplier:g}")
+        suffix = f"（{', '.join(details)}）" if details else ""
+        return f"{market_leg_label(exchange, market_type, raw_symbol, opportunity.symbol)} {identity}{suffix}"
+
+    def funding(side: str, *, next_cycle: bool) -> str:
+        market_type = getattr(opportunity, f"{side}_market_type")
+        if market_type == MarketType.SPOT:
+            return "现货无资金费率"
+        field = f"funding_next_rate_{side}_pct" if next_cycle else f"funding_rate_{side}_pct"
+        rate = getattr(opportunity, field)
+        interval = getattr(opportunity, f"{side}_funding_interval_hours")
+        return f"{_format_percent(rate, digits=3)}/{_format_interval(interval)}"
+
+    lines = [
+        build_alert_rating_header(rule, opportunity, include_reason=False)
+        if include_rating else f"{opportunity.symbol} {opportunity.type}",
+        f"买 {leg('buy')} → 卖 {leg('sell')}",
+        (
+            f"盘口价差：开仓 {_format_percent(opportunity.open_spread_pct)} / "
+            f"平仓 {_format_percent(opportunity.close_spread_pct)}；"
+            f"费后开仓估算 {_format_percent(opportunity.fee_adjusted_open_pct)}"
+        ),
+        (
+            f"资金费率：当前 买 {funding('buy', next_cycle=False)} / "
+            f"卖 {funding('sell', next_cycle=False)}；"
+            f"下期预估 买 {funding('buy', next_cycle=True)} / "
+            f"卖 {funding('sell', next_cycle=True)}"
+        ),
+        (
+            "24h成交额："
+            f"买 {_format_compact_volume(opportunity.buy_volume_24h_usdt)} / "
+            f"卖 {_format_compact_volume(opportunity.sell_volume_24h_usdt)}"
+        ),
+    ]
+    if opportunity.risk_labels:
+        lines.append(f"风险：{', '.join(opportunity.risk_labels)}")
+    return "\n".join(lines)
+
+
+def _format_compact_volume(value: float | None) -> str:
+    if value is None or not isfinite(value):
+        return "-"
+    return f"{value:,.0f} USDT"
 
 
 def _append_block(lines: list[str], title: str, rows: list[str]) -> None:

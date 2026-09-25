@@ -6,6 +6,7 @@ import {
   Form,
   Input,
   InputNumber,
+  Segmented,
   Select,
   Space,
   Switch,
@@ -84,6 +85,7 @@ const defaultRule: AlertRule = {
 };
 
 const defaultAlertMessageTemplate: AlertMessageTemplateSettings = {
+  format: "compact",
   include_trigger_summary: true,
   include_rule_details: true,
   include_pair: true,
@@ -157,7 +159,7 @@ function normalizeAstroCardSettings(values?: Partial<AstroCardSettings>): AstroC
 }
 
 const alertTemplateOptions: Array<{
-  name: Exclude<keyof AlertMessageTemplateSettings, "observation_limit">;
+  name: Exclude<keyof AlertMessageTemplateSettings, "format" | "observation_limit">;
   label: string;
   description: string;
 }> = [
@@ -322,6 +324,20 @@ function normalizeLivePilot(values?: Partial<LivePilotSettings>): LivePilotSetti
 }
 
 function buildAlertTemplatePreview(template: AlertMessageTemplateSettings): string {
+  if (template.format === "compact") {
+    const lines = [
+      "【推荐】BTCUSDT FF binance→okx",
+      "买 binance 合约 BTCUSDT → 卖 okx 合约 BTCUSDT",
+      "盘口价差：开仓 0.800% / 平仓 0.500%；费后开仓估算 0.600%",
+      "资金费率：当前 买 0.010%/8h / 卖 -0.020%/8h；下期预估 买 0.010%/8h / 卖 0.020%/8h",
+      "24h成交额：买 10,000,000 USDT / 卖 12,000,000 USDT",
+      "卡片：已创建"
+    ];
+    if (template.suppress_when_card_conditions_fail) {
+      lines.push("只报告可建卡告警：不满足建卡条件时仅保留告警历史，不发送飞书。");
+    }
+    return lines.join("\n");
+  }
   const blocks: string[] = [];
   if (template.include_trigger_summary) {
     blocks.push("【告警触发】\n规则：FF 价差\n等级：warning（普通告警）");
@@ -1118,9 +1134,17 @@ export function SettingsPage() {
           onFinish={saveAlertTemplate}
           onValuesChange={(_, values) => setAlertTemplatePreview(normalizeAlertTemplate(values))}
         >
+          <Form.Item name="format" label="消息格式">
+            <Segmented
+              options={[{ label: "精简", value: "compact" }, { label: "详细", value: "detailed" }]}
+              aria-label="告警消息格式"
+            />
+          </Form.Item>
           <div className="template-grid">
             <div className="template-options">
-              {alertTemplateOptions.map((option) => (
+              {alertTemplateOptions.filter((option) =>
+                option.name === "suppress_when_card_conditions_fail" || alertTemplatePreview.format === "detailed"
+              ).map((option) => (
                 <Form.Item
                   key={option.name}
                   name={option.name}
@@ -1133,14 +1157,16 @@ export function SettingsPage() {
                   </Checkbox>
                 </Form.Item>
               ))}
-              <Form.Item
-                label="连续监测最多显示轮数"
-                name="observation_limit"
-                rules={[{ required: true }]}
-                className="template-limit"
-              >
-                <InputNumber min={1} max={20} className="wide-input" />
-              </Form.Item>
+              {alertTemplatePreview.format === "detailed" ? (
+                <Form.Item
+                  label="连续监测最多显示轮数"
+                  name="observation_limit"
+                  rules={[{ required: true }]}
+                  className="template-limit"
+                >
+                  <InputNumber min={1} max={20} className="wide-input" />
+                </Form.Item>
+              ) : null}
             </div>
             <div className="template-preview">
               <Typography.Text strong>消息预览</Typography.Text>

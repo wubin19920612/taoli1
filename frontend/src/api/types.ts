@@ -889,6 +889,7 @@ export interface RiskSettings {
 }
 
 export interface AlertMessageTemplateSettings {
+  format: "compact" | "detailed";
   include_trigger_summary: boolean;
   include_rule_details: boolean;
   include_pair: boolean;
@@ -1032,6 +1033,10 @@ export interface IndexComponentAutoWatchStatus {
   enabled: boolean;
   items: { source: string; symbol: string }[];
   error: string | null;
+}
+
+export interface IndexComponentNotificationSettings {
+  enabled: boolean;
 }
 
 export interface IndexComponentChangeFilters {

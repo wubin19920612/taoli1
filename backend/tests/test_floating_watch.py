@@ -116,3 +116,15 @@ def test_index_component_auto_watch_switch_syncs_server_watchlist() -> None:
             "/api/index-components/auto-watch", headers=headers, json={"enabled": False}
         )
         assert disabled.json()["items"] == []
+
+
+def test_index_component_notification_switch_requires_password_and_persists() -> None:
+    app = create_app(settings=Settings(dashboard_password="secret", database_url="sqlite:///:memory:"))
+    with TestClient(app) as client:
+        path = "/api/index-components/notifications"
+        headers = {"X-Dashboard-Password": "secret"}
+        assert client.get(path).status_code == 401
+        assert client.put(path, json={"enabled": False}).status_code == 401
+        assert client.get(path, headers=headers).json() == {"enabled": True}
+        assert client.put(path, headers=headers, json={"enabled": False}).json() == {"enabled": False}
+        assert client.get(path, headers=headers).json() == {"enabled": False}

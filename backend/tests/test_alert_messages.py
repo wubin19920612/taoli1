@@ -5,6 +5,7 @@ import pytest
 from app.models.alert import AlertRule
 from app.models.market import MarketType
 from app.models.opportunity import Opportunity, OpportunityType
+from app.models.settings import AlertMessageTemplateSettings
 from app.services.alert_messages import build_alert_message, build_alert_rating_header
 
 
@@ -55,6 +56,28 @@ def test_alert_message_distinguishes_market_types_and_bitget_stock_spot() -> Non
     assert "提示：Bitget 股票现货使用 RToken 原始标的，Astro 对应交易所使用 bitgetr。" in text
     assert "spot" not in text
     assert "future" not in text
+
+
+def test_compact_alert_keeps_exact_market_identity_and_essential_metrics() -> None:
+    opportunity = _rating_opportunity().model_copy(update={
+        "sell_exchange": "hyperliquid",
+        "sell_raw_symbol": "xyz:BTC",
+        "sell_dex": "xyz",
+        "sell_price_multiplier": 1000,
+        "buy_funding_interval_hours": 8,
+        "sell_funding_interval_hours": 1,
+    })
+    text = build_alert_message(
+        AlertRule(name="价差"), opportunity,
+        template=AlertMessageTemplateSettings(format="compact"),
+    )
+
+    assert "买 binance 合约 BTCUSDT → 卖 hyperliquid 合约 xyz:BTC（DEX xyz, 价格倍率 1000）" in text
+    assert "盘口价差：开仓 1.200% / 平仓 0.800%；费后开仓估算 1.000%" in text
+    assert "当前 买 0.010%/8h / 卖 0.050%/1h" in text
+    assert "24h成交额：买 12,000,000 USDT / 卖 15,000,000 USDT" in text
+    assert "【规则参数】" not in text
+    assert "【连续监测】" not in text
 
 
 def _rating_opportunity() -> Opportunity:

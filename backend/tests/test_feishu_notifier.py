@@ -261,6 +261,7 @@ def test_build_payload_honors_alert_message_template_blocks() -> None:
         min_volume_24h_usdt=1_000_000,
     )
     template = AlertMessageTemplateSettings(
+        format="detailed",
         include_rule_details=False,
         include_funding=False,
         include_volume=False,

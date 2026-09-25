@@ -48,6 +48,7 @@ import type {
   ExchangeAnnouncement,
   IndexComponentChange,
   IndexComponentAutoWatchStatus,
+  IndexComponentNotificationSettings,
   IndexComponentChangeFilters,
   IndexComponentSnapshot,
   IndexComponentSnapshotFilters,
@@ -863,6 +864,16 @@ export async function listIndexComponentSnapshots(
 
 export async function listIndexComponentWatchlist(): Promise<IndexComponentWatchItem[]> {
   return fetchJson<IndexComponentWatchItem[]>("/index-components/watchlist");
+}
+
+export async function getIndexComponentNotifications(): Promise<IndexComponentNotificationSettings> {
+  return fetchJson<IndexComponentNotificationSettings>("/index-components/notifications");
+}
+
+export async function updateIndexComponentNotifications(enabled: boolean): Promise<IndexComponentNotificationSettings> {
+  return fetchJson<IndexComponentNotificationSettings>("/index-components/notifications", {
+    method: "PUT", body: JSON.stringify({ enabled })
+  });
 }
 
 export async function getIndexComponentAutoWatch(): Promise<IndexComponentAutoWatchStatus> {

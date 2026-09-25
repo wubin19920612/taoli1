@@ -7,11 +7,18 @@ import { IndexComponentChangesPage } from "../src/pages/IndexComponentChangesPag
 describe("IndexComponentChangesPage", () => {
   beforeEach(() => {
     let autoEnabled = false;
+    let notificationsEnabled = true;
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
         const method = init?.method ?? "GET";
+        if (url.includes("/index-components/notifications")) {
+          if (method === "PUT") {
+            notificationsEnabled = (JSON.parse(String(init?.body)) as { enabled: boolean }).enabled;
+          }
+          return Response.json({ enabled: notificationsEnabled });
+        }
         if (url.includes("/index-components/auto-watch")) {
           if (method === "PUT") {
             autoEnabled = (JSON.parse(String(init?.body)) as { enabled: boolean }).enabled;
@@ -327,5 +334,19 @@ describe("IndexComponentChangesPage", () => {
     expect(calls.filter(([url, init]) =>
       String(url).includes("/index-components/auto-watch") && init?.method === "PUT"
     )).toHaveLength(2);
+  });
+
+  it("toggles index component Feishu notifications independently of the watchlist", async () => {
+    render(<IndexComponentChangesPage />);
+    const toggle = await screen.findByRole("switch", { name: "成分变化通知" });
+    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("true"));
+    await userEvent.click(toggle);
+    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
+    expect(screen.getByText("ESPORTS")).toBeTruthy();
+    const calls = vi.mocked(fetch).mock.calls;
+    expect(calls.some(([url, init]) =>
+      String(url).includes("/index-components/notifications") && init?.method === "PUT" &&
+      JSON.parse(String(init.body)).enabled === false
+    )).toBe(true);
   });
 });
