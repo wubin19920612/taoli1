@@ -7,6 +7,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { getSqueezeEvents, getSqueezeStatus, getSqueezeWatchlist } from "../api/client";
 import type { SqueezeStatus, SqueezeWatchEvent } from "../api/types";
+import "./SqueezeArbitragePage.css";
 
 dayjs.extend(utc);
 
@@ -104,7 +105,7 @@ export function SqueezeArbitragePage() {
   }, [refresh]);
 
   return (
-    <div style={{ padding: "16px 24px", maxWidth: 1500, margin: "0 auto" }}>
+    <div className="squeeze-arbitrage-page">
       <Space style={{ width: "100%", justifyContent: "space-between", marginBottom: 16 }} wrap>
         <Typography.Title level={4} style={{ margin: 0 }}>挤仓结构观察</Typography.Title>
         <Button icon={<ReloadOutlined />} onClick={() => void refresh()} loading={loading} title="刷新数据" aria-label="刷新数据" />

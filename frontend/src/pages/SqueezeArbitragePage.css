@@ -1,0 +1,11 @@
+.squeeze-arbitrage-page {
+  max-width: 1500px;
+  margin: 0 auto;
+  padding: 16px 24px;
+}
+
+@media (max-width: 767px) {
+  .squeeze-arbitrage-page {
+    padding: 56px 16px 16px;
+  }
+}
