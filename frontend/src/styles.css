@@ -318,13 +318,42 @@
 }
 
 .instrument-market-diagnostics summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px 8px;
   cursor: pointer;
   font-weight: 600;
   color: #24536a;
 }
 
+.instrument-market-diagnostics summary::-webkit-details-marker {
+  display: none;
+}
+
+.instrument-market-diagnostics summary::before {
+  content: "▶";
+  flex: none;
+  font-size: 10px;
+}
+
+.instrument-market-diagnostics[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.instrument-market-diagnostic-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.instrument-market-diagnostic-age {
+  color: #52615b;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
 .instrument-market-diagnostics summary .ant-tag {
-  margin-left: 8px;
+  margin: 0;
 }
 
 .instrument-market-diagnostic-meta {
@@ -1488,18 +1517,19 @@ body {
 
 .instrument-spread-type-tag.ant-tag {
   display: inline-grid;
-  gap: 2px;
-  min-width: 104px;
+  gap: 3px;
+  min-width: 132px;
+  max-width: 100%;
   margin-inline-end: 0;
-  padding: 4px 8px;
+  padding: 5px 8px;
   border-width: 1px;
   border-style: solid;
   border-radius: 4px;
   line-height: 1.2;
 }
 
-.instrument-spread-type-tag strong {
-  font-size: 13px;
+.instrument-spread-type-tag span strong {
+  font-size: 11px;
   line-height: 1.2;
 }
 
@@ -1508,6 +1538,36 @@ body {
   font-weight: 600;
   line-height: 1.25;
   white-space: nowrap;
+}
+
+.instrument-spread-type-tag b {
+  font-size: 13px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.instrument-spread-column-title,
+.instrument-spread-value {
+  display: grid;
+  gap: 2px;
+  text-align: right;
+}
+
+.instrument-spread-column-title small,
+.instrument-spread-value small {
+  color: #708079;
+  font-size: 10px;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.instrument-spread-value strong {
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+
+.instrument-spread-close-value {
+  color: #24536a;
 }
 
 .instrument-spread-type-tag--ff.ant-tag,
@@ -2072,6 +2132,19 @@ body {
   border-top: 1px solid #e5ebe9;
 }
 
+.instrument-spread-table .instrument-market-cell .ant-space {
+  flex-wrap: wrap;
+}
+
+.instrument-spread-table .instrument-market-cell span {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.instrument-spread-table .instrument-market-cell > span {
+  font-size: 11px;
+}
+
 @media (max-width: 1180px) {
   .instrument-heading {
     align-items: flex-start;
@@ -2193,6 +2266,108 @@ body {
 }
 
 @media (max-width: 640px) {
+  .instrument-spread-table .ant-table-content {
+    overflow-x: visible !important;
+  }
+
+  .instrument-spread-table table,
+  .instrument-spread-table tbody {
+    display: block;
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  .instrument-spread-table colgroup,
+  .instrument-spread-table thead {
+    display: none;
+  }
+
+  .instrument-spread-table tbody tr.ant-table-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 8px 10px;
+    border-bottom: 1px solid #e5ebe9;
+  }
+
+  .instrument-spread-table tbody tr.ant-table-row:last-child {
+    border-bottom: 0;
+  }
+
+  .instrument-spread-table tbody tr.ant-table-row > td.ant-table-cell {
+    display: block;
+    width: auto !important;
+    min-width: 0;
+    padding: 5px 2px;
+    border: 0;
+    position: static !important;
+    right: auto !important;
+  }
+
+  .instrument-spread-table tbody tr.ant-table-row > td:nth-child(1) {
+    grid-column: 1 / -1;
+  }
+
+  .instrument-spread-table tbody tr.ant-table-row > td:nth-child(2) {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .instrument-spread-table tbody tr.ant-table-row > td:nth-child(3) {
+    grid-column: 1;
+    grid-row: 3;
+  }
+
+  .instrument-spread-table tbody tr.ant-table-row > td:nth-child(4) {
+    grid-column: 2;
+    grid-row: 2;
+  }
+
+  .instrument-spread-table tbody tr.ant-table-row > td:nth-child(5) {
+    grid-column: 2;
+    grid-row: 3;
+  }
+
+  .instrument-spread-table tbody tr.ant-table-row > td:nth-child(6),
+  .instrument-spread-table tbody tr.ant-table-row > td:nth-child(7) {
+    margin-top: 6px;
+    padding: 8px;
+    border: 1px solid #e3eae7;
+  }
+
+  .instrument-spread-table tbody tr.ant-table-row > td:nth-child(6) {
+    grid-column: 1;
+    background: #fffafa;
+    border-radius: 4px 0 0 4px;
+  }
+
+  .instrument-spread-table tbody tr.ant-table-row > td:nth-child(7) {
+    grid-column: 2;
+    background: #f8fbfc;
+    border-left: 0;
+    border-radius: 0 4px 4px 0;
+  }
+
+  .instrument-spread-table tbody tr.ant-table-row > td:nth-child(6)::before,
+  .instrument-spread-table tbody tr.ant-table-row > td:nth-child(7)::before {
+    display: block;
+    color: #52615b;
+    font-size: 10px;
+    text-align: right;
+  }
+
+  .instrument-spread-table tbody tr.ant-table-row > td:nth-child(6)::before {
+    content: "开仓价差";
+  }
+
+  .instrument-spread-table tbody tr.ant-table-row > td:nth-child(7)::before {
+    content: "平仓价差";
+  }
+
+  .instrument-spread-table tbody tr.ant-table-row > td:nth-child(8) {
+    grid-column: 1 / -1;
+    text-align: center;
+  }
+
   .instrument-heading > div:first-child {
     padding-left: 40px;
   }

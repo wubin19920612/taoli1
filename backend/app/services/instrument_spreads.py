@@ -122,7 +122,7 @@ def build_instrument_spreads(
             directions,
             key=lambda pair: midpoint_spread_pct(pair[0], pair[1])[0],
         )
-        executable_spread_pct = midpoint_spread_pct(buy_market, sell_market)[0]
+        executable_spread_pct, close_spread_pct = midpoint_spread_pct(buy_market, sell_market)
         opportunity_type = _opportunity_type(buy_market, sell_market)
         astro_supported, astro_blocker = _astro_support(
             opportunity_type,
@@ -139,6 +139,7 @@ def build_instrument_spreads(
                 buy_dex=_market_dex(buy_market),
                 buy_price_multiplier=buy_market.symbol_alias_price_multiplier,
                 buy_contract_size_multiplier=buy_market.contract_size_multiplier,
+                buy_bid=buy_market.bid,
                 buy_ask=buy_market.ask,
                 buy_volume_24h_usdt=buy_market.volume_24h_usdt,
                 buy_funding_rate_pct=buy_market.funding_rate_pct,
@@ -153,6 +154,7 @@ def build_instrument_spreads(
                 sell_price_multiplier=sell_market.symbol_alias_price_multiplier,
                 sell_contract_size_multiplier=sell_market.contract_size_multiplier,
                 sell_bid=sell_market.bid,
+                sell_ask=sell_market.ask,
                 sell_volume_24h_usdt=sell_market.volume_24h_usdt,
                 sell_funding_rate_pct=sell_market.funding_rate_pct,
                 sell_funding_interval_hours=sell_market.funding_interval_hours,
@@ -161,6 +163,7 @@ def build_instrument_spreads(
                 sell_is_estimated=sell_market.is_estimated,
                 price_difference=sell_market.bid - buy_market.ask,
                 executable_spread_pct=executable_spread_pct,
+                close_spread_pct=close_spread_pct,
                 mid_spread_pct=_mid_spread_pct(buy_market, sell_market),
                 opportunity_type=opportunity_type,
                 astro_supported=astro_supported,

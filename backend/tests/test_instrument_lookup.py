@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import Settings
@@ -71,6 +72,11 @@ def test_instrument_lookup_groups_exact_symbol_across_all_exchanges() -> None:
     assert payload["spreads"][0]["buy_market_type"] == "spot"
     assert payload["spreads"][0]["sell_exchange"] == "gate"
     assert payload["spreads"][0]["sell_market_type"] == "future"
+    assert payload["spreads"][0]["buy_bid"] == 99_999
+    assert payload["spreads"][0]["sell_ask"] == 100_201
+    assert payload["spreads"][0]["close_spread_pct"] == pytest.approx(
+        2 * (100_201 - 99_999) / (100_201 + 99_999) * 100
+    )
     assert payload["spreads"][0]["astro_supported"] is True
 
 

@@ -59,6 +59,7 @@ class InstrumentSpreadComparison(BaseModel):
     buy_dex: str | None = None
     buy_price_multiplier: float = Field(default=1.0, gt=0)
     buy_contract_size_multiplier: float | None = Field(default=None, gt=0)
+    buy_bid: float = Field(gt=0)
     buy_ask: float = Field(gt=0)
     buy_volume_24h_usdt: float | None = Field(default=None, ge=0)
     buy_funding_rate_pct: float | None = None
@@ -73,6 +74,7 @@ class InstrumentSpreadComparison(BaseModel):
     sell_price_multiplier: float = Field(default=1.0, gt=0)
     sell_contract_size_multiplier: float | None = Field(default=None, gt=0)
     sell_bid: float = Field(gt=0)
+    sell_ask: float = Field(gt=0)
     sell_volume_24h_usdt: float | None = Field(default=None, ge=0)
     sell_funding_rate_pct: float | None = None
     sell_funding_interval_hours: int | None = Field(default=None, gt=0)
@@ -81,6 +83,7 @@ class InstrumentSpreadComparison(BaseModel):
     sell_is_estimated: bool = False
     price_difference: float
     executable_spread_pct: float
+    close_spread_pct: float
     mid_spread_pct: float
     opportunity_type: OpportunityType | None = None
     astro_supported: bool = False

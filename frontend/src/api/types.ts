@@ -163,6 +163,7 @@ export interface InstrumentSpreadComparison {
   buy_dex: string | null;
   buy_price_multiplier: number;
   buy_contract_size_multiplier: number | null;
+  buy_bid: number;
   buy_ask: number;
   buy_volume_24h_usdt: number | null;
   buy_funding_rate_pct: number | null;
@@ -177,6 +178,7 @@ export interface InstrumentSpreadComparison {
   sell_price_multiplier: number;
   sell_contract_size_multiplier: number | null;
   sell_bid: number;
+  sell_ask: number;
   sell_volume_24h_usdt: number | null;
   sell_funding_rate_pct: number | null;
   sell_funding_interval_hours: number | null;
@@ -185,6 +187,7 @@ export interface InstrumentSpreadComparison {
   sell_is_estimated: boolean;
   price_difference: number;
   executable_spread_pct: number;
+  close_spread_pct: number;
   mid_spread_pct: number;
   opportunity_type: OpportunityType | null;
   astro_supported: boolean;

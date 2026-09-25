@@ -43,10 +43,16 @@ def test_build_instrument_spreads_keeps_best_executable_direction_and_sorts() ->
         "okx:future::BTCUSDT:1->binance:spot::BTCUSDT:1",
     ]
     assert comparisons[0].executable_spread_pct == pytest.approx(2.0)
+    assert comparisons[0].buy_bid == 98
+    assert comparisons[0].buy_ask == 99
+    assert comparisons[0].sell_bid == 101
+    assert comparisons[0].sell_ask == 102
+    assert comparisons[0].close_spread_pct == pytest.approx(4.0)
     assert comparisons[0].price_difference == 2
     assert comparisons[0].opportunity_type == "FF"
     assert comparisons[0].astro_supported is True
     assert comparisons[1].executable_spread_pct == pytest.approx(200 / 201)
+    assert comparisons[1].close_spread_pct == pytest.approx(600 / 201)
     assert comparisons[1].opportunity_type == "SF"
     assert comparisons[1].astro_supported is True
     assert comparisons[2].executable_spread_pct == 0

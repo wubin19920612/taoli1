@@ -79,12 +79,15 @@ const lookupResult = {
       id: "binance:spot->binance:future",
       buy_exchange: "binance",
       buy_market_type: "spot",
+      buy_bid: 99990,
       buy_ask: 100010,
       sell_exchange: "binance",
       sell_market_type: "future",
       sell_bid: 100090,
+      sell_ask: 100110,
       price_difference: 80,
       executable_spread_pct: 0.08,
+      close_spread_pct: 0.12,
       mid_spread_pct: 0.1,
       opportunity_type: "SF",
       astro_supported: true,
@@ -94,12 +97,15 @@ const lookupResult = {
       id: "okx:future->binance:future",
       buy_exchange: "okx",
       buy_market_type: "future",
+      buy_bid: 100040,
       buy_ask: 100060,
       sell_exchange: "binance",
       sell_market_type: "future",
       sell_bid: 100090,
+      sell_ask: 100110,
       price_difference: 30,
       executable_spread_pct: 0.03,
+      close_spread_pct: 0.07,
       mid_spread_pct: 0.05,
       opportunity_type: "FF",
       astro_supported: true,
@@ -109,12 +115,15 @@ const lookupResult = {
       id: "binance:spot->okx:future",
       buy_exchange: "binance",
       buy_market_type: "spot",
+      buy_bid: 99990,
       buy_ask: 100010,
       sell_exchange: "okx",
       sell_market_type: "future",
       sell_bid: 100040,
+      sell_ask: 100060,
       price_difference: 30,
       executable_spread_pct: 0.03,
+      close_spread_pct: 0.07,
       mid_spread_pct: 0.05,
       opportunity_type: "SF",
       astro_supported: true,
@@ -372,6 +381,7 @@ describe("InstrumentLookupPage", () => {
     expect(screen.getByText("100,000 - 100,100")).not.toBeNull();
     expect(screen.getByText("+0.100% · Binance")).not.toBeNull();
     expect(screen.getAllByText("Binance").length).toBeGreaterThan(0);
+    expect(screen.queryByText("行情实时")).toBeNull();
     expect(String((fetch as ReturnType<typeof vi.fn>).mock.calls[0][0])).toContain("/instruments/BTCUSDT");
   });
 
@@ -434,7 +444,7 @@ describe("InstrumentLookupPage", () => {
     render(<InstrumentLookupPage />);
 
     const marketTable = await screen.findByRole("table", { name: "精确行情市场" });
-    const zetaRow = within(marketTable).getByText(/DEX main · ZETA/).closest("article")!;
+    const zetaRow = within(marketTable).getByText(/^永续 · DEX main · ZETA$/).closest("article")!;
     expect(zetaRow.children[4].textContent).toContain("诊断已过期");
     expect(zetaRow.children[5].textContent).toContain("诊断已过期");
     expect(zetaRow.children[4].textContent).toContain("9000 USDT");
@@ -447,7 +457,7 @@ describe("InstrumentLookupPage", () => {
     expect(within(zetaRow).getByText("手续费未计入；实际费率取决于账户等级和订单类型")).not.toBeNull();
     expect(screen.getByText("账户数据未接入 · 未发送探测订单 · 当前仅依据公开市场数据判断")).not.toBeNull();
     expect(within(details).getByText("官方 OI 已达上限，普通增仓受限")).not.toBeNull();
-    expect(within(marketTable).getAllByText(/DEX main/)).toHaveLength(1);
+    expect(within(details).getByText(/市场诊断 · Hyperliquid · 永续 · DEX main · ZETA/)).not.toBeNull();
     expect(screen.queryByText("账户未接入")).toBeNull();
     expect(screen.queryByText("真实订单 未提供")).toBeNull();
     expect(within(details).getByText("开多")).not.toBeNull();
@@ -680,7 +690,7 @@ describe("InstrumentLookupPage", () => {
     render(<InstrumentLookupPage />);
 
     expect(await screen.findByText("跨市场差价")).not.toBeNull();
-    expect(screen.getByText("按买入 Ask、卖出 Bid 计算，每组市场保留较优方向")).not.toBeNull();
+    expect(screen.getByText("按可成交盘口计算，每组市场保留较优方向")).not.toBeNull();
     expect(screen.getByText("+0.080%")).not.toBeNull();
 
     await userEvent.click(screen.getAllByRole("button", { name: /建卡/ })[0]);
@@ -882,24 +892,24 @@ describe("InstrumentLookupPage", () => {
     await userEvent.click(typeHeader);
     const table = typeHeader.closest("table");
     const ascendingTypes = Array.from(table?.querySelectorAll("tbody tr.ant-table-row") ?? []).map(
-      (row) => row.querySelector("td")?.textContent
+      (row) => row.querySelector(".instrument-spread-type-tag strong")?.textContent
     );
     expect(ascendingTypes).toEqual([
-      "FF合约 → 合约", "FF合约 → 合约", "FF合约 → 合约",
-      "SF现货 → 合约", "SF现货 → 合约", "SF现货 → 合约", "SF现货 → 合约",
-      "SS现货 → 现货", "SS现货 → 现货", "SS现货 → 现货",
-      "反向 SF合约 → 现货", "反向 SF合约 → 现货", "反向 SF合约 → 现货"
+      "FF", "FF", "FF",
+      "SF", "SF", "SF", "SF",
+      "SS", "SS", "SS",
+      "反向 SF", "反向 SF", "反向 SF"
     ]);
 
     await userEvent.click(typeHeader);
     const descendingTypes = Array.from(table?.querySelectorAll("tbody tr.ant-table-row") ?? []).map(
-      (row) => row.querySelector("td")?.textContent
+      (row) => row.querySelector(".instrument-spread-type-tag strong")?.textContent
     );
     expect(descendingTypes).toEqual([
-      "反向 SF合约 → 现货", "反向 SF合约 → 现货", "反向 SF合约 → 现货",
-      "SS现货 → 现货", "SS现货 → 现货", "SS现货 → 现货",
-      "SF现货 → 合约", "SF现货 → 合约", "SF现货 → 合约", "SF现货 → 合约",
-      "FF合约 → 合约", "FF合约 → 合约", "FF合约 → 合约"
+      "反向 SF", "反向 SF", "反向 SF",
+      "SS", "SS", "SS",
+      "SF", "SF", "SF", "SF",
+      "FF", "FF", "FF"
     ]);
   });
 
@@ -908,11 +918,21 @@ describe("InstrumentLookupPage", () => {
 
     await screen.findByText("跨市场差价");
     const spreadTags = Array.from(document.querySelectorAll(".instrument-spread-type-tag"));
-    expect(spreadTags.map((tag) => tag.textContent)).toEqual([
-      "SF现货 → 合约",
-      "FF合约 → 合约",
-      "SF现货 → 合约"
+    expect(spreadTags.map((tag) => tag.querySelector("span")?.textContent)).toEqual([
+      "SF · 现货 → 合约",
+      "FF · 合约 → 合约",
+      "SF · 现货 → 合约"
     ]);
+    expect(spreadTags.map((tag) => tag.querySelector("b")?.textContent)).toEqual([
+      "bn → bn",
+      "okx → bn",
+      "bn → okx"
+    ]);
+    const spreadSection = screen.getByText("跨市场差价").closest("section")!;
+    expect(within(spreadSection).getByRole("columnheader", { name: /开仓价差/ })).not.toBeNull();
+    expect(within(spreadSection).getByRole("columnheader", { name: /平仓价差/ })).not.toBeNull();
+    expect(within(spreadSection).queryByRole("columnheader", { name: /中价差|价差额/ })).toBeNull();
+    expect(within(spreadSection).getByText("+0.120%")).not.toBeNull();
 
     const marketTags = Array.from(document.querySelectorAll(".instrument-market-type-tag"));
     expect(marketTags.filter((tag) => tag.classList.contains("instrument-market-type-tag--spot"))).toHaveLength(2);
@@ -922,6 +942,32 @@ describe("InstrumentLookupPage", () => {
       "永续合约", "永续合约",
       "现货", "永续合约"
     ]);
+  });
+
+  it("uses the requested exchange abbreviations in buy-to-sell order", async () => {
+    const routes = [
+      ["binance", "hyperliquid", "bn → hl"],
+      ["bybit", "gate", "by → gate"],
+      ["bitget", "lighter", "bg → lit"],
+      ["rh-lighter", "aster", "rh-lit → aster"],
+      ["okx", "binance", "okx → bn"]
+    ];
+    const spreads = routes.map(([buy, sell], index) => ({
+      ...lookupResult.spreads[1],
+      id: `${buy}:${index}->${sell}:${index}`,
+      buy_exchange: buy,
+      sell_exchange: sell
+    }));
+    const fallbackFetch = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("/instruments/")) return Response.json({ ...lookupResult, spreads });
+      return fallbackFetch(input, init);
+    });
+
+    render(<InstrumentLookupPage />);
+    await screen.findByText("跨市场差价");
+    expect(Array.from(document.querySelectorAll(".instrument-spread-type-tag b"), (tag) => tag.textContent))
+      .toEqual(routes.map((route) => route[2]));
   });
 
   it("sorts buy and sell markets by exchange name", async () => {
@@ -1375,7 +1421,7 @@ describe("InstrumentLookupPage", () => {
     const exactTable = await screen.findByRole("table", { name: "精确行情市场" });
     expect(within(exactTable).getByText("Lighter")).toBeTruthy();
     expect(within(exactTable).getByText("RH Lighter")).toBeTruthy();
-    expect(within(exactTable).getByText(/DEX io/)).toBeTruthy();
+    expect(within(exactTable).getAllByText(/DEX io/).length).toBeGreaterThan(0);
     expect(within(exactTable).getAllByText(/ANTHROPIC/).length).toBeGreaterThan(0);
     expect(screen.queryByText("Astro 路由证据")).toBeNull();
     expect(screen.queryByText("已匹配 Robinhood Lighter 真实公开行情")).toBeNull();
@@ -1439,13 +1485,14 @@ describe("InstrumentLookupPage", () => {
     expect(within(header).queryByText("行情数据状态")).toBeNull();
     const rows = within(table).getAllByRole("row").slice(1);
     expect(rows).toHaveLength(3);
-    expect(within(rows[0]).getByText(/DEX main · ZETA/)).not.toBeNull();
+    expect(within(rows[0].children[0] as HTMLElement).getByText(/DEX main · ZETA/)).not.toBeNull();
     expect(within(rows[0]).getByText("2")).not.toBeNull();
     expect(rows[0].children[4].textContent).toContain("9000 USDT");
     expect(rows[0].children[5].textContent).toContain("main 限制");
     expect(rows[0].children[5].textContent).not.toContain("io 限制");
     expect(rows[0].children[5].textContent).toContain("公开可用");
-    expect(within(rows[1]).getByText(/DEX io · io:ZETA/)).not.toBeNull();
+    expect(within(rows[1].children[0] as HTMLElement).getByText(/DEX io · io:ZETA/)).not.toBeNull();
+    expect(within(rows[1]).getByText(/市场诊断 · Hyperliquid · 永续 · DEX io · io:ZETA/)).not.toBeNull();
     expect(within(rows[1]).getByText("4")).not.toBeNull();
     expect(rows[1].children[4].textContent).toContain("6000 USDT");
     expect(rows[1].children[5].textContent).toContain("io 限制");
@@ -1546,7 +1593,7 @@ describe("InstrumentLookupPage", () => {
 
     render(<InstrumentLookupPage />);
     const table = await screen.findByRole("table", { name: "精确行情市场" });
-    const row = within(table).getByText(/DEX main · ZETA/).closest("article")!;
+    const row = within(table).getByText(/^永续 · DEX main · ZETA$/).closest("article")!;
     const summary = await within(row).findByText(/^市场诊断 ·/);
     const details = summary.closest("details") as HTMLDetailsElement;
     await userEvent.click(summary);
@@ -1555,7 +1602,7 @@ describe("InstrumentLookupPage", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "立即刷新" }));
     await waitFor(() => expect(diagnosticCalls).toBe(2));
-    expect(within(table).getByText(/DEX main · ZETA/).closest("article")).toBe(row);
+    expect(within(table).getByText(/^永续 · DEX main · ZETA$/).closest("article")).toBe(row);
     expect(row.contains(details)).toBe(true);
     expect(details.open).toBe(true);
     expect(within(row).queryByText("诊断加载中")).toBeNull();

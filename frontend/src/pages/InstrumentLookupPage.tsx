@@ -87,6 +87,17 @@ const exchangeLabels: Record<string, string> = {
   "rh-lighter": "RH Lighter",
   okx: "OKX"
 };
+const exchangeShortLabels: Record<string, string> = {
+  aster: "aster",
+  binance: "bn",
+  bitget: "bg",
+  bybit: "by",
+  gate: "gate",
+  hyperliquid: "hl",
+  lighter: "lit",
+  "rh-lighter": "rh-lit",
+  okx: "okx"
+};
 const chartExchanges: Record<MarketType, Set<string>> = {
   spot: new Set(["binance", "okx", "bybit", "gate", "bitget", "lighter", "rh-lighter"]),
   future: new Set(["binance", "okx", "bybit", "gate", "bitget", "aster", "hyperliquid", "lighter", "rh-lighter"])
@@ -188,18 +199,18 @@ function MarketTypeTag({ value }: { value: MarketType }) {
   );
 }
 
-function SpreadTypeTag({ value }: { value: InstrumentSpreadComparison["opportunity_type"] }) {
-  const presentation = value === "FF"
+function SpreadTypeTag({ spread }: { spread: InstrumentSpreadComparison }) {
+  const presentation = spread.opportunity_type === "FF"
     ? { code: "FF", route: "合约 → 合约", tone: "ff" }
-    : value === "SF"
+    : spread.opportunity_type === "SF"
       ? { code: "SF", route: "现货 → 合约", tone: "sf" }
-      : value === "SS"
+      : spread.opportunity_type === "SS"
         ? { code: "SS", route: "现货 → 现货", tone: "ss" }
         : { code: "反向 SF", route: "合约 → 现货", tone: "reverse-sf" };
   return (
     <Tag className={`instrument-spread-type-tag instrument-spread-type-tag--${presentation.tone}`}>
-      <strong>{presentation.code}</strong>
-      <span>{presentation.route}</span>
+      <span><strong>{presentation.code}</strong> · {presentation.route}</span>
+      <b>{exchangeShortLabels[spread.buy_exchange] ?? spread.buy_exchange} → {exchangeShortLabels[spread.sell_exchange] ?? spread.sell_exchange}</b>
     </Tag>
   );
 }
@@ -235,7 +246,7 @@ function exactMarkets(result: InstrumentLookupResult | null): InstrumentMarketCa
     })));
 }
 
-function marketDex(market: MarketSnapshot): string | null {
+function marketDex(market: Pick<MarketSnapshot, "exchange" | "market_type" | "raw_symbol" | "dex">): string | null {
   if (market.dex) return market.dex;
   if (market.exchange !== "hyperliquid" || market.market_type !== "future") return null;
   const separator = market.raw_symbol.indexOf(":");
@@ -380,6 +391,7 @@ function reverseInstrumentSpread(
     buy_dex: marketDex(buyMarket),
     buy_price_multiplier: buyMarket.symbol_alias_price_multiplier ?? 1,
     buy_contract_size_multiplier: buyMarket.contract_size_multiplier ?? null,
+    buy_bid: buyMarket.bid,
     buy_ask: buyMarket.ask,
     buy_volume_24h_usdt: buyMarket.volume_24h_usdt ?? null,
     buy_funding_rate_pct: buyMarket.funding_rate_pct ?? null,
@@ -394,6 +406,7 @@ function reverseInstrumentSpread(
     sell_price_multiplier: sellMarket.symbol_alias_price_multiplier ?? 1,
     sell_contract_size_multiplier: sellMarket.contract_size_multiplier ?? null,
     sell_bid: sellMarket.bid,
+    sell_ask: sellMarket.ask,
     sell_volume_24h_usdt: sellMarket.volume_24h_usdt ?? null,
     sell_funding_rate_pct: sellMarket.funding_rate_pct ?? null,
     sell_funding_interval_hours: sellMarket.funding_interval_hours ?? null,
@@ -402,6 +415,7 @@ function reverseInstrumentSpread(
     sell_is_estimated: sellMarket.is_estimated ?? false,
     price_difference: sellMarket.bid - buyMarket.ask,
     executable_spread_pct: 2 * (sellMarket.bid - buyMarket.ask) / (buyMarket.ask + sellMarket.bid) * 100,
+    close_spread_pct: 2 * (sellMarket.ask - buyMarket.bid) / (buyMarket.bid + sellMarket.ask) * 100,
     mid_spread_pct: 2 * (sellMid - buyMid) / (buyMid + sellMid) * 100,
     opportunity_type: directionalOpportunityType(buyMarket.market_type, sellMarket.market_type),
     astro_supported: true,
@@ -591,10 +605,14 @@ function MarketDiagnosticDetails({
   const reason = market.public_restrictions.join("；")
     || (issue ? "公开接口未返回足够信息" : "未发现公开市场限制");
   const freshness = diagnosticFreshness(market, quote);
+  const dex = marketDex(market);
   return (
     <details className="instrument-market-diagnostics" role="cell">
       <summary>
-        市场诊断 · {ageText(market.observed_at)}
+        <span className="instrument-market-diagnostic-title">
+          市场诊断 · {exchangeLabels[market.exchange] ?? market.exchange} · {marketTypeLabel(market.market_type)} · {dex ? `DEX ${dex} · ` : ""}{market.raw_symbol}
+        </span>
+        <span className="instrument-market-diagnostic-age">{ageText(market.observed_at)}</span>
         {refreshFailed ? <Tag color="orange">{freshness ? `诊断未更新 · ${freshness}` : "诊断未更新"}</Tag>
           : freshness ? <Tag color="orange">{freshness}</Tag> : <Tag color="green">诊断新鲜</Tag>}
         {restriction ? <Tag color="red">交易受限</Tag> : unknown ? <Tag color="gold">交易待核实</Tag> : null}
@@ -1286,36 +1304,35 @@ export function InstrumentLookupPage() {
     {
       title: "差价类型",
       dataIndex: "opportunity_type",
-      width: 132,
+      width: 150,
       sorter: (left, right) => (
         spreadTypeOrder(left.opportunity_type) - spreadTypeOrder(right.opportunity_type)
       ),
-      render: (value: InstrumentSpreadComparison["opportunity_type"]) => (
-        <SpreadTypeTag value={value} />
+      render: (_, spread) => (
+        <SpreadTypeTag spread={spread} />
       )
     },
     {
       title: "买入市场",
       key: "buy_market",
-      width: 170,
+      width: 160,
       sorter: (left, right) => exchangeNameOrder(left.buy_exchange, right.buy_exchange),
       render: (_, spread) => (
-        <div className="instrument-market-cell">
-          <Space size={6}>
-            <Typography.Text strong>{exchangeLabels[spread.buy_exchange] ?? spread.buy_exchange}</Typography.Text>
-            <MarketTypeTag value={spread.buy_market_type} />
-          </Space>
-          {spread.buy_raw_symbol ? <span>{spread.buy_dex ? `DEX ${spread.buy_dex} · ` : ""}{spread.buy_raw_symbol}</span> : null}
-          {spread.buy_price_multiplier !== undefined || spread.buy_contract_size_multiplier !== undefined ? (
-            <span>价格倍率 {spread.buy_price_multiplier ?? 1}x · 数量乘数 {spread.buy_contract_size_multiplier ?? "-"}</span>
-          ) : null}
-        </div>
+        <Tooltip title={`价格倍率 ${spread.buy_price_multiplier ?? 1}x · 数量乘数 ${spread.buy_contract_size_multiplier ?? "-"} · ${spread.buy_is_estimated ? "预估行情" : "非预估行情"} · 来源 ${spread.buy_data_source ?? "未提供"}`}>
+          <div className="instrument-market-cell">
+            <Space size={6}>
+              <Typography.Text strong>{exchangeLabels[spread.buy_exchange] ?? spread.buy_exchange}</Typography.Text>
+              <MarketTypeTag value={spread.buy_market_type} />
+            </Space>
+            {spread.buy_raw_symbol ? <span>{spread.buy_dex ? `DEX ${spread.buy_dex} · ` : ""}{spread.buy_raw_symbol}</span> : null}
+          </div>
+        </Tooltip>
       )
     },
     {
       title: "买入 Ask",
       dataIndex: "buy_ask",
-      width: 130,
+      width: 125,
       align: "right",
       render: (value: number, spread) => (
         <div className="instrument-market-cell">
@@ -1329,25 +1346,24 @@ export function InstrumentLookupPage() {
     {
       title: "卖出市场",
       key: "sell_market",
-      width: 170,
+      width: 160,
       sorter: (left, right) => exchangeNameOrder(left.sell_exchange, right.sell_exchange),
       render: (_, spread) => (
-        <div className="instrument-market-cell">
-          <Space size={6}>
-            <Typography.Text strong>{exchangeLabels[spread.sell_exchange] ?? spread.sell_exchange}</Typography.Text>
-            <MarketTypeTag value={spread.sell_market_type} />
-          </Space>
-          {spread.sell_raw_symbol ? <span>{spread.sell_dex ? `DEX ${spread.sell_dex} · ` : ""}{spread.sell_raw_symbol}</span> : null}
-          {spread.sell_price_multiplier !== undefined || spread.sell_contract_size_multiplier !== undefined ? (
-            <span>价格倍率 {spread.sell_price_multiplier ?? 1}x · 数量乘数 {spread.sell_contract_size_multiplier ?? "-"}</span>
-          ) : null}
-        </div>
+        <Tooltip title={`价格倍率 ${spread.sell_price_multiplier ?? 1}x · 数量乘数 ${spread.sell_contract_size_multiplier ?? "-"} · ${spread.sell_is_estimated ? "预估行情" : "非预估行情"} · 来源 ${spread.sell_data_source ?? "未提供"}`}>
+          <div className="instrument-market-cell">
+            <Space size={6}>
+              <Typography.Text strong>{exchangeLabels[spread.sell_exchange] ?? spread.sell_exchange}</Typography.Text>
+              <MarketTypeTag value={spread.sell_market_type} />
+            </Space>
+            {spread.sell_raw_symbol ? <span>{spread.sell_dex ? `DEX ${spread.sell_dex} · ` : ""}{spread.sell_raw_symbol}</span> : null}
+          </div>
+        </Tooltip>
       )
     },
     {
       title: "卖出 Bid",
       dataIndex: "sell_bid",
-      width: 130,
+      width: 125,
       align: "right",
       render: (value: number, spread) => (
         <div className="instrument-market-cell">
@@ -1359,37 +1375,40 @@ export function InstrumentLookupPage() {
       )
     },
     {
-      title: "可成交差价",
+      title: <span className="instrument-spread-column-title">开仓价差<small>卖 Bid − 买 Ask</small></span>,
       dataIndex: "executable_spread_pct",
-      width: 126,
+      width: 130,
       align: "right",
       sorter: (left, right) => left.executable_spread_pct - right.executable_spread_pct,
       defaultSortOrder: "descend",
-      render: (value: number) => (
-        <Typography.Text strong className={`instrument-rate instrument-rate-${tone(value)}`}>
-          {signedPct(value)}
-        </Typography.Text>
+      render: (value: number, spread) => (
+        <Tooltip title={`买入 Ask ${price(spread.buy_ask)} · 卖出 Bid ${price(spread.sell_bid)}；未扣手续费及滑点`}>
+          <div className={`instrument-spread-value instrument-rate-${tone(value)}`}>
+            <strong>{signedPct(value)}</strong>
+            <small>买 Ask → 卖 Bid</small>
+          </div>
+        </Tooltip>
       )
     },
     {
-      title: "中价差",
-      dataIndex: "mid_spread_pct",
-      width: 110,
+      title: <span className="instrument-spread-column-title">平仓价差<small>卖 Ask − 买 Bid</small></span>,
+      dataIndex: "close_spread_pct",
+      width: 130,
       align: "right",
-      render: (value: number) => signedPct(value)
-    },
-    {
-      title: "价差额",
-      dataIndex: "price_difference",
-      width: 110,
-      align: "right",
-      render: (value: number) => price(value)
+      sorter: (left, right) => left.close_spread_pct - right.close_spread_pct,
+      render: (value: number, spread) => (
+        <Tooltip title={`买入 Bid ${price(spread.buy_bid)} · 卖出 Ask ${price(spread.sell_ask)}；非平仓净收益，未扣手续费及滑点`}>
+          <div className="instrument-spread-value instrument-spread-close-value">
+            <strong>{signedPct(value)}</strong>
+            <small>买 Bid → 卖 Ask</small>
+          </div>
+        </Tooltip>
+      )
     },
     {
       title: "操作",
       key: "action",
-      fixed: "right",
-      width: 218,
+      width: 180,
       render: (_, spread) => {
         const blocker = pairSpreadBlocker(spread);
         return (
@@ -1573,8 +1592,8 @@ export function InstrumentLookupPage() {
                     <strong>{exchangeLabels[market.exchange] ?? market.exchange}</strong>
                     <span>{marketTypeLabel(market.market_type)} · {dex ? "DEX " + dex + " · " : ""}{market.raw_symbol}</span>
                     <span>规范标的 {market.symbol}</span>
-                    {quote ? <Tag color={quote.data_status === "live" ? "green" : "red"}>{quote.data_status === "live" ? "行情实时" : "行情已过期"}</Tag>
-                      : <Tag color="orange">仅诊断，未可靠关联行情</Tag>}
+                    {quote?.data_status === "stale" ? <Tag color="red">行情已过期</Tag>
+                      : !quote ? <Tag color="orange">仅诊断，未可靠关联行情</Tag> : null}
                     {diagnostic && (currentTradeStatusError || diagnosticStaleness) ?
                       <Tag color="orange">{currentTradeStatusError
                         ? `诊断未更新${diagnosticStaleness ? ` · ${diagnosticStaleness}` : ""}`
@@ -1749,7 +1768,7 @@ export function InstrumentLookupPage() {
           <div className="instrument-section-head instrument-spread-head">
             <div>
               <Typography.Title level={4}>跨市场差价</Typography.Title>
-              <Typography.Text type="secondary">按买入 Ask、卖出 Bid 计算，每组市场保留较优方向</Typography.Text>
+              <Typography.Text type="secondary">按可成交盘口计算，每组市场保留较优方向</Typography.Text>
             </div>
             <Space size={[10, 4]} wrap className="instrument-spread-filters">
               <AutoComplete
@@ -1779,6 +1798,8 @@ export function InstrumentLookupPage() {
             </Space>
           </div>
           <Table<InstrumentSpreadComparison>
+            className="instrument-spread-table"
+            tableLayout="fixed"
             rowKey="id"
             columns={spreadColumns}
             dataSource={visibleInstrumentSpreads}
