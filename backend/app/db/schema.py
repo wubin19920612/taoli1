@@ -682,4 +682,7 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
     await _ensure_pair_spread_funding_columns(db)
     await _ensure_oil_news_columns(db)
     await _migrate_alert_rule_excluded_labels(db)
+    from app.services.squeeze_arbitrage.repository import initialize_squeeze_schema
+
+    await initialize_squeeze_schema(db)
     await db.commit()

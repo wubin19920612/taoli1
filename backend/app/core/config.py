@@ -17,6 +17,8 @@ class Settings:
     poll_interval_seconds: float = 5.0
     funding_poll_interval_seconds: float = 120.0
     funding_research_enabled: bool = False
+    squeeze_monitor_enabled: bool = False
+    squeeze_monitor_symbols: str = "LSKUSDT,TUTUSDT,GUSDT"
     funding_research_manage_paper_trades: bool = True
     funding_research_snapshot_retention_hours: float = 72.0
     feishu_webhook_url: str = ""
@@ -155,6 +157,10 @@ def get_settings() -> Settings:
         poll_interval_seconds=float(os.getenv("POLL_INTERVAL_SECONDS", "5")),
         funding_poll_interval_seconds=float(os.getenv("FUNDING_POLL_INTERVAL_SECONDS", "120")),
         funding_research_enabled=bool_env("FUNDING_RESEARCH_ENABLED", False),
+        squeeze_monitor_enabled=bool_env("SQUEEZE_MONITOR_ENABLED", False),
+        squeeze_monitor_symbols=os.getenv(
+            "SQUEEZE_MONITOR_SYMBOLS", "LSKUSDT,TUTUSDT,GUSDT"
+        ).strip(),
         funding_research_manage_paper_trades=bool_env(
             "FUNDING_RESEARCH_MANAGE_PAPER_TRADES",
             True,

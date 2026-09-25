@@ -32,6 +32,7 @@ from app.api import (
     routes_phone_alerts,
     routes_settings,
     routes_second_level_sampling,
+    routes_squeeze_arbitrage,
     routes_trade_availability,
     routes_tradfi_perp_monitor,
     stream,
@@ -108,6 +109,8 @@ from app.services.live_pilot import (
     select_live_pilot_matches,
 )
 from app.services.negative_basis_monitor import NegativeBasisMonitor, NegativeBasisMonitorRepository
+from app.services.squeeze_arbitrage.repository import SqueezeRepository
+from app.services.squeeze_arbitrage.runner import SqueezeMonitor, SqueezeMonitorConfig
 from app.services.oil_news import (
     OilNewsMonitor,
     OilNewsProvider,
@@ -753,6 +756,7 @@ def create_app(
         db = await connect_database(_sqlite_path(app_settings))
         await initialize_schema(db)
         app.state.db = db
+        app.state.squeeze_repo = SqueezeRepository(db)
         app.state.alert_rule_repo = AlertRuleRepository(db)
         app.state.alert_event_repo = AlertEventRepository(db)
         app.state.phone_price_alert_rule_repo = PhonePriceAlertRuleRepository(db)
@@ -840,6 +844,19 @@ def create_app(
             alert_sender=text_alert_sender,
         )
         tasks: list[asyncio.Task] = []
+        if start_collector and start_background_workers and app_settings.squeeze_monitor_enabled:
+            symbols = tuple(
+                symbol.strip().upper()
+                for symbol in app_settings.squeeze_monitor_symbols.split(",")
+                if symbol.strip()
+            )
+            app.state.squeeze_monitor = SqueezeMonitor(
+                app.state.squeeze_repo, SqueezeMonitorConfig(symbols=symbols)
+            )
+            app.state.squeeze_monitor_active = True
+            _start_background_task(
+                tasks, app.state.squeeze_monitor.run(stop_event), name="squeeze-monitor"
+            )
         if start_background_workers:
             await app.state.second_level_sampler.initialize()
             _start_background_task(
@@ -1015,6 +1032,7 @@ def create_app(
                 "tradfi_perp_live_fetcher",
                 "second_level_sampler",
                 "negative_basis_monitor",
+                "squeeze_monitor",
                 "pair_spread_funding_recorder",
                 "oil_news_monitor",
                 "trade_availability_service",
@@ -1044,6 +1062,9 @@ def create_app(
     app.state.second_level_sampler = None
     app.state.oil_news_monitor = None
     app.state.negative_basis_monitor = None
+    app.state.squeeze_repo = None
+    app.state.squeeze_monitor = None
+    app.state.squeeze_monitor_active = False
     app.state.trade_availability_service = None
     app.state.account_position_service = None
     app.state.account_connection_service = None
@@ -1119,6 +1140,7 @@ def create_app(
     app.include_router(routes_pair_spread.router, prefix="/api")
     app.include_router(routes_premium_index.router, prefix="/api")
     app.include_router(routes_negative_basis_monitor.router, prefix="/api")
+    app.include_router(routes_squeeze_arbitrage.router, prefix="/api")
     app.include_router(routes_index_components.router, prefix="/api")
     app.include_router(routes_announcements.router, prefix="/api")
     app.include_router(routes_oil_news.router, prefix="/api")

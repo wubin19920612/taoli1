@@ -19,6 +19,7 @@ const defaultNavigationOrder = [
   "symbol-spread",
   "premium-index",
   "negative-basis",
+  "squeeze-arbitrage",
   "second-sampling",
   "fat-finger",
   "tradfi-perp",
@@ -200,6 +201,7 @@ describe("AppShell", () => {
     expect(labels).not.toContain("1 分钟价差信号");
     expect(labels).not.toContain("新币极速");
     expect(labels).toContain("账户连接");
+    expect(labels).toContain("挤仓结构观察");
     expect(labels).toContain("参数与告警");
   });
 

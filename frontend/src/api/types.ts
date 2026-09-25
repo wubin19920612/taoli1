@@ -2549,3 +2549,68 @@ export interface OpportunityFilters {
   min_volume_24h_k?: number;
   limit?: number;
 }
+export interface SqueezeWatchFeatures {
+  market_key: string;
+  bucket_at: string;
+  calculated_at: string;
+  status: "ready" | "insufficient_data" | "stale_data";
+  reasons: string[];
+  return_4h: number | null;
+  return_24h: number | null;
+  volume_ratio: number | null;
+  account_ratio: number | null;
+  account_ratio_change: number | null;
+  oi_current_growth: number | null;
+  oi_peak_growth: number | null;
+  oi_drawdown: number | null;
+  oi_age_seconds: number | null;
+  account_age_seconds: number | null;
+}
+
+export interface SqueezeWatchEvent {
+  id: string;
+  market_key: string;
+  rule_version: string;
+  first_bucket_at: string;
+  last_bucket_at: string;
+  stage: "building" | "squeeze_pending" | "tail_risk";
+  expires_at: string;
+  cooldown_until: string;
+  features: SqueezeWatchFeatures;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SqueezeStatus {
+  enabled: boolean;
+  rule_version: string;
+  last_attempt_at: string | null;
+  last_success_at: string | null;
+  last_bucket_at: string | null;
+  last_error: string | null;
+  verified_symbols: string[];
+  active_watch_count: number;
+  liquidation_coverage: {
+    state: string;
+    updated_at: string | null;
+    last_message_at: string | null;
+    last_error: string | null;
+    open_gaps: number;
+    public_stream_complete: false;
+  };
+  liquidation_observed_last_hour: Record<string, {
+    updates: number;
+    observed_notional_usdt: number;
+  }>;
+  latest_market_scans: Array<{
+    market_key: string;
+    bucket_at: string;
+    requested_from: string;
+    requested_to: string;
+    received_at: string;
+    candle_count: number;
+    positioning_count: number;
+    result_status: string;
+    error: string | null;
+  }>;
+}

@@ -1,4 +1,6 @@
 import type {
+  SqueezeStatus,
+  SqueezeWatchEvent,
   AccountConnection,
   AccountConnectionOverview,
   AccountConnectionTestResult,
@@ -100,6 +102,18 @@ import type {
   TradeAvailabilityWatch,
   TradfiPerpMonitorPreview
 } from "./types";
+
+export async function getSqueezeStatus(): Promise<SqueezeStatus> {
+  return fetchJson<SqueezeStatus>("/squeeze-arbitrage/status");
+}
+
+export async function getSqueezeWatchlist(): Promise<SqueezeWatchEvent[]> {
+  return fetchJson<SqueezeWatchEvent[]>("/squeeze-arbitrage/watchlist");
+}
+
+export async function getSqueezeEvents(limit = 50): Promise<SqueezeWatchEvent[]> {
+  return fetchJson<SqueezeWatchEvent[]>(`/squeeze-arbitrage/events?limit=${limit}`);
+}
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "/api";
 

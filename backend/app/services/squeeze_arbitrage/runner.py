@@ -1,0 +1,163 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+import re
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+
+from websockets.asyncio.client import connect as websocket_connect
+
+from .features import calculate_watch_features
+from .liquidation import parse_force_order
+from .models import market_key
+from .provider import BinanceSqueezeProvider, latest_completed_hour
+from .repository import SqueezeRepository
+
+logger = logging.getLogger(__name__)
+FORCE_ORDER_URL = "wss://fstream.binance.com/ws/!forceOrder@arr"
+
+
+@dataclass(frozen=True)
+class SqueezeMonitorConfig:
+    symbols: tuple[str, ...] = ("LSKUSDT", "TUTUSDT", "GUSDT")
+    poll_seconds: int = 300
+    max_active: int = 30
+
+    def __post_init__(self) -> None:
+        if not self.symbols or len(self.symbols) > 5 or len(set(self.symbols)) != len(self.symbols):
+            raise ValueError("Squeeze monitor requires 1-5 unique symbols")
+        if any(not re.fullmatch(r"[A-Z0-9]{2,30}USDT", symbol) for symbol in self.symbols):
+            raise ValueError("Squeeze monitor symbols must be raw Binance USDT symbols")
+        if self.poll_seconds < 60 or self.max_active < 1 or self.max_active > 30:
+            raise ValueError("Squeeze monitor resource budget is invalid")
+
+
+class SqueezeMonitor:
+    def __init__(
+        self, repo: SqueezeRepository, config: SqueezeMonitorConfig,
+        provider: BinanceSqueezeProvider | None = None,
+    ) -> None:
+        self.repo = repo
+        self.config = config
+        self.provider = provider or BinanceSqueezeProvider()
+        self._verified_symbols: set[str] = set()
+        self._last_complete_bucket: datetime | None = None
+        self.running = False
+
+    async def aclose(self) -> None:
+        await self.provider.aclose()
+
+    async def scan_once(self, now: datetime | None = None) -> None:
+        now = now or datetime.now(UTC)
+        bucket = latest_completed_hour(now - timedelta(seconds=90))
+        try:
+            metadata = await self.provider.verified_symbols(self.config.symbols)
+            self._verified_symbols = set(metadata)
+            for symbol, details in metadata.items():
+                await self.repo.save_market_identity(symbol, details, now)
+            missing = sorted(set(self.config.symbols) - self._verified_symbols)
+            errors = [f"unverified_or_inactive_market:{symbol}" for symbol in missing]
+            for symbol in self.config.symbols:
+                if symbol not in self._verified_symbols:
+                    continue
+                candle_count = 0
+                positioning_count = 0
+                try:
+                    candles = await self.provider.fetch_candles(symbol, bucket)
+                    samples = await self.provider.fetch_positioning(symbol, bucket)
+                    candle_count = len(candles)
+                    positioning_count = len(samples)
+                    await self.repo.save_market_data(candles, samples)
+                    key = market_key(symbol)
+                    saved_candles, saved_samples = await self.repo.load_market_data(key, bucket)
+                    features = calculate_watch_features(
+                        key, saved_candles, saved_samples,
+                        bucket_at=bucket, decision_at=now,
+                    )
+                    if not await self.repo.save_features(features, max_active=self.config.max_active):
+                        errors.append(f"watch_capacity:{symbol}")
+                    await self.repo.record_scan_market(
+                        key, bucket, now, candle_count=candle_count,
+                        positioning_count=positioning_count,
+                        result_status=features.status,
+                        error=";".join(features.reasons) or None,
+                    )
+                except Exception as exc:
+                    logger.exception("squeeze scan failed for %s", symbol)
+                    errors.append(f"{symbol}:{type(exc).__name__}:{exc}")
+                    await self.repo.record_scan_market(
+                        market_key(symbol), bucket, now, candle_count=candle_count,
+                        positioning_count=positioning_count,
+                        result_status="error", error=f"{type(exc).__name__}:{exc}"[:500],
+                    )
+            if errors:
+                await self.repo.set_scan_state(now, error="; ".join(errors)[:1000])
+            else:
+                await self.repo.set_scan_state(
+                    now, bucket_at=bucket, symbols=sorted(self._verified_symbols)
+                )
+                self._last_complete_bucket = bucket
+            await self.repo.prune_samples(now)
+        except Exception as exc:
+            logger.exception("squeeze scan failed")
+            await self.repo.set_scan_state(now, error=f"{type(exc).__name__}:{exc}"[:1000])
+
+    async def _run_scans(self, stop_event: asyncio.Event) -> None:
+        while not stop_event.is_set():
+            bucket = latest_completed_hour(datetime.now(UTC) - timedelta(seconds=90))
+            if bucket != self._last_complete_bucket:
+                await self.scan_once()
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=self.config.poll_seconds)
+            except TimeoutError:
+                pass
+
+    async def _run_liquidations(self, stop_event: asyncio.Event) -> None:
+        backoff = 1
+        while not stop_event.is_set():
+            try:
+                async with websocket_connect(FORCE_ORDER_URL, open_timeout=10, ping_interval=20) as ws:
+                    backoff = 1
+                    await self.repo.set_coverage("throttled_public_stream", datetime.now(UTC))
+                    while not stop_event.is_set():
+                        try:
+                            raw = await asyncio.wait_for(ws.recv(), timeout=35)
+                        except TimeoutError:
+                            continue
+                        received_at = datetime.now(UTC)
+                        update = parse_force_order(raw, received_at)
+                        if update is not None and update.market_key.split("|")[2] in self._verified_symbols:
+                            await self.repo.record_liquidation(update)
+                        await self.repo.set_coverage(
+                            "throttled_public_stream", received_at,
+                            last_message_at=received_at,
+                        )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - reconnect after protocol/network failure.
+                logger.warning("squeeze liquidation stream disconnected: %s", exc)
+                await self.repo.set_coverage(
+                    "disconnected", datetime.now(UTC), error=f"{type(exc).__name__}:{exc}"[:500]
+                )
+            if not stop_event.is_set():
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=backoff)
+                except TimeoutError:
+                    pass
+                backoff = min(backoff * 2, 60)
+
+    async def run(self, stop_event: asyncio.Event) -> None:
+        self.running = True
+        scans = asyncio.create_task(self._run_scans(stop_event), name="squeeze-hourly-scan")
+        liquidations = asyncio.create_task(
+            self._run_liquidations(stop_event), name="squeeze-force-order-stream"
+        )
+        try:
+            await asyncio.gather(scans, liquidations)
+        finally:
+            self.running = False
+            scans.cancel()
+            liquidations.cancel()
+            await asyncio.gather(scans, liquidations, return_exceptions=True)
+            await self.repo.set_coverage("disconnected", datetime.now(UTC), error="worker_stopped")

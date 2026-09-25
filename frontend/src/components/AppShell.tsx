@@ -53,6 +53,7 @@ type PageKey =
   | "symbol-spread"
   | "premium-index"
   | "negative-basis"
+  | "squeeze-arbitrage"
   | "second-sampling"
   | "fat-finger"
   | "tradfi-perp"
@@ -113,6 +114,11 @@ const lazyPages: Record<PageKey, LazyPage> = {
   "negative-basis": lazy(() =>
     import("../pages/NegativeBasisMonitorPage").then((module) => ({
       default: module.NegativeBasisMonitorPage
+    }))
+  ),
+  "squeeze-arbitrage": lazy(() =>
+    import("../pages/SqueezeArbitragePage").then((module) => ({
+      default: module.SqueezeArbitragePage
     }))
   ),
   "second-sampling": lazy(() =>
@@ -177,6 +183,7 @@ const defaultNavigationItems: NavigationItem[] = [
   { key: "symbol-spread", icon: <LineChartOutlined />, label: "跨所价差" },
   { key: "premium-index", icon: <LineChartOutlined />, label: "溢价指数" },
   { key: "negative-basis", icon: <RadarChartOutlined />, label: "负基差埋伏" },
+  { key: "squeeze-arbitrage", icon: <RadarChartOutlined />, label: "挤仓结构观察" },
   { key: "second-sampling", icon: <ThunderboltOutlined />, label: "1s 采样" },
   { key: "fat-finger", icon: <ExperimentOutlined />, label: "乌龙回测" },
   { key: "tradfi-perp", icon: <LineChartOutlined />, label: "TradFi 价差" },
