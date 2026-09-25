@@ -13,6 +13,9 @@ from pathlib import Path
 
 
 AUTOMATIC_NAME = re.compile(r"radar-before-[0-9a-f]{12}-\d{8}T\d{6}Z\.db\Z")
+SQUEEZE_ROUTE_AUTOMATIC_NAME = re.compile(
+    r"squeeze-route-before-[0-9a-f]{12}-\d{8}T\d{6}Z\.db\Z"
+)
 LEGACY_NAME = re.compile(r"radar-[A-Za-z0-9._-]+\.db\Z")
 
 
@@ -25,8 +28,13 @@ class BackupFile:
     modified_ns: int
 
 
-def list_backups(directory: Path, include_legacy: bool) -> list[BackupFile]:
-    pattern = LEGACY_NAME if include_legacy else AUTOMATIC_NAME
+def list_backups(
+    directory: Path, include_legacy: bool, prefix: str = "radar",
+) -> list[BackupFile]:
+    pattern = (
+        SQUEEZE_ROUTE_AUTOMATIC_NAME if prefix == "squeeze-route"
+        else LEGACY_NAME if include_legacy else AUTOMATIC_NAME
+    )
     backups: list[BackupFile] = []
     with os.scandir(directory) as entries:
         for entry in entries:
@@ -67,16 +75,19 @@ def select_retained(backups: list[BackupFile], now: datetime) -> set[Path]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--backup-dir", type=Path, required=True)
+    parser.add_argument("--prefix", choices=("radar", "squeeze-route"), default="radar")
     parser.add_argument("--include-legacy", action="store_true")
     parser.add_argument("--protect", action="append", default=[], metavar="BASENAME")
     parser.add_argument("--expect-delete-count", type=int)
     parser.add_argument("--apply", action="store_true", help="Delete selected files; default is a preview")
     args = parser.parse_args()
+    if args.prefix == "squeeze-route" and args.include_legacy:
+        parser.error("--include-legacy is only available for radar backups")
 
     directory = args.backup_dir
     if directory.is_symlink() or not directory.is_dir():
         parser.error("backup directory must be an existing non-symlink directory")
-    backups = list_backups(directory, args.include_legacy)
+    backups = list_backups(directory, args.include_legacy, args.prefix)
     retained = select_retained(backups, datetime.now(timezone.utc))
     protected = set(args.protect)
     unknown = protected - {backup.path.name for backup in backups}

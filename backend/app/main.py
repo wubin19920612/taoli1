@@ -111,7 +111,11 @@ from app.services.live_pilot import (
 from app.services.negative_basis_monitor import NegativeBasisMonitor, NegativeBasisMonitorRepository
 from app.services.squeeze_arbitrage.repository import SqueezeRepository
 from app.services.squeeze_arbitrage.runner import SqueezeMonitor, SqueezeMonitorConfig
-from app.services.squeeze_arbitrage.route_repository import SqueezeRouteRepository
+from app.services.squeeze_arbitrage.route_repository import (
+    SqueezeRouteRepository,
+    initialize_route_schema,
+    migrate_legacy_route_data,
+)
 from app.services.squeeze_arbitrage.route_runner import RouteMonitorConfig, SqueezeRouteMonitor
 from app.services.oil_news import (
     OilNewsMonitor,
@@ -758,8 +762,12 @@ def create_app(
         _ensure_database_parent(db_path)
         db = await connect_database(db_path)
         await initialize_schema(db)
-        route_db = db if db_path == ":memory:" else await connect_database(db_path)
+        route_stem, route_extension = os.path.splitext(db_path)
+        route_db_path = f"{route_stem}-squeeze-route{route_extension or '.db'}"
+        route_db = db if db_path == ":memory:" else await connect_database(route_db_path)
         if route_db is not db:
+            await initialize_route_schema(route_db)
+            await migrate_legacy_route_data(route_db, db_path)
             await route_db.execute("PRAGMA busy_timeout=500")
         app.state.db = db
         app.state.squeeze_repo = SqueezeRepository(db)

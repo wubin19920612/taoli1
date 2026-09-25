@@ -2590,6 +2590,13 @@ export interface SqueezeStatus {
     last_success_at: string | null;
     last_error: string | null;
     last_route_id: string | null;
+    last_collected_at: string | null;
+    queue_depth: number;
+    storage_failure_count: number;
+    last_storage_error_at: string | null;
+    last_storage_error: string | null;
+    dropped_scan_count: number;
+    last_drop_at: string | null;
   };
   rule_version: string;
   last_attempt_at: string | null;

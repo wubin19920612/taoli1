@@ -58,16 +58,21 @@ if ! sudo -n docker compose exec -T backend test -f /data/radar.db; then
   exit 1
 fi
 
-backup_file="backups/radar-before-${commit:0:12}-$(date -u +%Y%m%dT%H%M%SZ).db"
-echo "Creating SQLite backup at $backup_file"
-container_sha="$(sudo -n docker compose exec -T backend python - <<'PY'
+backup_sqlite() {
+  local database_path="$1"
+  local temporary_path="$2"
+  local backup_file="$3"
+  local container_sha host_sha
+  echo "Creating SQLite backup at $backup_file"
+  container_sha="$(sudo -n docker compose exec -T backend python - "$database_path" "$temporary_path" <<'PY'
 import hashlib
 import pathlib
 import sqlite3
+import sys
 from contextlib import closing
 
-src = pathlib.Path("/data/radar.db")
-dst = pathlib.Path("/tmp/radar-backup-deploy.db")
+src = pathlib.Path(sys.argv[1])
+dst = pathlib.Path(sys.argv[2])
 dst.unlink(missing_ok=True)
 with closing(sqlite3.connect(f"file:{src}?mode=ro", uri=True)) as source:
     with closing(sqlite3.connect(dst)) as target:
@@ -82,14 +87,23 @@ with dst.open("rb") as backup:
 print(digest.hexdigest())
 PY
 )"
-sudo -n docker compose cp backend:/tmp/radar-backup-deploy.db "$backup_file"
-sudo -n docker compose exec -T backend rm -f /tmp/radar-backup-deploy.db
-host_sha="$(sha256sum "$backup_file" | awk '{print $1}')"
-if [[ "$host_sha" != "$container_sha" ]]; then
-  echo "Backup SHA-256 mismatch; refusing to deploy." >&2
-  exit 1
+  sudo -n docker compose cp "backend:$temporary_path" "$backup_file"
+  sudo -n docker compose exec -T backend rm -f "$temporary_path"
+  host_sha="$(sha256sum "$backup_file" | awk '{print $1}')"
+  if [[ "$host_sha" != "$container_sha" ]]; then
+    echo "Backup SHA-256 mismatch; refusing to deploy." >&2
+    exit 1
+  fi
+  echo "Backup integrity_check=ok sha256=$host_sha"
+}
+
+backup_timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+backup_sqlite "/data/radar.db" "/tmp/radar-backup-deploy.db" \
+  "backups/radar-before-${commit:0:12}-${backup_timestamp}.db"
+if sudo -n docker compose exec -T backend test -f /data/radar-squeeze-route.db; then
+  backup_sqlite "/data/radar-squeeze-route.db" "/tmp/squeeze-route-backup-deploy.db" \
+    "backups/squeeze-route-before-${commit:0:12}-${backup_timestamp}.db"
 fi
-echo "Backup integrity_check=ok sha256=$host_sha"
 
 echo "Fast-forwarding to reviewed commit $commit from origin/$branch"
 git pull --ff-only origin "$branch"
@@ -107,6 +121,7 @@ echo "Pulling prebuilt images; no build runs on this server"
 "${compose[@]}" up -d --no-build --wait --wait-timeout 120 --remove-orphans
 
 python3 deploy/backup_retention.py --backup-dir "$ROOT_DIR/backups" --apply
+python3 deploy/backup_retention.py --backup-dir "$ROOT_DIR/backups" --prefix squeeze-route --apply
 
 echo "Current containers"
 "${compose[@]}" ps

@@ -25,8 +25,16 @@ from app.services.squeeze_arbitrage.route_engine import (
     vwap,
 )
 from app.services.squeeze_arbitrage.route_provider import PublicRouteProvider
-from app.services.squeeze_arbitrage.route_repository import SqueezeRouteRepository
-from app.services.squeeze_arbitrage.route_runner import RouteMonitorConfig, SqueezeRouteMonitor
+from app.services.squeeze_arbitrage.route_repository import (
+    SqueezeRouteRepository,
+    initialize_route_schema,
+    migrate_legacy_route_data,
+)
+from app.services.squeeze_arbitrage.route_runner import (
+    PendingSourceError,
+    RouteMonitorConfig,
+    SqueezeRouteMonitor,
+)
 from app.services.squeeze_arbitrage.route_tracker import RouteTracker
 
 D = Decimal
@@ -306,14 +314,22 @@ async def test_locked_route_db_reports_error_and_worker_recovers(tmp_path) -> No
         assert status["enabled"] is True
         assert status["last_error"] == monitor.last_error
         assert status["last_attempt_at"] is not None
+        await asyncio.sleep(3.5)
+        assert monitor.provider.sequence >= 2
+        assert (await monitor.status())["queue_depth"] >= 2
         assert await repo.list_routes() == []
         await holder.rollback()
         for _ in range(100):
-            if monitor.last_error is None and (await repo.list_routes()):
+            status = await monitor.status()
+            if status["queue_depth"] == 0 and (await repo.list_routes()):
                 break
             await asyncio.sleep(0.05)
         assert monitor.last_error is None
-        assert (await repo.status(enabled=True))["last_error"] is None
+        persisted = await repo.status(enabled=True)
+        assert persisted["last_error"] is None
+        assert persisted["storage_failure_count"] >= 1
+        assert persisted["last_storage_error_at"] is not None
+        assert persisted["dropped_scan_count"] == 0
         assert (await repo.load_tracker(ROUTE.route_id)).phase == "dislocation"
         assert len(await repo.list_events()) == 1
     finally:
@@ -322,6 +338,100 @@ async def test_locked_route_db_reports_error_and_worker_recovers(tmp_path) -> No
             await task
         await holder.rollback()
         await holder.close()
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_route_worker_state_migrates_existing_database(tmp_path) -> None:
+    db = await connect_database(str(tmp_path / "old-route.db"))
+    try:
+        await db.execute(
+            """CREATE TABLE squeeze_route_worker_state (
+               id INTEGER PRIMARY KEY CHECK(id = 1), last_attempt_at TEXT,
+               last_success_at TEXT, last_error TEXT, last_route_id TEXT)"""
+        )
+        await db.execute(
+            "INSERT INTO squeeze_route_worker_state(id,last_error) VALUES (1,'old error')"
+        )
+        await db.commit()
+        await initialize_schema(db)
+        status = await SqueezeRouteRepository(db).status(enabled=False)
+        assert status["last_error"] == "old error"
+        assert status["storage_failure_count"] == 0
+        assert status["dropped_scan_count"] == 0
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_legacy_route_data_moves_to_isolated_database(tmp_path) -> None:
+    legacy_path = str(tmp_path / "radar.db")
+    route_path = str(tmp_path / "radar-squeeze-route.db")
+    legacy = await connect_database(legacy_path)
+    route_db = await connect_database(route_path)
+    try:
+        await initialize_schema(legacy)
+        old_repo = SqueezeRouteRepository(legacy)
+        tracker = RouteTracker(ROUTE.route_id, baseline=D(0), baseline_at=NOW)
+        high, low = books()
+        evaluation, transition = tracker.advance(ROUTE, high, low, NOW)
+        await old_repo.save_scan(ROUTE, tracker, evaluation, high, low, transition)
+        await legacy.execute("DROP TABLE squeeze_route_worker_state")
+        await legacy.execute(
+            """CREATE TABLE squeeze_route_worker_state (
+               id INTEGER PRIMARY KEY CHECK(id = 1), last_attempt_at TEXT,
+               last_success_at TEXT, last_error TEXT, last_route_id TEXT)"""
+        )
+        await legacy.execute(
+            """INSERT INTO squeeze_route_worker_state
+               VALUES (1, ?, ?, NULL, ?)""",
+            (NOW.isoformat(), NOW.isoformat(), ROUTE.route_id),
+        )
+        await legacy.commit()
+
+        await initialize_route_schema(route_db)
+        await migrate_legacy_route_data(route_db, legacy_path)
+        new_repo = SqueezeRouteRepository(route_db)
+        assert (await new_repo.load_tracker(ROUTE.route_id)).phase == "dislocation"
+        assert len(await new_repo.list_events()) == 1
+        assert (await new_repo.list_routes())[0]["evaluation"]["route_id"] == ROUTE.route_id
+        assert (await new_repo.status(enabled=False))["last_success_at"] == NOW.isoformat()
+
+        await legacy.execute("BEGIN IMMEDIATE")
+        await new_repo.save_tracker(RouteTracker(ROUTE.route_id, phase="blocked"), NOW)
+        await legacy.rollback()
+        await migrate_legacy_route_data(route_db, legacy_path)
+        assert (await new_repo.load_tracker(ROUTE.route_id)).phase == "blocked"
+    finally:
+        await route_db.close()
+        await legacy.close()
+
+
+@pytest.mark.asyncio
+async def test_full_route_queue_marks_gap_and_persists_drop_count() -> None:
+    db = await connect_database(":memory:")
+    try:
+        await initialize_schema(db)
+        repo = SqueezeRouteRepository(db)
+        monitor = SqueezeRouteMonitor(repo, RouteMonitorConfig(max_pending_scans=2))
+        monitor.tracker = RouteTracker(ROUTE.route_id, phase="dislocation")
+        item = PendingSourceError(None, NOW, "source unavailable")
+        assert monitor._enqueue(item, NOW)
+        assert monitor._enqueue(item, NOW)
+        assert not monitor._enqueue(item, NOW)
+        assert monitor.tracker.phase == "blocked"
+        assert (await monitor.status())["dropped_scan_count"] == 1
+        tracker = RouteTracker(ROUTE.route_id, baseline=D(0), baseline_at=NOW)
+        high, low = books()
+        evaluation, transition = tracker.advance(ROUTE, high, low, NOW)
+        await repo.save_scan(
+            ROUTE, tracker, evaluation, high, low, transition,
+            dropped_scans=monitor._pending_drops, last_drop_at=monitor.last_drop_at,
+        )
+        status = await repo.status(enabled=True)
+        assert status["dropped_scan_count"] == 1
+        assert status["last_drop_at"] == NOW.isoformat()
+    finally:
         await db.close()
 
 
@@ -435,7 +545,7 @@ def test_api_only_route_enabled_does_not_start_worker(monkeypatch) -> None:
 
 
 def test_file_backed_route_sampler_has_its_own_sqlite_connection(tmp_path) -> None:
-    database_url = "sqlite:///" + (tmp_path / "squeeze-route.db").as_posix()
+    database_url = "sqlite:///" + (tmp_path / "radar.db").as_posix()
     app = create_app(
         settings=Settings(database_url=database_url),
         start_background_workers=False,
@@ -443,3 +553,4 @@ def test_file_backed_route_sampler_has_its_own_sqlite_connection(tmp_path) -> No
     with TestClient(app) as client:
         assert app.state.squeeze_route_repo.db is not app.state.db
         assert client.get("/api/squeeze-arbitrage/routes").json() == []
+    assert (tmp_path / "radar-squeeze-route.db").exists()

@@ -133,6 +133,15 @@ export function SqueezeArbitragePage() {
       </Space>
       {status?.last_error && <Alert type="warning" showIcon message={status.last_error} style={{ marginBottom: 16 }} />}
       {status?.routes?.last_error && <Alert type="warning" showIcon message={status.routes.last_error} style={{ marginBottom: 16 }} />}
+      {!!status?.routes?.queue_depth && <Alert type="info" showIcon
+        message={`路线写入积压 ${status.routes.queue_depth} 条；最新采集 ${time(status.routes.last_collected_at)}`}
+        style={{ marginBottom: 16 }} />}
+      {!!status?.routes?.dropped_scan_count && <Alert type="warning" showIcon
+        message={`已丢弃 ${status.routes.dropped_scan_count} 条路线采样，连续确认已重置；最近 ${time(status.routes.last_drop_at)}`}
+        style={{ marginBottom: 16 }} />}
+      {!!status?.routes?.storage_failure_count && <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
+        路线存储忙锁 {status.routes.storage_failure_count} 次，最近 {time(status.routes.last_storage_error_at)}。
+      </Typography.Paragraph>}
       <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
         已核验市场：{status?.verified_symbols.join("、") || "-"}。公开强平流仅为节流观测，缺失不能视为零；结构观察不代表可成交机会。
       </Typography.Paragraph>

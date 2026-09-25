@@ -34,10 +34,71 @@ async def initialize_route_schema(db: aiosqlite.Connection) -> None:
           ON squeeze_route_events(occurred_at DESC);
         CREATE TABLE IF NOT EXISTS squeeze_route_worker_state (
           id INTEGER PRIMARY KEY CHECK(id = 1), last_attempt_at TEXT,
-          last_success_at TEXT, last_error TEXT, last_route_id TEXT
+          last_success_at TEXT, last_error TEXT, last_route_id TEXT,
+          storage_failure_count INTEGER NOT NULL DEFAULT 0,
+          last_storage_error_at TEXT, last_storage_error TEXT,
+          dropped_scan_count INTEGER NOT NULL DEFAULT 0, last_drop_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS squeeze_route_meta (
+          key TEXT PRIMARY KEY, value TEXT NOT NULL
         );
     """)
+    cursor = await db.execute("PRAGMA table_info(squeeze_route_worker_state)")
+    columns = {row["name"] for row in await cursor.fetchall()}
+    additions = {
+        "storage_failure_count": "INTEGER NOT NULL DEFAULT 0",
+        "last_storage_error_at": "TEXT",
+        "last_storage_error": "TEXT",
+        "dropped_scan_count": "INTEGER NOT NULL DEFAULT 0",
+        "last_drop_at": "TEXT",
+    }
+    for name, ddl in additions.items():
+        if name not in columns:
+            await db.execute(f"ALTER TABLE squeeze_route_worker_state ADD COLUMN {name} {ddl}")
     await db.commit()
+
+
+async def migrate_legacy_route_data(db: aiosqlite.Connection, legacy_path: str) -> None:
+    cursor = await db.execute(
+        "SELECT 1 FROM squeeze_route_meta WHERE key='legacy_radar_imported'"
+    )
+    if await cursor.fetchone():
+        return
+    await db.execute("ATTACH DATABASE ? AS legacy_route", (legacy_path,))
+    try:
+        cursor = await db.execute(
+            """SELECT name FROM legacy_route.sqlite_master
+               WHERE type='table' AND name IN
+               ('squeeze_route_state','squeeze_route_latest',
+                'squeeze_route_events','squeeze_route_worker_state')"""
+        )
+        found = {row["name"] for row in await cursor.fetchall()}
+        if len(found) == 4:
+            await db.execute(
+                "INSERT OR IGNORE INTO squeeze_route_state SELECT * FROM legacy_route.squeeze_route_state"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO squeeze_route_latest SELECT * FROM legacy_route.squeeze_route_latest"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO squeeze_route_events SELECT * FROM legacy_route.squeeze_route_events"
+            )
+            await db.execute(
+                """INSERT OR IGNORE INTO squeeze_route_worker_state
+                   (id,last_attempt_at,last_success_at,last_error,last_route_id)
+                   SELECT id,last_attempt_at,last_success_at,last_error,last_route_id
+                   FROM legacy_route.squeeze_route_worker_state"""
+            )
+        await db.execute(
+            "INSERT INTO squeeze_route_meta(key,value) VALUES ('legacy_radar_imported',?)",
+            (legacy_path,),
+        )
+        await db.commit()
+    except BaseException:
+        await db.rollback()
+        raise
+    finally:
+        await db.execute("DETACH DATABASE legacy_route")
 
 
 def _json_default(value: Any) -> str:
@@ -104,6 +165,9 @@ class SqueezeRouteRepository:
     async def save_scan(
         self, route: Route, tracker: RouteTracker, evaluation: RouteEvaluation,
         expensive: LegSnapshot, cheap: LegSnapshot, transition: str | None,
+        *, storage_failures: int = 0, last_storage_error_at: datetime | None = None,
+        last_storage_error: str | None = None, dropped_scans: int = 0,
+        last_drop_at: datetime | None = None,
     ) -> None:
         at = utc_iso(evaluation.calculated_at)
         evaluation_json = json.dumps(evaluation.to_dict(), separators=(",", ":"))
@@ -131,12 +195,29 @@ class SqueezeRouteRepository:
                 )
             await self.db.execute(
                 """INSERT INTO squeeze_route_worker_state
-                   (id,last_attempt_at,last_success_at,last_error,last_route_id)
-                   VALUES (1,?,?,NULL,?) ON CONFLICT(id) DO UPDATE SET
+                   (id,last_attempt_at,last_success_at,last_error,last_route_id,
+                    storage_failure_count,last_storage_error_at,last_storage_error,
+                    dropped_scan_count,last_drop_at)
+                   VALUES (1,?,?,NULL,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
                    last_attempt_at=excluded.last_attempt_at,
                    last_success_at=excluded.last_success_at,
-                   last_error=NULL,last_route_id=excluded.last_route_id""",
-                (at, at, route.route_id),
+                   last_error=NULL,last_route_id=excluded.last_route_id,
+                   storage_failure_count=squeeze_route_worker_state.storage_failure_count
+                     + excluded.storage_failure_count,
+                   last_storage_error_at=COALESCE(
+                     excluded.last_storage_error_at,
+                     squeeze_route_worker_state.last_storage_error_at),
+                   last_storage_error=COALESCE(
+                     excluded.last_storage_error,
+                     squeeze_route_worker_state.last_storage_error),
+                   dropped_scan_count=squeeze_route_worker_state.dropped_scan_count
+                     + excluded.dropped_scan_count,
+                   last_drop_at=COALESCE(excluded.last_drop_at,
+                     squeeze_route_worker_state.last_drop_at)""",
+                (at, at, route.route_id, storage_failures,
+                 utc_iso(last_storage_error_at) if last_storage_error_at else None,
+                 last_storage_error[:500] if last_storage_error else None,
+                 dropped_scans, utc_iso(last_drop_at) if last_drop_at else None),
             )
 
         await self._write(write)
@@ -164,6 +245,13 @@ class SqueezeRouteRepository:
             "last_success_at": row["last_success_at"] if row else None,
             "last_error": row["last_error"] if row else None,
             "last_route_id": row["last_route_id"] if row else None,
+            "storage_failure_count": row["storage_failure_count"] if row else 0,
+            "last_storage_error_at": row["last_storage_error_at"] if row else None,
+            "last_storage_error": row["last_storage_error"] if row else None,
+            "dropped_scan_count": row["dropped_scan_count"] if row else 0,
+            "last_drop_at": row["last_drop_at"] if row else None,
+            "queue_depth": 0,
+            "last_collected_at": None,
         }
 
     async def list_routes(self, *, limit: int = 10, offset: int = 0) -> list[dict[str, Any]]:

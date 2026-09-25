@@ -91,6 +91,25 @@ class BackupRetentionTests(unittest.TestCase):
             self.assertNotEqual(changed.returncode, 0)
             self.assertEqual(len(list(directory.glob("*.db"))), 5)
 
+    def test_squeeze_route_retention_does_not_touch_radar_backups(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            for index in range(5):
+                (directory / f"squeeze-route-before-abcdef123456-20260924T12000{index}Z.db").write_bytes(
+                    f"route{index}".encode()
+                )
+                (directory / f"radar-before-abcdef123456-20260924T12000{index}Z.db").write_bytes(
+                    f"radar{index}".encode()
+                )
+            command = [
+                sys.executable, str(SCRIPT), "--backup-dir", str(directory),
+                "--prefix", "squeeze-route", "--apply",
+            ]
+            applied = subprocess.run(command, capture_output=True, text=True, check=True)
+            self.assertIn("Deleted 2 of 5 eligible backups", applied.stdout)
+            self.assertEqual(len(list(directory.glob("squeeze-route-before-*.db"))), 3)
+            self.assertEqual(len(list(directory.glob("radar-before-*.db"))), 5)
+
 
 if __name__ == "__main__":
     unittest.main()

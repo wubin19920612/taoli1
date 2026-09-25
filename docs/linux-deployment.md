@@ -55,8 +55,10 @@ BACKEND_PORT=127.0.0.1:8000
 SERVICE_CONTROL_ENABLED=false
 ```
 
-The application and its SQLite database use the `taoli1` Compose project and
-the `radar-data` named volume. The production overlay removes both build
+The application and its SQLite databases use the `taoli1` Compose project and
+the `radar-data` named volume. The squeeze route research worker uses
+`/data/radar-squeeze-route.db` so its frequent writes do not contend with
+`/data/radar.db`. The production overlay removes both build
 definitions, assigns prebuilt images, and caps backend/frontend memory at
 768/96 MiB. The normal `docker-compose.yml` remains available for local work.
 
@@ -87,14 +89,17 @@ Use the branch containing the reviewed commit at its remote tip. The script
 checks that exact branch/SHA pair before backing up and updating the server.
 
 The script requires a clean tracked worktree, checks the remote branch tip,
-checks free disk space, makes a SQLite backup with `integrity_check=ok` and a
-matching host/container SHA-256, uses `git pull --ff-only`, pulls the exact image
+checks free disk space, makes a SQLite backup of `/data/radar.db` with
+`integrity_check=ok` and a matching host/container SHA-256, and backs up
+`/data/radar-squeeze-route.db` to a separately checked file when it exists.
+It uses `git pull --ff-only`, pulls the exact image
 tags, and runs `docker compose up -d --no-build --wait`. Git runs as the normal
 user; Docker commands use passwordless `sudo`. It never removes volumes or the
 server's `.env`.
 
 After a successful Compose update, `deploy/backup_retention.py` removes only old
-deployment-created database backups. It keeps the latest three, one per UTC day
+deployment-created database backups independently for the radar and squeeze
+route files. It keeps the latest three of each, one per UTC day
 for the past seven days, and one per UTC week for the preceding four weeks.
 Named manual backups are not removed automatically. Preview the exact deletion
 set with `python3 deploy/backup_retention.py --backup-dir backups` before any
