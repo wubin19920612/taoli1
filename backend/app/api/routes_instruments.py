@@ -10,6 +10,7 @@ from app.models.instrument import (
     InstrumentExchangeSnapshot,
     InstrumentLookupResult,
     InstrumentMarketCandidate,
+    InstrumentMarketCapResult,
     InstrumentRouteStatus,
 )
 from app.models.market import MarketSnapshot, MarketType
@@ -20,6 +21,20 @@ from app.services.instrument_spreads import build_instrument_spreads
 from app.services.symbol_aliases import SymbolAliasResolver, canonical_query_symbol
 
 router = APIRouter(prefix="/instruments")
+market_cap_router = APIRouter(prefix="/instrument-market-cap")
+
+
+@market_cap_router.get("/{base}", response_model=InstrumentMarketCapResult)
+async def instrument_market_cap(
+    base: str,
+    request: Request,
+    coin_id: str | None = None,
+) -> InstrumentMarketCapResult:
+    service = request.app.state.instrument_market_cap_service
+    try:
+        return await service.lookup(base, coin_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 async def _risk_settings(request: Request) -> RiskSettings:

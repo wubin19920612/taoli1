@@ -385,6 +385,76 @@ describe("InstrumentLookupPage", () => {
     expect(String((fetch as ReturnType<typeof vi.fn>).mock.calls[0][0])).toContain("/instruments/BTCUSDT");
   });
 
+  it("shows covered 24h volume ratios and excludes stale exact markets", async () => {
+    const timestamp = new Date().toISOString();
+    const markets = [
+      { ...lookupResult.exchanges[0].spot!, timestamp, volume_24h_usdt: 1000, data_status: "live", age_seconds: 0, stale_after_seconds: 30 },
+      { ...lookupResult.exchanges[0].future!, timestamp, volume_24h_usdt: 2000, data_status: "live", age_seconds: 0, stale_after_seconds: 30 },
+      { ...lookupResult.exchanges[1].future!, timestamp, volume_24h_usdt: 3000, data_status: "live", age_seconds: 0, stale_after_seconds: 30 },
+      { ...lookupResult.exchanges[1].future!, raw_symbol: "BTC-USDT-OLD", timestamp, volume_24h_usdt: 4000, data_status: "stale", age_seconds: 60, stale_after_seconds: 30 },
+      { ...lookupResult.exchanges[1].future!, raw_symbol: "BTC-USDT-EXPIRED", timestamp: "2026-09-11T04:00:00Z", volume_24h_usdt: 5000, data_status: "live", age_seconds: 0, stale_after_seconds: 30 }
+    ];
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/instrument-market-cap/")) return Response.json({
+        base: "BTC", status: "available", candidates: [{ id: "bitcoin", name: "Bitcoin", symbol: "BTC", market_cap_rank: 1 }],
+        selected_id: "bitcoin", market_cap_usd: 10000, updated_at: timestamp, source: "CoinGecko"
+      });
+      if (url.includes("/instruments/")) return Response.json({ ...lookupResult, markets });
+      return fallback(input, init);
+    });
+
+    render(<InstrumentLookupPage />);
+
+    expect(await screen.findByText("≈0.5x")).not.toBeNull();
+    expect(screen.getByText("5x")).not.toBeNull();
+    expect(screen.getByText(/合约 24h 5000 USDT · 2\/4 市场/)).not.toBeNull();
+    expect(screen.getByText(/现货 24h 1000 USDT · 1\/1 市场/)).not.toBeNull();
+    expect(screen.getByText(/流通市值 1万 USD · Bitcoin/)).not.toBeNull();
+    const capCalls = vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes("/instrument-market-cap/"));
+    expect(capCalls).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "立即刷新" }));
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes("/instruments/BTCUSDT"))).toHaveLength(2));
+    expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes("/instrument-market-cap/"))).toHaveLength(1);
+  });
+
+  it("requires CoinGecko coin selection when a ticker is ambiguous", async () => {
+    const timestamp = new Date().toISOString();
+    const markets = [{
+      ...lookupResult.exchanges[0].future!, timestamp, volume_24h_usdt: 2000,
+      data_status: "live", age_seconds: 0, stale_after_seconds: 30
+    }];
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/instrument-market-cap/")) {
+        const selectedId = new URL(url, "http://localhost").searchParams.get("coin_id");
+        return Response.json({
+          base: "BTC", status: selectedId ? "available" : "ambiguous",
+          candidates: [
+            { id: "bitcoin", name: "Bitcoin", symbol: "BTC", market_cap_rank: 1 },
+            { id: "other-btc", name: "Other BTC", symbol: "BTC", market_cap_rank: null }
+          ], selected_id: selectedId,
+          market_cap_usd: selectedId === "bitcoin" ? 10000 : selectedId ? 20000 : null,
+          updated_at: timestamp, source: "CoinGecko"
+        });
+      }
+      if (url.includes("/instruments/")) return Response.json({ ...lookupResult, markets });
+      return fallback(input, init);
+    });
+
+    render(<InstrumentLookupPage />);
+    const selection = await screen.findByRole("combobox", { name: "选择 CoinGecko 币种" });
+    expect(screen.queryByText("≈0.2x")).toBeNull();
+    fireEvent.mouseDown(selection);
+    fireEvent.click(await screen.findByText("Bitcoin (BTC #1)"));
+    expect(await screen.findByText("≈0.2x")).not.toBeNull();
+    fireEvent.mouseDown(screen.getByRole("combobox", { name: "选择 CoinGecko 币种" }));
+    fireEvent.click(await screen.findByText("Other BTC (BTC)"));
+    expect(await screen.findByText("≈0.1x")).not.toBeNull();
+  });
+
   it("shows the unified public restriction and creates an exact-market recovery watch", async () => {
     const zetaLookup = {
       ...lookupResult,

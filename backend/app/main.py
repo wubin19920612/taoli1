@@ -102,6 +102,7 @@ from app.services.index_components import (
     MultiIndexComponentProvider,
     OKXIndexComponentProvider,
 )
+from app.services.instrument_market_cap import InstrumentMarketCapService
 from app.services.live_pilot import (
     filter_opportunities_by_alert_rules,
     select_live_pilot_matches,
@@ -992,6 +993,7 @@ def create_app(
                 "trade_availability_service",
                 "hyperliquid_trade_status_service",
                 "account_connection_service",
+                "instrument_market_cap_service",
                 "feishu_notifier",
             )
             await db.close()
@@ -999,6 +1001,7 @@ def create_app(
     app = FastAPI(title=app_settings.app_name, lifespan=lifespan)
     app.state.settings = app_settings
     app.state.snapshot_store = store
+    app.state.instrument_market_cap_service = InstrumentMarketCapService()
     app.state.market_collector = None
     app.state.orderbook_validator = None
     app.state.funding_research_repo = None
@@ -1085,6 +1088,7 @@ def create_app(
     app.include_router(routes_hyperliquid_trade_status.router, prefix="/api")
     app.include_router(routes_trade_availability.router, prefix="/api")
     app.include_router(routes_instruments.router, prefix="/api")
+    app.include_router(routes_instruments.market_cap_router, prefix="/api")
     app.include_router(routes_pair_spread.router, prefix="/api")
     app.include_router(routes_premium_index.router, prefix="/api")
     app.include_router(routes_negative_basis_monitor.router, prefix="/api")

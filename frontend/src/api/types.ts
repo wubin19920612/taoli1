@@ -209,6 +209,21 @@ export interface InstrumentLookupResult {
   spreads: InstrumentSpreadComparison[];
 }
 
+export interface InstrumentMarketCapResult {
+  base: string;
+  status: "available" | "ambiguous" | "not_found" | "unavailable" | "source_error";
+  candidates: Array<{
+    id: string;
+    name: string;
+    symbol: string;
+    market_cap_rank: number | null;
+  }>;
+  selected_id: string | null;
+  market_cap_usd: number | null;
+  updated_at: string | null;
+  source: string;
+}
+
 export type HyperliquidActionState = "available" | "blocked" | "conditional" | "unknown";
 
 export interface HyperliquidTradeActionStatus {

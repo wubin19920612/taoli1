@@ -103,3 +103,20 @@ class InstrumentLookupResult(BaseModel):
     route_errors: dict[str, str] = Field(default_factory=dict)
     exchanges: list[InstrumentExchangeSnapshot] = Field(default_factory=list)
     spreads: list[InstrumentSpreadComparison] = Field(default_factory=list)
+
+
+class InstrumentMarketCapCandidate(BaseModel):
+    id: str
+    name: str
+    symbol: str
+    market_cap_rank: int | None = None
+
+
+class InstrumentMarketCapResult(BaseModel):
+    base: str
+    status: Literal["available", "ambiguous", "not_found", "unavailable", "source_error"]
+    candidates: list[InstrumentMarketCapCandidate] = Field(default_factory=list)
+    selected_id: str | None = None
+    market_cap_usd: float | None = Field(default=None, gt=0)
+    updated_at: datetime | None = None
+    source: str = "CoinGecko"

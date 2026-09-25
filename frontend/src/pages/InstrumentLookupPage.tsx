@@ -23,6 +23,7 @@ import {
   InputNumber,
   Modal,
   Segmented,
+  Select,
   Space,
   Spin,
   Switch,
@@ -42,6 +43,7 @@ import {
   createInstrumentAstroCard,
   deleteTradeAvailabilityWatch,
   getTradeAvailability,
+  getInstrumentMarketCap,
   listTradeAvailabilityWatches,
   lookupInstrument,
   previewInstrumentAstroPair,
@@ -55,6 +57,7 @@ import type {
   AstroPairPlan,
   InstrumentExchangeSnapshot,
   InstrumentLookupResult,
+  InstrumentMarketCapResult,
   InstrumentMarketCandidate,
   InstrumentSpreadComparison,
   MarketTradeAvailability,
@@ -76,6 +79,7 @@ const LAST_SYMBOL_KEY = "taoli1.instrumentLookup.lastSymbol.v1";
 const SAVED_SYMBOLS_KEY = "taoli1.instrumentLookup.savedSymbols.v1";
 const MAX_SAVED_SYMBOLS = 30;
 const AUTO_REFRESH_MS = 10_000;
+const MARKET_CAP_REFRESH_MS = 300_000;
 const exchangeLabels: Record<string, string> = {
   aster: "Aster",
   binance: "Binance",
@@ -179,6 +183,17 @@ function compactUsdt(value: number | null | undefined): string {
   }).format(value)} USDT`;
 }
 
+function compactUsd(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "-";
+  return `${new Intl.NumberFormat("zh-CN", { notation: "compact", maximumFractionDigits: 2 }).format(value)} USD`;
+}
+
+function multiple(value: number | null): string {
+  return value === null || !Number.isFinite(value)
+    ? "-"
+    : `${new Intl.NumberFormat("zh-CN", { maximumSignificantDigits: 3 }).format(value)}x`;
+}
+
 function signedPct(value: number | null | undefined, digits = 3): string {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return "-";
@@ -244,6 +259,40 @@ function exactMarkets(result: InstrumentLookupResult | null): InstrumentMarketCa
       stale_after_seconds: 30,
       error: snapshot.error
     })));
+}
+
+function volumeTotals(markets: InstrumentMarketCandidate[]) {
+  const distinct = new Map<string, InstrumentMarketCandidate>();
+  const unidentifiable = { future: 0, spot: 0 };
+  for (const market of markets) {
+    const identity = exactMarketKey(market);
+    if (!identity) {
+      unidentifiable[market.market_type] += 1;
+      continue;
+    }
+    const key = JSON.stringify([identity, market.symbol_alias_price_multiplier ?? 1, market.contract_size_multiplier ?? null]);
+    const previous = distinct.get(key);
+    if (!previous || Date.parse(market.timestamp) > Date.parse(previous.timestamp)) distinct.set(key, market);
+  }
+  const totals = {
+    future: { amount: 0, included: 0, total: unidentifiable.future, estimated: 0 },
+    spot: { amount: 0, included: 0, total: unidentifiable.spot, estimated: 0 }
+  };
+  for (const market of distinct.values()) {
+    const total = totals[market.market_type];
+    total.total += 1;
+    const amount = market.volume_24h_usdt;
+    const observed = Date.parse(market.upstream_timestamp ?? market.timestamp);
+    if (market.data_status !== "live" || !Number.isFinite(observed)
+      || Date.now() - observed > market.stale_after_seconds * 1000
+      || typeof amount !== "number" || !Number.isFinite(amount) || amount < 0) continue;
+    total.amount += amount;
+    total.included += 1;
+    if (market.is_estimated && (!market.estimated_fields?.length || market.estimated_fields.includes("volume_24h_usdt"))) {
+      total.estimated += 1;
+    }
+  }
+  return totals;
 }
 
 function marketDex(market: Pick<MarketSnapshot, "exchange" | "market_type" | "raw_symbol" | "dex">): string | null {
@@ -837,6 +886,11 @@ export function InstrumentLookupPage() {
   const [activeSymbol, setActiveSymbol] = useState("");
   const [savedSymbols, setSavedSymbols] = useState(readSavedSymbols);
   const [result, setResult] = useState<InstrumentLookupResult | null>(null);
+  const [marketCapState, setMarketCapState] = useState<{
+    base: string;
+    loading: boolean;
+    value: InstrumentMarketCapResult | null;
+  } | null>(null);
   const [tradeStatus, setTradeStatus] = useState<TradeAvailabilityResult | null>(null);
   const [tradeWatches, setTradeWatches] = useState<TradeAvailabilityWatch[]>([]);
   const [tradeStatusError, setTradeStatusError] = useState<{ symbol: string; message: string } | null>(null);
@@ -871,6 +925,7 @@ export function InstrumentLookupPage() {
   const [astroSubmitResult, setAstroSubmitResult] = useState<AstroActionResult | null>(null);
   const [astroSubmitError, setAstroSubmitError] = useState("");
   const requestIdRef = useRef(0);
+  const marketCapRequestIdRef = useRef(0);
   const autoRefreshPendingRef = useRef(false);
   const astroPreviewRequestIdRef = useRef(0);
   const astroSubmitRequestIdRef = useRef(0);
@@ -939,6 +994,39 @@ export function InstrumentLookupPage() {
   useEffect(() => {
     void runLookup(startingSymbol);
   }, [runLookup, startingSymbol]);
+
+  const loadMarketCap = useCallback(async (base: string, coinId?: string, background = false) => {
+    const requestId = ++marketCapRequestIdRef.current;
+    setMarketCapState((current) => ({
+      base,
+      loading: true,
+      value: current?.base === base && current.value
+        ? background ? current.value : {
+          ...current.value,
+          status: "ambiguous",
+          selected_id: coinId ?? null,
+          market_cap_usd: null,
+          updated_at: null
+        }
+        : null
+    }));
+    try {
+      const value = await getInstrumentMarketCap(base, coinId);
+      if (requestId === marketCapRequestIdRef.current) setMarketCapState({ base, loading: false, value });
+    } catch {
+      if (requestId === marketCapRequestIdRef.current) setMarketCapState((current) => ({
+        base,
+        loading: false,
+        value: current?.base === base && current.value ? {
+          ...current.value, status: "source_error", market_cap_usd: null, updated_at: null
+        } : null
+      }));
+    }
+  }, []);
+
+  useEffect(() => {
+    if (result?.base && result.market_count > 0) void loadMarketCap(result.base);
+  }, [loadMarketCap, result?.base, result?.market_count]);
 
   useEffect(() => {
     const handleNavigation = () => {
@@ -1018,6 +1106,24 @@ export function InstrumentLookupPage() {
   const priceRange = resultPriceRange(result);
   const strongestBasis = maxBasis(result);
   const instrumentMarkets = exactMarkets(result);
+  const volumes = volumeTotals(result?.markets ?? []);
+  const marketCap = result && marketCapState?.base === result.base ? marketCapState.value : null;
+  const marketCapLoading = Boolean(result && marketCapState?.base === result.base && marketCapState.loading);
+  const capRatio = volumes.future.included && marketCap?.status === "available" && marketCap.market_cap_usd
+    ? volumes.future.amount / marketCap.market_cap_usd : null;
+  const spotRatio = volumes.future.included && volumes.spot.included && volumes.spot.amount > 0
+    ? volumes.future.amount / volumes.spot.amount : null;
+  const selectedCoin = marketCap?.candidates?.find((coin) => coin.id === marketCap.selected_id);
+
+  useEffect(() => {
+    if (!result?.base || result.market_count === 0) return undefined;
+    const base = result.base;
+    const refresh = () => {
+      if (document.visibilityState !== "hidden") void loadMarketCap(base, marketCap?.selected_id ?? undefined, true);
+    };
+    const timer = window.setInterval(refresh, MARKET_CAP_REFRESH_MS);
+    return () => window.clearInterval(timer);
+  }, [loadMarketCap, result?.base, result?.market_count, marketCap?.selected_id]);
   const marketCounts = instrumentMarkets.reduce(
     (counts, market) => ({
       spot: counts.spot + Number(market.market_type === "spot"),
@@ -1541,7 +1647,37 @@ export function InstrumentLookupPage() {
         <div><span>价格区间</span><strong>{priceRange ? `${price(priceRange.min)} - ${price(priceRange.max)}` : "-"}</strong></div>
         <div><span>最大现永基差</span><strong className={`instrument-rate-${tone(strongestBasis?.value ?? null)}`}>{strongestBasis ? `${signedPct(strongestBasis.value)} · ${exchangeLabels[strongestBasis.exchange]}` : "-"}</strong></div>
         <div><span>快照时间</span><strong>{fullTime(result?.observed_at)}</strong></div>
+        <div><span>合约 / 流通市值</span><strong>{capRatio === null ? "-" : `≈${multiple(capRatio)}`}</strong></div>
+        <div><span>合约 / 现货</span><strong>{multiple(spotRatio)}</strong></div>
       </section>
+
+      {result ? <div className="instrument-ratio-source">
+        <span>合约 24h {compactUsdt(volumes.future.included ? volumes.future.amount : null)} · {volumes.future.included}/{volumes.future.total} 市场{volumes.future.estimated ? " · 含预估" : ""}</span>
+        <span>现货 24h {compactUsdt(volumes.spot.included ? volumes.spot.amount : null)} · {volumes.spot.included}/{volumes.spot.total} 市场{volumes.spot.estimated ? " · 含预估" : ""}</span>
+        {marketCap && marketCap.candidates?.length > 1 ? <Select
+          size="small"
+          aria-label="选择 CoinGecko 币种"
+          placeholder="选择 CoinGecko 币种"
+          value={marketCap.selected_id ?? undefined}
+          loading={marketCapLoading}
+          options={marketCap.candidates.map((coin) => ({ value: coin.id, label: `${coin.name} (${coin.symbol}${coin.market_cap_rank ? ` #${coin.market_cap_rank}` : ""})` }))}
+          onChange={(coinId) => void loadMarketCap(result.base, coinId)}
+        /> : null}
+        <span>
+          流通市值 {marketCapLoading && !marketCap?.market_cap_usd ? "加载中" : compactUsd(marketCap?.market_cap_usd)}
+          {marketCapLoading && marketCap?.market_cap_usd ? " · 更新中" : ""}
+          {selectedCoin ? ` · ${selectedCoin.name}` : ""}
+          {marketCap?.updated_at ? ` · ${fullTime(marketCap.updated_at)}` : ""}
+          {marketCap?.status === "source_error" || (!marketCapLoading && !marketCap) ? " · CoinGecko 暂不可用" : ""}
+          {marketCap?.status === "not_found" ? " · CoinGecko 无匹配" : ""}
+          {marketCap?.status === "unavailable" ? " · CoinGecko 未提供市值" : ""}
+        </span>
+        {(marketCap?.status === "source_error" || (!marketCapLoading && !marketCap)) ? <Tooltip title="重试市值查询">
+          <Button size="small" type="text" aria-label="重试市值查询" icon={<ReloadOutlined />}
+            onClick={() => void loadMarketCap(result.base, marketCap?.selected_id ?? undefined)} />
+        </Tooltip> : null}
+        <span>市值为 USD，成交额为 USDT；比值按近似平价计算</span>
+      </div> : null}
 
       {marketRows.length > 0 ? (
         <section className="instrument-market-table instrument-exact-markets">

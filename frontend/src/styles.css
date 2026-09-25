@@ -1453,7 +1453,7 @@ body {
 
 .instrument-summary-band {
   display: grid;
-  grid-template-columns: repeat(6, minmax(130px, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   min-width: 0;
   background: #ffffff;
   border: 1px solid #dce4e1;
@@ -1475,6 +1475,14 @@ body {
   border-right: 0;
 }
 
+.instrument-summary-band > div:nth-child(4) {
+  border-right: 0;
+}
+
+.instrument-summary-band > div:nth-child(-n + 4) {
+  border-bottom: 1px solid #e5ebe9;
+}
+
 .instrument-summary-band span {
   color: #64716d;
   font-size: 12px;
@@ -1485,6 +1493,26 @@ body {
   color: #172026;
   font-size: 15px;
   line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.instrument-ratio-source {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px 16px;
+  min-width: 0;
+  color: #64716d;
+  font-size: 12px;
+}
+
+.instrument-ratio-source .ant-select {
+  min-width: 190px;
+  max-width: 100%;
+}
+
+.instrument-ratio-source > span {
+  max-width: 100%;
   overflow-wrap: anywhere;
 }
 
@@ -2157,18 +2185,6 @@ body {
     flex-wrap: wrap;
   }
 
-  .instrument-summary-band {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .instrument-summary-band > div:nth-child(3) {
-    border-right: 0;
-  }
-
-  .instrument-summary-band > div:nth-child(-n + 3) {
-    border-bottom: 1px solid #e5ebe9;
-  }
-
   .instrument-trade-market-head,
   .instrument-trade-market-main {
     grid-template-columns: 145px 170px minmax(360px, 1fr) 108px;
@@ -2411,11 +2427,14 @@ body {
 
   .instrument-summary-band > div {
     min-height: 76px;
-    border-bottom: 1px solid #e5ebe9;
   }
 
   .instrument-summary-band > div:nth-child(2n) {
     border-right: 0;
+  }
+
+  .instrument-summary-band > div:not(:nth-last-child(-n + 2)) {
+    border-bottom: 1px solid #e5ebe9;
   }
 
   .instrument-summary-band > div:nth-last-child(-n + 2) {
