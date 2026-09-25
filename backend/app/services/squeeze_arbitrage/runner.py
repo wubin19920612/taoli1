@@ -49,13 +49,13 @@ class SqueezeMonitor:
         await self.provider.aclose()
 
     async def scan_once(self, now: datetime | None = None) -> None:
-        now = now or datetime.now(UTC)
-        bucket = latest_completed_hour(now - timedelta(seconds=90))
+        scan_started_at = now or datetime.now(UTC)
+        bucket = latest_completed_hour(scan_started_at - timedelta(seconds=90))
         try:
             metadata = await self.provider.verified_symbols(self.config.symbols)
             self._verified_symbols = set(metadata)
             for symbol, details in metadata.items():
-                await self.repo.save_market_identity(symbol, details, now)
+                await self.repo.save_market_identity(symbol, details, scan_started_at)
             missing = sorted(set(self.config.symbols) - self._verified_symbols)
             errors = [f"unverified_or_inactive_market:{symbol}" for symbol in missing]
             for symbol in self.config.symbols:
@@ -73,12 +73,13 @@ class SqueezeMonitor:
                     saved_candles, saved_samples = await self.repo.load_market_data(key, bucket)
                     features = calculate_watch_features(
                         key, saved_candles, saved_samples,
-                        bucket_at=bucket, decision_at=now,
+                        bucket_at=bucket,
+                        decision_at=now if now is not None else datetime.now(UTC),
                     )
                     if not await self.repo.save_features(features, max_active=self.config.max_active):
                         errors.append(f"watch_capacity:{symbol}")
                     await self.repo.record_scan_market(
-                        key, bucket, now, candle_count=candle_count,
+                        key, bucket, scan_started_at, candle_count=candle_count,
                         positioning_count=positioning_count,
                         result_status=features.status,
                         error=";".join(features.reasons) or None,
@@ -87,21 +88,23 @@ class SqueezeMonitor:
                     logger.exception("squeeze scan failed for %s", symbol)
                     errors.append(f"{symbol}:{type(exc).__name__}:{exc}")
                     await self.repo.record_scan_market(
-                        market_key(symbol), bucket, now, candle_count=candle_count,
+                        market_key(symbol), bucket, scan_started_at, candle_count=candle_count,
                         positioning_count=positioning_count,
                         result_status="error", error=f"{type(exc).__name__}:{exc}"[:500],
                     )
             if errors:
-                await self.repo.set_scan_state(now, error="; ".join(errors)[:1000])
+                await self.repo.set_scan_state(scan_started_at, error="; ".join(errors)[:1000])
             else:
                 await self.repo.set_scan_state(
-                    now, bucket_at=bucket, symbols=sorted(self._verified_symbols)
+                    scan_started_at, bucket_at=bucket, symbols=sorted(self._verified_symbols)
                 )
                 self._last_complete_bucket = bucket
-            await self.repo.prune_samples(now)
+            await self.repo.prune_samples(scan_started_at)
         except Exception as exc:
             logger.exception("squeeze scan failed")
-            await self.repo.set_scan_state(now, error=f"{type(exc).__name__}:{exc}"[:1000])
+            await self.repo.set_scan_state(
+                scan_started_at, error=f"{type(exc).__name__}:{exc}"[:1000]
+            )
 
     async def _run_scans(self, stop_event: asyncio.Event) -> None:
         while not stop_event.is_set():

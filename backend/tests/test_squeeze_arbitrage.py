@@ -190,6 +190,50 @@ async def test_collector_replay_records_one_observation_event() -> None:
 
 
 @pytest.mark.asyncio
+async def test_live_scan_uses_response_availability_after_request_started() -> None:
+    fixture_candles, fixture_positioning = fixture_data()
+
+    class DelayedProvider:
+        async def verified_symbols(self, symbols):
+            return {"LSKUSDT": {"symbol": "LSKUSDT"}}
+
+        async def fetch_candles(self, symbol, bucket_at):
+            shift = bucket_at - BUCKET
+            received = datetime.now(UTC)
+            return [
+                replace(row, event_time=row.event_time + shift,
+                        received_at=received, available_at=received)
+                for row in fixture_candles
+            ]
+
+        async def fetch_positioning(self, symbol, bucket_at):
+            shift = bucket_at - BUCKET
+            received = datetime.now(UTC)
+            return [
+                replace(row, event_time=row.event_time + shift,
+                        account_ratio_event_time=row.account_ratio_event_time + shift,
+                        received_at=received, available_at=received)
+                for row in fixture_positioning
+            ]
+
+        async def aclose(self):
+            pass
+
+    db = await connect_database(":memory:")
+    try:
+        await initialize_schema(db)
+        repo = SqueezeRepository(db)
+        monitor = SqueezeMonitor(
+            repo, SqueezeMonitorConfig(symbols=("LSKUSDT",)), DelayedProvider()
+        )
+        await monitor.scan_once()
+        status = await repo.status(enabled=True, now=datetime.now(UTC))
+        assert status["latest_market_scans"][0]["result_status"] == "ready"
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
 async def test_liquidation_disconnect_gap_is_recorded_and_closed() -> None:
     db = await connect_database(":memory:")
     try:
