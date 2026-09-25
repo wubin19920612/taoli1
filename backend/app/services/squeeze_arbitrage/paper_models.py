@@ -30,6 +30,10 @@ class PaperSettings(BaseModel):
 
 class PaperRun(BaseModel):
     started_at: datetime
+    continuous_started_at: datetime | None = None
+    coverage_gap_count: int = 0
+    coverage_gap_open: bool = False
+    last_coverage_gap_at: datetime | None = None
     settings: PaperSettings
     last_processed_at: datetime | None = None
     last_event_at: datetime

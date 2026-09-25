@@ -422,6 +422,83 @@ def test_report_requires_time_and_independent_events_and_keeps_unresolved() -> N
     assert mature["profitability_conclusion"] is None
 
 
+@pytest.mark.asyncio
+async def test_continuous_observation_resets_after_persisted_gap() -> None:
+    db = await connect_database(":memory:")
+    try:
+        await initialize_paper_schema(db)
+        repo = SqueezePaperRepository(db, asyncio.Lock())
+        await repo.get_or_create_run(SETTINGS, NOW, ("bybit", "binance"))
+        await repo.mark_coverage_gap(NOW + timedelta(seconds=20))
+        await repo.mark_coverage_gap(NOW + timedelta(seconds=21))
+        interrupted = await repo.load_run()
+        assert interrupted is not None
+        assert interrupted.coverage_gap_open
+        assert interrupted.coverage_gap_count == 1
+
+        previous_events = [
+            create_paper_trade(event(), SETTINGS).model_copy(update={
+                "id": str(index), "event_id": str(index),
+                "signal_at": NOW + timedelta(seconds=1),
+            }) for index in range(30)
+        ]
+        during_gap = build_paper_report(
+            interrupted, previous_events, await repo.load_accounts(),
+            NOW + timedelta(days=15),
+        )
+        assert during_gap["sample_status"] == "sample_insufficient"
+
+        recovered_at = NOW + timedelta(hours=1)
+        await repo.close_coverage_gap(recovered_at)
+        recovered = await repo.load_run()
+        assert recovered is not None
+        assert recovered.continuous_started_at == recovered_at
+        old_window = build_paper_report(
+            recovered, previous_events, await repo.load_accounts(),
+            recovered_at + timedelta(days=15),
+        )
+        assert old_window["independent_events"] == 0
+        assert old_window["total_independent_events"] == 30
+        current_events = [item.model_copy(update={
+            "signal_at": recovered_at + timedelta(seconds=1),
+        }) for item in previous_events]
+        current_window = build_paper_report(
+            recovered, current_events, await repo.load_accounts(),
+            recovered_at + timedelta(days=14),
+        )
+        assert current_window["sample_status"] == "ready_for_review"
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_paper_run_schema_migrates_prior_deployment() -> None:
+    db = await connect_database(":memory:")
+    try:
+        await db.execute("""CREATE TABLE squeeze_paper_run (
+          id INTEGER PRIMARY KEY CHECK(id = 1),
+          started_at TEXT NOT NULL, rule_version TEXT NOT NULL,
+          settings_json TEXT NOT NULL, last_processed_at TEXT,
+          last_event_at TEXT NOT NULL, last_event_id TEXT NOT NULL DEFAULT '',
+          last_success_at TEXT, last_error TEXT
+        )""")
+        await db.execute(
+            """INSERT INTO squeeze_paper_run
+               (id,started_at,rule_version,settings_json,last_event_at)
+               VALUES (1,?,?,?,?)""",
+            (NOW.isoformat(), SETTINGS.rule_version, SETTINGS.model_dump_json(),
+             NOW.isoformat()),
+        )
+        await db.commit()
+        await initialize_paper_schema(db)
+        run = await SqueezePaperRepository(db, asyncio.Lock()).load_run()
+        assert run is not None
+        assert run.started_at == run.continuous_started_at == NOW
+        assert run.coverage_gap_count == 0
+    finally:
+        await db.close()
+
+
 def test_api_only_paper_enabled_exposes_empty_read_only_endpoints(monkeypatch) -> None:
     start_task = Mock()
     monkeypatch.setattr("app.main._start_background_task", start_task)

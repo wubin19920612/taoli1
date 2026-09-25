@@ -16,7 +16,11 @@ async def initialize_paper_schema(db: aiosqlite.Connection) -> None:
           started_at TEXT NOT NULL, rule_version TEXT NOT NULL,
           settings_json TEXT NOT NULL, last_processed_at TEXT,
           last_event_at TEXT NOT NULL, last_event_id TEXT NOT NULL DEFAULT '',
-          last_success_at TEXT, last_error TEXT
+          last_success_at TEXT, last_error TEXT,
+          continuous_started_at TEXT,
+          coverage_gap_count INTEGER NOT NULL DEFAULT 0,
+          coverage_gap_open INTEGER NOT NULL DEFAULT 0,
+          last_coverage_gap_at TEXT
         );
         CREATE TABLE IF NOT EXISTS squeeze_paper_accounts (
           exchange TEXT PRIMARY KEY, payload_json TEXT NOT NULL,
@@ -33,6 +37,20 @@ async def initialize_paper_schema(db: aiosqlite.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_squeeze_paper_trades_status
           ON squeeze_paper_trades(status,signal_at DESC);
     """)
+    cursor = await db.execute("PRAGMA table_info(squeeze_paper_run)")
+    run_columns = {row["name"] for row in await cursor.fetchall()}
+    for name, definition in {
+        "continuous_started_at": "TEXT",
+        "coverage_gap_count": "INTEGER NOT NULL DEFAULT 0",
+        "coverage_gap_open": "INTEGER NOT NULL DEFAULT 0",
+        "last_coverage_gap_at": "TEXT",
+    }.items():
+        if name not in run_columns:
+            await db.execute(f"ALTER TABLE squeeze_paper_run ADD COLUMN {name} {definition}")
+    await db.execute(
+        """UPDATE squeeze_paper_run SET continuous_started_at=started_at
+           WHERE continuous_started_at IS NULL"""
+    )
     cursor = await db.execute("PRAGMA table_info(squeeze_paper_trades)")
     columns = {row["name"] for row in await cursor.fetchall()}
     if "funding_gap_at" not in columns:
@@ -56,9 +74,10 @@ class SqueezePaperRepository:
                 try:
                     await self.db.execute(
                         """INSERT INTO squeeze_paper_run
-                           (id,started_at,rule_version,settings_json,last_event_at)
-                           VALUES (1,?,?,?,?)""",
-                        (now.isoformat(), settings.rule_version,
+                           (id,started_at,continuous_started_at,rule_version,
+                            settings_json,last_event_at)
+                           VALUES (1,?,?,?,?,?)""",
+                        (now.isoformat(), now.isoformat(), settings.rule_version,
                          settings.model_dump_json(), now.isoformat()),
                     )
                     for exchange in exchanges:
@@ -77,7 +96,10 @@ class SqueezePaperRepository:
                 except BaseException:
                     await self.db.rollback()
                     raise
-                return PaperRun(started_at=now, settings=settings, last_event_at=now)
+                return PaperRun(
+                    started_at=now, continuous_started_at=now,
+                    settings=settings, last_event_at=now,
+                )
             if row["rule_version"] != settings.rule_version:
                 raise RuntimeError("paper rule version changed; existing run needs explicit review")
             return self._run_from_row(row)
@@ -86,6 +108,11 @@ class SqueezePaperRepository:
     def _run_from_row(row: aiosqlite.Row) -> PaperRun:
         return PaperRun(
             started_at=datetime.fromisoformat(row["started_at"]),
+            continuous_started_at=datetime.fromisoformat(row["continuous_started_at"]),
+            coverage_gap_count=row["coverage_gap_count"],
+            coverage_gap_open=bool(row["coverage_gap_open"]),
+            last_coverage_gap_at=datetime.fromisoformat(row["last_coverage_gap_at"])
+            if row["last_coverage_gap_at"] else None,
             settings=PaperSettings.model_validate_json(row["settings_json"]),
             last_processed_at=datetime.fromisoformat(row["last_processed_at"])
             if row["last_processed_at"] else None,
@@ -101,6 +128,25 @@ class SqueezePaperRepository:
             cursor = await self.db.execute("SELECT * FROM squeeze_paper_run WHERE id=1")
             row = await cursor.fetchone()
         return self._run_from_row(row) if row else None
+
+    async def mark_coverage_gap(self, at: datetime) -> None:
+        async with self._lock:
+            await self.db.execute(
+                """UPDATE squeeze_paper_run SET coverage_gap_count=coverage_gap_count+1,
+                   coverage_gap_open=1,last_coverage_gap_at=?
+                   WHERE id=1 AND coverage_gap_open=0""",
+                (at.astimezone(UTC).isoformat(),),
+            )
+            await self.db.commit()
+
+    async def close_coverage_gap(self, at: datetime) -> None:
+        async with self._lock:
+            await self.db.execute(
+                """UPDATE squeeze_paper_run SET coverage_gap_open=0,
+                   continuous_started_at=? WHERE id=1 AND coverage_gap_open=1""",
+                (at.astimezone(UTC).isoformat(),),
+            )
+            await self.db.commit()
 
     async def load_accounts(self) -> dict[str, PaperAccount]:
         async with self._lock:

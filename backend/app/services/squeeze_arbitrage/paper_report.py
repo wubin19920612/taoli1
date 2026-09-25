@@ -20,9 +20,16 @@ def build_paper_report(
     accounts: dict[str, PaperAccount], now: datetime,
 ) -> dict[str, Any]:
     now = now.astimezone(UTC)
-    elapsed_days = max(0, (now - run.started_at).total_seconds() / 86400) if run else 0
-    independent_events = len({trade.event_id for trade in trades})
-    sufficient = elapsed_days >= 14 and independent_events >= 30
+    continuous_start = (run.continuous_started_at or run.started_at) if run else None
+    elapsed_days = max(0, (now - continuous_start).total_seconds() / 86400) if continuous_start else 0
+    independent_events = len({
+        trade.event_id for trade in trades
+        if continuous_start is not None and trade.signal_at >= continuous_start
+    })
+    sufficient = (
+        elapsed_days >= 14 and independent_events >= 30
+        and run is not None and not run.coverage_gap_open
+    )
     closed = sorted(
         (trade for trade in trades
          if trade.status == "closed" and trade.closed_at and trade.funding_gap_at is None),
@@ -120,9 +127,13 @@ def build_paper_report(
         "rule_version": run.settings.rule_version if run else None,
         "frozen_parameters": run.settings.model_dump(mode="json") if run else None,
         "started_at": run.started_at.isoformat() if run else None,
+        "continuous_started_at": continuous_start.isoformat() if continuous_start else None,
+        "coverage_gap_count": run.coverage_gap_count if run else 0,
+        "coverage_gap_open": run.coverage_gap_open if run else False,
         "as_of": now.isoformat(),
         "elapsed_days": round(elapsed_days, 3),
         "independent_events": independent_events,
+        "total_independent_events": len({trade.event_id for trade in trades}),
         "minimum_days": 14,
         "minimum_independent_events": 30,
         "sample_status": "ready_for_review" if sufficient else "sample_insufficient",

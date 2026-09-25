@@ -2647,6 +2647,9 @@ export interface SqueezePaperStatus {
   source_capability: string;
   rule_version: string;
   started_at: string | null;
+  continuous_started_at: string | null;
+  coverage_gap_count: number;
+  coverage_gap_open: boolean;
   last_processed_at: string | null;
   last_success_at: string | null;
   last_error: string | null;
@@ -2710,9 +2713,13 @@ export interface SqueezePaperReport {
   rule_version: string | null;
   frozen_parameters: Record<string, string | number> | null;
   started_at: string | null;
+  continuous_started_at: string | null;
+  coverage_gap_count: number;
+  coverage_gap_open: boolean;
   as_of: string;
   elapsed_days: number;
   independent_events: number;
+  total_independent_events: number;
   minimum_days: number;
   minimum_independent_events: number;
   sample_status: "sample_insufficient" | "ready_for_review";

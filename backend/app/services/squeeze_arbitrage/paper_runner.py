@@ -47,6 +47,10 @@ class SqueezePaperMonitor:
             "source_capability": "research_only_public_rest_paper",
             "rule_version": run.settings.rule_version if run else self.settings.rule_version,
             "started_at": run.started_at.isoformat() if run else None,
+            "continuous_started_at": run.continuous_started_at.isoformat()
+            if run and run.continuous_started_at else None,
+            "coverage_gap_count": run.coverage_gap_count if run else 0,
+            "coverage_gap_open": run.coverage_gap_open if run else False,
             "last_processed_at": run.last_processed_at.isoformat()
             if run and run.last_processed_at else None,
             "last_success_at": run.last_success_at.isoformat()
@@ -126,16 +130,28 @@ class SqueezePaperMonitor:
             self.settings, observed_at,
             (route_seed.expensive.exchange, route_seed.cheap.exchange),
         )
+        gap_open = run.coverage_gap_open
+        if run.last_success_at and (
+            observed_at - run.last_success_at > timedelta(seconds=15)
+        ) and not gap_open:
+            await self.repo.mark_coverage_gap(observed_at)
+            gap_open = True
         latest = await self.route_repo.latest_for_paper(self.route_id)
         if latest is None:
+            if not gap_open:
+                await self.repo.mark_coverage_gap(observed_at)
             self.last_error = "paper_route_snapshot_missing"
             await self._settle_without_book(run, route_seed, observed_at)
             return
         snapshot_at = datetime.fromisoformat(latest["evaluated_at"]).astimezone(UTC)
         if observed_at - snapshot_at > timedelta(seconds=15):
+            if not gap_open:
+                await self.repo.mark_coverage_gap(observed_at)
             self.last_error = "paper_route_snapshot_stale"
             await self._settle_without_book(run, route_seed, observed_at)
             return
+        if gap_open:
+            await self.repo.close_coverage_gap(observed_at)
         if run.last_processed_at and snapshot_at <= run.last_processed_at:
             return
         route, expensive, cheap = decode_route_inputs(latest["inputs"])

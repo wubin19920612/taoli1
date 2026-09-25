@@ -118,7 +118,7 @@ export function SqueezePaperView({ status, positions, trades, report, error, loa
     <Typography.Title level={5}>前瞻报告</Typography.Title>
     <Alert type={report?.sample_status === "ready_for_review" ? "info" : "warning"} showIcon
       message={report?.sample_status === "ready_for_review" ? "样本已达到复核门槛" : "样本不足"}
-      description={report ? `已观察 ${report.elapsed_days} / ${report.minimum_days} 天，${report.independent_events} / ${report.minimum_independent_events} 个独立事件。统计仅供研究复核。` : "尚未建立固定参数观察。"}
+      description={report ? `连续观察 ${report.elapsed_days} / ${report.minimum_days} 天，本窗口 ${report.independent_events} / ${report.minimum_independent_events} 个独立事件；覆盖中断 ${report.coverage_gap_count} 次${report.coverage_gap_open ? "，当前仍中断" : ""}。统计仅供研究复核。` : "尚未建立固定参数观察。"}
       style={{ marginBottom: 16 }} />
     {report && <>
       <Space size="large" wrap style={{ marginBottom: 16 }}>
