@@ -23,14 +23,19 @@
 - 前端：`npm test -- AppShell SettingsPage --silent`，27 passed；`npm run build` 通过 TypeScript 检查和 Vite 生产构建；`git diff --check` 通过。
 - 本地无采集服务使用内存数据库。浏览器实测菜单为 19 项，不含两个旧入口；两条旧页面链接均显示“实时机会”。截图位于 Codex 可视化目录 `monitor-pruning-local.png`，未提交仓库。
 - 本地 `http://127.0.0.1:3000/` 和前端代理 `/api/health` 返回 200；旧 `/api/minute-signals/scan`、`/api/new-listing-monitor/status`、`/api/settings/astro-new-listing-card` 返回 404；保留的 `/api/settings/announcements` 返回 200。
+- GitHub Actions run `36083544346` 对提交 `8e0e29f9caff786a1a2790b0a1a547aaa986beaa` 的 backend、frontend 构建均为 `completed/success`，整个 run 为 `completed/success`。
 
 ## 线上状态
 
-- 发布前只读 SSH 检查：服务器仓库与两份健康容器仍为 `c43d2f76a5663d02363d67ccc4b9d33798ebbb8f`，当前分支无已跟踪修改。
-- 本次裁剪版本尚未提交、推送、备份或部署。完成后在此更新提交号、双镜像、数据库备份校验、容器及页面验收结果；本地验证不能替代线上验证。
+- 功能提交 `8e0e29f9caff786a1a2790b0a1a547aaa986beaa` 已推送到 `origin/codex/frontend-localization-polish`。服务器经 `deploy/linux-update.sh` 备份后执行 `git pull --ff-only`，仓库已快进到该提交。
+- 部署前备份：`backups/radar-before-8e0e29f9caff-20260925T015417Z.db`（服务器 `~/wubin/taoli1` 下），`PRAGMA integrity_check=ok`，容器与主机 SHA-256 一致；复核文件 SHA-256 为 `1053a421bee07a204cf0096a963c6ed2a290668062a9fbefb2c32fd9e890fcf5`。
+- 后端和前端均运行 `ghcr.io/wubin19920612/taoli1-{backend,frontend}:sha-8e0e29f9caff786a1a2790b0a1a547aaa986beaa`，Docker Compose 两容器均为 `healthy`。服务器后端和前端代理 `/api/health` 均返回 200，前端根页面返回 200。
+- 生产前端代理下，`/api/minute-signals/scan`、`/api/new-listing-monitor/status` 和 `/api/settings/astro-new-listing-card` 均返回 404；`/api/settings/announcements` 与 `/api/announcements?limit=1` 均返回 200。
+- Playwright 打开生产页面：菜单共 19 项，不含“1 分钟价差信号”“新币极速/新币速递”，保留“交易所公告”；旧 `?page=minute-signals` 和 `?page=new-listing` 均选中“实时机会”。公告页面已加载记录，截图位于 Codex 可视化目录 `monitor-pruning-production.png`。
+- 部署脚本的既有自动备份保留规则保留最近三份，并清理一份较早的自动备份 `radar-before-6926681fb8a4-20260924T051046Z.db`；本次备份仍在服务器上。
 
 ## 工作区与后续
 
 - 任务开始时已有未跟踪 `.worktrees/`、`output/`、`script/dexe_bybit_bitget_chain.py` 和 `docs/task-handoff-2026-09-24-spread-alerts-aster-production.md`；均未纳入本任务或改动。
 - 本轮全量 pytest 生成 `backend/.pytest_module_prune_20260925/`。该目录仅含本轮测试夹具，但 Windows ACL 拒绝删除，仍为未跟踪文件；不要误加到提交。
-- 下一步：仅暂存本任务文件并推送当前分支；确认 GitHub Actions 的前后端双镜像都为目标 SHA；按 `deploy/linux-update.sh` 先备份校验 `/data/radar.db`，使用 `git pull --ff-only` 和预构建镜像发布；核对容器、健康接口、旧接口 404、交易所公告接口及实际页面菜单。
+- 下一步建议：此模块已完成。已有数据库中的 `new_listing_*` 历史表和记录仍保留；若以后需要物理清理，应单独设计备份和迁移。本任务之外的功能请在新任务中继续。
