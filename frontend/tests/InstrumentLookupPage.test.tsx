@@ -389,6 +389,7 @@ describe("InstrumentLookupPage", () => {
     const timestamp = new Date().toISOString();
     const markets = [
       { ...lookupResult.exchanges[0].spot!, timestamp, volume_24h_usdt: 1000, data_status: "live", age_seconds: 0, stale_after_seconds: 30 },
+      { ...lookupResult.exchanges[0].spot!, raw_symbol: "RBTCUSDT", symbol_alias_original_symbol: "RBTCUSDT", timestamp, volume_24h_usdt: 1000000, data_status: "live", age_seconds: 0, stale_after_seconds: 30 },
       { ...lookupResult.exchanges[0].future!, timestamp, volume_24h_usdt: 2000, data_status: "live", age_seconds: 0, stale_after_seconds: 30 },
       { ...lookupResult.exchanges[1].future!, timestamp, volume_24h_usdt: 3000, data_status: "live", age_seconds: 0, stale_after_seconds: 30 },
       { ...lookupResult.exchanges[1].future!, raw_symbol: "BTC-USDT-OLD", timestamp, volume_24h_usdt: 4000, data_status: "stale", age_seconds: 60, stale_after_seconds: 30 },
@@ -410,7 +411,7 @@ describe("InstrumentLookupPage", () => {
     expect(await screen.findByText("≈0.5x")).not.toBeNull();
     expect(screen.getByText("5x")).not.toBeNull();
     expect(screen.getByText(/合约 24h 5000 USDT · 2\/4 市场/)).not.toBeNull();
-    expect(screen.getByText(/现货 24h 1000 USDT · 1\/1 市场/)).not.toBeNull();
+    expect(screen.getByText(/现货 24h 1000 USDT · 1\/2 市场 · 1 个别名未计/)).not.toBeNull();
     expect(screen.getByText(/流通市值 1万 USD · Bitcoin/)).not.toBeNull();
     const capCalls = vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes("/instrument-market-cap/"));
     expect(capCalls).toHaveLength(1);

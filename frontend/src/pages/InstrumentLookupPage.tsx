@@ -275,12 +275,17 @@ function volumeTotals(markets: InstrumentMarketCandidate[]) {
     if (!previous || Date.parse(market.timestamp) > Date.parse(previous.timestamp)) distinct.set(key, market);
   }
   const totals = {
-    future: { amount: 0, included: 0, total: unidentifiable.future, estimated: 0 },
-    spot: { amount: 0, included: 0, total: unidentifiable.spot, estimated: 0 }
+    future: { amount: 0, included: 0, total: unidentifiable.future, estimated: 0, aliases: 0 },
+    spot: { amount: 0, included: 0, total: unidentifiable.spot, estimated: 0, aliases: 0 }
   };
   for (const market of distinct.values()) {
     const total = totals[market.market_type];
     total.total += 1;
+    if (market.symbol_alias_original_symbol
+      && market.symbol_alias_original_symbol.toUpperCase() !== market.symbol.toUpperCase()) {
+      total.aliases += 1;
+      continue;
+    }
     const amount = market.volume_24h_usdt;
     const observed = Date.parse(market.upstream_timestamp ?? market.timestamp);
     if (market.data_status !== "live" || !Number.isFinite(observed)
@@ -1652,8 +1657,8 @@ export function InstrumentLookupPage() {
       </section>
 
       {result ? <div className="instrument-ratio-source">
-        <span>合约 24h {compactUsdt(volumes.future.included ? volumes.future.amount : null)} · {volumes.future.included}/{volumes.future.total} 市场{volumes.future.estimated ? " · 含预估" : ""}</span>
-        <span>现货 24h {compactUsdt(volumes.spot.included ? volumes.spot.amount : null)} · {volumes.spot.included}/{volumes.spot.total} 市场{volumes.spot.estimated ? " · 含预估" : ""}</span>
+        <span>合约 24h {compactUsdt(volumes.future.included ? volumes.future.amount : null)} · {volumes.future.included}/{volumes.future.total} 市场{volumes.future.estimated ? " · 含预估" : ""}{volumes.future.aliases ? ` · ${volumes.future.aliases} 个别名未计` : ""}</span>
+        <span>现货 24h {compactUsdt(volumes.spot.included ? volumes.spot.amount : null)} · {volumes.spot.included}/{volumes.spot.total} 市场{volumes.spot.estimated ? " · 含预估" : ""}{volumes.spot.aliases ? ` · ${volumes.spot.aliases} 个别名未计` : ""}</span>
         {marketCap && marketCap.candidates?.length > 1 ? <Select
           size="small"
           aria-label="选择 CoinGecko 币种"
