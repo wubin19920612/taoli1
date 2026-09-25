@@ -661,6 +661,11 @@ describe("DashboardPage", () => {
               buyEx: "binance",
               sellEx: "okx"
             },
+            card_variant: "both",
+            route_variants: [
+              { card_variant: "non_gc", buy_exchange: "binance", sell_exchange: "okx" },
+              { card_variant: "gc", buy_exchange: "gc-binance", sell_exchange: "gc-okx" }
+            ],
             sdk_payload: { action: "add", pair: { name: "BTC" } },
             blockers: [],
             warnings: [],
@@ -747,6 +752,11 @@ describe("DashboardPage", () => {
               buyEx: "binance",
               sellEx: "okx"
             },
+            card_variant: "both",
+            route_variants: [
+              { card_variant: "non_gc", buy_exchange: "binance", sell_exchange: "okx" },
+              { card_variant: "gc", buy_exchange: "gc-binance", sell_exchange: "gc-okx" }
+            ],
             sdk_payload: { action: "add", pair: { name: "BTC" } },
             blockers: [],
             warnings: [],
@@ -773,7 +783,9 @@ describe("DashboardPage", () => {
     await userEvent.clear(positionInput);
     await userEvent.type(positionInput, "80");
     await userEvent.click(screen.getByLabelText("创建后允许开仓"));
-    await userEvent.click(screen.getByLabelText("Save sizing as global default"));
+    await userEvent.click(screen.getByText("仅 GC"));
+    expect(screen.getByText("gc-binance → gc-okx")).toBeTruthy();
+    await userEvent.click(screen.getByLabelText("保存为全局建卡默认值"));
     await userEvent.click(screen.getByRole("button", { name: "创建卡片" }));
 
     await waitFor(() => {
@@ -784,6 +796,7 @@ describe("DashboardPage", () => {
     expect(createBodies[0]).toContain('"min_notional":10');
     expect(createBodies[0]).toContain('"max_notional":25');
     expect(createBodies[0]).toContain('"open_enabled":true');
+    expect(createBodies[0]).toContain('"card_variant":"gc"');
     expect(createBodies[0]).toContain('"save_as_default":true');
   }, 15000);
 

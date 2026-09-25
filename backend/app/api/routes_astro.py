@@ -4,6 +4,7 @@ from app.db.repositories import SettingsRepository
 from app.models.astro import (
     AstroAlertActionResult,
     AstroCardCreateRequest,
+    AstroCardRouteVariant,
     AstroInstrumentCardCreateRequest,
     AstroInstrumentRouteRequest,
     AstroPairPlan,
@@ -29,6 +30,7 @@ from app.services.data_filters import ignored_exchange_set, symbol_is_excluded
 from app.services.astro_planner import AstroPairPlanner, AstroPlannerConfig
 from app.services.astro_preadd import AstroPreaddService
 from app.services.instrument_spreads import instrument_market_age_seconds
+from app.services.market_labels import astro_exchange_route_variants
 from app.services.spread_engine import Mode, build_directional_opportunity
 
 router = APIRouter(prefix="/astro")
@@ -203,6 +205,7 @@ def _settings_with_create_overrides(
             "min_notional": card_request.min_notional,
             "max_notional": card_request.max_notional,
             "open_enabled": card_request.open_enabled,
+            "card_variant": card_request.card_variant,
         }.items()
         if value is not None
     }
@@ -261,6 +264,16 @@ async def _build_astro_preview(
     settings, settings_warnings = await _manual_astro_card_settings(request)
     planner = AstroPairPlanner(AstroPlannerConfig.from_card_settings(settings))
     plan = planner.plan(opportunity, allow_manual_override=True)
+    route_variants = [
+        AstroCardRouteVariant(
+            card_variant="gc" if any(exchange.startswith("gc-") for exchange in (buy, sell)) else "non_gc",
+            buy_exchange=buy,
+            sell_exchange=sell,
+        )
+        for buy, sell in astro_exchange_route_variants(
+            str(plan.pair.get("buyEx", "")), str(plan.pair.get("sellEx", ""))
+        )
+    ] if plan.pair else []
     preview_warning = (
         "系统当前处于 dry-run 模式；点击确认也不会写入 Astro。"
         if request.app.state.settings.astro_dry_run_only
@@ -268,6 +281,8 @@ async def _build_astro_preview(
     )
     plan = plan.model_copy(
         update={
+            "card_variant": settings.card_variant,
+            "route_variants": route_variants,
             "warnings": [
                 preview_warning,
                 *(manual_warnings or []),
@@ -397,7 +412,10 @@ async def run_preadd(
     password: str | None = Depends(dashboard_password_header),
 ) -> AstroPreaddRunResult:
     _require_dashboard_password(request, password)
-    return await _preadd_service(request).run(payload.candidate_ids if payload else None)
+    return await _preadd_service(request).run(
+        payload.candidate_ids if payload else None,
+        payload.card_variant if payload else None,
+    )
 
 
 @router.get("/pairs")
@@ -458,6 +476,7 @@ async def _create_astro_card(
                 "min_notional": effective_settings.min_notional,
                 "max_notional": effective_settings.max_notional,
                 "open_enabled": effective_settings.open_enabled,
+                "card_variant": effective_settings.card_variant,
             }
         )
         if settings_repo is not None:

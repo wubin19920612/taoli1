@@ -79,6 +79,7 @@ describe("SettingsPage", () => {
             min_notional: 10,
             max_notional: 25,
             open_enabled: false,
+            card_variant: "both",
             close_position_buffer_pct: 0.1,
             unfavorable_funding_weight: 1,
             close_position_floor_pct: 0
@@ -417,6 +418,7 @@ describe("SettingsPage", () => {
     await userEvent.clear(positionValueInput);
     await userEvent.type(positionValueInput, "80");
     await userEvent.click(screen.getAllByLabelText("创建后允许开仓")[0]);
+    await userEvent.click(screen.getByText("仅 GC"));
     await userEvent.click(screen.getByRole("button", { name: /保存 Astro 卡片默认参数/ }));
 
     await waitFor(() => {
@@ -433,6 +435,13 @@ describe("SettingsPage", () => {
       expect.objectContaining({
         method: "PUT",
         body: expect.stringContaining('"open_enabled":true')
+      })
+    );
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/settings/astro-card"),
+      expect.objectContaining({
+        method: "PUT",
+        body: expect.stringContaining('"card_variant":"gc"')
       })
     );
   }, 15000);

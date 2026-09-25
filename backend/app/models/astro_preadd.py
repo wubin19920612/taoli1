@@ -3,6 +3,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.models.astro import AstroCardVariant
+
 PREADD_EXCHANGES = ("bitget", "binance", "bybit", "gate", "okx", "hyperliquid", "lighter")
 
 
@@ -60,6 +62,7 @@ class AstroPreaddPreview(BaseModel):
 
 class AstroPreaddRunRequest(BaseModel):
     candidate_ids: list[str] | None = None
+    card_variant: AstroCardVariant | None = None
 
 
 class AstroPreaddRunResult(BaseModel):

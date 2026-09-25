@@ -130,6 +130,11 @@ const astroPlan = {
   quoted_at: "2026-09-11T04:00:00Z",
   mode: "dry_run",
   can_submit: true,
+  card_variant: "both",
+  route_variants: [
+    { card_variant: "non_gc", buy_exchange: "binance", sell_exchange: "binance" },
+    { card_variant: "gc", buy_exchange: "gc-binance", sell_exchange: "gc-binance" }
+  ],
   pair: {
     name: "BTC",
     type: "SF",
@@ -692,6 +697,7 @@ describe("InstrumentLookupPage", () => {
       sell_market_type: "future"
     });
 
+    await userEvent.click(screen.getByText("仅非 GC"));
     await userEvent.click(screen.getByRole("button", { name: "确认创建" }));
     await waitFor(() => {
       expect((fetch as ReturnType<typeof vi.fn>).mock.calls.some(([input]) =>
@@ -702,6 +708,7 @@ describe("InstrumentLookupPage", () => {
       String(input).includes("/astro/instrument/card")
     );
     expect(JSON.parse(String(createCall?.[1]?.body)).expected_open_spread_pct).toBe(0.08);
+    expect(JSON.parse(String(createCall?.[1]?.body)).card.card_variant).toBe("non_gc");
     expect(await screen.findAllByText("已创建暂停卡片 BTC SF binance->binance")).toHaveLength(2);
     expect(screen.getByText(/人工建卡，仅作风险提示，未拦截创建/)).not.toBeNull();
   });

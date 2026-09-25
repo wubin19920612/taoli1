@@ -35,6 +35,7 @@ import {
 import type {
   AstroActionResult,
   AstroCardCreateRequest,
+  AstroCardVariant,
   AstroFieldAssumption,
   AstroPairPlan,
   ExchangePollState,
@@ -47,6 +48,7 @@ import type {
   RiskSettings
 } from "../api/types";
 import { OpportunityTable } from "../components/OpportunityTable";
+import { AstroCardVariantSelector, selectedAstroRoutes, supportsAstroCardVariant } from "../components/AstroCardVariantSelector";
 import { TopFilters } from "../components/TopFilters";
 import { defaultHiddenRiskLabels } from "../constants/riskLabels";
 import { useRadarStore } from "../state/useRadarStore";
@@ -466,6 +468,7 @@ function sizingFromPlan(plan: AstroPairPlan): AstroSizingFormValues {
     min_notional: pairNumber(plan.pair, "minNotional") ?? 0,
     max_notional: pairNumber(plan.pair, "maxNotional") ?? 0,
     open_enabled: pairBoolean(plan.pair, "disableOpen") === false,
+    card_variant: plan.card_variant ?? "both",
     save_as_default: false
   };
 }
@@ -533,6 +536,8 @@ export function DashboardPage() {
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [astroPreviewOpportunity, setAstroPreviewOpportunity] = useState<Opportunity | null>(null);
   const [astroPreviewPlan, setAstroPreviewPlan] = useState<AstroPairPlan | null>(null);
+  const selectedCardVariant: AstroCardVariant = Form.useWatch("card_variant", astroSizingForm)
+    ?? astroPreviewPlan?.card_variant ?? "both";
   const [astroPreviewLoading, setAstroPreviewLoading] = useState(false);
   const [astroPreviewError, setAstroPreviewError] = useState<string | null>(null);
   const [astroSubmitLoading, setAstroSubmitLoading] = useState(false);
@@ -749,7 +754,8 @@ export function DashboardPage() {
     astroPreviewLoading ||
     astroSubmitLoading ||
     !astroPreviewPlan ||
-    !astroPreviewPlan.can_submit;
+    !astroPreviewPlan.can_submit ||
+    !supportsAstroCardVariant(astroPreviewPlan.route_variants, selectedCardVariant);
 
   return (
     <div className="page">
@@ -1026,6 +1032,9 @@ export function DashboardPage() {
                     <Descriptions.Item label="Generated closePosition">
                       <Typography.Text code>{pairString(astroPreviewPlan.pair, "closePosition")}</Typography.Text>
                     </Descriptions.Item>
+                    <Descriptions.Item label="将创建路线" span={2}>
+                      {selectedAstroRoutes(astroPreviewPlan.route_variants, selectedCardVariant)}
+                    </Descriptions.Item>
                   </Descriptions>
                   {astroPreviewPlan.pair ? (
                     <Form form={astroSizingForm} layout="vertical" className="astro-sizing-form">
@@ -1046,8 +1055,11 @@ export function DashboardPage() {
                           <Switch checkedChildren="开启" unCheckedChildren="关闭" />
                         </Form.Item>
                       </div>
+                      <Form.Item label="建卡路线" name="card_variant" rules={[{ required: true }]}>
+                        <AstroCardVariantSelector routes={astroPreviewPlan.route_variants} />
+                      </Form.Item>
                       <Form.Item name="save_as_default" valuePropName="checked">
-                        <Checkbox>Save sizing as global default</Checkbox>
+                        <Checkbox>保存为全局建卡默认值</Checkbox>
                       </Form.Item>
                     </Form>
                   ) : null}

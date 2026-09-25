@@ -50,6 +50,7 @@ import {
 import type {
   AstroActionResult,
   AstroCardCreateRequest,
+  AstroCardVariant,
   AstroInstrumentRouteRequest,
   AstroPairPlan,
   InstrumentExchangeSnapshot,
@@ -65,6 +66,7 @@ import type {
   TradeAvailabilityResult,
   TradeAvailabilityWatch
 } from "../api/types";
+import { AstroCardVariantSelector, selectedAstroRoutes, supportsAstroCardVariant } from "../components/AstroCardVariantSelector";
 import { resolveHistoryIntervalSeconds } from "../constants/queryLimits";
 import { addFloatingWatchSymbol } from "../utils/floatingWatch";
 
@@ -843,6 +845,8 @@ export function InstrumentLookupPage() {
   const [astroSpread, setAstroSpread] = useState<InstrumentSpreadComparison | null>(null);
   const [astroReversed, setAstroReversed] = useState(false);
   const [astroPlan, setAstroPlan] = useState<AstroPairPlan | null>(null);
+  const selectedCardVariant: AstroCardVariant = Form.useWatch("card_variant", astroSizingForm)
+    ?? astroPlan?.card_variant ?? "both";
   const [astroPreviewLoading, setAstroPreviewLoading] = useState(false);
   const [astroPreviewError, setAstroPreviewError] = useState("");
   const [astroSubmitLoading, setAstroSubmitLoading] = useState(false);
@@ -1225,6 +1229,7 @@ export function InstrumentLookupPage() {
           min_notional: planNumber(plan, "minNotional", 10),
           max_notional: planNumber(plan, "maxNotional", 10),
           open_enabled: plan.pair.status === true && plan.pair.disableOpen !== true,
+          card_variant: plan.card_variant ?? "both",
           save_as_default: false
         });
       }
@@ -1860,7 +1865,8 @@ export function InstrumentLookupPage() {
             key="submit"
             type="primary"
             loading={astroSubmitLoading}
-            disabled={astroPreviewLoading || astroSubmitLoading || !astroPlan?.pair}
+            disabled={astroPreviewLoading || astroSubmitLoading || !astroPlan?.pair
+              || !supportsAstroCardVariant(astroPlan.route_variants, selectedCardVariant)}
             onClick={() => void submitAstroCard()}
           >
             确认创建
@@ -1875,7 +1881,7 @@ export function InstrumentLookupPage() {
               <Descriptions.Item label="卡片名称">{String(astroPlan?.pair?.name ?? "-")}</Descriptions.Item>
               <Descriptions.Item label="卡片类型">{String(astroPlan?.pair?.type ?? astroSpread.opportunity_type ?? "-")}</Descriptions.Item>
               <Descriptions.Item label="Astro 路线">
-                {String(astroPlan?.pair?.buyEx ?? "-")} → {String(astroPlan?.pair?.sellEx ?? "-")}
+                {selectedAstroRoutes(astroPlan?.route_variants, selectedCardVariant)}
               </Descriptions.Item>
               <Descriptions.Item label="买入">
                 {exchangeLabels[astroSpread.buy_exchange] ?? astroSpread.buy_exchange} · {marketTypeLabel(astroSpread.buy_market_type)} · Ask {price(astroSpread.buy_ask)}
@@ -1931,6 +1937,9 @@ export function InstrumentLookupPage() {
                     <Switch checkedChildren="开启" unCheckedChildren="关闭" />
                   </Form.Item>
                 </div>
+                <Form.Item label="建卡路线" name="card_variant" rules={[{ required: true }]}>
+                  <AstroCardVariantSelector routes={astroPlan.route_variants} />
+                </Form.Item>
                 <Form.Item name="save_as_default" valuePropName="checked">
                   <Checkbox>保存为全局建卡默认值</Checkbox>
                 </Form.Item>

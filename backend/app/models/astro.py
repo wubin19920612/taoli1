@@ -5,6 +5,14 @@ from pydantic import BaseModel, Field
 
 from app.models.market import MarketType
 
+AstroCardVariant = Literal["both", "non_gc", "gc"]
+
+
+class AstroCardRouteVariant(BaseModel):
+    card_variant: Literal["non_gc", "gc"]
+    buy_exchange: str
+    sell_exchange: str
+
 
 class AstroFieldAssumption(BaseModel):
     field: str
@@ -23,6 +31,8 @@ class AstroPairPlan(BaseModel):
     can_submit: bool
     pair: dict[str, Any] | None = None
     sdk_payload: dict[str, Any] | None = None
+    card_variant: AstroCardVariant = "both"
+    route_variants: list[AstroCardRouteVariant] = Field(default_factory=list)
     blockers: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     assumptions: list[AstroFieldAssumption] = Field(default_factory=list)
@@ -48,6 +58,7 @@ class AstroCardCreateRequest(BaseModel):
     min_notional: float | None = Field(default=None, ge=0)
     max_notional: float | None = Field(default=None, gt=0)
     open_enabled: bool | None = None
+    card_variant: AstroCardVariant | None = None
     save_as_default: bool = False
 
 

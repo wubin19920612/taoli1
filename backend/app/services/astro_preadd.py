@@ -8,6 +8,7 @@ from itertools import combinations
 from math import isfinite
 from time import monotonic
 
+from app.models.astro import AstroCardVariant
 from app.models.astro_preadd import (
     AstroPreaddCandidate,
     AstroPreaddLegSnapshot,
@@ -279,7 +280,11 @@ class AstroPreaddService:
             preview.warnings.insert(0, f"全局忽略交易所未参与预建：{'、'.join(ignored)}")
         return preview
 
-    async def run(self, candidate_ids: list[str] | None = None) -> AstroPreaddRunResult:
+    async def run(
+        self,
+        candidate_ids: list[str] | None = None,
+        card_variant: AstroCardVariant | None = None,
+    ) -> AstroPreaddRunResult:
         async with self._lock:
             config = await self.settings_repo.get_astro_preadd_settings()
             preview = await self.preview(config)
@@ -296,6 +301,8 @@ class AstroPreaddService:
                 result.warnings.append("Astro dry-run 开启，未写入卡片")
                 return result
             card_settings = await self.settings_repo.get_astro_card_settings()
+            if card_variant is not None:
+                card_settings = card_settings.model_copy(update={"card_variant": card_variant})
             for item in selected:
                 fresh = await self.preview(config)
                 fresh_item = next(

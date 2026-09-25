@@ -52,6 +52,7 @@ import type {
   ServiceControlStatus,
   SymbolAlias
 } from "../api/types";
+import { AstroCardVariantSelector } from "../components/AstroCardVariantSelector";
 import { alertRuleFieldHelp, alertRuleGuide, alertSeverityOptions, alertTypeOptions } from "../constants/alertRules";
 import { defaultHiddenRiskLabels, riskLabelOptions } from "../constants/riskLabels";
 import { PhonePriceAlertsPanel } from "./PhonePriceAlertsPanel";
@@ -142,6 +143,7 @@ const defaultAstroCardSettings: AstroCardSettings = {
   min_notional: 10,
   max_notional: 10,
   open_enabled: false,
+  card_variant: "both",
   close_position_buffer_pct: 0.1,
   unfavorable_funding_weight: 1,
   close_position_floor_pct: 0
@@ -979,6 +981,13 @@ export function SettingsPage() {
               <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
             </Form.Item>
           </div>
+          <Form.Item
+            label="默认建卡路线"
+            name="card_variant"
+            help="Lighter 仅支持 GC 路线；选择仅非 GC 时不会为 Lighter 建卡。"
+          >
+            <AstroCardVariantSelector />
+          </Form.Item>
           <Button type="primary" htmlType="submit" icon={<SaveOutlined />}>
             保存 Astro 卡片默认参数
           </Button>

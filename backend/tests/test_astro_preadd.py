@@ -6,7 +6,7 @@ from pydantic import ValidationError
 
 from app.core.config import Settings
 from app.main import create_app
-from app.models.astro_preadd import AstroPreaddSettings
+from app.models.astro_preadd import AstroPreaddRunRequest, AstroPreaddSettings
 from app.models.market import MarketSnapshot, MarketType
 from app.models.settings import AstroCardSettings, RiskSettings
 from app.services.astro_alerts import AstroAlertService
@@ -37,9 +37,15 @@ def market(
 
 
 class FakeRepo:
-    def __init__(self, settings: AstroPreaddSettings | None = None, risk: RiskSettings | None = None):
+    def __init__(
+        self,
+        settings: AstroPreaddSettings | None = None,
+        risk: RiskSettings | None = None,
+        card_settings: AstroCardSettings | None = None,
+    ):
         self.settings = settings or AstroPreaddSettings()
         self.risk = risk or RiskSettings()
+        self.card_settings = card_settings or AstroCardSettings(open_enabled=True)
 
     async def get_astro_preadd_settings(self):
         return self.settings
@@ -48,7 +54,7 @@ class FakeRepo:
         return self.risk
 
     async def get_astro_card_settings(self):
-        return AstroCardSettings(open_enabled=True)
+        return self.card_settings
 
 
 class FakeClient:
@@ -80,6 +86,8 @@ def test_preadd_settings_validate_supported_exchanges_and_positive_thresholds():
         AstroPreaddSettings(funding_threshold_pct=0)
     with pytest.raises(ValidationError):
         AstroPreaddSettings(min_volume_24h_usdt=-1)
+    with pytest.raises(ValidationError):
+        AstroPreaddRunRequest(card_variant="invalid")
 
 
 def test_preadd_funding_uses_prediction_then_current_with_explicit_cycle():
@@ -264,6 +272,31 @@ async def test_preadd_creates_bybit_funding_card_with_negative_open_threshold():
     assert "做多侧 binance：溢价 +0.000%，当前资金费 +0.0100% / 8h，24h 1.00M USDT" in messages[0]
     assert "做空侧 bybit：溢价 -2.000%，当前资金费 +0.8000% / 8h，24h 1.00M USDT" in messages[0]
     assert "卡片状态：暂停、禁开" in messages[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("default_variant, override, expected", [
+    ("non_gc", None, ("binance", "bitget")),
+    ("gc", None, ("gc-binance", "bitget")),
+    ("non_gc", "gc", ("gc-binance", "bitget")),
+])
+async def test_preadd_uses_global_or_one_run_card_variant(
+    default_variant: str, override: str | None, expected: tuple[str, str],
+) -> None:
+    store = SnapshotStore()
+    store.set_all_markets([
+        market("bitget", predicted=0.8), market("binance"),
+    ])
+    repo = FakeRepo(card_settings=AstroCardSettings(card_variant=default_variant))
+    client = FakeClient()
+    service = AstroAlertService(
+        client, Settings(astro_dry_run_only=False), add_restart_delay_seconds=0,
+    )
+
+    result = await AstroPreaddService(store, repo, service).run(card_variant=override)
+
+    assert result.created == 1
+    assert [(pair["buyEx"], pair["sellEx"]) for pair in client.added] == [expected]
 
 
 @pytest.mark.asyncio

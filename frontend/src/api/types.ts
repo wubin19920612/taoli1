@@ -1768,6 +1768,7 @@ export interface AstroCardSettings {
   min_notional: number;
   max_notional: number;
   open_enabled: boolean;
+  card_variant: AstroCardVariant;
   close_position_buffer_pct: number;
   unfavorable_funding_weight: number;
   close_position_floor_pct: number;
@@ -1818,7 +1819,16 @@ export interface AstroCardCreateRequest {
   min_notional?: number;
   max_notional?: number;
   open_enabled?: boolean;
+  card_variant?: AstroCardVariant;
   save_as_default?: boolean;
+}
+
+export type AstroCardVariant = "both" | "non_gc" | "gc";
+
+export interface AstroCardRouteVariant {
+  card_variant: "non_gc" | "gc";
+  buy_exchange: string;
+  sell_exchange: string;
 }
 
 export interface AstroInstrumentRouteRequest {
@@ -1846,6 +1856,8 @@ export interface AstroPairPlan {
   can_submit: boolean;
   pair: Record<string, unknown> | null;
   sdk_payload: Record<string, unknown> | null;
+  card_variant?: AstroCardVariant;
+  route_variants?: AstroCardRouteVariant[];
   blockers: string[];
   warnings: string[];
   assumptions: AstroFieldAssumption[];

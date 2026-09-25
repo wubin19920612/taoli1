@@ -21,6 +21,7 @@ import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 
 import {
+  getAstroCardSettings,
   getAstroPreaddExchanges,
   getAstroPreaddPreview,
   getAstroPreaddSettings,
@@ -33,6 +34,7 @@ import {
 } from "../api/client";
 import type {
   AdlRiskLevel,
+  AstroCardVariant,
   AstroPreaddCandidate,
   AstroPreaddLegSnapshot,
   AstroPreaddPreview,
@@ -47,6 +49,7 @@ import type {
   OpportunityHistoryPoint,
   OpportunityHistoryStats
 } from "../api/types";
+import { AstroCardVariantSelector } from "../components/AstroCardVariantSelector";
 import { marketTypeText } from "../constants/marketLabels";
 
 dayjs.extend(utc);
@@ -432,6 +435,7 @@ export function FundingArbitragePage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [preaddSettings, setPreaddSettings] = useState(defaultPreaddSettings);
+  const [preaddCardVariant, setPreaddCardVariant] = useState<AstroCardVariant>("both");
   const [preaddExchanges, setPreaddExchanges] = useState<string[]>([]);
   const [preaddPreview, setPreaddPreview] = useState<AstroPreaddPreview | null>(null);
   const [preaddResult, setPreaddResult] = useState<AstroPreaddRunResult | null>(null);
@@ -463,12 +467,13 @@ export function FundingArbitragePage() {
     setPreaddLoading(true);
     setPreaddError("");
     try {
-      const [nextSettings, exchanges, nextPreview] = await Promise.all([
-        getAstroPreaddSettings(), getAstroPreaddExchanges(), getAstroPreaddPreview()
+      const [nextSettings, exchanges, nextPreview, cardSettings] = await Promise.all([
+        getAstroPreaddSettings(), getAstroPreaddExchanges(), getAstroPreaddPreview(), getAstroCardSettings()
       ]);
       setPreaddSettings(nextSettings);
       setPreaddExchanges(exchanges);
       setPreaddPreview(nextPreview);
+      setPreaddCardVariant(cardSettings.card_variant ?? "both");
       preaddForm.setFieldsValue(nextSettings);
     } catch (exc) {
       setPreaddError(exc instanceof Error ? exc.message : String(exc));
@@ -504,16 +509,26 @@ export function FundingArbitragePage() {
   };
 
   const confirmPreadd = (candidate?: AstroPreaddCandidate) => {
+    let selectedVariant = preaddCardVariant;
     Modal.confirm({
       title: candidate ? `预建 ${candidate.symbol} 卡片` : "预建当前候选卡片",
-      content: "卡片将以暂停、禁开状态创建；不会开启仓位。",
+      content: (
+        <Space direction="vertical" size={8} style={{ width: "100%" }}>
+          <Typography.Text>卡片将以暂停、禁开状态创建；不会开启仓位。</Typography.Text>
+          <Typography.Text>本次建卡路线</Typography.Text>
+          <AstroCardVariantSelector
+            defaultValue={selectedVariant}
+            onChange={(value) => { selectedVariant = value; }}
+          />
+        </Space>
+      ),
       okText: "确认预建",
       cancelText: "取消",
       onOk: async () => {
         setPreaddRunning(true);
         setPreaddError("");
         try {
-          const outcome = await runAstroPreadd(candidate ? [candidate.id] : undefined);
+          const outcome = await runAstroPreadd(candidate ? [candidate.id] : undefined, selectedVariant);
           setPreaddResult(outcome);
           setPreaddPreview(await getAstroPreaddPreview());
         } catch (exc) {

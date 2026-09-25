@@ -56,6 +56,19 @@ def test_bitget_keeps_its_id_while_other_leg_gets_gc_variant() -> None:
     ]
 
 
+def test_card_variant_selection_preserves_supported_route_ids() -> None:
+    assert astro_exchange_route_variants("bitget", "bybit", "non_gc") == [
+        ("bitget", "bybit")
+    ]
+    assert astro_exchange_route_variants("bitget", "bybit", "gc") == [
+        ("bitget", "gc-bybit")
+    ]
+    assert astro_exchange_route_variants("lighter", "okx", "non_gc") == []
+    assert astro_exchange_route_variants("lighter", "okx", "gc") == [
+        ("gc-lighter", "gc-okx")
+    ]
+
+
 def test_unsupported_exchange_never_creates_single_sided_gc_route() -> None:
     assert astro_exchange_route_variants("gate", "aster") == [("gate", "aster")]
     assert astro_exchange_route_variants("aster", "bybit") == [("aster", "bybit")]

@@ -3,7 +3,7 @@ from collections.abc import Awaitable, Callable
 from typing import Protocol
 
 from app.core.config import Settings
-from app.models.astro import AstroAlertActionResult, AstroCardCreateRequest
+from app.models.astro import AstroAlertActionResult, AstroCardCreateRequest, AstroCardVariant
 from app.models.opportunity import Opportunity
 from app.models.settings import AstroCardSettings, LivePilotSettings, RiskSettings
 from app.services.astro_client import AstroClientError
@@ -66,11 +66,12 @@ def _with_card_enabled(pair: dict, enabled: bool) -> dict:
     return next_pair
 
 
-def _pair_variants(pair: dict) -> list[dict]:
+def _pair_variants(pair: dict, card_variant: AstroCardVariant = "both") -> list[dict]:
     variants: list[dict] = []
     for buy_exchange, sell_exchange in astro_exchange_route_variants(
         str(pair.get("buyEx", "")),
         str(pair.get("sellEx", "")),
+        card_variant,
     ):
         variant = dict(pair)
         variant["buyEx"] = buy_exchange
@@ -117,6 +118,7 @@ def _settings_with_create_overrides(
             "min_notional": card_request.min_notional,
             "max_notional": card_request.max_notional,
             "open_enabled": card_request.open_enabled,
+            "card_variant": card_request.card_variant,
         }.items()
         if value is not None
     }
@@ -328,10 +330,10 @@ class AstroAlertService:
         else:
             pair_enabled = effective_card_settings.open_enabled
         pair = _with_card_enabled(plan.pair, pair_enabled)
-        pair_variants = _pair_variants(pair)
-        if not pair_variants or any(
+        all_pair_variants = _pair_variants(pair)
+        if not all_pair_variants or any(
             "lighter" in {planned["buyEx"], planned["sellEx"]}
-            for planned in pair_variants
+            for planned in all_pair_variants
         ):
             return with_manual_warnings(
                 AstroAlertActionResult(
@@ -339,6 +341,16 @@ class AstroAlertService:
                     status="skipped",
                     action="unsupported",
                     message="Lighter 卡片只允许 gc-lighter 路由，未提交普通 lighter 或未知配对",
+                )
+            )
+        pair_variants = _pair_variants(pair, effective_card_settings.card_variant)
+        if not pair_variants:
+            return with_manual_warnings(
+                AstroAlertActionResult(
+                    enabled=True,
+                    status="skipped",
+                    action="unsupported",
+                    message="所选 GC/非 GC 卡片类型在当前路线上不可用，未写入 Astro",
                 )
             )
         pair_name = str(pair.get("name", ""))
@@ -383,7 +395,7 @@ class AstroAlertService:
         conflicting_pairs = [
             existing
             for existing in same_name_pairs
-            if not any(_same_route(existing, planned) for planned in pair_variants)
+            if not any(_same_route(existing, planned) for planned in all_pair_variants)
             and not (
                 any("gc-lighter" in {planned["buyEx"], planned["sellEx"]} for planned in pair_variants)
                 and "lighter" in {existing.get("buyEx"), existing.get("sellEx")}

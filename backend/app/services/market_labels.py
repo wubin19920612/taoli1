@@ -1,3 +1,4 @@
+from app.models.astro import AstroCardVariant
 from app.models.market import MarketType
 
 
@@ -88,6 +89,7 @@ def astro_exchange_id(
 def astro_exchange_route_variants(
     buy_exchange: str,
     sell_exchange: str,
+    card_variant: AstroCardVariant = "both",
 ) -> list[tuple[str, str]]:
     buy = buy_exchange.strip().lower()
     sell = sell_exchange.strip().lower()
@@ -95,14 +97,18 @@ def astro_exchange_route_variants(
         buy = _ASTRO_GC_EXCHANGE_IDS.get(buy, buy)
         sell = _ASTRO_GC_EXCHANGE_IDS.get(sell, sell)
         supported = set(_ASTRO_GC_EXCHANGE_IDS.values()) | _ASTRO_BITGET_EXCHANGE_IDS
-        return [(buy, sell)] if buy in supported and sell in supported else []
-    routes = [(buy, sell)]
+        routes = [(buy, sell)] if buy in supported and sell in supported else []
+    else:
+        routes = [(buy, sell)]
+        if buy in _ASTRO_BITGET_EXCHANGE_IDS and sell in _ASTRO_GC_EXCHANGE_IDS:
+            routes.append((buy, _ASTRO_GC_EXCHANGE_IDS[sell]))
+        elif sell in _ASTRO_BITGET_EXCHANGE_IDS and buy in _ASTRO_GC_EXCHANGE_IDS:
+            routes.append((_ASTRO_GC_EXCHANGE_IDS[buy], sell))
+        elif buy in _ASTRO_GC_EXCHANGE_IDS and sell in _ASTRO_GC_EXCHANGE_IDS:
+            routes.append((_ASTRO_GC_EXCHANGE_IDS[buy], _ASTRO_GC_EXCHANGE_IDS[sell]))
 
-    if buy in _ASTRO_BITGET_EXCHANGE_IDS and sell in _ASTRO_GC_EXCHANGE_IDS:
-        routes.append((buy, _ASTRO_GC_EXCHANGE_IDS[sell]))
-    elif sell in _ASTRO_BITGET_EXCHANGE_IDS and buy in _ASTRO_GC_EXCHANGE_IDS:
-        routes.append((_ASTRO_GC_EXCHANGE_IDS[buy], sell))
-    elif buy in _ASTRO_GC_EXCHANGE_IDS and sell in _ASTRO_GC_EXCHANGE_IDS:
-        routes.append((_ASTRO_GC_EXCHANGE_IDS[buy], _ASTRO_GC_EXCHANGE_IDS[sell]))
-
+    if card_variant == "gc":
+        return [route for route in routes if any(exchange.startswith("gc-") for exchange in route)]
+    if card_variant == "non_gc":
+        return [route for route in routes if all(not exchange.startswith("gc-") for exchange in route)]
     return routes

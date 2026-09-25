@@ -15,6 +15,7 @@ import type {
   AstroAutomationSettings,
   AstroActionResult,
   AstroCardCreateRequest,
+  AstroCardVariant,
   AstroInstrumentRouteRequest,
   AstroCardSettings,
   AstroPairStatus,
@@ -538,9 +539,11 @@ export async function getAstroPreaddPreview(): Promise<AstroPreaddPreview> {
   return fetchJson<AstroPreaddPreview>("/astro/preadd/preview");
 }
 
-export async function runAstroPreadd(candidateIds?: string[]): Promise<AstroPreaddRunResult> {
+export async function runAstroPreadd(
+  candidateIds?: string[], cardVariant?: AstroCardVariant
+): Promise<AstroPreaddRunResult> {
   return fetchJson<AstroPreaddRunResult>("/astro/preadd/run", {
-    method: "POST", body: JSON.stringify({ candidate_ids: candidateIds ?? null })
+    method: "POST", body: JSON.stringify({ candidate_ids: candidateIds ?? null, card_variant: cardVariant ?? null })
   });
 }
 

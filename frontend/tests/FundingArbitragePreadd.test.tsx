@@ -23,6 +23,9 @@ describe("Astro preadd controls", () => {
       if (url.includes("/astro/preadd/exchanges")) {
         return Response.json(["bitget", "binance", "okx"]);
       }
+      if (url.includes("/settings/astro-card")) {
+        return Response.json({ card_variant: "both" });
+      }
       if (url.includes("/astro/preadd/settings")) {
         return Response.json(init?.method === "PUT" ? JSON.parse(String(init.body)) : preaddSettings);
       }
@@ -105,12 +108,13 @@ describe("Astro preadd controls", () => {
     expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes("/astro/preadd/run"))).toBe(false);
     await user.click(screen.getByRole("button", { name: /立即预建/ }));
     expect(await screen.findByText("卡片将以暂停、禁开状态创建；不会开启仓位。")).toBeTruthy();
+    await user.click(screen.getByText("仅 GC"));
     await user.click(screen.getByRole("button", { name: "确认预建" }));
     await waitFor(() => {
       const run = vi.mocked(fetch).mock.calls.find(([url, init]) =>
         String(url).includes("/astro/preadd/run") && init?.method === "POST"
       );
-      expect(JSON.parse(String(run?.[1]?.body))).toEqual({ candidate_ids: null });
+      expect(JSON.parse(String(run?.[1]?.body))).toEqual({ candidate_ids: null, card_variant: "gc" });
     });
   });
 });

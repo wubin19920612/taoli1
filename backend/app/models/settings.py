@@ -3,6 +3,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.models.account_position import AccountPositionIdentity
+from app.models.astro import AstroCardVariant
 from app.models.market import MarketType
 
 DEFAULT_HIDDEN_RISK_LABELS = [
@@ -195,6 +196,7 @@ class AstroCardSettings(BaseModel):
     min_notional: float = Field(default=10, ge=0)
     max_notional: float = Field(default=10, gt=0)
     open_enabled: bool = False
+    card_variant: AstroCardVariant = "both"
     close_position_buffer_pct: float = Field(default=0.1, ge=0)
     unfavorable_funding_weight: float = Field(default=1, ge=0)
     close_position_floor_pct: float = Field(default=0, ge=0)

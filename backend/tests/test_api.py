@@ -2444,6 +2444,7 @@ def test_astro_card_settings_endpoint_roundtrips() -> None:
         assert payload["max_trade_usdt"] == 10
         assert payload["leverage"] == 1
         assert payload["open_enabled"] is False
+        assert payload["card_variant"] == "both"
         assert payload["close_position_buffer_pct"] == 0.1
         assert payload["unfavorable_funding_weight"] == 1
         assert payload["close_position_floor_pct"] == 0
@@ -2452,6 +2453,7 @@ def test_astro_card_settings_endpoint_roundtrips() -> None:
         payload["leverage"] = 4
         payload["max_notional"] = 75
         payload["open_enabled"] = True
+        payload["card_variant"] = "gc"
         payload["close_position_buffer_pct"] = 0.2
         payload["unfavorable_funding_weight"] = 1.5
         payload["close_position_floor_pct"] = 0.01
@@ -2474,8 +2476,14 @@ def test_astro_card_settings_endpoint_roundtrips() -> None:
         assert reloaded.status_code == 200
         assert reloaded.json()["max_notional"] == 75
         assert reloaded.json()["open_enabled"] is True
+        assert reloaded.json()["card_variant"] == "gc"
         assert reloaded.json()["unfavorable_funding_weight"] == 1.5
         assert reloaded.json()["close_position_floor_pct"] == 0.01
+        assert client.put(
+            "/api/settings/astro-card",
+            headers={"X-Dashboard-Password": "secret"},
+            json={**payload, "card_variant": "invalid"},
+        ).status_code == 422
 
 
 def test_astro_automation_settings_endpoint_updates_runtime_service() -> None:
@@ -3163,6 +3171,7 @@ def test_astro_preview_endpoint_uses_saved_card_defaults() -> None:
                 "min_notional": 11,
                 "max_notional": 55,
                 "open_enabled": True,
+                "card_variant": "gc",
                 "close_position_buffer_pct": 0.2,
                 "unfavorable_funding_weight": 1,
                 "close_position_floor_pct": 0,
@@ -3180,6 +3189,11 @@ def test_astro_preview_endpoint_uses_saved_card_defaults() -> None:
     assert payload["pair"]["maxNotional"] == "55"
     assert payload["pair"]["status"] is True
     assert payload["pair"]["disableOpen"] is False
+    assert payload["card_variant"] == "gc"
+    assert payload["route_variants"] == [
+        {"card_variant": "non_gc", "buy_exchange": "binance", "sell_exchange": "okx"},
+        {"card_variant": "gc", "buy_exchange": "gc-binance", "sell_exchange": "gc-okx"},
+    ]
 
 
 def test_astro_preview_endpoint_uses_env_defaults_before_settings_are_saved() -> None:
@@ -3363,6 +3377,7 @@ def test_astro_manual_card_create_endpoint_forwards_overrides_and_saves_defaults
                 "min_notional": 12,
                 "max_notional": 88,
                 "open_enabled": True,
+                "card_variant": "non_gc",
                 "save_as_default": True,
             },
         )
@@ -3376,6 +3391,7 @@ def test_astro_manual_card_create_endpoint_forwards_overrides_and_saves_defaults
     assert service.requests[0].min_notional == 12
     assert service.requests[0].max_notional == 88
     assert service.requests[0].open_enabled is True
+    assert service.requests[0].card_variant == "non_gc"
     assert service.requests[0].save_as_default is True
     assert saved.status_code == 200
     assert saved.json()["max_trade_usdt"] == 88
@@ -3383,6 +3399,7 @@ def test_astro_manual_card_create_endpoint_forwards_overrides_and_saves_defaults
     assert saved.json()["min_notional"] == 12
     assert saved.json()["max_notional"] == 88
     assert saved.json()["open_enabled"] is True
+    assert saved.json()["card_variant"] == "non_gc"
 
 
 def test_astro_manual_card_create_endpoint_warns_but_continues_when_order_book_validation_fails() -> None:
