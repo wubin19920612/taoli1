@@ -552,8 +552,24 @@ function tradeMarketHasRestriction(market: MarketTradeAvailability): boolean {
 
 function tradeMarketHasUnknown(market: MarketTradeAvailability): boolean {
   return relevantTradeActions(market).some(
-    (action) => action.state === "unknown" || action.state === "conditional"
+    (action) => action.state === "unknown" || action.state === "conditional" || action.state === "not_applicable"
   );
+}
+
+function tradeRestrictionSummary(market: MarketTradeAvailability): string | null {
+  if (market.public_restrictions.length) return market.public_restrictions.join("；");
+  const issue = relevantTradeActions(market).find((action) => action.state === "blocked"
+    || action.state === "conditional" || action.state === "unknown" || action.state === "not_applicable");
+  return issue?.reason || (issue ? "交易状态待核实" : null);
+}
+
+function TradeActionSummaryMetric({ label, action, historical }: { label: string; action: TradeActionStatus; historical: boolean }) {
+  const status = action.state === "available" ? "公开可用"
+    : action.state === "conditional" || action.state === "unknown" ? "待核实"
+      : tradeActionMeta(action).label;
+  return <TradeMetric label={label} value={historical ? `上次${status}` : status}
+    tone={historical ? undefined : action.state === "available" ? "positive" : action.state === "blocked" ? "negative" : undefined}
+    tooltip={action.reason} />;
 }
 
 function MarketDiagnosticDetails({
@@ -1508,7 +1524,7 @@ export function InstrumentLookupPage() {
           <div className="instrument-section-head">
             <div>
               <Typography.Title level={4}>精确行情市场</Typography.Title>
-              <Typography.Text type="secondary">逐个原始市场展示；盘口、公开限制及费用需展开查看，各自时间独立</Typography.Text>
+              <Typography.Text type="secondary">逐个原始市场展示；盘口深度与公开交易限制来自独立诊断</Typography.Text>
             </div>
             <Space size={[8, 4]} wrap>
               <Segmented<"all" | MarketType> size="small" value={tradeMarketTypeFilter}
@@ -1529,14 +1545,19 @@ export function InstrumentLookupPage() {
             description={Object.entries(currentTradeStatus.errors).map(([key, value]) => key + ": " + value).join(" | ")} /> : null}
           <div className="instrument-market-data-list" role="table" aria-label="精确行情市场">
             <div className="instrument-market-data-head" role="row">
-              <span>市场身份</span><span>行情 Bid / Ask</span><span>成交额</span><span>资金费率</span><span>倍率</span><span>行情数据状态</span>
+              <span>市场身份</span><span>行情 Bid / Ask</span><span>成交额</span><span>资金费率</span><span>盘口深度</span><span>交易限制</span>
             </div>
             {visibleMarketRows.map(({ quote, diagnostic }) => {
               const market = quote ?? diagnostic!;
               const dex = quote ? marketDex(quote) : diagnostic?.dex;
-              const priceMultiplier = quote?.symbol_alias_price_multiplier ?? 1;
-              const qualityTimestamp = quote?.upstream_timestamp ?? quote?.timestamp;
-              const diagnosticStaleness = diagnostic && quote ? diagnosticFreshness(diagnostic, quote) : null;
+              const diagnosticStaleness = diagnostic ? diagnosticFreshness(diagnostic, quote) : null;
+              const diagnosticNotice = !diagnostic
+                ? diagnosticsLoading && !currentTradeStatus ? "诊断加载中" : currentTradeStatusError ? "诊断请求失败" : "无可靠关联的市场诊断"
+                : null;
+              const diagnosticWarning = diagnostic ? currentTradeStatusError ? "诊断未更新" : diagnosticStaleness : null;
+              const restrictionSummary = diagnostic ? tradeRestrictionSummary(diagnostic) : null;
+              const hasRestriction = Boolean(diagnostic && (tradeMarketHasRestriction(diagnostic) || diagnostic.public_restrictions.length));
+              const hasUnknown = Boolean(diagnostic && tradeMarketHasUnknown(diagnostic));
               const rowIdentity = `${quote ? "quote" : "diagnostic"}:${exactMarketKey(market) ?? JSON.stringify([market.exchange, market.market_type, market.raw_symbol, market.dex])}`;
               const occurrence = marketRowKeys.get(rowIdentity) ?? 0;
               marketRowKeys.set(rowIdentity, occurrence + 1);
@@ -1549,7 +1570,7 @@ export function InstrumentLookupPage() {
                     <span>规范标的 {market.symbol}</span>
                     {quote ? <Tag color={quote.data_status === "live" ? "green" : "red"}>{quote.data_status === "live" ? "行情实时" : "行情已过期"}</Tag>
                       : <Tag color="orange">仅诊断，未可靠关联行情</Tag>}
-                    {diagnostic && quote && (currentTradeStatusError || diagnosticStaleness) ?
+                    {diagnostic && (currentTradeStatusError || diagnosticStaleness) ?
                       <Tag color="orange">{currentTradeStatusError
                         ? `诊断未更新${diagnosticStaleness ? ` · ${diagnosticStaleness}` : ""}`
                         : diagnosticStaleness}</Tag> : null}
@@ -1573,18 +1594,31 @@ export function InstrumentLookupPage() {
                     <TradeMetric label="下次结算" value={quote?.market_type === "future" ? fullTime(quote.funding_next_time) : "-"} />
                   </div>
                   <div className="instrument-market-data-group" role="cell">
-                    <span className="instrument-market-data-group-name">行情倍率</span>
-                    <TradeMetric label="价格倍率" value={quote ? priceMultiplier + "x" : "-"} />
-                    <TradeMetric label="合约数量乘数" value={quote?.contract_size_multiplier == null ? "-" : String(quote.contract_size_multiplier)} />
-                    <TradeMetric label="价格口径" value={!quote ? "-" : priceMultiplier === 1 ? "原始 = 规范" : "原始 x " + priceMultiplier} />
+                    <span className="instrument-market-data-group-name">盘口深度</span>
+                    {diagnostic ? <>
+                      {diagnosticWarning ? <Tag color="orange" className="instrument-market-data-warning">{diagnosticWarning}</Tag> : null}
+                      <TradeMetric label="0.1% 买" value={compactUsdt(diagnostic.bid_depth_01pct_usdt)} />
+                      <TradeMetric label="0.1% 卖" value={compactUsdt(diagnostic.ask_depth_01pct_usdt)} />
+                      <TradeMetric label="1% 买" value={compactUsdt(diagnostic.bid_depth_1pct_usdt)} />
+                      <TradeMetric label="1% 卖" value={compactUsdt(diagnostic.ask_depth_1pct_usdt)} />
+                    </> : <span className="instrument-market-data-unavailable">{diagnosticNotice}</span>}
                   </div>
-                  <div className="instrument-market-data-group instrument-market-data-quality" role="cell">
-                    <span className="instrument-market-data-group-name">行情数据状态</span>
-                    <TradeMetric label="行情来源" value={quote?.data_source || "未标注"} tooltip={quote?.data_source} />
-                    <TradeMetric label="行情更新时间" value={ageText(qualityTimestamp)} tooltip={fullTime(qualityTimestamp)} />
-                    <TradeMetric label="行情时间戳" value={marketTime(qualityTimestamp)} />
-                    <TradeMetric label="估算字段" value={quote ? quote.estimated_fields?.length ? quote.estimated_fields.join("、") : quote.is_estimated ? "含估算" : "无" : "-"} />
-                    {quote?.error ? <TradeMetric label="上游错误" value={quote.error} tooltip={quote.error} tone="negative" /> : null}
+                  <div className="instrument-market-data-group" role="cell">
+                    <span className="instrument-market-data-group-name">交易限制</span>
+                    {diagnostic ? <>
+                      <div className="instrument-market-data-restriction-summary">
+                        <Tag color={diagnosticWarning ? "orange" : hasRestriction ? "red" : hasUnknown ? "gold" : "green"}>
+                          {diagnosticWarning ?? (hasRestriction ? "有限制" : hasUnknown ? "待核实" : "公开未发现限制")}
+                        </Tag>
+                        {restrictionSummary ? <span>{restrictionSummary}</span> : null}
+                      </div>
+                      <TradeActionSummaryMetric label={market.market_type === "spot" ? "买入" : "开多"} action={diagnostic.buy_open} historical={Boolean(diagnosticWarning)} />
+                      <TradeActionSummaryMetric label={market.market_type === "spot" ? "卖出" : "开空"} action={diagnostic.sell_open} historical={Boolean(diagnosticWarning)} />
+                      {market.market_type === "future" ? <>
+                        <TradeActionSummaryMetric label="平空" action={diagnostic.buy_reduce_only} historical={Boolean(diagnosticWarning)} />
+                        <TradeActionSummaryMetric label="平多" action={diagnostic.sell_reduce_only} historical={Boolean(diagnosticWarning)} />
+                      </> : null}
+                    </> : <span className="instrument-market-data-unavailable">{diagnosticNotice}</span>}
                   </div>
                   {diagnostic ? <MarketDiagnosticDetails market={diagnostic} quote={quote} source={currentTradeStatus?.source ?? "公开诊断接口"}
                     watch={tradeWatchFor(diagnostic)} watchSaving={tradeWatchSaving === tradeMarketKey(diagnostic)}

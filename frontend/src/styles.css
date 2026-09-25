@@ -192,7 +192,7 @@
 .instrument-market-data-head,
 .instrument-market-data-row {
   display: grid;
-  grid-template-columns: minmax(170px, 0.95fr) minmax(135px, 1fr) minmax(155px, 1.15fr) minmax(155px, 1.15fr) minmax(100px, 0.68fr) minmax(145px, 1fr);
+  grid-template-columns: minmax(170px, 0.95fr) minmax(135px, 1fr) minmax(155px, 1.1fr) minmax(155px, 1.1fr) minmax(155px, 1fr) minmax(190px, 1.25fr);
   min-width: 0;
 }
 
@@ -275,12 +275,29 @@
   text-align: right;
 }
 
-.instrument-market-data-quality .instrument-trade-metric {
-  grid-template-columns: minmax(72px, 0.6fr) minmax(0, 1fr);
+.instrument-market-data-restriction-summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
-.instrument-market-data-quality .instrument-trade-metric strong {
-  overflow-wrap: anywhere;
+.instrument-market-data-restriction-summary .ant-tag {
+  flex: none;
+  margin: 0;
+}
+
+.instrument-market-data-warning.ant-tag {
+  width: max-content;
+  margin: 0;
+}
+
+.instrument-market-data-unavailable {
+  color: #8a5b23;
+  font-size: 11px;
 }
 
 .instrument-market-data-group .instrument-trade-metric-bid strong {
@@ -367,6 +384,10 @@
 
   .instrument-market-data-group {
     border-bottom: 1px solid #edf0f2;
+  }
+
+  .instrument-market-data-row > .instrument-market-data-group:nth-child(6) {
+    grid-column: 2 / -1;
   }
 
   .instrument-market-data-group-name {
