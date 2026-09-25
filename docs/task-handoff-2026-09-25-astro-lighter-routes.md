@@ -14,7 +14,7 @@
 - `backend/app/services/astro_planner.py`：预览以普通路线为基础，未知 Lighter 对手仍拦截。`backend/app/api/routes_astro.py` 返回可选精确路线。
 - `backend/app/services/astro_alerts.py`：告警自动建卡、实盘实验、人工建卡与预建共用路线选择；已有普通或 GC 同族卡片时只补缺失路线。`rh-lighter` 的只读保护保持在建卡服务入口。
 - `backend/app/services/instrument_spreads.py`：更新未知 Lighter 配对的提示，仅将这一处 Astro 文案纳入功能提交；该文件其他任务的未提交改动留在工作区。
-- `frontend/src/pages/SettingsPage.tsx`：修正“默认建卡路线”的 Lighter 提示。控制入口为“设置 -> Astro 卡片默认参数 -> 默认建卡路线”；机会列表、标的查询与立即预建的确认界面也可单次选择。
+- `frontend/src/pages/SettingsPage.tsx`：修正“默认建卡路线”的 Lighter 提示。控制入口为侧栏“参数与告警 -> Astro 卡片默认参数 -> 默认建卡路线”；机会列表、标的查询与立即预建的确认界面也可单次选择。
 
 ## 业务规则与限制
 
