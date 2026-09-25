@@ -984,7 +984,7 @@ export function SettingsPage() {
           <Form.Item
             label="默认建卡路线"
             name="card_variant"
-            help="Lighter 仅支持 GC 路线；选择仅非 GC 时不会为 Lighter 建卡。"
+            help="Lighter 支持普通与 GC 路线；具体可建路线以建卡预览为准。"
           >
             <AstroCardVariantSelector />
           </Form.Item>

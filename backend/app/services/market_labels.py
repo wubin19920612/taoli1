@@ -81,8 +81,6 @@ def astro_exchange_id(
     if is_bitget_rtoken_spot(exchange, market_type, raw_symbol, canonical_symbol):
         return "bitgetr"
     normalized = exchange.strip().lower()
-    if normalized == "lighter":
-        return "gc-lighter"
     return _ASTRO_EXCHANGE_ALIASES.get(normalized, normalized)
 
 
@@ -94,10 +92,21 @@ def astro_exchange_route_variants(
     buy = buy_exchange.strip().lower()
     sell = sell_exchange.strip().lower()
     if "lighter" in {buy, sell} or "gc-lighter" in {buy, sell}:
-        buy = _ASTRO_GC_EXCHANGE_IDS.get(buy, buy)
-        sell = _ASTRO_GC_EXCHANGE_IDS.get(sell, sell)
-        supported = set(_ASTRO_GC_EXCHANGE_IDS.values()) | _ASTRO_BITGET_EXCHANGE_IDS
-        routes = [(buy, sell)] if buy in supported and sell in supported else []
+        supported = (
+            set(_ASTRO_GC_EXCHANGE_IDS)
+            | set(_ASTRO_GC_EXCHANGE_IDS.values())
+            | _ASTRO_BITGET_EXCHANGE_IDS
+        )
+        routes = []
+        if buy in supported and sell in supported:
+            if not buy.startswith("gc-") and not sell.startswith("gc-"):
+                routes.append((buy, sell))
+            gc_route = (
+                _ASTRO_GC_EXCHANGE_IDS.get(buy, buy),
+                _ASTRO_GC_EXCHANGE_IDS.get(sell, sell),
+            )
+            if gc_route not in routes:
+                routes.append(gc_route)
     else:
         routes = [(buy, sell)]
         if buy in _ASTRO_BITGET_EXCHANGE_IDS and sell in _ASTRO_GC_EXCHANGE_IDS:

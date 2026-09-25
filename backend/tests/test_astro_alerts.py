@@ -433,28 +433,28 @@ async def test_selected_variant_is_not_blocked_by_existing_sibling(
 
 
 @pytest.mark.asyncio
-async def test_non_gc_selection_does_not_write_unsupported_lighter_route() -> None:
+async def test_non_gc_selection_creates_plain_lighter_route() -> None:
     client = FakeAstroClient()
     service = AstroAlertService(
         client,
         Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
         card_settings=AstroCardSettings(card_variant="non_gc"),
+        add_restart_delay_seconds=0,
     )
 
     result = await service.handle_alert(
         opportunity().model_copy(update={"buy_exchange": "lighter"})
     )
 
-    assert result.status == "skipped"
-    assert result.action == "unsupported"
-    assert "未写入 Astro" in result.message
-    assert client.list_calls == 0
-    assert client.added == []
+    assert result.status == "created"
+    assert [(pair["buyEx"], pair["sellEx"]) for pair in client.added] == [
+        ("lighter", "okx")
+    ]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("manual", [False, True])
-async def test_lighter_creation_writes_only_gc_routes_even_with_existing_plain_card(manual: bool) -> None:
+async def test_lighter_creation_adds_missing_gc_sibling_to_existing_plain_card(manual: bool) -> None:
     client = FakeAstroClient(pairs=[{"name": "BTC", "type": "FF", "buyEx": "lighter", "sellEx": "okx"}])
     service = AstroAlertService(
         client,
@@ -468,6 +468,64 @@ async def test_lighter_creation_writes_only_gc_routes_even_with_existing_plain_c
         ("gc-lighter", "gc-okx")
     ]
     assert client.updated == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("card_variant, expected", [
+    ("non_gc", [("lighter", "okx")]),
+    ("gc", [("gc-lighter", "gc-okx")]),
+    ("both", [("lighter", "okx"), ("gc-lighter", "gc-okx")]),
+])
+@pytest.mark.parametrize("entrypoint", [
+    "handle_alert", "handle_live_pilot", "handle_manual_create", "handle_preadd",
+])
+async def test_lighter_card_variant_applies_to_every_create_entrypoint(
+    card_variant: str, expected: list[tuple[str, str]], entrypoint: str,
+) -> None:
+    client = FakeAstroClient()
+    card_settings = AstroCardSettings(card_variant=card_variant)
+    service = AstroAlertService(
+        client,
+        Settings(
+            astro_alert_auto_create=True,
+            astro_manual_card_create=True,
+            astro_dry_run_only=False,
+        ),
+        card_settings=card_settings,
+        live_pilot_settings=LivePilotSettings(enabled=True),
+        add_restart_delay_seconds=0,
+    )
+    opp = opportunity().model_copy(update={"buy_exchange": "lighter"})
+    result = (
+        await service.handle_preadd(opp, card_settings)
+        if entrypoint == "handle_preadd"
+        else await getattr(service, entrypoint)(opp)
+    )
+
+    assert result.status == "created"
+    assert [(pair["buyEx"], pair["sellEx"]) for pair in client.added] == expected
+
+
+@pytest.mark.asyncio
+async def test_lighter_non_gc_sibling_is_created_when_gc_card_exists() -> None:
+    client = FakeAstroClient(pairs=[{
+        "name": "BTC", "type": "FF", "buyEx": "gc-lighter", "sellEx": "gc-okx",
+    }])
+    service = AstroAlertService(
+        client,
+        Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
+        card_settings=AstroCardSettings(card_variant="non_gc"),
+        add_restart_delay_seconds=0,
+    )
+
+    result = await service.handle_alert(
+        opportunity().model_copy(update={"buy_exchange": "lighter"})
+    )
+
+    assert result.status == "created"
+    assert [(pair["buyEx"], pair["sellEx"]) for pair in client.added] == [
+        ("lighter", "okx")
+    ]
 
 
 @pytest.mark.asyncio

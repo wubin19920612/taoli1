@@ -144,7 +144,7 @@ def test_instrument_astro_preview_uses_selected_live_market_direction() -> None:
     assert not any("Dry-run only" in warning for warning in payload["warnings"])
 
 
-def test_instrument_astro_preview_never_offers_plain_lighter_route() -> None:
+def test_instrument_astro_preview_offers_plain_and_gc_lighter_routes() -> None:
     app = instrument_app()
     app.state.snapshot_store.set_all_markets([
         market("lighter", bid=99, ask=100), market("binance", bid=101, ask=102)
@@ -155,9 +155,17 @@ def test_instrument_astro_preview_never_offers_plain_lighter_route() -> None:
     with TestClient(app) as client:
         response = client.post("/api/astro/instrument/preview", json=selected)
     assert response.status_code == 200
-    pair = response.json()["pair"]
-    assert pair["buyEx"] == "gc-lighter"
-    assert pair["sellEx"] == "gc-binance"
+    payload = response.json()
+    pair = payload["pair"]
+    assert pair["buyEx"] == "lighter"
+    assert pair["sellEx"] == "binance"
+    assert [
+        (route["card_variant"], route["buy_exchange"], route["sell_exchange"])
+        for route in payload["route_variants"]
+    ] == [
+        ("non_gc", "lighter", "binance"),
+        ("gc", "gc-lighter", "gc-binance"),
+    ]
 
 
 def test_rh_lighter_market_can_be_previewed_but_not_created() -> None:

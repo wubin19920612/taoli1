@@ -1,5 +1,7 @@
 from datetime import UTC, datetime
 
+import pytest
+
 from app.models.market import MarketType
 from app.models.opportunity import Opportunity, OpportunityType
 from app.services.astro_planner import AstroPairPlanner, AstroPlannerConfig
@@ -94,29 +96,36 @@ def test_negative_ff_open_requires_explicit_funding_reverse_mode() -> None:
     assert any("funding-only reverse-entry" in warning for warning in allowed.warnings)
 
 
-def test_lighter_preview_routes_only_to_gc_lighter() -> None:
+def test_lighter_preview_uses_ordinary_route_and_offers_gc_variant() -> None:
     planner = AstroPairPlanner()
     for buy, sell, expected in (
-        ("lighter", "binance", ("gc-lighter", "gc-binance")),
-        ("bitget", "lighter", ("bitget", "gc-lighter")),
-        ("lighter", "lighter", ("gc-lighter", "gc-lighter")),
+        ("lighter", "binance", ("lighter", "binance")),
+        ("bitget", "lighter", ("bitget", "lighter")),
+        ("lighter", "lighter", ("lighter", "lighter")),
     ):
         plan = planner.plan(opportunity().model_copy(update={"buy_exchange": buy, "sell_exchange": sell}))
         assert plan.can_submit is True
         assert (plan.pair["buyEx"], plan.pair["sellEx"]) == expected
-        assert astro_exchange_route_variants(*expected) == [expected]
-    assert astro_exchange_route_variants("lighter", "okx") == [("gc-lighter", "gc-okx")]
-    assert astro_exchange_route_variants("okx", "lighter") == [("gc-okx", "gc-lighter")]
+        assert astro_exchange_route_variants(*expected)[0] == expected
+    assert astro_exchange_route_variants("lighter", "okx") == [
+        ("lighter", "okx"), ("gc-lighter", "gc-okx")
+    ]
+    assert astro_exchange_route_variants("okx", "lighter") == [
+        ("okx", "lighter"), ("gc-okx", "gc-lighter")
+    ]
 
 
-def test_lighter_unknown_counterparty_is_blocked_even_for_manual_preview() -> None:
+@pytest.mark.parametrize("lighter_exchange", ["lighter", "gc-lighter"])
+def test_lighter_unknown_counterparty_is_blocked_even_for_manual_preview(
+    lighter_exchange: str,
+) -> None:
     plan = AstroPairPlanner().plan(
-        opportunity().model_copy(update={"buy_exchange": "lighter", "sell_exchange": "aster"}),
+        opportunity().model_copy(update={"buy_exchange": lighter_exchange, "sell_exchange": "aster"}),
         allow_manual_override=True,
     )
     assert not plan.can_submit
     assert plan.pair is None
-    assert "gc-lighter" in plan.blockers[0]
+    assert "Lighter" in plan.blockers[0]
 
 
 def test_ss_opportunity_is_blocked_because_astro_sdk_does_not_document_ss() -> None:

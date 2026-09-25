@@ -318,12 +318,10 @@ class AstroPairPlanner:
             opportunity.sell_raw_symbol,
             opportunity.symbol,
         )
-        if "lighter" in {opportunity.buy_exchange.lower(), opportunity.sell_exchange.lower()}:
-            routes = astro_exchange_route_variants(buy_astro_exchange, sell_astro_exchange)
-            if routes:
-                buy_astro_exchange, sell_astro_exchange = routes[0]
-            else:
-                blockers.append("gc-lighter 仅支持与已知 GC 或 Bitget 路由配对，未提交未知路由。")
+        if {buy_astro_exchange, sell_astro_exchange} & {"lighter", "gc-lighter"} and not astro_exchange_route_variants(
+            buy_astro_exchange, sell_astro_exchange
+        ):
+            blockers.append("Lighter 仅支持与已知 GC 交易所或 Bitget 配对，未提交未知路由。")
 
         assumptions = [
             AstroFieldAssumption(
@@ -362,7 +360,7 @@ class AstroPairPlanner:
                 note=(
                     "Uses Astro exchange ids; Hyperliquid is mapped to hl and Bitget "
                     "RToken stock spot is mapped from bitget to bitgetr. "
-                    "Lighter cards use only gc-lighter, with a GC or Bitget counterparty."
+                    "Supported Lighter pairs can use lighter or gc-lighter routes."
                 ),
             ),
         ]

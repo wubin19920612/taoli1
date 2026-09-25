@@ -30,6 +30,10 @@ def test_hyperliquid_uses_astro_hl_exchange_id() -> None:
     assert astro_exchange_id("hl", MarketType.FUTURE) == "hl"
 
 
+def test_lighter_keeps_ordinary_astro_exchange_id() -> None:
+    assert astro_exchange_id("lighter", MarketType.FUTURE) == "lighter"
+
+
 def test_supported_route_gets_matching_gc_variant() -> None:
     assert astro_exchange_route_variants("hl", "binance") == [
         ("hl", "binance"),
@@ -63,10 +67,20 @@ def test_card_variant_selection_preserves_supported_route_ids() -> None:
     assert astro_exchange_route_variants("bitget", "bybit", "gc") == [
         ("bitget", "gc-bybit")
     ]
-    assert astro_exchange_route_variants("lighter", "okx", "non_gc") == []
+    assert astro_exchange_route_variants("lighter", "okx", "non_gc") == [
+        ("lighter", "okx")
+    ]
     assert astro_exchange_route_variants("lighter", "okx", "gc") == [
         ("gc-lighter", "gc-okx")
     ]
+    assert astro_exchange_route_variants("bitget", "lighter") == [
+        ("bitget", "lighter"),
+        ("bitget", "gc-lighter"),
+    ]
+    assert astro_exchange_route_variants("gc-lighter", "okx") == [
+        ("gc-lighter", "gc-okx")
+    ]
+    assert astro_exchange_route_variants("lighter", "aster") == []
 
 
 def test_unsupported_exchange_never_creates_single_sided_gc_route() -> None:
