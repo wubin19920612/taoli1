@@ -415,9 +415,19 @@ def test_report_requires_time_and_independent_events_and_keeps_unresolved() -> N
     assert first["profitability_conclusion"] is None
     independent = [trade.model_copy(update={"id": str(index), "event_id": str(index)})
                    for index in range(30)]
-    early = build_paper_report(run, independent, accounts(), NOW + timedelta(days=13))
-    mature = build_paper_report(run, independent, accounts(), NOW + timedelta(days=14))
+    early_at = NOW + timedelta(days=13)
+    mature_at = NOW + timedelta(days=14)
+    early = build_paper_report(
+        run.model_copy(update={"last_success_at": early_at}), independent, accounts(), early_at,
+    )
+    stale = build_paper_report(
+        run.model_copy(update={"last_success_at": early_at}), independent, accounts(), mature_at,
+    )
+    mature = build_paper_report(
+        run.model_copy(update={"last_success_at": mature_at}), independent, accounts(), mature_at,
+    )
     assert early["sample_status"] == "sample_insufficient"
+    assert stale["sample_status"] == "sample_insufficient"
     assert mature["sample_status"] == "ready_for_review"
     assert mature["profitability_conclusion"] is None
 
@@ -462,9 +472,10 @@ async def test_continuous_observation_resets_after_persisted_gap() -> None:
         current_events = [item.model_copy(update={
             "signal_at": recovered_at + timedelta(seconds=1),
         }) for item in previous_events]
+        review_at = recovered_at + timedelta(days=14)
         current_window = build_paper_report(
-            recovered, current_events, await repo.load_accounts(),
-            recovered_at + timedelta(days=14),
+            recovered.model_copy(update={"last_success_at": review_at}),
+            current_events, await repo.load_accounts(), review_at,
         )
         assert current_window["sample_status"] == "ready_for_review"
     finally:
@@ -490,11 +501,58 @@ async def test_paper_run_schema_migrates_prior_deployment() -> None:
              NOW.isoformat()),
         )
         await db.commit()
+        before = datetime.now(UTC)
         await initialize_paper_schema(db)
+        after = datetime.now(UTC)
         run = await SqueezePaperRepository(db, asyncio.Lock()).load_run()
         assert run is not None
-        assert run.started_at == run.continuous_started_at == NOW
+        assert run.started_at == NOW
+        assert before <= run.continuous_started_at <= after
         assert run.coverage_gap_count == 0
+        await initialize_paper_schema(db)
+        repeated = await SqueezePaperRepository(db, asyncio.Lock()).load_run()
+        assert repeated is not None
+        assert repeated.continuous_started_at == run.continuous_started_at
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_existing_coverage_run_resets_once_at_tracking_upgrade() -> None:
+    db = await connect_database(":memory:")
+    try:
+        await db.execute("""CREATE TABLE squeeze_paper_run (
+          id INTEGER PRIMARY KEY CHECK(id = 1),
+          started_at TEXT NOT NULL, rule_version TEXT NOT NULL,
+          settings_json TEXT NOT NULL, last_processed_at TEXT,
+          last_event_at TEXT NOT NULL, last_event_id TEXT NOT NULL DEFAULT '',
+          last_success_at TEXT, last_error TEXT,
+          continuous_started_at TEXT,
+          coverage_gap_count INTEGER NOT NULL DEFAULT 0,
+          coverage_gap_open INTEGER NOT NULL DEFAULT 0,
+          last_coverage_gap_at TEXT
+        )""")
+        await db.execute(
+            """INSERT INTO squeeze_paper_run
+               (id,started_at,continuous_started_at,rule_version,
+                settings_json,last_event_at)
+               VALUES (1,?,?,?,?,?)""",
+            (NOW.isoformat(), NOW.isoformat(), SETTINGS.rule_version,
+             SETTINGS.model_dump_json(), NOW.isoformat()),
+        )
+        await db.commit()
+        before = datetime.now(UTC)
+        await initialize_paper_schema(db)
+        after = datetime.now(UTC)
+        repo = SqueezePaperRepository(db, asyncio.Lock())
+        run = await repo.load_run()
+        assert run is not None
+        assert run.started_at == NOW
+        assert before <= run.continuous_started_at <= after
+        await initialize_paper_schema(db)
+        repeated = await repo.load_run()
+        assert repeated is not None
+        assert repeated.continuous_started_at == run.continuous_started_at
     finally:
         await db.close()
 

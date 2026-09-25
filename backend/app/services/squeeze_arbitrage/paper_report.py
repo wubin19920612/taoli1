@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from statistics import mean
 from typing import Any
@@ -29,6 +29,8 @@ def build_paper_report(
     sufficient = (
         elapsed_days >= 14 and independent_events >= 30
         and run is not None and not run.coverage_gap_open
+        and run.last_success_at is not None
+        and timedelta(0) <= now - run.last_success_at <= timedelta(seconds=15)
     )
     closed = sorted(
         (trade for trade in trades

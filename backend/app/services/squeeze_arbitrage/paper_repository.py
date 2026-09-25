@@ -20,7 +20,8 @@ async def initialize_paper_schema(db: aiosqlite.Connection) -> None:
           continuous_started_at TEXT,
           coverage_gap_count INTEGER NOT NULL DEFAULT 0,
           coverage_gap_open INTEGER NOT NULL DEFAULT 0,
-          last_coverage_gap_at TEXT
+          last_coverage_gap_at TEXT,
+          coverage_tracking_version INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS squeeze_paper_accounts (
           exchange TEXT PRIMARY KEY, payload_json TEXT NOT NULL,
@@ -44,12 +45,15 @@ async def initialize_paper_schema(db: aiosqlite.Connection) -> None:
         "coverage_gap_count": "INTEGER NOT NULL DEFAULT 0",
         "coverage_gap_open": "INTEGER NOT NULL DEFAULT 0",
         "last_coverage_gap_at": "TEXT",
+        "coverage_tracking_version": "INTEGER NOT NULL DEFAULT 0",
     }.items():
         if name not in run_columns:
             await db.execute(f"ALTER TABLE squeeze_paper_run ADD COLUMN {name} {definition}")
+    # Earlier runs did not record every coverage gap, so their elapsed time is unverified.
     await db.execute(
-        """UPDATE squeeze_paper_run SET continuous_started_at=started_at
-           WHERE continuous_started_at IS NULL"""
+        """UPDATE squeeze_paper_run SET continuous_started_at=?,
+           coverage_tracking_version=1 WHERE coverage_tracking_version=0""",
+        (datetime.now(UTC).isoformat(),),
     )
     cursor = await db.execute("PRAGMA table_info(squeeze_paper_trades)")
     columns = {row["name"] for row in await cursor.fetchall()}
@@ -75,8 +79,8 @@ class SqueezePaperRepository:
                     await self.db.execute(
                         """INSERT INTO squeeze_paper_run
                            (id,started_at,continuous_started_at,rule_version,
-                            settings_json,last_event_at)
-                           VALUES (1,?,?,?,?,?)""",
+                            settings_json,last_event_at,coverage_tracking_version)
+                           VALUES (1,?,?,?,?,?,1)""",
                         (now.isoformat(), now.isoformat(), settings.rule_version,
                          settings.model_dump_json(), now.isoformat()),
                     )
