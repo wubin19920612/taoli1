@@ -374,3 +374,35 @@ S3报告：净收益/交易、总资金收益率、最大回撤、单腿失败�
 ## 17. 可直接发给 6-sol 的起始指令
 
 > 阅读 AGENTS.md 和 docs/task-handoff-2026-09-25-squeeze-arbitrage.md。当前任务属于“价差与资金费率告警”，只实施 S1：原始 OI、强平观测与结构观察池，验收通过并完成交付后再为 S2 新开任务。先核对当前分支/HEAD/工作区和旧分钟价差信号退役状态；不要恢复旧模块，不把全项目架构优化并入任务。补历史原始 OI 及单位/时间质量，接入有覆盖状态的公开强平观测，实现闭合小时特征、持久化观察池/冷却、status/watchlist/events接口和最小只读页面。严格保留原始市场、DEX、链/资产身份及倍率；缺数据不能补零或当成可交易。默认无真实下单、借币、转账或自动建卡，测试使用 fake transport/clock/sender，API-only不启动采集。所有阈值作为版本化研究参数，不能把对话统计当已验证胜率。保留其他任务改动；完成有意义的业务/故障测试和前端构建、只暂存本任务文件、提交推送，并按现行低内存预构建镜像流程备份、部署、验证真实接口，更新本文交接。生产启用仅限有资源预算的公开数据采集，实盘执行留待独立授权。若受阻明确记录已完成和未完成部分，不声称策略已盈利或已完成尚未进行的线上验证。
+
+## 18. S1 实施与线上交付续记（2026-09-26，北京时间）
+
+### 18.1 范围、分支与基线
+
+- 本轮开始分支 `codex/frontend-localization-polish`，HEAD `12cbea904d708223e60de04ae7c30bcccf4c65b9`；无已跟踪修改或暂存文件，原有未跟踪内容继续保留。
+- S1 代码提交依次为 `255814c`（结构观察基础）、`2b7ba6b`（单字符 G 市场校验）、`4cac06b`（HTTP 数据可用时点）、`f7311e7`（窄屏标题布局）。均已推送；S1 最终业务镜像 SHA 为 `f7311e747a510f91f275e45a8aed1f0226cbe08c`。
+- 本阶段只涉及挤仓结构观察。原分钟信号及新币极速接口未恢复；不下单、不借币、不转账、不自动建卡，也未启用任何实盘执行器。
+
+### 18.2 已完成能力和代码入口
+
+- `backend/app/services/squeeze_arbitrage/`：独立配置、Binance 公共小时 K 线/原始 OI/美元 OI/全体账户比采集、闭合小时特征、强平公开流解析与重连、观察事件持久化及数据保留。运行上限为 5 个指定原始 USDT 永续市场、30 个活跃观察事件；完整小时只扫描一次，失败按 300 秒间隔重试。
+- `backend/app/services/squeeze_arbitrage/features.py`：按原始市场键选取 OI 和账户比各自截止前可得的样本；精确要求 172 个连续小时 K 线、OI 样本连续、端点年龄不超过一个采样周期。量 OI 用 `sumOpenInterest` 判变化，美元值只作规模展示；四小时信号窗口与前 168 小时成交额基线分离。缺口、超龄、单位或来源变更不触发。
+- `backend/app/services/squeeze_arbitrage/repository.py` 与 `backend/app/db/schema.py`：新增独立表，保存原始市场核验信息、请求回补范围、事件/接收/可用时间、强平去重累计值、覆盖缺口、质量结果、72 小时观察到期与 48 小时冷却；仅清理本模块可重建样本，不删除事件或用户文件。
+- `backend/app/main.py` 与 `backend/app/api/routes_squeeze_arbitrage.py`：仅常规采集入口且 `SQUEEZE_MONITOR_ENABLED=true` 启动新 worker；API-only 和默认关闭不启动。GET `/api/squeeze-arbitrage/status`、`/watchlist`、`/events` 均只读且有列表上限。
+- `frontend/src/pages/SqueezeArbitragePage.tsx`：新只读菜单，显示运行状态、精确原始市场、数据质量、观察阶段；无交易操作。手机标题与全局菜单按钮的间距已实测修正。
+
+### 18.3 验证和生产状态
+
+- `backend/tests/test_squeeze_arbitrage.py`：13 项通过，覆盖价格放大但原始 OI 不变、陈旧/缺失比率与 OI、混合原始市场、完整小时、重复观察、重启存储、强平累计更新去重、覆盖断线、API-only、单字符 `GUSDT`、fake provider 及晚到 HTTP 响应。`test_pair_spread_query.py`、`test_repositories.py`、`test_api.py` 等共享回归此前 155 项通过；S1 后续局部修复均跑了对应新增测试。
+- 前端生产构建通过，`AppShell` 12 项通过。全量前端测试初跑 187 项通过、5 项因新增菜单使旧顺序断言失效；更新断言后最终复跑 20 个文件、192 项全部通过。后续 S2 新增路线视图测试后再次全量复跑为 21 个文件、193 项通过。
+- 生产使用两份精确 SHA 预构建镜像，脚本先备份、校验 `integrity_check=ok` 和主机/容器 SHA-256，再 `git pull --ff-only`、`up -d --no-build --wait`。最后一次备份为 `backups/radar-before-f7311e747a51-20260925T165309Z.db`，SHA-256 `89c1559edd744daed49469102b94ea2b4134813afdeaf1bd4b2478019795f0e4`；后端、前端容器均 healthy。
+- 生产 `.env` 仅新增 `SQUEEZE_MONITOR_ENABLED=true` 及 `LSKUSDT,TUTUSDT,GUSDT,AKEUSDT,BTRUSDT` 五个公共 Binance 原始市场，修改前已在服务器内保留受控配置备份。生产 `/api/health` 为 `ok`；S1 status 为 enabled，五个市场元数据核验通过，首轮每市场 172 根 K 线和 30 个 OI 样本，质量均为 `ready`。watchlist/events 为空，属于当前未触发观察条件；旧 `/api/minute-signals/scan` 保持 404。
+- 公开 `!forceOrder@arr` 连接显示 `throttled_public_stream`，完整覆盖始终为 false；目前未观测到目标市场强平消息，不能把零记录解释为零强平。线上只读页面 HTTP 200，桌面/手机浏览器均核对了数据与布局。
+- 最终镜像自 2026-09-25 16:54:17 UTC 运行至 17:24:45 UTC，完成约 30 分 28 秒持续观察。两容器均 healthy；最终资源瞬时样本：后端 CPU 14.64%、内存 376.7 MiB/768 MiB，前端 CPU 0%、内存 4.477 MiB/96 MiB；启动约 3 分钟时后端内存 354.9 MiB。17:00 UTC 下一闭合小时扫描在 17:04:24 UTC 完成，五个市场均取得 172 根 K 线、30 个 OI 样本且质量为 `ready`，`last_error=null`。`/api/health` 为 `ok`，现有交易所状态均 healthy，watchlist/events 为空，旧 `/api/minute-signals/scan` 为 404。CPU 为采样时刻数值，不代表 30 分钟平均；公开强平流仍无目标市场消息，不能据此验收真实强平事件。
+
+### 18.4 已知限制和 S2 起点
+
+- S1 的 raw OI 单位保存为 Binance USD-M 合约原始单位，尚未将跨所合约数量换算为同一基础币；市场核验状态只供结构研究，不是 S2 可交易身份白名单。
+- 公开强平流节流且缺稳定订单 ID，按可见事件身份与累计成交增量去重，仍可能漏报或存在无法消歧的更新；需继续看覆盖状态和断线缺口，不能声称全市场强平金额。
+- S1 尚无盘口、费率成本、借币能力、模拟收益或盈利验收。跨所路线、指定基础币 q 的四向 VWAP、质量阻断和收敛确认由 S2 实施；真实执行属于另行授权的 S4。
+- 其他任务的 `.worktrees/`、pytest 缓存、`output/` 截图/脚本、并行交接与探测脚本未暂存或修改。下阶段先复核分支/线上 SHA/工作区，并从本节和第 6、7、12、13 节实施 S2；按当前用户授权，S2 阶段交付后继续 S3。S3 的前瞻观察至少 14 天且 30 个独立事件，未满足前结论只能是样本不足。
