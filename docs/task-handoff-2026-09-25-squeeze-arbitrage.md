@@ -406,3 +406,26 @@ S3报告：净收益/交易、总资金收益率、最大回撤、单腿失败�
 - 公开强平流节流且缺稳定订单 ID，按可见事件身份与累计成交增量去重，仍可能漏报或存在无法消歧的更新；需继续看覆盖状态和断线缺口，不能声称全市场强平金额。
 - S1 尚无盘口、费率成本、借币能力、模拟收益或盈利验收。跨所路线、指定基础币 q 的四向 VWAP、质量阻断和收敛确认由 S2 实施；真实执行属于另行授权的 S4。
 - 其他任务的 `.worktrees/`、pytest 缓存、`output/` 截图/脚本、并行交接与探测脚本未暂存或修改。下阶段先复核分支/线上 SHA/工作区，并从本节和第 6、7、12、13 节实施 S2；按当前用户授权，S2 阶段交付后继续 S3。S3 的前瞻观察至少 14 天且 30 个独立事件，未满足前结论只能是样本不足。
+
+## 19. S2 隔离库修复与线上交付续记（2026-09-26，北京时间）
+
+### 19.1 范围、基线与实现
+
+- 本轮接续分支 `codex/frontend-localization-polish`，起始 HEAD `85ac47bf5ae66934f357cf729126d966ef68c9cc`。原 S2 路线研究已推送，但其高频写入与 S1 共用 `radar.db` 时造成主库 `database is locked`，因此生产先以 `SQUEEZE_ROUTE_ENABLED=false` 恢复 S1。不能将 `85ac47b` 记为 S2 完成交付。
+- 修复提交 `a585ecbaf626e252e87b214653777d7b69d3deaa` 已推送到当前分支。`backend/app/main.py` 将文件型路线数据移至同卷 `radar-squeeze-route.db`；`route_repository.py` 一次性迁移主库旧路线状态、最新评估、事件和 worker 状态，记录迁移标记，保留主库旧表，不重复覆盖新库后续写入。
+- `route_runner.py` 使用容量 30 的有界写队列；独立采集与写入，数据库忙锁时重试，队列溢出计数并重置连续确认。status/API/UI 显示队列、最近采集、忙锁和丢样。路线仍仅使用 Binance/Bybit 公共 REST 的精确 LSKUSDT 线性 USDT 永续，结论恒为 `research_only`，不连接实盘执行器。
+- `deploy/linux-update.sh` 对已存在的路线库增加单独 SQLite 在线备份、`integrity_check` 与主机/容器 SHA-256 校验；两类自动备份分别保留。首次从旧脚本部署时，路线库尚不存在，因此脚本只备份主库；后续部署将分别备份两库。
+
+### 19.2 本地与生产验证
+
+- 隔离库迁移、旧五列 worker 表、主库持写锁而路线库仍可写、忙锁积压恢复和队列丢样等定向测试通过。共享后端回归 234 项通过；前端相关 13 项通过、生产构建通过；备份保留策略 4 项通过；Git Bash `bash -n deploy/linux-update.sh` 通过。路线仓储、runner 和测试文件 Ruff 通过；`main.py` 与部署 Python 文件仍有既有 Ruff 问题，未进行无关整理。
+- GitHub Actions 精确 SHA 构建成功，两份镜像 manifest 均含 `linux/amd64`。生产配置备份 `backups/env-before-route-enable-20260925T1944Z.env` 与修改前 `.env` 的 SHA-256 同为 `84052381bf64d1a324d4ccfdc37384d281ed656e9799ec4144f80b9da5e8a78f`，随后仅将 `SQUEEZE_ROUTE_ENABLED` 设为 `true`。不在仓库保存配置内容。
+- 部署脚本先备份主库 `backups/radar-before-a585ecbaf626-20260925T194526Z.db`，`integrity_check=ok`，容器和主机 SHA-256 均为 `e3e66fa0190d5b60c7f1a6f0e30b9b372f33a868d771f815c3c2bda48616bbf8`；服务器 `git pull --ff-only` 到 `a585ecb`，使用两份同 SHA 预构建镜像 `up -d --no-build --wait`，两容器 healthy。
+- 自约 19:46 UTC 启动至 20:17 UTC，完成约 31 分钟持续观察。S1 在 20:02 完成 20:00 UTC 闭合小时采集，五市场均为 `ready`、各 172 根 K 线和 30 个 OI 样本、`last_error=null`。S2 20:17:52 UTC 仍持续采集，`queue_depth=0`、`storage_failure_count=0`、`dropped_scan_count=0`、`last_error=null`；新路线库迁移标记存在且 `integrity_check=ok`。普通 `opportunity_history` 20:13 UTC 仍新增记录；窗口内后端日志检索共享库锁错误为 0。
+- `/api/health` 为 `ok`，既有交易所状态均 healthy；只读路线接口返回精确双腿、三档固定基础币数量、四向 VWAP、费率周期和成本拆解，来源标为 `research_only_public_rest`。旧 `/api/minute-signals/scan` 为 404，前端 HTTP 200；桌面 1440px 和手机 390px Playwright 检查无页面错误和横向溢出。最终瞬时资源样本：后端 CPU 3.45%、内存 384 MiB/768 MiB，前端 CPU 0%、内存 5.723 MiB/96 MiB；20:09 曾有后端 CPU 119.15% 的瞬时样本，20:13 复测为 10.60%，不把单点值解释为持续平均。
+
+### 19.3 限制与 S3 起点
+
+- 当前 watchlist、route-events 均为空，未自然触发收敛确认或模拟成交；S2 只完成工程与线上稳定性验收，不能据此宣称路线可执行或盈利。公开强平流仍是节流观测，缺失不代表零。
+- 只保留本模块已跟踪文件并推送；`.worktrees/`、`output/`、其他任务交接和权限受限的 pytest 缓存未清理或提交。
+- 按第 7、8、12、13 节继续 S3：建立独立持久化 paper 余额/订单/成交/仓位/现金流，延迟后用新盘口执行 IOC 与部分成交，裸腿限时恢复、逐次实际资金费结算、失败和未成交保留、退出与重启恢复；使用固定参数和精确路线生成前瞻报告。Binance 历史资金费公开响应含结算 `markPrice`；Bybit 历史费率不含结算 mark，若用历史 mark K 线计算金额须明确标为代理。无足够维持保证金参数时标记 `collateral_model_incomplete`。S3 上线后的 14 天与 30 个独立事件未完成前，报告结论只能是“样本不足”。真实下单、借币、转账和自动建卡仍不在范围内。
