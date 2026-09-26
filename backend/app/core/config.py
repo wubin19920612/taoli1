@@ -18,7 +18,9 @@ class Settings:
     funding_poll_interval_seconds: float = 120.0
     funding_research_enabled: bool = False
     squeeze_monitor_enabled: bool = False
-    squeeze_monitor_symbols: str = "LSKUSDT,TUTUSDT,GUSDT"
+    squeeze_monitor_mode: str = "auto"
+    squeeze_monitor_symbols: str = ""
+    squeeze_monitor_exclude_symbols: str = "AKEUSDT,BTRUSDT,GUSDT,LSKUSDT,TUTUSDT"
     squeeze_route_enabled: bool = False
     squeeze_paper_enabled: bool = False
     funding_research_manage_paper_trades: bool = True
@@ -160,8 +162,12 @@ def get_settings() -> Settings:
         funding_poll_interval_seconds=float(os.getenv("FUNDING_POLL_INTERVAL_SECONDS", "120")),
         funding_research_enabled=bool_env("FUNDING_RESEARCH_ENABLED", False),
         squeeze_monitor_enabled=bool_env("SQUEEZE_MONITOR_ENABLED", False),
+        squeeze_monitor_mode=os.getenv("SQUEEZE_MONITOR_MODE", "auto").strip().lower(),
         squeeze_monitor_symbols=os.getenv(
-            "SQUEEZE_MONITOR_SYMBOLS", "LSKUSDT,TUTUSDT,GUSDT"
+            "SQUEEZE_MONITOR_SYMBOLS", ""
+        ).strip(),
+        squeeze_monitor_exclude_symbols=os.getenv(
+            "SQUEEZE_MONITOR_EXCLUDE_SYMBOLS", "AKEUSDT,BTRUSDT,GUSDT,LSKUSDT,TUTUSDT"
         ).strip(),
         squeeze_route_enabled=bool_env("SQUEEZE_ROUTE_ENABLED", False),
         squeeze_paper_enabled=bool_env("SQUEEZE_PAPER_ENABLED", False),

@@ -6,6 +6,7 @@ from typing import Any
 
 import httpx
 
+from .discovery import DiscoveryTicker, screen_tickers
 from .models import HOUR, HourCandle, PositionSample, market_key
 
 
@@ -32,18 +33,30 @@ class BinanceSqueezeProvider:
             return response.json()
         raise RuntimeError("Binance request retry limit reached")
 
-    async def verified_symbols(self, requested: tuple[str, ...]) -> dict[str, dict[str, Any]]:
+    async def verified_symbols(
+        self, requested: tuple[str, ...] | None
+    ) -> dict[str, dict[str, Any]]:
         payload = await self._get("/fapi/v1/exchangeInfo", {})
         rows = payload.get("symbols", []) if isinstance(payload, dict) else []
-        allowed = set(requested)
+        allowed = set(requested) if requested is not None else None
         return {
             row["symbol"]: row for row in rows
             if isinstance(row, dict)
-            and row.get("symbol") in allowed
+            and (allowed is None or row.get("symbol") in allowed)
+            and isinstance(row.get("symbol"), str)
+            and row["symbol"].endswith("USDT")
             and row.get("status") == "TRADING"
             and row.get("contractType") == "PERPETUAL"
             and row.get("quoteAsset") == "USDT"
         }
+
+    async def discover_tickers(
+        self, *, excluded: set[str], limit: int
+    ) -> tuple[list[DiscoveryTicker], int]:
+        metadata, tickers = await asyncio.gather(
+            self.verified_symbols(None), self._get("/fapi/v1/ticker/24hr", {})
+        )
+        return screen_tickers(metadata, tickers, excluded=excluded, limit=limit)
 
     async def fetch_candles(
         self, raw_symbol: str, bucket_at: datetime

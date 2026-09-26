@@ -2581,6 +2581,22 @@ export interface SqueezeWatchEvent {
   updated_at: string;
 }
 
+export interface SqueezeDiscoverySample {
+  raw_symbol: string;
+  market_key?: string;
+  selection_kind?: string;
+  quote_volume_24h?: number;
+  ticker_source_at?: string;
+  ticker_change_24h?: number;
+  return_4h?: number | null;
+  return_24h?: number | null;
+  volume_ratio?: number | null;
+  oi_current_growth?: number | null;
+  account_ratio?: number | null;
+  quality?: string;
+  reasons?: string[];
+}
+
 export interface SqueezeStatus {
   enabled: boolean;
   routes?: {
@@ -2605,6 +2621,17 @@ export interface SqueezeStatus {
   last_bucket_at: string | null;
   last_error: string | null;
   verified_symbols: string[];
+  discovery: {
+    mode: "auto" | "fixed" | "not_started";
+    selected_at: string | null;
+    bucket_at: string | null;
+    rule_version: string | null;
+    eligible_count: number;
+    screened_count: number;
+    stale: boolean;
+    selected: SqueezeDiscoverySample[];
+    screened: SqueezeDiscoverySample[];
+  };
   active_watch_count: number;
   liquidation_coverage: {
     state: string;

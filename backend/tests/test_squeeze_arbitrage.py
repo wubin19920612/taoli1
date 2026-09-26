@@ -12,6 +12,7 @@ from app.core.config import Settings
 from app.db.database import connect_database
 from app.db.schema import initialize_schema
 from app.main import create_app
+from app.services.squeeze_arbitrage.discovery import DiscoveryTicker, screen_tickers
 from app.services.squeeze_arbitrage.features import calculate_watch_features
 from app.services.squeeze_arbitrage.liquidation import parse_force_order
 from app.services.squeeze_arbitrage.models import HOUR, HourCandle, PositionSample, market_key
@@ -171,7 +172,7 @@ async def test_collector_replay_records_one_observation_event() -> None:
         await initialize_schema(db)
         repo = SqueezeRepository(db)
         monitor = SqueezeMonitor(
-            repo, SqueezeMonitorConfig(symbols=("LSKUSDT",)), FakeProvider()
+            repo, SqueezeMonitorConfig(mode="fixed", symbols=("LSKUSDT",)), FakeProvider()
         )
         now = BUCKET + timedelta(minutes=3)
         await monitor.scan_once(now)
@@ -185,6 +186,8 @@ async def test_collector_replay_records_one_observation_event() -> None:
         )
         assert (await cursor.fetchone())["verification_status"] == "verified_for_structure"
         assert len(await repo.list_events(now=now)) == 1
+        cursor = await db.execute("SELECT COUNT(*) AS n FROM squeeze_discovery_runs")
+        assert (await cursor.fetchone())["n"] == 2
     finally:
         await db.close()
 
@@ -224,7 +227,7 @@ async def test_live_scan_uses_response_availability_after_request_started() -> N
         await initialize_schema(db)
         repo = SqueezeRepository(db)
         monitor = SqueezeMonitor(
-            repo, SqueezeMonitorConfig(symbols=("LSKUSDT",)), DelayedProvider()
+            repo, SqueezeMonitorConfig(mode="fixed", symbols=("LSKUSDT",)), DelayedProvider()
         )
         await monitor.scan_once()
         status = await repo.status(enabled=True, now=datetime.now(UTC))
@@ -321,12 +324,187 @@ def test_api_only_never_starts_squeeze_worker_even_when_enabled(monkeypatch) -> 
 
 
 def test_squeeze_config_accepts_single_character_raw_base_and_rejects_aliases() -> None:
-    config = SqueezeMonitorConfig(symbols=("GUSDT", "LSKUSDT"))
+    config = SqueezeMonitorConfig(mode="fixed", symbols=("GUSDT", "LSKUSDT"))
     assert config.symbols == ("GUSDT", "LSKUSDT")
     with pytest.raises(ValueError):
-        SqueezeMonitorConfig(symbols=("G/USDT",))
+        SqueezeMonitorConfig(mode="fixed", symbols=("G/USDT",))
     with pytest.raises(ValueError):
-        SqueezeMonitorConfig(symbols=("LSKUSDT", "LSKUSDT"))
+        SqueezeMonitorConfig(mode="fixed", symbols=("LSKUSDT", "LSKUSDT"))
+
+
+def test_discovery_screen_uses_live_market_metrics_and_excludes_old_samples() -> None:
+    symbols = ("AKEUSDT", "NEWUSDT", "FASTUSDT", "THINUSDT", "BTCUSDT")
+    metadata = {symbol: {"symbol": symbol} for symbol in symbols}
+
+    def ticker(symbol: str, change: str, volume: str) -> dict:
+        return {"symbol": symbol, "priceChangePercent": change,
+                "quoteVolume": volume, "lowPrice": "100", "highPrice": "115",
+                "count": 500,
+                "closeTime": int((BUCKET + timedelta(minutes=2)).timestamp() * 1000)}
+
+    shortlisted, eligible = screen_tickers(metadata, [
+        ticker("AKEUSDT", "12", "5000000"),
+        ticker("NEWUSDT", "11", "5000000"),
+        ticker("FASTUSDT", "31", "5000000"),
+        ticker("THINUSDT", "12", "10000"),
+        ticker("BTCUSDT", "2", "900000000"),
+    ], excluded={"AKEUSDT"}, limit=1, now=BUCKET + timedelta(minutes=3))
+    assert eligible == 2
+    assert [row.raw_symbol for row in shortlisted] == ["NEWUSDT"]
+    stale_rows, _ = screen_tickers(metadata, [ticker("NEWUSDT", "11", "5000000")],
+                                   excluded=set(), limit=1, now=BUCKET + HOUR)
+    assert stale_rows == []
+
+
+@pytest.mark.asyncio
+async def test_binance_discovery_uses_trading_perpetual_metadata_and_full_ticker() -> None:
+    now = datetime.now(UTC)
+    requested: list[str] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requested.append(request.url.path)
+        if request.url.path.endswith("exchangeInfo"):
+            return httpx.Response(200, json={"symbols": [
+                {"symbol": symbol, "quoteAsset": "USDT", "status": status,
+                 "contractType": "PERPETUAL"}
+                for symbol, status in (("NEWUSDT", "TRADING"), ("AKEUSDT", "TRADING"),
+                                       ("HALTEDUSDT", "BREAK"))
+            ]})
+        if request.url.path.endswith("ticker/24hr"):
+            return httpx.Response(200, json=[
+                {"symbol": symbol, "quoteVolume": "5000000", "priceChangePercent": "12",
+                 "highPrice": "115", "lowPrice": "100", "count": 500,
+                 "closeTime": int(now.timestamp() * 1000)}
+                for symbol in ("NEWUSDT", "AKEUSDT", "HALTEDUSDT")
+            ])
+        raise AssertionError(request.url)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        shortlisted, eligible = await BinanceSqueezeProvider(client).discover_tickers(
+            excluded={"AKEUSDT"}, limit=12
+        )
+    assert eligible == 1
+    assert [row.raw_symbol for row in shortlisted] == ["NEWUSDT"]
+    assert set(requested) == {"/fapi/v1/exchangeInfo", "/fapi/v1/ticker/24hr"}
+
+
+def _dynamic_data(symbol: str) -> tuple[list[HourCandle], list[PositionSample]]:
+    key = market_key(symbol)
+    candles = [
+        HourCandle(key, BUCKET - (171 - index) * HOUR,
+                   108 if index >= 168 else 100,
+                   200 if index >= 168 else 100,
+                   BUCKET + timedelta(minutes=1), BUCKET + timedelta(minutes=1))
+        for index in range(172)
+    ]
+    positioning = [
+        PositionSample(key, BUCKET - (24 - index) * HOUR,
+                       103 if index == 24 else 100, "binance_usdm_contract", 1000,
+                       0.95, BUCKET + timedelta(minutes=1), BUCKET + timedelta(minutes=1),
+                       account_ratio_event_time=BUCKET - (24 - index) * HOUR)
+        for index in range(25)
+    ]
+    return candles, positioning
+
+
+@pytest.mark.asyncio
+async def test_auto_discovery_rotates_current_candidates_and_survives_restart() -> None:
+    symbols = tuple(f"NEW{index}USDT" for index in range(6))
+
+    class Provider:
+        async def discover_tickers(self, *, excluded, limit):
+            assert "AKEUSDT" in excluded and "LSKUSDT" in excluded
+            assert limit == 12
+            return ([DiscoveryTicker(symbol, {"symbol": symbol}, 5_000_000, 0.12, 0.15,
+                                     500, BUCKET + timedelta(minutes=2))
+                     for symbol in symbols], len(symbols))
+
+        async def fetch_candles(self, symbol, bucket_at):
+            assert bucket_at == BUCKET
+            return _dynamic_data(symbol)[0]
+
+        async def fetch_positioning(self, symbol, bucket_at):
+            return _dynamic_data(symbol)[1]
+
+        async def aclose(self):
+            pass
+
+    db = await connect_database(":memory:")
+    try:
+        await initialize_schema(db)
+        repo = SqueezeRepository(db)
+        old_candles, old_positioning = fixture_data()
+        old_features = calculate_watch_features(
+            KEY, old_candles, old_positioning, bucket_at=BUCKET,
+            decision_at=BUCKET + timedelta(minutes=3),
+        )
+        assert await repo.save_features(old_features)
+        await repo.record_scan_market(
+            market_key("AKEUSDT"), BUCKET - HOUR, BUCKET - HOUR,
+            candle_count=172, positioning_count=30, result_status="ready",
+        )
+        monitor = SqueezeMonitor(repo, SqueezeMonitorConfig(), Provider())
+        await monitor.scan_once(BUCKET + timedelta(minutes=3))
+        status = await SqueezeRepository(db).status(
+            enabled=True, now=BUCKET + timedelta(minutes=4)
+        )
+        assert status["discovery"]["mode"] == "auto"
+        assert status["discovery"]["eligible_count"] == 6
+        assert status["discovery"]["screened_count"] == 6
+        assert len(status["discovery"]["screened"]) == 6
+        assert len(status["discovery"]["selected"]) == 5
+        assert all(row["selection_kind"] == "early_candidate"
+                   for row in status["discovery"]["selected"])
+        assert status["active_watch_count"] == 0
+        assert await repo.list_events(now=BUCKET + timedelta(minutes=4), active_only=True) == []
+        assert len(await repo.list_events(now=BUCKET + timedelta(minutes=4))) == 1
+        assert len(status["latest_market_scans"]) == 5
+        assert all("AKEUSDT" not in row["market_key"] for row in status["latest_market_scans"])
+        assert len(status["verified_symbols"]) == 5
+        stale = await SqueezeRepository(db).status(
+            enabled=True, now=BUCKET + timedelta(hours=3)
+        )
+        assert stale["discovery"]["stale"]
+        assert stale["verified_symbols"] == []
+        assert stale["latest_market_scans"] == []
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_auto_discovery_failure_never_falls_back_to_fixed_symbols() -> None:
+    class FailingProvider:
+        async def discover_tickers(self, *, excluded, limit):
+            raise httpx.ConnectError("unavailable")
+
+        async def aclose(self):
+            pass
+
+    db = await connect_database(":memory:")
+    try:
+        await initialize_schema(db)
+        repo = SqueezeRepository(db)
+        await repo.save_discovery(
+            bucket_at=BUCKET, selected_at=BUCKET + timedelta(minutes=3),
+            mode="auto", eligible_count=1, screened=[],
+            selected=[{"raw_symbol": "NEWUSDT", "selection_kind": "early_candidate"}],
+        )
+        await repo.set_scan_state(
+            BUCKET + timedelta(minutes=3), bucket_at=BUCKET, symbols=["NEWUSDT"]
+        )
+        monitor = SqueezeMonitor(
+            repo, SqueezeMonitorConfig(symbols=("AKEUSDT", "LSKUSDT")), FailingProvider()
+        )
+        await monitor.scan_once(BUCKET + HOUR + timedelta(minutes=3))
+        status = await repo.status(enabled=True, now=BUCKET + HOUR + timedelta(minutes=3))
+        assert status["discovery"]["stale"]
+        assert status["discovery"]["selected"] == []
+        assert status["discovery"]["screened"] == []
+        assert status["verified_symbols"] == []
+        assert status["latest_market_scans"] == []
+        assert "ConnectError" in status["last_error"]
+    finally:
+        await db.close()
 
 
 @pytest.mark.asyncio

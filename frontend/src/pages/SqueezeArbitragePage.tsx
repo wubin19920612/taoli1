@@ -24,11 +24,11 @@ function time(value: string | null | undefined): string {
   return value ? dayjs.utc(value).utcOffset(8).format("MM-DD HH:mm") : "-";
 }
 
-function pct(value: number | null): string {
+function pct(value: number | null | undefined): string {
   return value == null ? "-" : `${(value * 100).toFixed(2)}%`;
 }
 
-function number(value: number | null): string {
+function number(value: number | null | undefined): string {
   return value == null ? "-" : value.toFixed(2);
 }
 
@@ -36,6 +36,20 @@ const stageLabels: Record<string, { label: string; color: string }> = {
   building: { label: "建仓观察", color: "blue" },
   squeeze_pending: { label: "逼空待确认", color: "orange" },
   tail_risk: { label: "尾部风险", color: "red" }
+};
+
+const screeningReasons: Record<string, string> = {
+  hourly_candle_gap_or_unavailable: "K 线不足或缺口",
+  positioning_endpoint_missing: "OI 样本缺失",
+  positioning_endpoint_stale: "OI 样本过期",
+  open_interest_window_gap: "OI 样本有缺口",
+  account_ratio_missing: "账户比缺失",
+  account_ratio_stale: "账户比过期",
+  four_hour_move_outside_early_range: "4h 涨幅不在早期区间",
+  day_move_outside_early_range: "24h 涨幅不在早期区间",
+  volume_not_accelerating: "量能未放大",
+  raw_oi_not_growing: "原始 OI 未增长",
+  short_crowding_not_evident: "账户比未见空头拥挤"
 };
 
 const columns: ColumnsType<SqueezeWatchEvent> = [
@@ -144,8 +158,9 @@ export function SqueezeArbitragePage() {
       {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} />}
       <Space size="large" wrap style={{ marginBottom: 16 }}>
         <Statistic title="公开数据采集" value={status?.enabled ? "运行中" : "已关闭"} />
+        <Statistic title="当前候选" value={status?.discovery?.selected.length ?? 0} />
         <Statistic title="观察中" value={status?.active_watch_count ?? 0} />
-        <Statistic title="最近完整小时 (北京时间)" value={time(status?.last_bucket_at)} />
+        <Statistic title="候选采样小时 (北京时间)" value={time(status?.discovery?.bucket_at)} />
         <Statistic title="强平公开流" value={status?.liquidation_coverage.state === "throttled_public_stream" ? "节流观测" : "未连接"} />
         <Statistic title="路线采集" value={status?.routes?.enabled ? "运行中" : "已关闭"} />
       </Space>
@@ -160,9 +175,68 @@ export function SqueezeArbitragePage() {
       {!!status?.routes?.storage_failure_count && <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
         路线存储忙锁 {status.routes.storage_failure_count} 次，最近 {time(status.routes.last_storage_error_at)}。
       </Typography.Paragraph>}
-      <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
-        已核验市场：{status?.verified_symbols.join("、") || "-"}。公开强平流仅为节流观测，缺失不能视为零；结构观察不代表可成交机会。
+      {status?.discovery?.stale && <Alert type="warning" showIcon
+        message="候选筛选未完成或结果已过期，当前没有有效观察市场"
+        style={{ marginBottom: 16 }} />}
+      <Typography.Paragraph type="secondary" style={{ marginBottom: 12 }}>
+        {status?.discovery?.mode === "fixed" ? "人工指定市场" : "自动初筛"}：
+        {time(status?.discovery?.selected_at)}；24 小时行情初筛 {status?.discovery?.eligible_count ?? 0} 个，
+        深入核验 {status?.discovery?.screened_count ?? 0} 个。
+        公开强平流仅为节流观测，缺失不能视为零；结构观察不代表可成交机会。
       </Typography.Paragraph>
+      <Typography.Title level={5}>当前异动候选</Typography.Title>
+      <Table
+        rowKey="raw_symbol"
+        size="small"
+        pagination={false}
+        dataSource={status?.discovery?.selected ?? []}
+        scroll={{ x: 870 }}
+        columns={[
+          { title: "原始市场", dataIndex: "market_key", width: 205,
+            render: (value: string | undefined, row) => value || `binance|future|${row.raw_symbol}|` },
+          { title: "类型", dataIndex: "selection_kind", width: 110,
+            render: (value: string) => value === "structure_event" ? <Tag color="orange">结构触发</Tag>
+              : value === "manual_configured" ? <Tag>人工指定</Tag> : <Tag color="blue">早期异动</Tag> },
+          { title: "4h / 24h", key: "returns", width: 135,
+            render: (_, row) => `${pct(row.return_4h)} / ${pct(row.return_24h)}` },
+          { title: "量能", dataIndex: "volume_ratio", width: 90,
+            render: (value: number | null | undefined) => value == null ? "-" : `${number(value)}x` },
+          { title: "原始 OI 24h", dataIndex: "oi_current_growth", width: 115,
+            render: (value: number | null | undefined) => pct(value) },
+          { title: "账户多空比", dataIndex: "account_ratio", width: 105,
+            render: (value: number | null | undefined) => number(value) },
+          { title: "24h 成交额", dataIndex: "quote_volume_24h", width: 105,
+            render: (value: number | undefined) => value == null ? "-" : `${(value / 1_000_000).toFixed(1)}M` }
+        ]}
+        locale={{ emptyText: <Empty description={status?.discovery?.mode === "not_started"
+          ? "候选初筛尚未运行" : "当前无符合早期量价与仓位条件的市场"} /> }}
+        style={{ marginBottom: 16 }}
+      />
+      {status?.discovery?.selected.length === 0 && !!status.discovery.screened.length && <>
+        <Typography.Title level={5}>本轮初筛（未入选）</Typography.Title>
+        <Table
+          rowKey="raw_symbol"
+          size="small"
+          pagination={false}
+          dataSource={status.discovery.screened}
+          scroll={{ x: 760 }}
+          columns={[
+            { title: "原始市场", dataIndex: "market_key", width: 205 },
+            { title: "24h 涨幅", dataIndex: "ticker_change_24h", width: 105,
+              render: (value: number | undefined) => pct(value) },
+            { title: "4h 涨幅", dataIndex: "return_4h", width: 105,
+              render: (value: number | null | undefined) => pct(value) },
+            { title: "量能", dataIndex: "volume_ratio", width: 85,
+              render: (value: number | null | undefined) => value == null ? "-" : `${number(value)}x` },
+            { title: "原始 OI 24h", dataIndex: "oi_current_growth", width: 110,
+              render: (value: number | null | undefined) => pct(value) },
+            { title: "未入选原因", dataIndex: "reasons",
+              render: (value: string[] | undefined) =>
+                (value ?? []).map((reason) => screeningReasons[reason] ?? reason).join("、") || "-" }
+          ]}
+          style={{ marginBottom: 16 }}
+        />
+      </>}
       <Typography.Title level={5}>数据覆盖</Typography.Title>
       <Table
         rowKey="market_key"
@@ -174,7 +248,7 @@ export function SqueezeArbitragePage() {
           { title: "原始市场", dataIndex: "market_key", width: 190 },
           { title: "小时", dataIndex: "bucket_at", width: 100, render: (value: string) => time(value) },
           { title: "K线 / OI样本", key: "counts", width: 115, render: (_, row) => `${row.candle_count} / ${row.positioning_count}` },
-          { title: "质量", dataIndex: "result_status", width: 125, render: (value: string) => <Tag color={value === "ready" ? "green" : "orange"}>{value}</Tag> },
+          { title: "数据质量", dataIndex: "result_status", width: 125, render: (value: string) => <Tag color={value === "ready" ? "green" : "orange"}>{value === "ready" ? "完整" : value}</Tag> },
           { title: "缺口", dataIndex: "error", render: (value: string | null) => value || "-" }
         ]}
         locale={{ emptyText: <Empty description="暂无采集记录" /> }}

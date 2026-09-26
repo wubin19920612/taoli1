@@ -75,6 +75,15 @@ async def initialize_squeeze_schema(db: aiosqlite.Connection) -> None:
           last_success_at TEXT, last_bucket_at TEXT, last_error TEXT,
           verified_symbols_json TEXT NOT NULL DEFAULT '[]'
         );
+        CREATE TABLE IF NOT EXISTS squeeze_discovery_runs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          bucket_at TEXT NOT NULL, selected_at TEXT NOT NULL, mode TEXT NOT NULL,
+          rule_version TEXT NOT NULL, eligible_count INTEGER NOT NULL,
+          screened_count INTEGER NOT NULL, selected_json TEXT NOT NULL,
+          screened_json TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_squeeze_discovery_recent
+          ON squeeze_discovery_runs(selected_at DESC);
     """)
     cursor = await db.execute("PRAGMA table_info(squeeze_positioning_samples)")
     columns = {row["name"] for row in await cursor.fetchall()}
@@ -347,15 +356,71 @@ class SqueezeRepository:
         )
         await self.db.commit()
 
+    async def save_discovery(
+        self, *, bucket_at: datetime, selected_at: datetime, mode: str,
+        eligible_count: int, screened: list[dict[str, Any]],
+        selected: list[dict[str, Any]],
+    ) -> None:
+        from .discovery import DISCOVERY_RULE_VERSION
+
+        await self.db.execute(
+            """INSERT INTO squeeze_discovery_runs
+               (bucket_at,selected_at,mode,rule_version,eligible_count,screened_count,
+                selected_json,screened_json) VALUES (?,?,?,?,?,?,?,?)""",
+            (utc_iso(bucket_at), utc_iso(selected_at), mode, DISCOVERY_RULE_VERSION,
+             eligible_count, len(screened), json.dumps(selected, separators=(",", ":")),
+             json.dumps(screened, separators=(",", ":"))),
+        )
+        await self.db.commit()
+
+    async def current_discovery(self, now: datetime) -> dict[str, Any]:
+        cursor = await self.db.execute(
+            "SELECT * FROM squeeze_discovery_runs ORDER BY selected_at DESC,id DESC LIMIT 1"
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return {
+                "mode": "not_started", "selected_at": None, "bucket_at": None,
+                "rule_version": None, "eligible_count": 0, "screened_count": 0,
+                "selected": [], "screened": [], "stale": False,
+            }
+        cursor = await self.db.execute(
+            "SELECT last_attempt_at,last_error FROM squeeze_scan_state WHERE id=1"
+        )
+        scan = await cursor.fetchone()
+        failed_refresh = bool(
+            scan and scan["last_error"] and scan["last_attempt_at"]
+            and scan["last_attempt_at"] > row["selected_at"]
+        )
+        stale = now - datetime.fromisoformat(row["selected_at"]) > timedelta(hours=2)
+        stale = stale or failed_refresh
+        return {
+            "mode": row["mode"], "selected_at": row["selected_at"],
+            "bucket_at": row["bucket_at"], "rule_version": row["rule_version"],
+            "eligible_count": row["eligible_count"],
+            "screened_count": row["screened_count"],
+            "selected": [] if stale else json.loads(row["selected_json"]),
+            "screened": [] if stale else json.loads(row["screened_json"]),
+            "stale": stale,
+        }
+
     async def status(self, *, enabled: bool, now: datetime) -> dict[str, Any]:
+        discovery = await self.current_discovery(now)
+        selected_symbols = [row["raw_symbol"] for row in discovery["selected"]]
+        selected_keys = [f"binance|future|{symbol}|" for symbol in selected_symbols]
         cursor = await self.db.execute("SELECT * FROM squeeze_scan_state WHERE id=1")
         scan = await cursor.fetchone()
         cursor = await self.db.execute("SELECT * FROM squeeze_liquidation_coverage WHERE id=1")
         coverage = await cursor.fetchone()
-        cursor = await self.db.execute(
-            "SELECT COUNT(*) AS n FROM squeeze_watch_events WHERE expires_at>?", (utc_iso(now),)
-        )
-        active = (await cursor.fetchone())["n"]
+        active = 0
+        if selected_keys:
+            placeholders = ",".join("?" for _ in selected_keys)
+            cursor = await self.db.execute(
+                f"SELECT COUNT(*) AS n FROM squeeze_watch_events "
+                f"WHERE expires_at>? AND market_key IN ({placeholders})",
+                (utc_iso(now), *selected_keys),
+            )
+            active = (await cursor.fetchone())["n"]
         cursor = await self.db.execute(
             """SELECT side,COUNT(*) AS updates,SUM(observed_liquidation_notional) AS notional
                FROM squeeze_liquidation_updates WHERE event_time>=? GROUP BY side""",
@@ -369,14 +434,19 @@ class SqueezeRepository:
             "SELECT COUNT(*) AS n FROM squeeze_liquidation_gaps WHERE ended_at IS NULL"
         )
         open_gaps = (await cursor.fetchone())["n"]
-        cursor = await self.db.execute(
-            """SELECT market_key,bucket_at,requested_from,requested_to,received_at,
-                      candle_count,positioning_count,result_status,error
-               FROM squeeze_scan_runs WHERE (market_key,bucket_at) IN
-               (SELECT market_key,MAX(bucket_at) FROM squeeze_scan_runs GROUP BY market_key)
-               ORDER BY market_key LIMIT 5"""
-        )
-        latest_scans = [dict(row) for row in await cursor.fetchall()]
+        latest_scans = []
+        if selected_keys:
+            placeholders = ",".join("?" for _ in selected_keys)
+            cursor = await self.db.execute(
+                f"""SELECT market_key,bucket_at,requested_from,requested_to,received_at,
+                           candle_count,positioning_count,result_status,error
+                    FROM squeeze_scan_runs AS run
+                    WHERE market_key IN ({placeholders}) AND bucket_at=(
+                      SELECT MAX(bucket_at) FROM squeeze_scan_runs WHERE market_key=run.market_key
+                    ) ORDER BY market_key LIMIT 5""",
+                selected_keys,
+            )
+            latest_scans = [dict(row) for row in await cursor.fetchall()]
         return {
             "enabled": enabled,
             "rule_version": "squeeze-watch-s1-v1",
@@ -384,7 +454,8 @@ class SqueezeRepository:
             "last_success_at": scan["last_success_at"] if scan else None,
             "last_bucket_at": scan["last_bucket_at"] if scan else None,
             "last_error": scan["last_error"] if scan else None,
-            "verified_symbols": json.loads(scan["verified_symbols_json"]) if scan else [],
+            "verified_symbols": selected_symbols,
+            "discovery": discovery,
             "active_watch_count": active,
             "liquidation_coverage": {
                 "state": coverage["state"] if coverage else "not_started",
@@ -402,8 +473,17 @@ class SqueezeRepository:
         self, *, now: datetime, active_only: bool = False,
         limit: int = 50, offset: int = 0,
     ) -> list[dict[str, Any]]:
-        where = "WHERE expires_at>?" if active_only else ""
-        params = (utc_iso(now), limit, offset) if active_only else (limit, offset)
+        if active_only:
+            discovery = await self.current_discovery(now)
+            keys = [f"binance|future|{row['raw_symbol']}|" for row in discovery["selected"]]
+            if not keys:
+                return []
+            placeholders = ",".join("?" for _ in keys)
+            where = f"WHERE expires_at>? AND market_key IN ({placeholders})"
+            params = (utc_iso(now), *keys, limit, offset)
+        else:
+            where = ""
+            params = (limit, offset)
         cursor = await self.db.execute(
             f"""SELECT * FROM squeeze_watch_events {where}
                 ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?""", params,
@@ -428,6 +508,7 @@ class SqueezeRepository:
                 ("squeeze_liquidation_updates", "event_time", 7),
                 ("squeeze_feature_results", "bucket_at", 14),
                 ("squeeze_scan_runs", "bucket_at", 14),
+                ("squeeze_discovery_runs", "bucket_at", 14),
             ):
                 await self.db.execute(
                     f"DELETE FROM {table} WHERE {column}<?",

@@ -876,8 +876,18 @@ def create_app(
                 for symbol in app_settings.squeeze_monitor_symbols.split(",")
                 if symbol.strip()
             )
+            excluded_symbols = tuple(
+                symbol.strip().upper()
+                for symbol in app_settings.squeeze_monitor_exclude_symbols.split(",")
+                if symbol.strip()
+            )
             app.state.squeeze_monitor = SqueezeMonitor(
-                app.state.squeeze_repo, SqueezeMonitorConfig(symbols=symbols)
+                app.state.squeeze_repo,
+                SqueezeMonitorConfig(
+                    mode=app_settings.squeeze_monitor_mode,
+                    symbols=symbols,
+                    excluded_symbols=excluded_symbols,
+                ),
             )
             app.state.squeeze_monitor_active = True
             _start_background_task(
