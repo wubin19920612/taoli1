@@ -498,3 +498,8 @@ S3报告：净收益/交易、总资金收益率、最大回撤、单腿失败�
 - 强平覆盖仍是 `throttled_public_stream`、`public_stream_complete=false`、`open_gaps=0`。S2 固定 Bybit/Binance LSK 双永续路线仍为 `research_only`，队列、存储失败、丢样均为 0；S3 worker 继续推进且无覆盖缺口，报告 0 个独立事件、`sample_insufficient`、`profitability_conclusion=null`。旧路线的固定研究样本没有因 S1 候选轮换而变成当前 S1 推荐。
 - 生产页面通过实际 HTTP 地址的 Playwright 桌面 1440px、手机 390px 检查：均显示当前候选、无旧 AKE 行、无脚本错误，`body.scrollWidth` 等于视口宽度；截图留在本机 Codex 可视化目录 `squeeze-current-{desktop,mobile}.png`。一次并行请求 `/watchlist` 在 5 秒内超时，随后复测该接口 HTTP 200/约 2 毫秒、`/status` HTTP 200/约 4 毫秒；需继续观察是否重复。后端日志中另有 Gate 公告分类抓取 traceback，属于公告模块，未见本轮 squeeze 采集、路线或数据库锁错误。
 - 这仅证明动态候选首轮采集与展示正常；筛选参数没有前瞻盈利验证，尚无自然结构事件或 paper 成交，S3 的 14 天/30 独立事件门槛也未达到。真实下单、借币、转账和自动建卡仍不在授权范围。
+
+### 21.4 下一闭合小时的轮换复核
+
+- 2026-09-26 07:05:56 UTC，S1 正常完成 07:00 UTC 闭合小时扫描：24h ticker 基础条件通过 207 个、深入核验 12 个、入选 0 个，`last_error=null`。上一小时的 SPK、REZ 在本小时因 4h 动量或账户比不再满足早期条件而退出当前名单；本轮初筛的拒绝原因仍在 `discovery.screened`，并未用旧五币或上一小时的候选补位。`/watchlist=[]`，历史筛选记录按每次运行追加保留。
+- 实际生产页面的第二轮 Playwright 桌面 1440px、手机 390px 均显示“本轮初筛（未入选）”和拒绝原因，旧 AKE 不出现、无脚本错误、页面宽度等于视口宽度；截图 `squeeze-empty-{desktop,mobile}.png` 留在本机 Codex 可视化目录。07:09 UTC 左右 S2 路线与 S3 paper 游标仍继续推进；这次 0 候选是条件筛选结果，不是采集关闭或采集失败。
