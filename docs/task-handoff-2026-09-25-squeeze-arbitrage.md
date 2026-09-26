@@ -429,3 +429,45 @@ S3报告：净收益/交易、总资金收益率、最大回撤、单腿失败�
 - 当前 watchlist、route-events 均为空，未自然触发收敛确认或模拟成交；S2 只完成工程与线上稳定性验收，不能据此宣称路线可执行或盈利。公开强平流仍是节流观测，缺失不代表零。
 - 只保留本模块已跟踪文件并推送；`.worktrees/`、`output/`、其他任务交接和权限受限的 pytest 缓存未清理或提交。
 - 按第 7、8、12、13 节继续 S3：建立独立持久化 paper 余额/订单/成交/仓位/现金流，延迟后用新盘口执行 IOC 与部分成交，裸腿限时恢复、逐次实际资金费结算、失败和未成交保留、退出与重启恢复；使用固定参数和精确路线生成前瞻报告。Binance 历史资金费公开响应含结算 `markPrice`；Bybit 历史费率不含结算 mark，若用历史 mark K 线计算金额须明确标为代理。无足够维持保证金参数时标记 `collateral_model_incomplete`。S3 上线后的 14 天与 30 个独立事件未完成前，报告结论只能是“样本不足”。真实下单、借币、转账和自动建卡仍不在范围内。
+
+## 20. S3 前瞻模拟账本与线上交付续记（2026-09-26，北京时间）
+
+### 20.1 范围、基线与代码
+
+- 本轮继续“价差与资金费率告警”模块。分支 `codex/frontend-localization-polish`；接续时 S1/S2 已交付，生产基线 `a585ecbaf626e252e87b214653777d7b69d3deaa`，本地 S3 初稿未提交。S3 业务提交 `a0f4a2c3461d24e36f3c2cc2fa558314278cc618` 和连续覆盖修复提交 `808f5b0f77aeba26bac899077ac4245d54947337` 已推送；其他任务未跟踪内容未暂存。
+- `paper_models.py`、`paper_engine.py`：冻结 `squeeze-paper-s3-v1` 参数，固定 Binance/Bybit 精确 LSKUSDT 双永续研究路线；两所各 10,000 USDT 模拟账户、100 USDT 单腿目标名义、500 ms 延迟、独立新盘口序列、可见深度 IOC/部分成交、保守 taker 费、裸腿恢复与未决状态、30 分钟减半/2 小时复核退出/6 小时最长持仓。账户不跨所划转，模拟占用按 1 倍名义计；没有可靠维持保证金分层，始终标记 `collateral_model_incomplete`。
+- `paper_repository.py`、`paper_runner.py`：余额、完整订单/成交/现金流、交易与事件游标写入独立 `radar-squeeze-route.db`，单次快照事务提交并按事件 ID、盘口时间和订单/资金费 ID 去重；旧版 paper 表增量迁移。worker 只扫描活跃或仍有资金费缺口的交易。路线盘口停更时仍用公开历史核对资金费，不推进盘口游标；超时无盘口的敞口保留为未决。连续观察起点与覆盖断档次数持久化，采集或 worker 间断超过 15 秒后，恢复时重新计算 14 天窗口。
+- `paper_funding.py`、`paper_report.py`：Binance 用公开历史结算记录内实际 `markPrice`，Bybit 用结算后已闭合的一分钟 mark K 线收盘代理且显式标记。缺失结算不补零，已平仓但资金费未齐的交易不进入已结清收益。报告保留全量失败/未成交事件和成本、每档容量、按路线分组、未决敞口与保守压力估计；连续 14 天且本窗口至少 30 个独立事件前固定为 `sample_insufficient`，即使达到门槛也只显示“可复核”，不自动给盈利或实盘结论。
+- `SQUEEZE_PAPER_ENABLED` 默认关闭，只有常规采集入口显式启用才启动 worker；API-only 不启动。`GET /api/squeeze-arbitrage/paper/status`、`/positions`、`/trades`、`/report` 与原 status 内 paper 段均只读并对列表设上限。`SqueezePaperView.tsx` 将模拟账本、结算来源、风险和样本门槛接入现有页面。双永续路线无借币费用；本阶段没有任何真实下单、借币、转账、通知或自动建卡调用。
+
+### 20.2 本地验证与首轮线上证据
+
+- 前瞻执行、步长/倍率、部分成交与裸腿恢复、资金费实值/代理、缺口重试、断流期间结算、重启幂等、旧表迁移、连续观察门槛、报告和 API-only 的假盘口/假时钟测试通过。共享后端回归 189 项通过；连续覆盖修复后的 S1/S2/S3 定向回归 47 项通过，最后一次结算连续性补丁的 paper 单测 15 项通过。全量前端 22 文件、194 项通过；相关视图测试、类型检查与生产构建通过。S3 新增文件及路线/API 定向 Ruff 检查通过；`main.py` 仍有既有 Ruff 项，未扩大整理。
+- 首轮业务镜像 `a0f4a2c` 的 GitHub Actions 构建成功，两份 manifest 均含 `linux/amd64`。服务器修改前配置备份为 `backups/env-before-paper-enable-20260925T213324Z.env`，备份与原 `.env` SHA-256 均为 `d73019863ccfe95bc660a1319be862b62f783e1af3429b73825fba21f6fede0d`；仅新增 `SQUEEZE_PAPER_ENABLED=true`，S1/S2 开关保持 true。配置内容与凭据未写入仓库。
+- 首轮脚本备份主库 `backups/radar-before-a0f4a2c3461d-20260925T213449Z.db`，`integrity_check=ok`、容器/主机 SHA-256 `ad0dcf9f20c39bce4603a8ec502695cefcba03ec59786e1c2f8e5db873299781`；路线库 `backups/squeeze-route-before-a0f4a2c3461d-20260925T213449Z.db`，`integrity_check=ok`、SHA-256 `4e7a1be8de6a17c8ca2a6c214acc6134148346599859ed661cbe6c65bce486fe`。`git pull --ff-only` 到该完整 SHA、两份预构建镜像 `up -d --no-build --wait` 后均 healthy；脚本按既有策略清理一份过期的自动主库备份，其余备份保留。
+- 21:37 UTC 首轮实际接口：`/api/health=ok`，S1 五市场最近完整小时为 21:00 UTC，均继续采样；S2 路线采集 enabled，`queue_depth=0`、忙锁/丢样计数为 0、`last_error=null`，精确腿 `bybit|future|LSKUSDT|` / `binance|future|LSKUSDT|` 恒为 `research_only`。S3 worker enabled 且游标推进，两账户初始余额各 10,000 USDT，持仓/交易均为空；报告 0 个独立事件、`sample_insufficient`、`profitability_conclusion=null`。旧 `/api/minute-signals/scan` 保持 404，前端 HTTP 200；近 10 分钟纸面 worker/数据库锁错误日志计数为 0。
+- Playwright 对生产桌面 1440px 和手机 390px 打开“模拟账本”，确认显示“样本不足”、无页面异常或页面级横向溢出。手机先用现有“隐藏关注浮窗”按钮收起全局浮窗，之后 tab 可点击。截图及验证脚本位于未跟踪 `output/squeeze-s3-production-{desktop,mobile}.png`、`output/verify-squeeze-s3-production.mjs`，未提交。
+
+### 20.3 待完成的前瞻观察与边界
+
+- 尚无自然确认的路线事件、模拟填单或真实资金费跨仓结算，不能声称策略盈利、容量可实盘执行、保证金风险已通过或 14 天/30 事件验收已完成。公开 REST 盘口仅为研究来源，Bybit 历史 mark 为代理。`collateral_model_incomplete` 不会因代码部署消失。
+- 后续持续看 paper/route status 的游标、连续覆盖起点、断档、丢样、资金费缺口和未决敞口；达到连续 14 天且同窗口 30 个独立事件后，人工复核净收益、双账户资金和压力场景。S4 真实执行需另开任务并由用户明确指定账户、资产白名单、额度与损失预算，本文不提供真实交易授权。
+- 其他任务的 `.worktrees/`、`output/` 既有产物、其他交接/探测脚本及权限受限 pytest 缓存均保留。S3 的本地临时 pytest 目录和上述截图/验证脚本也未纳入提交。后续业务修复与部署见 20.5 节。
+
+### 20.4 808f5b0 镜像部署与早期验证
+
+- 连续覆盖修复 `808f5b0f77aeba26bac899077ac4245d54947337` 的 GitHub Actions 构建成功，两份镜像 manifest 均含 `linux/amd64`。再次运行现有部署脚本，主库备份 `backups/radar-before-808f5b0f77ae-20260925T215129Z.db` 的 `integrity_check=ok`、容器/主机 SHA-256 `2142d1bc054335420fb27c6c39d46ad43cfd64f3e4b25c55b7896dacc55ca90e`；路线库备份 `backups/squeeze-route-before-808f5b0f77ae-20260925T215129Z.db` 的 `integrity_check=ok`、SHA-256 `81c47c62460ff22b1574d3f80bf395e35084bb9ed981b0b4cbe27f51d2cf001a`。服务器 `git pull --ff-only` 到该完整 SHA，用两份同 SHA 镜像 `up -d --no-build --wait`，后端、前端均 healthy。生产 `.env` 未再次修改。
+- 21:54 UTC 路线库升级后的 `PRAGMA integrity_check=ok`；既有 paper run 保留原 `started_at`，迁移所得 `continuous_started_at` 为 21:36:13 UTC，`coverage_gap_count=0`、`coverage_gap_open=false`。808f5b0 镜像的 `/api/health=ok`，paper status、positions、trades、report 及路线接口正常；paper 游标和路线采集时点继续前进，持仓/交易仍为 0，报告仍为 `sample_insufficient`、`profitability_conclusion=null`。桌面/手机 Playwright 再验均无页面错误或页面级横向溢出。
+- 该镜像启动约 1 分钟的瞬时资源样本：后端 180.6 MiB/768 MiB、前端 3.414 MiB/96 MiB；稍后样本为后端 356 MiB/768 MiB、前端 5 MiB/96 MiB。一次聚合 status 在 12 秒请求限时内未返回，随即复测为 HTTP 200、约 0.54 秒；需继续观察延迟，而不能把单次成功视为持续性能保证。
+- 21:52:50 UTC 主库 `HistoryRecorder._prune` 的既有 `VACUUM` 路径出现一次 `cannot VACUUM - SQL statements in progress`，来自普通 collector 的历史清理，不是 S3 路线库写入。普通 `opportunity_history` 最新时间随后从 21:54:56 增至 21:56:57 UTC；paper 失败和 `database is locked` 日志匹配为 0。这条主库清理异常应在独立运维/历史模块任务中排查，若后续重复则优先保障普通行情写入。
+
+### 20.5 连续窗口可信度修复与最终部署
+
+- 在交付复核中发现：若 worker 停止，原报告只按日历时间和持久化 `coverage_gap_open` 判定，停机期间可能继续累积 14 天；旧 paper 表迁移把没有断档记录的旧 `started_at` 当作连续起点。这两种情况都可能在将来误报 `ready_for_review`。修复提交 `7827a814999311ff57fa1f7d63fbbb668c116413` 已推送：报告还要求 `last_success_at` 距查询时间为 0 至 15 秒；新增一次性 `coverage_tracking_version=1` 迁移，将既有 run 的连续起点重置到首次具备完整追踪的升级时点，并保留原始 `started_at`、余额、事件游标及交易。重复初始化不重复重置。
+- 修复后的纸面账本 18 项、S1/S2/S3 组合 48 项、共享 API/仓储/价差回归 194 项全部通过；共享回归仅有既有 `datetime.utcnow()` 弃用警告。三个修改文件的 Ruff 与 `git diff --check` 通过。前端源代码未变，上轮全量前端 22 文件、194 项与生产构建通过；该 SHA 的 GitHub Actions backend/frontend 两项构建均成功，两份 manifest 都含 `linux/amd64`。
+- 再次运行 `deploy/linux-update.sh`：主库备份 `backups/radar-before-7827a8149993-20260925T222505Z.db` 的 `integrity_check=ok`，容器/主机 SHA-256 为 `9c314f20533989eda46fcbce8edc8907c5e937cd4fcfa7867402a7ec0062767c`；路线库备份 `backups/squeeze-route-before-7827a8149993-20260925T222505Z.db` 的 `integrity_check=ok`，SHA-256 为 `cd9bc316cd5b4e57e8abc630661ae1598ae816f64d9fd92fd436f669dc29ed02`。服务器 `git pull --ff-only` 至该完整 SHA，以两份同 SHA 预构建镜像 `up -d --no-build --wait`，两容器 healthy；生产配置未改。脚本按既有保留策略自动删除较旧的 `radar-before-a585ecbaf626-20260925T194526Z.db`，保留本轮和 808f5b0、a0f4a2c 的主库备份及三份路线库备份。
+- 升级后路线库只读 `PRAGMA integrity_check=ok`、`coverage_tracking_version=1`。paper run 原 `started_at=2026-09-25T21:36:13Z` 保留，可信连续窗口改从 `2026-09-25T22:26:24Z` 起算，`coverage_gap_count=0`、`coverage_gap_open=false`。`/api/health=ok`，22:31 UTC 路线和 paper 游标继续推进，路线队列、存储失败、丢样均为 0；两模拟账户各 10,000 USDT，暂无交易/持仓。报告为 0 个独立事件、`sample_insufficient`、`profitability_conclusion=null`，普通 `opportunity_history` 已写入到 22:30 UTC。
+- 新镜像通过只读 Playwright 复核：桌面 1440px、手机 390px 均打开模拟账本并显示“样本不足”，无页面错误或页面级横向溢出；截图仍存于未跟踪 `output/squeeze-s3-production-{desktop,mobile}.png`，未纳入 Git。
+- 自约 22:26 UTC 启动至次日 01:37 UTC，完成约 3 小时 11 分钟运行观察，两容器保持同一完整 SHA 且 healthy。S1 已完成 01:00 UTC 闭合小时：五个精确 Binance 原始市场均为 `ready`、各 172 根 K 线及 30 个 OI 样本、`last_error=null`。公开强平流仍标记 `throttled_public_stream` 且 `public_stream_complete=false`，没有目标市场消息不能解释为零强平。
+- 01:36 UTC S2 路线与 S3 paper 游标仍贴近当前时间：路线 `queue_depth=0`、`storage_failure_count=0`、`dropped_scan_count=0`、`last_error=null`，精确 Bybit/Binance LSK 双永续路线仍为 `research_only`；paper `coverage_gap_count=0`、`coverage_gap_open=false`、`last_error=null`，两个账户仍各 10,000 USDT。尚无自然确认事件、模拟成交或持仓，报告仍为 `sample_insufficient`、`profitability_conclusion=null`，14 天/30 事件的前瞻评审尚未发生。
+- `/api/health=ok`、前端页面 HTTP 200，旧 `/api/minute-signals/scan` 仍为 404；普通 `opportunity_history` 至少写入到 01:35:31 UTC。本镜像自启动以来的日志检索未发现 `squeeze paper monitor failed`、`squeeze route scan failed`、`database is locked` 或 `cannot VACUUM`；先前 808f5b0 镜像发生的一次主库 `VACUUM` 异常仍保留在 20.4 节作为待关注历史问题。01:37 UTC 瞬时资源样本为后端 386.2 MiB/768 MiB、前端 5.645 MiB/96 MiB；CPU 瞬时 6.24%/0%，不能视为观察窗口平均值。
