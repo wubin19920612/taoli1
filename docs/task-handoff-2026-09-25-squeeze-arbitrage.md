@@ -471,3 +471,30 @@ S3报告：净收益/交易、总资金收益率、最大回撤、单腿失败�
 - 自约 22:26 UTC 启动至次日 01:37 UTC，完成约 3 小时 11 分钟运行观察，两容器保持同一完整 SHA 且 healthy。S1 已完成 01:00 UTC 闭合小时：五个精确 Binance 原始市场均为 `ready`、各 172 根 K 线及 30 个 OI 样本、`last_error=null`。公开强平流仍标记 `throttled_public_stream` 且 `public_stream_complete=false`，没有目标市场消息不能解释为零强平。
 - 01:36 UTC S2 路线与 S3 paper 游标仍贴近当前时间：路线 `queue_depth=0`、`storage_failure_count=0`、`dropped_scan_count=0`、`last_error=null`，精确 Bybit/Binance LSK 双永续路线仍为 `research_only`；paper `coverage_gap_count=0`、`coverage_gap_open=false`、`last_error=null`，两个账户仍各 10,000 USDT。尚无自然确认事件、模拟成交或持仓，报告仍为 `sample_insufficient`、`profitability_conclusion=null`，14 天/30 事件的前瞻评审尚未发生。
 - `/api/health=ok`、前端页面 HTTP 200，旧 `/api/minute-signals/scan` 仍为 404；普通 `opportunity_history` 至少写入到 01:35:31 UTC。本镜像自启动以来的日志检索未发现 `squeeze paper monitor failed`、`squeeze route scan failed`、`database is locked` 或 `cannot VACUUM`；先前 808f5b0 镜像发生的一次主库 `VACUUM` 异常仍保留在 20.4 节作为待关注历史问题。01:37 UTC 瞬时资源样本为后端 386.2 MiB/768 MiB、前端 5.645 MiB/96 MiB；CPU 瞬时 6.24%/0%，不能视为观察窗口平均值。
+
+## 21. S1 当前候选发现修正（2026-09-26，北京时间）
+
+### 21.1 起因、范围与交付代码
+
+- 用户指出 S1“数据覆盖”仍为 AKE、BTR、G、LSK、TUT 五个历史样本，明确要求寻找当前可能异动的市场。生产 API 在改动前确实持续采这五个原始市场；`ready` 仅表示历史输入完整，不能解释为当前机会。
+- 本轮仍属“价差与资金费率告警”模块，仅更新 S1 候选发现、观察池展示和审计。分支 `codex/frontend-localization-polish`，起点 `48528517299b94575d21d42b7a63a52afbe36acb`；业务提交 `fea864b9347d7df1bf4b520d9366cb547a555c03` 已推送。S2/S3 的固定 LSK 双永续研究路线与前瞻 paper 样本没有被候选轮换改写。
+- `discovery.py`、`provider.py`：默认自动模式每个已闭合小时用 Binance USD-M `exchangeInfo` 与全市场 24h ticker 初筛。仅接受可交易线性 USDT 永续和不超过 5 分钟的 ticker；初筛范围为 24h 涨幅 2%—35%、成交额 100 万—2.5 亿 USDT、24h 价格区间 >=6%、交易数 >=300。按接近适度日涨幅排序，只深入查询最多 12 个原始市场。默认排除截图中的五个旧市场。
+- `runner.py`：对最多 12 个初筛市场各查询 172 根已闭合小时 K 线、30 个原始 OI 与账户比样本；只有数据质量 `ready` 且 4h 涨幅 1%—15%、24h 涨幅 3%—35%、量能比 >=1.5、原始 OI 24h 增长 >=1%、账户比 <=1.1 的市场进入早期候选。满足原 S1 严格结构事件条件的市场也可进入候选。按量能、原始 OI、近期涨幅与账户比排序，最多保留 5 个；不满足时允许 0 个，不补旧币。正常每小时最多 2 次全市场请求加 36 次逐市场请求；429 重试仍按 provider 既有限额。
+- `repository.py`：每次筛选追加保存规则版本、来源时间、入选指标和最多 12 个拒绝原因；API `/api/squeeze-arbitrage/status` 的 `discovery` 返回当前候选及初筛样本。超过 2 小时或后续刷新失败，当前名单失效。页面“数据覆盖”和“观察池”只显示有效入选市场，旧事件仍留在历史。生产旧 `.env` 中的 `SQUEEZE_MONITOR_SYMBOLS` 只有显式设置 `SQUEEZE_MONITOR_MODE=fixed` 才会启用；默认 `auto` 使用上述排除名单。
+- 页面分开展示当前异动候选、没有入选时的本轮初筛样本及原因、数据覆盖与正式结构事件。早期候选不是可成交路线，也不构成下单、借币、转账或自动建卡授权；公开强平 `!forceOrder@arr` 仍是节流辅助观测。
+
+### 21.2 验证与上线前状态
+
+- 后端全量 844 项通过；追加空候选诊断后，S1/S2/S3/API 133 项通过；最后追加筛选快照审计后，S1/S2/S3 52 项通过。Ruff 与 `git diff --check` 通过。前端全量 23 文件、195 项通过，最后定向 3 文件、4 项与生产构建通过。已有 `datetime.utcnow()` 弃用警告未并入本模块处理。
+- 生产改动前版本 `7827a814999311ff57fa1f7d63fbbb668c116413`，两容器 healthy，S1 的五个旧样本仍为最近覆盖；目标业务镜像与实际候选的发布证据见 21.3 节。上线前只读 Binance ticker 初筛可见 WAXP、JOE、REZ、PROM、AVNT、MAGMA 等新市场，但它们当时仅是行情初筛，并未验证结构或盈利。
+- 本地其他任务的 `.worktrees/`、`output/`、未跟踪交接/探测文件与权限受限 pytest 缓存原样保留；本轮新增的 `backend/.pytest_squeeze_dynamic_20260926r{1,2,3}/` 也未提交。线上仍需观察实际候选数量、API 错误、请求资源、两库与 S2/S3 持续状态；当前阈值是工程初值，不能当成已验证的策略收益参数。
+
+### 21.3 预构建镜像、备份、部署与真实候选
+
+- GitHub Actions 运行 `36224728072` 的 backend/frontend 两项矩阵作业均 `success`。两份 `sha-fea864b9347d7df1bf4b520d9366cb547a555c03` 镜像 manifest 均包含 `linux/amd64`；后端 index digest `sha256:0e2dc95eb3015812d4dcc9460adb8c6dc0d3d87c9852203c3b440a5c85bfe516`，前端 `sha256:618373430a349dc83ec0485cec9c24bfa44fa45f779e5f9af288681de4bcd051`。
+- 使用 `deploy/linux-update.sh` 先备份主库 `backups/radar-before-fea864b9347d-20260926T064934Z.db`，`integrity_check=ok`，容器/主机 SHA-256 一致，为 `855f6b073492402d611966fd8e1eb991de0cfe26a6ad7a6ab25995caf72c3432`；路线库备份 `backups/squeeze-route-before-fea864b9347d-20260926T064934Z.db`，`integrity_check=ok`，一致的 SHA-256 为 `db5041f8f78bdd1a8651c1090a1b62e55ee24f1f98a1a7f08635de4bae2a094b`。脚本按既有保留规则删去两库各一份较早的自动备份；未动手工备份。
+- 服务器从 `7827a81` 以 `git pull --ff-only` 快进到完整业务 SHA，拉取两份同 SHA 的预构建镜像，以 `docker compose up -d --no-build --wait` 启动；后端、前端均 healthy。部署后 `/api/health=ok`、前端 HTTP 200、旧 `/api/minute-signals/scan` 为 404；一次资源快照为后端约 358.6 MiB/768 MiB、前端约 4.5 MiB/96 MiB，后端 CPU 瞬时约 34%，不代表持续平均。
+- S1 启动后首次自动筛选于 2026-09-26 06:50:54 UTC 完成，对应 06:00 UTC 闭合小时：24h ticker 基础条件通过 210 个，深入核验 12 个，正式当前候选 2 个。`SPKUSDT` 为 4h +4.38%、24h +15.69%、量能 6.05x、原始 OI 24h +42.72%、账户比 1.05、24h 成交额约 28.6M USDT；`REZUSDT` 分别约 +1.70%、+12.86%、2.10x、+14.21%、0.93、17.6M USDT。两市场各 172 根小时 K 线、30 个 OI 样本且 `ready`，`last_error=null`；原 AKE/BTR/G/LSK/TUT 不在当前候选与数据覆盖里。`active_watch_count=0`，说明没有达到更严格的正式结构事件门槛。
+- 强平覆盖仍是 `throttled_public_stream`、`public_stream_complete=false`、`open_gaps=0`。S2 固定 Bybit/Binance LSK 双永续路线仍为 `research_only`，队列、存储失败、丢样均为 0；S3 worker 继续推进且无覆盖缺口，报告 0 个独立事件、`sample_insufficient`、`profitability_conclusion=null`。旧路线的固定研究样本没有因 S1 候选轮换而变成当前 S1 推荐。
+- 生产页面通过实际 HTTP 地址的 Playwright 桌面 1440px、手机 390px 检查：均显示当前候选、无旧 AKE 行、无脚本错误，`body.scrollWidth` 等于视口宽度；截图留在本机 Codex 可视化目录 `squeeze-current-{desktop,mobile}.png`。一次并行请求 `/watchlist` 在 5 秒内超时，随后复测该接口 HTTP 200/约 2 毫秒、`/status` HTTP 200/约 4 毫秒；需继续观察是否重复。后端日志中另有 Gate 公告分类抓取 traceback，属于公告模块，未见本轮 squeeze 采集、路线或数据库锁错误。
+- 这仅证明动态候选首轮采集与展示正常；筛选参数没有前瞻盈利验证，尚无自然结构事件或 paper 成交，S3 的 14 天/30 独立事件门槛也未达到。真实下单、借币、转账和自动建卡仍不在授权范围。
