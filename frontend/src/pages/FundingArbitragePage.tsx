@@ -1,4 +1,4 @@
-import { AreaChartOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
+import { AreaChartOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
 import {
   Alert,
   Button,
@@ -6,6 +6,7 @@ import {
   InputNumber,
   Modal,
   Segmented,
+  Select,
   Space,
   Statistic,
   Switch,
@@ -20,21 +21,36 @@ import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 
 import {
+  getAstroCardSettings,
+  getAstroPreaddExchanges,
+  getAstroPreaddPreview,
+  getAstroPreaddSettings,
   getOpportunityHistoryStats,
   getFundingArbitragePreview,
   getFundingArbitrageSettings,
-  updateFundingArbitrageSettings
+  updateAstroPreaddSettings,
+  updateFundingArbitrageSettings,
+  runAstroPreadd
 } from "../api/client";
 import type {
   AdlRiskLevel,
+  AstroCardVariant,
+  AstroPreaddCandidate,
+  AstroPreaddLegSnapshot,
+  AstroPreaddPreview,
+  AstroPreaddRunResult,
+  AstroPreaddSettings,
   FundingArbitrageCandidate,
   FundingArbitrageDecision,
   FundingArbitragePreview,
   FundingArbitrageSettings,
+  FundingOpportunityType,
   FundingSource,
   OpportunityHistoryPoint,
   OpportunityHistoryStats
 } from "../api/types";
+import { AstroCardVariantSelector } from "../components/AstroCardVariantSelector";
+import { marketTypeText } from "../constants/marketLabels";
 
 dayjs.extend(utc);
 
@@ -56,7 +72,31 @@ const defaultFundingSettings: FundingArbitrageSettings = {
   adl_block_score: 80,
   leverage: 1,
   notional_per_symbol_usdt: 100,
-  prefer_hyperliquid: true
+  prefer_hyperliquid: true,
+  strong_funding_pct: 0.6,
+  near_settlement_minutes: 45,
+  small_basis_threshold_pct: 0.25,
+  interval_mismatch_min_hours: 1,
+  formula_divergence_min_funding_pct: 0.25,
+  conflicted_basis_min_check_pct: 0.3,
+  min_conflicted_reward_risk_ratio: 1
+};
+
+const defaultPreaddSettings: AstroPreaddSettings = {
+  enabled: false,
+  exchanges: ["bitget", "binance"],
+  funding_threshold_pct: 0.6,
+  premium_threshold_pct: 1,
+  open_spread_threshold_pct: 0.9,
+  min_volume_24h_usdt: 0,
+  scan_interval_seconds: 60,
+  max_routes_per_run: 5,
+  stale_after_seconds: 30
+};
+
+const preaddExchangeLabels: Record<string, string> = {
+  bitget: "Bitget", binance: "Binance", bybit: "Bybit", gate: "Gate",
+  okx: "OKX", hyperliquid: "HL", lighter: "Lighter"
 };
 
 type FundingSettingsForm = Omit<FundingArbitrageSettings, "min_volume_24h_usdt"> & {
@@ -90,6 +130,16 @@ const fundingSourceText: Record<FundingSource, string> = {
   predicted: "\u9884\u6d4b",
   fallback_current: "\u5f53\u524d\u56de\u9000",
   missing: "\u7f3a\u5931"
+};
+
+const opportunityTypeText: Record<FundingOpportunityType, string> = {
+  BASIS_AND_FUNDING_ALIGNED: "Aligned",
+  STRONG_FUNDING_NEAR_SETTLEMENT: "Near",
+  INTERVAL_MISMATCH: "Cycle",
+  FORMULA_DIVERGENCE: "Formula",
+  BASIS_CARRY_CONFLICTED: "Conflict",
+  BASIS_MEAN_REVERSION: "Basis",
+  PURE_FUNDING_SPREAD: "Carry"
 };
 
 function pct(value: number | null | undefined, digits = 3): string {
@@ -132,8 +182,27 @@ function compactMoney(value: number | null | undefined): string {
   return value.toFixed(0);
 }
 
-function leg(exchange: string, marketType: string): string {
-  return `${exchange} ${marketType}`;
+function preaddLegCell(snapshot: AstroPreaddLegSnapshot, side: "buy" | "sell") {
+  return (
+    <Space direction="vertical" size={0}>
+      <Space size={4}>
+        <Tag color={side === "buy" ? "green" : "red"}>{side === "buy" ? "多" : "空"}</Tag>
+        <Typography.Text strong>{preaddExchangeLabels[snapshot.exchange] ?? snapshot.exchange}</Typography.Text>
+      </Space>
+      <Typography.Text>{`溢价 ${signedPct(snapshot.premium_index_pct)}`}</Typography.Text>
+      <Typography.Text>{`资金费 ${signedPct(snapshot.funding_rate_pct, 4)} / ${intervalHours(snapshot.funding_interval_hours)}`}</Typography.Text>
+      <Typography.Text type="secondary">{`24h ${compactMoney(snapshot.volume_24h_usdt)} USDT`}</Typography.Text>
+    </Space>
+  );
+}
+
+function leg(
+  exchange: string,
+  marketType: string,
+  rawSymbol?: string | null,
+  canonicalSymbol?: string | null
+): string {
+  return `${exchange} ${marketTypeText(exchange, marketType, rawSymbol, canonicalSymbol)}`;
 }
 
 function riskReasonText(values: string[]): string {
@@ -195,6 +264,8 @@ function buildColumns(
         <Space size={4} wrap className="funding-symbol-cell">
           <Typography.Text strong>{value}</Typography.Text>
           <Tag>{row.type}</Tag>
+          <Tag color="purple">{opportunityTypeText[row.primary_opportunity_type]}</Tag>
+          {row.uses_gate ? <Tag color="geekblue">Gate</Tag> : null}
           {row.uses_hyperliquid ? <Tag color="cyan">Hyper</Tag> : null}
         </Space>
       )
@@ -206,11 +277,11 @@ function buildColumns(
         <div className="funding-route-cell">
           <span>
             <Tag color="green">多</Tag>
-            {leg(row.long_exchange, row.long_market_type)}
+            {leg(row.long_exchange, row.long_market_type, row.long_raw_symbol, row.symbol)}
           </span>
           <span>
             <Tag color="red">空</Tag>
-            {leg(row.short_exchange, row.short_market_type)}
+            {leg(row.short_exchange, row.short_market_type, row.short_raw_symbol, row.symbol)}
           </span>
         </div>
       )
@@ -352,6 +423,7 @@ const historyColumns: ColumnsType<OpportunityHistoryPoint> = [
 
 export function FundingArbitragePage() {
   const [form] = Form.useForm<FundingSettingsForm>();
+  const [preaddForm] = Form.useForm<AstroPreaddSettings>();
   const [settings, setSettings] = useState<FundingArbitrageSettings>(defaultFundingSettings);
   const [preview, setPreview] = useState<FundingArbitragePreview | null>(null);
   const [historyCandidate, setHistoryCandidate] = useState<FundingArbitrageCandidate | null>(null);
@@ -362,6 +434,15 @@ export function FundingArbitragePage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [preaddSettings, setPreaddSettings] = useState(defaultPreaddSettings);
+  const [preaddCardVariant, setPreaddCardVariant] = useState<AstroCardVariant>("both");
+  const [preaddExchanges, setPreaddExchanges] = useState<string[]>([]);
+  const [preaddPreview, setPreaddPreview] = useState<AstroPreaddPreview | null>(null);
+  const [preaddResult, setPreaddResult] = useState<AstroPreaddRunResult | null>(null);
+  const [preaddError, setPreaddError] = useState("");
+  const [preaddLoading, setPreaddLoading] = useState(false);
+  const [preaddSaving, setPreaddSaving] = useState(false);
+  const [preaddRunning, setPreaddRunning] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -382,10 +463,82 @@ export function FundingArbitragePage() {
     }
   }, [form]);
 
+  const loadPreadd = useCallback(async () => {
+    setPreaddLoading(true);
+    setPreaddError("");
+    try {
+      const [nextSettings, exchanges, nextPreview, cardSettings] = await Promise.all([
+        getAstroPreaddSettings(), getAstroPreaddExchanges(), getAstroPreaddPreview(), getAstroCardSettings()
+      ]);
+      setPreaddSettings(nextSettings);
+      setPreaddExchanges(exchanges);
+      setPreaddPreview(nextPreview);
+      setPreaddCardVariant(cardSettings.card_variant ?? "both");
+      preaddForm.setFieldsValue(nextSettings);
+    } catch (exc) {
+      setPreaddError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setPreaddLoading(false);
+    }
+  }, [preaddForm]);
+
   useEffect(() => {
     form.setFieldsValue(settingsToForm(defaultFundingSettings));
     void load();
   }, [form, load]);
+
+  useEffect(() => {
+    preaddForm.setFieldsValue(defaultPreaddSettings);
+    void loadPreadd();
+  }, [preaddForm, loadPreadd]);
+
+  const savePreadd = async () => {
+    setPreaddSaving(true);
+    setPreaddError("");
+    try {
+      const saved = await updateAstroPreaddSettings(await preaddForm.validateFields());
+      setPreaddSettings(saved);
+      preaddForm.setFieldsValue(saved);
+      setPreaddPreview(await getAstroPreaddPreview());
+      message.success("预建规则已保存");
+    } catch (exc) {
+      setPreaddError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setPreaddSaving(false);
+    }
+  };
+
+  const confirmPreadd = (candidate?: AstroPreaddCandidate) => {
+    let selectedVariant = preaddCardVariant;
+    Modal.confirm({
+      title: candidate ? `预建 ${candidate.symbol} 卡片` : "预建当前候选卡片",
+      content: (
+        <Space direction="vertical" size={8} style={{ width: "100%" }}>
+          <Typography.Text>卡片将以暂停、禁开状态创建；不会开启仓位。</Typography.Text>
+          <Typography.Text>本次建卡路线</Typography.Text>
+          <AstroCardVariantSelector
+            defaultValue={selectedVariant}
+            onChange={(value) => { selectedVariant = value; }}
+          />
+        </Space>
+      ),
+      okText: "确认预建",
+      cancelText: "取消",
+      onOk: async () => {
+        setPreaddRunning(true);
+        setPreaddError("");
+        try {
+          const outcome = await runAstroPreadd(candidate ? [candidate.id] : undefined, selectedVariant);
+          setPreaddResult(outcome);
+          setPreaddPreview(await getAstroPreaddPreview());
+        } catch (exc) {
+          setPreaddError(exc instanceof Error ? exc.message : String(exc));
+        } finally {
+          setPreaddRunning(false);
+        }
+      }
+    });
+  };
 
   const openHistory = useCallback(async (candidate: FundingArbitrageCandidate, hours = historyHours) => {
     setHistoryCandidate(candidate);
@@ -546,11 +699,164 @@ export function FundingArbitragePage() {
             <Form.Item label={"\u6760\u6746"} name="leverage" rules={[{ required: true }]}>
               <InputNumber min={1} step={1} className="wide-input" />
             </Form.Item>
+            <Form.Item label={"逆风价差检查"} name="conflicted_basis_min_check_pct" rules={[{ required: true }]}>
+              <InputNumber min={0} step={0.05} suffix="%" className="wide-input" />
+            </Form.Item>
+            <Form.Item label={"最低盈亏比"} name="min_conflicted_reward_risk_ratio" rules={[{ required: true }]}>
+              <InputNumber min={0} step={0.1} className="wide-input" />
+            </Form.Item>
           </div>
           <Button type="primary" icon={<SaveOutlined />} onClick={() => void save()} loading={saving}>
             {"\u4fdd\u5b58\u7b56\u7565\u53c2\u6570"}
           </Button>
         </Form>
+      </section>
+
+      <section className="panel panel-wide">
+        <div className="toolbar">
+          <div className="toolbar-controls">
+            <Typography.Title level={5}>Astro 交易对预建</Typography.Title>
+            <Tag color={preaddSettings.enabled ? "green" : "default"}>
+              {preaddSettings.enabled ? "自动监测中" : "自动监测关闭"}
+            </Tag>
+          </div>
+          <div className="toolbar-actions">
+            <Button icon={<ReloadOutlined />} onClick={() => void loadPreadd()} loading={preaddLoading}>
+              刷新候选
+            </Button>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              disabled={!preaddPreview?.items.length || preaddRunning}
+              loading={preaddRunning}
+              onClick={() => confirmPreadd()}
+            >
+              立即预建
+            </Button>
+          </div>
+        </div>
+        {preaddError ? <Alert type="error" showIcon message={preaddError} /> : null}
+        {preaddResult ? (
+          <Alert
+            showIcon
+            type={preaddResult.failed ? "error" : preaddResult.created ? "success" : "warning"}
+            message={`预建 ${preaddResult.created} 路线，跳过 ${preaddResult.skipped}，失败 ${preaddResult.failed}`}
+            description={[...preaddResult.warnings, ...preaddResult.results].join("；")}
+          />
+        ) : null}
+        {preaddPreview?.warnings.length ? (
+          <Alert type="warning" showIcon message={preaddPreview.warnings.join("；")} />
+        ) : null}
+        <Form form={preaddForm} layout="vertical" disabled={preaddLoading || preaddSaving}>
+          <Alert
+            className="rule-guide"
+            type="info"
+            showIcon
+            message="候选判定说明"
+            description="资金费和溢价是“或”关系，任意一边达到任一阈值即可进入候选；资金费按单次结算原值比较，不按周期换算。Bybit 自身达到资金费阈值时只按收资金费方向，忽略相反的溢价收敛信号，并使用负价差阈值反向开仓；其他情况的信号方向冲突时不会预建。修改参数后需要先保存才会生效。"
+          />
+          <div className="funding-settings-grid">
+            <Form.Item label="自动预建" name="enabled" valuePropName="checked">
+              <Switch />
+            </Form.Item>
+            <Form.Item
+              label="预建交易所"
+              name="exchanges"
+              rules={[{ required: true, type: "array", min: 2, message: "至少选择两个交易所" }]}
+            >
+              <Select
+                mode="multiple"
+                options={preaddExchanges.map((exchange) => ({
+                  label: preaddExchangeLabels[exchange] ?? exchange, value: exchange
+                }))}
+              />
+            </Form.Item>
+            <Form.Item
+              label="资金费绝对值（单次结算）"
+              name="funding_threshold_pct"
+              rules={[{ required: true }]}
+              extra="任一边的下期预测资金费达到此值即触发；没有预测值时使用当前资金费。正负都按绝对值判断。"
+            >
+              <InputNumber min={0.001} max={100} step={0.05} suffix="%" className="wide-input" />
+            </Form.Item>
+            <Form.Item
+              label="溢价近似绝对值（标记/指数）"
+              name="premium_threshold_pct"
+              rules={[{ required: true }]}
+              extra="任一边的 |标记价格 ÷ 指数价格 - 1| 达到此值即触发。正溢价倾向做空该侧，负溢价倾向做多该侧。"
+            >
+              <InputNumber min={0.001} max={100} step={0.1} suffix="%" className="wide-input" />
+            </Form.Item>
+            <Form.Item
+              label="预建开仓价差阈值绝对值"
+              name="open_spread_threshold_pct"
+              rules={[{ required: true }]}
+              extra="普通候选写入正阈值；Bybit 资金费候选写入同绝对值的负阈值，按资金费方向反向开仓。预建卡片仍为暂停、禁开状态。"
+            >
+              <InputNumber min={0.001} max={100} step={0.1} suffix="%" className="wide-input" />
+            </Form.Item>
+            <Form.Item
+              label="单边24h最低成交量"
+              name="min_volume_24h_usdt"
+              rules={[{ required: true }]}
+              extra="做多侧和做空侧都必须达到此 USDT 成交量；设为 0 表示不限制。缺少成交量的数据在阈值大于 0 时会被排除。"
+            >
+              <InputNumber min={0} max={1_000_000_000_000} step={100_000} suffix="USDT" className="wide-input" />
+            </Form.Item>
+            <Form.Item label="自动扫描间隔" name="scan_interval_seconds" rules={[{ required: true }]}>
+              <InputNumber min={30} max={3600} step={30} suffix="秒" className="wide-input" />
+            </Form.Item>
+            <Form.Item label="每轮最多路线" name="max_routes_per_run" rules={[{ required: true }]}>
+              <InputNumber min={1} max={20} className="wide-input" />
+            </Form.Item>
+            <Form.Item label="行情最大延迟" name="stale_after_seconds" rules={[{ required: true }]}>
+              <InputNumber min={5} max={300} suffix="秒" className="wide-input" />
+            </Form.Item>
+          </div>
+          <Button icon={<SaveOutlined />} onClick={() => void savePreadd()} loading={preaddSaving}>
+            保存预建规则
+          </Button>
+        </Form>
+        <Table<AstroPreaddCandidate>
+          className="opportunity-table funding-table"
+          size="small"
+          rowKey="id"
+          dataSource={preaddPreview?.items ?? []}
+          loading={preaddLoading}
+          pagination={{ pageSize: 10 }}
+          scroll={{ x: 1240 }}
+          columns={[
+            { title: "标的", dataIndex: "symbol", width: 140 },
+            { title: "信号", width: 220, render: (_, row) => row.signal_type === "funding"
+              ? `${row.signal_exchange} ${row.funding_source === "predicted" ? "下期" : "当前"} ${signedPct(row.signal_value_pct)} / ${row.funding_interval_hours ?? "?"}h`
+              : `${row.signal_exchange} 溢价近似 ${signedPct(row.signal_value_pct)}` },
+            { title: "开仓方式", width: 170, render: (_, row) => (
+              <Space direction="vertical" size={0}>
+                <Tag color={row.entry_mode === "bybit_funding_reverse" ? "gold" : "blue"}>
+                  {row.entry_mode === "bybit_funding_reverse" ? "反向开仓" : "价差收敛"}
+                </Tag>
+                <Typography.Text type="secondary">
+                  {row.entry_mode === "bybit_funding_reverse" ? "仅做 Bybit 资金费" : "等待价差收敛"}
+                </Typography.Text>
+                <Typography.Text>{`卡片 ${signedPct(row.card_open_spread_pct)}`}</Typography.Text>
+              </Space>
+            ) },
+            { title: "做多侧行情", width: 220, render: (_, row) => preaddLegCell(row.buy_leg, "buy") },
+            { title: "做空侧行情", width: 220, render: (_, row) => preaddLegCell(row.sell_leg, "sell") },
+            { title: "当前可成交价差", width: 150, render: (_, row) => signedPct(row.live_spread_pct) },
+            { title: "行情时间", width: 150, render: (_, row) => settlementTime(row.observed_at) },
+            { title: "操作", width: 80, render: (_, row) => (
+              <Button
+                type="link"
+                icon={<PlusOutlined />}
+                title="预建这条暂停卡片"
+                aria-label={`预建 ${row.symbol} ${row.buy_exchange} 到 ${row.sell_exchange}`}
+                disabled={preaddRunning}
+                onClick={() => confirmPreadd(row)}
+              />
+            ) }
+          ]}
+        />
       </section>
 
       <Table
@@ -560,7 +866,7 @@ export function FundingArbitragePage() {
         loading={loading}
         rowKey="id"
         pagination={{ pageSize: 50, showSizeChanger: true }}
-        scroll={{ x: 1240 }}
+        scroll={{ x: 1410 }}
         size="small"
         tableLayout="fixed"
         expandable={{
@@ -615,6 +921,7 @@ export function FundingArbitragePage() {
                   pagination={{ pageSize: 12 }}
                   dataSource={historyStats.points.slice(0, 80)}
                   columns={historyColumns}
+                  scroll={{ x: 760 }}
                 />
               </>
             ) : null}

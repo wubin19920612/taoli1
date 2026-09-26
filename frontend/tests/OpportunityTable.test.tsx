@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { OpportunityTable } from "../src/components/OpportunityTable";
 import type { Opportunity } from "../src/api/types";
@@ -44,22 +44,88 @@ const row: Opportunity = {
 };
 
 describe("OpportunityTable", () => {
+  beforeEach(() => {
+    window.history.pushState({}, "", "/");
+  });
+
+  afterEach(() => {
+    window.history.pushState({}, "", "/");
+  });
+
   it("renders spread legs, funding previews and risk labels", () => {
     render(<OpportunityTable opportunities={[row]} loading={false} />);
 
     expect(screen.getByText("BTCUSDT")).toBeTruthy();
-    expect(screen.getByText("bn")).toBeTruthy();
-    expect(screen.getByText("ok")).toBeTruthy();
-    expect(screen.getByTitle("binance future")).toBeTruthy();
-    expect(screen.getByTitle("okx future")).toBeTruthy();
+    expect(screen.getByText("Binance")).toBeTruthy();
+    expect(screen.getByText("OKX")).toBeTruthy();
+    expect(screen.getAllByTitle("binance 合约").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByTitle("okx 合约").length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText("binance future")).toBeNull();
     expect(screen.queryByText("okx future")).toBeNull();
+    expect(screen.getAllByText("合约").length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText("0.620%")).toBeTruthy();
     expect(screen.getByText("当前")).toBeTruthy();
     expect(screen.getByText("预测")).toBeTruthy();
-    expect(screen.getByText("周期净")).toBeTruthy();
+    expect(screen.getByText("每小时净")).toBeTruthy();
+    expect(screen.getByText("24h净")).toBeTruthy();
     expect(screen.getByText("0.015% / 0.025%")).toBeTruthy();
-    expect(screen.getByText("0.010%")).toBeTruthy();
+    expect(screen.getByText("0.001%/h")).toBeTruthy();
+    expect(screen.getByText("0.030%/24h")).toBeTruthy();
+  });
+
+  it("labels Robinhood Lighter independently from regular Lighter", () => {
+    render(
+      <OpportunityTable
+        opportunities={[
+          {
+            ...row,
+            id: "rh-lighter-route",
+            buy_exchange: "lighter",
+            sell_exchange: "rh-lighter"
+          }
+        ]}
+        loading={false}
+      />
+    );
+
+    expect(screen.getByText("Lighter")).toBeTruthy();
+    expect(screen.getByText("RH Lighter")).toBeTruthy();
+  });
+
+  it("normalizes mixed funding intervals instead of displaying their raw difference", () => {
+    render(
+      <OpportunityTable
+        opportunities={[
+          {
+            ...row,
+            id: "lighter-hood",
+            symbol: "HOODUSDT",
+            buy_exchange: "lighter",
+            buy_raw_symbol: "HOOD",
+            sell_exchange: "bitget",
+            sell_raw_symbol: "HOODUSDT",
+            funding_rate_buy_pct: 0.0032,
+            funding_rate_sell_pct: 0.0507,
+            funding_next_rate_buy_pct: null,
+            funding_next_rate_sell_pct: null,
+            net_funding_pct: 0.0475,
+            net_funding_next_pct: null,
+            buy_funding_interval_hours: 1,
+            sell_funding_interval_hours: 8,
+            net_funding_hourly_pct: 0.0031375,
+            net_funding_daily_pct: 0.0753,
+            net_funding_next_hourly_pct: null,
+            net_funding_next_daily_pct: null
+          }
+        ]}
+        loading={false}
+      />
+    );
+
+    expect(screen.getAllByText("0.003% / 0.051%")).toHaveLength(2);
+    expect(screen.getByText("0.003%/h")).toBeTruthy();
+    expect(screen.getByText("0.075%/24h")).toBeTruthy();
+    expect(screen.queryByText("0.048%")).toBeNull();
   });
 
   it("renders signal validation risk labels in Chinese", () => {
@@ -91,6 +157,10 @@ describe("OpportunityTable", () => {
       funding_next_rate_buy_pct: null,
       funding_next_rate_sell_pct: 0.12,
       net_funding_next_pct: null,
+      net_funding_hourly_pct: 0.00125,
+      net_funding_daily_pct: 0.03,
+      net_funding_next_hourly_pct: null,
+      net_funding_next_daily_pct: null,
       mark_index_diff_buy_pct: 9.99,
       mark_index_diff_sell_pct: 0.01,
       funding_rate_buy_pct: 0.01,
@@ -99,8 +169,9 @@ describe("OpportunityTable", () => {
 
     render(<OpportunityTable opportunities={[missingNextFunding]} loading={false} />);
 
-    expect(screen.getByText("0.110%")).toBeTruthy();
-    expect(screen.queryByText("-9.870%")).toBeNull();
+    expect(screen.getByText("0.001%/h")).toBeTruthy();
+    expect(screen.getByText("0.030%/24h")).toBeTruthy();
+    expect(screen.queryByText("-9.870%/h")).toBeNull();
   });
 
   it("opens spread history from a row action", async () => {
@@ -119,6 +190,74 @@ describe("OpportunityTable", () => {
     expect(onOpenHistory).toHaveBeenCalledWith(row);
   });
 
+  it("opens pair spread query from a real-time opportunity row", async () => {
+    render(
+      <OpportunityTable
+        opportunities={[
+          {
+            ...row,
+            symbol: "EDGEUSDT",
+            buy_exchange: "gate",
+            buy_market_type: "spot",
+            buy_raw_symbol: "EDGEX_USDT",
+            sell_exchange: "binance",
+            sell_market_type: "future",
+            sell_raw_symbol: "EDGEUSDT"
+          }
+        ]}
+        loading={false}
+      />
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "价差查询 EDGEUSDT" }));
+
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("page")).toBe("pair-monitor");
+    expect(params.get("leg1_exchange")).toBe("gate");
+    expect(params.get("leg1_market_type")).toBe("spot");
+    expect(params.get("leg1_symbol")).toBe("EDGEX_USDT");
+    expect(params.get("leg2_exchange")).toBe("binance");
+    expect(params.get("leg2_market_type")).toBe("future");
+    expect(params.get("leg2_symbol")).toBe("EDGEUSDT");
+    expect(params.get("leg2_multiplier")).toBe("1");
+    expect(params.get("hours")).toBe("4");
+    expect(params.get("interval_minutes")).toBe("5");
+  });
+
+  it("preserves raw markets, Hyperliquid DEX, and market multipliers in opportunity navigation", async () => {
+    render(
+      <OpportunityTable
+        opportunities={[{
+          ...row,
+          symbol: "ANTHROPICUSDT",
+          buy_exchange: "lighter",
+          buy_raw_symbol: "ANTHROPIC",
+          buy_dex: null,
+          buy_price_multiplier: 1,
+          buy_contract_size_multiplier: 1,
+          sell_exchange: "hyperliquid",
+          sell_raw_symbol: "io:ANTH",
+          sell_dex: "io",
+          sell_price_multiplier: 1,
+          sell_contract_size_multiplier: 1
+        }]}
+        loading={false}
+      />
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "价差查询 ANTHROPICUSDT" }));
+
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("leg1_symbol")).toBe("ANTHROPIC");
+    expect(params.get("leg1_raw_symbol")).toBe("ANTHROPIC");
+    expect(params.get("leg1_price_multiplier")).toBe("1");
+    expect(params.get("leg2_symbol")).toBe("ANTH");
+    expect(params.get("leg2_raw_symbol")).toBe("io:ANTH");
+    expect(params.get("leg2_dex")).toBe("io");
+    expect(params.get("leg2_price_multiplier")).toBe("1");
+    expect(params.get("leg2_contract_size_multiplier")).toBe("1");
+  });
+
   it("shows raw leg symbols for aliased opportunities in leg titles", () => {
     render(
       <OpportunityTable
@@ -135,6 +274,26 @@ describe("OpportunityTable", () => {
       />
     );
 
-    expect(screen.getByTitle("gate future EDGEX_USDT")).toBeTruthy();
+    expect(screen.getAllByTitle("gate 合约 原始 EDGEX_USDT").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("labels Bitget RToken stock spot legs as stock spot", () => {
+    render(
+      <OpportunityTable
+        opportunities={[
+          {
+            ...row,
+            symbol: "AAPLUSDT",
+            buy_exchange: "bitget",
+            buy_market_type: "spot",
+            buy_raw_symbol: "RAAPLUSDT"
+          }
+        ]}
+        loading={false}
+      />
+    );
+
+    expect(screen.getAllByTitle("bitget 股票现货 原始 RAAPLUSDT").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/股票现货/).length).toBeGreaterThanOrEqual(1);
   });
 });

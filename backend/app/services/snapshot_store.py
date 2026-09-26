@@ -8,6 +8,7 @@ class SnapshotStore:
     def __init__(self) -> None:
         self._lock = RLock()
         self._markets: list[MarketSnapshot] = []
+        self._all_markets: list[MarketSnapshot] | None = None
         self._opportunities: list[Opportunity] = []
         self._exchange_errors: dict[str, str] = {}
 
@@ -18,6 +19,15 @@ class SnapshotStore:
     def get_markets(self) -> list[MarketSnapshot]:
         with self._lock:
             return list(self._markets)
+
+    def set_all_markets(self, markets: list[MarketSnapshot]) -> None:
+        with self._lock:
+            self._all_markets = list(markets)
+
+    def get_all_markets(self) -> list[MarketSnapshot]:
+        with self._lock:
+            markets = self._all_markets if self._all_markets is not None else self._markets
+            return list(markets)
 
     def set_opportunities(self, opportunities: list[Opportunity]) -> None:
         with self._lock:

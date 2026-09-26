@@ -13,6 +13,28 @@ from app.models.market import MarketSnapshot, MarketType
 from app.models.orderbook import OrderBookSnapshot
 
 
+def okx_ticker_volume_24h_usdt(item: dict, market_type: MarketType) -> float | None:
+    quote_volume = parse_float(item.get("volCcyQuote24h"))
+    if quote_volume is not None and quote_volume >= 0:
+        return quote_volume
+
+    volume = parse_float(item.get("volCcy24h"))
+    if volume is None or volume < 0:
+        return None
+    if market_type == MarketType.SPOT:
+        return volume
+
+    price = parse_float(item.get("last"))
+    if price is None or price <= 0:
+        bid = parse_float(item.get("bidPx"))
+        ask = parse_float(item.get("askPx"))
+        if bid is not None and bid > 0 and ask is not None and ask > 0:
+            price = (bid + ask) / 2
+    if price is None or price <= 0:
+        return None
+    return volume * price
+
+
 class OKXAdapter(ExchangeAdapter):
     name = "okx"
 
@@ -24,6 +46,7 @@ class OKXAdapter(ExchangeAdapter):
         payload = await self.get_json("https://www.okx.com/api/v5/market/tickers?instType=SWAP")
         tickers = self._parse_tickers(payload.get("data", []), MarketType.FUTURE)
         funding_by_symbol = await self._fetch_funding_by_symbol(tickers)
+        contract_multipliers = await self._fetch_contract_multipliers()
         enriched: list[MarketSnapshot] = []
         for row in tickers:
             item = funding_by_symbol.get(row.raw_symbol, {})
@@ -41,10 +64,36 @@ class OKXAdapter(ExchangeAdapter):
                         else None,
                         "funding_interval_hours": interval_hours,
                         "funding_next_time": next_time,
+                        "contract_size_multiplier": contract_multipliers.get(
+                            row.raw_symbol
+                        ),
                     }
                 )
             )
         return enriched
+
+    async def _fetch_contract_multipliers(self) -> dict[str, float]:
+        try:
+            payload = await self.get_json(
+                "https://www.okx.com/api/v5/public/instruments?instType=SWAP"
+            )
+        except Exception:  # noqa: BLE001 - metadata failure must not hide a usable book.
+            return {}
+        rows = payload.get("data", []) if isinstance(payload, dict) else []
+        multipliers: dict[str, float] = {}
+        for item in rows if isinstance(rows, list) else []:
+            if not isinstance(item, dict) or not item.get("instId"):
+                continue
+            contract_value = parse_float(item.get("ctVal"))
+            contract_multiple = parse_float(item.get("ctMult"))
+            multiplier = (
+                contract_value * contract_multiple
+                if contract_value is not None and contract_multiple is not None
+                else contract_value
+            )
+            if multiplier is not None and multiplier > 0:
+                multipliers[str(item["instId"])] = multiplier
+        return multipliers
 
     async def fetch_order_book(
         self,
@@ -82,7 +131,7 @@ class OKXAdapter(ExchangeAdapter):
             payload = await self.get_json(
                 "https://www.okx.com/api/v5/public/funding-rate?instId=ANY"
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 - funding metadata is supplementary.
             return {}
         rows = payload.get("data", [])
         return {
@@ -117,9 +166,11 @@ class OKXAdapter(ExchangeAdapter):
                     ask=ask,
                     bid_size=parse_float(item.get("bidSz")),
                     ask_size=parse_float(item.get("askSz")),
-                    volume_24h_usdt=parse_float(item.get("volCcy24h")),
+                    volume_24h_usdt=okx_ticker_volume_24h_usdt(item, market_type),
                     timestamp=now,
                     raw_symbol=raw,
+                    data_source=f"OKX public {market_type.value} tickers",
+                    upstream_timestamp=parse_datetime_ms(item.get("ts")),
                 )
             )
         return rows

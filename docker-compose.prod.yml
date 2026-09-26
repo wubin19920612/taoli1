@@ -1,0 +1,10 @@
+services:
+  backend:
+    image: ${BACKEND_IMAGE:?Set BACKEND_IMAGE to a prebuilt immutable image tag}
+    build: !reset null
+    mem_limit: 768m
+
+  frontend:
+    image: ${FRONTEND_IMAGE:?Set FRONTEND_IMAGE to a prebuilt immutable image tag}
+    build: !reset null
+    mem_limit: 96m

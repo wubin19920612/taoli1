@@ -5,6 +5,7 @@ from app.db.repositories import AlertRuleRepository, SettingsRepository
 from app.db.schema import initialize_schema
 from app.models.alert import AlertRule, AlertSeverity
 from app.models.settings import AstroCardSettings
+from app.models.opportunity_radar import OpportunityRadarSettings
 
 
 @pytest.mark.asyncio
@@ -64,6 +65,39 @@ async def test_settings_repository_defaults() -> None:
     assert settings.symbol_aliases[0].exchange == "gate"
     assert settings.symbol_aliases[0].symbol == "EDGEXUSDT"
     assert settings.symbol_aliases[0].canonical_symbol == "EDGEUSDT"
+    assert settings.symbol_aliases[0].price_multiplier == 1
+
+
+@pytest.mark.asyncio
+async def test_opportunity_radar_settings_round_trip() -> None:
+    db = await connect_database(":memory:")
+    try:
+        await initialize_schema(db)
+        repo = SettingsRepository(db)
+
+        defaults = await repo.get_opportunity_radar_settings()
+        assert defaults.anchor_exchange == "bybit"
+        assert defaults.min_abs_premium_pct == 1.5
+        assert defaults.max_abs_entry_spread_pct == 0.5
+
+        saved = await repo.set_opportunity_radar_settings(
+            OpportunityRadarSettings(
+                min_abs_premium_pct=2,
+                min_relative_premium_gap_pct=0.8,
+                max_abs_entry_spread_pct=0.3,
+                premium_direction="negative",
+                peer_exchanges=["binance", "okx"],
+            )
+        )
+        loaded = await repo.get_opportunity_radar_settings()
+
+        assert saved.min_abs_premium_pct == 2
+        assert loaded.min_relative_premium_gap_pct == 0.8
+        assert loaded.max_abs_entry_spread_pct == 0.3
+        assert loaded.premium_direction == "negative"
+        assert loaded.peer_exchanges == ["binance", "okx"]
+    finally:
+        await db.close()
 
 
 @pytest.mark.asyncio
@@ -74,6 +108,7 @@ async def test_alert_message_template_repository_defaults_and_roundtrip() -> Non
         repo = SettingsRepository(db)
 
         template = await repo.get_alert_message_template()
+        assert template.format == "compact"
 
         assert template.include_trigger_summary is True
         assert template.include_observations is True
@@ -134,5 +169,28 @@ async def test_astro_card_settings_round_trip() -> None:
         assert loaded.close_position_buffer_pct == 0.2
         assert loaded.unfavorable_funding_weight == 1.5
         assert loaded.close_position_floor_pct == 0.01
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_retired_new_listing_tables_are_not_created_or_dropped() -> None:
+    db = await connect_database(":memory:")
+    try:
+        await initialize_schema(db)
+        tables = await db.execute_fetchall(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'new_listing_%'"
+        )
+        assert tables == []
+
+        await db.execute("CREATE TABLE new_listing_watchlist (id TEXT PRIMARY KEY, payload TEXT)")
+        await db.execute(
+            "INSERT INTO new_listing_watchlist (id, payload) VALUES (?, ?)",
+            ("legacy-watch", "{}"),
+        )
+        await db.commit()
+        await initialize_schema(db)
+        rows = await db.execute_fetchall("SELECT id, payload FROM new_listing_watchlist")
+        assert [(row["id"], row["payload"]) for row in rows] == [("legacy-watch", "{}")]
     finally:
         await db.close()

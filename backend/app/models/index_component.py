@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
 from datetime import datetime
 from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator
+
+from app.models.pair_spread import normalize_pair_spread_symbol
 
 
 def _normalize_token(value: str) -> str:
@@ -14,6 +17,10 @@ def _normalize_token(value: str) -> str:
 
 def _normalize_source(value: str) -> str:
     return value.strip().lower()
+
+
+def index_watch_symbol(value: str) -> str:
+    return normalize_pair_spread_symbol(value.rsplit(":", 1)[-1])
 
 
 class IndexComponent(BaseModel):
@@ -66,6 +73,7 @@ class IndexComponentSnapshot(BaseModel):
     component_hash: str
     source: str
     observed_at: datetime
+    index_price: float | None = None
 
     @field_validator("exchange")
     @classmethod
@@ -86,7 +94,8 @@ class IndexComponentSnapshot(BaseModel):
         components: list[IndexComponent],
         source: str,
         observed_at: datetime,
-    ) -> "IndexComponentSnapshot":
+        index_price: float | None = None,
+    ) -> IndexComponentSnapshot:
         normalized_components = normalize_components(components)
         return cls(
             exchange=exchange,
@@ -95,6 +104,7 @@ class IndexComponentSnapshot(BaseModel):
             component_hash=stable_component_hash(normalized_components),
             source=source,
             observed_at=observed_at,
+            index_price=index_price,
         )
 
 
@@ -142,3 +152,31 @@ class IndexComponentWatchItem(BaseModel):
             return None
         text = value.strip()
         return text or None
+
+
+class IndexComponentAutoWatchSettings(BaseModel):
+    enabled: bool = False
+
+
+class IndexComponentNotificationSettings(BaseModel):
+    enabled: bool = True
+
+
+class IndexComponentAutoWatchItem(BaseModel):
+    source: str
+    symbol: str
+
+
+class IndexComponentAutoWatchStatus(IndexComponentAutoWatchSettings):
+    items: list[IndexComponentAutoWatchItem] = Field(default_factory=list)
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class IndexComponentTrendFollowup:
+    change_id: str
+    exchange: str
+    symbol: str
+    detected_at: datetime
+    due_at: datetime
+    baseline_price: float

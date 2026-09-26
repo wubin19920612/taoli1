@@ -114,7 +114,11 @@ The first version supports the existing planner's documented types:
 - `SF`
 - `FF`
 
-`SS` remains blocked because the SDK document and the observed frontend type list do not confirm `SS` support. Other types such as `FS`, `SR`, and `FR` can be added later after their local opportunity semantics and SDK mapping are verified.
+Automatic card creation remains limited to `SF` and `FF`. The manual card workflow may
+also create `FS` for an explicitly selected future-buy/spot-sell route; Astro's deployed
+frontend confirms that `FS` maps the A leg to futures and the B leg to spot. `SS` is still
+treated as a manual override; `SR` and `FR` use separate ratio semantics outside this
+directional spread extension.
 
 ## Idempotency And Duplicate Handling
 

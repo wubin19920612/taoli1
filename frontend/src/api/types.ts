@@ -3,7 +3,13 @@ export type OpportunityType = "SF" | "FF" | "SS";
 export type AlertSeverity = "info" | "warning" | "critical";
 export type PhonePriceAlertCondition = "above" | "below";
 export type PhonePriceAlertPriceField = "mark_price" | "index_price" | "mid_price" | "bid" | "ask";
-export type AnnouncementKind = "listing" | "delisting" | "other";
+export type PairSpreadPriceField = "mark_price" | "mid_price" | "index_price" | "last_price";
+export type AnnouncementKind = "listing" | "delisting" | "launchpool" | "other";
+export type SecondLevelSampleStatus = "ok" | "partial" | "error";
+export type NegativeBasisSignalLevel = "none" | "watch" | "building" | "confirmed" | "strong" | "extreme";
+export type FatFingerMarketMode = "SF" | "FF";
+export type FatFingerMakerSide = "buy" | "sell";
+export type FatFingerExitReason = "target" | "timeout";
 
 export interface Opportunity {
   id: string;
@@ -12,9 +18,27 @@ export interface Opportunity {
   buy_exchange: string;
   buy_market_type: MarketType;
   buy_raw_symbol?: string | null;
+  buy_dex?: string | null;
+  buy_price_multiplier?: number;
+  buy_contract_size_multiplier?: number | null;
+  buy_timestamp?: string | null;
+  buy_data_source?: string | null;
+  buy_is_estimated?: boolean;
+  buy_estimated_fields?: string[];
   sell_exchange: string;
   sell_market_type: MarketType;
   sell_raw_symbol?: string | null;
+  sell_dex?: string | null;
+  sell_price_multiplier?: number;
+  sell_contract_size_multiplier?: number | null;
+  sell_timestamp?: string | null;
+  sell_data_source?: string | null;
+  sell_is_estimated?: boolean;
+  sell_estimated_fields?: string[];
+  buy_fee_pct?: number;
+  sell_fee_pct?: number;
+  safety_slippage_pct?: number;
+  fees_are_estimated?: boolean;
   open_spread_pct: number;
   close_spread_pct: number;
   fee_adjusted_open_pct: number;
@@ -56,6 +80,8 @@ export interface SymbolAlias {
   symbol: string;
   canonical_symbol: string;
   market_type?: MarketType | null;
+  dex?: string | null;
+  price_multiplier: number;
 }
 
 export interface ExchangePollState {
@@ -87,6 +113,749 @@ export interface MarketSnapshot {
   index_price?: number | null;
   timestamp: string;
   raw_symbol: string;
+  dex?: string | null;
+  contract_size_multiplier?: number | null;
+  data_source?: string | null;
+  upstream_timestamp?: string | null;
+  is_estimated?: boolean;
+  estimated_fields?: string[];
+  symbol_alias_original_symbol?: string | null;
+  symbol_alias_price_multiplier?: number;
+}
+
+export interface InstrumentMarketCandidate extends MarketSnapshot {
+  data_status: "live" | "stale";
+  age_seconds: number;
+  stale_after_seconds: number;
+  error: string | null;
+}
+
+export interface InstrumentRouteStatus {
+  card_id: string | null;
+  card_name: string;
+  side: "buy" | "sell";
+  route: string;
+  exchange: string | null;
+  market_type: MarketType;
+  astro_raw_symbol: string;
+  canonical_symbol: string;
+  dex: string | null;
+  counterparty_route: string;
+  status: "live_market" | "market_missing" | "route_only";
+  live_data_supported: boolean;
+  matched_raw_symbol: string | null;
+  source: string;
+  reason: string;
+}
+
+export interface InstrumentExchangeSnapshot {
+  exchange: string;
+  spot: MarketSnapshot | null;
+  future: MarketSnapshot | null;
+  error: string | null;
+}
+
+export interface InstrumentSpreadComparison {
+  id: string;
+  buy_exchange: string;
+  buy_market_type: MarketType;
+  buy_raw_symbol: string;
+  buy_dex: string | null;
+  buy_price_multiplier: number;
+  buy_contract_size_multiplier: number | null;
+  buy_bid: number;
+  buy_ask: number;
+  buy_volume_24h_usdt: number | null;
+  buy_funding_rate_pct: number | null;
+  buy_funding_interval_hours: number | null;
+  buy_timestamp: string;
+  buy_data_source: string | null;
+  buy_is_estimated: boolean;
+  sell_exchange: string;
+  sell_market_type: MarketType;
+  sell_raw_symbol: string;
+  sell_dex: string | null;
+  sell_price_multiplier: number;
+  sell_contract_size_multiplier: number | null;
+  sell_bid: number;
+  sell_ask: number;
+  sell_volume_24h_usdt: number | null;
+  sell_funding_rate_pct: number | null;
+  sell_funding_interval_hours: number | null;
+  sell_timestamp: string;
+  sell_data_source: string | null;
+  sell_is_estimated: boolean;
+  price_difference: number;
+  executable_spread_pct: number;
+  close_spread_pct: number;
+  mid_spread_pct: number;
+  opportunity_type: OpportunityType | null;
+  astro_supported: boolean;
+  astro_blocker: string | null;
+}
+
+export interface InstrumentLookupResult {
+  query: string;
+  symbol: string;
+  base: string;
+  quote: string;
+  observed_at: string | null;
+  exchange_count: number;
+  market_count: number;
+  markets: InstrumentMarketCandidate[];
+  astro_routes: InstrumentRouteStatus[];
+  route_errors: Record<string, string>;
+  exchanges: InstrumentExchangeSnapshot[];
+  spreads: InstrumentSpreadComparison[];
+}
+
+export interface InstrumentMarketCapResult {
+  base: string;
+  status: "available" | "ambiguous" | "not_found" | "unavailable" | "source_error";
+  candidates: Array<{
+    id: string;
+    name: string;
+    symbol: string;
+    market_cap_rank: number | null;
+  }>;
+  selected_id: string | null;
+  market_cap_usd: number | null;
+  updated_at: string | null;
+  source: string;
+}
+
+export type HyperliquidActionState = "available" | "blocked" | "conditional" | "unknown";
+
+export interface HyperliquidTradeActionStatus {
+  state: HyperliquidActionState;
+  reason_code: string;
+  reason: string;
+  executable_price: number | null;
+  depth_1pct_usdt: number | null;
+}
+
+export interface HyperliquidMarketTradeStatus {
+  symbol: string;
+  dex: string;
+  raw_symbol: string;
+  observed_at: string;
+  at_open_interest_cap: boolean | null;
+  is_delisted: boolean;
+  only_isolated: boolean;
+  margin_mode: string | null;
+  max_leverage: number | null;
+  size_decimals: number | null;
+  best_bid: number | null;
+  best_ask: number | null;
+  bid_depth_1pct_usdt: number | null;
+  ask_depth_1pct_usdt: number | null;
+  mark_price: number | null;
+  oracle_price: number | null;
+  open_interest: number | null;
+  open_interest_usdt: number | null;
+  volume_24h_usdt: number | null;
+  funding_rate_pct: number | null;
+  funding_interval_hours: number;
+  market_multiplier: number;
+  fees_included: boolean;
+  fee_note: string;
+  buy_open: HyperliquidTradeActionStatus;
+  sell_open: HyperliquidTradeActionStatus;
+  buy_reduce_only: HyperliquidTradeActionStatus;
+  sell_reduce_only: HyperliquidTradeActionStatus;
+}
+
+export interface HyperliquidTradeStatusResult {
+  query: string;
+  observed_at: string;
+  source: string;
+  markets: HyperliquidMarketTradeStatus[];
+  limitations: string[];
+}
+
+export interface HyperliquidTradeStatusWatch {
+  id: string;
+  symbol: string;
+  dex: string;
+  raw_symbol: string;
+  monitor_buy: boolean;
+  monitor_sell: boolean;
+  enabled: boolean;
+  last_buy_state: HyperliquidActionState | null;
+  last_sell_state: HyperliquidActionState | null;
+  last_checked_at: string | null;
+  last_notified_at: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type TradeAvailabilityState = "available" | "blocked" | "conditional" | "unknown" | "not_applicable";
+export type TradeEvidenceScope = "public_market" | "account" | "order_error" | "platform_capability" | "none";
+export type TradeEvidenceState = "confirmed" | "not_checked" | "not_provided" | "error";
+
+export interface TradeActionStatus {
+  state: TradeAvailabilityState;
+  reason_code: string;
+  reason: string;
+  scope: TradeEvidenceScope;
+  executable_price: number | null;
+  depth_1pct_usdt: number | null;
+}
+
+export interface TradeDiagnosticEvidence {
+  scope: TradeEvidenceScope;
+  state: TradeEvidenceState;
+  reason_code: string;
+  message: string;
+  source: string | null;
+  raw_error: string | null;
+}
+
+export type TransferAvailabilityState = "enabled" | "partial" | "disabled" | "unknown";
+
+export interface SpotTransferNetworkStatus {
+  network: string;
+  deposit_enabled: boolean | null;
+  withdraw_enabled: boolean | null;
+}
+
+export interface SpotTransferAvailability {
+  asset: string;
+  deposit_state: TransferAvailabilityState;
+  withdraw_state: TransferAvailabilityState;
+  all_enabled: boolean | null;
+  publicly_queryable: boolean;
+  source: string;
+  observed_at: string | null;
+  networks: SpotTransferNetworkStatus[];
+  note: string;
+  error: string | null;
+}
+
+export interface MarketTradeAvailability {
+  exchange: string;
+  market_type: MarketType;
+  symbol: string;
+  raw_symbol: string;
+  dex: string | null;
+  coverage_tier: "core" | "existing" | "evaluated";
+  observed_at: string;
+  market_data_updated_at: string;
+  orderbook_updated_at: string | null;
+  orderbook_source: string;
+  public_status_code: string;
+  public_status_source: string;
+  public_restrictions: string[];
+  diagnostics: TradeDiagnosticEvidence[];
+  best_bid: number | null;
+  best_ask: number | null;
+  bid_depth_01pct_usdt: number | null;
+  ask_depth_01pct_usdt: number | null;
+  bid_depth_1pct_usdt: number | null;
+  ask_depth_1pct_usdt: number | null;
+  volume_24h_usdt: number | null;
+  funding_rate_pct: number | null;
+  funding_next_rate_pct: number | null;
+  funding_interval_hours: number | null;
+  funding_next_time: string | null;
+  mark_price: number | null;
+  index_price: number | null;
+  maker_fee_pct: number | null;
+  taker_fee_pct: number | null;
+  fees_included: boolean;
+  fee_note: string;
+  market_multiplier: number;
+  contract_size_multiplier: number;
+  spot_transfer: SpotTransferAvailability | null;
+  buy_open: TradeActionStatus;
+  sell_open: TradeActionStatus;
+  buy_reduce_only: TradeActionStatus;
+  sell_reduce_only: TradeActionStatus;
+}
+
+export interface ContractIndexComponent {
+  source_exchange: string;
+  market_type: MarketType | null;
+  raw_symbol: string;
+  weight: number | null;
+  price: number | null;
+}
+
+export interface ContractIndexComposition {
+  exchange: string;
+  market_type: MarketType;
+  symbol: string;
+  raw_symbol: string;
+  dex: string | null;
+  status: "available" | "not_returned" | "error";
+  source: string;
+  index_price: number | null;
+  observed_at: string | null;
+  weight_total: number | null;
+  components: ContractIndexComponent[];
+  note: string;
+  error: string | null;
+}
+
+export interface TradeAvailabilityCoverage {
+  exchange: string;
+  tier: "core" | "existing" | "evaluated";
+  public_status_supported: boolean;
+  orderbook_supported: boolean;
+  note: string;
+}
+
+export interface TradeAvailabilityResult {
+  query: string;
+  observed_at: string;
+  source: string;
+  markets: MarketTradeAvailability[];
+  index_compositions: ContractIndexComposition[];
+  coverage: TradeAvailabilityCoverage[];
+  errors: Record<string, string>;
+  limitations: string[];
+}
+
+export interface TradeAvailabilityWatch {
+  id: string;
+  symbol: string;
+  exchange: string;
+  market_type: MarketType;
+  raw_symbol: string;
+  dex: string | null;
+  monitor_buy: boolean;
+  monitor_sell: boolean;
+  enabled: boolean;
+  last_buy_state: TradeAvailabilityState | null;
+  last_sell_state: TradeAvailabilityState | null;
+  last_buy_reduce_only_state: TradeAvailabilityState | null;
+  last_sell_reduce_only_state: TradeAvailabilityState | null;
+  last_checked_at: string | null;
+  last_notified_at: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SecondLevelSamplingConfig {
+  enabled: boolean;
+  interval_seconds: number;
+  retention_hours: number;
+  exchanges: string[];
+  symbols: string[];
+  max_concurrent_requests: number;
+  capture_index_components: boolean;
+  component_signal_window_seconds: number;
+}
+
+export interface SecondLevelMarketSample {
+  id?: number | null;
+  observed_at: string;
+  exchange: string;
+  symbol: string;
+  status: SecondLevelSampleStatus;
+  spot_bid?: number | null;
+  spot_ask?: number | null;
+  spot_bid_size?: number | null;
+  spot_ask_size?: number | null;
+  spot_mid?: number | null;
+  spot_last?: number | null;
+  future_bid?: number | null;
+  future_ask?: number | null;
+  future_bid_size?: number | null;
+  future_ask_size?: number | null;
+  future_mid?: number | null;
+  future_last?: number | null;
+  mark_price?: number | null;
+  index_price?: number | null;
+  mark_premium_pct?: number | null;
+  mid_premium_pct?: number | null;
+  funding_rate_pct?: number | null;
+  raw_spot_symbol?: string | null;
+  raw_future_symbol?: string | null;
+  latency_ms?: number | null;
+  error?: string | null;
+}
+
+export interface SecondLevelPairSpreadSnapshot {
+  symbol: string;
+  left_exchange: string;
+  right_exchange: string;
+  observed_at: string;
+  left_spot_mid?: number | null;
+  right_spot_mid?: number | null;
+  left_future_mid?: number | null;
+  right_future_mid?: number | null;
+  spot_spread_pct?: number | null;
+  future_spread_pct?: number | null;
+  future_spot_spread_gap_pct?: number | null;
+  left_future_spot_basis_pct?: number | null;
+  right_future_spot_basis_pct?: number | null;
+  future_spot_basis_gap_pct?: number | null;
+  left_mark_premium_pct?: number | null;
+  right_mark_premium_pct?: number | null;
+  premium_gap_pct?: number | null;
+}
+
+export interface SecondLevelIndexComponentSample {
+  id?: number | null;
+  observed_at: string;
+  target_exchange: string;
+  symbol: string;
+  component_source: string;
+  component_symbol: string;
+  weight_pct?: number | null;
+  component_price?: number | null;
+  contribution_price?: number | null;
+  official_index_price?: number | null;
+  reconstructed_index_price?: number | null;
+  mark_price?: number | null;
+  future_mid?: number | null;
+  mark_premium_pct?: number | null;
+  funding_rate_pct?: number | null;
+  latency_ms?: number | null;
+  error?: string | null;
+}
+
+export interface SecondLevelIndexComponentSignal {
+  observed_at: string;
+  target_exchange: string;
+  symbol: string;
+  component_source: string;
+  component_symbol: string;
+  window_seconds: number;
+  weight_pct?: number | null;
+  component_price?: number | null;
+  component_price_change_pct?: number | null;
+  estimated_index_impact_pct?: number | null;
+  official_index_change_pct?: number | null;
+  mark_premium_change_pct?: number | null;
+  lag_vs_official_index_pct?: number | null;
+  signal_level: "high" | "medium" | "watch";
+  reason: string;
+}
+
+export interface SecondLevelSamplingStatus {
+  running: boolean;
+  config: SecondLevelSamplingConfig;
+  sample_count: number;
+  component_sample_count: number;
+  latest_observed_at?: string | null;
+  latest_error?: string | null;
+  latest_samples: SecondLevelMarketSample[];
+  latest_spreads: SecondLevelPairSpreadSnapshot[];
+  latest_component_samples: SecondLevelIndexComponentSample[];
+  latest_component_signals: SecondLevelIndexComponentSignal[];
+}
+
+export interface FatFingerBacktestRequest {
+  symbol: string;
+  market_mode: FatFingerMarketMode;
+  hours: number;
+  sample_limit: number;
+  entry_spread_pct: number;
+  ladder_levels: number;
+  ladder_step_pct: number;
+  order_notional_usdt: number;
+  maker_fill_assumption_pct: number;
+  maker_fee_pct: number;
+  taker_fee_pct: number;
+  taker_slippage_pct: number;
+  hedge_delay_seconds: number;
+  order_expiry_seconds: number;
+  take_profit_pct: number;
+  max_hold_seconds: number;
+  min_hedge_depth_usdt: number;
+  max_quote_age_seconds: number;
+  require_known_hedge_depth: boolean;
+  cooldown_seconds: number;
+}
+
+export interface FatFingerBacktestTrade {
+  id: string;
+  symbol: string;
+  market_mode: FatFingerMarketMode;
+  maker_exchange: string;
+  maker_market_type: MarketType;
+  hedge_exchange: string;
+  hedge_market_type: MarketType;
+  maker_side: FatFingerMakerSide;
+  tier: number;
+  entry_target_spread_pct: number;
+  order_placed_at: string;
+  maker_filled_at: string;
+  hedge_filled_at: string;
+  closed_at: string;
+  exit_reason: FatFingerExitReason;
+  maker_entry_price: number;
+  hedge_entry_price: number;
+  maker_exit_price: number;
+  hedge_exit_price: number;
+  notional_usdt: number;
+  hedge_depth_usdt?: number | null;
+  entry_hedge_edge_pct: number;
+  gross_pnl_usdt: number;
+  net_pnl_usdt: number;
+  net_pnl_pct: number;
+  max_favorable_pnl_pct: number;
+  max_adverse_pnl_pct: number;
+  hedge_delay_seconds: number;
+  hold_seconds: number;
+}
+
+export interface FatFingerBacktestRouteSummary {
+  maker_exchange: string;
+  maker_market_type: MarketType;
+  hedge_exchange: string;
+  hedge_market_type: MarketType;
+  maker_side: FatFingerMakerSide;
+  touch_count: number;
+  hedge_count: number;
+  unhedged_count: number;
+  closed_trade_count: number;
+  win_count: number;
+  total_notional_usdt: number;
+  total_net_pnl_usdt: number;
+  average_net_pnl_pct?: number | null;
+  median_net_pnl_pct?: number | null;
+  worst_net_pnl_pct?: number | null;
+  average_hold_seconds?: number | null;
+}
+
+export interface FatFingerBacktestResult {
+  request: FatFingerBacktestRequest;
+  start_at: string;
+  end_at: string;
+  raw_sample_count: number;
+  samples_truncated: boolean;
+  frame_count: number;
+  exchange_count: number;
+  order_placed_count: number;
+  order_expired_count: number;
+  order_skipped_depth_count: number;
+  exit_skipped_depth_count: number;
+  quote_touch_count: number;
+  hedge_completed_count: number;
+  unhedged_touch_count: number;
+  open_position_count: number;
+  closed_trade_count: number;
+  target_exit_count: number;
+  timeout_exit_count: number;
+  win_count: number;
+  loss_count: number;
+  win_rate_pct?: number | null;
+  hedge_success_rate_pct?: number | null;
+  total_notional_usdt: number;
+  total_net_pnl_usdt: number;
+  average_net_pnl_pct?: number | null;
+  median_net_pnl_pct?: number | null;
+  worst_net_pnl_pct?: number | null;
+  average_hold_seconds?: number | null;
+  average_hedge_delay_seconds?: number | null;
+  route_summaries: FatFingerBacktestRouteSummary[];
+  trades: FatFingerBacktestTrade[];
+  warnings: string[];
+}
+
+export interface NegativeBasisWatchItem {
+  id: string;
+  auto_managed: boolean;
+  enabled: boolean;
+  symbol: string;
+  spot_exchange: string;
+  future_exchange: string;
+  spot_symbol: string | null;
+  future_symbol: string | null;
+  future_multiplier: number;
+  interval_seconds: number;
+  lookback_hours: number;
+  retention_hours: number;
+  watch_threshold_pct: number;
+  building_threshold_pct: number;
+  confirmed_threshold_pct: number;
+  strong_threshold_pct: number;
+  extreme_threshold_pct: number;
+  watch_consecutive_hits: number;
+  building_consecutive_hits: number;
+  confirmed_consecutive_hits: number;
+  strong_consecutive_hits: number;
+  extreme_consecutive_hits: number;
+  spot_volume_growth_threshold: number;
+  oi_confirmed_growth_pct: number;
+  oi_strong_growth_pct: number;
+  min_spot_hourly_volume_usdt: number;
+  alert_min_level: NegativeBasisSignalLevel;
+  cooldown_seconds: number;
+  note: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NegativeBasisAutoScanStrategy {
+  interval_seconds: number;
+  lookback_hours: number;
+  retention_hours: number;
+  watch_threshold_pct: number;
+  building_threshold_pct: number;
+  confirmed_threshold_pct: number;
+  strong_threshold_pct: number;
+  extreme_threshold_pct: number;
+  watch_consecutive_hits: number;
+  building_consecutive_hits: number;
+  confirmed_consecutive_hits: number;
+  strong_consecutive_hits: number;
+  extreme_consecutive_hits: number;
+  spot_volume_growth_threshold: number;
+  oi_confirmed_growth_pct: number;
+  oi_strong_growth_pct: number;
+  min_spot_hourly_volume_usdt: number;
+  alert_min_level: NegativeBasisSignalLevel;
+  cooldown_seconds: number;
+}
+
+export interface NegativeBasisAutoScanSettings {
+  enabled: boolean;
+  feishu_notifications_enabled: boolean;
+  strategy: NegativeBasisAutoScanStrategy;
+  blocked_exchanges: string[];
+  blocked_symbols: string[];
+  blocked_exchange_symbols: string[];
+  updated_at: string;
+}
+
+export interface NegativeBasisPoint {
+  bucket_at: string;
+  spot_close: number;
+  future_close: number;
+  spot_premium_abs: number;
+  spot_premium_pct: number;
+}
+
+export interface NegativeBasisHourlyStatPoint {
+  bucket_at: string;
+  spot_premium_mean_pct: number | null;
+  spot_premium_max_pct: number | null;
+  spot_premium_last_pct: number | null;
+  spot_volume_usdt: number | null;
+  future_volume_usdt: number | null;
+  spot_volume_growth: number | null;
+  future_volume_ratio: number | null;
+  open_interest_open_usdt: number | null;
+  open_interest_close_usdt: number | null;
+  open_interest_change_pct: number | null;
+  long_account_pct: number | null;
+  short_account_pct: number | null;
+  long_account_count: number | null;
+  short_account_count: number | null;
+  long_short_ratio: number | null;
+  funding_rate_pct: number | null;
+}
+
+export interface NegativeBasisThresholdState {
+  name: NegativeBasisSignalLevel;
+  threshold_pct: number;
+  required_hits: number;
+  first_seen_at: string | null;
+  first_consecutive_at: string | null;
+  current_consecutive_hits: number;
+  max_consecutive_hits: number;
+  currently_active: boolean;
+}
+
+export interface NegativeBasisCurrentSnapshot {
+  observed_at: string;
+  spot_leg: PairSpreadCurrentLeg;
+  future_leg: PairSpreadCurrentLeg;
+  spot_premium_abs: number;
+  spot_premium_pct: number;
+}
+
+export interface NegativeBasisAnalysisResult {
+  item: NegativeBasisWatchItem;
+  observed_at: string;
+  signal_level: NegativeBasisSignalLevel;
+  score: number;
+  reasons: string[];
+  warnings: string[];
+  current: NegativeBasisCurrentSnapshot | null;
+  spot_premium: PairSpreadValueStats;
+  thresholds: NegativeBasisThresholdState[];
+  points: NegativeBasisPoint[];
+  hourly_stats: NegativeBasisHourlyStatPoint[];
+}
+
+export interface NegativeBasisSignalSample {
+  id?: number | null;
+  watch_id: string;
+  observed_at: string;
+  symbol: string;
+  spot_exchange: string;
+  future_exchange: string;
+  signal_level: NegativeBasisSignalLevel;
+  score: number;
+  spot_premium_pct: number | null;
+  spot_price: number | null;
+  future_price: number | null;
+  spot_volume_24h_usdt: number | null;
+  future_volume_24h_usdt: number | null;
+  open_interest_usdt: number | null;
+  open_interest_change_pct: number | null;
+  long_account_pct: number | null;
+  short_account_pct: number | null;
+  long_short_ratio: number | null;
+  funding_rate_pct: number | null;
+  reasons: string[];
+}
+
+export interface NegativeBasisAlertEvent {
+  id: string;
+  watch_id: string;
+  symbol: string;
+  spot_exchange: string;
+  future_exchange: string;
+  signal_level: NegativeBasisSignalLevel;
+  score: number;
+  spot_premium_pct: number | null;
+  message: string;
+  created_at: string;
+}
+
+export interface NegativeBasisAutoCandidate {
+  id: string;
+  symbol: string;
+  spot_exchange: string;
+  future_exchange: string;
+  spot_symbol?: string | null;
+  future_symbol?: string | null;
+  future_multiplier: number;
+  signal_level: NegativeBasisSignalLevel;
+  selection_score: number;
+  selection_reasons: string[];
+  spot_premium_pct: number;
+  spot_price: number;
+  future_price: number;
+  spot_volume_24h_usdt: number | null;
+  future_volume_24h_usdt: number | null;
+  observed_at: string;
+}
+
+export interface NegativeBasisMonitorStatus {
+  running: boolean;
+  auto_scan_enabled: boolean;
+  auto_scan_settings: NegativeBasisAutoScanSettings;
+  auto_scan_last_at: string | null;
+  auto_scan_error: string | null;
+  auto_candidate_count: number;
+  auto_candidates: NegativeBasisAutoCandidate[];
+  watch_count: number;
+  enabled_watch_count: number;
+  sample_count: number;
+  event_count: number;
+  latest_error?: string | null;
+  watchlist: NegativeBasisWatchItem[];
+  latest_samples: NegativeBasisSignalSample[];
+  latest_events: NegativeBasisAlertEvent[];
 }
 
 export interface HealthStatus {
@@ -110,6 +879,7 @@ export interface RiskSettings {
   max_open_spread_decay_pct: number;
   signal_validation_notional_usdt: number;
   orderbook_depth_safety_multiple: number;
+  orderbook_depth_band_pct: number;
   min_top_of_book_depth_usdt: number;
   signal_strategy_notes: string;
   ticker_collision_symbols: string[];
@@ -119,6 +889,7 @@ export interface RiskSettings {
 }
 
 export interface AlertMessageTemplateSettings {
+  format: "compact" | "detailed";
   include_trigger_summary: boolean;
   include_rule_details: boolean;
   include_pair: boolean;
@@ -132,16 +903,23 @@ export interface AlertMessageTemplateSettings {
   observation_limit: number;
 }
 
+export interface AstroAutomationSettings {
+  alert_auto_create: boolean;
+  allow_same_name_variants: boolean;
+}
+
 export interface AlertRule {
   id?: string;
   name: string;
   enabled: boolean;
   types: OpportunityType[];
+  suppress_sf_negative_funding: boolean;
   include_exchanges: string[];
   exclude_exchanges: string[];
   include_symbols: string[];
   exclude_symbols: string[];
   min_open_spread_pct: number;
+  favorable_funding_open_spread_pct: number | null;
   min_fee_adjusted_open_pct: number;
   min_volume_24h_usdt: number;
   max_data_age_seconds: number;
@@ -251,6 +1029,16 @@ export interface IndexComponentWatchItem {
   created_at: string;
 }
 
+export interface IndexComponentAutoWatchStatus {
+  enabled: boolean;
+  items: { source: string; symbol: string }[];
+  error: string | null;
+}
+
+export interface IndexComponentNotificationSettings {
+  enabled: boolean;
+}
+
 export interface IndexComponentChangeFilters {
   symbol?: string;
   exchange?: string;
@@ -261,6 +1049,29 @@ export interface IndexComponentSnapshotFilters {
   symbol?: string;
   exchange?: string;
   limit?: number;
+}
+
+export interface AnnouncementEventScheduleItem {
+  symbol: string;
+  event_time: string;
+  note?: string | null;
+}
+
+export interface AnnouncementResearchSource {
+  title: string;
+  url: string;
+}
+
+export interface AnnouncementAssetResearch {
+  symbol: string;
+  canonical_symbol?: string | null;
+  asset_type: string;
+  name?: string | null;
+  summary?: string | null;
+  business?: string | null;
+  sources: AnnouncementResearchSource[];
+  status: string;
+  searched_at: string;
 }
 
 export interface ExchangeAnnouncement {
@@ -275,7 +1086,9 @@ export interface ExchangeAnnouncement {
   symbols: string[];
   market_type?: string | null;
   event_time?: string | null;
+  event_schedule?: AnnouncementEventScheduleItem[];
   summary?: string | null;
+  asset_research?: AnnouncementAssetResearch[];
   published_at: string;
   fetched_at: string;
   alert_status: string;
@@ -286,8 +1099,11 @@ export interface ExchangeAnnouncement {
 export interface AnnouncementSettings {
   enabled: boolean;
   poll_interval_seconds: number;
+  alert_max_age_minutes: number;
   record_exchanges: string[];
   alert_exchanges: string[];
+  listing_delisting_alerts_enabled: boolean;
+  launchpool_alerts_enabled: boolean;
   bootstrap_alerts_enabled: boolean;
   event_reminders_enabled: boolean;
   event_reminder_minutes_before: number;
@@ -302,6 +1118,66 @@ export interface AnnouncementFilters {
 export interface AnnouncementExchangeOption {
   label: string;
   value: string;
+}
+
+export type OilNewsDirection = "long" | "short" | "watch";
+export type OilNewsSeverity = "critical" | "high" | "medium" | "low";
+
+export interface OilMarketSnapshot {
+  symbol: string;
+  price?: number | null;
+  change_1h_pct?: number | null;
+  observed_at: string;
+}
+
+export interface OilNewsItem {
+  id: string;
+  fingerprint: string;
+  external_id: string;
+  source: string;
+  source_feed: string;
+  title: string;
+  title_zh?: string | null;
+  url: string;
+  summary?: string | null;
+  summary_zh?: string | null;
+  published_at: string;
+  fetched_at: string;
+  categories: string[];
+  severity: OilNewsSeverity;
+  impact_score: number;
+  direction: OilNewsDirection;
+  confidence: number;
+  horizon: string;
+  rationale: string[];
+  risk_note: string;
+  market?: OilMarketSnapshot | null;
+  alert_status: string;
+  alerted_at?: string | null;
+}
+
+export interface OilNewsSettings {
+  enabled: boolean;
+  poll_interval_seconds: number;
+  feishu_notifications_enabled: boolean;
+  alert_min_severity: OilNewsSeverity;
+  alert_max_age_minutes: number;
+  bootstrap_alerts_enabled: boolean;
+}
+
+export interface OilNewsFilters {
+  severity?: OilNewsSeverity;
+  direction?: OilNewsDirection;
+  limit?: number;
+}
+
+export interface OilNewsRefreshResult {
+  fetched_count: number;
+  relevant_count: number;
+  inserted_count: number;
+  alerted_count: number;
+  market?: OilMarketSnapshot | null;
+  errors: string[];
 }
 
 export interface MarketFilters {
@@ -392,12 +1268,530 @@ export interface OpportunityHistoryStatsQuery {
   point_limit?: number;
 }
 
+export interface PairSpreadLegQuery {
+  exchange: string;
+  symbol: string;
+  market_type: MarketType;
+  dex?: string | null;
+}
+
+export interface PairSpreadPreset {
+  id: string;
+  leg1_exchange: string;
+  leg1_market_type: MarketType;
+  leg1_dex: string;
+  leg1_symbol: string;
+  leg1_raw_symbol?: string | null;
+  leg1_price_multiplier?: number;
+  leg1_contract_size_multiplier?: number | null;
+  leg2_exchange: string;
+  leg2_market_type: MarketType;
+  leg2_dex: string;
+  leg2_symbol: string;
+  leg2_raw_symbol?: string | null;
+  leg2_price_multiplier?: number;
+  leg2_contract_size_multiplier?: number | null;
+  leg2_multiplier: number;
+  hours: number;
+  intervalSeconds: number;
+  showDayCompare: boolean;
+  dayCompareDays: number;
+  dayCompareMode: "query" | "custom";
+  dayCompareStartTime: string;
+  dayCompareEndTime: string;
+  savedAt: string;
+}
+
+export interface FloatingWatchSettings {
+  symbols: string[];
+  pair_ids: string[];
+  hidden_positions: AccountPositionIdentity[];
+}
+
+export type AccountPositionSide = "long" | "short";
+export type AccountPositionFreshness = "fresh" | "stale";
+export type AccountPositionAccountState =
+  | "not_configured"
+  | "ok"
+  | "empty"
+  | "permission_denied"
+  | "error"
+  | "stale";
+
+export interface AccountPositionIdentity {
+  id: string;
+  account_id: string;
+  account_label: string;
+  exchange: string;
+  market_type: MarketType;
+  raw_symbol: string;
+  symbol: string;
+  side: AccountPositionSide;
+  dex: string | null;
+}
+
+export interface AccountPosition extends AccountPositionIdentity {
+  quantity: number;
+  quantity_unit: string;
+  contract_quantity: number | null;
+  contract_multiplier: number | null;
+  entry_price: number | null;
+  mark_price: number | null;
+  notional_usdt: number | null;
+  unrealized_pnl_usdt: number | null;
+  roi_pct: number | null;
+  leverage: number | null;
+  price_basis: string;
+  estimated_fields: string[];
+  updated_at: string;
+  freshness: AccountPositionFreshness;
+  age_seconds: number;
+}
+
+export interface AccountPositionAccountStatus {
+  account_id: string;
+  account_label: string;
+  exchange: string;
+  market_type: MarketType;
+  dex: string | null;
+  configured: boolean;
+  state: AccountPositionAccountState;
+  message: string;
+  position_count: number;
+  queried_at: string;
+  data_updated_at: string | null;
+  age_seconds: number | null;
+}
+
+export interface AccountPositionSnapshot {
+  positions: AccountPosition[];
+  accounts: AccountPositionAccountStatus[];
+  queried_at: string;
+}
+
+export type AccountConnectionExchange =
+  | "binance"
+  | "okx"
+  | "bybit"
+  | "gate"
+  | "bitget"
+  | "hyperliquid";
+
+export interface SupportedAccountExchange {
+  exchange: AccountConnectionExchange;
+  label: string;
+  supports_spot: boolean;
+  supports_futures: boolean;
+  requires_passphrase: boolean;
+  uses_public_address: boolean;
+  note: string;
+}
+
+export interface AccountConnection {
+  id: string;
+  exchange: AccountConnectionExchange;
+  account_label: string;
+  enabled: boolean;
+  include_spot: boolean;
+  include_futures: boolean;
+  dex: string | null;
+  credential_hint: string;
+  last_test_state: AccountPositionAccountState | null;
+  last_test_message: string | null;
+  last_tested_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AccountConnectionOverview {
+  storage_ready: boolean;
+  storage_message: string;
+  supported_exchanges: SupportedAccountExchange[];
+  connections: AccountConnection[];
+}
+
+export interface AccountConnectionWrite {
+  exchange: AccountConnectionExchange;
+  account_label: string;
+  enabled: boolean;
+  include_spot: boolean;
+  include_futures: boolean;
+  dex?: string | null;
+  api_key?: string;
+  api_secret?: string;
+  passphrase?: string;
+  public_address?: string;
+}
+
+export type AccountConnectionUpdate = Partial<Omit<AccountConnectionWrite, "exchange">>;
+
+export interface AccountConnectionTestScope {
+  market_type: MarketType;
+  dex: string | null;
+  state: AccountPositionAccountState;
+  message: string;
+  position_count: number;
+}
+
+export interface AccountConnectionTestResult {
+  connection_id: string | null;
+  exchange: AccountConnectionExchange;
+  account_label: string;
+  success: boolean;
+  scopes: AccountConnectionTestScope[];
+  tested_at: string;
+}
+
+export interface HyperliquidMarketAsset {
+  raw_symbol: string;
+  symbol: string;
+  base: string;
+  delisted: boolean;
+}
+
+export interface HyperliquidDexMarket {
+  dex: string;
+  full_name: string;
+  assets: HyperliquidMarketAsset[];
+}
+
+export interface PairSpreadPoint {
+  bucket_at: string;
+  leg1_close: number;
+  leg2_close: number;
+  spread_abs: number;
+  spread_pct: number;
+}
+
+export interface PairSpreadHourlyVolumePoint {
+  bucket_at: string;
+  leg1_volume_usdt: number | null;
+  leg2_volume_usdt: number | null;
+  total_volume_usdt: number | null;
+  volume_diff_usdt: number | null;
+  volume_ratio: number | null;
+}
+
+export interface PairSpreadOpenInterestPoint {
+  bucket_at: string;
+  leg1_open_interest_usdt: number | null;
+  leg2_open_interest_usdt: number | null;
+  leg1_change_usdt: number | null;
+  leg2_change_usdt: number | null;
+  net_change_usdt: number | null;
+  source?: string;
+  leg1_source?: string;
+  leg2_source?: string;
+}
+
+export interface PairSpreadFundingPoint {
+  exchange: string;
+  symbol: string;
+  funding_time: string;
+  funding_rate_pct: number;
+  dex?: string | null;
+}
+
+export interface PairSpreadRealtimeFundingPoint {
+  bucket_at: string;
+  left_rate_pct: number | null;
+  right_rate_pct: number | null;
+  net_rate_pct: number | null;
+  source?: string;
+}
+
+export interface PairSpreadFundingRecordRequest {
+  leg1: PairSpreadLegQuery;
+  leg2: PairSpreadLegQuery;
+  leg2_multiplier: number;
+}
+
+export interface PairSpreadFundingWatchItem {
+  pair_key: string;
+  leg1: PairSpreadLegQuery;
+  leg2: PairSpreadLegQuery;
+  leg2_multiplier: number;
+  interval_seconds: number;
+  created_at: string;
+  updated_at: string;
+  sample_count: number;
+  latest_sample_at: string | null;
+}
+
+export interface PairSpreadFundingRecordStatus {
+  watched: boolean;
+  item: PairSpreadFundingWatchItem | null;
+  samples: PairSpreadRealtimeFundingPoint[];
+  warnings: string[];
+}
+
+export interface PairSpreadCurrentLeg {
+  exchange: string;
+  symbol: string;
+  market_type: MarketType;
+  dex?: string | null;
+  raw_symbol: string;
+  price_multiplier: number;
+  contract_size_multiplier: number | null;
+  data_source: string | null;
+  upstream_timestamp: string | null;
+  is_estimated: boolean;
+  estimated_fields: string[];
+  estimated_taker_fee_pct: number | null;
+  fee_is_estimated: boolean;
+  price: number;
+  price_field: PairSpreadPriceField;
+  bid_price: number | null;
+  ask_price: number | null;
+  mark_price: number | null;
+  index_price: number | null;
+  mid_price: number | null;
+  last_price: number | null;
+  volume_24h_usdt: number | null;
+  open_interest_usdt: number | null;
+  open_interest_contracts: number | null;
+  long_account_pct: number | null;
+  short_account_pct: number | null;
+  long_account_count: number | null;
+  short_account_count: number | null;
+  long_short_ratio: number | null;
+  funding_rate_pct: number | null;
+  funding_next_rate_pct: number | null;
+  funding_next_time: string | null;
+  funding_interval_hours: number | null;
+  funding_rate_upper_pct: number | null;
+  funding_rate_lower_pct: number | null;
+  timestamp: string;
+}
+
+export interface PairSpreadCurrentSnapshot {
+  observed_at: string;
+  leg1: PairSpreadCurrentLeg;
+  leg2: PairSpreadCurrentLeg;
+  spread_abs: number;
+  spread_pct: number;
+  open_spread_abs: number | null;
+  open_spread_pct: number | null;
+  close_spread_abs: number | null;
+  close_spread_pct: number | null;
+  mark_spread_abs: number | null;
+  mark_spread_pct: number | null;
+}
+
+export interface PairSpreadValueStats {
+  min: number | null;
+  max: number | null;
+  mean: number | null;
+  current: number | null;
+}
+
+export interface PairSpreadQueryResult {
+  leg1: PairSpreadLegQuery;
+  leg2: PairSpreadLegQuery;
+  hours: number;
+  interval_minutes: number;
+  interval_seconds: number;
+  leg2_multiplier: number;
+  observed_at: string;
+  point_count: number;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+  spread_abs: PairSpreadValueStats;
+  spread_pct: PairSpreadValueStats;
+  current: PairSpreadCurrentSnapshot | null;
+  points: PairSpreadPoint[];
+  hourly_volume?: PairSpreadHourlyVolumePoint[];
+  open_interest?: PairSpreadOpenInterestPoint[];
+  open_interest_source?: string;
+  open_interest_leg1_source?: string;
+  open_interest_leg2_source?: string;
+  funding_history: PairSpreadFundingPoint[];
+  realtime_funding?: PairSpreadRealtimeFundingPoint[];
+  warnings: string[];
+}
+
+export interface PairSpreadFundingHistoryResult {
+  leg1: PairSpreadLegQuery;
+  leg2: PairSpreadLegQuery;
+  start_at: string;
+  end_at: string;
+  funding_history: PairSpreadFundingPoint[];
+  warnings: string[];
+}
+
+export interface SymbolExchangePriceSnapshot {
+  exchange: string;
+  symbol: string;
+  market_type: MarketType;
+  raw_symbol: string;
+  price: number;
+  price_field: PairSpreadPriceField;
+  funding_rate_pct: number | null;
+  timestamp: string;
+}
+
+export interface SymbolSpreadPoint {
+  bucket_at: string;
+  base_close: number;
+  exchange_close: number;
+  spread_abs: number;
+  spread_pct: number;
+}
+
+export interface SymbolSpreadSeries {
+  exchange: string;
+  symbol: string;
+  market_type: MarketType;
+  point_count: number;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+  spread_abs: PairSpreadValueStats;
+  spread_pct: PairSpreadValueStats;
+  current: SymbolSpreadPoint | null;
+  points: SymbolSpreadPoint[];
+}
+
+export interface SymbolSpreadQueryResult {
+  symbol: string;
+  market_type: MarketType;
+  base_exchange: string;
+  exchanges: string[];
+  hours: number;
+  interval_minutes: number;
+  interval_seconds: number;
+  observed_at: string;
+  point_count: number;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+  current_prices: SymbolExchangePriceSnapshot[];
+  series: SymbolSpreadSeries[];
+  warnings: string[];
+}
+
+export interface PairSpreadDiagnosticThresholdRun {
+  start_at: string | null;
+  end_at: string | null;
+  point_count: number;
+  peak_spread_pct: number | null;
+  peak_at: string | null;
+}
+
+export interface PairSpreadDiagnosticRule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  matches_pair_scope: boolean;
+  min_open_spread_pct: number;
+  min_fee_adjusted_open_pct: number;
+  consecutive_hits: number;
+  cooldown_seconds: number;
+  reasons: string[];
+}
+
+export interface PairSpreadDiagnosticEvent {
+  rule_id: string;
+  status: string;
+  created_at: string;
+  message: string;
+}
+
+export interface PairSpreadDiagnosticEventSummary {
+  total: number;
+  sent: number;
+  muted: number;
+  failed: number;
+  latest_status: string | null;
+  latest_at: string | null;
+  latest_message: string | null;
+  events: PairSpreadDiagnosticEvent[];
+}
+
+export interface PairSpreadDiagnosticResult {
+  leg1: PairSpreadLegQuery;
+  leg2: PairSpreadLegQuery;
+  hours: number;
+  requested_interval_seconds: number;
+  interval_seconds: number;
+  observed_at: string;
+  point_count: number;
+  threshold_pct: number;
+  peak_at: string | null;
+  peak_spread_pct: number | null;
+  peak_spread_abs: number | null;
+  peak_leg1_close: number | null;
+  peak_leg2_close: number | null;
+  points_over_threshold: number;
+  first_over_threshold_at: string | null;
+  last_over_threshold_at: string | null;
+  longest_run: PairSpreadDiagnosticThresholdRun;
+  current_spread_pct: number | null;
+  inferred_type: OpportunityType;
+  alert_rules: PairSpreadDiagnosticRule[];
+  alert_events: PairSpreadDiagnosticEventSummary;
+  suppress_when_card_conditions_fail: boolean;
+  notes: string[];
+  warnings: string[];
+}
+
+export interface PremiumIndexPoint {
+  bucket_at: string;
+  premium_pct: number;
+  mark_price: number | null;
+  index_price: number | null;
+  source: string;
+}
+
+export interface PremiumIndexCurrentSnapshot {
+  observed_at: string;
+  exchange: string;
+  symbol: string;
+  dex?: string | null;
+  raw_symbol: string;
+  mark_price: number | null;
+  index_price: number | null;
+  mid_price: number | null;
+  last_price: number | null;
+  premium_pct: number | null;
+  mid_premium_pct: number | null;
+  funding_rate_pct: number | null;
+  funding_next_rate_pct: number | null;
+  funding_next_time: string | null;
+  funding_interval_hours: number | null;
+  funding_rate_upper_pct: number | null;
+  funding_rate_lower_pct: number | null;
+  source: string;
+}
+
+export interface PremiumIndexValueStats {
+  min: number | null;
+  max: number | null;
+  mean: number | null;
+  current: number | null;
+}
+
+export interface PremiumIndexQueryResult {
+  exchange: string;
+  symbol: string;
+  dex?: string | null;
+  hours: number;
+  interval_minutes: number;
+  observed_at: string;
+  point_count: number;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+  premium_pct: PremiumIndexValueStats;
+  current: PremiumIndexCurrentSnapshot | null;
+  points: PremiumIndexPoint[];
+  warnings: string[];
+}
+
 export interface AstroCardSettings {
   max_trade_usdt: number;
   leverage: number;
   min_notional: number;
   max_notional: number;
   open_enabled: boolean;
+  card_variant: AstroCardVariant;
   close_position_buffer_pct: number;
   unfavorable_funding_weight: number;
   close_position_floor_pct: number;
@@ -448,7 +1842,24 @@ export interface AstroCardCreateRequest {
   min_notional?: number;
   max_notional?: number;
   open_enabled?: boolean;
+  card_variant?: AstroCardVariant;
   save_as_default?: boolean;
+}
+
+export type AstroCardVariant = "both" | "non_gc" | "gc";
+
+export interface AstroCardRouteVariant {
+  card_variant: "non_gc" | "gc";
+  buy_exchange: string;
+  sell_exchange: string;
+}
+
+export interface AstroInstrumentRouteRequest {
+  symbol: string;
+  buy_exchange: string;
+  buy_market_type: MarketType;
+  sell_exchange: string;
+  sell_market_type: MarketType;
 }
 
 export interface AstroFieldAssumption {
@@ -462,10 +1873,14 @@ export interface AstroFieldAssumption {
 export interface AstroPairPlan {
   opportunity_id: string;
   symbol: string;
+  source_open_spread_pct: number | null;
+  quoted_at: string | null;
   mode: "dry_run";
   can_submit: boolean;
   pair: Record<string, unknown> | null;
   sdk_payload: Record<string, unknown> | null;
+  card_variant?: AstroCardVariant;
+  route_variants?: AstroCardRouteVariant[];
   blockers: string[];
   warnings: string[];
   assumptions: AstroFieldAssumption[];
@@ -478,6 +1893,39 @@ export interface AstroActionResult {
   message: string;
   pair_name: string | null;
   pair_type: string | null;
+  warnings?: string[];
+}
+
+export interface AstroPairStatus {
+  id?: string;
+  name?: string;
+  type?: string;
+  status?: boolean;
+  disableOpen?: boolean;
+  disableClose?: boolean;
+  buyEx?: string;
+  sellEx?: string;
+  openPosition?: string | number | null;
+  closePosition?: string | number | null;
+  aExPosition?: string | number | null;
+  bExPosition?: string | number | null;
+  avgOpenAExPrice?: string | number | null;
+  avgOpenBExPrice?: string | number | null;
+  avgCloseAExPrice?: string | number | null;
+  avgCloseBExPrice?: string | number | null;
+  positionRate?: string | number | null;
+  regressionValue?: string | number | null;
+  profit?: string | number | null;
+  realizedProfit?: string | number | null;
+  aHlDex?: string | null;
+  bHlDex?: string | null;
+  aEffectiveHlDex?: string | null;
+  bEffectiveHlDex?: string | null;
+  maxTradeUSDT?: string | number | null;
+  leverage?: string | number | null;
+  minNotional?: string | number | null;
+  maxNotional?: string | number | null;
+  [key: string]: unknown;
 }
 
 export interface AstroSdkStatus {
@@ -486,6 +1934,8 @@ export interface AstroSdkStatus {
   base_url: string;
   admin_prefix: string;
   api_key_configured: boolean;
+  verify_tls: boolean;
+  ca_bundle_configured: boolean;
   list_path: string;
   pair_path: string;
   message_path: string;
@@ -516,6 +1966,60 @@ export interface ServiceRestartResult {
 }
 
 export type FundingArbitrageDecision = "ENTER" | "HOLD" | "EXIT_SOON" | "EXIT_NOW" | "BLOCKED";
+
+export interface AstroPreaddSettings {
+  enabled: boolean;
+  exchanges: string[];
+  funding_threshold_pct: number;
+  premium_threshold_pct: number;
+  open_spread_threshold_pct: number;
+  min_volume_24h_usdt: number;
+  scan_interval_seconds: number;
+  max_routes_per_run: number;
+  stale_after_seconds: number;
+}
+
+export interface AstroPreaddLegSnapshot {
+  exchange: string;
+  premium_index_pct: number | null;
+  funding_rate_pct: number | null;
+  funding_interval_hours: number | null;
+  volume_24h_usdt: number | null;
+}
+
+export interface AstroPreaddCandidate {
+  id: string;
+  symbol: string;
+  buy_exchange: string;
+  sell_exchange: string;
+  signal_exchange: string;
+  signal_type: "funding" | "premium_proxy";
+  signal_value_pct: number;
+  funding_source: "predicted" | "current" | "missing";
+  funding_interval_hours: number | null;
+  entry_mode: "convergence" | "bybit_funding_reverse";
+  card_open_spread_pct: number;
+  buy_leg: AstroPreaddLegSnapshot;
+  sell_leg: AstroPreaddLegSnapshot;
+  live_spread_pct: number;
+  observed_at: string;
+}
+
+export interface AstroPreaddPreview {
+  items: AstroPreaddCandidate[];
+  warnings: string[];
+  total_matches: number;
+}
+
+export interface AstroPreaddRunResult {
+  attempted: number;
+  created: number;
+  skipped: number;
+  failed: number;
+  results: string[];
+  warnings: string[];
+}
+
 export type FundingSource = "predicted" | "fallback_current" | "missing";
 export type AdlRiskLevel = "LOW" | "MEDIUM" | "HIGH" | "BLOCKED";
 
@@ -538,6 +2042,13 @@ export interface FundingArbitrageSettings {
   leverage: number;
   notional_per_symbol_usdt: number;
   prefer_hyperliquid: boolean;
+  strong_funding_pct: number;
+  near_settlement_minutes: number;
+  small_basis_threshold_pct: number;
+  interval_mismatch_min_hours: number;
+  formula_divergence_min_funding_pct: number;
+  conflicted_basis_min_check_pct: number;
+  min_conflicted_reward_risk_ratio: number;
 }
 
 export interface FundingArbitrageCandidate {
@@ -546,8 +2057,10 @@ export interface FundingArbitrageCandidate {
   type: "SF" | "FF";
   long_exchange: string;
   long_market_type: MarketType;
+  long_raw_symbol?: string | null;
   short_exchange: string;
   short_market_type: MarketType;
+  short_raw_symbol?: string | null;
   funding_source: FundingSource;
   long_current_funding_pct: number | null;
   short_current_funding_pct: number | null;
@@ -572,13 +2085,19 @@ export interface FundingArbitrageCandidate {
   confidence_penalty_pct: number;
   adl_risk_penalty_pct: number;
   expected_cycle_pnl_pct: number;
+  adverse_entry_basis_pct: number;
+  conflicted_reward_risk_ratio: number | null;
   adl_risk_score: number;
   adl_risk_level: AdlRiskLevel;
   decision: FundingArbitrageDecision;
   decision_reasons: string[];
   risk_labels: string[];
+  primary_opportunity_type: FundingOpportunityType;
+  opportunity_types: FundingOpportunityType[];
+  opportunity_reasons: string[];
   volume_24h_usdt: number | null;
   depth_usdt: number | null;
+  uses_gate: boolean;
   uses_hyperliquid: boolean;
 }
 
@@ -595,6 +2114,72 @@ export interface FundingArbitragePreview {
   exit_count: number;
   blocked_count: number;
   candidates: FundingArbitrageCandidate[];
+}
+
+export type OpportunityRadarPremiumDirection = "negative" | "positive" | "both";
+export type OpportunityRadarDirection = "LONG_ANCHOR_SHORT_PEER" | "LONG_PEER_SHORT_ANCHOR";
+export type OpportunityRadarSignalLevel = "HIGH" | "MEDIUM" | "WATCH";
+
+export interface OpportunityRadarSettings {
+  enabled: boolean;
+  feishu_notifications_enabled: boolean;
+  min_alert_score: number;
+  alert_consecutive_hits: number;
+  alert_cooldown_seconds: number;
+  anchor_exchange: string;
+  peer_exchanges: string[];
+  premium_direction: OpportunityRadarPremiumDirection;
+  min_abs_premium_pct: number;
+  min_relative_premium_gap_pct: number;
+  max_abs_entry_spread_pct: number;
+  require_funding_alignment: boolean;
+  min_hourly_funding_edge_pct: number;
+  min_volume_24h_usdt: number;
+  notional_per_symbol_usdt: number;
+  min_depth_multiple: number;
+  max_data_age_seconds: number;
+  max_candidates: number;
+}
+
+export interface OpportunityRadarCandidate {
+  id: string;
+  symbol: string;
+  signal_level: OpportunityRadarSignalLevel;
+  score: number;
+  direction: OpportunityRadarDirection;
+  long_exchange: string;
+  short_exchange: string;
+  anchor_exchange: string;
+  peer_exchange: string;
+  anchor_premium_pct: number;
+  peer_premium_pct: number;
+  peer_median_premium_pct: number;
+  relative_premium_gap_pct: number;
+  entry_spread_pct: number;
+  long_entry_price: number;
+  short_entry_price: number;
+  long_funding_pct: number | null;
+  short_funding_pct: number | null;
+  long_funding_interval_hours: number | null;
+  short_funding_interval_hours: number | null;
+  hourly_funding_edge_pct: number | null;
+  volume_24h_usdt: number | null;
+  depth_usdt: number | null;
+  data_age_seconds: number;
+  reasons: string[];
+  risk_labels: string[];
+}
+
+export interface OpportunityRadarPreview {
+  observed_at: string;
+  settings: OpportunityRadarSettings;
+  anchor_markets: number;
+  total_pairs_evaluated: number;
+  displayed_candidates: number;
+  high_count: number;
+  medium_count: number;
+  watch_count: number;
+  candidates: OpportunityRadarCandidate[];
 }
 
 export type TradfiPerpDirection = "LONG_HL_SHORT_BINANCE" | "LONG_BINANCE_SHORT_HL";
@@ -666,6 +2251,14 @@ export interface TradfiPerpMonitorPreview {
 
 export type FundingResearchDecision = "TRADE" | "SMALL_TRADE" | "WATCH" | "NO_TRADE";
 export type FundingResearchBasisAlignment = "aligned" | "neutral" | "conflicted";
+export type FundingOpportunityType =
+  | "BASIS_AND_FUNDING_ALIGNED"
+  | "STRONG_FUNDING_NEAR_SETTLEMENT"
+  | "INTERVAL_MISMATCH"
+  | "FORMULA_DIVERGENCE"
+  | "BASIS_CARRY_CONFLICTED"
+  | "BASIS_MEAN_REVERSION"
+  | "PURE_FUNDING_SPREAD";
 export type FundingResearchFormulaConfidence =
   | "formula"
   | "predicted"
@@ -688,16 +2281,25 @@ export interface FundingResearchDepthStats {
 }
 
 export interface FundingResearchCandidate {
+  id: string;
   symbol: string;
   long_exchange: string;
   short_exchange: string;
+  long_formula_family: string;
+  short_formula_family: string;
   long_funding_pct: number | null;
   short_funding_pct: number | null;
+  long_funding_interval_hours: number | null;
+  short_funding_interval_hours: number | null;
+  long_next_settlement_time: string | null;
+  short_next_settlement_time: string | null;
   expected_net_funding_pct: number | null;
   expected_basis_change_pct: number;
   estimated_cost_pct: number;
   risk_buffer_pct: number;
   ev_pct: number | null;
+  adverse_basis_pct: number;
+  conflicted_reward_risk_ratio: number | null;
   score: number;
   decision: FundingResearchDecision;
   basis_alignment: FundingResearchBasisAlignment;
@@ -708,6 +2310,11 @@ export interface FundingResearchCandidate {
   next_settlement_time: string | null;
   minutes_to_settlement: number | null;
   funding_source: FundingResearchFormulaConfidence;
+  primary_opportunity_type: FundingOpportunityType;
+  opportunity_types: FundingOpportunityType[];
+  opportunity_reasons: string[];
+  uses_gate: boolean;
+  uses_hyperliquid: boolean;
   depth_stats: FundingResearchDepthStats | null;
   risk_labels: string[];
   reasons: string[];
@@ -735,14 +2342,19 @@ export interface FundingResearchPaperTrade {
   symbol: string;
   long_exchange: string;
   short_exchange: string;
+  primary_opportunity_type: FundingOpportunityType;
+  opportunity_types: FundingOpportunityType[];
   opened_at: string;
   closed_at: string | null;
+  last_observed_at: string | null;
   open_long_basis_pct: number | null;
   open_short_basis_pct: number | null;
   open_basis_diff_pct: number | null;
   close_long_basis_pct: number | null;
   close_short_basis_pct: number | null;
   close_basis_diff_pct: number | null;
+  unrealized_basis_change_pct: number | null;
+  unrealized_pnl_pct: number | null;
   expected_net_funding_pct: number | null;
   expected_basis_change_pct: number;
   expected_ev_pct: number | null;
@@ -755,6 +2367,17 @@ export interface FundingResearchPaperTrade {
   max_adverse_ev_pct: number | null;
   exit_reason: string | null;
   source_candidate: FundingResearchCandidate;
+}
+
+export interface FundingResearchOpportunityTypeSummary {
+  opportunity_type: FundingOpportunityType;
+  total_trades: number;
+  closed_trades: number;
+  winners: number;
+  losers: number;
+  win_rate_pct: number | null;
+  total_realized_pnl_pct: number;
+  average_realized_pnl_pct: number | null;
 }
 
 export interface FundingResearchPaperTradeSummary {
@@ -772,6 +2395,7 @@ export interface FundingResearchPaperTradeSummary {
   max_win_pct: number | null;
   max_loss_pct: number | null;
   average_score: number | null;
+  by_opportunity_type: FundingResearchOpportunityTypeSummary[];
 }
 
 export interface FundingResearchLegacyBacktestSummary {
@@ -923,4 +2547,326 @@ export interface OpportunityFilters {
   include_risky?: boolean;
   hidden_risk_labels?: string[];
   min_volume_24h_k?: number;
+  limit?: number;
+}
+export interface SqueezeWatchFeatures {
+  market_key: string;
+  bucket_at: string;
+  calculated_at: string;
+  status: "ready" | "insufficient_data" | "stale_data";
+  reasons: string[];
+  return_4h: number | null;
+  return_24h: number | null;
+  volume_ratio: number | null;
+  account_ratio: number | null;
+  account_ratio_change: number | null;
+  oi_current_growth: number | null;
+  oi_peak_growth: number | null;
+  oi_drawdown: number | null;
+  oi_age_seconds: number | null;
+  account_age_seconds: number | null;
+}
+
+export interface SqueezeWatchEvent {
+  id: string;
+  market_key: string;
+  rule_version: string;
+  first_bucket_at: string;
+  last_bucket_at: string;
+  stage: "building" | "squeeze_pending" | "tail_risk";
+  expires_at: string;
+  cooldown_until: string;
+  features: SqueezeWatchFeatures;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SqueezeDiscoverySample {
+  raw_symbol: string;
+  market_key?: string;
+  selection_kind?: string;
+  quote_volume_24h?: number;
+  ticker_source_at?: string;
+  ticker_change_24h?: number;
+  return_4h?: number | null;
+  return_24h?: number | null;
+  volume_ratio?: number | null;
+  oi_current_growth?: number | null;
+  account_ratio?: number | null;
+  quality?: string;
+  reasons?: string[];
+}
+
+export interface SqueezeStatus {
+  enabled: boolean;
+  routes?: {
+    enabled: boolean;
+    source_capability: string;
+    last_attempt_at: string | null;
+    last_success_at: string | null;
+    last_error: string | null;
+    last_route_id: string | null;
+    last_collected_at: string | null;
+    queue_depth: number;
+    storage_failure_count: number;
+    last_storage_error_at: string | null;
+    last_storage_error: string | null;
+    dropped_scan_count: number;
+    last_drop_at: string | null;
+  };
+  paper?: SqueezePaperStatus | null;
+  rule_version: string;
+  last_attempt_at: string | null;
+  last_success_at: string | null;
+  last_bucket_at: string | null;
+  last_error: string | null;
+  verified_symbols: string[];
+  discovery: {
+    mode: "auto" | "fixed" | "not_started";
+    selected_at: string | null;
+    bucket_at: string | null;
+    rule_version: string | null;
+    eligible_count: number;
+    screened_count: number;
+    stale: boolean;
+    selected: SqueezeDiscoverySample[];
+    screened: SqueezeDiscoverySample[];
+  };
+  active_watch_count: number;
+  liquidation_coverage: {
+    state: string;
+    updated_at: string | null;
+    last_message_at: string | null;
+    last_error: string | null;
+    open_gaps: number;
+    public_stream_complete: false;
+  };
+  liquidation_observed_last_hour: Record<string, {
+    updates: number;
+    observed_notional_usdt: number;
+  }>;
+  latest_market_scans: Array<{
+    market_key: string;
+    bucket_at: string;
+    requested_from: string;
+    requested_to: string;
+    received_at: string;
+    candle_count: number;
+    positioning_count: number;
+    result_status: string;
+    error: string | null;
+  }>;
+}
+
+export interface SqueezePaperAccount {
+  exchange: string;
+  initial_balance: string;
+  cash_balance: string;
+  reserved_margin: string;
+  fees_paid: string;
+  funding_cashflow: string;
+  price_pnl: string;
+  updated_at: string;
+}
+
+export interface SqueezePaperStatus {
+  enabled: boolean;
+  source_capability: string;
+  rule_version: string;
+  started_at: string | null;
+  continuous_started_at: string | null;
+  coverage_gap_count: number;
+  coverage_gap_open: boolean;
+  last_processed_at: string | null;
+  last_success_at: string | null;
+  last_error: string | null;
+  trade_counts: Record<string, number>;
+  unresolved_exposure_count: number;
+  accounts: SqueezePaperAccount[];
+}
+
+export interface SqueezePaperFill {
+  id: string;
+  role: string;
+  leg_key: string;
+  side: string;
+  quantity: string;
+  unit_price: string;
+  fee: string;
+  filled_at: string;
+}
+
+export interface SqueezePaperCashflow {
+  id: string;
+  leg_key: string;
+  kind: string;
+  amount: string;
+  occurred_at: string;
+  source: string;
+  mark_kind: string;
+}
+
+export interface SqueezePaperTrade {
+  id: string;
+  event_id: string;
+  route_id: string;
+  asset_id: string;
+  status: string;
+  signal_at: string;
+  opened_at: string | null;
+  closed_at: string | null;
+  expensive_key: string;
+  cheap_key: string;
+  target_quantity: string;
+  expensive_open_quantity: string;
+  cheap_open_quantity: string;
+  price_pnl: string;
+  entry_fees: string;
+  exit_fees: string;
+  funding_total: string;
+  borrow_total: string;
+  max_adverse_net: string | null;
+  minimum_expensive_free_balance: string | null;
+  minimum_cheap_free_balance: string | null;
+  funding_gap_at: string | null;
+  exit_reason: string | null;
+  last_error: string | null;
+  risk_labels: string[];
+  fills: SqueezePaperFill[];
+  cashflows: SqueezePaperCashflow[];
+}
+
+export interface SqueezePaperReport {
+  rule_version: string | null;
+  frozen_parameters: Record<string, string | number> | null;
+  started_at: string | null;
+  continuous_started_at: string | null;
+  coverage_gap_count: number;
+  coverage_gap_open: boolean;
+  as_of: string;
+  elapsed_days: number;
+  independent_events: number;
+  total_independent_events: number;
+  minimum_days: number;
+  minimum_independent_events: number;
+  sample_status: "sample_insufficient" | "ready_for_review";
+  closed_trades: number;
+  closed_with_funding_gap: number;
+  unresolved_events: number;
+  unfinished_events: number;
+  funding_gap_trades: number;
+  single_leg_failure_rate: number | null;
+  closed_net_pnl: string;
+  net_per_closed_trade: string | null;
+  closed_trade_capital_return: string | null;
+  max_drawdown_closed_trade_only: string;
+  average_holding_seconds: number | null;
+  maximum_adverse_spread_expansion: string | null;
+  minimum_free_balance_by_leg: Record<string, string | null>;
+  funding_cashflow_actual_mark: string;
+  funding_cashflow_proxy_mark: string;
+  borrow_cost: string;
+  capacity_by_target_notional: Record<string, {
+    events: number;
+    depth_qualified: number;
+    cost_qualified: number;
+  }>;
+  by_route: Record<string, {
+    events: number;
+    closed: number;
+    failed_or_unfilled: number;
+    closed_net: string;
+  }>;
+  collateral_model_incomplete: boolean;
+  drawdown_excludes_open_positions: boolean;
+}
+
+export interface SqueezeRouteFill {
+  base_quantity: string;
+  quote_notional: string;
+  unit_price: string;
+  best_unit_price: string;
+  impact_rate: string;
+}
+
+export interface SqueezeRouteCapacity {
+  target_notional: string;
+  base_quantity: string;
+  expensive_open_sell: SqueezeRouteFill | null;
+  expensive_close_buy: SqueezeRouteFill | null;
+  cheap_open_buy: SqueezeRouteFill | null;
+  cheap_close_sell: SqueezeRouteFill | null;
+  open_difference: string | null;
+  close_difference_now: string | null;
+  target_residual: string | null;
+  entry_fee: string | null;
+  estimated_exit_fee: string | null;
+  estimated_funding: string | null;
+  estimated_borrow: string | null;
+  latency_buffer: string | null;
+  estimated_net: string | null;
+  blockers: string[];
+}
+
+export interface SqueezeRouteEvaluation {
+  route_id: string;
+  rule_version: string;
+  calculated_at: string;
+  expensive_key: string;
+  cheap_key: string;
+  asset_id: string;
+  quote_asset: string;
+  quality: "blocked" | "research_only";
+  blockers: string[];
+  expensive_source_at: string | null;
+  cheap_source_at: string | null;
+  expensive_received_at: string;
+  cheap_received_at: string;
+  expensive_sequence: number | null;
+  cheap_sequence: number | null;
+  expensive_last_trade_at: string | null;
+  cheap_last_trade_at: string | null;
+  expensive_funding_rate: string | null;
+  cheap_funding_rate: string | null;
+  expensive_funding_kind: string;
+  cheap_funding_kind: string;
+  expensive_funding_source_at: string | null;
+  cheap_funding_source_at: string | null;
+  expensive_funding_interval_hours: number | null;
+  cheap_funding_interval_hours: number | null;
+  expensive_next_funding_at: string | null;
+  cheap_next_funding_at: string | null;
+  fee_assumption: string;
+  expensive_recent_trade_notional: string | null;
+  cheap_recent_trade_notional: string | null;
+  expensive_turnover_24h: string | null;
+  cheap_turnover_24h: string | null;
+  expensive_contract_base_qty: string;
+  cheap_contract_base_qty: string;
+  expensive_quantity_step: string;
+  cheap_quantity_step: string;
+  expensive_taker_fee_rate: string;
+  cheap_taker_fee_rate: string;
+  capacities: SqueezeRouteCapacity[];
+}
+
+export interface SqueezeRouteRow {
+  route_id: string;
+  evaluated_at: string;
+  evaluation: SqueezeRouteEvaluation;
+  state: {
+    phase: string;
+    baseline: string | null;
+    peak_difference: string | null;
+    confirmation_count: number;
+  } | null;
+}
+
+export interface SqueezeRouteEvent {
+  id: string;
+  route_id: string;
+  phase: string;
+  occurred_at: string;
+  rule_version: string;
+  evaluation: SqueezeRouteEvaluation;
 }

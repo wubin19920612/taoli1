@@ -45,6 +45,8 @@ async def _alert_message_template(request: Request) -> AlertMessageTemplateSetti
 
 
 async def _resolve_event_message(request: Request, event: AlertEvent) -> str:
+    if event.message.startswith(("【强烈推荐】", "【推荐】", "【需评估】")):
+        return event.message
     rule = await _rule_repo(request).get(event.rule_id)
     if rule is None:
         return event.message
@@ -59,11 +61,13 @@ async def _resolve_event_message(request: Request, event: AlertEvent) -> str:
         return event.message
 
     observations = [observe_alert_metrics(row, row.observed_at) for row in reversed(rows)]
+    template = await _alert_message_template(request)
     return build_alert_message(
         rule,
         rows[0],
         observations=observations,
-        template=await _alert_message_template(request),
+        template=template.model_copy(update={"format": "detailed"}),
+        include_rating=False,
     )
 
 

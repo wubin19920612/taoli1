@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
 
@@ -6,9 +7,12 @@ from app.models.market import MarketType
 from app.models.opportunity import Opportunity, OpportunityType
 from app.models.settings import AstroCardSettings
 from app.services.funding_edge import current_cycle_funding_edge_pct, next_cycle_funding_edge_pct
+from app.services.market_labels import astro_exchange_id, astro_exchange_route_variants
+from app.services.market_sessions import is_opportunity_tradable
 
 
 SUPPORTED_ASTRO_TYPES = {OpportunityType.SF, OpportunityType.FF}
+ASTRO_POSITION_QUANTUM = Decimal("0.000001")
 
 
 @dataclass(frozen=True)
@@ -58,6 +62,52 @@ def _decimal_position(percent_value: float) -> str:
         rounding=ROUND_HALF_UP,
     )
     return f"{value:.6f}"
+
+
+def _ratio_position(percent_value: float) -> str:
+    spread = Decimal(str(percent_value)) / Decimal("100")
+    value = ((Decimal("2") + spread) / (Decimal("2") - spread)).quantize(
+        Decimal("0.000001"),
+        rounding=ROUND_HALF_UP,
+    )
+    return f"{value:.6f}"
+
+
+def _strict_close_position(open_position: str, close_position: str) -> tuple[str, bool]:
+    open_value = Decimal(open_position)
+    close_value = Decimal(close_position)
+    if close_value < open_value:
+        return close_position, False
+    return f"{open_value - ASTRO_POSITION_QUANTUM:.6f}", True
+
+
+def _raw_base_name(symbol: str | None) -> str | None:
+    if not symbol:
+        return None
+    normalized = symbol.strip().upper().split(":", 1)[-1]
+    for suffix in ("-SWAP", "_SWAP", "/SWAP", "-PERP", "_PERP", "/PERP", "_UMCBL"):
+        if normalized.endswith(suffix):
+            normalized = normalized[: -len(suffix)]
+            break
+    normalized = normalized.replace("-", "").replace("_", "").replace("/", "")
+    return _base_name(normalized) or None
+
+
+def _fr_pair_bases(opportunity: Opportunity) -> tuple[str, str] | None:
+    if opportunity.type != OpportunityType.FF:
+        return None
+    buy_base = _raw_base_name(opportunity.buy_raw_symbol)
+    sell_base = _raw_base_name(opportunity.sell_raw_symbol)
+    if buy_base is None or sell_base is None or buy_base == sell_base:
+        return None
+    return buy_base, sell_base
+
+
+def _hyperliquid_dex(raw_symbol: str | None) -> str | None:
+    if not raw_symbol or ":" not in raw_symbol:
+        return None
+    dex, _ = raw_symbol.split(":", 1)
+    return dex.strip().lower() or None
 
 
 def _compact_number(value: float | int) -> str:
@@ -111,6 +161,8 @@ def _funding_signal(opportunity: Opportunity) -> tuple[str, float | None, str]:
 def _astro_close_decision(
     opportunity: Opportunity,
     config: AstroPlannerConfig,
+    *,
+    allow_negative: bool = False,
 ) -> ClosePositionDecision:
     close_spread_pct = config.default_close_position_floor_pct
     source, net_cycle_pct, funding_note = _funding_signal(opportunity)
@@ -131,10 +183,9 @@ def _astro_close_decision(
 
     adjusted_for_astro = False
     if close_spread_pct >= opportunity.open_spread_pct:
-        close_spread_pct = max(
-            opportunity.open_spread_pct - config.default_close_position_buffer_pct,
-            0,
-        )
+        close_spread_pct = opportunity.open_spread_pct - config.default_close_position_buffer_pct
+        if not allow_negative:
+            close_spread_pct = max(close_spread_pct, 0)
         adjusted_for_astro = True
         note = (
             f"{note} Adjusted below openPosition to satisfy Astro's "
@@ -149,7 +200,12 @@ def _astro_close_decision(
     )
 
 
-def _type_blockers(opportunity: Opportunity) -> list[str]:
+def _type_blockers(
+    opportunity: Opportunity,
+    now: datetime | None = None,
+) -> list[str]:
+    if not is_opportunity_tradable(opportunity, now or datetime.now(UTC)):
+        return ["Bitget 股票现货当前处于休市时间，已阻止提交 Astro。"]
     if opportunity.type == OpportunityType.SS:
         return ["Astro SDK document does not list SS as a supported pair type."]
     if opportunity.type not in SUPPORTED_ASTRO_TYPES:
@@ -173,57 +229,172 @@ class AstroPairPlanner:
     def __init__(self, config: AstroPlannerConfig | None = None):
         self.config = config or AstroPlannerConfig()
 
-    def plan(self, opportunity: Opportunity) -> AstroPairPlan:
-        blockers = _type_blockers(opportunity)
-        if opportunity.open_spread_pct <= 0:
+    def plan(
+        self,
+        opportunity: Opportunity,
+        now: datetime | None = None,
+        *,
+        allow_manual_override: bool = False,
+        allow_negative_open: bool = False,
+    ) -> AstroPairPlan:
+        is_reverse_sf = (
+            opportunity.type == OpportunityType.SF
+            and opportunity.buy_market_type == MarketType.FUTURE
+            and opportunity.sell_market_type == MarketType.SPOT
+        )
+        blockers = _type_blockers(opportunity, now=now)
+        if opportunity.open_spread_pct <= 0 and not allow_negative_open:
             blockers.append("Open spread must be positive before building an Astro pair.")
-        if opportunity.close_spread_pct < 0:
+        if opportunity.close_spread_pct < 0 and not allow_negative_open:
             blockers.append("Close spread is negative; closePosition mapping needs manual review.")
 
-        close_decision = _astro_close_decision(opportunity, self.config)
+        manual_risk_warnings: list[str] = []
+        if allow_manual_override and is_reverse_sf:
+            blockers = [
+                blocker
+                for blocker in blockers
+                if not blocker.startswith("SF must map to spot buy leg")
+            ]
+            manual_risk_warnings.append(
+                "人工建卡风险提示：该路线将使用 Astro FS 类型（买入永续、卖出现货）；"
+                "请确认现货侧有可卖余额或借币能力。"
+            )
+        if allow_manual_override and blockers:
+            manual_risk_warnings.extend(
+                f"人工建卡风险提示：{blocker} 本次为人工建卡，仅作风险提示，未拦截创建。"
+                for blocker in blockers
+            )
+            blockers = []
+        if any(
+            exchange.lower() in {"hyperliquid", "hyper", "hl"} and not raw_symbol
+            for exchange, raw_symbol in (
+                (opportunity.buy_exchange, opportunity.buy_raw_symbol),
+                (opportunity.sell_exchange, opportunity.sell_raw_symbol),
+            )
+        ):
+            blockers.append("HL 市场未确认，缺少原始合约标识，不能按默认市场建卡。")
+
+        close_decision = _astro_close_decision(
+            opportunity,
+            self.config,
+            allow_negative=allow_manual_override or allow_negative_open,
+        )
+        fr_pair_bases = _fr_pair_bases(opportunity)
+        pair_type = (
+            "FR"
+            if fr_pair_bases is not None
+            else "FS"
+            if allow_manual_override and is_reverse_sf
+            else str(opportunity.type)
+        )
+        pair_name = (
+            f"{fr_pair_bases[0]}-{fr_pair_bases[1]}"
+            if fr_pair_bases is not None
+            else _base_name(opportunity.symbol)
+        )
+        position_value = _ratio_position if fr_pair_bases is not None else _decimal_position
+        open_position = position_value(opportunity.open_spread_pct)
+        close_position = position_value(close_decision.close_spread_pct)
+        close_position, rounded_close_adjusted = _strict_close_position(
+            open_position,
+            close_position,
+        )
+        close_position_note = close_decision.note
+        if rounded_close_adjusted:
+            close_position_note = (
+                f"{close_position_note} Lowered by one Astro precision unit after rounding "
+                "to preserve openPosition > closePosition."
+            )
+
+        buy_astro_exchange = astro_exchange_id(
+            opportunity.buy_exchange,
+            opportunity.buy_market_type,
+            opportunity.buy_raw_symbol,
+            opportunity.symbol,
+        )
+        sell_astro_exchange = astro_exchange_id(
+            opportunity.sell_exchange,
+            opportunity.sell_market_type,
+            opportunity.sell_raw_symbol,
+            opportunity.symbol,
+        )
+        if {buy_astro_exchange, sell_astro_exchange} & {"lighter", "gc-lighter"} and not astro_exchange_route_variants(
+            buy_astro_exchange, sell_astro_exchange
+        ):
+            blockers.append("Lighter 仅支持与已知 GC 交易所或 Bitget 配对，未提交未知路由。")
 
         assumptions = [
             AstroFieldAssumption(
                 field="name",
                 source=f"symbol={opportunity.symbol}",
-                assumed_value=_base_name(opportunity.symbol),
-                note="SDK examples use base asset names such as ETH. Whether names can include exchange/type is unverified.",
+                assumed_value=pair_name,
+                note=(
+                    "FR cards use the raw buy/sell base symbols; regular cards use the "
+                    "canonical base symbol."
+                    if fr_pair_bases is not None
+                    else "SDK examples use base asset names such as ETH. Whether names can "
+                    "include exchange/type is unverified."
+                ),
             ),
             AstroFieldAssumption(
                 field="openPosition",
                 source=f"open_spread_pct={opportunity.open_spread_pct}",
-                assumed_value=_decimal_position(opportunity.open_spread_pct),
-                note="Local spread is percent points; SDK examples look like decimal fractions. This uses percent / 100.",
+                assumed_value=open_position,
+                note=(
+                    "FR openPosition is the price ratio equivalent of the local executable spread."
+                    if fr_pair_bases is not None
+                    else "Local spread is percent points; SDK examples look like decimal "
+                    "fractions. This uses percent / 100."
+                ),
             ),
             AstroFieldAssumption(
                 field="closePosition",
                 source=f"close_spread_pct={opportunity.close_spread_pct}",
-                assumed_value=_decimal_position(close_decision.close_spread_pct),
-                note=close_decision.note,
+                assumed_value=close_position,
+                note=close_position_note,
             ),
             AstroFieldAssumption(
                 field="buyEx/sellEx",
                 source=f"{opportunity.buy_exchange}->{opportunity.sell_exchange}",
-                assumed_value=f"{opportunity.buy_exchange}->{opportunity.sell_exchange}",
-                note="Uses local exchange ids directly. Astro exchange id coverage must be verified on your instance.",
+                assumed_value=f"{buy_astro_exchange}->{sell_astro_exchange}",
+                note=(
+                    "Uses Astro exchange ids; Hyperliquid is mapped to hl and Bitget "
+                    "RToken stock spot is mapped from bitget to bitgetr. "
+                    "Supported Lighter pairs can use lighter or gc-lighter routes."
+                ),
             ),
         ]
 
         warnings = [
             "Dry-run only: this plan does not call Astro add/update/delete and cannot open positions.",
             "Astro SDK add action restarts astro-core; existing pairs are skipped instead of updated.",
+            *manual_risk_warnings,
         ]
+        if allow_negative_open and opportunity.open_spread_pct < 0:
+            warnings.append(
+                "Negative openPosition was explicitly enabled for a funding-only reverse-entry card."
+            )
         if close_decision.adjusted_for_astro:
             warnings.append(
                 "closePosition was adjusted below openPosition because the live close spread is not lower than the open spread."
             )
+        if rounded_close_adjusted:
+            warnings.append(
+                "closePosition was lowered by one Astro precision unit after rounding "
+                "to keep openPosition greater than closePosition."
+            )
         if close_decision.source == "unknown":
-            warnings.append("Funding data was unavailable, so closePosition used the spread-disappearance floor.")
+            warnings.append(
+                "Funding data was unavailable, so closePosition used the "
+                "spread-disappearance floor."
+            )
 
         if blockers:
             return AstroPairPlan(
                 opportunity_id=opportunity.id,
                 symbol=opportunity.symbol,
+                source_open_spread_pct=opportunity.open_spread_pct,
+                quoted_at=opportunity.last_seen_at,
                 can_submit=False,
                 blockers=blockers,
                 warnings=warnings,
@@ -231,24 +402,34 @@ class AstroPairPlanner:
             )
 
         pair = {
-            "name": _base_name(opportunity.symbol),
+            "name": pair_name,
             "status": self.config.default_open_enabled,
-            "type": str(opportunity.type),
-            "openPosition": _decimal_position(opportunity.open_spread_pct),
+            "type": pair_type,
+            "openPosition": open_position,
             "disableOpen": not self.config.default_open_enabled,
-            "closePosition": _decimal_position(close_decision.close_spread_pct),
+            "closePosition": close_position,
             "disableClose": False,
             "maxTradeUSDT": _compact_number(self.config.default_max_trade_usdt),
             "leverage": _compact_number(self.config.default_leverage),
-            "buyEx": opportunity.buy_exchange,
-            "sellEx": opportunity.sell_exchange,
+            "buyEx": buy_astro_exchange,
+            "sellEx": sell_astro_exchange,
             "startTime": "0",
             "minNotional": _compact_number(self.config.default_min_notional),
             "maxNotional": _compact_number(self.config.default_max_notional),
         }
+        if fr_pair_bases is not None:
+            pair.update({"regressionValue": "1", "rateMultiply": "1"})
+        buy_hl_dex = _hyperliquid_dex(opportunity.buy_raw_symbol)
+        sell_hl_dex = _hyperliquid_dex(opportunity.sell_raw_symbol)
+        if buy_astro_exchange == "hl" and buy_hl_dex is not None:
+            pair["aHlDex"] = buy_hl_dex
+        if sell_astro_exchange == "hl" and sell_hl_dex is not None:
+            pair["bHlDex"] = sell_hl_dex
         return AstroPairPlan(
             opportunity_id=opportunity.id,
             symbol=opportunity.symbol,
+            source_open_spread_pct=opportunity.open_spread_pct,
+            quoted_at=opportunity.last_seen_at,
             can_submit=True,
             pair=pair,
             sdk_payload={"action": "add", "pair": pair},

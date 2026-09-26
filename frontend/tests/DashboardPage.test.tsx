@@ -221,6 +221,26 @@ describe("DashboardPage", () => {
     expect(calls.find((url) => url.includes("/opportunities"))).toContain("min_volume_24h_k=100");
   });
 
+  it("does not inject a priority symbol into the default ranked query", async () => {
+    render(<DashboardPage />);
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/opportunities"),
+        expect.anything()
+      );
+    });
+
+    const opportunityCalls = vi.mocked(fetch).mock.calls
+      .map(([input]) => String(input))
+      .filter((url) => url.includes("/opportunities"));
+    expect(opportunityCalls).toHaveLength(1);
+    const params = new URL(opportunityCalls[0]).searchParams;
+    expect(params.get("symbol")).toBeNull();
+    expect(params.get("exchange")).toBeNull();
+    expect(params.get("limit")).toBe("120");
+  });
+
   it("adds a row symbol to the global blacklist from the table action", async () => {
     vi.stubGlobal(
       "fetch",
@@ -270,6 +290,54 @@ describe("DashboardPage", () => {
         })
       );
     });
+  });
+
+  it("adds a manually entered symbol when it is absent from opportunities", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/settings/risk") && init?.method === "PUT") {
+          return Response.json(JSON.parse(String(init.body)));
+        }
+        if (url.includes("/settings/risk")) {
+          return Response.json({
+            min_volume_24h_usdt: 100000,
+            stale_after_seconds: 30,
+            huge_spread_pct: 10,
+            wide_spread_pct: 3,
+            mark_index_deviation_pct: 1,
+            funding_against_pct: 0.01,
+            ticker_collision_symbols: [],
+            excluded_symbols: [],
+            ignored_exchanges: []
+          });
+        }
+        if (url.includes("/health")) {
+          return Response.json({ status: "ok", markets: 0, opportunities: 0, exchange_errors: {} });
+        }
+        if (url.includes("/opportunities")) {
+          return Response.json([]);
+        }
+        return Response.json({});
+      })
+    );
+
+    render(<DashboardPage />);
+
+    await userEvent.type(await screen.findByRole("textbox", { name: "输入要屏蔽的标的" }), "purr");
+    await userEvent.click(screen.getByRole("button", { name: "屏蔽输入标的" }));
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/settings/risk"),
+        expect.objectContaining({
+          method: "PUT",
+          body: expect.stringContaining('"excluded_symbols":["PURRUSDT"]')
+        })
+      );
+    });
+    expect(await screen.findByRole("button", { name: "取消屏蔽 PURRUSDT" })).toBeTruthy();
   });
 
   it("removes a symbol from the global blacklist from the dashboard", async () => {
@@ -573,7 +641,8 @@ describe("DashboardPage", () => {
             action: "add",
             message: "已创建暂停卡片 BTC FF binance->okx，禁开=true",
             pair_name: "BTC",
-            pair_type: "FF"
+            pair_type: "FF",
+            warnings: ["订单簿深度不足；本次为人工建卡，仅作风险提示，未拦截创建"]
           });
         }
         if (url.includes("/astro/preview/opp-1")) {
@@ -592,6 +661,11 @@ describe("DashboardPage", () => {
               buyEx: "binance",
               sellEx: "okx"
             },
+            card_variant: "both",
+            route_variants: [
+              { card_variant: "non_gc", buy_exchange: "binance", sell_exchange: "okx" },
+              { card_variant: "gc", buy_exchange: "gc-binance", sell_exchange: "gc-okx" }
+            ],
             sdk_payload: { action: "add", pair: { name: "BTC" } },
             blockers: [],
             warnings: [],
@@ -608,7 +682,7 @@ describe("DashboardPage", () => {
     render(<DashboardPage />);
 
     await userEvent.click(await screen.findByRole("button", { name: "Astro BTCUSDT" }));
-    await userEvent.click(await screen.findByRole("button", { name: "创建/更新暂停卡片" }));
+    await userEvent.click(await screen.findByRole("button", { name: "创建卡片" }));
 
     await waitFor(() => {
       expect(fetch).toHaveBeenCalledWith(
@@ -617,6 +691,7 @@ describe("DashboardPage", () => {
       );
     });
     expect((await screen.findAllByText(/已创建暂停卡片 BTC FF/)).length).toBeGreaterThan(0);
+    expect(screen.getByText(/人工建卡，仅作风险提示，未拦截创建/)).toBeTruthy();
   }, 15000);
 
   it("sends edited Astro sizing values and can save them as defaults", async () => {
@@ -677,6 +752,11 @@ describe("DashboardPage", () => {
               buyEx: "binance",
               sellEx: "okx"
             },
+            card_variant: "both",
+            route_variants: [
+              { card_variant: "non_gc", buy_exchange: "binance", sell_exchange: "okx" },
+              { card_variant: "gc", buy_exchange: "gc-binance", sell_exchange: "gc-okx" }
+            ],
             sdk_payload: { action: "add", pair: { name: "BTC" } },
             blockers: [],
             warnings: [],
@@ -702,9 +782,11 @@ describe("DashboardPage", () => {
 
     await userEvent.clear(positionInput);
     await userEvent.type(positionInput, "80");
-    await userEvent.click(screen.getByLabelText("Open after create"));
-    await userEvent.click(screen.getByLabelText("Save sizing as global default"));
-    await userEvent.click(screen.getByRole("button", { name: /暂停卡片/ }));
+    await userEvent.click(screen.getByLabelText("创建后允许开仓"));
+    await userEvent.click(screen.getByText("仅 GC"));
+    expect(screen.getByText("gc-binance → gc-okx")).toBeTruthy();
+    await userEvent.click(screen.getByLabelText("保存为全局建卡默认值"));
+    await userEvent.click(screen.getByRole("button", { name: "创建卡片" }));
 
     await waitFor(() => {
       expect(createBodies).toHaveLength(1);
@@ -714,6 +796,7 @@ describe("DashboardPage", () => {
     expect(createBodies[0]).toContain('"min_notional":10');
     expect(createBodies[0]).toContain('"max_notional":25');
     expect(createBodies[0]).toContain('"open_enabled":true');
+    expect(createBodies[0]).toContain('"card_variant":"gc"');
     expect(createBodies[0]).toContain('"save_as_default":true');
   }, 15000);
 

@@ -84,6 +84,45 @@ def test_sf_positive_funding_can_enter_when_basis_and_adl_are_low() -> None:
     assert candidate.expected_cycle_pnl_pct > 0
 
 
+def test_sf_bitget_rtoken_candidate_preserves_stock_spot_raw_symbol() -> None:
+    now = datetime(2026, 5, 26, 8, 0, tzinfo=UTC)
+    spot = market("bitget", MarketType.SPOT, bid=99.9, ask=100.0).model_copy(
+        update={
+            "symbol": "SOXLUSDT",
+            "base": "SOXL",
+            "raw_symbol": "RSOXLUSDT",
+        }
+    )
+    future = market(
+        "okx",
+        MarketType.FUTURE,
+        bid=100.25,
+        ask=100.35,
+        funding_next_rate_pct=0.12,
+        mark_price=100.3,
+        index_price=100.0,
+        next_time=now + timedelta(minutes=30),
+    ).model_copy(
+        update={
+            "symbol": "SOXLUSDT",
+            "base": "SOXL",
+            "raw_symbol": "SOXL-USDT-SWAP",
+        }
+    )
+
+    preview = build_funding_arbitrage_preview(
+        [spot, future],
+        FundingArbitrageSettings(min_entry_edge_pct=0.01, min_funding_edge_pct=0.01),
+        now=now,
+    )
+
+    candidate = preview.candidates[0]
+    assert candidate.long_exchange == "bitget"
+    assert candidate.long_market_type == "spot"
+    assert candidate.long_raw_symbol == "RSOXLUSDT"
+    assert candidate.short_raw_symbol == "SOXL-USDT-SWAP"
+
+
 def test_ff_orients_higher_funding_leg_as_short() -> None:
     now = datetime(2026, 5, 26, 8, 0, tzinfo=UTC)
     preview = build_funding_arbitrage_preview(
@@ -163,6 +202,7 @@ def test_ff_funding_edge_is_scaled_to_same_comparison_cycle() -> None:
     assert candidate.short_funding_interval_hours == 2
     assert candidate.funding_comparison_interval_hours == 8
     assert candidate.next_funding_edge_pct == 0.05
+    assert "INTERVAL_MISMATCH" in candidate.opportunity_types
 
 
 def test_missing_funding_interval_blocks_same_cycle_comparison() -> None:
@@ -243,6 +283,53 @@ def test_current_funding_fallback_adds_confidence_penalty() -> None:
     assert candidate.funding_source == "fallback_current"
     assert candidate.confidence_penalty_pct == 0.02
     assert candidate.next_funding_edge_pct == 0.12
+
+
+def test_conflicted_basis_with_poor_reward_risk_blocks_entry() -> None:
+    now = datetime(2026, 5, 26, 8, 0, tzinfo=UTC)
+    preview = build_funding_arbitrage_preview(
+        [
+            market(
+                "bybit",
+                MarketType.FUTURE,
+                bid=101.0,
+                ask=101.1,
+                funding_next_rate_pct=-0.35,
+                funding_interval_hours=4,
+                mark_price=101.0,
+                index_price=100.9,
+                next_time=now + timedelta(minutes=50),
+            ),
+            market(
+                "bitget",
+                MarketType.FUTURE,
+                bid=100.0,
+                ask=100.1,
+                funding_next_rate_pct=0.001,
+                funding_interval_hours=1,
+                mark_price=100.0,
+                index_price=100.0,
+                next_time=now + timedelta(minutes=50),
+            ),
+        ],
+        FundingArbitrageSettings(
+            min_entry_edge_pct=0.01,
+            min_funding_edge_pct=0.01,
+            conflicted_basis_min_check_pct=0.3,
+            min_conflicted_reward_risk_ratio=1.0,
+        ),
+        now=now,
+    )
+
+    candidate = preview.candidates[0]
+    assert candidate.next_funding_edge_pct == 0.354
+    assert candidate.entry_basis_pct < -1
+    assert candidate.adverse_entry_basis_pct > 1
+    assert candidate.conflicted_reward_risk_ratio is not None
+    assert candidate.conflicted_reward_risk_ratio < 1
+    assert candidate.decision == "BLOCKED"
+    assert "POOR_REWARD_RISK" in candidate.risk_labels
+    assert "reward/risk" in " ".join(candidate.decision_reasons)
 
 
 def test_ss_routes_are_not_built() -> None:
@@ -376,3 +463,49 @@ def test_known_thin_depth_blocks_funding_entry() -> None:
     assert candidate.decision == "BLOCKED"
     assert "THIN_DEPTH" in candidate.risk_labels
     assert preview.blocked_liquidity == 1
+
+
+def test_gate_hyperliquid_preview_marks_exchange_scope_and_specialized_type() -> None:
+    now = datetime(2026, 5, 26, 8, 0, tzinfo=UTC)
+    preview = build_funding_arbitrage_preview(
+        [
+            market(
+                "gate",
+                MarketType.FUTURE,
+                bid=100.0,
+                ask=100.1,
+                funding_next_rate_pct=-0.6,
+                funding_interval_hours=4,
+                mark_price=100.0,
+                index_price=100.0,
+                next_time=now + timedelta(minutes=20),
+            ),
+            market(
+                "hyperliquid",
+                MarketType.FUTURE,
+                bid=100.25,
+                ask=100.35,
+                funding_next_rate_pct=0.2,
+                funding_interval_hours=1,
+                mark_price=100.2,
+                index_price=100.0,
+                next_time=now + timedelta(minutes=20),
+            ),
+        ],
+        FundingArbitrageSettings(
+            min_entry_edge_pct=0.01,
+            min_funding_edge_pct=0.01,
+            strong_funding_pct=0.5,
+            near_settlement_minutes=30,
+            small_basis_threshold_pct=0.5,
+        ),
+        now=now,
+    )
+
+    candidate = preview.candidates[0]
+    assert candidate.uses_gate
+    assert candidate.uses_hyperliquid
+    assert candidate.primary_opportunity_type == "BASIS_AND_FUNDING_ALIGNED"
+    assert "STRONG_FUNDING_NEAR_SETTLEMENT" in candidate.opportunity_types
+    assert "INTERVAL_MISMATCH" in candidate.opportunity_types
+    assert "FORMULA_DIVERGENCE" in candidate.opportunity_types

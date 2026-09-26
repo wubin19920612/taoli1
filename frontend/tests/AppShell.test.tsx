@@ -1,0 +1,290 @@
+import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../src/pages/DashboardPage", () => ({
+  DashboardPage: () => <div>Dashboard</div>
+}));
+
+import { AppShell } from "../src/components/AppShell";
+
+const navigationOrderStorageKey = "taoli1:navigation-order.v1";
+const defaultNavigationOrder = [
+  "dashboard",
+  "funding",
+  "funding-research",
+  "opportunity-radar",
+  "instrument",
+  "pair-monitor",
+  "symbol-spread",
+  "premium-index",
+  "negative-basis",
+  "squeeze-arbitrage",
+  "second-sampling",
+  "fat-finger",
+  "tradfi-perp",
+  "gate-twap",
+  "index-components",
+  "announcements",
+  "oil-news",
+  "account-connections",
+  "settings",
+  "history"
+];
+
+function visibleMenuLabels(): string[] {
+  return screen.getAllByRole("menuitem").map((item) => item.textContent?.trim() ?? "");
+}
+
+async function openNavigationDialog(): Promise<HTMLElement> {
+  await userEvent.click(screen.getByRole("button", { name: "调整菜单顺序" }));
+  return screen.getByRole("dialog", { name: "调整菜单顺序" });
+}
+
+function dragNavigationItem(
+  dialog: HTMLElement,
+  sourceLabel: string,
+  sourceKey: string,
+  targetLabel: string,
+  clientY: number
+): void {
+  const source = within(dialog).getByText(sourceLabel).closest("li");
+  const target = within(dialog).getByText(targetLabel).closest("li");
+  if (!source || !target) throw new Error("Navigation row not found");
+  vi.spyOn(target, "getBoundingClientRect").mockReturnValue({
+    top: 100,
+    bottom: 140,
+    height: 40,
+    left: 0,
+    right: 400,
+    width: 400,
+    x: 0,
+    y: 100,
+    toJSON: () => ({})
+  });
+  const dataTransfer = {
+    effectAllowed: "none",
+    dropEffect: "none",
+    setData: vi.fn(),
+    getData: vi.fn(() => sourceKey)
+  };
+  fireEvent.dragStart(source, { dataTransfer });
+  fireEvent.dragOver(target, { dataTransfer, clientY });
+  const dropEvent = createEvent.drop(target, { dataTransfer });
+  Object.defineProperty(dropEvent, "clientY", { value: clientY });
+  fireEvent(target, dropEvent);
+}
+
+describe("AppShell", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    window.history.replaceState({}, "", "/");
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it("switches to the quiet palette and persists the selection", async () => {
+    const { container, unmount } = render(<AppShell />);
+
+    expect(container.querySelector(".app-shell-standard")).toBeTruthy();
+    await userEvent.click(screen.getByText("低调"));
+
+    expect(container.querySelector(".app-shell-quiet")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "数据工作台" })).toBeTruthy();
+    expect(window.localStorage.getItem("taoli1:appearance-mode")).toBe("quiet");
+
+    unmount();
+    const secondRender = render(<AppShell />);
+    await waitFor(() => {
+      expect(secondRender.container.querySelector(".app-shell-quiet")).toBeTruthy();
+    });
+  });
+
+  it("restores the original palette from the same control", async () => {
+    window.localStorage.setItem("taoli1:appearance-mode", "quiet");
+    const { container } = render(<AppShell />);
+
+    await userEvent.click(screen.getByText("原配色"));
+
+    expect(container.querySelector(".app-shell-standard")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "CEX 套利雷达" })).toBeTruthy();
+    expect(window.localStorage.getItem("taoli1:appearance-mode")).toBe("standard");
+  });
+
+  it("manually reorders navigation items and restores the saved order", async () => {
+    const firstRender = render(<AppShell />);
+
+    const dialog = await openNavigationDialog();
+    await userEvent.click(within(dialog).getByRole("button", { name: "下移 实时机会" }));
+    await userEvent.click(screen.getByRole("button", { name: "保存菜单顺序" }));
+
+    expect(visibleMenuLabels().slice(0, 2)).toEqual(["资金费率套利", "实时机会"]);
+    expect(JSON.parse(window.localStorage.getItem(navigationOrderStorageKey) ?? "[]").slice(0, 2)).toEqual([
+      "funding",
+      "dashboard"
+    ]);
+
+    firstRender.unmount();
+    render(<AppShell />);
+    expect(visibleMenuLabels().slice(0, 2)).toEqual(["资金费率套利", "实时机会"]);
+  });
+
+  it("reorders navigation by dropping before or after a target row", async () => {
+    render(<AppShell />);
+    const dialog = await openNavigationDialog();
+
+    dragNavigationItem(dialog, "实时机会", "dashboard", "资金费率套利", 130);
+    expect(within(dialog).getAllByRole("listitem").slice(0, 2).map((item) => item.textContent)).toEqual([
+      expect.stringContaining("资金费率套利"),
+      expect.stringContaining("实时机会")
+    ]);
+
+    dragNavigationItem(dialog, "资金研究", "funding-research", "资金费率套利", 110);
+    expect(within(dialog).getAllByRole("listitem").slice(0, 3).map((item) => item.textContent)).toEqual([
+      expect.stringContaining("资金研究"),
+      expect.stringContaining("资金费率套利"),
+      expect.stringContaining("实时机会")
+    ]);
+
+    await userEvent.click(screen.getByRole("button", { name: "保存菜单顺序" }));
+    expect(visibleMenuLabels().slice(0, 3)).toEqual(["资金研究", "资金费率套利", "实时机会"]);
+    expect(JSON.parse(window.localStorage.getItem(navigationOrderStorageKey) ?? "[]").slice(0, 3)).toEqual([
+      "funding-research",
+      "funding",
+      "dashboard"
+    ]);
+  });
+
+  it("restores the complete default navigation order after confirmation", async () => {
+    window.localStorage.setItem(navigationOrderStorageKey, JSON.stringify(["history", "settings", "dashboard"]));
+    render(<AppShell />);
+    await openNavigationDialog();
+
+    await userEvent.click(screen.getByRole("button", { name: "恢复默认菜单顺序" }));
+    await userEvent.click(screen.getByRole("button", { name: "保存菜单顺序" }));
+
+    expect(JSON.parse(window.localStorage.getItem(navigationOrderStorageKey) ?? "[]")).toEqual(defaultNavigationOrder);
+    expect(visibleMenuLabels().slice(0, 3)).toEqual(["实时机会", "资金费率套利", "资金研究"]);
+    expect(visibleMenuLabels().slice(-2)).toEqual(["参数与告警", "告警历史"]);
+  });
+
+  it("discards draft changes when canceled or closed", async () => {
+    render(<AppShell />);
+    let dialog = await openNavigationDialog();
+    await userEvent.click(within(dialog).getByRole("button", { name: "下移 实时机会" }));
+    await userEvent.click(screen.getByRole("button", { name: "取消调整菜单顺序" }));
+
+    expect(visibleMenuLabels().slice(0, 2)).toEqual(["实时机会", "资金费率套利"]);
+    expect(JSON.parse(window.localStorage.getItem(navigationOrderStorageKey) ?? "[]")).toEqual(defaultNavigationOrder);
+
+    dialog = await openNavigationDialog();
+    expect(within(dialog).getAllByRole("listitem")[0].textContent).toContain("实时机会");
+    await userEvent.click(within(dialog).getByRole("button", { name: "下移 实时机会" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+
+    expect(visibleMenuLabels().slice(0, 2)).toEqual(["实时机会", "资金费率套利"]);
+    expect(JSON.parse(window.localStorage.getItem(navigationOrderStorageKey) ?? "[]")).toEqual(defaultNavigationOrder);
+  });
+
+  it("ignores invalid saved entries and appends newly available navigation items", () => {
+    window.localStorage.setItem(navigationOrderStorageKey, JSON.stringify([
+      "history", "dashboard", "minute-signals", "new-listing", "removed-page"
+    ]));
+    render(<AppShell />);
+
+    const labels = visibleMenuLabels();
+    expect(labels.slice(0, 2)).toEqual(["告警历史", "实时机会"]);
+    expect(labels).toHaveLength(defaultNavigationOrder.length);
+    expect(labels).not.toContain("1 分钟价差信号");
+    expect(labels).not.toContain("新币极速");
+    expect(labels).toContain("账户连接");
+    expect(labels).toContain("挤仓结构观察");
+    expect(labels).toContain("参数与告警");
+  });
+
+  it.each(["minute-signals", "new-listing"])("opens the default page for retired URL %s", (page) => {
+    window.history.replaceState({}, "", `/?page=${page}`);
+    render(<AppShell />);
+
+    expect(screen.getByText("Dashboard")).toBeTruthy();
+    expect(visibleMenuLabels()).toHaveLength(defaultNavigationOrder.length);
+  });
+
+  it("renders only the dedicated watch panel for the standalone window URL", async () => {
+    window.history.replaceState({}, "", "/?floating_watch=standalone");
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ symbols: [], pair_ids: [] })));
+    const close = vi.spyOn(window, "close").mockImplementation(() => undefined);
+
+    const { container } = render(<AppShell />);
+
+    expect(screen.getByRole("complementary", { name: "独立关注窗口" })).not.toBeNull();
+    expect(container.querySelector(".floating-watch-standalone-shell")).not.toBeNull();
+    expect(screen.queryByRole("heading", { name: "CEX 套利雷达" })).toBeNull();
+    expect(screen.queryByRole("menu")).toBeNull();
+
+    window.localStorage.setItem("taoli1:floating-watch-visible.v1", "0");
+    window.dispatchEvent(new CustomEvent("taoli1:floating-watch-updated", {
+      detail: { symbols: [], pair_ids: [] }
+    }));
+    expect(window.localStorage.getItem("taoli1:floating-watch-visible.v1")).toBe("0");
+
+    await userEvent.click(screen.getByRole("button", { name: "关闭独立关注窗口" }));
+    await waitFor(() => {
+      expect(container.querySelector(".floating-watch-standalone-shell")).toBeNull();
+    });
+    expect(screen.getByRole("heading", { name: "CEX 套利雷达" })).not.toBeNull();
+    expect(new URLSearchParams(window.location.search).get("floating_watch")).toBeNull();
+    expect(new URLSearchParams(window.location.search).get("page")).toBe("dashboard");
+    close.mockRestore();
+  });
+
+  it("dispatches navigation for consecutive same-page selections from the dedicated watch window", async () => {
+    render(<AppShell />);
+    const navigations: string[] = [];
+    const recordNavigation = () => navigations.push(window.location.search);
+    window.addEventListener("taoli1:navigate", recordNavigation);
+
+    window.dispatchEvent(new MessageEvent("message", {
+      origin: window.location.origin,
+      data: {
+        type: "taoli1:floating-watch-navigate",
+        destination: "/?page=dashboard&symbol=BTCUSDT"
+      }
+    }));
+    window.dispatchEvent(new MessageEvent("message", {
+      origin: window.location.origin,
+      data: {
+        type: "taoli1:floating-watch-navigate",
+        destination: "/?page=dashboard&symbol=ETHUSDT"
+      }
+    }));
+
+    await waitFor(() => {
+      expect(new URLSearchParams(window.location.search).get("symbol")).toBe("ETHUSDT");
+    });
+    expect(new URLSearchParams(window.location.search).get("page")).toBe("dashboard");
+    expect(navigations).toHaveLength(2);
+    window.removeEventListener("taoli1:navigate", recordNavigation);
+  });
+
+  it("does not reopen the embedded watch after a delayed initial settings response", async () => {
+    let resolveSettings: ((response: Response) => void) | undefined;
+    const settingsResponse = new Promise<Response>((resolve) => {
+      resolveSettings = resolve;
+    });
+    vi.stubGlobal("fetch", vi.fn(() => settingsResponse));
+    render(<AppShell />);
+
+    await waitFor(() => expect(fetch).toHaveBeenCalled());
+    window.localStorage.setItem("taoli1:floating-watch-visible.v1", "0");
+    await act(async () => {
+      resolveSettings?.(Response.json({ symbols: ["BTCUSDT"], pair_ids: [] }));
+      await settingsResponse;
+    });
+    expect(window.localStorage.getItem("taoli1:floating-watch-visible.v1")).toBe("0");
+    expect(screen.queryByRole("complementary", { name: "关注浮窗" })).toBeNull();
+  });
+});
