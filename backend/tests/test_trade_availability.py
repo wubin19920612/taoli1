@@ -235,6 +235,63 @@ async def test_trade_status_covers_core_exchanges_and_evaluated_venues() -> None
 
 
 @pytest.mark.asyncio
+async def test_openai_status_uses_independent_lighter_instances() -> None:
+    def lighter_metadata(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "api.rh.lighter.xyz":
+            force_reduce_only = False
+        elif request.url.host == "mainnet.zklighter.elliot.ai":
+            force_reduce_only = True
+        else:
+            raise AssertionError(f"unexpected URL {request.url}")
+        return httpx.Response(200, json={
+            "code": 200,
+            "spot_order_book_details": [],
+            "order_book_details": [{
+                "symbol": "OPENAI",
+                "status": "active",
+                "is_frozen": False,
+                "market_config": {"force_reduce_only": force_reduce_only},
+            }],
+        })
+
+    snapshots = [
+        _snapshot(exchange, MarketType.FUTURE, "OPENAI").model_copy(update={
+            "symbol": "OPENAIUSDT",
+            "base": "OPENAI",
+            "index_price": 1668.0,
+        })
+        for exchange in ("lighter", "rh-lighter")
+    ]
+    store = SnapshotStore()
+    store.set_all_markets(snapshots)
+    client = httpx.AsyncClient(transport=httpx.MockTransport(lighter_metadata))
+    service = TradeAvailabilityService(
+        store, [FakeAdapter(snapshot.exchange) for snapshot in snapshots], AsyncMock(), client
+    )
+
+    result = await service.fetch_status("OPENAIUSDT")
+
+    by_exchange = {market.exchange: market for market in result.markets}
+    assert result.errors == {}
+    assert by_exchange["lighter"].buy_open.reason_code == "FORCE_REDUCE_ONLY"
+    rh_market = by_exchange["rh-lighter"]
+    assert rh_market.raw_symbol == "OPENAI"
+    assert rh_market.public_status_code == "active"
+    assert rh_market.public_status_source == "Robinhood Lighter orderBookDetails"
+    assert rh_market.buy_open.state == TradeAvailabilityState.AVAILABLE
+    assert rh_market.sell_open.state == TradeAvailabilityState.AVAILABLE
+    assert rh_market.best_bid == 100
+    assert rh_market.best_ask == 101
+    assert rh_market.diagnostics[0].reason_code == "PUBLIC_STATUS_OBSERVED"
+    assert next(item for item in result.coverage if item.exchange == "rh-lighter").public_status_supported
+    rh_index = next(item for item in result.index_compositions if item.exchange == "rh-lighter")
+    assert rh_index.source == "Robinhood Lighter orderBookDetails"
+    assert rh_index.index_price == 1668.0
+    await service.aclose()
+    await client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_spot_transfer_status_distinguishes_public_data_and_auth_only_sources() -> None:
     snapshots = [
         _snapshot("okx", MarketType.SPOT, "BTC-USDT"),

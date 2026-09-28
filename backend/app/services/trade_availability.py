@@ -12,6 +12,7 @@ import aiosqlite
 import httpx
 
 from app.exchanges.base import DEFAULT_HEADERS, DEFAULT_LIMITS, ExchangeAdapter, parse_float
+from app.exchanges.lighter import lighter_endpoint_profile
 from app.models.market import MarketSnapshot, MarketType
 from app.models.orderbook import OrderBookSnapshot
 from app.models.pair_spread import normalize_pair_spread_symbol
@@ -46,7 +47,7 @@ logger = logging.getLogger(__name__)
 
 AlertSender = Callable[[str], Awaitable[None]]
 CORE_EXCHANGES = ("binance", "okx", "bybit", "gate", "bitget")
-EXCHANGE_ORDER = (*CORE_EXCHANGES, "hyperliquid", "aster", "lighter")
+EXCHANGE_ORDER = (*CORE_EXCHANGES, "hyperliquid", "aster", "lighter", "rh-lighter")
 PUBLIC_TRANSFER_EXCHANGES = {"binance", "gate", "bitget"}
 INDEX_PROVIDER_CLASSES = {
     "binance": BinanceIndexComponentProvider,
@@ -64,6 +65,7 @@ INDEX_SOURCE_LABELS = {
     "aster": "Aster premiumIndex",
     "hyperliquid": "Hyperliquid metaAndAssetCtxs",
     "lighter": "Lighter orderBookDetails",
+    "rh-lighter": "Robinhood Lighter orderBookDetails",
 }
 
 
@@ -104,6 +106,7 @@ def _coverage() -> list[TradeAvailabilityCoverage]:
         "hyperliquid": "DEX 原始市场、OI cap 与 l2Book",
         "aster": "已验证 Binance 兼容交易与深度接口；未验证匿名公开充提接口",
         "lighter": "已验证 active/frozen/force_reduce_only 与 WebSocket 深度",
+        "rh-lighter": "独立 RH 实例的 active/frozen/force_reduce_only 与 WebSocket 深度；未验证匿名公开充提接口",
     }
     return [
         TradeAvailabilityCoverage(
@@ -545,6 +548,7 @@ class TradeAvailabilityService:
                     "官方 metaAndAssetCtxs 返回 oraclePx，但未返回可核验的加权指数成分与权重"
                 ),
                 "lighter": "官方 orderBookDetails 返回 index_price，但未返回成分、来源交易所和权重",
+                "rh-lighter": "官方 orderBookDetails 返回 index_price，但未返回成分、来源交易所和权重",
             }
             return ContractIndexComposition(
                 exchange=exchange,
@@ -554,7 +558,7 @@ class TradeAvailabilityService:
                 dex=market.dex,
                 status="not_returned",
                 source=source,
-                index_price=market.index_price if exchange in {"aster", "lighter"} else None,
+                index_price=market.index_price if exchange in {"aster", "lighter", "rh-lighter"} else None,
                 observed_at=market.market_data_updated_at,
                 note=notes.get(exchange, "官方公开接口未返回指数成分、价格和权重"),
             )
@@ -1099,7 +1103,8 @@ class TradeAvailabilityService:
         )
 
     async def _public_market_info(self, market: MarketSnapshot) -> _PublicMarketInfo:
-        handler = getattr(self, f"_info_{market.exchange.lower()}", None)
+        exchange = market.exchange.lower()
+        handler = self._info_lighter if exchange == "rh-lighter" else getattr(self, f"_info_{exchange}", None)
         if handler is None:
             raise RuntimeError("该交易所尚无公开状态诊断器")
         return await handler(market)
@@ -1342,11 +1347,14 @@ class TradeAvailabilityService:
         )
 
     async def _info_lighter(self, market: MarketSnapshot) -> _PublicMarketInfo:
-        url = "https://mainnet.zklighter.elliot.ai/api/v1/orderBookDetails"
-        payload = await self._get_json(url, cache_key="lighter:orderBookDetails")
+        profile = lighter_endpoint_profile(market.exchange)
+        url = f"{profile.api_url}/orderBookDetails"
+        payload = await self._get_json(url, cache_key=f"{profile.exchange}:orderBookDetails")
         key = "spot_order_book_details" if market.market_type == MarketType.SPOT else "order_book_details"
+        if not isinstance(payload, dict) or payload.get("code") != 200 or not isinstance(payload.get(key), list):
+            raise RuntimeError("invalid Lighter orderBookDetails response")
         row = self._find(payload.get(key, []), "symbol", market.raw_symbol)
-        source = "Lighter orderBookDetails"
+        source = INDEX_SOURCE_LABELS[profile.exchange]
         if row is None:
             return _PublicMarketInfo(False, False, False, "NOT_FOUND", source, ["公开元数据不存在该原始市场"])
         status = str(row.get("status", "unknown"))
