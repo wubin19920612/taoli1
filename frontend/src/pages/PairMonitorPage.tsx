@@ -252,24 +252,39 @@ function hyperliquidDexSelectOptions(markets: HyperliquidDexMarket[]): Array<{ l
     label: market.dex === HYPERLIQUID_MAIN_DEX ? market.full_name : `${market.dex} · ${market.full_name}`,
     value: market.dex
   }));
-  return options.length ? options : [{ label: "主站", value: HYPERLIQUID_MAIN_DEX }];
+  return [
+    { label: "自动匹配", value: "" },
+    ...(options.length ? options : [{ label: "主站", value: HYPERLIQUID_MAIN_DEX }])
+  ];
 }
 
 function hyperliquidAssetOptions(markets: HyperliquidDexMarket[], dex: string | null | undefined): string[] {
-  const selectedDex = dex || HYPERLIQUID_MAIN_DEX;
-  const market = markets.find(
-    (item) =>
-      item.dex === selectedDex ||
-      (selectedDex === HYPERLIQUID_MAIN_DEX && !item.dex)
-  );
+  const selectedMarkets = dex ? markets.filter((market) => market.dex === dex) : markets;
   return Array.from(
     new Set(
-      (market?.assets ?? [])
+      selectedMarkets.flatMap((market) => market.assets)
         .filter((asset) => !asset.delisted)
         .map((asset) => asset.base)
         .filter(Boolean)
     )
   ).sort();
+}
+
+function resolveHyperliquidDex(markets: HyperliquidDexMarket[], symbol: string, selectedDex: string): string {
+  const requested = symbol.trim().toUpperCase();
+  const matches = markets.filter((market) => market.assets.some((asset) =>
+    !asset.delisted && (asset.base.toUpperCase() === requested || asset.symbol.toUpperCase() === requested)
+  ));
+  if (selectedDex && matches.some((market) => market.dex === selectedDex)) {
+    return selectedDex;
+  }
+  if (matches.length === 1) {
+    return matches[0].dex;
+  }
+  if (matches.length > 1) {
+    throw new Error(`Hyperliquid ${requested} 同时存在于多个 DEX（${matches.map((market) => market.dex).join("、")}），请选择 DEX`);
+  }
+  return selectedDex && selectedDex !== HYPERLIQUID_MAIN_DEX ? selectedDex : "";
 }
 
 const premiumIndexExchanges = new Set(["binance", "okx", "bybit", "gate", "bitget", "aster", "hyperliquid"]);
@@ -4348,6 +4363,22 @@ export function PairMonitorPage() {
     hyperliquidMarketsPromiseRef.current = request;
     return request;
   }, []);
+  const resolvePairHyperliquidDexes = useCallback(async (values: PairSpreadFormValues): Promise<PairSpreadFormValues> => {
+    const leg1UsesDex = isHyperliquidFuture(values.leg1_exchange, values.leg1_market_type);
+    const leg2UsesDex = isHyperliquidFuture(values.leg2_exchange, values.leg2_market_type);
+    if (!leg1UsesDex && !leg2UsesDex) {
+      return values;
+    }
+    const markets = hyperliquidMarkets.length ? hyperliquidMarkets : await loadHyperliquidMarkets();
+    if (!markets.length) {
+      throw new Error("Hyperliquid DEX 市场列表为空，请稍后重试");
+    }
+    return {
+      ...values,
+      leg1_dex: leg1UsesDex ? resolveHyperliquidDex(markets, values.leg1_symbol, values.leg1_dex) : values.leg1_dex,
+      leg2_dex: leg2UsesDex ? resolveHyperliquidDex(markets, values.leg2_symbol, values.leg2_dex) : values.leg2_dex
+    };
+  }, [hyperliquidMarkets, loadHyperliquidMarkets]);
 
   useEffect(() => {
     if (presetSyncStartedRef.current) {
@@ -4777,7 +4808,7 @@ export function PairMonitorPage() {
         await form.validateFields();
         rawValues = form.getFieldsValue(true) as LegacyPairSpreadFormValues;
       }
-      const values = normalizePairFormForSymbolMode(rawValues, querySymbolMode);
+      const values = await resolvePairHyperliquidDexes(normalizePairFormForSymbolMode(rawValues, querySymbolMode));
       form.setFieldsValue(values);
       const queryHours = clampHours(override?.hours ?? hours);
       const requestedIntervalSeconds = clampIntervalSeconds(
@@ -4853,6 +4884,7 @@ export function PairMonitorPage() {
     pairSymbolMode,
     premiumCompare,
     refreshPremiumCompareCurrent,
+    resolvePairHyperliquidDexes,
     dayCompareDays,
     dayCompareSettings,
     showDayCompare,
@@ -5083,15 +5115,23 @@ export function PairMonitorPage() {
   const saveCurrentPreset = async () => {
     try {
       await form.validateFields();
-      const values = normalizePairFormForSymbolMode(
-        form.getFieldsValue(true) as LegacyPairSpreadFormValues,
-        pairSymbolMode
+      const values = await resolvePairHyperliquidDexes(
+        normalizePairFormForSymbolMode(
+          form.getFieldsValue(true) as LegacyPairSpreadFormValues,
+          pairSymbolMode
+        )
       );
+      const matchingResult = result?.current && pairConfigId(pairFormFromResult(result)) === pairConfigId(values);
+      const matchingUrlIdentity = urlIdentityMatchesPair(values);
+      let identity: Partial<PairSpreadIdentityMetadata> = {};
+      if (matchingResult) {
+        identity = matchingUrlIdentity ? pairIdentityMetadataFromUrlOrResult(result) : pairIdentityMetadataFromResult(result);
+      } else if (matchingUrlIdentity) {
+        identity = pairIdentityMetadataFromUrl();
+      }
       const preset: SavedPairSpreadPreset = {
         ...values,
-        ...(result?.current
-          ? pairIdentityMetadataFromUrlOrResult(result)
-          : pairIdentityMetadataFromUrl()),
+        ...identity,
         id: pairConfigId(values),
         hours: clampHours(hours),
         intervalSeconds: clampIntervalSeconds(intervalSeconds),
@@ -5303,7 +5343,20 @@ export function PairMonitorPage() {
       {result?.warnings.length ? <Alert type="warning" message={result.warnings.join("；")} showIcon /> : null}
 
       <section className="pair-query-panel">
-        <Form form={form} initialValues={initialFormValues} disabled={loading}>
+        <Form
+          form={form}
+          initialValues={initialFormValues}
+          disabled={loading}
+          onValuesChange={(changedValues: Partial<PairSpreadFormValues>) => {
+            if ("leg1_exchange" in changedValues || "leg1_market_type" in changedValues || "leg1_symbol" in changedValues) {
+              form.setFieldValue("leg1_dex", "");
+            }
+            if ("leg2_exchange" in changedValues || "leg2_market_type" in changedValues || "leg2_symbol" in changedValues ||
+              (pairSymbolMode === "same" && "leg1_symbol" in changedValues)) {
+              form.setFieldValue("leg2_dex", "");
+            }
+          }}
+        >
           <div className={queryBarClassName}>
             {sameSymbolMode ? (
               <>

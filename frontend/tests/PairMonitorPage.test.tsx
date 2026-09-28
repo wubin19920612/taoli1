@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PairMonitorPage } from "../src/pages/PairMonitorPage";
+import type { HyperliquidDexMarket } from "../src/api/types";
 
 const observedAt = "2026-07-24T02:00:00Z";
 
@@ -433,11 +434,32 @@ describe("PairMonitorPage", () => {
   const requests: string[] = [];
   let fundingRecordWatched = false;
   let serverPresets: Array<Record<string, unknown>> = [];
+  let hyperliquidMarketsResponse: HyperliquidDexMarket[] = [];
 
   beforeEach(() => {
     requests.length = 0;
     fundingRecordWatched = false;
     serverPresets = [];
+    hyperliquidMarketsResponse = [
+      {
+        dex: "main",
+        full_name: "Hyperliquid 主站",
+        assets: [{ raw_symbol: "BTC", symbol: "BTCUSDT", base: "BTC", delisted: false }]
+      },
+      {
+        dex: "io",
+        full_name: "EntropyIO",
+        assets: [{ raw_symbol: "io:OAI", symbol: "OAIUSDT", base: "OAI", delisted: false }]
+      },
+      {
+        dex: "xyz",
+        full_name: "XYZ",
+        assets: [
+          { raw_symbol: "xyz:COIN", symbol: "COINUSDT", base: "COIN", delisted: false },
+          { raw_symbol: "xyz:CL", symbol: "CLUSDT", base: "CL", delisted: false }
+        ]
+      }
+    ];
     window.history.pushState({}, "", "/");
     window.localStorage.clear();
     window.sessionStorage.clear();
@@ -481,23 +503,7 @@ describe("PairMonitorPage", () => {
           return Response.json(pairSpreadResult(url.searchParams));
         }
         if (url.pathname.includes("/pair-spread/hyperliquid-markets")) {
-          return Response.json([
-            {
-              dex: "main",
-              full_name: "Hyperliquid 主站",
-              assets: [{ raw_symbol: "BTC", symbol: "BTCUSDT", base: "BTC", delisted: false }]
-            },
-            {
-              dex: "io",
-              full_name: "EntropyIO",
-              assets: [{ raw_symbol: "io:OAI", symbol: "OAIUSDT", base: "OAI", delisted: false }]
-            },
-            {
-              dex: "xyz",
-              full_name: "XYZ",
-              assets: [{ raw_symbol: "xyz:COIN", symbol: "COINUSDT", base: "COIN", delisted: false }]
-            }
-          ]);
+          return Response.json(hyperliquidMarketsResponse);
         }
         if (url.pathname.includes("/pair-spread/funding-history")) {
           const result = pairSpreadResult(url.searchParams);
@@ -1219,6 +1225,115 @@ describe("PairMonitorPage", () => {
       expect(query?.searchParams.get("leg2_dex")).toBeNull();
       expect(query?.searchParams.get("leg2_symbol")).toBe("ANTHROPIC");
     });
+  });
+
+  it("selects the unique Hyperliquid DEX for CL when the prior selection was main", async () => {
+    window.history.pushState(
+      {},
+      "",
+      "/?page=pair-monitor&leg1_exchange=lighter&leg1_market_type=future&leg1_symbol=XAU" +
+        "&leg2_exchange=hyperliquid&leg2_market_type=future&leg2_dex=main&leg2_symbol=CL" +
+        "&hours=4&interval_seconds=60"
+    );
+
+    render(<PairMonitorPage />);
+
+    await waitFor(() => {
+      expect(requests.some((request) => {
+        const url = new URL(request, "http://localhost");
+        return url.pathname.endsWith("/pair-spread/query") &&
+          url.searchParams.get("leg2_dex") === "xyz" &&
+          url.searchParams.get("leg2_symbol") === "CL";
+      })).toBe(true);
+    });
+    await waitFor(() => {
+      expect(new URLSearchParams(window.location.search).get("leg2_dex")).toBe("xyz");
+    });
+    expect(screen.getByText("xyz · XYZ")).toBeTruthy();
+  });
+
+  it("saves a changed CL leg with its resolved DEX and no identity from the prior result", async () => {
+    window.history.pushState(
+      {},
+      "",
+      "/?page=pair-monitor&leg1_exchange=lighter&leg1_market_type=future&leg1_symbol=XAU" +
+        "&leg2_exchange=hyperliquid&leg2_market_type=future&leg2_dex=main&leg2_symbol=BTC" +
+        "&leg2_raw_symbol=BTC&hours=4&interval_seconds=60"
+    );
+    const user = userEvent.setup();
+    render(<PairMonitorPage />);
+    await waitFor(() => expect(document.querySelector(".pair-chart-card")).toBeTruthy());
+
+    const symbolInput = screen.getByPlaceholderText("SKHYNIX");
+    await user.clear(symbolInput);
+    await user.type(symbolInput, "CL");
+    await user.click(screen.getByRole("button", { name: /保存/ }));
+
+    await waitFor(() => expect(serverPresets).toHaveLength(1));
+    expect(serverPresets[0]).toMatchObject({ leg2_symbol: "CL", leg2_dex: "xyz" });
+    expect(serverPresets[0].leg2_raw_symbol).toBeUndefined();
+    expect(requests.some((request) => request.includes("/pair-spread/query") && request.includes("leg2_symbol=CL"))).toBe(false);
+  });
+
+  it("replaces a stale non-main DEX when CL has a unique market match", async () => {
+    window.history.pushState(
+      {},
+      "",
+      "/?page=pair-monitor&leg1_exchange=lighter&leg1_market_type=future&leg1_symbol=XAU" +
+        "&leg2_exchange=hyperliquid&leg2_market_type=future&leg2_dex=io&leg2_symbol=CL" +
+        "&hours=4&interval_seconds=60"
+    );
+
+    render(<PairMonitorPage />);
+
+    await waitFor(() => {
+      expect(requests.some((request) => request.includes("/pair-spread/query") &&
+        request.includes("leg2_dex=xyz") && request.includes("leg2_symbol=CL"))).toBe(true);
+    });
+  });
+
+  it("asks for a DEX when an unselected symbol exists on multiple Hyperliquid DEXs", async () => {
+    hyperliquidMarketsResponse[1].assets.push({
+      raw_symbol: "io:CL", symbol: "CLUSDT", base: "CL", delisted: false
+    });
+    window.history.pushState(
+      {},
+      "",
+      "/?page=pair-monitor&leg1_exchange=lighter&leg1_market_type=future&leg1_symbol=XAU" +
+        "&leg2_exchange=hyperliquid&leg2_market_type=future&leg2_symbol=CL" +
+        "&hours=4&interval_seconds=60"
+    );
+
+    render(<PairMonitorPage />);
+
+    expect(await screen.findByText(/CL 同时存在于多个 DEX/)).toBeTruthy();
+    expect(requests.some((request) => request.includes("/pair-spread/query"))).toBe(false);
+  });
+
+  it("clears a previous DEX when the Hyperliquid symbol changes", async () => {
+    hyperliquidMarketsResponse[0].assets.push({
+      raw_symbol: "CL", symbol: "CLUSDT", base: "CL", delisted: false
+    });
+    window.history.pushState(
+      {},
+      "",
+      "/?page=pair-monitor&leg1_exchange=lighter&leg1_market_type=future&leg1_symbol=XAU" +
+        "&leg2_exchange=hyperliquid&leg2_market_type=future&leg2_dex=main&leg2_symbol=BTC" +
+        "&hours=4&interval_seconds=60"
+    );
+    const user = userEvent.setup();
+    render(<PairMonitorPage />);
+    await waitFor(() => {
+      expect(requests.some((request) => request.includes("leg2_symbol=BTC"))).toBe(true);
+    });
+
+    const symbolInput = screen.getByPlaceholderText("SKHYNIX");
+    await user.clear(symbolInput);
+    await user.type(symbolInput, "CL");
+    await user.click(screen.getByRole("button", { name: /查询/ }));
+
+    expect(await screen.findByText(/CL 同时存在于多个 DEX/)).toBeTruthy();
+    expect(requests.some((request) => request.includes("leg2_symbol=CL"))).toBe(false);
   });
 
   it("shows the funding rate difference table", async () => {
