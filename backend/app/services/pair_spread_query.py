@@ -975,6 +975,15 @@ class PairSpreadQueryService:
         if self._owns_client and not self.client.is_closed:
             await self.client.aclose()
 
+    async def _resolved_result_leg(self, leg: PairSpreadLegQuery) -> PairSpreadLegQuery:
+        if leg.exchange != "hyperliquid" or leg.market_type != MarketType.FUTURE or leg.dex is not None:
+            return leg
+        try:
+            _, dex = await self._resolve_hyperliquid_coin(leg.symbol)
+        except Exception as exc:  # noqa: BLE001 - keep query failures in the API's 502 path.
+            raise PairSpreadQueryError(f"Hyperliquid DEX 解析失败: {exc}") from exc
+        return leg.model_copy(update={"dex": _hyperliquid_public_dex(dex)})
+
     async def query_funding_history(
         self,
         leg1: PairSpreadLegQuery,
@@ -1184,8 +1193,8 @@ class PairSpreadQueryService:
         )
 
         return PairSpreadQueryResult(
-            leg1=leg1,
-            leg2=leg2,
+            leg1=await self._resolved_result_leg(leg1),
+            leg2=await self._resolved_result_leg(leg2),
             hours=hours,
             interval_minutes=interval_minutes,
             interval_seconds=resolved_interval_seconds,
@@ -1646,8 +1655,8 @@ class PairSpreadQueryService:
             )
 
         return PairSpreadQueryResult(
-            leg1=leg1,
-            leg2=leg2,
+            leg1=await self._resolved_result_leg(leg1),
+            leg2=await self._resolved_result_leg(leg2),
             hours=hours,
             interval_minutes=1,
             interval_seconds=interval_seconds,

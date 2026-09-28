@@ -457,6 +457,47 @@ async def test_pair_spread_query_uses_large_intervals_as_historical_klines(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("interval_seconds", [5, 60])
+async def test_pair_spread_query_returns_automatically_resolved_hyperliquid_dex(
+    interval_seconds: int,
+) -> None:
+    class FakePairSpreadService(PairSpreadQueryService):
+        async def _fetch_klines(self, exchange: str, symbol: str, start, end, interval_minutes: int):
+            return [kline_at(end - timedelta(minutes=interval_minutes), 100 if exchange == "lighter" else 101)]
+
+        async def _fetch_current_with_warning(self, leg: PairSpreadLegQuery, warnings: list[str]):
+            price = 100 if leg.exchange == "lighter" else 101
+            snapshot = current_leg(leg.exchange, leg.symbol, price)
+            return snapshot.model_copy(update={"dex": "xyz", "raw_symbol": "xyz:CL"}) if leg.exchange == "hyperliquid" else snapshot
+
+        async def _query_open_interest(self, *args, **kwargs):
+            return [], ("unavailable", "unavailable", "unavailable")
+
+        async def _resolve_hyperliquid_coin(self, symbol: str, *, dex: str | None = None):
+            assert (symbol, dex) == ("CLUSDT", None)
+            return "xyz:CL", "xyz"
+
+    service = FakePairSpreadService()
+    try:
+        result = await service.query(
+            PairSpreadLegQuery(exchange="lighter", symbol="XAU"),
+            PairSpreadLegQuery(exchange="hyperliquid", symbol="CL"),
+            hours=4,
+            interval_seconds=interval_seconds,
+            now=datetime(2026, 7, 10, 12, 0, tzinfo=UTC),
+            include_current=interval_seconds == 5,
+        )
+    finally:
+        await service.aclose()
+        _REALTIME_PAIR_SPREAD_CACHE.clear()
+
+    assert result.leg1.dex is None
+    assert result.leg2.symbol == "CLUSDT"
+    assert result.leg2.dex == "xyz"
+    assert result.point_count == 1
+
+
+@pytest.mark.asyncio
 async def test_pair_spread_query_builds_stats_current_and_funding() -> None:
     _REALTIME_PAIR_FUNDING_CACHE.clear()
 
