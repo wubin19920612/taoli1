@@ -37,4 +37,29 @@ Gate Reader 是外部依赖，禁用缓存请求并不保证所有上游缓存�
 
 仅暂存本任务的采集实现、测试、页面说明及两份来源交接文档。保留已有 `.worktrees/`、pytest 临时目录、`output/**`、其他交接和未跟踪脚本。没有新增依赖或 schema 迁移。
 
-部署记录待正式提交、镜像完成及备份部署后补充；在补充之前不能将只读探测当作线上恢复。
+### 测试与提交
+
+- 后端：`python -m pytest tests/test_announcement_public_sources.py tests/test_announcements.py tests/test_api.py -k 'announcement or hyper' -q`，79 passed、104 deselected；新增来源测试单独运行 11 passed。
+- 前端：`npm test -- --run tests/AnnouncementsPage.test.tsx`，5 passed（已有 React act 警告）；`npm run build` 的 TypeScript 与 Vite 构建通过。
+- 新增文件 Ruff 通过；原 announcements 服务既有诊断修改前后均为 37 条，未增加诊断；`git diff --check` 通过。
+- 功能提交 `3e34ce6ca17f3fbbf376702ba725195b7e5d26b1` 已推送当前分支。GitHub Actions 前后端镜像构建均成功：https://github.com/wubin19920612/taoli1/actions/runs/36536208109 。
+
+### 备份与部署
+
+2026-09-29 使用 `deploy/linux-update.sh` 更新，服务器 `git pull --ff-only`，拉取预构建镜像后启动 Compose，未在服务器构建，也未删除数据卷。线上功能版本为 `3e34ce6ca17f3fbbf376702ba725195b7e5d26b1`；后续仅交付记录的文档提交不需要重新部署。
+
+服务器仓库内备份：
+
+- `backups/radar-before-3e34ce6ca17f-20260929T073426Z.db`，627425280 字节，SQLite integrity_check 为 ok；容器与宿主 SHA256 一致：`34f84214637c81752607df5b170f9a02bb16a1d238b09711a41336e5d694cf79`。
+- `backups/squeeze-route-before-3e34ce6ca17f-20260929T073426Z.db`，217088 字节，integrity_check 为 ok；SHA256：`0d7e857ee626aa8b58da347845484483cdbd7aced8bbec917a8529fd0bc52c22`。
+
+### 线上验收
+
+- 前后端容器使用对应功能提交的镜像，均健康；`/api/health` 返回 200 / ok，Gate、Hyperliquid 公告接口均返回 200。
+- 公告总开关与其他公告通知均启用；首次历史通知关闭；轮询配置 30 秒、通知时效 30 分钟。配置间隔不等于实测端到端延迟。
+- Hyperliquid 官方源入库 20 条，全部 muted；最新是 `593 / Weekly Update`，首次抓取时间 `2026-09-29T07:35:54.045906Z`。后续查询仍为 20 条，没有重复入库。
+- Gate 恢复记录 30 条：28 muted、2 sent，后续查询数量与状态一致。`102011 / 股票新人见面礼：报名即领，首充交易叠加奖励` 和 `102010 / 主流币双响礼：邀友 100% 抽 BTC、ETH，好友交易再领最高 $32 BTC` 均为 other 类别，实际发送流程成功。
+- SAMSUNG 股息公告 `102003` 已入库，发布于 `2026-09-29T02:53:36Z`，抓取于 `2026-09-29T07:35:55.470621Z`；因超过 30 分钟窗口保持 muted，未人工补发。
+- sent 是应用发送器成功状态，未独立确认用户终端收件；上述 Gate 通知属于恢复时捕获的近期事件，不能视为正常轮询延迟测量。部署后尚无新的 Hyperliquid 自然公告可验证从发布到飞书的完整链路。
+
+下一步：观察官方频道下一条自然新公告及其发送状态；若继续提升 Gate 可靠性，可单独实现官方 WebSocket 补充源，但必须保留网页股息等分类，不能将其宣称为完整公告中心替代。
