@@ -78,14 +78,23 @@ export function useRadarStore(
   }, [enabled, stableFilters]);
 
   useEffect(() => {
+    // Do not label rows from the previous exchange/sort as the new result.
+    setOpportunities([]);
+    hasLoadedRef.current = false;
+  }, [stableFilters]);
+
+  useEffect(() => {
     if (!enabled) {
       requestIdRef.current += 1;
       setLoading(false);
       return undefined;
     }
-    void refresh({ showLoading: !hasLoadedRef.current });
+    void refresh({ force: true, showLoading: !hasLoadedRef.current });
     if (!autoRefresh) {
-      return undefined;
+      return () => {
+        requestIdRef.current += 1;
+        inFlightRef.current = false;
+      };
     }
     const refreshIfVisible = () => {
       if (document.visibilityState !== "hidden") {
@@ -95,6 +104,8 @@ export function useRadarStore(
     const timer = window.setInterval(refreshIfVisible, refreshIntervalMs);
     document.addEventListener("visibilitychange", refreshIfVisible);
     return () => {
+      requestIdRef.current += 1;
+      inFlightRef.current = false;
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", refreshIfVisible);
     };

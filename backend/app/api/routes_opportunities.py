@@ -1,3 +1,5 @@
+from typing import Annotated, Literal
+
 from fastapi import APIRouter, Query, Request
 
 from app.models.market import MarketType
@@ -7,6 +9,12 @@ from app.services.data_filters import filter_markets, filter_opportunities
 from app.services.risk_labels import has_non_actionable_risk, known_volume_24h_usdt
 
 router = APIRouter()
+
+OpportunitySort = Literal[
+    "symbol", "buy_exchange", "sell_exchange", "open_spread_pct",
+    "close_spread_pct", "fee_adjusted_open_pct", "buy_volume_24h_usdt",
+    "sell_volume_24h_usdt", "net_funding_hourly_pct", "net_funding_next_hourly_pct",
+]
 
 _OPPORTUNITY_SYMBOL_SEARCH_ALIASES = {
     "RH": "HOODUSDT",
@@ -46,6 +54,8 @@ async def list_opportunities(
     hidden_risk_labels: str | None = Query(default=None),
     min_volume_24h_k: float | None = Query(default=None, ge=0),
     limit: int | None = Query(default=None, ge=1, le=1000),
+    sort_by: Annotated[OpportunitySort | None, Query()] = None,
+    sort_order: Literal["asc", "desc"] = Query(default="desc"),
 ) -> list[Opportunity]:
     settings = await _risk_settings(request)
     opportunities = filter_opportunities(
@@ -68,7 +78,7 @@ async def list_opportunities(
         wanted = _normalize_opportunity_symbol_query(symbol)
         opportunities = [item for item in opportunities if wanted in item.symbol]
     if exchange:
-        wanted_exchange = exchange.lower()
+        wanted_exchange = exchange.strip().lower()
         opportunities = [
             item
             for item in opportunities
@@ -96,6 +106,21 @@ async def list_opportunities(
         opportunities = [
             item for item in opportunities if not has_non_actionable_risk(item, hidden_labels)
         ]
+    if sort_by is not None:
+        # Sort the full filtered snapshot before limiting. Unknown values stay last
+        # in both directions; identity breaks ties without merging distinct routes.
+        known = [item for item in opportunities if getattr(item, sort_by) is not None]
+        missing = [item for item in opportunities if getattr(item, sort_by) is None]
+        known.sort(key=lambda item: item.id)
+        known.sort(
+            key=lambda item: (
+                getattr(item, sort_by).casefold()
+                if isinstance(getattr(item, sort_by), str)
+                else getattr(item, sort_by)
+            ),
+            reverse=sort_order == "desc",
+        )
+        opportunities = known + sorted(missing, key=lambda item: item.id)
     if limit is not None:
         opportunities = opportunities[:limit]
     return opportunities

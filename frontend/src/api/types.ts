@@ -2538,7 +2538,14 @@ export interface GateTwapJobStatus {
   events: GateTwapJobEvent[];
 }
 
+export type OpportunitySort = "symbol" | "buy_exchange" | "sell_exchange"
+  | "open_spread_pct" | "close_spread_pct" | "fee_adjusted_open_pct"
+  | "buy_volume_24h_usdt" | "sell_volume_24h_usdt"
+  | "net_funding_hourly_pct" | "net_funding_next_hourly_pct";
+
 export interface OpportunityFilters {
+  sort_by?: OpportunitySort;
+  sort_order?: "asc" | "desc";
   type?: OpportunityType;
   exclude_types?: OpportunityType[];
   symbol?: string;

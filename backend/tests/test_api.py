@@ -805,6 +805,70 @@ def test_opportunities_endpoint_resolves_robinhood_search_aliases(symbol_query: 
     assert [item["id"] for item in response.json()] == ["lighter-hood"]
 
 
+@pytest.mark.parametrize("field", [
+    "open_spread_pct", "close_spread_pct", "fee_adjusted_open_pct",
+    "buy_volume_24h_usdt", "sell_volume_24h_usdt",
+    "net_funding_hourly_pct", "net_funding_next_hourly_pct",
+])
+@pytest.mark.parametrize("direction,expected", [("asc", "low"), ("desc", "high")])
+def test_exchange_spread_sort_before_limit(field, direction, expected) -> None:
+    store = SnapshotStore()
+    store.set_opportunities([
+        make_opportunity().model_copy(update={"id": "low", field: -0.1 if "funding" in field else 1}),
+        make_opportunity().model_copy(update={"id": "high", field: 20}),
+        make_opportunity().model_copy(update={"id": "unrelated", "buy_exchange": "bybit", field: 999}),
+    ])
+    client = TestClient(create_app(snapshot_store=store))
+    response = client.get("/api/opportunities", params={
+        "exchange": " BINANCE ", "sort_by": field, "sort_order": direction, "limit": 1,
+    })
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()] == [expected]
+    assert store.get_opportunities()[0].id == "low"
+
+
+@pytest.mark.parametrize("field", ["buy_volume_24h_usdt", "sell_volume_24h_usdt", "net_funding_hourly_pct", "net_funding_next_hourly_pct"])
+@pytest.mark.parametrize("direction", ["asc", "desc"])
+def test_exchange_spread_sort_missing_values_last(field, direction) -> None:
+    store = SnapshotStore()
+    store.set_opportunities([
+        make_opportunity().model_copy(update={"id": "unknown", field: None}),
+        make_opportunity().model_copy(update={"id": "zero", field: 0}),
+    ])
+    client = TestClient(create_app(snapshot_store=store))
+    response = client.get("/api/opportunities", params={"sort_by": field, "sort_order": direction})
+    assert [item["id"] for item in response.json()] == ["zero", "unknown"]
+
+
+@pytest.mark.parametrize("field", ["symbol", "buy_exchange", "sell_exchange"])
+@pytest.mark.parametrize("direction,expected", [("asc", ["a", "b"]), ("desc", ["b", "a"])])
+def test_exchange_spread_name_sort(field, direction, expected) -> None:
+    store = SnapshotStore()
+    store.set_opportunities([
+        make_opportunity().model_copy(update={"id": "b", field: "zeta"}),
+        make_opportunity().model_copy(update={"id": "a", field: "Alpha"}),
+    ])
+    client = TestClient(create_app(snapshot_store=store))
+    response = client.get("/api/opportunities", params={"sort_by": field, "sort_order": direction})
+    assert [item["id"] for item in response.json()] == expected
+
+
+def test_exchange_filter_matches_both_sides_and_preserves_dex_identity() -> None:
+    store = SnapshotStore()
+    store.set_opportunities([
+        make_opportunity().model_copy(update={"id": "buy", "buy_exchange": "hyperliquid", "buy_dex": "xyz", "buy_raw_symbol": "xyz:BTC"}),
+        make_opportunity().model_copy(update={"id": "sell", "sell_exchange": "hyperliquid", "sell_dex": "main", "sell_raw_symbol": "BTC"}),
+        make_opportunity(),
+    ])
+    client = TestClient(create_app(snapshot_store=store))
+    rows = client.get("/api/opportunities?exchange=hyperliquid&sort_by=buy_exchange&sort_order=asc").json()
+    assert {item["id"] for item in rows} == {"buy", "sell"}
+    assert next(item for item in rows if item["id"] == "buy")["buy_raw_symbol"] == "xyz:BTC"
+    assert next(item for item in rows if item["id"] == "buy")["buy_dex"] == "xyz"
+    assert client.get("/api/opportunities?sort_by=invalid").status_code == 422
+    assert client.get("/api/opportunities?sort_order=invalid").status_code == 422
+
+
 def test_pair_spread_query_endpoint_uses_on_demand_service() -> None:
     fixed_now = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
 

@@ -80,6 +80,24 @@ describe("DashboardPage", () => {
     );
   });
 
+  it("requests exchange and global sorting together", async () => {
+    const user = userEvent.setup();
+    render(<DashboardPage />);
+    await user.click(screen.getByRole("combobox", { name: "交易所（任一侧）" }));
+    await user.click(screen.getByText("RH Lighter"));
+    await user.click(screen.getByRole("combobox", { name: "排序指标" }));
+    await user.click(screen.getByText("买方 24h 成交额"));
+    await user.click(screen.getByRole("combobox", { name: "排序方向" }));
+    await user.click(screen.getByText("升序"));
+    await waitFor(() => {
+      const urls = vi.mocked(fetch).mock.calls.map(([input]) => new URL(String(input), "http://localhost"));
+      expect(urls.some((url) => url.pathname.endsWith("/opportunities")
+        && url.searchParams.get("exchange") === "rh-lighter"
+        && url.searchParams.get("sort_by") === "buy_volume_24h_usdt"
+        && url.searchParams.get("sort_order") === "asc")).toBe(true);
+    });
+  });
+
   it("hides non-actionable risk rows by default", async () => {
     render(<DashboardPage />);
 

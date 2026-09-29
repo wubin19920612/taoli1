@@ -52,6 +52,19 @@ describe("OpportunityTable", () => {
     window.history.pushState({}, "", "/");
   });
 
+  it("keeps server ordering and sends header sorting to the server", async () => {
+    const user = userEvent.setup();
+    const onSortChange = vi.fn();
+    render(<OpportunityTable opportunities={[
+      { ...row, id: "first", symbol: "FIRSTUSDT", open_spread_pct: 0.1 },
+      { ...row, id: "second", symbol: "SECONDUSDT", open_spread_pct: 9 }
+    ]} loading={false} sortBy="buy_volume_24h_usdt" sortOrder="desc" onSortChange={onSortChange} />);
+    const rows = document.querySelectorAll("tbody tr[data-row-key]");
+    expect(rows[0].getAttribute("data-row-key")).toBe("first");
+    await user.click(screen.getAllByText("买入交易所")[0]);
+    expect(onSortChange).toHaveBeenCalledWith("buy_exchange", "desc");
+  });
+
   it("renders spread legs, funding previews and risk labels", () => {
     render(<OpportunityTable opportunities={[row]} loading={false} />);
 

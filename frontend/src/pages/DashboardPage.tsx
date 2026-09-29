@@ -136,6 +136,8 @@ function normalizeOpportunityTypes(value: unknown): OpportunityType[] {
 function defaultDashboardFilters(): OpportunityFilters {
   return {
     include_risky: false,
+    sort_by: "open_spread_pct",
+    sort_order: "desc",
     hidden_risk_labels: defaultHiddenRiskLabels,
     exclude_types: [],
     limit: 120
@@ -871,9 +873,17 @@ export function DashboardPage() {
           </Space>
         </div>
       ) : null}
+      <Typography.Paragraph type="secondary">
+        {filters.exchange ? `与 ${filters.exchange} 买入或卖出侧相关的价差。` : "全部交易所价差。"}
+        在符合当前筛选的采集数据中先排序，再取前 {filters.limit ?? "全部"} 条。
+        成交额为双方 24h USDT；净资金费率按小时归一化，正值表示买多卖空净收入，预测不保证实现；缺失值排末尾。
+      </Typography.Paragraph>
       <OpportunityTable
         opportunities={opportunities}
         loading={loading}
+        sortBy={filters.sort_by}
+        sortOrder={filters.sort_order}
+        onSortChange={(sort_by, sort_order) => setFilters((current) => ({ ...current, sort_by, sort_order }))}
         blockedSymbols={blockedSymbols}
         actionLoadingSymbol={savingSymbol}
         previewLoadingSymbol={astroPreviewSymbol}

@@ -9,13 +9,16 @@ import { Button, Space, Table, Tag, Tooltip, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
 
-import type { MarketType, Opportunity } from "../api/types";
+import type { MarketType, Opportunity, OpportunitySort } from "../api/types";
 import { marketTypeText } from "../constants/marketLabels";
 import { RiskTags } from "./RiskTags";
 
 interface OpportunityTableProps {
   opportunities: Opportunity[];
   loading: boolean;
+  sortBy?: OpportunitySort;
+  sortOrder?: "asc" | "desc";
+  onSortChange?: (field: OpportunitySort, order: "asc" | "desc") => void;
   blockedSymbols?: string[];
   actionLoadingSymbol?: string | null;
   previewLoadingSymbol?: string | null;
@@ -453,6 +456,9 @@ function buildColumns(
 export function OpportunityTable({
   opportunities,
   loading,
+  sortBy,
+  sortOrder,
+  onSortChange,
   blockedSymbols,
   actionLoadingSymbol,
   previewLoadingSymbol,
@@ -460,17 +466,49 @@ export function OpportunityTable({
   onPreviewAstro,
   onOpenHistory
 }: OpportunityTableProps) {
+  const columns = buildColumns(
+    blockedSymbols, actionLoadingSymbol, previewLoadingSymbol,
+    onToggleSymbol, onPreviewAstro, onOpenHistory
+  );
+  if (onSortChange) {
+    if (sortBy === "net_funding_hourly_pct" || sortBy === "net_funding_next_hourly_pct") {
+      columns.splice(columns.findIndex((column) => column.title === "Funding"), 0, {
+        title: sortBy === "net_funding_hourly_pct" ? "当前净费率 / h" : "预测净费率 / h",
+        dataIndex: sortBy,
+        width: 136,
+        align: "right",
+        render: (value: number | null) => value === null ? "-" : `${value.toFixed(5)}%`
+      });
+    }
+    const fields: Record<string, OpportunitySort> = {
+      Symbol: "symbol",
+      "买入交易所": "buy_exchange",
+      "卖出交易所": "sell_exchange",
+      "Open spread": "open_spread_pct",
+      "Net fee adj.": "fee_adjusted_open_pct",
+      "Close spread": "close_spread_pct"
+    };
+    columns.forEach((column) => {
+      const field = fields[String(column.title)];
+      if (field) {
+        column.key = field;
+        column.sorter = true;
+        column.defaultSortOrder = undefined;
+        column.sortOrder = sortBy === field ? (sortOrder === "asc" ? "ascend" : "descend") : null;
+        column.sortDirections = ["descend", "ascend", "descend"];
+      }
+    });
+  }
   return (
     <Table
       className="opportunity-table"
-      columns={buildColumns(
-        blockedSymbols,
-        actionLoadingSymbol,
-        previewLoadingSymbol,
-        onToggleSymbol,
-        onPreviewAstro,
-        onOpenHistory
-      )}
+      columns={columns}
+      onChange={(_, __, sorter, extra) => {
+        const selected = Array.isArray(sorter) ? sorter[0] : sorter;
+        if (extra.action === "sort" && selected.columnKey && onSortChange) {
+          onSortChange(selected.columnKey as OpportunitySort, selected.order === "ascend" ? "asc" : "desc");
+        }
+      }}
       dataSource={opportunities}
       loading={loading}
       rowKey="id"
