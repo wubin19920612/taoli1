@@ -1397,28 +1397,43 @@ class OKXAnnouncementProvider(HttpAnnouncementProvider):
     )
 
     async def fetch(self, *, include_details: bool = True) -> list[ExchangeAnnouncement]:
-        announcements: list[ExchangeAnnouncement] = []
-        for ann_type in self.ann_types:
+        async def fetch_api(ann_type: str) -> list[ExchangeAnnouncement]:
             query = f"annType={ann_type}&page=1" if ann_type else "page=1"
-            fetch_json = self._get_json if ann_type else self._get_additional_json
-            payload = await fetch_json(f"{self.base_url}?{query}")
+            payload = await self._get_json(f"{self.base_url}?{query}")
+            if isinstance(payload, dict) and str(payload.get("code", "0")) != "0":
+                raise ValueError("OKX announcement API returned an error code")
             content_by_key = (
                 await self._fetch_detail_content_for_payload(payload, ann_type)
                 if include_details else {}
             )
-            announcements.extend(self._parse_payload(payload, ann_type, content_by_key=content_by_key))
-        for url in self.latest_urls:
-            try:
-                html = await self._get_text(url)
-            except Exception:
-                logger.debug("failed to fetch okx latest announcements page: %s", url, exc_info=True)
+            return self._parse_payload(payload, ann_type, content_by_key=content_by_key)
+
+        async def fetch_page(url: str) -> list[ExchangeAnnouncement]:
+            return self._parse_latest_page(await self._get_text(url), "announcements-latest")
+
+        labels = [f"api:{value or 'all'}" for value in self.ann_types] + list(self.latest_urls)
+        results = await asyncio.gather(
+            *(fetch_api(value) for value in self.ann_types),
+            *(fetch_page(url) for url in self.latest_urls),
+            return_exceptions=True,
+        )
+        announcements: list[ExchangeAnnouncement] = []
+        known_slugs: set[str] = set()
+        for label, result in zip(labels, results, strict=True):
+            if isinstance(result, BaseException):
+                if isinstance(result, asyncio.CancelledError):
+                    raise result
+                logger.warning("OKX announcement source failed: %s (%s)", label, type(result).__name__)
                 continue
-            known_urls = {item.url.rstrip("/").rsplit("/", 1)[-1] for item in announcements}
-            for item in self._parse_latest_page(html, "announcements-latest"):
+            if not result:
+                logger.warning("OKX announcement source returned no valid articles: %s", label)
+            for item in result:
                 slug = item.url.rstrip("/").rsplit("/", 1)[-1]
-                if slug not in known_urls:
+                if slug not in known_slugs:
                     announcements.append(item)
-                    known_urls.add(slug)
+                    known_slugs.add(slug)
+        if not announcements:
+            raise ValueError("All OKX announcement sources failed or returned no valid articles")
         return announcements
 
     async def fetch_headlines(self) -> list[ExchangeAnnouncement]:
@@ -1426,6 +1441,26 @@ class OKXAnnouncementProvider(HttpAnnouncementProvider):
 
     def _parse_latest_page(self, html: str, fallback_category: str) -> list[ExchangeAnnouncement]:
         candidates: list[dict[str, object]] = []
+        # Current help center exposes dated articles in appState, without URLs.
+        for match in re.finditer(r'<script[^>]+id=["\']appState["\'][^>]*>(.*?)</script>', html, re.S | re.I):
+            try:
+                state = json.loads(match.group(1))
+                rows = state["appContext"]["initialProps"]["sectionData"]["articleList"]["list"]
+            except (ValueError, KeyError, TypeError):
+                continue
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                slug = row.get("slug")
+                if not isinstance(slug, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", slug):
+                    continue
+                if _parse_datetime_any(row.get("publishTime")) is None:
+                    continue
+                candidates.append({**row, "id": slug, "annId": slug,
+                                   "url": f"/zh-hans/help/{slug}",
+                                   "category": row.get("sectionSlug") or fallback_category})
         for match in re.finditer(r'<script[^>]+id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>', html, re.S | re.I):
             try:
                 payload = json.loads(unescape(match.group(1)))
