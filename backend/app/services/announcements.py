@@ -22,6 +22,7 @@ from app.models.announcement import (
     AnnouncementSettings,
     ExchangeAnnouncement,
 )
+from app.services.announcement_public_pages import TelegramChannelParser
 
 AlertSender = Callable[[str], None | Awaitable[None]]
 SettingsLoader = Callable[[], Awaitable[AnnouncementSettings]]
@@ -1851,17 +1852,57 @@ class GateAnnouncementProvider(HttpAnnouncementProvider):
 
     async def fetch(self, *, include_details: bool = True) -> list[ExchangeAnnouncement]:
         announcements: list[ExchangeAnnouncement] = []
+        general_available = False
         for category in self.categories:
             try:
                 response = await self.client.get(f"{self.page_base_url}/{category}".rstrip("/"))
                 response.raise_for_status()
+                if not self._has_article_payload(response.text):
+                    raise ValueError("Gate returned no announcement list (possibly a challenge page)")
             except Exception:
                 logger.warning("failed to fetch gate announcement category: %s", category, exc_info=True)
                 continue
+            if not category:
+                general_available = True
             page_rows = self._parse_page(response.text, category)
             content_by_key = await self._fetch_detail_content_for_page(page_rows) if include_details else {}
             announcements.extend(self._parse_page(response.text, category, content_by_key=content_by_key))
+        if not general_available:
+            # Public Gate content via a third-party reader, not an official REST API.
+            # Bound this to two requests per poll; the dividend catalog covers stock
+            # settlements absent from Gate's supported WebSocket announcement types.
+            for rows in await asyncio.gather(
+                self._fetch_reader_page(""), self._fetch_reader_page("dividenddistribution")
+            ):
+                announcements.extend(rows)
         return announcements
+
+    def _has_article_payload(self, html: str) -> bool:
+        payload = self._next_data(html)
+        if not isinstance(payload, dict):
+            return False
+        props = payload.get("props")
+        page = props.get("pageProps") if isinstance(props, dict) else None
+        data = page.get("listData") if isinstance(page, dict) else None
+        return (isinstance(data, dict) and isinstance(data.get("list"), list)) or bool(
+            _find_article_dicts(payload)
+        )
+
+    async def _fetch_reader_page(self, category: str) -> list[ExchangeAnnouncement]:
+        url = f"https://r.jina.ai/{self.base_url}/zh/announcements/{category}".rstrip("/")
+        try:
+            response = await self.client.get(
+                url,
+                headers={"X-Return-Format": "html", "X-No-Cache": "true"},
+                timeout=httpx.Timeout(15.0, connect=3.0),
+            )
+            response.raise_for_status()
+            if not self._has_article_payload(response.text):
+                raise ValueError("Gate reader returned no announcement list")
+            return self._parse_page(response.text, category)
+        except Exception:
+            logger.warning("failed to fetch gate reader fallback: %s", category or "general", exc_info=True)
+            return []
 
     async def fetch_headlines(self) -> list[ExchangeAnnouncement]:
         return await self.fetch(include_details=False)
@@ -1988,19 +2029,19 @@ class HyperliquidAnnouncementProvider(HttpAnnouncementProvider):
 
     async def _parse_payload(self, payload: object) -> list[ExchangeAnnouncement]:
         if not isinstance(payload, dict):
-            return []
+            raise TypeError("Hyperliquid meta response is not an object")
         universe = payload.get("universe")
-        if not isinstance(universe, list):
-            return []
+        if not isinstance(universe, list) or not universe:
+            raise ValueError("Hyperliquid meta universe is missing or empty")
 
         now = self._now_fn()
         current: dict[str, bool] = {}
         for row in universe:
-            if not isinstance(row, dict):
-                continue
+            if not isinstance(row, dict) or not isinstance(row.get("name"), str):
+                raise TypeError("Hyperliquid meta contains an invalid market")
             name = _clean_text(row.get("name")).upper()
-            if not name:
-                continue
+            if not name or not isinstance(row.get("isDelisted", False), bool):
+                raise ValueError("Hyperliquid meta contains an invalid market state")
             current[name] = bool(row.get("isDelisted"))
 
         previous = await self._load_previous_state()
@@ -2015,7 +2056,7 @@ class HyperliquidAnnouncementProvider(HttpAnnouncementProvider):
         current_active = set(current) - current_delisted
 
         should_emit_baseline = previous is None or not await self._has_baseline_records()
-        new_active = current_active if should_emit_baseline else current_active - set(previous or {})
+        new_active = current_active if should_emit_baseline else current_active - previous_active
         for symbol in sorted(new_active):
             announcements.append(
                 self._synthetic_announcement(
@@ -2092,8 +2133,47 @@ class HyperliquidAnnouncementProvider(HttpAnnouncementProvider):
     async def _has_baseline_records(self) -> bool:
         if self.repository is None:
             return False
-        rows = await self.repository.list(exchange=self.exchange, limit=1)
-        return any(row.source == self.source for row in rows)
+        return await self.repository.latest_published_at(
+            exchange=self.exchange, source=self.source
+        ) is not None
+
+
+class HyperliquidOfficialAnnouncementProvider(HttpAnnouncementProvider):
+    """Public channel linked by https://hyperliquid.xyz; independent of market meta."""
+
+    exchange = "hyperliquid"
+    source = "hyperliquid-official-announcements"
+    channel = "hyperliquid_announcements"
+    page_url = "https://t.me/s/hyperliquid_announcements"
+
+    async def fetch(self) -> list[ExchangeAnnouncement]:
+        return self._parse_page(await self._get_text(self.page_url))
+
+    def _parse_page(self, html: str) -> list[ExchangeAnnouncement]:
+        parser = TelegramChannelParser(self.channel)
+        parser.feed(html)
+        parser.close()
+        if not parser.posts:
+            raise ValueError("Hyperliquid official channel returned no valid dated posts")
+        rows: list[ExchangeAnnouncement] = []
+        for post in parser.posts:
+            title = post.text.splitlines()[0][:240]
+            rows.append(ExchangeAnnouncement(
+                exchange=self.exchange,
+                source=self.source,
+                announcement_id=post.post_id,
+                title=title,
+                url=f"https://t.me/{self.channel}/{post.post_id}",
+                kind=classify_announcement(title),
+                category="official-channel",
+                # Preserve publisher text (including DEX-qualified names); do not
+                # turn generic news or HIP-3 references into native-market identities.
+                symbols=[],
+                summary=post.text[:4000],
+                published_at=post.published_at,
+                fetched_at=self._now_fn(),
+            ))
+        return rows
 
 
 class MultiAnnouncementProvider:
@@ -2366,6 +2446,7 @@ def default_announcement_provider(
             GateAnnouncementProvider(),
             BitgetAnnouncementProvider(),
             HyperliquidAnnouncementProvider(repository=repository),
+            HyperliquidOfficialAnnouncementProvider(),
         ]
     )
 

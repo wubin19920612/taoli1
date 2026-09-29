@@ -613,7 +613,7 @@ export function AnnouncementsPage() {
           <div>
             <Typography.Title level={4}>交易所公告监控</Typography.Title>
             <Typography.Text type="secondary">
-              记录上币、下币、Launchpool、维护、活动及其他公告，按配置发送飞书通知。支持 Binance、OKX、Bybit、Gate、Bitget 的公开公告源；Hyperliquid 当前仅监测市场上下架变化。
+              记录上币、下币、Launchpool、维护、活动及其他公告，按配置发送飞书通知。Hyperliquid 接入官方公告频道，并保留原生永续市场上下架监测；HIP-3 各 DEX 的独立公告不保证覆盖。Gate 官网受限时通过第三方阅读服务补取公告，来源故障或缓存可能造成延迟。
             </Typography.Text>
           </div>
           <Space wrap>
