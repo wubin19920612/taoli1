@@ -35,7 +35,13 @@
 
 更新前生产运行 `6423d3eaaab459843c0caee314fcc1f4b2b49f6e`，tracked 文件干净，两容器 healthy，磁盘约 20 GiB 可用。公告轮询 enabled、30 秒，新公告窗口 30 分钟；上/下币和 Launchpool 通知已开、alert_exchanges 为空、bootstrap 关闭。
 
-提交、镜像、备份、实际运行版本和最终设置/采集验收在完成后追加。使用已文档化的 SSH 别名和 `deploy/linux-update.sh`；生产不编译镜像。
+- 功能提交 `d0074c16d2d3196d8d82f9a236b1794f18d0fb2b` 已推送；GitHub Actions 两份镜像成功，完整 SHA 标签核验后通过 `deploy/linux-update.sh` 部署。前后端均运行该 SHA，容器 healthy；`/api/health` 返回 200 / ok。
+- 主库备份 `backups/radar-before-d0074c16d2d3-20260929T014951Z.db`，623955968 字节；`integrity_check=ok`，容器与主机 SHA-256 均为 `ef45468fd21af2a881ff325393eb3ebea4b78bf93a8a268bca5f4a45fc43f5f0`。
+- 配套库备份 `backups/squeeze-route-before-d0074c16d2d3-20260929T014951Z.db`，217088 字节；`integrity_check=ok`，SHA-256 `8e74362f53c4332ad1c116e7aa38f4fa83e7a1d97f0634ebbb7a3aea638118e2`，容器/主机一致。
+- 部署后首批真实 OTHER 已入库：Binance 79、OKX 5、Bybit 28、Bitget 12；最新记录 fetched_at 均在本次部署后，首批历史公告状态 muted。Gate 0 条，与实测上游拦截一致，不宣称覆盖成功。
+- 首批入库后通过受认证的 settings API 仅将 `other_alerts_enabled` 改为 true，读取回验一致；上/下币、Launchpool、事件提醒仍为 true，bootstrap 仍 false，alert_exchanges 仍为空，轮询/窗口仍 30 秒/30 分钟。认证凭据仅在容器环境内部使用，不输出或保存。
+- 1440px/390px 线上浏览器验证：新开关 checked、状态标签显示开启、其他公告记录可见，无 JS 页面异常和文档横向溢出。截图 `output/other-announcements-production-{1440,390}.png`，脚本 `output/verify-other-announcements-production.mjs`，不提交。
+- 本次没有人工补发历史消息或发送伪造测试公告；尚无开启后自然新公告的实际飞书送达样本。本交接追加提交只改文档，线上功能版本仍为上述 SHA。
 
 ## 工作区与下一步
 
