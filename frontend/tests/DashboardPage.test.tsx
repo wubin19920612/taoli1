@@ -80,6 +80,21 @@ describe("DashboardPage", () => {
     );
   });
 
+  it("shows the maximum spread independently of row ordering", async () => {
+    const originalFetch = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (String(input).includes("/opportunities")) {
+        return Response.json([
+          { ...baseOpportunity, id: "low", open_spread_pct: 0.1 },
+          { ...baseOpportunity, id: "high", open_spread_pct: 9 }
+        ]);
+      }
+      return originalFetch(input, init);
+    });
+    render(<DashboardPage />);
+    await waitFor(() => expect(screen.getByText("列表最大开仓价差").closest(".ant-statistic")?.textContent).toContain("9.000"));
+  });
+
   it("requests exchange and global sorting together", async () => {
     const user = userEvent.setup();
     render(<DashboardPage />);

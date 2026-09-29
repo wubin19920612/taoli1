@@ -823,8 +823,8 @@ export function DashboardPage() {
         </Col>
         <Col xs={12} md={6}>
           <Statistic
-            title="Top open spread"
-            value={opportunities[0]?.open_spread_pct ?? 0}
+            title="列表最大开仓价差"
+            value={opportunities.length ? Math.max(...opportunities.map((item) => item.open_spread_pct)) : 0}
             precision={3}
             suffix="%"
           />
