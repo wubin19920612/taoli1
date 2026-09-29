@@ -1,4 +1,5 @@
 import asyncio
+import json
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -29,6 +30,116 @@ from app.services.announcements import (
 
 
 BASE_TIME = datetime(2026, 5, 30, 8, 0, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled,alert_exchanges,expected", [
+    (True, [], "sent"), (False, [], "muted"), (False, ["okx"], "sent"),
+])
+async def test_other_announcement_switch_and_persistent_dedup(enabled, alert_exchanges, expected):
+    db = await connect_database(":memory:")
+    alerts = []
+    try:
+        await initialize_schema(db)
+        repo = AnnouncementRepository(db)
+        await repo.create_if_new(announcement(
+            announcement_id="baseline", published_at=BASE_TIME - timedelta(minutes=1),
+        ).model_copy(update={"alert_status": "muted"}))
+        settings = AnnouncementSettings(other_alerts_enabled=enabled, alert_exchanges=alert_exchanges)
+        row = announcement(kind=AnnouncementKind.OTHER, title="Maintenance update", category="maintenance")
+        monitor = AnnouncementMonitor(repo, alert_sender=alerts.append, now_fn=lambda: BASE_TIME)
+        created = await monitor.process([row, row], settings)
+        assert [item.alert_status for item in created] == [expected]
+        restarted = AnnouncementMonitor(repo, alert_sender=alerts.append, now_fn=lambda: BASE_TIME)
+        assert await restarted.process([row], settings.model_copy(update={"other_alerts_enabled": True})) == []
+        assert len(alerts) == (1 if expected == "sent" else 0)
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["bootstrap", "old", "excluded"])
+async def test_other_announcements_respect_history_window_and_record_scope(case):
+    db = await connect_database(":memory:")
+    alerts = []
+    try:
+        await initialize_schema(db)
+        repo = AnnouncementRepository(db)
+        await repo.create_if_new(announcement(
+            announcement_id="baseline", published_at=BASE_TIME - timedelta(minutes=60),
+        ).model_copy(update={"alert_status": "muted"}))
+        settings = AnnouncementSettings(other_alerts_enabled=True, record_exchanges=[] if case == "excluded" else ["okx"])
+        row = announcement(kind=AnnouncementKind.OTHER, published_at=BASE_TIME - timedelta(minutes=45) if case == "old" else BASE_TIME)
+        monitor = AnnouncementMonitor(repo, alert_sender=alerts.append, now_fn=lambda: BASE_TIME)
+        created = await monitor.process([row], settings, bootstrap=case == "bootstrap")
+        assert alerts == []
+        assert [item.alert_status for item in created] == ([] if case == "excluded" else ["muted"])
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_class", [BinanceAnnouncementProvider, OKXAnnouncementProvider, BybitAnnouncementProvider, BitgetAnnouncementProvider])
+async def test_unfiltered_public_feeds_collect_other_announcements(provider_class):
+    title = "Scheduled system maintenance"
+    stamp = int(BASE_TIME.timestamp() * 1000)
+
+    def handler(request):
+        if "/help/" in request.url.path:
+            return httpx.Response(200, text="")
+        if provider_class is BinanceAnnouncementProvider:
+            assert "catalogId" not in request.url.params
+            payload = {"data": {"catalogs": [{"catalogId": 157, "catalogName": "Maintenance Updates", "articles": [{"code": "other-1", "title": title, "releaseDate": stamp}]}]}}
+        elif provider_class is OKXAnnouncementProvider:
+            rows = [] if "annType" in request.url.params else [{"title": title, "url": "https://www.okx.com/help/maintenance", "annType": "announcements-others", "pTime": str(stamp)}]
+            payload = {"data": [{"details": rows}]}
+        elif provider_class is BybitAnnouncementProvider:
+            rows = [] if "type" in request.url.params else [{"title": title, "url": "https://announcements.bybit.com/en-US/article/maintenance", "type": {"key": "latest_bybit_news", "title": "Latest Bybit News"}, "publishTime": stamp}]
+            payload = {"result": {"list": rows}}
+        else:
+            rows = [] if "annType" in request.url.params else [{"annId": "other-1", "annTitle": title, "annUrl": "https://www.bitget.com/support/articles/maintenance", "annType": "latest_news", "cTime": str(stamp)}]
+            payload = {"data": rows}
+        return httpx.Response(200, json=payload)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        rows = await provider_class(client=client, now_fn=lambda: BASE_TIME).fetch_headlines()
+    assert len(rows) == 1
+    assert rows[0].kind == AnnouncementKind.OTHER
+    assert rows[0].title == title
+    assert rows[0].published_at == BASE_TIME
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_class", [OKXAnnouncementProvider, BybitAnnouncementProvider, BitgetAnnouncementProvider])
+async def test_general_feed_failure_does_not_discard_listing_feed(provider_class):
+    stamp = int(BASE_TIME.timestamp() * 1000)
+
+    def handler(request):
+        if "/help/" in request.url.path:
+            return httpx.Response(200, text="")
+        if not (request.url.params.get("type") or request.url.params.get("annType")):
+            return httpx.Response(503)
+        if provider_class is OKXAnnouncementProvider:
+            payload = {"data": [{"details": [{"title": "New listing: TEST", "url": "https://www.okx.com/help/test", "pTime": str(stamp)}]}]}
+        elif provider_class is BybitAnnouncementProvider:
+            payload = {"result": {"list": [{"title": "New listing: TEST", "url": "https://announcements.bybit.com/en-US/article/test", "publishTime": stamp}]}}
+        else:
+            payload = {"data": [{"annId": "test", "annTitle": "New listing: TEST", "annUrl": "https://www.bitget.com/support/articles/test", "cTime": str(stamp)}]}
+        return httpx.Response(200, json=payload)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        rows = await provider_class(client=client, now_fn=lambda: BASE_TIME).fetch_headlines()
+    assert any(row.kind == AnnouncementKind.LISTING for row in rows)
+
+
+def test_latest_html_sources_keep_other_announcements():
+    row = {"id": "maintenance", "title": "Scheduled system maintenance", "url": "/help/maintenance", "pTime": str(int(BASE_TIME.timestamp() * 1000))}
+    html = '<script id="__NEXT_DATA__" type="application/json">' + json.dumps({"props": {"pageProps": {"articles": [row]}}}) + '</script>'
+    assert OKXAnnouncementProvider()._parse_latest_page(html, "announcements-latest")[0].kind == AnnouncementKind.OTHER
+    row.update({"url": "/announcements/article/maintenance", "release_timestamp": int(BASE_TIME.timestamp())})
+    html = '<script id="__NEXT_DATA__" type="application/json">' + json.dumps({"props": {"pageProps": {"listData": {"list": [row]}}}}) + '</script>'
+    assert GateAnnouncementProvider()._parse_page(html, "")[0].kind == AnnouncementKind.OTHER
+    assert GateAnnouncementProvider()._parse_page(html, "newspotlistings") == []
 
 
 @pytest.mark.asyncio
@@ -1208,7 +1319,7 @@ async def test_bybit_fetches_article_when_available_and_falls_back_on_403() -> N
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.host == "announcements.bybit.com":
             return httpx.Response(200, text="<article>WDCUSDT Futures trading will open at 2026-09-15 14:30 (UTC).</article>")
-        if request.url.params.get("type") == "delistings":
+        if request.url.params.get("type") in ("delistings", None):
             return httpx.Response(200, json={"result": {"list": []}})
         return httpx.Response(200, json={"result": {"list": [{
             "title": "New listing: WDCUSDT Perpetual Contract", "url": url,
@@ -1374,7 +1485,7 @@ def test_bitget_provider_tolerates_alternate_article_fields() -> None:
 
 
 @pytest.mark.asyncio
-async def test_bitget_fetches_launchpool_and_filters_other_latest_news() -> None:
+async def test_bitget_fetches_launchpool_and_other_latest_news() -> None:
     requested_urls: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1407,8 +1518,9 @@ async def test_bitget_fetches_launchpool_and_filters_other_latest_news() -> None
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         rows = await BitgetAnnouncementProvider(client=client).fetch()
 
-    assert [row.announcement_id for row in rows] == ["launchpool-1"]
+    assert [row.announcement_id for row in rows] == ["launchpool-1", "ordinary-news-1"]
     assert rows[0].kind == AnnouncementKind.LAUNCHPOOL
+    assert rows[1].kind == AnnouncementKind.OTHER
     assert any("annType=latest_news" in url for url in requested_urls)
 
 

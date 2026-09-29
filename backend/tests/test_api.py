@@ -3776,6 +3776,7 @@ def test_announcement_settings_endpoint_round_trip() -> None:
             "record_exchanges": ["OKX", "bybit", "okx"],
             "alert_exchanges": ["BYBIT"],
             "launchpool_alerts_enabled": False,
+            "other_alerts_enabled": True,
             "bootstrap_alerts_enabled": True,
             "event_reminders_enabled": True,
             "event_reminder_minutes_before": 45,
@@ -3790,6 +3791,7 @@ def test_announcement_settings_endpoint_round_trip() -> None:
     assert listed.status_code == 200
     assert listed.json()["bootstrap_alerts_enabled"] is True
     assert listed.json()["launchpool_alerts_enabled"] is False
+    assert listed.json()["other_alerts_enabled"] is True
     assert listed.json()["event_reminders_enabled"] is True
     assert listed.json()["event_reminder_minutes_before"] == 45
 

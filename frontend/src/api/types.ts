@@ -1104,6 +1104,7 @@ export interface AnnouncementSettings {
   alert_exchanges: string[];
   listing_delisting_alerts_enabled: boolean;
   launchpool_alerts_enabled: boolean;
+  other_alerts_enabled: boolean;
   bootstrap_alerts_enabled: boolean;
   event_reminders_enabled: boolean;
   event_reminder_minutes_before: number;

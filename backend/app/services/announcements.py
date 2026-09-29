@@ -1197,6 +1197,14 @@ class HttpAnnouncementProvider(AnnouncementProvider):
         response.raise_for_status()
         return response.text
 
+    async def _get_additional_json(self, url: str) -> object:
+        # An unavailable general feed must not discard the dedicated listing feeds.
+        try:
+            return await self._get_json(url)
+        except Exception:
+            logger.warning("failed to fetch general announcements: %s", url, exc_info=True)
+            return {}
+
     async def aclose(self) -> None:
         if self._owns_client:
             await self.client.aclose()
@@ -1284,20 +1292,28 @@ class BinanceAnnouncementProvider(HttpAnnouncementProvider):
     source = "binance-cms-announcements"
     base_url = "https://www.binance.com"
     api_url = "https://www.binance.com/bapi/composite/v1/public/cms/article/list/query"
-    catalogs = (
-        (48, "New Cryptocurrency Listing"),
-        (161, "Delisting"),
-    )
 
     async def fetch(self, *, include_details: bool = True) -> list[ExchangeAnnouncement]:
         announcements: list[ExchangeAnnouncement] = []
-        for catalog_id, category in self.catalogs:
-            query = f"type=1&catalogId={catalog_id}&pageNo=1&pageSize=20"
-            payload = await self._get_json(f"{self.api_url}?{query}")
-            rows = self._rows_from_payload(payload)
+        # The unfiltered endpoint includes each catalog's latest articles, keeping
+        # listing coverage while also collecting maintenance, activities and API news.
+        payload = await self._get_json(f"{self.api_url}?type=1&pageNo=1&pageSize=20")
+        data = payload.get("data") if isinstance(payload, dict) else None
+        catalogs = data.get("catalogs", []) if isinstance(data, dict) else []
+        if not isinstance(catalogs, list):
+            return []
+        for catalog in catalogs:
+            if not isinstance(catalog, dict):
+                continue
+            catalog_id = str(catalog.get("catalogId") or "")
+            category = _clean_text(catalog.get("catalogName")) or "Announcements"
+            rows = catalog.get("articles") or []
             for row in rows:
+                if not isinstance(row, dict):
+                    continue
                 code = _clean_text(row.get("code"))
-                content = await self._fetch_article_text(code) if include_details and code else None
+                needs_detail = classify_announcement(_clean_text(row.get("title")), category) != AnnouncementKind.OTHER
+                content = await self._fetch_article_text(code) if include_details and code and needs_detail else None
                 announcement = self._announcement_from_row(row, str(catalog_id), category, content=content)
                 if announcement is not None:
                     announcements.append(announcement)
@@ -1373,7 +1389,7 @@ class OKXAnnouncementProvider(HttpAnnouncementProvider):
     source = "okx-support-announcements"
     site_base_url = "https://www.okx.com"
     base_url = "https://www.okx.com/api/v5/support/announcements"
-    ann_types = ("announcements-new-listings", "announcements-delistings")
+    ann_types = ("announcements-new-listings", "announcements-delistings", "")
     latest_urls = (
         "https://www.okx.com/zh-hans/help/section/announcements-latest-announcements",
         "https://www.okx.com/help/section/announcements-latest-announcements",
@@ -1382,7 +1398,9 @@ class OKXAnnouncementProvider(HttpAnnouncementProvider):
     async def fetch(self, *, include_details: bool = True) -> list[ExchangeAnnouncement]:
         announcements: list[ExchangeAnnouncement] = []
         for ann_type in self.ann_types:
-            payload = await self._get_json(f"{self.base_url}?annType={ann_type}&page=1")
+            query = f"annType={ann_type}&page=1" if ann_type else "page=1"
+            fetch_json = self._get_json if ann_type else self._get_additional_json
+            payload = await fetch_json(f"{self.base_url}?{query}")
             content_by_key = (
                 await self._fetch_detail_content_for_payload(payload, ann_type)
                 if include_details else {}
@@ -1446,11 +1464,7 @@ class OKXAnnouncementProvider(HttpAnnouncementProvider):
                 published_at=published_at,
                 content=_clean_text(row.get("desc") or row.get("summary") or row.get("brief")),
             )
-            if announcement is not None and announcement.kind in {
-                AnnouncementKind.LISTING,
-                AnnouncementKind.DELISTING,
-                AnnouncementKind.LAUNCHPOOL,
-            }:
+            if announcement is not None:
                 announcements.append(announcement)
         return announcements
 
@@ -1600,13 +1614,17 @@ class BybitAnnouncementProvider(HttpAnnouncementProvider):
     exchange = "bybit"
     source = "bybit-v5-announcements"
     base_url = "https://api.bybit.com/v5/announcements/index"
-    announcement_types = ("new_crypto", "delistings")
+    announcement_types = ("new_crypto", "delistings", "")
 
     async def fetch(self, *, include_details: bool = True) -> list[ExchangeAnnouncement]:
         announcements: list[ExchangeAnnouncement] = []
         for announcement_type in self.announcement_types:
-            query = f"locale=en-US&type={quote_plus(announcement_type)}&limit=20"
-            payload = await self._get_json(f"{self.base_url}?{query}")
+            query = (
+                f"locale=en-US&type={quote_plus(announcement_type)}&limit=20"
+                if announcement_type else "locale=en-US&limit=50"
+            )
+            fetch_json = self._get_json if announcement_type else self._get_additional_json
+            payload = await fetch_json(f"{self.base_url}?{query}")
             content_by_key = await self._fetch_detail_content_for_payload(payload) if include_details else {}
             announcements.extend(self._parse_payload(payload, announcement_type, content_by_key=content_by_key))
         return announcements
@@ -1691,27 +1709,23 @@ class BitgetAnnouncementProvider(HttpAnnouncementProvider):
     exchange = "bitget"
     source = "bitget-public-annoucements"
     base_url = "https://api.bitget.com/api/v2/public/annoucements"
-    ann_types = ("coin_listings", "symbol_delisting", "latest_news")
+    ann_types = ("coin_listings", "symbol_delisting", "latest_news", "")
 
     async def fetch(self, *, include_details: bool = True) -> list[ExchangeAnnouncement]:
         announcements: list[ExchangeAnnouncement] = []
         for ann_type in self.ann_types:
-            query = f"language=en_US&annType={quote_plus(ann_type)}&limit=10"
-            payload = await self._get_json(f"{self.base_url}?{query}")
+            query = (
+                f"language=en_US&annType={quote_plus(ann_type)}&limit=10"
+                if ann_type else "language=en_US&limit=10"
+            )
+            fetch_json = self._get_json if ann_type else self._get_additional_json
+            payload = await fetch_json(f"{self.base_url}?{query}")
             content_by_key = (
                 await self._fetch_detail_content_for_payload(payload, ann_type)
                 if include_details else {}
             )
             parsed = self._parse_payload(payload, ann_type, content_by_key=content_by_key)
-            announcements.extend(
-                announcement
-                for announcement in parsed
-                if announcement.kind in {
-                    AnnouncementKind.LISTING,
-                    AnnouncementKind.DELISTING,
-                    AnnouncementKind.LAUNCHPOOL,
-                }
-            )
+            announcements.extend(parsed)
         return announcements
 
     async def fetch_headlines(self) -> list[ExchangeAnnouncement]:
@@ -1827,7 +1841,7 @@ class GateAnnouncementProvider(HttpAnnouncementProvider):
     source = "gate-next-announcements"
     base_url = "https://www.gate.com"
     page_base_url = "https://apim.gateapi.io/announcements"
-    categories = ("newspotlistings", "newfutureslistings", "newconvertlistings", "delisted")
+    categories = ("newspotlistings", "newfutureslistings", "newconvertlistings", "delisted", "")
     listing_title_patterns = (
         "gate to list",
         "initial listing",
@@ -1839,7 +1853,7 @@ class GateAnnouncementProvider(HttpAnnouncementProvider):
         announcements: list[ExchangeAnnouncement] = []
         for category in self.categories:
             try:
-                response = await self.client.get(f"{self.page_base_url}/{category}")
+                response = await self.client.get(f"{self.page_base_url}/{category}".rstrip("/"))
                 response.raise_for_status()
             except Exception:
                 logger.warning("failed to fetch gate announcement category: %s", category, exc_info=True)
@@ -1908,7 +1922,7 @@ class GateAnnouncementProvider(HttpAnnouncementProvider):
             if fallback_category == "delisted" and kind != AnnouncementKind.DELISTING:
                 continue
             if (
-                fallback_category != "delisted"
+                fallback_category in {"newspotlistings", "newfutureslistings", "newconvertlistings"}
                 and kind != AnnouncementKind.LAUNCHPOOL
                 and not self._is_listing_title(title)
             ):
@@ -2182,12 +2196,17 @@ class AnnouncementMonitor:
                 settings.launchpool_alerts_enabled
                 and announcement.kind == AnnouncementKind.LAUNCHPOOL
             )
+            should_alert_other = (
+                settings.other_alerts_enabled
+                and announcement.kind == AnnouncementKind.OTHER
+            )
             alert_status = (
                 "pending"
                 if (
                     announcement.exchange in alert_exchanges
                     or should_alert_listing_delisting
                     or should_alert_launchpool
+                    or should_alert_other
                 )
                 else "muted"
             )

@@ -106,6 +106,7 @@ describe("AnnouncementsPage", () => {
     expect(await screen.findByText("交易所公告监控")).toBeTruthy();
     expect(await screen.findByText("上/下币告警 开启")).toBeTruthy();
     expect(await screen.findByText("Launchpool 告警 开启")).toBeTruthy();
+    expect(await screen.findByText("其他公告通知 关闭")).toBeTruthy();
     expect(await screen.findByText("New listing: WDCUSDT Perpetual Contract")).toBeTruthy();
     expect(await screen.findByText("WDCUSDT")).toBeTruthy();
     expect(await screen.findByText("合约")).toBeTruthy();
@@ -135,6 +136,24 @@ describe("AnnouncementsPage", () => {
     });
   });
 
+  it("enables other announcements independently and persists the switch", async () => {
+    render(<AnnouncementsPage />);
+    await screen.findByText("New listing: WDCUSDT Perpetual Contract");
+    await userEvent.click(screen.getByRole("switch", { name: "其他公告飞书提醒" }));
+    expect(screen.getByText("其他公告通知 开启")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: /保存公告监控/ }));
+    await waitFor(() => {
+      const putCall = vi.mocked(fetch).mock.calls.find((call) => String(call[0]).includes("/settings/announcements") && call[1]?.method === "PUT");
+      expect(JSON.parse(String(putCall?.[1]?.body))).toMatchObject({
+        other_alerts_enabled: true,
+        listing_delisting_alerts_enabled: true,
+        launchpool_alerts_enabled: true,
+        alert_exchanges: ["bybit"],
+        bootstrap_alerts_enabled: false
+      });
+    });
+  });
+
   it("saves announcement monitoring settings", async () => {
     render(<AnnouncementsPage />);
 
@@ -153,6 +172,7 @@ describe("AnnouncementsPage", () => {
         alert_exchanges: ["bybit"],
         listing_delisting_alerts_enabled: true,
         launchpool_alerts_enabled: true,
+        other_alerts_enabled: false,
         bootstrap_alerts_enabled: false,
         alert_max_age_minutes: 30,
         event_reminders_enabled: true,

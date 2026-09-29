@@ -29,6 +29,7 @@ const defaultAnnouncementSettings: AnnouncementSettings = {
   alert_exchanges: [],
   listing_delisting_alerts_enabled: true,
   launchpool_alerts_enabled: true,
+  other_alerts_enabled: false,
   bootstrap_alerts_enabled: false,
   event_reminders_enabled: true,
   event_reminder_minutes_before: 30
@@ -60,7 +61,9 @@ function normalizeAnnouncementSettings(values?: Partial<AnnouncementSettings>): 
     listing_delisting_alerts_enabled:
       values?.listing_delisting_alerts_enabled ?? defaultAnnouncementSettings.listing_delisting_alerts_enabled,
     launchpool_alerts_enabled:
-      values?.launchpool_alerts_enabled ?? defaultAnnouncementSettings.launchpool_alerts_enabled
+      values?.launchpool_alerts_enabled ?? defaultAnnouncementSettings.launchpool_alerts_enabled,
+    other_alerts_enabled:
+      values?.other_alerts_enabled ?? defaultAnnouncementSettings.other_alerts_enabled
   };
 }
 
@@ -600,6 +603,7 @@ export function AnnouncementsPage() {
   const recordExchangeSet = new Set(settingsPreview.record_exchanges);
   const listingDelistingAlertEnabled = settingsPreview.listing_delisting_alerts_enabled;
   const launchpoolAlertEnabled = settingsPreview.launchpool_alerts_enabled;
+  const otherAlertEnabled = settingsPreview.other_alerts_enabled;
 
   return (
     <div className="page announcements-page">
@@ -609,7 +613,7 @@ export function AnnouncementsPage() {
           <div>
             <Typography.Title level={4}>交易所公告监控</Typography.Title>
             <Typography.Text type="secondary">
-              统一记录上币、下币、Launchpool 等交易所公告并按配置发送飞书告警，当前支持 Binance、OKX、Bybit、Gate、Bitget、Hyperliquid 的公开数据源。
+              记录上币、下币、Launchpool、维护、活动及其他公告，按配置发送飞书通知。支持 Binance、OKX、Bybit、Gate、Bitget 的公开公告源；Hyperliquid 当前仅监测市场上下架变化。
             </Typography.Text>
           </div>
           <Space wrap>
@@ -618,6 +622,9 @@ export function AnnouncementsPage() {
             </Tag>
             <Tag color={launchpoolAlertEnabled ? "gold" : "default"}>
               Launchpool 告警 {launchpoolAlertEnabled ? "开启" : "关闭"}
+            </Tag>
+            <Tag color={otherAlertEnabled ? "green" : "default"}>
+              其他公告通知 {otherAlertEnabled ? "开启" : "关闭"}
             </Tag>
             {exchangeOptions.map((item) => (
               <Tag
@@ -635,7 +642,7 @@ export function AnnouncementsPage() {
           type={settingsPreview.enabled ? "info" : "warning"}
           showIcon
           message={settingsPreview.enabled ? "公告轮询已启用" : "公告轮询已关闭"}
-          description="record_exchanges 控制哪些交易所会写入公告记录，alert_exchanges 控制哪些交易所的新公告和事件到点提醒会发飞书。上/下币和 Launchpool 公告默认也会同步飞书，可分别关闭；只有能识别出明确上/下币时间的公告才会触发到点提醒。"
+          description="在记录交易所范围内，可分别开启上/下币、Launchpool 和其他公告通知。告警交易所会额外接收该所全部类型的新公告及事件到点提醒，不受三个分类开关限制。关闭首次启动告警时，历史公告只记录、不补发。"
         />
         <Form
           form={form}
@@ -652,6 +659,9 @@ export function AnnouncementsPage() {
               <Switch />
             </Form.Item>
             <Form.Item label="Launchpool 公告飞书提醒" name="launchpool_alerts_enabled" valuePropName="checked">
+              <Switch />
+            </Form.Item>
+            <Form.Item label="其他公告飞书提醒" name="other_alerts_enabled" valuePropName="checked">
               <Switch />
             </Form.Item>
             <Form.Item label="首次启动也告警" name="bootstrap_alerts_enabled" valuePropName="checked">
