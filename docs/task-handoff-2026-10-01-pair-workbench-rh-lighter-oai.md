@@ -27,10 +27,23 @@
 
 - Local validation: 76 tests passed in 49.86 seconds across `test_lighter_adapter.py` and `test_pair_spread_query.py`; Ruff `--select F,E9` and `git diff --check` passed. The application service exactly matches its pre-alias `23ece61` version.
 - Live local custom query: 240 aligned minute points, raw markets `io:OAI` and `OPENAI`, one-hour funding on both legs, no warnings. RH `OAIUSDT` correctly raises `symbol not found` rather than resolving to OPENAI.
-- Git delivery and production acceptance are pending at the initial rollback commit; append verified results below. Production before rollback is running application commit `e235c93384ac37a33e18ed6b6467f24678f178b1`.
+- Git delivery and production rollback acceptance are complete; details below. Production before rollback was running application commit `e235c93384ac37a33e18ed6b6467f24678f178b1`.
 - Follow `docs/git-delivery-checklist.md` and `docs/linux-deployment.md`: scoped commit/push, both SHA-pinned GitHub Actions images, SQLite backups before `git pull --ff-only`, then Compose update with no production build or volume deletion.
 - Verify explicit custom-symbol query returns HTTP 200 with original raw markets, and the old RH `OAI` request no longer succeeds through an implicit alias.
 - Server connection details and credentials stay in the controlled operator environment, not this document.
+
+## Final rollback acceptance (2026-10-01)
+
+- Application/source/image commit: `52df4a67f36c95fb59ba9fe89394b9e95fda5819`, pushed without force push. This acceptance update is a subsequent documentation-only commit, not a second application change.
+- GitHub Actions run `36843848946`: both `build (backend)` and `build (frontend)` succeeded; frontend compilation includes TypeScript checks and the Vite production build. Both image manifests were verified on the server before updating.
+- Deployment used the approved script: SQLite backups first, `git pull --ff-only`, SHA-pinned image pulls and Compose `up -d --no-build --wait`. No old database restore, production build or volume deletion.
+- Radar backup: `backups/radar-before-52df4a67f36c-20261001T093859Z.db` (627466240 bytes), `integrity_check=ok`, matching host/container SHA-256 `1f4857fb6dac3d8777106ac4cc80d051b5c38371ccc23dad01dfa8205bd66732`.
+- Squeeze-route backup: `backups/squeeze-route-before-52df4a67f36c-20261001T093859Z.db` (217088 bytes), `integrity_check=ok`, matching host/container SHA-256 `37a2369390814104c1cd70077da5d26537d0ad0d7e77de7d40e022e4701b4ce9`.
+- Both production containers are healthy on `sha-52df4a67f36c95fb59ba9fe89394b9e95fda5819`. Tracked server worktree is clean at that source commit.
+- `/api/health`: `status=ok`, 11782 markets and no exchange errors; frontend root returned HTTP 200 with the React root element.
+- Correct custom query: HTTP 200, 240 aligned minute points from `2026-10-01T05:39:00Z` through `2026-10-01T09:38:00Z`, raw markets `io:OAI` / `OPENAI`, one-hour funding on each leg, eight historical funding records and no warnings.
+- Old same-symbol RH `OAI` query now correctly returns HTTP 502 containing `rh-lighter future symbol not found: OAIUSDT`; this verifies that implicit alias behavior is gone. Select custom mode and use OPENAI explicitly instead.
+- Residual risk: wrong saved/form symbols still fail intentionally, and market availability depends on upstream APIs. No other rollback failures were observed; existing unrelated artifacts remain untouched.
 
 ## Existing artifacts and next steps
 
