@@ -682,12 +682,12 @@ function groupSavedPairPresets(presets: SavedPairSpreadPreset[]): SavedPairSprea
         })
     }))
     .sort((left, right) => {
-      if (left.sameSymbol !== right.sameSymbol) {
-        return left.sameSymbol ? -1 : 1;
-      }
       const savedAtDiff = dayjs.utc(right.latestSavedAt).valueOf() - dayjs.utc(left.latestSavedAt).valueOf();
       if (savedAtDiff !== 0) {
         return savedAtDiff;
+      }
+      if (left.sameSymbol !== right.sameSymbol) {
+        return left.sameSymbol ? -1 : 1;
       }
       return left.title.localeCompare(right.title);
     });

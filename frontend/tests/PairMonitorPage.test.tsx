@@ -630,6 +630,77 @@ describe("PairMonitorPage", () => {
     expect(document.querySelectorAll(".pair-saved-tag")).toHaveLength(0);
   });
 
+  it.each([1, 2])("keeps a newly saved custom pair first and restores multiplier %s", async (multiplier) => {
+    const user = userEvent.setup();
+    serverPresets = [savedPairPreset({
+      id: "hyperliquid|future|io|OAI|rh-lighter|future||OAI",
+      leg1_exchange: "hyperliquid",
+      leg1_dex: "io",
+      leg1_symbol: "OAIUSDT",
+      leg2_exchange: "rh-lighter",
+      leg2_symbol: "OAIUSDT"
+    })];
+    window.localStorage.setItem("taoli1.pairSpread.presets.serverMigrated.v1", "1");
+    window.history.pushState(
+      {},
+      "",
+      "/?page=pair-monitor&leg1_exchange=hyperliquid&leg1_market_type=future&leg1_dex=io&leg1_symbol=OAI" +
+        "&leg2_exchange=rh-lighter&leg2_market_type=future&leg2_symbol=OPENAI&hours=4&interval_seconds=60"
+    );
+    const mounted = render(<PairMonitorPage />);
+    await waitFor(() => expect(document.querySelector(".pair-chart-card")).toBeTruthy());
+    if (multiplier !== 1) {
+      const input = screen.getByRole("spinbutton", { name: "右侧倍率" });
+      await user.clear(input);
+      await user.type(input, String(multiplier));
+    }
+    await user.click(screen.getByRole("button", { name: /保存/ }));
+    await waitFor(() => expect(serverPresets).toHaveLength(2));
+    expect(serverPresets[0]).toMatchObject({
+      leg1_exchange: "hyperliquid", leg1_dex: "io", leg1_symbol: "OAIUSDT",
+      leg2_exchange: "rh-lighter", leg2_symbol: "OPENAIUSDT", leg2_multiplier: multiplier
+    });
+    const cached = JSON.parse(window.localStorage.getItem("taoli1.pairSpread.presets.v1") ?? "[]");
+    expect(cached).toHaveLength(2);
+    expect(cached[0].leg2_symbol).toBe("OPENAIUSDT");
+    expect(document.querySelector(".pair-saved-group")?.classList.contains("pair-saved-group-custom")).toBe(true);
+    expect(document.querySelector(".pair-saved-group-symbol")?.textContent).toBe("OAI / OPENAI");
+
+    mounted.unmount();
+    render(<PairMonitorPage />);
+    await waitFor(() => expect(document.querySelectorAll(".pair-saved-tag")).toHaveLength(2));
+    const savedTag = document.querySelector(".pair-saved-tag") as HTMLElement;
+    expect(savedTag.classList.contains("pair-saved-tag-custom")).toBe(true);
+    expect(savedTag.textContent).toContain("OPENAI");
+    requests.length = 0;
+    await user.click(savedTag);
+    await waitFor(() => {
+      const query = requests.map((request) => new URL(request, "http://localhost"))
+        .find((url) => url.pathname.endsWith("/pair-spread/query") && !url.searchParams.has("include_current"));
+      expect(query?.searchParams.get("leg1_symbol")).toBe("OAIUSDT");
+      expect(query?.searchParams.get("leg1_dex")).toBe("io");
+      expect(query?.searchParams.get("leg2_symbol")).toBe("OPENAIUSDT");
+      expect(query?.searchParams.get("leg2_multiplier")).toBe(String(multiplier));
+    });
+    expect((screen.getByRole("textbox", { name: "右侧标的" }) as HTMLInputElement).value).toBe("OPENAIUSDT");
+  });
+
+  it("keeps a newer same-symbol group ahead of an older custom group", async () => {
+    serverPresets = [
+      savedPairPreset({ savedAt: "2026-09-12T02:00:00Z" }),
+      savedPairPreset({
+        id: "hyperliquid|future|io|OAI|rh-lighter|future||OPENAI",
+        leg1_exchange: "hyperliquid", leg1_dex: "io", leg1_symbol: "OAIUSDT",
+        leg2_exchange: "rh-lighter", leg2_symbol: "OPENAIUSDT",
+        savedAt: "2026-09-11T02:00:00Z"
+      })
+    ];
+    render(<PairMonitorPage />);
+    await waitFor(() => expect(document.querySelectorAll(".pair-saved-group")).toHaveLength(2));
+    expect(document.querySelector(".pair-saved-group-symbol")?.textContent).toBe("BTC");
+    expect(document.querySelector(".pair-saved-group")?.classList.contains("pair-saved-group-same")).toBe(true);
+  });
+
   it("saves and adds the queried pair to the floating watch", async () => {
     const user = userEvent.setup();
     window.history.pushState(
