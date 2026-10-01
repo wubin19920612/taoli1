@@ -67,7 +67,6 @@ PAIR_SPREAD_TIMEOUT = httpx.Timeout(18.0, connect=3.0, read=14.0, write=5.0, poo
 DISPLAY_TZ = timezone(timedelta(hours=8))
 BINANCE_ALPHA_KLINES_URL = "https://www.binance.com/bapi/defi/v1/public/alpha-trade/klines"
 BINANCE_ALPHA_TICKER_URL = "https://www.binance.com/bapi/defi/v1/public/alpha-trade/ticker"
-LIGHTER_FUTURE_SYMBOL_ALIASES = {"rh-lighter": {"OAIUSDT": "OPENAIUSDT"}}
 OPEN_INTEREST_HISTORY_EXCHANGES = frozenset(("binance", "bybit", "gate"))
 OPEN_INTEREST_HISTORY_MIN_INTERVAL_MINUTES = {"binance": 5, "bybit": 5, "gate": 1}
 OPEN_INTEREST_SOURCE_HISTORY = "exchange_history"
@@ -2644,10 +2643,6 @@ class PairSpreadQueryService:
                     cached = (utc_now(), markets)
                     self._lighter_markets[profile.exchange] = cached
         market = cached[1].get((market_type, _compact_symbol(symbol)))
-        if market is None and market_type == MarketType.FUTURE:
-            alias = LIGHTER_FUTURE_SYMBOL_ALIASES.get(profile.exchange, {}).get(_compact_symbol(symbol))
-            if alias is not None:
-                market = cached[1].get((market_type, alias))
         if market is None:
             raise RuntimeError(f"{profile.exchange} {market_type.value} symbol not found: {symbol}")
         return market
