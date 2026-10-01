@@ -36,7 +36,14 @@
 
 - 部署前只读确认：自动建卡开启，默认类型为 `gc`，普通告警默认卡片为暂停/禁开；Astro 只读列表请求成功，未找到 ZCAT 卡片。
 - 必须等待双镜像完成，先备份并校验线上 `/data/radar.db`，再按 `docs/linux-deployment.md` 快进更新和使用预构建镜像启动 Compose；禁止生产机现场构建与删除数据卷。
-- 部署提交、镜像构建、备份校验和线上接口结果待验收后补充；不得把预览成功等同于真实 Astro 写入或成交成功。
+- 功能提交 `09f2a30e920c2aa0b985889a6d23e8947e596f8e` 已提交并推送到既有分支，没有 force push。本文后续验收记录提交仅修改交接文档，不改变应用镜像版本。
+- GitHub Actions `36873162008` 的 backend/frontend 两个构建任务均成功；两镜像 manifest 在服务器校验通过。
+- `deploy/linux-update.sh` 在快进更新前创建主库备份 `backups/radar-before-09f2a30e920c-20261001T140417Z.db`，`integrity_check=ok`，容器与主机 SHA-256 一致：`0c5dd45bde6597827368783f78b53560513fe43abb2570af3e217420094fddcc`。
+- 另备份 `backups/squeeze-route-before-09f2a30e920c-20261001T140417Z.db`，完整性校验通过，容器与主机 SHA-256 一致：`6de1e0b8ef6e1f81b986e5995d9e93c3994feff47433b3212a42316c87e37072`。原保留策略各清理一份过期自动备份，新备份保留。
+- 服务器使用 `git pull --ff-only` 更新到功能提交，拉取双镜像后以 `up -d --no-build --wait` 启动；没有现场构建、删除数据卷或改写环境设置。双容器 healthy，运行镜像均为 `09f2a30e920c2aa0b985889a6d23e8947e596f8e`。
+- 线上 `/api/health` 返回 `status=ok`、11792 个市场、10362 个机会，`exchange_errors={}`；前端首页 HTTP 200，新设置帮助文字已存在于线上 JS 资源。
+- 实际 `POST /api/astro/instrument/preview`：`ZCATUSDT gate -> aster` 及 BTC 同方向均返回 `can_submit=true`、普通路线和 `gc-gate -> aster` 的 GC 路线；BTC 反向返回 `aster -> gc-gate`。默认配置仍为 `card_variant=gc`、`open_enabled=false`，无需改成非 GC。
+- Astro 只读列表接口 HTTP 200；验收时未观察到 ZCAT 卡片，未人为重放告警或调用真实建卡接口。真实 SDK 混合路线写入/重启及交易行为仍需在正常业务触发中观察，不能将预览成功当成外部写入或成交的证明。
 
 ## 工作区、已知限制与后续
 
