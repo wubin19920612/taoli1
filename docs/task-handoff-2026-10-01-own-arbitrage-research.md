@@ -2,6 +2,8 @@
 
 调研日期：2026-10-01。范围：Astro 卡片/SDK/已部署前端的只读行为分析，现有雷达代码复用评估，新 DEX 接入与独立执行器方案。本文是研究交付，不是实盘系统交付。
 
+**后续进展：已通过用户提供的官方安装文档找到并下载 v1.9.24 发布包，取得 Astro 核心字节码。见第 12 节。此前“尚未取得核心程序”的描述仅对应最初的线上主机检查；获取公开核心样本已不再依赖定位用户线上 SSH 主机。线上核心版本与发布包是否一致仍需核对。**
+
 ## 1. 结论和决策
 
 可以在现有雷达上建设自己的跨交易场所套利系统。最有价值的路线是复用市场发现、行情规范化、价差工作台、监控和模拟交易经验，新建可审计的执行器及交易场所适配器。卡片和 SDK 足以帮助定义产品行为，但不足以还原 Astro 核心的完整下单算法。
@@ -11,7 +13,7 @@
 当前尚缺两项关键输入：
 
 - Arcus 官方官网/交易页或完整市场标识。仓库未检索到 Arcus 接入实现，不能把名称推断为已确认协议。
-- Astro 核心运行机器的可用 SSH 别名或本地程序目录。当前可访问的雷达主机未发现运行中的 Astro 核心；SDK 指向的 Astro 服务可访问前端，但本次没有取得其后台二进制/源码和订单日志。
+- 用户线上 Astro 核心版本及订单日志（若需验证线上行为）。已取得官方发布包，可独立进行静态研究，不再把线上主机 SSH 入口作为获得核心样本的前提。
 
 ### 补充：核心程序所在主机核查
 
@@ -25,7 +27,7 @@
 
 结论：已登录雷达主机具有足够权限读取该机程序，但尚未定位到 Astro 核心所在主机及对应 SSH 入口。能读取远端 Astro 网页/SDK，不等于已获得该服务后台文件系统访问能力。若用户确认核心应位于同机，应进一步按其指定安装目录、程序名或运行账户定位；若位于另一台机器，需要对应既有连接配置。以上检查全为只读，没有搜索输出秘密文件内容、改变服务或触发交易。
 
-用户本次要求详细调研评估，没有要求立即启用交易。所有生产操作都是只读：未调用建卡、更新卡片、删除、启停、转账、下单或撤单接口。
+用户本次要求详细调研评估，没有要求立即启用交易。所有生产业务接口操作都是只读：未调用建卡、更新卡片、删除、启停、转账、下单或撤单接口。后续仅在服务器独立临时目录保存公开发布包，见第 12 节。
 
 ## 2. 基线、证据等级与验证范围
 
@@ -60,7 +62,7 @@
 
 这些能力实现“把策略配置交给 Astro”，不是直接提交交易所订单。项目没有由此获得交易所订单 ID、逐笔成交确认、完整账户账本或交易核心内部状态机。
 
-仓库历史设计记录了 SDK `delete`、20 次/10 秒限流，以及 add 会重启 astro-core、建议间隔约 3 秒。这些属于历史文档描述，本次没有对生产做写入或重启实验，不能当作当前版本已验证行为。
+仓库历史设计记录了 SDK `delete`、20 次/10 秒限流，以及 add 会重启 astro-core、建议间隔约 3 秒。后续读取官方 `SDK-API.md` 也确认这些描述仍在当前文档中；没有对生产做写入或重启实验，不能当作当前部署版本已执行验证的行为。
 
 ### 3.2 真实卡片结构
 
@@ -273,3 +275,83 @@ Astro 部署前端普通已成交价差显示为 `2*(B-A)/(A+B)`；SR/FR 的均�
 > 阅读 `docs/task-handoff-2026-10-01-own-arbitrage-research.md`。本任务只处理确认后的 Arcus 协议和一个 CEX 的目标市场接入。先确认官方 API、市场身份/合约倍率、资金费周期、双方成交额、可执行盘口和费用来源。实现行情适配与只读账户/订单能力评估，输出可回放样本与下一阶段执行规范；默认 paper，不创建真实订单、不迁移 Astro 活跃卡片。HL 必须保留具体 DEX 和原始市场标识；所有估算明确标记。按项目规则验证、提交、推送，涉及运行代码部署时按既定备份和镜像流程完成线上验收。
 
 将 Astro 活跃仓位迁移到自建执行器应作为独立、显式的后续任务：禁止两个引擎同时管理同一子账户的同一风险仓位；须先停止新增风险、核对订单/持仓并确定所有权切换，再谈策略迁移。
+
+## 12. 官方安装包研究：已取得核心字节码
+
+### 12.1 公开来源与下载验证
+
+用户提供了 [INSTALL.md](https://github.com/astro-btc/Astro/blob/main/INSTALL.md)，据此追踪：
+
+- [install-new.sh](https://github.com/astro-btc/Astro/blob/main/install-new.sh)：当前默认拉取 `astrobtc/astro:latest`，安装时会停止/删除旧 `astro-app` 并启动容器。只阅读脚本，没有运行。
+- [install-in-docker.sh](https://github.com/astro-btc/Astro/blob/main/install-in-docker.sh)：通过 GitHub latest release 下载 ZIP，安装 Node.js 23.11.1、Bytenode、PM2，再启动 core/server。此处 Node 版本只是脚本指定版本，不等于已证明最新字节码与该运行时兼容。
+- [v1.9.24 Release](https://github.com/astro-btc/Astro/releases/tag/v1.9.24)：API 报告发布时间 `2026-09-23T09:34:26Z`，附件 `astro-1.9.24.zip` 为 6,522,965 字节。
+- 调研时文档分支 HEAD：`a21552e6802d0464824cac97e5798c9c584645da`。移动分支与 latest 标签后续可能变化。
+
+发布包已下载到本地独立研究目录，SHA-256 与 GitHub asset digest 完全一致：
+
+`d28dc395203c2c6c5db1c9b9e39679c13ce942823eb3304a327ce6e770e1d3e8`
+
+ZIP CRC 检查全部通过。排除 `__MACOSX` 元数据和目录项后共 80 个文件，未压缩约 14.8 MB。仅从 ZIP 选择读取/提取固定文件，没有执行安装脚本、包脚本、字节码、WASM 或应用。
+
+本地大文件下载曾停滞，因此也通过已授权服务器向官方 GitHub 下载同一公开 ZIP 到独立 `/tmp/astro-public-research.*` 临时目录，校验后复制到本机；未安装依赖、未接触服务配置、未启动 Astro。最终本地副本再次校验相同 SHA-256。研究文件位于本机 Codex 可视化工作目录的 `astro-release-research/`，未提交第三方发布包到 Git。
+
+### 12.2 实际程序结构
+
+| 文件 | 大小 | 观察 |
+| --- | ---: | --- |
+| `astro-core/bin/www.jsc` | 16,168 bytes | core 启动入口；PM2 配置明确使用 `bytenode` 解释器 |
+| `astro-core/src/main.jsc` | 2,322,352 bytes | 核心主字节码，含订单/对账/策略及交易接口字符串 |
+| `astro-core/src/monitor/index.jsc` | 4,440 bytes | 监控相关字节码入口 |
+| `astro-core/src/3rd/lighter/index.jsc` | 4,072 bytes | Lighter 相关入口 |
+| `astro-core/src/3rd/lighter/lighter.wasm` | 7,460,042 bytes | 随包签名组件，需进一步单独核验 |
+| `astro-core/src/3rd/lighter/load_wasm.mjs` | 4,223 bytes | 可读 Go WASM 加载/签名桥接实现 |
+| `astro-server/src/main.jsc` | 1,062,832 bytes | 管理服务主字节码 |
+| `astro-admin/dist/assets/*` | 多文件 | 编译前端，可直接静态分析 |
+
+core 主字节码 SHA-256：`54339066c361389ae0a745a294a4d7641ad9945ef3d7d660e1ea17a11ec93850`。
+
+包中共 7 个 `.jsc`，core/server 的 package.json 均标注 1.9.24。公开仓库主要提供安装与使用材料；发布包并未附带完整核心 JavaScript 源码。`.jsc` 是编译后字节码，并不等于“无法分析”，但不能承诺完整还原作者源码。
+
+读取到的三个前端文件 `index-g8Z5B0kf.js`、`index-Cbqo_kH4.js`、`zh-CN-CMf_Sbg-.js` 与第 3.3 节用户线上页面对应文件 SHA-256 全部相同。因此该包对当前界面研究具有直接参考价值；这仍不证明线上 core 字节码版本完全相同。
+
+### 12.3 已提取的核心线索及证据强度
+
+以下来自核心字节码可读字符串，不是已经反编译或执行验证的控制流：
+
+- 待处理订单：`initPendingOrders`、`addPendingOrder`、`removePendingOrderByReqId`、`getAllPendingOrders`、`setPendingOrdersPersistEnabled`。
+- 对账：`reconcilePendingOrders`、`reconcile FILLED`、`reconcile TERMINATED`、`reconcile FILLED skipped (already accounted)`。
+- 未决状态：`reconcile PENDING dropped (status unresolved)`。不能仅凭这条日志认定程序错误丢单，必须查明条件、其他持仓核对与后续动作；这是下一阶段重点。
+- 部分成交：`PARTIALLY_FILLED`、`PartiallyFilledCanceled`、`logicalFilledSize`、`partial fill`。
+- 执行模式：`slowMode`、`boostMode`、`abFirstShouldTradeLeft`、`lastTradeCountForAbFirst`。
+- 重试和通道：`pendingOrderRetry`、`allowGateCrossExOrderRetry`、`gateCrossExCancelOrder`。
+- Lighter：`resolveLighterReduceOnlyC`、`getNextNonce`、`/api/v1/nextNonce?account_index=`。
+- 持久化：`better-sqlite3`；`order` 插入语句包含 `id/pairId/coin/isOpen/type/abEx/exchange/coinSize/price/status/ts`，`profit` 插入语句记录组合、交易场所、金额、备注及时间。
+- 比率配置：`FR positionValueRatio does not support stepOpen/stepClose!`、正数 `regressionValue` 校验等字符串。
+
+可读 Lighter WASM 加载器提供 `signCreateOrder/signCreateMarketOrder/createAuthTokenWithExpiry/signUpdateMargin/signUpdateLeverage` 的桥接方法，并尝试解析多个导出名称；这是可直接阅读的实现证据。包中 MEXC protobuf 定义也明确给出订单状态、累计成交、client/order ID、手续费与成交时间字段。
+
+这些证据足以将后续调查拆为“待处理订单持久化 → 查单对账 → 成交计量去重 → 补腿/退出”的具体模块；尚不足以宣称已经还原它们的调用顺序、数量算法、时间阈值和所有异常分支。
+
+### 12.4 Docker latest 不等于 GitHub latest release
+
+只读请求 Docker Registry manifest/config，未拉取镜像层、未创建或运行容器：
+
+- `astrobtc/astro:latest` 当时的 digest：`sha256:1d4c7648ec72adc46c5d57e5df924ad3b4c218d17288d94a7b95625561518ade`。
+- 配置创建时间 `2026-09-19T01:29:28.821260096Z`；标签声明 release `1.9.18-beta1`、image version `3.2`。
+- 镜像描述声明 pm2-runtime 启动 astro-server；工作目录为 `/home/ubuntu/astro-server`，非 root 用户 `ubuntu`。
+
+因此直接照安装脚本获取 `latest`，研究样本可能与 GitHub 1.9.24 ZIP 不同。镜像标签只是发布方元数据，没有检查镜像内部文件或启动后更新行为；必须固定 digest/发布包哈希，不能把 latest 当成稳定版本号。
+
+### 12.5 更新后的判断与下一步
+
+**官方发布包路线已实证可行，核心样本已取得。**线上主机 SSH 不是继续静态分析的必要条件；它只在需要确认用户实际版本、日志和实盘行为时才重要。
+
+后续同模块工作优先顺序：
+
+1. 建立字节码字符串/符号/数据表/交易端点索引，标注证据偏移与包哈希。
+2. 确认 V8/Bytenode 版本，评估匹配版本的字节码解码/反汇编工具；不能把加载 `.jsc` 当作无副作用的查看操作。
+3. 在独立、无真实密钥且默认禁止外部交易连接的 Linux 环境，采用 mock 交易接口和合成回报验证关键分支；不用生产环境做实验。
+4. 优先恢复 `pending orders/reconcile/partial fill/abFirst/slow/boost` 的行为规范，再与自建执行器设计对照。
+5. 用官方 SDK 和梯度/网格文档确认参数，再验证字节码中的实际条件；不要用字符串存在替代运行时证明。
+
+这轮交付为“公开发布包取得、完整性校验及首轮静态可研究性验证”，没有完成完整反编译、执行回放或收益验证。应用代码无变更，本轮验证是 ZIP CRC、SHA-256、结构检查和线上前端哈希比对，不重复运行与文档无关的后端测试。
