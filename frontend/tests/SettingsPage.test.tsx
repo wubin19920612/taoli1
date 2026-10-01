@@ -418,6 +418,7 @@ describe("SettingsPage", () => {
     render(<SettingsPage />);
 
     expect(await screen.findByText("Astro 卡片默认参数")).toBeTruthy();
+    expect(screen.getByText(/Aster、Bitget 保留原交易所 ID/)).toBeTruthy();
     const positionValueInput = (await screen.findAllByLabelText("仓位金额 USDT"))[0];
     await waitFor(() => {
       expect((positionValueInput as HTMLInputElement).value).toBe("25");

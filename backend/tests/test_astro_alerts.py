@@ -535,7 +535,7 @@ async def test_lighter_unknown_counterparty_never_calls_astro() -> None:
         client, Settings(astro_manual_card_create=True, astro_dry_run_only=False)
     )
     result = await service.handle_manual_create(
-        opportunity().model_copy(update={"buy_exchange": "lighter", "sell_exchange": "aster"})
+        opportunity().model_copy(update={"buy_exchange": "lighter", "sell_exchange": "htx"})
     )
     assert result.action == "unsupported"
     assert client.list_calls == 0
@@ -789,7 +789,8 @@ async def test_manual_hl_card_without_market_does_not_use_astro_default() -> Non
 
 
 @pytest.mark.asyncio
-async def test_ff_hl_card_submits_para_market_on_base_and_gc_routes() -> None:
+@pytest.mark.parametrize("buy_exchange", ["binance", "aster"])
+async def test_ff_hl_card_submits_para_market_on_base_and_gc_routes(buy_exchange: str) -> None:
     client = FakeAstroClient()
     service = AstroAlertService(
         client,
@@ -798,7 +799,7 @@ async def test_ff_hl_card_submits_para_market_on_base_and_gc_routes() -> None:
     )
     pair = opportunity().model_copy(
         update={
-            "symbol": "TTWOUSDT", "sell_exchange": "hyperliquid",
+            "symbol": "TTWOUSDT", "buy_exchange": buy_exchange, "sell_exchange": "hyperliquid",
             "sell_raw_symbol": "para:TTWO",
         }
     )
@@ -809,6 +810,81 @@ async def test_ff_hl_card_submits_para_market_on_base_and_gc_routes() -> None:
     assert [(card["sellEx"], card["bHlDex"]) for card in client.added] == [
         ("hl", "para"), ("gc-hl", "para")
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("card_variant", ["both", "non_gc", "gc"])
+@pytest.mark.parametrize("aster_buy", [False, True])
+@pytest.mark.parametrize("entrypoint", [
+    "handle_alert", "handle_live_pilot", "handle_manual_create", "handle_preadd",
+])
+async def test_aster_card_variant_applies_to_every_create_entrypoint(
+    card_variant: str, aster_buy: bool, entrypoint: str,
+) -> None:
+    client = FakeAstroClient()
+    card_settings = AstroCardSettings(card_variant=card_variant)
+    service = AstroAlertService(
+        client,
+        Settings(
+            astro_alert_auto_create=True,
+            astro_manual_card_create=True,
+            astro_dry_run_only=False,
+        ),
+        card_settings=card_settings,
+        live_pilot_settings=LivePilotSettings(enabled=True),
+        add_restart_delay_seconds=0,
+    )
+    ordinary = ("aster", "gate") if aster_buy else ("gate", "aster")
+    gc_route = ("aster", "gc-gate") if aster_buy else ("gc-gate", "aster")
+    selected = opportunity().model_copy(update={
+        "symbol": "ZCATUSDT",
+        "buy_exchange": ordinary[0],
+        "sell_exchange": ordinary[1],
+        "buy_raw_symbol": "ZCATUSDT" if aster_buy else "ZCAT_USDT",
+        "sell_raw_symbol": "ZCAT_USDT" if aster_buy else "ZCATUSDT",
+        "risk_labels": ["FUNDING_AGAINST_MARK_INDEX_DEVIATION"],
+    })
+
+    if entrypoint == "handle_preadd":
+        result = await service.handle_preadd(selected, card_settings)
+    else:
+        result = await getattr(service, entrypoint)(selected)
+
+    expected = [ordinary, gc_route] if card_variant == "both" else [
+        ordinary if card_variant == "non_gc" else gc_route
+    ]
+    assert result.status == "created"
+    assert [(pair["buyEx"], pair["sellEx"]) for pair in client.added] == expected
+    assert all(pair["name"] == "ZCAT" and pair["type"] == "FF" for pair in client.added)
+    assert client.updated == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("card_variant", ["non_gc", "gc"])
+@pytest.mark.parametrize("aster_buy", [False, True])
+async def test_existing_aster_sibling_only_backfills_selected_route(
+    card_variant: str, aster_buy: bool,
+) -> None:
+    ordinary = ("aster", "gate") if aster_buy else ("gate", "aster")
+    gc_route = ("aster", "gc-gate") if aster_buy else ("gc-gate", "aster")
+    existing, expected = (ordinary, gc_route) if card_variant == "gc" else (gc_route, ordinary)
+    client = FakeAstroClient(pairs=[{
+        "name": "BTC", "type": "FF", "buyEx": existing[0], "sellEx": existing[1],
+    }])
+    service = AstroAlertService(
+        client,
+        Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
+        card_settings=AstroCardSettings(card_variant=card_variant),
+        add_restart_delay_seconds=0,
+    )
+
+    result = await service.handle_alert(opportunity().model_copy(update={
+        "buy_exchange": ordinary[0], "sell_exchange": ordinary[1],
+    }))
+
+    assert result.status == "created"
+    assert [(pair["buyEx"], pair["sellEx"]) for pair in client.added] == [expected]
+    assert client.updated == []
 
 
 @pytest.mark.asyncio

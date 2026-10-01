@@ -1000,7 +1000,7 @@ export function SettingsPage() {
           <Form.Item
             label="默认建卡路线"
             name="card_variant"
-            help="Lighter 支持普通与 GC 路线；具体可建路线以建卡预览为准。"
+            help="Lighter 支持普通与 GC 路线；Aster、Bitget 保留原交易所 ID，仅将支持 GC 的另一腿切换为 GC。具体可建路线以建卡预览为准。"
           >
             <AstroCardVariantSelector />
           </Form.Item>

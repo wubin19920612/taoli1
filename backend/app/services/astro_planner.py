@@ -321,7 +321,7 @@ class AstroPairPlanner:
         if {buy_astro_exchange, sell_astro_exchange} & {"lighter", "gc-lighter"} and not astro_exchange_route_variants(
             buy_astro_exchange, sell_astro_exchange
         ):
-            blockers.append("Lighter 仅支持与已知 GC 交易所或 Bitget 配对，未提交未知路由。")
+            blockers.append("Lighter 仅支持与已知 GC 交易所、Aster 或 Bitget 配对，未提交未知路由。")
 
         assumptions = [
             AstroFieldAssumption(

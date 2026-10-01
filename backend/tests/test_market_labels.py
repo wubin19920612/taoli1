@@ -1,3 +1,5 @@
+import pytest
+
 from app.models.market import MarketType
 from app.services.market_labels import (
     astro_exchange_id,
@@ -80,10 +82,25 @@ def test_card_variant_selection_preserves_supported_route_ids() -> None:
     assert astro_exchange_route_variants("gc-lighter", "okx") == [
         ("gc-lighter", "gc-okx")
     ]
-    assert astro_exchange_route_variants("lighter", "aster") == []
+    assert astro_exchange_route_variants("lighter", "htx") == []
 
 
 def test_unsupported_exchange_never_creates_single_sided_gc_route() -> None:
-    assert astro_exchange_route_variants("gate", "aster") == [("gate", "aster")]
-    assert astro_exchange_route_variants("aster", "bybit") == [("aster", "bybit")]
+    assert astro_exchange_route_variants("gate", "htx") == [("gate", "htx")]
+    assert astro_exchange_route_variants("htx", "bybit") == [("htx", "bybit")]
     assert astro_exchange_route_variants("aster", "htx") == [("aster", "htx")]
+
+
+@pytest.mark.parametrize("exchange", ["binance", "bybit", "gate", "hl", "lighter", "okx"])
+@pytest.mark.parametrize("aster_buy", [False, True])
+def test_aster_keeps_its_id_while_other_leg_gets_gc_variant(
+    exchange: str, aster_buy: bool,
+) -> None:
+    ordinary = ("aster", exchange) if aster_buy else (exchange, "aster")
+    gc_route = ("aster", f"gc-{exchange}") if aster_buy else (f"gc-{exchange}", "aster")
+
+    assert astro_exchange_route_variants(*ordinary) == [ordinary, gc_route]
+    assert astro_exchange_route_variants(*ordinary, "non_gc") == [ordinary]
+    assert astro_exchange_route_variants(*ordinary, "gc") == [gc_route]
+    assert astro_exchange_route_variants(*gc_route, "gc") == [gc_route]
+    assert astro_exchange_route_variants(*gc_route, "non_gc") == []

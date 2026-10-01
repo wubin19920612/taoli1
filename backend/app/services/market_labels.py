@@ -1,7 +1,6 @@
 from app.models.astro import AstroCardVariant
 from app.models.market import MarketType
 
-
 _ASTRO_EXCHANGE_ALIASES = {
     "hyper": "hl",
     "hyperliquid": "hl",
@@ -14,7 +13,7 @@ _ASTRO_GC_EXCHANGE_IDS = {
     "lighter": "gc-lighter",
     "okx": "gc-okx",
 }
-_ASTRO_BITGET_EXCHANGE_IDS = {"bitget", "bitgetr"}
+_ASTRO_NON_GC_EXCHANGE_IDS = {"aster", "bitget", "bitgetr"}
 
 
 def normalize_market_symbol(value: str) -> str:
@@ -95,7 +94,7 @@ def astro_exchange_route_variants(
         supported = (
             set(_ASTRO_GC_EXCHANGE_IDS)
             | set(_ASTRO_GC_EXCHANGE_IDS.values())
-            | _ASTRO_BITGET_EXCHANGE_IDS
+            | _ASTRO_NON_GC_EXCHANGE_IDS
         )
         routes = []
         if buy in supported and sell in supported:
@@ -109,9 +108,9 @@ def astro_exchange_route_variants(
                 routes.append(gc_route)
     else:
         routes = [(buy, sell)]
-        if buy in _ASTRO_BITGET_EXCHANGE_IDS and sell in _ASTRO_GC_EXCHANGE_IDS:
+        if buy in _ASTRO_NON_GC_EXCHANGE_IDS and sell in _ASTRO_GC_EXCHANGE_IDS:
             routes.append((buy, _ASTRO_GC_EXCHANGE_IDS[sell]))
-        elif sell in _ASTRO_BITGET_EXCHANGE_IDS and buy in _ASTRO_GC_EXCHANGE_IDS:
+        elif sell in _ASTRO_NON_GC_EXCHANGE_IDS and buy in _ASTRO_GC_EXCHANGE_IDS:
             routes.append((_ASTRO_GC_EXCHANGE_IDS[buy], sell))
         elif buy in _ASTRO_GC_EXCHANGE_IDS and sell in _ASTRO_GC_EXCHANGE_IDS:
             routes.append((_ASTRO_GC_EXCHANGE_IDS[buy], _ASTRO_GC_EXCHANGE_IDS[sell]))

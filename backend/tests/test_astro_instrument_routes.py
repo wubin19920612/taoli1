@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import Settings
@@ -165,6 +166,30 @@ def test_instrument_astro_preview_offers_plain_and_gc_lighter_routes() -> None:
     ] == [
         ("non_gc", "lighter", "binance"),
         ("gc", "gc-lighter", "gc-binance"),
+    ]
+
+
+@pytest.mark.parametrize("aster_buy", [False, True])
+def test_instrument_astro_preview_offers_mixed_gc_aster_routes(aster_buy: bool) -> None:
+    app = instrument_app()
+    buy_exchange, sell_exchange = ("aster", "gate") if aster_buy else ("gate", "aster")
+    app.state.snapshot_store.set_all_markets([
+        market(buy_exchange, bid=99, ask=100), market(sell_exchange, bid=101, ask=102)
+    ])
+    selected = {**route(), "buy_exchange": buy_exchange, "sell_exchange": sell_exchange}
+
+    with TestClient(app) as client:
+        response = client.post("/api/astro/instrument/preview", json=selected)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["can_submit"] is True
+    assert [
+        (item["card_variant"], item["buy_exchange"], item["sell_exchange"])
+        for item in payload["route_variants"]
+    ] == [
+        ("non_gc", buy_exchange, sell_exchange),
+        ("gc", "aster", "gc-gate") if aster_buy else ("gc", "gc-gate", "aster"),
     ]
 
 

@@ -101,6 +101,8 @@ def test_lighter_preview_uses_ordinary_route_and_offers_gc_variant() -> None:
     for buy, sell, expected in (
         ("lighter", "binance", ("lighter", "binance")),
         ("bitget", "lighter", ("bitget", "lighter")),
+        ("lighter", "aster", ("lighter", "aster")),
+        ("aster", "lighter", ("aster", "lighter")),
         ("lighter", "lighter", ("lighter", "lighter")),
     ):
         plan = planner.plan(opportunity().model_copy(update={"buy_exchange": buy, "sell_exchange": sell}))
@@ -120,7 +122,7 @@ def test_lighter_unknown_counterparty_is_blocked_even_for_manual_preview(
     lighter_exchange: str,
 ) -> None:
     plan = AstroPairPlanner().plan(
-        opportunity().model_copy(update={"buy_exchange": lighter_exchange, "sell_exchange": "aster"}),
+        opportunity().model_copy(update={"buy_exchange": lighter_exchange, "sell_exchange": "htx"}),
         allow_manual_override=True,
     )
     assert not plan.can_submit
