@@ -28,13 +28,28 @@
 - Before the fix, both custom-pair cases failed specifically on group ordering after successfully asserting correct persisted fields; the same-symbol recency case passed.
 - After the fix, all three new cases passed; the full workbench suite passed 43 tests.
 - Existing backend preset storage suite: 2 passed. TypeScript checks, Vite production build and `git diff --check` passed.
-- Browser desktop/mobile verification and production deployment are pending at the initial implementation commit; append verified acceptance results below.
+- Browser desktop/mobile verification and production deployment completed; see the acceptance results below.
 
 ## Delivery and production
 
 - Follow `docs/git-delivery-checklist.md` and `docs/linux-deployment.md`: scoped commit/push, both SHA-pinned GitHub Actions images, integrity/SHA-checked SQLite backups before `git pull --ff-only`, and Compose update with no production build or volume deletion.
 - Verify both containers and `/api/health`, then the actual saved list on desktop/mobile and explicit OAI/OPENAI query behavior.
 - Server connection details and credentials stay in the controlled operator environment, not this document.
+
+## Final acceptance (2026-10-01)
+
+- Application source/image commit: `7acfdd98b5aa232fad8343c53ae6df87159c4d5d`, pushed to the existing branch without force push. This acceptance update is a subsequent documentation-only commit, not a second application change.
+- GitHub Actions run `36849370533`: both `build (frontend)` and `build (backend)` succeeded. Both image manifests were verified on the server before deployment.
+- Deployment script completed: checked backups first, then `git pull --ff-only`, exact image pulls and Compose `up -d --no-build --wait`; no server-side builds or volume deletion.
+- Radar backup: `backups/radar-before-7acfdd98b5aa-20261001T103239Z.db` (627834880 bytes), `integrity_check=ok`, matching host/container SHA-256 `d4f53ca57e11248a9cdcca77f700fe6db78a5baef8db0357892d5da998ece436`.
+- Squeeze-route backup: `backups/squeeze-route-before-7acfdd98b5aa-20261001T103239Z.db` (217088 bytes), `integrity_check=ok`, matching host/container SHA-256 `56d09d8c116fb9fc24af7db292b8db1a9c1eaa3e77dcd1ba67dbc6028d5262af`.
+- Both containers are healthy at `sha-7acfdd98b5aa232fad8343c53ae6df87159c4d5d`; the tracked server worktree is clean at that source commit. `/api/health`: `status=ok`, 11786 markets and no exchange errors.
+- Production read-only API verification confirmed the two existing OAI records remain distinct: old OAI/OAI unchanged, custom OAIUSDT/OPENAIUSDT with DEX `io` and multiplier 1. Explicit custom query returned HTTP 200, 238 aligned minute points and no warnings.
+- Local production build and deployed frontend both passed Chromium desktop (1440px) and mobile (390px) checks: custom `OAI / OPENAI` group first; captured save body retained both symbols, DEX and multiplier; reload/re-selection retained `OPENAIUSDT`; both records remained in the list.
+- Browser preset GET fixtures were derived from the real production records; save and every other browser write request were intercepted in memory. No actual production preset writes were made during browser validation. Real persistence is covered by the backend storage tests and independent read-only production inspection.
+- Screenshots visually checked: `output/pair-custom-presets-local-desktop.png`, `output/pair-custom-presets-local-mobile.png`, `output/pair-custom-presets-production-desktop.png`, `output/pair-custom-presets-production-mobile.png`.
+- Browser verification helper: untracked `output/verify-pair-custom-presets.mjs`. Temporary preview/tunnel helpers are task-owned and stopped after validation; connection details remain outside this document.
+- Residual behavior: old same-symbol presets remain selectable and are not automatically deleted or repaired. Users should select the explicit custom card or delete obsolete entries themselves. No symbol mapping is added; upstream market availability is unchanged.
 
 ## Existing artifacts and next steps
 
