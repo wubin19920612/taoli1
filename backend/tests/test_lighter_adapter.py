@@ -21,7 +21,7 @@ from app.models.negative_basis import (
     NEGATIVE_BASIS_FUTURE_EXCHANGES,
     NEGATIVE_BASIS_SPOT_EXCHANGES,
 )
-from app.models.pair_spread import PairSpreadLegQuery
+from app.models.pair_spread import PairSpreadKlinePoint, PairSpreadLegQuery
 from app.services.pair_spread_query import PairSpreadQueryService
 
 
@@ -575,3 +575,130 @@ async def test_pair_query_keeps_lighter_instances_and_market_ids_isolated(monkey
     assert {ws_url for _, ws_url in websocket_calls} == {
         "wss://mainnet.zklighter.elliot.ai/stream", RH_LIGHTER_WS_URL,
     }
+
+
+@pytest.mark.asyncio
+async def test_rh_lighter_oai_alias_supports_pair_history_current_and_funding(monkeypatch) -> None:
+    service = PairSpreadQueryService()
+    start = datetime(2026, 10, 1, 8, tzinfo=UTC)
+    end = start + timedelta(hours=4)
+    requested: list[str] = []
+
+    async def fake_get(url: str):
+        requested.append(url)
+        assert url.startswith(RH_LIGHTER_URL)
+        if url.endswith("orderBookDetails"):
+            return {"code": 200, "order_book_details": [detail("OPENAI", 42)]}
+        if url.endswith("funding-rates"):
+            return {"code": 200, "funding_rates": [
+                {"exchange": "lighter", "market_id": 42, "rate": -0.0001},
+            ]}
+        assert parse_qs(urlparse(url).query)["market_id"] == ["42"]
+        if "/candles?" in url:
+            return {"code": 200, "c": [
+                {"t": int((start + timedelta(minutes=minute)).timestamp() * 1000),
+                 "c": "1667", "V": "1200"}
+                for minute in range(241)
+            ]}
+        if "/fundings?" in url:
+            return {"code": 200, "fundings": [
+                {"timestamp": int(start.timestamp()), "rate": "0.0005", "direction": "short"},
+            ]}
+        raise AssertionError(url)
+
+    async def fake_books(market_ids: list[int], **kwargs):
+        assert market_ids == [42]
+        assert kwargs["ws_url"] == RH_LIGHTER_WS_URL
+        return {42: book("1666", "1667")}
+
+    async def fake_hyperliquid_klines(symbol, query_start, query_end, interval_minutes, *, dex):
+        assert symbol == "OAIUSDT"
+        assert dex == "io"
+        assert (query_start, query_end, interval_minutes) == (start, end, 1)
+        return [
+            PairSpreadKlinePoint(bucket_at=start + timedelta(minutes=minute), close=1610)
+            for minute in range(241)
+        ]
+
+    monkeypatch.setattr(service, "_get_json", fake_get)
+    monkeypatch.setattr(service, "_get_json_optional", fake_get)
+    monkeypatch.setattr(service, "_fetch_hyperliquid_klines", fake_hyperliquid_klines)
+    monkeypatch.setattr("app.services.pair_spread_query.lighter_order_books", fake_books)
+    try:
+        result = await service.query(
+            PairSpreadLegQuery(exchange="hyperliquid", symbol="io:OAI"),
+            PairSpreadLegQuery(exchange="rh-lighter", symbol="OAI"),
+            hours=4, now=end, include_current=False,
+        )
+        current = await service._fetch_lighter_current("OAIUSDT", exchange="rh-lighter")
+        funding = await service._fetch_lighter_funding("OAIUSDT", start, end, exchange="rh-lighter")
+    finally:
+        await service.aclose()
+
+    assert result.point_count == 241
+    assert result.leg1.symbol == "OAIUSDT"
+    assert result.leg1.dex == "io"
+    assert result.points[0].leg1_close == 1610
+    assert result.points[0].leg2_close == 1667
+    assert not result.warnings
+    assert current.exchange == "rh-lighter"
+    assert current.raw_symbol == "OPENAI"
+    assert current.bid_price == 1666
+    assert current.ask_price == 1667
+    assert current.funding_interval_hours == 1
+    assert current.funding_rate_pct == pytest.approx(-0.01)
+    assert funding[0].symbol == "OAIUSDT"
+    assert funding[0].exchange == "rh-lighter"
+    assert funding[0].funding_rate_pct == -0.0005
+    assert len([url for url in requested if url.endswith("orderBookDetails")]) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reverse_order", [False, True])
+async def test_rh_lighter_oai_alias_does_not_override_native_market(monkeypatch, reverse_order) -> None:
+    service = PairSpreadQueryService()
+    markets = [detail("OAI", 7), detail("OPENAI", 42)]
+    if reverse_order:
+        markets.reverse()
+
+    async def fake_get(url: str):
+        return {"code": 200, "order_book_details": markets}
+
+    monkeypatch.setattr(service, "_get_json", fake_get)
+    try:
+        market = await service._lighter_market("OAIUSDT", MarketType.FUTURE, exchange="rh-lighter")
+    finally:
+        await service.aclose()
+
+    assert market["market_id"] == 7
+    assert market["symbol"] == "OAI"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exchange", "market_type", "symbol", "status"),
+    [
+        ("lighter", MarketType.FUTURE, "OAIUSDT", "active"),
+        ("rh-lighter", MarketType.SPOT, "OAIUSDT", "active"),
+        ("rh-lighter", MarketType.FUTURE, "OAIUSDT", "inactive"),
+        ("rh-lighter", MarketType.FUTURE, "UNKNOWNUSDT", "active"),
+    ],
+)
+async def test_rh_lighter_oai_alias_is_limited_to_active_rh_futures(
+    monkeypatch, exchange, market_type, symbol, status,
+) -> None:
+    service = PairSpreadQueryService()
+
+    async def fake_get(url: str):
+        return {
+            "code": 200,
+            "order_book_details": [detail("OPENAI", 42, status=status)],
+            "spot_order_book_details": [detail("OPENAI/USDG", 2048, "spot", status)],
+        }
+
+    monkeypatch.setattr(service, "_get_json", fake_get)
+    try:
+        with pytest.raises(RuntimeError, match="symbol not found"):
+            await service._lighter_market(symbol, market_type, exchange=exchange)
+    finally:
+        await service.aclose()
