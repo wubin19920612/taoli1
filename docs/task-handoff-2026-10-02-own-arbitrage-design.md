@@ -53,7 +53,20 @@
 - 新增执行器首选调整为 TypeScript/Node，Python 雷达保留。设计顺序/受保护并行两模式，分开发单差、ACK 差、成交差和裸露风险；所有 SLO 仍待实测。
 - 完整 JSON/线性伪代码保留在报告所述本机研究目录，不入仓库。本次仅文档交付，无部署/数据库备份；未重新验证线上版本。
 
-### 实现模块
+### 本日再追加：可模仿核心行为规格
+
+起点 `4a4cdb7`。新增 `docs/astro-core-reimplementation-spec-2026-10-02.md`、`docs/research/astro-core-behavior-evidence-2026-10-02.json`、`docs/research/astro-core-reference-vectors-2026-10-02.json`。
+
+- 确认调度器 Map/队列/Set 合并机制和默认每轮32项、setImmediate续跑；六类策略导出与共享网关映射。
+- 确认 SF 一档取价、中点分母价差及严格阈值；FR 比率及相反比较方向；SF 阶梯目标、数量裁剪和配置缓存失效。
+- 上轮 Un_1 两调用通过原始 context slot 43/44 映射至 tradeSpot/tradeFuture。
+- HL 路径追到 IOC 限价、按 DEX 的 mid cache/in-flight promise、nonce、签名和 HTTP；默认 mid cache TTL 30000，非策略盘口 TTL。请求模板 slippage=0.1 经原始 float64 核对，且保护价使用1±slippage，不能误读为0.1%。额外 DEX 有固定候选列表的筛选。
+- CAS SQL 首次状态转换防重已在一次性 SQLite 验证；恢复时 pending 移除与后续状态处理存在可见顺序，不能未经动态测试宣称线上丢单。自建采用同事务事实账本。
+- 验证：30个区域、1971条指令 raw bytes 与原文件位置全部一致；12个 float64 原始字节解码；16个离线合成参考检查通过。都不是 Astro 实盘、语义等价或性能验证。
+- 完整提取在研究目录 `decompilation-20261002/core-chain/`。本轮仅文档/JSON，无应用变更、无数据库备份/部署、未重查线上版本；旧未跟踪内容仍保留。
+- 后续实现从新规格的 B/D/S/U 证据分层入手。SF/FF与通用风险闭环具备可实现规格；FR复杂倍率、完整GRID源码、所有平台边角分支仍未完全逆向，不自动迁移旧实盘卡片。
+
+### 后续任务入口
 
 建议新任务：“自建套利 P0/P1：Arcus 能力核验与执行账本骨架”。读取主方案后，取得 Arcus 官方入口，先完成 capability matrix；可独立实现 mock 网关、账本和状态机，不需要等 Astro 完整反编译。当前研究/设计模块交付后再开始实现模块。
 
