@@ -1,0 +1,358 @@
+{
+  "release_bundle": "astro-admin/dist/assets/index-Cbqo_kH4.js",
+  "bundle_sha256": "e41fd610df965b6c32e89a0de251246f02dfe032e5ad8c5da6ac313261de975a",
+  "functions": [
+    {
+      "function": "zn",
+      "utf8_byte_offset": 498649,
+      "utf8_byte_length": 230,
+      "sha256": "563c94896a4b7b480541411c9e819ed26096ea4cff88ebc828dd5eb980c625ab",
+      "source": "function zn(e){switch(e){case\"T\":return 1e12;case\"B\":return 1e9;case\"M\":return 1e6;case\"K\":return 1e3;case\"1\":return 1;case\"1/K\":return 1/1e3;case\"1/M\":return 1/1e6;case\"1/B\":return 1/1e9;case\"1/T\":return 1/1e12;default:return 1}}"
+    },
+    {
+      "function": "eT",
+      "utf8_byte_offset": 498879,
+      "utf8_byte_length": 204,
+      "sha256": "fdd69d45ff10559bb56543ddc0c78a143c9c6cc1cc0bff14bc9ebe2099cacedc",
+      "source": "function eT(e){switch(e){case\"T\":return\"1/T\";case\"B\":return\"1/B\";case\"M\":return\"1/M\";case\"K\":return\"1/K\";case\"1/K\":return\"K\";case\"1/M\":return\"M\";case\"1/B\":return\"B\";case\"1/T\":return\"T\";default:return\"1\"}}"
+    },
+    {
+      "function": "In",
+      "utf8_byte_offset": 499083,
+      "utf8_byte_length": 79,
+      "sha256": "a55d6f887849bf3252ae4ed99f2b8b5447438626f61d78ff61363cd3bd60b513",
+      "source": "function In(e,t){const n=typeof e==\"string\"?parseFloat(e):e,o=zn(t);return n*o}"
+    },
+    {
+      "function": "qi",
+      "utf8_byte_offset": 505439,
+      "utf8_byte_length": 74,
+      "sha256": "e7df2c8769717b03d3c4377656d73013b20a3469f852d9d573691cfc4dda6114",
+      "source": "function qi(e){return Number.isFinite(e)?Math.max(-em,Math.min(em,e)):NaN}"
+    },
+    {
+      "function": "nn",
+      "utf8_byte_offset": 505513,
+      "utf8_byte_length": 128,
+      "sha256": "7b102b61350e45f416ec39fb544502dc5cfcde0ea73762b8fb8d1dd901ccefd5",
+      "source": "function nn(e){if(e==null||e===\"\")return null;const t=typeof e==\"string\"?parseFloat(e):e;return!Number.isFinite(t)||t<=0?null:t}"
+    },
+    {
+      "function": "ao",
+      "utf8_byte_offset": 505776,
+      "utf8_byte_length": 115,
+      "sha256": "37328e9ee16330b7d0d64802bf8b27f9eb7b4cdad6937be1efff36ab4279ecc2",
+      "source": "function ao(e,t){if(!Number.isFinite(e)||!Number.isFinite(t))return NaN;const n=t+e;return n===0?NaN:2*(t-e)/n*100}"
+    },
+    {
+      "function": "Lo",
+      "utf8_byte_offset": 505891,
+      "utf8_byte_length": 119,
+      "sha256": "c7853ec34cfe5137ea0c4359b1b682601e5a8379eb7abd709b5bdf44c3c6dcff",
+      "source": "function Lo(e,t){if(!Number.isFinite(e)||!Number.isFinite(t))return NaN;const n=e/100,o=2+n;return o===0?NaN:t*(2-n)/o}"
+    },
+    {
+      "function": "tm",
+      "utf8_byte_offset": 506010,
+      "utf8_byte_length": 164,
+      "sha256": "051790a2663fe3bca24fc9aaf3414b468b33120aaddad190fd1e3f1e6b598105",
+      "source": "function tm(e,t,n,o){if(![e,t,n,o].every(Number.isFinite)||e<=0||t<=0||n<=0)return NaN;const r=ao(e*n,t),s=qi(r+o),a=Lo(s,t)/n;return Number.isFinite(a)&&a>0?a:NaN}"
+    },
+    {
+      "function": "mT",
+      "utf8_byte_offset": 506209,
+      "utf8_byte_length": 275,
+      "sha256": "7aaf05756de7862f15cb2ee3b968af7ccee0aab90db57bff23505295e870d68e",
+      "source": "function mT(e,t,n,o,r=12){const s=a=>{if(a==null||a===\"\")return;const c=typeof a==\"number\"?a:parseFloat(a);if(!Number.isFinite(c))return a;const d=o?ao(c,n):Lo(qi(c),n);return Number.isFinite(d)?Number(d.toFixed(o?kn:r)):a};return{greaterPriceAlert:s(t),lessPriceAlert:s(e)}}"
+    }
+  ],
+  "pure_function_tests": {
+    "kind": "Executed only nine inspected pure frontend functions extracted verbatim from release bundle. No full bundle, jsc, wasm, network or trading execution.",
+    "passed": 29,
+    "results": [
+      {
+        "name": "multiplier 1",
+        "actual": 1,
+        "expected": 1,
+        "passed": true
+      },
+      {
+        "name": "inverse multiplier 1",
+        "actual": 1,
+        "expected": 1,
+        "passed": true
+      },
+      {
+        "name": "multiplier T",
+        "actual": 1000000000000,
+        "expected": 1000000000000,
+        "passed": true
+      },
+      {
+        "name": "inverse multiplier T",
+        "actual": 1,
+        "expected": 1,
+        "passed": true
+      },
+      {
+        "name": "multiplier B",
+        "actual": 1000000000,
+        "expected": 1000000000,
+        "passed": true
+      },
+      {
+        "name": "inverse multiplier B",
+        "actual": 1,
+        "expected": 1,
+        "passed": true
+      },
+      {
+        "name": "multiplier M",
+        "actual": 1000000,
+        "expected": 1000000,
+        "passed": true
+      },
+      {
+        "name": "inverse multiplier M",
+        "actual": 1,
+        "expected": 1,
+        "passed": true
+      },
+      {
+        "name": "multiplier K",
+        "actual": 1000,
+        "expected": 1000,
+        "passed": true
+      },
+      {
+        "name": "inverse multiplier K",
+        "actual": 1,
+        "expected": 1,
+        "passed": true
+      },
+      {
+        "name": "multiplier 1/K",
+        "actual": 0.001,
+        "expected": 0.001,
+        "passed": true
+      },
+      {
+        "name": "inverse multiplier 1/K",
+        "actual": 1,
+        "expected": 1,
+        "passed": true
+      },
+      {
+        "name": "multiplier 1/M",
+        "actual": 1e-06,
+        "expected": 1e-06,
+        "passed": true
+      },
+      {
+        "name": "inverse multiplier 1/M",
+        "actual": 1,
+        "expected": 1,
+        "passed": true
+      },
+      {
+        "name": "multiplier 1/B",
+        "actual": 1e-09,
+        "expected": 1e-09,
+        "passed": true
+      },
+      {
+        "name": "inverse multiplier 1/B",
+        "actual": 1,
+        "expected": 1,
+        "passed": true
+      },
+      {
+        "name": "multiplier 1/T",
+        "actual": 1e-12,
+        "expected": 1e-12,
+        "passed": true
+      },
+      {
+        "name": "inverse multiplier 1/T",
+        "actual": 1,
+        "expected": 1,
+        "passed": true
+      },
+      {
+        "name": "ratio at regression zero",
+        "actual": 0,
+        "expected": 0,
+        "passed": true
+      },
+      {
+        "name": "positive deviation when ratio decreases",
+        "actual": 4.081632653061225,
+        "expected": 4.081632653061225,
+        "passed": true
+      },
+      {
+        "name": "percentage inverse",
+        "actual": 0.02458349861166204,
+        "expected": 0.024583498611662036,
+        "passed": true
+      },
+      {
+        "name": "lower percentage clamp",
+        "actual": -199.999999,
+        "expected": -199.999999,
+        "passed": true
+      },
+      {
+        "name": "upper percentage clamp",
+        "actual": 199.999999,
+        "expected": 199.999999,
+        "passed": true
+      },
+      {
+        "name": "clamped extreme remains positive",
+        "actual": true,
+        "expected": true,
+        "passed": true
+      },
+      {
+        "name": "raw ratio roundtrip",
+        "actual": 0.023,
+        "expected": 0.023,
+        "passed": true
+      },
+      {
+        "name": "alert direction swap to percentage",
+        "actual": {
+          "greaterPriceAlert": -3.921569,
+          "lessPriceAlert": 4.081633
+        },
+        "expected": {
+          "greaterPriceAlert": -3.921569,
+          "lessPriceAlert": 4.081633
+        },
+        "passed": true
+      },
+      {
+        "name": "invalid regression null",
+        "actual": null,
+        "expected": null,
+        "passed": true
+      },
+      {
+        "name": "nonfinite input is NaN",
+        "actual": true,
+        "expected": true,
+        "passed": true
+      },
+      {
+        "name": "multiplier invariant with rescaled R",
+        "actual": 3.9215686274509802,
+        "expected": 3.92156862745097,
+        "passed": true
+      }
+    ]
+  },
+  "limitations": [
+    "Does not execute UI event handlers, core bytecode, or actual API calls.",
+    "Full save handler and event ordering verified statically only."
+  ],
+  "bytecode_regions": [
+    {
+      "id": "E60",
+      "observation": "core cached thresholds",
+      "synthetic_object_address": "0xf0000073d800",
+      "instruction_offset_range": [
+        103,
+        133
+      ],
+      "instruction_count": 12,
+      "first_file_offset": 1931105,
+      "decoded_instruction_sha256": "efa3fb94c2b9b0a8c9074a9edaec628a54c9b29bc57cd36ab92ce8a7163ab6d8"
+    },
+    {
+      "id": "E61",
+      "observation": "HL snapshot and batch aggregation",
+      "synthetic_object_address": "0xf00000414600",
+      "instruction_offset_range": [
+        179,
+        631
+      ],
+      "instruction_count": 156,
+      "first_file_offset": 1021194,
+      "decoded_instruction_sha256": "d84784aa7d85fae64b49c3d00a6952b31c76b68699f86199a2090d8102f5e776"
+    },
+    {
+      "id": "E62",
+      "observation": "HL map removal quantity and ledger calls",
+      "synthetic_object_address": "0xf00000414600",
+      "instruction_offset_range": [
+        903,
+        1499
+      ],
+      "instruction_count": 212,
+      "first_file_offset": 1021918,
+      "decoded_instruction_sha256": "590f3222ecb0d4c2105310a9909b130e0fd5525b020a12d86708dc770a5a9797"
+    },
+    {
+      "id": "E63",
+      "observation": "Lighter filled branch and original order size",
+      "synthetic_object_address": "0xf00000804700",
+      "instruction_offset_range": [
+        938,
+        1500
+      ],
+      "instruction_count": 206,
+      "first_file_offset": 2233093,
+      "decoded_instruction_sha256": "f19b4caf484388720847cc07fe10a24713d244356ddd1cb7d833aa82719ac0ab"
+    }
+  ],
+  "checked_instruction_count": 586,
+  "sample_sha256": "54339066c361389ae0a745a294a4d7641ad9945ef3d7d660e1ea17a11ec93850",
+  "static_frontend_regions": [
+    {
+      "observation": "form-display",
+      "utf8_byte_offset": 566781,
+      "utf8_byte_length": 133,
+      "sha256": "98978406ddfd975e8769191fd21f9f909c9c754183baa616d12bbf85a8e6f825"
+    },
+    {
+      "observation": "regression-mode-switch",
+      "utf8_byte_offset": 583725,
+      "utf8_byte_length": 1118,
+      "sha256": "8103fce86eb889915c27ea660e6c088d1e4d8023a2bd2825b6f3e78a58762142"
+    },
+    {
+      "observation": "form-to-raw-threshold",
+      "utf8_byte_offset": 587246,
+      "utf8_byte_length": 2951,
+      "sha256": "4200bd8943bac2a724b51142995a2739bd02c7c7f2c11cfcdf0f1a8d99ccf8c7"
+    },
+    {
+      "observation": "step-threshold-conversion",
+      "utf8_byte_offset": 591158,
+      "utf8_byte_length": 2741,
+      "sha256": "8ef37f4bf4311e09a6511edd0979c7fcf5edd7dfac01ea843661bc49875526b3"
+    },
+    {
+      "observation": "FR-reverse",
+      "utf8_byte_offset": 609006,
+      "utf8_byte_length": 730,
+      "sha256": "6c15ec7d2e2db7d1d05278d347de92377050e37730219ea720c80782568f1a18"
+    }
+  ],
+  "update_transport": {
+    "bundle": "astro-admin/dist/assets/index-g8Z5B0kf.js",
+    "bundle_sha256": "04241877796011755587e4339340e3f712249d297b953afa192b22b2198d18eb",
+    "utf8_byte_offset": 526825,
+    "source": "OF=async e=>{const n=await ce.post(\"/api/config/update-pair\",{...e});if(n.data.code!==0)throw new Error(n.data.message||(typeof n.data.data==\"string\"?n.data.data:\"Update failed\"));return n.data}"
+  },
+  "server_read_only_observation": {
+    "date": "2026-10-02",
+    "reachable": true,
+    "production_image_commit": "09f2a30e920c2aa0b985889a6d23e8947e596f8e",
+    "astro_core_found": false,
+    "scope": "Running Docker containers and bounded depth scans of selected application roots; not an exhaustive host or other-host inventory.",
+    "secrets_read": false,
+    "mutations": false
+  }
+}
