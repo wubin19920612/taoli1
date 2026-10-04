@@ -23,12 +23,20 @@ class OrderBookSnapshot(BaseModel):
 class DepthValidationResult(BaseModel):
     passed: bool
     target_notional_usdt: float
+    required_depth_usdt: float | None = None
+    price_band_pct: float | None = None
+    buy_depth_usdt: float | None = None
+    sell_depth_usdt: float | None = None
+    min_depth_usdt: float | None = None
     buy_filled_usdt: float
     sell_filled_usdt: float
     buy_vwap: float | None
     sell_vwap: float | None
     quoted_open_pct: float
     executable_open_pct: float | None
+    cost_pct: float | None = None
+    funding_edge_pct: float | None = None
+    slippage_buffer_pct: float | None = None
     effective_executable_edge_pct: float | None
     slippage_loss_pct: float | None
     blockers: list[str]

@@ -1,8 +1,8 @@
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Callable
 
 from app.exchanges.aster import AsterAdapter
 from app.exchanges.base import ExchangeAdapter
@@ -10,9 +10,11 @@ from app.exchanges.binance import BinanceAdapter
 from app.exchanges.bitget import BitgetAdapter
 from app.exchanges.bybit import BybitAdapter
 from app.exchanges.gate import GateAdapter
-from app.exchanges.hyperliquid import HyperliquidAdapter
 from app.exchanges.htx import HTXAdapter
+from app.exchanges.hyperliquid import HyperliquidAdapter
+from app.exchanges.lighter import LighterAdapter, RobinhoodLighterAdapter
 from app.exchanges.okx import OKXAdapter
+from app.models.index_component import index_watch_symbol
 from app.models.market import MarketSnapshot
 from app.models.opportunity import Opportunity
 from app.models.settings import FeeSettings, RiskSettings
@@ -117,6 +119,8 @@ def default_exchange_adapters() -> list[ExchangeAdapter]:
         HTXAdapter(),
         AsterAdapter(),
         HyperliquidAdapter(),
+        LighterAdapter(),
+        RobinhoodLighterAdapter(),
     ]
 
 
@@ -131,7 +135,7 @@ class MarketCollector:
         history_recorder=None,
         index_component_provider=None,
         index_component_monitor=None,
-        poll_interval_seconds: float = 8.0,
+        poll_interval_seconds: float = 5.0,
         max_due_adapters_per_cycle: int = DEFAULT_MAX_DUE_ADAPTERS_PER_CYCLE,
         now_fn: Callable[[], datetime] | None = None,
     ) -> None:
@@ -194,8 +198,13 @@ class MarketCollector:
         aliased_markets = apply_symbol_aliases(markets, self.risk_settings.symbol_aliases)
         filtered_markets = filter_markets(aliased_markets, self.risk_settings)
 
-        opportunities = self._build_labeled_opportunities(filtered_markets)
-        filtered_opportunities = filter_opportunities(opportunities, self.risk_settings)
+        opportunities = self._build_labeled_opportunities(filtered_markets, now=now)
+        filtered_opportunities = filter_opportunities(
+            opportunities,
+            self.risk_settings,
+            now=now,
+        )
+        self.store.set_all_markets(aliased_markets)
         self.store.set_markets(filtered_markets)
         self.store.set_opportunities(filtered_opportunities)
         self.store.set_exchange_errors(errors)
@@ -213,6 +222,9 @@ class MarketCollector:
             return
         try:
             markets = await self._index_component_markets(markets)
+            observe_markets = getattr(self.index_component_monitor, "observe_markets", None)
+            if observe_markets is not None:
+                await observe_markets(markets)
             if not markets:
                 return
             snapshots = await self.index_component_provider.fetch_components(markets)
@@ -229,6 +241,12 @@ class MarketCollector:
             market
             for market in markets
             if self._index_component_symbol_is_watched(market.symbol, watched_symbols)
+            or (
+                market.symbol_alias_original_symbol is not None
+                and self._index_component_symbol_is_watched(
+                    market.symbol_alias_original_symbol, watched_symbols
+                )
+            )
         ]
 
     async def _index_component_watched_symbols(self) -> set[str] | None:
@@ -239,8 +257,8 @@ class MarketCollector:
         return {symbol.strip().upper() for symbol in symbols if symbol and symbol.strip()}
 
     def _index_component_symbol_is_watched(self, symbol: str, watched_symbols: set[str]) -> bool:
-        normalized = symbol.strip().upper()
-        return any(normalized.startswith(watched) for watched in watched_symbols)
+        normalized = index_watch_symbol(symbol)
+        return any(index_watch_symbol(watched) == normalized for watched in watched_symbols)
 
     def _state_for(self, exchange_name: str) -> ExchangePollState:
         state = self._poll_states.get(exchange_name)
@@ -313,6 +331,8 @@ class MarketCollector:
         state = self._state_for(exchange_name)
         state.in_flight = False
         if result.errors:
+            if result.markets and not result.should_cool_down:
+                self._exchange_snapshots[exchange_name] = result.markets
             self._exchange_errors[exchange_name] = result.errors
             state.last_error_at = now
             state.consecutive_failures += 1
@@ -369,7 +389,7 @@ class MarketCollector:
     ) -> tuple[list[MarketSnapshot], dict[str, str]]:
         try:
             return await self._fetch_adapter(adapter)
-        except Exception as exc:  # noqa: BLE001 - isolate flaky public APIs per exchange.
+        except Exception as exc:
             logger.warning("exchange adapter failed: %s", adapter.name, exc_info=exc)
             return [], {adapter.name: _error_message(exc)}
 
@@ -408,10 +428,24 @@ class MarketCollector:
                 markets.extend(await fetcher())
             except Exception as exc:  # noqa: BLE001 - isolate flaky public APIs per market.
                 errors[f"{adapter.name}:{label}"] = _error_message(exc)
+        market_errors = getattr(adapter, "market_errors", None)
+        if isinstance(market_errors, dict):
+            errors.update(
+                {
+                    str(key): str(value)
+                    for key, value in market_errors.items()
+                    if str(key).strip() and str(value).strip()
+                }
+            )
         return markets, errors
 
-    def _build_labeled_opportunities(self, markets: list[MarketSnapshot]) -> list[Opportunity]:
+    def _build_labeled_opportunities(
+        self,
+        markets: list[MarketSnapshot],
+        now: datetime | None = None,
+    ) -> list[Opportunity]:
         raw: list[Opportunity] = []
+        current = now or self._now_fn()
         for mode in ("SF", "FF", "SS"):
             buy_fee = self.fee_settings.spot_fee_pct if mode in {"SF", "SS"} else self.fee_settings.future_fee_pct
             sell_fee = self.fee_settings.future_fee_pct if mode in {"SF", "FF"} else self.fee_settings.spot_fee_pct
@@ -422,11 +456,12 @@ class MarketCollector:
                     buy_fee_pct=buy_fee,
                     sell_fee_pct=sell_fee,
                     safety_slippage_pct=self.fee_settings.safety_slippage_pct,
+                    now=current,
+                    stale_after_seconds=self.risk_settings.stale_after_seconds,
                 )
             )
-        now = datetime.now(UTC)
         labeled = [
-            apply_risk_labels(item, settings=self.risk_settings, now=now)
+            apply_risk_labels(item, settings=self.risk_settings, now=current)
             for item in raw
         ]
         return sorted(labeled, key=lambda item: item.open_spread_pct, reverse=True)

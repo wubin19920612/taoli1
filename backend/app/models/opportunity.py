@@ -1,7 +1,7 @@
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.models.market import MarketType
 
@@ -19,9 +19,27 @@ class Opportunity(BaseModel):
     buy_exchange: str
     buy_market_type: MarketType
     buy_raw_symbol: str | None = None
+    buy_dex: str | None = None
+    buy_price_multiplier: float = 1.0
+    buy_contract_size_multiplier: float | None = None
+    buy_timestamp: datetime | None = None
+    buy_data_source: str | None = None
+    buy_is_estimated: bool = False
+    buy_estimated_fields: list[str] = Field(default_factory=list)
     sell_exchange: str
     sell_market_type: MarketType
     sell_raw_symbol: str | None = None
+    sell_dex: str | None = None
+    sell_price_multiplier: float = 1.0
+    sell_contract_size_multiplier: float | None = None
+    sell_timestamp: datetime | None = None
+    sell_data_source: str | None = None
+    sell_is_estimated: bool = False
+    sell_estimated_fields: list[str] = Field(default_factory=list)
+    buy_fee_pct: float = 0.0
+    sell_fee_pct: float = 0.0
+    safety_slippage_pct: float = 0.0
+    fees_are_estimated: bool = True
     open_spread_pct: float
     close_spread_pct: float
     fee_adjusted_open_pct: float

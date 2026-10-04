@@ -1,18 +1,50 @@
 import { FilterOutlined, ReloadOutlined } from "@ant-design/icons";
 import { Button, Input, InputNumber, Segmented, Select, Space, Switch, Tooltip } from "antd";
 
-import type { OpportunityFilters, OpportunityType } from "../api/types";
+import type { OpportunityFilters, OpportunitySort, OpportunityType } from "../api/types";
 import { riskLabelOptions } from "../constants/riskLabels";
 
 interface TopFiltersProps {
   filters: OpportunityFilters;
   loading: boolean;
+  autoRefresh: boolean;
+  refreshIntervalMs: number;
   onChange: (filters: OpportunityFilters) => void;
   onRefresh: () => void;
+  onAutoRefreshChange: (enabled: boolean) => void;
+  onRefreshIntervalChange: (intervalMs: number) => void;
 }
 
-const exchanges = ["binance", "okx", "bybit", "gate", "bitget", "htx", "aster", "hyperliquid"];
-export function TopFilters({ filters, loading, onChange, onRefresh }: TopFiltersProps) {
+const exchanges = ["binance", "okx", "bybit", "gate", "bitget", "htx", "aster", "hyperliquid", "lighter", "rh-lighter"];
+const sortOptions: { label: string; value: OpportunitySort }[] = [
+  { label: "开仓价差", value: "open_spread_pct" },
+  { label: "扣费后价差", value: "fee_adjusted_open_pct" },
+  { label: "平仓价差", value: "close_spread_pct" },
+  { label: "标的名称", value: "symbol" },
+  { label: "买入交易所", value: "buy_exchange" },
+  { label: "卖出交易所", value: "sell_exchange" },
+  { label: "买方 24h 成交额", value: "buy_volume_24h_usdt" },
+  { label: "卖方 24h 成交额", value: "sell_volume_24h_usdt" },
+  { label: "当前净资金费率 / 小时", value: "net_funding_hourly_pct" },
+  { label: "预测净资金费率 / 小时", value: "net_funding_next_hourly_pct" }
+];
+const refreshIntervalOptions = [
+  { label: "8s", value: 8000 },
+  { label: "15s", value: 15000 },
+  { label: "30s", value: 30000 },
+  { label: "60s", value: 60000 }
+];
+
+export function TopFilters({
+  filters,
+  loading,
+  autoRefresh,
+  refreshIntervalMs,
+  onChange,
+  onRefresh,
+  onAutoRefreshChange,
+  onRefreshIntervalChange
+}: TopFiltersProps) {
   const patch = (next: Partial<OpportunityFilters>) => onChange({ ...filters, ...next });
   return (
     <div className="toolbar">
@@ -57,10 +89,27 @@ export function TopFilters({ filters, loading, onChange, onRefresh }: TopFilters
         <Select
           allowClear
           className="exchange-select"
-          placeholder="交易所"
-          options={exchanges.map((item) => ({ label: item, value: item }))}
+          placeholder="交易所（任一侧）"
+          aria-label="交易所（任一侧）"
+          showSearch
+          optionFilterProp="label"
+          options={exchanges.map((item) => ({ label: item === "rh-lighter" ? "RH Lighter" : item, value: item }))}
           value={filters.exchange}
           onChange={(value) => patch({ exchange: value })}
+        />
+        <Select
+          aria-label="排序指标"
+          style={{ width: 210 }}
+          options={sortOptions}
+          value={filters.sort_by ?? "open_spread_pct"}
+          onChange={(value: OpportunitySort) => patch({ sort_by: value })}
+        />
+        <Select
+          aria-label="排序方向"
+          style={{ width: 96 }}
+          options={[{ label: "降序", value: "desc" }, { label: "升序", value: "asc" }]}
+          value={filters.sort_order ?? "desc"}
+          onChange={(value: "asc" | "desc") => patch({ sort_order: value })}
         />
         <InputNumber
           className="spread-input"
@@ -79,6 +128,15 @@ export function TopFilters({ filters, loading, onChange, onRefresh }: TopFilters
           suffix="K"
           value={filters.min_volume_24h_k}
           onChange={(value) => patch({ min_volume_24h_k: value ?? undefined })}
+        />
+        <InputNumber
+          className="limit-input"
+          min={20}
+          max={500}
+          step={10}
+          placeholder="Rows"
+          value={filters.limit}
+          onChange={(value) => patch({ limit: value ?? undefined })}
         />
         <Select
           mode="multiple"
@@ -103,6 +161,19 @@ export function TopFilters({ filters, loading, onChange, onRefresh }: TopFilters
         </Space>
       </Space>
       <div className="toolbar-actions">
+        <Space size={8} wrap>
+          <Space size={6}>
+            <Switch checked={autoRefresh} onChange={onAutoRefreshChange} />
+            <span>Auto</span>
+          </Space>
+          <Select
+            className="refresh-interval-select"
+            disabled={!autoRefresh}
+            options={refreshIntervalOptions}
+            value={refreshIntervalMs}
+            onChange={onRefreshIntervalChange}
+          />
+        </Space>
         <Tooltip title="刷新">
           <Button icon={<ReloadOutlined />} loading={loading} onClick={onRefresh} />
         </Tooltip>

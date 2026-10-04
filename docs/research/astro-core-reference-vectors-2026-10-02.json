@@ -1,0 +1,205 @@
+{
+  "purpose": "implementation acceptance examples; not original Astro golden outputs",
+  "cases": [
+    {
+      "id": "V01",
+      "basis": "Astro SF strict opening comparison",
+      "input": {
+        "a_ask": "100",
+        "b_bid": "103",
+        "threshold": "0.02"
+      },
+      "expected": true,
+      "verification": "offline synthetic calculation, not Astro execution"
+    },
+    {
+      "id": "V02",
+      "basis": "Astro strict comparison boundary",
+      "input": {
+        "spread": "0.02",
+        "threshold": "0.02"
+      },
+      "expected": false,
+      "verification": "offline synthetic calculation, not Astro execution"
+    },
+    {
+      "id": "V03",
+      "basis": "Astro SF close metric comparison",
+      "input": {
+        "a_bid": "100",
+        "b_ask": "100.2",
+        "threshold": "0.003"
+      },
+      "expected": true,
+      "verification": "offline synthetic calculation, not Astro execution"
+    },
+    {
+      "id": "V04",
+      "basis": "Astro FR ratio direction",
+      "input": {
+        "a_ask": "2100",
+        "b_bid": "70000",
+        "open": "0.031"
+      },
+      "expected": true,
+      "verification": "offline synthetic calculation, not Astro execution"
+    },
+    {
+      "id": "V05",
+      "basis": "Astro FR ratio close direction",
+      "input": {
+        "a_bid": "2170",
+        "b_ask": "70000",
+        "close": "0.0305"
+      },
+      "expected": true,
+      "verification": "offline synthetic calculation, not Astro execution"
+    },
+    {
+      "id": "V06",
+      "basis": "Own safety contract: common executable base step",
+      "input": {
+        "steps": [
+          "0.002",
+          "0.003"
+        ],
+        "requested_base": "0.019"
+      },
+      "expected": "0.018",
+      "verification": "offline synthetic calculation, not Astro execution"
+    },
+    {
+      "id": "V07",
+      "basis": "Own safety contract: no round-up past risk budget",
+      "input": {
+        "remaining_base": "0.005",
+        "common_step": "0.006"
+      },
+      "expected": "SKIP",
+      "verification": "offline synthetic calculation, not Astro execution"
+    },
+    {
+      "id": "V08",
+      "basis": "Own safety contract: pending exposure interval",
+      "input": {
+        "confirmed_buy": "0.6",
+        "confirmed_sell": "0.4",
+        "pending_buy": "0.4",
+        "pending_sell": "0.2"
+      },
+      "expected": [
+        "0.0",
+        "0.6"
+      ],
+      "verification": "offline synthetic calculation, not Astro execution"
+    },
+    {
+      "id": "V09",
+      "basis": "Astro HL nonce local monotonic branch",
+      "input": {
+        "last": 1000,
+        "clock": [
+          1000,
+          999,
+          1005
+        ]
+      },
+      "expected": [
+        1001,
+        1002,
+        1005
+      ],
+      "verification": "offline synthetic calculation, not Astro execution"
+    },
+    {
+      "id": "V10",
+      "basis": "Astro HL unrounded IOC bound; not recommendation",
+      "input": {
+        "mid": "100",
+        "slippage": "0.1"
+      },
+      "expected": [
+        "110.0",
+        "90.0"
+      ],
+      "verification": "offline synthetic calculation, not Astro execution"
+    },
+    {
+      "id": "V11",
+      "basis": "Own safety contract: base-denominated fee",
+      "input": {
+        "gross_buy_base": "1",
+        "fee_base": "0.001"
+      },
+      "expected": "0.999",
+      "verification": "offline synthetic calculation, not Astro execution"
+    },
+    {
+      "id": "V12",
+      "basis": "Own safety contract: partial grid position",
+      "input": {
+        "target_quote": "200",
+        "confirmed_quote": "80"
+      },
+      "expected": "PARTIAL",
+      "verification": "offline synthetic calculation, not Astro execution"
+    },
+    {
+      "id": "V13",
+      "basis": "Astro scheduler default batch arithmetic",
+      "input": {
+        "distinct_queued_keys": 40,
+        "batch_cap": 32
+      },
+      "expected": [
+        32,
+        8
+      ],
+      "verification": "offline synthetic calculation, not Astro execution"
+    },
+    {
+      "id": "V14",
+      "basis": "Astro recovered CAS SQL in disposable SQLite",
+      "input": {
+        "same_filled_order_replayed": 2
+      },
+      "expected": [
+        1,
+        0
+      ],
+      "verification": "offline synthetic calculation, not Astro execution"
+    },
+    {
+      "id": "V15",
+      "basis": "Own safety contract: weighted fills",
+      "input": {
+        "fills": [
+          [
+            "0.4",
+            "100"
+          ],
+          [
+            "0.6",
+            "102"
+          ]
+        ]
+      },
+      "expected": "101.2",
+      "verification": "offline synthetic calculation, not Astro execution"
+    },
+    {
+      "id": "V16",
+      "basis": "Own safety contract: cost gating",
+      "input": {
+        "gross_quote": "2",
+        "fees": "1",
+        "slippage": "0.7",
+        "risk_buffer": "0.4"
+      },
+      "expected": false,
+      "verification": "offline synthetic calculation, not Astro execution"
+    }
+  ],
+  "passed": 16,
+  "target_executed": false
+}

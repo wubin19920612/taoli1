@@ -1,8 +1,14 @@
+import asyncio
+
+import httpx
+
 from app.exchanges.base import (
     ExchangeAdapter,
+    ExchangeRequestError,
     compact_usdt_symbol,
     normalize_usdt_symbol,
     order_book_snapshot,
+    parse_datetime_ms,
     parse_float,
     utc_now,
 )
@@ -21,16 +27,32 @@ class AsterAdapter(ExchangeAdapter):
 
     async def fetch_future_tickers(self) -> list[MarketSnapshot]:
         data = await self.get_json(f"{self.futures_base_url}/fapi/v1/ticker/bookTicker")
-        intervals = await self._fetch_funding_intervals()
         rows = self._parse_book(data if isinstance(data, list) else [], MarketType.FUTURE)
-        return [
-            row.model_copy(
-                update={
-                    "funding_interval_hours": intervals.get(row.raw_symbol, row.funding_interval_hours),
-                }
+        intervals, premium, volumes = await asyncio.gather(
+            self._fetch_funding_intervals(),
+            self._fetch_premium_index(),
+            self._fetch_future_24h_volumes(),
+        )
+        enriched: list[MarketSnapshot] = []
+        for row in rows:
+            item = premium.get(row.raw_symbol, {})
+            funding = parse_float(item.get("lastFundingRate"))
+            enriched.append(
+                row.model_copy(
+                    update={
+                        "funding_interval_hours": intervals.get(
+                            row.raw_symbol, row.funding_interval_hours
+                        ),
+                        "funding_rate_pct": funding * 100 if funding is not None else None,
+                        "funding_next_time": parse_datetime_ms(item.get("nextFundingTime")),
+                        "mark_price": parse_float(item.get("markPrice")),
+                        "index_price": parse_float(item.get("indexPrice")),
+                        "volume_24h_usdt": volumes.get(row.raw_symbol),
+                        "data_source": "Aster public bookTicker + premiumIndex + ticker/24hr + fundingInfo",
+                    }
+                )
             )
-            for row in rows
-        ]
+        return enriched
 
     async def fetch_order_book(
         self,
@@ -86,12 +108,40 @@ class AsterAdapter(ExchangeAdapter):
     async def _fetch_funding_intervals(self) -> dict[str, int]:
         try:
             rows = await self.get_json(f"{self.futures_base_url}/fapi/v1/fundingInfo")
-        except Exception:
+        except (ExchangeRequestError, httpx.RequestError):
             return {}
         intervals: dict[str, int] = {}
         for item in rows if isinstance(rows, list) else []:
+            if not isinstance(item, dict):
+                continue
             symbol = item.get("symbol")
             interval = parse_float(item.get("fundingIntervalHours"))
             if symbol and interval is not None and interval > 0:
                 intervals[symbol] = int(interval)
         return intervals
+
+    async def _fetch_premium_index(self) -> dict[str, dict]:
+        try:
+            rows = await self.get_json(f"{self.futures_base_url}/fapi/v1/premiumIndex")
+        except (ExchangeRequestError, httpx.RequestError):
+            return {}
+        return {
+            item["symbol"]: item
+            for item in (rows if isinstance(rows, list) else [])
+            if isinstance(item, dict) and item.get("symbol")
+        }
+
+    async def _fetch_future_24h_volumes(self) -> dict[str, float]:
+        try:
+            rows = await self.get_json(f"{self.futures_base_url}/fapi/v1/ticker/24hr")
+        except (ExchangeRequestError, httpx.RequestError):
+            return {}
+        volumes: dict[str, float] = {}
+        for item in rows if isinstance(rows, list) else []:
+            if not isinstance(item, dict):
+                continue
+            symbol = item.get("symbol")
+            volume = parse_float(item.get("quoteVolume"))
+            if symbol and volume is not None and volume >= 0:
+                volumes[symbol] = volume
+        return volumes

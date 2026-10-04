@@ -1,3 +1,5 @@
+from datetime import UTC, datetime, timedelta
+
 import httpx
 import pytest
 
@@ -7,10 +9,15 @@ from app.exchanges.binance import BinanceAdapter
 from app.exchanges.bitget import BitgetAdapter
 from app.exchanges.bybit import BybitAdapter
 from app.exchanges.gate import GateAdapter
-from app.exchanges.hyperliquid import HyperliquidAdapter
 from app.exchanges.htx import HTXAdapter
-from app.exchanges.okx import OKXAdapter
-from app.models.market import MarketType
+from app.exchanges.hyperliquid import HyperliquidAdapter
+from app.exchanges.okx import OKXAdapter, okx_ticker_volume_24h_usdt
+from app.models.alert import AlertRule
+from app.models.market import MarketSnapshot, MarketType
+from app.models.settings import RiskSettings
+from app.services.alert_engine import AlertEngine
+from app.services.risk_labels import apply_risk_labels
+from app.services.spread_engine import build_opportunities
 
 
 class FakeResponse:
@@ -25,6 +32,43 @@ class FakeResponse:
 
     async def aclose(self):
         return None
+
+
+def test_okx_future_ticker_converts_base_volume_to_quote_volume() -> None:
+    volume = okx_ticker_volume_24h_usdt(
+        {
+            "last": "208.11",
+            "volCcy24h": "10631.506",
+        },
+        MarketType.FUTURE,
+    )
+
+    assert volume == pytest.approx(2_212_522.71366)
+
+
+def test_okx_ticker_prefers_explicit_quote_volume() -> None:
+    volume = okx_ticker_volume_24h_usdt(
+        {
+            "last": "208.11",
+            "volCcy24h": "10631.506",
+            "volCcyQuote24h": "2257828.35308",
+        },
+        MarketType.FUTURE,
+    )
+
+    assert volume == pytest.approx(2_257_828.35308)
+
+
+def test_okx_spot_ticker_keeps_quote_currency_volume() -> None:
+    volume = okx_ticker_volume_24h_usdt(
+        {
+            "last": "208.11",
+            "volCcy24h": "10631.506",
+        },
+        MarketType.SPOT,
+    )
+
+    assert volume == pytest.approx(10_631.506)
 
 
 class FakeClient:
@@ -204,6 +248,7 @@ async def test_okx_fetches_all_funding_rates_in_one_request() -> None:
     rows = await adapter.fetch_future_tickers()
 
     assert rows[0].symbol == "BTCUSDT"
+    assert rows[0].volume_24h_usdt == pytest.approx(100_500_000)
     assert rows[0].funding_rate_pct == 0.01
     assert rows[0].funding_next_rate_pct == 0.02
     assert rows[0].funding_interval_hours == 4
@@ -274,6 +319,77 @@ async def test_binance_uses_funding_info_interval_over_default() -> None:
 
 
 @pytest.mark.asyncio
+async def test_binance_anthropic_contract_quantity_is_base_asset() -> None:
+    client = FundingIntervalClient(
+        {
+            "ticker/bookTicker": [
+                {
+                    "symbol": "ANTHROPICUSDT",
+                    "bidPrice": "2158.1",
+                    "askPrice": "2158.2",
+                    "bidQty": "0.1",
+                    "askQty": "0.2",
+                }
+            ],
+            "premiumIndex": [
+                {
+                    "symbol": "ANTHROPICUSDT",
+                    "lastFundingRate": "0.0001",
+                }
+            ],
+            "fundingInfo": [],
+            "exchangeInfo": {
+                "symbols": [
+                    {
+                        "symbol": "ANTHROPICUSDT",
+                        "contractType": "TRADIFI_PERPETUAL",
+                        "status": "TRADING",
+                        "baseAsset": "ANTHROPIC",
+                    }
+                ]
+            },
+        }
+    )
+
+    [row] = await BinanceAdapter(client=client).fetch_future_tickers()
+
+    assert row.contract_size_multiplier == 1
+    assert any("exchangeInfo" in url for url in client.urls)
+
+
+@pytest.mark.asyncio
+async def test_okx_anthropic_contract_multiplier_uses_ct_val_and_ct_mult() -> None:
+    client = FundingIntervalClient(
+        {
+            "market/tickers?instType=SWAP": {
+                "data": [
+                    {
+                        "instId": "ANTHROPIC-USDT-SWAP",
+                        "bidPx": "210.1",
+                        "askPx": "210.2",
+                    }
+                ]
+            },
+            "funding-rate?instId=ANY": {"data": []},
+            "public/instruments?instType=SWAP": {
+                "data": [
+                    {
+                        "instId": "ANTHROPIC-USDT-SWAP",
+                        "ctVal": "1",
+                        "ctMult": "1",
+                    }
+                ]
+            },
+        }
+    )
+
+    [row] = await OKXAdapter(client=client).fetch_future_tickers()
+
+    assert row.contract_size_multiplier == 1
+    assert any("public/instruments" in url for url in client.urls)
+
+
+@pytest.mark.asyncio
 async def test_aster_spot_uses_api_base_url() -> None:
     client = FundingIntervalClient(
         {
@@ -315,6 +431,8 @@ async def test_aster_uses_funding_info_interval_over_default() -> None:
                     "fundingIntervalHours": 4,
                 }
             ],
+            "premiumIndex": [],
+            "ticker/24hr": [],
         }
     )
     adapter = AsterAdapter(client=client)
@@ -323,6 +441,77 @@ async def test_aster_uses_funding_info_interval_over_default() -> None:
 
     assert rows[0].funding_interval_hours == 4
     assert any("fundingInfo" in url for url in client.urls)
+
+
+@pytest.mark.asyncio
+async def test_aster_futures_metadata_enables_gate_spot_alert() -> None:
+    client = FundingIntervalClient({
+        "ticker/bookTicker": [{
+            "symbol": "TAKEUSDT", "bidPrice": "0.160060", "askPrice": "0.160700",
+        }],
+        "fundingInfo": [{"symbol": "TAKEUSDT", "fundingIntervalHours": 4}],
+        "premiumIndex": [{
+            "symbol": "TAKEUSDT", "lastFundingRate": "0.00285410",
+            "nextFundingTime": 1790164800000, "time": 1790150955000,
+            "markPrice": "0.16581116", "indexPrice": "0.16535568",
+        }],
+        "ticker/24hr": [{"symbol": "TAKEUSDT", "quoteVolume": "4902707.75"}],
+    })
+    [future] = await AsterAdapter(client=client).fetch_future_tickers()
+
+    assert future.funding_rate_pct == pytest.approx(0.285410)
+    assert future.funding_next_rate_pct is None
+    assert future.funding_interval_hours == 4
+    assert future.funding_next_time == datetime.fromtimestamp(1790164800, UTC)
+    assert future.volume_24h_usdt == pytest.approx(4_902_707.75)
+    assert future.mark_price == pytest.approx(0.16581116)
+    assert future.index_price == pytest.approx(0.16535568)
+    assert future.upstream_timestamp is None
+
+    now = datetime.now(UTC)
+    spot = MarketSnapshot(
+        symbol="TAKEUSDT", base="TAKE", exchange="gate", market_type=MarketType.SPOT,
+        bid=0.157748, ask=0.158922, volume_24h_usdt=2_470_465,
+        timestamp=now, raw_symbol="TAKE_USDT",
+    )
+    settings = RiskSettings()
+    [opportunity] = build_opportunities([spot, future], mode="SF")
+    opportunity = apply_risk_labels(opportunity, settings, now=now)
+    assert "MISSING_FUNDING" not in opportunity.risk_labels
+    rule = AlertRule(
+        name="gate-aster", types=["SF"], min_open_spread_pct=1,
+        favorable_funding_open_spread_pct=0.7, min_volume_24h_usdt=1_000_000,
+        consecutive_hits=3, cooldown_seconds=300,
+    )
+    engine = AlertEngine()
+    for step in range(2):
+        assert engine.evaluate([opportunity], [rule], now=now + timedelta(seconds=step * 5), risk_settings=settings) == []
+    assert len(engine.evaluate([opportunity], [rule], now=now + timedelta(seconds=10), risk_settings=settings)) == 1
+
+
+@pytest.mark.asyncio
+async def test_aster_missing_premium_preserves_book() -> None:
+    client = FailingFragmentClient({
+        "ticker/bookTicker": [{
+            "symbol": "TAKEUSDT", "bidPrice": "0.160060", "askPrice": "0.160700",
+        }],
+        "fundingInfo": [{"symbol": "TAKEUSDT", "fundingIntervalHours": 4}],
+        "ticker/24hr": [{"symbol": "TAKEUSDT", "quoteVolume": "4902707.75"}],
+    }, failing_fragment="premiumIndex")
+    [future] = await AsterAdapter(client=client).fetch_future_tickers()
+
+    assert future.funding_rate_pct is None
+    assert future.volume_24h_usdt == pytest.approx(4_902_707.75)
+    now = datetime.now(UTC)
+    spot = MarketSnapshot(
+        symbol="TAKEUSDT", base="TAKE", exchange="gate", market_type=MarketType.SPOT,
+        bid=0.157748, ask=0.158922, volume_24h_usdt=2_470_465,
+        timestamp=now, raw_symbol="TAKE_USDT",
+    )
+    [candidate] = build_opportunities([spot, future], mode="SF")
+    candidate = apply_risk_labels(candidate, RiskSettings(), now=now)
+    assert "MISSING_FUNDING" in candidate.risk_labels
+    assert AlertEngine().evaluate([candidate], [AlertRule(name="default", consecutive_hits=1)], now=now) == []
 
 
 @pytest.mark.asyncio
@@ -338,6 +527,8 @@ async def test_aster_leaves_interval_unknown_when_funding_info_fails() -> None:
                     "askQty": "1",
                 }
             ],
+            "premiumIndex": [{"symbol": "SBETUSDT", "lastFundingRate": "0.0001"}],
+            "ticker/24hr": [],
         },
         failing_fragment="fundingInfo",
     )
@@ -346,6 +537,26 @@ async def test_aster_leaves_interval_unknown_when_funding_info_fails() -> None:
     rows = await adapter.fetch_future_tickers()
 
     assert rows[0].funding_interval_hours is None
+    assert rows[0].funding_rate_pct == pytest.approx(0.01)
+
+
+@pytest.mark.asyncio
+async def test_aster_24h_volume_failure_preserves_funding() -> None:
+    client = FailingFragmentClient(
+        {
+            "ticker/bookTicker": [
+                {"symbol": "TAKEUSDT", "bidPrice": "0.16", "askPrice": "0.161"}
+            ],
+            "fundingInfo": [{"symbol": "TAKEUSDT", "fundingIntervalHours": 4}],
+            "premiumIndex": [{"symbol": "TAKEUSDT", "lastFundingRate": "-0.0005"}],
+        },
+        failing_fragment="ticker/24hr",
+    )
+
+    [future] = await AsterAdapter(client=client).fetch_future_tickers()
+
+    assert future.funding_rate_pct == pytest.approx(-0.05)
+    assert future.volume_24h_usdt is None
 
 
 @pytest.mark.asyncio
@@ -367,6 +578,7 @@ async def test_gate_uses_contract_funding_interval_when_ticker_omits_it() -> Non
                 {
                     "name": "2Z_USDT",
                     "funding_interval": 14400,
+                    "quanto_multiplier": "0.01",
                 }
             ],
         }
@@ -376,7 +588,39 @@ async def test_gate_uses_contract_funding_interval_when_ticker_omits_it() -> Non
     rows = await adapter.fetch_future_tickers()
 
     assert rows[0].funding_interval_hours == 4
+    assert rows[0].contract_size_multiplier == 0.01
     assert any("futures/usdt/contracts" in url for url in client.urls)
+
+
+@pytest.mark.asyncio
+async def test_bitget_anthropic_contract_multiplier_uses_size_multiplier() -> None:
+    client = FundingIntervalClient(
+        {
+            "mix/market/tickers": {
+                "data": [
+                    {
+                        "symbol": "ANTHROPICUSDT",
+                        "bidPr": "2108.87",
+                        "askPr": "2109.27",
+                    }
+                ]
+            },
+            "current-fund-rate": {"data": []},
+            "mix/market/contracts": {
+                "data": [
+                    {
+                        "symbol": "ANTHROPICUSDT",
+                        "sizeMultiplier": "0.01",
+                    }
+                ]
+            },
+        }
+    )
+
+    [row] = await BitgetAdapter(client=client).fetch_future_tickers()
+
+    assert row.contract_size_multiplier == 0.01
+    assert any("mix/market/contracts" in url for url in client.urls)
 
 
 @pytest.mark.asyncio
@@ -544,8 +788,29 @@ async def test_hyperliquid_parses_perp_contexts_from_info_endpoint() -> None:
     assert rows[0].volume_24h_usdt == 1234567.89
 
 
+def test_hyperliquid_ignores_delisted_perp_assets_with_residual_prices() -> None:
+    adapter = HyperliquidAdapter(client=FakePostClient({}))
+
+    rows = adapter._parse_perp_payload(
+        [
+            {
+                "universe": [
+                    {"name": "vntl:ANTHROPIC", "isDelisted": True},
+                    {"name": "io:ANTH", "isDelisted": False},
+                ]
+            },
+            [
+                {"midPx": "2100", "markPx": "2100", "dayNtlVlm": "1000000"},
+                {"midPx": "2200", "markPx": "2200", "dayNtlVlm": "2000000"},
+            ],
+        ]
+    )
+
+    assert [row.raw_symbol for row in rows] == ["io:ANTH"]
+
+
 @pytest.mark.asyncio
-async def test_hyperliquid_fetches_stock_perp_dexes_and_keeps_best_symbol() -> None:
+async def test_hyperliquid_fetches_stock_perp_dexes_without_merging_same_ticker() -> None:
     client = FakePostClient(
         {
             ("perpDexs", None): [
@@ -613,13 +878,79 @@ async def test_hyperliquid_fetches_stock_perp_dexes_and_keeps_best_symbol() -> N
         ("https://api.hyperliquid.xyz/info", "metaAndAssetCtxs", "cash"),
     ]
     assert {row.symbol for row in rows} == {"BTCUSDT", "TSLAUSDT", "AAPLUSDT"}
-    tsla = next(row for row in rows if row.symbol == "TSLAUSDT")
-    assert tsla.raw_symbol == "cash:TSLA"
-    assert tsla.bid == 405.0
-    assert tsla.ask == 405.0
-    assert tsla.mark_price == 406.0
-    assert tsla.volume_24h_usdt == 5_000_000
-    assert sum(1 for row in rows if row.symbol == "TSLAUSDT") == 1
+    tsla = [row for row in rows if row.symbol == "TSLAUSDT"]
+    assert {(row.dex, row.raw_symbol) for row in tsla} == {
+        ("cash", "cash:TSLA"),
+        ("xyz", "xyz:TSLA"),
+    }
+    cash_tsla = next(row for row in tsla if row.dex == "cash")
+    assert cash_tsla.bid == 405.0
+    assert cash_tsla.ask == 405.0
+    assert cash_tsla.mark_price == 406.0
+    assert cash_tsla.volume_24h_usdt == 5_000_000
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_anth_uses_real_l2_book_and_keeps_dex_identity() -> None:
+    client = FakePostClient(
+        {
+            ("perpDexs", None): [{"name": "io", "fullName": "Hyperliquid IO"}],
+            ("metaAndAssetCtxs", None): [{"universe": []}, []],
+            ("predictedFundings", None): [],
+            ("metaAndAssetCtxs", "io"): [
+                {"universe": [{"name": "io:ANTH", "szDecimals": 3}]},
+                [{"midPx": "2165", "markPx": "2166", "dayNtlVlm": "123456"}],
+            ],
+            ("l2Book", None): {
+                "time": 1790092800123,
+                "levels": [
+                    [{"px": "2164", "sz": "2"}],
+                    [{"px": "2166", "sz": "3"}],
+                ],
+            },
+        }
+    )
+
+    rows = await HyperliquidAdapter(client=client).fetch_future_tickers()
+
+    [anth] = [row for row in rows if row.raw_symbol == "io:ANTH"]
+    assert anth.dex == "io"
+    assert anth.bid == 2164
+    assert anth.ask == 2166
+    assert anth.bid_size == 2
+    assert anth.ask_size == 3
+    assert anth.contract_size_multiplier == 1
+    assert anth.upstream_timestamp is not None
+    assert anth.is_estimated is False
+    assert anth.estimated_fields == []
+    assert "l2Book" in (anth.data_source or "")
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_anth_book_failure_keeps_other_markets_and_reports_error() -> None:
+    client = FakePostClient(
+        {
+            ("perpDexs", None): [{"name": "io"}],
+            ("metaAndAssetCtxs", None): [
+                {"universe": [{"name": "BTC", "szDecimals": 5}]},
+                [{"midPx": "100", "markPx": "100", "dayNtlVlm": "1000"}],
+            ],
+            ("predictedFundings", None): [],
+            ("metaAndAssetCtxs", "io"): [
+                {"universe": [{"name": "io:ANTH", "szDecimals": 3}]},
+                [{"midPx": "2165", "markPx": "2166", "dayNtlVlm": "123456"}],
+            ],
+        }
+    )
+    adapter = HyperliquidAdapter(client=client)
+
+    rows = await adapter.fetch_future_tickers()
+
+    assert {row.raw_symbol for row in rows} == {"BTC", "io:ANTH"}
+    anth = next(row for row in rows if row.raw_symbol == "io:ANTH")
+    assert anth.is_estimated is True
+    assert {"bid", "ask"}.issubset(anth.estimated_fields)
+    assert "hyperliquid:future:io:ANTH" in adapter.market_errors
 
 
 @pytest.mark.asyncio
@@ -762,8 +1093,8 @@ def test_exchange_adapters_use_shared_get_json(adapter_cls, monkeypatch) -> None
     asyncio.run(adapter.fetch_future_tickers())
 
     expected_calls_by_adapter = {
-        AsterAdapter: 3,
-        BitgetAdapter: 3,
+        AsterAdapter: 5,
+        BitgetAdapter: 5,
         BybitAdapter: 2,
         GateAdapter: 3,
         HTXAdapter: 3,
