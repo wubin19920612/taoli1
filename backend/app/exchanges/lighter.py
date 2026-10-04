@@ -201,7 +201,7 @@ class LighterAdapter(ExchangeAdapter):
     details_refresh_seconds = 60
     details_fallback_seconds = 300
     max_scanner_perp_markets = 48
-    priority_perp_symbols = frozenset({"ANTHROPIC", "HOOD"})
+    priority_perp_symbols = frozenset({"ANTHROPIC", "HOOD", "OPENAI"})
 
     def __init__(self, client=None):
         super().__init__(client)
