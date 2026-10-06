@@ -13,7 +13,8 @@
 - 分支：`codex/frontend-localization-polish`。
 - 本地基线：`f1d998c41f0289607f16158b3cc0c3aa0f0f9921`。
 - 开始时生产应用及两份镜像：`9a6810883dd163f340faa9ee37eee172f8d208d6`；生产跟踪文件干净，两个容器健康。
-- 功能提交、GitHub 推送、镜像任务、备份及部署结果在最终验收后补充到本文。
+- 功能提交：`f8e871ae76d429700b7f7da0685c150055f81e4c`，已推送当前 GitHub 分支，没有 force push。
+- 本文最终验收记录通过后续文档提交推送；生产服务器 HEAD 和运行镜像固定到上述功能提交，不为文档变更重启服务。
 
 ## 根因与关键入口
 
@@ -42,12 +43,20 @@
 
 ## 线上交付
 
-- 待验证完成后记录：实现提交、两份 SHA 固定镜像工作流、数据库备份路径与校验、服务器版本、容器及健康接口、真实鉴权和两种屏幕宽度的页面结果。
-- 生产是 2 GiB 主机，只在 GitHub Actions 构建镜像；按 `deploy/linux-update.sh` 先备份 SQLite、校验，再 `git pull --ff-only`、拉取固定 SHA 镜像并 `up -d --no-build --wait`。
+- GitHub Actions `Build production images` 工作流 `37489093086`：backend、frontend 两个任务均成功；部署前在服务器分别验证两份功能 SHA 镜像 manifest 存在。
+- 主库备份：`backups/radar-before-f8e871ae76d4-20261006T154103Z.db`，610230272 字节；`integrity_check=ok`，容器/宿主机 SHA-256 一致：`99e1ea9bb9d7f3784738a43691e4e2d7d96838335f7e8feb7ea33f8c3e9df28c`。
+- 研究库备份：`backups/squeeze-route-before-f8e871ae76d4-20261006T154103Z.db`，217088 字节；`integrity_check=ok`，SHA-256 一致：`1e9d5a3ccce55eac100f6a998e2bfd94e58fb72b2d615e5ee9b674e36f8be937`。
+- 生产是 2 GiB 主机，只在 GitHub Actions 构建镜像；`deploy/linux-update.sh` 已完成上述备份/校验、`git pull --ff-only`、拉取固定 SHA 镜像和 `up -d --no-build --wait`，执行结果为成功。没有生产构建、数据库恢复、修改密码或删除卷。
+- 既有备份保留策略移除 2 份较旧主库备份和 2 份较旧研究库备份；本次两份备份均保留。
+- 服务器 HEAD 与 backend/frontend 镜像标签均为 `f8e871ae76d429700b7f7da0685c150055f81e4c`；跟踪文件工作区干净，两容器 healthy。
+- 2026-10-06 23:43（Asia/Shanghai）健康采样：前端代理与后端直连 `/api/health` 均返回 `status=ok`，11778 个市场，`exchange_errors={}`；前端首页 HTTP 200。
+- 线上 Chromium：390px 手机和 1440px 桌面均使用线上构建与真实受保护删除接口，缺失密码/错误密码/有效密码依次返回 `[401, 401, 200]`；错误候选不持久化，成功后记住密码并移除合成卡片。
+- 页面无横向溢出、无 pageerror；合成 ID 确认线上不存在，只执行无影响的删除，不新增或删除真实标的；验收前后服务器标的对列表完全一致。
 
 ## 已知边界与未跟踪产物
 
 - 截图中的 HTTP 访问方式仍是既有部署边界；浏览器发送密码及本机存储的安全性仍依赖可信设备和 HTTPS。本任务没有更换认证协议、开启公开无密码写入或修改生产密码。
 - 开始时已有 `.worktrees/`、多份 `backend/.pytest_*`、其他模块交接记录、`output/` 截图/脚本和研究产物，全部保留，不暂存、不删除、不覆盖。
-- 本任务未跟踪验收产物：`output/verify-pair-preset-auth-20261006.mjs`、`output/pair-preset-auth-*-20261006.png`；测试日志在 `output/pair-preset-auth-*-20261006.log`，构建结果在忽略的 `frontend/dist/`。
+- 本任务未跟踪验收产物：`output/verify-pair-preset-auth-20261006.mjs`、本地/生产的手机/桌面 `output/pair-preset-auth-*-20261006.png`；测试、构建、部署、健康与线上验收日志在忽略的 `output/pair-preset-auth-*-20261006.log`，构建结果在忽略的 `frontend/dist/`。验收密码仅在受控进程内存中使用，不写入源码、日志、截图或仓库。
+- 实现、测试、GitHub 推送、备份、生产部署和线上验收已完成。本任务只提交 3 个前端源码文件、2 个测试文件及本文；所有其他改动和未跟踪产物保持原状。
 - 下一模块请新建任务，以本记录作为交接。若再次出现同类问题，先检查当前设备/访问源的凭据及实际 401 状态，不通过取消后端鉴权来修复。
