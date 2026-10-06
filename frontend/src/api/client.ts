@@ -157,9 +157,15 @@ function buildUrl(path: string, params?: object) {
   return url.toString();
 }
 
-function authHeaders(): HeadersInit {
-  const password = window.localStorage.getItem("dashboard_password") ?? "";
+function authHeaders(password = window.localStorage.getItem("dashboard_password") ?? ""): HeadersInit {
   return password ? { "X-Dashboard-Password": password } : {};
+}
+
+export class ApiError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message);
+    this.name = "ApiError";
+  }
 }
 
 const PROXY_ERROR_MESSAGES: Partial<Record<number, string>> = {
@@ -180,6 +186,9 @@ function extractErrorMessage(text: string, status: number): string {
   try {
     const parsed = JSON.parse(normalized) as { detail?: unknown };
     if (parsed && typeof parsed.detail === "string" && parsed.detail.trim()) {
+      if (status === 401 && parsed.detail === "Invalid dashboard password") {
+        return "本设备未保存有效的面板密码，请验证密码后重试。";
+      }
       return parsed.detail;
     }
   } catch {
@@ -206,7 +215,7 @@ async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T>
   });
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(extractErrorMessage(text, response.status));
+    throw new ApiError(extractErrorMessage(text, response.status), response.status);
   }
   return response.json() as Promise<T>;
 }
@@ -351,10 +360,12 @@ export async function getFloatingWatchSettings(): Promise<FloatingWatchSettings>
 export async function mutateFloatingWatchItem(
   action: "add" | "remove",
   itemType: "symbol" | "pair",
-  value: string
+  value: string,
+  password?: string
 ): Promise<FloatingWatchSettings> {
   return fetchJson<FloatingWatchSettings>("/settings/floating-watch/items", {
     method: "POST",
+    headers: authHeaders(password),
     body: JSON.stringify({ action, item_type: itemType, value })
   });
 }
@@ -985,25 +996,32 @@ export async function listPairSpreadPresets(): Promise<PairSpreadPreset[]> {
 }
 
 export async function mergePairSpreadPresets(
-  presets: PairSpreadPreset[]
+  presets: PairSpreadPreset[],
+  password?: string
 ): Promise<PairSpreadPreset[]> {
   return fetchJson<PairSpreadPreset[]>("/pair-spread/presets/merge", {
     method: "POST",
+    headers: authHeaders(password),
     body: JSON.stringify({ presets })
   });
 }
 
 export async function upsertPairSpreadPreset(
-  preset: PairSpreadPreset
+  preset: PairSpreadPreset,
+  password?: string
 ): Promise<PairSpreadPreset> {
   return fetchJson<PairSpreadPreset>(`/pair-spread/presets/${encodeURIComponent(preset.id)}`, {
     method: "PUT",
+    headers: authHeaders(password),
     body: JSON.stringify(preset)
   });
 }
 
-export async function deletePairSpreadPreset(id: string): Promise<void> {
-  await fetchJson(`/pair-spread/presets/${encodeURIComponent(id)}`, { method: "DELETE" });
+export async function deletePairSpreadPreset(id: string, password?: string): Promise<void> {
+  await fetchJson(`/pair-spread/presets/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: authHeaders(password)
+  });
 }
 
 export async function listHyperliquidMarkets(): Promise<HyperliquidDexMarket[]> {

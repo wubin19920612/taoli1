@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { listOpportunities, lookupInstrument } from "../src/api/client";
+import { deletePairSpreadPreset, listOpportunities, lookupInstrument } from "../src/api/client";
 
 function mockResponse(body: string, status: number, contentType: string): void {
   vi.stubGlobal(
@@ -17,6 +17,7 @@ function mockResponse(body: string, status: number, contentType: string): void {
 describe("API error messages", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    window.localStorage.clear();
   });
 
   it.each([
@@ -61,5 +62,26 @@ describe("API error messages", () => {
     await expect(listOpportunities({})).rejects.toThrow(
       "后端服务暂时不可用，可能正在重启，请稍后重试。"
     );
+  });
+
+  it("exposes the HTTP status and translates a dashboard password rejection", async () => {
+    mockResponse(JSON.stringify({ detail: "Invalid dashboard password" }), 401, "application/json");
+
+    await expect(deletePairSpreadPreset("BTC")).rejects.toMatchObject({
+      status: 401,
+      message: "本设备未保存有效的面板密码，请验证密码后重试。"
+    });
+  });
+
+  it("tries a supplied password without overwriting the saved credential", async () => {
+    window.localStorage.setItem("dashboard_password", "old-password");
+    mockResponse(JSON.stringify({ ok: true }), 200, "application/json");
+
+    await deletePairSpreadPreset("io:OAI/OPENAI", "candidate-password");
+
+    const [url, options] = vi.mocked(fetch).mock.calls[0];
+    expect(String(url)).toContain("io%3AOAI%2FOPENAI");
+    expect(new Headers(options?.headers).get("X-Dashboard-Password")).toBe("candidate-password");
+    expect(window.localStorage.getItem("dashboard_password")).toBe("old-password");
   });
 });
