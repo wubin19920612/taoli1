@@ -9,6 +9,7 @@ from app.models.astro import AstroAlertActionResult
 from app.models.market import MarketSnapshot, MarketType
 from app.models.orderbook import DepthValidationResult
 from app.models.settings import AstroCardSettings, RiskSettings
+from app.services.astro_alerts import AstroAlertService
 from app.services.snapshot_store import SnapshotStore
 
 
@@ -66,6 +67,21 @@ class FakeAstroSubmitService:
         )
 
 
+class RecordingAstroClient:
+    def __init__(self) -> None:
+        self.added = []
+
+    async def list_pairs(self):
+        return []
+
+    async def add_pair(self, pair):
+        self.added.append(pair)
+        return {"code": 0}
+
+    async def update_pair(self, pair):
+        raise AssertionError("Manual acceptance must not update an existing card")
+
+
 class FakeOrderBookValidator:
     def __init__(self, result: DepthValidationResult) -> None:
         self.result = result
@@ -110,7 +126,10 @@ class FailingAstroSettingsWriteRepository(RiskSettingsRepository):
         raise RuntimeError("database unavailable")
 
 
-def instrument_app(*, dashboard_password: str = "", astro_dry_run_only: bool = True):
+def instrument_app(
+    *, dashboard_password: str = "", astro_dry_run_only: bool = True,
+    astro_manual_card_create: bool = False,
+):
     store = SnapshotStore()
     store.set_all_markets(
         [
@@ -124,6 +143,7 @@ def instrument_app(*, dashboard_password: str = "", astro_dry_run_only: bool = T
             database_url="sqlite:///:memory:",
             dashboard_password=dashboard_password,
             astro_dry_run_only=astro_dry_run_only,
+            astro_manual_card_create=astro_manual_card_create,
         ),
     )
 
@@ -193,37 +213,57 @@ def test_instrument_astro_preview_offers_mixed_gc_aster_routes(aster_buy: bool) 
     ]
 
 
-def test_rh_lighter_market_can_be_previewed_but_not_created() -> None:
+@pytest.mark.parametrize("rh_buy", [False, True])
+@pytest.mark.parametrize("counterparty", ["bitget", "binance", "lighter"])
+def test_rh_lighter_market_allows_authenticated_manual_create(
+    counterparty: str, rh_buy: bool,
+) -> None:
     app = instrument_app(dashboard_password="secret")
+    buy, sell = ("rh-lighter", counterparty) if rh_buy else (counterparty, "rh-lighter")
     app.state.snapshot_store.set_all_markets([
-        market("rh-lighter", bid=99, ask=100), market("binance", bid=101, ask=102)
+        market(buy, bid=99, ask=100), market(sell, bid=101, ask=102)
     ])
     service = FakeAstroSubmitService()
     app.state.astro_alert_service = service
+    app.state.orderbook_validator = FakeOrderBookValidator(
+        DepthValidationResult(
+            passed=True, target_notional_usdt=1000,
+            buy_filled_usdt=1000, sell_filled_usdt=1000, buy_vwap=100, sell_vwap=101,
+            quoted_open_pct=1, executable_open_pct=1, effective_executable_edge_pct=1,
+            slippage_loss_pct=0, blockers=[], warnings=[],
+        )
+    )
     selected = {
-        **route(), "buy_exchange": "rh-lighter", "sell_exchange": "binance"
+        **route(), "buy_exchange": buy, "sell_exchange": sell
     }
 
     with TestClient(app) as client:
         preview = client.post("/api/astro/instrument/preview", json=selected)
+        unauthorized = client.post("/api/astro/instrument/card", json={
+            "route": selected, "card": {"open_enabled": False, "card_variant": "non_gc"},
+            "expected_open_spread_pct": 1,
+        })
         create = client.post(
             "/api/astro/instrument/card",
             headers={"X-Dashboard-Password": "secret"},
             json={
                 "route": selected,
-                "card": {},
+                "card": {"open_enabled": False, "card_variant": "non_gc"},
                 "expected_open_spread_pct": 1,
             },
         )
-
     assert preview.status_code == 200
-    assert preview.json()["can_submit"] is False
-    assert "公开只读行情" in preview.json()["blockers"][0]
-    assert "未开放 Astro 建卡或交易执行" in preview.json()["blockers"][0]
-    assert create.status_code == 422
-    assert "公开只读行情" in create.json()["detail"]
-    assert "未开放 Astro 建卡或交易执行" in create.json()["detail"]
-    assert service.calls == []
+    assert preview.json()["can_submit"] is True
+    assert preview.json()["blockers"] == []
+    assert preview.json()["pair"]["buyEx"] == buy
+    assert preview.json()["pair"]["sellEx"] == sell
+    assert not any("gc-rh-lighter" in str(item) for item in preview.json()["route_variants"])
+    assert unauthorized.status_code == 401
+    assert create.status_code == 200
+    assert len(service.calls) == 1
+    assert service.calls[0].buy_exchange == buy
+    assert service.calls[0].sell_exchange == sell
+    assert service.requests[0].open_enabled is False
 
 
 def test_instrument_astro_preview_explains_when_confirm_will_write_to_astro() -> None:
@@ -234,6 +274,59 @@ def test_instrument_astro_preview_explains_when_confirm_will_write_to_astro() ->
 
     assert response.status_code == 200
     assert "确认创建后会实际写入 Astro" in response.json()["warnings"][0]
+
+
+def test_rh_lighter_manual_api_reaches_sdk_with_exact_paused_openai_card() -> None:
+    app = instrument_app(
+        dashboard_password="secret", astro_dry_run_only=False, astro_manual_card_create=True,
+    )
+    selected = {
+        **route(), "symbol": "OPENAIUSDT", "buy_exchange": "bitget",
+        "sell_exchange": "rh-lighter",
+    }
+    app.state.snapshot_store.set_all_markets([
+        market("bitget", bid=99, ask=100).model_copy(update={
+            "symbol": "OPENAIUSDT", "base": "OPENAI", "raw_symbol": "OPENAIUSDT",
+        }),
+        market("rh-lighter", bid=101, ask=102).model_copy(update={
+            "symbol": "OPENAIUSDT", "base": "OPENAI", "raw_symbol": "OPENAI",
+            "funding_interval_hours": 1,
+        }),
+    ])
+    sdk_client = RecordingAstroClient()
+    app.state.astro_alert_service = AstroAlertService(
+        sdk_client, app.state.settings, add_restart_delay_seconds=0,
+    )
+    app.state.orderbook_validator = FakeOrderBookValidator(
+        DepthValidationResult(
+            passed=True, target_notional_usdt=1000,
+            buy_filled_usdt=1000, sell_filled_usdt=1000, buy_vwap=100, sell_vwap=101,
+            quoted_open_pct=1, executable_open_pct=1, effective_executable_edge_pct=1,
+            slippage_loss_pct=0, blockers=[], warnings=[],
+        )
+    )
+    with TestClient(app) as client:
+        preview = client.post("/api/astro/instrument/preview", json=selected)
+        response = client.post(
+            "/api/astro/instrument/card", headers={"X-Dashboard-Password": "secret"},
+            json={
+                "route": selected,
+                "expected_open_spread_pct": preview.json()["source_open_spread_pct"],
+                "card": {
+                    "open_enabled": False, "card_variant": "non_gc", "max_trade_usdt": 3000,
+                    "leverage": 5, "min_notional": 20, "max_notional": 30,
+                },
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "created"
+    assert len(sdk_client.added) == 1
+    assert sdk_client.added[0].items() >= {
+        "name": "OPENAI", "type": "FF", "buyEx": "bitget", "sellEx": "rh-lighter",
+        "status": False, "disableOpen": True, "maxTradeUSDT": "3000", "leverage": "5",
+        "minNotional": "20", "maxNotional": "30",
+    }.items()
 
 
 def test_instrument_astro_preview_surfaces_global_blacklist() -> None:

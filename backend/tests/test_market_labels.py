@@ -91,6 +91,33 @@ def test_unsupported_exchange_never_creates_single_sided_gc_route() -> None:
     assert astro_exchange_route_variants("aster", "htx") == [("aster", "htx")]
 
 
+@pytest.mark.parametrize("rh_buy", [False, True])
+@pytest.mark.parametrize("exchange", ["binance", "bybit", "gate", "hl", "lighter", "okx"])
+def test_rh_lighter_preserves_its_instance_when_other_leg_uses_gc(
+    exchange: str, rh_buy: bool,
+) -> None:
+    ordinary = ("rh-lighter", exchange) if rh_buy else (exchange, "rh-lighter")
+    gc_route = ("rh-lighter", f"gc-{exchange}") if rh_buy else (f"gc-{exchange}", "rh-lighter")
+
+    assert astro_exchange_id("rh-lighter", MarketType.FUTURE) == "rh-lighter"
+    assert astro_exchange_route_variants(*ordinary) == [ordinary, gc_route]
+    assert astro_exchange_route_variants(*ordinary, "non_gc") == [ordinary]
+    assert astro_exchange_route_variants(*ordinary, "gc") == [gc_route]
+    assert astro_exchange_route_variants(*gc_route, "gc") == [gc_route]
+    assert astro_exchange_route_variants(*gc_route, "non_gc") == []
+
+
+@pytest.mark.parametrize("exchange", ["bitget", "bitgetr", "aster"])
+@pytest.mark.parametrize("rh_buy", [False, True])
+def test_rh_lighter_and_non_gc_exchange_never_invent_a_gc_rh_route(
+    exchange: str, rh_buy: bool,
+) -> None:
+    ordinary = ("rh-lighter", exchange) if rh_buy else (exchange, "rh-lighter")
+    assert astro_exchange_route_variants(*ordinary) == [ordinary]
+    assert astro_exchange_route_variants(*ordinary, "non_gc") == [ordinary]
+    assert astro_exchange_route_variants(*ordinary, "gc") == []
+
+
 @pytest.mark.parametrize("exchange", ["binance", "bybit", "gate", "hl", "lighter", "okx"])
 @pytest.mark.parametrize("aster_buy", [False, True])
 def test_aster_keeps_its_id_while_other_leg_gets_gc_variant(

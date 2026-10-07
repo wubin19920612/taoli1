@@ -852,6 +852,51 @@ describe("InstrumentLookupPage", () => {
     expect(within(section).getByText("2 / 5 组")).not.toBeNull();
   });
 
+  it("submits a paused manual Bitget to RH Lighter card using the exact native route", async () => {
+    window.history.replaceState({}, "", "/?page=instrument&symbol=OPENAIUSDT");
+    const rhLookup = {
+      ...lookupResult, query: "OPENAIUSDT", symbol: "OPENAIUSDT", base: "OPENAI",
+      spreads: [{
+        ...lookupResult.spreads[1], id: "bitget:future->rh-lighter:future",
+        buy_exchange: "bitget", sell_exchange: "rh-lighter", opportunity_type: "FF",
+      }],
+    };
+    const rhPlan = {
+      ...astroPlan, symbol: "OPENAIUSDT", card_variant: "non_gc",
+      pair: { ...astroPlan.pair, name: "OPENAI", type: "FF", buyEx: "bitget", sellEx: "rh-lighter" },
+      route_variants: [{ card_variant: "non_gc", buy_exchange: "bitget", sell_exchange: "rh-lighter" }],
+    };
+    const fallbackFetch = vi.mocked(fetch).getMockImplementation();
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/instruments/")) return Response.json(rhLookup);
+      if (url.includes("/astro/instrument/preview")) return Response.json(rhPlan);
+      if (url.includes("/astro/instrument/card")) return Response.json({
+        enabled: true, status: "created", action: "add",
+        message: "已创建暂停卡片 OPENAI FF bitget->rh-lighter", warnings: [],
+      });
+      return fallbackFetch!(input, init);
+    });
+    render(<InstrumentLookupPage />);
+    await screen.findByText("跨市场差价");
+    await userEvent.click(screen.getAllByRole("button", { name: /建卡/ })[0]);
+    await screen.findByText("创建 Astro 卡片");
+    expect(screen.queryByText(/未开放 Astro 建卡或交易执行/)).toBeNull();
+    expect(screen.getByRole("switch", { name: "创建后允许开仓" }).getAttribute("aria-checked")).toBe("false");
+    await userEvent.click(screen.getByRole("button", { name: "确认创建" }));
+    await waitFor(() => {
+      expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("/astro/instrument/card"))).toBe(true);
+    });
+    const createCall = vi.mocked(fetch).mock.calls.find(([input]) => String(input).includes("/astro/instrument/card"));
+    const payload = JSON.parse(String(createCall?.[1]?.body));
+    expect(payload.route).toEqual({
+      symbol: "OPENAIUSDT", buy_exchange: "bitget", buy_market_type: "future",
+      sell_exchange: "rh-lighter", sell_market_type: "future",
+    });
+    expect(payload.card.open_enabled).toBe(false);
+    expect(payload.card.card_variant).toBe("non_gc");
+  });
+
   it("reverses both route legs and uses the reverse ask and bid when creating a card", async () => {
     (fetch as ReturnType<typeof vi.fn>).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);

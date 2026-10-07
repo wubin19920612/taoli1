@@ -13,7 +13,7 @@ _ASTRO_GC_EXCHANGE_IDS = {
     "lighter": "gc-lighter",
     "okx": "gc-okx",
 }
-_ASTRO_NON_GC_EXCHANGE_IDS = {"aster", "bitget", "bitgetr"}
+_ASTRO_NON_GC_EXCHANGE_IDS = {"aster", "bitget", "bitgetr", "rh-lighter"}
 
 
 def normalize_market_symbol(value: str) -> str:

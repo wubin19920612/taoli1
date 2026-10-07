@@ -11,17 +11,17 @@ from app.services.data_filters import symbol_is_excluded
 from app.services.market_labels import astro_exchange_route_variants
 from app.services.astro_planner import AstroPairPlanner, AstroPlannerConfig
 
-READ_ONLY_ASTRO_EXCHANGES = frozenset({"rh-lighter"})
-READ_ONLY_ASTRO_MESSAGE = (
-    "RH-Lighter 已接入官方公开只读行情，但本任务未开放 Astro 建卡或交易执行"
+AUTOMATIC_ASTRO_BLOCKED_EXCHANGES = frozenset({"rh-lighter"})
+AUTOMATIC_ASTRO_BLOCK_MESSAGE = (
+    "RH-Lighter 已支持人工建卡；自动建卡、自动预建及实盘实验仍未开放"
 )
 
 
-def read_only_astro_exchanges(opportunity: Opportunity) -> set[str]:
+def automatic_astro_blocked_exchanges(opportunity: Opportunity) -> set[str]:
     return {
-        opportunity.buy_exchange.lower(),
-        opportunity.sell_exchange.lower(),
-    } & READ_ONLY_ASTRO_EXCHANGES
+        opportunity.buy_exchange.strip().lower(),
+        opportunity.sell_exchange.strip().lower(),
+    } & AUTOMATIC_ASTRO_BLOCKED_EXCHANGES
 
 
 class AstroPairClient(Protocol):
@@ -231,12 +231,12 @@ class AstroAlertService:
                 action="none",
                 message=disabled_message,
             )
-        if read_only_astro_exchanges(opportunity):
+        if not manual_override and automatic_astro_blocked_exchanges(opportunity):
             return AstroAlertActionResult(
                 enabled=True,
                 status="skipped",
                 action="unsupported",
-                message=READ_ONLY_ASTRO_MESSAGE,
+                message=AUTOMATIC_ASTRO_BLOCK_MESSAGE,
             )
         manual_warnings: list[str] = []
 

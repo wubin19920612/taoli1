@@ -548,11 +548,10 @@ async def test_lighter_unknown_counterparty_never_calls_astro() -> None:
     [
         "handle_alert",
         "handle_live_pilot",
-        "handle_manual_create",
         "handle_preadd",
     ],
 )
-async def test_rh_lighter_is_read_only_across_all_astro_create_paths(
+async def test_rh_lighter_remains_blocked_for_automatic_astro_create_paths(
     handler_name: str,
 ) -> None:
     client = FakeAstroClient()
@@ -576,11 +575,109 @@ async def test_rh_lighter_is_read_only_across_all_astro_create_paths(
 
     assert result.status == "skipped"
     assert result.action == "unsupported"
-    assert "公开只读行情" in result.message
-    assert "未开放 Astro 建卡或交易执行" in result.message
+    assert "人工建卡" in result.message
+    assert "自动建卡" in result.message
     assert client.list_calls == 0
     assert client.added == []
     assert client.updated == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rh_buy", [False, True])
+@pytest.mark.parametrize("card_variant", ["both", "non_gc"])
+async def test_manual_rh_lighter_create_keeps_the_native_route_and_paused_state(
+    rh_buy: bool, card_variant: str,
+) -> None:
+    client = FakeAstroClient()
+    service = AstroAlertService(
+        client,
+        Settings(astro_manual_card_create=True, astro_dry_run_only=False),
+        add_restart_delay_seconds=0,
+    )
+    buy, sell = ("rh-lighter", "bitget") if rh_buy else ("bitget", "rh-lighter")
+    selected = opportunity().model_copy(update={"buy_exchange": buy, "sell_exchange": sell})
+
+    result = await service.handle_manual_create(
+        selected, AstroCardCreateRequest(card_variant=card_variant, open_enabled=False)
+    )
+
+    assert result.status == "created"
+    assert [(pair["buyEx"], pair["sellEx"]) for pair in client.added] == [(buy, sell)]
+    assert client.added[0]["status"] is False
+    assert client.added[0]["disableOpen"] is True
+    assert client.updated == []
+
+
+@pytest.mark.asyncio
+async def test_manual_rh_lighter_create_does_not_rewrite_an_existing_card() -> None:
+    client = FakeAstroClient(pairs=[{
+        "name": "BTC", "type": "FF", "buyEx": "bitget", "sellEx": "rh-lighter",
+        "status": True, "disableOpen": False,
+    }])
+    service = AstroAlertService(
+        client,
+        Settings(astro_manual_card_create=True, astro_dry_run_only=False),
+        add_restart_delay_seconds=0,
+    )
+    selected = opportunity().model_copy(update={
+        "buy_exchange": "bitget", "sell_exchange": "rh-lighter",
+    })
+
+    result = await service.handle_manual_create(selected)
+
+    assert result.action == "existing"
+    assert client.added == []
+    assert client.updated == []
+    assert client.pairs[0]["status"] is True
+
+
+@pytest.mark.asyncio
+async def test_manual_rh_lighter_gc_selection_is_rejected_before_sdk_access() -> None:
+    client = FakeAstroClient()
+    service = AstroAlertService(
+        client,
+        Settings(astro_manual_card_create=True, astro_dry_run_only=False),
+        add_restart_delay_seconds=0,
+    )
+    selected = opportunity().model_copy(update={
+        "buy_exchange": "bitget", "sell_exchange": "rh-lighter",
+    })
+
+    result = await service.handle_manual_create(
+        selected, AstroCardCreateRequest(card_variant="gc")
+    )
+
+    assert result.action == "unsupported"
+    assert "GC/非 GC" in result.message
+    assert client.list_calls == 0
+    assert client.added == []
+
+
+@pytest.mark.asyncio
+async def test_manual_rh_lighter_preserves_hyperliquid_raw_market_and_dex() -> None:
+    client = FakeAstroClient()
+    service = AstroAlertService(
+        client,
+        Settings(astro_manual_card_create=True, astro_dry_run_only=False),
+        add_restart_delay_seconds=0,
+    )
+    selected = opportunity().model_copy(update={
+        "symbol": "OPENAIUSDT", "buy_exchange": "hyperliquid", "buy_raw_symbol": "io:OAI",
+        "sell_exchange": "rh-lighter", "sell_raw_symbol": "OPENAI",
+    })
+
+    result = await service.handle_manual_create(
+        selected, AstroCardCreateRequest(card_variant="non_gc", open_enabled=False)
+    )
+
+    assert result.status == "created"
+    assert client.added[0]["buyEx"] == "hl"
+    assert client.added[0]["sellEx"] == "rh-lighter"
+    assert client.added[0]["aHlDex"] == "io"
+    assert client.added[0]["name"] == "OAI-OPENAI"
+    assert client.added[0]["type"] == "FR"
+    assert client.added[0]["status"] is False
+    assert client.added[0]["disableOpen"] is True
 
 
 @pytest.mark.asyncio
