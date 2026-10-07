@@ -12,12 +12,13 @@ from app.models.instrument import (
     InstrumentMarketCandidate,
     InstrumentMarketCapResult,
     InstrumentRouteStatus,
+    InstrumentStatisticsResult,
 )
 from app.models.market import MarketSnapshot, MarketType
 from app.models.pair_spread import normalize_hyperliquid_dex, normalize_pair_spread_symbol
 from app.models.settings import RiskSettings
 from app.services.data_filters import ignored_exchange_set
-from app.services.instrument_spreads import build_instrument_spreads
+from app.services.instrument_spreads import build_instrument_spreads, instrument_market_id
 from app.services.symbol_aliases import SymbolAliasResolver, canonical_query_symbol
 
 router = APIRouter(prefix="/instruments")
@@ -342,6 +343,7 @@ async def lookup_instrument(
     instrument_markets = [
         InstrumentMarketCandidate(
             **market.model_dump(),
+            market_id=instrument_market_id(market),
             data_status=(
                 "live"
                 if _market_age_seconds(market, now) <= settings.stale_after_seconds
@@ -385,3 +387,13 @@ async def lookup_instrument(
             stale_after_seconds=settings.stale_after_seconds,
         ),
     )
+
+
+@router.get("/{symbol}/statistics", response_model=InstrumentStatisticsResult)
+async def instrument_statistics(
+    symbol: str,
+    request: Request,
+    dex: str | None = None,
+) -> InstrumentStatisticsResult:
+    instrument = await lookup_instrument(symbol, request, dex)
+    return await request.app.state.instrument_statistics_service.lookup(instrument)

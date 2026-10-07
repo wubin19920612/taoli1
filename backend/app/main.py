@@ -104,6 +104,7 @@ from app.services.index_components import (
     OKXIndexComponentProvider,
 )
 from app.services.instrument_market_cap import InstrumentMarketCapService
+from app.services.instrument_statistics import InstrumentStatisticsService
 from app.services.live_pilot import (
     filter_opportunities_by_alert_rules,
     select_live_pilot_matches,
@@ -1090,6 +1091,7 @@ def create_app(
                 "hyperliquid_trade_status_service",
                 "account_connection_service",
                 "instrument_market_cap_service",
+                "instrument_statistics_service",
                 "feishu_notifier",
             )
             if route_db is not db:
@@ -1100,6 +1102,7 @@ def create_app(
     app.state.settings = app_settings
     app.state.snapshot_store = store
     app.state.instrument_market_cap_service = InstrumentMarketCapService()
+    app.state.instrument_statistics_service = InstrumentStatisticsService()
     app.state.market_collector = None
     app.state.orderbook_validator = None
     app.state.funding_research_repo = None

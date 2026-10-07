@@ -6,9 +6,11 @@ from fastapi.testclient import TestClient
 from app.core.config import Settings
 from app.main import create_app
 from app.models.instrument import INSTRUMENT_LOOKUP_EXCHANGES
+from app.models.instrument import InstrumentStatisticsResult
 from app.models.market import MarketSnapshot, MarketType
 from app.models.settings import RiskSettings
 from app.services.snapshot_store import SnapshotStore
+from unittest.mock import AsyncMock
 
 
 def market(
@@ -78,6 +80,24 @@ def test_instrument_lookup_groups_exact_symbol_across_all_exchanges() -> None:
         2 * (100_201 - 99_999) / (100_201 + 99_999) * 100
     )
     assert payload["spreads"][0]["astro_supported"] is True
+    assert payload["markets"][0]["market_id"] == "binance:future::BTCUSDT:1"
+
+
+def test_statistics_endpoint_reuses_exact_lookup_without_blocking_basic_quotes() -> None:
+    now = datetime.now(UTC)
+    store = SnapshotStore()
+    store.set_all_markets([market("BTCUSDT", "binance", MarketType.FUTURE, 100, now)])
+    app = create_app(snapshot_store=store, settings=Settings(database_url="sqlite:///:memory:"))
+    service = AsyncMock()
+    service.lookup.return_value = InstrumentStatisticsResult(symbol="BTCUSDT", observed_at=now)
+    with TestClient(app) as client:
+        app.state.instrument_statistics_service = service
+        assert client.get("/api/instruments/BTC").status_code == 200
+        service.lookup.assert_not_awaited()
+        response = client.get("/api/instruments/BTC/statistics")
+        assert response.status_code == 200
+        assert response.json()["symbol"] == "BTCUSDT"
+        assert service.lookup.await_args.args[0].markets[0].raw_symbol == "BTCUSDT"
 
 
 def test_instrument_lookup_falls_back_to_filtered_markets_for_injected_stores() -> None:

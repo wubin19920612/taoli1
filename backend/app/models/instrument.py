@@ -27,6 +27,7 @@ class InstrumentExchangeSnapshot(BaseModel):
 
 
 class InstrumentMarketCandidate(MarketSnapshot):
+    market_id: str | None = None
     data_status: Literal["live", "stale"]
     age_seconds: float = Field(ge=0)
     stale_after_seconds: int = Field(ge=1)
@@ -103,6 +104,33 @@ class InstrumentLookupResult(BaseModel):
     route_errors: dict[str, str] = Field(default_factory=dict)
     exchanges: list[InstrumentExchangeSnapshot] = Field(default_factory=list)
     spreads: list[InstrumentSpreadComparison] = Field(default_factory=list)
+
+
+class InstrumentPriceChangeStats(BaseModel):
+    change_1h_pct: float | None = None
+    change_24h_pct: float | None = None
+    observed_at: datetime | None = None
+    source: str = "exchange_1m_close"
+    error: str | None = None
+
+
+class InstrumentSpread24hStats(BaseModel):
+    max_spread_pct: float | None = None
+    max_at: datetime | None = None
+    point_count: int = Field(default=0, ge=0)
+    first_seen_at: datetime | None = None
+    last_seen_at: datetime | None = None
+    complete: bool = False
+    is_estimated: bool = True
+    source: str = "aligned_1m_close"
+    error: str | None = None
+
+
+class InstrumentStatisticsResult(BaseModel):
+    symbol: str
+    observed_at: datetime
+    markets: dict[str, InstrumentPriceChangeStats] = Field(default_factory=dict)
+    spreads: dict[str, InstrumentSpread24hStats] = Field(default_factory=dict)
 
 
 class InstrumentMarketCapCandidate(BaseModel):

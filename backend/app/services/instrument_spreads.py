@@ -50,22 +50,23 @@ def _astro_support(
     return False, "Astro 暂不支持买永续、卖现货的反向现永卡片"
 
 
-def _comparison_id(buy_market: MarketSnapshot, sell_market: MarketSnapshot) -> str:
-    def identity(market: MarketSnapshot) -> str:
-        dex = market.dex or (
-            market.raw_symbol.split(":", 1)[0]
-            if market.exchange == "hyperliquid" and ":" in market.raw_symbol
-            else "main" if market.exchange == "hyperliquid" else ""
-        )
-        value = (
-            f"{market.exchange}:{market.market_type.value}:{dex}:"
-            f"{market.raw_symbol}:{market.symbol_alias_price_multiplier:.12g}"
-        )
-        if market.contract_size_multiplier is not None:
-            value = f"{value}:{market.contract_size_multiplier:.12g}"
-        return value
+def instrument_market_id(market: MarketSnapshot) -> str:
+    dex = market.dex or (
+        market.raw_symbol.split(":", 1)[0]
+        if market.exchange == "hyperliquid" and ":" in market.raw_symbol
+        else "main" if market.exchange == "hyperliquid" else ""
+    )
+    value = (
+        f"{market.exchange}:{market.market_type.value}:{dex}:"
+        f"{market.raw_symbol}:{market.symbol_alias_price_multiplier:.12g}"
+    )
+    if market.contract_size_multiplier is not None:
+        value = f"{value}:{market.contract_size_multiplier:.12g}"
+    return value
 
-    return f"{identity(buy_market)}->{identity(sell_market)}"
+
+def _comparison_id(buy_market: MarketSnapshot, sell_market: MarketSnapshot) -> str:
+    return f"{instrument_market_id(buy_market)}->{instrument_market_id(sell_market)}"
 
 
 def _market_dex(market: MarketSnapshot) -> str | None:

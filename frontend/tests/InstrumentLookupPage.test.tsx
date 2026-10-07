@@ -365,6 +365,7 @@ describe("InstrumentLookupPage", () => {
           limitations: []
         });
         if (url.includes("/pair-spread/symbol-query")) return Response.json(trendResult);
+        if (url.endsWith("/statistics")) return Response.json({ symbol: "BTCUSDT", observed_at: "2026-10-07T12:00:00Z", markets: {}, spreads: {} });
         if (url.includes("/instruments/")) return Response.json(lookupResult);
         return Response.json({});
       })
@@ -383,6 +384,62 @@ describe("InstrumentLookupPage", () => {
     expect(screen.getAllByText("Binance").length).toBeGreaterThan(0);
     expect(screen.queryByText("行情实时")).toBeNull();
     expect(String((fetch as ReturnType<typeof vi.fn>).mock.calls[0][0])).toContain("/instruments/BTCUSDT");
+  });
+
+  it("shows exact-market price changes and the estimated aligned 24h maximum", async () => {
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    const quote = lookupResult.exchanges[0].future!;
+    const exactQuote = { ...quote, market_id: "binance:future::BTCUSDT:1", data_status: "live", age_seconds: 0, stale_after_seconds: 30, error: null };
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/statistics")) return Response.json({
+        symbol: "BTCUSDT", observed_at: "2026-10-07T12:00:00Z",
+        markets: { [exactQuote.market_id]: { change_1h_pct: -1.25, change_24h_pct: 3.5, observed_at: "2026-10-07T12:00:00Z", error: null } },
+        spreads: { [lookupResult.spreads[0].id]: { max_spread_pct: 0.456, max_at: "2026-10-07T10:00:00Z", point_count: 1440, complete: true, is_estimated: true, error: null } }
+      });
+      if (url.includes("/instruments/")) return Response.json({ ...lookupResult, markets: [exactQuote] });
+      return fallback(input, init);
+    });
+    render(<InstrumentLookupPage />);
+    expect(await screen.findByText("≈ +0.456%")).not.toBeNull();
+    expect(screen.getAllByText("24h 最大价差").length).toBeGreaterThan(0);
+    expect(screen.getByText("完整24h · 1440 点")).not.toBeNull();
+    const markets = screen.getByRole("table", { name: "精确行情市场" });
+    expect(within(markets).getByText("1h 涨跌幅")).not.toBeNull();
+    expect(within(markets).getByText("24h 涨跌幅")).not.toBeNull();
+    expect(within(markets).getByText("-1.250%")).not.toBeNull();
+    expect(within(markets).getByText("+3.500%")).not.toBeNull();
+  });
+
+  it("keeps realtime quotes visible while historical statistics are still loading", async () => {
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    let finish: (response: Response) => void = () => {};
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/statistics")) return new Promise<Response>((resolve) => { finish = resolve; });
+      return fallback(input, init);
+    });
+    render(<InstrumentLookupPage />);
+    expect(await screen.findByText("BTC / USDT")).not.toBeNull();
+    await waitFor(() => expect(screen.getAllByText("加载中").length).toBeGreaterThan(0));
+    finish(Response.json({ symbol: "BTCUSDT", observed_at: "2026-10-07T12:00:00Z", markets: {}, spreads: {
+      [lookupResult.spreads[0].id]: { max_spread_pct: -0.25, point_count: 2, complete: false, max_at: null, error: null }
+    } }));
+    expect(await screen.findByText("≈ -0.250%")).not.toBeNull();
+    expect(screen.getByText("部分样本 · 2 点")).not.toBeNull();
+  });
+
+  it("does not turn unavailable historical statistics into zeroes or hide live spreads", async () => {
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/statistics")) return new Response("upstream unavailable", { status: 502 });
+      return fallback(input, init);
+    });
+    render(<InstrumentLookupPage />);
+    expect(await screen.findByText("BTC / USDT")).not.toBeNull();
+    expect((await screen.findAllByText("24h 最大价差")).length).toBeGreaterThan(0);
+    await waitFor(() => expect(screen.getAllByText("暂无历史样本").length).toBe(3));
+    expect(screen.queryByText("≈ +0.000%")).toBeNull();
+    expect(screen.getAllByText("开仓价差").length).toBeGreaterThan(0);
   });
 
   it("shows covered 24h volume ratios and excludes stale exact markets", async () => {
@@ -416,7 +473,7 @@ describe("InstrumentLookupPage", () => {
     const capCalls = vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes("/instrument-market-cap/"));
     expect(capCalls).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "立即刷新" }));
-    await waitFor(() => expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes("/instruments/BTCUSDT"))).toHaveLength(2));
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes("/instruments/BTCUSDT") && !String(input).endsWith("/statistics"))).toHaveLength(2));
     expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes("/instrument-market-cap/"))).toHaveLength(1);
   });
 
@@ -719,10 +776,10 @@ describe("InstrumentLookupPage", () => {
     window.history.replaceState({}, "", "/?page=instrument&symbol=ETHUSDT");
     render(<InstrumentLookupPage />);
     await screen.findByText("ETH / USDT");
-    const btcLookupCount = (fetch as ReturnType<typeof vi.fn>).mock.calls.filter(([input]) => String(input).includes("/instruments/BTCUSDT")).length;
+    const btcLookupCount = (fetch as ReturnType<typeof vi.fn>).mock.calls.filter(([input]) => String(input).includes("/instruments/BTCUSDT") && !String(input).endsWith("/statistics")).length;
     await userEvent.click(screen.getByRole("button", { name: "BTCUSDT" }));
     await waitFor(() => {
-      expect((fetch as ReturnType<typeof vi.fn>).mock.calls.filter(([input]) => String(input).includes("/instruments/BTCUSDT")).length).toBe(btcLookupCount + 1);
+      expect((fetch as ReturnType<typeof vi.fn>).mock.calls.filter(([input]) => String(input).includes("/instruments/BTCUSDT") && !String(input).endsWith("/statistics")).length).toBe(btcLookupCount + 1);
       expect(screen.getByRole<HTMLInputElement>("textbox", { name: "查询标的" }).value).toBe("BTCUSDT");
     });
 

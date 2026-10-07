@@ -61,6 +61,7 @@ import type {
   IndexComponentWatchItem,
   InstrumentLookupResult,
   InstrumentMarketCapResult,
+  InstrumentStatisticsResult,
   OpportunityHistoryStats,
   OpportunityHistoryStatsQuery,
   OpportunityRadarPreview,
@@ -250,6 +251,10 @@ export function lookupInstrument(symbol: string, hyperliquidDex?: string): Promi
 export function getInstrumentMarketCap(base: string, coinId?: string): Promise<InstrumentMarketCapResult> {
   const query = coinId ? `?${new URLSearchParams({ coin_id: coinId }).toString()}` : "";
   return fetchJson<InstrumentMarketCapResult>(`/instrument-market-cap/${encodeURIComponent(base)}${query}`);
+}
+
+export function getInstrumentStatistics(symbol: string): Promise<InstrumentStatisticsResult> {
+  return fetchJson<InstrumentStatisticsResult>(`/instruments/${encodeURIComponent(symbol)}/statistics`);
 }
 
 export async function getHyperliquidTradeStatus(

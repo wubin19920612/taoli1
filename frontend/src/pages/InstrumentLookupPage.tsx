@@ -44,6 +44,7 @@ import {
   deleteTradeAvailabilityWatch,
   getTradeAvailability,
   getInstrumentMarketCap,
+  getInstrumentStatistics,
   listTradeAvailabilityWatches,
   lookupInstrument,
   previewInstrumentAstroPair,
@@ -60,6 +61,7 @@ import type {
   InstrumentMarketCapResult,
   InstrumentMarketCandidate,
   InstrumentSpreadComparison,
+  InstrumentStatisticsResult,
   MarketTradeAvailability,
   MarketSnapshot,
   MarketType,
@@ -80,6 +82,7 @@ const SAVED_SYMBOLS_KEY = "taoli1.instrumentLookup.savedSymbols.v1";
 const MAX_SAVED_SYMBOLS = 30;
 const AUTO_REFRESH_MS = 10_000;
 const MARKET_CAP_REFRESH_MS = 300_000;
+const STATISTICS_REFRESH_MS = 120_000;
 const exchangeLabels: Record<string, string> = {
   aster: "Aster",
   binance: "Binance",
@@ -891,6 +894,12 @@ export function InstrumentLookupPage() {
   const [activeSymbol, setActiveSymbol] = useState("");
   const [savedSymbols, setSavedSymbols] = useState(readSavedSymbols);
   const [result, setResult] = useState<InstrumentLookupResult | null>(null);
+  const [statisticsState, setStatisticsState] = useState<{
+    symbol: string;
+    loading: boolean;
+    value: InstrumentStatisticsResult | null;
+    error: string;
+  } | null>(null);
   const [marketCapState, setMarketCapState] = useState<{
     base: string;
     loading: boolean;
@@ -1032,6 +1041,40 @@ export function InstrumentLookupPage() {
   useEffect(() => {
     if (result?.base && result.market_count > 0) void loadMarketCap(result.base);
   }, [loadMarketCap, result?.base, result?.market_count]);
+
+  const statisticsSymbol = result?.market_count ? result.symbol : "";
+  const statisticsMarketIds = result?.markets?.map((market) => market.market_id).join("|") ?? "";
+  useEffect(() => {
+    if (!statisticsSymbol) return;
+    let active = true;
+    let pending = false;
+    const refresh = async () => {
+      if (pending || document.visibilityState === "hidden") return;
+      pending = true;
+      setStatisticsState((current) => ({
+        symbol: statisticsSymbol, loading: true, error: "",
+        value: current?.symbol === statisticsSymbol ? current.value : null
+      }));
+      try {
+        const value = await getInstrumentStatistics(statisticsSymbol);
+        if (value.symbol !== statisticsSymbol) throw new Error("历史统计标的不匹配，未混用其他标的数据");
+        if (active) setStatisticsState({ symbol: statisticsSymbol, loading: false, value, error: "" });
+      } catch (exc) {
+        if (active) setStatisticsState({
+          symbol: statisticsSymbol, loading: false, value: null,
+          error: exc instanceof Error ? exc.message : String(exc)
+        });
+      } finally {
+        pending = false;
+      }
+    };
+    void refresh();
+    const timer = autoRefresh ? window.setInterval(() => void refresh(), STATISTICS_REFRESH_MS) : undefined;
+    return () => { active = false; window.clearInterval(timer); };
+  }, [statisticsSymbol, statisticsMarketIds, autoRefresh]);
+  const statistics = statisticsState?.symbol === result?.symbol ? statisticsState?.value : null;
+  const statisticsLoading = statisticsState?.symbol === result?.symbol && statisticsState?.loading;
+  const statisticsError = statisticsState?.symbol === result?.symbol ? statisticsState?.error ?? "" : "";
 
   useEffect(() => {
     const handleNavigation = () => {
@@ -1517,6 +1560,29 @@ export function InstrumentLookupPage() {
       )
     },
     {
+      title: <span className="instrument-spread-column-title">24h 最大价差<small>同分钟收盘价 · 预估</small></span>,
+      key: "max_spread_24h",
+      width: 160,
+      align: "right",
+      sorter: (left, right) => (
+        (statistics?.spreads?.[left.id]?.max_spread_pct ?? Number.NEGATIVE_INFINITY)
+        - (statistics?.spreads?.[right.id]?.max_spread_pct ?? Number.NEGATIVE_INFINITY)
+      ),
+      render: (_, spread) => {
+        const history = statistics?.spreads?.[spread.id];
+        const value = history?.max_spread_pct;
+        return (
+          <Tooltip title={history?.error ?? (statisticsError || `当前买卖方向近24小时，同一分钟收盘价按价格倍率归一后计算；不是历史买一卖一可成交价差，未扣手续费及滑点。${history ? `对齐 ${history.point_count} / 1440 点；覆盖 ${fullTime(history.first_seen_at)} 至 ${fullTime(history.last_seen_at)}` : ""}`)}>
+            <div className={`instrument-spread-value instrument-rate-${tone(value ?? null)}`}>
+              <strong>{value == null ? statisticsLoading ? "加载中" : "-" : `≈ ${signedPct(value)}`}</strong>
+              <small>{value == null ? "暂无历史样本" : `${history?.complete ? "完整24h" : "部分样本"} · ${history?.point_count} 点`}</small>
+              {history?.max_at ? <small>峰值 {dayjs(history.max_at).format("MM-DD HH:mm")}</small> : null}
+            </div>
+          </Tooltip>
+        );
+      }
+    },
+    {
       title: "操作",
       key: "action",
       width: 180,
@@ -1724,6 +1790,8 @@ export function InstrumentLookupPage() {
               const hasRestriction = Boolean(diagnostic && (tradeMarketHasRestriction(diagnostic) || diagnostic.public_restrictions.length));
               const hasUnknown = Boolean(diagnostic && tradeMarketHasUnknown(diagnostic));
               const rowIdentity = `${quote ? "quote" : "diagnostic"}:${exactMarketKey(market) ?? JSON.stringify([market.exchange, market.market_type, market.raw_symbol, market.dex])}`;
+              const priceChanges = quote?.market_id ? statistics?.markets?.[quote.market_id] : null;
+              const changeTooltip = priceChanges?.error ?? (statisticsError || `按该原始市场最近已完成的1分钟收盘价，相对1小时 / 24小时前同一分钟收盘价计算涨跌幅；不是高低振幅。统计截至 ${fullTime(priceChanges?.observed_at)}`);
               const occurrence = marketRowKeys.get(rowIdentity) ?? 0;
               marketRowKeys.set(rowIdentity, occurrence + 1);
               return (
@@ -1745,6 +1813,10 @@ export function InstrumentLookupPage() {
                     <TradeMetric label="买一 Bid" value={price(quote?.bid)} tone="bid" />
                     <TradeMetric label="卖一 Ask" value={price(quote?.ask)} tone="ask" />
                     <TradeMetric label="标记 / 指数" value={quote ? price(quote.mark_price) + " / " + price(quote.index_price) : "-"} />
+                    <TradeMetric label="1h 涨跌幅" value={priceChanges?.change_1h_pct == null && statisticsLoading ? "加载中" : signedPct(priceChanges?.change_1h_pct)}
+                      tone={priceChanges?.change_1h_pct == null ? undefined : priceChanges.change_1h_pct >= 0 ? "positive" : "negative"} tooltip={changeTooltip} />
+                    <TradeMetric label="24h 涨跌幅" value={priceChanges?.change_24h_pct == null && statisticsLoading ? "加载中" : signedPct(priceChanges?.change_24h_pct)}
+                      tone={priceChanges?.change_24h_pct == null ? undefined : priceChanges.change_24h_pct >= 0 ? "positive" : "negative"} tooltip={changeTooltip} />
                   </div>
                   <div className="instrument-market-data-group" role="cell">
                     <span className="instrument-market-data-group-name">行情成交额</span>
@@ -1946,7 +2018,7 @@ export function InstrumentLookupPage() {
             dataSource={visibleInstrumentSpreads}
             pagination={false}
             size="small"
-            scroll={{ x: 1160 }}
+            scroll={{ x: 1320 }}
           />
         </section>
       ) : null}

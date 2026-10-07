@@ -27,7 +27,7 @@ from app.exchanges.lighter import (
     lighter_upstream_timestamp,
 )
 from app.exchanges.okx import okx_ticker_volume_24h_usdt
-from app.models.market import MarketType
+from app.models.market import MarketSnapshot, MarketType
 from app.models.pair_spread import (
     HYPERLIQUID_MAIN_DEX,
     PAIR_SPREAD_DAILY_INTERVAL_SECONDS,
@@ -974,6 +974,45 @@ class PairSpreadQueryService:
     async def aclose(self) -> None:
         if self._owns_client and not self.client.is_closed:
             await self.client.aclose()
+
+    async def fetch_market_klines(
+        self,
+        market: MarketSnapshot,
+        *,
+        start: datetime,
+        end: datetime,
+    ) -> list[PairSpreadKlinePoint]:
+        if market.exchange == "hyperliquid":
+            payload = await self._post_json(
+                "https://api.hyperliquid.xyz/info",
+                {
+                    "type": "candleSnapshot",
+                    "req": {
+                        "coin": market.raw_symbol,
+                        "interval": "1m",
+                        "startTime": _to_ms(start),
+                        "endTime": _to_ms(end),
+                    },
+                },
+            )
+            if not isinstance(payload, list):
+                raise RuntimeError("Hyperliquid 分钟K线响应格式异常")
+            return _dedupe_sorted([
+                point
+                for row in payload if isinstance(row, dict)
+                if (point := _parse_dict_kline(row, ("t",), ("c",))) is not None
+                and start <= point.bucket_at <= end
+            ])
+        symbol = market.raw_symbol
+        if market.exchange in {"lighter", "rh-lighter"}:
+            profile = lighter_endpoint_profile(market.exchange)
+            resolved = lighter_symbol(symbol, market.market_type, spot_quote=profile.spot_quote)
+            if resolved is None:
+                raise RuntimeError("Lighter 原始市场无法解析，未替用规范标的行情")
+            symbol = resolved[0]
+        return await self._fetch_klines(
+            market.exchange, symbol, start, end, 1, market.market_type
+        )
 
     async def _resolved_result_leg(self, leg: PairSpreadLegQuery) -> PairSpreadLegQuery:
         if leg.exchange != "hyperliquid" or leg.market_type != MarketType.FUTURE or leg.dex is not None:

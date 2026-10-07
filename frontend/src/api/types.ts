@@ -124,6 +124,7 @@ export interface MarketSnapshot {
 }
 
 export interface InstrumentMarketCandidate extends MarketSnapshot {
+  market_id?: string | null;
   data_status: "live" | "stale";
   age_seconds: number;
   stale_after_seconds: number;
@@ -207,6 +208,33 @@ export interface InstrumentLookupResult {
   route_errors: Record<string, string>;
   exchanges: InstrumentExchangeSnapshot[];
   spreads: InstrumentSpreadComparison[];
+}
+
+export interface InstrumentPriceChangeStats {
+  change_1h_pct: number | null;
+  change_24h_pct: number | null;
+  observed_at: string | null;
+  source: string;
+  error: string | null;
+}
+
+export interface InstrumentSpread24hStats {
+  max_spread_pct: number | null;
+  max_at: string | null;
+  point_count: number;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+  complete: boolean;
+  is_estimated: boolean;
+  source: string;
+  error: string | null;
+}
+
+export interface InstrumentStatisticsResult {
+  symbol: string;
+  observed_at: string;
+  markets: Record<string, InstrumentPriceChangeStats>;
+  spreads: Record<string, InstrumentSpread24hStats>;
 }
 
 export interface InstrumentMarketCapResult {
