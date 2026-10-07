@@ -2565,7 +2565,7 @@ class PairSpreadQueryService:
         cursor = int(start.timestamp())
         points: list[PairSpreadKlinePoint] = []
         while cursor < end_sec:
-            chunk_end = min(end_sec, cursor + 1000 * interval_seconds)
+            chunk_end = min(end_sec, cursor + 999 * interval_seconds)
             url = (
                 "https://api.gateio.ws/api/v4/spot/candlesticks"
                 f"?currency_pair={pair}&interval={_gate_interval(interval_minutes)}&from={cursor}&to={chunk_end}"

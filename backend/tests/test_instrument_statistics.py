@@ -168,3 +168,29 @@ async def test_history_uses_original_market_not_canonical_alias(exchange, raw_sy
         assert query._fetch_klines.await_args.args[1] in {raw_symbol, "1000PEPEUSDT"}
     finally:
         await query.aclose()
+
+
+@pytest.mark.asyncio
+async def test_gate_spot_history_paginates_without_exceeding_inclusive_1000_point_limit() -> None:
+    counts = []
+
+    def handler(request):
+        start, end = int(request.url.params["from"]), int(request.url.params["to"])
+        count = (end - start) // 60 + 1
+        counts.append(count)
+        if count > 1000:
+            return httpx.Response(400, json={"message": "Candlestick range too broad"})
+        return httpx.Response(200, json=[
+            [str(timestamp), "1000", "100", "100", "100", "100", "10", "true"]
+            for timestamp in range(start, end + 1, 60)
+        ])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        query = PairSpreadQueryService(client)
+        points = await query.fetch_market_klines(
+            market("gate", market_type=MarketType.SPOT, raw_symbol="BTC_USDT"),
+            start=NOW - timedelta(hours=24, minutes=3), end=NOW - timedelta(milliseconds=1),
+        )
+    assert counts == [1000, 443]
+    assert len(points) == 1443
+    assert points[-1].bucket_at == NOW - timedelta(minutes=1)
