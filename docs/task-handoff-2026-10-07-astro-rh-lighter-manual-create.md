@@ -13,7 +13,9 @@
 - 分支：`codex/frontend-localization-polish`。
 - 本地开始基线：`3adb225166ea188a4ef99312cf8944f6d4539e72`。
 - 开始时生产 HEAD / 两份镜像：`f8e871ae76d429700b7f7da0685c150055f81e4c`，服务器跟踪文件干净。
-- 功能提交、镜像工作流、备份及线上验收结果在交付后补充。
+- 功能提交：`fe88e38a7e1c465974e5ecd633f3274258688ba7`，已推送当前 GitHub 分支。
+- 生产镜像工作流：`Build production images`，run `37569566828`，backend/frontend 两个 job 均 success；服务器部署前分别通过两份固定 SHA 镜像的 manifest 检查。
+- 验收记录以独立文档提交补充并推送（`[skip ci]`）；生产 HEAD 和两份镜像保持功能提交，不为文档再次重启服务。
 
 ## 证据、实现与入口
 
@@ -39,14 +41,20 @@
 ## 测试与构建
 
 - 先在旧实现上复现 RH 开放断言与路由矩阵：27 failed、6 passed。
-- 六个 Astro 相关后端测试文件：211 passed。新增完整 SDK 隔离链路后，人工 API 文件复测中 17 个非 RH 案例通过；修正成功盘口测试夹具的必填字段后，7 个 RH 案例定向复测全部通过（117.02s）。不是声称最后一次整文件运行 24 passed。
+- 六个 Astro 相关后端测试文件：211 passed。新增完整 SDK 隔离链路并补齐成功盘口测试夹具的必填字段后，人工 API 文件最终整文件复测：24 passed（393.15s）；另有 RH 定向复测 7 passed（117.02s）。这两次复测与前述回归有重叠，不将执行次数误算为不同测试数量。
 - 前端 `InstrumentLookupPage`、`DashboardPage`、`SettingsPage`、`FundingArbitragePreadd`：65 passed。
 - `npm run build`：TypeScript 检查和 Vite 生产构建通过；定向 Ruff `--select F,E9` 与 `git diff --check` 通过。
 - 保留既有 React act、Ant Design 属性废弃与 FastAPI/Starlette 警告，不扩展修复无关事项。
 
 ## 线上状态与验收
 
-- 待生产镜像、备份、部署、前后端容器、健康接口及 390px/1440px 页面验证完成后补充。
+- 部署前 SQLite 备份：`backups/radar-before-fe88e38a7e1c-20261007T040526Z.db`，611766272 bytes，`integrity_check=ok`，宿主/容器 SHA-256 一致：`6caa843eff9b6b1baa62610d3736d71a775a80a7ebb6cbadf6845f4c8db1abb9`。
+- 独立研究库备份：`backups/squeeze-route-before-fe88e38a7e1c-20261007T040526Z.db`，241664 bytes，`integrity_check=ok`，宿主/容器 SHA-256 一致：`94f40e3d3e15f9ec13e4770591f647c219e45e0ac1791d1da52577206d8b0d6b`。
+- `deploy/linux-update.sh` 完成 `git pull --ff-only`、拉取预构建镜像与 Compose 启动；生产 HEAD / 前后端镜像均为 `fe88e38a7e1c465974e5ecd633f3274258688ba7`，跟踪文件干净；两容器 healthy。无生产构建、无卷删除，备份保留策略本次删除 0 文件。
+- 后端直连和前端代理 `/api/health` 均 `status=ok`，11769 个市场，RH/Bitget 等 9 个交易所健康，`exchange_errors={}`；首页 HTTP 200。
+- 真实 OPENAI 人工预览：`can_submit=true`、blockers 为空、原生 `bitget → rh-lighter`、仅非 GC 路线，`status=false` / `disableOpen=true`。缺少或无效面板密码的真实建卡请求分别返回 401。
+- 390px 手机和 1440px 桌面浏览器均通过：允许提交为“是”、非 GC 确认按钮可用、默认不开仓、不保存全局默认值、路由准确、无横向页面溢出与 pageerror；提交各拦截 1 次，确认前后 Astro 静态配置摘要一致。已人工检查稳定后的手机预览/按钮与桌面截图。
+- 只读确认：线上已经存在 `OPENAI / FF / bitget → rh-lighter` 卡片；用户再提交同一精确路线会按既有规则返回 `action=existing`，不覆盖旧参数或开仓状态。此行为与已解除的 RH 人工限制不同。
 - 验收只允许真实 GET / 人工预览 POST；建卡按钮的提交由浏览器测试拦截，真实建卡接口只用无效密码验证 401，不进入 SDK 写入。线上 SDK 配置摘要用于前后对照，不在仓库保存密码或完整私有配置。
 - 生产必须先校验 SQLite 备份、`git pull --ff-only`，再使用两份固定 SHA 预构建镜像启动 Compose；2 GiB 服务器不运行本地构建，不删除卷。
 
