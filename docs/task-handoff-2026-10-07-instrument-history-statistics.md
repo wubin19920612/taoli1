@@ -11,7 +11,7 @@
 - 分支：`codex/frontend-localization-polish`。
 - 本地开始基线：`dbb52a0cf97a025e1086e22adb5eb0421a0b6f2a`。
 - 开始时生产 HEAD / 两份镜像：`fe88e38a7e1c465974e5ecd633f3274258688ba7`，服务器跟踪文件干净，前后端 healthy。
-- 功能提交、镜像工作流、备份和部署验收将在部署后补充；本节不能作为已部署证明。
+- 功能提交 `345fd90de81c58ad46edfc43b7a56a346a639aa7`、Gate 分页修复 `694deab808bb0057617faff150efdd75c8e8c84a` 均已推送；最终生产版本为后者，最终部署与验收记录见下节。验收文档使用独立 `[skip ci]` 提交，不为仅文档修改再次重启服务。
 
 ## 已实现功能与入口
 
@@ -53,12 +53,25 @@
 - 独立研究库备份：`backups/squeeze-route-before-345fd90de81c-20261007T161247Z.db`，241664 bytes，校验通过，SHA-256：`817748d396128c9fc34db552dbc2a14690960c8804771ff8f77ba22e95e3009d`。
 - 首次 Compose 前后端 healthy；FLOCK 真实统计接口 200，冷请求 3.27s，10 个原始市场 / 双向 90 条统计。绝大多数已对齐 1440 点，Hyperliquid `@707` 历史过期，明确空涨跌幅；Gate 现货 400 引出了前述必要分页修复。
 - 已完成首次生产 1440px / 390px 页面验证，无溢出 / pageerror；独立价差查询同一窗口重算 Binance → Bitget 历史最大值 `0.40363269424824105%`，与统计接口一致。OPENAI 验证普通 / RH Lighter 独立市场和不同数量乘数，不混用端点；Gate 现货最终状态须在修复再部署后确认。
-- 分页修复会创建独立提交并重新备份、部署；最终版本与最终验收稍后追加，不将首次版本误报为最终版本。
+- 分页修复通过独立提交重新备份、部署，最终版本见下节，不将首次版本误报为最终版本。
+
+## 最终生产交付
+
+- 最终功能版本 / 生产 HEAD / backend 与 frontend 固定 SHA 镜像：`694deab808bb0057617faff150efdd75c8e8c84a`。工作流 `37651412833` 的 `build (backend)`、`build (frontend)` 均 completed / success，两份镜像 manifest 部署前校验通过。
+- 最终主库备份：`backups/radar-before-694deab808bb-20261007T162504Z.db`，608718848 bytes，`integrity_check=ok`，宿主 / 容器 SHA-256 一致：`5c4b58272e8af28035544f8fa18249f0f4562bef86c41f9b2576c281084ca006`。
+- 最终研究库备份：`backups/squeeze-route-before-694deab808bb-20261007T162504Z.db`，241664 bytes，完整性和两端校验通过，SHA-256：`e8b0e95c4309fbb30146b680800d88be1b13804f23a7e7de0e20ae23b503a223`。
+- `deploy/linux-update.sh` 完成 `git pull --ff-only`、拉取预构建镜像、Compose 更新；两容器 healthy、服务器跟踪文件干净，无生产构建、无卷删除。
+- 后端直连及前端代理 `/api/health` 均 `status=ok`，11786 市场、9 个交易所 healthy、`exchange_errors={}`。统计后后台内存约 345 MiB / 768 MiB，未见资源耗尽。
+- 最终 FLOCK 真实统计接口 200、冷请求 2.13s；10 个精确市场、90 个双向统计；9 个市场都有 1h / 24h 涨跌幅，含已修复的 Gate 现货；72 个方向在冷抓取时具备完整 1440 点。Hyperliquid 现货 `@707` 的分钟历史已过期，涨跌幅明确空值，剩余方向标示部分历史，不替用别的市场。
+- 最终 1440px / 390px 真实页面再次通过，无页面横向溢出 / pageerror；新增列、峰值时刻、两周期涨跌幅均可见。相同截止窗口的独立 Binance → Bitget 分钟价差查询重算最大值 `0.40363269424824105%`，与统计接口一致。已人工检查线上精确市场截图的指标排版、正负号和颜色。
+- OPENAI 最终验证：Gate 现货已有两周期涨跌幅、error 为空；普通 Lighter 与 RH Lighter 各自返回不同真实变化值，保留独立原始市场和端点。NVDA 的真实 `dex=xyz` 查询保留 `hyperliquid:future:xyz:xyz:NVDA:1:1` 身份并成功返回两周期涨跌幅。
+- 缓存在自然分钟滚动后可能返回 1439 个近24h点，此时诚实标记部分样本 / 实际覆盖时刻；2 分钟刷新后重新抓取。历史 1 分钟采样仍不能证明逐秒可成交 Bid/Ask 峰值；这是口径边界，不把估算伪装成实盘收益。
+- 所有线上验收均为只读 GET，没有建卡、下单、修改账户或更改交易配置。
 
 ## 未跟踪产物与下一步
 
 - 开始时已有 `.worktrees/`、多组 `backend/.pytest*`、其它任务交接文件、`output/` 截图 / 脚本 / 研究资料，全部保留，不暂存其它任务文件。
 - 本任务日志、市场夹具、浏览器脚本和截图保留于 `output/instrument-statistics-*20261007*`、`output/verify-instrument-statistics-20261007.mjs`；不提交测试产物。
-- 推送功能提交后等待两份 GitHub Actions 固定 SHA 镜像成功；通过生产脚本校验 SQLite 备份、`git pull --ff-only`、拉取镜像、Compose 启动，禁止在 2 GiB 服务器本地构建或删除卷。
-- 上线验收必须包含前后端 health、真实统计接口、FLOCK 桌面 / 手机显示以及另一标的 / Hyperliquid 原始市场验证。部署后在本文件追加提交 SHA、工作流、备份文件 / 校验和、部署版本与结果。
+- 后续发布仍须等待两份 GitHub Actions 固定 SHA 镜像成功，校验 SQLite 备份、`git pull --ff-only`、拉取镜像、Compose 启动，禁止在 2 GiB 服务器本地构建或删除卷。
+- 本模块已完成上线验收；后续修改至少复核前后端 health、真实统计接口、FLOCK 桌面 / 手机、Gate 现货、另一标的 / Hyperliquid 原始市场，并更新本记录。
 - 若继续做逐秒 Bid/Ask 历史真实峰值记录，应另开行情采样模块任务，明确采样频率、保留期与存储 / 服务器资源预算；下一模块也请新建任务并提供本交接文档。
