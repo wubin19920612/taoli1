@@ -818,7 +818,7 @@ describe("InstrumentLookupPage", () => {
     render(<InstrumentLookupPage />);
 
     expect(await screen.findByText("跨市场差价")).not.toBeNull();
-    expect(screen.getByText("按可成交盘口计算，每组市场保留较优方向")).not.toBeNull();
+    expect(screen.getByText(/按可成交盘口及价格倍率归一计算/)).not.toBeNull();
     expect(screen.getByText("+0.080%")).not.toBeNull();
 
     await userEvent.click(screen.getAllByRole("button", { name: /建卡/ })[0]);
@@ -1031,6 +1031,122 @@ describe("InstrumentLookupPage", () => {
     expect(payload.expected_open_spread_pct).toBe(-0.1199);
   });
 
+  it("labels each leg's turnover, per-settlement funding, missing periods and estimated data", async () => {
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    const spreads = lookupResult.spreads.map((spread, index) => ({
+      ...spread,
+      buy_raw_symbol: spread.buy_exchange === "okx" ? "BTC-USDT-SWAP" : "BTCUSDT",
+      buy_dex: null,
+      buy_price_multiplier: 1,
+      buy_volume_24h_usdt: index === 1 ? 220000000 : 1000000000,
+      buy_funding_rate_pct: index === 1 ? -0.539733 : null,
+      buy_funding_interval_hours: index === 1 ? 4 : null,
+      buy_is_estimated: index === 1,
+      sell_raw_symbol: spread.sell_exchange === "okx" ? "BTC-USDT-SWAP" : "BTCUSDT",
+      sell_dex: null,
+      sell_volume_24h_usdt: 509000000,
+      sell_funding_rate_pct: index === 2 ? null : 0,
+      sell_funding_interval_hours: index === 2 ? 0 : 8,
+      sell_is_estimated: false
+    }));
+    const markets = [
+      { ...lookupResult.exchanges[0].future!, funding_next_time: "2026-10-08T16:00:00Z", estimated_fields: ["funding_next_time"] },
+      { ...lookupResult.exchanges[1].future!, is_estimated: true, estimated_fields: ["volume_24h_usdt"] }
+    ];
+    vi.mocked(fetch).mockImplementation(async (input, init) => (
+      String(input).endsWith("/instruments/BTCUSDT") ? Response.json({ ...lookupResult, markets, spreads }) : fallback(input, init)
+    ));
+    render(<InstrumentLookupPage />);
+    const section = (await screen.findByText("跨市场差价")).closest("section")!;
+    const rows = section.querySelectorAll("tbody tr.ant-table-row");
+    const firstQuotes = rows[0].querySelectorAll(".instrument-spread-quote");
+    expect(within(firstQuotes[0] as HTMLElement).getByText("24h 成交额")).toBeTruthy();
+    expect(within(firstQuotes[0] as HTMLElement).getByText("10亿 USDT")).toBeTruthy();
+    expect(within(firstQuotes[0] as HTMLElement).getByText("不适用（现货）")).toBeTruthy();
+    expect(within(firstQuotes[1] as HTMLElement).getByText("+0.000000%")).toBeTruthy();
+    expect(within(firstQuotes[1] as HTMLElement).getByText("每 8 小时")).toBeTruthy();
+    expect(within(firstQuotes[1] as HTMLElement).getByText("≈ 10-09 00:00")).toBeTruthy();
+    const secondBuy = rows[1].querySelector(".instrument-spread-quote")!;
+    expect(within(secondBuy as HTMLElement).getByText("≈ 2.2亿 USDT")).toBeTruthy();
+    expect(within(secondBuy as HTMLElement).getByText("-0.539733%")).toBeTruthy();
+    expect(within(secondBuy as HTMLElement).getByText("每 4 小时")).toBeTruthy();
+    expect(within(rows[2].querySelectorAll(".instrument-spread-quote")[1] as HTMLElement).getAllByText("未提供")).toHaveLength(2);
+    expect(within(section).getByText(/未扣手续费及滑点/)).toBeTruthy();
+    expect(within(section).getAllByText(/价格倍率 1×/)).toHaveLength(6);
+  });
+
+  it("fixes exact market groups while quotes refresh, directions reverse and markets are added or removed", async () => {
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    const main = {
+      ...lookupResult.spreads[1], id: "main", buy_exchange: "binance", buy_raw_symbol: "BTCUSDT", buy_dex: null as string | null,
+      sell_exchange: "hyperliquid", sell_raw_symbol: "BTC", sell_dex: "main" as string | null, executable_spread_pct: 1
+    };
+    const subDex = { ...main, id: "io", sell_raw_symbol: "io:BTC", sell_dex: "io", executable_spread_pct: 0.5 };
+    const added = { ...main, id: "new", sell_exchange: "okx", sell_raw_symbol: "BTC-USDT-SWAP", sell_dex: null, executable_spread_pct: 4 };
+    const reversed = {
+      ...main, id: "reversed-main", buy_exchange: "hyperliquid", buy_raw_symbol: "BTC", buy_dex: "main",
+      sell_exchange: "binance", sell_raw_symbol: "BTCUSDT", sell_dex: null, buy_ask: 98765, executable_spread_pct: 0.1
+    };
+    let current = { ...lookupResult, spreads: [main, subDex] };
+    vi.mocked(fetch).mockImplementation(async (input, init) => (
+      String(input).endsWith("/instruments/BTCUSDT") ? Response.json(current) : fallback(input, init)
+    ));
+    render(<InstrumentLookupPage />);
+    const section = (await screen.findByText("跨市场差价")).closest("section")!;
+    const rowRoutes = () => Array.from(section.querySelectorAll("tbody tr.ant-table-row")).map((row) => row.querySelector(".instrument-spread-type-tag b")?.textContent);
+    const firstRow = section.querySelector("tbody tr.ant-table-row");
+    await userEvent.click(within(section).getByRole("button", { name: "固定排序" }));
+    expect(within(section).getByRole("button", { name: "解除固定" }).getAttribute("aria-pressed")).toBe("true");
+    current = { ...lookupResult, spreads: [{ ...subDex, executable_spread_pct: 3 }, added, reversed] };
+    await userEvent.click(screen.getByRole("button", { name: "立即刷新" }));
+    await waitFor(() => expect(rowRoutes()).toEqual(["hl → bn", "bn → hl", "bn → okx"]));
+    expect(section.querySelector("tbody tr.ant-table-row")).toBe(firstRow);
+    expect(within(firstRow as HTMLElement).getByText("98,765")).toBeTruthy();
+    await userEvent.click(within(section).getByRole("columnheader", { name: /开仓价差/ }));
+    expect(rowRoutes()).toEqual(["hl → bn", "bn → hl", "bn → okx"]);
+    fireEvent.change(screen.getByLabelText("搜索差价交易所"), { target: { value: "Hyperliquid" } });
+    expect(rowRoutes()).toEqual(["hl → bn", "bn → hl"]);
+    fireEvent.change(screen.getByLabelText("搜索差价交易所"), { target: { value: "" } });
+    expect(rowRoutes()).toEqual(["hl → bn", "bn → hl", "bn → okx"]);
+    current = { ...lookupResult, spreads: [added, subDex] };
+    await userEvent.click(screen.getByRole("button", { name: "立即刷新" }));
+    await waitFor(() => expect(rowRoutes()).toEqual(["bn → hl", "bn → okx"]));
+    current = { ...lookupResult, spreads: [added, { ...main, executable_spread_pct: -1 }, subDex] };
+    await userEvent.click(screen.getByRole("button", { name: "立即刷新" }));
+    await waitFor(() => expect(rowRoutes()).toEqual(["bn → hl", "bn → hl", "bn → okx"]));
+    const rawMarkets = Array.from(section.querySelectorAll("tbody tr.ant-table-row")).map((row) => row.querySelectorAll("td")[3].textContent);
+    expect(rawMarkets[0]).toContain("DEX main · BTC");
+    expect(rawMarkets[1]).toContain("DEX io · io:BTC");
+    await userEvent.click(within(section).getByRole("button", { name: "解除固定" }));
+    expect(rowRoutes()).toEqual(["bn → okx", "bn → hl", "bn → hl"]);
+  });
+
+  it("captures a custom column order and clears the fixed order when changing instruments", async () => {
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    let current = lookupResult;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/instruments/BTCUSDT")) return Response.json(current);
+      if (url.endsWith("/instruments/ETHUSDT")) return Response.json({ ...current, symbol: "ETHUSDT", base: "ETH" });
+      return fallback(input, init);
+    });
+    render(<InstrumentLookupPage />);
+    const section = (await screen.findByText("跨市场差价")).closest("section")!;
+    await userEvent.click(within(section).getByRole("columnheader", { name: /买入市场/ }));
+    const rowKeys = () => Array.from(section.querySelectorAll("tbody tr.ant-table-row")).map((row) => row.getAttribute("data-row-key"));
+    const fixedKeys = rowKeys();
+    await userEvent.click(within(section).getByRole("button", { name: "固定排序" }));
+    current = { ...lookupResult, spreads: [...lookupResult.spreads].reverse().map((spread, index) => ({ ...spread, executable_spread_pct: index })) };
+    await userEvent.click(screen.getByRole("button", { name: "立即刷新" }));
+    await waitFor(() => expect(within(section).getByText("+2.000%")).toBeTruthy());
+    expect(rowKeys()).toEqual(fixedKeys);
+    fireEvent.change(screen.getByLabelText("查询标的"), { target: { value: "ETHUSDT" } });
+    await userEvent.click(screen.getByRole("button", { name: /查询$/ }));
+    await screen.findByText("ETH / USDT");
+    expect(within(section).getByRole("button", { name: "固定排序" }).getAttribute("aria-pressed")).toBe("false");
+    expect(within(section).queryByRole("button", { name: "解除固定" })).toBeNull();
+  });
+
   it("hides uncommon spread types by default and can reveal and sort every spread", async () => {
     const spreadTypes = ["SF", "FF", "SS", null] as const;
     const manySpreads = Array.from({ length: 13 }, (_, index) => ({
@@ -1152,14 +1268,14 @@ describe("InstrumentLookupPage", () => {
     await userEvent.click(buyHeader);
     const table = buyHeader.closest("table");
     const buyMarkets = Array.from(table?.querySelectorAll("tbody tr.ant-table-row") ?? []).map(
-      (row) => row.querySelectorAll("td")[1]?.textContent
+      (row) => row.querySelectorAll("td")[1]?.querySelector(".ant-space")?.textContent
     );
     expect(buyMarkets).toEqual(["Binance现货", "Binance现货", "OKX永续合约"]);
 
     const sellHeader = screen.getByRole("columnheader", { name: /卖出市场/ });
     await userEvent.click(sellHeader);
     const sellMarkets = Array.from(table?.querySelectorAll("tbody tr.ant-table-row") ?? []).map(
-      (row) => row.querySelectorAll("td")[3]?.textContent
+      (row) => row.querySelectorAll("td")[3]?.querySelector(".ant-space")?.textContent
     );
     expect(sellMarkets).toEqual(["Binance永续合约", "Binance永续合约", "OKX永续合约"]);
   });

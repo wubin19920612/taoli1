@@ -1547,6 +1547,73 @@ body {
   width: 200px;
 }
 
+.instrument-spread-head > div:first-child {
+  min-width: 220px;
+}
+
+.instrument-spread-head > div:first-child > .ant-typography-secondary {
+  display: block;
+  max-width: 580px;
+  font-size: 12px;
+}
+
+.instrument-spread-quote {
+  display: grid;
+  gap: 5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.instrument-spread-quote-price {
+  color: #172026;
+  font-size: 15px;
+}
+
+.instrument-spread-quote-side {
+  display: none;
+  color: #66736f;
+  font-size: 12px;
+}
+
+.instrument-spread-quote dl {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+
+.instrument-spread-quote dl > div {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: baseline;
+  gap: 8px;
+}
+
+.instrument-spread-quote dt {
+  color: #66736f;
+  font-size: 12px;
+  text-align: left;
+}
+
+.instrument-spread-quote dd {
+  margin: 0;
+  color: #263d34;
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.instrument-spread-quote dd.instrument-rate-positive {
+  color: #9f2724;
+}
+
+.instrument-spread-quote dd.instrument-rate-negative {
+  color: #08765c;
+}
+
+.instrument-spread-quote-updated {
+  color: #66736f;
+  font-size: 11px;
+}
+
 .instrument-spread-type-tag.ant-tag {
   display: inline-grid;
   gap: 3px;
@@ -2286,6 +2353,21 @@ body {
 }
 
 @media (max-width: 640px) {
+  .instrument-spread-quote-side {
+    display: block;
+    text-align: left;
+  }
+
+  .instrument-spread-quote dl > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1px;
+  }
+
+  .instrument-spread-quote dt,
+  .instrument-spread-quote dd {
+    text-align: left;
+  }
+
   .instrument-spread-table .ant-table-content {
     overflow-x: visible !important;
   }
@@ -2384,6 +2466,23 @@ body {
   }
 
   .instrument-spread-table tbody tr.ant-table-row > td:nth-child(8) {
+    grid-column: 1 / -1;
+    margin-top: 6px;
+    padding: 8px;
+    border: 1px solid #e3eae7;
+    border-radius: 4px;
+    background: #f8fbfc;
+  }
+
+  .instrument-spread-table tbody tr.ant-table-row > td:nth-child(8)::before {
+    content: "24h 最大价差 · 历史收盘价预估";
+    display: block;
+    color: #52615b;
+    font-size: 11px;
+    text-align: right;
+  }
+
+  .instrument-spread-table tbody tr.ant-table-row > td:nth-child(9) {
     grid-column: 1 / -1;
     text-align: center;
   }

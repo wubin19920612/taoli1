@@ -129,6 +129,9 @@ type AstroSizingFormValues = Required<Omit<AstroCardCreateRequest, "save_as_defa
 };
 
 type SpreadTypeFilter = "FF" | "SF" | "SS" | "reverse_sf";
+type SpreadSortKey = "opportunity_type" | "buy_market" | "sell_market" | "executable_spread_pct" | "close_spread_pct" | "max_spread_24h";
+type SpreadSort = { key: SpreadSortKey; order: "ascend" | "descend" } | null;
+type SpreadOrderLock = { symbol: string; keys: string[] };
 
 const spreadTypeFilterOptions: Array<{ label: string; value: SpreadTypeFilter }> = [
   { label: "FF 合约-合约", value: "FF" },
@@ -232,6 +235,63 @@ function SpreadTypeTag({ spread }: { spread: InstrumentSpreadComparison }) {
       <span><strong>{presentation.code}</strong> · {presentation.route}</span>
       <b>{exchangeShortLabels[spread.buy_exchange] ?? spread.buy_exchange} → {exchangeShortLabels[spread.sell_exchange] ?? spread.sell_exchange}</b>
     </Tag>
+  );
+}
+
+function spreadGroupKey(spread: InstrumentSpreadComparison): string {
+  if (!spread.buy_raw_symbol || !spread.sell_raw_symbol) return spread.id;
+  return JSON.stringify([
+    [spread.buy_exchange, spread.buy_market_type, spread.buy_dex ?? "", spread.buy_raw_symbol],
+    [spread.sell_exchange, spread.sell_market_type, spread.sell_dex ?? "", spread.sell_raw_symbol]
+  ].map((market) => JSON.stringify(market)).sort());
+}
+
+function SpreadQuoteCell({ spread, side, market }: {
+  spread: InstrumentSpreadComparison;
+  side: "buy" | "sell";
+  market: MarketSnapshot | null;
+}) {
+  const isBuy = side === "buy";
+  const isFuture = (isBuy ? spread.buy_market_type : spread.sell_market_type) === "future";
+  const rate = isBuy ? spread.buy_funding_rate_pct : spread.sell_funding_rate_pct;
+  const interval = isBuy ? spread.buy_funding_interval_hours : spread.sell_funding_interval_hours;
+  const volume = isBuy ? spread.buy_volume_24h_usdt : spread.sell_volume_24h_usdt;
+  const timestamp = isBuy ? spread.buy_timestamp : spread.sell_timestamp;
+  const estimated = (field: string) => market?.estimated_fields?.length
+    ? market.estimated_fields.includes(field)
+    : isBuy ? spread.buy_is_estimated : spread.sell_is_estimated;
+  const fundingAvailable = typeof rate === "number" && Number.isFinite(rate);
+  const intervalAvailable = typeof interval === "number" && Number.isFinite(interval) && interval > 0;
+  return (
+    <div className="instrument-spread-quote">
+      <span className="instrument-spread-quote-side">{isBuy ? "买入 Ask（卖一）" : "卖出 Bid（买一）"}</span>
+      <strong className="instrument-spread-quote-price">{price(isBuy ? spread.buy_ask : spread.sell_bid)}</strong>
+      <dl>
+        <div>
+          <dt>24h 成交额</dt>
+          <dd title={typeof volume === "number" && Number.isFinite(volume) ? volume.toLocaleString("en-US", { maximumFractionDigits: 2 }) + " USDT / 24h" : "成交额未提供"}>{estimated("volume_24h_usdt") && volume != null ? "≈ " : ""}{compactUsdt(volume)}</dd>
+        </div>
+        <div>
+          <dt>资金费率</dt>
+          <dd className={isFuture && fundingAvailable ? "instrument-rate-" + tone(rate) : ""}>
+            <Tooltip title="每次结算的资金费率；正值为多头支付空头，负值为空头支付多头。双方周期可能不同，不能直接按费率相减。≈ 表示预估数据。">
+              <span>{isFuture ? fundingAvailable ? <>{estimated("funding_rate_pct") ? "≈ " : ""}{signedPct(rate, 6)}</> : "未提供" : "不适用（现货）"}</span>
+            </Tooltip>
+          </dd>
+        </div>
+        <div>
+          <dt>结算周期</dt>
+          <dd>{isFuture ? intervalAvailable ? <>{estimated("funding_interval_hours") ? "≈ " : ""}每 {interval} 小时</> : "未提供" : "无（现货）"}</dd>
+        </div>
+        {isFuture && market?.funding_next_time ? (
+          <div>
+            <dt>下次结算</dt>
+            <dd title={"北京时间 " + fullTime(market.funding_next_time)}>{estimated("funding_next_time") ? "≈ " : ""}{dayjs.utc(market.funding_next_time).utcOffset(8).format("MM-DD HH:mm")}</dd>
+          </div>
+        ) : null}
+      </dl>
+      <span className="instrument-spread-quote-updated" title={"北京时间 " + fullTime(timestamp)}>行情更新 {ageText(timestamp)}</span>
+    </div>
   );
 }
 
@@ -929,6 +989,8 @@ export function InstrumentLookupPage() {
     "reverse_sf"
   ]);
   const [spreadExchangeSearch, setSpreadExchangeSearch] = useState("");
+  const [spreadSort, setSpreadSort] = useState<SpreadSort>({ key: "executable_spread_pct", order: "descend" });
+  const [spreadOrderLock, setSpreadOrderLock] = useState<SpreadOrderLock | null>(null);
   const [astroSymbol, setAstroSymbol] = useState("");
   const [astroSpread, setAstroSpread] = useState<InstrumentSpreadComparison | null>(null);
   const [astroReversed, setAstroReversed] = useState(false);
@@ -1182,6 +1244,41 @@ export function InstrumentLookupPage() {
     { spot: 0, future: 0 }
   );
   const instrumentSpreads = result?.spreads ?? [];
+  const spreadOrderFixed = Boolean(spreadOrderLock && spreadOrderLock.symbol === result?.symbol);
+  const spreadComparators: Record<SpreadSortKey, (left: InstrumentSpreadComparison, right: InstrumentSpreadComparison) => number> = {
+    opportunity_type: (left, right) => spreadTypeOrder(left.opportunity_type) - spreadTypeOrder(right.opportunity_type),
+    buy_market: (left, right) => exchangeNameOrder(left.buy_exchange, right.buy_exchange),
+    sell_market: (left, right) => exchangeNameOrder(left.sell_exchange, right.sell_exchange),
+    executable_spread_pct: (left, right) => left.executable_spread_pct - right.executable_spread_pct,
+    close_spread_pct: (left, right) => left.close_spread_pct - right.close_spread_pct,
+    max_spread_24h: (left, right) => {
+      const leftValue = statistics?.spreads?.[left.id]?.max_spread_pct ?? Number.NEGATIVE_INFINITY;
+      const rightValue = statistics?.spreads?.[right.id]?.max_spread_pct ?? Number.NEGATIVE_INFINITY;
+      return leftValue === rightValue ? 0 : leftValue - rightValue;
+    }
+  };
+  const sortedInstrumentSpreads = spreadSort
+    ? [...instrumentSpreads].sort((left, right) => spreadComparators[spreadSort.key](left, right) * (spreadSort.order === "ascend" ? 1 : -1))
+    : instrumentSpreads;
+  const spreadOrderRanks = new Map(spreadOrderFixed ? spreadOrderLock?.keys.map((key, index) => [key, index]) : []);
+  const orderedInstrumentSpreads = spreadOrderFixed
+    ? [...sortedInstrumentSpreads].sort((left, right) => (
+      (spreadOrderRanks.get(spreadGroupKey(left)) ?? Number.MAX_SAFE_INTEGER)
+      - (spreadOrderRanks.get(spreadGroupKey(right)) ?? Number.MAX_SAFE_INTEGER)
+    ))
+    : sortedInstrumentSpreads;
+
+  useEffect(() => {
+    if (!spreadOrderLock || !result) return;
+    if (spreadOrderLock.symbol !== result.symbol) {
+      setSpreadOrderLock(null);
+      return;
+    }
+    const knownKeys = new Set(spreadOrderLock.keys);
+    const additions = orderedInstrumentSpreads.map(spreadGroupKey).filter((key) => !knownKeys.has(key));
+    if (additions.length) setSpreadOrderLock({ ...spreadOrderLock, keys: [...spreadOrderLock.keys, ...additions] });
+  }, [result, spreadOrderLock, orderedInstrumentSpreads]);
+
   const hiddenSpreadTypeSet = new Set(hiddenSpreadTypes);
   const spreadExchanges = [...new Set(instrumentSpreads.flatMap(
     (spread) => [spread.buy_exchange, spread.sell_exchange]
@@ -1201,7 +1298,7 @@ export function InstrumentLookupPage() {
   const spreadExchangeOptions = spreadExchanges
     .filter(exchangeMatchesSearch)
     .map((exchange) => ({ value: exchangeLabels[exchange] ?? exchange }));
-  const visibleInstrumentSpreads = instrumentSpreads.filter(
+  const visibleInstrumentSpreads = orderedInstrumentSpreads.filter(
     (spread) => !hiddenSpreadTypeSet.has(spreadTypeFilter(spread.opportunity_type))
       && (exchangeMatchesSearch(spread.buy_exchange) || exchangeMatchesSearch(spread.sell_exchange))
   );
@@ -1461,9 +1558,7 @@ export function InstrumentLookupPage() {
       title: "差价类型",
       dataIndex: "opportunity_type",
       width: 150,
-      sorter: (left, right) => (
-        spreadTypeOrder(left.opportunity_type) - spreadTypeOrder(right.opportunity_type)
-      ),
+      sorter: true,
       render: (_, spread) => (
         <SpreadTypeTag spread={spread} />
       )
@@ -1472,7 +1567,7 @@ export function InstrumentLookupPage() {
       title: "买入市场",
       key: "buy_market",
       width: 160,
-      sorter: (left, right) => exchangeNameOrder(left.buy_exchange, right.buy_exchange),
+      sorter: true,
       render: (_, spread) => (
         <Tooltip title={`价格倍率 ${spread.buy_price_multiplier ?? 1}x · 数量乘数 ${spread.buy_contract_size_multiplier ?? "-"} · ${spread.buy_is_estimated ? "预估行情" : "非预估行情"} · 来源 ${spread.buy_data_source ?? "未提供"}`}>
           <div className="instrument-market-cell">
@@ -1481,29 +1576,29 @@ export function InstrumentLookupPage() {
               <MarketTypeTag value={spread.buy_market_type} />
             </Space>
             {spread.buy_raw_symbol ? <span>{spread.buy_dex ? `DEX ${spread.buy_dex} · ` : ""}{spread.buy_raw_symbol}</span> : null}
+            <span className="instrument-spread-market-note">价格倍率 {spread.buy_price_multiplier ?? 1}×{spread.buy_is_estimated ? " · 预估行情" : ""}</span>
           </div>
         </Tooltip>
       )
     },
     {
-      title: "买入 Ask",
+      title: <span className="instrument-spread-column-title">买入 Ask<small>盘口卖一 · 归一价格</small></span>,
       dataIndex: "buy_ask",
-      width: 125,
+      width: 220,
       align: "right",
-      render: (value: number, spread) => (
-        <div className="instrument-market-cell">
-          <strong>{price(value)}</strong>
-          <span>24h {compactUsdt(spread.buy_volume_24h_usdt)}</span>
-          <span>资金 {signedPct(spread.buy_funding_rate_pct, 6)} / {spread.buy_funding_interval_hours ? `${spread.buy_funding_interval_hours}h` : "-"}</span>
-          <span title={fullTime(spread.buy_timestamp)}>更新 {ageText(spread.buy_timestamp)}</span>
-        </div>
+      render: (_, spread) => (
+        <SpreadQuoteCell
+          spread={spread}
+          side="buy"
+          market={result ? exactSpreadMarket(result, spread.buy_exchange, spread.buy_market_type, spread.buy_raw_symbol, spread.buy_dex) : null}
+        />
       )
     },
     {
       title: "卖出市场",
       key: "sell_market",
       width: 160,
-      sorter: (left, right) => exchangeNameOrder(left.sell_exchange, right.sell_exchange),
+      sorter: true,
       render: (_, spread) => (
         <Tooltip title={`价格倍率 ${spread.sell_price_multiplier ?? 1}x · 数量乘数 ${spread.sell_contract_size_multiplier ?? "-"} · ${spread.sell_is_estimated ? "预估行情" : "非预估行情"} · 来源 ${spread.sell_data_source ?? "未提供"}`}>
           <div className="instrument-market-cell">
@@ -1512,22 +1607,22 @@ export function InstrumentLookupPage() {
               <MarketTypeTag value={spread.sell_market_type} />
             </Space>
             {spread.sell_raw_symbol ? <span>{spread.sell_dex ? `DEX ${spread.sell_dex} · ` : ""}{spread.sell_raw_symbol}</span> : null}
+            <span className="instrument-spread-market-note">价格倍率 {spread.sell_price_multiplier ?? 1}×{spread.sell_is_estimated ? " · 预估行情" : ""}</span>
           </div>
         </Tooltip>
       )
     },
     {
-      title: "卖出 Bid",
+      title: <span className="instrument-spread-column-title">卖出 Bid<small>盘口买一 · 归一价格</small></span>,
       dataIndex: "sell_bid",
-      width: 125,
+      width: 220,
       align: "right",
-      render: (value: number, spread) => (
-        <div className="instrument-market-cell">
-          <strong>{price(value)}</strong>
-          <span>24h {compactUsdt(spread.sell_volume_24h_usdt)}</span>
-          <span>资金 {signedPct(spread.sell_funding_rate_pct, 6)} / {spread.sell_funding_interval_hours ? `${spread.sell_funding_interval_hours}h` : "-"}</span>
-          <span title={fullTime(spread.sell_timestamp)}>更新 {ageText(spread.sell_timestamp)}</span>
-        </div>
+      render: (_, spread) => (
+        <SpreadQuoteCell
+          spread={spread}
+          side="sell"
+          market={result ? exactSpreadMarket(result, spread.sell_exchange, spread.sell_market_type, spread.sell_raw_symbol, spread.sell_dex) : null}
+        />
       )
     },
     {
@@ -1535,8 +1630,7 @@ export function InstrumentLookupPage() {
       dataIndex: "executable_spread_pct",
       width: 130,
       align: "right",
-      sorter: (left, right) => left.executable_spread_pct - right.executable_spread_pct,
-      defaultSortOrder: "descend",
+      sorter: true,
       render: (value: number, spread) => (
         <Tooltip title={`买入 Ask ${price(spread.buy_ask)} · 卖出 Bid ${price(spread.sell_bid)}；未扣手续费及滑点`}>
           <div className={`instrument-spread-value instrument-rate-${tone(value)}`}>
@@ -1551,7 +1645,7 @@ export function InstrumentLookupPage() {
       dataIndex: "close_spread_pct",
       width: 130,
       align: "right",
-      sorter: (left, right) => left.close_spread_pct - right.close_spread_pct,
+      sorter: true,
       render: (value: number, spread) => (
         <Tooltip title={`买入 Bid ${price(spread.buy_bid)} · 卖出 Ask ${price(spread.sell_ask)}；非平仓净收益，未扣手续费及滑点`}>
           <div className="instrument-spread-value instrument-spread-close-value">
@@ -1566,10 +1660,7 @@ export function InstrumentLookupPage() {
       key: "max_spread_24h",
       width: 160,
       align: "right",
-      sorter: (left, right) => (
-        (statistics?.spreads?.[left.id]?.max_spread_pct ?? Number.NEGATIVE_INFINITY)
-        - (statistics?.spreads?.[right.id]?.max_spread_pct ?? Number.NEGATIVE_INFINITY)
-      ),
+      sorter: true,
       render: (_, spread) => {
         const history = statistics?.spreads?.[spread.id];
         const value = history?.max_spread_pct;
@@ -1983,9 +2074,23 @@ export function InstrumentLookupPage() {
           <div className="instrument-section-head instrument-spread-head">
             <div>
               <Typography.Title level={4}>跨市场差价</Typography.Title>
-              <Typography.Text type="secondary">按可成交盘口计算，每组市场保留较优方向</Typography.Text>
+              <Typography.Text type="secondary">按可成交盘口及价格倍率归一计算；未扣手续费及滑点，每组保留较优方向。≈ 表示预估数据，结算时间为北京时间。</Typography.Text>
             </div>
             <Space size={[10, 4]} wrap className="instrument-spread-filters">
+              <Tooltip title={spreadOrderFixed ? "行情继续更新，已有市场组保持顺序；新市场组追加到末尾。解除后恢复实时排序。" : "固定当前排列顺序，避免行情刷新时行位置跳动；价格、资费和成交额继续更新。"}>
+                <Button
+                  icon={<PushpinOutlined />}
+                  type={spreadOrderFixed ? "primary" : "default"}
+                  aria-label={spreadOrderFixed ? "解除固定" : "固定排序"}
+                  aria-pressed={spreadOrderFixed}
+                  onClick={() => setSpreadOrderLock(spreadOrderFixed || !result ? null : {
+                    symbol: result.symbol,
+                    keys: sortedInstrumentSpreads.map(spreadGroupKey)
+                  })}
+                >
+                  {spreadOrderFixed ? "解除固定" : "固定排序"}
+                </Button>
+              </Tooltip>
               <AutoComplete
                 className="instrument-spread-exchange-search"
                 value={spreadExchangeSearch}
@@ -2015,12 +2120,25 @@ export function InstrumentLookupPage() {
           <Table<InstrumentSpreadComparison>
             className="instrument-spread-table"
             tableLayout="fixed"
-            rowKey="id"
-            columns={spreadColumns}
+            rowKey={spreadGroupKey}
+            columns={spreadColumns.map((column) => {
+              const key = (column.key ?? ("dataIndex" in column ? column.dataIndex : undefined)) as SpreadSortKey;
+              return column.sorter ? {
+                ...column,
+                key,
+                sorter: !spreadOrderFixed,
+                sortOrder: !spreadOrderFixed && spreadSort?.key === key ? spreadSort.order : null
+              } : column;
+            })}
+            onChange={(_, __, sorter) => {
+              if (spreadOrderFixed || Array.isArray(sorter)) return;
+              const key = sorter.columnKey as SpreadSortKey;
+              setSpreadSort(sorter.order && key in spreadComparators ? { key, order: sorter.order } : null);
+            }}
             dataSource={visibleInstrumentSpreads}
             pagination={false}
             size="small"
-            scroll={{ x: 1320 }}
+            scroll={{ x: 1510 }}
           />
         </section>
       ) : null}
