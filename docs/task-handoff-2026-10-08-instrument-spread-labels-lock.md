@@ -39,7 +39,19 @@
 - 按 docs/git-delivery-checklist.md 与 docs/linux-deployment.md，仅暂存本次页面、样式、专项测试与本文档。
 - 等待两份固定 SHA 镜像完成后，部署脚本备份 /data/radar.db 和存在的 squeeze route 数据库，核验 integrity_check 与主机/容器 SHA-256，再 git pull --ff-only 与 Compose up -d --no-build --wait。生产机不执行构建，不删除数据卷，不修改 .env。
 - 发布前确认生产分支正确、受跟踪工作区干净，两个容器 healthy，/api/health status=ok 且 exchange_errors 为空，可用磁盘约 17 GiB。
-- 具体提交、备份校验和线上页面验收将在发布完成后补充；本节不代表已经完成部署。
+- 功能提交 6883583d1292b4b663f60f396b576f6a99905812 已推送当前分支；GitHub Actions 37751400608 的 backend/frontend 两项构建均成功，两份 SHA 镜像 manifest 已在生产机核验。最初 Git HTTPS TLS 握手失败，使用单次命令的 http.version=HTTP/1.1 与 http.sslBackend=openssl 后推送成功，没有关闭证书校验或改全局配置。
+
+## 线上最终验收
+
+- 生产源码与两个容器镜像均为 6883583d1292b4b663f60f396b576f6a99905812；受跟踪工作区干净，两个容器 healthy。本文最后的验收补充作为单独文档提交，不是第二次应用部署。
+- /data/radar.db 备份：backups/radar-before-6883583d1292-20261008T084257Z.db，610893824 bytes；integrity_check=ok，容器/主机 SHA-256 一致：8cc6640bf504bf7e24faeeca0743e93845461ff3756aec66e96f7ed48a0e2901。
+- Squeeze route 备份：backups/squeeze-route-before-6883583d1292-20261008T084257Z.db，241664 bytes；integrity_check=ok，容器/主机 SHA-256 一致：6d7b66c35062c558b08dc1be97106940b8a3530645a66444c91f64a9cc981910。
+- 更新使用 git pull --ff-only 和固定 SHA 镜像的 Compose up -d --no-build --wait，没有在生产机构建。既有部署备份保留策略自动保留本次备份及选中的历史备份，清理了 2026-10-07 的 345fd90 重复近期备份。
+- 后端和前端代理 /api/health 均 HTTP 200，status=ok，11841 markets，exchange_errors 为空，所有交易所 healthy。未改后端 API 或交易执行。
+- 经验证的 SSH 隧道访问真实生产前端（HTTP 200），1920px 桌面 METUSDT 差价表固定后观察到 7 次成功行情返回：原有可见市场组的相对顺序一致，双方时间戳与报价更新；新增/可见市场组变化使行数从 21 变为 22，未沿用旧行情。解除固定后按当前可成交开仓价差降序排列。
+- 390px 手机真实页面显示 21 个组，每组均有买入 Ask（卖一）/卖出 Bid（买一）角色标签、资金费率、各自结算周期、24h 成交额；固定按钮 aria-pressed=true。桌面/手机均无整页横向溢出、无浏览器脚本错误，实际下次结算时间为北京时间。
+- 线上截图：output/spread-labels-lock-production-1920-20261008.png、output/spread-labels-lock-production-390-20261008.png，便于查看表头与前三行的裁剪为 output/spread-labels-lock-production-preview-20261008.png；真实页面/行情验证 JSON、部署与健康日志也保留为本任务 output 产物，不提交仓库。
+- 已知限制：固定顺序只在本页当前标的有效；整页重载或换标的解除。市场真实增删或被屏蔽类型的方向改变仍会影响可见行数；现有历史统计缺失/加载中的提示、诊断过期提示按原逻辑保留，不把这些情况伪装成新数据或零值。
 
 ## 工作区与下一步
 
