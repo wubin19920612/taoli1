@@ -63,6 +63,24 @@
 - 核验前后端镜像、健康接口的独立 Arcus 状态、标的/配对/历史资金费率接口、桌面与手机页面。
 - 提交号、Actions、备份文件/校验、部署版本与最终页面验收在完成后追加；未追加前不视为线上完成。
 
+## 线上最终验收（2026-10-08）
+
+- 功能提交、生产源码及两份镜像版本：`43f9345d7b07a306f4b0a1294bcc36c841cbf058`；已推送当前分支，无 force push。此验收补充是后续文档提交，不是第二次应用部署。
+- GitHub Actions `37741238867`：backend/frontend 两项构建均成功；两份 SHA 镜像 manifest 预先核验。
+- 执行正式部署脚本：先备份，后 `git pull --ff-only`，拉取固定 SHA 镜像并 `up -d --no-build --wait`。未在生产构建、未删除 volume、未修改 .env；既有部署备份保留策略正常运行。
+- Radar 备份：`backups/radar-before-43f9345d7b07-20261008T070649Z.db`，615436288 bytes；`integrity_check=ok`；容器/主机 SHA-256 一致：`8da03c5a12b45a892b1cfbb32d5980a6e2cb7a8908613eb1f9e95a998d9285b3`。
+- Squeeze route 备份：`backups/squeeze-route-before-43f9345d7b07-20261008T070649Z.db`，241664 bytes；`integrity_check=ok`；容器/主机 SHA-256 一致：`63c8845c7f137f1c811cec30e13bc666f2fca7edfda6adfe01b4fd3a29e6896e`。
+- 两个生产容器健康、服务器受跟踪工作区干净、源码 SHA 与镜像一致；部署后约 8 分钟后端内存 377.6 MiB / 768 MiB，前端 4.969 MiB / 96 MiB。
+- `/api/health` HTTP 200，`status=ok`、11837 markets、exchange_errors 为空，独立 `arcus` 状态 healthy、连续失败 0；标的接口保留 `BTC-USD`、原生 USD 来源与 1h 周期。
+- Arcus BTC / Binance BTC：HTTP 200、241 个分钟对齐点、4 条历史资金费率、1h/8h 周期，无 warnings。
+- Arcus NVDA / RH Lighter NVDA：HTTP 200、240 个分钟对齐点、8 条历史资金费率、1h/1h；原始名 `NVDA-USD` / `NVDA`，无 warnings。
+- Arcus NVDA / Hyperliquid xyz NVDA：HTTP 200、241 个分钟对齐点、8 条历史资金费率，显式 DEX `xyz` 与原始名 `xyz:NVDA` 保留，无 warnings。
+- 支持交易所接口包含 Arcus；机会接口按 Arcus 筛选有真实 SF/FF 路线，双方成交额、原始名、估算费用、风险标签均保留；高差价/低成交额记录仍有既有风险标识，不能当作同名合约必然可套利。
+- 公开状态/深度接口 HTTP 200，Arcus 原始 BTC 市场 ONLINE、双边 L2、Base maker 0% / taker 0.0225%、oracle 可读，Arcus 无诊断错误；Arcus 现货配对请求按预期 HTTP 422 拒绝。
+- 标的统计 HTTP 200：Arcus BTC 1h/24h 涨跌幅无 error；Arcus/Binance 24h 峰值统计有 1440 对齐点且 complete=true，仍保留历史收盘价统计的 `is_estimated=true`。
+- 前端根页面从服务器侧 HTTP 200，React root 存在；本机浏览器直连公开入口超时，未声称完成线上桌面/手机截图。验收依据是实际生产接口、健康容器、SHA 镜像及前端测试/构建。
+- 残余限制：现货 RFQ 与 Arcus Astro 路线未接入，费用仍为估算且 USD/USDT 未换汇；全市场统计中原有 Aster 现货历史不支持、OKX 历史请求 429 和 Lighter 个别分钟缺口仍按既有 error/complete 标记返回，没有替用 Arcus 数据填补。
+
 ## 未跟踪文件与下一步
 
 - 保留原有 `.worktrees/`、旧 pytest 目录、未提交交接草稿和 `output/` 研究/截图，不清理未知归属文件。
