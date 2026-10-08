@@ -16,6 +16,7 @@ INSTRUMENT_LOOKUP_EXCHANGES: tuple[str, ...] = (
     "hyperliquid",
     "lighter",
     "rh-lighter",
+    "arcus",
 )
 
 

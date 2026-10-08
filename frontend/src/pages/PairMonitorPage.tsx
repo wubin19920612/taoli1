@@ -214,7 +214,8 @@ const exchangeLabels: Record<string, string> = {
   aster: "Aster",
   hyperliquid: "Hyperliquid",
   lighter: "Lighter",
-  "rh-lighter": "RH Lighter"
+  "rh-lighter": "RH Lighter",
+  arcus: "Arcus"
 };
 
 const exchangeOptions = [
@@ -227,7 +228,8 @@ const exchangeOptions = [
   "aster",
   "hyperliquid",
   "lighter",
-  "rh-lighter"
+  "rh-lighter",
+  "arcus"
 ].map((value) => ({ label: exchangeLabels[value] ?? value, value }));
 
 const intervalOptions = [
@@ -250,6 +252,13 @@ const marketTypeOptions: Array<{ label: string; value: MarketType }> = [
   { label: "合约", value: "future" },
   { label: "现货", value: "spot" }
 ];
+
+function marketTypeOptionsForExchange(exchange: string | undefined) {
+  return marketTypeOptions.map((option) => ({
+    ...option,
+    disabled: exchange === "arcus" && option.value === "spot"
+  }));
+}
 
 function isHyperliquidFuture(exchange: string | null | undefined, marketType: MarketType | null | undefined): boolean {
   return exchange === "hyperliquid" && marketType === "future";
@@ -1219,7 +1228,7 @@ function leftLegLabel(result: PairSpreadQueryResult | null): string {
 
 function exchangeToneClass(exchange: string): string {
   const normalized = exchange.trim().toLowerCase().replace(/_/g, "-");
-  if (["aster", "gate", "hyperliquid", "lighter", "rh-lighter", "bybit", "bitget", "binance", "okx", "binance-alpha"].includes(normalized)) {
+  if (["aster", "gate", "hyperliquid", "lighter", "rh-lighter", "arcus", "bybit", "bitget", "binance", "okx", "binance-alpha"].includes(normalized)) {
     return `pair-exchange-${normalized}`;
   }
   return "pair-exchange-default";
@@ -1233,6 +1242,7 @@ function exchangeShortLabel(exchange: string): string {
     hyperliquid: "hl",
     lighter: "li",
     "rh-lighter": "rh",
+    arcus: "arcus",
     bybit: "by",
     bitget: "bg",
     binance: "bn",
@@ -4259,6 +4269,14 @@ export function PairMonitorPage() {
   const watchedLeg2Exchange = Form.useWatch("leg2_exchange", form);
   const watchedLeg2MarketType = Form.useWatch("leg2_market_type", form);
   const watchedLeg2Dex = Form.useWatch("leg2_dex", form);
+  useEffect(() => {
+    if (watchedLeg1Exchange === "arcus" && watchedLeg1MarketType === "spot") {
+      form.setFieldValue("leg1_market_type", "future");
+    }
+    if (watchedLeg2Exchange === "arcus" && watchedLeg2MarketType === "spot") {
+      form.setFieldValue("leg2_market_type", "future");
+    }
+  }, [form, watchedLeg1Exchange, watchedLeg1MarketType, watchedLeg2Exchange, watchedLeg2MarketType]);
   const initialUrlQuery = useMemo(() => pairQueryFromUrl(), []);
   const initialCachedState = useMemo(() => {
     const cached = loadLastPairSpreadState();
@@ -5479,7 +5497,7 @@ export function PairMonitorPage() {
                       <Select options={exchangeOptions} showSearch />
                     </Form.Item>
                     <Form.Item name="leg1_market_type" rules={[{ required: true }]} className="pair-query-market-type">
-                      <Select options={marketTypeOptions} />
+                      <Select options={marketTypeOptionsForExchange(watchedLeg1Exchange)} />
                     </Form.Item>
                     {leg1UsesDex ? (
                       <Form.Item name="leg1_dex" className="pair-query-dex">
@@ -5493,7 +5511,7 @@ export function PairMonitorPage() {
                       <Select options={exchangeOptions} showSearch />
                     </Form.Item>
                     <Form.Item name="leg2_market_type" rules={[{ required: true }]} className="pair-query-market-type">
-                      <Select options={marketTypeOptions} />
+                      <Select options={marketTypeOptionsForExchange(watchedLeg2Exchange)} />
                     </Form.Item>
                     {leg2UsesDex ? (
                       <Form.Item name="leg2_dex" className="pair-query-dex">
@@ -5517,7 +5535,7 @@ export function PairMonitorPage() {
                     <div className="pair-query-field">
                       <Typography.Text className="pair-query-field-label">市场</Typography.Text>
                       <Form.Item name="leg1_market_type" rules={[{ required: true }]} className="pair-query-market-type">
-                        <Select aria-label="左侧市场" options={marketTypeOptions} />
+                        <Select aria-label="左侧市场" options={marketTypeOptionsForExchange(watchedLeg1Exchange)} />
                       </Form.Item>
                     </div>
                     {leg1UsesDex ? (
@@ -5552,7 +5570,7 @@ export function PairMonitorPage() {
                     <div className="pair-query-field">
                       <Typography.Text className="pair-query-field-label">市场</Typography.Text>
                       <Form.Item name="leg2_market_type" rules={[{ required: true }]} className="pair-query-market-type">
-                        <Select aria-label="右侧市场" options={marketTypeOptions} />
+                        <Select aria-label="右侧市场" options={marketTypeOptionsForExchange(watchedLeg2Exchange)} />
                       </Form.Item>
                     </div>
                     {leg2UsesDex ? (

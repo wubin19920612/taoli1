@@ -95,11 +95,12 @@ describe("DashboardPage", () => {
     await waitFor(() => expect(screen.getByText("列表最大开仓价差").closest(".ant-statistic")?.textContent).toContain("9.000"));
   });
 
-  it("requests exchange and global sorting together", async () => {
+  it.each([["rh-lighter", "RH Lighter"], ["arcus", "Arcus"]])("requests %s and global sorting together", async (exchange, label) => {
     const user = userEvent.setup();
     render(<DashboardPage />);
     await user.click(screen.getByRole("combobox", { name: "交易所（任一侧）" }));
-    await user.click(screen.getByText("RH Lighter"));
+    await user.type(screen.getByRole("combobox", { name: "交易所（任一侧）" }), label);
+    await user.click(screen.getByText(label));
     await user.click(screen.getByRole("combobox", { name: "排序指标" }));
     await user.click(screen.getByText("买方 24h 成交额"));
     await user.click(screen.getByRole("combobox", { name: "排序方向" }));
@@ -107,7 +108,7 @@ describe("DashboardPage", () => {
     await waitFor(() => {
       const urls = vi.mocked(fetch).mock.calls.map(([input]) => new URL(String(input), "http://localhost"));
       expect(urls.some((url) => url.pathname.endsWith("/opportunities")
-        && url.searchParams.get("exchange") === "rh-lighter"
+        && url.searchParams.get("exchange") === exchange
         && url.searchParams.get("sort_by") === "buy_volume_24h_usdt"
         && url.searchParams.get("sort_order") === "asc")).toBe(true);
     });

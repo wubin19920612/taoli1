@@ -17,6 +17,7 @@ SUPPORTED_PAIR_SPREAD_EXCHANGES: tuple[str, ...] = (
     "hyperliquid",
     "lighter",
     "rh-lighter",
+    "arcus",
 )
 SUPPORTED_SYMBOL_SPREAD_EXCHANGES: tuple[str, ...] = tuple(
     exchange for exchange in SUPPORTED_PAIR_SPREAD_EXCHANGES if exchange != "binance_alpha"
@@ -123,6 +124,8 @@ class PairSpreadLegQuery(BaseModel):
         exchange = info.data.get("exchange") if isinstance(info.data, dict) else None
         if exchange == "binance_alpha":
             return normalize_binance_alpha_symbol(value)
+        if exchange == "arcus" and value.strip().upper().endswith("-USD"):
+            return normalize_pair_spread_symbol(value.strip()[:-4])
         return normalize_pair_spread_symbol(value)
 
     @field_validator("dex")
@@ -135,6 +138,8 @@ class PairSpreadLegQuery(BaseModel):
     def validate_market_type(self) -> "PairSpreadLegQuery":
         if self.exchange == "binance_alpha" and self.market_type != MarketType.SPOT:
             raise ValueError("binance_alpha only supports spot pair-spread queries")
+        if self.exchange == "arcus" and self.market_type != MarketType.FUTURE:
+            raise ValueError("arcus only supports perpetual pair-spread queries; spot RFQ is not integrated")
         if self.dex is not None and self.exchange != "hyperliquid":
             raise ValueError("dex is only supported for hyperliquid pair-spread queries")
         if self.dex is not None and self.market_type != MarketType.FUTURE:

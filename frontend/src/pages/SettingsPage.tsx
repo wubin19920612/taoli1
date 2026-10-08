@@ -208,7 +208,7 @@ function ruleFromForm(values: AlertRuleFormValues, defaults: AlertRule): AlertRu
   };
 }
 
-const exchangeOptions = ["binance", "okx", "bybit", "gate", "bitget", "htx", "aster", "hyperliquid", "lighter"].map((item) => ({
+const exchangeOptions = ["binance", "okx", "bybit", "gate", "bitget", "htx", "aster", "hyperliquid", "lighter", "arcus"].map((item) => ({
   label: item,
   value: item
 }));

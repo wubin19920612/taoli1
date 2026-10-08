@@ -11,6 +11,7 @@ from urllib.parse import quote
 import aiosqlite
 import httpx
 
+from app.exchanges.arcus import ARCUS_URL, arcus_float, arcus_market_symbol
 from app.exchanges.base import DEFAULT_HEADERS, DEFAULT_LIMITS, ExchangeAdapter, parse_float
 from app.exchanges.lighter import lighter_endpoint_profile
 from app.models.market import MarketSnapshot, MarketType
@@ -47,7 +48,7 @@ logger = logging.getLogger(__name__)
 
 AlertSender = Callable[[str], Awaitable[None]]
 CORE_EXCHANGES = ("binance", "okx", "bybit", "gate", "bitget")
-EXCHANGE_ORDER = (*CORE_EXCHANGES, "hyperliquid", "aster", "lighter", "rh-lighter")
+EXCHANGE_ORDER = (*CORE_EXCHANGES, "hyperliquid", "aster", "lighter", "rh-lighter", "arcus")
 PUBLIC_TRANSFER_EXCHANGES = {"binance", "gate", "bitget"}
 INDEX_PROVIDER_CLASSES = {
     "binance": BinanceIndexComponentProvider,
@@ -66,6 +67,7 @@ INDEX_SOURCE_LABELS = {
     "hyperliquid": "Hyperliquid metaAndAssetCtxs",
     "lighter": "Lighter orderBookDetails",
     "rh-lighter": "Robinhood Lighter orderBookDetails",
+    "arcus": "Arcus markets + feetiers",
 }
 
 
@@ -107,6 +109,7 @@ def _coverage() -> list[TradeAvailabilityCoverage]:
         "aster": "已验证 Binance 兼容交易与深度接口；未验证匿名公开充提接口",
         "lighter": "已验证 active/frozen/force_reduce_only 与 WebSocket 深度",
         "rh-lighter": "独立 RH 实例的 active/frozen/force_reduce_only 与 WebSocket 深度；未验证匿名公开充提接口",
+        "arcus": "独立 Arcus 永续 markets ONLINE/OFFLINE、原始 USD 市场及 L2 深度；未接入现货 RFQ",
     }
     return [
         TradeAvailabilityCoverage(
@@ -549,6 +552,7 @@ class TradeAvailabilityService:
                 ),
                 "lighter": "官方 orderBookDetails 返回 index_price，但未返回成分、来源交易所和权重",
                 "rh-lighter": "官方 orderBookDetails 返回 index_price，但未返回成分、来源交易所和权重",
+                "arcus": "官方 markets 返回 oraclePrice，但未返回可核验的加权指数成分与权重",
             }
             return ContractIndexComposition(
                 exchange=exchange,
@@ -558,7 +562,7 @@ class TradeAvailabilityService:
                 dex=market.dex,
                 status="not_returned",
                 source=source,
-                index_price=market.index_price if exchange in {"aster", "lighter", "rh-lighter"} else None,
+                index_price=market.index_price if exchange in {"aster", "lighter", "rh-lighter", "arcus"} else None,
                 observed_at=market.market_data_updated_at,
                 note=notes.get(exchange, "官方公开接口未返回指数成分、价格和权重"),
             )
@@ -1344,6 +1348,43 @@ class TradeAvailabilityService:
             ),
             mark_price=parse_float(premium.get("markPrice")),
             index_price=parse_float(premium.get("indexPrice")),
+        )
+
+    async def _info_arcus(self, market: MarketSnapshot) -> _PublicMarketInfo:
+        payload = await self._get_json(f"{ARCUS_URL}/markets", cache_key="arcus:markets")
+        if not isinstance(payload, dict) or not isinstance(payload.get("markets"), list):
+            raise RuntimeError("invalid Arcus markets response")
+        row = self._find(payload["markets"], "marketDisplayName", market.raw_symbol)
+        source = INDEX_SOURCE_LABELS["arcus"]
+        if row is None or arcus_market_symbol(row) is None or market.market_type != MarketType.FUTURE:
+            return _PublicMarketInfo(False, False, False, "NOT_FOUND", source, ["公开元数据不存在该原始永续市场"])
+        status = str(row.get("status", "unknown"))
+        trading = status == "ONLINE"
+        restrictions = [] if trading else [f"公开状态为 {status}"]
+        maker_fee = taker_fee = None
+        try:
+            tiers = await self._get_json(f"{ARCUS_URL}/feetiers", cache_key="arcus:feetiers")
+            tier_rows = tiers.get("tiers") if isinstance(tiers, dict) else None
+            base_tier = next((
+                item for item in tier_rows
+                if isinstance(item, dict) and item.get("level") == 0
+            ), {}) if isinstance(tier_rows, list) else {}
+            maker_fee = arcus_float(base_tier.get("maker_fee_ppm"))
+            taker_fee = arcus_float(base_tier.get("taker_fee_ppm"))
+            if base_tier:
+                restrictions.append("手续费为公开 Base 档位，不代表账户实际费率；地区、账户及场外交易时段价格限制仍需核实")
+        except RuntimeError:
+            restrictions.append("公开手续费档位暂不可用")
+        funding = arcus_float(row.get("fundingRate"))
+        return _PublicMarketInfo(
+            trading, trading, trading, status, source, restrictions,
+            maker_fee_pct=maker_fee / 10_000 if maker_fee is not None else None,
+            taker_fee_pct=taker_fee / 10_000 if taker_fee is not None else None,
+            contract_size_multiplier=1,
+            volume_24h_usdt=arcus_float(row.get("volume24hNotional")),
+            funding_rate_pct=funding * 100 if funding is not None else None,
+            funding_interval_hours=1, mark_price=arcus_float(row.get("markPrice")),
+            index_price=arcus_float(row.get("oraclePrice")),
         )
 
     async def _info_lighter(self, market: MarketSnapshot) -> _PublicMarketInfo:

@@ -5,10 +5,18 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta, timezone
 from math import ceil, isfinite
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import httpx
 
+from app.exchanges.arcus import (
+    ARCUS_URL,
+    arcus_bbo_prices,
+    arcus_float,
+    arcus_market_rows,
+    arcus_market_symbol,
+    arcus_timestamp,
+)
 from app.exchanges.base import (
     DEFAULT_HEADERS,
     DEFAULT_LIMITS,
@@ -970,6 +978,8 @@ class PairSpreadQueryService:
             str, tuple[datetime, dict[tuple[MarketType, str], dict[str, Any]]]
         ] = {}
         self._lighter_markets_lock = asyncio.Lock()
+        self._arcus_markets: tuple[datetime, list[dict[str, Any]]] | None = None
+        self._arcus_markets_lock = asyncio.Lock()
 
     async def aclose(self) -> None:
         if self._owns_client and not self.client.is_closed:
@@ -1991,6 +2001,7 @@ class PairSpreadQueryService:
             "bitget": self._fetch_bitget_klines,
             "hyperliquid": self._fetch_hyperliquid_klines,
             "lighter": self._fetch_lighter_klines,
+            "arcus": self._fetch_arcus_klines,
             "rh-lighter": lambda s, a, b, i: self._fetch_lighter_klines(
                 s, a, b, i, exchange="rh-lighter"
             ),
@@ -2065,6 +2076,7 @@ class PairSpreadQueryService:
             "bitget": self._fetch_bitget_current,
             "hyperliquid": self._fetch_hyperliquid_current,
             "lighter": self._fetch_lighter_current,
+            "arcus": self._fetch_arcus_current,
             "rh-lighter": lambda s: self._fetch_lighter_current(
                 s, exchange="rh-lighter"
             ),
@@ -2099,6 +2111,7 @@ class PairSpreadQueryService:
             "bitget": self._fetch_bitget_funding,
             "hyperliquid": self._fetch_hyperliquid_funding,
             "lighter": self._fetch_lighter_funding,
+            "arcus": self._fetch_arcus_funding,
             "rh-lighter": lambda s, a, b: self._fetch_lighter_funding(
                 s, a, b, exchange="rh-lighter"
             ),
@@ -2647,6 +2660,121 @@ class PairSpreadQueryService:
                 break
             cursor = next_cursor
         return _dedupe_sorted(points)
+
+    async def _arcus_market(self, symbol: str) -> dict[str, Any]:
+        async with self._arcus_markets_lock:
+            now = utc_now()
+            if not self._arcus_markets or now - self._arcus_markets[0] >= timedelta(seconds=15):
+                rows = arcus_market_rows(await self._get_json(f"{ARCUS_URL}/markets"))
+                self._arcus_markets = now, rows
+            for row in self._arcus_markets[1]:
+                canonical, _ = arcus_market_symbol(row)
+                if symbol.upper() in {canonical, row["marketDisplayName"].upper()}:
+                    return row
+        raise RuntimeError(f"arcus perpetual symbol not found: {symbol}")
+
+    async def _fetch_arcus_klines(
+        self, symbol: str, start: datetime, end: datetime, interval_minutes: int,
+    ) -> list[PairSpreadKlinePoint]:
+        market = await self._arcus_market(symbol)
+        resolution = {1: "1m", 5: "5m", 15: "15m", 60: "1h", 240: "4h", 1440: "1d"}.get(
+            interval_minutes,
+        )
+        if resolution is None:
+            raise RuntimeError(f"Arcus does not support {interval_minutes} minute candles")
+        raw_symbol = market["marketDisplayName"]
+        interval_us = interval_minutes * 60 * 1_000_000
+        cursor = int(start.timestamp() * 1_000_000)
+        end_us = int(end.timestamp() * 1_000_000) + 1
+        points: list[PairSpreadKlinePoint] = []
+        while cursor < end_us:
+            chunk_end = min(end_us, cursor + 1500 * interval_us)
+            payload = await self._get_json(
+                f"{ARCUS_URL}/candles?market={quote(raw_symbol, safe='')}"
+                f"&timeframe={resolution}&from={cursor}&to={chunk_end}"
+            )
+            if not isinstance(payload, dict) or not isinstance(payload.get("candles"), list):
+                raise RuntimeError("invalid Arcus candles response")
+            for row in payload["candles"]:
+                if not isinstance(row, dict) or row.get("marketDisplayName") != raw_symbol:
+                    continue
+                bucket_at = arcus_timestamp(row.get("openTime"))
+                close = arcus_float(row.get("close"))
+                volume = arcus_float(row.get("notionalVolume"))
+                if bucket_at is not None and start <= bucket_at <= end and close is not None and close > 0:
+                    points.append(PairSpreadKlinePoint(
+                        bucket_at=bucket_at, close=close,
+                        volume_usdt=volume if volume is not None and volume >= 0 else None,
+                    ))
+            cursor = chunk_end
+        return _dedupe_sorted(points)
+
+    async def _fetch_arcus_current(self, symbol: str) -> PairSpreadCurrentLeg:
+        market = await self._arcus_market(symbol)
+        raw_symbol = market["marketDisplayName"]
+        book = await self._get_json(f"{ARCUS_URL}/bbo/{quote(raw_symbol, safe='')}")
+        prices = arcus_bbo_prices(book)
+        if prices is None:
+            raise RuntimeError(f"no usable Arcus order book for {raw_symbol}")
+        bid, ask, _, _ = prices
+        canonical, _ = arcus_market_symbol(market)
+        funding = arcus_float(market.get("fundingRate"))
+        next_funding = arcus_float(market.get("nextFundingRate"))
+        mark = arcus_float(market.get("markPrice"))
+        open_interest = arcus_float(market.get("openInterest"))
+        return _current_leg(
+            exchange="arcus", symbol=canonical, raw_symbol=raw_symbol,
+            bid_price=bid, ask_price=ask, mid_price=(bid + ask) / 2,
+            mark_price=mark, index_price=arcus_float(market.get("oraclePrice")),
+            last_price=arcus_float(market.get("lastTradePrice")),
+            funding_rate_pct=funding * 100 if funding is not None else None,
+            funding_next_rate_pct=next_funding * 100 if next_funding is not None else None,
+            funding_next_time=arcus_timestamp(market.get("nextFundingAt"), microseconds=False),
+            funding_interval_hours=1, contract_size_multiplier=1,
+            volume_24h_usdt=arcus_float(market.get("volume24hNotional")),
+            open_interest_contracts=open_interest,
+            open_interest_usdt=open_interest * mark if open_interest is not None and mark else None,
+            data_source="Arcus public markets + REST bbo (USD)",
+            upstream_timestamp=arcus_timestamp(book.get("timestamp")),
+        )
+
+    async def _fetch_arcus_funding(
+        self, symbol: str, start: datetime, end: datetime,
+    ) -> list[PairSpreadFundingPoint]:
+        market = await self._arcus_market(symbol)
+        raw_symbol = market["marketDisplayName"]
+        canonical, _ = arcus_market_symbol(market)
+        start_us = int(start.timestamp() * 1_000_000)
+        cursor = int(end.timestamp() * 1_000_000)
+        points: dict[datetime, PairSpreadFundingPoint] = {}
+        while cursor >= start_us:
+            payload = await self._get_json(
+                f"{ARCUS_URL}/fundingRates?market={quote(raw_symbol, safe='')}"
+                f"&from={start_us}&to={cursor}&limit=1000"
+            )
+            if not isinstance(payload, dict) or not isinstance(payload.get("fundingRates"), list):
+                raise RuntimeError("invalid Arcus funding rates response")
+            rows = payload["fundingRates"]
+            page_times: list[int] = []
+            for row in rows:
+                if not isinstance(row, dict) or row.get("marketDisplayName") != raw_symbol:
+                    continue
+                funding_time = arcus_timestamp(row.get("time"))
+                rate = arcus_float(row.get("fundingRate"))
+                if funding_time is not None:
+                    page_times.append(int(funding_time.timestamp() * 1_000_000))
+                if funding_time is not None and start <= funding_time <= end and rate is not None:
+                    points[funding_time] = PairSpreadFundingPoint(
+                        exchange="arcus", symbol=canonical, funding_time=funding_time,
+                        funding_rate_pct=rate * 100,
+                    )
+            if len(rows) < 1000 or not page_times:
+                break
+            next_cursor = min(page_times) - 1
+            if next_cursor >= cursor:
+                raise RuntimeError("Arcus funding pagination did not advance")
+            cursor = next_cursor
+        return [points[key] for key in sorted(points)]
 
     async def _lighter_market(
         self,

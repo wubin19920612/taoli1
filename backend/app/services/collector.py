@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from app.exchanges.arcus import ArcusAdapter
 from app.exchanges.aster import AsterAdapter
 from app.exchanges.base import ExchangeAdapter
 from app.exchanges.binance import BinanceAdapter
@@ -121,6 +122,7 @@ def default_exchange_adapters() -> list[ExchangeAdapter]:
         HyperliquidAdapter(),
         LighterAdapter(),
         RobinhoodLighterAdapter(),
+        ArcusAdapter(),
     ]
 
 

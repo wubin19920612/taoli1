@@ -61,6 +61,7 @@ const exchangeLabels: Record<string, string> = {
   hyperliquid: "Hyperliquid",
   lighter: "Lighter",
   "rh-lighter": "RH Lighter",
+  arcus: "Arcus",
   okx: "OKX"
 };
 

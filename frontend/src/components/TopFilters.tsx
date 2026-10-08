@@ -15,7 +15,7 @@ interface TopFiltersProps {
   onRefreshIntervalChange: (intervalMs: number) => void;
 }
 
-const exchanges = ["binance", "okx", "bybit", "gate", "bitget", "htx", "aster", "hyperliquid", "lighter", "rh-lighter"];
+const exchanges = ["binance", "okx", "bybit", "gate", "bitget", "htx", "aster", "hyperliquid", "lighter", "rh-lighter", "arcus"];
 const sortOptions: { label: string; value: OpportunitySort }[] = [
   { label: "开仓价差", value: "open_spread_pct" },
   { label: "扣费后价差", value: "fee_adjusted_open_pct" },
@@ -93,7 +93,7 @@ export function TopFilters({
           aria-label="交易所（任一侧）"
           showSearch
           optionFilterProp="label"
-          options={exchanges.map((item) => ({ label: item === "rh-lighter" ? "RH Lighter" : item, value: item }))}
+          options={exchanges.map((item) => ({ label: item === "rh-lighter" ? "RH Lighter" : item === "arcus" ? "Arcus" : item, value: item }))}
           value={filters.exchange}
           onChange={(value) => patch({ exchange: value })}
         />

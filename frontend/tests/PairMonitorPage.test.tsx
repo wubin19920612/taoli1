@@ -580,6 +580,36 @@ describe("PairMonitorPage", () => {
     vi.unstubAllGlobals();
   });
 
+  it("queries Arcus independently with its own exchange identity", async () => {
+    serverPresets = [savedPairPreset({
+      id: "arcus|future||BTC|binance|future||BTC",
+      leg1_exchange: "arcus", leg2_exchange: "binance"
+    })];
+    window.history.pushState({}, "", "/?page=pair-monitor&leg1_exchange=arcus&leg1_market_type=future&leg1_symbol=BTC&leg2_exchange=binance&leg2_market_type=future&leg2_symbol=BTC&hours=4&interval_seconds=60");
+    render(<PairMonitorPage />);
+    await waitFor(() => {
+      const query = requests.map((request) => new URL(request, "http://localhost"))
+        .find((url) => url.pathname.endsWith("/pair-spread/query"));
+      expect(query?.searchParams.get("leg1_exchange")).toBe("arcus");
+      expect(query?.searchParams.get("leg1_market_type")).toBe("future");
+      expect(query?.searchParams.get("leg1_symbol")).toBe("BTC");
+      expect(query?.searchParams.get("leg1_dex")).toBeNull();
+      expect(query?.searchParams.get("leg2_exchange")).toBe("binance");
+    });
+    await waitFor(() => expect(document.querySelector(".pair-exchange-arcus")?.textContent).toContain("arcus"));
+  });
+
+  it("disables Arcus spot RFQ rather than querying a perpetual as spot", async () => {
+    const user = userEvent.setup();
+    window.history.pushState({}, "", "/?page=pair-monitor&leg1_exchange=arcus&leg1_market_type=future&leg1_symbol=ETH&leg2_exchange=binance&leg2_market_type=future&leg2_symbol=BTC&hours=4&interval_seconds=60");
+    render(<PairMonitorPage />);
+    await user.click(await screen.findByRole("combobox", { name: "左侧市场" }));
+    await waitFor(() => {
+      const spot = document.querySelector('.ant-select-dropdown:not(.ant-select-dropdown-hidden) [title="现货"]');
+      expect(spot?.classList.contains("ant-select-item-option-disabled")).toBe(true);
+    });
+  });
+
   it("loads saved pair presets from the server on another device", async () => {
     serverPresets = [savedPairPreset()];
     window.localStorage.setItem("taoli1.pairSpread.presets.serverMigrated.v1", "1");

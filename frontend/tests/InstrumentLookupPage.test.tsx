@@ -1123,6 +1123,7 @@ describe("InstrumentLookupPage", () => {
       ["bybit", "gate", "by → gate"],
       ["bitget", "lighter", "bg → lit"],
       ["rh-lighter", "aster", "rh-lit → aster"],
+      ["arcus", "lighter", "arcus → lit"],
       ["okx", "binance", "okx → bn"]
     ];
     const spreads = routes.map(([buy, sell], index) => ({
