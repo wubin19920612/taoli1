@@ -1,6 +1,7 @@
 from collections import defaultdict
 from datetime import UTC, datetime
 from hashlib import sha1
+from itertools import combinations, product
 from typing import Literal
 
 from app.models.market import MarketSnapshot, MarketType
@@ -256,39 +257,61 @@ def build_opportunities(
         by_symbol[snapshot.symbol].append(snapshot)
 
     opportunities: list[Opportunity] = []
-    seen: set[tuple[str, str, tuple[str, ...], tuple[str, ...]]] = set()
-    for symbol, legs in by_symbol.items():
+    for legs in by_symbol.values():
         if len(legs) < 2:
             continue
-        for first in legs:
-            for second in legs:
-                if first == second:
-                    continue
-                oriented = orient_pair(mode, first, second)
-                if oriented is None:
-                    continue
-                buy_leg, sell_leg = oriented
-                pair_key = sorted((_market_identity(buy_leg), _market_identity(sell_leg)))
-                dedupe_key = (mode, symbol, pair_key[0], pair_key[1])
-                if dedupe_key in seen:
-                    continue
-                seen.add(dedupe_key)
+        # Preserve the old traversal's first encounter and stable tie ordering,
+        # but only enumerate eligible pairs, once per unordered FF/SS pair.
+        if mode == "SF":
+            spots = [leg for leg in legs if leg.market_type == MarketType.SPOT]
+            futures = [leg for leg in legs if leg.market_type == MarketType.FUTURE]
+            if not spots or not futures:
+                continue
+            pairs = product(
+                [(leg, _market_identity(leg)) for leg in spots],
+                [(leg, _market_identity(leg)) for leg in futures],
+            )
+        elif mode in {"FF", "SS"}:
+            market_type = MarketType.FUTURE if mode == "FF" else MarketType.SPOT
+            eligible = [leg for leg in legs if leg.market_type == market_type]
+            if len(eligible) < 2:
+                continue
+            pairs = combinations([(leg, _market_identity(leg)) for leg in eligible], 2)
+        else:
+            continue
 
+        # Symbol and mode are constant within this group. Release dedupe keys
+        # after each symbol instead of retaining the whole market's pair graph.
+        seen: set[tuple[tuple[str, ...], tuple[str, ...]]] = set()
+        for (buy_leg, buy_identity), (sell_leg, sell_identity) in pairs:
+            # Equal models necessarily have equal identities; only duplicates
+            # need the expensive full-model comparison. Different books with
+            # the same identity still follow the original first-pair behavior.
+            if buy_identity == sell_identity and buy_leg == sell_leg:
+                continue
+            pair_key = (
+                (buy_identity, sell_identity)
+                if buy_identity <= sell_identity else (sell_identity, buy_identity)
+            )
+            if pair_key in seen:
+                continue
+            seen.add(pair_key)
+
+            open_spread_pct, close_spread_pct = midpoint_spread_pct(buy_leg, sell_leg)
+            if mode in {"FF", "SS"} and open_spread_pct < 0 and close_spread_pct < 0:
+                buy_leg, sell_leg = sell_leg, buy_leg
                 open_spread_pct, close_spread_pct = midpoint_spread_pct(buy_leg, sell_leg)
-                if mode in {"FF", "SS"} and open_spread_pct < 0 and close_spread_pct < 0:
-                    buy_leg, sell_leg = sell_leg, buy_leg
-                    open_spread_pct, close_spread_pct = midpoint_spread_pct(buy_leg, sell_leg)
-                if open_spread_pct <= 0:
-                    continue
+            if open_spread_pct <= 0:
+                continue
 
-                opportunities.append(
-                    build_directional_opportunity(
-                        buy_leg,
-                        sell_leg,
-                        mode=mode,
-                        buy_fee_pct=buy_fee_pct,
-                        sell_fee_pct=sell_fee_pct,
-                        safety_slippage_pct=safety_slippage_pct,
-                    )
+            opportunities.append(
+                build_directional_opportunity(
+                    buy_leg,
+                    sell_leg,
+                    mode=mode,
+                    buy_fee_pct=buy_fee_pct,
+                    sell_fee_pct=sell_fee_pct,
+                    safety_slippage_pct=safety_slippage_pct,
                 )
+            )
     return sorted(opportunities, key=lambda item: item.open_spread_pct, reverse=True)
