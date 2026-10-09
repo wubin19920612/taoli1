@@ -24,7 +24,13 @@
 
 ## 发布与线上状态
 
-待当前模块测试完成后填写精确功能提交、CI、备份、部署和线上接口验收。当前生产仍为基线版本。
+- 功能提交 `d3542a139c52b51badc54f8ba25ade75f5022c80` 已推送；CI `37894352010` 两镜像成功，部署前验证固定 SHA manifest。
+- 主库备份 `backups/radar-before-d3542a139c52-20261009T063840Z.db`，615,809,024 bytes，SHA-256 `f46c8c6a4b4d34afacb75a7567de6560d3e81f93c97a962c6f8deea7168554fa`。
+- Route 备份 `backups/squeeze-route-before-d3542a139c52-20261009T063840Z.db`，241,664 bytes，SHA-256 `dddc74b98bfe8246f778b5b022230c0a17439897acdccd21ed99e96807b0c5f3`。两库 integrity_check=ok，容器/主机校验一致。
+- 服务器 fast-forward、拉取预构建镜像、Compose `up -d --no-build --wait` 成功。两容器 healthy，前端首页和代理 health 返回 200。既有备份保留策略保留每库 9 份、清理各 1 份旧自动备份；未更改该策略。
+- 06:42:55 UTC 线上实际 OPENAI 查询包含 9 个精确市场、36 对品种价差、12 条 Astro 路由；统计 API 返回 72 个双向结果，无市场取数错误。公开历史共 11,540 点在新旧实现中完整字段/顺序一致。
+- 健康检查 11,841 行情、7,583 机会、10 源 healthy、无行情源错误。单次健康 41 ms、普通查询 761 ms、统计 API 1.78 s 包括网络，仅作为功能验收样本，不作为前后性能差异结论。
+- 部署日志 `output/instrument-statistics-deploy-20261009.log`；结果 `output/instrument-statistics-production-20261009.json`；探针 `output/instrument-statistics-live-probe-20261009.py`。验收文档另作 skip-ci 提交，应用镜像保持功能 SHA。
 
 ## 工作区与后续
 
