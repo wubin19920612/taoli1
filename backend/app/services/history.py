@@ -67,5 +67,5 @@ class OpportunityHistoryRecorder:
             elapsed = (now - self._last_vacuum_at).total_seconds()
             if elapsed < self.settings.vacuum_interval_seconds:
                 return
-        await self.repository.vacuum()
-        self._last_vacuum_at = now
+        if await self.repository.vacuum_if_beneficial():
+            self._last_vacuum_at = now

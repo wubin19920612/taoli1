@@ -1732,6 +1732,28 @@ class OpportunityHistoryRepository:
     async def vacuum(self) -> None:
         await self.db.execute("VACUUM")
 
+    async def vacuum_if_beneficial(self) -> bool:
+        """Avoid rewriting every table just to reclaim a few reusable pages.
+
+        Auto maintenance needs at least 16 MiB and 10% of the database free.
+        Explicit vacuum() remains available for an operator-requested rebuild.
+        Never commit another caller's transaction to make maintenance possible.
+        """
+        if self.db.in_transaction:
+            return False
+        async with self.db.execute(
+            """SELECT page_count, page_size, freelist_count
+               FROM pragma_page_count(), pragma_page_size(), pragma_freelist_count()"""
+        ) as cursor:
+            row = await cursor.fetchone()
+        page_count, page_size, free_pages = row
+        if free_pages * page_size < 16 * 1024 * 1024 or free_pages * 10 < page_count:
+            return False
+        if self.db.in_transaction:
+            return False
+        await self.vacuum()
+        return True
+
     def _row_from_db(self, row: aiosqlite.Row) -> OpportunityHistoryRow:
         return OpportunityHistoryRow(
             observed_at=row["observed_at"],
