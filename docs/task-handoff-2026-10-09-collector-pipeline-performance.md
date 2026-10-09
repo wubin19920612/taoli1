@@ -29,7 +29,13 @@
 
 ## Git、部署与线上验收
 
-- 本轮提交、两份镜像、备份和线上差分结果在验收后补充。发布必须按现有清单备份/校验数据库，再 `git pull --ff-only`、固定 SHA 镜像 `up -d --no-build --wait`；2 GB 生产机禁止现场构建。
+- 功能提交 `46ea5e4be3ba02c912a07028f1d59090d9b4b057` 已推送；GitHub Actions `37890414694` 的两份镜像构建成功，生产机验证固定 SHA manifest 可访问。
+- 主库备份 `backups/radar-before-46ea5e4be3ba-20261009T055241Z.db`，615,432,192 bytes；`integrity_check=ok`，容器/主机 SHA-256 一致：`7d3432197b9e4904406947420083dfad60dc9032c58f4e43af343f843e468594`。
+- Route 库备份 `backups/squeeze-route-before-46ea5e4be3ba-20261009T055241Z.db`，241,664 bytes；`integrity_check=ok`，SHA-256 一致：`b9677900933f10e0ed1c1b7aa22b0217829a3871ad70daa20312654f82588850`。
+- 服务器 `git pull --ff-only` 至 `46ea5e4`，使用该 SHA 的前后端镜像 `up -d --no-build --wait` 成功，两个容器 healthy；生产无本地受跟踪修改，未现场构建。既有备份保留策略删除了 10 月 8 日较早的 `43f9345` 两份部署备份，保留本次和选定历史备份。
+- 2026-10-09 05:54:47 UTC，生产 11,841 条行情、7,482 条机会、10 个交易所 healthy、错误为空；前后端健康接口与前端首页正常。
+- 只读探针读取线上风险设置，在生产容器比较旧 `3d9bf3b` 与新计算链：7,482 条机会的完整字段、风险标签及稳定排序一致；实际机会接口 1,000 条记录的市场身份/双边交易字段完整并按价差降序。
+- 日志与探针结果为 `output/collector-pipeline-deploy-20261009.log`、`output/collector-pipeline-production-20261009.json`。最终验收文档以单独 `[skip ci]` 提交推送，不代表再次应用部署。
 
 ## 工作区与继续方向
 
