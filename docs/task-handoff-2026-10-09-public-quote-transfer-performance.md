@@ -24,10 +24,17 @@
 
 ## 发布与线上验收
 
-候选已完成协议和浏览器验证，提交后等待固定镜像，再记录备份、部署和生产结果。
+- 功能提交 `16a1185fe7cbb156255bc32300cee191ed2dd976` 已推送，CI `37898998427` 成功。两份固定 SHA manifest 可用，实际前端镜像 `nginx -t` 通过。
+- 主库备份 `backups/radar-before-16a1185fe7cb-20261009T072837Z.db`，616,677,376 bytes，SHA-256 `8a8e5a1f93d4db147c7b6e3cc0c0d1c8286fb1b847f48016163b56e67e3405ff`。
+- Route 备份 `backups/squeeze-route-before-16a1185fe7cb-20261009T072837Z.db`，241,664 bytes，SHA-256 `10f0feea55d545f515badabb656654dd0a02afe40c2412a96f028c8d5fb284c3`。两库 integrity_check=ok，容器/主机校验一致。
+- 服务器 ff-only、预构建镜像无构建启动成功，两容器 healthy；备份既有策略各保留 9 份、清理 1 份旧自动备份。
+- 生产协议重测全部通过：120 条机会 221,769 → 38,129 bytes，5 组内容字节一致，方法/协商/SSE/认证状态保持；服务器本机中位 identity/gzip 为 41.70/44.69 ms，少量本地压缩成本与预检一致。
+- 生产再次验证 46 个静态资源、36 个 gzip 副本，全部字节一致；health 为 ok，11,841 行情、7,846 机会、10 源 healthy、错误为空。
+- 临时验证容器、SSH 隧道和本轮 `/tmp` 配置均已清理；未删除或改动用户数据。
+- 证据 `output/public-quote-gzip-production-20261009.json`、`output/static-assets-after-public-gzip-20261009.json`、`output/public-quote-gzip-deploy-20261009.log`。验收文档另作 skip-ci 提交，生产镜像保持功能 SHA。
 
 ## 工作区及后续
 
 - 仅提交本轮 Nginx 配置、本交接与总账，保留两份 PairMonitor 用户修改及全部既有未跟踪产物。
-- 需要在发布完成后停止临时容器和隧道，删除本轮自己创建的 `/tmp/taoli1-public-quote-gzip-20261009.conf`。
+- 本轮临时验证环境已清理；本地 output 证据保留未跟踪。
 - 剩余候选按实际负载复核后决定；不能将减少字节误报为减少业务计算，不能把受保护接口的 401 当作该业务性能测量。
