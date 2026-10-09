@@ -63,4 +63,3 @@ class ReferenceAliasResolver(SymbolAliasResolver):
             and alias_dex is not None
         ]
         return candidates[0] if len(candidates) == 1 else None
-
