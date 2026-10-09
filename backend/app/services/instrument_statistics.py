@@ -1,5 +1,6 @@
 import asyncio
 import math
+import sys
 from collections import OrderedDict
 from datetime import UTC, datetime, timedelta
 from itertools import combinations
@@ -14,6 +15,9 @@ from app.models.market import MarketSnapshot
 from app.models.pair_spread import PairSpreadKlinePoint
 from app.services.instrument_spreads import instrument_market_id
 from app.services.pair_spread_query import PairSpreadQueryService
+
+# With positive prices in this range both numerator and denominator stay finite.
+_SAFE_SPREAD_PRICE = sys.float_info.max / 4
 
 
 def _close_spread(buy: float, sell: float) -> float:
@@ -102,8 +106,11 @@ class InstrumentStatisticsService:
         ))
         result = InstrumentStatisticsResult(symbol=instrument.symbol, observed_at=end_at)
         prices_by_id: dict[str, dict[datetime, float]] = {}
+        market_ids: list[str] = []
+        finite_spreads: dict[str, bool] = {}
         for market, (_, prices, error) in zip(instrument.markets, histories, strict=True):
             key = instrument_market_id(market)
+            market_ids.append(key)
             prices_by_id[key] = prices
             stats = InstrumentPriceChangeStats(error=error)
             if prices:
@@ -125,12 +132,26 @@ class InstrumentStatisticsService:
             buy_id, sell_id = spread.id.split("->", 1)
             eligible_ids.add(f"{sell_id}->{buy_id}")
         start_at = end_at - timedelta(hours=24)
-        for first, second in combinations(instrument.markets, 2):
-            first_id, second_id = instrument_market_id(first), instrument_market_id(second)
-            common = sorted(
+        for first_id, second_id in combinations(market_ids, 2):
+            if f"{first_id}->{second_id}" not in eligible_ids:
+                continue
+            common = [
                 bucket for bucket in prices_by_id[first_id].keys() & prices_by_id[second_id].keys()
                 if start_at <= bucket < end_at
-            )
+            ]
+            for key in (first_id, second_id):
+                if key not in finite_spreads:
+                    finite_spreads[key] = all(
+                        0 < price <= _SAFE_SPREAD_PRICE for price in prices_by_id[key].values()
+                    )
+            if not (finite_spreads[first_id] and finite_spreads[second_id]):
+                # Preserve the original comparison order for extreme/invalid
+                # floats (NaN is not totally ordered). Ordinary finite maxima
+                # use (spread, timestamp), so ties pick the latest minute in
+                # any traversal order and need no full timestamp sort.
+                common.sort()
+            first_at = min(common) + timedelta(minutes=1) if common else None
+            last_at = max(common) + timedelta(minutes=1) if common else None
             for buy_id, sell_id in ((first_id, second_id), (second_id, first_id)):
                 comparison_id = f"{buy_id}->{sell_id}"
                 if comparison_id not in eligible_ids:
@@ -143,8 +164,8 @@ class InstrumentStatisticsService:
                     )
                     stats.max_spread_pct = maximum
                     stats.max_at = maximum_at + timedelta(minutes=1)
-                    stats.first_seen_at = common[0] + timedelta(minutes=1)
-                    stats.last_seen_at = common[-1] + timedelta(minutes=1)
+                    stats.first_seen_at = first_at
+                    stats.last_seen_at = last_at
                     stats.complete = len(common) == 1440
                 else:
                     errors = [result.markets[key].error for key in (buy_id, sell_id)]

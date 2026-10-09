@@ -281,6 +281,16 @@ async def lookup_instrument(
     request: Request,
     dex: str | None = None,
 ) -> InstrumentLookupResult:
+    return await _lookup_instrument(symbol, request, dex, include_astro_routes=True)
+
+
+async def _lookup_instrument(
+    symbol: str,
+    request: Request,
+    dex: str | None,
+    *,
+    include_astro_routes: bool,
+) -> InstrumentLookupResult:
     try:
         requested_symbol = normalize_pair_spread_symbol(symbol)
     except ValueError as exc:
@@ -365,11 +375,13 @@ async def lookup_instrument(
             ),
         )
     ]
-    astro_routes, route_errors = await _astro_route_statuses(
-        request,
-        canonical_symbol,
-        exact_markets,
-    )
+    astro_routes, route_errors = [], {}
+    if include_astro_routes:
+        astro_routes, route_errors = await _astro_route_statuses(
+            request,
+            canonical_symbol,
+            exact_markets,
+        )
     base = canonical_symbol.removesuffix("USDT")
     return InstrumentLookupResult(
         query=symbol,
@@ -395,5 +407,7 @@ async def instrument_statistics(
     request: Request,
     dex: str | None = None,
 ) -> InstrumentStatisticsResult:
-    instrument = await lookup_instrument(symbol, request, dex)
+    # Historical price statistics only consume market identity and spreads.
+    # Avoid an unrelated SDK request (and its timeout) on this independent path.
+    instrument = await _lookup_instrument(symbol, request, dex, include_astro_routes=False)
     return await request.app.state.instrument_statistics_service.lookup(instrument)
