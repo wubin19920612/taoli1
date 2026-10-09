@@ -239,14 +239,22 @@ class MarketCollector:
         watched_symbols = await self._index_component_watched_symbols()
         if watched_symbols is None:
             return markets
+        try:
+            normalized_watched = {index_watch_symbol(symbol) for symbol in watched_symbols}
+        except ValueError:
+            # Preserve lazy matching/error order for malformed injected watch
+            # lists instead of failing early before a valid earlier match.
+            normalized_watched = None
         return [
             market
             for market in markets
-            if self._index_component_symbol_is_watched(market.symbol, watched_symbols)
+            if self._index_component_symbol_is_watched(
+                market.symbol, watched_symbols, normalized_watched,
+            )
             or (
                 market.symbol_alias_original_symbol is not None
                 and self._index_component_symbol_is_watched(
-                    market.symbol_alias_original_symbol, watched_symbols
+                    market.symbol_alias_original_symbol, watched_symbols, normalized_watched,
                 )
             )
         ]
@@ -258,8 +266,12 @@ class MarketCollector:
         symbols = await watched_symbols()
         return {symbol.strip().upper() for symbol in symbols if symbol and symbol.strip()}
 
-    def _index_component_symbol_is_watched(self, symbol: str, watched_symbols: set[str]) -> bool:
+    def _index_component_symbol_is_watched(
+        self, symbol: str, watched_symbols: set[str], normalized_watched: set[str] | None = None,
+    ) -> bool:
         normalized = index_watch_symbol(symbol)
+        if normalized_watched is not None:
+            return normalized in normalized_watched
         return any(index_watch_symbol(watched) == normalized for watched in watched_symbols)
 
     def _state_for(self, exchange_name: str) -> ExchangePollState:

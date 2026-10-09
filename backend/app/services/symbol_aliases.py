@@ -76,6 +76,18 @@ class SymbolAliasResolver:
             _alias_key(alias): alias
             for alias in (*KNOWN_SYMBOL_ALIASES, *aliases)
         }
+        # Index unique implicit DEX matches once per resolver. Keep an
+        # ambiguous exact-market entry (None) distinct from a missing entry:
+        # it must not fall back to a market-agnostic alias.
+        self._implicit_dex_aliases: dict[
+            tuple[str, str, str | None], SymbolAlias | None
+        ] = {}
+        for (exchange, symbol, market_type, dex), alias in self._by_key.items():
+            if dex is not None:
+                key = (exchange, symbol, market_type)
+                self._implicit_dex_aliases[key] = (
+                    None if key in self._implicit_dex_aliases else alias
+                )
 
     def _direct_alias(
         self,
@@ -103,33 +115,10 @@ class SymbolAliasResolver:
         # A raw HIP-3 ticker can safely imply its DEX only when the configured
         # alias is unique. Multiple DEX matches remain unresolved until the
         # caller supplies an explicit DEX.
-        exact_market = [
-            alias
-            for (
-                alias_exchange,
-                alias_symbol,
-                alias_market_type,
-                alias_dex,
-            ), alias in self._by_key.items()
-            if alias_exchange == exchange
-            and alias_symbol == symbol
-            and alias_market_type == market_type
-            and alias_dex is not None
-        ]
-        candidates = exact_market or [
-            alias
-            for (
-                alias_exchange,
-                alias_symbol,
-                alias_market_type,
-                alias_dex,
-            ), alias in self._by_key.items()
-            if alias_exchange == exchange
-            and alias_symbol == symbol
-            and alias_market_type is None
-            and alias_dex is not None
-        ]
-        return candidates[0] if len(candidates) == 1 else None
+        key = (exchange, symbol, market_type)
+        if key in self._implicit_dex_aliases:
+            return self._implicit_dex_aliases[key]
+        return self._implicit_dex_aliases.get((exchange, symbol, None))
 
     def alias_for(self, market: MarketSnapshot) -> SymbolAlias | None:
         exchange = market.exchange.lower()
