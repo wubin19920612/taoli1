@@ -30,10 +30,18 @@
 
 ## 发布与线上状态
 
-实现、直接及集成回归已通过；提交后记录 CI、备份、部署和实际接口验证。
+- 功能提交 `3200e40c54ccaa3ad8243ec1dc2aad9c59933325`，随后修正参考测试文件末尾多余空行，最终发布提交 `822d6c7b39c6f41dc78ab789e1269b18d8922f3b`。两者均已推送；最终 CI `37901520816` 成功，两镜像 SHA manifest 可用，跨本轮 diff --check 通过。
+- 主库备份 `backups/radar-before-822d6c7b39c6-20261009T075709Z.db`，617,127,936 bytes，SHA-256 `f25e729555e19bbef3773ed1ab0d03736cc8e4bd1d5496c8f4f08829ebb94c31`。
+- Route 备份 `backups/squeeze-route-before-822d6c7b39c6-20261009T075709Z.db`，241,664 bytes，SHA-256 `c210df8c7696ed98017dc2284e00fc631fe03e084299b6b338d23d44a7ee714e`。两库 integrity_check=ok，容器/主机校验一致。
+- 服务器 ff-only 更新、预构建镜像无构建启动成功；源码和两镜像为最终发布 SHA，受跟踪工作区无差异；两容器 healthy、重启 0、OOM false，首页和代理 health 返回 200。
+- 线上公开全量样本的别名后字段/顺序与旧实现一致，实际空观察名单的选择对象/顺序一致。公开全量列表在该样本没有直接别名命中，因此另取实际品种 ANTH 的原始标记验证 2 个正命中及省略 DEX 的解析，与旧实现一致。
+- 实际 ANTH → ANTHROPICUSDT 查询返回 9 市场，Hyperliquid 保留 `io:ANTH`/`io`，OKX 倍率仍为 10；OPENAI 返回 9 个精确市场，原始市场标识保持。
+- 行情总数随采集变化，一次探针为 10,915，随后复核恢复为 11,843；08:02:37 UTC 的最终检查 8,249 机会、10 源 healthy、无错误。最终按交易所/市场类型计数与原公开基线仅差 Bitget spot 增加 3，不用跨时点行情数量代替同输入差分。
+- 既有备份策略各保留 9 份、清理 1 份旧自动备份。无临时验证容器残留。
+- 证据 `output/market-preprocessing-production-20261009.json`、`output/optimization-final-health-20261009.json`、`output/market-preprocessing-deploy-20261009.log`。最终验收文档另作 skip-ci 提交，生产镜像保持 `822d6c7`。
 
 ## 工作区与后续
 
 - 只暂存本轮两个业务文件、三个新测试文件、一个基准脚本、本交接和总账。两份 PairMonitor 用户修改、既有未跟踪资料全部保留。
 - 线上探针只读 risk 的别名字段和观察名单，比较公开行情，不触发采集、通知、建卡或交易。
-- 完成本轮后再次检查剩余热点，按实际负载与行为一致性决定是否还有值得实施的优化。
+- 剩余热点复核已记录在 `docs/system-optimization-ledger-2026-10-09.md`；当前没有继续找到收益有证据且能保持现有行为的改动，停止本次持续优化。后续负载/配置变化时可从总账和各模块基准继续，不依赖旧聊天上下文。
