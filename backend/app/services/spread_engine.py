@@ -242,6 +242,47 @@ def build_opportunities(
     stale_after_seconds: int | None = None,
 ) -> list[Opportunity]:
     current = now or datetime.now(UTC)
+    by_symbol = _group_tradable_markets(snapshots, current, stale_after_seconds)
+    opportunities = _build_grouped_opportunities(
+        by_symbol, mode, buy_fee_pct, sell_fee_pct, safety_slippage_pct,
+    )
+    return sorted(opportunities, key=lambda item: item.open_spread_pct, reverse=True)
+
+
+def build_all_opportunities(
+    snapshots: list[MarketSnapshot],
+    *,
+    spot_fee_pct: float = 0.1,
+    future_fee_pct: float = 0.1,
+    safety_slippage_pct: float = 0.05,
+    now: datetime | None = None,
+    stale_after_seconds: int | None = None,
+) -> list[Opportunity]:
+    """Build the SF/FF/SS snapshot using one shared eligibility pass.
+
+    Preserve mode order for tied spreads, as in the collector's three calls
+    followed by a stable global sort. Every returned opportunity is newly owned.
+    """
+    current = now or datetime.now(UTC)
+    by_symbol = _group_tradable_markets(snapshots, current, stale_after_seconds)
+    opportunities: list[Opportunity] = []
+    for mode, buy_fee, sell_fee in (
+        ("SF", spot_fee_pct, future_fee_pct),
+        ("FF", future_fee_pct, future_fee_pct),
+        ("SS", spot_fee_pct, spot_fee_pct),
+    ):
+        opportunities.extend(_build_grouped_opportunities(
+            by_symbol, mode, buy_fee, sell_fee, safety_slippage_pct,
+        ))
+    opportunities.sort(key=lambda item: item.open_spread_pct, reverse=True)
+    return opportunities
+
+
+def _group_tradable_markets(
+    snapshots: list[MarketSnapshot],
+    current: datetime,
+    stale_after_seconds: int | None,
+) -> dict[str, list[MarketSnapshot]]:
     by_symbol: dict[str, list[MarketSnapshot]] = defaultdict(list)
     for snapshot in snapshots:
         if not is_market_snapshot_tradable(snapshot, current):
@@ -255,7 +296,16 @@ def build_opportunities(
         ):
             continue
         by_symbol[snapshot.symbol].append(snapshot)
+    return by_symbol
 
+
+def _build_grouped_opportunities(
+    by_symbol: dict[str, list[MarketSnapshot]],
+    mode: Mode,
+    buy_fee_pct: float,
+    sell_fee_pct: float,
+    safety_slippage_pct: float,
+) -> list[Opportunity]:
     opportunities: list[Opportunity] = []
     for legs in by_symbol.values():
         if len(legs) < 2:
@@ -314,4 +364,4 @@ def build_opportunities(
                     safety_slippage_pct=safety_slippage_pct,
                 )
             )
-    return sorted(opportunities, key=lambda item: item.open_spread_pct, reverse=True)
+    return opportunities

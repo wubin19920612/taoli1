@@ -24,9 +24,9 @@ from app.services.data_filters import (
     filter_opportunities,
     ignored_exchange_set,
 )
-from app.services.risk_labels import apply_risk_labels
+from app.services.risk_labels import risk_labels_for
 from app.services.snapshot_store import SnapshotStore
-from app.services.spread_engine import build_opportunities
+from app.services.spread_engine import build_all_opportunities
 from app.services.symbol_aliases import apply_symbol_aliases
 
 logger = logging.getLogger(__name__)
@@ -446,27 +446,25 @@ class MarketCollector:
         markets: list[MarketSnapshot],
         now: datetime | None = None,
     ) -> list[Opportunity]:
-        raw: list[Opportunity] = []
         current = now or self._now_fn()
-        for mode in ("SF", "FF", "SS"):
-            buy_fee = self.fee_settings.spot_fee_pct if mode in {"SF", "SS"} else self.fee_settings.future_fee_pct
-            sell_fee = self.fee_settings.future_fee_pct if mode in {"SF", "FF"} else self.fee_settings.spot_fee_pct
-            raw.extend(
-                build_opportunities(
-                    markets,
-                    mode=mode,
-                    buy_fee_pct=buy_fee,
-                    sell_fee_pct=sell_fee,
-                    safety_slippage_pct=self.fee_settings.safety_slippage_pct,
-                    now=current,
-                    stale_after_seconds=self.risk_settings.stale_after_seconds,
-                )
+        opportunities = build_all_opportunities(
+            markets,
+            spot_fee_pct=self.fee_settings.spot_fee_pct,
+            future_fee_pct=self.fee_settings.future_fee_pct,
+            safety_slippage_pct=self.fee_settings.safety_slippage_pct,
+            now=current,
+            stale_after_seconds=self.risk_settings.stale_after_seconds,
+        )
+        collision_symbols = frozenset(
+            symbol.upper() for symbol in self.risk_settings.ticker_collision_symbols
+        )
+        for item in opportunities:
+            # These models were just constructed for this collection, and have
+            # not been published to the store or passed to another consumer.
+            item.risk_labels = risk_labels_for(
+                item, self.risk_settings, current, collision_symbols=collision_symbols,
             )
-        labeled = [
-            apply_risk_labels(item, settings=self.risk_settings, now=current)
-            for item in raw
-        ]
-        return sorted(labeled, key=lambda item: item.open_spread_pct, reverse=True)
+        return opportunities
 
     async def close(self) -> None:
         for adapter in self.adapters:

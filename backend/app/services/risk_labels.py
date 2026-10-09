@@ -64,6 +64,20 @@ def apply_risk_labels(
     settings: RiskSettings,
     now: datetime | None = None,
 ) -> Opportunity:
+    """Return a labeled copy; leave shared caller-owned opportunities untouched."""
+    return opportunity.model_copy(update={
+        "risk_labels": risk_labels_for(opportunity, settings, now),
+    })
+
+
+def risk_labels_for(
+    opportunity: Opportunity,
+    settings: RiskSettings,
+    now: datetime | None = None,
+    *,
+    collision_symbols: frozenset[str] | None = None,
+) -> list[str]:
+    """Calculate labels without copying or mutating the opportunity."""
     current = now or datetime.now(UTC)
     labels: list[str] = []
 
@@ -81,7 +95,9 @@ def apply_risk_labels(
     if opportunity.spread_width_pct >= settings.wide_spread_pct:
         labels.append("WIDE_SPREAD")
 
-    if opportunity.symbol.upper() in {item.upper() for item in settings.ticker_collision_symbols}:
+    if collision_symbols is None:
+        collision_symbols = frozenset(item.upper() for item in settings.ticker_collision_symbols)
+    if opportunity.symbol.upper() in collision_symbols:
         labels.append("SAME_TICKER_RISK")
 
     next_cycle_funding = next_cycle_funding_edge_pct(opportunity)
@@ -108,4 +124,4 @@ def apply_risk_labels(
     ):
         labels.append("MISSING_FUNDING")
 
-    return opportunity.model_copy(update={"risk_labels": labels})
+    return labels
