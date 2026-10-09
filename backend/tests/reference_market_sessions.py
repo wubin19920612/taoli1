@@ -1,5 +1,5 @@
+"""Frozen 0819151 market-session rules for uncached differential comparisons."""
 from datetime import UTC, date, datetime, time, timedelta
-from functools import lru_cache
 from zoneinfo import ZoneInfo
 
 from app.models.market import MarketSnapshot, MarketType
@@ -103,10 +103,7 @@ def _early_close_dates(local_date: date, holidays: set[date]) -> set[date]:
     }
 
 
-@lru_cache(maxsize=128)
 def us_stock_session_close(local_date: date) -> time | None:
-    # The calendar result is immutable and depends only on the date. Cache it,
-    # not the time-sensitive open/closed decision made by callers below.
     holidays = _holiday_dates_around(local_date)
     if local_date.weekday() >= 5 or local_date in holidays:
         return None

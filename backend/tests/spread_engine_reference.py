@@ -6,9 +6,10 @@ Pricing/model construction helpers are unchanged by this refactor.
 from collections import defaultdict
 from datetime import UTC, datetime
 
+from reference_market_sessions import is_market_snapshot_tradable
+
 from app.models.market import MarketSnapshot
 from app.models.opportunity import Opportunity
-from app.services.market_sessions import is_market_snapshot_tradable
 from app.services.spread_engine import (
     Mode,
     _has_executable_book,
