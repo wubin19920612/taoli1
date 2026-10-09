@@ -18,11 +18,18 @@
 ## 验证及发布
 
 - 本地 `npm run build`（TypeScript + Vite）通过；本地构建含既有未提交 PairMonitor 修改，CI 仅构建本次受控 Git 文件。
-- 后续补齐 CI 镜像检查、独立容器协议验证、数据库备份、部署与线上结果。
+- 功能提交 `1aec646858e6e559c705edf054f759bf4a7eac01` 已推送；CI `37896268167` 成功，两个 SHA 镜像 manifest 均已检查。独立临时 Nginx 容器完成协议验证后已关闭并自动移除，SSH 测试隧道已关闭。
+- 预检和部署后均验证全部 46 个资源，其中 36 个超过 1 KiB 使用 gzip；解压字节及 MIME 均与原文一致。Accept-Encoding 缺省、br、gzip;q=0 返回原文，gzip/br,gzip 返回压缩版本；Vary、ETag/304、identity Range/206、SPA fallback 与 API 转发通过。
+- 首页入口 811,598 → 240,406 bytes（-70.38%）；全部 JS/CSS 合计 1,793,565 → 560,903 bytes（-68.73%）。资源文件名/原文 SHA 与生产基线相同，用户未提交的 PairMonitor 代码没有进入镜像。额外磁盘空间为压缩副本，未声称浏览器内存或 JS 执行成本下降。
+- Chromium 真实加载 dashboard、instrument、history 三个页面，分别实际读取 13/11/6 个 gzip 资源，无 pageerror；页面内容正常。未触发建卡、交易或消息发送。
+- 主库备份 `backups/radar-before-1aec646858e6-20261009T070650Z.db`，616,259,584 bytes，SHA-256 `686bf080994ae82b4e3ccc9e9ae74941de042d92359a10d05b41d97db71e1c04`。
+- Route 备份 `backups/squeeze-route-before-1aec646858e6-20261009T070650Z.db`，241,664 bytes，SHA-256 `b61419f5a7fa4b623a9a50917414393a95ac7c6807280f1a99ca955ad34c9d52`。两库 integrity_check=ok、容器/主机校验一致。
+- 服务器 ff-only、固定镜像无构建启动成功，两容器 healthy；生产首页和代理 health 正常，11,841 行情、7,359 机会、无行情源错误。备份策略各保留 9 份、清理 1 份旧自动备份，未改策略。
+- 证据：`output/static-assets-{preflight,production,browser}-20261009.json` 和 `output/static-assets-deploy-20261009.log`。当前生产应用为本轮功能 SHA，验收文档另作 skip-ci 提交。
 - 前端仅配置/容器构建改变，以真实 Nginx 的字节一致性、编码协商、MIME/ETag/304 和页面/API 冒烟验证为主，不添加只复述配置的单元测试。
 
 ## 工作区与后续
 
 - 仅本轮 Dockerfile、Nginx 配置、交接与总账进入提交；原有两份 PairMonitor 前端改动和所有未跟踪文件继续保留。
 - 当前剩余 CPU 抽样（11,840 行情）：别名 12.12 ms，行情过滤 3.25 ms，机会过滤 10.13 ms，空观察名单过滤 6.27 ms，机会计算 225.28 ms；名单实际为空、用户别名仅一条。证据 `output/optimization-remaining-cpu-audit-20261009.json`。
-- 上述小阶段目前没有足够证据支持新增复杂缓存/线程；后续完成网络与运行状态复查，再做整体停止审计。
+- 上述小阶段目前没有足够证据支持新增复杂缓存/线程。网络复查另发现公开机会列表约 222 KB/次、仍未压缩；级别 1 的离线压缩在生产机约 1.05 ms，输出 36 KB，作为下一轮独立验证候选。
