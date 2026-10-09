@@ -31,8 +31,14 @@
 
 ## 发布与线上验收
 
-- 待补充提交、固定 SHA 两份镜像、主库/Route 库备份完整性与哈希、部署结果、历史接口和正常采样验证。
-- 遵守现有 `git pull --ff-only`、离机构建、固定镜像 `up -d --no-build --wait` 流程，不删除数据卷。
+- 功能提交 `5a3bc91f3630bc83f6d9645c2da07ef2c590b04c` 已推送，GitHub Actions `37891748398` 两份镜像成功，生产机验证两份固定 SHA manifest 后部署。
+- 主库备份 `backups/radar-before-5a3bc91f3630-20261009T060844Z.db`，615,297,024 bytes；`integrity_check=ok`，容器/主机 SHA-256 一致：`7ba9845badc15942db668978d942386fc6c3aa456858263f2ca5b3eb858d550a`。
+- Route 备份 `backups/squeeze-route-before-5a3bc91f3630-20261009T060844Z.db`，241,664 bytes；`integrity_check=ok`，SHA-256 一致：`4126a81d8b0388db27a31c9e66b4ab96d79ff3e2f2e0480488eafeafee21ba72`。
+- 服务器 `git pull --ff-only`、固定镜像 `up -d --no-build --wait` 成功，源码/两个镜像为 `5a3bc91`；两个容器 healthy、重启计数 0、无 OOM。未现场构建、未删除数据卷，保留策略本次未删除备份。
+- 2026-10-09 06:10:46 UTC：11,841 条行情、7,486 个机会，10 个行情源 healthy、错误为空；前端首页及前后端健康接口正常。
+- 只读连接同时设置 query_only，当前空闲页 0，调用新自动维护方法返回 False，SQL trace 中无 VACUUM；探针没有对生产执行试验性压缩。
+- 历史启用且保留期仍为 3 天。部署前最新历史为 06:06:23，部署后为 06:10:01 UTC；历史接口与 DB 最新时间一致。最早记录推进到 2026-10-06 06:11:39 UTC，说明正常超期删除与新样本写入均在继续。
+- 完整日志在 `output/history-maintenance-deploy-20261009.log`，前后只读结果在 `output/history-maintenance-before-20261009.json`、`output/history-maintenance-production-20261009.json`。最终验收文档另作 `[skip ci]` 提交，不再次部署应用。
 
 ## 工作区与下一轮
 
