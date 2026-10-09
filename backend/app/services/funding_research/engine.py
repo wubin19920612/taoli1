@@ -13,6 +13,13 @@ from app.services.funding_research.models import (
     FundingResearchDepthStats,
     FundingResearchSettings,
 )
+from app.services.funding_research.opportunity_types import (
+    classify_funding_candidate,
+    exchange_formula_family,
+    research_candidate_id,
+)
+
+POOR_REWARD_RISK_LABEL = "POOR_REWARD_RISK"
 
 
 def _basis_pct(snapshot: MarketSnapshot) -> float | None:
@@ -157,6 +164,24 @@ def _base_risk_pct(
         risk += settings.settlement_crowding_penalty_pct
         labels.append("SETTLEMENT_CROWDING")
     return risk, labels
+
+
+def _adverse_basis_pct(
+    alignment: BasisAlignment,
+    basis_diff_pct: float | None,
+) -> float:
+    if alignment != "conflicted" or basis_diff_pct is None:
+        return 0.0
+    return abs(basis_diff_pct)
+
+
+def _conflicted_reward_risk_ratio(
+    ev_pct: float | None,
+    adverse_basis_pct: float,
+) -> float | None:
+    if adverse_basis_pct <= 0:
+        return None
+    return max(ev_pct or 0.0, 0.0) / adverse_basis_pct
 
 
 def _score_candidate(
@@ -304,6 +329,8 @@ def build_candidate(
     )
     cost = resolved.open_fee_pct + resolved.close_fee_pct + resolved.base_slippage_pct
     ev = None if expected_net_funding is None else expected_net_funding + basis_change - cost - risk
+    adverse_basis = _adverse_basis_pct(alignment, basis_diff)
+    reward_risk_ratio = _conflicted_reward_risk_ratio(ev, adverse_basis)
     reasons: list[str] = []
     if funding_source == "missing":
         reasons.append("missing funding estimate")
@@ -320,6 +347,16 @@ def build_candidate(
         reasons.append("entry depth too thin")
     elif depth < resolved.notional_per_symbol_usdt * resolved.min_depth_multiple:
         reasons.append("entry depth below full safety multiple")
+    if (
+        adverse_basis >= resolved.conflicted_basis_min_check_pct
+        and reward_risk_ratio is not None
+        and reward_risk_ratio < resolved.min_conflicted_reward_risk_ratio
+    ):
+        risk_labels.append(POOR_REWARD_RISK_LABEL)
+        reasons.append(
+            "conflicted basis reward/risk is below entry floor "
+            f"({reward_risk_ratio:.2f}x < {resolved.min_conflicted_reward_risk_ratio:.2f}x)"
+        )
 
     score = _score_candidate(
         expected_net_funding_pct=expected_net_funding,
@@ -331,17 +368,26 @@ def build_candidate(
         funding_source=funding_source,
         settings=resolved,
     )
-    return FundingResearchCandidate(
+    exchange_set = {long_leg.exchange.lower(), short_leg.exchange.lower()}
+    candidate = FundingResearchCandidate(
         symbol=long_leg.symbol,
         long_exchange=long_leg.exchange,
         short_exchange=short_leg.exchange,
+        long_formula_family=exchange_formula_family(long_leg.exchange),
+        short_formula_family=exchange_formula_family(short_leg.exchange),
         long_funding_pct=long_est.funding_rate_pct,
         short_funding_pct=short_est.funding_rate_pct,
+        long_funding_interval_hours=long_est.interval_hours,
+        short_funding_interval_hours=short_est.interval_hours,
+        long_next_settlement_time=long_est.next_time,
+        short_next_settlement_time=short_est.next_time,
         expected_net_funding_pct=expected_net_funding,
         expected_basis_change_pct=basis_change,
         estimated_cost_pct=cost,
         risk_buffer_pct=risk,
         ev_pct=ev,
+        adverse_basis_pct=adverse_basis,
+        conflicted_reward_risk_ratio=reward_risk_ratio,
         score=score,
         decision=_decision(
             ev,
@@ -359,9 +405,25 @@ def build_candidate(
         next_settlement_time=next_settlement,
         minutes_to_settlement=minutes_to_settlement,
         funding_source=funding_source,
+        uses_gate="gate" in exchange_set,
+        uses_hyperliquid="hyperliquid" in exchange_set,
         depth_stats=resolved_depth_stats,
         risk_labels=risk_labels,
         reasons=reasons,
+    )
+    primary_type, opportunity_types, opportunity_reasons = classify_funding_candidate(
+        candidate,
+        long_leg=long_leg,
+        short_leg=short_leg,
+        settings=resolved,
+    )
+    return candidate.model_copy(
+        update={
+            "id": research_candidate_id(candidate),
+            "primary_opportunity_type": primary_type,
+            "opportunity_types": opportunity_types,
+            "opportunity_reasons": opportunity_reasons,
+        }
     )
 
 
@@ -372,8 +434,24 @@ def _best_direction_for_pair(
     settings: FundingResearchSettings,
     now: datetime,
 ) -> FundingResearchCandidate:
-    first_long = build_candidate(first, second, settings=settings, now=now)
-    second_long = build_candidate(second, first, settings=settings, now=now)
+    first_estimate = estimate_snapshot_funding(first)
+    second_estimate = estimate_snapshot_funding(second)
+    first_long = build_candidate(
+        first,
+        second,
+        settings=settings,
+        now=now,
+        long_funding_estimate=first_estimate,
+        short_funding_estimate=second_estimate,
+    )
+    second_long = build_candidate(
+        second,
+        first,
+        settings=settings,
+        now=now,
+        long_funding_estimate=second_estimate,
+        short_funding_estimate=first_estimate,
+    )
     first_ev = first_long.ev_pct if first_long.ev_pct is not None else -999
     second_ev = second_long.ev_pct if second_long.ev_pct is not None else -999
     if first_ev != second_ev:

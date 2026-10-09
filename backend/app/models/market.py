@@ -28,3 +28,11 @@ class MarketSnapshot(BaseModel):
     index_price: float | None = None
     timestamp: datetime
     raw_symbol: str
+    dex: str | None = None
+    contract_size_multiplier: float | None = Field(default=None, gt=0)
+    data_source: str | None = None
+    upstream_timestamp: datetime | None = None
+    is_estimated: bool = False
+    estimated_fields: list[str] = Field(default_factory=list)
+    symbol_alias_original_symbol: str | None = None
+    symbol_alias_price_multiplier: float = Field(default=1.0, gt=0)

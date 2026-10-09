@@ -1,18 +1,21 @@
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Callable
 
+from app.exchanges.arcus import ArcusAdapter
 from app.exchanges.aster import AsterAdapter
 from app.exchanges.base import ExchangeAdapter
 from app.exchanges.binance import BinanceAdapter
 from app.exchanges.bitget import BitgetAdapter
 from app.exchanges.bybit import BybitAdapter
 from app.exchanges.gate import GateAdapter
-from app.exchanges.hyperliquid import HyperliquidAdapter
 from app.exchanges.htx import HTXAdapter
+from app.exchanges.hyperliquid import HyperliquidAdapter
+from app.exchanges.lighter import LighterAdapter, RobinhoodLighterAdapter
 from app.exchanges.okx import OKXAdapter
+from app.models.index_component import index_watch_symbol
 from app.models.market import MarketSnapshot
 from app.models.opportunity import Opportunity
 from app.models.settings import FeeSettings, RiskSettings
@@ -21,9 +24,9 @@ from app.services.data_filters import (
     filter_opportunities,
     ignored_exchange_set,
 )
-from app.services.risk_labels import apply_risk_labels
+from app.services.risk_labels import risk_labels_for
 from app.services.snapshot_store import SnapshotStore
-from app.services.spread_engine import build_opportunities
+from app.services.spread_engine import build_all_opportunities
 from app.services.symbol_aliases import apply_symbol_aliases
 
 logger = logging.getLogger(__name__)
@@ -117,6 +120,9 @@ def default_exchange_adapters() -> list[ExchangeAdapter]:
         HTXAdapter(),
         AsterAdapter(),
         HyperliquidAdapter(),
+        LighterAdapter(),
+        RobinhoodLighterAdapter(),
+        ArcusAdapter(),
     ]
 
 
@@ -131,7 +137,7 @@ class MarketCollector:
         history_recorder=None,
         index_component_provider=None,
         index_component_monitor=None,
-        poll_interval_seconds: float = 8.0,
+        poll_interval_seconds: float = 5.0,
         max_due_adapters_per_cycle: int = DEFAULT_MAX_DUE_ADAPTERS_PER_CYCLE,
         now_fn: Callable[[], datetime] | None = None,
     ) -> None:
@@ -194,8 +200,13 @@ class MarketCollector:
         aliased_markets = apply_symbol_aliases(markets, self.risk_settings.symbol_aliases)
         filtered_markets = filter_markets(aliased_markets, self.risk_settings)
 
-        opportunities = self._build_labeled_opportunities(filtered_markets)
-        filtered_opportunities = filter_opportunities(opportunities, self.risk_settings)
+        opportunities = self._build_labeled_opportunities(filtered_markets, now=now)
+        filtered_opportunities = filter_opportunities(
+            opportunities,
+            self.risk_settings,
+            now=now,
+        )
+        self.store.set_all_markets(aliased_markets)
         self.store.set_markets(filtered_markets)
         self.store.set_opportunities(filtered_opportunities)
         self.store.set_exchange_errors(errors)
@@ -213,6 +224,9 @@ class MarketCollector:
             return
         try:
             markets = await self._index_component_markets(markets)
+            observe_markets = getattr(self.index_component_monitor, "observe_markets", None)
+            if observe_markets is not None:
+                await observe_markets(markets)
             if not markets:
                 return
             snapshots = await self.index_component_provider.fetch_components(markets)
@@ -225,10 +239,24 @@ class MarketCollector:
         watched_symbols = await self._index_component_watched_symbols()
         if watched_symbols is None:
             return markets
+        try:
+            normalized_watched = {index_watch_symbol(symbol) for symbol in watched_symbols}
+        except ValueError:
+            # Preserve lazy matching/error order for malformed injected watch
+            # lists instead of failing early before a valid earlier match.
+            normalized_watched = None
         return [
             market
             for market in markets
-            if self._index_component_symbol_is_watched(market.symbol, watched_symbols)
+            if self._index_component_symbol_is_watched(
+                market.symbol, watched_symbols, normalized_watched,
+            )
+            or (
+                market.symbol_alias_original_symbol is not None
+                and self._index_component_symbol_is_watched(
+                    market.symbol_alias_original_symbol, watched_symbols, normalized_watched,
+                )
+            )
         ]
 
     async def _index_component_watched_symbols(self) -> set[str] | None:
@@ -238,9 +266,13 @@ class MarketCollector:
         symbols = await watched_symbols()
         return {symbol.strip().upper() for symbol in symbols if symbol and symbol.strip()}
 
-    def _index_component_symbol_is_watched(self, symbol: str, watched_symbols: set[str]) -> bool:
-        normalized = symbol.strip().upper()
-        return any(normalized.startswith(watched) for watched in watched_symbols)
+    def _index_component_symbol_is_watched(
+        self, symbol: str, watched_symbols: set[str], normalized_watched: set[str] | None = None,
+    ) -> bool:
+        normalized = index_watch_symbol(symbol)
+        if normalized_watched is not None:
+            return normalized in normalized_watched
+        return any(index_watch_symbol(watched) == normalized for watched in watched_symbols)
 
     def _state_for(self, exchange_name: str) -> ExchangePollState:
         state = self._poll_states.get(exchange_name)
@@ -313,6 +345,8 @@ class MarketCollector:
         state = self._state_for(exchange_name)
         state.in_flight = False
         if result.errors:
+            if result.markets and not result.should_cool_down:
+                self._exchange_snapshots[exchange_name] = result.markets
             self._exchange_errors[exchange_name] = result.errors
             state.last_error_at = now
             state.consecutive_failures += 1
@@ -369,7 +403,7 @@ class MarketCollector:
     ) -> tuple[list[MarketSnapshot], dict[str, str]]:
         try:
             return await self._fetch_adapter(adapter)
-        except Exception as exc:  # noqa: BLE001 - isolate flaky public APIs per exchange.
+        except Exception as exc:
             logger.warning("exchange adapter failed: %s", adapter.name, exc_info=exc)
             return [], {adapter.name: _error_message(exc)}
 
@@ -408,28 +442,41 @@ class MarketCollector:
                 markets.extend(await fetcher())
             except Exception as exc:  # noqa: BLE001 - isolate flaky public APIs per market.
                 errors[f"{adapter.name}:{label}"] = _error_message(exc)
+        market_errors = getattr(adapter, "market_errors", None)
+        if isinstance(market_errors, dict):
+            errors.update(
+                {
+                    str(key): str(value)
+                    for key, value in market_errors.items()
+                    if str(key).strip() and str(value).strip()
+                }
+            )
         return markets, errors
 
-    def _build_labeled_opportunities(self, markets: list[MarketSnapshot]) -> list[Opportunity]:
-        raw: list[Opportunity] = []
-        for mode in ("SF", "FF", "SS"):
-            buy_fee = self.fee_settings.spot_fee_pct if mode in {"SF", "SS"} else self.fee_settings.future_fee_pct
-            sell_fee = self.fee_settings.future_fee_pct if mode in {"SF", "FF"} else self.fee_settings.spot_fee_pct
-            raw.extend(
-                build_opportunities(
-                    markets,
-                    mode=mode,
-                    buy_fee_pct=buy_fee,
-                    sell_fee_pct=sell_fee,
-                    safety_slippage_pct=self.fee_settings.safety_slippage_pct,
-                )
+    def _build_labeled_opportunities(
+        self,
+        markets: list[MarketSnapshot],
+        now: datetime | None = None,
+    ) -> list[Opportunity]:
+        current = now or self._now_fn()
+        opportunities = build_all_opportunities(
+            markets,
+            spot_fee_pct=self.fee_settings.spot_fee_pct,
+            future_fee_pct=self.fee_settings.future_fee_pct,
+            safety_slippage_pct=self.fee_settings.safety_slippage_pct,
+            now=current,
+            stale_after_seconds=self.risk_settings.stale_after_seconds,
+        )
+        collision_symbols = frozenset(
+            symbol.upper() for symbol in self.risk_settings.ticker_collision_symbols
+        )
+        for item in opportunities:
+            # These models were just constructed for this collection, and have
+            # not been published to the store or passed to another consumer.
+            item.risk_labels = risk_labels_for(
+                item, self.risk_settings, current, collision_symbols=collision_symbols,
             )
-        now = datetime.now(UTC)
-        labeled = [
-            apply_risk_labels(item, settings=self.risk_settings, now=now)
-            for item in raw
-        ]
-        return sorted(labeled, key=lambda item: item.open_spread_pct, reverse=True)
+        return opportunities
 
     async def close(self) -> None:
         for adapter in self.adapters:

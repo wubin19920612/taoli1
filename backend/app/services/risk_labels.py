@@ -51,26 +51,6 @@ def effective_open_edge_pct(opportunity: Opportunity, settings: RiskSettings) ->
     return combined_open_edge_pct(opportunity) - settings.signal_slippage_buffer_pct
 
 
-def known_open_depth_usdt(opportunity: Opportunity) -> float | None:
-    if opportunity.min_open_depth_usdt is not None:
-        return opportunity.min_open_depth_usdt
-    known_depths = [
-        depth
-        for depth in [opportunity.buy_ask_depth_usdt, opportunity.sell_bid_depth_usdt]
-        if depth is not None
-    ]
-    if not known_depths:
-        return None
-    return min(known_depths)
-
-
-def required_open_depth_usdt(settings: RiskSettings) -> float:
-    return max(
-        settings.min_top_of_book_depth_usdt,
-        settings.signal_validation_notional_usdt * settings.orderbook_depth_safety_multiple,
-    )
-
-
 def has_non_actionable_risk(
     opportunity: Opportunity,
     hidden_labels: set[str] | frozenset[str] | None = None,
@@ -84,6 +64,20 @@ def apply_risk_labels(
     settings: RiskSettings,
     now: datetime | None = None,
 ) -> Opportunity:
+    """Return a labeled copy; leave shared caller-owned opportunities untouched."""
+    return opportunity.model_copy(update={
+        "risk_labels": risk_labels_for(opportunity, settings, now),
+    })
+
+
+def risk_labels_for(
+    opportunity: Opportunity,
+    settings: RiskSettings,
+    now: datetime | None = None,
+    *,
+    collision_symbols: frozenset[str] | None = None,
+) -> list[str]:
+    """Calculate labels without copying or mutating the opportunity."""
     current = now or datetime.now(UTC)
     labels: list[str] = []
 
@@ -101,7 +95,9 @@ def apply_risk_labels(
     if opportunity.spread_width_pct >= settings.wide_spread_pct:
         labels.append("WIDE_SPREAD")
 
-    if opportunity.symbol.upper() in {item.upper() for item in settings.ticker_collision_symbols}:
+    if collision_symbols is None:
+        collision_symbols = frozenset(item.upper() for item in settings.ticker_collision_symbols)
+    if opportunity.symbol.upper() in collision_symbols:
         labels.append("SAME_TICKER_RISK")
 
     next_cycle_funding = next_cycle_funding_edge_pct(opportunity)
@@ -119,11 +115,6 @@ def apply_risk_labels(
     if effective_open_edge_pct(opportunity, settings) < settings.min_effective_open_pct:
         labels.append("EDGE_AFTER_SLIPPAGE_TOO_SMALL")
 
-    required_depth = required_open_depth_usdt(settings)
-    open_depth = known_open_depth_usdt(opportunity)
-    if required_depth > 0 and open_depth is not None and open_depth < required_depth:
-        labels.append("THIN_ORDER_BOOK")
-
     if (
         opportunity.buy_market_type == MarketType.FUTURE
         and opportunity.funding_rate_buy_pct is None
@@ -133,4 +124,4 @@ def apply_risk_labels(
     ):
         labels.append("MISSING_FUNDING")
 
-    return opportunity.model_copy(update={"risk_labels": labels})
+    return labels

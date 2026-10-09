@@ -12,6 +12,8 @@ from app.services.funding_research import (
     FundingResearchSettings,
     LegacyBacktestSettings,
     backtest_legacy_opportunity_history,
+    close_paper_trade,
+    create_paper_trade_from_candidate,
     record_funding_research_run,
     summarize_paper_trades,
 )
@@ -40,10 +42,19 @@ async def _risk_settings(request: Request) -> RiskSettings:
 async def list_funding_research_candidates(
     request: Request,
     symbol: str | None = Query(default=None),
+    opportunity_type: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=1000),
 ) -> list[FundingResearchCandidate]:
     normalized_symbol = symbol.upper().replace("-", "").replace("_", "") if symbol else None
-    return await _repo(request).list_recent_candidates(symbol=normalized_symbol, limit=limit)
+    candidates = await _repo(request).list_recent_candidates(symbol=normalized_symbol, limit=limit)
+    if opportunity_type is None:
+        return candidates
+    normalized_type = opportunity_type.strip().upper()
+    return [
+        candidate
+        for candidate in candidates
+        if normalized_type in candidate.opportunity_types
+    ]
 
 
 @router.get("/candidate-snapshots", response_model=list[FundingResearchCandidateSnapshot])
@@ -67,19 +78,75 @@ async def list_funding_research_candidate_snapshots(
 async def list_funding_research_paper_trades(
     request: Request,
     status: str | None = Query(default=None),
+    opportunity_type: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=1000),
 ) -> list[FundingResearchPaperTrade]:
     normalized_status = status.upper() if status else None
-    return await _repo(request).list_paper_trades(status=normalized_status, limit=limit)
+    trades = await _repo(request).list_paper_trades(status=normalized_status, limit=limit)
+    if opportunity_type is None:
+        return trades
+    normalized_type = opportunity_type.strip().upper()
+    return [
+        trade
+        for trade in trades
+        if normalized_type in trade.opportunity_types
+    ]
 
 
 @router.get("/paper-trades/summary", response_model=FundingResearchPaperTradeSummary)
 async def get_funding_research_paper_trade_summary(
     request: Request,
+    opportunity_type: str | None = Query(default=None),
     limit: int = Query(default=1000, ge=1, le=10_000),
 ) -> FundingResearchPaperTradeSummary:
     trades = await _repo(request).list_paper_trades(limit=limit)
+    if opportunity_type is not None:
+        normalized_type = opportunity_type.strip().upper()
+        trades = [
+            trade
+            for trade in trades
+            if normalized_type in trade.opportunity_types
+        ]
     return summarize_paper_trades(trades)
+
+
+@router.post("/paper-trades/open/{candidate_id}", response_model=FundingResearchPaperTrade)
+async def open_funding_research_paper_trade(
+    candidate_id: str,
+    request: Request,
+) -> FundingResearchPaperTrade:
+    repo = _repo(request)
+    candidates = await repo.list_recent_candidates(limit=1_000)
+    candidate = next((item for item in candidates if item.id == candidate_id), None)
+    if candidate is None:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    trade = create_paper_trade_from_candidate(candidate)
+    return await repo.upsert_paper_trade(trade)
+
+
+@router.post("/paper-trades/{trade_id}/close", response_model=FundingResearchPaperTrade)
+async def close_funding_research_paper_trade(
+    trade_id: str,
+    request: Request,
+    exit_reason: str = Query(default="manual"),
+) -> FundingResearchPaperTrade:
+    repo = _repo(request)
+    trades = await repo.list_paper_trades(status="OPEN", limit=1_000)
+    trade = next((item for item in trades if item.id == trade_id), None)
+    if trade is None:
+        raise HTTPException(status_code=404, detail="Open paper trade not found")
+    candidates = await repo.list_recent_candidates(symbol=trade.symbol, limit=1_000)
+    candidate = next(
+        (
+            item
+            for item in candidates
+            if item.long_exchange == trade.long_exchange
+            and item.short_exchange == trade.short_exchange
+        ),
+        None,
+    )
+    closed = close_paper_trade(trade, candidate, exit_reason=exit_reason)
+    return await repo.upsert_paper_trade(closed)
 
 
 @router.post("/run")

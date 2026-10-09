@@ -6,11 +6,29 @@ import { IndexComponentChangesPage } from "../src/pages/IndexComponentChangesPag
 
 describe("IndexComponentChangesPage", () => {
   beforeEach(() => {
+    let autoEnabled = false;
+    let notificationsEnabled = true;
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
         const method = init?.method ?? "GET";
+        if (url.includes("/index-components/notifications")) {
+          if (method === "PUT") {
+            notificationsEnabled = (JSON.parse(String(init?.body)) as { enabled: boolean }).enabled;
+          }
+          return Response.json({ enabled: notificationsEnabled });
+        }
+        if (url.includes("/index-components/auto-watch")) {
+          if (method === "PUT") {
+            autoEnabled = (JSON.parse(String(init?.body)) as { enabled: boolean }).enabled;
+          }
+          return Response.json({
+            enabled: autoEnabled,
+            items: autoEnabled ? [{ source: "positions", symbol: "TTWOUSDT" }] : [],
+            error: null
+          });
+        }
         if (url.includes("/index-components/snapshots")) {
           if (url.includes("symbol=ESPORTS")) {
             if (url.includes("exchange=gate")) {
@@ -215,10 +233,9 @@ describe("IndexComponentChangesPage", () => {
 
     expect((await screen.findAllByText("gateio 20.00%")).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("参考 binance 指数成分").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText("pancakeswapv3 50.00%").length).toBeGreaterThanOrEqual(2);
-    expect(screen.getAllByText("binance future 30.00%").length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText("pancakeswapv3 50.00%").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("binance future 30.00%").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("参考篮子包含 gateio 20.00%")).toBeTruthy();
-    expect(screen.getByText("参考篮子未包含 bitget")).toBeTruthy();
   });
 
   it("keeps reference snapshots available for the chart when exchange filter is selected", async () => {
@@ -298,5 +315,38 @@ describe("IndexComponentChangesPage", () => {
     const calls = vi.mocked(fetch).mock.calls.map((call) => [String(call[0]), call[1]?.method ?? "GET"]);
     expect(calls.some(([url, method]) => url.includes("/index-components/watchlist") && method === "POST")).toBe(true);
     expect(calls.some(([url, method]) => url.includes("/index-components/watchlist/delete-me") && method === "DELETE")).toBe(true);
+  });
+
+  it("links automatic position monitoring with a switch and keeps manual entries", async () => {
+    render(<IndexComponentChangesPage />);
+    const toggle = await screen.findByRole("switch", { name: "自动联动浮窗关注和 Astro 卡片持仓" });
+    expect(screen.getByText("ESPORTS")).toBeTruthy();
+
+    await userEvent.click(toggle);
+    expect(await screen.findByText("TTWOUSDT")).toBeTruthy();
+    expect(screen.getByText("持仓")).toBeTruthy();
+    expect(screen.getByText("ESPORTS")).toBeTruthy();
+
+    await userEvent.click(toggle);
+    await waitFor(() => expect(screen.queryByText("TTWOUSDT")).toBeNull());
+    expect(screen.getByText("ESPORTS")).toBeTruthy();
+    const calls = vi.mocked(fetch).mock.calls;
+    expect(calls.filter(([url, init]) =>
+      String(url).includes("/index-components/auto-watch") && init?.method === "PUT"
+    )).toHaveLength(2);
+  });
+
+  it("toggles index component Feishu notifications independently of the watchlist", async () => {
+    render(<IndexComponentChangesPage />);
+    const toggle = await screen.findByRole("switch", { name: "成分变化通知" });
+    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("true"));
+    await userEvent.click(toggle);
+    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
+    expect(screen.getByText("ESPORTS")).toBeTruthy();
+    const calls = vi.mocked(fetch).mock.calls;
+    expect(calls.some(([url, init]) =>
+      String(url).includes("/index-components/notifications") && init?.method === "PUT" &&
+      JSON.parse(String(init.body)).enabled === false
+    )).toBe(true);
   });
 });

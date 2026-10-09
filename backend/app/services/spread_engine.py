@@ -1,9 +1,12 @@
 from collections import defaultdict
+from datetime import UTC, datetime
 from hashlib import sha1
+from itertools import combinations, product
 from typing import Literal
 
 from app.models.market import MarketSnapshot, MarketType
 from app.models.opportunity import Opportunity, OpportunityType
+from app.services.market_sessions import is_market_snapshot_tradable
 
 Mode = Literal["SF", "FF", "SS"]
 
@@ -65,11 +68,43 @@ def _min_known_depth(*values: float | None) -> float | None:
     return min(known)
 
 
-def opportunity_id(mode: Mode, symbol: str, buy_leg: MarketSnapshot, sell_leg: MarketSnapshot) -> str:
-    value = (
-        f"{mode}:{symbol}:{buy_leg.exchange}:{buy_leg.market_type}:"
-        f"{sell_leg.exchange}:{sell_leg.market_type}"
+def _market_dex(snapshot: MarketSnapshot) -> str | None:
+    if snapshot.dex:
+        return snapshot.dex.strip().lower() or None
+    if snapshot.exchange.lower() != "hyperliquid" or snapshot.market_type != MarketType.FUTURE:
+        return None
+    if ":" in snapshot.raw_symbol:
+        return snapshot.raw_symbol.split(":", 1)[0].strip().lower() or "main"
+    return "main"
+
+
+def _market_identity(snapshot: MarketSnapshot) -> tuple[str, ...]:
+    identity = (
+        snapshot.exchange.lower(),
+        snapshot.market_type.value,
+        snapshot.raw_symbol,
+        _market_dex(snapshot) or "",
+        f"{snapshot.symbol_alias_price_multiplier:.12g}",
     )
+    if snapshot.contract_size_multiplier is None:
+        return identity
+    return (*identity, f"{snapshot.contract_size_multiplier:.12g}")
+
+
+def _market_observed_at(snapshot: MarketSnapshot) -> datetime:
+    observed_at = snapshot.upstream_timestamp or snapshot.timestamp
+    return observed_at if observed_at.tzinfo is not None else observed_at.replace(tzinfo=UTC)
+
+
+def _has_executable_book(snapshot: MarketSnapshot) -> bool:
+    estimated = {field.strip().lower() for field in snapshot.estimated_fields}
+    return "bid" not in estimated and "ask" not in estimated
+
+
+def opportunity_id(mode: Mode, symbol: str, buy_leg: MarketSnapshot, sell_leg: MarketSnapshot) -> str:
+    buy_identity = ":".join(_market_identity(buy_leg))
+    sell_identity = ":".join(_market_identity(sell_leg))
+    value = f"{mode}:{symbol}:{buy_identity}->{sell_identity}"
     return sha1(value.encode("utf-8")).hexdigest()[:16]
 
 
@@ -81,6 +116,112 @@ def pair_allowed(mode: Mode, first: MarketSnapshot, second: MarketSnapshot) -> b
     if mode == "SS":
         return first.market_type == MarketType.SPOT and second.market_type == MarketType.SPOT
     return False
+
+
+def build_directional_opportunity(
+    buy_leg: MarketSnapshot,
+    sell_leg: MarketSnapshot,
+    *,
+    mode: Mode,
+    buy_fee_pct: float = 0.1,
+    sell_fee_pct: float = 0.1,
+    safety_slippage_pct: float = 0.05,
+) -> Opportunity:
+    """Build an opportunity for an explicitly selected direction, including a negative spread."""
+    open_spread_pct, close_spread_pct = midpoint_spread_pct(buy_leg, sell_leg)
+    fee_adjusted = open_spread_pct - buy_fee_pct - sell_fee_pct - safety_slippage_pct
+    buy_funding = _funding_rate(buy_leg)
+    sell_funding = _funding_rate(sell_leg)
+    net_funding = None
+    if buy_funding is not None and sell_funding is not None:
+        net_funding = sell_funding - buy_funding
+    buy_next_funding = _funding_next_rate(buy_leg)
+    sell_next_funding = _funding_next_rate(sell_leg)
+    net_funding_next = None
+    if buy_next_funding is not None and sell_next_funding is not None:
+        net_funding_next = sell_next_funding - buy_next_funding
+    buy_hourly = _normalized_hourly_rate(buy_leg)
+    sell_hourly = _normalized_hourly_rate(sell_leg)
+    net_funding_hourly = None
+    if buy_hourly is not None and sell_hourly is not None:
+        net_funding_hourly = sell_hourly - buy_hourly
+    buy_next_hourly = _normalized_next_rate(buy_leg)
+    sell_next_hourly = _normalized_next_rate(sell_leg)
+    net_funding_next_hourly = None
+    if buy_next_hourly is not None and sell_next_hourly is not None:
+        net_funding_next_hourly = sell_next_hourly - buy_next_hourly
+    buy_bid_depth = _depth_notional_usdt(buy_leg.bid, buy_leg.bid_size)
+    buy_ask_depth = _depth_notional_usdt(buy_leg.ask, buy_leg.ask_size)
+    sell_bid_depth = _depth_notional_usdt(sell_leg.bid, sell_leg.bid_size)
+    sell_ask_depth = _depth_notional_usdt(sell_leg.ask, sell_leg.ask_size)
+
+    return Opportunity(
+        id=opportunity_id(mode, buy_leg.symbol, buy_leg, sell_leg),
+        type=OpportunityType(mode),
+        symbol=buy_leg.symbol,
+        buy_exchange=buy_leg.exchange,
+        buy_market_type=buy_leg.market_type,
+        buy_raw_symbol=buy_leg.raw_symbol,
+        buy_dex=_market_dex(buy_leg),
+        buy_price_multiplier=buy_leg.symbol_alias_price_multiplier,
+        buy_contract_size_multiplier=buy_leg.contract_size_multiplier,
+        buy_timestamp=_market_observed_at(buy_leg),
+        buy_data_source=buy_leg.data_source,
+        buy_is_estimated=buy_leg.is_estimated,
+        buy_estimated_fields=buy_leg.estimated_fields,
+        sell_exchange=sell_leg.exchange,
+        sell_market_type=sell_leg.market_type,
+        sell_raw_symbol=sell_leg.raw_symbol,
+        sell_dex=_market_dex(sell_leg),
+        sell_price_multiplier=sell_leg.symbol_alias_price_multiplier,
+        sell_contract_size_multiplier=sell_leg.contract_size_multiplier,
+        sell_timestamp=_market_observed_at(sell_leg),
+        sell_data_source=sell_leg.data_source,
+        sell_is_estimated=sell_leg.is_estimated,
+        sell_estimated_fields=sell_leg.estimated_fields,
+        buy_fee_pct=buy_fee_pct,
+        sell_fee_pct=sell_fee_pct,
+        safety_slippage_pct=safety_slippage_pct,
+        fees_are_estimated=True,
+        open_spread_pct=open_spread_pct,
+        close_spread_pct=close_spread_pct,
+        fee_adjusted_open_pct=fee_adjusted,
+        spread_width_pct=abs(close_spread_pct - open_spread_pct),
+        buy_bid=buy_leg.bid,
+        buy_ask=buy_leg.ask,
+        sell_bid=sell_leg.bid,
+        sell_ask=sell_leg.ask,
+        buy_bid_depth_usdt=buy_bid_depth,
+        buy_ask_depth_usdt=buy_ask_depth,
+        sell_bid_depth_usdt=sell_bid_depth,
+        sell_ask_depth_usdt=sell_ask_depth,
+        min_open_depth_usdt=_min_known_depth(buy_ask_depth, sell_bid_depth),
+        buy_volume_24h_usdt=buy_leg.volume_24h_usdt,
+        sell_volume_24h_usdt=sell_leg.volume_24h_usdt,
+        funding_rate_buy_pct=buy_leg.funding_rate_pct,
+        funding_rate_sell_pct=sell_leg.funding_rate_pct,
+        funding_next_rate_buy_pct=buy_leg.funding_next_rate_pct,
+        funding_next_rate_sell_pct=sell_leg.funding_next_rate_pct,
+        funding_next_time_buy=buy_leg.funding_next_time,
+        funding_next_time_sell=sell_leg.funding_next_time,
+        net_funding_pct=net_funding,
+        net_funding_next_pct=net_funding_next,
+        buy_funding_interval_hours=buy_leg.funding_interval_hours,
+        sell_funding_interval_hours=sell_leg.funding_interval_hours,
+        net_funding_hourly_pct=net_funding_hourly,
+        net_funding_daily_pct=(
+            net_funding_hourly * 24 if net_funding_hourly is not None else None
+        ),
+        net_funding_next_hourly_pct=net_funding_next_hourly,
+        net_funding_next_daily_pct=(
+            net_funding_next_hourly * 24 if net_funding_next_hourly is not None else None
+        ),
+        mark_index_diff_buy_pct=mark_index_diff_pct(buy_leg),
+        mark_index_diff_sell_pct=mark_index_diff_pct(sell_leg),
+        risk_labels=[],
+        # The opportunity is only as fresh as its older leg.
+        last_seen_at=min(_market_observed_at(buy_leg), _market_observed_at(sell_leg)),
+    )
 
 
 def orient_pair(mode: Mode, first: MarketSnapshot, second: MarketSnapshot) -> tuple[MarketSnapshot, MarketSnapshot] | None:
@@ -97,120 +238,130 @@ def build_opportunities(
     buy_fee_pct: float = 0.1,
     sell_fee_pct: float = 0.1,
     safety_slippage_pct: float = 0.05,
+    now: datetime | None = None,
+    stale_after_seconds: int | None = None,
 ) -> list[Opportunity]:
+    current = now or datetime.now(UTC)
+    by_symbol = _group_tradable_markets(snapshots, current, stale_after_seconds)
+    opportunities = _build_grouped_opportunities(
+        by_symbol, mode, buy_fee_pct, sell_fee_pct, safety_slippage_pct,
+    )
+    return sorted(opportunities, key=lambda item: item.open_spread_pct, reverse=True)
+
+
+def build_all_opportunities(
+    snapshots: list[MarketSnapshot],
+    *,
+    spot_fee_pct: float = 0.1,
+    future_fee_pct: float = 0.1,
+    safety_slippage_pct: float = 0.05,
+    now: datetime | None = None,
+    stale_after_seconds: int | None = None,
+) -> list[Opportunity]:
+    """Build the SF/FF/SS snapshot using one shared eligibility pass.
+
+    Preserve mode order for tied spreads, as in the collector's three calls
+    followed by a stable global sort. Every returned opportunity is newly owned.
+    """
+    current = now or datetime.now(UTC)
+    by_symbol = _group_tradable_markets(snapshots, current, stale_after_seconds)
+    opportunities: list[Opportunity] = []
+    for mode, buy_fee, sell_fee in (
+        ("SF", spot_fee_pct, future_fee_pct),
+        ("FF", future_fee_pct, future_fee_pct),
+        ("SS", spot_fee_pct, spot_fee_pct),
+    ):
+        opportunities.extend(_build_grouped_opportunities(
+            by_symbol, mode, buy_fee, sell_fee, safety_slippage_pct,
+        ))
+    opportunities.sort(key=lambda item: item.open_spread_pct, reverse=True)
+    return opportunities
+
+
+def _group_tradable_markets(
+    snapshots: list[MarketSnapshot],
+    current: datetime,
+    stale_after_seconds: int | None,
+) -> dict[str, list[MarketSnapshot]]:
     by_symbol: dict[str, list[MarketSnapshot]] = defaultdict(list)
     for snapshot in snapshots:
+        if not is_market_snapshot_tradable(snapshot, current):
+            continue
+        if not _has_executable_book(snapshot):
+            continue
+        observed_at = _market_observed_at(snapshot)
+        if (
+            stale_after_seconds is not None
+            and (current - observed_at).total_seconds() > stale_after_seconds
+        ):
+            continue
         by_symbol[snapshot.symbol].append(snapshot)
+    return by_symbol
 
+
+def _build_grouped_opportunities(
+    by_symbol: dict[str, list[MarketSnapshot]],
+    mode: Mode,
+    buy_fee_pct: float,
+    sell_fee_pct: float,
+    safety_slippage_pct: float,
+) -> list[Opportunity]:
     opportunities: list[Opportunity] = []
-    seen: set[tuple[str, str, str]] = set()
-    for symbol, legs in by_symbol.items():
+    for legs in by_symbol.values():
         if len(legs) < 2:
             continue
-        for first in legs:
-            for second in legs:
-                if first == second:
-                    continue
-                oriented = orient_pair(mode, first, second)
-                if oriented is None:
-                    continue
-                buy_leg, sell_leg = oriented
-                pair_key = tuple(
-                    sorted(
-                        (
-                            buy_leg.exchange + buy_leg.market_type,
-                            sell_leg.exchange + sell_leg.market_type,
-                        )
-                    )
-                )
-                dedupe_key = (mode, symbol, "|".join(pair_key))
-                if dedupe_key in seen:
-                    continue
-                seen.add(dedupe_key)
+        # Preserve the old traversal's first encounter and stable tie ordering,
+        # but only enumerate eligible pairs, once per unordered FF/SS pair.
+        if mode == "SF":
+            spots = [leg for leg in legs if leg.market_type == MarketType.SPOT]
+            futures = [leg for leg in legs if leg.market_type == MarketType.FUTURE]
+            if not spots or not futures:
+                continue
+            pairs = product(
+                [(leg, _market_identity(leg)) for leg in spots],
+                [(leg, _market_identity(leg)) for leg in futures],
+            )
+        elif mode in {"FF", "SS"}:
+            market_type = MarketType.FUTURE if mode == "FF" else MarketType.SPOT
+            eligible = [leg for leg in legs if leg.market_type == market_type]
+            if len(eligible) < 2:
+                continue
+            pairs = combinations([(leg, _market_identity(leg)) for leg in eligible], 2)
+        else:
+            continue
 
+        # Symbol and mode are constant within this group. Release dedupe keys
+        # after each symbol instead of retaining the whole market's pair graph.
+        seen: set[tuple[tuple[str, ...], tuple[str, ...]]] = set()
+        for (buy_leg, buy_identity), (sell_leg, sell_identity) in pairs:
+            # Equal models necessarily have equal identities; only duplicates
+            # need the expensive full-model comparison. Different books with
+            # the same identity still follow the original first-pair behavior.
+            if buy_identity == sell_identity and buy_leg == sell_leg:
+                continue
+            pair_key = (
+                (buy_identity, sell_identity)
+                if buy_identity <= sell_identity else (sell_identity, buy_identity)
+            )
+            if pair_key in seen:
+                continue
+            seen.add(pair_key)
+
+            open_spread_pct, close_spread_pct = midpoint_spread_pct(buy_leg, sell_leg)
+            if mode in {"FF", "SS"} and open_spread_pct < 0 and close_spread_pct < 0:
+                buy_leg, sell_leg = sell_leg, buy_leg
                 open_spread_pct, close_spread_pct = midpoint_spread_pct(buy_leg, sell_leg)
-                if mode in {"FF", "SS"} and open_spread_pct < 0 and close_spread_pct < 0:
-                    buy_leg, sell_leg = sell_leg, buy_leg
-                    open_spread_pct, close_spread_pct = midpoint_spread_pct(buy_leg, sell_leg)
-                if open_spread_pct <= 0:
-                    continue
+            if open_spread_pct <= 0:
+                continue
 
-                fee_adjusted = open_spread_pct - buy_fee_pct - sell_fee_pct - safety_slippage_pct
-                buy_funding = _funding_rate(buy_leg)
-                sell_funding = _funding_rate(sell_leg)
-                net_funding = None
-                if buy_funding is not None and sell_funding is not None:
-                    net_funding = sell_funding - buy_funding
-                buy_next_funding = _funding_next_rate(buy_leg)
-                sell_next_funding = _funding_next_rate(sell_leg)
-                net_funding_next = None
-                if buy_next_funding is not None and sell_next_funding is not None:
-                    net_funding_next = sell_next_funding - buy_next_funding
-                buy_hourly = _normalized_hourly_rate(buy_leg)
-                sell_hourly = _normalized_hourly_rate(sell_leg)
-                net_funding_hourly = None
-                if buy_hourly is not None and sell_hourly is not None:
-                    net_funding_hourly = sell_hourly - buy_hourly
-                buy_next_hourly = _normalized_next_rate(buy_leg)
-                sell_next_hourly = _normalized_next_rate(sell_leg)
-                net_funding_next_hourly = None
-                if buy_next_hourly is not None and sell_next_hourly is not None:
-                    net_funding_next_hourly = sell_next_hourly - buy_next_hourly
-                net_funding_daily = None
-                if net_funding_hourly is not None:
-                    net_funding_daily = net_funding_hourly * 24
-                net_funding_next_daily = None
-                if net_funding_next_hourly is not None:
-                    net_funding_next_daily = net_funding_next_hourly * 24
-                buy_bid_depth = _depth_notional_usdt(buy_leg.bid, buy_leg.bid_size)
-                buy_ask_depth = _depth_notional_usdt(buy_leg.ask, buy_leg.ask_size)
-                sell_bid_depth = _depth_notional_usdt(sell_leg.bid, sell_leg.bid_size)
-                sell_ask_depth = _depth_notional_usdt(sell_leg.ask, sell_leg.ask_size)
-
-                opportunities.append(
-                    Opportunity(
-                        id=opportunity_id(mode, symbol, buy_leg, sell_leg),
-                        type=OpportunityType(mode),
-                        symbol=symbol,
-                        buy_exchange=buy_leg.exchange,
-                        buy_market_type=buy_leg.market_type,
-                        buy_raw_symbol=buy_leg.raw_symbol,
-                        sell_exchange=sell_leg.exchange,
-                        sell_market_type=sell_leg.market_type,
-                        sell_raw_symbol=sell_leg.raw_symbol,
-                        open_spread_pct=open_spread_pct,
-                        close_spread_pct=close_spread_pct,
-                        fee_adjusted_open_pct=fee_adjusted,
-                        spread_width_pct=abs(close_spread_pct - open_spread_pct),
-                        buy_bid=buy_leg.bid,
-                        buy_ask=buy_leg.ask,
-                        sell_bid=sell_leg.bid,
-                        sell_ask=sell_leg.ask,
-                        buy_bid_depth_usdt=buy_bid_depth,
-                        buy_ask_depth_usdt=buy_ask_depth,
-                        sell_bid_depth_usdt=sell_bid_depth,
-                        sell_ask_depth_usdt=sell_ask_depth,
-                        min_open_depth_usdt=_min_known_depth(buy_ask_depth, sell_bid_depth),
-                        buy_volume_24h_usdt=buy_leg.volume_24h_usdt,
-                        sell_volume_24h_usdt=sell_leg.volume_24h_usdt,
-                        funding_rate_buy_pct=buy_leg.funding_rate_pct,
-                        funding_rate_sell_pct=sell_leg.funding_rate_pct,
-                        funding_next_rate_buy_pct=buy_leg.funding_next_rate_pct,
-                        funding_next_rate_sell_pct=sell_leg.funding_next_rate_pct,
-                        funding_next_time_buy=buy_leg.funding_next_time,
-                        funding_next_time_sell=sell_leg.funding_next_time,
-                        net_funding_pct=net_funding,
-                        net_funding_next_pct=net_funding_next,
-                        buy_funding_interval_hours=buy_leg.funding_interval_hours,
-                        sell_funding_interval_hours=sell_leg.funding_interval_hours,
-                        net_funding_hourly_pct=net_funding_hourly,
-                        net_funding_daily_pct=net_funding_daily,
-                        net_funding_next_hourly_pct=net_funding_next_hourly,
-                        net_funding_next_daily_pct=net_funding_next_daily,
-                        mark_index_diff_buy_pct=mark_index_diff_pct(buy_leg),
-                        mark_index_diff_sell_pct=mark_index_diff_pct(sell_leg),
-                        risk_labels=[],
-                        last_seen_at=max(buy_leg.timestamp, sell_leg.timestamp),
-                    )
+            opportunities.append(
+                build_directional_opportunity(
+                    buy_leg,
+                    sell_leg,
+                    mode=mode,
+                    buy_fee_pct=buy_fee_pct,
+                    sell_fee_pct=sell_fee_pct,
+                    safety_slippage_pct=safety_slippage_pct,
                 )
-    return sorted(opportunities, key=lambda item: item.open_spread_pct, reverse=True)
+            )
+    return opportunities

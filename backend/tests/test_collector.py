@@ -288,10 +288,12 @@ def test_error_message_includes_transport_cause() -> None:
     assert _error_message(exc) == "ConnectError: All connection attempts failed; caused by OSError: network unreachable"
 
 
-def test_default_exchange_adapters_include_hyperliquid() -> None:
+def test_default_exchange_adapters_include_hyperliquid_and_both_lighter_instances() -> None:
     names = [adapter.name for adapter in default_exchange_adapters()]
 
     assert "hyperliquid" in names
+    assert names.count("lighter") == 1
+    assert names.count("rh-lighter") == 1
 
 
 @pytest.mark.asyncio
@@ -638,6 +640,7 @@ async def test_collector_skips_ignored_exchanges_and_blacklisted_symbols() -> No
 
     assert [item.symbol for item in result.markets] == ["BTCUSDT"]
     assert [item.symbol for item in store.get_markets()] == ["BTCUSDT"]
+    assert [item.symbol for item in store.get_all_markets()] == ["BTCUSDT", "BADUSDT"]
     assert active.spot_calls == 1
     assert active.future_calls == 1
     assert ignored.spot_calls == 0
@@ -706,6 +709,22 @@ async def test_collector_limits_index_component_fetches_to_watched_symbols() -> 
 
     assert provider.calls == [[btc]]
     assert monitor.calls == [["snapshot"]]
+
+
+@pytest.mark.asyncio
+async def test_collector_matches_index_component_watch_against_original_alias_symbol() -> None:
+    store = SnapshotStore()
+    provider = FakeIndexComponentProvider()
+    monitor = FakeTrackedIndexComponentMonitor({"1000PEPEUSDT"})
+    aliased = market_on("binance", "PEPEUSDT").model_copy(update={
+        "market_type": MarketType.FUTURE,
+        "symbol_alias_original_symbol": "1000PEPEUSDT",
+        "symbol_alias_price_multiplier": 10,
+    })
+    collector = MarketCollector(
+        [], store, index_component_provider=provider, index_component_monitor=monitor
+    )
+    assert await collector._index_component_markets([aliased]) == [aliased]
 
 
 @pytest.mark.asyncio

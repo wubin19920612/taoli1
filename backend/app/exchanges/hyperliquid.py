@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterable
-from datetime import datetime
 
 from app.exchanges.base import (
     ExchangeAdapter,
@@ -20,6 +19,11 @@ class HyperliquidAdapter(ExchangeAdapter):
     name = "hyperliquid"
     info_url = "https://api.hyperliquid.xyz/info"
     perp_dex_concurrency = 3
+    priority_order_book_markets = frozenset({"io:ANTH"})
+
+    def __init__(self, client=None):
+        super().__init__(client)
+        self.market_errors: dict[str, str] = {}
 
     async def fetch_spot_tickers(self) -> list[MarketSnapshot]:
         payload = await self.post_json(self.info_url, {"type": "spotMetaAndAssetCtxs"})
@@ -28,6 +32,7 @@ class HyperliquidAdapter(ExchangeAdapter):
         return self._parse_spot_rows(contexts, pair_names)
 
     async def fetch_future_tickers(self) -> list[MarketSnapshot]:
+        self.market_errors = {}
         perp_dex_names = await self._fetch_perp_dex_names()
         payload = await self.post_json(self.info_url, {"type": "metaAndAssetCtxs"})
         rows = self._parse_perp_payload(payload)
@@ -49,9 +54,10 @@ class HyperliquidAdapter(ExchangeAdapter):
                     continue
                 rows.extend(result)
 
-        return self._best_perp_rows_by_symbol(
+        rows = self._dedupe_perp_rows_by_market(
             self._attach_predicted_fundings(rows, predicted_fundings)
         )
+        return await self._attach_priority_order_books(rows)
 
     async def fetch_order_book(
         self,
@@ -82,7 +88,7 @@ class HyperliquidAdapter(ExchangeAdapter):
     async def _fetch_perp_dex_names(self) -> list[str]:
         try:
             payload = await self.post_json(self.info_url, {"type": "perpDexs"})
-        except Exception:
+        except Exception:  # noqa: BLE001 - DEX discovery must not block main markets.
             return []
         if not isinstance(payload, list):
             return []
@@ -116,7 +122,7 @@ class HyperliquidAdapter(ExchangeAdapter):
     async def _fetch_predicted_fundings(self) -> dict[str, dict[str, dict]]:
         try:
             payload = await self.post_json(self.info_url, {"type": "predictedFundings"})
-        except Exception:
+        except Exception:  # noqa: BLE001 - predicted funding is optional enrichment.
             return {}
         if not isinstance(payload, list):
             return {}
@@ -178,20 +184,66 @@ class HyperliquidAdapter(ExchangeAdapter):
         universe = meta.get("universe", [])
         return self._parse_perp_rows(universe, contexts)
 
-    def _best_perp_rows_by_symbol(self, rows: list[MarketSnapshot]) -> list[MarketSnapshot]:
-        best: dict[str, MarketSnapshot] = {}
-        order: list[str] = []
+    async def _attach_priority_order_books(
+        self,
+        rows: list[MarketSnapshot],
+    ) -> list[MarketSnapshot]:
+        enriched: list[MarketSnapshot] = []
         for row in rows:
-            current = best.get(row.symbol)
+            if row.raw_symbol not in self.priority_order_book_markets:
+                enriched.append(row)
+                continue
+            try:
+                book = await self.fetch_order_book(
+                    row.symbol,
+                    row.market_type,
+                    row.raw_symbol,
+                    limit=20,
+                )
+                if book is None or not book.bids or not book.asks:
+                    raise RuntimeError("empty l2Book response")
+                bid = max(book.bids, key=lambda level: level.price)
+                ask = min(book.asks, key=lambda level: level.price)
+                if bid.price >= ask.price:
+                    raise RuntimeError("crossed l2Book response")
+                enriched.append(
+                    row.model_copy(
+                        update={
+                            "bid": bid.price,
+                            "ask": ask.price,
+                            "bid_size": bid.size,
+                            "ask_size": ask.size,
+                            "upstream_timestamp": book.timestamp,
+                            "data_source": (
+                                "Hyperliquid public metaAndAssetCtxs + l2Book"
+                            ),
+                            "is_estimated": False,
+                            "estimated_fields": [],
+                        }
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001 - isolate one exact market.
+                key = f"{self.name}:{row.market_type.value}:{row.raw_symbol}"
+                detail = str(exc).strip() or exc.__class__.__name__
+                self.market_errors[key] = f"Hyperliquid l2Book failed: {detail}"
+                enriched.append(row)
+        return enriched
+
+    def _dedupe_perp_rows_by_market(self, rows: list[MarketSnapshot]) -> list[MarketSnapshot]:
+        best: dict[tuple[str, str], MarketSnapshot] = {}
+        order: list[tuple[str, str]] = []
+        for row in rows:
+            key = (row.dex or "main", row.raw_symbol)
+            current = best.get(key)
             if current is None:
-                best[row.symbol] = row
-                order.append(row.symbol)
+                best[key] = row
+                order.append(key)
                 continue
             current_volume = current.volume_24h_usdt if current.volume_24h_usdt is not None else -1
             row_volume = row.volume_24h_usdt if row.volume_24h_usdt is not None else -1
             if row_volume > current_volume:
-                best[row.symbol] = row
-        return [best[symbol] for symbol in order]
+                best[key] = row
+        return [best[key] for key in order]
 
     def _split_payload(self, payload: object) -> tuple[dict, list[dict]]:
         if not isinstance(payload, list) or len(payload) < 2:
@@ -289,6 +341,8 @@ class HyperliquidAdapter(ExchangeAdapter):
         for asset, item in zip(universe, contexts):
             if not isinstance(asset, dict):
                 continue
+            if asset.get("isDelisted") is True:
+                continue
             raw_coin = str(asset.get("name", "")).strip()
             if not raw_coin or raw_coin.startswith("@") or "/" in raw_coin:
                 continue
@@ -298,6 +352,8 @@ class HyperliquidAdapter(ExchangeAdapter):
                 continue
             symbol, base, quote = normalize_usdt_symbol(f"{base_coin}USDT")
             funding = parse_float(item.get("funding"))
+            dex = raw_coin.split(":", 1)[0].strip().lower() if ":" in raw_coin else "main"
+            requires_priority_book = raw_coin in self.priority_order_book_markets
             rows.append(
                 MarketSnapshot(
                     symbol=symbol,
@@ -316,6 +372,11 @@ class HyperliquidAdapter(ExchangeAdapter):
                     index_price=parse_float(item.get("oraclePx")),
                     timestamp=now,
                     raw_symbol=raw_coin,
+                    dex=dex,
+                    contract_size_multiplier=1.0,
+                    data_source="Hyperliquid public metaAndAssetCtxs",
+                    is_estimated=requires_priority_book,
+                    estimated_fields=["bid", "ask"] if requires_priority_book else [],
                 )
             )
         return rows

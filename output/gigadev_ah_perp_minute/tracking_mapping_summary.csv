@@ -1,0 +1,5 @@
+mapping,minutes,mean_tracking_error_pct,mean_absolute_tracking_error_pct,tracking_error_std_pct,price_level_correlation
+hyper_to_a_share,713,0.09231227,0.17324451,0.20574299,0.99526222
+hyper_to_h_share,713,-6.47489742,6.47489742,1.35664883,0.98315964
+binance_to_h_share,713,0.16617653,0.29341762,0.31644675,0.99616994
+binance_to_a_share,713,7.22045731,7.22045731,1.48433261,0.97970854
