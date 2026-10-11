@@ -428,6 +428,47 @@ describe("InstrumentLookupPage", () => {
     expect(screen.getByText("部分样本 · 2 点")).not.toBeNull();
   });
 
+  it("does not let an older background refresh overwrite a symbol being entered", async () => {
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    let instrumentCalls = 0;
+    let resolveRefresh!: (response: Response) => void;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/instruments/") && !url.endsWith("/statistics")) {
+        instrumentCalls += 1;
+        if (instrumentCalls === 2) {
+          return new Promise<Response>((resolve) => { resolveRefresh = resolve; });
+        }
+        if (url.includes("/instruments/OPENAIUSDT")) {
+          return Response.json({
+            ...lookupResult,
+            query: "OPENAIUSDT",
+            symbol: "OPENAIUSDT",
+            base: "OPENAI"
+          });
+        }
+      }
+      return fallback(input, init);
+    });
+
+    render(<InstrumentLookupPage />);
+    await screen.findByText("BTC / USDT");
+    await userEvent.click(screen.getByRole("button", { name: "立即刷新" }));
+    await waitFor(() => expect(instrumentCalls).toBe(2));
+
+    const input = screen.getByRole<HTMLInputElement>("textbox", { name: "查询标的" });
+    await userEvent.clear(input);
+    await userEvent.type(input, "OPENAI");
+    expect(input.value).toBe("OPENAI");
+
+    resolveRefresh(Response.json(lookupResult));
+    await waitFor(() => expect(input.value).toBe("OPENAI"));
+
+    await userEvent.click(screen.getByRole("button", { name: /查询$/ }));
+    expect(await screen.findByText("OPENAI / USDT")).not.toBeNull();
+    expect(input.value).toBe("OPENAIUSDT");
+  });
+
   it("does not turn unavailable historical statistics into zeroes or hide live spreads", async () => {
     const fallback = vi.mocked(fetch).getMockImplementation()!;
     vi.mocked(fetch).mockImplementation(async (input, init) => {

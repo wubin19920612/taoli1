@@ -1045,7 +1045,10 @@ export function InstrumentLookupPage() {
         setTradeStatus(null);
         setTradeStatusError(null);
       }
-      setQuery(next.symbol);
+      // Background refreshes must never rewrite the user's in-progress input.
+      // The input may already contain a different symbol that they are about to
+      // submit, while the previous symbol's quote request is still finishing.
+      if (!background) setQuery(next.symbol);
       setActiveSymbol(next.symbol);
       if (!background) {
         setTrendOpen(false);
@@ -1152,7 +1155,7 @@ export function InstrumentLookupPage() {
   useEffect(() => {
     if (!autoRefresh || !activeSymbol) return undefined;
     const refresh = () => {
-      if (document.visibilityState === "hidden" || autoRefreshPendingRef.current) return;
+      if (document.visibilityState === "hidden" || autoRefreshPendingRef.current || loading) return;
       autoRefreshPendingRef.current = true;
       void runLookup(activeSymbol, true).finally(() => { autoRefreshPendingRef.current = false; });
     };
@@ -1162,7 +1165,7 @@ export function InstrumentLookupPage() {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", refresh);
     };
-  }, [activeSymbol, autoRefresh, runLookup]);
+  }, [activeSymbol, autoRefresh, loading, runLookup]);
 
   const availableTrendExchanges = useMemo(
     () => result?.exchanges
