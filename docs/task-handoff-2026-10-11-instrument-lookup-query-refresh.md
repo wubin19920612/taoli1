@@ -32,12 +32,15 @@
 
 ## 线上状态
 
-- 生产机只读检查：服务器代码仍为 `822d6c7b39c6f41dc78ab789e1269b18d8922f3b`，前后端容器均 healthy，根分区可用约 14.6 GiB。
-- 本轮修复尚未部署；待提交推送并完成 GitHub Actions 双镜像后，按 `deploy/linux-update.sh` 先备份 `/data/radar.db`，再使用 `git pull --ff-only` 和预构建镜像更新。
+- 功能提交 `d090c374cf745fadd86668e1e4cb98a6506bc2cf` 已推送；GitHub Actions run `38124369191` 的 backend/frontend 两项镜像构建均成功。
+- 生产机已按 `deploy/linux-update.sh` 快进并运行双镜像，当前 backend/frontend 均 healthy，镜像 tag 均为 `sha-d090c374cf745fadd86668e1e4cb98a6506bc2cf`；未在生产机执行构建，也未使用 `docker compose down -v`。
+- 发布前主库备份：`backups/radar-before-d090c374cf74-20261011T082130Z.db`，`integrity_check=ok`，SHA-256 `5d25d759fc43f201bfa001fc0603395313079e7ffd7fa487be2e5829753d5422`。
+- 发布前 squeeze-route 备份：`backups/squeeze-route-before-d090c374cf74-20261011T082130Z.db`，`integrity_check=ok`，SHA-256 `9732baec65463a36510f646ec5178ff8ab642bc8ebefa25d9abd79a7750064a9`。
+- 后端直连和前端代理 `/api/health` 均 HTTP 200；生产 `OPENAIUSDT` 接口返回规范标的、8 个交易所、9 个精确市场。通过临时 SSH 隧道的 Playwright 验收：等待自动刷新后输入 OPENAI 未被覆盖，提交后显示 OPENAI / USDT，无 page error。
 
 ## 工作区与下一步
 
 - 本轮文件：`frontend/src/pages/InstrumentLookupPage.tsx`、`frontend/tests/InstrumentLookupPage.test.tsx`、本交接文档。
 - 现有 `frontend/src/pages/PairMonitorPage.tsx`、`frontend/tests/PairMonitorPage.test.tsx` 修改属于其他任务，不能暂存、回退或覆盖；大量 `.worktrees/`、`backend/.pytest_*`、`output/` 未跟踪产物同样保留。
-- 下一步：只暂存本轮三个文件，提交并推送当前分支；等待 backend/frontend 镜像构建；运行部署脚本并记录数据库备份校验、容器健康、`/api/health` 和线上 OPENAI 实际查询结果。
-- 已知限制：本轮验证使用专项接口模拟覆盖迟到响应；线上最终验收仍需真实 OPENAI 页面/API 请求确认。
+- 下一步：后续标的查询相关工作从本交接文档继续；不要改动或回退已部署的输入保护逻辑。
+- 已知限制：自动刷新保护依赖浏览器页面仍处于可见状态；页面隐藏时本来就暂停刷新，恢复可见后按现有定时器策略继续。
