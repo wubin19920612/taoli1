@@ -118,6 +118,8 @@ class InstrumentPriceChangeStats(BaseModel):
 class InstrumentSpread24hStats(BaseModel):
     max_spread_pct: float | None = None
     max_at: datetime | None = None
+    min_spread_pct: float | None = None
+    min_at: datetime | None = None
     point_count: int = Field(default=0, ge=0)
     first_seen_at: datetime | None = None
     last_seen_at: datetime | None = None

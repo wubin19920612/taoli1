@@ -1665,6 +1665,32 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+.instrument-spread-range {
+  display: grid;
+  gap: 2px;
+  text-align: right;
+}
+
+.instrument-spread-range-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px;
+  align-items: baseline;
+}
+
+.instrument-spread-range-row span,
+.instrument-spread-range small {
+  color: #708079;
+  font-size: 10px;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.instrument-spread-range-row strong {
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+
 .instrument-spread-close-value {
   color: #24536a;
 }

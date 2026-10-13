@@ -57,7 +57,10 @@ async def test_changes_and_directional_max_use_only_aligned_complete_candles() -
     reverse = result.spreads[f"{second_id}->{first_id}"]
     assert forward.max_spread_pct == pytest.approx(2000 / 110)
     assert reverse.max_spread_pct == pytest.approx(2200 / 209)
+    assert forward.min_spread_pct == pytest.approx(-2200 / 209)
+    assert reverse.min_spread_pct == pytest.approx(-2000 / 110)
     assert forward.max_at == NOW - timedelta(minutes=1)
+    assert forward.min_at == NOW
     assert forward.point_count == 3
     assert forward.complete is False
     assert forward.is_estimated is True
@@ -75,6 +78,7 @@ async def test_full_day_coverage_and_negative_max_are_not_absolute_values() -> N
     result = await InstrumentStatisticsService(query).lookup(instrument([first, second]), now=NOW)
     history = result.spreads[f"{instrument_market_id(first)}->{instrument_market_id(second)}"]
     assert history.max_spread_pct == pytest.approx(-2000 / 190)
+    assert history.min_spread_pct == pytest.approx(-2000 / 190)
     assert history.point_count == 1440
     assert history.complete is True
     assert history.first_seen_at == NOW - timedelta(hours=24) + timedelta(minutes=1)
@@ -91,7 +95,7 @@ async def test_missing_and_stale_baselines_do_not_become_zero_changes() -> None:
     assert result.markets[instrument_market_id(first)].change_24h_pct is None
     assert result.markets[instrument_market_id(second)].change_1h_pct is None
     assert "已过期" in result.markets[instrument_market_id(second)].error
-    assert all(stats.max_spread_pct is None for stats in result.spreads.values())
+    assert all(stats.max_spread_pct is None and stats.min_spread_pct is None for stats in result.spreads.values())
 
 
 @pytest.mark.asyncio
@@ -134,7 +138,7 @@ async def test_concurrent_queries_share_fetch_and_one_market_error_does_not_brea
     assert query.fetch_market_klines.await_count == 2
     assert results[0].markets[instrument_market_id(first)].change_1h_pct == pytest.approx(100 / 9)
     assert results[0].markets[instrument_market_id(second)].error == "upstream unavailable"
-    assert all(stats.max_spread_pct is None for stats in results[0].spreads.values())
+    assert all(stats.max_spread_pct is None and stats.min_spread_pct is None for stats in results[0].spreads.values())
 
 
 @pytest.mark.asyncio

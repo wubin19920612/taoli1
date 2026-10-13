@@ -221,6 +221,8 @@ export interface InstrumentPriceChangeStats {
 export interface InstrumentSpread24hStats {
   max_spread_pct: number | null;
   max_at: string | null;
+  min_spread_pct: number | null;
+  min_at: string | null;
   point_count: number;
   first_seen_at: string | null;
   last_seen_at: string | null;

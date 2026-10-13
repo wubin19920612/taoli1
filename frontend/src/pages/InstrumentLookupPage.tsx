@@ -1659,20 +1659,37 @@ export function InstrumentLookupPage() {
       )
     },
     {
-      title: <span className="instrument-spread-column-title">24h 最大价差<small>同分钟收盘价 · 预估</small></span>,
+      title: <span className="instrument-spread-column-title">24h 最大/最小价差<small>同分钟收盘价 · 预估</small></span>,
       key: "max_spread_24h",
-      width: 160,
+      width: 180,
       align: "right",
       sorter: true,
       render: (_, spread) => {
         const history = statistics?.spreads?.[spread.id];
-        const value = history?.max_spread_pct;
+        const maximum = history?.max_spread_pct ?? null;
+        const minimum = history?.min_spread_pct ?? null;
+        const valueText = (value: number | null) => value == null
+          ? statisticsLoading ? "加载中" : "-"
+          : `≈ ${signedPct(value)}`;
+        const coverageText = history?.point_count
+          ? `${history.complete ? "完整24h" : "部分样本"} · ${history.point_count} 点`
+          : history ? "暂无共同样本" : "暂无历史样本";
+        const tooltip = history?.error ?? (statisticsError || `当前买卖方向近24小时，同一分钟收盘价按价格倍率归一后计算最大值和最小值；不是历史买一卖一可成交价差，未扣手续费及滑点。${history ? `对齐 ${history.point_count} / 1440 点；覆盖 ${fullTime(history.first_seen_at)} 至 ${fullTime(history.last_seen_at)}` : ""}`);
         return (
-          <Tooltip title={history?.error ?? (statisticsError || `当前买卖方向近24小时，同一分钟收盘价按价格倍率归一后计算；不是历史买一卖一可成交价差，未扣手续费及滑点。${history ? `对齐 ${history.point_count} / 1440 点；覆盖 ${fullTime(history.first_seen_at)} 至 ${fullTime(history.last_seen_at)}` : ""}`)}>
-            <div className={`instrument-spread-value instrument-rate-${tone(value ?? null)}`}>
-              <strong>{value == null ? statisticsLoading ? "加载中" : "-" : `≈ ${signedPct(value)}`}</strong>
-              <small>{value == null ? "暂无历史样本" : `${history?.complete ? "完整24h" : "部分样本"} · ${history?.point_count} 点`}</small>
-              {history?.max_at ? <small>峰值 {dayjs(history.max_at).format("MM-DD HH:mm")}</small> : null}
+          <Tooltip title={tooltip}>
+            <div className="instrument-spread-range">
+              <div className={`instrument-spread-range-row instrument-rate-${tone(maximum)}`}>
+                <span>最大</span>
+                <strong>{valueText(maximum)}</strong>
+              </div>
+              <div className={`instrument-spread-range-row instrument-rate-${tone(minimum)}`}>
+                <span>最小</span>
+                <strong>{valueText(minimum)}</strong>
+              </div>
+              <small>{coverageText}</small>
+              {history?.max_at || history?.min_at ? (
+                <small>峰值 {history?.max_at ? dayjs(history.max_at).format("MM-DD HH:mm") : "-"} · 谷值 {history?.min_at ? dayjs(history.min_at).format("MM-DD HH:mm") : "-"}</small>
+              ) : null}
             </div>
           </Tooltip>
         );

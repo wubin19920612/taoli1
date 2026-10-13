@@ -386,7 +386,7 @@ describe("InstrumentLookupPage", () => {
     expect(String((fetch as ReturnType<typeof vi.fn>).mock.calls[0][0])).toContain("/instruments/BTCUSDT");
   });
 
-  it("shows exact-market price changes and the estimated aligned 24h maximum", async () => {
+  it("shows exact-market price changes and the estimated aligned 24h maximum and minimum", async () => {
     const fallback = vi.mocked(fetch).getMockImplementation()!;
     const quote = lookupResult.exchanges[0].future!;
     const exactQuote = { ...quote, market_id: "binance:future::BTCUSDT:1", data_status: "live", age_seconds: 0, stale_after_seconds: 30, error: null };
@@ -395,14 +395,15 @@ describe("InstrumentLookupPage", () => {
       if (url.endsWith("/statistics")) return Response.json({
         symbol: "BTCUSDT", observed_at: "2026-10-07T12:00:00Z",
         markets: { [exactQuote.market_id]: { change_1h_pct: -1.25, change_24h_pct: 3.5, observed_at: "2026-10-07T12:00:00Z", error: null } },
-        spreads: { [lookupResult.spreads[0].id]: { max_spread_pct: 0.456, max_at: "2026-10-07T10:00:00Z", point_count: 1440, complete: true, is_estimated: true, error: null } }
+        spreads: { [lookupResult.spreads[0].id]: { max_spread_pct: 0.456, max_at: "2026-10-07T10:00:00Z", min_spread_pct: -0.221, min_at: "2026-10-07T08:00:00Z", point_count: 1440, complete: true, is_estimated: true, error: null } }
       });
       if (url.includes("/instruments/")) return Response.json({ ...lookupResult, markets: [exactQuote] });
       return fallback(input, init);
     });
     render(<InstrumentLookupPage />);
     expect(await screen.findByText("≈ +0.456%")).not.toBeNull();
-    expect(screen.getAllByText("24h 最大价差").length).toBeGreaterThan(0);
+    expect(screen.getByText("≈ -0.221%")).not.toBeNull();
+    expect(screen.getAllByText("24h 最大/最小价差").length).toBeGreaterThan(0);
     expect(screen.getByText("完整24h · 1440 点")).not.toBeNull();
     const markets = screen.getByRole("table", { name: "精确行情市场" });
     expect(within(markets).getByText("1h 涨跌幅")).not.toBeNull();
@@ -422,7 +423,7 @@ describe("InstrumentLookupPage", () => {
     expect(await screen.findByText("BTC / USDT")).not.toBeNull();
     await waitFor(() => expect(screen.getAllByText("加载中").length).toBeGreaterThan(0));
     finish(Response.json({ symbol: "BTCUSDT", observed_at: "2026-10-07T12:00:00Z", markets: {}, spreads: {
-      [lookupResult.spreads[0].id]: { max_spread_pct: -0.25, point_count: 2, complete: false, max_at: null, error: null }
+      [lookupResult.spreads[0].id]: { max_spread_pct: -0.25, max_at: null, min_spread_pct: -0.5, min_at: null, point_count: 2, complete: false, error: null }
     } }));
     expect(await screen.findByText("≈ -0.250%")).not.toBeNull();
     expect(screen.getByText("部分样本 · 2 点")).not.toBeNull();
@@ -477,7 +478,7 @@ describe("InstrumentLookupPage", () => {
     });
     render(<InstrumentLookupPage />);
     expect(await screen.findByText("BTC / USDT")).not.toBeNull();
-    expect((await screen.findAllByText("24h 最大价差")).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("24h 最大/最小价差")).length).toBeGreaterThan(0);
     await waitFor(() => expect(screen.getAllByText("暂无历史样本").length).toBe(3));
     expect(screen.queryByText("≈ +0.000%")).toBeNull();
     expect(screen.getAllByText("开仓价差").length).toBeGreaterThan(0);

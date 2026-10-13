@@ -62,8 +62,14 @@ class ReferenceStatisticsService(InstrumentStatisticsService):
                         (_close_spread(prices_by_id[buy_id][bucket], prices_by_id[sell_id][bucket]), bucket)
                         for bucket in common
                     )
+                    minimum, minimum_at = min(
+                        (_close_spread(prices_by_id[buy_id][bucket], prices_by_id[sell_id][bucket]), bucket)
+                        for bucket in common
+                    )
                     stats.max_spread_pct = maximum
                     stats.max_at = maximum_at + timedelta(minutes=1)
+                    stats.min_spread_pct = minimum
+                    stats.min_at = minimum_at + timedelta(minutes=1)
                     stats.first_seen_at = common[0] + timedelta(minutes=1)
                     stats.last_seen_at = common[-1] + timedelta(minutes=1)
                     stats.complete = len(common) == 1440
