@@ -8,7 +8,7 @@
 
 - 分支：`codex/frontend-localization-polish`
 - 基线：`a453ec835bb2847b8ea88f0c4e66d5f35fa6e7c7`
-- 本任务变更尚未提交、推送或部署（交付前需按仓库清单执行）。
+- 本任务代码提交：`8de12078c7195149263584737e4e14cda5ed9c04`（已推送）。
 
 ## 已完成功能
 
@@ -29,8 +29,9 @@
 
 ## 验证结果
 
-- `backend/tests/test_announcement_localization.py`：通过。
+- `backend/tests/test_announcement_localization.py`：5 tests 通过。
 - 公告相关后端测试：通过（80 tests）。
+- 后端全量：1216 passed，12 warnings（既有 datetime 弃用提示）。
 - `frontend/tests/AnnouncementsPage.test.tsx`：5 tests 通过。
 - 前端全量：24 files / 231 tests 通过。
 - `npm run build`：通过。
@@ -38,9 +39,12 @@
 
 ## 线上状态与下一步
 
-- 线上状态：待提交、推送、备份数据库并部署。
-- 部署时只暂存本任务文件，避开现有 `PairMonitorPage` 修改和大量 `output/`、`.worktrees/` 等其他任务产物。
-- 按 `docs/git-delivery-checklist.md` 提交并推送；按 `docs/linux-deployment.md` 备份 `/data/radar.db`，使用预构建镜像更新并检查 `/api/health`、容器和公告接口。
+- 线上已部署代码提交：`8de12078c7195149263584737e4e14cda5ed9c04`。
+- 生产数据库备份：`backups/radar-before-8de12078c719-20261013T033039Z.db`，SHA-256 `2772dfc1cb12273cd27bf62280e9c2e9deb30d973df1f6dab4d7b184cce8be5c`；部署脚本执行 SQLite `integrity_check=ok` 后才继续更新。
+- 线上 `taoli1-backend-1`、`taoli1-frontend-1` 均运行对应 SHA 镜像并报告 healthy；前端 `:3000` 返回 HTTP 200，后端 `/api/health` 返回 `status=ok`。
+- 线上公告接口已实测返回 Binance 的 `title_zh` / `url_zh`，中文标题和链接可用。
+- 当前分支已提交并推送；部署时只暂存本任务文件，避开现有 `PairMonitorPage` 修改和大量 `output/`、`.worktrees/` 等其他任务产物。
+- 后续若扩展其他公告渠道，沿用官方中文源优先、失败回退英文的规则，并为新渠道补充源探测和接口测试。
 
 ## 已知问题
 
