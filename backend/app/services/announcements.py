@@ -22,6 +22,7 @@ from app.models.announcement import (
     AnnouncementSettings,
     ExchangeAnnouncement,
 )
+from app.services.announcement_localization import AnnouncementLocalizationService
 from app.services.announcement_public_pages import TelegramChannelParser
 
 AlertSender = Callable[[str], None | Awaitable[None]]
@@ -1100,10 +1101,10 @@ def build_announcement_alert_message(announcement: ExchangeAnnouncement) -> str:
     ):
         lines.append("交易开盘: 当前未确认明确时间")
     lines.extend(_announcement_schedule_lines(announcement))
-    lines.append(f"标题: {announcement.title}")
+    lines.append(f"标题: {announcement.title_zh or announcement.title}")
     if announcement.category:
         lines.append(f"分类: {announcement.category}")
-    lines.append(f"链接: {announcement.url}")
+    lines.append(f"链接: {announcement.url_zh or announcement.url}")
     lines.extend(_announcement_research_lines(announcement))
     return "\n".join(lines)
 
@@ -1134,8 +1135,8 @@ def build_announcement_event_reminder_message(
         lines.append(f"{_announcement_asset_label(announcement)}: {', '.join(announcement.symbols)}")
     if announcement.market_type:
         lines.append(f"市场: {_announcement_market_type_label(announcement)}")
-    lines.append(f"标题: {announcement.title}")
-    lines.append(f"链接: {announcement.url}")
+    lines.append(f"标题: {announcement.title_zh or announcement.title}")
+    lines.append(f"链接: {announcement.url_zh or announcement.url}")
     return "\n".join(lines)
 
 
@@ -1187,6 +1188,10 @@ class HttpAnnouncementProvider(AnnouncementProvider):
         )
         self._owns_client = client is None
         self._now_fn = now_fn or utc_now
+        self._localization = AnnouncementLocalizationService(self.exchange, self.client)
+
+    async def localize(self, rows: list[ExchangeAnnouncement]) -> list[ExchangeAnnouncement]:
+        return await self._localization.enrich(rows)
 
     async def _get_json(self, url: str) -> object:
         response = await self.client.get(url)
@@ -2221,7 +2226,9 @@ class MultiAnnouncementProvider:
             if provider.exchange not in exchanges:
                 continue
             try:
-                announcements.extend(await provider.fetch())
+                rows = await provider.fetch()
+                localize = getattr(provider, "localize", None)
+                announcements.extend(await localize(rows) if localize else rows)
             except Exception:
                 logger.exception("announcement provider failed: %s", provider.exchange)
         return announcements
@@ -2231,7 +2238,9 @@ class MultiAnnouncementProvider:
     ) -> AsyncIterator[list[ExchangeAnnouncement]]:
         async def fetch_one(provider: AnnouncementProvider) -> list[ExchangeAnnouncement]:
             try:
-                return await (provider.fetch_headlines() if headlines_only else provider.fetch())
+                rows = await (provider.fetch_headlines() if headlines_only else provider.fetch())
+                localize = getattr(provider, "localize", None)
+                return await localize(rows) if localize else rows
             except Exception:
                 logger.exception("announcement provider failed: %s", provider.exchange)
                 return []

@@ -722,9 +722,9 @@ class AnnouncementRepository:
               id, exchange, announcement_id, kind, title, url, source, category,
               symbols_json, market_type, event_time, event_schedule_json, summary,
               asset_research_json, published_at, fetched_at, alert_status, event_reminder_status,
-              event_reminder_sent_at
+              event_reminder_sent_at, title_zh, url_zh
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 announcement.id,
@@ -746,6 +746,8 @@ class AnnouncementRepository:
                 announcement.alert_status,
                 announcement.event_reminder_status,
                 _serialize_datetime(announcement.event_reminder_sent_at),
+                announcement.title_zh,
+                announcement.url_zh,
             ),
         )
         await self.db.commit()
@@ -768,6 +770,8 @@ class AnnouncementRepository:
             """
             UPDATE exchange_announcements
             SET
+              title_zh = COALESCE(?, title_zh),
+              url_zh = COALESCE(?, url_zh),
               symbols_json = CASE WHEN ? != '[]' THEN ? ELSE symbols_json END,
               market_type = COALESCE(?, market_type),
               event_time = CASE WHEN ? THEN NULL ELSE COALESCE(?, event_time) END,
@@ -789,6 +793,8 @@ class AnnouncementRepository:
             WHERE exchange = ? AND source = ? AND announcement_id = ?
             """,
             (
+                announcement.title_zh,
+                announcement.url_zh,
                 symbols_json,
                 symbols_json,
                 announcement.market_type,
@@ -1005,6 +1011,8 @@ class AnnouncementRepository:
             title=row["title"],
             url=row["url"],
             source=row["source"],
+            title_zh=row["title_zh"] if "title_zh" in row.keys() else None,
+            url_zh=row["url_zh"] if "url_zh" in row.keys() else None,
             category=row["category"],
             symbols=symbols,
             market_type=row["market_type"] if "market_type" in row.keys() else None,

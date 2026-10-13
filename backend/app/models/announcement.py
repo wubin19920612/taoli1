@@ -93,6 +93,8 @@ class ExchangeAnnouncement(BaseModel):
     title: str
     url: str
     source: str
+    title_zh: str | None = None
+    url_zh: str | None = None
     category: str | None = None
     symbols: list[str] = Field(default_factory=list)
     market_type: str | None = None
@@ -127,7 +129,7 @@ class ExchangeAnnouncement(BaseModel):
         text = value.strip()
         return text or None
 
-    @field_validator("market_type", "summary")
+    @field_validator("market_type", "summary", "title_zh", "url_zh")
     @classmethod
     def normalize_optional_text(cls, value: str | None) -> str | None:
         if value is None:

@@ -47,6 +47,8 @@ describe("AnnouncementsPage", () => {
               kind: "listing",
               title: "New listing: WDCUSDT Perpetual Contract",
               url: "https://announcements.bybit.com/en-US/article/new-listing/",
+              title_zh: "新币上架：WDCUSDT Bybit 永续合约",
+              url_zh: "https://announcements.bybit.com/zh-TW/article/new-listing/",
               source: "bybit-v5-announcements",
               category: "new_crypto",
               symbols: ["WDCUSDT"],
@@ -107,7 +109,8 @@ describe("AnnouncementsPage", () => {
     expect(await screen.findByText("上/下币告警 开启")).toBeTruthy();
     expect(await screen.findByText("Launchpool 告警 开启")).toBeTruthy();
     expect(await screen.findByText("其他公告通知 关闭")).toBeTruthy();
-    expect(await screen.findByText("New listing: WDCUSDT Perpetual Contract")).toBeTruthy();
+    expect(await screen.findByText("新币上架：WDCUSDT Bybit 永续合约")).toBeTruthy();
+    expect(await screen.findByText("官方中文")).toBeTruthy();
     expect(await screen.findByText("WDCUSDT")).toBeTruthy();
     expect(await screen.findByText("合约")).toBeTruthy();
     expect(await screen.findByText("1/1 已找到")).toBeTruthy();
@@ -118,6 +121,7 @@ describe("AnnouncementsPage", () => {
     expect(await screen.findByText("Launchpool 活动")).toBeTruthy();
     fireEvent.click(screen.getAllByLabelText("Expand row")[0]);
     expect(await screen.findByText("完整标题")).toBeTruthy();
+    expect(await screen.findByText("New listing: WDCUSDT Perpetual Contract")).toBeTruthy();
     expect(await screen.findByText("结构化摘要")).toBeTruthy();
     expect(await screen.findByText("Worldcoin Data Chain")).toBeTruthy();
     expect(await screen.findByText("具体业务：")).toBeTruthy();
@@ -138,7 +142,7 @@ describe("AnnouncementsPage", () => {
 
   it("enables other announcements independently and persists the switch", async () => {
     render(<AnnouncementsPage />);
-    await screen.findByText("New listing: WDCUSDT Perpetual Contract");
+    await screen.findByText("新币上架：WDCUSDT Bybit 永续合约");
     await userEvent.click(screen.getByRole("switch", { name: "其他公告飞书提醒" }));
     expect(screen.getByText("其他公告通知 开启")).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: /保存公告监控/ }));
@@ -157,7 +161,7 @@ describe("AnnouncementsPage", () => {
   it("saves announcement monitoring settings", async () => {
     render(<AnnouncementsPage />);
 
-    await screen.findByText("New listing: WDCUSDT Perpetual Contract");
+    await screen.findByText("新币上架：WDCUSDT Bybit 永续合约");
     await userEvent.click(screen.getByRole("button", { name: /保存公告监控/ }));
 
     await waitFor(() => {

@@ -447,7 +447,7 @@ function rowSummary(row: ExchangeAnnouncement): string {
     }
   }
   if (pieces.length === 0) {
-    return row.title;
+    return announcementTitle(row);
   }
   const actionLabels: Record<AnnouncementKind, string> = {
     listing: "上币",
@@ -457,6 +457,14 @@ function rowSummary(row: ExchangeAnnouncement): string {
   };
   const action = actionLabels[row.kind];
   return `${action}: ${pieces.join("；")}`;
+}
+
+function announcementTitle(row: ExchangeAnnouncement): string {
+  return row.title_zh && row.url_zh ? row.title_zh : row.title;
+}
+
+function announcementUrl(row: ExchangeAnnouncement): string {
+  return row.title_zh && row.url_zh ? row.url_zh : row.url;
 }
 
 const columns: ColumnsType<ExchangeAnnouncement> = [
@@ -471,14 +479,16 @@ const columns: ColumnsType<ExchangeAnnouncement> = [
     title: "公告摘要",
     dataIndex: "title",
     ellipsis: true,
-    render: (value: string, row) => {
+    render: (_value: string, row) => {
       const display = rowSummary(row);
+      const title = announcementTitle(row);
       return (
         <Space direction="vertical" size={2} className="announcement-title-cell">
-          <a href={row.url} target="_blank" rel="noreferrer">
+          <a href={announcementUrl(row)} target="_blank" rel="noreferrer">
             {display}
           </a>
-          {display !== value ? <Typography.Text type="secondary">{value}</Typography.Text> : null}
+          {display !== title ? <Typography.Text type="secondary">{title}</Typography.Text> : null}
+          {row.title_zh && row.url_zh ? <Tag color="blue">官方中文</Tag> : null}
         </Space>
       );
     }
@@ -496,10 +506,15 @@ function announcementDetails(row: ExchangeAnnouncement) {
           {rowSummary(row)}
         </Descriptions.Item>
         <Descriptions.Item label="完整标题">
-          <a href={row.url} target="_blank" rel="noreferrer">
-            {row.title}
+          <a href={announcementUrl(row)} target="_blank" rel="noreferrer">
+            {announcementTitle(row)}
           </a>
         </Descriptions.Item>
+        {row.title_zh && row.url_zh ? (
+          <Descriptions.Item label="原始标题">
+            <a href={row.url} target="_blank" rel="noreferrer">{row.title}</a>
+          </Descriptions.Item>
+        ) : null}
         <Descriptions.Item label={announcementIsStock(row) ? "标的" : "币种"}>
           {row.symbols.length > 0 ? row.symbols.join(", ") : "-"}
         </Descriptions.Item>
@@ -614,6 +629,7 @@ export function AnnouncementsPage() {
             <Typography.Title level={4}>交易所公告监控</Typography.Title>
             <Typography.Text type="secondary">
               记录上币、下币、Launchpool、维护、活动及其他公告，按配置发送飞书通知。Hyperliquid 接入官方公告频道，并保留原生永续市场上下架监测；HIP-3 各 DEX 的独立公告不保证覆盖。Gate 官网受限时通过第三方阅读服务补取公告，来源故障或缓存可能造成延迟。
+              优先展示官方中文标题并链接到中文原文（Bybit 为繁体），暂无中文版本时显示原公告。
             </Typography.Text>
           </div>
           <Space wrap>

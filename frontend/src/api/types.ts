@@ -1112,6 +1112,8 @@ export interface ExchangeAnnouncement {
   title: string;
   url: string;
   source: string;
+  title_zh?: string | null;
+  url_zh?: string | null;
   category?: string | null;
   symbols: string[];
   market_type?: string | null;

@@ -49,6 +49,8 @@ async def _ensure_exchange_announcement_columns(db: aiosqlite.Connection) -> Non
     rows = await cursor.fetchall()
     existing = {row["name"] for row in rows}
     columns: dict[str, str] = {
+        "title_zh": "TEXT",
+        "url_zh": "TEXT",
         "symbols_json": "TEXT NOT NULL DEFAULT '[]'",
         "market_type": "TEXT",
         "event_time": "TEXT",
@@ -306,6 +308,8 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
           title TEXT NOT NULL,
           url TEXT NOT NULL,
           source TEXT NOT NULL,
+          title_zh TEXT,
+          url_zh TEXT,
           category TEXT,
           symbols_json TEXT NOT NULL DEFAULT '[]',
           market_type TEXT,
