@@ -33,7 +33,14 @@
 
 ## 线上状态
 
-本交接文档创建时尚未部署；提交、推送、镜像工作流和线上备份/验证需在交付阶段记录到本文件或后续交接文档。
+- 提交：`5ff1b8f0d1d8730767dcfc6d502520f2b3915fed`，已推送到 `origin/codex/frontend-localization-polish`。
+- GitHub Actions：构建 workflow `38334571400` 成功，backend/frontend 两个 job 均成功。
+- 部署：生产 Compose 已更新到 backend/frontend `sha-5ff1b8f0d1d8730767dcfc6d502520f2b3915fed`，两个容器均 healthy。
+- 数据库备份：
+  - `backups/radar-before-5ff1b8f0d1d8-20261013T020155Z.db`，`integrity_check=ok`，SHA-256 `c453ab0861da3e20739810f6c8ee9fbeca58f2aee1b85a2dfaa36e11391321dd`。
+  - `backups/squeeze-route-before-5ff1b8f0d1d8-20261013T020155Z.db`，`integrity_check=ok`，SHA-256 `bc957e00711952f3b5ddc6b8b27d9196773c4a2b9c7cf85521aef5da95003d3a`。
+- 线上验证：`/api/health` 返回 `status=ok`；`/api/instruments/BTCUSDT/statistics` 返回 `min_spread_pct/min_at` 与 `max_spread_pct/max_at`；前端 `:3000/` 返回 HTTP 200。
+- 观察到 OKX 历史 K 线接口限流时，相关方向会保留 `point_count=0` 和错误信息，前端显示无共同样本/统计不可用，不会写成 0。
 
 ## 已知问题与下一步
 
