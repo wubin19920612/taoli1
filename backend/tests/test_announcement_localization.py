@@ -74,3 +74,81 @@ async def test_localization_keeps_original_when_publisher_has_no_chinese_transla
 
     assert localized[0].title_zh is None
     assert localized[0].url_zh is None
+
+
+@pytest.mark.asyncio
+async def test_new_announcement_refreshes_unexpired_chinese_feed_before_alert():
+    """A newly published article must not fall back using a prepublication cache."""
+    calls = 0
+
+    def respond(request):
+        nonlocal calls
+        calls += 1
+        ids = ["old"] if calls == 1 else ["old", "12560603897191"]
+        return httpx.Response(200, json={"data": [
+            {"annId": key, "annTitle": "Bitget 关于暂停 FET 网络提现服务的公告",
+             "annUrl": f"https://www.bitget.com/zh-CN/support/articles/{key}"}
+            for key in ids
+        ]})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        service = AnnouncementLocalizationService("bitget", client)
+        service._requests = lambda: [("https://official.test/feed", {})]
+        old = announcement("bitget", "old")
+        await service.enrich([old])
+        new = announcement("bitget", "12560603897191")
+        rows = await service.enrich([new, old])
+        await service.enrich([new, old])
+
+    assert rows[0].title_zh == "Bitget 关于暂停 FET 网络提现服务的公告"
+    assert rows[0].url_zh == "https://www.bitget.com/zh-CN/support/articles/12560603897191"
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_missing_translation_does_not_refresh_on_every_poll():
+    calls = 0
+
+    def respond(request):
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={"data": {"catalogs": [{"articles": [
+            {"code": "old", "title": "币安公告"},
+        ]}]}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        service = AnnouncementLocalizationService("binance", client)
+        service._requests = lambda: [("https://official.test/feed", {})]
+        await service.enrich([announcement("binance", "old")])
+        missing = announcement("binance", "english-only")
+        for _ in range(3):
+            rows = await service.enrich([missing])
+
+    assert calls == 2
+    assert rows[0].title_zh is None
+    assert rows[0].title == missing.title
+
+
+@pytest.mark.asyncio
+async def test_new_article_refresh_failure_keeps_original():
+    calls = 0
+
+    def respond(request):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            raise httpx.ReadTimeout("Chinese feed unavailable", request=request)
+        return httpx.Response(200, json={"data": {"catalogs": [{"articles": [
+            {"code": "old", "title": "币安公告"},
+        ]}]}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        service = AnnouncementLocalizationService("binance", client)
+        service._requests = lambda: [("https://official.test/feed", {})]
+        await service.enrich([announcement("binance", "old")])
+        new = announcement("binance", "new")
+        rows = await service.enrich([new])
+
+    assert calls == 2
+    assert rows[0].title_zh is None
+    assert rows[0].url == new.url

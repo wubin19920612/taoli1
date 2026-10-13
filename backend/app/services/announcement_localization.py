@@ -29,6 +29,7 @@ class AnnouncementLocalizationService:
         self.exchange = exchange
         self.client = client
         self._cache: dict[str, tuple[str, str]] = {}
+        self._missing_until: dict[str, float] = {}
         self._expires_at = 0.0
         self._lock = asyncio.Lock()
 
@@ -71,15 +72,21 @@ class AnnouncementLocalizationService:
         if not rows or not self._requests():
             return rows
         async with self._lock:
-            if time.monotonic() >= self._expires_at:
-                results = await asyncio.gather(*(
-                    self._fetch(url, headers) for url, headers in self._requests()
-                ))
-                self._cache = {
-                    key: value for result in results for key, value in result.items()
-                }
-                # Retry empty/failed feeds sooner; do not poll every news cycle.
-                self._expires_at = time.monotonic() + (120 if self._cache else 30)
+            now = time.monotonic()
+            unresolved = {
+                row.announcement_id
+                for row in rows
+                if row.announcement_id not in self._cache
+                and self._missing_until.get(row.announcement_id, 0.0) <= now
+            }
+            if now >= self._expires_at or unresolved:
+                await self._refresh()
+                now = time.monotonic()
+                for announcement_id in unresolved:
+                    if announcement_id not in self._cache:
+                        # A publisher may add a translation after publication;
+                        # retry after the short cache window, not every poll.
+                        self._missing_until[announcement_id] = now + 120
         enriched: list[ExchangeAnnouncement] = []
         for row in rows:
             localized = self._cache.get(row.announcement_id)
@@ -92,6 +99,18 @@ class AnnouncementLocalizationService:
                 row = row.model_copy(update={"title_zh": localized[0], "url_zh": localized[1]})
             enriched.append(row)
         return enriched
+
+    async def _refresh(self) -> None:
+        results = await asyncio.gather(*(
+            self._fetch(url, headers) for url, headers in self._requests()
+        ))
+        self._cache = {
+            key: value for result in results for key, value in result.items()
+        }
+        # Retry empty/failed feeds sooner; do not poll every news cycle.
+        self._expires_at = time.monotonic() + (120 if self._cache else 30)
+        for announcement_id in self._cache:
+            self._missing_until.pop(announcement_id, None)
 
     async def _fetch(self, url: str, headers: dict[str, str]) -> dict[str, tuple[str, str]]:
         timeout_seconds = 4
