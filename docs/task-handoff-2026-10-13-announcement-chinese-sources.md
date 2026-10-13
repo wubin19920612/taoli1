@@ -26,6 +26,8 @@
 - `frontend/src/pages/AnnouncementsPage.tsx`、`frontend/src/api/types.ts`
 - Bybit 当前官方中文接口是繁体 `zh-TW`，`zh-CN` 会返回参数错误；不能把它标记为简体。
 - 中文源失败或没有翻译时，保留原公告，不阻塞公告入库。
+- 复核发现：Binance S16 公告 `41b7bf96fc3e4ccbbb5668c85451e775` 的详情接口在 `zh-CN`、`zh-TW` 和中文请求头下都返回英文，属于官方未提供中文版本；Bitget FET 公告 `12560603897191` 的 `language=zh_CN` 接口返回中文。
+- 修复了“新公告落在两分钟中文缓存窗口内时先发英文”的竞态：未命中缓存的新 ID 会立即刷新中文源；确认无中文后进入短暂缺失缓存，避免每轮重复请求。
 
 ## 验证结果
 
@@ -39,10 +41,11 @@
 
 ## 线上状态与下一步
 
-- 线上已部署代码提交：`8de12078c7195149263584737e4e14cda5ed9c04`。
-- 生产数据库备份：`backups/radar-before-8de12078c719-20261013T033039Z.db`，SHA-256 `2772dfc1cb12273cd27bf62280e9c2e9deb30d973df1f6dab4d7b184cce8be5c`；部署脚本执行 SQLite `integrity_check=ok` 后才继续更新。
-- 线上 `taoli1-backend-1`、`taoli1-frontend-1` 均运行对应 SHA 镜像并报告 healthy；前端 `:3000` 返回 HTTP 200，后端 `/api/health` 返回 `status=ok`。
+- 线上已部署代码提交：`f0371ebd95be0b3c7d2e05d93e0c61c360ba89f3`。
+- 最新生产数据库备份：`backups/radar-before-f0371ebd95be-20261013T054747Z.db`，SHA-256 `80bff6e559e2d7716f0d198e0eb5b46650f428cde1abe8bd86623c9e3c8a2cb9`；部署脚本执行 SQLite `integrity_check=ok` 后才继续更新。此前 `8de1207` 备份仍保留。
+- 线上 `taoli1-backend-1`、`taoli1-frontend-1` 均运行 `sha-f0371ebd...` 镜像并报告 healthy；前端 `:3000` 返回 HTTP 200，后端 `/api/health` 返回 `status=ok`。
 - 线上公告接口已实测返回 Binance 的 `title_zh` / `url_zh`，中文标题和链接可用。
+- 线上复核结果：Bitget `12560603897191` 已返回中文标题和 `zh-CN` 链接；Binance S16 `41b7bf96fc3e4ccbbb5668c85451e775` 的 `title_zh` / `url_zh` 为空，符合官方源实际结果。
 - 当前分支已提交并推送；部署时只暂存本任务文件，避开现有 `PairMonitorPage` 修改和大量 `output/`、`.worktrees/` 等其他任务产物。
 - 后续若扩展其他公告渠道，沿用官方中文源优先、失败回退英文的规则，并为新渠道补充源探测和接口测试。
 
