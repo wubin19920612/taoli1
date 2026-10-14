@@ -36,13 +36,21 @@
 
 - 部署前生产工作区已跟踪文件干净，双容器 healthy，`/api/health` 为 ok，`exchange_errors={}`，剩余磁盘约 13.5 GiB。
 - 生产公共 Gate 查询再次确认 BTC 为默认 DEX，CIFR 为 para，NET 为 xyz。旧生产 `/api/astro/preview/b5d3ceb6d1d75534` 对 `NETUSDT -> para:NET` 仍提供 `bitget -> gc-hl`，复现了需要修复的实际行为；只读预览没有创建卡片。
-- 尚未部署本次功能；等待最终测试、精确 Git 提交、推送、双镜像构建成功，再通过标准更新脚本备份并快进部署。
-- 最终提交、镜像构建、SQLite 备份/校验和线上接口验收将在完成后补充。连接信息与凭据仅使用受控运行环境，不写入文档。
+- 功能提交 `ad5f4fe1e878840fb06fbc4f436fb0520e779899` 已推送到当前 GitHub 分支，没有 force push。本文后续验收提交只更新交接文档，不改变已部署应用镜像。
+- GitHub Actions [38535681985](https://github.com/wubin19920612/taoli1/actions/runs/38535681985) 的 backend/frontend 两个 job 均 completed/success；前端镜像包含 TypeScript 检查和 Vite 生产构建。生产机已核验两个精确 SHA 镜像 manifest。
+- 主库备份 `backups/radar-before-ad5f4fe1e878-20261014T083421Z.db`（623169536 字节），`integrity_check=ok`，容器/主机 SHA-256 一致：`d3cc72b53e7c6c97f57f0592e644b3f5ae7eece3e38331d30ecfa17de1170903`。
+- 研究库备份 `backups/squeeze-route-before-ad5f4fe1e878-20261014T083421Z.db`（241664 字节），`integrity_check=ok`，容器/主机 SHA-256 一致：`cf2c73a4ac1e62e526a1ddb997574630f34ca1e745c456c7eda4bfa84d0e9a08`。
+- `deploy/linux-update.sh` 成功执行，在上述备份后使用 `git pull --ff-only` 更新到功能提交，拉取预构建镜像并以 `up -d --no-build --wait` 启动；没有生产现场构建、删除数据卷或修改 .env。既有保留策略分别清理两份过期自动备份，新备份保留。
+- 双容器均 healthy，运行镜像均为功能 SHA；线上 `/api/health` 为 ok、12028 个市场、7694 个机会、`exchange_errors={}`；前端首页 HTTP 200。
+- 实际 GET 预览 `b5d3ceb6d1d75534`：`bitget NETUSDT -> para:NET` 从旧版 GC 默认/两种路线变为有效默认 non_gc、仅 `bitget -> hl`，`bHlDex=para`，`can_submit=true`。
+- 实际 GET 预览 `4b4f39eae0afcd8e`：支持的 `para:CIFR -> bybit CIFRUSDT` 保持默认 gc，提供 `hl -> bybit` 和 `gc-hl -> gc-bybit`，`aHlDex=para`。
+- 实际 GET 预览 `f8040ade59f09d5a`：默认 BTC 市场保持默认 gc，提供 `bitget -> hl` 和 `bitget -> gc-hl`。三例线上断言全部通过。
+- 本次只读核验，没有人工调用真实建卡、重放告警或开仓；预览和公共支持规则不等于具体账户权限、SDK 写入或成交证明。连接信息与凭据仅使用受控运行环境，不写入文档。
 
 ## 已知限制、工作区与下一步
 
 - 正常支持规则最多缓存 60 秒；清单故障时使用原始 HL，首次故障最多等待请求超时。公开清单不能证明具体账户权限或实际 SDK 下单成交。
 - 已有卡片不自动修改/删除；已有同名或 DEX 冲突仍遵守原安全保护，不能把新路线核验当成旧卡片修复。
 - 保留开始时已有的 `frontend/src/pages/PairMonitorPage.tsx` 和 `frontend/tests/PairMonitorPage.test.tsx` 未提交改动，未纳入本次交付。
-- 保留原有 `.worktrees/`、pytest 临时目录、output/script 等未跟踪产物及其他模块交接文档。本次新增未跟踪 `output/gate-crossex-hl-support-20261014.json` 为公共证据快照，`output/astro-hl-dex-ssh-proxy-20261014.py` 为临时本机连接辅助；不提交。
+- 保留原有 `.worktrees/`、pytest 临时目录、output/script 等未跟踪产物及其他模块交接文档。本次新增未跟踪 `output/gate-crossex-hl-support-20261014.json` 为公共证据快照，`output/astro-hl-dex-ssh-proxy-20261014.py` 为临时本机连接辅助，`output/astro-hl-gc-production-probe-20261014.py` 为只读线上验收脚本；不提交。
 - 下一模块请新建任务并引用本文件；本模块后续可观察正常告警的实际建卡结果，不人为重放历史告警或开启交易。
