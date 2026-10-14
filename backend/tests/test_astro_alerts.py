@@ -10,6 +10,20 @@ from app.models.opportunity import Opportunity, OpportunityType
 from app.models.settings import AstroCardSettings, LivePilotSettings, RiskSettings
 from app.services.astro_alerts import AstroAlertService
 from app.services.astro_client import AstroClientError
+from app.services.gate_crossex_hyperliquid import GateCrossExHyperliquidCatalog
+
+
+@pytest.fixture(autouse=True)
+def stub_gate_hl_symbols(monkeypatch):
+    async def fetch_symbol(self, symbol):
+        coin = symbol.removeprefix("HYPERLIQUID_FUTURE_").removesuffix("_USDC")
+        dex = {"TTWO": "para", "CIFR": "para", "NET": "xyz", "BTC": ""}.get(coin)
+        return [] if dex is None else [{
+            "symbol": symbol, "exchange_type": "HYPERLIQUID", "business_type": "FUTURE",
+            "state": "live", "tag": dex, "support_cross": "false",
+        }]
+
+    monkeypatch.setattr(GateCrossExHyperliquidCatalog, "_fetch_symbol", fetch_symbol)
 
 
 def opportunity(
@@ -887,7 +901,7 @@ async def test_manual_hl_card_without_market_does_not_use_astro_default() -> Non
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("buy_exchange", ["binance", "aster"])
-async def test_ff_hl_card_submits_para_market_on_base_and_gc_routes(buy_exchange: str) -> None:
+async def test_ff_hl_card_submits_supported_para_market_on_base_and_gc_routes(buy_exchange: str) -> None:
     client = FakeAstroClient()
     service = AstroAlertService(
         client,
@@ -907,6 +921,63 @@ async def test_ff_hl_card_submits_para_market_on_base_and_gc_routes(buy_exchange
     assert [(card["sellEx"], card["bHlDex"]) for card in client.added] == [
         ("hl", "para"), ("gc-hl", "para")
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw_symbol,coin,supported", [
+    ("para:NET", "NET", False), ("io:ANTH", "ANTH", False),
+    ("xyz:NET", "NET", True), ("para:CIFR", "CIFR", True),
+    ("BTC", "BTC", True), ("NEW", "NEW", False),
+])
+@pytest.mark.parametrize("hl_buy", [False, True])
+@pytest.mark.parametrize("card_variant", ["both", "non_gc", "gc"])
+@pytest.mark.parametrize("entrypoint", [
+    "handle_alert", "handle_live_pilot", "handle_manual_create", "handle_preadd",
+])
+async def test_hl_gc_requires_exact_market_for_every_create_entrypoint(
+    raw_symbol: str, coin: str, supported: bool,
+    hl_buy: bool, card_variant: str, entrypoint: str,
+) -> None:
+    client = FakeAstroClient()
+    card_settings = AstroCardSettings(card_variant=card_variant)
+    service = AstroAlertService(
+        client,
+        Settings(
+            astro_alert_auto_create=True,
+            astro_manual_card_create=True,
+            astro_dry_run_only=False,
+        ),
+        card_settings=card_settings,
+        live_pilot_settings=LivePilotSettings(enabled=True),
+        add_restart_delay_seconds=0,
+    )
+    selected = opportunity().model_copy(update={
+        "symbol": f"{coin}USDT",
+        "buy_exchange": "hyperliquid" if hl_buy else "bitget",
+        "sell_exchange": "bitget" if hl_buy else "hyperliquid",
+        "buy_raw_symbol": raw_symbol if hl_buy else f"{coin}USDT",
+        "sell_raw_symbol": f"{coin}USDT" if hl_buy else raw_symbol,
+    })
+
+    if entrypoint == "handle_preadd":
+        result = await service.handle_preadd(selected, card_settings)
+    else:
+        result = await getattr(service, entrypoint)(selected)
+
+    assert result.status == "created"
+    native = ("hl", "bitget") if hl_buy else ("bitget", "hl")
+    gc = ("gc-hl", "bitget") if hl_buy else ("bitget", "gc-hl")
+    expected = [native]
+    if supported:
+        expected = [native, gc] if card_variant == "both" else [
+            gc if card_variant == "gc" else native
+        ]
+    assert [(card["buyEx"], card["sellEx"]) for card in client.added] == expected
+    for card in client.added:
+        if ":" in raw_symbol:
+            assert card["aHlDex" if hl_buy else "bHlDex"] == raw_symbol.split(":")[0]
+        assert card["name"] == coin
+    assert client.updated == []
 
 
 @pytest.mark.asyncio

@@ -4,6 +4,7 @@ from app.models.market import MarketType
 from app.services.market_labels import (
     astro_exchange_id,
     astro_exchange_route_variants,
+    astro_pair_route_variants,
     is_bitget_rtoken_spot,
     market_leg_label,
     market_type_label,
@@ -44,6 +45,24 @@ def test_supported_route_gets_matching_gc_variant() -> None:
     assert astro_exchange_route_variants("gate", "bybit") == [
         ("gate", "bybit"),
         ("gc-gate", "gc-bybit"),
+    ]
+
+
+@pytest.mark.parametrize("dex", [None, "main", " MAIN "])
+@pytest.mark.parametrize("card_variant", ["both", "non_gc", "gc"])
+def test_main_hl_pair_keeps_requested_gc_variant(dex: str | None, card_variant: str) -> None:
+    pair = {"buyEx": "bitget", "sellEx": "hl", "bHlDex": dex}
+    assert astro_pair_route_variants(pair, card_variant) == astro_exchange_route_variants(
+        "bitget", "hl", card_variant,
+    )
+
+
+@pytest.mark.parametrize("dex", ["para", "io", "xyz", "main"])
+@pytest.mark.parametrize("card_variant", ["both", "non_gc", "gc"])
+def test_unconfirmed_hl_pair_falls_back_to_native(dex: str, card_variant: str) -> None:
+    pair = {"buyEx": "bitget", "sellEx": "hl", "bHlDex": dex}
+    assert astro_pair_route_variants(pair, card_variant, hl_gc_supported=False) == [
+        ("bitget", "hl")
     ]
 
 

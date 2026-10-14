@@ -85,6 +85,7 @@ from app.services.funding_research import (
     FundingResearchSettings,
     record_funding_research_run,
 )
+from app.services.gate_crossex_hyperliquid import GateCrossExHyperliquidCatalog
 from app.services.gate_twap import GateTwapClient, GateTwapJobManager
 from app.services.history import OpportunityHistoryRecorder
 from app.services.hyperliquid_trade_status import (
@@ -1142,7 +1143,10 @@ def create_app(
             timeout_seconds=app_settings.astro_request_timeout_seconds,
         )
     )
-    app.state.astro_alert_service = AstroAlertService(app.state.astro_client, app_settings)
+    app.state.astro_hl_gc_catalog = GateCrossExHyperliquidCatalog()
+    app.state.astro_alert_service = AstroAlertService(
+        app.state.astro_client, app_settings, hl_gc_catalog=app.state.astro_hl_gc_catalog,
+    )
     app.state.astro_preadd_service = None
     app.state.service_controller = DockerServiceController(
         ServiceControlConfig(

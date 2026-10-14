@@ -7,9 +7,10 @@ from app.models.astro import AstroAlertActionResult, AstroCardCreateRequest, Ast
 from app.models.opportunity import Opportunity
 from app.models.settings import AstroCardSettings, LivePilotSettings, RiskSettings
 from app.services.astro_client import AstroClientError
-from app.services.data_filters import symbol_is_excluded
-from app.services.market_labels import astro_exchange_route_variants
 from app.services.astro_planner import AstroPairPlanner, AstroPlannerConfig
+from app.services.data_filters import symbol_is_excluded
+from app.services.gate_crossex_hyperliquid import GateCrossExHyperliquidCatalog
+from app.services.market_labels import astro_pair_route_variants
 
 AUTOMATIC_ASTRO_BLOCKED_EXCHANGES = frozenset({"rh-lighter"})
 AUTOMATIC_ASTRO_BLOCK_MESSAGE = (
@@ -66,12 +67,12 @@ def _with_card_enabled(pair: dict, enabled: bool) -> dict:
     return next_pair
 
 
-def _pair_variants(pair: dict, card_variant: AstroCardVariant = "both") -> list[dict]:
+def _pair_variants(
+    pair: dict, card_variant: AstroCardVariant = "both", *, hl_gc_supported: bool = True,
+) -> list[dict]:
     variants: list[dict] = []
-    for buy_exchange, sell_exchange in astro_exchange_route_variants(
-        str(pair.get("buyEx", "")),
-        str(pair.get("sellEx", "")),
-        card_variant,
+    for buy_exchange, sell_exchange in astro_pair_route_variants(
+        pair, card_variant, hl_gc_supported=hl_gc_supported,
     ):
         variant = dict(pair)
         variant["buyEx"] = buy_exchange
@@ -152,6 +153,7 @@ class AstroAlertService:
         live_pilot_settings: LivePilotSettings | None = None,
         add_restart_delay_seconds: float = 3.0,
         risk_settings_loader: Callable[[], Awaitable[RiskSettings]] | None = None,
+        hl_gc_catalog: GateCrossExHyperliquidCatalog | None = None,
     ):
         self.client = client
         self.settings = settings
@@ -164,6 +166,7 @@ class AstroAlertService:
         )
         self.add_restart_delay_seconds = add_restart_delay_seconds
         self.risk_settings_loader = risk_settings_loader
+        self.hl_gc_catalog = hl_gc_catalog or GateCrossExHyperliquidCatalog()
 
     async def handle_alert(self, opportunity: Opportunity) -> AstroAlertActionResult:
         return await self._handle(
@@ -330,7 +333,8 @@ class AstroAlertService:
         else:
             pair_enabled = effective_card_settings.open_enabled
         pair = _with_card_enabled(plan.pair, pair_enabled)
-        all_pair_variants = _pair_variants(pair)
+        hl_gc_supported = await self.hl_gc_catalog.supports_opportunity(opportunity)
+        all_pair_variants = _pair_variants(pair, hl_gc_supported=hl_gc_supported)
         if not all_pair_variants:
             return with_manual_warnings(
                 AstroAlertActionResult(
@@ -340,7 +344,9 @@ class AstroAlertService:
                     message="当前交易所配对没有可用的 Astro 建卡路线，未写入 Astro",
                 )
             )
-        pair_variants = _pair_variants(pair, effective_card_settings.card_variant)
+        pair_variants = _pair_variants(
+            pair, effective_card_settings.card_variant, hl_gc_supported=hl_gc_supported,
+        )
         if not pair_variants:
             return with_manual_warnings(
                 AstroAlertActionResult(
@@ -495,6 +501,8 @@ class AstroAlertService:
             )
         if existing_variants:
             message += f"；已存在 {_routes(existing_variants)}"
+        if not hl_gc_supported:
+            message += "；Gate 未确认支持此 HL 市场，使用原始 HL 路线"
         return with_manual_warnings(
             AstroAlertActionResult(
                 enabled=True,

@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from app.core.security import dashboard_password_header, verify_dashboard_password
 from app.db.repositories import SettingsRepository
 from app.models.astro import (
     AstroAlertActionResult,
@@ -8,8 +9,8 @@ from app.models.astro import (
     AstroInstrumentCardCreateRequest,
     AstroInstrumentRouteRequest,
     AstroPairPlan,
+    AstroSdkStatus,
 )
-from app.models.astro import AstroSdkStatus
 from app.models.astro_preadd import (
     PREADD_EXCHANGES,
     AstroPreaddPreview,
@@ -23,13 +24,12 @@ from app.models.opportunity import Opportunity
 from app.models.orderbook import DepthValidationResult
 from app.models.pair_spread import normalize_pair_spread_symbol
 from app.models.settings import AstroCardSettings, FeeSettings, RiskSettings
-from app.core.security import dashboard_password_header, verify_dashboard_password
 from app.services.astro_client import AstroClientError, AstroSdkClient
-from app.services.data_filters import ignored_exchange_set, symbol_is_excluded
 from app.services.astro_planner import AstroPairPlanner, AstroPlannerConfig
 from app.services.astro_preadd import AstroPreaddService
+from app.services.data_filters import ignored_exchange_set, symbol_is_excluded
 from app.services.instrument_spreads import instrument_market_age_seconds
-from app.services.market_labels import astro_exchange_route_variants
+from app.services.market_labels import astro_pair_route_variants
 from app.services.spread_engine import Mode, build_directional_opportunity
 
 router = APIRouter(prefix="/astro")
@@ -263,16 +263,16 @@ async def _build_astro_preview(
     settings, settings_warnings = await _manual_astro_card_settings(request)
     planner = AstroPairPlanner(AstroPlannerConfig.from_card_settings(settings))
     plan = planner.plan(opportunity, allow_manual_override=True)
+    hl_gc_supported = await request.app.state.astro_hl_gc_catalog.supports_opportunity(opportunity)
     route_variants = [
         AstroCardRouteVariant(
             card_variant="gc" if any(exchange.startswith("gc-") for exchange in (buy, sell)) else "non_gc",
             buy_exchange=buy,
             sell_exchange=sell,
         )
-        for buy, sell in astro_exchange_route_variants(
-            str(plan.pair.get("buyEx", "")), str(plan.pair.get("sellEx", ""))
-        )
+        for buy, sell in astro_pair_route_variants(plan.pair, hl_gc_supported=hl_gc_supported)
     ] if plan.pair else []
+    native_hl = bool(plan.pair and not hl_gc_supported)
     preview_warning = (
         "系统当前处于 dry-run 模式；点击确认也不会写入 Astro。"
         if request.app.state.settings.astro_dry_run_only
@@ -280,10 +280,11 @@ async def _build_astro_preview(
     )
     plan = plan.model_copy(
         update={
-            "card_variant": settings.card_variant,
+            "card_variant": "non_gc" if native_hl else settings.card_variant,
             "route_variants": route_variants,
             "warnings": [
                 preview_warning,
+                *(["Gate 未确认支持此 HL 市场，使用原始 HL 路线并保留具体市场。"] if native_hl else []),
                 *(manual_warnings or []),
                 *settings_warnings,
                 *(

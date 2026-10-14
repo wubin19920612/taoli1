@@ -120,3 +120,15 @@ def astro_exchange_route_variants(
     if card_variant == "non_gc":
         return [route for route in routes if all(not exchange.startswith("gc-") for exchange in route)]
     return routes
+
+
+def astro_pair_route_variants(
+    pair: dict, card_variant: AstroCardVariant = "both",
+    *, hl_gc_supported: bool = True,
+) -> list[tuple[str, str]]:
+    # Unverified HL markets keep their native DEX even when the preference is GC.
+    native_hl = not hl_gc_supported and "hl" in {pair.get("buyEx"), pair.get("sellEx")}
+    effective_variant = "non_gc" if native_hl else card_variant
+    return astro_exchange_route_variants(
+        str(pair.get("buyEx", "")), str(pair.get("sellEx", "")), effective_variant,
+    )

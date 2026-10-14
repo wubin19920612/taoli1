@@ -10,6 +10,7 @@ from app.models.market import MarketSnapshot, MarketType
 from app.models.orderbook import DepthValidationResult
 from app.models.settings import AstroCardSettings, RiskSettings
 from app.services.astro_alerts import AstroAlertService
+from app.services.gate_crossex_hyperliquid import GateCrossExHyperliquidCatalog
 from app.services.snapshot_store import SnapshotStore
 
 
@@ -211,6 +212,59 @@ def test_instrument_astro_preview_offers_mixed_gc_aster_routes(aster_buy: bool) 
         ("non_gc", buy_exchange, sell_exchange),
         ("gc", "aster", "gc-gate") if aster_buy else ("gc", "gc-gate", "aster"),
     ]
+
+
+@pytest.mark.parametrize("dex,supported", [("para", False), ("io", False), ("xyz", True)])
+@pytest.mark.parametrize("hl_buy", [False, True])
+def test_hl_preview_matches_exact_gate_dex_with_gc_default(
+    dex: str, supported: bool, hl_buy: bool,
+) -> None:
+    app = instrument_app()
+
+    class GcSettingsRepository(RiskSettingsRepository):
+        async def find_astro_card_settings(self):
+            return AstroCardSettings(card_variant="gc")
+
+    async def fetch_symbol(symbol):
+        return [{
+            "symbol": symbol, "exchange_type": "HYPERLIQUID", "business_type": "FUTURE",
+            "state": "live", "tag": "xyz", "support_cross": "false",
+        }]
+
+    app.state.astro_hl_gc_catalog = GateCrossExHyperliquidCatalog(fetch_symbol)
+    buy, sell = ("hyperliquid", "bitget") if hl_buy else ("bitget", "hyperliquid")
+    app.state.snapshot_store.set_all_markets([
+        market(buy, bid=99, ask=100).model_copy(update={
+            "raw_symbol": f"{dex}:BTC" if hl_buy else "BTCUSDT",
+        }),
+        market(sell, bid=101, ask=102).model_copy(update={
+            "raw_symbol": "BTCUSDT" if hl_buy else f"{dex}:BTC",
+        }),
+    ])
+
+    with TestClient(app) as client:
+        app.state.settings_repo = GcSettingsRepository(RiskSettings(excluded_symbols=[]))
+        response = client.post("/api/astro/instrument/preview", json={
+            **route(), "buy_exchange": buy, "sell_exchange": sell,
+        })
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["can_submit"] is True
+    assert payload["card_variant"] == ("gc" if supported else "non_gc")
+    assert payload["pair"]["aHlDex" if hl_buy else "bHlDex"] == dex
+    expected = [{
+        "card_variant": "non_gc",
+        "buy_exchange": "hl" if hl_buy else "bitget",
+        "sell_exchange": "bitget" if hl_buy else "hl",
+    }]
+    if supported:
+        expected.append({
+            "card_variant": "gc",
+            "buy_exchange": "gc-hl" if hl_buy else "bitget",
+            "sell_exchange": "bitget" if hl_buy else "gc-hl",
+        })
+    assert payload["route_variants"] == expected
 
 
 @pytest.mark.parametrize("rh_buy", [False, True])
