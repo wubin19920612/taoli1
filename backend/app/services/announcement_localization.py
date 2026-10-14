@@ -53,7 +53,10 @@ class AnnouncementLocalizationService:
                 "https://api.bitget.com/api/v2/public/annoucements?language=zh_CN&limit=10"
                 + (f"&annType={kind}" if kind else ""),
                 {},
-            ) for kind in ("coin_listings", "symbol_delisting", "latest_news", "")]
+            ) for kind in (
+                "coin_listings", "symbol_delisting", "latest_news",
+                "product_updates", "maintenance_system_updates", "",
+            )]
         if self.exchange == "okx":
             return [(
                 "https://www.okx.com/api/v5/support/announcements?page=1"

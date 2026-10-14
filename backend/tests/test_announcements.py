@@ -68,7 +68,8 @@ async def test_other_announcements_respect_history_window_and_record_scope(case)
         await repo.create_if_new(announcement(
             announcement_id="baseline", published_at=BASE_TIME - timedelta(minutes=60),
         ).model_copy(update={"alert_status": "muted"}))
-        settings = AnnouncementSettings(other_alerts_enabled=True, record_exchanges=[] if case == "excluded" else ["okx"])
+        settings = AnnouncementSettings(other_alerts_enabled=True, alert_max_age_minutes=30,
+                                        record_exchanges=[] if case == "excluded" else ["okx"])
         row = announcement(kind=AnnouncementKind.OTHER, published_at=BASE_TIME - timedelta(minutes=45) if case == "old" else BASE_TIME)
         monitor = AnnouncementMonitor(repo, alert_sender=alerts.append, now_fn=lambda: BASE_TIME)
         created = await monitor.process([row], settings, bootstrap=case == "bootstrap")
@@ -621,7 +622,7 @@ async def test_settings_repository_round_trips_announcement_settings() -> None:
         assert defaults.record_exchanges == ["binance", "okx", "bybit", "gate", "bitget", "hyperliquid"]
         assert defaults.listing_delisting_alerts_enabled is True
         assert defaults.launchpool_alerts_enabled is True
-        assert defaults.alert_max_age_minutes == 30
+        assert defaults.alert_max_age_minutes == 180
         assert defaults.poll_interval_seconds == 30
 
         settings = AnnouncementSettings(
@@ -832,7 +833,7 @@ async def test_monitor_mutes_first_batch_for_a_new_source_in_nonempty_database()
 
 
 @pytest.mark.asyncio
-async def test_monitor_mutes_historical_gaps_but_alerts_recent_rows_above_source_watermark() -> None:
+async def test_monitor_alerts_unseen_recent_rows_regardless_of_source_watermark() -> None:
     db = await connect_database(":memory:")
     alerts: list[str] = []
     try:
@@ -862,9 +863,9 @@ async def test_monitor_mutes_historical_gaps_but_alerts_recent_rows_above_source
         )
 
         created_by_id = {item.announcement_id: item for item in created}
-        assert created_by_id["historical-gap"].alert_status == "muted"
+        assert created_by_id["historical-gap"].alert_status == "sent"
         assert created_by_id["recent-row"].alert_status == "sent"
-        assert len(alerts) == 1
+        assert len(alerts) == 2
         assert "OKX to list RECENT for spot trading" in alerts[0]
     finally:
         await db.close()

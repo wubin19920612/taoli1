@@ -1090,6 +1090,12 @@ def build_announcement_alert_message(announcement: ExchangeAnnouncement) -> str:
         f"[{announcement.exchange.upper()}] {kind_label}公告",
         f"{'监测时间' if announcement.exchange == 'hyperliquid' else '公告时间'}: {_display_time(announcement.published_at)} UTC+8",
     ]
+    delay_minutes = int(max(0, (
+        _as_utc(announcement.fetched_at) - _as_utc(announcement.published_at)
+    ).total_seconds()) // 60)
+    if delay_minutes >= 5:
+        lines.append(f"首次发现: {_display_time(announcement.fetched_at)} UTC+8")
+        lines.append(f"延迟提示: 发布后约 {delay_minutes} 分钟发现，请核对公告是否已生效。")
     if announcement.symbols:
         lines.append(f"{_announcement_asset_label(announcement)}: {', '.join(announcement.symbols)}")
     if announcement.market_type:
@@ -1750,23 +1756,49 @@ class BitgetAnnouncementProvider(HttpAnnouncementProvider):
     exchange = "bitget"
     source = "bitget-public-annoucements"
     base_url = "https://api.bitget.com/api/v2/public/annoucements"
-    ann_types = ("coin_listings", "symbol_delisting", "latest_news", "")
+    ann_types = (
+        "coin_listings", "symbol_delisting", "latest_news",
+        "product_updates", "maintenance_system_updates", "",
+    )
 
     async def fetch(self, *, include_details: bool = True) -> list[ExchangeAnnouncement]:
         announcements: list[ExchangeAnnouncement] = []
-        for ann_type in self.ann_types:
+        semaphore = asyncio.Semaphore(3)
+
+        async def fetch_category(ann_type: str) -> object:
             query = (
                 f"language=en_US&annType={quote_plus(ann_type)}&limit=10"
                 if ann_type else "language=en_US&limit=10"
             )
-            fetch_json = self._get_json if ann_type else self._get_additional_json
-            payload = await fetch_json(f"{self.base_url}?{query}")
+            async with semaphore:
+                payload = await self._get_json(f"{self.base_url}?{query}")
+            if (
+                not isinstance(payload, dict)
+                or payload.get("code") not in (None, "00000")
+                or not isinstance(payload.get("data"), list)
+            ):
+                raise ValueError("Invalid Bitget announcement response")
+            return payload
+
+        # One unavailable category must not drop every other category's notices.
+        results = await asyncio.gather(
+            *(fetch_category(kind) for kind in self.ann_types), return_exceptions=True,
+        )
+        successes = 0
+        for ann_type, payload in zip(self.ann_types, results, strict=True):
+            if isinstance(payload, BaseException):
+                logger.warning("Bitget announcement category failed: %s (%s)",
+                               ann_type or "general", type(payload).__name__)
+                continue
+            successes += 1
             content_by_key = (
                 await self._fetch_detail_content_for_payload(payload, ann_type)
                 if include_details else {}
             )
             parsed = self._parse_payload(payload, ann_type, content_by_key=content_by_key)
             announcements.extend(parsed)
+        if not successes:
+            raise ValueError("All Bitget announcement categories failed")
         return announcements
 
     async def fetch_headlines(self) -> list[ExchangeAnnouncement]:
@@ -2338,9 +2370,11 @@ class AnnouncementMonitor:
             historical_sync = (
                 bootstrap
                 or watermark is None
-                or _as_utc(announcement.published_at) <= _as_utc(watermark)
                 or _as_utc(announcement.published_at) < alert_cutoff
             )
+            # Sources can publish older timestamps late or out of order. The
+            # durable unique identity prevents replays; a newer publication
+            # watermark does not prove that this announcement was already seen.
             if historical_sync and not should_alert_on_bootstrap and alert_status == "pending":
                 alert_status = "muted"
             candidate = announcement.model_copy(update={"alert_status": alert_status})
