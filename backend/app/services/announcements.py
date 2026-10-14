@@ -23,6 +23,7 @@ from app.models.announcement import (
     ExchangeAnnouncement,
 )
 from app.services.announcement_localization import AnnouncementLocalizationService
+from app.services.announcement_polling import run_announcement_sources
 from app.services.announcement_public_pages import TelegramChannelParser
 
 AlertSender = Callable[[str], None | Awaitable[None]]
@@ -1764,6 +1765,9 @@ class BitgetAnnouncementProvider(HttpAnnouncementProvider):
     async def fetch(self, *, include_details: bool = True) -> list[ExchangeAnnouncement]:
         announcements: list[ExchangeAnnouncement] = []
         semaphore = asyncio.Semaphore(3)
+        source_articles: dict[str, list[str]] = {}
+        self.last_source_articles = source_articles
+        self.last_source_errors = {}
 
         async def fetch_category(ann_type: str) -> object:
             query = (
@@ -1772,6 +1776,10 @@ class BitgetAnnouncementProvider(HttpAnnouncementProvider):
             )
             async with semaphore:
                 payload = await self._get_json(f"{self.base_url}?{query}")
+            source_articles[ann_type or "general"] = [
+                _clean_text(row.get("annId") or row.get("id"))
+                for row in self._rows_from_payload(payload)
+            ]
             if (
                 not isinstance(payload, dict)
                 or payload.get("code") not in (None, "00000")
@@ -1784,6 +1792,11 @@ class BitgetAnnouncementProvider(HttpAnnouncementProvider):
         results = await asyncio.gather(
             *(fetch_category(kind) for kind in self.ann_types), return_exceptions=True,
         )
+        self.last_source_errors = {
+            kind or "general": type(result).__name__
+            for kind, result in zip(self.ann_types, results, strict=True)
+            if isinstance(result, BaseException)
+        }
         successes = 0
         for ann_type, payload in zip(self.ann_types, results, strict=True):
             if isinstance(payload, BaseException):
@@ -1907,6 +1920,103 @@ class BitgetAnnouncementProvider(HttpAnnouncementProvider):
             if announcement is not None:
                 announcements.append(announcement)
         return announcements
+
+
+class BitgetWebsiteAnnouncementProvider(HttpAnnouncementProvider):
+    """Observe the publisher's website independently of its public API feed."""
+
+    exchange = "bitget"
+    # A second discovery channel, not a second announcement identity.
+    source = BitgetAnnouncementProvider.source
+    section_ids = ("12508313443483", "360007868532")
+
+    async def fetch(self) -> list[ExchangeAnnouncement]:
+        requests = [(section, chinese) for section in self.section_ids for chinese in (False, True)]
+        source_articles: dict[str, list[str]] = {}
+        self.last_source_articles = source_articles
+        self.last_source_errors = {}
+
+        async def fetch_page(section: str, chinese: bool) -> list[ExchangeAnnouncement]:
+            prefix = "/zh-CN" if chinese else ""
+            html = await self._get_text(f"https://www.bitget.com{prefix}/support/sections/{section}")
+            return self._parse_page(html, section, chinese=chinese, source_articles=source_articles)
+
+        results = await asyncio.gather(
+            *(fetch_page(section, chinese) for section, chinese in requests),
+            return_exceptions=True,
+        )
+        self.last_source_errors = {
+            f"{section}:{'zh' if chinese else 'en'}": type(result).__name__
+            for (section, chinese), result in zip(requests, results, strict=True)
+            if isinstance(result, BaseException)
+        }
+        rows: dict[str, ExchangeAnnouncement] = {}
+        successes = 0
+        for (section, chinese), result in zip(requests, results, strict=True):
+            if isinstance(result, BaseException):
+                logger.warning("Bitget website failed section=%s chinese=%s error=%s",
+                               section, chinese, type(result).__name__)
+                continue
+            successes += 1
+            for row in result:
+                existing = rows.get(row.announcement_id)
+                if existing is None:
+                    rows[row.announcement_id] = row
+                elif chinese and row.title_zh:
+                    rows[row.announcement_id] = existing.model_copy(update={
+                        "title_zh": row.title_zh, "url_zh": row.url_zh,
+                    })
+        if not successes:
+            raise ValueError("All Bitget website announcement pages failed")
+        return list(rows.values())
+
+    async def localize(self, rows: list[ExchangeAnnouncement]) -> list[ExchangeAnnouncement]:
+        # The Chinese website is already included; do not wait for API sync.
+        return rows
+
+    def _parse_page(
+        self, html: str, section: str, *, chinese: bool,
+        source_articles: dict[str, list[str]] | None = None,
+    ) -> list[ExchangeAnnouncement]:
+        marker = re.search(r"window\.__ZEUS_REACT_QUERY_STATE__\s*=\s*", html)
+        if marker is None:
+            raise ValueError("Bitget website returned no announcement state")
+        # Decode public JSON only. Never execute publisher JavaScript.
+        payload, _ = json.JSONDecoder().raw_decode(html[marker.end():])
+        items = None
+        for query in payload.get("queries", []):
+            if not isinstance(query, dict) or query.get("queryKey", [])[:2] != ["sections", section]:
+                continue
+            data = query.get("state", {}).get("data")
+            if isinstance(data, dict) and isinstance(data.get("sectionArticle"), dict):
+                items = data["sectionArticle"].get("items")
+        if not isinstance(items, list):
+            raise TypeError("Bitget website returned no announcement list")
+        if source_articles is not None:
+            source_articles[f"{section}:{'zh' if chinese else 'en'}"] = [
+                str(item.get("contentId") or "") for item in items if isinstance(item, dict)
+            ]
+        rows = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            article_id = str(item.get("contentId") or "")
+            published_at = _parse_datetime_ms(item.get("showTime") or item.get("unifiedDisplayTime"))
+            if not article_id.isascii() or not article_id.isdigit() or published_at is None:
+                continue
+            prefix = "/zh-CN" if chinese else "/en"
+            row = self._announcement(
+                announcement_id=article_id,
+                title=_clean_text(item.get("title")),
+                url=f"https://www.bitget.com{prefix}/support/articles/{article_id}",
+                category="latest_news:news" if section == "360007868532" else "website:announcements",
+                published_at=published_at,
+            )
+            if row is not None:
+                if chinese and re.search(r"[\u3400-\u9fff]", row.title):
+                    row = row.model_copy(update={"title_zh": row.title, "url_zh": row.url})
+                rows.append(row)
+        return rows
 
 
 class GateAnnouncementProvider(HttpAnnouncementProvider):
@@ -2523,6 +2633,7 @@ def default_announcement_provider(
             BybitAnnouncementProvider(),
             GateAnnouncementProvider(),
             BitgetAnnouncementProvider(),
+            BitgetWebsiteAnnouncementProvider(),
             HyperliquidAnnouncementProvider(repository=repository),
             HyperliquidOfficialAnnouncementProvider(),
         ]
@@ -2537,27 +2648,10 @@ async def run_announcement_loop(
     *,
     min_interval_seconds: float = 30.0,
 ) -> None:
-    while not stop_event.is_set():
-        started_at = time.monotonic()
-        interval = min_interval_seconds
-        try:
-            settings = await settings_loader()
-            interval = max(min_interval_seconds, float(settings.poll_interval_seconds))
-            if settings.enabled and settings.record_exchanges:
-                bootstrap = not await monitor.repository.has_any()
-                async for announcements in provider.fetch_batches(
-                    set(settings.record_exchanges), headlines_only=True
-                ):
-                    await monitor.process(announcements, settings, bootstrap=bootstrap)
-                await monitor.process_due_event_reminders(settings)
-        except Exception:
-            logger.exception("announcement loop failed")
-        try:
-            await asyncio.wait_for(
-                stop_event.wait(), timeout=max(1.0, interval - (time.monotonic() - started_at))
-            )
-        except TimeoutError:
-            continue
+    await run_announcement_sources(
+        provider.providers, monitor, settings_loader, stop_event,
+        min_interval_seconds=min_interval_seconds,
+    )
 
 
 async def run_announcement_enrichment_loop(

@@ -622,7 +622,7 @@ async def test_settings_repository_round_trips_announcement_settings() -> None:
         assert defaults.record_exchanges == ["binance", "okx", "bybit", "gate", "bitget", "hyperliquid"]
         assert defaults.listing_delisting_alerts_enabled is True
         assert defaults.launchpool_alerts_enabled is True
-        assert defaults.alert_max_age_minutes == 180
+        assert defaults.alert_max_age_minutes == 30
         assert defaults.poll_interval_seconds == 30
 
         settings = AnnouncementSettings(
