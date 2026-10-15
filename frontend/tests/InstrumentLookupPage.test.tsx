@@ -393,6 +393,7 @@ describe("InstrumentLookupPage", () => {
       if (url.includes("/instruments/") && !url.endsWith("/statistics")) return Response.json({
         ...lookupResult,
         identity_ambiguous: true,
+        markets: [{ ...lookupResult.exchanges[0].future, market_id: "a", quote_kind: "reference", original_quote_currency: "USDC", data_status: "live", age_seconds: 0, stale_after_seconds: 30 }],
         asset_groups: [
           { asset_id: "asset.a", display_name: "Perle", market_ids: ["a"] },
           { asset_id: "asset.b", display_name: "Pearl", market_ids: ["b"] }
@@ -406,6 +407,9 @@ describe("InstrumentLookupPage", () => {
     expect(screen.queryByText("+0.100% · Binance")).toBeNull();
     expect(container.querySelector(".instrument-ratio-source")).toBeNull();
     expect(screen.getByRole("combobox", { name: "选择底层资产" })).not.toBeNull();
+    expect(screen.getByText("参考价格（不可成交）")).not.toBeNull();
+    expect(screen.getByText("原报价 USDC · 未核验换算")).not.toBeNull();
+    expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("/instrument-market-cap/"))).toBe(false);
     expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).endsWith("/statistics"))).toBe(false);
   });
 

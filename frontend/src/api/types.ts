@@ -128,6 +128,9 @@ export interface MarketSnapshot {
   identity_status?: string;
   unit_status?: string;
   quote_kind?: string;
+  original_quote_currency?: string | null;
+  quote_conversion_source?: string | null;
+  quote_conversion_valid_until?: string | null;
 }
 
 export interface InstrumentMarketCandidate extends MarketSnapshot {

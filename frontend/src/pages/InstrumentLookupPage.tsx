@@ -1932,6 +1932,10 @@ export function InstrumentLookupPage() {
               const hasUnknown = Boolean(diagnostic && tradeMarketHasUnknown(diagnostic));
               const rowIdentity = `${quote ? "quote" : "diagnostic"}:${exactMarketKey(market) ?? JSON.stringify([market.exchange, market.market_type, market.raw_symbol, market.dex])}`;
               const priceChanges = quote?.market_id ? statistics?.markets?.[quote.market_id] : null;
+              const originalCurrency = quote?.original_quote_currency || quote?.quote || "USDT";
+              const fxValid = Boolean(quote?.quote_conversion_source && quote.quote_conversion_valid_until
+                && Date.parse(quote.quote_conversion_valid_until) > Date.now());
+              const referenceQuote = quote?.quote_kind === "reference" || (originalCurrency !== "USDT" && !fxValid);
               const changeTooltip = priceChanges?.error ?? (statisticsError || `按该原始市场最近已完成的1分钟收盘价，相对1小时 / 24小时前同一分钟收盘价计算涨跌幅；不是高低振幅。统计截至 ${fullTime(priceChanges?.observed_at)}`);
               const occurrence = marketRowKeys.get(rowIdentity) ?? 0;
               marketRowKeys.set(rowIdentity, occurrence + 1);
@@ -1943,6 +1947,7 @@ export function InstrumentLookupPage() {
                     <span>{marketTypeLabel(market.market_type)} · {dex ? "DEX " + dex + " · " : ""}{market.raw_symbol}</span>
                     <span>规范标的 {market.symbol}</span>
                     {quote?.identity_status ? <span><Tag color={quote.identity_status === "verified" ? "green" : "orange"}>{quote.asset_name ?? "身份待核验"}</Tag>{quote.quote_kind === "reference" ? <Tag>参考报价</Tag> : null}</span> : null}
+                    {quote && originalCurrency !== "USDT" ? <span>原报价 {originalCurrency} · {fxValid ? "买卖价已折算 USDT" : quote.quote_conversion_source ? "换算已过期" : "未核验换算"}</span> : null}
                     {quote?.data_status === "stale" ? <Tag color="red">行情已过期</Tag>
                       : !quote ? <Tag color="orange">仅诊断，未可靠关联行情</Tag> : null}
                     {diagnostic && (currentTradeStatusError || diagnosticStaleness) ?
@@ -1951,10 +1956,10 @@ export function InstrumentLookupPage() {
                         : diagnosticStaleness}</Tag> : null}
                   </div>
                   <div className="instrument-market-data-group" role="cell">
-                    <span className="instrument-market-data-group-name">行情可成交价格</span>
+                    <span className="instrument-market-data-group-name">{referenceQuote ? "参考价格（不可成交）" : "行情可成交价格"}</span>
                     <TradeMetric label="买一 Bid" value={price(quote?.bid)} tone="bid" />
                     <TradeMetric label="卖一 Ask" value={price(quote?.ask)} tone="ask" />
-                    <TradeMetric label="标记 / 指数" value={quote ? price(quote.mark_price) + " / " + price(quote.index_price) : "-"} />
+                    <TradeMetric label={originalCurrency === "USDT" ? "标记 / 指数" : `标记 / 指数（${originalCurrency}）`} value={quote ? price(quote.mark_price) + " / " + price(quote.index_price) : "-"} />
                     <TradeMetric label="1h 涨跌幅" value={priceChanges?.change_1h_pct == null && statisticsLoading ? "加载中" : signedPct(priceChanges?.change_1h_pct)}
                       tone={priceChanges?.change_1h_pct == null ? undefined : priceChanges.change_1h_pct >= 0 ? "positive" : "negative"} tooltip={changeTooltip} />
                     <TradeMetric label="24h 涨跌幅" value={priceChanges?.change_24h_pct == null && statisticsLoading ? "加载中" : signedPct(priceChanges?.change_24h_pct)}
