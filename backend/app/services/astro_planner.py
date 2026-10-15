@@ -273,6 +273,14 @@ class AstroPairPlanner:
             )
         ):
             blockers.append("HL 市场未确认，缺少原始合约标识，不能按默认市场建卡。")
+        if opportunity.identity_enforced:
+            validation = opportunity.validation
+            if validation is None:
+                blockers.append("市场身份尚未完成核验，不能建卡。")
+            elif not validation.capabilities.manual_card or validation.expires_at <= (now or datetime.now(UTC)):
+                blockers.extend(issue.message for issue in validation.blockers)
+                if not validation.blockers:
+                    blockers.append("市场核验已过期，请刷新报价。")
 
         close_decision = _astro_close_decision(
             opportunity,

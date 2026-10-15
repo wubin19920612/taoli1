@@ -246,6 +246,7 @@ class BitgetAdapter(ExchangeAdapter):
                     data_source=f"Bitget public {market_type.value} tickers",
                     upstream_timestamp=upstream_timestamp,
                     symbol_alias_original_symbol=raw if is_rtoken_spot else None,
+                    asset_kind="equity" if is_rtoken_spot else None,
                 )
             )
         return rows

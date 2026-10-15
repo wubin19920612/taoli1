@@ -84,14 +84,21 @@ def _latest_instrument_market(
     symbol: str,
     exchange: str,
     market_type: MarketType,
+    raw_symbol: str | None = None,
+    dex: str | None = None,
 ) -> MarketSnapshot | None:
     matching = [
         market
         for market in markets
-        if market.symbol.upper() == symbol
+        if (market.symbol.upper() == symbol or raw_symbol is not None)
         and market.exchange.lower() == exchange
         and market.market_type == market_type
+        and (raw_symbol is None or market.raw_symbol == raw_symbol)
+        and (dex is None or (market.dex or "main") == dex)
     ]
+    identities = {(m.raw_symbol, m.dex) for m in matching}
+    if len(identities) > 1:
+        raise HTTPException(status_code=409, detail="存在多个原始市场，请指定原始代码和 DEX")
     return max(matching, key=lambda market: market.timestamp, default=None)
 
 
@@ -130,12 +137,16 @@ async def _find_instrument_opportunity(
         symbol=symbol,
         exchange=buy_exchange,
         market_type=route.buy_market_type,
+        raw_symbol=route.buy_raw_symbol,
+        dex=route.buy_dex,
     )
     sell_market = _latest_instrument_market(
         markets,
         symbol=symbol,
         exchange=sell_exchange,
         market_type=route.sell_market_type,
+        raw_symbol=route.sell_raw_symbol,
+        dex=route.sell_dex,
     )
     missing: list[str] = []
     if buy_market is None:
@@ -176,6 +187,7 @@ async def _find_instrument_opportunity(
         ),
         safety_slippage_pct=fees.safety_slippage_pct,
     )
+    opportunity.comparison_kind = route.comparison_kind
     return opportunity, warnings
 
 
@@ -260,6 +272,14 @@ async def _build_astro_preview(
     opportunity: Opportunity,
     manual_warnings: list[str] | None = None,
 ) -> AstroPairPlan:
+    validation_service = getattr(request.app.state, "market_validation", None)
+    if validation_service is not None:
+        risk_settings, _ = await _manual_risk_settings(request)
+        try:
+            validation, _, _ = await validation_service.qualify_opportunity(opportunity, risk_settings)
+            opportunity = opportunity.model_copy(update={"validation": validation, "identity_enforced": validation_service.should_enforce(validation)})
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=f"市场身份无法确认：{exc}") from exc
     settings, settings_warnings = await _manual_astro_card_settings(request)
     planner = AstroPairPlanner(AstroPlannerConfig.from_card_settings(settings))
     plan = planner.plan(opportunity, allow_manual_override=True)

@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.models.market import MarketType
 
@@ -68,6 +68,17 @@ class AstroInstrumentRouteRequest(BaseModel):
     buy_market_type: MarketType
     sell_exchange: str = Field(min_length=1)
     sell_market_type: MarketType
+    buy_raw_symbol: str | None = Field(default=None, max_length=160)
+    sell_raw_symbol: str | None = Field(default=None, max_length=160)
+    buy_dex: str | None = Field(default=None, max_length=64)
+    sell_dex: str | None = Field(default=None, max_length=64)
+    comparison_kind: Literal["same_asset", "custom_cross_asset"] = "same_asset"
+
+    @model_validator(mode="after")
+    def cross_asset_requires_exact_legs(self):
+        if self.comparison_kind == "custom_cross_asset" and not (self.buy_raw_symbol and self.sell_raw_symbol):
+            raise ValueError("custom cross-asset routes require both exact raw markets")
+        return self
 
 
 class AstroInstrumentCardCreateRequest(BaseModel):

@@ -57,6 +57,7 @@ import { AstroCardVariantSelector } from "../components/AstroCardVariantSelector
 import { alertRuleFieldHelp, alertRuleGuide, alertSeverityOptions, alertTypeOptions } from "../constants/alertRules";
 import { defaultHiddenRiskLabels, riskLabelOptions } from "../constants/riskLabels";
 import { PhonePriceAlertsPanel } from "./PhonePriceAlertsPanel";
+import { MarketIdentityPanel } from "../components/MarketIdentityPanel";
 
 type AlertRuleFormValues = AlertRule & {
   min_volume_24h_k?: number;
@@ -1323,6 +1324,7 @@ export function SettingsPage() {
         />
       </section>
       <PhonePriceAlertsPanel />
+      <MarketIdentityPanel />
     </div>
   );
 }

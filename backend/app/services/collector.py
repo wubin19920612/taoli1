@@ -140,6 +140,7 @@ class MarketCollector:
         poll_interval_seconds: float = 5.0,
         max_due_adapters_per_cycle: int = DEFAULT_MAX_DUE_ADAPTERS_PER_CYCLE,
         now_fn: Callable[[], datetime] | None = None,
+        market_validation=None,
     ) -> None:
         self.adapters = adapters
         self.store = store
@@ -157,6 +158,7 @@ class MarketCollector:
         self._exchange_errors: dict[str, dict[str, str]] = {}
         self._adapter_cursor = 0
         self._scheduler_lock = asyncio.Lock()
+        self.market_validation = market_validation
 
     def exchange_states(self) -> dict[str, dict[str, object]]:
         return {
@@ -198,9 +200,27 @@ class MarketCollector:
         errors = self._combined_exchange_errors(active_adapters)
 
         aliased_markets = apply_symbol_aliases(markets, self.risk_settings.symbol_aliases)
+        if self.market_validation is not None:
+            aliased_markets = await self.market_validation.prepare(aliased_markets, self.risk_settings)
         filtered_markets = filter_markets(aliased_markets, self.risk_settings)
 
         opportunities = self._build_labeled_opportunities(filtered_markets, now=now)
+        if self.market_validation is not None:
+            by_key = {
+                (m.exchange, m.market_type, m.raw_symbol): m for m in filtered_markets
+            }
+            accepted = []
+            for item in opportunities:
+                a = by_key.get((item.buy_exchange, item.buy_market_type, item.buy_raw_symbol))
+                b = by_key.get((item.sell_exchange, item.sell_market_type, item.sell_raw_symbol))
+                if a is None or b is None:
+                    continue
+                item.validation = self.market_validation.validate(a, b, self.risk_settings)
+                if self.market_validation.should_enforce(item.validation) and not item.validation.capabilities.same_asset_opportunity:
+                    continue
+                item.risk_labels = risk_labels_for(item, self.risk_settings, now)
+                accepted.append(item)
+            opportunities = accepted
         filtered_opportunities = filter_opportunities(
             opportunities,
             self.risk_settings,

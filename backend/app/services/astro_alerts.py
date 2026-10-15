@@ -2,6 +2,8 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Protocol
 
+import httpx
+
 from app.core.config import Settings
 from app.models.astro import AstroAlertActionResult, AstroCardCreateRequest, AstroCardVariant
 from app.models.opportunity import Opportunity
@@ -167,6 +169,7 @@ class AstroAlertService:
         self.add_restart_delay_seconds = add_restart_delay_seconds
         self.risk_settings_loader = risk_settings_loader
         self.hl_gc_catalog = hl_gc_catalog or GateCrossExHyperliquidCatalog()
+        self.market_validation = None
 
     async def handle_alert(self, opportunity: Opportunity) -> AstroAlertActionResult:
         return await self._handle(
@@ -242,6 +245,18 @@ class AstroAlertService:
                 message=AUTOMATIC_ASTRO_BLOCK_MESSAGE,
             )
         manual_warnings: list[str] = []
+        if opportunity.comparison_kind == "custom_cross_asset" and not manual_override:
+            return AstroAlertActionResult(enabled=True, status="skipped", action="market_validation", message="跨资产研究配对不允许进入自动建卡流程")
+        if self.market_validation is not None:
+            try:
+                risk = await self.risk_settings_loader() if self.risk_settings_loader else RiskSettings()
+                result, _, _ = await self.market_validation.qualify_opportunity(opportunity, risk)
+                if self.market_validation.should_enforce(result) and not result.capabilities.manual_card:
+                    return AstroAlertActionResult(enabled=True, status="skipped", action="market_validation",
+                                                  message="；".join(issue.message for issue in result.blockers))
+                opportunity = opportunity.model_copy(update={"validation": result, "identity_enforced": self.market_validation.should_enforce(result)})
+            except Exception as exc:  # noqa: BLE001 - failed identity checks must prevent external writes.
+                return AstroAlertActionResult(enabled=True, status="failed", action="market_validation", message=f"市场身份校验失败：{exc}")
 
         def with_manual_warnings(result: AstroAlertActionResult) -> AstroAlertActionResult:
             if not manual_warnings:
@@ -455,7 +470,18 @@ class AstroAlertService:
         )
         for index, planned in enumerate(missing_variants):
             try:
+                if self.market_validation is not None:
+                    previous = opportunity.validation
+                    result, a, b = await self.market_validation.qualify_opportunity(opportunity, risk, fresh=True)
+                    if previous is not None and (previous.buy_revision, previous.sell_revision) != (result.buy_revision, result.sell_revision):
+                        return AstroAlertActionResult(enabled=True, status="skipped", action="market_validation", message="市场映射已改变，请重新预览")
+                    if self.market_validation.should_enforce(result) and not result.capabilities.manual_card:
+                        return AstroAlertActionResult(enabled=True, status="skipped", action="market_validation", message="；".join(issue.message for issue in result.blockers))
+                    if not manual_override and not allow_reverse_entry and b.bid <= a.ask:
+                        return AstroAlertActionResult(enabled=True, status="skipped", action="market_validation", message="最新真实盘口已不满足正向价差，未创建卡片")
                 await self.client.add_pair(planned)
+            except (ValueError, TimeoutError, httpx.HTTPError) as exc:
+                return AstroAlertActionResult(enabled=True, status="failed", action="market_validation", message=f"提交前市场复核失败：{exc}")
             except AstroClientError as exc:
                 failed_route = _route(planned)
                 if created_variants:
@@ -484,6 +510,8 @@ class AstroAlertService:
                         pair_type=pair_type,
                     )
                 )
+            except RuntimeError as exc:
+                return AstroAlertActionResult(enabled=True, status="failed", action="market_validation", message=f"公开盘口复核失败：{exc}")
             created_variants.append(planned)
             is_last_add = index == len(missing_variants) - 1
             delay = restart_delay if is_last_add else self.add_restart_delay_seconds

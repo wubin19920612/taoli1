@@ -241,9 +241,10 @@ export function listMarkets(filters: MarketFilters = {}): Promise<MarketSnapshot
   });
 }
 
-export function lookupInstrument(symbol: string, hyperliquidDex?: string): Promise<InstrumentLookupResult> {
+export function lookupInstrument(symbol: string, hyperliquidDex?: string, assetId?: string): Promise<InstrumentLookupResult> {
   const params = new URLSearchParams();
   if (hyperliquidDex) params.set("dex", hyperliquidDex);
+  if (assetId) params.set("asset_id", assetId);
   const query = params.size ? `?${params.toString()}` : "";
   return fetchJson<InstrumentLookupResult>(`/instruments/${encodeURIComponent(symbol)}${query}`);
 }
@@ -253,8 +254,9 @@ export function getInstrumentMarketCap(base: string, coinId?: string): Promise<I
   return fetchJson<InstrumentMarketCapResult>(`/instrument-market-cap/${encodeURIComponent(base)}${query}`);
 }
 
-export function getInstrumentStatistics(symbol: string): Promise<InstrumentStatisticsResult> {
-  return fetchJson<InstrumentStatisticsResult>(`/instruments/${encodeURIComponent(symbol)}/statistics`);
+export function getInstrumentStatistics(symbol: string, assetId?: string): Promise<InstrumentStatisticsResult> {
+  const query = assetId ? `?${new URLSearchParams({ asset_id: assetId })}` : "";
+  return fetchJson<InstrumentStatisticsResult>(`/instruments/${encodeURIComponent(symbol)}/statistics${query}`);
 }
 
 export async function getHyperliquidTradeStatus(
@@ -1558,4 +1560,20 @@ export function saveDashboardPassword(password: string): void {
   } else {
     window.localStorage.removeItem("dashboard_password");
   }
+}
+
+export function getMarketIdentities(search = "", offset = 0, limit = 50): Promise<import("./types").MarketIdentityOverview> {
+  return fetchJson(`/market-identities?${new URLSearchParams({ search, offset: String(offset), limit: String(limit) })}`);
+}
+export function saveMarketIdentity(value: import("./types").MarketIdentityMutation): Promise<import("./types").MarketBinding> {
+  return fetchJson("/market-identities/binding", { method: "PUT", body: JSON.stringify(value) });
+}
+export function previewMarketIdentity(value: import("./types").MarketIdentityMutation): Promise<{ affected_opportunities: number }> {
+  return fetchJson("/market-identities/binding-preview", { method: "POST", body: JSON.stringify(value) });
+}
+export function saveMarketValidationSettings(value: import("./types").MarketValidationSettings): Promise<import("./types").MarketValidationSettings> {
+  return fetchJson("/market-identities/settings", { method: "PUT", body: JSON.stringify(value) });
+}
+export function getMarketCardAudit(): Promise<Array<{ card_id?: string; card_name: string; errors: string[]; validation?: { blockers: Array<{ message: string }> } }>> {
+  return fetchJson("/market-identities/card-audit");
 }

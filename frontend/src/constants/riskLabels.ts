@@ -1,4 +1,5 @@
 export const riskLabelOptions = [
+  { value: "MARKET_VALIDATION_BLOCKED", label: "市场核验未通过", description: "底层资产、单位或行情质量未通过统一校验，不能建卡" },
   {
     value: "LOW_VOLUME",
     label: "低成交额",

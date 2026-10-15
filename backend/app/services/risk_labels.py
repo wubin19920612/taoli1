@@ -17,6 +17,7 @@ NON_ACTIONABLE_RISK_LABELS = frozenset(
         "THIN_ORDER_BOOK",
         "EDGE_AFTER_SLIPPAGE_TOO_SMALL",
         "TRANSIENT_SIGNAL",
+        "MARKET_VALIDATION_BLOCKED",
     }
 )
 
@@ -80,6 +81,10 @@ def risk_labels_for(
     """Calculate labels without copying or mutating the opportunity."""
     current = now or datetime.now(UTC)
     labels: list[str] = []
+    if opportunity.identity_enforced and (
+        opportunity.validation is None or not opportunity.validation.capabilities.same_asset_opportunity
+    ):
+        labels.append("MARKET_VALIDATION_BLOCKED")
 
     min_volume = known_volume_24h_usdt(opportunity)
     if min_volume is not None and min_volume < settings.min_volume_24h_usdt:
@@ -89,7 +94,9 @@ def risk_labels_for(
     if age_seconds > settings.stale_after_seconds:
         labels.append("STALE_DATA")
 
-    if opportunity.open_spread_pct >= settings.huge_spread_pct:
+    if opportunity.open_spread_pct >= settings.huge_spread_pct and not (
+        opportunity.validation is not None and opportunity.validation.anomaly_status == "passed"
+    ):
         labels.append("HUGE_SPREAD_VERIFY")
 
     if opportunity.spread_width_pct >= settings.wide_spread_pct:

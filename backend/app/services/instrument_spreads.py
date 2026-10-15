@@ -5,6 +5,7 @@ from app.models.instrument import InstrumentSpreadComparison
 from app.models.market import MarketSnapshot, MarketType
 from app.models.opportunity import OpportunityType
 from app.services.market_labels import astro_exchange_route_variants
+from app.services.pair_validation import same_asset_eligible, validate_pair
 from app.services.spread_engine import midpoint_spread_pct
 
 
@@ -118,6 +119,8 @@ def build_instrument_spreads(
     ]
     comparisons: list[InstrumentSpreadComparison] = []
     for first, second in combinations(fresh_markets, 2):
+        if not same_asset_eligible(first, second):
+            continue
         directions = ((first, second), (second, first))
         buy_market, sell_market = max(
             directions,
@@ -131,9 +134,17 @@ def build_instrument_spreads(
             buy_market,
             sell_market,
         )
+        if buy_market.identity_checked or sell_market.identity_checked:
+            validation = validate_pair(buy_market, sell_market, now=current, stale_after_seconds=stale_after_seconds)
+            mandatory = set(validation.reason_codes) - {"ASSET_IDENTITY_UNVERIFIED", "UNIT_UNVERIFIED"}
+            if not validation.capabilities.manual_card and (buy_market.identity_enforced or sell_market.identity_enforced or mandatory):
+                astro_supported = False
+                astro_blocker = "；".join(issue.message for issue in validation.blockers)
         comparisons.append(
             InstrumentSpreadComparison(
                 id=_comparison_id(buy_market, sell_market),
+                reference_only=buy_market.quote_kind != "book" or sell_market.quote_kind != "book",
+                validation_reasons=[issue.message for issue in validation.blockers] if (buy_market.identity_checked or sell_market.identity_checked) and not astro_supported else [],
                 buy_exchange=buy_market.exchange,
                 buy_market_type=buy_market.market_type,
                 buy_raw_symbol=buy_market.raw_symbol,

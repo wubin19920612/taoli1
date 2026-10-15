@@ -4,6 +4,7 @@ from enum import StrEnum
 from pydantic import BaseModel, Field
 
 from app.models.market import MarketType
+from app.models.market_identity import PairValidationResult
 
 
 class OpportunityType(StrEnum):
@@ -73,3 +74,6 @@ class Opportunity(BaseModel):
     mark_index_diff_sell_pct: float | None = None
     risk_labels: list[str]
     last_seen_at: datetime
+    identity_enforced: bool = False
+    validation: PairValidationResult | None = None
+    comparison_kind: str = "same_asset"

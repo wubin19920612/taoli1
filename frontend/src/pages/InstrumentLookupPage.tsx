@@ -457,8 +457,12 @@ function astroRoute(symbol: string, spread: InstrumentSpreadComparison): AstroIn
     symbol,
     buy_exchange: spread.buy_exchange,
     buy_market_type: spread.buy_market_type,
+    buy_raw_symbol: spread.buy_raw_symbol,
+    buy_dex: spread.buy_dex,
     sell_exchange: spread.sell_exchange,
-    sell_market_type: spread.sell_market_type
+    sell_market_type: spread.sell_market_type,
+    sell_raw_symbol: spread.sell_raw_symbol,
+    sell_dex: spread.sell_dex
   };
 }
 
@@ -500,6 +504,7 @@ function reverseInstrumentSpread(
     spread.buy_dex
   ) ?? instrumentMarket(result, spread.buy_exchange, spread.buy_market_type);
   if (!buyMarket || !sellMarket) return null;
+  if (buyMarket.asset_id && sellMarket.asset_id && buyMarket.asset_id !== sellMarket.asset_id) return null;
   const buyMid = (buyMarket.bid + buyMarket.ask) / 2;
   const sellMid = (sellMarket.bid + sellMarket.ask) / 2;
   return {
@@ -537,8 +542,10 @@ function reverseInstrumentSpread(
     close_spread_pct: 2 * (sellMarket.ask - buyMarket.bid) / (buyMarket.bid + sellMarket.ask) * 100,
     mid_spread_pct: 2 * (sellMid - buyMid) / (buyMid + sellMid) * 100,
     opportunity_type: directionalOpportunityType(buyMarket.market_type, sellMarket.market_type),
-    astro_supported: true,
-    astro_blocker: null
+    reference_only: spread.reference_only,
+    validation_reasons: spread.validation_reasons,
+    astro_supported: !spread.reference_only && !spread.validation_reasons?.length,
+    astro_blocker: spread.validation_reasons?.join("；") || null
   };
 }
 
@@ -956,6 +963,8 @@ export function InstrumentLookupPage() {
   const [activeSymbol, setActiveSymbol] = useState("");
   const [savedSymbols, setSavedSymbols] = useState(readSavedSymbols);
   const [result, setResult] = useState<InstrumentLookupResult | null>(null);
+  const [selectedAsset, setSelectedAsset] = useState("");
+  const assetSelectionRef = useRef<{ symbol: string; assetId?: string }>({ symbol: "" });
   const [statisticsState, setStatisticsState] = useState<{
     symbol: string;
     loading: boolean;
@@ -1008,7 +1017,7 @@ export function InstrumentLookupPage() {
   const astroPreviewRequestIdRef = useRef(0);
   const astroSubmitRequestIdRef = useRef(0);
 
-  const runLookup = useCallback(async (value: string, background = false) => {
+  const runLookup = useCallback(async (value: string, background = false, assetOverride?: string | null) => {
     const normalized = normalizeSymbol(value);
     if (!normalized) {
       setError("请输入有效标的");
@@ -1019,8 +1028,11 @@ export function InstrumentLookupPage() {
     background ? setRefreshing(true) : setLoading(true);
     if (!background) setError("");
     try {
-      const next = await lookupInstrument(normalized);
+      const assetId = assetOverride === null ? undefined : assetOverride ?? (assetSelectionRef.current.symbol === normalized ? assetSelectionRef.current.assetId : undefined);
+      const next = await lookupInstrument(normalized, undefined, assetId);
       if (requestId !== requestIdRef.current) return;
+      assetSelectionRef.current = { symbol: normalized, assetId };
+      setSelectedAsset(assetId ?? "");
       setResult(next);
       setTradeStatus((current) => current?.query === next.symbol ? current : null);
       setTradeStatusError((current) => current?.symbol === next.symbol ? current : null);
@@ -1113,6 +1125,10 @@ export function InstrumentLookupPage() {
   const statisticsMarketIds = result?.markets?.map((market) => market.market_id).join("|") ?? "";
   useEffect(() => {
     if (!statisticsSymbol) return;
+    if (result?.identity_ambiguous && !selectedAsset) {
+      setStatisticsState({ symbol: statisticsSymbol, loading: false, value: null, error: "请先选择底层资产，再查看历史统计" });
+      return;
+    }
     let active = true;
     let pending = false;
     const refresh = async () => {
@@ -1123,7 +1139,7 @@ export function InstrumentLookupPage() {
         value: current?.symbol === statisticsSymbol ? current.value : null
       }));
       try {
-        const value = await getInstrumentStatistics(statisticsSymbol);
+        const value = await getInstrumentStatistics(statisticsSymbol, selectedAsset || undefined);
         if (value.symbol !== statisticsSymbol) throw new Error("历史统计标的不匹配，未混用其他标的数据");
         if (active) setStatisticsState({ symbol: statisticsSymbol, loading: false, value, error: "" });
       } catch (exc) {
@@ -1138,7 +1154,7 @@ export function InstrumentLookupPage() {
     void refresh();
     const timer = autoRefresh ? window.setInterval(() => void refresh(), STATISTICS_REFRESH_MS) : undefined;
     return () => { active = false; window.clearInterval(timer); };
-  }, [statisticsSymbol, statisticsMarketIds, autoRefresh]);
+  }, [statisticsSymbol, statisticsMarketIds, autoRefresh, selectedAsset, result?.identity_ambiguous]);
   const statistics = statisticsState?.symbol === result?.symbol ? statisticsState?.value : null;
   const statisticsLoading = statisticsState?.symbol === result?.symbol && statisticsState?.loading;
   const statisticsError = statisticsState?.symbol === result?.symbol ? statisticsState?.error ?? "" : "";
@@ -1638,7 +1654,7 @@ export function InstrumentLookupPage() {
         <Tooltip title={`买入 Ask ${price(spread.buy_ask)} · 卖出 Bid ${price(spread.sell_bid)}；未扣手续费及滑点`}>
           <div className={`instrument-spread-value instrument-rate-${tone(value)}`}>
             <strong>{signedPct(value)}</strong>
-            <small>买 Ask → 卖 Bid</small>
+            <small>{spread.reference_only ? "参考价差，非成交报价" : "买 Ask → 卖 Bid"}</small>
           </div>
         </Tooltip>
       )
@@ -1822,6 +1838,12 @@ export function InstrumentLookupPage() {
       ) : null}
 
       {error ? <Alert type="error" showIcon message={error} /> : null}
+      {result?.identity_ambiguous ? <Space wrap style={{ marginBottom: 12 }}>
+        <Typography.Text>底层资产</Typography.Text>
+        <Select aria-label="选择底层资产" value={selectedAsset} style={{ minWidth: 220 }}
+          options={[{ value: "", label: "显示全部资产分组" }, ...(result.asset_groups ?? []).filter((group) => group.asset_id).map((group) => ({ value: group.asset_id!, label: group.display_name }))]}
+          onChange={(value) => { setStatisticsState(null); setTrendCache({}); setTrendOpen(false); void runLookup(result.symbol, false, value || null); }} />
+      </Space> : null}
       {result && result.exchange_count === 0 ? <Alert type="warning" showIcon message={`当前聚合行情中没有 ${result.symbol} 的精确匹配数据`} /> : null}
 
       <section className="instrument-summary-band">
@@ -1881,6 +1903,8 @@ export function InstrumentLookupPage() {
               <Tag>{instrumentMarkets.length} 个行情市场</Tag>
             </Space>
           </div>
+          {result?.identity_ambiguous ? <Alert type="warning" showIcon message="同名代码包含不同底层资产，已分别核验并禁止跨资产同币配对。"
+            description={result.asset_groups?.map((group) => `${group.display_name}（${group.market_ids.length} 个市场）`).join("；")} /> : null}
           {currentTradeStatusError ? <Alert type="warning" showIcon
             message={currentTradeStatus ? "市场诊断刷新失败；显示上次诊断" : "市场诊断失败；行情仍可查看"}
             description={currentTradeStatusError} /> : null}
@@ -1914,6 +1938,7 @@ export function InstrumentLookupPage() {
                     <strong>{exchangeLabels[market.exchange] ?? market.exchange}</strong>
                     <span>{marketTypeLabel(market.market_type)} · {dex ? "DEX " + dex + " · " : ""}{market.raw_symbol}</span>
                     <span>规范标的 {market.symbol}</span>
+                    {quote?.identity_status ? <span><Tag color={quote.identity_status === "verified" ? "green" : "orange"}>{quote.asset_name ?? "身份待核验"}</Tag>{quote.quote_kind === "reference" ? <Tag>参考报价</Tag> : null}</span> : null}
                     {quote?.data_status === "stale" ? <Tag color="red">行情已过期</Tag>
                       : !quote ? <Tag color="orange">仅诊断，未可靠关联行情</Tag> : null}
                     {diagnostic && (currentTradeStatusError || diagnosticStaleness) ?

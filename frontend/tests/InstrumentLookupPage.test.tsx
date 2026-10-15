@@ -1049,8 +1049,12 @@ describe("InstrumentLookupPage", () => {
       symbol: "BTCUSDT",
       buy_exchange: "binance",
       buy_market_type: "future",
+      buy_raw_symbol: "BTCUSDT",
+      buy_dex: null,
       sell_exchange: "binance",
-      sell_market_type: "spot"
+      sell_market_type: "spot",
+      sell_raw_symbol: "BTCUSDT",
+      sell_dex: null
     });
 
     await userEvent.click(screen.getByRole("button", { name: "确认创建" }));
@@ -1067,8 +1071,12 @@ describe("InstrumentLookupPage", () => {
       symbol: "BTCUSDT",
       buy_exchange: "binance",
       buy_market_type: "future",
+      buy_raw_symbol: "BTCUSDT",
+      buy_dex: null,
       sell_exchange: "binance",
-      sell_market_type: "spot"
+      sell_market_type: "spot",
+      sell_raw_symbol: "BTCUSDT",
+      sell_dex: null
     });
     expect(payload.expected_open_spread_pct).toBe(-0.1199);
   });

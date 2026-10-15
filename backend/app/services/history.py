@@ -45,6 +45,8 @@ class OpportunityHistoryRecorder:
         min_volume = self.settings.min_volume_24h_usdt
 
         def eligible(item: Opportunity) -> bool:
+            if min_volume > 0 and (item.buy_volume_24h_usdt is None or item.sell_volume_24h_usdt is None):
+                return False
             if item.open_spread_pct < self.settings.min_open_spread_pct:
                 return False
             known_volume = known_volume_24h_usdt(item)

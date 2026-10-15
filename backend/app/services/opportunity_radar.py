@@ -5,11 +5,12 @@ from statistics import median
 
 from app.models.market import MarketSnapshot, MarketType
 from app.models.opportunity_radar import (
+    SUPPORTED_RADAR_EXCHANGES,
     OpportunityRadarCandidate,
     OpportunityRadarPreview,
     OpportunityRadarSettings,
-    SUPPORTED_RADAR_EXCHANGES,
 )
+from app.services.pair_validation import same_asset_eligible, validate_pair
 
 
 class OpportunityRadarAlertEngine:
@@ -228,6 +229,7 @@ def build_opportunity_radar_preview(
                 peer_premiums = [
                     value
                     for peer in peers
+                    if same_asset_eligible(anchor, peer)
                     if (value := _premium_pct(peer)) is not None
                 ]
                 if anchor_premium is None or not peer_premiums:
@@ -246,6 +248,10 @@ def build_opportunity_radar_preview(
                     continue
 
                 for peer in peers:
+                    if not same_asset_eligible(anchor, peer):
+                        continue
+                    if (anchor.identity_enforced or peer.identity_enforced) and not validate_pair(anchor, peer, now=current).capabilities.same_asset_opportunity:
+                        continue
                     peer_premium = _premium_pct(peer)
                     if peer_premium is None:
                         continue

@@ -90,6 +90,8 @@ class InstrumentSpreadComparison(BaseModel):
     opportunity_type: OpportunityType | None = None
     astro_supported: bool = False
     astro_blocker: str | None = None
+    reference_only: bool = False
+    validation_reasons: list[str] = Field(default_factory=list)
 
 
 class InstrumentLookupResult(BaseModel):
@@ -105,6 +107,8 @@ class InstrumentLookupResult(BaseModel):
     route_errors: dict[str, str] = Field(default_factory=dict)
     exchanges: list[InstrumentExchangeSnapshot] = Field(default_factory=list)
     spreads: list[InstrumentSpreadComparison] = Field(default_factory=list)
+    asset_groups: list[dict[str, object]] = Field(default_factory=list)
+    identity_ambiguous: bool = False
 
 
 class InstrumentPriceChangeStats(BaseModel):

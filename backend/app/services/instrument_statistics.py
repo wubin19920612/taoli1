@@ -20,6 +20,13 @@ from app.services.pair_spread_query import PairSpreadQueryService
 _SAFE_SPREAD_PRICE = sys.float_info.max / 4
 
 
+def _history_cache_key(market: MarketSnapshot) -> str:
+    key = instrument_market_id(market)
+    if market.binding_revision or market.binding_fingerprint:
+        key = f"{key}:{market.binding_revision}:{market.binding_fingerprint}"
+    return key
+
+
 def _close_spread(buy: float, sell: float) -> float:
     return 2 * (sell - buy) / (sell + buy) * 100
 
@@ -68,7 +75,7 @@ class InstrumentStatisticsService:
             and point.close * market.symbol_alias_price_multiplier > 0
         }
         cached = (end_at, prices, error or (None if prices else "未返回可用分钟K线"))
-        key = instrument_market_id(market)
+        key = _history_cache_key(market)
         self._cache[key] = cached
         self._cache.move_to_end(key)
         while len(self._cache) > 128:
@@ -78,7 +85,7 @@ class InstrumentStatisticsService:
     async def _history(
         self, market: MarketSnapshot, end_at: datetime
     ) -> tuple[datetime, dict[datetime, float], str | None]:
-        key = instrument_market_id(market)
+        key = _history_cache_key(market)
         cached = self._cache.get(key)
         if cached is not None and timedelta(0) <= end_at - cached[0] < timedelta(minutes=2):
             self._cache.move_to_end(key)

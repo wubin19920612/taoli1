@@ -7,11 +7,24 @@ from app.core.config import Settings
 from app.main import create_app
 from app.models.astro import AstroAlertActionResult
 from app.models.market import MarketSnapshot, MarketType
-from app.models.orderbook import DepthValidationResult
+from app.models.orderbook import DepthValidationResult, OrderBookLevel, OrderBookSnapshot
 from app.models.settings import AstroCardSettings, RiskSettings
 from app.services.astro_alerts import AstroAlertService
 from app.services.gate_crossex_hyperliquid import GateCrossExHyperliquidCatalog
 from app.services.snapshot_store import SnapshotStore
+
+
+def _install_exact_books(app):
+    class ExactBookAdapter:
+        def __init__(self, row):
+            self.name, self.row = row.exchange, row
+
+        async def fetch_order_book(self, symbol, market_type, raw_symbol, limit=20):
+            return OrderBookSnapshot(exchange=self.name, symbol=symbol, market_type=market_type, raw_symbol=raw_symbol,
+                                     bids=[OrderBookLevel(price=self.row.bid, size=100000)],
+                                     asks=[OrderBookLevel(price=self.row.ask, size=100000)], timestamp=datetime.now(UTC))
+
+    app.state.market_validation.set_adapters([ExactBookAdapter(row) for row in app.state.snapshot_store.get_all_markets()])
 
 
 def market(
@@ -292,6 +305,7 @@ def test_rh_lighter_market_allows_authenticated_manual_create(
     }
 
     with TestClient(app) as client:
+        _install_exact_books(app)
         preview = client.post("/api/astro/instrument/preview", json=selected)
         unauthorized = client.post("/api/astro/instrument/card", json={
             "route": selected, "card": {"open_enabled": False, "card_variant": "non_gc"},
@@ -360,6 +374,7 @@ def test_rh_lighter_manual_api_reaches_sdk_with_exact_paused_openai_card() -> No
         )
     )
     with TestClient(app) as client:
+        _install_exact_books(app)
         preview = client.post("/api/astro/instrument/preview", json=selected)
         response = client.post(
             "/api/astro/instrument/card", headers={"X-Dashboard-Password": "secret"},
@@ -578,7 +593,7 @@ def test_instrument_astro_preview_warns_for_ignored_exchange_without_blocking() 
     assert any("okx 已在全局忽略交易所列表" in warning for warning in payload["warnings"])
 
 
-def test_instrument_astro_preview_warns_for_stale_market_snapshot_without_blocking() -> None:
+def test_instrument_astro_preview_blocks_stale_market_snapshot_even_for_manual_create() -> None:
     app = instrument_app()
     now = datetime.now(UTC)
     app.state.snapshot_store.set_all_markets(
@@ -593,8 +608,9 @@ def test_instrument_astro_preview_warns_for_stale_market_snapshot_without_blocki
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["can_submit"] is True
-    assert payload["pair"] is not None
+    assert payload["can_submit"] is False
+    assert payload["pair"] is None
+    assert any("报价已过期" in blocker for blocker in payload["blockers"])
     assert any("买入侧 okx future 行情已过期" in warning for warning in payload["warnings"])
 
 

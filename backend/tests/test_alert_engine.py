@@ -600,7 +600,7 @@ def test_ff_positive_short_funding_qualifies_even_when_long_rate_is_higher() -> 
     assert required_open_spread_pct(rule, ff.model_copy(update={"funding_next_rate_sell_pct": -0.01})) == 1.0
 
 
-def test_all_missing_volume_does_not_block_alert_when_rule_requires_volume() -> None:
+def test_missing_volume_blocks_alert_when_rule_requires_both_sides_volume() -> None:
     engine = AlertEngine()
     rule = AlertRule(
         name="volume aware",
@@ -617,7 +617,7 @@ def test_all_missing_volume_does_not_block_alert_when_rule_requires_volume() -> 
         }
     )
 
-    assert len(engine.evaluate([opp], [rule], now=datetime.now(UTC))) == 1
+    assert engine.evaluate([opp], [rule], now=datetime.now(UTC)) == []
 
 
 def test_known_low_volume_blocks_alert_when_other_side_is_missing() -> None:

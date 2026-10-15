@@ -325,6 +325,7 @@ function buildColumns(
               icon={<ExperimentOutlined />}
               aria-label={`Astro ${row.symbol}`}
               loading={previewLoadingSymbol === normalized}
+              disabled={row.identity_enforced && !row.validation?.capabilities.manual_card}
               onClick={() => onPreviewAstro(row)}
             />
           </Tooltip>

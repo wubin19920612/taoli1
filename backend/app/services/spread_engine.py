@@ -7,6 +7,7 @@ from typing import Literal
 from app.models.market import MarketSnapshot, MarketType
 from app.models.opportunity import Opportunity, OpportunityType
 from app.services.market_sessions import is_market_snapshot_tradable
+from app.services.pair_validation import same_asset_eligible, validate_pair
 
 Mode = Literal["SF", "FF", "SS"]
 
@@ -98,7 +99,7 @@ def _market_observed_at(snapshot: MarketSnapshot) -> datetime:
 
 def _has_executable_book(snapshot: MarketSnapshot) -> bool:
     estimated = {field.strip().lower() for field in snapshot.estimated_fields}
-    return "bid" not in estimated and "ask" not in estimated
+    return snapshot.quote_kind == "book" and "bid" not in estimated and "ask" not in estimated
 
 
 def opportunity_id(mode: Mode, symbol: str, buy_leg: MarketSnapshot, sell_leg: MarketSnapshot) -> str:
@@ -126,6 +127,7 @@ def build_directional_opportunity(
     buy_fee_pct: float = 0.1,
     sell_fee_pct: float = 0.1,
     safety_slippage_pct: float = 0.05,
+    validate_identity: bool = True,
 ) -> Opportunity:
     """Build an opportunity for an explicitly selected direction, including a negative spread."""
     open_spread_pct, close_spread_pct = midpoint_spread_pct(buy_leg, sell_leg)
@@ -221,6 +223,8 @@ def build_directional_opportunity(
         risk_labels=[],
         # The opportunity is only as fresh as its older leg.
         last_seen_at=min(_market_observed_at(buy_leg), _market_observed_at(sell_leg)),
+        identity_enforced=buy_leg.identity_enforced or sell_leg.identity_enforced,
+        validation=validate_pair(buy_leg, sell_leg) if validate_identity and (buy_leg.identity_checked or sell_leg.identity_checked) else None,
     )
 
 
@@ -295,7 +299,8 @@ def _group_tradable_markets(
             and (current - observed_at).total_seconds() > stale_after_seconds
         ):
             continue
-        by_symbol[snapshot.symbol].append(snapshot)
+        group_key = snapshot.asset_id if snapshot.identity_enforced and snapshot.asset_id else snapshot.symbol
+        by_symbol[group_key].append(snapshot)
     return by_symbol
 
 
@@ -334,6 +339,8 @@ def _build_grouped_opportunities(
         # after each symbol instead of retaining the whole market's pair graph.
         seen: set[tuple[tuple[str, ...], tuple[str, ...]]] = set()
         for (buy_leg, buy_identity), (sell_leg, sell_identity) in pairs:
+            if not same_asset_eligible(buy_leg, sell_leg):
+                continue
             # Equal models necessarily have equal identities; only duplicates
             # need the expensive full-model comparison. Different books with
             # the same identity still follow the original first-pair behavior.
@@ -362,6 +369,7 @@ def _build_grouped_opportunities(
                     buy_fee_pct=buy_fee_pct,
                     sell_fee_pct=sell_fee_pct,
                     safety_slippage_pct=safety_slippage_pct,
+                    validate_identity=buy_leg.identity_enforced or sell_leg.identity_enforced,
                 )
             )
     return opportunities

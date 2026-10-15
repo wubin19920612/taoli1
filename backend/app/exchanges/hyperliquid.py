@@ -24,6 +24,7 @@ class HyperliquidAdapter(ExchangeAdapter):
     def __init__(self, client=None):
         super().__init__(client)
         self.market_errors: dict[str, str] = {}
+        self._collateral_names: dict[int, str] = {0: "USDC"}
 
     async def fetch_spot_tickers(self) -> list[MarketSnapshot]:
         payload = await self.post_json(self.info_url, {"type": "spotMetaAndAssetCtxs"})
@@ -182,7 +183,9 @@ class HyperliquidAdapter(ExchangeAdapter):
     def _parse_perp_payload(self, payload: object) -> list[MarketSnapshot]:
         meta, contexts = self._split_payload(payload)
         universe = meta.get("universe", [])
-        return self._parse_perp_rows(universe, contexts)
+        collateral = meta.get("collateralToken", 0)
+        quote_currency = self._collateral_names.get(collateral, f"HL_TOKEN_{collateral}")
+        return self._parse_perp_rows(universe, contexts, quote_currency=quote_currency)
 
     async def _attach_priority_order_books(
         self,
@@ -219,6 +222,9 @@ class HyperliquidAdapter(ExchangeAdapter):
                             ),
                             "is_estimated": False,
                             "estimated_fields": [],
+                            "quote_kind": "book",
+                            "book_timestamp": book.timestamp,
+                            "quote_time_source": book.timestamp_source,
                         }
                     )
                 )
@@ -278,6 +284,7 @@ class HyperliquidAdapter(ExchangeAdapter):
             name = str(item.get("name", "")).strip().upper()
             if isinstance(index, int) and name:
                 names[index] = name
+                self._collateral_names[index] = name
         return names
 
     def _spot_pair_name(self, item: dict, token_names: dict[int, str]) -> str | None:
@@ -331,11 +338,16 @@ class HyperliquidAdapter(ExchangeAdapter):
                     mark_price=parse_float(item.get("markPx")),
                     timestamp=now,
                     raw_symbol=raw_coin,
+                    quote_kind="reference",
+                    reference_price=mid,
+                    original_quote_currency=quote,
+                    is_estimated=True,
+                    estimated_fields=["bid", "ask"],
                 )
             )
         return rows
 
-    def _parse_perp_rows(self, universe: Iterable[object], contexts: list[dict]) -> list[MarketSnapshot]:
+    def _parse_perp_rows(self, universe: Iterable[object], contexts: list[dict], *, quote_currency: str = "USDC") -> list[MarketSnapshot]:
         rows: list[MarketSnapshot] = []
         now = utc_now()
         for asset, item in zip(universe, contexts):
@@ -353,7 +365,6 @@ class HyperliquidAdapter(ExchangeAdapter):
             symbol, base, quote = normalize_usdt_symbol(f"{base_coin}USDT")
             funding = parse_float(item.get("funding"))
             dex = raw_coin.split(":", 1)[0].strip().lower() if ":" in raw_coin else "main"
-            requires_priority_book = raw_coin in self.priority_order_book_markets
             rows.append(
                 MarketSnapshot(
                     symbol=symbol,
@@ -375,8 +386,11 @@ class HyperliquidAdapter(ExchangeAdapter):
                     dex=dex,
                     contract_size_multiplier=1.0,
                     data_source="Hyperliquid public metaAndAssetCtxs",
-                    is_estimated=requires_priority_book,
-                    estimated_fields=["bid", "ask"] if requires_priority_book else [],
+                    is_estimated=True,
+                    estimated_fields=["bid", "ask"],
+                    quote_kind="reference",
+                    reference_price=mid,
+                    original_quote_currency=quote_currency,
                 )
             )
         return rows

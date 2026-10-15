@@ -31,6 +31,7 @@ from app.api import (
     routes_premium_index,
     routes_phone_alerts,
     routes_settings,
+    routes_market_identities,
     routes_second_level_sampling,
     routes_squeeze_arbitrage,
     routes_trade_availability,
@@ -52,6 +53,9 @@ from app.db.repositories import (
     SettingsRepository,
 )
 from app.db.schema import initialize_schema
+from app.db.market_identity_repository import MarketIdentityRepository
+from app.services.market_validation_review import MarketValidationService
+from app.services.market_identity_catalog import OfficialMarketIdentityCatalog
 from app.models.alert import AlertEvent
 from app.models.orderbook import DepthValidationResult
 from app.models.phone_alert import PhonePriceAlertEvent
@@ -387,6 +391,9 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
             await _refresh_astro_runtime_settings(app, settings_repo)
             now = datetime.now(UTC)
             opportunities = filter_opportunities(app.state.snapshot_store.get_opportunities(), settings)
+            identity_validator = getattr(app.state, "market_validation", None)
+            if identity_validator is not None:
+                opportunities = identity_validator.filter_opportunities(opportunities, settings)
             opportunities = filter_opportunities_by_alert_rules(
                 opportunities,
                 rules,
@@ -798,6 +805,12 @@ def create_app(
                 app.state.hyperliquid_trade_status_service,
             )
         app.state.settings_repo = SettingsRepository(db)
+        identity_db = db if db_path == ":memory:" else await connect_database(db_path)
+        app.state.market_identity_repo = MarketIdentityRepository(identity_db)
+        app.state.market_validation = MarketValidationService(app.state.market_identity_repo, store)
+        await app.state.market_validation.initialize(seed_reviewed=start_collector)
+        app.state.market_identity_catalog = OfficialMarketIdentityCatalog(app.state.market_validation)
+        app.state.astro_alert_service.market_validation = app.state.market_validation
         app.state.account_connection_service = AccountConnectionService(
             AccountConnectionRepository(db),
             master_key=app_settings.account_credentials_master_key,
@@ -933,7 +946,9 @@ def create_app(
         collector: MarketCollector | None = None
         announcement_provider = None
         if start_collector:
+            _start_background_task(tasks, app.state.market_identity_catalog.run(stop_event), name="market-identity-catalog")
             exchange_adapters = default_exchange_adapters()
+            app.state.market_validation.set_adapters(exchange_adapters)
             history_recorder = OpportunityHistoryRecorder(
                 app.state.history_repo,
                 app_settings.history_settings,
@@ -970,6 +985,7 @@ def create_app(
                 index_component_provider=app.state.index_component_provider,
                 index_component_monitor=index_component_monitor,
                 poll_interval_seconds=app_settings.poll_interval_seconds,
+                market_validation=app.state.market_validation,
             )
             app.state.market_collector = collector
             app.state.orderbook_validator = OrderBookDepthValidator(exchange_adapters)
@@ -1071,6 +1087,7 @@ def create_app(
             for task in tasks:
                 with suppress(asyncio.CancelledError):
                     await task
+            await app.state.market_validation.aclose()
             if collector is not None:
                 await collector.close()
             if announcement_provider is not None:
@@ -1097,6 +1114,8 @@ def create_app(
             )
             if route_db is not db:
                 await route_db.close()
+            if identity_db is not db:
+                await identity_db.close()
             await db.close()
 
     app = FastAPI(title=app_settings.app_name, lifespan=lifespan)
@@ -1216,6 +1235,7 @@ def create_app(
     app.include_router(routes_tradfi_perp_monitor.router, prefix="/api")
     app.include_router(routes_second_level_sampling.router, prefix="/api")
     app.include_router(routes_settings.router, prefix="/api")
+    app.include_router(routes_market_identities.router, prefix="/api")
     app.include_router(routes_admin.router, prefix="/api")
     app.include_router(stream.router, prefix="/api")
     return app

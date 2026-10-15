@@ -12,6 +12,8 @@ export type FatFingerMakerSide = "buy" | "sell";
 export type FatFingerExitReason = "target" | "timeout";
 
 export interface Opportunity {
+  identity_enforced?: boolean;
+  validation?: { capabilities: { manual_card: boolean }; blockers: Array<{ code: string; message: string }> } | null;
   id: string;
   type: OpportunityType;
   symbol: string;
@@ -121,6 +123,11 @@ export interface MarketSnapshot {
   estimated_fields?: string[];
   symbol_alias_original_symbol?: string | null;
   symbol_alias_price_multiplier?: number;
+  asset_id?: string | null;
+  asset_name?: string | null;
+  identity_status?: string;
+  unit_status?: string;
+  quote_kind?: string;
 }
 
 export interface InstrumentMarketCandidate extends MarketSnapshot {
@@ -157,6 +164,8 @@ export interface InstrumentExchangeSnapshot {
 }
 
 export interface InstrumentSpreadComparison {
+  reference_only?: boolean;
+  validation_reasons?: string[];
   id: string;
   buy_exchange: string;
   buy_market_type: MarketType;
@@ -196,6 +205,8 @@ export interface InstrumentSpreadComparison {
 }
 
 export interface InstrumentLookupResult {
+  asset_groups?: Array<{ asset_id: string | null; display_name: string; market_ids: string[] }>;
+  identity_ambiguous?: boolean;
   query: string;
   symbol: string;
   base: string;
@@ -1888,6 +1899,11 @@ export interface AstroCardRouteVariant {
 }
 
 export interface AstroInstrumentRouteRequest {
+  buy_raw_symbol?: string;
+  sell_raw_symbol?: string;
+  buy_dex?: string | null;
+  sell_dex?: string | null;
+  comparison_kind?: "same_asset" | "custom_cross_asset";
   symbol: string;
   buy_exchange: string;
   buy_market_type: MarketType;
@@ -2910,3 +2926,22 @@ export interface SqueezeRouteEvent {
   rule_version: string;
   evaluation: SqueezeRouteEvaluation;
 }
+
+export interface ExactMarketKey { exchange: string; market_type: MarketType; dex: string | null; raw_symbol: string; }
+export interface MarketIdentityEvidence { source_type: "official_announcement" | "official_metadata" | "official_specification"; url: string; summary: string; fetched_at: string; }
+export interface MarketBinding {
+  tracking_definition?: string;
+  market: ExactMarketKey; asset_id: string | null; display_name: string; asset_kind: string;
+  identity_status: "pending" | "verified" | "conflict" | "expired"; unit_status: "pending" | "verified";
+  quote_currency: string; settlement_currency: string | null; price_multiplier: number; contract_size: number | null;
+  contract_kind: string; revision: number; verified_at: string | null; valid_until: string | null; evidence: MarketIdentityEvidence[];
+}
+export interface MarketValidationSettings {
+  mode: "shadow" | "enforce"; max_leg_time_skew_seconds: number; review_ttl_seconds: number; review_concurrency: number;
+  review_timeout_seconds: number; review_failure_cooldown_seconds: number;
+}
+export interface MarketIdentityOverview {
+  items: MarketBinding[]; total: number; settings: MarketValidationSettings;
+  coverage: { mode: string; markets: number; verified: number; pending: number; conflict: number; expired: number; reference_quotes: number; };
+}
+export interface MarketIdentityMutation { binding: MarketBinding; expected_revision: number; reason: string; }

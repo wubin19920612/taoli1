@@ -70,6 +70,7 @@ RISK_LABEL_BITS = {
     "THIN_ORDER_BOOK": 1 << 8,
     "EDGE_AFTER_SLIPPAGE_TOO_SMALL": 1 << 9,
     "TRANSIENT_SIGNAL": 1 << 10,
+    "MARKET_VALIDATION_BLOCKED": 1 << 11,
 }
 RISK_LABELS_BY_BIT = {value: key for key, value in RISK_LABEL_BITS.items()}
 
@@ -1584,6 +1585,8 @@ class OpportunityHistoryRepository:
         observed_at,
     ) -> OpportunityHistoryRow:
         return OpportunityHistoryRow(
+            market_identity=opportunity.validation.model_dump(mode="json") if opportunity.validation else None,
+            identity_status="verified" if opportunity.validation and opportunity.validation.identity_relation == "same" else "unverified",
             observed_at=observed_at,
             opportunity_id=opportunity.id,
             type=opportunity.type,
@@ -1631,9 +1634,9 @@ class OpportunityHistoryRepository:
               net_funding_hourly_scaled, net_funding_daily_scaled,
               net_funding_next_hourly_scaled, net_funding_next_daily_scaled,
               funding_next_time_buy, funding_next_time_sell,
-              buy_volume_24h_usdt, sell_volume_24h_usdt, risk_label_mask
+              buy_volume_24h_usdt, sell_volume_24h_usdt, risk_label_mask, market_identity_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
@@ -1666,6 +1669,7 @@ class OpportunityHistoryRepository:
                     row.buy_volume_24h_usdt,
                     row.sell_volume_24h_usdt,
                     _risk_label_mask(row.risk_labels),
+                    json.dumps(row.market_identity, ensure_ascii=False) if row.market_identity else None,
                 )
                 for row in rows
             ],
@@ -1680,9 +1684,12 @@ class OpportunityHistoryRepository:
         type: str | None = None,
         since=None,
         limit: int = 1000,
+        include_invalid: bool = False,
     ) -> list[OpportunityHistoryRow]:
         clauses: list[str] = []
         params: list[object] = []
+        if not include_invalid:
+            clauses.append("NOT EXISTS (SELECT 1 FROM market_invalid_opportunities invalid WHERE invalid.opportunity_id=opportunity_history.opportunity_id AND opportunity_history.observed_at<=invalid.observed_at)")
         if symbol:
             clauses.append("symbol = ?")
             params.append(symbol.upper())
@@ -1700,7 +1707,7 @@ class OpportunityHistoryRepository:
         params.append(limit)
         cursor = await self.db.execute(
             f"""
-            SELECT * FROM opportunity_history
+            SELECT *, (SELECT reason FROM market_invalid_opportunities invalid WHERE invalid.opportunity_id=opportunity_history.opportunity_id AND opportunity_history.observed_at<=invalid.observed_at) AS invalidated_reason FROM opportunity_history
             {where}
             ORDER BY observed_at DESC, open_spread_scaled DESC
             LIMIT ?
@@ -1763,7 +1770,10 @@ class OpportunityHistoryRepository:
         return True
 
     def _row_from_db(self, row: aiosqlite.Row) -> OpportunityHistoryRow:
+        metadata = json.loads(row["market_identity_json"]) if row["market_identity_json"] else None
         return OpportunityHistoryRow(
+            identity_status="invalidated" if row["invalidated_reason"] else "verified" if metadata and metadata.get("identity_relation") == "same" else "unverified",
+            market_identity=metadata,
             observed_at=row["observed_at"],
             opportunity_id=row["opportunity_id"],
             type=OpportunityType(row["type"]),

@@ -14,6 +14,7 @@ from app.models.funding_arbitrage import (
 )
 from app.models.market import MarketSnapshot, MarketType
 from app.services.funding_research.opportunity_types import exchange_formula_family
+from app.services.pair_validation import same_asset_eligible, validate_pair
 
 HYPERLIQUID_EXCHANGE = "hyperliquid"
 GATE_EXCHANGE = "gate"
@@ -524,9 +525,17 @@ def _build_candidates_for_symbol(
 
     for spot in spots:
         for future in futures:
+            if not same_asset_eligible(spot, future):
+                continue
+            if (spot.identity_enforced or future.identity_enforced) and not validate_pair(spot, future, now=now).capabilities.same_asset_opportunity:
+                continue
             candidates.append(_build_candidate("SF", symbol, spot, future, settings, now))
 
     for first, second in combinations(futures, 2):
+        if not same_asset_eligible(first, second):
+            continue
+        if (first.identity_enforced or second.identity_enforced) and not validate_pair(first, second, now=now).capabilities.same_asset_opportunity:
+            continue
         first_funding = _future_funding_per_hour_for_orientation(first)
         second_funding = _future_funding_per_hour_for_orientation(second)
         if first_funding is None and second_funding is None:

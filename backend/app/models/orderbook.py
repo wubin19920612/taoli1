@@ -18,6 +18,7 @@ class OrderBookSnapshot(BaseModel):
     bids: list[OrderBookLevel]
     asks: list[OrderBookLevel]
     timestamp: datetime
+    timestamp_source: str = "received"
 
 
 class DepthValidationResult(BaseModel):

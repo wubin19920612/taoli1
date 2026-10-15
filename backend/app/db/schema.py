@@ -26,6 +26,7 @@ async def _ensure_opportunity_history_columns(db: aiosqlite.Connection) -> None:
     rows = await cursor.fetchall()
     existing = {row["name"] for row in rows}
     columns: dict[str, str] = {
+        "market_identity_json": "TEXT",
         "funding_next_rate_buy_scaled": "INTEGER",
         "funding_next_rate_sell_scaled": "INTEGER",
         "net_funding_next_scaled": "INTEGER",
@@ -689,4 +690,7 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
     from app.services.squeeze_arbitrage.repository import initialize_squeeze_schema
 
     await initialize_squeeze_schema(db)
+    from app.db.market_identity_repository import initialize_market_identity_schema
+
+    await initialize_market_identity_schema(db)
     await db.commit()

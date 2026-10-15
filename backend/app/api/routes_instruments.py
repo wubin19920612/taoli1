@@ -280,8 +280,9 @@ async def lookup_instrument(
     symbol: str,
     request: Request,
     dex: str | None = None,
+    asset_id: str | None = None,
 ) -> InstrumentLookupResult:
-    return await _lookup_instrument(symbol, request, dex, include_astro_routes=True)
+    return await _lookup_instrument(symbol, request, dex, include_astro_routes=True, asset_id=asset_id)
 
 
 async def _lookup_instrument(
@@ -290,6 +291,7 @@ async def _lookup_instrument(
     dex: str | None,
     *,
     include_astro_routes: bool,
+    asset_id: str | None = None,
 ) -> InstrumentLookupResult:
     try:
         requested_symbol = normalize_pair_spread_symbol(symbol)
@@ -325,6 +327,17 @@ async def _lookup_instrument(
         if previous is None or market.timestamp > previous.timestamp:
             latest_by_identity[key] = market
     exact_markets = list(latest_by_identity.values())
+    validator = getattr(request.app.state, "market_validation", None)
+    if validator is not None:
+        exact_markets = [validator.annotate(row) for row in exact_markets]
+    groups = {}
+    for row in exact_markets:
+        group_key = row.asset_id or f"unverified:{row.asset_kind or 'unknown'}"
+        group = groups.setdefault(group_key, {"asset_id": row.asset_id, "display_name": row.asset_name or "身份待核验", "market_ids": []})
+        group["market_ids"].append(instrument_market_id(row))
+    identity_ambiguous = len({row.asset_id for row in exact_markets if row.asset_id}) > 1 or len({row.asset_kind for row in exact_markets if row.asset_kind}) > 1
+    if asset_id:
+        exact_markets = [row for row in exact_markets if row.asset_id == asset_id]
     latest_by_market: dict[tuple[str, MarketType], MarketSnapshot] = {}
     for market in exact_markets:
         key = (market.exchange.lower(), market.market_type)
@@ -391,6 +404,8 @@ async def _lookup_instrument(
         exchange_count=sum(1 for item in exchanges if item.spot is not None or item.future is not None),
         market_count=len(exact_markets),
         markets=instrument_markets,
+        asset_groups=list(groups.values()),
+        identity_ambiguous=identity_ambiguous,
         astro_routes=astro_routes,
         route_errors=route_errors,
         exchanges=exchanges,
@@ -406,8 +421,11 @@ async def instrument_statistics(
     symbol: str,
     request: Request,
     dex: str | None = None,
+    asset_id: str | None = None,
 ) -> InstrumentStatisticsResult:
     # Historical price statistics only consume market identity and spreads.
     # Avoid an unrelated SDK request (and its timeout) on this independent path.
-    instrument = await _lookup_instrument(symbol, request, dex, include_astro_routes=False)
+    instrument = await _lookup_instrument(symbol, request, dex, include_astro_routes=False, asset_id=asset_id)
+    if instrument.identity_ambiguous and asset_id is None:
+        raise HTTPException(status_code=409, detail="同名标的包含不同资产，请先选择资产再查询历史")
     return await request.app.state.instrument_statistics_service.lookup(instrument)
