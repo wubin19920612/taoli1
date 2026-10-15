@@ -1118,8 +1118,8 @@ export function InstrumentLookupPage() {
   }, []);
 
   useEffect(() => {
-    if (result?.base && result.market_count > 0) void loadMarketCap(result.base);
-  }, [loadMarketCap, result?.base, result?.market_count]);
+    if (result?.base && result.market_count > 0 && !result.identity_ambiguous) void loadMarketCap(result.base);
+  }, [loadMarketCap, result?.base, result?.market_count, result?.identity_ambiguous]);
 
   const statisticsSymbol = result?.market_count ? result.symbol : "";
   const statisticsMarketIds = result?.markets?.map((market) => market.market_id).join("|") ?? "";
@@ -1234,12 +1234,14 @@ export function InstrumentLookupPage() {
     });
   }, [availableTrendExchanges, result, trendCache, trendHours, trendKey, trendOpen, trendType]);
 
-  const priceRange = resultPriceRange(result);
-  const strongestBasis = maxBasis(result);
+  const summaryAmbiguous = Boolean(result?.identity_ambiguous && !selectedAsset);
+  const summaryResult = summaryAmbiguous ? null : result;
+  const priceRange = resultPriceRange(summaryResult);
+  const strongestBasis = maxBasis(summaryResult);
   const instrumentMarkets = exactMarkets(result);
-  const volumes = volumeTotals(result?.markets ?? []);
-  const marketCap = result && marketCapState?.base === result.base ? marketCapState.value : null;
-  const marketCapLoading = Boolean(result && marketCapState?.base === result.base && marketCapState.loading);
+  const volumes = volumeTotals(summaryResult?.markets ?? []);
+  const marketCap = result && !result.identity_ambiguous && marketCapState?.base === result.base ? marketCapState.value : null;
+  const marketCapLoading = Boolean(result && !result.identity_ambiguous && marketCapState?.base === result.base && marketCapState.loading);
   const capRatio = volumes.future.included && marketCap?.status === "available" && marketCap.market_cap_usd
     ? volumes.future.amount / marketCap.market_cap_usd : null;
   const spotRatio = volumes.future.included && volumes.spot.included && volumes.spot.amount > 0
@@ -1247,14 +1249,14 @@ export function InstrumentLookupPage() {
   const selectedCoin = marketCap?.candidates?.find((coin) => coin.id === marketCap.selected_id);
 
   useEffect(() => {
-    if (!result?.base || result.market_count === 0) return undefined;
+    if (!result?.base || result.market_count === 0 || result.identity_ambiguous) return undefined;
     const base = result.base;
     const refresh = () => {
       if (document.visibilityState !== "hidden") void loadMarketCap(base, marketCap?.selected_id ?? undefined, true);
     };
     const timer = window.setInterval(refresh, MARKET_CAP_REFRESH_MS);
     return () => window.clearInterval(timer);
-  }, [loadMarketCap, result?.base, result?.market_count, marketCap?.selected_id]);
+  }, [loadMarketCap, result?.base, result?.market_count, result?.identity_ambiguous, marketCap?.selected_id]);
   const marketCounts = instrumentMarkets.reduce(
     (counts, market) => ({
       spot: counts.spot + Number(market.market_type === "spot"),
@@ -1844,22 +1846,25 @@ export function InstrumentLookupPage() {
           options={[{ value: "", label: "显示全部资产分组" }, ...(result.asset_groups ?? []).filter((group) => group.asset_id).map((group) => ({ value: group.asset_id!, label: group.display_name }))]}
           onChange={(value) => { setStatisticsState(null); setTrendCache({}); setTrendOpen(false); void runLookup(result.symbol, false, value || null); }} />
       </Space> : null}
+      {result?.identity_ambiguous ? <Alert type="warning" showIcon message="同名代码包含不同底层资产，已分别核验并禁止跨资产同币配对。"
+        description={`${result.asset_groups?.map((group) => `${group.display_name}（${group.market_ids.length} 个市场）`).join("；")}。${summaryAmbiguous ? "请先选择底层资产，再查看汇总价格和成交额比例。" : ""}`} /> : null}
       {result && result.exchange_count === 0 ? <Alert type="warning" showIcon message={`当前聚合行情中没有 ${result.symbol} 的精确匹配数据`} /> : null}
 
       <section className="instrument-summary-band">
         <div><span>规范标的</span><strong>{result?.symbol ?? "-"}</strong></div>
         <div><span>覆盖交易所</span><strong>{result ? `${result.exchange_count} / ${result.exchanges.length}` : "-"}</strong></div>
         <div><span>市场</span><strong>{result ? `${marketCounts.spot} 现货 · ${marketCounts.future} 永续` : "-"}</strong></div>
-        <div><span>价格区间</span><strong>{priceRange ? `${price(priceRange.min)} - ${price(priceRange.max)}` : "-"}</strong></div>
+        <div><span>价格区间</span><strong>{summaryAmbiguous ? "先选择底层资产" : priceRange ? `${price(priceRange.min)} - ${price(priceRange.max)}` : "-"}</strong></div>
         <div><span>最大现永基差</span><strong className={`instrument-rate-${tone(strongestBasis?.value ?? null)}`}>{strongestBasis ? `${signedPct(strongestBasis.value)} · ${exchangeLabels[strongestBasis.exchange]}` : "-"}</strong></div>
         <div><span>快照时间</span><strong>{fullTime(result?.observed_at)}</strong></div>
         <div><span>合约 / 流通市值</span><strong>{capRatio === null ? "-" : `≈${multiple(capRatio)}`}</strong></div>
         <div><span>合约 / 现货</span><strong>{multiple(spotRatio)}</strong></div>
       </section>
 
-      {result ? <div className="instrument-ratio-source">
+      {result && !summaryAmbiguous ? <div className="instrument-ratio-source">
         <span>合约 24h {compactUsdt(volumes.future.included ? volumes.future.amount : null)} · {volumes.future.included}/{volumes.future.total} 市场{volumes.future.estimated ? " · 含预估" : ""}{volumes.future.aliases ? ` · ${volumes.future.aliases} 个别名未计` : ""}</span>
         <span>现货 24h {compactUsdt(volumes.spot.included ? volumes.spot.amount : null)} · {volumes.spot.included}/{volumes.spot.total} 市场{volumes.spot.estimated ? " · 含预估" : ""}{volumes.spot.aliases ? ` · ${volumes.spot.aliases} 个别名未计` : ""}</span>
+        {result.identity_ambiguous ? <span>同名资产尚未绑定流通市值来源，暂不计算市值比例。</span> : <>
         {marketCap && marketCap.candidates?.length > 1 ? <Select
           size="small"
           aria-label="选择 CoinGecko 币种"
@@ -1883,6 +1888,7 @@ export function InstrumentLookupPage() {
             onClick={() => void loadMarketCap(result.base, marketCap?.selected_id ?? undefined)} />
         </Tooltip> : null}
         <span>市值为 USD，成交额为 USDT；比值按近似平价计算</span>
+        </>}
       </div> : null}
 
       {marketRows.length > 0 ? (
@@ -1903,8 +1909,6 @@ export function InstrumentLookupPage() {
               <Tag>{instrumentMarkets.length} 个行情市场</Tag>
             </Space>
           </div>
-          {result?.identity_ambiguous ? <Alert type="warning" showIcon message="同名代码包含不同底层资产，已分别核验并禁止跨资产同币配对。"
-            description={result.asset_groups?.map((group) => `${group.display_name}（${group.market_ids.length} 个市场）`).join("；")} /> : null}
           {currentTradeStatusError ? <Alert type="warning" showIcon
             message={currentTradeStatus ? "市场诊断刷新失败；显示上次诊断" : "市场诊断失败；行情仍可查看"}
             description={currentTradeStatusError} /> : null}

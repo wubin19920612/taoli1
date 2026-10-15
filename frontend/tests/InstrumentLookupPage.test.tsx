@@ -386,6 +386,29 @@ describe("InstrumentLookupPage", () => {
     expect(String((fetch as ReturnType<typeof vi.fn>).mock.calls[0][0])).toContain("/instruments/BTCUSDT");
   });
 
+  it("does not combine summary prices, volumes or ticker-only market caps across different assets", async () => {
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/instruments/") && !url.endsWith("/statistics")) return Response.json({
+        ...lookupResult,
+        identity_ambiguous: true,
+        asset_groups: [
+          { asset_id: "asset.a", display_name: "Perle", market_ids: ["a"] },
+          { asset_id: "asset.b", display_name: "Pearl", market_ids: ["b"] }
+        ]
+      });
+      return fallback(input, init);
+    });
+    const { container } = render(<InstrumentLookupPage />);
+    expect(await screen.findByText("先选择底层资产")).not.toBeNull();
+    expect(screen.queryByText("100,000 - 100,100")).toBeNull();
+    expect(screen.queryByText("+0.100% · Binance")).toBeNull();
+    expect(container.querySelector(".instrument-ratio-source")).toBeNull();
+    expect(screen.getByRole("combobox", { name: "选择底层资产" })).not.toBeNull();
+    expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).endsWith("/statistics"))).toBe(false);
+  });
+
   it("shows exact-market price changes and the estimated aligned 24h maximum and minimum", async () => {
     const fallback = vi.mocked(fetch).getMockImplementation()!;
     const quote = lookupResult.exchanges[0].future!;
