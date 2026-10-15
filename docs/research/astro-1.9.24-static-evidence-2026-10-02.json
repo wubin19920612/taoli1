@@ -1,0 +1,103 @@
+{
+  "release": "1.9.24",
+  "file": "astro-core/src/main.jsc",
+  "sha256": "54339066c361389ae0a745a294a4d7641ad9945ef3d7d660e1ea17a11ec93850",
+  "evidence_kind": "static byte strings, not decoded control flow",
+  "items": [
+    {
+      "text": "journal_mode = WAL",
+      "offset_decimal": 47354,
+      "offset_hex": "0xb8fa"
+    },
+    {
+      "text": "synchronous = NORMAL",
+      "offset_decimal": 47460,
+      "offset_hex": "0xb964"
+    },
+    {
+      "text": "../../config/pending-orders.json",
+      "offset_decimal": 363305,
+      "offset_hex": "0x58b29"
+    },
+    {
+      "text": "writeFile",
+      "offset_decimal": 59870,
+      "offset_hex": "0xe9de"
+    },
+    {
+      "text": "rename",
+      "offset_decimal": 358925,
+      "offset_hex": "0x57a0d"
+    },
+    {
+      "text": "reconcile FILLED skipped (already accounted): ",
+      "offset_decimal": 2216699,
+      "offset_hex": "0x21d2fb"
+    },
+    {
+      "text": "reconcile PENDING dropped (status unresolved): ",
+      "offset_decimal": 2216804,
+      "offset_hex": "0x21d364"
+    },
+    {
+      "text": "decideGateCrossExRecovery",
+      "offset_decimal": 1157401,
+      "offset_hex": "0x11a919"
+    },
+    {
+      "text": "quarantineGateCrossExOrder",
+      "offset_decimal": 1154683,
+      "offset_hex": "0x119e7b"
+    },
+    {
+      "text": "FAIL_CLOSED",
+      "offset_decimal": 1156220,
+      "offset_hex": "0x11a47c"
+    },
+    {
+      "text": "MAX_POST_CANCEL_CHECKS",
+      "offset_decimal": 1157319,
+      "offset_hex": "0x11a8c7"
+    },
+    {
+      "text": "status unknown, auto retry disabled",
+      "offset_decimal": 1249246,
+      "offset_hex": "0x130fde"
+    },
+    {
+      "text": " retry blocked until prior order is terminal, id=",
+      "offset_decimal": 1383484,
+      "offset_hex": "0x151c3c"
+    },
+    {
+      "text": "abFirstShouldTradeLeft",
+      "offset_decimal": 1948529,
+      "offset_hex": "0x1dbb71"
+    },
+    {
+      "text": "recoverSingelLegTimes",
+      "offset_decimal": 1946522,
+      "offset_hex": "0x1db39a"
+    },
+    {
+      "text": "MMR_FORBID_OPEN",
+      "offset_decimal": 1945834,
+      "offset_hex": "0x1db0ea"
+    },
+    {
+      "text": "MMR_FORCE_REDUCE",
+      "offset_decimal": 1945874,
+      "offset_hex": "0x1db112"
+    },
+    {
+      "text": "[Strategy-SF] BadBooksFresh for ",
+      "offset_decimal": 1944247,
+      "offset_hex": "0x1daab7"
+    },
+    {
+      "text": "FR positionValueRatio does not support stepOpen/stepClose!",
+      "offset_decimal": 278887,
+      "offset_hex": "0x44167"
+    }
+  ]
+}

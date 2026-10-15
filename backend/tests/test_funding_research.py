@@ -93,6 +93,9 @@ def test_candidate_prefers_long_deeper_negative_funding_and_short_richer_basis()
     assert candidate.basis_alignment == "aligned"
     assert candidate.expected_basis_change_pct > 0
     assert candidate.ev_pct is not None
+    assert candidate.primary_opportunity_type == "BASIS_AND_FUNDING_ALIGNED"
+    assert "BASIS_AND_FUNDING_ALIGNED" in candidate.opportunity_types
+    assert candidate.id
 
 
 def test_formula_estimate_can_override_stale_exchange_display_funding() -> None:
@@ -140,6 +143,54 @@ def test_formula_estimate_can_override_stale_exchange_display_funding() -> None:
     assert candidate.short_funding_pct == pytest.approx(-0.529)
     assert candidate.expected_net_funding_pct == pytest.approx(0.852)
     assert candidate.basis_alignment == "aligned"
+    assert candidate.uses_gate
+    assert "FORMULA_DIVERGENCE" in candidate.opportunity_types
+    assert "INTERVAL_MISMATCH" in candidate.opportunity_types
+
+
+def test_gate_and_hyperliquid_routes_are_classified_for_first_release_scope() -> None:
+    now = datetime(2026, 6, 1, 8, 0, tzinfo=UTC)
+    gate = future(
+        "gate",
+        bid=10.00,
+        ask=10.01,
+        funding=-0.8,
+        interval=4,
+        mark=10.0,
+        index=10.0,
+        next_time=now + timedelta(minutes=20),
+    )
+    hyper = future(
+        "hyperliquid",
+        bid=10.03,
+        ask=10.04,
+        funding=0.1,
+        interval=1,
+        mark=10.03,
+        index=10.0,
+        next_time=now + timedelta(minutes=20),
+    )
+
+    candidate = build_candidate(
+        gate,
+        hyper,
+        settings=FundingResearchSettings(
+            target_holding_hours=4,
+            min_volume_24h_usdt=100_000_000,
+            strong_funding_pct=0.5,
+            small_basis_threshold_pct=0.5,
+            near_settlement_minutes=30,
+        ),
+        now=now,
+    )
+
+    assert candidate.uses_gate
+    assert candidate.uses_hyperliquid
+    assert candidate.long_formula_family == "gate_indicative"
+    assert candidate.short_formula_family == "hyperliquid_hourly"
+    assert "INTERVAL_MISMATCH" in candidate.opportunity_types
+    assert "FORMULA_DIVERGENCE" in candidate.opportunity_types
+    assert "STRONG_FUNDING_NEAR_SETTLEMENT" in candidate.opportunity_types
 
 
 def test_conflicted_basis_penalizes_otherwise_positive_funding() -> None:
@@ -173,6 +224,10 @@ def test_conflicted_basis_penalizes_otherwise_positive_funding() -> None:
     assert candidate.expected_net_funding_pct == pytest.approx(0.8)
     assert candidate.basis_alignment == "conflicted"
     assert candidate.expected_basis_change_pct < 0
+    assert candidate.adverse_basis_pct > 3
+    assert candidate.conflicted_reward_risk_ratio == 0
+    assert candidate.decision == "NO_TRADE"
+    assert "POOR_REWARD_RISK" in candidate.risk_labels
 
 
 def test_thin_but_tradeable_depth_keeps_high_funding_candidate_on_watchlist() -> None:
@@ -223,6 +278,7 @@ class FakeDepthAdapter:
         self.name = name
         self.asks = asks
         self.bids = bids
+        self.calls = 0
 
     async def fetch_order_book(
         self,
@@ -231,6 +287,7 @@ class FakeDepthAdapter:
         raw_symbol: str,
         limit: int = 20,
     ) -> OrderBookSnapshot:
+        self.calls += 1
         now = datetime(2026, 6, 1, 8, 0, tzinfo=UTC)
         return OrderBookSnapshot(
             exchange=self.name,
@@ -297,3 +354,52 @@ async def test_orderbook_depth_stats_use_multiple_levels_for_entry_depth() -> No
     assert stats.min_entry_depth_usdt > 1_000
     assert stats.long_entry_vwap is not None
     assert stats.short_entry_vwap is not None
+
+
+@pytest.mark.asyncio
+async def test_orderbook_depth_stats_reuses_cached_books() -> None:
+    now = datetime(2026, 6, 1, 8, 0, tzinfo=UTC)
+    long_market = future(
+        "okx",
+        bid=10.0,
+        ask=10.01,
+        funding=-1.5,
+        interval=2,
+        mark=10.0,
+        index=10.0,
+    )
+    short_market = future(
+        "gate",
+        bid=10.2,
+        ask=10.21,
+        funding=-0.2,
+        interval=2,
+        mark=10.2,
+        index=10.0,
+    )
+    candidate = build_candidate(long_market, short_market, now=now)
+    okx_adapter = FakeDepthAdapter("okx", asks=[(10.01, 300)], bids=[(10.0, 300)])
+    gate_adapter = FakeDepthAdapter("gate", asks=[(10.21, 300)], bids=[(10.2, 300)])
+    cache = {}
+
+    first = await orderbook_depth_stats_for_candidate(
+        candidate,
+        [long_market, short_market],
+        [okx_adapter, gate_adapter],
+        target_notional_usdt=1_000,
+        levels=20,
+        book_cache=cache,
+    )
+    second = await orderbook_depth_stats_for_candidate(
+        candidate,
+        [long_market, short_market],
+        [okx_adapter, gate_adapter],
+        target_notional_usdt=1_000,
+        levels=20,
+        book_cache=cache,
+    )
+
+    assert first is not None
+    assert second is not None
+    assert okx_adapter.calls == 1
+    assert gate_adapter.calls == 1

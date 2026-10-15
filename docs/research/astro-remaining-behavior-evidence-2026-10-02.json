@@ -1,0 +1,846 @@
+{
+  "sample_sha256": "54339066c361389ae0a745a294a4d7641ad9945ef3d7d660e1ea17a11ec93850",
+  "raw_target_executed": false,
+  "meaning": "Static decoded bytes checked against original; semantic inference and synthetic vectors are not runtime equivalence. RO builtins remain unresolved unless explicitly qualified.",
+  "regions": [
+    {
+      "id": "E31",
+      "observation": "FR ratio validation",
+      "synthetic_object_address": "0xf0000073d000",
+      "instruction_offset_range": [
+        0,
+        70
+      ],
+      "instruction_count": 31,
+      "first_file_offset": 1929972,
+      "last_file_offset": 1930042,
+      "decoded_instruction_sha256": "68895c84917584d64fac7006e574aa1087ca280c83f07ad63f5a03bd9a10cf7d"
+    },
+    {
+      "id": "E32",
+      "observation": "FR input compatibility",
+      "synthetic_object_address": "0xf0000012ac00",
+      "instruction_offset_range": [
+        2061,
+        2765
+      ],
+      "instruction_count": 182,
+      "first_file_offset": 282723,
+      "last_file_offset": 283420,
+      "decoded_instruction_sha256": "36b17d2283abaaa4b7f369e48b3233fd1b8e601bd1ff0d6f48d30ae628531e8b"
+    },
+    {
+      "id": "E33",
+      "observation": "FR value scales",
+      "synthetic_object_address": "0xf00000122e00",
+      "instruction_offset_range": [
+        0,
+        60
+      ],
+      "instruction_count": 25,
+      "first_file_offset": 269072,
+      "last_file_offset": 269132,
+      "decoded_instruction_sha256": "cb2d177fd2501d2d8827a32710ceb7aa3fec63ec47df81199ba55de683f5f0c9"
+    },
+    {
+      "id": "E34",
+      "observation": "FR open values",
+      "synthetic_object_address": "0xf00000123600",
+      "instruction_offset_range": [
+        0,
+        170
+      ],
+      "instruction_count": 69,
+      "first_file_offset": 269627,
+      "last_file_offset": 269797,
+      "decoded_instruction_sha256": "8d017edcd645c35e0c8ea2e36dd8a9ded79f31de514a34c3c6ebe2d2d6c4e311"
+    },
+    {
+      "id": "E35",
+      "observation": "FR value error",
+      "synthetic_object_address": "0xf00000124500",
+      "instruction_offset_range": [
+        0,
+        8
+      ],
+      "instruction_count": 4,
+      "first_file_offset": 270042,
+      "last_file_offset": 270050,
+      "decoded_instruction_sha256": "a9c1aeb45fba8abad81c3ef2767d79fd1fe44cd5a82e4481d84840a3c37fc128"
+    },
+    {
+      "id": "E36",
+      "observation": "FR single leg improvement",
+      "synthetic_object_address": "0xf00000125800",
+      "instruction_offset_range": [
+        0,
+        139
+      ],
+      "instruction_count": 62,
+      "first_file_offset": 270812,
+      "last_file_offset": 270951,
+      "decoded_instruction_sha256": "610e2f60732f57ce8b047521b889c0cb537149cc96b62c41e7462cade8283ba2"
+    },
+    {
+      "id": "E37",
+      "observation": "FR candidate quantities",
+      "synthetic_object_address": "0xf00000126100",
+      "instruction_offset_range": [
+        0,
+        242
+      ],
+      "instruction_count": 107,
+      "first_file_offset": 272518,
+      "last_file_offset": 272760,
+      "decoded_instruction_sha256": "51db06fa6bf5474f05492b7d97f6c207112ee99725e5cc81346be42a74eeb110"
+    },
+    {
+      "id": "E38",
+      "observation": "FR candidate score",
+      "synthetic_object_address": "0xf00000126e00",
+      "instruction_offset_range": [
+        0,
+        169
+      ],
+      "instruction_count": 65,
+      "first_file_offset": 271869,
+      "last_file_offset": 272038,
+      "decoded_instruction_sha256": "edd6da874c18a5edfda90e7af8cfaf6ee1a521ad74c5b768d086bb6fbf969c39"
+    },
+    {
+      "id": "E39",
+      "observation": "FR candidate sorting",
+      "synthetic_object_address": "0xf00000127700",
+      "instruction_offset_range": [
+        0,
+        12
+      ],
+      "instruction_count": 5,
+      "first_file_offset": 272280,
+      "last_file_offset": 272292,
+      "decoded_instruction_sha256": "4b863c0d00da6cb5d5ce1f2ed3484f10a8891d916dfda572504fa76afb4e2c12"
+    },
+    {
+      "id": "E40",
+      "observation": "FR close all",
+      "synthetic_object_address": "0xf00000124b00",
+      "instruction_offset_range": [
+        0,
+        50
+      ],
+      "instruction_count": 21,
+      "first_file_offset": 270391,
+      "last_file_offset": 270441,
+      "decoded_instruction_sha256": "a456e71f3a3fe1a34b90be5a0ebc1cfae12dedce451df98a83f5f341af0ca55c"
+    },
+    {
+      "id": "E41",
+      "observation": "FR close rate floor",
+      "synthetic_object_address": "0xf00000128100",
+      "instruction_offset_range": [
+        0,
+        109
+      ],
+      "instruction_count": 47,
+      "first_file_offset": 273078,
+      "last_file_offset": 273187,
+      "decoded_instruction_sha256": "d62e9dab27e1306e2de7fec3e2f7784124edbcc0800609d0e5b71ad52c169382"
+    },
+    {
+      "id": "E42",
+      "observation": "Ratio display",
+      "synthetic_object_address": "0xf00000138e00",
+      "instruction_offset_range": [
+        15,
+        111
+      ],
+      "instruction_count": 42,
+      "first_file_offset": 292643,
+      "last_file_offset": 292739,
+      "decoded_instruction_sha256": "8c4b49cb13bdf3d6622ef1450ac2debdfcc8f8cb68d3a8c2621834c0c91caae9"
+    },
+    {
+      "id": "E43",
+      "observation": "Ratio alert conversion",
+      "synthetic_object_address": "0xf0000076a400",
+      "instruction_offset_range": [
+        0,
+        47
+      ],
+      "instruction_count": 23,
+      "first_file_offset": 2004918,
+      "last_file_offset": 2004965,
+      "decoded_instruction_sha256": "405097c7f715fa7d9373d86454f26b281d8e054247dd1482804bf32a92aaf730"
+    },
+    {
+      "id": "E44",
+      "observation": "Ratio deviation",
+      "synthetic_object_address": "0xf00000769d00",
+      "instruction_offset_range": [
+        26,
+        46
+      ],
+      "instruction_count": 9,
+      "first_file_offset": 2004657,
+      "last_file_offset": 2004677,
+      "decoded_instruction_sha256": "abb659c675b60cb85eff87c844c6d33989aad19ec957395b76b219572c3ab009"
+    },
+    {
+      "id": "E45",
+      "observation": "Ratio display scale",
+      "synthetic_object_address": "0xf00000137e00",
+      "instruction_offset_range": [
+        0,
+        97
+      ],
+      "instruction_count": 44,
+      "first_file_offset": 292218,
+      "last_file_offset": 292315,
+      "decoded_instruction_sha256": "5bca1b413d9b9191397ee39a9c2cb74cafc3150c479b132a19ad01135f0deb9a"
+    },
+    {
+      "id": "E46",
+      "observation": "SF recovery",
+      "synthetic_object_address": "0xf00000741f00",
+      "instruction_offset_range": [
+        5687,
+        6623
+      ],
+      "instruction_count": 280,
+      "first_file_offset": 1964033,
+      "last_file_offset": 1964969,
+      "decoded_instruction_sha256": "53cd0cff4d7ad046264bac803eefbbb4bc30b36a82ff256869c7e95a151f9e67"
+    },
+    {
+      "id": "E47",
+      "observation": "SF reset retry",
+      "synthetic_object_address": "0xf00000741f00",
+      "instruction_offset_range": [
+        7325,
+        7330
+      ],
+      "instruction_count": 4,
+      "first_file_offset": 1965671,
+      "last_file_offset": 1965676,
+      "decoded_instruction_sha256": "981ba797e9233c11f9e442de6de48c5d295bedaccbee4e8da7a7a6a16a76a380"
+    },
+    {
+      "id": "E48",
+      "observation": "HL re-order closure",
+      "synthetic_object_address": "0xf00000581300",
+      "instruction_offset_range": [
+        0,
+        53
+      ],
+      "instruction_count": 27,
+      "first_file_offset": 1437592,
+      "last_file_offset": 1437645,
+      "decoded_instruction_sha256": "1f4487de5cf36c703c66b1b9eff0aeea1850e9e966b74060f4647aa90e606133"
+    },
+    {
+      "id": "E49",
+      "observation": "Lighter re-order closure",
+      "synthetic_object_address": "0xf000005d1300",
+      "instruction_offset_range": [
+        0,
+        45
+      ],
+      "instruction_count": 22,
+      "first_file_offset": 1525594,
+      "last_file_offset": 1525639,
+      "decoded_instruction_sha256": "7c795c9c560951f27966a57d6f9b2bfa790c0e055a15f97b982e1cd0bc6a82a8"
+    },
+    {
+      "id": "E50",
+      "observation": "Terminal retry guard",
+      "synthetic_object_address": "0xf00000558a00",
+      "instruction_offset_range": [
+        0,
+        188
+      ],
+      "instruction_count": 93,
+      "first_file_offset": 1383571,
+      "last_file_offset": 1383759,
+      "decoded_instruction_sha256": "2ed43b77d01f82fb26ab91a3a231912c2bc13317747ebb020c4661527c90d144"
+    },
+    {
+      "id": "E51",
+      "observation": "Pending flush enqueue",
+      "synthetic_object_address": "0xf00000183d00",
+      "instruction_offset_range": [
+        0,
+        27
+      ],
+      "instruction_count": 14,
+      "first_file_offset": 359435,
+      "last_file_offset": 359462,
+      "decoded_instruction_sha256": "71894d4c60ec8e8ecc3a095031cf611ac6c8392c91a22b0a25157b853f01b463"
+    },
+    {
+      "id": "E52",
+      "observation": "Pending write and rename",
+      "synthetic_object_address": "0xf00000184200",
+      "instruction_offset_range": [
+        0,
+        233
+      ],
+      "instruction_count": 103,
+      "first_file_offset": 359048,
+      "last_file_offset": 359281,
+      "decoded_instruction_sha256": "3d600712e662b3f6ebde0380a1aae17b9d7c8e2a65742cbfe861d3063860c34c"
+    },
+    {
+      "id": "E53",
+      "observation": "Pending add and replacement",
+      "synthetic_object_address": "0xf00000186400",
+      "instruction_offset_range": [
+        71,
+        183
+      ],
+      "instruction_count": 46,
+      "first_file_offset": 361615,
+      "last_file_offset": 361727,
+      "decoded_instruction_sha256": "53ff02ca13c4abb84250b20d70e4c2185dd69a06a5353d77c2ef36acbb5225b1"
+    },
+    {
+      "id": "E54",
+      "observation": "Pending key fields",
+      "synthetic_object_address": "0xf00000182f00",
+      "instruction_offset_range": [
+        0,
+        29
+      ],
+      "instruction_count": 17,
+      "first_file_offset": 358204,
+      "last_file_offset": 358233,
+      "decoded_instruction_sha256": "99438ccd65ac9d6ed44263019256a47e9262db1995ce73d3ce7cb4ecb5ee3a91"
+    },
+    {
+      "id": "E55",
+      "observation": "Freshness adaptive limits",
+      "synthetic_object_address": "0xf000006d6f00",
+      "instruction_offset_range": [
+        261,
+        783
+      ],
+      "instruction_count": 217,
+      "first_file_offset": 1810045,
+      "last_file_offset": 1810567,
+      "decoded_instruction_sha256": "08a51af95028e6c3c89999453f54e2db86890b6323c9bbb11c718467356e2c88"
+    },
+    {
+      "id": "E56",
+      "observation": "Freshness base settings",
+      "synthetic_object_address": "0xf000006ccc00",
+      "instruction_offset_range": [
+        1720,
+        1798
+      ],
+      "instruction_count": 26,
+      "first_file_offset": 1819933,
+      "last_file_offset": 1820011,
+      "decoded_instruction_sha256": "37bed4ba21f2f2bf6bd3d6ec711cbded71e5e9e7a5c1e639d7edbc1db2ee8d19"
+    },
+    {
+      "id": "E57",
+      "observation": "HL response ACK path",
+      "synthetic_object_address": "0xf00000580c00",
+      "instruction_offset_range": [
+        1714,
+        1982
+      ],
+      "instruction_count": 107,
+      "first_file_offset": 1441032,
+      "last_file_offset": 1441300,
+      "decoded_instruction_sha256": "cfa679338d620bb3c33610670487b61942aeae03a8926521c17edb2ab8f9ee29"
+    },
+    {
+      "id": "E58",
+      "observation": "Lighter future submit ACK",
+      "synthetic_object_address": "0xf000005d4100",
+      "instruction_offset_range": [
+        1580,
+        1992
+      ],
+      "instruction_count": 138,
+      "first_file_offset": 1535214,
+      "last_file_offset": 1535626,
+      "decoded_instruction_sha256": "652efae53dc3c0399b05c179fcddb3fbafccd2bf704f30e9ebd9edd94664e156"
+    },
+    {
+      "id": "E59",
+      "observation": "Confirmation pending gate",
+      "synthetic_object_address": "0xf00000736e00",
+      "instruction_offset_range": [
+        75,
+        118
+      ],
+      "instruction_count": 20,
+      "first_file_offset": 1924996,
+      "last_file_offset": 1925039,
+      "decoded_instruction_sha256": "38fddccc6991aa75a821ab9410f2474489a124421db780cf3e0af57b1f1b09de"
+    }
+  ],
+  "checked_instruction_count": 1850,
+  "heap_numbers": [
+    {
+      "address": "0xf00000128a00",
+      "file_offset": 273345,
+      "value": 0.1,
+      "raw_hex": "9a9999999999b93f"
+    },
+    {
+      "address": "0xf00000138600",
+      "file_offset": 292145,
+      "value": 1000000000000.0,
+      "raw_hex": "000000a2941a6d42"
+    },
+    {
+      "address": "0xf00000138700",
+      "file_offset": 292157,
+      "value": 0.001,
+      "raw_hex": "fca9f1d24d62503f"
+    },
+    {
+      "address": "0xf00000138800",
+      "file_offset": 292169,
+      "value": 1e-06,
+      "raw_hex": "8dedb5a0f7c6b03e"
+    },
+    {
+      "address": "0xf00000138900",
+      "file_offset": 292181,
+      "value": 1e-09,
+      "raw_hex": "95d626e80b2e113e"
+    },
+    {
+      "address": "0xf00000138a00",
+      "file_offset": 292193,
+      "value": 1e-12,
+      "raw_hex": "11ea2d819997713d"
+    },
+    {
+      "address": "0xf000006d8000",
+      "file_offset": 1809375,
+      "value": 2.2,
+      "raw_hex": "9a99999999990140"
+    },
+    {
+      "address": "0xf000006d8100",
+      "file_offset": 1809387,
+      "value": 3.8,
+      "raw_hex": "6666666666660e40"
+    },
+    {
+      "address": "0xf000006d8200",
+      "file_offset": 1809399,
+      "value": 1.5,
+      "raw_hex": "000000000000f83f"
+    },
+    {
+      "address": "0xf000006d8300",
+      "file_offset": 1809411,
+      "value": 0.6,
+      "raw_hex": "333333333333e33f"
+    },
+    {
+      "address": "0xf00000450100",
+      "file_offset": 1084282,
+      "value": 0.01,
+      "raw_hex": "7b14ae47e17a843f"
+    }
+  ],
+  "retry_closure_inventory": [
+    {
+      "function": "anonymous_762",
+      "address": "0xf0000048c900",
+      "lines": 33,
+      "retryAllowed_literal": false,
+      "confirmationPendingUntil_literal": false,
+      "warning": "Literal presence/absence in this closure is not proof of end-to-end retry safety."
+    },
+    {
+      "function": "anonymous_779",
+      "address": "0xf000004ab900",
+      "lines": 35,
+      "retryAllowed_literal": false,
+      "confirmationPendingUntil_literal": false,
+      "warning": "Literal presence/absence in this closure is not proof of end-to-end retry safety."
+    },
+    {
+      "function": "anonymous_795",
+      "address": "0xf000004ba200",
+      "lines": 47,
+      "retryAllowed_literal": false,
+      "confirmationPendingUntil_literal": false,
+      "warning": "Literal presence/absence in this closure is not proof of end-to-end retry safety."
+    },
+    {
+      "function": "anonymous_803",
+      "address": "0xf000004c4700",
+      "lines": 33,
+      "retryAllowed_literal": false,
+      "confirmationPendingUntil_literal": false,
+      "warning": "Literal presence/absence in this closure is not proof of end-to-end retry safety."
+    },
+    {
+      "function": "anonymous_805",
+      "address": "0xf000004c7400",
+      "lines": 35,
+      "retryAllowed_literal": false,
+      "confirmationPendingUntil_literal": false,
+      "warning": "Literal presence/absence in this closure is not proof of end-to-end retry safety."
+    },
+    {
+      "function": "anonymous_817",
+      "address": "0xf000004d6400",
+      "lines": 22,
+      "retryAllowed_literal": false,
+      "confirmationPendingUntil_literal": false,
+      "warning": "Literal presence/absence in this closure is not proof of end-to-end retry safety."
+    },
+    {
+      "function": "anonymous_833",
+      "address": "0xf000004e9000",
+      "lines": 22,
+      "retryAllowed_literal": false,
+      "confirmationPendingUntil_literal": false,
+      "warning": "Literal presence/absence in this closure is not proof of end-to-end retry safety."
+    },
+    {
+      "function": "anonymous_861",
+      "address": "0xf00000500f00",
+      "lines": 31,
+      "retryAllowed_literal": false,
+      "confirmationPendingUntil_literal": false,
+      "warning": "Literal presence/absence in this closure is not proof of end-to-end retry safety."
+    },
+    {
+      "function": "anonymous_863",
+      "address": "0xf00000503400",
+      "lines": 33,
+      "retryAllowed_literal": false,
+      "confirmationPendingUntil_literal": false,
+      "warning": "Literal presence/absence in this closure is not proof of end-to-end retry safety."
+    },
+    {
+      "function": "anonymous_872",
+      "address": "0xf00000510500",
+      "lines": 33,
+      "retryAllowed_literal": false,
+      "confirmationPendingUntil_literal": false,
+      "warning": "Literal presence/absence in this closure is not proof of end-to-end retry safety."
+    },
+    {
+      "function": "anonymous_874",
+      "address": "0xf00000512b00",
+      "lines": 35,
+      "retryAllowed_literal": false,
+      "confirmationPendingUntil_literal": false,
+      "warning": "Literal presence/absence in this closure is not proof of end-to-end retry safety."
+    },
+    {
+      "function": "anonymous_880",
+      "address": "0xf0000051ba00",
+      "lines": 43,
+      "retryAllowed_literal": false,
+      "confirmationPendingUntil_literal": false,
+      "warning": "Literal presence/absence in this closure is not proof of end-to-end retry safety."
+    },
+    {
+      "function": "Yx",
+      "address": "0xf00000529c00",
+      "lines": 62,
+      "retryAllowed_literal": false,
+      "confirmationPendingUntil_literal": true,
+      "warning": "Literal presence/absence in this closure is not proof of end-to-end retry safety."
+    },
+    {
+      "function": "anonymous_891",
+      "address": "0xf0000052a300",
+      "lines": 61,
+      "retryAllowed_literal": false,
+      "confirmationPendingUntil_literal": false,
+      "warning": "Literal presence/absence in this closure is not proof of end-to-end retry safety."
+    },
+    {
+      "function": "anonymous_903",
+      "address": "0xf00000534c00",
+      "lines": 54,
+      "retryAllowed_literal": false,
+      "confirmationPendingUntil_literal": false,
+      "warning": "Literal presence/absence in this closure is not proof of end-to-end retry safety."
+    },
+    {
+      "function": "daysInYear_2",
+      "address": "0xf00000558a00",
+      "lines": 116,
+      "retryAllowed_literal": true,
+      "confirmationPendingUntil_literal": false,
+      "warning": "Literal presence/absence in this closure is not proof of end-to-end retry safety."
+    },
+    {
+      "function": "anonymous_932",
+      "address": "0xf00000563f00",
+      "lines": 33,
+      "retryAllowed_literal": false,
+      "confirmationPendingUntil_literal": false,
+      "warning": "Literal presence/absence in this closure is not proof of end-to-end retry safety."
+    },
+    {
+      "function": "anonymous_934",
+      "address": "0xf00000566600",
+      "lines": 35,
+      "retryAllowed_literal": false,
+      "confirmationPendingUntil_literal": false,
+      "warning": "Literal presence/absence in this closure is not proof of end-to-end retry safety."
+    },
+    {
+      "function": "anonymous_940",
+      "address": "0xf0000056db00",
+      "lines": 35,
+      "retryAllowed_literal": false,
+      "confirmationPendingUntil_literal": false,
+      "warning": "Literal presence/absence in this closure is not proof of end-to-end retry safety."
+    },
+    {
+      "function": "anonymous_941",
+      "address": "0xf0000056f300",
+      "lines": 31,
+      "retryAllowed_literal": false,
+      "confirmationPendingUntil_literal": false,
+      "warning": "Literal presence/absence in this closure is not proof of end-to-end retry safety."
+    },
+    {
+      "function": "anonymous_948",
+      "address": "0xf00000575600",
+      "lines": 35,
+      "retryAllowed_literal": false,
+      "confirmationPendingUntil_literal": false,
+      "warning": "Literal presence/absence in this closure is not proof of end-to-end retry safety."
+    },
+    {
+      "function": "anonymous_961",
+      "address": "0xf00000581300",
+      "lines": 37,
+      "retryAllowed_literal": false,
+      "confirmationPendingUntil_literal": false,
+      "warning": "Literal presence/absence in this closure is not proof of end-to-end retry safety."
+    },
+    {
+      "function": "anonymous_999",
+      "address": "0xf000005a4100",
+      "lines": 31,
+      "retryAllowed_literal": false,
+      "confirmationPendingUntil_literal": false,
+      "warning": "Literal presence/absence in this closure is not proof of end-to-end retry safety."
+    },
+    {
+      "function": "anonymous_1012",
+      "address": "0xf000005af500",
+      "lines": 33,
+      "retryAllowed_literal": false,
+      "confirmationPendingUntil_literal": false,
+      "warning": "Literal presence/absence in this closure is not proof of end-to-end retry safety."
+    },
+    {
+      "function": "anonymous_1058",
+      "address": "0xf000005d1300",
+      "lines": 31,
+      "retryAllowed_literal": false,
+      "confirmationPendingUntil_literal": false,
+      "warning": "Literal presence/absence in this closure is not proof of end-to-end retry safety."
+    },
+    {
+      "function": "anonymous_1061",
+      "address": "0xf000005d4800",
+      "lines": 33,
+      "retryAllowed_literal": false,
+      "confirmationPendingUntil_literal": false,
+      "warning": "Literal presence/absence in this closure is not proof of end-to-end retry safety."
+    },
+    {
+      "function": "anonymous_1095",
+      "address": "0xf000005fd000",
+      "lines": 31,
+      "retryAllowed_literal": false,
+      "confirmationPendingUntil_literal": false,
+      "warning": "Literal presence/absence in this closure is not proof of end-to-end retry safety."
+    },
+    {
+      "function": "anonymous_1098",
+      "address": "0xf000005ff600",
+      "lines": 35,
+      "retryAllowed_literal": false,
+      "confirmationPendingUntil_literal": false,
+      "warning": "Literal presence/absence in this closure is not proof of end-to-end retry safety."
+    },
+    {
+      "function": "anonymous_1117",
+      "address": "0xf00000618500",
+      "lines": 33,
+      "retryAllowed_literal": false,
+      "confirmationPendingUntil_literal": false,
+      "warning": "Literal presence/absence in this closure is not proof of end-to-end retry safety."
+    },
+    {
+      "function": "anonymous_1137",
+      "address": "0xf00000650500",
+      "lines": 31,
+      "retryAllowed_literal": false,
+      "confirmationPendingUntil_literal": false,
+      "warning": "Literal presence/absence in this closure is not proof of end-to-end retry safety."
+    },
+    {
+      "function": "anonymous_1168",
+      "address": "0xf0000067b000",
+      "lines": 31,
+      "retryAllowed_literal": false,
+      "confirmationPendingUntil_literal": false,
+      "warning": "Literal presence/absence in this closure is not proof of end-to-end retry safety."
+    },
+    {
+      "function": "anonymous_1192",
+      "address": "0xf0000069ec00",
+      "lines": 31,
+      "retryAllowed_literal": false,
+      "confirmationPendingUntil_literal": false,
+      "warning": "Literal presence/absence in this closure is not proof of end-to-end retry safety."
+    },
+    {
+      "function": "anonymous_1218",
+      "address": "0xf000006baf00",
+      "lines": 31,
+      "retryAllowed_literal": false,
+      "confirmationPendingUntil_literal": false,
+      "warning": "Literal presence/absence in this closure is not proof of end-to-end retry safety."
+    }
+  ],
+  "admin_bundle_grid_literal_scan": [
+    {
+      "path": "astro-admin/dist/theme-init-v2.js",
+      "sha256": "8e8d73342efc850dc713e8d5705d4655317169b1b1979555cb1d691451572932",
+      "gridCount": 0,
+      "gridIndex": 0,
+      "chinese_grid": 0
+    },
+    {
+      "path": "astro-admin/dist/theme-init-v3.js",
+      "sha256": "8e8d73342efc850dc713e8d5705d4655317169b1b1979555cb1d691451572932",
+      "gridCount": 0,
+      "gridIndex": 0,
+      "chinese_grid": 0
+    },
+    {
+      "path": "astro-admin/dist/assets/BorrowTab--oesZbw-.js",
+      "sha256": "d1ee841af4905957b31a84c1e898b87407531d666727fffc345473da29fd3de1",
+      "gridCount": 0,
+      "gridIndex": 0,
+      "chinese_grid": 0
+    },
+    {
+      "path": "astro-admin/dist/assets/index-g8Z5B0kf.js",
+      "sha256": "04241877796011755587e4339340e3f712249d297b953afa192b22b2198d18eb",
+      "gridCount": 0,
+      "gridIndex": 0,
+      "chinese_grid": 0
+    },
+    {
+      "path": "astro-admin/dist/assets/zh-CN-CMf_Sbg-.js",
+      "sha256": "d1ca7e4f42ce42641e877055f588de9f4096467898dba5422251857a83ca3ad1",
+      "gridCount": 0,
+      "gridIndex": 0,
+      "chinese_grid": 0
+    },
+    {
+      "path": "astro-admin/dist/assets/en-B-ZVNBpi.js",
+      "sha256": "d8bc7799eeecd63d8785deac827b000b5223d8d4180859becf43e02a0990e837",
+      "gridCount": 0,
+      "gridIndex": 0,
+      "chinese_grid": 0
+    },
+    {
+      "path": "astro-admin/dist/assets/realtime-logs-DX6he9kE.js",
+      "sha256": "cf959e402be267b10bb5ed55570e12e8318018d8ae059a47601fa0f7fbe80296",
+      "gridCount": 0,
+      "gridIndex": 0,
+      "chinese_grid": 0
+    },
+    {
+      "path": "astro-admin/dist/assets/index-Cbqo_kH4.js",
+      "sha256": "e41fd610df965b6c32e89a0de251246f02dfe032e5ad8c5da6ac313261de975a",
+      "gridCount": 0,
+      "gridIndex": 0,
+      "chinese_grid": 0
+    },
+    {
+      "path": "astro-admin/dist/assets/index-BERzLCei.js",
+      "sha256": "be51278836f55a3874335297946af1167af0f1f8317224b312dfd50b9db45949",
+      "gridCount": 0,
+      "gridIndex": 0,
+      "chinese_grid": 0
+    },
+    {
+      "path": "astro-admin/dist/assets/ExchangeTab-Bqt0_64V.js",
+      "sha256": "06f81463cf53eaa829e93d00c76fca1bbc223968ddb93168f64d4454f06ca756",
+      "gridCount": 0,
+      "gridIndex": 0,
+      "chinese_grid": 0
+    },
+    {
+      "path": "astro-admin/dist/assets/Account-DWyq7pNj.js",
+      "sha256": "9272f44c7d94054f4eef8fd84e9c554fb4bcfff9aa978b9f58b123bed3a3f1aa",
+      "gridCount": 0,
+      "gridIndex": 0,
+      "chinese_grid": 0
+    },
+    {
+      "path": "astro-admin/dist/assets/index-Tm-ruCQc.js",
+      "sha256": "15efbaf39c10d1ca6604b14cff7430e6c5a9770fe7309581b1ac8931d0d3184c",
+      "gridCount": 0,
+      "gridIndex": 0,
+      "chinese_grid": 0
+    },
+    {
+      "path": "astro-admin/dist/assets/LanguageSwitcher-D5CyQpZJ.js",
+      "sha256": "5025f05eda32ad591d9465d72c55b4f53e8aed96eb8d0b90c71a66e12dca5666",
+      "gridCount": 0,
+      "gridIndex": 0,
+      "chinese_grid": 0
+    },
+    {
+      "path": "astro-admin/dist/assets/DownloadOutlined-DKzg2Hkb.js",
+      "sha256": "1c146f9f79481a0c2fe7c7ce7ce8ad284bcedce0b81b95895149e7ac4d04669b",
+      "gridCount": 0,
+      "gridIndex": 0,
+      "chinese_grid": 0
+    },
+    {
+      "path": "astro-admin/dist/assets/EventTab-CaUESMUH.js",
+      "sha256": "864c4de37f35a7df49ac57ae83d62307d9ff21effdd008a0f85886a1d84d12fd",
+      "gridCount": 0,
+      "gridIndex": 0,
+      "chinese_grid": 0
+    }
+  ],
+  "public_hl_dex_query": {
+    "endpoint": "https://api.hyperliquid.xyz/info",
+    "request": {
+      "type": "perpDexs"
+    },
+    "date": "2026-10-02",
+    "names": [
+      "xyz",
+      "flx",
+      "vntl",
+      "hyna",
+      "km",
+      "abcd",
+      "cash",
+      "para",
+      "mkts",
+      "io"
+    ],
+    "limitation": "Response does not identify Arcus; absence does not establish nonexistence."
+  }
+}
