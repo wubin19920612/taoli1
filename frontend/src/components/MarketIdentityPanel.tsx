@@ -74,7 +74,7 @@ export function MarketIdentityPanel() {
 
   return <section className="panel panel-wide">
     <Typography.Title level={4}>市场核验</Typography.Title>
-    <Typography.Paragraph type="secondary">按原始市场确认底层资产和合约单位。同名资产分别展示；未知市场保留行情，核验通过后才可用于同币自动动作。</Typography.Paragraph>
+    <Typography.Paragraph type="secondary">按原始市场确认底层资产和合约单位。同名资产分别展示；观察模式保留未知市场流程并拦截确认错配，严格模式要求身份核验通过。</Typography.Paragraph>
     {error ? <Alert type="warning" message="市场核验信息读取失败" description={error} showIcon /> : null}
     {data ? <Space wrap style={{ marginBottom: 12 }}>
       <Tag>已核验 {data.coverage.verified} / {data.coverage.markets}</Tag>
