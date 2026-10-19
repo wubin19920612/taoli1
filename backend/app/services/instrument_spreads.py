@@ -106,19 +106,20 @@ def build_instrument_spreads(
     *,
     stale_after_seconds: int = 30,
     now: datetime | None = None,
+    require_fresh_quotes: bool = True,
 ) -> list[InstrumentSpreadComparison]:
     current = now or datetime.now(UTC)
-    fresh_markets = [
+    candidate_markets = [
         market
         for market in markets
-        if instrument_market_is_fresh(
+        if not require_fresh_quotes or instrument_market_is_fresh(
             market,
             stale_after_seconds=stale_after_seconds,
             now=current,
         )
     ]
     comparisons: list[InstrumentSpreadComparison] = []
-    for first, second in combinations(fresh_markets, 2):
+    for first, second in combinations(candidate_markets, 2):
         if not same_asset_eligible(first, second):
             continue
         directions = ((first, second), (second, first))

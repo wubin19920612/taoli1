@@ -292,6 +292,7 @@ async def _lookup_instrument(
     *,
     include_astro_routes: bool,
     asset_id: str | None = None,
+    historical_statistics: bool = False,
 ) -> InstrumentLookupResult:
     try:
         requested_symbol = normalize_pair_spread_symbol(symbol)
@@ -412,6 +413,7 @@ async def _lookup_instrument(
         spreads=build_instrument_spreads(
             spread_markets,
             stale_after_seconds=settings.stale_after_seconds,
+            require_fresh_quotes=not historical_statistics,
         ),
     )
 
@@ -425,7 +427,13 @@ async def instrument_statistics(
 ) -> InstrumentStatisticsResult:
     # Historical price statistics only consume market identity and spreads.
     # Avoid an unrelated SDK request (and its timeout) on this independent path.
-    instrument = await _lookup_instrument(symbol, request, dex, include_astro_routes=False, asset_id=asset_id)
+    # Current book freshness must not remove pairs from historical close-price
+    # statistics between the page's quote request and this independent request.
+    # Asset identity, exact markets and ignored exchanges still gate the pairs.
+    instrument = await _lookup_instrument(
+        symbol, request, dex, include_astro_routes=False, asset_id=asset_id,
+        historical_statistics=True,
+    )
     if instrument.identity_ambiguous and asset_id is None:
         raise HTTPException(status_code=409, detail="同名标的包含不同资产，请先选择资产再查询历史")
     return await request.app.state.instrument_statistics_service.lookup(instrument)
