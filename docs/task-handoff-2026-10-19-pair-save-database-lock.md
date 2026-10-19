@@ -39,18 +39,29 @@
 - 重启前通过 SQLite backup API 生成 `/data/radar-manual-pair-save-20261019T015957Z.db`，复制到宿主机 `backups/radar-manual-pair-save-20261019T015957Z.db`。
 - 大小 641257472 字节；`integrity_check=ok`；容器及宿主机 SHA-256 均为 `6854ebb43d5e12b3531fcad0a319e82873a2a9cd6abc9eece2769f8efbe6f352`。
 - 临时恢复后用服务器既有 Hyperliquid `io:ANTH` / RH Lighter `ANTHROPIC` 标的对的原始完整 payload 原样 PUT，200；返回 payload 与保存前一致，保存前后 24 项列表完全一致。
-- 未创建截图中尚未保存的新组合，避免在列表已达 24 项上限时挤掉用户原有记录。没有删除数据库、WAL/SHM、卷或既有备份。
+- 未创建截图中尚未保存的新组合，避免在列表已达 24 项上限时挤掉用户原有记录。该临时恢复没有删除数据库、WAL/SHM、卷或既有备份。
 
 ## 验证与交付状态
 
 - 旧保存实现上新增的 5 项回归先失败，覆盖现场相同的文件库锁故障和回滚缺失。
 - 初步保存/索引关注/身份仓库/历史维护回归 49 passed；独立的连接恢复回归 5 passed；相关 API 回归 8 passed；前端 API client 8 passed。
 - 最终代码：保存、连接恢复、索引关注、身份仓库、历史维护回归 **54 passed**；启动模式、健康、Hyperliquid DEX 查询和资金费率记录相关 API 回归 **8 passed**；前端 API client **8 passed**。新增数据库/保存文件的 Ruff、Python 编译与 `git diff --check` 通过。
-- 最终代码的回归、提交、镜像构建、部署备份和持续线上验证将在交付完成后追加于本节；目前不能把临时恢复视为最终完成。
+- 功能提交 `29ed920552ea6582d3ab8771741af0c01d7c2c4c` 已推送。GitHub Actions `Build production images` 工作流 `39188703099` 的 backend、frontend 两个 job 均成功；在生产分别验证两份固定 SHA 镜像 manifest 后部署。
+- 部署主库备份：`backups/radar-before-29ed920552ea-20261019T021144Z.db`，641298432 字节，`integrity_check=ok`，容器/宿主机 SHA-256 一致：`fba11c10fab779a29ffbede8422960114728775d06042dde9a35d465ffd7a162`。
+- 研究库备份：`backups/squeeze-route-before-29ed920552ea-20261019T021144Z.db`，241664 字节，`integrity_check=ok`，容器/宿主机 SHA-256 一致：`976c89b32e92ba8b74644d710eb2cf49784857657800628ebd2bf578e02ce2db`。
+- `deploy/linux-update.sh` 已成功完成备份、`git pull --ff-only`、固定 SHA 镜像拉取和 `up -d --no-build --wait`。生产无构建、无换库或删卷。既有保留策略清理 2 份较旧主库备份及 2 份较旧研究库备份，保留本次两份及命名手动备份。
+- 2026-10-19 10:13 初验：生产 HEAD 与两份运行镜像均为功能提交；两容器 healthy；前端代理与后端 `/api/health` 返回 `ok`；真实保存返回 200。
+- 线上 Chromium 的 390px 手机与 1440px 桌面页面均点击真实“保存”按钮，收到生产接口 200；请求中的 DEX、原始市场和交易所身份检查通过；无 pageerror、无横向溢出。为了不改变用户已有配置，拦截器在转发真实 PUT 前将 payload 恢复为该既有记录的完整原始值（保留时间戳/查询选项）；没有模拟服务器成功响应。验收前后的真实服务器列表完全一致，仍为 24 项。
+- 观察确认生产历史采样配置为 120 秒；历史最新时间已从 10:13:16 推进到 10:15:18，不能把两次采样之间的正常间隔误判为持续锁死。
+- 10:13:32 至 10:18:40 的持续验收超过 5 分钟：**11 次真实保存全部 200**，各次健康检查 `ok`，24 项配置完整 payload 与验收前完全一致；历史最新时间继续推进到 10:17:20，采样确实持续写入。该观察超过临时重启后约两分钟的复发窗口，但不代表数日稳定性保证。
+- 10:19 收尾检查：本次容器启动以来 `database is locked`、标的对保存 500 和快照恢复警告均为 0；两个容器 healthy；前端代理健康接口 HTTP 200、12062 个市场、`exchange_errors={}`；生产跟踪文件干净，HEAD/镜像仍为功能 SHA。
+- 本文最终验收记录通过后续纯文档提交推送（`[skip ci]`）；不为文档更新重启生产或重新构建镜像。
 - 已有 FastAPI/Ant Design/Pydantic 警告和 main/routes 的原有 lint 问题不在本次范围内。
 
 ## 未跟踪证据与下一步
 
 - 本任务本地证据：`output/pair-save-*-20261019.log`、`output/pair-save-server-errors-20261019.txt`；pytest 临时目录放在本任务自己的 `output/pytest-pair-save-*`，不清理原有临时目录。
+- 浏览器脚本：`output/verify-pair-save-production-20261019.mjs`；最终浏览器日志：`output/pair-save-production-browser-final-20261019.log`；截图：`output/pair-save-production-390-20261019.png`、`output/pair-save-production-1440-20261019.png`。初次 SSH 隧道空闲断开及 Ant Design 中文按钮可访问名称带空格造成的脚本失败也保留在原日志中；增加 SSH keepalive、调整选择器后完成真实验收，不属于产品报错。
 - 凭据仅在受控进程内存中使用，不写源码、报告、截图或仓库。
-- 当前先完成本模块部署和真实保存验证。后续如需扩展数据库任务健康告警、各后台仓库事务隔离或历史缺口分析，请新建任务，以本文作为入口。
+- 本模块实现、测试、推送、备份、生产部署和真实保存验收均已完成。已有两份前端布局 WIP 的完整差异与开始前一致，未提交或改写。
+- 后续如需扩展数据库任务健康告警、各后台仓库事务隔离或历史缺口分析，请新建任务，以本文作为入口。历史采样缺口未自动回填，原 WAL 文件仍保留；本任务不直接删除 WAL 来回收空间。
