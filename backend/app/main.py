@@ -773,7 +773,7 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         db_path = _sqlite_path(app_settings)
         _ensure_database_parent(db_path)
-        db = await connect_database(db_path)
+        db = await connect_database(db_path, recover_stale_snapshots=True)
         await initialize_schema(db)
         route_stem, route_extension = os.path.splitext(db_path)
         route_db_path = f"{route_stem}-squeeze-route{route_extension or '.db'}"
@@ -867,7 +867,8 @@ def create_app(
             risk_settings_loader=app.state.settings_repo.get_risk_settings,
         )
         app.state.pair_spread_funding_recorder = PairSpreadFundingRecorder(PairSpreadFundingRepository(db))
-        app.state.pair_spread_preset_repo = PairSpreadPresetRepository(db)
+        preset_db = db if db_path == ":memory:" else await connect_database(db_path)
+        app.state.pair_spread_preset_repo = PairSpreadPresetRepository(preset_db)
         app.state.index_component_auto_watch = IndexComponentAutoWatchService(
             app.state.index_component_repo,
             app.state.settings_repo,
@@ -1116,6 +1117,8 @@ def create_app(
                 await route_db.close()
             if identity_db is not db:
                 await identity_db.close()
+            if preset_db is not db:
+                await preset_db.close()
             await db.close()
 
     app = FastAPI(title=app_settings.app_name, lifespan=lifespan)

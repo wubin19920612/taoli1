@@ -28,7 +28,7 @@ from app.models.settings import AlertMessageTemplateSettings
 from app.services.pair_spread_funding_recorder import PairSpreadFundingRecorder
 from app.services.pair_spread_diagnostics import build_pair_spread_diagnostic
 from app.services.pair_spread_query import PairSpreadQueryError, PairSpreadQueryService
-from app.services.pair_spread_presets import PairSpreadPresetRepository
+from app.services.pair_spread_presets import PairSpreadPresetBusyError, PairSpreadPresetRepository
 from app.services.symbol_aliases import (
     ResolvedSymbolAlias,
     SymbolAliasResolver,
@@ -198,7 +198,12 @@ async def upsert_pair_spread_preset(
     verify_dashboard_password(request.app.state.settings.dashboard_password, password)
     if preset_id != preset.id:
         raise HTTPException(status_code=422, detail="Preset id does not match request path")
-    return await _preset_repo(request).upsert(preset)
+    try:
+        return await _preset_repo(request).upsert(preset)
+    except PairSpreadPresetBusyError as exc:
+        raise HTTPException(
+            status_code=503, detail="数据库繁忙，标的对尚未保存，请稍后重试", headers={"Retry-After": "1"}
+        ) from exc
 
 
 @router.post("/presets/merge", response_model=list[PairSpreadPreset])
@@ -208,7 +213,12 @@ async def merge_pair_spread_presets(
     password: str | None = Depends(dashboard_password_header),
 ) -> list[PairSpreadPreset]:
     verify_dashboard_password(request.app.state.settings.dashboard_password, password)
-    return await _preset_repo(request).merge(payload.presets)
+    try:
+        return await _preset_repo(request).merge(payload.presets)
+    except PairSpreadPresetBusyError as exc:
+        raise HTTPException(
+            status_code=503, detail="数据库繁忙，标的对尚未同步，请稍后重试", headers={"Retry-After": "1"}
+        ) from exc
 
 
 @router.delete("/presets/{preset_id}")
@@ -218,7 +228,12 @@ async def delete_pair_spread_preset(
     password: str | None = Depends(dashboard_password_header),
 ) -> dict[str, bool]:
     verify_dashboard_password(request.app.state.settings.dashboard_password, password)
-    await _preset_repo(request).delete(preset_id)
+    try:
+        await _preset_repo(request).delete(preset_id)
+    except PairSpreadPresetBusyError as exc:
+        raise HTTPException(
+            status_code=503, detail="数据库繁忙，标的对尚未删除，请稍后重试", headers={"Retry-After": "1"}
+        ) from exc
     return {"ok": True}
 
 
