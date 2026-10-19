@@ -439,6 +439,46 @@ describe("InstrumentLookupPage", () => {
     expect(within(markets).getByText("+3.500%")).not.toBeNull();
   });
 
+  it("explains rate limited history without presenting empty extrema as zero", async () => {
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/statistics")) return Response.json({
+        symbol: "BTCUSDT", observed_at: "2026-10-19T12:00:00Z", markets: {},
+        spreads: { [lookupResult.spreads[0].id]: {
+          point_count: 0, complete: false, max_spread_pct: null, min_spread_pct: null,
+          error: "OKX 历史行情接口限流（HTTP 429 / 50011），稍后重试"
+        } }
+      });
+      return fallback(input, init);
+    });
+    render(<InstrumentLookupPage />);
+    expect(await screen.findByText("历史接口限流，稍后重试")).not.toBeNull();
+    expect(screen.queryByText("≈ +0.000%")).toBeNull();
+    expect(screen.getAllByText("开仓价差").length).toBeGreaterThan(0);
+  });
+
+  it("retains extrema with partial coverage and a visible update warning", async () => {
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/statistics")) return Response.json({
+        symbol: "BTCUSDT", observed_at: "2026-10-19T12:02:00Z", markets: {},
+        spreads: { [lookupResult.spreads[0].id]: {
+          point_count: 1438, complete: false, max_spread_pct: 0.456, min_spread_pct: -0.221,
+          first_seen_at: "2026-10-18T12:03:00Z", last_seen_at: "2026-10-19T12:00:00Z",
+          error: "OKX 历史行情接口限流（HTTP 429 / 50011），稍后重试"
+        } }
+      });
+      return fallback(input, init);
+    });
+    render(<InstrumentLookupPage />);
+    expect(await screen.findByText("≈ +0.456%")).not.toBeNull();
+    expect(screen.getByText("≈ -0.221%")).not.toBeNull();
+    expect(screen.getByText("部分样本 · 1438 点")).not.toBeNull();
+    expect(screen.getByText("历史接口限流，稍后重试 · 已保留有效样本")).not.toBeNull();
+    expect(screen.getByText(/样本截至/)).not.toBeNull();
+    expect(screen.queryByText(/完整24h/)).toBeNull();
+  });
+
   it("keeps realtime quotes visible while historical statistics are still loading", async () => {
     const fallback = vi.mocked(fetch).getMockImplementation()!;
     let finish: (response: Response) => void = () => {};

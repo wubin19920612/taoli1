@@ -55,8 +55,19 @@ async def test_complete_output_matches_reference(selection, coverage, seed):
     for now in (NOW, NOW + timedelta(minutes=1)):
         expected = await before.lookup(lookup, now=now)
         actual = await after.lookup(lookup, now=now)
+        # Error visibility intentionally changed: retained samples carry their
+        # upstream warning, including when there are enough points for extrema.
+        for key, stats in expected.markets.items():
+            upstream = histories[key][2]
+            if upstream and stats.error and upstream not in stats.error:
+                stats.error = f"{upstream}; {stats.error}"
+        for key, stats in expected.spreads.items():
+            errors = [expected.markets[market_id].error for market_id in key.split("->")]
+            stats.error = "; ".join(dict.fromkeys(error for error in errors if error)) or (
+                None if stats.point_count else "双方无同一分钟历史价格"
+            )
         # JSON handles non-finite legacy results consistently (null); also
-        # compares insertion order, timestamps, coverage, errors and estimates.
+        # compares insertion order, timestamps, coverage and estimates unchanged.
         assert actual.model_dump_json() == expected.model_dump_json()
     assert lookup.model_dump_json() == original
     assert list(before._cache.items()) == list(after._cache.items())

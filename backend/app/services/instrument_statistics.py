@@ -14,7 +14,7 @@ from app.models.instrument import (
 from app.models.market import MarketSnapshot
 from app.models.pair_spread import PairSpreadKlinePoint
 from app.services.instrument_spreads import instrument_market_id
-from app.services.pair_spread_query import PairSpreadQueryService
+from app.services.pair_spread_query import PairSpreadQueryService, PartialKlineHistoryError
 
 # With positive prices in this range both numerator and denominator stay finite.
 _SAFE_SPREAD_PRICE = sys.float_info.max / 4
@@ -31,6 +31,36 @@ def _close_spread(buy: float, sell: float) -> float:
     return 2 * (sell - buy) / (sell + buy) * 100
 
 
+def _merge_coverage(
+    ranges: list[tuple[datetime, datetime]], start: datetime, end: datetime,
+) -> list[tuple[datetime, datetime]]:
+    merged: list[tuple[datetime, datetime]] = []
+    for left, right in sorted((max(a, start), min(b, end)) for a, b in ranges):
+        if left >= right:
+            continue
+        if merged and left <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(right, merged[-1][1]))
+        else:
+            merged.append((left, right))
+    return merged
+
+
+def _missing_ranges(
+    coverage: list[tuple[datetime, datetime]], start: datetime, end: datetime,
+) -> list[tuple[datetime, datetime]]:
+    # Re-read the latest three completed minutes to tolerate delayed publication.
+    known = _merge_coverage(coverage, start, end - timedelta(minutes=3))
+    missing = []
+    cursor = start
+    for left, right in known:
+        if cursor < left:
+            missing.append((cursor, left))
+        cursor = right
+    if cursor < end:
+        missing.append((cursor, end))
+    return list(reversed(missing))  # Current prices before older backfill.
+
+
 class InstrumentStatisticsService:
     def __init__(self, query_service: PairSpreadQueryService | None = None) -> None:
         self.query_service = query_service
@@ -38,6 +68,7 @@ class InstrumentStatisticsService:
             str, tuple[datetime, dict[datetime, float], str | None]
         ] = OrderedDict()
         self._pending: dict[str, asyncio.Task] = {}
+        self._coverage: dict[str, list[tuple[datetime, datetime]]] = {}
         self._semaphore = asyncio.Semaphore(4)
 
     async def aclose(self) -> None:
@@ -51,35 +82,50 @@ class InstrumentStatisticsService:
     async def _fetch(
         self, market: MarketSnapshot, end_at: datetime
     ) -> tuple[datetime, dict[datetime, float], str | None]:
-        points: list[PairSpreadKlinePoint] = []
+        key = _history_cache_key(market)
+        start_at = end_at - timedelta(hours=24, minutes=3)
+        previous = self._cache.get(key)
+        prices = {at: price for at, price in (previous[1] if previous else {}).items()
+                  if start_at <= at < end_at}
+        coverage = _merge_coverage(self._coverage.get(key, []), start_at, end_at) if prices else []
+
+        def merge_prices(points: list[PairSpreadKlinePoint]) -> None:
+            prices.update({
+                point.bucket_at: point.close * market.symbol_alias_price_multiplier
+                for point in points
+                if start_at <= point.bucket_at < end_at
+                and point.bucket_at.second == 0
+                and point.bucket_at.microsecond == 0
+                and math.isfinite(point.close * market.symbol_alias_price_multiplier)
+                and point.close * market.symbol_alias_price_multiplier > 0
+            })
+
         error = None
         try:
-            async with asyncio.timeout(45):
-                async with self._semaphore:
+            async with self._semaphore:
+                async with asyncio.timeout(45):
                     if self.query_service is None:
                         self.query_service = PairSpreadQueryService()
-                    points = await self.query_service.fetch_market_klines(
-                        market,
-                        start=end_at - timedelta(hours=24, minutes=3),
-                        end=end_at - timedelta(milliseconds=1),
-                    )
+                    for left, right in _missing_ranges(coverage, start_at, end_at):
+                        try:
+                            points = await self.query_service.fetch_market_klines(
+                                market, start=left, end=right - timedelta(milliseconds=1),
+                            )
+                        except PartialKlineHistoryError as exc:
+                            merge_prices(exc.points)
+                            coverage.append((exc.covered_start, exc.covered_end))
+                            raise
+                        merge_prices(points)
+                        coverage.append((left, right))
         except (TimeoutError, RuntimeError, ValueError, KeyError, TypeError) as exc:
             error = "历史行情请求超时" if isinstance(exc, TimeoutError) else str(exc) or type(exc).__name__
-        prices = {
-            point.bucket_at: point.close * market.symbol_alias_price_multiplier
-            for point in points
-            if end_at - timedelta(hours=24, minutes=3) <= point.bucket_at < end_at
-            and point.bucket_at.second == 0
-            and point.bucket_at.microsecond == 0
-            and math.isfinite(point.close * market.symbol_alias_price_multiplier)
-            and point.close * market.symbol_alias_price_multiplier > 0
-        }
         cached = (end_at, prices, error or (None if prices else "未返回可用分钟K线"))
-        key = _history_cache_key(market)
+        self._coverage[key] = _merge_coverage(coverage, start_at, end_at) if prices else []
         self._cache[key] = cached
         self._cache.move_to_end(key)
         while len(self._cache) > 128:
-            self._cache.popitem(last=False)
+            evicted, _ = self._cache.popitem(last=False)
+            self._coverage.pop(evicted, None)
         return cached
 
     async def _history(
@@ -130,7 +176,7 @@ class InstrumentStatisticsService:
                         if reference is not None:
                             setattr(stats, f"change_{hours}h_pct", (prices[latest_at] / reference - 1) * 100)
                 else:
-                    stats.error = "分钟K线已过期，未计算涨跌幅"
+                    stats.error = "; ".join(filter(None, [error, "分钟K线已过期，未计算涨跌幅"]))
             result.markets[key] = stats
 
         eligible_ids = set()
@@ -164,6 +210,8 @@ class InstrumentStatisticsService:
                 if comparison_id not in eligible_ids:
                     continue
                 stats = InstrumentSpread24hStats(point_count=len(common))
+                errors = [result.markets[key].error for key in (buy_id, sell_id)]
+                stats.error = "; ".join(dict.fromkeys(error for error in errors if error)) or None
                 if common:
                     maximum, maximum_at = max(
                         (_close_spread(prices_by_id[buy_id][bucket], prices_by_id[sell_id][bucket]), bucket)
@@ -181,7 +229,6 @@ class InstrumentStatisticsService:
                     stats.last_seen_at = last_at
                     stats.complete = len(common) == 1440
                 else:
-                    errors = [result.markets[key].error for key in (buy_id, sell_id)]
-                    stats.error = "; ".join(error for error in errors if error) or "双方无同一分钟历史价格"
+                    stats.error = stats.error or "双方无同一分钟历史价格"
                 result.spreads[comparison_id] = stats
         return result

@@ -11,7 +11,7 @@ from app.models.market import MarketType
 from app.models.pair_spread import PairSpreadKlinePoint
 from app.services.instrument_spreads import build_instrument_spreads, instrument_market_id
 from app.services.instrument_statistics import InstrumentStatisticsService
-from app.services.pair_spread_query import PairSpreadQueryService
+from app.services.pair_spread_query import PairSpreadQueryService, PartialKlineHistoryError
 
 NOW = datetime(2026, 10, 7, 12, tzinfo=UTC)
 
@@ -198,3 +198,130 @@ async def test_gate_spot_history_paginates_without_exceeding_inclusive_1000_poin
     assert counts == [1000, 443]
     assert len(points) == 1443
     assert points[-1].bucket_at == NOW - timedelta(minutes=1)
+
+
+@pytest.mark.asyncio
+async def test_incremental_refresh_keeps_full_window_and_fetches_only_recent_minutes():
+    requested = []
+
+    async def fetch(target, *, start, end):
+        requested.append((start, end))
+        return [PairSpreadKlinePoint(bucket_at=start + timedelta(minutes=i), close=100)
+                for i in range(int((end - start).total_seconds() // 60) + 1)]
+
+    query = AsyncMock()
+    query.fetch_market_klines.side_effect = fetch
+    service = InstrumentStatisticsService(query)
+    lookup = instrument([market("binance"), market("okx")])
+    await service.lookup(lookup, now=NOW)
+    requested.clear()
+    result = await service.lookup(lookup, now=NOW + timedelta(minutes=2))
+    assert len(requested) == 2
+    assert all(end - start < timedelta(minutes=5) for start, end in requested)
+    assert all(stats.complete and stats.point_count == 1440 for stats in result.spreads.values())
+    assert all(min(prices) >= NOW - timedelta(hours=24, minutes=1)
+               for _, prices, _ in service._cache.values())
+
+
+@pytest.mark.asyncio
+async def test_failed_refresh_preserves_valid_window_and_surfaces_warning_until_recovery():
+    fail = False
+
+    async def fetch(target, *, start, end):
+        if fail and target.exchange == "okx":
+            raise RuntimeError("OKX 历史行情接口限流")
+        return [PairSpreadKlinePoint(bucket_at=start + timedelta(minutes=i), close=100)
+                for i in range(int((end - start).total_seconds() // 60) + 1)]
+
+    query = AsyncMock()
+    query.fetch_market_klines.side_effect = fetch
+    service = InstrumentStatisticsService(query)
+    lookup = instrument([market("binance"), market("okx")])
+    await service.lookup(lookup, now=NOW)
+    fail = True
+    result = await service.lookup(lookup, now=NOW + timedelta(minutes=2))
+    for stats in result.spreads.values():
+        assert stats.point_count == 1438
+        assert stats.max_spread_pct == 0
+        assert not stats.complete
+        assert stats.last_seen_at == NOW
+        assert "限流" in stats.error
+    fail = False
+    result = await service.lookup(lookup, now=NOW + timedelta(minutes=4))
+    assert all(stats.complete and stats.error is None for stats in result.spreads.values())
+
+
+@pytest.mark.asyncio
+async def test_partial_cold_load_resumes_missing_prefix_without_redownloading_valid_pages():
+    requested = []
+    fail = True
+
+    async def fetch(target, *, start, end):
+        requested.append((target.exchange, start, end))
+        points = [PairSpreadKlinePoint(bucket_at=start + timedelta(minutes=i), close=100)
+                  for i in range(int((end - start).total_seconds() // 60) + 1)]
+        if fail and target.exchange == "okx":
+            raise PartialKlineHistoryError("OKX 历史行情接口限流", points[-100:],
+                                           points[-100].bucket_at, end + timedelta(milliseconds=1))
+        return points
+
+    query = AsyncMock()
+    query.fetch_market_klines.side_effect = fetch
+    service = InstrumentStatisticsService(query)
+    lookup = instrument([market("binance"), market("okx")])
+    result = await service.lookup(lookup, now=NOW)
+    assert all(stats.point_count == 100 and "限流" in stats.error for stats in result.spreads.values())
+    fail = False
+    requested.clear()
+    result = await service.lookup(lookup, now=NOW + timedelta(minutes=2))
+    okx_requests = [(start, end) for exchange, start, end in requested if exchange == "okx"]
+    assert len(okx_requests) == 2
+    assert okx_requests[0][0] >= NOW - timedelta(minutes=3)
+    assert okx_requests[1][1] < NOW - timedelta(minutes=100)
+    assert all(stats.complete and stats.error is None for stats in result.spreads.values())
+
+
+@pytest.mark.asyncio
+async def test_failed_history_expires_and_cannot_cross_binding_revisions():
+    query = AsyncMock()
+    query.fetch_market_klines.return_value = [point(1, 100)]
+    service = InstrumentStatisticsService(query)
+    targets = [market("binance"), market("okx", binding_revision=1)]
+    await service.lookup(instrument(targets), now=NOW)
+    query.fetch_market_klines.side_effect = RuntimeError("HTTP 429 Too Many Requests")
+    changed = targets[1].model_copy(update={"binding_revision": 2})
+    result = await service.lookup(instrument([targets[0], changed]), now=NOW)
+    assert all(stats.point_count == 0 for stats in result.spreads.values())
+    result = await service.lookup(instrument(targets), now=NOW + timedelta(hours=25))
+    assert all(stats.point_count == 0 and stats.max_spread_pct is None for stats in result.spreads.values())
+
+
+@pytest.mark.asyncio
+async def test_partial_refresh_after_idle_period_repairs_middle_gap_before_claiming_complete():
+    phase = "cold"
+    requested = []
+
+    async def fetch(target, *, start, end):
+        requested.append((target.exchange, start, end))
+        points = [PairSpreadKlinePoint(bucket_at=start + timedelta(minutes=i), close=100)
+                  for i in range(int((end - start).total_seconds() // 60) + 1)]
+        if phase == "partial" and target.exchange == "okx":
+            raise PartialKlineHistoryError("OKX 历史行情接口限流", points[-100:],
+                                           points[-100].bucket_at, end + timedelta(milliseconds=1))
+        return points
+
+    query = AsyncMock()
+    query.fetch_market_klines.side_effect = fetch
+    service = InstrumentStatisticsService(query)
+    lookup = instrument([market("binance"), market("okx")])
+    await service.lookup(lookup, now=NOW)
+    phase = "partial"
+    result = await service.lookup(lookup, now=NOW + timedelta(hours=2))
+    assert all(stats.point_count == 1420 and not stats.complete for stats in result.spreads.values())
+    phase = "recovery"
+    requested.clear()
+    result = await service.lookup(lookup, now=NOW + timedelta(hours=2, minutes=2))
+    okx_ranges = [(start, end) for exchange, start, end in requested if exchange == "okx"]
+    assert len(okx_ranges) == 2
+    assert okx_ranges[1] == (NOW, NOW + timedelta(minutes=20) - timedelta(milliseconds=1))
+    assert all(stats.complete and stats.error is None for stats in result.spreads.values())

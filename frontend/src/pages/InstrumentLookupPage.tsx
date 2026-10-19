@@ -83,6 +83,15 @@ const MAX_SAVED_SYMBOLS = 30;
 const AUTO_REFRESH_MS = 10_000;
 const MARKET_CAP_REFRESH_MS = 300_000;
 const STATISTICS_REFRESH_MS = 120_000;
+
+function historyIssueText(error: string | null | undefined): string | null {
+  if (!error || error === "双方无同一分钟历史价格" || error === "未返回可用分钟K线") return null;
+  if (/超时|timeout/i.test(error)) return "历史请求超时，稍后重试";
+  if (/限流|429|50011/.test(error)) return "历史接口限流，稍后重试";
+  if (error.includes("已过期")) return "历史数据未更新";
+  return "历史数据获取失败";
+}
+
 const exchangeLabels: Record<string, string> = {
   aster: "Aster",
   binance: "Binance",
@@ -1689,10 +1698,12 @@ export function InstrumentLookupPage() {
         const valueText = (value: number | null) => value == null
           ? statisticsLoading ? "加载中" : "-"
           : `≈ ${signedPct(value)}`;
+        const issue = historyIssueText(history?.error);
         const coverageText = history?.point_count
           ? `${history.complete ? "完整24h" : "部分样本"} · ${history.point_count} 点`
-          : history ? "暂无共同样本" : "暂无历史样本";
-        const tooltip = history?.error ?? (statisticsError || `当前买卖方向近24小时，同一分钟收盘价按价格倍率归一后计算最大值和最小值；不是历史买一卖一可成交价差，未扣手续费及滑点。${history ? `对齐 ${history.point_count} / 1440 点；覆盖 ${fullTime(history.first_seen_at)} 至 ${fullTime(history.last_seen_at)}` : ""}`);
+          : issue ?? (history ? "暂无共同样本" : "暂无历史样本");
+        const historyDetails = `当前买卖方向近24小时，同一分钟收盘价按价格倍率归一后计算最大值和最小值；不是历史买一卖一可成交价差，未扣手续费及滑点。${history ? `对齐 ${history.point_count} / 1440 点；覆盖 ${fullTime(history.first_seen_at)} 至 ${fullTime(history.last_seen_at)}` : ""}`;
+        const tooltip = [history?.error || statisticsError, historyDetails].filter(Boolean).join("；");
         return (
           <Tooltip title={tooltip}>
             <div className="instrument-spread-range">
@@ -1705,6 +1716,10 @@ export function InstrumentLookupPage() {
                 <strong>{valueText(minimum)}</strong>
               </div>
               <small>{coverageText}</small>
+              {history?.point_count && issue ? <>
+                <small className="instrument-history-warning">{issue} · 已保留有效样本</small>
+                <small>样本截至 {fullTime(history.last_seen_at)}</small>
+              </> : null}
               {history?.max_at || history?.min_at ? (
                 <small>峰值 {history?.max_at ? dayjs(history.max_at).format("MM-DD HH:mm") : "-"} · 谷值 {history?.min_at ? dayjs(history.min_at).format("MM-DD HH:mm") : "-"}</small>
               ) : null}

@@ -66,6 +66,7 @@ from app.models.pair_spread import (
     normalize_hyperliquid_dex,
     normalize_pair_spread_symbol,
 )
+from app.services.okx_history import get_okx_history_json
 
 MINUTE_MS = 60_000
 HYPERLIQUID_CANDLE_LIMIT = 5000
@@ -957,6 +958,19 @@ def _normalize_symbol_spread_exchanges(
         if item in allowed and item not in normalized:
             normalized.append(item)
     return normalized
+
+
+class PartialKlineHistoryError(RuntimeError):
+    """Failed pagination with verified prices and a half-open covered interval."""
+
+    def __init__(
+        self, message: str, points: list[PairSpreadKlinePoint],
+        covered_start: datetime, covered_end: datetime,
+    ) -> None:
+        super().__init__(message)
+        self.points = points
+        self.covered_start = covered_start
+        self.covered_end = covered_end
 
 
 class PairSpreadQueryService:
@@ -2119,6 +2133,9 @@ class PairSpreadQueryService:
         return await handlers[exchange](symbol, start, end)
 
     async def _get_json(self, url: str) -> Any:
+        endpoint = urlsplit(url)
+        if endpoint.hostname == "www.okx.com" and endpoint.path == "/api/v5/market/history-candles":
+            return await get_okx_history_json(self.client, url)
         last_error: Exception | None = None
         for attempt in range(2):
             try:
@@ -2432,7 +2449,15 @@ class PairSpreadQueryService:
                 "https://www.okx.com/api/v5/market/history-candles"
                 f"?instId={inst_id}&bar={_okx_interval(interval_minutes)}&after={cursor}&limit=100"
             )
-            rows = (await self._get_json(url)).get("data", [])
+            try:
+                rows = (await self._get_json(url)).get("data", [])
+            except RuntimeError as exc:
+                if points:
+                    raise PartialKlineHistoryError(
+                        str(exc), _dedupe_sorted(points), min(p.bucket_at for p in points),
+                        end + timedelta(milliseconds=1),
+                    ) from exc
+                raise
             parsed = [_parse_array_kline(row, 0, 4, 7, 6) for row in rows if isinstance(row, list)]
             parsed = [point for point in parsed if point is not None]
             if not parsed:
@@ -2460,7 +2485,16 @@ class PairSpreadQueryService:
                 "https://www.okx.com/api/v5/market/history-candles"
                 f"?instId={inst_id}&bar={_okx_interval(interval_minutes)}&before={cursor}&limit=100"
             )
-            rows = (await self._get_json(url)).get("data", [])
+            try:
+                rows = (await self._get_json(url)).get("data", [])
+            except RuntimeError as exc:
+                if points:
+                    raise PartialKlineHistoryError(
+                        str(exc), _dedupe_sorted(points), start,
+                        min(end + timedelta(milliseconds=1),
+                            max(p.bucket_at for p in points) + timedelta(minutes=interval_minutes)),
+                    ) from exc
+                raise
             parsed = [_parse_array_kline(row, 0, 4, 7, 6) for row in rows if isinstance(row, list)]
             parsed = [point for point in parsed if point is not None]
             if not parsed:
