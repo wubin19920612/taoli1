@@ -161,6 +161,9 @@ class RiskSettings(BaseModel):
     huge_spread_pct: float = Field(default=10.0, ge=0)
     wide_spread_pct: float = Field(default=3.0, ge=0)
     mark_index_deviation_pct: float = Field(default=1.0, ge=0)
+    multi_exchange_premium_alert_enabled: bool = True
+    multi_exchange_premium_threshold_pct: float = Field(default=2.0, gt=0, allow_inf_nan=False)
+    multi_exchange_premium_cooldown_seconds: int = Field(default=900, ge=60)
     funding_against_pct: float = Field(default=0.01, ge=0)
     signal_slippage_buffer_pct: float = Field(default=0.05, ge=0)
     min_effective_open_pct: float = 0.05

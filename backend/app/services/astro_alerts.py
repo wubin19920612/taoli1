@@ -389,12 +389,22 @@ class AstroAlertService:
             )
 
         same_name_pairs = [item for item in existing_pairs if item.get("name") == pair_name]
+        # Older Aster GC cards retained the native Aster leg. Recognize those
+        # siblings for conflict checks only; never create or mutate that old route.
+        legacy_aster_variants = []
+        for planned in all_pair_variants:
+            if "gc-aster" in {planned.get("buyEx"), planned.get("sellEx")}:
+                legacy = dict(planned)
+                for leg in ("buyEx", "sellEx"):
+                    if legacy.get(leg) == "gc-aster":
+                        legacy[leg] = "aster"
+                legacy_aster_variants.append(legacy)
         hl_market_conflicts = [
             existing
             for existing in same_name_pairs
             if any(
                 _same_exchange_route(existing, planned) and not _same_route(existing, planned)
-                for planned in pair_variants
+                for planned in pair_variants + legacy_aster_variants
             )
         ]
         if hl_market_conflicts:
@@ -413,7 +423,8 @@ class AstroAlertService:
         conflicting_pairs = [
             existing
             for existing in same_name_pairs
-            if not any(_same_route(existing, planned) for planned in all_pair_variants)
+            if not any(_same_route(existing, planned)
+                       for planned in all_pair_variants + legacy_aster_variants)
         ]
         if (
             conflicting_pairs

@@ -147,6 +147,7 @@ from app.services.opportunity_radar import (
 from app.services.pair_spread_funding_recorder import PairSpreadFundingRecorder, PairSpreadFundingRepository
 from app.services.pair_spread_presets import PairSpreadPresetRepository
 from app.services.phone_price_alerts import PhonePriceAlertEngine, build_phone_price_alert_message
+from app.services.multi_exchange_premium import MultiExchangePremiumMonitor
 from app.services.risk_labels import effective_open_edge_pct, known_volume_24h_usdt
 from app.services.snapshot_store import SnapshotStore
 from app.services.service_control import DockerServiceController, ServiceControlConfig
@@ -1024,6 +1025,11 @@ def create_app(
                     ),
                     name="phone-price-alert-loop",
                 )
+            app.state.multi_exchange_premium_monitor = MultiExchangePremiumMonitor(app)
+            _start_background_task(
+                tasks, app.state.multi_exchange_premium_monitor.run_loop(stop_event),
+                name="multi-exchange-premium-loop",
+            )
             announcement_monitor = AnnouncementMonitor(
                 app.state.announcement_repo,
                 alert_sender=text_alert_sender,

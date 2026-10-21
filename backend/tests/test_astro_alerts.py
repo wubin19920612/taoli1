@@ -1003,7 +1003,7 @@ async def test_aster_card_variant_applies_to_every_create_entrypoint(
         add_restart_delay_seconds=0,
     )
     ordinary = ("aster", "gate") if aster_buy else ("gate", "aster")
-    gc_route = ("aster", "gc-gate") if aster_buy else ("gc-gate", "aster")
+    gc_route = ("gc-aster", "gc-gate") if aster_buy else ("gc-gate", "gc-aster")
     selected = opportunity().model_copy(update={
         "symbol": "ZCATUSDT",
         "buy_exchange": ordinary[0],
@@ -1034,7 +1034,7 @@ async def test_existing_aster_sibling_only_backfills_selected_route(
     card_variant: str, aster_buy: bool,
 ) -> None:
     ordinary = ("aster", "gate") if aster_buy else ("gate", "aster")
-    gc_route = ("aster", "gc-gate") if aster_buy else ("gc-gate", "aster")
+    gc_route = ("gc-aster", "gc-gate") if aster_buy else ("gc-gate", "gc-aster")
     existing, expected = (ordinary, gc_route) if card_variant == "gc" else (gc_route, ordinary)
     client = FakeAstroClient(pairs=[{
         "name": "BTC", "type": "FF", "buyEx": existing[0], "sellEx": existing[1],
@@ -1050,6 +1050,27 @@ async def test_existing_aster_sibling_only_backfills_selected_route(
         "buy_exchange": ordinary[0], "sell_exchange": ordinary[1],
     }))
 
+    assert result.status == "created"
+    assert [(pair["buyEx"], pair["sellEx"]) for pair in client.added] == [expected]
+    assert client.updated == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("aster_buy", [False, True])
+async def test_old_mixed_aster_card_does_not_block_new_gc_aster(aster_buy: bool) -> None:
+    old = ("aster", "gc-gate") if aster_buy else ("gc-gate", "aster")
+    expected = ("gc-aster", "gc-gate") if aster_buy else ("gc-gate", "gc-aster")
+    client = FakeAstroClient(pairs=[{
+        "name": "BTC", "type": "FF", "buyEx": old[0], "sellEx": old[1],
+    }])
+    service = AstroAlertService(
+        client, Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
+        card_settings=AstroCardSettings(card_variant="gc"), add_restart_delay_seconds=0,
+    )
+    result = await service.handle_alert(opportunity().model_copy(update={
+        "buy_exchange": "aster" if aster_buy else "gate",
+        "sell_exchange": "gate" if aster_buy else "aster",
+    }))
     assert result.status == "created"
     assert [(pair["buyEx"], pair["sellEx"]) for pair in client.added] == [expected]
     assert client.updated == []

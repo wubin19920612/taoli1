@@ -7,6 +7,7 @@ from math import ceil, isfinite
 from typing import Any
 
 from app.exchanges.base import parse_datetime_ms, parse_datetime_seconds, parse_float, utc_now
+from app.models.market import MarketSnapshot
 from app.models.premium_index import (
     PremiumIndexCurrentSnapshot,
     PremiumIndexMarketQuery,
@@ -202,6 +203,35 @@ def build_premium_points_from_mark_index(
 
 
 class PremiumIndexQueryService(PairSpreadQueryService):
+    async def monitor_point(
+        self, market: MarketSnapshot, *, now: datetime,
+    ) -> PremiumIndexPoint | None:
+        """Use the page's source policy without fetching redundant ticker/funding data.
+
+        Minute timestamps are preserved: fetching an old candle must not make it fresh.
+        Bitget and Hyperliquid current values use mark/index, as on the query page.
+        """
+        if market.exchange in {"binance", "aster", "bybit", "gate", "okx"}:
+            if market.exchange == "okx":
+                points = await self._fetch_okx_official_premium_history(
+                    market.raw_symbol, now - timedelta(minutes=2), now,
+                )
+            else:
+                points = await self._fetch_history(
+                    market.exchange, market.raw_symbol, now - timedelta(minutes=2), now, 1,
+                )
+            fresh = [p for p in points if 0 <= (now - p.bucket_at).total_seconds() <= 90]
+            if fresh:
+                return max(fresh, key=lambda p: p.bucket_at)
+        premium = _premium_pct(market.mark_price, market.index_price)
+        if premium is None or not isfinite(premium):
+            return None
+        return PremiumIndexPoint(
+            bucket_at=market.upstream_timestamp or market.timestamp,
+            premium_pct=premium, mark_price=market.mark_price, index_price=market.index_price,
+            source="mark_index_fallback",
+        )
+
     async def query(
         self,
         market: PremiumIndexMarketQuery,

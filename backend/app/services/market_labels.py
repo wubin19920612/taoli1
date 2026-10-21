@@ -6,6 +6,7 @@ _ASTRO_EXCHANGE_ALIASES = {
     "hyperliquid": "hl",
 }
 _ASTRO_GC_EXCHANGE_IDS = {
+    "aster": "gc-aster",
     "binance": "gc-binance",
     "bybit": "gc-bybit",
     "gate": "gc-gate",
@@ -13,7 +14,7 @@ _ASTRO_GC_EXCHANGE_IDS = {
     "lighter": "gc-lighter",
     "okx": "gc-okx",
 }
-_ASTRO_NON_GC_EXCHANGE_IDS = {"aster", "bitget", "bitgetr", "rh-lighter"}
+_ASTRO_NON_GC_EXCHANGE_IDS = {"bitget", "bitgetr", "rh-lighter"}
 
 
 def normalize_market_symbol(value: str) -> str:

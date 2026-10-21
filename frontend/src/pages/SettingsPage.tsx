@@ -29,6 +29,7 @@ import {
   getLivePilotPreview,
   getLivePilotSettings,
   getRiskSettings,
+  getPremiumIndexAlertStatus,
   getServiceControlStatus,
   listAlertRules,
   restartServiceControl,
@@ -106,6 +107,9 @@ const defaultRiskSettings: RiskSettings = {
   huge_spread_pct: 10,
   wide_spread_pct: 3,
   mark_index_deviation_pct: 1,
+  multi_exchange_premium_alert_enabled: true,
+  multi_exchange_premium_threshold_pct: 2,
+  multi_exchange_premium_cooldown_seconds: 900,
   funding_against_pct: 0.01,
   signal_slippage_buffer_pct: 0.05,
   min_effective_open_pct: 0.05,
@@ -388,6 +392,7 @@ function buildAlertTemplatePreview(template: AlertMessageTemplateSettings): stri
 }
 
 export function SettingsPage() {
+  const [premiumStatus, setPremiumStatus] = useState<Awaited<ReturnType<typeof getPremiumIndexAlertStatus>> | null>(null);
   const [riskForm] = Form.useForm<RiskSettings>();
   const [ruleForm] = Form.useForm<AlertRuleFormValues>();
   const [templateForm] = Form.useForm<AlertMessageTemplateSettings>();
@@ -436,7 +441,8 @@ export function SettingsPage() {
         astroCard,
         livePilot,
         pilotSelection,
-        nextAstroStatus
+        nextAstroStatus,
+        nextPremiumStatus
       ] = await Promise.all([
         getRiskSettings(),
         listAlertRules(),
@@ -446,7 +452,8 @@ export function SettingsPage() {
         getAstroCardSettings(),
         getLivePilotSettings(),
         getLivePilotPreview(),
-        astroStatusRequest
+        astroStatusRequest,
+        getPremiumIndexAlertStatus().catch(() => null)
       ]);
       const nextRuleDefaults = ruleDefaultsForRisk(risk);
       const nextAlertTemplate = normalizeAlertTemplate(alertTemplate);
@@ -465,6 +472,7 @@ export function SettingsPage() {
       setEditingRule(null);
       setServiceControl(nextServiceControl);
       setAstroStatus(nextAstroStatus);
+      setPremiumStatus(nextPremiumStatus);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
     } finally {
@@ -776,6 +784,30 @@ export function SettingsPage() {
               <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
             </Form.Item>
             <div className="form-grid-heading">
+              <Typography.Title level={5}>多交易所实时溢价指数告警</Typography.Title>
+              <Typography.Paragraph type="secondary">
+                同一已核验标的至少两个不同交易所的实时溢价指数绝对值严格超过阈值时，通过飞书告警。
+                正负方向均计入，同一交易所的多个市场只计一个交易所。官方 Premium Index 优先，
+                缺失时回退标记价/指数价偏离并注明来源。全市场分批轮询存在扫描延迟，过期数据不参与告警；此告警不会自动建卡。
+              </Typography.Paragraph>
+              {premiumStatus?.running && (
+                <Typography.Paragraph type="secondary">
+                  监控标的：{premiumStatus.eligible_symbols ?? 0}；上一轮完整扫描：
+                  {premiumStatus.last_sweep_seconds == null ? "尚未完成" : `${premiumStatus.last_sweep_seconds} 秒`}；
+                  最近一批查询失败：{premiumStatus.last_error_count ?? 0}。
+                </Typography.Paragraph>
+              )}
+            </div>
+            <Form.Item label="启用多交易所溢价告警" name="multi_exchange_premium_alert_enabled" valuePropName="checked">
+              <Switch />
+            </Form.Item>
+            <Form.Item label="实时溢价指数绝对值阈值" name="multi_exchange_premium_threshold_pct" rules={[{ required: true }, { type: "number", min: 0.000001 }]}>
+              <InputNumber min={0.000001} step={0.1} suffix="%" className="wide-input" />
+            </Form.Item>
+            <Form.Item label="同标的告警冷却秒数" name="multi_exchange_premium_cooldown_seconds" rules={[{ required: true }]}>
+              <InputNumber min={60} precision={0} step={60} className="wide-input" />
+            </Form.Item>
+            <div className="form-grid-heading">
               <Typography.Title level={5}>Signal strategy（信号策略）</Typography.Title>
               <Typography.Paragraph type="secondary">
                 信号策略用于判断告警机会是否真的适合创建 Astro 卡片。系统会在创建卡片前拉取两边交易所的多档 order book，
@@ -1001,7 +1033,7 @@ export function SettingsPage() {
           <Form.Item
             label="默认建卡路线"
             name="card_variant"
-            help="Lighter 支持普通与 GC 路线；Aster、Bitget 保留原交易所 ID，仅将支持 GC 的另一腿切换为 GC。具体可建路线以建卡预览为准。"
+            help="Aster、Lighter 支持普通与 GC 路线，GC 路线使用 gc-aster、gc-lighter；Bitget 保留原交易所 ID，仅将支持 GC 的另一腿切换为 GC。具体可建路线以建卡预览为准。"
           >
             <AstroCardVariantSelector />
           </Form.Item>

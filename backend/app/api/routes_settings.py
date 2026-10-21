@@ -72,6 +72,19 @@ async def get_risk_settings(request: Request) -> RiskSettings:
     return await _settings_repo(request).get_risk_settings()
 
 
+@router.get("/premium-index-alert-status")
+async def premium_index_alert_status(request: Request) -> dict:
+    monitor = getattr(request.app.state, "multi_exchange_premium_monitor", None)
+    settings = await _settings_repo(request).get_risk_settings()
+    notifier = getattr(request.app.state, "feishu_notifier", None)
+    running = bool(
+        monitor is not None and settings.multi_exchange_premium_alert_enabled
+        and request.app.state.feishu_live_send_enabled
+        and getattr(getattr(notifier, "config", None), "webhook_url", "")
+    )
+    return {"running": running, **(monitor.status if monitor else {})}
+
+
 @router.put("/risk", response_model=RiskSettings)
 async def update_risk_settings(
     settings: RiskSettings,

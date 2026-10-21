@@ -111,7 +111,7 @@ def test_unsupported_exchange_never_creates_single_sided_gc_route() -> None:
 
 
 @pytest.mark.parametrize("rh_buy", [False, True])
-@pytest.mark.parametrize("exchange", ["binance", "bybit", "gate", "hl", "lighter", "okx"])
+@pytest.mark.parametrize("exchange", ["binance", "bybit", "gate", "hl", "lighter", "okx", "aster"])
 def test_rh_lighter_preserves_its_instance_when_other_leg_uses_gc(
     exchange: str, rh_buy: bool,
 ) -> None:
@@ -126,7 +126,7 @@ def test_rh_lighter_preserves_its_instance_when_other_leg_uses_gc(
     assert astro_exchange_route_variants(*gc_route, "non_gc") == []
 
 
-@pytest.mark.parametrize("exchange", ["bitget", "bitgetr", "aster"])
+@pytest.mark.parametrize("exchange", ["bitget", "bitgetr"])
 @pytest.mark.parametrize("rh_buy", [False, True])
 def test_rh_lighter_and_non_gc_exchange_never_invent_a_gc_rh_route(
     exchange: str, rh_buy: bool,
@@ -139,11 +139,11 @@ def test_rh_lighter_and_non_gc_exchange_never_invent_a_gc_rh_route(
 
 @pytest.mark.parametrize("exchange", ["binance", "bybit", "gate", "hl", "lighter", "okx"])
 @pytest.mark.parametrize("aster_buy", [False, True])
-def test_aster_keeps_its_id_while_other_leg_gets_gc_variant(
+def test_aster_gets_its_own_gc_variant(
     exchange: str, aster_buy: bool,
 ) -> None:
     ordinary = ("aster", exchange) if aster_buy else (exchange, "aster")
-    gc_route = ("aster", f"gc-{exchange}") if aster_buy else (f"gc-{exchange}", "aster")
+    gc_route = ("gc-aster", f"gc-{exchange}") if aster_buy else (f"gc-{exchange}", "gc-aster")
 
     assert astro_exchange_route_variants(*ordinary) == [ordinary, gc_route]
     assert astro_exchange_route_variants(*ordinary, "non_gc") == [ordinary]

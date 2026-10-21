@@ -459,6 +459,16 @@ export async function getRiskSettings(): Promise<RiskSettings> {
   return fetchJson<RiskSettings>("/settings/risk");
 }
 
+export async function getPremiumIndexAlertStatus(): Promise<{
+  running: boolean;
+  eligible_symbols?: number;
+  last_sweep_seconds?: number | null;
+  last_batch_at?: string | null;
+  last_error_count?: number;
+}> {
+  return fetchJson("/settings/premium-index-alert-status");
+}
+
 export async function updateRiskSettings(settings: RiskSettings): Promise<RiskSettings> {
   return fetchJson<RiskSettings>("/settings/risk", {
     method: "PUT",

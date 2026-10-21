@@ -204,7 +204,7 @@ def test_instrument_astro_preview_offers_plain_and_gc_lighter_routes() -> None:
 
 
 @pytest.mark.parametrize("aster_buy", [False, True])
-def test_instrument_astro_preview_offers_mixed_gc_aster_routes(aster_buy: bool) -> None:
+def test_instrument_astro_preview_offers_gc_aster_routes(aster_buy: bool) -> None:
     app = instrument_app()
     buy_exchange, sell_exchange = ("aster", "gate") if aster_buy else ("gate", "aster")
     app.state.snapshot_store.set_all_markets([
@@ -223,7 +223,7 @@ def test_instrument_astro_preview_offers_mixed_gc_aster_routes(aster_buy: bool) 
         for item in payload["route_variants"]
     ] == [
         ("non_gc", buy_exchange, sell_exchange),
-        ("gc", "aster", "gc-gate") if aster_buy else ("gc", "gc-gate", "aster"),
+        ("gc", "gc-aster", "gc-gate") if aster_buy else ("gc", "gc-gate", "gc-aster"),
     ]
 
 

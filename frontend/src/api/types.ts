@@ -917,6 +917,9 @@ export interface RiskSettings {
   huge_spread_pct: number;
   wide_spread_pct: number;
   mark_index_deviation_pct: number;
+  multi_exchange_premium_alert_enabled?: boolean;
+  multi_exchange_premium_threshold_pct?: number;
+  multi_exchange_premium_cooldown_seconds?: number;
   funding_against_pct: number;
   signal_slippage_buffer_pct: number;
   min_effective_open_pct: number;

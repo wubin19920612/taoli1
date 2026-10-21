@@ -262,6 +262,20 @@ describe("SettingsPage", () => {
     ).toBe(true);
   }, 15000);
 
+  it("defaults multi-exchange premium alerts to 2 percent and saves changes", async () => {
+    render(<SettingsPage />);
+    const threshold = await screen.findByLabelText("实时溢价指数绝对值阈值");
+    await waitFor(() => expect(Number((threshold as HTMLInputElement).value)).toBe(2));
+    expect(screen.getByLabelText("启用多交易所溢价告警").getAttribute("aria-checked")).toBe("true");
+    await userEvent.clear(threshold);
+    await userEvent.type(threshold, "3.5");
+    await userEvent.click(screen.getByRole("button", { name: /保存风险参数/ }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/settings/risk"),
+      expect.objectContaining({ method: "PUT", body: expect.stringContaining('"multi_exchange_premium_threshold_pct":3.5') })
+    ));
+  }, 15000);
+
   it("edits an existing alert rule in place", async () => {
     render(<SettingsPage />);
 
@@ -418,7 +432,7 @@ describe("SettingsPage", () => {
     render(<SettingsPage />);
 
     expect(await screen.findByText("Astro 卡片默认参数")).toBeTruthy();
-    expect(screen.getByText(/Aster、Bitget 保留原交易所 ID/)).toBeTruthy();
+    expect(screen.getByText(/GC 路线使用 gc-aster、gc-lighter/)).toBeTruthy();
     const positionValueInput = (await screen.findAllByLabelText("仓位金额 USDT"))[0];
     await waitFor(() => {
       expect((positionValueInput as HTMLInputElement).value).toBe("25");
