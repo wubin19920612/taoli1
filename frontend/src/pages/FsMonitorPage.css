@@ -1,0 +1,16 @@
+.fs-page { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.fs-page h3, .fs-page .ant-typography { margin-bottom: 0; }
+.fs-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px 20px; }
+.fs-form .ant-input-number { width: 100%; }
+.fs-form .ant-form-item { margin-bottom: 8px; }
+.fs-details { display: flex; flex-direction: column; gap: 12px; max-width: 1200px; }
+.fs-details .ant-typography { overflow-wrap: anywhere; }
+.fs-mobile-candidates { display: grid; gap: 12px; }
+.fs-candidate-card { border: 1px solid #d9d9d9; border-radius: 8px; padding: 12px; display: grid; gap: 10px; background: var(--panel-bg, #fff); min-width: 0; }
+.fs-mobile-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.fs-candidate-card small { color: #666; }
+@media (max-width: 600px) {
+  .fs-page { padding-top: 18px; }
+  .fs-form { grid-template-columns: 1fr; }
+  .fs-details { max-width: calc(100vw - 82px); }
+}

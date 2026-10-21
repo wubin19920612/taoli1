@@ -1,3 +1,4 @@
+import type { FsSettings, FsReport, FsEvent } from "./fsTypes";
 import type {
   SqueezeStatus,
   SqueezeWatchEvent,
@@ -107,6 +108,15 @@ import type {
   TradeAvailabilityWatch,
   TradfiPerpMonitorPreview
 } from "./types";
+
+export const getFsReport = () => fetchJson<FsReport>("/fs-monitor/report");
+export const getFsSettings = () => fetchJson<FsSettings>("/fs-monitor/settings");
+export const updateFsSettings = (settings: FsSettings) => fetchJson<FsSettings>("/fs-monitor/settings", {
+  method: "PUT", body: JSON.stringify(settings)
+});
+export const refreshFsMonitor = () => fetchJson<{ queued: boolean }>("/fs-monitor/refresh", { method: "POST" });
+export const getFsHistory = () => fetchJson<FsReport[]>("/fs-monitor/history");
+export const getFsEvents = () => fetchJson<FsEvent[]>("/fs-monitor/events");
 
 export async function getSqueezeStatus(): Promise<SqueezeStatus> {
   return fetchJson<SqueezeStatus>("/squeeze-arbitrage/status");

@@ -16,6 +16,7 @@ from app.api import (
     routes_admin,
     routes_alerts,
     routes_funding_arbitrage,
+    routes_fs_monitor,
     routes_funding_research,
     routes_gate_twap,
     routes_health,
@@ -62,6 +63,8 @@ from app.models.phone_alert import PhonePriceAlertEvent
 from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, LivePilotSettings, RiskSettings
 from app.services.account_positions import AccountPositionService, GateAccountPositionProvider
 from app.services.account_connections import AccountConnectionService
+from app.services.fs_monitor import FsMonitor
+from app.services.fs_repository import FsRepository
 from app.services.alert_engine import (
     AlertEngine,
     AlertMatch,
@@ -820,6 +823,9 @@ def create_app(
         app.state.account_position_service.set_dynamic_provider_loader(
             app.state.account_connection_service.providers
         )
+        fs_repository = FsRepository(await connect_database(db_path))
+        await fs_repository.initialize()
+        app.state.fs_monitor = FsMonitor(fs_repository, app.state.account_connection_service, store)
         app.state.astro_alert_service.risk_settings_loader = (
             app.state.settings_repo.get_risk_settings
         )
@@ -948,6 +954,7 @@ def create_app(
         collector: MarketCollector | None = None
         announcement_provider = None
         if start_collector:
+            _start_background_task(tasks, app.state.fs_monitor.run(stop_event), name="fs-monitor")
             _start_background_task(tasks, app.state.market_identity_catalog.run(stop_event), name="market-identity-catalog")
             exchange_adapters = default_exchange_adapters()
             app.state.market_validation.set_adapters(exchange_adapters)
@@ -1115,6 +1122,7 @@ def create_app(
                 "trade_availability_service",
                 "hyperliquid_trade_status_service",
                 "account_connection_service",
+                "fs_monitor",
                 "instrument_market_cap_service",
                 "instrument_statistics_service",
                 "feishu_notifier",
@@ -1239,6 +1247,7 @@ def create_app(
     app.include_router(routes_alerts.router, prefix="/api")
     app.include_router(routes_phone_alerts.router, prefix="/api")
     app.include_router(routes_funding_arbitrage.router, prefix="/api")
+    app.include_router(routes_fs_monitor.router, prefix="/api")
     app.include_router(routes_funding_research.router, prefix="/api")
     app.include_router(routes_gate_twap.router, prefix="/api")
     app.include_router(routes_tradfi_perp_monitor.router, prefix="/api")

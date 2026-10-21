@@ -46,6 +46,7 @@ import {
 type PageKey =
   | "dashboard"
   | "funding"
+  | "fs-monitor"
   | "funding-research"
   | "opportunity-radar"
   | "instrument"
@@ -80,6 +81,9 @@ const lazyPages: Record<PageKey, LazyPage> = {
     import("../pages/FundingArbitragePage").then((module) => ({
       default: module.FundingArbitragePage
     }))
+  ),
+  "fs-monitor": lazy(() =>
+    import("../pages/FsMonitorPage").then((module) => ({ default: module.FsMonitorPage }))
   ),
   "funding-research": lazy(() =>
     import("../pages/FundingResearchPage").then((module) => ({
@@ -176,6 +180,7 @@ const standaloneFloatingWatchParam = "floating_watch";
 const defaultNavigationItems: NavigationItem[] = [
   { key: "dashboard", icon: <DashboardOutlined />, label: "实时机会" },
   { key: "funding", icon: <FundProjectionScreenOutlined />, label: "资金费率套利" },
+  { key: "fs-monitor", icon: <FundProjectionScreenOutlined />, label: "负费率 FS 观察" },
   { key: "funding-research", icon: <ExperimentOutlined />, label: "资金研究" },
   { key: "opportunity-radar", icon: <RadarChartOutlined />, label: "机会雷达" },
   { key: "instrument", icon: <SearchOutlined />, label: "标的查询" },

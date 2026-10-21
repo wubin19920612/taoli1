@@ -12,6 +12,7 @@ const navigationOrderStorageKey = "taoli1:navigation-order.v1";
 const defaultNavigationOrder = [
   "dashboard",
   "funding",
+  "fs-monitor",
   "funding-research",
   "opportunity-radar",
   "instrument",
@@ -167,7 +168,7 @@ describe("AppShell", () => {
     await userEvent.click(screen.getByRole("button", { name: "保存菜单顺序" }));
 
     expect(JSON.parse(window.localStorage.getItem(navigationOrderStorageKey) ?? "[]")).toEqual(defaultNavigationOrder);
-    expect(visibleMenuLabels().slice(0, 3)).toEqual(["实时机会", "资金费率套利", "资金研究"]);
+    expect(visibleMenuLabels().slice(0, 3)).toEqual(["实时机会", "资金费率套利", "负费率 FS 观察"]);
     expect(visibleMenuLabels().slice(-2)).toEqual(["参数与告警", "告警历史"]);
   });
 
