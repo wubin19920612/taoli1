@@ -3,17 +3,21 @@
 import asyncio
 import logging
 from collections import defaultdict
-from datetime import UTC, datetime, timedelta
-from math import isfinite
+from datetime import UTC, datetime, timedelta, timezone
+from itertools import permutations
+from math import ceil, isfinite
 from time import monotonic
 
 from app.models.alert import AlertEvent
 from app.models.market import MarketSnapshot, MarketType
 from app.models.market_identity import MarketKey, utc
 from app.models.premium_index import SUPPORTED_PREMIUM_INDEX_EXCHANGES
-from app.models.settings import RiskSettings
+from app.models.settings import FeeSettings, RiskSettings
 from app.services.data_filters import filter_markets
+from app.services.market_sessions import is_market_snapshot_tradable
+from app.services.pair_validation import validate_pair
 from app.services.premium_index_query import PremiumIndexQueryService
+from app.services.spread_engine import midpoint_spread_pct
 
 logger = logging.getLogger(__name__)
 BATCH_SIZE = 16
@@ -84,24 +88,117 @@ def matching_points(rows, settings: RiskSettings, now: datetime):
     return best if len({market.exchange for market, _ in best}) >= 2 else []
 
 
-def build_premium_alert_message(rows, settings: RiskSettings) -> str:
-    lines = [
-        "[多交易所实时溢价指数告警]",
-        f"标的：{rows[0][0].symbol} | 资产：{rows[0][0].asset_id}",
-        f"条件：至少两个交易所 |P| > {settings.multi_exchange_premium_threshold_pct:g}%",
-    ]
-    for market, point in sorted(rows, key=lambda row: (row[0].exchange, row[0].raw_symbol)):
-        source = (
-            "标记价/指数价偏离（回退估算）"
-            if point.source == "mark_index_fallback"
-            else point.source
+def _compact_amount(value: float | None) -> str:
+    if value is None or not isfinite(value) or value < 0:
+        return "—"
+    for scale, suffix in ((1e9, "B"), (1e6, "M"), (1e3, "K")):
+        if value >= scale:
+            return f"{value / scale:.2f}".rstrip("0").rstrip(".") + suffix
+    return f"{value:.2f}".rstrip("0").rstrip(".")
+
+
+def _market_label(market: MarketSnapshot) -> str:
+    label = f"{market.exchange}:{market.raw_symbol}"
+    if market.dex and not market.raw_symbol.lower().startswith(f"{market.dex.lower()}:"):
+        label += f"({market.dex})"
+    return label
+
+
+def build_premium_alert_message(
+    rows,
+    settings: RiskSettings,
+    *,
+    now: datetime | None = None,
+    fee_settings: FeeSettings | None = None,
+) -> str:
+    now = utc(now or datetime.now(UTC))
+    fees = fee_settings or FeeSettings()
+    markets = [market for market, _ in rows]
+    routes = []
+    for buy, sell in permutations(markets, 2):
+        if buy.exchange == sell.exchange:
+            continue
+        if not all(is_market_snapshot_tradable(market, now) for market in (buy, sell)):
+            continue
+        validation = validate_pair(
+            buy,
+            sell,
+            now=now,
+            stale_after_seconds=settings.stale_after_seconds,
+            huge_spread_pct=settings.huge_spread_pct,
         )
+        if validation.capabilities.strategy_alert:
+            opening, closing = midpoint_spread_pct(buy, sell)
+            routes.append((opening, closing, buy, sell))
+    route = max(routes, key=lambda item: item[0]) if routes else None
+    ranked = sorted(rows, key=lambda row: (-abs(row[1].premium_pct), _market_label(row[0])))
+    # Always show the selected route's two legs, then the strongest other premiums.
+    selected_keys = {MarketKey.from_snapshot(m).key for m in route[2:]} if route else set()
+    display = [row for row in ranked if MarketKey.from_snapshot(row[0]).key in selected_keys]
+    display += [row for row in ranked if MarketKey.from_snapshot(row[0]).key not in selected_keys]
+    display = display[:4]
+    lines = [f"【溢价】{markets[0].symbol} · {len({m.exchange for m in markets})}所"]
+    fallback = False
+    for market, point in display:
+        estimated = point.source == "mark_index_fallback"
+        fallback |= estimated
+        line = f"{_market_label(market)} P{point.premium_pct:+.2f}%{'*' if estimated else ''}"
+        age = (now - utc(market.timestamp)).total_seconds()
+        if not 0 <= age <= settings.stale_after_seconds:
+            lines.append(line + "｜费率/成交额过期")
+            continue
+        rate = market.funding_next_rate_pct
+        predicted = rate is not None or "funding_rate_pct" in market.estimated_fields
+        if rate is None:
+            rate = market.funding_rate_pct
+        rate_text = f"{rate:+.4f}%" if rate is not None and isfinite(rate) else "—"
+        interval = market.funding_interval_hours
+        period = f"{interval:g}h" if interval is not None and interval > 0 else "周期未知"
         lines.append(
-            f"{market.exchange} / DEX={market.dex or 'main'} / {market.raw_symbol}："
-            f"{point.premium_pct:+.4f}% | {source} | "
-            f"{utc(point.bucket_at):%Y-%m-%d %H:%M:%S} UTC"
+            line
+            + f"｜{'预资费' if predicted else '资费'}{rate_text}/{period}"
+            + f"｜24h额 {_compact_amount(market.volume_24h_usdt)} USDT"
         )
-    lines.append("仅溢价监控，不代表可成交收益；分批轮询存在扫描延迟。")
+    if len(rows) > len(display):
+        lines.append(f"另 {len(rows) - len(display)} 个市场命中")
+    if route:
+        opening, closing, buy, sell = route
+        lines.append(
+            f"多 {buy.exchange} → 空 {sell.exchange}｜开 {opening:+.3f}% / 平 {closing:+.3f}%"
+        )
+        # Disambiguate multiple same-exchange DEX markets in the chosen direction.
+        if any(sum(m.exchange == leg.exchange for m in markets) > 1 for leg in (buy, sell)):
+            lines[-1] = (
+                f"多 {_market_label(buy)} → 空 {_market_label(sell)}"
+                f"｜开 {opening:+.3f}% / 平 {closing:+.3f}%"
+            )
+        price_line = f"一档买 {buy.ask:.8g} / 卖 {sell.bid:.8g} USDT"
+        if all(
+            value is not None and isfinite(value) and value > 0
+            for value in (buy.ask_size, sell.bid_size)
+        ):
+            depth = min(buy.ask * buy.ask_size, sell.bid * sell.bid_size)
+            price_line += f"｜较薄档额 {_compact_amount(depth)}"
+        lines.append(price_line)
+        fee = 2 * fees.future_fee_pct
+        lines.append(f"开仓双边费估 {fee:.3f}%｜扣费差 {opening - fee:+.3f}%（未计滑点）")
+        multipliers = []
+        for market in (buy, sell):
+            if market.symbol_alias_price_multiplier != 1:
+                multipliers.append(f"{market.exchange}价×{market.symbol_alias_price_multiplier:g}")
+            if market.contract_size_multiplier is not None and market.contract_size_multiplier != 1:
+                multipliers.append(f"{market.exchange}合约面值×{market.contract_size_multiplier:g}")
+            if (market.original_quote_currency or market.quote) != "USDT":
+                multipliers.append(f"{market.exchange}已折算USDT")
+        if multipliers:
+            lines.append("；".join(multipliers))
+    else:
+        lines.append("价差暂缺：盘口过期或未通过核验")
+    max_age = max((now - utc(point.bucket_at)).total_seconds() for _, point in display)
+    stamp = now.astimezone(timezone(timedelta(hours=8))).strftime("%H:%M:%S")
+    lines.append(
+        f"{stamp} 北京｜P样本≤{ceil(max(0, max_age))}秒" + ("｜*回退估算" if fallback else "")
+    )
     return "\n".join(lines)
 
 
@@ -228,7 +325,13 @@ class MultiExchangePremiumMonitor:
             hits = matching_points(rows, settings, now)
             if not hits or now < self._next_allowed.get(key, now):
                 continue
-            message = build_premium_alert_message(hits, settings)
+            collector = getattr(self.app.state, "market_collector", None)
+            message = build_premium_alert_message(
+                hits,
+                settings,
+                now=now,
+                fee_settings=getattr(collector, "fee_settings", None),
+            )
             status = "sent"
             try:
                 await self.app.state.feishu_notifier.send_text(message)

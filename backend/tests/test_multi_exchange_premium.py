@@ -10,7 +10,7 @@ from app.core.config import Settings
 from app.main import create_app
 from app.models.market import MarketSnapshot, MarketType
 from app.models.premium_index import PremiumIndexPoint
-from app.models.settings import RiskSettings
+from app.models.settings import FeeSettings, RiskSettings
 from app.services.multi_exchange_premium import (
     MultiExchangePremiumMonitor,
     build_premium_alert_message,
@@ -82,7 +82,107 @@ def test_different_dexes_are_one_exchange_and_raw_market_is_preserved():
     rows.append((market("gate"), point(-3, now=now)))
     hits = matching_points(rows, RiskSettings(), now)
     message = build_premium_alert_message(hits, RiskSettings())
-    assert "xyz:BTC" in message and "DEX=io" in message and "-3.0000%" in message
+    assert "xyz:BTC" in message and "io:BTC" in message and "-3.00%" in message
+
+
+def summary_rows(now):
+    return [
+        (
+            market(
+                "bitget",
+                bid=99,
+                ask=100,
+                ask_size=20,
+                timestamp=now,
+                funding_rate_pct=-0.01,
+                funding_interval_hours=8,
+                volume_24h_usdt=12_300_000,
+            ),
+            point(-2.3, source="mark_index_fallback", now=now),
+        ),
+        (
+            market(
+                "gate",
+                bid=101,
+                ask=102,
+                bid_size=10,
+                timestamp=now,
+                funding_next_rate_pct=-0.02,
+                funding_interval_hours=4,
+                volume_24h_usdt=450_000,
+            ),
+            point(2.4, now=now),
+        ),
+    ]
+
+
+def test_compact_message_contains_executable_direction_funding_volume_and_estimated_cost():
+    now = datetime.now(UTC)
+    message = build_premium_alert_message(summary_rows(now), RiskSettings(), now=now)
+    assert "多 bitget → 空 gate｜开 +0.995% / 平 +2.985%" in message
+    assert "一档买 100 / 卖 101 USDT｜较薄档额 1.01K" in message
+    assert "开仓双边费估 0.100%｜扣费差 +0.895%（未计滑点）" in message
+    assert "资费-0.0100%/8h｜24h额 12.3M USDT" in message
+    assert "预资费-0.0200%/4h｜24h额 450K USDT" in message
+    assert "P-2.30%*" in message and "*回退估算" in message
+    assert "bitcoin" not in message and "条件：" not in message
+    assert len(message.splitlines()) == 7
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"timestamp": datetime(2020, 1, 1, tzinfo=UTC)},
+        {"quote_kind": "reference"},
+        {"estimated_fields": ["ask"]},
+        {"original_quote_currency": "USDC"},
+        {"identity_status": "pending"},
+        {"symbol_alias_price_multiplier": 1, "unit_status": "pending"},
+        {"bid": 105, "ask": 100},
+    ],
+)
+def test_unusable_books_never_get_a_trade_spread(updates):
+    now = datetime.now(UTC)
+    rows = summary_rows(now)
+    rows[0] = (rows[0][0].model_copy(update=updates), rows[0][1])
+    message = build_premium_alert_message(rows, RiskSettings(), now=now)
+    assert "价差暂缺" in message
+    assert "扣费差" not in message and "一档买" not in message
+
+
+def test_missing_metrics_are_not_zero_and_configured_fees_and_multipliers_are_visible():
+    now = datetime.now(UTC)
+    rows = summary_rows(now)
+    rows[0] = (
+        rows[0][0].model_copy(
+            update={
+                "funding_rate_pct": None,
+                "funding_interval_hours": None,
+                "volume_24h_usdt": None,
+                "symbol_alias_price_multiplier": 1000,
+                "contract_size_multiplier": 10,
+            }
+        ),
+        rows[0][1],
+    )
+    message = build_premium_alert_message(
+        rows, RiskSettings(), now=now, fee_settings=FeeSettings(future_fee_pct=0.08)
+    )
+    assert "资费—/周期未知｜24h额 — USDT" in message
+    assert "开仓双边费估 0.160%" in message
+    assert "bitget价×1000" in message and "bitget合约面值×10" in message
+
+
+def test_best_direction_can_be_negative_and_multiple_markets_are_bounded():
+    now = datetime.now(UTC)
+    rows = [
+        (market(exchange, bid=99, ask=100, timestamp=now), point(3, now=now))
+        for exchange in ("aster", "binance", "bitget", "bybit", "gate", "okx")
+    ]
+    message = build_premium_alert_message(rows, RiskSettings(), now=now)
+    assert "开 -1.005%" in message
+    assert "另 2 个市场命中" in message
+    assert "回退估算" not in message
 
 
 @pytest.mark.parametrize(
