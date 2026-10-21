@@ -69,4 +69,10 @@
 - 双边开仓费沿用运行中 collector 的 FeeSettings（默认各侧 0.05%），明确标为估算，扣费差不包含滑点、平仓费或资金费收益；一档价格不等于指定金额的深度 VWAP，通知仍需结合真实下单深度判断。
 - 51 项监控及价差引擎回归通过；标签与时间上取整微调后，11 项消息/边界定向测试通过。ruff 与 diff-check 通过。没有修改前端，本地不重复执行无关前端构建；生产双镜像由 CI 构建。
 - 只读实际行情预览 `output/premium-compact-live-preview-20261021.txt`：MEW 两所摘要 8 行，包含必要合约面值信息；未发送模拟消息。
-- 本补充的 Git、备份、部署与线上最终验收记录待下方补充。
+- 本补充功能提交 `df16fc815d4e180a8fe19e736c276a8852536f99` 已推送。GitHub Actions `39528020192` 前后端镜像构建均成功，服务器 manifest 核验通过。
+- 主库备份 `backups/radar-before-df16fc815d4e-20261021T013541Z.db`，完整性通过、主机/容器 SHA-256 相同：`c369fea33710244e5057cdac80f8ca543ed3e0e552d02dd1cf7366855e1c47b9`。
+- 独立研究库备份 `backups/squeeze-route-before-df16fc815d4e-20261021T013541Z.db`，完整性通过、主机/容器 SHA-256 相同：`0f80a707130283b9c66a299ad7490a28040011a0cc6375d824113c8419b17fa1`。
+- 09:37（北京时间）已按脚本快进并使用该 SHA 的两份预构建镜像启动。双容器 healthy、RestartCount=0、OOMKilled=false；首次 health 为 ok、11368 市场、4007 机会、exchange_errors={}，监控 running=true、246 个标的持续采样。
+- 本次部署日志 `output/premium-compact-deployment-20261021.log`；最终 API 及自然告警证据 `output/premium-compact-production-20261021.json`。后续自然告警采用新摘要，历史已发送消息不改写。
+- 09:38 验收取得新格式自然事件 `f07019b430c047ff8a55cde03fc69736`（09:37:41 创建，status=sent）：MEWUSDT，Gate P -2.20% / 预资费 -1.1413%/4h / 24h额 433.3K USDT；Bitget P -2.18% / 资费 -0.7028%/4h / 24h额 926.4K USDT。多 Bitget→空 Gate，开 -0.021%、平 +0.188%，一档买 0.0004788 / 卖 0.0004787 USDT，双边开仓费估 0.100%、扣费差 -0.121%（未计滑点），必要合约面值和回退标记均存在。实际正文保留在 `output/premium-compact-production-message-20261021.txt`，共 8 行；这是验收时行情，不是持续有效报价或开仓建议。
+- 最终 health 为 ok、12189 市场、2301 机会、exchange_errors={}，新监控批次持续推进、查询错误计数为 0。本补充不改 Aster 选路、告警阈值、冷却或真实交易开关；开始时两份 PairMonitor WIP 继续保留。
