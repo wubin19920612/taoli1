@@ -36,15 +36,24 @@
 - 真实公开接口整轮扫描成功；本地无账户/无身份目录时准确显示未知，生成三种情景。没有用真实账户借币请求验证执行能力。
 - 桌面1440px与手机390px浏览器检查通过：配置保存、候选与成本展开，无整页横向溢出，无页面脚本错误。证据 `output/fs-local-browser-20261021.json` 与 `output/fs-local-*-20261021.png`。
 - 首轮测试修正了测试初始化参数及 Decimal 断言；菜单测试随新增导航更新。首轮浏览器等待样本超时，重测成功，失败日志未清除。
-- 后端专项及账户/原资金费率回归共49项通过；最后补充身份有效期上限后，27项非API专项复测通过。Ruff检查通过。日志 `output/fs-backend-tests-20261021.log`、`output/fs-frontend-tests-final-20261021.json`、`output/fs-build-20261021.log`。发布记录在部署后补充。
+- 后端专项及账户/原资金费率回归共49项通过；最后补充身份有效期上限后，27项非API专项复测通过。Ruff检查通过。日志 `output/fs-backend-tests-20261021.log`、`output/fs-frontend-tests-final-20261021.json`、`output/fs-build-20261021.log`。
 
 ## 线上状态
 
-待发布：必须推送明确的功能提交，等待双镜像成功，备份并验证双库，使用预构建镜像部署。禁止在生产机构建。部署后验证健康、认证边界、实际 FS 观察结果和移动页面。
+- 2026-10-21 已发布功能提交 `86047e204b5502180d9d9d8242c902f477bdccdd`，已推送当前分支。[GitHub Actions 39533044886](https://github.com/wubin19920612/taoli1/actions/runs/39533044886) 的 backend/frontend 双镜像成功。服务器 `git pull --ff-only` 到该版本，使用同 SHA 预构建镜像启动，未在生产机构建。
+- 部署前主库备份：`backups/radar-before-86047e204b55-20261021T022931Z.db`，657842176字节，SHA-256 `cd894fa1f01b131acac6eb16b274bf5bb0e48f4cbb1db14c61a7ccf482caac75`。
+- 路线库备份：`backups/squeeze-route-before-86047e204b55-20261021T022931Z.db`，241664字节，SHA-256 `6e27207773a30780bff96f153f8656df0af9ebfdd83d640b72d1eb5a78166e9a`。两库 SQLite `integrity_check=ok`，容器内外哈希一致。既有保留脚本执行后各留10份备份。部署日志 `output/fs-deployment-20261021.log`。
+- 前后端容器 healthy，线上 Git 工作区 tracked clean。启动约6分钟后 backend 553.2MiB/768MiB、frontend 4.938MiB/96MiB；这是短期采样，不是长时间负载证明。
+- `/api/health` 为 `ok`、12192个市场、交易所错误为空。无密码访问 FS report 返回401；认证后 report/settings/history/events 均可读，refresh 返回202并完成新扫描。
+- 2026-10-21 10:37:10 北京时间完成的一轮：84个负费率市场、15个候选（12 discovered、3 blocked），历史2份、事件27条，整轮 error=null。较早样本过期后15条均降级 stale；重新刷新恢复对应观察状态。记录见 `output/fs-production-api-20261021.json`、`output/fs-production-fresh-20261021.json`。
+- 线上候选中14条 identity unverified、1条 conflict。MEWUSDT 双腿在既有市场目录中均是 identity/unit pending，不能将此解释为已验证的可交易路线；首版没有新增人工绑定。未选择账户，账户额度、库存及真实手续费仍未实测，因此没有 cost_pass，也没有执行任何借款/交易。
+- 通过 SSH 隧道读取真实部署页面，1440px/390px 候选、详情展开均正常，无页面错误或整页横向溢出。证据 `output/fs-production-browser-20261021.json`、`output/fs-production-*-20261021.png`；未修改线上配置。
+- 日志抽样发现其他模块 `trade_availability.py`、`announcements.py`、`oil_news.py` 存在 RuntimeError/HTTPStatusError 堆栈；本次检查未发现 FS 路由500，FS report error=null。其他模块错误未扩展修复，也未清理相关日志，需其所属任务另查。
+- 本次最终交接与 `docs/next-task.md` 另作仅文档提交；线上运行镜像版本仍为上述功能 SHA。
 
 ## 工作区与下一步
 
 - 两份原有 WIP `frontend/src/pages/PairMonitorPage.tsx`、`frontend/tests/PairMonitorPage.test.tsx` 不属于本模块，必须保留并排除提交。
 - 保留所有既有 `.worktrees/`、pytest 临时目录、交接草稿、output DB/WAL/SHM/日志/截图。新增 `output/fs-*`、本地预览服务脚本和浏览器脚本只是证据，不提交。
 - 本地预览端口8016/5186，使用独立 `output/fs-preview-20261021.db`；不要与线上数据库混用。
-- 后续先由用户选定只读 Bybit 账户，验证账户端点适用性；再考虑 Binance 适配、跨平台精确身份与保证金、实际结算对账。外部通知和真实交易需要独立范围说明。
+- 后续先由用户选定具备所需查询权限的 Bybit 账户，验证账户端点适用性，并通过现有身份流程补齐目标标的绑定；账户只读权限能否覆盖全部端点须以实际查询为准，不为监测主动增加交易权限。再考虑 Binance 适配、跨平台精确身份与保证金、实际结算对账。外部通知和真实交易需要独立范围说明。
