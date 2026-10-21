@@ -28,8 +28,18 @@
 - 专项测试：42/42 通过；新增两项先在旧实现上失败，修复后通过。日志 `output/spread-order-page-tests-20261021.log`。
 - TypeScript + Vite 生产构建通过，日志 `output/spread-order-build-20261021.log`。测试仍有既有 Ant Design message 的 act 警告，不影响通过。
 - 桌面 1920px 和手机 390px 浏览器用真实生产采样作为可控响应：10 个可见 FF 组中移除 4 组、移除全部 10 组、自动刷新恢复及反向排列返回数据时，固定 key 序列始终一致；占位双边价格为 `—`，三个操作按钮禁用，恢复后价格变化，解除后按新数值重新排序。无整页横向溢出、无脚本错误。证据 `output/spread-order-local-browser-20261021.json` 及两张 `spread-order-local-gap-*` 截图。
-- 部署和真实生产自动刷新的最终结果在交付后追加；可控响应验证不能替代真实生产验证。
+- 可控响应验证不能替代真实生产验证，真实行情观察结果见下文。
 - 发布流程依照 `docs/git-delivery-checklist.md`、`docs/linux-deployment.md`：仅提交本模块文件，推送当前分支，等待双镜像通过，备份并验证数据库，再以固定 SHA 镜像和 `git pull --ff-only` 更新；生产机不构建。
+
+## 线上交付记录
+
+- 功能提交 `cf92fc97219380ea8385373f08efe93e47ca748c` 已推送当前分支；[GitHub Actions 39529696057](https://github.com/wubin19920612/taoli1/actions/runs/39529696057) 的 backend/frontend 均成功，两份 SHA 镜像 manifest 已核验。
+- 生产 Git 与双容器镜像均为上述提交，受跟踪工作区干净；`git pull --ff-only` 和 Compose `up -d --no-build --wait` 成功。前后端 healthy，后端直连及前端代理 `/api/health` 均返回 `status=ok`，12189 markets，`exchange_errors={}`，所有交易所状态 healthy。
+- 主库备份：`backups/radar-before-cf92fc972193-20261021T015237Z.db`，656990208 bytes；`integrity_check=ok`，主机与容器 SHA-256 一致：`2010d74af2b005f03814c6949646ead1ed523abd604cd7801cdac03d6f1cdd96`。
+- Squeeze route 备份：`backups/squeeze-route-before-cf92fc972193-20261021T015237Z.db`，241664 bytes；`integrity_check=ok`，主机与容器 SHA-256 一致：`c1c26b875328cfcfd617fe6ada08c75fb76aae7db33abf89236a23c81bcd431b`。保留策略本次删除 0 份备份。
+- 真实生产浏览器 MEWUSDT、仅显示 FF：初始采样加 8 次自动刷新共 9 个快照，10 行 key 序列始终一致；暂缺组数依次为 `0,0,0,0,0,4,0,0,0`，行情缺失及下一次恢复时没有移除或插入已固定行；缺失行双边价格为 `—`、操作按钮禁用。报价继续变化，页面无脚本错误。
+- 解锁后开仓价差降序、390px 手机无整页横向溢出，均经真实生产页面验证。最终证据 `output/spread-order-production-final-20261021.json`，原始监测为 `spread-order-production-browser-20261021.json`，解锁及手机补充为 `spread-order-production-finish-20261021.json`；截图 `spread-order-production-1920-20261021.png` 和 `spread-order-production-390-20261021.png`。监测脚本初次将开/平仓单元格一起检查排序而误报，已修正为仅检查开仓列并补测通过，原始失败日志保留。
+- 部署和健康原始记录：`output/spread-order-deployment-20261021.log`、`output/spread-order-production-health-20261021.log`。本文的交付补充以独立 `[skip ci]` 文档提交推送，不重复部署应用。
 
 ## 工作区与后续
 
