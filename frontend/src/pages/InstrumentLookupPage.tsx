@@ -140,7 +140,8 @@ type AstroSizingFormValues = Required<Omit<AstroCardCreateRequest, "save_as_defa
 type SpreadTypeFilter = "FF" | "SF" | "SS" | "reverse_sf";
 type SpreadSortKey = "opportunity_type" | "buy_market" | "sell_market" | "executable_spread_pct" | "close_spread_pct" | "max_spread_24h";
 type SpreadSort = { key: SpreadSortKey; order: "ascend" | "descend" } | null;
-type SpreadOrderLock = { symbol: string; keys: string[] };
+type InstrumentSpreadRow = InstrumentSpreadComparison & { quoteUnavailable?: boolean };
+type SpreadOrderLock = { symbol: string; rows: InstrumentSpreadComparison[] };
 
 const spreadTypeFilterOptions: Array<{ label: string; value: SpreadTypeFilter }> = [
   { label: "FF 合约-合约", value: "FF" },
@@ -256,11 +257,25 @@ function spreadGroupKey(spread: InstrumentSpreadComparison): string {
 }
 
 function SpreadQuoteCell({ spread, side, market }: {
-  spread: InstrumentSpreadComparison;
+  spread: InstrumentSpreadRow;
   side: "buy" | "sell";
   market: MarketSnapshot | null;
 }) {
   const isBuy = side === "buy";
+  if (spread.quoteUnavailable) {
+    return (
+      <div className="instrument-spread-quote">
+        <span className="instrument-spread-quote-side">{isBuy ? "买入 Ask（卖一）" : "卖出 Bid（买一）"}</span>
+        <strong className="instrument-spread-quote-price">—</strong>
+        <dl>
+          {["24h 成交额", "资金费率", "结算周期", "下次结算"].map((label) => (
+            <div key={label}><dt>{label}</dt><dd>—</dd></div>
+          ))}
+        </dl>
+        <span className="instrument-spread-quote-updated">行情暂不可用，等待刷新</span>
+      </div>
+    );
+  }
   const isFuture = (isBuy ? spread.buy_market_type : spread.sell_market_type) === "future";
   const rate = isBuy ? spread.buy_funding_rate_pct : spread.sell_funding_rate_pct;
   const interval = isBuy ? spread.buy_funding_interval_hours : spread.sell_funding_interval_hours;
@@ -1290,12 +1305,16 @@ export function InstrumentLookupPage() {
   const sortedInstrumentSpreads = spreadSort
     ? [...instrumentSpreads].sort((left, right) => spreadComparators[spreadSort.key](left, right) * (spreadSort.order === "ascend" ? 1 : -1))
     : instrumentSpreads;
-  const spreadOrderRanks = new Map(spreadOrderFixed ? spreadOrderLock?.keys.map((key, index) => [key, index]) : []);
-  const orderedInstrumentSpreads = spreadOrderFixed
-    ? [...sortedInstrumentSpreads].sort((left, right) => (
-      (spreadOrderRanks.get(spreadGroupKey(left)) ?? Number.MAX_SAFE_INTEGER)
-      - (spreadOrderRanks.get(spreadGroupKey(right)) ?? Number.MAX_SAFE_INTEGER)
-    ))
+  const currentSpreadGroups = new Map(instrumentSpreads.map((spread) => [spreadGroupKey(spread), spread]));
+  const fixedSpreadGroups = new Set(spreadOrderFixed ? spreadOrderLock?.rows.map(spreadGroupKey) : []);
+  // Keep a slot for each locked group even when a refresh temporarily omits its
+  // quotes. The saved row supplies identity only; unavailable values and actions
+  // are hidden until the group returns in a current response.
+  const orderedInstrumentSpreads: InstrumentSpreadRow[] = spreadOrderFixed
+    ? [
+      ...spreadOrderLock!.rows.map((spread) => currentSpreadGroups.get(spreadGroupKey(spread)) ?? { ...spread, quoteUnavailable: true }),
+      ...sortedInstrumentSpreads.filter((spread) => !fixedSpreadGroups.has(spreadGroupKey(spread)))
+    ]
     : sortedInstrumentSpreads;
 
   useEffect(() => {
@@ -1304,13 +1323,16 @@ export function InstrumentLookupPage() {
       setSpreadOrderLock(null);
       return;
     }
-    const knownKeys = new Set(spreadOrderLock.keys);
-    const additions = orderedInstrumentSpreads.map(spreadGroupKey).filter((key) => !knownKeys.has(key));
-    if (additions.length) setSpreadOrderLock({ ...spreadOrderLock, keys: [...spreadOrderLock.keys, ...additions] });
+    const previousGroups = new Map(spreadOrderLock.rows.map((spread) => [spreadGroupKey(spread), spread]));
+    const rows = orderedInstrumentSpreads.map((spread) => spread.quoteUnavailable
+      ? previousGroups.get(spreadGroupKey(spread))! : spread);
+    if (rows.length !== spreadOrderLock.rows.length || rows.some((spread, index) => spread !== spreadOrderLock.rows[index])) {
+      setSpreadOrderLock({ ...spreadOrderLock, rows });
+    }
   }, [result, spreadOrderLock, orderedInstrumentSpreads]);
 
   const hiddenSpreadTypeSet = new Set(hiddenSpreadTypes);
-  const spreadExchanges = [...new Set(instrumentSpreads.flatMap(
+  const spreadExchanges = [...new Set(orderedInstrumentSpreads.flatMap(
     (spread) => [spread.buy_exchange, spread.sell_exchange]
   ))].sort(exchangeNameOrder);
   const exchangeSearchTerm = spreadExchangeSearch.trim().toLowerCase();
@@ -1583,7 +1605,7 @@ export function InstrumentLookupPage() {
     }
   };
 
-  const spreadColumns: ColumnsType<InstrumentSpreadComparison> = [
+  const spreadColumns: ColumnsType<InstrumentSpreadRow> = [
     {
       title: "差价类型",
       dataIndex: "opportunity_type",
@@ -1661,7 +1683,7 @@ export function InstrumentLookupPage() {
       width: 130,
       align: "right",
       sorter: true,
-      render: (value: number, spread) => (
+      render: (value: number, spread) => spread.quoteUnavailable ? "—" : (
         <Tooltip title={`买入 Ask ${price(spread.buy_ask)} · 卖出 Bid ${price(spread.sell_bid)}；未扣手续费及滑点`}>
           <div className={`instrument-spread-value instrument-rate-${tone(value)}`}>
             <strong>{signedPct(value)}</strong>
@@ -1676,7 +1698,7 @@ export function InstrumentLookupPage() {
       width: 130,
       align: "right",
       sorter: true,
-      render: (value: number, spread) => (
+      render: (value: number, spread) => spread.quoteUnavailable ? "—" : (
         <Tooltip title={`买入 Bid ${price(spread.buy_bid)} · 卖出 Ask ${price(spread.sell_ask)}；非平仓净收益，未扣手续费及滑点`}>
           <div className="instrument-spread-value instrument-spread-close-value">
             <strong>{signedPct(value)}</strong>
@@ -1692,6 +1714,7 @@ export function InstrumentLookupPage() {
       align: "right",
       sorter: true,
       render: (_, spread) => {
+        if (spread.quoteUnavailable) return "—";
         const history = statistics?.spreads?.[spread.id];
         const maximum = history?.max_spread_pct ?? null;
         const minimum = history?.min_spread_pct ?? null;
@@ -1736,31 +1759,33 @@ export function InstrumentLookupPage() {
         const blocker = pairSpreadBlocker(spread);
         return (
           <Space size={4}>
-            <Tooltip title={blocker ?? "在价差查询查看走势图"}>
+            <Tooltip title={spread.quoteUnavailable ? "行情暂不可用，等待刷新" : blocker ?? "在价差查询查看走势图"}>
               <span>
                 <Button
                   aria-label={`价差查询 ${result?.symbol ?? ""} ${spread.id}`}
                   size="small"
                   icon={<LineChartOutlined />}
-                  disabled={Boolean(blocker)}
+                  disabled={spread.quoteUnavailable || Boolean(blocker)}
                   onClick={() => openPairSpread(spread)}
                 />
               </span>
             </Tooltip>
-            <Tooltip title={spread.astro_blocker ? `${spread.astro_blocker}；人工建卡仅提示，不会拦截` : "按当前方向创建卡片"}>
+            <Tooltip title={spread.quoteUnavailable ? "行情暂不可用，等待刷新" : spread.astro_blocker ? `${spread.astro_blocker}；人工建卡仅提示，不会拦截` : "按当前方向创建卡片"}>
               <Button
                 size="small"
                 type="primary"
                 icon={<PlusOutlined />}
+                disabled={spread.quoteUnavailable}
                 onClick={() => void openAstroPreview(spread)}
               >
                 建卡
               </Button>
             </Tooltip>
-            <Tooltip title="交换买卖方向，按反向盘口创建卡片">
+            <Tooltip title={spread.quoteUnavailable ? "行情暂不可用，等待刷新" : "交换买卖方向，按反向盘口创建卡片"}>
               <Button
                 size="small"
                 icon={<SwapOutlined />}
+                disabled={spread.quoteUnavailable}
                 onClick={() => void openAstroPreview(spread, true)}
               >
                 反向
@@ -2138,7 +2163,7 @@ export function InstrumentLookupPage() {
         </section>
       ) : null}
 
-      {instrumentSpreads.length > 0 ? (
+      {orderedInstrumentSpreads.length > 0 ? (
         <section className="instrument-market-table">
           <div className="instrument-section-head instrument-spread-head">
             <div>
@@ -2146,7 +2171,7 @@ export function InstrumentLookupPage() {
               <Typography.Text type="secondary">按可成交盘口及价格倍率归一计算；未扣手续费及滑点，每组保留较优方向。≈ 表示预估数据，结算时间为北京时间。</Typography.Text>
             </div>
             <Space size={[10, 4]} wrap className="instrument-spread-filters">
-              <Tooltip title={spreadOrderFixed ? "行情继续更新，已有市场组保持顺序；新市场组追加到末尾。解除后恢复实时排序。" : "固定当前排列顺序，避免行情刷新时行位置跳动；价格、资费和成交额继续更新。"}>
+              <Tooltip title={spreadOrderFixed ? "行情继续更新，已有市场组保持位置；行情暂缺时保留占位，恢复后原位更新；新市场组追加末尾。解除后恢复实时排序。" : "固定当前排列顺序，避免行情刷新时行位置跳动；价格、资费和成交额继续更新。"}>
                 <Button
                   icon={<PushpinOutlined />}
                   type={spreadOrderFixed ? "primary" : "default"}
@@ -2154,7 +2179,7 @@ export function InstrumentLookupPage() {
                   aria-pressed={spreadOrderFixed}
                   onClick={() => setSpreadOrderLock(spreadOrderFixed || !result ? null : {
                     symbol: result.symbol,
-                    keys: sortedInstrumentSpreads.map(spreadGroupKey)
+                    rows: sortedInstrumentSpreads
                   })}
                 >
                   {spreadOrderFixed ? "解除固定" : "固定排序"}
@@ -2183,10 +2208,13 @@ export function InstrumentLookupPage() {
                   {option.label}
                 </Checkbox>
               ))}
-              <Tag>{visibleInstrumentSpreads.length} / {instrumentSpreads.length} 组</Tag>
+              <Tag>{visibleInstrumentSpreads.length} / {orderedInstrumentSpreads.length} 组</Tag>
+              {visibleInstrumentSpreads.some((spread) => spread.quoteUnavailable) ? (
+                <Tag color="warning">{visibleInstrumentSpreads.filter((spread) => spread.quoteUnavailable).length} 组行情暂缺</Tag>
+              ) : null}
             </Space>
           </div>
-          <Table<InstrumentSpreadComparison>
+          <Table<InstrumentSpreadRow>
             className="instrument-spread-table"
             tableLayout="fixed"
             rowKey={spreadGroupKey}

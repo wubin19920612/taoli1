@@ -1227,7 +1227,12 @@ describe("InstrumentLookupPage", () => {
     expect(rowRoutes()).toEqual(["hl → bn", "bn → hl", "bn → okx"]);
     current = { ...lookupResult, spreads: [added, subDex] };
     await userEvent.click(screen.getByRole("button", { name: "立即刷新" }));
-    await waitFor(() => expect(rowRoutes()).toEqual(["bn → hl", "bn → okx"]));
+    await waitFor(() => expect(within(firstRow as HTMLElement).getAllByText("行情暂不可用，等待刷新")).toHaveLength(2));
+    expect(rowRoutes()).toEqual(["hl → bn", "bn → hl", "bn → okx"]);
+    expect(section.querySelector("tbody tr.ant-table-row")).toBe(firstRow);
+    expect(within(firstRow as HTMLElement).queryByText("98,765")).toBeNull();
+    expect(within(firstRow as HTMLElement).getByRole<HTMLButtonElement>("button", { name: /建卡/ }).disabled).toBe(true);
+    expect(within(firstRow as HTMLElement).getByRole<HTMLButtonElement>("button", { name: /反向/ }).disabled).toBe(true);
     current = { ...lookupResult, spreads: [added, { ...main, executable_spread_pct: -1 }, subDex] };
     await userEvent.click(screen.getByRole("button", { name: "立即刷新" }));
     await waitFor(() => expect(rowRoutes()).toEqual(["bn → hl", "bn → hl", "bn → okx"]));
@@ -1236,6 +1241,35 @@ describe("InstrumentLookupPage", () => {
     expect(rawMarkets[1]).toContain("DEX io · io:BTC");
     await userEvent.click(within(section).getByRole("button", { name: "解除固定" }));
     expect(rowRoutes()).toEqual(["bn → okx", "bn → hl", "bn → hl"]);
+  });
+
+  it("keeps fixed row slots through a complete quote gap and drops unavailable rows on unlock", async () => {
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    let current = lookupResult;
+    vi.mocked(fetch).mockImplementation(async (input, init) => (
+      String(input).endsWith("/instruments/BTCUSDT") ? Response.json(current) : fallback(input, init)
+    ));
+    render(<InstrumentLookupPage />);
+    const section = (await screen.findByText("跨市场差价")).closest("section")!;
+    const rowKeys = () => Array.from(section.querySelectorAll("tbody tr.ant-table-row")).map((row) => row.getAttribute("data-row-key"));
+    const initialKeys = rowKeys();
+    await userEvent.click(within(section).getByRole("button", { name: "固定排序" }));
+    current = { ...lookupResult, market_count: 0, spreads: [] };
+    await userEvent.click(screen.getByRole("button", { name: "立即刷新" }));
+    await waitFor(() => expect(within(section).getAllByText("行情暂不可用，等待刷新")).toHaveLength(6));
+    expect(rowKeys()).toEqual(initialKeys);
+    expect(within(section).queryByText("+0.080%")).toBeNull();
+    fireEvent.change(screen.getByLabelText("搜索差价交易所"), { target: { value: "OKX" } });
+    expect(rowKeys()).toEqual(initialKeys.slice(1));
+    fireEvent.change(screen.getByLabelText("搜索差价交易所"), { target: { value: "" } });
+    current = { ...lookupResult, spreads: [lookupResult.spreads[2], { ...lookupResult.spreads[0], buy_ask: 100012 }] };
+    await userEvent.click(screen.getByRole("button", { name: "立即刷新" }));
+    await waitFor(() => expect(within(section).getByText("100,012")).toBeTruthy());
+    expect(rowKeys()).toEqual(initialKeys);
+    expect(within(section).getAllByText("行情暂不可用，等待刷新")).toHaveLength(2);
+    await userEvent.click(within(section).getByRole("button", { name: "解除固定" }));
+    expect(rowKeys()).toEqual([initialKeys[0], initialKeys[2]]);
+    expect(within(section).queryByText("行情暂不可用，等待刷新")).toBeNull();
   });
 
   it("captures a custom column order and clears the fixed order when changing instruments", async () => {
