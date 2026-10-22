@@ -6,6 +6,7 @@ from app.models.fs_monitor import FsCandidate, FsReport
 from app.models.market import MarketType
 from app.services.fs_bybit import BybitFsProvider, FsDataError, number, timestamp
 from app.services.fs_economics import evaluate
+from app.services.fs_public import PublicFsProvider, route_key
 from app.services.pair_validation import validate_pair
 
 
@@ -16,9 +17,13 @@ def identity_check(row, markets, spot_book, future_book, now):
         matches = [
             m
             for m in markets
-            if m.exchange == "bybit"
+            if m.exchange == row.exchange
             and m.market_type == kind
-            and m.raw_symbol == row.symbol
+            and m.raw_symbol
+            == (
+                (row.spot_raw_symbol if kind == MarketType.SPOT else row.future_raw_symbol)
+                or row.symbol
+            )
             and not m.dex
         ]
         if len(matches) != 1:
@@ -35,12 +40,12 @@ def identity_check(row, markets, spot_book, future_book, now):
                 "fingerprint": m.binding_fingerprint,
             }
         )
-        # Bybit order quantities are base-coin units; its legacy ticker adapter leaves
-        # contract_size_multiplier unset. The verified identity + official linear metadata
-        # supply the unit evidence; an explicit non-unit multiplier is still rejected.
+        # Metadata and verified binding must agree on the original contract size.
+        # Books supplied here have already been converted into base-coin units.
         if (
             m.symbol_alias_price_multiplier != 1
-            or m.contract_size_multiplier not in {None, 1}
+            or (m.contract_size_multiplier or 1)
+            != (row.contract_multiplier if kind == MarketType.FUTURE else 1)
             or m.quote != "USDT"
             or m.contract_kind not in {"linear", "spot"}
         ):
@@ -68,9 +73,26 @@ def identity_check(row, markets, spot_book, future_book, now):
 
 
 class FsMonitor:
-    def __init__(self, repository, accounts, store, provider=None, astro=None, identities=None):
+    def __init__(
+        self,
+        repository,
+        accounts,
+        store,
+        provider=None,
+        astro=None,
+        identities=None,
+        providers=None,
+    ):
         self.repository, self.accounts, self.store = repository, accounts, store
         self.provider = provider or BybitFsProvider()
+        self.providers = providers or (
+            {"bybit": provider}
+            if provider
+            else {
+                "bybit": self.provider,
+                **{ex: PublicFsProvider(ex, store) for ex in ("binance", "okx", "bitget", "gate")},
+            }
+        )
         self.report = FsReport()
         self.scanning = False
         self.wake = asyncio.Event()
@@ -80,16 +102,19 @@ class FsMonitor:
         self.identities = identities
         self._last_duration = 0.0
 
-    def markets(self, symbol):
+    def markets(self, symbol, exchange="bybit"):
+        from app.services.fs_public import raw_symbols
+
+        raw = raw_symbols(exchange, symbol[:-4])
         rows = [
             m
             for m in self.store.get_markets()
-            if m.exchange == "bybit" and m.raw_symbol == symbol and not m.dex
+            if m.exchange == exchange and m.raw_symbol in raw and not m.dex
         ]
         return [self.identities.annotate(m) for m in rows] if self.identities else rows
 
     async def aclose(self):
-        await self.provider.aclose()
+        await asyncio.gather(*(p.aclose() for p in self.providers.values()))
         await self.repository.aclose()
 
     async def update_settings(self, settings):
@@ -142,9 +167,8 @@ class FsMonitor:
                 for detail in row.identity_details:
                     matches = [
                         m
-                        for m in self.markets(row.symbol)
-                        if m.exchange == "bybit"
-                        and m.raw_symbol == row.symbol
+                        for m in self.markets(row.symbol, row.exchange)
+                        if m.exchange == row.exchange
                         and m.market_type.value == detail["market_type"]
                         and not m.dex
                     ]
@@ -159,7 +183,7 @@ class FsMonitor:
                         identity_changed = True
                         break
             if (
-                account_invalid
+                (account_invalid and row.exchange == "bybit")
                 or identity_changed
                 or not settings.enabled
                 or (row.valid_until is not None and row.valid_until <= now)
@@ -168,7 +192,7 @@ class FsMonitor:
                 row.signal_ready = False
                 reason = (
                     "account_changed"
-                    if account_invalid
+                    if account_invalid and row.exchange == "bybit"
                     else "identity_changed"
                     if identity_changed
                     else "observation_expired"
@@ -200,6 +224,7 @@ class FsMonitor:
             if generation == self.generation:
                 self.report = FsReport(
                     settings=settings,
+                    exchange_status=self.report.exchange_status,
                     observed_at=datetime.now(UTC),
                     error=str(exc) if isinstance(exc, FsDataError) else "scan_failed",
                 )
@@ -209,7 +234,23 @@ class FsMonitor:
             self.scanning = False
 
     async def _scan(self, settings, generation):
-        snapshot = await self.provider.public_snapshot()
+        enabled = list(dict.fromkeys(ex for ex in settings.exchanges if ex in self.providers))
+        snapshots, statuses = {}, {}
+
+        async def load(ex):
+            try:
+                async with asyncio.timeout(12):
+                    snapshots[ex] = await self.providers[ex].public_snapshot()
+                statuses[ex] = "ok" if snapshots[ex]["future_tickers"] else "no_market_data"
+            except Exception as exc:  # noqa: BLE001 - isolate venue failures and redact vendor text.
+                statuses[ex] = str(exc) if isinstance(exc, FsDataError) else "public_query_failed"
+
+        await asyncio.gather(*(load(ex) for ex in enabled))
+        if generation != self.generation:
+            return
+        self.report.exchange_status = statuses
+        if not snapshots:
+            raise FsDataError(next(iter(statuses.values()), "public_query_failed"))
         credentials, account_stamp, account_context, account_at, account_error = (
             None,
             None,
@@ -217,64 +258,91 @@ class FsMonitor:
             None,
             None,
         )
-        if settings.account_id:
+        if settings.account_id and "bybit" in enabled:
             try:
                 credentials, account_stamp = await self.credentials(settings.account_id)
                 account_context, account_at = await self.provider.account_context(credentials)
             except FsDataError as exc:
                 account_error = str(exc)
                 credentials = None
-        negatives = [
-            x
-            for x in snapshot["future_tickers"].values()
-            if number(x.get("fundingRate")) is not None
-            and float(x["fundingRate"]) < 0
-            and snapshot["futures"].get(x["symbol"], {}).get("quoteCoin") == "USDT"
-        ]
-
-        def score(ticker):
-            interval = number(ticker.get("fundingIntervalHour"), nonnegative=True)
-            return float(ticker["fundingRate"]) / (interval if interval else 1)
-
-        # Prioritize supported spot pairs; unborrowable/no-spot observations remain visible afterward.
-        negatives.sort(
-            key=lambda x: (
-                snapshot["rates"]
-                .get(snapshot["spots"].get(x["symbol"], {}).get("baseCoin"), {})
-                .get("borrowable")
-                is not True,
-                score(x),
-                x["symbol"],
-            )
-        )
-        semaphore = asyncio.Semaphore(3)
-
-        async def build(ticker):
-            async with semaphore:
-                row = await self._candidate(
-                    ticker,
-                    snapshot,
-                    settings,
-                    credentials,
-                    account_context,
-                    account_at,
-                    account_error,
+        pools = {}
+        for ex, snapshot in snapshots.items():
+            negatives = [
+                x
+                for x in snapshot["future_tickers"].values()
+                if number(x.get("fundingRate")) is not None
+                and float(x["fundingRate"]) < 0
+                and snapshot["futures"].get(x["symbol"], {}).get("quoteCoin") == "USDT"
+            ]
+            negatives.sort(
+                key=lambda x: (
+                    x["symbol"] not in snapshot["spots"],
+                    snapshot["rates"]
+                    .get(snapshot["spots"].get(x["symbol"], {}).get("baseCoin"), {})
+                    .get("borrowable")
+                    is not True,
+                    float(x["fundingRate"])
+                    / (number(x.get("fundingIntervalHour"), nonnegative=True) or 1),
+                    x["symbol"],
                 )
-                attempt = await self.repository.astro_attempt(row.symbol)
+            )
+            pools[ex] = negatives
+        negative_count = sum(len(v) for v in pools.values())
+        # Fair round-robin prevents the largest venue from consuming every slot.
+        chosen = []
+        for index in range(settings.max_candidates):
+            for ex in enabled:
+                if index < len(pools.get(ex, [])):
+                    chosen.append((ex, pools[ex][index]))
+                    if len(chosen) == settings.max_candidates:
+                        break
+            if len(chosen) == settings.max_candidates:
+                break
+        selected = [t["symbol"] if ex == "bybit" else ex + ":" + t["symbol"] for ex, t in chosen]
+        self.report.exchange_status = statuses
+        self.report.candidates = [r for r in self.report.candidates if route_key(r) in selected]
+        self.report.negative_count = negative_count
+        semaphore = asyncio.Semaphore(5)
+
+        async def build(ex, ticker):
+            async with semaphore:
+                try:
+                    async with asyncio.timeout(12):
+                        row = await self._candidate(
+                            ticker,
+                            snapshots[ex],
+                            settings,
+                            credentials if ex == "bybit" else None,
+                            account_context if ex == "bybit" else {},
+                            account_at if ex == "bybit" else None,
+                            account_error if ex == "bybit" else None,
+                            exchange=ex,
+                        )
+                except TimeoutError:
+                    row = FsCandidate(
+                        symbol=ticker["symbol"],
+                        base=ticker["symbol"][:-4],
+                        exchange=ex,
+                        observed_at=datetime.now(UTC),
+                        valid_until=datetime.now(UTC) + timedelta(seconds=15),
+                        stage="blocked",
+                        blockers=["query_timeout"],
+                        signal_blockers=["query_timeout"],
+                    )
+                attempt = await self.repository.astro_attempt(route_key(row))
                 if attempt:
                     row.astro_state = "uncertain" if attempt == "pending" else "recorded"
                 if generation == self.generation:
-                    # Publish each row immediately; an early row must not wait for
-                    # every slow candidate before its 15-second review can be seen.
-                    rows = {r.symbol: r for r in self.report.candidates if r.symbol in selected}
-                    rows[row.symbol] = row
+                    rows = {
+                        route_key(r): r for r in self.report.candidates if route_key(r) in selected
+                    }
+                    rows[route_key(row)] = row
                     self.report.candidates = [rows[s] for s in selected if s in rows]
                     self.report.observed_at = datetime.now(UTC)
                     self.report.error = None
                 return row
 
-        selected = [x["symbol"] for x in negatives[: settings.max_candidates]]
-        candidates = await asyncio.gather(*[build(x) for x in negatives[: settings.max_candidates]])
+        candidates = await asyncio.gather(*(build(ex, ticker) for ex, ticker in chosen))
         if generation != self.generation:
             return
         if settings.account_id and credentials:
@@ -295,9 +363,16 @@ class FsMonitor:
             settings=settings,
             observed_at=datetime.now(UTC),
             stale=False,
-            negative_count=len(negatives),
+            negative_count=negative_count,
+            exchange_status=statuses,
             candidates=candidates,
             sources=[
+                "https://www.okx.com/api/v5/public/interest-rate-loan-quota",
+                "https://api.bitget.com/api/v2/margin/currencies",
+                "https://api.gateio.ws/api/v4/margin/uni/currency_pairs",
+                "https://api.binance.com/api/v3/exchangeInfo",
+            ]
+            + [
                 "https://api.bybit.com" + path
                 for path in (
                     "/v5/market/instruments-info",
@@ -312,7 +387,7 @@ class FsMonitor:
             ],
         )
         states = {
-            r.symbol: ("signal_ready" if r.signal_ready else r.stage, tuple(sorted(r.blockers)))
+            route_key(r): ("signal_ready" if r.signal_ready else r.stage, tuple(sorted(r.blockers)))
             for r in candidates
         }
         events = [
@@ -338,7 +413,9 @@ class FsMonitor:
                     continue
                 row.astro_state = await self.astro.process(
                     row,
-                    lambda symbol=row.symbol: self.recheck(symbol, settings, generation),
+                    lambda symbol=row.symbol, ex=row.exchange: self.recheck(
+                        symbol, settings, generation, ex
+                    ),
                     lambda: generation == self.generation,
                 )
                 if row.astro_state == "signal_changed":
@@ -349,26 +426,38 @@ class FsMonitor:
                     # per scan, and no following write after an ambiguous result.
                     break
 
-    async def recheck(self, symbol, settings, generation):
+    async def recheck(self, symbol, settings, generation, exchange="bybit"):
         """Fresh, complete public/account sample before an external card write."""
-        data = await self.provider.public_snapshot()
+        data = await self.providers[exchange].public_snapshot()
         ticker = data["future_tickers"].get(symbol)
         if ticker is None or generation != self.generation:
             raise FsDataError("signal_changed")
         credentials, context, account_at, error = None, {}, None, None
-        if settings.account_id:
+        if settings.account_id and exchange == "bybit":
             credentials, stamp = await self.credentials(settings.account_id)
             if stamp != self._account_stamp:
                 raise FsDataError("account_changed")
             context, account_at = await self.provider.account_context(credentials)
-        row = await self._candidate(ticker, data, settings, credentials, context, account_at, error)
+        row = await self._candidate(
+            ticker, data, settings, credentials, context, account_at, error, exchange=exchange
+        )
         if generation != self.generation or not row.signal_ready:
             raise FsDataError("signal_changed")
         return row
 
     async def _candidate(
-        self, ticker, data, settings, credentials, account_context, account_at, account_error
+        self,
+        ticker,
+        data,
+        settings,
+        credentials,
+        account_context,
+        account_at,
+        account_error,
+        *,
+        exchange="bybit",
     ):
+        provider = self.providers[exchange]
         symbol = ticker["symbol"]
         fm, sm = data["futures"].get(symbol, {}), data["spots"].get(symbol, {})
         base = fm.get("baseCoin", "")
@@ -377,7 +466,11 @@ class FsMonitor:
         row = FsCandidate(
             symbol=symbol,
             base=base,
+            exchange=exchange,
+            spot_raw_symbol=sm.get("symbol", symbol),
+            future_raw_symbol=fm.get("symbol", symbol),
             observed_at=datetime.now(UTC),
+            valid_until=datetime.now(UTC) + timedelta(seconds=15),
             funding_pct=float(ticker["fundingRate"]) * 100,
             # Ticker's current interval supersedes cached instrument metadata.
             interval_hours=number(ticker.get("fundingIntervalHour"), nonnegative=True),
@@ -390,25 +483,41 @@ class FsMonitor:
             spot_fee_pct=settings.spot_fee_pct,
             future_fee_pct=settings.future_fee_pct,
             source_times={
-                "spot_ticker": data["spot_at"],
-                "future_ticker": data["future_at"],
+                "spot_ticker": st.get("source_at", data["spot_at"]),
+                "future_ticker": ticker.get("source_at", data["future_at"]),
                 "public_borrow": data["margin_at"],
             },
         )
         try:
+            if exchange != "bybit":
+                ticker = await provider.refresh_funding(ticker)
+                row.funding_pct = float(ticker["fundingRate"]) * 100
+                row.interval_hours = number(ticker.get("fundingIntervalHour"), nonnegative=True)
+                row.source_times["funding"] = ticker["source_at"]
+                if exchange in {"binance", "bitget", "gate"}:
+                    row.blockers.append("borrow_rate_requires_account")
+                if data.get("borrow_error"):
+                    row.blockers.append(data["borrow_error"])
             row.next_funding_at = timestamp(ticker.get("nextFundingTime"))
             interest = number(rate.get("hourlyBorrowRate"), nonnegative=True)
             row.hourly_borrow_pct = interest * 100 if interest is not None else None
             row.borrow_rate_source = "public_no_vip" if interest is not None else "unknown"
             if not sm:
                 raise FsDataError("spot_market_missing")
-            (sm, sm_at), (fm, fm_at) = await self.provider.current_instruments(symbol)
+            (sm, sm_at), (fm, fm_at) = await provider.current_instruments(symbol)
             row.source_times.update(spot_specs=sm_at, future_specs=fm_at)
+            if sm.get("marginBorrowable") is False:
+                row.product_borrowable = False
             from app.services.fs_identity import TARGETS
 
-            if symbol in TARGETS and fm.get("fullName") != TARGETS[symbol][1]:
+            row.contract_multiplier = float(fm.get("baseMultiplier", 1))
+            if (
+                exchange == "bybit"
+                and symbol in TARGETS
+                and fm.get("fullName") != TARGETS[symbol][1]
+            ):
                 raise FsDataError("identity_conflict")
-            if sm.get("marginTrading") not in {"utaOnly", "both"}:
+            if exchange == "bybit" and sm.get("marginTrading") not in {"utaOnly", "both"}:
                 row.product_borrowable = False
             if account_error:
                 row.account_state = account_error
@@ -418,7 +527,7 @@ class FsMonitor:
                     user_rate = number(coin.get("hourlyBorrowRate"), nonnegative=True)
                     if user_rate is None or coin.get("borrowable") is not True:
                         raise FsDataError("account_borrow_unavailable")
-                    quote = await self.provider.account_quote(symbol, base, credentials)
+                    quote = await provider.account_quote(symbol, base, credentials)
                     row.hourly_borrow_pct = user_rate * 100
                     row.borrow_rate_source = "account"
                     row.account_state = "checked"
@@ -438,16 +547,18 @@ class FsMonitor:
                     )
                 except FsDataError as exc:
                     row.account_state = str(exc)
-            (spot_book, _), (future_book, _) = await self.provider.books(symbol)
+            (spot_book, _), (future_book, _) = await provider.books(symbol)
             now = datetime.now(UTC)
             row.identity_state, row.asset_id, reasons = identity_check(
                 row,
-                self.markets(row.symbol),
+                self.markets(row.symbol, row.exchange),
                 spot_book,
                 future_book,
                 now,
             )
             row.blockers.extend(reasons)
+            if row.identity_state != "verified":
+                row.blockers.append("identity_unverified")
             return evaluate(
                 row,
                 settings,

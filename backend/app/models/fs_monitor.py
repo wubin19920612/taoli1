@@ -8,6 +8,11 @@ class FsSettings(BaseModel):
     model_config = ConfigDict(allow_inf_nan=False, extra="forbid")
     enabled: bool = True
     astro_auto_create: bool = False
+    exchanges: list[Literal["bybit", "binance", "okx", "bitget", "gate"]] = Field(
+        default_factory=lambda: ["bybit", "binance", "okx", "bitget", "gate"],
+        min_length=1,
+        max_length=5,
+    )
     account_id: str | None = Field(default=None, max_length=100)
     target_usdt: float = Field(default=1000, ge=10, le=100_000)
     holding_hours: float = Field(default=8, ge=0.1, le=72)
@@ -42,6 +47,9 @@ class FsCandidate(BaseModel):
     symbol: str
     base: str
     exchange: str = "bybit"
+    spot_raw_symbol: str | None = None
+    future_raw_symbol: str | None = None
+    contract_multiplier: float = 1
     quote: str = "USDT"
     multiplier: float = 1
     observed_at: datetime
@@ -79,6 +87,7 @@ class FsCandidate(BaseModel):
 
 
 class FsReport(BaseModel):
+    exchange_status: dict[str, str] = Field(default_factory=dict)
     scan_duration_seconds: float | None = None
     next_refresh_at: datetime | None = None
     observed_at: datetime | None = None

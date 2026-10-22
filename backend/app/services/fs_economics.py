@@ -102,13 +102,16 @@ def evaluate(
             or future_meta.get("settleCoin") != "USDT"
             or future_meta.get("contractType") != "LinearPerpetual"
             or any(m.get("status") != "Trading" for m in (spot_meta, future_meta))
-            or any(m.get("symbol") != row.symbol for m in (spot_meta, future_meta))
+            or spot_meta.get("symbol") != (row.spot_raw_symbol or row.symbol)
+            or future_meta.get("symbol") != (row.future_raw_symbol or row.symbol)
             or future_meta.get("isPreListing") is True
             or any(str(m.get("xstockMultiplier", "1")) != "1" for m in (spot_meta, future_meta))
         ):
             raise FsDataError("unsupported_contract")
         for key, book in (("spot_book", spot_book), ("future_book", future_book)):
-            if book.get("s") != row.symbol:
+            if book.get("s") != (
+                (row.spot_raw_symbol if key == "spot_book" else row.future_raw_symbol) or row.symbol
+            ):
                 raise FsDataError("orderbook_symbol_mismatch")
             source = timestamp(book.get("ts"))
             row.source_times[key] = source

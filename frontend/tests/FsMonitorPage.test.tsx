@@ -10,7 +10,7 @@ vi.mock("../src/api/client", () => ({
   listAccountConnections: vi.fn(), saveDashboardPassword: vi.fn()
 }));
 const settings: FsSettings = {
-  enabled: true, astro_auto_create: false, account_id: null, target_usdt: 1000, holding_hours: 8,
+  enabled: true, astro_auto_create: false, exchanges: ["bybit", "binance", "okx", "bitget", "gate"], account_id: null, target_usdt: 1000, holding_hours: 8,
   scan_interval_seconds: 60, max_candidates: 15, min_volume_usdt: 100000,
   min_net_pct: 0.1, spot_fee_pct: 0.1, future_fee_pct: 0.055,
   execution_buffer_pct: 0.05, basis_stress_pct: 0.5
@@ -79,6 +79,17 @@ describe("FS observation page", () => {
     await waitFor(() => expect(api.updateFsSettings).toHaveBeenCalledWith(settings));
     fireEvent.click(screen.getByRole("button", { name: "请求刷新" }));
     await waitFor(() => expect(api.refreshFsMonitor).toHaveBeenCalledTimes(1));
+  });
+  it("shows same-symbol candidates separately by exchange and public-data gaps", async () => {
+    vi.mocked(api.getFsReport).mockResolvedValue({ ...report,
+      exchange_status: { bybit: "ok", okx: "ok", gate: "public_query_failed" },
+      candidates: [candidate, { ...candidate, exchange: "okx", blockers: ["borrow_rate_requires_account"] }]
+    });
+    render(<FsMonitorPage />);
+    await waitFor(() => expect(screen.getAllByText("MEWUSDT")).toHaveLength(2));
+    expect(screen.getByText("OKX：1 条观察")).toBeTruthy();
+    expect(screen.getByText("Gate：公开接口查询失败")).toBeTruthy();
+    expect(screen.getByText("借币利率需账户接口确认")).toBeTruthy();
   });
   it("shows access errors and allows password retry", async () => {
     vi.mocked(api.getFsReport).mockRejectedValue(new Error("仪表盘密码错误"));

@@ -1,6 +1,7 @@
 export interface FsSettings {
   enabled: boolean;
   astro_auto_create?: boolean;
+  exchanges?: string[];
   account_id: string | null;
   target_usdt: number;
   holding_hours: number;
@@ -21,6 +22,7 @@ export interface FsScenario {
 }
 export interface FsCandidate {
   symbol: string; base: string; exchange: string; quote: string; multiplier: number;
+  spot_raw_symbol?: string | null; future_raw_symbol?: string | null; contract_multiplier?: number;
   observed_at: string; valid_until: string | null;
   funding_pct: number | null; interval_hours: number | null; next_funding_at: string | null;
   hourly_borrow_pct: number | null; borrow_rate_source: string;
@@ -37,6 +39,7 @@ export interface FsCandidate {
   blockers: string[]; scenarios: FsScenario[];
 }
 export interface FsReport {
+  exchange_status?: Record<string, string>;
   scan_duration_seconds?: number | null; next_refresh_at?: string | null;
   observed_at: string | null; scanning: boolean; stale: boolean; error: string | null;
   negative_count: number; settings: FsSettings; candidates: FsCandidate[]; sources: string[];
