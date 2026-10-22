@@ -26,7 +26,7 @@
 
 ## 测试与证据边界
 
-后端 FS、身份目录、Astro planner、账户回归与后续追加测试的最终结果见下方部署补记。前端 FS 6项及 AppShell12项通过，类型检查/Vite生产构建通过。现有 Starlette 弃用告警和 React act 测试告警保留；首次新前端断言因手机合并文本失败，已修正选择器，失败日志未删除。
+后端 FS、身份目录、Astro planner、账户回归最终86项通过（`output/fs-backend-final-20261022.log`）。前端 FS 6项及 AppShell12项通过，类型检查/Vite生产构建通过（`output/fs-frontend-20261022a.log`、`output/fs-frontend-20261022c.log`、`output/fs-build-20261022b.log`）。现有 Starlette 弃用告警和 React act 测试告警保留；首次新前端断言因手机合并文本失败，已修正选择器，失败日志未删除。
 
 模拟覆盖账户权限不足、零库存、身份冲突/变化、过期、账户禁用/修改、在途配置变化、查询失败；Astro并发去重、已有卡片、写入结果不确定、跨重启 pending、dry run 与失败脱敏。真实公开三轮见 `output/fs-public-probe-20261022.json`；不能将模拟成功说成真实账户或实盘收益验证。
 
@@ -38,4 +38,13 @@
 
 ## 部署补记
 
-待完成预构建镜像、双库备份和线上验证后更新本节；当前不能把尚未部署的改动写成线上已完成。
+- 功能提交 `243ae4687313001fe5c4656a96290622f500ca5d` 已推送。GitHub Actions [39756267151](https://github.com/wubin19920612/taoli1/actions/runs/39756267151) 前后端镜像成功，两标签 manifest 已核对。服务器 git pull --ff-only 到该SHA，通过 `deploy/linux-update.sh` 拉取同SHA预构建镜像并 `up -d --no-build --wait`，生产机构建次数为0。
+- 主库备份 `backups/radar-before-243ae4687313-20261022T093455Z.db`，719351808字节，SHA256 `4a2903d4d9ec6041510e0ff2f3c2a4bc652b85ffc4bf12946f59e572d9474aa5`。
+- 路线库备份 `backups/squeeze-route-before-243ae4687313-20261022T093455Z.db`，241664字节，SHA256 `32e057154a7f4032b29cebac42880b2448c57c818b5591c28080771d6e88a2e1`。两库 integrity_check=ok，容器/宿主机哈希一致。既有部署保留策略各保留9份备份，日志 `output/fs-deployment-20261022.log`。
+- 前后端 healthy，生产 tracked clean，`/api/health` status=ok、12201市场、exchange_errors={}。启动约两分钟时 backend 551.6MiB/768MiB、frontend 4.18MiB/96MiB；不是长期负载证明。部署前 backend 715.9MiB/768MiB，不能把重启后下降直接归因为本次优化。
+- 根据用户明确选择，已通过认证 settings API 设置 `astro_auto_create=true`，其他配置保持原值，account_id仍null。无密码 FS report=401；认证 report/settings/history/events正常，历史行强制 stale 且 signal_ready=false。
+- 2026-10-22 18:37–18:38（韩国时间）9次采样：开启配置后的第1次为空池/在途失效，随后逐行补齐，后6次连续样本15/15未过期；实测轮次约9.4–11.9秒。BMT identity verified，signal_ready=false，阻断为 cost_threshold_not_met；MET conflict；最终13 unverified、1 conflict、1 verified。MEW当时未入选前15，但其现货/永续绑定API均verified。四绑定到期均为2026-10-29T09:20:00Z。
+- Astro真实列表读取通过，验证结束112张、FS=0（起始114张；本模块没有删除/更新操作，未归因其他卡片数量变化）。没有当前达标信号，因此本轮没有真实 add；不能声称真实 FS 建卡/真实借贷/成交已验收。自动 add、同路线跳过、网络不确定持久化与重启恢复是模拟覆盖；自然信号出现后的首次真实新增与列表回读仍需观察。
+- 桌面1440px、手机390px的真实部署页面及配置开关、详情展开验证通过，0页面错误、无整页横向溢出。截图 `output/fs-astro-production-{1440,390}-20261022.png`、详情截图及 `output/fs-astro-production-browser-20261022.json`；完整API证据 `output/fs-production-verification-20261022.json`。
+- 日志抽样未见FS堆栈/500；原有 `trade_availability` 市场缺失、公告来源567及公告数据库写入异常保留在 `output/fs-production-logs-20261022.log`，属于其他模块，未扩展修复。
+- 最终交接与 next-task 另作 `[skip ci]` 文档提交；线上运行镜像仍为本节功能SHA。
