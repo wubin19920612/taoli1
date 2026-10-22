@@ -1,5 +1,18 @@
 # Bybit 负费率 FS 观察池设计
 
+## 2026-10-22 更新：信号交给 Astro
+
+用户明确本模块使用 Astro 的 FS 执行能力，taoli1 负责筛选信号并自动建卡。原版的独立账户查询成为可选验证，不再是建卡前置条件；未查账户仍不得标记“额度满足”或“成本通过”。以下首版说明保留为历史设计，本节覆盖与之冲突的约定。
+
+- `signal_ready` 单独表达公开预估达标：负费率、精确双腿身份/单位、公开借贷支持与利率、成交额、同币数四侧盘口、压力净收益门槛和原有新鲜度全部满足。只豁免 `account_not_configured` 与 `fees_unverified`；已选账户的权限不足、零库存、失败等负面证据仍阻断。`cost_pass` 的账户核验要求不变。
+- `astro_auto_create` 默认为 false；本次用户明确要求上线启用。仅生成 `type=FS,buyEx=bybit,sellEx=bybit`，沿用 Astro planner 的精度/开平价差映射。卡片固定 `status=false,disableOpen=true,leverage=1`，初始单笔/最小/最大金额均10 USDT，待用户在 Astro 中复核和启用。信号估算仓位仍为配置的目标金额。
+- 自动链路只读取 Astro 列表和新增停用卡片，不更新已有卡片，不调用外部消息、交易、借币或杠杆端点。建卡前重新采样、核对身份版本、配置代次、全局过滤条件与有效期。每轮最多一次新增写入；Astro 的 add 可能重启其 core，沿用已有 SDK 行为。
+- 路线按名称、FS类型、买卖交易所检查重复。写前持久化 `fs_astro_attempts.pending`，成功记 created；网络失败/取消/进程重启留下 pending 时只核对列表，不能因暂时未查到就重发。已创建后卡片被删除也不会自动重建；记录保留供人工核对。单进程锁阻止本模块并发重复提交；Astro SDK 未提供跨客户端幂等键，其他客户端同时新增仍是外部边界。
+- 有候选时约10秒起始间隔单飞采样，耗时计入间隔，逐条发布；无候选沿用配置60秒间隔。50秒整轮上限、120ms请求间距、并发3保持。慢查询或重试造成空档时照常过期，不延长15秒复核、30秒盘口、60秒其他来源的有效期。页面每5秒取结果、每1秒更新过期显示，读取失败移除旧通过状态。
+- 经 Bybit 官方文章明确双腿关系并核对精确现货/永续规格，为 MEWUSDT 与 BMTUSDT 增加4份绑定。固定证据截止 `2026-10-29T09:20:00Z`，重启或重复目录刷新不能续期；实时 fullName、base、USDT结算、状态、倍率不符继续阻断。其余资产不按 ticker 批量放行。
+
+依据：[MEW 双腿官方说明](https://www.bybit.com/en/learn/memes/what-is-mew-cat-coin)、[BMT 双腿官方说明](https://www.bybit.com/en/learn/crypto/what-is-bubblemaps-bmt)。具体交付与验证见 [2026-10-22 交接](task-handoff-2026-10-22-fs-astro-signals.md)。
+
 日期：2026-10-21。基线：`750f0fa`，分支 `codex/frontend-localization-polish`。
 
 ## 范围与验收

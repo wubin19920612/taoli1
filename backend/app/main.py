@@ -64,6 +64,7 @@ from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings,
 from app.services.account_positions import AccountPositionService, GateAccountPositionProvider
 from app.services.account_connections import AccountConnectionService
 from app.services.fs_monitor import FsMonitor
+from app.services.fs_astro import FsAstroBridge
 from app.services.fs_repository import FsRepository
 from app.services.alert_engine import (
     AlertEngine,
@@ -825,7 +826,14 @@ def create_app(
         )
         fs_repository = FsRepository(await connect_database(db_path))
         await fs_repository.initialize()
-        app.state.fs_monitor = FsMonitor(fs_repository, app.state.account_connection_service, store)
+        app.state.fs_monitor = FsMonitor(
+            fs_repository, app.state.account_connection_service, store,
+            astro=FsAstroBridge(
+                app.state.astro_client, fs_repository, app.state.settings_repo.get_risk_settings,
+                dry_run_only=app_settings.astro_dry_run_only,
+            ),
+            identities=app.state.market_validation,
+        )
         app.state.astro_alert_service.risk_settings_loader = (
             app.state.settings_repo.get_risk_settings
         )

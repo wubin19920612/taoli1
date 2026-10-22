@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { FsMonitorPage, candidateStage } from "../src/pages/FsMonitorPage";
+import { FsMonitorPage, candidateStage, signalReady } from "../src/pages/FsMonitorPage";
 import type { FsCandidate, FsReport, FsSettings } from "../src/api/fsTypes";
 import * as api from "../src/api/client";
 
@@ -10,7 +10,7 @@ vi.mock("../src/api/client", () => ({
   listAccountConnections: vi.fn(), saveDashboardPassword: vi.fn()
 }));
 const settings: FsSettings = {
-  enabled: true, account_id: null, target_usdt: 1000, holding_hours: 8,
+  enabled: true, astro_auto_create: false, account_id: null, target_usdt: 1000, holding_hours: 8,
   scan_interval_seconds: 60, max_candidates: 15, min_volume_usdt: 100000,
   min_net_pct: 0.1, spot_fee_pct: 0.1, future_fee_pct: 0.055,
   execution_buffer_pct: 0.05, basis_stress_pct: 0.5
@@ -51,6 +51,25 @@ describe("FS observation page", () => {
   });
   it("invalidates expired green state on the client", () => {
     expect(candidateStage({ ...candidate, stage: "cost_pass", valid_until: new Date(Date.now() - 1).toISOString() })).toBe("stale");
+  });
+  it("keeps public signal separate from account cost and expires it", async () => {
+    const ready = { ...candidate, signal_ready: true, astro_state: "existing" };
+    expect(signalReady(ready)).toBe(true);
+    expect(signalReady({ ...ready, valid_until: new Date(Date.now() - 1).toISOString() })).toBe(false);
+    expect(signalReady({ ...ready, valid_until: null })).toBe(false);
+    vi.mocked(api.getFsReport).mockResolvedValue({ ...report, candidates: [ready] });
+    render(<FsMonitorPage />);
+    await screen.findByText(/信号达标（公开预估）/);
+    expect(screen.getByText(/同路线卡片已存在/)).toBeTruthy();
+    expect(screen.queryByText("成本通过（预估）")).toBeNull();
+  });
+  it("allows explicit automatic disabled-card configuration without selecting an account", async () => {
+    render(<FsMonitorPage />);
+    await screen.findByText("MEWUSDT");
+    fireEvent.click(screen.getByText("监测配置与借币账户"));
+    fireEvent.click(screen.getByRole("switch", { name: "信号达标后自动建立 Astro 停用卡片" }));
+    fireEvent.click(screen.getByRole("button", { name: /保存配置/ }));
+    await waitFor(() => expect(api.updateFsSettings).toHaveBeenCalledWith({ ...settings, astro_auto_create: true }));
   });
   it("saves explicit settings and requests refresh without trade actions", async () => {
     render(<FsMonitorPage />);

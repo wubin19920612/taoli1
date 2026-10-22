@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 
 from app.models.market_identity import IdentityEvidence, MarketBinding, MarketKey
+from app.services.fs_identity import SPEC_URLS, reviewed_fs_bindings
 
 GATE_COINS = "https://api.gateio.ws/api/v4/spot/currencies"
 BITGET_COINS = "https://api.bitget.com/api/v2/spot/public/coins"
@@ -386,6 +387,7 @@ def catalog_bindings(payloads, *, now=None):
                 evidence=[evidence],
             )
         )
+    result.extend(reviewed_fs_bindings(payloads, now))
     return result
 
 
@@ -404,6 +406,7 @@ class OfficialMarketIdentityCatalog:
             BITGET_CONTRACTS,
             BYBIT_CONTRACTS,
             BINANCE_SPEC,
+            *SPEC_URLS,
         ]
         semaphore = asyncio.Semaphore(3)
         async with httpx.AsyncClient(timeout=10) as client:

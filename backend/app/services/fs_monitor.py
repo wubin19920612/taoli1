@@ -1,5 +1,6 @@
 import asyncio
-from datetime import UTC, datetime
+import time
+from datetime import UTC, datetime, timedelta
 
 from app.models.fs_monitor import FsCandidate, FsReport
 from app.models.market import MarketType
@@ -9,6 +10,7 @@ from app.services.pair_validation import validate_pair
 
 
 def identity_check(row, markets, spot_book, future_book, now):
+    row.identity_details = []
     legs = []
     for kind, book in ((MarketType.SPOT, spot_book), (MarketType.FUTURE, future_book)):
         matches = [
@@ -22,6 +24,17 @@ def identity_check(row, markets, spot_book, future_book, now):
         if len(matches) != 1:
             return "unverified", None, []
         m = matches[0]
+        row.identity_details.append(
+            {
+                "market_type": kind.value,
+                "raw_symbol": m.raw_symbol,
+                "identity_status": m.identity_status,
+                "unit_status": m.unit_status,
+                "asset_id": m.asset_id,
+                "revision": m.binding_revision,
+                "fingerprint": m.binding_fingerprint,
+            }
+        )
         # Bybit order quantities are base-coin units; its legacy ticker adapter leaves
         # contract_size_multiplier unset. The verified identity + official linear metadata
         # supply the unit evidence; an explicit non-unit multiplier is still rejected.
@@ -45,6 +58,8 @@ def identity_check(row, markets, spot_book, future_book, now):
             )
         )
     result = validate_pair(legs[1], legs[0], now=now)
+    if result.blockers:
+        row.identity_details[-1]["validation_issues"] = ",".join(x.code for x in result.blockers)
     if result.capabilities.same_asset_opportunity:
         row.valid_until = result.expires_at
         return "verified", legs[0].asset_id, []
@@ -53,7 +68,7 @@ def identity_check(row, markets, spot_book, future_book, now):
 
 
 class FsMonitor:
-    def __init__(self, repository, accounts, store, provider=None):
+    def __init__(self, repository, accounts, store, provider=None, astro=None, identities=None):
         self.repository, self.accounts, self.store = repository, accounts, store
         self.provider = provider or BybitFsProvider()
         self.report = FsReport()
@@ -61,6 +76,17 @@ class FsMonitor:
         self.wake = asyncio.Event()
         self.generation = 0
         self._states = {}
+        self.astro = astro
+        self.identities = identities
+        self._last_duration = 0.0
+
+    def markets(self, symbol):
+        rows = [
+            m
+            for m in self.store.get_markets()
+            if m.exchange == "bybit" and m.raw_symbol == symbol and not m.dex
+        ]
+        return [self.identities.annotate(m) for m in rows] if self.identities else rows
 
     async def aclose(self):
         await self.provider.aclose()
@@ -111,18 +137,44 @@ class FsMonitor:
             except FsDataError:
                 account_invalid = True
         for row in result.candidates:
+            identity_changed = False
+            if row.identity_state == "verified" and row.identity_details:
+                for detail in row.identity_details:
+                    matches = [
+                        m
+                        for m in self.markets(row.symbol)
+                        if m.exchange == "bybit"
+                        and m.raw_symbol == row.symbol
+                        and m.market_type.value == detail["market_type"]
+                        and not m.dex
+                    ]
+                    if len(matches) != 1 or (
+                        matches[0].identity_status != "verified"
+                        or matches[0].unit_status != "verified"
+                        or matches[0].binding_revision != detail["revision"]
+                        or matches[0].binding_fingerprint != detail["fingerprint"]
+                        or not matches[0].binding_valid_until
+                        or matches[0].binding_valid_until <= now
+                    ):
+                        identity_changed = True
+                        break
             if (
                 account_invalid
+                or identity_changed
                 or not settings.enabled
                 or (row.valid_until is not None and row.valid_until <= now)
             ):
                 row.stage = "stale"
-                row.blockers = list(
-                    dict.fromkeys(
-                        row.blockers
-                        + ["account_changed" if account_invalid else "observation_expired"]
-                    )
+                row.signal_ready = False
+                reason = (
+                    "account_changed"
+                    if account_invalid
+                    else "identity_changed"
+                    if identity_changed
+                    else "observation_expired"
                 )
+                row.signal_blockers = list(dict.fromkeys(row.signal_blockers + [reason]))
+                row.blockers = list(dict.fromkeys(row.blockers + [reason]))
         result.stale = (
             result.observed_at is None
             or (now - result.observed_at).total_seconds() > 90
@@ -137,6 +189,7 @@ class FsMonitor:
         if self.scanning:
             return
         self.scanning = True
+        started = time.monotonic()
         generation = self.generation
         settings = self.report.settings
         try:
@@ -151,6 +204,8 @@ class FsMonitor:
                     error=str(exc) if isinstance(exc, FsDataError) else "scan_failed",
                 )
         finally:
+            self._last_duration = time.monotonic() - started
+            self.report.scan_duration_seconds = round(self._last_duration, 3)
             self.scanning = False
 
     async def _scan(self, settings, generation):
@@ -196,7 +251,7 @@ class FsMonitor:
 
         async def build(ticker):
             async with semaphore:
-                return await self._candidate(
+                row = await self._candidate(
                     ticker,
                     snapshot,
                     settings,
@@ -205,7 +260,20 @@ class FsMonitor:
                     account_at,
                     account_error,
                 )
+                attempt = await self.repository.astro_attempt(row.symbol)
+                if attempt:
+                    row.astro_state = "uncertain" if attempt == "pending" else "recorded"
+                if generation == self.generation:
+                    # Publish each row immediately; an early row must not wait for
+                    # every slow candidate before its 15-second review can be seen.
+                    rows = {r.symbol: r for r in self.report.candidates if r.symbol in selected}
+                    rows[row.symbol] = row
+                    self.report.candidates = [rows[s] for s in selected if s in rows]
+                    self.report.observed_at = datetime.now(UTC)
+                    self.report.error = None
+                return row
 
+        selected = [x["symbol"] for x in negatives[: settings.max_candidates]]
         candidates = await asyncio.gather(*[build(x) for x in negatives[: settings.max_candidates]])
         if generation != self.generation:
             return
@@ -214,6 +282,15 @@ class FsMonitor:
             if current_stamp != account_stamp:
                 raise FsDataError("account_changed")
         self._account_stamp = account_stamp
+        now = datetime.now(UTC)
+        for row in candidates:
+            if row.valid_until and row.valid_until <= now:
+                row.stage = "stale"
+                row.signal_ready = False
+                row.blockers = list(dict.fromkeys([*row.blockers, "observation_expired"]))
+                row.signal_blockers = list(
+                    dict.fromkeys([*row.signal_blockers, "observation_expired"])
+                )
         report = FsReport(
             settings=settings,
             observed_at=datetime.now(UTC),
@@ -234,7 +311,10 @@ class FsMonitor:
                 )
             ],
         )
-        states = {r.symbol: (r.stage, tuple(sorted(r.blockers))) for r in candidates}
+        states = {
+            r.symbol: ("signal_ready" if r.signal_ready else r.stage, tuple(sorted(r.blockers)))
+            for r in candidates
+        }
         events = [
             (s, stage, list(reasons))
             for s, (stage, reasons) in states.items()
@@ -252,6 +332,39 @@ class FsMonitor:
             return
         self._states = states
         self.report = report
+        if self.astro and settings.astro_auto_create:
+            for row in candidates:
+                if not row.signal_ready or generation != self.generation:
+                    continue
+                row.astro_state = await self.astro.process(
+                    row,
+                    lambda symbol=row.symbol: self.recheck(symbol, settings, generation),
+                    lambda: generation == self.generation,
+                )
+                if row.astro_state == "signal_changed":
+                    row.signal_ready = False
+                    row.signal_blockers.append("signal_changed")
+                if row.astro_state in {"created", "uncertain"}:
+                    # Astro's add action may restart its core; only one new write
+                    # per scan, and no following write after an ambiguous result.
+                    break
+
+    async def recheck(self, symbol, settings, generation):
+        """Fresh, complete public/account sample before an external card write."""
+        data = await self.provider.public_snapshot()
+        ticker = data["future_tickers"].get(symbol)
+        if ticker is None or generation != self.generation:
+            raise FsDataError("signal_changed")
+        credentials, context, account_at, error = None, {}, None, None
+        if settings.account_id:
+            credentials, stamp = await self.credentials(settings.account_id)
+            if stamp != self._account_stamp:
+                raise FsDataError("account_changed")
+            context, account_at = await self.provider.account_context(credentials)
+        row = await self._candidate(ticker, data, settings, credentials, context, account_at, error)
+        if generation != self.generation or not row.signal_ready:
+            raise FsDataError("signal_changed")
+        return row
 
     async def _candidate(
         self, ticker, data, settings, credentials, account_context, account_at, account_error
@@ -291,6 +404,10 @@ class FsMonitor:
                 raise FsDataError("spot_market_missing")
             (sm, sm_at), (fm, fm_at) = await self.provider.current_instruments(symbol)
             row.source_times.update(spot_specs=sm_at, future_specs=fm_at)
+            from app.services.fs_identity import TARGETS
+
+            if symbol in TARGETS and fm.get("fullName") != TARGETS[symbol][1]:
+                raise FsDataError("identity_conflict")
             if sm.get("marginTrading") not in {"utaOnly", "both"}:
                 row.product_borrowable = False
             if account_error:
@@ -325,7 +442,7 @@ class FsMonitor:
             now = datetime.now(UTC)
             row.identity_state, row.asset_id, reasons = identity_check(
                 row,
-                self.store.get_markets(),
+                self.markets(row.symbol),
                 spot_book,
                 future_book,
                 now,
@@ -346,7 +463,20 @@ class FsMonitor:
             row.blockers.append(
                 str(exc) if isinstance(exc, FsDataError) else "candidate_query_failed"
             )
+            row.signal_blockers = list(row.blockers)
             return row
+
+    def refresh_delay(self, settings):
+        # Start-to-start cadence, bounded by the existing source validity. Busy or
+        # rate-limited scans never overlap; overdue rows still expire normally.
+        interval = (
+            min(settings.scan_interval_seconds, 10)
+            if self.report.candidates
+            else settings.scan_interval_seconds
+        )
+        if self.report.error:
+            interval = max(interval, 30)
+        return max(1.0, interval - self._last_duration)
 
     async def run(self, stop):
         while not stop.is_set():
@@ -355,7 +485,13 @@ class FsMonitor:
                 settings = await self.repository.settings()
                 if settings.enabled:
                     await self.scan()
-                await asyncio.wait_for(self.wake.wait(), timeout=settings.scan_interval_seconds)
+                delay = (
+                    self.refresh_delay(settings)
+                    if settings.enabled
+                    else settings.scan_interval_seconds
+                )
+                self.report.next_refresh_at = datetime.now(UTC) + timedelta(seconds=delay)
+                await asyncio.wait_for(self.wake.wait(), timeout=delay)
             except TimeoutError:
                 pass
             except Exception:  # noqa: BLE001 - redact vendor/credential errors and keep monitoring alive.

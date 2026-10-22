@@ -17,6 +17,7 @@ class FsRepository:
             CREATE TABLE IF NOT EXISTS fs_snapshots (bucket INTEGER PRIMARY KEY, observed_at TEXT NOT NULL, payload TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS fs_events (id INTEGER PRIMARY KEY AUTOINCREMENT, observed_at TEXT NOT NULL,
                 symbol TEXT NOT NULL, stage TEXT NOT NULL, reasons TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS fs_astro_attempts (symbol TEXT PRIMARY KEY, state TEXT NOT NULL, updated_at TEXT NOT NULL);
         """)
         await self.db.commit()
 
@@ -84,6 +85,38 @@ class FsRepository:
         ):
             rows = await cursor.fetchall()
         return [{**dict(row), "reasons": json.loads(row["reasons"])} for row in rows]
+
+    async def astro_attempt(self, symbol):
+        async with (
+            self.lock,
+            self.db.execute(
+                "SELECT state FROM fs_astro_attempts WHERE symbol=?", (symbol,)
+            ) as cursor,
+        ):
+            row = await cursor.fetchone()
+        return row[0] if row else None
+
+    async def record_astro_attempt(self, symbol, state):
+        from datetime import UTC, datetime
+
+        async with self.lock:
+            try:
+                now = datetime.now(UTC).isoformat()
+                await self.db.execute(
+                    "INSERT INTO fs_astro_attempts VALUES(?,?,?) ON CONFLICT(symbol) DO UPDATE SET state=excluded.state,updated_at=excluded.updated_at",
+                    (symbol, state, now),
+                )
+                await self.db.execute(
+                    "INSERT INTO fs_events(observed_at,symbol,stage,reasons) VALUES(?,?,?,?)",
+                    (now, symbol, "astro_" + state, "[]"),
+                )
+                await self.db.execute(
+                    "DELETE FROM fs_events WHERE id NOT IN (SELECT id FROM fs_events ORDER BY id DESC LIMIT 500)"
+                )
+                await self.db.commit()
+            except BaseException:
+                await self.db.rollback()
+                raise
 
     async def aclose(self):
         await self.db.close()

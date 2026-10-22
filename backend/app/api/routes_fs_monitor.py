@@ -59,6 +59,7 @@ async def history(
         row.stale = True
         for candidate in row.candidates:
             candidate.stage = "stale"
+            candidate.signal_ready = False
     return rows
 
 

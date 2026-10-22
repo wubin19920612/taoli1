@@ -104,6 +104,7 @@ def evaluate(
             or any(m.get("status") != "Trading" for m in (spot_meta, future_meta))
             or any(m.get("symbol") != row.symbol for m in (spot_meta, future_meta))
             or future_meta.get("isPreListing") is True
+            or any(str(m.get("xstockMultiplier", "1")) != "1" for m in (spot_meta, future_meta))
         ):
             raise FsDataError("unsupported_contract")
         for key, book in (("spot_book", spot_book), ("future_book", future_book)):
@@ -236,4 +237,18 @@ def evaluate(
     ):
         row.stage = "blocked"
     row.blockers = list(dict.fromkeys(row.blockers))
+    # Public estimates may create a disabled Astro observation card, never claim
+    # account capacity or verified executable cost. Explicit account failures still block.
+    row.signal_blockers = [
+        reason
+        for reason in row.blockers
+        if reason not in {"account_not_configured", "fees_unverified"}
+    ]
+    row.signal_ready = bool(
+        row.scenarios
+        and row.identity_state == "verified"
+        and row.valid_until
+        and row.valid_until > now
+        and not row.signal_blockers
+    )
     return row

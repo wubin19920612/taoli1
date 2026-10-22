@@ -1,5 +1,6 @@
 export interface FsSettings {
   enabled: boolean;
+  astro_auto_create?: boolean;
   account_id: string | null;
   target_usdt: number;
   holding_hours: number;
@@ -30,10 +31,13 @@ export interface FsCandidate {
   prices: Record<string, number>; source_times: Record<string, string>;
   fee_source: string; spot_fee_pct: number | null; future_fee_pct: number | null;
   identity_state: string; asset_id: string | null;
+  identity_details?: Array<Record<string, string | number | null>>;
+  signal_ready?: boolean; signal_blockers?: string[]; astro_state?: string;
   stage: "discovered" | "quota_sufficient" | "cost_pass" | "blocked" | "stale";
   blockers: string[]; scenarios: FsScenario[];
 }
 export interface FsReport {
+  scan_duration_seconds?: number | null; next_refresh_at?: string | null;
   observed_at: string | null; scanning: boolean; stale: boolean; error: string | null;
   negative_count: number; settings: FsSettings; candidates: FsCandidate[]; sources: string[];
 }

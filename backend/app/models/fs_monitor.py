@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class FsSettings(BaseModel):
     model_config = ConfigDict(allow_inf_nan=False, extra="forbid")
     enabled: bool = True
+    astro_auto_create: bool = False
     account_id: str | None = Field(default=None, max_length=100)
     target_usdt: float = Field(default=1000, ge=10, le=100_000)
     holding_hours: float = Field(default=8, ge=0.1, le=72)
@@ -67,13 +68,19 @@ class FsCandidate(BaseModel):
     spot_fee_pct: float | None = None
     future_fee_pct: float | None = None
     identity_state: str = "unverified"
+    identity_details: list[dict[str, str | int | None]] = Field(default_factory=list)
     asset_id: str | None = None
+    signal_ready: bool = False
+    signal_blockers: list[str] = Field(default_factory=list)
+    astro_state: str = "not_requested"
     stage: Literal["discovered", "quota_sufficient", "cost_pass", "blocked", "stale"] = "discovered"
     blockers: list[str] = Field(default_factory=list)
     scenarios: list[FsScenario] = Field(default_factory=list)
 
 
 class FsReport(BaseModel):
+    scan_duration_seconds: float | None = None
+    next_refresh_at: datetime | None = None
     observed_at: datetime | None = None
     scanning: bool = False
     stale: bool = True

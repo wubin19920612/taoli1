@@ -8,7 +8,9 @@ import "./FsMonitorPage.css";
 
 const stages: Record<string, string> = {
   discovered: "候选观察", quota_sufficient: "额度满足", cost_pass: "成本通过（预估）",
-  blocked: "条件不满足", stale: "快照已过期", left_pool: "离开本轮观察池"
+  blocked: "条件不满足", stale: "快照已过期", left_pool: "离开本轮观察池",
+  signal_ready: "信号达标（公开预估）", astro_pending: "开始提交 Astro 停用卡片",
+  astro_created: "Astro 停用卡片已创建", astro_reconciled: "已核对 Astro 卡片存在"
 };
 const reasons: Record<string, string> = {
   account_not_configured: "未选择借币账户", account_unavailable: "账户已禁用或读取范围不符",
@@ -40,6 +42,8 @@ const reasons: Record<string, string> = {
   no_longer_in_selected_candidates: "费率或排序变化，已离开本轮候选范围",
   metadata_pagination_incomplete: "市场目录未完整读取", missing_source_time: "缺少来源时间",
   invalid_source_time: "来源时间无效",
+  identity_changed: "市场身份记录已变更，等待重新核验",
+  signal_changed: "提交前信号已变化，等待重新采样",
   market_metadata_missing: "市场规格查询缺失"
 };
 const reason = (code: string) => reasons[code] ?? "数据未通过校验";
@@ -47,6 +51,17 @@ const num = (value: number | null | undefined, digits = 4) => value == null ? "�
 const pct = (value: number | null | undefined) => value == null ? "未知" : `${num(value, 6)}%`;
 const time = (value: string | null | undefined) => value ? new Date(value).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false }) : "尚无";
 const scenarioLabel: Record<string, string> = { next: "下一次结算", holding: "设定持有期", "24h": "未来24小时" };
+const astroStates: Record<string, string> = {
+  not_requested: "等待信号", created: "已创建停用卡片", existing: "同路线卡片已存在",
+  recorded: "已有建卡记录，未重建", uncertain: "写入结果待核对，停止重试",
+  query_failed: "Astro 查询或写入失败", signal_changed: "信号已变化，未建卡",
+  dry_run: "仅演练，未写入", risk_blocked: "全局过滤条件阻断", invalid_plan: "卡片参数未通过校验",
+};
+
+export function signalReady(row: FsCandidate): boolean {
+  return !!row.signal_ready && !!row.valid_until && Date.parse(row.valid_until) > Date.now()
+    && candidateStage(row) !== "stale";
+}
 
 export function candidateStage(row: FsCandidate): string {
   return row.valid_until && Date.parse(row.valid_until) <= Date.now() ? "stale" : row.stage;
@@ -58,6 +73,8 @@ function Details({ row }: { row: FsCandidate }) {
       { key: "route", label: "交易方向", children: `Bybit ${row.symbol}：多永续 / 空现货` },
       { key: "unit", label: "基础币 / 报价 / 倍率", children: `${row.base} / ${row.quote} / ${row.multiplier}` },
       { key: "identity", label: "身份核验", children: row.identity_state === "verified" ? `已核验 ${row.asset_id}` : "未通过核验" },
+      { key: "identity_details", label: "精确市场证据状态", children: row.identity_details?.map(x => `${x.market_type} ${x.raw_symbol}：身份 ${x.identity_status} / 单位 ${x.unit_status} / 版本 ${x.revision}`).join("；") || "尚无精确绑定" },
+      { key: "astro", label: "Astro 建卡", children: astroStates[row.astro_state ?? "not_requested"] ?? "等待核对" },
       { key: "q", label: "双腿基础币数量", children: num(row.quantity, 8) },
       { key: "borrow", label: "所需借币（含首期余量）", children: num(row.borrow_required, 8) },
       { key: "quota", label: "账户最大可借 / 库存", children: `${num(row.account_max_loan)} / ${num(row.available_inventory)}` },
@@ -90,6 +107,7 @@ export function FsMonitorPage() {
   const [busy, setBusy] = useState(false);
   const [password, setPassword] = useState("");
   const [loginVersion, setLoginVersion] = useState(0);
+  const [, tick] = useState(0);
   const alive = useRef(false);
   useEffect(() => {
     alive.current = true;
@@ -109,12 +127,13 @@ export function FsMonitorPage() {
           setAccounts(overview.connections.filter(x => x.exchange === "bybit" && x.enabled && x.include_spot && x.include_futures));
           setEvents(eventRows); setHistory(historyRows);
         }
-      } catch (e) { if (!cancelled) setError(e instanceof Error ? e.message : "读取失败"); }
+      } catch (e) { if (!cancelled) { setReport(null); setError(e instanceof Error ? e.message : "读取失败"); } }
       finally { loading = false; }
     }
     void load(true);
     const timer = window.setInterval(() => void load(), 5000);
-    return () => { cancelled = true; alive.current = false; window.clearInterval(timer); };
+    const expiryTimer = window.setInterval(() => tick(v => v + 1), 1000);
+    return () => { cancelled = true; alive.current = false; window.clearInterval(timer); window.clearInterval(expiryTimer); };
   }, [form, loginVersion]);
 
   async function save() {
@@ -130,7 +149,8 @@ export function FsMonitorPage() {
   }
   const columns: ColumnsType<FsCandidate> = [
     { title: "Bybit 原始市场", dataIndex: "symbol", width: 150 },
-    { title: "状态", width: 170, render: (_, r) => { const s = candidateStage(r); return <Tag color={s === "cost_pass" ? "green" : s === "quota_sufficient" ? "blue" : "default"}>{stages[s]}</Tag>; } },
+    { title: "FS 信号 / Astro", width: 180, render: (_, r) => <><Tag color={signalReady(r) ? "blue" : "default"}>{signalReady(r) ? "信号达标（公开预估）" : "继续观察"}</Tag><br /><small>{astroStates[r.astro_state ?? "not_requested"] ?? "等待核对"}</small></> },
+    { title: "账户核验（可选）", width: 170, render: (_, r) => { const s = candidateStage(r); return <Tag color={s === "cost_pass" ? "green" : s === "quota_sufficient" ? "blue" : "default"}>{stages[s]}</Tag>; } },
     { title: "永续费率 / 周期", width: 175, render: (_, r) => <>{pct(r.funding_pct)} / {num(r.interval_hours)}h<br /><small>下次 {time(r.next_funding_at)}</small></> },
     { title: "小时借币利率", width: 145, render: (_, r) => <>{pct(r.hourly_borrow_pct)}<br /><small>{r.borrow_rate_source === "account" ? "账户利率" : "公开普通档位"}</small></> },
     { title: "借币 / 额度 / 库存", width: 180, render: (_, r) => <>{r.product_borrowable == null ? "支持状态未知" : r.product_borrowable ? "产品支持" : "不支持"}<br />{num(r.account_max_loan)} / {num(r.available_inventory)}</> },
@@ -140,22 +160,23 @@ export function FsMonitorPage() {
   ];
   return <section className="fs-page">
     <Typography.Title level={3}>负费率 FS 观察池</Typography.Title>
-    <Typography.Paragraph>Bybit 做多 USDT 永续、借币卖出现货。持续筛选借贷与成本条件；不借币、不下单。</Typography.Paragraph>
+    <Typography.Paragraph>Bybit 做多 USDT 永续、借币卖出现货。taoli1 发现信号后通过 Astro 自动建立停用 FS 卡片；借币和执行由你在 Astro 中控制。</Typography.Paragraph>
     {error && <Alert type="error" showIcon message={error} description={<Space wrap><Input.Password aria-label="仪表盘密码" placeholder="仪表盘密码" value={password} onChange={e => setPassword(e.target.value)} /><Button onClick={() => { saveDashboardPassword(password); setPassword(""); setLoginVersion(v => v + 1); }}>验证并重新读取</Button></Space>} />}
     {report && <>
-      <Alert type={report.error ? "error" : "info"} showIcon message={report.error ? reason(report.error) : "资金费率与借币利率会变化，所有收益均为情景估算"} description={`本轮负费率市场 ${report.negative_count} 个，展示 ${report.candidates.length} 条。观察时间（北京时间）：${time(report.observed_at)}。${report.stale ? "尚无有效快照，或上一轮已过期。" : ""}`} />
+      <Alert type={report.error ? "error" : "info"} showIcon message={report.error ? reason(report.error) : "公开信号达标不代表账户可借或能够成交；自动建卡不会开启交易"} description={`本轮负费率市场 ${report.negative_count} 个，展示 ${report.candidates.length} 条。自动建卡${report.settings.astro_auto_create ? "已开启" : "未开启"}。观察时间（北京时间）：${time(report.observed_at)}。${report.stale ? "尚无有效快照，或上一轮已过期。" : ""}单轮耗时 ${num(report.scan_duration_seconds, 1)} 秒；下次刷新 ${time(report.next_refresh_at)}。`} />
       <Collapse items={[{ key: "settings", forceRender: true, label: "监测配置与借币账户", children: <Form form={form} layout="vertical" className="fs-form">
         <Form.Item name="enabled" label="持续扫描" valuePropName="checked"><Switch /></Form.Item>
-        <Form.Item name="account_id" label="Bybit 账户（可不选，仅公开观察）"><Select allowClear placeholder="只查公开数据" options={accounts.map(a => ({ value: a.id, label: a.account_label }))} /></Form.Item>
+        <Form.Item name="astro_auto_create" label="信号达标后自动建立 Astro 停用卡片" valuePropName="checked"><Switch /></Form.Item>
+        <Form.Item name="account_id" label="可选：Bybit 账户额外核验（Astro 建卡不要求配置）"><Select allowClear placeholder="使用公开数据筛选信号" options={accounts.map(a => ({ value: a.id, label: a.account_label }))} /></Form.Item>
         {([
           ["target_usdt", "目标现货规模 USDT", 10, 100000], ["holding_hours", "持有小时", 0.1, 72],
-          ["scan_interval_seconds", "扫描间隔秒", 30, 600], ["max_candidates", "每轮深查数量", 1, 30],
+          ["scan_interval_seconds", "空池扫描间隔秒", 30, 600], ["max_candidates", "每轮深查数量", 1, 30],
           ["min_volume_usdt", "双侧最低24h成交额 USDT", 0, 1e12], ["min_net_pct", "压力净收益门槛 %", 0, 100],
           ["spot_fee_pct", "假设现货单笔手续费 %", 0, 5], ["future_fee_pct", "假设永续单笔手续费 %", 0, 5],
           ["execution_buffer_pct", "额外执行缓冲 %", 0, 10], ["basis_stress_pct", "压力基差恶化 %", 0, 50]
         ] as const).map(([name, label, min, max]) => <Form.Item key={name} name={name} label={label} rules={[{ required: true }]}><InputNumber min={min} max={max} /></Form.Item>)}
         <Button type="primary" loading={busy} onClick={() => void save()}>保存配置</Button>
-        <Typography.Text type="secondary">需在“账户连接”保存启用现货与永续读取的 Bybit 账户。页面不会替你开启交易所杠杆。</Typography.Text>
+        <Typography.Text type="secondary">已有候选按约10秒起始间隔刷新，逐条发布；慢查询时仍按原有效期降级。Astro 仅建 Bybit 原生 FS 卡片，默认停用且禁止开仓，重复路线跳过。账户额度与真实手续费可在 Astro 执行前确认。</Typography.Text>
       </Form> }]} />
       <Space wrap><Button disabled={!report.settings.enabled || report.scanning} onClick={() => void refreshFsMonitor().then(() => message.info("已请求刷新，结果将在扫描完成后更新")).catch(e => message.error(e.message))}>{report.scanning ? "正在扫描" : "请求刷新"}</Button><Typography.Text type="secondary">展开行查看同币数进出场均价、来源时间及三种持有情景。</Typography.Text></Space>
       {screens.md === false ? <div className="fs-mobile-candidates">{report.candidates.map(row => {
@@ -163,6 +184,7 @@ export function FsMonitorPage() {
         const holding = row.scenarios.find(x => x.label === "holding");
         return <article key={row.symbol} className="fs-candidate-card">
           <Space wrap><strong>{row.symbol}</strong><Tag color={s === "cost_pass" ? "green" : s === "quota_sufficient" ? "blue" : "default"}>{stages[s]}</Tag></Space>
+          <div>{signalReady(row) ? "信号达标（公开预估）" : "继续观察"} · {astroStates[row.astro_state ?? "not_requested"] ?? "等待核对"}</div>
           <div className="fs-mobile-metrics">
             <div><small>永续资金费率</small><div>{pct(row.funding_pct)} / {num(row.interval_hours)}h</div></div>
             <div><small>小时借币利率</small><div>{pct(row.hourly_borrow_pct)}</div></div>

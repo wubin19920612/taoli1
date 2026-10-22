@@ -183,16 +183,16 @@ class BybitFsProvider:
         return result
 
     async def account_context(self, credentials):
-        (state, _), (collateral, source_at) = await asyncio.gather(
+        (state, state_at), (collateral, source_at) = await asyncio.gather(
             self.get("/v5/spot-margin-trade/state", credentials=credentials),
             self.get("/v5/account/collateral-info", credentials=credentials),
         )
         if state.get("spotMarginMode") != "1":
             raise FsDataError("account_margin_disabled")
-        return {x["currency"]: x for x in collateral.get("list", [])}, source_at
+        return {x["currency"]: x for x in collateral.get("list", [])}, min(source_at, state_at)
 
     async def account_quote(self, symbol, base, credentials):
-        (loan, loan_at), (stock, stock_at), (sf, _), (ff, _) = await asyncio.gather(
+        (loan, loan_at), (stock, stock_at), (sf, sf_at), (ff, ff_at) = await asyncio.gather(
             self.get("/v5/spot-margin-trade/max-borrowable", {"currency": base}, credentials),
             self.get(
                 "/v5/spot-margin-trade/flexible-available-inventory",
@@ -218,7 +218,7 @@ class BybitFsProvider:
             "account_max_loan": number(loan.get("maxLoan"), nonnegative=True),
             "available_inventory": number(stock.get("availableInventory"), nonnegative=True),
             "inventory_at": inventory_at,
-            "account_at": min(loan_at, stock_at),
+            "account_at": min(loan_at, stock_at, sf_at, ff_at),
             "spot_fee_pct": rates[0],
             "future_fee_pct": rates[1],
         }
