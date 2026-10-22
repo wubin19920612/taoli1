@@ -53,3 +53,26 @@
 两份既有 PairMonitor WIP 未改动，SHA256保持 `11379f2cb0881b274a998a4a4534a698c4dd94b0080de3de691f4dbf27440d38` 和 `0376b098c2274e60666915709d9d1183decac45781a861faac452aacb00500ab`。既有未跟踪文件、数据库/WAL/SHM和日志全部保留；本轮 output/fs-borrow-* 为未提交探测和验证证据。
 
 下一步若需真实账户容量，必须有交易所只读账户查询，或 Astro 后续正式提供借贷查询接口后再适配；本轮未选择账户、未读取/导出 Astro 交易所密钥。首次自然达标的真实 FS 建卡回读仍沿用上一交接的待验证项。其他模块使用新任务。
+
+## 最终交付、备份与线上验收
+
+- 功能提交 `c0ac671cbd745d762cad89b9223cf9977da5a3fa` 已推送并部署；GitHub Actions [39778026829](https://github.com/wubin19920612/taoli1/actions/runs/39778026829) 双镜像构建成功，两个 GHCR manifest 返回200。线上 Git、backend/frontend 镜像均为该SHA，tracked clean，双容器 healthy，health=ok、12207市场、exchange_errors={}。
+- 主库备份 `backups/radar-before-c0ac671cbd74-20261022T123147Z.db`，719351808字节，SHA256 `cf616122721fde8500e036abf896a9482ab0ed945323a02d76792a9407ae4289`。
+- 路线库备份 `backups/squeeze-route-before-c0ac671cbd74-20261022T123147Z.db`，241664字节，SHA256 `5ce0789c9c4726228459658deccf8a4c4278d8bf1ac7b9f47a9f617bd8db8e6c`。两库 integrity_check=ok、独立容器/宿主机哈希一致；既有保留策略各保留10份，本轮未删除常规备份。
+- 12:35:07～12:35:18 UTC 三次 API 样本均五家各3条、共15条，每条含 public_borrow；扫描5.537/6.561/3.182秒。真实显示 Bybit BMT262000、MASK6100、ALT500000，OKX MEW14000000/LPT5000/ZIL1200000，Bitget最小1e-8、Gate BMT最小50等。数值仅代表该采样时点的公开参考。
+- 账户仍null，15条实际额度/库存均null；自动建卡仍true、当前 signal_ready=0，Astro实时列表114张/FS0。无密码接口401，认证接口200；旧历史可读取且强制 stale / signal_ready=false。本轮没有真实FS新增、借贷或成交验证。
+- 1920px桌面和390px手机真实生产页面、展开详情/来源链接通过，0页面脚本错误、无整页横向溢出，列内不再出现“未知 / 未知”。已目视确认手机上限与单位没有被关注浮窗遮挡。证据 `output/fs-borrow-production-{1920,390}-20261022b.png`、详情截图、`fs-borrow-production-browser-20261022b.json`、`fs-borrow-production-verification-20261022.json`。首次辅助截图重跑时因两个同名“隐藏关注浮窗”按钮触发定位歧义，限定浮窗范围后通过；失败日志保留。
+- 新后端部署后约两分钟检查 RestartCount=0、healthy，内存623.3MiB/768MiB；这只是短期采样，不证明长期内存稳定。日志未发现本模块异常栈或500，已有 Gate 公告567及 trade_availability 原始市场缺失仍保留在 `output/fs-borrow-production-logs-20261022.log`，未扩展修复。
+- 最终交接另作 `[skip ci]` 文档提交，运行镜像继续为功能SHA。
+
+## 部署异常与恢复过程（必须保留）
+
+首次按原 `deploy/linux-update.sh` 在后端容器内备份时退出137，未快进Git、未部署新镜像。内核日志确认旧 `79eef76` 的 uvicorn 触及768MiB cgroup上限并被OOM终止，容器自动重启恢复；不能归因为尚未运行的新功能，也不能认定已查明所有内存增长来源。
+
+未完成的 `/tmp/radar-backup-deploy.db` 已先复制到 `backups/manual-fs-borrow-interrupted-20261022T122626Z.db` 保留，SHA256 `ff982765af8a140530ffd8e3efc85fa4e35408e53e2e8447b87f18ab3d53c112`，**未将其当作通过校验的备份**。原失败日志和内核证据为 `output/fs-borrow-deployment-20261022.log`、`fs-borrow-deploy-oom-evidence-20261022.log`。
+
+本轮仅采用一次性备份隔离包装：由已有预构建后端镜像启动独立临时容器，限制128MiB、0.5CPU、32进程、禁网、只读挂载业务卷，仅备份目录可写；SQLite mode=ro + backup API，缓存2MiB、256页分批复制，随后 integrity_check 和双侧哈希校验。它不占用后端的768MiB额度，实测临时容器约43.6MiB。包装保留原分支/SHA/工作区/磁盘检查、双库备份、git pull --ff-only、预构建镜像 pull 和 `up -d --no-build --wait`、备份保留策略；没有生产构建、没有更改业务容器内存限制或监测配置。
+
+包装脚本 `output/fs-borrow-isolated-deploy-20261022.sh`，SHA256 `8345b75e04909974fd604b626df1ec3ea5ea46fe399846a804d40d7d7ec394c3`，已通过 bash -n，线上使用临时文件执行；业务仓库的原部署脚本未修改。直接通过 bash -s 流式传输的第一次尝试未进入备份，改为先保存临时文件再执行。成功部署日志 `output/fs-borrow-deployment-20261022c.log` 记录了全部校验/更新/双容器healthy；该包装在完成最后的free输出后，因PowerShell传输额外尾部CR空行退出127。随后独立命令逐项确认Git、镜像、健康、业务API和浏览器均成功；没有把退出127本身当作成功证明，也没有重复部署。
+
+后续应新建服务器运维任务，排查既有后端内存增长并将隔离备份方式正式纳入部署脚本；本次功能交付不宣称修复OOM问题。所有失败产物、手工保留的中断备份和既有日志不得删除。
