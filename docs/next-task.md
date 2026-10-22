@@ -1,8 +1,8 @@
 # 下一任务入口
 
-FS 最新扩展为五交易所同平台观察池，详见 [2026-10-22 多交易所交接](task-handoff-2026-10-22-fs-multi-exchange.md)。用户在 Bybit 交付后明确要求补充其他交易所，后续以此范围为准；Binance/Bitget/Gate 的借币利率缺口继续阻断自动信号，不能把出现候选当作账户可执行。
+FS 最新扩展为五交易所同平台观察池，功能 `79eef76` 已推送并以预构建镜像部署，详见 [2026-10-22 多交易所交接](task-handoff-2026-10-22-fs-multi-exchange.md)。默认 Bybit/Binance/OKX/Bitget/Gate，按平台分配深查名额并隔离同名建卡记录。后端98项、前端19项、生产构建通过，双库备份及线上API/桌面/手机验证通过；连续8次样本均五家各3条，单轮约3.1～5.4秒。自动建卡保持开启，但当前无达标信号，尚未真实新增FS卡；Binance/Bitget/Gate的借币利率缺口继续阻断，真实账户能力未实测。用户已明确要求扩展，后续以此范围为准；下文Bybit限定为历史阶段。
 
-最新完成模块是 Bybit 负费率 FS 信号与 Astro 自动建卡，方案见 [设计文档](fs-borrow-monitor-design.md)，代码、测试、备份、部署及限制见 [2026-10-22 FS/Astro 交接](task-handoff-2026-10-22-fs-astro-signals.md)。首版历史见 [2026-10-21 观察池交接](task-handoff-2026-10-21-fs-borrow-monitor.md)。
+上一阶段完成模块是 Bybit 负费率 FS 信号与 Astro 自动建卡，方案见 [设计文档](fs-borrow-monitor-design.md)，代码、测试、备份、部署及限制见 [2026-10-22 FS/Astro 交接](task-handoff-2026-10-22-fs-astro-signals.md)。首版历史见 [2026-10-21 观察池交接](task-handoff-2026-10-21-fs-borrow-monitor.md)。
 
 FS 功能版本 `243ae46` 已推送并以预构建双镜像部署，菜单“负费率 FS 观察”，`astro_auto_create=true`。按用户澄清，taoli1 找信号后自动建立 Astro 原生 Bybit FS 停用卡片，禁止开仓、重复路线跳过，借贷与执行留在 Astro。公开信号不要求独立 taoli1 账户；额度/真实库存/账户费率仍未实测，不冒充 cost_pass。MEW/BMT 四份精确身份绑定已补齐，固定2026-10-29 09:20 UTC到期，其他 pending/conflict 继续阻断。10秒起始调度与逐条发布改善过期空档，不放宽新鲜度。
 

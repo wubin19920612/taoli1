@@ -47,3 +47,17 @@
 原有 PairMonitorPage.tsx / PairMonitorPage.test.tsx 未修改，哈希仍分别为 `11379f2cb0881b274a998a4a4534a698c4dd94b0080de3de691f4dbf27440d38` / `0376b098c2274e60666915709d9d1183decac45781a861faac452aacb00500ab`。所有旧未跟踪文件、DB/WAL/SHM、日志保持；新增探测/测试证据不提交。
 
 后续应观察首个自然达标的真实 FS add 和回读；不得降低身份/成本/时间门槛制造验收。Binance/Bitget/Gate 的私有利率如需接入，应明确 Astro 是否提供只读借贷数据或由用户选择账户，当前 SDK 列表/建卡链路不能代替借贷报价。现有跨客户端同时建卡没有服务端幂等键的限制仍在；不自动重试不确定提交，不自动重建用户删除的卡片。
+
+
+## 最终交付与线上验收
+
+- 功能提交 `79eef76143702c395afbe41db228316e977ec9ca` 已推送并部署。GitHub Actions [39771211633](https://github.com/wubin19920612/taoli1/actions/runs/39771211633) backend/frontend 均成功；部署前两镜像manifest返回200。服务器以 `git pull --ff-only` 更新到该SHA，使用预构建镜像 `up -d --no-build --wait`，没有生产构建。
+- 部署前主库备份 `backups/radar-before-79eef7614370-20261022T113334Z.db`，719351808字节，SHA256 `ea71b3281a66c811a6b21da310b257090450b8f21f84259f7550c6279380f109`。
+- 路线库备份 `backups/squeeze-route-before-79eef7614370-20261022T113334Z.db`，241664字节，SHA256 `ac8fbb4f832fc891165bbfe924181c600fab1fe71dfdee920f9f221d1c3dacab`。两库 integrity_check=ok、容器/宿主机哈希一致。既有部署保留策略各清理1份旧常规备份、各保留9份；本轮未手工清理。部署完整日志 `output/fs-multi-deployment-20261022.log`。
+- 最终后端98项通过（FS监测/多平台适配/Astro桥接/planner/身份目录/账户连接），见 `output/fs-multi-backend-20261022e.log`。前端FS7项＋AppShell12项=19项通过，见 `output/fs-multi-frontend-20261022a.log`；类型检查/Vite生产构建通过，见 `output/fs-multi-build-20261022b.log`；修改的后端文件 Ruff 与 git diff --check 通过。原有 Starlette 弃用/React act 告警保留。
+- 线上 Git/两镜像均为功能SHA，tracked clean，前后端 healthy；health status=ok、12204市场、exchange_errors={}。启动后短期内存 backend627.6MiB/768MiB、frontend4.176MiB/96MiB，仅是短期采样。
+- 韩国时间2026-10-22 20:35:33～20:36:10，8次真实API采样均五平台各3条，共15条；扫描3.110～5.355秒，没有快照 stage=stale。注意“观察快照未过期”不等于其所有来源齐全：Binance仍明确缺少盘口时间，私有利率未知仍阻断。认证接口200，无密码401，历史强制stale且signal_ready=false。
+- 自动建卡设置仍true，账户仍null，未更改原有规模/收益/手续费阈值。现场没有信号通过，Astro真列表114张、FS=0，本轮未执行真实FS add。新增跨平台去重、异常重试停止等由模拟验证；首个自然达标信号的真实写入与回读仍待观察。未验证任何新平台的真实账户利率/额度/库存/手续费，没有借币或下单。
+- 当前样本：Bybit BMT/MEW身份通过但压力净收益不达标；OKX MEW有身份/最大市价数量阻断，ZIL/LPT有身份/成本阻断；Bitget SAND身份通过但账户借币利率未知；其他pending继续阻断。不能将Bybit证据复制给OKX同名市场。
+- 桌面1440px、手机390px实际生产页面、五平台配置选项、自动建卡开关通过，0页面脚本错误，无整页横向溢出。证据 `output/fs-multi-production-{1440,390}-20261022.png`、`output/fs-multi-production-browser-20261022.json`、`output/fs-multi-production-verification-20261022.json`。首次浏览器验证因本机SSH隧道断开失败，重建本任务隧道后通过；不是生产页面故障。
+- 日志抽样保留在 `output/fs-multi-production-logs-20261022.log`，无本模块异常栈或接口500。最终交接另作 `[skip ci]` 文档提交，运行镜像保持功能SHA。

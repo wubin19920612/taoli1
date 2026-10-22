@@ -1,3 +1,5 @@
+> 后续用户要求补充其他交易所，已扩展并部署；当前入口见 [多交易所交接](task-handoff-2026-10-22-fs-multi-exchange.md)。本文保留 Bybit 阶段历史记录。
+
 # Bybit FS 信号与 Astro 自动建卡交接
 
 ## 范围、基线与用户澄清
