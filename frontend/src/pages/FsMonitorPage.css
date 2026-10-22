@@ -9,6 +9,8 @@
 .fs-candidate-card { border: 1px solid #d9d9d9; border-radius: 8px; padding: 12px; display: grid; gap: 10px; background: var(--panel-bg, #fff); min-width: 0; }
 .fs-mobile-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .fs-candidate-card small { color: #666; }
+.fs-borrow-info { display: grid; gap: 3px; overflow-wrap: anywhere; }
+.fs-borrow-info small { color: #666; }
 @media (max-width: 600px) {
   .fs-page { padding-top: 18px; }
   .fs-form { grid-template-columns: 1fr; }

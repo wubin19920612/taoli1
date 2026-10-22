@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { FsMonitorPage, candidateStage, signalReady } from "../src/pages/FsMonitorPage";
+import { BorrowInfo, FsMonitorPage, candidateStage, signalReady } from "../src/pages/FsMonitorPage";
 import type { FsCandidate, FsReport, FsSettings } from "../src/api/fsTypes";
 import * as api from "../src/api/client";
 
@@ -20,6 +20,8 @@ const candidate: FsCandidate = {
   observed_at: new Date().toISOString(), valid_until: new Date(Date.now() + 60000).toISOString(),
   funding_pct: -1, interval_hours: 4, next_funding_at: null, hourly_borrow_pct: 0.03,
   borrow_rate_source: "public_no_vip", product_borrowable: true, public_vip_limit: 1000000,
+  public_borrow: { scope: "bybit_no_vip", status: "available", source_url: "https://api.bybit.com/v5/spot-margin-trade/data",
+    observed_at: new Date().toISOString(), reference_limit: 1000000, minimum_borrow: null, margin_supported: null },
   account_max_loan: null, available_inventory: null, inventory_at: null, account_state: "not_configured",
   quantity: 2000000, borrow_required: 2001000, capacity_usdt: null, spot_volume_usdt: 1000000,
   future_volume_usdt: 3000000, prices: {}, source_times: {}, fee_source: "configured_assumption",
@@ -46,6 +48,8 @@ describe("FS observation page", () => {
     render(<FsMonitorPage />);
     await screen.findByText("MEWUSDT");
     expect(screen.getByText(/产品支持/)).toBeTruthy();
+    expect(screen.getByText("公开参考上限：1,000,000 MEW")).toBeTruthy();
+    expect(screen.getByText("账户额度 / 库存：未接入查询")).toBeTruthy();
     expect(screen.getByText(/未选择借币账户；手续费采用配置假设；资产身份或单位尚未核验/)).toBeTruthy();
     expect(screen.queryByText("成本通过（预估）")).toBeNull();
   });
@@ -98,5 +102,44 @@ describe("FS observation page", () => {
     fireEvent.change(screen.getByLabelText("仪表盘密码"), { target: { value: "test-password" } });
     fireEvent.click(screen.getByRole("button", { name: "验证并重新读取" }));
     expect(api.saveDashboardPassword).toHaveBeenCalledWith("test-password");
+  });
+});
+
+describe("FS borrow reference display", () => {
+  it("shows zero inventory independently from a positive public limit", () => {
+    render(<BorrowInfo row={{ ...candidate, account_state: "checked", account_max_loan: 123, available_inventory: 0 }} />);
+    expect(screen.getByText("公开参考上限：1,000,000 MEW")).toBeTruthy();
+    expect(screen.getByText("账户最大可借：123 MEW")).toBeTruthy();
+    expect(screen.getByText("可借库存：0 MEW")).toBeTruthy();
+  });
+  it("does not turn minimum amounts into a public upper limit or round them to zero", () => {
+    render(<BorrowInfo row={{ ...candidate, exchange: "bitget", public_borrow: { ...candidate.public_borrow!,
+      scope: "bitget_cross", reference_limit: null, minimum_borrow: 1e-8 } }} />);
+    expect(screen.getByText("最小借币量：0.00000001 MEW")).toBeTruthy();
+    expect(screen.getByText("该公开接口未提供上限")).toBeTruthy();
+    expect(screen.queryByText(/公开参考上限/)).toBeNull();
+  });
+  it("distinguishes Binance margin market support from base-coin borrowing", () => {
+    render(<BorrowInfo row={{ ...candidate, exchange: "binance", product_borrowable: null,
+      public_borrow: { ...candidate.public_borrow!, scope: "binance_margin", reference_limit: null, margin_supported: true } }} />);
+    expect(screen.getByText("杠杆交易支持，借币待核验")).toBeTruthy();
+    expect(screen.queryByText("产品支持借币")).toBeNull();
+  });
+  it("labels stale reference values and account results instead of implying current capacity", () => {
+    render(<BorrowInfo row={{ ...candidate, stage: "stale", account_state: "checked", account_max_loan: 10, available_inventory: 0 }} />);
+    expect(screen.getByText(/公开参考已过期/)).toBeTruthy();
+    expect(screen.getByText("上次库存：0 MEW（已过期）")).toBeTruthy();
+    expect(screen.queryByText(/账户最大可借/)).toBeNull();
+  });
+  it.each(["permission_denied", "query_failed"])("explains account %s without hiding public reference", state => {
+    render(<BorrowInfo row={{ ...candidate, account_state: state }} />);
+    expect(screen.getByText("公开参考上限：1,000,000 MEW")).toBeTruthy();
+    expect(screen.getByText(state === "permission_denied" ? "账户额度 / 库存：账户查询权限不足" : "账户额度 / 库存：账户查询失败")).toBeTruthy();
+  });
+  it("shows a public query failure without borrowing the legacy cap", () => {
+    render(<BorrowInfo row={{ ...candidate, public_borrow: { ...candidate.public_borrow!,
+      status: "query_failed", observed_at: null, reference_limit: null } }} />);
+    expect(screen.getByText("公开查询失败")).toBeTruthy();
+    expect(screen.queryByText(/公开参考上限/)).toBeNull();
   });
 });

@@ -7,6 +7,7 @@ from decimal import Decimal
 
 import httpx
 
+from app.models.fs_monitor import FsPublicBorrowReference
 from app.models.market import MarketType
 from app.services.fs_bybit import FsDataError, number
 
@@ -17,6 +18,34 @@ HOSTS = {
     "bitget": "https://api.bitget.com",
     "gate": "https://api.gateio.ws/api/v4",
 }
+BORROW_SOURCES = {
+    "bybit": ("https://api.bybit.com/v5/spot-margin-trade/data", "bybit_no_vip"),
+    "okx": (HOSTS["okx"] + "/api/v5/public/interest-rate-loan-quota", "okx_basic"),
+    "bitget": (HOSTS["bitget"] + "/api/v2/margin/currencies", "bitget_cross"),
+    "gate": (HOSTS["gate"] + "/margin/uni/currency_pairs", "gate_isolated"),
+    "binance": (HOSTS["binance"] + "/api/v3/exchangeInfo", "binance_margin"),
+}
+
+
+def public_borrow_details(exchange, rate, observed_at, *, failed=False):
+    source_url, scope = BORROW_SOURCES[exchange]
+    return FsPublicBorrowReference(
+        source_url=source_url,
+        scope=rate.get("publicScope", scope),
+        status="query_failed" if failed else "available" if rate else "not_listed",
+        observed_at=None if failed else observed_at,
+        reference_limit=None
+        if failed
+        else number(rate.get("maxBorrowingAmount"), nonnegative=True),
+        minimum_borrow=None
+        if failed
+        else number(rate.get("minimumBorrowAmount"), nonnegative=True),
+        margin_supported=(
+            rate.get("marginTradingAllowed")
+            if not failed and isinstance(rate.get("marginTradingAllowed"), bool)
+            else None
+        ),
+    )
 
 
 def route_key(row):
@@ -81,15 +110,39 @@ class PublicFsProvider:
         ex = self.exchange
         if ex == "okx":
             data, at = await self.get("/api/v5/public/interest-rate-loan-quota")
-            return {
-                x["ccy"]: {"borrowable": True, "hourlyBorrowRate": daily_to_hourly(x.get("rate"))}
+            payload = data[0]
+            rates = {
+                x["ccy"]: {
+                    "borrowable": True,
+                    "hourlyBorrowRate": daily_to_hourly(x.get("rate")),
+                    "maxBorrowingAmount": x.get("quota"),
+                }
                 for x in data[0]["basic"]
-            }, at
+            }
+            # Customized currencies must NOT use basic quota or VIP multipliers.
+            # Display the public Lv1/general reference without inferring the user's tier.
+            for coin in payload.get("configCcyList", []):
+                ccy = coin["ccy"] if isinstance(coin, dict) else coin
+                matches = [
+                    x
+                    for x in payload.get("config", [])
+                    if x.get("ccy") == ccy and x.get("level") == "Lv1" and x.get("stgyType") == "0"
+                ]
+                rates[ccy] = {
+                    "borrowable": True,
+                    "hourlyBorrowRate": (
+                        daily_to_hourly(coin.get("rate")) if isinstance(coin, dict) else None
+                    ),
+                    "maxBorrowingAmount": matches[0].get("quota") if len(matches) == 1 else None,
+                    "publicScope": "okx_lv1",
+                }
+            return rates, at
         if ex == "bitget":
             data, at = await self.get("/api/v2/margin/currencies")
             return {
                 x["baseCoin"]: {
-                    "borrowable": x.get("isCrossBorrowable") is True and x.get("status") == "1"
+                    "borrowable": x.get("isCrossBorrowable") is True and x.get("status") == "1",
+                    "minimumBorrowAmount": x.get("userMinBorrow"),
                 }
                 for x in data
                 if x.get("quoteCoin") == "USDT"
@@ -97,13 +150,20 @@ class PublicFsProvider:
         if ex == "gate":
             data, at = await self.get("/margin/uni/currency_pairs")
             return {
-                x["currency_pair"][:-5]: {"borrowable": x.get("status") == "enabled"}
+                x["currency_pair"][:-5]: {
+                    "borrowable": x.get("status") == "enabled",
+                    "minimumBorrowAmount": x.get("base_min_borrow_amount"),
+                }
                 for x in data
                 if x.get("currency_pair", "").endswith("_USDT")
             }, at
-        # Binance SAPI requires an API key even for the product reference. Never
-        # borrow credentials from another exchange or substitute lending yields.
-        return {}, datetime.now(UTC)
+        # Margin market support is public; it does NOT prove base-coin borrowability.
+        specs, at = await self.binance_specs(False)
+        return {
+            x["baseAsset"]: {"marginTradingAllowed": x.get("isMarginTradingAllowed")}
+            for x in specs.values()
+            if x.get("quoteAsset") == "USDT" and x.get("symbol") == x.get("baseAsset", "") + "USDT"
+        }, at
 
     async def public_snapshot(self):
         rates, margin_at, borrow_error = {}, datetime.now(UTC), None

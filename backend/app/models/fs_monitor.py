@@ -42,6 +42,21 @@ class FsScenario(BaseModel):
     stressed_net_usdt: float
 
 
+class FsPublicBorrowReference(BaseModel):
+    """Public product limits, never account capacity or available inventory."""
+
+    model_config = ConfigDict(allow_inf_nan=False)
+    source_url: str
+    scope: Literal[
+        "bybit_no_vip", "okx_basic", "okx_lv1", "bitget_cross", "gate_isolated", "binance_margin"
+    ]
+    status: Literal["available", "not_listed", "query_failed"]
+    observed_at: datetime | None = None
+    reference_limit: float | None = Field(default=None, ge=0)
+    minimum_borrow: float | None = Field(default=None, ge=0)
+    margin_supported: bool | None = None
+
+
 class FsCandidate(BaseModel):
     model_config = ConfigDict(allow_inf_nan=False)
     symbol: str
@@ -61,6 +76,7 @@ class FsCandidate(BaseModel):
     borrow_rate_source: str = "unknown"
     product_borrowable: bool | None = None
     public_vip_limit: float | None = None
+    public_borrow: FsPublicBorrowReference | None = None
     account_max_loan: float | None = None
     available_inventory: float | None = None
     inventory_at: datetime | None = None

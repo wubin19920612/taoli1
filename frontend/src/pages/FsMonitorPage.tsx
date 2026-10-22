@@ -71,6 +71,47 @@ export function candidateStage(row: FsCandidate): string {
   return row.valid_until && Date.parse(row.valid_until) <= Date.now() ? "stale" : row.stage;
 }
 
+const borrowScopes = {
+  bybit_no_vip: "普通档 No VIP", okx_basic: "基础额度，未乘等级系数", okx_lv1: "Lv1 普通策略",
+  bitget_cross: "全仓产品", gate_isolated: "逐仓产品", binance_margin: "杠杆市场",
+};
+const borrowAmount = (value: number | null | undefined, base: string) => value == null
+  ? "未返回" : `${value.toLocaleString("zh-CN", { maximumSignificantDigits: 12 })} ${base}`;
+
+function AccountBorrow({ row }: { row: FsCandidate }) {
+  if (row.account_state === "not_configured") return <div>账户额度 / 库存：未接入查询</div>;
+  if (row.account_state !== "checked") return <div>账户额度 / 库存：{reason(`account_${row.account_state}`)}</div>;
+  const expired = candidateStage(row) === "stale";
+  return <>
+    <div>{expired ? "上次账户额度" : "账户最大可借"}：{borrowAmount(row.account_max_loan, row.base)}{expired && "（已过期）"}</div>
+    <div>{expired ? "上次库存" : "可借库存"}：{borrowAmount(row.available_inventory, row.base)}{expired && "（已过期）"}</div>
+  </>;
+}
+
+export function BorrowInfo({ row }: { row: FsCandidate }) {
+  const ref = row.public_borrow;
+  // Old history has no reference object: preserve its Bybit value as historical only.
+  const limit = ref ? ref.reference_limit : row.exchange === "bybit" ? row.public_vip_limit : null;
+  const stamp = ref?.observed_at ? Date.parse(ref.observed_at) : NaN;
+  const age = Date.now() - stamp;
+  const expired = !Number.isFinite(stamp) || age > 60000 || age < -5000 || candidateStage(row) === "stale";
+  const scope = ref ? borrowScopes[ref.scope] : row.exchange === "bybit" ? borrowScopes.bybit_no_vip : "";
+  const limitMissing = ref?.status === "query_failed" ? "公开查询失败"
+    : ref?.status === "not_listed" ? "公开目录未列出此币"
+    : ref && ["bitget_cross", "gate_isolated", "binance_margin"].includes(ref.scope) ? "该公开接口未提供上限" : "未返回有效数值";
+  const support = row.product_borrowable == null
+    ? ref?.margin_supported === true ? "杠杆交易支持，借币待核验"
+      : ref?.margin_supported === false ? "市场不支持杠杆交易" : "借币支持待核验"
+    : row.product_borrowable ? "产品支持借币" : "产品不支持借币";
+  return <div className="fs-borrow-info">
+    <div>{support}</div>
+    <div>{limit != null ? `公开参考上限：${borrowAmount(limit, row.base)}` : limitMissing}</div>
+    {ref?.minimum_borrow != null && <div>最小借币量：{borrowAmount(ref.minimum_borrow, row.base)}</div>}
+    {scope && <small>{scope} · {ref && ref.status !== "available" ? "尚无公开数据" : expired ? "公开参考已过期" : "公开参考，不是库存"}</small>}
+    <AccountBorrow row={row} />
+  </div>;
+}
+
 function Details({ row }: { row: FsCandidate }) {
   return <div className="fs-details">
     <Descriptions size="small" bordered column={{ xs: 1, sm: 2, lg: 3 }} items={[
@@ -81,9 +122,10 @@ function Details({ row }: { row: FsCandidate }) {
       { key: "astro", label: "Astro 建卡", children: astroStates[row.astro_state ?? "not_requested"] ?? "等待核对" },
       { key: "q", label: "双腿基础币数量", children: num(row.quantity, 8) },
       { key: "borrow", label: "所需借币（含首期余量）", children: num(row.borrow_required, 8) },
-      { key: "quota", label: "账户最大可借 / 库存", children: `${num(row.account_max_loan)} / ${num(row.available_inventory)}` },
+      { key: "quota", label: "账户最大可借 / 库存", children: <AccountBorrow row={row} /> },
       { key: "capacity", label: "借贷容量参考（USDT）", children: num(row.capacity_usdt, 2) },
-      { key: "public", label: "公开档位上限（不是库存）", children: num(row.public_vip_limit) },
+      { key: "public", label: "公开借币参考与账户查询", children: <BorrowInfo row={row} /> },
+      { key: "public_source", label: "公开来源 / 采样时间", children: <>{row.public_borrow && <a href={row.public_borrow.source_url} target="_blank" rel="noreferrer">{exchangeNames[row.exchange]} 官方接口</a>}<br />{time(row.public_borrow?.observed_at ?? row.source_times.public_borrow)}</> },
       { key: "fee", label: "单笔现货 / 永续费率", children: `${pct(row.spot_fee_pct)} / ${pct(row.future_fee_pct)}（${row.fee_source === "account" ? "账户查询" : "配置假设"}）` },
       ...Object.entries({ spot_sell: "现货开仓卖出均价", future_buy: "永续开仓买入均价", spot_buy: "现货退出买回均价", future_sell: "永续退出卖出均价" }).map(([key, label]) => ({ key, label, children: num(row.prices[key], 10) })),
       { key: "inventory_at", label: "库存来源时间（北京时间）", children: time(row.inventory_at) },
@@ -157,7 +199,7 @@ export function FsMonitorPage() {
     { title: "账户核验（可选）", width: 170, render: (_, r) => { const s = candidateStage(r); return <Tag color={s === "cost_pass" ? "green" : s === "quota_sufficient" ? "blue" : "default"}>{stages[s]}</Tag>; } },
     { title: "永续费率 / 周期", width: 175, render: (_, r) => <>{pct(r.funding_pct)} / {num(r.interval_hours)}h<br /><small>下次 {time(r.next_funding_at)}</small></> },
     { title: "小时借币利率", width: 145, render: (_, r) => <>{pct(r.hourly_borrow_pct)}<br /><small>{r.borrow_rate_source === "account" ? "账户利率" : r.hourly_borrow_pct == null ? "尚未取得利率" : "公开基础利率"}</small></> },
-    { title: "借币 / 额度 / 库存", width: 180, render: (_, r) => <>{r.product_borrowable == null ? "支持状态未知" : r.product_borrowable ? "产品支持" : "不支持"}<br />{num(r.account_max_loan)} / {num(r.available_inventory)}</> },
+    { title: "借币 / 公开参考 / 账户", width: 270, render: (_, r) => <BorrowInfo row={r} /> },
     { title: "24h成交额 U（现货 / 永续）", width: 185, render: (_, r) => `${num(r.spot_volume_usdt, 0)} / ${num(r.future_volume_usdt, 0)}` },
     { title: "持有期预估净收益 / 压力 U", width: 180, render: (_, r) => { const s = r.scenarios.find(x => x.label === "holding"); return s ? `${num(s.net_usdt, 2)} / ${num(s.stressed_net_usdt, 2)}` : "无法估算"; } },
     { title: "待满足条件", width: 250, render: (_, r) => r.blockers.length ? r.blockers.map(reason).join("；") : "估算条件通过，执行前仍需重新校验" }
@@ -185,6 +227,7 @@ export function FsMonitorPage() {
         <Typography.Text type="secondary">已有候选按约10秒起始间隔刷新，逐条发布；慢查询时仍按原有效期降级。Astro 按候选交易所建立同平台原生 FS 卡片，默认停用且禁止开仓，重复路线跳过。账户额度与真实手续费可在 Astro 执行前确认。</Typography.Text>
       </Form> }]} />
       <Space wrap><Button disabled={!report.settings.enabled || report.scanning} onClick={() => void refreshFsMonitor().then(() => message.info("已请求刷新，结果将在扫描完成后更新")).catch(e => message.error(e.message))}>{report.scanning ? "正在扫描" : "请求刷新"}</Button><Typography.Text type="secondary">展开行查看同币数进出场均价、来源时间及三种持有情景。</Typography.Text></Space>
+      <Typography.Text type="secondary">公开参考上限和最小借币量按基础币计，不能代表账户当前可借量。当前 Astro SDK 未提供额度、库存查询；未接入账户查询时不显示为零。</Typography.Text>
       {screens.md === false ? <div className="fs-mobile-candidates">{report.candidates.map(row => {
         const s = candidateStage(row);
         const holding = row.scenarios.find(x => x.label === "holding");
@@ -197,7 +240,7 @@ export function FsMonitorPage() {
             <div><small>持有期预估净收益 U</small><div>{num(holding?.net_usdt, 2)}</div></div>
             <div><small>压力净收益 U</small><div>{num(holding?.stressed_net_usdt, 2)}</div></div>
           </div>
-          <div>{row.product_borrowable == null ? "借币支持未知" : row.product_borrowable ? "产品支持借币" : "产品不支持借币"} · 账户额度 {num(row.account_max_loan)} · 库存 {num(row.available_inventory)}</div>
+          <BorrowInfo row={row} />
           <small>下次结算 {time(row.next_funding_at)}（北京时间）</small>
           <Typography.Paragraph type="secondary">{row.blockers.map(reason).join("；") || "估算条件通过，执行前仍需重新校验"}</Typography.Paragraph>
           <Collapse size="small" items={[{ key: "detail", label: "查看盘口、成交额与成本明细", children: <>
@@ -205,7 +248,7 @@ export function FsMonitorPage() {
             <Details row={row} />
           </> }]} />
         </article>;
-      })}</div> : <Table<FsCandidate> size="small" rowKey={rowKey} columns={columns} dataSource={report.candidates} scroll={{ x: 1435 }} pagination={{ pageSize: 15, hideOnSinglePage: true }} expandable={{ expandedRowRender: row => <Details row={row} /> }} />}
+      })}</div> : <Table<FsCandidate> size="small" rowKey={rowKey} columns={columns} dataSource={report.candidates} scroll={{ x: 1635 }} pagination={{ pageSize: 15, hideOnSinglePage: true }} expandable={{ expandedRowRender: row => <Details row={row} /> }} />}
       <Collapse items={[{ key: "history", label: "历史观察与站内事件", children: <>
         <Button onClick={() => void Promise.all([getFsEvents(), getFsHistory()]).then(([e, h]) => { if (alive.current) { setEvents(e); setHistory(h); } }).catch(e => message.error(e.message))}>刷新历史</Button>
         <Typography.Paragraph type="secondary">每5分钟留存一份，最多288份。历史状态不代表当前可借；站内事件不发送外部通知。</Typography.Paragraph>

@@ -27,6 +27,15 @@ export interface FsCandidate {
   funding_pct: number | null; interval_hours: number | null; next_funding_at: string | null;
   hourly_borrow_pct: number | null; borrow_rate_source: string;
   product_borrowable: boolean | null; public_vip_limit: number | null;
+  public_borrow?: {
+    source_url: string;
+    scope: "bybit_no_vip" | "okx_basic" | "okx_lv1" | "bitget_cross" | "gate_isolated" | "binance_margin";
+    status: "available" | "not_listed" | "query_failed";
+    observed_at: string | null;
+    reference_limit: number | null;
+    minimum_borrow: number | null;
+    margin_supported: boolean | null;
+  } | null;
   account_max_loan: number | null; available_inventory: number | null; inventory_at: string | null;
   account_state: string; quantity: number | null; borrow_required: number | null; capacity_usdt: number | null;
   spot_volume_usdt: number | null; future_volume_usdt: number | null;

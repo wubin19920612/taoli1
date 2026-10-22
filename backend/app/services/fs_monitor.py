@@ -6,7 +6,7 @@ from app.models.fs_monitor import FsCandidate, FsReport
 from app.models.market import MarketType
 from app.services.fs_bybit import BybitFsProvider, FsDataError, number, timestamp
 from app.services.fs_economics import evaluate
-from app.services.fs_public import PublicFsProvider, route_key
+from app.services.fs_public import PublicFsProvider, public_borrow_details, route_key
 from app.services.pair_validation import validate_pair
 
 
@@ -477,7 +477,15 @@ class FsMonitor:
             product_borrowable=(
                 rate.get("borrowable") if isinstance(rate.get("borrowable"), bool) else None
             ),
-            public_vip_limit=number(rate.get("maxBorrowingAmount"), nonnegative=True),
+            # Keep the original Bybit-only field for historical snapshots/API clients.
+            public_vip_limit=(
+                number(rate.get("maxBorrowingAmount"), nonnegative=True)
+                if exchange == "bybit"
+                else None
+            ),
+            public_borrow=public_borrow_details(
+                exchange, rate, data["margin_at"], failed=bool(data.get("borrow_error"))
+            ),
             spot_volume_usdt=number(st.get("turnover24h"), nonnegative=True),
             future_volume_usdt=number(ticker.get("turnover24h"), nonnegative=True),
             spot_fee_pct=settings.spot_fee_pct,

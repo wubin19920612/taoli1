@@ -394,6 +394,9 @@ async def test_full_scan_with_account_and_config_change_discards_inflight_result
         assert not monitor.report.error
         assert monitor.report.candidates[0].stage == "cost_pass"
         assert monitor.report.candidates[0].interval_hours == 4
+        assert monitor.report.candidates[0].public_borrow.reference_limit == 9999
+        assert monitor.report.candidates[0].public_borrow.scope == "bybit_no_vip"
+        assert monitor.report.candidates[0].account_max_loan == 200
         assert (await monitor.current()).candidates[0].stage == "cost_pass"
         assert len(await repo.events()) == 1
         await monitor.scan()

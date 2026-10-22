@@ -1,5 +1,7 @@
 # 下一任务入口
 
+FS 本轮补充公开借币参考并核实 Astro 查询能力，见 [2026-10-22 借币数据展示交接](task-handoff-2026-10-22-fs-borrow-reference.md)：Bybit普通档上限、OKX基础/定制额度、Bitget/Gate最小借币量及Binance杠杆市场支持进入主表与手机。公开参考和真实账户额度/库存分开，未知不再合并为“未知/未知”。当前Astro官方SDK与实例只读核验均未发现借贷查询能力，真实账户数据仍未实测；最终提交、备份、部署与验收记录见该交接。
+
 FS 最新扩展为五交易所同平台观察池，功能 `79eef76` 已推送并以预构建镜像部署，详见 [2026-10-22 多交易所交接](task-handoff-2026-10-22-fs-multi-exchange.md)。默认 Bybit/Binance/OKX/Bitget/Gate，按平台分配深查名额并隔离同名建卡记录。后端98项、前端19项、生产构建通过，双库备份及线上API/桌面/手机验证通过；连续8次样本均五家各3条，单轮约3.1～5.4秒。自动建卡保持开启，但当前无达标信号，尚未真实新增FS卡；Binance/Bitget/Gate的借币利率缺口继续阻断，真实账户能力未实测。用户已明确要求扩展，后续以此范围为准；下文Bybit限定为历史阶段。
 
 上一阶段完成模块是 Bybit 负费率 FS 信号与 Astro 自动建卡，方案见 [设计文档](fs-borrow-monitor-design.md)，代码、测试、备份、部署及限制见 [2026-10-22 FS/Astro 交接](task-handoff-2026-10-22-fs-astro-signals.md)。首版历史见 [2026-10-21 观察池交接](task-handoff-2026-10-21-fs-borrow-monitor.md)。
