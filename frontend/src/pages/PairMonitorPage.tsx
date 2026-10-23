@@ -23,6 +23,7 @@ import {
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { formatPriceRatio, pairUsesRatio, priceRatio, ratioChartPoints } from "../utils/pairRatio";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 
@@ -2631,10 +2632,12 @@ function PairSpreadDiagnosticCard({
 
 function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
-  const points = pairDisplayPoints(result);
+  const ratioMode = pairUsesRatio(result);
+  const metric = ratioMode ? formatPriceRatio : signedPct;
+  const points = ratioChartPoints(pairDisplayPoints(result), ratioMode);
   const width = 1180;
   const height = 330;
-  const padding = { top: 24, right: 28, bottom: 34, left: 56 };
+  const padding = { top: 24, right: 28, bottom: 34, left: ratioMode ? 78 : 56 };
   const chartWidth = width - padding.left - padding.right;
   const chartHeight = height - padding.top - padding.bottom;
 
@@ -2658,7 +2661,7 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
   const ticks = chartTicks(points, hourlyTicks ? 25 : spanHours <= 12 ? 13 : spanHours >= 168 ? 7 : 6);
   const turningPoints = chartTurningPoints(points);
   const latestPoint = points[points.length - 1];
-  const latestTone = fundingRateTone(latestPoint.spread_pct);
+  const latestTone = ratioMode ? "neutral" : fundingRateTone(latestPoint.spread_pct);
   const hoveredPoint = hoveredIndex === null ? null : points[hoveredIndex] ?? null;
   const hoveredX = hoveredIndex === null ? null : xAt(hoveredIndex);
   const hoveredY = hoveredPoint ? yAt(hoveredPoint.spread_pct) : null;
@@ -2696,15 +2699,15 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
   return (
     <div className="pair-chart-card">
       <div className="pair-chart-head">
-        <Typography.Title level={5}>价差曲线</Typography.Title>
+        <Typography.Title level={5}>{ratioMode ? "价格比值曲线（左 ÷ 右）" : "价差曲线"}</Typography.Title>
         <div className="pair-chart-head-meta">
           <Tag color={latestTone === "positive" ? "red" : latestTone === "negative" ? "green" : undefined}>
-            最新 {signedPct(latestPoint.spread_pct)}
+            最新 {metric(latestPoint.spread_pct)}
           </Tag>
           <Typography.Text type="secondary">{fullTime(latestPoint.bucket_at)}</Typography.Text>
         </div>
       </div>
-      <svg className="pair-spread-chart" role="img" aria-label="均值价差率曲线" viewBox={`0 0 ${width} ${height}`}>
+      <svg className="pair-spread-chart" role="img" aria-label={ratioMode ? "价格比值曲线" : "均值价差率曲线"} viewBox={`0 0 ${width} ${height}`}>
         <defs>
           <linearGradient id="pairSpreadFill" x1="0" x2="0" y1="0" y2="1">
             <stop offset="0%" stopColor="#2f80ed" stopOpacity="0.18" />
@@ -2719,7 +2722,7 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
             <g key={tick}>
               <line className="pair-chart-grid-line" x1={padding.left} y1={y} x2={padding.left + chartWidth} y2={y} />
               <text className="pair-chart-axis-label" x={padding.left - 10} y={y + 4} textAnchor="end">
-                {value.toFixed(0)}%
+                {ratioMode ? formatPriceRatio(value) : `${value.toFixed(0)}%`}
               </text>
             </g>
           );
@@ -2752,13 +2755,13 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
           cy={yAt(latestPoint.spread_pct)}
           r="4.6"
         >
-          <title>{`${time(latestPoint.bucket_at)} 实时均值价差率 ${signedPct(latestPoint.spread_pct)}，差价 ${price(latestPoint.spread_abs)}`}</title>
+          <title>{`${time(latestPoint.bucket_at)} ${ratioMode ? "实时价格比值" : "实时均值价差率"} ${metric(latestPoint.spread_pct)}，差价 ${price(latestPoint.spread_abs)}`}</title>
         </circle>
         {turningPoints.map(({ index, point, kind }, labelIndex) => {
           const x = xAt(index);
           const y = yAt(point.spread_pct);
-          const label = signedPct(point.spread_pct);
-          const labelWidth = 66;
+          const label = metric(point.spread_pct);
+          const labelWidth = Math.max(66, label.length * 8 + 12);
           const labelHeight = 22;
           const labelOffset = 22 + (labelIndex % 2) * 12;
           const labelShift = ((labelIndex % 3) - 1) * 10;
@@ -2773,7 +2776,7 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
           );
           return (
             <g key={`turn-${point.bucket_at}-${kind}`} className={`pair-chart-turning pair-chart-turning-${kind}`}>
-              <title>{`${time(point.bucket_at)} 均值价差率 ${label}，差价 ${price(point.spread_abs)}`}</title>
+              <title>{`${time(point.bucket_at)} ${ratioMode ? "价格比值" : "均值价差率"} ${label}，差价 ${price(point.spread_abs)}`}</title>
               <line className="pair-chart-turning-leader" x1={x} y1={y} x2={labelCenterX} y2={labelCenterY} />
               <circle className="pair-chart-turning-dot" cx={x} cy={y} r="4" />
               <rect
@@ -2815,7 +2818,7 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
               {time(hoveredPoint.bucket_at)}
             </text>
             <text className="pair-chart-hover-tooltip-rate" x={tooltipX + tooltipWidth - 10} y={tooltipY + 18} textAnchor="end">
-              {signedPct(hoveredPoint.spread_pct)}
+              {metric(hoveredPoint.spread_pct)}
             </text>
             <line className="pair-chart-hover-tooltip-divider" x1={tooltipX + 10} y1={tooltipY + 27} x2={tooltipX + tooltipWidth - 10} y2={tooltipY + 27} />
             <text className="pair-chart-hover-tooltip-label" x={tooltipX + 10} y={tooltipY + 45}>
@@ -3330,18 +3333,21 @@ function PairDayCompareChart({
   loading,
   hours,
   intervalSeconds,
-  rangeLabel
+  rangeLabel,
+  ratioMode
 }: {
   series: PairDayCompareSeries[];
   loading: boolean;
   hours: number;
   intervalSeconds: number;
   rangeLabel: string;
+  ratioMode: boolean;
 }) {
-  const activeSeries = series.filter((item) => item.points.length > 0);
+  const metric = ratioMode ? formatPriceRatio : signedPct;
+  const activeSeries = series.map((item) => ({ ...item, points: ratioChartPoints(item.points, ratioMode) })).filter((item) => item.points.length > 0);
   const width = 1180;
   const height = 330;
-  const padding = { top: 24, right: 28, bottom: 38, left: 56 };
+  const padding = { top: 24, right: 28, bottom: 38, left: ratioMode ? 78 : 56 };
   const chartWidth = width - padding.left - padding.right;
   const chartHeight = height - padding.top - padding.bottom;
 
@@ -3349,7 +3355,7 @@ function PairDayCompareChart({
     return (
       <div className="pair-day-compare-card">
         <div className="pair-day-compare-head">
-          <Typography.Title level={5}>同时段价差对比</Typography.Title>
+          <Typography.Title level={5}>{ratioMode ? "同时段比值对比（左 ÷ 右）" : "同时段价差对比"}</Typography.Title>
           <Tag>{loading ? "加载中" : "0 条"}</Tag>
         </div>
         <div className="pair-day-compare-empty">{loading ? "正在加载同时段对比" : "暂无同时段对比数据"}</div>
@@ -3360,8 +3366,8 @@ function PairDayCompareChart({
   const values = activeSeries
     .flatMap((item) => item.points.map((point) => point.spread_pct))
     .filter((value) => Number.isFinite(value));
-  const minValue = Math.min(...values, 0);
-  const maxValue = Math.max(...values, 0);
+  const minValue = Math.min(...values, ...(ratioMode ? [] : [0]));
+  const maxValue = Math.max(...values, ...(ratioMode ? [] : [0]));
   const span = maxValue - minValue || Math.max(Math.abs(maxValue), 1);
   const min = minValue - span * 0.12;
   const max = maxValue + span * 0.12;
@@ -3392,7 +3398,7 @@ function PairDayCompareChart({
   return (
     <div className="pair-day-compare-card">
       <div className="pair-day-compare-head">
-        <Typography.Title level={5}>同时段价差对比</Typography.Title>
+        <Typography.Title level={5}>{ratioMode ? "同时段比值对比（左 ÷ 右）" : "同时段价差对比"}</Typography.Title>
         <div className="pair-day-compare-summary">
           <Tag color="blue">{durationLabel(hours)}</Tag>
           {rangeLabel ? <Tag>{rangeLabel}</Tag> : null}
@@ -3401,7 +3407,7 @@ function PairDayCompareChart({
           {loading ? <Tag color="processing">刷新中</Tag> : null}
         </div>
       </div>
-      <svg className="pair-day-compare-chart" role="img" aria-label="多天同时段价差对比" viewBox={`0 0 ${width} ${height}`}>
+      <svg className="pair-day-compare-chart" role="img" aria-label={ratioMode ? "多天同时段比值对比" : "多天同时段价差对比"} viewBox={`0 0 ${width} ${height}`}>
         <rect x={padding.left} y={padding.top} width={chartWidth} height={chartHeight} rx="4" />
         {[0, 0.25, 0.5, 0.75, 1].map((tick) => {
           const y = padding.top + chartHeight * tick;
@@ -3410,7 +3416,7 @@ function PairDayCompareChart({
             <g key={tick}>
               <line className="pair-day-compare-grid-line" x1={padding.left} y1={y} x2={padding.left + chartWidth} y2={y} />
               <text className="pair-day-compare-axis-label" x={padding.left - 10} y={y + 4} textAnchor="end">
-                {signedPct(value)}
+                {metric(value)}
               </text>
             </g>
           );
@@ -3438,7 +3444,7 @@ function PairDayCompareChart({
             <g key={`day-compare-series-${item.offsetDays}`}>
               <path className="pair-day-compare-line" d={linePath(item)} stroke={color} />
               <circle className="pair-day-compare-point" cx={latestX} cy={yAt(latest.spread_pct)} r="4" fill={color}>
-                <title>{`${item.label} ${time(latest.bucket_at)} ${signedPct(latest.spread_pct)}`}</title>
+                <title>{`${item.label} ${time(latest.bucket_at)} ${metric(latest.spread_pct)}`}</title>
               </circle>
             </g>
           );
@@ -3450,7 +3456,7 @@ function PairDayCompareChart({
           const color = colors[index % colors.length];
           return (
             <span key={`day-compare-legend-${item.offsetDays}`} style={{ color }}>
-              {item.label} {signedPct(latest?.spread_pct)}
+              {item.label} {metric(latest?.spread_pct)}
             </span>
           );
         })}
@@ -3968,7 +3974,7 @@ const pointColumns: ColumnsType<PairSpreadPoint> = [
   { title: "左价", dataIndex: "leg1_close", align: "right", render: (value: number) => price(value) },
   { title: "右价", dataIndex: "leg2_close", align: "right", render: (value: number) => price(value) },
   { title: "差价", dataIndex: "spread_abs", align: "right", render: (value: number) => price(value) },
-  { title: "均值价差率", dataIndex: "spread_pct", align: "right", render: (value: number) => signedPct(value) }
+  { title: "均值价差率", key: "spreadMetric", dataIndex: "spread_pct", align: "right", render: (value: number) => signedPct(value) }
 ];
 
 function fundingLegKey(exchange: string, symbol: string, dex?: string | null): string {
@@ -5341,6 +5347,9 @@ export function PairMonitorPage() {
   };
 
   const current = result?.current;
+  const ratioMode = pairUsesRatio(result);
+  const ratioPoints = pairDisplayPoints(result);
+  const latestRatioPoint = ratioPoints[ratioPoints.length - 1];
   const openSpreadPct = current?.open_spread_pct ?? null;
   const closeSpreadPct = current?.close_spread_pct ?? null;
   const hasMidpointSpread = Boolean(
@@ -5698,44 +5707,44 @@ export function PairMonitorPage() {
       <section className="pair-focus-block">
         <section className="pair-focus-metrics">
           <MetricCard
-            label="可成交开仓价差"
-            value={signedPct(openSpreadPct)}
+            label={ratioMode ? "可成交开仓比值" : "可成交开仓价差"}
+            value={ratioMode ? formatPriceRatio(priceRatio(current?.leg1.ask_price, current?.leg2.bid_price)) : signedPct(openSpreadPct)}
             sub={
               current
                 ? `左 ask ${price(current.leg1.ask_price)} · 右 bid ${price(current.leg2.bid_price)} · 差价 ${price(current.open_spread_abs)}`
                 : "等待查询"
             }
-            tone={spreadTone}
+            tone={ratioMode ? "neutral" : spreadTone}
           />
           <MetricCard
-            label="可成交平仓价差"
-            value={signedPct(closeSpreadPct)}
+            label={ratioMode ? "可成交平仓比值" : "可成交平仓价差"}
+            value={ratioMode ? formatPriceRatio(priceRatio(current?.leg1.bid_price, current?.leg2.ask_price)) : signedPct(closeSpreadPct)}
             sub={
               current
                 ? `左 bid ${price(current.leg1.bid_price)} · 右 ask ${price(current.leg2.ask_price)} · 差价 ${price(current.close_spread_abs)}`
                 : "等待查询"
             }
-            tone={closeSpreadTone}
+            tone={ratioMode ? "neutral" : closeSpreadTone}
           />
           <MetricCard
-            label="盘口中间价差"
-            value={signedPct(midpointSpreadPct)}
+            label={ratioMode ? "盘口中间比值" : "盘口中间价差"}
+            value={ratioMode ? formatPriceRatio(priceRatio(latestRatioPoint?.leg1_close, latestRatioPoint?.leg2_close)) : signedPct(midpointSpreadPct)}
             sub={
               result
-                ? `差价 ${price(midpointSpreadAbs)}${ratio ? ` · 倍率 ${compactNumber(ratio, 4)}x` : ""}`
+                ? `差价 ${price(midpointSpreadAbs)}${ratioMode ? " · 左 ÷ 右（右价已按倍率折算）" : ""}${!ratioMode && ratio ? ` · 倍率 ${compactNumber(ratio, 4)}x` : ""}`
                 : "等待查询"
             }
-            tone={midpointSpreadTone}
+            tone={ratioMode ? "neutral" : midpointSpreadTone}
           />
           <MetricCard
-            label="标记价差（辅助）"
-            value={signedPct(current?.mark_spread_pct)}
+            label={ratioMode ? "标记比值（辅助）" : "标记价差（辅助）"}
+            value={ratioMode ? formatPriceRatio(priceRatio(current?.leg1.mark_price, current?.leg2.mark_price)) : signedPct(current?.mark_spread_pct)}
             sub={
               current
                 ? `左标记 ${price(current.leg1.mark_price)} · 右标记 ${price(current.leg2.mark_price)} · 差价 ${price(current.mark_spread_abs)}`
                 : "等待查询"
             }
-            tone={markSpreadTone}
+            tone={ratioMode ? "neutral" : markSpreadTone}
           />
         </section>
         <PairSpreadChart result={result} />
@@ -6060,6 +6069,7 @@ export function PairMonitorPage() {
           hours={dayCompareChartConfig.hours}
           intervalSeconds={dayCompareChartConfig.intervalSeconds}
           rangeLabel={dayCompareChartConfig.rangeLabel}
+          ratioMode={ratioMode}
         />
       ) : null}
       <PairPriceChart result={result} />
@@ -6222,7 +6232,10 @@ export function PairMonitorPage() {
           </div>
           <Table<PairSpreadPoint>
             rowKey={(point) => point.bucket_at}
-            columns={pointColumns}
+            columns={ratioMode ? pointColumns.map((column) => column.key === "spreadMetric" ? {
+              ...column, title: "价格比值（左 ÷ 右）",
+              render: (_value: number, point: PairSpreadPoint) => formatPriceRatio(priceRatio(point.leg1_close, point.leg2_close))
+            } : column) : pointColumns}
             dataSource={recentPoints}
             loading={loading}
             pagination={{ pageSize: 10 }}

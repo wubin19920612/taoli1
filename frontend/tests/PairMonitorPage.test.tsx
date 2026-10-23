@@ -580,6 +580,36 @@ describe("PairMonitorPage", () => {
     vi.unstubAllGlobals();
   });
 
+  it.each([false, true])("shows XAU/CL ratios consistently, reversed=%s", async (reversed) => {
+    const originalFetch = window.fetch;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const response = await originalFetch(input, init);
+      if (!String(input).includes("/pair-spread/query")) return response;
+      const data = await response.json();
+      const left = reversed ? 100 : 4000;
+      const right = reversed ? 4000 : 100;
+      data.points = data.points.map((point: Record<string, unknown>) => ({ ...point, leg1_close: left, leg2_close: right }));
+      if (data.current) {
+        Object.assign(data.current.leg1, { price: left, mid_price: left, bid_price: left - 0.1, ask_price: left + 0.1, mark_price: left });
+        Object.assign(data.current.leg2, { price: right, mid_price: right, bid_price: right - 0.1, ask_price: right + 0.1, mark_price: null });
+      }
+      return Response.json(data);
+    });
+    window.history.pushState({}, "", "/?page=pair-monitor&leg1_exchange=binance&leg1_market_type=future&leg1_symbol=XAU&leg2_exchange=binance&leg2_market_type=future&leg2_symbol=CL&hours=6&interval_seconds=60");
+    render(<PairMonitorPage />);
+    await screen.findByRole("img", { name: "价格比值曲线" });
+    const focus = document.querySelector(".pair-focus-block")!;
+    expect(focus.textContent).not.toContain("%");
+    expect(focus.textContent).toContain(reversed ? "0.025" : "40");
+    expect(screen.getByText("标记比值（辅助）").parentElement?.textContent).toContain("-");
+    expect(document.querySelector(".pair-chart-head-meta")?.textContent).toContain(reversed ? "最新 0.025" : "最新 40");
+    expect(screen.getAllByText("价格比值（左 ÷ 右）").length).toBeGreaterThan(0);
+    const open = screen.getByText("可成交开仓比值").parentElement?.textContent;
+    expect(open).toContain(reversed ? "0.0250256" : "40.041");
+    await userEvent.setup().click(screen.getByRole("button", { name: "交换左右标的" }));
+    await waitFor(() => expect(requests.filter(r => r.includes("/pair-spread/query")).length).toBeGreaterThan(1));
+  });
+
   it("queries Arcus independently with its own exchange identity", async () => {
     serverPresets = [savedPairPreset({
       id: "arcus|future||BTC|binance|future||BTC",
