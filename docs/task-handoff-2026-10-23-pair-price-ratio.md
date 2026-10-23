@@ -26,6 +26,28 @@
 
 ## 线上与后续
 
-待本次功能提交构建双预构建镜像，完成双库独立容器备份、完整性/哈希校验、git pull --ff-only与no-build部署后补记最终证据。部署沿用上次已核实的 `output/fs-borrow-isolated-deploy-20261022.sh` 包装，不在2GB生产机构建，不在业务后端容器内做重型备份。服务器原有重启/内存问题另属运维模块，本次不宣称修复。
+本次已完成双预构建镜像、双库独立容器备份、完整性/哈希校验、git pull --ff-only与no-build部署，最终证据见文末。部署沿用上次已核实的 `output/fs-borrow-isolated-deploy-20261022.sh` 包装，不在2GB生产机构建，不在业务后端容器内做重型备份。服务器原有重启/内存问题另属运维模块，本次不宣称修复。
 
 后续其他功能请新建任务，从本交接继续；如需用户自选显示模式或修改2倍阈值，可独立小改。当前阈值附近可能随行情自动切换，是明确的自动规则。
+
+## 提交版本复核
+
+功能提交 `2e9afa2fb502c437f6bb87637e3bd0823adab8bd` 已推送。独立detached worktree `.worktrees/pair-ratio-validation-20261023` 排除两项既有布局WIP测试后，68项通过，TypeScript/Vite构建通过；保留该worktree作为验证证据。原工作区仍只有原有页面布局/测试WIP（71行增加、49行删除）。
+
+干净版本浏览器5组均通过：XAU/CL桌面和手机、CL/XAU反向、BTC/BTC同价普通百分比、XAU/CL设置0.025倍率后价格归一至约0.99而恢复百分比。真实API价格比值与卡片/最新值一致；同时段比较和悬停无百分号；无页面错误、无整页横向溢出。截图 `output/pair-ratio-clean-*-20261023.png` 已目视检查；JSON `output/pair-ratio-clean-browser-20261023.json`。浏览器脚本的同名Switch/共享图表class定位已缩窄到主图，失败日志保留，未将工具定位失败视为产品故障。
+
+GitHub Actions [39887421666](https://github.com/wubin19920612/taoli1/actions/runs/39887421666) backend/frontend均success，服务器对两个完整SHA镜像执行manifest inspect均通过。
+
+## 最终线上验收
+
+2026-10-23 11:07（Asia/Seoul）部署成功，脚本退出0。线上Git及两份镜像完整SHA均为 `2e9afa2fb502c437f6bb87637e3bd0823adab8bd`，tracked clean，backend/frontend healthy、RestartCount均0；`/api/health` status=ok、12197市场、exchange_errors={}。短期健康不能证明既有长期内存问题已修复。
+
+备份均通过 SQLite integrity_check=ok、独立容器与宿主机SHA256一致：
+
+- 主库：`backups/radar-before-2e9afa2fb502-20261023T020523Z.db`，SHA256 `f7bd402f36add8df086599916223fc0a57ce5bc7f898fb93c17db12fb673bd7a`。
+- 路线库：`backups/squeeze-route-before-2e9afa2fb502-20261023T020523Z.db`，SHA256 `8b565b0683e365a0682c4f7676fb538f9a2371d821362a054d6cc1f3b5f32162`。
+- 隔离备份包装：`output/pair-ratio-isolated-deploy-20261023.sh`，由上一轮包装规范换行为LF后通过scp传输，bash -n通过。既有备份保留策略执行，命名手工备份不受影响。完整日志 `output/pair-ratio-deployment-20261023.log`。
+
+真实生产页面5组验证全部通过，结果 `output/pair-ratio-production-browser-20261023.json`：XAU/CL约39.9144、CL/XAU约0.0250445；BTC/BTC以及倍率0.025折算后的XAU/CL仍显示百分比。主图悬停、同时段比值图、历史表头验证通过，1440px桌面和390px手机均无整页横向溢出、无页面脚本错误，截图已目视检查。只读浏览器验证拦截所有非GET/HEAD API请求，没有保存或更改线上配置。健康证据 `output/pair-ratio-production-health-20261023.log`。
+
+最终交接以独立 `[skip ci]` 文档提交推送；线上运行镜像保持功能SHA。遗留限制为2倍阈值附近自动切换、比值仅为价格关系；原有服务器长期内存问题和未提交布局WIP留待各自任务。
