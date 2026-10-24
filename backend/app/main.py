@@ -912,6 +912,8 @@ def create_app(
         # Fresh supervisor per lifespan so the same app can start again after stop().
         supervisor = TaskSupervisor()
         app.state.task_supervisor = supervisor
+        if start_background_workers and app_settings.memory_probe_enabled:
+            supervisor.enable_memory_probe()
         supervisor.start("event-loop-lag", supervisor.loop_lag.run, restart=True, critical=False)
         if start_collector and start_background_workers and app_settings.squeeze_monitor_enabled:
             symbols = tuple(
@@ -1131,6 +1133,20 @@ def create_app(
                     ),
                     name="funding-research-loop",
                 )
+        if start_background_workers and app_settings.memory_probe_enabled:
+            from app.runtime.memory_probe import MemoryProbe
+
+            memory_probe = MemoryProbe(
+                store, supervisor, interval_seconds=app_settings.memory_probe_interval_seconds,
+            )
+            _start_background_task(
+                supervisor, lambda: memory_probe.run(stop_event), name="memory-sampler",
+            )
+        if start_background_workers and app_settings.memory_tracemalloc_seconds > 0:
+            from app.runtime.memory_probe import TracemallocWindow
+
+            trace_window = TracemallocWindow(app_settings.memory_tracemalloc_seconds)
+            supervisor.start("memory-tracemalloc", trace_window.run, restart=False, critical=False)
         try:
             yield
         finally:

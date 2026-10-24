@@ -109,6 +109,8 @@ class TaskStatus:
     restarts: int = 0
     last_failure_at: datetime | None = None
     backoff_seconds: float = 0.0
+    last_rss_anon_mb: float | None = None
+    last_rss_delta_mb: float | None = None
 
 
 class TaskSupervisor:
@@ -188,6 +190,30 @@ class TaskSupervisor:
         status.iterations += 1
         if ok:
             status.last_ok_at = status.last_iteration_at
+
+    def enable_memory_probe(self, *, window: int = 120) -> None:
+        # Install only when enabled: the default beat above keeps its exact path
+        # and performs no feature checks, extra calls, imports or /proc I/O.
+        from app.runtime.memory_probe import TaskRSSDeltas
+
+        self._memory_deltas = TaskRSSDeltas(window)
+        self.beat = self._beat_with_memory
+
+    def _beat_with_memory(self, name: str, ok: bool) -> None:
+        TaskSupervisor.beat(self, name, ok)
+        status = self.statuses.get(name)
+        if status is not None:
+            try:
+                # Whole-process RSS between this task's beats is correlation,
+                # not precise per-task allocation/retention attribution.
+                self._memory_deltas.record(name, status)
+            except Exception:  # noqa: BLE001 - measurements cannot break business heartbeats.
+                status.last_rss_anon_mb = status.last_rss_delta_mb = None
+                logging.getLogger("memory_probe").info('{"memory_probe":1,"beat_errors":1}')
+
+    def task_rss_deltas(self) -> dict[str, dict]:
+        deltas = getattr(self, "_memory_deltas", None)
+        return deltas.summary(self.statuses) if deltas is not None else {}
 
     def snapshot(self) -> dict[str, dict]:
         now = self.now()

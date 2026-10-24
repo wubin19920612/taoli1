@@ -40,6 +40,16 @@ class SnapshotStore:
         with self._lock:
             return list(self._opportunities)
 
+    def sizes(self) -> dict[str, int]:
+        """Read lengths under the lock without copying or retaining the lists."""
+        with self._lock:
+            markets = self._all_markets if self._all_markets is not None else self._markets
+            return {
+                "markets": len(self._markets),
+                "all_markets": len(markets),
+                "opportunities": len(self._opportunities),
+            }
+
     def set_exchange_errors(self, errors: dict[str, str]) -> None:
         with self._lock:
             self._exchange_errors = dict(errors)
