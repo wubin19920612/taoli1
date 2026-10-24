@@ -79,3 +79,16 @@ PYTHONPATH=tests python -m pytest -q -p no:cacheprovider --basetemp=<scratchpad 
 ```
 
 注意：`-p s1_offline_guard` 需要 `PYTHONPATH=tests`；每次用新的 basetemp，不要清理仓库里已有的 `.pytest_*` 目录（部分目录有受限 ACL）。`test_api.py` 整文件较慢，可按文件逐个跑。
+
+## 7 线上部署结果（2026-10-25，Claude 执行，用户批准）
+
+- 推送：`codex/runtime-supervision` 新分支；部署分支 `codex/frontend-localization-polish` 由 `045ed8e` 快进到 `85bc07776a5712711e5f210c1f5d4614de2e78aa`。
+- CI：GitHub Actions run 40107518072 success；服务器 `docker manifest inspect` 前后端 `sha-85bc077…` 镜像均通过。
+- 部署脚本：`output/s1-isolated-deploy-20261025.sh`（复用 pair-ratio 隔离包装，LF，服务器 `bash -n` 通过，SHA256 两端一致 `8345b75e…`）；退出码 0；日志在服务器 `output/s1-deployment-20261025.log`。
+- 备份（integrity_check=ok，容器与宿主机 SHA256 一致）：
+  - 主库 `backups/radar-before-85bc07776a57-20261024T153529Z.db`，SHA256 `21cb755473f38d890bd3c522f9316374136842163479c3fb3e5045598604b074`
+  - 路线库 `backups/squeeze-route-before-85bc07776a57-20261024T153529Z.db`，SHA256 `ac022b9ca4067a32ba269c8a1b96be21d6361756ea52ecd2a3a24b793bcf2c76`
+  - 保留策略各删除 1 份最旧的非保留备份（`79eef7614370`），各保留 10 份。
+- 线上验证（启动约 90 秒后）：Git HEAD = 85bc077，tracked clean；backend/frontend healthy，RestartCount=0；`/api/health` status=ok、9407 市场、exchange_errors={}（旧契约不变）；`/api/health/live` 200；`/api/health/ready` 200 `{"status":"ready","reasons":[]}`；`/api/health/detail` 未带密码 401（鉴权生效，Claude 未用密码访问 detail）。
+- 观察：后端日志中 `trade_availability.py:1577 check_once` 的 `RuntimeError: 聚合行情中未找到指定原始市场` 约 4 次/分钟，该文件不在 S1 改动内，属既有行为，另行排查。部署前 backend 曾“Up 2 minutes”，即既有的自行重启/内存问题，S1 不宣称修复。
+- 待办：24 小时后采集基线（需带 dashboard 密码访问 `/api/health/detail`，由用户执行或另行授权），写入本节，作为 S2/S3 输入。
