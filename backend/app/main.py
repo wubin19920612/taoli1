@@ -1,12 +1,14 @@
 import asyncio
 import logging
 import os
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+from app.runtime.supervisor import TaskSupervisor, beat
 
 from app.api import (
     routes_account_connections,
@@ -342,12 +344,15 @@ async def _close_state_resources(app: FastAPI, *names: str) -> None:
 
 
 def _start_background_task(
-    tasks: list[asyncio.Task],
-    coroutine,
+    supervisor: TaskSupervisor,
+    coro_factory,
     *,
     name: str,
 ) -> None:
-    tasks.append(asyncio.create_task(coroutine, name=name))
+    supervisor.start(
+        name, coro_factory, restart=True,
+        critical=name in {"market-collector", "alert-loop"},
+    )
 
 
 async def _order_book_validation_failure(
@@ -611,7 +616,10 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                 app.state.alert_engine.record_delivery_result(match, status, now=event.created_at)
                 await event_repo.create(event)
         except Exception:
+            beat("alert-loop", ok=False)
             logger.exception("alert loop failed")
+        else:
+            beat("alert-loop", ok=True)
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
         except TimeoutError:
@@ -900,7 +908,10 @@ def create_app(
             app.state.trade_availability_service,
             alert_sender=text_alert_sender,
         )
-        tasks: list[asyncio.Task] = []
+        # Fresh supervisor per lifespan so the same app can start again after stop().
+        supervisor = TaskSupervisor()
+        app.state.task_supervisor = supervisor
+        supervisor.start("event-loop-lag", supervisor.loop_lag.run, restart=True, critical=False)
         if start_collector and start_background_workers and app_settings.squeeze_monitor_enabled:
             symbols = tuple(
                 symbol.strip().upper()
@@ -922,48 +933,48 @@ def create_app(
             )
             app.state.squeeze_monitor_active = True
             _start_background_task(
-                tasks, app.state.squeeze_monitor.run(stop_event), name="squeeze-monitor"
+                supervisor, lambda: app.state.squeeze_monitor.run(stop_event), name="squeeze-monitor"
             )
         if start_collector and start_background_workers and app_settings.squeeze_route_enabled:
             app.state.squeeze_route_monitor = SqueezeRouteMonitor(
                 app.state.squeeze_route_repo, RouteMonitorConfig()
             )
             _start_background_task(
-                tasks, app.state.squeeze_route_monitor.run(stop_event),
+                supervisor, lambda: app.state.squeeze_route_monitor.run(stop_event),
                 name="squeeze-route-monitor",
             )
         if start_collector and start_background_workers and app_settings.squeeze_paper_enabled:
             _start_background_task(
-                tasks, app.state.squeeze_paper_monitor.run(stop_event),
+                supervisor, lambda: app.state.squeeze_paper_monitor.run(stop_event),
                 name="squeeze-paper-monitor",
             )
         if start_background_workers:
             await app.state.second_level_sampler.initialize()
             _start_background_task(
-                tasks,
-                app.state.negative_basis_monitor.run(stop_event),
+                supervisor,
+                lambda: app.state.negative_basis_monitor.run(stop_event),
                 name="negative-basis-monitor",
             )
             _start_background_task(
-                tasks,
-                app.state.pair_spread_funding_recorder.run(stop_event),
+                supervisor,
+                lambda: app.state.pair_spread_funding_recorder.run(stop_event),
                 name="pair-spread-funding-recorder",
             )
             _start_background_task(
-                tasks,
-                app.state.hyperliquid_trade_status_monitor.run(stop_event),
+                supervisor,
+                lambda: app.state.hyperliquid_trade_status_monitor.run(stop_event),
                 name="hyperliquid-trade-status-monitor",
             )
             _start_background_task(
-                tasks,
-                app.state.trade_availability_monitor.run(stop_event),
+                supervisor,
+                lambda: app.state.trade_availability_monitor.run(stop_event),
                 name="trade-availability-monitor",
             )
         collector: MarketCollector | None = None
         announcement_provider = None
         if start_collector:
-            _start_background_task(tasks, app.state.fs_monitor.run(stop_event), name="fs-monitor")
-            _start_background_task(tasks, app.state.market_identity_catalog.run(stop_event), name="market-identity-catalog")
+            _start_background_task(supervisor, lambda: app.state.fs_monitor.run(stop_event), name="fs-monitor")
+            _start_background_task(supervisor, lambda: app.state.market_identity_catalog.run(stop_event), name="market-identity-catalog")
             exchange_adapters = default_exchange_adapters()
             app.state.market_validation.set_adapters(exchange_adapters)
             history_recorder = OpportunityHistoryRecorder(
@@ -1007,23 +1018,23 @@ def create_app(
             app.state.market_collector = collector
             app.state.orderbook_validator = OrderBookDepthValidator(exchange_adapters)
             _start_background_task(
-                tasks,
-                run_collector_loop(collector, app_settings.poll_interval_seconds, stop_event),
+                supervisor,
+                lambda: run_collector_loop(collector, app_settings.poll_interval_seconds, stop_event),
                 name="market-collector",
             )
             _start_background_task(
-                tasks,
-                app.state.astro_preadd_service.run_loop(stop_event),
+                supervisor,
+                lambda: app.state.astro_preadd_service.run_loop(stop_event),
                 name="astro-preadd-loop",
             )
             _start_background_task(
-                tasks,
-                _run_alert_loop(app, app_settings.poll_interval_seconds, stop_event),
+                supervisor,
+                lambda: _run_alert_loop(app, app_settings.poll_interval_seconds, stop_event),
                 name="alert-loop",
             )
             _start_background_task(
-                tasks,
-                _run_opportunity_radar_alert_loop(
+                supervisor,
+                lambda: _run_opportunity_radar_alert_loop(
                     app,
                     app_settings.poll_interval_seconds,
                     stop_event,
@@ -1032,8 +1043,8 @@ def create_app(
             )
             if app_settings.feishu_live_send_enabled and app_settings.feishu_phone_enabled:
                 _start_background_task(
-                    tasks,
-                    _run_phone_price_alert_loop(
+                    supervisor,
+                    lambda: _run_phone_price_alert_loop(
                         app,
                         app_settings.poll_interval_seconds,
                         stop_event,
@@ -1042,7 +1053,7 @@ def create_app(
                 )
             app.state.multi_exchange_premium_monitor = MultiExchangePremiumMonitor(app)
             _start_background_task(
-                tasks, app.state.multi_exchange_premium_monitor.run_loop(stop_event),
+                supervisor, lambda: app.state.multi_exchange_premium_monitor.run_loop(stop_event),
                 name="multi-exchange-premium-loop",
             )
             announcement_monitor = AnnouncementMonitor(
@@ -1053,8 +1064,8 @@ def create_app(
             app.state.announcement_monitor = announcement_monitor
             app.state.announcement_provider = announcement_provider
             _start_background_task(
-                tasks,
-                run_announcement_loop(
+                supervisor,
+                lambda: run_announcement_loop(
                     announcement_provider,
                     announcement_monitor,
                     app.state.settings_repo.get_announcement_settings,
@@ -1063,8 +1074,8 @@ def create_app(
                 name="announcement-loop",
             )
             _start_background_task(
-                tasks,
-                run_announcement_enrichment_loop(
+                supervisor,
+                lambda: run_announcement_enrichment_loop(
                     announcement_provider,
                     announcement_monitor,
                     app.state.settings_repo.get_announcement_settings,
@@ -1073,8 +1084,8 @@ def create_app(
                 name="announcement-enrichment-loop",
             )
             _start_background_task(
-                tasks,
-                run_oil_news_loop(
+                supervisor,
+                lambda: run_oil_news_loop(
                     app.state.oil_news_monitor,
                     app.state.settings_repo.get_oil_news_settings,
                     stop_event,
@@ -1082,8 +1093,8 @@ def create_app(
                 name="oil-news-loop",
             )
             _start_background_task(
-                tasks,
-                run_oil_news_translation_loop(
+                supervisor,
+                lambda: run_oil_news_translation_loop(
                     app.state.oil_news_monitor,
                     app.state.settings_repo.get_oil_news_settings,
                     stop_event,
@@ -1092,8 +1103,8 @@ def create_app(
             )
             if app_settings.funding_research_enabled:
                 _start_background_task(
-                    tasks,
-                    _run_funding_research_loop(
+                    supervisor,
+                    lambda: _run_funding_research_loop(
                         app,
                         app_settings.funding_poll_interval_seconds,
                         stop_event,
@@ -1104,11 +1115,7 @@ def create_app(
             yield
         finally:
             stop_event.set()
-            for task in tasks:
-                task.cancel()
-            for task in tasks:
-                with suppress(asyncio.CancelledError):
-                    await task
+            await supervisor.stop()
             await app.state.market_validation.aclose()
             if collector is not None:
                 await collector.close()
@@ -1144,6 +1151,8 @@ def create_app(
             await db.close()
 
     app = FastAPI(title=app_settings.app_name, lifespan=lifespan)
+    app.state.task_supervisor = TaskSupervisor()
+    app.state.start_collector = start_collector
     app.state.settings = app_settings
     app.state.snapshot_store = store
     app.state.instrument_market_cap_service = InstrumentMarketCapService()

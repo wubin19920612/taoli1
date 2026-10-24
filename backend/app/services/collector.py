@@ -19,6 +19,7 @@ from app.models.index_component import index_watch_symbol
 from app.models.market import MarketSnapshot
 from app.models.opportunity import Opportunity
 from app.models.settings import FeeSettings, RiskSettings
+from app.runtime.supervisor import StageTimings, beat
 from app.services.data_filters import (
     filter_markets,
     filter_opportunities,
@@ -141,6 +142,7 @@ class MarketCollector:
         max_due_adapters_per_cycle: int = DEFAULT_MAX_DUE_ADAPTERS_PER_CYCLE,
         now_fn: Callable[[], datetime] | None = None,
         market_validation=None,
+        timing_window: int = 120,
     ) -> None:
         self.adapters = adapters
         self.store = store
@@ -159,6 +161,7 @@ class MarketCollector:
         self._adapter_cursor = 0
         self._scheduler_lock = asyncio.Lock()
         self.market_validation = market_validation
+        self.stage_timings = StageTimings(timing_window)
 
     def exchange_states(self) -> dict[str, dict[str, object]]:
         return {
@@ -173,6 +176,13 @@ class MarketCollector:
                 await reset()
 
     async def collect_once(self) -> CollectionResult:
+        sample: dict[str, float] = {}
+        try:
+            return await self._collect_once(sample)
+        finally:
+            self.stage_timings.rounds.append(sample)
+
+    async def _collect_once(self, sample: dict[str, float]) -> CollectionResult:
         if self.risk_settings_loader is not None:
             self.risk_settings = await self.risk_settings_loader()
 
@@ -181,58 +191,67 @@ class MarketCollector:
             adapter for adapter in self.adapters if adapter.name.lower() not in ignored_exchanges
         ]
         if not active_adapters:
-            self.store.set_markets([])
-            self.store.set_opportunities([])
-            self.store.set_exchange_errors({})
+            with self.stage_timings.measure(sample, "publish"):
+                self.store.set_markets([])
+                self.store.set_opportunities([])
+                self.store.set_exchange_errors({})
+                self.store.mark_published(self._now_fn())
             return CollectionResult(markets=[], opportunities=[], exchange_errors={})
 
-        self._seed_exchange_snapshots_from_store()
-        now = self._now_fn()
-        due_adapters = await self._claim_due_adapters(active_adapters, now)
-        if due_adapters:
-            results = await asyncio.gather(
-                *(self._poll_adapter(adapter) for adapter in due_adapters),
-                return_exceptions=True,
+        with self.stage_timings.measure(sample, "poll"):
+            self._seed_exchange_snapshots_from_store()
+            now = self._now_fn()
+            due_adapters = await self._claim_due_adapters(active_adapters, now)
+            if due_adapters:
+                results = await asyncio.gather(
+                    *(self._poll_adapter(adapter) for adapter in due_adapters),
+                    return_exceptions=True,
+                )
+                await self._store_poll_results(due_adapters, results, now)
+
+        with self.stage_timings.measure(sample, "prepare"):
+            markets = self._combined_exchange_markets(active_adapters)
+            errors = self._combined_exchange_errors(active_adapters)
+
+            aliased_markets = apply_symbol_aliases(markets, self.risk_settings.symbol_aliases)
+            if self.market_validation is not None:
+                aliased_markets = await self.market_validation.prepare(aliased_markets, self.risk_settings)
+            filtered_markets = filter_markets(aliased_markets, self.risk_settings)
+
+        with self.stage_timings.measure(sample, "build"):
+            opportunities = self._build_labeled_opportunities(filtered_markets, now=now)
+            if self.market_validation is not None:
+                by_key = {
+                    (m.exchange, m.market_type, m.raw_symbol): m for m in filtered_markets
+                }
+                accepted = []
+                for item in opportunities:
+                    a = by_key.get((item.buy_exchange, item.buy_market_type, item.buy_raw_symbol))
+                    b = by_key.get((item.sell_exchange, item.sell_market_type, item.sell_raw_symbol))
+                    if a is None or b is None:
+                        continue
+                    item.validation = self.market_validation.validate(a, b, self.risk_settings)
+                    if self.market_validation.should_enforce(item.validation) and not item.validation.capabilities.same_asset_opportunity:
+                        continue
+                    item.risk_labels = risk_labels_for(item, self.risk_settings, now)
+                    accepted.append(item)
+                opportunities = accepted
+            filtered_opportunities = filter_opportunities(
+                opportunities,
+                self.risk_settings,
+                now=now,
             )
-            await self._store_poll_results(due_adapters, results, now)
-
-        markets = self._combined_exchange_markets(active_adapters)
-        errors = self._combined_exchange_errors(active_adapters)
-
-        aliased_markets = apply_symbol_aliases(markets, self.risk_settings.symbol_aliases)
-        if self.market_validation is not None:
-            aliased_markets = await self.market_validation.prepare(aliased_markets, self.risk_settings)
-        filtered_markets = filter_markets(aliased_markets, self.risk_settings)
-
-        opportunities = self._build_labeled_opportunities(filtered_markets, now=now)
-        if self.market_validation is not None:
-            by_key = {
-                (m.exchange, m.market_type, m.raw_symbol): m for m in filtered_markets
-            }
-            accepted = []
-            for item in opportunities:
-                a = by_key.get((item.buy_exchange, item.buy_market_type, item.buy_raw_symbol))
-                b = by_key.get((item.sell_exchange, item.sell_market_type, item.sell_raw_symbol))
-                if a is None or b is None:
-                    continue
-                item.validation = self.market_validation.validate(a, b, self.risk_settings)
-                if self.market_validation.should_enforce(item.validation) and not item.validation.capabilities.same_asset_opportunity:
-                    continue
-                item.risk_labels = risk_labels_for(item, self.risk_settings, now)
-                accepted.append(item)
-            opportunities = accepted
-        filtered_opportunities = filter_opportunities(
-            opportunities,
-            self.risk_settings,
-            now=now,
-        )
-        self.store.set_all_markets(aliased_markets)
-        self.store.set_markets(filtered_markets)
-        self.store.set_opportunities(filtered_opportunities)
-        self.store.set_exchange_errors(errors)
-        if self.history_recorder is not None:
-            await self.history_recorder.record(filtered_opportunities)
-        await self._process_index_components(filtered_markets)
+        with self.stage_timings.measure(sample, "publish"):
+            self.store.set_all_markets(aliased_markets)
+            self.store.set_markets(filtered_markets)
+            self.store.set_opportunities(filtered_opportunities)
+            self.store.set_exchange_errors(errors)
+            self.store.mark_published(self._now_fn())
+        with self.stage_timings.measure(sample, "history"):
+            if self.history_recorder is not None:
+                await self.history_recorder.record(filtered_opportunities)
+        with self.stage_timings.measure(sample, "index"):
+            await self._process_index_components(filtered_markets)
         return CollectionResult(
             markets=filtered_markets,
             opportunities=filtered_opportunities,
@@ -512,7 +531,10 @@ async def run_collector_loop(
         try:
             await collector.collect_once()
         except Exception:
+            beat("market-collector", ok=False)
             logger.exception("collector loop failed")
+        else:
+            beat("market-collector", ok=True)
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
         except TimeoutError:

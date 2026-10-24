@@ -22,6 +22,7 @@ from app.models.announcement import (
     AnnouncementSettings,
     ExchangeAnnouncement,
 )
+from app.runtime.supervisor import beat
 from app.services.announcement_localization import AnnouncementLocalizationService
 from app.services.announcement_polling import run_announcement_sources
 from app.services.announcement_public_pages import TelegramChannelParser
@@ -2677,7 +2678,10 @@ async def run_announcement_enrichment_loop(
                 async for announcements in provider.fetch_batches(exchanges):
                     await monitor.process(announcements, settings, bootstrap=bootstrap)
         except Exception:
+            beat("announcement-enrichment-loop", ok=False)
             logger.exception("announcement enrichment loop failed")
+        else:
+            beat("announcement-enrichment-loop", ok=True)
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
         except TimeoutError:

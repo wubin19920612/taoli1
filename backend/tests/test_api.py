@@ -546,9 +546,9 @@ def test_oil_news_reuses_shared_feishu_notifier_and_keeps_other_live_sends_off()
 def test_price_collector_starts_announcement_and_oil_news_workers(monkeypatch) -> None:
     started: list[str] = []
 
-    def record_background_task(_tasks, coroutine, *, name: str) -> None:
+    def record_background_task(_supervisor, coro_factory, *, name: str) -> None:
         started.append(name)
-        coroutine.close()
+        coro_factory().close()
 
     monkeypatch.setattr("app.main._start_background_task", record_background_task)
     monkeypatch.setattr("app.main.default_exchange_adapters", lambda: [])

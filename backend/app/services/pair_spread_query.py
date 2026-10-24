@@ -525,6 +525,28 @@ _REALTIME_PAIR_OPEN_INTEREST_CACHE: dict[str, list[PairSpreadOpenInterestPoint]]
 _REALTIME_SYMBOL_SPREAD_CACHE: dict[str, dict[str, list[SymbolSpreadPoint]]] = {}
 
 
+def realtime_cache_stats() -> dict[str, dict[str, int]]:
+    """Read sizes only; do not expose user keys or mutate/evict cached series."""
+    caches = {
+        "_REALTIME_PAIR_SPREAD_CACHE": _REALTIME_PAIR_SPREAD_CACHE,
+        "_REALTIME_PAIR_FUNDING_CACHE": _REALTIME_PAIR_FUNDING_CACHE,
+        "_REALTIME_PAIR_OPEN_INTEREST_CACHE": _REALTIME_PAIR_OPEN_INTEREST_CACHE,
+    }
+    result = {
+        name: {"keys": len(cache), "points": sum(len(points) for points in cache.values())}
+        for name, cache in caches.items()
+    }
+    result["_REALTIME_SYMBOL_SPREAD_CACHE"] = {
+        "keys": len(_REALTIME_SYMBOL_SPREAD_CACHE),
+        "points": sum(
+            len(points)
+            for series in _REALTIME_SYMBOL_SPREAD_CACHE.values()
+            for points in series.values()
+        ),
+    }
+    return result
+
+
 def _realtime_cache_key(
     leg1: PairSpreadLegQuery,
     leg2: PairSpreadLegQuery,

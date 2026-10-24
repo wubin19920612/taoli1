@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 from app.models.fs_monitor import FsCandidate, FsReport
 from app.models.market import MarketType
+from app.runtime.supervisor import beat
 from app.services.fs_bybit import BybitFsProvider, FsDataError, number, timestamp
 from app.services.fs_economics import evaluate
 from app.services.fs_public import PublicFsProvider, public_borrow_details, route_key
@@ -600,6 +601,7 @@ class FsMonitor:
     async def run(self, stop):
         while not stop.is_set():
             self.wake.clear()
+            iteration_completed = False
             try:
                 settings = await self.repository.settings()
                 if settings.enabled:
@@ -610,10 +612,14 @@ class FsMonitor:
                     else settings.scan_interval_seconds
                 )
                 self.report.next_refresh_at = datetime.now(UTC) + timedelta(seconds=delay)
+                iteration_completed = True
+                beat("fs-monitor", ok=True)
                 await asyncio.wait_for(self.wake.wait(), timeout=delay)
             except TimeoutError:
-                pass
+                if not iteration_completed:
+                    beat("fs-monitor", ok=False)
             except Exception:  # noqa: BLE001 - redact vendor/credential errors and keep monitoring alive.
                 # A repository outage must not terminate all future monitoring.
+                beat("fs-monitor", ok=False)
                 self.report.error = "monitor_unavailable"
                 await asyncio.sleep(30)

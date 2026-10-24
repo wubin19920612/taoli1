@@ -8,6 +8,8 @@ import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from app.runtime.supervisor import beat
+
 if TYPE_CHECKING:
     from app.db.repositories import AnnouncementRepository
     from app.services.announcements import AnnouncementMonitor, AnnouncementProvider, SettingsLoader
@@ -106,6 +108,7 @@ async def run_announcement_sources(
                 except Exception:
                     # Diagnostics must never prevent subsequent announcement polls.
                     logger.exception("Failed to record announcement poll evidence")
+            beat("announcement-loop", ok=observation.get("status") != "error")
             await _wait(stop_event, interval - (time.monotonic() - started))
 
     async def poll_reminders() -> None:
@@ -118,7 +121,10 @@ async def run_announcement_sources(
                 if settings.enabled:
                     await monitor.process_due_event_reminders(settings)
             except Exception:
+                beat("announcement-loop", ok=False)
                 logger.exception("Announcement event reminder loop failed")
+            else:
+                beat("announcement-loop", ok=True)
             await _wait(stop_event, interval)
 
     tasks = [asyncio.create_task(poll_source(provider)) for provider in providers]
