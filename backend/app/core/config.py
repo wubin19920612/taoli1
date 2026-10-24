@@ -1,7 +1,9 @@
+import math
 import os
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from dotenv import find_dotenv, load_dotenv
 
@@ -15,6 +17,8 @@ class Settings:
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     database_url: str = "sqlite:///./data/radar.db"
     poll_interval_seconds: float = 5.0
+    collector_post_publish_mode: Literal["background", "inline"] = "background"
+    collector_risk_settings_timeout_seconds: float = 2.0
     funding_poll_interval_seconds: float = 120.0
     funding_research_enabled: bool = False
     squeeze_monitor_enabled: bool = False
@@ -63,6 +67,13 @@ class Settings:
     astro_default_open_enabled: bool = False
     astro_default_close_position_buffer_pct: float = 0.1
     astro_request_timeout_seconds: float = 10.0
+
+    def __post_init__(self) -> None:
+        if self.collector_post_publish_mode not in {"background", "inline"}:
+            raise ValueError("collector_post_publish_mode must be background or inline")
+        timeout = self.collector_risk_settings_timeout_seconds
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("collector_risk_settings_timeout_seconds must be finite and positive")
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -159,6 +170,8 @@ def get_settings() -> Settings:
         cors_origins=os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"),
         database_url=database_url,
         poll_interval_seconds=float(os.getenv("POLL_INTERVAL_SECONDS", "5")),
+        collector_post_publish_mode=os.getenv("COLLECTOR_POST_PUBLISH_MODE", "background"),
+        collector_risk_settings_timeout_seconds=float(os.getenv("COLLECTOR_RISK_SETTINGS_TIMEOUT_SECONDS", "2")),
         funding_poll_interval_seconds=float(os.getenv("FUNDING_POLL_INTERVAL_SECONDS", "120")),
         funding_research_enabled=bool_env("FUNDING_RESEARCH_ENABLED", False),
         squeeze_monitor_enabled=bool_env("SQUEEZE_MONITOR_ENABLED", False),

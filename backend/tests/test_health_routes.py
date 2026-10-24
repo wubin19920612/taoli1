@@ -166,3 +166,48 @@ async def test_negative_basis_failure_visible_in_detail_then_recovers(app, clien
     response = await client.get("/api/health/detail", headers={"X-Dashboard-Password": "test-password"})
     assert response.json()["tasks"]["negative-basis-monitor"]["state"] == "running"
     assert response.json()["tasks"]["negative-basis-monitor"]["restarts"] == 1
+
+
+async def test_detail_includes_snapshot_consumer_and_collector_runtime(app, client):
+    from app.services.snapshot_consumers import LatestSnapshotSlot, PublishedSnapshot, SnapshotConsumer
+
+    slot = LatestSnapshotSlot()
+    consumer = SnapshotConsumer("history-recorder", slot, AsyncMock())
+    slot.put(PublishedSnapshot(1, datetime.now(UTC), (), ()))
+    slot.put(PublishedSnapshot(2, datetime.now(UTC), (), ()))
+    app.state.snapshot_consumers = {consumer.name: consumer}
+    app.state.market_collector = MarketCollector([], app.state.snapshot_store)
+    response = await client.get("/api/health/detail", headers={"X-Dashboard-Password": "test-password"})
+    assert response.status_code == 200
+    assert response.json()["collector_runtime"] == {"risk_settings_fallbacks": 0}
+    assert response.json()["snapshot_consumers"][consumer.name] == {
+        "processed_generation": 0, "processed": 0, "failed": 0,
+        "last_duration_seconds": None, "duration_p95_seconds": None,
+        "lag_generations": 2, "latest_generation": 2, "dropped": 1,
+    }
+    assert slot.stats() == {"latest_generation": 2, "dropped": 1}
+
+
+@pytest.mark.parametrize("broken_field", ["snapshot_consumers", "collector_runtime"])
+async def test_detail_optional_metrics_fail_independently(app, client, monkeypatch, broken_field):
+    def broken():
+        raise RuntimeError("metric unavailable")
+
+    collector = MarketCollector([], app.state.snapshot_store)
+    app.state.market_collector = collector
+    app.state.snapshot_consumers = {}
+    if broken_field == "snapshot_consumers":
+        app.state.snapshot_consumers = {"broken": SimpleNamespace(stats=broken)}
+    else:
+        monkeypatch.setattr(collector, "runtime_stats", broken)
+    response = await client.get("/api/health/detail", headers={"X-Dashboard-Password": "test-password"})
+    data = response.json()
+    assert response.status_code == 200
+    assert broken_field not in data
+    assert ({"snapshot_consumers", "collector_runtime"} - {broken_field}) <= data.keys()
+    assert "snapshot" in data and "tasks" in data
+
+
+async def test_detail_without_collector_omits_runtime(app, client):
+    data = (await client.get("/api/health/detail", headers={"X-Dashboard-Password": "test-password"})).json()
+    assert "collector_runtime" not in data

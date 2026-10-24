@@ -95,7 +95,7 @@ async def detail(
                     max(0.0, (now - last_success).total_seconds()) if last_success else None
                 ),
             }
-    return {
+    result = {
         "tasks": state.task_supervisor.snapshot(),
         "snapshot": {
             "generation": state.snapshot_store.generation,
@@ -106,3 +106,16 @@ async def detail(
         "event_loop_lag": state.task_supervisor.loop_lag.snapshot(),
         "realtime_caches": realtime_cache_stats(),
     }
+    try:
+        result["snapshot_consumers"] = {
+            name: {**consumer.stats(), **consumer.slot.stats()}
+            for name, consumer in getattr(state, "snapshot_consumers", {}).items()
+        }
+    except Exception:
+        pass
+    if collector is not None:
+        try:
+            result["collector_runtime"] = collector.runtime_stats()
+        except Exception:
+            pass
+    return result

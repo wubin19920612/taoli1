@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -26,6 +26,7 @@ from app.services.data_filters import (
     ignored_exchange_set,
 )
 from app.services.risk_labels import risk_labels_for
+from app.services.snapshot_consumers import LatestSnapshotSlot, PublishedSnapshot
 from app.services.snapshot_store import SnapshotStore
 from app.services.spread_engine import build_all_opportunities
 from app.services.symbol_aliases import apply_symbol_aliases
@@ -143,6 +144,8 @@ class MarketCollector:
         now_fn: Callable[[], datetime] | None = None,
         market_validation=None,
         timing_window: int = 120,
+        snapshot_slots: Sequence[LatestSnapshotSlot] | None = None,
+        risk_settings_timeout_seconds: float = 2.0,
     ) -> None:
         self.adapters = adapters
         self.store = store
@@ -162,6 +165,15 @@ class MarketCollector:
         self._scheduler_lock = asyncio.Lock()
         self.market_validation = market_validation
         self.stage_timings = StageTimings(timing_window)
+        self.snapshot_slots = snapshot_slots
+        self.risk_settings_timeout_seconds = risk_settings_timeout_seconds
+        self._risk_settings_loaded = False
+        self._risk_settings_fallbacks = 0
+        if snapshot_slots is not None:
+            self.stage_timings.names = ("poll", "prepare", "build", "publish")
+
+    def runtime_stats(self) -> dict[str, int]:
+        return {"risk_settings_fallbacks": self._risk_settings_fallbacks}
 
     def exchange_states(self) -> dict[str, dict[str, object]]:
         return {
@@ -184,7 +196,17 @@ class MarketCollector:
 
     async def _collect_once(self, sample: dict[str, float]) -> CollectionResult:
         if self.risk_settings_loader is not None:
-            self.risk_settings = await self.risk_settings_loader()
+            try:
+                self.risk_settings = await asyncio.wait_for(
+                    self.risk_settings_loader(), timeout=self.risk_settings_timeout_seconds,
+                )
+            except Exception as exc:
+                if not self._risk_settings_loaded:
+                    raise
+                self._risk_settings_fallbacks += 1
+                logger.warning("risk settings read failed (%s); reusing last successful settings", type(exc).__name__)
+            else:
+                self._risk_settings_loaded = True
 
         ignored_exchanges = ignored_exchange_set(self.risk_settings)
         active_adapters = [
@@ -196,6 +218,7 @@ class MarketCollector:
                 self.store.set_opportunities([])
                 self.store.set_exchange_errors({})
                 self.store.mark_published(self._now_fn())
+                self._publish_to_slots([], [])
             return CollectionResult(markets=[], opportunities=[], exchange_errors={})
 
         with self.stage_timings.measure(sample, "poll"):
@@ -247,22 +270,43 @@ class MarketCollector:
             self.store.set_opportunities(filtered_opportunities)
             self.store.set_exchange_errors(errors)
             self.store.mark_published(self._now_fn())
-        with self.stage_timings.measure(sample, "history"):
-            if self.history_recorder is not None:
-                await self.history_recorder.record(filtered_opportunities)
-        with self.stage_timings.measure(sample, "index"):
-            await self._process_index_components(filtered_markets)
+            self._publish_to_slots(filtered_markets, filtered_opportunities)
+        if self.snapshot_slots is None:
+            with self.stage_timings.measure(sample, "history"):
+                if self.history_recorder is not None:
+                    # Preserve the recorder's own clock in the rollback path.
+                    await self.history_recorder.record(filtered_opportunities)
+            with self.stage_timings.measure(sample, "index"):
+                await self.process_index_components(filtered_markets)
         return CollectionResult(
             markets=filtered_markets,
             opportunities=filtered_opportunities,
             exchange_errors=errors,
         )
 
-    async def _process_index_components(self, markets: list[MarketSnapshot]) -> None:
+    def _publish_to_slots(
+        self, markets: Sequence[MarketSnapshot], opportunities: Sequence[Opportunity],
+    ) -> None:
+        if self.snapshot_slots is None:
+            return
+        snapshot = PublishedSnapshot(
+            generation=self.store.generation,
+            published_at=self.store.published_at,
+            markets=tuple(markets),
+            opportunities=tuple(opportunities),
+        )
+        for slot in self.snapshot_slots:
+            slot.put(snapshot)
+
+    async def record_history(self, snapshot: PublishedSnapshot) -> None:
+        if self.history_recorder is not None:
+            await self.history_recorder.record(list(snapshot.opportunities), now=snapshot.published_at)
+
+    async def process_index_components(self, markets: Sequence[MarketSnapshot]) -> None:
         if self.index_component_provider is None or self.index_component_monitor is None:
             return
         try:
-            markets = await self._index_component_markets(markets)
+            markets = await self._index_component_markets(list(markets))
             observe_markets = getattr(self.index_component_monitor, "observe_markets", None)
             if observe_markets is not None:
                 await observe_markets(markets)

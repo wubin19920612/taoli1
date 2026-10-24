@@ -156,6 +156,7 @@ from app.services.phone_price_alerts import PhonePriceAlertEngine, build_phone_p
 from app.services.multi_exchange_premium import MultiExchangePremiumMonitor
 from app.services.risk_labels import effective_open_edge_pct, known_volume_24h_usdt
 from app.services.snapshot_store import SnapshotStore
+from app.services.snapshot_consumers import LatestSnapshotSlot, SnapshotConsumer
 from app.services.service_control import DockerServiceController, ServiceControlConfig
 from app.services.second_level_sampler import SecondLevelSampler, SecondLevelSamplingRepository
 from app.services.trade_availability import (
@@ -1005,6 +1006,12 @@ def create_app(
                 if index_component_providers
                 else EmptyIndexComponentProvider()
             )
+            app.state.snapshot_consumers = {}
+            snapshot_slots = None
+            if app_settings.collector_post_publish_mode == "background":
+                history_slot = LatestSnapshotSlot()
+                index_slot = LatestSnapshotSlot()
+                snapshot_slots = [history_slot, index_slot]
             collector = MarketCollector(
                 exchange_adapters,
                 store,
@@ -1014,8 +1021,21 @@ def create_app(
                 index_component_monitor=index_component_monitor,
                 poll_interval_seconds=app_settings.poll_interval_seconds,
                 market_validation=app.state.market_validation,
+                snapshot_slots=snapshot_slots,
+                risk_settings_timeout_seconds=app_settings.collector_risk_settings_timeout_seconds,
             )
             app.state.market_collector = collector
+            if snapshot_slots is not None:
+                app.state.snapshot_consumers = {
+                    "history-recorder": SnapshotConsumer("history-recorder", history_slot, collector.record_history),
+                    "index-components": SnapshotConsumer(
+                        "index-components", index_slot, lambda s: collector.process_index_components(s.markets),
+                    ),
+                }
+                for name, consumer in app.state.snapshot_consumers.items():
+                    _start_background_task(
+                        supervisor, lambda consumer=consumer: consumer.run(stop_event), name=name,
+                    )
             app.state.orderbook_validator = OrderBookDepthValidator(exchange_adapters)
             _start_background_task(
                 supervisor,
