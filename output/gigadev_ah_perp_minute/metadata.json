@@ -1,0 +1,37 @@
+{
+  "generated_at": "2026-09-12T11:26:52.561654+08:00",
+  "minute_start": "2026-09-08T21:03:00+08:00",
+  "minute_end": "2026-09-12T00:00:00+08:00",
+  "complete_strict_dates": [
+    "2026-09-09",
+    "2026-09-10",
+    "2026-09-11"
+  ],
+  "symbols": {
+    "a_share": "603986.SS",
+    "h_share": "3986.HK",
+    "binance_h_share": "GIGADEVUSDT",
+    "hyperliquid_a_share": "xyz:GIGADEV",
+    "usd_cny": "CNY=X",
+    "usd_hkd": "HKD=X"
+  },
+  "share_ratio": "1 A share : 1 H share",
+  "mapping_evidence": {
+    "binance_underlying_type": "HK_EQUITY",
+    "binance_index_constituents": [
+      "KK_RFR_3986HKD_USD",
+      "3986HK"
+    ],
+    "hyperliquid": "A-share linkage inferred from minute-level tracking against 603986.SS"
+  },
+  "primary_formula": "symmetric(perp) - symmetric(spot), in percentage points",
+  "symmetric_formula": "(A - H) / ((A + H) / 2) * 100",
+  "ratio_formula": "(A / H - 1) * 100",
+  "important_limitations": [
+    "Yahoo and exchange one-minute candles are last/close prices, not executable bid/ask.",
+    "Hyperliquid candles repeat the last trade in zero-trade minutes.",
+    "Only three complete common trading days are available because the Hyperliquid market started during 2026-09-08.",
+    "Funding is applied to equal quantities at entry prices; the net column assumes 10 bp round-trip fees.",
+    "Bid/ask spread and slippage are not available from candle history and remain unmodeled."
+  ]
+}

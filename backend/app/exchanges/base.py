@@ -122,6 +122,7 @@ def order_book_snapshot(
         bids=parse_order_book_levels(bids),
         asks=parse_order_book_levels(asks),
         timestamp=timestamp or utc_now(),
+        timestamp_source="upstream" if timestamp is not None else "received",
     )
 
 

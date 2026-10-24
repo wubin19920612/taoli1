@@ -41,6 +41,8 @@ class GateAdapter(ExchangeAdapter):
                     volume_24h_usdt=vol,
                     timestamp=now,
                     raw_symbol=item.get("currency_pair", raw),
+                    data_source="Gate public spot tickers",
+                    upstream_timestamp=parse_datetime_seconds(item.get("time")),
                 )
             )
         return rows
@@ -62,9 +64,10 @@ class GateAdapter(ExchangeAdapter):
             funding = parse_float(item.get("funding_rate"))
             indicative = parse_float(item.get("funding_rate_indicative"))
             contract = item.get("contract", raw)
+            contract_metadata = contract_info.get(contract, {})
             interval_seconds = parse_float(item.get("funding_interval"))
             if interval_seconds is None:
-                interval_seconds = parse_float(contract_info.get(contract, {}).get("funding_interval"))
+                interval_seconds = parse_float(contract_metadata.get("funding_interval"))
             interval_hours = int(interval_seconds / 3600) if interval_seconds else 8
             next_time = parse_datetime_seconds(item.get("funding_next_apply")) or next_aligned_funding_time(
                 now,
@@ -88,6 +91,13 @@ class GateAdapter(ExchangeAdapter):
                     index_price=parse_float(item.get("index_price")),
                     timestamp=now,
                     raw_symbol=contract,
+                    contract_size_multiplier=parse_float(
+                        contract_metadata.get("quanto_multiplier")
+                    ),
+                    data_source="Gate public futures tickers + contracts",
+                    upstream_timestamp=parse_datetime_seconds(
+                        item.get("time") or item.get("update_time")
+                    ),
                 )
             )
         return rows
@@ -117,7 +127,7 @@ class GateAdapter(ExchangeAdapter):
     async def _fetch_contract_info(self) -> dict[str, dict]:
         try:
             data = await self.get_json("https://api.gateio.ws/api/v4/futures/usdt/contracts")
-        except Exception:
+        except Exception:  # noqa: BLE001 - metadata failure must not hide a usable book.
             return {}
         if not isinstance(data, list):
             return {}

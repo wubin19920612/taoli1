@@ -1,0 +1,357 @@
+# 自建套利执行系统：Astro 调研、可行性评估与交接
+
+调研日期：2026-10-01。范围：Astro 卡片/SDK/已部署前端的只读行为分析，现有雷达代码复用评估，新 DEX 接入与独立执行器方案。本文是研究交付，不是实盘系统交付。
+
+**后续进展：已通过用户提供的官方安装文档找到并下载 v1.9.24 发布包，取得 Astro 核心字节码。见第 12 节。此前“尚未取得核心程序”的描述仅对应最初的线上主机检查；获取公开核心样本已不再依赖定位用户线上 SSH 主机。线上核心版本与发布包是否一致仍需核对。**
+
+## 1. 结论和决策
+
+可以在现有雷达上建设自己的跨交易场所套利系统。最有价值的路线是复用市场发现、行情规范化、价差工作台、监控和模拟交易经验，新建可审计的执行器及交易场所适配器。卡片和 SDK 足以帮助定义产品行为，但不足以还原 Astro 核心的完整下单算法。
+
+建议有条件推进：先明确 Arcus 官方交易入口和协议，再完成一个 DEX 与一个已有 CEX 的行情、账户、订单回报接入；验证影子运行和故障恢复后，才进入有限金额实盘。不要以“完整复刻 Astro”作为第一阶段验收目标。
+
+当前尚缺两项关键输入：
+
+- Arcus 官方官网/交易页或完整市场标识。仓库未检索到 Arcus 接入实现，不能把名称推断为已确认协议。
+- 用户线上 Astro 核心版本及订单日志（若需验证线上行为）。已取得官方发布包，可独立进行静态研究，不再把线上主机 SSH 入口作为获得核心样本的前提。
+
+### 补充：核心程序所在主机核查
+
+用户指出“既然可以登录服务器，应继续查找核心程序”后，补充了磁盘与部署检查，不能只凭运行进程列表下结论：
+
+- 检查 `/opt`、`/srv`、`/usr/local/bin`、用户目录，以及 systemd 服务名；未找到 Astro 核心安装或服务。
+- 检查全部现有容器（包括停止容器）、容器镜像、工作目录、挂载目的地、Docker 镜像库存和卷名；未发现可识别的 Astro 核心容器/镜像。已停止的 lp 容器也纳入检查，未启动任何容器。
+- 在主机根文件系统执行文件名搜索，排除虚拟文件系统、Docker/containerd 内部层目录、snap 和已检查的雷达仓库；命中的是系统中无关的名称，以及雷达 Astro 配置备份，未找到核心程序。文件名搜索不能排除无 Astro 命名的程序或已移除镜像。
+- 在远端内存中比较 SDK 目标 DNS 解析地址、主机本地接口地址和公网出口地址：目标不是 loopback，不匹配接口地址，也不匹配公网出口地址。未输出或保存目标地址、凭据或管理前缀。
+- 地址差异本身不能排除反向代理/NAT；结合以上检查，当前没有证据表明该核心位于已登录主机。现有本机 SSH 配置中只观察到雷达主机别名。
+
+结论：已登录雷达主机具有足够权限读取该机程序，但尚未定位到 Astro 核心所在主机及对应 SSH 入口。能读取远端 Astro 网页/SDK，不等于已获得该服务后台文件系统访问能力。若用户确认核心应位于同机，应进一步按其指定安装目录、程序名或运行账户定位；若位于另一台机器，需要对应既有连接配置。以上检查全为只读，没有搜索输出秘密文件内容、改变服务或触发交易。
+
+用户本次要求详细调研评估，没有要求立即启用交易。所有生产业务接口操作都是只读：未调用建卡、更新卡片、删除、启停、转账、下单或撤单接口。后续仅在服务器独立临时目录保存公开发布包，见第 12 节。
+
+## 2. 基线、证据等级与验证范围
+
+- 本地分支：`codex/frontend-localization-polish`。
+- 调研起点本地 HEAD：`22e8dd48a7428f31b7b5d36b313e7bd30e6951d0`。
+- 调研时线上运行 HEAD/前后端镜像：`09f2a30e920c2aa0b985889a6d23e8947e596f8e`。
+- 两个生产容器 healthy，`GET /api/health` 返回 `status=ok`。采样时市场数 11792、机会数 8796；这是动态快照，不是可成交机会数量。
+- 已检查容器（含停止容器）与进程名称：运行的是 taoli1 后端/前端；另有停止的 lp 容器，不能据此认为整个账户下不存在其他 Astro 主机。
+- 主机约 1931 MiB RAM、无 swap；采样时后端约 398 MiB / 768 MiB，前端约 5 MiB / 96 MiB。当前资源快照不构成执行延迟或高峰容量保证。
+
+证据分三级：
+
+1. **直接观察**：本仓库代码、SDK 列表返回字段、已部署网页脚本、公开只读 API、生产健康状态。
+2. **有限推断**：字段/界面行为对应的产品能力，仍不证明核心交易算法如何实现。
+3. **设计建议**：本文的新执行器架构、故障处理、阶段计划和资源估算，均不声称是 Astro 原实现。
+
+首次访问雷达 `/api/astro/pairs` 未提供仪表盘凭据，得到 401；随后在现有后端容器内通过已配置 `AstroSdkClient.list_pairs()` 执行授权的只读列表请求。凭据只在原容器内使用，未输出、复制或写入文档。SDK 当前配置 `verify_tls=false`；自建执行器应使用可信 TLS 链，不能照搬这一配置。
+
+## 3. 已实际确认的 Astro 能力
+
+### 3.1 SDK 是卡片控制接口
+
+代码入口：
+
+- `backend/app/services/astro_client.py`
+- `backend/app/services/astro_planner.py`
+- `backend/app/services/astro_alerts.py`
+- `backend/app/services/market_labels.py`
+- `backend/app/api/routes_astro.py`
+
+当前客户端使用 `POST /{admin_prefix}/api/config/sdk-update-pair`，包含 `action=list/add/update`。签名为 HMAC-SHA256，签名原文依次为毫秒时间戳、nonce、POST、路径、JSON body，以换行连接；请求头为 `x-timestamp`、`x-nonce`、`x-sign`。
+
+这些能力实现“把策略配置交给 Astro”，不是直接提交交易所订单。项目没有由此获得交易所订单 ID、逐笔成交确认、完整账户账本或交易核心内部状态机。
+
+仓库历史设计记录了 SDK `delete`、20 次/10 秒限流，以及 add 会重启 astro-core、建议间隔约 3 秒。后续读取官方 `SDK-API.md` 也确认这些描述仍在当前文档中；没有对生产做写入或重启实验，不能当作当前部署版本已执行验证的行为。
+
+### 3.2 真实卡片结构
+
+只读采样得到 87 张卡片，类型包括 `FF/FR/SF/SR`。观察到的交易所标识包括普通交易所、`gc-*`、`hl`、`lighter` 和 `rh-lighter`。这是已有卡片的分布，不是完整支持列表，也不证明所有卡片能成交。本项目对某些只读市场的限制依然需要保留。
+
+| 字段/能力 | 本次证据 | 自建时的处理 |
+| --- | --- | --- |
+| `buyEx/sellEx/type/name` | SDK + 前端 | 改为明确的双腿 instrument ID，名称仅用于展示 |
+| `openPosition/closePosition` | SDK + 前端 + 本地映射 | 普通价差与比率条件分开建模，单位和方向显式化 |
+| `maxTradeUSDT` | 前端显示仓位限额 | 区分总持仓额度与单笔额度，不按字段英文猜含义 |
+| `minNotional/maxNotional` | 前端标注最小/最大单笔额 | 另叠加交易场所最小金额和数量精度约束 |
+| `disableOpen/disableClose/status` | SDK + 前端 | 区分禁开、允许减仓、暂停、熔断和需要人工处理 |
+| `slowMode/boostMode` | SDK；中文标签“慢速模式(滑点低)”“抢单模式(滑点高)” | 只确认产品语义，不推断其具体订单类型或定价算法 |
+| `stepOpen/stepClose` | SDK + 前端 | 分档条件与分档额度，应有独立版本和校验 |
+| `stopLoss/fullToDisableOpen` | SDK/前端 | 精确触发口径仍需验证；自建时明确是价差、价格还是组合 PnL |
+| `abFirst` | 前端 SF/SS 显示“A单成交后再下B单”，值映射为 `a` | 证明界面支持先后腿策略，不证明超时和部分成交处理方式 |
+| `aExPosition/bExPosition`、开平仓均价、`realizedProfit` | SDK | 卡片仓位不能替代交易所真实账户与逐笔账本 |
+| `aHlDex/bHlDex`、`aEffectiveHlDex/bEffectiveHlDex` | SDK | 保存具体 DEX、原始市场、资产 ID 和抵押品信息 |
+| `aMarketSymbol/bMarketSymbol` | 前端 | 自建市场注册表保留原始合约标识 |
+| `rateMultiply` | 前端明确 K/M/B/T 及倒数显示换算 | 不当作合约乘数或对冲数量倍率 |
+| `regressionValue` | 前端标为回归值/归零点 | 属于策略估值参数；不证明两个不同资产天然可对冲 |
+
+前端还包含风险限额、MMR/清算信息、持仓调整、资金费率展示、日志 WebSocket 和 Gate CrossEx 相关功能。只分析了脚本中的接口定义；没有调用转账、减仓、升级、重启等管理接口。
+
+`gc-*` 与 Gate CrossEx 相关功能、原交易所行情选择共同出现。自建必须显式区分“行情来源”和“订单执行通道”：直接交易所账户、CrossEx 账户可能有不同的费用、保证金、市场覆盖和下单路由，不能仅移除 `gc-` 前缀。
+
+### 3.3 前端证据指纹
+
+从现有配置的 Astro 页面只读获取，页面标题为 `Astro - Hub`。不在文档记录主机、管理前缀或凭据；只记录发布资源名和 SHA-256：
+
+- `index-g8Z5B0kf.js`：`04241877796011755587e4339340e3f712249d297b953afa192b22b2198d18eb`
+- `index-Cbqo_kH4.js`：`e41fd610df965b6c32e89a0de251246f02dfe032e5ad8c5da6ac313261de975a`
+- `zh-CN-CMf_Sbg-.js`：`d1ca7e4f42ce42641e877055f588de9f4096467898dba5422251857a83ca3ad1`
+
+这些只用于标识本次读取版本，不是 Astro 核心版本号，也不证明脚本供应链可信。未把完整第三方程序或卡片私有配置复制进仓库。
+
+### 3.4 需要重点核对的比率方向
+
+Astro 部署前端普通已成交价差显示为 `2*(B-A)/(A+B)`；SR/FR 的均价比率显示为 `A/B`，并应用 `rateMultiply`。中文校验文案包含“开仓汇率必须小于清仓汇率”。
+
+本地 `astro_planner.py` 的 `_ratio_position()` 使用 `(2+s)/(2-s)`，其含义为对应正向价差的 `B/A`，且 `_strict_close_position()` 强制 close < open；现有 FR 测试也断言该方向。
+
+这是值得验证的协议口径疑点，不能仅凭前端显示判定 SDK/核心有 bug：可能涉及接口版本、回归值转换或不同控制路径。下一步应对一组已知 A/B 行情，对照前端表单序列化、SDK 配置和真实交易事件；在离线副本或测试环境验证。未做该实验前，不把本地 planner 的 FR 映射当成复刻规范，不自动修复现有实盘卡片。
+
+## 4. 能逆向到哪里
+
+| 对象 | 可获得的结果 | 当前限制 |
+| --- | --- | --- |
+| 卡片字段/网页 | 策略参数、单位、表单约束、展示公式、操作路径 | 不是成交引擎 |
+| SDK | 认证格式、卡片控制面、字段读回 | 未提供完整订单级执行细节 |
+| 正常交易日志/订单回报 | 下单顺序、成交延迟、补腿和风控触发的可观察行为 | 本次未获取核心主机日志，不能下结论 |
+| 后台源码或可分析程序 | 模块边界、交易所适配、算法及错误分支 | 核心程序未取得；编译和混淆情况未知 |
+| 长期实盘黑箱观察 | 还原部分常见路径 | 无法保证覆盖网络分区、清算、ADL、极端行情等罕见分支 |
+
+进一步分析核心的只读步骤：确认部署目录/容器挂载和版本 → 记录程序类型与哈希 → 判断是否有可读源码/脚本、符号或 source map → 获取脱敏的少量订单事件和配置样本 → 按事件时间建立策略/订单/成交因果关系。生产不附加调试器、不重启；需要动态实验时使用离线副本或测试环境。
+
+目标是形成自己能验证和维护的行为规范，而不是依赖复制未知的二进制才能扩展 DEX。
+
+## 5. Arcus：接入结论暂为有条件可行
+
+本仓库中未发现 `arcus` 实现；所读 Astro 主程序、交易页面脚本中未检索到 `arcus`。字符串缺失不能证明后端一定不支持别名或动态配置。
+
+本次向 `https://api.hyperliquid.xyz/info` 执行只读 `{"type":"perpDexs"}`，返回命名条目：`xyz/flx/vntl/hyna/km/abcd/cash/para/mkts/io`，没有直接名为 Arcus 的条目。Arcus 仍可能是前端品牌、其他协议或名称存在差异，因此不能归类为 Hyperliquid DEX。
+
+拿到用户确认的官方入口后按以下顺序核验，不对猜测的网址或合约授权：
+
+1. 确认协议身份、官方文档/SDK 仓库、链和市场类型、账户/子账户模型。
+2. 公开读取 markets/metadata、订单簿、成交、标记/指数价、资金费率和结算时间；记录 source timestamp、接收时间、序列号及可交易状态。
+3. 确认下单、撤单、查单、逐笔成交和持仓端点，以及用户事件 WebSocket/补查机制。
+4. 确认签名、nonce、agent/API key 权限、幂等 client order ID、速率限制、IOC/FOK/post-only/reduce-only 支持情况。
+5. 确认 tick/lot/min notional、合约乘数、线性/反向合约、抵押品、maker/taker 费、清算/ADL、预言机与熔断规则。
+6. 用公开数据确认目标标的双方 24h 成交额与下单量对应的可执行深度，再用测试账户核验订单生命周期。
+
+| Arcus 实际类型 | 适配路线 | 主要影响 |
+| --- | --- | --- |
+| Hyperliquid 上的市场/前端 | 复用协议级连接；保留 DEX、coin、asset ID、抵押品与账户模式 | 可能主要是市场注册问题，但下单与保证金仍需确认 |
+| 独立订单簿永续 DEX | 新增行情、签名、交易和账户适配器 | 通常具备接入条件，工作量依文档/测试环境质量变化 |
+| AMM/链上 swap | 使用可执行报价、交易构造、receipt/确认数、撤换交易机制 | 有 gas、MEV、回滚/最终性，不能套用 CEX 的 IOC 状态机 |
+| 聚合前端/代理 | 对接真实结算协议或官方交易 API | 需要明确品牌、行情来源、账户和执行通道的关系 |
+| 无可靠查单/成交/持仓确认 | 先限于监控与人工判断 | 暂不满足无人值守资金执行的验收条件 |
+
+在身份和接口确认前，不能承诺“Arcus 几天接好”，也没有依据报告其实际手续费、资金费周期、成交额或预期套利收益。
+
+## 6. 现有项目的可复用部分
+
+| 已有模块 | 可复用内容 | 实盘前的缺口 |
+| --- | --- | --- |
+| `collector.py` 与行情 adapters | 多交易场所发现、规范化、资金费率 | 默认大盘轮询约 5 秒；应另设仅订阅目标市场的执行行情通道 |
+| `pair_spread_query.py` / 工作台 | 组合筛选、行情和历史可视化、市场选择 | 历史价差不能当作历史可成交盘口；需保留缺失/估算标记 |
+| `orderbook_validator.py` | 盘口深度、VWAP、额度校验 | 双边需对齐同一经济风险数量，校验时差和盘口更新，不直接复制独立名义额模拟 |
+| `account_position_providers.py` | 部分 CEX 与 Hyperliquid 只读账户持仓 | 不是交易适配器，缺下单、撤单、订单回报与恢复闭环 |
+| `squeeze_arbitrage/paper_engine.py` / `paper_models.py` | IOC 模拟、部分成交、recovering/unresolved、账本和资金费现金流 | 仍为模拟；模型标有 `collateral_model_incomplete`，不能把模拟通过视为实盘保证金安全 |
+| Astro planner/alerts | 机会到卡片、查重和人工控制流程 | 与 Astro API 耦合，不作为独立执行器 |
+| 浮窗/告警 | 操作入口与运行可视化 | 当前兜底费用/盈利为估算值，须与执行账户真实结算分开 |
+
+浮窗存在 bid/ask 缺失后回退一般价格的显示逻辑；该逻辑适合展示兜底，但执行层必须在缺少可成交深度时拒绝新开仓。浮窗普通/单 HL/双 HL 的固定费率估算不是账户费率表，也不能用于最终账本。
+
+本次代码搜索未发现可作为通用交易网关复用的 `create_order/cancel_order` 实盘闭环。已有模拟交易经验能降低设计成本，但最重要的订单恢复与对账工作仍需新增。
+
+## 7. 建议架构和执行规则
+
+### 7.1 结构
+
+保留当前雷达作为研究/控制面；增加独立执行进程和独立账本，通过明确的策略版本和授权状态交接。初期一个执行进程、一个专用子账户、一个 DEX+CEX 组合即可，不必先做复杂微服务。
+
+模块边界：
+
+- Market registry：venue、execution channel、DEX、raw symbol、instrument ID、base/quote/settlement、contract size、price/quantity multiplier、margin model。
+- Market data：目标市场 WebSocket、快照与增量校验、断线重建、行情时效与时钟偏差。
+- Strategy：开平仓阈值、持有时间、资金费事件和策略版本；不持有签名凭据。
+- Risk：最大敞口、单笔/总仓、费用、滑点、交易场所余额、保证金、亏损与熔断。
+- Execution：订单意图持久化、幂等 ID、下单/撤单/查单/成交合并、补腿和恢复。
+- Ledger：orders、fills、fees、funding、positions、reconciliation、审计事件。
+- UI：人工 arm、暂停新开、reduce-only、紧急处理状态及原因；默认 paper。
+
+交易签名凭据与只读账户配置分开，尽量使用交易专用子账户、有限交易权限和独立密钥；不提供提现权限。不要把密钥发送到浏览器或写入策略卡片。
+
+### 7.2 行情和收益口径
+
+普通同风险标的、买 A 卖 B，使用归一化且与实际数量匹配的盘口 VWAP：
+
+`open_spread = 2 * (B_bid_vwap - A_ask_vwap) / (B_bid_vwap + A_ask_vwap)`。
+
+平仓需卖 A、买 B，因此使用 `A_bid_vwap` 与 `B_ask_vwap`。last、mark、index 不能替代交易价格。mark 可用于按平台规则估算保证金/资金费，不与执行价混淆。
+
+在线性、同一基础风险单位、两腿持有数量 Q 匹配且换汇影响另计的简化条件下：
+
+`price_pnl = Q * [(A_exit - A_entry) + (B_entry - B_exit)]`。
+
+`net_pnl = price_pnl + funding_received - funding_paid - entry_fees - exit_fees - borrow - gas - other_costs`。
+
+反向合约、不同抵押品和倍率市场必须由对应适配器计算，不套用简式。若已经使用实际成交价或盘口 VWAP，不能再次重复扣除同一部分滑点；只另外计入尚未体现的延迟/冲击风险预算。
+
+资金费按两腿各自下一结算时间、实际持仓数量、平台结算规则分别累计。1h 的 0.01% 与 8h 的 0.03% 不能直接相减作为可收现金流；标准化每小时值可用于筛选，真实收益按离散结算事件计算。当前预测费率和已结算费率分开存储。
+
+每个机会必须记录双方成交额、双方可执行深度、费用来源、资金费周期/下次时间、市场倍率、数量单位和估算标志。当前没有 Arcus 对应输入，故本文没有收益率或成交可行性的数值结论。
+
+异名资产不能只凭归一化 ticker 配对；同为 BTC、黄金、股票等展示名称，也必须核对经济标的、结算和合约条款。对同一资产的线性两腿，应按基础风险数量/合约乘数对齐，再校验名义额和保证金，不简单让两边都下相同 USDT 金额。
+
+### 7.3 状态和恢复
+
+建议交易状态：`DRAFT → ARMED → OPENING → HEDGED → CLOSING → CLOSED`；异常分支进入 `RECOVERING / HALTED / NEEDS_RECONCILIATION`。这些是自建设计，非 Astro 已确认内部状态。
+
+关键规则：
+
+1. 下单前先持久化 intent 与确定性 client order ID；发送成功与是否成交分开记录。
+2. 超时属于结果未知，先以 client ID 查单/查成交，禁止直接生成新 ID 重发。
+3. 按已确认累计成交量与合约乘数计算未对冲风险；撤单请求发出后仍处理可能迟到的成交。
+4. IOC 成交一部分、另一腿不成交时，有上限地补腿或平掉已成交腿；预算耗尽后停机并明确残余仓位。
+5. 补腿数量根据已成交与所有在途订单共同决定，避免重复补腿；所有补单/平仓受独立滑点与风险预算限制。
+6. 进程重启先恢复意图、查询未完订单/成交、对账仓位，再允许新交易；用单写者租约/隔离机制防止双实例同时交易。
+7. 开仓 kill switch 与紧急减仓流程分开；暂停不能直接遗忘订单。reduce-only 的平台语义必须验证。
+8. 为每笔订单记录 strategy ID、trade ID、leg ID、client ID、exchange ID、事件时间、手续费币种和执行来源。
+
+第一版建议用有价格上限/下限的可成交限价 IOC，具体采用顺序还是并行发送由两腿成交能力和故障测试决定。并行 IOC 也不原子；“先不流动腿再对冲”也会暴露对冲价格风险。暂不复制复杂抢单/做市模式。
+
+链上 AMM 另建交易生命周期：nonce、pending、replacement、receipt、confirmation、reorg；CEX 对冲触发要显式处理最终性延迟，不能收到广播成功就认为成交。
+
+## 8. 分阶段交付、估算与验收
+
+以下为单一订单簿 DEX + 单一 CEX、1–3 个标的、熟悉现有项目的工程人员的粗估。不是交付承诺；等待账户开通、接口支持和真实交易样本的时间另计。若 Arcus 是 AMM，需重新估算。
+
+| 阶段 | 粗估工程时间 | 可验收结果 |
+| --- | --- | --- |
+| P0 协议确认/行为规范 | 2–4 工作日 | 官方来源、字段单位、签名/市场规格、订单回报能力、Astro 行为证据表；解决关键身份问题 |
+| P1 公开行情与只读账户 | 3–7 工作日 | Arcus+CEX 目标市场真实盘口与时效；双方资金费/成交额/费用；断线重建可验证 |
+| P2 独立账本与 paper/故障注入 | 5–10 工作日 | 幂等、迟到回报、部分成交、超时查单、重启对账、费用及资金费结算回放 |
+| P3 有限金额实盘 | 5–10 工作日开发验证，加观测期 | 人工显式启用；限定标的/额度；开仓、补腿、平仓和账本与平台对账 |
+| P4 稳定化/操作工具 | 5–10 工作日 | 熔断、告警、恢复手册、备份、版本部署、事件追踪与风险看板 |
+
+约 20–41 个工程工作日，单人顺序开发通常约 4–9 周，不含长期观测和未知接口障碍。若协议复用程度很高，可缩短适配阶段；多个新 DEX、Maker 策略、借币、自动跨场所调资、复杂比率策略都会额外扩展范围。
+
+建议验收指标：
+
+- 影子运行建议至少 7 天，覆盖多次资金费结算、行情断连与恢复；天数达标不能代替关键场景覆盖。
+- 行情延迟预算通过目标机会寿命测量确定；记录 p50/p95/p99。过期/失序/断流时禁止新开。
+- 故障注入覆盖一腿拒单、一腿部分成交、HTTP 超时但已成交、重复/乱序回报、撤单后成交、进程重启、单场所失联和预算耗尽。
+- 测试矩阵内无重复风险订单、无被静默丢弃的订单状态；全部残余风险可定位并受硬限额约束。
+- 逐笔成交、费用、资金费和最终仓位可与平台记录对齐，精度差异有解释。
+- 实盘额度应按最小可成交量、账户可承受损失和故障退出成本设定，不能直接把现有 Astro 默认 10 USDT 当成 Arcus 可用单笔额度。
+
+系统可实现不等于策略能盈利：需用真实手续费、执行延迟和盘口重放估计净边际，并用小额实盘校准。没有这些样本，不能承诺收益或资金效率。
+
+## 9. 运维与资源建议
+
+现有 2 GiB 主机只适合谨慎增加只读研究负载；它还运行全市场雷达和模拟研究。建议执行器放在独立主机/服务，避免行情大扫描、SQLite 写竞争、发布重启影响订单闭环。初始 2–4 vCPU / 4–8 GiB 可作为小规模试点的待压测预算，不是固定硬件要求。
+
+初期单执行器可使用独立 SQLite WAL + 严格事务与备份；若多写者、多执行进程或复杂对账并发，考虑 PostgreSQL。无需为首个市场组合先引入 Kafka/Kubernetes。
+
+执行账本不写入雷达高频监控同一 SQLite 文件；通过进程隔离、独立存储与恢复校验降低耦合。备份不能代替实时对账；恢复数据库后必须重新查询交易所，避免从旧快照重复交易。
+
+将来涉及运行代码的上线继续遵守 `docs/linux-deployment.md`：生产外构建、备份 radar 与需要保存的执行账本并校验、精确镜像 SHA、`git pull --ff-only`、不删除数据卷、健康与实际功能验收。
+
+本次仅新增研究文档，不改变线上运行版本；没有备份/部署/容器重启动作，数据库无需因文档发布被操作。
+
+## 10. 本次检查与已知限制
+
+- 已完成：仓库代码及历史交接阅读、生产容器/进程/资源/health 只读检查、真实 Astro SDK list、已部署前端代码和中文语义检查、资源哈希、Hyperliquid perpDexs 公开查询。
+- 未完成：Arcus 官方身份/API 核验、Astro 核心源码/二进制分析、订单日志因果分析、实际订单/收益验证。这些不能在最终报告中描述为完成。
+- 定向验证：`python -m pytest tests/test_astro_client.py tests/test_astro_planner.py tests/test_orderbook_validator.py tests/test_squeeze_paper.py -q -p no:cacheprovider`（另指定本任务独立临时目录）：**60 passed in 25.15s**。它们只验证当前代码已有行为，不验证第三方交易所执行或 Astro 比率协议一致性。
+- 没有新增或修改应用代码，无需前端构建或生产发布。
+- 原工作区存在大量未跟踪产物，包括 `.worktrees/`、pytest 临时目录、历史未跟踪交接、截图与调研脚本；全部保留且不纳入本次提交。起点没有已跟踪代码修改。
+
+## 11. 下一任务的建议范围
+
+下一任务建议命名“自建套利 P0/P1：Arcus 协议核验与行情接入”。先提供 Arcus 官方入口；若继续核心行为调查，补充 Astro 程序机器的既有 SSH 别名/程序目录，秘密留在受控环境。
+
+可直接使用的任务说明：
+
+> 阅读 `docs/task-handoff-2026-10-01-own-arbitrage-research.md`。本任务只处理确认后的 Arcus 协议和一个 CEX 的目标市场接入。先确认官方 API、市场身份/合约倍率、资金费周期、双方成交额、可执行盘口和费用来源。实现行情适配与只读账户/订单能力评估，输出可回放样本与下一阶段执行规范；默认 paper，不创建真实订单、不迁移 Astro 活跃卡片。HL 必须保留具体 DEX 和原始市场标识；所有估算明确标记。按项目规则验证、提交、推送，涉及运行代码部署时按既定备份和镜像流程完成线上验收。
+
+将 Astro 活跃仓位迁移到自建执行器应作为独立、显式的后续任务：禁止两个引擎同时管理同一子账户的同一风险仓位；须先停止新增风险、核对订单/持仓并确定所有权切换，再谈策略迁移。
+
+## 12. 官方安装包研究：已取得核心字节码
+
+### 12.1 公开来源与下载验证
+
+用户提供了 [INSTALL.md](https://github.com/astro-btc/Astro/blob/main/INSTALL.md)，据此追踪：
+
+- [install-new.sh](https://github.com/astro-btc/Astro/blob/main/install-new.sh)：当前默认拉取 `astrobtc/astro:latest`，安装时会停止/删除旧 `astro-app` 并启动容器。只阅读脚本，没有运行。
+- [install-in-docker.sh](https://github.com/astro-btc/Astro/blob/main/install-in-docker.sh)：通过 GitHub latest release 下载 ZIP，安装 Node.js 23.11.1、Bytenode、PM2，再启动 core/server。此处 Node 版本只是脚本指定版本，不等于已证明最新字节码与该运行时兼容。
+- [v1.9.24 Release](https://github.com/astro-btc/Astro/releases/tag/v1.9.24)：API 报告发布时间 `2026-09-23T09:34:26Z`，附件 `astro-1.9.24.zip` 为 6,522,965 字节。
+- 调研时文档分支 HEAD：`a21552e6802d0464824cac97e5798c9c584645da`。移动分支与 latest 标签后续可能变化。
+
+发布包已下载到本地独立研究目录，SHA-256 与 GitHub asset digest 完全一致：
+
+`d28dc395203c2c6c5db1c9b9e39679c13ce942823eb3304a327ce6e770e1d3e8`
+
+ZIP CRC 检查全部通过。排除 `__MACOSX` 元数据和目录项后共 80 个文件，未压缩约 14.8 MB。仅从 ZIP 选择读取/提取固定文件，没有执行安装脚本、包脚本、字节码、WASM 或应用。
+
+本地大文件下载曾停滞，因此也通过已授权服务器向官方 GitHub 下载同一公开 ZIP 到独立 `/tmp/astro-public-research.*` 临时目录，校验后复制到本机；未安装依赖、未接触服务配置、未启动 Astro。最终本地副本再次校验相同 SHA-256。研究文件位于本机 Codex 可视化工作目录的 `astro-release-research/`，未提交第三方发布包到 Git。
+
+### 12.2 实际程序结构
+
+| 文件 | 大小 | 观察 |
+| --- | ---: | --- |
+| `astro-core/bin/www.jsc` | 16,168 bytes | core 启动入口；PM2 配置明确使用 `bytenode` 解释器 |
+| `astro-core/src/main.jsc` | 2,322,352 bytes | 核心主字节码，含订单/对账/策略及交易接口字符串 |
+| `astro-core/src/monitor/index.jsc` | 4,440 bytes | 监控相关字节码入口 |
+| `astro-core/src/3rd/lighter/index.jsc` | 4,072 bytes | Lighter 相关入口 |
+| `astro-core/src/3rd/lighter/lighter.wasm` | 7,460,042 bytes | 随包签名组件，需进一步单独核验 |
+| `astro-core/src/3rd/lighter/load_wasm.mjs` | 4,223 bytes | 可读 Go WASM 加载/签名桥接实现 |
+| `astro-server/src/main.jsc` | 1,062,832 bytes | 管理服务主字节码 |
+| `astro-admin/dist/assets/*` | 多文件 | 编译前端，可直接静态分析 |
+
+core 主字节码 SHA-256：`54339066c361389ae0a745a294a4d7641ad9945ef3d7d660e1ea17a11ec93850`。
+
+包中共 7 个 `.jsc`，core/server 的 package.json 均标注 1.9.24。公开仓库主要提供安装与使用材料；发布包并未附带完整核心 JavaScript 源码。`.jsc` 是编译后字节码，并不等于“无法分析”，但不能承诺完整还原作者源码。
+
+读取到的三个前端文件 `index-g8Z5B0kf.js`、`index-Cbqo_kH4.js`、`zh-CN-CMf_Sbg-.js` 与第 3.3 节用户线上页面对应文件 SHA-256 全部相同。因此该包对当前界面研究具有直接参考价值；这仍不证明线上 core 字节码版本完全相同。
+
+### 12.3 已提取的核心线索及证据强度
+
+以下来自核心字节码可读字符串，不是已经反编译或执行验证的控制流：
+
+- 待处理订单：`initPendingOrders`、`addPendingOrder`、`removePendingOrderByReqId`、`getAllPendingOrders`、`setPendingOrdersPersistEnabled`。
+- 对账：`reconcilePendingOrders`、`reconcile FILLED`、`reconcile TERMINATED`、`reconcile FILLED skipped (already accounted)`。
+- 未决状态：`reconcile PENDING dropped (status unresolved)`。不能仅凭这条日志认定程序错误丢单，必须查明条件、其他持仓核对与后续动作；这是下一阶段重点。
+- 部分成交：`PARTIALLY_FILLED`、`PartiallyFilledCanceled`、`logicalFilledSize`、`partial fill`。
+- 执行模式：`slowMode`、`boostMode`、`abFirstShouldTradeLeft`、`lastTradeCountForAbFirst`。
+- 重试和通道：`pendingOrderRetry`、`allowGateCrossExOrderRetry`、`gateCrossExCancelOrder`。
+- Lighter：`resolveLighterReduceOnlyC`、`getNextNonce`、`/api/v1/nextNonce?account_index=`。
+- 持久化：`better-sqlite3`；`order` 插入语句包含 `id/pairId/coin/isOpen/type/abEx/exchange/coinSize/price/status/ts`，`profit` 插入语句记录组合、交易场所、金额、备注及时间。
+- 比率配置：`FR positionValueRatio does not support stepOpen/stepClose!`、正数 `regressionValue` 校验等字符串。
+
+可读 Lighter WASM 加载器提供 `signCreateOrder/signCreateMarketOrder/createAuthTokenWithExpiry/signUpdateMargin/signUpdateLeverage` 的桥接方法，并尝试解析多个导出名称；这是可直接阅读的实现证据。包中 MEXC protobuf 定义也明确给出订单状态、累计成交、client/order ID、手续费与成交时间字段。
+
+这些证据足以将后续调查拆为“待处理订单持久化 → 查单对账 → 成交计量去重 → 补腿/退出”的具体模块；尚不足以宣称已经还原它们的调用顺序、数量算法、时间阈值和所有异常分支。
+
+### 12.4 Docker latest 不等于 GitHub latest release
+
+只读请求 Docker Registry manifest/config，未拉取镜像层、未创建或运行容器：
+
+- `astrobtc/astro:latest` 当时的 digest：`sha256:1d4c7648ec72adc46c5d57e5df924ad3b4c218d17288d94a7b95625561518ade`。
+- 配置创建时间 `2026-09-19T01:29:28.821260096Z`；标签声明 release `1.9.18-beta1`、image version `3.2`。
+- 镜像描述声明 pm2-runtime 启动 astro-server；工作目录为 `/home/ubuntu/astro-server`，非 root 用户 `ubuntu`。
+
+因此直接照安装脚本获取 `latest`，研究样本可能与 GitHub 1.9.24 ZIP 不同。镜像标签只是发布方元数据，没有检查镜像内部文件或启动后更新行为；必须固定 digest/发布包哈希，不能把 latest 当成稳定版本号。
+
+### 12.5 更新后的判断与下一步
+
+**官方发布包路线已实证可行，核心样本已取得。**线上主机 SSH 不是继续静态分析的必要条件；它只在需要确认用户实际版本、日志和实盘行为时才重要。
+
+后续同模块工作优先顺序：
+
+1. 建立字节码字符串/符号/数据表/交易端点索引，标注证据偏移与包哈希。
+2. 确认 V8/Bytenode 版本，评估匹配版本的字节码解码/反汇编工具；不能把加载 `.jsc` 当作无副作用的查看操作。
+3. 在独立、无真实密钥且默认禁止外部交易连接的 Linux 环境，采用 mock 交易接口和合成回报验证关键分支；不用生产环境做实验。
+4. 优先恢复 `pending orders/reconcile/partial fill/abFirst/slow/boost` 的行为规范，再与自建执行器设计对照。
+5. 用官方 SDK 和梯度/网格文档确认参数，再验证字节码中的实际条件；不要用字符串存在替代运行时证明。
+
+这轮交付为“公开发布包取得、完整性校验及首轮静态可研究性验证”，没有完成完整反编译、执行回放或收益验证。应用代码无变更，本轮验证是 ZIP CRC、SHA-256、结构检查和线上前端哈希比对，不重复运行与文档无关的后端测试。

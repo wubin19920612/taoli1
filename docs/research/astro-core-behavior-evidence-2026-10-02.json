@@ -1,0 +1,509 @@
+{
+  "sample_sha256": "54339066c361389ae0a745a294a4d7641ad9945ef3d7d660e1ea17a11ec93850",
+  "tool_revision": "69be8af3389a4d03bae2119e43888fdc49b55298",
+  "v8_profile": "12.9.202.28",
+  "raw_target_executed": false,
+  "checked_instruction_count": 1971,
+  "regions": [
+    {
+      "id": "E01",
+      "observation": "scheduler batch size 32",
+      "synthetic_object_address": "0xf000000f0b00",
+      "instruction_offset_range": [
+        54,
+        56
+      ],
+      "instruction_count": 2,
+      "first_file_offset": 238705,
+      "last_file_offset": 238707,
+      "decoded_instruction_sha256": "fb48422b854a34c1e9d1cba1d4f100b0d8c8bcc7f6152da449491ae82262a1c1",
+      "confidence": "offline bytecode evidence; not runtime equivalence"
+    },
+    {
+      "id": "E02",
+      "observation": "scheduler bounded loop and setImmediate",
+      "synthetic_object_address": "0xf000000f4a00",
+      "instruction_offset_range": [
+        37,
+        347
+      ],
+      "instruction_count": 138,
+      "first_file_offset": 234044,
+      "last_file_offset": 234354,
+      "decoded_instruction_sha256": "9bf3237f9a5de04bfc1e70a2761c643fdf486eaa4f2497fc8bffc32197ac04f2",
+      "confidence": "offline bytecode evidence; not runtime equivalence"
+    },
+    {
+      "id": "E03",
+      "observation": "event coalescing",
+      "synthetic_object_address": "0xf000000f5900",
+      "instruction_offset_range": [
+        0,
+        230
+      ],
+      "instruction_count": 96,
+      "first_file_offset": 235317,
+      "last_file_offset": 235547,
+      "decoded_instruction_sha256": "201a63dc147e36deec268eebe092a646666fc44b34dc7333a6479876426d340b",
+      "confidence": "offline bytecode evidence; not runtime equivalence"
+    },
+    {
+      "id": "E04",
+      "observation": "strategy dispatch",
+      "synthetic_object_address": "0xf000007bc600",
+      "instruction_offset_range": [
+        240,
+        785
+      ],
+      "instruction_count": 210,
+      "first_file_offset": 2150975,
+      "last_file_offset": 2151520,
+      "decoded_instruction_sha256": "92110b3e8426698dd8b63bb2bb2860a142ea7e3edf6c80047bdcf1d224e6046a",
+      "confidence": "offline bytecode evidence; not runtime equivalence"
+    },
+    {
+      "id": "E05",
+      "observation": "SF imported API slots",
+      "synthetic_object_address": "0xf0000073ec00",
+      "instruction_offset_range": [
+        426,
+        478
+      ],
+      "instruction_count": 18,
+      "first_file_offset": 1972379,
+      "last_file_offset": 1972431,
+      "decoded_instruction_sha256": "efa5291a368b13759800db7b1b89f4b1d7ba81203ef8381ac5c73fe6ead6cae6",
+      "confidence": "offline bytecode evidence; not runtime equivalence"
+    },
+    {
+      "id": "E06",
+      "observation": "shared gateway exports",
+      "synthetic_object_address": "0xf000006ccc00",
+      "instruction_offset_range": [
+        1862,
+        2013
+      ],
+      "instruction_count": 32,
+      "first_file_offset": 1820075,
+      "last_file_offset": 1820226,
+      "decoded_instruction_sha256": "bfcb3e6e22c4f8cddbdd3ddff7a3af32bf75e7a7d5e7212c5126d399b2a2b121",
+      "confidence": "offline bytecode evidence; not runtime equivalence"
+    },
+    {
+      "id": "E07",
+      "observation": "top of book price and amount",
+      "synthetic_object_address": "0xf000006cbe00",
+      "instruction_offset_range": [
+        166,
+        301
+      ],
+      "instruction_count": 58,
+      "first_file_offset": 1799154,
+      "last_file_offset": 1799289,
+      "decoded_instruction_sha256": "bde76d4b60241bb1eabef9ac3106642def2f37a0c7cc09949ce37a190d60e384",
+      "confidence": "offline bytecode evidence; not runtime equivalence"
+    },
+    {
+      "id": "E08",
+      "observation": "SF four quotes and spread formula",
+      "synthetic_object_address": "0xf00000741f00",
+      "instruction_offset_range": [
+        1292,
+        1643
+      ],
+      "instruction_count": 143,
+      "first_file_offset": 1959638,
+      "last_file_offset": 1959989,
+      "decoded_instruction_sha256": "9d8dc03e82e814f7890f0a32d84b59ab8a089dbaf2da2238cdf11f81731e1925",
+      "confidence": "offline bytecode evidence; not runtime equivalence"
+    },
+    {
+      "id": "E09",
+      "observation": "SF strict threshold and both rate gates",
+      "synthetic_object_address": "0xf00000741f00",
+      "instruction_offset_range": [
+        9920,
+        10071
+      ],
+      "instruction_count": 56,
+      "first_file_offset": 1968266,
+      "last_file_offset": 1968417,
+      "decoded_instruction_sha256": "a70f4dcb0193e215ca95536d1e7e2bf4ab6d1c03ec04146234ded405f4824da8",
+      "confidence": "offline bytecode evidence; not runtime equivalence"
+    },
+    {
+      "id": "E10",
+      "observation": "SF step target computation",
+      "synthetic_object_address": "0xf00000741f00",
+      "instruction_offset_range": [
+        7492,
+        8158
+      ],
+      "instruction_count": 198,
+      "first_file_offset": 1965838,
+      "last_file_offset": 1966504,
+      "decoded_instruction_sha256": "6eb50bfff6eab3fc601d3ea35cd8cd2c7ddf5f3e77eabcfa3b499466efbe5d6f",
+      "confidence": "offline bytecode evidence; not runtime equivalence"
+    },
+    {
+      "id": "E11",
+      "observation": "SF quantity calculation",
+      "synthetic_object_address": "0xf00000741f00",
+      "instruction_offset_range": [
+        8334,
+        8764
+      ],
+      "instruction_count": 110,
+      "first_file_offset": 1966680,
+      "last_file_offset": 1967110,
+      "decoded_instruction_sha256": "7ab5946fd37ef342cc6718424c83126387a05683058c8cd714990e66efb126cb",
+      "confidence": "offline bytecode evidence; not runtime equivalence"
+    },
+    {
+      "id": "E12",
+      "observation": "quantity clamp helper",
+      "synthetic_object_address": "0xf000006d9600",
+      "instruction_offset_range": [
+        67,
+        145
+      ],
+      "instruction_count": 34,
+      "first_file_offset": 1811698,
+      "last_file_offset": 1811776,
+      "decoded_instruction_sha256": "4460d57df6b96358e9495675abbff68ffd8d7fcb7c70326203b6595778d6451f",
+      "confidence": "offline bytecode evidence; not runtime equivalence"
+    },
+    {
+      "id": "E13",
+      "observation": "FR executable quote ratio",
+      "synthetic_object_address": "0xf00000771500",
+      "instruction_offset_range": [
+        1537,
+        1620
+      ],
+      "instruction_count": 34,
+      "first_file_offset": 2035351,
+      "last_file_offset": 2035434,
+      "decoded_instruction_sha256": "ddf8a57f2cba83d87f05e2804c28565154eee6d9c9c9558406feaf2317ac1339",
+      "confidence": "offline bytecode evidence; not runtime equivalence"
+    },
+    {
+      "id": "E14",
+      "observation": "FR strict threshold comparisons",
+      "synthetic_object_address": "0xf00000771500",
+      "instruction_offset_range": [
+        9638,
+        9656
+      ],
+      "instruction_count": 6,
+      "first_file_offset": 2043452,
+      "last_file_offset": 2043470,
+      "decoded_instruction_sha256": "c6100d95f89ef3e3b8a135e2a576af9394dfbb9442798bb6c67631f2ec46d900",
+      "confidence": "offline bytecode evidence; not runtime equivalence"
+    },
+    {
+      "id": "E15",
+      "observation": "HL DEX candidates and mid TTL",
+      "synthetic_object_address": "0xf0000043ef00",
+      "instruction_offset_range": [
+        114,
+        283
+      ],
+      "instruction_count": 65,
+      "first_file_offset": 1068351,
+      "last_file_offset": 1068520,
+      "decoded_instruction_sha256": "7563dde18d265ecb3e869f03558388a6058a1937d506e8370a044be86d058b8f",
+      "confidence": "offline bytecode evidence; not runtime equivalence"
+    },
+    {
+      "id": "E16",
+      "observation": "HL IOC request construction",
+      "synthetic_object_address": "0xf00000580c00",
+      "instruction_offset_range": [
+        1549,
+        1685
+      ],
+      "instruction_count": 51,
+      "first_file_offset": 1440867,
+      "last_file_offset": 1441003,
+      "decoded_instruction_sha256": "1283b7827df97b10301fc7e601ae1f2afe34ea014f09864510746ab4371ae30e",
+      "confidence": "offline bytecode evidence; not runtime equivalence"
+    },
+    {
+      "id": "E17",
+      "observation": "HL explicit limit versus calculated IOC",
+      "synthetic_object_address": "0xf00000450600",
+      "instruction_offset_range": [
+        24,
+        150
+      ],
+      "instruction_count": 52,
+      "first_file_offset": 1085594,
+      "last_file_offset": 1085717,
+      "decoded_instruction_sha256": "cd36c96605d2e5327ad03ebcffaa9c6a8e8a358c62bb27d6a3c32f85ab00c902",
+      "confidence": "offline bytecode evidence; not runtime equivalence"
+    },
+    {
+      "id": "E18",
+      "observation": "HL mid cache and in-flight promise",
+      "synthetic_object_address": "0xf00000447200",
+      "instruction_offset_range": [
+        94,
+        218
+      ],
+      "instruction_count": 54,
+      "first_file_offset": 1077999,
+      "last_file_offset": 1078123,
+      "decoded_instruction_sha256": "f70aa99c159145e438d5ffb78f88d1e79cb6a3a6eb10c85826b6e5582f28b64b",
+      "confidence": "offline bytecode evidence; not runtime equivalence"
+    },
+    {
+      "id": "E19",
+      "observation": "HL IOC relative price protection",
+      "synthetic_object_address": "0xf0000044f700",
+      "instruction_offset_range": [
+        321,
+        381
+      ],
+      "instruction_count": 26,
+      "first_file_offset": 1084670,
+      "last_file_offset": 1084730,
+      "decoded_instruction_sha256": "4eb5e9738b0c4625fbeccc920d913acf0322a8e6b787fe1a4a9d3475984c99b7",
+      "confidence": "offline bytecode evidence; not runtime equivalence"
+    },
+    {
+      "id": "E20",
+      "observation": "HL nonce monotonic branch",
+      "synthetic_object_address": "0xf0000044a400",
+      "instruction_offset_range": [
+        0,
+        47
+      ],
+      "instruction_count": 18,
+      "first_file_offset": 1079506,
+      "last_file_offset": 1079553,
+      "decoded_instruction_sha256": "91d5a2c6335d643d40d56a4decba64ef2205130ad1c81003f1c9da5b8f92a74d",
+      "confidence": "offline bytecode evidence; not runtime equivalence"
+    },
+    {
+      "id": "E21",
+      "observation": "HL action sign and submit",
+      "synthetic_object_address": "0xf00000455000",
+      "instruction_offset_range": [
+        168,
+        306
+      ],
+      "instruction_count": 54,
+      "first_file_offset": 1090018,
+      "last_file_offset": 1090156,
+      "decoded_instruction_sha256": "25d3cb6546d85f5fa127d33e809a8a2282bad7336a6e91e69bdf0d68b9f01779",
+      "confidence": "offline bytecode evidence; not runtime equivalence"
+    },
+    {
+      "id": "E22",
+      "observation": "HL HTTP exchange request",
+      "synthetic_object_address": "0xf00000448f00",
+      "instruction_offset_range": [
+        21,
+        73
+      ],
+      "instruction_count": 22,
+      "first_file_offset": 1078732,
+      "last_file_offset": 1078784,
+      "decoded_instruction_sha256": "022f2d71f06340fdc44d32234dd0449a9dab6c32b74a089281f38757d087d7e7",
+      "confidence": "offline bytecode evidence; not runtime equivalence"
+    },
+    {
+      "id": "E23",
+      "observation": "CAS fill SQL and changes test",
+      "synthetic_object_address": "0xf00000163500",
+      "instruction_offset_range": [
+        0,
+        64
+      ],
+      "instruction_count": 29,
+      "first_file_offset": 327573,
+      "last_file_offset": 327637,
+      "decoded_instruction_sha256": "bbc40d3fca4100c8a0a5f03d71db78ae5785ac14e3f086d918f25ee3ce55b0c2",
+      "confidence": "offline bytecode evidence; not runtime equivalence"
+    },
+    {
+      "id": "E24",
+      "observation": "append fill SQL",
+      "synthetic_object_address": "0xf00000165700",
+      "instruction_offset_range": [
+        0,
+        80
+      ],
+      "instruction_count": 36,
+      "first_file_offset": 329427,
+      "last_file_offset": 329507,
+      "decoded_instruction_sha256": "e1c3004ad16720f9414313a968351858e7ab49f0cbe51ff9a76f6a7e3c9bfb2b",
+      "confidence": "offline bytecode evidence; not runtime equivalence"
+    },
+    {
+      "id": "E25",
+      "observation": "reconcile CAS then position update",
+      "synthetic_object_address": "0xf000007f6700",
+      "instruction_offset_range": [
+        1491,
+        1721
+      ],
+      "instruction_count": 89,
+      "first_file_offset": 2218691,
+      "last_file_offset": 2218921,
+      "decoded_instruction_sha256": "87063e605f3b04a8b2799200e382c7aeda134610a4df8a491b05c476cde69780",
+      "confidence": "offline bytecode evidence; not runtime equivalence"
+    },
+    {
+      "id": "E26",
+      "observation": "reconcile pending record removal before outcome processing",
+      "synthetic_object_address": "0xf000007f6700",
+      "instruction_offset_range": [
+        442,
+        599
+      ],
+      "instruction_count": 64,
+      "first_file_offset": 2217642,
+      "last_file_offset": 2217799,
+      "decoded_instruction_sha256": "abfb923b68b10fd0abc0a1141b6d84dfcd8e8689a0f0e6bf758c91e57f0ae70e",
+      "confidence": "offline bytecode evidence; not runtime equivalence"
+    },
+    {
+      "id": "E27",
+      "observation": "per-venue rate limiter parameters",
+      "synthetic_object_address": "0xf000006db600",
+      "instruction_offset_range": [
+        169,
+        335
+      ],
+      "instruction_count": 72,
+      "first_file_offset": 1815307,
+      "last_file_offset": 1815473,
+      "decoded_instruction_sha256": "7f38a9b7577866afb14319d6769502652a60c2f288c9df9d134134fb3242e539",
+      "confidence": "offline bytecode evidence; not runtime equivalence"
+    },
+    {
+      "id": "E28",
+      "observation": "freshness age and skew checks",
+      "synthetic_object_address": "0xf000006d6f00",
+      "instruction_offset_range": [
+        711,
+        1005
+      ],
+      "instruction_count": 131,
+      "first_file_offset": 1810495,
+      "last_file_offset": 1810789,
+      "decoded_instruction_sha256": "fd0b7eeb5b9e98c9102c1ff107ce07a9bc1c9a8f2d253dd4487805bcbce1b97c",
+      "confidence": "offline bytecode evidence; not runtime equivalence"
+    },
+    {
+      "id": "E29",
+      "observation": "pair config defaults",
+      "synthetic_object_address": "0xf0000073d800",
+      "instruction_offset_range": [
+        31,
+        209
+      ],
+      "instruction_count": 65,
+      "first_file_offset": 1931033,
+      "last_file_offset": 1931211,
+      "decoded_instruction_sha256": "f742c085a32faa1ad99dba98a41ceb7469cbbfe892b34db7ff0395f55aa57701",
+      "confidence": "offline bytecode evidence; not runtime equivalence"
+    },
+    {
+      "id": "E30",
+      "observation": "signal cache size",
+      "synthetic_object_address": "0xf000006c6500",
+      "instruction_offset_range": [
+        14,
+        31
+      ],
+      "instruction_count": 8,
+      "first_file_offset": 1795645,
+      "last_file_offset": 1795662,
+      "decoded_instruction_sha256": "380828841b7501f2e8689804f2e2f2c618fa027d7af151fc5efc618d7dbb5a7f",
+      "confidence": "offline bytecode evidence; not runtime equivalence"
+    }
+  ],
+  "heap_number_method": "tagged_size=8; serializer object offset 8; IEEE754 little endian; file offset = header 32 + raw chunk payload offset",
+  "heap_numbers": [
+    {
+      "address": "0xf000006c8200",
+      "file_offset": 1795473,
+      "bytes_hex": "bc89d897b2d29c3c",
+      "little_endian_float64": 1e-16
+    },
+    {
+      "address": "0xf000006dc600",
+      "file_offset": 1816143,
+      "bytes_hex": "000000000000f83f",
+      "little_endian_float64": 1.5
+    },
+    {
+      "address": "0xf0000074ed00",
+      "file_offset": 1948643,
+      "bytes_hex": "2db29defa7c6e33f",
+      "little_endian_float64": 0.618
+    },
+    {
+      "address": "0xf00000744500",
+      "file_offset": 1939818,
+      "bytes_hex": "9a9999999999b93f",
+      "little_endian_float64": 0.1
+    },
+    {
+      "address": "0xf00000744d00",
+      "file_offset": 1940310,
+      "bytes_hex": "9a9999999999f13f",
+      "little_endian_float64": 1.1
+    },
+    {
+      "address": "0xf00000746000",
+      "file_offset": 1941651,
+      "bytes_hex": "9a9999999999f13f",
+      "little_endian_float64": 1.1
+    },
+    {
+      "address": "0xf00000581d00",
+      "file_offset": 1438140,
+      "bytes_hex": "0000000000001640",
+      "little_endian_float64": 5.5
+    },
+    {
+      "address": "0xf00000582a00",
+      "file_offset": 1438811,
+      "bytes_hex": "9a9999999999b93f",
+      "little_endian_float64": 0.1
+    },
+    {
+      "address": "0xf00000755d00",
+      "file_offset": 1957756,
+      "bytes_hex": "cdcccccccccc2340",
+      "little_endian_float64": 9.9
+    },
+    {
+      "address": "0xf00000755e00",
+      "file_offset": 1957768,
+      "bytes_hex": "cdcccccccccc23c0",
+      "little_endian_float64": -9.9
+    },
+    {
+      "address": "0xf00000755f00",
+      "file_offset": 1957780,
+      "bytes_hex": "bac0e5b16664603f",
+      "little_endian_float64": 0.002001
+    },
+    {
+      "address": "0xf0000073d400",
+      "file_offset": 1929947,
+      "bytes_hex": "9a9999999999b93f",
+      "little_endian_float64": 0.1
+    }
+  ],
+  "limitations": [
+    "unresolved snapshot identities",
+    "incorrect high-level structuring observed",
+    "offline instruction verification is not runtime validation"
+  ]
+}

@@ -9,6 +9,15 @@ FundingResearchDecision = Literal["TRADE", "SMALL_TRADE", "WATCH", "NO_TRADE"]
 BasisAlignment = Literal["aligned", "neutral", "conflicted"]
 FormulaConfidence = Literal["formula", "predicted", "fallback_current", "missing", "uncertain"]
 PaperTradeStatus = Literal["OPEN", "CLOSED"]
+FundingOpportunityType = Literal[
+    "BASIS_AND_FUNDING_ALIGNED",
+    "STRONG_FUNDING_NEAR_SETTLEMENT",
+    "INTERVAL_MISMATCH",
+    "FORMULA_DIVERGENCE",
+    "BASIS_CARRY_CONFLICTED",
+    "BASIS_MEAN_REVERSION",
+    "PURE_FUNDING_SPREAD",
+]
 
 
 class FundingResearchSettings(BaseModel):
@@ -41,6 +50,13 @@ class FundingResearchSettings(BaseModel):
     settlement_crowding_minutes: float = Field(default=15, ge=0)
     min_minutes_to_settlement: float = Field(default=1, ge=0)
     max_minutes_to_settlement: float = Field(default=240, gt=0)
+    strong_funding_pct: float = Field(default=0.6, ge=0)
+    near_settlement_minutes: float = Field(default=45, ge=0)
+    small_basis_threshold_pct: float = Field(default=0.25, ge=0)
+    interval_mismatch_min_hours: float = Field(default=1, ge=0)
+    formula_divergence_min_funding_pct: float = Field(default=0.25, ge=0)
+    conflicted_basis_min_check_pct: float = Field(default=0.3, ge=0)
+    min_conflicted_reward_risk_ratio: float = Field(default=1.0, ge=0)
 
 
 class FundingFormulaEstimate(BaseModel):
@@ -66,16 +82,25 @@ class FundingResearchDepthStats(BaseModel):
 
 
 class FundingResearchCandidate(BaseModel):
+    id: str = ""
     symbol: str
     long_exchange: str
     short_exchange: str
+    long_formula_family: str = "unknown"
+    short_formula_family: str = "unknown"
     long_funding_pct: float | None
     short_funding_pct: float | None
+    long_funding_interval_hours: float | None = None
+    short_funding_interval_hours: float | None = None
+    long_next_settlement_time: datetime | None = None
+    short_next_settlement_time: datetime | None = None
     expected_net_funding_pct: float | None
     expected_basis_change_pct: float
     estimated_cost_pct: float
     risk_buffer_pct: float
     ev_pct: float | None
+    adverse_basis_pct: float = 0.0
+    conflicted_reward_risk_ratio: float | None = None
     score: float
     decision: FundingResearchDecision
     basis_alignment: BasisAlignment
@@ -86,6 +111,11 @@ class FundingResearchCandidate(BaseModel):
     next_settlement_time: datetime | None
     minutes_to_settlement: float | None
     funding_source: FormulaConfidence
+    primary_opportunity_type: FundingOpportunityType = "PURE_FUNDING_SPREAD"
+    opportunity_types: list[FundingOpportunityType] = Field(default_factory=list)
+    opportunity_reasons: list[str] = Field(default_factory=list)
+    uses_gate: bool = False
+    uses_hyperliquid: bool = False
     depth_stats: FundingResearchDepthStats | None = None
     risk_labels: list[str]
     reasons: list[str]
@@ -102,14 +132,19 @@ class FundingResearchPaperTrade(BaseModel):
     symbol: str
     long_exchange: str
     short_exchange: str
+    primary_opportunity_type: FundingOpportunityType = "PURE_FUNDING_SPREAD"
+    opportunity_types: list[FundingOpportunityType] = Field(default_factory=list)
     opened_at: datetime
     closed_at: datetime | None = None
+    last_observed_at: datetime | None = None
     open_long_basis_pct: float | None = None
     open_short_basis_pct: float | None = None
     open_basis_diff_pct: float | None = None
     close_long_basis_pct: float | None = None
     close_short_basis_pct: float | None = None
     close_basis_diff_pct: float | None = None
+    unrealized_basis_change_pct: float | None = None
+    unrealized_pnl_pct: float | None = None
     expected_net_funding_pct: float | None = None
     expected_basis_change_pct: float = 0.0
     expected_ev_pct: float | None = None
@@ -122,6 +157,17 @@ class FundingResearchPaperTrade(BaseModel):
     max_adverse_ev_pct: float | None = None
     exit_reason: str | None = None
     source_candidate: FundingResearchCandidate
+
+
+class FundingResearchOpportunityTypeSummary(BaseModel):
+    opportunity_type: FundingOpportunityType
+    total_trades: int
+    closed_trades: int
+    winners: int
+    losers: int
+    win_rate_pct: float | None = None
+    total_realized_pnl_pct: float
+    average_realized_pnl_pct: float | None = None
 
 
 class FundingResearchPaperTradeSummary(BaseModel):
@@ -139,6 +185,7 @@ class FundingResearchPaperTradeSummary(BaseModel):
     max_win_pct: float | None = None
     max_loss_pct: float | None = None
     average_score: float | None = None
+    by_opportunity_type: list[FundingResearchOpportunityTypeSummary] = Field(default_factory=list)
 
 
 class FundingResearchLegacyBacktestSummary(BaseModel):

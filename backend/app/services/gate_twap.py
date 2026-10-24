@@ -32,7 +32,9 @@ GATE_API_BASE = "https://api.gateio.ws/api/v4"
 
 
 class GateTwapError(RuntimeError):
-    pass
+    def __init__(self, message: str, status_code: int | None = None):
+        self.status_code = status_code
+        super().__init__(message)
 
 
 def utc_now() -> datetime:
@@ -110,16 +112,25 @@ class GateTwapClient:
     ):
         self.credentials = credentials or GateCredentials.from_env()
         self.base_url = base_url.rstrip("/")
-        self._own_client = client is None
-        self.client = client or httpx.AsyncClient(timeout=httpx.Timeout(10.0), follow_redirects=True)
+        self._client = client
+        self._owns_client = client is None
 
     @property
     def has_credentials(self) -> bool:
         return self.credentials.available
 
     async def aclose(self) -> None:
-        if self._own_client:
-            await self.client.aclose()
+        if self._client is not None and self._owns_client:
+            await self._client.aclose()
+
+    @property
+    def client(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                timeout=httpx.Timeout(10.0),
+                follow_redirects=True,
+            )
+        return self._client
 
     @property
     def sign_prefix(self) -> str:
@@ -175,7 +186,10 @@ class GateTwapClient:
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            raise GateTwapError(f"Gate API {method} {path} failed: {response.text}") from exc
+            raise GateTwapError(
+                f"Gate API {method} {path} failed (HTTP {response.status_code})",
+                status_code=response.status_code,
+            ) from exc
         if not response.content:
             return None
         return response.json()
@@ -200,6 +214,17 @@ class GateTwapClient:
 
     async def get_position(self, settle: str, contract: str) -> dict[str, Any]:
         return await self.request("GET", f"/futures/{settle}/positions/{contract}", auth=True)
+
+    async def list_positions(self, settle: str) -> list[dict[str, Any]]:
+        return await self.request(
+            "GET",
+            f"/futures/{settle}/positions",
+            params={"holding": "true"},
+            auth=True,
+        )
+
+    async def list_contracts(self, settle: str) -> list[dict[str, Any]]:
+        return await self.request("GET", f"/futures/{settle}/contracts")
 
     async def create_futures_order(self, settle: str, order: dict[str, Any]) -> dict[str, Any]:
         return await self.request("POST", f"/futures/{settle}/orders", body=order, auth=True)
