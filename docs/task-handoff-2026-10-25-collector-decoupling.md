@@ -85,3 +85,18 @@ python -c "import app.main"
 - 既有未跟踪产物包括 `docs/architecture-review-2026-10-23-claude.md`、本次规格文件、其他交接、`.worktrees/`、`output/` 和多个测试目录，全部保留。原有部分 `.pytest_*` 存在受限 ACL，未尝试清理。
 - 本任务新增的模块、测试和本交接仍未跟踪；测试临时目录按命令保留。没有删除数据库、日志或备份。
 - 下一步仅为 Claude 验收与提交；后续 S6 或其他模块另建任务，不扩展本任务。
+
+## 线上部署结果（2026-10-25，Claude 执行，用户批准）
+
+- Claude 验收：S2 新测试 + 9 个回归文件 211 passed（离线 guard），`import app.main` 通过；本地提交 `3be4e8f`。
+- 推送 `codex/collector-decoupling`；部署分支 `codex/frontend-localization-polish` 由 `4984b6d` 快进到 `3be4e8f95cd911161fb86df5aa30a724dee0ae8d`。CI run 40110723584 success，前后端 sha 镜像 manifest 通过。
+- 部署脚本 `output/s2-isolated-deploy-20261025.sh`（与 S1 包装字节一致，SHA256 `8345b75e…`），服务器日志 `output/s2-deployment-20261025.log`，00:31（CST）完成。
+- 备份（integrity_check=ok，容器与宿主机 SHA256 一致）：
+  - 主库 `backups/radar-before-3be4e8f95cd9-20261024T161720Z.db`，SHA256 `80f15b1a90a985d63481996f2e3bbaf122d2235e498797d5340ef095f518289a`
+  - 路线库 `backups/squeeze-route-before-3be4e8f95cd9-20261024T161720Z.db`，SHA256 `03fb1799cae24e6c7e9800c5bd1dbc79f15c4714a23640cc251fe1194b0ca3b3`
+  - 主库备份耗时约 12.5 分钟（S1 时约 1 分钟）。推测原因：后端频繁 OOM 重启时写库，SQLite 在线备份遇到源库写入要从头复制。
+- 线上验证：HEAD = 3be4e8f，tracked clean；`live` 200、`ready` 200、`detail` 无密码 401、旧 `/api/health` status=ok、exchange_errors={}。
+- 历史采样（只读隔离容器查 `opportunity_history.observed_at`）：上线后间隔 129/125/125/103/124/125/127/126/138 秒；上线前中位数 121 秒。最后一个 19 秒间隔是 OOM 重启后的首次采样（旧行为相同）。
+- 观察：`history-recorder` 在 25 分钟内失败 4 次，错误为 `sqlite3.OperationalError: database is locked`。同时段指数价采样等其他写库操作也报同样错误，且集中在 OOM kill 前约 1 分钟（16:49–16:50Z，OOM 在 16:50:21Z）。判断是内存打满导致的锁超时，不是 S2 引起的。S2 下只有该代历史失败，采集不受影响。
+- **既有严重问题**：后端自 10-23 起每小时被 cgroup OOM（768MiB）杀 5–16 次，被杀时 anon-rss 约 780MB；重启后约 350MB，几分钟内涨满。S1、S2 前后频率不变。下一步应先做 M1 内存剖析（优先于 S3）。
+- 回滚：`.env` 设 `COLLECTOR_POST_PUBLISH_MODE=inline` 后重启，或 revert `3be4e8f`。
