@@ -977,7 +977,14 @@ def create_app(
         announcement_provider = None
         if start_collector:
             _start_background_task(supervisor, lambda: app.state.fs_monitor.run(stop_event), name="fs-monitor")
-            _start_background_task(supervisor, lambda: app.state.market_identity_catalog.run(stop_event), name="market-identity-catalog")
+            _start_background_task(
+                supervisor,
+                lambda: app.state.market_identity_catalog.run(
+                    stop_event,
+                    startup_delay_seconds=app_settings.market_identity_catalog_startup_delay_seconds,
+                ),
+                name="market-identity-catalog",
+            )
             exchange_adapters = default_exchange_adapters()
             app.state.market_validation.set_adapters(exchange_adapters)
             history_recorder = OpportunityHistoryRecorder(

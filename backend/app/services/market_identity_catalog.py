@@ -470,7 +470,12 @@ class OfficialMarketIdentityCatalog:
             "checked_at": datetime.now(UTC).isoformat(),
         }
 
-    async def run(self, stop):
+    async def run(self, stop, startup_delay_seconds=300):
+        if startup_delay_seconds > 0:
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=startup_delay_seconds)
+            except TimeoutError:
+                pass
         while not stop.is_set():
             try:
                 await self.refresh()

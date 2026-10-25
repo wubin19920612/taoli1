@@ -128,9 +128,12 @@ class MarketValidationService:
         except (httpx.HTTPError, ValueError, KeyError, TypeError):
             self.fx_retry_at = datetime.now(UTC) + timedelta(seconds=30)
 
-    def annotate(self, row, now=None):
+    def _annotate_base(self, row, now=None):
         now = utc(now or datetime.now(UTC))
-        result = self._apply_fx(self.registry.annotate(row, now), now)
+        return self._apply_fx(self.registry.annotate(row, now), now)
+
+    def annotate(self, row, now=None):
+        result = self._annotate_base(row, now)
         return result.model_copy(
             update={"identity_collision": row.symbol in self.collision_symbols}
         )
@@ -185,7 +188,7 @@ class MarketValidationService:
         if unknown:
             await self.repository.discover(unknown)
         annotated = [
-            self._cached_book(self.annotate(row, now), now, risk.stale_after_seconds)
+            self._cached_book(self._annotate_base(row, now), now, risk.stale_after_seconds)
             for row in markets
         ]
         assets_by_symbol = {}
@@ -202,7 +205,9 @@ class MarketValidationService:
             symbol for symbol, kinds in kinds_by_symbol.items() if len(kinds) > 1
         )
         annotated = [
-            row.model_copy(update={"identity_collision": row.symbol in self.collision_symbols})
+            row
+            if row.identity_collision == (row.symbol in self.collision_symbols)
+            else row.model_copy(update={"identity_collision": row.symbol in self.collision_symbols})
             for row in annotated
         ]
         if self.collision_symbols:
