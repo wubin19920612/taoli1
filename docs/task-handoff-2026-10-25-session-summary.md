@@ -69,3 +69,11 @@
 - Claude 复跑全量：1852 passed。生产容器里能读到 `/sys/fs/cgroup/memory.max`（1073741824）。
 - §3.1 结论：富化循环的 `fetch_batches` 会一直持有已完成任务的结果；最后一批在 600 秒等待期间一直留着；`localization._missing_until` 没有全表过期清理。本机样本峰值约 1MB，解释不了线上 +8~73MB，需要靠线上普查确认。
 - 上线步骤（需用户批准）：推送 `8721fef` 到部署分支 → CI → 生产 `.env` 增加 `MEMORY_CENSUS_ENABLED=true`（先备份）→ 部署 → 采 1 小时 → 关闭普查。
+
+## 9 M2-2 上线与暂停点（2026-10-25 23:31 CST，用户去休息）
+
+- 生产：`8721fef`（M2-2 普查代码），23:13 部署。第一次部署在 SQLite 备份这步失败（运行 19 分钟后报 `attempt to write a readonly database`，服务未受影响；Claude 删除了这次失败留下的 0 字节备份），重试约 2 分钟成功。日志：`output/m2census-deployment-20261025{,-retry}.log`。
+- 普查已于 23:30 关闭：`.env` 中删除了 `MEMORY_CENSUS_ENABLED`（开启前备份 `backups/env-before-census-20261025T144539Z`，关闭前备份 `backups/env-before-census-off-20261025T153008Z`），只重建了后端，镜像不变，状态 healthy。探针仍开着。3 轮普查的原始数据：服务器 `output/m2census-probe-20261025.log`。
+- **普查缺陷（下一步首先要修）**：`_Budget.remaining` 按遍历次数扣减（重复引用也算），60 万预算在只访问了约 7.3 万个不重复对象时就用光了，只有 `snapshot_store._markets`（9410 条，被截断前约 17MB）有数据，其余目标全部被截断，显示 0。修复方向：对象预算改按不重复对象计数（集合大小才决定内存）；遍历次数只受时间预算约束，或者另设一个更大的遍历上限。开销表现良好：每轮阻塞约 680ms，`census_rss_delta_mb=0`，没有跳过、没有错误，0 OOM。
+- **新发现（S6）**：`radar.db` 814MB，`radar.db-wal` **174MB**，checkpoint 跟不上，很可能是备份变慢、失败的原因。每次部署的备份约 800MB。
+- 待办（按顺序）：① 修复普查预算 → 再上线采 1 小时 → 出 M2-3 清单；② S6 WAL/checkpoint 检查；③ RuntimeError 修复（M2-1 交接 §3.1）；④ S4 备份任务书。
