@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -392,6 +393,9 @@ class TradeAvailabilityService:
         adapters: list[ExchangeAdapter],
         hyperliquid_service: HyperliquidTradeStatusService,
         client: httpx.AsyncClient | None = None,
+        *,
+        max_entries: int = 128,
+        retention_seconds: float = 120,
     ) -> None:
         self.store = store
         self.adapters = {adapter.name.lower(): adapter for adapter in adapters}
@@ -410,7 +414,9 @@ class TradeAvailabilityService:
             trust_env=True,
         )
         self._owns_client = client is None
-        self._cache: dict[str, tuple[datetime, Any]] = {}
+        self._cache: OrderedDict[str, tuple[datetime, datetime, Any]] = OrderedDict()
+        self._cache_max_entries = max_entries
+        self._cache_retention_seconds = retention_seconds
         self._cache_lock = asyncio.Lock()
 
     async def aclose(self) -> None:
@@ -432,8 +438,10 @@ class TradeAvailabilityService:
         key = cache_key or url
         async with self._cache_lock:
             cached = self._cache.get(key)
+            # Reader TTL controls freshness; expires_at is only a retention deadline.
             if cached and now - cached[0] < timedelta(seconds=cache_seconds):
-                return cached[1]
+                self._cache.move_to_end(key)
+                return cached[2]
         last_error: Exception | None = None
         for attempt in range(2):
             try:
@@ -441,7 +449,13 @@ class TradeAvailabilityService:
                 response.raise_for_status()
                 payload = response.json()
                 async with self._cache_lock:
-                    self._cache[key] = (datetime.now(UTC), payload)
+                    stored_at = datetime.now(UTC)
+                    expires_at = stored_at + timedelta(
+                        seconds=max(cache_seconds, self._cache_retention_seconds),
+                    )
+                    self._cache[key] = (stored_at, expires_at, payload)
+                    self._cache.move_to_end(key)
+                    self._prune(stored_at)
                 return payload
             except (httpx.HTTPError, ValueError) as exc:
                 last_error = exc
@@ -449,6 +463,37 @@ class TradeAvailabilityService:
                     await asyncio.sleep(0.2)
         detail = f"{last_error.__class__.__name__}: {last_error}" if last_error else "unknown error"
         raise RuntimeError(detail) from last_error
+
+    def _prune(self, now: datetime) -> None:
+        """Prune retention expiry, then LRU overflow; caller holds _cache_lock."""
+        expired = [key for key, (_, expires_at, _) in self._cache.items() if expires_at <= now]
+        for key in expired:
+            del self._cache[key]
+        while self._cache and len(self._cache) > self._cache_max_entries:
+            self._cache.popitem(last=False)
+
+    def cache_stats(self) -> dict[str, Any]:
+        """Read resident counts on the service event loop without exposing raw keys.
+
+        This synchronous method and locked cache mutations do not suspend, so
+        another coroutine cannot mutate the cache during this read.
+        """
+        counts: dict[str, int] = {}
+        for key in self._cache:
+            prefix, separator, _ = key.partition(":")
+            if separator and prefix in EXCHANGE_ORDER:
+                category = f"{prefix}:"
+            elif key.startswith(("https://", "http://")):
+                category = "url"
+            else:
+                category = "other"
+            counts[category] = counts.get(category, 0) + 1
+        return {
+            "entries": len(self._cache),
+            "keys_sample": [
+                {"prefix": prefix, "count": count} for prefix, count in sorted(counts.items())
+            ],
+        }
 
     async def fetch_status(
         self,
