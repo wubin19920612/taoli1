@@ -90,6 +90,7 @@ class MemoryProbe:
         interval_seconds: float = 10, clock: Callable[[], float] = time.monotonic,
         census_targets: list["CensusTarget"] | None = None,
         census_interval_seconds: float = 300,
+        census_max_objects: int = 600_000,
     ) -> None:
         self.store = store
         self.supervisor = supervisor
@@ -100,6 +101,7 @@ class MemoryProbe:
         self._iterations = self._iteration_times()
         self.census_targets = census_targets
         self.census_interval_seconds = census_interval_seconds
+        self.census_max_objects = census_max_objects
 
     def _iteration_times(self) -> dict:
         # Keep only task names and timestamps, never task results or snapshots.
@@ -158,8 +160,13 @@ class MemoryProbe:
                 try:
                     from app.runtime.cache_census import run_census
 
-                    result = run_census(self.census_targets)
-                    _log({**result, "rss_anon_mb": read_process_status()["rss_anon_mb"]})
+                    rss_before = read_process_status()["rss_anon_mb"]
+                    result = run_census(self.census_targets, max_objects=self.census_max_objects)
+                    rss_after = read_process_status()["rss_anon_mb"]
+                    _log({**result, "rss_anon_mb": rss_after, "census_rss_delta_mb": (
+                        rss_after - rss_before
+                        if rss_after is not None and rss_before is not None else None
+                    )})
                 except Exception:  # noqa: BLE001 - census cannot disrupt sampling.
                     _log({"census_errors": 1})
                 next_census = self.clock() + self.census_interval_seconds

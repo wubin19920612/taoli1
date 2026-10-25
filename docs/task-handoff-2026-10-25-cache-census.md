@@ -114,3 +114,51 @@ This table was written before tests and implementation and corrected during the 
 Local only. No push, production backup or deployment. A separate task will decide M2-3 and production acceptance. Fake local measurements cannot establish production RSS attribution.
 
 保留本任务生成的未跟踪测试目录 `backend/.pytest_m2_2/`、`backend/.pytest_m2_2_full/`、`backend/.pytest_m2_2_evidence/`；均不暂存。没有覆盖其他任务产物。依照用户六文件范围限制，交接集中在本文件，不修改 docs/next-task.md。
+
+## 验收打回修复
+
+本轮基于 `codex/m2-2-cache-census` 的 `f81ea09`，按用户 2026-10-25 的打回要求修复普查自身的临时内存风险。本节替代前文关于 own/unique 双口径、默认 200 万访问上限、排序和配置的旧说明；前文测试与测量保留为上一次提交的历史证据。仅修改 `cache_census.py`、`memory_probe.py`、`config.py`、`test_cache_census.py`、本交接，以及 `main.py` 一行新增传参。本轮仅新建本地提交，不 amend、不 push、不连接或部署生产。
+
+### 实现
+
+- 删除逐目标 local 集合和独立 own 测量；整轮只创建一个 shared visited 集合。命中已访问 id 时直接跳过其子图，共享对象仅归属第一个目标。体积只输出 `unique_kb`，删除 `own_bytes`、`own_kb`、`unique_bytes`，按 `unique_kb` 降序。LRU 仍只输出条目数、`unique_kb=null`。
+- 登记表稳定调整为全部 `snapshot_store.*`、全部 `market_collector.*`（含 adapters），再到其他目标；相同优先级保留原顺序，使快照优先归属原始持有者。展示排序发生在遍历后，不改变归属。
+- `run_census` 和 `MemoryProbe` 默认上限均为 **600,000**；新增 `Settings.memory_census_max_objects` / `MEMORY_CENSUS_MAX_OBJECTS`，默认 600000，必须为正整数，拒绝零、负数、小数及布尔值。环境变量用 int 解析后同样校验；`main.py` 仅新增 `census_max_objects=app_settings.memory_census_max_objects` 一行，探针再传给 `run_census`。
+- 保留整轮访问次数预算（重复引用也消耗）及 3 秒时间预算，因此 visited 集合最多有 max_objects 个 id。每目标 `objects` 为该目标新增的不同对象数；整轮 `visited_objects` 为清理前共享集合大小，正常情况下等于各目标 objects 之和。
+- 每轮先读 cgroup v2 的 `/sys/fs/cgroup/memory.max` 与 `memory.current`。余量严格小于 `max_objects * 80 + 64 * 1024**2` 字节时，在创建 visited、调用任何 getter 前返回 `census_skipped=low_headroom`、`headroom_mb`、`visited_objects=0`。默认阈值为 **115,108,864 B（109.7764 MiB）**，等于阈值时允许执行。读取失败、无效值或 `max` 退化为不检查。
+- 探针在普查前后各读取一次 `rss_anon_mb`，新增 `census_rss_delta_mb=after-before`；任一读数缺失时为 null。低余量跳过也沿用 `_log` 输出 `memory_probe=1`、跳过原因、余量、visited 数及 RSS 字段。关闭普查时不执行这些读取。
+- 共享集合及临时根引用在返回前释放；RSS delta 是释放后的净变化，**不代表轮内瞬时峰值**。余量门槛是预估保护，cgroup 不可读时按要求不拦截；本地测量不能代替 Linux 生产验收。
+
+### 60 万对象集合开销实测
+
+本机 **Windows 11 / CPython 3.12.10 / 64 位**。先创建并保持 600,000 个不同 `object()` 存活，再启动本地 tracemalloc，仅逐个向一个集合加入 `id(obj)`；对象列表及对象本体不计入记账成本。集合浅大小用 `sys.getsizeof(visited)`，整数大小为逐个 `sys.getsizeof(identity)` 求和。
+
+| 项目 | 实测字节 |
+|---|---:|
+| 集合自身及哈希表 | 16,777,432 |
+| 600,000 个 id 整数（每个 32 B） | 19,200,000 |
+| 集合 + id 合计 | **35,977,432（34.3108 MiB）** |
+| tracemalloc 当前 / 峰值增量 | 35,977,432 / 35,977,480 |
+| 保护公式中的记账预估（600000 × 80） | 48,000,000（45.7764 MiB） |
+
+该测量只覆盖 visited 记账集合及其增长过程，不含遍历栈、日志序列化、业务对象或其他进程/原生分配，不是生产 RSS 测量。tracemalloc 仅用于本机测量，没有加入生产代码。
+
+### 测试与后续交接
+
+新增/调整测试覆盖：只有一个集合、共享对象及子图只归属第一个目标、unique 排序、登记优先级、visited 计数、默认值与环境变量及 main 接线、正整数校验、两种对象上限下余量阈值的 -1/0/+1 字节边界、跳过前不构造集合或调用 getter、读取失败和无限额时继续执行，以及正常/跳过两条路径的实际 JSON 日志与 RSS 正/负/null 差值。
+
+最终指定四文件回归：**131 passed in 22.93s**，退出码 0。cwd 为 `backend`：
+
+```powershell
+python -m pytest -q tests/test_cache_census.py tests/test_memory_probe.py tests/test_config.py tests/test_task_supervisor.py --basetemp=.pytest_m2_2b_final --tb=short
+```
+
+随后后端全量：**1852 passed, 12 warnings in 91.25s**，退出码 0；12 项均为既有 `datetime.utcnow()` 弃用警告。cwd 同为 `backend`：
+
+```powershell
+python -m pytest -q --basetemp=.pytest_m2_2b_full --tb=short
+```
+
+全部 pytest 都显式使用 worktree 内 basetemp 并保持默认离线护栏。RED 在仓库根目录运行时，除新行为预期失败外，两个既有 subprocess 导入测试因 cwd 无法导入 app 而失败；最终指定回归已在 backend 目录运行并全部通过，没有修改这些既有测试。
+
+保留原有三个未跟踪目录及本轮新增的 `backend/.pytest_m2_2b_red/`、`backend/.pytest_m2_2b/`、`backend/.pytest_m2_2b_final/`、`backend/.pytest_m2_2b_full/`，不暂存测试产物。没有生产备份、部署或线上验证。后续请在独立验收任务验证 Linux 实际 RSS/余量、跳过日志、截断比例及 census_ms p95，再决定是否开启生产普查或进入 M2-3。

@@ -1,9 +1,9 @@
 """Bounded, synchronous estimates. Output contains static labels and numbers only.
 
-Sizes describe reachable Python allocations, not RSS or allocator arenas. Each
-target gets an independent size; shared allocations are attributed to the first
-target visited. The object budget counts traversal visits (including duplicates)
-across the entire run, so even a huge list of one repeated object is bounded.
+Sizes describe reachable Python allocations, not RSS or allocator arenas. One
+visited set attributes shared allocations to the first target visited. The
+object budget counts traversal visits (including duplicates) across the entire
+run, so even a huge list of one repeated object is bounded.
 """
 
 import asyncio
@@ -67,50 +67,72 @@ def _children(obj: object) -> Iterator[object]:
                         pass
 
 
-def _measure(obj: object, budget: _Budget, shared: set[int]) -> tuple[int, int, int, bool, bool]:
-    own = unique = objects = 0
-    local: set[int] = set()
+def _measure(obj: object, budget: _Budget, shared: set[int]) -> tuple[int, int, bool, bool]:
+    unique = objects = 0
     stack = [iter((obj,))]
     while stack:
         # Check even when iterating duplicates or exhausted child iterators.
         if budget.exhausted():
-            return own, unique, objects, True, False
+            return unique, objects, True, False
         try:
             current = next(stack[-1])
         except StopIteration:
             stack.pop()
             continue
         except Exception:  # noqa: BLE001 - preserve partial attribution on a bad child.
-            return own, unique, objects, True, True
+            return unique, objects, True, True
         budget.remaining -= 1
         identity = id(current)
-        if identity in local:
+        if identity in shared:
             continue
         try:
             amount = sys.getsizeof(current)
         except Exception:  # noqa: BLE001 - return only numeric evidence.
-            return own, unique, objects, True, True
-        local.add(identity)
-        own += amount
+            return unique, objects, True, True
+        shared.add(identity)
+        unique += amount
         objects += 1
-        if identity not in shared:
-            shared.add(identity)
-            unique += amount
         stack.append(iter(_children(current)))
-    return own, unique, objects, False, False
+    return unique, objects, False, False
 
 
 def deep_size(obj: object, *, max_objects: int, deadline: float) -> tuple[int, int, bool]:
     """Return estimated bytes, distinct objects, truncation; never recurse."""
-    own, _, objects, truncated, _ = _measure(obj, _Budget(max_objects, deadline), set())
-    return own, objects, truncated
+    unique, objects, truncated, _ = _measure(obj, _Budget(max_objects, deadline), set())
+    return unique, objects, truncated
+
+
+def _read_cgroup_file(path: str) -> str:
+    with open(path, encoding="ascii") as source:
+        return source.read().strip()
+
+
+def read_cgroup_headroom_bytes() -> int | None:
+    """Read the cgroup v2 limit and usage; unavailable/unlimited means no gate."""
+    try:
+        maximum = _read_cgroup_file("/sys/fs/cgroup/memory.max")
+        if maximum.strip() == "max":
+            return None
+        maximum = int(maximum)
+        current = int(_read_cgroup_file("/sys/fs/cgroup/memory.current"))
+    except (OSError, UnicodeError, ValueError):
+        return None
+    if maximum <= 0 or current < 0:
+        return None
+    return maximum - current
 
 
 def run_census(
-    targets: list[CensusTarget], *, max_objects: int = 2_000_000,
+    targets: list[CensusTarget], *, max_objects: int = 600_000,
     budget_seconds: float = 3.0,
 ) -> dict:
     started = time.perf_counter()
+    headroom = read_cgroup_headroom_bytes()
+    # Reserve bookkeeping (IDs + set capacity/growth) and a further 64 MiB.
+    # Check before constructing the visited set or invoking any target getter.
+    if headroom is not None and headroom < max_objects * 80 + 64 * 1024 ** 2:
+        return {"census_skipped": "low_headroom", "headroom_mb": headroom / 1024 ** 2,
+                "visited_objects": 0}
     budget = _Budget(max_objects, time.monotonic() + budget_seconds)
     shared: set[int] = set()
     roots = []  # Prevent id reuse for containers returned temporarily by getters.
@@ -118,8 +140,7 @@ def run_census(
     errors = 0
     for target in targets:
         row = {
-            "name": target.name, "entries": None, "own_bytes": 0,
-            "unique_bytes": 0, "own_kb": 0.0, "unique_kb": 0.0,
+            "name": target.name, "entries": None, "unique_kb": 0.0,
             "objects": 0, "truncated": False,
         }
         rows.append(row)
@@ -133,26 +154,26 @@ def run_census(
                 continue
             roots.append(obj)
             if isinstance(obj, functools._lru_cache_wrapper):
-                row.update(entries=obj.cache_info().currsize, own_bytes=None,
-                           unique_bytes=None, own_kb=None, unique_kb=None)
+                row.update(entries=obj.cache_info().currsize, unique_kb=None)
                 continue
             if isinstance(obj, (dict, types.MappingProxyType, list, tuple, set, frozenset, deque)):
                 row["entries"] = len(obj)
-            own, unique, objects, truncated, failed = _measure(obj, budget, shared)
+            unique, objects, truncated, failed = _measure(obj, budget, shared)
             errors += int(failed)
-            row.update(own_bytes=own, unique_bytes=unique, own_kb=own / 1024,
-                       unique_kb=unique / 1024, objects=objects, truncated=truncated)
+            row.update(unique_kb=unique / 1024, objects=objects, truncated=truncated)
         except Exception:  # noqa: BLE001 - never serialize arbitrary exception data.
             errors += 1
             row["truncated"] = True
         finally:
             # Do not retain the last target through the next getter or probe sleep.
             obj = None
-    rows.sort(key=lambda row: row["own_bytes"] or 0, reverse=True)
+    rows.sort(key=lambda row: row["unique_kb"] or 0, reverse=True)
     # Include release of the potentially large bookkeeping set in blocking time.
+    visited_objects = len(shared)
     shared.clear()
     roots.clear()
-    result = {"cache_census": rows, "census_ms": (time.perf_counter() - started) * 1000}
+    result = {"cache_census": rows, "census_ms": (time.perf_counter() - started) * 1000,
+              "visited_objects": visited_objects}
     if errors:
         result["census_errors"] = errors
     return result
@@ -312,4 +333,8 @@ def build_census_targets(app_services: object) -> list[CensusTarget]:
         CensusTarget("config.get_settings", lambda: config.get_settings),
         CensusTarget("market_sessions.us_stock_session_close", lambda: market_sessions.us_stock_session_close),
     ))
+    # Shared snapshots belong to their primary stores/collector, including
+    # adapter caches, before secondary services or snapshot consumers see them.
+    priority = {"snapshot_store": 0, "market_collector": 1}
+    targets.sort(key=lambda target: priority.get(target.name.partition(".")[0], 2))
     return targets

@@ -1152,6 +1152,7 @@ def create_app(
                 store, supervisor, interval_seconds=app_settings.memory_probe_interval_seconds,
                 census_targets=census_targets,
                 census_interval_seconds=app_settings.memory_census_interval_seconds,
+                census_max_objects=app_settings.memory_census_max_objects,
             )
             _start_background_task(
                 supervisor, lambda: memory_probe.run(stop_event), name="memory-sampler",
