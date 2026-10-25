@@ -105,3 +105,10 @@ python -m pytest -q -p no:cacheprovider --basetemp=.pytest_m1c_<字母> -p s1_of
 - 离线测试：新增 + 回归 12 个文件，223 passed；`import app.main` 通过。
 - 共享对象检查：C1 在 `identity_collision` 不变时沿用原对象，`prepare` 的输出可能与输入（发布为 `all_markets`）共用对象。已搜索 `app/` 下所有对 `MarketSnapshot` 字段的赋值，结果只有 FS 自己的行对象（`fs_monitor.py`），没有原地修改市场快照的地方，所以安全。
 - 本机真实网络复测（`scratchpad/m1_stage_local.py`，4 轮）：`validation.prepare` 峰值从 57–59MB 降到 33.9MB；**整轮峰值仍约 104MB（修复前 101–106MB），没有下降**。整轮峰值出现在 prepare 之外（推测是轮询结果与新旧两代快照同时存活），而且本机数据噪声大（机会数 859 对 4058）。线上效果以探针数据为准。
+
+## 线上结果（2026-10-25，Claude）
+
+- 11:32 CST 上线 `f38ced1`（CI 40158318571 success，备份 integrity ok：主库 sha256 484d4a8a…，路线库 38ac4dca…），探针开启，`MALLOC_ARENA_MAX` 未设置。
+- 1 小时（11:34–12:34）：OOM **5 次**（基线 4 次）；平均存活约 10 分钟（基线约 15 分钟）；启动后 60 秒的跳涨 +192~198MB（基线 +229~237MB，C2 减少约 35MB）；平台期和 +7MB/分钟的斜率不变。
+- 结论：C1/C2 没有减少 OOM。整轮峰值来自身份校验以外的部分，持续增长来源仍未定位。C1/C2 保留（无副作用，启动跳涨略降）。
+- 主机内存（12:35）：总 1931MB，已用 1249MB，其中 backend 680MB、其他进程约 570MB；可用 497MB，无 swap。
