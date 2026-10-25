@@ -61,3 +61,11 @@
 - 部署日志 `output/m2s9-deployment-20261025.log`（这次启动时漏加 `; echo DEPLOY_EXIT=$?`，没有结束标志；容器已在目标 SHA 上、healthy）。
 - 探针 1 小时（17:57–18:58）：OOM 0、restarts 0。RSS 按 5 分钟统计：20 分钟后底部约 690→700MB，此后基本走平（每 5 分钟约 +1MB）；周期性尖峰 740–755MB，最高 785MB。基线（1024m 旧版）平台期约 740MB。**结论：底部约下降 30–40MB，在预期 30–70MB 的低端；尖峰没有改善**。大头仍在别处，按计划交给 M2-2 普查。
 - `聚合行情中未找到指定原始市场`：1 小时 230 次（约每分钟 4 次，和以前一样，符合预期，因为 M2-1 没改监控逻辑）。修复方向见 M2-1 交接 §3.1，是否立项待定。
+
+## 8 M2-2 缓存普查（已验收，未上线）
+
+- 分支 `codex/m2-2-cache-census`（worktree `.worktrees/m2-2-cache-census`）：`35a0669` 任务书 → `f81ea09` 普查 → `8721fef` 打回修复。基于生产版本 `d986ab0`，没有推送。
+- 第一版打回：每个目标单独一份 `local` 集合，再加一份全轮共享集合，200 万对象预算时普查临时占用约 280MB（Claude 在 Linux 上实测：200 万 id 的集合约 125MB），会把 1024m 撑爆。修复：只保留一份共享集合；对象预算默认 60 万（约 34MB，可用 `MEMORY_CENSUS_MAX_OBJECTS` 调整）；cgroup 余量小于“预算×80B+64MB”时跳过本轮；输出 `census_rss_delta_mb` 和 `visited_objects`。
+- Claude 复跑全量：1852 passed。生产容器里能读到 `/sys/fs/cgroup/memory.max`（1073741824）。
+- §3.1 结论：富化循环的 `fetch_batches` 会一直持有已完成任务的结果；最后一批在 600 秒等待期间一直留着；`localization._missing_until` 没有全表过期清理。本机样本峰值约 1MB，解释不了线上 +8~73MB，需要靠线上普查确认。
+- 上线步骤（需用户批准）：推送 `8721fef` 到部署分支 → CI → 生产 `.env` 增加 `MEMORY_CENSUS_ENABLED=true`（先备份）→ 部署 → 采 1 小时 → 关闭普查。
