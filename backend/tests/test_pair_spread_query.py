@@ -437,6 +437,9 @@ async def test_pair_spread_query_uses_large_intervals_as_historical_klines(
             close = 100 if exchange == "binance" else 101
             return [kline_at(end - timedelta(minutes=interval_minutes), close)]
 
+        async def _fetch_open_interest_history(self, *args, **kwargs):
+            return {}
+
     service = FakePairSpreadService()
     try:
         result = await service.query(
@@ -1063,6 +1066,9 @@ async def test_pair_spread_query_falls_back_to_available_window() -> None:
 
         async def _fetch_funding_history(self, exchange: str, symbol: str, start, end):
             return []
+
+        async def _fetch_open_interest_history(self, *args, **kwargs):
+            return {}
 
     service = FakePairSpreadService()
     try:

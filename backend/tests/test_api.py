@@ -18,6 +18,7 @@ from app.models.index_component import (
     IndexComponentWatchItem,
 )
 from app.models.market import MarketSnapshot, MarketType
+from app.models.market_identity import MarketKey, PairCapabilities, PairValidationResult
 from app.models.opportunity import Opportunity, OpportunityType
 from app.models.opportunity_radar import OpportunityRadarSettings
 from app.models.alert import AlertEvent, AlertRule
@@ -57,6 +58,7 @@ from app.models.settings import (
 )
 from app.services.astro_alerts import AstroAlertService
 from app.services.index_components import MultiIndexComponentProvider
+from app.services.market_validation_review import MarketValidationService
 from app.services.service_control import DockerServiceController, ServiceControlConfig, ServiceControlError
 from app.services.snapshot_store import SnapshotStore
 
@@ -249,8 +251,11 @@ class FakePhonePriceAlertRuleRepository:
 
 
 class FakeExchangeClient:
+    def __init__(self):
+        self.is_closed = False
+
     async def aclose(self) -> None:
-        return None
+        self.is_closed = True
 
 
 class FakeExchangeAdapter:
@@ -438,6 +443,47 @@ def make_market(symbol: str, exchange: str = "binance") -> MarketSnapshot:
     )
 
 
+@pytest.fixture
+def confirmed_market_validation(monkeypatch):
+    # These tests cover saved card settings, using seeded executable quotes.
+    # Keep the real planner/service while supplying confirmed identity results.
+    async def qualify(self, opportunity, risk, *, fresh=False):
+        now = datetime.now(UTC)
+        legs = [
+            MarketSnapshot(
+                symbol=opportunity.symbol,
+                base=opportunity.symbol.removesuffix("USDT"),
+                exchange=getattr(opportunity, f"{side}_exchange"),
+                market_type=getattr(opportunity, f"{side}_market_type"),
+                dex=getattr(opportunity, f"{side}_dex"),
+                raw_symbol=getattr(opportunity, f"{side}_raw_symbol") or opportunity.symbol,
+                bid=getattr(opportunity, f"{side}_bid"),
+                ask=getattr(opportunity, f"{side}_ask"),
+                volume_24h_usdt=getattr(opportunity, f"{side}_volume_24h_usdt"),
+                timestamp=now,
+            )
+            for side in ("buy", "sell")
+        ]
+        result = PairValidationResult(
+            identity_relation="same",
+            unit_status="verified",
+            quote_status="executable",
+            buy_market=MarketKey.from_snapshot(legs[0]),
+            sell_market=MarketKey.from_snapshot(legs[1]),
+            capabilities=PairCapabilities(
+                same_asset_opportunity=True,
+                strategy_alert=True,
+                automatic_card=True,
+                manual_card=True,
+            ),
+            validated_at=now,
+            expires_at=now + timedelta(minutes=5),
+        )
+        return result, *legs
+
+    monkeypatch.setattr(MarketValidationService, "qualify_opportunity", qualify)
+
+
 def test_health_endpoint() -> None:
     app = create_app()
     client = TestClient(app)
@@ -578,6 +624,8 @@ def test_collector_startup_uses_multi_exchange_index_component_provider(monkeypa
     monkeypatch.setattr("app.main.default_exchange_adapters", lambda: adapters)
     monkeypatch.setattr("app.main.run_collector_loop", AsyncMock())
     monkeypatch.setattr("app.main._run_alert_loop", AsyncMock())
+    # This test checks provider wiring; workers have their own lifecycle tests.
+    monkeypatch.setattr("app.main._start_background_task", Mock())
 
     app = create_app(
         settings=Settings(database_url="sqlite:///:memory:"),
@@ -3222,7 +3270,7 @@ def test_astro_preview_endpoint_returns_dry_run_pair_for_seeded_opportunity() ->
     assert any(item["field"] == "openPosition" for item in payload["assumptions"])
 
 
-def test_astro_preview_endpoint_uses_saved_card_defaults() -> None:
+def test_astro_preview_endpoint_uses_saved_card_defaults(confirmed_market_validation) -> None:
     store = SnapshotStore()
     store.set_opportunities([make_opportunity()])
     app = create_app(
@@ -3265,7 +3313,7 @@ def test_astro_preview_endpoint_uses_saved_card_defaults() -> None:
     ]
 
 
-def test_astro_preview_endpoint_uses_env_defaults_before_settings_are_saved() -> None:
+def test_astro_preview_endpoint_uses_env_defaults_before_settings_are_saved(confirmed_market_validation) -> None:
     store = SnapshotStore()
     store.set_opportunities([make_opportunity()])
     app = create_app(
@@ -3293,7 +3341,7 @@ def test_astro_preview_endpoint_uses_env_defaults_before_settings_are_saved() ->
     assert payload["pair"]["disableOpen"] is False
 
 
-def test_astro_preview_endpoint_uses_saved_defaults_even_when_they_match_model_defaults() -> None:
+def test_astro_preview_endpoint_uses_saved_defaults_even_when_they_match_model_defaults(confirmed_market_validation) -> None:
     store = SnapshotStore()
     store.set_opportunities([make_opportunity()])
     app = create_app(
@@ -3531,7 +3579,7 @@ def test_astro_manual_card_create_endpoint_warns_but_continues_when_order_book_v
     assert card_settings.max_trade_usdt == 80
 
 
-def test_astro_manual_card_create_endpoint_uses_saved_defaults_with_real_service() -> None:
+def test_astro_manual_card_create_endpoint_uses_saved_defaults_with_real_service(confirmed_market_validation) -> None:
     store = SnapshotStore()
     store.set_opportunities([make_opportunity()])
     app = create_app(
@@ -3581,7 +3629,7 @@ def test_astro_manual_card_create_endpoint_uses_saved_defaults_with_real_service
     assert client_backend.added[0]["disableOpen"] is False
 
 
-def test_live_pilot_auto_create_service_uses_pilot_settings_for_real_service() -> None:
+def test_live_pilot_auto_create_service_uses_pilot_settings_for_real_service(confirmed_market_validation) -> None:
     store = SnapshotStore()
     store.set_opportunities([make_opportunity()])
     app = create_app(

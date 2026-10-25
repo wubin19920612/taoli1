@@ -24,6 +24,8 @@ dev = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+addopts = '-m "not network"'
+markers = ["network: explicitly opted-in tests against real external services"]
 
 [tool.ruff]
 line-length = 100
