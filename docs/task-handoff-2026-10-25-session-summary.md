@@ -46,3 +46,11 @@
 - 用户授权 Claude 读写生产 `.env` 中与 M1 相关的键（`MEMORY_*`、`MALLOC_ARENA_MAX`）：改之前先备份到 `backups/env-before-*`，只 grep 指定的键，不输出其他内容。
 - 用户曾在对话里贴出 dashboard 密码，已建议轮换；Claude **不使用密码**访问 `/api/health/detail`。探针数据从 `docker logs taoli1-backend-1 | grep '"memory_probe":1'` 读取。
 - 已知的既有日志噪声：`trade_availability.py` 约每分钟 4 次 `RuntimeError: 聚合行情中未找到指定原始市场`（M2-1 中只读调查）。
+
+## 6 追加进展（2026-10-25 17:10–18:00）
+
+- Docker 清理已执行（用户授权）：回收 13.7G，磁盘剩 23G；13:38 重启后 0 OOM，RSS 平台约 741MB。
+- M2-1 已完成并验收：分支 `codex/m2-1-cache` @ `9560a36`（worktree `.worktrees/m2-1-cache`），只改 `trade_availability.py` + 新测试 + 交接；Claude 复跑 126 passed。RuntimeError 调查见 `docs/task-handoff-2026-10-25-trade-availability-cache.md` §3.1（三类原因，含 HL `dex` None/空串 vs `main`、monitor 二次匹配不 strip/lower、诊断错误被吞），是否另开修复任务待定。
+- S9 已完成并验收：分支 `codex/s9-test-gate` @ `e4e43b6`（worktree `.worktrees/s9-test-gate`）。后端全量 1745 passed / 93 秒（原 45 分钟，慢因是每个 client 重复解析 CA 证书）；离线护栏 Claude 亲测有效。本机跑测试要加 `--basetemp=<可写目录>`，否则 `pytest-of-wubin` 权限错误会造成 56 个 error。
+- 尚未验证：Docker 镜像构建（本机/WSL 无 docker）与 CI test job，只能推送部署分支后由 CI 验证。
+- 两个分支都没有推送。下一步：合并 M2-1+S9 → 推送部署分支（CI 先测试再构建）→ 部署 → 用探针采 1 小时做对比。推送和部署都需要用户批准。
