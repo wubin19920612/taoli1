@@ -54,3 +54,10 @@
 - S9 已完成并验收：分支 `codex/s9-test-gate` @ `e4e43b6`（worktree `.worktrees/s9-test-gate`）。后端全量 1745 passed / 93 秒（原 45 分钟，慢因是每个 client 重复解析 CA 证书）；离线护栏 Claude 亲测有效。本机跑测试要加 `--basetemp=<可写目录>`，否则 `pytest-of-wubin` 权限错误会造成 56 个 error。
 - 尚未验证：Docker 镜像构建（本机/WSL 无 docker）与 CI test job，只能推送部署分支后由 CI 验证。
 - 两个分支都没有推送。下一步：合并 M2-1+S9 → 推送部署分支（CI 先测试再构建）→ 部署 → 用探针采 1 小时做对比。推送和部署都需要用户批准。
+
+## 7 M2-1 + S9 上线结果（2026-10-25 17:57 CST 部署）
+
+- 部署：集成分支 `codex/deploy-m2-s9` = `d986ab0`（`c7a236e` 之上 cherry-pick M2-1 `e881412` + S9 `d986ab0`）。已推送到 `codex/frontend-localization-polish` 和同名功能分支。CI run 40182189353：test 4 分钟通过 → build backend/frontend 成功（S9 门禁与 lock 构建在 CI 上验证通过）。本地全量 1784 passed。
+- 部署日志 `output/m2s9-deployment-20261025.log`（这次启动时漏加 `; echo DEPLOY_EXIT=$?`，没有结束标志；容器已在目标 SHA 上、healthy）。
+- 探针 1 小时（17:57–18:58）：OOM 0、restarts 0。RSS 按 5 分钟统计：20 分钟后底部约 690→700MB，此后基本走平（每 5 分钟约 +1MB）；周期性尖峰 740–755MB，最高 785MB。基线（1024m 旧版）平台期约 740MB。**结论：底部约下降 30–40MB，在预期 30–70MB 的低端；尖峰没有改善**。大头仍在别处，按计划交给 M2-2 普查。
+- `聚合行情中未找到指定原始市场`：1 小时 230 次（约每分钟 4 次，和以前一样，符合预期，因为 M2-1 没改监控逻辑）。修复方向见 M2-1 交接 §3.1，是否立项待定。
