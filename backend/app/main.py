@@ -1143,8 +1143,15 @@ def create_app(
         if start_background_workers and app_settings.memory_probe_enabled:
             from app.runtime.memory_probe import MemoryProbe
 
+            census_targets = None
+            if app_settings.memory_census_enabled:
+                from app.runtime.cache_census import build_census_targets
+
+                census_targets = build_census_targets(app.state)
             memory_probe = MemoryProbe(
                 store, supervisor, interval_seconds=app_settings.memory_probe_interval_seconds,
+                census_targets=census_targets,
+                census_interval_seconds=app_settings.memory_census_interval_seconds,
             )
             _start_background_task(
                 supervisor, lambda: memory_probe.run(stop_event), name="memory-sampler",

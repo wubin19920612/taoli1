@@ -8,6 +8,10 @@ import sys
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.runtime.cache_census import CensusTarget
 
 from app.runtime.supervisor import TaskStatus, TaskSupervisor, distribution
 from app.services.pair_spread_query import realtime_cache_stats
@@ -84,6 +88,8 @@ class MemoryProbe:
     def __init__(
         self, store: SnapshotStore, supervisor: TaskSupervisor, *,
         interval_seconds: float = 10, clock: Callable[[], float] = time.monotonic,
+        census_targets: list["CensusTarget"] | None = None,
+        census_interval_seconds: float = 300,
     ) -> None:
         self.store = store
         self.supervisor = supervisor
@@ -92,6 +98,8 @@ class MemoryProbe:
         self._last_summary = clock()
         self._collections = [stat["collections"] for stat in gc.get_stats()]
         self._iterations = self._iteration_times()
+        self.census_targets = census_targets
+        self.census_interval_seconds = census_interval_seconds
 
     def _iteration_times(self) -> dict:
         # Keep only task names and timestamps, never task results or snapshots.
@@ -125,6 +133,10 @@ class MemoryProbe:
 
     async def run(self, stop_event: asyncio.Event) -> None:
         next_sample = self.clock()
+        next_census = (
+            next_sample + self.census_interval_seconds
+            if self.census_targets is not None else None
+        )
         while not stop_event.is_set():
             sampling = self.clock() >= next_sample
             try:
@@ -142,7 +154,18 @@ class MemoryProbe:
             if sampling:
                 self.supervisor.beat("memory-sampler", ok=ok)
                 next_sample = self.clock() + self.interval_seconds
+            if next_census is not None and self.clock() >= next_census:
+                try:
+                    from app.runtime.cache_census import run_census
+
+                    result = run_census(self.census_targets)
+                    _log({**result, "rss_anon_mb": read_process_status()["rss_anon_mb"]})
+                except Exception:  # noqa: BLE001 - census cannot disrupt sampling.
+                    _log({"census_errors": 1})
+                next_census = self.clock() + self.census_interval_seconds
             delay = max(0.001, min(next_sample, self._last_summary + 60) - self.clock())
+            if next_census is not None:
+                delay = max(0.001, min(delay, next_census - self.clock()))
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=delay)
             except TimeoutError:

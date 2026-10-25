@@ -19,6 +19,8 @@ class Settings:
     poll_interval_seconds: float = 5.0
     memory_probe_enabled: bool = False
     memory_probe_interval_seconds: float = 10.0
+    memory_census_enabled: bool = False
+    memory_census_interval_seconds: float = 300.0
     memory_tracemalloc_seconds: float = 0.0
     market_identity_catalog_startup_delay_seconds: float = 300.0
     collector_post_publish_mode: Literal["background", "inline"] = "background"
@@ -78,6 +80,8 @@ class Settings:
             raise ValueError("market_identity_catalog_startup_delay_seconds must be finite and nonnegative")
         if not math.isfinite(self.memory_probe_interval_seconds) or self.memory_probe_interval_seconds <= 0:
             raise ValueError("memory_probe_interval_seconds must be finite and positive")
+        if not math.isfinite(self.memory_census_interval_seconds) or self.memory_census_interval_seconds <= 0:
+            raise ValueError("memory_census_interval_seconds must be finite and positive")
         if not math.isfinite(self.memory_tracemalloc_seconds) or self.memory_tracemalloc_seconds < 0:
             raise ValueError("memory_tracemalloc_seconds must be finite and nonnegative")
         if self.collector_post_publish_mode not in {"background", "inline"}:
@@ -183,6 +187,8 @@ def get_settings() -> Settings:
         poll_interval_seconds=float(os.getenv("POLL_INTERVAL_SECONDS", "5")),
         memory_probe_enabled=bool_env("MEMORY_PROBE_ENABLED", False),
         memory_probe_interval_seconds=float(os.getenv("MEMORY_PROBE_INTERVAL_SECONDS", "10")),
+        memory_census_enabled=bool_env("MEMORY_CENSUS_ENABLED", False),
+        memory_census_interval_seconds=float(os.getenv("MEMORY_CENSUS_INTERVAL_SECONDS", "300")),
         memory_tracemalloc_seconds=float(os.getenv("MEMORY_TRACEMALLOC_SECONDS", "0")),
         market_identity_catalog_startup_delay_seconds=float(
             os.getenv("MARKET_IDENTITY_CATALOG_STARTUP_DELAY_SECONDS", "300")
