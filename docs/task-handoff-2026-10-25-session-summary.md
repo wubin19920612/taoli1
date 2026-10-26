@@ -85,3 +85,11 @@
 - `codex/m2-2-cache-census`：`e2662af`（对象预算按不重复对象计数，大容器抽样，每目标 0.5 秒上限，输出 `visits`）→ Claude 压测发现跨目标重复计算（`all_markets` 应约 0.3MB，实际 22.9MB），打回 → `8da136a`（按对象 id 哈希固定 1/16 一致抽样）。Claude 复测：all_markets 0.4MB，每轮 320–410ms，全量 1888 passed。压测脚本在会话 scratchpad 的 `bench_census.py`。
 - 已知局限：dict 按 value 的 id 抽样，大量共享同一个 value（如 True、小整数）时会全选或全不选。全选时结果精确但较慢；全不选时退化为按第一个元素外推。
 - 上线：推送 `8da136a` → CI → `.env` 加 `MEMORY_CENSUS_ENABLED=true`（先备份）→ 部署 → 采 1 小时（建议用服务器端 nohup 脚本自动导出并关闭）→ 出 M2-3 清单。需要用户批准。
+
+## 11 CI 失败与预算可配置（2026-10-26，已验收，未上线）
+
+- `8da136a` 的 CI 失败了，只有一个测试：`test_production_scale_registered_targets_benchmark`。GitHub runner 比本机慢，120 万对象的 JSON 目标超过了 0.5 秒的单目标上限，被截断。日志要登录才能看（见记忆 ci-logs-need-login）。部署分支现在指向 `8da136a`，但没有镜像，生产仍是 `8721fef`。
+- 实测生产容器的 Python 比本机慢约 5.8 倍（同一段遍历：199ms 对 1151ms），所以生产需要更大的时间预算。健康检查每 30 秒一次，单次超时 5 秒，连续失败 3 次才判定异常，所以每 5 分钟阻塞一次、每次不超过 8 秒是可以接受的。
+- `8732429`（Codex）：新增 `MEMORY_CENSUS_BUDGET_SECONDS`（默认 3，取值 0 到 10）和 `MEMORY_CENSUS_TARGET_SECONDS`（默认 0.5，不能大于前者），普查输出里带上这两个值；依赖真实耗时的测试加上 `@pytest.mark.benchmark`，默认 addopts 排除。`cfd79d6`（Claude，1 行）：把 `test_memory_probe.py` 里 `<5ms` 的那个测试也标记为 benchmark。
+- Claude 验收：全量 1913 passed（3 个 deselected）；`-m benchmark` 3 passed；压测 437ms，去重有效。
+- 上线计划：推送 `cfd79d6`；`.env` 设置 `MEMORY_CENSUS_ENABLED=true`、`MEMORY_CENSUS_BUDGET_SECONDS=8`、`MEMORY_CENSUS_TARGET_SECONDS=3`；用服务器端脚本 `output/m2census2-run-20261026.sh`（需要改 SHA，并加上这两个键，关闭时三个键一起删）采 1 小时后自动关闭。
