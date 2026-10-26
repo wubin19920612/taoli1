@@ -4,6 +4,7 @@ import sys
 import time
 from collections import deque
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from functools import lru_cache
 from types import MappingProxyType, SimpleNamespace
 
@@ -11,6 +12,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict, PrivateAttr, create_model
 
 from app.core import config
+from app.models.market import MarketSnapshot, MarketType
 from app.runtime import cache_census as census
 from app.runtime import memory_probe
 from app.runtime.supervisor import TaskSupervisor
@@ -25,6 +27,12 @@ def unavailable_cgroup_by_default(monkeypatch):
 
 def size(value):
     return census.deep_size(value, max_objects=100_000, deadline=time.monotonic() + 5)
+
+
+def _identity_sample(values):
+    selected = [value for value in values
+                if (((id(value) >> 4) * 2654435761) & 0xFFFFFFFF) % 16 == 0]
+    return selected or [next(iter(values))]
 
 
 def test_nested_models_slots_and_cycles():
@@ -113,14 +121,20 @@ def test_million_references_do_not_spend_unique_budget(monkeypatch):
         assert all(not row["truncated"] for row in rows.values())
         assert rows["later"]["unique_kb"] > 0
         assert result["visited_objects"] == 4
-        assert result["visits"] == (503 if threshold == 2000 else 1_000_003)
+        samples = 1_000_000 if (
+            (((id(shared) >> 4) * 2654435761) & 0xFFFFFFFF) % 16 == 0
+        ) else 1
+        assert result["visits"] == (samples + 3 if threshold == 2000 else 1_000_003)
+        if threshold == 2000:
+            assert rows["repeated"]["sample_size"] == samples
 
 
-@pytest.mark.parametrize("kind", [dict, list, tuple, set, deque])
+@pytest.mark.parametrize("kind", [dict, MappingProxyType, list, tuple, set, frozenset, deque])
 @pytest.mark.parametrize("count", [2000, 2001, 10003])
-def test_sampling_boundary_stride_and_exact_container_size(kind, count):
+def test_sampling_boundary_identity_and_exact_container_size(kind, count):
     values = [bytearray(100) for _ in range(count)] if kind in (list, tuple, deque) else list(range(1000, count + 1000))
-    value = kind(enumerate(values)) if kind is dict else kind(values)
+    mapping = kind in (dict, MappingProxyType)
+    value = kind(dict(enumerate(values))) if mapping else kind(values)
     result = census.run_census([census.CensusTarget("container", lambda: value)])
     row = result["cache_census"][0]
     assert not row["truncated"]
@@ -128,10 +142,11 @@ def test_sampling_boundary_stride_and_exact_container_size(kind, count):
         assert "sampled" not in row and "sample_size" not in row
         assert row["unique_kb"] * 1024 == size(value)[0]
     else:
-        assert row["sampled"] is True and row["sample_size"] == 500
-        assert result["visited_objects"] == (1001 if kind is dict else 501)
+        selected = _identity_sample(list(value.values()) if mapping else value)
+        assert row["sampled"] is True and row["sample_size"] == len(selected)
+        assert result["visited_objects"] == 1 + len(selected) * (2 if mapping else 1)
         children = sum(sys.getsizeof(v) for v in values)
-        if kind is dict:
+        if mapping:
             children += sum(sys.getsizeof(k) for k in value)
         assert row["unique_kb"] * 1024 == pytest.approx(sys.getsizeof(value) + children)
 
@@ -139,30 +154,121 @@ def test_sampling_boundary_stride_and_exact_container_size(kind, count):
 def test_sampled_elements_join_shared_set_and_nested_samples_are_reported():
     values = [bytearray(100 + i) for i in range(3000)]
     first = [values]
+    selected = _identity_sample(values)
+    selected_ids = {id(value) for value in selected}
+    selected_again = selected[:2]
+    not_selected = next(value for value in values if id(value) not in selected_ids)
     result = census.run_census([
         census.CensusTarget("nested", lambda: first),
-        census.CensusTarget("selected_again", lambda: [values[0], values[6]]),
-        census.CensusTarget("not_selected", lambda: values[1]),
+        census.CensusTarget("selected_again", lambda: selected_again),
+        census.CensusTarget("not_selected", lambda: not_selected),
     ])
     rows = {row["name"]: row for row in result["cache_census"]}
     assert rows["nested"]["sampled"] is True
-    assert rows["nested"]["sample_size"] == 500
+    assert rows["nested"]["sample_size"] == len(selected)
     expected = sys.getsizeof(first) + sys.getsizeof(values)
-    expected += 6 * sum(sys.getsizeof(values[i]) for i in range(0, 3000, 6))
-    assert rows["nested"]["unique_kb"] * 1024 == expected
-    assert rows["selected_again"]["unique_kb"] * 1024 == sys.getsizeof([None, None])
-    assert rows["not_selected"]["unique_kb"] * 1024 == sys.getsizeof(values[1])
+    expected += len(values) / len(selected) * sum(sys.getsizeof(value) for value in selected)
+    assert rows["nested"]["unique_kb"] * 1024 == pytest.approx(expected)
+    assert rows["selected_again"]["unique_kb"] * 1024 == sys.getsizeof(selected_again)
+    assert rows["not_selected"]["unique_kb"] * 1024 == sys.getsizeof(not_selected)
 
 
-def test_nested_sampling_factors_multiply():
+def test_nested_sampling_factors_multiply(monkeypatch):
     inner = [bytearray(100) for _ in range(3000)]
     outer = [inner] + [None] * 2999
+    selected_ids = {id(inner)} | {id(value) for value in inner[::16]}
+    # Preserve unique identities, but force known selections at both levels.
+    monkeypatch.setattr(census, "id", lambda value: (
+        (id(value) << 8) | (0 if id(value) in selected_ids else 16)
+    ), raising=False)
     row = census.run_census([census.CensusTarget("nested", lambda: outer)])["cache_census"][0]
-    expected = sys.getsizeof(outer) + 6 * sys.getsizeof(inner)
-    expected += 36 * 500 * sys.getsizeof(inner[0]) + 6 * sys.getsizeof(None)
+    expected = sys.getsizeof(outer) + 3000 * sys.getsizeof(inner)
+    expected += 3000 * 3000 * sys.getsizeof(inner[0])
     assert not row["truncated"]
+    assert row["unique_kb"] * 1024 == pytest.approx(expected)
+    assert row["sampled"] is True and row["sample_size"] == 1 + len(inner[::16])
+
+
+@pytest.mark.parametrize("mapping", [False, True])
+def test_no_identity_samples_falls_back_to_first_element(monkeypatch, mapping):
+    values = [bytearray(100 + i) for i in range(2100)]
+    value = dict(enumerate(values)) if mapping else values
+    monkeypatch.setattr(census, "id", lambda value: (id(value) << 8) | 16, raising=False)
+    row = census.run_census([census.CensusTarget("fallback", lambda: value)])["cache_census"][0]
+    expected = sys.getsizeof(value) + len(value) * (
+        sys.getsizeof(values[0]) + (sys.getsizeof(next(iter(value))) if mapping else 0)
+    )
+    assert not row["truncated"]
+    assert row["sampled"] is True and row["sample_size"] == 1
+    assert row["objects"] == (3 if mapping else 2)
     assert row["unique_kb"] * 1024 == expected
-    assert row["sampled"] is True and row["sample_size"] == 1000
+
+
+def test_market_snapshot_shared_prefix_is_not_counted_again(tmp_path):
+    def model(index):
+        return MarketSnapshot(
+            symbol=f"ASSET{index}USDT", base=f"ASSET{index}", exchange="binance",
+            market_type=MarketType.FUTURE, bid=100.0 + index, ask=101.0 + index,
+            timestamp=datetime.now(UTC), raw_symbol=f"ASSET{index}USDT",
+        )
+
+    markets = [model(index) for index in range(9400)]
+    all_markets = markets + [model(index) for index in range(9400, 9530)]
+    result = census.run_census([
+        census.CensusTarget("markets", lambda: markets),
+        census.CensusTarget("all_markets", lambda: all_markets),
+    ])
+    rows = {row["name"]: row for row in result["cache_census"]}
+    assert all(row["sampled"] and not row["truncated"] for row in rows.values())
+    assert 0 < rows["all_markets"]["unique_kb"] <= rows["markets"]["unique_kb"] * 0.05
+    assert rows["markets"]["sample_size"] == len(_identity_sample(markets))
+    assert rows["all_markets"]["sample_size"] == len(_identity_sample(all_markets))
+    (tmp_path / "shared_markets_metrics.json").write_text(json.dumps(result), encoding="utf-8")
+
+
+def test_same_list_shared_by_different_length_containers_is_not_counted_again():
+    shared = [bytearray(10000)]
+    first, second = [shared] * 2101, [shared] * 2231
+    result = census.run_census([
+        census.CensusTarget("first", lambda: first),
+        census.CensusTarget("second", lambda: second),
+    ])
+    rows = {row["name"]: row for row in result["cache_census"]}
+    assert all(row["sampled"] and not row["truncated"] for row in rows.values())
+    assert rows["first"]["unique_kb"] * 1024 > sys.getsizeof(first) + sys.getsizeof(shared)
+    assert rows["second"]["unique_kb"] * 1024 == sys.getsizeof(second)
+    assert result["visited_objects"] == 4
+
+
+@pytest.mark.parametrize("nested", [False, True])
+@pytest.mark.parametrize("mapping", [False, True])
+def test_identity_hash_scan_respects_target_deadline(monkeypatch, mapping, nested):
+    now, hashed = [0.0], []
+    values = [bytearray(100) for _ in range(3000)]
+    container = dict(enumerate(values)) if mapping else values
+    root = [container] if nested else container
+
+    def identity(value):
+        if value is not container and value is not root:
+            hashed.append(value)
+            now[0] += 0.01
+        # No element is selected: time must be checked during the hash scan.
+        return (id(value) << 8) | 16
+
+    monkeypatch.setattr(census.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(census, "id", identity, raising=False)
+    result = census.run_census([
+        census.CensusTarget("slow", lambda: root),
+        census.CensusTarget("later", lambda: bytearray(200)),
+    ])
+    rows = {row["name"]: row for row in result["cache_census"]}
+    assert rows["slow"]["sampled"] is True and rows["slow"]["truncated"] is True
+    assert rows["slow"]["sample_size"] == 0
+    assert rows["slow"]["unique_kb"] * 1024 == (
+        sys.getsizeof(container) + (sys.getsizeof(root) if nested else 0)
+    )
+    assert 1 < len(hashed) < len(values)
+    assert rows["later"]["unique_kb"] > 0 and not rows["later"]["truncated"]
 
 
 def _snapshot_fixture(count):
@@ -172,8 +278,10 @@ def _snapshot_fixture(count):
 
 def test_sampled_pydantic_estimate_within_fifteen_percent_of_full_size(monkeypatch, tmp_path):
     models = _snapshot_fixture(10_000)
-    estimated, objects, truncated = size(models)
-    assert not truncated and objects < 100_000
+    measurement = census._measure(models, census._Budget(600_000, time.monotonic() + 5), set())
+    estimated = round(measurement.size)
+    assert not measurement.truncated and measurement.objects < 600_000
+    assert measurement.sample_size == len(_identity_sample(models))
     monkeypatch.setattr(census, "_SAMPLE_THRESHOLD", sys.maxsize, raising=False)
     full, _, truncated = census.deep_size(models, max_objects=3_000_000, deadline=time.monotonic() + 30)
     assert not truncated
@@ -181,6 +289,7 @@ def test_sampled_pydantic_estimate_within_fifteen_percent_of_full_size(monkeypat
     assert error < 0.15
     (tmp_path / "sampling_accuracy.json").write_text(json.dumps({
         "estimated_bytes": estimated, "full_bytes": full, "relative_error": error,
+        "sample_size": measurement.sample_size,
     }), encoding="utf-8")
 
 

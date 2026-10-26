@@ -16,7 +16,7 @@ import types
 from collections import deque
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from itertools import chain, islice
+from itertools import chain
 
 
 @dataclass(frozen=True)
@@ -43,7 +43,7 @@ class _Measurement:
 
 
 _SAMPLE_THRESHOLD = 2000
-_SAMPLE_SIZE = 500
+_SAMPLE_MODULUS = 16
 _CONTAINERS = (dict, types.MappingProxyType, list, tuple, set, frozenset, deque)
 
 
@@ -81,22 +81,30 @@ def _children(obj: object) -> Iterator[object]:
                         pass
 
 
-def _sampled_children(obj: object, count: int, result: _Measurement) -> Iterator[object]:
-    # No whole-container copies. Index sequences directly; advance other
-    # iterators in C between evenly spaced positions (one dict entry is a unit).
-    indexed = isinstance(obj, (list, tuple))
+def _sampled_children(
+    obj: object, count: int, result: _Measurement, deadline: float,
+) -> tuple[Iterator[object], float]:
+    # The same object must be selected in every container, regardless of length
+    # or position, so sampled descendants share attribution across targets.
+    # Retain only selected entries; count them before assigning their weight.
     mapping = isinstance(obj, (dict, types.MappingProxyType))
-    source = iter(obj.items() if mapping else obj) if not indexed else None
-    previous = -1
-    for offset in range(_SAMPLE_SIZE):
-        index = offset * count // _SAMPLE_SIZE
-        element = obj[index] if indexed else next(islice(source, index - previous - 1, None))
-        previous = index
-        result.sample_size += 1
-        if mapping:
-            yield from element
-        else:
-            yield element
+    source = iter(obj.items() if mapping else obj)
+    first = next(source)
+    selected = []
+    for element in chain((first,), source):
+        # Hash scans can be wide even when nothing is selected. Apply the same
+        # per-target/global deadline as the subsequent depth measurement.
+        if time.monotonic() >= deadline:
+            result.truncated = True
+            break
+        identity = id(element[1] if mapping else element)
+        if (((identity >> 4) * 2654435761) & 0xFFFFFFFF) % _SAMPLE_MODULUS == 0:
+            selected.append(element)
+    if not selected and not result.truncated:
+        selected.append(first)
+    result.sample_size += len(selected)
+    children = chain.from_iterable(selected) if mapping else iter(selected)
+    return children, count / len(selected) if selected else 1.0
 
 
 def _measure(
@@ -138,8 +146,8 @@ def _measure(
             if isinstance(current, _CONTAINERS) and len(current) > _SAMPLE_THRESHOLD:
                 count = len(current)
                 result.sampled = True
-                stack.append((_sampled_children(current, count, result),
-                              weight * count / _SAMPLE_SIZE))
+                children, factor = _sampled_children(current, count, result, deadline)
+                stack.append((children, weight * factor))
             else:
                 stack.append((iter(_children(current)), weight))
         except Exception:  # noqa: BLE001 - return only numeric evidence.

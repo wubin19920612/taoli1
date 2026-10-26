@@ -218,3 +218,58 @@ python -m pytest -q --basetemp=.pytest_m2_2c_full --tb=short
 抽样外推是估算：异构元素、按步长聚集的大对象或大量共享引用可能产生较大误差；跨目标只对**实际测到**的 id 去重，不能用 500 个样本推断所有未抽到对象的共享关系。因此，多个共享容器的外推体积之和不等于完整对象图的精确去重体积，不能当作 RSS 或严格可加减的泄漏量。`truncated=false` 表示抽样遍历完成，不表示所有元素均被深度测量。
 
 保留原七个未跟踪 pytest 目录及本轮 `.pytest_m2_2c_red/`、`.pytest_m2_2c/`、`.pytest_m2_2c_full/`（均在 backend 内），均不暂存；按用户文件限制不修改 `docs/next-task.md`。本次只交付本地修复；生产版本仍按用户提供的信息记为 `8721fef`，未推送、未做生产备份或部署、未重新取得线上验收数据。后续在独立生产验收任务推送/部署并检查所有登记目标、sampled/sample_size、visits/visited_objects、截断及耗时分布，再继续 M2-3。
+
+## 打回修复：一致抽样
+
+2026-10-26，分支 `codex/m2-2-cache-census`，本轮基线 `e2662af7d33a54af40475874e6077395ac25b8cb`。验收发现：`markets` 的 9400 个 MarketSnapshot 同时出现在长度为 9530 的 `all_markets` 中，按各自长度均匀步长抽样会选中不同对象，后一个目标因而重复外推前一个目标已覆盖的模型。本节替代上一节的固定 500 元素、均匀步长抽样规则及其不同长度容器的去重限制。
+
+### 实现与范围
+
+仅修改 `backend/app/runtime/cache_census.py`、`backend/tests/test_cache_census.py` 和本交接文档；不修改 `docs/next-task.md`、配置、探针接线或业务行为。用户要求新建本地提交，不 amend、不 push；没有运行 WSL、Docker、连接生产、备份或部署。
+
+- 直接元素数 **>2000** 的容器遍历全部直接元素，用 `(((id(elem) >> 4) * 2654435761) & 0xFFFFFFFF) % 16 == 0` 决定入选。同一个对象在不同长度或位置的容器中使用同一判定，不再因长度改变样本集合。dict/mappingproxy 根据 **value 的身份** 决定整个 key/value 对是否入选；两者均参与深度测量。list/tuple/set/frozenset/deque 使用元素本身。
+- 只保留入选元素，不复制整个容器；完成扫描后，以 `元素数 / 入选数` 外推后代体积，容器自身浅大小仍精确计入。完整扫描但零入选时，回退测量首个元素（dict 为首个键值对），按元素数外推。嵌套大容器采用相同算法，倍率继续逐层相乘。
+- 哈希扫描每个元素前检查既有的目标/全局截止时间；即使没有任何对象入选也会及时截断。超时保留已计入的部分结果并置 `truncated=true`，不为零入选执行额外回退扫描，后续目标仍可使用自己的时间窗口。
+- `sample_size` 记录目标内各抽样容器**实际入选的直接元素数之和**（零入选正常回退记 1，扫描超时则记录截至中断时的入选数）；不再固定为 500。`visits` 仍只统计深度遍历实际取出的对象，包含重复引用，不包含仅做哈希判断的元素。共享集合、60 万对象上限、0.5 秒目标窗口、3 秒全局预算、余量保护、RSS 及隐私字段保持既有规则。
+
+### 本机回归与误差
+
+新增/更新覆盖：9400+130 个真实 MarketSnapshot 的共享前缀场景，要求 `all_markets.unique_kb <= markets.unique_kb * 5%`；同一列表由不同长度的大容器重复引用时，第二个目标只增加自身浅大小；七种容器的 2000/2001/10003 边界；入选数与外推倍率；嵌套倍率；list/dict 零入选回退；根级及嵌套 list/dict 在无入选元素时的扫描超时；100 万重复引用与对象预算；1 万同构模型的 <15% 误差要求。
+
+本机 **Windows / CPython 3.12.10 / 64 位 / Pydantic 2.12.5**，指定两文件回归 **143 passed in 23.57s**，退出码 0，cwd 为 `backend`：
+
+```powershell
+python -m pytest -q tests/test_cache_census.py tests/test_memory_probe.py --basetemp=.pytest_m2_2d --tb=short
+```
+
+该 basetemp 对应仓库根目录的 `backend/.pytest_m2_2d`。每次复用前，将本轮上一阶段产物复制到 `backend/.pytest_m2_2d_evidence/`，保留 RED、指定回归和全量的日志/证据，未清理任何旧任务目录。实现前的指定两文件 RED 为 **23 failed / 118 passed**；之后补充了两个嵌套扫描超时用例。
+
+随后后端全量 **1888 passed, 12 warnings in 104.97s**，退出码 0；12 条均为既有 `datetime.utcnow()` 弃用警告，cwd 同为 `backend`：
+
+```powershell
+python -m pytest -q --basetemp=.pytest_m2_2d --tb=short
+```
+
+两轮最终 pytest 均使用指定 basetemp 和默认离线网络护栏。额外对两个 Python 文件运行 Ruff，发现 1 个 `SIM102` 和 3 个 `I001`；通过对基线 `e2662af` 的原文件运行相同检查，确认四项全部既有，本轮未新增，也未扩大范围处理。
+
+指定回归的共享前缀实测：`markets` 入选 **552**，unique **24,893.345 KiB**；`all_markets` 入选 **560**，unique **432.681 KiB（约 0.423 MiB）**，仅为前者的 **1.738%**，两行均未截断。1 万个 60 字段同构模型入选 **587**，外推 **53,735,363 B**，全量遍历 **53,688,122 B**，相对误差 **0.08799%**。证据分别位于 `.pytest_m2_2d_evidence/targeted/test_market_snapshot_shared_pr0/shared_markets_metrics.json` 和 `.pytest_m2_2d_evidence/targeted/test_sampled_pydantic_estimate0/sampling_accuracy.json`（均相对 backend）。
+
+### 生产规模本机基准
+
+沿用真实目标登记和既有压力 fixture：三个快照列表 **9410 / 9500 / 4600** 条，底层 **12,000** 个 60 字段模型；嵌套 JSON **300,000 行 / 约 120 万个不同对象**。数据构造不计入 census_ms。指定回归中连续三轮结果：
+
+| 项目 | 第一轮 | 第二轮 | 第三轮 |
+|---|---:|---:|---:|
+| census_ms | 535.793 | 480.806 | 494.673 |
+| visits | 650,275 | 650,275 | 650,275 |
+| visited_objects | 341,161 | 341,161 | 341,161 |
+| 非零体积目标 | 4/4 | 4/4 | 4/4 |
+| truncated / census_errors | 0 / 0 | 0 / 0 | 0 / 0 |
+
+三轮均满足 **census_ms <1500**，所有压力目标非零。每轮共享集合及 id 整数合计 **27,694,600 B（约 26.412 MiB）**，测量口径与上一节相同；不是全进程 RSS 或瞬时峰值。证据：`backend/.pytest_m2_2d_evidence/targeted/test_production_scale_register0/production_scale_metrics.json`。
+
+### 验证边界与下一步
+
+哈希抽样仍是估算，实际入选比例依赖对象地址分布；异构数据、重复引用、共享后代以及零入选时的首元素回退仍可能影响外推，不能将结果当作精确对象图大小或 RSS。本轮修复针对不同长度容器的样本错位，未调整抽样阈值、预算或业务缓存。
+
+开始时已有十个未跟踪 pytest 目录全部保留，本轮只新增 `backend/.pytest_m2_2d/` 和 `backend/.pytest_m2_2d_evidence/`，均不暂存。线上状态本轮未核实；没有生产备份、部署或线上验收。下个独立任务继续生产验收或 M2-3，依本节规则检查样本数、共享前缀增量、截断和耗时。
