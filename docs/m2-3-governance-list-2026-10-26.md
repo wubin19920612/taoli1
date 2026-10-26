@@ -24,7 +24,7 @@
 
 | 编号 | 内容 | 预期降幅 | 风险 | 说明 |
 |---|---|---|---|---|
-| **M2-3a** | `fs_public` 的 `binance_specs` 只保留实际用到的字段（`current_instruments` 和 `meta` 用到的 status、filters 里的 stepSize/minQty/minNotional 等），按 symbol 存精简后的 dict；TTL 从 20 秒延长到 10 分钟（规格很少变）；解析完立刻丢掉原始 payload | **−55~65MB 常驻**，同时消除每 20 秒一次的大 JSON 解析尖峰 | 低–中 | FS 链路比较敏感：只改数据缓存的形状，**不改 fs_astro attempt 路径和任何判断逻辑**；用新旧实现对照测试保证 `current_instruments` 的输出完全一致 |
+| **M2-3a** | `fs_public` 的 `binance_specs` 只保留实际用到的字段（`current_instruments` 和 `meta` 用到的 status、filters 里的 stepSize/minQty/minNotional 等），按 symbol 存精简后的 dict；**TTL 保持 20 秒不变**（规格的获取时间会写进 `source_times.spot_specs/future_specs`，`fs_economics.py:129` 要求所有来源都在 60 秒内，否则报 `stale_input`，延长 TTL 会让 Binance 的 FS 全部判为过期）；解析完立刻丢掉原始 payload | **−55~65MB 常驻**（解析尖峰仍然存在，但解析完立刻丢弃，尖峰会变低） | 低–中 | FS 链路比较敏感：只改数据缓存的形状，**不改 fs_astro attempt 路径和任何判断逻辑**；用新旧实现对照测试保证 `current_instruments` 的输出完全一致 |
 | **M2-3b** | `market_validation.books`：只保留审核真正用到的档位深度（例如前 N 档），上限从 1000 降到 300，并加 TTL；`reviews`/`_last_incident` 同样加 TTL | −15~25MB，平台期更低 | 低 | 先查清审核用到多少档、过期语义是什么，写进任务书 |
 | M2-4a | 采集器与 store 共享快照对象，或者发布后释放采集器那一份（两份快照同时常驻） | −30~40MB | 中–高 | 原本就是 M2-4 的范围，先出设计并在本机测量 |
 | M2-4b | 身份绑定瘦身：`replace()` 不再 deep copy（输入本来就是新从库里读出来的），或者改成更轻的不可变结构 | −10~30MB | 中 | 先确认 deep copy 是为了防止什么被改动 |
