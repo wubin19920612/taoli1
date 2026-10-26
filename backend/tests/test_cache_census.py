@@ -8,7 +8,7 @@ from functools import lru_cache
 from types import MappingProxyType, SimpleNamespace
 
 import pytest
-from pydantic import BaseModel, ConfigDict, PrivateAttr
+from pydantic import BaseModel, ConfigDict, PrivateAttr, create_model
 
 from app.core import config
 from app.runtime import cache_census as census
@@ -84,16 +84,149 @@ def test_one_shared_set_attributes_unique_to_first_target_and_sorts(monkeypatch)
                for row in rows.values())
 
 
-def test_object_budget_is_global_and_wide_containers_are_lazy():
-    large = [None] * 100_000
-    rows = census.run_census([
+def test_object_budget_counts_unique_objects_globally():
+    large = [bytearray(1) for _ in range(1000)]
+    result = census.run_census([
         census.CensusTarget("one", lambda: large),
         census.CensusTarget("two", lambda: [bytearray(100)]),
-    ], max_objects=5)["cache_census"]
+    ], max_objects=5)
+    rows = result["cache_census"]
     assert all(row["truncated"] for row in rows)
-    assert sum(row["objects"] for row in rows) <= 5
+    assert result["visited_objects"] == sum(row["objects"] for row in rows) == 5
     assert size([])[2] is False
     assert census.deep_size(large, max_objects=0, deadline=time.monotonic() + 1) == (0, 0, True)
+
+
+def test_million_references_do_not_spend_unique_budget(monkeypatch):
+    monkeypatch.setattr(census.time, "monotonic", lambda: 0.0)
+    shared = bytearray(100)
+    repeated = [shared] * 1_000_000
+    later = [bytearray(200)]
+    # Exercise both the normal sample path and a full million-visit traversal.
+    for threshold in (2000, 1_000_000):
+        monkeypatch.setattr(census, "_SAMPLE_THRESHOLD", threshold, raising=False)
+        result = census.run_census([
+            census.CensusTarget("repeated", lambda: repeated),
+            census.CensusTarget("later", lambda: later),
+        ], max_objects=5)
+        rows = {row["name"]: row for row in result["cache_census"]}
+        assert all(not row["truncated"] for row in rows.values())
+        assert rows["later"]["unique_kb"] > 0
+        assert result["visited_objects"] == 4
+        assert result["visits"] == (503 if threshold == 2000 else 1_000_003)
+
+
+@pytest.mark.parametrize("kind", [dict, list, tuple, set, deque])
+@pytest.mark.parametrize("count", [2000, 2001, 10003])
+def test_sampling_boundary_stride_and_exact_container_size(kind, count):
+    values = [bytearray(100) for _ in range(count)] if kind in (list, tuple, deque) else list(range(1000, count + 1000))
+    value = kind(enumerate(values)) if kind is dict else kind(values)
+    result = census.run_census([census.CensusTarget("container", lambda: value)])
+    row = result["cache_census"][0]
+    assert not row["truncated"]
+    if count <= 2000:
+        assert "sampled" not in row and "sample_size" not in row
+        assert row["unique_kb"] * 1024 == size(value)[0]
+    else:
+        assert row["sampled"] is True and row["sample_size"] == 500
+        assert result["visited_objects"] == (1001 if kind is dict else 501)
+        children = sum(sys.getsizeof(v) for v in values)
+        if kind is dict:
+            children += sum(sys.getsizeof(k) for k in value)
+        assert row["unique_kb"] * 1024 == pytest.approx(sys.getsizeof(value) + children)
+
+
+def test_sampled_elements_join_shared_set_and_nested_samples_are_reported():
+    values = [bytearray(100 + i) for i in range(3000)]
+    first = [values]
+    result = census.run_census([
+        census.CensusTarget("nested", lambda: first),
+        census.CensusTarget("selected_again", lambda: [values[0], values[6]]),
+        census.CensusTarget("not_selected", lambda: values[1]),
+    ])
+    rows = {row["name"]: row for row in result["cache_census"]}
+    assert rows["nested"]["sampled"] is True
+    assert rows["nested"]["sample_size"] == 500
+    expected = sys.getsizeof(first) + sys.getsizeof(values)
+    expected += 6 * sum(sys.getsizeof(values[i]) for i in range(0, 3000, 6))
+    assert rows["nested"]["unique_kb"] * 1024 == expected
+    assert rows["selected_again"]["unique_kb"] * 1024 == sys.getsizeof([None, None])
+    assert rows["not_selected"]["unique_kb"] * 1024 == sys.getsizeof(values[1])
+
+
+def test_nested_sampling_factors_multiply():
+    inner = [bytearray(100) for _ in range(3000)]
+    outer = [inner] + [None] * 2999
+    row = census.run_census([census.CensusTarget("nested", lambda: outer)])["cache_census"][0]
+    expected = sys.getsizeof(outer) + 6 * sys.getsizeof(inner)
+    expected += 36 * 500 * sys.getsizeof(inner[0]) + 6 * sys.getsizeof(None)
+    assert not row["truncated"]
+    assert row["unique_kb"] * 1024 == expected
+    assert row["sampled"] is True and row["sample_size"] == 1000
+
+
+def _snapshot_fixture(count):
+    model = create_model("CensusSnapshot", **{f"field_{i}": (float, ...) for i in range(60)})
+    return [model(**{f"field_{j}": float(i * 60 + j) for j in range(60)}) for i in range(count)]
+
+
+def test_sampled_pydantic_estimate_within_fifteen_percent_of_full_size(monkeypatch, tmp_path):
+    models = _snapshot_fixture(10_000)
+    estimated, objects, truncated = size(models)
+    assert not truncated and objects < 100_000
+    monkeypatch.setattr(census, "_SAMPLE_THRESHOLD", sys.maxsize, raising=False)
+    full, _, truncated = census.deep_size(models, max_objects=3_000_000, deadline=time.monotonic() + 30)
+    assert not truncated
+    error = abs(estimated - full) / full
+    assert error < 0.15
+    (tmp_path / "sampling_accuracy.json").write_text(json.dumps({
+        "estimated_bytes": estimated, "full_bytes": full, "relative_error": error,
+    }), encoding="utf-8")
+
+
+def test_target_timeout_does_not_expire_later_target(monkeypatch):
+    now = [0.0]
+    original = census.sys.getsizeof
+
+    class Slow:
+        pass
+
+    slow = Slow()
+
+    def sizeof(value):
+        if value is slow:
+            now[0] += 0.51
+        return original(value)
+
+    monkeypatch.setattr(census.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(census.sys, "getsizeof", sizeof)
+    result = census.run_census([
+        census.CensusTarget("slow", lambda: [slow]),
+        census.CensusTarget("later", lambda: [bytearray(100)]),
+    ])
+    rows = {row["name"]: row for row in result["cache_census"]}
+    assert rows["slow"]["truncated"] is True
+    assert rows["slow"]["unique_kb"] > 0
+    assert rows["later"]["truncated"] is False
+    assert rows["later"]["unique_kb"] > 0
+
+
+def test_getter_time_is_part_of_target_budget(monkeypatch):
+    now = [0.0]
+
+    def slow_getter():
+        now[0] += 0.51
+        return [bytearray(100)]
+
+    monkeypatch.setattr(census.time, "monotonic", lambda: now[0])
+    result = census.run_census([
+        census.CensusTarget("slow", slow_getter),
+        census.CensusTarget("later", lambda: [bytearray(100)]),
+    ])
+    rows = {row["name"]: row for row in result["cache_census"]}
+    assert rows["slow"]["truncated"] is True
+    assert rows["later"]["truncated"] is False
+    assert rows["later"]["unique_kb"] > 0
 
 
 def test_deadline_shared_by_all_targets(monkeypatch):
@@ -349,7 +482,7 @@ def test_cgroup_headroom_gate_before_any_getter(monkeypatch, max_objects, margin
     if skipped:
         assert not calls
         assert result == {"census_skipped": "low_headroom", "headroom_mb": headroom / 1024 ** 2,
-                          "visited_objects": 0}
+                          "visited_objects": 0, "visits": 0}
     else:
         assert calls == [True]
         assert result["visited_objects"] == 2
@@ -543,6 +676,53 @@ async def test_actual_service_registry_and_offline_benchmark(monkeypatch, tmp_pa
             await providers.aclose()
             for adapter in adapters:
                 await adapter.client.aclose()
+
+
+def test_production_scale_registered_targets_benchmark(monkeypatch, tmp_path):
+    models = _snapshot_fixture(12_000)
+    store = SnapshotStore()
+    store._markets = models[:9410]
+    store._all_markets = models[:9500]
+    store._opportunities = models[7400:]  # 4600 entries, sharing two other lists.
+    # 300k rows * (dict + distinct str + float + int) = 1.2m JSON objects,
+    # plus a small number of containers and shared field names.
+    payload = {"groups": {
+        f"group_{group}": [{"name": f"row_{group}_{index}",
+                             "price": float(group * 30_000 + index),
+                             "count": 1000 + group * 30_000 + index}
+                            for index in range(30_000)]
+        for group in range(10)
+    }}
+    state = SimpleNamespace(snapshot_store=store,
+                            market_collector=SimpleNamespace(_exchange_snapshots=payload))
+    selected = {"snapshot_store._markets", "snapshot_store._all_markets",
+                "snapshot_store._opportunities", "market_collector._exchange_snapshots"}
+    targets = [target for target in census.build_census_targets(state) if target.name in selected]
+    assert len(targets) == 4
+    bookkeeping = []
+
+    class TrackingSet(set):
+        def clear(self):
+            container = sys.getsizeof(self)
+            identities = sum(sys.getsizeof(identity) for identity in self)
+            bookkeeping.append({"objects": len(self), "set_bytes": container,
+                                "id_bytes": identities, "total_bytes": container + identities})
+            super().clear()
+
+    monkeypatch.setattr(census, "set", TrackingSet, raising=False)
+    runs = [census.run_census(targets) for _ in range(3)]
+    for result in runs:
+        assert not result.get("census_errors")
+        assert all(row["unique_kb"] > 0 and not row["truncated"] for row in result["cache_census"])
+        assert result["census_ms"] < 1500
+        assert result["visited_objects"] <= 600_000
+    assert all(row["objects"] == result["visited_objects"] for row, result in zip(bookkeeping, runs))
+    (tmp_path / "production_scale_metrics.json").write_text(json.dumps({
+        "python": sys.version, "snapshot_entries": [9410, 9500, 4600],
+        "distinct_models": len(models), "model_fields": 60,
+        "json_rows": 300_000, "json_objects_approx": 1_200_000,
+        "runs": runs, "bookkeeping": bookkeeping,
+    }), encoding="utf-8")
 
 
 async def test_enrichment_round_allocation_experiment(monkeypatch, tmp_path):

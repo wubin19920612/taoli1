@@ -2,8 +2,9 @@
 
 Sizes describe reachable Python allocations, not RSS or allocator arenas. One
 visited set attributes shared allocations to the first target visited. The
-object budget counts traversal visits (including duplicates) across the entire
-run, so even a huge list of one repeated object is bounded.
+object budget caps distinct IDs; traversal visits are bounded by time. Large
+containers extrapolate sampled descendants, so their sizes are estimates even
+when traversal completes without truncation.
 """
 
 import asyncio
@@ -15,7 +16,7 @@ import types
 from collections import deque
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from itertools import chain
+from itertools import chain, islice
 
 
 @dataclass(frozen=True)
@@ -26,11 +27,24 @@ class CensusTarget:
 
 @dataclass
 class _Budget:
-    remaining: int
+    max_objects: int
     deadline: float
+    visits: int = 0
 
-    def exhausted(self) -> bool:
-        return self.remaining <= 0 or time.monotonic() >= self.deadline
+
+@dataclass
+class _Measurement:
+    size: float = 0
+    objects: int = 0
+    truncated: bool = False
+    failed: bool = False
+    sampled: bool = False
+    sample_size: int = 0
+
+
+_SAMPLE_THRESHOLD = 2000
+_SAMPLE_SIZE = 500
+_CONTAINERS = (dict, types.MappingProxyType, list, tuple, set, frozenset, deque)
 
 
 _OPAQUE = (
@@ -47,7 +61,7 @@ def _children(obj: object) -> Iterator[object]:
         return
     if isinstance(obj, (dict, types.MappingProxyType)):
         yield from chain.from_iterable(obj.items())
-    elif isinstance(obj, (list, tuple, set, frozenset, deque)):
+    elif isinstance(obj, _CONTAINERS):
         yield from obj
     elif not isinstance(obj, _OPAQUE):
         try:
@@ -67,39 +81,77 @@ def _children(obj: object) -> Iterator[object]:
                         pass
 
 
-def _measure(obj: object, budget: _Budget, shared: set[int]) -> tuple[int, int, bool, bool]:
-    unique = objects = 0
-    stack = [iter((obj,))]
+def _sampled_children(obj: object, count: int, result: _Measurement) -> Iterator[object]:
+    # No whole-container copies. Index sequences directly; advance other
+    # iterators in C between evenly spaced positions (one dict entry is a unit).
+    indexed = isinstance(obj, (list, tuple))
+    mapping = isinstance(obj, (dict, types.MappingProxyType))
+    source = iter(obj.items() if mapping else obj) if not indexed else None
+    previous = -1
+    for offset in range(_SAMPLE_SIZE):
+        index = offset * count // _SAMPLE_SIZE
+        element = obj[index] if indexed else next(islice(source, index - previous - 1, None))
+        previous = index
+        result.sample_size += 1
+        if mapping:
+            yield from element
+        else:
+            yield element
+
+
+def _measure(
+    obj: object, budget: _Budget, shared: set[int], *, deadline: float | None = None,
+) -> _Measurement:
+    result = _Measurement()
+    deadline = budget.deadline if deadline is None else min(deadline, budget.deadline)
+    # Each frame carries its extrapolation factor. A sampled container's own
+    # shallow size is counted before applying its factor to descendants only.
+    stack = [(iter((obj,)), 1.0)]
     while stack:
         # Check even when iterating duplicates or exhausted child iterators.
-        if budget.exhausted():
-            return unique, objects, True, False
+        if time.monotonic() >= deadline:
+            result.truncated = True
+            break
         try:
-            current = next(stack[-1])
+            children, weight = stack[-1]
+            current = next(children)
         except StopIteration:
             stack.pop()
             continue
         except Exception:  # noqa: BLE001 - preserve partial attribution on a bad child.
-            return unique, objects, True, True
-        budget.remaining -= 1
+            result.truncated = result.failed = True
+            break
+        budget.visits += 1
         identity = id(current)
         if identity in shared:
             continue
+        # Duplicates spend no object budget. Stop before inserting a new ID;
+        # len(shared) is the actual memory bound, across all targets.
+        if len(shared) >= budget.max_objects:
+            result.truncated = True
+            break
         try:
             amount = sys.getsizeof(current)
+            shared.add(identity)
+            result.size += amount * weight
+            result.objects += 1
+            if isinstance(current, _CONTAINERS) and len(current) > _SAMPLE_THRESHOLD:
+                count = len(current)
+                result.sampled = True
+                stack.append((_sampled_children(current, count, result),
+                              weight * count / _SAMPLE_SIZE))
+            else:
+                stack.append((iter(_children(current)), weight))
         except Exception:  # noqa: BLE001 - return only numeric evidence.
-            return unique, objects, True, True
-        shared.add(identity)
-        unique += amount
-        objects += 1
-        stack.append(iter(_children(current)))
-    return unique, objects, False, False
+            result.truncated = result.failed = True
+            break
+    return result
 
 
 def deep_size(obj: object, *, max_objects: int, deadline: float) -> tuple[int, int, bool]:
     """Return estimated bytes, distinct objects, truncation; never recurse."""
-    unique, objects, truncated, _ = _measure(obj, _Budget(max_objects, deadline), set())
-    return unique, objects, truncated
+    result = _measure(obj, _Budget(max_objects, deadline), set())
+    return round(result.size), result.objects, result.truncated
 
 
 def _read_cgroup_file(path: str) -> str:
@@ -132,7 +184,7 @@ def run_census(
     # Check before constructing the visited set or invoking any target getter.
     if headroom is not None and headroom < max_objects * 80 + 64 * 1024 ** 2:
         return {"census_skipped": "low_headroom", "headroom_mb": headroom / 1024 ** 2,
-                "visited_objects": 0}
+                "visited_objects": 0, "visits": 0}
     budget = _Budget(max_objects, time.monotonic() + budget_seconds)
     shared: set[int] = set()
     roots = []  # Prevent id reuse for containers returned temporarily by getters.
@@ -144,9 +196,11 @@ def run_census(
             "objects": 0, "truncated": False,
         }
         rows.append(row)
-        if budget.exhausted():
+        now = time.monotonic()
+        if now >= budget.deadline:
             row["truncated"] = True
             continue
+        deadline = min(budget.deadline, now + 0.5)
         try:
             obj = target.getter()
             if obj is None:
@@ -156,11 +210,14 @@ def run_census(
             if isinstance(obj, functools._lru_cache_wrapper):
                 row.update(entries=obj.cache_info().currsize, unique_kb=None)
                 continue
-            if isinstance(obj, (dict, types.MappingProxyType, list, tuple, set, frozenset, deque)):
+            if isinstance(obj, _CONTAINERS):
                 row["entries"] = len(obj)
-            unique, objects, truncated, failed = _measure(obj, budget, shared)
-            errors += int(failed)
-            row.update(unique_kb=unique / 1024, objects=objects, truncated=truncated)
+            measurement = _measure(obj, budget, shared, deadline=deadline)
+            errors += int(measurement.failed)
+            row.update(unique_kb=measurement.size / 1024, objects=measurement.objects,
+                       truncated=measurement.truncated)
+            if measurement.sampled:
+                row.update(sampled=True, sample_size=measurement.sample_size)
         except Exception:  # noqa: BLE001 - never serialize arbitrary exception data.
             errors += 1
             row["truncated"] = True
@@ -173,7 +230,7 @@ def run_census(
     shared.clear()
     roots.clear()
     result = {"cache_census": rows, "census_ms": (time.perf_counter() - started) * 1000,
-              "visited_objects": visited_objects}
+              "visited_objects": visited_objects, "visits": budget.visits}
     if errors:
         result["census_errors"] = errors
     return result

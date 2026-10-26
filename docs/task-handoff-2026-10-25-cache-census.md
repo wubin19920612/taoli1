@@ -162,3 +162,59 @@ python -m pytest -q --basetemp=.pytest_m2_2b_full --tb=short
 全部 pytest 都显式使用 worktree 内 basetemp 并保持默认离线护栏。RED 在仓库根目录运行时，除新行为预期失败外，两个既有 subprocess 导入测试因 cwd 无法导入 app 而失败；最终指定回归已在 backend 目录运行并全部通过，没有修改这些既有测试。
 
 保留原有三个未跟踪目录及本轮新增的 `backend/.pytest_m2_2b_red/`、`backend/.pytest_m2_2b/`、`backend/.pytest_m2_2b_final/`、`backend/.pytest_m2_2b_full/`，不暂存测试产物。没有生产备份、部署或线上验证。后续请在独立验收任务验证 Linux 实际 RSS/余量、跳过日志、截断比例及 census_ms p95，再决定是否开启生产普查或进入 M2-3。
+
+## 生产缺陷修复：预算与抽样
+
+2026-10-26，分支 `codex/m2-2-cache-census`，修复基线 `8721fef445e7699e6383d166cf01fb042e2be260`。据用户提供的生产观察，该版本已经上线：60 万次访问预算在共享集合仅 **73,317** 个对象时用完，只有 `snapshot_store._markets`（9410 条）得到约 17 MB 的截断数据，后续目标均为零；每轮约 680 ms，释放后 `census_rss_delta_mb=0`。本轮未连接生产复核。这一节替代上一节关于“重复引用也消耗访问次数预算”的设计说明；旧测量保留作历史证据。
+
+### 范围与实现
+
+仅修改 `backend/app/runtime/cache_census.py`、`backend/tests/test_cache_census.py`、本交接。没有修改 memory_probe/config/main 或业务代码。用户要求新建本地提交，不 amend、不 push；没有运行 WSL、Docker、备份或部署。
+
+- `_Budget.max_objects` 约束整轮共享集合的实际大小，只有新 id 才占用对象预算。重复引用只增加 `visits`，不扣减对象预算；集合已满时，仍能跳过已见 id，遇到下一个新 id 才截断，集合大小不会超过上限。默认仍为 **600,000**，原 cgroup 余量保护公式保持不变。
+- dict/list/tuple/set/deque 直接元素数 **>2000** 时，深度测量 **500** 个元素，位置为 `floor(i * len / 500)`，`i=0..499`。dict 每个键值对算一个抽样元素，键和值均测量；同样适用于原来支持的 mappingproxy/frozenset。序列直接按索引取样，其他类型通过迭代器和 islice 前进，不复制完整容器。
+- 容器自身 `sys.getsizeof` 精确计入；只有抽样元素的深度贡献乘以 `len / 500`。嵌套大容器继续抽样，倍率逐层相乘。实际测到的对象仍进入同一个共享集合，重复 id 及其子图不再计入。行内 `sampled=true` 表示遇到抽样容器；`sample_size` 是该目标内所有抽样容器**实际抽取的直接元素数之和**，正常根容器为 500，多个嵌套容器可大于 500，超时可小于计划抽样数。没有抽样的行保持原字段集合。
+- 每个目标在调用 getter 前确定截止时间 `min(全局截止时间, 当前时间 + 0.5秒)`；单目标超时保留该行部分结果并置 `truncated=true`，后续目标使用自己的 0.5 秒窗口。全局仍为 **3 秒**，耗尽后后续目标直接记截断。getsizeof、单次迭代、getter 仍是协作式检查，不能强制抢占。
+- 新增整轮 `visits`：成功从遍历迭代器取出的对象次数，包含重复引用和触及上限时未能入集合的对象，不含 islice 跳过的未测元素、迭代结束检查或被外推的假想对象。`visited_objects` 和每行 `objects` 仍为实际不重复对象数，前者等于各行后者之和；低余量跳过时二者均为零。`unique_kb` 仍是按共享集合归属的估算体积，排序和隐私约束保持不变。RSS 字段及其含义完全未改。
+
+### 测试与误差验收
+
+新增覆盖：100 万次共享引用在默认抽样及关闭抽样的完整遍历路径上均不提前耗尽对象预算，后续目标仍被测量；不重复对象达到上限时截断；五类容器 2000/2001/10003 元素边界；均匀步长、容器浅大小、嵌套倍率、样本加入共享集合；1 万个 60 字段 Pydantic 模型的外推误差；fake clock 下单目标超时、getter 耗时计入该目标、后续目标继续、全局超时仍终止后续目标。完整百万引用用 fake clock 单独验证对象预算，生产时重复遍历仍受时间限制。
+
+本机 **Windows / CPython 3.12.10 / 64 位 / Pydantic 2.12.5**：1 万个同构 60 字段模型，抽样估算 **53,744,096 B**，关闭抽样后完整遍历 **53,688,122 B**，相对误差 **0.1043%**，满足 <15%。证据：`backend/.pytest_m2_2c/test_sampled_pydantic_estimate0/sampling_accuracy.json`。
+
+指定四文件回归 **153 passed in 32.21s**，退出码 0，cwd 为 backend：
+
+```powershell
+python -m pytest -q tests/test_cache_census.py tests/test_memory_probe.py tests/test_config.py tests/test_task_supervisor.py --basetemp=.pytest_m2_2c --tb=short
+```
+
+随后后端全量 **1874 passed, 12 warnings in 121.20s**，退出码 0；12 条均为既有 `datetime.utcnow()` 弃用警告。cwd 同为 backend：
+
+```powershell
+python -m pytest -q --basetemp=.pytest_m2_2c_full --tb=short
+```
+
+所有 pytest 使用 worktree 内不同的 basetemp，保留默认离线网络护栏，不复用或清理旧任务的测试目录。新增行为在修复前指定四文件 RED 回归为 16 failed / 134 passed，之后补充嵌套倍率、getter 超时与生产规模基准，最终两轮验收均通过。
+
+### 接近生产规模的本机性能验收
+
+`test_production_scale_registered_targets_benchmark` 通过真实 `build_census_targets` 登记并选择四个压力目标：三个 SnapshotStore 列表分别 **9410 / 9500 / 4600** 条，共 **23,510** 个模型引用，底层 **12,000** 个不同的 60 字段 Pydantic 模型，列表间互相共享；`market_collector._exchange_snapshots` 持有嵌套 JSON dict，10 个分组各含 30,000 行，每行拥有不同 dict、str、float、int，共约 **120 万** 个不重复 JSON 对象，另有少量容器及共享字段名。构造数据不计入 census_ms。
+
+三轮默认 60 万对象 / 3 秒预算下：
+
+| 项目 | 第一轮 | 第二轮 | 第三轮 |
+|---|---:|---:|---:|
+| census_ms | 197.301 | 183.165 | 191.832 |
+| visits | 303,510 | 303,510 | 303,510 |
+| visited_objects | 111,503 | 111,503 | 111,503 |
+| 非零体积目标 | 4/4 | 4/4 | 4/4 |
+| truncated / census_errors | 0 / 0 | 0 / 0 | 0 / 0 |
+
+三轮均满足 **census_ms <1500**。每轮只使用一个共享集合；清空前测得集合及哈希表 **4,194,536 B**，111,503 个 id 整数 **3,568,096 B**，合计 **7,762,632 B（约 7.403 MiB）**。使用测试专用 TrackingSet，在 clear 前计算浅大小及 id 大小之和，包含子类额外的少量固定开销；计数耗时也包含在上述 census_ms 内。这是共享集合当前占用，不是全进程 RSS 或集合扩容瞬时峰值，也不包含 fixture 本体。没有把 tracemalloc 引入运行时。证据：`backend/.pytest_m2_2c/test_production_scale_register0/production_scale_metrics.json`。
+
+### 限制与下一步
+
+抽样外推是估算：异构元素、按步长聚集的大对象或大量共享引用可能产生较大误差；跨目标只对**实际测到**的 id 去重，不能用 500 个样本推断所有未抽到对象的共享关系。因此，多个共享容器的外推体积之和不等于完整对象图的精确去重体积，不能当作 RSS 或严格可加减的泄漏量。`truncated=false` 表示抽样遍历完成，不表示所有元素均被深度测量。
+
+保留原七个未跟踪 pytest 目录及本轮 `.pytest_m2_2c_red/`、`.pytest_m2_2c/`、`.pytest_m2_2c_full/`（均在 backend 内），均不暂存；按用户文件限制不修改 `docs/next-task.md`。本次只交付本地修复；生产版本仍按用户提供的信息记为 `8721fef`，未推送、未做生产备份或部署、未重新取得线上验收数据。后续在独立生产验收任务推送/部署并检查所有登记目标、sampled/sample_size、visits/visited_objects、截断及耗时分布，再继续 M2-3。
