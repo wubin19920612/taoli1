@@ -494,6 +494,7 @@ async def test_tracemalloc_stop_failure_is_logged_without_exception_details(monk
     assert "secret" not in caplog.text and "https://" not in caplog.text
 
 
+@pytest.mark.benchmark
 def test_sampling_cost_with_large_snapshot_is_below_five_ms(monkeypatch):
     monkeypatch.setattr(gc, "get_objects", forbidden)
     store = SnapshotStore()
