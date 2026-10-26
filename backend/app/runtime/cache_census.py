@@ -184,7 +184,7 @@ def read_cgroup_headroom_bytes() -> int | None:
 
 def run_census(
     targets: list[CensusTarget], *, max_objects: int = 600_000,
-    budget_seconds: float = 3.0,
+    budget_seconds: float = 3.0, target_seconds: float = 0.5,
 ) -> dict:
     started = time.perf_counter()
     headroom = read_cgroup_headroom_bytes()
@@ -192,7 +192,8 @@ def run_census(
     # Check before constructing the visited set or invoking any target getter.
     if headroom is not None and headroom < max_objects * 80 + 64 * 1024 ** 2:
         return {"census_skipped": "low_headroom", "headroom_mb": headroom / 1024 ** 2,
-                "visited_objects": 0, "visits": 0}
+                "visited_objects": 0, "visits": 0,
+                "budget_seconds": budget_seconds, "target_seconds": target_seconds}
     budget = _Budget(max_objects, time.monotonic() + budget_seconds)
     shared: set[int] = set()
     roots = []  # Prevent id reuse for containers returned temporarily by getters.
@@ -208,7 +209,7 @@ def run_census(
         if now >= budget.deadline:
             row["truncated"] = True
             continue
-        deadline = min(budget.deadline, now + 0.5)
+        deadline = min(budget.deadline, now + target_seconds)
         try:
             obj = target.getter()
             if obj is None:
@@ -238,7 +239,8 @@ def run_census(
     shared.clear()
     roots.clear()
     result = {"cache_census": rows, "census_ms": (time.perf_counter() - started) * 1000,
-              "visited_objects": visited_objects, "visits": budget.visits}
+              "visited_objects": visited_objects, "visits": budget.visits,
+              "budget_seconds": budget_seconds, "target_seconds": target_seconds}
     if errors:
         result["census_errors"] = errors
     return result

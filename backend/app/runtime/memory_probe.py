@@ -91,6 +91,8 @@ class MemoryProbe:
         census_targets: list["CensusTarget"] | None = None,
         census_interval_seconds: float = 300,
         census_max_objects: int = 600_000,
+        census_budget_seconds: float = 3.0,
+        census_target_seconds: float = 0.5,
     ) -> None:
         self.store = store
         self.supervisor = supervisor
@@ -102,6 +104,8 @@ class MemoryProbe:
         self.census_targets = census_targets
         self.census_interval_seconds = census_interval_seconds
         self.census_max_objects = census_max_objects
+        self.census_budget_seconds = census_budget_seconds
+        self.census_target_seconds = census_target_seconds
 
     def _iteration_times(self) -> dict:
         # Keep only task names and timestamps, never task results or snapshots.
@@ -161,14 +165,19 @@ class MemoryProbe:
                     from app.runtime.cache_census import run_census
 
                     rss_before = read_process_status()["rss_anon_mb"]
-                    result = run_census(self.census_targets, max_objects=self.census_max_objects)
+                    result = run_census(
+                        self.census_targets, max_objects=self.census_max_objects,
+                        budget_seconds=self.census_budget_seconds,
+                        target_seconds=self.census_target_seconds,
+                    )
                     rss_after = read_process_status()["rss_anon_mb"]
                     _log({**result, "rss_anon_mb": rss_after, "census_rss_delta_mb": (
                         rss_after - rss_before
                         if rss_after is not None and rss_before is not None else None
                     )})
                 except Exception:  # noqa: BLE001 - census cannot disrupt sampling.
-                    _log({"census_errors": 1})
+                    _log({"census_errors": 1, "budget_seconds": self.census_budget_seconds,
+                          "target_seconds": self.census_target_seconds})
                 next_census = self.clock() + self.census_interval_seconds
             delay = max(0.001, min(next_sample, self._last_summary + 60) - self.clock())
             if next_census is not None:

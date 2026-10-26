@@ -24,8 +24,11 @@ dev = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = '-m "not network"'
-markers = ["network: explicitly opted-in tests against real external services"]
+addopts = '-m "not network and not benchmark"'
+markers = [
+  "network: explicitly opted-in tests against real external services",
+  "benchmark: explicitly opted-in performance checks using real wall-clock time",
+]
 
 [tool.ruff]
 line-length = 100

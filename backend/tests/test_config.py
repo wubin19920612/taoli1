@@ -1,6 +1,8 @@
 from pathlib import Path
 
-from app.core.config import get_settings
+import pytest
+
+from app.core.config import Settings, get_settings
 
 
 def test_get_settings_loads_dotenv_from_parent_directory(
@@ -187,3 +189,61 @@ def test_get_settings_loads_funding_research_flags(tmp_path: Path, monkeypatch) 
         assert settings.funding_research_snapshot_retention_hours == 24
     finally:
         get_settings.cache_clear()
+
+
+def test_census_time_budget_defaults(monkeypatch):
+    monkeypatch.setattr("app.core.config.find_dotenv", lambda **kwargs: "")
+    monkeypatch.delenv("MEMORY_CENSUS_BUDGET_SECONDS", raising=False)
+    monkeypatch.delenv("MEMORY_CENSUS_TARGET_SECONDS", raising=False)
+    for settings in (Settings(), get_settings.__wrapped__()):
+        assert settings.memory_census_budget_seconds == 3.0
+        assert settings.memory_census_target_seconds == 0.5
+
+
+@pytest.mark.parametrize("budget,target", [(3.0, 0.5), (10.0, 10.0), (1e-9, 1e-9), (0.25, 0.1)])
+def test_census_time_budget_valid_boundaries_and_environment(monkeypatch, budget, target):
+    monkeypatch.setattr("app.core.config.find_dotenv", lambda **kwargs: "")
+    monkeypatch.setenv("MEMORY_CENSUS_BUDGET_SECONDS", str(budget))
+    monkeypatch.setenv("MEMORY_CENSUS_TARGET_SECONDS", str(target))
+    for settings in (Settings(memory_census_budget_seconds=budget, memory_census_target_seconds=target),
+                     get_settings.__wrapped__()):
+        assert settings.memory_census_budget_seconds == budget
+        assert settings.memory_census_target_seconds == target
+
+
+@pytest.mark.parametrize("field,value", [
+    (field, value)
+    for field in ("memory_census_budget_seconds", "memory_census_target_seconds")
+    for value in (0, -1, float("inf"), float("-inf"), float("nan"))
+] + [("memory_census_budget_seconds", 10.000001), ("memory_census_target_seconds", 3.000001)])
+def test_census_time_budget_rejects_invalid_values_and_environment(monkeypatch, field, value):
+    monkeypatch.setattr("app.core.config.find_dotenv", lambda **kwargs: "")
+    monkeypatch.setenv("MEMORY_CENSUS_BUDGET_SECONDS", "3.0")
+    monkeypatch.setenv("MEMORY_CENSUS_TARGET_SECONDS", "0.5")
+    with pytest.raises(ValueError, match=field):
+        Settings(**{field: value})
+    monkeypatch.setenv(field.upper(), str(value))
+    with pytest.raises(ValueError, match=field):
+        get_settings.__wrapped__()
+
+
+@pytest.mark.parametrize("budget,target", [(0.25, 0.5), (9.0, 9.000001)])
+def test_census_target_cannot_exceed_configured_budget(monkeypatch, budget, target):
+    monkeypatch.setattr("app.core.config.find_dotenv", lambda **kwargs: "")
+    monkeypatch.setenv("MEMORY_CENSUS_BUDGET_SECONDS", str(budget))
+    monkeypatch.setenv("MEMORY_CENSUS_TARGET_SECONDS", str(target))
+    with pytest.raises(ValueError, match="memory_census_target_seconds"):
+        Settings(memory_census_budget_seconds=budget, memory_census_target_seconds=target)
+    with pytest.raises(ValueError, match="memory_census_target_seconds"):
+        get_settings.__wrapped__()
+
+
+@pytest.mark.parametrize("name", ["MEMORY_CENSUS_BUDGET_SECONDS", "MEMORY_CENSUS_TARGET_SECONDS"])
+@pytest.mark.parametrize("value", ["", "invalid"])
+def test_census_time_budget_rejects_malformed_environment(monkeypatch, name, value):
+    monkeypatch.setattr("app.core.config.find_dotenv", lambda **kwargs: "")
+    monkeypatch.setenv("MEMORY_CENSUS_BUDGET_SECONDS", "3.0")
+    monkeypatch.setenv("MEMORY_CENSUS_TARGET_SECONDS", "0.5")
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValueError):
+        get_settings.__wrapped__()

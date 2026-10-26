@@ -273,3 +273,51 @@ python -m pytest -q --basetemp=.pytest_m2_2d --tb=short
 哈希抽样仍是估算，实际入选比例依赖对象地址分布；异构数据、重复引用、共享后代以及零入选时的首元素回退仍可能影响外推，不能将结果当作精确对象图大小或 RSS。本轮修复针对不同长度容器的样本错位，未调整抽样阈值、预算或业务缓存。
 
 开始时已有十个未跟踪 pytest 目录全部保留，本轮只新增 `backend/.pytest_m2_2d/` 和 `backend/.pytest_m2_2d_evidence/`，均不暂存。线上状态本轮未核实；没有生产备份、部署或线上验收。下个独立任务继续生产验收或 M2-3，依本节规则检查样本数、共享前缀增量、截断和耗时。
+
+## CI 失败修复：可配置时间预算
+
+2026-10-26，分支 `codex/m2-2-cache-census`，本轮基线 `8da136a5146e4c4b29b9956f603fc759552676b4`。用户报告 GitHub Ubuntu runner 的唯一失败为生产规模基准中 JSON 目标超过既有 0.5 秒单目标窗口，导致 `truncated=true`；生产容器 Python 同一遍历约 1151 ms、本机约 199 ms（约 5.8 倍）。后者为用户提供的 Claude 实测，本轮未连接生产复测。
+
+### 配置、传参和输出
+
+- `core/config.py` 新增 `memory_census_budget_seconds` / `MEMORY_CENSUS_BUDGET_SECONDS`，默认 **3.0**；要求有限且 **0 < budget <= 10**。新增 `memory_census_target_seconds` / `MEMORY_CENSUS_TARGET_SECONDS`，默认 **0.5**；要求有限且 **0 < target <= budget**。非法值在配置构造时抛出 `ValueError`，环境变量同样校验。
+- `main.py` 仅增加两个参数，经 `MemoryProbe` 传给 `run_census(budget_seconds=..., target_seconds=...)`。单目标截止时间仍取整轮 deadline 与 `目标开始时间 + target_seconds` 的较小值，getter 耗时仍计入目标窗口。默认预算、普查调度、抽样、对象上限及业务缓存行为保持原规则。
+- 每轮普通结果和低内存跳过结果都带数字 `budget_seconds` / `target_seconds`；探针捕获异常时的计数日志也带这两个值，便于对照实际生效配置。未开启普查时不新增普查日志。
+- 配置测试覆盖默认值、环境变量解析、正数下边界、10 秒上边界、target 等于 budget、零/负数/NaN/正负无穷/超上限/非法字符串，以及 target 大于自定义 budget。fake clock 验证自定义预算确实改变截断行为；真实 lifespan → MemoryProbe → fake run_census 验证默认和自定义配置传到底层；普通及低内存跳过日志验证两个数值字段。
+
+### 墙钟测试与默认 CI
+
+`backend/pyproject.toml` 只修改 pytest 配置：注册 `benchmark`，默认 `addopts = '-m "not network and not benchmark"'`。生产规模基准和真实服务登记基准均加 `@pytest.mark.benchmark`，保留所有既有断言，包括所有压力目标非零且不截断、`census_ms < 1500`。
+
+逐项检查其余计时断言：`test_deadline_shared_by_all_targets` 的 monotonic 虽已伪造，但 `census_ms` 来自真实 perf_counter，所以其 `<200 ms` 断言对应测试也标记 benchmark。其余 fake clock 调度、目标超时和全局超时测试保留在默认回归；新增的纯 fake clock 用例继续覆盖全局截止和后续 getter 跳过。对象上限为零和已过期 deadline 的即时截断断言也保留，不是性能上限验收。未删除或放宽性能断言。
+
+另发现 `backend/tests/test_memory_probe.py::test_sampling_cost_with_large_snapshot_is_below_five_ms` 使用真实 perf_counter 断言 `<5 ms`。该文件未列入用户允许修改的白名单，已单独请求允许只增加一行 benchmark 标记；本轮尚未获答复，故保持原样，仍在默认回归中运行并通过。这是要求 3a 的一个待确认范围项；不能声称默认 CI 已排除所有真实耗时断言。若获准，给该项加标记并依次重跑定向、全量和 benchmark，更新本节结果。
+
+### 本机验证与证据
+
+所有 pytest 都使用仓库根目录下的 `backend/.pytest_m2_2e` 作为 basetemp；每次复用前把上一阶段产物复制到 `backend/.pytest_m2_2e_evidence/` 对应子目录，保留原有全部未跟踪目录。以下命令从 worktree 根目录运行；PYTHONPATH 让既有子进程导入测试同样可以找到 `app`：
+
+```powershell
+$env:PYTHONPATH = (Resolve-Path -LiteralPath backend).Path
+python -m pytest -q backend/tests/test_cache_census.py backend/tests/test_memory_probe.py backend/tests/test_config.py --basetemp=backend/.pytest_m2_2e --tb=short
+python -m pytest -q backend/tests --basetemp=backend/.pytest_m2_2e --tb=short
+python -m pytest -m benchmark -q backend/tests/test_cache_census.py backend/tests/test_memory_probe.py --basetemp=backend/.pytest_m2_2e --tb=short
+```
+
+初次定向运行未设置 PYTHONPATH，两个既有子进程导入测试失败；补齐本轮命令环境后重跑，不修改导入测试代码。初次日志及产物保存于 `targeted.txt` / `targeted_initial/`，重跑日志为 `targeted_rerun.txt`。最终验证均退出码 0：
+
+| 顺序 | 验证 | 结果 |
+|---|---|---|
+| 1 | test_cache_census / test_memory_probe / test_config | **174 passed, 3 deselected in 24.24s** |
+| 2 | 后端全量，默认排除 network / benchmark | **1913 passed, 3 deselected, 12 warnings in 121.36s** |
+| 3 | 显式 `-m benchmark` | **3 passed, 145 deselected in 9.16s** |
+
+12 条警告均为既有 `datetime.utcnow()` 弃用警告。日志分别为 `targeted_rerun.txt`、`full.txt`、`benchmark.txt`；产物分别归档到证据目录的 `targeted/`、`full/`、`benchmark/`。证据全部位于 `backend/.pytest_m2_2e_evidence/`，不加入提交。
+
+生产规模基准三轮 `census_ms` 为 **578.758 / 593.612 / 582.301 ms**，4 个目标均非零且未截断，visited_objects 每轮 **341,159**、visits **650,423**。返回结果内预算均为默认 **3.0 / 0.5 秒**。详见 `benchmark/test_production_scale_register0/production_scale_metrics.json`；这是本机 Windows 结果，没有更改基准预算来取得通过。
+
+额外运行 Ruff，并逐文件对比基线：config 和 memory_probe 无发现，cache_census 1 项、test_cache_census 3 项、test_config 3 项均为既有，未新增 lint 问题，也未扩大范围修复。
+
+### 交付边界与下一步
+
+本轮按用户要求只新建本地提交，不 amend、不 push；没有运行 WSL、Docker、连接生产、备份或部署。没有修改 `docs/next-task.md`、业务服务或 CI 工作流文件。本轮测试证据目录不暂存。线上版本与新配置的生产效果均未核实，不能把本机 benchmark 通过当作 Ubuntu CI 或生产验收通过；后续在独立生产验收任务选择有效预算，核对日志中的生效值、截断、耗时分布和业务延迟，再继续 M2-3。

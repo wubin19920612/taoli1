@@ -338,6 +338,7 @@ def test_getter_time_is_part_of_target_budget(monkeypatch):
     assert rows["later"]["unique_kb"] > 0
 
 
+@pytest.mark.benchmark
 def test_deadline_shared_by_all_targets(monkeypatch):
     ticks = iter(i * 0.01 for i in range(1000))
     monkeypatch.setattr(census.time, "monotonic", lambda: next(ticks))
@@ -349,6 +350,33 @@ def test_deadline_shared_by_all_targets(monkeypatch):
     assert all(row["truncated"] for row in result["cache_census"])
     assert not called
     assert result["census_ms"] < 200
+
+
+@pytest.mark.parametrize("budget_seconds,target_seconds,truncated", [
+    (3.0, 0.5, [True, True, False]),
+    (3.0, 1.5, [False, False, False]),
+    (1.0, 1.0, [False, True, True]),
+])
+def test_configured_time_budgets_control_deadlines(
+    monkeypatch, budget_seconds, target_seconds, truncated,
+):
+    now, called = [0.0], []
+
+    def getter(index):
+        called.append(index)
+        now[0] += 0.75 if index < 2 else 0
+        return bytearray(100)
+
+    monkeypatch.setattr(census.time, "monotonic", lambda: now[0])
+    result = census.run_census([
+        census.CensusTarget(str(index), lambda index=index: getter(index))
+        for index in range(3)
+    ], budget_seconds=budget_seconds, target_seconds=target_seconds)
+    rows = {row["name"]: row for row in result["cache_census"]}
+    assert [rows[str(index)]["truncated"] for index in range(3)] == truncated
+    assert called == ([0, 1] if budget_seconds == 1.0 else [0, 1, 2])
+    assert result["budget_seconds"] == budget_seconds
+    assert result["target_seconds"] == target_seconds
 
 
 def test_missing_errors_and_log_privacy(caplog):
@@ -512,8 +540,10 @@ async def test_scheduling_independent_interval_and_error_isolation(monkeypatch, 
     stop = asyncio.Event()
     samples, runs, logs = [], [], []
 
-    def run(targets, *, max_objects):
+    def run(targets, *, max_objects, budget_seconds, target_seconds):
         assert max_objects == 12345
+        assert budget_seconds == 8.0
+        assert target_seconds == 2.0
         runs.append(now[0])
         if broken:
             raise ValueError("sensitive-" + "failure")
@@ -533,18 +563,67 @@ async def test_scheduling_independent_interval_and_error_isolation(monkeypatch, 
         SnapshotStore(), TaskSupervisor(), interval_seconds=5, clock=lambda: now[0],
         census_targets=[] if enabled else None, census_interval_seconds=2,
         census_max_objects=12345,
+        census_budget_seconds=8.0, census_target_seconds=2.0,
     )
     monkeypatch.setattr(probe, "sample", lambda: samples.append(now[0]))
     await probe.run(stop)
     assert samples == [0, 5]
     assert runs == ([2, 4, 6] if enabled else [])
     if broken:
-        assert logs == [{"census_errors": 1}] * 3
+        assert logs == [{"census_errors": 1, "budget_seconds": 8.0, "target_seconds": 2.0}] * 3
     elif enabled:
         assert all("rss_anon_mb" in row for row in logs)
         assert all("census_rss_delta_mb" in row and row["visited_objects"] == 0 for row in logs)
     else:
         assert logs == []
+
+
+@pytest.mark.parametrize("budget_seconds,target_seconds", [(3.0, 0.5), (8.0, 2.0)])
+async def test_lifespan_passes_configured_time_budgets_to_census(
+    monkeypatch, budget_seconds, target_seconds,
+):
+    from app import main
+
+    now, probes, calls = [0.0], [], []
+    stop = asyncio.Event()
+    original_probe = memory_probe.MemoryProbe
+
+    def build_probe(*args, **kwargs):
+        probe = original_probe(*args, **kwargs, clock=lambda: now[0])
+        monkeypatch.setattr(probe, "sample", lambda: None)
+        probes.append(probe)
+        return probe
+
+    def run(targets, **kwargs):
+        calls.append((targets, kwargs))
+        stop.set()
+        return {"cache_census": [], "budget_seconds": kwargs["budget_seconds"],
+                "target_seconds": kwargs["target_seconds"]}
+
+    async def wait_for(awaitable, timeout):
+        awaitable.close()
+        now[0] += timeout
+        raise TimeoutError
+
+    monkeypatch.setattr(TaskSupervisor, "start", lambda *args, **kwargs: None)
+    monkeypatch.setattr(main, "default_exchange_adapters", list)
+    monkeypatch.setattr(memory_probe, "MemoryProbe", build_probe)
+    monkeypatch.setattr(memory_probe.asyncio, "wait_for", wait_for)
+    monkeypatch.setattr(census, "run_census", run)
+    app = main.create_app(settings=config.Settings(
+        database_url="sqlite:///:memory:", memory_probe_enabled=True,
+        memory_census_enabled=True, memory_census_interval_seconds=2,
+        memory_census_max_objects=12345,
+        memory_census_budget_seconds=budget_seconds,
+        memory_census_target_seconds=target_seconds,
+    ), start_background_workers=True)
+    async with app.router.lifespan_context(app):
+        assert len(probes) == 1
+        await probes[0].run(stop)
+        assert calls == [(probes[0].census_targets, {
+            "max_objects": 12345, "budget_seconds": budget_seconds,
+            "target_seconds": target_seconds,
+        })]
 
 
 def test_registry_contains_all_static_paths_and_reads_replacements():
@@ -591,7 +670,8 @@ def test_cgroup_headroom_gate_before_any_getter(monkeypatch, max_objects, margin
     if skipped:
         assert not calls
         assert result == {"census_skipped": "low_headroom", "headroom_mb": headroom / 1024 ** 2,
-                          "visited_objects": 0, "visits": 0}
+                          "visited_objects": 0, "visits": 0,
+                          "budget_seconds": 3.0, "target_seconds": 0.5}
     else:
         assert calls == [True]
         assert result["visited_objects"] == 2
@@ -641,6 +721,7 @@ async def test_probe_census_logs_rss_delta(monkeypatch, caplog, before, after, e
     probe = memory_probe.MemoryProbe(
         SnapshotStore(), TaskSupervisor(), clock=lambda: now[0], census_targets=[],
         census_interval_seconds=2,
+        census_budget_seconds=6.0, census_target_seconds=1.25,
     )
     monkeypatch.setattr(probe, "sample", lambda: None)
     await probe.run(stop)
@@ -651,6 +732,8 @@ async def test_probe_census_logs_rss_delta(monkeypatch, caplog, before, after, e
     assert logs[0]["census_rss_delta_mb"] == expected
     assert logs[0]["visited_objects"] == 0
     assert logs[0]["memory_probe"] == 1
+    assert logs[0]["budget_seconds"] == 6.0
+    assert logs[0]["target_seconds"] == 1.25
     if low_headroom:
         assert logs[0]["census_skipped"] == "low_headroom"
         assert logs[0]["headroom_mb"] == 64
@@ -724,6 +807,7 @@ async def test_inspecting_active_snapshot_does_not_pin_previous_generation():
         await asyncio.gather(task, return_exceptions=True)
 
 
+@pytest.mark.benchmark
 async def test_actual_service_registry_and_offline_benchmark(monkeypatch, tmp_path):
     from app import main
     from app.services.announcements import default_announcement_provider
@@ -787,6 +871,7 @@ async def test_actual_service_registry_and_offline_benchmark(monkeypatch, tmp_pa
                 await adapter.client.aclose()
 
 
+@pytest.mark.benchmark
 def test_production_scale_registered_targets_benchmark(monkeypatch, tmp_path):
     models = _snapshot_fixture(12_000)
     store = SnapshotStore()

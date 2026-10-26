@@ -22,6 +22,8 @@ class Settings:
     memory_census_enabled: bool = False
     memory_census_interval_seconds: float = 300.0
     memory_census_max_objects: int = 600_000
+    memory_census_budget_seconds: float = 3.0
+    memory_census_target_seconds: float = 0.5
     memory_tracemalloc_seconds: float = 0.0
     market_identity_catalog_startup_delay_seconds: float = 300.0
     collector_post_publish_mode: Literal["background", "inline"] = "background"
@@ -85,6 +87,12 @@ class Settings:
             raise ValueError("memory_census_interval_seconds must be finite and positive")
         if type(self.memory_census_max_objects) is not int or self.memory_census_max_objects <= 0:
             raise ValueError("memory_census_max_objects must be a positive integer")
+        budget = self.memory_census_budget_seconds
+        if not math.isfinite(budget) or not 0 < budget <= 10:
+            raise ValueError("memory_census_budget_seconds must be finite and 0 < x <= 10")
+        target = self.memory_census_target_seconds
+        if not math.isfinite(target) or not 0 < target <= budget:
+            raise ValueError("memory_census_target_seconds must be finite and 0 < x <= budget")
         if not math.isfinite(self.memory_tracemalloc_seconds) or self.memory_tracemalloc_seconds < 0:
             raise ValueError("memory_tracemalloc_seconds must be finite and nonnegative")
         if self.collector_post_publish_mode not in {"background", "inline"}:
@@ -193,6 +201,8 @@ def get_settings() -> Settings:
         memory_census_enabled=bool_env("MEMORY_CENSUS_ENABLED", False),
         memory_census_interval_seconds=float(os.getenv("MEMORY_CENSUS_INTERVAL_SECONDS", "300")),
         memory_census_max_objects=int(os.getenv("MEMORY_CENSUS_MAX_OBJECTS", "600000")),
+        memory_census_budget_seconds=float(os.getenv("MEMORY_CENSUS_BUDGET_SECONDS", "3.0")),
+        memory_census_target_seconds=float(os.getenv("MEMORY_CENSUS_TARGET_SECONDS", "0.5")),
         memory_tracemalloc_seconds=float(os.getenv("MEMORY_TRACEMALLOC_SECONDS", "0")),
         market_identity_catalog_startup_delay_seconds=float(
             os.getenv("MARKET_IDENTITY_CATALOG_STARTUP_DELAY_SECONDS", "300")
