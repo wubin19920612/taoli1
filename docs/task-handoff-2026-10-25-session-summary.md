@@ -77,3 +77,11 @@
 - **普查缺陷（下一步首先要修）**：`_Budget.remaining` 按遍历次数扣减（重复引用也算），60 万预算在只访问了约 7.3 万个不重复对象时就用光了，只有 `snapshot_store._markets`（9410 条，被截断前约 17MB）有数据，其余目标全部被截断，显示 0。修复方向：对象预算改按不重复对象计数（集合大小才决定内存）；遍历次数只受时间预算约束，或者另设一个更大的遍历上限。开销表现良好：每轮阻塞约 680ms，`census_rss_delta_mb=0`，没有跳过、没有错误，0 OOM。
 - **新发现（S6）**：`radar.db` 814MB，`radar.db-wal` **174MB**，checkpoint 跟不上，很可能是备份变慢、失败的原因。每次部署的备份约 800MB。
 - 待办（按顺序）：① 修复普查预算 → 再上线采 1 小时 → 出 M2-3 清单；② S6 WAL/checkpoint 检查；③ RuntimeError 修复（M2-1 交接 §3.1）；④ S4 备份任务书。
+
+## 10 普查修复（2026-10-26，已验收，未上线）
+
+- 过夜：后端运行 9 小时，0 OOM，RSS 回到约 743MB；WAL 已降到 9.4MB（174MB 是暂时堆积，S6 往后放）。
+- Codex 桌面版升级到 v0.164，路径改为 `...\Codex\bin\2993767bd1dfb009\codex.exe`，参数没变。
+- `codex/m2-2-cache-census`：`e2662af`（对象预算按不重复对象计数，大容器抽样，每目标 0.5 秒上限，输出 `visits`）→ Claude 压测发现跨目标重复计算（`all_markets` 应约 0.3MB，实际 22.9MB），打回 → `8da136a`（按对象 id 哈希固定 1/16 一致抽样）。Claude 复测：all_markets 0.4MB，每轮 320–410ms，全量 1888 passed。压测脚本在会话 scratchpad 的 `bench_census.py`。
+- 已知局限：dict 按 value 的 id 抽样，大量共享同一个 value（如 True、小整数）时会全选或全不选。全选时结果精确但较慢；全不选时退化为按第一个元素外推。
+- 上线：推送 `8da136a` → CI → `.env` 加 `MEMORY_CENSUS_ENABLED=true`（先备份）→ 部署 → 采 1 小时（建议用服务器端 nohup 脚本自动导出并关闭）→ 出 M2-3 清单。需要用户批准。
