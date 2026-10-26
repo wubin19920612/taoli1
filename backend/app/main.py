@@ -17,6 +17,7 @@ from app.api import (
     routes_astro,
     routes_admin,
     routes_alerts,
+    routes_features,
     routes_funding_arbitrage,
     routes_fs_monitor,
     routes_funding_research,
@@ -780,6 +781,7 @@ def create_app(
     if start_collector and not start_background_workers:
         raise ValueError("start_collector requires start_background_workers")
     app_settings = settings or get_settings()
+    disabled = app_settings.disabled_features
     store = snapshot_store or SnapshotStore()
     stop_event = asyncio.Event()
 
@@ -789,23 +791,25 @@ def create_app(
         _ensure_database_parent(db_path)
         db = await connect_database(db_path, recover_stale_snapshots=True)
         await initialize_schema(db)
-        route_stem, route_extension = os.path.splitext(db_path)
-        route_db_path = f"{route_stem}-squeeze-route{route_extension or '.db'}"
-        route_db = db if db_path == ":memory:" else await connect_database(route_db_path)
-        if route_db is not db:
-            await initialize_route_schema(route_db)
-            await migrate_legacy_route_data(route_db, db_path)
-            await route_db.execute("PRAGMA busy_timeout=500")
-        await initialize_paper_schema(route_db)
         app.state.db = db
-        app.state.squeeze_repo = SqueezeRepository(db)
-        app.state.squeeze_route_repo = SqueezeRouteRepository(route_db)
-        app.state.squeeze_paper_repo = SqueezePaperRepository(
-            route_db, app.state.squeeze_route_repo._lock
-        )
-        app.state.squeeze_paper_monitor = SqueezePaperMonitor(
-            app.state.squeeze_paper_repo, app.state.squeeze_route_repo
-        )
+        route_db = None
+        if "squeeze" not in disabled:
+            route_stem, route_extension = os.path.splitext(db_path)
+            route_db_path = f"{route_stem}-squeeze-route{route_extension or '.db'}"
+            route_db = db if db_path == ":memory:" else await connect_database(route_db_path)
+            if route_db is not db:
+                await initialize_route_schema(route_db)
+                await migrate_legacy_route_data(route_db, db_path)
+                await route_db.execute("PRAGMA busy_timeout=500")
+            await initialize_paper_schema(route_db)
+            app.state.squeeze_repo = SqueezeRepository(db)
+            app.state.squeeze_route_repo = SqueezeRouteRepository(route_db)
+            app.state.squeeze_paper_repo = SqueezePaperRepository(
+                route_db, app.state.squeeze_route_repo._lock
+            )
+            app.state.squeeze_paper_monitor = SqueezePaperMonitor(
+                app.state.squeeze_paper_repo, app.state.squeeze_route_repo
+            )
         app.state.alert_rule_repo = AlertRuleRepository(db)
         app.state.alert_event_repo = AlertEventRepository(db)
         app.state.phone_price_alert_rule_repo = PhonePriceAlertRuleRepository(db)
@@ -859,14 +863,17 @@ def create_app(
             alert_sender=preadd_alert_sender,
         )
         app.state.history_repo = OpportunityHistoryRepository(db)
-        app.state.funding_research_repo = FundingResearchRepository(db)
+        app.state.funding_research_repo = (
+            FundingResearchRepository(db) if "funding_research" not in disabled else None
+        )
         app.state.index_component_repo = IndexComponentRepository(db)
         app.state.announcement_repo = AnnouncementRepository(db)
-        app.state.oil_news_repo = OilNewsRepository(db)
-        app.state.second_level_sampler = SecondLevelSampler(
-            SecondLevelSamplingRepository(db),
-            risk_settings_loader=app.state.settings_repo.get_risk_settings,
-        )
+        app.state.oil_news_repo = OilNewsRepository(db) if "oil_news" not in disabled else None
+        if "second_level_sampling" not in disabled:
+            app.state.second_level_sampler = SecondLevelSampler(
+                SecondLevelSamplingRepository(db),
+                risk_settings_loader=app.state.settings_repo.get_risk_settings,
+            )
         text_alert_sender = (
             (lambda message: _send_index_component_alert(app, message))
             if app_settings.feishu_live_send_enabled
@@ -878,18 +885,20 @@ def create_app(
             and app_settings.feishu_webhook_url
             else None
         )
-        app.state.oil_news_monitor = OilNewsMonitor(
-            app.state.oil_news_repo,
-            OilNewsProvider(),
-            alert_sender=oil_news_alert_sender,
-            translator=OilNewsTranslator(),
-        )
-        app.state.negative_basis_monitor = NegativeBasisMonitor(
-            NegativeBasisMonitorRepository(db),
-            snapshot_store=store,
-            alert_sender=text_alert_sender,
-            risk_settings_loader=app.state.settings_repo.get_risk_settings,
-        )
+        if "oil_news" not in disabled:
+            app.state.oil_news_monitor = OilNewsMonitor(
+                app.state.oil_news_repo,
+                OilNewsProvider(),
+                alert_sender=oil_news_alert_sender,
+                translator=OilNewsTranslator(),
+            )
+        if "negative_basis" not in disabled:
+            app.state.negative_basis_monitor = NegativeBasisMonitor(
+                NegativeBasisMonitorRepository(db),
+                snapshot_store=store,
+                alert_sender=text_alert_sender,
+                risk_settings_loader=app.state.settings_repo.get_risk_settings,
+            )
         app.state.pair_spread_funding_recorder = PairSpreadFundingRecorder(PairSpreadFundingRepository(db))
         preset_db = db if db_path == ":memory:" else await connect_database(db_path)
         app.state.pair_spread_preset_repo = PairSpreadPresetRepository(preset_db)
@@ -915,7 +924,8 @@ def create_app(
         if start_background_workers and app_settings.memory_probe_enabled:
             supervisor.enable_memory_probe()
         supervisor.start("event-loop-lag", supervisor.loop_lag.run, restart=True, critical=False)
-        if start_collector and start_background_workers and app_settings.squeeze_monitor_enabled:
+        if (start_collector and start_background_workers
+                and app_settings.squeeze_monitor_enabled and "squeeze" not in disabled):
             symbols = tuple(
                 symbol.strip().upper()
                 for symbol in app_settings.squeeze_monitor_symbols.split(",")
@@ -938,7 +948,8 @@ def create_app(
             _start_background_task(
                 supervisor, lambda: app.state.squeeze_monitor.run(stop_event), name="squeeze-monitor"
             )
-        if start_collector and start_background_workers and app_settings.squeeze_route_enabled:
+        if (start_collector and start_background_workers
+                and app_settings.squeeze_route_enabled and "squeeze" not in disabled):
             app.state.squeeze_route_monitor = SqueezeRouteMonitor(
                 app.state.squeeze_route_repo, RouteMonitorConfig()
             )
@@ -946,18 +957,21 @@ def create_app(
                 supervisor, lambda: app.state.squeeze_route_monitor.run(stop_event),
                 name="squeeze-route-monitor",
             )
-        if start_collector and start_background_workers and app_settings.squeeze_paper_enabled:
+        if (start_collector and start_background_workers
+                and app_settings.squeeze_paper_enabled and "squeeze" not in disabled):
             _start_background_task(
                 supervisor, lambda: app.state.squeeze_paper_monitor.run(stop_event),
                 name="squeeze-paper-monitor",
             )
         if start_background_workers:
-            await app.state.second_level_sampler.initialize()
-            _start_background_task(
-                supervisor,
-                lambda: app.state.negative_basis_monitor.run(stop_event),
-                name="negative-basis-monitor",
-            )
+            if app.state.second_level_sampler is not None:
+                await app.state.second_level_sampler.initialize()
+            if "negative_basis" not in disabled:
+                _start_background_task(
+                    supervisor,
+                    lambda: app.state.negative_basis_monitor.run(stop_event),
+                    name="negative-basis-monitor",
+                )
             _start_background_task(
                 supervisor,
                 lambda: app.state.pair_spread_funding_recorder.run(stop_event),
@@ -1061,15 +1075,16 @@ def create_app(
                 lambda: _run_alert_loop(app, app_settings.poll_interval_seconds, stop_event),
                 name="alert-loop",
             )
-            _start_background_task(
-                supervisor,
-                lambda: _run_opportunity_radar_alert_loop(
-                    app,
-                    app_settings.poll_interval_seconds,
-                    stop_event,
-                ),
-                name="opportunity-radar-alert-loop",
-            )
+            if "opportunity_radar" not in disabled:
+                _start_background_task(
+                    supervisor,
+                    lambda: _run_opportunity_radar_alert_loop(
+                        app,
+                        app_settings.poll_interval_seconds,
+                        stop_event,
+                    ),
+                    name="opportunity-radar-alert-loop",
+                )
             if app_settings.feishu_live_send_enabled and app_settings.feishu_phone_enabled:
                 _start_background_task(
                     supervisor,
@@ -1112,25 +1127,26 @@ def create_app(
                 ),
                 name="announcement-enrichment-loop",
             )
-            _start_background_task(
-                supervisor,
-                lambda: run_oil_news_loop(
-                    app.state.oil_news_monitor,
-                    app.state.settings_repo.get_oil_news_settings,
-                    stop_event,
-                ),
-                name="oil-news-loop",
-            )
-            _start_background_task(
-                supervisor,
-                lambda: run_oil_news_translation_loop(
-                    app.state.oil_news_monitor,
-                    app.state.settings_repo.get_oil_news_settings,
-                    stop_event,
-                ),
-                name="oil-news-translation-loop",
-            )
-            if app_settings.funding_research_enabled:
+            if "oil_news" not in disabled:
+                _start_background_task(
+                    supervisor,
+                    lambda: run_oil_news_loop(
+                        app.state.oil_news_monitor,
+                        app.state.settings_repo.get_oil_news_settings,
+                        stop_event,
+                    ),
+                    name="oil-news-loop",
+                )
+                _start_background_task(
+                    supervisor,
+                    lambda: run_oil_news_translation_loop(
+                        app.state.oil_news_monitor,
+                        app.state.settings_repo.get_oil_news_settings,
+                        stop_event,
+                    ),
+                    name="oil-news-translation-loop",
+                )
+            if app_settings.funding_research_enabled and "funding_research" not in disabled:
                 _start_background_task(
                     supervisor,
                     lambda: _run_funding_research_loop(
@@ -1178,7 +1194,8 @@ def create_app(
                 app,
                 "astro_client",
                 "service_controller",
-                "gate_twap_manager",
+                # The manager owns client shutdown when present.
+                "gate_twap_manager" if app.state.gate_twap_manager is not None else "gate_twap_client",
                 "tradfi_perp_live_fetcher",
                 "second_level_sampler",
                 "negative_basis_monitor",
@@ -1195,7 +1212,7 @@ def create_app(
                 "instrument_statistics_service",
                 "feishu_notifier",
             )
-            if route_db is not db:
+            if route_db is not None and route_db is not db:
                 await route_db.close()
             if identity_db is not db:
                 await identity_db.close()
@@ -1237,7 +1254,9 @@ def create_app(
     app.state.account_connection_service = None
     app.state.alert_engine = AlertEngine()
     app.state.phone_price_alert_engine = PhonePriceAlertEngine()
-    app.state.opportunity_radar_alert_engine = OpportunityRadarAlertEngine()
+    app.state.opportunity_radar_alert_engine = (
+        OpportunityRadarAlertEngine() if "opportunity_radar" not in disabled else None
+    )
     app.state.hyperliquid_trade_status_service = HyperliquidTradeStatusService()
     app.state.astro_client = AstroSdkClient(
         AstroSdkConfig(
@@ -1264,7 +1283,10 @@ def create_app(
         )
     )
     gate_twap_client = GateTwapClient()
-    app.state.gate_twap_manager = GateTwapJobManager(gate_twap_client)
+    app.state.gate_twap_client = gate_twap_client
+    app.state.gate_twap_manager = (
+        GateTwapJobManager(gate_twap_client) if "gate_twap" not in disabled else None
+    )
     app.state.account_position_service = AccountPositionService(
         [GateAccountPositionProvider(gate_twap_client)]
     )
@@ -1296,6 +1318,7 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.include_router(routes_features.router, prefix="/api")
     app.include_router(routes_health.router, prefix="/api")
     app.include_router(routes_account_connections.router, prefix="/api")
     app.include_router(routes_account_positions.router, prefix="/api")

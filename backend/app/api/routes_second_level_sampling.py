@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
+from app.core.features import require_feature
 from app.core.security import dashboard_password_header, verify_dashboard_password
 from app.models.fat_finger_backtest import FatFingerBacktestRequest, FatFingerBacktestResult
 from app.models.pair_spread import normalize_pair_spread_symbol
@@ -17,7 +18,7 @@ from app.models.second_level_sampling import (
 from app.services.second_level_sampler import SecondLevelSampler
 from app.services.fat_finger_backtest import run_fat_finger_backtest
 
-router = APIRouter(prefix="/second-level-sampling")
+router = APIRouter(dependencies=[Depends(require_feature("second_level_sampling"))], prefix="/second-level-sampling")
 
 
 def _sampler(request: Request) -> SecondLevelSampler:
@@ -136,7 +137,7 @@ async def list_second_level_index_component_samples(
     )
 
 
-@router.post("/fat-finger-backtest", response_model=FatFingerBacktestResult)
+@router.post("/fat-finger-backtest", dependencies=[Depends(require_feature("fat_finger"))], response_model=FatFingerBacktestResult)
 async def run_second_level_fat_finger_backtest(
     config: FatFingerBacktestRequest,
     request: Request,

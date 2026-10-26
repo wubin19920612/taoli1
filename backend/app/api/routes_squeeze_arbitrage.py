@@ -3,14 +3,15 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
+from app.core.features import require_feature
 from app.services.squeeze_arbitrage.paper_report import build_paper_report
 from app.services.squeeze_arbitrage.paper_repository import SqueezePaperRepository
 from app.services.squeeze_arbitrage.repository import SqueezeRepository
 from app.services.squeeze_arbitrage.route_repository import SqueezeRouteRepository
 
-router = APIRouter(prefix="/squeeze-arbitrage", tags=["squeeze-arbitrage"])
+router = APIRouter(dependencies=[Depends(require_feature("squeeze"))], prefix="/squeeze-arbitrage", tags=["squeeze-arbitrage"])
 
 
 def _repo(request: Request) -> SqueezeRepository:

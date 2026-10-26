@@ -1,4 +1,51 @@
-# DISABLED_FEATURES 依赖盘点交接（2026-10-26）
+# DISABLED_FEATURES 实现交接（2026-10-26）
+
+## 当前交付状态
+
+本节为本次续做的有效状态；后面的历史盘点保留作为依赖证据，其中“未实现”“停止原因”“待决策”均已由任务书 §7 和本节取代。
+
+- 模块与目标：九个可选功能的启动裁剪、统一接口停用和前端菜单/页面守卫；空配置保留启用行为。
+- 工作目录：`C:\Users\wubin\Desktop\code\codex\taoli1\.worktrees\feature-flags`；分支 `codex/feature-flags`。
+- 本次基线：`d309c77f3e2a2b580b721babae7b02a68f389a4b`；进入工作区时无修改或未跟踪文件。
+- 已完成实现、后端全量、前端定向与全量复核、类型检查和生产构建；新建本地提交的哈希由最终编码报告给出，也可通过本文件的最新 Git 提交定位。
+- 只改任务书 §4 白名单；各功能业务文件、FS、`cache_census.py`、PairMonitor 页面及其测试、compose、CI、部署脚本均未改。
+- 按用户本次要求只新建本地提交，不 amend、不 push、不运行 WSL/Docker。不连接生产、不备份或部署、不修改线上 `.env`；§6 线上内存验收留给 Claude。
+
+## §7 决策落实与关键入口
+
+1. `backend/app/core/config.py`：新增 `disabled_features: frozenset[str]` 和九键白名单，解析逗号、空格、大小写、重复及空项；未知键配置加载直接报错。设置冻结，只读启动配置，路由不再读取环境变量。
+2. 停用 `second_level_sampling` 自动加入 `fat_finger` 并记录 INFO 日志。单独停用 `fat_finger` 只拦回测接口，采样器仍构造并执行原有初始化路径。停采样则不构造 sampler/repo/fetcher，不调用 `initialize()`，因此不会创建内部 `second-level-sampler` 任务。
+3. `backend/app/main.py`：裁剪对应 repo、monitor、engine 和 supervisor 注册；squeeze 专属 route/paper 数据库连接、初始化和迁移一起跳过。共享主数据库/schema 保留，无删表、删数据或迁移业务变更。`funding_research` 与原 `FUNDING_RESEARCH_ENABLED` 对后台 loop 取 AND，原开关关闭时仍保留原路由语义。
+4. Gate client 作为核心资源始终构造并供 `GateAccountPositionProvider` 使用；停用时 manager 为 None。生命周期只选择一个关闭入口：manager 存在时通过其 `aclose()` 关闭 client，否则直接关闭保留在 state 的 client。测试验证两种情况下 client 均只关闭一次。
+5. `backend/app/core/features.py` 为公共 `require_feature` 依赖；七个完整功能 router 加统一依赖。混合 router 只拦 symbol-query、fat-finger-backtest 和 oil-news settings GET/PUT；原路由继续挂载，停用返回 `404 {"detail":"feature_disabled"}`。
+6. `backend/app/api/routes_features.py`：公开 `GET /api/features` 返回排序后的实际生效集合，不需要 Dashboard 密码，包含采样联动项。
+7. `frontend/src/api/client.ts`、`types.ts` 和 `components/AppShell.tsx`：请求配置、九个 page key 映射、菜单和菜单排序弹窗隐藏；可选页面在结果返回前不挂载。停用直达页面显示“该功能已停用”，包括 URL、浏览器历史和内部导航；请求失败恢复全部启用。保留本地排序数据，重新启用不丢原顺序。
+8. readiness 只验收 `/api/health/ready`，没有添加 `/ready` 或放宽就绪条件。全停用测试同时验证缺少快照仍为 503、核心任务运行且快照新鲜时为 200。
+9. census 不改：移除的 state 服务对应 target 为 missing；symbol-query 被拦后模块缓存不再由该接口写入，启动空缓存的 `entries=0`。全停用时 health/detail、MemoryProbe 采样和实际 census 均通过。
+
+## 本次验证证据
+
+- RED 在实现前执行：后端 `tests/test_feature_flags.py` 14 项失败，原因是尚无配置字段；前端隔离页面 mock 后 12 失败、1 通过，无未处理异常。首轮前端 RED 的页面连带错误日志也保留。
+- 后端定向 GREEN：14 passed（14.55 秒）。逐项/全停用时使用禁止构造的 mock，检查 state、sampler 初始化、全部相关路由/方法、supervisor 注册、独立数据库、核心接口和 Gate 关闭次数；测试 supervisor 不执行联网业务循环。
+- 后端全量：**1926 passed, 4 deselected, 12 warnings**（187.51 秒）。4 项是项目默认 `not network and not benchmark` 的排除；warning 为既有 UTC datetime 弃用提示。
+- 两次后端命令均在 `backend` 目录执行，明确指定 `--basetemp=C:/Users/wubin/Desktop/code/codex/taoli1/.worktrees/feature-flags/backend/.pytest_ff`：先 `python -m pytest -q tests/test_feature_flags.py ...`，再 `python -m pytest -q ...`。
+- 前端先 `npm ci`；定向测试 13 passed。验证九项菜单、直接访问守卫、等待期间不挂载、失败/默认放行、全部停用和排序保留。
+- 首次 `npm test`：277 passed / 2 failed（28 文件）。两个失败均在未改动的 PairMonitor 测试：密码取消流程超出 5000ms，随后 Hyperliquid 保存重试断言失败。单独复跑该文件 **53 passed**（45.30 秒），没有改文件或延长 timeout。
+- `npm test -- --maxWorkers=2 --minWorkers=2`：**28 文件、279 项全部通过**（187.88 秒），没有改超时阈值。该轮也包含默认/失败时直接访问可选页面能正常挂载的补强断言。
+- `npm run build`：TypeScript 与 Vite 均通过；新增测试已纳入类型检查。测试日志保留首次全量失败及所有复核结果。
+- 已审阅代码差异与白名单、共享引用、关闭路径；`git diff --check` 通过。
+
+## 未解决项、产物和下一步
+
+- 功能依赖决策全部落实，无待用户决策的代码阻塞。前端默认高并发测试出现超时，须保留首次失败记录，不能只报告复跑成功。
+- `npm ci` 审计报告 21 项依赖告警（3 low、5 moderate、11 high、2 critical）；未执行 audit fix，也未改依赖/锁文件。前端测试另有 React act 和 Ant Design 弃用 warning。
+- 未跟踪产物：`backend/.pytest_ff/`（测试数据库、WAL 等证据，保留且不提交）。忽略产物：前后端 `feature-flags-*.log`、`frontend/node_modules`、`frontend/dist`、类型构建缓存及 pytest 缓存；均不提交。
+- 本次没有新的线上版本、线上备份或线上验收结果；内存节省尚未实测。后续由 Claude 按 §6 先部署默认空配置验收，再备份 `.env`、启用全部停用项并采样对比。
+- 本模块交付后，下一模块应新建任务；继续部署/内存验收可以直接引用本交接及任务书，不需恢复旧对话。
+
+---
+
+## 历史依赖盘点（本次实现前，保留原文）
 
 ## 状态、目标与范围
 

@@ -1,5 +1,6 @@
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
+from app.core.features import require_feature
 from app.models.settings import RiskSettings
 from app.services.data_filters import filter_markets
 from app.services.funding_research import (
@@ -18,7 +19,7 @@ from app.services.funding_research import (
     summarize_paper_trades,
 )
 
-router = APIRouter(prefix="/funding-research")
+router = APIRouter(dependencies=[Depends(require_feature("funding_research"))], prefix="/funding-research")
 
 
 def _repo(request: Request) -> FundingResearchRepository:

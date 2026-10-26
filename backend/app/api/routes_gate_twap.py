@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from app.core.features import require_feature
 from app.core.security import dashboard_password_header, verify_dashboard_password
 from app.models.gate_twap import (
     GateTwapJobStatus,
@@ -15,7 +16,7 @@ from app.services.gate_twap import (
     normalize_contract,
 )
 
-router = APIRouter(prefix="/gate-twap")
+router = APIRouter(dependencies=[Depends(require_feature("gate_twap"))], prefix="/gate-twap")
 
 
 def _manager(request: Request) -> GateTwapJobManager:

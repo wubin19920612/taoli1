@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from app.core.features import require_feature
 from app.core.security import dashboard_password_header, verify_dashboard_password
 from app.db.repositories import SettingsRepository
 from app.models.announcement import AnnouncementSettings
@@ -243,12 +244,12 @@ async def update_announcement_settings(
     return await _settings_repo(request).set_announcement_settings(settings)
 
 
-@router.get("/oil-news", response_model=OilNewsSettings)
+@router.get("/oil-news", dependencies=[Depends(require_feature("oil_news"))], response_model=OilNewsSettings)
 async def get_oil_news_settings(request: Request) -> OilNewsSettings:
     return await _settings_repo(request).get_oil_news_settings()
 
 
-@router.put("/oil-news", response_model=OilNewsSettings)
+@router.put("/oil-news", dependencies=[Depends(require_feature("oil_news"))], response_model=OilNewsSettings)
 async def update_oil_news_settings(
     settings: OilNewsSettings,
     request: Request,

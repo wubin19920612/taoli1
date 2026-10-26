@@ -2951,3 +2951,12 @@ export interface MarketIdentityOverview {
   coverage: { mode: string; markets: number; verified: number; pending: number; conflict: number; expired: number; reference_quotes: number; };
 }
 export interface MarketIdentityMutation { binding: MarketBinding; expected_revision: number; reason: string; }
+
+export type OptionalFeature =
+  | "squeeze" | "negative_basis" | "oil_news" | "opportunity_radar"
+  | "symbol_spread" | "fat_finger" | "gate_twap" | "second_level_sampling"
+  | "funding_research";
+
+export interface FeaturesResponse {
+  disabled: OptionalFeature[];
+}

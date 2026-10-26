@@ -1,5 +1,6 @@
 import type { FsSettings, FsReport, FsEvent } from "./fsTypes";
 import type {
+  FeaturesResponse,
   SqueezeStatus,
   SqueezeWatchEvent,
   SqueezeRouteRow,
@@ -151,6 +152,10 @@ export async function getSqueezePaperReport(): Promise<SqueezePaperReport> {
 }
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "/api";
+
+export async function getFeatures(): Promise<FeaturesResponse> {
+  return fetchJson<FeaturesResponse>("/features");
+}
 
 function buildUrl(path: string, params?: object) {
   const url = new URL(`${API_BASE}${path}`, window.location.origin);

@@ -37,7 +37,8 @@ import {
 } from "react";
 
 import { FloatingWatchPanel } from "./FloatingWatchPanel";
-import { getFloatingWatchSettings } from "../api/client";
+import { getFeatures, getFloatingWatchSettings } from "../api/client";
+import type { OptionalFeature } from "../api/types";
 import {
   FLOATING_WATCH_NAVIGATE_MESSAGE,
   FLOATING_WATCH_UPDATED_EVENT
@@ -172,6 +173,17 @@ const lazyPages: Record<PageKey, LazyPage> = {
 };
 
 const pageKeys = Object.keys(lazyPages) as PageKey[];
+const pageFeatures: Partial<Record<PageKey, OptionalFeature>> = {
+  "squeeze-arbitrage": "squeeze",
+  "negative-basis": "negative_basis",
+  "oil-news": "oil_news",
+  "opportunity-radar": "opportunity_radar",
+  "symbol-spread": "symbol_spread",
+  "fat-finger": "fat_finger",
+  "gate-twap": "gate_twap",
+  "second-sampling": "second_level_sampling",
+  "funding-research": "funding_research"
+};
 const appearanceModeStorageKey = "taoli1:appearance-mode";
 const navigationOrderStorageKey = "taoli1:navigation-order.v1";
 const floatingWatchVisibleStorageKey = "taoli1:floating-watch-visible.v1";
@@ -322,6 +334,8 @@ function pushPageToUrl(page: PageKey): void {
 }
 
 export function AppShell() {
+  const [disabledFeatures, setDisabledFeatures] = useState<OptionalFeature[]>([]);
+  const [featuresLoaded, setFeaturesLoaded] = useState(false);
   const [standaloneFloatingWatch, setStandaloneFloatingWatch] = useState(isStandaloneFloatingWatchWindow);
   const [page, setPage] = useState<PageKey>(() => pageFromUrl() ?? "dashboard");
   const [appearanceMode, setAppearanceMode] = useState<AppearanceMode>(initialAppearanceMode);
@@ -334,10 +348,29 @@ export function AppShell() {
   );
   const CurrentPage = useMemo(() => lazyPages[page], [page]);
   const navigationItems = useMemo(
-    () => navigationOrder.map((key) => navigationItemsByKey.get(key)).filter((item): item is NavigationItem => Boolean(item)),
-    [navigationOrder]
+    () => navigationOrder
+      .filter((key) => !disabledFeatures.includes(pageFeatures[key]!))
+      .map((key) => navigationItemsByKey.get(key)).filter((item): item is NavigationItem => Boolean(item)),
+    [navigationOrder, disabledFeatures]
   );
   const quietMode = appearanceMode === "quiet";
+  const pageFeature = pageFeatures[page];
+  const pageDisabled = pageFeature !== undefined && disabledFeatures.includes(pageFeature);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getFeatures()
+      .then((features) => {
+        if (!cancelled) setDisabledFeatures(Array.isArray(features.disabled) ? features.disabled : []);
+      })
+      .catch(() => {
+        if (!cancelled) setDisabledFeatures([]);
+      })
+      .finally(() => {
+        if (!cancelled) setFeaturesLoaded(true);
+      });
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     try {
@@ -523,7 +556,11 @@ export function AppShell() {
                 </div>
               }
             >
-              <CurrentPage />
+              {pageFeature && !featuresLoaded ? (
+                <div className="page-loading"><Spin /></div>
+              ) : pageDisabled ? (
+                <Typography.Text>该功能已停用</Typography.Text>
+              ) : <CurrentPage />}
             </Suspense>
           </Layout.Content>
         </Layout>
@@ -560,7 +597,7 @@ export function AppShell() {
           <ol className="navigation-order-list">
             {draftNavigationOrder.map((key, index) => {
               const item = navigationItemsByKey.get(key);
-              if (!item) return null;
+              if (!item || disabledFeatures.includes(pageFeatures[key]!)) return null;
               return (
                 <li
                   key={key}

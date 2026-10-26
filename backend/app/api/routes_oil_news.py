@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from app.core.features import require_feature
 from app.core.security import dashboard_password_header, verify_dashboard_password
 from app.db.repositories import OilNewsRepository
 from app.models.oil_news import (
@@ -9,7 +10,7 @@ from app.models.oil_news import (
     OilNewsSeverity,
 )
 
-router = APIRouter(prefix="/oil-news")
+router = APIRouter(dependencies=[Depends(require_feature("oil_news"))], prefix="/oil-news")
 
 
 def _repo(request: Request) -> OilNewsRepository:

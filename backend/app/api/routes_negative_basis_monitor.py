@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import ValidationError
 
+from app.core.features import require_feature
 from app.core.security import dashboard_password_header, verify_dashboard_password
 from app.models.negative_basis import (
     NEGATIVE_BASIS_FUTURE_EXCHANGES,
@@ -21,7 +22,7 @@ from app.models.pair_spread import normalize_pair_spread_symbol
 from app.services.negative_basis_monitor import NegativeBasisMonitor
 from app.services.pair_spread_query import PairSpreadQueryError
 
-router = APIRouter(prefix="/negative-basis-monitor")
+router = APIRouter(dependencies=[Depends(require_feature("negative_basis"))], prefix="/negative-basis-monitor")
 
 
 def _monitor(request: Request) -> NegativeBasisMonitor:

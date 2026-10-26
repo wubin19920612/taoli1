@@ -1,3 +1,4 @@
+import logging
 import math
 import os
 from dataclasses import dataclass
@@ -9,11 +10,17 @@ from dotenv import find_dotenv, load_dotenv
 
 from app.models.settings import AstroAutomationSettings, AstroCardSettings, HistorySettings
 
+OPTIONAL_FEATURES = frozenset({
+    "squeeze", "negative_basis", "oil_news", "opportunity_radar", "symbol_spread",
+    "fat_finger", "gate_twap", "second_level_sampling", "funding_research",
+})
+
 
 @dataclass(frozen=True)
 class Settings:
     app_name: str = "Arbitrage Radar"
     environment: str = "development"
+    disabled_features: frozenset[str] = frozenset()
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     database_url: str = "sqlite:///./data/radar.db"
     poll_interval_seconds: float = 5.0
@@ -78,6 +85,16 @@ class Settings:
     astro_request_timeout_seconds: float = 10.0
 
     def __post_init__(self) -> None:
+        disabled = frozenset(key.strip().lower() for key in self.disabled_features if key.strip())
+        unknown = disabled - OPTIONAL_FEATURES
+        if unknown:
+            raise ValueError(f"Unknown DISABLED_FEATURES: {', '.join(sorted(unknown))}")
+        if "second_level_sampling" in disabled and "fat_finger" not in disabled:
+            disabled |= {"fat_finger"}
+            logging.getLogger(__name__).info(
+                "DISABLED_FEATURES: second_level_sampling also disables fat_finger"
+            )
+        object.__setattr__(self, "disabled_features", disabled)
         delay = self.market_identity_catalog_startup_delay_seconds
         if not math.isfinite(delay) or delay < 0:
             raise ValueError("market_identity_catalog_startup_delay_seconds must be finite and nonnegative")
@@ -191,6 +208,7 @@ def get_settings() -> Settings:
     feishu_live_send_enabled = bool_env("FEISHU_LIVE_SEND_ENABLED", False)
 
     return Settings(
+        disabled_features=frozenset(os.getenv("DISABLED_FEATURES", "").split(",")),
         app_name=os.getenv("APP_NAME", "Arbitrage Radar"),
         environment=environment,
         cors_origins=os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"),

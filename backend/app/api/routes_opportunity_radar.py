@@ -1,12 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from app.core.features import require_feature
 from app.core.security import dashboard_password_header, verify_dashboard_password
 from app.models.opportunity_radar import OpportunityRadarPreview, OpportunityRadarSettings
 from app.models.settings import RiskSettings
 from app.services.data_filters import filter_markets
 from app.services.opportunity_radar import build_opportunity_radar_preview
 
-router = APIRouter(prefix="/opportunity-radar")
+router = APIRouter(dependencies=[Depends(require_feature("opportunity_radar"))], prefix="/opportunity-radar")
 
 
 def _settings_repo(request: Request):
