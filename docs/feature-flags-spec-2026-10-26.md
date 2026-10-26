@@ -45,3 +45,10 @@
 ## 6 上线验收（Claude，用户已批准设置 .env）
 
 - 先部署代码（默认为空，确认行为不变）→ 先备份 `.env`，再设置 `DISABLED_FEATURES=squeeze,negative_basis,oil_news,opportunity_radar,symbol_spread,fat_finger,gate_twap,second_level_sampling,funding_research` → 重建后端 → 探针采 1 小时，与 2026-10-26 17:34–18:35 的数据对比（rss_anon 底部、尖峰、增长斜率）。
+
+## 7 依赖决策（Claude，2026-10-26，根据 Codex 盘点 `43a2d9a`）
+
+1. **gate_twap**：`GateTwapClient` 被核心的 `GateAccountPositionProvider` 和浮窗共用，归为核心资源，**无论是否停用都照常构造**。停用 `gate_twap` 时只不构造 `GateTwapJobManager`，`/api/gate-twap/*` 返回 404 feature_disabled，菜单隐藏。client 的关闭由 `main.py` 生命周期负责（manager 不存在时也要正确关闭，manager 存在时不能重复关闭）。
+2. **second_level_sampling → fat_finger 联动**：停用 `second_level_sampling` 时，实际生效的停用集合自动加入 `fat_finger`（`/api/features` 返回的 disabled 里两个都有，日志记一行说明）。单独停用 `fat_finger` 时只拦回测接口，采样器照常构造和运行。
+3. ready 接口的验收路径是 `/api/health/ready`（§5 写的 `/ready` 有误）。
+4. `symbol_spread` 停用后，普查里 `_REALTIME_SYMBOL_SPREAD_CACHE` 显示为空（entries=0），不要求显示 missing。
