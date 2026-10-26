@@ -93,3 +93,10 @@
 - `8732429`（Codex）：新增 `MEMORY_CENSUS_BUDGET_SECONDS`（默认 3，取值 0 到 10）和 `MEMORY_CENSUS_TARGET_SECONDS`（默认 0.5，不能大于前者），普查输出里带上这两个值；依赖真实耗时的测试加上 `@pytest.mark.benchmark`，默认 addopts 排除。`cfd79d6`（Claude，1 行）：把 `test_memory_probe.py` 里 `<5ms` 的那个测试也标记为 benchmark。
 - Claude 验收：全量 1913 passed（3 个 deselected）；`-m benchmark` 3 passed；压测 437ms，去重有效。
 - 上线计划：推送 `cfd79d6`；`.env` 设置 `MEMORY_CENSUS_ENABLED=true`、`MEMORY_CENSUS_BUDGET_SECONDS=8`、`MEMORY_CENSUS_TARGET_SECONDS=3`；用服务器端脚本 `output/m2census2-run-20261026.sh`（需要改 SHA，并加上这两个键，关闭时三个键一起删）采 1 小时后自动关闭。
+
+## 12 M2-2 普查上线结果与 M2-3 清单（2026-10-26）
+
+- 生产 `cfd79d6`，17:34 部署（第一次就成功）。普查采到 18:35，由服务器端脚本自动关闭（`.env` 备份：开启前 `env-before-census2-20261026T093143Z`，关闭前 `env-before-census2-off-20261026T103519Z`）。现在探针开着，普查关着，状态 healthy。
+- 11 轮普查，0 跳过、0 错误、0 OOM。第 1 轮完整，可归属内存 257MB；从第 2 轮起达到 60 万对象上限，排在后面的目标被截断。原始数据：服务器和本地的 `output/m2census2-20261026-probe.log`。
+- 结论与治理清单：`docs/m2-3-governance-list-2026-10-26.md`。头号问题是 `fs_public.binance_specs` 常驻 71MB 完整的 `exchangeInfo`。
+- 功能分支 `codex/m2-2-cache-census` 补推时 TLS 握手失败过两次，部署分支没有受影响。
