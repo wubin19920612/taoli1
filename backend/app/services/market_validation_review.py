@@ -14,6 +14,37 @@ from app.services.orderbook_validator import OrderBookDepthValidator
 from app.services.pair_validation import validate_pair
 
 
+class _ExpiryCache(OrderedDict):
+    """Discard expired payloads while retaining the old bounded eviction order."""
+
+    def __init__(self):
+        super().__init__()
+        self._order = OrderedDict()
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        self._order.setdefault(key, None)
+
+    def clear(self):
+        super().clear()
+        self._order.clear()
+
+    def put(self, key, value, limit=1000, *, touch=True):
+        self[key] = value
+        if touch:
+            self.move_to_end(key)
+            self._order.move_to_end(key)
+        while len(self._order) > limit:
+            evicted, _ = self._order.popitem(last=False)
+            super().pop(evicted, None)
+
+    def prune(self, expired):
+        for key, value in list(self.items()):
+            if expired(value):
+                # Keep only the key until the old capacity policy would evict it.
+                super().pop(key)
+
+
 class _BookAdapter:
     def __init__(self, row, books):
         self.name, self.books = row.exchange, books
@@ -32,7 +63,7 @@ class MarketValidationService:
         self.settings = MarketValidationSettings()
         self.adapters = {a.name.lower(): a for a in adapters}
         self.books = OrderedDict()
-        self.reviews = OrderedDict()
+        self.reviews = _ExpiryCache()
         self.tasks = {}
         self.failures = OrderedDict()
         self.discovered = set()
@@ -45,7 +76,7 @@ class MarketValidationService:
         self.fx_retry_at = datetime.min.replace(tzinfo=UTC)
         self._refresh_lock = asyncio.Lock()
         self._mutation_epoch = 0
-        self._last_incident = {}
+        self._last_incident = _ExpiryCache()
         self.collision_symbols = set()
         self.invalidated_ids = set()
 
@@ -86,6 +117,9 @@ class MarketValidationService:
 
     @staticmethod
     def _bounded_put(cache, key, value, limit=1000):
+        if isinstance(cache, _ExpiryCache):
+            cache.put(key, value, limit)
+            return
         cache[key] = value
         cache.move_to_end(key)
         while len(cache) > limit:
@@ -176,6 +210,7 @@ class MarketValidationService:
 
     async def prepare(self, markets, risk):
         now = datetime.now(UTC)
+        self.reviews.prune(lambda result: result.expires_at <= now)
         unknown = []
         for row in markets:
             try:
@@ -314,9 +349,8 @@ class MarketValidationService:
                         {"reasons": result.reason_codes},
                         "open" if result.blockers else "resolved",
                     )
-                    self._last_incident[incident_key] = now
-                    if len(self._last_incident) > 1000:
-                        self._last_incident.pop(next(iter(self._last_incident)))
+                    self._last_incident.put(incident_key, now, touch=False)
+                    self._last_incident.prune(lambda observed: (now - observed).total_seconds() >= 60)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 - isolate a failed background review; no trading side effects.
@@ -365,11 +399,14 @@ class MarketValidationService:
                 ],
             }
         )
+        # Reviews consume full depth; subsequent cached quotes need only the best levels.
         self._bounded_put(
             self.books,
             MarketKey.from_snapshot(row).key,
             (
-                normalized,
+                normalized.model_copy(
+                    update={"bids": normalized.bids[:1], "asks": normalized.asks[:1]}
+                ),
                 row.binding_revision,
                 row.binding_fingerprint,
                 row.quote_conversion_bid,
