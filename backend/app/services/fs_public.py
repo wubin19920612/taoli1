@@ -359,7 +359,47 @@ class PublicFsProvider:
         data, at = await self.get(
             "/fapi/v1/exchangeInfo" if futures else "/api/v3/exchangeInfo", futures=futures
         )
-        result = ({x["symbol"]: x for x in data["symbols"]}, at)
+        fields = (
+            "symbol", "status", "baseAsset", "quoteAsset", "contractType",
+            "marginAsset", "isMarginTradingAllowed",
+        )
+        filter_fields = {
+            "LOT_SIZE": ("filterType", "stepSize", "minQty"),
+            "NOTIONAL": ("filterType", "minNotional", "notional"),
+            "MIN_NOTIONAL": ("filterType", "minNotional", "notional"),
+        }
+        specs = {}
+        try:
+            for item in data["symbols"]:
+                symbol = item["symbol"]
+                spec = {name: item[name] for name in fields if name in item}
+                if "filters" in item:
+                    filters = item["filters"]
+                    if isinstance(filters, list):
+                        spec["filters"] = []
+                        for rule in filters:
+                            # Malformed entries must still fail in the reader,
+                            # not in borrow_reference's shared cache refresh.
+                            if not isinstance(rule, dict):
+                                spec["filters"].append(rule)
+                                continue
+                            kind = rule.get("filterType")
+                            if isinstance(kind, str):
+                                if kind not in filter_fields:
+                                    continue
+                                names = filter_fields[kind]
+                            else:
+                                names = ("filterType",)
+                            spec["filters"].append(
+                                {name: rule[name] for name in names if name in rule}
+                            )
+                    else:
+                        spec["filters"] = filters
+                specs[symbol] = spec
+        finally:
+            # Also release raw payloads when a caller retains an error traceback.
+            data = item = filters = rule = None
+        result = (specs, at)
         self.cache[key] = result
         return result
 
