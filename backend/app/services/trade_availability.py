@@ -1619,7 +1619,11 @@ class TradeAvailabilityMonitor:
                     None,
                 )
                 if market is None:
-                    raise RuntimeError("聚合行情中未找到指定原始市场")
+                    message = "聚合行情中未找到指定原始市场"
+                    if result.errors:
+                        diagnostic = result.errors[min(result.errors)][:200]
+                        message += f"；诊断：{diagnostic}"
+                    raise RuntimeError(message)
                 recovered: list[str] = []
                 recovered_actions: list[str] = []
                 if (
@@ -1693,16 +1697,25 @@ class TradeAvailabilityMonitor:
                         await self.alert_sender(build_trade_recovery_message(event))
                     events.append(event)
             except Exception as exc:
-                logger.exception("trade availability watch failed id=%s", watch.id)
+                error = f"{exc.__class__.__name__}: {exc}"
+                if error != watch.last_error:
+                    logger.exception("trade availability watch failed id=%s", watch.id)
+                else:
+                    logger.debug(
+                        "trade availability watch still failing id=%s error=%s", watch.id, error,
+                    )
                 await self.repository.upsert(
                     watch.model_copy(
                         update={
                             "last_checked_at": now,
-                            "last_error": f"{exc.__class__.__name__}: {exc}",
+                            "last_error": error,
                             "updated_at": now,
                         }
                     )
                 )
+            else:
+                if watch.last_error is not None:
+                    logger.info("trade availability watch 已恢复 id=%s", watch.id)
         return events
 
     async def run(self, stop_event: asyncio.Event, interval_seconds: float = 20.0) -> None:
