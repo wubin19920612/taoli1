@@ -398,10 +398,12 @@ async def test_runtime_error_read_only_reproduction(
     monitor = module.TradeAvailabilityMonitor(repository, service)
     assert await monitor.check_once() == []
     assert len(saved) == 1
-    expected = "RuntimeError: 聚合行情中未找到指定原始市场" if expected_error else None
-    assert saved[0].last_error == expected
+    # The monitor may append "；诊断：<result.errors>" after the generic reason.
     if expected_error:
+        assert saved[0].last_error.startswith("RuntimeError: 聚合行情中未找到指定原始市场")
         assert any(
-            record.exc_info and str(record.exc_info[1]) == "聚合行情中未找到指定原始市场"
+            record.exc_info and str(record.exc_info[1]).startswith("聚合行情中未找到指定原始市场")
             for record in caplog.records
         )
+    else:
+        assert saved[0].last_error is None
