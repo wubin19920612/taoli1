@@ -1,10 +1,49 @@
 from __future__ import annotations
 
+import sys
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import MappingProxyType
 
 from app.models.market import MarketSnapshot
 from app.models.market_identity import MarketBinding, MarketKey, utc
+
+
+@dataclass(frozen=True, slots=True)
+class _RegistryEntry:
+    """Immutable reader projection; full evidence stays in the repository."""
+
+    asset_id: str | None
+    display_name: str
+    asset_kind: str
+    identity_status: str
+    unit_status: str
+    revision: int
+    valid_until: datetime | None
+    fingerprint: str
+    quote_currency: str
+    contract_kind: str
+    tracking_definition: str
+    contract_size: float | None
+    price_multiplier: float
+
+    @classmethod
+    def from_binding(cls, binding: MarketBinding) -> _RegistryEntry:
+        return cls(
+            asset_id=sys.intern(binding.asset_id) if binding.asset_id is not None else None,
+            display_name=sys.intern(binding.display_name),
+            asset_kind=sys.intern(binding.asset_kind),
+            identity_status=sys.intern(binding.identity_status),
+            unit_status=sys.intern(binding.unit_status),
+            revision=binding.revision,
+            valid_until=binding.valid_until,
+            fingerprint=binding.fingerprint,
+            quote_currency=sys.intern(binding.quote_currency),
+            contract_kind=sys.intern(binding.contract_kind),
+            tracking_definition=sys.intern(binding.tracking_definition),
+            contract_size=binding.contract_size,
+            price_multiplier=binding.price_multiplier,
+        )
 
 
 class MarketIdentityRegistry:
@@ -15,9 +54,11 @@ class MarketIdentityRegistry:
         self.replace(bindings)
 
     def replace(self, bindings):
-        self.bindings = MappingProxyType({b.market.key: b.model_copy(deep=True) for b in bindings})
+        self.bindings = MappingProxyType(
+            {b.market.key: _RegistryEntry.from_binding(b) for b in bindings}
+        )
 
-    def get(self, market: MarketKey) -> MarketBinding | None:
+    def get(self, market: MarketKey) -> _RegistryEntry | None:
         return self.bindings.get(market.key)
 
     def annotate(self, row: MarketSnapshot, now: datetime | None = None) -> MarketSnapshot:
