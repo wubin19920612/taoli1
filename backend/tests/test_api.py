@@ -325,7 +325,12 @@ class FakeAstroSubmitService:
         opportunity: Opportunity,
         card_request=None,
         card_settings=None,
+        *,
+        manual_review=None,
+        depth_check=None,
     ):
+        if depth_check is not None:
+            await depth_check()
         self.calls.append(opportunity)
         self.requests.append(card_request)
         from app.models.astro import AstroAlertActionResult
@@ -447,7 +452,7 @@ def make_market(symbol: str, exchange: str = "binance") -> MarketSnapshot:
 def confirmed_market_validation(monkeypatch):
     # These tests cover saved card settings, using seeded executable quotes.
     # Keep the real planner/service while supplying confirmed identity results.
-    async def qualify(self, opportunity, risk, *, fresh=False, fetch_books_when_unverified=False):
+    async def qualify(self, opportunity, risk, *, fresh=False, fetch_books_when_unverified=False, priority=False):
         now = datetime.now(UTC)
         legs = [
             MarketSnapshot(

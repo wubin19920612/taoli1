@@ -235,11 +235,10 @@ def test_astro_create_fresh_reaches_real_submit_with_reviewed_threshold(entry):
     external.add_pair.assert_awaited_once()
     assert external.add_pair.await_args.args[0]["openPosition"] == "0.029557"
     calls = app.state.market_validation.qualify_opportunity.await_args_list
+    assert len(calls) == 1
     assert all(call.kwargs["fresh"] is True for call in calls)
     assert calls[0].kwargs["fetch_books_when_unverified"] is True
-    assert calls[1].kwargs["fetch_books_when_unverified"] is True
-    # The existing final pre-write review retains its default policy.
-    assert calls[2].kwargs == {"fresh": True}
+    assert calls[0].kwargs["priority"] is True
 
 
 @pytest.mark.parametrize("entry", ["instrument", "opportunity"])

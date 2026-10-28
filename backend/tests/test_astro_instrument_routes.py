@@ -68,7 +68,11 @@ class FakeAstroSubmitService:
         self.card_settings = AstroCardSettings()
         self.risk_settings_loader = None
 
-    async def handle_manual_create(self, opportunity, card_request, card_settings=None):
+    async def handle_manual_create(
+        self, opportunity, card_request, card_settings=None, *, manual_review=None, depth_check=None,
+    ):
+        if depth_check is not None:
+            await depth_check()
         self.calls.append(opportunity)
         self.requests.append(card_request)
         self.settings_requests.append(card_settings)

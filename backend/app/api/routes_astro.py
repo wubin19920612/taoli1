@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.core.security import dashboard_password_header, verify_dashboard_password
@@ -30,9 +32,11 @@ from app.services.astro_preadd import AstroPreaddService
 from app.services.data_filters import ignored_exchange_set, symbol_is_excluded
 from app.services.instrument_spreads import instrument_market_age_seconds
 from app.services.market_labels import astro_pair_route_variants
+from app.services.market_validation_review import ManualReview
 from app.services.spread_engine import Mode, build_directional_opportunity
 
 router = APIRouter(prefix="/astro")
+logger = logging.getLogger(__name__)
 
 
 def _astro_client(request: Request) -> AstroSdkClient:
@@ -271,14 +275,13 @@ async def _review_manual_opportunity(
     request: Request,
     opportunity: Opportunity,
     risk_settings: RiskSettings,
+    manual_review: ManualReview,
 ) -> tuple[Opportunity, str | None]:
     validation_service = getattr(request.app.state, "market_validation", None)
     if validation_service is None:
         return opportunity, None
     try:
-        validation, buy, sell = await validation_service.qualify_opportunity(
-            opportunity, risk_settings, fresh=True, fetch_books_when_unverified=True,
-        )
+        validation, buy, sell = await manual_review.qualify(validation_service, opportunity, risk_settings)
         reviewed = build_directional_opportunity(
             buy,
             sell,
@@ -305,8 +308,21 @@ async def _build_astro_preview(
     opportunity: Opportunity,
     manual_warnings: list[str] | None = None,
 ) -> AstroPairPlan:
+    context = ManualReview()
+    try:
+        return await _build_astro_preview_reviewed(request, opportunity, manual_warnings, context)
+    finally:
+        context.log(logger, "astro_manual_preview_timing", opportunity.symbol)
+
+
+async def _build_astro_preview_reviewed(
+    request: Request,
+    opportunity: Opportunity,
+    manual_warnings: list[str] | None,
+    manual_review: ManualReview,
+) -> AstroPairPlan:
     risk_settings, risk_warnings = await _manual_risk_settings(request)
-    opportunity, review_error = await _review_manual_opportunity(request, opportunity, risk_settings)
+    opportunity, review_error = await _review_manual_opportunity(request, opportunity, risk_settings, manual_review)
     if review_error is not None:
         return AstroPairPlan(
             opportunity_id=opportunity.id,
@@ -401,10 +417,13 @@ async def _validate_order_book_before_create(
     opportunity: Opportunity,
     risk_settings: RiskSettings,
     card_settings: AstroCardSettings,
+    manual_review: ManualReview | None = None,
 ) -> DepthValidationResult | None:
     validator = getattr(request.app.state, "orderbook_validator", None)
     if validator is None:
         return None
+    if manual_review is not None:
+        validator = manual_review.depth_validator(validator)
     result = await validator.validate(
         opportunity,
         risk_settings=risk_settings,
@@ -498,9 +517,23 @@ async def _create_astro_card(
     card_request: AstroCardCreateRequest | None,
     manual_warnings: list[str] | None = None,
 ) -> AstroAlertActionResult:
+    context = ManualReview()
+    try:
+        return await _create_astro_card_reviewed(request, opportunity, card_request, manual_warnings, context)
+    finally:
+        context.log(logger, "astro_manual_create_timing", opportunity.symbol)
+
+
+async def _create_astro_card_reviewed(
+    request: Request,
+    opportunity: Opportunity,
+    card_request: AstroCardCreateRequest | None,
+    manual_warnings: list[str] | None,
+    manual_review: ManualReview,
+) -> AstroAlertActionResult:
     risk_settings, risk_warnings = await _manual_risk_settings(request)
     warnings = [*(manual_warnings or []), *risk_warnings]
-    opportunity, review_error = await _review_manual_opportunity(request, opportunity, risk_settings)
+    opportunity, review_error = await _review_manual_opportunity(request, opportunity, risk_settings, manual_review)
     if review_error is not None:
         return AstroAlertActionResult(
             enabled=request.app.state.settings.astro_manual_card_create,
@@ -556,21 +589,22 @@ async def _create_astro_card(
         raise HTTPException(status_code=503, detail="Astro submit service is not ready")
     if hasattr(service, "card_settings") and settings_for_service is not None:
         service.card_settings = settings_for_service
-    depth_failure = await _validate_order_book_before_create(
-        request,
-        opportunity,
-        risk_settings,
-        effective_settings,
-    )
+    async def check_depth():
+        depth_failure = await _validate_order_book_before_create(
+            request, opportunity, risk_settings, effective_settings, manual_review,
+        )
+        if depth_failure is not None:
+            warnings.append(
+                _manual_override_warning(_format_depth_validation_message(depth_failure))
+            )
+
     result = await service.handle_manual_create(
         opportunity,
         card_request,
         card_settings=effective_settings,
+        manual_review=manual_review,
+        depth_check=check_depth,
     )
-    if depth_failure is not None:
-        warnings.append(
-            _manual_override_warning(_format_depth_validation_message(depth_failure))
-        )
     return result.model_copy(
         update={
             "warnings": _unique_warnings([

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections import Counter, OrderedDict
+from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
 from itertools import combinations
+from time import monotonic
 
 import httpx
 
@@ -12,6 +15,101 @@ from app.models.settings import RiskSettings
 from app.services.market_identity import MarketIdentityRegistry
 from app.services.orderbook_validator import OrderBookDepthValidator
 from app.services.pair_validation import validate_pair
+
+_manual_books = ContextVar("astro_manual_books", default=None)
+
+
+class ManualMappingChanged(ValueError):
+    def __init__(self):
+        super().__init__("市场映射已改变，请重新预览")
+
+
+class ManualReview:
+    """Request-local review and raw depth; never reuse across manual requests."""
+
+    def __init__(self):
+        self.started_at = monotonic()
+        self.completed_at = None
+        self.result = None
+        self.service = None
+        self.risk_key = None
+        self.epoch = None
+        self.books = {}
+        self.metrics = {
+            "variants": 0, "review_ms": 0.0, "depth_ms": 0.0, "list_ms": 0.0,
+            "add_ms": [], "sleep_ms": 0.0, "reviews": 0,
+        }
+
+    async def measure(self, stage, operation):
+        started = monotonic()
+        try:
+            return await operation
+        finally:
+            elapsed = (monotonic() - started) * 1000
+            if stage == "add_ms":
+                self.metrics[stage].append(elapsed)
+            else:
+                self.metrics[stage] += elapsed
+
+    def log(self, logger, event, pair):
+        logger.info(json.dumps({event: 1, "pair": pair, **self.metrics,
+                                "total_ms": (monotonic() - self.started_at) * 1000}))
+
+    async def qualify(self, service, opportunity, risk):
+        if self.result is not None:
+            validation, a, b = self.result
+            current_a, current_b = service.annotate(a), service.annotate(b)
+            # Check live bindings even inside the five-second reuse window.
+            if (service is not self.service
+                    or service._mutation_epoch != self.epoch
+                    or service.pair_key(a, b) != service.pair_key(current_a, current_b)):
+                raise ManualMappingChanged()
+            identity_fields = (
+                "identity_status", "unit_status", "identity_collision",
+                "quote_conversion_bid", "quote_conversion_ask", "quote_conversion_valid_until",
+            )
+            identity_unchanged = all(
+                getattr(old, field) == getattr(current, field)
+                for old, current in ((a, current_a), (b, current_b))
+                for field in identity_fields
+            )
+            if (monotonic() - self.completed_at <= 5
+                    and identity_unchanged and validation.expires_at > datetime.now(UTC)
+                    and risk.model_dump_json() == self.risk_key):
+                return self.result
+        previous = self.result[0] if self.result else opportunity.validation
+        self.books = {}
+        token = _manual_books.set(self.books)
+        self.metrics["reviews"] += 1
+        try:
+            result = await self.measure("review_ms", service.qualify_opportunity(
+                opportunity, risk, fresh=True, fetch_books_when_unverified=True, priority=True,
+            ))
+        finally:
+            _manual_books.reset(token)
+        validation, _, _ = result
+        if previous is not None and (previous.buy_revision, previous.sell_revision) != (
+            validation.buy_revision, validation.sell_revision
+        ):
+            raise ManualMappingChanged()
+        self.result = result
+        self.completed_at = monotonic()
+        self.service = service
+        self.epoch = service._mutation_epoch
+        self.risk_key = risk.model_dump_json()
+        return result
+
+    def depth_validator(self, validator):
+        # Only the normal 20-level validator can consume this exact raw sample.
+        # Custom validators and larger-depth requests retain their own fetch path.
+        if (type(validator) is not OrderBookDepthValidator or validator.limit > 20
+                or self.result is None or monotonic() - self.completed_at > 5):
+            return validator
+        _, a, b = self.result
+        keys = [(row.exchange, str(row.market_type), row.raw_symbol) for row in (a, b)]
+        if not all(key in self.books for key in keys):
+            return validator
+        return OrderBookDepthValidator([_BookAdapter(a, self.books), _BookAdapter(b, self.books)])
 
 
 class _ExpiryCache(OrderedDict):
@@ -68,6 +166,7 @@ class MarketValidationService:
         self.failures = OrderedDict()
         self.discovered = set()
         self.semaphore = asyncio.Semaphore(3)
+        self.manual_semaphore = asyncio.Semaphore(2)
         self.book_semaphore = asyncio.Semaphore(3)
         self.review_inflight = {}
         self.review_attempted = OrderedDict()
@@ -378,6 +477,9 @@ class MarketValidationService:
         asks = sorted(book.asks, key=lambda x: x.price)
         if bids[0].price >= asks[0].price:
             raise ValueError("crossed book")
+        captured = _manual_books.get()
+        if captured is not None:
+            captured[(row.exchange, str(row.market_type), row.raw_symbol)] = book
         # Adapter snapshots are in their public price units; face-value size
         # conversion is performed by the exchange adapter, as before.
         multiplier = row.symbol_alias_price_multiplier
@@ -417,11 +519,11 @@ class MarketValidationService:
 
     async def review(
         self, a, b, risk, *, twice=False, comparison_kind="same_asset",
-        fetch_books_when_unverified=False,
+        fetch_books_when_unverified=False, priority=False,
     ):
         key = (
             *self.pair_key(a, b), comparison_kind, twice, risk.model_dump_json(),
-            fetch_books_when_unverified,
+            fetch_books_when_unverified, priority,
         )
         existing = self.review_inflight.get(key)
         if existing is not None:
@@ -430,7 +532,7 @@ class MarketValidationService:
             raise ValueError("review queue is full; retry later")
 
         async def run():
-            async with self.semaphore:
+            async with self.manual_semaphore if priority else self.semaphore:
                 return await self._review(
                     a, b, risk, twice=twice, comparison_kind=comparison_kind,
                     fetch_books_when_unverified=fetch_books_when_unverified,
@@ -617,13 +719,14 @@ class MarketValidationService:
         return legs
 
     async def qualify_opportunity(
-        self, opportunity, risk, *, fresh=False, fetch_books_when_unverified=False,
+        self, opportunity, risk, *, fresh=False, fetch_books_when_unverified=False, priority=False,
     ):
         a, b = self._opportunity_legs(opportunity)
         if fresh:
             result, a, b = await self.review(
                 a, b, risk, comparison_kind=opportunity.comparison_kind,
                 fetch_books_when_unverified=fetch_books_when_unverified,
+                priority=priority,
             )
         else:
             result = self.validate(a, b, risk, comparison_kind=opportunity.comparison_kind)

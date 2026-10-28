@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from typing import Protocol
 
@@ -13,7 +14,10 @@ from app.services.astro_planner import AstroPairPlanner, AstroPlannerConfig
 from app.services.data_filters import symbol_is_excluded
 from app.services.gate_crossex_hyperliquid import GateCrossExHyperliquidCatalog
 from app.services.market_labels import astro_pair_route_variants
+from app.services.market_validation_review import ManualMappingChanged, ManualReview
 from app.services.spread_engine import build_directional_opportunity
+
+logger = logging.getLogger(__name__)
 
 AUTOMATIC_ASTRO_BLOCKED_EXCHANGES = frozenset({"rh-lighter"})
 AUTOMATIC_ASTRO_BLOCK_MESSAGE = (
@@ -192,15 +196,26 @@ class AstroAlertService:
         opportunity: Opportunity,
         card_request: AstroCardCreateRequest | None = None,
         card_settings: AstroCardSettings | None = None,
+        *,
+        manual_review: ManualReview | None = None,
+        depth_check: Callable[[], Awaitable[None]] | None = None,
     ) -> AstroAlertActionResult:
-        return await self._handle(
-            opportunity,
-            enabled=self.settings.astro_manual_card_create,
-            disabled_message="Manual card creation is disabled.",
-            card_request=card_request,
-            card_settings_override=card_settings,
-            manual_override=True,
-        )
+        context = manual_review or ManualReview()
+        try:
+            return await self._handle(
+                opportunity,
+                enabled=self.settings.astro_manual_card_create,
+                disabled_message="Manual card creation is disabled.",
+                card_request=card_request,
+                card_settings_override=card_settings,
+                manual_override=True,
+                manual_review=context,
+                depth_check=depth_check,
+                add_restart_delay_seconds=0,
+            )
+        finally:
+            if manual_review is None:
+                context.log(logger, "astro_manual_create_timing", opportunity.symbol)
 
     async def handle_preadd(
         self,
@@ -230,6 +245,8 @@ class AstroAlertService:
         manual_override: bool = False,
         allow_route_variants: bool = False,
         allow_reverse_entry: bool = False,
+        manual_review: ManualReview | None = None,
+        depth_check: Callable[[], Awaitable[None]] | None = None,
     ) -> AstroAlertActionResult:
         if not enabled:
             return AstroAlertActionResult(
@@ -252,8 +269,8 @@ class AstroAlertService:
             try:
                 risk = await self.risk_settings_loader() if self.risk_settings_loader else RiskSettings()
                 if manual_override:
-                    result, buy, sell = await self.market_validation.qualify_opportunity(
-                        opportunity, risk, fresh=True, fetch_books_when_unverified=True,
+                    result, buy, sell = await manual_review.qualify(
+                        self.market_validation, opportunity, risk,
                     )
                     reviewed = build_directional_opportunity(
                         buy, sell, mode=opportunity.type,
@@ -274,6 +291,8 @@ class AstroAlertService:
                     return AstroAlertActionResult(enabled=True, status="skipped", action="market_validation",
                                                   message="；".join(issue.message for issue in result.blockers))
                 opportunity = opportunity.model_copy(update={"validation": result, "identity_enforced": self.market_validation.should_enforce(result)})
+            except ManualMappingChanged as exc:
+                return AstroAlertActionResult(enabled=True, status="skipped", action="market_validation", message=str(exc))
             except Exception as exc:  # noqa: BLE001 - failed identity checks must prevent external writes.
                 return AstroAlertActionResult(enabled=True, status="failed", action="market_validation", message=f"市场身份校验失败：{exc}")
 
@@ -394,7 +413,26 @@ class AstroAlertService:
         pair_type = str(pair.get("type", ""))
 
         try:
-            existing_pairs = await self.client.list_pairs()
+            if manual_override:
+                async def check_depth():
+                    if depth_check is not None:
+                        await depth_check()
+
+                existing_pairs, depth_result = await asyncio.gather(
+                    manual_review.measure("list_ms", self.client.list_pairs()),
+                    manual_review.measure("depth_ms", check_depth()),
+                    return_exceptions=True,
+                )
+                if isinstance(depth_result, Exception):
+                    manual_warnings.append(
+                        f"订单簿校验失败：{depth_result}；本次为人工建卡，仅作风险提示，未拦截创建"
+                    )
+                elif isinstance(depth_result, BaseException):
+                    raise depth_result
+                if isinstance(existing_pairs, BaseException):
+                    raise existing_pairs
+            else:
+                existing_pairs = await self.client.list_pairs()
         except AstroClientError as exc:
             return with_manual_warnings(
                 AstroAlertActionResult(
@@ -493,6 +531,8 @@ class AstroAlertService:
             )
 
         created_variants: list[dict] = []
+        if manual_review is not None:
+            manual_review.metrics["variants"] = len(missing_variants)
         restart_delay = (
             self.add_restart_delay_seconds
             if add_restart_delay_seconds is None
@@ -502,14 +542,22 @@ class AstroAlertService:
             try:
                 if self.market_validation is not None:
                     previous = opportunity.validation
-                    result, a, b = await self.market_validation.qualify_opportunity(opportunity, risk, fresh=True)
+                    if manual_override:
+                        result, a, b = await manual_review.qualify(self.market_validation, opportunity, risk)
+                    else:
+                        result, a, b = await self.market_validation.qualify_opportunity(opportunity, risk, fresh=True)
                     if previous is not None and (previous.buy_revision, previous.sell_revision) != (result.buy_revision, result.sell_revision):
                         return AstroAlertActionResult(enabled=True, status="skipped", action="market_validation", message="市场映射已改变，请重新预览")
                     if self.market_validation.should_enforce(result) and not result.capabilities.manual_card:
                         return AstroAlertActionResult(enabled=True, status="skipped", action="market_validation", message="；".join(issue.message for issue in result.blockers))
                     if not manual_override and not allow_reverse_entry and b.bid <= a.ask:
                         return AstroAlertActionResult(enabled=True, status="skipped", action="market_validation", message="最新真实盘口已不满足正向价差，未创建卡片")
-                await self.client.add_pair(planned)
+                if manual_review is not None:
+                    await manual_review.measure("add_ms", self.client.add_pair(planned))
+                else:
+                    await self.client.add_pair(planned)
+            except ManualMappingChanged as exc:
+                return AstroAlertActionResult(enabled=True, status="skipped", action="market_validation", message=str(exc))
             except (ValueError, TimeoutError, httpx.HTTPError) as exc:
                 return AstroAlertActionResult(enabled=True, status="failed", action="market_validation", message=f"提交前市场复核失败：{exc}")
             except AstroClientError as exc:
@@ -546,7 +594,10 @@ class AstroAlertService:
             is_last_add = index == len(missing_variants) - 1
             delay = restart_delay if is_last_add else self.add_restart_delay_seconds
             if delay > 0:
-                await asyncio.sleep(delay)
+                if manual_review is not None:
+                    await manual_review.measure("sleep_ms", asyncio.sleep(delay))
+                else:
+                    await asyncio.sleep(delay)
 
         message = (
             f"已创建{_card_state_message(pair_enabled)} {pair_name} {pair_type} "
