@@ -3,9 +3,17 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, datetime
+from functools import lru_cache
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+MARKET_KEY_CACHE_SIZE = 32768
+
+
+@lru_cache(maxsize=MARKET_KEY_CACHE_SIZE)
+def _encode_key(exchange, market_type, dex, raw_symbol) -> str:
+    return json.dumps([exchange, market_type, dex, raw_symbol], separators=(",", ":"))
 
 
 def utc(value: datetime) -> datetime:
@@ -51,9 +59,7 @@ class MarketKey(BaseModel):
     @property
     def key(self) -> str:
         # raw symbols can contain colons. This encoding is also used by the DB.
-        return json.dumps(
-            [self.exchange, self.market_type, self.dex, self.raw_symbol], separators=(",", ":")
-        )
+        return _encode_key(self.exchange, self.market_type, self.dex, self.raw_symbol)
 
 
 class IdentityEvidence(BaseModel):
