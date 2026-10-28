@@ -22,7 +22,7 @@ from app.services.snapshot_store import SnapshotStore
 from app.services.spread_engine import build_directional_opportunity
 
 
-def fresh_app(*, verified=True, real_submit=False):
+def fresh_app(*, verified=True, real_submit=False, mode="enforce"):
     now = datetime.now(UTC)
     buy = market(raw="JIOUSDT", price=100).model_copy(update={
         "symbol": "JIOUSDT", "base": "JIO", "timestamp": now,
@@ -49,11 +49,11 @@ def fresh_app(*, verified=True, real_submit=False):
     adapters = [SimpleNamespace(name=row.exchange, fetch_order_book=AsyncMock(return_value=book))
                 for row, book in zip((buy, sell), books)]
     validation = MarketValidationService(None, store, adapters)
-    validation.settings = validation.settings.model_copy(update={"mode": "enforce"})
+    validation.settings = validation.settings.model_copy(update={"mode": mode})
     bindings = [binding(row, "jio").model_copy(update={
         "verified_at": now, "valid_until": now + timedelta(days=1),
     }) for row in (buy, sell)] if verified else []
-    validation.registry = MarketIdentityRegistry(bindings, mode="enforce")
+    validation.registry = MarketIdentityRegistry(bindings, mode=mode)
     validation.qualify_opportunity = AsyncMock(wraps=validation.qualify_opportunity)
     catalog = SimpleNamespace(supports_opportunity=AsyncMock(return_value=False))
     settings = Settings(
@@ -123,8 +123,60 @@ def test_astro_preview_fresh_unknown_identity_remains_blocked_once(entry):
     plan = response.json()
     assert plan["can_submit"] is False
     assert plan["blockers"] == ["资产身份待核验或证据已过期", "价格与合约单位待核验"]
+    for message in ("REFERENCE_QUOTE_ONLY", "LEG_TIME_SKEW",
+                    "仅有参考价格", "双方行情时间差过大"):
+        assert not any(message in item for item in plan["blockers"] + plan["warnings"])
     for adapter in adapters:
         adapter.fetch_order_book.assert_awaited_once()
+
+
+@pytest.mark.parametrize("entry", ["instrument", "opportunity"])
+def test_astro_preview_fresh_shadow_unknown_identity_allows_manual_preview(entry):
+    app, opportunity, route, adapters, _ = fresh_app(verified=False, mode="shadow")
+    service = app.state.market_validation
+    initial = service.validate(*app.state.snapshot_store.get_all_markets())
+    assert {"REFERENCE_QUOTE_ONLY", "LEG_TIME_SKEW"} <= set(initial.reason_codes)
+    with TestClient(app) as client:
+        response = preview(client, entry, opportunity, route)
+    assert response.status_code == 200
+    plan = response.json()
+    assert plan["can_submit"] is True
+    assert plan["blockers"] == []
+    assert plan["source_open_spread_pct"] == pytest.approx(200 * 3 / 203)
+    for message in ("REFERENCE_QUOTE_ONLY", "LEG_TIME_SKEW",
+                    "仅有参考价格", "双方行情时间差过大"):
+        assert not any(message in item for item in plan["blockers"] + plan["warnings"])
+    assert service.qualify_opportunity.await_args.kwargs["fresh"] is True
+    for adapter in adapters:
+        adapter.fetch_order_book.assert_awaited_once()
+
+
+@pytest.mark.parametrize("entry", ["instrument", "opportunity"])
+@pytest.mark.parametrize("mode", ["shadow", "enforce"])
+@pytest.mark.parametrize("relation,message", [
+    ("different", "双方属于不同底层资产，不能作为同币配对"),
+    ("conflict", "资产或合约规格与核验记录冲突"),
+])
+def test_astro_preview_fresh_identity_mismatch_is_blocked(entry, mode, relation, message):
+    app, opportunity, route, _, external = fresh_app(mode=mode)
+    service = app.state.market_validation
+    bindings = list(service.registry.bindings.values())
+    updates = {"asset_id": "different-jio"} if relation == "different" else {
+        "identity_status": "conflict",
+    }
+    bindings[1] = bindings[1].model_copy(update=updates)
+    service.registry.replace(bindings)
+    initial = service.validate(*app.state.snapshot_store.get_all_markets())
+    assert initial.identity_relation == relation
+    with TestClient(app) as client:
+        response = preview(client, entry, opportunity, route)
+    assert response.status_code == 200
+    plan = response.json()
+    assert plan["can_submit"] is False
+    assert plan["blockers"].count(message) == 1
+    assert service.qualify_opportunity.await_args.kwargs["fresh"] is True
+    app.state.astro_alert_service.handle_manual_create.assert_not_awaited()
+    external.add_pair.assert_not_awaited()
 
 
 @pytest.mark.parametrize("entry", ["instrument", "opportunity"])
