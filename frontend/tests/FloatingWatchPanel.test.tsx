@@ -2,6 +2,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import * as apiClient from "../src/api/client";
 import { FloatingWatchPanel } from "../src/components/FloatingWatchPanel";
 
 const preset = {
@@ -1461,6 +1462,169 @@ describe("FloatingWatchPanel", () => {
     resolveLookup?.(Response.json(instrument));
     await act(async () => Promise.resolve());
     view.unmount();
+  });
+
+  describe("Astro dashboard authentication polling", () => {
+    const passwordMessage = "本设备未保存有效的面板密码，请验证密码后重试。";
+    const passwordError = () => new apiClient.ApiError(passwordMessage, 401);
+    let restoreApiMocks: () => void;
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      const mocks = [
+        vi.spyOn(apiClient, "listAstroPairs").mockRejectedValue(passwordError()),
+        vi.spyOn(apiClient, "getFloatingWatchSettings"),
+        vi.spyOn(apiClient, "lookupInstrument")
+      ];
+      restoreApiMocks = () => mocks.forEach((mock) => mock.mockRestore());
+    });
+
+    afterEach(() => {
+      restoreApiMocks();
+    });
+
+    async function renderPanel() {
+      await act(async () => {
+        render(<FloatingWatchPanel visible onClose={vi.fn()} />);
+      });
+    }
+
+    async function poll() {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+    }
+
+    async function click(name: string) {
+      await act(async () => {
+        screen.getByRole("button", { name }).click();
+      });
+    }
+
+    it("skips three Astro polls after a password 401 while settings and quotes keep refreshing", async () => {
+      await renderPanel();
+      expect(apiClient.listAstroPairs).toHaveBeenCalledTimes(1);
+
+      for (let round = 1; round <= 3; round += 1) {
+        await poll();
+        expect(apiClient.listAstroPairs).toHaveBeenCalledTimes(1);
+        expect(apiClient.getFloatingWatchSettings).toHaveBeenCalledTimes(round + 1);
+        expect(apiClient.lookupInstrument).toHaveBeenCalledTimes(round + 1);
+      }
+    });
+
+    it("preserves cached Astro cards and the password warning throughout three skipped polls", async () => {
+      vi.mocked(apiClient.listAstroPairs).mockResolvedValueOnce(astroPairs);
+      await renderPanel();
+      await act(async () => {
+        screen.getByText("Astro 3 · 1 持仓").click();
+      });
+      expect(apiClient.listAstroPairs).toHaveBeenCalledTimes(2);
+
+      for (let round = 0; round < 3; round += 1) {
+        await poll();
+        expect(apiClient.listAstroPairs).toHaveBeenCalledTimes(2);
+        expect(screen.getByText(`Astro 卡片读取失败：${passwordMessage}`)).not.toBeNull();
+        expect(screen.getByText("ANTHROPIC-ANTHROPIC")).not.toBeNull();
+      }
+    });
+
+    it.each([
+      [null, "verified-password"],
+      ["rejected-password", "verified-password"],
+      ["rejected-password", null]
+    ])("resumes on a password change from %s to %s and clears the old block", async (initial, changed) => {
+      if (initial !== null) window.localStorage.setItem("dashboard_password", initial);
+      await renderPanel();
+      await poll();
+      expect(apiClient.listAstroPairs).toHaveBeenCalledTimes(1);
+
+      vi.mocked(apiClient.listAstroPairs).mockResolvedValue(astroPairs);
+      if (changed === null) window.localStorage.removeItem("dashboard_password");
+      else window.localStorage.setItem("dashboard_password", changed);
+      await poll();
+      expect(apiClient.listAstroPairs).toHaveBeenCalledTimes(2);
+
+      if (initial === null) window.localStorage.removeItem("dashboard_password");
+      else window.localStorage.setItem("dashboard_password", initial);
+      await poll();
+      expect(apiClient.listAstroPairs).toHaveBeenCalledTimes(3);
+    });
+
+    it("retries once on manual refresh and blocks subsequent polls after another password 401", async () => {
+      await renderPanel();
+      await poll();
+      expect(apiClient.listAstroPairs).toHaveBeenCalledTimes(1);
+
+      await click("刷新关注行情");
+      expect(apiClient.listAstroPairs).toHaveBeenCalledTimes(2);
+      for (let round = 0; round < 3; round += 1) await poll();
+      expect(apiClient.listAstroPairs).toHaveBeenCalledTimes(2);
+      expect(apiClient.getFloatingWatchSettings).toHaveBeenCalledTimes(6);
+    });
+
+    it.each(["交易对 1", "Astro 0", "持仓 0"])("retries once when switching to %s", async (label) => {
+      await renderPanel();
+      await poll();
+      expect(apiClient.listAstroPairs).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        screen.getByText(label).click();
+      });
+      expect(apiClient.listAstroPairs).toHaveBeenCalledTimes(2);
+      await poll();
+      expect(apiClient.listAstroPairs).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([
+      ["upstream 401", new apiClient.ApiError("Astro upstream unauthorized", 401)],
+      ["server 500", new apiClient.ApiError("Astro server error", 500)],
+      ["500 with the password message", new apiClient.ApiError(passwordMessage, 500)],
+      ["network error", new TypeError("Failed to fetch")],
+      ["plain Error with the password message", new Error(passwordMessage)]
+    ])("continues polling after %s", async (_label, error) => {
+      vi.mocked(apiClient.listAstroPairs).mockRejectedValue(error);
+      await renderPanel();
+      for (let round = 1; round <= 3; round += 1) {
+        await poll();
+        expect(apiClient.listAstroPairs).toHaveBeenCalledTimes(round + 1);
+        expect(apiClient.getFloatingWatchSettings).toHaveBeenCalledTimes(round + 1);
+      }
+    });
+
+    it("records the saved password at rejection time", async () => {
+      let rejectRequest!: (error: Error) => void;
+      vi.mocked(apiClient.listAstroPairs).mockReturnValueOnce(new Promise((_resolve, reject) => {
+        rejectRequest = reject;
+      }));
+      window.localStorage.setItem("dashboard_password", "request-password");
+      await renderPanel();
+
+      window.localStorage.setItem("dashboard_password", "rejection-password");
+      await act(async () => {
+        rejectRequest(passwordError());
+      });
+      await poll();
+      expect(apiClient.listAstroPairs).toHaveBeenCalledTimes(1);
+      expect(apiClient.getFloatingWatchSettings).toHaveBeenCalledTimes(2);
+    });
+
+    it.each(["manual refresh", "mode switch"])("retries a queued %s after an in-flight password rejection", async (trigger) => {
+      let rejectRequest!: (error: Error) => void;
+      vi.mocked(apiClient.listAstroPairs).mockReturnValueOnce(new Promise((_resolve, reject) => {
+        rejectRequest = reject;
+      }));
+      await renderPanel();
+      if (trigger === "manual refresh") await click("刷新关注行情");
+      else await act(async () => { screen.getByText("Astro 0").click(); });
+
+      await act(async () => {
+        rejectRequest(passwordError());
+      });
+      expect(apiClient.listAstroPairs).toHaveBeenCalledTimes(2);
+      await poll();
+      expect(apiClient.listAstroPairs).toHaveBeenCalledTimes(2);
+    });
   });
 
   it("clamps a saved desktop position after the viewport shrinks", async () => {

@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 
 import {
   getFloatingWatchSettings,
+  isDashboardPasswordError,
   listAccountPositions,
   listAstroPairs,
   listPairSpreadPresets,
@@ -654,17 +655,33 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
   );
   const panelRef = useRef<HTMLElement | null>(null);
   const refreshQueue = useRef<Promise<void>>(Promise.resolve());
+  const astroAuthBlocked = useRef<string | null>(null);
+  const lastRefreshMode = useRef<WatchMode>(mode);
 
-  const refresh = useCallback((requestedMode: WatchMode): Promise<void> => {
+  const refresh = useCallback((requestedMode: WatchMode, retryAstroAuth = false): Promise<void> => {
     const run = async () => {
       setLoading(true);
       try {
-        const astroResultPromise = listAstroPairs()
-          .then((items) => ({ items, error: "" }))
-          .catch((caught) => ({
-            items: null,
-            error: caught instanceof Error ? caught.message : String(caught)
-          }));
+        const password = window.localStorage.getItem("dashboard_password") ?? "";
+        // Reset inside the queue so an in-flight rejection cannot cancel an explicit retry.
+        if (retryAstroAuth || requestedMode !== lastRefreshMode.current
+          || (astroAuthBlocked.current !== null && astroAuthBlocked.current !== password)) {
+          astroAuthBlocked.current = null;
+        }
+        lastRefreshMode.current = requestedMode;
+        const astroResultPromise = astroAuthBlocked.current === null
+          ? listAstroPairs()
+            .then((items) => ({ items, error: "" }))
+            .catch((caught) => {
+              if (isDashboardPasswordError(caught)) {
+                astroAuthBlocked.current = window.localStorage.getItem("dashboard_password") ?? "";
+              }
+              return {
+                items: null,
+                error: caught instanceof Error ? caught.message : String(caught)
+              };
+            })
+          : null;
         const nextSettings = await getFloatingWatchSettings();
         setSettings(nextSettings);
         if (requestedMode === "symbols") {
@@ -721,7 +738,7 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
           }
         }
         const astroResult = await astroResultPromise;
-        if (astroResult.items) {
+        if (astroResult?.items) {
           setAstroPairs(astroResult.items);
           if (requestedMode === "astro") {
             const legs = Array.from(new Map(
@@ -754,7 +771,7 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
             setAstroInstruments(Object.fromEntries(instrumentEntries));
           }
         }
-        setAstroError(astroResult.error);
+        if (astroResult) setAstroError(astroResult.error);
         setError("");
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : String(caught));
@@ -1031,7 +1048,7 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
         <span className="floating-watch-header-actions">
           {!collapsed ? (
             <Tooltip title="立即刷新">
-              <Button aria-label="刷新关注行情" type="text" size="small" icon={<ReloadOutlined spin={loading} />} onClick={() => void refresh(mode)} />
+              <Button aria-label="刷新关注行情" type="text" size="small" icon={<ReloadOutlined spin={loading} />} onClick={() => void refresh(mode, true)} />
             </Tooltip>
           ) : null}
           {!standalone ? (

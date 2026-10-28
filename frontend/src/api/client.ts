@@ -220,6 +220,12 @@ function extractErrorMessage(text: string, status: number): string {
   return normalized;
 }
 
+export function isDashboardPasswordError(error: unknown): error is ApiError {
+  return error instanceof ApiError
+    && error.status === 401
+    && error.message === extractErrorMessage(JSON.stringify({ detail: "Invalid dashboard password" }), 401);
+}
+
 async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(buildUrl(path), {
     ...options,
