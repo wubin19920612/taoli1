@@ -55,3 +55,11 @@ python -m pytest tests -q --basetemp=.pytest_preview_fresh_full -p no:cacheprovi
 - 原有 `.pytest_preview_fresh_a` 已移存为 `backend/.pytest_preview_fresh_a_previous_20261028/`，保留上一轮证据。新测试产生的 `.pytest_preview_fresh_a/`、`.pytest_preview_fresh_full/` 等产物不提交。
 - 用户提供的未跟踪任务书保持原样、不纳入代码提交。
 - 本模块后续如需发布，应在新任务中基于本提交独立安排推送、备份、部署和线上验收。
+
+## 发布记录（2026-10-28，Claude 执行部署）
+- 提交 `020642c`（rebase 到 4ad88b7 后），推送 origin/codex/astro-preview-fresh 与 origin/codex/frontend-localization-polish（fast-forward）。
+- CI 镜像 backend/frontend `sha-020642cb7c23…` 约 5 分钟就绪。
+- Codex 沙箱无法读取 SSH 私钥（C:/tmp/taoli1_codex_temp），部署改由 Claude 运行 `output/astro-fresh-deploy-20261028.sh`（复用 m23a 隔离部署脚本，.env 未动）。
+- 13:34 CST `DEPLOY_ATTEMPT_1=0`，`DEPLOY_EXIT=0`；live=200 ready=200。
+- 线上只读预览 JIOUSDT（bitget JIOUSDT → hyperliquid xyz:JIO）：can_submit=true，blockers=[]，价差 +2.17%；仅剩 Bitget 快照 32 秒过期风险提示。
+- 部署后 10 分钟：restarts=0，database is locked=0，Traceback=103（部署前 60 分钟 671，均为 Gate 公告接口 567 上游错误，与本修复无关）。
