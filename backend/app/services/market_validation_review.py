@@ -415,8 +415,14 @@ class MarketValidationService:
         )
         return normalized
 
-    async def review(self, a, b, risk, *, twice=False, comparison_kind="same_asset"):
-        key = (*self.pair_key(a, b), comparison_kind, twice, risk.model_dump_json())
+    async def review(
+        self, a, b, risk, *, twice=False, comparison_kind="same_asset",
+        fetch_books_when_unverified=False,
+    ):
+        key = (
+            *self.pair_key(a, b), comparison_kind, twice, risk.model_dump_json(),
+            fetch_books_when_unverified,
+        )
         existing = self.review_inflight.get(key)
         if existing is not None:
             return await asyncio.shield(existing)
@@ -425,7 +431,10 @@ class MarketValidationService:
 
         async def run():
             async with self.semaphore:
-                return await self._review(a, b, risk, twice=twice, comparison_kind=comparison_kind)
+                return await self._review(
+                    a, b, risk, twice=twice, comparison_kind=comparison_kind,
+                    fetch_books_when_unverified=fetch_books_when_unverified,
+                )
 
         task = asyncio.create_task(run())
         self.review_inflight[key] = task
@@ -438,7 +447,10 @@ class MarketValidationService:
         task.add_done_callback(forget)
         return await asyncio.shield(task)
 
-    async def _review(self, a, b, risk, *, twice=False, comparison_kind="same_asset"):
+    async def _review(
+        self, a, b, risk, *, twice=False, comparison_kind="same_asset",
+        fetch_books_when_unverified=False,
+    ):
         from app.services.spread_engine import build_directional_opportunity
 
         epoch = self._mutation_epoch
@@ -466,6 +478,10 @@ class MarketValidationService:
             "different",
             "conflict",
         }:
+            blocking -= {"ASSET_IDENTITY_UNVERIFIED", "UNIT_UNVERIFIED"}
+        # Manual previews may refresh quotes for unknown identities, but the
+        # final validation still retains every identity/unit blocker.
+        if fetch_books_when_unverified:
             blocking -= {"ASSET_IDENTITY_UNVERIFIED", "UNIT_UNVERIFIED"}
         if blocking:
             return initial, a, b
@@ -600,11 +616,14 @@ class MarketValidationService:
             legs.append(row)
         return legs
 
-    async def qualify_opportunity(self, opportunity, risk, *, fresh=False):
+    async def qualify_opportunity(
+        self, opportunity, risk, *, fresh=False, fetch_books_when_unverified=False,
+    ):
         a, b = self._opportunity_legs(opportunity)
         if fresh:
             result, a, b = await self.review(
-                a, b, risk, comparison_kind=opportunity.comparison_kind
+                a, b, risk, comparison_kind=opportunity.comparison_kind,
+                fetch_books_when_unverified=fetch_books_when_unverified,
             )
         else:
             result = self.validate(a, b, risk, comparison_kind=opportunity.comparison_kind)

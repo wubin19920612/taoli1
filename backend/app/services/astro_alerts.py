@@ -13,6 +13,7 @@ from app.services.astro_planner import AstroPairPlanner, AstroPlannerConfig
 from app.services.data_filters import symbol_is_excluded
 from app.services.gate_crossex_hyperliquid import GateCrossExHyperliquidCatalog
 from app.services.market_labels import astro_pair_route_variants
+from app.services.spread_engine import build_directional_opportunity
 
 AUTOMATIC_ASTRO_BLOCKED_EXCHANGES = frozenset({"rh-lighter"})
 AUTOMATIC_ASTRO_BLOCK_MESSAGE = (
@@ -250,7 +251,25 @@ class AstroAlertService:
         if self.market_validation is not None:
             try:
                 risk = await self.risk_settings_loader() if self.risk_settings_loader else RiskSettings()
-                result, _, _ = await self.market_validation.qualify_opportunity(opportunity, risk)
+                if manual_override:
+                    result, buy, sell = await self.market_validation.qualify_opportunity(
+                        opportunity, risk, fresh=True, fetch_books_when_unverified=True,
+                    )
+                    reviewed = build_directional_opportunity(
+                        buy, sell, mode=opportunity.type,
+                        buy_fee_pct=opportunity.buy_fee_pct,
+                        sell_fee_pct=opportunity.sell_fee_pct,
+                        safety_slippage_pct=opportunity.safety_slippage_pct,
+                        validate_identity=False,
+                    )
+                    opportunity = reviewed.model_copy(update={
+                        "id": opportunity.id,
+                        "comparison_kind": opportunity.comparison_kind,
+                        "fees_are_estimated": opportunity.fees_are_estimated,
+                        "risk_labels": opportunity.risk_labels,
+                    })
+                else:
+                    result, _, _ = await self.market_validation.qualify_opportunity(opportunity, risk)
                 if self.market_validation.should_enforce(result) and not result.capabilities.manual_card:
                     return AstroAlertActionResult(enabled=True, status="skipped", action="market_validation",
                                                   message="；".join(issue.message for issue in result.blockers))

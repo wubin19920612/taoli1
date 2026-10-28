@@ -267,19 +267,54 @@ async def _manual_astro_card_settings(
         ]
 
 
+async def _review_manual_opportunity(
+    request: Request,
+    opportunity: Opportunity,
+    risk_settings: RiskSettings,
+) -> tuple[Opportunity, str | None]:
+    validation_service = getattr(request.app.state, "market_validation", None)
+    if validation_service is None:
+        return opportunity, None
+    try:
+        validation, buy, sell = await validation_service.qualify_opportunity(
+            opportunity, risk_settings, fresh=True, fetch_books_when_unverified=True,
+        )
+        reviewed = build_directional_opportunity(
+            buy,
+            sell,
+            mode=opportunity.type,
+            buy_fee_pct=opportunity.buy_fee_pct,
+            sell_fee_pct=opportunity.sell_fee_pct,
+            safety_slippage_pct=opportunity.safety_slippage_pct,
+            validate_identity=False,
+        )
+        return reviewed.model_copy(update={
+            "id": opportunity.id,
+            "comparison_kind": opportunity.comparison_kind,
+            "fees_are_estimated": opportunity.fees_are_estimated,
+            "risk_labels": opportunity.risk_labels,
+            "validation": validation,
+            "identity_enforced": validation_service.should_enforce(validation),
+        }), None
+    except Exception as exc:  # noqa: BLE001 - a failed review must prevent manual writes.
+        return opportunity, f"实时盘口复核失败：{exc}，请稍后重试"
+
+
 async def _build_astro_preview(
     request: Request,
     opportunity: Opportunity,
     manual_warnings: list[str] | None = None,
 ) -> AstroPairPlan:
-    validation_service = getattr(request.app.state, "market_validation", None)
-    if validation_service is not None:
-        risk_settings, _ = await _manual_risk_settings(request)
-        try:
-            validation, _, _ = await validation_service.qualify_opportunity(opportunity, risk_settings)
-            opportunity = opportunity.model_copy(update={"validation": validation, "identity_enforced": validation_service.should_enforce(validation)})
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=f"市场身份无法确认：{exc}") from exc
+    risk_settings, risk_warnings = await _manual_risk_settings(request)
+    opportunity, review_error = await _review_manual_opportunity(request, opportunity, risk_settings)
+    if review_error is not None:
+        return AstroPairPlan(
+            opportunity_id=opportunity.id,
+            symbol=opportunity.symbol,
+            can_submit=False,
+            blockers=[review_error],
+            warnings=_unique_warnings([*(manual_warnings or []), *risk_warnings]),
+        )
     settings, settings_warnings = await _manual_astro_card_settings(request)
     planner = AstroPairPlanner(AstroPlannerConfig.from_card_settings(settings))
     plan = planner.plan(opportunity, allow_manual_override=True)
@@ -465,6 +500,25 @@ async def _create_astro_card(
 ) -> AstroAlertActionResult:
     risk_settings, risk_warnings = await _manual_risk_settings(request)
     warnings = [*(manual_warnings or []), *risk_warnings]
+    opportunity, review_error = await _review_manual_opportunity(request, opportunity, risk_settings)
+    if review_error is not None:
+        return AstroAlertActionResult(
+            enabled=request.app.state.settings.astro_manual_card_create,
+            status="failed",
+            action="market_validation",
+            message=review_error,
+            warnings=_unique_warnings(warnings),
+        )
+    if opportunity.identity_enforced:
+        validation_plan = AstroPairPlanner().plan(opportunity, allow_manual_override=True)
+        if not validation_plan.can_submit:
+            return AstroAlertActionResult(
+                enabled=request.app.state.settings.astro_manual_card_create,
+                status="skipped",
+                action="market_validation",
+                message="；".join(validation_plan.blockers),
+                warnings=_unique_warnings(warnings),
+            )
     if symbol_is_excluded(opportunity.symbol, risk_settings):
         warnings.append(
             _manual_override_warning(f"{opportunity.symbol} 已在全局黑名单")

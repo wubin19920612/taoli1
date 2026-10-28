@@ -14,7 +14,7 @@ from app.services.gate_crossex_hyperliquid import GateCrossExHyperliquidCatalog
 from app.services.snapshot_store import SnapshotStore
 
 
-def _install_exact_books(app):
+def _install_exact_books(app, *, snapshot_timestamp=False):
     class ExactBookAdapter:
         def __init__(self, row):
             self.name, self.row = row.exchange, row
@@ -22,7 +22,8 @@ def _install_exact_books(app):
         async def fetch_order_book(self, symbol, market_type, raw_symbol, limit=20):
             return OrderBookSnapshot(exchange=self.name, symbol=symbol, market_type=market_type, raw_symbol=raw_symbol,
                                      bids=[OrderBookLevel(price=self.row.bid, size=100000)],
-                                     asks=[OrderBookLevel(price=self.row.ask, size=100000)], timestamp=datetime.now(UTC))
+                                     asks=[OrderBookLevel(price=self.row.ask, size=100000)],
+                                     timestamp=self.row.timestamp if snapshot_timestamp else datetime.now(UTC))
 
     app.state.market_validation.set_adapters([ExactBookAdapter(row) for row in app.state.snapshot_store.get_all_markets()])
 
@@ -166,6 +167,7 @@ def test_instrument_astro_preview_uses_selected_live_market_direction() -> None:
     app = instrument_app()
 
     with TestClient(app) as client:
+        _install_exact_books(app, snapshot_timestamp=True)
         response = client.post("/api/astro/instrument/preview", json=route())
 
     assert response.status_code == 200
@@ -188,6 +190,7 @@ def test_instrument_astro_preview_offers_plain_and_gc_lighter_routes() -> None:
         **route(), "buy_exchange": "lighter", "sell_exchange": "binance"
     }
     with TestClient(app) as client:
+        _install_exact_books(app, snapshot_timestamp=True)
         response = client.post("/api/astro/instrument/preview", json=selected)
     assert response.status_code == 200
     payload = response.json()
@@ -213,6 +216,7 @@ def test_instrument_astro_preview_offers_gc_aster_routes(aster_buy: bool) -> Non
     selected = {**route(), "buy_exchange": buy_exchange, "sell_exchange": sell_exchange}
 
     with TestClient(app) as client:
+        _install_exact_books(app, snapshot_timestamp=True)
         response = client.post("/api/astro/instrument/preview", json=selected)
 
     assert response.status_code == 200
@@ -256,6 +260,7 @@ def test_hl_preview_matches_exact_gate_dex_with_gc_default(
     ])
 
     with TestClient(app) as client:
+        _install_exact_books(app, snapshot_timestamp=True)
         app.state.settings_repo = GcSettingsRepository(RiskSettings(excluded_symbols=[]))
         response = client.post("/api/astro/instrument/preview", json={
             **route(), "buy_exchange": buy, "sell_exchange": sell,
@@ -305,6 +310,7 @@ def test_rh_lighter_market_allows_authenticated_manual_create(
     }
 
     with TestClient(app) as client:
+        _install_exact_books(app, snapshot_timestamp=True)
         _install_exact_books(app)
         preview = client.post("/api/astro/instrument/preview", json=selected)
         unauthorized = client.post("/api/astro/instrument/card", json={
@@ -338,6 +344,7 @@ def test_instrument_astro_preview_explains_when_confirm_will_write_to_astro() ->
     app = instrument_app(astro_dry_run_only=False)
 
     with TestClient(app) as client:
+        _install_exact_books(app, snapshot_timestamp=True)
         response = client.post("/api/astro/instrument/preview", json=route())
 
     assert response.status_code == 200
@@ -374,6 +381,7 @@ def test_rh_lighter_manual_api_reaches_sdk_with_exact_paused_openai_card() -> No
         )
     )
     with TestClient(app) as client:
+        _install_exact_books(app, snapshot_timestamp=True)
         _install_exact_books(app)
         preview = client.post("/api/astro/instrument/preview", json=selected)
         response = client.post(
@@ -402,6 +410,7 @@ def test_instrument_astro_preview_surfaces_global_blacklist() -> None:
     app = instrument_app()
 
     with TestClient(app) as client:
+        _install_exact_books(app, snapshot_timestamp=True)
         app.state.settings_repo = RiskSettingsRepository()
         response = client.post("/api/astro/instrument/preview", json=route())
 
@@ -423,6 +432,7 @@ def test_instrument_astro_preview_allows_selected_negative_spread_direction() ->
     }
 
     with TestClient(app) as client:
+        _install_exact_books(app, snapshot_timestamp=True)
         response = client.post("/api/astro/instrument/preview", json=reverse_route)
 
     assert response.status_code == 200
@@ -454,6 +464,7 @@ def test_instrument_astro_preview_maps_future_to_spot_route_to_fs() -> None:
     }
 
     with TestClient(app) as client:
+        _install_exact_books(app, snapshot_timestamp=True)
         response = client.post(
             "/api/astro/instrument/preview",
             json=reverse_sf_route,
@@ -472,6 +483,7 @@ def test_instrument_astro_preview_warns_when_risk_settings_cannot_be_loaded() ->
     app = instrument_app()
 
     with TestClient(app) as client:
+        _install_exact_books(app, snapshot_timestamp=True)
         app.state.settings_repo = FailingRiskSettingsRepository()
         response = client.post("/api/astro/instrument/preview", json=route())
 
@@ -490,6 +502,7 @@ def test_instrument_astro_create_rebuilds_route_and_passes_sizing_to_shared_serv
     app.state.astro_alert_service = service
 
     with TestClient(app) as client:
+        _install_exact_books(app, snapshot_timestamp=True)
         response = client.post(
             "/api/astro/instrument/card",
             headers={"X-Dashboard-Password": "secret"},
@@ -542,6 +555,7 @@ def test_instrument_astro_create_warns_but_continues_when_order_book_validation_
     )
 
     with TestClient(app) as client:
+        _install_exact_books(app, snapshot_timestamp=True)
         response = client.post(
             "/api/astro/instrument/card",
             headers={"X-Dashboard-Password": "secret"},
@@ -565,6 +579,7 @@ def test_instrument_astro_create_requires_dashboard_password() -> None:
     app = instrument_app(dashboard_password="secret")
 
     with TestClient(app) as client:
+        _install_exact_books(app, snapshot_timestamp=True)
         response = client.post(
             "/api/astro/instrument/card",
             json={
@@ -581,6 +596,7 @@ def test_instrument_astro_preview_warns_for_ignored_exchange_without_blocking() 
     app = instrument_app()
 
     with TestClient(app) as client:
+        _install_exact_books(app, snapshot_timestamp=True)
         app.state.settings_repo = RiskSettingsRepository(
             RiskSettings(ignored_exchanges=["okx"])
         )
@@ -604,6 +620,7 @@ def test_instrument_astro_preview_blocks_stale_market_snapshot_even_for_manual_c
     )
 
     with TestClient(app) as client:
+        _install_exact_books(app, snapshot_timestamp=True)
         response = client.post("/api/astro/instrument/preview", json=route())
 
     assert response.status_code == 200
@@ -620,6 +637,7 @@ def test_instrument_astro_create_warns_for_spread_drift_and_continues() -> None:
     app.state.astro_alert_service = service
 
     with TestClient(app) as client:
+        _install_exact_books(app, snapshot_timestamp=True)
         response = client.post(
             "/api/astro/instrument/card",
             headers={"X-Dashboard-Password": "secret"},
@@ -646,6 +664,7 @@ def test_instrument_astro_create_warns_when_risk_settings_cannot_be_loaded() -> 
     app.state.astro_alert_service = service
 
     with TestClient(app) as client:
+        _install_exact_books(app, snapshot_timestamp=True)
         app.state.settings_repo = FailingRiskSettingsRepository()
         response = client.post(
             "/api/astro/instrument/card",
@@ -677,6 +696,7 @@ def test_instrument_astro_create_warns_when_default_settings_cannot_be_saved() -
     app.state.astro_alert_service = service
 
     with TestClient(app) as client:
+        _install_exact_books(app, snapshot_timestamp=True)
         app.state.settings_repo = FailingAstroSettingsWriteRepository()
         response = client.post(
             "/api/astro/instrument/card",

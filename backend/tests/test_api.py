@@ -447,7 +447,7 @@ def make_market(symbol: str, exchange: str = "binance") -> MarketSnapshot:
 def confirmed_market_validation(monkeypatch):
     # These tests cover saved card settings, using seeded executable quotes.
     # Keep the real planner/service while supplying confirmed identity results.
-    async def qualify(self, opportunity, risk, *, fresh=False):
+    async def qualify(self, opportunity, risk, *, fresh=False, fetch_books_when_unverified=False):
         now = datetime.now(UTC)
         legs = [
             MarketSnapshot(
@@ -3470,7 +3470,7 @@ def test_astro_manual_card_create_endpoint_warns_for_globally_blocked_symbol() -
     assert any("仅作风险提示，未拦截创建" in warning for warning in payload["warnings"])
 
 
-def test_astro_manual_card_create_endpoint_forwards_overrides_and_saves_defaults() -> None:
+def test_astro_manual_card_create_endpoint_forwards_overrides_and_saves_defaults(confirmed_market_validation) -> None:
     store = SnapshotStore()
     store.set_opportunities([make_opportunity()])
     app = create_app(
@@ -3519,7 +3519,7 @@ def test_astro_manual_card_create_endpoint_forwards_overrides_and_saves_defaults
     assert saved.json()["card_variant"] == "non_gc"
 
 
-def test_astro_manual_card_create_endpoint_warns_but_continues_when_order_book_validation_fails() -> None:
+def test_astro_manual_card_create_endpoint_warns_but_continues_when_order_book_validation_fails(confirmed_market_validation) -> None:
     store = SnapshotStore()
     store.set_opportunities([make_opportunity()])
     app = create_app(

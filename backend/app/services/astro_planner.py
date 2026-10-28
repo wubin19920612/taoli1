@@ -1,6 +1,6 @@
-from datetime import UTC, datetime
 from dataclasses import dataclass
-from decimal import Decimal, ROUND_HALF_UP
+from datetime import UTC, datetime
+from decimal import ROUND_HALF_UP, Decimal
 
 from app.models.astro import AstroFieldAssumption, AstroPairPlan
 from app.models.market import MarketType
@@ -9,7 +9,6 @@ from app.models.settings import AstroCardSettings
 from app.services.funding_edge import current_cycle_funding_edge_pct, next_cycle_funding_edge_pct
 from app.services.market_labels import astro_exchange_id, astro_exchange_route_variants
 from app.services.market_sessions import is_opportunity_tradable
-
 
 SUPPORTED_ASTRO_TYPES = {OpportunityType.SF, OpportunityType.FF}
 ASTRO_POSITION_QUANTUM = Decimal("0.000001")
@@ -57,7 +56,7 @@ def _base_name(symbol: str) -> str:
 
 
 def _decimal_position(percent_value: float) -> str:
-    value = (Decimal(str(percent_value)) / Decimal("100")).quantize(
+    value = (Decimal(str(percent_value)) / Decimal(100)).quantize(
         Decimal("0.000001"),
         rounding=ROUND_HALF_UP,
     )
@@ -65,8 +64,8 @@ def _decimal_position(percent_value: float) -> str:
 
 
 def _ratio_position(percent_value: float) -> str:
-    spread = Decimal(str(percent_value)) / Decimal("100")
-    value = ((Decimal("2") + spread) / (Decimal("2") - spread)).quantize(
+    spread = Decimal(str(percent_value)) / Decimal(100)
+    value = ((Decimal(2) + spread) / (Decimal(2) - spread)).quantize(
         Decimal("0.000001"),
         rounding=ROUND_HALF_UP,
     )
@@ -110,10 +109,10 @@ def _hyperliquid_dex(raw_symbol: str | None) -> str | None:
     return dex.strip().lower() or None
 
 
-def _compact_number(value: float | int) -> str:
+def _compact_number(value: float) -> str:
     decimal = Decimal(str(value)).normalize()
     if decimal == decimal.to_integral():
-        return str(decimal.quantize(Decimal("1")))
+        return str(decimal.quantize(Decimal(1)))
     return format(decimal, "f")
 
 
@@ -210,18 +209,16 @@ def _type_blockers(
         return ["Astro SDK document does not list SS as a supported pair type."]
     if opportunity.type not in SUPPORTED_ASTRO_TYPES:
         return [f"Astro SDK support for {opportunity.type} is not documented."]
-    if opportunity.type == OpportunityType.SF:
-        if (
-            opportunity.buy_market_type != MarketType.SPOT
-            or opportunity.sell_market_type != MarketType.FUTURE
-        ):
-            return ["SF must map to spot buy leg and future sell leg before submitting to Astro."]
-    if opportunity.type == OpportunityType.FF:
-        if (
-            opportunity.buy_market_type != MarketType.FUTURE
-            or opportunity.sell_market_type != MarketType.FUTURE
-        ):
-            return ["FF must map to future buy leg and future sell leg before submitting to Astro."]
+    if opportunity.type == OpportunityType.SF and (
+        opportunity.buy_market_type != MarketType.SPOT
+        or opportunity.sell_market_type != MarketType.FUTURE
+    ):
+        return ["SF must map to spot buy leg and future sell leg before submitting to Astro."]
+    if opportunity.type == OpportunityType.FF and (
+        opportunity.buy_market_type != MarketType.FUTURE
+        or opportunity.sell_market_type != MarketType.FUTURE
+    ):
+        return ["FF must map to future buy leg and future sell leg before submitting to Astro."]
     return []
 
 
@@ -278,7 +275,7 @@ class AstroPairPlanner:
             if validation is None:
                 blockers.append("市场身份尚未完成核验，不能建卡。")
             elif not validation.capabilities.manual_card or validation.expires_at <= (now or datetime.now(UTC)):
-                blockers.extend(issue.message for issue in validation.blockers)
+                blockers.extend(dict.fromkeys(issue.message for issue in validation.blockers))
                 if not validation.blockers:
                     blockers.append("市场核验已过期，请刷新报价。")
 
