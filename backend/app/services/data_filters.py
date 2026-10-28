@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from app.models.market import MarketSnapshot
 from app.models.opportunity import Opportunity
 from app.models.settings import RiskSettings
+from app.runtime.cooperative import YieldBudget
 from app.services.market_sessions import is_opportunity_tradable
 
 
@@ -55,9 +56,27 @@ def filter_markets(markets: list[MarketSnapshot], settings: RiskSettings) -> lis
     return [
         market
         for market in markets
-        if normalize_symbol(market.symbol) not in excluded
-        and normalize_exchange(market.exchange) not in ignored
+        if _market_is_included(market, excluded, ignored)
     ]
+
+
+def _market_is_included(market, excluded, ignored) -> bool:
+    return (normalize_symbol(market.symbol) not in excluded
+            and normalize_exchange(market.exchange) not in ignored)
+
+
+async def filter_markets_async(
+    markets: list[MarketSnapshot], settings: RiskSettings, *, budget: YieldBudget | None = None,
+) -> list[MarketSnapshot]:
+    budget = budget or YieldBudget()
+    excluded = excluded_symbol_set(settings)
+    ignored = ignored_exchange_set(settings)
+    filtered = []
+    for market in markets:
+        await budget.maybe_yield()
+        if _market_is_included(market, excluded, ignored):
+            filtered.append(market)
+    return filtered
 
 
 def filter_opportunities(

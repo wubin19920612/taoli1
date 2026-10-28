@@ -18,6 +18,7 @@ from app.models.premium_index import (
     PremiumIndexQueryResult,
 )
 from app.models.settings import SymbolAlias
+from app.runtime.cooperative import YieldBudget
 
 KNOWN_SYMBOL_ALIASES: tuple[SymbolAlias, ...] = (
     SymbolAlias(
@@ -460,31 +461,43 @@ def apply_symbol_aliases(
     aliases: list[SymbolAlias],
 ) -> list[MarketSnapshot]:
     resolver = SymbolAliasResolver(aliases)
-    normalized: list[MarketSnapshot] = []
+    return [_apply_symbol_alias(market, resolver) for market in markets]
+
+
+async def apply_symbol_aliases_async(
+    markets: list[MarketSnapshot],
+    aliases: list[SymbolAlias],
+    *,
+    budget: YieldBudget | None = None,
+) -> list[MarketSnapshot]:
+    budget = budget or YieldBudget()
+    resolver = SymbolAliasResolver(aliases)
+    normalized = []
     for market in markets:
-        alias = resolver.alias_for(market)
-        if alias is None:
-            normalized.append(market)
-            continue
-        multiplier = alias.price_multiplier
-        canonical = alias.canonical_symbol
-        if canonical == market.symbol and multiplier == 1:
-            normalized.append(market)
-            continue
-        normalized.append(
-            market.model_copy(
-                update={
-                    "symbol": canonical,
-                    "base": _base_from_symbol(canonical),
-                    "bid": market.bid * multiplier,
-                    "ask": market.ask * multiplier,
-                    "bid_size": _scaled_size(market.bid_size, multiplier),
-                    "ask_size": _scaled_size(market.ask_size, multiplier),
-                    "mark_price": _scaled(market.mark_price, multiplier),
-                    "index_price": _scaled(market.index_price, multiplier),
-                    "symbol_alias_original_symbol": market.symbol,
-                    "symbol_alias_price_multiplier": multiplier,
-                }
-            )
-        )
+        await budget.maybe_yield()
+        normalized.append(_apply_symbol_alias(market, resolver))
     return normalized
+
+
+def _apply_symbol_alias(market: MarketSnapshot, resolver: SymbolAliasResolver) -> MarketSnapshot:
+    alias = resolver.alias_for(market)
+    if alias is None:
+        return market
+    multiplier = alias.price_multiplier
+    canonical = alias.canonical_symbol
+    if canonical == market.symbol and multiplier == 1:
+        return market
+    return market.model_copy(
+        update={
+            "symbol": canonical,
+            "base": _base_from_symbol(canonical),
+            "bid": market.bid * multiplier,
+            "ask": market.ask * multiplier,
+            "bid_size": _scaled_size(market.bid_size, multiplier),
+            "ask_size": _scaled_size(market.ask_size, multiplier),
+            "mark_price": _scaled(market.mark_price, multiplier),
+            "index_price": _scaled(market.index_price, multiplier),
+            "symbol_alias_original_symbol": market.symbol,
+            "symbol_alias_price_multiplier": multiplier,
+        }
+    )

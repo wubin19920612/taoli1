@@ -19,18 +19,19 @@ from app.models.index_component import index_watch_symbol
 from app.models.market import MarketSnapshot
 from app.models.opportunity import Opportunity
 from app.models.settings import FeeSettings, RiskSettings
+from app.runtime.cooperative import YieldBudget
 from app.runtime.supervisor import StageTimings, beat
 from app.services.compact_markets import CompactMarkets, pack
 from app.services.data_filters import (
-    filter_markets,
+    filter_markets_async,
     filter_opportunities,
     ignored_exchange_set,
 )
 from app.services.risk_labels import risk_labels_for
 from app.services.snapshot_consumers import LatestSnapshotSlot, PublishedSnapshot
 from app.services.snapshot_store import SnapshotStore
-from app.services.spread_engine import build_all_opportunities
-from app.services.symbol_aliases import apply_symbol_aliases
+from app.services.spread_engine import build_all_opportunities, build_all_opportunities_async
+from app.services.symbol_aliases import apply_symbol_aliases_async
 
 logger = logging.getLogger(__name__)
 
@@ -234,22 +235,31 @@ class MarketCollector:
                 await self._store_poll_results(due_adapters, results, now)
 
         with self.stage_timings.measure(sample, "prepare"):
+            validation_epoch = getattr(self.market_validation, "_mutation_epoch", None)
             markets = self._combined_exchange_markets(active_adapters)
             errors = self._combined_exchange_errors(active_adapters)
 
-            aliased_markets = apply_symbol_aliases(markets, self.risk_settings.symbol_aliases)
+            budget = YieldBudget()
+            aliased_markets = await apply_symbol_aliases_async(
+                markets, self.risk_settings.symbol_aliases, budget=budget,
+            )
             if self.market_validation is not None:
                 aliased_markets = await self.market_validation.prepare(aliased_markets, self.risk_settings)
-            filtered_markets = filter_markets(aliased_markets, self.risk_settings)
+            filtered_markets = await filter_markets_async(
+                aliased_markets, self.risk_settings, budget=budget,
+            )
 
         with self.stage_timings.measure(sample, "build"):
-            opportunities = self._build_labeled_opportunities(filtered_markets, now=now)
+            opportunities = await self._build_labeled_opportunities_async(
+                filtered_markets, now=now, budget=budget,
+            )
             if self.market_validation is not None:
                 by_key = {
                     (m.exchange, m.market_type, m.raw_symbol): m for m in filtered_markets
                 }
                 accepted = []
                 for item in opportunities:
+                    await budget.maybe_yield()
                     a = by_key.get((item.buy_exchange, item.buy_market_type, item.buy_raw_symbol))
                     b = by_key.get((item.sell_exchange, item.sell_market_type, item.sell_raw_symbol))
                     if a is None or b is None:
@@ -266,6 +276,10 @@ class MarketCollector:
                 now=now,
             )
         with self.stage_timings.measure(sample, "publish"):
+            # A binding update can revoke capabilities while post-processing yields.
+            # Keep its refreshed store intact and retry on the next collector round.
+            if validation_epoch != getattr(self.market_validation, "_mutation_epoch", None):
+                raise ValueError("mapping changed during collection")
             self.store.set_all_markets(aliased_markets)
             self.store.set_markets(filtered_markets)
             self.store.set_opportunities(filtered_opportunities)
@@ -561,6 +575,36 @@ class MarketCollector:
             symbol.upper() for symbol in self.risk_settings.ticker_collision_symbols
         )
         for item in opportunities:
+            # These models were just constructed for this collection, and have
+            # not been published to the store or passed to another consumer.
+            item.risk_labels = risk_labels_for(
+                item, self.risk_settings, current, collision_symbols=collision_symbols,
+            )
+        return opportunities
+
+    async def _build_labeled_opportunities_async(
+        self,
+        markets: list[MarketSnapshot],
+        now: datetime | None = None,
+        *,
+        budget: YieldBudget | None = None,
+    ) -> list[Opportunity]:
+        budget = budget or YieldBudget()
+        current = now or self._now_fn()
+        opportunities = await build_all_opportunities_async(
+            markets,
+            budget=budget,
+            spot_fee_pct=self.fee_settings.spot_fee_pct,
+            future_fee_pct=self.fee_settings.future_fee_pct,
+            safety_slippage_pct=self.fee_settings.safety_slippage_pct,
+            now=current,
+            stale_after_seconds=self.risk_settings.stale_after_seconds,
+        )
+        collision_symbols = frozenset(
+            symbol.upper() for symbol in self.risk_settings.ticker_collision_symbols
+        )
+        for item in opportunities:
+            await budget.maybe_yield()
             # These models were just constructed for this collection, and have
             # not been published to the store or passed to another consumer.
             item.risk_labels = risk_labels_for(

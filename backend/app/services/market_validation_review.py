@@ -13,6 +13,7 @@ import httpx
 
 from app.models.market_identity import MarketKey, MarketValidationSettings, utc
 from app.models.settings import RiskSettings
+from app.runtime.cooperative import YieldBudget
 from app.services.market_identity import MarketIdentityRegistry
 from app.services.orderbook_validator import OrderBookDepthValidator
 from app.services.pair_validation import validate_pair
@@ -335,42 +336,52 @@ class MarketValidationService:
         )
 
     async def prepare(self, markets, risk):
+        budget = YieldBudget()
         now = datetime.now(UTC)
+        # Pruning is bounded and synchronous: readers never see a partial prune.
         self.reviews.prune(lambda result: result.expires_at <= now)
         unknown = []
+        discovered = self.discovered.copy()
         for row in markets:
+            await budget.maybe_yield()
             try:
                 key = MarketKey.from_snapshot(row).key
             except ValueError:
                 continue
-            if key not in self.discovered:
+            if key not in discovered:
                 unknown.append(row)
-                self.discovered.add(key)
+                discovered.add(key)
+        # Preserve discovery-before-I/O semantics, but publish the complete set.
+        self.discovered = discovered
         if unknown:
             await self.repository.discover(unknown)
-        annotated = [
-            self._cached_book(self._annotate_base(row, now), now, risk.stale_after_seconds)
-            for row in markets
-        ]
+        annotated = []
         assets_by_symbol = {}
         kinds_by_symbol = {}
-        for row in annotated:
+        for row in markets:
+            await budget.maybe_yield()
+            row = self._cached_book(self._annotate_base(row, now), now, risk.stale_after_seconds)
+            annotated.append(row)
             if row.asset_id:
                 assets_by_symbol.setdefault(row.symbol, set()).add(row.asset_id)
             if row.asset_kind:
                 kinds_by_symbol.setdefault(row.symbol, set()).add(row.asset_kind)
-        self.collision_symbols = {
-            symbol for symbol, assets in assets_by_symbol.items() if len(assets) > 1
-        }
-        self.collision_symbols.update(
-            symbol for symbol, kinds in kinds_by_symbol.items() if len(kinds) > 1
-        )
-        annotated = [
-            row
-            if row.identity_collision == (row.symbol in self.collision_symbols)
-            else row.model_copy(update={"identity_collision": row.symbol in self.collision_symbols})
-            for row in annotated
-        ]
+        collision_symbols = set()
+        for symbol, assets in assets_by_symbol.items():
+            await budget.maybe_yield()
+            if len(assets) > 1:
+                collision_symbols.add(symbol)
+        for symbol, kinds in kinds_by_symbol.items():
+            await budget.maybe_yield()
+            if len(kinds) > 1:
+                collision_symbols.add(symbol)
+        for index, row in enumerate(annotated):
+            await budget.maybe_yield()
+            collision = row.symbol in collision_symbols
+            if row.identity_collision != collision:
+                annotated[index] = row.model_copy(update={"identity_collision": collision})
+        # No reader can observe an empty or partly accumulated collision set.
+        self.collision_symbols = collision_symbols
         if self.collision_symbols:
             from app.services.spread_engine import opportunity_id, pair_allowed
 

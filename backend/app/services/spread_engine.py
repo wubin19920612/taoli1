@@ -1,4 +1,5 @@
 from collections import defaultdict
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from hashlib import sha1
 from itertools import combinations, product
@@ -6,6 +7,7 @@ from typing import Literal
 
 from app.models.market import MarketSnapshot, MarketType
 from app.models.opportunity import Opportunity, OpportunityType
+from app.runtime.cooperative import YieldBudget
 from app.services.market_sessions import is_market_snapshot_tradable
 from app.services.pair_validation import same_asset_eligible, validate_pair
 
@@ -289,19 +291,24 @@ def _group_tradable_markets(
 ) -> dict[str, list[MarketSnapshot]]:
     by_symbol: dict[str, list[MarketSnapshot]] = defaultdict(list)
     for snapshot in snapshots:
-        if not is_market_snapshot_tradable(snapshot, current):
-            continue
-        if not _has_executable_book(snapshot):
-            continue
-        observed_at = _market_observed_at(snapshot)
-        if (
-            stale_after_seconds is not None
-            and (current - observed_at).total_seconds() > stale_after_seconds
-        ):
-            continue
-        group_key = snapshot.asset_id if snapshot.identity_enforced and snapshot.asset_id else snapshot.symbol
-        by_symbol[group_key].append(snapshot)
+        key = _tradable_group_key(snapshot, current, stale_after_seconds)
+        if key is not None:
+            by_symbol[key].append(snapshot)
     return by_symbol
+
+
+def _tradable_group_key(snapshot, current, stale_after_seconds) -> str | None:
+    if not is_market_snapshot_tradable(snapshot, current):
+        return None
+    if not _has_executable_book(snapshot):
+        return None
+    observed_at = _market_observed_at(snapshot)
+    if (
+        stale_after_seconds is not None
+        and (current - observed_at).total_seconds() > stale_after_seconds
+    ):
+        return None
+    return snapshot.asset_id if snapshot.identity_enforced and snapshot.asset_id else snapshot.symbol
 
 
 def _build_grouped_opportunities(
@@ -311,8 +318,22 @@ def _build_grouped_opportunities(
     sell_fee_pct: float,
     safety_slippage_pct: float,
 ) -> list[Opportunity]:
-    opportunities: list[Opportunity] = []
+    return [
+        item for item in _iter_grouped_opportunities(
+            by_symbol, mode, buy_fee_pct, sell_fee_pct, safety_slippage_pct,
+        ) if item is not None
+    ]
+
+
+def _iter_grouped_opportunities(
+    by_symbol: dict[str, list[MarketSnapshot]],
+    mode: Mode,
+    buy_fee_pct: float,
+    sell_fee_pct: float,
+    safety_slippage_pct: float,
+) -> Iterator[Opportunity | None]:
     for legs in by_symbol.values():
+        yield None
         if len(legs) < 2:
             continue
         # Preserve the old traversal's first encounter and stable tie ordering,
@@ -339,6 +360,7 @@ def _build_grouped_opportunities(
         # after each symbol instead of retaining the whole market's pair graph.
         seen: set[tuple[tuple[str, ...], tuple[str, ...]]] = set()
         for (buy_leg, buy_identity), (sell_leg, sell_identity) in pairs:
+            yield None
             if not same_asset_eligible(buy_leg, sell_leg):
                 continue
             # Equal models necessarily have equal identities; only duplicates
@@ -361,15 +383,47 @@ def _build_grouped_opportunities(
             if open_spread_pct <= 0:
                 continue
 
-            opportunities.append(
-                build_directional_opportunity(
-                    buy_leg,
-                    sell_leg,
-                    mode=mode,
-                    buy_fee_pct=buy_fee_pct,
-                    sell_fee_pct=sell_fee_pct,
-                    safety_slippage_pct=safety_slippage_pct,
-                    validate_identity=buy_leg.identity_enforced or sell_leg.identity_enforced,
-                )
+            yield build_directional_opportunity(
+                buy_leg,
+                sell_leg,
+                mode=mode,
+                buy_fee_pct=buy_fee_pct,
+                sell_fee_pct=sell_fee_pct,
+                safety_slippage_pct=safety_slippage_pct,
+                validate_identity=buy_leg.identity_enforced or sell_leg.identity_enforced,
             )
+
+
+async def build_all_opportunities_async(
+    snapshots: list[MarketSnapshot],
+    *,
+    spot_fee_pct: float = 0.1,
+    future_fee_pct: float = 0.1,
+    safety_slippage_pct: float = 0.05,
+    now: datetime | None = None,
+    stale_after_seconds: int | None = None,
+    budget: YieldBudget | None = None,
+) -> list[Opportunity]:
+    """Use the synchronous eligibility and pair traversal with timed checkpoints."""
+    budget = budget or YieldBudget()
+    current = now or datetime.now(UTC)
+    by_symbol: dict[str, list[MarketSnapshot]] = defaultdict(list)
+    for snapshot in snapshots:
+        await budget.maybe_yield()
+        key = _tradable_group_key(snapshot, current, stale_after_seconds)
+        if key is not None:
+            by_symbol[key].append(snapshot)
+    opportunities = []
+    for mode, buy_fee, sell_fee in (
+        ("SF", spot_fee_pct, future_fee_pct),
+        ("FF", future_fee_pct, future_fee_pct),
+        ("SS", spot_fee_pct, spot_fee_pct),
+    ):
+        for item in _iter_grouped_opportunities(
+            by_symbol, mode, buy_fee, sell_fee, safety_slippage_pct,
+        ):
+            await budget.maybe_yield()
+            if item is not None:
+                opportunities.append(item)
+    opportunities.sort(key=lambda item: item.open_spread_pct, reverse=True)
     return opportunities
