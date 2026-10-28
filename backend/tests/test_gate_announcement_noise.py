@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from datetime import UTC, datetime
@@ -238,3 +239,117 @@ async def test_partial_failure_preserves_results_and_request_order_without_backo
             assert records[0].args == (failed_category,)
             assert records[0].levelno == (logging.WARNING if poll == 0 else logging.DEBUG)
             assert bool(records[0].exc_info) == (poll == 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("success_at", [1000.0, 1001.0])
+async def test_concurrent_failure_does_not_overwrite_direct_recovery(success_at: float) -> None:
+    feed, clock = GateFeed(), Clock()
+    a_category_waiting = asyncio.Event()
+    release_a = asyncio.Event()
+    b_detail_waiting = asyncio.Event()
+    release_b_detail = asyncio.Event()
+    first_category_requests = 0
+
+    async def transport(request: httpx.Request) -> httpx.Response:
+        nonlocal first_category_requests
+        if request.url.host == "www.gate.com":
+            assert request.url.path == "/announcements/article/60001"
+            b_detail_waiting.set()
+            await release_b_detail.wait()
+            return httpx.Response(200, text="<article>Gate listing details</article>")
+        response = feed(request)
+        if request.url.host == "apim.gateapi.io" and request.url.path.endswith("/newspotlistings"):
+            first_category_requests += 1
+            if first_category_requests == 1:
+                a_category_waiting.set()
+                await release_a.wait()
+            elif first_category_requests == 2:
+                return httpx.Response(200, text=feed.pages["newspotlistings"])
+        return response
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        provider = GateAnnouncementProvider(client=client, now_fn=lambda: NOW, monotonic_fn=clock)
+        tasks = [asyncio.create_task(provider.fetch_headlines())]
+        try:
+            await asyncio.wait_for(a_category_waiting.wait(), timeout=5)
+            # Also cover success at the same clock tick as A's start.
+            clock.now = success_at
+            tasks.append(asyncio.create_task(provider.fetch()))
+            await asyncio.wait_for(b_detail_waiting.wait(), timeout=5)
+            clock.now = 1002.0
+            release_a.set()
+            rows_a = await asyncio.wait_for(tasks[0], timeout=5)
+            assert [row.announcement_id for row in rows_a] == ["61001", "61002"]
+
+            clock.now = 1003.0
+            release_b_detail.set()
+            rows_b = await asyncio.wait_for(tasks[1], timeout=5)
+            assert [row.announcement_id for row in rows_b] == ["60001", "61001", "61002"]
+            assert feed.direct_requests == [CATEGORIES[0], *CATEGORIES, *CATEGORIES[1:]]
+
+            feed.direct_requests.clear()
+            clock.now = 1004.0
+            await provider.fetch_headlines()
+            assert feed.direct_requests == list(CATEGORIES)
+
+            # A later all-failed poll must still back off despite the older success.
+            feed.direct_requests.clear()
+            clock.now = 1005.0
+            await provider.fetch_headlines()
+            assert feed.direct_requests == []
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_all_failed_fetches_still_back_off() -> None:
+    feed, clock = GateFeed(), Clock()
+    a_category_waiting = asyncio.Event()
+    b_category_waiting = asyncio.Event()
+    release_a = asyncio.Event()
+    release_b = asyncio.Event()
+    first_category_requests = 0
+
+    async def transport(request: httpx.Request) -> httpx.Response:
+        nonlocal first_category_requests
+        response = feed(request)
+        if request.url.host == "apim.gateapi.io" and request.url.path.endswith("/newspotlistings"):
+            first_category_requests += 1
+            if first_category_requests == 1:
+                a_category_waiting.set()
+                await release_a.wait()
+            elif first_category_requests == 2:
+                b_category_waiting.set()
+                await release_b.wait()
+        return response
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        provider = GateAnnouncementProvider(client=client, now_fn=lambda: NOW, monotonic_fn=clock)
+        tasks = [asyncio.create_task(provider.fetch_headlines())]
+        try:
+            await asyncio.wait_for(a_category_waiting.wait(), timeout=5)
+            clock.now = 1001.0
+            tasks.append(asyncio.create_task(provider.fetch()))
+            await asyncio.wait_for(b_category_waiting.wait(), timeout=5)
+            clock.now = 1002.0
+            release_a.set()
+            await asyncio.wait_for(tasks[0], timeout=5)
+            clock.now = 1003.0
+            release_b.set()
+            await asyncio.wait_for(tasks[1], timeout=5)
+            assert feed.direct_requests == [CATEGORIES[0], *CATEGORIES, *CATEGORIES[1:]]
+
+            feed.direct_requests.clear()
+            feed.reader_requests.clear()
+            clock.now = 1030.0
+            rows = await provider.fetch_headlines()
+            assert feed.direct_requests == []
+            assert feed.reader_requests == ["", "dividenddistribution"]
+            assert [row.announcement_id for row in rows] == ["61001", "61002"]
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)

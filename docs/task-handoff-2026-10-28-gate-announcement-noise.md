@@ -77,3 +77,46 @@ python -m pytest -q --basetemp=../.pytest-tmp/x
 - 没有已知未解决的本地测试失败。Gate 直连被拒绝的原因及生产读取器可用性未在本次现场验证；本次实现处理失败后的日志和重试频率。
 
 如继续上线，请另开服务器运维任务，先按任务书取得部署批准并复核实际生产版本、备份及发布流程，再单独观察一小时：分类失败 WARNING 数量、Gate 公告最新入库时间。其他功能模块也应在新任务继续。
+
+## 2026-10-28 追加：P2 并发恢复状态修复
+
+- 本轮基线：`f796648ecf80ce8ab48e7f0004b6e28838e7d9cf`，分支仍为 `codex/gate-announcement-noise`。
+- 问题来源：`../../output/gate-noise-review-20261028.log` 末尾只读审阅报告。`backend/app/main.py:1112、1122` 的公告轮询与详情补全共享 provider；A 全失败结束时可能覆盖并发 B 已经成功清除的退避，使下一轮错误跳过直连 300 秒。
+- 修复范围仍严格限定为本交接文档、`backend/app/services/announcements.py`、`backend/tests/test_gate_announcement_noise.py`。
+
+实现：
+
+- Gate 实例新增 `_direct_success_at: float | None`，初始为 `None`，记录最近一次直连分类成功的单调时间。
+- `fetch` 开始记录 `started = self._monotonic_fn()`，并复用此时间检查现有退避是否到期。
+- 分类成功时更新 `_direct_success_at`，保留清除 `_direct_retry_at` 及分类失败记录、恢复日志的既有处理。
+- 仅在 `categories` 非空、本轮没有直连成功，且 `_direct_success_at is None or _direct_success_at < started` 时写入 300 秒退避。与本轮开始同时或之后发生的并发成功均优先保留恢复状态；更早的成功不妨碍后续全失败轮次退避。
+- 未加锁。AST 范围复核确认业务代码仅修改 Gate 的构造函数和 `fetch`，直连及读取器 `client.get` 参数完全一致，原有测试保持不变；UA、请求头、URL、详情处理及串行业务行为均保持原有规则。
+
+先新增两个异步测试函数，共三个实例，使用 `asyncio.Event` 和 `httpx.MockTransport` 固定并发交错，不访问外网、不使用实际休眠：
+
+1. A 首分类失败请求挂起；B 同分类成功后等待详情；A 完成五类全失败；再让 B 完成详情及其余失败分类。B 结束后下一轮必须请求全部五个直连分类。参数覆盖 B 成功时间等于 A 开始时间及晚于 A 开始时间；随后再确认较新的全失败轮次仍会退避。
+2. A、B 的首分类失败请求分别挂起，确保两轮同时进入直连，再依次让两轮完成全失败；下一轮仍应跳过全部直连并正常读取两页回退内容。
+
+在 `backend` 目录使用 Windows 原生 Python 3.12.10，未运行 WSL，按以下顺序验证：
+
+```powershell
+python -m pytest -q --basetemp=../.pytest-tmp/x tests/test_gate_announcement_noise.py -k concurrent
+```
+
+- RED（尚未修改业务实现）：**2 failed, 1 passed, 7 deselected in 0.93s**。两种成功时间均在“下一轮请求五类直连”断言处失败，实际请求列表为 `[]`；并发全失败退避用例通过。
+- GREEN（修复后，同一命令）：**3 passed, 7 deselected in 0.46s**。
+
+```powershell
+python -m pytest -q --basetemp=../.pytest-tmp/x
+```
+
+- 后端全量：**2064 passed, 4 deselected, 12 warnings in 127.13s**。默认标记排除 network、benchmark 用例；警告仍来自 API、指数成分测试中的 `datetime.utcnow()` 弃用提示。
+- `git diff --check` 通过。未修改或放宽任何原有测试。
+
+本轮本地交付：
+
+- 提交标题：`fix: keep gate direct recovery across concurrent fetches`。
+- 正文末尾 trailer：`Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`。
+- 提交号可用当前分支 `git log -1 --oneline` 查询。
+- 开始时已有未跟踪目录 `.pytest-tmp/`（含 `claude/`、`x/`）；仅按用户指定 basetemp 运行测试，未手动清理这些目录，不暂存测试产物。
+- 按用户要求不 push；未进行生产备份、部署或线上验证。本轮确认的是本地并发回归和后端全量测试结果。

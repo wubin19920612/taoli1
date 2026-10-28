@@ -2046,13 +2046,15 @@ class GateAnnouncementProvider(HttpAnnouncementProvider):
         self._monotonic_fn = monotonic_fn or time.monotonic
         self._category_failures: dict[str, str] = {}
         self._direct_retry_at: float | None = None
+        self._direct_success_at: float | None = None
 
     async def fetch(self, *, include_details: bool = True) -> list[ExchangeAnnouncement]:
+        started = self._monotonic_fn()
         announcements: list[ExchangeAnnouncement] = []
         general_available = False
         direct_succeeded = False
         categories = self.categories
-        if self._direct_retry_at is not None and self._monotonic_fn() < self._direct_retry_at:
+        if self._direct_retry_at is not None and started < self._direct_retry_at:
             logger.debug("skipping gate announcement categories during direct backoff")
             categories = ()
         for category in categories:
@@ -2072,6 +2074,7 @@ class GateAnnouncementProvider(HttpAnnouncementProvider):
                 self._category_failures[category] = signature
                 continue
             direct_succeeded = True
+            self._direct_success_at = self._monotonic_fn()
             self._direct_retry_at = None
             if self._category_failures.pop(category, None) is not None:
                 logger.info("gate announcement category recovered: %s", category)
@@ -2080,7 +2083,11 @@ class GateAnnouncementProvider(HttpAnnouncementProvider):
             page_rows = self._parse_page(response.text, category)
             content_by_key = await self._fetch_detail_content_for_page(page_rows) if include_details else {}
             announcements.extend(self._parse_page(response.text, category, content_by_key=content_by_key))
-        if categories and not direct_succeeded:
+        if (
+            categories
+            and not direct_succeeded
+            and (self._direct_success_at is None or self._direct_success_at < started)
+        ):
             self._direct_retry_at = self._monotonic_fn() + GATE_DIRECT_BACKOFF_SECONDS
         if not general_available:
             # Public Gate content via a third-party reader, not an official REST API.
