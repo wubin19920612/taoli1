@@ -20,6 +20,7 @@ from app.models.market import MarketSnapshot
 from app.models.opportunity import Opportunity
 from app.models.settings import FeeSettings, RiskSettings
 from app.runtime.supervisor import StageTimings, beat
+from app.services.compact_markets import CompactMarkets, pack
 from app.services.data_filters import (
     filter_markets,
     filter_opportunities,
@@ -159,7 +160,7 @@ class MarketCollector:
         self.max_due_adapters_per_cycle = max(1, max_due_adapters_per_cycle)
         self._now_fn = now_fn or (lambda: datetime.now(UTC))
         self._poll_states: dict[str, ExchangePollState] = {}
-        self._exchange_snapshots: dict[str, list[MarketSnapshot]] = {}
+        self._exchange_snapshots: dict[str, CompactMarkets] = {}
         self._exchange_errors: dict[str, dict[str, str]] = {}
         self._adapter_cursor = 0
         self._scheduler_lock = asyncio.Lock()
@@ -367,8 +368,12 @@ class MarketCollector:
     def _seed_exchange_snapshots_from_store(self) -> None:
         if self._exchange_snapshots:
             return
+        by_exchange: dict[str, list[MarketSnapshot]] = {}
         for market in self.store.get_markets():
-            self._exchange_snapshots.setdefault(market.exchange, []).append(market)
+            by_exchange.setdefault(market.exchange, []).append(market)
+        self._exchange_snapshots = {
+            exchange: pack(markets) for exchange, markets in by_exchange.items()
+        }
 
     async def _claim_due_adapters(
         self,
@@ -429,7 +434,7 @@ class MarketCollector:
         state.in_flight = False
         if result.errors:
             if result.markets and not result.should_cool_down:
-                self._exchange_snapshots[exchange_name] = result.markets
+                self._exchange_snapshots[exchange_name] = pack(result.markets)
             self._exchange_errors[exchange_name] = result.errors
             state.last_error_at = now
             state.consecutive_failures += 1
@@ -446,7 +451,7 @@ class MarketCollector:
                 state.next_due_at = now + timedelta(seconds=self.poll_interval_seconds)
             return
 
-        self._exchange_snapshots[exchange_name] = result.markets
+        self._exchange_snapshots[exchange_name] = pack(result.markets)
         self._exchange_errors.pop(exchange_name, None)
         state.status = "healthy"
         state.last_success_at = now
@@ -502,7 +507,9 @@ class MarketCollector:
     def _combined_exchange_markets(self, adapters: list[ExchangeAdapter]) -> list[MarketSnapshot]:
         markets: list[MarketSnapshot] = []
         for adapter in adapters:
-            markets.extend(self._exchange_snapshots.get(adapter.name, []))
+            snapshot = self._exchange_snapshots.get(adapter.name)
+            if snapshot is not None:
+                markets.extend(snapshot.unpack())
         return markets
 
     def _combined_exchange_errors(self, adapters: list[ExchangeAdapter]) -> dict[str, str]:
