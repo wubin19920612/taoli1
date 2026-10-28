@@ -1675,7 +1675,7 @@ describe("FloatingWatchPanel", () => {
       expect(screen.queryByText(`Astro 卡片读取失败：${passwordMessage}`)).toBeNull();
     });
 
-    it("records the saved password at rejection time", async () => {
+    it("blocks the password the request was sent with, not the one saved at rejection time", async () => {
       let rejectRequest!: (error: Error) => void;
       vi.mocked(apiClient.listAstroPairs).mockReturnValueOnce(new Promise((_resolve, reject) => {
         rejectRequest = reject;
@@ -1688,7 +1688,8 @@ describe("FloatingWatchPanel", () => {
         rejectRequest(passwordError());
       });
       await poll();
-      expect(apiClient.listAstroPairs).toHaveBeenCalledTimes(1);
+      // The rejected password differs from the one now saved, so polling resumes.
+      expect(apiClient.listAstroPairs).toHaveBeenCalledTimes(2);
       expect(apiClient.getFloatingWatchSettings).toHaveBeenCalledTimes(2);
     });
 
