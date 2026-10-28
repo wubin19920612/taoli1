@@ -54,6 +54,7 @@ def fresh_app(*, verified=True, real_submit=False, mode="enforce"):
         "verified_at": now, "valid_until": now + timedelta(days=1),
     }) for row in (buy, sell)] if verified else []
     validation.registry = MarketIdentityRegistry(bindings, mode=mode)
+    validation.test_bindings = bindings  # registry keeps slim entries (M2-4b), not MarketBinding
     validation.qualify_opportunity = AsyncMock(wraps=validation.qualify_opportunity)
     catalog = SimpleNamespace(supports_opportunity=AsyncMock(return_value=False))
     settings = Settings(
@@ -160,7 +161,7 @@ def test_astro_preview_fresh_shadow_unknown_identity_allows_manual_preview(entry
 def test_astro_preview_fresh_identity_mismatch_is_blocked(entry, mode, relation, message):
     app, opportunity, route, _, external = fresh_app(mode=mode)
     service = app.state.market_validation
-    bindings = list(service.registry.bindings.values())
+    bindings = list(service.test_bindings)
     updates = {"asset_id": "different-jio"} if relation == "different" else {
         "identity_status": "conflict",
     }
