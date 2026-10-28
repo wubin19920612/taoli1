@@ -108,7 +108,13 @@ class ManualReview:
         _, a, b = self.result
         keys = [(row.exchange, str(row.market_type), row.raw_symbol) for row in (a, b)]
         if not all(key in self.books for key in keys):
-            return validator
+            # A coalesced review captures books only in the owner's context.
+            # Keep the waiter's raw depth fetches behind the shared book limit.
+            return OrderBookDepthValidator(
+                [_LimitedBookAdapter(adapter, self.service)
+                 for adapter in validator.adapters.values()],
+                limit=validator.limit,
+            )
         return OrderBookDepthValidator([_BookAdapter(a, self.books), _BookAdapter(b, self.books)])
 
 
@@ -149,6 +155,16 @@ class _BookAdapter:
 
     async def fetch_order_book(self, symbol, market_type, raw_symbol, limit=20):
         return self.books[(self.name, str(market_type), raw_symbol)]
+
+
+class _LimitedBookAdapter:
+    def __init__(self, adapter, service):
+        self.name, self.adapter, self.service = adapter.name, adapter, service
+
+    async def fetch_order_book(self, symbol, market_type, raw_symbol, limit=20):
+        return await self.service._fetch_book(
+            self.adapter, symbol, market_type, raw_symbol, limit,
+        )
 
 
 class MarketValidationService:
@@ -462,15 +478,20 @@ class MarketValidationService:
         finally:
             self.tasks.pop(key, None)
 
+    async def _fetch_book(self, adapter, symbol, market_type, raw_symbol, limit, *, timeout=None):
+        async with self.book_semaphore:
+            return await asyncio.wait_for(
+                adapter.fetch_order_book(symbol, market_type, raw_symbol, limit), timeout,
+            )
+
     async def _book(self, row):
         adapter = self.adapters.get(row.exchange)
         if adapter is None:
             raise ValueError("missing book adapter")
-        async with self.book_semaphore:
-            book = await asyncio.wait_for(
-                adapter.fetch_order_book(row.symbol, row.market_type, row.raw_symbol, 20),
-                self.settings.review_timeout_seconds,
-            )
+        book = await self._fetch_book(
+            adapter, row.symbol, row.market_type, row.raw_symbol, 20,
+            timeout=self.settings.review_timeout_seconds,
+        )
         if book is None or not book.bids or not book.asks or book.raw_symbol != row.raw_symbol:
             raise ValueError("book unavailable or exact raw market mismatch")
         bids = sorted(book.bids, key=lambda x: x.price, reverse=True)

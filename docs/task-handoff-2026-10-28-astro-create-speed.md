@@ -99,5 +99,38 @@ All checks passed!
 ## 剩余边界与下一步
 
 - 当前证据是本地测试及静态检查，不代表真实交易所/astro-core 的端到端时延。人工仍受 book_semaphore、交易所限频、网络、list/add 和 core 重启时延约束。
-- 同一请求等待超过 5 秒或身份/有效期变化时会再次复核，这是提交安全所需行为。并发合并复核的等待方若没有捕获完整盘口，会安全退回原深度获取流程。
+- 同一请求等待超过 5 秒或身份/有效期变化时会再次复核，这是提交安全所需行为。并发合并复核的等待方若没有捕获完整盘口，初版退回原深度获取流程时会绕过盘口信号量；该问题已按下节修复。
 - 后续部署或其他模块请另开任务，并依据本分支提交重新执行相应部署授权与生产验收。
+
+## 审查后修复（2026-10-28）
+
+- 本节交付要求覆盖上文初版的“只 commit、不 push”：按用户明确指令，只推送备份分支 `codex/astro-create-speed`，不推送 `codex/frontend-localization-polish`，不部署。
+- 起始提交：`9069a662bca2354ffcac9c8341fdbc00818eee7b`。`git fetch origin` 后，确认目标为 `8779d40678ff6ddc0a49522a74ddac85a9430e9b`；`git rebase origin/codex/frontend-localization-polish` 无冲突，重放后的 Astro 提交为 `7f65f4d3cf196c84af85ae4e422653f6da33bbf2`。
+- 仅修复标准深度校验器在并发合并复核后缺失原始盘口的回退。`ManualReview.depth_validator` 用 `_LimitedBookAdapter` 包装原 validator 的 adapter，保留原始市场标识、请求深度和校验逻辑；通过 `MarketValidationService._fetch_book` 取得共享 `book_semaphore` 后才调用真实 adapter。
+- `_book` 也调用同一 `_fetch_book` 入口，保持原超时在取得信号量后开始。深度回退维持原无额外 review timeout 的语义；不返回已归一化盘口，避免深度校验重复单位转换。其他回退条件、自定义 validator、自动/preadd 路径和 adapter 限频参数不改。
+- 新增真实并发合并测试：用 Event 暂停 owner，让 waiter 加入同一个 inflight；确认 owner 有两腿盘口、waiter 没有，再占满信号量。断言释放前调用次数保持 `[1, 1]` 且任务等待，释放后 `[2, 2]`、深度验证通过，并核对 Hyperliquid 原始市场 `xyz:JIO` 和请求参数。
+
+先只加测试、未修改实现时，在 `backend` 运行：
+
+```text
+python -m pytest tests/test_astro_create_speed.py -q -k coalesced_manual_depth --basetemp=.pytest_create_speed_fallback_red -p no:cacheprovider
+E           assert [2, 2] == [1, 1]
+1 failed, 19 deselected in 1.28s
+```
+
+修复后：
+
+```text
+python -m pytest tests/test_astro_create_speed.py -q --basetemp=.pytest_create_speed_fallback_green -p no:cacheprovider
+20 passed in 1.01s
+
+python -m pytest tests -q --basetemp=.pytest_create_speed_full2 -p no:cacheprovider
+2140 passed, 4 deselected, 12 warnings in 136.09s (0:02:16)
+
+python -m ruff check app/api/routes_astro.py app/services/astro_alerts.py app/services/market_validation_review.py
+All checks passed!
+```
+
+全量测试的 12 条 warning 仍为 index component 相关的 `datetime.utcnow()` 弃用提示。`git diff --check` 通过；提交消息为 `fix(astro): keep manual depth fallback behind book semaphore`。提交及远端最终 SHA 以本次交付报告和 Git 引用为准。
+
+原有未跟踪任务书和 pytest 临时目录均保留，不纳入提交。未连接生产服务器，未备份、部署或进行线上性能验收。后续部署或其他模块继续使用新任务。

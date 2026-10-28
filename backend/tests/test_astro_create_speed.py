@@ -88,6 +88,76 @@ def test_manual_create_one_review_and_only_inter_variant_sleep(entry, variants, 
     assert len(row["add_ms"]) == variants
 
 
+@pytest.mark.asyncio
+async def test_coalesced_manual_depth_fallback_waits_for_shared_book_semaphore(monkeypatch):
+    from app.services.market_validation_review import ManualReview
+
+    app, opportunity, _, adapters, _ = fresh_app()
+    service = app.state.market_validation
+    owner, waiter = ManualReview(), ManualReview()
+    review_started, release_review = asyncio.Event(), asyncio.Event()
+    original_review = service._review
+
+    async def held_review(*args, **kwargs):
+        review_started.set()
+        await release_review.wait()
+        return await original_review(*args, **kwargs)
+
+    monkeypatch.setattr(service, "_review", held_review)
+    owner_task = asyncio.create_task(owner.qualify(service, opportunity, RiskSettings()))
+    waiter_task = depth_task = blocked_task = None
+    try:
+        await asyncio.wait_for(review_started.wait(), 1)
+        waiter_task = asyncio.create_task(waiter.qualify(service, opportunity, RiskSettings()))
+        await asyncio.sleep(0)
+        assert len(service.review_inflight) == 1
+        assert not waiter_task.done()
+        release_review.set()
+        await asyncio.wait_for(asyncio.gather(owner_task, waiter_task), 1)
+        assert len(owner.books) == 2
+        assert waiter.books == {}
+        assert [adapter.fetch_order_book.await_count for adapter in adapters] == [1, 1]
+
+        blocked = asyncio.Event()
+
+        class ObservedSemaphore(asyncio.Semaphore):
+            async def acquire(self):
+                if self.locked():
+                    blocked.set()
+                return await super().acquire()
+
+        service.book_semaphore = ObservedSemaphore(1)
+        await service.book_semaphore.acquire()
+        validator = waiter.depth_validator(OrderBookDepthValidator(adapters))
+        depth_task = asyncio.create_task(validator.validate(opportunity, RiskSettings()))
+        blocked_task = asyncio.create_task(blocked.wait())
+        done, _ = await asyncio.wait(
+            {depth_task, blocked_task}, timeout=1, return_when=asyncio.FIRST_COMPLETED,
+        )
+        assert done, "depth validation never started"
+        assert [adapter.fetch_order_book.await_count for adapter in adapters] == [1, 1]
+        assert blocked.is_set()
+        assert not depth_task.done()
+
+        service.book_semaphore.release()
+        depth = await asyncio.wait_for(depth_task, 1)
+        assert depth.passed
+        assert [adapter.fetch_order_book.await_count for adapter in adapters] == [2, 2]
+        assert service.book_semaphore._value == 1
+        for adapter, raw_symbol in zip(adapters, ("JIOUSDT", "xyz:JIO")):
+            assert adapter.fetch_order_book.await_args.args == (
+                opportunity.symbol, opportunity.buy_market_type, raw_symbol, 20,
+            )
+    finally:
+        release_review.set()
+        tasks = [task for task in (owner_task, waiter_task, depth_task, blocked_task)
+                 if task is not None]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await service.aclose()
+
+
 def test_preview_priority_and_timing(caplog):
     app, opportunity, route, _, _ = fresh_app()
     with caplog.at_level(logging.INFO), TestClient(app) as client:
