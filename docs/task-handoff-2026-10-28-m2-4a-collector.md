@@ -49,11 +49,34 @@ M2-4a unpack 12000 rows: 187.974 ms (budget 150 ms)
 
 ## 性能边界与后续方案
 
-内存缩减 72.61%，满足至少 60% 的要求。这是 tracemalloc 同一批数据在释放原模型前后的保留内存差，包含紧凑记录继续持有的叶子值；不是 RSS，也不是线上测量。
+此前指定回归 unpack 为 186.997 ms、全量为 187.974 ms，超过 150 ms 上限。2026-10-28 跟进修复以 `53bbe8ad5d3843cd2e36e2734e7a7e5e93d319e2` 为基线，只修改 `compact_markets.py`、其单元测试和本性能章节。
 
-首次定向运行 unpack 为 138.114 ms，但指定回归为 186.997 ms、全量为 187.974 ms，超过 150 ms 上限，不能宣称稳定达标。测试计时关闭 tracemalloc，包含模型构造与正常 GC 的墙钟耗时，没有禁用 GC 或取多次最小值。
+- 本机 Windows Python 3.12.10、Pydantic 2.12.5；已检查本地 `model_construct` 源码。模块加载时仅当模型无 private attributes、`__pydantic_post_init__ is None`、extra 不为 `allow` 时启用 `_FAST`；否则保留 `model_construct` 回退。
+- 快速路径为每行创建 `MarketSnapshot.__new__(MarketSnapshot)`，按顺序以 `object.__setattr__` 写入新 values dict、新 fields set、值为 None 的 extra 和 private 槽位。所有字段值来自已验证快照，不重复执行 Pydantic 的字段扫描。
+- pack/unpack 中，普通 list 且元素全部为精确的 str/int/float/bool/None 类型时用 `list(value)`；其他值及容器/元素子类继续 deepcopy，保留其状态和嵌套可变值隔离语义。
+- 新增同一组行的快速路径/回退路径对比，核对 `model_dump()`、`model_fields_set`、模型相等比较、模型及字段类型；强制 `_FAST=False` 执行全部字段往返，并增加嵌套可变值的源对象/重复行/多次 unpack 隔离断言。
 
-按任务书保持本次设计。后续可单独评审分批方案：每次重建 1000–2000 行，在批次间让出事件循环，维持 adapter 和行顺序，全部完成后再原子发布；不复用上一轮已标注对象。分批只能降低单次阻塞，不能保证降低总 CPU 耗时，需另测总耗时、峰值内存和 prepare stage。这个方案可能涉及异步准备路径，超出本次授权范围，因此未实施。
+在 backend 下创建 `../.pytest-tmp`，指定回归包括 `tests/test_compact_markets.py`、`tests/test_collector_compact_equivalence.py` 和展开去重后的全部 `tests/test_collector*.py`。原样结果：
+
+```text
+M2-4a retained: original=37929454 bytes, compact=10341942 bytes, reduction=72.73%
+M2-4a unpack 12000 rows: 41.872 ms (budget 150 ms)
+71 passed in 1.89s
+```
+
+随后执行全量命令 `python -m pytest -q --basetemp=../.pytest-tmp/x`。原样性能输出和汇总行：
+
+```text
+M2-4a retained: original=37929454 bytes, compact=10341758 bytes, reduction=72.73%
+M2-4a unpack 12000 rows: 66.981 ms (budget 150 ms)
+2062 passed, 4 deselected, 12 warnings in 137.26s (0:02:17)
+```
+
+指定回归和全量 unpack 均低于 150 ms，保留内存缩减 72.73%，满足至少 60% 的要求。12 条 warning 仍为既有 `datetime.utcnow()` 弃用提示。两个修改的 Python 文件通过 `ruff check`，`git diff --check` 通过。
+
+保留内存按 tracemalloc 同一批数据在释放原模型前后测量，包含紧凑记录继续持有的叶子值。unpack 计时关闭 tracemalloc，包含正常 GC 的墙钟耗时，没有禁用 GC 或取多次最小值。以上为本地测试，线上 RSS 和 prepare stage 仍需另行验收。
+
+本次全程离线、未使用 WSL；只做本地提交。原 `.pytest-tmp/x` 已移至同目录下的 `m2-4a-before-fast-x-20261028-135446` 留存，原全量日志未覆盖；新回归日志为 `.pytest-tmp/m2-4a-fast-targeted-pytest.log`，本次全量日志为 `.pytest-tmp/m2-4a-fast-full-pytest.log`。这些未跟踪产物均保留且不纳入提交。
 
 ## 交付、线上状态与下一步
 

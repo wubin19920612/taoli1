@@ -5,7 +5,10 @@ import tracemalloc
 from datetime import UTC, datetime, timedelta
 from time import perf_counter
 
+import pytest
+
 from app.models.market import MarketSnapshot, MarketType
+from app.services import compact_markets
 from app.services.compact_markets import CompactMarkets, pack
 
 NOW = datetime(2026, 10, 28, tzinfo=UTC)
@@ -43,7 +46,10 @@ def minimal_market(**updates):
     })
 
 
-def test_round_trip_preserves_all_fields_types_and_explicit_defaults():
+@pytest.mark.parametrize("force_fallback", [False, True])
+def test_round_trip_preserves_all_fields_types_and_explicit_defaults(monkeypatch, force_fallback):
+    if force_fallback:
+        monkeypatch.setattr(compact_markets, "_FAST", False)
     full = full_market()
     assert full.model_fields_set == set(MarketSnapshot.model_fields)
     rows = [full, minimal_market(), minimal_market(dex=None, estimated_fields=[], quote="USDT")]
@@ -57,6 +63,23 @@ def test_round_trip_preserves_all_fields_types_and_explicit_defaults():
         assert restored.model_fields_set == original.model_fields_set
         for name in MarketSnapshot.model_fields:
             assert type(getattr(restored, name)) is type(getattr(original, name))
+
+
+def test_fast_unpack_matches_model_construct(monkeypatch):
+    rows = [full_market(), minimal_market(), minimal_market(dex=None, estimated_fields=[], quote="USDT")]
+    compact = pack(rows)
+    monkeypatch.setattr(compact_markets, "_FAST", False)
+    standard = compact.unpack()
+    monkeypatch.setattr(compact_markets, "_FAST", True)
+    fast = compact.unpack()
+    for original, actual, expected in zip(rows, fast, standard, strict=True):
+        assert type(actual) is type(expected) is type(original) is MarketSnapshot
+        assert actual.model_dump() == expected.model_dump() == original.model_dump()
+        assert actual.model_fields_set == expected.model_fields_set == original.model_fields_set
+        assert actual == expected == original
+        assert actual.model_fields_set is not expected.model_fields_set
+        for name in MarketSnapshot.model_fields:
+            assert type(getattr(actual, name)) is type(getattr(expected, name))
 
 
 def test_pack_and_each_unpack_own_their_mutable_values_and_fields_set():
@@ -74,6 +97,17 @@ def test_pack_and_each_unpack_own_their_mutable_values_and_fields_set():
     for restored in compact.unpack():
         assert restored.model_dump() == expected
         assert restored.model_fields_set == expected_fields
+
+
+def test_nested_mutable_values_remain_isolated():
+    # Trusted model copies may contain richer containers than validated list[str].
+    source = full_market().model_copy(update={"estimated_fields": [{"nested": ["bid"]}]})
+    compact = pack([source, source])
+    source.estimated_fields[0]["nested"].append("source mutation")
+    first = compact.unpack()
+    first[0].estimated_fields[0]["nested"].append("unpacked mutation")
+    assert first[1].estimated_fields == [{"nested": ["bid"]}]
+    assert all(row.estimated_fields == [{"nested": ["bid"]}] for row in compact.unpack())
 
 
 def test_empty_batch():
