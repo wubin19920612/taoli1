@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from io import StringIO
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -12,6 +13,32 @@ from test_market_validation_review import setup_pair
 
 from app.models.settings import RiskSettings
 from app.services.orderbook_validator import OrderBookDepthValidator
+
+
+@pytest.fixture
+def timing_output(caplog):
+    output = StringIO()
+    logger = logging.getLogger("astro_timing")
+    handler = logging.StreamHandler(output)
+    logger.addHandler(handler)
+    try:
+        with caplog.at_level(logging.WARNING):
+            yield output
+    finally:
+        logger.removeHandler(handler)
+        handler.close()
+
+
+def timing_row(output, event):
+    lines = output.getvalue().splitlines()
+    assert len(lines) == 1
+    row = json.loads(lines[0])
+    assert row[event] == 1
+    assert lines[0] == json.dumps(row, separators=(",", ":"))
+    logger = logging.getLogger("astro_timing")
+    assert logger.level == logging.INFO
+    assert logger.propagate is False
+    return row
 
 
 @pytest.mark.asyncio
@@ -56,7 +83,9 @@ async def test_priority_review_escapes_busy_background_but_uses_book_limit():
 
 @pytest.mark.parametrize("entry", ["instrument", "opportunity"])
 @pytest.mark.parametrize("variants", [1, 2])
-def test_manual_create_one_review_and_only_inter_variant_sleep(entry, variants, monkeypatch, caplog):
+def test_manual_create_one_review_and_only_inter_variant_sleep(
+    entry, variants, monkeypatch, timing_output,
+):
     app, opportunity, route, adapters, external = fresh_app(real_submit=True)
     app.state.orderbook_validator = OrderBookDepthValidator(adapters)
     app.state.astro_hl_gc_catalog.supports_opportunity.return_value = variants == 2
@@ -70,7 +99,7 @@ def test_manual_create_one_review_and_only_inter_variant_sleep(entry, variants, 
 
     external.add_pair.side_effect = add
     monkeypatch.setattr("app.services.astro_alerts.asyncio.sleep", sleep)
-    with caplog.at_level(logging.INFO), TestClient(app) as client:
+    with TestClient(app) as client:
         response = create(client, entry, opportunity, route)
     assert response.json()["status"] == "created"
     assert events == (["add"] if variants == 1 else ["add", ("sleep", 3.0), "add"])
@@ -78,14 +107,13 @@ def test_manual_create_one_review_and_only_inter_variant_sleep(entry, variants, 
     assert len(calls) == 1
     assert calls[0].kwargs == {"fresh": True, "fetch_books_when_unverified": True, "priority": True}
     assert all(adapter.fetch_order_book.await_count == 1 for adapter in adapters)
-    rows = [json.loads(record.message) for record in caplog.records
-            if record.message.startswith('{"astro_manual_create_timing"')]
-    assert len(rows) == 1
-    row = rows[0]
+    row = timing_row(timing_output, "astro_manual_create_timing")
     assert {"pair", "variants", "review_ms", "depth_ms", "list_ms", "add_ms",
             "sleep_ms", "total_ms", "reviews"} <= row.keys()
     assert row["variants"] == variants and row["reviews"] == 1
     assert len(row["add_ms"]) == variants
+    assert row["pair"] == opportunity.symbol
+    assert row["total_ms"] >= row["review_ms"] >= 0
 
 
 @pytest.mark.asyncio
@@ -158,15 +186,16 @@ async def test_coalesced_manual_depth_fallback_waits_for_shared_book_semaphore(m
         await service.aclose()
 
 
-def test_preview_priority_and_timing(caplog):
+@pytest.mark.parametrize("entry", ["instrument", "opportunity"])
+def test_preview_priority_and_timing(entry, timing_output):
     app, opportunity, route, _, _ = fresh_app()
-    with caplog.at_level(logging.INFO), TestClient(app) as client:
-        assert preview(client, "instrument", opportunity, route).json()["can_submit"]
+    with TestClient(app) as client:
+        assert preview(client, entry, opportunity, route).json()["can_submit"]
     assert app.state.market_validation.qualify_opportunity.await_args.kwargs["priority"] is True
-    rows = [json.loads(record.message) for record in caplog.records
-            if record.message.startswith('{"astro_manual_preview_timing"')]
-    assert len(rows) == 1 and rows[0]["reviews"] == 1
-    assert rows[0]["total_ms"] >= rows[0]["review_ms"] >= 0
+    row = timing_row(timing_output, "astro_manual_preview_timing")
+    assert row["reviews"] == 1
+    assert row["pair"] == opportunity.symbol
+    assert row["total_ms"] >= row["review_ms"] >= 0
 
 
 @pytest.mark.asyncio

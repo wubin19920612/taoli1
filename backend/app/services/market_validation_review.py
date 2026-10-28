@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections import Counter, OrderedDict
 from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
@@ -15,6 +16,13 @@ from app.models.settings import RiskSettings
 from app.services.market_identity import MarketIdentityRegistry
 from app.services.orderbook_validator import OrderBookDepthValidator
 from app.services.pair_validation import validate_pair
+
+timing_logger = logging.getLogger("astro_timing")
+timing_logger.setLevel(logging.INFO)
+timing_logger.propagate = False
+if not timing_logger.handlers:
+    # Emit plain JSON even when the application's root logger filters out INFO.
+    timing_logger.addHandler(logging.StreamHandler())
 
 _manual_books = ContextVar("astro_manual_books", default=None)
 
@@ -51,9 +59,12 @@ class ManualReview:
             else:
                 self.metrics[stage] += elapsed
 
-    def log(self, logger, event, pair):
-        logger.info(json.dumps({event: 1, "pair": pair, **self.metrics,
-                                "total_ms": (monotonic() - self.started_at) * 1000}))
+    def log(self, event, pair):
+        timing_logger.info(json.dumps(
+            {event: 1, "pair": pair, **self.metrics,
+             "total_ms": (monotonic() - self.started_at) * 1000},
+            separators=(",", ":"),
+        ))
 
     async def qualify(self, service, opportunity, risk):
         if self.result is not None:

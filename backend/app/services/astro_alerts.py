@@ -215,7 +215,7 @@ class AstroAlertService:
             )
         finally:
             if manual_review is None:
-                context.log(logger, "astro_manual_create_timing", opportunity.symbol)
+                context.log("astro_manual_create_timing", opportunity.symbol)
 
     async def handle_preadd(
         self,

@@ -312,7 +312,7 @@ async def _build_astro_preview(
     try:
         return await _build_astro_preview_reviewed(request, opportunity, manual_warnings, context)
     finally:
-        context.log(logger, "astro_manual_preview_timing", opportunity.symbol)
+        context.log("astro_manual_preview_timing", opportunity.symbol)
 
 
 async def _build_astro_preview_reviewed(
@@ -521,7 +521,7 @@ async def _create_astro_card(
     try:
         return await _create_astro_card_reviewed(request, opportunity, card_request, manual_warnings, context)
     finally:
-        context.log(logger, "astro_manual_create_timing", opportunity.symbol)
+        context.log("astro_manual_create_timing", opportunity.symbol)
 
 
 async def _create_astro_card_reviewed(
