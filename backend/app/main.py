@@ -8,6 +8,7 @@ from typing import AsyncIterator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.runtime.loop_stall_watchdog import LoopStallWatchdog
 from app.runtime.supervisor import TaskSupervisor, beat
 
 from app.api import (
@@ -924,6 +925,12 @@ def create_app(
         if start_background_workers and app_settings.memory_probe_enabled:
             supervisor.enable_memory_probe()
         supervisor.start("event-loop-lag", supervisor.loop_lag.run, restart=True, critical=False)
+        loop_stall_watchdog = LoopStallWatchdog()
+        app.state.loop_stall_watchdog = loop_stall_watchdog
+        if loop_stall_watchdog.enabled:
+            supervisor.start(
+                "loop-stall-watchdog", loop_stall_watchdog.run, restart=False, critical=False,
+            )
         if (start_collector and start_background_workers
                 and app_settings.squeeze_monitor_enabled and "squeeze" not in disabled):
             symbols = tuple(
@@ -1184,6 +1191,7 @@ def create_app(
             yield
         finally:
             stop_event.set()
+            loop_stall_watchdog.stop()
             await supervisor.stop()
             await app.state.market_validation.aclose()
             if collector is not None:
