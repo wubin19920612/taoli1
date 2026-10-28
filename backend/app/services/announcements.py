@@ -32,6 +32,8 @@ SettingsLoader = Callable[[], Awaitable[AnnouncementSettings]]
 AssetResearcher = Callable[[ExchangeAnnouncement], Awaitable[list[AnnouncementAssetResearch]]]
 logger = logging.getLogger(__name__)
 
+GATE_DIRECT_BACKOFF_SECONDS = 300
+
 ANNOUNCEMENT_EXCHANGES = ("binance", "okx", "bybit", "gate", "bitget", "hyperliquid")
 ANNOUNCEMENT_EXCHANGE_OPTIONS = [
     {"label": "Binance", "value": "binance"},
@@ -2033,23 +2035,53 @@ class GateAnnouncementProvider(HttpAnnouncementProvider):
         "new listing",
     )
 
+    def __init__(
+        self,
+        client: httpx.AsyncClient | None = None,
+        *,
+        now_fn: Callable[[], datetime] | None = None,
+        monotonic_fn: Callable[[], float] | None = None,
+    ) -> None:
+        super().__init__(client=client, now_fn=now_fn)
+        self._monotonic_fn = monotonic_fn or time.monotonic
+        self._category_failures: dict[str, str] = {}
+        self._direct_retry_at: float | None = None
+
     async def fetch(self, *, include_details: bool = True) -> list[ExchangeAnnouncement]:
         announcements: list[ExchangeAnnouncement] = []
         general_available = False
-        for category in self.categories:
+        direct_succeeded = False
+        categories = self.categories
+        if self._direct_retry_at is not None and self._monotonic_fn() < self._direct_retry_at:
+            logger.debug("skipping gate announcement categories during direct backoff")
+            categories = ()
+        for category in categories:
             try:
                 response = await self.client.get(f"{self.page_base_url}/{category}".rstrip("/"))
                 response.raise_for_status()
                 if not self._has_article_payload(response.text):
                     raise ValueError("Gate returned no announcement list (possibly a challenge page)")
-            except Exception:
-                logger.warning("failed to fetch gate announcement category: %s", category, exc_info=True)
+            except Exception as exc:
+                signature = type(exc).__name__
+                if isinstance(exc, httpx.HTTPStatusError):
+                    signature += f":{exc.response.status_code}"
+                if self._category_failures.get(category) != signature:
+                    logger.warning("failed to fetch gate announcement category: %s", category, exc_info=True)
+                else:
+                    logger.debug("failed to fetch gate announcement category: %s", category)
+                self._category_failures[category] = signature
                 continue
+            direct_succeeded = True
+            self._direct_retry_at = None
+            if self._category_failures.pop(category, None) is not None:
+                logger.info("gate announcement category recovered: %s", category)
             if not category:
                 general_available = True
             page_rows = self._parse_page(response.text, category)
             content_by_key = await self._fetch_detail_content_for_page(page_rows) if include_details else {}
             announcements.extend(self._parse_page(response.text, category, content_by_key=content_by_key))
+        if categories and not direct_succeeded:
+            self._direct_retry_at = self._monotonic_fn() + GATE_DIRECT_BACKOFF_SECONDS
         if not general_available:
             # Public Gate content via a third-party reader, not an official REST API.
             # Bound this to two requests per poll; the dividend catalog covers stock
