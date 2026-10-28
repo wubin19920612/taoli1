@@ -134,3 +134,9 @@ All checks passed!
 全量测试的 12 条 warning 仍为 index component 相关的 `datetime.utcnow()` 弃用提示。`git diff --check` 通过；提交消息为 `fix(astro): keep manual depth fallback behind book semaphore`。提交及远端最终 SHA 以本次交付报告和 Git 引用为准。
 
 原有未跟踪任务书和 pytest 临时目录均保留，不纳入提交。未连接生产服务器，未备份、部署或进行线上性能验收。后续部署或其他模块继续使用新任务。
+
+## 发布记录（2026-10-28，Claude 执行部署）
+- 19:15 CST 上线 eb5d839（提速+深度回退限频修复），DEPLOY_EXIT=0，live/ready 200；10 分钟 restarts=0、locked=0、Traceback=0。
+- 发现计时日志被 root WARNING 丢弃 → 457ae12 专用 `astro_timing` logger；19:30 CST 上线，DEPLOY_EXIT=0，live/ready 200。
+- 线上 PREDICTUSDT 预览：客户端 0.24/0.28/0.45/4.39/0.34/0.64 s；服务端 `astro_manual_preview_timing` total_ms 209/261/346/801/310/278，reviews=1。
+- 结论：建卡逻辑内耗时已降到 0.2–0.8 s；偶发约 3.6 s 发生在计时区间之外（`_find_instrument_opportunity` 取全量快照或事件循环繁忙），待单独排查。
