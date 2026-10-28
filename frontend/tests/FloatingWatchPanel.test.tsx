@@ -1592,6 +1592,89 @@ describe("FloatingWatchPanel", () => {
       }
     });
 
+    it("keeps polling after settings fail and an old password 401 arrives after a successful manual refresh", async () => {
+      let rejectOldRequest!: (error: Error) => void;
+      vi.mocked(apiClient.listAstroPairs)
+        .mockReturnValueOnce(new Promise((_resolve, reject) => {
+          rejectOldRequest = reject;
+        }))
+        .mockResolvedValue(astroPairs);
+      vi.mocked(apiClient.getFloatingWatchSettings).mockRejectedValueOnce(new Error("settings failed"));
+      window.localStorage.setItem("dashboard_password", "old-password");
+      await renderPanel();
+      expect(screen.getByText("settings failed")).not.toBeNull();
+      expect(apiClient.listAstroPairs).toHaveBeenCalledTimes(1);
+
+      window.localStorage.setItem("dashboard_password", "new-password");
+      await click("刷新关注行情");
+      expect(apiClient.listAstroPairs).toHaveBeenCalledTimes(2);
+      expect(screen.getByText("Astro 3 · 1 持仓")).not.toBeNull();
+      expect(screen.queryByText("settings failed")).toBeNull();
+
+      await act(async () => {
+        rejectOldRequest(passwordError());
+      });
+      expect(screen.queryByText(`Astro 卡片读取失败：${passwordMessage}`)).toBeNull();
+      await poll();
+      expect(apiClient.listAstroPairs).toHaveBeenCalledTimes(3);
+      expect(apiClient.getFloatingWatchSettings).toHaveBeenCalledTimes(3);
+      expect(screen.getByText("Astro 3 · 1 持仓")).not.toBeNull();
+      expect(screen.queryByText(`Astro 卡片读取失败：${passwordMessage}`)).toBeNull();
+    });
+
+    it.each(["password 401", "success", "server 500"])("preserves a newer password block after an old %s response", async (response) => {
+      let resolveOldRequest!: (items: Awaited<ReturnType<typeof apiClient.listAstroPairs>>) => void;
+      let rejectOldRequest!: (error: Error) => void;
+      vi.mocked(apiClient.listAstroPairs).mockReturnValueOnce(new Promise((resolve, reject) => {
+        resolveOldRequest = resolve;
+        rejectOldRequest = reject;
+      }));
+      vi.mocked(apiClient.getFloatingWatchSettings).mockRejectedValueOnce(new Error("settings failed"));
+      window.localStorage.setItem("dashboard_password", "old-password");
+      await renderPanel();
+
+      window.localStorage.setItem("dashboard_password", "new-password");
+      await act(async () => {
+        screen.getByText("Astro 0").click();
+      });
+      expect(apiClient.listAstroPairs).toHaveBeenCalledTimes(2);
+      expect(screen.getByText(`Astro 卡片读取失败：${passwordMessage}`)).not.toBeNull();
+
+      await act(async () => {
+        if (response === "success") resolveOldRequest(astroPairs);
+        else rejectOldRequest(response === "password 401"
+          ? passwordError()
+          : new apiClient.ApiError("old server error", 500));
+      });
+      await poll();
+      expect(apiClient.listAstroPairs).toHaveBeenCalledTimes(2);
+      expect(apiClient.getFloatingWatchSettings).toHaveBeenCalledTimes(3);
+      expect(screen.getByText("Astro 0")).not.toBeNull();
+      expect(screen.getByText(`Astro 卡片读取失败：${passwordMessage}`)).not.toBeNull();
+      expect(screen.queryByText("Astro 卡片读取失败：old server error")).toBeNull();
+    });
+
+    it("blocks the request password and retries a password changed while the latest request was pending", async () => {
+      let rejectRequest!: (error: Error) => void;
+      vi.mocked(apiClient.listAstroPairs)
+        .mockReturnValueOnce(new Promise((_resolve, reject) => {
+          rejectRequest = reject;
+        }))
+        .mockResolvedValue(astroPairs);
+      window.localStorage.setItem("dashboard_password", "request-password");
+      await renderPanel();
+
+      window.localStorage.setItem("dashboard_password", "changed-password");
+      await act(async () => {
+        rejectRequest(passwordError());
+      });
+      expect(screen.getByText("Astro 0")).not.toBeNull();
+      await poll();
+      expect(apiClient.listAstroPairs).toHaveBeenCalledTimes(2);
+      expect(screen.getByText("Astro 3 · 1 持仓")).not.toBeNull();
+      expect(screen.queryByText(`Astro 卡片读取失败：${passwordMessage}`)).toBeNull();
+    });
+
     it("records the saved password at rejection time", async () => {
       let rejectRequest!: (error: Error) => void;
       vi.mocked(apiClient.listAstroPairs).mockReturnValueOnce(new Promise((_resolve, reject) => {

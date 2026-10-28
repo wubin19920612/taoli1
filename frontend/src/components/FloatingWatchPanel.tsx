@@ -656,6 +656,7 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
   const panelRef = useRef<HTMLElement | null>(null);
   const refreshQueue = useRef<Promise<void>>(Promise.resolve());
   const astroAuthBlocked = useRef<string | null>(null);
+  const astroRequestSequence = useRef(0);
   const lastRefreshMode = useRef<WatchMode>(mode);
 
   const refresh = useCallback((requestedMode: WatchMode, retryAstroAuth = false): Promise<void> => {
@@ -669,12 +670,15 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
           astroAuthBlocked.current = null;
         }
         lastRefreshMode.current = requestedMode;
-        const astroResultPromise = astroAuthBlocked.current === null
+        const astroRequestId = astroAuthBlocked.current === null ? ++astroRequestSequence.current : null;
+        const astroResultPromise = astroRequestId !== null
           ? listAstroPairs()
             .then((items) => ({ items, error: "" }))
             .catch((caught) => {
+              // Settings can fail first and release the queue while this request is still pending.
+              if (astroRequestId !== astroRequestSequence.current) return null;
               if (isDashboardPasswordError(caught)) {
-                astroAuthBlocked.current = window.localStorage.getItem("dashboard_password") ?? "";
+                astroAuthBlocked.current = password;
               }
               return {
                 items: null,
@@ -738,7 +742,7 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
           }
         }
         const astroResult = await astroResultPromise;
-        if (astroResult?.items) {
+        if (astroRequestId === astroRequestSequence.current && astroResult?.items) {
           setAstroPairs(astroResult.items);
           if (requestedMode === "astro") {
             const legs = Array.from(new Map(
@@ -768,10 +772,12 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
                 }
               }
             );
-            setAstroInstruments(Object.fromEntries(instrumentEntries));
+            if (astroRequestId === astroRequestSequence.current) {
+              setAstroInstruments(Object.fromEntries(instrumentEntries));
+            }
           }
         }
-        if (astroResult) setAstroError(astroResult.error);
+        if (astroRequestId === astroRequestSequence.current && astroResult) setAstroError(astroResult.error);
         setError("");
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : String(caught));
