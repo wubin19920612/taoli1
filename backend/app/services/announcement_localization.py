@@ -16,6 +16,8 @@ from app.models.announcement import ExchangeAnnouncement
 
 logger = logging.getLogger(__name__)
 
+LOCALIZATION_SOURCE_TIMEOUT_SECONDS = 2.5
+
 
 class AnnouncementLocalizationService:
     """Best-effort official localization, cached separately from the news feed.
@@ -32,6 +34,7 @@ class AnnouncementLocalizationService:
         self._missing_until: dict[str, float] = {}
         self._expires_at = 0.0
         self._lock = asyncio.Lock()
+        self._source_errors: dict[str, type[Exception]] = {}
 
     def _requests(self) -> list[tuple[str, dict[str, str]]]:
         if self.exchange == "binance":
@@ -107,16 +110,17 @@ class AnnouncementLocalizationService:
         results = await asyncio.gather(*(
             self._fetch(url, headers) for url, headers in self._requests()
         ))
-        self._cache = {
+        refreshed = {
             key: value for result in results for key, value in result.items()
         }
+        self._cache.update(refreshed)
         # Retry empty/failed feeds sooner; do not poll every news cycle.
-        self._expires_at = time.monotonic() + (120 if self._cache else 30)
+        self._expires_at = time.monotonic() + (120 if refreshed else 30)
         for announcement_id in self._cache:
             self._missing_until.pop(announcement_id, None)
 
     async def _fetch(self, url: str, headers: dict[str, str]) -> dict[str, tuple[str, str]]:
-        timeout_seconds = 4
+        timeout_seconds = LOCALIZATION_SOURCE_TIMEOUT_SECONDS
         try:
             # Localization cannot hold up a new announcement indefinitely.
             async with asyncio.timeout(timeout_seconds):
@@ -131,9 +135,15 @@ class AnnouncementLocalizationService:
                     key, value = self._localized_row(row)
                     if key and value is not None:
                         result[key] = value
+                if self._source_errors.pop(url, None) is not None:
+                    logger.info("Chinese announcement source recovered: %s", url)
                 return result
-        except (httpx.HTTPError, TimeoutError, ValueError, TypeError, KeyError, AttributeError, IndexError):
-            logger.warning("Chinese announcement source unavailable: %s", url)
+        except (httpx.HTTPError, TimeoutError, ValueError, TypeError, KeyError,
+                AttributeError, IndexError) as exc:
+            error_type = type(exc)
+            log = logger.debug if self._source_errors.get(url) is error_type else logger.warning
+            self._source_errors[url] = error_type
+            log("Chinese announcement source unavailable: %s error=%s", url, error_type.__name__)
             return {}
 
     def _rows(self, response: httpx.Response, url: str) -> list[dict]:

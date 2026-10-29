@@ -8,6 +8,8 @@ import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+import httpx
+
 from app.runtime.supervisor import beat
 
 if TYPE_CHECKING:
@@ -56,6 +58,27 @@ async def run_announcement_sources(
     localize_timeout_seconds: float = 3.0,
 ) -> None:
     async def poll_source(provider: AnnouncementProvider) -> None:
+        # Keep discovery and optional translation failures independent, per provider.
+        failures: dict[str, tuple[type[Exception], int | None, int]] = {}
+
+        def log_failure(stage: str, exc: Exception) -> None:
+            status_code = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+            signature = (type(exc), status_code)
+            previous = failures.get(stage)
+            count = previous[2] + 1 if previous else 1
+            failures[stage] = (*signature, count)
+            logger.warning(
+                "Announcement %s failed provider=%s error=%s consecutive_failures=%d",
+                stage, type(provider).__name__, type(exc).__name__, count,
+                exc_info=previous is None or previous[:2] != signature,
+            )
+
+        def log_recovery(stage: str) -> None:
+            previous = failures.pop(stage, None)
+            if previous is not None:
+                logger.info("Announcement %s recovered after %d failures provider=%s",
+                            stage, previous[2], type(provider).__name__)
+
         while not stop_event.is_set():
             started = time.monotonic()
             interval = min_interval_seconds
@@ -84,11 +107,12 @@ async def run_announcement_sources(
                         try:
                             async with asyncio.timeout(localize_timeout_seconds):
                                 rows = await localize(rows)
-                        except Exception as exc:
+                        except Exception as exc:  # noqa: BLE001 - logged by log_failure below
                             # Translation is optional; never discard discovered headlines.
                             observation["localize_error"] = type(exc).__name__
-                            logger.warning("Announcement localization failed provider=%s",
-                                           type(provider).__name__, exc_info=True)
+                            log_failure("localization", exc)
+                        else:
+                            log_recovery("localization")
                     observation["localize_seconds"] = round(time.monotonic() - localize_start, 3)
                     process_start = time.monotonic()
                     created = await monitor.process(rows, settings, bootstrap=bootstrap)
@@ -96,10 +120,10 @@ async def run_announcement_sources(
                         "status": "ok", "row_count": len(rows), "new_count": len(created),
                         "process_seconds": round(time.monotonic() - process_start, 3),
                     })
-            except Exception as exc:
+                    log_recovery("poll")
+            except Exception as exc:  # noqa: BLE001 - logged by log_failure below
                 observation.update({"status": "error", "error": type(exc).__name__})
-                logger.warning("Announcement poll failed provider=%s error=%s",
-                               type(provider).__name__, type(exc).__name__, exc_info=True)
+                log_failure("poll", exc)
             if active:
                 observation.update({"finished_at": datetime.now(UTC).isoformat(),
                                     "total_seconds": round(time.monotonic() - started, 3)})
