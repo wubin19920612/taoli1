@@ -33,6 +33,7 @@ AssetResearcher = Callable[[ExchangeAnnouncement], Awaitable[list[AnnouncementAs
 logger = logging.getLogger(__name__)
 
 GATE_DIRECT_BACKOFF_SECONDS = 300
+GATE_FETCH_BUDGET_SECONDS = 17.0
 
 ANNOUNCEMENT_EXCHANGES = ("binance", "okx", "bybit", "gate", "bitget", "hyperliquid")
 ANNOUNCEMENT_EXCHANGE_OPTIONS = [
@@ -1400,6 +1401,13 @@ class BinanceAnnouncementProvider(HttpAnnouncementProvider):
         )
 
 
+def _announcement_source_error(error: BaseException) -> str:
+    if isinstance(error, httpx.HTTPStatusError):
+        return f"HTTP {error.response.status_code}"
+    message = " ".join(str(error).split())
+    return f"{type(error).__name__}: {message}"[:200]
+
+
 class OKXAnnouncementProvider(HttpAnnouncementProvider):
     exchange = "okx"
     source = "okx-support-announcements"
@@ -1412,6 +1420,9 @@ class OKXAnnouncementProvider(HttpAnnouncementProvider):
     )
 
     async def fetch(self, *, include_details: bool = True) -> list[ExchangeAnnouncement]:
+        source_errors: dict[str, str] = {}
+        self.last_source_errors = source_errors
+
         async def fetch_api(ann_type: str) -> list[ExchangeAnnouncement]:
             query = f"annType={ann_type}&page=1" if ann_type else "page=1"
             payload = await self._get_json(f"{self.base_url}?{query}")
@@ -1438,9 +1449,11 @@ class OKXAnnouncementProvider(HttpAnnouncementProvider):
             if isinstance(result, BaseException):
                 if isinstance(result, asyncio.CancelledError):
                     raise result
+                source_errors[label] = _announcement_source_error(result)
                 logger.warning("OKX announcement source failed: %s (%s)", label, type(result).__name__)
                 continue
             if not result:
+                source_errors[label] = "ValueError: no valid articles"
                 logger.warning("OKX announcement source returned no valid articles: %s", label)
             for item in result:
                 slug = item.url.rstrip("/").rsplit("/", 1)[-1]
@@ -1448,7 +1461,8 @@ class OKXAnnouncementProvider(HttpAnnouncementProvider):
                     announcements.append(item)
                     known_slugs.add(slug)
         if not announcements:
-            raise ValueError("All OKX announcement sources failed or returned no valid articles")
+            summary = ", ".join(f"{label}={reason}" for label, reason in source_errors.items())
+            raise ValueError(f"All OKX announcement sources failed or returned no valid articles: {summary}")
         return announcements
 
     async def fetch_headlines(self) -> list[ExchangeAnnouncement]:
@@ -1949,7 +1963,7 @@ class BitgetWebsiteAnnouncementProvider(HttpAnnouncementProvider):
             return_exceptions=True,
         )
         self.last_source_errors = {
-            f"{section}:{'zh' if chinese else 'en'}": type(result).__name__
+            f"{section}:{'zh' if chinese else 'en'}": _announcement_source_error(result)
             for (section, chinese), result in zip(requests, results, strict=True)
             if isinstance(result, BaseException)
         }
@@ -1970,7 +1984,8 @@ class BitgetWebsiteAnnouncementProvider(HttpAnnouncementProvider):
                         "title_zh": row.title_zh, "url_zh": row.url_zh,
                     })
         if not successes:
-            raise ValueError("All Bitget website announcement pages failed")
+            summary = ", ".join(f"{label}={reason}" for label, reason in self.last_source_errors.items())
+            raise ValueError(f"All Bitget website announcement pages failed: {summary}")
         return list(rows.values())
 
     async def localize(self, rows: list[ExchangeAnnouncement]) -> list[ExchangeAnnouncement]:
@@ -2044,12 +2059,13 @@ class GateAnnouncementProvider(HttpAnnouncementProvider):
     ) -> None:
         super().__init__(client=client, now_fn=now_fn)
         self._monotonic_fn = monotonic_fn or time.monotonic
-        self._category_failures: dict[str, str] = {}
+        self._category_failures: dict[str | tuple[str, str], str] = {}
         self._direct_retry_at: float | None = None
         self._direct_success_at: float | None = None
 
     async def fetch(self, *, include_details: bool = True) -> list[ExchangeAnnouncement]:
         started = self._monotonic_fn()
+        deadline = started + GATE_FETCH_BUDGET_SECONDS
         announcements: list[ExchangeAnnouncement] = []
         general_available = False
         direct_succeeded = False
@@ -2058,6 +2074,9 @@ class GateAnnouncementProvider(HttpAnnouncementProvider):
             logger.debug("skipping gate announcement categories during direct backoff")
             categories = ()
         for category in categories:
+            if deadline - self._monotonic_fn() < 1.0:
+                logger.debug("skipping remaining gate announcement categories: fetch budget exhausted")
+                break
             try:
                 response = await self.client.get(f"{self.page_base_url}/{category}".rstrip("/"))
                 response.raise_for_status()
@@ -2090,13 +2109,24 @@ class GateAnnouncementProvider(HttpAnnouncementProvider):
         ):
             self._direct_retry_at = self._monotonic_fn() + GATE_DIRECT_BACKOFF_SECONDS
         if not general_available:
+            remaining = deadline - self._monotonic_fn()
+            if remaining < 1.0:
+                logger.debug("skipping gate reader fallback: fetch budget exhausted")
+                return announcements
             # Public Gate content via a third-party reader, not an official REST API.
             # Bound this to two requests per poll; the dividend catalog covers stock
             # settlements absent from Gate's supported WebSocket announcement types.
-            for rows in await asyncio.gather(
-                self._fetch_reader_page(""), self._fetch_reader_page("dividenddistribution")
-            ):
-                announcements.extend(rows)
+            reader_timeout = min(15.0, remaining - 0.5)
+            try:
+                async with asyncio.timeout(remaining):
+                    results = await asyncio.gather(
+                        self._fetch_reader_page("", timeout=reader_timeout),
+                        self._fetch_reader_page("dividenddistribution", timeout=reader_timeout),
+                    )
+                for rows in results:
+                    announcements.extend(rows)
+            except TimeoutError:
+                logger.debug("gate reader fallback exceeded fetch budget; keeping category results")
         return announcements
 
     def _has_article_payload(self, html: str) -> bool:
@@ -2110,21 +2140,34 @@ class GateAnnouncementProvider(HttpAnnouncementProvider):
             _find_article_dicts(payload)
         )
 
-    async def _fetch_reader_page(self, category: str) -> list[ExchangeAnnouncement]:
+    async def _fetch_reader_page(
+        self, category: str, *, timeout: float = 15.0,
+    ) -> list[ExchangeAnnouncement]:
         url = f"https://r.jina.ai/{self.base_url}/zh/announcements/{category}".rstrip("/")
+        failure_key = ("reader", category)
         try:
             response = await self.client.get(
                 url,
                 headers={"X-Return-Format": "html", "X-No-Cache": "true"},
-                timeout=httpx.Timeout(15.0, connect=3.0),
+                timeout=httpx.Timeout(timeout, connect=min(3.0, timeout)),
             )
             response.raise_for_status()
             if not self._has_article_payload(response.text):
                 raise ValueError("Gate reader returned no announcement list")
-            return self._parse_page(response.text, category)
-        except Exception:
-            logger.warning("failed to fetch gate reader fallback: %s", category or "general", exc_info=True)
+            rows = self._parse_page(response.text, category)
+        except Exception as exc:
+            signature = type(exc).__name__
+            if isinstance(exc, httpx.HTTPStatusError):
+                signature += f":{exc.response.status_code}"
+            if self._category_failures.get(failure_key) != signature:
+                logger.warning("failed to fetch gate reader fallback: %s", category or "general", exc_info=True)
+            else:
+                logger.debug("failed to fetch gate reader fallback: %s", category or "general")
+            self._category_failures[failure_key] = signature
             return []
+        if self._category_failures.pop(failure_key, None) is not None:
+            logger.info("gate reader fallback recovered: %s", category or "general")
+        return rows
 
     async def fetch_headlines(self) -> list[ExchangeAnnouncement]:
         return await self.fetch(include_details=False)
