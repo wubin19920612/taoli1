@@ -350,3 +350,116 @@ async def test_successful_poll_does_not_clear_localization_failure_state(monkeyp
         recovered = stage_records(caplog, stage, "recovered")
         assert len(recovered) == 1
         assert "recovered after 1 failures" in recovered[0].getMessage()
+
+
+@pytest.mark.asyncio
+async def test_source_cache_replaces_all_entries_across_1000_successful_refreshes(monkeypatch):
+    source_url = "https://source.test/rotating"
+    calls = 0
+
+    def respond(request):
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json=chinese_payload(announcement_id=f"article-{calls}"))
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        service = AnnouncementLocalizationService("bybit", client)
+        monkeypatch.setattr(service, "_requests", lambda: [(source_url, {})])
+        for _ in range(1000):
+            await service._refresh()
+
+    expected = {"article-1000": (
+        "新币上架 TEST", "https://announcements.bybit.com/zh-TW/article/article-1000/",
+    )}
+    assert calls == 1000
+    assert service._cache == expected
+    assert service._source_cache == {source_url: expected}
+
+
+@pytest.mark.asyncio
+async def test_source_cache_replaces_successful_source_and_preserves_failed_source(monkeypatch):
+    source_a = "https://source.test/a"
+    source_b = "https://source.test/b"
+    refreshed = False
+    calls = []
+
+    def respond(request):
+        calls.append(str(request.url))
+        if str(request.url) == source_b:
+            if refreshed:
+                raise httpx.ReadTimeout("source B unavailable", request=request)
+            payload = chinese_payload("源 B 上次成功的公告", "article-b")
+        else:
+            payload = chinese_payload("源 A 公告", "article-a-new" if refreshed else "article-a-old")
+        return httpx.Response(200, json=payload)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        service = AnnouncementLocalizationService("bybit", client)
+        monkeypatch.setattr(service, "_requests", lambda: [(source_a, {}), (source_b, {})])
+        await service._refresh()
+        refreshed = True
+        await service._refresh()
+        assert set(service._cache) == {"article-a-new", "article-b"}
+        rows = await service.enrich([
+            announcement(announcement_id="article-a-new"),
+            announcement(announcement_id="article-b"),
+        ])
+
+    assert [row.title_zh for row in rows] == ["源 A 公告", "源 B 上次成功的公告"]
+    assert rows[1].url_zh == "https://announcements.bybit.com/zh-TW/article/article-b/"
+    assert calls == [source_a, source_b, source_a, source_b]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("keep_source_a", [True, False])
+async def test_source_cache_removes_entries_for_sources_no_longer_requested(monkeypatch, keep_source_a):
+    source_a = "https://source.test/a"
+    source_b = "https://source.test/b"
+    requests = [(source_a, {}), (source_b, {})]
+    calls = []
+
+    def respond(request):
+        calls.append(str(request.url))
+        return httpx.Response(200, json=chinese_payload(announcement_id=request.url.path[1:]))
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        service = AnnouncementLocalizationService("bybit", client)
+        monkeypatch.setattr(service, "_requests", lambda: requests)
+        await service._refresh()
+        assert set(service._cache) == {"a", "b"}
+        requests[:] = [(source_a, {})] if keep_source_a else []
+        await service._refresh()
+
+    assert set(service._cache) == ({"a"} if keep_source_a else set())
+    assert set(service._source_cache) == ({source_a} if keep_source_a else set())
+    assert calls == [source_a, source_b] + ([source_a] if keep_source_a else [])
+
+
+@pytest.mark.asyncio
+async def test_empty_success_clears_source_cache_and_keeps_failed_source_with_short_retry(monkeypatch):
+    clock = SimpleNamespace(monotonic=lambda: 1000.0)
+    monkeypatch.setattr(announcement_localization, "time", clock)
+    source_a = "https://source.test/a"
+    source_b = "https://source.test/b"
+    refreshed = False
+
+    def respond(request):
+        if refreshed:
+            if str(request.url) == source_b:
+                raise httpx.ConnectTimeout("source B unavailable", request=request)
+            return httpx.Response(200, json={"result": {"list": []}})
+        return httpx.Response(200, json=chinese_payload(announcement_id=request.url.path[1:]))
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        service = AnnouncementLocalizationService("bybit", client)
+        monkeypatch.setattr(service, "_requests", lambda: [(source_a, {}), (source_b, {})])
+        await service._refresh()
+        assert set(service._cache) == {"a", "b"}
+        assert service._expires_at == 1120.0
+        refreshed = True
+        await service._refresh()
+
+    assert set(service._cache) == {"b"}
+    assert service._source_cache[source_a] == {}
+    assert service._cache == service._source_cache[source_b]
+    assert service._expires_at == 1030.0

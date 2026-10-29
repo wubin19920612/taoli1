@@ -31,6 +31,7 @@ class AnnouncementLocalizationService:
         self.exchange = exchange
         self.client = client
         self._cache: dict[str, tuple[str, str]] = {}
+        self._source_cache: dict[str, dict[str, tuple[str, str]]] = {}
         self._missing_until: dict[str, float] = {}
         self._expires_at = 0.0
         self._lock = asyncio.Lock()
@@ -107,19 +108,29 @@ class AnnouncementLocalizationService:
         return enriched
 
     async def _refresh(self) -> None:
+        requests = self._requests()
         results = await asyncio.gather(*(
-            self._fetch(url, headers) for url, headers in self._requests()
+            self._fetch(url, headers) for url, headers in requests
         ))
-        refreshed = {
-            key: value for result in results for key, value in result.items()
+        # Replace successful snapshots, including empty ones; keep failed feeds.
+        for (url, _), result in zip(requests, results):
+            if result is not None:
+                self._source_cache[url] = result
+        # Drop removed sources and retain request order for overlapping article IDs.
+        self._source_cache = {
+            url: self._source_cache[url] for url, _ in requests if url in self._source_cache
         }
-        self._cache.update(refreshed)
+        self._cache = {
+            key: value for result in self._source_cache.values() for key, value in result.items()
+        }
         # Retry empty/failed feeds sooner; do not poll every news cycle.
-        self._expires_at = time.monotonic() + (120 if refreshed else 30)
+        self._expires_at = time.monotonic() + (120 if any(results) else 30)
         for announcement_id in self._cache:
             self._missing_until.pop(announcement_id, None)
 
-    async def _fetch(self, url: str, headers: dict[str, str]) -> dict[str, tuple[str, str]]:
+    async def _fetch(
+        self, url: str, headers: dict[str, str],
+    ) -> dict[str, tuple[str, str]] | None:
         timeout_seconds = LOCALIZATION_SOURCE_TIMEOUT_SECONDS
         try:
             # Localization cannot hold up a new announcement indefinitely.
@@ -144,7 +155,7 @@ class AnnouncementLocalizationService:
             log = logger.debug if self._source_errors.get(url) is error_type else logger.warning
             self._source_errors[url] = error_type
             log("Chinese announcement source unavailable: %s error=%s", url, error_type.__name__)
-            return {}
+            return None
 
     def _rows(self, response: httpx.Response, url: str) -> list[dict]:
         if "/help/" in url or self.exchange == "gate":
