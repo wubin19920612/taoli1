@@ -181,6 +181,129 @@ async def test_registry_change_during_validation_does_not_republish(fixed_clock,
     assert store.generation == 0
 
 
+@pytest.mark.parametrize("refresh_count", [1, 2])
+async def test_prepare_retries_mapping_epoch_before_side_effects(
+    fixed_clock, monkeypatch, refresh_count,
+):
+    from app.runtime.cooperative import YieldBudget
+
+    rows = [market(), market("bybit")]
+    repo = SimpleNamespace(
+        discover=AsyncMock(), invalidate_opportunities=AsyncMock(),
+        settings=AsyncMock(return_value=market_validation_review.MarketValidationSettings()),
+        list_bindings=AsyncMock(),
+    )
+    service = MarketValidationService(repo, None)
+    service.registry = MarketIdentityRegistry([binding(row, "old") for row in rows])
+    service.collision_symbols = {"previous"}
+    service.fx_retry_at = NOW + timedelta(days=1)
+    annotations = []
+    refreshed = 0
+    annotate = MarketIdentityRegistry.annotate
+
+    def record(self, row, now=None):
+        result = annotate(self, row, now)
+        annotations.append(result.asset_id)
+        return result
+
+    async def checkpoint(self):
+        nonlocal refreshed
+        # Refresh after the first row in each cooperative attempt.
+        if len(annotations) == 2 * refreshed + 1 and refreshed < refresh_count:
+            assert service.collision_symbols == {"previous"}
+            assert service.discovered == set()
+            repo.discover.assert_not_awaited()
+            repo.invalidate_opportunities.assert_not_awaited()
+            refreshed += 1
+            repo.list_bindings.return_value = [binding(row, f"new{refreshed}") for row in rows]
+            await service.refresh()
+        # The third attempt must finish without cooperative checkpoints.
+        assert len(annotations) < 5
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(MarketIdentityRegistry, "annotate", record)
+    monkeypatch.setattr(YieldBudget, "maybe_yield", checkpoint)
+    result = await service.prepare(rows, RiskSettings(huge_spread_pct=10000))
+    assert refreshed == refresh_count
+    assert annotations == ["old", "old"] + [
+        asset for version in range(1, refresh_count + 1) for asset in [f"new{version}"] * 2
+    ]
+    assert [row.asset_id for row in result] == [f"new{refresh_count}"] * 2
+    assert service.collision_symbols == set()
+    assert not any(row.identity_collision for row in result)
+    repo.invalidate_opportunities.assert_not_awaited()
+    repo.discover.assert_awaited_once_with(rows)
+
+
+async def test_collector_queues_rounds_and_pins_risk_across_yields(fixed_clock, monkeypatch):
+    from app.runtime.cooperative import YieldBudget
+    from app.services import collector as collector_module
+
+    rows = synthetic_markets(4)
+    old = RiskSettings(huge_spread_pct=10000, symbol_aliases=[
+        SymbolAlias(exchange=row.exchange, symbol=row.symbol, canonical_symbol="OLDUSDT")
+        for row in rows
+    ])
+    new = RiskSettings(huge_spread_pct=10000, excluded_symbols=["OLDUSDT"])
+    loader = AsyncMock(side_effect=[old, new])
+    service = synthetic_service()
+    collector = MarketCollector(
+        [SimpleNamespace(name=row.exchange) for row in rows], SnapshotStore(),
+        risk_settings_loader=loader, market_validation=service,
+        now_fn=lambda: NOW, snapshot_slots=[],
+    )
+    collector._claim_due_adapters = AsyncMock(return_value=[])
+    collector._combined_exchange_markets = lambda _: rows
+    entered, release, second_started = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    observed = []
+    validate = service.validate
+    labels = collector_module.risk_labels_for
+
+    def record_validate(a, b, risk):
+        observed.append((asyncio.current_task().get_name(), risk))
+        return validate(a, b, risk)
+
+    def record_labels(item, risk, *args, **kwargs):
+        observed.append((asyncio.current_task().get_name(), risk))
+        return labels(item, risk, *args, **kwargs)
+
+    async def checkpoint(self):
+        if asyncio.current_task().get_name() == "first" and not entered.is_set():
+            entered.set()
+            await release.wait()
+        await asyncio.sleep(0)
+
+    async def second_round():
+        second_started.set()
+        return await collector.collect_once()
+
+    monkeypatch.setattr(service, "validate", record_validate)
+    monkeypatch.setattr(collector_module, "risk_labels_for", record_labels)
+    monkeypatch.setattr(YieldBudget, "maybe_yield", checkpoint)
+    first = asyncio.create_task(collector.collect_once(), name="first")
+    second = None
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        second = asyncio.create_task(second_round(), name="second")
+        await second_started.wait()
+        for _ in range(10):
+            await asyncio.sleep(0)
+        assert loader.await_count == 1
+        assert not second.done()
+        # Even an external replacement must not alter this round's local snapshot.
+        collector.risk_settings = new
+        release.set()
+        first_result, second_result = await asyncio.wait_for(asyncio.gather(first, second), 2)
+    finally:
+        release.set()
+        await asyncio.gather(*(task for task in (first, second) if task), return_exceptions=True)
+    assert {row.symbol for row in first_result.markets} == {"OLDUSDT"}
+    assert {row.symbol for row in second_result.markets} == {rows[0].symbol}
+    assert first_result.opportunities and second_result.opportunities
+    assert {name for name, _ in observed} == {"first", "second"}
+    assert all(risk is (old if name == "first" else new) for name, risk in observed)
+
+
 def synthetic_markets(count):
     rows = []
     for i in range(count):

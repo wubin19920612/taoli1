@@ -165,6 +165,7 @@ class MarketCollector:
         self._exchange_errors: dict[str, dict[str, str]] = {}
         self._adapter_cursor = 0
         self._scheduler_lock = asyncio.Lock()
+        self._collection_lock = asyncio.Lock()
         self.market_validation = market_validation
         self.stage_timings = StageTimings(timing_window)
         self.snapshot_slots = snapshot_slots
@@ -190,11 +191,12 @@ class MarketCollector:
                 await reset()
 
     async def collect_once(self) -> CollectionResult:
-        sample: dict[str, float] = {}
-        try:
-            return await self._collect_once(sample)
-        finally:
-            self.stage_timings.rounds.append(sample)
+        async with self._collection_lock:
+            sample: dict[str, float] = {}
+            try:
+                return await self._collect_once(sample)
+            finally:
+                self.stage_timings.rounds.append(sample)
 
     async def _collect_once(self, sample: dict[str, float]) -> CollectionResult:
         if self.risk_settings_loader is not None:
@@ -210,7 +212,8 @@ class MarketCollector:
             else:
                 self._risk_settings_loaded = True
 
-        ignored_exchanges = ignored_exchange_set(self.risk_settings)
+        risk = self.risk_settings
+        ignored_exchanges = ignored_exchange_set(risk)
         active_adapters = [
             adapter for adapter in self.adapters if adapter.name.lower() not in ignored_exchanges
         ]
@@ -241,17 +244,17 @@ class MarketCollector:
 
             budget = YieldBudget()
             aliased_markets = await apply_symbol_aliases_async(
-                markets, self.risk_settings.symbol_aliases, budget=budget,
+                markets, risk.symbol_aliases, budget=budget,
             )
             if self.market_validation is not None:
-                aliased_markets = await self.market_validation.prepare(aliased_markets, self.risk_settings)
+                aliased_markets = await self.market_validation.prepare(aliased_markets, risk)
             filtered_markets = await filter_markets_async(
-                aliased_markets, self.risk_settings, budget=budget,
+                aliased_markets, risk, budget=budget,
             )
 
         with self.stage_timings.measure(sample, "build"):
             opportunities = await self._build_labeled_opportunities_async(
-                filtered_markets, now=now, budget=budget,
+                filtered_markets, now=now, budget=budget, risk=risk,
             )
             if self.market_validation is not None:
                 by_key = {
@@ -264,15 +267,15 @@ class MarketCollector:
                     b = by_key.get((item.sell_exchange, item.sell_market_type, item.sell_raw_symbol))
                     if a is None or b is None:
                         continue
-                    item.validation = self.market_validation.validate(a, b, self.risk_settings)
+                    item.validation = self.market_validation.validate(a, b, risk)
                     if self.market_validation.should_enforce(item.validation) and not item.validation.capabilities.same_asset_opportunity:
                         continue
-                    item.risk_labels = risk_labels_for(item, self.risk_settings, now)
+                    item.risk_labels = risk_labels_for(item, risk, now)
                     accepted.append(item)
                 opportunities = accepted
             filtered_opportunities = filter_opportunities(
                 opportunities,
-                self.risk_settings,
+                risk,
                 now=now,
             )
         with self.stage_timings.measure(sample, "publish"):
@@ -588,8 +591,10 @@ class MarketCollector:
         now: datetime | None = None,
         *,
         budget: YieldBudget | None = None,
+        risk: RiskSettings | None = None,
     ) -> list[Opportunity]:
         budget = budget or YieldBudget()
+        risk = risk if risk is not None else self.risk_settings
         current = now or self._now_fn()
         opportunities = await build_all_opportunities_async(
             markets,
@@ -598,17 +603,17 @@ class MarketCollector:
             future_fee_pct=self.fee_settings.future_fee_pct,
             safety_slippage_pct=self.fee_settings.safety_slippage_pct,
             now=current,
-            stale_after_seconds=self.risk_settings.stale_after_seconds,
+            stale_after_seconds=risk.stale_after_seconds,
         )
         collision_symbols = frozenset(
-            symbol.upper() for symbol in self.risk_settings.ticker_collision_symbols
+            symbol.upper() for symbol in risk.ticker_collision_symbols
         )
         for item in opportunities:
             await budget.maybe_yield()
             # These models were just constructed for this collection, and have
             # not been published to the store or passed to another consumer.
             item.risk_labels = risk_labels_for(
-                item, self.risk_settings, current, collision_symbols=collision_symbols,
+                item, risk, current, collision_symbols=collision_symbols,
             )
         return opportunities
 

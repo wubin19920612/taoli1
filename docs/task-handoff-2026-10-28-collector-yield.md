@@ -160,3 +160,85 @@ git push origin HEAD:codex/frontend-localization-polish
 本任务以更正后的 ≤250 ms 基准门槛交付，不再以旧 100 ms 门槛阻断。本地代码与测试保持在指定工作树；下一模块请新建任务。
 
 线上效果需在后续明确授权的部署任务中验收：按部署文档备份、使用已验证镜像更新后，观察采集后处理路径的 `loop_stall` 和 `/api/health/live`。如以后需要低于 100 ms 的目标，应另行明确 GC / 对象分配治理范围。
+
+
+## 审查后修复交付（2026-10-29，任务书 2026-10-28）
+
+本节为最新状态，覆盖前文历史记录。本轮基线为 `4c4241114ed853edf12af824f727de1735b26290`，分支 `codex/collector-yield`。依据任务书末尾“审查后修复”及主仓 `output/collector-yield-review.log`，只修复映射快照与采集重入/设置一致性，不部署。
+
+### 五个改动文件
+
+- `backend/app/services/market_validation_review.py`：每次尝试固定 epoch 与 registry 读者快照（共享不可变 bindings）；refresh 在读完设置和绑定后原子替换 registry，避免提前改变 mode。注解之后、碰撞计算提交之前检查 epoch；失败尝试不 prune、不提交 discovered/collision、不调用失效写入。最多计算三次，第三次不执行协作检查点。接受快照后才执行发现 I/O；若该 I/O 期间映射再次变化，则抛出 `mapping changed during preparation`，不提交过期碰撞或调用失效写入，交由既有采集循环下一轮重试。
+- `backend/app/services/collector.py`：collect_once 的 asyncio.Lock 覆盖整轮；设置加载后固定局部 risk，alias/prepare/filter/build/validate/风险标签/机会过滤沿用同一对象。保留发布前 epoch 检查和无 await 发布段。
+- `backend/tests/test_cooperative.py`：新增三例，覆盖一次刷新重算、两次刷新后同步兜底、两轮排队且外部替换设置不影响当前轮；核对每次注解的资产版本、发现与失效调用、市场输出，以及 validate 和风险标签收到的设置对象。
+- `backend/tests/test_collector.py`：原测试的“重入立即返回旧快照”与新要求冲突，改为验证排队等待、返回首轮完成后的 BTC 快照，仍验证 adapter 只轮询一次。
+- 本交接文档。没有修改其他源文件、docs/next-task.md、任务书或基准脚本。
+
+### 命令与原始汇总
+
+Python 命令均在 backend 执行。为保留原有四个 .pytest_yield_* 目录中的数据库证据，只将验收命令 basetemp 改为新的 .pytest_yield_review_*；测试选择及其他参数保持不变。
+
+```text
+python -m pytest tests/test_cooperative.py -q -k 'retries_mapping_epoch or queues_rounds' --basetemp=.pytest_yield_review_red -p no:cacheprovider
+3 failed, 9 deselected in 0.94s
+
+python -m pytest tests/test_cooperative.py tests/test_collector.py -q --basetemp=.pytest_yield_review_green -p no:cacheprovider
+1 failed, 35 passed in 173.83s (0:02:53)
+
+python -m pytest tests -q -k "collector or spread or validation or alias or filter or cooperative" --basetemp=.pytest_yield_review_a -p no:cacheprovider
+530 passed, 1649 deselected in 36.85s
+
+python -m pytest tests -q --basetemp=.pytest_yield_review_full -p no:cacheprovider
+2175 passed, 4 deselected, 12 warnings in 137.71s (0:02:17)
+```
+
+红测证据：映射刷新前已经提交 discovered；并发第二轮在第一轮未完成时加载设置，loader.await_count 为 2 而非 1。修改后的组合测试中三个回归用例均通过；唯一失败为既有心跳测试 elapsed=6.636749899997085 超过 5 秒（心跳间隔断言通过）。未改代码或放宽阈值，随后规定范围及全量验收均通过。一次误从仓库根目录执行测试返回 `no tests ran in 0.00s`，已改在 backend 执行，不计作验收。
+
+12 条 warning 来自既有 datetime.utcnow() 弃用提示。Ruff 修改前四个相关文件检查有 1 条 I001；最终检查仍仅有 tests/test_collector.py:282 的同一条导入排序错误，无新增错误。
+
+```text
+python -m ruff check app/services/collector.py app/services/market_validation_review.py tests/test_cooperative.py tests/test_collector.py
+Found 1 error.
+[*] 1 fixable with the `--fix` option.
+
+python -m ruff check app/runtime/cooperative.py app/services/collector.py app/services/market_validation_review.py app/services/symbol_aliases.py app/services/data_filters.py app/services/spread_engine.py tests/test_cooperative.py tests/test_collector.py tests/collector_yield_reference.py
+Found 1 error.
+[*] 1 fixable with the `--fix` option.
+
+python -m ruff check app/runtime/cooperative.py app/services/collector.py app/services/market_validation_review.py app/services/symbol_aliases.py app/services/data_filters.py app/services/spread_engine.py tests/test_cooperative.py tests/collector_yield_reference.py
+All checks passed!
+
+git diff --check
+exit 0
+```
+
+### 最终 12k 基准
+
+全量测试结束后单独执行原脚本，未修改脚本、阈值、负载或 GC 设置。12,000 个市场、18,000 个机会，旧新各预热一次，然后五轮交替执行。
+
+```text
+python ../output/collector_yield_benchmark.py
+BENCHMARK_SUMMARY {"old": {"median_total_ms": 2133.415, "worst_heartbeat_ms": 2166.832}, "new": {"median_total_ms": 2165.385, "worst_heartbeat_ms": 170.21}, "increase_pct": 1.499, "equal_outputs": true}
+```
+
+exit 0；新路径最差心跳 170.210 ms ≤250 ms，总耗时中位数增幅 1.499% ≤20%。十个样本输出哈希均为 `ed7a6a239e5bb339ddd8d4b723f9e4d71789b45d14a27b8f66ceede5410e8b53`，逐字段结果一致。
+
+### Git、保留文件与线上边界
+
+只读查询已确认两个远端分支均在指定基线。默认 Windows schannel 查询曾返回 SEC_E_NO_CREDENTIALS；使用单次命令的 OpenSSL 后成功，不修改 Git 全局/仓库配置，不改变网络节点或关闭 TLS 校验。
+
+```text
+git -c http.sslBackend=openssl ls-remote origin refs/heads/codex/frontend-localization-polish refs/heads/codex/collector-yield
+4c4241114ed853edf12af824f727de1735b26290 refs/heads/codex/collector-yield
+4c4241114ed853edf12af824f727de1735b26290 refs/heads/codex/frontend-localization-polish
+
+git commit -m "fix(collector): pin mapping epoch and settings across yields"
+git -c http.sslBackend=openssl push origin HEAD:codex/collector-yield
+git -c http.sslBackend=openssl push origin HEAD:codex/frontend-localization-polish
+```
+
+推送前再核实 frontend-localization-polish 必须仍在指定基线；两次推送均禁止 force。最终 SHA 和实际推送原始输出见本轮交付回执及远端记录。本节属于该修复提交，可通过 git log 定位。
+
+保留任务开始时全部未跟踪文件：四个既有 .pytest_yield_* 数据库目录、任务书和本地基准；本轮新生成的测试目录同样保留且不暂存。只暂存上述五个文件。
+
+按用户要求未部署、未做线上备份或线上验收；本地性能不代表线上验证。连续映射更新触发第三次同步兜底时会暂时放弃协作让出，这是任务书指定的有限重试行为。下一模块或部署请另开任务，沿用本交接。

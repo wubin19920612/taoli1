@@ -460,15 +460,17 @@ async def test_collector_does_not_start_duplicate_poll_when_exchange_is_in_fligh
 
     first_collect = asyncio.create_task(collector.collect_once())
     await adapter.started.wait()
-    overlapping_result = await collector.collect_once()
-
-    assert [row.symbol for row in overlapping_result.markets] == ["ETHUSDT"]
+    overlapping_collect = asyncio.create_task(collector.collect_once())
+    await asyncio.sleep(0)
+    assert not overlapping_collect.done()
     assert adapter.spot_calls == 1
 
     adapter.release.set()
     completed_result = await first_collect
+    overlapping_result = await overlapping_collect
 
     assert [row.symbol for row in completed_result.markets] == ["BTCUSDT"]
+    assert [row.symbol for row in overlapping_result.markets] == ["BTCUSDT"]
     assert adapter.spot_calls == 1
 
 

@@ -5,6 +5,7 @@ import json
 import logging
 from collections import Counter, OrderedDict
 from contextvars import ContextVar
+from copy import copy
 from datetime import UTC, datetime, timedelta
 from itertools import combinations
 from time import monotonic
@@ -217,8 +218,8 @@ class MarketValidationService:
     async def refresh(self):
         async with self._refresh_lock:
             settings = await self.repository.settings()
-            self.registry.mode = settings.mode
-            self.registry.replace(await self.repository.list_bindings())
+            bindings = await self.repository.list_bindings()
+            self.registry = MarketIdentityRegistry(bindings, mode=settings.mode)
             if settings.review_concurrency != self.settings.review_concurrency:
                 self.semaphore = asyncio.Semaphore(settings.review_concurrency)
                 self.book_semaphore = asyncio.Semaphore(settings.review_concurrency)
@@ -338,49 +339,70 @@ class MarketValidationService:
     async def prepare(self, markets, risk):
         budget = YieldBudget()
         now = datetime.now(UTC)
-        # Pruning is bounded and synchronous: readers never see a partial prune.
-        self.reviews.prune(lambda result: result.expires_at <= now)
-        unknown = []
-        discovered = self.discovered.copy()
-        for row in markets:
-            await budget.maybe_yield()
-            try:
-                key = MarketKey.from_snapshot(row).key
-            except ValueError:
+        # A registry's bindings are immutable, but replace() changes its reference.
+        # Copy the reader so every row in an attempt sees the same mapping/mode.
+        for attempt in range(3):
+            epoch = self._mutation_epoch
+            registry = copy(self.registry)
+            cooperative = attempt < 2
+            unknown = []
+            discovered = self.discovered.copy()
+            for row in markets:
+                if cooperative:
+                    await budget.maybe_yield()
+                try:
+                    key = MarketKey.from_snapshot(row).key
+                except ValueError:
+                    continue
+                if key not in discovered:
+                    unknown.append(row)
+                    discovered.add(key)
+            annotated = []
+            assets_by_symbol = {}
+            kinds_by_symbol = {}
+            for row in markets:
+                if cooperative:
+                    await budget.maybe_yield()
+                row = self._cached_book(
+                    self._apply_fx(registry.annotate(row, now), now),
+                    now, risk.stale_after_seconds,
+                )
+                annotated.append(row)
+                if row.asset_id:
+                    assets_by_symbol.setdefault(row.symbol, set()).add(row.asset_id)
+                if row.asset_kind:
+                    kinds_by_symbol.setdefault(row.symbol, set()).add(row.asset_kind)
+            if epoch != self._mutation_epoch:
                 continue
-            if key not in discovered:
-                unknown.append(row)
-                discovered.add(key)
-        # Preserve discovery-before-I/O semantics, but publish the complete set.
+            collision_symbols = set()
+            for symbol, assets in assets_by_symbol.items():
+                if cooperative:
+                    await budget.maybe_yield()
+                if len(assets) > 1:
+                    collision_symbols.add(symbol)
+            for symbol, kinds in kinds_by_symbol.items():
+                if cooperative:
+                    await budget.maybe_yield()
+                if len(kinds) > 1:
+                    collision_symbols.add(symbol)
+            for index, row in enumerate(annotated):
+                if cooperative:
+                    await budget.maybe_yield()
+                collision = row.symbol in collision_symbols
+                if row.identity_collision != collision:
+                    annotated[index] = row.model_copy(update={"identity_collision": collision})
+            # Nothing shared or persistent is changed by a discarded attempt.
+            # Attempt three has no awaits, so a mapping refresh cannot interrupt it.
+            if epoch == self._mutation_epoch:
+                break
+        self.reviews.prune(lambda result: result.expires_at <= now)
         self.discovered = discovered
         if unknown:
             await self.repository.discover(unknown)
-        annotated = []
-        assets_by_symbol = {}
-        kinds_by_symbol = {}
-        for row in markets:
-            await budget.maybe_yield()
-            row = self._cached_book(self._annotate_base(row, now), now, risk.stale_after_seconds)
-            annotated.append(row)
-            if row.asset_id:
-                assets_by_symbol.setdefault(row.symbol, set()).add(row.asset_id)
-            if row.asset_kind:
-                kinds_by_symbol.setdefault(row.symbol, set()).add(row.asset_kind)
-        collision_symbols = set()
-        for symbol, assets in assets_by_symbol.items():
-            await budget.maybe_yield()
-            if len(assets) > 1:
-                collision_symbols.add(symbol)
-        for symbol, kinds in kinds_by_symbol.items():
-            await budget.maybe_yield()
-            if len(kinds) > 1:
-                collision_symbols.add(symbol)
-        for index, row in enumerate(annotated):
-            await budget.maybe_yield()
-            collision = row.symbol in collision_symbols
-            if row.identity_collision != collision:
-                annotated[index] = row.model_copy(update={"identity_collision": collision})
-        # No reader can observe an empty or partly accumulated collision set.
+        # Discovery performs I/O after accepting the snapshot. Fail closed if a
+        # refresh ran there; never publish collisions or invalidate from that epoch.
+        if epoch != self._mutation_epoch:
+            raise ValueError("mapping changed during preparation")
         self.collision_symbols = collision_symbols
         if self.collision_symbols:
             from app.services.spread_engine import opportunity_id, pair_allowed
