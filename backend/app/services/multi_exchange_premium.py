@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone
 from itertools import permutations
 from math import ceil, isfinite
@@ -25,9 +26,20 @@ OFFICIAL_MAX_AGE_SECONDS = 90
 MAX_SAMPLE_SKEW_SECONDS = 60
 
 
-def eligible_groups(markets: list[MarketSnapshot], settings: RiskSettings, now: datetime):
-    groups = defaultdict(dict)
-    for market in filter_markets(markets, settings):
+@dataclass
+class _EligibilityScan:
+    # Keep occurrences until the time check: an expired duplicate must not
+    # overwrite an earlier live row. Positions preserve first-live-group order.
+    groups: dict[tuple, list[tuple[int, str, MarketSnapshot]]]
+    by_market: dict[str, tuple[tuple, MarketSnapshot]]
+    has_duplicates: bool
+
+
+def _scan_eligibility(markets: list[MarketSnapshot], settings: RiskSettings):
+    groups = defaultdict(list)
+    by_market = {}
+    has_duplicates = False
+    for position, market in enumerate(filter_markets(markets, settings)):
         if (
             market.market_type != MarketType.FUTURE
             or market.exchange not in SUPPORTED_PREMIUM_INDEX_EXCHANGES
@@ -35,7 +47,6 @@ def eligible_groups(markets: list[MarketSnapshot], settings: RiskSettings, now: 
             or market.unit_status != "verified"
             or not market.asset_id
             or not market.binding_valid_until
-            or utc(market.binding_valid_until) <= now
         ):
             continue
         try:
@@ -49,12 +60,46 @@ def eligible_groups(markets: list[MarketSnapshot], settings: RiskSettings, now: 
             market.contract_kind,
             market.tracking_definition if market.contract_kind == "valuation" else "",
         )
-        groups[group][key] = market
-    return {
-        key: list(rows.values())
-        for key, rows in groups.items()
-        if len({row.exchange for row in rows.values()}) >= 2
-    }
+        groups[group].append((position, key, market))
+        has_duplicates |= key in by_market
+        by_market[key] = (group, market)
+    return _EligibilityScan(dict(groups), by_market, has_duplicates)
+
+
+def _eligible_at(scan: _EligibilityScan, now: datetime):
+    live_groups = []
+    for group, candidates in scan.groups.items():
+        rows = {}
+        first_position = None
+        for position, key, market in candidates:
+            if utc(market.binding_valid_until) <= now:
+                continue
+            if first_position is None:
+                first_position = position
+            rows[key] = market
+        if len({row.exchange for row in rows.values()}) >= 2:
+            live_groups.append((first_position, group, rows))
+    live_groups.sort(key=lambda item: item[0])
+    groups = {group: list(rows.values()) for _, group, rows in live_groups}
+    # Unique keys use the cached index directly. With duplicate keys, expiry can
+    # change the winning occurrence/group; reuse cached keys to project winners
+    # in the exact legacy order, without reconstructing any MarketKey.
+    by_market = scan.by_market
+    if scan.has_duplicates:
+        by_market = {
+            key: (group, market)
+            for _, group, rows in live_groups
+            for key, market in rows.items()
+        }
+    return groups, by_market
+
+
+def eligible_groups(markets: list[MarketSnapshot], settings: RiskSettings, now: datetime):
+    return _eligible_at(_scan_eligibility(markets, settings), now)[0]
+
+
+def _same_market_rows(old: list[MarketSnapshot], new: list[MarketSnapshot]) -> bool:
+    return len(old) == len(new) and all(a is b for a, b in zip(old, new))
 
 
 def matching_points(rows, settings: RiskSettings, now: datetime):
@@ -207,6 +252,7 @@ class MultiExchangePremiumMonitor:
         self.app = app
         self.service = service or PremiumIndexQueryService()
         self._cursor = None
+        self._scan_cache = None
         self._next_allowed = {}
         self._locks = defaultdict(asyncio.Lock)
         self._request_at = defaultdict(float)
@@ -222,6 +268,22 @@ class MultiExchangePremiumMonitor:
             "last_fallback_points": 0,
         }
         self._sweep_started = monotonic()
+
+    def _current_eligibility(self, settings: RiskSettings, now: datetime):
+        store = self.app.state.snapshot_store
+        cache_key = (store.generation, settings.model_dump_json())
+        markets = store.get_markets()
+        if (
+            self._scan_cache is None
+            or self._scan_cache[0] != cache_key
+            or not _same_market_rows(self._scan_cache[2], markets)
+        ):
+            # Drop the previous full scan before retaining its replacement.
+            # Keep the input copy alive: binding refreshes can replace rows
+            # without advancing generation, so compare row objects directly.
+            self._scan_cache = None
+            self._scan_cache = (cache_key, _scan_eligibility(markets, settings), markets)
+        return _eligible_at(self._scan_cache[1], now)
 
     async def _point(self, market):
         # At most two market queries/sec/exchange, with bounded global concurrency.
@@ -262,7 +324,7 @@ class MultiExchangePremiumMonitor:
         if not settings.multi_exchange_premium_alert_enabled:
             return
         now = datetime.now(UTC)
-        groups = eligible_groups(self.app.state.snapshot_store.get_markets(), settings, now)
+        groups = self._current_eligibility(settings, now)[0]
         keys = sorted(groups)
         self.status["eligible_symbols"] = len(keys)
         remaining = [key for key in keys if self._cursor is None or key > self._cursor]
@@ -299,12 +361,7 @@ class MultiExchangePremiumMonitor:
         if not settings.multi_exchange_premium_alert_enabled:
             return
         now = datetime.now(UTC)
-        current = eligible_groups(self.app.state.snapshot_store.get_markets(), settings, now)
-        by_market = {
-            MarketKey.from_snapshot(market).key: (key, market)
-            for key, markets in current.items()
-            for market in markets
-        }
+        current, by_market = self._current_eligibility(settings, now)
         observations = defaultdict(list)
         for result in results:
             if result is None:
@@ -314,6 +371,8 @@ class MultiExchangePremiumMonitor:
             if live is None:
                 continue
             key, latest = live
+            if key not in current or utc(latest.binding_valid_until) <= now:
+                continue
             if (latest.asset_id, latest.binding_revision, latest.binding_fingerprint) != (
                 market.asset_id,
                 market.binding_revision,
