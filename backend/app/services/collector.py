@@ -236,6 +236,8 @@ class MarketCollector:
                     return_exceptions=True,
                 )
                 await self._store_poll_results(due_adapters, results, now)
+                # Do not retain the consumed poll batch across post-processing yields.
+                del results
 
         with self.stage_timings.measure(sample, "prepare"):
             validation_epoch = getattr(self.market_validation, "_mutation_epoch", None)
@@ -246,6 +248,8 @@ class MarketCollector:
             aliased_markets = await apply_symbol_aliases_async(
                 markets, risk.symbol_aliases, budget=budget,
             )
+            # Do not retain the consumed unpacked batch across later yields.
+            del markets
             if self.market_validation is not None:
                 aliased_markets = await self.market_validation.prepare(aliased_markets, risk)
             filtered_markets = await filter_markets_async(
