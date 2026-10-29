@@ -242,3 +242,9 @@ git -c http.sslBackend=openssl push origin HEAD:codex/frontend-localization-poli
 保留任务开始时全部未跟踪文件：四个既有 .pytest_yield_* 数据库目录、任务书和本地基准；本轮新生成的测试目录同样保留且不暂存。只暂存上述五个文件。
 
 按用户要求未部署、未做线上备份或线上验收；本地性能不代表线上验证。连续映射更新触发第三次同步兜底时会暂时放弃协作让出，这是任务书指定的有限重试行为。下一模块或部署请另开任务，沿用本交接。
+
+## 发布记录（2026-10-29，Claude 执行部署）
+- 08:34 CST 上线 ddda20b，DEPLOY_EXIT=0，live/ready 200。
+- /api/health/live 每 0.2s 探测 90s：修复前 9 次 3.46–4.54s；修复后（稳定期）max 1.56s，>1s 1 次，>0.5s 18 次。
+- loop_stall 日志：采集路径不再出现；剩余 1 次 1.7s 来自 announcements.py 公告正则解析（fetch_api→_parse_payload→extract_event_schedule/_time）。
+- 剩余亚秒延迟主因 CPU 争用：2 核机器 load 2.8–3.4，同机 node 进程 ~/arb-mvp-live（live-mainnet）约 62%、~/arb-mvp（example config）约 50%，taoli1 uvicorn 约 37%。
