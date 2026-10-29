@@ -31,3 +31,8 @@
 
 ## 5 派发
 - Codex：gpt-6-astra high（涉及异步等待期间的状态变化，等价性要求高）。不要跑 WSL，不要联网。上线需另行申请批准。
+
+## 6 修订（Claude，10-29，回应 Codex 发现的冲突）
+- 冲突：绑定接口替换行情（`snapshot_store.set_markets`）时不会增加 `generation`，所以只用 `(generation, settings)` 作缓存 key 会漏掉绑定变化。
+- **批准增加行对象身份校验**，做法固定如下：缓存保存上一次输入的 `markets` 列表（`get_markets()` 返回的那个副本）的引用；命中条件是 `generation` 和 settings 指纹都相同、`len` 相同，并且 `all(a is b for a, b in zip(old, new))`。不允许用 `id()` 元组或哈希代替身份比较（对象回收后 id 可能被复用）。缓存仍然只保留 1 份。
+- 微基准里要单独打印身份校验本身的耗时（1.24 万行）。
