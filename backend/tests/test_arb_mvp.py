@@ -274,3 +274,48 @@ async def test_other_status_codes_do_not_surface_response_message(status, expect
 
     result = await ArbMvpClient("http://arb.test", "secret-test", transport=httpx.MockTransport(handler)).add_pair({"name": "BTC"})
     assert not result.success and result.message == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url", ["http://arb.test:bad", "ftp://arb.test", "http:///", "/relative"])
+async def test_invalid_url_fails_before_transport(url, caplog):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(200, json={"code": 0, "data": {"config": {"name": "BTC"}}})
+
+    result = await ArbMvpClient(url, "secret-test", transport=httpx.MockTransport(handler)).add_pair({"name": "BTC"})
+    assert not result.success and result.message == "arb-mvp 地址配置错误"
+    assert len(calls) == 0
+    assert "secret-test" not in result.message + caplog.text
+
+
+@pytest.mark.asyncio
+async def test_unexpected_transport_error_is_unknown_without_retry(caplog):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        raise RuntimeError("secret-test x-sign transport failure")
+
+    result = await ArbMvpClient("http://arb.test", "secret-test", transport=httpx.MockTransport(handler)).add_pair({"name": "BTC"})
+    assert not result.success and result.message == "结果未知，请到 arb-mvp 界面确认是否已建卡，不要直接重试"
+    assert len(calls) == 1
+    assert "secret-test" not in result.message + caplog.text
+    assert "x-sign" not in result.message + caplog.text
+
+
+@pytest.mark.asyncio
+async def test_transport_cancellation_propagates_without_retry():
+    import asyncio
+
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        raise asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        await ArbMvpClient("http://arb.test", "secret-test", transport=httpx.MockTransport(handler)).add_pair({"name": "BTC"})
+    assert len(calls) == 1

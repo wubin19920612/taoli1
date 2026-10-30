@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -105,6 +105,56 @@ describe("DashboardPage", () => {
     expect(screen.getByText("lighter:future")).toBeTruthy();
     expect(screen.queryByText("交易所链路状态加载中")).toBeNull();
   });
+
+  it("keeps Astro sizing through pending Astro then live then Astro previews", async () => {
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    const originalPlan = { opportunity_id: "opp-1", symbol: "BTCUSDT", source_open_spread_pct: 0.8, can_submit: true,
+      pair: {name: "BTC", maxTradeUSDT: "10", leverage: "1", minNotional: "10", maxNotional: "10", disableOpen: true},
+      route_variants: [{card_variant: "non_gc", buy_exchange: "binance", sell_exchange: "okx"}],
+      card_variant: "non_gc", warnings: [], blockers: [], assumptions: [] };
+    const pendingAstro: Array<(response: Response) => void> = [];
+    let astroRequests = 0;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/arb-mvp/status")) return Response.json({paper: {configured: true}, live: {configured: true}, default_max_position_usd: 150});
+      if (url.includes("/astro/preview/opp-1")) {
+        if (url.includes("target=arb_")) return Response.json({...originalPlan, route_variants: [],
+          pair: {name: "BTC", type: "FF", maxPositionUsd: "150", minOrderUsd: "10", maxOrderUsd: "10", legA: {leverage: 1}, disableOpen: true}});
+        if (++astroRequests === 1) return Response.json(originalPlan);
+        return new Promise<Response>((resolve) => pendingAstro.push(resolve));
+      }
+      if (url.includes("/astro/opportunities/opp-1/card")) return Response.json({enabled: true, status: "created", message: "created", warnings: []});
+      if (url.includes("/opportunities")) return Response.json([baseOpportunity]);
+      return fallback(input, init);
+    });
+    render(<DashboardPage />);
+    await userEvent.click(await screen.findByRole("button", {name: "Astro BTCUSDT"}));
+    await waitFor(() => expect((screen.getByLabelText("Position value USDT") as HTMLInputElement).value).toBe("10"));
+    await userEvent.click(screen.getByRole("radio", {name: "arb-mvp 模拟盘"}));
+    await waitFor(() => expect((screen.getByLabelText("最大持仓 (USD)") as HTMLInputElement).value).toBe("150"));
+    await userEvent.click(screen.getByRole("radio", {name: "Astro"}));
+    await waitFor(() => expect(pendingAstro).toHaveLength(1));
+    expect((screen.getByRole("button", {name: "创建卡片"}) as HTMLButtonElement).disabled).toBe(true);
+    await userEvent.click(screen.getByRole("button", {name: "创建卡片"}));
+    expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes("/astro/opportunities/opp-1/card"))).toHaveLength(0);
+    await userEvent.click(screen.getByRole("radio", {name: "arb-mvp live"}));
+    await waitFor(() => expect((screen.getByLabelText("最大持仓 (USD)") as HTMLInputElement).value).toBe("150"));
+    await userEvent.click(screen.getByRole("radio", {name: "Astro"}));
+    await waitFor(() => expect(pendingAstro).toHaveLength(2));
+    // An obsolete Astro response must not make the current preview submittable.
+    await act(async () => { pendingAstro[0](Response.json({...originalPlan, pair: {...originalPlan.pair, maxTradeUSDT: "999"}})); });
+    expect((screen.getByRole("button", {name: "创建卡片"}) as HTMLButtonElement).disabled).toBe(true);
+    expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes("/astro/opportunities/opp-1/card"))).toHaveLength(0);
+    await act(async () => { pendingAstro[1](Response.json(originalPlan)); });
+    await waitFor(() => expect((screen.getByRole("button", {name: "创建卡片"}) as HTMLButtonElement).disabled).toBe(false));
+    await userEvent.click(screen.getByRole("button", {name: "创建卡片"}));
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes("/astro/opportunities/opp-1/card"))).toHaveLength(1));
+    const call = vi.mocked(fetch).mock.calls.find(([url]) => String(url).includes("/astro/opportunities/opp-1/card"))!;
+    const payload = JSON.parse(String(call[1]?.body));
+    expect(payload.target).toBe("astro");
+    expect(payload.max_trade_usdt).toBe(10);
+    expect((screen.getByLabelText("Position value USDT") as HTMLInputElement).value).toBe("10");
+  }, 20000);
 
   it("arb-mvp switches preview, isolates sizing, confirms live, and sends target", async () => {
     const fallback = vi.mocked(fetch).getMockImplementation()!;

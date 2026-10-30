@@ -537,7 +537,9 @@ export function DashboardPage() {
   const [astroSizingForm] = Form.useForm<AstroSizingFormValues>();
   const [cardTarget, setCardTarget] = useState<CardTarget>("astro");
   const [arbStatus, setArbStatus] = useState<ArbMvpStatus | null>(null);
-  const astroPositionRef = useRef<number | undefined>();
+  const astroSizingRef = useRef<Partial<Pick<AstroSizingFormValues, "max_trade_usdt" | "leverage" | "min_notional" | "max_notional">>>({});
+  const arbSizingRef = useRef<Partial<Pick<AstroSizingFormValues, "max_trade_usdt" | "leverage" | "min_notional" | "max_notional">>>({});
+  const [readyPreviewTarget, setReadyPreviewTarget] = useState<CardTarget | null>(null);
   const astroPreviewRequestIdRef = useRef(0);
 
   const [filters, setFilters] = useState<OpportunityFilters>(() => initialDashboardFilters());
@@ -670,6 +672,7 @@ export function DashboardPage() {
     astroPreviewRequestIdRef.current += 1;
     setAstroPreviewOpportunity(null);
     setAstroPreviewPlan(null);
+    setReadyPreviewTarget(null);
     setAstroPreviewError(null);
     setAstroPreviewLoading(false);
     setAstroSubmitLoading(false);
@@ -684,11 +687,13 @@ export function DashboardPage() {
     setAstroPreviewOpportunity(opportunity);
     setCardTarget("astro");
     setArbStatus(null);
-    astroPositionRef.current = undefined;
+    astroSizingRef.current = {};
+    arbSizingRef.current = {};
     void getArbMvpStatus().then((status) => {
       if (requestId === astroPreviewRequestIdRef.current) setArbStatus(status);
     }).catch(() => {});
     setAstroPreviewPlan(null);
+    setReadyPreviewTarget(null);
     setAstroPreviewError(null);
     setAstroSubmitResult(null);
     setAstroSubmitError(null);
@@ -698,6 +703,7 @@ export function DashboardPage() {
       if (requestId !== astroPreviewRequestIdRef.current) return;
       setAstroPreviewPlan(plan);
       if (plan.pair) {
+        setReadyPreviewTarget("astro");
         astroSizingForm.setFieldsValue(sizingFromPlan(plan));
       } else {
         astroSizingForm.resetFields();
@@ -712,10 +718,15 @@ export function DashboardPage() {
 
   const changeCardTarget = async (target: CardTarget) => {
     if (astroSubmitLoading || target === cardTarget || !astroPreviewOpportunity) return;
-    if (cardTarget === "astro") astroPositionRef.current = astroSizingForm.getFieldValue("max_trade_usdt");
+    if (!astroPreviewLoading && readyPreviewTarget === cardTarget && astroPreviewPlan?.pair) {
+      const sizing = astroSizingForm.getFieldsValue(["max_trade_usdt", "leverage", "min_notional", "max_notional"]);
+      if (cardTarget === "astro") astroSizingRef.current = sizing;
+      else arbSizingRef.current = sizing;
+    }
     const requestId = ++astroPreviewRequestIdRef.current;
     setCardTarget(target);
     setAstroPreviewPlan(null);
+    setReadyPreviewTarget(null);
     setAstroPreviewLoading(true);
     setAstroPreviewError(null);
     setAstroSubmitError(null);
@@ -725,15 +736,17 @@ export function DashboardPage() {
       if (requestId !== astroPreviewRequestIdRef.current) return;
       setAstroPreviewPlan(plan);
       if (plan.pair) {
+        setReadyPreviewTarget(target);
         if (target === "astro") {
           astroSizingForm.setFieldsValue(sizingFromPlan(plan));
-          if (astroPositionRef.current !== undefined) astroSizingForm.setFieldValue("max_trade_usdt", astroPositionRef.current);
+          astroSizingForm.setFieldsValue(astroSizingRef.current);
         } else {
           astroSizingForm.setFieldsValue({
             max_trade_usdt: Number(plan.pair.maxPositionUsd ?? arbStatus?.default_max_position_usd ?? 100),
             leverage: Number((plan.pair.legA as {leverage?: number})?.leverage ?? 1),
             min_notional: Number(plan.pair.minOrderUsd), max_notional: Number(plan.pair.maxOrderUsd),
-            open_enabled: false, card_variant: "both", save_as_default: false
+            open_enabled: false, card_variant: "both", save_as_default: false,
+            ...arbSizingRef.current
           });
         }
       }
@@ -745,7 +758,9 @@ export function DashboardPage() {
   };
 
   const submitAstroCard = async () => {
-    if (!astroPreviewOpportunity || !astroPreviewPlan?.can_submit) {
+    if (astroSubmitLoading || astroPreviewLoading || readyPreviewTarget !== cardTarget) return;
+    const previewRequestId = astroPreviewRequestIdRef.current;
+    if (!astroPreviewOpportunity || !astroPreviewPlan?.pair || !astroPreviewPlan.can_submit) {
       return;
     }
     setAstroSubmitLoading(true);
@@ -753,6 +768,7 @@ export function DashboardPage() {
     setAstroSubmitError(null);
     try {
       const sizing = await astroSizingForm.validateFields();
+      if (previewRequestId !== astroPreviewRequestIdRef.current) return;
       if (cardTarget === "arb_live") {
         const confirmed = await new Promise<boolean>((resolve) => {
           Modal.confirm({ title: `将在 arb-mvp live（主网）上架卡片 ${String(astroPreviewPlan?.pair?.name ?? "")}，不会下单`,
@@ -817,9 +833,10 @@ export function DashboardPage() {
   };
 
   const astroSubmitDisabled =
+    readyPreviewTarget !== cardTarget ||
     astroPreviewLoading ||
     astroSubmitLoading ||
-    !astroPreviewPlan ||
+    !astroPreviewPlan?.pair ||
     !astroPreviewPlan.can_submit ||
     (cardTarget === "astro" && !supportsAstroCardVariant(astroPreviewPlan.route_variants, selectedCardVariant));
 

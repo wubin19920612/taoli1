@@ -1,6 +1,7 @@
 from dataclasses import replace
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -11,6 +12,9 @@ from app.models.settings import AstroCardSettings, RiskSettings
 from app.services.arb_mvp_client import ArbMvpClient, ArbMvpResult
 from app.services.snapshot_store import SnapshotStore
 from test_arb_mvp import arb_opportunity
+
+
+REAL_ADD_PAIR = ArbMvpClient.add_pair
 
 
 @pytest.fixture
@@ -137,3 +141,36 @@ async def test_arb_default_persists_separately():
         await repo.set_arb_mvp_default_max_position_usd(150)
         assert await SettingsRepository(db).get_arb_mvp_default_max_position_usd() == 150
         assert (await repo.get_astro_card_settings()).max_trade_usdt == 25
+
+
+@pytest.mark.parametrize("target", ["arb_paper", "arb_live"])
+@pytest.mark.parametrize("instrument", [False, True])
+@pytest.mark.parametrize("invalid_url", [True, False])
+def test_client_configuration_and_transport_errors_return_failed_not_500(context, monkeypatch, target, instrument, invalid_url):
+    app, client, _, service, _ = context
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        raise RuntimeError("private transport failure")
+
+    real_client = ArbMvpClient("http://arb.test:bad" if invalid_url else "http://arb.test",
+                               "secret-test", transport=httpx.MockTransport(handler))
+
+    async def add_pair(self, pair):
+        return await REAL_ADD_PAIR(real_client, pair)
+
+    monkeypatch.setattr(ArbMvpClient, "add_pair", add_pair)
+    if instrument:
+        response = client.post("/api/astro/instrument/card", json={
+            "route": {"symbol": "BTC", "buy_exchange": "hyperliquid", "sell_exchange": "lighter",
+                      "buy_market_type": "future", "sell_market_type": "future"},
+            "expected_open_spread_pct": 0.8, "card": {"target": target}})
+    else:
+        response = client.post("/api/astro/opportunities/opp-1/card", json={"target": target})
+    assert response.status_code == 200
+    assert response.json()["status"] == "failed"
+    assert response.json()["message"] == ("arb-mvp 地址配置错误" if invalid_url else
+        "结果未知，请到 arb-mvp 界面确认是否已建卡，不要直接重试")
+    assert len(calls) == (0 if invalid_url else 1)
+    service.handle_manual_create.assert_not_called()

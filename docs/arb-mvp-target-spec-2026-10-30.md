@@ -312,3 +312,111 @@ EXIT_CODE=0
 - 三项验收全部通过；`git diff --check` 通过。复核仅本轮五个文件的差异后，按消息 `fix: send arb-mvp sizes as decimal strings and surface rejection reasons` 新建一个本地提交；不 amend、不 push、不部署。
 - 原始测试日志留在上述临时目录，不纳入提交。本任务书继续作为交接记录，既有 PM 决定及历史验收记录完整保留。
 - 本轮完成 PM 决定 2 的四条范围；真实服务契约/建卡、生产配置及线上运行未做验收。后续审阅、推送或部署由 PM 在新任务安排。
+
+## PM 决定 3（2026-10-30，只读审查 4a540c0 的两个 P2）
+
+审查日志：`output/arb-mvp-target-review-20261030.log`。
+1. `backend/app/services/arb_mvp_client.py:63`：`httpx.InvalidURL` 等非 `HTTPError` 异常穿透到建卡主流程（错误 URL 如 `http://arb.test:bad` 复现 500）。改为：构造请求前校验 URL（http/https、有 host），非法 → 失败"arb-mvp 地址配置错误"；发送阶段捕获所有 `Exception`（不吞 `asyncio.CancelledError`）→ UNKNOWN_RESULT。建卡路由任何情况下不返回 500。加测试（错误 URL、transport 抛任意异常各一例，断言只请求 ≤1 次）。
+2. `frontend/src/pages/DashboardPage.tsx:719`、`InstrumentLookupPage.tsx:1585`：Astro(10)→paper(150)→Astro 预览未完成→live→Astro 的切换顺序会把 arb 尺寸 150 缓存成 Astro 尺寸并提交。改为：Astro 尺寸与 arb 尺寸分开保存，只在"当前显示的是 Astro 档且 Astro 预览已就绪"时更新 Astro 缓存；提交时以当前 target 和对应已就绪预览为准，预览未就绪禁止提交。两页各加一个复现该顺序的测试。
+3. 跑前端全量、`npx tsc -b`、后端全量，全过后新建 commit `fix: harden arb-mvp client errors and target switch sizing`，不 push。
+
+
+## PM 决定 3 的实现与验收记录（2026-10-30）
+
+### 范围与实现
+
+- 基线 `4a540c0`，分支 `codex/arb-mvp-target`，工作树 `taoli1/.worktrees/arb-mvp-target`。开始时仅本任务书末尾的「PM 决定 3」未提交，完整保留该内容。本轮仅处理该决定的三条，不 push、不部署。
+- `backend/app/services/arb_mvp_client.py`：构造请求前用 `httpx.URL` 解析并检查 http/https 及 host；非法 URL（包括非法端口）直接返回「arb-mvp 地址配置错误」。发送及响应解码阶段捕获 `Exception`，统一返回 `UNKNOWN_RESULT`，不重试、不泄漏异常内容；`asyncio.CancelledError` 继续向上传播。
+- 两页分别保存 Astro/arb 的金额、杠杆和最小/最大订单尺寸；只在当前 target 的预览已就绪且有 pair 时保存对应表单缓存。打开弹窗重置两份缓存；切档立即清除预览就绪状态，最新响应填入对应缓存后才就绪。提交按钮及提交入口均校验就绪 target，表单异步校验后再次核对预览请求编号，继续过滤过期响应。
+- 两页各新增一个完整复现：Astro(10) → paper(150) → Astro 预览挂起 → live → Astro；挂起期间不能提交，旧 Astro 响应不能解除禁用，最终实际发送 `target=astro, max_trade_usdt=10`。
+- 后端新增非法 URL、任意 transport 异常及取消传播测试；非法 URL 不触发 transport，任意异常只触发一次。两个建卡入口 × paper/live × URL/transport 故障共八种路由组合，验证返回 HTTP 200、业务 `status=failed`，不调用 Astro 服务。
+- 原有测试断言未修改；未修改禁止文件、依赖、部署脚本或 CI，未访问 WSL、生产服务器、真实 Astro、arb-mvp 或交易所。
+
+### 先失败、后修复的记录
+
+日志均保留在 `C:/Users/wubin/AppData/Local/Temp/`，以下命令分别在本工作树 `frontend`、`backend` 执行。
+
+前端先增加复现测试，在实现改动前执行：
+
+```powershell
+npm test -- tests/DashboardPage.test.tsx tests/InstrumentLookupPage.test.tsx -t 'keeps Astro sizing'
+```
+
+```text
+Test Files  2 failed (2)
+     Tests  2 failed | 66 skipped (68)
+AssertionError: expected 150 to be 10 // Object.is equality
+EXIT_CODE=1
+```
+
+两页均在实际提交 payload 的金额断言失败。原始日志 `arb-mvp-pm3-frontend-red-20261030.log` 及同次运行的可读转码副本 `arb-mvp-pm3-frontend-red-20261030-utf8.log` 均保留；这次运行末尾另有已知 junction 缓存写入 `EPERM`，不影响上述两个用例确实失败的证据。修复后使用同一筛选加 `--cache=false` 定向检查，`2 passed | 66 skipped (68)`、退出码 0，日志 `arb-mvp-pm3-frontend-targeted-20261030.log`；正式全量仍按原始 `npm test` 命令执行。
+
+后端先新增测试，再在实现改动前执行：
+
+```powershell
+& 'C:/Users/wubin/AppData/Local/Temp/claude/D-------claude---/7f276a81-4df2-4527-bc65-b410f9d557b6/scratchpad/venv-lock/Scripts/python.exe' -m pytest -q -p no:cacheprovider tests/test_arb_mvp.py tests/test_arb_mvp_routes.py
+```
+
+```text
+13 failed, 66 passed, 1 warning in 11.09s
+EXIT_CODE=1
+```
+
+原始日志 `arb-mvp-pm3-backend-red-20261030.log` 及可读转码副本保留。首次修复后定向检查发现生成测试时 PowerShell 编码导致 UNKNOWN_RESULT 的中文预期损坏（`5 failed, 74 passed`），记录在 `arb-mvp-pm3-backend-targeted-20261030.log`；修正测试文本后，临时以 HEAD 原始客户端重跑上述命令，并在 finally 恢复修复版客户端，独立确认：
+
+```text
+13 failed, 66 passed, 1 warning in 13.13s
+EXIT_CODE=1
+```
+
+此确认日志为 `arb-mvp-pm3-backend-red-confirmed-20261030.log`，包含完整命令和基线实现说明。失败分别来自四种 URL、任意 transport 异常及八个路由组合；取消传播用例原本即通过。修复版随后进入下述后端全量验收。
+
+### 三项全量验收
+
+前端（工作目录 `frontend`）：
+
+```powershell
+npm test
+```
+
+```text
+Test Files  28 passed (28)
+     Tests  308 passed (308)
+  Duration  84.70s
+EXIT_CODE=0
+```
+
+日志：`arb-mvp-pm3-frontend-full-20261030.log`。按本任务书既有 junction 缓存权限处理，经工具权限审查允许写入 Vitest 缓存后执行完整原命令。
+
+类型检查（工作目录 `frontend`）：
+
+```powershell
+npx tsc -b
+```
+
+```text
+无诊断输出
+EXIT_CODE=0
+```
+
+日志：`arb-mvp-pm3-tsc-20261030.log`。
+
+
+后端全量（工作目录 `backend`，任务书指定锁定依赖 venv）：
+
+```powershell
+& 'C:/Users/wubin/AppData/Local/Temp/claude/D-------claude---/7f276a81-4df2-4527-bc65-b410f9d557b6/scratchpad/venv-lock/Scripts/python.exe' -m pytest -q -p no:cacheprovider
+```
+
+```text
+2382 passed, 6 deselected, 13 warnings in 126.30s (0:02:06)
+EXIT_CODE=0
+```
+
+日志：`arb-mvp-pm3-backend-full-20261030.log`。6 项 deselected 来自仓库既有 `not network and not benchmark` 配置；13 条 warnings 为 Starlette/httpx 与 `datetime.utcnow` 弃用提示。前端 stderr 原样保留，最终 Vitest 无失败用例、退出码 0。
+
+### 本地交付与交接
+
+- 三项全量验收全部通过，`git diff --check` 通过。复核差异仅涉及本轮八个文件，按指定消息 `fix: harden arb-mvp client errors and target switch sizing` 新建一个本地 commit；不 amend、不 push、不部署。
+- 本任务书继续作为交接记录；既有 PM 决定、历史实现记录及原始日志完整保留，日志不纳入提交。本轮没有发现需新增「待 PM 决定」的问题。
+- 验收限于本地离线测试，未验证生产配置或真实建卡。下一步如需审阅、推送或部署，由 PM 另开任务安排；本轮在此停止。

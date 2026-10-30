@@ -43,6 +43,12 @@ class ArbMvpClient:
         self._transport = transport
 
     async def add_pair(self, pair: dict) -> ArbMvpResult:
+        try:
+            url = httpx.URL(self._url)
+            if url.scheme not in {"http", "https"} or not url.host:
+                return ArbMvpResult(False, "arb-mvp 地址配置错误")
+        except (httpx.InvalidURL, ValueError):
+            return ArbMvpResult(False, "arb-mvp 地址配置错误")
         # Enforce the money boundary again at the only outbound write point.
         pair = {**pair, "disableOpen": True}
         body = json.dumps({"action": "add", "pair": pair}, ensure_ascii=False,
@@ -59,7 +65,9 @@ class ArbMvpClient:
                     "x-nonce": nonce, "x-sign": signature,
                 })
             data = response.json()
-        except (httpx.HTTPError, ValueError):
+        except Exception:
+            # Transport failures may occur after the add was accepted. Never
+            # retry or expose exception details; CancelledError still propagates.
             return ArbMvpResult(False, UNKNOWN_RESULT)
         if not isinstance(data, dict):
             return ArbMvpResult(False, UNKNOWN_RESULT)
