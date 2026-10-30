@@ -88,7 +88,7 @@ def test_pair_spread_preset_api_syncs_devices_and_protects_writes() -> None:
     payload = _preset("BTC", now, hours=12).model_dump(mode="json", by_alias=True)
 
     with TestClient(app) as client:
-        assert client.get("/api/pair-spread/presets").json() == []
+        assert client.get("/api/pair-spread/presets", headers={"X-Dashboard-Password": "secret"}).json() == []
 
         unauthorized = client.post(
             "/api/pair-spread/presets/merge",
@@ -110,7 +110,7 @@ def test_pair_spread_preset_api_syncs_devices_and_protects_writes() -> None:
         assert merged.json()[0]["leg2_price_multiplier"] == 10
 
         # A second device reads the same server-side list without browser storage.
-        second_device = client.get("/api/pair-spread/presets")
+        second_device = client.get("/api/pair-spread/presets", headers={"X-Dashboard-Password": "secret"})
         assert second_device.status_code == 200
         assert second_device.json()[0]["hours"] == 12
 
@@ -130,7 +130,7 @@ def test_pair_spread_preset_api_syncs_devices_and_protects_writes() -> None:
         assert unauthorized_delete.status_code == 401
         deleted = client.delete("/api/pair-spread/presets/BTC", headers=headers)
         assert deleted.status_code == 200
-        assert client.get("/api/pair-spread/presets").json() == []
+        assert client.get("/api/pair-spread/presets", headers={"X-Dashboard-Password": "secret"}).json() == []
 
 
 def test_file_backed_presets_can_save_while_collector_has_a_stale_snapshot(tmp_path) -> None:
@@ -168,7 +168,7 @@ def test_file_backed_presets_can_save_while_collector_has_a_stale_snapshot(tmp_p
             assert response.json()["leg1_dex"] == "io"
             assert response.json()["leg2_exchange"] == "rh-lighter"
             assert app.state.db.in_transaction  # Saving must not commit the collector's work.
-            assert client.get("/api/pair-spread/presets").json()[0]["id"] == preset.id
+            assert client.get("/api/pair-spread/presets", headers={"X-Dashboard-Password": "secret"}).json()[0]["id"] == preset.id
         finally:
             client.portal.call(app.state.db.rollback)
 
@@ -235,7 +235,7 @@ def test_preset_api_reports_busy_then_recovers_without_a_restart(tmp_path) -> No
         finally:
             blocker.rollback()
         assert client.put("/api/pair-spread/presets/BTC", headers=headers, json=payload).status_code == 200
-        assert client.get("/api/pair-spread/presets").json()[0]["id"] == "BTC"
+        assert client.get("/api/pair-spread/presets", headers={"X-Dashboard-Password": "secret"}).json()[0]["id"] == "BTC"
         assert client.delete("/api/pair-spread/presets/BTC", headers=headers).status_code == 200
 
 

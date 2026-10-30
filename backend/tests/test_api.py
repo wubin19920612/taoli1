@@ -678,7 +678,7 @@ def test_phone_price_alert_rule_endpoints_round_trip() -> None:
     assert created["symbol"] == "BTCUSDT"
     assert created["exchange"] == "binance"
 
-    list_response = client.get("/api/phone-alerts/rules")
+    list_response = client.get("/api/phone-alerts/rules", headers={"X-Dashboard-Password": "secret"})
 
     assert list_response.status_code == 200
     assert list_response.json()[0]["name"] == "BTC breakout"
@@ -1742,14 +1742,14 @@ def test_pair_spread_funding_record_endpoints_round_trip() -> None:
         app.state.pair_spread_funding_recorder = fake_recorder
         headers = {"X-Dashboard-Password": "secret"}
 
-        watchlist_response = client.get("/api/pair-spread/funding-records/watchlist")
+        watchlist_response = client.get("/api/pair-spread/funding-records/watchlist", headers={"X-Dashboard-Password": "secret"})
         assert watchlist_response.status_code == 200
         assert watchlist_response.json() == []
 
         status_response = client.get(
             "/api/pair-spread/funding-records/status"
             "?leg1_exchange=binance&leg1_symbol=btc&leg2_exchange=okx&leg2_symbol=btc"
-            "&leg1_market_type=future&leg2_market_type=future&hours=6&leg2_multiplier=1"
+            "&leg1_market_type=future&leg2_market_type=future&hours=6&leg2_multiplier=1", headers={"X-Dashboard-Password": "secret"}
         )
         assert status_response.status_code == 200
         assert status_response.json()["watched"] is False
@@ -1765,14 +1765,14 @@ def test_pair_spread_funding_record_endpoints_round_trip() -> None:
         assert started["item"]["sample_count"] == 1
         assert started["samples"][0]["net_rate_pct"] == pytest.approx(0.03)
 
-        watchlist_response = client.get("/api/pair-spread/funding-records/watchlist")
+        watchlist_response = client.get("/api/pair-spread/funding-records/watchlist", headers={"X-Dashboard-Password": "secret"})
         assert watchlist_response.status_code == 200
         assert watchlist_response.json()[0]["sample_count"] == 1
 
         status_response = client.get(
             "/api/pair-spread/funding-records/status"
             "?leg1_exchange=binance&leg1_symbol=btc&leg2_exchange=okx&leg2_symbol=btc"
-            "&leg1_market_type=future&leg2_market_type=future&hours=6&leg2_multiplier=1"
+            "&leg1_market_type=future&leg2_market_type=future&hours=6&leg2_multiplier=1", headers={"X-Dashboard-Password": "secret"}
         )
         assert status_response.status_code == 200
         assert status_response.json()["watched"] is True
@@ -1787,7 +1787,7 @@ def test_pair_spread_funding_record_endpoints_round_trip() -> None:
         assert stop_response.status_code == 200
         assert stop_response.json()["watched"] is False
 
-        watchlist_response = client.get("/api/pair-spread/funding-records/watchlist")
+        watchlist_response = client.get("/api/pair-spread/funding-records/watchlist", headers={"X-Dashboard-Password": "secret"})
         assert watchlist_response.status_code == 200
         assert watchlist_response.json() == []
 
@@ -2372,7 +2372,7 @@ def test_alert_message_template_settings_endpoint_roundtrips() -> None:
     app = create_app(settings=Settings(dashboard_password="secret", database_url="sqlite:///:memory:"))
 
     with TestClient(app) as client:
-        response = client.get("/api/settings/alert-message-template")
+        response = client.get("/api/settings/alert-message-template", headers={"X-Dashboard-Password": "secret"})
         assert response.status_code == 200
         payload = response.json()
         assert payload["format"] == "compact"
@@ -2398,7 +2398,7 @@ def test_alert_message_template_settings_endpoint_roundtrips() -> None:
         assert saved.json()["suppress_when_card_conditions_fail"] is False
         assert saved.json()["observation_limit"] == 2
 
-        reloaded = client.get("/api/settings/alert-message-template")
+        reloaded = client.get("/api/settings/alert-message-template", headers={"X-Dashboard-Password": "secret"})
         assert reloaded.status_code == 200
         assert reloaded.json()["include_observations"] is False
         assert reloaded.json()["suppress_when_card_conditions_fail"] is False
@@ -2560,7 +2560,7 @@ def test_astro_card_settings_endpoint_roundtrips() -> None:
     app = create_app(settings=Settings(dashboard_password="secret", database_url="sqlite:///:memory:"))
 
     with TestClient(app) as client:
-        response = client.get("/api/settings/astro-card")
+        response = client.get("/api/settings/astro-card", headers={"X-Dashboard-Password": "secret"})
         assert response.status_code == 200
         payload = response.json()
         assert payload["max_trade_usdt"] == 10
@@ -2594,7 +2594,7 @@ def test_astro_card_settings_endpoint_roundtrips() -> None:
         assert saved.json()["open_enabled"] is True
         assert saved.json()["close_position_buffer_pct"] == 0.2
 
-        reloaded = client.get("/api/settings/astro-card")
+        reloaded = client.get("/api/settings/astro-card", headers={"X-Dashboard-Password": "secret"})
         assert reloaded.status_code == 200
         assert reloaded.json()["max_notional"] == 75
         assert reloaded.json()["open_enabled"] is True
@@ -2619,7 +2619,7 @@ def test_astro_automation_settings_endpoint_updates_runtime_service() -> None:
     app.state.astro_alert_service = AstroAlertService(FakeAstroPairClient(), app.state.settings)
 
     with TestClient(app) as client:
-        response = client.get("/api/settings/astro-automation")
+        response = client.get("/api/settings/astro-automation", headers={"X-Dashboard-Password": "secret"})
         assert response.status_code == 200
         assert response.json()["alert_auto_create"] is False
         assert response.json()["allow_same_name_variants"] is False
@@ -2644,7 +2644,7 @@ def test_astro_automation_settings_endpoint_updates_runtime_service() -> None:
         assert app.state.astro_alert_service.alert_auto_create_enabled is True
         assert app.state.astro_alert_service.allow_same_name_variants is True
 
-        reloaded = client.get("/api/settings/astro-automation")
+        reloaded = client.get("/api/settings/astro-automation", headers={"X-Dashboard-Password": "secret"})
         assert reloaded.status_code == 200
         assert reloaded.json()["alert_auto_create"] is True
         assert reloaded.json()["allow_same_name_variants"] is True
@@ -2654,7 +2654,7 @@ def test_live_pilot_settings_endpoint_roundtrips() -> None:
     app = create_app(settings=Settings(dashboard_password="secret", database_url="sqlite:///:memory:"))
 
     with TestClient(app) as client:
-        response = client.get("/api/settings/live-pilot")
+        response = client.get("/api/settings/live-pilot", headers={"X-Dashboard-Password": "secret"})
         assert response.status_code == 200
         payload = response.json()
         assert payload["enabled"] is False
@@ -2683,7 +2683,7 @@ def test_live_pilot_settings_endpoint_roundtrips() -> None:
         assert saved.json()["max_symbols"] == 7
         assert saved.json()["notional_per_symbol_usdt"] == 125
 
-        reloaded = client.get("/api/settings/live-pilot")
+        reloaded = client.get("/api/settings/live-pilot", headers={"X-Dashboard-Password": "secret"})
         assert reloaded.status_code == 200
         assert reloaded.json()["min_next_funding_edge_pct"] == -0.03
         assert reloaded.json()["prefer_hyperliquid"] is False
@@ -3301,7 +3301,7 @@ def test_astro_preview_endpoint_uses_saved_card_defaults(confirmed_market_valida
         )
         assert saved.status_code == 200
 
-        response = client.get("/api/astro/preview/opp")
+        response = client.get("/api/astro/preview/opp", headers={"X-Dashboard-Password": "secret"})
 
     assert response.status_code == 200
     payload = response.json()
@@ -3379,7 +3379,7 @@ def test_astro_preview_endpoint_uses_saved_defaults_even_when_they_match_model_d
         )
         assert saved.status_code == 200
 
-        response = client.get("/api/astro/preview/opp")
+        response = client.get("/api/astro/preview/opp", headers={"X-Dashboard-Password": "secret"})
 
     assert response.status_code == 200
     payload = response.json()
@@ -3505,7 +3505,7 @@ def test_astro_manual_card_create_endpoint_forwards_overrides_and_saves_defaults
         )
         assert response.status_code == 200
 
-        saved = client.get("/api/settings/astro-card")
+        saved = client.get("/api/settings/astro-card", headers={"X-Dashboard-Password": "secret"})
 
     assert service.requests[0] is not None
     assert service.requests[0].max_trade_usdt == 88
@@ -3840,7 +3840,7 @@ def test_announcement_settings_endpoint_round_trip() -> None:
     assert response.json()["record_exchanges"] == ["okx", "bybit"]
     assert response.json()["alert_exchanges"] == ["bybit"]
     assert response.json()["launchpool_alerts_enabled"] is False
-    listed = client.get("/api/settings/announcements")
+    listed = client.get("/api/settings/announcements", headers={"X-Dashboard-Password": "secret"})
     assert listed.status_code == 200
     assert listed.json()["bootstrap_alerts_enabled"] is True
     assert listed.json()["launchpool_alerts_enabled"] is False

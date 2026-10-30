@@ -383,8 +383,8 @@ def test_preadd_api_saves_rule_with_auth_and_previews_without_writing_astro():
         start_background_workers=False,
     )
     with TestClient(app) as client:
-        assert client.get("/api/astro/preadd/settings").json()["enabled"] is False
-        assert client.get("/api/astro/preadd/preview").json()["total_matches"] == 1
+        assert client.get("/api/astro/preadd/settings", headers={"X-Dashboard-Password": "test-pass"}).json()["enabled"] is False
+        assert client.get("/api/astro/preadd/preview", headers={"X-Dashboard-Password": "test-pass"}).json()["total_matches"] == 1
         assert client.put("/api/astro/preadd/settings", json=AstroPreaddSettings().model_dump()).status_code == 401
         saved = client.put(
             "/api/astro/preadd/settings",
@@ -395,8 +395,8 @@ def test_preadd_api_saves_rule_with_auth_and_previews_without_writing_astro():
             headers={"x-dashboard-password": "test-pass"},
         )
         assert saved.status_code == 200
-        assert client.get("/api/astro/preadd/settings").json()["funding_threshold_pct"] == 0.7
-        assert client.get("/api/astro/preadd/settings").json()["min_volume_24h_usdt"] == 500_000
+        assert client.get("/api/astro/preadd/settings", headers={"X-Dashboard-Password": "test-pass"}).json()["funding_threshold_pct"] == 0.7
+        assert client.get("/api/astro/preadd/settings", headers={"X-Dashboard-Password": "test-pass"}).json()["min_volume_24h_usdt"] == 500_000
         result = client.post("/api/astro/preadd/run", headers={"x-dashboard-password": "test-pass"})
         assert result.status_code == 200
         assert result.json()["created"] == 0

@@ -238,7 +238,7 @@ def test_risk_settings_persist_and_validate(tmp_path):
     url = "sqlite:///" + (tmp_path / "premium.db").as_posix()
     config = Settings(database_url=url, dashboard_password="test-secret")
     with TestClient(create_app(settings=config)) as client:
-        baseline = client.get("/api/settings/risk").json()
+        baseline = client.get("/api/settings/risk", headers={"X-Dashboard-Password": "test-secret"}).json()
         assert baseline["multi_exchange_premium_threshold_pct"] == 2
         payload = {**baseline, "multi_exchange_premium_threshold_pct": 3.5}
         assert client.put("/api/settings/risk", json=payload).status_code == 401
@@ -258,7 +258,7 @@ def test_risk_settings_persist_and_validate(tmp_path):
             )
     with TestClient(create_app(settings=config)) as client:
         assert (
-            client.get("/api/settings/risk").json()["multi_exchange_premium_threshold_pct"] == 3.5
+            client.get("/api/settings/risk", headers={"X-Dashboard-Password": "test-secret"}).json()["multi_exchange_premium_threshold_pct"] == 3.5
         )
 
 

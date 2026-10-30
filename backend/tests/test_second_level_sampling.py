@@ -275,7 +275,7 @@ def test_second_level_sampling_api_saves_config() -> None:
                 "max_concurrent_requests": 4,
             },
         )
-        status_response = client.get("/api/second-level-sampling/status")
+        status_response = client.get("/api/second-level-sampling/status", headers={"X-Dashboard-Password": "secret"})
 
     assert response.status_code == 200
     payload = response.json()
@@ -296,7 +296,7 @@ def test_fat_finger_backtest_api_returns_explicit_empty_history_result() -> None
 
     with TestClient(app) as client:
         response = client.post(
-            "/api/second-level-sampling/fat-finger-backtest",
+            "/api/second-level-sampling/fat-finger-backtest", headers={"X-Dashboard-Password": "secret"},
             json={"symbol": "dexe"},
         )
 

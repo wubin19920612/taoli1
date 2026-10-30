@@ -30,7 +30,7 @@ def test_identity_write_auth_revision_validation_and_invalidation(tmp_path):
             client.put("/api/market-identities/binding", json=value, headers=headers).status_code
             == 409
         )
-        data = client.get("/api/market-identities?search=PRL").json()
+        data = client.get("/api/market-identities?search=PRL", headers={"X-Dashboard-Password": "test-password"}).json()
         assert data["total"] == 1 and data["items"][0]["asset_id"] == "perle"
         value["binding"]["evidence"] = []
         value["expected_revision"] = 1
@@ -63,10 +63,10 @@ def test_prl_asset_groups_exclude_false_pair_and_statistics_require_selection(tm
             )
             assert response.status_code == 200
         app.state.snapshot_store.set_all_markets([a, b])
-        response = client.get("/api/instruments/PRL")
+        response = client.get("/api/instruments/PRL", headers={"X-Dashboard-Password": "pw"})
         assert response.status_code == 200, response.text
         data = response.json()
         assert data["identity_ambiguous"]
         assert {g["asset_id"] for g in data["asset_groups"]} == {"perle", "pearl"}
         assert not data["spreads"]
-        assert client.get("/api/instruments/PRL/statistics").status_code == 409
+        assert client.get("/api/instruments/PRL/statistics", headers={"X-Dashboard-Password": "pw"}).status_code == 409
