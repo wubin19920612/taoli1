@@ -50,7 +50,7 @@ def test_arb_never_calls_or_mutates_astro(context, target, caplog):
     assert response.json()["status"] == "created"
     assert response.json()["action"] == target.replace("arb_", "arb_mvp_") + "_add"
     pair = add.call_args.args[0]
-    assert pair["disableOpen"] is True and pair["maxPositionUsd"] == 120
+    assert pair["disableOpen"] is True and pair["maxPositionUsd"] == "120"
     assert service.card_settings.max_trade_usdt == 20
     service.handle_manual_create.assert_not_called()
     repo.set_astro_card_settings.assert_not_called()
@@ -87,7 +87,7 @@ def test_both_previews_and_instrument_creation_honor_target(context):
     for response in [client.get("/api/astro/preview/opp-1?target=arb_paper"),
                      client.post("/api/astro/instrument/preview?target=arb_live", json=route)]:
         assert response.status_code == 200 and response.json()["can_submit"]
-        assert response.json()["pair"]["maxPositionUsd"] == 100
+        assert response.json()["pair"]["maxPositionUsd"] == "100"
         assert response.json()["route_variants"] == []
     response = client.post("/api/astro/instrument/card", json={"route": route, "expected_open_spread_pct": 0.8, "card": {"target": "arb_paper"}})
     assert response.json()["status"] == "created"

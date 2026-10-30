@@ -226,3 +226,89 @@ EXIT_CODE=0
 - 只创建一个消息为 `feat: arb-mvp paper/live target for manual card creation` 的提交。三项验证完成后再暂存这些明确路径；不 push，不部署，也不进行线上备份或线上验收。
 - 本任务书兼作本模块的交接记录：代码入口、业务边界、Lighter raw symbol 本地证据、命令及验收结果均在上文。下一步由 PM 在独立任务中安排审阅、推送或部署；本地验证不代表生产服务配置或真实建卡已验收。
 - 临时诊断页面/测试副本已清理；测试日志留在系统临时目录，不提交。未删除既有日志或其他任务产物。
+
+## PM 决定 2（2026-10-30，审 f7230db 后）
+
+1. **必须修**：arb-mvp 的 pair 校验（arb-mvp `src/pairs/schema.ts`，zod strictObject）要求 `maxPositionUsd` / `minOrderUsd` / `maxOrderUsd` / `openSpread` / `closeSpread` / `maxSlippage` 都是**十进制字符串**（不能有指数记法），`leg.leverage` 是整数，`name` 1–40 字符，`openSpread > closeSpread`，不允许多余字段。现在 `arb_mvp_planner.py` 传的是 float，真实 arb-mvp 会每次 400。改成十进制字符串（用 Decimal 格式化，不能出现 `1e-05`、`100.0` 可以写成 `100`）；`name` 超过 40 字符 → 阻断。
+2. 加一个契约测试：断言 planner 产出的 pair 键集合恰好是 `{name,type,legA,legB,openSpread,closeSpread,disableOpen,disableClose,maxPositionUsd,minOrderUsd,maxOrderUsd,maxSlippage}`，各字段类型与上面一致，leg 键只允许 `{venue,dex,symbol,leverage}`。参考合法样例：`{"name":"ETH-HL-LIGHTER-LIVE1","type":"FF","legA":{"venue":"hyperliquid","symbol":"ETH","leverage":3},"legB":{"venue":"lighter","symbol":"ETH","leverage":3},"openSpread":"0.0015","closeSpread":"0.0003","disableOpen":true,"disableClose":false,"maxPositionUsd":"100","minOrderUsd":"15","maxOrderUsd":"25","maxSlippage":"0.002"}`。
+3. 400 / 409 时在中文前缀后带上 arb-mvp 返回的 `message`（arb-mvp 是用户自己的系统，返回的是校验原因，例如 `Invalid config: legA.venue ...`），截断到 300 字符，去掉换行之外的控制字符；其他状态码保持现状。客户端测试相应更新（新加断言，不删旧的安全断言：key 和 x-sign 不出现在日志和返回里）。
+4. 修完跑前端全量、`npx tsc -b`、后端全量，三项全过后新建一个 commit `fix: send arb-mvp sizes as decimal strings and surface rejection reasons`，不 push。
+
+## PM 决定 2 的实现与验收记录（2026-10-30）
+
+### 范围与实现
+
+- 本轮基线 `f7230db`，工作树 `taoli1/.worktrees/arb-mvp-target`，分支 `codex/arb-mvp-target`。开始时仅本任务书的「PM 决定 2」未提交；完整保留该段。本轮仅修改两个 arb-mvp 实现文件、两个相关后端测试文件和本任务书。
+- `backend/app/services/arb_mvp_planner.py`：三个尺寸字段通过 `Decimal(str(value))` 按定点格式输出，去掉小数部分末尾零，不输出指数记法，不额外舍入；名称经原 `_base_name()` 映射后校验 1–40 字符，越界阻断且无 pair/payload。开平阈值继续复用原 Decimal 六位小数算法及严格大小关系；`maxSlippage` 保持 `"0.002"`。
+- `backend/tests/test_arb_mvp.py`：先补契约测试，核对 pair 精确键集合、leg 允许/必需键、六个十进制字符串、整数杠杆、布尔开关及 `openSpread > closeSpread`；覆盖主 DEX/`xyz`、live/paper、RH-Lighter、负/极小阈值、指数来源的大尺寸、尺寸小数精度及名称边界。
+- `backend/app/services/arb_mvp_client.py`：仅对 400/409 在原中文前缀后附加字符串 `message`。保留 LF 换行，移除其余 Unicode Cc/Cf 控制/格式字符；遮蔽本次 API key、签名值及 `x-sign` 标记后，将原因截为最多 300 字符。无字符串原因时保持中文前缀；其他状态码、签名原始字节、禁止开仓及不重试行为保持原状。
+- 客户端新增原因展示、截断、控制字符清理、凭据回显遮蔽、非字符串原因及其他状态码回归测试。原安全断言全部保留；`backend/tests/test_arb_mvp_routes.py` 仅将两处旧数值预期改为严格字符串预期（`"120"`/`"100"`），匹配 PM 新契约，未放宽断言。
+- 未修改 Astro 实现、前端实现、依赖、部署脚本、CI 或任务书禁止文件。未访问 WSL、生产服务器、真实 Astro、arb-mvp 或交易所。本轮未发现需要新增「待 PM 决定」的问题。
+
+### 先测试、后实现的证据
+
+先修改上述两份测试并执行定向测试，确认红灯后才修改实现。工作目录为 `backend`：
+
+```powershell
+& 'C:/Users/wubin/AppData/Local/Temp/claude/D-------claude---/7f276a81-4df2-4527-bc65-b410f9d557b6/scratchpad/venv-lock/Scripts/python.exe' -m pytest -q -p no:cacheprovider tests/test_arb_mvp.py tests/test_arb_mvp_routes.py
+```
+
+```text
+# 修改实现前
+18 failed, 47 passed, 1 warning in 9.97s
+EXIT_CODE=1
+# 修改实现后
+65 passed, 1 warning in 8.89s
+EXIT_CODE=0
+```
+
+日志目录为 `C:/Users/wubin/AppData/Local/Temp/`。红灯原始日志 `arb-mvp-pm2-red-20261030.log` 保留；因 PowerShell 追加输出产生混合编码，另保留同次运行的可读转码副本 `arb-mvp-pm2-red-20261030-utf8.log`，未重跑或覆盖红灯证据。定向通过日志为 `arb-mvp-pm2-targeted-20261030.log`。日志均包含命令、汇总和退出码。
+
+### 三项全量验收
+
+前端全量（工作目录 `frontend`）：
+
+```powershell
+npm test
+```
+
+```text
+Test Files  28 passed (28)
+     Tests  306 passed (306)
+  Duration  78.32s
+EXIT_CODE=0
+```
+
+日志：`arb-mvp-pm2-frontend-full-final-20261030.log`。首次沙箱运行用例同样全部通过（`28 passed / 306 passed`，`93.04s`），但写入 `node_modules/.vite/vitest/results.json` 遇到 `EPERM`，退出码 1，不计为验收通过；该日志保留在 `arb-mvp-pm2-frontend-full-20261030.log`。按本任务书已记录的 junction 缓存权限处理，经工具权限审查允许缓存写入后，原样重跑 `npm test` 获得以上退出码 0。
+
+类型检查（工作目录 `frontend`）：
+
+```powershell
+npx tsc -b
+```
+
+```text
+无诊断输出
+EXIT_CODE=0
+```
+
+日志：`arb-mvp-pm2-tsc-20261030.log`。
+
+后端全量（工作目录 `backend`，指定锁定依赖 venv）：
+
+```powershell
+& 'C:/Users/wubin/AppData/Local/Temp/claude/D-------claude---/7f276a81-4df2-4527-bc65-b410f9d557b6/scratchpad/venv-lock/Scripts/python.exe' -m pytest -q -p no:cacheprovider
+```
+
+```text
+2368 passed, 6 deselected, 13 warnings in 158.08s (0:02:38)
+EXIT_CODE=0
+```
+
+日志：`arb-mvp-pm2-backend-full-20261030.log`。6 项 deselected 仍来自仓库的 `not network and not benchmark` 配置；13 条 warnings 为 Starlette/httpx 及 `datetime.utcnow` 弃用提示。前端日志保留 React act、Ant Design 弃用提示及任务书已有记录的 cssinjs `TypeError: Cannot read properties of undefined (reading 'content')` stderr；最终 Vitest 无失败用例、退出码 0，未扩大范围修改这些既有提示。
+
+### 本地交付与交接
+
+- 三项验收全部通过；`git diff --check` 通过。复核仅本轮五个文件的差异后，按消息 `fix: send arb-mvp sizes as decimal strings and surface rejection reasons` 新建一个本地提交；不 amend、不 push、不部署。
+- 原始测试日志留在上述临时目录，不纳入提交。本任务书继续作为交接记录，既有 PM 决定及历史验收记录完整保留。
+- 本轮完成 PM 决定 2 的四条范围；真实服务契约/建卡、生产配置及线上运行未做验收。后续审阅、推送或部署由 PM 在新任务安排。

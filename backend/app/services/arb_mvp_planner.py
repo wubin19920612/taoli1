@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from decimal import Decimal
 from math import isfinite
 
 from app.models.astro import AstroPairPlan
@@ -6,6 +7,11 @@ from app.models.market import MarketType
 from app.models.opportunity import Opportunity, OpportunityType
 from app.models.settings import AstroCardSettings
 from app.services.astro_planner import AstroPairPlanner, AstroPlannerConfig, _base_name, _fr_pair_bases
+
+
+def _decimal_size(value: float) -> str:
+    text = format(Decimal(str(value)), "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
 
 
 class ArbMvpPlanner:
@@ -46,6 +52,9 @@ class ArbMvpPlanner:
         if (not isinstance(settings.leverage, int) or isinstance(settings.leverage, bool)
                 or not 1 <= settings.leverage <= 100):
             blockers.append("杠杆必须为 1–100 的整数")
+        name = _base_name(opportunity.symbol)
+        if not 1 <= len(name) <= 40:
+            blockers.append("arb-mvp 卡片名称必须为 1–40 字符")
         if opportunity.identity_enforced:
             validation = opportunity.validation
             if validation is None:
@@ -59,10 +68,11 @@ class ArbMvpPlanner:
             open_position, close_position, _, _, _ = AstroPairPlanner(
                 AstroPlannerConfig.from_card_settings(settings)
             ).position_thresholds(opportunity, allow_negative=True)
-            pair = {"name": _base_name(opportunity.symbol), "type": "FF", "legA": legs[0], "legB": legs[1],
+            pair = {"name": name, "type": "FF", "legA": legs[0], "legB": legs[1],
                     "openSpread": open_position, "closeSpread": close_position,
-                    "maxPositionUsd": settings.max_trade_usdt,
-                    "minOrderUsd": settings.min_notional, "maxOrderUsd": settings.max_notional,
+                    "maxPositionUsd": _decimal_size(settings.max_trade_usdt),
+                    "minOrderUsd": _decimal_size(settings.min_notional),
+                    "maxOrderUsd": _decimal_size(settings.max_notional),
                     "disableOpen": True, "disableClose": False, "maxSlippage": "0.002"}
         return AstroPairPlan(opportunity_id=opportunity.id, symbol=opportunity.symbol,
                              source_open_spread_pct=opportunity.open_spread_pct,

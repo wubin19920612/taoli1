@@ -2,13 +2,31 @@
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import time
+import unicodedata
 from dataclasses import dataclass
 
 import httpx
 
 UNKNOWN_RESULT = "结果未知，请到 arb-mvp 界面确认是否已建卡，不要直接重试"
+
+
+def _rejection_reason(message: object, api_key: str, signature: str) -> str:
+    if not isinstance(message, str):
+        return ""
+    message = "".join(
+        char for char in message
+        if char == "\n" or unicodedata.category(char) not in {"Cc", "Cf"}
+    )
+    # Sanitize before redaction, and redact before truncation, so neither control
+    # characters nor the display limit can expose a credential or its prefix.
+    sensitive = sorted((value for value in (api_key, signature, "x-sign") if value),
+                       key=len, reverse=True)
+    message = re.sub("|".join(re.escape(value) for value in sensitive),
+                     "[redacted]", message, flags=re.IGNORECASE)
+    return message[:300]
 
 
 @dataclass(frozen=True)
@@ -52,11 +70,17 @@ class ArbMvpClient:
             if not isinstance(name, str) or name != pair.get("name"):
                 return ArbMvpResult(False, UNKNOWN_RESULT)
             return ArbMvpResult(True, "卡片已上架，状态 STOPPED，禁止开仓", name)
-        # Never reflect untrusted response text (it may echo credentials/headers).
         if response.status_code == 409:
             limited = "LIMIT_EXCEEDED" in json.dumps(data)
-            return ArbMvpResult(False, "卡片数量已达上限（LIMIT_EXCEEDED）" if limited
-                                else "卡片重名（DUPLICATE_NAME），未自动改名或重试")
-        messages = {400: "arb-mvp 卡片配置错误", 401: "arb-mvp 签名验证失败",
+            prefix = ("卡片数量已达上限（LIMIT_EXCEEDED）" if limited
+                      else "卡片重名（DUPLICATE_NAME），未自动改名或重试")
+        elif response.status_code == 400:
+            prefix = "arb-mvp 卡片配置错误"
+        else:
+            prefix = None
+        if prefix is not None:
+            reason = _rejection_reason(data.get("message"), self._api_key, signature)
+            return ArbMvpResult(False, f"{prefix}：{reason}" if reason else prefix)
+        messages = {401: "arb-mvp 签名验证失败",
                     429: "arb-mvp 请求过于频繁，请稍后再试"}
         return ArbMvpResult(False, messages.get(response.status_code, UNKNOWN_RESULT))

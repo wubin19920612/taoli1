@@ -2,6 +2,8 @@ import hashlib
 import hmac
 import json
 import logging
+import re
+from decimal import Decimal
 
 import httpx
 import pytest
@@ -74,6 +76,76 @@ def test_invalid_sizes(updates):
     assert not ArbMvpPlanner(settings).plan(arb_opportunity(), "arb_live").can_submit
 
 
+@pytest.mark.parametrize("target,exchange,raw", [
+    ("arb_live", "lighter", "ETH"),
+    ("arb_paper", "rh-lighter", "xyz:GOLD"),
+])
+@pytest.mark.parametrize("spread", [0.15, -0.2, 0.000001])
+def test_pair_matches_strict_arb_mvp_contract(target, exchange, raw, spread):
+    settings = AstroCardSettings(
+        max_trade_usdt=100, min_notional=15, max_notional=25, leverage=3,
+    )
+    plan = ArbMvpPlanner(settings).plan(arb_opportunity(
+        symbol=raw.split(":")[-1], buy_raw_symbol=raw,
+        sell_raw_symbol=raw.split(":")[-1], sell_exchange=exchange,
+        open_spread_pct=spread,
+    ), target)
+    assert plan.can_submit
+    pair = plan.pair
+    assert set(pair) == {
+        "name", "type", "legA", "legB", "openSpread", "closeSpread",
+        "disableOpen", "disableClose", "maxPositionUsd", "minOrderUsd",
+        "maxOrderUsd", "maxSlippage",
+    }
+    assert isinstance(pair["name"], str) and 1 <= len(pair["name"]) <= 40
+    assert pair["type"] == "FF"
+    for key in ("legA", "legB"):
+        leg = pair[key]
+        assert {"venue", "symbol", "leverage"} <= set(leg)
+        assert set(leg) <= {"venue", "dex", "symbol", "leverage"}
+        assert isinstance(leg["venue"], str) and isinstance(leg["symbol"], str)
+        assert type(leg["leverage"]) is int and leg["leverage"] == 3
+        if "dex" in leg:
+            assert isinstance(leg["dex"], str) and leg["dex"] == "xyz"
+    for key in ("maxPositionUsd", "minOrderUsd", "maxOrderUsd",
+                "openSpread", "closeSpread", "maxSlippage"):
+        assert isinstance(pair[key], str), key
+        assert re.fullmatch(r"-?\d+(?:\.\d+)?", pair[key]), key
+    assert Decimal(pair["openSpread"]) > Decimal(pair["closeSpread"])
+    assert pair["disableOpen"] is True and pair["disableClose"] is False
+    assert pair["maxPositionUsd"] == "100"
+    assert pair["minOrderUsd"] == "15" and pair["maxOrderUsd"] == "25"
+    assert pair["maxSlippage"] == "0.002"
+    assert plan.sdk_payload == {"action": "add", "pair": pair}
+
+
+@pytest.mark.parametrize("maximum,expected", [(100.0, "100"), (1e21, "1000000000000000000000")])
+def test_sizes_use_plain_decimal_strings_without_rounding(maximum, expected):
+    settings = AstroCardSettings(
+        max_trade_usdt=maximum, min_notional=10.00001, max_notional=25.125,
+    )
+    plan = ArbMvpPlanner(settings).plan(arb_opportunity(), "arb_live")
+    assert plan.can_submit
+    assert plan.pair["maxPositionUsd"] == expected
+    assert plan.pair["minOrderUsd"] == "10.00001"
+    assert plan.pair["maxOrderUsd"] == "25.125"
+
+
+@pytest.mark.parametrize("symbol,allowed", [
+    ("A", True), ("A" * 40 + "USDT", True), ("A" * 41 + "USDT", False), (" ", False),
+])
+def test_name_length_is_validated_after_base_name_mapping(symbol, allowed):
+    plan = ArbMvpPlanner(AstroCardSettings(max_trade_usdt=100)).plan(
+        arb_opportunity(symbol=symbol), "arb_live",
+    )
+    assert plan.can_submit is allowed
+    if allowed:
+        assert 1 <= len(plan.pair["name"]) <= 40
+    else:
+        assert plan.pair is None and plan.sdk_payload is None
+        assert any("名称" in blocker and "40" in blocker for blocker in plan.blockers)
+
+
 @pytest.mark.asyncio
 async def test_signature_is_over_sent_bytes_and_client_forces_disable_open(monkeypatch, caplog):
     monkeypatch.setattr("app.services.arb_mvp_client.time.time", lambda: 1234.5)
@@ -124,3 +196,81 @@ async def test_timeout_is_not_retried_or_leaked(caplog):
     assert not result.success and "结果未知" in result.message and "不要直接重试" in result.message
     assert len(calls) == 1 and calls[0].extensions["timeout"]["read"] == 10
     assert "secret-test" not in caplog.text and "x-sign" not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,prefix", [
+    (400, "arb-mvp 卡片配置错误"),
+    (409, "卡片重名（DUPLICATE_NAME），未自动改名或重试"),
+])
+async def test_rejection_reason_is_sanitized_and_limited(status, prefix, caplog):
+    calls = []
+    reason = "Invalid config: legA.venue\x00\t\r\x1b\x7f\x85\u200b ...\n" + "原因" * 200
+    expected = ("Invalid config: legA.venue ...\n" + "原因" * 200)[:300]
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(status, json={"code": -1, "message": reason})
+
+    with caplog.at_level(logging.DEBUG):
+        result = await ArbMvpClient("http://arb.test", "secret-test", transport=httpx.MockTransport(handler)).add_pair({"name": "BTC"})
+    assert not result.success and result.message == prefix + "：" + expected
+    assert len(calls) == 1
+    assert "secret-test" not in result.message and "x-sign" not in result.message
+    assert "secret-test" not in caplog.text and "x-sign" not in caplog.text
+    assert calls[0].headers["x-sign"] not in result.message + caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [400, 409])
+async def test_rejection_reason_redacts_echoed_credentials_before_truncation(status, caplog):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        reason = ("Invalid config: secret-\x00test X-\tsign=" + request.headers["x-sign"]
+                  + "\n" + "a" * 280 + "secret-test")
+        return httpx.Response(status, json={"code": -1, "message": reason})
+
+    with caplog.at_level(logging.DEBUG):
+        result = await ArbMvpClient("http://arb.test", "secret-test", transport=httpx.MockTransport(handler)).add_pair({"name": "BTC"})
+    assert not result.success and "Invalid config:" in result.message
+    assert "secret-test" not in result.message + caplog.text
+    assert "x-sign" not in (result.message + caplog.text).lower()
+    assert calls[0].headers["x-sign"] not in result.message + caplog.text
+    assert len(result.message.split("：", 1)[1]) <= 300
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reason", [None, "", 123, {"detail": "bad"}, ["bad"]])
+@pytest.mark.parametrize("status,prefix", [
+    (400, "arb-mvp 卡片配置错误"), (409, "卡片数量已达上限（LIMIT_EXCEEDED）"),
+])
+async def test_rejection_without_string_reason_keeps_chinese_prefix(reason, status, prefix):
+    def handler(request):
+        return httpx.Response(status, json={"code": -1, "error": "LIMIT_EXCEEDED", "message": reason})
+
+    result = await ArbMvpClient("http://arb.test", "secret-test", transport=httpx.MockTransport(handler)).add_pair({"name": "BTC"})
+    assert not result.success and result.message == prefix
+
+
+@pytest.mark.asyncio
+async def test_limit_rejection_includes_reason():
+    def handler(request):
+        return httpx.Response(409, json={"code": -1, "error": "LIMIT_EXCEEDED", "message": "Maximum pairs reached"})
+
+    result = await ArbMvpClient("http://arb.test", "secret-test", transport=httpx.MockTransport(handler)).add_pair({"name": "BTC"})
+    assert result.message == "卡片数量已达上限（LIMIT_EXCEEDED）：Maximum pairs reached"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,expected", [
+    (401, "arb-mvp 签名验证失败"), (429, "arb-mvp 请求过于频繁，请稍后再试"),
+    (500, "结果未知，请到 arb-mvp 界面确认是否已建卡，不要直接重试"),
+])
+async def test_other_status_codes_do_not_surface_response_message(status, expected):
+    def handler(request):
+        return httpx.Response(status, json={"code": -1, "message": "secret-test x-sign upstream reason"})
+
+    result = await ArbMvpClient("http://arb.test", "secret-test", transport=httpx.MockTransport(handler)).add_pair({"name": "BTC"})
+    assert not result.success and result.message == expected
