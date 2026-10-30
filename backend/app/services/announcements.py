@@ -7,6 +7,7 @@ import re
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime, timedelta
+from functools import lru_cache
 from html import unescape
 from inspect import isawaitable
 from urllib.parse import quote_plus
@@ -698,6 +699,7 @@ def _schedule_context_has_time_cue(context: str) -> bool:
     )
 
 
+@lru_cache(maxsize=1024)
 def _alias_pattern(alias: str) -> re.Pattern[str]:
     return re.compile(rf"(?<![A-Z0-9]){re.escape(alias)}(?![A-Z0-9])", re.I)
 
@@ -707,6 +709,10 @@ def extract_event_schedule(text: str, symbols: list[str]) -> list[AnnouncementEv
     if not normalized or not symbols:
         return []
 
+    folded = normalized.casefold()
+    # re.I also equates ASCII I with İ/ı, which casefold does not; keep the
+    # original regex path for such text and for all non-ASCII aliases.
+    can_prefilter = "İ" not in normalized and "ı" not in normalized
     schedule_by_symbol: dict[str, AnnouncementEventScheduleItem] = {}
     symbol_order = {_normalize_symbol(symbol): index for index, symbol in enumerate(symbols)}
     for symbol in symbols:
@@ -717,6 +723,10 @@ def extract_event_schedule(text: str, symbols: list[str]) -> list[AnnouncementEv
         for aliases in (specific_aliases, plain_aliases):
             found = False
             for alias in aliases:
+                # Without boundaries, casefold containment (including ſ/K) is
+                # a superset of re.I matches on this path; the regex still decides.
+                if can_prefilter and alias.isascii() and alias.casefold() not in folded:
+                    continue
                 for match in _alias_pattern(alias).finditer(normalized):
                     window = normalized[match.start() : min(len(normalized), match.start() + 240)]
                     if not _schedule_context_has_time_cue(window):
@@ -2101,7 +2111,10 @@ class GateAnnouncementProvider(HttpAnnouncementProvider):
                 general_available = True
             page_rows = self._parse_page(response.text, category)
             content_by_key = await self._fetch_detail_content_for_page(page_rows) if include_details else {}
-            announcements.extend(self._parse_page(response.text, category, content_by_key=content_by_key))
+            announcements.extend(
+                self._parse_page(response.text, category, content_by_key=content_by_key)
+                if content_by_key else page_rows
+            )
         if (
             categories
             and not direct_succeeded

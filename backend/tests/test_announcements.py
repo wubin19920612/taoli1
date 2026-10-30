@@ -1,10 +1,12 @@
 import asyncio
 import json
+import re
 from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
 
+import app.services.announcements as announcement_service
 from app.db.database import connect_database
 from app.db.repositories import AnnouncementRepository, SettingsRepository
 from app.db.schema import initialize_schema
@@ -300,6 +302,186 @@ def test_event_schedule_parser_extracts_per_symbol_times() -> None:
         ("SMH", datetime(2026, 6, 18, 9, 0, tzinfo=UTC)),
         ("EWZ", datetime(2026, 6, 18, 9, 15, tzinfo=UTC)),
     ]
+
+
+def _legacy_extract_event_schedule(text: str, symbols: list[str]):
+    """Keep the original unfiltered regex loop as an equivalence reference."""
+    normalized = announcement_service._clean_text(re.sub(r"\s+", " ", text))
+    if not normalized or not symbols:
+        return []
+
+    schedule_by_symbol = {}
+    symbol_order = {
+        announcement_service._normalize_symbol(symbol): index
+        for index, symbol in enumerate(symbols)
+    }
+    for symbol in symbols:
+        schedule_symbol = announcement_service._normalize_symbol(symbol)
+        if not schedule_symbol:
+            continue
+        specific_aliases, plain_aliases = announcement_service._schedule_alias_groups(schedule_symbol)
+        for aliases in (specific_aliases, plain_aliases):
+            found = False
+            for alias in aliases:
+                pattern = re.compile(rf"(?<![A-Z0-9]){re.escape(alias)}(?![A-Z0-9])", re.I)
+                for match in pattern.finditer(normalized):
+                    window = normalized[match.start() : min(len(normalized), match.start() + 240)]
+                    if not announcement_service._schedule_context_has_time_cue(window):
+                        continue
+                    candidates = announcement_service._datetime_candidates(window)
+                    if not candidates:
+                        continue
+                    alias_end = match.end() - match.start()
+                    after_alias = [candidate for candidate in candidates if candidate[0] >= alias_end - 2]
+                    _, _, event_time, _ = min(after_alias or candidates, key=lambda item: (abs(item[0] - alias_end), item[0]))
+                    schedule_by_symbol[schedule_symbol] = announcement_service.AnnouncementEventScheduleItem(
+                        symbol=schedule_symbol,
+                        event_time=event_time,
+                    )
+                    found = True
+                    break
+                if found:
+                    break
+            if found:
+                break
+
+    return sorted(
+        schedule_by_symbol.values(),
+        key=lambda item: (symbol_order.get(item.symbol, len(symbol_order)), item.event_time),
+    )
+
+
+@pytest.mark.parametrize(("text", "symbols", "expected_symbols"), [
+    pytest.param(
+        "SMH/USDT perpetual futures trading will open at 09:00 UTC on June 18, 2026. "
+        "EWZ/USDT perpetual futures trading will open at 09:15 UTC on June 18, 2026. "
+        "RIVN/USDT perpetual futures trading will open at 09:30 UTC on June 18, 2026.",
+        ["SMH", "EWZ", "RIVN"], ["SMH", "EWZ", "RIVN"], id="existing-english",
+    ),
+    pytest.param(
+        "SMH/USDT 合约交易开盘时间：2026 年 6 月 18 日 17:00 (UTC+8)。"
+        "EWZ/USDT 合约交易开盘时间：2026 年 6 月 18 日 17:15 (UTC+8)。",
+        ["SMH", "EWZ"], ["SMH", "EWZ"], id="existing-chinese",
+    ),
+    pytest.param("btc/usdt trading will open at 2026-06-18 09:00 UTC.", ["BTC"], ["BTC"], id="lowercase"),
+    pytest.param("Btc Usdt trading will open at 2026-06-18 09:00 UTC.", ["btc"], ["BTC"], id="mixed-case-space"),
+    pytest.param("XBTCUSDT trading will open at 2026-06-18 09:00 UTC.", ["BTC"], [], id="letter-prefix"),
+    pytest.param("BTCUSDT2 trading will open at 2026-06-18 09:00 UTC.", ["BTC"], [], id="digit-suffix"),
+    pytest.param("2BTC trading will open at 2026-06-18 09:00 UTC.", ["BTC"], [], id="digit-prefix"),
+    pytest.param("BTCX trading will open at 2026-06-18 09:00 UTC.", ["BTC"], [], id="letter-suffix"),
+    pytest.param("BTC/USDⓈ trading will open at 2026-06-18 09:00 UTC.", ["BTC"], ["BTC"], id="usd-circled-s"),
+    pytest.param("BTC USD1 trading will open at 2026-06-18 09:00 UTC.", ["BTC"], ["BTC"], id="usd1-space"),
+    pytest.param("BTCUSD1 trading will open at 2026-06-18 09:00 UTC.", ["BTC"], ["BTC"], id="usd1-joined"),
+    pytest.param("BTC/USDC trading will open at 2026-06-18 09:00 UTC.", ["BTC"], ["BTC"], id="usdc-slash"),
+    pytest.param("BTC USD trading will open at 2026-06-18 09:00 UTC.", ["BTC"], ["BTC"], id="usd-space"),
+    pytest.param(
+        "BTC/USDT has no date. BTC/USDT trading will open at 2026-06-18 09:00 UTC. "
+        "BTC/USDT trading will open at 2026-06-19 10:00 UTC.",
+        ["BTC", "BTC"], ["BTC"], id="repeated-symbol-and-occurrences",
+    ),
+    pytest.param(
+        "【ＢＴＣ】；BTC/USDT　合约交易开盘时间：2026 年 6 月 18 日 17:00（UTC+8）。",
+        ["BTC"], ["BTC"], id="fullwidth-and-chinese-punctuation",
+    ),
+    pytest.param("ＢＴＣ/ＵＳＤＴ trading will open at 2026-06-18 09:00 UTC.", ["BTC"], [], id="fullwidth-alias-unmatched"),
+    pytest.param("ſOL/UſDT trading will open at 2026-06-18 09:00 UTC.", ["SOL"], ["SOL"], id="long-s"),
+    pytest.param("KAS/USDT trading will open at 2026-06-18 09:00 UTC.", ["KAS"], ["KAS"], id="kelvin-sign"),
+    pytest.param("İOST/USDT trading will open at 2026-06-18 09:00 UTC.", ["IOST"], ["IOST"], id="dotted-i"),
+    pytest.param("ıOST/USDT trading will open at 2026-06-18 09:00 UTC.", ["IOST"], ["IOST"], id="dotless-i"),
+    pytest.param("BTC trading will open at 2026-06-18 09:00 UTC.", ["BTC"], ["BTC"], id="plain-alias"),
+    pytest.param("A/USDT trading will open at 2026-06-18 09:00 UTC.", ["A"], ["A"], id="single-character-pair"),
+    pytest.param("A trading will open at 2026-06-18 09:00 UTC.", ["A"], [], id="single-character-no-plain"),
+    pytest.param(
+        "BTC/USDT trading will open at 2026-06-18 09:00 UTC. "
+        "ETH/USDT trading will open at 2026-06-18 10:00 UTC.",
+        ["ETH/USD", "BTC/USDT"], ["ETH/USD", "BTC/USDT"], id="pair-symbols-and-input-order",
+    ),
+    pytest.param("BTC/USDⓈ trading will open at 2026-06-18 09:00 UTC.", ["BTC/USDⓈ"], ["BTC/USDⓈ"], id="non-ascii-symbol"),
+    pytest.param("BTC/USDT&#32;trading\nwill\topen at 2026-06-18 09:00 UTC.", ["BTC"], ["BTC"], id="html-and-whitespace"),
+    pytest.param("BTC/USDT published at 2026-06-18 09:00 UTC.", ["BTC"], [], id="no-trading-cue"),
+    pytest.param("BTC/USDT trading will open soon.", ["BTC"], [], id="no-time"),
+    pytest.param("", ["BTC"], [], id="empty-text"),
+    pytest.param("BTC/USDT trading will open at 2026-06-18 09:00 UTC.", [], [], id="empty-symbols"),
+    pytest.param("BTC/USDT trading will open at 2026-06-18 09:00 UTC.", [" "], [], id="blank-symbol"),
+])
+def test_event_schedule_prefilter_matches_legacy(text, symbols, expected_symbols) -> None:
+    expected = _legacy_extract_event_schedule(text, symbols)
+    assert [item.symbol for item in expected] == expected_symbols
+    assert extract_event_schedule(text, symbols) == expected
+
+
+def test_alias_pattern_cache_is_bounded() -> None:
+    assert announcement_service._alias_pattern.cache_info().maxsize == 1024
+
+
+def test_event_schedule_keeps_non_ascii_aliases_on_regex_path(monkeypatch) -> None:
+    pattern = announcement_service._alias_pattern
+    calls = []
+
+    def pattern_spy(alias):
+        calls.append(alias)
+        return pattern(alias)
+
+    monkeypatch.setattr(announcement_service, "_alias_pattern", pattern_spy)
+    assert extract_event_schedule(
+        "BTC/USDT trading will open at 2026-06-18 09:00 UTC.", ["ABSENT"],
+    ) == []
+    specific, plain = announcement_service._schedule_alias_groups("ABSENT")
+    assert calls == [alias for alias in specific + plain if not alias.isascii()]
+    assert len(calls) == 3
+
+
+def test_event_schedule_prefilter_skips_absent_ascii_aliases(monkeypatch) -> None:
+    symbols = [f"TOKEN{index:02}" for index in range(49)] + ["BTC"]
+    pattern = announcement_service._alias_pattern
+    calls = []
+
+    def pattern_spy(alias):
+        calls.append(alias)
+        return pattern(alias)
+
+    pattern.cache_clear()
+    monkeypatch.setattr(announcement_service, "_alias_pattern", pattern_spy)
+    try:
+        rows = extract_event_schedule(
+            "BTC/USDT trading will open at 2026-06-18 09:00 UTC.", symbols,
+        )
+        assert [row.symbol for row in rows] == ["BTC"]
+        assert [alias for alias in calls if alias.isascii()] == ["BTC/USDT"]
+        assert len([alias for alias in calls if not alias.isascii()]) == 49 * 3
+    finally:
+        pattern.cache_clear()
+
+
+def test_event_schedule_prefilter_limits_compiles_after_non_ascii_warmup(monkeypatch) -> None:
+    symbols = [f"TOKEN{index:02}" for index in range(49)] + ["BTC"]
+    pattern = announcement_service._alias_pattern
+    compile_pattern = re.compile
+    calls = []
+
+    def compile_spy(expression, flags=0):
+        calls.append((expression, flags))
+        return compile_pattern(expression, flags)
+
+    pattern.cache_clear()
+    try:
+        # Non-ASCII aliases deliberately bypass the prefilter. Warm only these;
+        # all ASCII aliases remain cold so this still detects a missing prefilter.
+        for symbol in symbols:
+            specific, plain = announcement_service._schedule_alias_groups(symbol)
+            for alias in specific + plain:
+                if not alias.isascii():
+                    pattern(alias)
+        monkeypatch.setattr(re, "compile", compile_spy)
+        rows = extract_event_schedule(
+            "BTC/USDT trading will open at 2026-06-18 09:00 UTC.", symbols,
+        )
+        specific, plain = announcement_service._schedule_alias_groups("BTC")
+        assert [row.symbol for row in rows] == ["BTC"]
+        assert len(calls) <= len(specific) + len(plain)
+        assert calls == [(r"(?<![A-Z0-9])BTC/USDT(?![A-Z0-9])", re.I)]
+    finally:
+        pattern.cache_clear()
 
 
 def test_listing_pre_open_range_respects_source_timezone() -> None:
@@ -1581,6 +1763,61 @@ def test_gate_provider_finds_nested_article_lists() -> None:
     assert rows[0].symbols == ["NEST"]
     assert rows[0].market_type == "spot"
     assert rows[0].event_time == datetime(2026, 5, 30, 10, 0, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("include_details", "detail_content"), [
+    (False, ""),
+    (True, ""),
+    (True, "NEST/USDT trading will open at 2026-05-30 11:00 UTC."),
+])
+async def test_gate_reuses_page_rows_unless_details_are_available(
+    monkeypatch, include_details, detail_content,
+) -> None:
+    page = '<script id="__NEXT_DATA__" type="application/json">' + json.dumps({
+        "props": {"pageProps": {"listData": {"list": [{
+            "id": "60001", "title": "Gate to List NEST (NEST) for Spot Trading",
+            "brief": "NEST/USDT trading will open at 2026-05-30 10:00 UTC.",
+            "url": "/announcements/article/60001", "release_timestamp": "1780134000",
+        }]}}},
+    }) + '</script>'
+    detail_requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/announcements/article/60001":
+            detail_requests.append(str(request.url))
+            return httpx.Response(200, text=detail_content)
+        assert request.url.host == "apim.gateapi.io"
+        return httpx.Response(200, text=page)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = GateAnnouncementProvider(client=client, now_fn=lambda: BASE_TIME)
+        parse_page = provider._parse_page
+        parsed = []
+
+        def parse_spy(html, category, *, content_by_key=None):
+            rows = parse_page(html, category, content_by_key=content_by_key)
+            parsed.append((category, content_by_key, rows))
+            return rows
+
+        monkeypatch.setattr(provider, "_parse_page", parse_spy)
+        rows = await provider.fetch(include_details=include_details)
+
+    expected_rows = []
+    for category in provider.categories:
+        calls = [call for call in parsed if call[0] == category]
+        has_details = include_details and bool(detail_content) and bool(calls[0][2])
+        assert len(calls) == (2 if has_details else 1)
+        assert calls[0][1] is None
+        if has_details:
+            assert calls[1][1] == {"60001": detail_content}
+        expected_rows.extend(calls[-1][2])
+    assert len(rows) == len(provider.categories)
+    assert all(row is expected for row, expected in zip(rows, expected_rows, strict=True))
+    assert all(row.event_time == datetime(
+        2026, 5, 30, 11 if include_details and detail_content else 10, tzinfo=UTC,
+    ) for row in rows)
+    assert len(detail_requests) == (len(provider.categories) if include_details else 0)
 
 
 @pytest.mark.asyncio
