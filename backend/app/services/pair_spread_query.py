@@ -67,6 +67,7 @@ from app.models.pair_spread import (
     normalize_pair_spread_symbol,
 )
 from app.services.okx_history import get_okx_history_json
+from app.services.realtime_series_cache import RealtimeSeriesBudget, RealtimeSeriesCache
 
 MINUTE_MS = 60_000
 HYPERLIQUID_CANDLE_LIMIT = 5000
@@ -516,13 +517,44 @@ def _warnings_text(items: list[str]) -> str:
     return "; ".join(unique_items)
 
 
-_REALTIME_PAIR_SPREAD_CACHE: dict[str, list[PairSpreadPoint]] = {}
+_REALTIME_SERIES_BUDGET = RealtimeSeriesBudget()
+_REALTIME_PAIR_SPREAD_CACHE = RealtimeSeriesCache[list[PairSpreadPoint]](_REALTIME_SERIES_BUDGET)
 # 实时资金费率由每次价差查询抓到的当前快照累积，和交易所整点结算历史分开保存。
-_REALTIME_PAIR_FUNDING_CACHE: dict[str, list[PairSpreadRealtimeFundingPoint]] = {}
+_REALTIME_PAIR_FUNDING_CACHE = RealtimeSeriesCache[list[PairSpreadRealtimeFundingPoint]](
+    _REALTIME_SERIES_BUDGET,
+)
 # 对未提供公开历史 OI 的交易所，保存当前快照并按查询周期形成变化量序列。
-_REALTIME_PAIR_OPEN_INTEREST_CACHE: dict[str, list[PairSpreadOpenInterestPoint]] = {}
+_REALTIME_PAIR_OPEN_INTEREST_CACHE = RealtimeSeriesCache[list[PairSpreadOpenInterestPoint]](
+    _REALTIME_SERIES_BUDGET,
+)
 # 单标的跨交易所秒级价差没有统一历史源，使用每次查询抓到的当前价形成本地采样线。
-_REALTIME_SYMBOL_SPREAD_CACHE: dict[str, dict[str, list[SymbolSpreadPoint]]] = {}
+_REALTIME_SYMBOL_SPREAD_CACHE = RealtimeSeriesCache[dict[str, list[SymbolSpreadPoint]]](
+    _REALTIME_SERIES_BUDGET,
+)
+
+REALTIME_CACHE_RESTART_WARNING = (
+    "实时序列缓存已过期或被淘汰，历史从现在重新累积。"
+)
+REALTIME_CACHE_MISS_WARNING = (
+    "实时序列缓存未命中（首次查询或较早的过期/淘汰），历史从现在重新累积。"
+)
+
+
+def _cached_realtime_series(cache, key: str, default, warnings: list[str] | None):
+    series = cache.get(key)
+    if series is None:
+        if warnings is not None and isinstance(cache, RealtimeSeriesCache):
+            status = cache.restart_status(key)
+            if status is not None:
+                _append_unique(warnings, REALTIME_CACHE_RESTART_WARNING
+                               if status == "evicted" else REALTIME_CACHE_MISS_WARNING)
+        return default
+    return series
+
+
+def realtime_cache_census_view(attribute: str):
+    cache = globals().get(attribute)
+    return cache.diagnostic_view() if isinstance(cache, RealtimeSeriesCache) else cache
 
 
 def realtime_cache_stats() -> dict[str, dict[str, int]]:
@@ -684,12 +716,15 @@ def _realtime_open_interest_points_from_current(
     observed_at: datetime,
     interval_seconds: int,
     hours: int,
+    warnings: list[str] | None = None,
 ) -> list[PairSpreadOpenInterestPoint]:
     if current is None:
         return []
     if current.leg1.open_interest_usdt is None and current.leg2.open_interest_usdt is None:
         return []
-    cached_open_interest = _REALTIME_PAIR_OPEN_INTEREST_CACHE.setdefault(cache_key, [])
+    cached_open_interest = _cached_realtime_series(
+        _REALTIME_PAIR_OPEN_INTEREST_CACHE, cache_key, [], warnings,
+    )
     _append_realtime_open_interest_point(
         cached_open_interest,
         _open_interest_point_from_current(
@@ -699,8 +734,7 @@ def _realtime_open_interest_points_from_current(
     )
     cutoff = observed_at - timedelta(hours=hours)
     points = [point for point in cached_open_interest if point.bucket_at >= cutoff]
-    if len(points) != len(cached_open_interest):
-        _REALTIME_PAIR_OPEN_INTEREST_CACHE[cache_key] = points
+    _REALTIME_PAIR_OPEN_INTEREST_CACHE[cache_key] = points
     return points
 
 
@@ -711,10 +745,13 @@ def _realtime_funding_points_from_current(
     observed_at: datetime,
     interval_seconds: int,
     hours: int,
+    warnings: list[str] | None = None,
 ) -> list[PairSpreadRealtimeFundingPoint]:
     if current is None:
         return []
-    cached_funding = _REALTIME_PAIR_FUNDING_CACHE.setdefault(cache_key, [])
+    cached_funding = _cached_realtime_series(
+        _REALTIME_PAIR_FUNDING_CACHE, cache_key, [], warnings,
+    )
     current_funding_point = _realtime_funding_point(
         current,
         _floor_interval(observed_at, interval_seconds),
@@ -723,8 +760,7 @@ def _realtime_funding_points_from_current(
         _append_realtime_funding_point(cached_funding, current_funding_point)
     cutoff = observed_at - timedelta(hours=hours)
     points = [point for point in cached_funding if point.bucket_at >= cutoff]
-    if len(points) != len(cached_funding):
-        _REALTIME_PAIR_FUNDING_CACHE[cache_key] = points
+    _REALTIME_PAIR_FUNDING_CACHE[cache_key] = points
     return points
 
 
@@ -957,7 +993,9 @@ def _symbol_spread_cache_key(
             ",".join(exchanges),
             ",".join(
                 (
-                    f"{exchange}:{legs_by_exchange[exchange].symbol}:"
+                    f"{exchange}:"
+                    f"{(legs_by_exchange[exchange].dex or '') if exchange == 'hyperliquid' else ''}:"
+                    f"{legs_by_exchange[exchange].symbol}:"
                     f"{price_multipliers_by_exchange.get(exchange, 1.0):.12g}"
                 )
                 for exchange in exchanges
@@ -1260,6 +1298,7 @@ class PairSpreadQueryService:
             observed_at=observed_at,
             interval_seconds=resolved_interval_seconds,
             hours=hours,
+            warnings=warnings,
         )
         open_interest, open_interest_sources = await self._query_open_interest(
             leg1,
@@ -1608,7 +1647,9 @@ class PairSpreadQueryService:
             price_multipliers_by_exchange=price_multipliers_by_exchange,
             interval_seconds=interval_seconds,
         )
-        cached_by_exchange = _REALTIME_SYMBOL_SPREAD_CACHE.setdefault(cache_key, {})
+        cached_by_exchange = _cached_realtime_series(
+            _REALTIME_SYMBOL_SPREAD_CACHE, cache_key, {}, warnings,
+        )
         cutoff = observed_at - timedelta(hours=hours)
         series: list[SymbolSpreadSeries] = []
         for exchange in result_exchanges:
@@ -1630,6 +1671,7 @@ class PairSpreadQueryService:
                 )
             )
 
+        _REALTIME_SYMBOL_SPREAD_CACHE[cache_key] = cached_by_exchange
         if any(item.point_count <= 1 for item in series):
             _append_unique(
                 warnings,
@@ -1694,7 +1736,9 @@ class PairSpreadQueryService:
             interval_seconds=interval_seconds,
         )
         # 秒级周期没有统一的跨交易所历史K线来源，使用实时盘口中间价形成本地采样序列。
-        cached_points = _REALTIME_PAIR_SPREAD_CACHE.setdefault(cache_key, [])
+        cached_points = _cached_realtime_series(
+            _REALTIME_PAIR_SPREAD_CACHE, cache_key, [], warnings,
+        )
         left_mid = _positive(current.leg1.mid_price)
         right_mid = _positive(current.leg2.mid_price)
         if left_mid is not None and right_mid is not None:
@@ -1713,8 +1757,7 @@ class PairSpreadQueryService:
             _append_unique(warnings, "盘口中间价不完整，本次快照未写入实时价差曲线。")
         cutoff = observed_at - timedelta(hours=hours)
         points = [point for point in cached_points if point.bucket_at >= cutoff]
-        if len(points) != len(cached_points):
-            _REALTIME_PAIR_SPREAD_CACHE[cache_key] = points
+        _REALTIME_PAIR_SPREAD_CACHE[cache_key] = points
 
         realtime_funding = _realtime_funding_points_from_current(
             cache_key,
@@ -1722,6 +1765,7 @@ class PairSpreadQueryService:
             observed_at=observed_at,
             interval_seconds=interval_seconds,
             hours=hours,
+            warnings=warnings,
         )
         open_interest = _realtime_open_interest_points_from_current(
             cache_key,
@@ -1729,6 +1773,7 @@ class PairSpreadQueryService:
             observed_at=observed_at,
             interval_seconds=interval_seconds,
             hours=hours,
+            warnings=warnings,
         )
         open_interest_leg1_source = _open_interest_source_for_leg(current.leg1)
         open_interest_leg2_source = _open_interest_source_for_leg(current.leg2)
@@ -1892,6 +1937,7 @@ class PairSpreadQueryService:
                 observed_at=observed_at,
                 interval_seconds=interval_seconds,
                 hours=hours,
+                warnings=warnings,
             )
 
         if leg1_source == OPEN_INTEREST_SOURCE_REALTIME:
