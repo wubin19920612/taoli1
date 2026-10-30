@@ -689,8 +689,8 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                         key, state.last_sent_at, state.retry_after, state.retry_attempts,
                     )
                 except Exception:
+                    # The send already happened; still keep its audit event.
                     logger.exception("alert delivery state write failed: %s", key)
-                    continue
                 try:
                     await event_repo.create(event)
                 except Exception:
