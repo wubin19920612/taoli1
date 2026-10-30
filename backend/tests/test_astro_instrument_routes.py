@@ -13,6 +13,8 @@ from app.services.astro_alerts import AstroAlertService
 from app.services.gate_crossex_hyperliquid import GateCrossExHyperliquidCatalog
 from app.services.snapshot_store import SnapshotStore
 
+pytestmark = pytest.mark.usefixtures("astro_attempts_for_services")
+
 
 def _install_exact_books(app, *, snapshot_timestamp=False):
     class ExactBookAdapter:

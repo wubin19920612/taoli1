@@ -13,6 +13,30 @@ sys.path.insert(0, str(ROOT))
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 
 
+@pytest.fixture
+async def astro_attempts_for_services(monkeypatch):
+    """Give existing standalone service regressions a real, isolated ledger."""
+    from app.db.database import connect_database
+    from app.db.schema import initialize_schema
+    from app.services.astro_alerts import AstroAlertService
+    from app.services.astro_card_attempts import AstroCardAttemptRepository
+
+    db = await connect_database(":memory:")
+    await initialize_schema(db)
+    repository = AstroCardAttemptRepository(db)
+    original_init = AstroAlertService.__init__
+
+    def initialize(self, *args, **kwargs):
+        kwargs.setdefault("attempts", repository)
+        original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(AstroAlertService, "__init__", initialize)
+    try:
+        yield repository
+    finally:
+        await db.close()
+
+
 @pytest.fixture(scope="session")
 def offline_tls_contexts():
     # Parsing the same CA bundle for every client/proxy dominates Windows tests.

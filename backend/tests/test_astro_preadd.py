@@ -13,6 +13,8 @@ from app.services.astro_alerts import AstroAlertService
 from app.services.astro_preadd import AstroPreaddService, find_preadd_candidates
 from app.services.snapshot_store import SnapshotStore
 
+pytestmark = pytest.mark.usefixtures("astro_attempts_for_services")
+
 
 def market(
     exchange: str,

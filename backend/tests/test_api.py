@@ -62,6 +62,8 @@ from app.services.market_validation_review import MarketValidationService
 from app.services.service_control import DockerServiceController, ServiceControlConfig, ServiceControlError
 from app.services.snapshot_store import SnapshotStore
 
+pytestmark = pytest.mark.usefixtures("astro_attempts_for_services")
+
 
 class FakeSettingsRepository:
     def __init__(

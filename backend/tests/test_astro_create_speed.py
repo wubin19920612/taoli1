@@ -14,6 +14,8 @@ from test_market_validation_review import setup_pair
 from app.models.settings import RiskSettings
 from app.services.orderbook_validator import OrderBookDepthValidator
 
+pytestmark = pytest.mark.usefixtures("astro_attempts_for_services")
+
 
 @pytest.fixture
 def timing_output(caplog):

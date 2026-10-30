@@ -62,6 +62,7 @@ from app.db.repositories import (
     SettingsRepository,
 )
 from app.db.schema import initialize_schema
+from app.services.astro_card_attempts import AstroCardAttemptRepository
 from app.db.market_identity_repository import MarketIdentityRepository
 from app.services.market_validation_review import MarketValidationService
 from app.services.market_identity_catalog import OfficialMarketIdentityCatalog
@@ -873,6 +874,7 @@ def create_app(
         db = await connect_database(db_path, recover_stale_snapshots=True)
         await initialize_schema(db)
         app.state.db = db
+        app.state.astro_alert_service.attempts = AstroCardAttemptRepository(db)
         route_db = None
         if "squeeze" not in disabled:
             route_stem, route_extension = os.path.splitext(db_path)

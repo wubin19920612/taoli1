@@ -1,7 +1,7 @@
 import logging
 import time
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.core.security import dashboard_password_header, verify_dashboard_password
 from app.api.routes_arb_mvp import default_max_position, target_credentials
@@ -42,6 +42,19 @@ from app.services.spread_engine import Mode, build_directional_opportunity
 
 router = APIRouter(prefix="/astro")
 logger = logging.getLogger(__name__)
+
+
+@router.get("/card-attempts")
+async def card_attempts(
+    request: Request,
+    limit: int = Query(default=100, ge=1, le=1000),
+    state: str | None = Query(default=None, pattern="^(pending|created|failed|unknown|reconciled)?$"),
+) -> list[dict]:
+    service = getattr(request.app.state, "astro_alert_service", None)
+    repository = getattr(service, "attempts", None)
+    if repository is None:
+        raise HTTPException(status_code=503, detail="Astro card attempt repository is not ready")
+    return await repository.list_attempts(limit, state)
 
 
 def _astro_client(request: Request) -> AstroSdkClient:

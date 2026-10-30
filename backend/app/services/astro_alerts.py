@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
 import httpx
@@ -9,6 +10,7 @@ from app.core.config import Settings
 from app.models.astro import AstroAlertActionResult, AstroCardCreateRequest, AstroCardVariant
 from app.models.opportunity import Opportunity
 from app.models.settings import AstroCardSettings, LivePilotSettings, RiskSettings
+from app.services.astro_card_attempts import AstroCardAttemptRepository, route_key
 from app.services.astro_client import AstroClientError
 from app.services.astro_planner import AstroPairPlanner, AstroPlannerConfig
 from app.services.data_filters import symbol_is_excluded
@@ -161,6 +163,7 @@ class AstroAlertService:
         add_restart_delay_seconds: float = 3.0,
         risk_settings_loader: Callable[[], Awaitable[RiskSettings]] | None = None,
         hl_gc_catalog: GateCrossExHyperliquidCatalog | None = None,
+        attempts: AstroCardAttemptRepository | None = None,
     ):
         self.client = client
         self.settings = settings
@@ -175,6 +178,10 @@ class AstroAlertService:
         self.risk_settings_loader = risk_settings_loader
         self.hl_gc_catalog = hl_gc_catalog or GateCrossExHyperliquidCatalog()
         self.market_validation = None
+        self.attempts = attempts
+        # Names come from the finite market catalog; keep locks for this service's
+        # lifetime so waiting callers always share the same lock.
+        self._pair_locks: dict[str, asyncio.Lock] = {}
 
     async def handle_alert(self, opportunity: Opportunity) -> AstroAlertActionResult:
         return await self._handle(
@@ -230,6 +237,7 @@ class AstroAlertService:
             disabled_message="预建卡片未开启",
             card_settings_override=card_settings.model_copy(update={"open_enabled": False}),
             allow_route_variants=True,
+            source="preadd",
             allow_reverse_entry=allow_reverse_entry,
         )
 
@@ -247,7 +255,9 @@ class AstroAlertService:
         allow_reverse_entry: bool = False,
         manual_review: ManualReview | None = None,
         depth_check: Callable[[], Awaitable[None]] | None = None,
+        source: str = "alert",
     ) -> AstroAlertActionResult:
+        source = "manual" if manual_override else "live_pilot" if live_pilot else source
         if not enabled:
             return AstroAlertActionResult(
                 enabled=False,
@@ -412,213 +422,288 @@ class AstroAlertService:
         pair_name = str(pair.get("name", ""))
         pair_type = str(pair.get("type", ""))
 
-        try:
-            if manual_override:
-                async def check_depth():
-                    if depth_check is not None:
-                        await depth_check()
-
-                existing_pairs, depth_result = await asyncio.gather(
-                    manual_review.measure("list_ms", self.client.list_pairs()),
-                    manual_review.measure("depth_ms", check_depth()),
-                    return_exceptions=True,
+        async with self._pair_locks.setdefault(pair_name, asyncio.Lock()):
+            if self.attempts is None:
+                return AstroAlertActionResult(
+                    enabled=True, status="failed", action="add",
+                    message="尝试账本未就绪，未创建 Astro 卡片",
+                    pair_name=pair_name, pair_type=pair_type,
                 )
-                if isinstance(depth_result, Exception):
-                    manual_warnings.append(
-                        f"订单簿校验失败：{depth_result}；本次为人工建卡，仅作风险提示，未拦截创建"
-                    )
-                elif isinstance(depth_result, BaseException):
-                    raise depth_result
-                if isinstance(existing_pairs, BaseException):
-                    raise existing_pairs
-            else:
-                existing_pairs = await self.client.list_pairs()
-        except AstroClientError as exc:
-            return with_manual_warnings(
-                AstroAlertActionResult(
-                    enabled=True,
-                    status="failed",
-                    action="list",
-                    message=f"查询现有卡片失败，{exc.message}",
-                    pair_name=pair_name,
-                    pair_type=pair_type,
-                )
-            )
-
-        same_name_pairs = [item for item in existing_pairs if item.get("name") == pair_name]
-        # Older Aster GC cards retained the native Aster leg. Recognize those
-        # siblings for conflict checks only; never create or mutate that old route.
-        legacy_aster_variants = []
-        for planned in all_pair_variants:
-            if "gc-aster" in {planned.get("buyEx"), planned.get("sellEx")}:
-                legacy = dict(planned)
-                for leg in ("buyEx", "sellEx"):
-                    if legacy.get(leg) == "gc-aster":
-                        legacy[leg] = "aster"
-                legacy_aster_variants.append(legacy)
-        hl_market_conflicts = [
-            existing
-            for existing in same_name_pairs
-            if any(
-                _same_exchange_route(existing, planned) and not _same_route(existing, planned)
-                for planned in pair_variants + legacy_aster_variants
-            )
-        ]
-        if hl_market_conflicts:
-            return AstroAlertActionResult(
-                enabled=True,
-                status="skipped",
-                action="conflict",
-                message=(
-                    f"已跳过，Astro 同名同交易所路线的 HL 市场不同："
-                    f"现有 {_routes(hl_market_conflicts)}；目标 {_routes(pair_variants)}。"
-                    "请核实已有卡片市场，未自动创建重复卡片"
-                ),
-                pair_name=pair_name,
-                pair_type=pair_type,
-            )
-        conflicting_pairs = [
-            existing
-            for existing in same_name_pairs
-            if not any(_same_route(existing, planned)
-                       for planned in all_pair_variants + legacy_aster_variants)
-        ]
-        if (
-            conflicting_pairs
-            and not (self.allow_same_name_variants or allow_route_variants)
-            and not manual_override
-        ):
-            return AstroAlertActionResult(
-                enabled=True,
-                status="skipped",
-                action="conflict",
-                message=(
-                    f"已跳过，Astro 已存在同名 {pair_name} 但类型或交易所不同："
-                    f"{_routes(conflicting_pairs)}"
-                ),
-                pair_name=pair_name,
-                pair_type=pair_type,
-            )
-        if conflicting_pairs and manual_override:
-            manual_warnings.append(
-                f"Astro 已存在同名 {pair_name} 但类型或交易所不同："
-                f"{_routes(conflicting_pairs)}；本次为人工建卡，仅作风险提示，未拦截创建"
-            )
-
-        existing_variants = [
-            planned
-            for planned in pair_variants
-            if any(_same_route(existing, planned) for existing in same_name_pairs)
-        ]
-        missing_variants = [
-            planned
-            for planned in pair_variants
-            if not any(_same_route(existing, planned) for existing in same_name_pairs)
-        ]
-        if not missing_variants:
-            return with_manual_warnings(
-                AstroAlertActionResult(
-                    enabled=True,
-                    status="skipped",
-                    action="existing",
-                    message=(
-                        f"已跳过，Astro 已存在卡片 {pair_name} {pair_type} "
-                        f"{_routes(existing_variants)}"
-                    ),
-                    pair_name=pair_name,
-                    pair_type=pair_type,
-                )
-            )
-
-        created_variants: list[dict] = []
-        if manual_review is not None:
-            manual_review.metrics["variants"] = len(missing_variants)
-        restart_delay = (
-            self.add_restart_delay_seconds
-            if add_restart_delay_seconds is None
-            else add_restart_delay_seconds
-        )
-        for index, planned in enumerate(missing_variants):
             try:
-                if self.market_validation is not None:
-                    previous = opportunity.validation
-                    if manual_override:
-                        result, a, b = await manual_review.qualify(self.market_validation, opportunity, risk)
-                    else:
-                        result, a, b = await self.market_validation.qualify_opportunity(opportunity, risk, fresh=True)
-                    if previous is not None and (previous.buy_revision, previous.sell_revision) != (result.buy_revision, result.sell_revision):
-                        return AstroAlertActionResult(enabled=True, status="skipped", action="market_validation", message="市场映射已改变，请重新预览")
-                    if self.market_validation.should_enforce(result) and not result.capabilities.manual_card:
-                        return AstroAlertActionResult(enabled=True, status="skipped", action="market_validation", message="；".join(issue.message for issue in result.blockers))
-                    if not manual_override and not allow_reverse_entry and b.bid <= a.ask:
-                        return AstroAlertActionResult(enabled=True, status="skipped", action="market_validation", message="最新真实盘口已不满足正向价差，未创建卡片")
-                if manual_review is not None:
-                    await manual_review.measure("add_ms", self.client.add_pair(planned))
-                else:
-                    await self.client.add_pair(planned)
-            except ManualMappingChanged as exc:
-                return AstroAlertActionResult(enabled=True, status="skipped", action="market_validation", message=str(exc))
-            except (ValueError, TimeoutError, httpx.HTTPError) as exc:
-                return AstroAlertActionResult(enabled=True, status="failed", action="market_validation", message=f"提交前市场复核失败：{exc}")
-            except AstroClientError as exc:
-                failed_route = _route(planned)
-                if created_variants:
-                    return with_manual_warnings(
-                        AstroAlertActionResult(
-                            enabled=True,
-                            status="failed",
-                            action="add_partial",
-                            message=(
-                                f"部分创建成功：已创建 {_routes(created_variants)}；"
-                                f"{failed_route} 创建失败，{exc.message}。"
-                                f"卡片状态为{_card_state_message(pair_enabled)}，"
-                                f"{_disable_open_message(pair_enabled)}"
-                            ),
-                            pair_name=pair_name,
-                            pair_type=pair_type,
-                        )
+                if manual_override:
+                    async def check_depth():
+                        if depth_check is not None:
+                            await depth_check()
+
+                    existing_pairs, depth_result = await asyncio.gather(
+                        manual_review.measure("list_ms", self.client.list_pairs()),
+                        manual_review.measure("depth_ms", check_depth()),
+                        return_exceptions=True,
                     )
+                    if isinstance(depth_result, Exception):
+                        manual_warnings.append(
+                            f"订单簿校验失败：{depth_result}；本次为人工建卡，仅作风险提示，未拦截创建"
+                        )
+                    elif isinstance(depth_result, BaseException):
+                        raise depth_result
+                    if isinstance(existing_pairs, BaseException):
+                        raise existing_pairs
+                else:
+                    existing_pairs = await self.client.list_pairs()
+            except AstroClientError as exc:
                 return with_manual_warnings(
                     AstroAlertActionResult(
                         enabled=True,
                         status="failed",
-                        action="add",
-                        message=f"创建 {failed_route} 失败，{exc.message}",
+                        action="list",
+                        message=f"查询现有卡片失败，{exc.message}",
                         pair_name=pair_name,
                         pair_type=pair_type,
                     )
                 )
-            except RuntimeError as exc:
-                return AstroAlertActionResult(enabled=True, status="failed", action="market_validation", message=f"公开盘口复核失败：{exc}")
-            created_variants.append(planned)
-            is_last_add = index == len(missing_variants) - 1
-            delay = restart_delay if is_last_add else self.add_restart_delay_seconds
-            if delay > 0:
-                if manual_review is not None:
-                    await manual_review.measure("sleep_ms", asyncio.sleep(delay))
-                else:
-                    await asyncio.sleep(delay)
 
-        message = (
-            f"已创建{_card_state_message(pair_enabled)} {pair_name} {pair_type} "
-            f"{_route(created_variants[0])}，{_disable_open_message(pair_enabled)}"
-        )
-        if len(created_variants) > 1:
-            message += (
-                f"；同步创建 {_routes(created_variants[1:])}"
-                f"（共 {len(created_variants)} 张）"
+            same_name_pairs = [item for item in existing_pairs if item.get("name") == pair_name]
+            attempt_messages: list[str] = []
+            blocked_attempt: dict | None = None
+            try:
+                for planned in pair_variants:
+                    attempt = await self.attempts.get(route_key(planned))
+                    if not attempt or attempt["state"] not in {"pending", "unknown"}:
+                        continue
+                    if any(_same_route(existing, planned) for existing in same_name_pairs):
+                        await self.attempts.mark(route_key(planned), "reconciled", "远端已看到该路线")
+                        continue
+                    if manual_override:
+                        manual_warnings.append("上次提交结果未知，可能产生重复卡")
+                        continue
+                    # Only unknown expires after 24h. Pending may represent an
+                    # interrupted process and must never expire automatically.
+                    if attempt["state"] == "unknown" and (
+                        datetime.now(UTC) - datetime.fromisoformat(attempt["updated_at"])
+                        > timedelta(hours=24)
+                    ):
+                        attempt_messages.append(
+                            f"{_route(planned)} 上次提交结果未知（{attempt['updated_at']}），"
+                            "已超过 24 小时，按过期规则重新创建"
+                        )
+                        continue
+                    blocked_attempt = attempt
+                # Reconcile every visible sibling before returning a retry barrier.
+                if blocked_attempt is not None:
+                    return with_manual_warnings(AstroAlertActionResult(
+                        enabled=True, status="skipped", action="uncertain",
+                        message=f"上次提交结果未知（{blocked_attempt['updated_at']}），远端暂未看到，"
+                                "未重复创建；请在 Astro 核实",
+                        pair_name=pair_name, pair_type=pair_type,
+                    ))
+            except Exception as exc:  # noqa: BLE001 - ledger failures must prevent external writes.
+                return with_manual_warnings(AstroAlertActionResult(
+                    enabled=True, status="failed", action="add",
+                    message=f"查询或对账尝试账本失败，未创建 Astro 卡片：{exc}",
+                    pair_name=pair_name, pair_type=pair_type,
+                ))
+            # Older Aster GC cards retained the native Aster leg. Recognize those
+            # siblings for conflict checks only; never create or mutate that old route.
+            legacy_aster_variants = []
+            for planned in all_pair_variants:
+                if "gc-aster" in {planned.get("buyEx"), planned.get("sellEx")}:
+                    legacy = dict(planned)
+                    for leg in ("buyEx", "sellEx"):
+                        if legacy.get(leg) == "gc-aster":
+                            legacy[leg] = "aster"
+                    legacy_aster_variants.append(legacy)
+            hl_market_conflicts = [
+                existing
+                for existing in same_name_pairs
+                if any(
+                    _same_exchange_route(existing, planned) and not _same_route(existing, planned)
+                    for planned in pair_variants + legacy_aster_variants
+                )
+            ]
+            if hl_market_conflicts:
+                return AstroAlertActionResult(
+                    enabled=True,
+                    status="skipped",
+                    action="conflict",
+                    message=(
+                        f"已跳过，Astro 同名同交易所路线的 HL 市场不同："
+                        f"现有 {_routes(hl_market_conflicts)}；目标 {_routes(pair_variants)}。"
+                        "请核实已有卡片市场，未自动创建重复卡片"
+                    ),
+                    pair_name=pair_name,
+                    pair_type=pair_type,
+                )
+            conflicting_pairs = [
+                existing
+                for existing in same_name_pairs
+                if not any(_same_route(existing, planned)
+                           for planned in all_pair_variants + legacy_aster_variants)
+            ]
+            if (
+                conflicting_pairs
+                and not (self.allow_same_name_variants or allow_route_variants)
+                and not manual_override
+            ):
+                return AstroAlertActionResult(
+                    enabled=True,
+                    status="skipped",
+                    action="conflict",
+                    message=(
+                        f"已跳过，Astro 已存在同名 {pair_name} 但类型或交易所不同："
+                        f"{_routes(conflicting_pairs)}"
+                    ),
+                    pair_name=pair_name,
+                    pair_type=pair_type,
+                )
+            if conflicting_pairs and manual_override:
+                manual_warnings.append(
+                    f"Astro 已存在同名 {pair_name} 但类型或交易所不同："
+                    f"{_routes(conflicting_pairs)}；本次为人工建卡，仅作风险提示，未拦截创建"
+                )
+
+            existing_variants = [
+                planned
+                for planned in pair_variants
+                if any(_same_route(existing, planned) for existing in same_name_pairs)
+            ]
+            missing_variants = [
+                planned
+                for planned in pair_variants
+                if not any(_same_route(existing, planned) for existing in same_name_pairs)
+            ]
+            if not missing_variants:
+                return with_manual_warnings(
+                    AstroAlertActionResult(
+                        enabled=True,
+                        status="skipped",
+                        action="existing",
+                        message=(
+                            f"已跳过，Astro 已存在卡片 {pair_name} {pair_type} "
+                            f"{_routes(existing_variants)}"
+                        ),
+                        pair_name=pair_name,
+                        pair_type=pair_type,
+                    )
+                )
+
+            created_variants: list[dict] = []
+            if manual_review is not None:
+                manual_review.metrics["variants"] = len(missing_variants)
+            restart_delay = (
+                self.add_restart_delay_seconds
+                if add_restart_delay_seconds is None
+                else add_restart_delay_seconds
             )
-        if existing_variants:
-            message += f"；已存在 {_routes(existing_variants)}"
-        if not hl_gc_supported:
-            message += "；Gate 未确认支持此 HL 市场，使用原始 HL 路线"
-        return with_manual_warnings(
-            AstroAlertActionResult(
-                enabled=True,
-                status="created",
-                action="add",
-                message=message,
-                pair_name=pair_name,
-                pair_type=pair_type,
+            for index, planned in enumerate(missing_variants):
+                try:
+                    if self.market_validation is not None:
+                        previous = opportunity.validation
+                        if manual_override:
+                            result, a, b = await manual_review.qualify(self.market_validation, opportunity, risk)
+                        else:
+                            result, a, b = await self.market_validation.qualify_opportunity(opportunity, risk, fresh=True)
+                        if previous is not None and (previous.buy_revision, previous.sell_revision) != (result.buy_revision, result.sell_revision):
+                            return AstroAlertActionResult(enabled=True, status="skipped", action="market_validation", message="市场映射已改变，请重新预览")
+                        if self.market_validation.should_enforce(result) and not result.capabilities.manual_card:
+                            return AstroAlertActionResult(enabled=True, status="skipped", action="market_validation", message="；".join(issue.message for issue in result.blockers))
+                        if not manual_override and not allow_reverse_entry and b.bid <= a.ask:
+                            return AstroAlertActionResult(enabled=True, status="skipped", action="market_validation", message="最新真实盘口已不满足正向价差，未创建卡片")
+                except ManualMappingChanged as exc:
+                    return AstroAlertActionResult(enabled=True, status="skipped", action="market_validation", message=str(exc))
+                except (ValueError, TimeoutError, httpx.HTTPError, RuntimeError) as exc:
+                    return AstroAlertActionResult(enabled=True, status="failed", action="market_validation", message=f"提交前市场复核失败：{exc}")
+
+                state, detail = await self._submit_variant(planned, source, pair_enabled, manual_review)
+                if state != "created":
+                    failed_route = _route(planned)
+                    failure = "结果未知，请在 Astro 核实" if state == "unknown" else "创建失败"
+                    message = f"{failed_route} {failure}，{detail}"
+                    if created_variants:
+                        message = (
+                            f"部分创建成功：已创建 {_routes(created_variants)}；{message}。"
+                            f"卡片状态为{_card_state_message(pair_enabled)}，"
+                            f"{_disable_open_message(pair_enabled)}"
+                        )
+                    if attempt_messages:
+                        message += "；" + "；".join(attempt_messages)
+                    return with_manual_warnings(AstroAlertActionResult(
+                        enabled=True, status="failed",
+                        action="add_partial" if created_variants else "uncertain" if state == "unknown" else "add",
+                        message=message, pair_name=pair_name, pair_type=pair_type,
+                    ))
+                created_variants.append(planned)
+                is_last_add = index == len(missing_variants) - 1
+                delay = restart_delay if is_last_add else self.add_restart_delay_seconds
+                if delay > 0:
+                    if manual_review is not None:
+                        await manual_review.measure("sleep_ms", asyncio.sleep(delay))
+                    else:
+                        await asyncio.sleep(delay)
+
+            message = (
+                f"已创建{_card_state_message(pair_enabled)} {pair_name} {pair_type} "
+                f"{_route(created_variants[0])}，{_disable_open_message(pair_enabled)}"
             )
-        )
+            if len(created_variants) > 1:
+                message += (
+                    f"；同步创建 {_routes(created_variants[1:])}"
+                    f"（共 {len(created_variants)} 张）"
+                )
+            if attempt_messages:
+                message += "；" + "；".join(attempt_messages)
+            if existing_variants:
+                message += f"；已存在 {_routes(existing_variants)}"
+            if not hl_gc_supported:
+                message += "；Gate 未确认支持此 HL 市场，使用原始 HL 路线"
+            return with_manual_warnings(
+                AstroAlertActionResult(
+                    enabled=True,
+                    status="created",
+                    action="add",
+                    message=message,
+                    pair_name=pair_name,
+                    pair_type=pair_type,
+                )
+            )
+
+    async def _submit_variant(
+        self, planned: dict, source: str, pair_enabled: bool,
+        manual_review: ManualReview | None,
+    ) -> tuple[str, str]:
+        key = route_key(planned)
+        try:
+            await self.attempts.mark_pending(planned, source, pair_enabled)
+        except Exception as exc:  # noqa: BLE001 - never submit without a committed attempt.
+            return "failed", f"尝试账本写入失败，未提交远端：{exc}"
+
+        try:
+            if manual_review is not None:
+                await manual_review.measure("add_ms", self.client.add_pair(planned))
+            else:
+                await self.client.add_pair(planned)
+        except BaseException as exc:
+            state = (
+                "failed" if isinstance(exc, AstroClientError) and exc.explicitly_rejected
+                else "unknown"
+            )
+            message = str(exc) or type(exc).__name__
+            await self._mark_attempt_best_effort(key, state, message)
+            if not isinstance(exc, Exception):
+                # CancelledError must reach the caller after recording uncertainty.
+                raise
+            return state, message
+        try:
+            await self.attempts.mark(key, "created", "Astro 创建成功")
+        except BaseException as exc:
+            await self._mark_attempt_best_effort(key, "unknown", "远端已返回成功，但账本确认失败")
+            if not isinstance(exc, Exception):
+                raise
+            return "unknown", "远端已返回成功，但账本确认失败"
+        return "created", "Astro 创建成功"
+
+    async def _mark_attempt_best_effort(self, key: str, state: str, message: str) -> None:
+        try:
+            await self.attempts.mark(key, state, message)
+        except Exception:
+            # The committed pending row remains a retry barrier if storage fails.
+            logger.exception("Failed to record Astro attempt outcome for %s", key)

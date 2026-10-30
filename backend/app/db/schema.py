@@ -130,6 +130,18 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
           updated_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS astro_card_attempts (
+          route_key TEXT PRIMARY KEY,
+          pair_name TEXT NOT NULL,
+          source TEXT NOT NULL CHECK(source IN ('alert','live_pilot','manual','preadd')),
+          state TEXT NOT NULL CHECK(state IN ('pending','created','failed','unknown','reconciled')),
+          open_enabled INTEGER NOT NULL CHECK(open_enabled IN (0,1)),
+          request_json TEXT NOT NULL,
+          result_message TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS alert_events (
           id TEXT PRIMARY KEY,
           rule_id TEXT NOT NULL,

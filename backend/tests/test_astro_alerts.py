@@ -12,6 +12,8 @@ from app.services.astro_alerts import AstroAlertService
 from app.services.astro_client import AstroClientError
 from app.services.gate_crossex_hyperliquid import GateCrossExHyperliquidCatalog
 
+pytestmark = pytest.mark.usefixtures("astro_attempts_for_services")
+
 
 @pytest.fixture(autouse=True)
 def stub_gate_hl_symbols(monkeypatch):
@@ -1182,7 +1184,7 @@ async def test_partial_gc_create_failure_is_reported_after_base_success() -> Non
         ("binance", "okx")
     ]
     assert "已创建 binance->okx" in result.message
-    assert "gc-binance->gc-okx 创建失败" in result.message
+    assert "gc-binance->gc-okx 结果未知，请在 Astro 核实" in result.message
 
 
 @pytest.mark.asyncio

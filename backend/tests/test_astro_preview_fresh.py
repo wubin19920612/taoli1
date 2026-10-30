@@ -21,6 +21,8 @@ from app.services.market_validation_review import MarketValidationService
 from app.services.snapshot_store import SnapshotStore
 from app.services.spread_engine import build_directional_opportunity
 
+pytestmark = pytest.mark.usefixtures("astro_attempts_for_services")
+
 
 def fresh_app(*, verified=True, real_submit=False, mode="enforce"):
     now = datetime.now(UTC)

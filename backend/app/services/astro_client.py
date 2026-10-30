@@ -10,10 +10,15 @@ import httpx
 
 
 class AstroClientError(RuntimeError):
-    def __init__(self, message: str, status_code: int = 502):
+    def __init__(self, message: str, status_code: int = 502, *, has_response_body: bool = False):
         super().__init__(message)
         self.status_code = status_code
         self.message = message
+        self.has_response_body = has_response_body
+
+    @property
+    def explicitly_rejected(self) -> bool:
+        return 400 <= self.status_code < 500 and self.has_response_body
 
 
 @dataclass(frozen=True)
@@ -177,6 +182,7 @@ class AstroSdkClient:
             raise AstroClientError(
                 f"Astro HTTP {exc.response.status_code}{suffix}",
                 exc.response.status_code,
+                has_response_body=bool(detail),
             ) from exc
         except httpx.HTTPError as exc:
             if _is_ssl_certificate_error(exc):

@@ -53,3 +53,29 @@
 
 ## 测试环境（必须）
 CI 用 backend/requirements.lock 锁定依赖（FastAPI 0.162、Starlette 1.10、pydantic 2.14.1）。全量测试用：`C:\Users\wubin\AppData\Local\Temp\claude\D-------claude---\7f276a81-4df2-4527-bc65-b410f9d557b6\scratchpad\venv-lock\Scripts\python.exe -m pytest -q -p no:cacheprovider`（在 backend 目录）。日志保留命令和汇总行。不要运行 WSL，不要访问生产或真实 Astro/飞书/交易所。**不要 git push**（只在本地分支提交）。
+
+## 本地实现与交接记录（2026-10-30）
+
+- 分支：`codex/s7b-astro-card-attempts`；基线：`026f6eeba539aa37030becc4228594f4be547751`。开始时工作区干净。
+- 四个入口共用按 `pair_name` 的锁，覆盖实时 list、fresh 复核、逐 variant 写入和 restart 等待。账本缺失、读取/对账失败或 pending 提交失败时均不创建远端卡片。
+- `astro_card_attempts.route_key` 是排序键、无多余空白的 JSON，包含 `name`、`type`、`buyEx`、`sellEx`；买/卖侧为 `hl` 或 `gc-hl` 时分别加入 `aHlDex` / `bHlDex`，默认 `main` 并 trim/lower。与 `_same_route` 的 planned 字段一致，名称/类型/交易所不做额外大小写折叠。原始 HL 市场经现有 planner 转为卡片名称和对应 DEX；远端的 `aEffectiveHlDex` / `bEffectiveHlDex` 仍由原有 `_same_route` 优先用于对账，不混入 planned 身份键。
+- `AstroClientError` 原来已有 `status_code`，补最小字段 `has_response_body`。SDK 只有收到 HTTP 错误响应且去除空白后的响应体非空时才置 true；`explicitly_rejected` 要求同时满足 4xx。超时、网络错误、5xx、空响应体和其他无法判断的异常记 unknown；取消尽力落账后继续传播。首次未知返回 `uncertain`；已有成功 variant 时保留 `add_partial` 并在消息中明确其余路线结果未知。
+- pending/unknown 阻止自动重发；远端看到同路线就 reconciled。unknown 超过 24h 可自动重建并明确提示，pending 不自动过期；手动覆盖附重复卡警告。最终状态写失败时已提交的 pending 仍可阻止自动重发。清理仅覆盖超过 30 天的 created/failed/reconciled，按天节流。
+- `request_json` 仅保存 planner 生成的卡片参数；已检查 planner 没有密钥字段，SDK 认证在另行生成的请求头中。主键保存每条路线的最新尝试，不是无限追加的历史流水。
+- 审计入口：`GET /api/astro/card-attempts?limit=100&state=`，按更新时间倒序，复用全局密码保护。`main.py` 仅注入数据库仓库，schema 仅新增本表。
+- 新增测试涵盖混合入口 20 次并发、不同名称并行、restart 持锁、不同 HL DEX 隔离、跨服务实例重试屏障、逐 variant 对账、24h 过期、人工警告、明确拒绝/未知、先 commit 再 add、取消传播、落账失败、30 天清理和接口鉴权。旧测试只注入真实临时账本；原 503 部分成功断言由“创建失败”改为任务书要求的“结果未知”，其余业务断言保留。
+- 本次交接记录直接追加在任务书内，以遵守只修改范围内文件的要求。未推送、未部署、未访问生产或真实外部服务；后续部署/其他模块应另开任务。
+
+### 验证命令与结果
+
+指定虚拟环境实测版本：FastAPI `0.162.0`、Starlette `1.10.0`、Pydantic `2.14.1`。在 `backend` 目录运行：
+
+```powershell
+& 'C:\Users\wubin\AppData\Local\Temp\claude\D-------claude---\7f276a81-4df2-4527-bc65-b410f9d557b6\scratchpad\venv-lock\Scripts\python.exe' -m pytest -q -p no:cacheprovider
+```
+
+- Astro 相关首轮回归：`395 passed, 1 warning in 14.60s`。
+- 首轮全量：`2478 passed, 6 deselected, 13 warnings in 109.75s (0:01:49)`。
+- 最终全量：`2479 passed, 6 deselected, 13 warnings in 109.15s (0:01:49)`。6 项为默认排除的 network/benchmark；13 条为 Starlette httpx 与 datetime.utcnow 弃用警告。
+- 最终全量日志：`%TEMP%\s7b-astro-card-attempts-full-final-20261030.log`（包含工作目录、完整命令及 pytest 输出）。
+- 新增仓库/测试、建卡服务与 fixture 的 Ruff 检查通过。其他改动文件遗留的 14 条 Ruff 问题已与基线逐文件核对，规则/数量一致，未扩大范围修复。
