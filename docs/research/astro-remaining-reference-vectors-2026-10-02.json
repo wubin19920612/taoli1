@@ -1,0 +1,254 @@
+{
+  "target_executed": false,
+  "kind": "Independent synthetic reference calculations; not Astro outputs or equivalence tests",
+  "passed": 25,
+  "vectors": [
+    {
+      "name": "ratio 2 means A twice B",
+      "basis": "E35 raw arithmetic",
+      "actual": -80,
+      "expected": -80,
+      "passed": true
+    },
+    {
+      "name": "ratio open imbalance plan",
+      "basis": "E33/E34; min/max semantic inference",
+      "actual": [
+        100.0,
+        10.0,
+        220.0
+      ],
+      "expected": [
+        100,
+        10,
+        220
+      ],
+      "passed": true
+    },
+    {
+      "name": "ratio below one",
+      "basis": "E33/E34; min/max semantic inference",
+      "actual": [
+        50.0,
+        100.0,
+        100.0
+      ],
+      "expected": [
+        50,
+        100,
+        100
+      ],
+      "passed": true
+    },
+    {
+      "name": "cap exhausted skips incremental budget",
+      "basis": "E33/E34; min/max semantic inference",
+      "actual": [
+        0,
+        0,
+        200
+      ],
+      "expected": [
+        0,
+        0,
+        200
+      ],
+      "passed": true
+    },
+    {
+      "name": "single A fill reduces ratio error",
+      "basis": "E36; abs semantic inference",
+      "actual": true,
+      "expected": true,
+      "passed": true
+    },
+    {
+      "name": "single B fill worsens ratio error",
+      "basis": "E36; abs semantic inference",
+      "actual": false,
+      "expected": false,
+      "passed": true
+    },
+    {
+      "name": "equal error not improvement",
+      "basis": "E36 strict comparison",
+      "actual": false,
+      "expected": false,
+      "passed": true
+    },
+    {
+      "name": "tail exactly double minimum is not close all",
+      "basis": "E40",
+      "actual": false,
+      "expected": false,
+      "passed": true
+    },
+    {
+      "name": "both tails below double minimum",
+      "basis": "E40",
+      "actual": true,
+      "expected": true,
+      "passed": true
+    },
+    {
+      "name": "close minimum rate",
+      "basis": "E41; max semantic inference",
+      "actual": 0.2,
+      "expected": 0.2,
+      "passed": true
+    },
+    {
+      "name": "ratio deviation percent",
+      "basis": "E44",
+      "actual": 28.571428571428573,
+      "expected": 28.571428571428573,
+      "passed": true
+    },
+    {
+      "name": "inverse deviation returns raw ratio",
+      "basis": "S algebraic inverse",
+      "actual": 0.0014999999999999998,
+      "expected": 0.0015,
+      "passed": true
+    },
+    {
+      "name": "freshness no history HL",
+      "basis": "E55/E56",
+      "actual": [
+        7600,
+        2400
+      ],
+      "expected": [
+        7600,
+        2400
+      ],
+      "passed": true
+    },
+    {
+      "name": "freshness t400",
+      "basis": "E55; max semantic inference",
+      "actual": [
+        1520.0,
+        880.0000000000001
+      ],
+      "expected": [
+        1520,
+        880.0000000000001
+      ],
+      "passed": true
+    },
+    {
+      "name": "freshness t401 changes bucket",
+      "basis": "E55/E56",
+      "actual": [
+        1425,
+        450
+      ],
+      "expected": [
+        1425,
+        450
+      ],
+      "passed": true
+    },
+    {
+      "name": "freshness t800",
+      "basis": "E55/E56",
+      "actual": [
+        1425,
+        450
+      ],
+      "expected": [
+        1425,
+        450
+      ],
+      "passed": true
+    },
+    {
+      "name": "freshness t801",
+      "basis": "E55/E56",
+      "actual": [
+        7600,
+        2400
+      ],
+      "expected": [
+        7600,
+        2400
+      ],
+      "passed": true
+    },
+    {
+      "name": "freshness t2000",
+      "basis": "E55/E56",
+      "actual": [
+        7600,
+        2400
+      ],
+      "expected": [
+        7600,
+        2400
+      ],
+      "passed": true
+    },
+    {
+      "name": "freshness slow tail",
+      "basis": "E55/E56 float64 .6",
+      "actual": [
+        11400.0,
+        3600.0
+      ],
+      "expected": [
+        11400,
+        3600
+      ],
+      "passed": true
+    },
+    {
+      "name": "boost precedes slow",
+      "basis": "E55/E56 float641.5",
+      "actual": [
+        28500.0,
+        9000.0
+      ],
+      "expected": [
+        28500,
+        9000
+      ],
+      "passed": true
+    },
+    {
+      "name": "recovery exact timeout no retry",
+      "basis": "E46",
+      "actual": false,
+      "expected": false,
+      "passed": true
+    },
+    {
+      "name": "recovery past timeout retry candidate",
+      "basis": "E46; other gates still required",
+      "actual": true,
+      "expected": true,
+      "passed": true
+    },
+    {
+      "name": "grid exact boundary no buy",
+      "basis": "S boundary rule consistent with historical D",
+      "actual": false,
+      "expected": false,
+      "passed": true
+    },
+    {
+      "name": "grid exact boundary no sell",
+      "basis": "S boundary rule consistent with historical D",
+      "actual": false,
+      "expected": false,
+      "passed": true
+    },
+    {
+      "name": "pending deadline equality is not future",
+      "basis": "E59; not order terminal proof",
+      "actual": false,
+      "expected": false,
+      "passed": true
+    }
+  ]
+}

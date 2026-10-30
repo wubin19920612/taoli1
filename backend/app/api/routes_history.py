@@ -21,6 +21,7 @@ async def list_opportunity_history(
     type: str | None = Query(default=None),
     hours: float = Query(default=24, gt=0, le=24 * 30),
     limit: int = Query(default=1000, ge=1, le=10_000),
+    include_invalid: bool = False,
 ) -> list[OpportunityHistoryRow]:
     repo = getattr(request.app.state, "history_repo", None)
     if repo is None:
@@ -34,6 +35,7 @@ async def list_opportunity_history(
         type=normalized_type,
         since=since,
         limit=limit,
+        include_invalid=include_invalid,
     )
 
 

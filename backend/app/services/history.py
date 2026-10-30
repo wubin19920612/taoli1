@@ -1,9 +1,13 @@
+import logging
 from datetime import UTC, datetime, timedelta
 
 from app.db.repositories import OpportunityHistoryRepository
 from app.models.opportunity import Opportunity
 from app.models.settings import HistorySettings
 from app.services.risk_labels import known_volume_24h_usdt
+
+
+logger = logging.getLogger(__name__)
 
 
 class OpportunityHistoryRecorder:
@@ -38,13 +42,18 @@ class OpportunityHistoryRecorder:
         ]
         inserted = await self.repository.insert_many(rows)
         self._last_sample_at = observed_at
-        await self._prune(observed_at)
+        try:
+            await self._prune(observed_at)
+        except Exception:
+            logger.warning("History maintenance failed after batch insert committed", exc_info=True)
         return inserted
 
     def _select(self, opportunities: list[Opportunity]) -> list[Opportunity]:
         min_volume = self.settings.min_volume_24h_usdt
 
         def eligible(item: Opportunity) -> bool:
+            if min_volume > 0 and (item.buy_volume_24h_usdt is None or item.sell_volume_24h_usdt is None):
+                return False
             if item.open_spread_pct < self.settings.min_open_spread_pct:
                 return False
             known_volume = known_volume_24h_usdt(item)
@@ -67,5 +76,5 @@ class OpportunityHistoryRecorder:
             elapsed = (now - self._last_vacuum_at).total_seconds()
             if elapsed < self.settings.vacuum_interval_seconds:
                 return
-        await self.repository.vacuum()
-        self._last_vacuum_at = now
+        if await self.repository.vacuum_if_beneficial():
+            self._last_vacuum_at = now

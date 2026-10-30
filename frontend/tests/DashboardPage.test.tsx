@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -78,6 +78,171 @@ describe("DashboardPage", () => {
         return Response.json({});
       })
     );
+  });
+
+  it("keeps exchange health pending until the response arrives without loading card targets", async () => {
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    let resolveHealth!: (response: Response) => void;
+    const pendingHealth = new Promise<Response>((resolve) => { resolveHealth = resolve; });
+    vi.mocked(fetch).mockImplementation((input, init) => (
+      String(input).includes("/health") ? pendingHealth : fallback(input, init)
+    ));
+
+    render(<DashboardPage />);
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes("/health"))).toBe(true));
+    const pendingStatistic = screen.getByText("交易所链路状态加载中").closest(".ant-statistic")!;
+    expect(pendingStatistic.querySelector(".ant-statistic-content")?.textContent).toBe("-");
+    expect(screen.queryByText("交易所链路异常")).toBeNull();
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes("/arb-mvp/status"))).toBe(false);
+
+    resolveHealth(Response.json({
+      status: "ok", markets: 1, opportunities: 0,
+      exchange_errors: { "lighter:future": "ConnectTimeout" }
+    }));
+    const loadedStatistic = (await screen.findByText("交易所链路异常")).closest(".ant-statistic")!;
+    expect(loadedStatistic.querySelector(".ant-statistic-content")?.textContent).toBe("1");
+    expect(screen.getByText("交易所外部 API 链路异常")).toBeTruthy();
+    expect(screen.getByText("lighter:future")).toBeTruthy();
+    expect(screen.queryByText("交易所链路状态加载中")).toBeNull();
+  });
+
+  it("keeps Astro sizing through pending Astro then live then Astro previews", async () => {
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    const originalPlan = { opportunity_id: "opp-1", symbol: "BTCUSDT", source_open_spread_pct: 0.8, can_submit: true,
+      pair: {name: "BTC", maxTradeUSDT: "10", leverage: "1", minNotional: "10", maxNotional: "10", disableOpen: true},
+      route_variants: [{card_variant: "non_gc", buy_exchange: "binance", sell_exchange: "okx"}],
+      card_variant: "non_gc", warnings: [], blockers: [], assumptions: [] };
+    const pendingAstro: Array<(response: Response) => void> = [];
+    let astroRequests = 0;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/arb-mvp/status")) return Response.json({paper: {configured: true}, live: {configured: true}, default_max_position_usd: 150});
+      if (url.includes("/astro/preview/opp-1")) {
+        if (url.includes("target=arb_")) return Response.json({...originalPlan, route_variants: [],
+          pair: {name: "BTC", type: "FF", maxPositionUsd: "150", minOrderUsd: "10", maxOrderUsd: "10", legA: {leverage: 1}, disableOpen: true}});
+        if (++astroRequests === 1) return Response.json(originalPlan);
+        return new Promise<Response>((resolve) => pendingAstro.push(resolve));
+      }
+      if (url.includes("/astro/opportunities/opp-1/card")) return Response.json({enabled: true, status: "created", message: "created", warnings: []});
+      if (url.includes("/opportunities")) return Response.json([baseOpportunity]);
+      return fallback(input, init);
+    });
+    render(<DashboardPage />);
+    await userEvent.click(await screen.findByRole("button", {name: "Astro BTCUSDT"}));
+    await waitFor(() => expect((screen.getByLabelText("Position value USDT") as HTMLInputElement).value).toBe("10"));
+    await userEvent.click(screen.getByRole("radio", {name: "arb-mvp 模拟盘"}));
+    await waitFor(() => expect((screen.getByLabelText("最大持仓 (USD)") as HTMLInputElement).value).toBe("150"));
+    await userEvent.click(screen.getByRole("radio", {name: "Astro"}));
+    await waitFor(() => expect(pendingAstro).toHaveLength(1));
+    expect((screen.getByRole("button", {name: "创建卡片"}) as HTMLButtonElement).disabled).toBe(true);
+    await userEvent.click(screen.getByRole("button", {name: "创建卡片"}));
+    expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes("/astro/opportunities/opp-1/card"))).toHaveLength(0);
+    await userEvent.click(screen.getByRole("radio", {name: "arb-mvp live"}));
+    await waitFor(() => expect((screen.getByLabelText("最大持仓 (USD)") as HTMLInputElement).value).toBe("150"));
+    await userEvent.click(screen.getByRole("radio", {name: "Astro"}));
+    await waitFor(() => expect(pendingAstro).toHaveLength(2));
+    // An obsolete Astro response must not make the current preview submittable.
+    await act(async () => { pendingAstro[0](Response.json({...originalPlan, pair: {...originalPlan.pair, maxTradeUSDT: "999"}})); });
+    expect((screen.getByRole("button", {name: "创建卡片"}) as HTMLButtonElement).disabled).toBe(true);
+    expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes("/astro/opportunities/opp-1/card"))).toHaveLength(0);
+    await act(async () => { pendingAstro[1](Response.json(originalPlan)); });
+    await waitFor(() => expect((screen.getByRole("button", {name: "创建卡片"}) as HTMLButtonElement).disabled).toBe(false));
+    await userEvent.click(screen.getByRole("button", {name: "创建卡片"}));
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes("/astro/opportunities/opp-1/card"))).toHaveLength(1));
+    const call = vi.mocked(fetch).mock.calls.find(([url]) => String(url).includes("/astro/opportunities/opp-1/card"))!;
+    const payload = JSON.parse(String(call[1]?.body));
+    expect(payload.target).toBe("astro");
+    expect(payload.max_trade_usdt).toBe(10);
+    expect((screen.getByLabelText("Position value USDT") as HTMLInputElement).value).toBe("10");
+  }, 20000);
+
+  it("arb-mvp switches preview, isolates sizing, confirms live, and sends target", async () => {
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    const originalPlan = { opportunity_id: "opp-1", symbol: "BTCUSDT", source_open_spread_pct: 0.8, can_submit: true,
+      pair: {name: "BTC", maxTradeUSDT: "10", leverage: "1", minNotional: "10", maxNotional: "10", disableOpen: true},
+      route_variants: [{card_variant: "non_gc", buy_exchange: "binance", sell_exchange: "okx"}],
+      card_variant: "non_gc", warnings: [], blockers: [], assumptions: [] };
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/arb-mvp/status")) return Response.json({ paper: {configured: true}, live: {configured: true}, default_max_position_usd: 150 });
+      if (url.includes("/astro/preview/opp-1")) return Response.json(url.includes("target=arb_") ? {
+        ...originalPlan, route_variants: [], pair: {name: "BTC", type: "FF", maxPositionUsd: 150, minOrderUsd: 10, maxOrderUsd: 10, legA: {leverage: 1}, disableOpen: true}
+      } : originalPlan);
+      if (url.includes("/astro/opportunities/opp-1/card")) return Response.json({ enabled: true, status: "created", message: "arb-created", warnings: [] });
+      if (url.includes("/opportunities")) return Response.json([baseOpportunity]);
+      return fallback(input, init);
+    });
+    render(<DashboardPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Astro BTCUSDT" }));
+    await userEvent.click(await screen.findByRole("radio", {name: "arb-mvp 模拟盘"}));
+    await waitFor(() => expect((screen.getByLabelText("最大持仓 (USD)") as HTMLInputElement).value).toBe("150"));
+    expect(screen.queryByLabelText("创建后允许开仓")).toBeNull();
+    expect(screen.queryByText("建卡路线")).toBeNull();
+    expect(screen.getByText(/STOPPED、禁止开仓/)).not.toBeNull();
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes("target=arb_paper"))).toBe(true);
+    await userEvent.click(screen.getByRole("radio", {name: "Astro"}));
+    await waitFor(() => expect((screen.getByLabelText("Position value USDT") as HTMLInputElement).value).toBe("10"));
+    await userEvent.click(screen.getByRole("radio", {name: "arb-mvp live"}));
+    await screen.findByLabelText("最大持仓 (USD)");
+    await userEvent.click(screen.getByRole("button", {name: "创建卡片"}));
+    expect((await screen.findAllByText("将在 arb-mvp live（主网）上架卡片 BTC，不会下单")).length).toBeGreaterThan(0);
+    expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes("/astro/opportunities/opp-1/card"))).toHaveLength(0);
+    await userEvent.click(screen.getByRole("button", {name: "确认上架"}));
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes("/astro/opportunities/opp-1/card"))).toHaveLength(1));
+    const createCalls = vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes("/astro/opportunities/opp-1/card"));
+    expect(JSON.parse(String(createCalls[0][1]?.body)).target).toBe("arb_live");
+    expect(JSON.parse(String(createCalls[0][1]?.body)).open_enabled).toBe(false);
+  }, 20000);
+
+  it("arb-mvp unconfigured targets are disabled", async () => {
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/arb-mvp/status")) return Response.json({paper: {configured: false}, live: {configured: false}, default_max_position_usd: 100});
+      if (url.includes("/astro/preview/opp-1")) return Response.json({ opportunity_id: "opp-1", symbol: "BTCUSDT", source_open_spread_pct: 0.8, can_submit: true,
+      pair: {name: "BTC", maxTradeUSDT: "10", leverage: "1", minNotional: "10", maxNotional: "10", disableOpen: true},
+      route_variants: [{card_variant: "non_gc", buy_exchange: "binance", sell_exchange: "okx"}],
+      card_variant: "non_gc", warnings: [], blockers: [], assumptions: [] });
+      if (url.includes("/opportunities")) return Response.json([baseOpportunity]);
+      return fallback(input, init);
+    });
+    render(<DashboardPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Astro BTCUSDT" }));
+    expect((await screen.findByRole("radio", {name: "arb-mvp 模拟盘"}) as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByRole("radio", {name: "arb-mvp live"}) as HTMLInputElement).disabled).toBe(true);
+  });
+  it("shows the maximum spread independently of row ordering", async () => {
+    const originalFetch = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (String(input).includes("/opportunities")) {
+        return Response.json([
+          { ...baseOpportunity, id: "low", open_spread_pct: 0.1 },
+          { ...baseOpportunity, id: "high", open_spread_pct: 9 }
+        ]);
+      }
+      return originalFetch(input, init);
+    });
+    render(<DashboardPage />);
+    await waitFor(() => expect(screen.getByText("列表最大开仓价差").closest(".ant-statistic")?.textContent).toContain("9.000"));
+  });
+
+  it.each([["rh-lighter", "RH Lighter"], ["arcus", "Arcus"]])("requests %s and global sorting together", async (exchange, label) => {
+    const user = userEvent.setup();
+    render(<DashboardPage />);
+    await user.click(screen.getByRole("combobox", { name: "交易所（任一侧）" }));
+    await user.type(screen.getByRole("combobox", { name: "交易所（任一侧）" }), label);
+    await user.click(screen.getByText(label));
+    await user.click(screen.getByRole("combobox", { name: "排序指标" }));
+    await user.click(screen.getByText("买方 24h 成交额"));
+    await user.click(screen.getByRole("combobox", { name: "排序方向" }));
+    await user.click(screen.getByText("升序"));
+    await waitFor(() => {
+      const urls = vi.mocked(fetch).mock.calls.map(([input]) => new URL(String(input), "http://localhost"));
+      expect(urls.some((url) => url.pathname.endsWith("/opportunities")
+        && url.searchParams.get("exchange") === exchange
+        && url.searchParams.get("sort_by") === "buy_volume_24h_usdt"
+        && url.searchParams.get("sort_order") === "asc")).toBe(true);
+    });
   });
 
   it("hides non-actionable risk rows by default", async () => {
@@ -221,6 +386,26 @@ describe("DashboardPage", () => {
     expect(calls.find((url) => url.includes("/opportunities"))).toContain("min_volume_24h_k=100");
   });
 
+  it("does not inject a priority symbol into the default ranked query", async () => {
+    render(<DashboardPage />);
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/opportunities"),
+        expect.anything()
+      );
+    });
+
+    const opportunityCalls = vi.mocked(fetch).mock.calls
+      .map(([input]) => String(input))
+      .filter((url) => url.includes("/opportunities"));
+    expect(opportunityCalls).toHaveLength(1);
+    const params = new URL(opportunityCalls[0]).searchParams;
+    expect(params.get("symbol")).toBeNull();
+    expect(params.get("exchange")).toBeNull();
+    expect(params.get("limit")).toBe("120");
+  });
+
   it("adds a row symbol to the global blacklist from the table action", async () => {
     vi.stubGlobal(
       "fetch",
@@ -270,6 +455,54 @@ describe("DashboardPage", () => {
         })
       );
     });
+  });
+
+  it("adds a manually entered symbol when it is absent from opportunities", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/settings/risk") && init?.method === "PUT") {
+          return Response.json(JSON.parse(String(init.body)));
+        }
+        if (url.includes("/settings/risk")) {
+          return Response.json({
+            min_volume_24h_usdt: 100000,
+            stale_after_seconds: 30,
+            huge_spread_pct: 10,
+            wide_spread_pct: 3,
+            mark_index_deviation_pct: 1,
+            funding_against_pct: 0.01,
+            ticker_collision_symbols: [],
+            excluded_symbols: [],
+            ignored_exchanges: []
+          });
+        }
+        if (url.includes("/health")) {
+          return Response.json({ status: "ok", markets: 0, opportunities: 0, exchange_errors: {} });
+        }
+        if (url.includes("/opportunities")) {
+          return Response.json([]);
+        }
+        return Response.json({});
+      })
+    );
+
+    render(<DashboardPage />);
+
+    await userEvent.type(await screen.findByRole("textbox", { name: "输入要屏蔽的标的" }), "purr");
+    await userEvent.click(screen.getByRole("button", { name: "屏蔽输入标的" }));
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/settings/risk"),
+        expect.objectContaining({
+          method: "PUT",
+          body: expect.stringContaining('"excluded_symbols":["PURRUSDT"]')
+        })
+      );
+    });
+    expect(await screen.findByRole("button", { name: "取消屏蔽 PURRUSDT" })).toBeTruthy();
   });
 
   it("removes a symbol from the global blacklist from the dashboard", async () => {
@@ -573,7 +806,8 @@ describe("DashboardPage", () => {
             action: "add",
             message: "已创建暂停卡片 BTC FF binance->okx，禁开=true",
             pair_name: "BTC",
-            pair_type: "FF"
+            pair_type: "FF",
+            warnings: ["订单簿深度不足；本次为人工建卡，仅作风险提示，未拦截创建"]
           });
         }
         if (url.includes("/astro/preview/opp-1")) {
@@ -592,6 +826,11 @@ describe("DashboardPage", () => {
               buyEx: "binance",
               sellEx: "okx"
             },
+            card_variant: "both",
+            route_variants: [
+              { card_variant: "non_gc", buy_exchange: "binance", sell_exchange: "okx" },
+              { card_variant: "gc", buy_exchange: "gc-binance", sell_exchange: "gc-okx" }
+            ],
             sdk_payload: { action: "add", pair: { name: "BTC" } },
             blockers: [],
             warnings: [],
@@ -608,7 +847,7 @@ describe("DashboardPage", () => {
     render(<DashboardPage />);
 
     await userEvent.click(await screen.findByRole("button", { name: "Astro BTCUSDT" }));
-    await userEvent.click(await screen.findByRole("button", { name: "创建/更新暂停卡片" }));
+    await userEvent.click(await screen.findByRole("button", { name: "创建卡片" }));
 
     await waitFor(() => {
       expect(fetch).toHaveBeenCalledWith(
@@ -617,6 +856,7 @@ describe("DashboardPage", () => {
       );
     });
     expect((await screen.findAllByText(/已创建暂停卡片 BTC FF/)).length).toBeGreaterThan(0);
+    expect(screen.getByText(/人工建卡，仅作风险提示，未拦截创建/)).toBeTruthy();
   }, 15000);
 
   it("sends edited Astro sizing values and can save them as defaults", async () => {
@@ -677,6 +917,11 @@ describe("DashboardPage", () => {
               buyEx: "binance",
               sellEx: "okx"
             },
+            card_variant: "both",
+            route_variants: [
+              { card_variant: "non_gc", buy_exchange: "binance", sell_exchange: "okx" },
+              { card_variant: "gc", buy_exchange: "gc-binance", sell_exchange: "gc-okx" }
+            ],
             sdk_payload: { action: "add", pair: { name: "BTC" } },
             blockers: [],
             warnings: [],
@@ -702,9 +947,11 @@ describe("DashboardPage", () => {
 
     await userEvent.clear(positionInput);
     await userEvent.type(positionInput, "80");
-    await userEvent.click(screen.getByLabelText("Open after create"));
-    await userEvent.click(screen.getByLabelText("Save sizing as global default"));
-    await userEvent.click(screen.getByRole("button", { name: /暂停卡片/ }));
+    await userEvent.click(screen.getByLabelText("创建后允许开仓"));
+    await userEvent.click(screen.getByText("仅 GC"));
+    expect(screen.getByText("gc-binance → gc-okx")).toBeTruthy();
+    await userEvent.click(screen.getByLabelText("保存为全局建卡默认值"));
+    await userEvent.click(screen.getByRole("button", { name: "创建卡片" }));
 
     await waitFor(() => {
       expect(createBodies).toHaveLength(1);
@@ -714,6 +961,7 @@ describe("DashboardPage", () => {
     expect(createBodies[0]).toContain('"min_notional":10');
     expect(createBodies[0]).toContain('"max_notional":25');
     expect(createBodies[0]).toContain('"open_enabled":true');
+    expect(createBodies[0]).toContain('"card_variant":"gc"');
     expect(createBodies[0]).toContain('"save_as_default":true');
   }, 15000);
 

@@ -1,0 +1,141 @@
+.account-connections-page {
+  width: 100%;
+  max-width: 1180px;
+  min-width: 0;
+  margin: 0 auto;
+  overflow-x: clip;
+}
+
+.account-connections-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.account-connections-header .ant-typography {
+  margin-top: 0;
+  margin-bottom: 4px;
+}
+
+.account-connections-auth {
+  display: grid;
+  grid-template-columns: minmax(180px, 320px) auto;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.account-connections-page > .ant-alert {
+  margin-bottom: 12px;
+}
+
+.account-connections-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-block: 1px solid #e5e7eb;
+  margin: 14px 0;
+}
+
+.account-connections-summary > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 10px 16px;
+  border-right: 1px solid #e5e7eb;
+}
+
+.account-connections-summary > div:last-child {
+  border-right: 0;
+}
+
+.account-connections-summary span {
+  color: #667085;
+  font-size: 13px;
+}
+
+.account-connections-summary strong {
+  color: #1f2937;
+  font-size: 20px;
+}
+
+.account-connections-table-shell {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.account-connections-table-shell .ant-table-wrapper {
+  min-width: 0;
+}
+
+.account-connections-test-result {
+  margin-top: 12px;
+}
+
+.account-connections-form-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.account-connections-form .ant-form-item {
+  margin-bottom: 14px;
+}
+
+.account-connections-scope-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.account-connections-exchange-note {
+  margin-top: -6px;
+  font-size: 13px;
+}
+
+@media (max-width: 600px) {
+  .account-connections-page {
+    padding-inline: 0;
+  }
+
+  .account-connections-header {
+    align-items: stretch;
+    flex-direction: column;
+    padding-left: 42px;
+  }
+
+  .account-connections-header > .ant-btn {
+    align-self: flex-start;
+  }
+
+  .account-connections-auth {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .account-connections-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .account-connections-summary > div:nth-child(2) {
+    border-right: 0;
+  }
+
+  .account-connections-summary > div:nth-child(-n + 2) {
+    border-bottom: 1px solid #e5e7eb;
+  }
+
+  .account-connections-table-shell .ant-table-cell-fix-right {
+    position: static !important;
+    right: auto !important;
+  }
+
+  .account-connections-form-grid,
+  .account-connections-scope-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+}

@@ -7,6 +7,8 @@ from app.models.opportunity import OpportunityType
 
 
 class OpportunityHistoryRow(BaseModel):
+    identity_status: str = "unverified"
+    market_identity: dict | None = None
     observed_at: datetime
     opportunity_id: str
     type: OpportunityType

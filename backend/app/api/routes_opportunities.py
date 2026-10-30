@@ -1,3 +1,5 @@
+from typing import Annotated, Literal
+
 from fastapi import APIRouter, Query, Request
 
 from app.models.market import MarketType
@@ -8,11 +10,29 @@ from app.services.risk_labels import has_non_actionable_risk, known_volume_24h_u
 
 router = APIRouter()
 
+OpportunitySort = Literal[
+    "symbol", "buy_exchange", "sell_exchange", "open_spread_pct",
+    "close_spread_pct", "fee_adjusted_open_pct", "buy_volume_24h_usdt",
+    "sell_volume_24h_usdt", "net_funding_hourly_pct", "net_funding_next_hourly_pct",
+]
+
+_OPPORTUNITY_SYMBOL_SEARCH_ALIASES = {
+    "RH": "HOODUSDT",
+    "ROBINHOOD": "HOODUSDT",
+    "ROBINHOODUSDT": "HOODUSDT",
+    "罗宾汉": "HOODUSDT",
+}
+
 
 def _parse_csv(value: str | None, default: list[str]) -> list[str]:
     if value is None:
         return default
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _normalize_opportunity_symbol_query(value: str) -> str:
+    normalized = value.strip().upper().replace("-", "").replace("_", "")
+    return _OPPORTUNITY_SYMBOL_SEARCH_ALIASES.get(normalized, normalized)
 
 
 async def _risk_settings(request: Request) -> RiskSettings:
@@ -33,6 +53,9 @@ async def list_opportunities(
     include_risky: bool = Query(default=False),
     hidden_risk_labels: str | None = Query(default=None),
     min_volume_24h_k: float | None = Query(default=None, ge=0),
+    limit: int | None = Query(default=None, ge=1, le=1000),
+    sort_by: Annotated[OpportunitySort | None, Query()] = None,
+    sort_order: Literal["asc", "desc"] = Query(default="desc"),
 ) -> list[Opportunity]:
     settings = await _risk_settings(request)
     opportunities = filter_opportunities(
@@ -52,10 +75,10 @@ async def list_opportunities(
             item for item in opportunities if item.type.value not in excluded_types
         ]
     if symbol:
-        wanted = symbol.upper().replace("-", "").replace("_", "")
+        wanted = _normalize_opportunity_symbol_query(symbol)
         opportunities = [item for item in opportunities if wanted in item.symbol]
     if exchange:
-        wanted_exchange = exchange.lower()
+        wanted_exchange = exchange.strip().lower()
         opportunities = [
             item
             for item in opportunities
@@ -83,6 +106,23 @@ async def list_opportunities(
         opportunities = [
             item for item in opportunities if not has_non_actionable_risk(item, hidden_labels)
         ]
+    if sort_by is not None:
+        # Sort the full filtered snapshot before limiting. Unknown values stay last
+        # in both directions; identity breaks ties without merging distinct routes.
+        known = [item for item in opportunities if getattr(item, sort_by) is not None]
+        missing = [item for item in opportunities if getattr(item, sort_by) is None]
+        known.sort(key=lambda item: item.id)
+        known.sort(
+            key=lambda item: (
+                getattr(item, sort_by).casefold()
+                if isinstance(getattr(item, sort_by), str)
+                else getattr(item, sort_by)
+            ),
+            reverse=sort_order == "desc",
+        )
+        opportunities = known + sorted(missing, key=lambda item: item.id)
+    if limit is not None:
+        opportunities = opportunities[:limit]
     return opportunities
 
 

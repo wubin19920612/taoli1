@@ -75,7 +75,15 @@ export function AlertHistoryPage() {
           <Button icon={<ReloadOutlined />} onClick={() => void load()} loading={loading} />
         </Space>
       </div>
-      <Table columns={columns} dataSource={events} rowKey="id" loading={loading} size="middle" tableLayout="fixed" />
+      <Table
+        columns={columns}
+        dataSource={events}
+        rowKey="id"
+        loading={loading}
+        size="middle"
+        tableLayout="fixed"
+        scroll={{ x: 760 }}
+      />
     </div>
   );
 }

@@ -5,8 +5,10 @@ import {
   Col,
   Descriptions,
   Form,
+  Input,
   InputNumber,
   Modal,
+  Radio,
   Row,
   Segmented,
   Space,
@@ -14,25 +16,30 @@ import {
   Switch,
   Table,
   Tag,
+  Tooltip,
   Typography,
   message
 } from "antd";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
-import { EyeOutlined } from "@ant-design/icons";
+import { EyeOutlined, StopOutlined } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 
 import {
   createAstroCard,
+  getArbMvpStatus,
   getOpportunityHistoryStats,
   getRiskSettings,
   previewAstroPair,
   updateRiskSettings
 } from "../api/client";
 import type {
+  ArbMvpStatus,
+  CardTarget,
   AstroActionResult,
   AstroCardCreateRequest,
+  AstroCardVariant,
   AstroFieldAssumption,
   AstroPairPlan,
   ExchangePollState,
@@ -45,6 +52,7 @@ import type {
   RiskSettings
 } from "../api/types";
 import { OpportunityTable } from "../components/OpportunityTable";
+import { AstroCardVariantSelector, selectedAstroRoutes, supportsAstroCardVariant } from "../components/AstroCardVariantSelector";
 import { TopFilters } from "../components/TopFilters";
 import { defaultHiddenRiskLabels } from "../constants/riskLabels";
 import { useRadarStore } from "../state/useRadarStore";
@@ -52,13 +60,18 @@ import { useRadarStore } from "../state/useRadarStore";
 dayjs.extend(utc);
 
 function normalizeSymbol(value: string): string {
-  return value.toUpperCase().replace(/[-_]/g, "");
+  return value.trim().toUpperCase().replace(/[-_]/g, "");
 }
 
 function normalizeSymbols(values: string[] | undefined): string[] {
   return Array.from(
     new Set((values ?? []).map((item) => normalizeSymbol(item)).filter((item) => item.length > 0))
   );
+}
+
+function normalizeManualBlockSymbol(value: string): string {
+  const normalized = normalizeSymbol(value);
+  return normalized && !normalized.endsWith("USDT") ? `${normalized}USDT` : normalized;
 }
 
 function jsonBlock(value: unknown): string {
@@ -100,7 +113,7 @@ type ExchangeStateRow = ExchangePollState & {
   exchange: string;
 };
 
-type AstroSizingFormValues = Required<Omit<AstroCardCreateRequest, "save_as_default">> & {
+type AstroSizingFormValues = Required<Omit<AstroCardCreateRequest, "save_as_default" | "target">> & {
   save_as_default: boolean;
 };
 
@@ -127,8 +140,11 @@ function normalizeOpportunityTypes(value: unknown): OpportunityType[] {
 function defaultDashboardFilters(): OpportunityFilters {
   return {
     include_risky: false,
+    sort_by: "open_spread_pct",
+    sort_order: "desc",
     hidden_risk_labels: defaultHiddenRiskLabels,
-    exclude_types: []
+    exclude_types: [],
+    limit: 120
   };
 }
 
@@ -458,6 +474,7 @@ function sizingFromPlan(plan: AstroPairPlan): AstroSizingFormValues {
     min_notional: pairNumber(plan.pair, "minNotional") ?? 0,
     max_notional: pairNumber(plan.pair, "maxNotional") ?? 0,
     open_enabled: pairBoolean(plan.pair, "disableOpen") === false,
+    card_variant: plan.card_variant ?? "both",
     save_as_default: false
   };
 }
@@ -518,12 +535,22 @@ const exchangeStateColumns: ColumnsType<ExchangeStateRow> = [
 
 export function DashboardPage() {
   const [astroSizingForm] = Form.useForm<AstroSizingFormValues>();
+  const [cardTarget, setCardTarget] = useState<CardTarget>("astro");
+  const [arbStatus, setArbStatus] = useState<ArbMvpStatus | null>(null);
+  const astroSizingRef = useRef<Partial<Pick<AstroSizingFormValues, "max_trade_usdt" | "leverage" | "min_notional" | "max_notional">>>({});
+  const arbSizingRef = useRef<Partial<Pick<AstroSizingFormValues, "max_trade_usdt" | "leverage" | "min_notional" | "max_notional">>>({});
+  const [readyPreviewTarget, setReadyPreviewTarget] = useState<CardTarget | null>(null);
+  const astroPreviewRequestIdRef = useRef(0);
+
   const [filters, setFilters] = useState<OpportunityFilters>(() => initialDashboardFilters());
   const [riskSettings, setRiskSettings] = useState<RiskSettings | null>(null);
   const [savingSymbol, setSavingSymbol] = useState<string | null>(null);
+  const [manualBlockSymbol, setManualBlockSymbol] = useState("");
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [astroPreviewOpportunity, setAstroPreviewOpportunity] = useState<Opportunity | null>(null);
   const [astroPreviewPlan, setAstroPreviewPlan] = useState<AstroPairPlan | null>(null);
+  const selectedCardVariant: AstroCardVariant = Form.useWatch("card_variant", astroSizingForm)
+    ?? astroPreviewPlan?.card_variant ?? "both";
   const [astroPreviewLoading, setAstroPreviewLoading] = useState(false);
   const [astroPreviewError, setAstroPreviewError] = useState<string | null>(null);
   const [astroSubmitLoading, setAstroSubmitLoading] = useState(false);
@@ -534,7 +561,13 @@ export function DashboardPage() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [historyHours, setHistoryHours] = useState(168);
-  const { opportunities, health, loading, error, refresh } = useRadarStore(filters, settingsLoaded);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [refreshIntervalMs, setRefreshIntervalMs] = useState(8000);
+  const { opportunities, health, loading, error, refresh } = useRadarStore(
+    filters,
+    settingsLoaded,
+    { autoRefresh, refreshIntervalMs }
+  );
   const errors = health?.exchange_errors ?? {};
   const exchangeStates = useMemo(
     () =>
@@ -545,6 +578,7 @@ export function DashboardPage() {
     [health]
   );
   const blockedSymbols = riskSettings ? normalizeSymbols(riskSettings.excluded_symbols) : [];
+  const manualBlockCandidate = normalizeManualBlockSymbol(manualBlockSymbol);
   const astroPreviewSymbol = useMemo(
     () => (astroPreviewOpportunity ? normalizeSymbol(astroPreviewOpportunity.symbol) : null),
     [astroPreviewOpportunity]
@@ -585,15 +619,19 @@ export function DashboardPage() {
     };
   }, []);
 
-  const toggleBlockedSymbol = async (symbol: string, block: boolean) => {
+  const toggleBlockedSymbol = async (symbol: string, block: boolean): Promise<boolean> => {
     if (!riskSettings) {
-      return;
+      return false;
     }
     const normalizedSymbol = normalizeSymbol(symbol);
     if (!normalizedSymbol) {
-      return;
+      return false;
     }
     const currentExcluded = normalizeSymbols(riskSettings.excluded_symbols);
+    if (block && currentExcluded.includes(normalizedSymbol)) {
+      message.info(`${normalizedSymbol} 已在全局黑名单`);
+      return true;
+    }
     const nextExcluded = block
       ? normalizeSymbols([...currentExcluded, normalizedSymbol])
       : currentExcluded.filter((item) => item !== normalizedSymbol);
@@ -609,17 +647,32 @@ export function DashboardPage() {
       };
       setRiskSettings(normalizedSaved);
       message.success(block ? `Blocked ${normalizedSymbol}` : `Unblocked ${normalizedSymbol}`);
-      await refresh();
+      await refresh({ force: true, showLoading: true });
+      return true;
     } catch (exc) {
       message.error(exc instanceof Error ? exc.message : String(exc));
+      return false;
     } finally {
       setSavingSymbol(null);
     }
   };
 
+  const blockManualSymbol = async () => {
+    const normalizedSymbol = normalizeManualBlockSymbol(manualBlockSymbol);
+    if (!normalizedSymbol) {
+      return;
+    }
+    if (await toggleBlockedSymbol(normalizedSymbol, true)) {
+      setManualBlockSymbol("");
+    }
+  };
+
   const closeAstroPreview = () => {
+    if (astroSubmitLoading) return;
+    astroPreviewRequestIdRef.current += 1;
     setAstroPreviewOpportunity(null);
     setAstroPreviewPlan(null);
+    setReadyPreviewTarget(null);
     setAstroPreviewError(null);
     setAstroPreviewLoading(false);
     setAstroSubmitLoading(false);
@@ -629,29 +682,85 @@ export function DashboardPage() {
   };
 
   const openAstroPreview = async (opportunity: Opportunity) => {
+    if (astroSubmitLoading) return;
+    const requestId = ++astroPreviewRequestIdRef.current;
     setAstroPreviewOpportunity(opportunity);
+    setCardTarget("astro");
+    setArbStatus(null);
+    astroSizingRef.current = {};
+    arbSizingRef.current = {};
+    void getArbMvpStatus().then((status) => {
+      if (requestId === astroPreviewRequestIdRef.current) setArbStatus(status);
+    }).catch(() => {});
     setAstroPreviewPlan(null);
+    setReadyPreviewTarget(null);
     setAstroPreviewError(null);
     setAstroSubmitResult(null);
     setAstroSubmitError(null);
     setAstroPreviewLoading(true);
     try {
       const plan = await previewAstroPair(opportunity.id);
+      if (requestId !== astroPreviewRequestIdRef.current) return;
       setAstroPreviewPlan(plan);
       if (plan.pair) {
+        setReadyPreviewTarget("astro");
         astroSizingForm.setFieldsValue(sizingFromPlan(plan));
       } else {
         astroSizingForm.resetFields();
       }
     } catch (exc) {
+      if (requestId !== astroPreviewRequestIdRef.current) return;
       setAstroPreviewError(exc instanceof Error ? exc.message : String(exc));
     } finally {
-      setAstroPreviewLoading(false);
+      if (requestId === astroPreviewRequestIdRef.current) setAstroPreviewLoading(false);
+    }
+  };
+
+  const changeCardTarget = async (target: CardTarget) => {
+    if (astroSubmitLoading || target === cardTarget || !astroPreviewOpportunity) return;
+    if (!astroPreviewLoading && readyPreviewTarget === cardTarget && astroPreviewPlan?.pair) {
+      const sizing = astroSizingForm.getFieldsValue(["max_trade_usdt", "leverage", "min_notional", "max_notional"]);
+      if (cardTarget === "astro") astroSizingRef.current = sizing;
+      else arbSizingRef.current = sizing;
+    }
+    const requestId = ++astroPreviewRequestIdRef.current;
+    setCardTarget(target);
+    setAstroPreviewPlan(null);
+    setReadyPreviewTarget(null);
+    setAstroPreviewLoading(true);
+    setAstroPreviewError(null);
+    setAstroSubmitError(null);
+    setAstroSubmitResult(null);
+    try {
+      const plan = await previewAstroPair(astroPreviewOpportunity.id, target);
+      if (requestId !== astroPreviewRequestIdRef.current) return;
+      setAstroPreviewPlan(plan);
+      if (plan.pair) {
+        setReadyPreviewTarget(target);
+        if (target === "astro") {
+          astroSizingForm.setFieldsValue(sizingFromPlan(plan));
+          astroSizingForm.setFieldsValue(astroSizingRef.current);
+        } else {
+          astroSizingForm.setFieldsValue({
+            max_trade_usdt: Number(plan.pair.maxPositionUsd ?? arbStatus?.default_max_position_usd ?? 100),
+            leverage: Number((plan.pair.legA as {leverage?: number})?.leverage ?? 1),
+            min_notional: Number(plan.pair.minOrderUsd), max_notional: Number(plan.pair.maxOrderUsd),
+            open_enabled: false, card_variant: "both", save_as_default: false,
+            ...arbSizingRef.current
+          });
+        }
+      }
+    } catch (exc) {
+      if (requestId === astroPreviewRequestIdRef.current) setAstroPreviewError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      if (requestId === astroPreviewRequestIdRef.current) setAstroPreviewLoading(false);
     }
   };
 
   const submitAstroCard = async () => {
-    if (!astroPreviewOpportunity || !astroPreviewPlan?.can_submit) {
+    if (astroSubmitLoading || astroPreviewLoading || readyPreviewTarget !== cardTarget) return;
+    const previewRequestId = astroPreviewRequestIdRef.current;
+    if (!astroPreviewOpportunity || !astroPreviewPlan?.pair || !astroPreviewPlan.can_submit) {
       return;
     }
     setAstroSubmitLoading(true);
@@ -659,7 +768,17 @@ export function DashboardPage() {
     setAstroSubmitError(null);
     try {
       const sizing = await astroSizingForm.validateFields();
-      const result = await createAstroCard(astroPreviewOpportunity.id, sizing);
+      if (previewRequestId !== astroPreviewRequestIdRef.current) return;
+      if (cardTarget === "arb_live") {
+        const confirmed = await new Promise<boolean>((resolve) => {
+          Modal.confirm({ title: `将在 arb-mvp live（主网）上架卡片 ${String(astroPreviewPlan?.pair?.name ?? "")}，不会下单`,
+            okText: "确认上架", cancelText: "取消", onOk: () => resolve(true), onCancel: () => resolve(false) });
+        });
+        if (!confirmed) return;
+      }
+      const payload = { ...sizing, target: cardTarget, ...(cardTarget !== "astro" ? {open_enabled: false} : {}) };
+
+      const result = await createAstroCard(astroPreviewOpportunity.id, payload);
       setAstroSubmitResult(result);
       if (result.status === "created" || result.status === "updated") {
         message.success(result.message);
@@ -714,17 +833,47 @@ export function DashboardPage() {
   };
 
   const astroSubmitDisabled =
+    readyPreviewTarget !== cardTarget ||
     astroPreviewLoading ||
     astroSubmitLoading ||
-    !astroPreviewPlan ||
-    !astroPreviewPlan.can_submit;
+    !astroPreviewPlan?.pair ||
+    !astroPreviewPlan.can_submit ||
+    (cardTarget === "astro" && !supportsAstroCardVariant(astroPreviewPlan.route_variants, selectedCardVariant));
 
   return (
     <div className="page">
-      <TopFilters filters={filters} loading={loading} onChange={changeFilters} onRefresh={refresh} />
-      {blockedSymbols.length > 0 ? (
-        <div className="blocked-strip">
-          <Typography.Text className="blocked-strip-title">Blocked symbols</Typography.Text>
+      <TopFilters
+        filters={filters}
+        loading={loading}
+        autoRefresh={autoRefresh}
+        refreshIntervalMs={refreshIntervalMs}
+        onChange={changeFilters}
+        onRefresh={() => void refresh({ force: true, showLoading: true })}
+        onAutoRefreshChange={setAutoRefresh}
+        onRefreshIntervalChange={setRefreshIntervalMs}
+      />
+      <div className="blocked-strip">
+        <Typography.Text className="blocked-strip-title">全局屏蔽</Typography.Text>
+        <Space.Compact className="blocked-strip-input">
+          <Input
+            aria-label="输入要屏蔽的标的"
+            placeholder="PURRUSDT"
+            value={manualBlockSymbol}
+            disabled={!riskSettings || savingSymbol !== null}
+            onChange={(event) => setManualBlockSymbol(event.target.value)}
+            onPressEnter={() => void blockManualSymbol()}
+          />
+          <Tooltip title="屏蔽标的">
+            <Button
+              aria-label="屏蔽输入标的"
+              icon={<StopOutlined />}
+              loading={savingSymbol === manualBlockCandidate && Boolean(manualBlockCandidate)}
+              disabled={!riskSettings || savingSymbol !== null || !manualBlockCandidate}
+              onClick={() => void blockManualSymbol()}
+            />
+          </Tooltip>
+        </Space.Compact>
+        {blockedSymbols.length > 0 ? (
           <Space size={8} wrap className="blocked-strip-list">
             {blockedSymbols.map((symbol) => (
               <Button
@@ -741,8 +890,8 @@ export function DashboardPage() {
               </Button>
             ))}
           </Space>
-        </div>
-      ) : null}
+        ) : null}
+      </div>
       <Row gutter={[12, 12]} className="metric-row">
         <Col xs={12} md={6}>
           <Statistic title="Opportunities" value={opportunities.length} />
@@ -751,12 +900,15 @@ export function DashboardPage() {
           <Statistic title="Markets" value={health?.markets ?? 0} />
         </Col>
         <Col xs={12} md={6}>
-          <Statistic title="交易所链路异常" value={Object.keys(errors).length} />
+          <Statistic
+            title={health ? "交易所链路异常" : "交易所链路状态加载中"}
+            value={health ? Object.keys(errors).length : "-"}
+          />
         </Col>
         <Col xs={12} md={6}>
           <Statistic
-            title="Top open spread"
-            value={opportunities[0]?.open_spread_pct ?? 0}
+            title="列表最大开仓价差"
+            value={opportunities.length ? Math.max(...opportunities.map((item) => item.open_spread_pct)) : 0}
             precision={3}
             suffix="%"
           />
@@ -805,9 +957,17 @@ export function DashboardPage() {
           </Space>
         </div>
       ) : null}
+      <Typography.Paragraph type="secondary">
+        {filters.exchange ? `与 ${filters.exchange} 买入或卖出侧相关的价差。` : "全部交易所价差。"}
+        在符合当前筛选的采集数据中先排序，再取前 {filters.limit ?? "全部"} 条。
+        成交额为双方 24h USDT；净资金费率按小时归一化，正值表示买多卖空净收入，预测不保证实现；缺失值排末尾。
+      </Typography.Paragraph>
       <OpportunityTable
         opportunities={opportunities}
         loading={loading}
+        sortBy={filters.sort_by}
+        sortOrder={filters.sort_order}
+        onSortChange={(sort_by, sort_order) => setFilters((current) => ({ ...current, sort_by, sort_order }))}
         blockedSymbols={blockedSymbols}
         actionLoadingSymbol={savingSymbol}
         previewLoadingSymbol={astroPreviewSymbol}
@@ -898,13 +1058,23 @@ export function DashboardPage() {
             loading={astroSubmitLoading}
             onClick={() => void submitAstroCard()}
           >
-            创建/更新暂停卡片
+            创建卡片
           </Button>
         ]}
         destroyOnHidden
       >
         {astroPreviewOpportunity ? (
           <Space direction="vertical" size={12} className="astro-preview-panel">
+            <div>
+              <Typography.Text>建卡目标</Typography.Text>{" "}
+              <Radio.Group value={cardTarget} disabled={astroSubmitLoading} onChange={(event) => void changeCardTarget(event.target.value)}>
+                <Radio value="astro">Astro</Radio>
+                <Radio value="arb_paper" disabled={!arbStatus?.paper?.configured}>arb-mvp 模拟盘</Radio>
+                <Radio value="arb_live" disabled={!arbStatus?.live?.configured}>arb-mvp live</Radio>
+              </Radio.Group>
+            </div>
+            {cardTarget !== "astro" ? <Alert type="info" showIcon message="arb-mvp 卡片建好后是 STOPPED、禁止开仓，需要在 arb-mvp 界面手动开始交易" /> : null}
+
             <Descriptions bordered size="small" column={2}>
               <Descriptions.Item label="Symbol">{astroPreviewOpportunity.symbol}</Descriptions.Item>
               <Descriptions.Item label="Opportunity ID">{astroPreviewOpportunity.id}</Descriptions.Item>
@@ -933,6 +1103,13 @@ export function DashboardPage() {
                 message={astroSubmitResult.message}
               />
             ) : null}
+            {astroSubmitResult?.warnings?.length ? (
+              <Alert
+                type="warning"
+                showIcon
+                message={astroSubmitResult.warnings.join(" | ")}
+              />
+            ) : null}
             {astroPreviewPlan ? (
               <>
                 {astroPreviewPlan.warnings.length > 0 ? (
@@ -954,16 +1131,19 @@ export function DashboardPage() {
                   <Typography.Title level={5}>Generated card defaults</Typography.Title>
                   <Descriptions bordered size="small" column={2}>
                     <Descriptions.Item label="Generated openPosition">
-                      <Typography.Text code>{pairString(astroPreviewPlan.pair, "openPosition")}</Typography.Text>
+                      <Typography.Text code>{pairString(astroPreviewPlan.pair, cardTarget === "astro" ? "openPosition" : "openSpread")}</Typography.Text>
                     </Descriptions.Item>
                     <Descriptions.Item label="Generated closePosition">
-                      <Typography.Text code>{pairString(astroPreviewPlan.pair, "closePosition")}</Typography.Text>
+                      <Typography.Text code>{pairString(astroPreviewPlan.pair, cardTarget === "astro" ? "closePosition" : "closeSpread")}</Typography.Text>
                     </Descriptions.Item>
+                    {cardTarget === "astro" ? (<Descriptions.Item label="将创建路线" span={2}>
+                      {selectedAstroRoutes(astroPreviewPlan.route_variants, selectedCardVariant)}
+                    </Descriptions.Item>) : null}
                   </Descriptions>
                   {astroPreviewPlan.pair ? (
                     <Form form={astroSizingForm} layout="vertical" className="astro-sizing-form">
                       <div className="form-grid">
-                        <Form.Item label="Position value USDT" name="max_trade_usdt" rules={[{ required: true }]}>
+                        <Form.Item label={cardTarget === "astro" ? "Position value USDT" : "最大持仓 (USD)"} name="max_trade_usdt" rules={[{ required: true }]}>
                           <InputNumber min={0.01} step={1} className="wide-input" />
                         </Form.Item>
                         <Form.Item label="Leverage" name="leverage" rules={[{ required: true }]}>
@@ -975,12 +1155,15 @@ export function DashboardPage() {
                         <Form.Item label="Maximum notional USDT" name="max_notional" rules={[{ required: true }]}>
                           <InputNumber min={0.01} step={1} className="wide-input" />
                         </Form.Item>
-                        <Form.Item label="Open after create" name="open_enabled" valuePropName="checked">
-                          <Switch checkedChildren="on" unCheckedChildren="off" />
-                        </Form.Item>
+                        {cardTarget === "astro" ? (<Form.Item label="创建后允许开仓" name="open_enabled" valuePropName="checked">
+                          <Switch checkedChildren="开启" unCheckedChildren="关闭" />
+                        </Form.Item>) : null}
                       </div>
+                      {cardTarget === "astro" ? (<Form.Item label="建卡路线" name="card_variant" rules={[{ required: true }]}>
+                        <AstroCardVariantSelector routes={astroPreviewPlan.route_variants} />
+                      </Form.Item>) : null}
                       <Form.Item name="save_as_default" valuePropName="checked">
-                        <Checkbox>Save sizing as global default</Checkbox>
+                        <Checkbox>保存为全局建卡默认值</Checkbox>
                       </Form.Item>
                     </Form>
                   ) : null}

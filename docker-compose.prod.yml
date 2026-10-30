@@ -1,0 +1,11 @@
+services:
+  backend:
+    image: ${BACKEND_IMAGE:?Set BACKEND_IMAGE to a prebuilt immutable image tag}
+    build: !reset null
+    # Temporary headroom while M1 locates steady growth (was 768m; 2026-10-25).
+    mem_limit: 1024m
+
+  frontend:
+    image: ${FRONTEND_IMAGE:?Set FRONTEND_IMAGE to a prebuilt immutable image tag}
+    build: !reset null
+    mem_limit: 96m

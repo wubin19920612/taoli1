@@ -1,15 +1,24 @@
+import asyncio
+from copy import deepcopy
 from dataclasses import dataclass
 import json
+import ssl
+from time import monotonic
 from typing import Any
 
 import httpx
 
 
 class AstroClientError(RuntimeError):
-    def __init__(self, message: str, status_code: int = 502):
+    def __init__(self, message: str, status_code: int = 502, *, has_response_body: bool = False):
         super().__init__(message)
         self.status_code = status_code
         self.message = message
+        self.has_response_body = has_response_body
+
+    @property
+    def explicitly_rejected(self) -> bool:
+        return 400 <= self.status_code < 500 and self.has_response_body
 
 
 @dataclass(frozen=True)
@@ -18,6 +27,7 @@ class AstroSdkConfig:
     admin_prefix: str
     api_key: str
     verify_tls: bool = True
+    ca_bundle: str = ""
     timeout_seconds: float = 10.0
 
     @property
@@ -27,6 +37,17 @@ class AstroSdkConfig:
     @property
     def normalized_admin_prefix(self) -> str:
         return self.admin_prefix.strip().strip("/")
+
+    @property
+    def normalized_ca_bundle(self) -> str:
+        return self.ca_bundle.strip()
+
+    @property
+    def httpx_verify(self) -> bool | str:
+        if not self.verify_tls:
+            return False
+        ca_bundle = self.normalized_ca_bundle
+        return ca_bundle if ca_bundle else True
 
     def _path_with_prefix(self, suffix: str) -> str:
         prefix = self.normalized_admin_prefix
@@ -44,13 +65,25 @@ class AstroSdkConfig:
 class AstroSdkClient:
     def __init__(self, config: AstroSdkConfig, client: httpx.AsyncClient | None = None):
         self.config = config
-        self.client = client or httpx.AsyncClient(
-            timeout=config.timeout_seconds,
-            verify=config.verify_tls,
-        )
+        self._client = client
+        self._owns_client = client is None
+        self._pairs_cache: list[dict[str, Any]] | None = None
+        self._pairs_cached_at = 0.0
+        self._pairs_lock = asyncio.Lock()
+        self._pairs_inflight: asyncio.Task[list[dict[str, Any]]] | None = None
+
+    @property
+    def client(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                timeout=self.config.timeout_seconds,
+                verify=self.config.httpx_verify,
+            )
+        return self._client
 
     async def aclose(self) -> None:
-        await self.client.aclose()
+        if self._client is not None and self._owns_client:
+            await self._client.aclose()
 
     def status(self, dry_run_only: bool) -> dict[str, Any]:
         return {
@@ -59,6 +92,8 @@ class AstroSdkClient:
             "base_url": self.config.base_url,
             "admin_prefix": self.config.admin_prefix,
             "api_key_configured": bool(self.config.api_key.strip()),
+            "verify_tls": self.config.verify_tls,
+            "ca_bundle_configured": bool(self.config.normalized_ca_bundle),
             "list_path": self.config.list_path,
             "pair_path": self.config.list_path,
             "message_path": self.config.message_path,
@@ -82,10 +117,45 @@ class AstroSdkClient:
         return await self._mutate_pair("update", pair)
 
     async def _mutate_pair(self, action: str, pair: dict[str, Any]) -> dict[str, Any]:
-        response = await self._post(self.config.list_path, {"action": action, "pair": pair})
-        if response.get("code") != 0:
-            raise AstroClientError(response.get("message", f"Astro {action} request failed"))
-        return response
+        try:
+            response = await self._post(self.config.list_path, {"action": action, "pair": pair})
+            if response.get("code") != 0:
+                raise AstroClientError(response.get("message", f"Astro {action} request failed"))
+            return response
+        finally:
+            self._pairs_cache = None
+            # A read started before this write must not refill the cache or be
+            # joined by subsequent readers, even if the write timed out.
+            self._pairs_inflight = None
+
+    async def list_pairs_cached(self, max_age_seconds: float = 10.0) -> list[dict[str, Any]]:
+        """仅用于展示，建卡/对账前必须用 list_pairs()。"""
+        async with self._pairs_lock:
+            if (
+                self._pairs_cache is not None
+                and monotonic() - self._pairs_cached_at < max_age_seconds
+            ):
+                return deepcopy(self._pairs_cache)
+            if self._pairs_inflight is None:
+                self._pairs_inflight = asyncio.create_task(self._refresh_pairs_cache())
+                # Retrieve failures even if all display requests were cancelled.
+                self._pairs_inflight.add_done_callback(
+                    lambda task: None if task.cancelled() else task.exception()
+                )
+            inflight = self._pairs_inflight
+        # One route timing out must not cancel the shared upstream read.
+        return deepcopy(await asyncio.shield(inflight))
+
+    async def _refresh_pairs_cache(self) -> list[dict[str, Any]]:
+        try:
+            pairs = await self.list_pairs()
+            if self._pairs_inflight is asyncio.current_task():
+                self._pairs_cache = deepcopy(pairs)
+                self._pairs_cached_at = monotonic()
+            return pairs
+        finally:
+            if self._pairs_inflight is asyncio.current_task():
+                self._pairs_inflight = None
 
     async def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         if not self.config.configured:
@@ -112,8 +182,17 @@ class AstroSdkClient:
             raise AstroClientError(
                 f"Astro HTTP {exc.response.status_code}{suffix}",
                 exc.response.status_code,
+                has_response_body=bool(detail),
             ) from exc
         except httpx.HTTPError as exc:
+            if _is_ssl_certificate_error(exc):
+                raise AstroClientError(
+                    "Astro TLS 证书校验失败：目标地址使用自签名或未受信任证书。"
+                    "如果这是内网 Astro 服务，临时处理可在服务端 .env 设置 "
+                    "ASTRO_VERIFY_TLS=false 后重启；更安全做法是配置 "
+                    "ASTRO_CA_BUNDLE=/容器内/astro-ca.pem。",
+                    502,
+                ) from exc
             raise AstroClientError(f"Astro request failed: {exc}", 502) from exc
         try:
             parsed = response.json()
@@ -148,3 +227,15 @@ class AstroSdkClient:
             canonical_message.encode("utf-8"),
             hashlib.sha256,
         ).hexdigest()
+
+
+def _is_ssl_certificate_error(exc: BaseException) -> bool:
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, ssl.SSLCertVerificationError):
+            return True
+        current = current.__cause__ or current.__context__
+    message = str(exc).lower()
+    return "certificate_verify_failed" in message or "certificate verify failed" in message
