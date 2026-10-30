@@ -2122,7 +2122,7 @@ class GateAnnouncementProvider(HttpAnnouncementProvider):
             content_by_key = await self._fetch_detail_content_for_page(page_rows) if include_details else {}
             announcements.extend(
                 self._parse_page(response.text, category, content_by_key=content_by_key)
-                if content_by_key else page_rows
+                if include_details else page_rows
             )
         if (
             categories

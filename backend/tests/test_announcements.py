@@ -1810,11 +1810,13 @@ async def test_gate_reuses_page_rows_unless_details_are_available(
     expected_rows = []
     for category in provider.categories:
         calls = [call for call in parsed if call[0] == category]
-        has_details = include_details and bool(detail_content) and bool(calls[0][2])
-        assert len(calls) == (2 if has_details else 1)
+        # Detail fetches await, so the second parse keeps its fresh clock even
+        # when every detail fails; only the headline path reuses the first parse.
+        assert len(calls) == (2 if include_details else 1)
         assert calls[0][1] is None
-        if has_details:
-            assert calls[1][1] == {"60001": detail_content}
+        if include_details:
+            has_details = bool(detail_content) and bool(calls[0][2])
+            assert calls[1][1] == ({"60001": detail_content} if has_details else {})
         expected_rows.extend(calls[-1][2])
     assert len(rows) == len(provider.categories)
     assert all(row is expected for row, expected in zip(rows, expected_rows, strict=True))

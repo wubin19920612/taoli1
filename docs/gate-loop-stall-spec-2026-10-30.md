@@ -76,3 +76,7 @@ C:\Users\wubin\Desktop\code\codex\taoli1\.worktrees\gate-loop-stall\backend\app\
 - 全量汇总：`2527 passed, 6 deselected, 13 warnings in 140.72s (0:02:20)`，退出码 0。使用项目默认的 `not network and not benchmark` 选择条件，6 项因此排除；13 条警告为 FastAPI/Starlette TestClient 的 httpx 弃用提示及 `datetime.utcnow()` 弃用提示，未扩大范围修复。
 - 工作区检查：`git diff --check` 通过；初始仅本任务书未跟踪，该文件随实现纳入提交，未发现其他未跟踪文件或范围外改动。
 - 线上与后续：本任务只做本地实现和测试；未运行 WSL，未访问生产、交易所、Gate、飞书或其他外网，未推送或部署。真实 Gate 页面的冷启动基准及上线后 +1h 观察仍由 Claude 按任务书验收。
+
+## Claude 验收修正（2026-10-30）
+- 上面交接记录里“非 ASCII 别名绕过预筛、冷缓存 147 次正则调用”已被 `3a1b9d2` 取代：非 ASCII 别名改为按其 ASCII 片段预筛（`_alias_may_match`），Ⓢ 等非 ASCII 字符仍由原正则判断。4 个真实 Gate 页面（52 条）冷启动一轮 1.0s → 0.046s，热缓存 0.038s；新旧解析结果除随机 id 外完全一致。
+- 只读审查发现：`include_details=True` 且详情全部失败时，复用首次解析会让状态按等待详情之前的时间计算，和旧行为不一致。已改为只在 `include_details=False` 时复用（两次解析之间没有 await，结果必然相同），对应测试同步调整。
