@@ -323,7 +323,7 @@ def _legacy_extract_event_schedule(text: str, symbols: list[str]):
         for aliases in (specific_aliases, plain_aliases):
             found = False
             for alias in aliases:
-                pattern = re.compile(rf"(?<![A-Z0-9]){re.escape(alias)}(?![A-Z0-9])", re.I)
+                pattern = re.compile(rf"(?<![A-Z0-9]){re.escape(alias)}(?![A-Z0-9])", re.IGNORECASE)
                 for match in pattern.finditer(normalized):
                     window = normalized[match.start() : min(len(normalized), match.start() + 240)]
                     if not announcement_service._schedule_context_has_time_cue(window):
@@ -414,7 +414,7 @@ def test_alias_pattern_cache_is_bounded() -> None:
     assert announcement_service._alias_pattern.cache_info().maxsize == 1024
 
 
-def test_event_schedule_keeps_non_ascii_aliases_on_regex_path(monkeypatch) -> None:
+def test_event_schedule_prefilters_non_ascii_aliases_by_ascii_runs(monkeypatch) -> None:
     pattern = announcement_service._alias_pattern
     calls = []
 
@@ -426,9 +426,13 @@ def test_event_schedule_keeps_non_ascii_aliases_on_regex_path(monkeypatch) -> No
     assert extract_event_schedule(
         "BTC/USDT trading will open at 2026-06-18 09:00 UTC.", ["ABSENT"],
     ) == []
-    specific, plain = announcement_service._schedule_alias_groups("ABSENT")
-    assert calls == [alias for alias in specific + plain if not alias.isascii()]
-    assert len(calls) == 3
+    assert calls == []
+    assert extract_event_schedule(
+        "ABSENT/USDⓈ trading will open at 2026-06-18 09:00 UTC.", ["ABSENT"],
+    ) == _legacy_extract_event_schedule(
+        "ABSENT/USDⓈ trading will open at 2026-06-18 09:00 UTC.", ["ABSENT"],
+    )
+    assert calls  # present ASCII runs still reach the regex
 
 
 def test_event_schedule_prefilter_skips_absent_ascii_aliases(monkeypatch) -> None:
@@ -448,7 +452,7 @@ def test_event_schedule_prefilter_skips_absent_ascii_aliases(monkeypatch) -> Non
         )
         assert [row.symbol for row in rows] == ["BTC"]
         assert [alias for alias in calls if alias.isascii()] == ["BTC/USDT"]
-        assert len([alias for alias in calls if not alias.isascii()]) == 49 * 3
+        assert [alias for alias in calls if not alias.isascii()] == []
     finally:
         pattern.cache_clear()
 
@@ -465,8 +469,8 @@ def test_event_schedule_prefilter_limits_compiles_after_non_ascii_warmup(monkeyp
 
     pattern.cache_clear()
     try:
-        # Non-ASCII aliases deliberately bypass the prefilter. Warm only these;
-        # all ASCII aliases remain cold so this still detects a missing prefilter.
+        # Warm only non-ASCII aliases; all ASCII aliases remain cold so this
+        # still detects a missing prefilter.
         for symbol in symbols:
             specific, plain = announcement_service._schedule_alias_groups(symbol)
             for alias in specific + plain:
@@ -479,7 +483,7 @@ def test_event_schedule_prefilter_limits_compiles_after_non_ascii_warmup(monkeyp
         specific, plain = announcement_service._schedule_alias_groups("BTC")
         assert [row.symbol for row in rows] == ["BTC"]
         assert len(calls) <= len(specific) + len(plain)
-        assert calls == [(r"(?<![A-Z0-9])BTC/USDT(?![A-Z0-9])", re.I)]
+        assert calls == [(r"(?<![A-Z0-9])BTC/USDT(?![A-Z0-9])", re.IGNORECASE)]
     finally:
         pattern.cache_clear()
 

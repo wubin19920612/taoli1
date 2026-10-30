@@ -699,6 +699,15 @@ def _schedule_context_has_time_cue(context: str) -> bool:
     )
 
 
+_NON_ASCII_RUN = re.compile(r"[^\x00-\x7f]+")
+
+
+def _alias_may_match(alias: str, folded_text: str) -> bool:
+    # re.I maps each char to one char, so every ASCII run of the alias must
+    # appear casefolded in the text; non-ASCII chars (e.g. USDⓈ) stay with the regex.
+    return all(run.casefold() in folded_text for run in _NON_ASCII_RUN.split(alias) if run)
+
+
 @lru_cache(maxsize=1024)
 def _alias_pattern(alias: str) -> re.Pattern[str]:
     return re.compile(rf"(?<![A-Z0-9]){re.escape(alias)}(?![A-Z0-9])", re.I)
@@ -711,7 +720,7 @@ def extract_event_schedule(text: str, symbols: list[str]) -> list[AnnouncementEv
 
     folded = normalized.casefold()
     # re.I also equates ASCII I with İ/ı, which casefold does not; keep the
-    # original regex path for such text and for all non-ASCII aliases.
+    # original regex path for such text.
     can_prefilter = "İ" not in normalized and "ı" not in normalized
     schedule_by_symbol: dict[str, AnnouncementEventScheduleItem] = {}
     symbol_order = {_normalize_symbol(symbol): index for index, symbol in enumerate(symbols)}
@@ -725,7 +734,7 @@ def extract_event_schedule(text: str, symbols: list[str]) -> list[AnnouncementEv
             for alias in aliases:
                 # Without boundaries, casefold containment (including ſ/K) is
                 # a superset of re.I matches on this path; the regex still decides.
-                if can_prefilter and alias.isascii() and alias.casefold() not in folded:
+                if can_prefilter and not _alias_may_match(alias, folded):
                     continue
                 for match in _alias_pattern(alias).finditer(normalized):
                     window = normalized[match.start() : min(len(normalized), match.start() + 240)]
