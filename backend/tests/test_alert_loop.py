@@ -1,5 +1,6 @@
 import asyncio
 from datetime import UTC, datetime
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import FastAPI
@@ -19,7 +20,8 @@ from app.models.settings import (
     LivePilotSettings,
     RiskSettings,
 )
-from app.services.alert_engine import AlertMatch
+from app.services.alert_delivery_store import AlertDeliveryStore
+from app.services.alert_engine import AlertEngine, AlertMatch
 from app.services.alert_messages import build_alert_message
 from app.services.opportunity_trade_availability import OpportunityTradeAvailabilityReport
 from app.services.snapshot_store import SnapshotStore
@@ -154,11 +156,13 @@ class FakeSettingsRepo:
         return self.live_pilot_settings
 
 
-class DeliveryRecordingEngine:
+class DeliveryRecordingEngine(AlertEngine):
     def __init__(self) -> None:
+        super().__init__()
         self.delivery_statuses: list[str] = []
 
     def record_delivery_result(self, match: AlertMatch, status: str, **kwargs) -> None:
+        super().record_delivery_result(match, status, **kwargs)
         self.delivery_statuses.append(status)
 
 
@@ -301,6 +305,7 @@ class BlankExceptionAstroAlertService:
 async def test_live_pilot_alert_loop_filters_candidates_by_alert_rules_before_selection() -> None:
     stop_event = asyncio.Event()
     app = FastAPI()
+    app.state.alert_delivery_store = AsyncMock(spec=AlertDeliveryStore)
     low_edge = opportunity().model_copy(
         update={
             "id": "low-edge",
@@ -351,6 +356,7 @@ async def test_live_pilot_alert_loop_filters_candidates_by_alert_rules_before_se
 async def test_live_pilot_experiment_does_not_filter_regular_alerts() -> None:
     stop_event = asyncio.Event()
     app = FastAPI()
+    app.state.alert_delivery_store = AsyncMock(spec=AlertDeliveryStore)
     lower_edge = opportunity().model_copy(
         update={
             "id": "lower-edge",
@@ -414,6 +420,7 @@ async def test_live_pilot_experiment_does_not_filter_regular_alerts() -> None:
 async def test_live_pilot_experiment_processes_its_route_before_the_same_symbol() -> None:
     stop_event = asyncio.Event()
     app = FastAPI()
+    app.state.alert_delivery_store = AsyncMock(spec=AlertDeliveryStore)
     lower_edge = opportunity().model_copy(
         update={
             "id": "btc-lower-edge",
@@ -478,6 +485,7 @@ async def test_alert_loop_appends_astro_result_and_trade_status_to_feishu_and_ev
 ) -> None:
     stop_event = asyncio.Event()
     app = FastAPI()
+    app.state.alert_delivery_store = AsyncMock(spec=AlertDeliveryStore)
     rule = AlertRule(
         id="rule-1",
         name="FF spread",
@@ -527,6 +535,7 @@ async def test_alert_loop_appends_astro_result_and_trade_status_to_feishu_and_ev
 async def test_alert_loop_sends_compact_message_with_card_result() -> None:
     stop_event = asyncio.Event()
     app = FastAPI()
+    app.state.alert_delivery_store = AsyncMock(spec=AlertDeliveryStore)
     rule = AlertRule(name="FF spread", min_open_spread_pct=0.5)
     opp = opportunity()
     store = SnapshotStore()
@@ -560,6 +569,7 @@ async def test_alert_loop_sends_compact_message_with_card_result() -> None:
 async def test_alert_loop_mutes_when_live_feishu_send_is_disabled() -> None:
     stop_event = asyncio.Event()
     app = FastAPI()
+    app.state.alert_delivery_store = AsyncMock(spec=AlertDeliveryStore)
     rule = AlertRule(
         id="rule-live-send-disabled",
         name="FF spread",
@@ -596,6 +606,7 @@ async def test_alert_loop_mutes_when_live_feishu_send_is_disabled() -> None:
 async def test_alert_loop_retries_failed_delivery_without_success_cooldown() -> None:
     stop_event = asyncio.Event()
     app = FastAPI()
+    app.state.alert_delivery_store = AsyncMock(spec=AlertDeliveryStore)
     rule = AlertRule(name="FF spread", types=["FF"], consecutive_hits=1)
     opp = opportunity()
     store = SnapshotStore()
@@ -620,6 +631,7 @@ async def test_alert_loop_retries_failed_delivery_without_success_cooldown() -> 
 async def test_alert_loop_refreshes_astro_card_settings_before_auto_create() -> None:
     stop_event = asyncio.Event()
     app = FastAPI()
+    app.state.alert_delivery_store = AsyncMock(spec=AlertDeliveryStore)
     rule = AlertRule(
         id="rule-1",
         name="FF spread",
@@ -658,6 +670,7 @@ async def test_alert_loop_refreshes_astro_card_settings_before_auto_create() -> 
 async def test_alert_loop_only_sends_three_selected_matches_per_symbol() -> None:
     stop_event = asyncio.Event()
     app = FastAPI()
+    app.state.alert_delivery_store = AsyncMock(spec=AlertDeliveryStore)
     rule = AlertRule(
         id="rule-1",
         name="FF spread",
@@ -694,6 +707,7 @@ async def test_alert_loop_only_sends_three_selected_matches_per_symbol() -> None
 async def test_alert_loop_skips_astro_create_when_latest_signal_collapsed() -> None:
     stop_event = asyncio.Event()
     app = FastAPI()
+    app.state.alert_delivery_store = AsyncMock(spec=AlertDeliveryStore)
     rule = AlertRule(
         id="rule-1",
         name="FF spread",
@@ -736,6 +750,7 @@ async def test_alert_loop_skips_astro_create_when_latest_signal_collapsed() -> N
 async def test_alert_loop_mutes_sf_when_latest_funding_turns_negative() -> None:
     stop_event = asyncio.Event()
     app = FastAPI()
+    app.state.alert_delivery_store = AsyncMock(spec=AlertDeliveryStore)
     rule = AlertRule(name="SF spread", types=["SF"], min_open_spread_pct=0.5, consecutive_hits=1)
     original = opportunity().model_copy(
         update={
@@ -772,6 +787,7 @@ async def test_alert_loop_mutes_sf_when_latest_funding_turns_negative() -> None:
 async def test_alert_loop_rating_and_message_use_same_latest_snapshot() -> None:
     stop_event = asyncio.Event()
     app = FastAPI()
+    app.state.alert_delivery_store = AsyncMock(spec=AlertDeliveryStore)
     rule = AlertRule(name="FF spread", min_open_spread_pct=0.5)
     original = opportunity().model_copy(update={
         "buy_funding_interval_hours": 8,
@@ -810,6 +826,7 @@ async def test_alert_loop_rating_and_message_use_same_latest_snapshot() -> None:
 async def test_alert_loop_skips_astro_create_when_order_book_validation_fails() -> None:
     stop_event = asyncio.Event()
     app = FastAPI()
+    app.state.alert_delivery_store = AsyncMock(spec=AlertDeliveryStore)
     rule = AlertRule(
         id="rule-1",
         name="FF spread",
@@ -878,6 +895,7 @@ async def test_alert_loop_skips_astro_create_when_order_book_validation_fails() 
 async def test_alert_loop_downgrades_strong_rating_when_order_book_validation_fails() -> None:
     stop_event = asyncio.Event()
     app = FastAPI()
+    app.state.alert_delivery_store = AsyncMock(spec=AlertDeliveryStore)
     rule = AlertRule(name="high volume spread", min_volume_24h_usdt=1_000_000)
     opp = opportunity().model_copy(update={
         "funding_rate_sell_pct": 0.05,
@@ -917,6 +935,7 @@ async def test_alert_loop_downgrades_strong_rating_when_order_book_validation_fa
 async def test_alert_loop_mutes_when_astro_card_already_exists() -> None:
     stop_event = asyncio.Event()
     app = FastAPI()
+    app.state.alert_delivery_store = AsyncMock(spec=AlertDeliveryStore)
     rule = AlertRule(
         id="rule-1",
         name="FF spread",
@@ -953,6 +972,7 @@ async def test_alert_loop_mutes_when_astro_card_already_exists() -> None:
 async def test_alert_loop_mutes_when_astro_plan_cannot_create_card_and_filter_enabled() -> None:
     stop_event = asyncio.Event()
     app = FastAPI()
+    app.state.alert_delivery_store = AsyncMock(spec=AlertDeliveryStore)
     rule = AlertRule(
         id="rule-ss",
         name="SS spread",
@@ -1000,6 +1020,7 @@ async def test_alert_loop_mutes_when_astro_plan_cannot_create_card_and_filter_en
 async def test_alert_loop_uses_experiment_notional_for_live_pilot_validation() -> None:
     stop_event = asyncio.Event()
     app = FastAPI()
+    app.state.alert_delivery_store = AsyncMock(spec=AlertDeliveryStore)
     rule = AlertRule(
         id="rule-1",
         name="FF spread",
@@ -1062,6 +1083,7 @@ async def test_alert_loop_uses_experiment_notional_for_live_pilot_validation() -
 async def test_alert_loop_keeps_alert_when_astro_service_raises() -> None:
     stop_event = asyncio.Event()
     app = FastAPI()
+    app.state.alert_delivery_store = AsyncMock(spec=AlertDeliveryStore)
     rule = AlertRule(
         id="rule-1",
         name="FF spread",
@@ -1098,6 +1120,7 @@ async def test_alert_loop_keeps_alert_when_astro_service_raises() -> None:
 async def test_alert_loop_includes_exception_type_when_astro_error_text_is_blank() -> None:
     stop_event = asyncio.Event()
     app = FastAPI()
+    app.state.alert_delivery_store = AsyncMock(spec=AlertDeliveryStore)
     rule = AlertRule(
         id="rule-1",
         name="FF spread",

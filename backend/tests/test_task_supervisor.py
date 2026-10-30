@@ -239,6 +239,7 @@ async def test_loop_heartbeats_on_completed_and_failed_iterations(loop_name, ok)
         app = create_app(start_background_workers=False, settings=Settings())
         app.state.alert_rule_repo = SimpleNamespace(list=operation)
         app.state.alert_event_repo = SimpleNamespace()
+        app.state.alert_delivery_store = SimpleNamespace(prune=AsyncMock())
         factory = lambda: _run_alert_loop(app, 0.01, stop)
     else:
         async def settings():

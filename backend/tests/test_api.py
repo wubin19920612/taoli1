@@ -2464,6 +2464,7 @@ def test_alert_loop_mutes_feishu_when_card_conditions_fail() -> None:
     app.state.feishu_live_send_enabled = True
 
     async def run_once() -> None:
+        app.state.alert_delivery_store = AsyncMock()
         stop_event = asyncio.Event()
         task = asyncio.create_task(_run_alert_loop(app, 60, stop_event))
         for _ in range(20):
@@ -2539,6 +2540,7 @@ def test_alert_loop_sends_feishu_when_card_condition_filter_is_disabled() -> Non
     app.state.feishu_live_send_enabled = True
 
     async def run_once() -> None:
+        app.state.alert_delivery_store = AsyncMock()
         stop_event = asyncio.Event()
         task = asyncio.create_task(_run_alert_loop(app, 60, stop_event))
         for _ in range(20):

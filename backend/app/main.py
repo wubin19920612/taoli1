@@ -1,9 +1,11 @@
 import asyncio
 import logging
 import os
+import sqlite3
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import AsyncIterator
+from uuid import NAMESPACE_URL, uuid5
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -71,6 +73,7 @@ from app.services.account_connections import AccountConnectionService
 from app.services.fs_monitor import FsMonitor
 from app.services.fs_astro import FsAstroBridge
 from app.services.fs_repository import FsRepository
+from app.services.alert_delivery_store import AlertDeliveryStore
 from app.services.alert_engine import (
     AlertEngine,
     AlertMatch,
@@ -380,7 +383,49 @@ async def _order_book_validation_failure(
     return _format_order_book_validation_failure(result)
 
 
+async def _restore_alert_delivery_state(app: FastAPI) -> None:
+    store: AlertDeliveryStore = app.state.alert_delivery_store
+    engine: AlertEngine = app.state.alert_engine
+    now = datetime.now(UTC)
+    # Failure to load must prevent the loop from starting with empty cooldowns.
+    states = await store.load_all()
+    for key in engine.restore(states, now):
+        state = engine.export_state(key)
+        rule_id, _, opportunity_id = key.partition(":")
+        event = AlertEvent(
+            # Stable across crashes between event insertion and clearing pending.
+            id=uuid5(
+                NAMESPACE_URL, f"alert-delivery-unknown:{key}:{state.last_sent_at.isoformat()}",
+            ).hex,
+            rule_id=rule_id,
+            opportunity_id=opportunity_id,
+            symbol="未知",
+            status="unknown",
+            # This existing prefix keeps the history API from rebuilding the message.
+            message=(
+                "【需评估】\n上次发送过程中进程退出，结果未知，按已发送处理，不重发"
+                f"\n告警键：{key}"
+            ),
+            created_at=now,
+        )
+        try:
+            await app.state.alert_event_repo.create(event)
+        except sqlite3.IntegrityError as exc:
+            if exc.sqlite_errorcode != sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY:
+                logger.exception("unknown alert event write failed: %s", key)
+                continue
+            # The same recovery event was committed before an earlier crash.
+        except Exception:
+            logger.exception("unknown alert event write failed: %s", key)
+            continue
+        try:
+            await store.record(key, state.last_sent_at, state.retry_after, state.retry_attempts)
+        except Exception:
+            logger.exception("recovered alert delivery state write failed: %s", key)
+
+
 async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asyncio.Event) -> None:
+    last_delivery_prune: datetime | None = None
     while not stop_event.is_set():
         try:
             repo: AlertRuleRepository = app.state.alert_rule_repo
@@ -391,6 +436,19 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                 None,
             )
             rules = await repo.list()
+            delivery_store: AlertDeliveryStore = app.state.alert_delivery_store
+            prune_now = datetime.now(UTC)
+            if last_delivery_prune is None or prune_now - last_delivery_prune >= timedelta(days=1):
+                retention = max(
+                    timedelta(days=7),
+                    timedelta(seconds=max((rule.cooldown_seconds for rule in rules), default=0))
+                    + timedelta(days=1),
+                )
+                try:
+                    await delivery_store.prune(prune_now - retention)
+                except Exception:
+                    logger.exception("alert delivery state prune failed")
+                last_delivery_prune = prune_now
             settings = await settings_repo.get_risk_settings() if settings_repo is not None else RiskSettings()
             alert_template = (
                 await settings_repo.get_alert_message_template()
@@ -581,6 +639,7 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                     ),
                 )
                 message = f"{rating_header}\n\n{message}"
+                key = f"{match.rule.id}:{match.opportunity.id}"
                 if alert_template.format == "compact":
                     message = build_alert_message(
                         match.rule,
@@ -598,6 +657,11 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                     status = "muted"
                     message = f"{message}\n\n飞书实时发送未启用"
                 else:
+                    try:
+                        await delivery_store.mark_pending(key, datetime.now(UTC))
+                    except Exception:
+                        logger.exception("alert delivery pending write failed: %s", key)
+                        continue
                     try:
                         await app.state.feishu_notifier.send_alert(
                             match.rule,
@@ -618,7 +682,19 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                     created_at=datetime.now(UTC),
                 )
                 app.state.alert_engine.record_delivery_result(match, status, now=event.created_at)
-                await event_repo.create(event)
+                state = app.state.alert_engine.export_state(key)
+                try:
+                    await delivery_store.record(
+                        key, state.last_sent_at, state.retry_after, state.retry_attempts,
+                    )
+                except Exception:
+                    logger.exception("alert delivery state write failed: %s", key)
+                    continue
+                try:
+                    await event_repo.create(event)
+                except Exception:
+                    logger.exception("alert event write failed: %s", key)
+                    continue
         except Exception:
             beat("alert-loop", ok=False)
             logger.exception("alert loop failed")
@@ -816,6 +892,8 @@ def create_app(
             )
         app.state.alert_rule_repo = AlertRuleRepository(db)
         app.state.alert_event_repo = AlertEventRepository(db)
+        app.state.alert_delivery_store = AlertDeliveryStore(db)
+        await _restore_alert_delivery_state(app)
         app.state.phone_price_alert_rule_repo = PhonePriceAlertRuleRepository(db)
         app.state.phone_price_alert_event_repo = PhonePriceAlertEventRepository(db)
         app.state.hyperliquid_trade_status_watch_repo = HyperliquidTradeStatusWatchRepository(db)
