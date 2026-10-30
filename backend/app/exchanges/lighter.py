@@ -354,6 +354,8 @@ class LighterAdapter(ExchangeAdapter):
                     symbol=symbol,
                     base=base,
                     quote="USDT",
+                    # RH-Lighter (USDG): quote currency confirmation is pending; preserve behavior.
+                    original_quote_currency="USDC" if self.name == "lighter" else None,
                     exchange=self.name,
                     market_type=market_type,
                     bid=bid,

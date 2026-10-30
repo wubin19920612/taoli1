@@ -114,7 +114,7 @@ class MarketIdentityRegistry:
             "binding_revision": binding.revision,
             "binding_valid_until": binding.valid_until,
             "binding_fingerprint": binding.fingerprint,
-            "original_quote_currency": binding.quote_currency,
+            "original_quote_currency": row.original_quote_currency or binding.quote_currency,
             "contract_kind": binding.contract_kind,
             "tracking_definition": binding.tracking_definition,
         }
