@@ -1,9 +1,13 @@
+import logging
 from datetime import UTC, datetime, timedelta
 
 from app.db.repositories import OpportunityHistoryRepository
 from app.models.opportunity import Opportunity
 from app.models.settings import HistorySettings
 from app.services.risk_labels import known_volume_24h_usdt
+
+
+logger = logging.getLogger(__name__)
 
 
 class OpportunityHistoryRecorder:
@@ -38,7 +42,10 @@ class OpportunityHistoryRecorder:
         ]
         inserted = await self.repository.insert_many(rows)
         self._last_sample_at = observed_at
-        await self._prune(observed_at)
+        try:
+            await self._prune(observed_at)
+        except Exception:
+            logger.warning("History maintenance failed after batch insert committed", exc_info=True)
         return inserted
 
     def _select(self, opportunities: list[Opportunity]) -> list[Opportunity]:

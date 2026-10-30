@@ -1621,8 +1621,50 @@ class OpportunityHistoryRepository:
     async def insert_many(self, rows: list[OpportunityHistoryRow]) -> int:
         if not rows:
             return 0
-        await self.db.executemany(
-            """
+        if len(rows) > 1000:
+            raise ValueError("History batch cannot exceed 1000 rows")
+
+        parameters = [
+            (
+                row.observed_at.isoformat(),
+                row.opportunity_id,
+                row.type,
+                row.symbol,
+                row.buy_exchange,
+                row.buy_market_type,
+                row.sell_exchange,
+                row.sell_market_type,
+                _scale_percent(row.open_spread_pct),
+                _scale_percent(row.close_spread_pct),
+                _scale_percent(row.fee_adjusted_open_pct),
+                _scale_percent(row.spread_width_pct),
+                _scale_percent(row.funding_rate_buy_pct),
+                _scale_percent(row.funding_rate_sell_pct),
+                _scale_percent(row.funding_next_rate_buy_pct),
+                _scale_percent(row.funding_next_rate_sell_pct),
+                _scale_percent(row.net_funding_pct),
+                _scale_percent(row.net_funding_next_pct),
+                row.buy_funding_interval_hours,
+                row.sell_funding_interval_hours,
+                _scale_percent(row.net_funding_hourly_pct),
+                _scale_percent(row.net_funding_daily_pct),
+                _scale_percent(row.net_funding_next_hourly_pct),
+                _scale_percent(row.net_funding_next_daily_pct),
+                _serialize_datetime(row.funding_next_time_buy),
+                _serialize_datetime(row.funding_next_time_sell),
+                row.buy_volume_24h_usdt,
+                row.sell_volume_24h_usdt,
+                _risk_label_mask(row.risk_labels),
+                json.dumps(row.market_identity, ensure_ascii=False) if row.market_identity else None,
+            )
+            for row in rows
+        ]
+        # One statement is atomic without rolling back other users of this connection.
+        # 30 columns * 1000 rows stays below the supported SQLite variable limits.
+        placeholders = "(" + ", ".join(["?"] * 30) + ")"
+        values_sql = ", ".join([placeholders] * len(rows))
+        await self.db.execute(
+            f"""
             INSERT INTO opportunity_history (
               observed_at, opportunity_id, type, symbol,
               buy_exchange, buy_market_type, sell_exchange, sell_market_type,
@@ -1636,43 +1678,9 @@ class OpportunityHistoryRepository:
               funding_next_time_buy, funding_next_time_sell,
               buy_volume_24h_usdt, sell_volume_24h_usdt, risk_label_mask, market_identity_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES {values_sql}
             """,
-            [
-                (
-                    row.observed_at.isoformat(),
-                    row.opportunity_id,
-                    row.type,
-                    row.symbol,
-                    row.buy_exchange,
-                    row.buy_market_type,
-                    row.sell_exchange,
-                    row.sell_market_type,
-                    _scale_percent(row.open_spread_pct),
-                    _scale_percent(row.close_spread_pct),
-                    _scale_percent(row.fee_adjusted_open_pct),
-                    _scale_percent(row.spread_width_pct),
-                    _scale_percent(row.funding_rate_buy_pct),
-                    _scale_percent(row.funding_rate_sell_pct),
-                    _scale_percent(row.funding_next_rate_buy_pct),
-                    _scale_percent(row.funding_next_rate_sell_pct),
-                    _scale_percent(row.net_funding_pct),
-                    _scale_percent(row.net_funding_next_pct),
-                    row.buy_funding_interval_hours,
-                    row.sell_funding_interval_hours,
-                    _scale_percent(row.net_funding_hourly_pct),
-                    _scale_percent(row.net_funding_daily_pct),
-                    _scale_percent(row.net_funding_next_hourly_pct),
-                    _scale_percent(row.net_funding_next_daily_pct),
-                    _serialize_datetime(row.funding_next_time_buy),
-                    _serialize_datetime(row.funding_next_time_sell),
-                    row.buy_volume_24h_usdt,
-                    row.sell_volume_24h_usdt,
-                    _risk_label_mask(row.risk_labels),
-                    json.dumps(row.market_identity, ensure_ascii=False) if row.market_identity else None,
-                )
-                for row in rows
-            ],
+            [value for row_parameters in parameters for value in row_parameters],
         )
         await self.db.commit()
         return len(rows)

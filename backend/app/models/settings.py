@@ -270,7 +270,7 @@ class HistorySettings(BaseModel):
     enabled: bool = True
     sample_seconds: int = Field(default=120, ge=10)
     retention_days: int = Field(default=3, ge=1)
-    keep_top_n: int = Field(default=100, ge=1)
+    keep_top_n: int = Field(default=100, ge=1, le=1000)
     min_open_spread_pct: float = Field(default=0.5, ge=0)
     min_volume_24h_k: float = Field(default=100, ge=0)
     vacuum_interval_seconds: int = Field(default=86_400, ge=60)
