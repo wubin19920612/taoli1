@@ -395,7 +395,7 @@ def build_census_targets(app_services: object) -> list[CensusTarget]:
     for attribute in ("_REALTIME_PAIR_SPREAD_CACHE", "_REALTIME_PAIR_FUNDING_CACHE",
                       "_REALTIME_PAIR_OPEN_INTEREST_CACHE", "_REALTIME_SYMBOL_SPREAD_CACHE"):
         targets.append(CensusTarget(f"pair_spread_query.{attribute}",
-                                    lambda attribute=attribute: getattr(pair_spread_query, attribute, None)))
+                                    lambda attribute=attribute: pair_spread_query.realtime_cache_census_view(attribute)))
     targets.extend((
         CensusTarget("config.get_settings", lambda: config.get_settings),
         CensusTarget("market_sessions.us_stock_session_close", lambda: market_sessions.us_stock_session_close),
