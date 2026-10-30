@@ -1887,6 +1887,7 @@ export interface LivePilotPreview {
 }
 
 export interface AstroCardCreateRequest {
+  target?: CardTarget;
   max_trade_usdt?: number;
   leverage?: number;
   min_notional?: number;
@@ -1897,6 +1898,12 @@ export interface AstroCardCreateRequest {
 }
 
 export type AstroCardVariant = "both" | "non_gc" | "gc";
+export type CardTarget = "astro" | "arb_paper" | "arb_live";
+export interface ArbMvpStatus {
+  paper: { configured: boolean };
+  live: { configured: boolean };
+  default_max_position_usd: number;
+}
 
 export interface AstroCardRouteVariant {
   card_variant: "non_gc" | "gc";

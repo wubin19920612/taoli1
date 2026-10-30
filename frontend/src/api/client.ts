@@ -1,3 +1,4 @@
+import type { ArbMvpStatus, CardTarget } from "./types";
 import type { FsSettings, FsReport, FsEvent } from "./fsTypes";
 import type {
   FeaturesResponse,
@@ -1539,8 +1540,8 @@ export async function getAstroStatus(): Promise<AstroSdkStatus> {
   return fetchJson<AstroSdkStatus>("/astro/status");
 }
 
-export async function previewAstroPair(opportunityId: string): Promise<AstroPairPlan> {
-  return fetchJson<AstroPairPlan>(`/astro/preview/${opportunityId}`);
+export async function previewAstroPair(opportunityId: string, target: CardTarget = "astro"): Promise<AstroPairPlan> {
+  return fetchJson<AstroPairPlan>(`/astro/preview/${opportunityId}${target === "astro" ? "" : `?target=${target}`}`);
 }
 
 export async function createAstroCard(
@@ -1554,9 +1555,9 @@ export async function createAstroCard(
 }
 
 export async function previewInstrumentAstroPair(
-  route: AstroInstrumentRouteRequest
+  route: AstroInstrumentRouteRequest, target: CardTarget = "astro"
 ): Promise<AstroPairPlan> {
-  return fetchJson<AstroPairPlan>("/astro/instrument/preview", {
+  return fetchJson<AstroPairPlan>(`/astro/instrument/preview${target === "astro" ? "" : `?target=${target}`}`, {
     method: "POST",
     body: JSON.stringify(route)
   });
@@ -1607,4 +1608,8 @@ export function saveMarketValidationSettings(value: import("./types").MarketVali
 }
 export function getMarketCardAudit(): Promise<Array<{ card_id?: string; card_name: string; errors: string[]; validation?: { blockers: Array<{ message: string }> } }>> {
   return fetchJson("/market-identities/card-audit");
+}
+
+export async function getArbMvpStatus(): Promise<ArbMvpStatus> {
+  return fetchJson<ArbMvpStatus>("/arb-mvp/status");
 }

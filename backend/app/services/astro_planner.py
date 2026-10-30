@@ -226,6 +226,31 @@ class AstroPairPlanner:
     def __init__(self, config: AstroPlannerConfig | None = None):
         self.config = config or AstroPlannerConfig()
 
+    def position_thresholds(
+        self, opportunity: Opportunity, *, allow_negative: bool = False,
+    ) -> tuple[str, str, ClosePositionDecision, bool, str]:
+        close_decision = _astro_close_decision(
+            opportunity,
+            self.config,
+            allow_negative=allow_negative,
+        )
+        fr_pair_bases = _fr_pair_bases(opportunity)
+        position_value = _ratio_position if fr_pair_bases is not None else _decimal_position
+        open_position = position_value(opportunity.open_spread_pct)
+        close_position = position_value(close_decision.close_spread_pct)
+        close_position, rounded_close_adjusted = _strict_close_position(
+            open_position,
+            close_position,
+        )
+        close_position_note = close_decision.note
+        if rounded_close_adjusted:
+            close_position_note = (
+                f"{close_position_note} Lowered by one Astro precision unit after rounding "
+                "to preserve openPosition > closePosition."
+            )
+
+        return open_position, close_position, close_decision, rounded_close_adjusted, close_position_note
+
     def plan(
         self,
         opportunity: Opportunity,
@@ -279,10 +304,8 @@ class AstroPairPlanner:
                 if not validation.blockers:
                     blockers.append("市场核验已过期，请刷新报价。")
 
-        close_decision = _astro_close_decision(
-            opportunity,
-            self.config,
-            allow_negative=allow_manual_override or allow_negative_open,
+        open_position, close_position, close_decision, rounded_close_adjusted, close_position_note = self.position_thresholds(
+            opportunity, allow_negative=allow_manual_override or allow_negative_open,
         )
         fr_pair_bases = _fr_pair_bases(opportunity)
         pair_type = (
@@ -297,19 +320,6 @@ class AstroPairPlanner:
             if fr_pair_bases is not None
             else _base_name(opportunity.symbol)
         )
-        position_value = _ratio_position if fr_pair_bases is not None else _decimal_position
-        open_position = position_value(opportunity.open_spread_pct)
-        close_position = position_value(close_decision.close_spread_pct)
-        close_position, rounded_close_adjusted = _strict_close_position(
-            open_position,
-            close_position,
-        )
-        close_position_note = close_decision.note
-        if rounded_close_adjusted:
-            close_position_note = (
-                f"{close_position_note} Lowered by one Astro precision unit after rounding "
-                "to preserve openPosition > closePosition."
-            )
 
         buy_astro_exchange = astro_exchange_id(
             opportunity.buy_exchange,

@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field, model_validator
 from app.models.market import MarketType
 
 AstroCardVariant = Literal["both", "non_gc", "gc"]
+CardTarget = Literal["astro", "arb_paper", "arb_live"]
 
 
 class AstroCardRouteVariant(BaseModel):
@@ -53,6 +54,7 @@ class AstroSdkStatus(BaseModel):
 
 
 class AstroCardCreateRequest(BaseModel):
+    target: CardTarget = "astro"
     max_trade_usdt: float | None = Field(default=None, gt=0)
     leverage: int | None = Field(default=None, ge=1)
     min_notional: float | None = Field(default=None, ge=0)

@@ -69,6 +69,10 @@ class Settings:
     service_control_docker_socket_path: str = "/var/run/docker.sock"
     compose_project_name: str = ""
     astro_sdk_base_url: str = ""
+    arb_paper_url: str = ""
+    arb_paper_api_key: str = ""
+    arb_live_url: str = ""
+    arb_live_api_key: str = ""
     astro_admin_prefix: str = ""
     astro_api_key: str = ""
     astro_verify_tls: bool = True
@@ -281,6 +285,10 @@ def get_settings() -> Settings:
         ),
         compose_project_name=os.getenv("COMPOSE_PROJECT_NAME", "").strip(),
         astro_sdk_base_url=os.getenv("ASTRO_SDK_BASE_URL", "").strip(),
+        arb_paper_url=os.getenv("ARB_PAPER_URL", "").strip(),
+        arb_paper_api_key=os.getenv("ARB_PAPER_API_KEY", "").strip(),
+        arb_live_url=os.getenv("ARB_LIVE_URL", "").strip(),
+        arb_live_api_key=os.getenv("ARB_LIVE_API_KEY", "").strip(),
         astro_admin_prefix=os.getenv("ASTRO_ADMIN_PREFIX", "").strip(),
         astro_api_key=os.getenv("ASTRO_API_KEY", "").strip(),
         astro_verify_tls=bool_env("ASTRO_VERIFY_TLS", True),

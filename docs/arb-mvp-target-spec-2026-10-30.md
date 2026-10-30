@@ -60,3 +60,169 @@ commit 信息 `feat: arb-mvp paper/live target for manual card creation`。不�
 ## 测试环境（必须）
 后端全量用锁定依赖：在 `backend` 目录下 `C:\Users\wubin\AppData\Local\Temp\claude\D-------claude---\7f276a81-4df2-4527-bc65-b410f9d557b6\scratchpad\venv-lock\Scripts\python.exe -m pytest -q -p no:cacheprovider`。前端在 `frontend` 目录 `npm test` 和 `npx tsc -b`。日志里保留命令和汇总行。不要运行 WSL，不要访问生产服务器、真实 Astro、真实 arb-mvp 或交易所。
 遇到本任务书没覆盖、需要改不可改文件、或映射事实与本书不符时：停下，把问题写在本文件末尾「待 PM 决定」段，不要自行扩大范围。
+
+## 实现记录
+
+2026-10-30，工作树 `taoli1/.worktrees/arb-mvp-target`，分支 `codex/arb-mvp-target`，基线 `c0fad64b376a60232735c2def160b77ad497ef6c`。首次实现开始时工作区干净；续做时保留并接续本任务全部既有改动。下方首次验证和待决定段保留历史证据；PM 决定后的修复及最终三项验收见文末，均已通过。本任务仅创建指定消息的本地提交，不 push、不部署。
+
+### 修改文件与实现范围
+
+- `backend/app/core/config.py`、`.env.example`：四个 arb 配置项；示例值均为空。
+- `backend/app/models/astro.py`：建卡目标类型与缺省 `astro`。
+- `backend/app/services/astro_planner.py`：仅抽取公开阈值方法 `position_thresholds()`，保留原计算、舍入、说明和告警内容，原测试断言未修改。
+- 新增 `backend/app/services/arb_mvp_planner.py`：FF、交易所、raw symbol/HL DEX、身份及尺寸校验，输出 arb pair。
+- 新增 `backend/app/services/arb_mvp_client.py`：唯一写方法 `add_pair()`，紧凑 JSON 字节签名并原字节发送；10 秒超时，不重定向、不重试；未知结果提示人工核对。planner 和客户端均强制 `disableOpen=true`，不提供状态、修改或删除调用。
+- `backend/app/api/routes_astro.py`：两种预览和两种人工建卡入口按 target 分流；arb 分支复用人工复核、仅提示深度风险、记录目标/卡名/结果/耗时，不调用 Astro 提交服务，不写 Astro 设置。
+- 新增 `backend/app/api/routes_arb_mvp.py`、修改 `backend/app/main.py`：状态查询通过现有全局鉴权注册，仅返回配置布尔值及默认最大持仓。
+- `backend/app/db/repositories.py`：新增独立设置键 `arb_mvp_default_max_position_usd`，初始/读取失败回退 100；与 Astro 默认设置隔离。
+- `frontend/src/api/client.ts`、`frontend/src/api/types.ts`：目标类型、状态接口、预览 target 查询参数及建卡 payload。
+- `frontend/src/pages/InstrumentLookupPage.tsx`、`frontend/src/pages/DashboardPage.tsx`：三档选择、每次打开默认 Astro、未配置禁用、切档重取预览、过滤过期预览响应、arb 隐藏路线/开仓开关、最大持仓默认值及切回恢复、STOPPED 提示、live 上架确认、结果及 warnings 展示。
+- 新增 `backend/tests/test_arb_mvp.py`、`backend/tests/test_arb_mvp_routes.py`；在 `frontend/tests/InstrumentLookupPage.test.tsx`、`frontend/tests/DashboardPage.test.tsx` 添加测试。原有测试断言未修改。
+- 本任务书追加实现记录及待 PM 决定事项。未修改任务书列出的禁止文件、部署脚本或 CI。
+
+### Lighter raw symbol 核对
+
+本次仅核对本地源码和离线测试，没有访问交易所。`backend/app/exchanges/lighter.py` 从 `orderBookDetails` 的 `order_book_details` 读取永续市场，构建快照时直接使用 `raw_symbol=str(item["symbol"])`；`market_id` 单独用于 WebSocket 订阅和盘口查询，不作为 raw symbol，也未向永续 raw symbol 拼接 USDT 等后缀。
+
+`backend/tests/test_lighter_adapter.py` 的离线样例覆盖 `ETH`、`ANTHROPIC`、`OPENAI`，以及普通 Lighter / RH-Lighter 同名市场的不同 market ID 和端点隔离。现货样例有 `ETH/USDC`、`ETH/USDG`，但本任务只接受永续，现货在映射时阻断。因此本次永续映射直接传递 `orderBookDetails.symbol`，不猜测 market index 映射。该结论为源码和离线样例核对，不代表已核验线上市场目录。
+
+### 测试命令与汇总
+
+先写测试再实现：新增后端映射/客户端测试首次运行因 `ModuleNotFoundError: No module named 'app.services.arb_mvp_client'` 红灯，汇总 `1 error in 0.51s`；新增路由测试首次运行因缺少 `arb_paper_url` 配置红灯，汇总 `1 warning, 6 errors in 7.30s`。实现后定向测试通过；前端新测试经过 DOM 定位与测试文本编码修正后通过，未改原有业务断言。
+
+后端全量（工作目录 `backend`，指定锁定依赖 venv）：
+
+```powershell
+& 'C:/Users/wubin/AppData/Local/Temp/claude/D-------claude---/7f276a81-4df2-4527-bc65-b410f9d557b6/scratchpad/venv-lock/Scripts/python.exe' -m pytest -q -p no:cacheprovider
+```
+
+```text
+2338 passed, 6 deselected, 13 warnings in 118.30s (0:01:58)
+```
+
+6 个 deselected 来自仓库原有 `not network and not benchmark` 配置；未运行真实网络测试。warnings 为 Starlette/httpx 和 datetime.utcnow 弃用提示。
+
+前端新交互定向测试（工作树根目录）：
+
+```powershell
+npm --prefix frontend test -- --run tests/DashboardPage.test.tsx tests/InstrumentLookupPage.test.tsx -t arb-mvp --cache=false
+```
+
+```text
+Test Files  2 passed (2)
+     Tests  4 passed | 61 skipped (65)
+  Duration  7.86s
+```
+
+前端全量（工作目录 `frontend`）：
+
+```powershell
+npm test
+```
+
+```text
+Test Files  1 failed | 27 passed (28)
+     Tests  1 failed | 304 passed (305)
+  Duration  87.21s
+```
+
+唯一失败为原有 `DashboardPage > labels exchange errors as external exchange API link failures`。未经修改原断言，单文件复测：
+
+```powershell
+npm test -- --run tests/DashboardPage.test.tsx
+```
+
+```text
+Test Files  1 failed (1)
+     Tests  1 failed | 20 passed (21)
+  Duration  12.03s
+```
+
+前端类型检查（工作目录 `frontend`）：
+
+```powershell
+npx tsc -b
+```
+
+结果：退出码 0，无诊断输出。`git diff --check` 通过。
+
+环境备注：`frontend/node_modules` 是指向主工作树依赖目录的 junction。最初沙箱内定向测试遇到 Vitest 缓存 `EPERM`，定向测试使用 `--cache=false`；最终原命令 `npm test` 经工具权限审核运行，缓存错误已消除。没有改依赖、WSL、生产或真实服务状态。前端全量仍有原有 React act/Ant Design 弃用提示。
+
+## 待 PM 决定
+
+**历史停止点（已按下方 PM 决定续做并解除）：前端全量测试未通过，未创建验收提交。**
+
+- 原有 `frontend/tests/DashboardPage.test.tsx` 的健康展示测试，在全量和单文件运行中均失败于 `expect(screen.getByText("交易所外部 API 链路异常")).toBeTruthy()`；新增建卡测试及其他 304 项前端测试通过。
+- 初步源码证据：该测试先等待 `交易所链路异常`，这是 Dashboard 初始就渲染的统计标题，随后同步断言依赖异步 `/health` 返回的告警。失败时告警尚未出现。本次没有修改该健康展示逻辑、数据加载逻辑或原断言；尚未进行隔离基线复测，不能断言是基线已有故障。
+- 待决定：是否允许在本任务中诊断并修复这一非建卡测试的异步等待。可审阅的候选变更是仅将上述断言等待方式改为 `expect(await screen.findByText("交易所外部 API 链路异常")).toBeTruthy()`，保持文本、存在性以及随后交易所/错误详情断言全部不变；须先确认原因，再跑完整前端验收。或者由独立任务修复并回补基线。
+- 按任务书的未覆盖问题停止规则，当前没有执行该候选修改，也没有调整超时、屏蔽测试、放宽断言或更改健康模块。待 PM 决定后继续验收，最终仍只创建一个指定消息的 commit，不 push、不部署。
+
+## PM 决定（2026-10-30）
+
+- PM 在干净基线 96456e2 上单独跑 `tests/DashboardPage.test.tsx`：19/19 通过。所以 `labels exchange errors as external exchange API link failures` 失败是**本次改动造成的回归**，不是原有故障。
+- 不允许改这条旧测试（包括把 getByText 改成 findByText）。在本次改动里找根因并修实现。重点怀疑：Dashboard 挂载时新增的 `/api/arb-mvp/status` 请求或 target 相关 effect 改变了 `/health` 等请求的顺序/时序，或者打乱了测试的 fetch mock。可选修法：只在打开建卡弹窗时才请求 status（页面挂载时不请求），或者让新请求不影响现有数据加载。
+- 修完后跑前端全量 `npm test`、`npx tsc -b`、后端全量，三项全过后按任务书创建一个 commit（消息不变），不 push。
+
+## PM 决定后的实现与验收记录（2026-10-30）
+
+### Dashboard 回归诊断及修复
+
+- 原工作区完整 Dashboard 文件复现 `1 failed | 20 passed (21)`，失败仍为 `labels exchange errors as external exchange API link failures`。该旧测试正文与 HEAD 逐段比对完全一致；两份前端测试文件的 Git diff 均只新增用例，没有删除或修改原有测试行。
+- 当前 `getArbMvpStatus()` 已经只在 `openAstroPreview()` 中调用，挂载时没有 arb status 请求，也没有 target effect 插入健康加载链。不能把 PM 提出的排查假设当成已证实的根因。
+- 用临时副本对照 `96456e2` 的 Dashboard 页面及原 19 条测试，整文件 `19 passed (19)`；用同一份原 19 条测试对当前 Dashboard 实现，也为 `19 passed (19)`。此对照只替换页面/测试副本，复用当前依赖和其他模块，并非完整隔离 checkout。临时副本已删除，未纳入提交。
+- 结合上述对照，回归在本次新增用例加入后的执行时序下出现，并非健康 API 被新增 status 请求替换。直接失败机制是：`health === null` 时，页面已渲染完成态统计标题“交易所链路异常”和数值 `0`；测试对该标题的等待可在 `/health` 返回前结束，下一条同步告警断言因此失败。单独筛选该用例时，基线页面副本也能暴露同一先后顺序，不能依赖某次运行恰好先完成健康请求。未证实某一个新增 hook 或静态确认框单独导致延迟，故没有围绕这些猜测保留改动。
+- 修复落在 `DashboardPage.tsx`：健康数据尚未返回时，异常统计显示“交易所链路状态加载中”和 `-`；收到数据后再显示正式异常统计，与同一份 `health` 派生的告警一起渲染。既避免把未知状态显示为零异常，也消除了旧断言依赖的先后竞态。没有更改请求顺序、增加延时、修改旧断言或放宽测试。
+- 新增延迟 `/health` 响应的回归用例：断言待加载时没有零异常完成态，挂载不请求 `/arb-mvp/status`，释放响应后统计值 `1`、告警和交易所详情同时可见。原有 arb 交互测试继续验证打开弹窗后的目标选择。
+- 加入新回归用例前，修复后的 Dashboard 单文件为 `21 passed (21)`；加入后在最终全量中为 `22 passed (22)`。
+
+### 最终验收命令与汇总
+
+以下命令均在本工作树内执行。原始日志保留在 `C:/Users/wubin/AppData/Local/Temp/`；没有安装或更换依赖，也没有访问 WSL、生产、真实 Astro、真实 arb-mvp 或交易所。
+
+前端全量（工作目录 `frontend`）：
+
+```powershell
+npm test
+```
+
+```text
+Test Files  28 passed (28)
+     Tests  306 passed (306)
+  Duration  77.70s
+EXIT_CODE=0
+```
+
+日志：`arb-mvp-frontend-full-final-20261030.log`。首次沙箱运行也是 `28 passed / 306 passed`，但 Vitest 写 junction 指向的 `node_modules/.vite/vitest/results.json` 时发生 `EPERM`，退出码 1；该次不计为完整验收。经工具权限审核允许本地缓存写入后，原样重跑上述命令，最终退出码 0。首次记录保留于 `arb-mvp-frontend-full-20261030.log`。
+
+类型检查（工作目录 `frontend`）：
+
+```powershell
+npx tsc -b
+```
+
+```text
+无诊断输出
+EXIT_CODE=0
+```
+
+日志：`arb-mvp-tsc-20261030.log`。
+
+后端全量（工作目录 `backend`，任务书指定的锁定依赖 venv）：
+
+```powershell
+& 'C:/Users/wubin/AppData/Local/Temp/claude/D-------claude---/7f276a81-4df2-4527-bc65-b410f9d557b6/scratchpad/venv-lock/Scripts/python.exe' -m pytest -q -p no:cacheprovider
+```
+
+```text
+2338 passed, 6 deselected, 13 warnings in 135.93s (0:02:15)
+EXIT_CODE=0
+```
+
+日志：`arb-mvp-backend-full-20261030.log`。6 项 deselected 仍来自仓库既有 `not network and not benchmark` 配置；13 条 warning 为 Starlette/httpx 和 `datetime.utcnow` 弃用提示。前端保留 React act、Ant Design 弃用等 stderr 输出；`useRadarStore` 用例期间还记录了 Ant Design cssinjs 的 `TypeError: Cannot read properties of undefined (reading 'content')`，Vitest 最终没有报告失败用例，退出码为 0。本次未扩展修改该测试环境问题。`git diff --check` 通过。
+
+### 提交范围与交接
+
+- 本次提交覆盖上文已有建卡实现及测试、四个空值示例变量、本次 Dashboard 回归修复和本任务书，共 19 个文件；禁止修改的 Astro 客户端、自动建卡服务、安全模块、部署脚本和 CI 无差异。
+- 只创建一个消息为 `feat: arb-mvp paper/live target for manual card creation` 的提交。三项验证完成后再暂存这些明确路径；不 push，不部署，也不进行线上备份或线上验收。
+- 本任务书兼作本模块的交接记录：代码入口、业务边界、Lighter raw symbol 本地证据、命令及验收结果均在上文。下一步由 PM 在独立任务中安排审阅、推送或部署；本地验证不代表生产服务配置或真实建卡已验收。
+- 临时诊断页面/测试副本已清理；测试日志留在系统临时目录，不提交。未删除既有日志或其他任务产物。

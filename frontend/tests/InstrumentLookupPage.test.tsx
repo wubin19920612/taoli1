@@ -372,6 +372,58 @@ describe("InstrumentLookupPage", () => {
     );
   });
 
+
+  it("arb-mvp switches preview, isolates sizing, confirms live, and sends target", async () => {
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    const originalPlan = astroPlan;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/arb-mvp/status")) return Response.json({ paper: {configured: true}, live: {configured: true}, default_max_position_usd: 150 });
+      if (url.includes("/astro/instrument/preview")) return Response.json(url.includes("target=arb_") ? {
+        ...originalPlan, route_variants: [], pair: {name: "BTC", type: "FF", maxPositionUsd: 150, minOrderUsd: 10, maxOrderUsd: 10, legA: {leverage: 1}, disableOpen: true}
+      } : originalPlan);
+      if (url.includes("/astro/instrument/card")) return Response.json({ enabled: true, status: "created", message: "arb-created", warnings: [] });
+
+      return fallback(input, init);
+    });
+    render(<InstrumentLookupPage />);
+    await screen.findByText("跨市场差价");
+    await userEvent.click(screen.getAllByRole("button", { name: /建卡/ })[0]);
+    await userEvent.click(await screen.findByRole("radio", {name: "arb-mvp 模拟盘"}));
+    await waitFor(() => expect((screen.getByLabelText("最大持仓 (USD)") as HTMLInputElement).value).toBe("150"));
+    expect(screen.queryByLabelText("创建后允许开仓")).toBeNull();
+    expect(screen.queryByText("建卡路线")).toBeNull();
+    expect(screen.getByText(/STOPPED、禁止开仓/)).not.toBeNull();
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes("target=arb_paper"))).toBe(true);
+    await userEvent.click(screen.getByRole("radio", {name: "Astro"}));
+    await waitFor(() => expect((screen.getByLabelText("单笔金额 USDT") as HTMLInputElement).value).toBe("10"));
+    await userEvent.click(screen.getByRole("radio", {name: "arb-mvp live"}));
+    await screen.findByLabelText("最大持仓 (USD)");
+    await userEvent.click(screen.getByRole("button", {name: "确认创建"}));
+    expect((await screen.findAllByText("将在 arb-mvp live（主网）上架卡片 BTC，不会下单")).length).toBeGreaterThan(0);
+    expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes("/astro/instrument/card"))).toHaveLength(0);
+    await userEvent.click(screen.getByRole("button", {name: "确认上架"}));
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes("/astro/instrument/card"))).toHaveLength(1));
+    const createCalls = vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes("/astro/instrument/card"));
+    expect(JSON.parse(String(createCalls[0][1]?.body)).card.target).toBe("arb_live");
+    expect(JSON.parse(String(createCalls[0][1]?.body)).card.open_enabled).toBe(false);
+  }, 20000);
+
+  it("arb-mvp unconfigured targets are disabled", async () => {
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/arb-mvp/status")) return Response.json({paper: {configured: false}, live: {configured: false}, default_max_position_usd: 100});
+      if (url.includes("/astro/instrument/preview")) return Response.json(astroPlan);
+
+      return fallback(input, init);
+    });
+    render(<InstrumentLookupPage />);
+    await screen.findByText("跨市场差价");
+    await userEvent.click(screen.getAllByRole("button", { name: /建卡/ })[0]);
+    expect((await screen.findByRole("radio", {name: "arb-mvp 模拟盘"}) as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByRole("radio", {name: "arb-mvp live"}) as HTMLInputElement).disabled).toBe(true);
+  });
   it("shows exact cross-exchange spot and perpetual basics", async () => {
     render(<InstrumentLookupPage />);
 

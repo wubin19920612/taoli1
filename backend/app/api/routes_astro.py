@@ -1,8 +1,10 @@
 import logging
+import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.core.security import dashboard_password_header, verify_dashboard_password
+from app.api.routes_arb_mvp import default_max_position, target_credentials
 from app.db.repositories import SettingsRepository
 from app.models.astro import (
     AstroAlertActionResult,
@@ -12,6 +14,7 @@ from app.models.astro import (
     AstroInstrumentRouteRequest,
     AstroPairPlan,
     AstroSdkStatus,
+    CardTarget,
 )
 from app.models.astro_preadd import (
     PREADD_EXCHANGES,
@@ -28,6 +31,8 @@ from app.models.pair_spread import normalize_pair_spread_symbol
 from app.models.settings import AstroCardSettings, FeeSettings, RiskSettings
 from app.services.astro_client import AstroClientError, AstroSdkClient
 from app.services.astro_planner import AstroPairPlanner, AstroPlannerConfig
+from app.services.arb_mvp_client import ArbMvpClient
+from app.services.arb_mvp_planner import ArbMvpPlanner
 from app.services.astro_preadd import AstroPreaddService
 from app.services.data_filters import ignored_exchange_set, symbol_is_excluded
 from app.services.instrument_spreads import instrument_market_age_seconds
@@ -496,9 +501,85 @@ async def list_astro_pairs(
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
 
+async def _arb_plan_reviewed(request, opportunity, target, card_request, manual_warnings, context):
+    risk, risk_warnings = await _manual_risk_settings(request)
+    warnings = [*(manual_warnings or []), *risk_warnings]
+    opportunity, error = await _review_manual_opportunity(request, opportunity, risk, context)
+    if error:
+        return opportunity, risk, None, AstroPairPlan(
+            opportunity_id=opportunity.id, symbol=opportunity.symbol, can_submit=False,
+            blockers=[error], warnings=warnings), "market_validation"
+    saved, settings_warnings = await _manual_astro_card_settings(request)
+    effective = _settings_with_create_overrides(saved.model_copy(update={
+        "max_trade_usdt": await default_max_position(request),
+    }), card_request)
+    plan = ArbMvpPlanner(effective).plan(opportunity, target)
+    if symbol_is_excluded(opportunity.symbol, risk):
+        warnings.append(_manual_override_warning(f"{opportunity.symbol} 已在全局黑名单"))
+    plan.warnings = _unique_warnings([*warnings, *settings_warnings])
+    return opportunity, risk, effective, plan, "arb_mvp_mapping"
+
+
+async def _build_arb_preview(request, opportunity, target, manual_warnings=None):
+    context = ManualReview()
+    try:
+        _, _, _, plan, _ = await _arb_plan_reviewed(
+            request, opportunity, target, None, manual_warnings, context)
+        if not all(target_credentials(request, target)):
+            plan.blockers.append("该 arb-mvp 档位尚未配置")
+            plan.can_submit = False
+        return plan
+    finally:
+        context.log("arb_mvp_manual_preview_timing", opportunity.symbol)
+
+
+async def _create_arb_card(request, opportunity, card_request, manual_warnings=None):
+    target = card_request.target
+    started = time.monotonic()
+    context = ManualReview()
+    result = AstroAlertActionResult(enabled=True, status="failed",
+                                   action=f"arb_mvp_{'paper' if target == 'arb_paper' else 'live'}_add",
+                                   message="arb-mvp 建卡失败")
+    pair_name = None
+    try:
+        url, key = target_credentials(request, target)
+        if not url or not key:
+            result = result.model_copy(update={"enabled": False, "status": "disabled", "message": "该 arb-mvp 档位尚未配置"})
+            return result
+        reviewed, risk, effective, plan, failure_action = await _arb_plan_reviewed(
+            request, opportunity, target, card_request, manual_warnings, context)
+        if not plan.can_submit:
+            result = result.model_copy(update={"status": "skipped", "action": failure_action,
+                                              "message": "；".join(plan.blockers), "warnings": plan.warnings})
+            return result
+        pair_name = plan.pair["name"]
+        warnings = list(plan.warnings)
+        try:
+            depth_failure = await _validate_order_book_before_create(request, reviewed, risk, effective, context)
+            if depth_failure is not None:
+                warnings.append(_manual_override_warning(_format_depth_validation_message(depth_failure)))
+        except Exception:
+            warnings.append(_manual_override_warning("订单簿深度检查失败"))
+        if card_request.save_as_default:
+            try:
+                await _settings_repo(request).set_arb_mvp_default_max_position_usd(effective.max_trade_usdt)
+            except Exception:
+                warnings.append("保存 arb-mvp 默认最大持仓失败，本次仍使用当前参数")
+        added = await ArbMvpClient(url, key).add_pair(plan.pair)
+        result = result.model_copy(update={"status": "created" if added.success else "failed",
+                                          "message": added.message, "pair_name": pair_name, "pair_type": "FF",
+                                          "warnings": _unique_warnings(warnings)})
+        return result
+    finally:
+        logger.info("arb_mvp_create target=%s pair=%s result=%s elapsed_ms=%.1f",
+                    target, pair_name, result.status, (time.monotonic() - started) * 1000)
+
+
 @router.get("/preview/{opportunity_id}", response_model=AstroPairPlan)
-async def preview_astro_pair(opportunity_id: str, request: Request) -> AstroPairPlan:
+async def preview_astro_pair(opportunity_id: str, request: Request, target: CardTarget = "astro") -> AstroPairPlan:
     opportunity = _find_opportunity(request, opportunity_id)
+    if target != "astro":
+        return await _build_arb_preview(request, opportunity, target)
     return await _build_astro_preview(request, opportunity)
 
 
@@ -506,8 +587,11 @@ async def preview_astro_pair(opportunity_id: str, request: Request) -> AstroPair
 async def preview_astro_instrument_pair(
     route: AstroInstrumentRouteRequest,
     request: Request,
+    target: CardTarget = "astro",
 ) -> AstroPairPlan:
     opportunity, warnings = await _find_instrument_opportunity(request, route)
+    if target != "astro":
+        return await _build_arb_preview(request, opportunity, target, warnings)
     return await _build_astro_preview(request, opportunity, warnings)
 
 
@@ -517,6 +601,8 @@ async def _create_astro_card(
     card_request: AstroCardCreateRequest | None,
     manual_warnings: list[str] | None = None,
 ) -> AstroAlertActionResult:
+    if card_request is not None and card_request.target != "astro":
+        return await _create_arb_card(request, opportunity, card_request, manual_warnings)
     context = ManualReview()
     try:
         return await _create_astro_card_reviewed(request, opportunity, card_request, manual_warnings, context)

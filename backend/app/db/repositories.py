@@ -1207,6 +1207,21 @@ class OilNewsRepository:
 
 
 class SettingsRepository:
+    async def get_arb_mvp_default_max_position_usd(self) -> float:
+        cursor = await self.db.execute(
+            "SELECT payload FROM app_settings WHERE key = ?", ("arb_mvp_default_max_position_usd",)
+        )
+        row = await cursor.fetchone()
+        return float(json.loads(row["payload"])) if row is not None else 100.0
+
+    async def set_arb_mvp_default_max_position_usd(self, value: float) -> None:
+        await self.db.execute(
+            "INSERT INTO app_settings (key, payload) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET payload = excluded.payload",
+            ("arb_mvp_default_max_position_usd", json.dumps(value, allow_nan=False)),
+        )
+        await self.db.commit()
+
     def __init__(self, db: aiosqlite.Connection):
         self.db = db
         self._floating_watch_lock = asyncio.Lock()

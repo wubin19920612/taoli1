@@ -8,6 +8,7 @@ import {
   Input,
   InputNumber,
   Modal,
+  Radio,
   Row,
   Segmented,
   Space,
@@ -19,7 +20,7 @@ import {
   Typography,
   message
 } from "antd";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 import { EyeOutlined, StopOutlined } from "@ant-design/icons";
@@ -27,12 +28,15 @@ import type { ColumnsType } from "antd/es/table";
 
 import {
   createAstroCard,
+  getArbMvpStatus,
   getOpportunityHistoryStats,
   getRiskSettings,
   previewAstroPair,
   updateRiskSettings
 } from "../api/client";
 import type {
+  ArbMvpStatus,
+  CardTarget,
   AstroActionResult,
   AstroCardCreateRequest,
   AstroCardVariant,
@@ -109,7 +113,7 @@ type ExchangeStateRow = ExchangePollState & {
   exchange: string;
 };
 
-type AstroSizingFormValues = Required<Omit<AstroCardCreateRequest, "save_as_default">> & {
+type AstroSizingFormValues = Required<Omit<AstroCardCreateRequest, "save_as_default" | "target">> & {
   save_as_default: boolean;
 };
 
@@ -531,6 +535,11 @@ const exchangeStateColumns: ColumnsType<ExchangeStateRow> = [
 
 export function DashboardPage() {
   const [astroSizingForm] = Form.useForm<AstroSizingFormValues>();
+  const [cardTarget, setCardTarget] = useState<CardTarget>("astro");
+  const [arbStatus, setArbStatus] = useState<ArbMvpStatus | null>(null);
+  const astroPositionRef = useRef<number | undefined>();
+  const astroPreviewRequestIdRef = useRef(0);
+
   const [filters, setFilters] = useState<OpportunityFilters>(() => initialDashboardFilters());
   const [riskSettings, setRiskSettings] = useState<RiskSettings | null>(null);
   const [savingSymbol, setSavingSymbol] = useState<string | null>(null);
@@ -657,6 +666,8 @@ export function DashboardPage() {
   };
 
   const closeAstroPreview = () => {
+    if (astroSubmitLoading) return;
+    astroPreviewRequestIdRef.current += 1;
     setAstroPreviewOpportunity(null);
     setAstroPreviewPlan(null);
     setAstroPreviewError(null);
@@ -668,7 +679,15 @@ export function DashboardPage() {
   };
 
   const openAstroPreview = async (opportunity: Opportunity) => {
+    if (astroSubmitLoading) return;
+    const requestId = ++astroPreviewRequestIdRef.current;
     setAstroPreviewOpportunity(opportunity);
+    setCardTarget("astro");
+    setArbStatus(null);
+    astroPositionRef.current = undefined;
+    void getArbMvpStatus().then((status) => {
+      if (requestId === astroPreviewRequestIdRef.current) setArbStatus(status);
+    }).catch(() => {});
     setAstroPreviewPlan(null);
     setAstroPreviewError(null);
     setAstroSubmitResult(null);
@@ -676,6 +695,7 @@ export function DashboardPage() {
     setAstroPreviewLoading(true);
     try {
       const plan = await previewAstroPair(opportunity.id);
+      if (requestId !== astroPreviewRequestIdRef.current) return;
       setAstroPreviewPlan(plan);
       if (plan.pair) {
         astroSizingForm.setFieldsValue(sizingFromPlan(plan));
@@ -683,9 +703,44 @@ export function DashboardPage() {
         astroSizingForm.resetFields();
       }
     } catch (exc) {
+      if (requestId !== astroPreviewRequestIdRef.current) return;
       setAstroPreviewError(exc instanceof Error ? exc.message : String(exc));
     } finally {
-      setAstroPreviewLoading(false);
+      if (requestId === astroPreviewRequestIdRef.current) setAstroPreviewLoading(false);
+    }
+  };
+
+  const changeCardTarget = async (target: CardTarget) => {
+    if (astroSubmitLoading || target === cardTarget || !astroPreviewOpportunity) return;
+    if (cardTarget === "astro") astroPositionRef.current = astroSizingForm.getFieldValue("max_trade_usdt");
+    const requestId = ++astroPreviewRequestIdRef.current;
+    setCardTarget(target);
+    setAstroPreviewPlan(null);
+    setAstroPreviewLoading(true);
+    setAstroPreviewError(null);
+    setAstroSubmitError(null);
+    setAstroSubmitResult(null);
+    try {
+      const plan = await previewAstroPair(astroPreviewOpportunity.id, target);
+      if (requestId !== astroPreviewRequestIdRef.current) return;
+      setAstroPreviewPlan(plan);
+      if (plan.pair) {
+        if (target === "astro") {
+          astroSizingForm.setFieldsValue(sizingFromPlan(plan));
+          if (astroPositionRef.current !== undefined) astroSizingForm.setFieldValue("max_trade_usdt", astroPositionRef.current);
+        } else {
+          astroSizingForm.setFieldsValue({
+            max_trade_usdt: Number(plan.pair.maxPositionUsd ?? arbStatus?.default_max_position_usd ?? 100),
+            leverage: Number((plan.pair.legA as {leverage?: number})?.leverage ?? 1),
+            min_notional: Number(plan.pair.minOrderUsd), max_notional: Number(plan.pair.maxOrderUsd),
+            open_enabled: false, card_variant: "both", save_as_default: false
+          });
+        }
+      }
+    } catch (exc) {
+      if (requestId === astroPreviewRequestIdRef.current) setAstroPreviewError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      if (requestId === astroPreviewRequestIdRef.current) setAstroPreviewLoading(false);
     }
   };
 
@@ -698,7 +753,16 @@ export function DashboardPage() {
     setAstroSubmitError(null);
     try {
       const sizing = await astroSizingForm.validateFields();
-      const result = await createAstroCard(astroPreviewOpportunity.id, sizing);
+      if (cardTarget === "arb_live") {
+        const confirmed = await new Promise<boolean>((resolve) => {
+          Modal.confirm({ title: `将在 arb-mvp live（主网）上架卡片 ${String(astroPreviewPlan?.pair?.name ?? "")}，不会下单`,
+            okText: "确认上架", cancelText: "取消", onOk: () => resolve(true), onCancel: () => resolve(false) });
+        });
+        if (!confirmed) return;
+      }
+      const payload = { ...sizing, target: cardTarget, ...(cardTarget !== "astro" ? {open_enabled: false} : {}) };
+
+      const result = await createAstroCard(astroPreviewOpportunity.id, payload);
       setAstroSubmitResult(result);
       if (result.status === "created" || result.status === "updated") {
         message.success(result.message);
@@ -757,7 +821,7 @@ export function DashboardPage() {
     astroSubmitLoading ||
     !astroPreviewPlan ||
     !astroPreviewPlan.can_submit ||
-    !supportsAstroCardVariant(astroPreviewPlan.route_variants, selectedCardVariant);
+    (cardTarget === "astro" && !supportsAstroCardVariant(astroPreviewPlan.route_variants, selectedCardVariant));
 
   return (
     <div className="page">
@@ -819,7 +883,10 @@ export function DashboardPage() {
           <Statistic title="Markets" value={health?.markets ?? 0} />
         </Col>
         <Col xs={12} md={6}>
-          <Statistic title="交易所链路异常" value={Object.keys(errors).length} />
+          <Statistic
+            title={health ? "交易所链路异常" : "交易所链路状态加载中"}
+            value={health ? Object.keys(errors).length : "-"}
+          />
         </Col>
         <Col xs={12} md={6}>
           <Statistic
@@ -981,6 +1048,16 @@ export function DashboardPage() {
       >
         {astroPreviewOpportunity ? (
           <Space direction="vertical" size={12} className="astro-preview-panel">
+            <div>
+              <Typography.Text>建卡目标</Typography.Text>{" "}
+              <Radio.Group value={cardTarget} disabled={astroSubmitLoading} onChange={(event) => void changeCardTarget(event.target.value)}>
+                <Radio value="astro">Astro</Radio>
+                <Radio value="arb_paper" disabled={!arbStatus?.paper?.configured}>arb-mvp 模拟盘</Radio>
+                <Radio value="arb_live" disabled={!arbStatus?.live?.configured}>arb-mvp live</Radio>
+              </Radio.Group>
+            </div>
+            {cardTarget !== "astro" ? <Alert type="info" showIcon message="arb-mvp 卡片建好后是 STOPPED、禁止开仓，需要在 arb-mvp 界面手动开始交易" /> : null}
+
             <Descriptions bordered size="small" column={2}>
               <Descriptions.Item label="Symbol">{astroPreviewOpportunity.symbol}</Descriptions.Item>
               <Descriptions.Item label="Opportunity ID">{astroPreviewOpportunity.id}</Descriptions.Item>
@@ -1037,19 +1114,19 @@ export function DashboardPage() {
                   <Typography.Title level={5}>Generated card defaults</Typography.Title>
                   <Descriptions bordered size="small" column={2}>
                     <Descriptions.Item label="Generated openPosition">
-                      <Typography.Text code>{pairString(astroPreviewPlan.pair, "openPosition")}</Typography.Text>
+                      <Typography.Text code>{pairString(astroPreviewPlan.pair, cardTarget === "astro" ? "openPosition" : "openSpread")}</Typography.Text>
                     </Descriptions.Item>
                     <Descriptions.Item label="Generated closePosition">
-                      <Typography.Text code>{pairString(astroPreviewPlan.pair, "closePosition")}</Typography.Text>
+                      <Typography.Text code>{pairString(astroPreviewPlan.pair, cardTarget === "astro" ? "closePosition" : "closeSpread")}</Typography.Text>
                     </Descriptions.Item>
-                    <Descriptions.Item label="将创建路线" span={2}>
+                    {cardTarget === "astro" ? (<Descriptions.Item label="将创建路线" span={2}>
                       {selectedAstroRoutes(astroPreviewPlan.route_variants, selectedCardVariant)}
-                    </Descriptions.Item>
+                    </Descriptions.Item>) : null}
                   </Descriptions>
                   {astroPreviewPlan.pair ? (
                     <Form form={astroSizingForm} layout="vertical" className="astro-sizing-form">
                       <div className="form-grid">
-                        <Form.Item label="Position value USDT" name="max_trade_usdt" rules={[{ required: true }]}>
+                        <Form.Item label={cardTarget === "astro" ? "Position value USDT" : "最大持仓 (USD)"} name="max_trade_usdt" rules={[{ required: true }]}>
                           <InputNumber min={0.01} step={1} className="wide-input" />
                         </Form.Item>
                         <Form.Item label="Leverage" name="leverage" rules={[{ required: true }]}>
@@ -1061,13 +1138,13 @@ export function DashboardPage() {
                         <Form.Item label="Maximum notional USDT" name="max_notional" rules={[{ required: true }]}>
                           <InputNumber min={0.01} step={1} className="wide-input" />
                         </Form.Item>
-                        <Form.Item label="创建后允许开仓" name="open_enabled" valuePropName="checked">
+                        {cardTarget === "astro" ? (<Form.Item label="创建后允许开仓" name="open_enabled" valuePropName="checked">
                           <Switch checkedChildren="开启" unCheckedChildren="关闭" />
-                        </Form.Item>
+                        </Form.Item>) : null}
                       </div>
-                      <Form.Item label="建卡路线" name="card_variant" rules={[{ required: true }]}>
+                      {cardTarget === "astro" ? (<Form.Item label="建卡路线" name="card_variant" rules={[{ required: true }]}>
                         <AstroCardVariantSelector routes={astroPreviewPlan.route_variants} />
-                      </Form.Item>
+                      </Form.Item>) : null}
                       <Form.Item name="save_as_default" valuePropName="checked">
                         <Checkbox>保存为全局建卡默认值</Checkbox>
                       </Form.Item>
