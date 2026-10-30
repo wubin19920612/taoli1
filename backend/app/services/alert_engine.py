@@ -5,6 +5,7 @@ from app.models.alert import AlertRule
 from app.models.market import MarketType
 from app.models.opportunity import Opportunity, OpportunityType
 from app.models.settings import RiskSettings
+from app.services.alert_delivery_store import AlertDeliveryState
 from app.services.alert_metrics import (
     AlertObservation,
     combined_open_edge_pct,
@@ -28,12 +29,43 @@ class AlertMatch:
 
 
 class AlertEngine:
+    """Restore delivery state only; hits/observations restart at zero to favor fewer alerts."""
+
     def __init__(self) -> None:
         self._hits: dict[str, tuple[int, datetime]] = {}
         self._last_sent: dict[str, datetime] = {}
         self._retry_after: dict[str, datetime] = {}
         self._retry_attempts: dict[str, int] = {}
         self._observations: dict[str, list[AlertObservation]] = {}
+
+    def restore(self, states: list[AlertDeliveryState], now: datetime) -> list[str]:
+        self._hits.clear()
+        self._observations.clear()
+        self._last_sent.clear()
+        self._retry_after.clear()
+        self._retry_attempts.clear()
+        unknown_keys = []
+        for state in states:
+            last_sent = state.pending_since or state.last_sent_at
+            if last_sent is not None:
+                self._last_sent[state.key] = last_sent
+            if state.pending_since is not None:
+                # An interrupted send consumes its cooldown, even without a receipt.
+                unknown_keys.append(state.key)
+            else:
+                if state.retry_after is not None and state.retry_after > now:
+                    self._retry_after[state.key] = state.retry_after
+                if state.retry_attempts:
+                    self._retry_attempts[state.key] = state.retry_attempts
+        return unknown_keys
+
+    def export_state(self, key: str) -> AlertDeliveryState:
+        return AlertDeliveryState(
+            key=key,
+            last_sent_at=self._last_sent.get(key),
+            retry_after=self._retry_after.get(key),
+            retry_attempts=self._retry_attempts.get(key, 0),
+        )
 
     def evaluate(
         self,

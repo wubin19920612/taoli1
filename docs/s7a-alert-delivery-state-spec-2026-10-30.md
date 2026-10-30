@@ -36,3 +36,46 @@
 
 ## 测试环境（必须）
 CI 用 backend/requirements.lock 的锁定依赖（FastAPI 0.162、Starlette 1.10、pydantic 2.14.1）。全量测试用：`C:\Users\wubin\AppData\Local\Temp\claude\D-------claude---\7f276a81-4df2-4527-bc65-b410f9d557b6\scratchpad\venv-lock\Scripts\python.exe -m pytest -q -p no:cacheprovider`（在 backend 目录）。日志保留命令和汇总行。不要运行 WSL，不要访问生产或真实飞书/Astro/交易所。
+
+## 实现与验收记录（2026-10-30）
+
+- 分支：`codex/s7a-alert-delivery-state`；实现前基线：`a167e10`；初始工作区干净。
+- 仅改动本任务书，以及 `backend/app/db/schema.py`、`backend/app/main.py`、`backend/app/services/alert_engine.py`、新增的 `backend/app/services/alert_delivery_store.py`，和测试 `test_alert_delivery_state.py`（新增）、`test_alert_loop.py`、`test_api.py`、`test_task_supervisor.py`。既有测试保留原断言，只补充新增仓库依赖；前端、规则模型、消息模板、notifier 和 Astro 流程未修改。
+
+### 持久化与恢复
+
+```sql
+CREATE TABLE IF NOT EXISTS alert_delivery_state (
+  key TEXT PRIMARY KEY,
+  last_sent_at TEXT,
+  retry_after TEXT,
+  retry_attempts INTEGER NOT NULL DEFAULT 0,
+  pending_since TEXT,
+  updated_at TEXT NOT NULL
+);
+```
+
+时间由仓库写为 UTC ISO 8601 文本。`mark_pending`、`record`、`prune` 各自立即提交；`record` 清除 pending。每天清理无 pending 且超过保留期的行，保留期为 7 天与最大规则冷却加 1 天的较大值，避免长冷却规则被提前清理。
+
+`main._restore_alert_delivery_state` 在启动告警循环前读取状态。pending 以发送开始时间恢复 `last_sent`，按已发送处理，在剩余冷却期内不重发；冷却结束后仍可正常触发。连续命中与观察样本不持久化，从零累计。加载失败向上传播，避免以空冷却启动。
+
+每个 pending 写入一条 `AlertEvent(status="unknown")`，包含“上次发送过程中进程退出，结果未知，按已发送处理，不重发”。以 key 和 pending 时间生成稳定事件 ID，防止写事件后、清 pending 前再次崩溃导致重复事件。事件写入失败保留 pending 并记录异常；其他键继续恢复。事件成功后再固化冷却并清 pending。
+
+`AlertEvent.status` 和前端 `AlertEvent.status` 都是字符串，无需扩展枚举。只读核查 `frontend/src/pages/AlertHistoryPage.tsx`：unknown 可显示为红色 `unknown` 标签，消息按原文显示。恢复消息使用已有 `【需评估】` 前缀，防止历史接口按行情重建而覆盖恢复说明；已用 `/api/alerts/events` 离线接口测试验证。状态表不存 symbol，恢复事件标的列显示“未知”，完整告警键与原始 opportunity ID 保留，不推断市场身份。未进行浏览器运行验收。
+
+发送前 pending 写入失败则跳过该条发送；发送结果先更新内存，再持久化冷却/退避。状态写入或事件写入失败各自记异常并继续下一条命中。发送后状态保存失败会保留 pending，重启时按 unknown 恢复。
+
+### 验证与后续边界
+
+- 指定虚拟环境版本实测为 FastAPI `0.162.0`、Starlette `1.10.0`、pydantic `2.14.1`。运行和测试锁文件的 46 项依赖核查中，45 项匹配；Windows 环境未安装 `uvloop==0.22.1`，未更改指定环境或依赖文件。
+- 定向测试初轮：`83 passed in 11.47s`；补充接口原文与清理周期断言后，新增测试文件：`17 passed in 8.73s`。
+- 新仓库、引擎和新增测试的 Ruff 检查通过；其他改动文件的 Ruff 告警与基线一致（main.py 6 项、test_api.py 4 项，无新增），未扩范围修复；`git diff --check` 通过。
+- 最终全量测试工作目录：`backend`。命令：
+
+```powershell
+& 'C:\Users\wubin\AppData\Local\Temp\claude\D-------claude---\7f276a81-4df2-4527-bc65-b410f9d557b6\scratchpad\venv-lock\Scripts\python.exe' -m pytest -q -p no:cacheprovider
+```
+
+最终全量汇总：`2369 passed, 6 deselected, 13 warnings in 124.97s (0:02:04)`，退出码 0。6 项按项目默认配置排除（network/benchmark）；13 项为 TestClient/httpx 与 datetime.utcnow 的弃用提示。原始日志保存在 `%TEMP%\s7a-alert-delivery-state-full-tests-final-20261030.log`（含命令）。
+
+本任务未访问生产、未备份或部署线上、未调用真实飞书/Astro/交易所、未运行 WSL。后续部署验收属于新任务，本地验证不代表生产验收。

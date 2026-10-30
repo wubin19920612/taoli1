@@ -121,6 +121,15 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
           updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
 
+        CREATE TABLE IF NOT EXISTS alert_delivery_state (
+          key TEXT PRIMARY KEY,
+          last_sent_at TEXT,
+          retry_after TEXT,
+          retry_attempts INTEGER NOT NULL DEFAULT 0,
+          pending_since TEXT,
+          updated_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS alert_events (
           id TEXT PRIMARY KEY,
           rule_id TEXT NOT NULL,
