@@ -310,7 +310,7 @@ def test_hidden_position_identity_persists_across_app_restart(tmp_path) -> None:
         assert watch_updated.json()["hidden_positions"] == [hidden]
 
     with TestClient(create_app(settings=app_settings)) as client:
-        restored = client.get("/api/settings/floating-watch").json()
+        restored = client.get("/api/settings/floating-watch", headers={"X-Dashboard-Password": "secret"}).json()
         assert restored["hidden_positions"] == [hidden]
         removed = client.post(
             "/api/settings/floating-watch/positions",

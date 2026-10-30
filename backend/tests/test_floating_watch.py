@@ -48,7 +48,7 @@ def test_floating_watch_api_syncs_devices_and_protects_writes() -> None:
     )
 
     with TestClient(app) as client:
-        assert client.get("/api/settings/floating-watch").json() == {
+        assert client.get("/api/settings/floating-watch", headers={"X-Dashboard-Password": "secret"}).json() == {
             "symbols": [],
             "pair_ids": [],
             "hidden_positions": [],
@@ -79,7 +79,7 @@ def test_floating_watch_api_syncs_devices_and_protects_writes() -> None:
         )
         assert pair_saved.json()["pair_ids"] == ["pair-a"]
 
-        second_device = client.get("/api/settings/floating-watch")
+        second_device = client.get("/api/settings/floating-watch", headers={"X-Dashboard-Password": "secret"})
         assert second_device.json() == pair_saved.json()
 
 

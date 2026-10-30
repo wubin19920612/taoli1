@@ -687,8 +687,8 @@ def test_oil_news_api_exposes_records_and_password_protected_settings() -> None:
         start_background_workers=False,
     )
     with TestClient(app) as client:
-        assert client.get("/api/oil-news").json() == []
-        response = client.get("/api/settings/oil-news")
+        assert client.get("/api/oil-news", headers={"X-Dashboard-Password": "secret"}).json() == []
+        response = client.get("/api/settings/oil-news", headers={"X-Dashboard-Password": "secret"})
         assert response.status_code == 200
         assert response.json()["alert_min_severity"] == "high"
 

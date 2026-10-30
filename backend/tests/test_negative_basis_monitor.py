@@ -798,7 +798,7 @@ def test_negative_basis_monitor_api_saves_watch_item() -> None:
                 "updated_at": "2026-08-11T00:00:00Z",
             },
         )
-        status_response = client.get("/api/negative-basis-monitor/status")
+        status_response = client.get("/api/negative-basis-monitor/status", headers={"X-Dashboard-Password": "secret"})
 
     assert response.status_code == 200
     payload = response.json()
@@ -836,7 +836,7 @@ def test_negative_basis_monitor_api_updates_auto_scan_blocklist() -> None:
             headers=headers,
             params={"exchange": "Binance", "symbol": "PROM"},
         )
-        status_response = client.get("/api/negative-basis-monitor/status")
+        status_response = client.get("/api/negative-basis-monitor/status", headers={"X-Dashboard-Password": "secret"})
         unblock_symbol_response = client.delete(
             "/api/negative-basis-monitor/auto-scan/block-symbol",
             headers=headers,

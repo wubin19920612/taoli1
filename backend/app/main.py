@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import AsyncIterator
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.runtime.loop_stall_watchdog import LoopStallWatchdog
@@ -44,6 +44,7 @@ from app.api import (
     stream,
 )
 from app.core.config import Settings, get_settings
+from app.core.security import require_dashboard_password
 from app.db.database import connect_database
 from app.db.repositories import (
     AccountConnectionRepository,
@@ -788,6 +789,8 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        if not app.state.settings.dashboard_password:
+            logger.warning("DASHBOARD_PASSWORD is empty; all API routes are unprotected")
         db_path = _sqlite_path(app_settings)
         _ensure_database_parent(db_path)
         db = await connect_database(db_path, recover_stale_snapshots=True)
@@ -1326,37 +1329,41 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.include_router(routes_features.router, prefix="/api")
-    app.include_router(routes_health.router, prefix="/api")
-    app.include_router(routes_account_connections.router, prefix="/api")
-    app.include_router(routes_account_positions.router, prefix="/api")
-    app.include_router(routes_astro.router, prefix="/api")
-    app.include_router(routes_opportunities.router, prefix="/api")
-    app.include_router(routes_opportunity_radar.router, prefix="/api")
-    app.include_router(routes_history.router, prefix="/api")
-    app.include_router(routes_hyperliquid_trade_status.router, prefix="/api")
-    app.include_router(routes_trade_availability.router, prefix="/api")
-    app.include_router(routes_instruments.router, prefix="/api")
-    app.include_router(routes_instruments.market_cap_router, prefix="/api")
-    app.include_router(routes_pair_spread.router, prefix="/api")
-    app.include_router(routes_premium_index.router, prefix="/api")
-    app.include_router(routes_negative_basis_monitor.router, prefix="/api")
-    app.include_router(routes_squeeze_arbitrage.router, prefix="/api")
-    app.include_router(routes_index_components.router, prefix="/api")
-    app.include_router(routes_announcements.router, prefix="/api")
-    app.include_router(routes_oil_news.router, prefix="/api")
-    app.include_router(routes_alerts.router, prefix="/api")
-    app.include_router(routes_phone_alerts.router, prefix="/api")
-    app.include_router(routes_funding_arbitrage.router, prefix="/api")
-    app.include_router(routes_fs_monitor.router, prefix="/api")
-    app.include_router(routes_funding_research.router, prefix="/api")
-    app.include_router(routes_gate_twap.router, prefix="/api")
-    app.include_router(routes_tradfi_perp_monitor.router, prefix="/api")
-    app.include_router(routes_second_level_sampling.router, prefix="/api")
-    app.include_router(routes_settings.router, prefix="/api")
-    app.include_router(routes_market_identities.router, prefix="/api")
-    app.include_router(routes_admin.router, prefix="/api")
-    app.include_router(stream.router, prefix="/api")
+    # Every API router uses the same guard; public exceptions live in security.py.
+    for router in (
+        routes_features.router,
+        routes_health.router,
+        routes_account_connections.router,
+        routes_account_positions.router,
+        routes_astro.router,
+        routes_opportunities.router,
+        routes_opportunity_radar.router,
+        routes_history.router,
+        routes_hyperliquid_trade_status.router,
+        routes_trade_availability.router,
+        routes_instruments.router,
+        routes_instruments.market_cap_router,
+        routes_pair_spread.router,
+        routes_premium_index.router,
+        routes_negative_basis_monitor.router,
+        routes_squeeze_arbitrage.router,
+        routes_index_components.router,
+        routes_announcements.router,
+        routes_oil_news.router,
+        routes_alerts.router,
+        routes_phone_alerts.router,
+        routes_funding_arbitrage.router,
+        routes_fs_monitor.router,
+        routes_funding_research.router,
+        routes_gate_twap.router,
+        routes_tradfi_perp_monitor.router,
+        routes_second_level_sampling.router,
+        routes_settings.router,
+        routes_market_identities.router,
+        routes_admin.router,
+        stream.router,
+    ):
+        app.include_router(router, prefix="/api", dependencies=[Depends(require_dashboard_password)])
     return app
 
 

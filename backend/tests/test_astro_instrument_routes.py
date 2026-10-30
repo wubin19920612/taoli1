@@ -316,7 +316,7 @@ def test_rh_lighter_market_allows_authenticated_manual_create(
     with TestClient(app) as client:
         _install_exact_books(app, snapshot_timestamp=True)
         _install_exact_books(app)
-        preview = client.post("/api/astro/instrument/preview", json=selected)
+        preview = client.post("/api/astro/instrument/preview", headers={"X-Dashboard-Password": "secret"}, json=selected)
         unauthorized = client.post("/api/astro/instrument/card", json={
             "route": selected, "card": {"open_enabled": False, "card_variant": "non_gc"},
             "expected_open_spread_pct": 1,
@@ -387,7 +387,7 @@ def test_rh_lighter_manual_api_reaches_sdk_with_exact_paused_openai_card() -> No
     with TestClient(app) as client:
         _install_exact_books(app, snapshot_timestamp=True)
         _install_exact_books(app)
-        preview = client.post("/api/astro/instrument/preview", json=selected)
+        preview = client.post("/api/astro/instrument/preview", headers={"X-Dashboard-Password": "secret"}, json=selected)
         response = client.post(
             "/api/astro/instrument/card", headers={"X-Dashboard-Password": "secret"},
             json={
