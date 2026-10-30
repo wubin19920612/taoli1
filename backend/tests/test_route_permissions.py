@@ -6,6 +6,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 from fastapi.routing import APIRoute
+from types import SimpleNamespace
 
 from app.core.config import Settings
 from app.core.security import verify_dashboard_password
@@ -35,11 +36,28 @@ async def client(app):
         yield client
 
 
+def _flatten_routes(routes, prefix=""):
+    # FastAPI >= 0.16x wraps include_router() results in _IncludedRouter instead of copying APIRoutes.
+    for route in routes:
+        original = getattr(route, "original_router", None)
+        if original is not None:
+            yield from _flatten_routes(original.routes, prefix + route.include_context.prefix)
+        elif isinstance(route, APIRoute):
+            yield SimpleNamespace(
+                path=prefix + route.path,
+                path_format=prefix + route.path_format,
+                param_convertors=route.param_convertors,
+                methods=route.methods,
+            )
+
+
 def api_routes(app):
-    return [
-        route for route in app.routes
-        if isinstance(route, APIRoute) and (route.path == "/api" or route.path.startswith("/api/"))
+    routes = [
+        route for route in _flatten_routes(app.routes)
+        if route.path == "/api" or route.path.startswith("/api/")
     ]
+    assert routes, "no /api routes enumerated"
+    return routes
 
 
 def placeholder_path(route):
