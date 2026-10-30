@@ -1,6 +1,9 @@
+import asyncio
+from copy import deepcopy
 from dataclasses import dataclass
 import json
 import ssl
+from time import monotonic
 from typing import Any
 
 import httpx
@@ -59,6 +62,10 @@ class AstroSdkClient:
         self.config = config
         self._client = client
         self._owns_client = client is None
+        self._pairs_cache: list[dict[str, Any]] | None = None
+        self._pairs_cached_at = 0.0
+        self._pairs_lock = asyncio.Lock()
+        self._pairs_inflight: asyncio.Task[list[dict[str, Any]]] | None = None
 
     @property
     def client(self) -> httpx.AsyncClient:
@@ -105,10 +112,45 @@ class AstroSdkClient:
         return await self._mutate_pair("update", pair)
 
     async def _mutate_pair(self, action: str, pair: dict[str, Any]) -> dict[str, Any]:
-        response = await self._post(self.config.list_path, {"action": action, "pair": pair})
-        if response.get("code") != 0:
-            raise AstroClientError(response.get("message", f"Astro {action} request failed"))
-        return response
+        try:
+            response = await self._post(self.config.list_path, {"action": action, "pair": pair})
+            if response.get("code") != 0:
+                raise AstroClientError(response.get("message", f"Astro {action} request failed"))
+            return response
+        finally:
+            self._pairs_cache = None
+            # A read started before this write must not refill the cache or be
+            # joined by subsequent readers, even if the write timed out.
+            self._pairs_inflight = None
+
+    async def list_pairs_cached(self, max_age_seconds: float = 10.0) -> list[dict[str, Any]]:
+        """仅用于展示，建卡/对账前必须用 list_pairs()。"""
+        async with self._pairs_lock:
+            if (
+                self._pairs_cache is not None
+                and monotonic() - self._pairs_cached_at < max_age_seconds
+            ):
+                return deepcopy(self._pairs_cache)
+            if self._pairs_inflight is None:
+                self._pairs_inflight = asyncio.create_task(self._refresh_pairs_cache())
+                # Retrieve failures even if all display requests were cancelled.
+                self._pairs_inflight.add_done_callback(
+                    lambda task: None if task.cancelled() else task.exception()
+                )
+            inflight = self._pairs_inflight
+        # One route timing out must not cancel the shared upstream read.
+        return deepcopy(await asyncio.shield(inflight))
+
+    async def _refresh_pairs_cache(self) -> list[dict[str, Any]]:
+        try:
+            pairs = await self.list_pairs()
+            if self._pairs_inflight is asyncio.current_task():
+                self._pairs_cache = deepcopy(pairs)
+                self._pairs_cached_at = monotonic()
+            return pairs
+        finally:
+            if self._pairs_inflight is asyncio.current_task():
+                self._pairs_inflight = None
 
     async def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         if not self.config.configured:

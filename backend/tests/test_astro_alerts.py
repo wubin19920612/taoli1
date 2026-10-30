@@ -90,6 +90,9 @@ class FakeAstroClient:
             raise self.error
         return self.pairs
 
+    async def list_pairs_cached(self):
+        raise AssertionError("Card creation must use the realtime list")
+
     async def add_pair(self, pair: dict[str, Any]) -> dict[str, Any]:
         route = f"{pair.get('buyEx')}->{pair.get('sellEx')}"
         if error := self.add_errors.get(route):

@@ -68,10 +68,13 @@ async def test_astro_duplicate_and_uncertain_write_survive_restart(tmp_path):
     await repo.initialize()
     row = signal()
     client = SimpleNamespace(list_pairs=AsyncMock(return_value=[]), add_pair=AsyncMock())
+    client.list_pairs_cached = AsyncMock(side_effect=AssertionError("Use the realtime list"))
     fresh = AsyncMock(side_effect=signal)
     bridge = FsAstroBridge(client, repo, AsyncMock(return_value=RiskSettings()), dry_run_only=False)
     try:
         assert await bridge.process(row, fresh, lambda: True) == "created"
+        client.list_pairs.assert_awaited_once()
+        client.list_pairs_cached.assert_not_awaited()
         assert client.add_pair.await_count == 1
         assert await bridge.process(row, fresh, lambda: True) == "recorded"
         client.list_pairs.return_value = [card_plan(row)]

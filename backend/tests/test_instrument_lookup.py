@@ -224,7 +224,7 @@ def test_anthropic_lookup_matches_independent_robinhood_lighter_route() -> None:
     )
 
     class Astro:
-        async def list_pairs(self):
+        async def list_pairs_cached(self):
             return [
                 {
                     "id": "lighter-rh",

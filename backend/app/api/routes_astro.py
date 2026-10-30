@@ -491,7 +491,7 @@ async def list_astro_pairs(
     _require_dashboard_password(request, password)
     client = _astro_client(request)
     try:
-        return await client.list_pairs()
+        return await client.list_pairs_cached()
     except AstroClientError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 

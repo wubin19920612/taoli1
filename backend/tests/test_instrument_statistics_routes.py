@@ -37,14 +37,14 @@ async def test_statistics_independent_of_astro_but_basic_lookup_preserves_routes
         return [{"id": "test", "name": "BTC", "type": "FF",
                  "buyEx": "binance", "sellEx": "okx"}]
 
-    app.state.astro_client = SimpleNamespace(list_pairs=AsyncMock(side_effect=list_pairs))
+    app.state.astro_client = SimpleNamespace(list_pairs_cached=AsyncMock(side_effect=list_pairs))
     service = AsyncMock()
     service.lookup.return_value = InstrumentStatisticsResult(symbol="BTCUSDT", observed_at=now)
     app.state.instrument_statistics_service = service
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
         stats = await asyncio.wait_for(client.get("/api/instruments/BTC/statistics"), timeout=1)
         assert stats.status_code == 200
-        app.state.astro_client.list_pairs.assert_not_awaited()
+        app.state.astro_client.list_pairs_cached.assert_not_awaited()
         target = service.lookup.await_args.args[0]
         assert target.symbol == "BTCUSDT"
         assert target.markets[0].raw_symbol == "BTCUSDT"
@@ -61,7 +61,7 @@ async def test_statistics_independent_of_astro_but_basic_lookup_preserves_routes
                 basic_task.cancel()
                 await asyncio.gather(basic_task, return_exceptions=True)
         assert basic.status_code == 200
-        app.state.astro_client.list_pairs.assert_awaited_once()
+        app.state.astro_client.list_pairs_cached.assert_awaited_once()
         if sdk_state == "error":
             assert "SDK unavailable" in basic.json()["route_errors"]["astro"]
         else:

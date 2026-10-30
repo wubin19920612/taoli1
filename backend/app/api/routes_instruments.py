@@ -175,20 +175,8 @@ async def _astro_route_statuses(
     config = getattr(client, "config", None)
     if config is not None and not getattr(config, "configured", False):
         return [], {"astro": "Astro SDK 未配置，无法读取路由证据"}
-    now = datetime.now(UTC)
-    cached = getattr(request.app.state, "instrument_astro_route_cache", None)
-    payload: Any = None
-    if (
-        isinstance(cached, tuple)
-        and len(cached) == 2
-        and isinstance(cached[0], datetime)
-        and (now - cached[0]).total_seconds() <= 10
-    ):
-        payload = cached[1]
     try:
-        if payload is None:
-            payload = await asyncio.wait_for(client.list_pairs(), timeout=5)
-            request.app.state.instrument_astro_route_cache = (now, payload)
+        payload = await asyncio.wait_for(client.list_pairs_cached(), timeout=5)
     except Exception as exc:  # noqa: BLE001 - route evidence must not block market lookup.
         return [], {"astro": f"Astro 路由读取失败: {exc}"}
     pairs = payload if isinstance(payload, list) else []
