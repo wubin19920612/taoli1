@@ -1,7 +1,10 @@
 """Pure, fixed USD notional per-leg accounting; no network, clock or database I/O."""
 
 from dataclasses import dataclass
+from datetime import timedelta
+from itertools import pairwise
 from math import floor, isfinite
+from statistics import median
 
 from app.models.market import MarketType
 from app.models.pair_range_backtest import PairRangeBacktestRequest, PairRangeBacktestResult
@@ -33,9 +36,9 @@ def calculate_range_backtest(
 ) -> PairRangeBacktestResult:
     """Costs use two trades per leg at the supplied per-leg notional.
 
-    Coverage uses the current interval and settlement phase, not gaps between
-    observed records (which could conceal missing settlements). Zero scheduled
-    settlements means coverage 1; spot or unknown schedule means null. Interior
+    Coverage prefers the current interval and settlement phase, falling back to
+    the median observed settlement gap with an explicit estimation warning.
+    Zero scheduled settlements means coverage 1; an unknown schedule means null. Interior
     price gaps are deliberately not audited: only endpoint neighborhoods are read.
     """
     warnings = list(dict.fromkeys((*leg1_data.warnings, *leg2_data.warnings)))
@@ -61,14 +64,22 @@ def calculate_range_backtest(
             valid = [p for p in points if isfinite(p.close) and p.close > 0]
             if not valid:
                 raise ValueError(f"{name} {kind}: no historical price near requested endpoint")
-            point = min(
-                valid, key=lambda p: (abs((p.bucket_at - target).total_seconds()), p.bucket_at)
-            )
-            deviation = abs((point.bucket_at - target).total_seconds())
+            closes = [(p.bucket_at + timedelta(seconds=data.granularity_seconds), p)
+                      for p in valid]
+            past = [(at, p) for at, p in closes if at <= target]
+            if past:
+                close_at, point = max(past, key=lambda item: item[0])
+            else:
+                close_at, point = min(closes, key=lambda item: item[0])
+                warnings.append(
+                    f"{name} {kind} 无端点时刻及之前已收盘的 K 线，"
+                    "使用端点之后最近的收盘价，存在前视偏差。"
+                )
+            deviation = abs((close_at - target).total_seconds())
             output[name] = {
                 "market": leg,
                 "price": float(point.close),
-                "timestamp": point.bucket_at,
+                "timestamp": close_at,
                 "target_at": target,
                 "deviation_seconds": deviation,
             }
@@ -126,11 +137,22 @@ def calculate_range_backtest(
                 }
             )
         interval = current.funding_interval_hours if current else None
+        inferred = False
         if interval is None or not isfinite(interval) or interval <= 0:
-            warnings.append(f"{name} 结算周期未知，funding coverage 无法估算；未补零。")
-            continue
+            times = sorted(unique)
+            if len(times) < 2:
+                warnings.append(f"{name} 结算周期未知，funding coverage 无法估算；未补零。")
+                continue
+            interval = median((b - a).total_seconds() for a, b in pairwise(times)) / 3600
+            inferred = True
+            warnings.append(
+                f"{name} 结算周期按区间内实际结算时间相邻间隔中位数推断为 {interval:g} 小时；"
+                "缺失记录或周期变化可能影响推断及 funding coverage。"
+            )
         period = interval * 3600
-        anchor = current.funding_next_time or next(iter(unique), None)
+        anchor = (
+            current.funding_next_time if current and not inferred else None
+        ) or min(unique, default=None)
         # Existing venues align funding to UTC. If no phase is available, state
         # that assumption explicitly, rather than inferring cadence from gaps.
         anchor_seconds = anchor.timestamp() if anchor else 0.0
@@ -143,14 +165,15 @@ def calculate_range_backtest(
         )
         actual = len(unique)
         coverage[name] = actual / expected if expected else (1.0 if actual == 0 else None)
-        warnings.append(
-            f"{name} funding coverage 按当前 {interval:g} 小时周期估算，历史周期变化可能影响覆盖率。"
-        )
+        if not inferred:
+            warnings.append(
+                f"{name} funding coverage 按当前 {interval:g} 小时周期估算，历史周期变化可能影响覆盖率。"
+            )
         if actual < expected:
             warnings.append(f"{name} 资金费缺失：实际 {actual} / 预计 {expected} 次结算，未补零。")
             gaps.append({"leg": name, "kind": "funding", "expected": expected, "actual": actual})
         elif actual > expected:
-            warnings.append(f"{name} 实际结算次数超过当前周期估算，历史结算周期可能发生变化。")
+            warnings.append(f"{name} 实际结算次数超过周期估算，历史结算周期可能发生变化。")
 
     settlements.sort(key=lambda p: (p["funding_time"], p["leg"]))
     price_total = sum(pnl.values())
@@ -176,6 +199,7 @@ def calculate_range_backtest(
                 "leg2": leg2_data.granularity_seconds,
             },
             "gaps": gaps,
+            "funding_coverage": coverage,
             "is_estimate": True,
         },
         warnings=list(dict.fromkeys(warnings)),

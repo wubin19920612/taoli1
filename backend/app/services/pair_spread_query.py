@@ -9,6 +9,7 @@ from typing import Any
 from urllib.parse import quote, urlsplit
 
 import httpx
+from fastapi import HTTPException
 
 from app.exchanges.arcus import (
     ARCUS_URL,
@@ -1180,24 +1181,31 @@ class PairSpreadQueryService:
     async def query_range_backtest(
         self, payload: PairRangeBacktestRequest, *, fee_settings: FeeSettings,
     ) -> PairRangeBacktestResult:
+        hours = ceil((payload.end_at - payload.start_at).total_seconds() / 3600)
+        granularity = _resolve_historical_interval_seconds(hours, 60)
+        # Validate both endpoint windows in UTC before resolving markets or doing I/O.
+        try:
+            window = timedelta(seconds=5 * granularity)
+            windows = {}
+            for at in (payload.start_at, payload.end_at):
+                center = _as_utc(at).replace(second=0, microsecond=0)
+                windows[at] = (center - window, center + window)
+        except OverflowError as exc:
+            raise HTTPException(status_code=422, detail="端点 K 线窗口超出支持的日期范围") from exc
         # Resolve DEX once before any price/funding I/O, retaining exact identity.
         legs = await asyncio.gather(
             self._resolved_result_leg(payload.leg1), self._resolved_result_leg(payload.leg2),
         )
         payload = payload.model_copy(update={"leg1": legs[0], "leg2": legs[1]})
-        hours = ceil((payload.end_at - payload.start_at).total_seconds() / 3600)
-        granularity = _resolve_historical_interval_seconds(hours, 60)
 
         async def load(leg: PairSpreadLegQuery) -> RangeLegData:
             warnings: list[str] = []
 
             async def endpoint(at: datetime) -> list[PairSpreadKlinePoint]:
                 # Only a small candle window around each endpoint, regardless of span.
-                center = at.replace(second=0, microsecond=0)
-                window = timedelta(seconds=5 * granularity)
                 return await self._fetch_klines_with_warning(
                     leg.exchange, leg.symbol, leg.market_type, leg.dex,
-                    center - window, center + window, granularity // 60, warnings,
+                    *windows[at], granularity // 60, warnings,
                 )
 
             entry, exit_points, funding, current = await asyncio.gather(

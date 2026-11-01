@@ -72,6 +72,7 @@ class RangeDataGap(BaseModel):
 class RangeDataQuality(BaseModel):
     source: dict[str, str]
     granularity_seconds: dict[str, int]
+    funding_coverage: RangeCoverage
     gaps: list[RangeDataGap]
     is_estimate: Literal[True] = True
 

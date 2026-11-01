@@ -6,6 +6,8 @@ from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
+from fastapi import FastAPI
+
 from app.api.routes_pair_spread import router
 from app.models.market import MarketType
 from app.models.pair_range_backtest import PairRangeBacktestRequest
@@ -18,7 +20,6 @@ from app.models.settings import FeeSettings
 from app.services.funding_history_pagination import PartialFundingHistoryError
 from app.services.pair_range_backtest import RangeLegData, calculate_range_backtest
 from app.services.pair_spread_query import PairSpreadQueryError, PairSpreadQueryService
-from fastapi import FastAPI
 
 START = datetime(2026, 10, 1, tzinfo=UTC)
 
@@ -54,8 +55,12 @@ def book(leg, **updates):
 
 def data_for(request, leg, *, entry=100, exit=110, rate=0.01, count=3):
     return RangeLegData(
-        entry_points=(PairSpreadKlinePoint(bucket_at=request.start_at, close=entry),),
-        exit_points=(PairSpreadKlinePoint(bucket_at=request.end_at, close=exit),),
+        entry_points=(PairSpreadKlinePoint(
+            bucket_at=request.start_at - timedelta(minutes=1), close=entry,
+        ),),
+        exit_points=(PairSpreadKlinePoint(
+            bucket_at=request.end_at - timedelta(minutes=1), close=exit,
+        ),),
         funding=tuple(
             PairSpreadFundingPoint(
                 exchange=leg.exchange,
@@ -158,7 +163,7 @@ def test_endpoint_nearest_selection_and_deviation_warning(offset, has_gap):
     one = replace(
         one,
         entry_points=(
-            PairSpreadKlinePoint(bucket_at=START + timedelta(seconds=offset), close=100),
+            PairSpreadKlinePoint(bucket_at=START + timedelta(seconds=offset - 60), close=100),
             PairSpreadKlinePoint(bucket_at=START + timedelta(seconds=500), close=999),
         ),
     )
@@ -176,6 +181,7 @@ def test_spot_fee_and_no_funding_and_missing_price():
     result = calculate(request, one, two)
     assert result.fees == 3.0
     assert result.funding_pnl.coverage.leg1 is None
+    assert result.data_quality.funding_coverage == result.funding_pnl.coverage
     assert all(p.leg == "leg2" for p in result.funding_pnl.settlements)
     with pytest.raises(ValueError, match="no historical price"):
         calculate(request, replace(one, entry_points=()), two)
@@ -379,6 +385,7 @@ async def test_route_200_and_dependency_cleanup(route_app):
     result = await post(app, request_for().model_dump(mode="json"))
     assert result.status_code == 200, result.text
     assert result.json()["data_quality"]["is_estimate"] is True
+    assert result.json()["data_quality"]["funding_coverage"] == result.json()["funding_pnl"]["coverage"]
     service.query_range_backtest.assert_awaited_once()
     service.aclose.assert_awaited_once()
 
@@ -513,3 +520,110 @@ async def test_loader_preserves_explicit_dex_for_all_sources():
         assert observed.count(("price", dex)) == 2
         assert observed.count(("funding", dex)) == 1
         assert observed.count(("book", dex)) == 1
+
+
+@pytest.mark.parametrize("kind", ["entry", "exit"])
+@pytest.mark.parametrize("granularity", [60, 3600])
+@pytest.mark.parametrize("offset", [0, 10, -10])
+def test_endpoint_uses_latest_close_not_after_target(kind, granularity, offset):
+    request = request_for()
+    target = request.start_at if kind == "entry" else request.end_at
+    close_at = target - timedelta(seconds=granularity + offset)
+    points = (
+        PairSpreadKlinePoint(bucket_at=target, close=999),
+        PairSpreadKlinePoint(bucket_at=close_at - timedelta(seconds=granularity), close=101),
+        PairSpreadKlinePoint(bucket_at=close_at - timedelta(seconds=2 * granularity), close=98),
+    )
+    one = replace(data_for(request, request.leg1), granularity_seconds=granularity,
+                  **{f"{kind}_points": points})
+    result = calculate(request, one, data_for(request, request.leg2))
+    endpoint = getattr(result, kind).leg1
+    assert endpoint.price == 101
+    assert endpoint.timestamp == close_at
+    assert endpoint.deviation_seconds == granularity + offset
+    assert not any(f"leg1 {kind}" in w and "之后" in w for w in result.warnings)
+
+
+@pytest.mark.parametrize("kind", ["entry", "exit"])
+@pytest.mark.parametrize("offset", [0, 30, 3600])
+def test_endpoint_exact_close_or_future_fallback_warns(kind, offset):
+    request = request_for()
+    target = request.start_at if kind == "entry" else request.end_at
+    close_at = target + timedelta(seconds=offset)
+    points = (
+        PairSpreadKlinePoint(bucket_at=target + timedelta(hours=1), close=999),
+        PairSpreadKlinePoint(bucket_at=close_at - timedelta(hours=1), close=101),
+    )
+    one = replace(data_for(request, request.leg1), granularity_seconds=3600,
+                  **{f"{kind}_points": points})
+    result = calculate(request, one, data_for(request, request.leg2))
+    endpoint = getattr(result, kind).leg1
+    assert endpoint.price == 101
+    assert endpoint.timestamp == close_at
+    assert endpoint.deviation_seconds == offset
+    assert any(f"leg1 {kind}" in w and "之后" in w for w in result.warnings) == (offset > 0)
+
+
+@pytest.mark.parametrize("current_available", [True, False])
+@pytest.mark.parametrize("hours,expected_interval,coverage", [
+    ([4, 8], 4, 2 / 6),
+    ([4, 8, 16], 6, 3 / 4),
+    ([4, 8, 12, 24], 4, 4 / 6),
+])
+def test_unknown_funding_period_uses_median_of_unique_in_range_settlements(
+    current_available, hours, expected_interval, coverage,
+):
+    request = request_for()
+    request.leg1 = request.leg1.model_copy(update={"exchange": "bitget"})
+    one = data_for(request, request.leg1)
+    seed = one.funding[0]
+    one = replace(
+        one,
+        current=book(request.leg1, funding_interval_hours=None) if current_available else None,
+        funding=tuple(seed.model_copy(update={"funding_time": START + timedelta(hours=h)})
+                      for h in [*reversed(hours), hours[0], 0, 25]),
+    )
+    result = calculate(request, one, data_for(request, request.leg2))
+    assert result.funding_pnl.coverage.leg1 == pytest.approx(coverage)
+    assert result.data_quality.funding_coverage == result.funding_pnl.coverage
+    assert any("leg1" in w and "推断" in w and f"{expected_interval:g} 小时" in w
+               for w in result.warnings)
+
+
+@pytest.mark.parametrize("count", [0, 1])
+def test_unknown_funding_period_requires_two_settlements(count):
+    request = request_for()
+    one = replace(data_for(request, request.leg1, count=count), current=None)
+    result = calculate(request, one, data_for(request, request.leg2))
+    assert result.funding_pnl.coverage.leg1 is None
+    assert result.data_quality.funding_coverage == result.funding_pnl.coverage
+    assert any("leg1" in w and "周期未知" in w for w in result.warnings)
+
+
+def test_known_funding_period_takes_priority_over_observed_gaps():
+    request = request_for()
+    one = data_for(request, request.leg1)
+    one = replace(one, funding=(one.funding[0], one.funding[2]))
+    result = calculate(request, one, data_for(request, request.leg2))
+    assert result.funding_pnl.coverage.leg1 == pytest.approx(2 / 3)
+    assert result.data_quality.funding_coverage == result.funding_pnl.coverage
+    assert not any("推断" in w for w in result.warnings)
+
+
+@pytest.mark.parametrize("start,end", [
+    ("9999-12-31T22:00:00Z", "9999-12-31T23:59:00Z"),
+    ("9999-12-01T23:00:00Z", "9999-12-31T23:00:00Z"),
+    ("0001-01-01T00:00:00Z", "0001-01-02T00:00:00Z"),
+    ("9999-12-31T22:00:00-02:00", "9999-12-31T23:00:00-02:00"),
+])
+async def test_endpoint_window_overflow_returns_422_before_network(route_app, start, end):
+    app, _ = route_app
+    service = PairSpreadQueryService()
+    service._resolved_result_leg = AsyncMock()
+    app.state.pair_spread_query_service_factory = lambda: service
+    response = await post(app, request_for().model_dump(mode="json") | {
+        "start_at": start, "end_at": end,
+    })
+    assert response.status_code == 422, response.text
+    service._resolved_result_leg.assert_not_awaited()
+    assert service.client.is_closed

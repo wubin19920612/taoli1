@@ -3,9 +3,13 @@
 import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import datetime
+from math import isfinite
+from time import monotonic
 from typing import Any, Literal
 
 from app.models.pair_spread import PairSpreadFundingPoint
+
+FUNDING_HISTORY_TOTAL_TIMEOUT_SECONDS = 45.0
 
 
 class PartialFundingHistoryError(RuntimeError):
@@ -24,18 +28,39 @@ async def collect_funding_pages(
     limit: int,
     direction: Literal["forward", "backward"] = "backward",
     page_numbered: bool = False,
+    total_timeout_seconds: float | None = None,
 ) -> list[PairSpreadFundingPoint]:
     """Cursor is inclusive milliseconds; page numbering starts at one.
 
     Raw timestamps drive pagination even if a rate is absent. Invalid rates do
     not become zero settlements. Preserve successfully parsed pages on failure.
+    All callers share a total budget; the existing 20-second page cap still applies.
     """
+    budget = (
+        FUNDING_HISTORY_TOTAL_TIMEOUT_SECONDS
+        if total_timeout_seconds is None else total_timeout_seconds
+    )
+    if not isfinite(budget) or budget <= 0:
+        raise ValueError("funding history total timeout must be positive and finite")
+    deadline = monotonic() + budget
     cursor = int((start if direction == "forward" else end).timestamp() * 1000)
     points: dict[datetime, PairSpreadFundingPoint] = {}
     invalid = 0
     try:
         for page in range(1, 101):
-            rows = await asyncio.wait_for(fetch_page(cursor, page), timeout=20)
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"funding history total timeout budget exhausted ({budget:g}s)")
+            page_timeout = asyncio.timeout(min(20, remaining))
+            try:
+                async with page_timeout:
+                    rows = await fetch_page(cursor, page)
+            except TimeoutError as exc:
+                if page_timeout.expired() and remaining <= 20:
+                    raise TimeoutError(
+                        f"funding history total timeout budget exhausted ({budget:g}s)"
+                    ) from exc
+                raise
             if not isinstance(rows, list):
                 raise TypeError("invalid funding history response")
             times = []
