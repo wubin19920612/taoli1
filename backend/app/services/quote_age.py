@@ -35,7 +35,10 @@ def quote_age_fields(
 
 
 def market_source_timestamp(market: MarketSnapshot) -> datetime | None:
-    return market.book_timestamp or market.upstream_timestamp
+    if market.book_timestamp is not None:
+        # Book enrichment may also copy its local fallback into upstream_timestamp.
+        return None if market.quote_time_source == "received" else market.book_timestamp
+    return market.upstream_timestamp
 
 
 def market_time_source(market: MarketSnapshot) -> str:

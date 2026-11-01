@@ -125,6 +125,30 @@ def test_opportunity_age_uses_local_clock_and_keeps_source_timestamp(monkeypatch
     assert client.get("/api/opportunities").json()[0]["buy_age_ms"] == 2250
 
 
+@pytest.mark.parametrize("mirrored_upstream", [False, True])
+def test_received_book_time_does_not_report_source_age(monkeypatch, mirrored_upstream):
+    book_time = NOW - timedelta(seconds=4)
+    anchor = market(
+        "bybit", mark=98, timestamp=NOW - timedelta(seconds=2),
+        book_timestamp=book_time, quote_time_source="received",
+        # Book enrichment can also copy the local fallback into this field.
+        upstream_timestamp=book_time if mirrored_upstream else None,
+    )
+    peer = market("binance")
+    client, _ = opportunity_client([
+        build_directional_opportunity(anchor, peer, mode="FF"),
+    ], monkeypatch)
+    payload = client.get("/api/opportunities").json()[0]
+    assert payload["buy_age_ms"] == 2000
+    assert payload["buy_source_age_ms"] is None
+    assert payload["buy_time_source"] == "received"
+
+    candidate = build_opportunity_radar_preview([anchor, peer], now=NOW).candidates[0]
+    assert candidate.long_age_ms == 2000
+    assert candidate.long_source_age_ms is None
+    assert candidate.long_time_source == "received"
+
+
 def test_legacy_opportunity_without_new_timestamps_still_expires(monkeypatch):
     data = opportunity().model_dump()
     for key in list(data):
@@ -165,11 +189,12 @@ def test_radar_leg_age_threshold_and_request_time(stale_exchange):
 
 
 @pytest.mark.parametrize("anchor_mark", [98, 102])
-def test_radar_directional_leg_ages_and_book_source(anchor_mark):
+@pytest.mark.parametrize("time_source", ["exchange", "upstream"])
+def test_radar_directional_leg_ages_and_book_source(anchor_mark, time_source):
     anchor = market(
         "bybit", mark=anchor_mark, timestamp=NOW - timedelta(seconds=2),
         upstream_timestamp=NOW - timedelta(seconds=10),
-        book_timestamp=NOW - timedelta(seconds=4), quote_time_source="exchange",
+        book_timestamp=NOW - timedelta(seconds=4), quote_time_source=time_source,
     )
     peer = market("binance", timestamp=NOW - timedelta(seconds=1))
     preview = build_opportunity_radar_preview([anchor, peer], now=NOW)
@@ -178,7 +203,7 @@ def test_radar_directional_leg_ages_and_book_source(anchor_mark):
     peer_side = "short" if anchor_mark < 100 else "long"
     assert getattr(candidate, f"{anchor_side}_age_ms") == 2000
     assert getattr(candidate, f"{anchor_side}_source_age_ms") == 4000
-    assert getattr(candidate, f"{anchor_side}_time_source") == "exchange"
+    assert getattr(candidate, f"{anchor_side}_time_source") == time_source
     assert getattr(candidate, f"{peer_side}_age_ms") == 1000
     assert getattr(candidate, f"{peer_side}_source_age_ms") is None
     assert candidate.data_age_seconds == 2
@@ -203,7 +228,9 @@ async def test_pair_current_ages_recomputed_without_mutating_reused_legs(monkeyp
     try:
         legs = (PairSpreadLegQuery(exchange="binance", symbol="btc"),
                 PairSpreadLegQuery(exchange="okx", symbol="btc"))
+        monkeypatch.setattr(pair_spread_query, "utc_now", lambda: NOW)
         first = await service.query(*legs, hours=1, interval_seconds=5, now=NOW)
+        monkeypatch.setattr(pair_spread_query, "utc_now", lambda: NOW + timedelta(seconds=3))
         second = await service.query(*legs, hours=1, interval_seconds=5, now=NOW + timedelta(seconds=3))
         assert first.current.leg1.age_ms == 2000
         assert first.current.leg1.source_age_ms == -1000  # Preserve upstream clock skew.

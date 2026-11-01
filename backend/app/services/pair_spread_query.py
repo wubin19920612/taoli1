@@ -1784,8 +1784,10 @@ class PairSpreadQueryService:
         else:
             _append_unique(warnings, "盘口中间价不完整，本次快照未写入实时价差曲线。")
         cutoff = observed_at - timedelta(hours=hours)
-        points = [point for point in cached_points if cutoff <= point.bucket_at <= observed_at]
-        _REALTIME_PAIR_SPREAD_CACHE[cache_key] = points
+        cached_points = [point for point in cached_points if point.bucket_at >= cutoff]
+        _REALTIME_PAIR_SPREAD_CACHE[cache_key] = cached_points
+        # Historical window bounds must not discard samples needed by live queries.
+        points = [point for point in cached_points if point.bucket_at <= observed_at]
 
         realtime_funding = _realtime_funding_points_from_current(
             cache_key,
@@ -2040,9 +2042,10 @@ class PairSpreadQueryService:
         leg2: PairSpreadCurrentLeg,
         observed_at: datetime,
     ) -> PairSpreadCurrentSnapshot:
+        age_now = utc_now()
         leg1, leg2 = (
             leg.model_copy(update=quote_age_fields(
-                leg.timestamp, leg.upstream_timestamp, now=observed_at,
+                leg.timestamp, leg.upstream_timestamp, now=age_now,
                 time_source=leg.time_source,
             ))
             for leg in (leg1, leg2)

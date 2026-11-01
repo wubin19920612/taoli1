@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -16,6 +17,7 @@ from app.models.pair_spread import (
     PairSpreadKlinePoint,
     PairSpreadLegQuery,
     PairSpreadOpenInterestPoint,
+    PairSpreadPoint,
     PairSpreadPriceField,
 )
 from app.services.pair_spread_funding_recorder import (
@@ -799,6 +801,90 @@ async def test_pair_spread_query_historical_compare_skips_current_and_funding() 
         ("binance", floored_end, 1),
         ("okx", floored_end, 1),
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interval_seconds", [5, 60])
+@pytest.mark.parametrize("historical_end", [False, True])
+async def test_pair_current_ages_use_clock_after_fetch(
+    monkeypatch: pytest.MonkeyPatch, interval_seconds: int, historical_end: bool,
+) -> None:
+    request_time = datetime(2026, 11, 1, 8, tzinfo=UTC)
+    clock_time = request_time
+    window_end = request_time - timedelta(hours=1) if historical_end else request_time
+    legs = [PairSpreadLegQuery(exchange=exchange, symbol="btc") for exchange in ("binance", "okx")]
+
+    async def fetch_current(exchange: str, symbol: str, **kwargs):
+        nonlocal clock_time
+        clock_time = request_time + timedelta(seconds=3)
+        return current_leg(exchange, symbol, 100).model_copy(update={
+            "timestamp": request_time,
+            "upstream_timestamp": request_time - timedelta(seconds=2),
+            "mid_price": None, "funding_rate_pct": None,
+        })
+
+    service = PairSpreadQueryService()
+    monkeypatch.setattr(pair_spread_query_module, "utc_now", lambda: clock_time)
+    monkeypatch.setattr(service, "_fetch_current_leg", fetch_current)
+    monkeypatch.setattr(service, "_fetch_klines", AsyncMock(return_value=[
+        kline_at(window_end - timedelta(minutes=1), 100),
+    ]))
+    monkeypatch.setattr(service, "_fetch_funding_history", AsyncMock(return_value=[]))
+    monkeypatch.setattr(service, "_fetch_open_interest_history", AsyncMock(return_value={}))
+    try:
+        result = await service.query(
+            *legs, hours=1, interval_seconds=interval_seconds,
+            now=window_end if historical_end else None,
+        )
+        assert result.observed_at == window_end
+        assert result.current is not None
+        for leg in (result.current.leg1, result.current.leg2):
+            assert leg.age_ms == 3000
+            assert leg.source_age_ms == 5000
+            assert leg.time_source == "upstream"
+    finally:
+        await service.aclose()
+        _REALTIME_PAIR_SPREAD_CACHE.clear()
+
+
+@pytest.mark.asyncio
+async def test_historical_window_keeps_newer_realtime_samples_in_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request_time = datetime(2026, 11, 1, 8, tzinfo=UTC)
+    historical_end = request_time - timedelta(hours=1)
+    legs = [PairSpreadLegQuery(exchange=exchange, symbol="btc") for exchange in ("binance", "okx")]
+    key = pair_spread_query_module._realtime_cache_key(
+        *legs, leg2_multiplier=1, interval_seconds=5,
+    )
+    timestamps = [
+        historical_end - timedelta(hours=1, seconds=5),
+        historical_end - timedelta(seconds=5), historical_end,
+        request_time - timedelta(seconds=5), request_time,
+    ]
+    _REALTIME_PAIR_SPREAD_CACHE[key] = [PairSpreadPoint(
+        bucket_at=timestamp, leg1_close=100, leg2_close=101, spread_abs=1, spread_pct=1,
+    ) for timestamp in timestamps]
+    service = PairSpreadQueryService()
+    monkeypatch.setattr(pair_spread_query_module, "utc_now", lambda: request_time)
+    monkeypatch.setattr(service, "_fetch_current_leg", AsyncMock(side_effect=[
+        current_leg(exchange, "BTCUSDT", 100).model_copy(update={
+            "mid_price": None, "funding_rate_pct": None,
+        }) for exchange in ("binance", "okx", "binance", "okx")
+    ]))
+    try:
+        historical = await service.query(*legs, hours=1, interval_seconds=5, now=historical_end)
+        assert [point.bucket_at for point in historical.points] == timestamps[1:3]
+        assert historical.actual_samples == 2
+        assert [point.bucket_at for point in _REALTIME_PAIR_SPREAD_CACHE[key]] == timestamps[1:]
+
+        realtime = await service.query(*legs, hours=1, interval_seconds=5)
+        assert [point.bucket_at for point in realtime.points] == timestamps[2:]
+        assert realtime.actual_samples == 3
+        assert [point.bucket_at for point in _REALTIME_PAIR_SPREAD_CACHE[key]] == timestamps[2:]
+    finally:
+        await service.aclose()
+        _REALTIME_PAIR_SPREAD_CACHE.clear()
 
 
 @pytest.mark.asyncio
