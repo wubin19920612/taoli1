@@ -157,3 +157,9 @@ $py = 'C:\Users\wubin\AppData\Local\Temp\claude\D-------claude---\fb63363d-eacd-
 - 后续建议：另开任务按上表影响顺序处理主连接事务归属及迁移原子性，不在本次扩大实现或验收范围。线上状态未复核、未备份、未部署；任务书原有生产描述仅为输入背景。
 - 本地交付仅包含 `backend/app/main.py`、`backend/app/services/astro_card_attempts.py`、`backend/tests/test_db_connection_isolation.py`、本任务书。提交信息严格使用 `fix: give astro card attempts its own sqlite connection`，提交号以包含本记录的本地提交为准；不 push。不存在需保留的其他初始修改或未跟踪产物。
 - 交付复核：`git diff --cached --check` 通过，暂存区文件清单恰为上述四个文件，分支仍为 `codex/db-write-lock`；未暂存差异为空。Git 未配置自定义 hooks 路径或提交签名，默认 hooks 目录只有 `.sample` 文件。
+
+## Claude 验收（2026-11-01）
+- 只读审查：主连接上除快照恢复外没有别的回滚源；正常关闭顺序正确，`:memory:` 分支不变；新测试能检出回归。
+- 审查 P2“账本连接等写锁超过 5 秒会失败”：失败时是保守的（建卡前失败就不建卡；建卡后失败就停在 pending/unknown，不会重复建卡）。为降低建卡后出现 unknown 的概率，账本连接的 busy_timeout 设为 15 秒，并在测试里加了断言（Claude 直接改）。
+- 审查 P2“启动失败或关闭异常时泄漏连接”：主连接、identity、preset、route 都是同样的写法，出现这些情况时进程会退出，这次不改。
+- 全量测试：`2558 passed, 6 deselected`。

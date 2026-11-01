@@ -53,6 +53,8 @@ async def test_attempts_connection_lifespan(tmp_path, in_memory):
         assert (attempts.db is main_db) is in_memory
         # The dedicated connection sees the schema initialized on the main one.
         assert await attempts.list_attempts() == []
+        async with attempts.db.execute("PRAGMA busy_timeout") as cursor:
+            assert (await cursor.fetchone())[0] == (5000 if in_memory else 15000)
     with pytest.raises(ValueError, match="no active connection"):
         await attempts.db.execute("SELECT 1")
     with pytest.raises(ValueError, match="no active connection"):

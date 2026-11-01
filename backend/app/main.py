@@ -998,6 +998,9 @@ def create_app(
         await initialize_schema(db)
         app.state.db = db
         attempts_db = db if db_path == ":memory:" else await connect_database(db_path)
+        if attempts_db is not db:
+            # A post-create mark that times out leaves the route unknown; wait longer.
+            await attempts_db.execute("PRAGMA busy_timeout=15000")
         app.state.astro_alert_service.attempts = AstroCardAttemptRepository(attempts_db)
         route_db = None
         if "squeeze" not in disabled:
