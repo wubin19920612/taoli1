@@ -37,6 +37,7 @@ from app.exchanges.lighter import (
 )
 from app.exchanges.okx import okx_ticker_volume_24h_usdt
 from app.models.market import MarketSnapshot, MarketType
+from app.models.pair_range_backtest import PairRangeBacktestRequest, PairRangeBacktestResult
 from app.models.pair_spread import (
     HYPERLIQUID_MAIN_DEX,
     PAIR_SPREAD_DAILY_INTERVAL_SECONDS,
@@ -67,7 +68,13 @@ from app.models.pair_spread import (
     normalize_hyperliquid_dex,
     normalize_pair_spread_symbol,
 )
+from app.models.settings import FeeSettings
+from app.services.funding_history_pagination import (
+    PartialFundingHistoryError,
+    collect_funding_pages,
+)
 from app.services.okx_history import get_okx_history_json
+from app.services.pair_range_backtest import RangeLegData, calculate_range_backtest
 from app.services.quote_age import quote_age_fields
 from app.services.realtime_series_cache import RealtimeSeriesBudget, RealtimeSeriesCache
 
@@ -1170,6 +1177,52 @@ class PairSpreadQueryService:
             warnings=warnings,
         )
 
+    async def query_range_backtest(
+        self, payload: PairRangeBacktestRequest, *, fee_settings: FeeSettings,
+    ) -> PairRangeBacktestResult:
+        # Resolve DEX once before any price/funding I/O, retaining exact identity.
+        legs = await asyncio.gather(
+            self._resolved_result_leg(payload.leg1), self._resolved_result_leg(payload.leg2),
+        )
+        payload = payload.model_copy(update={"leg1": legs[0], "leg2": legs[1]})
+        hours = ceil((payload.end_at - payload.start_at).total_seconds() / 3600)
+        granularity = _resolve_historical_interval_seconds(hours, 60)
+
+        async def load(leg: PairSpreadLegQuery) -> RangeLegData:
+            warnings: list[str] = []
+
+            async def endpoint(at: datetime) -> list[PairSpreadKlinePoint]:
+                # Only a small candle window around each endpoint, regardless of span.
+                center = at.replace(second=0, microsecond=0)
+                window = timedelta(seconds=5 * granularity)
+                return await self._fetch_klines_with_warning(
+                    leg.exchange, leg.symbol, leg.market_type, leg.dex,
+                    center - window, center + window, granularity // 60, warnings,
+                )
+
+            entry, exit_points, funding, current = await asyncio.gather(
+                endpoint(payload.start_at), endpoint(payload.end_at),
+                self._fetch_funding_with_warning(leg, payload.start_at, payload.end_at, warnings),
+                self._fetch_current_with_warning(leg, warnings),
+            )
+            return RangeLegData(
+                entry_points=tuple(entry), exit_points=tuple(exit_points),
+                funding=tuple(funding), current=current, granularity_seconds=granularity,
+                warnings=tuple(warnings),
+            )
+
+        # Identical legs share one data fetch, including funding history.
+        if legs[0] == legs[1]:
+            data1 = data2 = await load(legs[0])
+        else:
+            data1, data2 = await asyncio.gather(*(load(leg) for leg in legs))
+        try:
+            return calculate_range_backtest(
+                payload, leg1_data=data1, leg2_data=data2, fee_settings=fee_settings,
+            )
+        except ValueError as exc:
+            raise PairSpreadQueryError(str(exc)) from exc
+
     async def query(
         self,
         leg1: PairSpreadLegQuery,
@@ -1913,7 +1966,7 @@ class PairSpreadQueryService:
                 f"{leg.exchange}:{leg.dex + ':' if leg.dex else ''}{leg.symbol} 历史资金费率失败: "
                 f"{_exception_text(exc)}",
             )
-            return []
+            return exc.points if isinstance(exc, PartialFundingHistoryError) else []
 
     async def _query_open_interest(
         self,
@@ -3986,164 +4039,124 @@ class PairSpreadQueryService:
         return raw_coin
 
     async def _fetch_binance_like_funding(
-        self,
-        base_url: str,
-        exchange: str,
-        symbol: str,
-        start: datetime,
-        end: datetime,
+        self, base_url: str, exchange: str, symbol: str, start: datetime, end: datetime,
     ) -> list[PairSpreadFundingPoint]:
-        raw = _compact_symbol(symbol)
-        rows = await self._get_json(
-            f"{base_url}/fapi/v1/fundingRate?symbol={raw}"
-            f"&startTime={_to_ms(start)}&endTime={_to_ms(end)}&limit=1000"
-        )
-        return [
-            point
-            for row in rows if isinstance(row, dict)
-            if (
-                point := _funding_point(
-                    exchange,
-                    symbol,
-                    parse_datetime_ms(row.get("fundingTime")),
-                    parse_float(row.get("fundingRate")),
-                )
+        async def page(cursor: int, number: int) -> list[dict[str, Any]]:
+            return await self._get_json(
+                f"{base_url}/fapi/v1/fundingRate?symbol={_compact_symbol(symbol)}"
+                f"&startTime={cursor}&endTime={_to_ms(end)}&limit=1000"
             )
-            is not None
-        ]
+
+        return await collect_funding_pages(
+            page, lambda row: parse_datetime_ms(row.get("fundingTime")),
+            lambda row: _funding_point(exchange, symbol,
+                parse_datetime_ms(row.get("fundingTime")), parse_float(row.get("fundingRate"))),
+            start=start, end=end, limit=1000, direction="forward",
+        )
 
     async def _fetch_okx_funding(
-        self,
-        symbol: str,
-        start: datetime,
-        end: datetime,
+        self, symbol: str, start: datetime, end: datetime,
     ) -> list[PairSpreadFundingPoint]:
-        inst_id = _okx_inst_id(symbol)
-        payload = await self._get_json(
-            f"https://www.okx.com/api/v5/public/funding-rate-history?instId={inst_id}&limit=100"
-        )
-        return [
-            point
-            for row in payload.get("data", []) if isinstance(row, dict)
-            if (
-                point := _funding_point(
-                    "okx",
-                    symbol,
-                    parse_datetime_ms(row.get("fundingTime")),
-                    parse_float(row.get("fundingRate")),
-                )
+        async def page(cursor: int, number: int) -> list[dict[str, Any]]:
+            payload = await self._get_json(
+                "https://www.okx.com/api/v5/public/funding-rate-history"
+                f"?instId={_okx_inst_id(symbol)}&after={cursor + 1}&limit=100"
             )
-            is not None
-            and start <= point.funding_time <= end
-        ]
+            if payload.get("code", "0") != "0":
+                raise RuntimeError(f"OKX funding history: {payload.get('msg', 'API error')}")
+            return payload["data"]
+
+        return await collect_funding_pages(
+            page, lambda row: parse_datetime_ms(row.get("fundingTime")),
+            # fundingRate is predicted; only realizedRate represents settlement.
+            lambda row: _funding_point("okx", symbol,
+                parse_datetime_ms(row.get("fundingTime")), parse_float(row.get("realizedRate"))),
+            start=start, end=end, limit=100,
+        )
 
     async def _fetch_bybit_funding(
-        self,
-        symbol: str,
-        start: datetime,
-        end: datetime,
+        self, symbol: str, start: datetime, end: datetime,
     ) -> list[PairSpreadFundingPoint]:
-        raw = _compact_symbol(symbol)
-        payload = await self._get_json(
-            "https://api.bybit.com/v5/market/funding/history"
-            f"?category=linear&symbol={raw}&startTime={_to_ms(start)}&endTime={_to_ms(end)}&limit=200"
-        )
-        return [
-            point
-            for row in payload.get("result", {}).get("list", []) if isinstance(row, dict)
-            if (
-                point := _funding_point(
-                    "bybit",
-                    symbol,
-                    parse_datetime_ms(row.get("fundingRateTimestamp")),
-                    parse_float(row.get("fundingRate")),
-                )
+        async def page(cursor: int, number: int) -> list[dict[str, Any]]:
+            payload = await self._get_json(
+                "https://api.bybit.com/v5/market/funding/history"
+                f"?category=linear&symbol={_compact_symbol(symbol)}"
+                f"&startTime={_to_ms(start)}&endTime={cursor}&limit=200"
             )
-            is not None
-        ]
+            if payload.get("retCode", 0) != 0:
+                raise RuntimeError(f"Bybit funding history: {payload.get('retMsg', 'API error')}")
+            return payload["result"]["list"]
+
+        return await collect_funding_pages(
+            page, lambda row: parse_datetime_ms(row.get("fundingRateTimestamp")),
+            lambda row: _funding_point("bybit", symbol,
+                parse_datetime_ms(row.get("fundingRateTimestamp")), parse_float(row.get("fundingRate"))),
+            start=start, end=end, limit=200,
+        )
 
     async def _fetch_gate_funding(
-        self,
-        symbol: str,
-        start: datetime,
-        end: datetime,
+        self, symbol: str, start: datetime, end: datetime,
     ) -> list[PairSpreadFundingPoint]:
-        contract = _gate_contract(symbol)
-        rows = await self._get_json(
-            "https://api.gateio.ws/api/v4/futures/usdt/funding_rate"
-            f"?contract={contract}&from={int(start.timestamp())}&to={int(end.timestamp())}&limit=1000"
-        )
-        points: list[PairSpreadFundingPoint] = []
-        for row in rows if isinstance(rows, list) else []:
-            if not isinstance(row, dict):
-                continue
-            timestamp = (
-                parse_datetime_seconds(row.get("t"))
-                or parse_datetime_seconds(row.get("time"))
-                or parse_datetime_ms(row.get("funding_time"))
+        async def page(cursor: int, number: int) -> list[dict[str, Any]]:
+            return await self._get_json(
+                "https://api.gateio.ws/api/v4/futures/usdt/funding_rate"
+                f"?contract={_gate_contract(symbol)}&from={int(start.timestamp())}"
+                f"&to={cursor // 1000}&limit=1000"
             )
-            rate = parse_float(row.get("r") or row.get("rate") or row.get("funding_rate"))
-            point = _funding_point("gate", symbol, timestamp, rate)
-            if point is not None:
-                points.append(point)
-        return points
+
+        def timestamp(row: dict[str, Any]) -> datetime | None:
+            return (parse_datetime_seconds(row.get("t"))
+                    or parse_datetime_seconds(row.get("time"))
+                    or parse_datetime_ms(row.get("funding_time")))
+
+        def parse(row: dict[str, Any]) -> PairSpreadFundingPoint | None:
+            rate = next((row[key] for key in ("r", "rate", "funding_rate")
+                         if row.get(key) is not None), None)
+            return _funding_point("gate", symbol, timestamp(row), parse_float(rate))
+
+        return await collect_funding_pages(page, timestamp, parse, start=start, end=end, limit=1000)
 
     async def _fetch_bitget_funding(
-        self,
-        symbol: str,
-        start: datetime,
-        end: datetime,
+        self, symbol: str, start: datetime, end: datetime,
     ) -> list[PairSpreadFundingPoint]:
-        raw = _compact_symbol(symbol)
-        payload = await self._get_json(
-            "https://api.bitget.com/api/v2/mix/market/history-fund-rate"
-            f"?symbol={raw}&productType=USDT-FUTURES&pageSize=100&pageNo=1"
+        async def page(cursor: int, number: int) -> list[dict[str, Any]]:
+            payload = await self._get_json(
+                "https://api.bitget.com/api/v2/mix/market/history-fund-rate"
+                f"?symbol={_compact_symbol(symbol)}&productType=USDT-FUTURES"
+                f"&pageSize=100&pageNo={number}"
+            )
+            if payload.get("code", "00000") != "00000":
+                raise RuntimeError(f"Bitget funding history: {payload.get('msg', 'API error')}")
+            return payload["data"]
+
+        def timestamp(row: dict[str, Any]) -> datetime | None:
+            return parse_datetime_ms(row.get("fundingTime") or row.get("settleTime"))
+
+        return await collect_funding_pages(
+            page, timestamp,
+            lambda row: _funding_point("bitget", symbol, timestamp(row), parse_float(row.get("fundingRate"))),
+            start=start, end=end, limit=100, page_numbered=True,
         )
-        rows = payload.get("data", []) if isinstance(payload, dict) else []
-        points: list[PairSpreadFundingPoint] = []
-        for row in rows if isinstance(rows, list) else []:
-            if not isinstance(row, dict):
-                continue
-            timestamp = parse_datetime_ms(row.get("fundingTime") or row.get("settleTime"))
-            rate = parse_float(row.get("fundingRate"))
-            point = _funding_point("bitget", symbol, timestamp, rate)
-            if point is not None and start <= point.funding_time <= end:
-                points.append(point)
-        return points
 
     async def _fetch_hyperliquid_funding(
-        self,
-        symbol: str,
-        start: datetime,
-        end: datetime,
-        *,
-        dex: str | None = None,
+        self, symbol: str, start: datetime, end: datetime, *, dex: str | None = None,
     ) -> list[PairSpreadFundingPoint]:
         raw_coin, resolved_dex = await self._resolve_hyperliquid_coin(symbol, dex=dex)
-        payload = await self._post_json(
-            "https://api.hyperliquid.xyz/info",
-            {
-                "type": "fundingHistory",
-                "coin": raw_coin,
-                "startTime": _to_ms(start),
-                "endTime": _to_ms(end),
-            },
-        )
-        rows = payload if isinstance(payload, list) else []
-        points: list[PairSpreadFundingPoint] = []
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            point = _funding_point(
-                "hyperliquid",
-                symbol,
-                parse_datetime_ms(row.get("time")),
-                parse_float(row.get("fundingRate")),
-                dex=_hyperliquid_public_dex(resolved_dex),
+
+        async def page(cursor: int, number: int) -> list[dict[str, Any]]:
+            return await self._post_json(
+                "https://api.hyperliquid.xyz/info",
+                {"type": "fundingHistory", "coin": raw_coin,
+                 "startTime": cursor, "endTime": _to_ms(end)},
             )
-            if point is not None:
-                points.append(point)
-        return points
+
+        return await collect_funding_pages(
+            page, lambda row: parse_datetime_ms(row.get("time")),
+            lambda row: _funding_point("hyperliquid", symbol,
+                parse_datetime_ms(row.get("time")), parse_float(row.get("fundingRate")),
+                dex=_hyperliquid_public_dex(resolved_dex)),
+            start=start, end=end, limit=500, direction="forward",
+        )
 
 
 def _exception_text(exc: BaseException | None) -> str:

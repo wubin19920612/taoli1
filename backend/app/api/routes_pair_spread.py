@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -6,30 +7,31 @@ from pydantic import ValidationError
 from app.core.features import require_feature
 from app.core.security import dashboard_password_header, verify_dashboard_password
 from app.models.market import MarketType
+from app.models.pair_range_backtest import PairRangeBacktestRequest, PairRangeBacktestResult
 from app.models.pair_spread import (
-    PAIR_SPREAD_MAX_INTERVAL_SECONDS,
-    PAIR_SPREAD_MIN_INTERVAL_SECONDS,
-    PAIR_SPREAD_MIN_HOURS,
     PAIR_SPREAD_INTERVAL_OPTIONS,
-    PairSpreadPreset,
-    PairSpreadPresetMergeRequest,
+    PAIR_SPREAD_MAX_INTERVAL_SECONDS,
+    PAIR_SPREAD_MIN_HOURS,
+    PAIR_SPREAD_MIN_INTERVAL_SECONDS,
+    SUPPORTED_PAIR_SPREAD_EXCHANGES,
+    SUPPORTED_SYMBOL_SPREAD_EXCHANGES,
+    HyperliquidDexMarket,
+    PairSpreadDiagnosticResult,
+    PairSpreadFundingHistoryResult,
     PairSpreadFundingRecordRequest,
     PairSpreadFundingRecordStatus,
     PairSpreadFundingWatchItem,
-    PairSpreadFundingHistoryResult,
-    PairSpreadDiagnosticResult,
     PairSpreadLegQuery,
+    PairSpreadPreset,
+    PairSpreadPresetMergeRequest,
     PairSpreadQueryResult,
-    HyperliquidDexMarket,
-    SUPPORTED_PAIR_SPREAD_EXCHANGES,
-    SUPPORTED_SYMBOL_SPREAD_EXCHANGES,
     SymbolSpreadQueryResult,
 )
-from app.models.settings import AlertMessageTemplateSettings
-from app.services.pair_spread_funding_recorder import PairSpreadFundingRecorder
+from app.models.settings import AlertMessageTemplateSettings, FeeSettings
 from app.services.pair_spread_diagnostics import build_pair_spread_diagnostic
-from app.services.pair_spread_query import PairSpreadQueryError, PairSpreadQueryService
+from app.services.pair_spread_funding_recorder import PairSpreadFundingRecorder
 from app.services.pair_spread_presets import PairSpreadPresetBusyError, PairSpreadPresetRepository
+from app.services.pair_spread_query import PairSpreadQueryError, PairSpreadQueryService
 from app.services.symbol_aliases import (
     ResolvedSymbolAlias,
     SymbolAliasResolver,
@@ -512,6 +514,42 @@ async def query_pair_spread_funding_history(
             leg1_alias=leg1_alias,
             leg2_alias=leg2_alias,
         )
+    except PairSpreadQueryError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    finally:
+        close = getattr(service, "aclose", None)
+        if close is not None:
+            await close()
+
+
+@router.post("/range-backtest", response_model=PairRangeBacktestResult)
+async def backtest_pair_spread_range(
+    payload: PairRangeBacktestRequest,
+    request: Request,
+    password: str | None = Depends(dashboard_password_header),
+) -> PairRangeBacktestResult:
+    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
+    resolver = await _symbol_alias_resolver(request)
+    try:
+        legs = [
+            _resolved_leg(
+                resolver, exchange=leg.exchange, symbol=leg.symbol,
+                market_type=leg.market_type, dex=leg.dex,
+            )[0]
+            for leg in (payload.leg1, payload.leg2)
+        ]
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    payload = payload.model_copy(update={"leg1": legs[0], "leg2": legs[1]})
+    factory = getattr(request.app.state, "pair_spread_query_service_factory", None) or PairSpreadQueryService
+    service = factory()
+    collector = getattr(request.app.state, "market_collector", None)
+    fees = getattr(collector, "fee_settings", None) or FeeSettings()
+    try:
+        async with asyncio.timeout(60):
+            return await service.query_range_backtest(payload, fee_settings=fees)
+    except TimeoutError as exc:
+        raise HTTPException(status_code=504, detail="区间回测数据请求超时") from exc
     except PairSpreadQueryError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     finally:
