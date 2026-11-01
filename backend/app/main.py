@@ -176,6 +176,12 @@ from app.services.trade_availability import (
 )
 
 logger = logging.getLogger(__name__)
+alert_timing_logger = logging.getLogger("alert_timing")
+alert_timing_logger.setLevel(logging.INFO)
+alert_timing_logger.propagate = False
+if not alert_timing_logger.handlers:
+    # Emit plain JSON even when the application's root logger filters out INFO.
+    alert_timing_logger.addHandler(logging.StreamHandler())
 def _sqlite_path(settings: Settings) -> str:
     return settings.sqlite_path
 
@@ -700,7 +706,7 @@ async def _process_alert_match(
         logger.exception("alert match processing failed: %s", key)
         return False
     finally:
-        logger.info(json.dumps(
+        alert_timing_logger.info(json.dumps(
             {"alert_timing": 1, "key": key, "symbol": match.opportunity.symbol,
              "status": status, **durations, "total_ms": (monotonic() - started) * 1000,
              "timeouts": timeouts},

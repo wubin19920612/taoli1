@@ -64,6 +64,20 @@ def isolation_app(*, count=2, concurrency=3, live_pilot=False):
     return app, stop
 
 
+@pytest.fixture(autouse=True)
+def capture_alert_timing():
+    # Production keeps this logger off the root handlers; let caplog see it here.
+    timing_logger = logging.getLogger("alert_timing")
+    assert timing_logger.level == logging.INFO
+    assert timing_logger.propagate is False
+    assert timing_logger.handlers
+    timing_logger.propagate = True
+    try:
+        yield
+    finally:
+        timing_logger.propagate = False
+
+
 def timing_rows(caplog):
     return [json.loads(record.getMessage()) for record in caplog.records
             if record.getMessage().startswith('{"alert_timing":')]
@@ -177,7 +191,7 @@ async def test_write_failure_marks_round_unhealthy_and_continues_same_symbol(
     app.state.feishu_notifier.send_alert = send
     heartbeat = Mock()
     monkeypatch.setattr(main, "beat", heartbeat)
-    with caplog.at_level(logging.INFO, logger="app.main"):
+    with caplog.at_level(logging.INFO, logger="alert_timing"):
         await asyncio.wait_for(main._run_alert_loop(app, 60, stop), 1)
     heartbeat.assert_called_once_with("alert-loop", ok=False)
     rows = timing_rows(caplog)
@@ -253,7 +267,7 @@ async def test_diagnostic_timeout_delivers_restricted_rating(monkeypatch, caplog
         await asyncio.Event().wait()
 
     monkeypatch.setattr(main, "build_opportunity_trade_availability_report", hang)
-    with caplog.at_level(logging.INFO, logger="app.main"):
+    with caplog.at_level(logging.INFO, logger="alert_timing"):
         await asyncio.wait_for(main._run_alert_loop(app, 60, stop), 1)
     event = app.state.alert_event_repo.events[0]
     assert event.status == "sent"
@@ -278,7 +292,7 @@ async def test_orderbook_timeout_skips_all_card_creation(monkeypatch, live_pilot
         await asyncio.Event().wait()
 
     monkeypatch.setattr(main, "_order_book_validation_failure", hang)
-    with caplog.at_level(logging.INFO, logger="app.main"):
+    with caplog.at_level(logging.INFO, logger="alert_timing"):
         await asyncio.wait_for(main._run_alert_loop(app, 60, stop), 1)
     event = app.state.alert_event_repo.events[0]
     assert event.status == "muted"
@@ -307,7 +321,7 @@ async def test_unhandled_match_exception_isolated_and_heartbeat_unhealthy(monkey
     monkeypatch.setattr(main, "_find_latest_opportunity", find)
     heartbeat = Mock()
     monkeypatch.setattr(main, "beat", heartbeat)
-    with caplog.at_level(logging.INFO, logger="app.main"):
+    with caplog.at_level(logging.INFO, logger="alert_timing"):
         await asyncio.wait_for(main._run_alert_loop(app, 60, stop), 1)
     assert [e.opportunity_id for e in app.state.alert_event_repo.events] == ["opp-1"]
     heartbeat.assert_called_once_with("alert-loop", ok=False)
@@ -538,7 +552,7 @@ async def test_mutating_stages_have_no_outer_deadline(monkeypatch, stage):
 @pytest.mark.asyncio
 async def test_one_safe_timing_json_per_match_with_null_unexecuted_stages(caplog):
     app, stop = isolation_app()
-    with caplog.at_level(logging.INFO, logger="app.main"):
+    with caplog.at_level(logging.INFO, logger="alert_timing"):
         await asyncio.wait_for(main._run_alert_loop(app, 60, stop), 1)
     rows = timing_rows(caplog)
     assert len(rows) == 2
