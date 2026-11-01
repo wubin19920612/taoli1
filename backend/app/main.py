@@ -1544,7 +1544,10 @@ def create_app(
         allow_headers=["*"],
     )
     # Every API router uses the same guard; public exceptions live in security.py.
+    from app.api.routes_spread_events import router as spread_events_router
+
     for router in (
+        spread_events_router,
         routes_features.router,
         routes_health.router,
         routes_account_connections.router,

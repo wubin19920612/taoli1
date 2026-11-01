@@ -52,6 +52,7 @@ type PageKey =
   | "opportunity-radar"
   | "instrument"
   | "pair-monitor"
+  | "spread-events"
   | "symbol-spread"
   | "premium-index"
   | "negative-basis"
@@ -110,6 +111,9 @@ const lazyPages: Record<PageKey, LazyPage> = {
     import("../pages/SymbolSpreadPage").then((module) => ({
       default: module.SymbolSpreadPage
     }))
+  ),
+  "spread-events": lazy(() =>
+    import("../pages/SpreadEventsPage").then((module) => ({ default: module.SpreadEventsPage }))
   ),
   "premium-index": lazy(() =>
     import("../pages/PremiumIndexPage").then((module) => ({
@@ -197,6 +201,7 @@ const defaultNavigationItems: NavigationItem[] = [
   { key: "opportunity-radar", icon: <RadarChartOutlined />, label: "机会雷达" },
   { key: "instrument", icon: <SearchOutlined />, label: "标的查询" },
   { key: "pair-monitor", icon: <StockOutlined />, label: "价差查询" },
+  { key: "spread-events", icon: <LineChartOutlined />, label: "价差事件榜" },
   { key: "symbol-spread", icon: <LineChartOutlined />, label: "跨所价差" },
   { key: "premium-index", icon: <LineChartOutlined />, label: "溢价指数" },
   { key: "negative-basis", icon: <RadarChartOutlined />, label: "负基差埋伏" },

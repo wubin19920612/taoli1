@@ -17,6 +17,7 @@ const defaultNavigationOrder = [
   "opportunity-radar",
   "instrument",
   "pair-monitor",
+  "spread-events",
   "symbol-spread",
   "premium-index",
   "negative-basis",
