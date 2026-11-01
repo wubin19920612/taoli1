@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import ValidationError
 
 from app.models.spread_events import SpreadEventsParams, SpreadEventsResponse
-from app.services.spread_events import query_spread_events
+from app.services.spread_events import SpreadEventsBusyError, query_spread_events
 
 router = APIRouter()
 
@@ -32,4 +32,10 @@ async def list_spread_events(
     repo = getattr(request.app.state, "history_repo", None)
     if repo is None:
         raise HTTPException(status_code=503, detail="History repository is not ready")
-    return await query_spread_events(repo.db, params)
+    db_path = request.app.state.settings.sqlite_path
+    if db_path == ":memory:":
+        raise HTTPException(status_code=503, detail="价差事件查询需要独立只读数据库文件连接")
+    try:
+        return await query_spread_events(db_path, params)
+    except SpreadEventsBusyError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc

@@ -48,6 +48,8 @@ class SpreadEventLeg(BaseModel):
     market_type: MarketType
     raw_symbol: str | None = None
     dex: str | None = None
+    price_multiplier: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    contract_size_multiplier: float | None = Field(default=None, gt=0, allow_inf_nan=False)
 
 
 class SpreadEvent(BaseModel):

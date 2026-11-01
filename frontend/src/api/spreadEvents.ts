@@ -17,6 +17,8 @@ export interface SpreadEventLeg {
   market_type: MarketType;
   raw_symbol: string | null;
   dex: string | null;
+  price_multiplier: number | null;
+  contract_size_multiplier: number | null;
 }
 
 export interface SpreadEvent {
@@ -63,6 +65,15 @@ export async function getSpreadEvents(
 }
 
 // Same URL protocol as OpportunityTable.openPairSpread, including exact HL identity.
+function knownMultiplier(value: number | null): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+export function spreadEventMultiplierUnknown(event: SpreadEvent): boolean {
+  return [event.buy_leg, event.sell_leg].some((leg) =>
+    !knownMultiplier(leg.price_multiplier) || !knownMultiplier(leg.contract_size_multiplier));
+}
+
 export function spreadEventPairUrl(event: SpreadEvent): URL | null {
   const url = new URL(window.location.href);
   url.searchParams.set("page", "pair-monitor");
@@ -79,8 +90,10 @@ export function spreadEventPairUrl(event: SpreadEvent): URL | null {
     url.searchParams.set(`leg${index}_symbol`, (separator > 0 ? raw.slice(separator + 1) : raw).toUpperCase());
     url.searchParams.set(`leg${index}_raw_symbol`, raw);
     if (leg.dex) url.searchParams.set(`leg${index}_dex`, leg.dex);
+    for (const field of ["price_multiplier", "contract_size_multiplier"] as const) {
+      if (knownMultiplier(leg[field])) url.searchParams.set(`leg${index}_${field}`, String(leg[field]));
+    }
   }
-  url.searchParams.set("leg2_multiplier", "1");
   url.searchParams.set("hours", "4");
   url.searchParams.set("interval_minutes", "5");
   return url;

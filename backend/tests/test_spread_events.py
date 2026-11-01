@@ -1,4 +1,7 @@
+import asyncio
 import json
+import sqlite3
+import threading
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -10,7 +13,8 @@ from app.db.database import connect_database
 from app.db.schema import initialize_schema
 from app.main import create_app
 from app.models.spread_events import SpreadEventsParams
-from app.services.spread_events import aggregate_spread_events, query_spread_events
+from app.services import spread_events
+from app.services.spread_events import query_spread_events
 
 BASE = datetime(2026, 11, 1, tzinfo=UTC)
 
@@ -27,6 +31,15 @@ def point(seconds, value, key="a", raw=None):
             "raw_symbol": raw, "dex": "xyz",
         }}) if raw else None,
     }
+
+
+def aggregate_spread_events(rows, query):
+    # Production supplies a single-pass SQL stream in global observed_at order.
+    field = "fee_adjusted_open_scaled" if query.metric == "fee_adjusted" else "open_spread_scaled"
+    return spread_events.aggregate_spread_events(
+        ((r["opportunity_id"], r["observed_at"], r[field])
+         for r in sorted(rows, key=lambda r: r["observed_at"])), query,
+    )
 
 
 def params(**kwargs):
@@ -83,12 +96,10 @@ def test_sort_and_limit(sort, expected):
     assert events[0].series_key == expected
 
 
-def test_minimum_duration_single_sample_raw_metric_and_exact_identity():
+def test_minimum_duration_single_sample_and_raw_metric():
     rows = [point(0, 0.2, raw="xyz:BTC"), point(60, 0.2, raw="xyz:BTC")]
     assert aggregate_spread_events(rows, params())[0] == []
     event, = aggregate_spread_events(rows, params(metric="raw", min_duration_s=60))[0]
-    assert event.buy_leg.raw_symbol == "xyz:BTC"
-    assert event.buy_leg.dex == "xyz"
     assert event.peak == 0.4
     assert aggregate_spread_events(rows, params(metric="raw", min_duration_s=61))[0] == []
     single, = aggregate_spread_events([point(0, 0.5)], params())[0]
@@ -97,8 +108,9 @@ def test_minimum_duration_single_sample_raw_metric_and_exact_identity():
 
 
 @pytest.fixture
-async def db():
-    db = await connect_database(":memory:")
+async def db(tmp_path):
+    path = tmp_path / "history.db"
+    db = await connect_database(str(path))
     await initialize_schema(db)
     # Use real schema/scaled values, including points outside both query bounds.
     for t in [-60, 0, 60, 120, 180]:
@@ -114,8 +126,8 @@ async def db():
                               "open_spread_scaled", "fee_adjusted_open_scaled"]],
         )
     await db.commit()
-    yield db
     await db.close()
+    yield path
 
 
 async def test_sql_both_bounds_symbol_and_truncation(db, monkeypatch):
@@ -138,8 +150,10 @@ async def test_sql_both_bounds_symbol_and_truncation(db, monkeypatch):
 
 @pytest.fixture
 async def client(db):
-    app = create_app(settings=Settings(dashboard_password="test-password"), start_collector=False)
-    app.state.history_repo = SimpleNamespace(db=db)
+    app = create_app(settings=Settings(dashboard_password="test-password",
+                                     database_url=f"sqlite:///{db}"), start_collector=False)
+    # The endpoint must not touch this shared connection.
+    app.state.history_repo = SimpleNamespace(db=object())
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as c:
         yield c
 
@@ -179,3 +193,139 @@ async def test_route_seven_days_and_timezone_normalization(client):
     assert response.status_code == 200
     assert response.json()["scanned_rows"] == 2
     assert response.json()["params"]["symbol"] == "BTCUSDT"
+
+
+def test_streaming_gap_bootstrap_uses_default_cadence():
+    events, _ = aggregate_spread_events([point(0, 0.5), point(361, 0.5)], params())
+    assert {e.end_reason for e in events} == {"gap", "ongoing"}
+    assert all(e.samples == 1 for e in events)
+
+
+def test_interval_estimate_freezes_after_first_31_positive_intervals():
+    early = [point(t, 0.5) for t in range(0, 32 * 10, 10)]
+    later = [point(310 + i * 100, 0.5) for i in range(1, 41)]
+    events, _ = aggregate_spread_events(early + later + [point(4500, 0.5)], params())
+    assert len(events) == 2
+    assert sum(e.samples for e in events) == 73
+
+
+async def test_worker_uses_readonly_file_batches_index_and_selected_metadata(db, monkeypatch):
+    real_connect = sqlite3.connect
+    calls, batches, threads, closed = [], [], [], []
+
+    class Cursor(sqlite3.Cursor):
+        def fetchall(self):
+            raise AssertionError("stream must never fetchall")
+
+        def fetchmany(self, size=1):
+            batches.append(size)
+            return super().fetchmany(size)
+
+    class Connection(sqlite3.Connection):
+        def execute(self, sql, parameters=()):
+            calls.append(sql)
+            return self.cursor(factory=Cursor).execute(sql, parameters)
+
+        def close(self):
+            closed.append(threading.get_ident())
+            super().close()
+
+    def connect(db_uri, **kwargs):
+        assert db_uri.endswith("?mode=ro") and kwargs["uri"] is True
+        threads.append(threading.get_ident())
+        connection = real_connect(db_uri, factory=Connection, **kwargs)
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            connection.execute("DELETE FROM opportunity_history")
+        connection.rollback()
+        return connection
+
+    monkeypatch.setattr(spread_events.sqlite3, "connect", connect)
+    monkeypatch.setattr(spread_events, "FETCH_BATCH_SIZE", 2)
+    result = await query_spread_events(db, params())
+    assert result.scanned_rows == 4
+    assert len(batches) >= 3 and set(batches) == {2}
+    assert threads == closed and threads[0] != threading.get_ident()
+    scans = [sql for sql in calls if sql.startswith("SELECT opportunity_id")]
+    assert len(scans) == 1 and "market_identity_json" not in scans[0]
+    assert sum(sql.startswith("SELECT symbol,") for sql in calls) == 1
+    with real_connect(db) as check:
+        plan = list(check.execute("EXPLAIN QUERY PLAN " + scans[0],
+                                 (BASE.isoformat(), params().end_at.isoformat(), 500_000)))
+    assert any("idx_opportunity_history_time" in row[3] for row in plan)
+    assert not any("TEMP B-TREE" in row[3] for row in plan)
+
+
+@pytest.mark.parametrize("revision,unit_status,expected", [
+    (7, "verified", 1000), (8, "verified", None), (7, "pending", None),
+])
+async def test_multipliers_require_exact_historical_binding_revision(db, revision, unit_status, expected):
+    from app.models.market_identity import MarketKey
+
+    market = {"exchange": "hyperliquid", "market_type": "future", "raw_symbol": "xyz:BTC", "dex": "xyz"}
+    identity = {"buy_market": market, "buy_revision": 7}
+    with sqlite3.connect(db) as connection:
+        connection.execute("UPDATE opportunity_history SET buy_exchange='hyperliquid', market_identity_json=?",
+                           (json.dumps(identity),))
+        connection.execute("INSERT INTO market_identity_bindings (market_key, revision, identity_status, payload) VALUES (?, ?, 'verified', ?)", (
+            MarketKey.model_validate(market).key, revision,
+            json.dumps({"unit_status": unit_status, "price_multiplier": 1000, "contract_size": 0.01}),
+        ))
+        connection.execute("UPDATE opportunity_history SET market_identity_json='{}' WHERE observed_at > ?",
+                           ((BASE + timedelta(seconds=120)).isoformat(),))
+    result = await query_spread_events(db, SpreadEventsParams(start_at=BASE, end_at=BASE + timedelta(seconds=120)))
+    leg = result.events[0].buy_leg
+    assert leg.raw_symbol == "xyz:BTC" and leg.dex == "xyz"
+    assert leg.price_multiplier == expected
+    assert leg.contract_size_multiplier == (0.01 if expected else None)
+    assert result.events[0].sell_leg.price_multiplier is None
+
+
+async def test_missing_database_is_not_created(tmp_path):
+    path = tmp_path / "missing.db"
+    with pytest.raises(sqlite3.OperationalError):
+        await query_spread_events(path, params())
+    assert not path.exists()
+
+
+async def test_route_queue_timeout_is_429_with_chinese_detail(client, monkeypatch):
+    semaphore = asyncio.Semaphore(1)
+    monkeypatch.setattr(spread_events, "_QUERY_SEMAPHORE", semaphore)
+    monkeypatch.setattr(spread_events, "QUERY_WAIT_SECONDS", 0.01)
+    await semaphore.acquire()
+    try:
+        response = await client.get("/api/spread-events", headers={"X-Dashboard-Password": "test-password"})
+        assert response.status_code == 429
+        assert "5" in response.json()["detail"]
+        assert any(ord(c) > 127 for c in response.json()["detail"])
+    finally:
+        semaphore.release()
+    assert (await client.get("/api/spread-events", headers={"X-Dashboard-Password": "test-password"})).status_code == 200
+
+
+async def test_cancellation_keeps_global_permit_until_worker_exits(db, monkeypatch):
+    semaphore = asyncio.Semaphore(1)
+    monkeypatch.setattr(spread_events, "_QUERY_SEMAPHORE", semaphore)
+    monkeypatch.setattr(spread_events, "QUERY_WAIT_SECONDS", 0.01)
+    started, release = threading.Event(), threading.Event()
+    real_query = spread_events._query_spread_events
+
+    def blocked(*args):
+        started.set()
+        assert release.wait(5)
+        return real_query(*args)
+
+    monkeypatch.setattr(spread_events, "_query_spread_events", blocked)
+    first = asyncio.create_task(query_spread_events(db, params()))
+    try:
+        assert await asyncio.to_thread(started.wait, 3)
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        assert semaphore.locked()
+        with pytest.raises(spread_events.SpreadEventsBusyError):
+            await query_spread_events(db, params())
+    finally:
+        release.set()
+        await asyncio.wait_for(semaphore.acquire(), 3)
+        semaphore.release()
+    assert (await query_spread_events(db, params())).scanned_rows == 4

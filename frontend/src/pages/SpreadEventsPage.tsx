@@ -5,7 +5,7 @@ import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 import { useEffect, useState } from "react";
 
-import { getSpreadEvents, spreadEventPairUrl } from "../api/spreadEvents";
+import { getSpreadEvents, spreadEventMultiplierUnknown, spreadEventPairUrl } from "../api/spreadEvents";
 import type { SpreadEvent, SpreadEventLeg, SpreadEventsParams, SpreadEventsResponse } from "../api/spreadEvents";
 
 dayjs.extend(utc);
@@ -30,6 +30,7 @@ const columns: ColumnsType<SpreadEvent> = [
   } },
   { title: "两腿（买 → 卖）", width: 360, render: (_, event) => (
     <div><div>{legLabel(event.buy_leg)}</div><div>→ {legLabel(event.sell_leg)}</div>
+      {spreadEventMultiplierUnknown(event) && <Tag color="orange">倍率未知</Tag>}
       {!spreadEventPairUrl(event) && <Typography.Text type="secondary">历史样本缺少原始市场身份，无法精确跳转</Typography.Text>}
     </div>
   ) },

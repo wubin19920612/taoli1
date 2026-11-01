@@ -8,8 +8,8 @@ import { SpreadEventsPage } from "../src/pages/SpreadEventsPage";
 
 const event: SpreadEvent = {
   series_key: "btc-xyz-okx", symbol: "BTCUSDT",
-  buy_leg: { exchange: "hyperliquid", market_type: "future", raw_symbol: "xyz:BTC", dex: "xyz" },
-  sell_leg: { exchange: "okx", market_type: "spot", raw_symbol: "BTC-USDT", dex: null },
+  buy_leg: { exchange: "hyperliquid", market_type: "future", raw_symbol: "xyz:BTC", dex: "xyz", price_multiplier: null, contract_size_multiplier: null },
+  sell_leg: { exchange: "okx", market_type: "spot", raw_symbol: "BTC-USDT", dex: null, price_multiplier: null, contract_size_multiplier: null },
   start_at: "2026-11-01T00:00:00Z", end_at: "2026-11-01T00:04:00Z",
   duration_s: 240, peak: 0.8, peak_at: "2026-11-01T00:02:00Z", mean: 0.5,
   samples: 3, end_reason: "below"
@@ -58,7 +58,7 @@ describe("SpreadEventsPage", () => {
   });
 
   it("clicks a row using the existing exact pair URL and navigation event", async () => {
-    window.history.replaceState({}, "", "/?page=spread-events&leg1_price_multiplier=100&leg2_dex=old&leg2_contract_size_multiplier=100");
+    window.history.replaceState({}, "", "/?page=spread-events&leg1_price_multiplier=100&leg2_dex=old&leg2_contract_size_multiplier=100&leg2_multiplier=9");
     const listener = vi.fn();
     window.addEventListener("taoli1:navigate", listener);
     try {
@@ -79,10 +79,45 @@ describe("SpreadEventsPage", () => {
       expect(expected.searchParams.has("leg2_dex")).toBe(false);
       expect(expected.searchParams.has("leg1_price_multiplier")).toBe(false);
       expect(expected.searchParams.has("leg2_contract_size_multiplier")).toBe(false);
+      expect([...expected.searchParams.keys()].some((name) => name.includes("multiplier"))).toBe(false);
+      expect(within(link.closest("tr")!).getByText("倍率未知")).toBeTruthy();
       expect(listener).toHaveBeenCalledOnce();
     } finally {
       window.removeEventListener("taoli1:navigate", listener);
     }
+  });
+
+  it("preserves non-unit price and contract multipliers in the existing protocol", async () => {
+    const known: SpreadEvent = {
+      ...event,
+      buy_leg: { ...event.buy_leg, price_multiplier: 1000, contract_size_multiplier: 0.01 },
+      sell_leg: { ...event.sell_leg, price_multiplier: 0.1, contract_size_multiplier: 10 }
+    };
+    vi.mocked(fetch).mockResolvedValueOnce(Response.json({ ...result, events: [known] }));
+    render(<SpreadEventsPage />);
+    const link = await screen.findByRole("link", { name: "BTCUSDT" });
+    const url = new URL((link as HTMLAnchorElement).href);
+    expect(url.searchParams.get("leg1_price_multiplier")).toBe("1000");
+    expect(url.searchParams.get("leg1_contract_size_multiplier")).toBe("0.01");
+    expect(url.searchParams.get("leg2_price_multiplier")).toBe("0.1");
+    expect(url.searchParams.get("leg2_contract_size_multiplier")).toBe("10");
+    expect(url.searchParams.has("leg2_multiplier")).toBe(false);
+    expect(within(link.closest("tr")!).queryByText("倍率未知")).toBeNull();
+    await userEvent.click(link);
+    expect(window.location.href).toBe(url.href);
+  });
+
+  it("marks partial multiplier knowledge and only sends known parameters", async () => {
+    const partial = { ...event, buy_leg: { ...event.buy_leg, price_multiplier: 1000 } };
+    vi.mocked(fetch).mockResolvedValueOnce(Response.json({ ...result, events: [partial] }));
+    render(<SpreadEventsPage />);
+    const link = await screen.findByRole("link", { name: "BTCUSDT" });
+    expect(within(link.closest("tr")!).getByText("倍率未知")).toBeTruthy();
+    const url = new URL((link as HTMLAnchorElement).href);
+    expect(url.searchParams.get("leg1_price_multiplier")).toBe("1000");
+    expect(url.searchParams.has("leg1_contract_size_multiplier")).toBe(false);
+    expect(url.searchParams.has("leg2_price_multiplier")).toBe(false);
+    expect(url.searchParams.has("leg2_multiplier")).toBe(false);
   });
 
   it("navigates an ordinary symbol link without reloading the document", async () => {
