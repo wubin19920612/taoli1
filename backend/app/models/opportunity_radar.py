@@ -92,6 +92,12 @@ class OpportunityRadarCandidate(BaseModel):
     volume_24h_usdt: float | None = None
     depth_usdt: float | None = None
     data_age_seconds: float
+    long_age_ms: float | None = None
+    long_source_age_ms: float | None = None
+    long_time_source: str | None = None
+    short_age_ms: float | None = None
+    short_source_age_ms: float | None = None
+    short_time_source: str | None = None
     reasons: list[str] = Field(default_factory=list)
     risk_labels: list[str] = Field(default_factory=list)
 
@@ -106,3 +112,4 @@ class OpportunityRadarPreview(BaseModel):
     medium_count: int
     watch_count: int
     candidates: list[OpportunityRadarCandidate]
+    excluded_stale: int | None = None

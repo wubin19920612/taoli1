@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta, timezone
+from itertools import pairwise
 from math import ceil, isfinite
 from typing import Any
 from urllib.parse import quote, urlsplit
@@ -67,6 +68,7 @@ from app.models.pair_spread import (
     normalize_pair_spread_symbol,
 )
 from app.services.okx_history import get_okx_history_json
+from app.services.quote_age import quote_age_fields
 from app.services.realtime_series_cache import RealtimeSeriesBudget, RealtimeSeriesCache
 
 MINUTE_MS = 60_000
@@ -613,6 +615,32 @@ def _append_realtime_point(
     if len(points) > PAIR_SPREAD_REALTIME_MAX_POINTS:
         del points[:-PAIR_SPREAD_REALTIME_MAX_POINTS]
     return points
+
+
+def _realtime_window_completeness(
+    points: list[PairSpreadPoint],
+    *,
+    observed_at: datetime,
+    hours: int,
+    interval_seconds: int,
+) -> dict[str, int | float | bool]:
+    """Measure the full requested window, including missing leading/trailing data."""
+    end = _as_utc(observed_at)
+    start = end - timedelta(hours=hours)
+    expected = ceil(hours * 3600 / interval_seconds)
+    timestamps = sorted(_as_utc(point.bucket_at) for point in points)
+    edges = [start, *timestamps, end]
+    max_gap_ms = max(
+        (right - left).total_seconds() * 1000
+        for left, right in pairwise(edges)
+    )
+    actual = len(points)
+    return {
+        "expected_samples": expected,
+        "actual_samples": actual,
+        "max_gap_ms": max_gap_ms,
+        "complete": actual * 100 >= expected * 95 and max_gap_ms <= interval_seconds * 3000,
+    }
 
 
 def _realtime_funding_point(
@@ -1756,7 +1784,7 @@ class PairSpreadQueryService:
         else:
             _append_unique(warnings, "盘口中间价不完整，本次快照未写入实时价差曲线。")
         cutoff = observed_at - timedelta(hours=hours)
-        points = [point for point in cached_points if point.bucket_at >= cutoff]
+        points = [point for point in cached_points if cutoff <= point.bucket_at <= observed_at]
         _REALTIME_PAIR_SPREAD_CACHE[cache_key] = points
 
         realtime_funding = _realtime_funding_points_from_current(
@@ -1793,6 +1821,9 @@ class PairSpreadQueryService:
             leg2_multiplier=leg2_multiplier,
             observed_at=observed_at,
             point_count=len(points),
+            **_realtime_window_completeness(
+                points, observed_at=observed_at, hours=hours, interval_seconds=interval_seconds,
+            ),
             first_seen_at=points[0].bucket_at if points else None,
             last_seen_at=points[-1].bucket_at if points else None,
             spread_abs=_stats([point.spread_abs for point in points]),
@@ -2009,6 +2040,13 @@ class PairSpreadQueryService:
         leg2: PairSpreadCurrentLeg,
         observed_at: datetime,
     ) -> PairSpreadCurrentSnapshot:
+        leg1, leg2 = (
+            leg.model_copy(update=quote_age_fields(
+                leg.timestamp, leg.upstream_timestamp, now=observed_at,
+                time_source=leg.time_source,
+            ))
+            for leg in (leg1, leg2)
+        )
         spread_abs = leg2.price - leg1.price
         open_spread_abs, open_spread_pct = _spread_values(
             leg1.ask_price,

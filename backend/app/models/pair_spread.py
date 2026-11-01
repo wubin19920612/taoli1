@@ -323,6 +323,9 @@ class PairSpreadCurrentLeg(BaseModel):
     contract_size_multiplier: float | None = Field(default=None, gt=0)
     data_source: str | None = None
     upstream_timestamp: datetime | None = None
+    age_ms: float | None = None
+    source_age_ms: float | None = None
+    time_source: str | None = None
     is_estimated: bool = False
     estimated_fields: list[str] = Field(default_factory=list)
     estimated_taker_fee_pct: float | None = Field(default=None, ge=0)
@@ -382,6 +385,10 @@ class PairSpreadQueryResult(BaseModel):
     leg2_multiplier: float = 1.0
     observed_at: datetime
     point_count: int
+    expected_samples: int | None = None
+    actual_samples: int | None = None
+    max_gap_ms: float | None = None
+    complete: bool | None = None
     first_seen_at: datetime | None = None
     last_seen_at: datetime | None = None
     spread_abs: PairSpreadValueStats

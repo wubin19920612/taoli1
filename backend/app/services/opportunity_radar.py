@@ -11,6 +11,7 @@ from app.models.opportunity_radar import (
     OpportunityRadarSettings,
 )
 from app.services.pair_validation import same_asset_eligible, validate_pair
+from app.services.quote_age import market_source_timestamp, market_time_source, quote_age_fields
 
 
 class OpportunityRadarAlertEngine:
@@ -108,10 +109,7 @@ def _premium_pct(snapshot: MarketSnapshot) -> float | None:
 
 
 def _data_age_seconds(snapshot: MarketSnapshot, now: datetime) -> float:
-    timestamp = snapshot.timestamp
-    if timestamp.tzinfo is None:
-        timestamp = timestamp.replace(tzinfo=UTC)
-    return max((now - timestamp.astimezone(UTC)).total_seconds(), 0.0)
+    return max(quote_age_fields(snapshot.timestamp, None, now=now)["age_ms"] / 1000, 0.0)
 
 
 def _funding_rate(snapshot: MarketSnapshot) -> float | None:
@@ -199,11 +197,19 @@ def build_opportunity_radar_preview(
     resolved = settings or OpportunityRadarSettings()
     current = now or datetime.now(UTC)
     supported = set(SUPPORTED_RADAR_EXCHANGES)
+    selected = {resolved.anchor_exchange, *resolved.peer_exchanges}
+    excluded_stale = 0
     by_symbol: dict[str, list[MarketSnapshot]] = defaultdict(list)
     for market in markets:
         if market.market_type != MarketType.FUTURE:
             continue
         if market.exchange.lower() not in supported:
+            continue
+        if market.exchange.lower() not in selected:
+            continue
+        # Remove stale legs before any peer reference, score, or limit is built.
+        if _data_age_seconds(market, current) > resolved.max_data_age_seconds:
+            excluded_stale += 1
             continue
         by_symbol[market.symbol].append(market)
 
@@ -274,8 +280,6 @@ def build_opportunity_radar_preview(
                         _data_age_seconds(long_leg, current),
                         _data_age_seconds(short_leg, current),
                     )
-                    if age > resolved.max_data_age_seconds:
-                        continue
                     volume = _known_volume(long_leg, short_leg)
                     if resolved.min_volume_24h_usdt > 0 and (
                         volume is None or volume < resolved.min_volume_24h_usdt
@@ -352,6 +356,16 @@ def build_opportunity_radar_preview(
                             volume_24h_usdt=volume,
                             depth_usdt=depth,
                             data_age_seconds=round(age, 1),
+                            **{
+                                f"{side}_{key}": value
+                                for side, leg in (("long", long_leg), ("short", short_leg))
+                                for key, value in quote_age_fields(
+                                    leg.timestamp,
+                                    market_source_timestamp(leg),
+                                    now=current,
+                                    time_source=market_time_source(leg),
+                                ).items()
+                            },
                             reasons=reasons,
                             risk_labels=risk_labels,
                         )
@@ -377,4 +391,5 @@ def build_opportunity_radar_preview(
         medium_count=sum(item.signal_level == "MEDIUM" for item in candidates),
         watch_count=sum(item.signal_level == "WATCH" for item in candidates),
         candidates=candidates,
+        excluded_stale=excluded_stale,
     )

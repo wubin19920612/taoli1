@@ -10,6 +10,7 @@ from app.models.opportunity import Opportunity, OpportunityType
 from app.runtime.cooperative import YieldBudget
 from app.services.market_sessions import is_market_snapshot_tradable
 from app.services.pair_validation import same_asset_eligible, validate_pair
+from app.services.quote_age import market_source_timestamp, market_time_source, quote_age_fields
 
 Mode = Literal["SF", "FF", "SS"]
 
@@ -170,6 +171,9 @@ def build_directional_opportunity(
         buy_price_multiplier=buy_leg.symbol_alias_price_multiplier,
         buy_contract_size_multiplier=buy_leg.contract_size_multiplier,
         buy_timestamp=_market_observed_at(buy_leg),
+        buy_local_timestamp=buy_leg.timestamp,
+        buy_source_timestamp=market_source_timestamp(buy_leg),
+        buy_time_source=market_time_source(buy_leg),
         buy_data_source=buy_leg.data_source,
         buy_is_estimated=buy_leg.is_estimated,
         buy_estimated_fields=buy_leg.estimated_fields,
@@ -180,6 +184,9 @@ def build_directional_opportunity(
         sell_price_multiplier=sell_leg.symbol_alias_price_multiplier,
         sell_contract_size_multiplier=sell_leg.contract_size_multiplier,
         sell_timestamp=_market_observed_at(sell_leg),
+        sell_local_timestamp=sell_leg.timestamp,
+        sell_source_timestamp=market_source_timestamp(sell_leg),
+        sell_time_source=market_time_source(sell_leg),
         sell_data_source=sell_leg.data_source,
         sell_is_estimated=sell_leg.is_estimated,
         sell_estimated_fields=sell_leg.estimated_fields,
@@ -228,6 +235,25 @@ def build_directional_opportunity(
         identity_enforced=buy_leg.identity_enforced or sell_leg.identity_enforced,
         validation=validate_pair(buy_leg, sell_leg) if validate_identity and (buy_leg.identity_checked or sell_leg.identity_checked) else None,
     )
+
+
+def opportunity_with_ages(opportunity: Opportunity, *, now: datetime) -> Opportunity:
+    """Copy request-derived fields without modifying the collector's snapshot.
+
+    Legacy opportunities have no local leg times. Use their existing last_seen_at
+    conservatively for both legs so they also expire during a collector stall.
+    """
+    updates = {}
+    for side in ("buy", "sell"):
+        local_timestamp = getattr(opportunity, f"{side}_local_timestamp")
+        ages = quote_age_fields(
+            local_timestamp or opportunity.last_seen_at,
+            getattr(opportunity, f"{side}_source_timestamp"),
+            now=now,
+            time_source=(getattr(opportunity, f"{side}_time_source") if local_timestamp else "legacy"),
+        )
+        updates.update({f"{side}_{key}": value for key, value in ages.items()})
+    return opportunity.model_copy(update=updates)
 
 
 def orient_pair(mode: Mode, first: MarketSnapshot, second: MarketSnapshot) -> tuple[MarketSnapshot, MarketSnapshot] | None:

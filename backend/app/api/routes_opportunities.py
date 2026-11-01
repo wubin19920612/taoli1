@@ -1,12 +1,14 @@
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Query, Request, Response
 
+from app.exchanges.base import utc_now
 from app.models.market import MarketType
-from app.models.opportunity import Opportunity, OpportunityType
+from app.models.opportunity import Opportunity, OpportunityList, OpportunityType
 from app.models.settings import DEFAULT_HIDDEN_RISK_LABELS, RiskSettings
 from app.services.data_filters import filter_markets, filter_opportunities
 from app.services.risk_labels import has_non_actionable_risk, known_volume_24h_usdt
+from app.services.spread_engine import opportunity_with_ages
 
 router = APIRouter()
 
@@ -42,9 +44,10 @@ async def _risk_settings(request: Request) -> RiskSettings:
     return await repo.get_risk_settings()
 
 
-@router.get("/opportunities", response_model=list[Opportunity])
+@router.get("/opportunities", response_model=list[Opportunity] | OpportunityList)
 async def list_opportunities(
     request: Request,
+    response: Response,
     type: str | None = Query(default=None),
     exclude_types: str | None = Query(default=None),
     symbol: str | None = Query(default=None),
@@ -56,12 +59,26 @@ async def list_opportunities(
     limit: int | None = Query(default=None, ge=1, le=1000),
     sort_by: Annotated[OpportunitySort | None, Query()] = None,
     sort_order: Literal["asc", "desc"] = Query(default="desc"),
-) -> list[Opportunity]:
+    include_metadata: bool = Query(default=False),
+) -> list[Opportunity] | OpportunityList:
     settings = await _risk_settings(request)
     opportunities = filter_opportunities(
         request.app.state.snapshot_store.get_opportunities(),
         settings,
     )
+    current = utc_now()
+    fresh = []
+    excluded_stale = 0
+    for item in opportunities:
+        aged = opportunity_with_ages(item, now=current)
+        if max(aged.buy_age_ms, aged.sell_age_ms) > settings.stale_after_seconds * 1000:
+            excluded_stale += 1
+        else:
+            fresh.append(aged)
+    opportunities = fresh
+    # Keep the existing array contract, including for empty results. Clients that
+    # need JSON metadata can explicitly request the additive envelope.
+    response.headers["X-Excluded-Stale"] = str(excluded_stale)
     if type:
         opportunities = [item for item in opportunities if item.type == type]
     allowed_types = {item.value for item in OpportunityType}
@@ -123,6 +140,8 @@ async def list_opportunities(
         opportunities = known + sorted(missing, key=lambda item: item.id)
     if limit is not None:
         opportunities = opportunities[:limit]
+    if include_metadata:
+        return OpportunityList(opportunities=opportunities, excluded_stale=excluded_stale)
     return opportunities
 
 

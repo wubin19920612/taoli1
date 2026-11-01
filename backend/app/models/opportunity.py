@@ -24,6 +24,11 @@ class Opportunity(BaseModel):
     buy_price_multiplier: float = 1.0
     buy_contract_size_multiplier: float | None = None
     buy_timestamp: datetime | None = None
+    buy_local_timestamp: datetime | None = None
+    buy_source_timestamp: datetime | None = None
+    buy_age_ms: float | None = None
+    buy_source_age_ms: float | None = None
+    buy_time_source: str | None = None
     buy_data_source: str | None = None
     buy_is_estimated: bool = False
     buy_estimated_fields: list[str] = Field(default_factory=list)
@@ -34,6 +39,11 @@ class Opportunity(BaseModel):
     sell_price_multiplier: float = 1.0
     sell_contract_size_multiplier: float | None = None
     sell_timestamp: datetime | None = None
+    sell_local_timestamp: datetime | None = None
+    sell_source_timestamp: datetime | None = None
+    sell_age_ms: float | None = None
+    sell_source_age_ms: float | None = None
+    sell_time_source: str | None = None
     sell_data_source: str | None = None
     sell_is_estimated: bool = False
     sell_estimated_fields: list[str] = Field(default_factory=list)
@@ -77,3 +87,8 @@ class Opportunity(BaseModel):
     identity_enforced: bool = False
     validation: PairValidationResult | None = None
     comparison_kind: str = "same_asset"
+
+
+class OpportunityList(BaseModel):
+    opportunities: list[Opportunity]
+    excluded_stale: int | None = None
