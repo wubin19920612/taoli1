@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PairMonitorPage } from "../src/pages/PairMonitorPage";
 import type { HyperliquidDexMarket } from "../src/api/types";
+import type { RangeBacktestRequest } from "../src/api/rangeBacktest";
+import { rangeBacktestFixture } from "./fixtures/rangeBacktest";
 
 const observedAt = "2026-07-24T02:00:00Z";
 
@@ -1867,6 +1869,46 @@ describe("PairMonitorPage", () => {
     }
     fireEvent.mouseLeave(hoverTarget);
     expect(chart.querySelector(".pair-chart-hover-detail")).toBeNull();
+  });
+
+  it.each(["Escape", "清除"])("只在松开拖选后请求区间回测，%s取消选区和结果", async (cancel) => {
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    const backtests: RangeBacktestRequest[] = [];
+    let backtestSignal: AbortSignal | null | undefined;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (String(input).includes("/pair-spread/range-backtest")) {
+        const request = JSON.parse(String(init?.body)) as RangeBacktestRequest;
+        backtests.push(request);
+        backtestSignal = init?.signal;
+        return Response.json(rangeBacktestFixture(request.leg1, request.leg2, request));
+      }
+      return fallback(input, init);
+    });
+    window.history.pushState({}, "", "/?page=pair-monitor&leg1_exchange=aster&leg1_market_type=future&leg1_symbol=TAIL&leg2_exchange=gate&leg2_market_type=future&leg2_symbol=TAIL&hours=6&interval_seconds=60");
+    render(<PairMonitorPage />);
+    const chart = await screen.findByRole("img", { name: "均值价差率曲线" });
+    vi.spyOn(chart, "getBoundingClientRect").mockReturnValue({
+      bottom: 330, height: 330, left: 0, right: 1180, top: 0, width: 1180,
+      x: 0, y: 0, toJSON: () => ({})
+    });
+    const target = chart.querySelector(".pair-chart-hover-target")!;
+    fireEvent.mouseDown(target, { button: 0, clientX: 56 });
+    fireEvent.mouseMove(target, { buttons: 1, clientX: 1152 });
+    expect(backtests).toHaveLength(0);
+    fireEvent.mouseUp(window, { button: 0, clientX: 1152 });
+    await screen.findByText("+56.9000 美元");
+    expect(backtests).toEqual([{
+      leg1: expect.objectContaining({ exchange: "aster", symbol: "TAILUSDT", market_type: "future" }),
+      leg2: expect.objectContaining({ exchange: "gate", symbol: "TAILUSDT", market_type: "future" }),
+      start_at: "2026-07-24T01:58:00.000Z", end_at: "2026-07-24T02:00:00.000Z",
+      direction: "long1_short2", notional_usd: 1000
+    }]);
+    if (cancel === "Escape") fireEvent.keyDown(window, { key: "Escape" });
+    else fireEvent.click(screen.getByRole("button", { name: "清除" }));
+    expect(chart.querySelector(".pair-chart-range-selection")).toBeNull();
+    expect(screen.queryByRole("region", { name: "区间回测结果" })).toBeNull();
+    expect(backtestSignal?.aborted).toBe(true);
+    expect(backtests).toHaveLength(1);
   });
 
   it("auto-runs a Binance Alpha spread query from URL parameters", async () => {

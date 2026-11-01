@@ -4633,6 +4633,20 @@ body {
   min-width: 0;
 }
 
+.pair-range-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pair-range-panel summary {
+  cursor: pointer;
+}
+
+.pair-range-panel .ant-select {
+  min-width: 200px;
+}
+
 .pair-chart-head {
   display: flex;
   align-items: center;

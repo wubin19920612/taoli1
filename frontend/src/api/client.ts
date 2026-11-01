@@ -1,5 +1,6 @@
 import type { ArbMvpStatus, CardTarget } from "./types";
 import type { FsSettings, FsReport, FsEvent } from "./fsTypes";
+import type { RangeBacktestRequest, RangeBacktestResult } from "./rangeBacktest";
 import type {
   FeaturesResponse,
   SqueezeStatus,
@@ -1026,6 +1027,14 @@ export async function queryPairSpread(query: {
       throw new Error(extractErrorMessage(text, response.status));
     }
     return response.json() as Promise<PairSpreadQueryResult>;
+  });
+}
+
+export function rangeBacktest(query: RangeBacktestRequest, signal?: AbortSignal): Promise<RangeBacktestResult> {
+  return fetchJson<RangeBacktestResult>("/pair-spread/range-backtest", {
+    method: "POST",
+    body: JSON.stringify(query),
+    signal
   });
 }
 

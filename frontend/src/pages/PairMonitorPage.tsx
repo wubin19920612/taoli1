@@ -68,6 +68,8 @@ import type {
 } from "../api/types";
 import { resolveHistoryIntervalSeconds } from "../constants/queryLimits";
 import { QuoteAgeTag } from "../components/QuoteAgeTag";
+import { RangeBacktestPanel } from "../components/RangeBacktestPanel";
+import type { RangeBacktestRange } from "../api/rangeBacktest";
 import { addFloatingWatchPair } from "../utils/floatingWatch";
 import { buildTimeScale } from "../utils/chartTimeScale";
 
@@ -2641,8 +2643,16 @@ function PairSpreadDiagnosticCard({
   );
 }
 
-function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
+export function PairSpreadChart({ result, onRangeSelect, onRangeClear }: {
+  result: PairSpreadQueryResult | null;
+  onRangeSelect?: (start: number, end: number) => void;
+  onRangeClear?: () => void;
+}) {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
+  const dragRef = useRef<number | null>(null);
+  const [dragRange, setDragRange] = useState<{ start: number; end: number } | null>(null);
+  const [selectedRange, setSelectedRange] = useState<{ start: number; end: number } | null>(null);
   const ratioMode = pairUsesRatio(result);
   const metric = ratioMode ? formatPriceRatio : signedPct;
   const points = useMemo(() => ratioChartPoints(pairDisplayPoints(result), ratioMode), [result, ratioMode]);
@@ -2652,6 +2662,53 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
   const chartWidth = width - padding.left - padding.right;
   const chartHeight = height - padding.top - padding.bottom;
   const timeScale = useMemo(() => buildTimeScale(points, chartWidth), [points, chartWidth]);
+
+  const plotXOf = useCallback((clientX: number) => {
+    const bounds = svgRef.current?.getBoundingClientRect();
+    if (!bounds || bounds.width <= 0) return null;
+    return Math.min(chartWidth, Math.max(0, (clientX - bounds.left) / bounds.width * width - padding.left));
+  }, [chartWidth, padding.left]);
+  const clearRange = useCallback(() => {
+    dragRef.current = null;
+    setDragRange(null);
+    setSelectedRange(null);
+    onRangeClear?.();
+  }, [onRangeClear]);
+
+  useEffect(() => {
+    const move = (event: MouseEvent) => {
+      const start = dragRef.current;
+      if (start === null) return;
+      const end = plotXOf(event.clientX);
+      if (end !== null) setDragRange({ start, end });
+    };
+    const finish = (event: MouseEvent) => {
+      if (event.button !== 0 || dragRef.current === null) return;
+      const start = dragRef.current;
+      const end = plotXOf(event.clientX);
+      const renderedWidth = svgRef.current?.getBoundingClientRect().width ?? 0;
+      dragRef.current = null;
+      setDragRange(null);
+      if (end === null || Math.abs(end - start) * renderedWidth / width < 8) return;
+      const startMs = Math.round(timeScale.tOf(Math.min(start, end)));
+      const endMs = Math.round(timeScale.tOf(Math.max(start, end)));
+      if (endMs <= startMs) return;
+      setSelectedRange({ start: startMs, end: endMs });
+      onRangeSelect?.(startMs, endMs);
+    };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") clearRange(); };
+    const cancelDrag = () => { dragRef.current = null; setDragRange(null); };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", finish);
+    window.addEventListener("keydown", escape);
+    window.addEventListener("blur", cancelDrag);
+    return () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", finish);
+      window.removeEventListener("keydown", escape);
+      window.removeEventListener("blur", cancelDrag);
+    };
+  }, [plotXOf, timeScale, onRangeSelect, clearRange]);
 
   if (!result || points.length === 0) {
     return <div className="pair-chart-empty">暂无查询结果</div>;
@@ -2693,18 +2750,14 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
           Math.max(padding.top, hoveredY - tooltipHeight / 2)
         );
   const handleChartMouseMove = (event: ReactMouseEvent<SVGRectElement>) => {
-    const svg = event.currentTarget.ownerSVGElement;
-    if (!svg) {
-      return;
-    }
-    const bounds = svg.getBoundingClientRect();
-    if (bounds.width <= 0) {
-      return;
-    }
-    const viewBoxX = ((event.clientX - bounds.left) / bounds.width) * width;
-    const chartCursorX = Math.min(chartWidth, Math.max(0, viewBoxX - padding.left));
+    const chartCursorX = plotXOf(event.clientX);
+    if (chartCursorX === null) return;
     setHoveredIndex(timeScale.nearestIndex(timeScale.tOf(chartCursorX)));
   };
+  const selection = dragRange ?? (selectedRange ? {
+    start: Math.max(0, Math.min(chartWidth, timeScale.xOf(selectedRange.start))),
+    end: Math.max(0, Math.min(chartWidth, timeScale.xOf(selectedRange.end)))
+  } : null);
 
   return (
     <div className="pair-chart-card">
@@ -2715,9 +2768,11 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
             最新 {metric(latestPoint.spread_pct)}
           </Tag>
           <Typography.Text type="secondary">{fullTime(latestPoint.bucket_at)}</Typography.Text>
+          <Button size="small" aria-label="清除" disabled={!selection} onClick={clearRange}>清除</Button>
         </div>
       </div>
-      <svg className="pair-spread-chart" role="img" aria-label={ratioMode ? "价格比值曲线" : "均值价差率曲线"} viewBox={`0 0 ${width} ${height}`}>
+      <Typography.Text type="secondary">按住鼠标左键拖选区间，松开后估算；按 Esc 或点“清除”取消选区。</Typography.Text>
+      <svg ref={svgRef} className="pair-spread-chart" role="img" aria-label={ratioMode ? "价格比值曲线" : "均值价差率曲线"} viewBox={`0 0 ${width} ${height}`}>
         <defs>
           <linearGradient id="pairSpreadFill" x1="0" x2="0" y1="0" y2="1">
             <stop offset="0%" stopColor="#2f80ed" stopOpacity="0.18" />
@@ -2816,6 +2871,16 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
             </g>
           );
         })}
+        {selection ? <rect
+          className="pair-chart-range-selection"
+          x={padding.left + Math.min(selection.start, selection.end)}
+          y={padding.top}
+          width={Math.abs(selection.end - selection.start)}
+          height={chartHeight}
+          fill="#2f80ed"
+          fillOpacity="0.2"
+          pointerEvents="none"
+        /> : null}
         <rect
           className="pair-chart-hover-target"
           x={padding.left}
@@ -2825,6 +2890,14 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
           style={{ fill: "transparent", stroke: "none" }}
           onMouseMove={handleChartMouseMove}
           onMouseLeave={() => setHoveredIndex(null)}
+          onMouseDown={(event) => {
+            if (event.button !== 0 || !onRangeSelect) return;
+            const start = plotXOf(event.clientX);
+            if (start === null) return;
+            event.preventDefault();
+            dragRef.current = start;
+            setDragRange({ start, end: start });
+          }}
         />
         {hoveredPoint && hoveredX !== null && hoveredY !== null ? (
           <g className="pair-chart-hover-detail" pointerEvents="none">
@@ -2877,6 +2950,18 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
       </div>
     </div>
   );
+}
+
+function PairSpreadBacktest({ result }: { result: PairSpreadQueryResult | null }) {
+  const [range, setRange] = useState<RangeBacktestRange | null>(null);
+  const selectRange = useCallback((start: number, end: number) => {
+    setRange({ start_at: new Date(start).toISOString(), end_at: new Date(end).toISOString() });
+  }, []);
+  const clearRange = useCallback(() => setRange(null), []);
+  return <>
+    <PairSpreadChart result={result} onRangeSelect={selectRange} onRangeClear={clearRange} />
+    {result && range ? <RangeBacktestPanel leg1={result.leg1} leg2={result.leg2} range={range} defaultDirection="long1_short2" /> : null}
+  </>;
 }
 
 function openInterestChangeClass(value: number | null | undefined): string {
@@ -5775,7 +5860,7 @@ export function PairMonitorPage() {
             样本不足 {result.actual_samples ?? "-"}/{result.expected_samples ?? "-"}，最大缺口 {typeof result.max_gap_ms === "number" ? `${(result.max_gap_ms / 1000).toFixed(1)}s` : "未知"}
           </Tag>
         ) : null}
-        <PairSpreadChart result={result} />
+        <PairSpreadBacktest key={JSON.stringify([result?.leg1, result?.leg2, result?.leg2_multiplier])} result={result} />
       </section>
 
       <section className="pair-query-panel pair-query-secondary-panel">
