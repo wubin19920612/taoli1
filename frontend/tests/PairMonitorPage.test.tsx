@@ -1809,6 +1809,66 @@ describe("PairMonitorPage", () => {
     expect(document.querySelector(".pair-chart-hover-detail")).toBeNull();
   });
 
+  it.each([false, true])("maps spread chart gaps and hover to real time, ratio mode=%s", async (ratioMode) => {
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const response = await fallback(input, init);
+      if (!String(input).includes("/pair-spread/query")) return response;
+      const data = await response.json();
+      const left = ratioMode ? 4000 : 100;
+      const right = ratioMode ? 100 : 101;
+      Object.assign(data.current.leg1, { price: left, mid_price: left });
+      Object.assign(data.current.leg2, { price: right, mid_price: right });
+      data.points = [0, 1, 2, 9, 10].map((minutes, index) => {
+        const historicalRight = right + index * 0.1;
+        return {
+          bucket_at: new Date(Date.parse(observedAt) - (12 - minutes) * 60_000).toISOString(),
+          leg1_close: left,
+          leg2_close: historicalRight,
+          spread_abs: historicalRight - left,
+          spread_pct: (historicalRight - left) / ((left + historicalRight) / 2) * 100
+        };
+      });
+      return Response.json(data);
+    });
+    window.history.pushState({}, "", "/?page=pair-monitor&leg1_exchange=aster&leg1_market_type=future&leg1_symbol=TIME&leg2_exchange=gate&leg2_market_type=future&leg2_symbol=TIME&hours=6&interval_seconds=60");
+    render(<PairMonitorPage />);
+
+    const chart = await screen.findByRole("img", { name: ratioMode ? "价格比值曲线" : "均值价差率曲线" });
+    const left = ratioMode ? 78 : 56;
+    const plotWidth = 1180 - left - 28;
+    const xAtMinute = (minute: number) => left + plotWidth * minute / 12;
+    const line = chart.querySelector(".pair-chart-line")!.getAttribute("d")!;
+    const vertices = Array.from(line.matchAll(/([ML]) ([\d.-]+) ([\d.-]+)/g));
+    expect(vertices.map((vertex) => vertex[1])).toEqual(["M", "L", "L", "M", "L", "L"]);
+    [0, 1, 2, 9, 10, 12].forEach((minute, index) => {
+      expect(Number(vertices[index][2])).toBeCloseTo(xAtMinute(minute), 2);
+    });
+    const area = chart.querySelector(".pair-chart-area")!.getAttribute("d")!;
+    expect(area.match(/M /g)).toHaveLength(2);
+    expect(area.match(/Z/g)).toHaveLength(2);
+    const gap = chart.querySelector(".pair-chart-gap")!;
+    expect(Number(gap.getAttribute("x"))).toBeCloseTo(xAtMinute(2));
+    expect(Number(gap.getAttribute("width"))).toBeCloseTo(plotWidth * 7 / 12);
+    expect(Number(chart.querySelector(".pair-chart-current-point")!.getAttribute("cx"))).toBe(1152);
+
+    // Render at half the SVG viewBox width, offset from the viewport origin.
+    vi.spyOn(chart, "getBoundingClientRect").mockReturnValue({
+      bottom: 185, height: 165, left: 35, right: 625, top: 20, width: 590,
+      x: 35, y: 20, toJSON: () => ({})
+    });
+    const hoverTarget = chart.querySelector(".pair-chart-hover-target")!;
+    for (const [fraction, minute, expectedTime] of [[0.25, 2, "09:50"], [0.7, 9, "09:57"]] as const) {
+      fireEvent.mouseMove(hoverTarget, { clientX: 35 + (left + plotWidth * fraction) / 2, clientY: 100 });
+      expect(chart.querySelector(".pair-chart-hover-tooltip-time")?.textContent).toContain(expectedTime);
+      expect(Number(chart.querySelector(".pair-chart-hover-crosshair")!.getAttribute("x1"))).toBeCloseTo(xAtMinute(minute));
+      expect(Number(chart.querySelector(".pair-chart-hover-point")!.getAttribute("cx"))).toBeCloseTo(xAtMinute(minute));
+      expect(chart.querySelector(".pair-chart-hover-tooltip-rate")?.textContent?.includes("%")).toBe(!ratioMode);
+    }
+    fireEvent.mouseLeave(hoverTarget);
+    expect(chart.querySelector(".pair-chart-hover-detail")).toBeNull();
+  });
+
   it("auto-runs a Binance Alpha spread query from URL parameters", async () => {
     window.history.pushState(
       {},

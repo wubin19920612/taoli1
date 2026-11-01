@@ -69,6 +69,7 @@ import type {
 import { resolveHistoryIntervalSeconds } from "../constants/queryLimits";
 import { QuoteAgeTag } from "../components/QuoteAgeTag";
 import { addFloatingWatchPair } from "../utils/floatingWatch";
+import { buildTimeScale } from "../utils/chartTimeScale";
 
 dayjs.extend(utc);
 
@@ -1614,10 +1615,11 @@ function pairDisplayPoints(result: PairSpreadQueryResult | null): PairSpreadPoin
 function spreadLinePath(
   points: PairSpreadPoint[],
   xAt: (index: number) => number,
-  yAt: (value: number) => number
+  yAt: (value: number) => number,
+  gapBeforeIndices: ReadonlySet<number>
 ): string {
   return points
-    .map((point, index) => `${index === 0 ? "M" : "L"} ${xAt(index).toFixed(2)} ${yAt(point.spread_pct).toFixed(2)}`)
+    .map((point, index) => `${index === 0 || gapBeforeIndices.has(index) ? "M" : "L"} ${xAt(index).toFixed(2)} ${yAt(point.spread_pct).toFixed(2)}`)
     .join(" ");
 }
 
@@ -1625,17 +1627,25 @@ function spreadAreaPath(
   points: PairSpreadPoint[],
   xAt: (index: number) => number,
   yAt: (value: number) => number,
-  baselineY: number
+  baselineY: number,
+  gapBeforeIndices: ReadonlySet<number>
 ): string {
   if (!points.length) {
     return "";
   }
-  const firstX = xAt(0);
-  const lastX = xAt(points.length - 1);
-  const line = points
-    .map((point, index) => `L ${xAt(index).toFixed(2)} ${yAt(point.spread_pct).toFixed(2)}`)
-    .join(" ");
-  return `M ${firstX.toFixed(2)} ${baselineY.toFixed(2)} ${line} L ${lastX.toFixed(2)} ${baselineY.toFixed(2)} Z`;
+  const paths: string[] = [];
+  let segmentStart = 0;
+  for (let end = 1; end <= points.length; end += 1) {
+    if (end < points.length && !gapBeforeIndices.has(end)) continue;
+    const firstX = xAt(segmentStart);
+    const lastX = xAt(end - 1);
+    const line = points.slice(segmentStart, end)
+      .map((point, offset) => `L ${xAt(segmentStart + offset).toFixed(2)} ${yAt(point.spread_pct).toFixed(2)}`)
+      .join(" ");
+    paths.push(`M ${firstX.toFixed(2)} ${baselineY.toFixed(2)} ${line} L ${lastX.toFixed(2)} ${baselineY.toFixed(2)} Z`);
+    segmentStart = end;
+  }
+  return paths.join(" ");
 }
 
 function chartSpanHours(points: PairSpreadPoint[]): number {
@@ -2635,12 +2645,13 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   const ratioMode = pairUsesRatio(result);
   const metric = ratioMode ? formatPriceRatio : signedPct;
-  const points = ratioChartPoints(pairDisplayPoints(result), ratioMode);
+  const points = useMemo(() => ratioChartPoints(pairDisplayPoints(result), ratioMode), [result, ratioMode]);
   const width = 1180;
   const height = 330;
   const padding = { top: 24, right: 28, bottom: 34, left: ratioMode ? 78 : 56 };
   const chartWidth = width - padding.left - padding.right;
   const chartHeight = height - padding.top - padding.bottom;
+  const timeScale = useMemo(() => buildTimeScale(points, chartWidth), [points, chartWidth]);
 
   if (!result || points.length === 0) {
     return <div className="pair-chart-empty">暂无查询结果</div>;
@@ -2652,8 +2663,8 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
   const span = maxValue - minValue || Math.max(Math.abs(maxValue), 1);
   const min = minValue - span * 0.12;
   const max = maxValue + span * 0.12;
-  const xAt = (index: number) =>
-    padding.left + (points.length === 1 ? chartWidth / 2 : (chartWidth * index) / (points.length - 1));
+  const gapBeforeIndices = new Set(timeScale.gaps.map((gap) => gap.afterIndex));
+  const xAt = (index: number) => padding.left + timeScale.xOf(Date.parse(points[index].bucket_at));
   const yAt = (value: number) => padding.top + ((max - value) / (max - min)) * chartHeight;
   const baselineValue = min <= 0 && max >= 0 ? 0 : minValue > 0 ? min : max;
   const baselineY = yAt(baselineValue);
@@ -2664,7 +2675,7 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
   const latestPoint = points[points.length - 1];
   const latestTone = ratioMode ? "neutral" : fundingRateTone(latestPoint.spread_pct);
   const hoveredPoint = hoveredIndex === null ? null : points[hoveredIndex] ?? null;
-  const hoveredX = hoveredIndex === null ? null : xAt(hoveredIndex);
+  const hoveredX = hoveredPoint && hoveredIndex !== null ? xAt(hoveredIndex) : null;
   const hoveredY = hoveredPoint ? yAt(hoveredPoint.spread_pct) : null;
   const tooltipWidth = 184;
   const tooltipHeight = 88;
@@ -2692,9 +2703,7 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
     }
     const viewBoxX = ((event.clientX - bounds.left) / bounds.width) * width;
     const chartCursorX = Math.min(chartWidth, Math.max(0, viewBoxX - padding.left));
-    const index =
-      points.length === 1 ? 0 : Math.round((chartCursorX / chartWidth) * (points.length - 1));
-    setHoveredIndex(index);
+    setHoveredIndex(timeScale.nearestIndex(timeScale.tOf(chartCursorX)));
   };
 
   return (
@@ -2716,6 +2725,19 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
           </linearGradient>
         </defs>
         <rect className="pair-chart-plot-bg" x={padding.left} y={padding.top} width={chartWidth} height={chartHeight} rx="4" />
+        {timeScale.gaps.map((gap) => (
+          <rect
+            key={gap.afterIndex}
+            className="pair-chart-gap"
+            x={padding.left + timeScale.xOf(gap.startMs)}
+            y={padding.top}
+            width={timeScale.xOf(gap.endMs) - timeScale.xOf(gap.startMs)}
+            height={chartHeight}
+            fill="#94a3b8"
+            fillOpacity="0.12"
+            pointerEvents="none"
+          />
+        ))}
         {[0, 0.25, 0.5, 0.75, 1].map((tick) => {
           const y = padding.top + chartHeight * tick;
           const value = max - (max - min) * tick;
@@ -2748,8 +2770,8 @@ function PairSpreadChart({ result }: { result: PairSpreadQueryResult | null }) {
         {min <= 0 && max >= 0 ? (
           <line className="pair-chart-zero-line" x1={padding.left} y1={yAt(0)} x2={padding.left + chartWidth} y2={yAt(0)} />
         ) : null}
-        <path className="pair-chart-area" d={spreadAreaPath(points, xAt, yAt, baselineY)} />
-        <path className="pair-chart-line" d={spreadLinePath(points, xAt, yAt)} />
+        <path className="pair-chart-area" d={spreadAreaPath(points, xAt, yAt, baselineY, gapBeforeIndices)} />
+        <path className="pair-chart-line" d={spreadLinePath(points, xAt, yAt, gapBeforeIndices)} />
         <circle
           className={`pair-chart-current-point pair-chart-current-${latestTone}`}
           cx={xAt(points.length - 1)}
