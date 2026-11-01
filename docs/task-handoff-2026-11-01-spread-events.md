@@ -2,6 +2,16 @@
 
 # 价差事件榜交接与返工验收报告
 
+## 二次复审 P2 修复（2026-11-01）
+
+- 分支 `codex/spread-events`，本轮基线 `93abfd4`；仅修改 `backend/app/services/spread_events.py`、`backend/tests/test_spread_events.py` 和本交接口径。创建新本地提交，不 amend、不 push、不部署，不接触生产数据库。
+- 同时间戳样本恢复按 `id ASC` 消费。现有索引为 `observed_at DESC`，反向扫描的隐含 rowid 顺序为 DESC；直接 `ORDER BY observed_at ASC, id ASC` 虽使用时间索引，仍会出现 `USE TEMP B-TREE FOR LAST TERM OF ORDER BY`。
+- 等价实现采用 `ORDER BY observed_at ASC, id DESC` 索引扫描，仅缓存当前时间戳组并反向输出，不做排序；跨 fetch 批次保持组完整。扫描上限切在组内时，按固定时间戳的 `id ASC LIMIT` 补读该组前缀，保证截断结果也等价于 `ASC, ASC LIMIT`。查询额外缓存最多一个时间戳组，组大小受 500000 行上限约束；聚合器仍只保留各序列状态和 top limit。
+- max_gap 改为 `max(3 × 配置采样间隔, 120s, 3 × 稳定中位数)`。采样间隔读取 `get_settings().history_settings.sample_seconds`，与启动时传给 `OpportunityHistoryRecorder` 的配置来源一致；无法读取或数值无效时用 120s。少于 31 个已有正间隔时不启用中位数；满 31 个后冻结，当前间隔仍先判 gap 再纳入估计。
+- 回归覆盖指定的重复时间戳样本（仅一个 below，samples=2）、0/60/360/…/9060 秒连续事件（ongoing，samples=32）、稳定阈值 900s 的严格边界和 901s 真实缺口、配置间隔在冷启动与稳定期的下限、配置缺失回退、跨批次和组内截断。
+- 从 backend 运行 `PYTHONPATH=. python -m pytest tests/test_spread_events.py -q`：**53 passed in 14.29s**。以下其他全量与性能数字为上一轮记录，本轮未重跑全量或基准。
+- 真实 schema / SQLite 3.49.1 的 EXPLAIN：主扫描和截断组补读均使用 `idx_opportunity_history_time`，symbol 筛选时使用 `idx_opportunity_history_symbol_time`；四条实际路径均无 `TEMP B-TREE`，测试同时断言该结论。
+
 ## 目标、范围与基线
 
 - 范围依据 `docs/spread-events-spec-2026-11-01.md` 及本轮用户返工要求；原任务书不修改。
@@ -25,8 +35,8 @@
 - 独立连接开启读事务，主扫描、超限探测及展示字段读取使用同一快照；连接用 closing 保证退出和异常时关闭。
 - 主扫描仅 SELECT opportunity_id、observed_at、所选 scaled 指标。游标 `fetchmany(5000)`；不 fetchall，不逐样本读取身份 JSON。
 - 每序列只保存当前事件、累计值、上一样本时间、最多 31 个采样间隔及其估计。已完成事件通过 heapq 仅保留排序需要的前 limit 个，最多 500；最后排序这些候选。
-- **新 max_gap 口径：每序列前 31 个正间隔的中位数，收满后冻结；没有间隔时按默认采集周期 120 秒估计。max_gap = max(120 秒, 3 × 估计间隔)。判断当前缺口时使用此前间隔的估计，再把本间隔加入估计；当前缺口不会抬高自己的判定阈值。**
-- 上述口径是用户批准的流式估计，替代原全窗口中位数；不追溯重算过去事件。冷启动 max_gap 为 360 秒；后续采样频率大幅变化或前 31 个间隔偏斜时可能影响缺口划分。
+- **二次复审后的 max_gap 口径：始终至少为 `max(120 秒, 3 × recorder 配置采样间隔)`，配置读取失败时按 120 秒；每序列收满前 31 个正间隔后才启用并冻结其中位数，取三者最大值。判断当前缺口先于加入本间隔；当前缺口不会抬高自己的判定阈值。**
+- 上述口径为流式估计，替代原全窗口中位数；不追溯重算过去事件。默认配置下冷启动 max_gap 为 360 秒；后续采样频率大幅变化或前 31 个间隔偏斜时可能影响缺口划分。
 - 缺口优先于回落、结束于缺口前样本；回落结束于首个低阈样本；ongoing 结束于最后观察样本，不外推查询尾部。仅超阈样本进入 peak/mean/samples；保留原 duration、阈值、排序、limit 和时间上限规则。
 - 最多扫描 500000 行；到上限后用同条件 EXISTS/OFFSET 探测是否截断，返回 truncated。展示身份只对入选序列查询一次该序列最后一条记录，时间不晚于已扫描尾部，同一序列多个入选事件复用结果。
 - 模块级 `asyncio.Semaphore(1)` 限制同一应用进程的查询并发；排队超过 5 秒返回 HTTP 429：`价差事件查询繁忙，等待超过 5 秒，请稍后重试。`

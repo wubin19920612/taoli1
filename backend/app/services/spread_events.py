@@ -10,6 +10,7 @@ from itertools import count
 from pathlib import Path
 from statistics import median
 
+from app.core.config import get_settings
 from app.db.repositories import PERCENT_SCALE
 from app.models.market_identity import MarketKey
 from app.models.spread_events import (
@@ -88,24 +89,34 @@ class _Event:
 
 @dataclass(slots=True)
 class _Series:
+    max_gap: float
     active: _Event | None = None
     total: float = 0
     previous: datetime | None = None
     intervals: list[float] = field(default_factory=list)
-    max_gap: float = 360
+
+
+def _configured_sample_seconds() -> float:
+    try:
+        # Same HistorySettings source passed to OpportunityHistoryRecorder at startup.
+        seconds = get_settings().history_settings.sample_seconds
+    except (AttributeError, TypeError, ValueError, OSError):
+        seconds = None
+    return _positive_number(seconds) or 120.0
 
 
 def aggregate_spread_events(rows, params: SpreadEventsParams) -> tuple[list[_Event], int]:
     """Consume time-ordered (series key, observed_at, scaled metric) tuples once.
 
     Estimate the median of the first 31 positive intervals per series, then freeze.
-    Before any interval, assume the default collector cadence of 120s.
-    max_gap = max(120s, 3 * estimate). Test each gap BEFORE adding that interval,
-    so the current outage cannot raise its own threshold. This is a streaming
-    estimate, not the former whole-window median; past events are not reclassified.
+    Until all 31 intervals exist, use max(120s, 3 * configured collector cadence).
+    Once stable, also include 3 * median in that maximum. Test each gap BEFORE
+    adding that interval, so the current outage cannot raise its own threshold.
+    This is a streaming estimate; past events are not reclassified.
     Memory is O(series * 31 + limit), independent of samples/events per series.
     """
     series: dict[str, _Series] = {}
+    minimum_max_gap = max(120.0, 3 * _configured_sample_seconds())
     sort_field = {"peak": "peak", "duration": "duration_s", "start": "start_at"}[params.sort]
     events = []
     sequence = count()
@@ -130,7 +141,7 @@ def aggregate_spread_events(rows, params: SpreadEventsParams) -> tuple[list[_Eve
     for key, observed_at, scaled_value in rows:
         state = series.get(key)
         if state is None:
-            state = series[key] = _Series()
+            state = series[key] = _Series(max_gap=minimum_max_gap)
         at = _utc(observed_at)
         if state.previous is not None:
             interval = (at - state.previous).total_seconds()
@@ -138,7 +149,8 @@ def aggregate_spread_events(rows, params: SpreadEventsParams) -> tuple[list[_Eve
                 finish(state, "gap", state.previous)
             if interval > 0 and len(state.intervals) < INTERVAL_ESTIMATE_SAMPLES:
                 state.intervals.append(interval)
-                state.max_gap = max(120.0, 3 * median(state.intervals))
+                if len(state.intervals) == INTERVAL_ESTIMATE_SAMPLES:
+                    state.max_gap = max(minimum_max_gap, 3 * median(state.intervals))
         value = scaled_value / PERCENT_SCALE
         if value >= params.threshold:
             if state.active is None:
@@ -171,17 +183,36 @@ def _query_spread_events(db_path: str | Path, params: SpreadEventsParams) -> Spr
 
         def rows():
             nonlocal scanned_rows, last_observed_at
-            # Bare timestamp bounds and index order; no identity JSON per sample.
+            # The DESC time index reverses to (observed_at ASC, rowid DESC).
+            # Asking SQLite for id ASC too would sort ties in a TEMP B-TREE.
+            # Reverse each timestamp group instead, yielding the equivalent
+            # (observed_at ASC, id ASC) stream, including across fetch batches.
+            pending = []
             with closing(db.execute(
                 f"SELECT opportunity_id, observed_at, {metric} FROM opportunity_history "
-                f"WHERE {where} ORDER BY observed_at ASC LIMIT ?",
+                f"WHERE {where} ORDER BY observed_at ASC, id DESC LIMIT ?",
                 [*values, MAX_SCANNED_ROWS],
             )) as cursor:
                 while batch := cursor.fetchmany(FETCH_BATCH_SIZE):
                     for row in batch:
+                        if pending and row[1] != last_observed_at:
+                            yield from reversed(pending)
+                            pending.clear()
                         scanned_rows += 1
                         last_observed_at = row[1]
-                        yield row
+                        pending.append(row)
+            if pending and scanned_rows == MAX_SCANNED_ROWS:
+                # LIMIT may cut a tie group in descending id order. Re-read its
+                # ascending prefix to preserve the same capped rows as ASC, ASC.
+                # With observed_at fixed, the time index supplies id ASC directly.
+                with closing(db.execute(
+                    f"SELECT opportunity_id, observed_at, {metric} FROM opportunity_history "
+                    f"WHERE {where} AND observed_at = ? ORDER BY id ASC LIMIT ?",
+                    [*values, last_observed_at, len(pending)],
+                )) as cursor:
+                    yield from cursor
+            else:
+                yield from reversed(pending)
 
         candidates, series_count = aggregate_spread_events(rows(), params)
         truncated = scanned_rows == MAX_SCANNED_ROWS and bool(db.execute(

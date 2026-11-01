@@ -34,16 +34,21 @@ def point(seconds, value, key="a", raw=None):
 
 
 def aggregate_spread_events(rows, query):
-    # Production supplies a single-pass SQL stream in global observed_at order.
+    # Production supplies a single-pass stream in (observed_at, id) order.
     field = "fee_adjusted_open_scaled" if query.metric == "fee_adjusted" else "open_spread_scaled"
     return spread_events.aggregate_spread_events(
         ((r["opportunity_id"], r["observed_at"], r[field])
-         for r in sorted(rows, key=lambda r: r["observed_at"])), query,
+         for r in sorted(rows, key=lambda r: (r["observed_at"], r["id"]))), query,
     )
 
 
 def params(**kwargs):
     return SpreadEventsParams(end_at=BASE + timedelta(hours=24), **kwargs)
+
+
+@pytest.fixture(autouse=True)
+def configured_history_cadence(monkeypatch):
+    monkeypatch.setattr(spread_events, "get_settings", lambda: Settings(history_sample_seconds=120))
 
 
 def test_below_threshold_peak_mean_and_inclusive_start():
@@ -70,7 +75,8 @@ def test_gap_closes_at_last_sample_and_restarts_as_ongoing():
     assert events[1].end_at == BASE + timedelta(seconds=120)
 
 
-def test_gap_floor_is_120_and_comparison_is_strict():
+def test_gap_floor_is_120_and_comparison_is_strict(monkeypatch):
+    monkeypatch.setattr(spread_events, "get_settings", lambda: Settings(history_sample_seconds=10))
     rows = [point(t, 0.5) for t in [0, 10, 20, 140, 261, 271, 281]]
     events, _ = aggregate_spread_events(rows, params(sort="start"))
     assert [e.duration_s for e in events] == [20, 140]
@@ -202,14 +208,91 @@ def test_streaming_gap_bootstrap_uses_default_cadence():
 
 
 def test_interval_estimate_freezes_after_first_31_positive_intervals():
-    early = [point(t, 0.5) for t in range(0, 32 * 10, 10)]
-    later = [point(310 + i * 100, 0.5) for i in range(1, 41)]
-    events, _ = aggregate_spread_events(early + later + [point(4500, 0.5)], params())
+    early = [point(t, 0.5) for t in range(0, 32 * 300, 300)]
+    later = [point(9300 + i * 100, 0.5) for i in range(1, 41)]
+    events, _ = aggregate_spread_events(
+        early + later + [point(13800, 0.5), point(14701, 0.5)], params(),
+    )
     assert len(events) == 2
-    assert sum(e.samples for e in events) == 73
+    assert sum(e.samples for e in events) == 74
+    assert next(e for e in events if e.end_reason == "gap").duration_s == 13800
 
 
-async def test_worker_uses_readonly_file_batches_index_and_selected_metadata(db, monkeypatch):
+def test_unstable_interval_estimate_does_not_split_continuous_event():
+    times = [0, 60, *range(360, 9061, 300)]
+    event, = aggregate_spread_events([point(t, 0.5) for t in times], params())[0]
+    assert event.end_reason == "ongoing"
+    assert event.duration_s == 9060
+    assert event.samples == len(times)
+
+
+@pytest.mark.parametrize("last_interval,expected_reasons", [
+    (900, ["ongoing"]), (901, ["ongoing", "gap"]),
+])
+def test_stable_median_extends_gap_limit_but_real_gap_still_closes(last_interval, expected_reasons):
+    times = [0, 60, *range(360, 9061, 300), 9060 + last_interval]
+    events, _ = aggregate_spread_events([point(t, 0.5) for t in times], params(sort="start"))
+    assert [e.end_reason for e in events] == expected_reasons
+    assert sum(e.samples for e in events) == len(times)
+    if last_interval > 900:
+        assert events[1].end_at == BASE + timedelta(seconds=9060)
+
+
+@pytest.mark.parametrize("warmup_samples", [1, 32])
+def test_configured_recorder_cadence_is_always_a_floor(monkeypatch, warmup_samples):
+    from app.services.history import OpportunityHistoryRecorder
+
+    settings = Settings(history_sample_seconds=240)
+    recorder = OpportunityHistoryRecorder(None, settings.history_settings)
+    monkeypatch.setattr(spread_events, "get_settings", lambda: settings)
+    boundary = warmup_samples - 1 + 3 * recorder.settings.sample_seconds
+    times = [*range(warmup_samples), boundary, boundary + 3 * recorder.settings.sample_seconds + 1]
+    events, _ = aggregate_spread_events([point(t, 0.5) for t in times], params(sort="start"))
+    assert [e.end_reason for e in events] == ["ongoing", "gap"]
+    assert events[1].end_at == BASE + timedelta(seconds=boundary)
+    assert events[1].samples == warmup_samples + 1
+
+
+def test_unavailable_recorder_configuration_falls_back_to_120_seconds(monkeypatch):
+    monkeypatch.setattr(spread_events, "get_settings", lambda: SimpleNamespace())
+    events, _ = aggregate_spread_events(
+        [point(0, 0.5), point(360, 0.5), point(721, 0.5)], params(sort="start"),
+    )
+    assert [e.end_reason for e in events] == ["ongoing", "gap"]
+    assert events[1].samples == 2
+
+
+@pytest.mark.parametrize("batch_size", [1, 2])
+@pytest.mark.parametrize("row_limit", [1, 2, 3, 500_000])
+async def test_sql_equal_timestamps_follow_insertion_order(db, monkeypatch, batch_size, row_limit):
+    samples = [point(0, 0.5), point(60, 0.5), point(60, 0.1)]
+    with sqlite3.connect(db) as connection:
+        connection.execute("DELETE FROM opportunity_history")
+        connection.executemany(
+            """INSERT INTO opportunity_history (
+                observed_at, opportunity_id, type, symbol,
+                buy_exchange, buy_market_type, sell_exchange, sell_market_type,
+                open_spread_scaled, close_spread_scaled, fee_adjusted_open_scaled, spread_width_scaled
+            ) VALUES (?, ?, 'FF', ?, ?, ?, ?, ?, ?, 0, ?, 0)""",
+            [[row[k] for k in ["observed_at", "opportunity_id", "symbol", "buy_exchange",
+                               "buy_market_type", "sell_exchange", "sell_market_type",
+                               "open_spread_scaled", "fee_adjusted_open_scaled"]] for row in samples],
+        )
+    monkeypatch.setattr(spread_events, "FETCH_BATCH_SIZE", batch_size)
+    monkeypatch.setattr(spread_events, "MAX_SCANNED_ROWS", row_limit)
+    result = await query_spread_events(db, params(threshold=0.3))
+    event, = result.events
+    assert event.end_reason == ("below" if row_limit >= 3 else "ongoing")
+    assert event.samples == min(row_limit, 2)
+    assert event.duration_s == (0 if row_limit == 1 else 60)
+    assert result.scanned_rows == min(row_limit, 3)
+    assert result.truncated == (row_limit < 3)
+
+
+@pytest.mark.parametrize("row_limit", [3, 500_000])
+@pytest.mark.parametrize("symbol", [None, "BTCUSDT"])
+async def test_worker_uses_readonly_file_batches_index_and_selected_metadata(db, monkeypatch,
+                                                                          row_limit, symbol):
     real_connect = sqlite3.connect
     calls, batches, threads, closed = [], [], [], []
 
@@ -223,7 +306,7 @@ async def test_worker_uses_readonly_file_batches_index_and_selected_metadata(db,
 
     class Connection(sqlite3.Connection):
         def execute(self, sql, parameters=()):
-            calls.append(sql)
+            calls.append((sql, parameters))
             return self.cursor(factory=Cursor).execute(sql, parameters)
 
         def close(self):
@@ -241,18 +324,22 @@ async def test_worker_uses_readonly_file_batches_index_and_selected_metadata(db,
 
     monkeypatch.setattr(spread_events.sqlite3, "connect", connect)
     monkeypatch.setattr(spread_events, "FETCH_BATCH_SIZE", 2)
-    result = await query_spread_events(db, params())
-    assert result.scanned_rows == 4
+    monkeypatch.setattr(spread_events, "MAX_SCANNED_ROWS", row_limit)
+    result = await query_spread_events(db, params(symbol=symbol))
+    assert result.scanned_rows == min(row_limit, 4)
     assert len(batches) >= 3 and set(batches) == {2}
     assert threads == closed and threads[0] != threading.get_ident()
-    scans = [sql for sql in calls if sql.startswith("SELECT opportunity_id")]
-    assert len(scans) == 1 and "market_identity_json" not in scans[0]
-    assert sum(sql.startswith("SELECT symbol,") for sql in calls) == 1
+    scans = [(sql, values) for sql, values in calls if sql.startswith("SELECT opportunity_id")]
+    assert len(scans) == (2 if row_limit == 3 else 1)
+    assert all("market_identity_json" not in sql for sql, _ in scans)
+    assert "ORDER BY observed_at ASC, id DESC" in scans[0][0]
+    assert sum(sql.startswith("SELECT symbol,") for sql, _ in calls) == 1
     with real_connect(db) as check:
-        plan = list(check.execute("EXPLAIN QUERY PLAN " + scans[0],
-                                 (BASE.isoformat(), params().end_at.isoformat(), 500_000)))
-    assert any("idx_opportunity_history_time" in row[3] for row in plan)
-    assert not any("TEMP B-TREE" in row[3] for row in plan)
+        for sql, values in scans:
+            plan = list(check.execute("EXPLAIN QUERY PLAN " + sql, values))
+            assert any("idx_opportunity_history_" in row[3] and "observed_at" in row[3]
+                       for row in plan)
+            assert not any("TEMP B-TREE" in row[3] for row in plan)
 
 
 @pytest.mark.parametrize("revision,unit_status,expected", [
