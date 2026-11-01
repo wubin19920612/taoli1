@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import hmac
+import json
 import time
 from datetime import UTC, datetime
 from urllib.parse import urlencode
@@ -95,7 +96,8 @@ class BybitFsProvider:
             if response.status_code == 429:
                 raise FsDataError("rate_limited")
             response.raise_for_status()
-            data = response.json()
+            content = response.content
+            data = await asyncio.to_thread(json.loads, content)
             code = data.get("retCode")
             if code in {10003, 10004, 10005, 10007, 10010, 33004}:
                 raise FsDataError("permission_denied")

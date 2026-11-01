@@ -1,6 +1,7 @@
 """Public-only FS sources. No keys, private requests, or inferred borrow rates."""
 
 import asyncio
+import json
 import time
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -66,6 +67,51 @@ def daily_to_hourly(value):
     return rate / 24 if rate is not None else None
 
 
+def _binance_specs(data):
+    """Copy only reader fields, preserving malformed filters for those readers."""
+    fields = (
+        "symbol", "status", "baseAsset", "quoteAsset", "contractType",
+        "marginAsset", "isMarginTradingAllowed",
+    )
+    filter_fields = {
+        "LOT_SIZE": ("filterType", "stepSize", "minQty"),
+        "NOTIONAL": ("filterType", "minNotional", "notional"),
+        "MIN_NOTIONAL": ("filterType", "minNotional", "notional"),
+    }
+    specs = {}
+    try:
+        for item in data["symbols"]:
+            symbol = item["symbol"]
+            spec = {name: item[name] for name in fields if name in item}
+            if "filters" in item:
+                filters = item["filters"]
+                if isinstance(filters, list):
+                    spec["filters"] = []
+                    for rule in filters:
+                        # Malformed entries must still fail in the reader,
+                        # not in borrow_reference's shared cache refresh.
+                        if not isinstance(rule, dict):
+                            spec["filters"].append(rule)
+                            continue
+                        kind = rule.get("filterType")
+                        if isinstance(kind, str):
+                            if kind not in filter_fields:
+                                continue
+                            names = filter_fields[kind]
+                        else:
+                            names = ("filterType",)
+                        spec["filters"].append(
+                            {name: rule[name] for name in names if name in rule}
+                        )
+                else:
+                    spec["filters"] = filters
+            specs[symbol] = spec
+    finally:
+        # Worker exceptions can retain this frame as well as the async caller.
+        data = item = filters = rule = None
+    return specs
+
+
 class PublicFsProvider:
     def __init__(self, exchange, store, client=None):
         self.exchange, self.store = exchange, store
@@ -94,7 +140,8 @@ class PublicFsProvider:
         try:
             r = await self.client.get(host + path, params=params)
             r.raise_for_status()
-            data = r.json()
+            content = r.content
+            data = await asyncio.to_thread(json.loads, content)
             at = datetime.now(UTC)
             if self.exchange in {"okx", "bitget"}:
                 if data.get("code") not in {"0", "00000"}:
@@ -359,46 +406,15 @@ class PublicFsProvider:
         data, at = await self.get(
             "/fapi/v1/exchangeInfo" if futures else "/api/v3/exchangeInfo", futures=futures
         )
-        fields = (
-            "symbol", "status", "baseAsset", "quoteAsset", "contractType",
-            "marginAsset", "isMarginTradingAllowed",
-        )
-        filter_fields = {
-            "LOT_SIZE": ("filterType", "stepSize", "minQty"),
-            "NOTIONAL": ("filterType", "minNotional", "notional"),
-            "MIN_NOTIONAL": ("filterType", "minNotional", "notional"),
-        }
-        specs = {}
+        payload = [data]
         try:
-            for item in data["symbols"]:
-                symbol = item["symbol"]
-                spec = {name: item[name] for name in fields if name in item}
-                if "filters" in item:
-                    filters = item["filters"]
-                    if isinstance(filters, list):
-                        spec["filters"] = []
-                        for rule in filters:
-                            # Malformed entries must still fail in the reader,
-                            # not in borrow_reference's shared cache refresh.
-                            if not isinstance(rule, dict):
-                                spec["filters"].append(rule)
-                                continue
-                            kind = rule.get("filterType")
-                            if isinstance(kind, str):
-                                if kind not in filter_fields:
-                                    continue
-                                names = filter_fields[kind]
-                            else:
-                                names = ("filterType",)
-                            spec["filters"].append(
-                                {name: rule[name] for name in names if name in rule}
-                            )
-                    else:
-                        spec["filters"] = filters
-                specs[symbol] = spec
+            # Consume a holder so to_thread's traceback cannot retain the raw
+            # payload in its args tuple after the extraction function fails.
+            specs = await asyncio.to_thread(lambda: _binance_specs(payload.pop()))
         finally:
             # Also release raw payloads when a caller retains an error traceback.
-            data = item = filters = rule = None
+            data = None
+            payload.clear()
         result = (specs, at)
         self.cache[key] = result
         return result

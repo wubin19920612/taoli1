@@ -1,4 +1,5 @@
 import asyncio
+import gc
 import io
 import json
 import logging
@@ -244,3 +245,45 @@ def test_watchdog_stop_joins_with_one_second_timeout():
     watchdog.thread = Mock()
     watchdog.stop()
     watchdog.thread.join.assert_called_once_with(timeout=1.0)
+
+
+def test_stall_gc_counters_cover_interval_and_reset(output, monkeypatch):
+    watchdog, now, _ = fake_watchdog(monkeypatch)
+    monitor = watchdog.gc_monitor
+    monitor.start()
+    try:
+        now[0] = 1.1
+        watchdog._check()
+        gc.collect(2)
+        watchdog._heartbeat = now[0] = 1.5
+        watchdog._check()
+        row, = records(output)
+        assert row["gc_ms"] > 0
+        assert row["gc_gen2"] >= 1
+        now[0] = 2.6
+        watchdog._check()
+        watchdog._heartbeat = now[0] = 3.0
+        watchdog._check()
+        assert records(output)[-1]["gc_ms"] == 0
+        assert records(output)[-1]["gc_gen2"] == 0
+    finally:
+        monitor.stop()
+
+
+def test_stall_gc_includes_pause_before_detection_and_excludes_after_recovery(output, monkeypatch):
+    watchdog, now, _ = fake_watchdog(monkeypatch)
+    # Deterministic snapshots model a pause that finishes before the observer
+    # gets the GIL, and a later collection after the recovered heartbeat.
+    totals = [(12.0, 1)]
+    monkeypatch.setattr(watchdog.gc_monitor, "snapshot", lambda: totals[0])
+    watchdog._beat()
+    totals[0] = (262.0, 2)
+    now[0] = 1.1
+    watchdog._check()
+    now[0] = 1.5
+    watchdog._beat()
+    totals[0] = (312.0, 3)
+    watchdog._check()
+    row, = records(output)
+    assert row["gc_ms"] == 250.0
+    assert row["gc_gen2"] == 1

@@ -4,6 +4,7 @@ import asyncio
 import gc
 import json
 import sys
+import threading
 import weakref
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
@@ -448,20 +449,24 @@ class WeakDict(dict):
 
 @pytest.mark.parametrize("futures", [False, True])
 @pytest.mark.parametrize("missing_symbol", [False, True], ids=["success", "traceback"])
-async def test_decoded_payload_and_raw_symbol_dicts_are_released(clock, futures, missing_symbol):
+async def test_decoded_payload_and_raw_symbol_dicts_are_released(
+    clock, futures, missing_symbol, monkeypatch,
+):
     references = []
+    original_loads = json.loads
 
-    class TrackingResponse(httpx.Response):
-        def json(self, **kwargs):
-            payload = WeakDict(super().json(**kwargs))
-            payload["symbols"] = [WeakDict(item) for item in payload["symbols"]]
-            references.extend(weakref.ref(value) for value in [payload, *payload["symbols"]])
-            if missing_symbol:
-                del payload["symbols"][-1]["symbol"]
-            return payload
+    def tracking_loads(content, **kwargs):
+        payload = WeakDict(original_loads(content, **kwargs))
+        payload["symbols"] = [WeakDict(item) for item in payload["symbols"]]
+        references.extend(weakref.ref(value) for value in [payload, *payload["symbols"]])
+        if missing_symbol:
+            del payload["symbols"][-1]["symbol"]
+        return payload
+
+    monkeypatch.setattr(json, "loads", tracking_loads)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(
-        lambda request: TrackingResponse(200, json=exchange_info(3, futures=futures))
+        lambda request: httpx.Response(200, json=exchange_info(3, futures=futures))
     )) as client:
         provider = PublicFsProvider("binance", None, client)
         if missing_symbol:
@@ -475,3 +480,49 @@ async def test_decoded_payload_and_raw_symbol_dicts_are_released(clock, futures,
         gc.collect()
         assert len(references) == 4
         assert all(ref() is None for ref in references)
+
+
+async def test_binance_spec_extraction_runs_in_worker_and_preserves_fields(clock):
+    main_thread = threading.get_ident()
+    visited = []
+
+    class Symbols(list):
+        def __iter__(self):
+            visited.append(threading.get_ident())
+            return super().__iter__()
+
+    body = exchange_info()
+    body["symbols"] = Symbols(body["symbols"])
+    provider = PublicFsProvider("binance", None)
+
+    async def get(*args, **kwargs):
+        return body, clock.current
+
+    provider.get = get
+    specs, at = await provider.binance_specs(False)
+    assert at == clock.current
+    assert specs == {"ABCUSDT": {
+        "symbol": "ABCUSDT", "status": "TRADING", "baseAsset": "ABC", "quoteAsset": "USDT",
+        "contractType": "PERPETUAL", "marginAsset": "USDT", "isMarginTradingAllowed": True,
+        "filters": [
+            {"filterType": "LOT_SIZE", "stepSize": "0.00100000", "minQty": "0.01000000"},
+            {"filterType": "NOTIONAL", "minNotional": "5.00000000"},
+        ],
+    }}
+    assert visited and all(ident != main_thread for ident in visited)
+
+
+async def test_malformed_filters_fail_in_reader_after_shared_cache_refresh(clock):
+    body = exchange_info()
+    body["symbols"][0]["filters"].append({"filterType": {"malformed": "private"}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, json=body)
+    )) as client:
+        provider = PublicFsProvider("binance", None, client)
+        rates, at = await provider.borrow_reference()
+        assert rates["ABC"]["marginTradingAllowed"] is True
+        assert at == clock.current
+        assert ("binance_specs", False) in provider.cache
+        with pytest.raises(TypeError, match="unhashable"):
+            await provider.current_instruments("ABCUSDT")

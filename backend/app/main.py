@@ -12,6 +12,7 @@ from uuid import NAMESPACE_URL, uuid5
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.runtime.gc_pause import GcPauseMonitor
 from app.runtime.loop_stall_watchdog import LoopStallWatchdog
 from app.runtime.supervisor import TaskSupervisor, beat
 
@@ -1136,7 +1137,10 @@ def create_app(
         if start_background_workers and app_settings.memory_probe_enabled:
             supervisor.enable_memory_probe()
         supervisor.start("event-loop-lag", supervisor.loop_lag.run, restart=True, critical=False)
-        loop_stall_watchdog = LoopStallWatchdog()
+        gc_pause_monitor = GcPauseMonitor()
+        app.state.gc_pause_monitor = gc_pause_monitor
+        supervisor.start("gc-pause-log", gc_pause_monitor.run, restart=False, critical=False)
+        loop_stall_watchdog = LoopStallWatchdog(gc_monitor=gc_pause_monitor)
         app.state.loop_stall_watchdog = loop_stall_watchdog
         if loop_stall_watchdog.enabled:
             supervisor.start(
