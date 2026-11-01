@@ -16,6 +16,18 @@ OPTIONAL_FEATURES = frozenset({
 })
 
 
+def _bounded_alert_number(value, default, upper, *, integer=False):
+    try:
+        number = int(value) if integer else float(value)
+        if isinstance(value, bool) or not math.isfinite(number) or not 1 <= number <= upper:
+            return default
+        if integer and number != float(value):
+            return default
+        return number
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
 @dataclass(frozen=True)
 class Settings:
     app_name: str = "Arbitrage Radar"
@@ -24,6 +36,9 @@ class Settings:
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     database_url: str = "sqlite:///./data/radar.db"
     poll_interval_seconds: float = 5.0
+    alert_match_concurrency: int = 3
+    alert_diagnostic_timeout_seconds: float = 20.0
+    alert_orderbook_timeout_seconds: float = 15.0
     memory_probe_enabled: bool = False
     memory_probe_interval_seconds: float = 10.0
     memory_census_enabled: bool = False
@@ -89,6 +104,14 @@ class Settings:
     astro_request_timeout_seconds: float = 10.0
 
     def __post_init__(self) -> None:
+        for name, default, upper, integer in (
+            ("alert_match_concurrency", 3, 8, True),
+            ("alert_diagnostic_timeout_seconds", 20.0, 120, False),
+            ("alert_orderbook_timeout_seconds", 15.0, 120, False),
+        ):
+            object.__setattr__(self, name, _bounded_alert_number(
+                getattr(self, name), default, upper, integer=integer,
+            ))
         disabled = frozenset(key.strip().lower() for key in self.disabled_features if key.strip())
         unknown = disabled - OPTIONAL_FEATURES
         if unknown:
@@ -218,6 +241,15 @@ def get_settings() -> Settings:
         cors_origins=os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"),
         database_url=database_url,
         poll_interval_seconds=float(os.getenv("POLL_INTERVAL_SECONDS", "5")),
+        alert_match_concurrency=_bounded_alert_number(
+            os.getenv("ALERT_MATCH_CONCURRENCY", "3"), 3, 8, integer=True,
+        ),
+        alert_diagnostic_timeout_seconds=_bounded_alert_number(
+            os.getenv("ALERT_DIAGNOSTIC_TIMEOUT_SECONDS", "20"), 20.0, 120,
+        ),
+        alert_orderbook_timeout_seconds=_bounded_alert_number(
+            os.getenv("ALERT_ORDERBOOK_TIMEOUT_SECONDS", "15"), 15.0, 120,
+        ),
         memory_probe_enabled=bool_env("MEMORY_PROBE_ENABLED", False),
         memory_probe_interval_seconds=float(os.getenv("MEMORY_PROBE_INTERVAL_SECONDS", "10")),
         memory_census_enabled=bool_env("MEMORY_CENSUS_ENABLED", False),

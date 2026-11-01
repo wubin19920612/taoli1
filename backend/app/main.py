@@ -1,10 +1,12 @@
 import asyncio
+import json
 import logging
 import os
 import sqlite3
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from datetime import UTC, datetime, timedelta
-from typing import AsyncIterator
+from time import monotonic
+from typing import AsyncIterator, Iterator
 from uuid import NAMESPACE_URL, uuid5
 
 from fastapi import Depends, FastAPI
@@ -426,8 +428,285 @@ async def _restore_alert_delivery_state(app: FastAPI) -> None:
             logger.exception("recovered alert delivery state write failed: %s", key)
 
 
+async def _process_alert_match(
+    app: FastAPI,
+    match: AlertMatch,
+    settings: RiskSettings,
+    alert_template: AlertMessageTemplateSettings,
+    live_pilot_settings: LivePilotSettings,
+    live_pilot_match_keys: set[tuple[str, str]],
+    delivery_store: AlertDeliveryStore,
+    event_repo: AlertEventRepository,
+    write_lock: asyncio.Lock,
+    app_settings: Settings,
+) -> bool:
+    # Only fixed metadata and durations belong in this log, never messages/settings.
+    key = f"{match.rule.id}:{match.opportunity.id}"
+    started = monotonic()
+    durations: dict[str, float | None] = {
+        "diag_ms": None, "orderbook_ms": None, "astro_ms": None, "feishu_ms": None,
+    }
+    timeouts: list[str] = []
+
+    @contextmanager
+    def timed(stage: str) -> Iterator[None]:
+        stage_started = monotonic()
+        try:
+            yield
+        finally:
+            durations[f"{stage}_ms"] = (monotonic() - stage_started) * 1000
+
+    status = "sent"
+    try:
+        card_summary = "未创建（自动建卡未启用）"
+        card_condition_failure = False
+        existing_card_skipped = False
+        signal_condition_failure = False
+        is_live_pilot_match = (match.rule.id, match.opportunity.id) in live_pilot_match_keys
+        latest_opportunity = _find_latest_opportunity(app, match.opportunity.id)
+        message = build_alert_message(
+            match.rule,
+            latest_opportunity or match.opportunity,
+            observations=match.observations,
+            template=alert_template,
+            include_rating=False,
+        )
+        availability_report = None
+        trade_availability_service = getattr(
+            app.state,
+            "trade_availability_service",
+            None,
+        )
+        if trade_availability_service is not None:
+            try:
+                with timed("diag"):
+                    availability_report = await asyncio.wait_for(
+                        build_opportunity_trade_availability_report(
+                            trade_availability_service,
+                            latest_opportunity or match.opportunity,
+                        ),
+                        timeout=getattr(app_settings, "alert_diagnostic_timeout_seconds", 20.0),
+                    )
+            except Exception as exc:  # Keep the original alert deliverable.
+                logger.exception("trade availability alert enrichment failed")
+                diagnostic_error = _exception_message(exc)
+                if isinstance(exc, TimeoutError):
+                    timeouts.append("diag")
+                    diagnostic_error = "超时"
+                availability_report = OpportunityTradeAvailabilityReport(
+                    text=(
+                        "【交易与充提状态】\n"
+                        f"诊断：未知（{diagnostic_error}）\n"
+                        "口径：诊断失败不等于交易或充提关闭；未发送探测订单。"
+                    ),
+                    opening_restricted=True,
+                )
+            message = f"{message}\n\n{availability_report.text}"
+        validation_failure = _latest_signal_validation_failure(
+            match,
+            latest_opportunity,
+            settings,
+            datetime.now(UTC),
+        )
+        if validation_failure is not None:
+            signal_condition_failure = True
+            card_summary = "未创建（最新信号校验未通过）"
+            message = (
+                f"{message}\n\n"
+                f"Astro: 最新信号校验未通过：{validation_failure}"
+            )
+        astro_alert_service: AstroAlertService | None = getattr(
+            app.state,
+            "astro_alert_service",
+            None,
+        )
+        astro_processing_failed = False
+        if astro_alert_service is not None and not signal_condition_failure:
+            try:
+                card_settings = _astro_card_settings_for_opportunity(
+                    astro_alert_service,
+                    latest_opportunity,
+                )
+                if is_live_pilot_match and card_settings is not None:
+                    card_settings = live_pilot_card_settings(
+                        card_settings,
+                        live_pilot_settings,
+                    )
+                plan_failure = _astro_plan_validation_failure(
+                    latest_opportunity,
+                    card_settings,
+                )
+                if plan_failure is not None:
+                    card_condition_failure = True
+                    card_summary = "未创建（卡片参数校验未通过）"
+                    message = (
+                        f"{message}\n\n"
+                        f"Astro: 卡片参数校验未通过：{plan_failure}"
+                    )
+                else:
+                    order_book_timed_out = False
+                    try:
+                        with timed("orderbook"):
+                            order_book_failure = await asyncio.wait_for(
+                                _order_book_validation_failure(
+                                    app,
+                                    latest_opportunity,
+                                    settings,
+                                    card_settings,
+                                    override_notional_usdt=(
+                                        live_pilot_settings.notional_per_symbol_usdt
+                                        if is_live_pilot_match
+                                        else None
+                                    ),
+                                ),
+                                timeout=getattr(app_settings, "alert_orderbook_timeout_seconds", 15.0),
+                            )
+                    except TimeoutError:
+                        order_book_timed_out = True
+                        timeouts.append("orderbook")
+                    if order_book_timed_out:
+                        card_condition_failure = True
+                        card_summary = "未创建（订单簿校验超时）"
+                        message = f"{message}\n\nAstro: 订单簿校验超时"
+                    elif order_book_failure is not None:
+                        card_condition_failure = True
+                        card_summary = "未创建（订单簿校验未通过）"
+                        message = (
+                            f"{message}\n\n"
+                            f"Astro: 订单簿校验未通过：{order_book_failure}"
+                        )
+                    else:
+                        # No outer wait_for: cancelling add can leave an S7-B attempt
+                        # unknown. Astro already enforces its own HTTP timeout.
+                        with timed("astro"):
+                            astro_result = await (
+                                astro_alert_service.handle_live_pilot(latest_opportunity)
+                                if is_live_pilot_match
+                                else astro_alert_service.handle_alert(latest_opportunity)
+                            )
+                        if astro_result.status == "skipped" and astro_result.action in {
+                            "unsupported",
+                            "conflict",
+                        }:
+                            card_condition_failure = True
+                        if astro_result.status == "skipped" and astro_result.action == "existing":
+                            existing_card_skipped = True
+                        if astro_result.status == "created":
+                            card_summary = "已创建"
+                        elif astro_result.status == "updated":
+                            card_summary = "已更新"
+                        elif astro_result.action == "existing":
+                            card_summary = "已有卡片"
+                        else:
+                            card_summary = f"未创建（{astro_result.message[:80]}）"
+                        message = f"{message}\n\n{astro_result.format_message()}"
+            except Exception as exc:  # noqa: BLE001 - keep alert delivery independent.
+                logger.exception("astro alert follow-up failed")
+                astro_processing_failed = True
+                card_summary = "未创建（Astro 处理失败）"
+                message = f"{message}\n\nAstro: 处理失败，{_exception_message(exc)}"
+        rating_header = build_alert_rating_header(
+            match.rule,
+            latest_opportunity or match.opportunity,
+            include_reason=(
+                alert_template.include_funding
+                and alert_template.include_volume
+                and alert_template.include_risk
+            ),
+            validation_failed=(
+                signal_condition_failure
+                or card_condition_failure
+                or existing_card_skipped
+                or astro_processing_failed
+                or (
+                    availability_report is not None
+                    and availability_report.opening_restricted
+                )
+            ),
+        )
+        message = f"{rating_header}\n\n{message}"
+        if alert_template.format == "compact":
+            message = build_alert_message(
+                match.rule,
+                latest_opportunity or match.opportunity,
+                template=alert_template,
+            )
+            message += f"\n卡片：{card_summary}"
+            if availability_report is not None and availability_report.opening_restricted:
+                message += "\n交易状态：需核实开仓可用性"
+        if signal_condition_failure or existing_card_skipped:
+            status = "muted"
+        elif alert_template.suppress_when_card_conditions_fail and card_condition_failure:
+            status = "muted"
+        elif not getattr(app.state, "feishu_live_send_enabled", True):
+            status = "muted"
+            message = f"{message}\n\n飞书实时发送未启用"
+        else:
+            try:
+                async with write_lock:
+                    await delivery_store.mark_pending(key, datetime.now(UTC))
+            except Exception:
+                logger.exception("alert delivery pending write failed: %s", key)
+                return True
+            try:
+                # Feishu also has an HTTP timeout; do not cancel an in-flight send
+                # with a new stage deadline or hold the database lock across it.
+                with timed("feishu"):
+                    await app.state.feishu_notifier.send_alert(
+                        match.rule,
+                        match.opportunity,
+                        observations=match.observations,
+                        template=alert_template,
+                        prebuilt_text=message,
+                    )
+            except Exception as exc:  # noqa: BLE001 - preserve event even when webhook fails.
+                status = "failed"
+                message = f"{message}\n\n飞书发送失败：{exc}"
+        event = AlertEvent(
+            rule_id=match.rule.id,
+            opportunity_id=match.opportunity.id,
+            symbol=match.opportunity.symbol,
+            status=status,
+            message=message,
+            created_at=datetime.now(UTC),
+        )
+        app.state.alert_engine.record_delivery_result(match, status, now=event.created_at)
+        state = app.state.alert_engine.export_state(key)
+        try:
+            async with write_lock:
+                await delivery_store.record(
+                    key, state.last_sent_at, state.retry_after, state.retry_attempts,
+                )
+        except Exception:
+            # The send already happened; still keep its audit event.
+            logger.exception("alert delivery state write failed: %s", key)
+        try:
+            async with write_lock:
+                await event_repo.create(event)
+        except Exception:
+            logger.exception("alert event write failed: %s", key)
+            return True
+        return True
+    except asyncio.CancelledError:
+        status = "cancelled"
+        raise
+    except Exception:
+        status = "failed"
+        logger.exception("alert match processing failed: %s", key)
+        return False
+    finally:
+        logger.info(json.dumps(
+            {"alert_timing": 1, "key": key, "symbol": match.opportunity.symbol,
+             "status": status, **durations, "total_ms": (monotonic() - started) * 1000,
+             "timeouts": timeouts},
+            separators=(",", ":"),
+        ))
+
+
 async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asyncio.Event) -> None:
     last_delivery_prune: datetime | None = None
+    write_lock = asyncio.Lock()
+    app_settings = getattr(app.state, "settings", Settings())
     while not stop_event.is_set():
         try:
             repo: AlertRuleRepository = app.state.alert_rule_repo
@@ -496,212 +775,34 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                     if (match.rule.id, match.opportunity.id) not in live_pilot_match_keys
                 ),
             ]
-            for match in ordered_matches:
-                status = "sent"
-                card_summary = "未创建（自动建卡未启用）"
-                card_condition_failure = False
-                existing_card_skipped = False
-                signal_condition_failure = False
-                is_live_pilot_match = (match.rule.id, match.opportunity.id) in live_pilot_match_keys
-                latest_opportunity = _find_latest_opportunity(app, match.opportunity.id)
-                message = build_alert_message(
-                    match.rule,
-                    latest_opportunity or match.opportunity,
-                    observations=match.observations,
-                    template=alert_template,
-                    include_rating=False,
-                )
-                availability_report = None
-                trade_availability_service = getattr(
-                    app.state,
-                    "trade_availability_service",
-                    None,
-                )
-                if trade_availability_service is not None:
-                    try:
-                        availability_report = await build_opportunity_trade_availability_report(
-                            trade_availability_service,
-                            latest_opportunity or match.opportunity,
-                        )
-                    except Exception as exc:  # Keep the original alert deliverable.
-                        logger.exception("trade availability alert enrichment failed")
-                        availability_report = OpportunityTradeAvailabilityReport(
-                            text=(
-                                "【交易与充提状态】\n"
-                                f"诊断：未知（{_exception_message(exc)}）\n"
-                                "口径：诊断失败不等于交易或充提关闭；未发送探测订单。"
-                            ),
-                            opening_restricted=True,
-                        )
-                    message = f"{message}\n\n{availability_report.text}"
-                validation_failure = _latest_signal_validation_failure(
-                    match,
-                    latest_opportunity,
-                    settings,
-                    now,
-                )
-                if validation_failure is not None:
-                    signal_condition_failure = True
-                    card_summary = "未创建（最新信号校验未通过）"
-                    message = (
-                        f"{message}\n\n"
-                        f"Astro: 最新信号校验未通过：{validation_failure}"
+            semaphore = asyncio.Semaphore(getattr(
+                app_settings, "alert_match_concurrency", Settings.alert_match_concurrency,
+            ))
+
+            async def process_bounded(match: AlertMatch) -> bool:
+                async with semaphore:
+                    return await _process_alert_match(
+                        app, match, settings, alert_template, live_pilot_settings,
+                        live_pilot_match_keys, delivery_store, event_repo, write_lock,
+                        app_settings,
                     )
-                astro_alert_service: AstroAlertService | None = getattr(
-                    app.state,
-                    "astro_alert_service",
-                    None,
-                )
-                astro_processing_failed = False
-                if astro_alert_service is not None and not signal_condition_failure:
-                    try:
-                        card_settings = _astro_card_settings_for_opportunity(
-                            astro_alert_service,
-                            latest_opportunity,
-                        )
-                        if is_live_pilot_match and card_settings is not None:
-                            card_settings = live_pilot_card_settings(
-                                card_settings,
-                                live_pilot_settings,
-                            )
-                        plan_failure = _astro_plan_validation_failure(
-                            latest_opportunity,
-                            card_settings,
-                        )
-                        if plan_failure is not None:
-                            card_condition_failure = True
-                            card_summary = "未创建（卡片参数校验未通过）"
-                            message = (
-                                f"{message}\n\n"
-                                f"Astro: 卡片参数校验未通过：{plan_failure}"
-                            )
-                        else:
-                            order_book_failure = await _order_book_validation_failure(
-                                app,
-                                latest_opportunity,
-                                settings,
-                                card_settings,
-                                override_notional_usdt=(
-                                    live_pilot_settings.notional_per_symbol_usdt
-                                    if is_live_pilot_match
-                                    else None
-                                ),
-                            )
-                            if order_book_failure is not None:
-                                card_condition_failure = True
-                                card_summary = "未创建（订单簿校验未通过）"
-                                message = (
-                                    f"{message}\n\n"
-                                    f"Astro: 订单簿校验未通过：{order_book_failure}"
-                                )
-                            else:
-                                astro_result = await (
-                                    astro_alert_service.handle_live_pilot(latest_opportunity)
-                                    if is_live_pilot_match
-                                    else astro_alert_service.handle_alert(latest_opportunity)
-                                )
-                                if astro_result.status == "skipped" and astro_result.action in {
-                                    "unsupported",
-                                    "conflict",
-                                }:
-                                    card_condition_failure = True
-                                if astro_result.status == "skipped" and astro_result.action == "existing":
-                                    existing_card_skipped = True
-                                if astro_result.status == "created":
-                                    card_summary = "已创建"
-                                elif astro_result.status == "updated":
-                                    card_summary = "已更新"
-                                elif astro_result.action == "existing":
-                                    card_summary = "已有卡片"
-                                else:
-                                    card_summary = f"未创建（{astro_result.message[:80]}）"
-                                message = f"{message}\n\n{astro_result.format_message()}"
-                    except Exception as exc:  # noqa: BLE001 - keep alert delivery independent.
-                        logger.exception("astro alert follow-up failed")
-                        astro_processing_failed = True
-                        card_summary = "未创建（Astro 处理失败）"
-                        message = f"{message}\n\nAstro: 处理失败，{_exception_message(exc)}"
-                rating_header = build_alert_rating_header(
-                    match.rule,
-                    latest_opportunity or match.opportunity,
-                    include_reason=(
-                        alert_template.include_funding
-                        and alert_template.include_volume
-                        and alert_template.include_risk
-                    ),
-                    validation_failed=(
-                        signal_condition_failure
-                        or card_condition_failure
-                        or existing_card_skipped
-                        or astro_processing_failed
-                        or (
-                            availability_report is not None
-                            and availability_report.opening_restricted
-                        )
-                    ),
-                )
-                message = f"{rating_header}\n\n{message}"
-                key = f"{match.rule.id}:{match.opportunity.id}"
-                if alert_template.format == "compact":
-                    message = build_alert_message(
-                        match.rule,
-                        latest_opportunity or match.opportunity,
-                        template=alert_template,
-                    )
-                    message += f"\n卡片：{card_summary}"
-                    if availability_report is not None and availability_report.opening_restricted:
-                        message += "\n交易状态：需核实开仓可用性"
-                if signal_condition_failure or existing_card_skipped:
-                    status = "muted"
-                elif alert_template.suppress_when_card_conditions_fail and card_condition_failure:
-                    status = "muted"
-                elif not getattr(app.state, "feishu_live_send_enabled", True):
-                    status = "muted"
-                    message = f"{message}\n\n飞书实时发送未启用"
-                else:
-                    try:
-                        await delivery_store.mark_pending(key, datetime.now(UTC))
-                    except Exception:
-                        logger.exception("alert delivery pending write failed: %s", key)
-                        continue
-                    try:
-                        await app.state.feishu_notifier.send_alert(
-                            match.rule,
-                            match.opportunity,
-                            observations=match.observations,
-                            template=alert_template,
-                            prebuilt_text=message,
-                        )
-                    except Exception as exc:  # noqa: BLE001 - preserve event even when webhook fails.
-                        status = "failed"
-                        message = f"{message}\n\n飞书发送失败：{exc}"
-                event = AlertEvent(
-                    rule_id=match.rule.id,
-                    opportunity_id=match.opportunity.id,
-                    symbol=match.opportunity.symbol,
-                    status=status,
-                    message=message,
-                    created_at=datetime.now(UTC),
-                )
-                app.state.alert_engine.record_delivery_result(match, status, now=event.created_at)
-                state = app.state.alert_engine.export_state(key)
-                try:
-                    await delivery_store.record(
-                        key, state.last_sent_at, state.retry_after, state.retry_attempts,
-                    )
-                except Exception:
-                    # The send already happened; still keep its audit event.
-                    logger.exception("alert delivery state write failed: %s", key)
-                try:
-                    await event_repo.create(event)
-                except Exception:
-                    logger.exception("alert event write failed: %s", key)
-                    continue
+
+            # Task creation preserves live-pilot priority at semaphore admission.
+            tasks = [asyncio.create_task(process_bounded(match)) for match in ordered_matches]
+            try:
+                results = await asyncio.gather(*tasks)
+            except asyncio.CancelledError:
+                # gather does not cancel siblings when a child itself is cancelled.
+                # Drain them before leaving the round so no match is orphaned.
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                raise
         except Exception:
             beat("alert-loop", ok=False)
             logger.exception("alert loop failed")
         else:
-            beat("alert-loop", ok=True)
+            beat("alert-loop", ok=all(results))
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
         except TimeoutError:
