@@ -31,7 +31,7 @@ class GcPauseMonitor:
         self._started: list[float | None] = [None, None, None]
         # Publish both counters together for the watchdog's observer thread.
         self._totals = (0.0, 0)
-        self._pending: deque[tuple[int, float]] = deque(maxlen=5)
+        self._pending: deque[tuple[int, float, int]] = deque(maxlen=5)
         self._emitted: deque[float] = deque()
 
     def start(self) -> None:
@@ -62,13 +62,13 @@ class GcPauseMonitor:
                 self._totals = (total_ms + milliseconds, gen2 + int(generation == 2))
                 if self.enabled and milliseconds >= self.threshold_ms:
                     # Five small scalar records at most; never retain GC objects/frames.
-                    self._pending.append((generation, milliseconds))
+                    self._pending.append((generation, milliseconds, int(info.get("collected", 0))))
         except Exception:  # noqa: BLE001, S110 - GC diagnostics cannot affect collection.
             pass
 
     def flush(self) -> None:
         while self._pending:
-            generation, milliseconds = self._pending.popleft()
+            generation, milliseconds, collected = self._pending.popleft()
             try:
                 now = self.clock()
                 while self._emitted and self._emitted[0] <= now - 60:
@@ -79,6 +79,7 @@ class GcPauseMonitor:
                 self._emitted.append(now)
                 logger.info(json.dumps({
                     "gc_pause": 1, "gen": generation, "ms": round(milliseconds, 3),
+                    "collected": collected,
                 }, separators=(",", ":"), allow_nan=False))
             except Exception:  # noqa: BLE001, S110 - broken logging must stay isolated.
                 pass

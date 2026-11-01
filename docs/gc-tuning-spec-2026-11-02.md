@@ -47,3 +47,78 @@
 ## 上线后观察（Claude 做）
 - 对比 `gc_collections`、`gc_pause` 的条数和耗时、loop_stall 次数、RSS。
 - 如果 RSS 比 ae241bf 时上涨超过 15%，或出现内存溢出，就在 .env 里设 `GC_TUNING_ENABLED=false` 并重启。改 .env 前先问用户。
+
+## Codex 本地交接记录
+
+- 日期：2026-11-02；模块：后端 GC 调参与运行时诊断。
+- 工作分支：`codex/gc-tuning`；基线：`32eb803eddc73b4c51747c964ff091343f4981ad`；开始时工作区干净。
+- 交付范围为本地实现、测试、基准和一次提交；没有运行 WSL、git push 或线上部署，未修改线上配置、数据库或备份。
+- 提交信息：`perf: freeze startup heap and raise gc thresholds`。本记录随该提交交付，提交号见 `git log -1 --oneline`。
+
+### 实现与生命周期
+
+- `start_gc_tuning(supervisor)` 立即设置阈值，返回幂等的同步释放函数；`main.py` 只增加导入、后台任务注册后的调用和 finally 中的释放，共三行。
+- 默认阈值 `(10000,20,10)`；非法阈值（含溢出、非正数、数量不符）告警并回退 `(700,10,10)`；非法延迟（含 NaN/Inf、越界）告警并回退 60 秒。总开关关闭时不读取或调用 GC API。
+- 冻结任务名 `gc-freeze`，`restart=False`、`critical=False`；到期后仅执行一次 collect/freeze，使用独立 `gc_tuning` logger 输出 JSON。
+- 活跃的重复启动共享一个任务，通过引用计数在最后一次释放时还原；进程内第一次成功冻结后，即使 lifespan 关闭再开启，也不会再次冻结。冻结前取消不消耗这次机会。
+- 退出先同步取消冻结任务、解冻本模块冻结的堆并恢复原阈值，再等待 supervisor 停止，避免等待期间取消导致漏清理。没有关闭自动 GC，也没有周期性手动 collect。
+- `gc_pause` 仅增加标量 `collected`，JSON 仍在回调外生成；`memory_probe` 增加 `gc_frozen` 和 `gc_thresholds`。
+
+### 红灯 / 绿灯
+
+所有测试均使用任务书指定的 CI 依赖 venv（Windows CPython 3.12.10），从 `backend/` 执行并设置 `PYTHONPATH` 为该目录。
+
+- 首轮先修改测试、尚未实现运行时代码：`gc_pause` 的 4 项断言因缺少 `collected` 失败，memory probe 的 1 项断言因缺少新字段失败。该轮汇总 `5 failed, 53 passed, 1 deselected, 27 errors in 19.66s`；27 个 setup errors 是首次测试误假定环境冻结数为零，随后修正了隔离方式。
+- 修正隔离后，在仍未实现模块时再次验证红灯：子进程 27 项用例全部因 `ModuleNotFoundError: app.runtime.gc_tuning` 报错；外层汇总 `1 failed in 1.90s`，子进程同时确认前后 GC 状态一致。
+- 首次实现后：`59 passed, 1 deselected in 20.55s`（含隔离入口，内部另执行 27 项 GC 用例）。
+- 复核“同一进程不能重复冻结”后，先加强跨 lifespan 的正常/异常退出测试：`2 failed, 25 deselected in 4.91s`，均因第二次启动仍注册 `gc-freeze` 而失败；再增加进程级成功冻结标记。
+- 最终定向验证：`86 passed, 1 deselected in 21.98s`。命令为 `<venv>\Scripts\python -m pytest -q tests/gc_tuning_cases.py tests/test_gc_tuning.py tests/test_gc_pause.py tests/test_memory_probe.py --tb=short --basetemp=<scratchpad>\pt-gct1`。
+- 最终全量命令严格使用 `<venv>\Scripts\python -m pytest -q --basetemp=<scratchpad>\pt-gct1`。
+- **最终全量汇总行：`2770 passed, 6 deselected, 13 warnings in 146.23s (0:02:26)`。** 全量中的 `test_gc_tuning_isolated_process` 内部执行全部 27 项 GC 用例；6 项 deselected 来自现有 pytest 默认排除的 network/benchmark 标记。13 条 warning 为 Starlette/httpx、`datetime.utcnow()` 的弃用告警。
+- 所有本次运行时模块及对应测试文件的 Ruff 检查通过；`git diff --check` 通过；人工复核了文件范围和三行 lifespan 接入。
+
+### 测试 GC 状态还原
+
+- 本机 Python 初始 `gc.get_freeze_count()` 为 377；实测 `gc.unfreeze()` 后为 0，下一次 `gc.collect()` 后又为 377。因此不能把这 377 个 CPython 运行时永久对象误判为本模块残留。
+- 全量通过独立 Python 子进程执行真实冻结测试，避免影响父测试进程的永久代。各用例 finally 中释放调参会话，先断言阈值和冻结堆已还原，再做失败兜底清理；仅测试代码通过 collect 恢复运行时永久对象基线。
+- 真实 lifespan 的第一次冻结结束后明确断言 `gc.get_freeze_count()==0`，覆盖正常/异常退出；取消用例验证没有执行 freeze，且保留进入时的 GC 状态。
+- 隔离入口同时检查子进程最终状态与初始状态相同，以及父进程状态未变；已观察到 `GC_STATE_RESTORED ((700, 10, 10), 377) ((700, 10, 10), 377)`。
+
+### 60 秒本地基准
+
+- 脚本：`backend/tests/benchmark_gc_tuning.py`；复现：在同一 venv、同一 `PYTHONPATH` 下执行 `python tests/benchmark_gc_tuning.py`。默认不会被 pytest 收集。
+- 默认组和调参组使用两个独立进程，串行运行；每组保留 3,000,000 个独立、GC 跟踪的常驻 list 对象，每轮创建并替换 15,000 个 Pydantic Snapshot，旧批次活到新批次构造完成。
+- 依据任务书的生产 gen0 约 55 次/秒先校准批次间隔，两组均使用 `1.049090909090909` 秒，60 秒各完成 58 轮；默认组实测 gen0 约 55.9 次/秒。
+- 调参组使用真实 `start_gc_tuning`，将启动延迟设为 0，在常驻堆及首批快照构造后执行冻结，然后开始 60 秒计时。预热 collect 和一次性冻结不计入稳态 gen2 次数；初始化成本另记。
+- RSS 使用 Windows `GetProcessMemoryInfo.PeakWorkingSetSize`，单位 MiB，是各独立进程生命周期峰值，包含初始化。
+
+| 指标 | 默认 `(700,10,10)` | 新阈值 `(10000,20,10)` + 冻结 |
+| --- | ---: | ---: |
+| 实测窗口（秒） | 60.012 | 60.006 |
+| gen0 / gen1 / gen2 次数 | 3354 / 304 / 2 | 222 / 10 / 0 |
+| gen2 最大耗时（ms） | 141.746 | 无样本 |
+| gen2 中位耗时（ms） | 141.132 | 无样本 |
+| RSS 峰值（MiB） | 321.805 | 322.098 |
+| 窗口开始时冻结数 | 377 | 3,059,770 |
+| 调参任务初始化总耗时（ms） | 不适用 | 169.367 |
+| 冻结前 collect 耗时（ms） | 不适用 | 147.180 |
+| 清理后阈值 | `(700,10,10)` | `(700,10,10)` |
+| 清理后冻结数 | 377（运行时基线） | 0 |
+
+- RSS 峰值增加约 0.09%；调参组没有 gen2 样本，不将其最大/中位耗时虚报为 0 ms。
+- 这是本地合成负载，不代表生产堆结构、硬件或真实循环延迟；生产对比和发布仍由 Claude 按任务书后续执行。最终补充的“跨 lifespan 只冻结一次”标记不改变本基准单次启动的执行路径。
+
+### 改动文件与后续
+
+1. `backend/app/runtime/gc_tuning.py`（新增）：环境解析、一次性冻结、进程去重与退出还原。
+2. `backend/app/runtime/gc_pause.py`：增加 collected。
+3. `backend/app/runtime/memory_probe.py`：增加冻结数和阈值。
+4. `backend/app/main.py`：三行生命周期接入。
+5. `backend/tests/gc_tuning_cases.py`（新增）：27 项 GC 验收用例，供隔离入口运行。
+6. `backend/tests/test_gc_tuning.py`（新增）：隔离子进程及父/子 GC 状态断言。
+7. `backend/tests/benchmark_gc_tuning.py`（新增）：独立进程 60 秒模拟脚本。
+8. `backend/tests/test_gc_pause.py`：collected 回归断言。
+9. `backend/tests/test_memory_probe.py`：新诊断字段回归断言。
+10. `docs/gc-tuning-spec-2026-11-02.md`：仅在末尾追加本记录。
+
+无本任务以外的修改或需要保留的未跟踪产物；新增脚本均随本地提交交付。后续在独立运维任务中由 Claude 完成发布和生产观察；本任务没有执行推送、备份、部署或线上验收。

@@ -32,7 +32,7 @@ def pause_output(monkeypatch, monitor):
 def pause(monitor, now, milliseconds, generation=2):
     monitor.callback("start", {"generation": generation})
     now[0] += milliseconds / 1000
-    monitor.callback("stop", {"generation": generation})
+    monitor.callback("stop", {"generation": generation, "collected": 17})
 
 
 def test_gc_real_collection_accumulates_and_callback_lifecycle(monitor):
@@ -65,7 +65,7 @@ def test_gc_pause_threshold_deferred_logging_and_rolling_minute(monitor, pause_o
         monitor.flush()
     rows = [json.loads(line) for line in pause_output.getvalue().splitlines()]
     assert len(rows) == 5
-    assert rows[0] == {"gc_pause": 1, "gen": 2, "ms": 200.0}
+    assert rows[0] == {"gc_pause": 1, "gen": 2, "ms": 200.0, "collected": 17}
     now[0] = first_log + 59.999 - 0.25
     pause(monitor, now, 250)
     monitor.flush()
@@ -84,7 +84,9 @@ def test_gc_counts_every_generation_and_logs_actual_generation(monitor, pause_ou
     pause(monitor, now, 250, generation)
     assert monitor.snapshot() == (250.0, int(generation == 2))
     monitor.flush()
-    assert json.loads(pause_output.getvalue()) == {"gc_pause": 1, "gen": generation, "ms": 250.0}
+    assert json.loads(pause_output.getvalue()) == {
+        "gc_pause": 1, "gen": generation, "ms": 250.0, "collected": 17,
+    }
 
 
 @pytest.mark.parametrize("enabled", ["0", "false", "OFF", " no "])

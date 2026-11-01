@@ -13,6 +13,7 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.runtime.gc_pause import GcPauseMonitor
+from app.runtime.gc_tuning import start_gc_tuning
 from app.runtime.loop_stall_watchdog import LoopStallWatchdog
 from app.runtime.supervisor import TaskSupervisor, beat
 
@@ -1402,9 +1403,11 @@ def create_app(
 
             trace_window = TracemallocWindow(app_settings.memory_tracemalloc_seconds)
             supervisor.start("memory-tracemalloc", trace_window.run, restart=False, critical=False)
+        restore_gc = start_gc_tuning(supervisor)
         try:
             yield
         finally:
+            restore_gc()
             stop_event.set()
             loop_stall_watchdog.stop()
             await supervisor.stop()

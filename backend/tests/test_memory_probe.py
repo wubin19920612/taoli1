@@ -165,6 +165,8 @@ def test_sampler_json_gc_deltas_and_no_large_object_access(monkeypatch, caplog):
     collections = [10, 20, 30]
     monkeypatch.setattr(gc, "get_stats", lambda: [{"collections": n} for n in collections])
     monkeypatch.setattr(gc, "get_count", lambda: (1, 2, 3))
+    monkeypatch.setattr(gc, "get_freeze_count", lambda: 1234)
+    monkeypatch.setattr(gc, "get_threshold", lambda: (10000, 20, 10))
     monkeypatch.setattr(memory_probe, "read_process_status", lambda: {
         "rss_mb": 20, "rss_anon_mb": 10, "threads": 17,
     })
@@ -179,8 +181,11 @@ def test_sampler_json_gc_deltas_and_no_large_object_access(monkeypatch, caplog):
         "memory_probe",
         "rss_mb", "rss_anon_mb", "threads", "gc_counts", "gc_collections",
         "snapshot_sizes", "realtime_caches", "active_tasks",
+        "gc_frozen", "gc_thresholds",
     }
     assert sample["gc_counts"] == [1, 2, 3]
+    assert sample["gc_frozen"] == 1234
+    assert sample["gc_thresholds"] == [10000, 20, 10]
     assert sample["gc_collections"] == [2, 1, 0]
     assert sample["snapshot_sizes"] == {"markets": 0, "all_markets": 0, "opportunities": 0}
     assert sample["realtime_caches"]["_REALTIME_PAIR_SPREAD_CACHE"] == {"keys": 1, "points": 1}

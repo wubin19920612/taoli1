@@ -117,6 +117,8 @@ class MemoryProbe:
         _log({
             **read_process_status(),
             "gc_counts": gc.get_count(),
+            "gc_frozen": gc.get_freeze_count(),
+            "gc_thresholds": gc.get_threshold(),
             "gc_collections": [max(0, new - old) for new, old in zip(
                 collections, self._collections, strict=True,
             )],
