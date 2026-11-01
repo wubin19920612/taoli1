@@ -44,6 +44,7 @@ import type {
   AstroPairPlan,
   ExchangePollState,
   Opportunity,
+  OpportunityList,
   OpportunityFilters,
   OpportunityHistoryPoint,
   OpportunityHistoryStats,
@@ -61,6 +62,10 @@ dayjs.extend(utc);
 
 function normalizeSymbol(value: string): string {
   return value.trim().toUpperCase().replace(/[-_]/g, "");
+}
+
+function normalizeOpportunityList(payload: Opportunity[] | OpportunityList): OpportunityList {
+  return Array.isArray(payload) ? { opportunities: payload } : payload;
 }
 
 function normalizeSymbols(values: string[] | undefined): string[] {
@@ -563,11 +568,14 @@ export function DashboardPage() {
   const [historyHours, setHistoryHours] = useState(168);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [refreshIntervalMs, setRefreshIntervalMs] = useState(8000);
-  const { opportunities, health, loading, error, refresh } = useRadarStore(
-    filters,
+  const metadataFilters = useMemo(() => ({ ...filters, include_metadata: true }), [filters]);
+  const { opportunities: opportunityPayload, health, loading, error, refresh } = useRadarStore(
+    metadataFilters,
     settingsLoaded,
     { autoRefresh, refreshIntervalMs }
   );
+  // The existing store forwards JSON unchanged; accept both the opt-in envelope and legacy arrays.
+  const { opportunities, excluded_stale: excludedStale } = normalizeOpportunityList(opportunityPayload);
   const errors = health?.exchange_errors ?? {};
   const exchangeStates = useMemo(
     () =>
@@ -962,6 +970,9 @@ export function DashboardPage() {
         在符合当前筛选的采集数据中先排序，再取前 {filters.limit ?? "全部"} 条。
         成交额为双方 24h USDT；净资金费率按小时归一化，正值表示买多卖空净收入，预测不保证实现；缺失值排末尾。
       </Typography.Paragraph>
+      {(excludedStale ?? 0) > 0 ? (
+        <Typography.Text type="secondary">已剔除 {excludedStale} 条过期报价</Typography.Text>
+      ) : null}
       <OpportunityTable
         opportunities={opportunities}
         loading={loading}

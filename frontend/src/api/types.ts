@@ -24,6 +24,9 @@ export interface Opportunity {
   buy_price_multiplier?: number;
   buy_contract_size_multiplier?: number | null;
   buy_timestamp?: string | null;
+  buy_age_ms?: number | null;
+  buy_source_age_ms?: number | null;
+  buy_time_source?: string | null;
   buy_data_source?: string | null;
   buy_is_estimated?: boolean;
   buy_estimated_fields?: string[];
@@ -34,6 +37,9 @@ export interface Opportunity {
   sell_price_multiplier?: number;
   sell_contract_size_multiplier?: number | null;
   sell_timestamp?: string | null;
+  sell_age_ms?: number | null;
+  sell_source_age_ms?: number | null;
+  sell_time_source?: string | null;
   sell_data_source?: string | null;
   sell_is_estimated?: boolean;
   sell_estimated_fields?: string[];
@@ -76,6 +82,11 @@ export interface Opportunity {
   last_seen_at: string;
 }
 
+
+export interface OpportunityList {
+  opportunities: Opportunity[];
+  excluded_stale?: number | null;
+}
 
 export interface SymbolAlias {
   exchange: string;
@@ -1585,6 +1596,9 @@ export interface PairSpreadCurrentLeg {
   contract_size_multiplier: number | null;
   data_source: string | null;
   upstream_timestamp: string | null;
+  age_ms?: number | null;
+  source_age_ms?: number | null;
+  time_source?: string | null;
   is_estimated: boolean;
   estimated_fields: string[];
   estimated_taker_fee_pct: number | null;
@@ -1644,6 +1658,10 @@ export interface PairSpreadQueryResult {
   leg2_multiplier: number;
   observed_at: string;
   point_count: number;
+  expected_samples?: number | null;
+  actual_samples?: number | null;
+  max_gap_ms?: number | null;
+  complete?: boolean | null;
   first_seen_at: string | null;
   last_seen_at: string | null;
   spread_abs: PairSpreadValueStats;
@@ -2228,6 +2246,12 @@ export interface OpportunityRadarCandidate {
   volume_24h_usdt: number | null;
   depth_usdt: number | null;
   data_age_seconds: number;
+  long_age_ms?: number | null;
+  long_source_age_ms?: number | null;
+  long_time_source?: string | null;
+  short_age_ms?: number | null;
+  short_source_age_ms?: number | null;
+  short_time_source?: string | null;
   reasons: string[];
   risk_labels: string[];
 }
@@ -2242,6 +2266,7 @@ export interface OpportunityRadarPreview {
   medium_count: number;
   watch_count: number;
   candidates: OpportunityRadarCandidate[];
+  excluded_stale?: number | null;
 }
 
 export type TradfiPerpDirection = "LONG_HL_SHORT_BINANCE" | "LONG_BINANCE_SHORT_HL";

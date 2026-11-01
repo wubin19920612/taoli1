@@ -29,6 +29,7 @@ import type {
   OpportunityRadarSettings,
   OpportunityRadarSignalLevel
 } from "../api/types";
+import { QuoteAgeTag } from "../components/QuoteAgeTag";
 
 const exchangeOptions = ["bybit", "binance", "okx", "gate", "bitget", "aster", "hyperliquid", "lighter"].map(
   (value) => ({ label: value, value })
@@ -102,11 +103,17 @@ const columns: ColumnsType<OpportunityRadarCandidate> = [
   },
   {
     title: "试错方向",
-    width: 190,
+    width: 230,
     render: (_, row) => (
       <div className="radar-route-cell">
-        <span><Tag color="green">多</Tag>{row.long_exchange}</span>
-        <span><Tag color="red">空</Tag>{row.short_exchange}</span>
+        <span>
+          <Tag color="green">多</Tag>{row.long_exchange}{" "}
+          <QuoteAgeTag ageMs={row.long_age_ms} sourceAgeMs={row.long_source_age_ms} timeSource={row.long_time_source} />
+        </span>
+        <span>
+          <Tag color="red">空</Tag>{row.short_exchange}{" "}
+          <QuoteAgeTag ageMs={row.short_age_ms} sourceAgeMs={row.short_source_age_ms} timeSource={row.short_time_source} />
+        </span>
       </div>
     )
   },
@@ -402,6 +409,9 @@ export function OpportunityRadarPage() {
         </Form>
       </section>
 
+      {(preview?.excluded_stale ?? 0) > 0 ? (
+        <Typography.Text type="secondary">已剔除 {preview?.excluded_stale} 条过期报价</Typography.Text>
+      ) : null}
       <Table
         className="opportunity-table radar-table"
         columns={columns}
@@ -411,7 +421,7 @@ export function OpportunityRadarPage() {
         size="small"
         tableLayout="fixed"
         pagination={{ pageSize: 50, showSizeChanger: true }}
-        scroll={{ x: 1140 }}
+        scroll={{ x: 1180 }}
         expandable={{ expandedRowRender: expandedRow }}
       />
     </div>

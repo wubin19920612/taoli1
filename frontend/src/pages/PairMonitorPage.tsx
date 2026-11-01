@@ -67,6 +67,7 @@ import type {
   PremiumIndexQueryResult
 } from "../api/types";
 import { resolveHistoryIntervalSeconds } from "../constants/queryLimits";
+import { QuoteAgeTag } from "../components/QuoteAgeTag";
 import { addFloatingWatchPair } from "../utils/floatingWatch";
 
 dayjs.extend(utc);
@@ -5747,6 +5748,11 @@ export function PairMonitorPage() {
             tone={ratioMode ? "neutral" : markSpreadTone}
           />
         </section>
+        {result?.complete === false ? (
+          <Tag color="default">
+            样本不足 {result.actual_samples ?? "-"}/{result.expected_samples ?? "-"}，最大缺口 {typeof result.max_gap_ms === "number" ? `${(result.max_gap_ms / 1000).toFixed(1)}s` : "未知"}
+          </Tag>
+        ) : null}
         <PairSpreadChart result={result} />
       </section>
 
@@ -6000,7 +6006,10 @@ export function PairMonitorPage() {
         <MetricCard
           label={leftLegLabel(result)}
           value={price(current?.leg1.price)}
-          sub={current ? priceFieldLabels[current.leg1.price_field] : "-"}
+          sub={current ? <>
+            {priceFieldLabels[current.leg1.price_field]}{" "}
+            <QuoteAgeTag ageMs={current.leg1.age_ms} sourceAgeMs={current.leg1.source_age_ms} timeSource={current.leg1.time_source} />
+          </> : "-"}
           highlight={
             current ? (
               <VolumeMetric
@@ -6027,7 +6036,10 @@ export function PairMonitorPage() {
         <MetricCard
           label={rightLegLabel(result)}
           value={price(current?.leg2.price)}
-          sub={current ? priceFieldLabels[current.leg2.price_field] : "-"}
+          sub={current ? <>
+            {priceFieldLabels[current.leg2.price_field]}{" "}
+            <QuoteAgeTag ageMs={current.leg2.age_ms} sourceAgeMs={current.leg2.source_age_ms} timeSource={current.leg2.time_source} />
+          </> : "-"}
           highlight={
             current ? (
               <VolumeMetric

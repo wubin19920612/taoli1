@@ -91,6 +91,60 @@ describe("OpportunityRadarPage", () => {
     vi.unstubAllGlobals();
   });
 
+  it("shows per-leg ages and the excluded count even with no candidates", async () => {
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    let empty = false;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const response = await fallback(input, init);
+      if (!String(input).includes("/opportunity-radar/preview")) return response;
+      const data = await response.json();
+      return Response.json({
+        ...data,
+        excluded_stale: 3,
+        candidates: empty ? [] : [{
+          ...candidate,
+          long_age_ms: 5000,
+          long_source_age_ms: 7500,
+          long_time_source: "book",
+          short_age_ms: 31000,
+          short_source_age_ms: null,
+          short_time_source: "received"
+        }]
+      });
+    });
+    render(<OpportunityRadarPage />);
+    const longAge = await screen.findByLabelText("报价年龄 5.0s");
+    const shortAge = screen.getByLabelText("报价年龄 31.0s");
+    expect(longAge.classList.contains("ant-tag-yellow")).toBe(true);
+    expect(shortAge.classList.contains("ant-tag-red")).toBe(true);
+    expect(longAge.parentElement?.textContent).toContain("多bybit");
+    expect(shortAge.parentElement?.textContent).toContain("空binance");
+    await userEvent.hover(longAge);
+    expect(await screen.findByText("来源年龄：7500ms；时间来源：book")).toBeTruthy();
+    await userEvent.unhover(longAge);
+    await userEvent.hover(shortAge);
+    expect(await screen.findByText("来源年龄：未知；时间来源：received")).toBeTruthy();
+    expect(screen.getByText("已剔除 3 条过期报价")).toBeTruthy();
+
+    empty = true;
+    await userEvent.click(screen.getByRole("button", { name: /刷新/ }));
+    await waitFor(() => expect(screen.queryByText("BTCUSDT")).toBeNull());
+    expect(screen.getByText("已剔除 3 条过期报价")).toBeTruthy();
+  });
+
+  it.each([undefined, null, 0])("hides missing ages and nonpositive excluded counts (%s)", async (excludedStale) => {
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const response = await fallback(input, init);
+      if (!String(input).includes("/opportunity-radar/preview")) return response;
+      return Response.json({ ...await response.json(), excluded_stale: excludedStale });
+    });
+    render(<OpportunityRadarPage />);
+    await screen.findByText("BTCUSDT");
+    expect(screen.queryByLabelText(/^报价年龄/)).toBeNull();
+    expect(screen.queryByText(/已剔除/)).toBeNull();
+  });
+
   it("renders an extreme-premium candidate and saves adjustable thresholds", async () => {
     const user = userEvent.setup();
     render(<OpportunityRadarPage />);

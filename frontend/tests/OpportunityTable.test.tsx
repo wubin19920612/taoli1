@@ -52,6 +52,35 @@ describe("OpportunityTable", () => {
     window.history.pushState({}, "", "/");
   });
 
+  it("shows each leg's age and source metadata independently", async () => {
+    render(<OpportunityTable opportunities={[{
+      ...row,
+      buy_age_ms: 1200,
+      buy_source_age_ms: 1600,
+      buy_time_source: "book",
+      sell_age_ms: 31000,
+      sell_source_age_ms: -200,
+      sell_time_source: "upstream"
+    }]} loading={false} />);
+
+    const buyAge = screen.getByLabelText("报价年龄 1.2s");
+    const sellAge = screen.getByLabelText("报价年龄 31.0s");
+    expect(buyAge.closest("td")?.textContent).toContain("Binance");
+    expect(sellAge.closest("td")?.textContent).toContain("OKX");
+    expect(buyAge.classList.contains("ant-tag-green")).toBe(true);
+    expect(sellAge.classList.contains("ant-tag-red")).toBe(true);
+    await userEvent.hover(buyAge);
+    expect(await screen.findByText("来源年龄：1600ms；时间来源：book")).toBeTruthy();
+    await userEvent.unhover(buyAge);
+    await userEvent.hover(sellAge);
+    expect(await screen.findByText("来源年龄：-200ms；时间来源：upstream")).toBeTruthy();
+  });
+
+  it("hides ages for older opportunity payloads", () => {
+    render(<OpportunityTable opportunities={[row]} loading={false} />);
+    expect(screen.queryByLabelText(/^报价年龄/)).toBeNull();
+  });
+
   it("keeps server ordering and sends header sorting to the server", async () => {
     const user = userEvent.setup();
     const onSortChange = vi.fn();

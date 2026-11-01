@@ -580,6 +580,48 @@ describe("PairMonitorPage", () => {
     vi.unstubAllGlobals();
   });
 
+  it("shows current leg ages and an incomplete realtime window", async () => {
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const response = await fallback(input, init);
+      if (!String(input).includes("/pair-spread/query")) return response;
+      const data = await response.json();
+      Object.assign(data.current.leg1, { age_ms: 1200, source_age_ms: -100, time_source: "upstream" });
+      Object.assign(data.current.leg2, { age_ms: 30000, source_age_ms: null, time_source: "received" });
+      return Response.json({ ...data, complete: false, actual_samples: 0, expected_samples: 2880, max_gap_ms: 12500 });
+    });
+    render(<PairMonitorPage />);
+    await userEvent.click(screen.getByRole("button", { name: /查.*询/ }));
+    const leftAge = await screen.findByLabelText("报价年龄 1.2s");
+    const rightAge = screen.getByLabelText("报价年龄 30.0s");
+    const legCards = document.querySelectorAll(".pair-secondary-metric-grid .pair-metric-card");
+    expect(leftAge.closest(".pair-metric-card")).toBe(legCards[0]);
+    expect(rightAge.closest(".pair-metric-card")).toBe(legCards[1]);
+    expect(leftAge.classList.contains("ant-tag-green")).toBe(true);
+    expect(rightAge.classList.contains("ant-tag-yellow")).toBe(true);
+    await userEvent.hover(leftAge);
+    expect(await screen.findByText("来源年龄：-100ms；时间来源：upstream")).toBeTruthy();
+    await userEvent.unhover(leftAge);
+    await userEvent.hover(rightAge);
+    expect(await screen.findByText("来源年龄：未知；时间来源：received")).toBeTruthy();
+    const warning = screen.getByText("样本不足 0/2880，最大缺口 12.5s");
+    expect(warning.classList.contains("ant-tag-default")).toBe(true);
+  });
+
+  it.each([undefined, null, true])("hides missing leg ages and window warnings when complete=%s", async (complete) => {
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const response = await fallback(input, init);
+      if (!String(input).includes("/pair-spread/query")) return response;
+      return Response.json({ ...await response.json(), complete });
+    });
+    render(<PairMonitorPage />);
+    await userEvent.click(screen.getByRole("button", { name: /查.*询/ }));
+    await screen.findByRole("img", { name: "均值价差率曲线" });
+    expect(screen.queryByLabelText(/^报价年龄/)).toBeNull();
+    expect(screen.queryByText(/样本不足/)).toBeNull();
+  });
+
   it.each([false, true])("shows XAU/CL ratios consistently, reversed=%s", async (reversed) => {
     const originalFetch = window.fetch;
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {

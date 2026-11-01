@@ -12,6 +12,7 @@ import dayjs from "dayjs";
 import type { MarketType, Opportunity, OpportunitySort } from "../api/types";
 import { marketTypeText } from "../constants/marketLabels";
 import { RiskTags } from "./RiskTags";
+import { QuoteAgeTag } from "./QuoteAgeTag";
 
 interface OpportunityTableProps {
   opportunities: Opportunity[];
@@ -84,7 +85,10 @@ function leg(
   canonicalSymbol?: string,
   dex?: string | null,
   priceMultiplier?: number,
-  contractSizeMultiplier?: number | null
+  contractSizeMultiplier?: number | null,
+  ageMs?: number | null,
+  sourceAgeMs?: number | null,
+  timeSource?: string | null
 ) {
   const rawSuffix =
     rawSymbol && canonicalSymbol && normalizeSymbol(rawSymbol) !== normalizeSymbol(canonicalSymbol)
@@ -109,6 +113,7 @@ function leg(
       <Typography.Text className="leg-meta" title={fullName}>
         {meta || marketLabel}
       </Typography.Text>
+      <QuoteAgeTag ageMs={ageMs} sourceAgeMs={sourceAgeMs} timeSource={timeSource} />
     </div>
   );
 }
@@ -387,7 +392,10 @@ function buildColumns(
         row.symbol,
         row.buy_dex,
         row.buy_price_multiplier,
-        row.buy_contract_size_multiplier
+        row.buy_contract_size_multiplier,
+        row.buy_age_ms,
+        row.buy_source_age_ms,
+        row.buy_time_source
       )
     },
     {
@@ -400,7 +408,10 @@ function buildColumns(
         row.symbol,
         row.sell_dex,
         row.sell_price_multiplier,
-        row.sell_contract_size_multiplier
+        row.sell_contract_size_multiplier,
+        row.sell_age_ms,
+        row.sell_source_age_ms,
+        row.sell_time_source
       )
     },
     {

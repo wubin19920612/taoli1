@@ -80,6 +80,62 @@ describe("DashboardPage", () => {
     );
   });
 
+  it("requests metadata and shows excluded quotes above an empty list", async () => {
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    let empty = false;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (String(input).includes("/opportunities")) {
+        return Response.json({
+          opportunities: empty ? [] : [{ ...baseOpportunity, buy_age_ms: 1200, sell_age_ms: 5000 }],
+          excluded_stale: 4
+        });
+      }
+      return fallback(input, init);
+    });
+    render(<DashboardPage />);
+    expect(await screen.findByText("已剔除 4 条过期报价")).toBeTruthy();
+    expect(screen.getByLabelText("报价年龄 1.2s")).toBeTruthy();
+    expect(screen.getByLabelText("报价年龄 5.0s")).toBeTruthy();
+    const request = vi.mocked(fetch).mock.calls.find(([url]) => String(url).includes("/opportunities"));
+    expect(new URL(String(request?.[0])).searchParams.get("include_metadata")).toBe("true");
+
+    empty = true;
+    await userEvent.click(await screen.findByRole("button", { name: "reload" }));
+    await waitFor(() => expect(screen.queryByText("BTCUSDT")).toBeNull());
+    expect(screen.getByText("已剔除 4 条过期报价")).toBeTruthy();
+  });
+
+  it.each([undefined, null, 0])("hides absent or zero excluded counts (%s)", async (excludedStale) => {
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (String(input).includes("/opportunities")) {
+        return Response.json({ opportunities: [baseOpportunity], excluded_stale: excludedStale });
+      }
+      return fallback(input, init);
+    });
+    render(<DashboardPage />);
+    await screen.findByText("BTCUSDT");
+    expect(screen.queryByText(/已剔除/)).toBeNull();
+    expect(screen.queryByLabelText(/^报价年龄/)).toBeNull();
+  });
+
+  it("accepts legacy arrays and clears an earlier excluded count on refresh", async () => {
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    let legacy = false;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (String(input).includes("/opportunities")) {
+        return Response.json(legacy ? [baseOpportunity] : { opportunities: [], excluded_stale: 2 });
+      }
+      return fallback(input, init);
+    });
+    render(<DashboardPage />);
+    await screen.findByText("已剔除 2 条过期报价");
+    legacy = true;
+    await userEvent.click(await screen.findByRole("button", { name: "reload" }));
+    await screen.findByText("BTCUSDT");
+    expect(screen.queryByText(/已剔除/)).toBeNull();
+  });
+
   it("keeps exchange health pending until the response arrives without loading card targets", async () => {
     const fallback = vi.mocked(fetch).getMockImplementation()!;
     let resolveHealth!: (response: Response) => void;
