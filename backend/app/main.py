@@ -647,7 +647,8 @@ async def _process_alert_match(
                     await delivery_store.mark_pending(key, datetime.now(UTC))
             except Exception:
                 logger.exception("alert delivery pending write failed: %s", key)
-                return True
+                status = "pending_write_failed"
+                return False
             try:
                 # Feishu also has an HTTP timeout; do not cancel an in-flight send
                 # with a new stage deadline or hold the database lock across it.
@@ -672,6 +673,7 @@ async def _process_alert_match(
         )
         app.state.alert_engine.record_delivery_result(match, status, now=event.created_at)
         state = app.state.alert_engine.export_state(key)
+        state_write_ok = True
         try:
             async with write_lock:
                 await delivery_store.record(
@@ -680,13 +682,16 @@ async def _process_alert_match(
         except Exception:
             # The send already happened; still keep its audit event.
             logger.exception("alert delivery state write failed: %s", key)
+            status = "state_write_failed"
+            state_write_ok = False
         try:
             async with write_lock:
                 await event_repo.create(event)
         except Exception:
             logger.exception("alert event write failed: %s", key)
-            return True
-        return True
+            status = "event_write_failed"
+            return False
+        return state_write_ok
     except asyncio.CancelledError:
         status = "cancelled"
         raise
@@ -775,20 +780,31 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                     if (match.rule.id, match.opportunity.id) not in live_pilot_match_keys
                 ),
             ]
-            semaphore = asyncio.Semaphore(getattr(
+            concurrency = getattr(
                 app_settings, "alert_match_concurrency", Settings.alert_match_concurrency,
-            ))
+            )
+            semaphore = asyncio.Semaphore(concurrency)
+            matches_by_symbol: dict[str, list[AlertMatch]] = {}
+            for match in ordered_matches:
+                matches_by_symbol.setdefault(match.opportunity.symbol, []).append(match)
+            # At concurrency=1 preserve even interleaved symbols in the original order.
+            groups = [ordered_matches] if concurrency == 1 else list(matches_by_symbol.values())
 
-            async def process_bounded(match: AlertMatch) -> bool:
+            async def process_bounded(group: list[AlertMatch]) -> bool:
                 async with semaphore:
-                    return await _process_alert_match(
-                        app, match, settings, alert_template, live_pilot_settings,
-                        live_pilot_match_keys, delivery_store, event_repo, write_lock,
-                        app_settings,
-                    )
+                    group_ok = True
+                    for match in group:
+                        match_ok = await _process_alert_match(
+                            app, match, settings, alert_template, live_pilot_settings,
+                            live_pilot_match_keys, delivery_store, event_repo, write_lock,
+                            app_settings,
+                        )
+                        group_ok = group_ok and match_ok
+                    return group_ok
 
-            # Task creation preserves live-pilot priority at semaphore admission.
-            tasks = [asyncio.create_task(process_bounded(match)) for match in ordered_matches]
+            # First-seen symbol order preserves live-pilot priority at admission;
+            # keeping the permit for the whole group serializes same-symbol matches.
+            tasks = [asyncio.create_task(process_bounded(group)) for group in groups]
             try:
                 results = await asyncio.gather(*tasks)
             except asyncio.CancelledError:

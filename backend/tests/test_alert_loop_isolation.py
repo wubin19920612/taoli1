@@ -13,6 +13,7 @@ from app.core import config
 from app.models.alert import AlertRule
 from app.models.settings import AlertMessageTemplateSettings, LivePilotSettings
 from app.services.alert_delivery_store import AlertDeliveryStore
+from app.services.alert_engine import AlertMatch
 from app.services.opportunity_trade_availability import OpportunityTradeAvailabilityReport
 from app.services.snapshot_store import SnapshotStore
 from test_alert_loop import (
@@ -66,6 +67,137 @@ def isolation_app(*, count=2, concurrency=3, live_pilot=False):
 def timing_rows(caplog):
     return [json.loads(record.getMessage()) for record in caplog.records
             if record.getMessage().startswith('{"alert_timing":')]
+
+
+def same_symbol_rule_matches(app, monkeypatch):
+    first, other = app.state.snapshot_store.get_opportunities()
+    rule = app.state.alert_rule_repo.rules[0]
+    pilot_rule = rule.model_copy(update={"id": "pilot-rule"})
+    pilot = AlertMatch(pilot_rule, first, [])
+    normal = AlertMatch(rule, first, [])
+    unrelated = AlertMatch(rule, other, [])
+    app.state.alert_engine.evaluate = Mock(return_value=[unrelated, normal, pilot])
+    monkeypatch.setattr(main, "select_live_pilot_matches", lambda *args: [pilot])
+    return pilot, unrelated, normal
+
+
+@pytest.mark.asyncio
+async def test_same_symbol_waits_for_live_pilot_while_other_symbol_completes(monkeypatch):
+    app, stop = isolation_app(live_pilot=True)
+    pilot, unrelated, normal = same_symbol_rule_matches(app, monkeypatch)
+    entered, release, completed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    started = []
+    original_process = main._process_alert_match
+
+    async def process(app, match, *args):
+        started.append(match)
+        result = await original_process(app, match, *args)
+        if match is unrelated:
+            completed.set()
+        return result
+
+    original_pilot = app.state.astro_alert_service.handle_live_pilot
+
+    async def handle_pilot(item):
+        entered.set()
+        await release.wait()
+        return await original_pilot(item)
+
+    monkeypatch.setattr(main, "_process_alert_match", process)
+    app.state.astro_alert_service.handle_live_pilot = handle_pilot
+    task = asyncio.create_task(main._run_alert_loop(app, 60, stop))
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        await asyncio.wait_for(completed.wait(), 1)
+        assert started == [pilot, unrelated]
+        assert [e.opportunity_id for e in app.state.alert_event_repo.events] == ["opp-1"]
+        assert not task.done()
+        release.set()
+        await asyncio.wait_for(task, 1)
+        assert started == [pilot, unrelated, normal]
+        assert [e.rule_id for e in app.state.alert_event_repo.events
+                if e.opportunity_id == "opp-0"] == ["pilot-rule", "isolation-rule"]
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_serial_concurrency_preserves_interleaved_symbol_order(monkeypatch):
+    app, stop = isolation_app(concurrency=1, live_pilot=True)
+    ordered = same_symbol_rule_matches(app, monkeypatch)
+    await asyncio.wait_for(main._run_alert_loop(app, 60, stop), 1)
+    assert [(e.rule_id, e.opportunity_id) for e in app.state.alert_event_repo.events] == [
+        (m.rule.id, m.opportunity.id) for m in ordered
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure,status,first_calls", [
+    ("pending", "pending_write_failed", ["pending"]),
+    ("record", "state_write_failed", ["pending", "send", "record", "event"]),
+    ("event", "event_write_failed", ["pending", "send", "record", "event"]),
+])
+async def test_write_failure_marks_round_unhealthy_and_continues_same_symbol(
+    monkeypatch, caplog, failure, status, first_calls,
+):
+    app, stop = isolation_app()
+    items = app.state.snapshot_store.get_opportunities()
+    app.state.snapshot_store.set_opportunities([
+        item.model_copy(update={"symbol": "SAMEUSDT"}) for item in items
+    ])
+    calls = []
+
+    def record_call(stage, key):
+        calls.append((stage, key))
+        if stage == failure and key == "isolation-rule:opp-0":
+            raise RuntimeError(f"{stage} write failed")
+
+    async def pending(key, *args):
+        record_call("pending", key)
+
+    async def record(key, *args):
+        record_call("record", key)
+
+    original_create = app.state.alert_event_repo.create
+
+    async def create(event):
+        record_call("event", f"{event.rule_id}:{event.opportunity_id}")
+        return await original_create(event)
+
+    original_send = app.state.feishu_notifier.send_alert
+
+    async def send(rule, item, **kwargs):
+        record_call("send", f"{rule.id}:{item.id}")
+        return await original_send(rule, item, **kwargs)
+
+    app.state.alert_delivery_store.mark_pending.side_effect = pending
+    app.state.alert_delivery_store.record.side_effect = record
+    app.state.alert_event_repo.create = create
+    app.state.feishu_notifier.send_alert = send
+    heartbeat = Mock()
+    monkeypatch.setattr(main, "beat", heartbeat)
+    with caplog.at_level(logging.INFO, logger="app.main"):
+        await asyncio.wait_for(main._run_alert_loop(app, 60, stop), 1)
+    heartbeat.assert_called_once_with("alert-loop", ok=False)
+    rows = timing_rows(caplog)
+    assert len(rows) == 2
+    assert {row["key"]: row["status"] for row in rows} == {
+        "isolation-rule:opp-0": status, "isolation-rule:opp-1": "sent",
+    }
+    assert calls == [
+        *[(stage, "isolation-rule:opp-0") for stage in first_calls],
+        *[(stage, "isolation-rule:opp-1") for stage in ["pending", "send", "record", "event"]],
+    ]
+    events = app.state.alert_event_repo.events
+    assert [e.opportunity_id for e in events] == (
+        ["opp-0", "opp-1"] if failure == "record" else ["opp-1"]
+    )
+    assert all(e.status == "sent" for e in events)
+    assert app.state.alert_engine.delivery_statuses == (
+        ["sent"] if failure == "pending" else ["sent", "sent"]
+    )
+    assert len(app.state.feishu_notifier.sent_texts) == (1 if failure == "pending" else 2)
 
 
 @pytest.mark.asyncio
@@ -289,7 +421,10 @@ async def test_latest_validation_uses_time_after_diagnostic(monkeypatch):
     app.state.trade_availability_service = object()
     initial = datetime.now(UTC)
     current = initial
-    refreshed = initial + timedelta(minutes=10)
+    # Cross the strict expiry boundary even if both real clock reads are identical.
+    refreshed = initial + timedelta(
+        seconds=app.state.alert_rule_repo.rules[0].max_data_age_seconds + 1,
+    )
 
     class Clock(datetime):
         @classmethod

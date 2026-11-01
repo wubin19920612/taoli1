@@ -145,3 +145,74 @@ C:\Users\wubin\Desktop\code\codex\taoli1\.worktrees\s7c\backend\app\main.py
 ### 验收边界与下一步
 - 当前完成范围为本地实现、离线测试和本地提交。没有线上验证数据，也不据此宣称已部署或生产验收通过。
 - 后续按上文 Claude 验收清单审查提交；如需上线，另开发布/运维任务授权推送、备份、部署及 +1h 观察。其他功能模块继续使用独立任务，本文件可直接作为交接入口。
+
+## 返工 1（2026-11-01，只读审查结论，Claude 确认）
+1. **同币种串行（P1）**：并发后，同一机会上的 live-pilot 命中和普通规则命中可能同时建卡，普通规则先建出暂停卡后，live-pilot 会因为“已有卡片”被跳过（串行时建的是开启的实验卡）。改为：把 `ordered_matches` 按 `match.opportunity.symbol` 分组（保持组内原顺序，组的顺序按各组第一条命中在 `ordered_matches` 中的位置）。每组一个任务，组内命中**依次**调用 `_process_alert_match`；Semaphore 限制同时运行的组数。并发数=1 时仍与原串行顺序完全一致。
+2. **写入失败要计入失败（P2）**：`mark_pending` 失败、`event_repo.create` 失败时 `_process_alert_match` 返回 False（本轮 beat ok=False）；`delivery_store.record` 失败也返回 False，但仍要继续写事件（顺序不变）。计时日志的 status 在这几种情况下分别写 `pending_write_failed`、`state_write_failed`、`event_write_failed`，不能再写 `sent`。业务控制流（是否发送、是否写事件）不变。
+3. 测试：
+   - 同一 symbol 两条规则（一条 live-pilot），并发数=3，第一条处理挂起时第二条不能开始；不同 symbol 的命中照常并发；
+   - 上面三种写入失败各断言一次 beat ok=False 和对应的计时 status。
+4. **不做**：共用连接回滚的问题（审查 P1-B）是已有的跨模块问题，单独立项，这次不改 Astro 账本和其他仓储。
+5. 提交信息：`fix: serialize alert matches per symbol and report write failures`。其余要求（范围、venv、不 push、不跑 WSL、不访问外网）同上；在交接记录后追加“返工 1”记录。
+
+## 返工 1 本地交接记录（2026-11-01）
+
+### 范围与实现
+- 工作树仍为 `.worktrees\s7c`，分支 `codex/s7c-alert-isolation`，本次基线 `5ee9538`。开始时已有的任务书“返工 1”原文完整保留，仅在末尾追加记录。
+- 修改文件仅为 `backend/app/main.py`、`backend/tests/test_alert_loop_isolation.py` 和本任务书；没有修改配置、Astro 账本或其他仓储。
+- `_run_alert_loop` 按原始 symbol 分组，保留组内顺序和各组首次出现的顺序；每组一个任务，整组持有 Semaphore 许可，组内逐个等待 `_process_alert_match`。组内失败不会短路后续命中，最终汇总全部结果。
+- 并发数为 1 时，将完整 `ordered_matches` 作为一个串行任务执行，以保持原始全局顺序（包括 symbol 交错的情况）；并发数大于 1 时不同 symbol 仍可并行，同币种 live-pilot 完成后普通命中才能开始。
+- `_process_alert_match` 的 pending/state/event 写入失败均返回 False，计时状态分别为 `pending_write_failed`、`state_write_failed`、`event_write_failed`，本轮 heartbeat 为 `ok=False`。pending 失败仍停止发送及后续写入；state 失败仍尝试写事件；发送结果与事件业务 status 保持原语义。若 state 和 event 都失败，最终计时状态为 `event_write_failed`，两次异常均保留错误日志。
+- 取消传播、阶段期限、写锁范围、消息格式、live-pilot 选择和静默/冷却/重试规则未调整。共用连接回滚问题仍按任务书另行立项。
+
+### 新增测试与 TDD 证据
+新增 3 个测试函数，参数化后 5 项：
+1. `test_same_symbol_waits_for_live_pilot_while_other_symbol_completes`：并发数 3，同机会两条规则中的 live-pilot 被 Event 挂起时，普通规则尚未进入处理，不同 symbol 已完成落库；释放后普通规则继续。
+2. `test_serial_concurrency_preserves_interleaved_symbol_order`：并发数 1，live-pilot/其他 symbol/同 symbol 普通规则的原始顺序保持不变。
+3. `test_write_failure_marks_round_unhealthy_and_continues_same_symbol`：参数化覆盖 pending/state/event 三种写失败，逐项断言 heartbeat、计时状态、发送与写入调用顺序、事件业务状态；同组后续命中继续成功。
+
+先新增测试、再修改实现。指定 venv 的红灯命令（在本工作树 `backend` 目录，环境变量同下方全量命令）：
+
+```powershell
+& 'C:\Users\wubin\AppData\Local\Temp\claude\D-------claude---\fb63363d-eacd-45e5-80aa-d9d6ede68e74\scratchpad\venv\Scripts\python.exe' -m pytest -q -p no:cacheprovider tests/test_alert_loop_isolation.py -k 'same_symbol or interleaved' --tb=short
+```
+
+红灯汇总：`4 failed, 1 passed, 21 deselected in 8.19s`。失败分别证实同币种并发和三种写失败误报健康；原串行顺序用例通过。
+
+实现后运行：
+
+```powershell
+& 'C:\Users\wubin\AppData\Local\Temp\claude\D-------claude---\fb63363d-eacd-45e5-80aa-d9d6ede68e74\scratchpad\venv\Scripts\python.exe' -m pytest -q -p no:cacheprovider tests/test_alert_loop.py tests/test_alert_loop_isolation.py --tb=short
+```
+
+首次回归为 `1 failed, 46 passed in 9.75s`，新增 5 项全部通过。唯一失败为已有 `test_latest_validation_uses_time_after_diagnostic`：推进 600 秒恰好等于默认过期阈值；两次时钟读数相同时，严格大于比较不会判过期。已将测试时间改成阈值之后 1 秒，保留全部原断言，没有修改生产过期判断或放宽、删除测试。
+
+### 全量测试命令
+在 `C:\Users\wubin\Desktop\code\codex\taoli1\.worktrees\s7c\backend` 运行任务书指定命令：
+
+```powershell
+$env:PYTHONDONTWRITEBYTECODE = '1'
+$env:PYTHONPATH = (Get-Location).Path
+& 'C:\Users\wubin\AppData\Local\Temp\claude\D-------claude---\fb63363d-eacd-45e5-80aa-d9d6ede68e74\scratchpad\venv\Scripts\python.exe' -c "import app.main as m; print(m.__file__)"
+& 'C:\Users\wubin\AppData\Local\Temp\claude\D-------claude---\fb63363d-eacd-45e5-80aa-d9d6ede68e74\scratchpad\venv\Scripts\python.exe' -m pytest -q -p no:cacheprovider
+```
+
+导入路径输出：
+
+```text
+C:\Users\wubin\Desktop\code\codex\taoli1\.worktrees\s7c\backend\app\main.py
+```
+
+返工后全量汇总：
+
+```text
+2553 passed, 6 deselected, 13 warnings in 136.26s (0:02:16)
+```
+
+13 条为 Starlette/httpx 和 `datetime.utcnow()` 弃用警告。沿用仓库离线网络拦截 fixture，默认排除 network/benchmark 标记测试；没有访问外网。全量包含新增 5 项及修正后的时间刷新测试，全部通过；`git diff --check` 通过。
+
+### 本地交付与边界
+- 本次仅新增一个本地提交，信息为 `fix: serialize alert matches per symbol and report write failures`；完整提交号可通过 `git log -1 --format=%H` 查询本记录所在提交。
+- 只暂存上述三个允许文件；起始没有其他修改或未跟踪产物。
+- 未 git push、未运行 WSL、未访问生产/交易所/Astro/飞书；未进行线上备份、部署或验收。本次完成范围为返工 1 的本地实现和离线验证。
+- 后续审查以本记录所在提交为入口；共用连接回滚或上线发布需单独新任务处理。
