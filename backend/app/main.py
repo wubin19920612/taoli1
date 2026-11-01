@@ -997,7 +997,8 @@ def create_app(
         db = await connect_database(db_path, recover_stale_snapshots=True)
         await initialize_schema(db)
         app.state.db = db
-        app.state.astro_alert_service.attempts = AstroCardAttemptRepository(db)
+        attempts_db = db if db_path == ":memory:" else await connect_database(db_path)
+        app.state.astro_alert_service.attempts = AstroCardAttemptRepository(attempts_db)
         route_db = None
         if "squeeze" not in disabled:
             route_stem, route_extension = os.path.splitext(db_path)
@@ -1433,6 +1434,8 @@ def create_app(
                 await identity_db.close()
             if preset_db is not db:
                 await preset_db.close()
+            if attempts_db is not db:
+                await attempts_db.close()
             await db.close()
 
     app = FastAPI(title=app_settings.app_name, lifespan=lifespan)

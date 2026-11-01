@@ -19,6 +19,12 @@ def route_key(pair: dict) -> str:
 
 
 class AstroCardAttemptRepository:
+    """Rolls back its own connection on failure; requires a dedicated connection.
+
+    Never pass the shared main connection for a file-backed database. The app's
+    isolated :memory: test database is the explicit exception.
+    """
+
     def __init__(self, db: aiosqlite.Connection):
         self.db = db
         self._lock = asyncio.Lock()
