@@ -138,3 +138,9 @@ frontend/tests/PremiumIndexPage.test.tsx
 - 仅提交以上任务文件，提交信息：`perf(frontend): pause polling while the tab is hidden`。提交号由本次提交后的 `git log -1` 确认。
 - 按本次明确要求仅本地提交，不推送、不部署；未操作生产数据库或线上服务，未进行线上验收。
 - 后续导航分组 S8-B 应在新任务中继续。
+
+## 返工 1（Claude，2026-11-02，依据只读审查）
+1. `usePolling.ts:43`：StrictMode 下 effect 先清理再重新挂载时，会留下 pending 标记。结果是第一次 callback 完成后马上又调一次，第一个周期还没到就调用了两次。要求修复：StrictMode 下第一个周期之前只调用一次。测试要断言具体次数（==1），不能拿实际跑出来的次数当基准。
+2. `FloatingWatchPanel.tsx:804`：现在只在入队前检查一次可见性，所以切换模式后排队的刷新，在页面隐藏之后仍会发出去。要求：真正发请求前再检查一次，页面隐藏就跳过，等重新可见后再立即刷新。补测试。
+3. `OilNewsPage.tsx:264`，以及 TradfiPerp、SecondLevelSampling 里同类的“依赖变化后立即加载”：这次立即加载和定时轮询之间没有串行保护，也不会重置周期，比如第 59.9 秒切换筛选，第 60 秒又会重复发一次请求。改之前（基线）不会这样，要恢复到基线行为。建议做法：让 `usePolling` 接受 `deps`，依赖变化时重新调度，并立即执行一次；或者另外提供一个 `trigger()`，和轮询共用同一个串行队列。每个页面各补一条测试：切换筛选后，下一次请求按完整周期重新计时，不会出现重叠请求。
+其余要求不变：只改任务书允许的文件，`npm test` 和 `npx tsc --noEmit` 都要通过，追加返工记录，另起一个提交，提交信息用 `fix(frontend): polling strictmode, floating queue and dep refresh`。
