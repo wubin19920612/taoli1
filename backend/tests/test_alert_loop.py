@@ -17,7 +17,6 @@ from app.models.orderbook import DepthValidationResult
 from app.models.settings import (
     AlertMessageTemplateSettings,
     AstroCardSettings,
-    LivePilotSettings,
     RiskSettings,
 )
 from app.services.alert_delivery_store import AlertDeliveryStore
@@ -134,12 +133,10 @@ class FakeSettingsRepo:
     def __init__(
         self,
         astro_card_settings: AstroCardSettings | None = None,
-        live_pilot_settings: LivePilotSettings | None = None,
         alert_template: AlertMessageTemplateSettings | None = None,
         risk_settings: RiskSettings | None = None,
     ):
         self.astro_card_settings = astro_card_settings
-        self.live_pilot_settings = live_pilot_settings or LivePilotSettings()
         self.alert_template = alert_template or AlertMessageTemplateSettings(format="detailed")
         self.risk_settings = risk_settings or RiskSettings()
 
@@ -151,9 +148,6 @@ class FakeSettingsRepo:
 
     async def find_astro_card_settings(self) -> AstroCardSettings | None:
         return self.astro_card_settings
-
-    async def get_live_pilot_settings(self) -> LivePilotSettings:
-        return self.live_pilot_settings
 
 
 class DeliveryRecordingEngine(AlertEngine):
@@ -235,9 +229,7 @@ class FailingFeishuNotifier:
 class FakeAstroAlertService:
     def __init__(self):
         self.card_settings: AstroCardSettings | None = None
-        self.live_pilot_settings = LivePilotSettings()
         self.calls: list[str] = []
-        self.live_pilot_calls: list[str] = []
 
     async def handle_alert(self, opportunity: Opportunity) -> AstroAlertActionResult:
         self.calls.append(opportunity.id)
@@ -246,17 +238,6 @@ class FakeAstroAlertService:
             status="created",
             action="add",
             message="已创建暂停卡片 BTC FF binance->okx，禁开=true",
-            pair_name="BTC",
-            pair_type="FF",
-        )
-
-    async def handle_live_pilot(self, opportunity: Opportunity) -> AstroAlertActionResult:
-        self.live_pilot_calls.append(opportunity.id)
-        return AstroAlertActionResult(
-            enabled=True,
-            status="created",
-            action="add",
-            message="已创建开启实验卡片 BTC FF binance->okx，禁开=false",
             pair_name="BTC",
             pair_type="FF",
         )
@@ -302,7 +283,7 @@ class BlankExceptionAstroAlertService:
 
 
 @pytest.mark.asyncio
-async def test_live_pilot_alert_loop_filters_candidates_by_alert_rules_before_selection() -> None:
+async def test_alert_loop_filters_candidates_by_alert_rules_before_evaluation() -> None:
     stop_event = asyncio.Event()
     app = FastAPI()
     app.state.alert_delivery_store = AsyncMock(spec=AlertDeliveryStore)
@@ -340,7 +321,6 @@ async def test_live_pilot_alert_loop_filters_candidates_by_alert_rules_before_se
     app.state.alert_rule_repo = FakeRuleRepo([rule])
     app.state.alert_event_repo = event_repo
     app.state.settings_repo = FakeSettingsRepo(
-        live_pilot_settings=LivePilotSettings(enabled=True, max_symbols=10)
     )
     app.state.snapshot_store = store
     app.state.alert_engine = alert_engine
@@ -350,133 +330,6 @@ async def test_live_pilot_alert_loop_filters_candidates_by_alert_rules_before_se
     await asyncio.wait_for(_run_alert_loop(app, 60, stop_event), timeout=2)
 
     assert alert_engine.seen_opportunity_ids == ["high-edge"]
-
-
-@pytest.mark.asyncio
-async def test_live_pilot_experiment_does_not_filter_regular_alerts() -> None:
-    stop_event = asyncio.Event()
-    app = FastAPI()
-    app.state.alert_delivery_store = AsyncMock(spec=AlertDeliveryStore)
-    lower_edge = opportunity().model_copy(
-        update={
-            "id": "lower-edge",
-            "symbol": "LOWERUSDT",
-            "open_spread_pct": 0.60,
-            "fee_adjusted_open_pct": 0.50,
-            "funding_rate_buy_pct": 0.0,
-            "funding_rate_sell_pct": 0.02,
-            "net_funding_pct": 0.02,
-        }
-    )
-    higher_edge = opportunity().model_copy(
-        update={
-            "id": "higher-edge",
-            "symbol": "HIGHERUSDT",
-            "open_spread_pct": 0.80,
-            "fee_adjusted_open_pct": 0.70,
-            "funding_rate_buy_pct": 0.0,
-            "funding_rate_sell_pct": 0.04,
-            "net_funding_pct": 0.04,
-        }
-    )
-    rule = AlertRule(
-        id="rule-1",
-        name="threshold",
-        types=["FF"],
-        min_open_spread_pct=0.5,
-        min_fee_adjusted_open_pct=0.25,
-        min_volume_24h_usdt=1_000_000,
-        consecutive_hits=1,
-    )
-    store = SnapshotStore()
-    store.set_opportunities([lower_edge, higher_edge])
-    event_repo = CountingEventRepo(stop_event, target_count=2)
-    alert_engine = AllMatchesAlertEngine(rule)
-    service = FakeAstroAlertService()
-
-    app.state.alert_rule_repo = FakeRuleRepo([rule])
-    app.state.alert_event_repo = event_repo
-    app.state.settings_repo = FakeSettingsRepo(
-        live_pilot_settings=LivePilotSettings(
-            enabled=True,
-            max_symbols=1,
-            min_next_funding_edge_pct=0.01,
-        )
-    )
-    app.state.snapshot_store = store
-    app.state.alert_engine = alert_engine
-    app.state.feishu_notifier = FakeFeishuNotifier()
-    app.state.astro_alert_service = service
-
-    await asyncio.wait_for(_run_alert_loop(app, 60, stop_event), timeout=2)
-
-    assert alert_engine.seen_opportunity_ids == ["lower-edge", "higher-edge"]
-    assert [event.opportunity_id for event in event_repo.events] == ["higher-edge", "lower-edge"]
-    assert service.calls == ["lower-edge"]
-    assert service.live_pilot_calls == ["higher-edge"]
-
-
-@pytest.mark.asyncio
-async def test_live_pilot_experiment_processes_its_route_before_the_same_symbol() -> None:
-    stop_event = asyncio.Event()
-    app = FastAPI()
-    app.state.alert_delivery_store = AsyncMock(spec=AlertDeliveryStore)
-    lower_edge = opportunity().model_copy(
-        update={
-            "id": "btc-lower-edge",
-            "open_spread_pct": 0.60,
-            "fee_adjusted_open_pct": 0.50,
-            "funding_rate_buy_pct": 0.0,
-            "funding_rate_sell_pct": 0.02,
-            "net_funding_pct": 0.02,
-        }
-    )
-    higher_edge = opportunity().model_copy(
-        update={
-            "id": "btc-higher-edge",
-            "open_spread_pct": 0.80,
-            "fee_adjusted_open_pct": 0.70,
-            "funding_rate_buy_pct": 0.0,
-            "funding_rate_sell_pct": 0.04,
-            "net_funding_pct": 0.04,
-        }
-    )
-    rule = AlertRule(
-        id="rule-1",
-        name="threshold",
-        types=["FF"],
-        min_open_spread_pct=0.5,
-        min_fee_adjusted_open_pct=0.25,
-        min_volume_24h_usdt=1_000_000,
-        consecutive_hits=1,
-    )
-    store = SnapshotStore()
-    store.set_opportunities([lower_edge, higher_edge])
-    event_repo = CountingEventRepo(stop_event, target_count=2)
-    service = FakeAstroAlertService()
-
-    app.state.alert_rule_repo = FakeRuleRepo([rule])
-    app.state.alert_event_repo = event_repo
-    app.state.settings_repo = FakeSettingsRepo(
-        live_pilot_settings=LivePilotSettings(
-            enabled=True,
-            max_symbols=1,
-            min_next_funding_edge_pct=0.01,
-        )
-    )
-    app.state.snapshot_store = store
-    app.state.alert_engine = AllMatchesAlertEngine(rule)
-    app.state.feishu_notifier = FakeFeishuNotifier()
-    app.state.astro_alert_service = service
-
-    await asyncio.wait_for(_run_alert_loop(app, 60, stop_event), timeout=2)
-
-    assert service.calls == ["btc-lower-edge"]
-    assert service.live_pilot_calls == ["btc-higher-edge"]
-    assert [event.opportunity_id for event in event_repo.events] == [
-        "btc-higher-edge",
-        "btc-lower-edge",
-    ]
 
 
 @pytest.mark.asyncio
@@ -1017,69 +870,6 @@ async def test_alert_loop_mutes_when_astro_plan_cannot_create_card_and_filter_en
 
 
 @pytest.mark.asyncio
-async def test_alert_loop_uses_experiment_notional_for_live_pilot_validation() -> None:
-    stop_event = asyncio.Event()
-    app = FastAPI()
-    app.state.alert_delivery_store = AsyncMock(spec=AlertDeliveryStore)
-    rule = AlertRule(
-        id="rule-1",
-        name="FF spread",
-        types=["FF"],
-        min_open_spread_pct=0.5,
-        min_fee_adjusted_open_pct=0.25,
-        min_volume_24h_usdt=1_000_000,
-        consecutive_hits=1,
-    )
-    opp = opportunity()
-    store = SnapshotStore()
-    store.set_opportunities([opp])
-    event_repo = FakeEventRepo(stop_event)
-    service = FakeAstroAlertService()
-    validator = FakeOrderBookValidator(
-        DepthValidationResult(
-            passed=True,
-            target_notional_usdt=100,
-            buy_filled_usdt=100,
-            sell_filled_usdt=100,
-            buy_vwap=100,
-            sell_vwap=100.8,
-            quoted_open_pct=0.8,
-            executable_open_pct=0.8,
-            effective_executable_edge_pct=0.5,
-            slippage_loss_pct=0,
-            blockers=[],
-            warnings=[],
-        )
-    )
-
-    app.state.settings = type(
-        "Settings",
-        (),
-        {"astro_card_settings": AstroCardSettings(max_trade_usdt=10)},
-    )()
-    app.state.alert_rule_repo = FakeRuleRepo([rule])
-    app.state.alert_event_repo = event_repo
-    app.state.settings_repo = FakeSettingsRepo(
-        AstroCardSettings(max_trade_usdt=10),
-        LivePilotSettings(enabled=True, notional_per_symbol_usdt=100),
-    )
-    app.state.snapshot_store = store
-    app.state.alert_engine = FakeAlertEngine(AlertMatch(rule, opp, []))
-    app.state.feishu_notifier = FakeFeishuNotifier()
-    app.state.astro_alert_service = service
-    app.state.orderbook_validator = validator
-
-    await asyncio.wait_for(_run_alert_loop(app, 60, stop_event), timeout=2)
-
-    assert service.calls == []
-    assert service.live_pilot_calls == ["opp-1"]
-    assert service.live_pilot_settings.enabled is True
-    assert validator.calls[0][2] is not None
-    assert validator.calls[0][2].max_trade_usdt == 100
-    assert validator.calls[0][3] == 100
-
-
-@pytest.mark.asyncio
 async def test_alert_loop_keeps_alert_when_astro_service_raises() -> None:
     stop_event = asyncio.Event()
     app = FastAPI()
@@ -1150,3 +940,60 @@ async def test_alert_loop_includes_exception_type_when_astro_error_text_is_blank
     assert "Astro: 处理失败，TimeoutError" in event_repo.events[0].message
     assert feishu.sent_texts[0] is not None
     assert "Astro: 处理失败，TimeoutError" in feishu.sent_texts[0]
+
+
+@pytest.mark.asyncio
+async def test_all_eligible_matches_use_regular_alerts_in_evaluation_order() -> None:
+    stop_event = asyncio.Event()
+    app = FastAPI()
+    app.state.alert_delivery_store = AsyncMock(spec=AlertDeliveryStore)
+    lower_edge = opportunity().model_copy(
+        update={
+            "id": "lower-edge",
+            "symbol": "LOWERUSDT",
+            "open_spread_pct": 0.60,
+            "fee_adjusted_open_pct": 0.50,
+            "funding_rate_buy_pct": 0.0,
+            "funding_rate_sell_pct": 0.02,
+            "net_funding_pct": 0.02,
+        }
+    )
+    higher_edge = opportunity().model_copy(
+        update={
+            "id": "higher-edge",
+            "symbol": "HIGHERUSDT",
+            "open_spread_pct": 0.80,
+            "fee_adjusted_open_pct": 0.70,
+            "funding_rate_buy_pct": 0.0,
+            "funding_rate_sell_pct": 0.04,
+            "net_funding_pct": 0.04,
+        }
+    )
+    rule = AlertRule(
+        id="rule-1",
+        name="threshold",
+        types=["FF"],
+        min_open_spread_pct=0.5,
+        min_fee_adjusted_open_pct=0.25,
+        min_volume_24h_usdt=1_000_000,
+        consecutive_hits=1,
+    )
+    store = SnapshotStore()
+    store.set_opportunities([lower_edge, higher_edge])
+    event_repo = CountingEventRepo(stop_event, target_count=2)
+    alert_engine = AllMatchesAlertEngine(rule)
+    service = FakeAstroAlertService()
+
+    app.state.alert_rule_repo = FakeRuleRepo([rule])
+    app.state.alert_event_repo = event_repo
+    app.state.settings_repo = FakeSettingsRepo()
+    app.state.snapshot_store = store
+    app.state.alert_engine = alert_engine
+    app.state.feishu_notifier = FakeFeishuNotifier()
+    app.state.astro_alert_service = service
+
+    await asyncio.wait_for(_run_alert_loop(app, 60, stop_event), timeout=2)
+
+    assert alert_engine.seen_opportunity_ids == ["lower-edge", "higher-edge"]
+    assert [event.opportunity_id for event in event_repo.events] == ["lower-edge", "higher-edge"]
+    assert service.calls == ["lower-edge", "higher-edge"]

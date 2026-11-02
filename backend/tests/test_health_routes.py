@@ -144,7 +144,7 @@ async def test_detail_password_metrics_and_nested_cache_counts(app, client, monk
     assert "private-key" in pair_spread_query._REALTIME_PAIR_SPREAD_CACHE
 
 
-async def test_negative_basis_failure_visible_in_detail_then_recovers(app, client):
+async def test_trade_availability_failure_visible_in_detail_then_recovers(app, client):
     app.state.task_supervisor = TaskSupervisor(initial_backoff=0.1, max_backoff=0.2)
     calls = 0
 
@@ -155,17 +155,17 @@ async def test_negative_basis_failure_visible_in_detail_then_recovers(app, clien
             raise RuntimeError("secret")
         await asyncio.Event().wait()
 
-    app.state.task_supervisor.start("negative-basis-monitor", fail_once, restart=True, critical=False)
+    app.state.task_supervisor.start("trade-availability-monitor", fail_once, restart=True, critical=False)
     await asyncio.sleep(0)
     response = await client.get("/api/health/detail", headers={"X-Dashboard-Password": "test-password"})
-    assert response.json()["tasks"]["negative-basis-monitor"]["state"] == "failed"
+    assert response.json()["tasks"]["trade-availability-monitor"]["state"] == "failed"
     assert "secret" not in response.text
     async with asyncio.timeout(1):
         while calls < 2:
             await asyncio.sleep(0.001)
     response = await client.get("/api/health/detail", headers={"X-Dashboard-Password": "test-password"})
-    assert response.json()["tasks"]["negative-basis-monitor"]["state"] == "running"
-    assert response.json()["tasks"]["negative-basis-monitor"]["restarts"] == 1
+    assert response.json()["tasks"]["trade-availability-monitor"]["state"] == "running"
+    assert response.json()["tasks"]["trade-availability-monitor"]["restarts"] == 1
 
 
 async def test_detail_includes_snapshot_consumer_and_collector_runtime(app, client):

@@ -4,7 +4,6 @@ from datetime import UTC, datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import ValidationError
 
-from app.core.features import require_feature
 from app.core.security import dashboard_password_header, verify_dashboard_password
 from app.models.market import MarketType
 from app.models.pair_range_backtest import PairRangeBacktestRequest, PairRangeBacktestResult
@@ -633,7 +632,7 @@ async def query_pair_spread(
             await close()
 
 
-@router.get("/symbol-query", dependencies=[Depends(require_feature("symbol_spread"))], response_model=SymbolSpreadQueryResult)
+@router.get("/symbol-query", response_model=SymbolSpreadQueryResult)
 async def query_symbol_spread(
     request: Request,
     symbol: str = Query(...),

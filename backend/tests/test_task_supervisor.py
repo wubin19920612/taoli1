@@ -11,7 +11,6 @@ from app.runtime.supervisor import EventLoopLag, StageTimings, TaskSupervisor, b
 from app.services.announcement_polling import run_announcement_sources
 from app.services.announcements import run_announcement_enrichment_loop
 from app.services.collector import MarketCollector, run_collector_loop
-from app.services.fs_monitor import FsMonitor
 from app.services.snapshot_store import SnapshotStore
 
 
@@ -253,35 +252,6 @@ async def test_loop_heartbeats_on_completed_and_failed_iterations(loop_name, ok)
     assert status.iterations == 1
     assert (status.last_ok_at is not None) == ok
     await supervisor.stop()
-
-
-@pytest.mark.parametrize("ok", [True, False])
-async def test_fs_iteration_heartbeat(ok, monkeypatch):
-    stop = asyncio.Event()
-    supervisor = TaskSupervisor()
-
-    async def settings():
-        if not ok:
-            stop.set()
-            raise RuntimeError("offline")
-        return SimpleNamespace(enabled=False, scan_interval_seconds=1)
-
-    async def wait():
-        stop.set()
-
-    async def sleep(_):
-        pass
-
-    monitor = SimpleNamespace(
-        repository=SimpleNamespace(settings=settings), report=SimpleNamespace(),
-        wake=SimpleNamespace(clear=lambda: None, wait=wait),
-    )
-    monkeypatch.setattr("app.services.fs_monitor.asyncio.sleep", sleep)
-    await supervisor.start("fs-monitor", lambda: FsMonitor.run(monitor, stop),
-                           restart=False, critical=False)
-    status = supervisor.statuses["fs-monitor"]
-    assert status.iterations == 1
-    assert (status.last_ok_at is not None) == ok
 
 
 async def test_announcement_source_heartbeat_uses_supervisor_context():

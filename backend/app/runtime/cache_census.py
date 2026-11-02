@@ -254,7 +254,7 @@ SERVICE_PATHS = (
     "snapshot_store._opportunities", "snapshot_store._exchange_errors",
     "market_collector._poll_states", "market_collector._exchange_snapshots",
     "market_collector._exchange_errors", "account_position_service._cache",
-    "account_connection_service._provider_cache", "fs_monitor.report", "fs_monitor._states",
+    "account_connection_service._provider_cache",
     "astro_hl_gc_catalog._cache", "instrument_market_cap_service._search_cache",
     "instrument_market_cap_service._market_cache", "instrument_market_cap_service._locks",
     "instrument_statistics_service._cache", "instrument_statistics_service._pending",
@@ -267,19 +267,15 @@ SERVICE_PATHS = (
     "market_validation.invalidated_ids", "market_validation.fx",
     "alert_engine._hits", "alert_engine._last_sent", "alert_engine._retry_after",
     "alert_engine._retry_attempts", "alert_engine._observations",
-    "opportunity_radar_alert_engine._hits", "opportunity_radar_alert_engine._alerted_active",
-    "opportunity_radar_alert_engine._last_sent", "phone_price_alert_engine._last_sent",
+    "phone_price_alert_engine._last_sent",
     "gate_twap_manager.jobs", "gate_twap_manager.tasks",
     "index_component_auto_watch._last_attempt_by_symbol",
     "index_component_monitor._latest_prices",
     "multi_exchange_premium_monitor._next_allowed", "multi_exchange_premium_monitor._locks",
     "multi_exchange_premium_monitor._request_at", "multi_exchange_premium_monitor._exchange_retry_at",
-    "multi_exchange_premium_monitor.status", "negative_basis_monitor._last_run_at",
-    "negative_basis_monitor._last_sent_at", "negative_basis_monitor._last_sent_level",
-    "negative_basis_monitor._auto_candidates", "oil_news_monitor._translation_retry_after",
-    "squeeze_monitor._verified_symbols", "service_controller._tasks",
-    "squeeze_route_monitor._queue._queue", "squeeze_route_monitor.tracker",
-    "squeeze_route_monitor.provider._route",
+    "multi_exchange_premium_monitor.status",
+    "service_controller._tasks",
+
 )
 
 _QUERY_ATTRIBUTES = (
@@ -354,7 +350,6 @@ def build_census_targets(app_services: object) -> list[CensusTarget]:
                                        "market_errors", "_collateral_names")),
         ("trade_availability_service.adapters", ("_markets", "_cached", "_rtoken_spot_symbols",
                                                  "market_errors", "_collateral_names")),
-        ("fs_monitor.providers", ("cache", "_metadata")),
         ("announcement_provider.providers", ("_localization._cache", "_localization._missing_until",
                                               "last_source_errors", "last_source_articles")),
     )

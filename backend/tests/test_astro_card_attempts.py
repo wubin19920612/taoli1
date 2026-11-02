@@ -14,7 +14,7 @@ from app.core.config import Settings
 from app.db.database import connect_database
 from app.db.schema import initialize_schema
 from app.main import create_app
-from app.models.settings import AstroCardSettings, LivePilotSettings
+from app.models.settings import AstroCardSettings
 from app.services.astro_alerts import AstroAlertService, _same_route
 from app.services.astro_card_attempts import AstroCardAttemptRepository, route_key
 from app.services.astro_client import AstroClientError, AstroSdkClient, AstroSdkConfig
@@ -61,7 +61,6 @@ def service(client, repository, *, both=False):
         Settings(astro_alert_auto_create=True, astro_manual_card_create=True, astro_dry_run_only=False),
         attempts=repository,
         card_settings=AstroCardSettings(card_variant="both" if both else "non_gc"),
-        live_pilot_settings=LivePilotSettings(enabled=True),
         hl_gc_catalog=SimpleNamespace(supports_opportunity=AsyncMock(return_value=False)),
         add_restart_delay_seconds=0,
     )
@@ -86,7 +85,7 @@ async def test_twenty_mixed_calls_serialize_each_variant(repository):
 
     client.before_add = pause
     calls = [asyncio.create_task(trigger(subject, source))
-             for source in ["alert", "manual", "preadd", "live_pilot"] * 5]
+             for source in (["alert", "manual", "preadd"] * 7)[:20]]
     await asyncio.wait_for(entered.wait(), 2)
     assert client.list_calls == 1
     release.set()
@@ -154,7 +153,7 @@ async def test_same_name_lock_includes_restart_wait(repository, monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("source", ["alert", "live_pilot", "preadd"])
+@pytest.mark.parametrize("source", ["alert", "preadd"])
 async def test_timeout_blocks_automatic_retry_and_reconciles(repository, source):
     client = Client()
     client.error = TimeoutError("add timed out")

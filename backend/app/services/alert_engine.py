@@ -272,3 +272,25 @@ def _limit_matches_per_symbol(matches: list[AlertMatch]) -> list[AlertMatch]:
             sorted(symbol_matches, key=_alert_rank, reverse=True)[:MAX_ALERTS_PER_SYMBOL]
         )
     return sorted(limited, key=_alert_rank, reverse=True)[:MAX_ALERTS_PER_EVALUATION]
+
+
+def filter_opportunities_by_alert_rules(
+    opportunities: list[Opportunity],
+    rules: list[AlertRule],
+    risk_settings: RiskSettings,
+    now: datetime | None = None,
+) -> list[Opportunity]:
+    active_rules = [rule for rule in rules if rule.enabled]
+    if not active_rules:
+        return []
+
+    current = now or datetime.now(UTC)
+    eligible: list[Opportunity] = []
+    seen_ids: set[str] = set()
+    for opportunity in opportunities:
+        if opportunity.id in seen_ids:
+            continue
+        if any(opportunity_matches_rule(rule, opportunity, current, risk_settings) for rule in active_rules):
+            eligible.append(opportunity)
+            seen_ids.add(opportunity.id)
+    return eligible

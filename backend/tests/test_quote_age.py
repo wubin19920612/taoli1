@@ -9,7 +9,6 @@ from fastapi.testclient import TestClient
 from app.api import routes_opportunities
 from app.models.market import MarketSnapshot, MarketType
 from app.models.opportunity import Opportunity
-from app.models.opportunity_radar import OpportunityRadarSettings
 from app.models.pair_spread import (
     PairSpreadCurrentLeg,
     PairSpreadLegQuery,
@@ -18,7 +17,6 @@ from app.models.pair_spread import (
 )
 from app.models.settings import RiskSettings
 from app.services import pair_spread_query
-from app.services.opportunity_radar import build_opportunity_radar_preview
 from app.services.pair_spread_query import PairSpreadQueryService
 from app.services.snapshot_store import SnapshotStore
 from app.services.spread_engine import build_directional_opportunity
@@ -143,11 +141,6 @@ def test_received_book_time_does_not_report_source_age(monkeypatch, mirrored_ups
     assert payload["buy_source_age_ms"] is None
     assert payload["buy_time_source"] == "received"
 
-    candidate = build_opportunity_radar_preview([anchor, peer], now=NOW).candidates[0]
-    assert candidate.long_age_ms == 2000
-    assert candidate.long_source_age_ms is None
-    assert candidate.long_time_source == "received"
-
 
 def test_legacy_opportunity_without_new_timestamps_still_expires(monkeypatch):
     data = opportunity().model_dump()
@@ -159,54 +152,6 @@ def test_legacy_opportunity_without_new_timestamps_still_expires(monkeypatch):
     assert len(client.get("/api/opportunities").json()) == 1
     monkeypatch.setattr(routes_opportunities, "utc_now", lambda: NOW + timedelta(seconds=31))
     assert client.get("/api/opportunities").json() == []
-
-
-def test_old_peer_is_removed_before_median_and_scoring():
-    preview = build_opportunity_radar_preview([
-        market("bybit", mark=98),
-        market("binance", mark=100),
-        # Including this peer in the median would suppress the fresh candidate.
-        market("okx", mark=90, timestamp=NOW - timedelta(seconds=121)),
-    ], OpportunityRadarSettings(min_depth_multiple=1, max_candidates=1), now=NOW)
-    assert preview.excluded_stale == 1
-    assert preview.displayed_candidates == 1
-    assert preview.candidates[0].peer_exchange == "binance"
-    assert preview.candidates[0].peer_median_premium_pct == 0
-    assert preview.total_pairs_evaluated == 1
-
-
-@pytest.mark.parametrize("stale_exchange", ["bybit", "binance"])
-def test_radar_leg_age_threshold_and_request_time(stale_exchange):
-    markets = [market("bybit", mark=98), market("binance")]
-    for row in markets:
-        if row.exchange == stale_exchange:
-            row.timestamp = NOW - timedelta(seconds=120)
-    settings = OpportunityRadarSettings(min_depth_multiple=1)
-    assert len(build_opportunity_radar_preview(markets, settings, now=NOW).candidates) == 1
-    later = build_opportunity_radar_preview(markets, settings, now=NOW + timedelta(milliseconds=1))
-    assert later.candidates == []
-    assert later.excluded_stale == 1
-
-
-@pytest.mark.parametrize("anchor_mark", [98, 102])
-@pytest.mark.parametrize("time_source", ["exchange", "upstream"])
-def test_radar_directional_leg_ages_and_book_source(anchor_mark, time_source):
-    anchor = market(
-        "bybit", mark=anchor_mark, timestamp=NOW - timedelta(seconds=2),
-        upstream_timestamp=NOW - timedelta(seconds=10),
-        book_timestamp=NOW - timedelta(seconds=4), quote_time_source=time_source,
-    )
-    peer = market("binance", timestamp=NOW - timedelta(seconds=1))
-    preview = build_opportunity_radar_preview([anchor, peer], now=NOW)
-    candidate = preview.candidates[0]
-    anchor_side = "long" if anchor_mark < 100 else "short"
-    peer_side = "short" if anchor_mark < 100 else "long"
-    assert getattr(candidate, f"{anchor_side}_age_ms") == 2000
-    assert getattr(candidate, f"{anchor_side}_source_age_ms") == 4000
-    assert getattr(candidate, f"{anchor_side}_time_source") == time_source
-    assert getattr(candidate, f"{peer_side}_age_ms") == 1000
-    assert getattr(candidate, f"{peer_side}_source_age_ms") is None
-    assert candidate.data_age_seconds == 2
 
 
 def current_leg(exchange, **updates):

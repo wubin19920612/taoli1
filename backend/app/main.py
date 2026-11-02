@@ -27,27 +27,19 @@ from app.api import (
     routes_alerts,
     routes_features,
     routes_funding_arbitrage,
-    routes_fs_monitor,
-    routes_funding_research,
     routes_gate_twap,
     routes_health,
     routes_history,
     routes_hyperliquid_trade_status,
     routes_index_components,
     routes_instruments,
-    routes_negative_basis_monitor,
-    routes_oil_news,
     routes_opportunities,
-    routes_opportunity_radar,
     routes_pair_spread,
     routes_premium_index,
     routes_phone_alerts,
     routes_settings,
     routes_market_identities,
-    routes_second_level_sampling,
-    routes_squeeze_arbitrage,
     routes_trade_availability,
-    routes_tradfi_perp_monitor,
     stream,
 )
 from app.core.config import Settings, get_settings
@@ -60,7 +52,6 @@ from app.db.repositories import (
     IndexComponentRepository,
     AlertRuleRepository,
     OpportunityHistoryRepository,
-    OilNewsRepository,
     PhonePriceAlertEventRepository,
     PhonePriceAlertRuleRepository,
     SettingsRepository,
@@ -73,16 +64,14 @@ from app.services.market_identity_catalog import OfficialMarketIdentityCatalog
 from app.models.alert import AlertEvent
 from app.models.orderbook import DepthValidationResult
 from app.models.phone_alert import PhonePriceAlertEvent
-from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, LivePilotSettings, RiskSettings
+from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, RiskSettings
 from app.services.account_positions import AccountPositionService, GateAccountPositionProvider
 from app.services.account_connections import AccountConnectionService
-from app.services.fs_monitor import FsMonitor
-from app.services.fs_astro import FsAstroBridge
-from app.services.fs_repository import FsRepository
 from app.services.alert_delivery_store import AlertDeliveryStore
 from app.services.alert_engine import (
     AlertEngine,
     AlertMatch,
+    filter_opportunities_by_alert_rules,
     observations_are_stable,
     required_open_spread_pct,
     suppresses_sf_negative_funding,
@@ -95,18 +84,13 @@ from app.services.announcements import (
     run_announcement_enrichment_loop,
     run_announcement_loop,
 )
-from app.services.astro_alerts import AstroAlertService, live_pilot_card_settings
+from app.services.astro_alerts import AstroAlertService
 from app.services.astro_client import AstroSdkClient, AstroSdkConfig
 from app.services.astro_planner import AstroPairPlanner, AstroPlannerConfig
 from app.services.astro_preadd import AstroPreaddService
 from app.services.collector import MarketCollector, default_exchange_adapters, run_collector_loop
-from app.services.data_filters import filter_markets, filter_opportunities
+from app.services.data_filters import filter_opportunities
 from app.services.feishu import FeishuConfig, FeishuNotifier
-from app.services.funding_research import (
-    FundingResearchRepository,
-    FundingResearchSettings,
-    record_funding_research_run,
-)
 from app.services.gate_crossex_hyperliquid import GateCrossExHyperliquidCatalog
 from app.services.gate_twap import GateTwapClient, GateTwapJobManager
 from app.services.history import OpportunityHistoryRecorder
@@ -128,39 +112,10 @@ from app.services.index_components import (
 )
 from app.services.instrument_market_cap import InstrumentMarketCapService
 from app.services.instrument_statistics import InstrumentStatisticsService
-from app.services.live_pilot import (
-    filter_opportunities_by_alert_rules,
-    select_live_pilot_matches,
-)
-from app.services.negative_basis_monitor import NegativeBasisMonitor, NegativeBasisMonitorRepository
-from app.services.squeeze_arbitrage.paper_repository import (
-    SqueezePaperRepository, initialize_paper_schema,
-)
-from app.services.squeeze_arbitrage.paper_runner import SqueezePaperMonitor
-from app.services.squeeze_arbitrage.repository import SqueezeRepository
-from app.services.squeeze_arbitrage.runner import SqueezeMonitor, SqueezeMonitorConfig
-from app.services.squeeze_arbitrage.route_repository import (
-    SqueezeRouteRepository,
-    initialize_route_schema,
-    migrate_legacy_route_data,
-)
-from app.services.squeeze_arbitrage.route_runner import RouteMonitorConfig, SqueezeRouteMonitor
-from app.services.oil_news import (
-    OilNewsMonitor,
-    OilNewsProvider,
-    OilNewsTranslator,
-    run_oil_news_loop,
-    run_oil_news_translation_loop,
-)
 from app.services.orderbook_validator import OrderBookDepthValidator
 from app.services.opportunity_trade_availability import (
     OpportunityTradeAvailabilityReport,
     build_opportunity_trade_availability_report,
-)
-from app.services.opportunity_radar import (
-    OpportunityRadarAlertEngine,
-    build_opportunity_radar_alert_message,
-    build_opportunity_radar_preview,
 )
 from app.services.pair_spread_funding_recorder import PairSpreadFundingRecorder, PairSpreadFundingRepository
 from app.services.pair_spread_presets import PairSpreadPresetRepository
@@ -170,7 +125,6 @@ from app.services.risk_labels import effective_open_edge_pct, known_volume_24h_u
 from app.services.snapshot_store import SnapshotStore
 from app.services.snapshot_consumers import LatestSnapshotSlot, SnapshotConsumer
 from app.services.service_control import DockerServiceController, ServiceControlConfig
-from app.services.second_level_sampler import SecondLevelSampler, SecondLevelSamplingRepository
 from app.services.trade_availability import (
     TradeAvailabilityMonitor,
     TradeAvailabilityService,
@@ -218,7 +172,6 @@ async def _refresh_astro_runtime_settings(app: FastAPI, settings_repo: SettingsR
     )
     if settings_repo is None:
         astro_alert_service.card_settings = fallback_settings
-        astro_alert_service.live_pilot_settings = LivePilotSettings()
         if fallback_automation is not None:
             astro_alert_service.alert_auto_create_enabled = fallback_automation.alert_auto_create
             astro_alert_service.allow_same_name_variants = (
@@ -240,12 +193,6 @@ async def _refresh_astro_runtime_settings(app: FastAPI, settings_repo: SettingsR
         astro_alert_service.allow_same_name_variants = (
             fallback_automation.allow_same_name_variants
         )
-    get_live_pilot_settings = getattr(settings_repo, "get_live_pilot_settings", None)
-    astro_alert_service.live_pilot_settings = (
-        await get_live_pilot_settings()
-        if get_live_pilot_settings is not None
-        else LivePilotSettings()
-    )
 
 
 def _find_latest_opportunity(app: FastAPI, opportunity_id: str):
@@ -441,8 +388,6 @@ async def _process_alert_match(
     match: AlertMatch,
     settings: RiskSettings,
     alert_template: AlertMessageTemplateSettings,
-    live_pilot_settings: LivePilotSettings,
-    live_pilot_match_keys: set[tuple[str, str]],
     delivery_store: AlertDeliveryStore,
     event_repo: AlertEventRepository,
     write_lock: asyncio.Lock,
@@ -470,7 +415,6 @@ async def _process_alert_match(
         card_condition_failure = False
         existing_card_skipped = False
         signal_condition_failure = False
-        is_live_pilot_match = (match.rule.id, match.opportunity.id) in live_pilot_match_keys
         latest_opportunity = _find_latest_opportunity(app, match.opportunity.id)
         message = build_alert_message(
             match.rule,
@@ -535,11 +479,6 @@ async def _process_alert_match(
                     astro_alert_service,
                     latest_opportunity,
                 )
-                if is_live_pilot_match and card_settings is not None:
-                    card_settings = live_pilot_card_settings(
-                        card_settings,
-                        live_pilot_settings,
-                    )
                 plan_failure = _astro_plan_validation_failure(
                     latest_opportunity,
                     card_settings,
@@ -561,11 +500,6 @@ async def _process_alert_match(
                                     latest_opportunity,
                                     settings,
                                     card_settings,
-                                    override_notional_usdt=(
-                                        live_pilot_settings.notional_per_symbol_usdt
-                                        if is_live_pilot_match
-                                        else None
-                                    ),
                                 ),
                                 timeout=getattr(app_settings, "alert_orderbook_timeout_seconds", 15.0),
                             )
@@ -587,11 +521,7 @@ async def _process_alert_match(
                         # No outer wait_for: cancelling add can leave an S7-B attempt
                         # unknown. Astro already enforces its own HTTP timeout.
                         with timed("astro"):
-                            astro_result = await (
-                                astro_alert_service.handle_live_pilot(latest_opportunity)
-                                if is_live_pilot_match
-                                else astro_alert_service.handle_alert(latest_opportunity)
-                            )
+                            astro_result = await astro_alert_service.handle_alert(latest_opportunity)
                         if astro_result.status == "skipped" and astro_result.action in {
                             "unsupported",
                             "conflict",
@@ -749,11 +679,6 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                 if settings_repo is not None
                 else AlertMessageTemplateSettings()
             )
-            live_pilot_settings = (
-                await settings_repo.get_live_pilot_settings()
-                if settings_repo is not None
-                else LivePilotSettings()
-            )
             await _refresh_astro_runtime_settings(app, settings_repo)
             now = datetime.now(UTC)
             opportunities = filter_opportunities(app.state.snapshot_store.get_opportunities(), settings)
@@ -767,50 +692,29 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                 now=now,
             )
             matches = app.state.alert_engine.evaluate(opportunities, rules, now=now, risk_settings=settings)
-            live_pilot_matches = (
-                select_live_pilot_matches(matches, live_pilot_settings, settings)
-                if live_pilot_settings.enabled
-                else []
-            )
-            live_pilot_match_keys = {
-                (match.rule.id, match.opportunity.id)
-                for match in live_pilot_matches
-            }
-            ordered_matches = [
-                *(
-                    match
-                    for match in matches
-                    if (match.rule.id, match.opportunity.id) in live_pilot_match_keys
-                ),
-                *(
-                    match
-                    for match in matches
-                    if (match.rule.id, match.opportunity.id) not in live_pilot_match_keys
-                ),
-            ]
             concurrency = getattr(
                 app_settings, "alert_match_concurrency", Settings.alert_match_concurrency,
             )
             semaphore = asyncio.Semaphore(concurrency)
             matches_by_symbol: dict[str, list[AlertMatch]] = {}
-            for match in ordered_matches:
+            for match in matches:
                 matches_by_symbol.setdefault(match.opportunity.symbol, []).append(match)
             # At concurrency=1 preserve even interleaved symbols in the original order.
-            groups = [ordered_matches] if concurrency == 1 else list(matches_by_symbol.values())
+            groups = [matches] if concurrency == 1 else list(matches_by_symbol.values())
 
             async def process_bounded(group: list[AlertMatch]) -> bool:
                 async with semaphore:
                     group_ok = True
                     for match in group:
                         match_ok = await _process_alert_match(
-                            app, match, settings, alert_template, live_pilot_settings,
-                            live_pilot_match_keys, delivery_store, event_repo, write_lock,
+                            app, match, settings, alert_template,
+                            delivery_store, event_repo, write_lock,
                             app_settings,
                         )
                         group_ok = group_ok and match_ok
                     return group_ok
 
-            # First-seen symbol order preserves live-pilot priority at admission;
+            # First-seen symbol order preserves ordinary match order at admission;
             # keeping the permit for the whole group serializes same-symbol matches.
             tasks = [asyncio.create_task(process_bounded(group)) for group in groups]
             try:
@@ -838,47 +742,6 @@ async def _send_index_component_alert(app: FastAPI, message: str) -> None:
     if notifier is None:
         return
     await notifier.send_text(message)
-
-
-async def _run_opportunity_radar_alert_loop(
-    app: FastAPI,
-    interval_seconds: float,
-    stop_event: asyncio.Event,
-) -> None:
-    while not stop_event.is_set():
-        try:
-            settings_repo: SettingsRepository | None = getattr(app.state, "settings_repo", None)
-            notifier = getattr(app.state, "feishu_notifier", None)
-            webhook_url = getattr(getattr(notifier, "config", None), "webhook_url", "")
-            if settings_repo is not None and notifier is not None and webhook_url:
-                settings = await settings_repo.get_opportunity_radar_settings()
-                engine: OpportunityRadarAlertEngine = (
-                    app.state.opportunity_radar_alert_engine
-                )
-                if settings.enabled and settings.feishu_notifications_enabled:
-                    risk_settings = await settings_repo.get_risk_settings()
-                    markets = filter_markets(
-                        app.state.snapshot_store.get_markets(),
-                        risk_settings,
-                    )
-                    now = datetime.now(UTC)
-                    preview = build_opportunity_radar_preview(markets, settings, now=now)
-                    for candidate in engine.evaluate(preview.candidates, settings, now=now):
-                        try:
-                            await notifier.send_text(
-                                build_opportunity_radar_alert_message(candidate, observed_at=now)
-                            )
-                        except Exception:  # noqa: BLE001 - retry after transient webhook failures.
-                            engine.release_failed(candidate.id)
-                            logger.exception("opportunity radar Feishu notification failed")
-                else:
-                    engine.reset_active()
-        except Exception:
-            logger.exception("opportunity radar alert loop failed")
-        try:
-            await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
-        except TimeoutError:
-            continue
 
 
 async def _run_phone_price_alert_loop(
@@ -933,50 +796,6 @@ async def _run_phone_price_alert_loop(
             continue
 
 
-async def _run_funding_research_loop(
-    app: FastAPI,
-    interval_seconds: float,
-    stop_event: asyncio.Event,
-) -> None:
-    while not stop_event.is_set():
-        try:
-            repo: FundingResearchRepository | None = getattr(
-                app.state,
-                "funding_research_repo",
-                None,
-            )
-            if repo is not None:
-                settings_repo: SettingsRepository | None = getattr(app.state, "settings_repo", None)
-                risk_settings = (
-                    await settings_repo.get_risk_settings()
-                    if settings_repo is not None
-                    else RiskSettings()
-                )
-                markets = filter_markets(app.state.snapshot_store.get_markets(), risk_settings)
-                result = await record_funding_research_run(
-                    markets=markets,
-                    repo=repo,
-                    settings=FundingResearchSettings(
-                        snapshot_retention_hours=app.state.settings.funding_research_snapshot_retention_hours,
-                    ),
-                    manage_paper_trades=app.state.settings.funding_research_manage_paper_trades,
-                )
-                logger.info(
-                    "funding research scan recorded markets=%s candidates=%s pruned=%s opened=%s closed=%s",
-                    result.market_snapshot_count,
-                    result.candidate_snapshot_count,
-                    result.pruned_snapshot_count,
-                    len(result.opened_paper_trades),
-                    len(result.closed_paper_trades),
-                )
-        except Exception:
-            logger.exception("funding research loop failed")
-        try:
-            await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
-        except TimeoutError:
-            continue
-
-
 def create_app(
     snapshot_store: SnapshotStore | None = None,
     settings: Settings | None = None,
@@ -988,10 +807,10 @@ def create_app(
     app_settings = settings or get_settings()
     disabled = app_settings.disabled_features
     store = snapshot_store or SnapshotStore()
-    stop_event = asyncio.Event()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        stop_event = asyncio.Event()
         if not app.state.settings.dashboard_password:
             logger.warning("DASHBOARD_PASSWORD is empty; all API routes are unprotected")
         db_path = _sqlite_path(app_settings)
@@ -1004,24 +823,6 @@ def create_app(
             # A post-create mark that times out leaves the route unknown; wait longer.
             await attempts_db.execute("PRAGMA busy_timeout=15000")
         app.state.astro_alert_service.attempts = AstroCardAttemptRepository(attempts_db)
-        route_db = None
-        if "squeeze" not in disabled:
-            route_stem, route_extension = os.path.splitext(db_path)
-            route_db_path = f"{route_stem}-squeeze-route{route_extension or '.db'}"
-            route_db = db if db_path == ":memory:" else await connect_database(route_db_path)
-            if route_db is not db:
-                await initialize_route_schema(route_db)
-                await migrate_legacy_route_data(route_db, db_path)
-                await route_db.execute("PRAGMA busy_timeout=500")
-            await initialize_paper_schema(route_db)
-            app.state.squeeze_repo = SqueezeRepository(db)
-            app.state.squeeze_route_repo = SqueezeRouteRepository(route_db)
-            app.state.squeeze_paper_repo = SqueezePaperRepository(
-                route_db, app.state.squeeze_route_repo._lock
-            )
-            app.state.squeeze_paper_monitor = SqueezePaperMonitor(
-                app.state.squeeze_paper_repo, app.state.squeeze_route_repo
-            )
         app.state.alert_rule_repo = AlertRuleRepository(db)
         app.state.alert_event_repo = AlertEventRepository(db)
         app.state.alert_delivery_store = AlertDeliveryStore(db)
@@ -1051,16 +852,6 @@ def create_app(
         app.state.account_position_service.set_dynamic_provider_loader(
             app.state.account_connection_service.providers
         )
-        fs_repository = FsRepository(await connect_database(db_path))
-        await fs_repository.initialize()
-        app.state.fs_monitor = FsMonitor(
-            fs_repository, app.state.account_connection_service, store,
-            astro=FsAstroBridge(
-                app.state.astro_client, fs_repository, app.state.settings_repo.get_risk_settings,
-                dry_run_only=app_settings.astro_dry_run_only,
-            ),
-            identities=app.state.market_validation,
-        )
         app.state.astro_alert_service.risk_settings_loader = (
             app.state.settings_repo.get_risk_settings
         )
@@ -1077,42 +868,13 @@ def create_app(
             alert_sender=preadd_alert_sender,
         )
         app.state.history_repo = OpportunityHistoryRepository(db)
-        app.state.funding_research_repo = (
-            FundingResearchRepository(db) if "funding_research" not in disabled else None
-        )
         app.state.index_component_repo = IndexComponentRepository(db)
         app.state.announcement_repo = AnnouncementRepository(db)
-        app.state.oil_news_repo = OilNewsRepository(db) if "oil_news" not in disabled else None
-        if "second_level_sampling" not in disabled:
-            app.state.second_level_sampler = SecondLevelSampler(
-                SecondLevelSamplingRepository(db),
-                risk_settings_loader=app.state.settings_repo.get_risk_settings,
-            )
         text_alert_sender = (
             (lambda message: _send_index_component_alert(app, message))
             if app_settings.feishu_live_send_enabled
             else None
         )
-        oil_news_alert_sender = (
-            (lambda message: _send_index_component_alert(app, message))
-            if app_settings.oil_news_feishu_live_send_enabled
-            and app_settings.feishu_webhook_url
-            else None
-        )
-        if "oil_news" not in disabled:
-            app.state.oil_news_monitor = OilNewsMonitor(
-                app.state.oil_news_repo,
-                OilNewsProvider(),
-                alert_sender=oil_news_alert_sender,
-                translator=OilNewsTranslator(),
-            )
-        if "negative_basis" not in disabled:
-            app.state.negative_basis_monitor = NegativeBasisMonitor(
-                NegativeBasisMonitorRepository(db),
-                snapshot_store=store,
-                alert_sender=text_alert_sender,
-                risk_settings_loader=app.state.settings_repo.get_risk_settings,
-            )
         app.state.pair_spread_funding_recorder = PairSpreadFundingRecorder(PairSpreadFundingRepository(db))
         preset_db = db if db_path == ":memory:" else await connect_database(db_path)
         app.state.pair_spread_preset_repo = PairSpreadPresetRepository(preset_db)
@@ -1147,54 +909,7 @@ def create_app(
             supervisor.start(
                 "loop-stall-watchdog", loop_stall_watchdog.run, restart=False, critical=False,
             )
-        if (start_collector and start_background_workers
-                and app_settings.squeeze_monitor_enabled and "squeeze" not in disabled):
-            symbols = tuple(
-                symbol.strip().upper()
-                for symbol in app_settings.squeeze_monitor_symbols.split(",")
-                if symbol.strip()
-            )
-            excluded_symbols = tuple(
-                symbol.strip().upper()
-                for symbol in app_settings.squeeze_monitor_exclude_symbols.split(",")
-                if symbol.strip()
-            )
-            app.state.squeeze_monitor = SqueezeMonitor(
-                app.state.squeeze_repo,
-                SqueezeMonitorConfig(
-                    mode=app_settings.squeeze_monitor_mode,
-                    symbols=symbols,
-                    excluded_symbols=excluded_symbols,
-                ),
-            )
-            app.state.squeeze_monitor_active = True
-            _start_background_task(
-                supervisor, lambda: app.state.squeeze_monitor.run(stop_event), name="squeeze-monitor"
-            )
-        if (start_collector and start_background_workers
-                and app_settings.squeeze_route_enabled and "squeeze" not in disabled):
-            app.state.squeeze_route_monitor = SqueezeRouteMonitor(
-                app.state.squeeze_route_repo, RouteMonitorConfig()
-            )
-            _start_background_task(
-                supervisor, lambda: app.state.squeeze_route_monitor.run(stop_event),
-                name="squeeze-route-monitor",
-            )
-        if (start_collector and start_background_workers
-                and app_settings.squeeze_paper_enabled and "squeeze" not in disabled):
-            _start_background_task(
-                supervisor, lambda: app.state.squeeze_paper_monitor.run(stop_event),
-                name="squeeze-paper-monitor",
-            )
         if start_background_workers:
-            if app.state.second_level_sampler is not None:
-                await app.state.second_level_sampler.initialize()
-            if "negative_basis" not in disabled:
-                _start_background_task(
-                    supervisor,
-                    lambda: app.state.negative_basis_monitor.run(stop_event),
-                    name="negative-basis-monitor",
-                )
             _start_background_task(
                 supervisor,
                 lambda: app.state.pair_spread_funding_recorder.run(stop_event),
@@ -1213,7 +928,6 @@ def create_app(
         collector: MarketCollector | None = None
         announcement_provider = None
         if start_collector:
-            _start_background_task(supervisor, lambda: app.state.fs_monitor.run(stop_event), name="fs-monitor")
             _start_background_task(
                 supervisor,
                 lambda: app.state.market_identity_catalog.run(
@@ -1299,16 +1013,6 @@ def create_app(
                 lambda: _run_alert_loop(app, app_settings.poll_interval_seconds, stop_event),
                 name="alert-loop",
             )
-            if "opportunity_radar" not in disabled:
-                _start_background_task(
-                    supervisor,
-                    lambda: _run_opportunity_radar_alert_loop(
-                        app,
-                        app_settings.poll_interval_seconds,
-                        stop_event,
-                    ),
-                    name="opportunity-radar-alert-loop",
-                )
             if app_settings.feishu_live_send_enabled and app_settings.feishu_phone_enabled:
                 _start_background_task(
                     supervisor,
@@ -1351,35 +1055,6 @@ def create_app(
                 ),
                 name="announcement-enrichment-loop",
             )
-            if "oil_news" not in disabled:
-                _start_background_task(
-                    supervisor,
-                    lambda: run_oil_news_loop(
-                        app.state.oil_news_monitor,
-                        app.state.settings_repo.get_oil_news_settings,
-                        stop_event,
-                    ),
-                    name="oil-news-loop",
-                )
-                _start_background_task(
-                    supervisor,
-                    lambda: run_oil_news_translation_loop(
-                        app.state.oil_news_monitor,
-                        app.state.settings_repo.get_oil_news_settings,
-                        stop_event,
-                    ),
-                    name="oil-news-translation-loop",
-                )
-            if app_settings.funding_research_enabled and "funding_research" not in disabled:
-                _start_background_task(
-                    supervisor,
-                    lambda: _run_funding_research_loop(
-                        app,
-                        app_settings.funding_poll_interval_seconds,
-                        stop_event,
-                    ),
-                    name="funding-research-loop",
-                )
         if start_background_workers and app_settings.memory_probe_enabled:
             from app.runtime.memory_probe import MemoryProbe
 
@@ -1423,24 +1098,14 @@ def create_app(
                 "service_controller",
                 # The manager owns client shutdown when present.
                 "gate_twap_manager" if app.state.gate_twap_manager is not None else "gate_twap_client",
-                "tradfi_perp_live_fetcher",
-                "second_level_sampler",
-                "negative_basis_monitor",
-                "squeeze_monitor",
-                "squeeze_route_monitor",
-                "squeeze_paper_monitor",
                 "pair_spread_funding_recorder",
-                "oil_news_monitor",
                 "trade_availability_service",
                 "hyperliquid_trade_status_service",
                 "account_connection_service",
-                "fs_monitor",
                 "instrument_market_cap_service",
                 "instrument_statistics_service",
                 "feishu_notifier",
             )
-            if route_db is not None and route_db is not db:
-                await route_db.close()
             if identity_db is not db:
                 await identity_db.close()
             if preset_db is not db:
@@ -1458,7 +1123,6 @@ def create_app(
     app.state.instrument_statistics_service = InstrumentStatisticsService()
     app.state.market_collector = None
     app.state.orderbook_validator = None
-    app.state.funding_research_repo = None
     app.state.pair_spread_query_service_factory = None
     app.state.premium_index_query_service_factory = None
     app.state.pair_spread_funding_recorder = None
@@ -1468,24 +1132,11 @@ def create_app(
     app.state.hyperliquid_trade_status_monitor = None
     app.state.trade_availability_watch_repo = None
     app.state.trade_availability_monitor = None
-    app.state.second_level_sampler = None
-    app.state.oil_news_monitor = None
-    app.state.negative_basis_monitor = None
-    app.state.squeeze_repo = None
-    app.state.squeeze_monitor = None
-    app.state.squeeze_monitor_active = False
-    app.state.squeeze_route_repo = None
-    app.state.squeeze_route_monitor = None
-    app.state.squeeze_paper_repo = None
-    app.state.squeeze_paper_monitor = None
     app.state.trade_availability_service = None
     app.state.account_position_service = None
     app.state.account_connection_service = None
     app.state.alert_engine = AlertEngine()
     app.state.phone_price_alert_engine = PhonePriceAlertEngine()
-    app.state.opportunity_radar_alert_engine = (
-        OpportunityRadarAlertEngine() if "opportunity_radar" not in disabled else None
-    )
     app.state.hyperliquid_trade_status_service = HyperliquidTradeStatusService()
     app.state.astro_client = AstroSdkClient(
         AstroSdkConfig(
@@ -1520,10 +1171,7 @@ def create_app(
         [GateAccountPositionProvider(gate_twap_client)]
     )
     app.state.feishu_live_send_enabled = app_settings.feishu_live_send_enabled
-    feishu_text_send_enabled = (
-        app_settings.feishu_live_send_enabled
-        or app_settings.oil_news_feishu_live_send_enabled
-    )
+    feishu_text_send_enabled = app_settings.feishu_live_send_enabled
     app.state.feishu_notifier = FeishuNotifier(
         FeishuConfig(
             webhook_url=app_settings.feishu_webhook_url if feishu_text_send_enabled else "",
@@ -1548,10 +1196,7 @@ def create_app(
         allow_headers=["*"],
     )
     # Every API router uses the same guard; public exceptions live in security.py.
-    from app.api.routes_spread_events import router as spread_events_router
-
     for router in (
-        spread_events_router,
         routes_features.router,
         routes_health.router,
         routes_account_connections.router,
@@ -1559,7 +1204,6 @@ def create_app(
         routes_astro.router,
         routes_arb_mvp.router,
         routes_opportunities.router,
-        routes_opportunity_radar.router,
         routes_history.router,
         routes_hyperliquid_trade_status.router,
         routes_trade_availability.router,
@@ -1567,19 +1211,12 @@ def create_app(
         routes_instruments.market_cap_router,
         routes_pair_spread.router,
         routes_premium_index.router,
-        routes_negative_basis_monitor.router,
-        routes_squeeze_arbitrage.router,
         routes_index_components.router,
         routes_announcements.router,
-        routes_oil_news.router,
         routes_alerts.router,
         routes_phone_alerts.router,
         routes_funding_arbitrage.router,
-        routes_fs_monitor.router,
-        routes_funding_research.router,
         routes_gate_twap.router,
-        routes_tradfi_perp_monitor.router,
-        routes_second_level_sampling.router,
         routes_settings.router,
         routes_market_identities.router,
         routes_admin.router,

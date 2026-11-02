@@ -11,7 +11,7 @@ from fastapi import FastAPI
 import app.main as main
 from app.core import config
 from app.models.alert import AlertRule
-from app.models.settings import AlertMessageTemplateSettings, LivePilotSettings
+from app.models.settings import AlertMessageTemplateSettings
 from app.services.alert_delivery_store import AlertDeliveryStore
 from app.services.alert_engine import AlertMatch
 from app.services.opportunity_trade_availability import OpportunityTradeAvailabilityReport
@@ -27,7 +27,7 @@ from test_alert_loop import (
 )
 
 
-def isolation_app(*, count=2, concurrency=3, live_pilot=False):
+def isolation_app(*, count=2, concurrency=3):
     stop = asyncio.Event()
     app = FastAPI()
     app.state.settings = SimpleNamespace(
@@ -55,9 +55,7 @@ def isolation_app(*, count=2, concurrency=3, live_pilot=False):
     app.state.alert_rule_repo = FakeRuleRepo([rule])
     app.state.alert_event_repo = FakeEventRepo(stop)
     app.state.alert_delivery_store = AsyncMock(spec=AlertDeliveryStore)
-    app.state.settings_repo = FakeSettingsRepo(live_pilot_settings=LivePilotSettings(
-        enabled=live_pilot, max_symbols=1, min_next_funding_edge_pct=0.01,
-    ))
+    app.state.settings_repo = FakeSettingsRepo()
     app.state.alert_engine = AllMatchesAlertEngine(rule)
     app.state.feishu_notifier = FakeFeishuNotifier()
     app.state.astro_alert_service = FakeAstroAlertService()
@@ -86,19 +84,18 @@ def timing_rows(caplog):
 def same_symbol_rule_matches(app, monkeypatch):
     first, other = app.state.snapshot_store.get_opportunities()
     rule = app.state.alert_rule_repo.rules[0]
-    pilot_rule = rule.model_copy(update={"id": "pilot-rule"})
-    pilot = AlertMatch(pilot_rule, first, [])
+    first_rule = rule.model_copy(update={"id": "first-rule"})
+    first_match = AlertMatch(first_rule, first, [])
     normal = AlertMatch(rule, first, [])
     unrelated = AlertMatch(rule, other, [])
-    app.state.alert_engine.evaluate = Mock(return_value=[unrelated, normal, pilot])
-    monkeypatch.setattr(main, "select_live_pilot_matches", lambda *args: [pilot])
-    return pilot, unrelated, normal
+    app.state.alert_engine.evaluate = Mock(return_value=[first_match, unrelated, normal])
+    return first_match, unrelated, normal
 
 
 @pytest.mark.asyncio
-async def test_same_symbol_waits_for_live_pilot_while_other_symbol_completes(monkeypatch):
-    app, stop = isolation_app(live_pilot=True)
-    pilot, unrelated, normal = same_symbol_rule_matches(app, monkeypatch)
+async def test_same_symbol_waits_for_first_match_while_other_symbol_completes(monkeypatch):
+    app, stop = isolation_app()
+    first_match, unrelated, normal = same_symbol_rule_matches(app, monkeypatch)
     entered, release, completed = asyncio.Event(), asyncio.Event(), asyncio.Event()
     started = []
     original_process = main._process_alert_match
@@ -110,27 +107,28 @@ async def test_same_symbol_waits_for_live_pilot_while_other_symbol_completes(mon
             completed.set()
         return result
 
-    original_pilot = app.state.astro_alert_service.handle_live_pilot
+    original_handle = app.state.astro_alert_service.handle_alert
 
-    async def handle_pilot(item):
-        entered.set()
-        await release.wait()
-        return await original_pilot(item)
+    async def handle_first(item):
+        if item.id == "opp-0":
+            entered.set()
+            await release.wait()
+        return await original_handle(item)
 
     monkeypatch.setattr(main, "_process_alert_match", process)
-    app.state.astro_alert_service.handle_live_pilot = handle_pilot
+    app.state.astro_alert_service.handle_alert = handle_first
     task = asyncio.create_task(main._run_alert_loop(app, 60, stop))
     try:
         await asyncio.wait_for(entered.wait(), 1)
         await asyncio.wait_for(completed.wait(), 1)
-        assert started == [pilot, unrelated]
+        assert started == [first_match, unrelated]
         assert [e.opportunity_id for e in app.state.alert_event_repo.events] == ["opp-1"]
         assert not task.done()
         release.set()
         await asyncio.wait_for(task, 1)
-        assert started == [pilot, unrelated, normal]
+        assert started == [first_match, unrelated, normal]
         assert [e.rule_id for e in app.state.alert_event_repo.events
-                if e.opportunity_id == "opp-0"] == ["pilot-rule", "isolation-rule"]
+                if e.opportunity_id == "opp-0"] == ["first-rule", "isolation-rule"]
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
@@ -138,7 +136,7 @@ async def test_same_symbol_waits_for_live_pilot_while_other_symbol_completes(mon
 
 @pytest.mark.asyncio
 async def test_serial_concurrency_preserves_interleaved_symbol_order(monkeypatch):
-    app, stop = isolation_app(concurrency=1, live_pilot=True)
+    app, stop = isolation_app(concurrency=1)
     ordered = same_symbol_rule_matches(app, monkeypatch)
     await asyncio.wait_for(main._run_alert_loop(app, 60, stop), 1)
     assert [(e.rule_id, e.opportunity_id) for e in app.state.alert_event_repo.events] == [
@@ -279,10 +277,9 @@ async def test_diagnostic_timeout_delivers_restricted_rating(monkeypatch, caplog
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("live_pilot", [False, True])
 @pytest.mark.parametrize("compact", [False, True])
-async def test_orderbook_timeout_skips_all_card_creation(monkeypatch, live_pilot, compact, caplog):
-    app, stop = isolation_app(count=1, live_pilot=live_pilot)
+async def test_orderbook_timeout_skips_all_card_creation(monkeypatch, compact, caplog):
+    app, stop = isolation_app(count=1)
     app.state.settings.alert_orderbook_timeout_seconds = 0.01
     app.state.settings_repo.alert_template = AlertMessageTemplateSettings(
         format="compact" if compact else "detailed", suppress_when_card_conditions_fail=True,
@@ -297,7 +294,6 @@ async def test_orderbook_timeout_skips_all_card_creation(monkeypatch, live_pilot
     event = app.state.alert_event_repo.events[0]
     assert event.status == "muted"
     assert not app.state.astro_alert_service.calls
-    assert not app.state.astro_alert_service.live_pilot_calls
     if compact:
         assert "卡片：未创建（订单簿校验超时）" in event.message
     else:
@@ -368,8 +364,8 @@ async def test_cancel_propagates_and_drains_inflight_matches(monkeypatch, child_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("concurrency", [1, 3])
-async def test_live_pilot_starts_first_and_success_heartbeat(monkeypatch, concurrency):
-    app, stop = isolation_app(concurrency=concurrency, live_pilot=True)
+async def test_regular_match_order_and_success_heartbeat(monkeypatch, concurrency):
+    app, stop = isolation_app(concurrency=concurrency)
     started = []
     original_find = main._find_latest_opportunity
 
@@ -381,8 +377,8 @@ async def test_live_pilot_starts_first_and_success_heartbeat(monkeypatch, concur
     heartbeat = Mock()
     monkeypatch.setattr(main, "beat", heartbeat)
     await asyncio.wait_for(main._run_alert_loop(app, 60, stop), 1)
-    assert started == ["opp-1", "opp-0"]
-    assert app.state.astro_alert_service.live_pilot_calls == ["opp-1"]
+    assert started == ["opp-0", "opp-1"]
+    assert app.state.astro_alert_service.calls == ["opp-0", "opp-1"]
     if concurrency == 1:
         assert [e.opportunity_id for e in app.state.alert_event_repo.events] == started
     heartbeat.assert_called_once_with("alert-loop", ok=True)
