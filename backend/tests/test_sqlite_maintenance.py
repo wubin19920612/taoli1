@@ -35,15 +35,15 @@ async def test_retention_boundary_and_dry_run(tmp_path, monkeypatch, caplog, dry
     path = str(tmp_path / "maintenance.db")
     db = await connect_database(path)
     statements = []
-    original_connect = maintenance.connect_database
+    original_connect = maintenance.aiosqlite.connect
 
-    async def tracked_connect(path):
-        dedicated = await original_connect(path)
+    async def tracked_connect(path, **kwargs):
+        dedicated = await original_connect(path, **kwargs)
         assert dedicated is not db
         await dedicated.set_trace_callback(statements.append)
         return dedicated
 
-    monkeypatch.setattr(maintenance, "connect_database", tracked_connect)
+    monkeypatch.setattr(maintenance.aiosqlite, "connect", tracked_connect)
     try:
         for table, column, days in TABLES:
             await db.execute(f'CREATE TABLE "{table}" ("{column}" TEXT)')
@@ -155,24 +155,37 @@ async def test_vacuum_disk_guard_and_actual_compaction(tmp_path, monkeypatch, ca
 
 
 @pytest.mark.parametrize("enabled,workers,expected", [(False, True, False), (True, False, False), (True, True, True)])
-async def test_main_startup_switch(tmp_path, monkeypatch, enabled, workers, expected):
+@pytest.mark.parametrize("legacy", [True, False])
+async def test_main_startup_switch(tmp_path, monkeypatch, enabled, workers, expected, legacy):
     from app import main
     from app.runtime.supervisor import TaskSupervisor
 
     started = {}
+    recorders = []
+    original_recorder = main.OpportunityHistoryRecorder
+
+    def recorder(*args, **kwargs):
+        result = original_recorder(*args, **kwargs)
+        recorders.append(result)
+        return result
 
     def start(self, name, factory, *, restart, critical):
         started[name] = factory
 
     monkeypatch.setattr(TaskSupervisor, "start", start)
+    monkeypatch.setattr(main, "OpportunityHistoryRecorder", recorder)
     monkeypatch.setattr(main, "default_exchange_adapters", list)
     app = main.create_app(settings=config.Settings(
         database_url=f"sqlite:///{tmp_path / 'startup.db'}",
         disabled_features=config.OPTIONAL_FEATURES,
         sqlite_maintenance_enabled=enabled,
-    ), start_background_workers=workers)
+        history_legacy_vacuum_enabled=legacy,
+    ), start_background_workers=workers, start_collector=workers)
     async with app.router.lifespan_context(app):
         assert ("sqlite-maintenance" in started) is expected
+        if workers:
+            assert len(recorders) == 1
+            assert recorders[0].legacy_vacuum_enabled is (legacy and not enabled)
 
 
 async def test_schedule_only_runs_once_in_low_peak_window(tmp_path, monkeypatch):
@@ -195,7 +208,7 @@ async def test_schedule_only_runs_once_in_low_peak_window(tmp_path, monkeypatch)
 
 async def test_disabled_worker_never_connects(tmp_path, monkeypatch):
     connect = AsyncMock(side_effect=AssertionError("must not connect"))
-    monkeypatch.setattr(maintenance, "connect_database", connect)
+    monkeypatch.setattr(maintenance.aiosqlite, "connect", connect)
     worker = maintenance.SQLiteMaintenance(str(tmp_path / "disabled.db"), config.Settings())
     await worker.run(asyncio.Event())
     await worker.run_once(now=NOW)
@@ -237,17 +250,17 @@ async def test_stop_or_cancel_between_batches_closes_dedicated_connection(tmp_pa
     path = str(tmp_path / "stop.db")
     db = await connect_database(path)
     dedicated_connections = []
-    original_connect = maintenance.connect_database
+    original_connect = maintenance.aiosqlite.connect
     stop = asyncio.Event()
     yielded = asyncio.Event()
     supervisor = TaskSupervisor()
 
-    async def tracked_connect(path):
-        connection = await original_connect(path)
+    async def tracked_connect(path, **kwargs):
+        connection = await original_connect(path, **kwargs)
         dedicated_connections.append(connection)
         return connection
 
-    monkeypatch.setattr(maintenance, "connect_database", tracked_connect)
+    monkeypatch.setattr(maintenance.aiosqlite, "connect", tracked_connect)
     try:
         await db.execute("CREATE TABLE alert_events (created_at TEXT)")
         await db.executemany("INSERT INTO alert_events VALUES (?)", [

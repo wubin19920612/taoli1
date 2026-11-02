@@ -947,6 +947,8 @@ def create_app(
             history_recorder = OpportunityHistoryRecorder(
                 app.state.history_repo,
                 app_settings.history_settings,
+                legacy_vacuum_enabled=(app_settings.history_legacy_vacuum_enabled
+                                       and not app_settings.sqlite_maintenance_enabled),
             )
             index_component_monitor = IndexComponentMonitor(
                 app.state.index_component_repo,

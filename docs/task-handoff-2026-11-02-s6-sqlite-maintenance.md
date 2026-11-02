@@ -77,3 +77,46 @@ $env:ASTRO_ALERT_AUTO_CREATE = 'false'
 - history 原有维护路径仍保留，因此不能宣称已消除原路径 VACUUM 的阻塞。
 - 工作开始时工作区干净；本任务只新增上述维护包、测试和文档，无其他任务 WIP。临时环境在系统 TEMP 下，不纳入仓库。
 - 编码交付后，后续上线演练/启用应另开运维任务，并以本文作为交接；不要混入 S4 备份改造或共享连接事务重构。
+
+## 审查修复
+
+本节更新于 2026-11-02，针对 `review-s6.log` 末尾的 5 项问题；以下规则取代上文中旧连接、`julianday` 和 history VACUUM 路径的描述。
+
+分支仍为 `codex/s6-sqlite-maintenance`；本轮基线为 `d1d02a4e75ea1870eec7e88bcc6e13c043a2672f`，开始时工作区干净。只修改维护模块、`config.py`、`main.py` 中的 recorder 接线、`history.py` 的最小开关逻辑、相关测试和本文。交付提交标题：`fix: 处理 S6 审查问题`，新增提交，不 amend。
+
+### 修复与业务规则
+
+1. **P1：旧 history VACUUM 互斥。** 新增 `HISTORY_LEGACY_VACUUM_ENABLED=true`。`main.py` 传入 recorder 的有效值为该开关与 `not SQLITE_MAINTENANCE_ENABLED` 的交集。维护模块启用时，即使是 dry-run，旧路径也只 prune、不调用 `vacuum_if_beneficial`；维护模块关闭且新开关保持默认时，原行为不变。未改 history 保留期、repository VACUUM 实现或共享连接事务规则。四种开关组合与真实应用启动接线均有测试。
+2. **P2-1：可用索引的时间范围分页。** 截止时间先转为 UTC `isoformat()`；候选上界为截止时间加一天，以覆盖 ISO 时区偏移（绝对值小于 24 小时）及秒/微秒表示差异。SQL 使用裸时间列字符串范围比较，候选逐条用 `datetime.fromisoformat` 校验真实时刻。等于截止时间、无时区、无法解析的值保留；非标准表示未进入索引范围的行也保守保留。按时间降序、rowid 升序匹配已有索引；跨批重复时间戳用时间等值及 rowid 范围单独续页，避免重复扫描同一时间的大量行。删除按 rowid 和原时间值精确复查，防止删掉选取后被业务更新的行。
+3. **P2-1：时间与停止边界。** dry-run 不再执行整表 COUNT，同样分批读取、计数并让出执行。每批查询及删除前检查 stop/deadline；每表预算 30 秒，每个查询/删除批次预算 1 秒，通过 SQLite progress handler 每 1000 条虚拟机指令检查。到期记录 `status=interrupted` 并退出本轮，计数为已完成批次的部分计数，不表示全表总量。SQLite busy timeout 为 1000ms；这是协作式耗时保护，不是对底层磁盘 I/O 的硬实时保证。
+4. **P2-2：连接生命周期。** 维护模块自行创建专用 aiosqlite 连接，不改全局 `connect_database`。打开操作 shield 后等待，初始化 PRAGMA 在 `try/finally` 内；取消打开时也等待取得连接再清理。初始化异常或取消均 interrupt 后 close；批内未提交修改随连接关闭回滚。测试对初始化 WAL/query_only 阶段分别注入异常和取消，并验证底层 interrupt/close。
+5. **P2-3：从打开起只读。** dry-run 对不存在的路径直接跳过，不创建库；已有库用 `Path.as_uri()` 编码的 `mode=ro` URI 打开，首条 SQL 为 `PRAGMA query_only=ON`。不执行 journal_mode 切换、删除、checkpoint 或 VACUUM。测试在底层 SQLite 连接构造时即安装 trace，覆盖全部初始化 SQL，并验证非 WAL 库文件字节不变；路径包含空格、中文和 `#`。写维护使用 `mode=rw`，也不会意外新建空库。
+6. **P2-4：WAL 保护。** 写维护专用连接显式设置 `wal_autocheckpoint=1000`。每批前（含前一批提交后）检查 `-wal` 文件；超过 64MiB 执行 PASSIVE checkpoint。busy 或存在未 checkpoint 的帧时记录 `wal_pressure`、停止本轮，不进入最终 TRUNCATE/VACUUM；全部帧已 checkpoint 时允许复用仍分配的 WAL 文件。测试用真实长读事务钉住 WAL，并缩小测试阈值，验证一批提交后暂停、保留剩余行。
+
+### 验证证据
+
+- 先新增回归测试、后实现：`14 failed, 2 passed in 7.24s`；实现后该文件 `16 passed in 1.59s`。
+- 将测试索引改为与项目一致的 DESC 后，额外捕获临时排序问题：`2 failed, 14 deselected in 1.49s`；随后修复索引顺序与续页逻辑。
+- 最终维护/history 定向组：`42 passed in 17.95s`。
+- 对真实 `initialize_schema` 建立的内存库执行 EXPLAIN QUERY PLAN：second_level 两表分别使用 `idx_second_level_samples_time`、`idx_second_level_component_samples_time` 的 `SEARCH ... (observed_at<?)`；oil_news 使用 `idx_oil_news_items_time` 的 `SEARCH ... (published_at<?)`，三者没有临时排序。回归测试也检查范围页、重复时间续页的索引查询计划。
+- `alert_events` 和 `squeeze_hourly_candles` 当前没有独立时间索引，真实计划仍有 rowid 范围扫描和临时排序；由 progress handler 限时。本次未扩大范围修改 schema，不声称这两表获得了时间索引定位。
+
+全量测试在 `backend` 目录使用指定临时虚拟环境执行：
+
+```powershell
+$env:FEISHU_LIVE_SEND_ENABLED = 'false'
+$env:ASTRO_ALERT_AUTO_CREATE = 'false'
+& "$env:TEMP\taoli1-s6-venv\Scripts\python.exe" -B -m pytest -q --basetemp "$env:TEMP\taoli1-s6-full-review" -p no:cacheprovider
+```
+
+汇总行：**`2829 passed, 6 deselected, 13 warnings in 209.24s (0:03:29)`**。6 项由项目既有 pytest 配置排除 network/benchmark；13 条为 Starlette/httpx 与 `datetime.utcnow()` 弃用警告。日志保存在 `$env:TEMP\taoli1-s6-full-review.log`；红灯记录为 `taoli1-s6-review-red.log`、`taoli1-s6-desc-red.log`，均不纳入仓库。
+
+维护模块、config、两份维护测试的 Ruff 通过；`git diff --check` 通过。main 全文件仍有 13 项既有 Ruff 问题；history 仍有导入格式和 SIM103 两项既有问题，未扩大 P1 最小修改范围。
+
+### Git、线上状态与后续边界
+
+- 实时核对远端分支仍为 `ca96f57ce5e77e2bc27b2547836f62b426346f43`，与本轮基线已分叉（修复前本地领先 4、落后 1）。本轮保留两侧历史，不 amend、不 force push；普通推送受该分叉限制，不能将本地提交等同于已推送。后续应另行协调远端历史整合。
+- 本轮为审查修复的编码/测试交付；未连接生产库，未备份、部署、清理或 VACUUM 线上数据库，线上版本与运行指标未核验。
+- 无新增仓库外业务产物；测试环境、临时数据库与日志均在系统 TEMP。提交前检查并仅暂存本轮 7 个文件。
+- 复制库规模演练、API p95、真实 WAL 峰值及 24 小时观察仍待运维阶段验收；专用连接不消除 SQLite 单写者约束。耗时限制可能产生部分清理/部分计数；需观察 `status`，缺索引表或异常时间值需要另行评估。
+- 下一任务以本节为准推进历史整合和上线演练，不在本轮扩展部署或表结构修改。

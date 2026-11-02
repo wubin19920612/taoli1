@@ -15,9 +15,12 @@ class OpportunityHistoryRecorder:
         self,
         repository: OpportunityHistoryRepository,
         settings: HistorySettings,
+        *,
+        legacy_vacuum_enabled: bool = True,
     ) -> None:
         self.repository = repository
         self.settings = settings
+        self.legacy_vacuum_enabled = legacy_vacuum_enabled
         self._last_sample_at: datetime | None = None
         self._last_vacuum_at: datetime | None = None
 
@@ -70,7 +73,7 @@ class OpportunityHistoryRecorder:
     async def _prune(self, now: datetime) -> None:
         cutoff = now - timedelta(days=self.settings.retention_days)
         deleted = await self.repository.prune_before(cutoff)
-        if deleted <= 0:
+        if deleted <= 0 or not self.legacy_vacuum_enabled:
             return
         if self._last_vacuum_at is not None:
             elapsed = (now - self._last_vacuum_at).total_seconds()

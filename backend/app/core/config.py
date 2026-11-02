@@ -80,6 +80,7 @@ class Settings:
     history_min_open_spread_pct: float = 0.5
     history_min_volume_24h_k: float = 100
     history_vacuum_interval_seconds: int = 86_400
+    history_legacy_vacuum_enabled: bool = True
     service_control_enabled: bool = False
     service_control_restart_delay_seconds: float = 1.0
     service_control_docker_socket_path: str = "/var/run/docker.sock"
@@ -314,6 +315,7 @@ def get_settings() -> Settings:
         history_min_open_spread_pct=float(os.getenv("HISTORY_MIN_OPEN_SPREAD_PCT", "0.5")),
         history_min_volume_24h_k=float(os.getenv("HISTORY_MIN_VOLUME_24H_K", "100")),
         history_vacuum_interval_seconds=int(os.getenv("HISTORY_VACUUM_INTERVAL_SECONDS", "86400")),
+        history_legacy_vacuum_enabled=maintenance_bool_env("HISTORY_LEGACY_VACUUM_ENABLED", True),
         service_control_enabled=bool_env(
             "SERVICE_CONTROL_ENABLED",
             environment.strip().lower() in {"development", "local", "test"},
