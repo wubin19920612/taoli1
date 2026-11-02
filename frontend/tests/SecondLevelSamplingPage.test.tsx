@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -169,6 +169,45 @@ describe("SecondLevelSamplingPage", () => {
     await waitFor(() => {
       expect(requests.some((request) => request.startsWith("PUT"))).toBe(true);
     });
+  });
+
+  it("serializes a filter refresh across the old deadline and restarts a full sampling interval", async () => {
+    vi.useFakeTimers();
+    currentStatus = { ...status, running: true };
+    const fetchSamples = vi.mocked(fetch);
+    const normalFetch = fetchSamples.getMockImplementation()!;
+    let release!: (response: Response) => void;
+    let hold = false;
+    fetchSamples.mockImplementation((input, init) => {
+      if (hold && new URL(String(input), "http://localhost").pathname === "/api/second-level-sampling/samples") {
+        return new Promise(resolve => { release = resolve; });
+      }
+      return normalFetch(input, init);
+    });
+    const sampleCalls = () => fetchSamples.mock.calls.filter(([input]) => new URL(String(input), "http://localhost").pathname === "/api/second-level-sampling/samples");
+    const view = render(<SecondLevelSamplingPage />);
+    try {
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(sampleCalls()).toHaveLength(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(900); });
+      hold = true;
+      const minutesInput = screen.getAllByRole("spinbutton").find(input => (input as HTMLInputElement).value === "30")!;
+      fireEvent.change(minutesInput, { target: { value: "60" } });
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(sampleCalls()).toHaveLength(2);
+      expect(String(sampleCalls()[1][0])).toContain("minutes=60");
+      await act(async () => { await vi.advanceTimersByTimeAsync(1100); });
+      expect(sampleCalls()).toHaveLength(2);
+      hold = false;
+      await act(async () => release(Response.json([sample])));
+      await act(async () => { await vi.advanceTimersByTimeAsync(999); });
+      expect(sampleCalls()).toHaveLength(2);
+      await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+      expect(sampleCalls()).toHaveLength(3);
+    } finally {
+      view.unmount();
+      vi.useRealTimers();
+    }
   });
 
   it("does not keep polling while the sampler is paused", async () => {

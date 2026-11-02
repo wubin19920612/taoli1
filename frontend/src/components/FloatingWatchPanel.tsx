@@ -661,6 +661,8 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
 
   const refresh = useCallback((requestedMode: WatchMode, retryAstroAuth = false): Promise<void> => {
     const run = async () => {
+      // A queued refresh may start after the tab was hidden.
+      if (document.visibilityState === "hidden") return;
       setLoading(true);
       try {
         const password = window.localStorage.getItem("dashboard_password") ?? "";

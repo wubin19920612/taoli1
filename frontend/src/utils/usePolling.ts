@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 type PollingOptions = {
   enabled?: boolean;
@@ -16,13 +16,21 @@ export function usePolling(
   // Keep the in-flight guard across effect restarts (including StrictMode).
   const running = useRef(false);
   const onSettled = useRef<(() => void) | null>(null);
-  const previous = useRef<{ enabled: boolean; intervalMs: number } | null>(null);
+  const triggerRef = useRef<(() => void) | null>(null);
+  const previous = useRef<{
+    enabled: boolean; immediate: boolean; intervalMs: number; pauseWhenHidden: boolean;
+  } | null>(null);
+  // Explicit refreshes share the polling guard, even when periodic polling is disabled.
+  const trigger = useCallback(() => { triggerRef.current?.(); }, []);
 
   useEffect(() => {
     const intervalChanged = previous.current?.enabled === enabled
       && previous.current.intervalMs !== intervalMs;
-    previous.current = { enabled, intervalMs };
-    if (!enabled) return;
+    const replay = previous.current?.enabled === enabled
+      && previous.current.immediate === immediate
+      && previous.current.intervalMs === intervalMs
+      && previous.current.pauseWhenHidden === pauseWhenHidden;
+    previous.current = { enabled, immediate, intervalMs, pauseWhenHidden };
 
     let active = true;
     let hidden = pauseWhenHidden && document.visibilityState === "hidden";
@@ -33,12 +41,13 @@ export function usePolling(
       timer = undefined;
     };
     const schedule = () => {
-      if (!active || hidden || running.current) return;
+      if (!active || !enabled || hidden || running.current) return;
       clearTimer();
       timer = window.setTimeout(() => void run(), intervalMs);
     };
     const run = async () => {
-      if (!active || hidden) return;
+      // Explicit triggers also work while disabled, when no visibility listener is installed.
+      if (!active || (pauseWhenHidden && document.visibilityState === "hidden")) return;
       clearTimer();
       if (running.current) {
         pending = true;
@@ -60,6 +69,8 @@ export function usePolling(
       else schedule();
     };
     onSettled.current = settled;
+    const triggerRun = () => { void run(); };
+    triggerRef.current = triggerRun;
 
     const handleVisibility = () => {
       const nextHidden = document.visibilityState === "hidden";
@@ -69,8 +80,10 @@ export function usePolling(
       if (hidden) pending = false;
       else void run();
     };
-    if (pauseWhenHidden) document.addEventListener("visibilitychange", handleVisibility);
-    if (immediate && !intervalChanged) void run();
+    if (enabled && pauseWhenHidden) document.addEventListener("visibilitychange", handleVisibility);
+    // StrictMode replays setup without a new refresh intent. Let the first call
+    // settle and schedule instead of queuing a second immediate invocation.
+    if (enabled && immediate && !intervalChanged && !replay) void run();
     else schedule();
 
     return () => {
@@ -78,7 +91,10 @@ export function usePolling(
       pending = false;
       clearTimer();
       if (onSettled.current === settled) onSettled.current = null;
-      if (pauseWhenHidden) document.removeEventListener("visibilitychange", handleVisibility);
+      if (triggerRef.current === triggerRun) triggerRef.current = null;
+      if (enabled && pauseWhenHidden) document.removeEventListener("visibilitychange", handleVisibility);
     };
   }, [enabled, immediate, intervalMs, pauseWhenHidden]);
+
+  return trigger;
 }

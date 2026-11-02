@@ -444,6 +444,43 @@ describe("FloatingWatchPanel", () => {
     }
   });
 
+  it.each([false, true])("skips a queued mode refresh that starts hidden and resumes the current mode (standalone: %s)", async standalone => {
+    vi.useFakeTimers();
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+    let finishAstro!: (value: typeof astroPairs) => void;
+    const astro = vi.spyOn(apiClient, "listAstroPairs")
+      .mockReturnValueOnce(new Promise(resolve => { finishAstro = resolve; }));
+    const view = render(<FloatingWatchPanel visible standalone={standalone} onClose={vi.fn()} />);
+    const settingsCalls = () => vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes("/settings/floating-watch")).length;
+    try {
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(settingsCalls()).toBe(1);
+      act(() => { screen.getByText("交易对 1").click(); });
+      act(() => {
+        Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await act(async () => finishAstro(astroPairs));
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(settingsCalls()).toBe(1);
+      expect(astro).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("/pair-spread/"))).toBe(false);
+      await act(async () => {
+        Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(settingsCalls()).toBe(2);
+      expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes("/pair-spread/query"))).toHaveLength(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+      expect(settingsCalls()).toBe(3);
+    } finally {
+      view.unmount();
+      astro.mockRestore();
+      Reflect.deleteProperty(document, "visibilityState");
+      vi.useRealTimers();
+    }
+  });
+
   it("shows live symbols and pairs and opens their detail pages", async () => {
     render(<FloatingWatchPanel visible onClose={vi.fn()} />);
     const panel = await screen.findByRole("complementary", { name: "关注浮窗" });

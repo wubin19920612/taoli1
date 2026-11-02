@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -111,5 +111,43 @@ describe("OilNewsPage", () => {
         (call) => String(call[0]).includes("/oil-news/refresh") && call[1]?.method === "POST"
       )).toBe(true);
     });
+  });
+
+  it("serializes a filter refresh across the old deadline and restarts a full 60s interval", async () => {
+    vi.useFakeTimers();
+    const fetchNews = vi.mocked(fetch);
+    const normalFetch = fetchNews.getMockImplementation()!;
+    let release!: (response: Response) => void;
+    let hold = false;
+    fetchNews.mockImplementation((input, init) => {
+      if (hold && new URL(String(input), "http://localhost").pathname === "/api/oil-news") {
+        return new Promise(resolve => { release = resolve; });
+      }
+      return normalFetch(input, init);
+    });
+    const count = () => fetchNews.mock.calls.filter(([input]) => new URL(String(input), "http://localhost").pathname === "/api/oil-news").length;
+    const view = render(<OilNewsPage />);
+    try {
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(count()).toBe(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(59_900); });
+      hold = true;
+      fireEvent.mouseDown(screen.getByRole("combobox", { name: "重大程度" }));
+      fireEvent.click(document.querySelector('.ant-select-item-option[title="严重"]')!);
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(count()).toBe(2);
+      expect(String(fetchNews.mock.calls.filter(([input]) => String(input).includes("severity=high"))[0]?.[0])).toContain("severity=high");
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_100); });
+      expect(count()).toBe(2);
+      hold = false;
+      await act(async () => release(Response.json(news)));
+      await act(async () => { await vi.advanceTimersByTimeAsync(59_999); });
+      expect(count()).toBe(2);
+      await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+      expect(count()).toBe(3);
+    } finally {
+      view.unmount();
+      vi.useRealTimers();
+    }
   });
 });

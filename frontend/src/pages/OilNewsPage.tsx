@@ -255,13 +255,13 @@ export function OilNewsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const triggerRefresh = usePolling(loadRows, 60_000, { immediate: false });
+
   useEffect(() => {
-    void loadRows();
+    triggerRefresh();
     // Keep automatic refresh aligned with the active filters.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [severity, direction]);
-
-  usePolling(loadRows, 60_000, { immediate: false });
+  }, [severity, direction, triggerRefresh]);
 
   const metrics = useMemo(() => {
     const latestMarket = rows.find((row) => row.market?.price != null)?.market;

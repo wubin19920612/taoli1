@@ -187,13 +187,58 @@ describe("usePolling", () => {
     expect(callback).toHaveBeenCalledTimes(3);
   });
 
-  it("keeps a single polling chain in StrictMode", async () => {
-    const callback = vi.fn();
+  it.each([false, true])("calls only once before the first full interval in StrictMode (async: %s)", async slow => {
+    const pending = deferred();
+    const callback = vi.fn().mockReturnValueOnce(slow ? pending.promise : undefined);
     renderHook(() => usePolling(callback, 1000), { wrapper: StrictMode });
     await advance(0);
-    const initialCalls = callback.mock.calls.length;
-    await advance(1000);
-    expect(callback).toHaveBeenCalledTimes(initialCalls + 1);
+    expect(callback).toHaveBeenCalledTimes(1);
+    if (slow) {
+      await advance(5000);
+      expect(callback).toHaveBeenCalledTimes(1);
+      await act(async () => pending.resolve());
+    }
+    await advance(999);
+    expect(callback).toHaveBeenCalledTimes(1);
+    await advance(1);
+    expect(callback).toHaveBeenCalledTimes(2);
     expect(vi.getTimerCount()).toBe(1);
+  });
+
+  it("serializes triggered refreshes with polling and restarts the full interval after completion", async () => {
+    const pending = deferred();
+    const first = vi.fn().mockReturnValueOnce(pending.promise);
+    const latest = vi.fn();
+    const { result, rerender } = renderHook(({ callback }) => usePolling(callback, 1000), {
+      initialProps: { callback: first }
+    });
+    rerender({ callback: latest });
+    act(() => { result.current(); result.current(); });
+    await advance(5000);
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(latest).not.toHaveBeenCalled();
+    await act(async () => pending.resolve());
+    expect(latest).toHaveBeenCalledTimes(1);
+    await advance(999);
+    expect(latest).toHaveBeenCalledTimes(1);
+    await advance(1);
+    expect(latest).toHaveBeenCalledTimes(2);
+  });
+
+  it("allows explicit refreshes with polling disabled, respects current visibility and stops after unmount", async () => {
+    const callback = vi.fn();
+    const { result, unmount } = renderHook(() => usePolling(callback, 1000, { enabled: false }));
+    const trigger = result.current;
+    setVisibility("hidden");
+    act(() => trigger());
+    expect(callback).not.toHaveBeenCalled();
+    setVisibility("visible");
+    act(() => trigger());
+    await advance(5000);
+    expect(callback).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+    unmount();
+    act(() => trigger());
+    expect(callback).toHaveBeenCalledTimes(1);
   });
 });

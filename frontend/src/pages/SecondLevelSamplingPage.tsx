@@ -387,12 +387,17 @@ export function SecondLevelSamplingPage() {
 
   const isRunning = status?.running ?? false;
   const pollingMs = Math.max(1000, Math.round((status?.config.interval_seconds ?? draft.interval_seconds) * 1000));
+  const forceComponentDetailsRef = useRef(false);
+  const triggerRefresh = usePolling(() => {
+    const forceComponentDetails = forceComponentDetailsRef.current;
+    forceComponentDetailsRef.current = false;
+    return refresh({ forceComponentDetails });
+  }, pollingMs, { enabled: isRunning, immediate: false });
 
   useEffect(() => {
-    void refresh({ forceComponentDetails: true });
-  }, [refresh]);
-
-  usePolling(refresh, pollingMs, { enabled: isRunning, immediate: false });
+    forceComponentDetailsRef.current = true;
+    triggerRefresh();
+  }, [refresh, triggerRefresh]);
 
   const saveConfig = useCallback(
     async (enabled = draft.enabled) => {

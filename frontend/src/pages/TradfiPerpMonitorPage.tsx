@@ -280,11 +280,11 @@ export function TradfiPerpMonitorPage() {
     }
   }, [params]);
 
-  useEffect(() => {
-    void loadSnapshot();
-  }, [loadSnapshot]);
+  const triggerRefresh = usePolling(loadSnapshot, 10_000, { enabled: autoRefresh, immediate: false });
 
-  usePolling(loadSnapshot, 10_000, { enabled: autoRefresh, immediate: false });
+  useEffect(() => {
+    triggerRefresh();
+  }, [loadSnapshot, triggerRefresh]);
 
   const columns = buildColumns();
   const rows = preview?.rows ?? [];

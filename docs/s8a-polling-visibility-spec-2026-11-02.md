@@ -144,3 +144,74 @@ frontend/tests/PremiumIndexPage.test.tsx
 2. `FloatingWatchPanel.tsx:804`：现在只在入队前检查一次可见性，所以切换模式后排队的刷新，在页面隐藏之后仍会发出去。要求：真正发请求前再检查一次，页面隐藏就跳过，等重新可见后再立即刷新。补测试。
 3. `OilNewsPage.tsx:264`，以及 TradfiPerp、SecondLevelSampling 里同类的“依赖变化后立即加载”：这次立即加载和定时轮询之间没有串行保护，也不会重置周期，比如第 59.9 秒切换筛选，第 60 秒又会重复发一次请求。改之前（基线）不会这样，要恢复到基线行为。建议做法：让 `usePolling` 接受 `deps`，依赖变化时重新调度，并立即执行一次；或者另外提供一个 `trigger()`，和轮询共用同一个串行队列。每个页面各补一条测试：切换筛选后，下一次请求按完整周期重新计时，不会出现重叠请求。
 其余要求不变：只改任务书允许的文件，`npm test` 和 `npx tsc --noEmit` 都要通过，追加返工记录，另起一个提交，提交信息用 `fix(frontend): polling strictmode, floating queue and dep refresh`。
+
+## 返工 1 执行记录（Codex，2026-11-02）
+
+- 模块与验收：S8-A 前端轮询可见性，仅修复上述三项；分支 `codex/s8-polling`，本轮基线 `5943235aa0d1ea2b925ca3132a552c5348e2005f`。开始时工作区干净。
+- 先补回归测试并运行红灯，再修改实现。所有测试和类型检查均在本工作树的 `frontend/` 下运行；沿用 `--no-cache`，避免 Vitest 向共享依赖目录写测试缓存。
+
+### 红灯
+
+```text
+npm test -- --no-cache tests/usePolling.test.tsx tests/FloatingWatchPanel.test.tsx tests/OilNewsPage.test.tsx tests/TradfiPerpMonitorPage.test.tsx tests/SecondLevelSamplingPage.test.tsx
+Test Files  5 failed (5)
+     Tests  8 failed | 63 passed (71)
+退出码 1
+```
+
+- StrictMode 的同步和延迟完成两个用例都直接断言首个完整周期前调用次数为 1；原实现实际为 2，不再使用运行次数作为基准。
+- 普通浮窗和独立浮窗两个用例：首轮 Astro 请求未完成时切换交易对模式，随后隐藏页面并完成首轮；原实现仍执行排队刷新，设置请求从 1 次增至 2 次。
+- OilNews 在 59.9 秒、TradfiPerp 在 9.9 秒、SecondLevelSampling 在 0.9 秒修改筛选并挂起请求；越过原截止时间后原实现请求均从 2 次增至 3 次，复现重叠。
+- 新增共享队列 `trigger()` 的测试在旧实现上因尚无返回函数失败；验证目标是请求中多次触发合并、使用最新 callback，并在完成后等待完整周期。
+- 完成三项修复后，另补“关闭自动轮询时的显式刷新”测试，先复现隐藏时仍调用的问题：`Test Files  1 failed | 4 passed (5)`，`Tests  1 failed | 71 passed (72)`，再改为执行时读取当前可见性。
+- 正式红灯日志：`%TEMP%\s8a-rework1-red-final.log`；补充边界红灯日志：`%TEMP%\s8a-rework1-green-targeted.log`。
+
+### 修复与绿灯
+
+- `usePolling` 区分配置变化和 StrictMode 的相同配置 effect 重放；重放只恢复调度，不留下额外立即刷新的 pending 意图。同步异常时也沿用同一判断。
+- `usePolling` 返回稳定的 `trigger()`，与定时轮询共用 running/pending 串行保护，清除旧定时器，待刷新完成后重新等待完整周期。关闭自动轮询时仍可显式触发筛选加载，不安装轮询定时器或可见性监听；隐藏时不执行，卸载后触发无效。
+- `FloatingWatchPanel.refresh` 在队列任务实际开始时再次检查 `document.visibilityState`；隐藏时跳过，恢复可见后由已有监听立即刷新当前模式，保留 `refreshQueue`。
+- OilNews、TradfiPerp、SecondLevelSampling 的首轮与筛选依赖加载改走 `trigger()`。SecondLevelSampling 通过 ref 保留筛选变化后强制加载成分明细的意图，日常轮询仍按指纹判断是否加载明细。手动按钮及接口参数保持原有行为。
+- 三个页面的新测试均继续验证：挂起期间没有重叠请求；完成筛选请求后，在完整周期的最后 1ms 前没有请求，到期恰好新增 1 次。
+
+```text
+npm test -- --no-cache tests/usePolling.test.tsx tests/FloatingWatchPanel.test.tsx tests/OilNewsPage.test.tsx tests/TradfiPerpMonitorPage.test.tsx tests/SecondLevelSamplingPage.test.tsx
+Test Files  5 passed (5)
+     Tests  72 passed (72)
+退出码 0
+
+npm test -- --no-cache
+Test Files  35 passed (35)
+     Tests  397 passed (397)
+  Duration  117.54s
+退出码 0
+
+npx tsc --noEmit
+无输出，退出码 0
+```
+
+- 定向绿灯日志：`%TEMP%\s8a-rework1-green-targeted-final.log`；全量日志：`%TEMP%\s8a-rework1-green-full.log`；最终类型检查日志：`%TEMP%\s8a-rework1-tsc-final.log`。
+- 全量日志保留既有 Ant Design 弃用与 React act 警告；无失败用例。已复核实现与测试差异，`git diff --check` 通过。
+
+### 本轮文件与交付边界
+
+仅修改以下 11 个允许的文件：
+
+```text
+docs/s8a-polling-visibility-spec-2026-11-02.md
+frontend/src/utils/usePolling.ts
+frontend/src/components/FloatingWatchPanel.tsx
+frontend/src/pages/OilNewsPage.tsx
+frontend/src/pages/TradfiPerpMonitorPage.tsx
+frontend/src/pages/SecondLevelSamplingPage.tsx
+frontend/tests/usePolling.test.tsx
+frontend/tests/FloatingWatchPanel.test.tsx
+frontend/tests/OilNewsPage.test.tsx
+frontend/tests/TradfiPerpMonitorPage.test.tsx
+frontend/tests/SecondLevelSamplingPage.test.tsx
+```
+
+- `TradfiPerpMonitorPage.test.tsx` 为本轮新增测试文件；日志均在系统临时目录，未作为仓库产物提交。
+- `frontend/node_modules` 联接未改，目标仍为 `.worktrees/s9-test-gate/frontend/node_modules`；未运行 npm install，未使用 WSL。
+- 本轮只创建一个本地提交，提交信息为 `fix(frontend): polling strictmode, floating queue and dep refresh`；实际提交号以交付回复及 `git log -1` 为准。不推送、不部署，未操作线上数据库或服务，未进行线上验收。
+- 本任务书末尾记录作为本轮交接；后续导航分组 S8-B 另开任务。
