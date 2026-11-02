@@ -103,15 +103,19 @@ server's `.env`.
 默认 `BACKUP_MODE=isolated`：从 Compose 查找当前 backend 容器，使用其不可变镜像
 ID（`docker inspect .Image`），独立运行临时容器；不拉取备份镜像、不共享 backend
 内存额度。限制为 128 MiB 内存及相同总内存/交换额度、0.5 CPU、32 PID，禁用网络，
-容器根文件系统只读。主库与存在时的 route 库逐一执行 `source.backup(pages=-1)`，
-各自 `integrity_check` 全部通过后发布备份，再核对容器与宿主机 SHA-256。
+容器根文件系统只读。通过 `docker inspect` 只提取 backend 的 `/data` 挂载，以
+`--mount` 挂载该 volume 名或 bind source，并另挂宿主机 `backups/`；临时容器只有这
+两个挂载，不继承 backend 的 Docker socket 等其他挂载。主库与存在时的 route 库
+逐一执行 `source.backup(pages=-1)`，各自先通过 `integrity_check`，再核对容器与
+宿主机 SHA-256，全部通过后才发布备份。
 每个库是独立时间点，两个库不构成跨库原子快照。route 库不存在会明确输出 skip。
 
 数据卷以可写方式提供 SQLite 所需的 WAL/SHM 锁元数据权限，但源连接始终使用
 `mode=ro`，不执行源库写 SQL。不能因暂时没有 WAL/SHM 就把在线库设为 `immutable=1`。
-备份输出直接写宿主机 `backups/`，新模式文件权限 0600、归该目录所有者所有；
-失败留下的 `*.partial` 不属于自动清理范围，必须人工检查，不作为恢复点。
-最终文件使用硬链接原子发布，拒绝覆盖同名备份；`backups/` 必须支持普通文件硬链接。
+备份先写宿主机 `backups/*.db.partial`，新模式文件权限 0600、归该目录所有者所有；
+校验全部通过后在同一目录原子 rename 为正式 `.db`，拒绝覆盖同名备份。校验失败
+保留为 `*.db.failed` 并中止部署；进程中断可能留下 `.partial`。两种后缀均不匹配
+自动保留器正则，必须人工检查，不作为恢复点。
 
 部署前检查 `backups/` 内所有文件的递归逻辑大小（包括未纳入清理的文件；链接本身
 计数但不跟随）。`BACKUP_DIR_MAX_GB` 默认 **15 GiB（15 × 1024³ bytes）**；
@@ -154,7 +158,11 @@ bash deploy/restore_drill.sh /path/to/copied-backups/manual-snapshot.db --kind r
 退出码：`0` 为 `RESTORE_DRILL PASS`，`1` 为数据、校验或文件操作失败，`2` 为命令
 用法错误。脚本拒绝 `/data`、`/var/lib/docker`、线上库文件名 `radar.db` /
 `radar-squeeze-route.db`、符号链接及带侧文件的快照；所有 SQLite 连接只打开临时文件。
-不得把线上数据卷指定为临时目录（含 `TMPDIR`）。临时空间预留至少双倍备份体积。
+临时目录按 `TMPDIR`、`TEMP`、`TMP` 的优先级取首个非空环境变量；未设置时检查固定
+候选 `/tmp`、`/var/tmp`（Windows 另有系统 Temp）。先解析并拒绝线上数据路径、输入
+快照所在目录及仓库 `backups/` 的内部路径，再显式传入 `TemporaryDirectory(dir=...)`；
+不调用会探测写入的 `gettempdir()`，受保护路径检查通过前不创建或写入文件。环境变量
+指定受保护路径时直接失败。临时空间预留至少双倍备份体积。
 
 测试机上进一步验收隔离容器行为时，使用独立 Compose 项目、测试数据卷及测试配置，
 先记录 backend 镜像 ID 和 `docker stats`，再对测试分支/完整 SHA 运行更新脚本。

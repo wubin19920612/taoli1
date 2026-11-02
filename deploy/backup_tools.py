@@ -92,6 +92,27 @@ def reject_live_path(path: Path) -> None:
             raise ValueError("live data/Docker paths are forbidden; export a standalone backup first")
 
 
+def restore_temp_parent(backup: Path) -> Path:
+    """Select without tempfile's write probe; validate before any file creation."""
+    configured = next((os.environ[name] for name in ("TMPDIR", "TEMP", "TMP")
+                       if os.environ.get(name)), None)
+    candidates = [Path(configured)] if configured else [Path("/tmp"), Path("/var/tmp")]
+    if not configured and os.name == "nt":
+        candidates.append(Path(os.environ.get("SystemRoot", "C:/Windows")) / "Temp")
+    backup_directories = (backup.resolve().parent, Path(__file__).resolve().parent.parent / "backups")
+    for candidate in candidates:
+        reject_live_path(candidate)
+        resolved = candidate.resolve()
+        for directory in backup_directories:
+            directory = directory.resolve()
+            if resolved == directory or directory in resolved.parents:
+                raise ValueError("temporary paths inside backup directories are forbidden")
+        # Only read metadata after the protected-path checks; never probe by writing.
+        if resolved.is_dir():
+            return resolved
+    raise ValueError("no existing safe temporary directory; set TMPDIR explicitly")
+
+
 def integrity_check(connection: sqlite3.Connection) -> None:
     result = connection.execute("PRAGMA integrity_check").fetchall()
     if result != [("ok",)]:
@@ -122,6 +143,7 @@ def compare_counts(reference: sqlite3.Connection, restored: sqlite3.Connection,
 
 def restore_drill(backup: Path, kind: str | None, tables: list[str] | None) -> None:
     reject_live_path(backup)
+    temporary_parent = restore_temp_parent(backup)
     if backup.name in ("radar.db", "radar-squeeze-route.db"):
         raise ValueError("live database basenames are forbidden; choose an exported backup")
     if backup.is_symlink() or not backup.is_file():
@@ -137,9 +159,8 @@ def restore_drill(backup: Path, kind: str | None, tables: list[str] | None) -> N
             else:
                 raise ValueError("set --kind radar|squeeze-route or explicit --table names")
         tables = list(KEY_TABLES[kind])
-    reject_live_path(Path(tempfile.gettempdir()))
     original_sha = sha256(backup)
-    with tempfile.TemporaryDirectory(prefix="taoli1-restore-drill-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="taoli1-restore-drill-", dir=temporary_parent) as temporary:
         reference_path = Path(temporary) / "reference.db"
         restored_path = Path(temporary) / "restored.db"
         # The supplied path is only read as a file. All SQLite opens are in this

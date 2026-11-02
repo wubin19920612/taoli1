@@ -13,6 +13,7 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
+from backup_retention import list_backups
 from backup_tools import KEY_TABLES, check_directory, compare_counts, restore_drill
 
 
@@ -100,6 +101,44 @@ class CapacityTests(unittest.TestCase):
 
 
 class RestoreTests(unittest.TestCase):
+    def test_protected_temp_paths_are_rejected_before_any_file_access_or_temp_probe(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            backup = Path(temporary) / "backups" / "snapshot.db"
+            protected = (Path("/data"), Path("/data/nested"),
+                         Path("/var/lib/docker/volumes/test"), backup.parent,
+                         backup.parent / "nested", DEPLOY.parent / "backups" / "nested")
+            for path in protected:
+                with self.subTest(path=path), \
+                        patch.dict(os.environ, {"TMPDIR": str(path)}), \
+                        patch("backup_tools.tempfile.gettempdir", side_effect=AssertionError("temp probe")), \
+                        patch("backup_tools.tempfile.TemporaryDirectory") as create, \
+                        patch("backup_tools.sha256") as digest, \
+                        patch("backup_tools.sqlite3.connect") as connect, \
+                        patch("pathlib.Path.is_file", side_effect=AssertionError("input access")), \
+                        self.assertRaisesRegex(ValueError, "forbidden"):
+                    restore_drill(backup, "radar", None)
+                create.assert_not_called()
+                digest.assert_not_called()
+                connect.assert_not_called()
+
+    def test_safe_temp_parent_is_explicit_and_never_uses_gettempdir(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            backups = root / "backups"
+            backups.mkdir()
+            backup = backups / "snapshot.db"
+            make_database(backup, ("key_table",))
+            scratch = root / "scratch"
+            scratch.mkdir()
+            original_tempdir = tempfile.TemporaryDirectory
+            with patch.dict(os.environ, {"TMPDIR": str(scratch)}), \
+                    patch("backup_tools.tempfile.gettempdir", side_effect=AssertionError("temp probe")), \
+                    patch("backup_tools.tempfile.TemporaryDirectory", wraps=original_tempdir) as create, \
+                    redirect_stdout(StringIO()):
+                restore_drill(backup, None, ["key_table"])
+            self.assertEqual(Path(create.call_args.kwargs["dir"]), scratch.resolve())
+            self.assertEqual(list(scratch.iterdir()), [])
+
     def test_cli_restores_both_profiles_and_preserves_input(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -203,7 +242,7 @@ class IsolatedBackupTests(unittest.TestCase):
                 for state in ("live", "closed"):
                     if state == "closed":
                         writer.close()
-                    destination = root / f"{state}.db"
+                    destination = root / f"{state}.db.partial"
                     result = subprocess.run([sys.executable, "-", str(source), str(destination)],
                                             input=script, capture_output=True, text=True)
                     self.assertEqual(result.returncode, 0, result.stderr)
@@ -215,7 +254,7 @@ class IsolatedBackupTests(unittest.TestCase):
                                            input=script, capture_output=True, text=True)
                     self.assertNotEqual(retry.returncode, 0)
                     self.assertEqual(destination.read_bytes(), before)
-                    self.assertFalse(Path(str(destination) + ".partial").exists())
+                    self.assertFalse((root / f"{state}.db").exists())
 
     def test_failed_backup_is_not_published_and_partial_is_not_overwritten(self) -> None:
         script = UPDATE.read_text(encoding="utf-8").split("<<'ISOLATED_PY'\n", 1)[1].split("\nISOLATED_PY", 1)[0]
@@ -227,13 +266,13 @@ class IsolatedBackupTests(unittest.TestCase):
             source.write_bytes(b"not sqlite")
             destination = root / "snapshot.db"
             partial = Path(str(destination) + ".partial")
-            result = subprocess.run([sys.executable, "-", str(source), str(destination)],
+            result = subprocess.run([sys.executable, "-", str(source), str(partial)],
                                     input=script, capture_output=True, text=True)
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(destination.exists())
             self.assertTrue(partial.exists())
             before = partial.read_bytes()
-            retry = subprocess.run([sys.executable, "-", str(source), str(destination)],
+            retry = subprocess.run([sys.executable, "-", str(source), str(partial)],
                                    input=script, capture_output=True, text=True)
             self.assertNotEqual(retry.returncode, 0)
             self.assertEqual(partial.read_bytes(), before)
@@ -267,28 +306,85 @@ class ShellTests(unittest.TestCase):
                                         (DEPLOY / "restore_drill.sh").as_posix(), backup.as_posix(), table)
                 self.assertEqual(result.returncode, code, result.stderr)
 
-    def test_isolated_function_enforces_resource_flags_and_host_hash(self) -> None:
+    def test_isolated_function_limits_mounts_and_quarantines_failed_verification(self) -> None:
         function = UPDATE.read_text(encoding="utf-8").split("backup_sqlite_isolated() {", 1)[1]
         function = "backup_sqlite_isolated() {" + function.split("\nbackup_function=", 1)[0]
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             log = root / "calls"
             wrapper = '''set -Eeuo pipefail
-sudo() { printf '%s\\n' "$*" >> "$MOCK_LOG"; cat >/dev/null; printf '%s\\n' "$MOCK_SHA"; }
-sha256sum() { printf '%s  file\\n' "$HOST_SHA"; }
+sudo() {
+  printf '%s\\0' "$@" >> "$MOCK_LOG"
+  cat >/dev/null
+  [[ ! -e "$BACKUP_FILE" ]] || return 96
+  printf 'snapshot' > "$BACKUP_FILE.partial"
+  if [[ "$MOCK_RESULT" == integrity-error ]]; then return 97; fi
+  printf '%s\\n' "$MOCK_SHA"
+}
+sha256sum() {
+  [[ "$1" == "$BACKUP_FILE.partial" && -f "$1" && ! -e "$BACKUP_FILE" ]] || return 98
+  if [[ "$MOCK_RESULT" == hash-error ]]; then return 99; fi
+  if [[ "$MOCK_RESULT" == publish-collision ]]; then printf 'preserve existing' > "$BACKUP_FILE"; fi
+  printf '%s  file\\n' "$HOST_SHA"
+}
 ROOT_DIR="$1"
 backend_container=abc123abc123
 backup_image=sha256:mock-image
+backup_data_mount="$MOCK_DATA_MOUNT"
 '''
-            for host_sha, expected in (("a" * 64, 0), ("b" * 64, 1)):
-                result = self.run_shell(wrapper + function + '\nbackup_sqlite_isolated /data/radar.db unused "$1/out.db"',
-                                        root.as_posix(), MOCK_LOG=log.as_posix(),
-                                        MOCK_SHA="a" * 64, HOST_SHA=host_sha)
-                self.assertEqual(result.returncode, expected, result.stderr)
-            calls = log.read_text()
-            for flag in ("--memory=128m", "--memory-swap=128m", "--network none", "--pull=never",
-                         "--read-only", "--volumes-from abc123abc123:rw", "--entrypoint python"):
-                self.assertIn(flag, calls)
+            for mount in ("type=volume,source=taoli1_radar-data,target=/data",
+                          "type=bind,source=/srv/radar data,target=/data"):
+                for status in ("ok", "mismatch", "integrity-error", "hash-error", "publish-collision"):
+                    with self.subTest(mount=mount, status=status):
+                        case = root / str(len(list(root.iterdir())))
+                        backups = case / "backups"
+                        backups.mkdir(parents=True)
+                        backup = backups / "radar-before-abcdef123456-20261102T000000Z.db"
+                        result = self.run_shell(
+                            wrapper + function + '\nbackup_sqlite_isolated /data/radar.db unused "$BACKUP_FILE"\n'
+                            + 'printf DEPLOY_CONTINUED', case.as_posix(),
+                            MOCK_LOG=log.as_posix(), MOCK_SHA="a" * 64,
+                            HOST_SHA=("b" if status == "mismatch" else "a") * 64,
+                            MOCK_RESULT=status, MOCK_DATA_MOUNT=mount, BACKUP_FILE=backup.as_posix())
+                        self.assertEqual(result.returncode, 0 if status == "ok" else 1, result.stderr)
+                        self.assertEqual(backup.exists(), status in ("ok", "publish-collision"))
+                        failed = Path(str(backup) + ".failed")
+                        self.assertEqual(failed.exists(), status != "ok")
+                        self.assertFalse(Path(str(backup) + ".partial").exists())
+                        self.assertEqual((backup if status == "ok" else failed).read_bytes(), b"snapshot")
+                        self.assertEqual(len(list_backups(backups, include_legacy=False)),
+                                         int(status in ("ok", "publish-collision")))
+                        if status == "publish-collision":
+                            self.assertEqual(backup.read_bytes(), b"preserve existing")
+                        self.assertEqual("DEPLOY_CONTINUED" in result.stdout, status == "ok")
+                        calls = log.read_bytes().decode().rstrip("\0").split("\0")
+                        mounts = [calls[i + 1] for i, arg in enumerate(calls) if arg == "--mount"]
+                        self.assertEqual(mounts, [mount, f"type=bind,source={case.as_posix()}/backups,target=/backups"])
+                        self.assertNotIn("--volumes-from", calls)
+                        self.assertNotIn("docker.sock", " ".join(calls))
+                        self.assertTrue({"--memory=128m", "--memory-swap=128m", "--network",
+                                         "none", "--pull=never", "--read-only"}.issubset(calls))
+                        self.assertEqual(calls[calls.index("--entrypoint") + 1], "python")
+                        self.assertTrue(calls[-1].endswith(".db.partial"))
+                        log.unlink()
+
+    def test_isolated_function_refuses_existing_final_partial_and_failed_files(self) -> None:
+        function = UPDATE.read_text(encoding="utf-8").split("backup_sqlite_isolated() {", 1)[1]
+        function = "backup_sqlite_isolated() {" + function.split("\nbackup_function=", 1)[0]
+        with tempfile.TemporaryDirectory() as temporary:
+            backup = Path(temporary) / "snapshot.db"
+            for suffix in ("", ".partial", ".failed"):
+                with self.subTest(suffix=suffix):
+                    existing = Path(str(backup) + suffix)
+                    existing.write_bytes(b"preserve")
+                    result = self.run_shell('set -Eeuo pipefail\nsudo() { printf UNEXPECTED; return 99; }\n'
+                                            + function + '\nbackup_sqlite_isolated /data/radar.db unused "$1"',
+                                            backup.as_posix())
+                    self.assertEqual(result.returncode, 1, result.stderr)
+                    self.assertIn("already exists", result.stderr)
+                    self.assertNotIn("UNEXPECTED", result.stdout)
+                    self.assertEqual(existing.read_bytes(), b"preserve")
+                    existing.unlink()
 
     def test_legacy_selection_is_explicit_and_invalid_mode_stops_early(self) -> None:
         result = self.run_shell('BACKUP_MODE=invalid bash "$1"', UPDATE.as_posix())
@@ -309,15 +405,29 @@ backup_mode=isolated
 sudo() {
   if [[ "$*" == *"compose ps -q backend" ]]; then printf '%s\\n' "$MOCK_CONTAINER";
   elif [[ "$*" == *"inspect abc123abc123 --format {{.Image}}" ]]; then printf '%s\\n' "$MOCK_IMAGE";
+  elif [[ "$*" == *"inspect abc123abc123 --format"* && "$*" == *'.Mounts'* ]]; then printf '%s\\n' "$MOCK_MOUNT";
   else return 99; fi
 }
 '''
         for container, expected in (("abc123abc123", 0), ("abc123abc123\ndef456def456", 1), ("", 1)):
             result = self.run_shell(mock + selection + '\nprintf "%s %s\\n" "$backup_function" "$backup_image"',
-                                    MOCK_CONTAINER=container, MOCK_IMAGE="sha256:" + "a" * 64)
+                                    MOCK_CONTAINER=container, MOCK_IMAGE="sha256:" + "a" * 64,
+                                    MOCK_MOUNT="volume|taoli1_radar-data")
             self.assertEqual(result.returncode, expected, result.stderr)
             if expected == 0:
                 self.assertIn("backup_sqlite_isolated sha256:", result.stdout)
+        for mount, expected in (("volume|taoli1_radar-data", 0), ("bind|/srv/radar data", 0),
+                                ("", 1), ("tmpfs|", 1), ("volume|", 1), ("bind|relative", 1),
+                                ("bind|/srv/data,readonly", 1),
+                                ("volume|data\nvolume|other", 1)):
+            with self.subTest(mount=mount):
+                result = self.run_shell(mock + selection + '\nprintf "%s\\n" "$backup_data_mount"',
+                                        MOCK_CONTAINER="abc123abc123", MOCK_IMAGE="sha256:" + "a" * 64,
+                                        MOCK_MOUNT=mount)
+                self.assertEqual(result.returncode, expected, result.stderr)
+                if expected == 0:
+                    kind, source = mount.split("|")
+                    self.assertEqual(result.stdout.strip(), f"type={kind},source={source},target=/data")
 
     def test_both_databases_are_backed_up_and_route_probe_errors_fail_closed(self) -> None:
         flow = UPDATE.read_text(encoding="utf-8").split("backup_timestamp=", 1)[1]

@@ -121,17 +121,22 @@ PY
 backup_sqlite_isolated() {
   local database_path="$1"
   local backup_file="$3"
+  local partial_file="$backup_file.partial"
+  local failed_file="$backup_file.failed"
   local container_sha host_sha
-  if [[ -e "$backup_file" || -e "$backup_file.partial" ]]; then
-    echo "Backup destination already exists: $backup_file (or .partial); refusing to overwrite." >&2
-    exit 1
-  fi
+  local existing
+  for existing in "$backup_file" "$partial_file" "$failed_file"; do
+    if [[ -e "$existing" || -L "$existing" ]]; then
+      echo "Backup destination already exists: $existing; refusing to overwrite." >&2
+      exit 1
+    fi
+  done
   echo "Creating isolated SQLite backup at $backup_file (image=$backup_image memory=128m)"
-  container_sha="$(sudo -n docker run --rm -i --pull=never --network none --read-only \
+  if container_sha="$(sudo -n docker run --rm -i --pull=never --network none --read-only \
     --memory=128m --memory-swap=128m --pids-limit=32 --cpus=0.5 \
-    --volumes-from "$backend_container:rw" \
+    --mount "$backup_data_mount" \
     --mount "type=bind,source=$ROOT_DIR/backups,target=/backups" \
-    --entrypoint python "$backup_image" - "$database_path" "/backups/$(basename "$backup_file")" <<'ISOLATED_PY'
+    --entrypoint python "$backup_image" - "$database_path" "/backups/$(basename "$partial_file")" <<'ISOLATED_PY'
 import hashlib
 import os
 import pathlib
@@ -140,20 +145,17 @@ import sys
 from contextlib import closing
 
 src, dst = map(pathlib.Path, sys.argv[1:])
-partial = dst.with_name(dst.name + ".partial")
-if dst.exists():
-    raise RuntimeError("Refusing to overwrite backup")
-# Exclusive creation leaves a clearly labelled partial file on failure.
-with partial.open("xb"):
+# Only write the .partial path; the host publishes after verifying its hash.
+with dst.open("xb"):
     pass
-os.chmod(partial, 0o600)
+os.chmod(dst, 0o600)
 owner = dst.parent.stat()
-os.chown(partial, owner.st_uid, owner.st_gid)
+os.chown(dst, owner.st_uid, owner.st_gid)
 # WAL readers may need to create/update -shm even with mode=ro. Allow SQLite
 # locking metadata on the volume; never use immutable=1 on a live database.
 with closing(sqlite3.connect(src.as_uri() + "?mode=ro", uri=True)) as source:
     source.execute("PRAGMA cache_size=-2048")
-    with closing(sqlite3.connect(partial)) as target:
+    with closing(sqlite3.connect(dst)) as target:
         target.execute("PRAGMA cache_size=-2048")
         # One step avoids repeated restarts under continuous source writes.
         source.backup(target, pages=-1)
@@ -162,22 +164,34 @@ with closing(sqlite3.connect(src.as_uri() + "?mode=ro", uri=True)) as source:
             raise RuntimeError(f"backup integrity_check={check}")
 
 digest = hashlib.sha256()
-with partial.open("rb+") as backup:
+with dst.open("rb+") as backup:
     for chunk in iter(lambda: backup.read(1024 * 1024), b""):
         digest.update(chunk)
     os.fsync(backup.fileno())
-# Publish without overwriting any prior restore point (same filesystem).
-os.link(partial, dst)
-partial.unlink()
 print(digest.hexdigest())
 ISOLATED_PY
-)"
-  host_sha="$(sha256sum "$backup_file" | awk '{print $1}')"
-  if [[ "$host_sha" != "$container_sha" ]]; then
-    echo "Backup SHA-256 mismatch; refusing to deploy." >&2
-    exit 1
+)" && host_sha="$(sha256sum "$partial_file" | awk '{print $1}')" \
+    && [[ "$host_sha" =~ ^[0-9a-f]{64}$ && "$host_sha" == "$container_sha" ]]; then
+    # Both paths are in backups/: rename atomically, never replace an existing
+    # restore point. A no-clobber skip leaves .partial and must count as failure.
+    if mv -T --no-clobber -- "$partial_file" "$backup_file" \
+      && [[ ! -e "$partial_file" && ! -L "$partial_file" ]]; then
+      echo "Backup integrity_check=ok sha256=$host_sha"
+      return 0
+    fi
+    echo "Backup publication failed; refusing to deploy." >&2
+  else
+    echo "Backup integrity/SHA-256 verification failed; refusing to deploy." >&2
   fi
-  echo "Backup integrity_check=ok sha256=$host_sha"
+  if [[ -e "$partial_file" || -L "$partial_file" ]]; then
+    mv -T --no-clobber -- "$partial_file" "$failed_file"
+    if [[ -e "$partial_file" || -L "$partial_file" ]]; then
+      echo "Cannot quarantine backup; retained at $partial_file." >&2
+    else
+      echo "Failed backup retained at $failed_file." >&2
+    fi
+  fi
+  exit 1
 }
 
 backup_function=backup_sqlite_isolated
@@ -195,6 +209,29 @@ else
     echo "Unable to resolve backend image ID; refusing to deploy." >&2
     exit 1
   fi
+  # Inspect only /data. Never inherit backend mounts such as docker.sock.
+  backend_data="$(sudo -n docker inspect "$backend_container" --format \
+    '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Type}}|{{if eq .Type "volume"}}{{.Name}}{{else}}{{.Source}}{{end}}{{"\n"}}{{end}}{{end}}')"
+  backend_data_type="${backend_data%%|*}"
+  backend_data_source="${backend_data#*|}"
+  if [[ -z "$backend_data_source" || "$backend_data_source" == *[,$'\r\n|']* ]]; then
+    echo "Invalid or ambiguous backend /data mount; refusing to deploy." >&2
+    exit 1
+  fi
+  case "$backend_data_type" in
+    volume)
+      if [[ ! "$backend_data_source" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]]; then
+        echo "Invalid backend /data volume name; refusing to deploy." >&2
+        exit 1
+      fi ;;
+    bind)
+      if [[ "$backend_data_source" != /* ]]; then
+        echo "Backend /data bind source must be absolute; refusing to deploy." >&2
+        exit 1
+      fi ;;
+    *) echo "Backend /data must be a volume or bind mount; refusing to deploy." >&2; exit 1 ;;
+  esac
+  backup_data_mount="type=$backend_data_type,source=$backend_data_source,target=/data"
 fi
 
 backup_timestamp="$(date -u +%Y%m%dT%H%M%SZ)"

@@ -20,3 +20,14 @@
 - 测试边界：本地用实际 SQLite 测试 WAL 活跃/关闭、恢复与容量逻辑；Docker 参数与旧路径用 shell mock 验证，不等于 cgroup 或测试机 Compose 验收。
 - 初始未跟踪文件：`sqlitefix-isolated-deploy-20261028.sh`，仅参考，保持原样且不提交。其他测试产物不提交。
 - 下一步：用户在测试机独立 Compose 项目演练双库备份，记录业务容器内存及备份容器限额、两份 SHA 与恢复 PASS，再决定上线。后续 S6/定时备份另开任务。
+
+## 审查修复
+
+- 范围：修复只读报告末尾的 P2-1、P2-2、P2-3；以本地 `36ef0b1` 为修复基线，在当前 `codex/s4-backup-formalize` 分支新增 `fix: 处理 S4 审查问题` 提交，不 amend。
+- P2-1：通过 `docker inspect` 精确提取 backend `/data` 的 volume 名或 bind source，以 `--mount` 只挂 `/data` 和 `backups/`；拒绝缺失、多重或不支持的挂载信息。Shell mock 逐参数断言恰好两个挂载，没有 `--volumes-from` 或 Docker socket。
+- P2-2：隔离容器只写 `*.db.partial`；容器 integrity 与宿主机 SHA-256 全部通过后，同目录原子 rename 为正式 `.db`。失败保留为 `*.db.failed` 并中止部署；`.failed` 不匹配自动保留器正则。新增 mock 覆盖 SHA 不符、哈希命令失败、容器 integrity 失败和发布碰撞，并核对已有文件不被覆盖、失败后不继续部署。异常中断仍可能留下 `.partial`，由人工调查。
+- P2-3：不再调用 `gettempdir()`；按 `TMPDIR` / `TEMP` / `TMP` 或固定目录选取临时父目录，先检查解析后的路径，拒绝 `/data`、`/var/lib/docker`、输入备份目录及仓库 `backups/` 内部路径，再显式传给 `TemporaryDirectory(dir=...)`。新增受保护 TMPDIR 测试，在创建临时目录、读取输入内容、哈希或 SQLite 连接前拒绝；安全目录测试断言不调用探测函数并清理临时文件。
+- 验证：`python -m pytest deploy/test_backup_retention.py deploy/test_backup_tools.py -q` → **`23 passed, 1 skipped in 11.94s`**。跳过项为 Windows 符号链接权限限制。全部 3 份现有 `.sh`（含仅检查的根目录参考脚本）执行 `bash -n` → `BASH_SYNTAX PASS scripts=3`；`git diff --check` 通过，legacy 函数与修复基线一致。
+- 文档：同步更新 `docs/linux-deployment.md` 的挂载、验证发布顺序、失败文件和临时目录说明。
+- 编码：本次 5 份修改文件均通过严格 UTF-8 解码、无 BOM；Shell 保持 LF，Python/Markdown 保持当前 `core.autocrlf=true` 的 CRLF 检出格式，Git 存储为 LF。提交说明保留中文。根目录未跟踪参考脚本保持原样，不提交。
+- 交付边界：只进行本地 SQLite 与 shell mock 验证，未执行 SSH、Docker 或生产部署，无新增线上备份和线上验证证据。开始时本地分支相对已缓存远端为 ahead 4 / behind 1；保留该历史，不合并、重写或强推。
