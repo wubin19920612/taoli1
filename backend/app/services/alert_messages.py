@@ -272,7 +272,7 @@ def build_compact_alert_message(
         if price_multiplier != 1:
             details.append(f"价格倍率 {price_multiplier:g}")
         if contract_multiplier not in (None, 1):
-            details.append(f"合约倍率 {contract_multiplier:g}")
+            details.append(f"1张={contract_multiplier:g}个{_base_currency(opportunity.symbol)}")
         suffix = f"（{', '.join(details)}）" if details else ""
         return f"{market_leg_label(exchange, market_type, raw_symbol, opportunity.symbol)} {identity}{suffix}"
 
@@ -309,6 +309,14 @@ def build_compact_alert_message(
     if opportunity.risk_labels:
         lines.append(f"风险：{', '.join(opportunity.risk_labels)}")
     return "\n".join(lines)
+
+
+def _base_currency(symbol: str) -> str:
+    symbol = symbol.strip().upper()
+    for suffix in ("USDT", "USDC", "USD"):
+        if symbol.endswith(suffix):
+            return symbol[:-len(suffix)] or symbol
+    return symbol
 
 
 def _format_compact_volume(value: float | None) -> str:

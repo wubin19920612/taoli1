@@ -80,6 +80,22 @@ def test_compact_alert_keeps_exact_market_identity_and_essential_metrics() -> No
     assert "【连续监测】" not in text
 
 
+def test_compact_alert_shows_contract_face_value_in_base_currency() -> None:
+    opportunity = _rating_opportunity().model_copy(update={
+        "sell_exchange": "okx",
+        "sell_raw_symbol": "AKE-USDT-SWAP",
+        "sell_contract_size_multiplier": 100,
+        "symbol": "AKEUSDT",
+    })
+    text = build_alert_message(
+        AlertRule(name="价差"), opportunity,
+        template=AlertMessageTemplateSettings(format="compact"),
+    )
+
+    assert "1张=100个AKE" in text
+    assert "合约倍率" not in text
+
+
 def _rating_opportunity() -> Opportunity:
     return Opportunity(
         id="rating-opp", type=OpportunityType.FF, symbol="BTCUSDT",
