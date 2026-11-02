@@ -1,3 +1,4 @@
+import { usePolling } from "../utils/usePolling";
 import {
   DeleteOutlined,
   EditOutlined,
@@ -589,11 +590,7 @@ export function NegativeBasisMonitorPage() {
     }
   }, [selectedWatchId]);
 
-  useEffect(() => {
-    void refresh();
-    const timer = window.setInterval(() => void refresh(), 8000);
-    return () => window.clearInterval(timer);
-  }, [refresh]);
+  usePolling(refresh, 8000);
 
   useEffect(() => {
     form.setFieldsValue(formValuesFromWatch(draft));

@@ -1,3 +1,4 @@
+import { usePolling } from "../utils/usePolling";
 import { DeleteOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
 import { Alert, Button, Input, Select, Space, Switch, Table, Tag, Tooltip, Typography, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
@@ -647,13 +648,13 @@ export function IndexComponentChangesPage() {
   useEffect(() => {
     void load();
     void loadWatchlist();
-    const timer = window.setInterval(() => {
-      void getIndexComponentAutoWatch().then(setAutoWatch).catch(() => undefined);
-    }, 15_000);
-    return () => window.clearInterval(timer);
     // Initial load only; filter changes are applied by the query button.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  usePolling(async () => {
+    setAutoWatch(await getIndexComponentAutoWatch());
+  }, 15_000, { immediate: false });
 
   return (
     <div className="page">

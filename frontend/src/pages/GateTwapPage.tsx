@@ -1,3 +1,4 @@
+import { usePolling } from "../utils/usePolling";
 import {
   ClockCircleOutlined,
   PlayCircleOutlined,
@@ -294,8 +295,6 @@ export function GateTwapPage() {
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState("");
 
-  const formContract = Form.useWatch("contract", form) ?? defaultValues.contract;
-  const formSettle = Form.useWatch("settle", form) ?? defaultValues.settle;
   const formLive = Form.useWatch("live", form) ?? false;
 
   const loadMarket = useCallback(async () => {
@@ -325,17 +324,9 @@ export function GateTwapPage() {
 
   useEffect(() => {
     form.setFieldsValue(defaultValues);
-    void loadMarket();
-    void loadJobs();
-  }, [form, loadJobs, loadMarket]);
+  }, [form]);
 
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      void loadMarket();
-      void loadJobs();
-    }, 5000);
-    return () => window.clearInterval(timer);
-  }, [loadJobs, loadMarket, formContract, formSettle]);
+  usePolling(() => Promise.all([loadMarket(), loadJobs()]), 5000);
 
   const preview = async () => {
     setPreviewing(true);

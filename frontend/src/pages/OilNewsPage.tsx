@@ -1,3 +1,4 @@
+import { usePolling } from "../utils/usePolling";
 import { LinkOutlined, ReloadOutlined, SaveOutlined, SearchOutlined } from "@ant-design/icons";
 import {
   Alert,
@@ -256,11 +257,11 @@ export function OilNewsPage() {
 
   useEffect(() => {
     void loadRows();
-    const timer = window.setInterval(() => void loadRows(), 60_000);
-    return () => window.clearInterval(timer);
     // Keep automatic refresh aligned with the active filters.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [severity, direction]);
+
+  usePolling(loadRows, 60_000, { immediate: false });
 
   const metrics = useMemo(() => {
     const latestMarket = rows.find((row) => row.market?.price != null)?.market;

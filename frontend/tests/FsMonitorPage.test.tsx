@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BorrowInfo, FsMonitorPage, candidateStage, signalReady } from "../src/pages/FsMonitorPage";
 import type { FsCandidate, FsReport, FsSettings } from "../src/api/fsTypes";
@@ -44,6 +44,34 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("FS observation page", () => {
+  it("pauses polling for 60 seconds while hidden and refreshes once when visible", async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+    const view = render(<FsMonitorPage />);
+    try {
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(api.getFsReport).toHaveBeenCalledTimes(1);
+      act(() => {
+        Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(api.getFsReport).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(api.getFsReport).toHaveBeenCalledTimes(2);
+      expect(api.getFsSettings).toHaveBeenCalledTimes(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+      expect(api.getFsReport).toHaveBeenCalledTimes(3);
+    } finally {
+      view.unmount();
+      Reflect.deleteProperty(document, "visibilityState");
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps public borrow support separate from unknown account inventory", async () => {
     render(<FsMonitorPage />);
     await screen.findByText("MEWUSDT");

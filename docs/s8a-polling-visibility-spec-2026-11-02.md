@@ -55,3 +55,86 @@
 
 ## 输出
 - 提交号（提交信息用 `perf(frontend): pause polling while the tab is hidden`）、改动文件清单、红灯/绿灯记录、测试汇总行、tsc 结果。
+
+## Codex 本地交接记录
+
+- 日期：2026-11-02。模块：S8-A 前端轮询可见性；分支：`codex/s8-polling`；本轮开始基线：`f569548`（任务书提交，调查代码基线为 `ac6d8d9`）。
+- 在上一轮留下的 4 个页面测试修改及新增 `usePolling.test.tsx` 上继续，先运行红灯，再实现，再运行绿灯。
+- 新增 `usePolling`：保存最新 callback，以串行 `setTimeout` 等待异步调用完成再调度；隐藏时清除定时器，重新可见时立即刷新；处理 enabled、卸载、周期变化、异常及 StrictMode。请求进行中发生多次恢复时，合并为一次后续刷新。
+- 指定的 13 个文件均已接入。PairMonitor 的查询与资金费率记录状态两条轮询均暂停。FsMonitor 保留首次配置加载、登录重试和每秒本地倒计时；FloatingWatchPanel 保留 `refreshQueue`，在原调度内加入可见性处理，普通面板和独立浮窗均覆盖测试。
+- 手动刷新、接口参数及配置的周期值沿用；隐藏前已发起的请求允许完成。未改动导航、AppShell、useRadarStore、InstrumentLookupPage、SpreadEventsPage 或后端。
+
+### 红灯记录
+
+在 `frontend/` 运行：
+
+```text
+npm test -- tests/usePolling.test.tsx tests/FsMonitorPage.test.tsx tests/NegativeBasisMonitorPage.test.tsx tests/PairMonitorPage.test.tsx tests/FloatingWatchPanel.test.tsx
+
+Test Files  5 failed (5)
+     Tests  6 failed | 125 passed (131)
+```
+
+- hook 实现文件尚不存在，`usePolling.test.tsx` 导入失败，11 个用例尚未收集。
+- 4 个页面的 6 个隐藏用例全部按预期失败：隐藏 60 秒后，FsReport 被调用 13 次；NegativeBasis 请求从 2 增至 16；FloatingWatchPanel 两种窗口模式的请求均从 3 增至 21；PairMonitor 未记录/已记录资金费率两种状态的请求分别从 5 增至 18/19。
+- 本次运行结束另有 Vitest 写入联接目录下 `.vite/vitest/results.json` 的 `EPERM` 缓存权限错误。后续命令统一加 `--no-cache`，未改联接、依赖或项目配置。原始日志：`%TEMP%\s8a-red.log`。
+- 第一次全量回归另发现旧 PremiumIndex 测试绑定 `setInterval`：`Test Files  1 failed | 33 passed (34)`，`Tests  1 failed | 388 passed (389)`。已改为用假定时器验证实际请求在 2999ms 前不发生、3000ms 时发生，并继续按 3 秒刷新，同时验证配置持久化。
+
+### 绿灯与类型检查
+
+所有命令均在本工作树的 `frontend/` 下运行，退出码均为 0：
+
+```text
+npm test -- --no-cache tests/usePolling.test.tsx tests/FsMonitorPage.test.tsx tests/NegativeBasisMonitorPage.test.tsx tests/PairMonitorPage.test.tsx tests/FloatingWatchPanel.test.tsx
+Test Files  5 passed (5)
+     Tests  142 passed (142)
+
+npm test -- --no-cache tests/PremiumIndexPage.test.tsx
+Test Files  1 passed (1)
+     Tests  10 passed (10)
+
+npm test -- --no-cache
+Test Files  34 passed (34)
+     Tests  389 passed (389)
+  Duration  113.23s
+
+npx tsc --noEmit
+无输出，退出码 0（PremiumIndex 测试调整后再次通过）。
+```
+
+- hook 的 11 个用例覆盖串行、防叠加、隐藏及恢复、隐藏时挂载、enabled 切换、请求中卸载、同步/异步异常、最新 callback、改周期、关闭隐藏暂停、请求中多次切换及 StrictMode。
+- 全量日志保留原有 Ant Design 弃用及 React act 警告，测试均通过。
+- 最终全量日志：`%TEMP%\s8a-green-full-final.log`；最终类型检查日志：`%TEMP%\s8a-tsc-final.log`。
+
+### 改动文件（21 个）
+
+```text
+docs/s8a-polling-visibility-spec-2026-11-02.md
+frontend/src/utils/usePolling.ts
+frontend/src/components/FloatingWatchPanel.tsx
+frontend/src/pages/FsMonitorPage.tsx
+frontend/src/pages/GateTwapPage.tsx
+frontend/src/pages/IndexComponentChangesPage.tsx
+frontend/src/pages/NegativeBasisMonitorPage.tsx
+frontend/src/pages/OilNewsPage.tsx
+frontend/src/pages/OpportunityRadarPage.tsx
+frontend/src/pages/PairMonitorPage.tsx
+frontend/src/pages/PremiumIndexPage.tsx
+frontend/src/pages/SecondLevelSamplingPage.tsx
+frontend/src/pages/SqueezeArbitragePage.tsx
+frontend/src/pages/SymbolSpreadPage.tsx
+frontend/src/pages/TradfiPerpMonitorPage.tsx
+frontend/tests/usePolling.test.tsx
+frontend/tests/FloatingWatchPanel.test.tsx
+frontend/tests/FsMonitorPage.test.tsx
+frontend/tests/NegativeBasisMonitorPage.test.tsx
+frontend/tests/PairMonitorPage.test.tsx
+frontend/tests/PremiumIndexPage.test.tsx
+```
+
+### 环境与交付边界
+
+- 保持用户已设好的 `frontend/node_modules` 目录联接，目标为 `.worktrees/s9-test-gate/frontend/node_modules`；未运行 npm install，未使用 WSL。
+- 仅提交以上任务文件，提交信息：`perf(frontend): pause polling while the tab is hidden`。提交号由本次提交后的 `git log -1` 确认。
+- 按本次明确要求仅本地提交，不推送、不部署；未操作生产数据库或线上服务，未进行线上验收。
+- 后续导航分组 S8-B 应在新任务中继续。

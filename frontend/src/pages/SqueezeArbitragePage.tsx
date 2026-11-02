@@ -1,3 +1,4 @@
+import { usePolling } from "../utils/usePolling";
 import { ReloadOutlined } from "@ant-design/icons";
 import { Alert, Button, Empty, Space, Statistic, Table, Tabs, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
@@ -145,9 +146,9 @@ export function SqueezeArbitragePage() {
 
   useEffect(() => {
     void refresh();
-    const timer = window.setInterval(() => void refresh(false), 15_000);
-    return () => window.clearInterval(timer);
   }, [refresh]);
+
+  usePolling(() => refresh(false), 15_000, { immediate: false });
 
   return (
     <div className="squeeze-arbitrage-page">

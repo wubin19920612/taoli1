@@ -1,3 +1,4 @@
+import { usePolling } from "../utils/usePolling";
 import { BellOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
 import {
   Alert,
@@ -235,13 +236,7 @@ export function OpportunityRadarPage() {
     void load();
   }, [load]);
 
-  useEffect(() => {
-    if (!autoRefresh) {
-      return;
-    }
-    const timer = window.setInterval(() => void refreshPreview(), 60_000);
-    return () => window.clearInterval(timer);
-  }, [autoRefresh, refreshPreview]);
+  usePolling(refreshPreview, 60_000, { enabled: autoRefresh, immediate: false });
 
   const save = async () => {
     setSaving(true);

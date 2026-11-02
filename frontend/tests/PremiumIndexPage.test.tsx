@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -351,21 +351,31 @@ describe("PremiumIndexPage", () => {
   });
 
   it("uses and persists the selected real-time sampling interval", async () => {
-    const intervalSpy = vi.spyOn(window, "setInterval");
     const user = userEvent.setup();
-    render(<PremiumIndexPage />);
+    const view = render(<PremiumIndexPage />);
 
     await user.click(screen.getByRole("combobox", { name: "实时采样间隔" }));
     await user.click(await screen.findByText("采样 3 秒"));
-    await user.click(screen.getByRole("button", { name: /查询/ }));
-
-    expect(await screen.findByText("3s 实时采样")).toBeTruthy();
-    await waitFor(() => {
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(screen.getByRole("button", { name: /查询/ }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(screen.getByText("3s 实时采样")).toBeTruthy();
       expect(window.localStorage.getItem("taoli1.premiumIndex.samplingIntervalSeconds.v1")).toBe("3");
-      expect(intervalSpy.mock.calls.some((call) => call[1] === 3_000)).toBe(true);
-    });
-
-    intervalSpy.mockRestore();
+      const currentCalls = () => requests.filter(request => request.includes("/premium-index/current")).length;
+      expect(currentCalls()).toBe(0);
+      await act(async () => { await vi.advanceTimersByTimeAsync(2999); });
+      expect(currentCalls()).toBe(0);
+      await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+      expect(currentCalls()).toBe(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(2999); });
+      expect(currentCalls()).toBe(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+      expect(currentCalls()).toBe(2);
+    } finally {
+      view.unmount();
+      vi.useRealTimers();
+    }
   });
 
   it("shows the weighted period premium and remaining average needed to hit the funding limit", async () => {

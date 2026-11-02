@@ -1,3 +1,4 @@
+import { usePolling } from "../utils/usePolling";
 import { ReloadOutlined, SaveOutlined, SearchOutlined } from "@ant-design/icons";
 import { Alert, Button, Form, Input, InputNumber, Select, Switch, Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
@@ -1289,17 +1290,12 @@ export function PremiumIndexPage() {
     });
   }, [form, locationSearch, runQuery]);
 
-  useEffect(() => {
-    if (!autoRefresh || !result) {
-      return undefined;
-    }
-    const timer = window.setInterval(() => {
-      if (!loading && !refreshing) {
-        void refreshCurrent();
-      }
-    }, samplingIntervalSeconds * 1_000);
-    return () => window.clearInterval(timer);
-  }, [autoRefresh, loading, refreshCurrent, refreshing, result, samplingIntervalSeconds]);
+  usePolling(async () => {
+    if (!loading && !refreshing) await refreshCurrent();
+  }, samplingIntervalSeconds * 1_000, {
+    enabled: autoRefresh && Boolean(result),
+    immediate: false
+  });
 
   const saveCurrentPreset = async () => {
     try {

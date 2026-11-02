@@ -1,3 +1,4 @@
+import { usePolling } from "../utils/usePolling";
 import { ReloadOutlined, SyncOutlined } from "@ant-design/icons";
 import {
   Alert,
@@ -283,15 +284,7 @@ export function TradfiPerpMonitorPage() {
     void loadSnapshot();
   }, [loadSnapshot]);
 
-  useEffect(() => {
-    if (!autoRefresh) {
-      return undefined;
-    }
-    const id = window.setInterval(() => {
-      void loadSnapshot();
-    }, 10_000);
-    return () => window.clearInterval(id);
-  }, [autoRefresh, loadSnapshot]);
+  usePolling(loadSnapshot, 10_000, { enabled: autoRefresh, immediate: false });
 
   const columns = buildColumns();
   const rows = preview?.rows ?? [];

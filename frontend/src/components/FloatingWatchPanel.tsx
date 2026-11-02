@@ -793,15 +793,34 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
   useEffect(() => {
     if (!visible || collapsed) return undefined;
     let stopped = false;
+    let hidden = document.visibilityState === "hidden";
+    let polling = false;
+    let resumePending = false;
     let timer: number | undefined;
     const poll = async () => {
+      if (stopped || hidden) return;
+      if (polling) { resumePending = true; return; }
+      polling = true;
       await refresh(mode);
-      if (!stopped) timer = window.setTimeout(() => void poll(), REFRESH_INTERVAL_MS);
+      polling = false;
+      if (stopped || hidden) return;
+      if (resumePending) { resumePending = false; void poll(); }
+      else timer = window.setTimeout(() => void poll(), REFRESH_INTERVAL_MS);
     };
+    const handleVisibility = () => {
+      const nextHidden = document.visibilityState === "hidden";
+      if (nextHidden === hidden) return;
+      hidden = nextHidden;
+      if (timer !== undefined) window.clearTimeout(timer);
+      if (hidden) resumePending = false;
+      else void poll();
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
     void poll();
     return () => {
       stopped = true;
       if (timer !== undefined) window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", handleVisibility);
     };
   }, [collapsed, mode, refresh, visible]);
 

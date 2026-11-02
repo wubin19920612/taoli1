@@ -176,10 +176,38 @@ export function FsMonitorPage() {
       } catch (e) { if (!cancelled) { setReport(null); setError(e instanceof Error ? e.message : "读取失败"); } }
       finally { loading = false; }
     }
-    void load(true);
-    const timer = window.setInterval(() => void load(), 5000);
+    let timer: number | undefined;
+    let hidden = document.visibilityState === "hidden";
+    let initial = true;
+    let resumePending = false;
+    const poll = async () => {
+      if (cancelled || hidden) return;
+      if (loading) { resumePending = true; return; }
+      const firstLoad = initial;
+      initial = false;
+      await load(firstLoad);
+      if (cancelled || hidden) return;
+      if (resumePending) { resumePending = false; void poll(); }
+      else timer = window.setTimeout(() => void poll(), 5000);
+    };
+    const handleVisibility = () => {
+      const nextHidden = document.visibilityState === "hidden";
+      if (nextHidden === hidden) return;
+      hidden = nextHidden;
+      window.clearTimeout(timer);
+      if (hidden) resumePending = false;
+      else void poll();
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    void poll();
     const expiryTimer = window.setInterval(() => tick(v => v + 1), 1000);
-    return () => { cancelled = true; alive.current = false; window.clearInterval(timer); window.clearInterval(expiryTimer); };
+    return () => {
+      cancelled = true;
+      alive.current = false;
+      window.clearTimeout(timer);
+      window.clearInterval(expiryTimer);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
   }, [form, loginVersion]);
 
   async function save() {

@@ -1,3 +1,4 @@
+import { usePolling } from "../utils/usePolling";
 import { ReloadOutlined, SearchOutlined } from "@ant-design/icons";
 import { Alert, Button, Form, Input, InputNumber, Select, Switch, Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
@@ -509,17 +510,12 @@ export function SymbolSpreadPage() {
     await executeQuery(lastQuery, true);
   }, [executeQuery, lastQuery]);
 
-  useEffect(() => {
-    if (!autoRefresh || !lastQuery) {
-      return undefined;
-    }
-    const timer = window.setInterval(() => {
-      if (!loading && !refreshing) {
-        void executeQuery(lastQuery, true);
-      }
-    }, clampIntervalSeconds(lastQuery.interval_seconds) * 1_000);
-    return () => window.clearInterval(timer);
-  }, [autoRefresh, executeQuery, lastQuery, loading, refreshing]);
+  usePolling(async () => {
+    if (lastQuery && !loading && !refreshing) await executeQuery(lastQuery, true);
+  }, lastQuery ? clampIntervalSeconds(lastQuery.interval_seconds) * 1_000 : 5000, {
+    enabled: autoRefresh && Boolean(lastQuery),
+    immediate: false
+  });
 
   const seriesColumns = useMemo<ColumnsType<DisplaySymbolSpreadSeries>>(
     () => [

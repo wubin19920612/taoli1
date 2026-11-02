@@ -1,3 +1,4 @@
+import { usePolling } from "../utils/usePolling";
 import {
   PauseCircleOutlined,
   PlayCircleOutlined,
@@ -391,15 +392,7 @@ export function SecondLevelSamplingPage() {
     void refresh({ forceComponentDetails: true });
   }, [refresh]);
 
-  useEffect(() => {
-    if (!isRunning) {
-      return undefined;
-    }
-    const timer = window.setInterval(() => {
-      void refresh();
-    }, pollingMs);
-    return () => window.clearInterval(timer);
-  }, [isRunning, pollingMs, refresh]);
+  usePolling(refresh, pollingMs, { enabled: isRunning, immediate: false });
 
   const saveConfig = useCallback(
     async (enabled = draft.enabled) => {

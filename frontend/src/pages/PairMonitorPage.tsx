@@ -1,3 +1,4 @@
+import { usePolling } from "../utils/usePolling";
 import {
   DeleteOutlined,
   LineChartOutlined,
@@ -5210,15 +5211,9 @@ export function PairMonitorPage() {
     void loadFundingRecordStatus(result);
   }, [loadFundingRecordStatus, result]);
 
-  useEffect(() => {
-    if (!result || !fundingRecordStatus?.watched) {
-      return undefined;
-    }
-    const timer = window.setInterval(() => {
-      void loadFundingRecordStatus(result);
-    }, 60_000);
-    return () => window.clearInterval(timer);
-  }, [fundingRecordStatus?.watched, loadFundingRecordStatus, result]);
+  usePolling(async () => {
+    if (result) await loadFundingRecordStatus(result);
+  }, 60_000, { enabled: Boolean(result && fundingRecordStatus?.watched), immediate: false });
 
   useEffect(() => {
     const syncLocationSearch = () => {
@@ -5279,17 +5274,12 @@ export function PairMonitorPage() {
     });
   }, [form, locationSearch]);
 
-  useEffect(() => {
-    if (!autoRefresh || !result) {
-      return undefined;
-    }
-    const timer = window.setInterval(() => {
-      if (!loading) {
-        void runQuery({ premiumMode: "current" });
-      }
-    }, clampIntervalSeconds(resultIntervalSeconds(result)) * 1000);
-    return () => window.clearInterval(timer);
-  }, [autoRefresh, loading, result, runQuery]);
+  usePolling(async () => {
+    if (!loading) await runQuery({ premiumMode: "current" });
+  }, result ? clampIntervalSeconds(resultIntervalSeconds(result)) * 1000 : 5000, {
+    enabled: autoRefresh && Boolean(result),
+    immediate: false
+  });
 
   const rerun = () => {
     if (!result) {
