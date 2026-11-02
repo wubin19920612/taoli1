@@ -313,6 +313,67 @@
   color: #d92d20;
 }
 
+.instrument-market-compact-list {
+  overflow-x: auto;
+}
+
+.instrument-market-compact-list .instrument-market-compact-head,
+.instrument-market-compact-list .instrument-market-compact-row {
+  display: grid;
+  grid-template-columns: minmax(320px, 2fr) minmax(145px, 1fr) 120px 155px minmax(200px, 1.2fr) minmax(140px, 0.9fr);
+  min-width: 1120px;
+  padding: 0;
+}
+
+.instrument-market-compact-head > span {
+  padding: 8px 10px;
+}
+
+.instrument-market-compact-cell {
+  align-content: center;
+  min-width: 0;
+  padding: 9px 10px;
+  cursor: pointer;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.instrument-market-compact-identity {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+}
+
+.instrument-market-compact-identity > .ant-btn {
+  flex: none;
+  padding: 0;
+  height: auto;
+}
+
+.instrument-market-compact-identity > span:not(.ant-tag) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.instrument-market-compact-cell .ant-tag {
+  flex: none;
+  margin: 0;
+  font-size: 10px;
+  line-height: 18px;
+}
+
+.instrument-market-compact-row:hover {
+  background: #f8faf9;
+}
+
+.instrument-market-expanded {
+  grid-column: 1 / -1;
+  border-top: 1px solid #e5ebe9;
+  background: #fff;
+}
+
 .instrument-market-diagnostics,
 .instrument-market-diagnostic-missing {
   grid-column: 1 / -1;
@@ -1378,7 +1439,86 @@ body {
 }
 
 .instrument-lookup-page {
-  gap: 14px;
+  gap: 12px;
+  max-width: 100%;
+  max-height: calc(100dvh - 88px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  scroll-behavior: smooth;
+}
+
+.instrument-lookup-page > * {
+  flex-shrink: 0;
+}
+
+.instrument-lookup-page > section[id] {
+  scroll-margin-top: 58px;
+}
+
+.instrument-query-card {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px;
+  background: #fff;
+  border: 1px solid #dce4e1;
+  border-radius: 6px;
+}
+
+.instrument-title-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.instrument-info-trigger {
+  padding: 0;
+  color: #64716d;
+  background: transparent;
+  border: 0;
+  cursor: help;
+  font-size: 14px;
+}
+
+.instrument-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.instrument-section-nav {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+  padding: 8px;
+  overflow-x: auto;
+  background: #fff;
+  border: 1px solid #dce4e1;
+  border-radius: 6px;
+}
+
+.instrument-section-nav a {
+  flex: none;
+  padding: 4px 10px;
+  color: #24536a;
+  background: #f8faf9;
+  border: 1px solid #e5ebe9;
+  border-radius: 4px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.instrument-section-nav a:hover,
+.instrument-section-nav a:focus-visible {
+  background: #eef3f1;
 }
 
 .instrument-heading,
@@ -1409,16 +1549,30 @@ body {
 }
 
 .instrument-search-tools > .ant-input-affix-wrapper {
-  width: 280px;
+  width: 240px;
+  min-width: 160px;
+}
+
+.instrument-search-tools > .ant-btn,
+.instrument-search-tools > .ant-space {
+  flex: none;
 }
 
 .instrument-saved-symbols,
 .instrument-saved-symbol-list {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 8px;
   min-width: 0;
+}
+
+.instrument-saved-symbol-list {
+  overflow-x: auto;
+}
+
+.instrument-saved-symbol-list > .instrument-saved-symbol {
+  flex: none;
 }
 
 .instrument-saved-symbols {
@@ -1456,55 +1610,48 @@ body {
 }
 
 .instrument-summary-band {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
   min-width: 0;
-  background: #ffffff;
-  border: 1px solid #dce4e1;
-  border-radius: 6px;
-  overflow: hidden;
+  padding-top: 10px;
+  border-top: 1px solid #e5ebe9;
 }
 
 .instrument-summary-band > div {
-  display: grid;
-  align-content: center;
-  gap: 5px;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
   min-width: 0;
-  min-height: 82px;
-  padding: 12px 14px;
-  border-right: 1px solid #e5ebe9;
-}
-
-.instrument-summary-band > div:last-child {
-  border-right: 0;
-}
-
-.instrument-summary-band > div:nth-child(4) {
-  border-right: 0;
-}
-
-.instrument-summary-band > div:nth-child(-n + 4) {
-  border-bottom: 1px solid #e5ebe9;
 }
 
 .instrument-summary-band span {
   color: #64716d;
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .instrument-summary-band strong {
   min-width: 0;
   color: #172026;
-  font-size: 15px;
+  font-size: 12px;
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
 
+.instrument-source-trigger.ant-btn {
+  margin-left: auto;
+  padding: 0;
+  height: auto;
+  font-size: 12px;
+}
+
 .instrument-ratio-source {
   display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 5px 16px;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 8px;
+  width: min(460px, calc(100vw - 64px));
   min-width: 0;
   color: #64716d;
   font-size: 12px;
@@ -1537,6 +1684,28 @@ body {
 
 .instrument-section-head h4.ant-typography {
   font-size: 16px;
+}
+
+.instrument-collapse-head {
+  position: relative;
+}
+
+.instrument-collapse-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+}
+
+.instrument-collapse-trigger::after {
+  position: absolute;
+  inset: 0;
+  content: "";
 }
 
 .instrument-spread-filters {
@@ -2276,7 +2445,7 @@ body {
   font-size: 11px;
 }
 
-@media (max-width: 1180px) {
+@media (max-width: 1279px) {
   .instrument-heading {
     align-items: flex-start;
     flex-direction: column;
@@ -2285,6 +2454,10 @@ body {
   .instrument-search-tools {
     width: 100%;
     justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .instrument-summary-band {
     flex-wrap: wrap;
   }
 
@@ -2381,6 +2554,18 @@ body {
   .instrument-transfer-grid-row > div > span:not(.instrument-transfer-state) {
     white-space: normal;
     overflow-wrap: anywhere;
+  }
+}
+
+@media (max-width: 600px) {
+  .instrument-lookup-page {
+    max-height: calc(100dvh - 72px);
+  }
+
+  .instrument-search-tools > .ant-input-affix-wrapper {
+    flex: 1 1 100%;
+    width: 100%;
+    min-width: 0;
   }
 }
 

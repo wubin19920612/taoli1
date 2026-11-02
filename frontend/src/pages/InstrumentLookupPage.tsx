@@ -3,6 +3,7 @@ import {
   BellOutlined,
   CloseOutlined,
   DownOutlined,
+  InfoCircleOutlined,
   LineChartOutlined,
   PlusOutlined,
   PushpinOutlined,
@@ -23,6 +24,7 @@ import {
   Input,
   InputNumber,
   Modal,
+  Popover,
   Radio,
   Segmented,
   Select,
@@ -38,7 +40,7 @@ import {
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import {
   createTradeAvailabilityWatch,
@@ -87,6 +89,24 @@ const MAX_SAVED_SYMBOLS = 30;
 const AUTO_REFRESH_MS = 10_000;
 const MARKET_CAP_REFRESH_MS = 300_000;
 const STATISTICS_REFRESH_MS = 120_000;
+
+type MarketDensity = "compact" | "full";
+
+function readLayoutPreference(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function saveLayoutPreference(key: string, value: string) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Layout preferences remain usable when storage is unavailable.
+  }
+}
 
 function historyIssueText(error: string | null | undefined): string | null {
   if (!error || error === "双方无同一分钟历史价格" || error === "未返回可用分钟K线") return null;
@@ -832,6 +852,164 @@ function MarketDiagnosticDetails({
   );
 }
 
+function InstrumentMarketRow({
+  quote, diagnostic, compact, statistics, statisticsLoading, statisticsError,
+  diagnosticsLoading, currentTradeStatus, currentTradeStatusError, watch, watchSaving, onToggleWatch
+}: {
+  quote: InstrumentMarketCandidate | null;
+  diagnostic: MarketTradeAvailability | null;
+  compact: boolean;
+  statistics: InstrumentStatisticsResult | null | undefined;
+  statisticsLoading: boolean | undefined;
+  statisticsError: string;
+  diagnosticsLoading: boolean;
+  currentTradeStatus: TradeAvailabilityResult | null;
+  currentTradeStatusError: string;
+  watch: TradeAvailabilityWatch | undefined;
+  watchSaving: boolean;
+  onToggleWatch: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const detailsId = useId();
+  const market = quote ?? diagnostic!;
+  const dex = quote ? marketDex(quote) : diagnostic?.dex;
+  const diagnosticStaleness = diagnostic ? diagnosticFreshness(diagnostic, quote) : null;
+  const diagnosticNotice = !diagnostic
+    ? diagnosticsLoading && !currentTradeStatus ? "诊断加载中" : currentTradeStatusError ? "诊断请求失败" : "无可靠关联的市场诊断"
+    : null;
+  const diagnosticWarning = diagnostic ? currentTradeStatusError ? "诊断未更新" : diagnosticStaleness : null;
+  const restrictionSummary = diagnostic ? tradeRestrictionSummary(diagnostic) : null;
+  const hasRestriction = Boolean(diagnostic && (tradeMarketHasRestriction(diagnostic) || diagnostic.public_restrictions.length));
+  const hasUnknown = Boolean(diagnostic && tradeMarketHasUnknown(diagnostic));
+  const priceChanges = quote?.market_id ? statistics?.markets?.[quote.market_id] : null;
+  const originalCurrency = quote?.original_quote_currency || quote?.quote || "USDT";
+  const fxValid = Boolean(quote?.quote_conversion_source && quote.quote_conversion_valid_until
+    && Date.parse(quote.quote_conversion_valid_until) > Date.now());
+  const referenceQuote = quote?.quote_kind === "reference" || (originalCurrency !== "USDT" && !fxValid);
+  const changeTooltip = priceChanges?.error ?? (statisticsError || `按该原始市场最近已完成的1分钟收盘价，相对1小时 / 24小时前同一分钟收盘价计算涨跌幅；不是高低振幅。统计截至 ${fullTime(priceChanges?.observed_at)}`);
+  const restrictionTag = (
+    <Tag color={diagnosticWarning ? "orange" : hasRestriction ? "red" : hasUnknown ? "gold" : "green"}>
+      {diagnosticWarning ?? (hasRestriction ? "有限制" : hasUnknown ? "待核实" : "公开未发现限制")}
+    </Tag>
+  );
+  const fullContent = (
+    <>
+      <div className="instrument-market-data-identity" role="cell">
+        <strong>{exchangeLabels[market.exchange] ?? market.exchange}</strong>
+        <span>{marketTypeLabel(market.market_type)} · {dex ? "DEX " + dex + " · " : ""}{market.raw_symbol}</span>
+        <span>规范标的 {market.symbol}</span>
+        {quote?.identity_status ? <span><Tag color={quote.identity_status === "verified" ? "green" : "orange"}>{quote.asset_name ?? "身份待核验"}</Tag>{quote.quote_kind === "reference" ? <Tag>参考报价</Tag> : null}</span> : null}
+        {quote && originalCurrency !== "USDT" ? <span>原报价 {originalCurrency} · {fxValid ? "买卖价已折算 USDT" : quote.quote_conversion_source ? "换算已过期" : "未核验换算"}</span> : null}
+        {quote?.data_status === "stale" ? <Tag color="red">行情已过期</Tag>
+          : !quote ? <Tag color="orange">仅诊断，未可靠关联行情</Tag> : null}
+        {diagnostic && (currentTradeStatusError || diagnosticStaleness) ?
+          <Tag color="orange">{currentTradeStatusError
+            ? `诊断未更新${diagnosticStaleness ? ` · ${diagnosticStaleness}` : ""}`
+            : diagnosticStaleness}</Tag> : null}
+      </div>
+      <div className="instrument-market-data-group" role="cell">
+        <span className="instrument-market-data-group-name">{referenceQuote ? "参考价格（不可成交）" : "行情可成交价格"}</span>
+        <TradeMetric label="买一 Bid" value={price(quote?.bid)} tone="bid" />
+        <TradeMetric label="卖一 Ask" value={price(quote?.ask)} tone="ask" />
+        <TradeMetric label={originalCurrency === "USDT" ? "标记 / 指数" : `标记 / 指数（${originalCurrency}）`} value={quote ? price(quote.mark_price) + " / " + price(quote.index_price) : "-"} />
+        <TradeMetric label="1h 涨跌幅" value={priceChanges?.change_1h_pct == null && statisticsLoading ? "加载中" : signedPct(priceChanges?.change_1h_pct)}
+          tone={priceChanges?.change_1h_pct == null ? undefined : priceChanges.change_1h_pct >= 0 ? "positive" : "negative"} tooltip={changeTooltip} />
+        <TradeMetric label="24h 涨跌幅" value={priceChanges?.change_24h_pct == null && statisticsLoading ? "加载中" : signedPct(priceChanges?.change_24h_pct)}
+          tone={priceChanges?.change_24h_pct == null ? undefined : priceChanges.change_24h_pct >= 0 ? "positive" : "negative"} tooltip={changeTooltip} />
+      </div>
+      <div className="instrument-market-data-group" role="cell">
+        <span className="instrument-market-data-group-name">行情成交额</span>
+        <TradeMetric label="24h 成交额" value={compactUsdt(quote?.volume_24h_usdt)} />
+        <TradeMetric label="买一数量" value={quote?.bid_size == null ? "-" : String(quote.bid_size)} />
+        <TradeMetric label="卖一数量" value={quote?.ask_size == null ? "-" : String(quote.ask_size)} />
+      </div>
+      <div className="instrument-market-data-group" role="cell">
+        <span className="instrument-market-data-group-name">行情资金费率</span>
+        <TradeMetric label="当前 / 周期" value={!quote ? "-" : quote.market_type === "spot" ? "现货" : signedPct(quote.funding_rate_pct, 6) + " / " + (quote.funding_interval_hours ? quote.funding_interval_hours + "h" : "-")} />
+        <TradeMetric label="下期预估" value={quote?.market_type === "future" ? signedPct(quote.funding_next_rate_pct, 6) : "-"} />
+        <TradeMetric label="下次结算" value={quote?.market_type === "future" ? fullTime(quote.funding_next_time) : "-"} />
+      </div>
+      <div className="instrument-market-data-group" role="cell">
+        <span className="instrument-market-data-group-name">盘口深度</span>
+        {diagnostic ? <>
+          {diagnosticWarning ? <Tag color="orange" className="instrument-market-data-warning">{diagnosticWarning}</Tag> : null}
+          <TradeMetric label="0.1% 买" value={compactUsdt(diagnostic.bid_depth_01pct_usdt)} />
+          <TradeMetric label="0.1% 卖" value={compactUsdt(diagnostic.ask_depth_01pct_usdt)} />
+          <TradeMetric label="1% 买" value={compactUsdt(diagnostic.bid_depth_1pct_usdt)} />
+          <TradeMetric label="1% 卖" value={compactUsdt(diagnostic.ask_depth_1pct_usdt)} />
+        </> : <span className="instrument-market-data-unavailable">{diagnosticNotice}</span>}
+      </div>
+      <div className="instrument-market-data-group" role="cell">
+        <span className="instrument-market-data-group-name">交易限制</span>
+        {diagnostic ? <>
+          <div className="instrument-market-data-restriction-summary">
+            {restrictionTag}
+            {restrictionSummary ? <span>{restrictionSummary}</span> : null}
+          </div>
+          <TradeActionSummaryMetric label={market.market_type === "spot" ? "买入" : "开多"} action={diagnostic.buy_open} historical={Boolean(diagnosticWarning)} />
+          <TradeActionSummaryMetric label={market.market_type === "spot" ? "卖出" : "开空"} action={diagnostic.sell_open} historical={Boolean(diagnosticWarning)} />
+          {market.market_type === "future" ? <>
+            <TradeActionSummaryMetric label="平空" action={diagnostic.buy_reduce_only} historical={Boolean(diagnosticWarning)} />
+            <TradeActionSummaryMetric label="平多" action={diagnostic.sell_reduce_only} historical={Boolean(diagnosticWarning)} />
+          </> : null}
+        </> : <span className="instrument-market-data-unavailable">{diagnosticNotice}</span>}
+      </div>
+      {diagnostic ? <MarketDiagnosticDetails market={diagnostic} quote={quote} source={currentTradeStatus?.source ?? "公开诊断接口"}
+        watch={watch} watchSaving={watchSaving}
+        refreshFailed={Boolean(currentTradeStatusError)}
+        onToggleWatch={onToggleWatch} />
+        : <div className="instrument-market-diagnostic-missing" role="cell">{diagnosticsLoading && !currentTradeStatus ? "诊断加载中" : currentTradeStatusError ? "诊断请求失败，未混用其他市场数据" : "无可靠关联的市场诊断"}</div>}
+    </>
+  );
+  const rowClassName = "instrument-market-data-row" + (quote?.data_status === "stale" ? " instrument-market-data-row-stale" : "");
+  if (!compact) return <article className={rowClassName} role="row">{fullContent}</article>;
+
+  return (
+    <article className={rowClassName + " instrument-market-compact-row"} role="row"
+      onClick={(event) => {
+        const target = event.target as HTMLElement;
+        if (target.closest(".instrument-market-compact-cell") && !target.closest("button")) setExpanded((value) => !value);
+      }}>
+      <div className="instrument-market-compact-cell instrument-market-compact-identity" role="cell">
+        <Button type="text" size="small" icon={expanded ? <DownOutlined /> : <RightOutlined />}
+          aria-label={`${expanded ? "收起" : "展开"}市场 ${exchangeLabels[market.exchange] ?? market.exchange} ${marketTypeLabel(market.market_type)} ${dex ? `DEX ${dex} ` : ""}${market.raw_symbol}`}
+          aria-expanded={expanded} aria-controls={expanded ? detailsId : undefined}
+          onClick={() => setExpanded((value) => !value)}>
+          <strong>{exchangeLabels[market.exchange] ?? market.exchange}</strong>
+        </Button>
+        <MarketTypeTag value={market.market_type} />
+        <span title={market.raw_symbol}>{dex ? `DEX ${dex} · ` : ""}{market.raw_symbol}</span>
+        {quote?.identity_status && quote.identity_status !== "verified" ? <Tag color="orange">身份待核验</Tag> : null}
+        {quote?.data_status === "stale" ? <Tag color="red">行情已过期</Tag>
+          : !quote ? <Tag color="orange">仅诊断，未可靠关联行情</Tag> : null}
+        {referenceQuote ? <Tag>参考价格（不可成交）</Tag> : null}
+        {quote && originalCurrency !== "USDT" ? <span>原报价 {originalCurrency} · {fxValid ? "买卖价已折算 USDT" : quote.quote_conversion_source ? "换算已过期" : "未核验换算"}</span> : null}
+      </div>
+      <div className="instrument-market-compact-cell" role="cell">
+        <span className="instrument-rate-positive">{price(quote?.bid)}</span><span> / </span><span className="instrument-rate-negative">{price(quote?.ask)}</span>
+      </div>
+      <div className="instrument-market-compact-cell" role="cell">{compactUsdt(quote?.volume_24h_usdt)}</div>
+      <div className="instrument-market-compact-cell" role="cell">
+        {!quote ? "-" : quote.market_type === "spot" ? "现货" : signedPct(quote.funding_rate_pct, 6) + " / " + (quote.funding_interval_hours ? quote.funding_interval_hours + "h" : "-")}
+      </div>
+      <div className="instrument-market-compact-cell" role="cell">
+        {diagnostic ? <Tooltip title={diagnosticWarning ?? "独立诊断的 0.1% 买 / 卖深度"}>
+          <span>{diagnosticWarning ? <Tag color="orange">{diagnosticWarning}</Tag> : null}{compactUsdt(diagnostic.bid_depth_01pct_usdt)} / {compactUsdt(diagnostic.ask_depth_01pct_usdt)}</span>
+        </Tooltip> : <span className="instrument-market-data-unavailable">{diagnosticNotice}</span>}
+      </div>
+      <div className="instrument-market-compact-cell" role="cell">
+        {diagnostic ? <Tooltip title={restrictionSummary}>{restrictionTag}</Tooltip>
+          : <span className="instrument-market-data-unavailable">{diagnosticNotice}</span>}
+      </div>
+      {expanded ? <div className="instrument-market-expanded" role="cell" id={detailsId}>
+        <div role="table" aria-label={`${market.raw_symbol} 完整市场信息`}>
+          <div className="instrument-market-data-row" role="row">{fullContent}</div>
+        </div>
+      </div> : null}
+    </article>
+  );
+}
+
 function weightPct(value: number | null): string {
   return value === null ? "未返回" : `${(value * 100).toFixed(2)}%`;
 }
@@ -1024,6 +1202,9 @@ export function InstrumentLookupPage() {
   const [error, setError] = useState("");
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [trendOpen, setTrendOpen] = useState(false);
+  const [marketDensity, setMarketDensity] = useState<MarketDensity>(() => readLayoutPreference("instrument-market-density") === "full" ? "full" : "compact");
+  const [transferOpen, setTransferOpen] = useState(() => readLayoutPreference("instrument-transfer-open") === "true");
+  const [indexOpen, setIndexOpen] = useState(() => readLayoutPreference("instrument-index-open") === "true");
   const [trendType, setTrendType] = useState<MarketType>("future");
   const [trendHours, setTrendHours] = useState(24);
   const [trendCache, setTrendCache] = useState<Record<string, TrendState>>({});
@@ -1894,71 +2075,121 @@ export function InstrumentLookupPage() {
 
   return (
     <div className="page instrument-lookup-page">
-      <div className="instrument-heading">
-        <div>
-          <Typography.Title level={2}>标的查询</Typography.Title>
-          <Typography.Text type="secondary">{result ? `${result.base} / ${result.quote}` : "跨交易所市场总览"}</Typography.Text>
-        </div>
-        <div className="instrument-search-tools">
-          <Input
-            aria-label="查询标的"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            onPressEnter={() => void runLookup(query)}
-            prefix={<SearchOutlined />}
-            placeholder="BTC 或 BTCUSDT"
-            disabled={loading}
-          />
-          <Button type="primary" icon={<SearchOutlined />} loading={loading} onClick={() => void runLookup(query)}>查询</Button>
-          <Button
-            icon={<SaveOutlined />}
-            aria-label="保存当前标的"
-            disabled={!result || loading || normalizeSymbol(query) !== result.symbol || savedSymbols.includes(result.symbol)}
-            onClick={saveCurrentSymbol}
-          >
-            保存
-          </Button>
-          <Button
-            icon={<PushpinOutlined />}
-            loading={watchSaving}
-            disabled={!result || loading}
-            onClick={() => void addCurrentSymbolToWatch()}
-          >
-            加入浮窗
-          </Button>
-          <Tooltip title="立即刷新"><Button aria-label="立即刷新" icon={<ReloadOutlined spin={refreshing} />} disabled={!activeSymbol || loading} onClick={() => void runLookup(activeSymbol, true)} /></Tooltip>
-          <Space size={6}><Switch size="small" checked={autoRefresh} onChange={setAutoRefresh} /><Typography.Text type="secondary">自动刷新</Typography.Text></Space>
-        </div>
-      </div>
-
-      <div className="instrument-diagnostic-scope" role="note">
-        <strong>诊断口径</strong>
-        <span>账户数据未接入 · 未发送探测订单 · 当前仅依据公开市场数据判断</span>
-      </div>
-
-      {savedSymbols.length > 0 ? (
-        <div className="instrument-saved-symbols">
-          <Typography.Text type="secondary">已保存</Typography.Text>
-          <div className="instrument-saved-symbol-list">
-            {savedSymbols.map((symbol) => (
-              <div className="instrument-saved-symbol" key={symbol}>
-                <Button size="small" type="text" disabled={loading} onClick={() => void runLookup(symbol)}>
-                  {symbol}
-                </Button>
-                <Tooltip title={`移除 ${symbol}`}>
-                  <Button
-                    size="small"
-                    type="text"
-                    aria-label={`移除已保存标的 ${symbol}`}
-                    icon={<CloseOutlined />}
-                    onClick={() => removeSavedSymbol(symbol)}
-                  />
-                </Tooltip>
-              </div>
-            ))}
+      <section className="instrument-query-card">
+        <div className="instrument-heading">
+          <div>
+            <div className="instrument-title-line">
+              <Typography.Title level={2}>标的查询</Typography.Title>
+              <Tooltip title="诊断口径：账户数据未接入 · 未发送探测订单 · 当前仅依据公开市场数据判断">
+                <button type="button" className="instrument-info-trigger" aria-label="诊断口径"><InfoCircleOutlined /></button>
+              </Tooltip>
+            </div>
+            <Typography.Text type="secondary">{result ? `${result.base} / ${result.quote}` : "跨交易所市场总览"}</Typography.Text>
+          </div>
+          <div className="instrument-search-tools">
+            <Input
+              aria-label="查询标的"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onPressEnter={() => void runLookup(query)}
+              prefix={<SearchOutlined />}
+              placeholder="BTC 或 BTCUSDT"
+              disabled={loading}
+            />
+            <Button type="primary" icon={<SearchOutlined />} loading={loading} onClick={() => void runLookup(query)}>查询</Button>
+            <Button
+              icon={<SaveOutlined />}
+              aria-label="保存当前标的"
+              disabled={!result || loading || normalizeSymbol(query) !== result.symbol || savedSymbols.includes(result.symbol)}
+              onClick={saveCurrentSymbol}
+            >
+              保存
+            </Button>
+            <Button
+              icon={<PushpinOutlined />}
+              loading={watchSaving}
+              disabled={!result || loading}
+              onClick={() => void addCurrentSymbolToWatch()}
+            >
+              加入浮窗
+            </Button>
+            <Tooltip title="立即刷新"><Button aria-label="立即刷新" icon={<ReloadOutlined spin={refreshing} />} disabled={!activeSymbol || loading} onClick={() => void runLookup(activeSymbol, true)} /></Tooltip>
+            <Space size={6}><Switch size="small" checked={autoRefresh} onChange={setAutoRefresh} /><Typography.Text type="secondary">自动刷新</Typography.Text></Space>
           </div>
         </div>
-      ) : null}
+
+        {savedSymbols.length > 0 ? (
+          <div className="instrument-saved-symbols">
+            <Typography.Text type="secondary">已保存</Typography.Text>
+            <div className="instrument-saved-symbol-list">
+              {savedSymbols.map((symbol) => (
+                <div className="instrument-saved-symbol" key={symbol}>
+                  <Button size="small" type="text" disabled={loading} onClick={() => void runLookup(symbol)}>
+                    {symbol}
+                  </Button>
+                  <Tooltip title={`移除 ${symbol}`}>
+                    <Button
+                      size="small"
+                      type="text"
+                      aria-label={`移除已保存标的 ${symbol}`}
+                      icon={<CloseOutlined />}
+                      onClick={() => removeSavedSymbol(symbol)}
+                    />
+                  </Tooltip>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        <div className="instrument-diagnostic-scope instrument-visually-hidden" role="note">
+          <strong>诊断口径</strong>
+          <span>账户数据未接入 · 未发送探测订单 · 当前仅依据公开市场数据判断</span>
+        </div>
+
+        <section className="instrument-summary-band">
+          <div><span>规范标的</span><strong>{result?.symbol ?? "-"}</strong></div>
+          <div><span>覆盖交易所</span><strong>{result ? `${result.exchange_count} / ${result.exchanges.length}` : "-"}</strong></div>
+          <div><span>市场</span><strong>{result ? `${marketCounts.spot} 现货 · ${marketCounts.future} 永续` : "-"}</strong></div>
+          <div><span>价格区间</span><strong>{summaryAmbiguous ? "先选择底层资产" : priceRange ? `${price(priceRange.min)} - ${price(priceRange.max)}` : "-"}</strong></div>
+          <div><span>最大现永基差</span><strong className={`instrument-rate-${tone(strongestBasis?.value ?? null)}`}>{strongestBasis ? `${signedPct(strongestBasis.value)} · ${exchangeLabels[strongestBasis.exchange]}` : "-"}</strong></div>
+          <div><span>快照时间</span><strong>{fullTime(result?.observed_at)}</strong></div>
+          <div><span>合约 / 流通市值</span><strong>{capRatio === null ? "-" : `≈${multiple(capRatio)}`}</strong></div>
+          <div><span>合约 / 现货</span><strong>{multiple(spotRatio)}</strong></div>
+          {result && !summaryAmbiguous ? <Popover trigger="click" placement="bottomRight" content={<div className="instrument-ratio-source">
+            <span>合约 24h {compactUsdt(volumes.future.included ? volumes.future.amount : null)} · {volumes.future.included}/{volumes.future.total} 市场{volumes.future.estimated ? " · 含预估" : ""}{volumes.future.aliases ? ` · ${volumes.future.aliases} 个别名未计` : ""}</span>
+            <span>现货 24h {compactUsdt(volumes.spot.included ? volumes.spot.amount : null)} · {volumes.spot.included}/{volumes.spot.total} 市场{volumes.spot.estimated ? " · 含预估" : ""}{volumes.spot.aliases ? ` · ${volumes.spot.aliases} 个别名未计` : ""}</span>
+            {result.identity_ambiguous ? <span>同名资产尚未绑定流通市值来源，暂不计算市值比例。</span> : <>
+            {marketCap && marketCap.candidates?.length > 1 ? <Select
+              size="small"
+              aria-label="选择 CoinGecko 币种"
+              placeholder="选择 CoinGecko 币种"
+              value={marketCap.selected_id ?? undefined}
+              loading={marketCapLoading}
+              options={marketCap.candidates.map((coin) => ({ value: coin.id, label: `${coin.name} (${coin.symbol}${coin.market_cap_rank ? ` #${coin.market_cap_rank}` : ""})` }))}
+              onChange={(coinId) => void loadMarketCap(result.base, coinId)}
+            /> : null}
+            <span>
+              流通市值 {marketCapLoading && !marketCap?.market_cap_usd ? "加载中" : compactUsd(marketCap?.market_cap_usd)}
+              {marketCapLoading && marketCap?.market_cap_usd ? " · 更新中" : ""}
+              {selectedCoin ? ` · ${selectedCoin.name}` : ""}
+              {marketCap?.updated_at ? ` · ${fullTime(marketCap.updated_at)}` : ""}
+              {marketCap?.status === "source_error" || (!marketCapLoading && !marketCap) ? " · CoinGecko 暂不可用" : ""}
+              {marketCap?.status === "not_found" ? " · CoinGecko 无匹配" : ""}
+              {marketCap?.status === "unavailable" ? " · CoinGecko 未提供市值" : ""}
+            </span>
+            {(marketCap?.status === "source_error" || (!marketCapLoading && !marketCap)) ? <Tooltip title="重试市值查询">
+              <Button size="small" type="text" aria-label="重试市值查询" icon={<ReloadOutlined />}
+                onClick={() => void loadMarketCap(result.base, marketCap?.selected_id ?? undefined)} />
+            </Tooltip> : null}
+            <span>市值为 USD，成交额为 USDT；比值按近似平价计算</span>
+            </>}
+          </div>}>
+            <Button type="link" size="small" className="instrument-source-trigger">来源与口径</Button>
+          </Popover> : null}
+        </section>
+
+      </section>
 
       {error ? <Alert type="error" showIcon message={error} /> : null}
       {result?.identity_ambiguous ? <Space wrap style={{ marginBottom: 12 }}>
@@ -1971,281 +2202,25 @@ export function InstrumentLookupPage() {
         description={`${result.asset_groups?.map((group) => `${group.display_name}（${group.market_ids.length} 个市场）`).join("；")}。${summaryAmbiguous ? "请先选择底层资产，再查看汇总价格和成交额比例。" : ""}`} /> : null}
       {result && result.exchange_count === 0 ? <Alert type="warning" showIcon message={`当前聚合行情中没有 ${result.symbol} 的精确匹配数据`} /> : null}
 
-      <section className="instrument-summary-band">
-        <div><span>规范标的</span><strong>{result?.symbol ?? "-"}</strong></div>
-        <div><span>覆盖交易所</span><strong>{result ? `${result.exchange_count} / ${result.exchanges.length}` : "-"}</strong></div>
-        <div><span>市场</span><strong>{result ? `${marketCounts.spot} 现货 · ${marketCounts.future} 永续` : "-"}</strong></div>
-        <div><span>价格区间</span><strong>{summaryAmbiguous ? "先选择底层资产" : priceRange ? `${price(priceRange.min)} - ${price(priceRange.max)}` : "-"}</strong></div>
-        <div><span>最大现永基差</span><strong className={`instrument-rate-${tone(strongestBasis?.value ?? null)}`}>{strongestBasis ? `${signedPct(strongestBasis.value)} · ${exchangeLabels[strongestBasis.exchange]}` : "-"}</strong></div>
-        <div><span>快照时间</span><strong>{fullTime(result?.observed_at)}</strong></div>
-        <div><span>合约 / 流通市值</span><strong>{capRatio === null ? "-" : `≈${multiple(capRatio)}`}</strong></div>
-        <div><span>合约 / 现货</span><strong>{multiple(spotRatio)}</strong></div>
-      </section>
-
-      {result && !summaryAmbiguous ? <div className="instrument-ratio-source">
-        <span>合约 24h {compactUsdt(volumes.future.included ? volumes.future.amount : null)} · {volumes.future.included}/{volumes.future.total} 市场{volumes.future.estimated ? " · 含预估" : ""}{volumes.future.aliases ? ` · ${volumes.future.aliases} 个别名未计` : ""}</span>
-        <span>现货 24h {compactUsdt(volumes.spot.included ? volumes.spot.amount : null)} · {volumes.spot.included}/{volumes.spot.total} 市场{volumes.spot.estimated ? " · 含预估" : ""}{volumes.spot.aliases ? ` · ${volumes.spot.aliases} 个别名未计` : ""}</span>
-        {result.identity_ambiguous ? <span>同名资产尚未绑定流通市值来源，暂不计算市值比例。</span> : <>
-        {marketCap && marketCap.candidates?.length > 1 ? <Select
-          size="small"
-          aria-label="选择 CoinGecko 币种"
-          placeholder="选择 CoinGecko 币种"
-          value={marketCap.selected_id ?? undefined}
-          loading={marketCapLoading}
-          options={marketCap.candidates.map((coin) => ({ value: coin.id, label: `${coin.name} (${coin.symbol}${coin.market_cap_rank ? ` #${coin.market_cap_rank}` : ""})` }))}
-          onChange={(coinId) => void loadMarketCap(result.base, coinId)}
-        /> : null}
-        <span>
-          流通市值 {marketCapLoading && !marketCap?.market_cap_usd ? "加载中" : compactUsd(marketCap?.market_cap_usd)}
-          {marketCapLoading && marketCap?.market_cap_usd ? " · 更新中" : ""}
-          {selectedCoin ? ` · ${selectedCoin.name}` : ""}
-          {marketCap?.updated_at ? ` · ${fullTime(marketCap.updated_at)}` : ""}
-          {marketCap?.status === "source_error" || (!marketCapLoading && !marketCap) ? " · CoinGecko 暂不可用" : ""}
-          {marketCap?.status === "not_found" ? " · CoinGecko 无匹配" : ""}
-          {marketCap?.status === "unavailable" ? " · CoinGecko 未提供市值" : ""}
-        </span>
-        {(marketCap?.status === "source_error" || (!marketCapLoading && !marketCap)) ? <Tooltip title="重试市值查询">
-          <Button size="small" type="text" aria-label="重试市值查询" icon={<ReloadOutlined />}
-            onClick={() => void loadMarketCap(result.base, marketCap?.selected_id ?? undefined)} />
-        </Tooltip> : null}
-        <span>市值为 USD，成交额为 USDT；比值按近似平价计算</span>
-        </>}
-      </div> : null}
-
-      {marketRows.length > 0 ? (
-        <section className="instrument-market-table instrument-exact-markets">
-          <div className="instrument-section-head">
-            <div>
-              <Typography.Title level={4}>精确行情市场</Typography.Title>
-              <Typography.Text type="secondary">逐个原始市场展示；盘口深度与公开交易限制来自独立诊断</Typography.Text>
-            </div>
-            <Space size={[8, 4]} wrap>
-              <Segmented<"all" | MarketType> size="small" value={tradeMarketTypeFilter}
-                options={[{ label: "全部", value: "all" }, { label: "现货", value: "spot" }, { label: "永续", value: "future" }]}
-                onChange={setTradeMarketTypeFilter} />
-              <Segmented<"all" | "blocked" | "unknown"> size="small" value={tradeAvailabilityFilter}
-                options={[{ label: "全部状态", value: "all" }, { label: "有限制", value: "blocked" }, { label: "未知", value: "unknown" }]}
-                onChange={setTradeAvailabilityFilter} />
-              <Space size={5}><Switch size="small" checked={tradeOnlyIssues} onChange={setTradeOnlyIssues} /><Typography.Text>只看异常</Typography.Text></Space>
-              <Tag>{instrumentMarkets.length} 个行情市场</Tag>
-            </Space>
-          </div>
-          {currentTradeStatusError ? <Alert type="warning" showIcon
-            message={currentTradeStatus ? "市场诊断刷新失败；显示上次诊断" : "市场诊断失败；行情仍可查看"}
-            description={currentTradeStatusError} /> : null}
-          {currentTradeStatus && Object.keys(currentTradeStatus.errors).length ? <Alert type="warning" showIcon
-            message={Object.keys(currentTradeStatus.errors).length + " 个市场诊断降级"}
-            description={Object.entries(currentTradeStatus.errors).map(([key, value]) => key + ": " + value).join(" | ")} /> : null}
-          <div className="instrument-market-data-list" role="table" aria-label="精确行情市场">
-            <div className="instrument-market-data-head" role="row">
-              <span>市场身份</span><span>行情 Bid / Ask</span><span>成交额</span><span>资金费率</span><span>盘口深度</span><span>交易限制</span>
-            </div>
-            {visibleMarketRows.map(({ quote, diagnostic }) => {
-              const market = quote ?? diagnostic!;
-              const dex = quote ? marketDex(quote) : diagnostic?.dex;
-              const diagnosticStaleness = diagnostic ? diagnosticFreshness(diagnostic, quote) : null;
-              const diagnosticNotice = !diagnostic
-                ? diagnosticsLoading && !currentTradeStatus ? "诊断加载中" : currentTradeStatusError ? "诊断请求失败" : "无可靠关联的市场诊断"
-                : null;
-              const diagnosticWarning = diagnostic ? currentTradeStatusError ? "诊断未更新" : diagnosticStaleness : null;
-              const restrictionSummary = diagnostic ? tradeRestrictionSummary(diagnostic) : null;
-              const hasRestriction = Boolean(diagnostic && (tradeMarketHasRestriction(diagnostic) || diagnostic.public_restrictions.length));
-              const hasUnknown = Boolean(diagnostic && tradeMarketHasUnknown(diagnostic));
-              const rowIdentity = `${quote ? "quote" : "diagnostic"}:${exactMarketKey(market) ?? JSON.stringify([market.exchange, market.market_type, market.raw_symbol, market.dex])}`;
-              const priceChanges = quote?.market_id ? statistics?.markets?.[quote.market_id] : null;
-              const originalCurrency = quote?.original_quote_currency || quote?.quote || "USDT";
-              const fxValid = Boolean(quote?.quote_conversion_source && quote.quote_conversion_valid_until
-                && Date.parse(quote.quote_conversion_valid_until) > Date.now());
-              const referenceQuote = quote?.quote_kind === "reference" || (originalCurrency !== "USDT" && !fxValid);
-              const changeTooltip = priceChanges?.error ?? (statisticsError || `按该原始市场最近已完成的1分钟收盘价，相对1小时 / 24小时前同一分钟收盘价计算涨跌幅；不是高低振幅。统计截至 ${fullTime(priceChanges?.observed_at)}`);
-              const occurrence = marketRowKeys.get(rowIdentity) ?? 0;
-              marketRowKeys.set(rowIdentity, occurrence + 1);
-              return (
-                <article className={"instrument-market-data-row" + (quote?.data_status === "stale" ? " instrument-market-data-row-stale" : "")}
-                  key={`${rowIdentity}:${occurrence}`} role="row">
-                  <div className="instrument-market-data-identity" role="cell">
-                    <strong>{exchangeLabels[market.exchange] ?? market.exchange}</strong>
-                    <span>{marketTypeLabel(market.market_type)} · {dex ? "DEX " + dex + " · " : ""}{market.raw_symbol}</span>
-                    <span>规范标的 {market.symbol}</span>
-                    {quote?.identity_status ? <span><Tag color={quote.identity_status === "verified" ? "green" : "orange"}>{quote.asset_name ?? "身份待核验"}</Tag>{quote.quote_kind === "reference" ? <Tag>参考报价</Tag> : null}</span> : null}
-                    {quote && originalCurrency !== "USDT" ? <span>原报价 {originalCurrency} · {fxValid ? "买卖价已折算 USDT" : quote.quote_conversion_source ? "换算已过期" : "未核验换算"}</span> : null}
-                    {quote?.data_status === "stale" ? <Tag color="red">行情已过期</Tag>
-                      : !quote ? <Tag color="orange">仅诊断，未可靠关联行情</Tag> : null}
-                    {diagnostic && (currentTradeStatusError || diagnosticStaleness) ?
-                      <Tag color="orange">{currentTradeStatusError
-                        ? `诊断未更新${diagnosticStaleness ? ` · ${diagnosticStaleness}` : ""}`
-                        : diagnosticStaleness}</Tag> : null}
-                  </div>
-                  <div className="instrument-market-data-group" role="cell">
-                    <span className="instrument-market-data-group-name">{referenceQuote ? "参考价格（不可成交）" : "行情可成交价格"}</span>
-                    <TradeMetric label="买一 Bid" value={price(quote?.bid)} tone="bid" />
-                    <TradeMetric label="卖一 Ask" value={price(quote?.ask)} tone="ask" />
-                    <TradeMetric label={originalCurrency === "USDT" ? "标记 / 指数" : `标记 / 指数（${originalCurrency}）`} value={quote ? price(quote.mark_price) + " / " + price(quote.index_price) : "-"} />
-                    <TradeMetric label="1h 涨跌幅" value={priceChanges?.change_1h_pct == null && statisticsLoading ? "加载中" : signedPct(priceChanges?.change_1h_pct)}
-                      tone={priceChanges?.change_1h_pct == null ? undefined : priceChanges.change_1h_pct >= 0 ? "positive" : "negative"} tooltip={changeTooltip} />
-                    <TradeMetric label="24h 涨跌幅" value={priceChanges?.change_24h_pct == null && statisticsLoading ? "加载中" : signedPct(priceChanges?.change_24h_pct)}
-                      tone={priceChanges?.change_24h_pct == null ? undefined : priceChanges.change_24h_pct >= 0 ? "positive" : "negative"} tooltip={changeTooltip} />
-                  </div>
-                  <div className="instrument-market-data-group" role="cell">
-                    <span className="instrument-market-data-group-name">行情成交额</span>
-                    <TradeMetric label="24h 成交额" value={compactUsdt(quote?.volume_24h_usdt)} />
-                    <TradeMetric label="买一数量" value={quote?.bid_size == null ? "-" : String(quote.bid_size)} />
-                    <TradeMetric label="卖一数量" value={quote?.ask_size == null ? "-" : String(quote.ask_size)} />
-                  </div>
-                  <div className="instrument-market-data-group" role="cell">
-                    <span className="instrument-market-data-group-name">行情资金费率</span>
-                    <TradeMetric label="当前 / 周期" value={!quote ? "-" : quote.market_type === "spot" ? "现货" : signedPct(quote.funding_rate_pct, 6) + " / " + (quote.funding_interval_hours ? quote.funding_interval_hours + "h" : "-")} />
-                    <TradeMetric label="下期预估" value={quote?.market_type === "future" ? signedPct(quote.funding_next_rate_pct, 6) : "-"} />
-                    <TradeMetric label="下次结算" value={quote?.market_type === "future" ? fullTime(quote.funding_next_time) : "-"} />
-                  </div>
-                  <div className="instrument-market-data-group" role="cell">
-                    <span className="instrument-market-data-group-name">盘口深度</span>
-                    {diagnostic ? <>
-                      {diagnosticWarning ? <Tag color="orange" className="instrument-market-data-warning">{diagnosticWarning}</Tag> : null}
-                      <TradeMetric label="0.1% 买" value={compactUsdt(diagnostic.bid_depth_01pct_usdt)} />
-                      <TradeMetric label="0.1% 卖" value={compactUsdt(diagnostic.ask_depth_01pct_usdt)} />
-                      <TradeMetric label="1% 买" value={compactUsdt(diagnostic.bid_depth_1pct_usdt)} />
-                      <TradeMetric label="1% 卖" value={compactUsdt(diagnostic.ask_depth_1pct_usdt)} />
-                    </> : <span className="instrument-market-data-unavailable">{diagnosticNotice}</span>}
-                  </div>
-                  <div className="instrument-market-data-group" role="cell">
-                    <span className="instrument-market-data-group-name">交易限制</span>
-                    {diagnostic ? <>
-                      <div className="instrument-market-data-restriction-summary">
-                        <Tag color={diagnosticWarning ? "orange" : hasRestriction ? "red" : hasUnknown ? "gold" : "green"}>
-                          {diagnosticWarning ?? (hasRestriction ? "有限制" : hasUnknown ? "待核实" : "公开未发现限制")}
-                        </Tag>
-                        {restrictionSummary ? <span>{restrictionSummary}</span> : null}
-                      </div>
-                      <TradeActionSummaryMetric label={market.market_type === "spot" ? "买入" : "开多"} action={diagnostic.buy_open} historical={Boolean(diagnosticWarning)} />
-                      <TradeActionSummaryMetric label={market.market_type === "spot" ? "卖出" : "开空"} action={diagnostic.sell_open} historical={Boolean(diagnosticWarning)} />
-                      {market.market_type === "future" ? <>
-                        <TradeActionSummaryMetric label="平空" action={diagnostic.buy_reduce_only} historical={Boolean(diagnosticWarning)} />
-                        <TradeActionSummaryMetric label="平多" action={diagnostic.sell_reduce_only} historical={Boolean(diagnosticWarning)} />
-                      </> : null}
-                    </> : <span className="instrument-market-data-unavailable">{diagnosticNotice}</span>}
-                  </div>
-                  {diagnostic ? <MarketDiagnosticDetails market={diagnostic} quote={quote} source={currentTradeStatus?.source ?? "公开诊断接口"}
-                    watch={tradeWatchFor(diagnostic)} watchSaving={tradeWatchSaving === tradeMarketKey(diagnostic)}
-                    refreshFailed={Boolean(currentTradeStatusError)}
-                    onToggleWatch={() => void toggleTradeWatch(diagnostic)} />
-                    : <div className="instrument-market-diagnostic-missing" role="cell">{diagnosticsLoading && !currentTradeStatus ? "诊断加载中" : currentTradeStatusError ? "诊断请求失败，未混用其他市场数据" : "无可靠关联的市场诊断"}</div>}
-                </article>
-              );
-            })}
-            {visibleMarketRows.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前筛选下没有市场" /> : null}
-          </div>
-        </section>
-      ) : null}
-      {spotTransferMarkets.length ? (
-        <section className="instrument-market-table instrument-transfer-status">
-          <div className="instrument-section-head">
-            <div>
-              <Typography.Title level={4}>现货充提通道</Typography.Title>
-              <Typography.Text type="secondary">每条网络独立展示，不合并为“部分开放”</Typography.Text>
-            </div>
-            <Tag>{spotTransferMarkets.length} 个现货市场</Tag>
-          </div>
-          <div className="instrument-transfer-grid" role="table" aria-label="现货逐链充提状态">
-            <div className="instrument-transfer-grid-head" role="row">
-              <span>交易所</span>
-              <span>资产</span>
-              <span>网络</span>
-              <span>充币</span>
-              <span>提币</span>
-              <span>数据来源</span>
-              <span>更新时间</span>
-            </div>
-            {spotTransferMarkets.flatMap((market) => {
-              const transfer = market.spot_transfer;
-              const networks = transfer?.networks.length
-                ? transfer.networks
-                : [{ network: "未返回链列表", deposit_enabled: null, withdraw_enabled: null }];
-              const sourceDetail = transfer?.error || transfer?.note || transfer?.source || "没有可公开核验的逐链状态";
-              return networks.map((network, index) => (
-                <div
-                  className={`instrument-transfer-grid-row${index === 0 ? " instrument-transfer-grid-row-start" : ""}`}
-                  key={`${tradeMarketKey(market)}:${network.network}:${index}`}
-                  role="row"
-                >
-                  <div data-label="交易所" role="cell">
-                    <strong>{exchangeLabels[market.exchange] ?? market.exchange}</strong>
-                    <span>{market.raw_symbol}</span>
-                  </div>
-                  <div data-label="资产" role="cell"><strong>{transfer?.asset ?? "-"}</strong></div>
-                  <div data-label="网络" role="cell"><strong>{network.network}</strong></div>
-                  <div data-label="充币" role="cell"><TransferNetworkState value={network.deposit_enabled} /></div>
-                  <div data-label="提币" role="cell"><TransferNetworkState value={network.withdraw_enabled} /></div>
-                  <div data-label="数据来源" role="cell">
-                    <Tooltip title={sourceDetail}><span>{transfer?.source || sourceDetail}</span></Tooltip>
-                  </div>
-                  <div data-label="更新时间" role="cell">
-                    <Tooltip title={fullTime(transfer?.observed_at)}><span>{ageText(transfer?.observed_at)}</span></Tooltip>
-                  </div>
-                </div>
-              ));
-            })}
-          </div>
-        </section>
-      ) : null}
-
-      {currentTradeStatus?.index_compositions?.length ? (
-        <section className="instrument-market-table instrument-index-compositions">
-          <div className="instrument-section-head">
-            <div>
-              <Typography.Title level={4}>合约指数成分</Typography.Title>
-              <Typography.Text type="secondary">按合约交易所分组；仅展示官方接口真实返回</Typography.Text>
-            </div>
-            <Tag>
-              {currentTradeStatus.index_compositions.length} 个合约 · {currentTradeStatus.index_compositions.reduce((total, item) => total + item.components.length, 0)} 个成分
-            </Tag>
-          </div>
-          <div className="instrument-index-card-grid">
-            {currentTradeStatus.index_compositions.map((composition) => (
-              <article
-                className="instrument-index-card"
-                key={`${composition.exchange}:${composition.market_type}:${composition.dex ?? ""}:${composition.raw_symbol}`}
-              >
-                <div className="instrument-index-card-title">
-                  <div>
-                    <strong>{exchangeLabels[composition.exchange] ?? composition.exchange} · {composition.symbol.replace(/USDT$/, "")}</strong>
-                    <span>{marketTypeLabel(composition.market_type)} · {composition.dex ? `DEX ${composition.dex} · ` : ""}{composition.market_type} / {composition.dex ? `${composition.dex} / ` : ""}{composition.raw_symbol}</span>
-                  </div>
-                  <div className="instrument-index-price">
-                    <span>加权指数</span>
-                    <b>{composition.index_price === null ? "未返回" : price(composition.index_price)}</b>
-                  </div>
-                </div>
-                <div className="instrument-index-source">指数来源：{composition.source}</div>
-                <div className="instrument-index-component-head">
-                  <span>占比</span><span>价格</span><span>来源 / 原始符号</span>
-                </div>
-                {composition.components.length ? composition.components.map((component, index) => (
-                  <div className="instrument-index-component-row" key={`${component.source_exchange}:${component.raw_symbol}:${index}`}>
-                    <strong>{weightPct(component.weight)}</strong>
-                    <strong>{component.price === null ? "未返回" : price(component.price)}</strong>
-                    <span>
-                      <b>{exchangeLabels[component.source_exchange] ?? component.source_exchange} · {component.market_type ? marketTypeLabel(component.market_type) : "未返回"}</b>
-                      <small>{component.raw_symbol}</small>
-                    </span>
-                  </div>
-                )) : (
-                  <Tooltip title={composition.error || composition.note}>
-                    <div className="instrument-index-empty">{composition.status === "error" ? "查询失败" : "未返回"}</div>
-                  </Tooltip>
-                )}
-                <div className="instrument-index-card-foot">
-                  <span>权重 <b>{weightPct(composition.weight_total)}</b></span>
-                  <Tooltip title={fullTime(composition.observed_at)}><span>更新 {ageText(composition.observed_at)}</span></Tooltip>
-                </div>
-              </article>
-            ))}
-          </div>
-        </section>
+      {marketRows.length || orderedInstrumentSpreads.length || (result && result.exchange_count > 0) || spotTransferMarkets.length || currentTradeStatus?.index_compositions?.length ? (
+        <nav className="instrument-section-nav" aria-label="标的页内导航">
+          {[
+            { id: "instrument-spreads", label: `跨市场差价 ${visibleInstrumentSpreads.length}`, visible: orderedInstrumentSpreads.length > 0 },
+            { id: "instrument-markets", label: `市场明细 ${visibleMarketRows.length}`, visible: marketRows.length > 0 },
+            { id: "instrument-trend", label: "走势", visible: Boolean(result && result.exchange_count > 0) },
+            { id: "instrument-transfers", label: `充提通道 ${spotTransferMarkets.length}`, visible: spotTransferMarkets.length > 0 },
+            { id: "instrument-index", label: `指数成分 ${currentTradeStatus?.index_compositions?.length ?? 0}`, visible: Boolean(currentTradeStatus?.index_compositions?.length) }
+          ].filter((item) => item.visible).map((item) => (
+            <a key={item.id} href={`#${item.id}`} onClick={(event) => {
+              event.preventDefault();
+              document.getElementById(item.id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+            }}>{item.label}</a>
+          ))}
+        </nav>
       ) : null}
 
       {orderedInstrumentSpreads.length > 0 ? (
-        <section className="instrument-market-table">
+        <section id="instrument-spreads" className="instrument-market-table">
           <div className="instrument-section-head instrument-spread-head">
             <div>
               <Typography.Title level={4}>跨市场差价</Typography.Title>
@@ -2321,8 +2296,57 @@ export function InstrumentLookupPage() {
         </section>
       ) : null}
 
+      {marketRows.length > 0 ? (
+        <section id="instrument-markets" className="instrument-market-table instrument-exact-markets">
+          <div className="instrument-section-head">
+            <div>
+              <Typography.Title level={4}>市场明细</Typography.Title>
+              <Typography.Text type="secondary">逐个原始市场展示；盘口深度与公开交易限制来自独立诊断</Typography.Text>
+            </div>
+            <Space size={[8, 4]} wrap>
+              <Segmented<MarketDensity> size="small" aria-label="市场明细密度" value={marketDensity}
+                options={[{ label: "紧凑", value: "compact" }, { label: "完整", value: "full" }]}
+                onChange={(value) => { setMarketDensity(value); saveLayoutPreference("instrument-market-density", value); }} />
+              <Segmented<"all" | MarketType> size="small" value={tradeMarketTypeFilter}
+                options={[{ label: "全部", value: "all" }, { label: "现货", value: "spot" }, { label: "永续", value: "future" }]}
+                onChange={setTradeMarketTypeFilter} />
+              <Segmented<"all" | "blocked" | "unknown"> size="small" value={tradeAvailabilityFilter}
+                options={[{ label: "全部状态", value: "all" }, { label: "有限制", value: "blocked" }, { label: "未知", value: "unknown" }]}
+                onChange={setTradeAvailabilityFilter} />
+              <Space size={5}><Switch size="small" checked={tradeOnlyIssues} onChange={setTradeOnlyIssues} /><Typography.Text>只看异常</Typography.Text></Space>
+              <Tag>{instrumentMarkets.length} 个行情市场</Tag>
+            </Space>
+          </div>
+          {currentTradeStatusError ? <Alert type="warning" showIcon
+            message={currentTradeStatus ? "市场诊断刷新失败；显示上次诊断" : "市场诊断失败；行情仍可查看"}
+            description={currentTradeStatusError} /> : null}
+          {currentTradeStatus && Object.keys(currentTradeStatus.errors).length ? <Alert type="warning" showIcon
+            message={Object.keys(currentTradeStatus.errors).length + " 个市场诊断降级"}
+            description={Object.entries(currentTradeStatus.errors).map(([key, value]) => key + ": " + value).join(" | ")} /> : null}
+          <div className={"instrument-market-data-list" + (marketDensity === "compact" ? " instrument-market-compact-list" : "")} role="table" aria-label="精确行情市场">
+            <div className={"instrument-market-data-head" + (marketDensity === "compact" ? " instrument-market-compact-head" : "")} role="row">
+              {marketDensity === "compact" ? <>
+                <span role="columnheader">市场</span><span role="columnheader">Bid / Ask</span><span role="columnheader">24h 成交额</span><span role="columnheader">资金费率 / 周期</span><span role="columnheader">0.1% 买 / 卖深度</span><span role="columnheader">交易限制</span>
+              </> : <><span>市场身份</span><span>行情 Bid / Ask</span><span>成交额</span><span>资金费率</span><span>盘口深度</span><span>交易限制</span></>}
+            </div>
+            {visibleMarketRows.map(({ quote, diagnostic }) => {
+              const market = quote ?? diagnostic!;
+              const rowIdentity = `${quote ? "quote" : "diagnostic"}:${exactMarketKey(market) ?? JSON.stringify([market.exchange, market.market_type, market.raw_symbol, market.dex])}`;
+              const occurrence = marketRowKeys.get(rowIdentity) ?? 0;
+              marketRowKeys.set(rowIdentity, occurrence + 1);
+              return <InstrumentMarketRow key={`${rowIdentity}:${occurrence}`} quote={quote} diagnostic={diagnostic}
+                compact={marketDensity === "compact"} statistics={statistics} statisticsLoading={statisticsLoading} statisticsError={statisticsError}
+                diagnosticsLoading={diagnosticsLoading} currentTradeStatus={currentTradeStatus} currentTradeStatusError={currentTradeStatusError}
+                watch={diagnostic ? tradeWatchFor(diagnostic) : undefined}
+                watchSaving={Boolean(diagnostic && tradeWatchSaving === tradeMarketKey(diagnostic))}
+                onToggleWatch={() => { if (diagnostic) void toggleTradeWatch(diagnostic); }} />;
+            })}
+            {visibleMarketRows.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前筛选下没有市场" /> : null}
+          </div>
+        </section>
+      ) : null}
       {result && result.exchange_count > 0 ? (
-        <section className={`instrument-trend-section ${trendOpen ? "instrument-trend-open" : ""}`}>
+        <section id="instrument-trend" className={`instrument-trend-section ${trendOpen ? "instrument-trend-open" : ""}`}>
           <div className="instrument-section-head">
             <Space size={10}>
               <LineChartOutlined />
@@ -2380,6 +2404,123 @@ export function InstrumentLookupPage() {
               ) : null}
             </div>
           ) : null}
+        </section>
+      ) : null}
+
+      {spotTransferMarkets.length ? (
+        <section id="instrument-transfers" className="instrument-market-table instrument-transfer-status">
+          <div className="instrument-section-head instrument-collapse-head">
+            <div>
+              <Typography.Title level={4}>
+                <button type="button" className="instrument-collapse-trigger" aria-label="现货充提通道" aria-expanded={transferOpen} aria-controls="instrument-transfers-content"
+                  onClick={() => { const next = !transferOpen; setTransferOpen(next); saveLayoutPreference("instrument-transfer-open", String(next)); }}>
+                  {transferOpen ? <DownOutlined /> : <RightOutlined />} 现货充提通道
+                </button>
+              </Typography.Title>
+              <Typography.Text type="secondary">每条网络独立展示，不合并为“部分开放”</Typography.Text>
+            </div>
+            <Tag>{spotTransferMarkets.length} 个现货市场</Tag>
+          </div>
+          {transferOpen ? <div id="instrument-transfers-content" className="instrument-transfer-grid" role="table" aria-label="现货逐链充提状态">
+            <div className="instrument-transfer-grid-head" role="row">
+              <span>交易所</span>
+              <span>资产</span>
+              <span>网络</span>
+              <span>充币</span>
+              <span>提币</span>
+              <span>数据来源</span>
+              <span>更新时间</span>
+            </div>
+            {spotTransferMarkets.flatMap((market) => {
+              const transfer = market.spot_transfer;
+              const networks = transfer?.networks.length
+                ? transfer.networks
+                : [{ network: "未返回链列表", deposit_enabled: null, withdraw_enabled: null }];
+              const sourceDetail = transfer?.error || transfer?.note || transfer?.source || "没有可公开核验的逐链状态";
+              return networks.map((network, index) => (
+                <div
+                  className={`instrument-transfer-grid-row${index === 0 ? " instrument-transfer-grid-row-start" : ""}`}
+                  key={`${tradeMarketKey(market)}:${network.network}:${index}`}
+                  role="row"
+                >
+                  <div data-label="交易所" role="cell">
+                    <strong>{exchangeLabels[market.exchange] ?? market.exchange}</strong>
+                    <span>{market.raw_symbol}</span>
+                  </div>
+                  <div data-label="资产" role="cell"><strong>{transfer?.asset ?? "-"}</strong></div>
+                  <div data-label="网络" role="cell"><strong>{network.network}</strong></div>
+                  <div data-label="充币" role="cell"><TransferNetworkState value={network.deposit_enabled} /></div>
+                  <div data-label="提币" role="cell"><TransferNetworkState value={network.withdraw_enabled} /></div>
+                  <div data-label="数据来源" role="cell">
+                    <Tooltip title={sourceDetail}><span>{transfer?.source || sourceDetail}</span></Tooltip>
+                  </div>
+                  <div data-label="更新时间" role="cell">
+                    <Tooltip title={fullTime(transfer?.observed_at)}><span>{ageText(transfer?.observed_at)}</span></Tooltip>
+                  </div>
+                </div>
+              ));
+            })}
+          </div> : null}
+        </section>
+      ) : null}
+
+      {currentTradeStatus?.index_compositions?.length ? (
+        <section id="instrument-index" className="instrument-market-table instrument-index-compositions">
+          <div className="instrument-section-head instrument-collapse-head">
+            <div>
+              <Typography.Title level={4}>
+                <button type="button" className="instrument-collapse-trigger" aria-label="合约指数成分" aria-expanded={indexOpen} aria-controls="instrument-index-content"
+                  onClick={() => { const next = !indexOpen; setIndexOpen(next); saveLayoutPreference("instrument-index-open", String(next)); }}>
+                  {indexOpen ? <DownOutlined /> : <RightOutlined />} 合约指数成分
+                </button>
+              </Typography.Title>
+              <Typography.Text type="secondary">按合约交易所分组；仅展示官方接口真实返回</Typography.Text>
+            </div>
+            <Tag>
+              {currentTradeStatus.index_compositions.length} 个合约 · {currentTradeStatus.index_compositions.reduce((total, item) => total + item.components.length, 0)} 个成分
+            </Tag>
+          </div>
+          {indexOpen ? <div id="instrument-index-content" className="instrument-index-card-grid">
+            {currentTradeStatus.index_compositions.map((composition) => (
+              <article
+                className="instrument-index-card"
+                key={`${composition.exchange}:${composition.market_type}:${composition.dex ?? ""}:${composition.raw_symbol}`}
+              >
+                <div className="instrument-index-card-title">
+                  <div>
+                    <strong>{exchangeLabels[composition.exchange] ?? composition.exchange} · {composition.symbol.replace(/USDT$/, "")}</strong>
+                    <span>{marketTypeLabel(composition.market_type)} · {composition.dex ? `DEX ${composition.dex} · ` : ""}{composition.market_type} / {composition.dex ? `${composition.dex} / ` : ""}{composition.raw_symbol}</span>
+                  </div>
+                  <div className="instrument-index-price">
+                    <span>加权指数</span>
+                    <b>{composition.index_price === null ? "未返回" : price(composition.index_price)}</b>
+                  </div>
+                </div>
+                <div className="instrument-index-source">指数来源：{composition.source}</div>
+                <div className="instrument-index-component-head">
+                  <span>占比</span><span>价格</span><span>来源 / 原始符号</span>
+                </div>
+                {composition.components.length ? composition.components.map((component, index) => (
+                  <div className="instrument-index-component-row" key={`${component.source_exchange}:${component.raw_symbol}:${index}`}>
+                    <strong>{weightPct(component.weight)}</strong>
+                    <strong>{component.price === null ? "未返回" : price(component.price)}</strong>
+                    <span>
+                      <b>{exchangeLabels[component.source_exchange] ?? component.source_exchange} · {component.market_type ? marketTypeLabel(component.market_type) : "未返回"}</b>
+                      <small>{component.raw_symbol}</small>
+                    </span>
+                  </div>
+                )) : (
+                  <Tooltip title={composition.error || composition.note}>
+                    <div className="instrument-index-empty">{composition.status === "error" ? "查询失败" : "未返回"}</div>
+                  </Tooltip>
+                )}
+                <div className="instrument-index-card-foot">
+                  <span>权重 <b>{weightPct(composition.weight_total)}</b></span>
+                  <Tooltip title={fullTime(composition.observed_at)}><span>更新 {ageText(composition.observed_at)}</span></Tooltip>
+                </div>
+              </article>
+            ))}
+          </div> : null}
         </section>
       ) : null}
 
