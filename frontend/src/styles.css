@@ -340,9 +340,10 @@
 
 .instrument-market-compact-identity {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  overflow: hidden;
+  gap: 4px 6px;
+  white-space: normal;
 }
 
 .instrument-market-compact-identity > .ant-btn {
