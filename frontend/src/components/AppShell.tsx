@@ -3,7 +3,6 @@ import {
   ArrowDownOutlined,
   ArrowUpOutlined,
   BgColorsOutlined,
-  BellOutlined,
   ClockCircleOutlined,
   DashboardOutlined,
   EyeInvisibleOutlined,
@@ -65,8 +64,7 @@ type PageKey =
   | "announcements"
   | "oil-news"
   | "account-connections"
-  | "settings"
-  | "history";
+  | "settings";
 
 type LazyPage = LazyExoticComponent<ComponentType>;
 type NavigationItem = {
@@ -170,9 +168,6 @@ const lazyPages: Record<PageKey, LazyPage> = {
   ),
   settings: lazy(() =>
     import("../pages/SettingsPage").then((module) => ({ default: module.SettingsPage }))
-  ),
-  history: lazy(() =>
-    import("../pages/AlertHistoryPage").then((module) => ({ default: module.AlertHistoryPage }))
   )
 };
 
@@ -214,8 +209,7 @@ const defaultNavigationItems: NavigationItem[] = [
   { key: "announcements", icon: <NotificationOutlined />, label: "交易所公告" },
   { key: "oil-news", icon: <NotificationOutlined />, label: "原油新闻" },
   { key: "account-connections", icon: <KeyOutlined />, label: "账户连接" },
-  { key: "settings", icon: <SettingOutlined />, label: "参数与告警" },
-  { key: "history", icon: <BellOutlined />, label: "告警历史" }
+  { key: "settings", icon: <SettingOutlined />, label: "参数与告警" }
 ];
 const defaultNavigationOrder = defaultNavigationItems.map((item) => item.key);
 const navigationItemsByKey = new Map(defaultNavigationItems.map((item) => [item.key, item]));
@@ -319,6 +313,8 @@ function pageFromUrl(): PageKey | null {
     return null;
   }
   const requested = new URLSearchParams(window.location.search).get("page");
+  // Retain old bookmarks and navigation events as an alias for the settings history tab.
+  if (requested === "history") return "settings";
   return isPageKey(requested) ? requested : null;
 }
 

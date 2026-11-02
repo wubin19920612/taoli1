@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -6,6 +6,8 @@ import { SettingsPage } from "../src/pages/SettingsPage";
 
 describe("SettingsPage", () => {
   beforeEach(() => {
+    window.localStorage.clear();
+    window.history.replaceState({}, "", "/?page=settings");
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -85,74 +87,6 @@ describe("SettingsPage", () => {
             close_position_floor_pct: 0
           });
         }
-        if (url.includes("/settings/live-pilot") && init?.method === "PUT") {
-          return Response.json(JSON.parse(String(init.body)));
-        }
-        if (url.includes("/settings/live-pilot/preview")) {
-          return Response.json({
-            settings: {
-              enabled: false,
-              max_symbols: 10,
-              notional_per_symbol_usdt: 100,
-              min_next_funding_edge_pct: -0.05,
-              prefer_hyperliquid: true,
-              exclude_ss: true,
-              create_cards_enabled: true
-            },
-            total_opportunities: 3,
-            eligible_symbols: 2,
-            selected_symbols: 2,
-            skipped_negative_funding: 1,
-            skipped_type: 1,
-            skipped_risk: 4,
-            budget_usdt: 200,
-            items: [
-              {
-                opportunity_id: "btc-hyper",
-                symbol: "BTCUSDT",
-                type: "FF",
-                route: "hyperliquid future -> okx future",
-                buy_exchange: "hyperliquid",
-                sell_exchange: "okx",
-                uses_hyperliquid: true,
-                open_spread_pct: 0.5,
-                fee_adjusted_open_pct: 0.35,
-                next_funding_edge_pct: 0.02,
-                combined_open_edge_pct: 0.37,
-                volume_24h_usdt: 10000000,
-                notional_usdt: 100,
-                risk_labels: []
-              },
-              {
-                opportunity_id: "eth",
-                symbol: "ETHUSDT",
-                type: "FF",
-                route: "binance future -> okx future",
-                buy_exchange: "binance",
-                sell_exchange: "okx",
-                uses_hyperliquid: false,
-                open_spread_pct: 0.4,
-                fee_adjusted_open_pct: 0.2,
-                next_funding_edge_pct: -0.01,
-                combined_open_edge_pct: 0.19,
-                volume_24h_usdt: 8000000,
-                notional_usdt: 100,
-                risk_labels: ["FUNDING_AGAINST"]
-              }
-            ]
-          });
-        }
-        if (url.includes("/settings/live-pilot")) {
-          return Response.json({
-            enabled: false,
-            max_symbols: 10,
-            notional_per_symbol_usdt: 100,
-            min_next_funding_edge_pct: -0.05,
-            prefer_hyperliquid: true,
-            exclude_ss: true,
-            create_cards_enabled: true
-          });
-        }
         if (url.includes("/astro/status")) {
           return Response.json({
             configured: true,
@@ -220,7 +154,8 @@ describe("SettingsPage", () => {
   it("loads risk settings and can submit an alert rule", async () => {
     render(<SettingsPage />);
 
-    expect(await screen.findByDisplayValue("1000")).toBeTruthy();
+    const ruleVolume = await screen.findByLabelText("最低成交额 (K)");
+    await waitFor(() => expect((ruleVolume as HTMLInputElement).value).toBe("1000"));
     expect(screen.getAllByText(/低成交额.*LOW_VOLUME/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/数据过期.*STALE_DATA/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/异常大价差.*HUGE_SPREAD_VERIFY/).length).toBeGreaterThan(0);
@@ -264,6 +199,7 @@ describe("SettingsPage", () => {
 
   it("defaults multi-exchange premium alerts to 2 percent and saves changes", async () => {
     render(<SettingsPage />);
+    await userEvent.click(screen.getByRole("tab", { name: "风险参数" }));
     const threshold = await screen.findByLabelText("实时溢价指数绝对值阈值");
     await waitFor(() => expect(Number((threshold as HTMLInputElement).value)).toBe(2));
     expect(screen.getByLabelText("启用多交易所溢价告警").getAttribute("aria-checked")).toBe("true");
@@ -409,8 +345,10 @@ describe("SettingsPage", () => {
 
   it("loads and saves Astro automation settings", async () => {
     render(<SettingsPage />);
+    await userEvent.click(screen.getByRole("tab", { name: "Astro" }));
 
     expect(await screen.findByText("Astro 自动化")).toBeTruthy();
+    expect(await screen.findByText(/Astro dry-run 当前开启/)).toBeTruthy();
     await userEvent.click(screen.getByLabelText("告警自动创建 Astro 卡片"));
     await userEvent.click(screen.getByLabelText("允许同名不同类型或路线卡片"));
     await userEvent.click(screen.getByRole("button", { name: /保存 Astro 自动化/ }));
@@ -430,6 +368,7 @@ describe("SettingsPage", () => {
 
   it("loads and saves Astro card defaults", async () => {
     render(<SettingsPage />);
+    await userEvent.click(screen.getByRole("tab", { name: "Astro" }));
 
     expect(await screen.findByText("Astro 卡片默认参数")).toBeTruthy();
     expect(screen.getByText(/GC 路线使用 gc-aster、gc-lighter/)).toBeTruthy();
@@ -471,6 +410,7 @@ describe("SettingsPage", () => {
 
   it("loads and saves symbol aliases with risk settings", async () => {
     render(<SettingsPage />);
+    await userEvent.click(screen.getByRole("tab", { name: "风险参数" }));
 
     expect(await screen.findByText("全局币名映射")).toBeTruthy();
     expect(screen.getByText("全部页面生效")).toBeTruthy();
@@ -493,59 +433,6 @@ describe("SettingsPage", () => {
         })
       );
     });
-  }, 15000);
-
-  it("loads and saves Live Pilot settings", async () => {
-    render(<SettingsPage />);
-
-    expect(await screen.findByText("正差价正费率实盘实验")).toBeTruthy();
-    expect(screen.getByText("1000 USDT")).toBeTruthy();
-    expect(await screen.findByText("当前候选 2/2")).toBeTruthy();
-    expect(screen.getByText("BTCUSDT")).toBeTruthy();
-    expect(screen.getAllByText("FF 合约-合约").length).toBeGreaterThan(0);
-    expect(screen.getByText("hyperliquid future -> okx future")).toBeTruthy();
-    expect(screen.getByText("Hyper")).toBeTruthy();
-    expect(screen.getByText("强负资金跳过 1")).toBeTruthy();
-    expect(screen.getByText("类型跳过 1")).toBeTruthy();
-    expect(screen.getByText("风险跳过 4")).toBeTruthy();
-    expect(screen.getByText(/Astro dry-run 当前开启/)).toBeTruthy();
-
-    await userEvent.click(screen.getByLabelText("启用实盘实验"));
-    const symbolLimit = screen.getByLabelText("最多标的数");
-    await userEvent.clear(symbolLimit);
-    await userEvent.type(symbolLimit, "7");
-    const notional = screen.getByLabelText("每标的资金 USDT");
-    await userEvent.clear(notional);
-    await userEvent.type(notional, "125");
-    const fundingFloor = screen.getByLabelText("最小下周期资金边际");
-    await userEvent.clear(fundingFloor);
-    await userEvent.type(fundingFloor, "-0.03");
-    await userEvent.click(screen.getByRole("button", { name: /保存实盘实验/ }));
-
-    await waitFor(() => {
-      expect(fetch).toHaveBeenCalledWith(
-        expect.stringContaining("/settings/live-pilot"),
-        expect.objectContaining({
-          method: "PUT",
-          body: expect.stringContaining('"notional_per_symbol_usdt":125')
-        })
-      );
-    });
-    expect(
-      vi.mocked(fetch).mock.calls.some(([, init]) => {
-        return init?.method === "PUT" && String(init.body).includes('"enabled":true');
-      })
-    ).toBe(true);
-    expect(
-      vi.mocked(fetch).mock.calls.some(([, init]) => {
-        return init?.method === "PUT" && String(init.body).includes('"min_next_funding_edge_pct":-0.03');
-      })
-    ).toBe(true);
-    expect(
-      vi.mocked(fetch).mock.calls.some(([, init]) => {
-        return init?.method === "PUT" && String(init.body).includes('"exclude_ss":true');
-      })
-    ).toBe(true);
   }, 15000);
 
   it("uses saved risk volume as the default alert rule volume", async () => {
@@ -612,6 +499,7 @@ describe("SettingsPage", () => {
 
   it("saves editable risk thresholds and converts K volume back to USDT", async () => {
     render(<SettingsPage />);
+    await userEvent.click(screen.getByRole("tab", { name: "风险参数" }));
 
     const volumeInput = await screen.findByLabelText("低成交额阈值 (LOW_VOLUME)");
     await userEvent.clear(volumeInput);
@@ -636,6 +524,7 @@ describe("SettingsPage", () => {
 
   it("saves signal validity risk settings", async () => {
     render(<SettingsPage />);
+    await userEvent.click(screen.getByRole("tab", { name: "风险参数" }));
 
     const slippageInput = await screen.findByLabelText(/Signal slippage buffer pct/);
     await userEvent.clear(slippageInput);
@@ -655,13 +544,14 @@ describe("SettingsPage", () => {
 
   it("shows signal strategy minimum notional default and saves it", async () => {
     render(<SettingsPage />);
+    await userEvent.click(screen.getByRole("tab", { name: "风险参数" }));
 
-    expect(await screen.findByText("Signal strategy（信号策略）")).toBeTruthy();
+    expect(await screen.findByText("信号策略")).toBeTruthy();
     expect(screen.getByText(/信号策略用于判断告警机会是否真的适合创建 Astro 卡片/)).toBeTruthy();
     expect(screen.getByText(/系统会在创建卡片前拉取两边交易所的多档 order book/)).toBeTruthy();
     expect(screen.getByText(/默认 1000 USDT/)).toBeTruthy();
     const minimumInput = await screen.findByLabelText("最小盘口验证金额 USDT (Minimum validation notional USDT)");
-    const strategyNotes = await screen.findByLabelText("信号策略备注 / 后续自定义规则 (Signal strategy notes)");
+    const strategyNotes = await screen.findByLabelText("信号策略备注 / 后续自定义规则");
     expect((minimumInput as HTMLInputElement).value).toBe("1000");
 
     await userEvent.clear(minimumInput);
@@ -690,6 +580,7 @@ describe("SettingsPage", () => {
 
   it("saves symbol blacklist and ignored exchanges in risk settings", async () => {
     render(<SettingsPage />);
+    await userEvent.click(screen.getByRole("tab", { name: "风险参数" }));
 
     const blacklist = await screen.findByLabelText("黑名单标的");
     await userEvent.click(blacklist);
@@ -762,6 +653,7 @@ describe("SettingsPage", () => {
     );
 
     render(<SettingsPage />);
+    await userEvent.click(screen.getByRole("tab", { name: "访问与服务" }));
 
     await userEvent.click(await screen.findByRole("button", { name: "重启前端" }, { timeout: 10000 }));
 
@@ -771,4 +663,100 @@ describe("SettingsPage", () => {
     expect(screen.getByRole("button", { name: "重启后端" })).toBeTruthy();
     expect(screen.getByText(/taoli1-frontend-1/)).toBeTruthy();
   }, 15000);
+
+  it("keeps unsaved rule and risk forms and rule validation across tab changes", async () => {
+    render(<SettingsPage />);
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "告警规则", "风险参数", "Astro", "访问与服务", "告警历史"
+    ]);
+    expect(screen.getByRole("tab", { name: "告警规则" }).getAttribute("aria-selected")).toBe("true");
+    await screen.findByRole("button", { name: "编辑规则 Existing FF" });
+    const ruleName = screen.getByLabelText("告警规则名称") as HTMLInputElement;
+    fireEvent.change(ruleName, { target: { value: "Unsaved rule" } });
+    const threshold = screen.getByLabelText("开仓阈值") as HTMLInputElement;
+    await userEvent.clear(threshold);
+    await userEvent.click(screen.getByRole("button", { name: "新增规则" }));
+    await waitFor(() => expect(threshold.getAttribute("aria-invalid")).toBe("true"));
+
+    await userEvent.click(screen.getByRole("tab", { name: "风险参数" }));
+    const notes = screen.getByLabelText("信号策略备注 / 后续自定义规则") as HTMLTextAreaElement;
+    fireEvent.change(notes, { target: { value: "Unsaved risk notes" } });
+    await userEvent.click(screen.getByRole("tab", { name: "告警规则" }));
+    expect(screen.getByLabelText("告警规则名称")).toBe(ruleName);
+    expect(ruleName.value).toBe("Unsaved rule");
+    expect(threshold.getAttribute("aria-invalid")).toBe("true");
+    await userEvent.click(screen.getByRole("tab", { name: "风险参数" }));
+    expect(screen.getByLabelText("信号策略备注 / 后续自定义规则")).toBe(notes);
+    expect(notes.value).toBe("Unsaved risk notes");
+    expect(vi.mocked(fetch).mock.calls.some(([, init]) => init?.method === "PUT" || init?.method === "POST")).toBe(false);
+  }, 15000);
+
+  it("keeps unsaved Astro and access inputs mounted across tab changes", async () => {
+    render(<SettingsPage />);
+    await screen.findByRole("button", { name: "编辑规则 Existing FF" });
+    await userEvent.click(screen.getByRole("tab", { name: "Astro" }));
+    const automation = screen.getByLabelText("告警自动创建 Astro 卡片");
+    await userEvent.click(automation);
+    const cardAmount = screen.getByLabelText("仓位金额 USDT") as HTMLInputElement;
+    fireEvent.change(cardAmount, { target: { value: "80" } });
+    await userEvent.click(screen.getByRole("tab", { name: "访问与服务" }));
+    const password = screen.getByPlaceholderText("Dashboard Password") as HTMLInputElement;
+    fireEvent.change(password, { target: { value: "draft-password" } });
+    await userEvent.click(screen.getByRole("tab", { name: "Astro" }));
+    expect(automation.getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByLabelText("仓位金额 USDT")).toBe(cardAmount);
+    expect(cardAmount.value).toBe("80");
+    await userEvent.click(screen.getByRole("tab", { name: "访问与服务" }));
+    expect(screen.getByPlaceholderText("Dashboard Password")).toBe(password);
+    expect(password.value).toBe("draft-password");
+    expect(vi.mocked(fetch).mock.calls.some(([, init]) => init?.method === "PUT" || init?.method === "POST")).toBe(false);
+  }, 15000);
+
+  it("requests alert history only on activation and keeps its panel mounted", async () => {
+    render(<SettingsPage />);
+    await screen.findByRole("button", { name: "编辑规则 Existing FF" });
+    const historyRequests = () => vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes("/alerts/events"));
+    expect(historyRequests()).toHaveLength(0);
+    expect(screen.queryByText("正差价正费率实盘实验")).toBeNull();
+    expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("/settings/live-pilot"))).toBe(false);
+
+    await userEvent.click(screen.getByRole("tab", { name: "告警历史" }));
+    await waitFor(() => expect(historyRequests()).toHaveLength(1));
+    const testButton = await screen.findByRole("button", { name: /测试告警/ });
+    await userEvent.click(screen.getByRole("tab", { name: "告警规则" }));
+    expect(testButton.isConnected).toBe(true);
+    expect(historyRequests()).toHaveLength(1);
+    await userEvent.click(screen.getByRole("tab", { name: "告警历史" }));
+    await waitFor(() => expect(historyRequests()).toHaveLength(2));
+    expect(await screen.findByRole("button", { name: /测试告警/ })).toBe(testButton);
+  }, 15000);
+
+  it("restores the saved tab and persists a new selection", async () => {
+    window.localStorage.setItem("settings-active-tab", "risk");
+    render(<SettingsPage />);
+    expect(screen.getByRole("tab", { name: "风险参数" }).getAttribute("aria-selected")).toBe("true");
+    await userEvent.click(screen.getByRole("tab", { name: "Astro" }));
+    expect(window.localStorage.getItem("settings-active-tab")).toBe("astro");
+  });
+
+  it("falls back to alert rules for an unknown saved tab", async () => {
+    window.localStorage.setItem("settings-active-tab", "retired-tab");
+    render(<SettingsPage />);
+    expect(screen.getByRole("tab", { name: "告警规则" }).getAttribute("aria-selected")).toBe("true");
+    await screen.findByRole("button", { name: "编辑规则 Existing FF" });
+  });
+
+  it("allows tab changes when localStorage reads and writes throw", async () => {
+    const read = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("storage blocked"); });
+    const write = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("storage blocked"); });
+    try {
+      render(<SettingsPage />);
+      expect(screen.getByRole("tab", { name: "告警规则" }).getAttribute("aria-selected")).toBe("true");
+      await userEvent.click(screen.getByRole("tab", { name: "风险参数" }));
+      expect(screen.getByRole("tab", { name: "风险参数" }).getAttribute("aria-selected")).toBe("true");
+    } finally {
+      read.mockRestore();
+      write.mockRestore();
+    }
+  });
 });

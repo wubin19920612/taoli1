@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -68,5 +68,40 @@ describe("AlertHistoryPage", () => {
       expect.stringContaining("/alerts/test"),
       expect.objectContaining({ method: "POST" })
     );
+  });
+
+  it("translates actual delivery statuses and preserves unknown values", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json(
+      ["sent", "failed", "muted", "unknown", "future-status", "toString"].map((status, index) => ({
+        id: `evt-${index}`,
+        symbol: "BTCUSDT",
+        status,
+        message: "status test",
+        created_at: "2026-05-15T02:00:00Z"
+      }))
+    )));
+    render(<AlertHistoryPage />);
+    for (const label of ["已发送", "失败", "已静默", "结果未知", "future-status", "toString"]) {
+      expect(await screen.findByText(label)).toBeTruthy();
+    }
+  });
+
+  it("labels refresh and reloads history on demand", async () => {
+    render(<AlertHistoryPage />);
+    await screen.findByText("BTCUSDT");
+    await userEvent.click(screen.getByRole("button", { name: /刷新/ }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+    expect(fetch).toHaveBeenLastCalledWith(expect.stringContaining("/alerts/events?limit=200"), expect.anything());
+  });
+
+  it("does not load while its embedded tab is inactive", async () => {
+    const { rerender } = render(<AlertHistoryPage active={false} />);
+    expect(fetch).not.toHaveBeenCalled();
+    rerender(<AlertHistoryPage active />);
+    expect(await screen.findByText("BTCUSDT")).toBeTruthy();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    rerender(<AlertHistoryPage active={false} />);
+    expect(screen.getByText("BTCUSDT")).toBeTruthy();
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 });

@@ -3103,11 +3103,36 @@ body {
   white-space: nowrap;
 }
 
+.settings-page > .ant-tabs,
+.settings-page .ant-tabs-content-holder {
+  min-width: 0;
+}
+
 .settings-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
+  gap: 16px;
   min-width: 0;
+}
+
+.settings-panel-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin-bottom: 16px;
+}
+
+.settings-panel-header .ant-typography {
+  margin-bottom: 0;
+}
+
+.settings-section {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #dce4e1;
 }
 
 .panel {
@@ -3187,25 +3212,6 @@ body {
   color: #66736f;
   font-size: 13px;
   line-height: 1.5;
-}
-
-.live-pilot-metrics {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-  margin: 0 0 14px;
-}
-
-.live-pilot-metrics > div {
-  min-width: 0;
-  padding: 10px 12px;
-  background: #f7faf9;
-  border: 1px solid #dce4e1;
-  border-radius: 6px;
-}
-
-.live-pilot-metrics .ant-typography {
-  margin: 0;
 }
 
 .funding-metrics {
@@ -7125,19 +7131,6 @@ body {
   word-break: break-word;
 }
 
-.live-pilot-preview {
-  display: grid;
-  gap: 8px;
-  margin: 0 0 14px;
-}
-
-.live-pilot-preview-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
 .template-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(320px, 0.9fr);
@@ -7728,7 +7721,6 @@ body {
   .symbol-spread-metric-grid,
   .premium-metric-grid,
   .spread-history-stats,
-  .live-pilot-metrics,
   .gate-market-grid {
     grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   }
@@ -7804,8 +7796,7 @@ body {
   .announcements-settings-head,
   .index-component-watch-head,
   .index-component-market-head,
-  .gate-plan-head,
-  .live-pilot-preview-head {
+  .gate-plan-head {
     align-items: flex-start;
     flex-direction: column;
   }
@@ -7885,7 +7876,6 @@ body {
   .research-backtest-stats,
   .announcements-settings-grid,
   .oil-news-settings-grid,
-  .live-pilot-metrics,
   .template-grid,
   .template-options,
   .gate-market-grid,

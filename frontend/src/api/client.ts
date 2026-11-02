@@ -76,9 +76,7 @@ import type {
   PairSpreadPreset,
   PairSpreadFundingRecordRequest,
   PairSpreadFundingRecordStatus,
-  LivePilotPreview,
   MarketType,
-  LivePilotSettings,
   MarketFilters,
   MarketSnapshot,
   Opportunity,
@@ -531,21 +529,6 @@ export async function updateAstroAutomationSettings(
   settings: AstroAutomationSettings
 ): Promise<AstroAutomationSettings> {
   return fetchJson<AstroAutomationSettings>("/settings/astro-automation", {
-    method: "PUT",
-    body: JSON.stringify(settings)
-  });
-}
-
-export async function getLivePilotSettings(): Promise<LivePilotSettings> {
-  return fetchJson<LivePilotSettings>("/settings/live-pilot");
-}
-
-export async function getLivePilotPreview(): Promise<LivePilotPreview> {
-  return fetchJson<LivePilotPreview>("/settings/live-pilot/preview");
-}
-
-export async function updateLivePilotSettings(settings: LivePilotSettings): Promise<LivePilotSettings> {
-  return fetchJson<LivePilotSettings>("/settings/live-pilot", {
     method: "PUT",
     body: JSON.stringify(settings)
   });

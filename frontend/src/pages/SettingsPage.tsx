@@ -11,6 +11,7 @@ import {
   Space,
   Switch,
   Table,
+  Tabs,
   Tag,
   Tooltip,
   Typography,
@@ -26,8 +27,6 @@ import {
   getAlertMessageTemplate,
   getAstroCardSettings,
   getAstroStatus,
-  getLivePilotPreview,
-  getLivePilotSettings,
   getRiskSettings,
   getPremiumIndexAlertStatus,
   getServiceControlStatus,
@@ -37,7 +36,6 @@ import {
   updateAlertMessageTemplate,
   updateAstroAutomationSettings,
   updateAstroCardSettings,
-  updateLivePilotSettings,
   updateAlertRule,
   updateRiskSettings
 } from "../api/client";
@@ -47,9 +45,6 @@ import type {
   AstroAutomationSettings,
   AstroCardSettings,
   AstroSdkStatus,
-  LivePilotPreview,
-  LivePilotPreviewItem,
-  LivePilotSettings,
   RiskSettings,
   ServiceControlStatus,
   SymbolAlias
@@ -59,6 +54,7 @@ import { alertRuleFieldHelp, alertRuleGuide, alertSeverityOptions, alertTypeOpti
 import { defaultHiddenRiskLabels, riskLabelOptions } from "../constants/riskLabels";
 import { PhonePriceAlertsPanel } from "./PhonePriceAlertsPanel";
 import { MarketIdentityPanel } from "../components/MarketIdentityPanel";
+import { AlertHistoryPage } from "./AlertHistoryPage";
 
 type AlertRuleFormValues = AlertRule & {
   min_volume_24h_k?: number;
@@ -132,16 +128,6 @@ const defaultRiskSettings: RiskSettings = {
       price_multiplier: 1
     }
   ]
-};
-
-const defaultLivePilotSettings: LivePilotSettings = {
-  enabled: false,
-  max_symbols: 10,
-  notional_per_symbol_usdt: 100,
-  min_next_funding_edge_pct: -0.05,
-  prefer_hyperliquid: true,
-  exclude_ss: true,
-  create_cards_enabled: true
 };
 
 const defaultAstroCardSettings: AstroCardSettings = {
@@ -230,29 +216,6 @@ const riskSelectOptions = riskLabelOptions.map((item) => ({
   label: `${item.label} (${item.value})`,
   value: item.value
 }));
-const opportunityTypeLabels: Record<string, string> = {
-  SF: "SF 现货-合约",
-  FF: "FF 合约-合约",
-  SS: "SS 现货-现货"
-};
-
-function formatPct(value: number): string {
-  return `${value.toFixed(3)}%`;
-}
-
-function formatCompactUsdt(value?: number | null): string {
-  if (value === null || value === undefined) {
-    return "-";
-  }
-  if (value >= 1_000_000) {
-    return `${(value / 1_000_000).toFixed(2)}M`;
-  }
-  if (value >= 1_000) {
-    return `${(value / 1_000).toFixed(1)}K`;
-  }
-  return `${value.toFixed(0)}`;
-}
-
 function serviceCanRestart(status: ServiceControlStatus | null, service: ServiceName): boolean {
   if (!status?.enabled) {
     return false;
@@ -321,13 +284,6 @@ function normalizeAlertTemplate(values?: Partial<AlertMessageTemplateSettings>):
   };
 }
 
-function normalizeLivePilot(values?: Partial<LivePilotSettings>): LivePilotSettings {
-  return {
-    ...defaultLivePilotSettings,
-    ...(values ?? {})
-  };
-}
-
 function buildAlertTemplatePreview(template: AlertMessageTemplateSettings): string {
   if (template.format === "compact") {
     const lines = [
@@ -391,14 +347,33 @@ function buildAlertTemplatePreview(template: AlertMessageTemplateSettings): stri
   return blocks.join("\n\n") || "至少保留一个字段，避免告警内容为空。";
 }
 
+const settingsTabs = ["rules", "risk", "astro", "access", "history"] as const;
+type SettingsTab = typeof settingsTabs[number];
+const activeTabStorageKey = "settings-active-tab";
+
+function isHistoryUrl(): boolean {
+  return typeof window !== "undefined"
+    && new URLSearchParams(window.location.search).get("page") === "history";
+}
+
+function initialSettingsTab(): SettingsTab {
+  if (isHistoryUrl()) return "history";
+  try {
+    const saved = window.localStorage.getItem(activeTabStorageKey);
+    return settingsTabs.includes(saved as SettingsTab) ? saved as SettingsTab : "rules";
+  } catch {
+    return "rules";
+  }
+}
+
 export function SettingsPage() {
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialSettingsTab);
   const [premiumStatus, setPremiumStatus] = useState<Awaited<ReturnType<typeof getPremiumIndexAlertStatus>> | null>(null);
   const [riskForm] = Form.useForm<RiskSettings>();
   const [ruleForm] = Form.useForm<AlertRuleFormValues>();
   const [templateForm] = Form.useForm<AlertMessageTemplateSettings>();
   const [astroAutomationForm] = Form.useForm<AstroAutomationSettings>();
   const [astroCardForm] = Form.useForm<AstroCardSettings>();
-  const [livePilotForm] = Form.useForm<LivePilotSettings>();
   const [rules, setRules] = useState<AlertRule[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -414,9 +389,6 @@ export function SettingsPage() {
   const [restartingService, setRestartingService] = useState<ServiceName | null>(null);
   const [astroStatus, setAstroStatus] = useState<AstroSdkStatus | null>(null);
   const [astroStatusError, setAstroStatusError] = useState("");
-  const [livePilotPreview, setLivePilotPreview] =
-    useState<LivePilotSettings>(defaultLivePilotSettings);
-  const [livePilotSelection, setLivePilotSelection] = useState<LivePilotPreview | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -439,8 +411,6 @@ export function SettingsPage() {
         alertTemplate,
         astroAutomation,
         astroCard,
-        livePilot,
-        pilotSelection,
         nextAstroStatus,
         nextPremiumStatus
       ] = await Promise.all([
@@ -450,24 +420,18 @@ export function SettingsPage() {
         getAlertMessageTemplate(),
         getAstroAutomationSettings(),
         getAstroCardSettings(),
-        getLivePilotSettings(),
-        getLivePilotPreview(),
         astroStatusRequest,
         getPremiumIndexAlertStatus().catch(() => null)
       ]);
       const nextRuleDefaults = ruleDefaultsForRisk(risk);
       const nextAlertTemplate = normalizeAlertTemplate(alertTemplate);
-      const nextLivePilot = normalizeLivePilot(livePilot);
       riskForm.setFieldsValue(riskToForm(risk));
       ruleForm.setFieldsValue(ruleToForm(nextRuleDefaults));
       templateForm.setFieldsValue(nextAlertTemplate);
       astroAutomationForm.setFieldsValue(astroAutomation);
       astroCardForm.setFieldsValue(astroCard);
-      livePilotForm.setFieldsValue(nextLivePilot);
       setRuleDefaults(nextRuleDefaults);
       setAlertTemplatePreview(nextAlertTemplate);
-      setLivePilotPreview(nextLivePilot);
-      setLivePilotSelection(pilotSelection);
       setRules(nextRules);
       setEditingRule(null);
       setServiceControl(nextServiceControl);
@@ -487,9 +451,28 @@ export function SettingsPage() {
       alert_auto_create: false,
       allow_same_name_variants: false
     });
-    livePilotForm.setFieldsValue(defaultLivePilotSettings);
     astroCardForm.setFieldsValue(defaultAstroCardSettings);
     void load();
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(activeTabStorageKey, activeTab);
+    } catch {
+      // Keep the current tab usable when browser storage is unavailable.
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    const openHistoryFromUrl = () => {
+      if (isHistoryUrl()) setActiveTab("history");
+    };
+    window.addEventListener("popstate", openHistoryFromUrl);
+    window.addEventListener("taoli1:navigate", openHistoryFromUrl);
+    return () => {
+      window.removeEventListener("popstate", openHistoryFromUrl);
+      window.removeEventListener("taoli1:navigate", openHistoryFromUrl);
+    };
   }, []);
 
   const saveRisk = async () => {
@@ -524,15 +507,6 @@ export function SettingsPage() {
     const saved = await updateAstroAutomationSettings(values);
     astroAutomationForm.setFieldsValue(saved);
     message.success("Astro 自动化设置已保存");
-  };
-
-  const saveLivePilot = async () => {
-    const values = normalizeLivePilot(await livePilotForm.validateFields());
-    const saved = normalizeLivePilot(await updateLivePilotSettings(values));
-    livePilotForm.setFieldsValue(saved);
-    setLivePilotPreview(saved);
-    setLivePilotSelection(await getLivePilotPreview());
-    message.success("实盘灰度已保存");
   };
 
   const resetRuleEditor = () => {
@@ -614,7 +588,6 @@ export function SettingsPage() {
     }
   };
 
-  const livePilotBudget = livePilotPreview.max_symbols * livePilotPreview.notional_per_symbol_usdt;
   const astroRuntimeWarnings = [
     astroStatus?.dry_run_only ? "Astro dry-run 当前开启，保存配置后仍不会写入实盘卡片。" : "",
     astroStatus && !astroStatus.configured ? "Astro SDK 未配置，无法提交卡片。" : "",
@@ -678,685 +651,623 @@ export function SettingsPage() {
       )
     }
   ];
-  const livePilotColumns: ColumnsType<LivePilotPreviewItem> = [
-    {
-      title: "标的",
-      dataIndex: "symbol",
-      width: 132,
-      render: (value: string, row) => (
-        <Space size={4} wrap>
-          <Typography.Text strong>{value}</Typography.Text>
-          {row.uses_hyperliquid ? <Tag color="cyan">Hyper</Tag> : null}
-        </Space>
-      )
-    },
-    {
-      title: "类型",
-      dataIndex: "type",
-      width: 116,
-      render: (value: string) => <Tag>{opportunityTypeLabels[value] ?? value}</Tag>
-    },
-    { title: "路线", dataIndex: "route", ellipsis: true },
-    { title: "综合", dataIndex: "combined_open_edge_pct", width: 88, render: formatPct },
-    { title: "价差净值", dataIndex: "fee_adjusted_open_pct", width: 96, render: formatPct },
-    { title: "下周期资金", dataIndex: "next_funding_edge_pct", width: 108, render: formatPct },
-    { title: "资金", dataIndex: "notional_usdt", width: 88, render: (value: number) => `${value}U` },
-    { title: "24h量", dataIndex: "volume_24h_usdt", width: 92, render: formatCompactUsdt },
-    {
-      title: "风险",
-      dataIndex: "risk_labels",
-      width: 160,
-      render: (labels: string[]) => labels.length > 0 ? labels.join(", ") : "-"
-    }
-  ];
 
   return (
-    <div className="page settings-grid">
+    <div className="page settings-page">
       {error ? <Alert type="error" message={error} showIcon /> : null}
-      <section className="panel">
-        <Typography.Title level={4}>面板访问</Typography.Title>
-        <Space.Compact className="password-row">
-          <Input.Password
-            placeholder="Dashboard Password"
-            onChange={(event) => saveDashboardPassword(event.target.value)}
-          />
-          <Button icon={<SaveOutlined />} onClick={() => void load()}>
-            应用
-          </Button>
-        </Space.Compact>
-        <div className="service-control">
-          <Typography.Title level={5}>服务控制</Typography.Title>
-          <Alert
-            type={serviceControl?.enabled ? "info" : "warning"}
-            showIcon
-            message={serviceControl?.enabled ? "当前环境允许重启前端和后端服务" : "服务控制未启用"}
-            description={
-              serviceControlError ||
-              serviceControl?.message ||
-              "仅建议在本地测试环境或受控网络中开启。"
-            }
-          />
-          <Space wrap className="service-control-actions">
-            {serviceNames.map((service) => (
-              <Button
-                key={service}
-                danger
-                icon={<ReloadOutlined />}
-                aria-label={`重启${serviceLabels[service]}`}
-                onClick={() => void restartService(service)}
-                disabled={!serviceCanRestart(serviceControl, service)}
-                loading={restartingService === service}
-              >
-                重启{serviceLabels[service]}
-              </Button>
-            ))}
-          </Space>
-          <div className="service-control-list">
-            {(serviceControl?.details ?? []).map((item) => (
-              <Typography.Text key={item.name} type="secondary">
-                {serviceLabels[item.name as ServiceName] ?? item.name}：
-                {item.available ? item.container_name ?? item.container_id ?? item.state ?? "可用" : "不可用"}
-              </Typography.Text>
-            ))}
-          </div>
-        </div>
-      </section>
-      <section className="panel">
-        <Typography.Title level={4}>风险参数</Typography.Title>
-        <Form form={riskForm} layout="vertical" disabled={loading} onFinish={saveRisk}>
-          <div className="form-grid">
-            <Form.Item label="低成交额阈值 (LOW_VOLUME)" name="min_volume_24h_k" rules={[{ required: true }]}>
-              <InputNumber min={0} step={100} suffix="K" className="wide-input" />
-            </Form.Item>
-            <Form.Item label="数据过期秒数 (STALE_DATA)" name="stale_after_seconds" rules={[{ required: true }]}>
-              <InputNumber min={5} className="wide-input" />
-            </Form.Item>
-            <Form.Item label="异常大价差阈值 (HUGE_SPREAD_VERIFY)" name="huge_spread_pct" rules={[{ required: true }]}>
-              <InputNumber min={0} step={0.1} suffix="%" className="wide-input" />
-            </Form.Item>
-            <Form.Item label="WIDE_SPREAD 开平价差宽度" name="wide_spread_pct" rules={[{ required: true }]}>
-              <InputNumber min={0} step={0.1} suffix="%" className="wide-input" />
-            </Form.Item>
-            <Form.Item label="标记/指数偏离阈值 (MARK_INDEX_DEVIATION)" name="mark_index_deviation_pct" rules={[{ required: true }]}>
-              <InputNumber min={0} step={0.1} suffix="%" className="wide-input" />
-            </Form.Item>
-            <Form.Item label="资金费率逆风阈值 (FUNDING_AGAINST)" name="funding_against_pct" rules={[{ required: true }]}>
-              <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
-            </Form.Item>
-            <div className="form-grid-heading">
-              <Typography.Title level={5}>多交易所实时溢价指数告警</Typography.Title>
-              <Typography.Paragraph type="secondary">
-                同一已核验标的至少两个不同交易所的实时溢价指数绝对值严格超过阈值时，通过飞书告警。
-                正负方向均计入，同一交易所的多个市场只计一个交易所。官方 Premium Index 优先，
-                缺失时回退标记价/指数价偏离并注明来源。全市场分批轮询存在扫描延迟，过期数据不参与告警；此告警不会自动建卡。
-              </Typography.Paragraph>
-              {premiumStatus?.running && (
-                <Typography.Paragraph type="secondary">
-                  监控标的：{premiumStatus.eligible_symbols ?? 0}；上一轮完整扫描：
-                  {premiumStatus.last_sweep_seconds == null ? "尚未完成" : `${premiumStatus.last_sweep_seconds} 秒`}；
-                  最近一批查询失败：{premiumStatus.last_error_count ?? 0}。
-                </Typography.Paragraph>
-              )}
-            </div>
-            <Form.Item label="启用多交易所溢价告警" name="multi_exchange_premium_alert_enabled" valuePropName="checked">
-              <Switch />
-            </Form.Item>
-            <Form.Item label="实时溢价指数绝对值阈值" name="multi_exchange_premium_threshold_pct" rules={[{ required: true }, { type: "number", min: 0.000001 }]}>
-              <InputNumber min={0.000001} step={0.1} suffix="%" className="wide-input" />
-            </Form.Item>
-            <Form.Item label="同标的告警冷却秒数" name="multi_exchange_premium_cooldown_seconds" rules={[{ required: true }]}>
-              <InputNumber min={60} precision={0} step={60} className="wide-input" />
-            </Form.Item>
-            <div className="form-grid-heading">
-              <Typography.Title level={5}>Signal strategy（信号策略）</Typography.Title>
-              <Typography.Paragraph type="secondary">
-                信号策略用于判断告警机会是否真的适合创建 Astro 卡片。系统会在创建卡片前拉取两边交易所的多档 order book，
-                按盘口验证金额模拟买入侧 asks 和卖出侧 bids 的可成交 VWAP，避免只看瞬时最优价导致价差一买就消失。
-              </Typography.Paragraph>
-              <Typography.Paragraph type="secondary">
-                最小验证金额是创建卡片前的盘口试算金额，默认 1000 USDT；不会使用 Astro 卡片的总仓位金额或手动建卡金额。
-                深度按最优价附近的价格带累计，例如 0.1% 价格带内有多少挂单。
-                若价格带深度不足、成交后价差不够、或价差衰减太快，系统会跳过创建卡片。
-              </Typography.Paragraph>
-            </div>
-            <Form.Item label="信号滑点缓冲百分比 (Signal slippage buffer pct)" name="signal_slippage_buffer_pct" rules={[{ required: true }]}>
-              <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
-            </Form.Item>
-            <Form.Item
-              label="最低有效开仓收益率 (Minimum effective open pct)"
-              name="min_effective_open_pct"
-              rules={[{ required: true }]}
-              help="允许填负数；例如 -1 表示实际可成交有效收益低于 -1% 才拦截，填更低可基本关闭这项拦截。"
-            >
-              <InputNumber step={0.01} suffix="%" className="wide-input" />
-            </Form.Item>
-            <Form.Item label="最大开仓价差衰减百分比 (Max open spread decay pct)" name="max_open_spread_decay_pct" rules={[{ required: true }]}>
-              <InputNumber min={0} max={100} step={1} suffix="%" className="wide-input" />
-            </Form.Item>
-            <Form.Item label="最小盘口验证金额 USDT (Minimum validation notional USDT)" name="signal_validation_notional_usdt" rules={[{ required: true }]}>
-              <InputNumber min={0} step={1} className="wide-input" />
-            </Form.Item>
-            <Form.Item label="盘口深度安全倍数 (Depth safety multiple)" name="orderbook_depth_safety_multiple" rules={[{ required: true }]}>
-              <InputNumber min={0} step={0.5} className="wide-input" />
-            </Form.Item>
-            <Form.Item label="开仓深度价格带 % (Order book depth band pct)" name="orderbook_depth_band_pct" rules={[{ required: true }]}>
-              <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
-            </Form.Item>
-            <Form.Item label="最小价格带深度 USDT (Minimum band depth USDT)" name="min_top_of_book_depth_usdt" rules={[{ required: true }]}>
-              <InputNumber min={0} step={10} className="wide-input" />
-            </Form.Item>
-            <Form.Item
-              label="信号策略备注 / 后续自定义规则 (Signal strategy notes)"
-              name="signal_strategy_notes"
-              className="form-grid-wide"
-            >
-              <Input.TextArea rows={4} />
-            </Form.Item>
-          </div>
-          <div className="risk-help">
-            {riskLabelOptions.map((item) => (
-              <Typography.Text key={item.value} type="secondary">
-                {item.label} ({item.value})：{item.description}
-              </Typography.Text>
-            ))}
-          </div>
-          <Form.Item label="同名风险标的 (SAME_TICKER_RISK)" name="ticker_collision_symbols">
-            <Select mode="tags" tokenSeparators={[",", " "]} />
-          </Form.Item>
-          <Form.Item label="黑名单标的" name="excluded_symbols">
-            <Select mode="tags" tokenSeparators={[",", " "]} placeholder="TRADOORUSDT" />
-          </Form.Item>
-          <Form.Item label="忽略交易所" name="ignored_exchanges">
-            <Select mode="multiple" allowClear options={exchangeOptions} />
-          </Form.Item>
-          <Form.List name="symbol_aliases">
-            {(fields, { add, remove }) => (
-              <div className="symbol-alias-list">
-                <Space className="symbol-alias-header" align="center" wrap>
-                  <Typography.Title level={5}>全局币名映射</Typography.Title>
-                  <Tag color="blue">全部页面生效</Tag>
-                  <Button
-                    type="dashed"
-                    icon={<PlusOutlined />}
-                    onClick={() =>
-                      add({
-                        exchange: "gate",
-                        symbol: "",
-                        canonical_symbol: "",
-                        market_type: null,
-                        dex: null,
-                        price_multiplier: 1
-                      })
-                    }
+      <Tabs
+        activeKey={activeTab}
+        onChange={(key) => setActiveTab(key as SettingsTab)}
+        items={[
+          {
+            key: "rules",
+            label: "告警规则",
+            forceRender: true,
+            children: (
+              <div className="settings-grid">
+                <section className="panel panel-wide" ref={ruleEditorRef}>
+                  <div className="settings-panel-header">
+                    <Typography.Title level={4}>{editingRule ? "编辑告警规则" : "新增告警规则"}</Typography.Title>
+                    <Space wrap>
+                      <Button
+                        type="primary"
+                        htmlType="submit"
+                        form="alert-rule-editor"
+                        disabled={loading || ruleSaving}
+                        icon={editingRule ? <SaveOutlined /> : <PlusOutlined />}
+                        loading={ruleSaving}
+                        aria-label={editingRule ? "保存修改" : "新增规则"}
+                      >
+                        {editingRule ? "保存修改" : "新增规则"}
+                      </Button>
+                      {editingRule ? (
+                        <Button icon={<CloseOutlined />} onClick={resetRuleEditor} disabled={ruleSaving}>
+                          取消编辑
+                        </Button>
+                      ) : null}
+                    </Space>
+                  </div>
+                  {editingRule ? (
+                    <Alert
+                      className="rule-guide"
+                      type="warning"
+                      showIcon
+                      message={`正在编辑：${editingRule.name}`}
+                      description="保存后立即更新现有规则，不会创建重复规则。"
+                    />
+                  ) : null}
+                  <Alert className="rule-guide" type="info" showIcon message="规则说明" description={alertRuleGuide} />
+                  <Form
+                    id="alert-rule-editor"
+                    name="alert-rule-editor"
+                    form={ruleForm}
+                    layout="vertical"
+                    disabled={loading || ruleSaving}
+                    initialValues={ruleToForm(ruleDefaults)}
+                    onFinish={saveRule}
                   >
-                    添加映射
-                  </Button>
-                </Space>
-                {fields.map((field) => (
-                  <Space key={field.key} align="start" wrap className="symbol-alias-row">
-                    <Form.Item
-                      label="交易所"
-                      name={[field.name, "exchange"]}
-                      rules={[{ required: true }]}
-                    >
-                      <Select options={exchangeOptions} className="alias-exchange-input" />
+                    <div className="form-grid">
+                      <Form.Item label="告警规则名称" name="name" rules={[{ required: true }]} help={alertRuleFieldHelp.name}>
+                        <Input />
+                      </Form.Item>
+                      <Form.Item label="启用" name="enabled" valuePropName="checked" help={alertRuleFieldHelp.enabled}>
+                        <Switch />
+                      </Form.Item>
+                      <Form.Item label="套利类型" name="types" rules={[{ required: true }]} help={alertRuleFieldHelp.types}>
+                        <Select mode="multiple" options={alertTypeOptions} />
+                      </Form.Item>
+                      <Form.Item
+                        label="SF 负资金费率不通知"
+                        name="suppress_sf_negative_funding"
+                        valuePropName="checked"
+                        help={alertRuleFieldHelp.suppress_sf_negative_funding}
+                      >
+                        <Switch checkedChildren="不通知" unCheckedChildren="允许通知" />
+                      </Form.Item>
+                      <Form.Item
+                        label="包含交易所"
+                        name="include_exchanges"
+                        help={alertRuleFieldHelp.include_exchanges}
+                      >
+                        <Select mode="multiple" allowClear options={exchangeOptions} />
+                      </Form.Item>
+                      <Form.Item
+                        label="排除交易所"
+                        name="exclude_exchanges"
+                        help={alertRuleFieldHelp.exclude_exchanges}
+                      >
+                        <Select mode="multiple" allowClear options={exchangeOptions} />
+                      </Form.Item>
+                      <Form.Item
+                        label="包含标的"
+                        name="include_symbols"
+                        help={alertRuleFieldHelp.include_symbols}
+                      >
+                        <Select mode="tags" tokenSeparators={[",", " "]} placeholder="BTCUSDT, ETHUSDT" />
+                      </Form.Item>
+                      <div className="rule-note">{alertRuleFieldHelp.exclude_symbols}</div>
+                      <Form.Item
+                        label="开仓阈值"
+                        name="min_open_spread_pct"
+                        rules={[{ required: true }]}
+                        help={alertRuleFieldHelp.min_open_spread_pct}
+                      >
+                        <InputNumber min={0} step={0.1} suffix="%" className="wide-input" />
+                      </Form.Item>
+                      <Form.Item
+                        label="资金费率条件开仓阈值"
+                        name="favorable_funding_open_spread_pct"
+                        help={alertRuleFieldHelp.favorable_funding_open_spread_pct}
+                      >
+                        <InputNumber min={0} step={0.1} suffix="%" placeholder="留空关闭" className="wide-input" />
+                      </Form.Item>
+                      <Form.Item
+                        label="综合开仓阈值"
+                        name="min_fee_adjusted_open_pct"
+                        rules={[{ required: true }]}
+                        help={alertRuleFieldHelp.min_fee_adjusted_open_pct}
+                      >
+                        <InputNumber min={0} step={0.1} suffix="%" className="wide-input" />
+                      </Form.Item>
+                      <Form.Item
+                        label="最低成交额 (K)"
+                        name="min_volume_24h_k"
+                        rules={[{ required: true }]}
+                        help={alertRuleFieldHelp.min_volume_24h_usdt}
+                      >
+                        <InputNumber min={0} step={100} suffix="K" className="wide-input" />
+                      </Form.Item>
+                      <Form.Item
+                        label="连续命中"
+                        name="consecutive_hits"
+                        rules={[{ required: true }]}
+                        help={alertRuleFieldHelp.consecutive_hits}
+                      >
+                        <InputNumber min={1} className="wide-input" />
+                      </Form.Item>
+                      <Form.Item
+                        label="冷却秒数"
+                        name="cooldown_seconds"
+                        rules={[{ required: true }]}
+                        help={alertRuleFieldHelp.cooldown_seconds}
+                      >
+                        <InputNumber min={0} className="wide-input" />
+                      </Form.Item>
+                      <Form.Item label="等级" name="severity" rules={[{ required: true }]} help={alertRuleFieldHelp.severity}>
+                        <Select options={alertSeverityOptions} />
+                      </Form.Item>
+                    </div>
+                    <Form.Item label="排除风险标签" name="excluded_risk_labels">
+                      <Select mode="multiple" options={riskSelectOptions} />
                     </Form.Item>
-                    <Form.Item
-                      label="原始名"
-                      name={[field.name, "symbol"]}
-                      rules={[{ required: true }]}
-                    >
-                      <Input placeholder="NEX" className="alias-symbol-input" />
-                    </Form.Item>
-                    <Form.Item
-                      label="映射名"
-                      name={[field.name, "canonical_symbol"]}
-                      rules={[{ required: true }]}
-                    >
-                      <Input placeholder="10000NEX" className="alias-symbol-input" />
-                    </Form.Item>
-                    <Form.Item label="类型" name={[field.name, "market_type"]}>
-                      <Select
-                        allowClear
-                        options={marketTypeOptions}
-                        placeholder="全部"
-                        className="alias-market-type-input"
+                  </Form>
+                </section>
+                <section className="panel panel-wide">
+                  <Typography.Title level={4}>告警规则</Typography.Title>
+                  <Table
+                    columns={columns}
+                    dataSource={rules}
+                    loading={loading}
+                    rowKey={(row) => row.id ?? row.name}
+                    pagination={false}
+                    size="middle"
+                    scroll={{ x: 980 }}
+                  />
+                </section>
+                <section className="panel panel-wide">
+                  <div className="settings-panel-header">
+                    <Typography.Title level={4}>告警内容模板</Typography.Title>
+                    <Button type="primary" htmlType="submit" form="alert-template-form" icon={<SaveOutlined />} disabled={loading}>
+                      保存告警模板
+                    </Button>
+                  </div>
+                  <Alert
+                    className="rule-guide"
+                    type="info"
+                    showIcon
+                    message="全局模板"
+                    description="这里控制飞书告警和新告警历史里展示哪些内容。告警规则仍然只负责判断什么时候触发。"
+                  />
+                  <Form id="alert-template-form"
+                    form={templateForm}
+                    layout="vertical"
+                    disabled={loading}
+                    onFinish={saveAlertTemplate}
+                    onValuesChange={(_, values) => setAlertTemplatePreview(normalizeAlertTemplate(values))}
+                  >
+                    <Form.Item name="format" label="消息格式">
+                      <Segmented
+                        options={[{ label: "精简", value: "compact" }, { label: "详细", value: "detailed" }]}
+                        aria-label="告警消息格式"
                       />
                     </Form.Item>
-                    <Form.Item label="DEX" name={[field.name, "dex"]}>
-                      <Input placeholder="仅 Hyperliquid，如 io" className="alias-symbol-input" />
+                    <div className="template-grid">
+                      <div className="template-options">
+                        {alertTemplateOptions.filter((option) =>
+                          option.name === "suppress_when_card_conditions_fail" || alertTemplatePreview.format === "detailed"
+                        ).map((option) => (
+                          <Form.Item
+                            key={option.name}
+                            name={option.name}
+                            valuePropName="checked"
+                            className="template-option"
+                          >
+                            <Checkbox aria-label={option.label}>
+                              <span className="template-option-label">{option.label}</span>
+                              <span className="template-option-desc">{option.description}</span>
+                            </Checkbox>
+                          </Form.Item>
+                        ))}
+                        {alertTemplatePreview.format === "detailed" ? (
+                          <Form.Item
+                            label="连续监测最多显示轮数"
+                            name="observation_limit"
+                            rules={[{ required: true }]}
+                            className="template-limit"
+                          >
+                            <InputNumber min={1} max={20} className="wide-input" />
+                          </Form.Item>
+                        ) : null}
+                      </div>
+                      <div className="template-preview">
+                        <Typography.Text strong>消息预览</Typography.Text>
+                        <pre>{buildAlertTemplatePreview(alertTemplatePreview)}</pre>
+                      </div>
+                    </div>
+                  </Form>
+                </section>
+                <PhonePriceAlertsPanel />
+              </div>
+            )
+          },
+          {
+            key: "risk",
+            label: "风险参数",
+            forceRender: true,
+            children: (
+              <div className="settings-grid">
+                <section className="panel">
+                  <div className="settings-panel-header">
+                    <Typography.Title level={4}>风险参数</Typography.Title>
+                    <Button type="primary" htmlType="submit" form="risk-settings-form" icon={<SaveOutlined />} disabled={loading}>
+                      保存风险参数
+                    </Button>
+                  </div>
+                  <Form id="risk-settings-form" form={riskForm} layout="vertical" disabled={loading} onFinish={saveRisk}>
+                    <div className="form-grid">
+                      <Form.Item label="低成交额阈值 (LOW_VOLUME)" name="min_volume_24h_k" rules={[{ required: true }]}>
+                        <InputNumber min={0} step={100} suffix="K" className="wide-input" />
+                      </Form.Item>
+                      <Form.Item label="数据过期秒数 (STALE_DATA)" name="stale_after_seconds" rules={[{ required: true }]}>
+                        <InputNumber min={5} className="wide-input" />
+                      </Form.Item>
+                      <Form.Item label="异常大价差阈值 (HUGE_SPREAD_VERIFY)" name="huge_spread_pct" rules={[{ required: true }]}>
+                        <InputNumber min={0} step={0.1} suffix="%" className="wide-input" />
+                      </Form.Item>
+                      <Form.Item label="WIDE_SPREAD 开平价差宽度" name="wide_spread_pct" rules={[{ required: true }]}>
+                        <InputNumber min={0} step={0.1} suffix="%" className="wide-input" />
+                      </Form.Item>
+                      <Form.Item label="标记/指数偏离阈值 (MARK_INDEX_DEVIATION)" name="mark_index_deviation_pct" rules={[{ required: true }]}>
+                        <InputNumber min={0} step={0.1} suffix="%" className="wide-input" />
+                      </Form.Item>
+                      <Form.Item label="资金费率逆风阈值 (FUNDING_AGAINST)" name="funding_against_pct" rules={[{ required: true }]}>
+                        <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
+                      </Form.Item>
+                    </div>
+                    <div className="risk-help">
+                      {riskLabelOptions.map((item) => (
+                        <Typography.Text key={item.value} type="secondary">
+                          {item.label} ({item.value})：{item.description}
+                        </Typography.Text>
+                      ))}
+                    </div>
+                    <section className="settings-section">
+                      <div className="form-grid">
+                        <div className="form-grid-heading">
+                          <Typography.Title level={5}>多交易所实时溢价指数告警</Typography.Title>
+                          <Typography.Paragraph type="secondary">
+                            同一已核验标的至少两个不同交易所的实时溢价指数绝对值严格超过阈值时，通过飞书告警。
+                            正负方向均计入，同一交易所的多个市场只计一个交易所。官方 Premium Index 优先，
+                            缺失时回退标记价/指数价偏离并注明来源。全市场分批轮询存在扫描延迟，过期数据不参与告警；此告警不会自动建卡。
+                          </Typography.Paragraph>
+                          {premiumStatus?.running && (
+                            <Typography.Paragraph type="secondary">
+                              监控标的：{premiumStatus.eligible_symbols ?? 0}；上一轮完整扫描：
+                              {premiumStatus.last_sweep_seconds == null ? "尚未完成" : `${premiumStatus.last_sweep_seconds} 秒`}；
+                              最近一批查询失败：{premiumStatus.last_error_count ?? 0}。
+                            </Typography.Paragraph>
+                          )}
+                        </div>
+                        <Form.Item label="启用多交易所溢价告警" name="multi_exchange_premium_alert_enabled" valuePropName="checked">
+                          <Switch />
+                        </Form.Item>
+                        <Form.Item label="实时溢价指数绝对值阈值" name="multi_exchange_premium_threshold_pct" rules={[{ required: true }, { type: "number", min: 0.000001 }]}>
+                          <InputNumber min={0.000001} step={0.1} suffix="%" className="wide-input" />
+                        </Form.Item>
+                        <Form.Item label="同标的告警冷却秒数" name="multi_exchange_premium_cooldown_seconds" rules={[{ required: true }]}>
+                          <InputNumber min={60} precision={0} step={60} className="wide-input" />
+                        </Form.Item>
+                      </div>
+                    </section>
+                    <section className="settings-section">
+                      <div className="form-grid">
+                        <div className="form-grid-heading">
+                          <Typography.Title level={5}>信号策略</Typography.Title>
+                          <Typography.Paragraph type="secondary">
+                            信号策略用于判断告警机会是否真的适合创建 Astro 卡片。系统会在创建卡片前拉取两边交易所的多档 order book，
+                            按盘口验证金额模拟买入侧 asks 和卖出侧 bids 的可成交 VWAP，避免只看瞬时最优价导致价差一买就消失。
+                          </Typography.Paragraph>
+                          <Typography.Paragraph type="secondary">
+                            最小验证金额是创建卡片前的盘口试算金额，默认 1000 USDT；不会使用 Astro 卡片的总仓位金额或手动建卡金额。
+                            深度按最优价附近的价格带累计，例如 0.1% 价格带内有多少挂单。
+                            若价格带深度不足、成交后价差不够、或价差衰减太快，系统会跳过创建卡片。
+                          </Typography.Paragraph>
+                        </div>
+                        <Form.Item label="信号滑点缓冲百分比 (Signal slippage buffer pct)" name="signal_slippage_buffer_pct" rules={[{ required: true }]}>
+                          <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
+                        </Form.Item>
+                        <Form.Item
+                          label="最低有效开仓收益率 (Minimum effective open pct)"
+                          name="min_effective_open_pct"
+                          rules={[{ required: true }]}
+                          help="允许填负数；例如 -1 表示实际可成交有效收益低于 -1% 才拦截，填更低可基本关闭这项拦截。"
+                        >
+                          <InputNumber step={0.01} suffix="%" className="wide-input" />
+                        </Form.Item>
+                        <Form.Item label="最大开仓价差衰减百分比 (Max open spread decay pct)" name="max_open_spread_decay_pct" rules={[{ required: true }]}>
+                          <InputNumber min={0} max={100} step={1} suffix="%" className="wide-input" />
+                        </Form.Item>
+                        <Form.Item label="最小盘口验证金额 USDT (Minimum validation notional USDT)" name="signal_validation_notional_usdt" rules={[{ required: true }]}>
+                          <InputNumber min={0} step={1} className="wide-input" />
+                        </Form.Item>
+                        <Form.Item label="盘口深度安全倍数 (Depth safety multiple)" name="orderbook_depth_safety_multiple" rules={[{ required: true }]}>
+                          <InputNumber min={0} step={0.5} className="wide-input" />
+                        </Form.Item>
+                        <Form.Item label="开仓深度价格带 % (Order book depth band pct)" name="orderbook_depth_band_pct" rules={[{ required: true }]}>
+                          <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
+                        </Form.Item>
+                        <Form.Item label="最小价格带深度 USDT (Minimum band depth USDT)" name="min_top_of_book_depth_usdt" rules={[{ required: true }]}>
+                          <InputNumber min={0} step={10} className="wide-input" />
+                        </Form.Item>
+                        <Form.Item
+                          label="信号策略备注 / 后续自定义规则"
+                          name="signal_strategy_notes"
+                          className="form-grid-wide"
+                        >
+                          <Input.TextArea rows={4} />
+                        </Form.Item>
+                      </div>
+                    </section>
+                    <section className="settings-section">
+                      <Typography.Title level={5}>币名映射与过滤</Typography.Title>
+                      <Form.Item label="同名风险标的 (SAME_TICKER_RISK)" name="ticker_collision_symbols">
+                        <Select mode="tags" tokenSeparators={[",", " "]} />
+                      </Form.Item>
+                      <Form.Item label="黑名单标的" name="excluded_symbols">
+                        <Select mode="tags" tokenSeparators={[",", " "]} placeholder="TRADOORUSDT" />
+                      </Form.Item>
+                      <Form.Item label="忽略交易所" name="ignored_exchanges">
+                        <Select mode="multiple" allowClear options={exchangeOptions} />
+                      </Form.Item>
+                      <Form.List name="symbol_aliases">
+                        {(fields, { add, remove }) => (
+                          <div className="symbol-alias-list">
+                            <Space className="symbol-alias-header" align="center" wrap>
+                              <Typography.Title level={5}>全局币名映射</Typography.Title>
+                              <Tag color="blue">全部页面生效</Tag>
+                              <Button
+                                type="dashed"
+                                icon={<PlusOutlined />}
+                                onClick={() =>
+                                  add({
+                                    exchange: "gate",
+                                    symbol: "",
+                                    canonical_symbol: "",
+                                    market_type: null,
+                                    dex: null,
+                                    price_multiplier: 1
+                                  })
+                                }
+                              >
+                                添加映射
+                              </Button>
+                            </Space>
+                            {fields.map((field) => (
+                              <Space key={field.key} align="start" wrap className="symbol-alias-row">
+                                <Form.Item
+                                  label="交易所"
+                                  name={[field.name, "exchange"]}
+                                  rules={[{ required: true }]}
+                                >
+                                  <Select options={exchangeOptions} className="alias-exchange-input" />
+                                </Form.Item>
+                                <Form.Item
+                                  label="原始名"
+                                  name={[field.name, "symbol"]}
+                                  rules={[{ required: true }]}
+                                >
+                                  <Input placeholder="NEX" className="alias-symbol-input" />
+                                </Form.Item>
+                                <Form.Item
+                                  label="映射名"
+                                  name={[field.name, "canonical_symbol"]}
+                                  rules={[{ required: true }]}
+                                >
+                                  <Input placeholder="10000NEX" className="alias-symbol-input" />
+                                </Form.Item>
+                                <Form.Item label="类型" name={[field.name, "market_type"]}>
+                                  <Select
+                                    allowClear
+                                    options={marketTypeOptions}
+                                    placeholder="全部"
+                                    className="alias-market-type-input"
+                                  />
+                                </Form.Item>
+                                <Form.Item label="DEX" name={[field.name, "dex"]}>
+                                  <Input placeholder="仅 Hyperliquid，如 io" className="alias-symbol-input" />
+                                </Form.Item>
+                                <Form.Item
+                                  label="价格汇率"
+                                  name={[field.name, "price_multiplier"]}
+                                  rules={[{ required: true, type: "number", min: 0.000001 }]}
+                                >
+                                  <InputNumber min={0.000001} step={1} className="alias-symbol-input" />
+                                </Form.Item>
+                                <Button
+                                  type="text"
+                                  danger
+                                  icon={<DeleteOutlined />}
+                                  aria-label="删除映射"
+                                  onClick={() => remove(field.name)}
+                                />
+                              </Space>
+                            ))}
+                          </div>
+                        )}
+                      </Form.List>
+                    </section>
+                  </Form>
+                </section>
+                <MarketIdentityPanel />
+              </div>
+            )
+          },
+          {
+            key: "astro",
+            label: "Astro",
+            forceRender: true,
+            children: (
+              <div className="settings-grid">
+                <section className="panel">
+                  <div className="settings-panel-header">
+                    <Typography.Title level={4}>Astro 自动化</Typography.Title>
+                    <Button type="primary" htmlType="submit" form="astro-automation-form" icon={<SaveOutlined />} disabled={loading}>
+                      保存 Astro 自动化
+                    </Button>
+                  </div>
+                  <Alert
+                    className="rule-guide"
+                    type="info"
+                    showIcon
+                    message="控制告警是否自动创建 Astro 卡片"
+                    description="开启后，命中告警会继续经过最新信号、订单簿、卡片参数和重复卡片校验；全部通过后才会写入 Astro。"
+                  />
+                  {astroRuntimeWarnings.length > 0 ? (
+                    <Alert
+                      className="rule-guide"
+                      type="warning"
+                      showIcon
+                      message="运行状态提示"
+                      description={astroRuntimeWarnings.join(" ")}
+                    />
+                  ) : null}
+                  <Form id="astro-automation-form"
+                    form={astroAutomationForm}
+                    layout="vertical"
+                    disabled={loading}
+                    onFinish={saveAstroAutomation}
+                  >
+                    <Form.Item
+                      label="告警自动创建 Astro 卡片"
+                      name="alert_auto_create"
+                      valuePropName="checked"
+                      help="关闭时只会记录告警和通知，不会自动写入 Astro 卡片。"
+                    >
+                      <Switch checkedChildren="开启" unCheckedChildren="关闭" />
                     </Form.Item>
                     <Form.Item
-                      label="价格汇率"
-                      name={[field.name, "price_multiplier"]}
-                      rules={[{ required: true, type: "number", min: 0.000001 }]}
+                      label="允许同名不同类型或路线卡片"
+                      name="allow_same_name_variants"
+                      valuePropName="checked"
+                      help="开启后，同名但类型或交易所路线不同的卡片会继续创建；名称、类型和路线完全相同时仍会跳过。"
                     >
-                      <InputNumber min={0.000001} step={1} className="alias-symbol-input" />
+                      <Switch checkedChildren="允许" unCheckedChildren="跳过" />
                     </Form.Item>
-                    <Button
-                      type="text"
-                      danger
-                      icon={<DeleteOutlined />}
-                      aria-label="删除映射"
-                      onClick={() => remove(field.name)}
-                    />
-                  </Space>
-                ))}
+                  </Form>
+                </section>
+                <section className="panel">
+                  <div className="settings-panel-header">
+                    <Typography.Title level={4}>Astro 卡片默认参数</Typography.Title>
+                    <Button type="primary" htmlType="submit" form="astro-card-defaults" icon={<SaveOutlined />} disabled={loading}>
+                      保存 Astro 卡片默认参数
+                    </Button>
+                  </div>
+                  <Form id="astro-card-defaults"
+                    name="astro-card-defaults"
+                    form={astroCardForm}
+                    layout="vertical"
+                    disabled={loading}
+                    onFinish={saveAstroCardDefaults}
+                  >
+                    <div className="form-grid">
+                      <Form.Item label="仓位金额 USDT" name="max_trade_usdt" rules={[{ required: true }]}>
+                        <InputNumber min={0.01} step={1} className="wide-input" />
+                      </Form.Item>
+                      <Form.Item label="杠杆倍数" name="leverage" rules={[{ required: true }]}>
+                        <InputNumber min={1} step={1} className="wide-input" />
+                      </Form.Item>
+                      <Form.Item label="最小名义金额 USDT" name="min_notional" rules={[{ required: true }]}>
+                        <InputNumber min={0} step={1} className="wide-input" />
+                      </Form.Item>
+                      <Form.Item label="最大名义金额 USDT" name="max_notional" rules={[{ required: true }]}>
+                        <InputNumber min={0.01} step={1} className="wide-input" />
+                      </Form.Item>
+                      <Form.Item label="创建后允许开仓" name="open_enabled" valuePropName="checked">
+                        <Switch checkedChildren="开启" unCheckedChildren="关闭" />
+                      </Form.Item>
+                      <Form.Item label="平仓缓冲比例" name="close_position_buffer_pct" rules={[{ required: true }]}>
+                        <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
+                      </Form.Item>
+                      <Form.Item label="不利资金费权重" name="unfavorable_funding_weight" rules={[{ required: true }]}>
+                        <InputNumber min={0} step={0.1} className="wide-input" />
+                      </Form.Item>
+                      <Form.Item label="平仓下限比例" name="close_position_floor_pct" rules={[{ required: true }]}>
+                        <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
+                      </Form.Item>
+                    </div>
+                    <Form.Item
+                      label="默认建卡路线"
+                      name="card_variant"
+                      help="Aster、Lighter 支持普通与 GC 路线，GC 路线使用 gc-aster、gc-lighter；Bitget 保留原交易所 ID，仅将支持 GC 的另一腿切换为 GC。具体可建路线以建卡预览为准。"
+                    >
+                      <AstroCardVariantSelector />
+                    </Form.Item>
+                  </Form>
+                </section>
               </div>
-            )}
-          </Form.List>
-          <Button type="primary" htmlType="submit" icon={<SaveOutlined />}>
-            保存风险参数
-          </Button>
-        </Form>
-      </section>
-      <section className="panel">
-        <Typography.Title level={4}>Astro 自动化</Typography.Title>
-        <Alert
-          className="rule-guide"
-          type="info"
-          showIcon
-          message="控制告警是否自动创建 Astro 卡片"
-          description="开启后，命中告警会继续经过最新信号、订单簿、卡片参数和重复卡片校验；全部通过后才会写入 Astro。"
-        />
-        {astroRuntimeWarnings.length > 0 ? (
-          <Alert
-            className="rule-guide"
-            type="warning"
-            showIcon
-            message="运行状态提示"
-            description={astroRuntimeWarnings.join(" ")}
-          />
-        ) : null}
-        <Form
-          form={astroAutomationForm}
-          layout="vertical"
-          disabled={loading}
-          onFinish={saveAstroAutomation}
-        >
-          <Form.Item
-            label="告警自动创建 Astro 卡片"
-            name="alert_auto_create"
-            valuePropName="checked"
-            help="关闭时只会记录告警和通知，不会自动写入 Astro 卡片。"
-          >
-            <Switch checkedChildren="开启" unCheckedChildren="关闭" />
-          </Form.Item>
-          <Form.Item
-            label="允许同名不同类型或路线卡片"
-            name="allow_same_name_variants"
-            valuePropName="checked"
-            help="开启后，同名但类型或交易所路线不同的卡片会继续创建；名称、类型和路线完全相同时仍会跳过。"
-          >
-            <Switch checkedChildren="允许" unCheckedChildren="跳过" />
-          </Form.Item>
-          <Button type="primary" htmlType="submit" icon={<SaveOutlined />}>
-            保存 Astro 自动化
-          </Button>
-        </Form>
-      </section>
-      <section className="panel">
-        <Typography.Title level={4}>Astro 卡片默认参数</Typography.Title>
-        <Form
-          name="astro-card-defaults"
-          form={astroCardForm}
-          layout="vertical"
-          disabled={loading}
-          onFinish={saveAstroCardDefaults}
-        >
-          <div className="form-grid">
-            <Form.Item label="仓位金额 USDT" name="max_trade_usdt" rules={[{ required: true }]}>
-              <InputNumber min={0.01} step={1} className="wide-input" />
-            </Form.Item>
-            <Form.Item label="杠杆倍数" name="leverage" rules={[{ required: true }]}>
-              <InputNumber min={1} step={1} className="wide-input" />
-            </Form.Item>
-            <Form.Item label="最小名义金额 USDT" name="min_notional" rules={[{ required: true }]}>
-              <InputNumber min={0} step={1} className="wide-input" />
-            </Form.Item>
-            <Form.Item label="最大名义金额 USDT" name="max_notional" rules={[{ required: true }]}>
-              <InputNumber min={0.01} step={1} className="wide-input" />
-            </Form.Item>
-            <Form.Item label="创建后允许开仓" name="open_enabled" valuePropName="checked">
-              <Switch checkedChildren="开启" unCheckedChildren="关闭" />
-            </Form.Item>
-            <Form.Item label="平仓缓冲比例" name="close_position_buffer_pct" rules={[{ required: true }]}>
-              <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
-            </Form.Item>
-            <Form.Item label="不利资金费权重" name="unfavorable_funding_weight" rules={[{ required: true }]}>
-              <InputNumber min={0} step={0.1} className="wide-input" />
-            </Form.Item>
-            <Form.Item label="平仓下限比例" name="close_position_floor_pct" rules={[{ required: true }]}>
-              <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
-            </Form.Item>
-          </div>
-          <Form.Item
-            label="默认建卡路线"
-            name="card_variant"
-            help="Aster、Lighter 支持普通与 GC 路线，GC 路线使用 gc-aster、gc-lighter；Bitget 保留原交易所 ID，仅将支持 GC 的另一腿切换为 GC。具体可建路线以建卡预览为准。"
-          >
-            <AstroCardVariantSelector />
-          </Form.Item>
-          <Button type="primary" htmlType="submit" icon={<SaveOutlined />}>
-            保存 Astro 卡片默认参数
-          </Button>
-        </Form>
-      </section>
-      <section className="panel panel-wide">
-        <Typography.Title level={4}>正差价正费率实盘实验</Typography.Title>
-        <Alert
-          className="rule-guide"
-          type={livePilotPreview.enabled ? "warning" : "info"}
-          showIcon
-          message={livePilotPreview.enabled ? "实盘实验已启用" : "实盘实验未启用"}
-          description={
-            livePilotPreview.enabled
-              ? "常规告警、飞书通知和普通自动建卡保持原逻辑；实验只从其中挑选少量候选，同标的仅保留一条最优路线，并使用下面的实验仓位与启动状态。"
-              : "开启后用于小资金实盘测试；未开启时不会新增任何实验建卡动作。"
+            )
+          },
+          {
+            key: "access",
+            label: "访问与服务",
+            forceRender: true,
+            children: (
+              <div className="settings-grid">
+                <section className="panel">
+                  <div className="settings-panel-header">
+                    <Typography.Title level={4}>面板访问</Typography.Title>
+                    <Button icon={<SaveOutlined />} onClick={() => void load()}>
+                      应用
+                    </Button>
+                  </div>
+                  <Space.Compact className="password-row">
+                    <Input.Password
+                      placeholder="Dashboard Password"
+                      onChange={(event) => saveDashboardPassword(event.target.value)}
+                    />
+                  </Space.Compact>
+                  <div className="service-control">
+                    <Typography.Title level={5}>服务控制</Typography.Title>
+                    <Alert
+                      type={serviceControl?.enabled ? "info" : "warning"}
+                      showIcon
+                      message={serviceControl?.enabled ? "当前环境允许重启前端和后端服务" : "服务控制未启用"}
+                      description={
+                        serviceControlError ||
+                        serviceControl?.message ||
+                        "仅建议在本地测试环境或受控网络中开启。"
+                      }
+                    />
+                    <Space wrap className="service-control-actions">
+                      {serviceNames.map((service) => (
+                        <Button
+                          key={service}
+                          danger
+                          icon={<ReloadOutlined />}
+                          aria-label={`重启${serviceLabels[service]}`}
+                          onClick={() => void restartService(service)}
+                          disabled={!serviceCanRestart(serviceControl, service)}
+                          loading={restartingService === service}
+                        >
+                          重启{serviceLabels[service]}
+                        </Button>
+                      ))}
+                    </Space>
+                    <div className="service-control-list">
+                      {(serviceControl?.details ?? []).map((item) => (
+                        <Typography.Text key={item.name} type="secondary">
+                          {serviceLabels[item.name as ServiceName] ?? item.name}：
+                          {item.available ? item.container_name ?? item.container_id ?? item.state ?? "可用" : "不可用"}
+                        </Typography.Text>
+                      ))}
+                    </div>
+                  </div>
+                </section>
+              </div>
+            )
+          },
+          {
+            key: "history",
+            label: "告警历史",
+            forceRender: true,
+            children: (
+              <div className="settings-grid">
+                <AlertHistoryPage active={activeTab === "history"} />
+              </div>
+            )
           }
-        />
-        <Form
-          form={livePilotForm}
-          layout="vertical"
-          disabled={loading}
-          onFinish={saveLivePilot}
-          onValuesChange={(_, values) => setLivePilotPreview(normalizeLivePilot(values))}
-        >
-          <div className="live-pilot-metrics">
-            <div>
-              <Typography.Text type="secondary">最多标的</Typography.Text>
-              <Typography.Title level={5}>{livePilotPreview.max_symbols}</Typography.Title>
-            </div>
-            <div>
-              <Typography.Text type="secondary">每标的资金</Typography.Text>
-              <Typography.Title level={5}>{livePilotPreview.notional_per_symbol_usdt} USDT</Typography.Title>
-            </div>
-            <div>
-              <Typography.Text type="secondary">总预算</Typography.Text>
-              <Typography.Title level={5}>{livePilotBudget} USDT</Typography.Title>
-            </div>
-            <div>
-              <Typography.Text type="secondary">资金过滤</Typography.Text>
-              <Typography.Title level={5}>{`>= ${livePilotPreview.min_next_funding_edge_pct}%`}</Typography.Title>
-            </div>
-          </div>
-          <div className="form-grid">
-            <Form.Item label="启用实盘实验" name="enabled" valuePropName="checked">
-              <Switch />
-            </Form.Item>
-            <Form.Item
-              label="实验卡片默认启动"
-              name="create_cards_enabled"
-              valuePropName="checked"
-              help="只影响实验挑选出的候选；普通自动建卡仍遵循 Astro 卡片默认参数。"
-            >
-              <Switch />
-            </Form.Item>
-            <Form.Item
-              label="屏蔽 SS（现货-现货）"
-              name="exclude_ss"
-              valuePropName="checked"
-              help="默认开启；开启后 SS 不进入实验候选和实验建卡。"
-            >
-              <Switch />
-            </Form.Item>
-            <Form.Item label="最多标的数" name="max_symbols" rules={[{ required: true }]}>
-              <InputNumber min={1} max={100} step={1} className="wide-input" />
-            </Form.Item>
-            <Form.Item label="每标的资金 USDT" name="notional_per_symbol_usdt" rules={[{ required: true }]}>
-              <InputNumber min={0.01} step={1} className="wide-input" />
-            </Form.Item>
-            <Form.Item
-              label="最小下周期资金边际"
-              name="min_next_funding_edge_pct"
-              rules={[{ required: true }]}
-              help="填正数即可只保留正资金边际；低于该值的机会不会进入实验。"
-            >
-              <InputNumber step={0.01} suffix="%" className="wide-input" />
-            </Form.Item>
-            <Form.Item label="Hyper 优先" name="prefer_hyperliquid" valuePropName="checked">
-              <Switch />
-            </Form.Item>
-          </div>
-          <div className="rule-note">
-            实验不会截流常规告警：所有原有规则仍照常告警、通知和建卡。实验只对命中的正资金候选额外使用实验资金和启动状态；同标的多条路线时，实验路线优先，避免普通卡片抢占同名标的。
-          </div>
-          <div className="live-pilot-preview">
-            <div className="live-pilot-preview-head">
-              <Space size={8} wrap>
-                <Typography.Text strong>
-                  当前候选 {livePilotSelection?.selected_symbols ?? 0}/{livePilotSelection?.eligible_symbols ?? 0}
-                </Typography.Text>
-                <Tag color="blue">强负资金跳过 {livePilotSelection?.skipped_negative_funding ?? 0}</Tag>
-                <Tag color="purple">类型跳过 {livePilotSelection?.skipped_type ?? 0}</Tag>
-                <Tag color="orange">风险跳过 {livePilotSelection?.skipped_risk ?? 0}</Tag>
-                <Tag color="green">预算 {livePilotSelection?.budget_usdt ?? 0} USDT</Tag>
-              </Space>
-              <Typography.Text type="secondary">
-                实时机会 {livePilotSelection?.total_opportunities ?? 0}
-              </Typography.Text>
-            </div>
-            <Table
-              columns={livePilotColumns}
-              dataSource={livePilotSelection?.items ?? []}
-              rowKey="opportunity_id"
-              pagination={false}
-              size="small"
-              tableLayout="fixed"
-              scroll={{ x: 920 }}
-            />
-          </div>
-          <Button type="primary" htmlType="submit" icon={<SaveOutlined />}>
-            保存实盘实验
-          </Button>
-        </Form>
-      </section>
-      <section className="panel panel-wide">
-        <Typography.Title level={4}>告警内容模板</Typography.Title>
-        <Alert
-          className="rule-guide"
-          type="info"
-          showIcon
-          message="全局模板"
-          description="这里控制飞书告警和新告警历史里展示哪些内容。告警规则仍然只负责判断什么时候触发。"
-        />
-        <Form
-          form={templateForm}
-          layout="vertical"
-          disabled={loading}
-          onFinish={saveAlertTemplate}
-          onValuesChange={(_, values) => setAlertTemplatePreview(normalizeAlertTemplate(values))}
-        >
-          <Form.Item name="format" label="消息格式">
-            <Segmented
-              options={[{ label: "精简", value: "compact" }, { label: "详细", value: "detailed" }]}
-              aria-label="告警消息格式"
-            />
-          </Form.Item>
-          <div className="template-grid">
-            <div className="template-options">
-              {alertTemplateOptions.filter((option) =>
-                option.name === "suppress_when_card_conditions_fail" || alertTemplatePreview.format === "detailed"
-              ).map((option) => (
-                <Form.Item
-                  key={option.name}
-                  name={option.name}
-                  valuePropName="checked"
-                  className="template-option"
-                >
-                  <Checkbox aria-label={option.label}>
-                    <span className="template-option-label">{option.label}</span>
-                    <span className="template-option-desc">{option.description}</span>
-                  </Checkbox>
-                </Form.Item>
-              ))}
-              {alertTemplatePreview.format === "detailed" ? (
-                <Form.Item
-                  label="连续监测最多显示轮数"
-                  name="observation_limit"
-                  rules={[{ required: true }]}
-                  className="template-limit"
-                >
-                  <InputNumber min={1} max={20} className="wide-input" />
-                </Form.Item>
-              ) : null}
-            </div>
-            <div className="template-preview">
-              <Typography.Text strong>消息预览</Typography.Text>
-              <pre>{buildAlertTemplatePreview(alertTemplatePreview)}</pre>
-            </div>
-          </div>
-          <Button type="primary" htmlType="submit" icon={<SaveOutlined />}>
-            保存告警模板
-          </Button>
-        </Form>
-      </section>
-      <section className="panel" ref={ruleEditorRef}>
-        <Typography.Title level={4}>{editingRule ? "编辑告警规则" : "新增告警规则"}</Typography.Title>
-        {editingRule ? (
-          <Alert
-            className="rule-guide"
-            type="warning"
-            showIcon
-            message={`正在编辑：${editingRule.name}`}
-            description="保存后立即更新现有规则，不会创建重复规则。"
-          />
-        ) : null}
-        <Alert className="rule-guide" type="info" showIcon message="规则说明" description={alertRuleGuide} />
-        <Form
-          name="alert-rule-editor"
-          form={ruleForm}
-          layout="vertical"
-          disabled={loading || ruleSaving}
-          initialValues={ruleToForm(ruleDefaults)}
-          onFinish={saveRule}
-        >
-          <div className="form-grid">
-            <Form.Item label="告警规则名称" name="name" rules={[{ required: true }]} help={alertRuleFieldHelp.name}>
-              <Input />
-            </Form.Item>
-            <Form.Item label="启用" name="enabled" valuePropName="checked" help={alertRuleFieldHelp.enabled}>
-              <Switch />
-            </Form.Item>
-            <Form.Item label="套利类型" name="types" rules={[{ required: true }]} help={alertRuleFieldHelp.types}>
-              <Select mode="multiple" options={alertTypeOptions} />
-            </Form.Item>
-            <Form.Item
-              label="SF 负资金费率不通知"
-              name="suppress_sf_negative_funding"
-              valuePropName="checked"
-              help={alertRuleFieldHelp.suppress_sf_negative_funding}
-            >
-              <Switch checkedChildren="不通知" unCheckedChildren="允许通知" />
-            </Form.Item>
-            <Form.Item
-              label="包含交易所"
-              name="include_exchanges"
-              help={alertRuleFieldHelp.include_exchanges}
-            >
-              <Select mode="multiple" allowClear options={exchangeOptions} />
-            </Form.Item>
-            <Form.Item
-              label="排除交易所"
-              name="exclude_exchanges"
-              help={alertRuleFieldHelp.exclude_exchanges}
-            >
-              <Select mode="multiple" allowClear options={exchangeOptions} />
-            </Form.Item>
-            <Form.Item
-              label="包含标的"
-              name="include_symbols"
-              help={alertRuleFieldHelp.include_symbols}
-            >
-              <Select mode="tags" tokenSeparators={[",", " "]} placeholder="BTCUSDT, ETHUSDT" />
-            </Form.Item>
-            <div className="rule-note">{alertRuleFieldHelp.exclude_symbols}</div>
-            <Form.Item
-              label="开仓阈值"
-              name="min_open_spread_pct"
-              rules={[{ required: true }]}
-              help={alertRuleFieldHelp.min_open_spread_pct}
-            >
-              <InputNumber min={0} step={0.1} suffix="%" className="wide-input" />
-            </Form.Item>
-            <Form.Item
-              label="资金费率条件开仓阈值"
-              name="favorable_funding_open_spread_pct"
-              help={alertRuleFieldHelp.favorable_funding_open_spread_pct}
-            >
-              <InputNumber min={0} step={0.1} suffix="%" placeholder="留空关闭" className="wide-input" />
-            </Form.Item>
-            <Form.Item
-              label="综合开仓阈值"
-              name="min_fee_adjusted_open_pct"
-              rules={[{ required: true }]}
-              help={alertRuleFieldHelp.min_fee_adjusted_open_pct}
-            >
-              <InputNumber min={0} step={0.1} suffix="%" className="wide-input" />
-            </Form.Item>
-            <Form.Item
-              label="最低成交额 (K)"
-              name="min_volume_24h_k"
-              rules={[{ required: true }]}
-              help={alertRuleFieldHelp.min_volume_24h_usdt}
-            >
-              <InputNumber min={0} step={100} suffix="K" className="wide-input" />
-            </Form.Item>
-            <Form.Item
-              label="连续命中"
-              name="consecutive_hits"
-              rules={[{ required: true }]}
-              help={alertRuleFieldHelp.consecutive_hits}
-            >
-              <InputNumber min={1} className="wide-input" />
-            </Form.Item>
-            <Form.Item
-              label="冷却秒数"
-              name="cooldown_seconds"
-              rules={[{ required: true }]}
-              help={alertRuleFieldHelp.cooldown_seconds}
-            >
-              <InputNumber min={0} className="wide-input" />
-            </Form.Item>
-            <Form.Item label="等级" name="severity" rules={[{ required: true }]} help={alertRuleFieldHelp.severity}>
-              <Select options={alertSeverityOptions} />
-            </Form.Item>
-          </div>
-          <Form.Item label="排除风险标签" name="excluded_risk_labels">
-            <Select mode="multiple" options={riskSelectOptions} />
-          </Form.Item>
-          <Space wrap>
-            <Button
-              type="primary"
-              htmlType="submit"
-              icon={editingRule ? <SaveOutlined /> : <PlusOutlined />}
-              loading={ruleSaving}
-              aria-label={editingRule ? "保存修改" : "新增规则"}
-            >
-              {editingRule ? "保存修改" : "新增规则"}
-            </Button>
-            {editingRule ? (
-              <Button icon={<CloseOutlined />} onClick={resetRuleEditor} disabled={ruleSaving}>
-                取消编辑
-              </Button>
-            ) : null}
-          </Space>
-        </Form>
-      </section>
-      <section className="panel panel-wide">
-        <Typography.Title level={4}>告警规则</Typography.Title>
-        <Table
-          columns={columns}
-          dataSource={rules}
-          loading={loading}
-          rowKey={(row) => row.id ?? row.name}
-          pagination={false}
-          size="middle"
-          scroll={{ x: 980 }}
-        />
-      </section>
-      <PhonePriceAlertsPanel />
-      <MarketIdentityPanel />
+        ]}
+      />
     </div>
   );
 }

@@ -30,8 +30,7 @@ const defaultNavigationOrder = [
   "announcements",
   "oil-news",
   "account-connections",
-  "settings",
-  "history"
+  "settings"
 ];
 
 function visibleMenuLabels(): string[] {
@@ -170,7 +169,8 @@ describe("AppShell", () => {
 
     expect(JSON.parse(window.localStorage.getItem(navigationOrderStorageKey) ?? "[]")).toEqual(defaultNavigationOrder);
     expect(visibleMenuLabels().slice(0, 3)).toEqual(["实时机会", "资金费率套利", "负费率 FS 观察"]);
-    expect(visibleMenuLabels().slice(-2)).toEqual(["参数与告警", "告警历史"]);
+    expect(visibleMenuLabels().slice(-2)).toEqual(["账户连接", "参数与告警"]);
+    expect(visibleMenuLabels()).not.toContain("告警历史");
   });
 
   it("discards draft changes when canceled or closed", async () => {
@@ -198,7 +198,9 @@ describe("AppShell", () => {
     render(<AppShell />);
 
     const labels = visibleMenuLabels();
-    expect(labels.slice(0, 2)).toEqual(["告警历史", "实时机会"]);
+    expect(labels.slice(0, 2)).toEqual(["实时机会", "资金费率套利"]);
+    expect(labels).not.toContain("告警历史");
+    expect(JSON.parse(window.localStorage.getItem(navigationOrderStorageKey) ?? "[]")).toEqual(defaultNavigationOrder);
     expect(labels).toHaveLength(defaultNavigationOrder.length);
     expect(labels).not.toContain("1 分钟价差信号");
     expect(labels).not.toContain("新币极速");
@@ -214,6 +216,42 @@ describe("AppShell", () => {
     expect(screen.getByText("Dashboard")).toBeTruthy();
     expect(visibleMenuLabels()).toHaveLength(defaultNavigationOrder.length);
   });
+
+  it("opens the settings history tab for a legacy history bookmark", async () => {
+    window.localStorage.setItem("settings-active-tab", "risk");
+    window.history.replaceState({}, "", "/?page=history&symbol=BTCUSDT#bookmark");
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json([])));
+    render(<AppShell />);
+
+    const historyTab = await screen.findByRole("tab", { name: "告警历史" }, { timeout: 10000 });
+    expect(historyTab.getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("menuitem", { name: /参数与告警/ }).classList.contains("ant-menu-item-selected")).toBe(true);
+    expect(visibleMenuLabels()).not.toContain("告警历史");
+    expect(window.localStorage.getItem("settings-active-tab")).toBe("history");
+    expect(window.location.search).toContain("symbol=BTCUSDT");
+    expect(window.location.hash).toBe("#bookmark");
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("/alerts/events"))).toBe(true));
+  }, 15000);
+
+  it.each(["popstate", "taoli1:navigate"])("handles legacy history through %s while settings is already mounted", async (eventName) => {
+    window.history.replaceState({}, "", "/?page=settings");
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json([])));
+    render(<AppShell />);
+    await screen.findByRole("tab", { name: "告警规则" }, { timeout: 10000 });
+    const ruleName = screen.getByLabelText("告警规则名称") as HTMLInputElement;
+    await waitFor(() => expect(ruleName.disabled).toBe(false));
+    await userEvent.type(ruleName, "Preserved draft");
+    expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("/alerts/events"))).toBe(false);
+
+    act(() => {
+      window.history.pushState({}, "", "/?page=history");
+      window.dispatchEvent(new Event(eventName));
+    });
+    await waitFor(() => expect(screen.getByRole("tab", { name: "告警历史" }).getAttribute("aria-selected")).toBe("true"));
+    await userEvent.click(screen.getByRole("tab", { name: "告警规则" }));
+    expect(screen.getByLabelText("告警规则名称")).toBe(ruleName);
+    expect(ruleName.value).toBe("Preserved draft");
+  }, 15000);
 
   it("renders only the dedicated watch panel for the standalone window URL", async () => {
     window.history.replaceState({}, "", "/?floating_watch=standalone");
