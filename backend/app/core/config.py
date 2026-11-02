@@ -35,6 +35,15 @@ class Settings:
     disabled_features: frozenset[str] = frozenset()
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     database_url: str = "sqlite:///./data/radar.db"
+    sqlite_maintenance_enabled: bool = False
+    sqlite_maintenance_dry_run: bool = True
+    sqlite_maintenance_hour_utc: int = 20
+    sqlite_maintenance_batch_size: int = 5000
+    sqlite_maintenance_second_level_market_samples_retention_days: int = 2
+    sqlite_maintenance_second_level_index_component_samples_retention_days: int = 2
+    sqlite_maintenance_alert_events_retention_days: int = 90
+    sqlite_maintenance_oil_news_items_retention_days: int = 90
+    sqlite_maintenance_squeeze_hourly_candles_retention_days: int = 30
     poll_interval_seconds: float = 5.0
     alert_match_concurrency: int = 3
     alert_diagnostic_timeout_seconds: float = 20.0
@@ -104,6 +113,17 @@ class Settings:
     astro_request_timeout_seconds: float = 10.0
 
     def __post_init__(self) -> None:
+        for name, lower, upper in (
+            ("hour_utc", 0, 23), ("batch_size", 1, 5000),
+            ("second_level_market_samples_retention_days", 1, 36500),
+            ("second_level_index_component_samples_retention_days", 1, 36500),
+            ("alert_events_retention_days", 1, 36500),
+            ("oil_news_items_retention_days", 1, 36500),
+            ("squeeze_hourly_candles_retention_days", 1, 36500),
+        ):
+            value = getattr(self, f"sqlite_maintenance_{name}")
+            if type(value) is not int or not lower <= value <= upper:
+                raise ValueError(f"sqlite_maintenance_{name} must be an integer in [{lower}, {upper}]")
         for name, default, upper, integer in (
             ("alert_match_concurrency", 3, 8, True),
             ("alert_diagnostic_timeout_seconds", 20.0, 120, False),
@@ -217,6 +237,14 @@ def _resolve_sqlite_database_url(database_url: str, dotenv_path: str | None) -> 
 
 @lru_cache
 def get_settings() -> Settings:
+    def maintenance_bool_env(name: str, default: bool) -> bool:
+        value = os.getenv(name, "").strip().lower()
+        if not value:
+            return default
+        if value not in {"1", "true", "yes", "on", "0", "false", "no", "off"}:
+            raise ValueError(f"{name} must be a boolean")
+        return value in {"1", "true", "yes", "on"}
+
     dotenv_path = find_dotenv(usecwd=True)
     if dotenv_path:
         load_dotenv(dotenv_path, override=False)
@@ -240,6 +268,20 @@ def get_settings() -> Settings:
         environment=environment,
         cors_origins=os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"),
         database_url=database_url,
+        sqlite_maintenance_enabled=maintenance_bool_env("SQLITE_MAINTENANCE_ENABLED", False),
+        sqlite_maintenance_dry_run=maintenance_bool_env("SQLITE_MAINTENANCE_DRY_RUN", True),
+        sqlite_maintenance_hour_utc=int(os.getenv("SQLITE_MAINTENANCE_HOUR_UTC", "20")),
+        sqlite_maintenance_batch_size=int(os.getenv("SQLITE_MAINTENANCE_BATCH_SIZE", "5000")),
+        sqlite_maintenance_second_level_market_samples_retention_days=int(os.getenv(
+            "SQLITE_MAINTENANCE_SECOND_LEVEL_MARKET_SAMPLES_RETENTION_DAYS", "2")),
+        sqlite_maintenance_second_level_index_component_samples_retention_days=int(os.getenv(
+            "SQLITE_MAINTENANCE_SECOND_LEVEL_INDEX_COMPONENT_SAMPLES_RETENTION_DAYS", "2")),
+        sqlite_maintenance_alert_events_retention_days=int(os.getenv(
+            "SQLITE_MAINTENANCE_ALERT_EVENTS_RETENTION_DAYS", "90")),
+        sqlite_maintenance_oil_news_items_retention_days=int(os.getenv(
+            "SQLITE_MAINTENANCE_OIL_NEWS_ITEMS_RETENTION_DAYS", "90")),
+        sqlite_maintenance_squeeze_hourly_candles_retention_days=int(os.getenv(
+            "SQLITE_MAINTENANCE_SQUEEZE_HOURLY_CANDLES_RETENTION_DAYS", "30")),
         poll_interval_seconds=float(os.getenv("POLL_INTERVAL_SECONDS", "5")),
         alert_match_concurrency=_bounded_alert_number(
             os.getenv("ALERT_MATCH_CONCURRENCY", "3"), 3, 8, integer=True,
