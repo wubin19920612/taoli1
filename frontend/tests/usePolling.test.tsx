@@ -1,4 +1,4 @@
-import { StrictMode } from "react";
+import { StrictMode, useEffect } from "react";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -233,12 +233,174 @@ describe("usePolling", () => {
     act(() => trigger());
     expect(callback).not.toHaveBeenCalled();
     setVisibility("visible");
-    act(() => trigger());
     await advance(5000);
     expect(callback).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
     unmount();
     act(() => trigger());
     expect(callback).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves a queued trigger across disabling polling and uses the latest callback", async () => {
+    const pending = deferred();
+    const first = vi.fn(() => pending.promise);
+    const latest = vi.fn();
+    const { result, rerender } = renderHook(({ callback, enabled }) => usePolling(callback, 1000, { enabled }), {
+      initialProps: { callback: first as () => void | Promise<void>, enabled: true }
+    });
+    rerender({ callback: latest, enabled: true });
+    act(() => { result.current(); result.current(); });
+    await advance(0);
+    rerender({ callback: latest, enabled: false });
+    await advance(5000);
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(latest).not.toHaveBeenCalled();
+    await act(async () => pending.resolve());
+    expect(latest).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+    await advance(60_000);
+    expect(latest).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains hidden triggers and their listener while disabled until one visible refresh", async () => {
+    setVisibility("hidden");
+    const callback = vi.fn();
+    const add = vi.spyOn(document, "addEventListener");
+    const remove = vi.spyOn(document, "removeEventListener");
+    const { result, rerender } = renderHook(({ interval }) => usePolling(callback, interval, { enabled: false }), {
+      initialProps: { interval: 1000 }
+    });
+    act(() => { result.current(); result.current(); });
+    await advance(0);
+    rerender({ interval: 2000 });
+    await advance(60_000);
+    expect(callback).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+    const listeners = add.mock.calls.filter(([event]) => event === "visibilitychange");
+    expect(listeners.length).toBeGreaterThan(0);
+    const listener = listeners[listeners.length - 1][1];
+    setVisibility("visible");
+    await advance(0);
+    expect(callback).toHaveBeenCalledTimes(1);
+    expect(remove).toHaveBeenCalledWith("visibilitychange", listener);
+    setVisibility("hidden");
+    setVisibility("visible");
+    await advance(60_000);
+    expect(callback).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("cancels a queued automatic resume when disabled without creating an explicit trigger", async () => {
+    const pending = deferred();
+    const callback = vi.fn().mockReturnValueOnce(pending.promise);
+    const { rerender } = renderHook(({ enabled }) => usePolling(callback, 1000, { enabled }), {
+      initialProps: { enabled: true }
+    });
+    setVisibility("hidden");
+    setVisibility("visible");
+    rerender({ enabled: false });
+    await act(async () => pending.resolve());
+    await advance(60_000);
+    expect(callback).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+    rerender({ enabled: true });
+    await advance(0);
+    setVisibility("hidden");
+    expect(vi.getTimerCount()).toBe(0);
+    await advance(60_000);
+    expect(callback).toHaveBeenCalledTimes(2);
+    setVisibility("visible");
+    await advance(0);
+    expect(callback).toHaveBeenCalledTimes(3);
+    await advance(999);
+    expect(callback).toHaveBeenCalledTimes(3);
+    await advance(1);
+    expect(callback).toHaveBeenCalledTimes(4);
+  });
+
+  it("observes visibility when a disabled hook receives a trigger after the tab was hidden", async () => {
+    const callback = vi.fn();
+    const { result } = renderHook(() => usePolling(callback, 1000, { enabled: false }));
+    setVisibility("hidden");
+    act(() => result.current());
+    await advance(60_000);
+    expect(callback).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+    setVisibility("visible");
+    await advance(0);
+    expect(callback).toHaveBeenCalledTimes(1);
+    await advance(60_000);
+    expect(callback).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an in-flight queued trigger through hiding and disabling until it can run", async () => {
+    const pending = deferred();
+    const callback = vi.fn().mockReturnValueOnce(pending.promise);
+    const { result, rerender } = renderHook(({ enabled }) => usePolling(callback, 1000, { enabled }), {
+      initialProps: { enabled: true }
+    });
+    act(() => result.current());
+    await advance(0);
+    setVisibility("hidden");
+    rerender({ enabled: false });
+    await act(async () => pending.resolve());
+    await advance(60_000);
+    expect(callback).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+    setVisibility("visible");
+    await advance(0);
+    expect(callback).toHaveBeenCalledTimes(2);
+    await advance(60_000);
+    expect(callback).toHaveBeenCalledTimes(2);
+  });
+
+  it("coalesces same-tick triggers while idle and restarts the interval after the shared request", async () => {
+    const pending = deferred();
+    const callback = vi.fn().mockReturnValueOnce(pending.promise);
+    const { result } = renderHook(() => usePolling(callback, 1000, { immediate: false }));
+    await advance(900);
+    act(() => { result.current(); result.current(); result.current(); });
+    await advance(5000);
+    expect(callback).toHaveBeenCalledTimes(1);
+    await act(async () => pending.resolve());
+    expect(callback).toHaveBeenCalledTimes(1);
+    await advance(999);
+    expect(callback).toHaveBeenCalledTimes(1);
+    await advance(1);
+    expect(callback).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([false, true])("coalesces effect triggers in StrictMode before the first full interval (async: %s)", async slow => {
+    const pending = deferred();
+    const callback = vi.fn().mockReturnValueOnce(slow ? pending.promise : undefined);
+    renderHook(() => {
+      const trigger = usePolling(callback, 1000, { immediate: false });
+      useEffect(() => { trigger(); }, [trigger]);
+    }, { wrapper: StrictMode });
+    await advance(0);
+    expect(callback).toHaveBeenCalledTimes(1);
+    if (slow) {
+      await advance(5000);
+      expect(callback).toHaveBeenCalledTimes(1);
+      await act(async () => pending.resolve());
+    }
+    await advance(999);
+    expect(callback).toHaveBeenCalledTimes(1);
+    await advance(1);
+    expect(callback).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([false, true])("discards queued triggers and listeners after unmount (hidden: %s)", async hidden => {
+    if (hidden) setVisibility("hidden");
+    const callback = vi.fn();
+    const { result, unmount } = renderHook(() => usePolling(callback, 1000, { enabled: false }));
+    const trigger = result.current;
+    act(() => trigger());
+    unmount();
+    setVisibility("visible");
+    act(() => trigger());
+    await advance(60_000);
+    expect(callback).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

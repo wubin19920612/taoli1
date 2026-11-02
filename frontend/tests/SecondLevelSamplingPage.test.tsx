@@ -144,6 +144,32 @@ describe("SecondLevelSamplingPage", () => {
     vi.unstubAllGlobals();
   });
 
+  it("defers a paused sampler's hidden initial load until visible without starting polling", async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+    const sampleCalls = () => vi.mocked(fetch).mock.calls.filter(([input]) =>
+      new URL(String(input), "http://localhost").pathname === "/api/second-level-sampling/samples");
+    const view = render(<SecondLevelSamplingPage />);
+    try {
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(sampleCalls()).toHaveLength(0);
+      Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+      act(() => document.dispatchEvent(new Event("visibilitychange")));
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(sampleCalls()).toHaveLength(1);
+      expect(screen.getAllByText("DEXEUSDT").length).toBeGreaterThan(0);
+      expect(requests.some(request => request.includes("/second-level-sampling/component-samples"))).toBe(true);
+      const requestCount = requests.length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(sampleCalls()).toHaveLength(1);
+      expect(requests).toHaveLength(requestCount);
+    } finally {
+      view.unmount();
+      Reflect.deleteProperty(document, "visibilityState");
+      vi.useRealTimers();
+    }
+  });
+
   it("loads status, samples, and saves config", async () => {
     render(<SecondLevelSamplingPage />);
 

@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -70,6 +71,24 @@ describe("OilNewsPage", () => {
         return Response.json({});
       })
     );
+  });
+
+  it("loads news once before the first full interval when effects replay in StrictMode", async () => {
+    vi.useFakeTimers();
+    const count = () => vi.mocked(fetch).mock.calls.filter(([input]) =>
+      new URL(String(input), "http://localhost").pathname === "/api/oil-news").length;
+    const view = render(<StrictMode><OilNewsPage /></StrictMode>);
+    try {
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(count()).toBe(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(59_999); });
+      expect(count()).toBe(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+      expect(count()).toBe(2);
+    } finally {
+      view.unmount();
+      vi.useRealTimers();
+    }
   });
 
   it("renders oil news direction, impact and market confirmation", async () => {

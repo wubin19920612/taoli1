@@ -229,3 +229,72 @@ frontend/tests/SecondLevelSamplingPage.test.tsx
 - 卸载以后什么都不执行。严格模式下的重放，包括页面在 effect 里调用 trigger 的情况，在第一个周期之前都只执行一次。具体做法：同一个 tick 内重复的 trigger 合并成一次，或者跳过挂载后的重复调用。
 - 给以上每条语义各写一条 hook 级别的测试；上面 3 个问题，各写一条页面级别的复现测试（先红灯，再绿灯）。
 其余要求不变：只改任务书允许的文件；`npm test` 和 `npx tsc --noEmit` 都要通过；追加返工记录；另起一个提交，提交信息用 `fix(frontend): unify polling trigger semantics`。
+
+## 返工 2 执行记录（Codex，2026-11-02）
+
+- 模块与验收：S8-A 前端轮询可见性，统一显式 trigger 与自动轮询语义，复现并修复上述三个页面问题；分支 `codex/s8-polling`，本轮基线 `f8838574c7cac4b19164bb3e343521c824e03538`。开始时工作区干净。
+- 全文阅读任务书后先修改测试、运行红灯，再修改 hook。没有修改页面实现、接口参数或周期。下列命令全部在本工作树的 `frontend/` 运行；继续使用 `--no-cache` 避免向共享依赖目录写入 Vitest 缓存。
+
+### 红灯与复现证据
+
+```text
+npm test -- --no-cache tests/usePolling.test.tsx tests/TradfiPerpMonitorPage.test.tsx tests/SecondLevelSamplingPage.test.tsx tests/OilNewsPage.test.tsx
+Test Files  4 failed (4)
+     Tests  10 failed | 23 passed (33)
+退出码 1
+```
+
+- TradfiPerp：挂起初始请求，修改筛选后关闭自动刷新；释放初始请求后应有第 2 次请求，旧实现仍只有 1 次。绿灯继续检查第二次请求含最新 `min_volume_24h_k=2000`，且之后 60 秒没有自动轮询。
+- SecondLevelSampling：暂停状态下隐藏挂载，隐藏 60 秒不发起样本请求；恢复可见后应立即加载 1 次，旧实现为 0 次。绿灯同时确认样本呈现、成分明细加载，以及随后 60 秒不轮询。
+- OilNews：StrictMode 重放页面 effect 后，首个完整 60 秒周期前应只有 1 次新闻请求，旧实现为 2 次；绿灯验证 59,999ms 仍为 1 次、到期后为 2 次。
+- hook 测试覆盖：关闭自动刷新保留排队 trigger 并使用最新 callback；隐藏 trigger 保留监听且不受 enabled/周期变更影响；自动恢复请求可随 disabled 取消；同 tick trigger 合并、串行执行并重新等待完整周期；StrictMode effect trigger 的同步/异步回调均只执行一次；卸载后待执行 trigger 不执行。
+- 初次定向修复通过 `4 passed / 33 passed` 后，复核新增两个组合边界测试。其中“可见挂载且 disabled，之后隐藏再 trigger”发现安装监听时使用旧可见性的问题，先运行补充红灯，再修复：
+
+```text
+npm test -- --no-cache tests/usePolling.test.tsx
+Test Files  1 failed (1)
+     Tests  1 failed | 23 passed (24)
+退出码 1
+```
+
+- 另一个组合边界确认：请求中排队的 trigger 经隐藏、关闭自动刷新、旧请求完成后仍保留，重新可见时执行一次，之后不轮询。
+- 红灯日志：`%TEMP%\s8a-rework2-red.log`；补充红灯：`%TEMP%\s8a-rework2-red-visibility.log`；初次定向绿灯：`%TEMP%\s8a-rework2-green-targeted.log`。
+
+### 统一实现与最终验证
+
+- `frontend/src/utils/usePolling.ts` 在跨 effect 的 ref 中分别保存显式 trigger、自动 poll、运行中状态及微任务合并状态，共用一个串行执行入口。配置变化只取消自动意图；显式 trigger 继续保留。
+- trigger 在同一 tick 的微任务中合并；隐藏只延后执行，disabled 不取消。可见性监听按“自动轮询开启或仍有待执行 trigger”维护，安装时同步当前可见性；disabled 的 trigger 消费完后移除监听，不创建周期定时器。
+- 自动轮询仅在 enabled 且可见时调度；恢复可见时触发一次。所有刷新完成后才开始完整间隔，回调异常仍由 hook 静默处理。StrictMode 重放不会增加一次 trigger；卸载清除定时器、监听和执行入口，异步完成及待执行微任务不会再发起 callback。
+- 本轮新增 13 个用例（hook 10 个、页面 3 个），并加强已有 disabled trigger 用例：恢复可见后无需再次手动 trigger 就必须补执行。
+
+```text
+npm test -- --no-cache
+Test Files  35 passed (35)
+     Tests  410 passed (410)
+  Duration  97.86s
+退出码 0
+
+npx tsc --noEmit
+无输出，退出码 0
+```
+
+- 全量包含全部既有页面测试；FsMonitor、NegativeBasis、PairMonitor、FloatingWatchPanel、PremiumIndex 及返工 1 的三个筛选重排周期测试均通过。最终 hook 文件共 24 个用例全部通过。
+- 全量日志仍有 Ant Design 弃用及 React act 警告，没有失败用例。最终全量日志：`%TEMP%\s8a-rework2-green-full.log`；类型检查日志：`%TEMP%\s8a-rework2-tsc.log`。
+- 已人工复核 hook 生命周期、串行队列、监听安装/移除及测试差异；`git diff --check` 通过。
+
+### 文件与交付边界
+
+本轮仅修改以下 6 个允许文件：
+
+```text
+docs/s8a-polling-visibility-spec-2026-11-02.md
+frontend/src/utils/usePolling.ts
+frontend/tests/usePolling.test.tsx
+frontend/tests/TradfiPerpMonitorPage.test.tsx
+frontend/tests/SecondLevelSamplingPage.test.tsx
+frontend/tests/OilNewsPage.test.tsx
+```
+
+- `frontend/node_modules` 联接保持原样，目标仍为 `.worktrees/s9-test-gate/frontend/node_modules`；未运行 npm install，未使用 WSL。测试日志仅写入系统临时目录，无新增未跟踪交付文件。
+- 按要求创建一个本地提交，信息为 `fix(frontend): unify polling trigger semantics`；实际提交号以交付回复及 `git log -1` 为准。不推送、不部署，未操作线上数据库或服务，未进行线上验收。
+- 本记录作为本轮交接。后续如继续 S8-B 导航分组，应另开任务。
