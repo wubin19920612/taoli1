@@ -533,6 +533,7 @@ describe("InstrumentLookupPage", () => {
     expect(screen.getAllByText("24h 最大/最小价差").length).toBeGreaterThan(0);
     expect(screen.getByText("完整24h · 1440 点")).not.toBeNull();
     const markets = screen.getByRole("table", { name: "精确行情市场" });
+    await userEvent.click(within(markets).getByRole("button", { name: "展开市场 Binance 永续 BTCUSDT" }));
     expect(within(markets).getByText("1h 涨跌幅")).not.toBeNull();
     expect(within(markets).getByText("24h 涨跌幅")).not.toBeNull();
     expect(within(markets).getByText("-1.250%")).not.toBeNull();
@@ -676,6 +677,7 @@ describe("InstrumentLookupPage", () => {
 
     expect(await screen.findByText("≈0.5x")).not.toBeNull();
     expect(screen.getByText("5x")).not.toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "来源与口径" }));
     expect(screen.getByText(/合约 24h 5000 USDT · 2\/4 市场/)).not.toBeNull();
     expect(screen.getByText(/现货 24h 1000 USDT · 1\/2 市场 · 1 个别名未计/)).not.toBeNull();
     expect(screen.getByText(/流通市值 1万 USD · Bitcoin/)).not.toBeNull();
@@ -712,6 +714,7 @@ describe("InstrumentLookupPage", () => {
     });
 
     render(<InstrumentLookupPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "来源与口径" }));
     const selection = await screen.findByRole("combobox", { name: "选择 CoinGecko 币种" });
     expect(screen.queryByText("≈0.2x")).toBeNull();
     fireEvent.mouseDown(selection);
@@ -779,6 +782,7 @@ describe("InstrumentLookupPage", () => {
     window.history.replaceState({}, "", "/?page=instrument&symbol=ZETAUSDT");
 
     render(<InstrumentLookupPage />);
+    await userEvent.click(await screen.findByRole("radio", { name: "完整" }));
 
     const marketTable = await screen.findByRole("table", { name: "精确行情市场" });
     const zetaRow = within(marketTable).getByText(/^永续 · DEX main · ZETA$/).closest("article")!;
@@ -806,6 +810,7 @@ describe("InstrumentLookupPage", () => {
     expect(screen.getAllByText("受限")).toHaveLength(2);
     expect(screen.getAllByText("可用")).toHaveLength(2);
     expect(screen.getByText("合约指数成分")).not.toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "合约指数成分" }));
     expect(screen.getByText("45.00%")).not.toBeNull();
     expect(screen.getByText("ZETA-USD")).not.toBeNull();
     expect(screen.getByText("Coinbase · 现货")).not.toBeNull();
@@ -915,6 +920,7 @@ describe("InstrumentLookupPage", () => {
     });
 
     render(<InstrumentLookupPage />);
+    await userEvent.click(await screen.findByRole("radio", { name: "完整" }));
 
     const marketTable = await screen.findByRole("table", { name: "精确行情市场" });
     await waitFor(() => expect(within(marketTable).getByText(/^市场诊断 ·/)).not.toBeNull());
@@ -928,6 +934,7 @@ describe("InstrumentLookupPage", () => {
     expect(screen.queryByText("Sell / Short")).toBeNull();
     expect(within(details).getByText("买入")).not.toBeNull();
     expect(within(details).getByText("卖出")).not.toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "现货充提通道" }));
     const transferTable = screen.getByRole("table", { name: "现货逐链充提状态" });
     expect(within(transferTable).getAllByText("BTC").length).toBeGreaterThan(0);
     expect(within(transferTable).getByText("BSC")).not.toBeNull();
@@ -1014,7 +1021,7 @@ describe("InstrumentLookupPage", () => {
     await screen.findByText("BTC / USDT");
 
     expect((fetch as ReturnType<typeof vi.fn>).mock.calls.some(([input]) => String(input).includes("symbol-query"))).toBe(false);
-    await userEvent.click(screen.getByRole("button", { name: /展开/ }));
+    await userEvent.click(within(screen.getByRole("heading", { name: "走势与价差" }).closest("section")!).getByRole("button", { name: /展开/ }));
 
     await waitFor(() => {
       expect((fetch as ReturnType<typeof vi.fn>).mock.calls.some(([input]) => String(input).includes("symbol-query"))).toBe(true);
@@ -1474,7 +1481,7 @@ describe("InstrumentLookupPage", () => {
     expect(within(spreadSection).queryByRole("columnheader", { name: /中价差|价差额/ })).toBeNull();
     expect(within(spreadSection).getByText("+0.120%")).not.toBeNull();
 
-    const marketTags = Array.from(document.querySelectorAll(".instrument-market-type-tag"));
+    const marketTags = Array.from(spreadSection.querySelectorAll(".instrument-market-type-tag"));
     expect(marketTags.filter((tag) => tag.classList.contains("instrument-market-type-tag--spot"))).toHaveLength(2);
     expect(marketTags.filter((tag) => tag.classList.contains("instrument-market-type-tag--future"))).toHaveLength(4);
     expect(marketTags.map((tag) => tag.textContent)).toEqual([
@@ -2017,6 +2024,7 @@ describe("InstrumentLookupPage", () => {
     });
     window.history.replaceState({}, "", "/?page=instrument&symbol=ZETAUSDT");
     render(<InstrumentLookupPage />);
+    await userEvent.click(await screen.findByRole("radio", { name: "完整" }));
     const table = await screen.findByRole("table", { name: "精确行情市场" });
     await waitFor(() => expect(within(table).getAllByText(/市场诊断/)).toHaveLength(3));
     const header = table.querySelector(".instrument-market-data-head") as HTMLElement;
@@ -2073,6 +2081,7 @@ describe("InstrumentLookupPage", () => {
     });
     window.history.replaceState({}, "", "/?page=instrument&symbol=ZETAUSDT");
     render(<InstrumentLookupPage />);
+    await userEvent.click(await screen.findByRole("radio", { name: "完整" }));
     const table = await screen.findByRole("table", { name: "精确行情市场" });
     await waitFor(() => expect(within(table).getByText(/^市场诊断 ·/)).not.toBeNull());
     const row = within(table).getAllByRole("row")[1];
@@ -2133,6 +2142,7 @@ describe("InstrumentLookupPage", () => {
     window.history.replaceState({}, "", "/?page=instrument&symbol=ZETAUSDT");
 
     render(<InstrumentLookupPage />);
+    await userEvent.click(await screen.findByRole("radio", { name: "完整" }));
     const table = await screen.findByRole("table", { name: "精确行情市场" });
     const row = within(table).getByText(/^永续 · DEX main · ZETA$/).closest("article")!;
     const summary = await within(row).findByText(/^市场诊断 ·/);
