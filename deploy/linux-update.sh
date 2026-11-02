@@ -4,6 +4,25 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# Read-only local check: no Git network, Docker, .env, or deployment actions.
+if [[ "${1:-}" == "--check-backups" ]]; then
+  if (( $# > 2 )); then
+    echo "Usage: bash deploy/linux-update.sh --check-backups [DIRECTORY]" >&2
+    exit 2
+  fi
+  exec "${PYTHON:-python3}" "$ROOT_DIR/deploy/backup_tools.py" check-dir \
+    --backup-dir "${2:-$ROOT_DIR/backups}" --max-gb "${BACKUP_DIR_MAX_GB:-15}"
+elif (( $# != 0 )); then
+  echo "Usage: bash deploy/linux-update.sh [--check-backups [DIRECTORY]]" >&2
+  exit 2
+fi
+
+backup_mode="${BACKUP_MODE:-isolated}"
+case "$backup_mode" in
+  isolated|legacy) ;;
+  *) echo "BACKUP_MODE must be isolated or legacy." >&2; exit 2 ;;
+esac
+
 branch="${DEPLOY_BRANCH:?Set DEPLOY_BRANCH to the reviewed deployment branch}"
 commit="${DEPLOY_COMMIT:?Set DEPLOY_COMMIT to the full reviewed 40-character commit SHA}"
 if [[ ! "$commit" =~ ^[0-9a-f]{40}$ ]]; then
@@ -48,6 +67,8 @@ if (( available_mb < 2048 )); then
 fi
 
 mkdir -p backups
+python3 deploy/backup_tools.py check-dir --backup-dir "$ROOT_DIR/backups" \
+  --max-gb "${BACKUP_DIR_MAX_GB:-15}"
 
 if ! sudo -n docker compose ps --services --status running | grep -qx "backend"; then
   echo "Backend is not running; refusing an update without a database backup." >&2
@@ -97,13 +118,103 @@ PY
   echo "Backup integrity_check=ok sha256=$host_sha"
 }
 
-backup_timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-backup_sqlite "/data/radar.db" "/tmp/radar-backup-deploy.db" \
-  "backups/radar-before-${commit:0:12}-${backup_timestamp}.db"
-if sudo -n docker compose exec -T backend test -f /data/radar-squeeze-route.db; then
-  backup_sqlite "/data/radar-squeeze-route.db" "/tmp/squeeze-route-backup-deploy.db" \
-    "backups/squeeze-route-before-${commit:0:12}-${backup_timestamp}.db"
+backup_sqlite_isolated() {
+  local database_path="$1"
+  local backup_file="$3"
+  local container_sha host_sha
+  if [[ -e "$backup_file" || -e "$backup_file.partial" ]]; then
+    echo "Backup destination already exists: $backup_file (or .partial); refusing to overwrite." >&2
+    exit 1
+  fi
+  echo "Creating isolated SQLite backup at $backup_file (image=$backup_image memory=128m)"
+  container_sha="$(sudo -n docker run --rm -i --pull=never --network none --read-only \
+    --memory=128m --memory-swap=128m --pids-limit=32 --cpus=0.5 \
+    --volumes-from "$backend_container:rw" \
+    --mount "type=bind,source=$ROOT_DIR/backups,target=/backups" \
+    --entrypoint python "$backup_image" - "$database_path" "/backups/$(basename "$backup_file")" <<'ISOLATED_PY'
+import hashlib
+import os
+import pathlib
+import sqlite3
+import sys
+from contextlib import closing
+
+src, dst = map(pathlib.Path, sys.argv[1:])
+partial = dst.with_name(dst.name + ".partial")
+if dst.exists():
+    raise RuntimeError("Refusing to overwrite backup")
+# Exclusive creation leaves a clearly labelled partial file on failure.
+with partial.open("xb"):
+    pass
+os.chmod(partial, 0o600)
+owner = dst.parent.stat()
+os.chown(partial, owner.st_uid, owner.st_gid)
+# WAL readers may need to create/update -shm even with mode=ro. Allow SQLite
+# locking metadata on the volume; never use immutable=1 on a live database.
+with closing(sqlite3.connect(src.as_uri() + "?mode=ro", uri=True)) as source:
+    source.execute("PRAGMA cache_size=-2048")
+    with closing(sqlite3.connect(partial)) as target:
+        target.execute("PRAGMA cache_size=-2048")
+        # One step avoids repeated restarts under continuous source writes.
+        source.backup(target, pages=-1)
+        check = target.execute("PRAGMA integrity_check").fetchall()
+        if check != [("ok",)]:
+            raise RuntimeError(f"backup integrity_check={check}")
+
+digest = hashlib.sha256()
+with partial.open("rb+") as backup:
+    for chunk in iter(lambda: backup.read(1024 * 1024), b""):
+        digest.update(chunk)
+    os.fsync(backup.fileno())
+# Publish without overwriting any prior restore point (same filesystem).
+os.link(partial, dst)
+partial.unlink()
+print(digest.hexdigest())
+ISOLATED_PY
+)"
+  host_sha="$(sha256sum "$backup_file" | awk '{print $1}')"
+  if [[ "$host_sha" != "$container_sha" ]]; then
+    echo "Backup SHA-256 mismatch; refusing to deploy." >&2
+    exit 1
+  fi
+  echo "Backup integrity_check=ok sha256=$host_sha"
+}
+
+backup_function=backup_sqlite_isolated
+if [[ "$backup_mode" == "legacy" ]]; then
+  echo "BACKUP_MODE=legacy: backup shares the backend memory limit; use only as a temporary fallback." >&2
+  backup_function=backup_sqlite
+else
+  backend_container="$(sudo -n docker compose ps -q backend)"
+  if [[ ! "$backend_container" =~ ^[0-9a-f]{12,64}$ ]]; then
+    echo "Expected exactly one backend container; refusing to deploy." >&2
+    exit 1
+  fi
+  backup_image="$(sudo -n docker inspect "$backend_container" --format '{{.Image}}')"
+  if [[ ! "$backup_image" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    echo "Unable to resolve backend image ID; refusing to deploy." >&2
+    exit 1
+  fi
 fi
+
+backup_timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+"$backup_function" "/data/radar.db" "/tmp/radar-backup-deploy.db" \
+  "backups/radar-before-${commit:0:12}-${backup_timestamp}.db"
+route_database_state="$(sudo -n docker compose exec -T backend sh -c \
+  'if [ -f /data/radar-squeeze-route.db ]; then echo present; else echo absent; fi')"
+if [[ "$route_database_state" == "present" ]]; then
+  "$backup_function" "/data/radar-squeeze-route.db" "/tmp/squeeze-route-backup-deploy.db" \
+    "backups/squeeze-route-before-${commit:0:12}-${backup_timestamp}.db"
+elif [[ "$route_database_state" == "absent" ]]; then
+  echo "No /data/radar-squeeze-route.db; skipping optional route backup."
+else
+  echo "Cannot determine route database presence; refusing to deploy." >&2
+  exit 1
+fi
+
+# Refuse the update if the newly created restore points crossed the limit too.
+python3 deploy/backup_tools.py check-dir --backup-dir "$ROOT_DIR/backups" \
+  --max-gb "${BACKUP_DIR_MAX_GB:-15}"
 
 echo "Fast-forwarding to reviewed commit $commit from origin/$branch"
 git pull --ff-only origin "$branch"
