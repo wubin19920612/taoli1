@@ -715,6 +715,7 @@ export function IndexComponentChangesPage() {
         tableLayout="fixed"
         scroll={{ x: 980 }}
       />
+      {autoWatch?.error ? <Alert type="warning" showIcon message={autoWatch.error} /> : null}
       <Collapse
         activeKey={watchOpen ? ["watch"] : []}
         onChange={(keys) => {
@@ -778,7 +779,6 @@ export function IndexComponentChangesPage() {
                 <Typography.Text type="secondary">成分变化推送飞书，自动联动关注与持仓。</Typography.Text>
               </Tooltip>
             </div>
-            {autoWatch?.error ? <Alert type="warning" showIcon message={autoWatch.error} /> : null}
             <div className="index-component-watch-list">
               {watchItems.length > 0 ? (
                 watchItems.map((item) => (

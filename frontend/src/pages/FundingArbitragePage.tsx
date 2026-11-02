@@ -625,7 +625,7 @@ export function FundingArbitragePage() {
               <Typography.Text type="secondary" className="funding-settings-summary">
                 {settings.enabled ? "预览开启" : "预览关闭"} · 入场 {settings.min_entry_edge_pct}% · 每标的 {settings.notional_per_symbol_usdt} USDT
               </Typography.Text>
-              <Button type="primary" icon={<SaveOutlined />} onClick={() => void save()} loading={saving} disabled={loading}>
+              <Button type="primary" icon={<SaveOutlined />} onClick={() => void save()} loading={saving} disabled={loading || saving}>
                 保存策略参数
               </Button>
             </Space>
@@ -714,6 +714,7 @@ export function FundingArbitragePage() {
           )
         }]}
       />
+      {preaddError ? <Alert type="error" showIcon message={preaddError} /> : null}
       <Collapse
         className="funding-settings-collapse"
         items={[{
@@ -725,7 +726,7 @@ export function FundingArbitragePage() {
               <Typography.Text type="secondary" className="funding-settings-summary">
                 <span>{preaddSettings.enabled ? "自动监测中" : "自动监测关闭"}</span> · 每 {preaddSettings.scan_interval_seconds} 秒扫描 · 每轮最多 {preaddSettings.max_routes_per_run} 条路线
               </Typography.Text>
-              <Button icon={<SaveOutlined />} onClick={() => void savePreadd()} loading={preaddSaving} disabled={preaddLoading}>
+              <Button icon={<SaveOutlined />} onClick={() => void savePreadd()} loading={preaddSaving} disabled={preaddLoading || preaddSaving}>
                 保存预建规则
               </Button>
             </Space>
@@ -750,7 +751,6 @@ export function FundingArbitragePage() {
                 </Button>
               </div>
             </div>
-            {preaddError ? <Alert type="error" showIcon message={preaddError} /> : null}
             {preaddResult ? (
               <Alert
                 showIcon
