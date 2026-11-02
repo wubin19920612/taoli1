@@ -1,5 +1,5 @@
 import { ReloadOutlined, SearchOutlined, SaveOutlined } from "@ant-design/icons";
-import { Alert, Button, Descriptions, Form, InputNumber, Select, Space, Switch, Table, Tag, Typography, message } from "antd";
+import { Alert, Button, Collapse, Descriptions, Form, InputNumber, Select, Space, Switch, Table, Tag, Typography, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
@@ -548,7 +548,13 @@ function announcementDetails(row: ExchangeAnnouncement) {
 
 export function AnnouncementsPage() {
   const [form] = Form.useForm<AnnouncementSettings>();
-  const [settingsPreview, setSettingsPreview] = useState<AnnouncementSettings>(defaultAnnouncementSettings);
+  const [settingsOpen, setSettingsOpen] = useState(() => {
+    try {
+      return window.localStorage.getItem("announcements-settings-open") === "true";
+    } catch {
+      return false;
+    }
+  });
   const [exchangeOptions, setExchangeOptions] = useState<AnnouncementExchangeOption[]>(fallbackExchangeOptions);
   const [rows, setRows] = useState<ExchangeAnnouncement[]>([]);
   const [loading, setLoading] = useState(false);
@@ -586,7 +592,6 @@ export function AnnouncementsPage() {
       ]);
       const normalized = normalizeAnnouncementSettings(nextSettings);
       setExchangeOptions(nextExchanges.length > 0 ? nextExchanges : fallbackExchangeOptions);
-      setSettingsPreview(normalized);
       form.setFieldsValue(normalized);
     } catch (exc) {
       const text = friendlyError(exc);
@@ -601,7 +606,6 @@ export function AnnouncementsPage() {
     const values = normalizeAnnouncementSettings(await form.validateFields());
     const saved = normalizeAnnouncementSettings(await updateAnnouncementSettings(values));
     form.setFieldsValue(saved);
-    setSettingsPreview(saved);
     message.success("公告监控配置已保存");
   };
 
@@ -614,103 +618,84 @@ export function AnnouncementsPage() {
   }, []);
 
   const tableExchangeOptions = [{ label: "全部交易所", value: "" }, ...exchangeOptions];
-  const alertExchangeSet = new Set(settingsPreview.alert_exchanges);
-  const recordExchangeSet = new Set(settingsPreview.record_exchanges);
-  const listingDelistingAlertEnabled = settingsPreview.listing_delisting_alerts_enabled;
-  const launchpoolAlertEnabled = settingsPreview.launchpool_alerts_enabled;
-  const otherAlertEnabled = settingsPreview.other_alerts_enabled;
 
   return (
     <div className="page announcements-page">
+      <Typography.Title level={4}>交易所公告监控</Typography.Title>
       {error ? <Alert type="error" message={error} showIcon /> : null}
-      <section className="panel panel-wide announcements-settings-panel">
-        <div className="announcements-settings-head">
-          <div>
-            <Typography.Title level={4}>交易所公告监控</Typography.Title>
-            <Typography.Text type="secondary">
+      <Collapse
+        activeKey={settingsOpen ? ["settings"] : []}
+        onChange={(keys) => {
+          const open = keys.includes("settings");
+          setSettingsOpen(open);
+          try {
+            window.localStorage.setItem("announcements-settings-open", String(open));
+          } catch {
+            // Keep the panel usable when browser storage is unavailable.
+          }
+        }}
+        items={[{
+          key: "settings",
+          label: "抓取与推送设置",
+          forceRender: true,
+          children: <div className="announcements-settings-panel">
+            <Typography.Paragraph type="secondary">
               记录上币、下币、Launchpool、维护、活动及其他公告，按配置发送飞书通知。Hyperliquid 接入官方公告频道，并保留原生永续市场上下架监测；HIP-3 各 DEX 的独立公告不保证覆盖。Gate 官网受限时通过第三方阅读服务补取公告，来源故障或缓存可能造成延迟。
               优先展示官方中文标题并链接到中文原文（Bybit 为繁体），暂无中文版本时显示原公告。
-            </Typography.Text>
+              在记录交易所范围内，可分别开启上/下币、Launchpool 和其他公告通知。告警交易所会额外接收该所全部类型的新公告及事件到点提醒，不受三个分类开关限制。关闭首次启动告警时，历史公告只记录、不补发。
+            </Typography.Paragraph>
+            <Form
+              form={form}
+              layout="vertical"
+              disabled={settingsLoading}
+              onFinish={saveSettings}
+            >
+              <div className="announcements-settings-grid">
+                <Form.Item label="启用公告轮询" name="enabled" valuePropName="checked">
+                  <Switch />
+                </Form.Item>
+                <Form.Item label="上/下币公告飞书提醒" name="listing_delisting_alerts_enabled" valuePropName="checked">
+                  <Switch />
+                </Form.Item>
+                <Form.Item label="Launchpool 公告飞书提醒" name="launchpool_alerts_enabled" valuePropName="checked">
+                  <Switch />
+                </Form.Item>
+                <Form.Item label="其他公告飞书提醒" name="other_alerts_enabled" valuePropName="checked">
+                  <Switch />
+                </Form.Item>
+                <Form.Item label="首次启动也告警" name="bootstrap_alerts_enabled" valuePropName="checked">
+                  <Switch />
+                </Form.Item>
+                <Form.Item label="事件到点提醒" name="event_reminders_enabled" valuePropName="checked">
+                  <Switch />
+                </Form.Item>
+                <Form.Item label="轮询间隔" name="poll_interval_seconds" rules={[{ required: true }]}>
+                  <InputNumber min={30} max={86400} step={30} suffix="s" className="wide-input" />
+                </Form.Item>
+                <Form.Item label="新公告通知窗口" name="alert_max_age_minutes" rules={[{ required: true }]} extra="按发布时间计算；窗口内首次发现的延迟公告也会提醒，并标明延迟。">
+                  <InputNumber min={1} max={10080} step={5} suffix="min" className="wide-input" />
+                </Form.Item>
+                <Form.Item label="提前提醒" name="event_reminder_minutes_before" rules={[{ required: true }]}>
+                  <InputNumber min={1} max={10080} step={5} suffix="min" className="wide-input" />
+                </Form.Item>
+                <Form.Item label="记录交易所" name="record_exchanges">
+                  <Select mode="multiple" allowClear options={exchangeOptions} />
+                </Form.Item>
+                <Form.Item label="告警交易所" name="alert_exchanges">
+                  <Select mode="multiple" allowClear options={exchangeOptions} />
+                </Form.Item>
+              </div>
+              <Button type="primary" htmlType="submit" icon={<SaveOutlined />}>
+                保存公告监控
+              </Button>
+            </Form>
           </div>
-          <Space wrap>
-            <Tag color={listingDelistingAlertEnabled ? "green" : "default"}>
-              上/下币告警 {listingDelistingAlertEnabled ? "开启" : "关闭"}
-            </Tag>
-            <Tag color={launchpoolAlertEnabled ? "gold" : "default"}>
-              Launchpool 告警 {launchpoolAlertEnabled ? "开启" : "关闭"}
-            </Tag>
-            <Tag color={otherAlertEnabled ? "green" : "default"}>
-              其他公告通知 {otherAlertEnabled ? "开启" : "关闭"}
-            </Tag>
-            {exchangeOptions.map((item) => (
-              <Tag
-                key={item.value}
-                color={alertExchangeSet.has(item.value) ? "green" : recordExchangeSet.has(item.value) ? "blue" : "default"}
-              >
-                {item.label}
-                {alertExchangeSet.has(item.value) ? " 告警" : recordExchangeSet.has(item.value) ? " 记录" : " 关闭"}
-              </Tag>
-            ))}
-          </Space>
-        </div>
-        <Alert
-          className="rule-guide"
-          type={settingsPreview.enabled ? "info" : "warning"}
-          showIcon
-          message={settingsPreview.enabled ? "公告轮询已启用" : "公告轮询已关闭"}
-          description="在记录交易所范围内，可分别开启上/下币、Launchpool 和其他公告通知。告警交易所会额外接收该所全部类型的新公告及事件到点提醒，不受三个分类开关限制。关闭首次启动告警时，历史公告只记录、不补发。"
-        />
-        <Form
-          form={form}
-          layout="vertical"
-          disabled={settingsLoading}
-          onFinish={saveSettings}
-          onValuesChange={(_, values) => setSettingsPreview(normalizeAnnouncementSettings(values))}
-        >
-          <div className="announcements-settings-grid">
-            <Form.Item label="启用公告轮询" name="enabled" valuePropName="checked">
-              <Switch />
-            </Form.Item>
-            <Form.Item label="上/下币公告飞书提醒" name="listing_delisting_alerts_enabled" valuePropName="checked">
-              <Switch />
-            </Form.Item>
-            <Form.Item label="Launchpool 公告飞书提醒" name="launchpool_alerts_enabled" valuePropName="checked">
-              <Switch />
-            </Form.Item>
-            <Form.Item label="其他公告飞书提醒" name="other_alerts_enabled" valuePropName="checked">
-              <Switch />
-            </Form.Item>
-            <Form.Item label="首次启动也告警" name="bootstrap_alerts_enabled" valuePropName="checked">
-              <Switch />
-            </Form.Item>
-            <Form.Item label="事件到点提醒" name="event_reminders_enabled" valuePropName="checked">
-              <Switch />
-            </Form.Item>
-            <Form.Item label="轮询间隔" name="poll_interval_seconds" rules={[{ required: true }]}>
-              <InputNumber min={30} max={86400} step={30} suffix="s" className="wide-input" />
-            </Form.Item>
-            <Form.Item label="新公告通知窗口" name="alert_max_age_minutes" rules={[{ required: true }]} extra="按发布时间计算；窗口内首次发现的延迟公告也会提醒，并标明延迟。">
-              <InputNumber min={1} max={10080} step={5} suffix="min" className="wide-input" />
-            </Form.Item>
-            <Form.Item label="提前提醒" name="event_reminder_minutes_before" rules={[{ required: true }]}>
-              <InputNumber min={1} max={10080} step={5} suffix="min" className="wide-input" />
-            </Form.Item>
-            <Form.Item label="记录交易所" name="record_exchanges">
-              <Select mode="multiple" allowClear options={exchangeOptions} />
-            </Form.Item>
-            <Form.Item label="告警交易所" name="alert_exchanges">
-              <Select mode="multiple" allowClear options={exchangeOptions} />
-            </Form.Item>
-          </div>
-          <Button type="primary" htmlType="submit" icon={<SaveOutlined />}>
-            保存公告监控
-          </Button>
-        </Form>
-      </section>
+        }]}
+      />
 
       <div className="toolbar">
         <Space className="toolbar-controls" wrap>
-          <Typography.Title level={4}>公告记录</Typography.Title>
+          <Typography.Text strong>公告记录</Typography.Text>
           <Select
             value={exchange}
             options={tableExchangeOptions}

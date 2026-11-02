@@ -106,6 +106,7 @@ export function AccountConnectionsPage() {
   const [password, setPassword] = useState(
     () => window.localStorage.getItem("dashboard_password") ?? ""
   );
+  const [passwordEditing, setPasswordEditing] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<AccountConnection | null>(null);
   const [saving, setSaving] = useState(false);
@@ -118,6 +119,7 @@ export function AccountConnectionsPage() {
       setOverview(await listAccountConnections());
       setError("");
     } catch (caught) {
+      setPasswordEditing(true);
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
       setLoading(false);
@@ -379,31 +381,59 @@ export function AccountConnectionsPage() {
       </header>
 
       <section className="account-connections-auth" aria-label="面板访问密码">
-        <Input.Password
-          value={password}
-          prefix={<SafetyCertificateOutlined />}
-          placeholder="仪表盘密码"
-          aria-label="仪表盘密码"
-          onChange={(event) => setPassword(event.target.value)}
-          onPressEnter={() => {
-            saveDashboardPassword(password);
-            void load();
-          }}
-        />
-        <Button
-          icon={<ReloadOutlined />}
-          onClick={() => {
-            saveDashboardPassword(password);
-            void load();
-          }}
-        >
-          保存并刷新
-        </Button>
+        {password && overview && !error && !loading && !passwordEditing ? (
+          <Typography.Text>
+            <SafetyCertificateOutlined /> 已验证 · <Button type="link" size="small" onClick={() => setPasswordEditing(true)}>修改</Button>
+          </Typography.Text>
+        ) : <>
+          <Input.Password
+            value={password}
+            prefix={<SafetyCertificateOutlined />}
+            placeholder="仪表盘密码"
+            aria-label="仪表盘密码"
+            onChange={(event) => {
+              setPasswordEditing(true);
+              setPassword(event.target.value);
+            }}
+            onPressEnter={() => {
+              saveDashboardPassword(password);
+              setPasswordEditing(false);
+              void load();
+            }}
+          />
+          <Button
+            icon={<ReloadOutlined />}
+            onClick={() => {
+              saveDashboardPassword(password);
+              setPasswordEditing(false);
+              void load();
+            }}
+          >
+            保存并刷新
+          </Button>
+        </>}
       </section>
 
       {error ? <Alert type="error" showIcon closable message={error} onClose={() => setError("")} /> : null}
       {overview && !overview.storage_ready ? (
         <Alert type="warning" showIcon message={overview.storage_message} />
+      ) : null}
+
+      {testResult ? (
+        <Alert
+          className="account-connections-test-result"
+          type={testResult.success ? "success" : "warning"}
+          showIcon
+          closable
+          onClose={() => setTestResult(null)}
+          message={`${testResult.account_label}：${testResult.success ? "测试通过" : "测试未全部通过"}`}
+          description={testResult.scopes.map((scope) => (
+            <div key={`${scope.market_type}-${scope.dex ?? ""}`}>
+              {scope.market_type === "spot" ? "现货" : `永续${scope.dex ? ` · ${scope.dex}` : ""}`}：
+              {scope.message}（{scope.position_count} 个持仓）
+            </div>
+          ))}
+        />
       ) : null}
 
       <section className="account-connections-summary" aria-label="账户连接概览">
@@ -425,23 +455,6 @@ export function AccountConnectionsPage() {
           size="middle"
         />
       </section>
-
-      {testResult ? (
-        <Alert
-          className="account-connections-test-result"
-          type={testResult.success ? "success" : "warning"}
-          showIcon
-          closable
-          onClose={() => setTestResult(null)}
-          message={`${testResult.account_label}：${testResult.success ? "测试通过" : "测试未全部通过"}`}
-          description={testResult.scopes.map((scope) => (
-            <div key={`${scope.market_type}-${scope.dex ?? ""}`}>
-              {scope.market_type === "spot" ? "现货" : `永续${scope.dex ? ` · ${scope.dex}` : ""}`}：
-              {scope.message}（{scope.position_count} 个持仓）
-            </div>
-          ))}
-        />
-      ) : null}
 
       <Modal
         title={editing ? `编辑 ${editing.account_label}` : "添加账户连接"}

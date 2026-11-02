@@ -6,6 +6,7 @@ import { AnnouncementsPage } from "../src/pages/AnnouncementsPage";
 
 describe("AnnouncementsPage", () => {
   beforeEach(() => {
+    window.localStorage.removeItem("announcements-settings-open");
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -106,9 +107,10 @@ describe("AnnouncementsPage", () => {
     render(<AnnouncementsPage />);
 
     expect(await screen.findByText("交易所公告监控")).toBeTruthy();
-    expect(await screen.findByText("上/下币告警 开启")).toBeTruthy();
-    expect(await screen.findByText("Launchpool 告警 开启")).toBeTruthy();
-    expect(await screen.findByText("其他公告通知 关闭")).toBeTruthy();
+    await userEvent.click(screen.getByText("抓取与推送设置"));
+    expect((await screen.findByRole("switch", { name: "上/下币公告飞书提醒" })).getAttribute("aria-checked")).toBe("true");
+    expect((await screen.findByRole("switch", { name: "Launchpool 公告飞书提醒" })).getAttribute("aria-checked")).toBe("true");
+    expect((await screen.findByRole("switch", { name: "其他公告飞书提醒" })).getAttribute("aria-checked")).toBe("false");
     expect(await screen.findByText("新币上架：WDCUSDT Bybit 永续合约")).toBeTruthy();
     expect(await screen.findByText("官方中文")).toBeTruthy();
     expect(await screen.findByText("WDCUSDT")).toBeTruthy();
@@ -143,8 +145,9 @@ describe("AnnouncementsPage", () => {
   it("enables other announcements independently and persists the switch", async () => {
     render(<AnnouncementsPage />);
     await screen.findByText("新币上架：WDCUSDT Bybit 永续合约");
+    await userEvent.click(screen.getByText("抓取与推送设置"));
     await userEvent.click(screen.getByRole("switch", { name: "其他公告飞书提醒" }));
-    expect(screen.getByText("其他公告通知 开启")).toBeTruthy();
+    expect(screen.getByRole("switch", { name: "其他公告飞书提醒" }).getAttribute("aria-checked")).toBe("true");
     await userEvent.click(screen.getByRole("button", { name: /保存公告监控/ }));
     await waitFor(() => {
       const putCall = vi.mocked(fetch).mock.calls.find((call) => String(call[0]).includes("/settings/announcements") && call[1]?.method === "PUT");
@@ -162,6 +165,7 @@ describe("AnnouncementsPage", () => {
     render(<AnnouncementsPage />);
 
     await screen.findByText("新币上架：WDCUSDT Bybit 永续合约");
+    await userEvent.click(screen.getByText("抓取与推送设置"));
     await userEvent.click(screen.getByRole("button", { name: /保存公告监控/ }));
 
     await waitFor(() => {

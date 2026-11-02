@@ -1,5 +1,5 @@
 import { DeleteOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
-import { Alert, Button, Input, Select, Space, Switch, Table, Tag, Tooltip, Typography, message } from "antd";
+import { Alert, Button, Collapse, Input, Select, Space, Switch, Table, Tag, Tooltip, Typography, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
@@ -501,6 +501,13 @@ const columns: ColumnsType<IndexComponentChange> = [
 ];
 
 export function IndexComponentChangesPage() {
+  const [watchOpen, setWatchOpen] = useState(() => {
+    try {
+      return window.localStorage.getItem("index-components-watch-open") === "true";
+    } catch {
+      return false;
+    }
+  });
   const [changes, setChanges] = useState<IndexComponentChange[]>([]);
   const [snapshots, setSnapshots] = useState<IndexComponentSnapshot[]>([]);
   const [referenceSnapshots, setReferenceSnapshots] = useState<IndexComponentSnapshot[]>([]);
@@ -689,99 +696,8 @@ export function IndexComponentChangesPage() {
           <Button icon={<SearchOutlined />} onClick={() => void load()} loading={loading}>
             查询
           </Button>
-          <Button icon={<ReloadOutlined />} onClick={() => void load()} loading={loading} />
         </Space>
       </div>
-      <section className="panel panel-wide index-component-watch-panel">
-        <div className="index-component-watch-head">
-          <div>
-            <Typography.Title level={5}>监控标的</Typography.Title>
-          </div>
-          <Space.Compact className="index-component-watch-add">
-            <Input
-              placeholder="新增监控标的"
-              value={watchSymbol}
-              onChange={(event) => setWatchSymbol(event.target.value)}
-              onPressEnter={() => void addWatchItem()}
-              allowClear
-            />
-            <Button icon={<PlusOutlined />} onClick={() => void addWatchItem()} loading={watchLoading}>
-              加入监控
-            </Button>
-          </Space.Compact>
-        </div>
-        <div className="index-component-auto-controls">
-          <Typography.Text strong>成分变化通知</Typography.Text>
-          <Switch
-            checked={notifications?.enabled ?? false}
-            loading={notificationLoading && notifications === null}
-            disabled={notificationLoading || notifications === null}
-            onChange={(enabled) => void toggleNotifications(enabled)}
-            aria-label="成分变化通知"
-          />
-          <Typography.Text type="secondary">飞书</Typography.Text>
-        </div>
-        <div className="index-component-auto-controls">
-          <Typography.Text strong>自动联动</Typography.Text>
-          <Switch
-            checked={autoWatch?.enabled ?? false}
-            loading={watchLoading && autoWatch === null}
-            disabled={watchLoading || autoWatch === null}
-            onChange={(enabled) => void toggleAutoWatch(enabled)}
-            aria-label="自动联动浮窗关注和 Astro 卡片持仓"
-          />
-          {autoWatch?.enabled ? (
-            <Tooltip title="立即同步自动监控标的">
-              <Button
-                type="text"
-                size="small"
-                icon={<ReloadOutlined spin={watchLoading} />}
-                aria-label="同步自动监控标的"
-                disabled={watchLoading}
-                onClick={() => void syncAutoWatch()}
-              />
-            </Tooltip>
-          ) : null}
-          <Typography.Text type="secondary">浮窗 · 运行卡片 · 持仓</Typography.Text>
-        </div>
-        {autoWatch?.error ? <Alert type="warning" showIcon message={autoWatch.error} /> : null}
-        <div className="index-component-watch-list">
-          {watchItems.length > 0 ? (
-            watchItems.map((item) => (
-              <Tag
-                className="index-component-watch-tag"
-                key={item.id}
-                closable={false}
-              >
-                <Space size={6}>
-                  <Typography.Text strong>{item.symbol}</Typography.Text>
-                  {item.note ? <Typography.Text type="secondary">{item.note}</Typography.Text> : null}
-                  <Button
-                    size="small"
-                    type="text"
-                    danger
-                    icon={<DeleteOutlined />}
-                    onClick={() => void removeWatchItem(item)}
-                    loading={watchLoading}
-                  >
-                    删除
-                  </Button>
-                </Space>
-              </Tag>
-            ))
-          ) : (
-            autoWatch?.items?.length ? null : <Typography.Text type="secondary">暂无监控标的</Typography.Text>
-          )}
-          {autoWatch?.items?.map((item) => (
-            <Tag className="index-component-watch-tag" key={`${item.source}:${item.symbol}`} color="blue">
-              <Space size={6}>
-                <Typography.Text strong>{item.symbol}</Typography.Text>
-                <Typography.Text type="secondary">{AUTO_WATCH_SOURCES[item.source] ?? item.source}</Typography.Text>
-              </Space>
-            </Tag>
-          ))}
-        </div>
-      </section>
       <IndexComponentMarketChart
         snapshots={snapshots}
         referenceSnapshots={referenceSnapshots}
@@ -798,6 +714,109 @@ export function IndexComponentChangesPage() {
         size="middle"
         tableLayout="fixed"
         scroll={{ x: 980 }}
+      />
+      {autoWatch?.error ? <Alert type="warning" showIcon message={autoWatch.error} /> : null}
+      <Collapse
+        activeKey={watchOpen ? ["watch"] : []}
+        onChange={(keys) => {
+          const open = keys.includes("watch");
+          setWatchOpen(open);
+          try {
+            window.localStorage.setItem("index-components-watch-open", String(open));
+          } catch {
+            // Keep the panel usable when browser storage is unavailable.
+          }
+        }}
+        items={[{
+          key: "watch",
+          label: `监控标的（${watchItems.length + (autoWatch?.items?.length ?? 0)}）`,
+          forceRender: true,
+          children: <div className="index-component-watch-panel">
+            <div className="index-component-watch-head">
+              <Space.Compact className="index-component-watch-add">
+                <Input
+                  placeholder="新增监控标的"
+                  value={watchSymbol}
+                  onChange={(event) => setWatchSymbol(event.target.value)}
+                  onPressEnter={() => void addWatchItem()}
+                  allowClear
+                />
+                <Button icon={<PlusOutlined />} onClick={() => void addWatchItem()} loading={watchLoading}>
+                  加入监控
+                </Button>
+              </Space.Compact>
+            </div>
+            <div className="index-component-auto-controls">
+              <Typography.Text strong>成分变化通知</Typography.Text>
+              <Switch
+                checked={notifications?.enabled ?? false}
+                loading={notificationLoading && notifications === null}
+                disabled={notificationLoading || notifications === null}
+                onChange={(enabled) => void toggleNotifications(enabled)}
+                aria-label="成分变化通知"
+              />
+              <Typography.Text strong>自动联动</Typography.Text>
+              <Switch
+                checked={autoWatch?.enabled ?? false}
+                loading={watchLoading && autoWatch === null}
+                disabled={watchLoading || autoWatch === null}
+                onChange={(enabled) => void toggleAutoWatch(enabled)}
+                aria-label="自动联动浮窗关注和 Astro 卡片持仓"
+              />
+              {autoWatch?.enabled ? (
+                <Tooltip title="立即同步自动监控标的">
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<ReloadOutlined spin={watchLoading} />}
+                    aria-label="同步自动监控标的"
+                    disabled={watchLoading}
+                    onClick={() => void syncAutoWatch()}
+                  />
+                </Tooltip>
+              ) : null}
+              <Tooltip title="监控标的的指数成分变化时发送飞书通知，关闭通知后仍保留变更记录；自动联动浮窗关注、Astro 运行卡片和持仓中的标的，加入指数成分监控，可立即同步自动监控标的。">
+                <Typography.Text type="secondary">成分变化推送飞书，自动联动关注与持仓。</Typography.Text>
+              </Tooltip>
+            </div>
+            <div className="index-component-watch-list">
+              {watchItems.length > 0 ? (
+                watchItems.map((item) => (
+                  <Tag
+                    className="index-component-watch-tag"
+                    key={item.id}
+                    closable={false}
+                  >
+                    <Space size={6}>
+                      <Typography.Text strong>{item.symbol}</Typography.Text>
+                      {item.note ? <Typography.Text type="secondary">{item.note}</Typography.Text> : null}
+                      <Button
+                        size="small"
+                        type="text"
+                        danger
+                        icon={<DeleteOutlined />}
+                        onClick={() => void removeWatchItem(item)}
+                        loading={watchLoading}
+                      >
+                        删除
+                      </Button>
+                    </Space>
+                  </Tag>
+                ))
+              ) : (
+                autoWatch?.items?.length ? null : <Typography.Text type="secondary">暂无监控标的</Typography.Text>
+              )}
+              {autoWatch?.items?.map((item) => (
+                <Tag className="index-component-watch-tag" key={`${item.source}:${item.symbol}`} color="blue">
+                  <Space size={6}>
+                    <Typography.Text strong>{item.symbol}</Typography.Text>
+                    <Typography.Text type="secondary">{AUTO_WATCH_SOURCES[item.source] ?? item.source}</Typography.Text>
+                  </Space>
+                </Tag>
+              ))}
+            </div>
+          </div>
+        }]}
       />
     </div>
   );

@@ -2,6 +2,7 @@ import { AreaChartOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from "@
 import {
   Alert,
   Button,
+  Collapse,
   Form,
   InputNumber,
   Modal,
@@ -603,7 +604,7 @@ export function FundingArbitragePage() {
         <div className="toolbar-controls">
           <Typography.Title level={4}>{"\u8d44\u91d1\u8d39\u7387\u5957\u5229"}</Typography.Title>
           <Typography.Text type="secondary">
-            {"\u6eda\u52a8\u4e00\u5468\u671f carry \u9884\u89c8"}
+            {"滚动一周期收益预览"}
           </Typography.Text>
         </div>
         <div className="toolbar-actions">
@@ -613,250 +614,280 @@ export function FundingArbitragePage() {
         </div>
       </section>
 
+      <Collapse
+        className="funding-settings-collapse"
+        items={[{
+          key: "strategy",
+          label: "策略参数",
+          forceRender: true,
+          extra: (
+            <Space wrap onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
+              <Typography.Text type="secondary" className="funding-settings-summary">
+                {settings.enabled ? "预览开启" : "预览关闭"} · 入场 {settings.min_entry_edge_pct}% · 每标的 {settings.notional_per_symbol_usdt} USDT
+              </Typography.Text>
+              <Button type="primary" icon={<SaveOutlined />} onClick={() => void save()} loading={saving} disabled={loading || saving}>
+                保存策略参数
+              </Button>
+            </Space>
+          ),
+          children: (
+            <Form
+              form={form}
+              layout="vertical"
+              disabled={loading || saving}
+              onValuesChange={() => {
+                const values = form.getFieldsValue(true) as Partial<FundingSettingsForm>;
+                setSettings(settingsFromForm({ ...settingsToForm(settings), ...values }));
+              }}
+            >
+              <div className="funding-settings-grid">
+                <Form.Item label={"\u542f\u7528\u9884\u89c8"} name="enabled" valuePropName="checked">
+                  <Switch />
+                </Form.Item>
+                <Form.Item label="Hyperliquid 优先" name="prefer_hyperliquid" valuePropName="checked">
+                  <Switch />
+                </Form.Item>
+                <Form.Item label={"\u6700\u591a\u5019\u9009"} name="max_candidates" rules={[{ required: true }]}>
+                  <InputNumber min={1} max={500} className="wide-input" />
+                </Form.Item>
+                <Form.Item
+                  label={"\u6bcf\u6807\u7684\u8d44\u91d1 USDT"}
+                  name="notional_per_symbol_usdt"
+                  rules={[{ required: true }]}
+                >
+                  <InputNumber min={1} step={10} className="wide-input" />
+                </Form.Item>
+                <Form.Item label={"\u8fdb\u5165\u7efc\u5408\u9608\u503c"} name="min_entry_edge_pct" rules={[{ required: true }]}>
+                  <InputNumber step={0.01} suffix="%" className="wide-input" />
+                </Form.Item>
+                <Form.Item label={"\u6301\u6709\u7efc\u5408\u9608\u503c"} name="min_hold_edge_pct" rules={[{ required: true }]}>
+                  <InputNumber step={0.01} suffix="%" className="wide-input" />
+                </Form.Item>
+                <Form.Item label={"\u9000\u51fa\u7efc\u5408\u9608\u503c"} name="min_exit_edge_pct" rules={[{ required: true }]}>
+                  <InputNumber step={0.01} suffix="%" className="wide-input" />
+                </Form.Item>
+                <Form.Item label={"\u539f\u59cb\u8d44\u8d39\u4e0b\u9650"} name="min_funding_edge_pct" rules={[{ required: true }]}>
+                  <InputNumber step={0.01} suffix="%" className="wide-input" />
+                </Form.Item>
+                <Form.Item label={"24h \u6210\u4ea4\u989d K"} name="min_volume_24h_k" rules={[{ required: true }]}>
+                  <InputNumber min={0} step={100} suffix="K" className="wide-input" />
+                </Form.Item>
+                <Form.Item label={"\u6700\u5927\u57fa\u5dee\u5bbd\u5ea6"} name="max_basis_width_pct" rules={[{ required: true }]}>
+                  <InputNumber min={0} step={0.1} suffix="%" className="wide-input" />
+                </Form.Item>
+                <Form.Item
+                  label={"\u6700\u5927\u6807\u8bb0\u504f\u79bb"}
+                  name="max_mark_index_deviation_pct"
+                  rules={[{ required: true }]}
+                >
+                  <InputNumber min={0} step={0.1} suffix="%" className="wide-input" />
+                </Form.Item>
+                <Form.Item label={"ADL \u963b\u65ad\u5206"} name="adl_block_score" rules={[{ required: true }]}>
+                  <InputNumber min={0} step={5} className="wide-input" />
+                </Form.Item>
+                <Form.Item label={"\u6700\u5c0f\u7ed3\u7b97\u5206\u949f"} name="min_minutes_to_settlement" rules={[{ required: true }]}>
+                  <InputNumber min={0} step={1} className="wide-input" />
+                </Form.Item>
+                <Form.Item label={"\u6700\u5927\u7ed3\u7b97\u5206\u949f"} name="max_minutes_to_settlement" rules={[{ required: true }]}>
+                  <InputNumber min={1} step={5} className="wide-input" />
+                </Form.Item>
+                <Form.Item label={"\u6ed1\u70b9\u7f13\u51b2"} name="slippage_buffer_pct" rules={[{ required: true }]}>
+                  <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
+                </Form.Item>
+                <Form.Item label={"\u57fa\u5dee\u6743\u91cd"} name="basis_risk_weight" rules={[{ required: true }]}>
+                  <InputNumber min={0} step={0.1} className="wide-input" />
+                </Form.Item>
+                <Form.Item label={"\u7f6e\u4fe1\u60e9\u7f5a"} name="confidence_penalty_pct" rules={[{ required: true }]}>
+                  <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
+                </Form.Item>
+                <Form.Item label={"\u6760\u6746"} name="leverage" rules={[{ required: true }]}>
+                  <InputNumber min={1} step={1} className="wide-input" />
+                </Form.Item>
+                <Form.Item label={"逆风价差检查"} name="conflicted_basis_min_check_pct" rules={[{ required: true }]}>
+                  <InputNumber min={0} step={0.05} suffix="%" className="wide-input" />
+                </Form.Item>
+                <Form.Item label={"最低盈亏比"} name="min_conflicted_reward_risk_ratio" rules={[{ required: true }]}>
+                  <InputNumber min={0} step={0.1} className="wide-input" />
+                </Form.Item>
+              </div>
+            </Form>
+          )
+        }]}
+      />
+      {preaddError ? <Alert type="error" showIcon message={preaddError} /> : null}
+      <Collapse
+        className="funding-settings-collapse"
+        items={[{
+          key: "preadd",
+          label: "Astro 预建",
+          forceRender: true,
+          extra: (
+            <Space wrap onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
+              <Typography.Text type="secondary" className="funding-settings-summary">
+                <span>{preaddSettings.enabled ? "自动监测中" : "自动监测关闭"}</span> · 每 {preaddSettings.scan_interval_seconds} 秒扫描 · 每轮最多 {preaddSettings.max_routes_per_run} 条路线
+              </Typography.Text>
+              <Button icon={<SaveOutlined />} onClick={() => void savePreadd()} loading={preaddSaving} disabled={preaddLoading || preaddSaving}>
+                保存预建规则
+              </Button>
+            </Space>
+          ),
+          children: <div className="funding-preadd-panel">
+            <div className="toolbar">
+              <div className="toolbar-controls">
+                <Typography.Title level={5}>Astro 交易对预建</Typography.Title>
+              </div>
+              <div className="toolbar-actions">
+                <Button icon={<ReloadOutlined />} onClick={() => void loadPreadd()} loading={preaddLoading}>
+                  刷新候选
+                </Button>
+                <Button
+                  type="primary"
+                  icon={<PlusOutlined />}
+                  disabled={!preaddPreview?.items.length || preaddRunning}
+                  loading={preaddRunning}
+                  onClick={() => confirmPreadd()}
+                >
+                  立即预建
+                </Button>
+              </div>
+            </div>
+            {preaddResult ? (
+              <Alert
+                showIcon
+                type={preaddResult.failed ? "error" : preaddResult.created ? "success" : "warning"}
+                message={`预建 ${preaddResult.created} 路线，跳过 ${preaddResult.skipped}，失败 ${preaddResult.failed}`}
+                description={[...preaddResult.warnings, ...preaddResult.results].join("；")}
+              />
+            ) : null}
+            <Alert
+              className="rule-guide"
+              type={preaddPreview?.warnings.length ? "warning" : "info"}
+              showIcon
+              message="候选判定说明"
+              description={
+                <ul className="funding-preadd-notes">
+                  {preaddPreview?.warnings.map((warning, index) => <li key={index}>{warning}</li>)}
+                  <li>资金费和溢价是“或”关系，任意一边达到任一阈值即可进入候选；资金费按单次结算原值比较，不按周期换算。</li>
+                  <li>Bybit 自身达到资金费阈值时只按收资金费方向，忽略相反的溢价收敛信号，并使用负价差阈值反向开仓；其他情况的信号方向冲突时不会预建。</li>
+                  <li>修改参数后需要先保存才会生效。</li>
+                </ul>
+              }
+            />
+            <Form form={preaddForm} layout="vertical" disabled={preaddLoading || preaddSaving}>
+              <div className="funding-settings-grid">
+                <Form.Item label="自动预建" name="enabled" valuePropName="checked">
+                  <Switch />
+                </Form.Item>
+                <Form.Item
+                  label="预建交易所"
+                  name="exchanges"
+                  rules={[{ required: true, type: "array", min: 2, message: "至少选择两个交易所" }]}
+                >
+                  <Select
+                    mode="multiple"
+                    options={preaddExchanges.map((exchange) => ({
+                      label: preaddExchangeLabels[exchange] ?? exchange, value: exchange
+                    }))}
+                  />
+                </Form.Item>
+                <Form.Item
+                  label="资金费绝对值（单次结算）"
+                  name="funding_threshold_pct"
+                  rules={[{ required: true }]}
+                  extra="任一边的下期预测资金费达到此值即触发；没有预测值时使用当前资金费。正负都按绝对值判断。"
+                >
+                  <InputNumber min={0.001} max={100} step={0.05} suffix="%" className="wide-input" />
+                </Form.Item>
+                <Form.Item
+                  label="溢价近似绝对值（标记/指数）"
+                  name="premium_threshold_pct"
+                  rules={[{ required: true }]}
+                  extra="任一边的 |标记价格 ÷ 指数价格 - 1| 达到此值即触发。正溢价倾向做空该侧，负溢价倾向做多该侧。"
+                >
+                  <InputNumber min={0.001} max={100} step={0.1} suffix="%" className="wide-input" />
+                </Form.Item>
+                <Form.Item
+                  label="预建开仓价差阈值绝对值"
+                  name="open_spread_threshold_pct"
+                  rules={[{ required: true }]}
+                  extra="普通候选写入正阈值；Bybit 资金费候选写入同绝对值的负阈值，按资金费方向反向开仓。预建卡片仍为暂停、禁开状态。"
+                >
+                  <InputNumber min={0.001} max={100} step={0.1} suffix="%" className="wide-input" />
+                </Form.Item>
+                <Form.Item
+                  label="单边24h最低成交量"
+                  name="min_volume_24h_usdt"
+                  rules={[{ required: true }]}
+                  extra="做多侧和做空侧都必须达到此 USDT 成交量；设为 0 表示不限制。缺少成交量的数据在阈值大于 0 时会被排除。"
+                >
+                  <InputNumber min={0} max={1_000_000_000_000} step={100_000} suffix="USDT" className="wide-input" />
+                </Form.Item>
+                <Form.Item label="自动扫描间隔" name="scan_interval_seconds" rules={[{ required: true }]}>
+                  <InputNumber min={30} max={3600} step={30} suffix="秒" className="wide-input" />
+                </Form.Item>
+                <Form.Item label="每轮最多路线" name="max_routes_per_run" rules={[{ required: true }]}>
+                  <InputNumber min={1} max={20} className="wide-input" />
+                </Form.Item>
+                <Form.Item label="行情最大延迟" name="stale_after_seconds" rules={[{ required: true }]}>
+                  <InputNumber min={5} max={300} suffix="秒" className="wide-input" />
+                </Form.Item>
+              </div>
+            </Form>
+            <Table<AstroPreaddCandidate>
+              className="opportunity-table funding-table"
+              size="small"
+              rowKey="id"
+              dataSource={preaddPreview?.items ?? []}
+              loading={preaddLoading}
+              pagination={{ pageSize: 10 }}
+              scroll={{ x: 1240 }}
+              columns={[
+                { title: "标的", dataIndex: "symbol", width: 140 },
+                { title: "信号", width: 220, render: (_, row) => row.signal_type === "funding"
+                  ? `${row.signal_exchange} ${row.funding_source === "predicted" ? "下期" : "当前"} ${signedPct(row.signal_value_pct)} / ${row.funding_interval_hours ?? "?"}h`
+                  : `${row.signal_exchange} 溢价近似 ${signedPct(row.signal_value_pct)}` },
+                { title: "开仓方式", width: 170, render: (_, row) => (
+                  <Space direction="vertical" size={0}>
+                    <Tag color={row.entry_mode === "bybit_funding_reverse" ? "gold" : "blue"}>
+                      {row.entry_mode === "bybit_funding_reverse" ? "反向开仓" : "价差收敛"}
+                    </Tag>
+                    <Typography.Text type="secondary">
+                      {row.entry_mode === "bybit_funding_reverse" ? "仅做 Bybit 资金费" : "等待价差收敛"}
+                    </Typography.Text>
+                    <Typography.Text>{`卡片 ${signedPct(row.card_open_spread_pct)}`}</Typography.Text>
+                  </Space>
+                ) },
+                { title: "做多侧行情", width: 220, render: (_, row) => preaddLegCell(row.buy_leg, "buy") },
+                { title: "做空侧行情", width: 220, render: (_, row) => preaddLegCell(row.sell_leg, "sell") },
+                { title: "当前可成交价差", width: 150, render: (_, row) => signedPct(row.live_spread_pct) },
+                { title: "行情时间", width: 150, render: (_, row) => settlementTime(row.observed_at) },
+                { title: "操作", width: 80, render: (_, row) => (
+                  <Button
+                    type="link"
+                    icon={<PlusOutlined />}
+                    title="预建这条暂停卡片"
+                    aria-label={`预建 ${row.symbol} ${row.buy_exchange} 到 ${row.sell_exchange}`}
+                    disabled={preaddRunning}
+                    onClick={() => confirmPreadd(row)}
+                  />
+                ) }
+              ]}
+            />
+          </div>
+        }]}
+      />
+
       <section className="metric-row funding-metrics">
         <Statistic
           title={"\u5019\u9009"}
           value={preview?.displayed_candidates ?? 0}
           suffix={`/ ${preview?.total_pairs_evaluated ?? 0}`}
         />
-        <Statistic title="ENTER" value={preview?.enter_count ?? 0} />
-        <Statistic title="HOLD" value={preview?.hold_count ?? 0} />
+        <Statistic title="可入场" value={preview?.enter_count ?? 0} />
+        <Statistic title="持有" value={preview?.hold_count ?? 0} />
         <Statistic title={"\u9000\u51fa"} value={preview?.exit_count ?? 0} />
         <Statistic title={"\u963b\u65ad"} value={preview?.blocked_count ?? 0} />
-        <Statistic title={"ADL \u963b\u65ad"} value={preview?.blocked_adl_risk ?? 0} />
-      </section>
-
-      <section className="panel panel-wide">
-        <Form
-          form={form}
-          layout="vertical"
-          disabled={loading || saving}
-          onValuesChange={() => {
-            const values = form.getFieldsValue(true) as Partial<FundingSettingsForm>;
-            setSettings(settingsFromForm({ ...settingsToForm(settings), ...values }));
-          }}
-        >
-          <div className="funding-settings-grid">
-            <Form.Item label={"\u542f\u7528\u9884\u89c8"} name="enabled" valuePropName="checked">
-              <Switch />
-            </Form.Item>
-            <Form.Item label={"Hyper \u4f18\u5148"} name="prefer_hyperliquid" valuePropName="checked">
-              <Switch />
-            </Form.Item>
-            <Form.Item label={"\u6700\u591a\u5019\u9009"} name="max_candidates" rules={[{ required: true }]}>
-              <InputNumber min={1} max={500} className="wide-input" />
-            </Form.Item>
-            <Form.Item
-              label={"\u6bcf\u6807\u7684\u8d44\u91d1 USDT"}
-              name="notional_per_symbol_usdt"
-              rules={[{ required: true }]}
-            >
-              <InputNumber min={1} step={10} className="wide-input" />
-            </Form.Item>
-            <Form.Item label={"\u8fdb\u5165\u7efc\u5408\u9608\u503c"} name="min_entry_edge_pct" rules={[{ required: true }]}>
-              <InputNumber step={0.01} suffix="%" className="wide-input" />
-            </Form.Item>
-            <Form.Item label={"\u6301\u6709\u7efc\u5408\u9608\u503c"} name="min_hold_edge_pct" rules={[{ required: true }]}>
-              <InputNumber step={0.01} suffix="%" className="wide-input" />
-            </Form.Item>
-            <Form.Item label={"\u9000\u51fa\u7efc\u5408\u9608\u503c"} name="min_exit_edge_pct" rules={[{ required: true }]}>
-              <InputNumber step={0.01} suffix="%" className="wide-input" />
-            </Form.Item>
-            <Form.Item label={"\u539f\u59cb\u8d44\u8d39\u4e0b\u9650"} name="min_funding_edge_pct" rules={[{ required: true }]}>
-              <InputNumber step={0.01} suffix="%" className="wide-input" />
-            </Form.Item>
-            <Form.Item label={"24h \u6210\u4ea4\u989d K"} name="min_volume_24h_k" rules={[{ required: true }]}>
-              <InputNumber min={0} step={100} suffix="K" className="wide-input" />
-            </Form.Item>
-            <Form.Item label={"\u6700\u5927\u57fa\u5dee\u5bbd\u5ea6"} name="max_basis_width_pct" rules={[{ required: true }]}>
-              <InputNumber min={0} step={0.1} suffix="%" className="wide-input" />
-            </Form.Item>
-            <Form.Item
-              label={"\u6700\u5927\u6807\u8bb0\u504f\u79bb"}
-              name="max_mark_index_deviation_pct"
-              rules={[{ required: true }]}
-            >
-              <InputNumber min={0} step={0.1} suffix="%" className="wide-input" />
-            </Form.Item>
-            <Form.Item label={"ADL \u963b\u65ad\u5206"} name="adl_block_score" rules={[{ required: true }]}>
-              <InputNumber min={0} step={5} className="wide-input" />
-            </Form.Item>
-            <Form.Item label={"\u6700\u5c0f\u7ed3\u7b97\u5206\u949f"} name="min_minutes_to_settlement" rules={[{ required: true }]}>
-              <InputNumber min={0} step={1} className="wide-input" />
-            </Form.Item>
-            <Form.Item label={"\u6700\u5927\u7ed3\u7b97\u5206\u949f"} name="max_minutes_to_settlement" rules={[{ required: true }]}>
-              <InputNumber min={1} step={5} className="wide-input" />
-            </Form.Item>
-            <Form.Item label={"\u6ed1\u70b9\u7f13\u51b2"} name="slippage_buffer_pct" rules={[{ required: true }]}>
-              <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
-            </Form.Item>
-            <Form.Item label={"\u57fa\u5dee\u6743\u91cd"} name="basis_risk_weight" rules={[{ required: true }]}>
-              <InputNumber min={0} step={0.1} className="wide-input" />
-            </Form.Item>
-            <Form.Item label={"\u7f6e\u4fe1\u60e9\u7f5a"} name="confidence_penalty_pct" rules={[{ required: true }]}>
-              <InputNumber min={0} step={0.01} suffix="%" className="wide-input" />
-            </Form.Item>
-            <Form.Item label={"\u6760\u6746"} name="leverage" rules={[{ required: true }]}>
-              <InputNumber min={1} step={1} className="wide-input" />
-            </Form.Item>
-            <Form.Item label={"逆风价差检查"} name="conflicted_basis_min_check_pct" rules={[{ required: true }]}>
-              <InputNumber min={0} step={0.05} suffix="%" className="wide-input" />
-            </Form.Item>
-            <Form.Item label={"最低盈亏比"} name="min_conflicted_reward_risk_ratio" rules={[{ required: true }]}>
-              <InputNumber min={0} step={0.1} className="wide-input" />
-            </Form.Item>
-          </div>
-          <Button type="primary" icon={<SaveOutlined />} onClick={() => void save()} loading={saving}>
-            {"\u4fdd\u5b58\u7b56\u7565\u53c2\u6570"}
-          </Button>
-        </Form>
-      </section>
-
-      <section className="panel panel-wide">
-        <div className="toolbar">
-          <div className="toolbar-controls">
-            <Typography.Title level={5}>Astro 交易对预建</Typography.Title>
-            <Tag color={preaddSettings.enabled ? "green" : "default"}>
-              {preaddSettings.enabled ? "自动监测中" : "自动监测关闭"}
-            </Tag>
-          </div>
-          <div className="toolbar-actions">
-            <Button icon={<ReloadOutlined />} onClick={() => void loadPreadd()} loading={preaddLoading}>
-              刷新候选
-            </Button>
-            <Button
-              type="primary"
-              icon={<PlusOutlined />}
-              disabled={!preaddPreview?.items.length || preaddRunning}
-              loading={preaddRunning}
-              onClick={() => confirmPreadd()}
-            >
-              立即预建
-            </Button>
-          </div>
-        </div>
-        {preaddError ? <Alert type="error" showIcon message={preaddError} /> : null}
-        {preaddResult ? (
-          <Alert
-            showIcon
-            type={preaddResult.failed ? "error" : preaddResult.created ? "success" : "warning"}
-            message={`预建 ${preaddResult.created} 路线，跳过 ${preaddResult.skipped}，失败 ${preaddResult.failed}`}
-            description={[...preaddResult.warnings, ...preaddResult.results].join("；")}
-          />
-        ) : null}
-        {preaddPreview?.warnings.length ? (
-          <Alert type="warning" showIcon message={preaddPreview.warnings.join("；")} />
-        ) : null}
-        <Form form={preaddForm} layout="vertical" disabled={preaddLoading || preaddSaving}>
-          <Alert
-            className="rule-guide"
-            type="info"
-            showIcon
-            message="候选判定说明"
-            description="资金费和溢价是“或”关系，任意一边达到任一阈值即可进入候选；资金费按单次结算原值比较，不按周期换算。Bybit 自身达到资金费阈值时只按收资金费方向，忽略相反的溢价收敛信号，并使用负价差阈值反向开仓；其他情况的信号方向冲突时不会预建。修改参数后需要先保存才会生效。"
-          />
-          <div className="funding-settings-grid">
-            <Form.Item label="自动预建" name="enabled" valuePropName="checked">
-              <Switch />
-            </Form.Item>
-            <Form.Item
-              label="预建交易所"
-              name="exchanges"
-              rules={[{ required: true, type: "array", min: 2, message: "至少选择两个交易所" }]}
-            >
-              <Select
-                mode="multiple"
-                options={preaddExchanges.map((exchange) => ({
-                  label: preaddExchangeLabels[exchange] ?? exchange, value: exchange
-                }))}
-              />
-            </Form.Item>
-            <Form.Item
-              label="资金费绝对值（单次结算）"
-              name="funding_threshold_pct"
-              rules={[{ required: true }]}
-              extra="任一边的下期预测资金费达到此值即触发；没有预测值时使用当前资金费。正负都按绝对值判断。"
-            >
-              <InputNumber min={0.001} max={100} step={0.05} suffix="%" className="wide-input" />
-            </Form.Item>
-            <Form.Item
-              label="溢价近似绝对值（标记/指数）"
-              name="premium_threshold_pct"
-              rules={[{ required: true }]}
-              extra="任一边的 |标记价格 ÷ 指数价格 - 1| 达到此值即触发。正溢价倾向做空该侧，负溢价倾向做多该侧。"
-            >
-              <InputNumber min={0.001} max={100} step={0.1} suffix="%" className="wide-input" />
-            </Form.Item>
-            <Form.Item
-              label="预建开仓价差阈值绝对值"
-              name="open_spread_threshold_pct"
-              rules={[{ required: true }]}
-              extra="普通候选写入正阈值；Bybit 资金费候选写入同绝对值的负阈值，按资金费方向反向开仓。预建卡片仍为暂停、禁开状态。"
-            >
-              <InputNumber min={0.001} max={100} step={0.1} suffix="%" className="wide-input" />
-            </Form.Item>
-            <Form.Item
-              label="单边24h最低成交量"
-              name="min_volume_24h_usdt"
-              rules={[{ required: true }]}
-              extra="做多侧和做空侧都必须达到此 USDT 成交量；设为 0 表示不限制。缺少成交量的数据在阈值大于 0 时会被排除。"
-            >
-              <InputNumber min={0} max={1_000_000_000_000} step={100_000} suffix="USDT" className="wide-input" />
-            </Form.Item>
-            <Form.Item label="自动扫描间隔" name="scan_interval_seconds" rules={[{ required: true }]}>
-              <InputNumber min={30} max={3600} step={30} suffix="秒" className="wide-input" />
-            </Form.Item>
-            <Form.Item label="每轮最多路线" name="max_routes_per_run" rules={[{ required: true }]}>
-              <InputNumber min={1} max={20} className="wide-input" />
-            </Form.Item>
-            <Form.Item label="行情最大延迟" name="stale_after_seconds" rules={[{ required: true }]}>
-              <InputNumber min={5} max={300} suffix="秒" className="wide-input" />
-            </Form.Item>
-          </div>
-          <Button icon={<SaveOutlined />} onClick={() => void savePreadd()} loading={preaddSaving}>
-            保存预建规则
-          </Button>
-        </Form>
-        <Table<AstroPreaddCandidate>
-          className="opportunity-table funding-table"
-          size="small"
-          rowKey="id"
-          dataSource={preaddPreview?.items ?? []}
-          loading={preaddLoading}
-          pagination={{ pageSize: 10 }}
-          scroll={{ x: 1240 }}
-          columns={[
-            { title: "标的", dataIndex: "symbol", width: 140 },
-            { title: "信号", width: 220, render: (_, row) => row.signal_type === "funding"
-              ? `${row.signal_exchange} ${row.funding_source === "predicted" ? "下期" : "当前"} ${signedPct(row.signal_value_pct)} / ${row.funding_interval_hours ?? "?"}h`
-              : `${row.signal_exchange} 溢价近似 ${signedPct(row.signal_value_pct)}` },
-            { title: "开仓方式", width: 170, render: (_, row) => (
-              <Space direction="vertical" size={0}>
-                <Tag color={row.entry_mode === "bybit_funding_reverse" ? "gold" : "blue"}>
-                  {row.entry_mode === "bybit_funding_reverse" ? "反向开仓" : "价差收敛"}
-                </Tag>
-                <Typography.Text type="secondary">
-                  {row.entry_mode === "bybit_funding_reverse" ? "仅做 Bybit 资金费" : "等待价差收敛"}
-                </Typography.Text>
-                <Typography.Text>{`卡片 ${signedPct(row.card_open_spread_pct)}`}</Typography.Text>
-              </Space>
-            ) },
-            { title: "做多侧行情", width: 220, render: (_, row) => preaddLegCell(row.buy_leg, "buy") },
-            { title: "做空侧行情", width: 220, render: (_, row) => preaddLegCell(row.sell_leg, "sell") },
-            { title: "当前可成交价差", width: 150, render: (_, row) => signedPct(row.live_spread_pct) },
-            { title: "行情时间", width: 150, render: (_, row) => settlementTime(row.observed_at) },
-            { title: "操作", width: 80, render: (_, row) => (
-              <Button
-                type="link"
-                icon={<PlusOutlined />}
-                title="预建这条暂停卡片"
-                aria-label={`预建 ${row.symbol} ${row.buy_exchange} 到 ${row.sell_exchange}`}
-                disabled={preaddRunning}
-                onClick={() => confirmPreadd(row)}
-              />
-            ) }
-          ]}
-        />
+        <Statistic title="减仓风险" value={preview?.blocked_adl_risk ?? 0} />
       </section>
 
       <Table

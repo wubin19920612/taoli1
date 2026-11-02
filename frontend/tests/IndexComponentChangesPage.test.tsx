@@ -6,6 +6,7 @@ import { IndexComponentChangesPage } from "../src/pages/IndexComponentChangesPag
 
 describe("IndexComponentChangesPage", () => {
   beforeEach(() => {
+    window.localStorage.removeItem("index-components-watch-open");
     let autoEnabled = false;
     let notificationsEnabled = true;
     vi.stubGlobal(
@@ -306,7 +307,8 @@ describe("IndexComponentChangesPage", () => {
   it("manages monitored symbols for index component alerts", async () => {
     render(<IndexComponentChangesPage />);
 
-    expect(await screen.findByText("监控标的")).toBeTruthy();
+    expect(await screen.findByText("监控标的（1）")).toBeTruthy();
+    await userEvent.click(screen.getByText("监控标的（1）"));
     expect(screen.getByText("ESPORTS")).toBeTruthy();
     await userEvent.type(screen.getByPlaceholderText("新增监控标的"), "esports");
     await userEvent.click(screen.getByRole("button", { name: /加入监控/ }));
@@ -319,6 +321,7 @@ describe("IndexComponentChangesPage", () => {
 
   it("links automatic position monitoring with a switch and keeps manual entries", async () => {
     render(<IndexComponentChangesPage />);
+    await userEvent.click(await screen.findByText("监控标的（1）"));
     const toggle = await screen.findByRole("switch", { name: "自动联动浮窗关注和 Astro 卡片持仓" });
     expect(screen.getByText("ESPORTS")).toBeTruthy();
 
@@ -338,6 +341,7 @@ describe("IndexComponentChangesPage", () => {
 
   it("toggles index component Feishu notifications independently of the watchlist", async () => {
     render(<IndexComponentChangesPage />);
+    await userEvent.click(await screen.findByText("监控标的（1）"));
     const toggle = await screen.findByRole("switch", { name: "成分变化通知" });
     await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("true"));
     await userEvent.click(toggle);

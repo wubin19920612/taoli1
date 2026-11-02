@@ -71,6 +71,7 @@ describe("Astro preadd controls", () => {
   it("saves thresholds and only submits after explicit confirmation", async () => {
     const user = userEvent.setup();
     render(<FundingArbitragePage />);
+    await user.click(screen.getByText("Astro 预建"));
     expect(await screen.findByText("Astro 交易对预建")).toBeTruthy();
     expect(await screen.findByText("bitget 下期 +0.800% / 8h")).toBeTruthy();
     expect(screen.getByText("溢价 -0.120%")).toBeTruthy();
@@ -94,7 +95,7 @@ describe("Astro preadd controls", () => {
     await user.type(fundingInput, "1.2");
     await user.clear(volumeInput);
     await user.type(volumeInput, "500000");
-    await user.click(screen.getByRole("button", { name: /保存预建规则/ }));
+    await user.click(screen.getByText("保存预建规则").closest("button")!);
     await waitFor(() => {
       const saved = vi.mocked(fetch).mock.calls.find(([url, init]) =>
         String(url).includes("/astro/preadd/settings") && init?.method === "PUT"
