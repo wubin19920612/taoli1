@@ -1390,8 +1390,21 @@ export function PremiumIndexPage() {
   return (
     <div className="page premium-index-page">
       {error ? <Alert type="error" message={error} showIcon /> : null}
-      {result?.warnings.length ? <Alert type="warning" message={result.warnings.join("；")} showIcon /> : null}
-      {premiumDefinitionMessage ? <Alert type="info" message={premiumDefinitionMessage} showIcon /> : null}
+      {result?.warnings.length || premiumDefinitionMessage ? (
+        <Alert
+          type={result?.warnings.length ? "warning" : "info"}
+          showIcon
+          message={
+            <details className="premium-notices">
+              <summary>数据说明与提示{result?.warnings.length ? `（${result.warnings.length} 条告警）` : ""}</summary>
+              <ul>
+                {result?.warnings.map((warning, index) => <li key={index}>{warning}</li>)}
+                {premiumDefinitionMessage ? <li>{premiumDefinitionMessage}</li> : null}
+              </ul>
+            </details>
+          }
+        />
+      ) : null}
 
       <section className="premium-query-panel">
         <Form form={form} initialValues={defaultFormValues} disabled={loading}>
@@ -1461,49 +1474,58 @@ export function PremiumIndexPage() {
         ) : null}
       </section>
 
-      <section className="premium-metric-grid">
-        <MetricCard
-          label="实时溢价指数"
-          value={signedPct(currentPremium)}
-          sub={currentPremiumSub}
-          tone={currentPremiumTone}
-          accent="live"
-        />
-        <MetricCard
-          label="本周期加权溢价指数"
-          value={signedPct(weightedPremiumPct)}
-          sub={fundingFollowEstimate
-            ? `递增权重 · ${fundingFollowEstimate.sampledPoints}点 · 已过 ${compactHours(fundingFollowEstimate.elapsedHours)}`
-            : "等待资金周期样本"}
-          tone={weightedPremiumTone}
-        />
-        <MetricCard label="标记价" value={price(current?.mark_price)} sub="mark price" />
-        <MetricCard label="指数价" value={price(current?.index_price)} sub="index price" />
-        <MetricCard
-          label="剩余拉满所需溢价指数"
-          value={signedPct(requiredPremiumPct)}
-          sub={requiredPremiumSub}
-          tone={requiredPremiumTone}
-        />
-        <MetricCard
-          label="资金费率"
-          value={signedPct(current?.funding_rate_pct)}
-          sub={current?.funding_next_time ? `交易所返回 · 下次 ${time(current.funding_next_time)}` : "交易所返回"}
-        />
-        <MetricCard
-          label="数据窗口"
-          value={intervalLabel(result?.interval_minutes ?? intervalMinutes)}
-          sub={result ? `${time(result.first_seen_at)} - ${time(result.last_seen_at)}` : durationLabel(hours)}
-        />
-      </section>
-
-      <FundingFollowPanel estimate={fundingFollowEstimate} />
-
       <PremiumIndexChart
         result={result}
         autoRefresh={autoRefresh}
         samplingIntervalSeconds={samplingIntervalSeconds}
       />
+
+      <section className="premium-metric-group" aria-label="指数与溢价">
+        <Typography.Text type="secondary" className="premium-metric-group-title">指数与溢价</Typography.Text>
+        <div className="premium-metric-grid premium-market-metrics">
+          <MetricCard
+            label="实时溢价指数"
+            value={signedPct(currentPremium)}
+            sub={currentPremiumSub}
+            tone={currentPremiumTone}
+            accent="live"
+          />
+          <MetricCard label="标记价" value={price(current?.mark_price)} sub="标记价格" />
+          <MetricCard label="指数价" value={price(current?.index_price)} sub="指数价格" />
+          <MetricCard
+            label="数据窗口"
+            value={intervalLabel(result?.interval_minutes ?? intervalMinutes)}
+            sub={result ? `${time(result.first_seen_at)} - ${time(result.last_seen_at)}` : durationLabel(hours)}
+          />
+        </div>
+      </section>
+
+      <section className="premium-metric-group" aria-label="资金费率">
+        <Typography.Text type="secondary" className="premium-metric-group-title">资金费率</Typography.Text>
+        <div className="premium-metric-grid premium-funding-metrics">
+          <MetricCard
+            label="本周期加权溢价指数"
+            value={signedPct(weightedPremiumPct)}
+            sub={fundingFollowEstimate
+              ? `递增权重 · ${fundingFollowEstimate.sampledPoints}点 · 已过 ${compactHours(fundingFollowEstimate.elapsedHours)}`
+              : "等待资金周期样本"}
+            tone={weightedPremiumTone}
+          />
+          <MetricCard
+            label="剩余拉满所需溢价指数"
+            value={signedPct(requiredPremiumPct)}
+            sub={requiredPremiumSub}
+            tone={requiredPremiumTone}
+          />
+          <MetricCard
+            label="资金费率"
+            value={signedPct(current?.funding_rate_pct)}
+            sub={current?.funding_next_time ? `交易所返回 · 下次 ${time(current.funding_next_time)}` : "交易所返回"}
+          />
+        </div>
+      </section>
+
+      <FundingFollowPanel estimate={fundingFollowEstimate} />
 
       <section className="premium-detail-card">
         <div className="premium-detail-head">
