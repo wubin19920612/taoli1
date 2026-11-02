@@ -1,4 +1,3 @@
-import logging
 import math
 import os
 from dataclasses import dataclass
@@ -10,9 +9,12 @@ from dotenv import find_dotenv, load_dotenv
 
 from app.models.settings import AstroAutomationSettings, AstroCardSettings, HistorySettings
 
-OPTIONAL_FEATURES = frozenset({
+OPTIONAL_FEATURES = frozenset({"gate_twap"})
+
+# Accepted for old deployments, but no longer exposed or effective.
+RETIRED_FEATURES = frozenset({
     "squeeze", "negative_basis", "oil_news", "opportunity_radar", "symbol_spread",
-    "fat_finger", "gate_twap", "second_level_sampling", "funding_research",
+    "fat_finger", "second_level_sampling", "funding_research",
 })
 
 
@@ -51,16 +53,6 @@ class Settings:
     collector_post_publish_mode: Literal["background", "inline"] = "background"
     collector_max_due_adapters_per_cycle: int = 6
     collector_risk_settings_timeout_seconds: float = 2.0
-    funding_poll_interval_seconds: float = 120.0
-    funding_research_enabled: bool = False
-    squeeze_monitor_enabled: bool = False
-    squeeze_monitor_mode: str = "auto"
-    squeeze_monitor_symbols: str = ""
-    squeeze_monitor_exclude_symbols: str = "AKEUSDT,BTRUSDT,GUSDT,LSKUSDT,TUTUSDT"
-    squeeze_route_enabled: bool = False
-    squeeze_paper_enabled: bool = False
-    funding_research_manage_paper_trades: bool = True
-    funding_research_snapshot_retention_hours: float = 72.0
     feishu_webhook_url: str = ""
     feishu_secret: str = ""
     feishu_app_id: str = ""
@@ -70,7 +62,6 @@ class Settings:
     feishu_phone_user_id_type: str = "open_id"
     feishu_phone_enabled: bool = False
     feishu_live_send_enabled: bool = False
-    oil_news_feishu_live_send_enabled: bool = False
     dashboard_password: str = ""
     account_credentials_master_key: str = ""
     history_enabled: bool = True
@@ -114,15 +105,10 @@ class Settings:
                 getattr(self, name), default, upper, integer=integer,
             ))
         disabled = frozenset(key.strip().lower() for key in self.disabled_features if key.strip())
-        unknown = disabled - OPTIONAL_FEATURES
+        unknown = disabled - OPTIONAL_FEATURES - RETIRED_FEATURES
         if unknown:
             raise ValueError(f"Unknown DISABLED_FEATURES: {', '.join(sorted(unknown))}")
-        if "second_level_sampling" in disabled and "fat_finger" not in disabled:
-            disabled |= {"fat_finger"}
-            logging.getLogger(__name__).info(
-                "DISABLED_FEATURES: second_level_sampling also disables fat_finger"
-            )
-        object.__setattr__(self, "disabled_features", disabled)
+        object.__setattr__(self, "disabled_features", disabled & OPTIONAL_FEATURES)
         delay = self.market_identity_catalog_startup_delay_seconds
         if not math.isfinite(delay) or delay < 0:
             raise ValueError("market_identity_catalog_startup_delay_seconds must be finite and nonnegative")
@@ -268,25 +254,6 @@ def get_settings() -> Settings:
         collector_post_publish_mode=os.getenv("COLLECTOR_POST_PUBLISH_MODE", "background"),
         collector_max_due_adapters_per_cycle=int(os.getenv("COLLECTOR_MAX_DUE_ADAPTERS_PER_CYCLE", "6")),
         collector_risk_settings_timeout_seconds=float(os.getenv("COLLECTOR_RISK_SETTINGS_TIMEOUT_SECONDS", "2")),
-        funding_poll_interval_seconds=float(os.getenv("FUNDING_POLL_INTERVAL_SECONDS", "120")),
-        funding_research_enabled=bool_env("FUNDING_RESEARCH_ENABLED", False),
-        squeeze_monitor_enabled=bool_env("SQUEEZE_MONITOR_ENABLED", False),
-        squeeze_monitor_mode=os.getenv("SQUEEZE_MONITOR_MODE", "auto").strip().lower(),
-        squeeze_monitor_symbols=os.getenv(
-            "SQUEEZE_MONITOR_SYMBOLS", ""
-        ).strip(),
-        squeeze_monitor_exclude_symbols=os.getenv(
-            "SQUEEZE_MONITOR_EXCLUDE_SYMBOLS", "AKEUSDT,BTRUSDT,GUSDT,LSKUSDT,TUTUSDT"
-        ).strip(),
-        squeeze_route_enabled=bool_env("SQUEEZE_ROUTE_ENABLED", False),
-        squeeze_paper_enabled=bool_env("SQUEEZE_PAPER_ENABLED", False),
-        funding_research_manage_paper_trades=bool_env(
-            "FUNDING_RESEARCH_MANAGE_PAPER_TRADES",
-            True,
-        ),
-        funding_research_snapshot_retention_hours=float(
-            os.getenv("FUNDING_RESEARCH_SNAPSHOT_RETENTION_HOURS", "72")
-        ),
         feishu_webhook_url=os.getenv("FEISHU_WEBHOOK_URL", ""),
         feishu_secret=os.getenv("FEISHU_SECRET", ""),
         feishu_app_id=os.getenv("FEISHU_APP_ID", "").strip(),
@@ -296,10 +263,6 @@ def get_settings() -> Settings:
         feishu_phone_user_id_type=os.getenv("FEISHU_PHONE_USER_ID_TYPE", "open_id").strip() or "open_id",
         feishu_phone_enabled=bool_env("FEISHU_PHONE_ENABLED", False),
         feishu_live_send_enabled=feishu_live_send_enabled,
-        oil_news_feishu_live_send_enabled=bool_env(
-            "OIL_NEWS_FEISHU_LIVE_SEND_ENABLED",
-            feishu_live_send_enabled,
-        ),
         dashboard_password=os.getenv("DASHBOARD_PASSWORD", ""),
         account_credentials_master_key=os.getenv("ACCOUNT_CREDENTIALS_MASTER_KEY", "").strip(),
         history_enabled=bool_env("HISTORY_ENABLED", True),

@@ -4,7 +4,7 @@ import pytest
 from test_market_identity_validation import binding, market
 
 from app.core.config import Settings
-from app.models.settings import AstroCardSettings, LivePilotSettings
+from app.models.settings import AstroCardSettings
 from app.services.astro_alerts import AstroAlertService
 from app.services.market_identity import MarketIdentityRegistry
 from app.services.market_validation_review import MarketValidationService
@@ -24,7 +24,7 @@ class Client:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("entry", ["manual", "alert", "preadd", "live"])
+@pytest.mark.parametrize("entry", ["manual", "alert", "preadd"])
 async def test_all_astro_entries_block_confirmed_wrong_asset_even_in_shadow(entry):
     now = datetime.now(UTC)
     a = market().model_copy(update={"timestamp": now})
@@ -39,7 +39,6 @@ async def test_all_astro_entries_block_confirmed_wrong_asset_even_in_shadow(entr
         Settings(
             astro_manual_card_create=True, astro_alert_auto_create=True, astro_dry_run_only=False
         ),
-        live_pilot_settings=LivePilotSettings(enabled=True),
     )
     service.market_validation = validation
     opportunity = build_directional_opportunity(a, b, mode="FF")
@@ -49,7 +48,5 @@ async def test_all_astro_entries_block_confirmed_wrong_asset_even_in_shadow(entr
         result = await service.handle_alert(opportunity)
     elif entry == "preadd":
         result = await service.handle_preadd(opportunity, AstroCardSettings())
-    else:
-        result = await service.handle_live_pilot(opportunity)
     assert result.status == "skipped" and result.action == "market_validation"
     assert not client.added

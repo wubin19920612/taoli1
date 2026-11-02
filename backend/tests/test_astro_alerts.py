@@ -7,7 +7,7 @@ from app.core.config import Settings
 from app.models.astro import AstroCardCreateRequest
 from app.models.market import MarketType
 from app.models.opportunity import Opportunity, OpportunityType
-from app.models.settings import AstroCardSettings, LivePilotSettings, RiskSettings
+from app.models.settings import AstroCardSettings, RiskSettings
 from app.services.astro_alerts import AstroAlertService
 from app.services.astro_client import AstroClientError
 from app.services.gate_crossex_hyperliquid import GateCrossExHyperliquidCatalog
@@ -142,7 +142,6 @@ async def test_dry_run_mode_skips_astro_writes() -> None:
     "handler_name",
     [
         "handle_alert",
-        "handle_live_pilot",
     ],
 )
 async def test_global_blacklist_blocks_automatic_astro_create_paths(handler_name: str) -> None:
@@ -157,7 +156,6 @@ async def test_global_blacklist_blocks_automatic_astro_create_paths(handler_name
             astro_manual_card_create=True,
             astro_dry_run_only=False,
         ),
-        live_pilot_settings=LivePilotSettings(enabled=True),
         risk_settings_loader=load_risk_settings,
     )
 
@@ -379,7 +377,7 @@ async def test_missing_pair_creates_paused_disable_open_card() -> None:
     ("gc", ("gc-binance", "gc-okx")),
 ])
 @pytest.mark.parametrize("entrypoint", [
-    "handle_alert", "handle_live_pilot", "handle_manual_create", "handle_preadd",
+    "handle_alert", "handle_manual_create", "handle_preadd",
 ])
 async def test_card_variant_applies_to_every_create_entrypoint(
     card_variant: str, expected: tuple[str, str], entrypoint: str,
@@ -394,7 +392,6 @@ async def test_card_variant_applies_to_every_create_entrypoint(
             astro_dry_run_only=False,
         ),
         card_settings=card_settings,
-        live_pilot_settings=LivePilotSettings(enabled=True),
         add_restart_delay_seconds=0,
     )
 
@@ -496,7 +493,7 @@ async def test_lighter_creation_adds_missing_gc_sibling_to_existing_plain_card(m
     ("both", [("lighter", "okx"), ("gc-lighter", "gc-okx")]),
 ])
 @pytest.mark.parametrize("entrypoint", [
-    "handle_alert", "handle_live_pilot", "handle_manual_create", "handle_preadd",
+    "handle_alert", "handle_manual_create", "handle_preadd",
 ])
 async def test_lighter_card_variant_applies_to_every_create_entrypoint(
     card_variant: str, expected: list[tuple[str, str]], entrypoint: str,
@@ -511,7 +508,6 @@ async def test_lighter_card_variant_applies_to_every_create_entrypoint(
             astro_dry_run_only=False,
         ),
         card_settings=card_settings,
-        live_pilot_settings=LivePilotSettings(enabled=True),
         add_restart_delay_seconds=0,
     )
     opp = opportunity().model_copy(update={"buy_exchange": "lighter"})
@@ -566,7 +562,6 @@ async def test_lighter_unknown_counterparty_never_calls_astro() -> None:
     "handler_name",
     [
         "handle_alert",
-        "handle_live_pilot",
         "handle_preadd",
     ],
 )
@@ -581,7 +576,6 @@ async def test_rh_lighter_remains_blocked_for_automatic_astro_create_paths(
             astro_manual_card_create=True,
             astro_dry_run_only=False,
         ),
-        live_pilot_settings=LivePilotSettings(enabled=True),
     )
     rh_opportunity = opportunity().model_copy(
         update={"sell_exchange": "rh-lighter"}
@@ -754,40 +748,7 @@ async def test_alert_create_uses_supplied_astro_card_settings() -> None:
 
 
 @pytest.mark.asyncio
-async def test_live_pilot_experiment_create_uses_pilot_notional_and_enabled_card() -> None:
-    client = FakeAstroClient()
-    service = AstroAlertService(
-        client,
-        Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
-        card_settings=AstroCardSettings(
-            max_trade_usdt=10,
-            leverage=1,
-            min_notional=10,
-            max_notional=10,
-            close_position_buffer_pct=0.1,
-            unfavorable_funding_weight=1,
-            close_position_floor_pct=0,
-        ),
-        live_pilot_settings=LivePilotSettings(
-            enabled=True,
-            notional_per_symbol_usdt=100,
-            create_cards_enabled=True,
-        ),
-        add_restart_delay_seconds=0,
-    )
-
-    result = await service.handle_live_pilot(opportunity())
-
-    assert result.status == "created"
-    assert "已创建开启卡片 BTC FF binance->okx，禁开=false" in result.message
-    assert client.added[0]["status"] is True
-    assert client.added[0]["disableOpen"] is False
-    assert client.added[0]["maxTradeUSDT"] == "100"
-    assert client.added[0]["maxNotional"] == "100"
-
-
-@pytest.mark.asyncio
-async def test_live_pilot_experiment_does_not_change_regular_alert_card_defaults() -> None:
+async def test_regular_alert_uses_configured_card_defaults() -> None:
     client = FakeAstroClient()
     service = AstroAlertService(
         client,
@@ -798,11 +759,6 @@ async def test_live_pilot_experiment_does_not_change_regular_alert_card_defaults
             min_notional=10,
             max_notional=10,
             open_enabled=False,
-        ),
-        live_pilot_settings=LivePilotSettings(
-            enabled=True,
-            notional_per_symbol_usdt=100,
-            create_cards_enabled=True,
         ),
         add_restart_delay_seconds=0,
     )
@@ -937,7 +893,7 @@ async def test_ff_hl_card_submits_supported_para_market_on_base_and_gc_routes(bu
 @pytest.mark.parametrize("hl_buy", [False, True])
 @pytest.mark.parametrize("card_variant", ["both", "non_gc", "gc"])
 @pytest.mark.parametrize("entrypoint", [
-    "handle_alert", "handle_live_pilot", "handle_manual_create", "handle_preadd",
+    "handle_alert", "handle_manual_create", "handle_preadd",
 ])
 async def test_hl_gc_requires_exact_market_for_every_create_entrypoint(
     raw_symbol: str, coin: str, supported: bool,
@@ -953,7 +909,6 @@ async def test_hl_gc_requires_exact_market_for_every_create_entrypoint(
             astro_dry_run_only=False,
         ),
         card_settings=card_settings,
-        live_pilot_settings=LivePilotSettings(enabled=True),
         add_restart_delay_seconds=0,
     )
     selected = opportunity().model_copy(update={
@@ -989,7 +944,7 @@ async def test_hl_gc_requires_exact_market_for_every_create_entrypoint(
 @pytest.mark.parametrize("card_variant", ["both", "non_gc", "gc"])
 @pytest.mark.parametrize("aster_buy", [False, True])
 @pytest.mark.parametrize("entrypoint", [
-    "handle_alert", "handle_live_pilot", "handle_manual_create", "handle_preadd",
+    "handle_alert", "handle_manual_create", "handle_preadd",
 ])
 async def test_aster_card_variant_applies_to_every_create_entrypoint(
     card_variant: str, aster_buy: bool, entrypoint: str,
@@ -1004,7 +959,6 @@ async def test_aster_card_variant_applies_to_every_create_entrypoint(
             astro_dry_run_only=False,
         ),
         card_settings=card_settings,
-        live_pilot_settings=LivePilotSettings(enabled=True),
         add_restart_delay_seconds=0,
     )
     ordinary = ("aster", "gate") if aster_buy else ("gate", "aster")

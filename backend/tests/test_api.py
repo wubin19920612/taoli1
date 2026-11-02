@@ -1,6 +1,4 @@
-import asyncio
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 from fastapi.testclient import TestClient
@@ -20,7 +18,6 @@ from app.models.index_component import (
 from app.models.market import MarketSnapshot, MarketType
 from app.models.market_identity import MarketKey, PairCapabilities, PairValidationResult
 from app.models.opportunity import Opportunity, OpportunityType
-from app.models.opportunity_radar import OpportunityRadarSettings
 from app.models.alert import AlertEvent, AlertRule
 from app.models.orderbook import DepthValidationResult
 from app.models.pair_spread import (
@@ -53,7 +50,6 @@ from app.models.premium_index import (
 from app.models.settings import (
     AlertMessageTemplateSettings,
     AstroCardSettings,
-    LivePilotSettings,
     RiskSettings,
 )
 from app.services.astro_alerts import AstroAlertService
@@ -71,17 +67,13 @@ class FakeSettingsRepository:
         settings: RiskSettings,
         alert_template: AlertMessageTemplateSettings | None = None,
         astro_card_settings: AstroCardSettings | None = None,
-        live_pilot_settings: LivePilotSettings | None = None,
         funding_arbitrage_settings: FundingArbitrageSettings | None = None,
-        opportunity_radar_settings: OpportunityRadarSettings | None = None,
         announcement_settings: AnnouncementSettings | None = None,
     ):
         self.settings = settings
         self.alert_template = alert_template or AlertMessageTemplateSettings()
         self.astro_card_settings = astro_card_settings
-        self.live_pilot_settings = live_pilot_settings or LivePilotSettings()
         self.funding_arbitrage_settings = funding_arbitrage_settings or FundingArbitrageSettings()
-        self.opportunity_radar_settings = opportunity_radar_settings or OpportunityRadarSettings()
         self.announcement_settings = announcement_settings or AnnouncementSettings()
 
     async def get_risk_settings(self) -> RiskSettings:
@@ -100,12 +92,6 @@ class FakeSettingsRepository:
         self.astro_card_settings = settings
         return settings
 
-    async def get_live_pilot_settings(self) -> LivePilotSettings:
-        return self.live_pilot_settings
-
-    async def set_live_pilot_settings(self, settings: LivePilotSettings) -> LivePilotSettings:
-        self.live_pilot_settings = settings
-        return settings
 
     async def get_funding_arbitrage_settings(self) -> FundingArbitrageSettings:
         return self.funding_arbitrage_settings
@@ -117,15 +103,6 @@ class FakeSettingsRepository:
         self.funding_arbitrage_settings = settings
         return settings
 
-    async def get_opportunity_radar_settings(self) -> OpportunityRadarSettings:
-        return self.opportunity_radar_settings
-
-    async def set_opportunity_radar_settings(
-        self,
-        settings: OpportunityRadarSettings,
-    ) -> OpportunityRadarSettings:
-        self.opportunity_radar_settings = settings
-        return settings
 
     async def get_announcement_settings(self) -> AnnouncementSettings:
         return self.announcement_settings
@@ -133,7 +110,6 @@ class FakeSettingsRepository:
     async def set_announcement_settings(self, settings: AnnouncementSettings) -> AnnouncementSettings:
         self.announcement_settings = settings
         return settings
-
 
 
 class FakeHistoryRepository:
@@ -564,39 +540,7 @@ def test_create_app_preserves_feishu_credentials_when_live_send_is_enabled() -> 
     assert config.phone_enabled is True
 
 
-def test_oil_news_reuses_shared_feishu_notifier_and_keeps_other_live_sends_off() -> None:
-    app = create_app(
-        settings=Settings(
-            database_url="sqlite:///:memory:",
-            feishu_webhook_url="https://example.test/webhook",
-            feishu_secret="webhook-secret",
-            feishu_live_send_enabled=False,
-            oil_news_feishu_live_send_enabled=True,
-        ),
-        start_background_workers=False,
-    )
-
-    with TestClient(app):
-        monitor = app.state.oil_news_monitor
-        config = app.state.feishu_notifier.config
-        notifier = SimpleNamespace(send_text=AsyncMock())
-
-        assert monitor.alert_sender is not None
-        assert app.state.feishu_live_send_enabled is False
-        assert config.webhook_url == "https://example.test/webhook"
-        assert config.secret == "webhook-secret"
-        assert not hasattr(app.state, "oil_news_feishu_notifier")
-
-        original_notifier = app.state.feishu_notifier
-        try:
-            app.state.feishu_notifier = notifier
-            asyncio.run(monitor.alert_sender("oil news alert"))
-        finally:
-            app.state.feishu_notifier = original_notifier
-        notifier.send_text.assert_awaited_once_with("oil news alert")
-
-
-def test_price_collector_starts_announcement_and_oil_news_workers(monkeypatch) -> None:
+def test_price_collector_starts_announcement_workers(monkeypatch) -> None:
     started: list[str] = []
 
     def record_background_task(_supervisor, coro_factory, *, name: str) -> None:
@@ -615,8 +559,9 @@ def test_price_collector_starts_announcement_and_oil_news_workers(monkeypatch) -
 
     assert "market-collector" in started
     assert "announcement-loop" in started
-    assert "oil-news-loop" in started
-    assert "oil-news-translation-loop" in started
+    assert "announcement-enrichment-loop" in started
+    assert "oil-news-loop" not in started
+    assert "oil-news-translation-loop" not in started
 
 
 def test_collector_startup_uses_multi_exchange_index_component_provider(monkeypatch) -> None:
@@ -1466,7 +1411,8 @@ def test_pair_spread_query_endpoint_accepts_second_interval() -> None:
     assert payload["interval_seconds"] == 5
 
 
-def test_symbol_spread_query_endpoint_accepts_custom_scope_and_interval() -> None:
+@pytest.mark.parametrize("disabled", [frozenset(), frozenset({"symbol_spread"})])
+def test_symbol_spread_query_endpoint_accepts_custom_scope_and_interval(disabled) -> None:
     fixed_now = datetime(2026, 7, 10, 12, 0, tzinfo=UTC)
 
     class FakePairSpreadService:
@@ -1552,7 +1498,7 @@ def test_symbol_spread_query_endpoint_accepts_custom_scope_and_interval() -> Non
         async def aclose(self) -> None:
             return None
 
-    app = create_app(settings=Settings(database_url="sqlite:///:memory:"))
+    app = create_app(settings=Settings(database_url="sqlite:///:memory:", disabled_features=disabled))
     app.state.pair_spread_query_service_factory = FakePairSpreadService
 
     with TestClient(app) as client:
@@ -1947,90 +1893,6 @@ def test_funding_arbitrage_settings_round_trip() -> None:
     assert response.status_code == 200
     assert response.json()["enabled"] is True
     assert response.json()["min_entry_edge_pct"] == 0.04
-
-
-def test_funding_research_run_creates_candidates_and_paper_trades() -> None:
-    now = datetime.now(UTC)
-    store = SnapshotStore()
-    store.set_markets(
-        [
-            MarketSnapshot(
-                symbol="LABUSDT",
-                base="LAB",
-                exchange="binance",
-                market_type=MarketType.FUTURE,
-                bid=8.79,
-                ask=8.81,
-                bid_size=2_000,
-                ask_size=2_000,
-                volume_24h_usdt=500_000_000,
-                funding_rate_pct=-1.6,
-                funding_next_rate_pct=-1.6,
-                funding_interval_hours=2,
-                funding_next_time=now + timedelta(minutes=30),
-                mark_price=8.8,
-                index_price=9.5,
-                timestamp=now,
-                raw_symbol="LABUSDT",
-            ),
-            MarketSnapshot(
-                symbol="LABUSDT",
-                base="LAB",
-                exchange="okx",
-                market_type=MarketType.FUTURE,
-                bid=9.39,
-                ask=9.41,
-                bid_size=2_000,
-                ask_size=2_000,
-                volume_24h_usdt=500_000_000,
-                funding_rate_pct=-0.1,
-                funding_next_rate_pct=-0.1,
-                funding_interval_hours=2,
-                funding_next_time=now + timedelta(minutes=30),
-                mark_price=9.4,
-                index_price=9.5,
-                timestamp=now,
-                raw_symbol="LABUSDT",
-            ),
-        ]
-    )
-    app = create_app(
-        snapshot_store=store,
-        settings=Settings(database_url="sqlite:///:memory:"),
-    )
-
-    with TestClient(app) as client:
-        run_response = client.post("/api/funding-research/run")
-        candidates_response = client.get("/api/funding-research/candidates?symbol=lab-usdt")
-        snapshots_response = client.get(
-            "/api/funding-research/candidate-snapshots"
-            "?symbol=lab-usdt&long_exchange=binance&short_exchange=okx"
-        )
-        trades_response = client.get("/api/funding-research/paper-trades?status=open")
-        summary_response = client.get("/api/funding-research/paper-trades/summary")
-
-    assert run_response.status_code == 200
-    run_payload = run_response.json()
-    assert run_payload["market_snapshot_count"] == 2
-    assert run_payload["pruned_snapshot_count"] == 0
-    assert run_payload["candidate_count"] == 1
-    assert run_payload["opened_paper_trade_count"] == 1
-    assert run_payload["top_candidates"][0]["long_exchange"] == "binance"
-    assert run_payload["top_candidates"][0]["short_exchange"] == "okx"
-
-    assert candidates_response.status_code == 200
-    assert candidates_response.json()[0]["symbol"] == "LABUSDT"
-
-    assert snapshots_response.status_code == 200
-    assert snapshots_response.json()[0]["candidate"]["symbol"] == "LABUSDT"
-    assert snapshots_response.json()[0]["candidate"]["long_exchange"] == "binance"
-
-    assert trades_response.status_code == 200
-    assert trades_response.json()[0]["status"] == "OPEN"
-
-    assert summary_response.status_code == 200
-    assert summary_response.json()["total_trades"] == 1
-    assert summary_response.json()["open_trades"] == 1
 
 
 def test_opportunities_endpoint_excludes_selected_types() -> None:
@@ -2652,226 +2514,6 @@ def test_astro_automation_settings_endpoint_updates_runtime_service() -> None:
         assert reloaded.status_code == 200
         assert reloaded.json()["alert_auto_create"] is True
         assert reloaded.json()["allow_same_name_variants"] is True
-
-
-def test_live_pilot_settings_endpoint_roundtrips() -> None:
-    app = create_app(settings=Settings(dashboard_password="secret", database_url="sqlite:///:memory:"))
-
-    with TestClient(app) as client:
-        response = client.get("/api/settings/live-pilot", headers={"X-Dashboard-Password": "secret"})
-        assert response.status_code == 200
-        payload = response.json()
-        assert payload["enabled"] is False
-        assert payload["max_symbols"] == 10
-        assert payload["notional_per_symbol_usdt"] == 100
-        assert payload["create_cards_enabled"] is True
-        assert payload["exclude_ss"] is True
-
-        payload["enabled"] = True
-        payload["max_symbols"] = 7
-        payload["notional_per_symbol_usdt"] = 125
-        payload["min_next_funding_edge_pct"] = -0.03
-        payload["prefer_hyperliquid"] = False
-        payload["exclude_ss"] = False
-
-        unauthenticated = client.put("/api/settings/live-pilot", json=payload)
-        assert unauthenticated.status_code == 401
-
-        saved = client.put(
-            "/api/settings/live-pilot",
-            headers={"X-Dashboard-Password": "secret"},
-            json=payload,
-        )
-        assert saved.status_code == 200
-        assert saved.json()["enabled"] is True
-        assert saved.json()["max_symbols"] == 7
-        assert saved.json()["notional_per_symbol_usdt"] == 125
-
-        reloaded = client.get("/api/settings/live-pilot", headers={"X-Dashboard-Password": "secret"})
-        assert reloaded.status_code == 200
-        assert reloaded.json()["min_next_funding_edge_pct"] == -0.03
-        assert reloaded.json()["prefer_hyperliquid"] is False
-        assert reloaded.json()["exclude_ss"] is False
-
-
-def test_live_pilot_preview_endpoint_returns_selected_test_symbols() -> None:
-    store = SnapshotStore()
-    btc_normal = make_opportunity().model_copy(
-        update={
-            "id": "btc-normal",
-            "symbol": "BTCUSDT",
-            "buy_exchange": "binance",
-            "sell_exchange": "okx",
-            "fee_adjusted_open_pct": 0.8,
-            "funding_next_rate_buy_pct": 0,
-            "funding_next_rate_sell_pct": 0,
-            "net_funding_next_pct": 0,
-        }
-    )
-    btc_hyper = make_opportunity().model_copy(
-        update={
-            "id": "btc-hyper",
-            "symbol": "BTCUSDT",
-            "buy_exchange": "hyperliquid",
-            "sell_exchange": "okx",
-            "fee_adjusted_open_pct": 0.5,
-            "funding_next_rate_buy_pct": 0,
-            "funding_next_rate_sell_pct": 0,
-            "net_funding_next_pct": 0,
-        }
-    )
-    eth = make_opportunity().model_copy(
-        update={
-            "id": "eth",
-            "symbol": "ETHUSDT",
-            "fee_adjusted_open_pct": 0.7,
-            "funding_next_rate_buy_pct": 0,
-            "funding_next_rate_sell_pct": -0.1,
-            "net_funding_next_pct": -0.1,
-        }
-    )
-    xrp_negative = make_opportunity().model_copy(
-        update={
-            "id": "xrp-negative",
-            "symbol": "XRPUSDT",
-            "fee_adjusted_open_pct": 1.2,
-            "funding_next_rate_buy_pct": 0,
-            "funding_next_rate_sell_pct": -0.4,
-            "net_funding_next_pct": -0.4,
-        }
-    )
-    store.set_opportunities([btc_normal, btc_hyper, eth, xrp_negative])
-    app = create_app(snapshot_store=store)
-    app.state.alert_rule_repo = FakeAlertRulesRepository(
-        [
-            AlertRule(
-                name="live pilot",
-                types=["FF"],
-                min_open_spread_pct=0.0,
-                min_fee_adjusted_open_pct=0.0,
-                min_volume_24h_usdt=0,
-            )
-        ]
-    )
-    app.state.settings_repo = FakeSettingsRepository(
-        RiskSettings(),
-        live_pilot_settings=LivePilotSettings(
-            enabled=True,
-            max_symbols=2,
-            notional_per_symbol_usdt=100,
-            min_next_funding_edge_pct=-0.3,
-            prefer_hyperliquid=True,
-        ),
-    )
-    client = TestClient(app)
-
-    response = client.get("/api/settings/live-pilot/preview")
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["settings"]["enabled"] is True
-    assert payload["total_opportunities"] == 4
-    assert payload["eligible_symbols"] == 2
-    assert payload["skipped_negative_funding"] == 1
-    assert payload["skipped_type"] == 0
-    assert payload["budget_usdt"] == 200
-    assert [item["symbol"] for item in payload["items"]] == ["ETHUSDT", "BTCUSDT"]
-    assert payload["items"][1]["opportunity_id"] == "btc-hyper"
-    assert payload["items"][1]["uses_hyperliquid"] is True
-    assert payload["items"][0]["next_funding_edge_pct"] == -0.1
-    assert payload["items"][0]["notional_usdt"] == 100
-
-
-def test_live_pilot_preview_endpoint_applies_saved_risk_volume_threshold() -> None:
-    store = SnapshotStore()
-    liquid = make_opportunity().model_copy(
-        update={
-            "id": "liquid",
-            "symbol": "BTCUSDT",
-            "buy_volume_24h_usdt": 2_000_000,
-            "sell_volume_24h_usdt": 3_000_000,
-        }
-    )
-    low_volume = make_opportunity().model_copy(
-        update={
-            "id": "low-volume",
-            "symbol": "LOWUSDT",
-            "fee_adjusted_open_pct": 1.2,
-            "buy_volume_24h_usdt": 200_000,
-            "sell_volume_24h_usdt": 250_000,
-        }
-    )
-    store.set_opportunities([low_volume, liquid])
-    app = create_app(snapshot_store=store)
-    app.state.alert_rule_repo = FakeAlertRulesRepository(
-        [
-            AlertRule(
-                name="live pilot",
-                types=["FF"],
-                min_open_spread_pct=0.0,
-                min_fee_adjusted_open_pct=0.0,
-                min_volume_24h_usdt=0,
-            )
-        ]
-    )
-    app.state.settings_repo = FakeSettingsRepository(
-        RiskSettings(min_volume_24h_usdt=1_000_000, ticker_collision_symbols=[]),
-        live_pilot_settings=LivePilotSettings(enabled=True, max_symbols=10),
-    )
-    client = TestClient(app)
-
-    response = client.get("/api/settings/live-pilot/preview")
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert [item["symbol"] for item in payload["items"]] == ["BTCUSDT"]
-    assert payload["skipped_risk"] == 1
-
-
-def test_live_pilot_preview_endpoint_applies_alert_rule_thresholds() -> None:
-    store = SnapshotStore()
-    below_rule = make_opportunity().model_copy(
-        update={
-            "id": "below-rule",
-            "symbol": "LOWEDGEUSDT",
-            "open_spread_pct": 0.40,
-            "fee_adjusted_open_pct": 0.30,
-            "net_funding_next_pct": 0.00,
-        }
-    )
-    above_rule = make_opportunity().model_copy(
-        update={
-            "id": "above-rule",
-            "symbol": "HIGHEDGEUSDT",
-            "open_spread_pct": 0.70,
-            "fee_adjusted_open_pct": 0.55,
-            "net_funding_next_pct": 0.00,
-        }
-    )
-    store.set_opportunities([below_rule, above_rule])
-    app = create_app(snapshot_store=store)
-    app.state.alert_rule_repo = FakeAlertRuleRepository(
-        AlertRule(
-            name="live pilot threshold",
-            types=["FF"],
-            min_open_spread_pct=0.5,
-            min_fee_adjusted_open_pct=0.5,
-            min_volume_24h_usdt=1_000_000,
-        )
-    )
-    app.state.settings_repo = FakeSettingsRepository(
-        RiskSettings(ticker_collision_symbols=[]),
-        live_pilot_settings=LivePilotSettings(enabled=True, max_symbols=10),
-    )
-    client = TestClient(app)
-
-    response = client.get("/api/settings/live-pilot/preview")
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["total_opportunities"] == 1
-    assert payload["eligible_symbols"] == 1
-    assert [item["symbol"] for item in payload["items"]] == ["HIGHEDGEUSDT"]
 
 
 def test_alert_history_endpoint_enriches_legacy_short_messages() -> None:
@@ -3638,69 +3280,6 @@ def test_astro_manual_card_create_endpoint_uses_saved_defaults_with_real_service
     assert client_backend.added[0]["disableOpen"] is False
 
 
-def test_live_pilot_auto_create_service_uses_pilot_settings_for_real_service(confirmed_market_validation) -> None:
-    store = SnapshotStore()
-    store.set_opportunities([make_opportunity()])
-    app = create_app(
-        snapshot_store=store,
-        settings=Settings(
-            dashboard_password="secret",
-            database_url="sqlite:///:memory:",
-            astro_alert_auto_create=True,
-            astro_dry_run_only=False,
-        ),
-    )
-    client_backend = FakeAstroPairClient()
-    app.state.astro_alert_service = AstroAlertService(
-        client_backend,
-        app.state.settings,
-        add_restart_delay_seconds=0,
-    )
-    validator = FakeOrderBookValidator(
-        DepthValidationResult(
-            passed=True,
-            target_notional_usdt=100,
-            buy_filled_usdt=100,
-            sell_filled_usdt=100,
-            buy_vwap=100,
-            sell_vwap=100.5,
-            quoted_open_pct=0.5,
-            executable_open_pct=0.5,
-            effective_executable_edge_pct=0.35,
-            slippage_loss_pct=0,
-            blockers=[],
-            warnings=[],
-        )
-    )
-    app.state.orderbook_validator = validator
-
-    with TestClient(app) as client:
-        saved = client.put(
-            "/api/settings/live-pilot",
-            headers={"X-Dashboard-Password": "secret"},
-            json={
-                "enabled": True,
-                "max_symbols": 10,
-                "notional_per_symbol_usdt": 100,
-                "min_next_funding_edge_pct": -0.05,
-                "prefer_hyperliquid": True,
-                "create_cards_enabled": True,
-            },
-        )
-        assert saved.status_code == 200
-
-        app.state.astro_alert_service.live_pilot_settings = LivePilotSettings.model_validate(saved.json())
-        result = client_backend.added
-        assert result == []
-
-        asyncio.run(app.state.astro_alert_service.handle_live_pilot(make_opportunity()))
-
-    assert client_backend.added[0]["status"] is True
-    assert client_backend.added[0]["disableOpen"] is False
-    assert client_backend.added[0]["maxTradeUSDT"] == "100"
-    assert client_backend.added[0]["maxNotional"] == "100"
-
-
 def test_astro_manual_card_create_endpoint_requires_dashboard_password() -> None:
     store = SnapshotStore()
     store.set_opportunities([make_opportunity()])
@@ -3958,90 +3537,6 @@ async def test_service_control_frontend_restart_is_reported_as_restarted() -> No
     assert result.status == "restarted"
     assert result.message == "Frontend restart triggered."
     assert controller._request.await_count == 1
-
-
-def test_opportunity_radar_preview_and_settings_round_trip() -> None:
-    now = datetime.now(UTC)
-    store = SnapshotStore()
-    store.set_markets(
-        [
-            MarketSnapshot(
-                symbol="BTCUSDT",
-                base="BTC",
-                exchange="bybit",
-                market_type=MarketType.FUTURE,
-                bid=99.95,
-                ask=100.05,
-                bid_size=200,
-                ask_size=200,
-                volume_24h_usdt=5_000_000,
-                funding_next_rate_pct=-0.1,
-                funding_interval_hours=1,
-                mark_price=98,
-                index_price=100,
-                timestamp=now,
-                raw_symbol="BTCUSDT",
-            ),
-            MarketSnapshot(
-                symbol="BTCUSDT",
-                base="BTC",
-                exchange="binance",
-                market_type=MarketType.FUTURE,
-                bid=100.25,
-                ask=100.35,
-                bid_size=200,
-                ask_size=200,
-                volume_24h_usdt=5_000_000,
-                funding_next_rate_pct=0.04,
-                funding_interval_hours=4,
-                mark_price=100,
-                index_price=100,
-                timestamp=now,
-                raw_symbol="BTCUSDT",
-            ),
-        ]
-    )
-    app = create_app(snapshot_store=store)
-    app.state.settings_repo = FakeSettingsRepository(
-        RiskSettings(),
-        opportunity_radar_settings=OpportunityRadarSettings(min_depth_multiple=1),
-    )
-    client = TestClient(app)
-
-    preview_response = client.get("/api/opportunity-radar/preview")
-    settings_response = client.put(
-        "/api/opportunity-radar/settings",
-        json={
-            **OpportunityRadarSettings().model_dump(),
-            "min_abs_premium_pct": 2,
-            "max_abs_entry_spread_pct": 0.3,
-        },
-    )
-
-    assert preview_response.status_code == 200
-    assert preview_response.json()["displayed_candidates"] == 1
-    assert preview_response.json()["candidates"][0]["long_exchange"] == "bybit"
-    assert settings_response.status_code == 200
-    assert settings_response.json()["min_abs_premium_pct"] == 2
-    assert settings_response.json()["max_abs_entry_spread_pct"] == 0.3
-
-    app.state.feishu_notifier = SimpleNamespace(
-        config=SimpleNamespace(webhook_url=""),
-        send_text=AsyncMock(),
-    )
-    missing_config_response = client.post("/api/opportunity-radar/test-notification")
-    assert missing_config_response.status_code == 400
-
-    send_text = AsyncMock()
-    app.state.feishu_notifier = SimpleNamespace(
-        config=SimpleNamespace(webhook_url="https://example.test/hook"),
-        send_text=send_text,
-    )
-    test_response = client.post("/api/opportunity-radar/test-notification")
-
-    assert test_response.status_code == 200
-    assert test_response.json() == {"status": "sent"}
-    send_text.assert_awaited_once_with("[机会雷达] 飞书通知测试成功")
 
 
 def test_retired_monitor_endpoints_are_unavailable() -> None:

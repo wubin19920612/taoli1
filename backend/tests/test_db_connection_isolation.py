@@ -20,11 +20,8 @@ def test_rollback_calls_stay_in_isolated_connection_modules():
     allowed = {
         "db/database.py",  # Recovery releases only a failed read snapshot.
         "db/market_identity_repository.py",
-        "services/fs_repository.py",
         "services/pair_spread_presets.py",
         "services/astro_card_attempts.py",
-        "services/squeeze_arbitrage/paper_repository.py",
-        "services/squeeze_arbitrage/route_repository.py",
     }
     unexpected = []
     for path in sorted(app_root.rglob("*.py")):

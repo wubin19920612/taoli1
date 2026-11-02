@@ -1,4 +1,6 @@
+import json
 import logging
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -6,7 +8,6 @@ import httpx
 import pytest
 from fastapi import HTTPException
 from fastapi.routing import APIRoute
-from types import SimpleNamespace
 
 from app.core.config import Settings
 from app.core.security import verify_dashboard_password
@@ -91,7 +92,14 @@ async def test_every_api_route_and_method_requires_password(app, client, headers
                 assert response.json() == {"detail": "Invalid dashboard password"}
     assert public_seen == PUBLIC_PATHS
     assert checked == sum(len(route.methods) for route in routes)
-    assert len(routes) >= 178  # Baseline; new routes are automatically exercised above.
+    # Frozen from the pre-retirement routes, subtracting only the 64 retired endpoints.
+    # A set check catches a lost retained route even if another route replaces it.
+    baseline = json.loads((Path(__file__).parent / "fixtures/retained_api_endpoints.json").read_text(encoding="utf-8"))
+    expected = {tuple(pair) for pair in baseline}
+    observed = {(method, route.path) for route in routes for method in route.methods}
+    assert len(expected) == 118
+    assert expected <= observed
+    assert len(routes) >= len(expected)  # Newly added routes are still exercised above.
     print(
         f"API route inventory: {len(routes)} routes, "
         f"{len({route.path for route in routes})} paths, {checked} method/path pairs"

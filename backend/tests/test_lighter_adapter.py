@@ -17,10 +17,6 @@ from app.exchanges.lighter import (
     lighter_upstream_timestamp,
 )
 from app.models.market import MarketType
-from app.models.negative_basis import (
-    NEGATIVE_BASIS_FUTURE_EXCHANGES,
-    NEGATIVE_BASIS_SPOT_EXCHANGES,
-)
 from app.models.pair_spread import PairSpreadLegQuery
 from app.services.pair_spread_query import PairSpreadQueryService
 
@@ -450,8 +446,6 @@ def test_lighter_rejects_crossed_book_and_accepts_pair_query() -> None:
     assert PairSpreadLegQuery(
         exchange="rh-lighter", symbol="ETH", market_type=MarketType.SPOT
     ).symbol == "ETHUSDT"
-    assert "rh-lighter" not in NEGATIVE_BASIS_SPOT_EXCHANGES
-    assert "rh-lighter" not in NEGATIVE_BASIS_FUTURE_EXCHANGES
 
 
 @pytest.mark.asyncio

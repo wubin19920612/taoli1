@@ -832,7 +832,7 @@ async def test_actual_service_registry_and_offline_benchmark(monkeypatch, tmp_pa
                 "instrument_market_cap_service._search_cache", "instrument_market_cap_service._market_cache",
                 "market_validation.registry.bindings", "announcement_research._cache",
                 "history_recorder.rows", "announcement_enrichment.batch",
-                "index_component_monitor._latest_prices", "squeeze_route_monitor._queue._queue",
+                "index_component_monitor._latest_prices",
             }
             assert required <= by_name.keys()
             for attribute in ("_REALTIME_PAIR_SPREAD_CACHE", "_REALTIME_PAIR_FUNDING_CACHE",

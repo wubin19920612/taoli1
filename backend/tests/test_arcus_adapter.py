@@ -20,7 +20,6 @@ from app.exchanges.arcus import (
 )
 from app.main import create_app
 from app.models.market import MarketType
-from app.models.negative_basis import NEGATIVE_BASIS_FUTURE_EXCHANGES, NEGATIVE_BASIS_SPOT_EXCHANGES
 from app.models.pair_spread import PairSpreadLegQuery
 from app.services.collector import default_exchange_adapters
 from app.services.pair_spread_query import PairSpreadQueryService
@@ -314,8 +313,6 @@ def test_arcus_model_accepts_native_symbol_and_rejects_spot_without_extending_ot
         PairSpreadLegQuery(exchange="arcus", symbol="BTC", market_type=MarketType.SPOT)
     with pytest.raises(ValidationError, match="dex is only supported"):
         PairSpreadLegQuery(exchange="arcus", symbol="BTC", dex="io")
-    assert "arcus" not in NEGATIVE_BASIS_SPOT_EXCHANGES
-    assert "arcus" not in NEGATIVE_BASIS_FUTURE_EXCHANGES
 
 
 @pytest.mark.asyncio

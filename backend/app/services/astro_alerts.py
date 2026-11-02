@@ -9,7 +9,7 @@ import httpx
 from app.core.config import Settings
 from app.models.astro import AstroAlertActionResult, AstroCardCreateRequest, AstroCardVariant
 from app.models.opportunity import Opportunity
-from app.models.settings import AstroCardSettings, LivePilotSettings, RiskSettings
+from app.models.settings import AstroCardSettings, RiskSettings
 from app.services.astro_card_attempts import AstroCardAttemptRepository, route_key
 from app.services.astro_client import AstroClientError
 from app.services.astro_planner import AstroPairPlanner, AstroPlannerConfig
@@ -137,21 +137,6 @@ def _settings_with_create_overrides(
     return settings.model_copy(update=updates)
 
 
-def live_pilot_card_settings(
-    settings: AstroCardSettings,
-    live_pilot_settings: LivePilotSettings,
-) -> AstroCardSettings:
-    if not live_pilot_settings.enabled:
-        return settings
-    notional = live_pilot_settings.notional_per_symbol_usdt
-    return settings.model_copy(
-        update={
-            "max_trade_usdt": notional,
-            "max_notional": notional,
-        }
-    )
-
-
 class AstroAlertService:
     def __init__(
         self,
@@ -159,7 +144,6 @@ class AstroAlertService:
         settings: Settings,
         planner: AstroPairPlanner | None = None,
         card_settings: AstroCardSettings | None = None,
-        live_pilot_settings: LivePilotSettings | None = None,
         add_restart_delay_seconds: float = 3.0,
         risk_settings_loader: Callable[[], Awaitable[RiskSettings]] | None = None,
         hl_gc_catalog: GateCrossExHyperliquidCatalog | None = None,
@@ -169,7 +153,6 @@ class AstroAlertService:
         self.settings = settings
         self.planner = planner
         self.card_settings = card_settings or settings.astro_card_settings
-        self.live_pilot_settings = live_pilot_settings or LivePilotSettings()
         self.alert_auto_create_enabled = settings.astro_alert_auto_create
         self.allow_same_name_variants = (
             settings.astro_automation_settings.allow_same_name_variants
@@ -190,13 +173,6 @@ class AstroAlertService:
             disabled_message="自动创建卡片未开启",
         )
 
-    async def handle_live_pilot(self, opportunity: Opportunity) -> AstroAlertActionResult:
-        return await self._handle(
-            opportunity,
-            enabled=self.live_pilot_settings.enabled,
-            disabled_message="实盘实验未开启",
-            live_pilot=True,
-        )
 
     async def handle_manual_create(
         self,
@@ -248,7 +224,6 @@ class AstroAlertService:
         disabled_message: str,
         card_request: AstroCardCreateRequest | None = None,
         card_settings_override: AstroCardSettings | None = None,
-        live_pilot: bool = False,
         add_restart_delay_seconds: float | None = None,
         manual_override: bool = False,
         allow_route_variants: bool = False,
@@ -257,7 +232,7 @@ class AstroAlertService:
         depth_check: Callable[[], Awaitable[None]] | None = None,
         source: str = "alert",
     ) -> AstroAlertActionResult:
-        source = "manual" if manual_override else "live_pilot" if live_pilot else source
+        source = "manual" if manual_override else source
         if not enabled:
             return AstroAlertActionResult(
                 enabled=False,
@@ -361,11 +336,6 @@ class AstroAlertService:
             else self.card_settings
         )
         effective_card_settings = _settings_with_create_overrides(base_card_settings, card_request)
-        if live_pilot:
-            effective_card_settings = live_pilot_card_settings(
-                effective_card_settings,
-                self.live_pilot_settings,
-            )
         planner = self.planner or AstroPairPlanner(
             AstroPlannerConfig.from_card_settings(effective_card_settings)
         )
@@ -391,10 +361,7 @@ class AstroAlertService:
                 )
             )
 
-        if live_pilot:
-            pair_enabled = self.live_pilot_settings.create_cards_enabled
-        else:
-            pair_enabled = effective_card_settings.open_enabled
+        pair_enabled = effective_card_settings.open_enabled
         pair = _with_card_enabled(plan.pair, pair_enabled)
         hl_gc_supported = await self.hl_gc_catalog.supports_opportunity(opportunity)
         all_pair_variants = _pair_variants(pair, hl_gc_supported=hl_gc_supported)

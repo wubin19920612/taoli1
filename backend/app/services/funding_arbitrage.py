@@ -13,7 +13,7 @@ from app.models.funding_arbitrage import (
     FundingSource,
 )
 from app.models.market import MarketSnapshot, MarketType
-from app.services.funding_research.opportunity_types import exchange_formula_family
+from app.services.funding_formula_families import exchange_formula_family
 from app.services.pair_validation import same_asset_eligible, validate_pair
 
 HYPERLIQUID_EXCHANGE = "hyperliquid"
