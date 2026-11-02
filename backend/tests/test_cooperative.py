@@ -85,6 +85,17 @@ async def test_collector_matches_frozen_pipeline_and_publishes_atomically(fixed_
 
     old, _, _ = setup_collector(BaselineCollector)
     new, _, _ = setup_collector(MarketCollector)
+
+    # The frozen pipeline still calls this synchronously; keep its original unpack path.
+    def baseline_markets(adapters):
+        markets = []
+        for adapter in adapters:
+            snapshot = old._exchange_snapshots.get(adapter.name)
+            if snapshot is not None:
+                markets.extend(snapshot.unpack())
+        return markets
+
+    old._combined_exchange_markets = baseline_markets
     old.market_validation.__class__ = BaselineValidation
     previous = output(new.store)
     observations = []
@@ -150,7 +161,7 @@ async def test_registry_change_during_validation_does_not_republish(fixed_clock,
         risk_settings=RiskSettings(huge_spread_pct=10000),
         now_fn=lambda: NOW, snapshot_slots=[],
     )
-    collector._combined_exchange_markets = lambda _: rows
+    collector._combined_exchange_markets = AsyncMock(return_value=rows)
     for adapter in adapters:
         collector._state_for(adapter.name).next_due_at = NOW + timedelta(days=1)
     checked = 0
@@ -253,7 +264,7 @@ async def test_collector_queues_rounds_and_pins_risk_across_yields(fixed_clock, 
         now_fn=lambda: NOW, snapshot_slots=[],
     )
     collector._claim_due_adapters = AsyncMock(return_value=[])
-    collector._combined_exchange_markets = lambda _: rows
+    collector._combined_exchange_markets = AsyncMock(return_value=rows)
     entered, release, second_started = asyncio.Event(), asyncio.Event(), asyncio.Event()
     observed = []
     validate = service.validate
@@ -302,6 +313,76 @@ async def test_collector_queues_rounds_and_pins_risk_across_yields(fixed_clock, 
     assert first_result.opportunities and second_result.opportunities
     assert {name for name, _ in observed} == {"first", "second"}
     assert all(risk is (old if name == "first" else new) for name, risk in observed)
+
+
+async def test_collector_unpack_yields_each_row_and_shares_pipeline_budget(monkeypatch):
+    from app.runtime import cooperative
+    from app.services import collector as collector_module
+    from app.services.compact_markets import CompactMarkets, pack
+
+    rows = synthetic_markets(64)
+    adapters = [SimpleNamespace(name=f"venue{i}") for i in range(4)]
+    collector = MarketCollector(
+        adapters, SnapshotStore(), now_fn=lambda: NOW, snapshot_slots=[],
+        risk_settings=RiskSettings(huge_spread_pct=10000),
+    )
+    for adapter in adapters:
+        collector._exchange_snapshots[adapter.name] = pack([
+            row for row in rows if row.exchange == adapter.name
+        ])
+        collector._state_for(adapter.name).next_due_at = NOW + timedelta(days=1)
+    budget = cooperative.YieldBudget(budget_ms=0)
+    monkeypatch.setattr(collector_module, "YieldBudget", lambda: budget)
+    unpack_row = CompactMarkets._unpack_row
+    unpack_async = CompactMarkets.unpack_async
+    sleep = asyncio.sleep
+    constructed = []
+    checkpoints = []
+    unpack_budgets = []
+    unpacking = False
+
+    def track_row(self, row, field_sets):
+        result = unpack_row(self, row, field_sets)
+        constructed.append(result)
+        return result
+
+    async def track_unpack(self, received_budget):
+        nonlocal unpacking
+        unpack_budgets.append(received_budget)
+        unpacking = True
+        try:
+            return await unpack_async(self, received_budget)
+        finally:
+            unpacking = False
+
+    async def track_sleep(delay):
+        if unpacking:
+            assert delay == 0
+            checkpoints.append(len(constructed))
+        await sleep(delay)
+
+    monkeypatch.setattr(CompactMarkets, "_unpack_row", track_row)
+    monkeypatch.setattr(CompactMarkets, "unpack_async", track_unpack)
+    monkeypatch.setattr(cooperative.asyncio, "sleep", track_sleep)
+    aliases = AsyncMock(wraps=collector_module.apply_symbol_aliases_async)
+    filters = AsyncMock(wraps=collector_module.filter_markets_async)
+    build = AsyncMock(wraps=collector._build_labeled_opportunities_async)
+    monkeypatch.setattr(collector_module, "apply_symbol_aliases_async", aliases)
+    monkeypatch.setattr(collector_module, "filter_markets_async", filters)
+    monkeypatch.setattr(collector, "_build_labeled_opportunities_async", build)
+
+    result = await collector.collect_once()
+
+    assert checkpoints == list(range(len(rows)))
+    assert len(unpack_budgets) == len(adapters)
+    assert all(received is budget for received in unpack_budgets)
+    for stage in (aliases, filters, build):
+        stage.assert_awaited_once()
+        assert stage.await_args.kwargs["budget"] is budget
+    expected = [row for adapter in adapters for row in rows if row.exchange == adapter.name]
+    assert constructed == expected
+    assert result.markets == expected
+    assert result.opportunities
 
 
 def synthetic_markets(count):

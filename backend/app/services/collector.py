@@ -241,10 +241,10 @@ class MarketCollector:
 
         with self.stage_timings.measure(sample, "prepare"):
             validation_epoch = getattr(self.market_validation, "_mutation_epoch", None)
-            markets = self._combined_exchange_markets(active_adapters)
+            budget = YieldBudget()
+            markets = await self._combined_exchange_markets(active_adapters, budget)
             errors = self._combined_exchange_errors(active_adapters)
 
-            budget = YieldBudget()
             aliased_markets = await apply_symbol_aliases_async(
                 markets, risk.symbol_aliases, budget=budget,
             )
@@ -525,12 +525,14 @@ class MarketCollector:
     def _has_http_legal_restriction(self, errors: dict[str, str]) -> bool:
         return any(_is_http_legal_restriction(message) for message in errors.values())
 
-    def _combined_exchange_markets(self, adapters: list[ExchangeAdapter]) -> list[MarketSnapshot]:
+    async def _combined_exchange_markets(
+        self, adapters: list[ExchangeAdapter], budget: YieldBudget,
+    ) -> list[MarketSnapshot]:
         markets: list[MarketSnapshot] = []
         for adapter in adapters:
             snapshot = self._exchange_snapshots.get(adapter.name)
             if snapshot is not None:
-                markets.extend(snapshot.unpack())
+                markets.extend(await snapshot.unpack_async(budget))
         return markets
 
     def _combined_exchange_errors(self, adapters: list[ExchangeAdapter]) -> dict[str, str]:
