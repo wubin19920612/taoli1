@@ -31,6 +31,7 @@ import type {
   OilNewsSettings,
   OilNewsSeverity
 } from "../api/types";
+import { isPageHidden, onPageVisible } from "../utils/pageVisibility";
 
 dayjs.extend(utc);
 
@@ -256,8 +257,15 @@ export function OilNewsPage() {
 
   useEffect(() => {
     void loadRows();
-    const timer = window.setInterval(() => void loadRows(), 60_000);
-    return () => window.clearInterval(timer);
+    const timer = window.setInterval(() => {
+      if (isPageHidden()) return;
+      void loadRows();
+    }, 60_000);
+    const offVisible = onPageVisible(() => void loadRows());
+    return () => {
+      offVisible();
+      window.clearInterval(timer);
+    };
     // Keep automatic refresh aligned with the active filters.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [severity, direction]);

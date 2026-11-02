@@ -13,6 +13,7 @@ import type {
   PremiumIndexValueStats
 } from "../api/types";
 import { resolveHistoryIntervalSeconds } from "../constants/queryLimits";
+import { isPageHidden, onPageVisible } from "../utils/pageVisibility";
 
 dayjs.extend(utc);
 
@@ -1294,11 +1295,20 @@ export function PremiumIndexPage() {
       return undefined;
     }
     const timer = window.setInterval(() => {
+      if (isPageHidden()) return;
       if (!loading && !refreshing) {
         void refreshCurrent();
       }
     }, samplingIntervalSeconds * 1_000);
-    return () => window.clearInterval(timer);
+    const offVisible = onPageVisible(() => {
+      if (!loading && !refreshing) {
+        void refreshCurrent();
+      }
+    });
+    return () => {
+      offVisible();
+      window.clearInterval(timer);
+    };
   }, [autoRefresh, loading, refreshCurrent, refreshing, result, samplingIntervalSeconds]);
 
   const saveCurrentPreset = async () => {

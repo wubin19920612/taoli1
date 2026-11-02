@@ -415,6 +415,35 @@ describe("FloatingWatchPanel", () => {
     vi.unstubAllGlobals();
   });
 
+  it.each([false, true])("pauses polling for 60 seconds while hidden and refreshes once when visible (standalone: %s)", async standalone => {
+    vi.useFakeTimers();
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+    const view = render(<FloatingWatchPanel visible standalone={standalone} onClose={vi.fn()} />);
+    const settingsCalls = () => vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes("/settings/floating-watch")).length;
+    try {
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(settingsCalls()).toBe(1);
+      const initialRequests = vi.mocked(fetch).mock.calls.length;
+      act(() => {
+        Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(vi.mocked(fetch).mock.calls).toHaveLength(initialRequests);
+      await act(async () => {
+        Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(settingsCalls()).toBe(2);
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+      expect(settingsCalls()).toBe(3);
+    } finally {
+      view.unmount();
+      Reflect.deleteProperty(document, "visibilityState");
+      vi.useRealTimers();
+    }
+  });
+
   it("shows live symbols and pairs and opens their detail pages", async () => {
     render(<FloatingWatchPanel visible onClose={vi.fn()} />);
     const panel = await screen.findByRole("complementary", { name: "关注浮窗" });

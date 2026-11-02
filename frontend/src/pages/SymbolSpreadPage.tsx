@@ -14,6 +14,7 @@ import type {
   SymbolSpreadSeries
 } from "../api/types";
 import { resolveHistoryIntervalSeconds } from "../constants/queryLimits";
+import { isPageHidden, onPageVisible } from "../utils/pageVisibility";
 
 dayjs.extend(utc);
 
@@ -514,11 +515,20 @@ export function SymbolSpreadPage() {
       return undefined;
     }
     const timer = window.setInterval(() => {
+      if (isPageHidden()) return;
       if (!loading && !refreshing) {
         void executeQuery(lastQuery, true);
       }
     }, clampIntervalSeconds(lastQuery.interval_seconds) * 1_000);
-    return () => window.clearInterval(timer);
+    const offVisible = onPageVisible(() => {
+      if (!loading && !refreshing) {
+        void executeQuery(lastQuery, true);
+      }
+    });
+    return () => {
+      offVisible();
+      window.clearInterval(timer);
+    };
   }, [autoRefresh, executeQuery, lastQuery, loading, refreshing]);
 
   const seriesColumns = useMemo<ColumnsType<DisplaySymbolSpreadSeries>>(

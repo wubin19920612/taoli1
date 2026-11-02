@@ -44,6 +44,7 @@ import type {
   SecondLevelSamplingConfig,
   SecondLevelSamplingStatus
 } from "../api/types";
+import { isPageHidden, onPageVisible } from "../utils/pageVisibility";
 
 dayjs.extend(utc);
 
@@ -396,9 +397,16 @@ export function SecondLevelSamplingPage() {
       return undefined;
     }
     const timer = window.setInterval(() => {
+      if (isPageHidden()) return;
       void refresh();
     }, pollingMs);
-    return () => window.clearInterval(timer);
+    const offVisible = onPageVisible(() => {
+      void refresh();
+    });
+    return () => {
+      offVisible();
+      window.clearInterval(timer);
+    };
   }, [isRunning, pollingMs, refresh]);
 
   const saveConfig = useCallback(

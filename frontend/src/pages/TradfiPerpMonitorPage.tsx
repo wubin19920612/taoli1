@@ -25,6 +25,7 @@ import type {
   TradfiPerpMonitorPreview,
   TradfiPerpMonitorRow
 } from "../api/types";
+import { isPageHidden, onPageVisible } from "../utils/pageVisibility";
 
 dayjs.extend(utc);
 
@@ -288,9 +289,16 @@ export function TradfiPerpMonitorPage() {
       return undefined;
     }
     const id = window.setInterval(() => {
+      if (isPageHidden()) return;
       void loadSnapshot();
     }, 10_000);
-    return () => window.clearInterval(id);
+    const offVisible = onPageVisible(() => {
+      void loadSnapshot();
+    });
+    return () => {
+      offVisible();
+      window.clearInterval(id);
+    };
   }, [autoRefresh, loadSnapshot]);
 
   const columns = buildColumns();

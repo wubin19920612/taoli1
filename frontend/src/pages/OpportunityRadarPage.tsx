@@ -30,6 +30,7 @@ import type {
   OpportunityRadarSignalLevel
 } from "../api/types";
 import { QuoteAgeTag } from "../components/QuoteAgeTag";
+import { isPageHidden, onPageVisible } from "../utils/pageVisibility";
 
 const exchangeOptions = ["bybit", "binance", "okx", "gate", "bitget", "aster", "hyperliquid", "lighter"].map(
   (value) => ({ label: value, value })
@@ -239,8 +240,15 @@ export function OpportunityRadarPage() {
     if (!autoRefresh) {
       return;
     }
-    const timer = window.setInterval(() => void refreshPreview(), 60_000);
-    return () => window.clearInterval(timer);
+    const timer = window.setInterval(() => {
+      if (isPageHidden()) return;
+      void refreshPreview();
+    }, 60_000);
+    const offVisible = onPageVisible(() => void refreshPreview());
+    return () => {
+      offVisible();
+      window.clearInterval(timer);
+    };
   }, [autoRefresh, refreshPreview]);
 
   const save = async () => {

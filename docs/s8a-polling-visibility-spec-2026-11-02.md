@@ -71,3 +71,11 @@
 - `pageVisibility` 单元测试；
 - 每个页面各一条测试：隐藏 60 秒内没有请求，变为可见后立即请求一次（FsMonitor、NegativeBasis、PairMonitor、FloatingWatchPanel 必须有，其余页面尽量补）。
 原有测试全部通过，并且不能修改原有测试的断言。`npm test` 和 `npx tsc --noEmit` 都要通过。提交信息用 `perf(frontend): skip polling requests while the tab is hidden`。
+
+## 实现记录（v2，2026-11-02）
+- 新增 `frontend/src/utils/pageVisibility.ts`（`isPageHidden`、`onPageVisible`）；13 个文件的定时器回调开头加 `isPageHidden()` 跳过，同 effect 注册 `onPageVisible` 刷新并在 cleanup 注销；条件不建定时器的 effect 不注册。
+- FloatingWatchPanel：首轮 poll 照常，后续链式 poll 隐藏时跳过 `refresh` 但继续排下一次；可见回调走原 `refresh`（仍进 `refreshQueue`）。
+- PairMonitorPage 有两处定时器（资金费记录状态 60s、自动刷新查询），都已处理。
+- 红灯（只加测试、未改实现）：Test Files 4 failed | 30 passed (34)；Tests 6 failed | 374 passed (380)。
+- 绿灯：Test Files 34 passed (34)；Tests 380 passed (380)；`npx tsc --noEmit` 通过。
+- 新增页面测试：FsMonitor、NegativeBasis、PairMonitor（含资金费 watched 两种）、FloatingWatchPanel（standalone 两种）；另有 `pageVisibility.test.ts` 单元测试。其余 9 个页面未补页面级测试。

@@ -43,6 +43,7 @@ import type {
   GateTwapSide,
   GateTwapSliceMode
 } from "../api/types";
+import { isPageHidden, onPageVisible } from "../utils/pageVisibility";
 
 dayjs.extend(utc);
 
@@ -331,10 +332,18 @@ export function GateTwapPage() {
 
   useEffect(() => {
     const timer = window.setInterval(() => {
+      if (isPageHidden()) return;
       void loadMarket();
       void loadJobs();
     }, 5000);
-    return () => window.clearInterval(timer);
+    const offVisible = onPageVisible(() => {
+      void loadMarket();
+      void loadJobs();
+    });
+    return () => {
+      offVisible();
+      window.clearInterval(timer);
+    };
   }, [loadJobs, loadMarket, formContract, formSettle]);
 
   const preview = async () => {

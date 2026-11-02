@@ -27,6 +27,7 @@ import type {
   IndexComponentWatchItem,
   MarketSnapshot
 } from "../api/types";
+import { isPageHidden, onPageVisible } from "../utils/pageVisibility";
 
 dayjs.extend(utc);
 
@@ -648,9 +649,16 @@ export function IndexComponentChangesPage() {
     void load();
     void loadWatchlist();
     const timer = window.setInterval(() => {
+      if (isPageHidden()) return;
       void getIndexComponentAutoWatch().then(setAutoWatch).catch(() => undefined);
     }, 15_000);
-    return () => window.clearInterval(timer);
+    const offVisible = onPageVisible(() => {
+      void getIndexComponentAutoWatch().then(setAutoWatch).catch(() => undefined);
+    });
+    return () => {
+      offVisible();
+      window.clearInterval(timer);
+    };
     // Initial load only; filter changes are applied by the query button.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

@@ -42,6 +42,7 @@ import {
   removeFloatingWatchPair,
   removeFloatingWatchSymbol
 } from "../utils/floatingWatch";
+import { isPageHidden, onPageVisible } from "../utils/pageVisibility";
 
 const REFRESH_INTERVAL_MS = 10_000;
 const POSITION_STORAGE_KEY = "taoli1:floating-watch-position.v1";
@@ -794,12 +795,14 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
     if (!visible || collapsed) return undefined;
     let stopped = false;
     let timer: number | undefined;
-    const poll = async () => {
-      await refresh(mode);
-      if (!stopped) timer = window.setTimeout(() => void poll(), REFRESH_INTERVAL_MS);
+    const poll = async (skipWhenHidden = false) => {
+      if (!(skipWhenHidden && isPageHidden())) await refresh(mode);
+      if (!stopped) timer = window.setTimeout(() => void poll(true), REFRESH_INTERVAL_MS);
     };
     void poll();
+    const offVisible = onPageVisible(() => void refresh(mode));
     return () => {
+      offVisible();
       stopped = true;
       if (timer !== undefined) window.clearTimeout(timer);
     };

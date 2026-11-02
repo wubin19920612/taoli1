@@ -5,6 +5,7 @@ import { getFsReport, getFsSettings, updateFsSettings, refreshFsMonitor, getFsHi
 import type { FsCandidate, FsEvent, FsReport, FsSettings } from "../api/fsTypes";
 import type { AccountConnection } from "../api/types";
 import "./FsMonitorPage.css";
+import { isPageHidden, onPageVisible } from "../utils/pageVisibility";
 
 const exchangeNames: Record<string, string> = { bybit: "Bybit", binance: "Binance", okx: "OKX", bitget: "Bitget", gate: "Gate" };
 const rowKey = (row: FsCandidate) => `${row.exchange}:${row.symbol}`;
@@ -177,9 +178,10 @@ export function FsMonitorPage() {
       finally { loading = false; }
     }
     void load(true);
-    const timer = window.setInterval(() => void load(), 5000);
+    const timer = window.setInterval(() => { if (isPageHidden()) return; void load(); }, 5000);
+    const offVisible = onPageVisible(() => void load());
     const expiryTimer = window.setInterval(() => tick(v => v + 1), 1000);
-    return () => { cancelled = true; alive.current = false; window.clearInterval(timer); window.clearInterval(expiryTimer); };
+    return () => { offVisible(); cancelled = true; alive.current = false; window.clearInterval(timer); window.clearInterval(expiryTimer); };
   }, [form, loginVersion]);
 
   async function save() {

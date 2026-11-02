@@ -72,6 +72,7 @@ import { RangeBacktestPanel } from "../components/RangeBacktestPanel";
 import type { RangeBacktestRange } from "../api/rangeBacktest";
 import { addFloatingWatchPair } from "../utils/floatingWatch";
 import { buildTimeScale } from "../utils/chartTimeScale";
+import { isPageHidden, onPageVisible } from "../utils/pageVisibility";
 
 dayjs.extend(utc);
 
@@ -5215,9 +5216,16 @@ export function PairMonitorPage() {
       return undefined;
     }
     const timer = window.setInterval(() => {
+      if (isPageHidden()) return;
       void loadFundingRecordStatus(result);
     }, 60_000);
-    return () => window.clearInterval(timer);
+    const offVisible = onPageVisible(() => {
+      void loadFundingRecordStatus(result);
+    });
+    return () => {
+      offVisible();
+      window.clearInterval(timer);
+    };
   }, [fundingRecordStatus?.watched, loadFundingRecordStatus, result]);
 
   useEffect(() => {
@@ -5284,11 +5292,20 @@ export function PairMonitorPage() {
       return undefined;
     }
     const timer = window.setInterval(() => {
+      if (isPageHidden()) return;
       if (!loading) {
         void runQuery({ premiumMode: "current" });
       }
     }, clampIntervalSeconds(resultIntervalSeconds(result)) * 1000);
-    return () => window.clearInterval(timer);
+    const offVisible = onPageVisible(() => {
+      if (!loading) {
+        void runQuery({ premiumMode: "current" });
+      }
+    });
+    return () => {
+      offVisible();
+      window.clearInterval(timer);
+    };
   }, [autoRefresh, loading, result, runQuery]);
 
   const rerun = () => {

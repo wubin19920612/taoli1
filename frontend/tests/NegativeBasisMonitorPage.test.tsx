@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -98,6 +98,35 @@ describe("NegativeBasisMonitorPage", () => {
         return Response.json({});
       })
     );
+  });
+
+  it("pauses polling for 60 seconds while hidden and refreshes once when visible", async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+    const view = render(<NegativeBasisMonitorPage />);
+    const statusCalls = () => vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes("/negative-basis-monitor/status")).length;
+    try {
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(statusCalls()).toBe(1);
+      const initialRequests = vi.mocked(fetch).mock.calls.length;
+      act(() => {
+        Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(vi.mocked(fetch).mock.calls).toHaveLength(initialRequests);
+      await act(async () => {
+        Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(statusCalls()).toBe(2);
+      await act(async () => { await vi.advanceTimersByTimeAsync(8000); });
+      expect(statusCalls()).toBe(3);
+    } finally {
+      view.unmount();
+      Reflect.deleteProperty(document, "visibilityState");
+      vi.useRealTimers();
+    }
   });
 
   it("shows the global auto-monitoring strategy before any manual route", async () => {

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -580,6 +580,40 @@ describe("PairMonitorPage", () => {
     window.localStorage.clear();
     window.sessionStorage.clear();
     vi.unstubAllGlobals();
+  });
+
+  it.each([false, true])("pauses polling for 60 seconds while hidden and refreshes once when visible (funding watched: %s)", async watched => {
+    vi.useFakeTimers();
+    fundingRecordWatched = watched;
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+    window.history.pushState({}, "", "/?page=pair-monitor&leg1_exchange=binance&leg1_market_type=future&leg1_symbol=BTC&leg2_exchange=okx&leg2_market_type=future&leg2_symbol=BTC&hours=4&interval_seconds=5");
+    const view = render(<PairMonitorPage />);
+    const queryCalls = () => requests.filter(url => url.includes("/pair-spread/query")).length;
+    try {
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(queryCalls()).toBe(1);
+      fireEvent.click(screen.getByRole("switch", { name: "自动刷新" }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+      expect(queryCalls()).toBe(2);
+      const initialRequests = requests.length;
+      act(() => {
+        Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(requests).toHaveLength(initialRequests);
+      await act(async () => {
+        Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(queryCalls()).toBe(3);
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+      expect(queryCalls()).toBe(4);
+    } finally {
+      view.unmount();
+      Reflect.deleteProperty(document, "visibilityState");
+      vi.useRealTimers();
+    }
   });
 
   it("shows current leg ages and an incomplete realtime window", async () => {

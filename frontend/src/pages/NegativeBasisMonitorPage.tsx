@@ -61,6 +61,7 @@ import type {
   NegativeBasisThresholdState,
   NegativeBasisWatchItem
 } from "../api/types";
+import { isPageHidden, onPageVisible } from "../utils/pageVisibility";
 
 dayjs.extend(utc);
 
@@ -591,8 +592,15 @@ export function NegativeBasisMonitorPage() {
 
   useEffect(() => {
     void refresh();
-    const timer = window.setInterval(() => void refresh(), 8000);
-    return () => window.clearInterval(timer);
+    const timer = window.setInterval(() => {
+      if (isPageHidden()) return;
+      void refresh();
+    }, 8000);
+    const offVisible = onPageVisible(() => void refresh());
+    return () => {
+      offVisible();
+      window.clearInterval(timer);
+    };
   }, [refresh]);
 
   useEffect(() => {

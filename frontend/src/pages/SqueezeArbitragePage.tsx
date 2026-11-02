@@ -17,6 +17,7 @@ import type {
 import { SqueezeRoutesView } from "./SqueezeRoutesView";
 import { SqueezePaperView } from "./SqueezePaperView";
 import "./SqueezeArbitragePage.css";
+import { isPageHidden, onPageVisible } from "../utils/pageVisibility";
 
 dayjs.extend(utc);
 
@@ -145,8 +146,15 @@ export function SqueezeArbitragePage() {
 
   useEffect(() => {
     void refresh();
-    const timer = window.setInterval(() => void refresh(false), 15_000);
-    return () => window.clearInterval(timer);
+    const timer = window.setInterval(() => {
+      if (isPageHidden()) return;
+      void refresh(false);
+    }, 15_000);
+    const offVisible = onPageVisible(() => void refresh(false));
+    return () => {
+      offVisible();
+      window.clearInterval(timer);
+    };
   }, [refresh]);
 
   return (
