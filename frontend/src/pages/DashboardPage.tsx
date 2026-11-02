@@ -63,6 +63,12 @@ function normalizeSymbol(value: string): string {
   return value.trim().toUpperCase().replace(/[-_]/g, "");
 }
 
+// Matches antd Statistic precision: truncate, do not round.
+function truncatedFixed(value: number, precision: number): string {
+  const [integer, fraction = ""] = String(value).split(".");
+  return `${integer}.${fraction.padEnd(precision, "0").slice(0, precision)}`;
+}
+
 function normalizeOpportunityList(payload: Opportunity[] | OpportunityList): OpportunityList {
   return Array.isArray(payload) ? { opportunities: payload } : payload;
 }
@@ -938,7 +944,7 @@ export function DashboardPage() {
         <span className="dashboard-status-metric">
           <Typography.Text type="secondary">列表最大开仓价差</Typography.Text>{" "}
           <Typography.Text strong>
-            {(opportunities.length ? Math.max(...opportunities.map((item) => item.open_spread_pct)) : 0).toFixed(3)}%
+            {truncatedFixed(opportunities.length ? Math.max(...opportunities.map((item) => item.open_spread_pct)) : 0, 3)}%
           </Typography.Text>
         </span>
         {(excludedStale ?? 0) > 0 ? (
