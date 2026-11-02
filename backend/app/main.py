@@ -1266,6 +1266,7 @@ def create_app(
                 index_component_provider=app.state.index_component_provider,
                 index_component_monitor=index_component_monitor,
                 poll_interval_seconds=app_settings.poll_interval_seconds,
+                max_due_adapters_per_cycle=app_settings.collector_max_due_adapters_per_cycle,
                 market_validation=app.state.market_validation,
                 snapshot_slots=snapshot_slots,
                 risk_settings_timeout_seconds=app_settings.collector_risk_settings_timeout_seconds,

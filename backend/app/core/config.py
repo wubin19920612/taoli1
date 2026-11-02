@@ -49,6 +49,7 @@ class Settings:
     memory_tracemalloc_seconds: float = 0.0
     market_identity_catalog_startup_delay_seconds: float = 300.0
     collector_post_publish_mode: Literal["background", "inline"] = "background"
+    collector_max_due_adapters_per_cycle: int = 6
     collector_risk_settings_timeout_seconds: float = 2.0
     funding_poll_interval_seconds: float = 120.0
     funding_research_enabled: bool = False
@@ -141,6 +142,9 @@ class Settings:
             raise ValueError("memory_tracemalloc_seconds must be finite and nonnegative")
         if self.collector_post_publish_mode not in {"background", "inline"}:
             raise ValueError("collector_post_publish_mode must be background or inline")
+        limit = self.collector_max_due_adapters_per_cycle
+        if type(limit) is not int or limit < 1:
+            raise ValueError("collector_max_due_adapters_per_cycle must be a positive integer")
         timeout = self.collector_risk_settings_timeout_seconds
         if not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("collector_risk_settings_timeout_seconds must be finite and positive")
@@ -262,6 +266,7 @@ def get_settings() -> Settings:
             os.getenv("MARKET_IDENTITY_CATALOG_STARTUP_DELAY_SECONDS", "300")
         ),
         collector_post_publish_mode=os.getenv("COLLECTOR_POST_PUBLISH_MODE", "background"),
+        collector_max_due_adapters_per_cycle=int(os.getenv("COLLECTOR_MAX_DUE_ADAPTERS_PER_CYCLE", "6")),
         collector_risk_settings_timeout_seconds=float(os.getenv("COLLECTOR_RISK_SETTINGS_TIMEOUT_SECONDS", "2")),
         funding_poll_interval_seconds=float(os.getenv("FUNDING_POLL_INTERVAL_SECONDS", "120")),
         funding_research_enabled=bool_env("FUNDING_RESEARCH_ENABLED", False),

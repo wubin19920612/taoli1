@@ -6,7 +6,11 @@ import pytest
 from app.exchanges.base import ExchangeAdapter
 from app.models.market import MarketSnapshot, MarketType
 from app.models.settings import RiskSettings
-from app.services.collector import MarketCollector, default_exchange_adapters
+from app.services.collector import (
+    DEFAULT_MAX_DUE_ADAPTERS_PER_CYCLE,
+    MarketCollector,
+    default_exchange_adapters,
+)
 from app.services.snapshot_store import SnapshotStore
 
 
@@ -472,6 +476,35 @@ async def test_collector_does_not_start_duplicate_poll_when_exchange_is_in_fligh
     assert [row.symbol for row in completed_result.markets] == ["BTCUSDT"]
     assert [row.symbol for row in overlapping_result.markets] == ["BTCUSDT"]
     assert adapter.spot_calls == 1
+
+
+def test_collector_default_due_limit_is_six() -> None:
+    collector = MarketCollector([], SnapshotStore())
+
+    assert DEFAULT_MAX_DUE_ADAPTERS_PER_CYCLE == 6
+    assert collector.max_due_adapters_per_cycle == DEFAULT_MAX_DUE_ADAPTERS_PER_CYCLE
+
+
+@pytest.mark.asyncio
+async def test_collector_claims_six_of_ten_due_adapters_and_wraps_cursor() -> None:
+    adapters = [CountingAdapter(f"ex{index}") for index in range(10)]
+    collector = MarketCollector(adapters, SnapshotStore(), max_due_adapters_per_cycle=6)
+    now = FakeClock().now()
+
+    first = await collector._claim_due_adapters(adapters, now)
+
+    assert first == adapters[:6]
+    assert collector._adapter_cursor == 6
+    assert [collector._state_for(adapter.name).in_flight for adapter in adapters] == [True] * 6 + [False] * 4
+
+    # Simulate completed polls so all ten adapters are due on the next cycle.
+    for adapter in first:
+        collector._state_for(adapter.name).in_flight = False
+
+    second = await collector._claim_due_adapters(adapters, now)
+
+    assert second == adapters[6:] + adapters[:2]
+    assert collector._adapter_cursor == 2
 
 
 @pytest.mark.asyncio

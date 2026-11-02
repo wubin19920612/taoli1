@@ -191,6 +191,38 @@ def test_get_settings_loads_funding_research_flags(tmp_path: Path, monkeypatch) 
         get_settings.cache_clear()
 
 
+def test_collector_due_limit_defaults_to_six(monkeypatch):
+    monkeypatch.setattr("app.core.config.find_dotenv", lambda **kwargs: "")
+    monkeypatch.delenv("COLLECTOR_MAX_DUE_ADAPTERS_PER_CYCLE", raising=False)
+
+    assert Settings().collector_max_due_adapters_per_cycle == 6
+    assert get_settings.__wrapped__().collector_max_due_adapters_per_cycle == 6
+
+
+@pytest.mark.parametrize("limit", [1, 3, 6, 12])
+def test_collector_due_limit_reads_environment(monkeypatch, limit):
+    monkeypatch.setattr("app.core.config.find_dotenv", lambda **kwargs: "")
+    monkeypatch.setenv("COLLECTOR_MAX_DUE_ADAPTERS_PER_CYCLE", str(limit))
+
+    assert Settings(collector_max_due_adapters_per_cycle=limit).collector_max_due_adapters_per_cycle == limit
+    assert get_settings.__wrapped__().collector_max_due_adapters_per_cycle == limit
+
+
+@pytest.mark.parametrize("limit", [0, -1, 1.5, 6.0, True, False, None, "6"])
+def test_collector_due_limit_rejects_invalid_settings(limit):
+    with pytest.raises(ValueError, match="collector_max_due_adapters_per_cycle must be a positive integer"):
+        Settings(collector_max_due_adapters_per_cycle=limit)
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "", "invalid", "1.5", "6.0", "true", "nan", "inf"])
+def test_collector_due_limit_rejects_invalid_environment(monkeypatch, value):
+    monkeypatch.setattr("app.core.config.find_dotenv", lambda **kwargs: "")
+    monkeypatch.setenv("COLLECTOR_MAX_DUE_ADAPTERS_PER_CYCLE", value)
+
+    with pytest.raises(ValueError):
+        get_settings.__wrapped__()
+
+
 def test_census_time_budget_defaults(monkeypatch):
     monkeypatch.setattr("app.core.config.find_dotenv", lambda **kwargs: "")
     monkeypatch.delenv("MEMORY_CENSUS_BUDGET_SECONDS", raising=False)
