@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../src/pages/DashboardPage", () => ({
   DashboardPage: () => <div>Dashboard</div>
 }));
+vi.mock("../src/pages/GateTwapPage", () => ({ GateTwapPage: () => <div>Gate TWAP</div> }));
 
 import { AppShell } from "../src/components/AppShell";
 
@@ -12,25 +13,27 @@ const navigationOrderStorageKey = "taoli1:navigation-order.v1";
 const defaultNavigationOrder = [
   "dashboard",
   "funding",
-  "fs-monitor",
-  "funding-research",
-  "opportunity-radar",
   "instrument",
   "pair-monitor",
-  "spread-events",
-  "symbol-spread",
   "premium-index",
-  "negative-basis",
-  "squeeze-arbitrage",
-  "second-sampling",
-  "fat-finger",
-  "tradfi-perp",
   "gate-twap",
   "index-components",
   "announcements",
-  "oil-news",
   "account-connections",
   "settings"
+];
+const retiredPages = [
+  ["fat-finger", "乌龙回测"],
+  ["funding-research", "资金研究"],
+  ["negative-basis", "负基差埋伏"],
+  ["oil-news", "原油新闻"],
+  ["opportunity-radar", "机会雷达"],
+  ["second-sampling", "1s 采样"],
+  ["squeeze-arbitrage", "挤仓结构观察"],
+  ["symbol-spread", "跨所价差"],
+  ["spread-events", "价差事件榜"],
+  ["tradfi-perp", "TradFi 价差"],
+  ["fs-monitor", "负费率 FS 观察"]
 ];
 
 function visibleMenuLabels(): string[] {
@@ -143,17 +146,17 @@ describe("AppShell", () => {
       expect.stringContaining("实时机会")
     ]);
 
-    dragNavigationItem(dialog, "资金研究", "funding-research", "资金费率套利", 110);
+    dragNavigationItem(dialog, "标的查询", "instrument", "资金费率套利", 110);
     expect(within(dialog).getAllByRole("listitem").slice(0, 3).map((item) => item.textContent)).toEqual([
-      expect.stringContaining("资金研究"),
+      expect.stringContaining("标的查询"),
       expect.stringContaining("资金费率套利"),
       expect.stringContaining("实时机会")
     ]);
 
     await userEvent.click(screen.getByRole("button", { name: "保存菜单顺序" }));
-    expect(visibleMenuLabels().slice(0, 3)).toEqual(["资金研究", "资金费率套利", "实时机会"]);
+    expect(visibleMenuLabels().slice(0, 3)).toEqual(["标的查询", "资金费率套利", "实时机会"]);
     expect(JSON.parse(window.localStorage.getItem(navigationOrderStorageKey) ?? "[]").slice(0, 3)).toEqual([
-      "funding-research",
+      "instrument",
       "funding",
       "dashboard"
     ]);
@@ -168,7 +171,7 @@ describe("AppShell", () => {
     await userEvent.click(screen.getByRole("button", { name: "保存菜单顺序" }));
 
     expect(JSON.parse(window.localStorage.getItem(navigationOrderStorageKey) ?? "[]")).toEqual(defaultNavigationOrder);
-    expect(visibleMenuLabels().slice(0, 3)).toEqual(["实时机会", "资金费率套利", "负费率 FS 观察"]);
+    expect(visibleMenuLabels().slice(0, 3)).toEqual(["实时机会", "资金费率套利", "标的查询"]);
     expect(visibleMenuLabels().slice(-2)).toEqual(["账户连接", "参数与告警"]);
     expect(visibleMenuLabels()).not.toContain("告警历史");
   });
@@ -205,16 +208,56 @@ describe("AppShell", () => {
     expect(labels).not.toContain("1 分钟价差信号");
     expect(labels).not.toContain("新币极速");
     expect(labels).toContain("账户连接");
-    expect(labels).toContain("挤仓结构观察");
+    expect(labels).toContain("Gate 定时减仓");
     expect(labels).toContain("参数与告警");
   });
 
-  it.each(["minute-signals", "new-listing"])("opens the default page for retired URL %s", (page) => {
+  it("removes all retired pages from menus and saved order while preserving retained ordering", async () => {
+    window.localStorage.setItem(navigationOrderStorageKey, JSON.stringify([
+      ...retiredPages.map(([key]) => key), "settings", "dashboard", "settings", "unknown-page"
+    ]));
+    render(<AppShell />);
+
+    expect(visibleMenuLabels().slice(0, 2)).toEqual(["参数与告警", "实时机会"]);
+    expect(visibleMenuLabels()).toHaveLength(defaultNavigationOrder.length);
+    expect(screen.getByText("Dashboard")).toBeTruthy();
+    const dialog = await openNavigationDialog();
+    for (const [key, label] of retiredPages) {
+      expect(screen.queryByRole("menuitem", { name: label })).toBeNull();
+      expect(within(dialog).queryByText(label)).toBeNull();
+      expect(JSON.parse(window.localStorage.getItem(navigationOrderStorageKey) ?? "[]")).not.toContain(key);
+    }
+    expect(JSON.parse(window.localStorage.getItem(navigationOrderStorageKey) ?? "[]")).toEqual([
+      "settings", "dashboard", ...defaultNavigationOrder.filter((key) => key !== "settings" && key !== "dashboard")
+    ]);
+  });
+
+  it.each([...retiredPages.map(([key]) => key), "minute-signals", "new-listing"])("opens the default page for retired URL %s", (page) => {
     window.history.replaceState({}, "", `/?page=${page}`);
     render(<AppShell />);
 
     expect(screen.getByText("Dashboard")).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: /实时机会/ }).classList.contains("ant-menu-item-selected")).toBe(true);
     expect(visibleMenuLabels()).toHaveLength(defaultNavigationOrder.length);
+  });
+
+  it.each(["popstate", "taoli1:navigate"])("falls back from every retired URL through %s after another page mounts", async (eventName) => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ disabled: [], symbols: [], pair_ids: [] })));
+    render(<AppShell />);
+
+    for (const [key] of retiredPages) {
+      act(() => {
+        window.history.pushState({}, "", "/?page=gate-twap");
+        window.dispatchEvent(new Event(eventName));
+      });
+      expect(await screen.findByText("Gate TWAP")).toBeTruthy();
+      act(() => {
+        window.history.pushState({}, "", `/?page=${key}`);
+        window.dispatchEvent(new Event(eventName));
+      });
+      expect(screen.getByText("Dashboard")).toBeTruthy();
+      expect(screen.getByRole("menuitem", { name: /实时机会/ }).classList.contains("ant-menu-item-selected")).toBe(true);
+    }
   });
 
   it("opens the settings history tab for a legacy history bookmark", async () => {
