@@ -55,3 +55,19 @@
 
 ## 输出
 - 提交号（提交信息用 `perf(frontend): pause polling while the tab is hidden`）、改动文件清单、红灯/绿灯记录、测试汇总行、tsc 结果。
+
+## v2 方案（Claude，2026-11-02）：改为最小侵入
+第一版（分支 codex/s8-polling，f18bb8b..d0e2a47）把 13 处轮询都改成了统一的 `usePolling` hook。三轮只读审查每次都查出新的回归，原因是各页面原来的 effect 里有不少细节：依赖变化时重置周期、手动刷新后重新计时、排队刷新等，hook 很难一一还原。这一版放弃统一 hook，改为**保留各页面原有的 effect 和定时器结构不动**，只加可见性判断：
+1. 新增 `frontend/src/utils/pageVisibility.ts`，只导出两个函数：
+   - `isPageHidden(): boolean`
+   - `onPageVisible(callback): () => void`：注册一个回调，页面从隐藏变为可见时触发；返回值用于注销。
+2. 13 处轮询，每处只做两个改动：
+   - 在定时器回调开头加 `if (isPageHidden()) return;`。这样隐藏时只跳过发请求，定时器、周期、依赖重置的逻辑都和原来一样。
+   - 在同一个 effect 里注册 `onPageVisible(() => <与定时器回调相同的刷新调用>)`，并在 cleanup 里注销，让页面恢复可见时立即刷新一次。如果这个 effect 在 enabled 或暂停之类的条件下不会启动定时器，就也不注册这个回调，和原来不轮询的行为保持一致。
+   - FloatingWatchPanel 的 setTimeout 链也照此处理：隐藏时跳过 `refresh` 但继续排下一次；可见时立即刷新一次，仍走原来的 `refreshQueue`。
+   - FsMonitorPage 每秒的本地倒计时 tick 不改。
+3. 首轮立即加载、手动刷新、依赖变化后立即加载、周期设置等其他代码一律不动。
+验收：每一处的 diff 只包含上面两个改动。新增测试：
+- `pageVisibility` 单元测试；
+- 每个页面各一条测试：隐藏 60 秒内没有请求，变为可见后立即请求一次（FsMonitor、NegativeBasis、PairMonitor、FloatingWatchPanel 必须有，其余页面尽量补）。
+原有测试全部通过，并且不能修改原有测试的断言。`npm test` 和 `npx tsc --noEmit` 都要通过。提交信息用 `perf(frontend): skip polling requests while the tab is hidden`。
