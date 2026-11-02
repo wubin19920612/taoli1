@@ -56,9 +56,10 @@ SERVICE_CONTROL_ENABLED=false
 ```
 
 The application and its SQLite databases use the `taoli1` Compose project and
-the `radar-data` named volume. The squeeze route research worker uses
-`/data/radar-squeeze-route.db` so its frequent writes do not contend with
-`/data/radar.db`. The production overlay removes both build
+the `radar-data` named volume. The squeeze route research worker is retired
+(已退役). Its legacy `/data/radar-squeeze-route.db`, when present, remains
+covered by the backup and restore procedures below; do not delete it as part of
+feature retirement. The production overlay removes both build
 definitions, assigns prebuilt images, and caps backend/frontend memory at
 768/96 MiB. The normal `docker-compose.yml` remains available for local work.
 
