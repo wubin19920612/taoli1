@@ -93,7 +93,7 @@ describe("DashboardPage", () => {
       return fallback(input, init);
     });
     render(<DashboardPage />);
-    expect(await screen.findByText("已剔除 4 条过期报价")).toBeTruthy();
+    expect(await screen.findByText("已剔除过期 4")).toBeTruthy();
     expect(screen.getByLabelText("报价年龄 1.2s")).toBeTruthy();
     expect(screen.getByLabelText("报价年龄 5.0s")).toBeTruthy();
     const request = vi.mocked(fetch).mock.calls.find(([url]) => String(url).includes("/opportunities"));
@@ -102,7 +102,7 @@ describe("DashboardPage", () => {
     empty = true;
     await userEvent.click(await screen.findByRole("button", { name: "reload" }));
     await waitFor(() => expect(screen.queryByText("BTCUSDT")).toBeNull());
-    expect(screen.getByText("已剔除 4 条过期报价")).toBeTruthy();
+    expect(screen.getByText("已剔除过期 4")).toBeTruthy();
   });
 
   it.each([undefined, null, 0])("hides absent or zero excluded counts (%s)", async (excludedStale) => {
@@ -129,7 +129,7 @@ describe("DashboardPage", () => {
       return fallback(input, init);
     });
     render(<DashboardPage />);
-    await screen.findByText("已剔除 2 条过期报价");
+    await screen.findByText("已剔除过期 2");
     legacy = true;
     await userEvent.click(await screen.findByRole("button", { name: "reload" }));
     await screen.findByText("BTCUSDT");
@@ -146,20 +146,21 @@ describe("DashboardPage", () => {
 
     render(<DashboardPage />);
     await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes("/health"))).toBe(true));
-    const pendingStatistic = screen.getByText("交易所链路状态加载中").closest(".ant-statistic")!;
-    expect(pendingStatistic.querySelector(".ant-statistic-content")?.textContent).toBe("-");
-    expect(screen.queryByText("交易所链路异常")).toBeNull();
+    const pendingIndicator = screen.getByRole("button", { name: "链路状态加载中" });
+    expect(pendingIndicator.textContent).toBe("链路状态加载中");
+    expect(screen.queryByText(/^链路异常/)).toBeNull();
     expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes("/arb-mvp/status"))).toBe(false);
 
     resolveHealth(Response.json({
       status: "ok", markets: 1, opportunities: 0,
       exchange_errors: { "lighter:future": "ConnectTimeout" }
     }));
-    const loadedStatistic = (await screen.findByText("交易所链路异常")).closest(".ant-statistic")!;
-    expect(loadedStatistic.querySelector(".ant-statistic-content")?.textContent).toBe("1");
+    const loadedIndicator = await screen.findByRole("button", { name: "链路异常 1" });
+    expect(loadedIndicator.textContent).toBe("链路异常 1");
+    await userEvent.click(loadedIndicator);
     expect(screen.getByText("交易所外部 API 链路异常")).toBeTruthy();
     expect(screen.getByText("lighter:future")).toBeTruthy();
-    expect(screen.queryByText("交易所链路状态加载中")).toBeNull();
+    expect(screen.queryByText("链路状态加载中")).toBeNull();
   });
 
   it("keeps Astro sizing through pending Astro then live then Astro previews", async () => {
@@ -185,7 +186,7 @@ describe("DashboardPage", () => {
     });
     render(<DashboardPage />);
     await userEvent.click(await screen.findByRole("button", {name: "Astro BTCUSDT"}));
-    await waitFor(() => expect((screen.getByLabelText("Position value USDT") as HTMLInputElement).value).toBe("10"));
+    await waitFor(() => expect((screen.getByLabelText("单笔金额 USDT") as HTMLInputElement).value).toBe("10"));
     await userEvent.click(screen.getByRole("radio", {name: "arb-mvp 模拟盘"}));
     await waitFor(() => expect((screen.getByLabelText("最大持仓 (USD)") as HTMLInputElement).value).toBe("150"));
     await userEvent.click(screen.getByRole("radio", {name: "Astro"}));
@@ -209,7 +210,7 @@ describe("DashboardPage", () => {
     const payload = JSON.parse(String(call[1]?.body));
     expect(payload.target).toBe("astro");
     expect(payload.max_trade_usdt).toBe(10);
-    expect((screen.getByLabelText("Position value USDT") as HTMLInputElement).value).toBe("10");
+    expect((screen.getByLabelText("单笔金额 USDT") as HTMLInputElement).value).toBe("10");
   }, 20000);
 
   it("arb-mvp switches preview, isolates sizing, confirms live, and sends target", async () => {
@@ -237,7 +238,7 @@ describe("DashboardPage", () => {
     expect(screen.getByText(/STOPPED、禁止开仓/)).not.toBeNull();
     expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes("target=arb_paper"))).toBe(true);
     await userEvent.click(screen.getByRole("radio", {name: "Astro"}));
-    await waitFor(() => expect((screen.getByLabelText("Position value USDT") as HTMLInputElement).value).toBe("10"));
+    await waitFor(() => expect((screen.getByLabelText("单笔金额 USDT") as HTMLInputElement).value).toBe("10"));
     await userEvent.click(screen.getByRole("radio", {name: "arb-mvp live"}));
     await screen.findByLabelText("最大持仓 (USD)");
     await userEvent.click(screen.getByRole("button", {name: "创建卡片"}));
@@ -279,7 +280,7 @@ describe("DashboardPage", () => {
       return originalFetch(input, init);
     });
     render(<DashboardPage />);
-    await waitFor(() => expect(screen.getByText("列表最大开仓价差").closest(".ant-statistic")?.textContent).toContain("9.000"));
+    await waitFor(() => expect(screen.getByText("列表最大开仓价差").closest(".dashboard-status-metric")?.textContent).toContain("9.000"));
   });
 
   it.each([["rh-lighter", "RH Lighter"], ["arcus", "Arcus"]])("requests %s and global sorting together", async (exchange, label) => {
@@ -546,6 +547,7 @@ describe("DashboardPage", () => {
 
     render(<DashboardPage />);
 
+    await userEvent.click(screen.getByRole("button", { name: "屏蔽 0" }));
     await userEvent.type(await screen.findByRole("textbox", { name: "输入要屏蔽的标的" }), "purr");
     await userEvent.click(screen.getByRole("button", { name: "屏蔽输入标的" }));
 
@@ -599,6 +601,7 @@ describe("DashboardPage", () => {
 
     render(<DashboardPage />);
 
+    await userEvent.click(await screen.findByRole("button", { name: "屏蔽 1" }));
     await userEvent.click(await screen.findByRole("button", { name: "取消屏蔽 BADUSDT" }));
 
     await waitFor(() => {
@@ -689,7 +692,8 @@ describe("DashboardPage", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Astro BTCUSDT" }));
 
-    expect((await screen.findAllByText("Astro dry-run")).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("Astro 建卡预览")).length).toBeGreaterThan(0);
+    await userEvent.click(await screen.findByText("技术细节"));
     expect(screen.getAllByText(/openPosition/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/0.007800/).length).toBeGreaterThan(0);
     expect(screen.getByText(/Dry-run only/)).toBeTruthy();
@@ -994,8 +998,9 @@ describe("DashboardPage", () => {
     render(<DashboardPage />);
 
     await userEvent.click(await screen.findByRole("button", { name: "Astro BTCUSDT" }));
-    const positionInput = await screen.findByLabelText("Position value USDT");
+    const positionInput = await screen.findByLabelText("单笔金额 USDT");
     expect((positionInput as HTMLInputElement).value).toBe("25");
+    await userEvent.click(screen.getByText("技术细节"));
     expect(screen.getByText("Generated openPosition")).toBeTruthy();
     expect(screen.getByText("0.007800")).toBeTruthy();
     expect(screen.getByText("Generated closePosition")).toBeTruthy();
@@ -1076,7 +1081,8 @@ describe("DashboardPage", () => {
 
     render(<DashboardPage />);
 
-    expect(await screen.findByText("Exchange states")).toBeTruthy();
+    await userEvent.click(await screen.findByRole("button", { name: "链路正常" }));
+    expect(await screen.findByText("交易所状态")).toBeTruthy();
     expect(screen.getByText("binance")).toBeTruthy();
     expect(screen.getByText("gate")).toBeTruthy();
     expect(screen.getByText("cooling_down")).toBeTruthy();
@@ -1123,7 +1129,8 @@ describe("DashboardPage", () => {
 
     render(<DashboardPage />);
 
-    expect(await screen.findByText("交易所链路异常")).toBeTruthy();
+    expect(await screen.findByText("链路异常 1")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "链路异常 1" }));
     expect(screen.getByText("交易所外部 API 链路异常")).toBeTruthy();
     expect(screen.getByText("binance:future")).toBeTruthy();
     expect(screen.getByText(/fapi\.binance\.com/)).toBeTruthy();
@@ -1174,6 +1181,7 @@ describe("DashboardPage", () => {
 
     render(<DashboardPage />);
 
+    await userEvent.click(await screen.findByRole("button", { name: "链路正常" }));
     expect(await screen.findByText("stale")).toBeTruthy();
     expect(screen.getAllByText("unknown").length).toBeGreaterThan(0);
     expect(screen.getByText("n/a")).toBeTruthy();

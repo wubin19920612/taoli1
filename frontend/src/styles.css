@@ -2670,6 +2670,119 @@ body {
   border-radius: 6px;
 }
 
+.dashboard-filter-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.dashboard-filter-row > .toolbar {
+  flex: 1;
+}
+
+.dashboard-blocked-toggle {
+  flex: 0 0 auto;
+  margin-top: 10px;
+}
+
+.dashboard-blocked-content {
+  display: grid;
+  gap: 10px;
+  width: 300px;
+  max-width: calc(100vw - 48px);
+  overflow-wrap: anywhere;
+}
+
+.dashboard-blocked-content .blocked-strip-input {
+  width: 100%;
+}
+
+.dashboard-blocked-content .blocked-strip-list .ant-btn {
+  height: auto;
+  white-space: normal;
+  text-align: left;
+}
+
+.dashboard-status-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  min-height: 32px;
+  padding: 4px 12px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.dashboard-status-metric {
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.dashboard-health-toggle {
+  height: auto;
+  margin-left: auto;
+  padding: 0;
+}
+
+.dashboard-health-toggle .ant-tag {
+  margin: 0;
+}
+
+.dashboard-health-details {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.dashboard-opportunity-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #66736f;
+}
+
+.dashboard-opportunity-heading .ant-typography {
+  margin: 0;
+}
+
+.astro-preview-panel {
+  width: 100%;
+  min-width: 0;
+}
+
+.astro-preview-panel > .ant-space-item,
+.astro-preview-section {
+  min-width: 0;
+}
+
+.astro-preview-json {
+  max-height: 320px;
+  max-width: 100%;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  background: #f7faf9;
+  border: 1px solid #dce4e1;
+  border-radius: 6px;
+}
+
+@media (max-width: 600px) {
+  .dashboard-filter-row {
+    flex-wrap: wrap;
+  }
+
+  .dashboard-filter-row > .toolbar {
+    flex-basis: 100%;
+  }
+
+  .dashboard-blocked-toggle {
+    margin-top: 0;
+    margin-left: auto;
+  }
+}
+
 .page-alert {
   border-radius: 6px;
 }

@@ -2,17 +2,16 @@ import {
   Alert,
   Button,
   Checkbox,
-  Col,
+  Collapse,
   Descriptions,
   Form,
   Input,
   InputNumber,
   Modal,
+  Popover,
   Radio,
-  Row,
   Segmented,
   Space,
-  Statistic,
   Switch,
   Table,
   Tag,
@@ -23,7 +22,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
-import { EyeOutlined, StopOutlined } from "@ant-design/icons";
+import { EyeOutlined, InfoCircleOutlined, StopOutlined } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 
 import {
@@ -62,6 +61,12 @@ dayjs.extend(utc);
 
 function normalizeSymbol(value: string): string {
   return value.trim().toUpperCase().replace(/[-_]/g, "");
+}
+
+// Matches antd Statistic precision: truncate, do not round.
+function truncatedFixed(value: number, precision: number): string {
+  const [integer, fraction = ""] = String(value).split(".");
+  return `${integer}.${fraction.padEnd(precision, "0").slice(0, precision)}`;
 }
 
 function normalizeOpportunityList(payload: Opportunity[] | OpportunityList): OpportunityList {
@@ -123,6 +128,7 @@ type AstroSizingFormValues = Required<Omit<AstroCardCreateRequest, "save_as_defa
 };
 
 const dashboardFilterStorageKey = "taoli1.dashboard.filters.v1";
+const dashboardHealthExpandedStorageKey = "dashboard-health-expanded";
 const opportunityTypes: OpportunityType[] = ["SF", "FF", "SS"];
 const spreadHistoryRanges = [
   { label: "24h", value: 24 },
@@ -551,6 +557,13 @@ export function DashboardPage() {
   const [riskSettings, setRiskSettings] = useState<RiskSettings | null>(null);
   const [savingSymbol, setSavingSymbol] = useState<string | null>(null);
   const [manualBlockSymbol, setManualBlockSymbol] = useState("");
+  const [healthExpanded, setHealthExpanded] = useState(() => {
+    try {
+      return window.localStorage.getItem(dashboardHealthExpandedStorageKey) === "true";
+    } catch {
+      return false;
+    }
+  });
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [astroPreviewOpportunity, setAstroPreviewOpportunity] = useState<Opportunity | null>(null);
   const [astroPreviewPlan, setAstroPreviewPlan] = useState<AstroPairPlan | null>(null);
@@ -596,6 +609,14 @@ export function DashboardPage() {
     setFilters(nextFilters);
     savePersistedDashboardFilters(nextFilters);
   };
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(dashboardHealthExpandedStorageKey, String(healthExpanded));
+    } catch {
+      // Keep the details toggle usable when storage is unavailable.
+    }
+  }, [healthExpanded]);
 
   useEffect(() => {
     let cancelled = false;
@@ -850,129 +871,148 @@ export function DashboardPage() {
 
   return (
     <div className="page">
-      <TopFilters
-        filters={filters}
-        loading={loading}
-        autoRefresh={autoRefresh}
-        refreshIntervalMs={refreshIntervalMs}
-        onChange={changeFilters}
-        onRefresh={() => void refresh({ force: true, showLoading: true })}
-        onAutoRefreshChange={setAutoRefresh}
-        onRefreshIntervalChange={setRefreshIntervalMs}
-      />
-      <div className="blocked-strip">
-        <Typography.Text className="blocked-strip-title">全局屏蔽</Typography.Text>
-        <Space.Compact className="blocked-strip-input">
-          <Input
-            aria-label="输入要屏蔽的标的"
-            placeholder="PURRUSDT"
-            value={manualBlockSymbol}
-            disabled={!riskSettings || savingSymbol !== null}
-            onChange={(event) => setManualBlockSymbol(event.target.value)}
-            onPressEnter={() => void blockManualSymbol()}
-          />
-          <Tooltip title="屏蔽标的">
-            <Button
-              aria-label="屏蔽输入标的"
-              icon={<StopOutlined />}
-              loading={savingSymbol === manualBlockCandidate && Boolean(manualBlockCandidate)}
-              disabled={!riskSettings || savingSymbol !== null || !manualBlockCandidate}
-              onClick={() => void blockManualSymbol()}
-            />
-          </Tooltip>
-        </Space.Compact>
-        {blockedSymbols.length > 0 ? (
-          <Space size={8} wrap className="blocked-strip-list">
-            {blockedSymbols.map((symbol) => (
-              <Button
-                key={symbol}
-                size="small"
-                type="text"
-                icon={<EyeOutlined />}
-                aria-label={`\u53d6\u6d88\u5c4f\u853d ${symbol}`}
-                loading={savingSymbol === symbol}
-                disabled={savingSymbol !== null && savingSymbol !== symbol}
-                onClick={() => void toggleBlockedSymbol(symbol, false)}
-              >
-                取消屏蔽 {symbol}
-              </Button>
-            ))}
-          </Space>
-        ) : null}
-      </div>
-      <Row gutter={[12, 12]} className="metric-row">
-        <Col xs={12} md={6}>
-          <Statistic title="Opportunities" value={opportunities.length} />
-        </Col>
-        <Col xs={12} md={6}>
-          <Statistic title="Markets" value={health?.markets ?? 0} />
-        </Col>
-        <Col xs={12} md={6}>
-          <Statistic
-            title={health ? "交易所链路异常" : "交易所链路状态加载中"}
-            value={health ? Object.keys(errors).length : "-"}
-          />
-        </Col>
-        <Col xs={12} md={6}>
-          <Statistic
-            title="列表最大开仓价差"
-            value={opportunities.length ? Math.max(...opportunities.map((item) => item.open_spread_pct)) : 0}
-            precision={3}
-            suffix="%"
-          />
-        </Col>
-      </Row>
-      {error ? <Alert className="page-alert" type="error" message={error} showIcon /> : null}
-      {Object.keys(errors).length > 0 ? (
-        <Alert
-          className="page-alert"
-          type="warning"
-          message="交易所外部 API 链路异常"
-          description={
-            <div className="exchange-error-list">
-              {Object.entries(errors)
-                .slice(0, 6)
-                .map(([key, value]) => (
-                  <div key={key} className="exchange-error-item">
-                    <Typography.Text strong>{key}</Typography.Text>
-                    <Typography.Text>{`: ${value}`}</Typography.Text>
-                  </div>
-                ))}
-              {Object.keys(errors).length > 6 ? (
-                <Typography.Text type="secondary">
-                  还有 {Object.keys(errors).length - 6} 条交易所链路异常，请查看健康检查详情。
-                </Typography.Text>
+      <div className="dashboard-filter-row">
+        <TopFilters
+          filters={filters}
+          loading={loading}
+          autoRefresh={autoRefresh}
+          refreshIntervalMs={refreshIntervalMs}
+          onChange={changeFilters}
+          onRefresh={() => void refresh({ force: true, showLoading: true })}
+          onAutoRefreshChange={setAutoRefresh}
+          onRefreshIntervalChange={setRefreshIntervalMs}
+        />
+        <Popover
+          title="全局屏蔽"
+          trigger="click"
+          placement="bottomRight"
+          content={
+            <div className="dashboard-blocked-content">
+              <Space.Compact className="blocked-strip-input">
+                <Input
+                  aria-label="输入要屏蔽的标的"
+                  placeholder="PURRUSDT"
+                  value={manualBlockSymbol}
+                  disabled={!riskSettings || savingSymbol !== null}
+                  onChange={(event) => setManualBlockSymbol(event.target.value)}
+                  onPressEnter={() => void blockManualSymbol()}
+                />
+                <Tooltip title="屏蔽标的">
+                  <Button
+                    aria-label="屏蔽输入标的"
+                    icon={<StopOutlined />}
+                    loading={savingSymbol === manualBlockCandidate && Boolean(manualBlockCandidate)}
+                    disabled={!riskSettings || savingSymbol !== null || !manualBlockCandidate}
+                    onClick={() => void blockManualSymbol()}
+                  />
+                </Tooltip>
+              </Space.Compact>
+              {blockedSymbols.length > 0 ? (
+                <Space size={8} wrap className="blocked-strip-list">
+                  {blockedSymbols.map((symbol) => (
+                    <Button
+                      key={symbol}
+                      size="small"
+                      type="text"
+                      icon={<EyeOutlined />}
+                      aria-label={`\u53d6\u6d88\u5c4f\u853d ${symbol}`}
+                      loading={savingSymbol === symbol}
+                      disabled={savingSymbol !== null && savingSymbol !== symbol}
+                      onClick={() => void toggleBlockedSymbol(symbol, false)}
+                    >
+                      取消屏蔽 {symbol}
+                    </Button>
+                  ))}
+                </Space>
               ) : null}
             </div>
           }
-          showIcon
-        />
-      ) : null}
-      {exchangeStates.length > 0 ? (
-        <div className="metric-row">
-          <Space direction="vertical" size={10} style={{ width: "100%" }}>
-            <Typography.Title level={5} style={{ margin: 0 }}>
-              Exchange states
-            </Typography.Title>
-            <Table
-              size="small"
-              pagination={false}
-              rowKey="exchange"
-              columns={exchangeStateColumns}
-              dataSource={exchangeStates}
-              scroll={{ x: 960 }}
+        >
+          <Button className="dashboard-blocked-toggle">屏蔽 {blockedSymbols.length}</Button>
+        </Popover>
+      </div>
+      {error ? <Alert className="page-alert" type="error" message={error} showIcon /> : null}
+      <div className="metric-row dashboard-status-row">
+        <span className="dashboard-status-metric">
+          <Typography.Text type="secondary">机会数</Typography.Text>{" "}
+          <Typography.Text strong>{opportunities.length}</Typography.Text>
+        </span>
+        <span className="dashboard-status-metric">
+          <Typography.Text type="secondary">市场数</Typography.Text>{" "}
+          <Typography.Text strong>{health?.markets ?? 0}</Typography.Text>
+        </span>
+        <span className="dashboard-status-metric">
+          <Typography.Text type="secondary">列表最大开仓价差</Typography.Text>{" "}
+          <Typography.Text strong>
+            {truncatedFixed(opportunities.length ? Math.max(...opportunities.map((item) => item.open_spread_pct)) : 0, 3)}%
+          </Typography.Text>
+        </span>
+        {(excludedStale ?? 0) > 0 ? (
+          <Typography.Text type="secondary">已剔除过期 {excludedStale}</Typography.Text>
+        ) : null}
+        <Button
+          type="text"
+          className="dashboard-health-toggle"
+          aria-expanded={healthExpanded}
+          aria-controls="dashboard-health-details"
+          onClick={() => setHealthExpanded((current) => !current)}
+        >
+          <Tag color={health ? (Object.keys(errors).length > 0 ? "gold" : "green") : undefined}>
+            {health ? (Object.keys(errors).length > 0 ? `链路异常 ${Object.keys(errors).length}` : "链路正常") : "链路状态加载中"}
+          </Tag>
+        </Button>
+      </div>
+      {healthExpanded ? (
+        <div id="dashboard-health-details" className="dashboard-health-details">
+          {Object.keys(errors).length > 0 ? (
+            <Alert
+              className="page-alert"
+              type="warning"
+              message="交易所外部 API 链路异常"
+              description={
+                <div className="exchange-error-list">
+                  {Object.entries(errors).map(([key, value]) => (
+                    <div key={key} className="exchange-error-item">
+                      <Typography.Text strong>{key}</Typography.Text>
+                      <Typography.Text>{`: ${value}`}</Typography.Text>
+                    </div>
+                  ))}
+                </div>
+              }
+              showIcon
             />
-          </Space>
+          ) : null}
+          {exchangeStates.length > 0 ? (
+            <div className="metric-row">
+              <Space direction="vertical" size={10} style={{ width: "100%" }}>
+                <Typography.Title level={5} style={{ margin: 0 }}>
+                  交易所状态
+                </Typography.Title>
+                <Table
+                  size="small"
+                  pagination={false}
+                  rowKey="exchange"
+                  columns={exchangeStateColumns}
+                  dataSource={exchangeStates}
+                  scroll={{ x: 960 }}
+                />
+              </Space>
+            </div>
+          ) : null}
         </div>
       ) : null}
-      <Typography.Paragraph type="secondary">
-        {filters.exchange ? `与 ${filters.exchange} 买入或卖出侧相关的价差。` : "全部交易所价差。"}
-        在符合当前筛选的采集数据中先排序，再取前 {filters.limit ?? "全部"} 条。
-        成交额为双方 24h USDT；净资金费率按小时归一化，正值表示买多卖空净收入，预测不保证实现；缺失值排末尾。
-      </Typography.Paragraph>
-      {(excludedStale ?? 0) > 0 ? (
-        <Typography.Text type="secondary">已剔除 {excludedStale} 条过期报价</Typography.Text>
-      ) : null}
+      <div className="dashboard-opportunity-heading">
+        <Typography.Title level={5}>机会列表</Typography.Title>
+        <Tooltip title={
+          <>
+            {filters.exchange ? `与 ${filters.exchange} 买入或卖出侧相关的价差。` : "全部交易所价差。"}
+            在符合当前筛选的采集数据中先排序，再取前 {filters.limit ?? "全部"} 条。
+            成交额为双方 24h USDT；净资金费率按小时归一化，正值表示买多卖空净收入，预测不保证实现；缺失值排末尾。
+          </>
+        }>
+          <InfoCircleOutlined tabIndex={0} aria-label="机会列表说明" />
+        </Tooltip>
+      </div>
       <OpportunityTable
         opportunities={opportunities}
         loading={loading}
@@ -1055,7 +1095,7 @@ export function DashboardPage() {
       </Modal>
       <Modal
         open={astroPreviewOpportunity !== null}
-        title="Astro dry-run"
+        title="Astro 建卡预览"
         width={1040}
         onCancel={closeAstroPreview}
         footer={[
@@ -1086,19 +1126,7 @@ export function DashboardPage() {
             </div>
             {cardTarget !== "astro" ? <Alert type="info" showIcon message="arb-mvp 卡片建好后是 STOPPED、禁止开仓，需要在 arb-mvp 界面手动开始交易" /> : null}
 
-            <Descriptions bordered size="small" column={2}>
-              <Descriptions.Item label="Symbol">{astroPreviewOpportunity.symbol}</Descriptions.Item>
-              <Descriptions.Item label="Opportunity ID">{astroPreviewOpportunity.id}</Descriptions.Item>
-              <Descriptions.Item label="Mode">
-                <Tag color="blue">{astroPreviewPlan?.mode ?? "dry_run"}</Tag>
-              </Descriptions.Item>
-              <Descriptions.Item label="Can submit">
-                <Tag color={astroPreviewPlan?.can_submit ? "green" : "red"}>
-                  {astroPreviewPlan?.can_submit ? "yes" : "no"}
-                </Tag>
-              </Descriptions.Item>
-            </Descriptions>
-            {astroPreviewLoading ? <Alert type="info" showIcon message="Loading Astro preview..." /> : null}
+            {astroPreviewLoading ? <Alert type="info" showIcon message="正在生成预览" /> : null}
             {astroPreviewError ? <Alert type="error" showIcon message={astroPreviewError} /> : null}
             {astroSubmitError ? <Alert type="error" showIcon message={astroSubmitError} /> : null}
             {astroSubmitResult ? (
@@ -1121,49 +1149,49 @@ export function DashboardPage() {
                 message={astroSubmitResult.warnings.join(" | ")}
               />
             ) : null}
+            {astroPreviewPlan && astroPreviewPlan.warnings.length > 0 ? (
+              <Alert
+                type="warning"
+                showIcon
+                message={astroPreviewPlan.warnings.join(" | ")}
+              />
+            ) : null}
+            {astroPreviewPlan && astroPreviewPlan.blockers.length > 0 ? (
+              <Alert
+                type="error"
+                showIcon
+                message="当前不能创建"
+                description={astroPreviewPlan.blockers.join(" | ")}
+              />
+            ) : null}
+            <Descriptions bordered size="small" column={2}>
+              <Descriptions.Item label="标的">{astroPreviewOpportunity.symbol}</Descriptions.Item>
+              <Descriptions.Item label="机会 ID">{astroPreviewOpportunity.id}</Descriptions.Item>
+              <Descriptions.Item label="模式">
+                <Tag color="blue">{astroPreviewPlan?.mode ?? "dry_run"}</Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="允许提交">
+                <Tag color={astroPreviewPlan?.can_submit ? "green" : "red"}>
+                  {astroPreviewPlan?.can_submit ? "yes" : "no"}
+                </Tag>
+              </Descriptions.Item>
+            </Descriptions>
             {astroPreviewPlan ? (
               <>
-                {astroPreviewPlan.warnings.length > 0 ? (
-                  <Alert
-                    type="warning"
-                    showIcon
-                    message={astroPreviewPlan.warnings.join(" | ")}
-                  />
-                ) : null}
-                {astroPreviewPlan.blockers.length > 0 ? (
-                  <Alert
-                    type="error"
-                    showIcon
-                    message="Blockers"
-                    description={astroPreviewPlan.blockers.join(" | ")}
-                  />
-                ) : null}
                 <div className="astro-preview-section">
-                  <Typography.Title level={5}>Generated card defaults</Typography.Title>
-                  <Descriptions bordered size="small" column={2}>
-                    <Descriptions.Item label="Generated openPosition">
-                      <Typography.Text code>{pairString(astroPreviewPlan.pair, cardTarget === "astro" ? "openPosition" : "openSpread")}</Typography.Text>
-                    </Descriptions.Item>
-                    <Descriptions.Item label="Generated closePosition">
-                      <Typography.Text code>{pairString(astroPreviewPlan.pair, cardTarget === "astro" ? "closePosition" : "closeSpread")}</Typography.Text>
-                    </Descriptions.Item>
-                    {cardTarget === "astro" ? (<Descriptions.Item label="将创建路线" span={2}>
-                      {selectedAstroRoutes(astroPreviewPlan.route_variants, selectedCardVariant)}
-                    </Descriptions.Item>) : null}
-                  </Descriptions>
                   {astroPreviewPlan.pair ? (
                     <Form form={astroSizingForm} layout="vertical" className="astro-sizing-form">
                       <div className="form-grid">
-                        <Form.Item label={cardTarget === "astro" ? "Position value USDT" : "最大持仓 (USD)"} name="max_trade_usdt" rules={[{ required: true }]}>
+                        <Form.Item label={cardTarget === "astro" ? "单笔金额 USDT" : "最大持仓 (USD)"} name="max_trade_usdt" rules={[{ required: true }]}>
                           <InputNumber min={0.01} step={1} className="wide-input" />
                         </Form.Item>
-                        <Form.Item label="Leverage" name="leverage" rules={[{ required: true }]}>
+                        <Form.Item label="杠杆" name="leverage" rules={[{ required: true }]}>
                           <InputNumber min={1} step={1} className="wide-input" />
                         </Form.Item>
-                        <Form.Item label="Minimum notional USDT" name="min_notional" rules={[{ required: true }]}>
+                        <Form.Item label="最小名义金额 USDT" name="min_notional" rules={[{ required: true }]}>
                           <InputNumber min={0} step={1} className="wide-input" />
                         </Form.Item>
-                        <Form.Item label="Maximum notional USDT" name="max_notional" rules={[{ required: true }]}>
+                        <Form.Item label="最大名义金额 USDT" name="max_notional" rules={[{ required: true }]}>
                           <InputNumber min={0.01} step={1} className="wide-input" />
                         </Form.Item>
                         {cardTarget === "astro" ? (<Form.Item label="创建后允许开仓" name="open_enabled" valuePropName="checked">
@@ -1179,25 +1207,49 @@ export function DashboardPage() {
                     </Form>
                   ) : null}
                 </div>
-                <div className="astro-preview-section">
-                  <Typography.Title level={5}>Field assumptions</Typography.Title>
-                  <Table
-                    size="small"
-                    pagination={false}
-                    rowKey="field"
-                    columns={astroAssumptionColumns}
-                    dataSource={astroPreviewPlan.assumptions}
-                    scroll={{ x: 760 }}
-                  />
-                </div>
-                <div className="astro-preview-section">
-                  <Typography.Title level={5}>Pair payload</Typography.Title>
-                  <pre className="astro-preview-json">{jsonBlock(astroPreviewPlan.pair)}</pre>
-                </div>
-                <div className="astro-preview-section">
-                  <Typography.Title level={5}>SDK payload</Typography.Title>
-                  <pre className="astro-preview-json">{jsonBlock(astroPreviewPlan.sdk_payload)}</pre>
-                </div>
+                <Collapse
+                  items={[{
+                    key: "technical-details",
+                    label: "技术细节",
+                    children: (
+                      <Space direction="vertical" size={12} className="astro-preview-panel">
+                        <div className="astro-preview-section">
+                          <Typography.Title level={5}>生成的卡片默认值</Typography.Title>
+                          <Descriptions bordered size="small" column={2}>
+                            <Descriptions.Item label="Generated openPosition">
+                              <Typography.Text code>{pairString(astroPreviewPlan.pair, cardTarget === "astro" ? "openPosition" : "openSpread")}</Typography.Text>
+                            </Descriptions.Item>
+                            <Descriptions.Item label="Generated closePosition">
+                              <Typography.Text code>{pairString(astroPreviewPlan.pair, cardTarget === "astro" ? "closePosition" : "closeSpread")}</Typography.Text>
+                            </Descriptions.Item>
+                            {cardTarget === "astro" ? (<Descriptions.Item label="将创建路线" span={2}>
+                              {selectedAstroRoutes(astroPreviewPlan.route_variants, selectedCardVariant)}
+                            </Descriptions.Item>) : null}
+                          </Descriptions>
+                        </div>
+                        <div className="astro-preview-section">
+                          <Typography.Title level={5}>字段假设</Typography.Title>
+                          <Table
+                            size="small"
+                            pagination={false}
+                            rowKey="field"
+                            columns={astroAssumptionColumns}
+                            dataSource={astroPreviewPlan.assumptions}
+                            scroll={{ x: 760 }}
+                          />
+                        </div>
+                        <div className="astro-preview-section">
+                          <Typography.Title level={5}>Pair payload</Typography.Title>
+                          <pre className="astro-preview-json">{jsonBlock(astroPreviewPlan.pair)}</pre>
+                        </div>
+                        <div className="astro-preview-section">
+                          <Typography.Title level={5}>SDK payload</Typography.Title>
+                          <pre className="astro-preview-json">{jsonBlock(astroPreviewPlan.sdk_payload)}</pre>
+                        </div>
+                      </Space>
+                    )
+                  }]}
+                />
               </>
             ) : null}
           </Space>
