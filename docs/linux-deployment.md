@@ -98,6 +98,86 @@ tags, and runs `docker compose up -d --no-build --wait`. Git runs as the normal
 user; Docker commands use passwordless `sudo`. It never removes volumes or the
 server's `.env`.
 
+### S4：隔离备份与容量门槛
+
+默认 `BACKUP_MODE=isolated`：从 Compose 查找当前 backend 容器，使用其不可变镜像
+ID（`docker inspect .Image`），独立运行临时容器；不拉取备份镜像、不共享 backend
+内存额度。限制为 128 MiB 内存及相同总内存/交换额度、0.5 CPU、32 PID，禁用网络，
+容器根文件系统只读。主库与存在时的 route 库逐一执行 `source.backup(pages=-1)`，
+各自 `integrity_check` 全部通过后发布备份，再核对容器与宿主机 SHA-256。
+每个库是独立时间点，两个库不构成跨库原子快照。route 库不存在会明确输出 skip。
+
+数据卷以可写方式提供 SQLite 所需的 WAL/SHM 锁元数据权限，但源连接始终使用
+`mode=ro`，不执行源库写 SQL。不能因暂时没有 WAL/SHM 就把在线库设为 `immutable=1`。
+备份输出直接写宿主机 `backups/`，新模式文件权限 0600、归该目录所有者所有；
+失败留下的 `*.partial` 不属于自动清理范围，必须人工检查，不作为恢复点。
+最终文件使用硬链接原子发布，拒绝覆盖同名备份；`backups/` 必须支持普通文件硬链接。
+
+部署前检查 `backups/` 内所有文件的递归逻辑大小（包括未纳入清理的文件；链接本身
+计数但不跟随）。`BACKUP_DIR_MAX_GB` 默认 **15 GiB（15 × 1024³ bytes）**；
+超过上限拒绝部署，等于上限允许继续。双库备份后、`git pull` 前再检查一次；若新
+备份触发上限，保留这些恢复点并中止更新。现有剩余磁盘至少 2 GiB 的检查仍保留。
+该阈值不预留本次备份的空间，也不取代文件系统剩余空间检查。
+
+每次检查输出 `UNMANAGED` 文件名、大小及汇总，如 `env-before-*`、旧手工命名、
+嵌套目录内文件和 `.partial`；不输出文件内容、不删除文件。仅检查本地目录可用：
+
+```bash
+bash deploy/linux-update.sh --check-backups /path/to/copied-backups
+BACKUP_DIR_MAX_GB=20 bash deploy/linux-update.sh --check-backups /path/to/copied-backups
+```
+
+检查模式不连接 Git 远端、不调用 Docker、不读取 `.env`。容量过限时先核对清单及下文
+保留器预览；迁出人工确认的文件，或确认容量预算后临时调整命令环境变量。不要为
+绕过门槛而直接批量删除备份或修改自动保留规则。
+
+### 恢复演练（临时目录，不覆盖数据库）
+
+在测试机准备已关闭、无 `-wal/-shm/-journal` 的独立备份文件以及 Python 3.10+，
+无需安装业务依赖或 Docker。下面命令中的时间戳与 SHA 应替换为真实备份文件名：
+
+```bash
+bash deploy/restore_drill.sh "/path/to/copied-backups/radar-before-<12hex>-<timestamp>.db"
+bash deploy/restore_drill.sh "/path/to/copied-backups/squeeze-route-before-<12hex>-<timestamp>.db"
+# 旧命名文件要显式指定库类型；自定义关键表可重复传 --table NAME。
+bash deploy/restore_drill.sh /path/to/copied-backups/manual-snapshot.db --kind radar
+```
+
+脚本仅以普通文件方式读取输入，先复制到权限受限的随机临时目录，再从临时副本
+执行 SQLite Backup API 恢复到另一临时库。检查副本和恢复库的 `integrity_check`、
+关键表行数，并确认输入备份 SHA-256 没有变化；成功或失败均清理自己的临时目录。
+主库默认对比 `app_settings`、`opportunity_history`、`alert_events`；route 库默认
+对比 `squeeze_route_state`、`squeeze_route_latest`、`squeeze_route_events`。
+缺少任何指定表即失败，零行可以通过。这证明该快照可恢复，不能证明它包含快照
+之后的业务数据；行数比较对象是备份副本，不访问线上库，也不验证业务语义。
+
+退出码：`0` 为 `RESTORE_DRILL PASS`，`1` 为数据、校验或文件操作失败，`2` 为命令
+用法错误。脚本拒绝 `/data`、`/var/lib/docker`、线上库文件名 `radar.db` /
+`radar-squeeze-route.db`、符号链接及带侧文件的快照；所有 SQLite 连接只打开临时文件。
+不得把线上数据卷指定为临时目录（含 `TMPDIR`）。临时空间预留至少双倍备份体积。
+
+测试机上进一步验收隔离容器行为时，使用独立 Compose 项目、测试数据卷及测试配置，
+先记录 backend 镜像 ID 和 `docker stats`，再对测试分支/完整 SHA 运行更新脚本。
+确认两份 `Backup integrity_check=ok sha256=...`、备份容器的 128 MiB 限制和业务容器
+内存变化，再把双库备份分别送入上述恢复演练。该步骤会更新测试环境，不能在本机
+或生产环境照抄运行；本次 S4 本地验收不包含此项运行证据。
+
+### 备份路径回退与数据恢复边界
+
+旧 `backup_sqlite` 保留一个版本。仅需要回退备份实现时，在**已批准的测试机更新**
+命令前加 `BACKUP_MODE=legacy`，其余 `DEPLOY_BRANCH` / `DEPLOY_COMMIT` 仍按上文提供。
+容量门槛和双库校验继续生效，但旧备份会重新共享 backend 的内存限额，有历史 OOM
+风险；不会在隔离备份失败时自动切换。验证后取消该变量即可恢复默认路径。
+
+若要回退业务镜像，记录当前版本及两份验证备份，检查旧镜像与数据库兼容性后按上文
+生产 overlay 指定之前的完整 SHA 标签并 `up -d --no-build --wait`，再查健康与业务接口。
+恢复演练脚本只验证快照，不负责线上还原。真正回写数据前须单独批准维护窗口：停止
+所有写入者、保存当前双库与侧文件、在停写后整体替换已演练的双库快照并清除旧
+WAL/SHM，再启动并验收。不要向运行中的库覆盖 `.db`，不要用 `down -v`。
+
+每日定时备份的待决方案见 [S4 定时备份评估](s4-daily-backup-proposal.md)；当前没有
+安装或启用 timer。
+
 After a successful Compose update, `deploy/backup_retention.py` removes only old
 deployment-created database backups independently for the radar and squeeze
 route files. It keeps the latest three of each, one per UTC day
