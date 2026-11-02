@@ -16,6 +16,13 @@ const messageCellStyle = {
   wordBreak: "break-word" as const
 };
 
+const statusLabels: Record<string, string> = {
+  sent: "已发送",
+  failed: "失败",
+  muted: "已静默",
+  unknown: "结果未知"
+};
+
 function formatUtcPlus8(value: string): string {
   return dayjs.utc(value).utcOffset(8).format("MM-DD HH:mm:ss");
 }
@@ -23,7 +30,16 @@ function formatUtcPlus8(value: string): string {
 const columns: ColumnsType<AlertEvent> = [
   { title: "时间(UTC+8)", dataIndex: "created_at", width: 132, render: formatUtcPlus8 },
   { title: "标的", dataIndex: "symbol", width: 120 },
-  { title: "状态", dataIndex: "status", width: 96, render: (value: string) => <Tag color={value === "sent" ? "green" : "red"}>{value}</Tag> },
+  {
+    title: "状态",
+    dataIndex: "status",
+    width: 96,
+    render: (value: string) => (
+      <Tag color={value === "sent" ? "green" : value === "failed" ? "red" : undefined}>
+        {Object.prototype.hasOwnProperty.call(statusLabels, value) ? statusLabels[value] : value}
+      </Tag>
+    )
+  },
   {
     title: "消息",
     dataIndex: "message",
@@ -31,7 +47,7 @@ const columns: ColumnsType<AlertEvent> = [
   }
 ];
 
-export function AlertHistoryPage() {
+export function AlertHistoryPage({ active = true }: { active?: boolean }) {
   const [events, setEvents] = useState<AlertEvent[]>([]);
   const [loading, setLoading] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -40,14 +56,16 @@ export function AlertHistoryPage() {
     setLoading(true);
     try {
       setEvents(await listAlertEvents(200));
+    } catch (exc) {
+      message.error(exc instanceof Error ? exc.message : String(exc));
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    void load();
-  }, []);
+    if (active) void load();
+  }, [active]);
 
   const createTestEvent = async () => {
     setTesting(true);
@@ -63,7 +81,7 @@ export function AlertHistoryPage() {
   };
 
   return (
-    <div className="page">
+    <section className="panel alert-history-panel">
       <div className="toolbar">
         <Space>
           <Typography.Title level={4}>告警历史</Typography.Title>
@@ -72,7 +90,9 @@ export function AlertHistoryPage() {
           <Button icon={<ExperimentOutlined />} onClick={() => void createTestEvent()} loading={testing}>
             测试告警
           </Button>
-          <Button icon={<ReloadOutlined />} onClick={() => void load()} loading={loading} />
+          <Button icon={<ReloadOutlined />} onClick={() => void load()} loading={loading}>
+            刷新
+          </Button>
         </Space>
       </div>
       <Table
@@ -84,6 +104,6 @@ export function AlertHistoryPage() {
         tableLayout="fixed"
         scroll={{ x: 760 }}
       />
-    </div>
+    </section>
   );
 }
