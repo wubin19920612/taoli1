@@ -6,7 +6,6 @@ import {
   ClockCircleOutlined,
   DashboardOutlined,
   EyeInvisibleOutlined,
-  ExperimentOutlined,
   FundProjectionScreenOutlined,
   HolderOutlined,
   KeyOutlined,
@@ -15,11 +14,9 @@ import {
   NodeIndexOutlined,
   OrderedListOutlined,
   PushpinOutlined,
-  RadarChartOutlined,
   SearchOutlined,
   StockOutlined,
   SettingOutlined,
-  ThunderboltOutlined,
   UndoOutlined
 } from "@ant-design/icons";
 import { Button, ConfigProvider, Layout, Menu, Modal, Segmented, Space, Spin, Tooltip, Typography } from "antd";
@@ -46,23 +43,12 @@ import {
 type PageKey =
   | "dashboard"
   | "funding"
-  | "fs-monitor"
-  | "funding-research"
-  | "opportunity-radar"
   | "instrument"
   | "pair-monitor"
-  | "spread-events"
-  | "symbol-spread"
   | "premium-index"
-  | "negative-basis"
-  | "squeeze-arbitrage"
-  | "second-sampling"
-  | "fat-finger"
-  | "tradfi-perp"
   | "gate-twap"
   | "index-components"
   | "announcements"
-  | "oil-news"
   | "account-connections"
   | "settings";
 
@@ -82,19 +68,6 @@ const lazyPages: Record<PageKey, LazyPage> = {
       default: module.FundingArbitragePage
     }))
   ),
-  "fs-monitor": lazy(() =>
-    import("../pages/FsMonitorPage").then((module) => ({ default: module.FsMonitorPage }))
-  ),
-  "funding-research": lazy(() =>
-    import("../pages/FundingResearchPage").then((module) => ({
-      default: module.FundingResearchPage
-    }))
-  ),
-  "opportunity-radar": lazy(() =>
-    import("../pages/OpportunityRadarPage").then((module) => ({
-      default: module.OpportunityRadarPage
-    }))
-  ),
   instrument: lazy(() =>
     import("../pages/InstrumentLookupPage").then((module) => ({
       default: module.InstrumentLookupPage
@@ -105,42 +78,9 @@ const lazyPages: Record<PageKey, LazyPage> = {
       default: module.PairMonitorPage
     }))
   ),
-  "symbol-spread": lazy(() =>
-    import("../pages/SymbolSpreadPage").then((module) => ({
-      default: module.SymbolSpreadPage
-    }))
-  ),
-  "spread-events": lazy(() =>
-    import("../pages/SpreadEventsPage").then((module) => ({ default: module.SpreadEventsPage }))
-  ),
   "premium-index": lazy(() =>
     import("../pages/PremiumIndexPage").then((module) => ({
       default: module.PremiumIndexPage
-    }))
-  ),
-  "negative-basis": lazy(() =>
-    import("../pages/NegativeBasisMonitorPage").then((module) => ({
-      default: module.NegativeBasisMonitorPage
-    }))
-  ),
-  "squeeze-arbitrage": lazy(() =>
-    import("../pages/SqueezeArbitragePage").then((module) => ({
-      default: module.SqueezeArbitragePage
-    }))
-  ),
-  "second-sampling": lazy(() =>
-    import("../pages/SecondLevelSamplingPage").then((module) => ({
-      default: module.SecondLevelSamplingPage
-    }))
-  ),
-  "fat-finger": lazy(() =>
-    import("../pages/FatFingerBacktestPage").then((module) => ({
-      default: module.FatFingerBacktestPage
-    }))
-  ),
-  "tradfi-perp": lazy(() =>
-    import("../pages/TradfiPerpMonitorPage").then((module) => ({
-      default: module.TradfiPerpMonitorPage
     }))
   ),
   "gate-twap": lazy(() =>
@@ -156,11 +96,6 @@ const lazyPages: Record<PageKey, LazyPage> = {
       default: module.AnnouncementsPage
     }))
   ),
-  "oil-news": lazy(() =>
-    import("../pages/OilNewsPage").then((module) => ({
-      default: module.OilNewsPage
-    }))
-  ),
   "account-connections": lazy(() =>
     import("../pages/AccountConnectionsPage").then((module) => ({
       default: module.AccountConnectionsPage
@@ -173,15 +108,7 @@ const lazyPages: Record<PageKey, LazyPage> = {
 
 const pageKeys = Object.keys(lazyPages) as PageKey[];
 const pageFeatures: Partial<Record<PageKey, OptionalFeature>> = {
-  "squeeze-arbitrage": "squeeze",
-  "negative-basis": "negative_basis",
-  "oil-news": "oil_news",
-  "opportunity-radar": "opportunity_radar",
-  "symbol-spread": "symbol_spread",
-  "fat-finger": "fat_finger",
-  "gate-twap": "gate_twap",
-  "second-sampling": "second_level_sampling",
-  "funding-research": "funding_research"
+  "gate-twap": "gate_twap"
 };
 const appearanceModeStorageKey = "taoli1:appearance-mode";
 const navigationOrderStorageKey = "taoli1:navigation-order.v1";
@@ -191,23 +118,12 @@ const standaloneFloatingWatchParam = "floating_watch";
 const defaultNavigationItems: NavigationItem[] = [
   { key: "dashboard", icon: <DashboardOutlined />, label: "实时机会" },
   { key: "funding", icon: <FundProjectionScreenOutlined />, label: "资金费率套利" },
-  { key: "fs-monitor", icon: <FundProjectionScreenOutlined />, label: "负费率 FS 观察" },
-  { key: "funding-research", icon: <ExperimentOutlined />, label: "资金研究" },
-  { key: "opportunity-radar", icon: <RadarChartOutlined />, label: "机会雷达" },
   { key: "instrument", icon: <SearchOutlined />, label: "标的查询" },
   { key: "pair-monitor", icon: <StockOutlined />, label: "价差查询" },
-  { key: "spread-events", icon: <LineChartOutlined />, label: "价差事件榜" },
-  { key: "symbol-spread", icon: <LineChartOutlined />, label: "跨所价差" },
   { key: "premium-index", icon: <LineChartOutlined />, label: "溢价指数" },
-  { key: "negative-basis", icon: <RadarChartOutlined />, label: "负基差埋伏" },
-  { key: "squeeze-arbitrage", icon: <RadarChartOutlined />, label: "挤仓结构观察" },
-  { key: "second-sampling", icon: <ThunderboltOutlined />, label: "1s 采样" },
-  { key: "fat-finger", icon: <ExperimentOutlined />, label: "乌龙回测" },
-  { key: "tradfi-perp", icon: <LineChartOutlined />, label: "TradFi 价差" },
   { key: "gate-twap", icon: <ClockCircleOutlined />, label: "Gate 定时减仓" },
   { key: "index-components", icon: <NodeIndexOutlined />, label: "指数成分变更" },
   { key: "announcements", icon: <NotificationOutlined />, label: "交易所公告" },
-  { key: "oil-news", icon: <NotificationOutlined />, label: "原油新闻" },
   { key: "account-connections", icon: <KeyOutlined />, label: "账户连接" },
   { key: "settings", icon: <SettingOutlined />, label: "参数与告警" }
 ];
@@ -391,10 +307,7 @@ export function AppShell() {
 
   useEffect(() => {
     const syncPageFromUrl = () => {
-      const requested = pageFromUrl();
-      if (requested) {
-        setPage(requested);
-      }
+      setPage(pageFromUrl() ?? "dashboard");
     };
     window.addEventListener("popstate", syncPageFromUrl);
     window.addEventListener("taoli1:navigate", syncPageFromUrl);

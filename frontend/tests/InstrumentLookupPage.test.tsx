@@ -1026,6 +1026,11 @@ describe("InstrumentLookupPage", () => {
     await waitFor(() => {
       expect((fetch as ReturnType<typeof vi.fn>).mock.calls.some(([input]) => String(input).includes("symbol-query"))).toBe(true);
     });
+    const trendCall = vi.mocked(fetch).mock.calls.find(([input]) => String(input).includes("/pair-spread/symbol-query"));
+    expect(trendCall).toBeDefined();
+    const trendUrl = new URL(String(trendCall![0]), window.location.origin);
+    expect(trendUrl.pathname).toBe("/api/pair-spread/symbol-query");
+    expect(trendUrl.searchParams.get("symbol")).toBe("BTCUSDT");
     expect(await screen.findByRole("img", { name: "多交易所价格走势" })).not.toBeNull();
     expect(screen.getAllByText("最新价差").length).toBeGreaterThan(0);
   });
@@ -1063,7 +1068,9 @@ describe("InstrumentLookupPage", () => {
     );
     expect(JSON.parse(String(createCall?.[1]?.body)).expected_open_spread_pct).toBe(0.08);
     expect(JSON.parse(String(createCall?.[1]?.body)).card.card_variant).toBe("non_gc");
-    expect(await screen.findAllByText("已创建暂停卡片 BTC SF binance->binance")).toHaveLength(2);
+    await waitFor(() => {
+      expect(screen.getAllByText("已创建暂停卡片 BTC SF binance->binance")).toHaveLength(2);
+    });
     expect(screen.getByText(/人工建卡，仅作风险提示，未拦截创建/)).not.toBeNull();
   });
 

@@ -1,33 +1,17 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const mounts = vi.hoisted(() => ({ oil: vi.fn() }));
+const mounts = vi.hoisted(() => ({ gate: vi.fn() }));
 vi.mock("../src/pages/DashboardPage", () => ({ DashboardPage: () => <div>Dashboard</div> }));
-vi.mock("../src/pages/OilNewsPage", () => ({
-  OilNewsPage: () => { mounts.oil(); return <div>Oil page mounted</div>; }
+vi.mock("../src/pages/GateTwapPage", () => ({
+  GateTwapPage: () => { mounts.gate(); return <div>Gate page mounted</div>; }
 }));
 vi.mock("../src/components/FloatingWatchPanel", () => ({ FloatingWatchPanel: () => null }));
-vi.mock("../src/pages/SqueezeArbitragePage", () => ({ SqueezeArbitragePage: () => <div>Enabled page</div> }));
-vi.mock("../src/pages/NegativeBasisMonitorPage", () => ({ NegativeBasisMonitorPage: () => <div>Enabled page</div> }));
-vi.mock("../src/pages/OpportunityRadarPage", () => ({ OpportunityRadarPage: () => <div>Enabled page</div> }));
-vi.mock("../src/pages/SymbolSpreadPage", () => ({ SymbolSpreadPage: () => <div>Enabled page</div> }));
-vi.mock("../src/pages/FatFingerBacktestPage", () => ({ FatFingerBacktestPage: () => <div>Enabled page</div> }));
-vi.mock("../src/pages/GateTwapPage", () => ({ GateTwapPage: () => <div>Enabled page</div> }));
-vi.mock("../src/pages/SecondLevelSamplingPage", () => ({ SecondLevelSamplingPage: () => <div>Enabled page</div> }));
-vi.mock("../src/pages/FundingResearchPage", () => ({ FundingResearchPage: () => <div>Enabled page</div> }));
 
 import { AppShell } from "../src/components/AppShell";
 
 const features = [
-  ["squeeze", "squeeze-arbitrage", "挤仓结构观察"],
-  ["negative_basis", "negative-basis", "负基差埋伏"],
-  ["oil_news", "oil-news", "原油新闻"],
-  ["opportunity_radar", "opportunity-radar", "机会雷达"],
-  ["symbol_spread", "symbol-spread", "跨所价差"],
-  ["fat_finger", "fat-finger", "乌龙回测"],
-  ["gate_twap", "gate-twap", "Gate 定时减仓"],
-  ["second_level_sampling", "second-sampling", "1s 采样"],
-  ["funding_research", "funding-research", "资金研究"]
+  ["gate_twap", "gate-twap", "Gate 定时减仓"]
 ];
 
 function mockFeatures(disabled: string[], fail = false) {
@@ -45,7 +29,7 @@ function mockFeatures(disabled: string[], fail = false) {
 beforeEach(() => {
   window.localStorage.clear();
   window.history.replaceState({}, "", "/");
-  mounts.oil.mockClear();
+  mounts.gate.mockClear();
 });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -62,7 +46,7 @@ describe("feature flags", () => {
   });
 
   it("hides all disabled menus while preserving saved order for re-enable", async () => {
-    const order = JSON.stringify(["oil-news", "dashboard"]);
+    const order = JSON.stringify(["gate-twap", "dashboard"]);
     window.localStorage.setItem("taoli1:navigation-order.v1", order);
     mockFeatures(features.map(([key]) => key));
     render(<AppShell />);
@@ -70,14 +54,14 @@ describe("feature flags", () => {
     await waitFor(() => {
       for (const [, , label] of features) expect(screen.queryByRole("menuitem", { name: new RegExp(label) })).toBeNull();
     });
-    expect(JSON.parse(window.localStorage.getItem("taoli1:navigation-order.v1")!)[0]).toBe("oil-news");
+    expect(JSON.parse(window.localStorage.getItem("taoli1:navigation-order.v1")!)[0]).toBe("gate-twap");
   });
 
   it.each([false, true])("shows all menus with empty flags or failure: %s", async (fail) => {
     const fetchMock = mockFeatures([], fail);
-    window.history.replaceState({}, "", "/?page=oil-news");
+    window.history.replaceState({}, "", "/?page=gate-twap");
     render(<AppShell />);
-    await screen.findByText("Oil page mounted");
+    await screen.findByText("Gate page mounted");
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/features"))).toBe(true);
     for (const [, , label] of features) expect(screen.getByRole("menuitem", { name: new RegExp(label) })).toBeTruthy();
   });
@@ -87,17 +71,17 @@ describe("feature flags", () => {
     const pending = new Promise((done) => { resolve = done; });
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => String(input).includes("/features")
       ? pending : Promise.resolve({ ok: true, json: async () => ({ symbols: [], pair_ids: [] }) })));
-    window.history.replaceState({}, "", "/?page=oil-news");
+    window.history.replaceState({}, "", "/?page=gate-twap");
     render(<AppShell />);
     await act(async () => { await Promise.resolve(); });
-    expect(mounts.oil).not.toHaveBeenCalled();
-    await act(async () => resolve({ ok: true, json: async () => ({ disabled: ["oil_news"] }) }));
+    expect(mounts.gate).not.toHaveBeenCalled();
+    await act(async () => resolve({ ok: true, json: async () => ({ disabled: ["gate_twap"] }) }));
     expect(await screen.findByText("该功能已停用")).toBeTruthy();
-    expect(mounts.oil).not.toHaveBeenCalled();
+    expect(mounts.gate).not.toHaveBeenCalled();
     window.history.pushState({}, "", "/?page=dashboard");
     fireEvent(window, new PopStateEvent("popstate"));
     expect(await screen.findByText("Dashboard")).toBeTruthy();
-    window.history.pushState({}, "", "/?page=oil-news");
+    window.history.pushState({}, "", "/?page=gate-twap");
     fireEvent(window, new Event("taoli1:navigate"));
     expect(await screen.findByText("该功能已停用")).toBeTruthy();
   });
