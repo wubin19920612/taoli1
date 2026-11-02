@@ -4402,7 +4402,6 @@ function PairDetailTabs({ items }: { items: NonNullable<TabsProps["items"]> }) {
     className="pair-detail-tabs"
     activeKey={activeKey}
     items={items}
-    destroyOnHidden
     onChange={(key) => {
       setActiveKey(key);
       try {
