@@ -45,6 +45,7 @@ from app.api import (
 from app.core.config import Settings, get_settings
 from app.core.security import require_dashboard_password
 from app.db.database import connect_database
+from app.maintenance.sqlite import SQLiteMaintenance
 from app.db.repositories import (
     AccountConnectionRepository,
     AlertEventRepository,
@@ -897,6 +898,11 @@ def create_app(
         # Fresh supervisor per lifespan so the same app can start again after stop().
         supervisor = TaskSupervisor()
         app.state.task_supervisor = supervisor
+        if start_background_workers and app_settings.sqlite_maintenance_enabled:
+            sqlite_maintenance = SQLiteMaintenance(db_path, app_settings)
+            _start_background_task(
+                supervisor, lambda: sqlite_maintenance.run(stop_event), name="sqlite-maintenance",
+            )
         if start_background_workers and app_settings.memory_probe_enabled:
             supervisor.enable_memory_probe()
         supervisor.start("event-loop-lag", supervisor.loop_lag.run, restart=True, critical=False)
