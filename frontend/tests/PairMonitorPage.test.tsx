@@ -630,7 +630,7 @@ describe("PairMonitorPage", () => {
     await userEvent.click(screen.getByRole("button", { name: /查.*询/ }));
     const leftAge = await screen.findByLabelText("报价年龄 1.2s");
     const rightAge = screen.getByLabelText("报价年龄 30.0s");
-    const legCards = document.querySelectorAll(".pair-secondary-metric-grid .pair-metric-card");
+    const legCards = document.querySelectorAll(".pair-focus-metrics > .pair-metric-card:first-child, .pair-focus-metrics > .pair-metric-card:last-child");
     expect(leftAge.closest(".pair-metric-card")).toBe(legCards[0]);
     expect(rightAge.closest(".pair-metric-card")).toBe(legCards[1]);
     expect(leftAge.classList.contains("ant-tag-green")).toBe(true);
@@ -681,6 +681,7 @@ describe("PairMonitorPage", () => {
     expect(focus.textContent).toContain(reversed ? "0.025" : "40");
     expect(screen.getByText("标记比值（辅助）").parentElement?.textContent).toContain("-");
     expect(document.querySelector(".pair-chart-head-meta")?.textContent).toContain(reversed ? "最新 0.025" : "最新 40");
+    await userEvent.click(screen.getByRole("tab", { name: "最近价差" }));
     expect(screen.getAllByText("价格比值（左 ÷ 右）").length).toBeGreaterThan(0);
     const open = screen.getByText("可成交开仓比值").parentElement?.textContent;
     expect(open).toContain(reversed ? "0.0250256" : "40.041");
@@ -1146,6 +1147,7 @@ describe("PairMonitorPage", () => {
 
     await user.click(screen.getByRole("button", { name: /查询/ }));
 
+    await user.click(screen.getByRole("tab", { name: "市场质量" }));
     expect(await screen.findByText("双腿市场身份与行情质量")).toBeTruthy();
     expect(screen.getByText("来源：Left public order book")).toBeTruthy();
     expect(screen.getByText("来源：Right public order book")).toBeTruthy();
@@ -1688,7 +1690,7 @@ describe("PairMonitorPage", () => {
 
     await user.click(screen.getByRole("button", { name: /查询/ }));
 
-    expect(await screen.findByText("资金费率差")).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "资金费率差" })).toBeTruthy();
     expect(screen.getAllByText("净费率").length).toBeGreaterThan(0);
     expect(screen.getAllByText("+0.0300%").length).toBeGreaterThan(0);
     expect(screen.getAllByText("+0.1000%").length).toBeGreaterThan(0);
@@ -1715,31 +1717,34 @@ describe("PairMonitorPage", () => {
       (element as HTMLElement).className.toString()
     );
     const focusBlockIndex = pageLayout.findIndex((className) => className.includes("pair-focus-block"));
-    const openInterestChartIndex = pageLayout.findIndex((className) => className.includes("pair-oi-card"));
+    const comparisonToolbarIndex = pageLayout.findIndex((className) => className.includes("pair-comparison-panel"));
     const priceChartIndex = pageLayout.findIndex((className) => className.includes("pair-price-card"));
-    const fundingGridIndex = pageLayout.findIndex((className) => className.includes("pair-funding-grid"));
+    const fundingGridIndex = pageLayout.findIndex((className) => className.includes("pair-detail-tabs"));
     expect(focusBlockIndex).toBeGreaterThan(-1);
     expect(document.querySelector(".pair-focus-block .pair-chart-card")).toBeTruthy();
-    expect(openInterestChartIndex).toBeGreaterThan(focusBlockIndex);
-    expect(priceChartIndex).toBe(openInterestChartIndex + 1);
+    expect(comparisonToolbarIndex).toBeGreaterThan(focusBlockIndex);
+    expect(priceChartIndex).toBe(comparisonToolbarIndex + 1);
     expect(fundingGridIndex).toBeGreaterThan(priceChartIndex);
+    await user.click(screen.getByRole("tab", { name: "持仓与 OI" }));
     expect(screen.getByText("OI变化量（USDT）")).toBeTruthy();
-    expect(document.querySelector(".pair-oi-chart")).toBeTruthy();
+    expect(document.querySelector(".pair-detail-tabs .ant-tabs-tabpane-active .pair-oi-chart")).toBeTruthy();
     expect(pageText.indexOf("标的价格")).toBeLessThan(pageText.indexOf("资金费率差"));
 
+    await user.click(screen.getByRole("tab", { name: "资金费率差" }));
+    const restoredSummaryPanel = document.querySelector(".pair-funding-summary-panel") as HTMLElement;
     requests.length = 0;
     fireEvent.change(screen.getByLabelText("资金费率累计开始时间"), { target: { value: "2026-07-23T15:30" } });
     fireEvent.change(screen.getByLabelText("资金费率累计结束时间"), { target: { value: "2026-07-24T08:30" } });
     await new Promise((resolve) => window.setTimeout(resolve, 20));
-    expect(summaryPanel.textContent).toContain("+0.0300%");
-    expect(summaryPanel.textContent).toContain("当前周期");
+    expect(restoredSummaryPanel.textContent).toContain("+0.0300%");
+    expect(restoredSummaryPanel.textContent).toContain("当前周期");
     expect(requests.some((request) => request.includes("/pair-spread/query"))).toBe(false);
 
     await user.click(screen.getByRole("button", { name: /确定资金费率累计时间/ }));
     await waitFor(() => {
-      expect(summaryPanel.textContent).toContain("+0.1200%");
-      expect(summaryPanel.textContent).toContain("指定时间");
-      expect(summaryPanel.textContent).toContain("3 条");
+      expect(restoredSummaryPanel.textContent).toContain("+0.1200%");
+      expect(restoredSummaryPanel.textContent).toContain("指定时间");
+      expect(restoredSummaryPanel.textContent).toContain("3 条");
     });
     expect(requests.some((request) => request.includes("/pair-spread/query"))).toBe(false);
   });
@@ -1749,6 +1754,7 @@ describe("PairMonitorPage", () => {
     render(<PairMonitorPage />);
 
     await user.click(screen.getByRole("button", { name: /查询/ }));
+    await user.click(screen.getByRole("tab", { name: "诊断" }));
     await user.click(await screen.findByRole("button", { name: /诊断监控/ }));
 
     await waitFor(() => {

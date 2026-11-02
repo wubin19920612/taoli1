@@ -18,9 +18,11 @@ import {
   Select,
   Switch,
   Table,
+  Tabs,
   Tag,
   Typography
 } from "antd";
+import type { TabsProps } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { formatPriceRatio, pairUsesRatio, priceRatio, ratioChartPoints } from "../utils/pairRatio";
@@ -4376,6 +4378,42 @@ function buildMinuteFundingRateDiffRows(status: PairSpreadFundingRecordStatus | 
     .slice(-4000);
 }
 
+function PairWarningSummary({ warnings }: { warnings: string[] }) {
+  const messages = warnings.filter(Boolean);
+  if (!messages.length) return null;
+  return (
+    <details className="pair-warning-summary">
+      <summary><strong>{messages.length} 条提示</strong><span>{messages[0]}</span></summary>
+      <ul>{messages.map((message, index) => <li key={index}>{message}</li>)}</ul>
+    </details>
+  );
+}
+
+function PairDetailTabs({ items }: { items: NonNullable<TabsProps["items"]> }) {
+  const [activeKey, setActiveKey] = useState(() => {
+    try {
+      const saved = localStorage.getItem("pair-monitor-detail-tab");
+      return saved && items.some((item) => item.key === saved) ? saved : "funding";
+    } catch {
+      return "funding";
+    }
+  });
+  return <Tabs
+    className="pair-detail-tabs"
+    activeKey={activeKey}
+    items={items}
+    destroyOnHidden
+    onChange={(key) => {
+      setActiveKey(key);
+      try {
+        localStorage.setItem("pair-monitor-detail-tab", key);
+      } catch {
+        // Storage may be unavailable; tab navigation still works for this visit.
+      }
+    }}
+  />;
+}
+
 export function PairMonitorPage() {
   const [form] = Form.useForm<PairSpreadFormValues>();
   const watchedLeg1Exchange = Form.useWatch("leg1_exchange", form);
@@ -5591,10 +5629,12 @@ export function PairMonitorPage() {
         />
         {presetAuthError ? <Alert type="error" message={presetAuthError} showIcon /> : null}
       </Modal>
-      {showPremiumCompare && premiumError ? <Alert type="error" message={premiumError} showIcon /> : null}
-      {showDayCompare && dayCompareError ? <Alert type="warning" message={dayCompareError} showIcon /> : null}
-      {fundingRecordError ? <Alert type="warning" message={fundingRecordError} showIcon /> : null}
-      {result?.warnings.length ? <Alert type="warning" message={result.warnings.join("；")} showIcon /> : null}
+      <PairWarningSummary warnings={[
+        showPremiumCompare ? premiumError : "",
+        showDayCompare ? dayCompareError : "",
+        fundingRecordError,
+        ...(result?.warnings ?? [])
+      ]} />
 
       <section className="pair-query-panel">
         <Form
@@ -5611,21 +5651,31 @@ export function PairMonitorPage() {
             }
           }}
         >
+          <div className="pair-query-mode">
+            <Segmented<PairSymbolMode>
+              aria-label="标的模式"
+              options={[{ label: "同标的", value: "same" }, { label: "自定义", value: "custom" }]}
+              value={pairSymbolMode}
+              onChange={(value) => setPairSymbolMode(value)}
+            />
+          </div>
           <div className={queryBarClassName}>
             {sameSymbolMode ? (
               <>
-                <div className="pair-query-field pair-query-primary-symbol">
-                  <Typography.Text className="pair-query-field-label">标的</Typography.Text>
-                  <Form.Item name="leg1_symbol" rules={[{ required: true, message: "请输入标的" }]} className="pair-query-contract">
-                    <Input
-                      aria-label="标的"
-                      placeholder="SKHY"
-                      list={leg1UsesDex ? "pair-hyperliquid-assets-leg1" : undefined}
-                    />
-                  </Form.Item>
-                </div>
-                <div className="pair-query-venues">
+                <fieldset className="pair-query-leg-group">
+                  <legend>左腿</legend>
                   <div className="pair-query-venue">
+                    <div className="pair-query-field pair-query-primary-symbol">
+                      <Typography.Text className="pair-query-field-label">标的</Typography.Text>
+                      <Form.Item name="leg1_symbol" rules={[{ required: true, message: "请输入标的" }]} className="pair-query-contract">
+                        <Input
+                          aria-label="标的"
+                          placeholder="SKHY"
+                          list={leg1UsesDex ? "pair-hyperliquid-assets-leg1" : undefined}
+                        />
+                      </Form.Item>
+                    </div>
+
                     <Typography.Text className="pair-query-venue-label">左交易所</Typography.Text>
                     <Form.Item name="leg1_exchange" rules={[{ required: true }]} className="pair-query-item">
                       <Select options={exchangeOptions} showSearch />
@@ -5639,6 +5689,22 @@ export function PairMonitorPage() {
                       </Form.Item>
                     ) : null}
                   </div>
+                </fieldset>
+                <Button
+                  className="pair-query-swap"
+                  size="small"
+                  icon={<SwapOutlined />}
+                  aria-label="交换左右标的"
+                  title={
+                    sameSymbolMode
+                      ? "交换左右交易所并立即查询"
+                      : "交换左右标的并立即查询；自定义标的模式下右侧倍率重置为 1"
+                  }
+                  disabled={loading}
+                  onClick={() => void swapPairLegs()}
+                />
+                <fieldset className="pair-query-leg-group">
+                  <legend>右腿</legend>
                   <div className="pair-query-venue">
                     <Typography.Text className="pair-query-venue-label">右交易所</Typography.Text>
                     <Form.Item name="leg2_exchange" rules={[{ required: true }]} className="pair-query-item">
@@ -5653,7 +5719,7 @@ export function PairMonitorPage() {
                       </Form.Item>
                     ) : null}
                   </div>
-                </div>
+                </fieldset>
               </>
             ) : (
               <>
@@ -5692,6 +5758,19 @@ export function PairMonitorPage() {
                     </div>
                   </div>
                 </fieldset>
+                <Button
+                  className="pair-query-swap"
+                  size="small"
+                  icon={<SwapOutlined />}
+                  aria-label="交换左右标的"
+                  title={
+                    sameSymbolMode
+                      ? "交换左右交易所并立即查询"
+                      : "交换左右标的并立即查询；自定义标的模式下右侧倍率重置为 1"
+                  }
+                  disabled={loading}
+                  onClick={() => void swapPairLegs()}
+                />
                 <fieldset className="pair-query-leg-group pair-query-leg-group-right">
                   <legend>右腿</legend>
                   <div className={`pair-query-leg-fields pair-query-leg-fields-right${leg2UsesDex ? " pair-query-leg-fields-with-dex" : ""}`}>
@@ -5809,28 +5888,94 @@ export function PairMonitorPage() {
                 </div>
               </div>
             </fieldset>
-            <div className="pair-query-actions">
-              <Button type="primary" icon={<SearchOutlined />} loading={loading} onClick={() => void runQuery()}>
-                查询
-              </Button>
-              <Button icon={<SaveOutlined />} disabled={loading} onClick={() => void saveCurrentPreset()}>
-                保存
-              </Button>
-              <Button
-                icon={<PushpinOutlined />}
-                loading={watchSaving}
-                disabled={!result || loading}
-                onClick={() => void addCurrentPairToWatch()}
-              >
-                加入浮窗
-              </Button>
-            </div>
+          </div>
+          <div className="pair-query-actions">
+            <Button type="primary" icon={<SearchOutlined />} loading={loading} onClick={() => void runQuery()}>
+              查询
+            </Button>
+            <Button icon={<SaveOutlined />} disabled={loading} onClick={() => void saveCurrentPreset()}>
+              保存
+            </Button>
+            <Button
+              icon={<PushpinOutlined />}
+              loading={watchSaving}
+              disabled={!result || loading}
+              onClick={() => void addCurrentPairToWatch()}
+            >
+              加入浮窗
+            </Button>
           </div>
         </Form>
+        {savedPresetGroups.length ? (
+          <div className="pair-saved-presets">
+            <Typography.Text className="pair-saved-title">已保存</Typography.Text>
+            <div className="pair-saved-group-list">
+              {savedPresetGroups.map((group) => (
+                <div
+                  key={group.key}
+                  className={`pair-saved-group ${group.sameSymbol ? "pair-saved-group-same" : "pair-saved-group-custom"}`}
+                >
+                  <div className="pair-saved-group-head">
+                    <Typography.Text className="pair-saved-group-symbol">{group.title}</Typography.Text>
+                    <span className="pair-saved-group-count">{group.presets.length}</span>
+                  </div>
+                  <div className="pair-saved-group-items">
+                    {group.presets.map((preset) => (
+                      <Tag
+                        key={preset.id}
+                        closable
+                        className={`pair-saved-tag ${isSameSymbolPreset(preset) ? "pair-saved-tag-same" : "pair-saved-tag-custom"}`}
+                        onClick={() => applySavedPreset(preset)}
+                        onClose={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          void removeSavedPreset(preset.id);
+                        }}
+                      >
+                        <SavedPairPresetContent preset={preset} />
+                      </Tag>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </section>
 
       <section className="pair-focus-block">
         <section className="pair-focus-metrics">
+          <MetricCard
+            label={leftLegLabel(result)}
+            value={price(current?.leg1.price)}
+            sub={current ? <>
+              {priceFieldLabels[current.leg1.price_field]}{" "}
+              <QuoteAgeTag ageMs={current.leg1.age_ms} sourceAgeMs={current.leg1.source_age_ms} timeSource={current.leg1.time_source} />
+            </> : "-"}
+            highlight={
+              current ? (
+                <VolumeMetric
+                  value={current.leg1.volume_24h_usdt}
+                  comparisonValue={current.leg2.volume_24h_usdt}
+                />
+              ) : null
+            }
+            action={
+              leftPremiumLeg ? (
+                <Button
+                  size="small"
+                  type="link"
+                  icon={<LineChartOutlined />}
+                  onClick={() =>
+                    openPremiumIndexFromLeg(leftPremiumLeg, premiumLinkHours, premiumLinkIntervalSeconds, result)
+                  }
+                >
+                  查看溢价指数
+                </Button>
+              ) : null
+            }
+          />
+
           <MetricCard
             label={ratioMode ? "可成交开仓比值" : "可成交开仓价差"}
             value={ratioMode ? formatPriceRatio(priceRatio(current?.leg1.ask_price, current?.leg2.bid_price)) : signedPct(openSpreadPct)}
@@ -5854,55 +5999,63 @@ export function PairMonitorPage() {
           <MetricCard
             label={ratioMode ? "盘口中间比值" : "盘口中间价差"}
             value={ratioMode ? formatPriceRatio(priceRatio(latestRatioPoint?.leg1_close, latestRatioPoint?.leg2_close)) : signedPct(midpointSpreadPct)}
-            sub={
-              result
+            sub={<>
+              {result
                 ? `差价 ${price(midpointSpreadAbs)}${ratioMode ? " · 左 ÷ 右（右价已按倍率折算）" : ""}${!ratioMode && ratio ? ` · 倍率 ${compactNumber(ratio, 4)}x` : ""}`
-                : "等待查询"
-            }
+                : "等待查询"}
+              <span className="pair-mark-summary">
+                <span>{ratioMode ? "标记比值（辅助）" : "标记价差（辅助）"}</span>{" "}
+                <span>{ratioMode ? formatPriceRatio(priceRatio(current?.leg1.mark_price, current?.leg2.mark_price)) : signedPct(current?.mark_spread_pct)}</span>
+                {current ? ` · 左标记 ${price(current.leg1.mark_price)} · 右标记 ${price(current.leg2.mark_price)} · 差价 ${price(current.mark_spread_abs)}` : " · 等待查询"}
+              </span>
+            </>}
             tone={ratioMode ? "neutral" : midpointSpreadTone}
           />
           <MetricCard
-            label={ratioMode ? "标记比值（辅助）" : "标记价差（辅助）"}
-            value={ratioMode ? formatPriceRatio(priceRatio(current?.leg1.mark_price, current?.leg2.mark_price)) : signedPct(current?.mark_spread_pct)}
-            sub={
-              current
-                ? `左标记 ${price(current.leg1.mark_price)} · 右标记 ${price(current.leg2.mark_price)} · 差价 ${price(current.mark_spread_abs)}`
-                : "等待查询"
+            label={rightLegLabel(result)}
+            value={price(current?.leg2.price)}
+            sub={current ? <>
+              {priceFieldLabels[current.leg2.price_field]}{" "}
+              <QuoteAgeTag ageMs={current.leg2.age_ms} sourceAgeMs={current.leg2.source_age_ms} timeSource={current.leg2.time_source} />
+            </> : "-"}
+            highlight={
+              current ? (
+                <VolumeMetric
+                  value={current.leg2.volume_24h_usdt}
+                  comparisonValue={current.leg1.volume_24h_usdt}
+                />
+              ) : null
             }
-            tone={ratioMode ? "neutral" : markSpreadTone}
+            action={
+              rightPremiumLeg ? (
+                <Button
+                  size="small"
+                  type="link"
+                  icon={<LineChartOutlined />}
+                  onClick={() =>
+                    openPremiumIndexFromLeg(rightPremiumLeg, premiumLinkHours, premiumLinkIntervalSeconds, result)
+                  }
+                >
+                  查看溢价指数
+                </Button>
+              ) : null
+            }
           />
         </section>
-        {result?.complete === false ? (
-          <Tag color="default">
-            样本不足 {result.actual_samples ?? "-"}/{result.expected_samples ?? "-"}，最大缺口 {typeof result.max_gap_ms === "number" ? `${(result.max_gap_ms / 1000).toFixed(1)}s` : "未知"}
-          </Tag>
-        ) : null}
+        <div className="pair-spread-context">
+          <span>周期 {intervalLabel(result ? resultIntervalSeconds(result) : intervalSeconds)}</span>
+          <span>{result ? `${dataRangeLabel(result, hours)} · ${fullTime(result.observed_at)}` : durationLabel(hours)}</span>
+          {result?.complete === false ? (
+            <Tag color="default">
+              样本不足 {result.actual_samples ?? "-"}/{result.expected_samples ?? "-"}，最大缺口 {typeof result.max_gap_ms === "number" ? `${(result.max_gap_ms / 1000).toFixed(1)}s` : "未知"}
+            </Tag>
+          ) : null}
+        </div>
         <PairSpreadBacktest key={JSON.stringify([result?.leg1, result?.leg2, result?.leg2_multiplier])} result={result} />
       </section>
 
-      <section className="pair-query-panel pair-query-secondary-panel">
-        <div className="pair-query-options">
-          <Button
-            className="pair-query-swap"
-            icon={<SwapOutlined />}
-            aria-label="交换左右标的"
-            title={
-              sameSymbolMode
-                ? "交换左右交易所并立即查询"
-                : "交换左右标的并立即查询；自定义标的模式下右侧倍率重置为 1"
-            }
-            disabled={loading}
-            onClick={() => void swapPairLegs()}
-          >
-            交换左右
-          </Button>
-          <div className="pair-query-symbol-toggle">
-            <Typography.Text className="pair-query-option-label">自定义</Typography.Text>
-            <Switch
-              checked={pairSymbolMode === "custom"}
-              onChange={(checked) => setPairSymbolMode(checked ? "custom" : "same")}
-            />
-          </div>
+      <section className="pair-query-panel pair-comparison-panel">
+        <div className="pair-comparison-toolbar">
           <Typography.Text className="pair-query-option-label">图表扩展</Typography.Text>
           <Switch
             checked={showPremiumCompare}
@@ -6089,115 +6242,8 @@ export function PairMonitorPage() {
             </>
           ) : null}
         </div>
-        {savedPresetGroups.length ? (
-          <div className="pair-saved-presets">
-            <Typography.Text className="pair-saved-title">已保存</Typography.Text>
-            <div className="pair-saved-group-list">
-              {savedPresetGroups.map((group) => (
-                <div
-                  key={group.key}
-                  className={`pair-saved-group ${group.sameSymbol ? "pair-saved-group-same" : "pair-saved-group-custom"}`}
-                >
-                  <div className="pair-saved-group-head">
-                    <Typography.Text className="pair-saved-group-symbol">{group.title}</Typography.Text>
-                    <span className="pair-saved-group-count">{group.presets.length}</span>
-                  </div>
-                  <div className="pair-saved-group-items">
-                    {group.presets.map((preset) => (
-                      <Tag
-                        key={preset.id}
-                        closable
-                        className={`pair-saved-tag ${isSameSymbolPreset(preset) ? "pair-saved-tag-same" : "pair-saved-tag-custom"}`}
-                        onClick={() => applySavedPreset(preset)}
-                        onClose={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          void removeSavedPreset(preset.id);
-                        }}
-                      >
-                        <SavedPairPresetContent preset={preset} />
-                      </Tag>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : null}
       </section>
-
-      <section className="pair-metric-grid pair-secondary-metric-grid">
-        <MetricCard
-          label={leftLegLabel(result)}
-          value={price(current?.leg1.price)}
-          sub={current ? <>
-            {priceFieldLabels[current.leg1.price_field]}{" "}
-            <QuoteAgeTag ageMs={current.leg1.age_ms} sourceAgeMs={current.leg1.source_age_ms} timeSource={current.leg1.time_source} />
-          </> : "-"}
-          highlight={
-            current ? (
-              <VolumeMetric
-                value={current.leg1.volume_24h_usdt}
-                comparisonValue={current.leg2.volume_24h_usdt}
-              />
-            ) : null
-          }
-          action={
-            leftPremiumLeg ? (
-              <Button
-                size="small"
-                type="link"
-                icon={<LineChartOutlined />}
-                onClick={() =>
-                  openPremiumIndexFromLeg(leftPremiumLeg, premiumLinkHours, premiumLinkIntervalSeconds, result)
-                }
-              >
-                查看溢价指数
-              </Button>
-            ) : null
-          }
-        />
-        <MetricCard
-          label={rightLegLabel(result)}
-          value={price(current?.leg2.price)}
-          sub={current ? <>
-            {priceFieldLabels[current.leg2.price_field]}{" "}
-            <QuoteAgeTag ageMs={current.leg2.age_ms} sourceAgeMs={current.leg2.source_age_ms} timeSource={current.leg2.time_source} />
-          </> : "-"}
-          highlight={
-            current ? (
-              <VolumeMetric
-                value={current.leg2.volume_24h_usdt}
-                comparisonValue={current.leg1.volume_24h_usdt}
-              />
-            ) : null
-          }
-          action={
-            rightPremiumLeg ? (
-              <Button
-                size="small"
-                type="link"
-                icon={<LineChartOutlined />}
-                onClick={() =>
-                  openPremiumIndexFromLeg(rightPremiumLeg, premiumLinkHours, premiumLinkIntervalSeconds, result)
-                }
-              >
-                查看溢价指数
-              </Button>
-            ) : null
-          }
-        />
-        <MetricCard
-          label="周期"
-          value={intervalLabel(result ? resultIntervalSeconds(result) : intervalSeconds)}
-          sub={result ? `${dataRangeLabel(result, hours)} · ${fullTime(result.observed_at)}` : durationLabel(hours)}
-        />
-      </section>
-
-      <PairMarketDataCard result={result} />
-      <PairPositionStatsCard result={result} />
-      <PairOpenInterestChart result={result} />
-      <PairHourlyVolumeCard result={result} />
+      <PairPriceChart result={result} />
       {showDayCompare ? (
         <PairDayCompareChart
           series={dayCompareSeries}
@@ -6208,179 +6254,192 @@ export function PairMonitorPage() {
           ratioMode={ratioMode}
         />
       ) : null}
-      <PairPriceChart result={result} />
-      <PairSpreadDiagnosticCard
-        result={result}
-        thresholdPct={diagnosticThresholdPct}
-        diagnostic={diagnostic}
-        loading={diagnosticLoading}
-        error={diagnosticError}
-        onThresholdChange={setDiagnosticThresholdPct}
-        onSaveThreshold={saveDiagnosticParameter}
-        onDiagnose={() => void runDiagnostic()}
-      />
-
       {showPremiumCompare ? <PairPremiumCompareChart comparison={premiumCompare} loading={premiumLoading} /> : null}
 
-      <section className="pair-funding-grid">
-        <div className="pair-detail-card pair-funding-diff-card">
-          <div className="pair-detail-head">
-            <Typography.Title level={5}>资金费率差</Typography.Title>
-            <div className="pair-funding-diff-tools">
-              {latestFundingDiff ? (
-                <span className="pair-funding-diff-latest">
-                  <Typography.Text type="secondary">最新净费率</Typography.Text>
-                  <FundingRateValue value={latestFundingDiff.net_rate_pct} strong />
-                </span>
-              ) : null}
-              <Tag color="blue">右-左</Tag>
-              {fundingSummaryActive ? <Tag color="purple">指定时间</Tag> : null}
-              {fundingSummaryLoading ? <Tag color="processing">查询中</Tag> : null}
-              <Tag>{fundingDiffTableRows.length} 条</Tag>
-              {result ? (
-                fundingRecordSupported ? (
-                  <>
-                    <Tag color={fundingRecordWatched ? "green" : undefined}>
-                      {fundingRecordWatched ? "分钟记录已开启" : "未记录分钟费率"}
-                    </Tag>
-                    {fundingRecordWatched ? <Tag>{fundingRecordSampleCount} 点</Tag> : <Tag>1分钟</Tag>}
-                    <Button
+      <PairDetailTabs items={[
+        { key: "funding", label: "资金费率差", children: (
+          <section className="pair-funding-grid">
+            <div className="pair-detail-card pair-funding-diff-card">
+              <div className="pair-detail-head">
+                <Typography.Title level={5}>资金费率差</Typography.Title>
+                <div className="pair-funding-diff-tools">
+                  {latestFundingDiff ? (
+                    <span className="pair-funding-diff-latest">
+                      <Typography.Text type="secondary">最新净费率</Typography.Text>
+                      <FundingRateValue value={latestFundingDiff.net_rate_pct} strong />
+                    </span>
+                  ) : null}
+                  <Tag color="blue">右-左</Tag>
+                  {fundingSummaryActive ? <Tag color="purple">指定时间</Tag> : null}
+                  {fundingSummaryLoading ? <Tag color="processing">查询中</Tag> : null}
+                  <Tag>{fundingDiffTableRows.length} 条</Tag>
+                  {result ? (
+                    fundingRecordSupported ? (
+                      <>
+                        <Tag color={fundingRecordWatched ? "green" : undefined}>
+                          {fundingRecordWatched ? "分钟记录已开启" : "未记录分钟费率"}
+                        </Tag>
+                        {fundingRecordWatched ? <Tag>{fundingRecordSampleCount} 点</Tag> : <Tag>1分钟</Tag>}
+                        <Button
+                          size="small"
+                          type={fundingRecordWatched ? "default" : "primary"}
+                          icon={fundingRecordWatched ? <DeleteOutlined /> : <LineChartOutlined />}
+                          loading={fundingRecordLoading}
+                          onClick={() => void toggleFundingRecord()}
+                        >
+                          {fundingRecordWatched ? "停止记录" : "开始记录"}
+                        </Button>
+                      </>
+                    ) : (
+                      <Tag>分钟记录仅合约对</Tag>
+                    )
+                  ) : null}
+                </div>
+              </div>
+              <div className="pair-funding-summary-panel">
+                <div className="pair-funding-summary-main">
+                  <Typography.Text type="secondary">总资金费率差（右-左）</Typography.Text>
+                  <FundingRateValue value={fundingRateTotalSummary.net_total_pct} strong />
+                  <span>{fundingRateSummaryRangeLabel(fundingRateTotalSummary)}</span>
+                </div>
+                <div className="pair-funding-summary-metrics">
+                  <span>
+                    <Typography.Text type="secondary">右侧合计</Typography.Text>
+                    <FundingRateValue value={fundingRateTotalSummary.right_total_pct} />
+                  </span>
+                  <span>
+                    <Typography.Text type="secondary">左侧合计</Typography.Text>
+                    <FundingRateValue value={fundingRateTotalSummary.left_total_pct} />
+                  </span>
+                  <span>
+                    <Typography.Text type="secondary">计入点数</Typography.Text>
+                    <strong>{fundingRateTotalSummary.rows.length} 条</strong>
+                  </span>
+                </div>
+                <div className="pair-funding-summary-controls">
+                  <label className="pair-funding-summary-time-field">
+                    <span>开始</span>
+                    <Input
+                      aria-label="资金费率累计开始时间"
+                      type="datetime-local"
                       size="small"
-                      type={fundingRecordWatched ? "default" : "primary"}
-                      icon={fundingRecordWatched ? <DeleteOutlined /> : <LineChartOutlined />}
-                      loading={fundingRecordLoading}
-                      onClick={() => void toggleFundingRecord()}
-                    >
-                      {fundingRecordWatched ? "停止记录" : "开始记录"}
-                    </Button>
-                  </>
-                ) : (
-                  <Tag>分钟记录仅合约对</Tag>
-                )
+                      value={fundingSummaryDraftStart}
+                      onChange={(event) => setFundingSummaryDraftStart(event.target.value)}
+                    />
+                  </label>
+                  <label className="pair-funding-summary-time-field">
+                    <span>结束</span>
+                    <Input
+                      aria-label="资金费率累计结束时间"
+                      type="datetime-local"
+                      size="small"
+                      value={fundingSummaryDraftEnd}
+                      onChange={(event) => setFundingSummaryDraftEnd(event.target.value)}
+                    />
+                  </label>
+                  <Button
+                    size="small"
+                    type="primary"
+                    aria-label="确定资金费率累计时间"
+                    disabled={(!fundingSummaryChanged && !fundingSummaryError) || fundingSummaryLoading}
+                    loading={fundingSummaryLoading}
+                    onClick={() => void applyFundingSummaryRange()}
+                  >
+                    确定
+                  </Button>
+                  <Button
+                    size="small"
+                    disabled={
+                      !fundingSummaryDraftStart &&
+                      !fundingSummaryDraftEnd &&
+                      !fundingSummaryStart &&
+                      !fundingSummaryEnd
+                    }
+                    onClick={() => {
+                      setFundingSummaryDraftStart("");
+                      setFundingSummaryDraftEnd("");
+                      setFundingSummaryStart("");
+                      setFundingSummaryEnd("");
+                      setFundingSummaryRows(null);
+                      setFundingSummaryError("");
+                    }}
+                  >
+                    清空时间
+                  </Button>
+                </div>
+              </div>
+              {fundingSummaryError ? (
+                <Alert type="warning" message={fundingSummaryError} showIcon />
               ) : null}
-            </div>
-          </div>
-          <div className="pair-funding-summary-panel">
-            <div className="pair-funding-summary-main">
-              <Typography.Text type="secondary">总资金费率差（右-左）</Typography.Text>
-              <FundingRateValue value={fundingRateTotalSummary.net_total_pct} strong />
-              <span>{fundingRateSummaryRangeLabel(fundingRateTotalSummary)}</span>
-            </div>
-            <div className="pair-funding-summary-metrics">
-              <span>
-                <Typography.Text type="secondary">右侧合计</Typography.Text>
-                <FundingRateValue value={fundingRateTotalSummary.right_total_pct} />
-              </span>
-              <span>
-                <Typography.Text type="secondary">左侧合计</Typography.Text>
-                <FundingRateValue value={fundingRateTotalSummary.left_total_pct} />
-              </span>
-              <span>
-                <Typography.Text type="secondary">计入点数</Typography.Text>
-                <strong>{fundingRateTotalSummary.rows.length} 条</strong>
-              </span>
-            </div>
-            <div className="pair-funding-summary-controls">
-              <label className="pair-funding-summary-time-field">
-                <span>开始</span>
-                <Input
-                  aria-label="资金费率累计开始时间"
-                  type="datetime-local"
-                  size="small"
-                  value={fundingSummaryDraftStart}
-                  onChange={(event) => setFundingSummaryDraftStart(event.target.value)}
-                />
-              </label>
-              <label className="pair-funding-summary-time-field">
-                <span>结束</span>
-                <Input
-                  aria-label="资金费率累计结束时间"
-                  type="datetime-local"
-                  size="small"
-                  value={fundingSummaryDraftEnd}
-                  onChange={(event) => setFundingSummaryDraftEnd(event.target.value)}
-                />
-              </label>
-              <Button
+              {!fundingSummaryLoading && fundingRateTotalSummary.warning ? (
+                <Alert type="warning" message={fundingRateTotalSummary.warning} showIcon />
+              ) : null}
+              <Table<FundingRateDiffRow>
+                rowKey={(row) => `${row.source}-${row.funding_time}`}
+                columns={fundingDiffColumns}
+                dataSource={fundingDiffTableRows}
+                loading={loading || fundingSummaryLoading}
+                pagination={{ pageSize: 8 }}
                 size="small"
-                type="primary"
-                aria-label="确定资金费率累计时间"
-                disabled={(!fundingSummaryChanged && !fundingSummaryError) || fundingSummaryLoading}
-                loading={fundingSummaryLoading}
-                onClick={() => void applyFundingSummaryRange()}
-              >
-                确定
-              </Button>
-              <Button
-                size="small"
-                disabled={
-                  !fundingSummaryDraftStart &&
-                  !fundingSummaryDraftEnd &&
-                  !fundingSummaryStart &&
-                  !fundingSummaryEnd
-                }
-                onClick={() => {
-                  setFundingSummaryDraftStart("");
-                  setFundingSummaryDraftEnd("");
-                  setFundingSummaryStart("");
-                  setFundingSummaryEnd("");
-                  setFundingSummaryRows(null);
-                  setFundingSummaryError("");
-                }}
-              >
-                清空时间
-              </Button>
+                tableLayout="auto"
+                scroll={{ x: "max-content" }}
+              />
             </div>
-          </div>
-          {fundingSummaryError ? (
-            <Alert type="warning" message={fundingSummaryError} showIcon />
-          ) : null}
-          {!fundingSummaryLoading && fundingRateTotalSummary.warning ? (
-            <Alert type="warning" message={fundingRateTotalSummary.warning} showIcon />
-          ) : null}
-          <Table<FundingRateDiffRow>
-            rowKey={(row) => `${row.source}-${row.funding_time}`}
-            columns={fundingDiffColumns}
-            dataSource={fundingDiffTableRows}
-            loading={loading || fundingSummaryLoading}
-            pagination={{ pageSize: 8 }}
-            size="small"
-            tableLayout="auto"
-            scroll={{ x: "max-content" }}
-          />
-        </div>
-        {fundingRecordWatched ? (
-          <PairMinuteFundingDiffChart
-            rows={minuteFundingDiffRows}
-            status={fundingRecordStatus}
-            loading={fundingRecordLoading}
-          />
-        ) : null}
-      </section>
+            {fundingRecordWatched ? (
+              <PairMinuteFundingDiffChart
+                rows={minuteFundingDiffRows}
+                status={fundingRecordStatus}
+                loading={fundingRecordLoading}
+              />
+            ) : null}
+          </section>
 
-      <section className="pair-detail-grid">
-        <div className="pair-detail-card pair-spread-points-card">
-          <div className="pair-detail-head">
-            <Typography.Title level={5}>最近价差</Typography.Title>
-            <Button icon={<ReloadOutlined />} disabled={!result} loading={loading} onClick={rerun}>
-              重查
-            </Button>
-          </div>
-          <Table<PairSpreadPoint>
-            rowKey={(point) => point.bucket_at}
-            columns={ratioMode ? pointColumns.map((column) => column.key === "spreadMetric" ? {
-              ...column, title: "价格比值（左 ÷ 右）",
-              render: (_value: number, point: PairSpreadPoint) => formatPriceRatio(priceRatio(point.leg1_close, point.leg2_close))
-            } : column) : pointColumns}
-            dataSource={recentPoints}
-            loading={loading}
-            pagination={{ pageSize: 10 }}
-            size="small"
-            tableLayout="fixed"
-            scroll={{ x: 640 }}
+        ) },
+        { key: "recent", label: "最近价差", children: (
+          <section className="pair-detail-grid">
+            <div className="pair-detail-card pair-spread-points-card">
+              <div className="pair-detail-head">
+                <Typography.Title level={5}>最近价差</Typography.Title>
+                <Button icon={<ReloadOutlined />} disabled={!result} loading={loading} onClick={rerun}>
+                  重查
+                </Button>
+              </div>
+              <Table<PairSpreadPoint>
+                rowKey={(point) => point.bucket_at}
+                columns={ratioMode ? pointColumns.map((column) => column.key === "spreadMetric" ? {
+                  ...column, title: "价格比值（左 ÷ 右）",
+                  render: (_value: number, point: PairSpreadPoint) => formatPriceRatio(priceRatio(point.leg1_close, point.leg2_close))
+                } : column) : pointColumns}
+                dataSource={recentPoints}
+                loading={loading}
+                pagination={{ pageSize: 10 }}
+                size="small"
+                tableLayout="fixed"
+                scroll={{ x: 640 }}
+              />
+            </div>
+          </section>
+        ) },
+        { key: "quality", label: "市场质量", children: <PairMarketDataCard result={result} /> },
+        { key: "positions", label: "持仓与 OI", children: <>
+          <PairPositionStatsCard result={result} />
+          <PairOpenInterestChart result={result} />
+        </> },
+        { key: "volume", label: "成交额", children: <PairHourlyVolumeCard result={result} /> },
+        { key: "diagnostic", label: "诊断", children: (
+          <PairSpreadDiagnosticCard
+            result={result}
+            thresholdPct={diagnosticThresholdPct}
+            diagnostic={diagnostic}
+            loading={diagnosticLoading}
+            error={diagnosticError}
+            onThresholdChange={setDiagnosticThresholdPct}
+            onSaveThreshold={saveDiagnosticParameter}
+            onDiagnose={() => void runDiagnostic()}
           />
-        </div>
-      </section>
+
+        ) }
+      ]} />
     </div>
   );
 }
