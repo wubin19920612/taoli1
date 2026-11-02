@@ -215,3 +215,17 @@ frontend/tests/SecondLevelSamplingPage.test.tsx
 - `frontend/node_modules` 联接未改，目标仍为 `.worktrees/s9-test-gate/frontend/node_modules`；未运行 npm install，未使用 WSL。
 - 本轮只创建一个本地提交，提交信息为 `fix(frontend): polling strictmode, floating queue and dep refresh`；实际提交号以交付回复及 `git log -1` 为准。不推送、不部署，未操作线上数据库或服务，未进行线上验收。
 - 本任务书末尾记录作为本轮交接；后续导航分组 S8-B 另开任务。
+
+## 返工 2（Claude，2026-11-02，依据只读复审）
+复审发现 3 个问题，都出在 `trigger()` 和 `enabled`、页面隐藏这些状态互相作用的地方：
+1. P2 `usePolling.ts:91`：TradfiPerp 页面上，请求还没回来时切换了筛选，接着又关掉自动刷新，排在队列里的那次请求会被清掉，页面停在旧筛选的结果上（改之前不会这样）。
+2. P2 `usePolling.ts:83`：SecondLevelSampling 在“暂停采样”状态、而且页面隐藏时挂载，首次加载被跳过了；之后页面变回可见，60 秒内也没有补上请求（改之前会加载）。
+3. P3 `OilNewsPage.tsx:260`：页面在 effect 里调用 `trigger()` 时，React 严格模式下第一个周期之前仍会请求两次。
+
+修复原则（请按这个统一语义实现，避免继续打补丁）：
+- **trigger 是“一定要执行的刷新”**：不受 `enabled` 影响，`enabled=false` 也要执行；关闭自动刷新也不能清掉已经排队的 trigger。页面隐藏时只是推迟：记下一个待执行标记，等页面可见后立即执行一次。只要还有待执行标记，就必须保持对 `visibilitychange` 的监听，不管 `enabled` 是什么值。
+- **定时轮询受 `enabled` 和隐藏状态控制**：`enabled=false` 或页面隐藏时不排定时器；页面重新可见且 `enabled=true` 时立即执行一次，然后恢复周期。
+- trigger 和定时轮询共用同一条串行队列；执行完一次 trigger 后，下一次定时轮询重新按完整周期计时；同时排了多个 trigger 时合并成一次执行。
+- 卸载以后什么都不执行。严格模式下的重放，包括页面在 effect 里调用 trigger 的情况，在第一个周期之前都只执行一次。具体做法：同一个 tick 内重复的 trigger 合并成一次，或者跳过挂载后的重复调用。
+- 给以上每条语义各写一条 hook 级别的测试；上面 3 个问题，各写一条页面级别的复现测试（先红灯，再绿灯）。
+其余要求不变：只改任务书允许的文件；`npm test` 和 `npx tsc --noEmit` 都要通过；追加返工记录；另起一个提交，提交信息用 `fix(frontend): unify polling trigger semantics`。
