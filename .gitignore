@@ -23,3 +23,13 @@ frontend/dist/
 /*_spread_*.png
 /script/analyze_husdt_bn_bybit.py
 /output/gigadev_ah_perp_minute/gigadev_minute_spreads.csv
+
+# Local test and agent workspaces
+/.worktrees/
+/.pytest-tmp/
+/.pytest_tmp*/
+backend/.pytest_*/
+backend/.pytest-*/
+
+# Local verification artifacts (screenshots, probes, deploy scripts); tracked files stay tracked
+/output/*

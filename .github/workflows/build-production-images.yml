@@ -3,7 +3,6 @@ name: Build production images
 on:
   push:
     branches:
-      - codex/server-low-memory
       - codex/frontend-localization-polish
   workflow_dispatch:
     inputs:
