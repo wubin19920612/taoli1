@@ -2,13 +2,13 @@
 
 日期：2026-11-03。分支：`codex/shadow-ledger`；基线：`81585e43d60b03d3ca9df14b3f9379c5f108c183`。
 
-**交付状态：A–F 已实现并提交本地；性能验收尚未通过，不能据此开启生产影子记录。** `SHADOW_ENABLED` 默认仍为 0。未推送、未部署、未连接服务器、未运行 WSL、未启动真实服务、未访问外网行情或交易接口。所有测试使用合成数据；依赖安装使用 npm 离线缓存。
+**交付状态：A–F 已实现；本次 PM 性能返工、后端全量、前端全量、tsc 及两个离线基准全部通过，已分步提交本地。** 返工基线为 `dc0fec6`，验收预算以规格末尾 PM decisions 为准；本机通过不等于生产可启用。 `SHADOW_ENABLED` 默认仍为 0。未推送、未部署、未连接服务器、未运行 WSL、未启动真实服务、未访问外网行情或交易接口。所有验证均为离线测试；本次未安装或更新依赖。
 
 ## 实现内容与口径
 
 - A：只删除 `opportunity_matches_rule` 对缺失成交额的一票否决。已知腿的成交额仍比较阈值；标签生成器补充 `volume_unknown`，可通过 `excluded_risk_labels` 排除。没有用假机会评分拦告警。
 - B：`execution_routes.py` 保存 CrossEx 的 `(exchange_type, business_type, base, tag)` 集合。只接受 live FUTURE，按原始合约去报价币精确匹配，HL 的 DEX/tag 必须一致；bitget 只有默认 native 通道。默认每 1800 秒刷新，失败保留旧集合并 900 秒后重试。Astro 原有按合约查询的目录文件完全未改。
-- C：每轮快照消费者跟踪当前市场，机会从列表消失后仍可平仓。每个开仓同时产生 `conv-0.1` 和 `conv-half` 两行；3000 上限按行计，满额丢弃新的开仓并计数。相同机会有任一变体未平时不重复开仓，最后一个变体平仓后冷却 600 秒。
+- C：每轮快照消费者跟踪当前市场，机会从列表消失后仍可平仓。每个开仓同时产生 `conv-0.1` 和 `conv-half` 两行；默认 1500、允许配置至 3000，上限按行计，满额丢弃新的开仓并计数。相同机会有任一变体未平时不重复开仓，最后一个变体平仓后冷却 600 秒。
 - D：市场维护中间价及最后变动时间；价格波动与价差样本使用定长数值环形缓冲。按交易所去重投票，已知不同资产身份不能参与同一中位价。市场状态最多 6000 个、价差序列最多 3000 个，另有 TTL 和丢弃计数。BMT 用真实公式计算合成盘口的价差，可同时命中 frozen_leg、spread_plateau。
 - E：三条 `/api/shadow/*` 路由使用现有密码依赖。统计只用已平仓事件，默认排除假机会。北京时间平仓日期分组；Wilson 95%、样本标准差、t 单侧下界、2000 次按整天重抽样、两下界的较小值、n_min、CVaR5、净值曲线和最大回撤。前端提供中文维度筛选、时间范围、包含假机会开关、桶表格、最近影子单与原始市场信息。
 - F：默认关闭影子记录；独立连接批量写入，异常计数且每 300 秒最多一条消费错误日志。恢复失败不从空账本继续开仓。写入失败时先重试原批次，再处理下一代，避免无限积累待写数据。
@@ -36,14 +36,14 @@ net_bps = spread_bps - slippage_bps - fees_bps + funding_bps
 
 `shadow_trades` 提供主键、机会 id、变体、币、开平时间和 fake_flag 列及索引，完整交易字段/MarketKey JSON/恢复状态放在 payload 中。开仓和平仓立即批量落库；跟踪状态每 60 秒检查点保存，退出时再保存。异常退出可能丢失最多约 60 秒的“最后有效价/未结算费率观察”，已经提交的开平仓和资金费结算不会重复记账。仍未平仓的数据不受 30 天清理影响。
 
-生产文件数据库使用独立连接；批量写用 savepoint，整批成功才释放提交，失败回滚到本批次，不能回滚先前的其他写入。影子表初始化放在 `ShadowRuntime.initialize` 的 try/except 内；不会因影子表单独失败阻断主服务启动。历史记录与现有消费者继续使用原有流程。
+文件数据库使用独立连接，影子连接的 SQLite 页缓存限定为 512 KiB；批量写按最多 200 行划分，每个分块使用 savepoint 独立提交。失败只回滚当前分块，先前成功的分块保留；剩余待写项必须重试成功后才接收下一代计算，不能回滚先前的其他写入。影子表初始化放在 `ShadowRuntime.initialize` 的 try/except 内；不会因影子表单独失败阻断主服务启动。历史记录与现有消费者继续使用原有流程。
 
 ## 配置
 
 ```dotenv
 SHADOW_ENABLED=0
 SHADOW_MIN_OPEN_PCT=0.2
-SHADOW_MAX_OPEN=3000
+SHADOW_MAX_OPEN=1500
 SHADOW_SLIPPAGE_BPS={"gt50k":2,"5k-50k":5,"500-5k":15,"lt500":30,"unknown":30}
 NATIVE_ROUTE_EXCHANGES=hyperliquid,lighter,bitget
 CROSSEX_CATALOG_REFRESH_SECONDS=1800
@@ -51,75 +51,98 @@ CROSSEX_CATALOG_REFRESH_SECONDS=1800
 
 `SHADOW_MAX_OPEN` 限于 2–3000，按两个变体原子开仓。SHADOW_ENABLED 控制账本跟踪与写入；通道/假机会展示仍更新。后台模式且账本开启时挂现有最新快照邮箱；关闭时及旧 inline 模式通过独立观察器读取已发布代数，不改变历史消费者、采集器调度或 inline 行为。共享快照模型不修改；展示使用同代的带字段副本。
 
+## PM 性能返工说明
+
+1. **增量跟踪**：`MarketChanges` 对精确 MarketKey 下的报价时间、盘口、资金费计划、资产身份及有效性比较内容修订，不依赖 Python 对象地址。`ShadowLedger.by_market` 把两腿映射到持仓；报价变化、消失或过期只触达相关持仓。资金费结算、600 秒 stale、24/48 小时持有期限通过有界定时堆单独唤醒，因此没有新报价也不会漏结算或超时。检查点仍保存所有未平行。压力场景常规轮重算 1500 个双变体持仓，真实规模中位重算 167 个，未平行数分别为 3000/1000。
+2. **评分增量**：仅更新报价修订影响的市场及资产组；分钟切换执行历史/冻结时间边界维护。价差环形缓冲只保留开仓价差 ≥1% 的机会，降至阈值以下即删除。冻结、离群和 BMT 旧回归保持通过。
+3. **不可变线程输入**：`freeze_snapshot` 在事件循环无 await 地复制本轮标量和列表元组；市场数据扁平化为不可变 tuple，工作线程才构造记录，避免在事件循环分配成千上万个包装对象。机会输入缓存通过字段内容比较识别原地改值和列表变化，且每轮只保留当前机会。输入不含原始 MarketSnapshot/Opportunity 或可变目录集合；CrossEx 目录使用本轮 frozenset。验证元数据只在事件循环用于展示，工作线程不访问。
+4. **线程所有权与互斥**：`submit` 接入原有邮箱和 inline 观察器；已有工作未完成时立即跳过并累加 `skipped_rounds`，从 `/api/shadow/status` 返回。`consume` 为可等待的测试/调用入口。计算、恢复、检查点、JSON 编码、批量写和关闭 flush 均在 `asyncio.to_thread` 工作流程中；现有 aiosqlite 的 SQL 操作继续由其专用 SQLite 线程执行。账本、评分器和计算缓存只由互斥工作轮修改；目录刷新任务与工作线程拥有各自的通道缓存。取消等待者不会释放执行门闩，关闭会先等活动轮结束。
+5. **一致状态发布**：工作线程生成状态字典，事件循环整份替换最近完成轮次的状态。接口不遍历正在变化的 positions/pending/scorer。旧 generation 的展示结果不会覆盖新快照；展示副本在工作线程构造/复用，原始共享模型不修改。输入捕获错误、计算及写入异常均隔离。
+6. **写入与内存**：两个变体共享不变开仓元数据；`PendingRows` 只保留账本拥有的行和持仓引用，到写入时最多展开 200 行。成功分块立即从 pending 移除，失败分块及后续分块留待重试。展示模型的字段集合按 dict 大小预分配，避免每个模型多分配约 4 KiB。没有改 schema.py、repositories.py 或采集调度。
+7. **配置**：Settings 和环境变量缺省均为 `SHADOW_MAX_OPEN=1500`；压力基准明确覆盖为 3000。`SHADOW_ENABLED` 仍默认关闭。
+
+新增 8 项安全回归覆盖：取消后仍互斥/关闭等待/状态快照、输入与目录隔离/旧代不覆盖、缓存识别原地修改、200 行分块失败重试及 JSON 编码线程、无新报价的结算/stale/检查点、精确 DEX 索引及定时堆容量、评分增量与 ≥1% 缓冲、配置默认值。原有 41 项账本/评分/API/通道用例也通过。基准只按 PM 指定的新预算重新定义断言，没有删除失败保护或放宽其他测试。
+
 ## 验证环境与命令原始汇总
 
-Windows 本机 Python 3.12.10，pytest 8.4.2、pydantic 2.12.5、FastAPI 0.135.1、aiosqlite 0.22.1。**不是 PM 的锁定依赖 venv**；锁定环境最终验收由 PM 执行。
+Windows 本机 Python 3.12.10，pytest 8.4.2、pydantic 2.12.5、FastAPI 0.135.1、aiosqlite 0.22.1。仍非 PM 锁定依赖 venv；生产同构环境与真实行情验收不在本次授权范围内。
 
-后端命令在 `backend` 目录运行；PowerShell 先设 `$env:PYTHONPATH='.'`：
+后端在 `backend` 目录运行，先设 `$env:PYTHONPATH='.'`：
 
 ```powershell
-python -m pytest tests -q -p no:cacheprovider --basetemp ../.pytest-tmp/full-final
+python -m pytest tests -q -p no:cacheprovider --basetemp ../.pytest-tmp/perf-full-final
 ```
 
-最终原始汇总（退出码 0）：
+原始汇总（退出码 0）：
 
 ```text
-2476 passed, 7 deselected, 12 warnings in 251.17s (0:04:11)
+2484 passed, 8 deselected, 12 warnings in 201.89s (0:03:21)
 ```
 
-7 项 deselected 包括显式联网/性能测试，本次性能测试另行运行。12 个 warning 来自原有 datetime.utcnow 弃用警告。
+8 项 deselected 包括已有显式联网/性能测试，以及本次两个显式 benchmark；两个影子基准已另行独立运行。12 个 warning 为原有 datetime.utcnow 弃用警告。离线网络保护沿用 `tests/conftest.py`，未改选择规则。
 
-前端命令在 `frontend` 目录运行：
+前端在 `frontend` 目录运行（使用已有 node_modules，未安装依赖）：
 
 ```powershell
-npm.cmd ci --offline --ignore-scripts --no-audit --no-fund
 npm.cmd test -- --reporter=dot
 .\node_modules\.bin\tsc.cmd --noEmit
 ```
 
-最终原始汇总（退出码 0）：
+最终原始汇总（两条命令退出码均为 0）：
 
 ```text
-Test Files  31 passed (31)
-     Tests  413 passed (413)
-  Duration  158.79s (transform 4.24s, setup 489.34s, collect 237.96s, tests 377.79s, environment 194.06s, prepare 11.07s)
+ Test Files  31 passed (31)
+      Tests  413 passed (413)
+   Duration  120.76s (transform 3.23s, setup 397.14s, collect 200.05s, tests 310.30s, environment 137.52s, prepare 8.32s)
+TSC_EXIT_CODE=0
 ```
 
-类型检查原始退出结果：`TSC_EXIT_CODE=0`（tsc 无诊断输出）。依赖安装输出：`added 245 packages in 52s`，命令明确使用 `--offline`，没有联网安装。
+tsc 无诊断输出。前端已有 React act 与 Ant Design 弃用警告保留。首次前后端并行运行时，旧 AppShell 的 `opens the settings history tab for a legacy history bookmark` 等待标签页失败，原始汇总为：
 
-过程记录：第一步通道/原 Astro 目录/告警测试 `55 passed in 0.56s`；首轮前端 `Test Files 30 passed (30)`、`Tests 410 passed (410)`；新增影子页及导航定向测试 `Test Files 2 passed (2)`、`Tests 32 passed (32)`。首轮后端 `3 failed, 2469 passed, 6 deselected, 12 warnings in 202.56s (0:03:22)`，暴露消费者接入与事务保护问题，已修正实现，未修改这两组旧保护测试。唯一改动的旧告警断言是任务书明确要求变更的成交额缺失行为；前端旧导航期望只新增了影子账本条目。
+```text
+Test Files  1 failed | 30 passed (31)
+     Tests  1 failed | 412 passed (413)
+  Duration  131.26s (transform 15.25s, setup 396.68s, collect 206.24s, tests 320.19s, environment 105.55s, prepare 17.62s)
+```
 
-离线网络保护由现有 `tests/conftest.py` 自动夹具执行，真实网络测试默认 deselect。详细运行日志保留于仓库内忽略目录 `.pytest-tmp/`，未入 Git。
+后端结束后，保持同一前端源码、断言及超时，单独重跑前端全量得到上述 413 passed；可确认隔离重跑通过，不能单凭一次重跑断言根因已完全定位。未修改前端或其测试。
 
-## 性能基准
+完整日志保存在忽略目录 `.pytest-tmp/perf-backend-full.log`、`perf-frontend-full.log`（首次失败）、`perf-frontend-final.log`、`perf-tsc.log`、`perf-benchmark-final.log`；测试库/临时目录也保留在仓库内 `.pytest-tmp/`。
 
-独立运行，无后端/前端全量测试并行：
+## 两个场景的性能基准
+
+独立运行，未与后端/前端全量或 tsc 负载并行：
 
 ```powershell
-python -m pytest tests/test_shadow_benchmark.py -q -s -m benchmark -p no:cacheprovider --basetemp ../.pytest-tmp/bench-final
+python -m pytest tests/test_shadow_benchmark.py -q -s -m benchmark -p no:cacheprovider --basetemp ../.pytest-tmp/perf-bench-final
 ```
 
-合成 1500 对市场、3000 个未平变体行、每轮 1000 个机会，盘口持续变动，覆盖真实 Runtime（评分、通道、展示副本、账本跟踪、文件 SQLite 批量写）。RSS 为 Windows WorkingSetSize 差值，行情 fixture 建立后取基线，再建立账本；不是 tracemalloc 推测。单独报告首次开仓批量写和 60 秒检查点写入，不混入常规轮的中位数。基准包含硬断言，中位数大于 5 ms 或 RSS 增量大于 30 MiB 会失败。
+两个场景都经过真实 ShadowRuntime、目录标注、评分、账本及文件 SQLite 分块写入：压力为 1000 机会/3000 未平行且全部报价变化；真实规模为 400 机会/1000 未平行，每轮轮换约 1/3 市场对报价（对应可见机会约 1/3）。初次开仓分别输入 1500/500 个机会以建满两变体持仓；随后 51 个常规轮，另有第 61 秒检查点。沿用原基准的可变合成模型，每轮等待消费结束后原地更新，不将上游 fixture 模型反复重建的内存当作影子增量。
 
-最终原始基准与汇总（退出码 **1**，耗时硬断言失败）：
+事件循环同步主体计时包含不可变捕获、任务创建、同代展示/状态发布及输入释放，不把 await 工作线程的等待算作事件循环执行。中位/P95/max 都含首次开仓和检查点。工作线程使用 `thread_time` 测 CPU、`perf_counter` 测完整墙钟（含 aiosqlite 等待）；常规 CPU 中位预算分别为 20/8 ms。Windows CPU 时钟约 15.625 ms 粒度，真实场景的 0 ms 中位不代表零成本，因此额外保留更保守的工作线程墙钟中位 ≤20/8 ms 断言。RSS 为 Windows WorkingSetSize，fixture 和主测试 DB 建立后取基线，随后初始化真实独立影子 DB 连接；最终包含账本、缓存及线程等增量，非 tracemalloc 估算。
+
+最终原始输出（退出码 0）：
 
 ```text
-SHADOW_BENCHMARK {"checkpoint_batch_ms": 183.80839994642884, "median_ms": 29.853499960154295, "open_batch_ms": 209.13370000198483, "open_rows": 3000, "opportunities": 1000, "p95_ms": 69.20919998083264, "rounds": 51, "rss_delta_mib": 24.81640625, "within_memory_budget": true, "within_time_budget": false}
-FAILED tests/test_shadow_benchmark.py::test_shadow_3000_rows_1000_opportunities
-1 failed in 4.37s
+SHADOW_BENCHMARK {"capture_median_ms": 2.7231998974457383, "changed_fraction": 1.0, "checkpoint_event_loop_ms": 2.7988001238554716, "checkpoint_worker_wall_ms": 156.6392999375239, "event_loop_max_ms": 9.065199992619455, "event_loop_median_ms": 2.8439000016078353, "event_loop_p95_ms": 3.50580015219748, "open_event_loop_ms": 9.065199992619455, "open_rows": 3000, "open_worker_wall_ms": 192.44190002791584, "opportunities": 1000, "publish_median_ms": 0.09510002564638853, "recomputed_median": 1500, "rounds": 51, "rss_delta_mib": 26.3984375, "scenario": "stress", "within_memory_budget": true, "within_time_budget": true, "worker_cpu_mean_ms": 23.590686274509803, "worker_cpu_median_ms": 15.625, "worker_wall_median_ms": 19.80879995971918}
+.SHADOW_BENCHMARK {"capture_median_ms": 0.9296999778598547, "changed_fraction": 0.3333333333333333, "checkpoint_event_loop_ms": 0.8501000702381134, "checkpoint_worker_wall_ms": 33.39190001133829, "event_loop_max_ms": 2.5803999742493033, "event_loop_median_ms": 0.9787000017240644, "event_loop_p95_ms": 1.2692000018432736, "open_event_loop_ms": 2.5803999742493033, "open_rows": 1000, "open_worker_wall_ms": 53.4727000631392, "opportunities": 400, "publish_median_ms": 0.0315000070258975, "recomputed_median": 167, "rounds": 51, "rss_delta_mib": 6.14453125, "scenario": "realistic", "within_memory_budget": true, "within_time_budget": true, "worker_cpu_mean_ms": 3.982843137254902, "worker_cpu_median_ms": 0.0, "worker_wall_median_ms": 5.079800030216575}
+2 passed in 3.33s
 ```
 
-| 指标 | 结果 | 任务书门槛 | 判定 |
+| 指标 | 压力场景 | 真实规模 | PM 预算 |
 | --- | ---: | ---: | --- |
-| 完整消费者常规轮中位数 | 29.85 ms | ≤5 ms | 未通过 |
-| 常规轮 P95 | 69.21 ms | 未指定 | 记录 |
-| 常驻 WorkingSet 增量 | 24.82 MiB | ≤30 MiB | 本机合成场景通过 |
-| 首次 3000 行批量开仓 | 209.13 ms | 未单列 | 记录 |
-| 60 秒检查点批量写 | 183.81 ms | 未单列 | 记录 |
+| 事件循环中位 | 2.844 ms | 0.979 ms | ≤3 ms |
+| 事件循环 P95 | 3.506 ms | 1.269 ms | ≤10 ms |
+| 事件循环最大值（含开仓/检查点） | 9.065 ms | 2.580 ms | ≤20 ms |
+| 工作线程 CPU 中位（量化时钟） | 15.625 ms | 0.000 ms | ≤20 / ≤8 ms |
+| 工作线程墙钟中位（额外硬保护） | 19.809 ms | 5.080 ms | ≤20 / ≤8 ms |
+| WorkingSet 增量 | 26.398 MiB | 6.145 MiB | ≤30 MiB |
+| 首次开仓工作线程墙钟 | 192.442 ms | 53.473 ms | 单独记录 |
+| 检查点工作线程墙钟 | 156.639 ms | 33.392 ms | 单独记录 |
 
-最终基准比早期静态盘口基准增加了持续变化的盘口与合成 CrossEx 条目；不同轮次还存在本机调度抖动，不能把早期更小数字当最终验收结果。后续优先分析评分扫描/同代展示副本、检查点序列化的成本。不得删除或放宽基准断言以使验收变绿。
+**边界**：压力场景事件循环中位与工作线程墙钟的余量较小；CPU 均值为 23.591 ms（预算针对中位数），仍有长尾。上述同步主体计时不能替代真实服务事件循环调度延迟、GIL/GC 争用及生产负载观测。首次开仓和检查点仍需较长工作线程墙钟，但不再在事件循环编码/写库，期间新轮会被计数跳过。本次没有 1.9 GiB 无 swap 同构环境、长时间真实行情或大量已平仓统计冷查询验收。
 
-早期完整消费者基准 28.93 ms；去除重复身份/盘口解析、增加定长缓存和常规跟踪快速路径后，优化中测得 17.44 ms。**截至该次仍未满足 ≤5 ms 预算**。最终结果以本节最终原始输出为准，不把功能测试通过当作性能验收通过。尚未在 1.9 GiB 生产同构环境测量，未进行真实 10 分钟行情验收。
+返工前历史结果保留于 `ff22a89` 报告：常规中位 29.8535 ms、P95 69.2092 ms、首次开仓 209.1337 ms、检查点 183.8084 ms，旧事件循环 ≤5 ms 断言失败。本次只使用 PM 明确批准的事件循环/工作线程分离预算；开发中未通过的场景继续优化实现，未调高阈值。本节最终原始输出是当前验收依据。
 
 ## 币安成交额为空：源码调查与离线复现
 
@@ -141,13 +164,19 @@ FAILED tests/test_shadow_benchmark.py::test_shadow_3000_rows_1000_opportunities
 4. 任务书称“每所费率设置”，源码实际上是现货/合约默认费率，按机会的既有腿费率复用。流动性、滑点及资金费均是估计口径。
 5. 价差序列每分钟一个样本，60 个连续分钟样本才启用 plateau；一分钟内不重复计样本。容量满时不继续增大，计数公开；容量之外的市场/序列无法得到完整历史规则评分，但仍计算可用的即时软标签。
 6. t 下界使用任务书指定的 df<30 表，df≥30 取 1.645；分位数采用线性插值；CVaR5 取最差 ceil(5% * n) 个事件均值；E≤0 时 n_min=null，最低事件门槛仍为 30。种子固定为 20261103。这些细节供 arb-mvp 对齐复核。
-7. 性能预算未通过前，不建议开启生产；首次开仓和检查点 JSON 编码/写库还有明显延迟。30 天大量已平仓统计的冷查询峰值尚未做生产规模压力测试。
+7. 本机两个新预算场景已通过，但压力场景余量较小；首次开仓和检查点工作线程仍有长尾。不能据此直接开启生产。30 天大量已平仓统计的冷查询峰值尚未做生产规模压力测试。
 8. 用户最新指令禁止联网与启动服务，故未做任务书中真实 10 分钟行情验收；锁定 venv、生产同构资源验收、独立只读审查仍由 PM 安排。没有部署、备份或生产验证可报告。
 
 ## Git 与范围检查
 
-已分步提交：`42b692f`（A/B/F 基础）、`23615a3`（账本/评分/统计接口）、`b6a8747`（中文页面）、`acfb50b`（恢复/结算/隔离复核）、`4d05c02`（资源预算硬断言）；文档提交见本分支 `git log`。
+历史实现提交：`42b692f`、`23615a3`、`b6a8747`、`acfb50b`、`4d05c02`；旧报告为 `ff22a89`。本次从已提交 PM decisions 的 `dc0fec6` 继续，初始工作区干净。
 
-`main.py`、`config.py` 相对 81585e4 仅追加；未触碰并行 SQLite 任务的已有钩子。禁止文件差异检查为空：collector、astro_*、arb_mvp_*、fs_astro、history 写入、原 gate_crossex_hyperliquid。所有提交均只在当前本地分支，未 push。
+本次分步本地提交：
 
-用户提供的 `docs/shadow-ledger-spec-2026-11-03.md` 原先未跟踪，原样保留，不擅自纳入提交。交接见 `docs/task-handoff-2026-11-03-shadow-ledger.md`。
+- `52c5e62` — `perf: move incremental shadow ledger processing off event loop`
+- `b0766fd` — `test: enforce shadow worker budgets and snapshot isolation`
+- `docs:` 报告与交接提交见本分支 `git log`（文档不自引提交号）。
+
+返工仅涉及 shadow runtime/ledger/scorer、config 默认值、main 的影子消费者入口、两个影子测试文件以及本报告和交接文档。`schema.py`、`repositories.py`、collector、Astro/arb-mvp、history 写入及前端均无本轮差异；`git diff --check` 通过。用户规格已由基线 `dc0fec6` 跟踪，本轮未修改。
+
+没有 push、服务器连接、备份、部署或线上验证。忽略目录 `.pytest-tmp/` 的日志/诊断脚本/测试库与既有 node_modules 均保留。交接见 [task-handoff-2026-11-03-shadow-ledger.md](task-handoff-2026-11-03-shadow-ledger.md)；下一步是本模块的 PM 锁定环境与独立验收，真实行情及生产操作需要另行授权。
