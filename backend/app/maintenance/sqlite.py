@@ -155,7 +155,7 @@ class SQLiteMaintenance:
             # ISO offsets are strictly less than 24 hours. Widen the indexed
             # lexical upper bound by a day, then parse candidates in Python.
             # This includes offset/microsecond boundaries without julianday(column)
-            # defeating the index. Malformed/naive timestamps are retained; unusual
+            # defeating the index. Malformed timestamps are retained; unusual
             # non-ISO encodings outside this range are conservatively left alone.
             upper_time = (cutoff + timedelta(days=1)).isoformat()
             async with db.execute(f'SELECT MAX(rowid) FROM "{table}"') as cursor:
@@ -198,7 +198,10 @@ class SQLiteMaintenance:
                 for rowid, value in rows:
                     try:
                         observed = datetime.fromisoformat(value)
-                        if observed.tzinfo is not None and observed < cutoff:
+                        # Legacy timestamps without an offset were stored as UTC.
+                        if observed.tzinfo is None:
+                            observed = observed.replace(tzinfo=UTC)
+                        if observed < cutoff:
                             candidates.append((rowid, value))
                     except (TypeError, ValueError):
                         pass

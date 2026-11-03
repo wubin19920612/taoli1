@@ -145,6 +145,33 @@ async def test_initialization_always_interrupts_and_closes(tmp_path, monkeypatch
 
 
 @pytest.mark.parametrize("dry_run", [True, False])
+@pytest.mark.parametrize("value,expired", [
+    pytest.param("2026-08-04T20:14:59", True, id="naive-t"),
+    pytest.param("2026-08-04 20:14:59", True, id="naive-space"),
+    pytest.param("2026-08-04T21:15:00+02:00", True, id="non-utc-offset"),
+    pytest.param("0000-invalid", False, id="unparseable"),
+    pytest.param("2026-08-04T20:15:00", False, id="naive-t-cutoff"),
+    pytest.param("2026-08-04 20:15:00", False, id="naive-space-cutoff"),
+])
+async def test_legacy_timestamp_retention_and_counts(tmp_path, caplog, dry_run, value, expired):
+    path = tmp_path / "legacy.db"
+    seed(path, [value])
+    with caplog.at_level(logging.INFO, logger=maintenance.__name__):
+        await worker(path, sqlite_maintenance_dry_run=dry_run).run_once(now=NOW)
+    with sqlite3.connect(path) as db:
+        remaining = [r[0] for r in db.execute("SELECT created_at FROM alert_events")]
+    assert remaining == ([] if expired and not dry_run else [value])
+    deleted = int(expired and not dry_run)
+    would_delete = int(expired and dry_run)
+    reports = [r.getMessage() for r in caplog.records
+               if r.name == maintenance.__name__
+               and r.getMessage().startswith("sqlite maintenance table=alert_events ")]
+    assert len(reports) == 1
+    assert f"dry_run={dry_run} deleted={deleted} would_delete={would_delete} " in reports[0]
+    assert reports[0].endswith("status=ok")
+
+
+@pytest.mark.parametrize("dry_run", [True, False])
 async def test_indexed_ranges_keep_offset_and_invalid_times_safe(tmp_path, monkeypatch, dry_run):
     path = tmp_path / "indexed.db"
     # Both offsets cross the cutoff in the opposite direction to lexical ordering.
@@ -153,7 +180,7 @@ async def test_indexed_ranges_keep_offset_and_invalid_times_safe(tmp_path, monke
         "2026-08-04T19:15:00-02:00",  # fresh in UTC
         CUTOFF.isoformat(),
         (CUTOFF - timedelta(microseconds=1)).isoformat(),
-        "0000-invalid", "2026-08-04T00:00:00",  # invalid / naive: retain
+        "0000-invalid", "2026-08-04T00:00:00",  # invalid: retain; naive UTC: old
         "2026-08-04T20:14:59Z", "2026-08-05T19:14:59+23:00",
         (NOW + timedelta(days=1)).isoformat(),
     ]
@@ -169,7 +196,7 @@ async def test_indexed_ranges_keep_offset_and_invalid_times_safe(tmp_path, monke
             assert "SEARCH" in plan and "age_idx" in plan
             assert "TEMP B-TREE" not in plan
         remaining = [r[0] for r in db.execute("SELECT created_at FROM alert_events ORDER BY rowid")]
-    assert remaining == (values if dry_run else [values[i] for i in [1, 2, 4, 5, 8]])
+    assert remaining == (values if dry_run else [values[i] for i in [1, 2, 4, 8]])
 
 
 async def test_dry_run_yields_and_stops_counting(tmp_path, monkeypatch, caplog):

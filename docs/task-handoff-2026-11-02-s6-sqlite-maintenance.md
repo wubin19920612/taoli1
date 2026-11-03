@@ -120,3 +120,5 @@ $env:ASTRO_ALERT_AUTO_CREATE = 'false'
 - 无新增仓库外业务产物；测试环境、临时数据库与日志均在系统 TEMP。提交前检查并仅暂存本轮 7 个文件。
 - 复制库规模演练、API p95、真实 WAL 峰值及 24 小时观察仍待运维阶段验收；专用连接不消除 SQLite 单写者约束。耗时限制可能产生部分清理/部分计数；需观察 `status`，缺索引表或异常时间值需要另行评估。
 - 下一任务以本节为准推进历史整合和上线演练，不在本轮扩展部署或表结构修改。
+
+- 2026-11-03 复审修复（基线 `918c506f1e8410e08c418d431c4c7da5cd17d9af`）：无时区旧时间（T/空格分隔）按 UTC 参与保留期判断，取代本节旧的“无时区保留”规则；不可解析值和等于截止时间的值仍保留，非 UTC 偏移按真实时刻比较。先补删除/dry-run 计数及边界测试：`5 failed, 9 passed, 14 deselected in 3.27s`，修复后审查回归 `28 passed in 2.27s`；指定 `$env:TEMP\taoli1-s6-venv` 缺失的 Python 启动器已从对应 Python 3.12 安装补回，全量沿用上述两个 false 环境变量并执行 `-B -m pytest -q --basetemp "$env:TEMP\taoli1-s6-naive-full-20261103" -p no:cacheprovider`，汇总 `2841 passed, 6 deselected, 13 warnings in 145.28s (0:02:25)`，日志 `$env:TEMP\taoli1-s6-naive-full-20261103.log`；两份变更 Python 文件 Ruff、`git diff --check` 通过；本轮新增提交 `fix: S6 无时区时间按 UTC 处理`，不 amend、不推送、不部署。
