@@ -70,7 +70,8 @@ class AuthStore:
                     return None, False
             async with self.db.execute("SELECT last_counter FROM auth_totp_state WHERE singleton = 1") as cursor:
                 last = (await cursor.fetchone())[0]
-            counter = matching_counter(secret, code, now, last) if password_ok else None
+            candidate = matching_counter(secret, code, now, last)
+            counter = candidate if password_ok else None
             if counter is None:
                 await self.db.execute("INSERT INTO auth_failures VALUES (?, ?)", (ip, now))
                 async with self.db.execute(

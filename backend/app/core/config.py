@@ -104,6 +104,10 @@ class Settings:
     dashboard_auth_disabled: bool = False
     trusted_proxy_ips: str = "127.0.0.1,172.16.0.0/12"
 
+    def __repr__(self) -> str:
+        # Configuration can contain credentials; never reveal them via exception/debug repr.
+        return "Settings(<redacted>)"
+
     def __post_init__(self) -> None:
         if type(self.dashboard_session_days) is not int or not 1 <= self.dashboard_session_days <= 30:
             raise ValueError("DASHBOARD_SESSION_DAYS must be between 1 and 30")
