@@ -1,0 +1,187 @@
+"""Bounded, display-only diagnostics over exact markets and comparable assets."""
+
+from array import array
+from collections import defaultdict
+from dataclasses import dataclass, field
+from functools import lru_cache
+from statistics import fmean, median, pstdev
+
+from app.services.spread_engine import _market_observed_at, _has_executable_book
+
+
+class MinuteRing:
+    """Fixed-size numeric storage, avoiding thousands of retained float tuples."""
+    __slots__ = ("values", "capacity", "width", "start", "count")
+
+    def __init__(self, capacity, width):
+        self.values = array("d", [0]) * (capacity * width)
+        self.capacity, self.width, self.start, self.count = capacity, width, 0, 0
+
+    def __len__(self):
+        return self.count
+
+    def __getitem__(self, index):
+        if index < 0:
+            index += self.count
+        if not 0 <= index < self.count:
+            raise IndexError(index)
+        offset = ((self.start + index) % self.capacity) * self.width
+        return tuple(self.values[offset:offset + self.width])
+
+    def __setitem__(self, index, value):
+        if index < 0:
+            index += self.count
+        offset = ((self.start + index) % self.capacity) * self.width
+        for i, number in enumerate(value):
+            self.values[offset + i] = number
+
+    def append(self, value):
+        if self.count == self.capacity:
+            self.start = (self.start + 1) % self.capacity
+        else:
+            self.count += 1
+        self[self.count - 1] = value
+
+    def popleft(self):
+        self.start = (self.start + 1) % self.capacity
+        self.count -= 1
+
+
+@lru_cache(maxsize=10000)
+def _identity(exchange, market_type, raw, dex, multiplier, size):
+    dex = dex.lower() if dex else (raw.split(":", 1)[0].lower() if ":" in raw else "main") if exchange == "hyperliquid" and market_type == "future" else ""
+    value = (exchange.lower(), str(market_type), raw, dex, f"{multiplier:.12g}")
+    return (*value, f"{size:.12g}") if size is not None else value
+
+
+def prepare_markets(markets, now):
+    ts = now.timestamp()
+    result = {}
+    for m in markets:
+        d = m.__dict__
+        key = _identity(d["exchange"], d["market_type"], d["raw_symbol"], d["dex"],
+                        d["symbol_alias_price_multiplier"], d["contract_size_multiplier"])
+        observed = _market_observed_at(m).timestamp()
+        result[key] = (m, observed, 0 <= ts - observed <= 10 and _has_executable_book(m))
+    return result
+
+
+def opportunity_keys(op):
+    d = op.__dict__
+    def key(side):
+        return _identity(d[f"{side}_exchange"], d[f"{side}_market_type"], d[f"{side}_raw_symbol"] or "",
+                         d[f"{side}_dex"], d[f"{side}_price_multiplier"], d[f"{side}_contract_size_multiplier"])
+    return key("buy"), key("sell")
+
+
+@dataclass(slots=True)
+class PriceState:
+    mid: float
+    changed: float
+    seen: float
+    samples: MinuteRing = field(default_factory=lambda: MinuteRing(16, 3))
+
+
+class FakeOpportunityScorer:
+    def __init__(self, max_markets=6000, max_series=3000):
+        self.prices = {}
+        self.spreads = {}
+        self.max_markets = max_markets
+        self.max_series = max_series
+        self.dropped = 0
+
+    def score(self, markets, opportunities, now, prepared=None):
+        ts = now.timestamp()
+        minute = int(ts // 60)
+        # Expire absent keys as well as per-key rings: changing listings cannot
+        # accumulate an unbounded dictionary over a long-running process.
+        self.prices = {k: v for k, v in self.prices.items() if ts - v.seen <= 900}
+        self.spreads = {k: v for k, v in self.spreads.items() if minute - v[-1][0] < 60}
+        groups = defaultdict(list)
+        by_key = {}
+        prepared = prepared if prepared is not None else prepare_markets(markets, now)
+        for key, (market, _, fresh) in prepared.items():
+            if not fresh:
+                continue
+            mid = (market.bid + market.ask) / 2
+            state = self.prices.get(key)
+            if state is None:
+                if len(self.prices) >= self.max_markets:
+                    self.dropped += 1
+                    continue
+                state = self.prices[key] = PriceState(mid, ts, ts)
+            if mid != state.mid:
+                state.changed = ts
+            state.mid, state.seen = mid, ts
+            if state.samples and state.samples[-1][0] == minute:
+                m, low, high = state.samples[-1]
+                if mid < low or mid > high:
+                    state.samples[-1] = (m, min(low, mid), max(high, mid))
+            else:
+                state.samples.append((minute, mid, mid))
+            asset = market.asset_id or market.symbol
+            # Reviewed incompatible identities must not vote on each other's price.
+            if market.identity_collision and not market.asset_id:
+                continue
+            groups[asset].append((market.exchange.lower(), key, state))
+            by_key[key] = asset
+        hard, frozen = set(), set()
+        for rows in groups.values():
+            can_have_outlier = len({ex for ex, _, _ in rows}) >= 3
+            if not can_have_outlier and not any(ts - state.changed >= 900 for _, _, state in rows):
+                continue
+            # Each exchange gets one vote even if several DEXes/market types exist.
+            for exchange, key, state in rows:
+                is_frozen = ts - state.changed >= 900
+                if not can_have_outlier and not is_frozen:
+                    continue
+                other = defaultdict(list)
+                moving_other = False
+                for ex, _, peer in rows:
+                    if ex == exchange:
+                        continue
+                    other[ex].append(peer.mid)
+                    if is_frozen:
+                        samples = [x for x in peer.samples if x[0] >= minute - 14]
+                        if samples and max(x[2] for x in samples) / min(x[1] for x in samples) - 1 > 0.003:
+                            moving_other = True
+                votes = [median(v) for v in other.values()]
+                if len(votes) >= 2 and max(votes) / min(votes) - 1 < 0.005:
+                    if abs(state.mid / median(votes) - 1) > 0.03:
+                        hard.add(key)
+                if ts - state.changed >= 900 and moving_other:
+                    frozen.add(key)
+        result = {}
+        for op in opportunities:
+            reasons = []
+            if hard or frozen:
+                keys = opportunity_keys(op)
+                if keys[0] in hard or keys[1] in hard:
+                    reasons.append("median_outlier")
+                if keys[0] in frozen or keys[1] in frozen:
+                    reasons.append("frozen_leg")
+            if op.open_spread_pct >= 1:
+                ring = self.spreads.get(op.id)
+                if ring is None and len(self.spreads) < self.max_series:
+                    ring = self.spreads[op.id] = MinuteRing(60, 2)
+                if ring is not None:
+                    if not ring or ring[-1][0] != minute:
+                        ring.append((minute, op.open_spread_pct))
+                    while ring and minute - ring[0][0] >= 60:
+                        ring.popleft()
+                    if len(ring) == 60 and ring[-1][0] - ring[0][0] == 59:
+                        values = [v for _, v in ring]
+                        mean = fmean(values)
+                        if mean > 1 and pstdev(values) < mean * 0.05:
+                            reasons.append("spread_plateau")
+                else:
+                    self.dropped += 1
+            else:
+                self.spreads.pop(op.id, None)
+            if op.buy_volume_24h_usdt is None or op.sell_volume_24h_usdt is None:
+                reasons.append("volume_unknown")
+            if op.open_spread_pct > 5:
+                reasons.append("extreme_spread")
+            score = len(reasons) + ("median_outlier" in reasons)
+            result[op.id] = {"fake_score": score, "fake_reasons": reasons, "fake_flag": score >= 2}
+        return result

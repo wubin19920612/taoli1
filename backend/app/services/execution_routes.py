@@ -92,6 +92,8 @@ class ExecutionRoutes:
         self.updated_at = None
         self.retry_at = 0.0
         self.errors = 0
+        self._route_cache = {}
+        self._cache_entries = self.entries
 
     @staticmethod
     async def _fetch():
@@ -123,6 +125,13 @@ class ExecutionRoutes:
                 pass
 
     def routes(self, exchange, market_type, raw_symbol, dex=None):
+        if self._cache_entries is not self.entries or len(self._route_cache) >= 10000:
+            self._route_cache.clear()
+            self._cache_entries = self.entries
+        key = (exchange, market_type, raw_symbol, dex)
+        cached = self._route_cache.get(key)
+        if cached is not None:
+            return cached
         exchange = exchange.lower()
         result = ["native"] if exchange in self.native else []
         base = raw_base(exchange, raw_symbol, dex)
@@ -132,6 +141,7 @@ class ExecutionRoutes:
             tag = "" if tag == "main" else tag
         if market_type == "future" and base and (EXCHANGES.get(exchange), "FUTURE", base, tag) in self.entries:
             result.append("crossex")
+        self._route_cache[key] = result
         return result
 
     def fields(self, opportunity):

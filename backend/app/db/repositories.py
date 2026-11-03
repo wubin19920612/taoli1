@@ -49,6 +49,73 @@ from app.models.settings import (
 )
 
 PERCENT_SCALE = 10_000
+
+
+class ShadowTradeRepository:
+    """Dedicated shadow connection in production; one transaction per batch."""
+
+    def __init__(self, db):
+        self.db = db
+        self.lock = asyncio.Lock()
+
+    async def save_batch(self, rows):
+        values = [(r["id"], r["opportunity_id"], r["variant"], r["symbol"],
+                   r["opened_at"], r["closed_at"], int(r["fake_flag"]),
+                   json.dumps(r, separators=(",", ":"), allow_nan=False)) for r in rows]
+        async with self.lock:
+            # Releasing an outermost savepoint commits the whole batch; rollback
+            # to it cannot discard writes that preceded this batch (memory tests
+            # may share a connection). Production uses a dedicated connection.
+            await self.db.execute("SAVEPOINT shadow_batch")
+            try:
+                await self.db.executemany("""
+                    INSERT INTO shadow_trades
+                    (id, opportunity_id, variant, symbol, opened_at, closed_at, fake_flag, payload)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET closed_at=excluded.closed_at, payload=excluded.payload
+                """, values)
+                await self.db.execute("RELEASE SAVEPOINT shadow_batch")
+            except BaseException:
+                await self.db.execute("ROLLBACK TO SAVEPOINT shadow_batch")
+                await self.db.execute("RELEASE SAVEPOINT shadow_batch")
+                raise
+
+    async def restore(self, now):
+        async with self.db.execute("SELECT payload FROM shadow_trades WHERE closed_at IS NULL") as cursor:
+            rows = [json.loads(r["payload"]) for r in await cursor.fetchall()]
+        cutoff = (now - timedelta(minutes=10)).isoformat()
+        async with self.db.execute("""SELECT opportunity_id, MAX(closed_at) AS closed_at
+            FROM shadow_trades WHERE closed_at >= ? GROUP BY opportunity_id""", (cutoff,)) as cursor:
+            cooldowns = {r["opportunity_id"]: datetime.fromisoformat(r["closed_at"]).timestamp()
+                         for r in await cursor.fetchall()}
+        return rows, cooldowns
+
+    async def list_trades(self, limit=100, status=None):
+        where = " WHERE closed_at IS NULL" if status == "open" else " WHERE closed_at IS NOT NULL" if status == "closed" else ""
+        async with self.db.execute(
+            "SELECT payload FROM shadow_trades" + where + " ORDER BY opened_at DESC, id LIMIT ?", (limit,),
+        ) as cursor:
+            rows = [json.loads(r["payload"]) for r in await cursor.fetchall()]
+        for row in rows:
+            row.pop("tracking", None)
+        return rows
+
+    async def closed_events(self, since, until, include_fake=False):
+        query = "SELECT payload FROM shadow_trades WHERE closed_at >= ? AND closed_at <= ?"
+        if not include_fake:
+            query += " AND fake_flag = 0"
+        query += " ORDER BY closed_at, id"
+        async with self.db.execute(query, (since.isoformat(), until.isoformat())) as cursor:
+            rows = [json.loads(r["payload"]) for r in await cursor.fetchall()]
+        return rows
+
+    async def prune(self, now):
+        async with self.lock:
+            await self.db.execute("DELETE FROM shadow_trades WHERE closed_at < ?",
+                                  ((now - timedelta(days=30)).isoformat(),))
+            await self.db.commit()
+
+
 RISK_LABEL_BITS = {
     "LOW_VOLUME": 1 << 0,
     "STALE_DATA": 1 << 1,

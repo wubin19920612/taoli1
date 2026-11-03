@@ -127,6 +127,8 @@ from app.services.risk_labels import effective_open_edge_pct, known_volume_24h_u
 from app.services.snapshot_store import SnapshotStore
 from app.services.snapshot_consumers import LatestSnapshotSlot, SnapshotConsumer
 from app.services.service_control import DockerServiceController, ServiceControlConfig
+from app.services.shadow_runtime import ShadowRuntime
+from app.api import routes_shadow
 from app.services.trade_availability import (
     TradeAvailabilityMonitor,
     TradeAvailabilityService,
@@ -821,6 +823,8 @@ def create_app(
         db = await connect_database(db_path, recover_stale_snapshots=True)
         await initialize_schema(db)
         app.state.db = db
+        app.state.shadow_runtime = ShadowRuntime(app_settings, store)
+        await app.state.shadow_runtime.initialize(db)
         attempts_db = db if db_path == ":memory:" else await connect_database(db_path)
         if attempts_db is not db:
             # A post-create mark that times out leaves the route unknown; wait longer.
@@ -990,6 +994,10 @@ def create_app(
                 history_slot = LatestSnapshotSlot()
                 index_slot = LatestSnapshotSlot()
                 snapshot_slots = [history_slot, index_slot]
+            shadow_slot = LatestSnapshotSlot()
+            use_shadow_slot = app_settings.shadow_enabled and snapshot_slots is not None
+            if use_shadow_slot:
+                snapshot_slots.append(shadow_slot)
             collector = MarketCollector(
                 exchange_adapters,
                 store,
@@ -1004,6 +1012,15 @@ def create_app(
                 risk_settings_timeout_seconds=app_settings.collector_risk_settings_timeout_seconds,
             )
             app.state.market_collector = collector
+            shadow_consumer = SnapshotConsumer("shadow-ledger", shadow_slot, app.state.shadow_runtime.consume)
+            _start_background_task(
+                supervisor,
+                (lambda: shadow_consumer.run(stop_event)) if use_shadow_slot
+                else (lambda: app.state.shadow_runtime.run_inline_observer(stop_event)),
+                name="shadow-ledger",
+            )
+            _start_background_task(supervisor, lambda: app.state.shadow_runtime.catalog.run(stop_event),
+                                   name="shadow-crossex-catalog")
             if snapshot_slots is not None:
                 app.state.snapshot_consumers = {
                     "history-recorder": SnapshotConsumer("history-recorder", history_slot, collector.record_history),
@@ -1016,6 +1033,7 @@ def create_app(
                         supervisor, lambda consumer=consumer: consumer.run(stop_event), name=name,
                     )
             app.state.orderbook_validator = OrderBookDepthValidator(exchange_adapters)
+            app.state.shadow_consumer = shadow_consumer
             _start_background_task(
                 supervisor,
                 lambda: run_collector_loop(collector, app_settings.poll_interval_seconds, stop_event),
@@ -1105,6 +1123,7 @@ def create_app(
             stop_event.set()
             loop_stall_watchdog.stop()
             await supervisor.stop()
+            await app.state.shadow_runtime.aclose()
             await app.state.market_validation.aclose()
             if collector is not None:
                 await collector.close()
@@ -1137,6 +1156,7 @@ def create_app(
     app.state.start_collector = start_collector
     app.state.settings = app_settings
     app.state.snapshot_store = store
+    app.state.shadow_runtime = ShadowRuntime(app_settings, store)
     app.state.instrument_market_cap_service = InstrumentMarketCapService()
     app.state.instrument_statistics_service = InstrumentStatisticsService()
     app.state.market_collector = None
@@ -1215,6 +1235,7 @@ def create_app(
     )
     # Every API router uses the same guard; public exceptions live in security.py.
     for router in (
+        routes_shadow.router,
         routes_features.router,
         routes_health.router,
         routes_account_connections.router,

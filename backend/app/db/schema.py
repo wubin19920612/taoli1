@@ -714,4 +714,24 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
     from app.db.market_identity_repository import initialize_market_identity_schema
 
     await initialize_market_identity_schema(db)
+    await initialize_shadow_schema(db)
     await db.commit()
+
+
+async def initialize_shadow_schema(db: aiosqlite.Connection) -> None:
+    await db.executescript("""
+        CREATE TABLE IF NOT EXISTS shadow_trades (
+            id TEXT PRIMARY KEY,
+            opportunity_id TEXT NOT NULL,
+            variant TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            opened_at TEXT NOT NULL,
+            closed_at TEXT,
+            fake_flag INTEGER NOT NULL,
+            payload TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_shadow_open_variant
+            ON shadow_trades(opportunity_id, variant) WHERE closed_at IS NULL;
+        CREATE INDEX IF NOT EXISTS idx_shadow_closed ON shadow_trades(closed_at);
+        CREATE INDEX IF NOT EXISTS idx_shadow_opened ON shadow_trades(opened_at DESC);
+    """)
