@@ -72,6 +72,7 @@ import { resolveHistoryIntervalSeconds } from "../constants/queryLimits";
 import { QuoteAgeTag } from "../components/QuoteAgeTag";
 import { RangeBacktestPanel } from "../components/RangeBacktestPanel";
 import { PairChartV2, type PairChartV2Controls } from "../components/pairChartV2/PairChartV2";
+import { MAX_CHART_HOURS } from "../components/pairChartV2/data";
 import { readVersion, writeVersion, type ChartVersion } from "../components/pairChartV2/storage";
 import type { RangeBacktestRange } from "../api/rangeBacktest";
 import { addFloatingWatchPair } from "../utils/floatingWatch";
@@ -6106,7 +6107,7 @@ export function PairMonitorPage() {
           onChange={(value) => { setChartVersion(value as ChartVersion); writeVersion(value as ChartVersion); }} />
         <PairSpreadBacktest key={JSON.stringify([chartVersion, result?.leg1, result?.leg2, result?.leg2_multiplier])} result={result}
           v2={chartVersion === "v2" ? { loading, onSwap: () => void swapPairLegs(), onLoadHours: (nextHours) => {
-            if (result) void runQuery({ hours: clampHours(nextHours), values: pairFormFromResult(result),
+            if (result) void runQuery({ hours: Math.min(MAX_CHART_HOURS, clampHours(nextHours)), values: pairFormFromResult(result),
               symbolMode: pairSymbolModeFromValues(pairFormFromResult(result)), intervalSeconds: resultIntervalSeconds(result), preserveInterval: true });
           } } : undefined} />
       </section>

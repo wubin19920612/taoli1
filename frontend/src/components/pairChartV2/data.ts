@@ -7,6 +7,13 @@ import { pairUsesRatio, ratioChartPoints } from "../../utils/pairRatio";
 dayjs.extend(utc);
 export type ValuePoint = { time: UTCTimestamp; value: number };
 export const isFiniteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+export const MAX_CHART_HOURS = 168;
+
+export function priceFormatFor(value: number | undefined, indexed = false) {
+  const magnitude = Math.abs(value ?? 0);
+  const precision = indexed || magnitude >= 1000 ? 2 : magnitude >= 1 ? 4 : 6;
+  return { type: "price" as const, precision, minMove: 10 ** -precision };
+}
 
 // Naive API dates are UTC too. Last input wins within the same UTC second.
 export function utcSeconds(value: string): UTCTimestamp | null {
@@ -45,8 +52,14 @@ function matchesLeg(row: PairSpreadFundingPoint, leg: PairSpreadLegQuery): boole
 }
 
 export function historyRates(history: PairSpreadFundingPoint[], leg: PairSpreadLegQuery): ValuePoint[] {
-  return sortedTimed(history.filter((row) => matchesLeg(row, leg) && isFiniteNumber(row.funding_rate_pct)), (row) => row.funding_time)
-    .map((row) => ({ time: row.time, value: row.funding_rate_pct }));
+  const byMinute = new Map<UTCTimestamp, ValuePoint>();
+  // Match the exact exchange/market first, then round independently per leg.
+  // Keep the latest record in each minute so duplicates cannot create extra bars.
+  for (const row of sortedTimed(history.filter((row) => matchesLeg(row, leg) && isFiniteNumber(row.funding_rate_pct)), (row) => row.funding_time)) {
+    const time = Math.round(row.time / 60) * 60 as UTCTimestamp;
+    byMinute.set(time, { time, value: row.funding_rate_pct });
+  }
+  return [...byMinute.values()];
 }
 
 export function netSettlements(history: PairSpreadFundingPoint[], left: PairSpreadLegQuery, right: PairSpreadLegQuery,
@@ -71,7 +84,10 @@ export function chartData(result: PairSpreadQueryResult | null, points: PairSpre
   const realtime = sortedTimed(result?.realtime_funding ?? [], (row) => row.bucket_at);
   const rateLine = (field: "left_rate_pct" | "right_rate_pct", leg?: PairSpreadLegQuery) => {
     const line = realtime.filter((row) => isFiniteNumber(row[field])).map((row) => ({ time: row.time, value: row[field]! }));
-    return line.length ? line : leg ? historyRates(result?.funding_history ?? [], leg) : [];
+    if (line.length >= 2) return line;
+    const history = leg ? historyRates(result?.funding_history ?? [], leg) : [];
+    const latest = line[0];
+    return latest ? [...history.filter((row) => row.time < latest.time), latest] : history;
   };
   return {
     ratioMode, prices, spread, left: priceLine("leg1_close"), right: priceLine("leg2_close"),

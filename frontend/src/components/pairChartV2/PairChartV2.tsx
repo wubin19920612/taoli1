@@ -1,4 +1,4 @@
-import { Button, InputNumber, Popover, Switch, Tag, Typography } from "antd";
+import { Button, InputNumber, Popover, Switch, Tag, Tooltip, Typography } from "antd";
 import dayjs from "dayjs";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -7,7 +7,7 @@ import {
 } from "lightweight-charts";
 import type { PairSpreadPoint, PairSpreadQueryResult } from "../../api/types";
 import { formatPriceRatio } from "../../utils/pairRatio";
-import { chartData, isFiniteNumber, latestAt, thresholdMetric, utcSeconds } from "./data";
+import { chartData, isFiniteNumber, latestAt, MAX_CHART_HOURS, priceFormatFor, thresholdMetric, utcSeconds } from "./data";
 import { readThresholds, writeThresholds, type Thresholds } from "./storage";
 import { useRangeSelection } from "./useRangeSelection";
 import "./pairChartV2.css";
@@ -61,7 +61,7 @@ function FundingSummary({ result, data }: { result: Props["result"]; data: Retur
         {countdown !== null ? ` · 下次结算 ${countdown}` : ""}
       </span>;
     })}
-    <span>柱：已结算净费率；线：实时费率，无采样时显示历史阶梯</span>
+    <span>柱：已结算净费率；线：实时费率，不足两点时接历史阶梯</span>
   </div>;
 }
 
@@ -78,6 +78,7 @@ export function PairChartV2({ result, points, labels, loading, onSwap, onLoadHou
   const ratioMode = data.ratioMode;
   const metric = ratioMode ? formatPriceRatio : percent;
   const title = ratioMode ? "价格比值曲线（左 ÷ 右）" : "价差曲线";
+  const atHistoryCap = (result?.hours ?? 0) >= MAX_CHART_HOURS;
 
   useEffect(() => {
     if (!host.current) return;
@@ -103,8 +104,8 @@ export function PairChartV2({ result, points, labels, loading, onSwap, onLoadHou
     leftFunding.applyOptions({ lineType: LineType.WithSteps, priceFormat: fundingFormat });
     rightFunding.applyOptions({ lineType: LineType.WithSteps, priceFormat: fundingFormat });
     settlements.applyOptions({ priceFormat: fundingFormat });
-    chart.panes()[0].setHeight(340);
-    chart.panes()[1].setHeight(170);
+    chart.panes()[0].setStretchFactor(0.7);
+    chart.panes()[1].setStretchFactor(0.3);
     seriesRef.current = { spread, left, right, leftFunding, rightFunding, settlements };
     const hover = (event: { time?: Time; point?: { x: number; y: number } }) => setHoverTime(event.point && typeof event.time === "number" ? event.time : null);
     chart.subscribeCrosshairMove(hover);
@@ -121,8 +122,8 @@ export function PairChartV2({ result, points, labels, loading, onSwap, onLoadHou
     const series = seriesRef.current, chart = chartRef.current;
     if (!series || !chart) return;
     series.spread.applyOptions({ title: ratioMode ? "价格比值" : "价差", priceFormat: { type: "custom", formatter: ratioMode ? formatPriceRatio : percent, minMove: 0.000001 } });
-    series.left.applyOptions({ title: labels[0], priceFormat: { type: "price", precision: ratioMode ? 2 : 6, minMove: ratioMode ? 0.01 : 0.000001 } });
-    series.right.applyOptions({ title: labels[1], priceFormat: { type: "price", precision: ratioMode ? 2 : 6, minMove: ratioMode ? 0.01 : 0.000001 } });
+    series.left.applyOptions({ title: labels[0], priceFormat: priceFormatFor(data.left[data.left.length - 1]?.value, ratioMode) });
+    series.right.applyOptions({ title: labels[1], priceFormat: priceFormatFor(data.right[data.right.length - 1]?.value, ratioMode) });
     series.leftFunding.applyOptions({ title: `${result?.leg1.exchange ?? "左"} 费率` });
     series.rightFunding.applyOptions({ title: `${result?.leg2.exchange ?? "右"} 费率` });
     for (const key of ["spread", "left", "right", "leftFunding", "rightFunding", "settlements"] as const) series[key].setData(data[key]);
@@ -160,8 +161,11 @@ export function PairChartV2({ result, points, labels, loading, onSwap, onLoadHou
       <Button size="small" disabled={!result || loading} onClick={onSwap}>⇆ 切换</Button>
       <QuoteAge label={result?.leg1.exchange ?? "左腿"} age={result?.current?.leg1.age_ms} />
       <span>·</span><QuoteAge label={result?.leg2.exchange ?? "右腿"} age={result?.current?.leg2.age_ms} />
-      <Button size="small" loading={loading} disabled={!result} onClick={() => onLoadHours((result?.hours ?? 0) + 24)}>再加载 1 天</Button>
-      <Button size="small" loading={loading} disabled={!result || result.hours >= 168} onClick={() => onLoadHours(168)}>加载至 7 天</Button>
+      <Tooltip title={atHistoryCap ? "超过 7 天后端会改为小时周期" : undefined}>
+        <span><Button size="small" loading={loading} disabled={!result || loading || atHistoryCap}
+          onClick={() => onLoadHours(Math.min(MAX_CHART_HOURS, (result?.hours ?? 0) + 24))}>再加载 1 天</Button></span>
+      </Tooltip>
+      <Button size="small" loading={loading} disabled={!result || loading || atHistoryCap} onClick={() => onLoadHours(MAX_CHART_HOURS)}>加载至 7 天</Button>
       <Switch size="small" checked={rangeMode} onChange={setRangeMode} aria-label="区间" /><span>区间</span>
       <Button size="small" aria-label="清除" onClick={clear}>清除</Button>
       <Popover trigger="click" title="阈值设置" content={<div className="pair-v2-settings">

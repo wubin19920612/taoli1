@@ -17,7 +17,9 @@ beforeEach(() => {
     if (url.pathname.endsWith("/pair-spread/query")) {
       const result = chartFixture();
       result.hours = Number(url.searchParams.get("hours"));
-      result.interval_seconds = Number(url.searchParams.get("interval_seconds"));
+      const requestedInterval = Number(url.searchParams.get("interval_seconds"));
+      result.interval_seconds = result.hours > 168 ? Math.max(3600, requestedInterval) : requestedInterval;
+      result.interval_minutes = result.interval_seconds / 60;
       result.leg1.exchange = url.searchParams.get("leg1_exchange")!;
       result.leg2.exchange = url.searchParams.get("leg2_exchange")!;
       return Response.json(result);
@@ -54,7 +56,7 @@ describe("PairMonitorPage v2 integration", () => {
     second.unmount();
   });
 
-  it("reuses the query and swap callbacks, preserving the displayed identity and interval when extending beyond seven days", async () => {
+  it("reuses query and swap callbacks, preserving identity and interval while limiting history requests to seven days", async () => {
     render(<PairMonitorPage />);
     await waitFor(() => expect(screen.getByRole("button", { name: "再加载 1 天" }).hasAttribute("disabled")).toBe(false));
     const original = latestQuery().searchParams;
@@ -67,13 +69,33 @@ describe("PairMonitorPage v2 integration", () => {
     fireEvent.click(screen.getByRole("button", { name: "加载至 7 天" }));
     await waitFor(() => expect(latestQuery().searchParams.get("hours")).toBe("168"));
     await waitFor(() => expect(screen.getByRole("button", { name: "再加载 1 天" }).className).not.toContain("loading"));
+    const queries = requests.filter((r) => r.pathname.endsWith("/pair-spread/query")).length;
+    expect(screen.getByRole("button", { name: "再加载 1 天" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "加载至 7 天" }).hasAttribute("disabled")).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "再加载 1 天" }));
-    await waitFor(() => expect(latestQuery().searchParams.get("hours")).toBe("192"));
+    fireEvent.click(screen.getByRole("button", { name: "加载至 7 天" }));
+    expect(requests.filter((r) => r.pathname.endsWith("/pair-spread/query"))).toHaveLength(queries);
     expect(latestQuery().searchParams.get("interval_seconds")).toBe("60");
     await waitFor(() => expect(screen.getByRole("button", { name: "⇆ 切换" }).hasAttribute("disabled")).toBe(false));
     fireEvent.click(screen.getByRole("button", { name: "⇆ 切换" }));
     await waitFor(() => expect(latestQuery().searchParams.get("leg1_exchange")).toBe("bitget"));
     expect(latestQuery().searchParams.get("leg2_exchange")).toBe("binance");
+    for (const request of requests.filter((r) => r.pathname.endsWith("/pair-spread/query"))) {
+      expect(Number(request.searchParams.get("hours"))).toBeLessThanOrEqual(168);
+    }
+  });
+
+  it("requests only the remaining hours when one more day would exceed seven days", async () => {
+    window.history.replaceState({}, "", window.location.href.replace("hours=4", "hours=160"));
+    render(<PairMonitorPage />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "再加载 1 天" }).hasAttribute("disabled")).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "再加载 1 天" }));
+    await waitFor(() => expect(latestQuery().searchParams.get("hours")).toBe("168"));
+    expect(latestQuery().searchParams.get("interval_seconds")).toBe("60");
+    await waitFor(() => expect(screen.getByRole("button", { name: "再加载 1 天" }).hasAttribute("disabled")).toBe(true));
+    for (const request of requests.filter((r) => r.pathname.endsWith("/pair-spread/query"))) {
+      expect(Number(request.searchParams.get("hours"))).toBeLessThanOrEqual(168);
+    }
   });
 
   it("keeps the original RangeBacktestPanel connected to v2 range selection and clearing", async () => {

@@ -14,9 +14,9 @@ function buildMockChart() {
     subscribeVisibleLogicalRangeChange: vi.fn(), unsubscribeVisibleLogicalRangeChange: vi.fn(),
     subscribeSizeChange: vi.fn(), unsubscribeSizeChange: vi.fn()
   };
-  const panes = [0, 1].map(() => ({ setHeight: vi.fn(), getHeight: () => 340 }));
+  const panes = [0, 1].map(() => ({ setHeight: vi.fn(), setStretchFactor: vi.fn(), getHeight: () => 340 }));
   const chart = {
-    series, scale, addSeries: vi.fn(() => { const item = makeSeries(); series.push(item); return item; }),
+    series, scale, addSeries: vi.fn((_definition: unknown, _options: unknown, _paneIndex: number) => { const item = makeSeries(); series.push(item); return item; }),
     applyOptions: vi.fn(), remove: vi.fn(), timeScale: () => scale, priceScale: () => ({ width: () => 80 }), panes: () => panes,
     subscribeCrosshairMove: vi.fn(), unsubscribeCrosshairMove: vi.fn()
   };
@@ -45,4 +45,18 @@ export function chartFixture(): PairSpreadQueryResult {
     ],
     realtime_funding: [{ bucket_at: "2026-11-03T00:05:00Z", left_rate_pct: 0.02, right_rate_pct: 0.04, net_rate_pct: 0.02 }]
   };
+}
+
+export function binanceBybitFixture(): PairSpreadQueryResult {
+  const result = chartFixture();
+  result.leg2.exchange = "bybit";
+  result.funding_history = [
+    { exchange: "binance", symbol: "BTCUSDT", funding_time: "2026-11-02T00:00:00.001000Z", funding_rate_pct: 0.01 },
+    { exchange: "bybit", symbol: "BTCUSDT", funding_time: "2026-11-02T00:00:00Z", funding_rate_pct: 0.01 },
+    { exchange: "binance", symbol: "BTCUSDT", funding_time: "2026-11-02T08:00:00.001000Z", funding_rate_pct: 0.008758 },
+    { exchange: "bybit", symbol: "BTCUSDT", funding_time: "2026-11-02T08:00:00Z", funding_rate_pct: 0.005216 },
+    { exchange: "binance", symbol: "BTCUSDT", funding_time: "2026-11-02T16:00:00.001000Z", funding_rate_pct: 0.009118 },
+    { exchange: "bybit", symbol: "BTCUSDT", funding_time: "2026-11-02T16:00:00Z", funding_rate_pct: 0.009346 }
+  ];
+  return result;
 }
