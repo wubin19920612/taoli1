@@ -70,6 +70,7 @@ import type {
 } from "../api/types";
 import { resolveHistoryIntervalSeconds } from "../constants/queryLimits";
 import { QuoteAgeTag } from "../components/QuoteAgeTag";
+import { PairSummaryCards } from "../components/pairSummary/PairSummaryCards";
 import { RangeBacktestPanel } from "../components/RangeBacktestPanel";
 import { PairChartV2, type PairChartV2Controls } from "../components/pairChartV2/PairChartV2";
 import { MAX_CHART_HOURS } from "../components/pairChartV2/data";
@@ -6028,41 +6029,9 @@ export function PairMonitorPage() {
             }
           />
 
-          <MetricCard
-            label={ratioMode ? "可成交开仓比值" : "可成交开仓价差"}
-            value={ratioMode ? formatPriceRatio(priceRatio(current?.leg1.ask_price, current?.leg2.bid_price)) : signedPct(openSpreadPct)}
-            sub={
-              current
-                ? `左 ask ${price(current.leg1.ask_price)} · 右 bid ${price(current.leg2.bid_price)} · 差价 ${price(current.open_spread_abs)}`
-                : "等待查询"
-            }
-            tone={ratioMode ? "neutral" : spreadTone}
-          />
-          <MetricCard
-            label={ratioMode ? "可成交平仓比值" : "可成交平仓价差"}
-            value={ratioMode ? formatPriceRatio(priceRatio(current?.leg1.bid_price, current?.leg2.ask_price)) : signedPct(closeSpreadPct)}
-            sub={
-              current
-                ? `左 bid ${price(current.leg1.bid_price)} · 右 ask ${price(current.leg2.ask_price)} · 差价 ${price(current.close_spread_abs)}`
-                : "等待查询"
-            }
-            tone={ratioMode ? "neutral" : closeSpreadTone}
-          />
-          <MetricCard
-            label={ratioMode ? "盘口中间比值" : "盘口中间价差"}
-            value={ratioMode ? formatPriceRatio(priceRatio(latestRatioPoint?.leg1_close, latestRatioPoint?.leg2_close)) : signedPct(midpointSpreadPct)}
-            sub={<>
-              {result
-                ? `差价 ${price(midpointSpreadAbs)}${ratioMode ? " · 左 ÷ 右（右价已按倍率折算）" : ""}${!ratioMode && ratio ? ` · 倍率 ${compactNumber(ratio, 4)}x` : ""}`
-                : "等待查询"}
-              <span className="pair-mark-summary">
-                <span>{ratioMode ? "标记比值（辅助）" : "标记价差（辅助）"}</span>{" "}
-                <span>{ratioMode ? formatPriceRatio(priceRatio(current?.leg1.mark_price, current?.leg2.mark_price)) : signedPct(current?.mark_spread_pct)}</span>
-                {current ? ` · 左标记 ${price(current.leg1.mark_price)} · 右标记 ${price(current.leg2.mark_price)} · 差价 ${price(current.mark_spread_abs)}` : " · 等待查询"}
-              </span>
-            </>}
-            tone={ratioMode ? "neutral" : midpointSpreadTone}
-          />
+          <PairSummaryCards result={result} hours={hours} ratioMode={ratioMode}
+            spreadTone={spreadTone} closeSpreadTone={closeSpreadTone} price={price}
+            signedPct={signedPct} exchangeLabels={exchangeLabels} />
           <MetricCard
             label={rightLegLabel(result)}
             value={price(current?.leg2.price)}

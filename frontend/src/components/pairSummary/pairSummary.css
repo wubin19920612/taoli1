@@ -1,0 +1,97 @@
+.pair-summary-card {
+  align-content: start;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.pair-summary-card h3 {
+  margin: 0 0 4px;
+  white-space: normal;
+  line-height: 1.4;
+}
+
+.pair-summary-row,
+.pair-summary-footer,
+.pair-summary-stats {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+
+.pair-focus-metrics .pair-summary-card .pair-summary-main {
+  font-size: clamp(19px, 1.5vw, 26px);
+  font-weight: 800;
+  line-height: 1.15;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.pair-summary-small,
+.pair-summary-stats {
+  color: #687872;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.pair-summary-footer {
+  border-top: 1px solid #e2e8e5;
+  padding-top: 8px;
+  margin-top: auto;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.pair-summary-funding-positive {
+  color: #14803c;
+}
+
+.pair-summary-funding-negative {
+  color: #c62828;
+}
+
+.pair-summary-funding-neutral {
+  color: #69736f;
+}
+
+.pair-summary-percentile {
+  color: #7c3aed;
+}
+
+.pair-summary-range {
+  position: relative;
+  height: 6px;
+  margin: 7px 6px;
+  border-radius: 3px;
+  background: #ede9fe;
+}
+
+.pair-summary-marker {
+  position: absolute;
+  top: 50%;
+  width: 5px;
+  height: 14px;
+  border-radius: 2px;
+  transform: translate(-50%, -50%);
+}
+
+.pair-summary-mean {
+  background: #6b7280;
+  height: 20px;
+  width: 3px;
+}
+
+.pair-summary-current {
+  background: #7c3aed;
+}
+
+.pair-summary-stats span {
+  min-width: 0;
+  flex: 1;
+}
+
+.pair-summary-stats strong {
+  display: block;
+  color: #17211d;
+}

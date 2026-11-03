@@ -679,13 +679,14 @@ describe("PairMonitorPage", () => {
     render(<PairMonitorPage />);
     await screen.findByRole("img", { name: "价格比值曲线" });
     const focus = document.querySelector(".pair-focus-block")!;
-    expect(focus.textContent).not.toContain("%");
+    expect(focus.querySelector(".pair-chart-card")?.textContent).not.toContain("%");
+    focus.querySelectorAll(".pair-metric-value").forEach((value) => expect(value.textContent).not.toContain("%"));
     expect(focus.textContent).toContain(reversed ? "0.025" : "40");
-    expect(screen.getByText("标记比值（辅助）").parentElement?.textContent).toContain("-");
+    expect(screen.queryByText("标记比值（辅助）")).toBeNull();
     expect(document.querySelector(".pair-chart-head-meta")?.textContent).toContain(reversed ? "最新 0.025" : "最新 40");
     await userEvent.click(screen.getByRole("tab", { name: "最近价差" }));
     expect(screen.getAllByText("价格比值（左 ÷ 右）").length).toBeGreaterThan(0);
-    const open = screen.getByText("可成交开仓比值").parentElement?.textContent;
+    const open = within(screen.getByRole("region", { name: "可成交比值" })).getByText("开仓").parentElement?.textContent;
     expect(open).toContain(reversed ? "0.0250256" : "40.041");
     await userEvent.setup().click(screen.getByRole("button", { name: "交换左右标的" }));
     await waitFor(() => expect(requests.filter(r => r.includes("/pair-spread/query")).length).toBeGreaterThan(1));
@@ -1268,21 +1269,56 @@ describe("PairMonitorPage", () => {
     expect((await screen.findAllByText("5秒")).length).toBeGreaterThan(0);
   });
 
-  it("shows executable open and close spreads separately from midpoint and mark spreads", async () => {
+  it("merges executable open and close spreads and removes the auxiliary mark row", async () => {
     const user = userEvent.setup();
     render(<PairMonitorPage />);
 
     await user.click(screen.getByRole("button", { name: /查询/ }));
 
-    expect(await screen.findByText("可成交开仓价差")).toBeTruthy();
-    expect(screen.getByText("可成交平仓价差")).toBeTruthy();
-    expect(screen.getByText("盘口中间价差")).toBeTruthy();
-    expect(screen.getByText("标记价差（辅助）")).toBeTruthy();
-    expect(screen.getByText("+0.80%")).toBeTruthy();
-    expect(screen.getByText("+1.20%")).toBeTruthy();
-    expect(screen.getByText("+1.40%")).toBeTruthy();
+    const executable = within(await screen.findByRole("region", { name: "可成交价差" }));
+    expect(executable.getByText("开仓")).toBeTruthy();
+    expect(executable.getByText("平仓")).toBeTruthy();
+    expect(screen.queryByText("盘口中间价差")).toBeNull();
+    expect(screen.queryByText("标记价差（辅助）")).toBeNull();
+    expect(executable.getByText("+0.80%")).toBeTruthy();
+    expect(executable.getByText("+1.20%")).toBeTruthy();
+    expect(executable.getByText("-0.40%")).toBeTruthy();
     expect(screen.getByText(/左 ask .*右 bid/)).toBeTruthy();
     expect(screen.getByText(/左 bid .*右 ask/)).toBeTruthy();
+  });
+
+  it("renders the three summary cards with round trip, normalized funding and current percentile after a query", async () => {
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const response = await fallback(input, init);
+      if (!String(input).includes("/pair-spread/query")) return response;
+      const data = await response.json();
+      data.current.leg1.funding_interval_hours = 8;
+      Object.assign(data.current.leg2, { funding_rate_pct: 0.03, funding_interval_hours: 4 });
+      data.points = [
+        { bucket_at: "2026-07-24T00:00:00Z", leg1_close: 100, leg2_close: 100, spread_abs: 0, spread_pct: 0 },
+        { bucket_at: "2026-07-24T01:00:00Z", leg1_close: 100, leg2_close: 101, spread_abs: 1, spread_pct: 1 }
+      ];
+      return Response.json(data);
+    });
+    render(<PairMonitorPage />);
+    await userEvent.click(screen.getByRole("button", { name: /查询/ }));
+
+    const executable = within(await screen.findByRole("region", { name: "可成交价差" }));
+    const funding = within(screen.getByRole("region", { name: "资金费（左多 / 右空）" }));
+    const position = within(screen.getByRole("region", { name: "价差位置（查询区间 4 小时）" }));
+    expect(document.querySelectorAll(".pair-focus-metrics > .pair-metric-card")).toHaveLength(5);
+    expect(executable.getByText("开平差（来回成本）")).toBeTruthy();
+    expect(executable.getByText("-0.40%")).toBeTruthy();
+    expect(funding.getByText("净费率 / 8h")).toBeTruthy();
+    expect(funding.getByText("+0.0500%").classList.contains("pair-summary-funding-positive")).toBe(true);
+    expect(funding.getByText("日化 +0.1500% · 年化 +54.75%")).toBeTruthy();
+    expect(funding.getByText(/右 Bitget .*4h/)).toBeTruthy();
+    expect(position.getByText("当前分位")).toBeTruthy();
+    expect(position.getByText("P50")).toBeTruthy();
+    expect(position.getByText("偏离均值 +0.00%")).toBeTruthy();
+    expect(position.getByText("近 1h 变化 -0.50%")).toBeTruthy();
+    expect(position.getByText("波动 σ +0.50%")).toBeTruthy();
   });
 
   it("shows exact leg identity, source, multipliers, timestamps, and estimated fields", async () => {
