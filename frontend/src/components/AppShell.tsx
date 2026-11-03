@@ -41,6 +41,7 @@ import {
 } from "../utils/floatingWatch";
 
 type PageKey =
+  | "shadow-ledger"
   | "dashboard"
   | "funding"
   | "instrument"
@@ -60,6 +61,7 @@ type NavigationItem = {
 };
 
 const lazyPages: Record<PageKey, LazyPage> = {
+  "shadow-ledger": lazy(() => import("../pages/ShadowLedgerPage").then((module) => ({ default: module.ShadowLedgerPage }))),
   dashboard: lazy(() =>
     import("../pages/DashboardPage").then((module) => ({ default: module.DashboardPage }))
   ),
@@ -123,6 +125,7 @@ const defaultNavigationItems: NavigationItem[] = [
   { key: "premium-index", icon: <LineChartOutlined />, label: "溢价指数" },
   { key: "gate-twap", icon: <ClockCircleOutlined />, label: "Gate 定时减仓" },
   { key: "index-components", icon: <NodeIndexOutlined />, label: "指数成分变更" },
+  { key: "shadow-ledger", icon: <OrderedListOutlined />, label: "影子账本" },
   { key: "announcements", icon: <NotificationOutlined />, label: "交易所公告" },
   { key: "account-connections", icon: <KeyOutlined />, label: "账户连接" },
   { key: "settings", icon: <SettingOutlined />, label: "参数与告警" }

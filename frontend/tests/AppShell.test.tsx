@@ -18,6 +18,7 @@ const defaultNavigationOrder = [
   "premium-index",
   "gate-twap",
   "index-components",
+  "shadow-ledger",
   "announcements",
   "account-connections",
   "settings"

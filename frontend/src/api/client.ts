@@ -78,6 +78,21 @@ import type {
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "/api";
 
+export async function getShadowStatus(): Promise<import("./shadow").ShadowStatus> {
+  return fetchJson("/shadow/status");
+}
+
+export async function getShadowBuckets(params: { dims: string; since?: string; until?: string; include_fake: boolean }): Promise<import("./shadow").ShadowBucket[]> {
+  const query = new URLSearchParams({ dims: params.dims, include_fake: params.include_fake ? "1" : "0" });
+  if (params.since) query.set("since", params.since);
+  if (params.until) query.set("until", params.until);
+  return fetchJson(`/shadow/buckets?${query}`);
+}
+
+export async function getShadowTrades(status?: "open" | "closed"): Promise<import("./shadow").ShadowTrade[]> {
+  return fetchJson(`/shadow/trades?limit=100${status ? `&status=${status}` : ""}`);
+}
+
 export async function getFeatures(): Promise<FeaturesResponse> {
   return fetchJson<FeaturesResponse>("/features");
 }
