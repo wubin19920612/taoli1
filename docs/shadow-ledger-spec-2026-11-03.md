@@ -105,3 +105,10 @@
    - 常驻内存增量 ≤ 30 MiB 不变。
 4. `SHADOW_MAX_OPEN` 默认改为 1500。
 5. 其他实现细节自行决定，写进报告。
+
+## PM decisions 第二轮（2026-11-03，回应只读审查打回 db05329）
+1. **P1 恢复时资金费漏计**（`shadow_ledger.py:133/337`）：每个变体行各自保存自己的资金费结算进度（已计入的最后一个结算时刻），恢复时按行恢复，不共享。补测试：两个变体被分在不同批次提交、中途中断后恢复，各自资金费都正确（审查复现的 2/0 bp 用例必须变成 2/2）。
+2. **P1 开关关闭时必须完全不运行**（`shadow_runtime.py:99/213`、`main.py:1015`）：`SHADOW_ENABLED=0` 时不创建工作线程、不注册行情消费者、不拉 CrossEx 目录给影子用、**不执行任何影子表的写入或删除**（包括保留期清理）。建表语句（`CREATE TABLE IF NOT EXISTS`）可以保留。`/api/shadow/status` 返回 `enabled: false`，其他影子接口返回空结果。补测试：关闭状态下用 SQLite trace 断言没有任何针对 `shadow_trades` 的 INSERT/UPDATE/DELETE，且没有影子线程。
+3. **P2 接口读未提交数据**（`repositories.py:95/117`）：影子接口的读取用独立的只读连接（`file:...?mode=ro`，在 `asyncio.to_thread` 里执行），只能看到已提交的数据。补测试：写事务未提交时接口读不到这些行，回滚后结果不变。
+4. **P2 日志限频**（`shadow_runtime.py:137`）：影子相关所有异常路径统一走限频日志（每类每 5 分钟最多一条，其余只计数，计数进 `/api/shadow/status`）。补测试。
+5. 另外排查：全量测试第一次运行出现过一次 `PytestUnhandledThreadExceptionWarning`（重跑消失）。检查影子线程在测试结束 / 应用关闭时是否会在已关闭的连接上继续写或抛异常，确保关闭流程先停线程再关连接。
