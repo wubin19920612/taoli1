@@ -16,7 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 
 import {
   getFloatingWatchSettings,
-  isDashboardPasswordError,
+  isAuthenticationError,
   listAccountPositions,
   listAstroPairs,
   listPairSpreadPresets,
@@ -656,7 +656,7 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
   );
   const panelRef = useRef<HTMLElement | null>(null);
   const refreshQueue = useRef<Promise<void>>(Promise.resolve());
-  const astroAuthBlocked = useRef<string | null>(null);
+  const astroAuthBlocked = useRef<boolean | null>(null);
   const astroRequestSequence = useRef(0);
   const lastRefreshMode = useRef<WatchMode>(mode);
 
@@ -664,10 +664,8 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
     const run = async () => {
       setLoading(true);
       try {
-        const password = window.localStorage.getItem("dashboard_password") ?? "";
         // Reset inside the queue so an in-flight rejection cannot cancel an explicit retry.
-        if (retryAstroAuth || requestedMode !== lastRefreshMode.current
-          || (astroAuthBlocked.current !== null && astroAuthBlocked.current !== password)) {
+        if (retryAstroAuth || requestedMode !== lastRefreshMode.current) {
           astroAuthBlocked.current = null;
         }
         lastRefreshMode.current = requestedMode;
@@ -678,8 +676,8 @@ export function FloatingWatchPanel({ visible, onClose, standalone = false }: Flo
             .catch((caught) => {
               // Settings can fail first and release the queue while this request is still pending.
               if (astroRequestId !== astroRequestSequence.current) return null;
-              if (isDashboardPasswordError(caught)) {
-                astroAuthBlocked.current = password;
+              if (isAuthenticationError(caught)) {
+                astroAuthBlocked.current = true;
               }
               return {
                 items: null,

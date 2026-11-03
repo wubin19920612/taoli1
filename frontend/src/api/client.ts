@@ -1,3 +1,4 @@
+import { sessionFetch } from "./auth";
 import type { ArbMvpStatus, CardTarget } from "./types";
 import type { RangeBacktestRequest, RangeBacktestResult } from "./rangeBacktest";
 import type {
@@ -76,7 +77,7 @@ import type {
   TradeAvailabilityWatch
 } from "./types";
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "/api";
+const API_BASE = "/api";
 
 export async function getFeatures(): Promise<FeaturesResponse> {
   return fetchJson<FeaturesResponse>("/features");
@@ -98,10 +99,6 @@ function buildUrl(path: string, params?: object) {
   return url.toString();
 }
 
-function authHeaders(password = window.localStorage.getItem("dashboard_password") ?? ""): HeadersInit {
-  return password ? { "X-Dashboard-Password": password } : {};
-}
-
 export class ApiError extends Error {
   constructor(message: string, public readonly status: number) {
     super(message);
@@ -120,6 +117,7 @@ function looksLikeHtmlError(text: string): boolean {
 }
 
 function extractErrorMessage(text: string, status: number): string {
+  if (status === 401) return "登录已失效，请重新登录。";
   const normalized = text.trim();
   if (!normalized) {
     return PROXY_ERROR_MESSAGES[status] ?? `请求失败（HTTP ${status}）`;
@@ -127,9 +125,6 @@ function extractErrorMessage(text: string, status: number): string {
   try {
     const parsed = JSON.parse(normalized) as { detail?: unknown };
     if (parsed && typeof parsed.detail === "string" && parsed.detail.trim()) {
-      if (status === 401 && parsed.detail === "Invalid dashboard password") {
-        return "本设备未保存有效的面板密码，请验证密码后重试。";
-      }
       return parsed.detail;
     }
   } catch {
@@ -145,18 +140,16 @@ function extractErrorMessage(text: string, status: number): string {
   return normalized;
 }
 
-export function isDashboardPasswordError(error: unknown): error is ApiError {
+export function isAuthenticationError(error: unknown): error is ApiError {
   return error instanceof ApiError
-    && error.status === 401
-    && error.message === extractErrorMessage(JSON.stringify({ detail: "Invalid dashboard password" }), 401);
+    && error.status === 401;
 }
 
 async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(buildUrl(path), {
+  const response = await sessionFetch(buildUrl(path), {
     ...options,
     headers: {
       "Content-Type": "application/json",
-      ...authHeaders(),
       ...options.headers
     }
   });
@@ -169,7 +162,7 @@ async function fetchJson<T>(path: string, options: RequestInit = {}): Promise<T>
 
 export function listOpportunities(filters: OpportunityFilters): Promise<Opportunity[]> {
   const url = buildUrl("/opportunities", filters);
-  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+  return sessionFetch(url).then(async (response) => {
     if (!response.ok) {
       throw new Error(extractErrorMessage(await response.text(), response.status));
     }
@@ -179,7 +172,7 @@ export function listOpportunities(filters: OpportunityFilters): Promise<Opportun
 
 export function listMarkets(filters: MarketFilters = {}): Promise<MarketSnapshot[]> {
   const url = buildUrl("/markets", filters);
-  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+  return sessionFetch(url).then(async (response) => {
     if (!response.ok) {
       throw new Error(extractErrorMessage(await response.text(), response.status));
     }
@@ -313,12 +306,10 @@ export async function getFloatingWatchSettings(): Promise<FloatingWatchSettings>
 export async function mutateFloatingWatchItem(
   action: "add" | "remove",
   itemType: "symbol" | "pair",
-  value: string,
-  password?: string
+  value: string
 ): Promise<FloatingWatchSettings> {
   return fetchJson<FloatingWatchSettings>("/settings/floating-watch/items", {
     method: "POST",
-    headers: authHeaders(password),
     body: JSON.stringify({ action, item_type: itemType, value })
   });
 }
@@ -360,9 +351,8 @@ export function updateAccountConnection(
 }
 
 export async function deleteAccountConnection(connectionId: string): Promise<void> {
-  const response = await fetch(buildUrl(`/account-connections/${encodeURIComponent(connectionId)}`), {
+  const response = await sessionFetch(buildUrl(`/account-connections/${encodeURIComponent(connectionId)}`), {
     method: "DELETE",
-    headers: authHeaders()
   });
   if (!response.ok) {
     throw new Error(extractErrorMessage(await response.text(), response.status));
@@ -472,7 +462,7 @@ export async function updateAnnouncementSettings(settings: AnnouncementSettings)
 
 export async function listAnnouncements(filters: AnnouncementFilters = {}): Promise<ExchangeAnnouncement[]> {
   const url = buildUrl("/announcements", { limit: 100, ...filters });
-  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+  return sessionFetch(url).then(async (response) => {
     if (!response.ok) {
       throw new Error(extractErrorMessage(await response.text(), response.status));
     }
@@ -532,7 +522,7 @@ export async function getGateTwapMarket(params: {
   settle?: string;
 } = {}): Promise<GateTwapMarketSnapshot> {
   const url = buildUrl("/gate-twap/market", params);
-  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+  return sessionFetch(url).then(async (response) => {
     if (!response.ok) {
       throw new Error(extractErrorMessage(await response.text(), response.status));
     }
@@ -633,7 +623,7 @@ export async function listIndexComponentChanges(
   filters: IndexComponentChangeFilters = {}
 ): Promise<IndexComponentChange[]> {
   const url = buildUrl("/index-components/changes", { limit: 100, ...filters });
-  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+  return sessionFetch(url).then(async (response) => {
     if (!response.ok) {
       throw new Error(extractErrorMessage(await response.text(), response.status));
     }
@@ -645,7 +635,7 @@ export async function listIndexComponentSnapshots(
   filters: IndexComponentSnapshotFilters = {}
 ): Promise<IndexComponentSnapshot[]> {
   const url = buildUrl("/index-components/snapshots", { limit: 500, ...filters });
-  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+  return sessionFetch(url).then(async (response) => {
     if (!response.ok) {
       throw new Error(extractErrorMessage(await response.text(), response.status));
     }
@@ -698,7 +688,7 @@ export async function getOpportunityHistoryStats(
   query: OpportunityHistoryStatsQuery
 ): Promise<OpportunityHistoryStats> {
   const url = buildUrl("/history/opportunities/stats", query);
-  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+  return sessionFetch(url).then(async (response) => {
     if (!response.ok) {
       throw new Error(extractErrorMessage(await response.text(), response.status));
     }
@@ -723,7 +713,7 @@ export async function queryPairSpread(query: {
   include_current?: boolean;
 }): Promise<PairSpreadQueryResult> {
   const url = buildUrl("/pair-spread/query", query);
-  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+  return sessionFetch(url).then(async (response) => {
     if (!response.ok) {
       const text = await response.text();
       throw new Error(extractErrorMessage(text, response.status));
@@ -746,31 +736,26 @@ export async function listPairSpreadPresets(): Promise<PairSpreadPreset[]> {
 }
 
 export async function mergePairSpreadPresets(
-  presets: PairSpreadPreset[],
-  password?: string
+  presets: PairSpreadPreset[]
 ): Promise<PairSpreadPreset[]> {
   return fetchJson<PairSpreadPreset[]>("/pair-spread/presets/merge", {
     method: "POST",
-    headers: authHeaders(password),
     body: JSON.stringify({ presets })
   });
 }
 
 export async function upsertPairSpreadPreset(
-  preset: PairSpreadPreset,
-  password?: string
+  preset: PairSpreadPreset
 ): Promise<PairSpreadPreset> {
   return fetchJson<PairSpreadPreset>(`/pair-spread/presets/${encodeURIComponent(preset.id)}`, {
     method: "PUT",
-    headers: authHeaders(password),
     body: JSON.stringify(preset)
   });
 }
 
-export async function deletePairSpreadPreset(id: string, password?: string): Promise<void> {
+export async function deletePairSpreadPreset(id: string): Promise<void> {
   await fetchJson(`/pair-spread/presets/${encodeURIComponent(id)}`, {
     method: "DELETE",
-    headers: authHeaders(password)
   });
 }
 
@@ -790,7 +775,7 @@ export async function querySymbolExchangeSpreads(query: {
   include_current?: boolean;
 }): Promise<SymbolSpreadQueryResult> {
   const url = buildUrl("/pair-spread/symbol-query", query);
-  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+  return sessionFetch(url).then(async (response) => {
     if (!response.ok) {
       const text = await response.text();
       throw new Error(extractErrorMessage(text, response.status));
@@ -815,7 +800,7 @@ export async function queryPairSpreadDiagnostics(query: {
   end_at?: string;
 }): Promise<PairSpreadDiagnosticResult> {
   const url = buildUrl("/pair-spread/diagnostics", query);
-  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+  return sessionFetch(url).then(async (response) => {
     if (!response.ok) {
       const text = await response.text();
       throw new Error(extractErrorMessage(text, response.status));
@@ -839,7 +824,7 @@ export async function queryPairSpreadFundingHistory(query: {
   end_at?: string;
 }): Promise<PairSpreadFundingHistoryResult> {
   const url = buildUrl("/pair-spread/funding-history", query);
-  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+  return sessionFetch(url).then(async (response) => {
     if (!response.ok) {
       const text = await response.text();
       throw new Error(extractErrorMessage(text, response.status));
@@ -862,7 +847,7 @@ export async function getPairSpreadFundingRecordStatus(query: {
   end_at?: string;
 }): Promise<PairSpreadFundingRecordStatus> {
   const url = buildUrl("/pair-spread/funding-records/status", query);
-  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+  return sessionFetch(url).then(async (response) => {
     if (!response.ok) {
       const text = await response.text();
       throw new Error(extractErrorMessage(text, response.status));
@@ -905,7 +890,7 @@ export async function queryPremiumIndex(query: {
   interval_minutes?: number;
 }): Promise<PremiumIndexQueryResult> {
   const url = buildUrl("/premium-index/query", query);
-  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+  return sessionFetch(url).then(async (response) => {
     if (!response.ok) {
       const text = await response.text();
       throw new Error(extractErrorMessage(text, response.status));
@@ -920,7 +905,7 @@ export async function getCurrentPremiumIndex(query: {
   dex?: string;
 }): Promise<PremiumIndexCurrentSnapshot> {
   const url = buildUrl("/premium-index/current", query);
-  return fetch(url, { headers: authHeaders() }).then(async (response) => {
+  return sessionFetch(url).then(async (response) => {
     if (!response.ok) {
       const text = await response.text();
       throw new Error(extractErrorMessage(text, response.status));
@@ -997,14 +982,6 @@ export async function listAstroPairs(): Promise<AstroPairStatus[]> {
   );
 }
 
-export function saveDashboardPassword(password: string): void {
-  if (password) {
-    window.localStorage.setItem("dashboard_password", password);
-  } else {
-    window.localStorage.removeItem("dashboard_password");
-  }
-}
-
 export function getMarketIdentities(search = "", offset = 0, limit = 50): Promise<import("./types").MarketIdentityOverview> {
   return fetchJson(`/market-identities?${new URLSearchParams({ search, offset: String(offset), limit: String(limit) })}`);
 }
@@ -1023,4 +1000,26 @@ export function getMarketCardAudit(): Promise<Array<{ card_id?: string; card_nam
 
 export async function getArbMvpStatus(): Promise<ArbMvpStatus> {
   return fetchJson<ArbMvpStatus>("/arb-mvp/status");
+}
+
+export interface LoginSession {
+  created_at: number;
+  expires_at: number;
+  last_seen_at: number;
+  ip: string;
+  user_agent: string;
+  current: boolean;
+}
+
+export function login(password: string, code: string): Promise<{ ok: boolean }> {
+  return fetchJson("/auth/login", { method: "POST", body: JSON.stringify({ password, code }) });
+}
+export function listSessions(): Promise<LoginSession[]> {
+  return fetchJson("/auth/sessions");
+}
+export function logout(): Promise<{ ok: boolean }> {
+  return fetchJson("/auth/logout", { method: "POST" });
+}
+export function revokeAllSessions(): Promise<{ ok: boolean }> {
+  return fetchJson("/auth/sessions/revoke-all", { method: "POST" });
 }

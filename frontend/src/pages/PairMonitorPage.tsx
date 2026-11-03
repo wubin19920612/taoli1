@@ -1,3 +1,4 @@
+import { redirectToLogin } from "../api/auth";
 import {
   DeleteOutlined,
   LineChartOutlined,
@@ -41,7 +42,6 @@ import {
   queryPairSpreadDiagnostics,
   queryPairSpreadFundingHistory,
   queryPremiumIndex,
-  saveDashboardPassword,
   startPairSpreadFundingRecord,
   stopPairSpreadFundingRecord,
   upsertPairSpreadPreset
@@ -113,7 +113,7 @@ type PairSpreadIdentityMetadata = Pick<
 type SavedPairSpreadPreset = PairSpreadPreset;
 
 type PendingPresetWrite = {
-  operation: (password?: string) => Promise<void>;
+  operation: () => Promise<void>;
   errorPrefix: string;
 };
 
@@ -4490,12 +4490,7 @@ export function PairMonitorPage() {
     }
   });
   const [presetSyncError, setPresetSyncError] = useState("");
-  const [presetAuthOpen, setPresetAuthOpen] = useState(false);
-  const [presetAuthPassword, setPresetAuthPassword] = useState("");
-  const [presetAuthError, setPresetAuthError] = useState("");
-  const [presetAuthLoading, setPresetAuthLoading] = useState(false);
   const pendingPresetWriteRef = useRef<PendingPresetWrite | null>(null);
-  const presetAuthRetryingRef = useRef(false);
   const [watchSaving, setWatchSaving] = useState(false);
   const presetSyncStartedRef = useRef(false);
   const presetMutationVersionRef = useRef(0);
@@ -4586,16 +4581,10 @@ export function PairMonitorPage() {
     };
   }, [hyperliquidMarkets, loadHyperliquidMarkets]);
 
-  const openPresetAuth = () => {
-    setPresetAuthPassword("");
-    setPresetAuthError("");
-    setPresetAuthOpen(true);
-  };
-
   const runPresetWrite = async (
     operation: PendingPresetWrite["operation"],
     errorPrefix: string,
-    promptForPassword = true
+    redirectOnUnauthorized = true
   ) => {
     const mutationVersion = presetMutationVersionRef.current;
     try {
@@ -4610,38 +4599,10 @@ export function PairMonitorPage() {
       setPresetSyncError(errorPrefix + detail);
       if (exc instanceof ApiError && exc.status === 401) {
         pendingPresetWriteRef.current = { operation, errorPrefix };
-        if (promptForPassword) openPresetAuth();
+        if (redirectOnUnauthorized) redirectToLogin();
       } else {
         pendingPresetWriteRef.current = null;
       }
-    }
-  };
-
-  const retryPresetWrite = async () => {
-    const pending = pendingPresetWriteRef.current;
-    if (!pending || presetAuthRetryingRef.current) return;
-    if (!presetAuthPassword) {
-      setPresetAuthError("请输入面板密码。");
-      return;
-    }
-    presetAuthRetryingRef.current = true;
-    setPresetAuthLoading(true);
-    setPresetAuthError("");
-    try {
-      await pending.operation(presetAuthPassword);
-      saveDashboardPassword(presetAuthPassword);
-      pendingPresetWriteRef.current = null;
-      setPresetSyncError("");
-      setPresetAuthPassword("");
-      setPresetAuthOpen(false);
-    } catch (exc) {
-      const detail = exc instanceof Error ? exc.message : String(exc);
-      setPresetAuthError(exc instanceof ApiError && exc.status === 401
-        ? "面板密码不正确，请重新输入。标的对尚未更改。"
-        : pending.errorPrefix + detail);
-    } finally {
-      presetAuthRetryingRef.current = false;
-      setPresetAuthLoading(false);
     }
   };
 
@@ -4653,12 +4614,12 @@ export function PairMonitorPage() {
     const localPresets = loadSavedPairPresets();
     const initialMutationVersion = presetMutationVersionRef.current;
 
-    const syncSavedPresets = async (password?: string) => {
+    const syncSavedPresets = async () => {
       let serverPresets = normalizeSavedPairPresetList(await listPairSpreadPresets());
       const migrated = window.localStorage.getItem(PAIR_SPREAD_PRESETS_SERVER_MIGRATED_KEY) === "1";
       if (!migrated && localPresets.length > 0) {
         serverPresets = normalizeSavedPairPresetList(
-          await mergePairSpreadPresets(localPresets, password)
+          await mergePairSpreadPresets(localPresets)
         );
       }
       if (!migrated) {
@@ -5419,8 +5380,8 @@ export function PairMonitorPage() {
         savedAt: new Date().toISOString()
       };
       presetMutationVersionRef.current += 1;
-      await runPresetWrite(async (password) => {
-        const savedPreset = normalizeSavedPreset(await upsertPairSpreadPreset(preset, password));
+      await runPresetWrite(async () => {
+        const savedPreset = normalizeSavedPreset(await upsertPairSpreadPreset(preset));
         setSavedPresets((currentPresets) => {
           const next = [
             savedPreset,
@@ -5461,9 +5422,9 @@ export function PairMonitorPage() {
         savedAt: new Date().toISOString()
       };
       presetMutationVersionRef.current += 1;
-      await runPresetWrite(async (password) => {
-        const savedPreset = normalizeSavedPreset(await upsertPairSpreadPreset(preset, password));
-        await addFloatingWatchPair(savedPreset.id, password);
+      await runPresetWrite(async () => {
+        const savedPreset = normalizeSavedPreset(await upsertPairSpreadPreset(preset));
+        await addFloatingWatchPair(savedPreset.id);
         setSavedPresets((currentPresets) => {
           const next = [
             savedPreset,
@@ -5483,8 +5444,8 @@ export function PairMonitorPage() {
 
   const removeSavedPreset = async (id: string) => {
     presetMutationVersionRef.current += 1;
-    await runPresetWrite(async (password) => {
-      await deletePairSpreadPreset(id, password);
+    await runPresetWrite(async () => {
+      await deletePairSpreadPreset(id);
       setSavedPresets((currentPresets) => {
         const next = currentPresets.filter((preset) => preset.id !== id);
         storeSavedPairPresets(next);
@@ -5617,40 +5578,8 @@ export function PairMonitorPage() {
         type="warning"
         message={presetSyncError}
         showIcon
-        action={pendingPresetWriteRef.current ? <Button size="small" onClick={openPresetAuth}>验证密码</Button> : null}
+        action={pendingPresetWriteRef.current ? <Button size="small" onClick={redirectToLogin}>重新登录</Button> : null}
       /> : null}
-      <Modal
-        title="验证面板密码"
-        open={presetAuthOpen}
-        destroyOnHidden
-        okText="验证并重试"
-        cancelText="取消"
-        confirmLoading={presetAuthLoading}
-        cancelButtonProps={{ disabled: presetAuthLoading }}
-        closable={!presetAuthLoading}
-        maskClosable={!presetAuthLoading}
-        keyboard={!presetAuthLoading}
-        onOk={() => void retryPresetWrite()}
-        onCancel={() => {
-          setPresetAuthOpen(false);
-          setPresetAuthPassword("");
-          setPresetAuthError("");
-        }}
-      >
-        <Typography.Paragraph>
-          本设备未保存有效的面板密码。请输入设置中使用的面板密码，验证成功后会记住密码并重试刚才的操作。
-        </Typography.Paragraph>
-        <Input.Password
-          aria-label="面板密码"
-          placeholder="请输入面板密码"
-          autoComplete="current-password"
-          value={presetAuthPassword}
-          disabled={presetAuthLoading}
-          onChange={(event) => setPresetAuthPassword(event.target.value)}
-          onPressEnter={() => void retryPresetWrite()}
-        />
-        {presetAuthError ? <Alert type="error" message={presetAuthError} showIcon /> : null}
-      </Modal>
       <PairWarningSummary warnings={[
         showPremiumCompare ? premiumError : "",
         showDayCompare ? dayCompareError : "",
