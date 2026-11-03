@@ -97,8 +97,17 @@ class Settings:
     astro_default_open_enabled: bool = False
     astro_default_close_position_buffer_pct: float = 0.1
     astro_request_timeout_seconds: float = 10.0
+    shadow_enabled: bool = False
+    shadow_min_open_pct: float = 0.2
+    shadow_max_open: int = 3000
+    shadow_slippage_bps: str = '{"gt50k":2,"5k-50k":5,"500-5k":15,"lt500":30,"unknown":30}'
+    native_route_exchanges: str = "hyperliquid,lighter,bitget"
+    crossex_catalog_refresh_seconds: int = 1800
 
     def __post_init__(self) -> None:
+        from app.services.execution_routes import validate_shadow_settings
+
+        validate_shadow_settings(self)
         if not math.isfinite(self.hl_bbo_max_age_seconds) or self.hl_bbo_max_age_seconds <= 0:
             raise ValueError("hl_bbo_max_age_seconds must be finite and positive")
         if type(self.hl_bbo_max_coins) is not int or self.hl_bbo_max_coins <= 0:
@@ -315,4 +324,10 @@ def get_settings() -> Settings:
             os.getenv("ASTRO_DEFAULT_CLOSE_POSITION_BUFFER_PCT", "0.1")
         ),
         astro_request_timeout_seconds=float(os.getenv("ASTRO_REQUEST_TIMEOUT_SECONDS", "10")),
+        shadow_enabled=bool_env("SHADOW_ENABLED", False),
+        shadow_min_open_pct=float(os.getenv("SHADOW_MIN_OPEN_PCT", "0.2")),
+        shadow_max_open=int(os.getenv("SHADOW_MAX_OPEN", "3000")),
+        shadow_slippage_bps=os.getenv("SHADOW_SLIPPAGE_BPS", Settings.shadow_slippage_bps),
+        native_route_exchanges=os.getenv("NATIVE_ROUTE_EXCHANGES", "hyperliquid,lighter,bitget"),
+        crossex_catalog_refresh_seconds=int(os.getenv("CROSSEX_CATALOG_REFRESH_SECONDS", "1800")),
     )

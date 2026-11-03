@@ -81,6 +81,8 @@ def risk_labels_for(
     """Calculate labels without copying or mutating the opportunity."""
     current = now or datetime.now(UTC)
     labels: list[str] = []
+    if opportunity.buy_volume_24h_usdt is None or opportunity.sell_volume_24h_usdt is None:
+        labels.append("volume_unknown")
     if opportunity.identity_enforced and (
         opportunity.validation is None or not opportunity.validation.capabilities.same_asset_opportunity
     ):

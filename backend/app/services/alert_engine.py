@@ -227,8 +227,6 @@ def opportunity_matches_rule(
     if effective_open_edge_pct(opportunity, settings) + EPSILON < settings.min_effective_open_pct:
         return False
     min_volume = known_volume_24h_usdt(opportunity)
-    if rule.min_volume_24h_usdt > 0 and (opportunity.buy_volume_24h_usdt is None or opportunity.sell_volume_24h_usdt is None):
-        return False
     if min_volume is not None and min_volume < rule.min_volume_24h_usdt:
         return False
     if (now - opportunity.last_seen_at).total_seconds() > rule.max_data_age_seconds:

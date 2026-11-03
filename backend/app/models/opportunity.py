@@ -87,6 +87,12 @@ class Opportunity(BaseModel):
     identity_enforced: bool = False
     validation: PairValidationResult | None = None
     comparison_kind: str = "same_asset"
+    buy_routes: list[str] = Field(default_factory=list)
+    sell_routes: list[str] = Field(default_factory=list)
+    executable: bool = False
+    fake_score: int | None = None
+    fake_reasons: list[str] = Field(default_factory=list)
+    fake_flag: bool = False
 
 
 class OpportunityList(BaseModel):
