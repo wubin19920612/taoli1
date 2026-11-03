@@ -1,3 +1,4 @@
+from auth_helpers import TEST_TOTP_SECRET, session_headers
 import asyncio
 import json
 from collections import Counter
@@ -58,7 +59,7 @@ class Client:
 def service(client, repository, *, both=False):
     return AstroAlertService(
         client,
-        Settings(astro_alert_auto_create=True, astro_manual_card_create=True, astro_dry_run_only=False),
+        Settings(dashboard_auth_disabled=True, astro_alert_auto_create=True, astro_manual_card_create=True, astro_dry_run_only=False),
         attempts=repository,
         card_settings=AstroCardSettings(card_variant="both" if both else "non_gc"),
         hl_gc_catalog=SimpleNamespace(supports_opportunity=AsyncMock(return_value=False)),
@@ -395,14 +396,14 @@ async def test_cleanup_preserves_unresolved_and_recent_records(repository):
 
 
 def test_audit_endpoint_uses_global_password_and_filters():
-    app = create_app(settings=Settings(database_url="sqlite:///:memory:", dashboard_password="test-password"),
+    app = create_app(settings=Settings(dashboard_totp_secret=TEST_TOTP_SECRET, database_url="sqlite:///:memory:", dashboard_password="test-password"),
                      start_background_workers=False)
     with TestClient(app) as client:
         repository = app.state.astro_alert_service.attempts
         planned = {"name": "BTC", "type": "FF", "buyEx": "binance", "sellEx": "okx"}
         client.portal.call(repository.mark_pending, planned, "manual", False)
         assert client.get("/api/astro/card-attempts").status_code == 401
-        headers = {"X-Dashboard-Password": "test-password"}
+        headers = session_headers("test-password")
         response = client.get("/api/astro/card-attempts?limit=1&state=pending", headers=headers)
         assert response.status_code == 200
         assert response.json()[0]["route_key"] == route_key(planned)
@@ -426,3 +427,6 @@ async def test_sdk_preserves_response_evidence(status, body, rejected):
         assert caught.value.status_code == status
         assert caught.value.has_response_body == bool(body)
         assert caught.value.explicitly_rejected is rejected
+
+
+pytestmark = pytest.mark.usefixtures("legacy_auth_sessions")

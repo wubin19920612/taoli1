@@ -691,7 +691,7 @@ describe("SettingsPage", () => {
     expect(vi.mocked(fetch).mock.calls.some(([, init]) => init?.method === "PUT" || init?.method === "POST")).toBe(false);
   }, 15000);
 
-  it("keeps unsaved Astro and access inputs mounted across tab changes", async () => {
+  it("keeps unsaved Astro inputs and login devices mounted across tab changes", async () => {
     render(<SettingsPage />);
     await screen.findByRole("button", { name: "编辑规则 Existing FF" });
     await userEvent.click(screen.getByRole("tab", { name: "Astro" }));
@@ -700,15 +700,15 @@ describe("SettingsPage", () => {
     const cardAmount = screen.getByLabelText("仓位金额 USDT") as HTMLInputElement;
     fireEvent.change(cardAmount, { target: { value: "80" } });
     await userEvent.click(screen.getByRole("tab", { name: "访问与服务" }));
-    const password = screen.getByPlaceholderText("Dashboard Password") as HTMLInputElement;
-    fireEvent.change(password, { target: { value: "draft-password" } });
+    const devices = screen.getByRole("region", { name: "登录设备" });
+    expect(screen.queryByPlaceholderText("Dashboard Password")).toBeNull();
     await userEvent.click(screen.getByRole("tab", { name: "Astro" }));
     expect(automation.getAttribute("aria-checked")).toBe("true");
     expect(screen.getByLabelText("仓位金额 USDT")).toBe(cardAmount);
     expect(cardAmount.value).toBe("80");
     await userEvent.click(screen.getByRole("tab", { name: "访问与服务" }));
-    expect(screen.getByPlaceholderText("Dashboard Password")).toBe(password);
-    expect(password.value).toBe("draft-password");
+    expect(screen.getByRole("region", { name: "登录设备" })).toBe(devices);
+    expect(window.localStorage.getItem("dashboard_password")).toBeNull();
     expect(vi.mocked(fetch).mock.calls.some(([, init]) => init?.method === "PUT" || init?.method === "POST")).toBe(false);
   }, 15000);
 

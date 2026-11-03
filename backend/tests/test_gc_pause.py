@@ -167,7 +167,7 @@ async def test_main_gc_monitor_independent_of_watchdog(monkeypatch, monitor, wat
     from app.main import create_app
 
     monkeypatch.setenv("LOOP_STALL_WATCHDOG_ENABLED", str(watchdog_enabled))
-    app = create_app(settings=Settings(database_url="sqlite:///:memory:"),
+    app = create_app(settings=Settings(dashboard_auth_disabled=True, database_url="sqlite:///:memory:"),
                      start_background_workers=False)
     async with app.router.lifespan_context(app):
         await asyncio.sleep(0)
@@ -176,3 +176,6 @@ async def test_main_gc_monitor_independent_of_watchdog(monkeypatch, monitor, wat
         assert app.state.loop_stall_watchdog.gc_monitor is instance
         assert app.state.task_supervisor.statuses["gc-pause-log"].critical is False
     assert instance.callback not in gc.callbacks
+
+
+pytestmark = pytest.mark.usefixtures("legacy_auth_sessions")

@@ -1,3 +1,4 @@
+from auth_helpers import TEST_TOTP_SECRET, session_headers
 import asyncio
 
 import pytest
@@ -41,14 +42,14 @@ async def test_floating_watch_repository_round_trip() -> None:
 
 def test_floating_watch_api_syncs_devices_and_protects_writes() -> None:
     app = create_app(
-        settings=Settings(
+        settings=Settings(dashboard_totp_secret=TEST_TOTP_SECRET,
             dashboard_password="secret",
             database_url="sqlite:///:memory:",
         )
     )
 
     with TestClient(app) as client:
-        assert client.get("/api/settings/floating-watch", headers={"X-Dashboard-Password": "secret"}).json() == {
+        assert client.get("/api/settings/floating-watch", headers=session_headers("secret")).json() == {
             "symbols": [],
             "pair_ids": [],
             "hidden_positions": [],
@@ -62,7 +63,7 @@ def test_floating_watch_api_syncs_devices_and_protects_writes() -> None:
 
         saved = client.post(
             "/api/settings/floating-watch/items",
-            headers={"X-Dashboard-Password": "secret"},
+            headers=session_headers("secret"),
             json={"action": "add", "item_type": "symbol", "value": "btc"},
         )
         assert saved.status_code == 200
@@ -74,24 +75,24 @@ def test_floating_watch_api_syncs_devices_and_protects_writes() -> None:
 
         pair_saved = client.post(
             "/api/settings/floating-watch/items",
-            headers={"X-Dashboard-Password": "secret"},
+            headers=session_headers("secret"),
             json={"action": "add", "item_type": "pair", "value": "pair-a"},
         )
         assert pair_saved.json()["pair_ids"] == ["pair-a"]
 
-        second_device = client.get("/api/settings/floating-watch", headers={"X-Dashboard-Password": "secret"})
+        second_device = client.get("/api/settings/floating-watch", headers=session_headers("secret"))
         assert second_device.json() == pair_saved.json()
 
 
 def test_index_component_auto_watch_switch_syncs_server_watchlist() -> None:
-    app = create_app(settings=Settings(dashboard_password="secret", database_url="sqlite:///:memory:"))
+    app = create_app(settings=Settings(dashboard_totp_secret=TEST_TOTP_SECRET, dashboard_password="secret", database_url="sqlite:///:memory:"))
     with TestClient(app) as client:
         async def astro_pairs():
             return [{"name": "VANRY", "type": "FF", "status": False, "aExPosition": "1"}]
 
         app.state.astro_client.list_pairs = astro_pairs
         assert client.get("/api/index-components/auto-watch").status_code == 401
-        headers = {"X-Dashboard-Password": "secret"}
+        headers = session_headers("secret")
         assert client.get("/api/index-components/auto-watch", headers=headers).json() == {
             "enabled": False, "items": [], "error": None
         }
@@ -119,12 +120,15 @@ def test_index_component_auto_watch_switch_syncs_server_watchlist() -> None:
 
 
 def test_index_component_notification_switch_requires_password_and_persists() -> None:
-    app = create_app(settings=Settings(dashboard_password="secret", database_url="sqlite:///:memory:"))
+    app = create_app(settings=Settings(dashboard_totp_secret=TEST_TOTP_SECRET, dashboard_password="secret", database_url="sqlite:///:memory:"))
     with TestClient(app) as client:
         path = "/api/index-components/notifications"
-        headers = {"X-Dashboard-Password": "secret"}
+        headers = session_headers("secret")
         assert client.get(path).status_code == 401
         assert client.put(path, json={"enabled": False}).status_code == 401
         assert client.get(path, headers=headers).json() == {"enabled": True}
         assert client.put(path, headers=headers, json={"enabled": False}).json() == {"enabled": False}
         assert client.get(path, headers=headers).json() == {"enabled": False}
+
+
+pytestmark = pytest.mark.usefixtures("legacy_auth_sessions")

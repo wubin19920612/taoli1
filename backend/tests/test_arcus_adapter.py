@@ -330,10 +330,13 @@ async def test_arcus_registered_collector_and_instrument_lookup_keep_raw_market(
         snapshots = await ArcusAdapter(client).fetch_future_tickers()
     store = SnapshotStore()
     store.set_all_markets(snapshots)
-    app = create_app(snapshot_store=store, settings=Settings(database_url="sqlite:///:memory:"))
+    app = create_app(snapshot_store=store, settings=Settings(dashboard_auth_disabled=True, database_url="sqlite:///:memory:"))
     with TestClient(app) as client:
         payload = client.get("/api/instruments/BTCUSDT").json()
     result = next(row for row in payload["exchanges"] if row["exchange"] == "arcus")
     assert result["spot"] is None
     assert result["future"]["raw_symbol"] == "BTC-USD"
     assert result["future"]["funding_interval_hours"] == 1
+
+
+pytestmark = pytest.mark.usefixtures("legacy_auth_sessions")

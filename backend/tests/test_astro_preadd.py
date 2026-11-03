@@ -1,3 +1,4 @@
+from auth_helpers import TEST_TOTP_SECRET, session_headers
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -209,7 +210,7 @@ async def test_preadd_creates_only_paused_bgbn_cards_and_never_updates_existing(
     repo = FakeRepo()
     client = FakeClient()
     service = AstroAlertService(
-        client, Settings(astro_alert_auto_create=False, astro_dry_run_only=False),
+        client, Settings(dashboard_auth_disabled=True, astro_alert_auto_create=False, astro_dry_run_only=False),
         add_restart_delay_seconds=0, risk_settings_loader=repo.get_risk_settings,
     )
     messages: list[str] = []
@@ -249,7 +250,7 @@ async def test_preadd_creates_bybit_funding_card_with_negative_open_threshold():
     repo = FakeRepo(AstroPreaddSettings(exchanges=["bybit", "binance"]))
     client = FakeClient()
     service = AstroAlertService(
-        client, Settings(astro_alert_auto_create=False, astro_dry_run_only=False),
+        client, Settings(dashboard_auth_disabled=True, astro_alert_auto_create=False, astro_dry_run_only=False),
         add_restart_delay_seconds=0, risk_settings_loader=repo.get_risk_settings,
     )
     messages: list[str] = []
@@ -292,7 +293,7 @@ async def test_preadd_uses_global_or_one_run_card_variant(
     repo = FakeRepo(card_settings=AstroCardSettings(card_variant=default_variant))
     client = FakeClient()
     service = AstroAlertService(
-        client, Settings(astro_dry_run_only=False), add_restart_delay_seconds=0,
+        client, Settings(dashboard_auth_disabled=True, astro_dry_run_only=False), add_restart_delay_seconds=0,
     )
 
     result = await AstroPreaddService(store, repo, service).run(card_variant=override)
@@ -316,7 +317,7 @@ async def test_preadd_uses_fresh_entry_mode_when_signal_changes_before_creation(
     repo = FakeRepo(AstroPreaddSettings(exchanges=["bybit", "binance"]))
     client = FakeClient()
     service = AstroAlertService(
-        client, Settings(astro_alert_auto_create=False, astro_dry_run_only=False),
+        client, Settings(dashboard_auth_disabled=True, astro_alert_auto_create=False, astro_dry_run_only=False),
         add_restart_delay_seconds=0, risk_settings_loader=repo.get_risk_settings,
     )
     preparer = AstroPreaddService(store, repo, service)
@@ -343,12 +344,12 @@ async def test_preadd_respects_ignored_exchanges_and_dry_run():
     store.set_all_markets([market("bitget", predicted=0.8), market("binance")])
     repo = FakeRepo(risk=RiskSettings(ignored_exchanges=["bitget"]))
     client = FakeClient()
-    service = AstroAlertService(client, Settings(astro_dry_run_only=False))
+    service = AstroAlertService(client, Settings(dashboard_auth_disabled=True, astro_dry_run_only=False))
     preparer = AstroPreaddService(store, repo, service)
     assert (await preparer.run()).attempted == 0
     assert client.list_calls == 0
     repo.risk = RiskSettings()
-    service.settings = Settings(astro_dry_run_only=True)
+    service.settings = Settings(dashboard_auth_disabled=True, astro_dry_run_only=True)
     result = await preparer.run()
     assert result.attempted == 0
     assert "dry-run" in result.warnings[0]
@@ -362,7 +363,7 @@ async def test_preadd_notification_failure_does_not_change_created_result():
     repo = FakeRepo()
     client = FakeClient()
     service = AstroAlertService(
-        client, Settings(astro_dry_run_only=False), add_restart_delay_seconds=0,
+        client, Settings(dashboard_auth_disabled=True, astro_dry_run_only=False), add_restart_delay_seconds=0,
     )
 
     async def fail_notification(_: str) -> None:
@@ -381,12 +382,12 @@ def test_preadd_api_saves_rule_with_auth_and_previews_without_writing_astro():
     store.set_all_markets([market("bitget", predicted=0.8), market("binance")])
     app = create_app(
         snapshot_store=store,
-        settings=Settings(database_url="sqlite:///:memory:", dashboard_password="test-pass"),
+        settings=Settings(dashboard_totp_secret=TEST_TOTP_SECRET, database_url="sqlite:///:memory:", dashboard_password="test-pass"),
         start_background_workers=False,
     )
     with TestClient(app) as client:
-        assert client.get("/api/astro/preadd/settings", headers={"X-Dashboard-Password": "test-pass"}).json()["enabled"] is False
-        assert client.get("/api/astro/preadd/preview", headers={"X-Dashboard-Password": "test-pass"}).json()["total_matches"] == 1
+        assert client.get("/api/astro/preadd/settings", headers=session_headers("test-pass")).json()["enabled"] is False
+        assert client.get("/api/astro/preadd/preview", headers=session_headers("test-pass")).json()["total_matches"] == 1
         assert client.put("/api/astro/preadd/settings", json=AstroPreaddSettings().model_dump()).status_code == 401
         saved = client.put(
             "/api/astro/preadd/settings",
@@ -394,12 +395,15 @@ def test_preadd_api_saves_rule_with_auth_and_previews_without_writing_astro():
                 funding_threshold_pct=0.7,
                 min_volume_24h_usdt=500_000,
             ).model_dump(),
-            headers={"x-dashboard-password": "test-pass"},
+            headers=session_headers("test-pass"),
         )
         assert saved.status_code == 200
-        assert client.get("/api/astro/preadd/settings", headers={"X-Dashboard-Password": "test-pass"}).json()["funding_threshold_pct"] == 0.7
-        assert client.get("/api/astro/preadd/settings", headers={"X-Dashboard-Password": "test-pass"}).json()["min_volume_24h_usdt"] == 500_000
-        result = client.post("/api/astro/preadd/run", headers={"x-dashboard-password": "test-pass"})
+        assert client.get("/api/astro/preadd/settings", headers=session_headers("test-pass")).json()["funding_threshold_pct"] == 0.7
+        assert client.get("/api/astro/preadd/settings", headers=session_headers("test-pass")).json()["min_volume_24h_usdt"] == 500_000
+        result = client.post("/api/astro/preadd/run", headers=session_headers("test-pass"))
         assert result.status_code == 200
         assert result.json()["created"] == 0
         assert "dry-run" in result.json()["warnings"][0]
+
+
+pytestmark = [*([pytestmark] if "pytestmark" in globals() and not isinstance(pytestmark, list) else globals().get("pytestmark", [])), pytest.mark.usefixtures("legacy_auth_sessions")]

@@ -1,3 +1,4 @@
+from auth_helpers import TEST_TOTP_SECRET, session_headers
 import asyncio
 import sqlite3
 from datetime import UTC, datetime, timedelta
@@ -78,17 +79,17 @@ async def test_repository_merges_by_saved_at_and_prunes_old_presets() -> None:
 
 def test_pair_spread_preset_api_syncs_devices_and_protects_writes() -> None:
     app = create_app(
-        settings=Settings(
+        settings=Settings(dashboard_totp_secret=TEST_TOTP_SECRET,
             dashboard_password="secret",
             database_url="sqlite:///:memory:",
         )
     )
-    headers = {"X-Dashboard-Password": "secret"}
+    headers = session_headers("secret")
     now = datetime(2026, 9, 12, tzinfo=UTC)
     payload = _preset("BTC", now, hours=12).model_dump(mode="json", by_alias=True)
 
     with TestClient(app) as client:
-        assert client.get("/api/pair-spread/presets", headers={"X-Dashboard-Password": "secret"}).json() == []
+        assert client.get("/api/pair-spread/presets", headers=session_headers("secret")).json() == []
 
         unauthorized = client.post(
             "/api/pair-spread/presets/merge",
@@ -110,7 +111,7 @@ def test_pair_spread_preset_api_syncs_devices_and_protects_writes() -> None:
         assert merged.json()[0]["leg2_price_multiplier"] == 10
 
         # A second device reads the same server-side list without browser storage.
-        second_device = client.get("/api/pair-spread/presets", headers={"X-Dashboard-Password": "secret"})
+        second_device = client.get("/api/pair-spread/presets", headers=session_headers("secret"))
         assert second_device.status_code == 200
         assert second_device.json()[0]["hours"] == 12
 
@@ -130,7 +131,7 @@ def test_pair_spread_preset_api_syncs_devices_and_protects_writes() -> None:
         assert unauthorized_delete.status_code == 401
         deleted = client.delete("/api/pair-spread/presets/BTC", headers=headers)
         assert deleted.status_code == 200
-        assert client.get("/api/pair-spread/presets", headers={"X-Dashboard-Password": "secret"}).json() == []
+        assert client.get("/api/pair-spread/presets", headers=session_headers("secret")).json() == []
 
 
 def test_file_backed_presets_can_save_while_collector_has_a_stale_snapshot(tmp_path) -> None:
@@ -139,7 +140,7 @@ def test_file_backed_presets_can_save_while_collector_has_a_stale_snapshot(tmp_p
         other.execute("CREATE TABLE snapshot_probe (value INTEGER)")
         other.execute("INSERT INTO snapshot_probe VALUES (1)")
     app = create_app(
-        settings=Settings(dashboard_password="secret", database_url=f"sqlite:///{path}"),
+        settings=Settings(dashboard_totp_secret=TEST_TOTP_SECRET, dashboard_password="secret", database_url=f"sqlite:///{path}"),
         start_background_workers=False,
     )
     preset = _preset("hyperliquid-io-oai-rh-openai", datetime.now(UTC)).model_copy(update={
@@ -160,7 +161,7 @@ def test_file_backed_presets_can_save_while_collector_has_a_stale_snapshot(tmp_p
                 other.execute("INSERT INTO snapshot_probe VALUES (2)")
             response = client.put(
                 f"/api/pair-spread/presets/{preset.id}",
-                headers={"X-Dashboard-Password": "secret"},
+                headers=session_headers("secret"),
                 json=preset.model_dump(mode="json", by_alias=True),
             )
             assert response.status_code == 200
@@ -168,7 +169,7 @@ def test_file_backed_presets_can_save_while_collector_has_a_stale_snapshot(tmp_p
             assert response.json()["leg1_dex"] == "io"
             assert response.json()["leg2_exchange"] == "rh-lighter"
             assert app.state.db.in_transaction  # Saving must not commit the collector's work.
-            assert client.get("/api/pair-spread/presets", headers={"X-Dashboard-Password": "secret"}).json()[0]["id"] == preset.id
+            assert client.get("/api/pair-spread/presets", headers=session_headers("secret")).json()[0]["id"] == preset.id
         finally:
             client.portal.call(app.state.db.rollback)
 
@@ -214,10 +215,10 @@ async def test_failed_preset_writes_roll_back_and_release_the_writer(tmp_path, o
 def test_preset_api_reports_busy_then_recovers_without_a_restart(tmp_path) -> None:
     path = tmp_path / "radar.db"
     app = create_app(
-        settings=Settings(dashboard_password="secret", database_url=f"sqlite:///{path}"),
+        settings=Settings(dashboard_totp_secret=TEST_TOTP_SECRET, dashboard_password="secret", database_url=f"sqlite:///{path}"),
         start_background_workers=False,
     )
-    headers = {"X-Dashboard-Password": "secret"}
+    headers = session_headers("secret")
     payload = _preset("BTC", datetime.now(UTC)).model_dump(mode="json", by_alias=True)
     with TestClient(app) as client, sqlite3.connect(path) as blocker:
         client.portal.call(app.state.pair_spread_preset_repo.db.execute, "PRAGMA busy_timeout=20")
@@ -235,7 +236,7 @@ def test_preset_api_reports_busy_then_recovers_without_a_restart(tmp_path) -> No
         finally:
             blocker.rollback()
         assert client.put("/api/pair-spread/presets/BTC", headers=headers, json=payload).status_code == 200
-        assert client.get("/api/pair-spread/presets", headers={"X-Dashboard-Password": "secret"}).json()[0]["id"] == "BTC"
+        assert client.get("/api/pair-spread/presets", headers=session_headers("secret")).json()[0]["id"] == "BTC"
         assert client.delete("/api/pair-spread/presets/BTC", headers=headers).status_code == 200
 
 
@@ -268,3 +269,6 @@ async def test_cancelled_save_rolls_back_before_other_requests_read(tmp_path, mo
         assert not db.in_transaction
     finally:
         await db.close()
+
+
+pytestmark = pytest.mark.usefixtures("legacy_auth_sessions")

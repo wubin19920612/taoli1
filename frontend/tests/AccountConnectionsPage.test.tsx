@@ -66,7 +66,6 @@ function overview(connections = [connection()]) {
 describe("AccountConnectionsPage", () => {
   beforeEach(() => {
     window.localStorage.clear();
-    window.localStorage.setItem("dashboard_password", "dashboard-test");
   });
 
   afterEach(() => {
@@ -88,9 +87,8 @@ describe("AccountConnectionsPage", () => {
     expect(screen.getByText("****ABCD")).toBeTruthy();
     expect(screen.getByText("****WXYZ")).toBeTruthy();
     expect(document.body.textContent).not.toContain("secret-value");
-    expect(fetchMock.mock.calls[0][1]?.headers).toMatchObject({
-      "X-Dashboard-Password": "dashboard-test"
-    });
+    expect(fetchMock.mock.calls[0][1]?.credentials).toBe("same-origin");
+    expect(new Headers(fetchMock.mock.calls[0][1]?.headers).has("X-Dashboard-Password")).toBe(false);
   });
 
   it("shows passphrase for OKX and public address plus DEX for Hyperliquid", async () => {

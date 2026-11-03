@@ -18,6 +18,7 @@ from app.services.alert_delivery_store import AlertDeliveryStore
 def test_rollback_calls_stay_in_isolated_connection_modules():
     app_root = Path(__file__).resolve().parents[1] / "app"
     allowed = {
+        "db/auth.py",  # Dedicated authentication connection, never the shared business writer.
         "db/database.py",  # Recovery releases only a failed read snapshot.
         "db/market_identity_repository.py",
         "services/pair_spread_presets.py",
@@ -41,11 +42,13 @@ def test_rollback_calls_stay_in_isolated_connection_modules():
 async def test_attempts_connection_lifespan(tmp_path, in_memory):
     db_path = ":memory:" if in_memory else str(tmp_path / "radar.db")
     app = create_app(
-        settings=Settings(database_url=f"sqlite:///{db_path}"),
+        settings=Settings(dashboard_auth_disabled=True, database_url=f"sqlite:///{db_path}"),
         start_background_workers=False,
     )
     async with app.router.lifespan_context(app):
         main_db = app.state.alert_event_repo.db
+        auth_db = app.state.auth_store.db
+        assert auth_db is not main_db
         attempts = app.state.astro_alert_service.attempts
         assert (attempts.db is main_db) is in_memory
         # The dedicated connection sees the schema initialized on the main one.
@@ -56,13 +59,15 @@ async def test_attempts_connection_lifespan(tmp_path, in_memory):
         await attempts.db.execute("SELECT 1")
     with pytest.raises(ValueError, match="no active connection"):
         await main_db.execute("SELECT 1")
+    with pytest.raises(ValueError, match="no active connection"):
+        await auth_db.execute("SELECT 1")
 
 
 @pytest.mark.parametrize("failure", [sqlite3.OperationalError, asyncio.CancelledError])
 async def test_attempts_rollback_preserves_uncommitted_shared_write(tmp_path, monkeypatch, failure):
     db_path = str(tmp_path / "radar.db")
     app = create_app(
-        settings=Settings(database_url=f"sqlite:///{db_path}"),
+        settings=Settings(dashboard_auth_disabled=True, database_url=f"sqlite:///{db_path}"),
         start_background_workers=False,
     )
     async with app.router.lifespan_context(app):
@@ -95,3 +100,6 @@ async def test_attempts_rollback_preserves_uncommitted_shared_write(tmp_path, mo
             assert rows[0].pending_since is not None
         finally:
             await observer.close()
+
+
+pytestmark = pytest.mark.usefixtures("legacy_auth_sessions")

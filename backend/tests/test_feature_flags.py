@@ -59,7 +59,7 @@ async def test_startup_routes_tasks_and_shared_resources(disabled, startup, monk
     effective = disabled & config.OPTIONAL_FEATURES
     if "gate_twap" in effective:
         monkeypatch.setattr(main, "GateTwapJobManager", Mock(side_effect=AssertionError("constructed Gate manager")))
-    settings = config.Settings(
+    settings = config.Settings(dashboard_auth_disabled=True,
         database_url=f"sqlite:///{tmp_path / 'radar.db'}", disabled_features=disabled,
         memory_probe_enabled=True, memory_census_enabled=True,
     )

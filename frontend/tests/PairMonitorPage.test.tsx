@@ -481,7 +481,7 @@ describe("PairMonitorPage", () => {
           url.pathname.includes("/pair-spread/presets/") ||
           url.pathname.endsWith("/settings/floating-watch/items")
         )) {
-          if (requiredDashboardPassword && new Headers(init.headers).get("X-Dashboard-Password") !== requiredDashboardPassword) {
+          if (requiredDashboardPassword) {
             return Response.json({ detail: "Invalid dashboard password" }, { status: 401 });
           }
           if (presetWriteStatus !== 200) {
@@ -927,69 +927,61 @@ describe("PairMonitorPage", () => {
     expect(document.querySelectorAll(".pair-saved-tag")).toHaveLength(0);
   });
 
-  it("asks for a password on an unconfigured phone and retries the exact delete", async () => {
-    const user = userEvent.setup();
-    requiredDashboardPassword = "valid-password";
+  it("redirects an expired session and preserves the exact failed delete and cached presets", async () => {
+    requiredDashboardPassword = "session-expired";
     serverPresets = [savedPairPreset(), savedPairPreset({ id: "another-pair", leg1_symbol: "ETHUSDT", leg2_symbol: "ETHUSDT" })];
+    const view = render(<PairMonitorPage />);
+    await waitFor(() => expect(document.querySelectorAll(".pair-saved-tag")).toHaveLength(2));
+    fireEvent.click(document.querySelector(".pair-saved-tag .ant-tag-close-icon") as Element);
+    await waitFor(() => expect(location.pathname).toBe("/login"));
+    expect(serverPresets).toHaveLength(2);
+    expect(JSON.parse(localStorage.getItem("taoli1.pairSpread.presets.v1") ?? "[]")).toHaveLength(2);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    // A fresh session returns to the page; the user explicitly repeats the write.
+    view.unmount();
+    requiredDashboardPassword = "";
+    history.replaceState(null, "", "/?page=pair-monitor");
     render(<PairMonitorPage />);
     await waitFor(() => expect(document.querySelectorAll(".pair-saved-tag")).toHaveLength(2));
-
     fireEvent.click(document.querySelector(".pair-saved-tag .ant-tag-close-icon") as Element);
-    expect(await screen.findByRole("dialog", { name: "验证面板密码" })).toBeTruthy();
-    expect(serverPresets).toHaveLength(2);
-    expect(JSON.parse(window.localStorage.getItem("taoli1.pairSpread.presets.v1") ?? "[]")).toHaveLength(2);
-
-    await user.type(screen.getByLabelText("面板密码"), "valid-password");
-    await user.click(screen.getByRole("button", { name: "验证并重试" }));
-
-    await waitFor(() => expect(document.querySelectorAll(".pair-saved-tag")).toHaveLength(1));
+    await waitFor(() => expect(serverPresets).toHaveLength(1));
     expect(serverPresets[0].id).toBe("another-pair");
-    expect(window.localStorage.getItem("dashboard_password")).toBe("valid-password");
-    expect(JSON.parse(window.localStorage.getItem("taoli1.pairSpread.presets.v1") ?? "[]")).toHaveLength(1);
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(JSON.parse(localStorage.getItem("taoli1.pairSpread.presets.v1") ?? "[]")).toHaveLength(1);
+    expect(localStorage.getItem("dashboard_password")).toBeNull();
   });
 
-  it("keeps an existing password and presets intact after a wrong password or cancellation", async () => {
-    const user = userEvent.setup();
-    requiredDashboardPassword = "valid-password";
-    window.localStorage.setItem("dashboard_password", "outdated-password");
+  it("preserves presets on repeated unauthorized deletes without an inline password dialog", async () => {
+    requiredDashboardPassword = "session-expired";
     serverPresets = [savedPairPreset()];
     render(<PairMonitorPage />);
     await waitFor(() => expect(document.querySelectorAll(".pair-saved-tag")).toHaveLength(1));
-
-    fireEvent.click(document.querySelector(".pair-saved-tag .ant-tag-close-icon") as Element);
-    await screen.findByRole("dialog");
-    await user.click(screen.getByRole("button", { name: "验证并重试" }));
-    expect(await screen.findByText("请输入面板密码。")).toBeTruthy();
-    await user.type(screen.getByLabelText("面板密码"), "wrong-password");
-    await user.click(screen.getByRole("button", { name: "验证并重试" }));
-    expect(await screen.findByText("面板密码不正确，请重新输入。标的对尚未更改。")).toBeTruthy();
-    expect(window.localStorage.getItem("dashboard_password")).toBe("outdated-password");
-    expect(serverPresets).toHaveLength(1);
-
-    await user.click(screen.getByRole("button", { name: /取\s*消/ }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(document.querySelectorAll(".pair-saved-tag")).toHaveLength(1);
-    await user.click(screen.getByRole("button", { name: "验证密码" }));
-    expect((screen.getByLabelText("面板密码") as HTMLInputElement).value).toBe("");
-    await user.type(screen.getByLabelText("面板密码"), "valid-password");
-    await user.keyboard("{Enter}");
-    await waitFor(() => expect(serverPresets).toHaveLength(0));
-    expect(window.localStorage.getItem("dashboard_password")).toBe("valid-password");
+    for (let attempt = 0; attempt < 2; attempt++) {
+      fireEvent.click(document.querySelector(".pair-saved-tag .ant-tag-close-icon") as Element);
+      await waitFor(() => expect(location.pathname).toBe("/login"));
+      expect(serverPresets).toHaveLength(1);
+      expect(document.querySelectorAll(".pair-saved-tag")).toHaveLength(1);
+      expect(screen.queryByRole("dialog")).toBeNull();
+    }
+    expect(localStorage.getItem("dashboard_password")).toBeNull();
   });
 
-  it("retries a protected save without losing the Hyperliquid DEX and market identity", async () => {
+  it("preserves Hyperliquid DEX and market identity through login return and a new save", async () => {
     const user = userEvent.setup();
-    requiredDashboardPassword = "valid-password";
-    window.history.pushState({}, "", "/?page=pair-monitor&leg1_exchange=hyperliquid&leg1_market_type=future&leg1_dex=io&leg1_symbol=OAI&leg1_raw_symbol=io%3AOAI&leg2_exchange=rh-lighter&leg2_market_type=future&leg2_symbol=OPENAI&leg2_multiplier=2&hours=4&interval_seconds=60");
-    render(<PairMonitorPage />);
+    requiredDashboardPassword = "session-expired";
+    const page = "/?page=pair-monitor&leg1_exchange=hyperliquid&leg1_market_type=future&leg1_dex=io&leg1_symbol=OAI&leg1_raw_symbol=io%3AOAI&leg2_exchange=rh-lighter&leg2_market_type=future&leg2_symbol=OPENAI&leg2_multiplier=2&hours=4&interval_seconds=60";
+    history.replaceState(null, "", page);
+    const view = render(<PairMonitorPage />);
     await waitFor(() => expect(document.querySelector(".pair-chart-card")).toBeTruthy());
+    const pageBeforeLogin = location.pathname + location.search + location.hash;
     await user.click(screen.getByRole("button", { name: /保存/ }));
-    await screen.findByRole("dialog");
+    await waitFor(() => expect(location.pathname).toBe("/login"));
     expect(serverPresets).toHaveLength(0);
-    await user.type(screen.getByLabelText("面板密码"), "valid-password");
-    await user.click(screen.getByRole("button", { name: "验证并重试" }));
-
+    const next = new URLSearchParams(location.search).get("next");
+    expect(next).toBe(pageBeforeLogin);
+    view.unmount(); requiredDashboardPassword = "";
+    history.replaceState(null, "", next!);
+    render(<PairMonitorPage />);
+    await user.click(screen.getByRole("button", { name: /保存/ }));
     await waitFor(() => expect(serverPresets).toHaveLength(1));
     expect(serverPresets[0]).toMatchObject({
       leg1_dex: "io", leg1_raw_symbol: "io:OAI", leg1_symbol: "OAIUSDT",
@@ -997,18 +989,17 @@ describe("PairMonitorPage", () => {
     });
   });
 
-  it("does not interrupt reading when local preset migration needs a password", async () => {
-    const user = userEvent.setup();
-    requiredDashboardPassword = "valid-password";
-    window.localStorage.setItem("taoli1.pairSpread.presets.v1", JSON.stringify([savedPairPreset()]));
+  it("preserves local migration data until a session is restored", async () => {
+    requiredDashboardPassword = "session-expired";
+    localStorage.setItem("taoli1.pairSpread.presets.v1", JSON.stringify([savedPairPreset()]));
+    const view = render(<PairMonitorPage />);
+    await waitFor(() => expect(location.pathname).toBe("/login"));
+    expect(localStorage.getItem("taoli1.pairSpread.presets.serverMigrated.v1")).toBeNull();
+    expect(JSON.parse(localStorage.getItem("taoli1.pairSpread.presets.v1") ?? "[]")).toHaveLength(1);
+    view.unmount(); requiredDashboardPassword = "";
+    history.replaceState(null, "", "/?page=pair-monitor");
     render(<PairMonitorPage />);
-    expect(await screen.findByRole("button", { name: "验证密码" })).toBeTruthy();
-    expect(screen.queryByRole("dialog")).toBeNull();
-    expect(window.localStorage.getItem("taoli1.pairSpread.presets.serverMigrated.v1")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "验证密码" }));
-    await user.type(screen.getByLabelText("面板密码"), "valid-password");
-    await user.click(screen.getByRole("button", { name: "验证并重试" }));
-    await waitFor(() => expect(window.localStorage.getItem("taoli1.pairSpread.presets.serverMigrated.v1")).toBe("1"));
+    await waitFor(() => expect(localStorage.getItem("taoli1.pairSpread.presets.serverMigrated.v1")).toBe("1"));
     expect(serverPresets).toHaveLength(1);
   });
 
@@ -1023,24 +1014,22 @@ describe("PairMonitorPage", () => {
     expect(serverPresets).toHaveLength(1);
   });
 
-  it("passes the verified password to both writes when adding a pair to the floating watch", async () => {
+  it("uses session cookies for both writes when adding a pair to the floating watch", async () => {
     const user = userEvent.setup();
-    requiredDashboardPassword = "valid-password";
-    window.history.pushState({}, "", "/?page=pair-monitor&leg1_exchange=binance&leg1_market_type=future&leg1_symbol=BTC&leg2_exchange=okx&leg2_market_type=future&leg2_symbol=BTC&hours=4&interval_seconds=60");
+    history.replaceState(null, "", "/?page=pair-monitor&leg1_exchange=binance&leg1_market_type=future&leg1_symbol=BTC&leg2_exchange=okx&leg2_market_type=future&leg2_symbol=BTC&hours=4&interval_seconds=60");
     render(<PairMonitorPage />);
     const addButton = screen.getByRole("button", { name: /加入浮窗/ });
     await waitFor(() => expect(addButton.hasAttribute("disabled")).toBe(false));
     await user.click(addButton);
-    await screen.findByRole("dialog");
-    await user.type(screen.getByLabelText("面板密码"), "valid-password");
-    await user.click(screen.getByRole("button", { name: "验证并重试" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    const watchWrite = vi.mocked(fetch).mock.calls.find(([input, init]) =>
-      String(input).endsWith("/settings/floating-watch/items") && init?.method === "POST"
-    );
-    expect(new Headers(watchWrite?.[1]?.headers).get("X-Dashboard-Password")).toBe("valid-password");
-    expect(window.localStorage.getItem("dashboard_password")).toBe("valid-password");
-    expect(serverPresets).toHaveLength(1);
+    await waitFor(() => expect(serverPresets).toHaveLength(1));
+    const writes = vi.mocked(fetch).mock.calls.filter(([input, init]) =>
+      init?.method === "POST" || init?.method === "PUT");
+    expect(writes.some(([url]) => String(url).endsWith("/settings/floating-watch/items"))).toBe(true);
+    for (const [, init] of writes) {
+      expect(init?.credentials).toBe("same-origin");
+      expect(new Headers(init?.headers).has("X-Dashboard-Password")).toBe(false);
+    }
+    expect(localStorage.getItem("dashboard_password")).toBeNull();
   });
 
   it.each([1, 2])("keeps same-symbol tags before custom pairs in their shared group and restores multiplier %s", async (multiplier) => {

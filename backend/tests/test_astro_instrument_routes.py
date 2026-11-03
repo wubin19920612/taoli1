@@ -1,3 +1,4 @@
+from auth_helpers import TEST_TOTP_SECRET, session_headers
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -160,9 +161,9 @@ def instrument_app(
     )
     return create_app(
         snapshot_store=store,
-        settings=Settings(
+        settings=Settings(dashboard_totp_secret=TEST_TOTP_SECRET,
             database_url="sqlite:///:memory:",
-            dashboard_password=dashboard_password,
+            dashboard_password=dashboard_password, dashboard_auth_disabled=not dashboard_password,
             astro_dry_run_only=astro_dry_run_only,
             astro_manual_card_create=astro_manual_card_create,
         ),
@@ -318,14 +319,14 @@ def test_rh_lighter_market_allows_authenticated_manual_create(
     with TestClient(app) as client:
         _install_exact_books(app, snapshot_timestamp=True)
         _install_exact_books(app)
-        preview = client.post("/api/astro/instrument/preview", headers={"X-Dashboard-Password": "secret"}, json=selected)
+        preview = client.post("/api/astro/instrument/preview", headers=session_headers("secret"), json=selected)
         unauthorized = client.post("/api/astro/instrument/card", json={
             "route": selected, "card": {"open_enabled": False, "card_variant": "non_gc"},
             "expected_open_spread_pct": 1,
         })
         create = client.post(
             "/api/astro/instrument/card",
-            headers={"X-Dashboard-Password": "secret"},
+            headers=session_headers("secret"),
             json={
                 "route": selected,
                 "card": {"open_enabled": False, "card_variant": "non_gc"},
@@ -389,9 +390,9 @@ def test_rh_lighter_manual_api_reaches_sdk_with_exact_paused_openai_card() -> No
     with TestClient(app) as client:
         _install_exact_books(app, snapshot_timestamp=True)
         _install_exact_books(app)
-        preview = client.post("/api/astro/instrument/preview", headers={"X-Dashboard-Password": "secret"}, json=selected)
+        preview = client.post("/api/astro/instrument/preview", headers=session_headers("secret"), json=selected)
         response = client.post(
-            "/api/astro/instrument/card", headers={"X-Dashboard-Password": "secret"},
+            "/api/astro/instrument/card", headers=session_headers("secret"),
             json={
                 "route": selected,
                 "expected_open_spread_pct": preview.json()["source_open_spread_pct"],
@@ -511,7 +512,7 @@ def test_instrument_astro_create_rebuilds_route_and_passes_sizing_to_shared_serv
         _install_exact_books(app, snapshot_timestamp=True)
         response = client.post(
             "/api/astro/instrument/card",
-            headers={"X-Dashboard-Password": "secret"},
+            headers=session_headers("secret"),
             json={
                 "route": route(),
                 "card": {
@@ -564,7 +565,7 @@ def test_instrument_astro_create_warns_but_continues_when_order_book_validation_
         _install_exact_books(app, snapshot_timestamp=True)
         response = client.post(
             "/api/astro/instrument/card",
-            headers={"X-Dashboard-Password": "secret"},
+            headers=session_headers("secret"),
             json={
                 "route": route(),
                 "card": {"max_trade_usdt": 100, "max_notional": 100},
@@ -646,7 +647,7 @@ def test_instrument_astro_create_warns_for_spread_drift_and_continues() -> None:
         _install_exact_books(app, snapshot_timestamp=True)
         response = client.post(
             "/api/astro/instrument/card",
-            headers={"X-Dashboard-Password": "secret"},
+            headers=session_headers("secret"),
             json={
                 "route": route(),
                 "card": {},
@@ -674,7 +675,7 @@ def test_instrument_astro_create_warns_when_risk_settings_cannot_be_loaded() -> 
         app.state.settings_repo = FailingRiskSettingsRepository()
         response = client.post(
             "/api/astro/instrument/card",
-            headers={"X-Dashboard-Password": "secret"},
+            headers=session_headers("secret"),
             json={
                 "route": route(),
                 "card": {"leverage": 2},
@@ -706,7 +707,7 @@ def test_instrument_astro_create_warns_when_default_settings_cannot_be_saved() -
         app.state.settings_repo = FailingAstroSettingsWriteRepository()
         response = client.post(
             "/api/astro/instrument/card",
-            headers={"X-Dashboard-Password": "secret"},
+            headers=session_headers("secret"),
             json={
                 "route": route(),
                 "card": {
@@ -725,3 +726,6 @@ def test_instrument_astro_create_warns_when_default_settings_cannot_be_saved() -
     assert service.requests[0].max_trade_usdt == 25
     assert service.card_settings == original_settings
     assert any("保存 Astro 默认建卡设置失败" in warning for warning in payload["warnings"])
+
+
+pytestmark = [*([pytestmark] if "pytestmark" in globals() and not isinstance(pytestmark, list) else globals().get("pytestmark", [])), pytest.mark.usefixtures("legacy_auth_sessions")]

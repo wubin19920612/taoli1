@@ -14,6 +14,48 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 
 
 @pytest.fixture
+def legacy_auth_sessions(monkeypatch, request):
+    """Replace only auth setup in pre-2FA business tests, using real session checks."""
+    from app.db.auth import AuthStore
+    from auth_helpers import seed_sessions
+    from app.core.config import get_settings
+
+    # Old unconfigured development fixtures now opt in explicitly.
+    monkeypatch.setenv("DASHBOARD_AUTH_DISABLED", "true")
+    get_settings.cache_clear()
+
+    original_open = AuthStore.open
+
+    async def open_seeded(path):
+        store = await original_open(path)
+        await seed_sessions(store)
+        return store
+
+    monkeypatch.setattr(AuthStore, "open", open_seeded)
+    original_create = getattr(request.module, "create_app", None)
+    if original_create:
+        class IsolatedSessionLookup:
+            async def authenticate(self, token, now):
+                store = await open_seeded(":memory:")
+                try:
+                    return await store.authenticate(token, now)
+                finally:
+                    await store.close()
+
+        def create_with_sessions(*args, **kwargs):
+            if "settings" not in kwargs:
+                from dataclasses import replace
+                kwargs["settings"] = replace(get_settings(), environment="test", dashboard_auth_disabled=True)
+            app = original_create(*args, **kwargs)
+            app.state.auth_store = IsolatedSessionLookup()
+            return app
+
+        monkeypatch.setattr(request.module, "create_app", create_with_sessions)
+    yield
+    get_settings.cache_clear()
+
+
+@pytest.fixture
 async def astro_attempts_for_services(monkeypatch):
     """Give existing standalone service regressions a real, isolated ledger."""
     from app.db.database import connect_database

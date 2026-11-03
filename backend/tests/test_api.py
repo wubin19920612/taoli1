@@ -1,3 +1,4 @@
+from auth_helpers import TEST_TOTP_SECRET, session_headers
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, Mock
 
@@ -481,7 +482,7 @@ def test_api_only_mode_does_not_start_background_workers(monkeypatch) -> None:
     start_background_task = Mock()
     monkeypatch.setattr("app.main._start_background_task", start_background_task)
     app = create_app(
-        settings=Settings(database_url="sqlite:///:memory:"),
+        settings=Settings(dashboard_auth_disabled=True, database_url="sqlite:///:memory:"),
         start_background_workers=False,
     )
 
@@ -493,7 +494,7 @@ def test_api_only_mode_does_not_start_background_workers(monkeypatch) -> None:
 
 def test_create_app_blanks_feishu_credentials_when_live_send_is_disabled() -> None:
     app = create_app(
-        settings=Settings(
+        settings=Settings(dashboard_auth_disabled=True,
             feishu_webhook_url="https://example.test/webhook",
             feishu_secret="webhook-secret",
             feishu_app_id="app-id",
@@ -517,7 +518,7 @@ def test_create_app_blanks_feishu_credentials_when_live_send_is_disabled() -> No
 
 def test_create_app_preserves_feishu_credentials_when_live_send_is_enabled() -> None:
     app = create_app(
-        settings=Settings(
+        settings=Settings(dashboard_auth_disabled=True,
             feishu_webhook_url="https://example.test/webhook",
             feishu_secret="webhook-secret",
             feishu_app_id="app-id",
@@ -550,7 +551,7 @@ def test_price_collector_starts_announcement_workers(monkeypatch) -> None:
     monkeypatch.setattr("app.main._start_background_task", record_background_task)
     monkeypatch.setattr("app.main.default_exchange_adapters", lambda: [])
     app = create_app(
-        settings=Settings(database_url="sqlite:///:memory:"),
+        settings=Settings(dashboard_auth_disabled=True, database_url="sqlite:///:memory:"),
         start_collector=True,
     )
 
@@ -580,7 +581,7 @@ def test_collector_startup_uses_multi_exchange_index_component_provider(monkeypa
     monkeypatch.setattr("app.main._start_background_task", Mock())
 
     app = create_app(
-        settings=Settings(database_url="sqlite:///:memory:"),
+        settings=Settings(dashboard_auth_disabled=True, database_url="sqlite:///:memory:"),
         start_collector=True,
     )
 
@@ -598,11 +599,11 @@ def test_collector_startup_uses_multi_exchange_index_component_provider(monkeypa
 
 
 def test_phone_price_alert_rule_endpoints_round_trip() -> None:
-    app = create_app(settings=Settings(dashboard_password="secret"))
+    app = create_app(settings=Settings(dashboard_totp_secret=TEST_TOTP_SECRET, dashboard_password="secret"))
     repo = FakePhonePriceAlertRuleRepository()
     app.state.phone_price_alert_rule_repo = repo
     client = TestClient(app)
-    headers = {"X-Dashboard-Password": "secret"}
+    headers = session_headers("secret")
 
     create_response = client.post(
         "/api/phone-alerts/rules",
@@ -625,7 +626,7 @@ def test_phone_price_alert_rule_endpoints_round_trip() -> None:
     assert created["symbol"] == "BTCUSDT"
     assert created["exchange"] == "binance"
 
-    list_response = client.get("/api/phone-alerts/rules", headers={"X-Dashboard-Password": "secret"})
+    list_response = client.get("/api/phone-alerts/rules", headers=session_headers("secret"))
 
     assert list_response.status_code == 200
     assert list_response.json()[0]["name"] == "BTC breakout"
@@ -700,7 +701,7 @@ def test_phone_price_alert_diagnostics_report_trigger_ready_rule() -> None:
     )
     app = create_app(
         snapshot_store=store,
-        settings=Settings(feishu_phone_enabled=True),
+        settings=Settings(dashboard_auth_disabled=True, feishu_phone_enabled=True),
     )
     app.state.phone_price_alert_rule_repo = FakePhonePriceAlertRuleRepository([rule])
     client = TestClient(app)
@@ -945,7 +946,7 @@ def test_pair_spread_query_endpoint_uses_on_demand_service() -> None:
             self.closed = True
 
     service = FakePairSpreadService()
-    app = create_app(settings=Settings(database_url="sqlite:///:memory:"))
+    app = create_app(settings=Settings(dashboard_auth_disabled=True, database_url="sqlite:///:memory:"))
     app.state.pair_spread_query_service_factory = lambda: service
 
     with TestClient(app) as client:
@@ -1034,7 +1035,7 @@ def test_pair_spread_query_endpoint_accepts_hyperliquid_dex_selection() -> None:
         async def aclose(self) -> None:
             return None
 
-    app = create_app(settings=Settings(database_url="sqlite:///:memory:"))
+    app = create_app(settings=Settings(dashboard_auth_disabled=True, database_url="sqlite:///:memory:"))
     app.state.pair_spread_query_service_factory = FakePairSpreadService
 
     with TestClient(app) as client:
@@ -1129,7 +1130,7 @@ def test_pair_spread_query_endpoint_resolves_global_symbol_alias_and_price_multi
         async def aclose(self) -> None:
             return None
 
-    app = create_app(settings=Settings(database_url="sqlite:///:memory:"))
+    app = create_app(settings=Settings(dashboard_auth_disabled=True, database_url="sqlite:///:memory:"))
     app.state.pair_spread_query_service_factory = FakePairSpreadService
 
     with TestClient(app) as client:
@@ -1219,7 +1220,7 @@ def test_pair_spread_query_endpoint_resolves_known_hyperliquid_dex_alias() -> No
         async def aclose(self) -> None:
             return None
 
-    app = create_app(settings=Settings(database_url="sqlite:///:memory:"))
+    app = create_app(settings=Settings(dashboard_auth_disabled=True, database_url="sqlite:///:memory:"))
     app.state.pair_spread_query_service_factory = FakePairSpreadService
 
     with TestClient(app) as client:
@@ -1296,7 +1297,7 @@ def test_pair_spread_funding_history_endpoint_uses_lightweight_service() -> None
             self.closed = True
 
     service = FakePairSpreadService()
-    app = create_app(settings=Settings(database_url="sqlite:///:memory:"))
+    app = create_app(settings=Settings(dashboard_auth_disabled=True, database_url="sqlite:///:memory:"))
     app.state.pair_spread_query_service_factory = lambda: service
 
     with TestClient(app) as client:
@@ -1394,7 +1395,7 @@ def test_pair_spread_query_endpoint_accepts_second_interval() -> None:
         async def aclose(self) -> None:
             return None
 
-    app = create_app(settings=Settings(database_url="sqlite:///:memory:"))
+    app = create_app(settings=Settings(dashboard_auth_disabled=True, database_url="sqlite:///:memory:"))
     app.state.pair_spread_query_service_factory = FakePairSpreadService
 
     with TestClient(app) as client:
@@ -1498,7 +1499,7 @@ def test_symbol_spread_query_endpoint_accepts_custom_scope_and_interval(disabled
         async def aclose(self) -> None:
             return None
 
-    app = create_app(settings=Settings(database_url="sqlite:///:memory:", disabled_features=disabled))
+    app = create_app(settings=Settings(dashboard_auth_disabled=True, database_url="sqlite:///:memory:", disabled_features=disabled))
     app.state.pair_spread_query_service_factory = FakePairSpreadService
 
     with TestClient(app) as client:
@@ -1572,7 +1573,7 @@ def test_pair_spread_diagnostics_endpoint_coarsens_second_interval() -> None:
         async def aclose(self) -> None:
             return None
 
-    app = create_app(settings=Settings(database_url="sqlite:///:memory:"))
+    app = create_app(settings=Settings(dashboard_auth_disabled=True, database_url="sqlite:///:memory:"))
     app.state.pair_spread_query_service_factory = FakePairSpreadService
 
     with TestClient(app) as client:
@@ -1683,21 +1684,21 @@ def test_pair_spread_funding_record_endpoints_round_trip() -> None:
             self.samples.pop(key, None)
             return PairSpreadFundingRecordStatus(watched=False)
 
-    app = create_app(settings=Settings(dashboard_password="secret", database_url="sqlite:///:memory:"))
+    app = create_app(settings=Settings(dashboard_totp_secret=TEST_TOTP_SECRET, dashboard_password="secret", database_url="sqlite:///:memory:"))
     fake_recorder = FakePairSpreadFundingRecorder()
 
     with TestClient(app) as client:
         app.state.pair_spread_funding_recorder = fake_recorder
-        headers = {"X-Dashboard-Password": "secret"}
+        headers = session_headers("secret")
 
-        watchlist_response = client.get("/api/pair-spread/funding-records/watchlist", headers={"X-Dashboard-Password": "secret"})
+        watchlist_response = client.get("/api/pair-spread/funding-records/watchlist", headers=session_headers("secret"))
         assert watchlist_response.status_code == 200
         assert watchlist_response.json() == []
 
         status_response = client.get(
             "/api/pair-spread/funding-records/status"
             "?leg1_exchange=binance&leg1_symbol=btc&leg2_exchange=okx&leg2_symbol=btc"
-            "&leg1_market_type=future&leg2_market_type=future&hours=6&leg2_multiplier=1", headers={"X-Dashboard-Password": "secret"}
+            "&leg1_market_type=future&leg2_market_type=future&hours=6&leg2_multiplier=1", headers=session_headers("secret")
         )
         assert status_response.status_code == 200
         assert status_response.json()["watched"] is False
@@ -1713,14 +1714,14 @@ def test_pair_spread_funding_record_endpoints_round_trip() -> None:
         assert started["item"]["sample_count"] == 1
         assert started["samples"][0]["net_rate_pct"] == pytest.approx(0.03)
 
-        watchlist_response = client.get("/api/pair-spread/funding-records/watchlist", headers={"X-Dashboard-Password": "secret"})
+        watchlist_response = client.get("/api/pair-spread/funding-records/watchlist", headers=session_headers("secret"))
         assert watchlist_response.status_code == 200
         assert watchlist_response.json()[0]["sample_count"] == 1
 
         status_response = client.get(
             "/api/pair-spread/funding-records/status"
             "?leg1_exchange=binance&leg1_symbol=btc&leg2_exchange=okx&leg2_symbol=btc"
-            "&leg1_market_type=future&leg2_market_type=future&hours=6&leg2_multiplier=1", headers={"X-Dashboard-Password": "secret"}
+            "&leg1_market_type=future&leg2_market_type=future&hours=6&leg2_multiplier=1", headers=session_headers("secret")
         )
         assert status_response.status_code == 200
         assert status_response.json()["watched"] is True
@@ -1735,7 +1736,7 @@ def test_pair_spread_funding_record_endpoints_round_trip() -> None:
         assert stop_response.status_code == 200
         assert stop_response.json()["watched"] is False
 
-        watchlist_response = client.get("/api/pair-spread/funding-records/watchlist", headers={"X-Dashboard-Password": "secret"})
+        watchlist_response = client.get("/api/pair-spread/funding-records/watchlist", headers=session_headers("secret"))
         assert watchlist_response.status_code == 200
         assert watchlist_response.json() == []
 
@@ -1786,7 +1787,7 @@ def test_premium_index_endpoints_use_on_demand_service() -> None:
             self.closed = True
 
     service = FakePremiumIndexService()
-    app = create_app(settings=Settings(database_url="sqlite:///:memory:"))
+    app = create_app(settings=Settings(dashboard_auth_disabled=True, database_url="sqlite:///:memory:"))
     app.state.premium_index_query_service_factory = lambda: service
 
     with TestClient(app) as client:
@@ -2233,10 +2234,10 @@ def test_history_stats_endpoint_returns_spread_distribution_and_chart_points() -
 
 
 def test_alert_message_template_settings_endpoint_roundtrips() -> None:
-    app = create_app(settings=Settings(dashboard_password="secret", database_url="sqlite:///:memory:"))
+    app = create_app(settings=Settings(dashboard_totp_secret=TEST_TOTP_SECRET, dashboard_password="secret", database_url="sqlite:///:memory:"))
 
     with TestClient(app) as client:
-        response = client.get("/api/settings/alert-message-template", headers={"X-Dashboard-Password": "secret"})
+        response = client.get("/api/settings/alert-message-template", headers=session_headers("secret"))
         assert response.status_code == 200
         payload = response.json()
         assert payload["format"] == "compact"
@@ -2254,7 +2255,7 @@ def test_alert_message_template_settings_endpoint_roundtrips() -> None:
 
         saved = client.put(
             "/api/settings/alert-message-template",
-            headers={"X-Dashboard-Password": "secret"},
+            headers=session_headers("secret"),
             json=payload,
         )
         assert saved.status_code == 200
@@ -2262,7 +2263,7 @@ def test_alert_message_template_settings_endpoint_roundtrips() -> None:
         assert saved.json()["suppress_when_card_conditions_fail"] is False
         assert saved.json()["observation_limit"] == 2
 
-        reloaded = client.get("/api/settings/alert-message-template", headers={"X-Dashboard-Password": "secret"})
+        reloaded = client.get("/api/settings/alert-message-template", headers=session_headers("secret"))
         assert reloaded.status_code == 200
         assert reloaded.json()["include_observations"] is False
         assert reloaded.json()["suppress_when_card_conditions_fail"] is False
@@ -2423,10 +2424,10 @@ def test_alert_loop_sends_feishu_when_card_condition_filter_is_disabled() -> Non
 
 
 def test_astro_card_settings_endpoint_roundtrips() -> None:
-    app = create_app(settings=Settings(dashboard_password="secret", database_url="sqlite:///:memory:"))
+    app = create_app(settings=Settings(dashboard_totp_secret=TEST_TOTP_SECRET, dashboard_password="secret", database_url="sqlite:///:memory:"))
 
     with TestClient(app) as client:
-        response = client.get("/api/settings/astro-card", headers={"X-Dashboard-Password": "secret"})
+        response = client.get("/api/settings/astro-card", headers=session_headers("secret"))
         assert response.status_code == 200
         payload = response.json()
         assert payload["max_trade_usdt"] == 10
@@ -2451,7 +2452,7 @@ def test_astro_card_settings_endpoint_roundtrips() -> None:
 
         saved = client.put(
             "/api/settings/astro-card",
-            headers={"X-Dashboard-Password": "secret"},
+            headers=session_headers("secret"),
             json=payload,
         )
         assert saved.status_code == 200
@@ -2460,7 +2461,7 @@ def test_astro_card_settings_endpoint_roundtrips() -> None:
         assert saved.json()["open_enabled"] is True
         assert saved.json()["close_position_buffer_pct"] == 0.2
 
-        reloaded = client.get("/api/settings/astro-card", headers={"X-Dashboard-Password": "secret"})
+        reloaded = client.get("/api/settings/astro-card", headers=session_headers("secret"))
         assert reloaded.status_code == 200
         assert reloaded.json()["max_notional"] == 75
         assert reloaded.json()["open_enabled"] is True
@@ -2469,14 +2470,14 @@ def test_astro_card_settings_endpoint_roundtrips() -> None:
         assert reloaded.json()["close_position_floor_pct"] == 0.01
         assert client.put(
             "/api/settings/astro-card",
-            headers={"X-Dashboard-Password": "secret"},
+            headers=session_headers("secret"),
             json={**payload, "card_variant": "invalid"},
         ).status_code == 422
 
 
 def test_astro_automation_settings_endpoint_updates_runtime_service() -> None:
     app = create_app(
-        settings=Settings(
+        settings=Settings(dashboard_totp_secret=TEST_TOTP_SECRET,
             dashboard_password="secret",
             database_url="sqlite:///:memory:",
             astro_alert_auto_create=False,
@@ -2485,7 +2486,7 @@ def test_astro_automation_settings_endpoint_updates_runtime_service() -> None:
     app.state.astro_alert_service = AstroAlertService(FakeAstroPairClient(), app.state.settings)
 
     with TestClient(app) as client:
-        response = client.get("/api/settings/astro-automation", headers={"X-Dashboard-Password": "secret"})
+        response = client.get("/api/settings/astro-automation", headers=session_headers("secret"))
         assert response.status_code == 200
         assert response.json()["alert_auto_create"] is False
         assert response.json()["allow_same_name_variants"] is False
@@ -2498,7 +2499,7 @@ def test_astro_automation_settings_endpoint_updates_runtime_service() -> None:
 
         saved = client.put(
             "/api/settings/astro-automation",
-            headers={"X-Dashboard-Password": "secret"},
+            headers=session_headers("secret"),
             json={
                 "alert_auto_create": True,
                 "allow_same_name_variants": True,
@@ -2510,7 +2511,7 @@ def test_astro_automation_settings_endpoint_updates_runtime_service() -> None:
         assert app.state.astro_alert_service.alert_auto_create_enabled is True
         assert app.state.astro_alert_service.allow_same_name_variants is True
 
-        reloaded = client.get("/api/settings/astro-automation", headers={"X-Dashboard-Password": "secret"})
+        reloaded = client.get("/api/settings/astro-automation", headers=session_headers("secret"))
         assert reloaded.status_code == 200
         assert reloaded.json()["alert_auto_create"] is True
         assert reloaded.json()["allow_same_name_variants"] is True
@@ -2870,12 +2871,12 @@ def test_alert_history_endpoint_applies_global_message_template() -> None:
 
 
 def test_service_control_endpoints_report_status_and_restart_service() -> None:
-    app = create_app(settings=Settings(dashboard_password="secret"))
+    app = create_app(settings=Settings(dashboard_totp_secret=TEST_TOTP_SECRET, dashboard_password="secret"))
     controller = FakeServiceControl()
     app.state.service_controller = controller
     client = TestClient(app)
 
-    headers = {"X-Dashboard-Password": "secret"}
+    headers = session_headers("secret")
 
     status_response = client.get("/api/admin/service-control", headers=headers)
     assert status_response.status_code == 200
@@ -2889,7 +2890,7 @@ def test_service_control_endpoints_report_status_and_restart_service() -> None:
 
 
 def test_service_control_endpoints_require_password_even_when_dashboard_password_is_blank() -> None:
-    app = create_app(settings=Settings())
+    app = create_app(settings=Settings(dashboard_auth_disabled=True, ))
     controller = FakeServiceControl()
     app.state.service_controller = controller
     client = TestClient(app)
@@ -2926,13 +2927,13 @@ def test_astro_preview_endpoint_uses_saved_card_defaults(confirmed_market_valida
     store.set_opportunities([make_opportunity()])
     app = create_app(
         snapshot_store=store,
-        settings=Settings(dashboard_password="secret", database_url="sqlite:///:memory:"),
+        settings=Settings(dashboard_totp_secret=TEST_TOTP_SECRET, dashboard_password="secret", database_url="sqlite:///:memory:"),
     )
 
     with TestClient(app) as client:
         saved = client.put(
             "/api/settings/astro-card",
-            headers={"X-Dashboard-Password": "secret"},
+            headers=session_headers("secret"),
             json={
                 "max_trade_usdt": 55,
                 "leverage": 3,
@@ -2947,7 +2948,7 @@ def test_astro_preview_endpoint_uses_saved_card_defaults(confirmed_market_valida
         )
         assert saved.status_code == 200
 
-        response = client.get("/api/astro/preview/opp", headers={"X-Dashboard-Password": "secret"})
+        response = client.get("/api/astro/preview/opp", headers=session_headers("secret"))
 
     assert response.status_code == 200
     payload = response.json()
@@ -2969,7 +2970,7 @@ def test_astro_preview_endpoint_uses_env_defaults_before_settings_are_saved(conf
     store.set_opportunities([make_opportunity()])
     app = create_app(
         snapshot_store=store,
-        settings=Settings(
+        settings=Settings(dashboard_auth_disabled=True,
             database_url="sqlite:///:memory:",
             astro_default_max_trade_usdt=44,
             astro_default_leverage=5,
@@ -2997,7 +2998,7 @@ def test_astro_preview_endpoint_uses_saved_defaults_even_when_they_match_model_d
     store.set_opportunities([make_opportunity()])
     app = create_app(
         snapshot_store=store,
-        settings=Settings(
+        settings=Settings(dashboard_totp_secret=TEST_TOTP_SECRET,
             dashboard_password="secret",
             database_url="sqlite:///:memory:",
             astro_default_max_trade_usdt=44,
@@ -3011,7 +3012,7 @@ def test_astro_preview_endpoint_uses_saved_defaults_even_when_they_match_model_d
     with TestClient(app) as client:
         saved = client.put(
             "/api/settings/astro-card",
-            headers={"X-Dashboard-Password": "secret"},
+            headers=session_headers("secret"),
             json={
                 "max_trade_usdt": 10,
                 "leverage": 1,
@@ -3025,7 +3026,7 @@ def test_astro_preview_endpoint_uses_saved_defaults_even_when_they_match_model_d
         )
         assert saved.status_code == 200
 
-        response = client.get("/api/astro/preview/opp", headers={"X-Dashboard-Password": "secret"})
+        response = client.get("/api/astro/preview/opp", headers=session_headers("secret"))
 
     assert response.status_code == 200
     payload = response.json()
@@ -3048,7 +3049,7 @@ def test_astro_preview_endpoint_returns_404_for_missing_opportunity() -> None:
 
 def test_astro_status_endpoint_reports_dry_run_configuration() -> None:
     app = create_app(
-        settings=Settings(
+        settings=Settings(dashboard_auth_disabled=True,
             astro_sdk_base_url="https://127.0.0.1:8443",
             astro_admin_prefix="admin",
             astro_api_key="secret",
@@ -3073,7 +3074,7 @@ def test_astro_manual_card_create_endpoint_returns_action_result_for_seeded_oppo
     store.set_opportunities([make_opportunity()])
     app = create_app(
         snapshot_store=store,
-        settings=Settings(dashboard_password="secret", astro_manual_card_create=True),
+        settings=Settings(dashboard_totp_secret=TEST_TOTP_SECRET, dashboard_password="secret", astro_manual_card_create=True),
     )
     service = FakeAstroSubmitService()
     app.state.astro_alert_service = service
@@ -3081,7 +3082,7 @@ def test_astro_manual_card_create_endpoint_returns_action_result_for_seeded_oppo
 
     response = client.post(
         "/api/astro/opportunities/opp/card",
-        headers={"X-Dashboard-Password": "secret"},
+        headers=session_headers("secret"),
     )
 
     assert response.status_code == 200
@@ -3098,7 +3099,7 @@ def test_astro_manual_card_create_endpoint_warns_for_globally_blocked_symbol() -
     store.set_opportunities([make_opportunity()])
     app = create_app(
         snapshot_store=store,
-        settings=Settings(dashboard_password="secret", astro_manual_card_create=True),
+        settings=Settings(dashboard_totp_secret=TEST_TOTP_SECRET, dashboard_password="secret", astro_manual_card_create=True),
     )
     service = FakeAstroSubmitService()
     app.state.settings_repo = FakeSettingsRepository(
@@ -3109,7 +3110,7 @@ def test_astro_manual_card_create_endpoint_warns_for_globally_blocked_symbol() -
 
     response = client.post(
         "/api/astro/opportunities/opp/card",
-        headers={"X-Dashboard-Password": "secret"},
+        headers=session_headers("secret"),
     )
 
     assert response.status_code == 200
@@ -3126,7 +3127,7 @@ def test_astro_manual_card_create_endpoint_forwards_overrides_and_saves_defaults
     store.set_opportunities([make_opportunity()])
     app = create_app(
         snapshot_store=store,
-        settings=Settings(
+        settings=Settings(dashboard_totp_secret=TEST_TOTP_SECRET,
             dashboard_password="secret",
             database_url="sqlite:///:memory:",
             astro_manual_card_create=True,
@@ -3138,7 +3139,7 @@ def test_astro_manual_card_create_endpoint_forwards_overrides_and_saves_defaults
     with TestClient(app) as client:
         response = client.post(
             "/api/astro/opportunities/opp/card",
-            headers={"X-Dashboard-Password": "secret"},
+            headers=session_headers("secret"),
             json={
                 "max_trade_usdt": 88,
                 "leverage": 2,
@@ -3151,7 +3152,7 @@ def test_astro_manual_card_create_endpoint_forwards_overrides_and_saves_defaults
         )
         assert response.status_code == 200
 
-        saved = client.get("/api/settings/astro-card", headers={"X-Dashboard-Password": "secret"})
+        saved = client.get("/api/settings/astro-card", headers=session_headers("secret"))
 
     assert service.requests[0] is not None
     assert service.requests[0].max_trade_usdt == 88
@@ -3175,7 +3176,7 @@ def test_astro_manual_card_create_endpoint_warns_but_continues_when_order_book_v
     store.set_opportunities([make_opportunity()])
     app = create_app(
         snapshot_store=store,
-        settings=Settings(
+        settings=Settings(dashboard_totp_secret=TEST_TOTP_SECRET,
             dashboard_password="secret",
             database_url="sqlite:///:memory:",
             astro_manual_card_create=True,
@@ -3207,7 +3208,7 @@ def test_astro_manual_card_create_endpoint_warns_but_continues_when_order_book_v
     with TestClient(app) as client:
         response = client.post(
             "/api/astro/opportunities/opp/card",
-            headers={"X-Dashboard-Password": "secret"},
+            headers=session_headers("secret"),
             json={"max_trade_usdt": 80, "max_notional": 80},
         )
 
@@ -3235,7 +3236,7 @@ def test_astro_manual_card_create_endpoint_uses_saved_defaults_with_real_service
     store.set_opportunities([make_opportunity()])
     app = create_app(
         snapshot_store=store,
-        settings=Settings(
+        settings=Settings(dashboard_totp_secret=TEST_TOTP_SECRET,
             dashboard_password="secret",
             database_url="sqlite:///:memory:",
             astro_manual_card_create=True,
@@ -3252,7 +3253,7 @@ def test_astro_manual_card_create_endpoint_uses_saved_defaults_with_real_service
     with TestClient(app) as client:
         saved = client.put(
             "/api/settings/astro-card",
-            headers={"X-Dashboard-Password": "secret"},
+            headers=session_headers("secret"),
             json={
                 "max_trade_usdt": 77,
                 "leverage": 3,
@@ -3268,7 +3269,7 @@ def test_astro_manual_card_create_endpoint_uses_saved_defaults_with_real_service
 
         response = client.post(
             "/api/astro/opportunities/opp/card",
-            headers={"X-Dashboard-Password": "secret"},
+            headers=session_headers("secret"),
         )
 
     assert response.status_code == 200
@@ -3283,7 +3284,7 @@ def test_astro_manual_card_create_endpoint_uses_saved_defaults_with_real_service
 def test_astro_manual_card_create_endpoint_requires_dashboard_password() -> None:
     store = SnapshotStore()
     store.set_opportunities([make_opportunity()])
-    app = create_app(snapshot_store=store, settings=Settings(dashboard_password="secret"))
+    app = create_app(snapshot_store=store, settings=Settings(dashboard_totp_secret=TEST_TOTP_SECRET, dashboard_password="secret"))
     client = TestClient(app)
 
     response = client.post("/api/astro/opportunities/opp/card")
@@ -3292,12 +3293,12 @@ def test_astro_manual_card_create_endpoint_requires_dashboard_password() -> None
 
 
 def test_astro_manual_card_create_endpoint_returns_404_for_missing_opportunity() -> None:
-    app = create_app(settings=Settings(dashboard_password="secret"))
+    app = create_app(settings=Settings(dashboard_totp_secret=TEST_TOTP_SECRET, dashboard_password="secret"))
     client = TestClient(app)
 
     response = client.post(
         "/api/astro/opportunities/missing/card",
-        headers={"X-Dashboard-Password": "secret"},
+        headers=session_headers("secret"),
     )
 
     assert response.status_code == 404
@@ -3398,14 +3399,14 @@ def test_index_component_watchlist_endpoints_manage_monitored_symbols() -> None:
 
 
 def test_announcement_settings_endpoint_round_trip() -> None:
-    app = create_app(settings=Settings(dashboard_password="secret"))
+    app = create_app(settings=Settings(dashboard_totp_secret=TEST_TOTP_SECRET, dashboard_password="secret"))
     repo = FakeSettingsRepository(RiskSettings())
     app.state.settings_repo = repo
     client = TestClient(app)
 
     response = client.put(
         "/api/settings/announcements",
-        headers={"X-Dashboard-Password": "secret"},
+        headers=session_headers("secret"),
         json={
             "enabled": True,
             "poll_interval_seconds": 120,
@@ -3423,7 +3424,7 @@ def test_announcement_settings_endpoint_round_trip() -> None:
     assert response.json()["record_exchanges"] == ["okx", "bybit"]
     assert response.json()["alert_exchanges"] == ["bybit"]
     assert response.json()["launchpool_alerts_enabled"] is False
-    listed = client.get("/api/settings/announcements", headers={"X-Dashboard-Password": "secret"})
+    listed = client.get("/api/settings/announcements", headers=session_headers("secret"))
     assert listed.status_code == 200
     assert listed.json()["bootstrap_alerts_enabled"] is True
     assert listed.json()["launchpool_alerts_enabled"] is False
@@ -3541,7 +3542,7 @@ async def test_service_control_frontend_restart_is_reported_as_restarted() -> No
 
 def test_retired_monitor_endpoints_are_unavailable() -> None:
     app = create_app(
-        settings=Settings(database_url="sqlite:///:memory:"),
+        settings=Settings(dashboard_auth_disabled=True, database_url="sqlite:///:memory:"),
         start_background_workers=False,
     )
 
@@ -3557,3 +3558,6 @@ def test_retired_monitor_endpoints_are_unavailable() -> None:
             assert client.get(path).status_code == 404
         assert client.get("/api/health").status_code == 200
         assert client.get("/api/settings/announcements").status_code == 200
+
+
+pytestmark = [*([pytestmark] if "pytestmark" in globals() and not isinstance(pytestmark, list) else globals().get("pytestmark", [])), pytest.mark.usefixtures("legacy_auth_sessions")]

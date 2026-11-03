@@ -93,7 +93,7 @@ def test_market_cap_route_validates_selection_without_affecting_instrument_looku
         async def aclose(self):
             pass
 
-    app = create_app(settings=Settings(database_url="sqlite:///:memory:"))
+    app = create_app(settings=Settings(dashboard_auth_disabled=True, database_url="sqlite:///:memory:"))
     app.state.instrument_market_cap_service = Service()
     with TestClient(app) as client:
         response = client.get("/api/instrument-market-cap/BTC")
@@ -104,3 +104,6 @@ def test_market_cap_route_validates_selection_without_affecting_instrument_looku
     assert response.json()["status"] == "not_found"
     assert invalid.status_code == 422
     assert instrument.status_code == 200
+
+
+pytestmark = pytest.mark.usefixtures("legacy_auth_sessions")

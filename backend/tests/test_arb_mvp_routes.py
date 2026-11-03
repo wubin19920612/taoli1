@@ -1,3 +1,4 @@
+from auth_helpers import TEST_TOTP_SECRET
 from dataclasses import replace
 from unittest.mock import AsyncMock
 
@@ -22,7 +23,7 @@ def context(monkeypatch):
     opp = arb_opportunity()
     store = SnapshotStore()
     monkeypatch.setattr(store, "get_opportunities", lambda: [opp])
-    app = create_app(snapshot_store=store, settings=Settings(
+    app = create_app(snapshot_store=store, settings=Settings(dashboard_auth_disabled=True, dashboard_totp_secret=TEST_TOTP_SECRET,
         database_url="sqlite:///:memory:", dashboard_password="", arb_paper_url="http://paper.test",
         arb_paper_api_key="paper-secret", arb_live_url="http://live.test", arb_live_api_key="live-secret"))
     app.state.market_validation = None
@@ -80,7 +81,7 @@ def test_unconfigured_disabled_and_status_private(context):
     assert response.json()["enabled"] is False and response.json()["status"] == "disabled"
     add.assert_not_called()
     service.handle_manual_create.assert_not_called()
-    app.state.settings = replace(app.state.settings, dashboard_password="test-password")
+    app.state.settings = replace(app.state.settings, dashboard_password="test-password", dashboard_auth_disabled=False)
     assert client.get("/api/arb-mvp/status").status_code == 401
 
 
@@ -174,3 +175,6 @@ def test_client_configuration_and_transport_errors_return_failed_not_500(context
         "结果未知，请到 arb-mvp 界面确认是否已建卡，不要直接重试")
     assert len(calls) == (0 if invalid_url else 1)
     service.handle_manual_create.assert_not_called()
+
+
+pytestmark = pytest.mark.usefixtures("legacy_auth_sessions")

@@ -83,7 +83,7 @@ RETIRED_ENDPOINTS = (
 
 
 async def test_retired_endpoints_are_absent():
-    app = main.create_app(settings=Settings(database_url="sqlite:///:memory:", disabled_features=RETIRED_FEATURES),
+    app = main.create_app(settings=Settings(dashboard_auth_disabled=True, database_url="sqlite:///:memory:", disabled_features=RETIRED_FEATURES),
                           start_background_workers=False)
     paths = app.openapi()["paths"]
     assert len(RETIRED_ENDPOINTS) == 64
@@ -167,7 +167,7 @@ async def test_new_and_legacy_copy_lifespan_restarts_preserve_data(existing, sta
         stop_events.append(stop)
 
     monkeypatch.setattr(main, "_run_alert_loop", capture_alert_loop)
-    app = main.create_app(settings=Settings(database_url=f"sqlite:///{db_path}", disabled_features=RETIRED_FEATURES),
+    app = main.create_app(settings=Settings(dashboard_auth_disabled=True, database_url=f"sqlite:///{db_path}", disabled_features=RETIRED_FEATURES),
                           start_collector=True)
     supervisors = []
     for _ in range(2):
@@ -252,3 +252,6 @@ async def test_old_squeeze_columns_are_added_without_changing_rows(tmp_path):
             }
     finally:
         await db.close()
+
+
+pytestmark = pytest.mark.usefixtures("legacy_auth_sessions")

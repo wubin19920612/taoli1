@@ -1,3 +1,7 @@
+from auth_helpers import TEST_TOTP_SECRET, session_headers, IsolatedSessionLookup
+from app.core.config import Settings
+from app.core.security import require_dashboard_password
+from fastapi import Depends
 import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -161,10 +165,11 @@ async def test_cancelled_display_waiter_does_not_cancel_shared_read(sdk):
 
 def display_app(sdk):
     app = FastAPI()
-    app.include_router(astro_router, prefix="/api")
-    app.include_router(instruments_router, prefix="/api")
+    app.include_router(astro_router, prefix="/api", dependencies=[Depends(require_dashboard_password)])
+    app.include_router(instruments_router, prefix="/api", dependencies=[Depends(require_dashboard_password)])
     app.state.astro_client = sdk
-    app.state.settings = SimpleNamespace(dashboard_password="test-password")
+    app.state.settings = Settings(dashboard_password="test-password", dashboard_totp_secret=TEST_TOTP_SECRET)
+    app.state.auth_store = IsolatedSessionLookup()
     app.state.snapshot_store = SnapshotStore()
     return app
 
@@ -174,10 +179,10 @@ async def test_display_routes_share_cache_and_observe_write_invalidation(sdk):
     app = display_app(sdk)
     sdk.list_pairs.return_value = [{"name": "BTC", "type": "FF", "buyEx": "binance", "sellEx": "okx"}]
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
-        headers = {"X-Dashboard-Password": "test-password"}
+        headers = session_headers("test-password")
         pairs, instrument = await asyncio.gather(
             client.get("/api/astro/pairs", headers=headers),
-            client.get("/api/instruments/BTC"),
+            client.get("/api/instruments/BTC", headers=session_headers("test-password")),
         )
         assert pairs.status_code == instrument.status_code == 200
         assert pairs.json() == sdk.list_pairs.return_value
@@ -185,7 +190,7 @@ async def test_display_routes_share_cache_and_observe_write_invalidation(sdk):
         sdk.list_pairs.assert_awaited_once()
         await sdk.update_pair({"name": "BTC", "status": False})
         sdk.list_pairs.return_value = []
-        refreshed = await client.get("/api/instruments/BTC")
+        refreshed = await client.get("/api/instruments/BTC", headers=session_headers("test-password"))
         assert refreshed.json()["astro_routes"] == []
         assert (await client.get("/api/astro/pairs", headers=headers)).json() == []
         assert sdk.list_pairs.await_count == 2
@@ -205,12 +210,12 @@ async def test_display_auth_and_upstream_401_are_preserved_without_caching():
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
             assert (await client.get("/api/astro/pairs")).status_code == 401
             assert not upstream_calls
-            headers = {"X-Dashboard-Password": "test-password"}
+            headers = session_headers("test-password")
             for _ in range(2):
                 response = await client.get("/api/astro/pairs", headers=headers)
                 assert response.status_code == 401
                 assert response.json()["detail"] == "Astro HTTP 401: bad signature"
-            instrument = await client.get("/api/instruments/BTC")
+            instrument = await client.get("/api/instruments/BTC", headers=session_headers("test-password"))
             assert instrument.status_code == 200
             assert "Astro HTTP 401: bad signature" in instrument.json()["route_errors"]["astro"]
             assert len(upstream_calls) == 3

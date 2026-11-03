@@ -64,24 +64,24 @@ describe("API error messages", () => {
     );
   });
 
-  it("exposes the HTTP status and translates a dashboard password rejection", async () => {
-    mockResponse(JSON.stringify({ detail: "Invalid dashboard password" }), 401, "application/json");
+  it("exposes the HTTP status and translates a session rejection", async () => {
+    mockResponse(JSON.stringify({ detail: "Authentication required" }), 401, "application/json");
 
     await expect(deletePairSpreadPreset("BTC")).rejects.toMatchObject({
       status: 401,
-      message: "本设备未保存有效的面板密码，请验证密码后重试。"
+      message: "登录已失效，请重新登录。"
     });
   });
 
-  it("tries a supplied password without overwriting the saved credential", async () => {
+  it("uses same-origin cookies without sending a stored legacy password", async () => {
     window.localStorage.setItem("dashboard_password", "old-password");
     mockResponse(JSON.stringify({ ok: true }), 200, "application/json");
 
-    await deletePairSpreadPreset("io:OAI/OPENAI", "candidate-password");
+    await deletePairSpreadPreset("io:OAI/OPENAI");
 
     const [url, options] = vi.mocked(fetch).mock.calls[0];
     expect(String(url)).toContain("io%3AOAI%2FOPENAI");
-    expect(new Headers(options?.headers).get("X-Dashboard-Password")).toBe("candidate-password");
-    expect(window.localStorage.getItem("dashboard_password")).toBe("old-password");
+    expect(new Headers(options?.headers).get("X-Dashboard-Password")).toBeNull();
+    expect(options?.credentials).toBe("same-origin");
   });
 });
