@@ -28,6 +28,7 @@ async def context(tmp_path, monkeypatch):
     app.state.settings = Settings(
         environment="production", dashboard_password="synthetic-login-password",
         dashboard_totp_secret=TEST_TOTP_SECRET, dashboard_api_token="a" * 64,
+        trusted_proxy_ips="127.0.0.1",
     )
     app.state.auth_store = store
     app.state.feishu_notifier = SimpleNamespace(send_text=AsyncMock())
@@ -115,12 +116,12 @@ async def test_same_code_concurrent_connections_and_reopen(context, tmp_path):
                 ip="127.0.0.1", browser="Test", now=NOW, days=30)
     try:
         results = await asyncio.gather(store.login(**args), other.login(**args))
-        assert sum(token is not None for token, _ in results) == 1
+        assert sum(result.token is not None for result in results) == 1
     finally:
         await other.close()
     reopened = await AuthStore.open(str(tmp_path / "auth.db"))
     try:
-        assert (await reopened.login(**args))[0] is None
+        assert (await reopened.login(**args)).token is None
     finally:
         await reopened.close()
 
@@ -140,15 +141,15 @@ async def test_ip_lock_uniform_errors_unlock_and_notification_failure(context, m
     assert result.status_code == 200
 
 
-async def test_global_lock_and_unlock(context, monkeypatch):
-    app, client, _ = context
+async def test_twenty_failures_do_not_lock_other_ips(context):
+    app, client, store = context
     for index in range(20):
         result = await sign_in(app, client, code="bad", headers={"x-forwarded-for": f"192.0.2.{index + 1}"})
         assert result.status_code == 401
-    assert (await sign_in(app, client, headers={"x-forwarded-for": "198.51.100.1"})).status_code == 401
+    assert (await sign_in(app, client, headers={"x-forwarded-for": "198.51.100.1"})).status_code == 200
     assert app.state.feishu_notifier.send_text.call_count == 1
-    monkeypatch.setattr("app.core.security.time.time", lambda: NOW + 900)
-    assert (await sign_in(app, client, code=totp_at(TEST_TOTP_SECRET, int((NOW + 900) // 30)))).status_code == 200
+    async with store.db.execute("SELECT COUNT(*) FROM auth_locks WHERE scope = 'global'") as cursor:
+        assert (await cursor.fetchone())[0] == 0
 
 
 async def test_expiry_logout_and_revoke_all(context, monkeypatch):
@@ -223,11 +224,13 @@ async def test_storage_failure_and_invalid_unicode_are_sanitized(context, monkey
 
 
 @pytest.mark.parametrize("peer,forwarded,expected", [
-    ("127.0.0.1", "192.0.2.1, 198.51.100.2", "198.51.100.2"),
-    ("172.20.0.2", "192.0.2.1", "192.0.2.1"),
+    ("172.30.0.2", "192.0.2.1, 198.51.100.2", "198.51.100.2"),
+    ("172.30.0.3", "192.0.2.1", "192.0.2.1"),
+    ("172.20.0.2", "192.0.2.1", "172.20.0.2"),
+    ("127.0.0.1", "192.0.2.1", "127.0.0.1"),
     ("198.51.100.3", "192.0.2.1", "198.51.100.3"),
-    ("127.0.0.1", "invalid", "127.0.0.1"),
-    ("127.0.0.1", "2001:db8::1", "2001:db8::1"),
+    ("172.30.0.2", "invalid", "172.30.0.2"),
+    ("172.30.0.2", "2001:db8::1", "2001:db8::1"),
 ])
 def test_trusted_proxy(peer, forwarded, expected):
     app = SimpleNamespace(state=SimpleNamespace(settings=Settings()))

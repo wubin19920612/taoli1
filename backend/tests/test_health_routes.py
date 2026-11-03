@@ -49,7 +49,7 @@ async def test_legacy_health_exact_fields_and_filters_are_preserved(app, client)
     app.state.settings_repo = SimpleNamespace(
         get_risk_settings=AsyncMock(return_value=RiskSettings(ignored_exchanges=["okx"])),
     )
-    response = await client.get("/api/health")
+    response = await client.get("/api/health", headers=session_headers("test-password"))
     assert response.status_code == 200
     # Capture of the legacy contract; no supervision fields added to it.
     assert response.json() == {

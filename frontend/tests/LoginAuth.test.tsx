@@ -70,6 +70,25 @@ describe("session login", () => {
     expect(loginReturnPath()).toBe("/");
   });
 
+  it("keeps a rate-limited login on the form without storing or echoing credentials", async () => {
+    redirectToLogin();
+    const fetchMock = vi.fn(async () => Response.json({ detail: "登录尝试过于频繁，请稍后重试" },
+      { status: 429, headers: { "Retry-After": "60" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AuthGate><div>private</div></AuthGate>);
+    const values = ["synthetic-private-input", "654321"];
+    fireEvent.change(screen.getByLabelText("密码"), { target: { value: values[0] } });
+    fireEvent.change(screen.getByLabelText("6 位验证码"), { target: { value: values[1] } });
+    fireEvent.submit(screen.getByLabelText("密码").closest("form")!);
+    const alert = await screen.findByRole("alert");
+    expect(values.every(value => !alert.textContent?.includes(value))).toBe(true);
+    expect((screen.getByLabelText("密码") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("6 位验证码") as HTMLInputElement).value).toBe("");
+    expect(location.pathname).toBe("/login");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(localStorage.length + sessionStorage.length).toBe(0);
+  });
+
   it.each([() => listMarkets(), () => listOpportunities({}), () => logout()])("redirects all API call styles on 401", async (call) => {
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({}, { status: 401 })));
     await expect(call()).rejects.toThrow();

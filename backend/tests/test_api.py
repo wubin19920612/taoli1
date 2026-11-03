@@ -2093,13 +2093,15 @@ def test_health_endpoint_applies_global_symbol_and_exchange_exclusions() -> None
     ])
     store.set_opportunities([blacklisted, ignored_exchange, clean])
     store.set_exchange_errors({"gate:spot": "timeout", "binance:spot": "timeout"})
-    app = create_app(snapshot_store=store)
+    app = create_app(snapshot_store=store, settings=Settings(
+        dashboard_password="test-password", dashboard_totp_secret=TEST_TOTP_SECRET,
+    ))
     app.state.settings_repo = FakeSettingsRepository(
         RiskSettings(excluded_symbols=["BADUSDT"], ignored_exchanges=["gate"])
     )
     client = TestClient(app)
 
-    response = client.get("/api/health")
+    response = client.get("/api/health", headers=session_headers("test-password"))
 
     assert response.status_code == 200
     assert response.json()["markets"] == 1
@@ -2108,12 +2110,14 @@ def test_health_endpoint_applies_global_symbol_and_exchange_exclusions() -> None
 
 
 def test_health_endpoint_reports_exchange_poll_states() -> None:
-    app = create_app()
+    app = create_app(settings=Settings(
+        dashboard_password="test-password", dashboard_totp_secret=TEST_TOTP_SECRET,
+    ))
     app.state.market_collector = FakeCollector()
     app.state.settings_repo = FakeSettingsRepository(RiskSettings(ignored_exchanges=["gate"]))
     client = TestClient(app)
 
-    response = client.get("/api/health")
+    response = client.get("/api/health", headers=session_headers("test-password"))
 
     assert response.status_code == 200
     payload = response.json()

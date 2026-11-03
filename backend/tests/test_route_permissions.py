@@ -182,4 +182,7 @@ async def test_startup_warns_only_when_password_is_empty(caplog, password):
     assert len(warnings) == (0 if password else 1)
     if warnings:
         assert warnings[0].levelno == logging.WARNING
-        assert "all API routes are unprotected" in warnings[0].message
+        assert warnings[0].message == (
+            "DASHBOARD_PASSWORD is empty; protected API routes deny access "
+            "unless explicit non-production auth bypass is enabled"
+        )
