@@ -46,20 +46,24 @@ async def login(request: Request, response: Response, tasks: BackgroundTasks):
     ip, browser, now = client_ip(request), browser_label(request), time.time()
     password_ok = constant_time_equal(settings.dashboard_password, password if valid_shape else "")
     try:
-        token, locked = await request.app.state.auth_store.login(
+        result = await request.app.state.auth_store.login(
             password_ok=password_ok and valid_shape, secret=settings.dashboard_totp_secret,
             code=code if valid_shape else "", ip=ip, browser=browser, now=now,
             days=settings.dashboard_session_days,
         )
     except Exception:
         raise HTTPException(503, "Authentication unavailable") from None
-    if locked:
+    if result.rate_limited:
+        if result.notify_rate_limit:
+            await notify_login(request.app.state.feishu_notifier, "登录全局限速", ip, browser, now)
+        raise HTTPException(429, "登录尝试过于频繁，请稍后重试", headers={"Retry-After": "60"})
+    if result.ip_locked:
         # HTTPException responses do not run injected BackgroundTasks.
         await notify_login(request.app.state.feishu_notifier, "登录锁定", ip, browser, now)
-    if not token:
+    if not result.token:
         raise HTTPException(401, LOGIN_ERROR)
     tasks.add_task(notify_login, request.app.state.feishu_notifier, "登录成功", ip, browser, now)
-    response.set_cookie(COOKIE_NAME, token, max_age=settings.dashboard_session_days * 86400,
+    response.set_cookie(COOKIE_NAME, result.token, max_age=settings.dashboard_session_days * 86400,
                         httponly=True, secure=True, samesite="strict", path="/")
     response.headers["Cache-Control"] = "no-store"
     return {"ok": True}

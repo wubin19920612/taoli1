@@ -4,6 +4,7 @@ import hashlib
 import secrets
 import sqlite3
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 
 import aiosqlite
 
@@ -22,7 +23,19 @@ INSERT OR IGNORE INTO auth_totp_state VALUES (1, -1);
 CREATE TABLE IF NOT EXISTS auth_failures (ip TEXT NOT NULL, failed_at REAL NOT NULL);
 CREATE INDEX IF NOT EXISTS auth_failures_time ON auth_failures(failed_at);
 CREATE TABLE IF NOT EXISTS auth_locks (scope TEXT PRIMARY KEY, until_at REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS auth_login_attempts (attempted_at REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS auth_rate_notice (
+    singleton INTEGER PRIMARY KEY CHECK(singleton = 1), last_sent_at REAL NOT NULL
+);
 """
+
+
+@dataclass(frozen=True)
+class LoginResult:
+    token: str | None = field(default=None, repr=False)
+    ip_locked: bool = False
+    rate_limited: bool = False
+    notify_rate_limit: bool = False
 
 
 def session_hash(token: str) -> str:
@@ -40,6 +53,8 @@ class AuthStore:
         db.row_factory = aiosqlite.Row
         await db.execute("PRAGMA busy_timeout=5000")
         await db.executescript(AUTH_SCHEMA)
+        # Retire locks created by the previous global-failure policy.
+        await db.execute("DELETE FROM auth_locks WHERE scope = 'global'")
         await db.commit()
         return cls(db)
 
@@ -60,14 +75,27 @@ class AuthStore:
     async def login(self, *, password_ok, secret, code, ip, browser, now, days):
         """Consume a code and issue its session atomically, across processes too."""
         async with self.transaction():
+            # Shared rolling admission budget, not a global lock. Denied attempts
+            # do not enter the window or extend it. All admitted attempts count.
+            await self.db.execute("DELETE FROM auth_login_attempts WHERE attempted_at <= ?", (now - 60,))
+            async with self.db.execute("SELECT COUNT(*) FROM auth_login_attempts") as cursor:
+                attempts = (await cursor.fetchone())[0]
+            if attempts >= 30:
+                async with self.db.execute("SELECT last_sent_at FROM auth_rate_notice WHERE singleton = 1") as cursor:
+                    notice = await cursor.fetchone()
+                notify = notice is None or now - notice[0] >= 900
+                if notify:
+                    await self.db.execute("INSERT OR REPLACE INTO auth_rate_notice VALUES (1, ?)", (now,))
+                return LoginResult(rate_limited=True, notify_rate_limit=notify)
+            await self.db.execute("INSERT INTO auth_login_attempts VALUES (?)", (now,))
             await self.db.execute("DELETE FROM auth_failures WHERE failed_at <= ?", (now - 900,))
             await self.db.execute("DELETE FROM auth_locks WHERE until_at <= ?", (now,))
             await self.db.execute("DELETE FROM auth_sessions WHERE expires_at <= ? OR revoked_at IS NOT NULL", (now,))
             async with self.db.execute(
-                "SELECT 1 FROM auth_locks WHERE scope IN ('global', ?)", ("ip:" + ip,),
+                "SELECT 1 FROM auth_locks WHERE scope = ?", ("ip:" + ip,),
             ) as cursor:
                 if await cursor.fetchone():
-                    return None, False
+                    return LoginResult()
             async with self.db.execute("SELECT last_counter FROM auth_totp_state WHERE singleton = 1") as cursor:
                 last = (await cursor.fetchone())[0]
             candidate = matching_counter(secret, code, now, last)
@@ -75,22 +103,20 @@ class AuthStore:
             if counter is None:
                 await self.db.execute("INSERT INTO auth_failures VALUES (?, ?)", (ip, now))
                 async with self.db.execute(
-                    "SELECT COUNT(*), COALESCE(SUM(ip = ?), 0) FROM auth_failures", (ip,),
+                    "SELECT COUNT(*) FROM auth_failures WHERE ip = ?", (ip,),
                 ) as cursor:
-                    total, per_ip = await cursor.fetchone()
-                locked = False
-                for scope, count, limit in (("global", total, 20), ("ip:" + ip, per_ip, 5)):
-                    if count >= limit:
-                        await self.db.execute("INSERT OR REPLACE INTO auth_locks VALUES (?, ?)", (scope, now + 900))
-                        locked = True
-                return None, locked
+                    per_ip = (await cursor.fetchone())[0]
+                locked = per_ip >= 5
+                if locked:
+                    await self.db.execute("INSERT OR REPLACE INTO auth_locks VALUES (?, ?)", ("ip:" + ip, now + 900))
+                return LoginResult(ip_locked=locked)
             await self.db.execute("UPDATE auth_totp_state SET last_counter = ? WHERE singleton = 1", (counter,))
             token = secrets.token_hex(32)
             await self.db.execute(
                 "INSERT INTO auth_sessions VALUES (?, ?, ?, ?, ?, ?, NULL)",
                 (session_hash(token), now, now + days * 86400, now, ip, browser),
             )
-            return token, False
+            return LoginResult(token=token)
 
     async def authenticate(self, token, now):
         if not token or len(token) != 64 or any(c not in "0123456789abcdef" for c in token):

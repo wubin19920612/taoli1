@@ -1,7 +1,8 @@
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, HTTPException, Request, Response
 
+from app.core.security import require_authentication
 from app.models.settings import RiskSettings
 from app.services.data_filters import (
     filter_exchange_errors,
@@ -37,7 +38,13 @@ def _exchange_states(request: Request, settings: RiskSettings) -> dict[str, dict
 
 
 @router.get("/health")
-async def health(request: Request) -> dict:
+async def health(request: Request, response: Response) -> dict:
+    # The same URL has public and authenticated representations; do not cache it.
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        await require_authentication(request, allow_development_bypass=False)
+    except HTTPException:
+        return {"status": "ok"}
     store = request.app.state.snapshot_store
     settings = await _risk_settings(request)
     return {
@@ -69,7 +76,7 @@ async def ready(request: Request, response: Response) -> dict:
         if age is None or not 0 <= age < max_age:
             reasons.append("snapshot is missing or stale")
     response.status_code = 503 if reasons else 200
-    return {"status": "not_ready" if reasons else "ready", "reasons": reasons}
+    return {"status": "not_ready" if reasons else "ready"}
 
 
 @router.get("/health/detail")

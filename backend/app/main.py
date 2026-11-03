@@ -817,7 +817,7 @@ def create_app(
         stop_event = asyncio.Event()
         app.state.hyperliquid_bbo_stream = None
         if not app.state.settings.dashboard_password:
-            logger.warning("DASHBOARD_PASSWORD is empty; all API routes are unprotected")
+            logger.warning("DASHBOARD_PASSWORD is empty; protected API routes deny access unless explicit non-production auth bypass is enabled")
         db_path = _sqlite_path(app_settings)
         _ensure_database_parent(db_path)
         db = await connect_database(db_path, recover_stale_snapshots=True)

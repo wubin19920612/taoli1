@@ -74,9 +74,9 @@ async def require_dashboard_password(request: Request) -> None:
     await require_authentication(request)
 
 
-async def require_authentication(request: Request, *, session_only=False) -> None:
+async def require_authentication(request: Request, *, session_only=False, allow_development_bypass=True) -> None:
     settings = request.app.state.settings
-    if not session_only and development_bypass(settings):
+    if not session_only and allow_development_bypass and development_bypass(settings):
         return
     if not auth_configured(settings):
         raise HTTPException(401, "Authentication required")
