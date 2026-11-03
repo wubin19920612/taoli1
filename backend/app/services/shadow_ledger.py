@@ -1,11 +1,14 @@
 """Paper observations only. No account, order, or opportunity-history dependencies."""
 
 import json
+import heapq
+from collections import defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from app.services.fake_opportunity import opportunity_keys, prepare_markets
+from app.services.fake_opportunity import MarketChanges, opportunity_keys, prepare_markets
 from app.services.spread_engine import _market_observed_at
 
 VARIANTS = ("conv-0.1", "conv-half")
@@ -50,6 +53,45 @@ def funding_state(market):
     }
 
 
+class TradeRow(dict):
+    """Variants share immutable entry metadata; only accounting fields diverge."""
+    __slots__ = ("common",)
+
+    def __init__(self, common, **values):
+        super().__init__(values)
+        self.common = common
+
+    def __missing__(self, key):
+        return self.common[key]
+
+    def payload(self):
+        return {**self.common, **self}
+
+
+class PendingRows(Mapping):
+    """Retain owned rows, materializing at most one write chunk at a time."""
+    def __init__(self):
+        self.rows = {}
+
+    def queue(self, row, position):
+        self.rows[row["id"]] = (row, position)
+
+    def __getitem__(self, key):
+        row, position = self.rows[key]
+        payload = row.payload() if isinstance(row, TradeRow) else dict(row)
+        payload["tracking"] = position.state()
+        return payload
+
+    def __iter__(self):
+        return iter(self.rows)
+
+    def __len__(self):
+        return len(self.rows)
+
+    def __delitem__(self, key):
+        del self.rows[key]
+
+
 @dataclass(slots=True)
 class Position:
     keys: tuple
@@ -75,8 +117,13 @@ class ShadowLedger:
         self.cooldowns = {}
         self.open_count = 0
         self.dropped = 0
-        self.pending = {}
+        self.pending = PendingRows()
         self.checkpoint_at = 0.0
+        self.by_market = defaultdict(set)
+        self.changes = MarketChanges()
+        self.deadlines = {}
+        self.timers = []
+        self.recomputed = 0
 
     def restore(self, rows, cooldowns):
         positions = {}
@@ -90,16 +137,34 @@ class ShadowLedger:
         self.positions = positions
         self.open_count = len(rows)
         self.cooldowns = cooldowns
+        self.by_market.clear()
+        self.deadlines.clear()
+        self.timers.clear()
+        for key, position in positions.items():
+            for market in position.keys:
+                self.by_market[market].add(key)
+            self._schedule(key, position, position.opened)
+
+    def _schedule(self, key, position, ts):
+        due = min(min(position.last_seen) + 600, position.opened + 172800)
+        if ts < position.opened + 86400:
+            due = min(due, position.opened + 86400)
+        for schedule in position.funding:
+            if schedule["next"] is not None and schedule["next"] > ts:
+                due = min(due, schedule["next"])
+        self.deadlines[key] = due
+        heapq.heappush(self.timers, (due, key))
 
     def _queue(self, position, rows=None):
-        state = position.state()
         for row in position.rows if rows is None else rows:
-            # Freeze at flush time; shared state is only owned by this consumer.
-            self.pending[row["id"]] = {**row, "tracking": state}
+            self.pending.queue(row, position)
 
     @staticmethod
     def _funding(position, legs, now):
         total, unknown = 0.0, 0
+        if all(s["next"] is None and (m is None or m.funding_next_time is None)
+               for s, m in zip(position.funding, legs)):
+            return total, unknown
         for index, (schedule, market) in enumerate(zip(position.funding, legs)):
             if schedule["spot"]:
                 continue
@@ -130,14 +195,26 @@ class ShadowLedger:
                     schedule["interval"] = (market.funding_interval_hours or 0) * 3600
         return total, unknown
 
-    def process(self, markets, opportunities, now, annotations=None, prepared=None):
+    def process(self, markets, opportunities, now, annotations=None, prepared=None, changed=None):
         if not self.enabled:
             return
         ts = now.timestamp()
         prepared = prepared if prepared is not None else prepare_markets(markets, now)
         self.cooldowns = {k: v for k, v in self.cooldowns.items() if ts - v < 600}
         checkpoint = ts >= self.checkpoint_at
-        for op_id, position in list(self.positions.items()):
+        changed = self.changes.update(prepared) if changed is None else changed
+        affected = set()
+        for key in changed:
+            affected.update(self.by_market.get(key, ()))
+        while self.timers and self.timers[0][0] <= ts:
+            due, key = heapq.heappop(self.timers)
+            if self.deadlines.get(key) == due:
+                affected.add(key)
+        self.recomputed = len(affected)
+        for op_id in affected:
+            position = self.positions.get(op_id)
+            if position is None:
+                continue
             buy_info, sell_info = prepared.get(position.keys[0]), prepared.get(position.keys[1])
             buy_fresh, sell_fresh = buy_info is not None and buy_info[2], sell_info is not None and sell_info[2]
             if buy_fresh:
@@ -156,8 +233,7 @@ class ShadowLedger:
             if (not stale and buy_fresh and sell_fresh and not funding and not unknown
                     and holding < 86400 and max(0.1, position.open_spread / 2) < close
                     < position.open_spread + max(position.open_spread, 1)):
-                if checkpoint:
-                    self._queue(position)
+                self._schedule(op_id, position, ts)
                 continue
             remaining = []
             closed = []
@@ -193,9 +269,18 @@ class ShadowLedger:
             position.rows = remaining
             if not remaining:
                 del self.positions[op_id]
-            elif checkpoint or funding or unknown:
-                self._queue(position)
+                self.deadlines.pop(op_id, None)
+                for key in position.keys:
+                    self.by_market[key].discard(op_id)
+                    if not self.by_market[key]:
+                        del self.by_market[key]
+            else:
+                self._schedule(op_id, position, ts)
+                if funding or unknown:
+                    self._queue(position)
         if checkpoint:
+            for position in self.positions.values():
+                self._queue(position)
             self.checkpoint_at = ts + 60
         for op in opportunities:
             if op.open_spread_pct < self.minimum or op.id in self.positions or op.id in self.cooldowns:
@@ -225,18 +310,32 @@ class ShadowLedger:
                 spread_tier=spread_tier(op.open_spread_pct), liquidity=tier,
                 routes="/".join("+".join(r) if r else "none" for r in routes),
                 strategy_version=STRATEGY_VERSION, buy_quote_age_seconds=ages[0], sell_quote_age_seconds=ages[1],
-                fake_score=fields.get("fake_score", op.fake_score), fake_reasons=fields.get("fake_reasons", op.fake_reasons),
+                fake_score=fields.get("fake_score", op.fake_score), fake_reasons=list(fields.get("fake_reasons", op.fake_reasons)),
                 fake_flag=fields.get("fake_flag", op.fake_flag), executable=fields.get("executable", op.executable),
             )
             position = Position(keys, ts, op.open_spread_pct,
                                 [legs[0].bid, legs[1].ask], [ts - a for a in ages],
                                 [funding_state(m) for m in legs],
-                                [{**common, "id": uuid4().hex, "variant": v} for v in VARIANTS])
+                                [TradeRow(common, id=uuid4().hex, variant=v) for v in VARIANTS])
+            self._funding(position, legs, ts)
             self.positions[op.id] = position
+            for key in keys:
+                self.by_market[key].add(op.id)
+            self._schedule(op.id, position, ts)
             self.open_count += len(VARIANTS)
             self._queue(position)
 
+        # Replaced deadlines must not accumulate across millions of quote ticks.
+        if len(self.timers) > max(64, 2 * len(self.positions)):
+            self.timers = [(due, key) for key, due in self.deadlines.items()]
+            heapq.heapify(self.timers)
+
     async def flush(self, repository):
-        if self.pending:
-            await repository.save_batch(list(self.pending.values()))
-            self.pending.clear()
+        # Serialization and this coroutine run on the runtime's worker loop.
+        # Only successful chunks leave pending, so retries remain bounded/idempotent.
+        keys = list(self.pending)
+        for offset in range(0, len(keys), 200):
+            batch = keys[offset:offset + 200]
+            await repository.save_batch([self.pending[key] for key in batch])
+            for key in batch:
+                del self.pending[key]

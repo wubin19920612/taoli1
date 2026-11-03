@@ -58,20 +58,38 @@ def prepare_markets(markets, now):
     ts = now.timestamp()
     result = {}
     for m in markets:
-        d = m.__dict__
-        key = _identity(d["exchange"], d["market_type"], d["raw_symbol"], d["dex"],
-                        d["symbol_alias_price_multiplier"], d["contract_size_multiplier"])
+        key = market_key(m)
         observed = _market_observed_at(m).timestamp()
         result[key] = (m, observed, 0 <= ts - observed <= 10 and _has_executable_book(m))
     return result
 
 
+def market_key(m):
+    return _identity(m.exchange, m.market_type, m.raw_symbol, m.dex,
+                     m.symbol_alias_price_multiplier, m.contract_size_multiplier)
+
+
 def opportunity_keys(op):
-    d = op.__dict__
-    def key(side):
-        return _identity(d[f"{side}_exchange"], d[f"{side}_market_type"], d[f"{side}_raw_symbol"] or "",
-                         d[f"{side}_dex"], d[f"{side}_price_multiplier"], d[f"{side}_contract_size_multiplier"])
-    return key("buy"), key("sell")
+    return (_identity(op.buy_exchange, op.buy_market_type, op.buy_raw_symbol or "", op.buy_dex,
+                      op.buy_price_multiplier, op.buy_contract_size_multiplier),
+            _identity(op.sell_exchange, op.sell_market_type, op.sell_raw_symbol or "", op.sell_dex,
+                      op.sell_price_multiplier, op.sell_contract_size_multiplier))
+
+
+class MarketChanges:
+    """Compare quote content, not object identity (callers may reuse models)."""
+    def __init__(self):
+        self.previous = {}
+
+    def update(self, prepared):
+        current = {k: (observed, fresh, m.bid, m.ask, m.funding_rate_pct,
+                       m.funding_next_time, m.funding_interval_hours, m.asset_id,
+                       m.symbol, m.identity_collision)
+                   for k, (m, observed, fresh) in prepared.items()}
+        changed = {k for k, value in current.items() if self.previous.get(k) != value}
+        changed.update(self.previous.keys() - current.keys())
+        self.previous = current
+        return changed
 
 
 @dataclass(slots=True)
@@ -90,20 +108,40 @@ class FakeOpportunityScorer:
         self.max_series = max_series
         self.dropped = 0
         self.last_prune_minute = None
+        self.changes = MarketChanges()
+        self.groups = defaultdict(dict)
+        self.assets = {}
+        self.hard = set()
+        self.frozen = set()
 
-    def score(self, markets, opportunities, now, prepared=None):
+    def score(self, markets, opportunities, now, prepared=None, changed=None):
         ts = now.timestamp()
         minute = int(ts // 60)
         # Expire absent keys as well as per-key rings: changing listings cannot
         # accumulate an unbounded dictionary over a long-running process.
-        if minute != self.last_prune_minute:
+        new_minute = minute != self.last_prune_minute
+        if new_minute:
             self.prices = {k: v for k, v in self.prices.items() if ts - v.seen <= 900}
             self.spreads = {k: v for k, v in self.spreads.items() if minute - v[-1][0] < 60}
             self.last_prune_minute = minute
-        groups = defaultdict(list)
         prepared = prepared if prepared is not None else prepare_markets(markets, now)
-        for key, (market, _, fresh) in prepared.items():
-            if not fresh:
+        changed = self.changes.update(prepared) if changed is None else changed
+        dirty = set(self.groups) if new_minute else set()
+        if new_minute:
+            changed = changed | {key for key, info in prepared.items() if info[2]}
+        for key in changed:
+            old_asset = self.assets.get(key)
+            info = prepared.get(key)
+            market = info[0] if info else None
+            asset = ((market.asset_id or market.symbol) if info and info[2]
+                     and not (market.identity_collision and not market.asset_id) else None)
+            if old_asset is not None and old_asset != asset:
+                self.groups[old_asset].pop(key, None)
+                self.assets.pop(key, None)
+                dirty.add(old_asset)
+                self.hard.discard(key)
+                self.frozen.discard(key)
+            if info is None or not info[2]:
                 continue
             mid = (market.bid + market.ask) / 2
             state = self.prices.get(key)
@@ -125,9 +163,19 @@ class FakeOpportunityScorer:
             # Reviewed incompatible identities must not vote on each other's price.
             if market.identity_collision and not market.asset_id:
                 continue
-            groups[asset].append((market.exchange.lower(), key, state))
-        hard, frozen = set(), set()
-        for rows in groups.values():
+            if key not in self.groups[asset]:
+                self.assets[key] = asset
+                self.groups[asset][key] = (market.exchange.lower(), key, state)
+            dirty.add(asset)
+        hard, frozen = self.hard, self.frozen
+        for asset in dirty:
+            members = self.groups[asset]
+            if not members:
+                del self.groups[asset]
+                continue
+            hard.difference_update(members)
+            frozen.difference_update(members)
+            rows = members.values()
             can_have_outlier = len(rows) >= 3 and len({ex for ex, _, _ in rows}) >= 3
             if not can_have_outlier and not any(ts - state.changed >= 900 for _, _, state in rows):
                 continue

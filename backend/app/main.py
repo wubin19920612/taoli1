@@ -1012,7 +1012,7 @@ def create_app(
                 risk_settings_timeout_seconds=app_settings.collector_risk_settings_timeout_seconds,
             )
             app.state.market_collector = collector
-            shadow_consumer = SnapshotConsumer("shadow-ledger", shadow_slot, app.state.shadow_runtime.consume)
+            shadow_consumer = SnapshotConsumer("shadow-ledger", shadow_slot, app.state.shadow_runtime.submit)
             _start_background_task(
                 supervisor,
                 (lambda: shadow_consumer.run(stop_event)) if use_shadow_slot
