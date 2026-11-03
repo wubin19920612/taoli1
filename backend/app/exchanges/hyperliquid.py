@@ -27,6 +27,7 @@ class HyperliquidAdapter(ExchangeAdapter):
         self.bbo_stream = bbo_stream
         self.market_errors: dict[str, str] = {}
         self._collateral_names: dict[int, str] = {0: "USDC"}
+        self._bbo_coins_by_dex: dict[str, set[str]] = {}
 
     async def fetch_spot_tickers(self) -> list[MarketSnapshot]:
         payload = await self.post_json(self.info_url, {"type": "spotMetaAndAssetCtxs"})
@@ -39,6 +40,8 @@ class HyperliquidAdapter(ExchangeAdapter):
         perp_dex_names = await self._fetch_perp_dex_names()
         payload = await self.post_json(self.info_url, {"type": "metaAndAssetCtxs"})
         rows = self._parse_perp_payload(payload)
+        if self.bbo_stream is not None:
+            self._bbo_coins_by_dex["main"] = {row.raw_symbol for row in rows}
         predicted_fundings = await self._fetch_predicted_fundings()
 
         if perp_dex_names:
@@ -52,16 +55,21 @@ class HyperliquidAdapter(ExchangeAdapter):
                 *(fetch_limited(dex_name) for dex_name in perp_dex_names),
                 return_exceptions=True,
             )
-            for result in dex_results:
+            for dex_name, result in zip(perp_dex_names, dex_results, strict=True):
                 if isinstance(result, Exception):
                     continue
+                if self.bbo_stream is not None:
+                    self._bbo_coins_by_dex[dex_name] = {row.raw_symbol for row in result}
                 rows.extend(result)
 
         rows = self._dedupe_perp_rows_by_market(
             self._attach_predicted_fundings(rows, predicted_fundings)
         )
         if self.bbo_stream is not None:
-            self.bbo_stream.set_coins(row.raw_symbol for row in rows)
+            # An unavailable DEX (including failed discovery) keeps its last good set.
+            self.bbo_stream.set_coins(
+                coin for coins in self._bbo_coins_by_dex.values() for coin in coins
+            )
         return await self._attach_priority_order_books(rows)
 
     async def fetch_order_book(
@@ -200,7 +208,13 @@ class HyperliquidAdapter(ExchangeAdapter):
             bbo = self.bbo_stream.get_fresh(row.raw_symbol) if self.bbo_stream else None
             if bbo is not None:
                 bid, bid_size, ask, ask_size, exchange_time_ms, _ = bbo
-                book_time = parse_datetime_ms(exchange_time_ms)
+                try:
+                    book_time = parse_datetime_ms(exchange_time_ms)
+                    if book_time is None:
+                        raise ValueError("missing BBO timestamp")
+                except (OSError, OverflowError, ValueError):
+                    enriched.append(row)
+                    continue
                 enriched.append(row.model_copy(update={
                     "bid": bid,
                     "ask": ask,

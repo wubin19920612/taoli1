@@ -32,6 +32,9 @@ class HyperliquidBboStream:
     heartbeat_seconds = 50.0  # Leave margin before HL's 60-second idle limit.
     stats_interval_seconds = 300.0
     reconnect_delays = (1, 2, 5, 10, 30)
+    # HL pushes bbo only on change, so a quiet market keeps its last book as long as
+    # the connection itself is live; the per-quote cap bounds silently lost streams.
+    quote_max_age_seconds = 120.0
 
     def __init__(self, *, max_coins: int = 450, max_age_seconds: float = 10.0):
         self.max_coins = max_coins
@@ -43,16 +46,19 @@ class HyperliquidBboStream:
         self._connected = False
         self._reconnects = 0
         self._last_send = float("-inf")
+        self._last_message_at = float("-inf")
         # Per-second buckets, not a timestamp per message; memory stays bounded.
         self._message_counts: deque[tuple[int, int]] = deque(maxlen=301)
 
     def set_coins(self, coins: Iterable[str]) -> None:
-        selected: set[str] = set()
-        for coin in coins:
-            if len(selected) >= self.max_coins:
-                break
-            if isinstance(coin, str) and coin and not coin.startswith("@") and "/" not in coin:
-                selected.add(coin)
+        candidates = {
+            coin for coin in coins
+            if isinstance(coin, str) and coin and not coin.startswith("@") and "/" not in coin
+        }
+        # Keep sent subscriptions first; metadata ordering must not churn a capped set.
+        selected = set(sorted(
+            candidates, key=lambda coin: (coin not in self._subscribed, coin),
+        )[:self.max_coins])
         if selected == self._coins:
             return
         for coin in self._coins - selected:
@@ -88,11 +94,13 @@ class HyperliquidBboStream:
             if not isinstance(levels, list) or len(levels) != 2:
                 return
             timestamp = data.get("time")
-            if type(timestamp) is not int or not 0 < timestamp < 253402300800000:
+            # Milliseconds in 2000-01-01..2100-01-01, safe on supported platforms.
+            if type(timestamp) is not int or not 946_684_800_000 <= timestamp <= 4_102_444_800_000:
                 return
             bid, bid_size = self._level(levels[0])
             ask, ask_size = self._level(levels[1])
             received = monotonic()
+            self._last_message_at = received
             self._quotes[coin] = (bid, bid_size, ask, ask_size, timestamp, received)
             second = int(received)
             if self._message_counts and self._message_counts[-1][0] == second:
@@ -105,7 +113,10 @@ class HyperliquidBboStream:
 
     def get_fresh(self, coin: str) -> BboQuote | None:
         quote = self._quotes.get(coin)
-        if quote is None or not 0 <= monotonic() - quote[5] <= self.max_age_seconds:
+        now = monotonic()
+        if (quote is None or not self._connected
+                or not 0 <= now - self._last_message_at <= self.max_age_seconds
+                or not 0 <= now - quote[5] <= self.quote_max_age_seconds):
             return None
         bid, bid_size, ask, ask_size, _, _ = quote
         if (bid is None or ask is None or not 0 < bid < ask
@@ -183,6 +194,9 @@ class HyperliquidBboStream:
                     self.ws_url, open_timeout=10, close_timeout=3,
                     ping_interval=20, ping_timeout=20,
                 ) as websocket:
+                    # Books from a previous connection may have missed updates.
+                    self._quotes.clear()
+                    self._last_message_at = float("-inf")
                     self._connected = True
                     connected_at = monotonic()
                     receiver = asyncio.create_task(self._receive(websocket))
