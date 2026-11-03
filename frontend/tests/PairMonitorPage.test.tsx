@@ -468,6 +468,8 @@ describe("PairMonitorPage", () => {
     ];
     window.history.pushState({}, "", "/");
     window.localStorage.clear();
+    // Existing SVG/layout regression assertions exercise the retained legacy view.
+    window.localStorage.setItem("pair-chart-version", "v1");
     window.sessionStorage.clear();
     vi.stubGlobal(
       "fetch",

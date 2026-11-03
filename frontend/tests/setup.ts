@@ -1,6 +1,12 @@
 import { act, cleanup } from "@testing-library/react";
 import { message } from "antd";
 import { afterEach, vi } from "vitest";
+import { createMockChart } from "../src/components/pairChartV2/chartTestUtils";
+
+vi.mock("lightweight-charts", async (importOriginal) => ({
+  ...await importOriginal<typeof import("lightweight-charts")>(),
+  createChart: vi.fn(createMockChart)
+}));
 
 afterEach(() => {
   cleanup();

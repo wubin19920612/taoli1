@@ -71,6 +71,8 @@ import type {
 import { resolveHistoryIntervalSeconds } from "../constants/queryLimits";
 import { QuoteAgeTag } from "../components/QuoteAgeTag";
 import { RangeBacktestPanel } from "../components/RangeBacktestPanel";
+import { PairChartV2, type PairChartV2Controls } from "../components/pairChartV2/PairChartV2";
+import { readVersion, writeVersion, type ChartVersion } from "../components/pairChartV2/storage";
 import type { RangeBacktestRange } from "../api/rangeBacktest";
 import { addFloatingWatchPair } from "../utils/floatingWatch";
 import { buildTimeScale } from "../utils/chartTimeScale";
@@ -2944,14 +2946,16 @@ export function PairSpreadChart({ result, onRangeSelect, onRangeClear }: {
   );
 }
 
-function PairSpreadBacktest({ result }: { result: PairSpreadQueryResult | null }) {
+function PairSpreadBacktest({ result, v2 }: { result: PairSpreadQueryResult | null; v2?: PairChartV2Controls }) {
   const [range, setRange] = useState<RangeBacktestRange | null>(null);
   const selectRange = useCallback((start: number, end: number) => {
     setRange({ start_at: new Date(start).toISOString(), end_at: new Date(end).toISOString() });
   }, []);
   const clearRange = useCallback(() => setRange(null), []);
   return <>
-    <PairSpreadChart result={result} onRangeSelect={selectRange} onRangeClear={clearRange} />
+    {v2 ? <PairChartV2 {...v2} result={result} points={pairDisplayPoints(result)}
+      labels={[leftLegLabel(result), rightLegLabel(result)]} onRangeSelect={selectRange} onRangeClear={clearRange} />
+      : <PairSpreadChart result={result} onRangeSelect={selectRange} onRangeClear={clearRange} />}
     {result && range ? <RangeBacktestPanel leg1={result.leg1} leg2={result.leg2} range={range} defaultDirection="long1_short2" /> : null}
   </>;
 }
@@ -4403,6 +4407,7 @@ function PairDetailTabs({ items }: { items: NonNullable<TabsProps["items"]> }) {
 }
 
 export function PairMonitorPage() {
+  const [chartVersion, setChartVersion] = useState<ChartVersion>(readVersion);
   const [form] = Form.useForm<PairSpreadFormValues>();
   const watchedFormValues = Form.useWatch([], form);
   const watchedLeg1Exchange = Form.useWatch("leg1_exchange", form);
@@ -5039,6 +5044,7 @@ export function PairMonitorPage() {
   const runQuery = useCallback(async (override?: {
     hours?: number;
     intervalSeconds?: number;
+    preserveInterval?: boolean;
     values?: PairSpreadFormValues;
     symbolMode?: PairSymbolMode;
     premiumMode?: "history" | "current";
@@ -5066,7 +5072,7 @@ export function PairMonitorPage() {
       const requestedIntervalSeconds = clampIntervalSeconds(
         override?.intervalSeconds ?? intervalSeconds
       );
-      const queryIntervalSeconds = resolveHistoryIntervalSeconds(
+      const queryIntervalSeconds = override?.preserveInterval ? requestedIntervalSeconds : resolveHistoryIntervalSeconds(
         queryHours,
         requestedIntervalSeconds
       );
@@ -6096,7 +6102,13 @@ export function PairMonitorPage() {
             </Tag>
           ) : null}
         </div>
-        <PairSpreadBacktest key={JSON.stringify([result?.leg1, result?.leg2, result?.leg2_multiplier])} result={result} />
+        <Segmented value={chartVersion} options={[{ label: "新版图表", value: "v2" }, { label: "原版", value: "v1" }]}
+          onChange={(value) => { setChartVersion(value as ChartVersion); writeVersion(value as ChartVersion); }} />
+        <PairSpreadBacktest key={JSON.stringify([chartVersion, result?.leg1, result?.leg2, result?.leg2_multiplier])} result={result}
+          v2={chartVersion === "v2" ? { loading, onSwap: () => void swapPairLegs(), onLoadHours: (nextHours) => {
+            if (result) void runQuery({ hours: clampHours(nextHours), values: pairFormFromResult(result),
+              symbolMode: pairSymbolModeFromValues(pairFormFromResult(result)), intervalSeconds: resultIntervalSeconds(result), preserveInterval: true });
+          } } : undefined} />
       </section>
 
       <section className="pair-query-panel pair-comparison-panel">
@@ -6288,7 +6300,7 @@ export function PairMonitorPage() {
           ) : null}
         </div>
       </section>
-      <PairPriceChart result={result} />
+      {chartVersion === "v1" ? <PairPriceChart result={result} /> : null}
       {showDayCompare ? (
         <PairDayCompareChart
           series={dayCompareSeries}
@@ -6430,7 +6442,7 @@ export function PairMonitorPage() {
                 scroll={{ x: "max-content" }}
               />
             </div>
-            {fundingRecordWatched ? (
+            {chartVersion === "v1" && fundingRecordWatched ? (
               <PairMinuteFundingDiffChart
                 rows={minuteFundingDiffRows}
                 status={fundingRecordStatus}
