@@ -5,6 +5,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 
 from app.models.market import MarketSnapshot
+from app.runtime.cooperative import YieldBudget
 
 _FAST = (
     not MarketSnapshot.__private_attributes__
@@ -38,24 +39,37 @@ class CompactMarkets:
         markets = []
         field_sets: dict[int, set[str]] = {}
         for row in self.rows:
-            bitmap = row[-1]
-            if bitmap not in field_sets:
-                field_sets[bitmap] = {name for name, bit in _FIELD_BITS if bitmap & bit}
-            values = dict(zip(_FIELDS, row))
-            for name in self.mutable_fields:
-                values[name] = _copy_mutable(values[name])
-            fields_set = field_sets[bitmap].copy()
-            if _FAST:
-                # Match Pydantic 2.12 model_construct for these complete, trusted rows.
-                m = MarketSnapshot.__new__(MarketSnapshot)
-                object.__setattr__(m, "__dict__", values)
-                object.__setattr__(m, "__pydantic_fields_set__", fields_set)
-                object.__setattr__(m, "__pydantic_extra__", None)
-                object.__setattr__(m, "__pydantic_private__", None)
-            else:
-                m = MarketSnapshot.model_construct(_fields_set=fields_set, **values)
-            markets.append(m)
+            markets.append(self._unpack_row(row, field_sets))
         return markets
+
+    async def unpack_async(self, budget: YieldBudget) -> list[MarketSnapshot]:
+        markets = []
+        field_sets: dict[int, set[str]] = {}
+        for row in self.rows:
+            await budget.maybe_yield()
+            markets.append(self._unpack_row(row, field_sets))
+        return markets
+
+    def _unpack_row(
+        self, row: tuple[object, ...], field_sets: dict[int, set[str]],
+    ) -> MarketSnapshot:
+        bitmap = row[-1]
+        if bitmap not in field_sets:
+            field_sets[bitmap] = {name for name, bit in _FIELD_BITS if bitmap & bit}
+        values = dict(zip(_FIELDS, row))
+        for name in self.mutable_fields:
+            values[name] = _copy_mutable(values[name])
+        fields_set = field_sets[bitmap].copy()
+        if _FAST:
+            # Match Pydantic 2.12 model_construct for these complete, trusted rows.
+            m = MarketSnapshot.__new__(MarketSnapshot)
+            object.__setattr__(m, "__dict__", values)
+            object.__setattr__(m, "__pydantic_fields_set__", fields_set)
+            object.__setattr__(m, "__pydantic_extra__", None)
+            object.__setattr__(m, "__pydantic_private__", None)
+        else:
+            m = MarketSnapshot.model_construct(_fields_set=fields_set, **values)
+        return m
 
 
 def pack(markets: Sequence[MarketSnapshot]) -> CompactMarkets:

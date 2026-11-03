@@ -11,6 +11,7 @@ from app.models.market import MarketSnapshot, MarketType
 from app.models.market_identity import IdentityEvidence, MarketBinding, MarketKey
 from app.models.orderbook import OrderBookLevel, OrderBookSnapshot
 from app.models.settings import RiskSettings
+from app.runtime.cooperative import YieldBudget
 from app.services import market_validation_review, pair_validation
 from app.services.collector import AdapterPollResult, MarketCollector
 from app.services.compact_markets import CompactMarkets
@@ -62,7 +63,9 @@ class LegacyCollector(MarketCollector):
         state.cooldown_until = None
         state.next_due_at = now + timedelta(seconds=self.poll_interval_seconds)
 
-    def _combined_exchange_markets(self, adapters: list[ExchangeAdapter]) -> list[MarketSnapshot]:
+    async def _combined_exchange_markets(
+        self, adapters: list[ExchangeAdapter], budget: YieldBudget,
+    ) -> list[MarketSnapshot]:
         markets: list[MarketSnapshot] = []
         for adapter in adapters:
             markets.extend(self._exchange_snapshots.get(adapter.name, []))

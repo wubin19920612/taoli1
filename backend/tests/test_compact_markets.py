@@ -8,6 +8,7 @@ from time import perf_counter
 import pytest
 
 from app.models.market import MarketSnapshot, MarketType
+from app.runtime.cooperative import YieldBudget
 from app.services import compact_markets
 from app.services.compact_markets import CompactMarkets, pack
 
@@ -115,6 +116,58 @@ def test_empty_batch():
     assert len(compact) == 0
     assert compact.unpack() == []
     assert compact.unpack() is not compact.unpack()
+
+
+@pytest.mark.parametrize("force_fallback", [False, True])
+async def test_async_unpack_matches_sync_fields_types_and_order(monkeypatch, force_fallback):
+    monkeypatch.setattr(compact_markets, "_FAST", not force_fallback)
+    rows = [full_market(), minimal_market(),
+            minimal_market(dex=None, estimated_fields=[], quote="USDT"), full_market(1)]
+    compact = pack(rows)
+    synchronous = compact.unpack()
+    asynchronous = await compact.unpack_async(YieldBudget(budget_ms=0))
+    for original, expected, actual in zip(rows, synchronous, asynchronous, strict=True):
+        assert actual == expected == original
+        assert actual is not expected and actual is not original
+        assert actual.model_dump() == expected.model_dump() == original.model_dump()
+        assert actual.model_dump(exclude_unset=True) == original.model_dump(exclude_unset=True)
+        assert actual.model_fields_set == expected.model_fields_set == original.model_fields_set
+        assert actual.model_fields_set is not expected.model_fields_set
+        assert actual.estimated_fields is not expected.estimated_fields
+        for name in MarketSnapshot.model_fields:
+            assert type(getattr(actual, name)) is type(getattr(expected, name))
+
+
+@pytest.mark.parametrize("force_fallback", [False, True])
+async def test_async_unpack_owns_nested_mutables_and_fields_set(monkeypatch, force_fallback):
+    monkeypatch.setattr(compact_markets, "_FAST", not force_fallback)
+    source = full_market().model_copy(update={"estimated_fields": [{"nested": ["bid"]}]})
+    expected_fields = source.model_fields_set.copy()
+    compact = pack([source, source])
+    source.estimated_fields[0]["nested"].append("source mutation")
+    source.model_fields_set.clear()
+    synchronous = compact.unpack()
+    first = await compact.unpack_async(YieldBudget(budget_ms=0))
+    second = await compact.unpack_async(YieldBudget(budget_ms=0))
+    restored_rows = synchronous + first + second
+    assert len({id(row.model_fields_set) for row in restored_rows}) == len(restored_rows)
+    assert len({id(row.estimated_fields) for row in restored_rows}) == len(restored_rows)
+    assert len({id(row.estimated_fields[0]) for row in restored_rows}) == len(restored_rows)
+    assert len({id(row.estimated_fields[0]["nested"]) for row in restored_rows}) == len(restored_rows)
+    first[0].estimated_fields[0]["nested"].append("unpacked mutation")
+    first[0].model_fields_set.clear()
+    for row in synchronous + first[1:] + second + compact.unpack():
+        assert row.estimated_fields == [{"nested": ["bid"]}]
+        assert row.model_fields_set == expected_fields
+
+
+async def test_async_unpack_empty_batch_returns_fresh_list():
+    compact = pack([])
+    first = await compact.unpack_async(YieldBudget(budget_ms=0))
+    second = await compact.unpack_async(YieldBudget(budget_ms=0))
+    assert first == second == []
+    assert first is not second
+    assert first is not compact.unpack()
 
 
 def test_12000_rows_retained_memory_and_unpack_time(capsys):

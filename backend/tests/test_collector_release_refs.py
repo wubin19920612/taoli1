@@ -53,8 +53,8 @@ async def test_consumed_batches_released_while_prepare_waits(monkeypatch, batch)
     )
     combined = collector._combined_exchange_markets
 
-    def track_unpacked(adapters):
-        rows = combined(adapters)
+    async def track_unpacked(adapters, budget):
+        rows = await combined(adapters, budget)
         for row in rows:
             key = "unpacked" if row.symbol == "BTCUSDT" else "reused"
             refs[key].append(weakref.ref(row))
