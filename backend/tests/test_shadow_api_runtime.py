@@ -9,6 +9,7 @@ from app.db.database import connect_database
 from app.db.schema import initialize_schema
 from app.main import create_app
 from app.services.shadow_runtime import ShadowRuntime
+from app.services.shadow_ledger import ShadowLedger
 from app.services.snapshot_consumers import PublishedSnapshot
 from app.services.snapshot_store import SnapshotStore
 from shadow_helpers import NOW, pair
@@ -35,6 +36,22 @@ async def test_api_auth_validation_and_empty_disabled_status():
             assert (await client.get("/api/shadow/buckets?since=2026-11-03")).status_code == 400
             assert (await client.get("/api/shadow/trades?status=unknown")).status_code == 422
             assert (await client.get("/api/shadow/trades?limit=501")).status_code == 422
+            book = ShadowLedger(Settings(shadow_enabled=True))
+            markets, op = pair()
+            book.process(markets, [op], NOW)
+            await book.flush(app.state.shadow_runtime.repo)
+            closed_at = NOW + timedelta(seconds=5)
+            closing = [m.model_copy(update={"timestamp": closed_at, "bid": 100, "ask": 100}) for m in markets]
+            book.process(closing, [], closed_at)
+            await book.flush(app.state.shadow_runtime.repo)
+            response = await client.get("/api/shadow/buckets", params={"dims": "fake_flag,executable",
+                "since": NOW.isoformat(), "until": closed_at.isoformat()})
+            assert response.status_code == 200
+            bucket = response.json()[0]
+            assert bucket["n_evt"] == 2
+            assert bucket["dimensions"] == {"fake_flag": False, "executable": False}
+            assert (await client.get("/api/shadow/trades?status=open")).json() == []
+            assert len((await client.get("/api/shadow/trades?status=closed")).json()) == 2
         finally:
             await db.close()
 
@@ -75,3 +92,14 @@ async def test_runtime_preserves_published_models_and_isolates_failed_writes(cap
     finally:
         await runtime.aclose()
         await db.close()
+
+
+@pytest.mark.asyncio
+async def test_shadow_schema_failure_does_not_escape_startup(monkeypatch):
+    import app.services.shadow_runtime as module
+    async def broken(db):
+        raise RuntimeError("synthetic shadow schema failure")
+    monkeypatch.setattr(module, "initialize_shadow_schema", broken)
+    runtime = ShadowRuntime(Settings(database_url="sqlite:///:memory:"), SnapshotStore())
+    await runtime.initialize(None)
+    assert not runtime.status()["ready"] and runtime.errors == 1

@@ -100,13 +100,25 @@ class ShadowTradeRepository:
             row.pop("tracking", None)
         return rows
 
+    async def count_open(self):
+        async with self.db.execute("SELECT COUNT(*) FROM shadow_trades WHERE closed_at IS NULL") as cursor:
+            return (await cursor.fetchone())[0]
+
     async def closed_events(self, since, until, include_fake=False):
-        query = "SELECT payload FROM shadow_trades WHERE closed_at >= ? AND closed_at <= ?"
+        # Statistics do not need recovery state or full market metadata. Project
+        # only event fields rather than decoding every multi-kilobyte payload.
+        fields = ("net_bps", "spread_bps", "slippage_bps", "fees_bps", "funding_bps",
+                  "pair", "spread_tier", "liquidity", "routes", "executable", "strategy_version")
+        projection = ", ".join(f"json_extract(payload, '$.{name}') AS {name}" for name in fields)
+        query = f"SELECT id, symbol, closed_at, variant, fake_flag, {projection} FROM shadow_trades WHERE closed_at >= ? AND closed_at <= ?"
         if not include_fake:
             query += " AND fake_flag = 0"
         query += " ORDER BY closed_at, id"
         async with self.db.execute(query, (since.isoformat(), until.isoformat())) as cursor:
-            rows = [json.loads(r["payload"]) for r in await cursor.fetchall()]
+            rows = [dict(r) for r in await cursor.fetchall()]
+        for row in rows:
+            row["fake_flag"] = bool(row["fake_flag"])
+            row["executable"] = bool(row["executable"])
         return rows
 
     async def prune(self, now):

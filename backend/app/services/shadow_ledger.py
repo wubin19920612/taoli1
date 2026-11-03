@@ -104,6 +104,10 @@ class ShadowLedger:
             if schedule["spot"]:
                 continue
             due, rate, interval = schedule["next"], schedule["rate"], schedule["interval"]
+            if (market is not None and due is not None and market.funding_next_time is not None
+                    and market.funding_next_time.timestamp() == due
+                    and 0 <= due - _market_observed_at(market).timestamp() <= 10):
+                rate = market.funding_rate_pct
             # Use the rate observed for this settlement, never the next cycle's
             # rate published after it. Last-known rates across gaps are estimates.
             if due is not None and position.opened < due <= now:
@@ -114,6 +118,10 @@ class ShadowLedger:
                     total += (-1 if index == 0 else 1) * rate * 100 * count
                 schedule["last"] = due + (count - 1) * interval
                 schedule["next"] = due + count * interval if interval > 0 else None
+            elif due is not None and due <= position.opened:
+                # Opening exactly on a settlement does not earn it, but the
+                # schedule must still advance rather than becoming stuck.
+                schedule["next"] = due + interval if interval > 0 else None
             if market is not None and 0 <= now - _market_observed_at(market).timestamp() <= 10:
                 upcoming = market.funding_next_time.timestamp() if market.funding_next_time else None
                 if upcoming is not None and upcoming > now and (schedule["last"] is None or upcoming > schedule["last"]):

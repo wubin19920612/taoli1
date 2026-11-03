@@ -5,7 +5,7 @@ import pytest
 from app.core.config import Settings
 from app.db.database import connect_database
 from app.db.repositories import ShadowTradeRepository
-from app.db.schema import initialize_schema
+from app.db.schema import initialize_schema, initialize_shadow_schema
 from app.services.shadow_ledger import ShadowLedger, liquidity_tier, spread_tier
 from app.services.spread_engine import midpoint_spread_pct
 from shadow_helpers import NOW, pair
@@ -117,6 +117,7 @@ async def test_batch_restore_funding_no_duplicate_settlement_retention_and_coold
     db = await connect_database(str(tmp_path / "shadow.db"))
     try:
         await initialize_schema(db)
+        await initialize_shadow_schema(db)
         repo = ShadowTradeRepository(db)
         book = ledger()
         markets, op = pair()
@@ -165,3 +166,63 @@ def test_liquidity_boundaries(volume, tier):
 def test_spread_boundaries():
     assert [spread_tier(v) for v in [0.1, 0.2, 0.3, 0.5, 1, 2, 5, 5.01]] == [
         "<0.2%", "0.2–0.3%", "0.3–0.5%", "0.5–1%", "1–2%", "2–5%", "2–5%", ">5%"]
+
+
+def test_funding_separate_cycles_signs_and_settlement_time_rate():
+    book = ledger()
+    markets, op = pair()
+    for m, rate, seconds, interval in zip(markets, [0.01, 0.03], [30, 60], [1, 8]):
+        m.funding_rate_pct = rate
+        m.funding_next_time = NOW + timedelta(seconds=seconds)
+        m.funding_interval_hours = interval
+    book.process(markets, [op], NOW)
+    now = NOW + timedelta(seconds=30)
+    books = fresh(markets, now)
+    books[0].funding_rate_pct = 0.02  # actual observation for this exact settlement
+    book.process(books, [], now)
+    assert all(r["funding_bps"] == -2 for p in book.positions.values() for r in p.rows)
+    now += timedelta(seconds=30)
+    books = fresh(books, now)
+    book.process(books, [], now)
+    assert all(r["funding_bps"] == 1 for p in book.positions.values() for r in p.rows)
+
+
+def test_open_on_settlement_excludes_it_but_keeps_next_cycle():
+    book = ledger()
+    markets, op = pair()
+    for m in markets:
+        m.funding_next_time = NOW
+        m.funding_rate_pct = 0.01
+        m.funding_interval_hours = 1
+    markets[1].funding_rate_pct = 0.03
+    book.process(markets, [op], NOW)
+    book.process(markets, [], NOW)
+    now = NOW + timedelta(hours=1)
+    book.process(fresh(markets, now), [], now)
+    assert all(r["funding_bps"] == pytest.approx(2) for p in book.positions.values() for r in p.rows)
+
+
+@pytest.mark.asyncio
+async def test_batch_failure_is_atomic_and_preserves_prior_writes():
+    db = await connect_database(":memory:")
+    try:
+        await initialize_schema(db)
+        await initialize_shadow_schema(db)
+        repo = ShadowTradeRepository(db)
+        await db.execute("CREATE TABLE unrelated (value TEXT)")
+        await db.execute("INSERT INTO unrelated VALUES ('keep')")
+        book = ledger()
+        markets, op = pair()
+        book.process(markets, [op], NOW)
+        rows = list(book.pending.values())
+        # Duplicate open opportunity/variant with a distinct id fails midway.
+        bad = {**rows[0], "id": "conflicting-id"}
+        with pytest.raises(Exception):
+            await repo.save_batch([rows[0], bad])
+        assert await repo.list_trades() == []
+        async with db.execute("SELECT value FROM unrelated") as cursor:
+            assert (await cursor.fetchone())[0] == "keep"
+        await book.flush(repo)
+        assert len(await repo.list_trades()) == 2
+    finally:
+        await db.close()

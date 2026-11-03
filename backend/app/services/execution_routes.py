@@ -24,7 +24,7 @@ def validate_shadow_settings(settings):
         raise ValueError("SHADOW_MIN_OPEN_PCT must be finite and nonnegative")
     if type(settings.shadow_max_open) is not int or not 2 <= settings.shadow_max_open <= 3000:
         raise ValueError("SHADOW_MAX_OPEN must be between 2 and 3000 (variant rows)")
-    if settings.crossex_catalog_refresh_seconds <= 0:
+    if type(settings.crossex_catalog_refresh_seconds) is not int or settings.crossex_catalog_refresh_seconds <= 0:
         raise ValueError("CROSSEX_CATALOG_REFRESH_SECONDS must be positive")
     values = json.loads(settings.shadow_slippage_bps)
     if not isinstance(values, dict) or set(values) != LIQUIDITY_TIERS or any(
@@ -113,6 +113,8 @@ class ExecutionRoutes:
             logger.warning("shadow CrossEx catalogue refresh failed; retaining previous entries")
             return
         self.entries = entries
+        self._route_cache.clear()
+        self._cache_entries = entries
         self.updated_at = datetime.now(UTC).isoformat()
         self.retry_at = self.clock() + self.refresh_seconds
 

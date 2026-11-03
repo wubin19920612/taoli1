@@ -89,16 +89,18 @@ class FakeOpportunityScorer:
         self.max_markets = max_markets
         self.max_series = max_series
         self.dropped = 0
+        self.last_prune_minute = None
 
     def score(self, markets, opportunities, now, prepared=None):
         ts = now.timestamp()
         minute = int(ts // 60)
         # Expire absent keys as well as per-key rings: changing listings cannot
         # accumulate an unbounded dictionary over a long-running process.
-        self.prices = {k: v for k, v in self.prices.items() if ts - v.seen <= 900}
-        self.spreads = {k: v for k, v in self.spreads.items() if minute - v[-1][0] < 60}
+        if minute != self.last_prune_minute:
+            self.prices = {k: v for k, v in self.prices.items() if ts - v.seen <= 900}
+            self.spreads = {k: v for k, v in self.spreads.items() if minute - v[-1][0] < 60}
+            self.last_prune_minute = minute
         groups = defaultdict(list)
-        by_key = {}
         prepared = prepared if prepared is not None else prepare_markets(markets, now)
         for key, (market, _, fresh) in prepared.items():
             if not fresh:
@@ -124,10 +126,9 @@ class FakeOpportunityScorer:
             if market.identity_collision and not market.asset_id:
                 continue
             groups[asset].append((market.exchange.lower(), key, state))
-            by_key[key] = asset
         hard, frozen = set(), set()
         for rows in groups.values():
-            can_have_outlier = len({ex for ex, _, _ in rows}) >= 3
+            can_have_outlier = len(rows) >= 3 and len({ex for ex, _, _ in rows}) >= 3
             if not can_have_outlier and not any(ts - state.changed >= 900 for _, _, state in rows):
                 continue
             # Each exchange gets one vote even if several DEXes/market types exist.

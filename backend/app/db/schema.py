@@ -714,7 +714,6 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
     from app.db.market_identity_repository import initialize_market_identity_schema
 
     await initialize_market_identity_schema(db)
-    await initialize_shadow_schema(db)
     await db.commit()
 
 

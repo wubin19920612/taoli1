@@ -7,6 +7,7 @@ from time import monotonic
 
 from app.db.database import connect_database
 from app.db.repositories import ShadowTradeRepository
+from app.db.schema import initialize_shadow_schema
 from app.services.execution_routes import ExecutionRoutes
 from app.services.fake_opportunity import FakeOpportunityScorer, prepare_markets
 from app.services.shadow_ledger import ShadowLedger
@@ -30,6 +31,7 @@ class ShadowRuntime:
         self.last_log = -float("inf")
         self.prune_at = 0
         self.last_duration_ms = None
+        self.stored_open_count = 0
 
     def error(self):
         self.errors += 1
@@ -45,7 +47,9 @@ class ShadowRuntime:
             else:
                 self.db = await connect_database(self.settings.sqlite_path)
                 self.owns_db = True
+            await initialize_shadow_schema(self.db)
             self.repo = ShadowTradeRepository(self.db)
+            self.stored_open_count = await self.repo.count_open()
             if self.ledger.enabled:
                 self.ledger.restore(*(await self.repo.restore(datetime.now(UTC))))
             self.restored = True
@@ -63,7 +67,12 @@ class ShadowRuntime:
             # between checking the generation and replacing its annotated copies.
             if self.store.generation == snapshot.generation:
                 self.store.set_opportunities([op.model_copy(update=annotations[op.id]) for op in snapshot.opportunities])
-            if not self.ledger.enabled or self.repo is None:
+            if self.repo is None:
+                return
+            if monotonic() >= self.prune_at:
+                await self.repo.prune(snapshot.published_at)
+                self.prune_at = monotonic() + 3600
+            if not self.ledger.enabled:
                 return
             if not self.restored:
                 self.ledger.restore(*(await self.repo.restore(snapshot.published_at)))
@@ -73,9 +82,6 @@ class ShadowRuntime:
             await self.ledger.flush(self.repo)
             self.ledger.process(snapshot.markets, snapshot.opportunities, snapshot.published_at, annotations, prepared)
             await self.ledger.flush(self.repo)
-            if monotonic() >= self.prune_at:
-                await self.repo.prune(snapshot.published_at)
-                self.prune_at = monotonic() + 3600
         except Exception:
             self.error()
         finally:
@@ -96,7 +102,8 @@ class ShadowRuntime:
 
     def status(self):
         return {"enabled": self.ledger.enabled, "ready": self.restored,
-                "open_count": self.ledger.open_count, "dropped": self.ledger.dropped,
+                "open_count": self.ledger.open_count if self.ledger.enabled else self.stored_open_count,
+                "dropped": self.ledger.dropped,
                 "errors": self.errors, "pending_writes": len(self.ledger.pending),
                 "catalog_updated_at": self.catalog.updated_at, "catalog_entries": len(self.catalog.entries),
                 "catalog_errors": self.catalog.errors, "scorer_dropped": self.scorer.dropped,
