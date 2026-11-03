@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -719,6 +719,145 @@ describe("PairMonitorPage", () => {
     });
   });
 
+  it("groups saved pairs by the left symbol and keeps venue details in compact tags", async () => {
+    serverPresets = [
+      savedPairPreset(),
+      savedPairPreset({
+        id: "hyperliquid|future|xyz|BTC|gate|future||BTC",
+        leg1_exchange: "hyperliquid", leg1_dex: "xyz", leg2_exchange: "gate",
+        savedAt: "2026-09-11T02:00:00Z"
+      }),
+      savedPairPreset({
+        id: "binance|future||BTC|binance|future||ETH",
+        leg2_exchange: "binance", leg2_symbol: "ETHUSDT",
+        savedAt: "2026-09-14T02:00:00Z"
+      }),
+      savedPairPreset({
+        id: "binance|future||ETH|okx|future||ETH",
+        leg1_symbol: "ETHUSDT", leg2_symbol: "ETHUSDT",
+        savedAt: "2026-09-13T02:00:00Z"
+      })
+    ];
+    render(<PairMonitorPage />);
+    await waitFor(() => expect(document.querySelectorAll(".pair-saved-tag")).toHaveLength(4));
+    const groups = document.querySelectorAll(".pair-saved-group");
+    expect(groups).toHaveLength(2);
+    expect(groups[0].querySelector(".pair-saved-group-symbol")?.textContent).toBe("BTC");
+    expect(groups[0].querySelector(".pair-saved-group-count")?.textContent).toBe("3");
+    const tags = groups[0].querySelectorAll(".pair-saved-tag");
+    expect(tags).toHaveLength(3);
+    expect(tags[0].textContent).not.toContain("BTC");
+    expect(tags[0].textContent).toContain("bn");
+    expect(tags[0].textContent).toContain("ok");
+    expect(tags[1].textContent).not.toContain("BTC");
+    expect(tags[1].querySelector(".pair-exchange-dex")?.textContent).toBe("xyz");
+    expect(tags[2].querySelectorAll(".pair-exchange-binance")).toHaveLength(2);
+    expect(tags[2].textContent).toContain("BTC");
+    expect(tags[2].textContent).toContain("ETH");
+    expect(tags[2].textContent).toContain("/");
+  });
+
+  it("filters individual saved tags by either symbol, exchange id or chip abbreviation and clears", async () => {
+    const user = userEvent.setup();
+    serverPresets = [
+      savedPairPreset(),
+      savedPairPreset({
+        id: "hyperliquid|future|main|BTC|gate|future||BTC",
+        leg1_exchange: "hyperliquid", leg1_dex: "main", leg2_exchange: "gate"
+      }),
+      savedPairPreset({
+        id: "bitget|future||ETH|hyperliquid|future|xyz|CXMT",
+        leg1_exchange: "bitget", leg1_symbol: "ETHUSDT",
+        leg2_exchange: "hyperliquid", leg2_dex: "xyz", leg2_symbol: "CXMTUSDT"
+      })
+    ];
+    render(<PairMonitorPage />);
+    await waitFor(() => expect(document.querySelectorAll(".pair-saved-tag")).toHaveLength(3));
+    const search = screen.getByPlaceholderText("搜标的/交易所");
+    for (const term of ["hL", "HYPERLIQUID"]) {
+      fireEvent.change(search, { target: { value: term } });
+      const tags = document.querySelectorAll(".pair-saved-tag");
+      expect(tags).toHaveLength(2);
+      tags.forEach((tag) => expect(tag.querySelector(".pair-exchange-hyperliquid")).toBeTruthy());
+      expect(document.querySelector(".pair-saved-group-count")?.textContent).toBe("1");
+    }
+    fireEvent.change(search, { target: { value: "cxmt" } });
+    expect(document.querySelectorAll(".pair-saved-group")).toHaveLength(1);
+    expect(document.querySelector(".pair-saved-tag")?.textContent).toContain("CXMT");
+    fireEvent.change(search, { target: { value: "bTc" } });
+    expect(document.querySelectorAll(".pair-saved-tag")).toHaveLength(2);
+    fireEvent.change(search, { target: { value: "oKx" } });
+    expect(document.querySelectorAll(".pair-saved-tag")).toHaveLength(1);
+    expect(document.querySelector(".pair-saved-tag .pair-exchange-okx")).toBeTruthy();
+    fireEvent.change(search, { target: { value: "no-such-saved-pair" } });
+    expect(screen.getByText("无匹配")).toBeTruthy();
+    expect(document.querySelectorAll(".pair-saved-group")).toHaveLength(0);
+    const savedArea = document.querySelector(".pair-saved-presets") as HTMLElement;
+    await user.click(within(savedArea).getByRole("button", { name: "close-circle" }));
+    expect((search as HTMLInputElement).value).toBe("");
+    expect(document.querySelectorAll(".pair-saved-tag")).toHaveLength(3);
+    expect(screen.queryByText("无匹配")).toBeNull();
+  });
+
+  it("collapses five saved groups, searches all of them and remembers expansion without saving the search", async () => {
+    const user = userEvent.setup();
+    serverPresets = ["BTC", "BCH", "BNB", "BONK", "BOME"].map((symbol, index) => savedPairPreset({
+      id: `binance|future||${symbol}|okx|future||${symbol}`,
+      leg1_symbol: `${symbol}USDT`, leg2_symbol: `${symbol}USDT`,
+      savedAt: `2026-09-12T0${index}:00:00Z`
+    }));
+    const mounted = render(<PairMonitorPage />);
+    await screen.findByRole("button", { name: "展开全部（共 5 组）" });
+    expect(document.querySelectorAll(".pair-saved-group")).toHaveLength(4);
+    expect(Array.from(document.querySelectorAll(".pair-saved-group-symbol"), (node) => node.textContent))
+      .toEqual(["BOME", "BONK", "BNB", "BCH"]);
+    const search = screen.getByPlaceholderText("搜标的/交易所");
+    fireEvent.change(search, { target: { value: "btc" } });
+    expect(document.querySelectorAll(".pair-saved-group")).toHaveLength(1);
+    expect(document.querySelector(".pair-saved-group-symbol")?.textContent).toBe("BTC");
+    fireEvent.change(search, { target: { value: "b" } });
+    expect(document.querySelectorAll(".pair-saved-group")).toHaveLength(5);
+    expect(screen.queryByRole("button", { name: /展开全部|收起/ })).toBeNull();
+    fireEvent.change(search, { target: { value: "  " } });
+    expect(document.querySelectorAll(".pair-saved-group")).toHaveLength(4);
+    await user.click(screen.getByRole("button", { name: "展开全部（共 5 组）" }));
+    expect(document.querySelectorAll(".pair-saved-group")).toHaveLength(5);
+    expect(window.localStorage.getItem("pair-saved-expanded")).toBe("true");
+    fireEvent.change(search, { target: { value: "btc" } });
+    mounted.unmount();
+    render(<PairMonitorPage />);
+    await screen.findByRole("button", { name: "收起" });
+    expect((screen.getByPlaceholderText("搜标的/交易所") as HTMLInputElement).value).toBe("");
+    expect(document.querySelectorAll(".pair-saved-group")).toHaveLength(5);
+    await user.click(screen.getByRole("button", { name: "收起" }));
+    expect(document.querySelectorAll(".pair-saved-group")).toHaveLength(4);
+    expect(window.localStorage.getItem("pair-saved-expanded")).toBe("false");
+  });
+
+  it("highlights the current form configuration with its exact DEX and follows edits and preset application", async () => {
+    const user = userEvent.setup();
+    serverPresets = ["io", "xyz"].map((dex) => savedPairPreset({
+      id: `hyperliquid|future|${dex}|OAI|rh-lighter|future||OPENAI`,
+      leg1_exchange: "hyperliquid", leg1_dex: dex, leg1_symbol: "OAIUSDT",
+      leg2_exchange: "rh-lighter", leg2_symbol: "OPENAIUSDT"
+    }));
+    window.history.pushState({}, "",
+      "/?page=pair-monitor&leg1_exchange=hyperliquid&leg1_market_type=future&leg1_dex=io&leg1_symbol=OAI" +
+      "&leg2_exchange=rh-lighter&leg2_market_type=future&leg2_symbol=OPENAI&hours=4&interval_seconds=60"
+    );
+    render(<PairMonitorPage />);
+    await waitFor(() => expect(document.querySelectorAll(".pair-saved-tag")).toHaveLength(2));
+    expect(document.querySelectorAll(".pair-saved-tag-active")).toHaveLength(1);
+    expect(document.querySelector(".pair-saved-tag-active .pair-exchange-dex")?.textContent).toBe("io");
+    await waitFor(() => expect(document.querySelector(".pair-chart-card")).toBeTruthy());
+    fireEvent.change(screen.getByRole("textbox", { name: "右侧标的" }), { target: { value: "BTC" } });
+    expect(document.querySelectorAll(".pair-saved-tag-active")).toHaveLength(0);
+    await user.click(document.querySelector(".pair-saved-tag") as HTMLElement);
+    await waitFor(() => expect(document.querySelectorAll(".pair-saved-tag-active")).toHaveLength(1));
+    expect(document.querySelector(".pair-saved-tag-active .pair-exchange-dex")?.textContent).toBe("io");
+    expect((screen.getByRole("textbox", { name: "右侧标的" }) as HTMLInputElement).value).toBe("OPENAIUSDT");
+  });
+
   it("loads saved pair presets from the server on another device", async () => {
     serverPresets = [savedPairPreset()];
     window.localStorage.setItem("taoli1.pairSpread.presets.serverMigrated.v1", "1");
@@ -726,7 +865,8 @@ describe("PairMonitorPage", () => {
     render(<PairMonitorPage />);
 
     await waitFor(() => {
-      expect(document.querySelector(".pair-saved-tag")?.textContent).toContain("BTC");
+      expect(document.querySelector(".pair-saved-group-symbol")?.textContent).toBe("BTC");
+      expect(document.querySelectorAll(".pair-saved-tag")).toHaveLength(1);
       const cached = JSON.parse(
         window.localStorage.getItem("taoli1.pairSpread.presets.v1") ?? "[]"
       );
@@ -900,7 +1040,7 @@ describe("PairMonitorPage", () => {
     expect(serverPresets).toHaveLength(1);
   });
 
-  it.each([1, 2])("keeps a newly saved custom pair first and restores multiplier %s", async (multiplier) => {
+  it.each([1, 2])("keeps same-symbol tags before custom pairs in their shared group and restores multiplier %s", async (multiplier) => {
     const user = userEvent.setup();
     serverPresets = [savedPairPreset({
       id: "hyperliquid|future|io|OAI|rh-lighter|future||OAI",
@@ -933,14 +1073,15 @@ describe("PairMonitorPage", () => {
     const cached = JSON.parse(window.localStorage.getItem("taoli1.pairSpread.presets.v1") ?? "[]");
     expect(cached).toHaveLength(2);
     expect(cached[0].leg2_symbol).toBe("OPENAIUSDT");
-    expect(document.querySelector(".pair-saved-group")?.classList.contains("pair-saved-group-custom")).toBe(true);
-    expect(document.querySelector(".pair-saved-group-symbol")?.textContent).toBe("OAI / OPENAI");
+    expect(document.querySelectorAll(".pair-saved-group")).toHaveLength(1);
+    expect(document.querySelector(".pair-saved-group-symbol")?.textContent).toBe("OAI");
+    expect(document.querySelector(".pair-saved-group-count")?.textContent).toBe("2");
 
     mounted.unmount();
     render(<PairMonitorPage />);
     await waitFor(() => expect(document.querySelectorAll(".pair-saved-tag")).toHaveLength(2));
-    const savedTag = document.querySelector(".pair-saved-tag") as HTMLElement;
-    expect(savedTag.classList.contains("pair-saved-tag-custom")).toBe(true);
+    expect(document.querySelector(".pair-saved-tag")?.classList.contains("pair-saved-tag-same")).toBe(true);
+    const savedTag = document.querySelector(".pair-saved-tag-custom") as HTMLElement;
     expect(savedTag.textContent).toContain("OPENAI");
     requests.length = 0;
     await user.click(savedTag);
@@ -968,7 +1109,7 @@ describe("PairMonitorPage", () => {
     render(<PairMonitorPage />);
     await waitFor(() => expect(document.querySelectorAll(".pair-saved-group")).toHaveLength(2));
     expect(document.querySelector(".pair-saved-group-symbol")?.textContent).toBe("BTC");
-    expect(document.querySelector(".pair-saved-group")?.classList.contains("pair-saved-group-same")).toBe(true);
+    expect(document.querySelector(".pair-saved-group-count")?.textContent).toBe("1");
   });
 
   it("saves and adds the queried pair to the floating watch", async () => {
@@ -1024,7 +1165,8 @@ describe("PairMonitorPage", () => {
 
     render(<PairMonitorPage />);
 
-    expect(document.querySelector(".pair-saved-tag")?.textContent).toContain("BTC");
+    expect(document.querySelector(".pair-saved-group-symbol")?.textContent).toBe("BTC");
+    expect(document.querySelectorAll(".pair-saved-tag")).toHaveLength(1);
     expect(await screen.findByText(/已保存标的对同步失败.*offline/)).toBeTruthy();
     expect(window.localStorage.getItem("taoli1.pairSpread.presets.serverMigrated.v1")).toBeNull();
   });
@@ -1100,8 +1242,8 @@ describe("PairMonitorPage", () => {
     render(<PairMonitorPage />);
 
     const savedTag = document.querySelector(".pair-saved-tag") as HTMLElement;
-    expect(savedTag.textContent).toContain("DEXE");
-    expect(savedTag.textContent).not.toContain("DEXEUSDT");
+    expect(document.querySelector(".pair-saved-group-symbol")?.textContent).toBe("DEXE");
+    expect(savedTag.textContent).not.toContain("DEXE");
     expect(document.querySelector(".pair-exchange-bybit")).toBeTruthy();
     expect(document.querySelector(".pair-exchange-bitget")).toBeTruthy();
   });
@@ -1496,13 +1638,12 @@ describe("PairMonitorPage", () => {
     requests.length = 0;
 
     const savedTag = document.querySelector(".pair-saved-tag") as HTMLElement;
-    expect(savedTag.textContent).toContain("CXMT");
-    expect(savedTag.textContent).not.toContain("CXMTUSDT");
+    expect(document.querySelector(".pair-saved-group-symbol")?.textContent).toBe("CXMT");
+    expect(savedTag.textContent).not.toContain("CXMT");
     expect(savedTag.textContent).toContain("hl");
     expect(savedTag.textContent).toContain("gt");
     expect(savedTag.textContent).not.toContain("12小时");
     expect(savedTag.textContent).not.toContain("1分钟");
-    expect((savedTag.textContent?.match(/CXMT/g) ?? []).length).toBe(1);
     expect(document.querySelector(".pair-exchange-hyperliquid")).toBeTruthy();
     expect(document.querySelector(".pair-exchange-gate")).toBeTruthy();
     await user.click(savedTag);

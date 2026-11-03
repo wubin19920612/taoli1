@@ -116,7 +116,6 @@ type PendingPresetWrite = {
 type SavedPairSpreadGroup = {
   key: string;
   title: string;
-  sameSymbol: boolean;
   presets: SavedPairSpreadPreset[];
   latestSavedAt: string;
 };
@@ -669,12 +668,7 @@ function groupSavedPairPresets(presets: SavedPairSpreadPreset[]): SavedPairSprea
   const grouped = new Map<string, SavedPairSpreadGroup>();
   presets.forEach((preset) => {
     const leftSymbol = shortSavedSymbol(preset.leg1_symbol) || preset.leg1_symbol;
-    const rightSymbol = shortSavedSymbol(preset.leg2_symbol) || preset.leg2_symbol;
-    const sameSymbol = isSameSymbolPreset(preset);
-    const key = sameSymbol
-      ? `same:${leftSymbol}`
-      : `custom:${pairConfigId(preset)}`;
-    const title = sameSymbol ? leftSymbol : `${leftSymbol} / ${rightSymbol}`;
+    const key = leftSymbol;
     const existing = grouped.get(key);
     if (existing) {
       existing.presets.push(preset);
@@ -685,8 +679,7 @@ function groupSavedPairPresets(presets: SavedPairSpreadPreset[]): SavedPairSprea
     }
     grouped.set(key, {
       key,
-      title,
-      sameSymbol,
+      title: leftSymbol,
       presets: [preset],
       latestSavedAt: preset.savedAt
     });
@@ -710,9 +703,6 @@ function groupSavedPairPresets(presets: SavedPairSpreadPreset[]): SavedPairSprea
       const savedAtDiff = dayjs.utc(right.latestSavedAt).valueOf() - dayjs.utc(left.latestSavedAt).valueOf();
       if (savedAtDiff !== 0) {
         return savedAtDiff;
-      }
-      if (left.sameSymbol !== right.sameSymbol) {
-        return left.sameSymbol ? -1 : 1;
       }
       return left.title.localeCompare(right.title);
     });
@@ -1260,6 +1250,19 @@ function exchangeShortLabel(exchange: string): string {
   return shortLabels[normalized] ?? normalized.slice(0, 2);
 }
 
+function savedPairPresetMatchesSearch(preset: SavedPairSpreadPreset, search: string): boolean {
+  return [
+    shortSavedSymbol(preset.leg1_symbol),
+    shortSavedSymbol(preset.leg2_symbol),
+    preset.leg1_exchange,
+    preset.leg2_exchange,
+    exchangeShortLabel(preset.leg1_exchange),
+    exchangeShortLabel(preset.leg2_exchange),
+    exchangeLabels[preset.leg1_exchange] ?? "",
+    exchangeLabels[preset.leg2_exchange] ?? ""
+  ].some((value) => value.toLowerCase().includes(search));
+}
+
 function ExchangeChip({
   exchange,
   marketType,
@@ -1285,10 +1288,6 @@ function SavedPairPresetContent({ preset }: { preset: SavedPairSpreadPreset }) {
   const leftSymbol = shortSavedSymbol(preset.leg1_symbol);
   const rightSymbol = shortSavedSymbol(preset.leg2_symbol);
   const sameSymbol = leftSymbol === rightSymbol;
-  const sameVenue =
-    preset.leg1_exchange === preset.leg2_exchange &&
-    preset.leg1_market_type === preset.leg2_market_type &&
-    preset.leg1_dex === preset.leg2_dex;
   const multiplierText = preset.leg2_multiplier === 1 ? "" : `右×${compactNumber(preset.leg2_multiplier, 4)}`;
   const dayCompareSettings = normalizeDayCompareSettings({
     mode: preset.dayCompareMode,
@@ -1299,21 +1298,11 @@ function SavedPairPresetContent({ preset }: { preset: SavedPairSpreadPreset }) {
   return (
     <span className="pair-saved-main">
       {sameSymbol ? (
-        <>
-          <span className="pair-saved-symbol">{leftSymbol}</span>
-          <span className="pair-saved-exchanges">
-            <ExchangeChip exchange={preset.leg1_exchange} marketType={preset.leg1_market_type} dex={preset.leg1_dex} />
-            <span className="pair-saved-separator">/</span>
-            <ExchangeChip exchange={preset.leg2_exchange} marketType={preset.leg2_market_type} dex={preset.leg2_dex} />
-          </span>
-        </>
-      ) : sameVenue ? (
-        <>
+        <span className="pair-saved-exchanges">
           <ExchangeChip exchange={preset.leg1_exchange} marketType={preset.leg1_market_type} dex={preset.leg1_dex} />
-          <span className="pair-saved-symbol">
-            {leftSymbol} / {rightSymbol}
-          </span>
-        </>
+          <span className="pair-saved-separator">/</span>
+          <ExchangeChip exchange={preset.leg2_exchange} marketType={preset.leg2_market_type} dex={preset.leg2_dex} />
+        </span>
       ) : (
         <>
           <ExchangeChip exchange={preset.leg1_exchange} marketType={preset.leg1_market_type} dex={preset.leg1_dex} />
@@ -4415,6 +4404,7 @@ function PairDetailTabs({ items }: { items: NonNullable<TabsProps["items"]> }) {
 
 export function PairMonitorPage() {
   const [form] = Form.useForm<PairSpreadFormValues>();
+  const watchedFormValues = Form.useWatch([], form);
   const watchedLeg1Exchange = Form.useWatch("leg1_exchange", form);
   const watchedLeg1MarketType = Form.useWatch("leg1_market_type", form);
   const watchedLeg1Dex = Form.useWatch("leg1_dex", form);
@@ -4484,6 +4474,14 @@ export function PairMonitorPage() {
   const [dayCompareEndTime, setDayCompareEndTime] = useState(() => initialDayCompareSettings.endTime);
   const [diagnosticThresholdPct, setDiagnosticThresholdPct] = useState(loadDiagnosticThreshold);
   const [savedPresets, setSavedPresets] = useState<SavedPairSpreadPreset[]>(() => loadSavedPairPresets());
+  const [savedPresetSearch, setSavedPresetSearch] = useState("");
+  const [savedPresetsExpanded, setSavedPresetsExpanded] = useState(() => {
+    try {
+      return localStorage.getItem("pair-saved-expanded") === "true";
+    } catch {
+      return false;
+    }
+  });
   const [presetSyncError, setPresetSyncError] = useState("");
   const [presetAuthOpen, setPresetAuthOpen] = useState(false);
   const [presetAuthPassword, setPresetAuthPassword] = useState("");
@@ -4520,6 +4518,23 @@ export function PairMonitorPage() {
   const [fundingSummaryError, setFundingSummaryError] = useState("");
   const initialDayCompareLoadedRef = useRef(false);
   const savedPresetGroups = useMemo(() => groupSavedPairPresets(savedPresets), [savedPresets]);
+  const normalizedSavedPresetSearch = savedPresetSearch.trim().toLowerCase();
+  const filteredSavedPresetGroups = useMemo(() => {
+    if (!normalizedSavedPresetSearch) return savedPresetGroups;
+    return savedPresetGroups
+      .map((group) => ({
+        ...group,
+        presets: group.presets.filter((preset) => savedPairPresetMatchesSearch(preset, normalizedSavedPresetSearch))
+      }))
+      .filter((group) => group.presets.length > 0);
+  }, [savedPresetGroups, normalizedSavedPresetSearch]);
+  const visibleSavedPresetGroups = normalizedSavedPresetSearch || savedPresetsExpanded
+    ? filteredSavedPresetGroups
+    : filteredSavedPresetGroups.slice(0, 4);
+  const currentPairConfigId = pairConfigId(normalizePairFormForSymbolMode(
+    { ...initialFormValues, ...watchedFormValues },
+    pairSymbolMode
+  ));
   const hyperliquidDexOptions = useMemo(
     () => hyperliquidDexSelectOptions(hyperliquidMarkets),
     [hyperliquidMarkets]
@@ -5907,12 +5922,23 @@ export function PairMonitorPage() {
         </Form>
         {savedPresetGroups.length ? (
           <div className="pair-saved-presets">
-            <Typography.Text className="pair-saved-title">已保存</Typography.Text>
+            <div className="pair-saved-header">
+              <Typography.Text className="pair-saved-title">已保存</Typography.Text>
+              <Input
+                className="pair-saved-search"
+                allowClear
+                size="small"
+                placeholder="搜标的/交易所"
+                aria-label="搜标的/交易所"
+                value={savedPresetSearch}
+                onChange={(event) => setSavedPresetSearch(event.target.value)}
+              />
+            </div>
             <div className="pair-saved-group-list">
-              {savedPresetGroups.map((group) => (
+              {visibleSavedPresetGroups.map((group) => (
                 <div
                   key={group.key}
-                  className={`pair-saved-group ${group.sameSymbol ? "pair-saved-group-same" : "pair-saved-group-custom"}`}
+                  className="pair-saved-group"
                 >
                   <div className="pair-saved-group-head">
                     <Typography.Text className="pair-saved-group-symbol">{group.title}</Typography.Text>
@@ -5923,7 +5949,7 @@ export function PairMonitorPage() {
                       <Tag
                         key={preset.id}
                         closable
-                        className={`pair-saved-tag ${isSameSymbolPreset(preset) ? "pair-saved-tag-same" : "pair-saved-tag-custom"}`}
+                        className={`pair-saved-tag ${isSameSymbolPreset(preset) ? "pair-saved-tag-same" : "pair-saved-tag-custom"}${pairConfigId(preset) === currentPairConfigId ? " pair-saved-tag-active" : ""}`}
                         onClick={() => applySavedPreset(preset)}
                         onClose={(event) => {
                           event.preventDefault();
@@ -5937,7 +5963,27 @@ export function PairMonitorPage() {
                   </div>
                 </div>
               ))}
+              {!visibleSavedPresetGroups.length ? <Typography.Text type="secondary">无匹配</Typography.Text> : null}
             </div>
+            {!normalizedSavedPresetSearch && savedPresetGroups.length > 4 ? (
+              <Button
+                className="pair-saved-toggle"
+                type="link"
+                size="small"
+                aria-expanded={savedPresetsExpanded}
+                onClick={() => {
+                  const expanded = !savedPresetsExpanded;
+                  setSavedPresetsExpanded(expanded);
+                  try {
+                    localStorage.setItem("pair-saved-expanded", String(expanded));
+                  } catch {
+                    // Expansion still works when local storage is unavailable.
+                  }
+                }}
+              >
+                {savedPresetsExpanded ? "收起" : `展开全部（共 ${savedPresetGroups.length} 组）`}
+              </Button>
+            ) : null}
           </div>
         ) : null}
       </section>

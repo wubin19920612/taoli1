@@ -3747,17 +3747,16 @@ body {
 
 .pair-saved-group-list {
   display: flex;
+  flex-direction: column;
   gap: 10px;
   min-width: 0;
-  overflow-x: auto;
-  padding-bottom: 4px;
 }
 
 .pair-saved-group {
   display: flex;
-  flex: 0 0 auto;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
+  min-width: 0;
   padding: 4px 8px;
   border: 1px solid #dfe8e4;
   border-radius: 6px;
@@ -3766,9 +3765,11 @@ body {
 
 .pair-saved-group-head {
   display: flex;
-  flex: 0 0 auto;
+  flex: 0 0 120px;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+  line-height: 30px;
 }
 
 .pair-saved-group-symbol {
@@ -3790,7 +3791,10 @@ body {
 
 .pair-saved-group-items {
   display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
   gap: 6px;
+  min-width: 0;
 }
 
 .pair-saved-tag-same {
@@ -3843,7 +3847,31 @@ body {
   justify-self: center;
 }
 
-.pair-saved-presets,
+.pair-saved-presets {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  padding-top: 8px;
+}
+
+.pair-saved-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pair-saved-search {
+  width: 180px;
+  max-width: 100%;
+}
+
+.pair-saved-toggle {
+  justify-self: start;
+  padding-inline: 0;
+}
+
 .premium-saved-presets {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -3893,12 +3921,11 @@ body {
 
 .pair-saved-main {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   flex: 1 1 auto;
   gap: 6px;
   min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
 }
 
 .pair-saved-symbol {
@@ -6994,7 +7021,6 @@ body {
     min-width: 128px;
   }
 
-  .pair-saved-presets,
   .premium-saved-presets {
     grid-template-columns: 1fr;
   }
@@ -7005,8 +7031,14 @@ body {
 }
 
 .pair-saved-group-items .pair-saved-tag {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   width: auto;
+  max-width: 100%;
+}
+
+.pair-saved-tag.pair-saved-tag-active {
+  border-color: #478d79;
+  background: #e6f4ee;
 }
 
 .pair-mark-summary {
@@ -7101,7 +7133,12 @@ body {
     flex: 1 1 100%;
   }
 
-  .pair-saved-presets {
-    grid-template-columns: auto minmax(0, 1fr);
+  .pair-saved-group {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .pair-saved-group-head {
+    flex-basis: auto;
   }
 }
