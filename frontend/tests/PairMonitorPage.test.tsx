@@ -1282,7 +1282,7 @@ describe("PairMonitorPage", () => {
     expect(screen.queryByText("标记价差（辅助）")).toBeNull();
     expect(executable.getByText("+0.80%")).toBeTruthy();
     expect(executable.getByText("+1.20%")).toBeTruthy();
-    expect(executable.getByText("+0.40%")).toBeTruthy();
+    expect(executable.getByText("0.4000%")).toBeTruthy();
     expect(screen.getByText(/左 ask .*右 bid/)).toBeTruthy();
     expect(screen.getByText(/左 bid .*右 ask/)).toBeTruthy();
   });
@@ -1309,7 +1309,7 @@ describe("PairMonitorPage", () => {
     const position = within(screen.getByRole("region", { name: "价差位置（查询区间 4 小时）" }));
     expect(document.querySelectorAll(".pair-focus-metrics > .pair-metric-card")).toHaveLength(5);
     expect(executable.getByText("开平差（来回成本）")).toBeTruthy();
-    expect(executable.getByText("+0.40%")).toBeTruthy();
+    expect(executable.getByText("0.4000%")).toBeTruthy();
     expect(funding.getByText("净费率 / 8h")).toBeTruthy();
     expect(funding.getByText("+0.0500%").classList.contains("pair-summary-funding-positive")).toBe(true);
     expect(funding.getByText("日化 +0.1500% · 年化 +54.75%")).toBeTruthy();

@@ -96,7 +96,7 @@ export function PairSummaryCards({ result, hours, ratioMode, spreadTone, closeSp
       <div className="pair-summary-small">左 bid {price(current?.leg1.bid_price)} · 右 ask {price(current?.leg2.ask_price)}</div>
       <div className="pair-summary-footer">
         <span>开平差（来回成本）</span>
-        <strong>{delta(cost.difference)}{ratioMode && cost.relativePct !== null ? `（${signedPct(cost.relativePct)}）` : ""}</strong>
+        <strong>{ratioMode ? delta(cost.difference) : cost.difference === null ? "-" : `${cost.difference.toFixed(4)}%`}{ratioMode && cost.relativePct !== null ? `（${signedPct(cost.relativePct)}）` : ""}</strong>
       </div>
     </Card>
     <FundingSummaryCard current={current} signedPct={signedPct} exchangeLabels={exchangeLabels} />
