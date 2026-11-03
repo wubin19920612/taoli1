@@ -38,6 +38,9 @@ class Settings:
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     database_url: str = "sqlite:///./data/radar.db"
     poll_interval_seconds: float = 5.0
+    hl_bbo_enabled: bool = True
+    hl_bbo_max_age_seconds: float = 10.0
+    hl_bbo_max_coins: int = 450
     alert_match_concurrency: int = 3
     alert_diagnostic_timeout_seconds: float = 20.0
     alert_orderbook_timeout_seconds: float = 15.0
@@ -96,6 +99,10 @@ class Settings:
     astro_request_timeout_seconds: float = 10.0
 
     def __post_init__(self) -> None:
+        if not math.isfinite(self.hl_bbo_max_age_seconds) or self.hl_bbo_max_age_seconds <= 0:
+            raise ValueError("hl_bbo_max_age_seconds must be finite and positive")
+        if type(self.hl_bbo_max_coins) is not int or self.hl_bbo_max_coins <= 0:
+            raise ValueError("hl_bbo_max_coins must be a positive integer")
         for name, default, upper, integer in (
             ("alert_match_concurrency", 3, 8, True),
             ("alert_diagnostic_timeout_seconds", 20.0, 120, False),
@@ -231,6 +238,9 @@ def get_settings() -> Settings:
         cors_origins=os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"),
         database_url=database_url,
         poll_interval_seconds=float(os.getenv("POLL_INTERVAL_SECONDS", "5")),
+        hl_bbo_enabled=bool_env("HL_BBO_ENABLED", True),
+        hl_bbo_max_age_seconds=float(os.getenv("HL_BBO_MAX_AGE_SECONDS", "10")),
+        hl_bbo_max_coins=int(os.getenv("HL_BBO_MAX_COINS", "450")),
         alert_match_concurrency=_bounded_alert_number(
             os.getenv("ALERT_MATCH_CONCURRENCY", "3"), 3, 8, integer=True,
         ),

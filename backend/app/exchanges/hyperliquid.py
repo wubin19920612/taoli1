@@ -11,6 +11,7 @@ from app.exchanges.base import (
     parse_float,
     utc_now,
 )
+from app.exchanges.hyperliquid_bbo import HyperliquidBboStream
 from app.models.market import MarketSnapshot, MarketType
 from app.models.orderbook import OrderBookSnapshot
 
@@ -21,8 +22,9 @@ class HyperliquidAdapter(ExchangeAdapter):
     perp_dex_concurrency = 3
     priority_order_book_markets = frozenset({"io:ANTH"})
 
-    def __init__(self, client=None):
+    def __init__(self, client=None, *, bbo_stream: HyperliquidBboStream | None = None):
         super().__init__(client)
+        self.bbo_stream = bbo_stream
         self.market_errors: dict[str, str] = {}
         self._collateral_names: dict[int, str] = {0: "USDC"}
 
@@ -58,6 +60,8 @@ class HyperliquidAdapter(ExchangeAdapter):
         rows = self._dedupe_perp_rows_by_market(
             self._attach_predicted_fundings(rows, predicted_fundings)
         )
+        if self.bbo_stream is not None:
+            self.bbo_stream.set_coins(row.raw_symbol for row in rows)
         return await self._attach_priority_order_books(rows)
 
     async def fetch_order_book(
@@ -193,6 +197,24 @@ class HyperliquidAdapter(ExchangeAdapter):
     ) -> list[MarketSnapshot]:
         enriched: list[MarketSnapshot] = []
         for row in rows:
+            bbo = self.bbo_stream.get_fresh(row.raw_symbol) if self.bbo_stream else None
+            if bbo is not None:
+                bid, bid_size, ask, ask_size, exchange_time_ms, _ = bbo
+                book_time = parse_datetime_ms(exchange_time_ms)
+                enriched.append(row.model_copy(update={
+                    "bid": bid,
+                    "ask": ask,
+                    "bid_size": bid_size,
+                    "ask_size": ask_size,
+                    "quote_kind": "book",
+                    "is_estimated": False,
+                    "estimated_fields": [],
+                    "data_source": "Hyperliquid metaAndAssetCtxs + WS bbo",
+                    "upstream_timestamp": book_time,
+                    "book_timestamp": book_time,
+                    "quote_time_source": "upstream",
+                }))
+                continue
             if row.raw_symbol not in self.priority_order_book_markets:
                 enriched.append(row)
                 continue

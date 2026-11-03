@@ -57,6 +57,8 @@ from app.db.repositories import (
     SettingsRepository,
 )
 from app.db.schema import initialize_schema
+from app.exchanges.hyperliquid import HyperliquidAdapter
+from app.exchanges.hyperliquid_bbo import HyperliquidBboStream
 from app.services.astro_card_attempts import AstroCardAttemptRepository
 from app.db.market_identity_repository import MarketIdentityRepository
 from app.services.market_validation_review import MarketValidationService
@@ -811,6 +813,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         stop_event = asyncio.Event()
+        app.state.hyperliquid_bbo_stream = None
         if not app.state.settings.dashboard_password:
             logger.warning("DASHBOARD_PASSWORD is empty; all API routes are unprotected")
         db_path = _sqlite_path(app_settings)
@@ -937,6 +940,21 @@ def create_app(
                 name="market-identity-catalog",
             )
             exchange_adapters = default_exchange_adapters()
+            if start_background_workers and app_settings.hl_bbo_enabled:
+                hyperliquid_adapter = next(
+                    (adapter for adapter in exchange_adapters if isinstance(adapter, HyperliquidAdapter)),
+                    None,
+                )
+                if hyperliquid_adapter is not None:
+                    bbo_stream = HyperliquidBboStream(
+                        max_coins=app_settings.hl_bbo_max_coins,
+                        max_age_seconds=app_settings.hl_bbo_max_age_seconds,
+                    )
+                    app.state.hyperliquid_bbo_stream = bbo_stream
+                    hyperliquid_adapter.bbo_stream = bbo_stream
+                    _start_background_task(
+                        supervisor, lambda: bbo_stream.run(stop_event), name="hyperliquid-bbo",
+                    )
             app.state.market_validation.set_adapters(exchange_adapters)
             history_recorder = OpportunityHistoryRecorder(
                 app.state.history_repo,
