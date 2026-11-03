@@ -1,3 +1,5 @@
+from app.api import routes_auth
+from app.db.auth import AuthStore
 import asyncio
 import json
 import logging
@@ -821,6 +823,7 @@ def create_app(
         db = await connect_database(db_path, recover_stale_snapshots=True)
         await initialize_schema(db)
         app.state.db = db
+        app.state.auth_store = await AuthStore.open(db_path)
         attempts_db = db if db_path == ":memory:" else await connect_database(db_path)
         if attempts_db is not db:
             # A post-create mark that times out leaves the route unknown; wait longer.
@@ -1130,6 +1133,7 @@ def create_app(
                 await preset_db.close()
             if attempts_db is not db:
                 await attempts_db.close()
+            await app.state.auth_store.close()
             await db.close()
 
     app = FastAPI(title=app_settings.app_name, lifespan=lifespan)
@@ -1215,6 +1219,7 @@ def create_app(
     )
     # Every API router uses the same guard; public exceptions live in security.py.
     for router in (
+        routes_auth.router,
         routes_features.router,
         routes_health.router,
         routes_account_connections.router,

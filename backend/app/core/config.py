@@ -98,7 +98,15 @@ class Settings:
     astro_default_close_position_buffer_pct: float = 0.1
     astro_request_timeout_seconds: float = 10.0
 
+    dashboard_totp_secret: str = ""
+    dashboard_api_token: str = ""
+    dashboard_session_days: int = 30
+    dashboard_auth_disabled: bool = False
+    trusted_proxy_ips: str = "127.0.0.1,172.16.0.0/12"
+
     def __post_init__(self) -> None:
+        if type(self.dashboard_session_days) is not int or not 1 <= self.dashboard_session_days <= 30:
+            raise ValueError("DASHBOARD_SESSION_DAYS must be between 1 and 30")
         if not math.isfinite(self.hl_bbo_max_age_seconds) or self.hl_bbo_max_age_seconds <= 0:
             raise ValueError("hl_bbo_max_age_seconds must be finite and positive")
         if type(self.hl_bbo_max_coins) is not int or self.hl_bbo_max_coins <= 0:
@@ -232,6 +240,11 @@ def get_settings() -> Settings:
     feishu_live_send_enabled = bool_env("FEISHU_LIVE_SEND_ENABLED", False)
 
     return Settings(
+        dashboard_totp_secret=os.getenv("DASHBOARD_TOTP_SECRET", "").strip(),
+        dashboard_api_token=os.getenv("DASHBOARD_API_TOKEN", ""),
+        dashboard_session_days=int(os.getenv("DASHBOARD_SESSION_DAYS", "30")),
+        dashboard_auth_disabled=bool_env("DASHBOARD_AUTH_DISABLED", False),
+        trusted_proxy_ips=os.getenv("TRUSTED_PROXY_IPS", "127.0.0.1,172.16.0.0/12"),
         disabled_features=frozenset(os.getenv("DISABLED_FEATURES", "").split(",")),
         app_name=os.getenv("APP_NAME", "Arbitrage Radar"),
         environment=environment,

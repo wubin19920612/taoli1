@@ -1,8 +1,7 @@
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 
-from app.core.security import dashboard_password_header, verify_dashboard_password
 from app.models.market import MarketType
 from app.models.trade_availability import (
     TradeAvailabilityResult,
@@ -31,10 +30,6 @@ def _repository(request: Request) -> TradeAvailabilityWatchRepository:
     return repository
 
 
-def _verify_write(request: Request, password: str | None) -> None:
-    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
-
-
 @router.get("/watches/list", response_model=list[TradeAvailabilityWatch])
 async def list_watches(request: Request) -> list[TradeAvailabilityWatch]:
     return await _repository(request).list()
@@ -44,9 +39,7 @@ async def list_watches(request: Request) -> list[TradeAvailabilityWatch]:
 async def create_watch(
     payload: TradeAvailabilityWatchCreate,
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ) -> TradeAvailabilityWatch:
-    _verify_write(request, password)
     exchange = payload.exchange.strip().lower()
     raw_symbol = payload.raw_symbol.strip()
     dex = payload.dex.strip().lower() if payload.dex and payload.dex.strip() else None
@@ -108,9 +101,7 @@ async def create_watch(
 async def delete_watch(
     watch_id: str,
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ) -> dict[str, str]:
-    _verify_write(request, password)
     await _repository(request).delete(watch_id)
     return {"status": "deleted"}
 

@@ -1,8 +1,7 @@
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Request, Response
 
-from app.core.security import dashboard_password_header, verify_dashboard_password
 from app.models.settings import RiskSettings
 from app.services.data_filters import (
     filter_exchange_errors,
@@ -76,10 +75,8 @@ async def ready(request: Request, response: Response) -> dict:
 @router.get("/health/detail")
 async def detail(
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ) -> dict:
     state = request.app.state
-    verify_dashboard_password(state.settings.dashboard_password, password)
     collector = state.market_collector
     now = datetime.now(UTC)
     exchanges = {}

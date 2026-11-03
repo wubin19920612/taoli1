@@ -1,6 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 
-from app.core.security import dashboard_password_header, verify_dashboard_password
 from app.db.repositories import SettingsRepository
 from app.models.announcement import AnnouncementSettings
 from app.models.settings import (
@@ -32,9 +31,7 @@ async def get_floating_watch_settings(request: Request) -> FloatingWatchSettings
 async def mutate_floating_watch_settings(
     mutation: FloatingWatchMutation,
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ) -> FloatingWatchSettings:
-    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
     try:
         return await _settings_repo(request).mutate_floating_watch_settings(mutation)
     except ValueError as exc:
@@ -45,9 +42,7 @@ async def mutate_floating_watch_settings(
 async def mutate_floating_watch_position_settings(
     mutation: FloatingWatchPositionMutation,
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ) -> FloatingWatchSettings:
-    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
     try:
         return await _settings_repo(request).mutate_floating_watch_position_settings(mutation)
     except ValueError as exc:
@@ -76,9 +71,7 @@ async def premium_index_alert_status(request: Request) -> dict:
 async def update_risk_settings(
     settings: RiskSettings,
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ) -> RiskSettings:
-    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
     return await _settings_repo(request).set_risk_settings(settings)
 
 
@@ -91,9 +84,7 @@ async def get_alert_message_template(request: Request) -> AlertMessageTemplateSe
 async def update_alert_message_template(
     settings: AlertMessageTemplateSettings,
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ) -> AlertMessageTemplateSettings:
-    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
     return await _settings_repo(request).set_alert_message_template(settings)
 
 
@@ -111,9 +102,7 @@ async def get_astro_card_settings(request: Request) -> AstroCardSettings:
 async def update_astro_card_settings(
     settings: AstroCardSettings,
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ) -> AstroCardSettings:
-    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
     return await _settings_repo(request).set_astro_card_settings(settings)
 
 
@@ -131,9 +120,7 @@ async def get_astro_automation_settings(request: Request) -> AstroAutomationSett
 async def update_astro_automation_settings(
     settings: AstroAutomationSettings,
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ) -> AstroAutomationSettings:
-    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
     saved = await _settings_repo(request).set_astro_automation_settings(settings)
     service = getattr(request.app.state, "astro_alert_service", None)
     if service is not None and hasattr(service, "alert_auto_create_enabled"):
@@ -152,7 +139,5 @@ async def get_announcement_settings(request: Request) -> AnnouncementSettings:
 async def update_announcement_settings(
     settings: AnnouncementSettings,
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ) -> AnnouncementSettings:
-    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
     return await _settings_repo(request).set_announcement_settings(settings)

@@ -1,7 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.core.features import require_feature
-from app.core.security import dashboard_password_header, verify_dashboard_password
 from app.models.gate_twap import (
     GateTwapJobStatus,
     GateTwapMarketSnapshot,
@@ -24,10 +23,6 @@ def _manager(request: Request) -> GateTwapJobManager:
     if manager is None:
         raise HTTPException(status_code=503, detail="Gate TWAP manager is not ready")
     return manager
-
-
-def _require_dashboard_password(request: Request, password: str | None) -> None:
-    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
 
 
 @router.get("/market", response_model=GateTwapMarketSnapshot)
@@ -76,9 +71,7 @@ async def get_gate_twap_job(job_id: str, request: Request) -> GateTwapJobStatus:
 async def start_gate_twap_job(
     payload: GateTwapRunRequest,
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ) -> GateTwapJobStatus:
-    _require_dashboard_password(request, password)
     manager = _manager(request)
     try:
         return await manager.start(payload)
@@ -90,9 +83,7 @@ async def start_gate_twap_job(
 async def cancel_gate_twap_job(
     job_id: str,
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ) -> GateTwapJobStatus:
-    _require_dashboard_password(request, password)
     manager = _manager(request)
     try:
         return await manager.cancel(job_id)

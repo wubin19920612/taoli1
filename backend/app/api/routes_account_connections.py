@@ -1,6 +1,5 @@
-from fastapi import APIRouter, Header, HTTPException, Request, Response, status
+from fastapi import APIRouter, HTTPException, Request, Response, status
 
-from app.core.security import verify_dashboard_password
 from app.models.account_connection import (
     AccountConnectionOverview,
     AccountConnectionTestResult,
@@ -19,7 +18,6 @@ router = APIRouter(prefix="/account-connections")
 
 def _service(
     request: Request,
-    provided_password: str | None,
 ) -> AccountConnectionService:
     service = getattr(request.app.state, "account_connection_service", None)
     if service is None:
@@ -30,7 +28,6 @@ def _service(
             status_code=503,
             detail="必须先配置非空的 DASHBOARD_PASSWORD 才能管理账户凭据",
         )
-    verify_dashboard_password(expected_password, provided_password)
     return service
 
 
@@ -43,19 +40,17 @@ def _http_error(exc: Exception) -> HTTPException:
 @router.get("", response_model=AccountConnectionOverview)
 async def list_account_connections(
     request: Request,
-    x_dashboard_password: str | None = Header(default=None),
 ) -> AccountConnectionOverview:
-    return await _service(request, x_dashboard_password).overview()
+    return await _service(request).overview()
 
 
 @router.post("", response_model=AccountConnectionView, status_code=status.HTTP_201_CREATED)
 async def create_account_connection(
     payload: AccountConnectionWrite,
     request: Request,
-    x_dashboard_password: str | None = Header(default=None),
 ) -> AccountConnectionView:
     try:
-        return await _service(request, x_dashboard_password).create(payload)
+        return await _service(request).create(payload)
     except (AccountConnectionConfigurationError, AccountConnectionNotFoundError) as exc:
         raise _http_error(exc) from exc
 
@@ -64,10 +59,9 @@ async def create_account_connection(
 async def test_draft_account_connection(
     payload: AccountConnectionWrite,
     request: Request,
-    x_dashboard_password: str | None = Header(default=None),
 ) -> AccountConnectionTestResult:
     try:
-        return await _service(request, x_dashboard_password).test_draft(payload)
+        return await _service(request).test_draft(payload)
     except (AccountConnectionConfigurationError, AccountConnectionNotFoundError) as exc:
         raise _http_error(exc) from exc
 
@@ -77,10 +71,9 @@ async def update_account_connection(
     connection_id: str,
     payload: AccountConnectionUpdate,
     request: Request,
-    x_dashboard_password: str | None = Header(default=None),
 ) -> AccountConnectionView:
     try:
-        return await _service(request, x_dashboard_password).update(connection_id, payload)
+        return await _service(request).update(connection_id, payload)
     except (AccountConnectionConfigurationError, AccountConnectionNotFoundError) as exc:
         raise _http_error(exc) from exc
 
@@ -89,10 +82,9 @@ async def update_account_connection(
 async def delete_account_connection(
     connection_id: str,
     request: Request,
-    x_dashboard_password: str | None = Header(default=None),
 ) -> Response:
     try:
-        await _service(request, x_dashboard_password).delete(connection_id)
+        await _service(request).delete(connection_id)
     except (AccountConnectionConfigurationError, AccountConnectionNotFoundError) as exc:
         raise _http_error(exc) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -102,9 +94,8 @@ async def delete_account_connection(
 async def test_saved_account_connection(
     connection_id: str,
     request: Request,
-    x_dashboard_password: str | None = Header(default=None),
 ) -> AccountConnectionTestResult:
     try:
-        return await _service(request, x_dashboard_password).test_saved(connection_id)
+        return await _service(request).test_saved(connection_id)
     except (AccountConnectionConfigurationError, AccountConnectionNotFoundError) as exc:
         raise _http_error(exc) from exc

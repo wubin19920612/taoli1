@@ -1,6 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 
-from app.core.security import dashboard_password_header, verify_dashboard_password
 from app.models.funding_arbitrage import FundingArbitragePreview, FundingArbitrageSettings
 from app.models.settings import RiskSettings
 from app.services.data_filters import filter_markets
@@ -36,9 +35,7 @@ async def get_funding_arbitrage_settings(request: Request) -> FundingArbitrageSe
 async def update_funding_arbitrage_settings(
     settings: FundingArbitrageSettings,
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ) -> FundingArbitrageSettings:
-    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
     repo = _settings_repo(request)
     return await repo.set_funding_arbitrage_settings(settings)
 

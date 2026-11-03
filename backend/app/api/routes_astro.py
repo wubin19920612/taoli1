@@ -1,9 +1,8 @@
 import logging
 import time
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
-from app.core.security import dashboard_password_header, verify_dashboard_password
 from app.api.routes_arb_mvp import default_max_position, target_credentials
 from app.db.repositories import SettingsRepository
 from app.models.astro import (
@@ -62,10 +61,6 @@ def _astro_client(request: Request) -> AstroSdkClient:
     if client is None:
         raise HTTPException(status_code=503, detail="Astro client is not ready")
     return client
-
-
-def _require_dashboard_password(request: Request, password: str | None) -> None:
-    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
 
 
 def _find_opportunity(request: Request, opportunity_id: str):
@@ -477,9 +472,7 @@ async def preadd_settings(request: Request) -> AstroPreaddSettings:
 async def save_preadd_settings(
     settings: AstroPreaddSettings,
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ) -> AstroPreaddSettings:
-    _require_dashboard_password(request, password)
     return await _settings_repo(request).set_astro_preadd_settings(settings)
 
 
@@ -492,9 +485,7 @@ async def preview_preadd(request: Request) -> AstroPreaddPreview:
 async def run_preadd(
     request: Request,
     payload: AstroPreaddRunRequest | None = None,
-    password: str | None = Depends(dashboard_password_header),
 ) -> AstroPreaddRunResult:
-    _require_dashboard_password(request, password)
     return await _preadd_service(request).run(
         payload.candidate_ids if payload else None,
         payload.card_variant if payload else None,
@@ -504,9 +495,7 @@ async def run_preadd(
 @router.get("/pairs")
 async def list_astro_pairs(
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ) -> list[dict]:
-    _require_dashboard_password(request, password)
     client = _astro_client(request)
     try:
         return await client.list_pairs_cached()
@@ -719,9 +708,7 @@ async def create_astro_card_from_opportunity(
     opportunity_id: str,
     request: Request,
     card_request: AstroCardCreateRequest | None = None,
-    password: str | None = Depends(dashboard_password_header),
 ) -> AstroAlertActionResult:
-    _require_dashboard_password(request, password)
     opportunity = _find_opportunity(request, opportunity_id)
     return await _create_astro_card(request, opportunity, card_request)
 
@@ -730,9 +717,7 @@ async def create_astro_card_from_opportunity(
 async def create_astro_card_from_instrument(
     payload: AstroInstrumentCardCreateRequest,
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ) -> AstroAlertActionResult:
-    _require_dashboard_password(request, password)
     opportunity, warnings = await _find_instrument_opportunity(request, payload.route)
     allowed_drift_pct = max(0.02, abs(payload.expected_open_spread_pct) * 0.1)
     actual_drift_pct = abs(opportunity.open_spread_pct - payload.expected_open_spread_pct)
