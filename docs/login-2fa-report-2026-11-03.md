@@ -144,3 +144,8 @@ python -m pytest tests -q -p no:cacheprovider --basetemp ../.pytest-tmp
 - 依次验证 HTTPS 登录、Cookie 标志、旧头 401、Token、设备列表、退出/退出全部、失败锁定和真实飞书通知，再验证旧 3000 公网不可达。HTTPS 证书、端口 80/8443、安全组、续期仍全部属于 C 的后续工作。
 
 首轮原始输出 `.pytest-backend-output.txt`、`.vitest-output.txt`、`.tsc-output.txt` 原样保留。本轮输出使用 `.pytest-backend-review-output.txt`、`.vitest-review-output.txt`、`.tsc-review-output.txt`（tsc 无输出时文件可能不生成），均不提交；临时数据库在仓库内 `.pytest-tmp`，不提交依赖目录。本轮规格已经在 `affad23` 跟踪，未修改其内容；交接文档见 `docs/task-handoff-2026-11-03-login-2fa.md`。
+
+## PM 验收结论（2026-11-03）
+- 锁定依赖 venv（fastapi 0.162.0 / starlette 1.10.0 / pydantic 2.14.1）后端全量：`2499 passed, 6 deselected, 13 warnings`。前端 424 passed、tsc 通过（Codex 日志）。
+- 只读复审（d3afdf6）：PM decisions 2–6 通过；第 1 条剩余"发送背压时 SSE 停在 yield、撤销后 31 s 才断开"。**PM 接受为已知限制**：阻塞期间客户端收不到新数据，恢复读取后下一次复查即断开，最多送达撤销时已在发送中的一条消息。不再返工。
+- 验收通过，可以部署；部署按任务书 C 节，由 Claude 执行，需用户先在安全组放行 80、8443。
