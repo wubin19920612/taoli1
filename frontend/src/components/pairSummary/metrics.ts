@@ -50,10 +50,10 @@ export function countdown(settlement: number | null, now: number): string {
 export function roundTripMetrics(open: number | null | undefined, close: number | null | undefined) {
   const opening = finite(open);
   const closing = finite(close);
-  const difference = opening === null || closing === null ? null : finite(opening - closing);
+  const difference = opening === null || closing === null ? null : finite(Math.abs(opening - closing));
   return {
     difference,
-    relativePct: difference === null || closing === null || closing === 0 ? null : finite(difference / closing * 100)
+    relativePct: difference === null || closing === null || closing === 0 ? null : finite(difference / Math.abs(closing) * 100)
   };
 }
 

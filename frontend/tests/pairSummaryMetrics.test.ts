@@ -72,7 +72,7 @@ describe("pair summary funding", () => {
 
 describe("pair summary round trip", () => {
   it("subtracts close from open and reports ratio-relative cost", () => {
-    expect(roundTripMetrics(0.8, 1.2).difference).toBeCloseTo(-0.4);
+    expect(roundTripMetrics(0.8, 1.2).difference).toBeCloseTo(0.4);
     expect(roundTripMetrics(40.2, 40).relativePct).toBeCloseTo(0.5);
     expect(roundTripMetrics(null, 1).difference).toBeNull();
     expect(roundTripMetrics(1, undefined).difference).toBeNull();
