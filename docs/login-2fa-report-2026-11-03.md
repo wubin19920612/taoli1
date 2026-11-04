@@ -149,3 +149,7 @@ python -m pytest tests -q -p no:cacheprovider --basetemp ../.pytest-tmp
 - 锁定依赖 venv（fastapi 0.162.0 / starlette 1.10.0 / pydantic 2.14.1）后端全量：`2499 passed, 6 deselected, 13 warnings`。前端 424 passed、tsc 通过（Codex 日志）。
 - 只读复审（d3afdf6）：PM decisions 2–6 通过；第 1 条剩余"发送背压时 SSE 停在 yield、撤销后 31 s 才断开"。**PM 接受为已知限制**：阻塞期间客户端收不到新数据，恢复读取后下一次复查即断开，最多送达撤销时已在发送中的一条消息。不再返工。
 - 验收通过，可以部署；部署按任务书 C 节，由 Claude 执行，需用户先在安全组放行 80、8443。
+
+## PM decision：兼容现有 arb 宿主机绑定（2026-11-04）
+
+部署前发现生产机 arb-mvp 服务（含 live）绑定在 `172.18.0.1`，后端 `ARB_PAPER_URL` / `ARB_LIVE_URL` 也指向该地址，现有 Compose 网络为 `172.18.0.0/16`。若改用此前固定的 `172.30.0.0/24`，后端将无法连接 arb。PM 决定将固定 Compose 子网改为 `172.18.0.0/24`、网关改为 `172.18.0.1`，并同步前端 nginx 精确信任网关 `/32`、后端两处可信代理默认 `/24` 及对应测试地址（含严格匹配的正则）。本决定取代上文旧网段说明；其他逻辑和断言强度不变。

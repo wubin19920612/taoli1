@@ -102,7 +102,7 @@ class Settings:
     dashboard_api_token: str = ""
     dashboard_session_days: int = 30
     dashboard_auth_disabled: bool = False
-    trusted_proxy_ips: str = "172.30.0.0/24"
+    trusted_proxy_ips: str = "172.18.0.0/24"
 
     def __repr__(self) -> str:
         # Configuration can contain credentials; never reveal them via exception/debug repr.
@@ -248,7 +248,7 @@ def get_settings() -> Settings:
         dashboard_api_token=os.getenv("DASHBOARD_API_TOKEN", ""),
         dashboard_session_days=int(os.getenv("DASHBOARD_SESSION_DAYS", "30")),
         dashboard_auth_disabled=bool_env("DASHBOARD_AUTH_DISABLED", False),
-        trusted_proxy_ips=os.getenv("TRUSTED_PROXY_IPS", "172.30.0.0/24"),
+        trusted_proxy_ips=os.getenv("TRUSTED_PROXY_IPS", "172.18.0.0/24"),
         disabled_features=frozenset(os.getenv("DISABLED_FEATURES", "").split(",")),
         app_name=os.getenv("APP_NAME", "Arbitrage Radar"),
         environment=environment,

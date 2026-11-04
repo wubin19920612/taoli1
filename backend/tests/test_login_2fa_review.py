@@ -99,18 +99,18 @@ def test_proxy_defaults_match_fixed_compose_network(monkeypatch):
     monkeypatch.delenv("TRUSTED_PROXY_IPS", raising=False)
     get_settings.cache_clear()
     try:
-        assert Settings().trusted_proxy_ips == get_settings().trusted_proxy_ips == "172.30.0.0/24"
+        assert Settings().trusted_proxy_ips == get_settings().trusted_proxy_ips == "172.18.0.0/24"
     finally:
         get_settings.cache_clear()
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
-    assert re.search(r"networks:\s+default:\s+ipam:\s+config:\s+- subnet: 172\.30\.0\.0/24\s+gateway: 172\.30\.0\.1", compose)
+    assert re.search(r"networks:\s+default:\s+ipam:\s+config:\s+- subnet: 172\.18\.0\.0/24\s+gateway: 172\.18\.0\.1", compose)
     assert '"127.0.0.1:${FRONTEND_PORT:-3000}:80"' in compose
     assert '"127.0.0.1:${BACKEND_PORT:-8000}:8000"' in compose
     assert "--no-proxy-headers" in (ROOT / "backend/Dockerfile").read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("actual", ["198.51.100.42", "2001:db8::42"])
-@pytest.mark.parametrize("forged", ["192.0.2.99", "192.0.2.99, 172.30.0.1", "invalid"])
+@pytest.mark.parametrize("forged", ["192.0.2.99", "192.0.2.99, 172.18.0.1", "invalid"])
 def test_double_proxy_chain_overwrites_client_xff(actual, forged):
     # Bind this offline header-chain model to both checked-in nginx configurations.
     host = (ROOT / "deploy/nginx-https.conf.example").read_text(encoding="utf-8")
@@ -121,17 +121,17 @@ def test_double_proxy_chain_overwrites_client_xff(actual, forged):
         assert "$proxy_add_x_forwarded_for" not in config
     assert re.findall(r"set_real_ip_from\s+([^;]+);", host) == []
     trusted = re.findall(r"set_real_ip_from\s+([^;]+);", frontend)
-    assert trusted == ["172.30.0.1/32"]
+    assert trusted == ["172.18.0.1/32"]
     assert "real_ip_header X-Forwarded-For;" in frontend
     assert "real_ip_recursive on;" in frontend
     client_headers = {"x-forwarded-for": forged}
     host_headers = {**client_headers, "x-forwarded-for": actual}
-    gateway = "172.30.0.1"
+    gateway = "172.18.0.1"
     frontend_remote = host_headers["x-forwarded-for"] if any(
         ipaddress.ip_address(gateway) in ipaddress.ip_network(net) for net in trusted
     ) else gateway
     app = SimpleNamespace(state=SimpleNamespace(settings=Settings()))
-    request = Request({"type": "http", "app": app, "client": ("172.30.0.2", 123),
+    request = Request({"type": "http", "app": app, "client": ("172.18.0.2", 123),
                        "headers": [(b"x-forwarded-for", frontend_remote.encode())]})
     assert client_ip(request) == actual
     # A direct untrusted client cannot use XFF to impersonate another IP.

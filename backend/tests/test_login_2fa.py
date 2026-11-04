@@ -224,13 +224,13 @@ async def test_storage_failure_and_invalid_unicode_are_sanitized(context, monkey
 
 
 @pytest.mark.parametrize("peer,forwarded,expected", [
-    ("172.30.0.2", "192.0.2.1, 198.51.100.2", "198.51.100.2"),
-    ("172.30.0.3", "192.0.2.1", "192.0.2.1"),
+    ("172.18.0.2", "192.0.2.1, 198.51.100.2", "198.51.100.2"),
+    ("172.18.0.3", "192.0.2.1", "192.0.2.1"),
     ("172.20.0.2", "192.0.2.1", "172.20.0.2"),
     ("127.0.0.1", "192.0.2.1", "127.0.0.1"),
     ("198.51.100.3", "192.0.2.1", "198.51.100.3"),
-    ("172.30.0.2", "invalid", "172.30.0.2"),
-    ("172.30.0.2", "2001:db8::1", "2001:db8::1"),
+    ("172.18.0.2", "invalid", "172.18.0.2"),
+    ("172.18.0.2", "2001:db8::1", "2001:db8::1"),
 ])
 def test_trusted_proxy(peer, forwarded, expected):
     app = SimpleNamespace(state=SimpleNamespace(settings=Settings()))
