@@ -1,5 +1,88 @@
 # 阶段 1：影子账本实现与离线验证报告
 
+## PM 第二轮修复（2026-11-04，当前交付）
+
+本轮按任务书「PM decisions 第二轮」修复四条审查问题，并检查关闭顺序。工作树为 `taoli1/.worktrees/shadow-ledger`，分支 `codex/shadow-ledger`，起点 `4dfd696`（包含性能基线 `db05329`）；进入任务时工作区干净，无 `HANDOFF.md`。以下本轮记录优先于后面的历史记录，尤其是开关关闭后的行为、API 连接和资金费恢复说明。
+
+### 修复与失败回归
+
+| 审查项 | 修复前证据 | 最终行为与验证 |
+| --- | --- | --- |
+| 变体资金费恢复 | 202 行分两批（200/2）更新，第一批提交后打断；两种恢复顺序分别出现 2/0、2/4 bp；`2 failed, 27 deselected in 1.54s` | 每行持有独立的两腿资金费状态，序列化到该行既有 `tracking.funding`，包括 `last`、`next`、费率与周期；恢复不再拿第一行的进度给所有变体使用。两种顺序均为 2/2 bp，再次恢复也不重复结算。保留原 payload 格式，不迁移表结构。 |
+| 关闭仍运行和 DELETE | SQLite trace 捕获到 `shadow_trades` 的保留期 DELETE；已存记录仍经 API 返回 | `initialize/submit/_process/inline observer/aclose` 在关闭时直接返回；main 不启动影子消费者及影子 CrossEx 目录任务。trace 断言无 INSERT/UPDATE/DELETE，to_thread 派发次数为零、没有活动影子工作轮或专用 DB；inline/background 两种模式都不注册影子任务。status 返回 `enabled=false`，正常 trades/buckets 请求均为空，原认证及参数校验保留。 |
+| API 读到未提交事务 | 已提交 2 行、写连接外层 BEGIN 内再保存 2 行，两个接口都读到 4 行；`1 failed, 4 deselected in 24.23s` | 路由在 `asyncio.to_thread` 内创建独立 `file:...?mode=ro` 连接，复用既有仓库查询方法，读完关闭。提交前/回滚后都是 2 行，提交后为 4 行；trades 与 buckets 均覆盖。另验证连接创建不在事件循环线程，URI 正确编码空格和 #，同 URI 写入被 SQLite 拒绝。 |
+| 所有异常路径统一限频 | capture 连续三次打印三条、catalog 没有统一分类计数；publish 异常逃逸并阻断关闭；`3 failed, 6 deselected in 17.58s` | `ShadowErrorLog` 用锁维护按类别的计数和上次日志时刻，每类 300 秒最多一条，其余仍计数。`errors` 是总计，`error_counts` 返回计数副本；目录计数无需等下一轮就能在 status 看到。验证 299/300 秒边界和不同类别互不压制。 |
+
+API 只读查询封装在 `routes_shadow.py`，没有改 `repositories.py`、`schema.py`，避免触及其他 SQLite 任务的共享实现。启用态 API 验收改用临时**文件** SQLite；独立只读连接不回退借用 `:memory:` 的写连接。文件不可读或统计失败返回 503，并进入统一分类计数。关闭态仍用内存库验证旧数据不可见；原数据断言、认证断言和参数校验断言全部保留。
+
+异常分类覆盖：`initialize`、`capture`、`consumer`（处理/持久化）、`worker`、`publish`、`catalog`、`read_list_trades`、`read_closed_events`、`statistics`、`shutdown_flush`、`shutdown_close`、`shutdown_wait`。前三类、发布、目录和 API 的故障注入测试验证了计数及日志次数；正常关闭、取消关闭和重复关闭另有顺序回归。没有改变 CrossEx 匹配规则或失败重试间隔。
+
+关闭顺序：main 原有的“先停 supervisor、再 await shadow_runtime.aclose、最后关闭共享连接”保留。`aclose` 现在复用同一个受 shield 保护的关闭任务；等待活动轮结束，再 flush，再关闭自有连接。调用方取消关闭也必须等这个流程完成，重复关闭不再写已关闭连接。发布异常由 `_finish` 隔离，不能使关闭提前跳过。原取消消费者/互斥测试继续通过。
+
+关于曾出现的 `PytestUnhandledThreadExceptionWarning`：本轮没有复现原警告，不能断言其历史根因。新增发布失败用例确实暴露了旧关闭路径提前退出、遗留 SQLite 线程的问题；失败日志已写出 pytest 汇总后，该次测试进程仍未退出，随后仅中断了该测试会话。修复后的影子相关测试将该警告提升为错误，全部通过；全量日志也检查该警告。
+
+回归开发中另外保留了夹具失败记录：关闭态启动测试最初错误组合 `start_collector=True/start_background_workers=False`；只读测试最初有路径循环变量覆盖和 mock 参数名冲突（`2 failed, 7 passed in 19.74s`）。这些只修夹具，未删除或放宽断言，后续同组为 `9 passed in 19.30s`。红灯原始输出位于 `.pytest-tmp/round2-funding-red.log`、`round2-disabled-red.log`、`round2-reader-red.log`、`round2-logging-red.log`。
+
+### 最终本地环境与原始汇总
+
+Windows 11，Python **3.12.10**（`C:/Users/wubin/AppData/Local/Programs/Python/Python312/python.exe`），pytest **8.4.2**，FastAPI **0.135.1**，Starlette **0.52.1**，Pydantic **2.12.5**，aiosqlite **0.22.1**。当前 `backend/requirements.lock` 为 FastAPI **0.162.0**、Starlette **1.10.0**、Pydantic **2.14.1**、aiosqlite **0.22.1**；本轮未安装、升级或改动依赖，**锁定依赖验收由 PM 负责**。
+
+以下命令从 `backend` 执行，测试库和日志全部置于忽略的 `.pytest-tmp/` scratchpad，保留离线网络保护：
+
+```powershell
+python -m pytest tests/test_shadow_ledger.py tests/test_shadow_api_runtime.py tests/test_shadow_fake.py tests/test_shadow_routes.py tests/test_shadow_stats.py tests/test_shadow_binance_volume.py tests/test_shadow_performance_safety.py tests/test_shadow_review_regressions.py -q -W error::pytest.PytestUnhandledThreadExceptionWarning -p no:cacheprovider --basetemp ../.pytest-tmp/round2-related-final
+python -m pytest tests -q -p no:cacheprovider --basetemp ../.pytest-tmp/round2-full-final
+python -m pytest tests/test_shadow_benchmark.py -q -s -m benchmark -p no:cacheprovider --basetemp ../.pytest-tmp/round2-bench-records
+```
+
+最终原始汇总（各命令退出码均为 0）：
+
+```text
+75 passed in 23.18s
+2502 passed, 8 deselected, 12 warnings in 201.85s (0:03:21)
+2 passed in 3.30s
+```
+
+日志：`.pytest-tmp/round2-related-final.log`、`round2-full-final.log`、`round2-bench-records.log`。本轮早期全量也通过：`2502 passed, 8 deselected, 12 warnings in 181.77s (0:03:01)`；此后只调整快照构造，再执行上面的最终全量。最终 12 条 warning 均为既有 `datetime.utcnow()` 弃用警告，没有 `PytestUnhandledThreadExceptionWarning`。8 项 deselected 来自原有 network/benchmark 筛选规则；影子两个 benchmark 独立运行。没有修改筛选规则、断言、阈值或超时。前端无改动，本轮未重复运行前端测试/tsc；后文前端结果为上一轮历史证据。
+
+### 性能预算：保留 db05329 的全部断言
+
+基准文件 `test_shadow_benchmark.py` 与性能安全测试文件均未修改。所有最终基准都独立运行，不与本轮其他测试并行。逐行资金费恢复增加开销后，初次压力场景墙钟中位 **23.4105 ms**，未通过原 20 ms 门槛；中间几次也失败，分别保留在 `round2-funding-bench*.log`、`round2-benchmark-current.log`、`round2-bench-tuples.log`。未将这些失败记成通过。
+
+修复方式：无结算计划时跳过逐行资金费处理，持仓只缓存各行最早结算时刻用于调度；捕获快照保留已经生成的不可变市场元组，避免“展平、再切片”复制；工作线程对来自固定 itemgetter 的确定宽度元组直接构造记录，避免 `_make` 的逐行 Python 检查。限频包装不额外持有冻结输入，原事件循环计时仍包含输入释放。不可变输入、代数隔离、列表原地修改、精确 DEX 索引、200 行分批重试及内存上限的原回归全部保留。
+
+| 最终指标 | 压力：1000 机会 / 3000 未平行 | 真实：400 机会 / 1000 未平行，1/3 变化 | 原预算 |
+| --- | ---: | ---: | --- |
+| 事件循环中位 | 2.7911 ms | 0.8181 ms | ≤3 ms |
+| 事件循环 P95 | 4.5384 ms | 1.3441 ms | ≤10 ms |
+| 事件循环最大（含开仓/检查点） | 7.2537 ms | 2.3064 ms | ≤20 ms |
+| 工作线程 CPU 中位 | 15.625 ms | 0 ms | ≤20 / ≤8 ms |
+| 工作线程墙钟中位 | 17.8257 ms | 4.8503 ms | ≤20 / ≤8 ms（已有附加断言） |
+| WorkingSet 增量 | 25.3086 MiB | 3.3281 MiB | ≤30 MiB |
+| 初次开仓工作线程墙钟 | 200.4322 ms | 54.8385 ms | 单独记录 |
+| 检查点工作线程墙钟 | 159.1867 ms | 43.0045 ms | 单独记录 |
+
+额外以 scratchpad 脚本从 `git show db05329` 只读加载旧影子模块，同机重跑原基准，未替换工作树文件：`2 passed in 2.81s`，压力/真实规模事件循环中位 2.9809/0.8756 ms、工作线程墙钟 19.6798/4.3834 ms、RSS 26.6563/6.0352 MiB；日志 `round2-bench-baseline.log`。这仅辅助比较，并不能消除主机负载波动。Windows CPU 时钟粒度仍约 15.625 ms，0 中位不是零成本；压力场景余量仍有限，最终全部预算通过不等于生产同构验收。
+
+### 分步提交、范围与后续交接
+
+- `cb2572e` — `fix(shadow): restore funding progress per variant`
+- `90b7ea2` — `fix(shadow): fully disable runtime and API data when switched off`
+- `d4d6fad` — `fix(shadow): read API data through isolated read-only connections`
+- `6eacf39` — `fix(shadow): rate limit failures by category and drain workers on close`（同时修正上述只读测试夹具）
+- `e0b7ca8` — `perf(shadow): avoid redundant snapshot copies and record checks`
+- 本报告文档提交见分支 `git log`，不自引提交号。
+
+本轮仅改 `shadow_ledger.py`、`shadow_runtime.py`、`execution_routes.py`、`routes_shadow.py`、main 的影子任务注册块、三个影子测试文件和本报告。`config.py`、数据库共享实现、采集调度、历史写入、Astro/arb-mvp、前端和任务书均未改。原任务书在 `db05329..4dfd696` 的 PM 文档变化不属于本轮修改。`git diff --check` 纳入交付检查。
+
+**没有 push、服务器连接、WSL、备份、部署或线上验证，也没有启动真实行情服务。** 线上版本未核验、未更改。保留既有未跟踪/忽略产物，新增日志、测试库和只读对比/性能诊断脚本只放在 `.pytest-tmp/`；交付源文件只暂存本任务文件。
+
+下一步由 PM 进行锁定依赖、独立只读复审及生产同构验收；真实行情、部署仍须另行授权。当前不新增业务规则，也不回填已经发生的历史错账。后续仍以精确 MarketKey/DEX、逐行资金费进度及默认关闭约束继续本模块；无依赖的新模块另开任务。本报告包含本轮交接所需的基线、入口、规则、验证与残余风险，旧交接文件的运行行为以本节为准。
+
+---
+
+以下保留 **2026-11-03 / db05329 的历史报告**，不代表本轮最终行为或重新执行的验收。
+
 日期：2026-11-03。分支：`codex/shadow-ledger`；基线：`81585e43d60b03d3ca9df14b3f9379c5f108c183`。
 
 **交付状态：A–F 已实现；本次 PM 性能返工、后端全量、前端全量、tsc 及两个离线基准全部通过，已分步提交本地。** 返工基线为 `dc0fec6`，验收预算以规格末尾 PM decisions 为准；本机通过不等于生产可启用。 `SHADOW_ENABLED` 默认仍为 0。未推送、未部署、未连接服务器、未运行 WSL、未启动真实服务、未访问外网行情或交易接口。所有验证均为离线测试；本次未安装或更新依赖。
