@@ -2,8 +2,14 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { PairMonitorPage } from "../src/pages/PairMonitorPage";
-import type { HyperliquidDexMarket } from "../src/api/types";
+import {
+  PairMonitorPage,
+  buildFundingRateDiffRows,
+  buildMinuteFundingRateDiffRows,
+  buildRealtimeFundingRateDiffRows,
+  fundingHistoryFailedForLeg
+} from "../src/pages/PairMonitorPage";
+import type { HyperliquidDexMarket, PairSpreadFundingRecordStatus, PairSpreadQueryResult } from "../src/api/types";
 import type { RangeBacktestRequest } from "../src/api/rangeBacktest";
 import { rangeBacktestFixture } from "./fixtures/rangeBacktest";
 
@@ -1844,6 +1850,183 @@ describe("PairMonitorPage", () => {
 
     expect(await screen.findByText(/CL 同时存在于多个 DEX/)).toBeTruthy();
     expect(requests.some((request) => request.includes("leg2_symbol=CL"))).toBe(false);
+  });
+
+  function mockFundingQuery(update: (data: ReturnType<typeof pairSpreadResult>) => void) {
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const response = await fallback(input, init);
+      if (!String(input).includes("/pair-spread/query")) return response;
+      const data = await response.json() as ReturnType<typeof pairSpreadResult>;
+      update(data);
+      return Response.json(data);
+    });
+  }
+
+  async function queryFundingCard(leftMarketType = "future") {
+    window.history.pushState({}, "", `/?page=pair-monitor&leg1_exchange=bitget&leg1_market_type=${leftMarketType}&leg1_symbol=SKHY&leg2_exchange=bitget&leg2_market_type=future&leg2_symbol=SKHYNIX&hours=4&interval_seconds=5`);
+    render(<PairMonitorPage />);
+    await userEvent.click(screen.getByRole("button", { name: /查询/ }));
+    await waitFor(() => {
+      expect(document.querySelectorAll(".pair-funding-diff-card tbody tr.ant-table-row").length).toBeGreaterThan(0);
+    });
+    return document.querySelector(".pair-funding-diff-card") as HTMLElement;
+  }
+
+  function fundingTableCells(card: HTMLElement) {
+    return Array.from(card.querySelectorAll("tbody tr.ant-table-row"))
+      .map((row) => within(row as HTMLElement).getAllByRole("cell"));
+  }
+
+  function summaryMetric(card: HTMLElement, label: string) {
+    const labelElement = within(card).getByText(label);
+    return labelElement.parentElement!.querySelector(".pair-funding-rate-value") as HTMLElement;
+  }
+
+  it("shows missing funding as neutral dashes for a spot left leg and keeps right-leg net rates", async () => {
+    mockFundingQuery((data) => {
+      data.leg1.market_type = "spot";
+      data.funding_history = [
+        { exchange: data.leg2.exchange, symbol: data.leg2.symbol, funding_time: "2026-07-24T00:00:00Z", funding_rate_pct: -0.07 },
+        { exchange: data.leg2.exchange, symbol: data.leg2.symbol, funding_time: "2026-07-23T16:00:00Z", funding_rate_pct: 0.01 }
+      ];
+      Object.assign(data, { warnings: ["bitget:SKHYUSDT 历史资金费率失败: timeout"] });
+    });
+    const card = await queryFundingCard("spot");
+    const spotHeaders = within(card).getAllByText("Bitget 现货");
+    expect(spotHeaders.length).toBeGreaterThan(0);
+    expect(spotHeaders[0].parentElement!.querySelector("small")!.textContent).toBe("SKHYUSDT");
+    const rows = fundingTableCells(card);
+    expect(rows).toHaveLength(2);
+    for (const cells of rows) {
+      const missing = within(cells[1]).getByText("—");
+      expect(missing.title).toBe("现货无资金费率");
+      expect(missing.classList.contains("pair-funding-rate-neutral")).toBe(true);
+      expect(cells[3].textContent).toBe(cells[2].textContent);
+    }
+    expect(summaryMetric(card, "左侧合计").textContent).toBe("—");
+    expect(summaryMetric(card, "左侧合计").title).toBe("现货无资金费率");
+    expect(summaryMetric(card, "右侧合计").textContent).toBe("-0.0700%");
+    expect(summaryMetric(card, "总资金费率差（右-左）").textContent).toBe("-0.0700%");
+  });
+
+  it("shows missing funding between 4h settlements against a 1h leg and sums only real records", async () => {
+    mockFundingQuery((data) => {
+      data.funding_history = [
+        { ...data.funding_history[0], funding_time: "2026-07-24T00:00:00Z", funding_rate_pct: 0.04 },
+        ...[0, 1, 2].map((hour) => ({
+          ...data.funding_history[1],
+          funding_time: `2026-07-24T0${hour}:00:00Z`,
+          funding_rate_pct: 0.01
+        }))
+      ];
+    });
+    const card = await queryFundingCard();
+    const rows = fundingTableCells(card);
+    expect(rows.map((cells) => cells.slice(1).map((cell) => cell.textContent)))
+      .toEqual([["—", "+0.0100%", "+0.0100%"], ["—", "+0.0100%", "+0.0100%"], ["+0.0400%", "+0.0100%", "-0.0300%"]]);
+    for (const cells of rows.slice(0, 2)) {
+      const missing = within(cells[1]).getByText("—");
+      expect(missing.title).toBe("该时点无结算");
+      expect(missing.classList.contains("pair-funding-rate-neutral")).toBe(true);
+    }
+    expect(summaryMetric(card, "左侧合计").textContent).toBe("+0.0400%");
+    expect(summaryMetric(card, "右侧合计").textContent).toBe("+0.0300%");
+    expect(summaryMetric(card, "总资金费率差（右-左）").textContent).toBe("-0.0100%");
+    expect(within(card).getByText("计入点数").parentElement!.textContent).toBe("计入点数3 条");
+  });
+
+  it("shows a funding warning and failure titles only for the failed leg", async () => {
+    const warning = "bitget:SKHYUSDT 历史资金费率失败: timeout";
+    mockFundingQuery((data) => {
+      data.funding_history = data.funding_history.filter((point) => point.symbol === data.leg2.symbol);
+      Object.assign(data, { warnings: [warning, "当前行情失败"] });
+    });
+    const card = await queryFundingCard();
+    const alert = within(card).getByRole("alert");
+    expect(alert.classList.contains("ant-alert-warning")).toBe(true);
+    expect(alert.textContent).toContain(warning);
+    expect(alert.textContent).toContain("合计和净费率只包含已取到的数据");
+    expect(alert.textContent).not.toContain("当前行情失败");
+    for (const cells of fundingTableCells(card)) {
+      expect(within(cells[1]).getByText("—").title).toBe("该腿费率取数失败");
+    }
+    expect(summaryMetric(card, "左侧合计").textContent).toBe("—");
+    expect(document.querySelector(".pair-warning-summary")!.textContent).toContain(warning);
+  });
+
+  it("uses custom-range failure titles and the existing alert without duplicate warnings", async () => {
+    const card = await queryFundingCard();
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    const warning = "bitget:SKHYUSDT 历史资金费率失败: range timeout";
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const response = await fallback(input, init);
+      if (!String(input).includes("/pair-spread/funding-history")) return response;
+      const data = await response.json();
+      data.funding_history = data.funding_history.filter((point: { symbol: string }) => point.symbol === data.leg2.symbol);
+      data.warnings = [warning];
+      return Response.json(data);
+    });
+    fireEvent.change(screen.getByLabelText("资金费率累计开始时间"), { target: { value: "2026-07-24T07:30" } });
+    fireEvent.change(screen.getByLabelText("资金费率累计结束时间"), { target: { value: "2026-07-24T08:30" } });
+    await userEvent.click(screen.getByRole("button", { name: /确定资金费率累计时间/ }));
+    await waitFor(() => expect(within(card).getByRole("alert").textContent).toContain(warning));
+    expect(within(card).getAllByRole("alert")).toHaveLength(1);
+    expect(within(card).getByRole("alert").textContent).toContain("合计和净费率只包含已取到的数据");
+    expect(within(fundingTableCells(card)[0][1]).getByText("—").title).toBe("该腿费率取数失败");
+    await userEvent.click(screen.getByRole("button", { name: "清空时间" }));
+    expect(within(card).queryByRole("alert")).toBeNull();
+    expect(fundingTableCells(card)[0][1].textContent).toBe("-0.1000%");
+  });
+
+  it("keeps zero and both populated funding legs as numeric values", async () => {
+    mockFundingQuery((data) => {
+      data.funding_history = data.funding_history.slice(0, 2).map((point, index) => ({
+        ...point, funding_rate_pct: index === 0 ? 0 : 0.02
+      }));
+    });
+    const card = await queryFundingCard();
+    const cells = fundingTableCells(card)[0];
+    expect(cells.slice(1).map((cell) => cell.textContent)).toEqual(["+0.0000%", "+0.0200%", "+0.0200%"]);
+    expect(summaryMetric(card, "左侧合计").textContent).toBe("+0.0000%");
+    expect(cells[1].querySelector("span")!.title).toBe("");
+  });
+
+  it.each([
+    ["bitget:BTCUSDT 历史资金费率失败: timeout", { exchange: "bitget", symbol: "BTCUSDT" }, true],
+    ["bitget:BTCUSDT 历史资金费率失败: timeout", { exchange: "bybit", symbol: "BTCUSDT" }, false],
+    ["bitget:BTCUSDT2 历史资金费率失败: timeout", { exchange: "bitget", symbol: "BTCUSDT" }, false],
+    ["hyperliquid:xyz:BTCUSDT 历史资金费率失败: timeout", { exchange: "hyperliquid", dex: "xyz", symbol: "BTCUSDT" }, true],
+    ["hyperliquid:xyz:BTCUSDT 历史资金费率失败: timeout", { exchange: "hyperliquid", dex: "io", symbol: "BTCUSDT" }, false],
+    ["hyperliquid:xyz:BTCUSDT 历史资金费率失败: timeout", { exchange: "hyperliquid", symbol: "BTCUSDT" }, false],
+    ["hyperliquid:xyz:xyz:BTC 历史资金费率失败: timeout", { exchange: "hyperliquid", dex: "xyz", symbol: "xyz:BTC" }, true],
+    ["bitget:BTCUSDT 当前行情失败: timeout", { exchange: "bitget", symbol: "BTCUSDT" }, false],
+    ["upstream: bitget:BTCUSDT 历史资金费率失败: timeout", { exchange: "bitget", symbol: "BTCUSDT" }, false]
+  ])("matches funding failure warnings by exact leg identity: %s / %j", (warning, leg, expected) => {
+    expect(fundingHistoryFailedForLeg([warning], { ...leg, market_type: "future" })).toBe(expected);
+  });
+
+  it.each(["left", "right"] as const)("preserves a missing %s rate in current, realtime and minute rows", (missingSide) => {
+    const data = pairSpreadResult() as PairSpreadQueryResult;
+    data.funding_history = [];
+    data.realtime_funding = [];
+    data.current![missingSide === "left" ? "leg1" : "leg2"].funding_rate_pct = null;
+    const expected = { left_rate_pct: missingSide === "left" ? null : 0.01, right_rate_pct: missingSide === "right" ? null : 0.01, net_rate_pct: missingSide === "left" ? 0.01 : -0.01 };
+    expect(buildFundingRateDiffRows(data)[0]).toMatchObject(expected);
+    expect(buildRealtimeFundingRateDiffRows(data)[0]).toMatchObject(expected);
+    const sample = { bucket_at: observedAt, ...expected, source: "current" };
+    data.realtime_funding = [sample];
+    expect(buildRealtimeFundingRateDiffRows(data)[0]).toMatchObject(expected);
+    const status: PairSpreadFundingRecordStatus = { ...pairFundingRecordStatus(true), item: null, samples: [sample] };
+    expect(buildMinuteFundingRateDiffRows(status)[0]).toMatchObject(expected);
+  });
+
+  it("leaves the net rate null when both sample legs are missing", () => {
+    const sample = { bucket_at: observedAt, left_rate_pct: null, right_rate_pct: null, net_rate_pct: 0, source: "current" };
+    const data = { ...(pairSpreadResult() as PairSpreadQueryResult), realtime_funding: [sample] };
+    expect(buildRealtimeFundingRateDiffRows(data)[0]).toMatchObject({ left_rate_pct: null, right_rate_pct: null, net_rate_pct: null });
+    expect(buildMinuteFundingRateDiffRows({ ...pairFundingRecordStatus(true), item: null, samples: [sample] })[0])
+      .toMatchObject({ left_rate_pct: null, right_rate_pct: null, net_rate_pct: null });
   });
 
   it("shows the funding rate difference table", async () => {
