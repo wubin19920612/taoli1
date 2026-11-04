@@ -36,6 +36,10 @@ async def test_api_auth_validation_and_empty_disabled_status():
             assert (await client.get("/api/shadow/buckets?since=2026-11-03")).status_code == 400
             assert (await client.get("/api/shadow/trades?status=unknown")).status_code == 422
             assert (await client.get("/api/shadow/trades?limit=501")).status_code == 422
+            # Data-bearing API checks require explicit enablement under PM round 2.
+            app.state.shadow_runtime = ShadowRuntime(
+                Settings(shadow_enabled=True, database_url="sqlite:///:memory:"), SnapshotStore())
+            await app.state.shadow_runtime.initialize(db)
             book = ShadowLedger(Settings(shadow_enabled=True))
             markets, op = pair()
             book.process(markets, [op], NOW)
@@ -53,6 +57,7 @@ async def test_api_auth_validation_and_empty_disabled_status():
             assert (await client.get("/api/shadow/trades?status=open")).json() == []
             assert len((await client.get("/api/shadow/trades?status=closed")).json()) == 2
         finally:
+            await app.state.shadow_runtime.aclose()
             await db.close()
 
 
@@ -100,6 +105,6 @@ async def test_shadow_schema_failure_does_not_escape_startup(monkeypatch):
     async def broken(db):
         raise RuntimeError("synthetic shadow schema failure")
     monkeypatch.setattr(module, "initialize_shadow_schema", broken)
-    runtime = ShadowRuntime(Settings(database_url="sqlite:///:memory:"), SnapshotStore())
+    runtime = ShadowRuntime(Settings(shadow_enabled=True, database_url="sqlite:///:memory:"), SnapshotStore())
     await runtime.initialize(None)
     assert not runtime.status()["ready"] and runtime.errors == 1

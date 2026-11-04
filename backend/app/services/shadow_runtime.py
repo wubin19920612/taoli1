@@ -96,6 +96,8 @@ class ShadowRuntime:
             self.last_log = current
 
     async def initialize(self, shared_db):
+        if not self.ledger.enabled:
+            return
         self._published = await asyncio.to_thread(lambda: asyncio.run(self._initialize(shared_db)))
 
     async def _initialize(self, shared_db):
@@ -118,6 +120,8 @@ class ShadowRuntime:
 
     async def submit(self, snapshot):
         """Mailbox handler: never wait for previous work or enqueue a backlog."""
+        if not self.ledger.enabled:
+            return None
         started = perf_counter()
         if self._closing or (self._active is not None and not self._active.done()):
             self.skipped_rounds += 1
@@ -208,6 +212,8 @@ class ShadowRuntime:
         return (display if annotations is not None else None), {**self._worker_status(), "display_changed": display_changed}
 
     async def _process(self, snapshot, entries):
+        if not self.ledger.enabled:
+            return None
         annotations = None
         try:
             if self.repo is not None:
@@ -237,6 +243,8 @@ class ShadowRuntime:
         return annotations
 
     async def run_inline_observer(self, stop):
+        if not self.ledger.enabled:
+            return
         generation = 0
         while not stop.is_set():
             if self.store.generation > generation:
@@ -276,6 +284,8 @@ class ShadowRuntime:
 
     async def aclose(self):
         self._closing = True
+        if not self.ledger.enabled:
+            return
         if self._active is not None:
             await asyncio.shield(self._active)
         self._published = await asyncio.to_thread(lambda: asyncio.run(self._close_worker()))

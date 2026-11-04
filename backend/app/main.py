@@ -1012,15 +1012,17 @@ def create_app(
                 risk_settings_timeout_seconds=app_settings.collector_risk_settings_timeout_seconds,
             )
             app.state.market_collector = collector
-            shadow_consumer = SnapshotConsumer("shadow-ledger", shadow_slot, app.state.shadow_runtime.submit)
-            _start_background_task(
-                supervisor,
-                (lambda: shadow_consumer.run(stop_event)) if use_shadow_slot
-                else (lambda: app.state.shadow_runtime.run_inline_observer(stop_event)),
-                name="shadow-ledger",
-            )
-            _start_background_task(supervisor, lambda: app.state.shadow_runtime.catalog.run(stop_event),
-                                   name="shadow-crossex-catalog")
+            shadow_consumer = None
+            if app_settings.shadow_enabled:
+                shadow_consumer = SnapshotConsumer("shadow-ledger", shadow_slot, app.state.shadow_runtime.submit)
+                _start_background_task(
+                    supervisor,
+                    (lambda: shadow_consumer.run(stop_event)) if use_shadow_slot
+                    else (lambda: app.state.shadow_runtime.run_inline_observer(stop_event)),
+                    name="shadow-ledger",
+                )
+                _start_background_task(supervisor, lambda: app.state.shadow_runtime.catalog.run(stop_event),
+                                       name="shadow-crossex-catalog")
             if snapshot_slots is not None:
                 app.state.snapshot_consumers = {
                     "history-recorder": SnapshotConsumer("history-recorder", history_slot, collector.record_history),
