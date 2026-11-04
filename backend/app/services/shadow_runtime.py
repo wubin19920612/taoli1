@@ -36,7 +36,7 @@ def freeze_snapshot(snapshot, previous=None):
     market_values, estimated = [], []
     for market in snapshot.markets:
         values = market.__dict__
-        market_values.extend(_market_values(values))
+        market_values.append(_market_values(values))
         estimated.append(tuple(values["estimated_fields"]))
     markets, estimates = tuple(market_values), tuple(estimated)
     payloads, lists, cache = [], [], {}
@@ -144,9 +144,13 @@ class ShadowRuntime:
             # continues running. _finish owns publication and stays alive.
             await asyncio.shield(task)
 
-    async def _finish(self, generation, validations, frozen, entries, catalog_status, timing):
+    async def _finish(self, *args):
+        work = self._finish_round(*args)
+        # Do not retain another reference to the detached input: _finish_round
+        # includes its release in the existing event-loop occupancy measurement.
+        del args
         try:
-            await self._finish_round(generation, validations, frozen, entries, catalog_status, timing)
+            await work
         except Exception:
             self.error("publish")
 
@@ -180,13 +184,14 @@ class ShadowRuntime:
         return display, status, (thread_time() - cpu) * 1000, (perf_counter() - started) * 1000
 
     def _calculate(self, snapshot, entries):
-        market_width = len(MARKET_FIELDS) - 1
         payloads = snapshot.opportunities
         lists = snapshot.op_lists
+        # These fixed-width tuples come exclusively from freeze_snapshot's
+        # itemgetters; construct records without _make's per-row Python checks.
         snapshot = PublishedSnapshot(snapshot.generation, snapshot.published_at,
-            tuple(MarketInput._make(snapshot.markets[i * market_width:(i + 1) * market_width] + (fields,))
-                  for i, fields in enumerate(snapshot.market_lists)),
-            tuple(OpportunityInput._make(_op_projection(values) + fields[-3:])
+            tuple(tuple.__new__(MarketInput, values + (fields,))
+                  for values, fields in zip(snapshot.markets, snapshot.market_lists)),
+            tuple(tuple.__new__(OpportunityInput, _op_projection(values) + fields[-3:])
                   for values, fields in zip(payloads, lists)))
         annotations = asyncio.run(self._process(snapshot, entries))
         display, cache, display_changed = [], {}, False
