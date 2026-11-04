@@ -1,6 +1,7 @@
 """Regressions for the second PM review, using offline SQLite and HTTP clients."""
 
 import asyncio
+import logging
 import sqlite3
 import threading
 from datetime import timedelta
@@ -149,9 +150,9 @@ async def test_api_reader_connection_is_read_only_and_off_event_loop(tmp_path, m
     original = routes.aiosqlite.connect
     connections = []
 
-    def connect(uri, **kwargs):
-        connections.append((uri, kwargs, threading.get_ident()))
-        return original(uri, **kwargs)
+    def connect(database, **kwargs):
+        connections.append((database, kwargs, threading.get_ident()))
+        return original(database, **kwargs)
 
     monkeypatch.setattr(routes.aiosqlite, "connect", connect)
     try:
@@ -165,5 +166,190 @@ async def test_api_reader_connection_is_read_only_and_off_event_loop(tmp_path, m
         with sqlite3.connect(uri, **kwargs) as db:
             with pytest.raises(sqlite3.OperationalError, match="readonly"):
                 db.execute("DELETE FROM shadow_trades")
+    finally:
+        await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_capture_errors_are_rate_limited_and_counted_by_category(monkeypatch, caplog):
+    import app.services.shadow_runtime as module
+    runtime = ShadowRuntime(Settings(shadow_enabled=True), SnapshotStore())
+    clock = [100.0]
+    monkeypatch.setattr(module, "monotonic", lambda: clock[0])
+
+    def broken(*args):
+        raise ValueError("synthetic capture failure")
+
+    monkeypatch.setattr(module, "freeze_snapshot", broken)
+    with caplog.at_level(logging.ERROR):
+        for _ in range(3):
+            assert await runtime.submit(PublishedSnapshot(1, NOW, (), ())) is None
+        assert len(caplog.records) == 1
+        assert runtime.status()["error_counts"] == {"capture": 3}
+        clock[0] += 299
+        await runtime.submit(PublishedSnapshot(1, NOW, (), ()))
+        assert len(caplog.records) == 1
+        clock[0] += 1
+        await runtime.submit(PublishedSnapshot(1, NOW, (), ()))
+        assert len(caplog.records) == 2
+        assert runtime.status()["errors"] == 5
+        counts = runtime.status()["error_counts"]
+        counts["capture"] = 999
+        assert runtime.status()["error_counts"] == {"capture": 5}
+
+
+@pytest.mark.asyncio
+async def test_catalog_errors_share_runtime_category_counters(monkeypatch, caplog):
+    runtime = ShadowRuntime(Settings(shadow_enabled=True), SnapshotStore())
+
+    async def broken():
+        raise ValueError("synthetic catalogue failure")
+
+    runtime.catalog.fetch = broken
+    with caplog.at_level(logging.WARNING):
+        for _ in range(3):
+            runtime.catalog.retry_at = 0
+            await runtime.catalog.refresh()
+        assert len(caplog.records) == 1
+        assert runtime.status()["error_counts"] == {"catalog": 3}
+        assert runtime.status()["catalog_errors"] == 3
+
+
+@pytest.mark.asyncio
+async def test_publish_failure_is_isolated_and_close_still_drains(tmp_path, monkeypatch, caplog):
+    runtime = ShadowRuntime(Settings(shadow_enabled=True, database_url="sqlite:///" + str(tmp_path / "publish.db")),
+                            SnapshotStore())
+    await runtime.initialize(None)
+    runtime.store.mark_published(NOW)
+
+    def broken(*args):
+        raise ValueError("synthetic publication failure")
+
+    monkeypatch.setattr(runtime.store, "set_opportunities", broken)
+    try:
+        with caplog.at_level(logging.ERROR):
+            for _ in range(3):
+                await runtime.consume(PublishedSnapshot(runtime.store.generation, NOW, (), ()))
+        assert len(caplog.records) == 1
+        assert runtime.status()["error_counts"] == {"publish": 3}
+    finally:
+        await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_close_waits_for_worker_before_closing_connection(tmp_path):
+    from test_shadow_performance_safety import wait_started
+    runtime = ShadowRuntime(Settings(shadow_enabled=True, database_url="sqlite:///" + str(tmp_path / "close.db")),
+                            SnapshotStore())
+    await runtime.initialize(None)
+    entered, release = threading.Event(), threading.Event()
+    events = []
+    save, close = runtime.repo.save_batch, runtime.db.close
+
+    async def slow_save(rows):
+        entered.set()
+        assert release.wait(5)
+        await save(rows)
+        events.append("saved")
+
+    async def recorded_close():
+        events.append("closed")
+        await close()
+
+    runtime.repo.save_batch = slow_save
+    runtime.db.close = recorded_close
+    markets, op = pair()
+    try:
+        await runtime.submit(PublishedSnapshot(1, NOW, tuple(markets), (op,)))
+        await wait_started(entered)
+        closing = asyncio.create_task(runtime.aclose())
+        await asyncio.sleep(0)
+        closing.cancel()
+        await asyncio.sleep(0)
+        assert not closing.done()
+        assert "closed" not in events
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await closing
+        assert events[-1] == "closed" and "saved" in events[:-1]
+        assert runtime._active.done()
+        await runtime.aclose()  # Idempotent; never writes to the closed connection.
+        assert events.count("closed") == 1
+        assert runtime.status()["errors"] == 0
+    finally:
+        release.set()
+        await runtime.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("category", ["initialize", "consumer", "worker"])
+async def test_runtime_error_paths_use_independent_category_limits(monkeypatch, caplog, category):
+    import app.services.shadow_runtime as module
+    runtime = ShadowRuntime(Settings(shadow_enabled=True, database_url="sqlite:///:memory:"), SnapshotStore())
+    db = await connect_database(":memory:")
+
+    async def broken_async(*args):
+        raise RuntimeError("synthetic " + category)
+
+    def broken_sync(*args):
+        raise RuntimeError("synthetic " + category)
+
+    try:
+        if category == "initialize":
+            monkeypatch.setattr(module, "initialize_shadow_schema", broken_async)
+        else:
+            await runtime.initialize(db)
+            if category == "consumer":
+                monkeypatch.setattr(runtime.repo, "prune", broken_async)
+            else:
+                monkeypatch.setattr(runtime, "_calculate", broken_sync)
+        with caplog.at_level(logging.ERROR):
+            for _ in range(3):
+                if category == "initialize":
+                    await runtime.initialize(db)
+                else:
+                    await runtime.consume(PublishedSnapshot(1, NOW, (), ()))
+        assert len(caplog.records) == 1
+        assert runtime.status()["error_counts"] == {category: 3}
+        # A different category is not suppressed by the first category's window.
+        with caplog.at_level(logging.ERROR):
+            runtime.error("other")
+        assert len(caplog.records) == 2
+        assert runtime.status()["errors"] == 4
+    finally:
+        await runtime.aclose()
+        await db.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("category,endpoint", [("read_list_trades", "trades"),
+                                             ("read_closed_events", "buckets"),
+                                             ("statistics", "buckets")])
+async def test_api_errors_are_rate_limited_and_visible_in_status(tmp_path, monkeypatch, caplog, category, endpoint):
+    import app.api.routes_shadow as routes
+    app = create_app(settings=Settings(shadow_enabled=True, database_url="sqlite:///" + str(tmp_path / "errors.db")),
+                     start_background_workers=False)
+    runtime = app.state.shadow_runtime
+    await runtime.initialize(None)
+
+    async def broken_async(*args):
+        raise RuntimeError("synthetic read failure")
+
+    def broken_sync(*args):
+        raise RuntimeError("synthetic statistics failure")
+
+    if category == "statistics":
+        monkeypatch.setattr(routes, "buckets", broken_sync)
+    else:
+        monkeypatch.setattr(routes.ShadowTradeRepository, category.removeprefix("read_"), broken_async)
+    try:
+        with caplog.at_level(logging.ERROR):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+                for _ in range(3):
+                    assert (await client.get("/api/shadow/" + endpoint)).status_code == 503
+                state = (await client.get("/api/shadow/status")).json()
+        assert len(caplog.records) == 1
+        assert state["error_counts"] == {category: 3}
+        assert state["errors"] == 3
     finally:
         await runtime.aclose()

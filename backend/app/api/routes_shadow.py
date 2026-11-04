@@ -34,7 +34,11 @@ async def read_committed(request, method, *args):
             db.row_factory = aiosqlite.Row
             return await getattr(ShadowTradeRepository(db), method)(*args)
 
-    return await asyncio.to_thread(lambda: asyncio.run(read()))
+    try:
+        return await asyncio.to_thread(lambda: asyncio.run(read()))
+    except Exception:
+        runtime(request).error("read_" + method)
+        raise HTTPException(503, "影子账本读取暂不可用") from None
 
 
 @router.get("/status")
@@ -63,4 +67,8 @@ async def get_buckets(request: Request, dims: str = "variant,pair", since: datet
     if not runtime(request).ledger.enabled:
         return []
     rows = await read_committed(request, "closed_events", since.astimezone(UTC), until.astimezone(UTC), include_fake)
-    return await asyncio.to_thread(buckets, rows, dimensions, include_fake)
+    try:
+        return await asyncio.to_thread(buckets, rows, dimensions, include_fake)
+    except Exception:
+        runtime(request).error("statistics")
+        raise HTTPException(503, "影子账本统计暂不可用") from None

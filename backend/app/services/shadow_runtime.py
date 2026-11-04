@@ -1,7 +1,6 @@
 """Single-flight worker with detached immutable inputs and atomic status publication."""
 
 import asyncio
-import logging
 from collections import namedtuple
 from operator import itemgetter
 from datetime import UTC, datetime
@@ -11,12 +10,10 @@ from app.models.opportunity import Opportunity
 from app.db.database import connect_database
 from app.db.repositories import ShadowTradeRepository
 from app.db.schema import initialize_shadow_schema
-from app.services.execution_routes import ExecutionRoutes
+from app.services.execution_routes import ExecutionRoutes, ShadowErrorLog
 from app.services.fake_opportunity import FakeOpportunityScorer, MarketChanges, prepare_markets
 from app.services.shadow_ledger import ShadowLedger
 from app.services.snapshot_consumers import PublishedSnapshot
-
-logger = logging.getLogger(__name__)
 
 MARKET_FIELDS = "exchange market_type raw_symbol dex symbol_alias_price_multiplier contract_size_multiplier timestamp upstream_timestamp bid ask quote_kind funding_next_time funding_rate_pct funding_interval_hours asset_id symbol identity_collision estimated_fields".split()
 MarketInput = namedtuple("MarketInput", MARKET_FIELDS)
@@ -64,7 +61,9 @@ class ShadowRuntime:
         self.settings = settings
         self.store = store
         self.ledger = ShadowLedger(settings)
-        self.catalog = ExecutionRoutes(settings.native_route_exchanges, settings.crossex_catalog_refresh_seconds)
+        self.error_log = ShadowErrorLog(clock=lambda: monotonic())
+        self.catalog = ExecutionRoutes(settings.native_route_exchanges, settings.crossex_catalog_refresh_seconds,
+                                       on_error=self.error)
         # The refresh task owns catalog; only this independent cache is used by
         # the computation worker, with a captured immutable catalogue per round.
         self.worker_catalog = ExecutionRoutes(settings.native_route_exchanges)
@@ -74,26 +73,24 @@ class ShadowRuntime:
         self.db = None
         self.owns_db = False
         self.restored = False
-        self.errors = 0
-        self.last_log = -float("inf")
         self.prune_at = 0
         self.last_duration_ms = None
         self.stored_open_count = 0
         self.skipped_rounds = 0
-        self._capture_errors = 0
         self._active = None
         self._display_cache = {}
         self._input_cache = {}
         self._validation_cache = ()
         self._closing = False
+        self._close_task = None
         self._published = self._worker_status()
 
-    def error(self):
-        self.errors += 1
-        current = monotonic()
-        if current - self.last_log >= 300:
-            logger.exception("shadow consumer failed (count=%s); collection and alerts continue", self.errors)
-            self.last_log = current
+    @property
+    def errors(self):
+        return sum(self.error_log.counts().values())
+
+    def error(self, category="consumer"):
+        self.error_log.record(category)
 
     async def initialize(self, shared_db):
         if not self.ledger.enabled:
@@ -115,7 +112,7 @@ class ShadowRuntime:
                 self.ledger.restore(*(await self.repo.restore(datetime.now(UTC))))
             self.restored = True
         except Exception:
-            self.error()
+            self.error("initialize")
         return self._worker_status()
 
     async def submit(self, snapshot):
@@ -137,9 +134,7 @@ class ShadowRuntime:
             timing.append((perf_counter() - started) * 1000)
             return task
         except Exception:
-            # Capture errors are isolated as well; do not touch worker-owned state.
-            logger.exception("shadow input capture failed")
-            self._capture_errors += 1
+            self.error("capture")
             return None
 
     async def consume(self, snapshot):
@@ -150,6 +145,12 @@ class ShadowRuntime:
             await asyncio.shield(task)
 
     async def _finish(self, generation, validations, frozen, entries, catalog_status, timing):
+        try:
+            await self._finish_round(generation, validations, frozen, entries, catalog_status, timing)
+        except Exception:
+            self.error("publish")
+
+    async def _finish_round(self, generation, validations, frozen, entries, catalog_status, timing):
         dispatch_ms = timing[0]
         annotations, status, cpu_ms, wall_ms = await asyncio.to_thread(self._work, frozen, entries)
         resumed = perf_counter()
@@ -174,7 +175,7 @@ class ShadowRuntime:
         try:
             display, status = self._calculate(snapshot, entries)
         except Exception:
-            self.error()
+            self.error("worker")
             display, status = None, self._worker_status()
         return display, status, (thread_time() - cpu) * 1000, (perf_counter() - started) * 1000
 
@@ -265,9 +266,11 @@ class ShadowRuntime:
 
     def status(self):
         # No live ledger/scorer containers are inspected from the event loop.
+        counts = self.error_log.counts()
         return {"catalog_updated_at": None, "catalog_entries": 0, "catalog_errors": 0,
                 "last_duration_ms": None, **self._published, "skipped_rounds": self.skipped_rounds,
-                "errors": self._published["errors"] + self._capture_errors}
+                "errors": sum(counts.values()), "error_counts": counts,
+                "catalog_errors": self.catalog.errors}
 
     async def _close_worker(self):
         try:
@@ -276,16 +279,32 @@ class ShadowRuntime:
                     self.ledger._queue(position)
                 await self.ledger.flush(self.repo)
         except Exception:
-            self.error()
+            self.error("shutdown_flush")
         finally:
             if self.owns_db and self.db is not None:
-                await self.db.close()
+                try:
+                    await self.db.close()
+                except Exception:
+                    self.error("shutdown_close")
         return self._worker_status()
 
     async def aclose(self):
         self._closing = True
         if not self.ledger.enabled:
             return
+        if self._close_task is None:
+            self._close_task = asyncio.create_task(self._shutdown())
+        try:
+            await asyncio.shield(self._close_task)
+        except asyncio.CancelledError:
+            # The caller must not close its shared DB while a worker still owns it.
+            await asyncio.shield(self._close_task)
+            raise
+
+    async def _shutdown(self):
         if self._active is not None:
-            await asyncio.shield(self._active)
+            try:
+                await asyncio.shield(self._active)
+            except Exception:
+                self.error("shutdown_wait")
         self._published = await asyncio.to_thread(lambda: asyncio.run(self._close_worker()))

@@ -5,6 +5,7 @@ import json
 import logging
 import math
 import re
+from threading import Lock
 from datetime import UTC, datetime
 from time import monotonic
 
@@ -17,6 +18,30 @@ EXCHANGES = {name: name.upper() for name in (
 )}
 LIQUIDITY_TIERS = {"gt50k", "5k-50k", "500-5k", "lt500", "unknown"}
 logger = logging.getLogger(__name__)
+
+
+class ShadowErrorLog:
+    """One log per category per five minutes; count every failure across threads."""
+
+    def __init__(self, clock=monotonic):
+        self.clock = clock
+        self._counts = {}
+        self._last = {}
+        self._lock = Lock()
+
+    def record(self, category):
+        with self._lock:
+            count = self._counts[category] = self._counts.get(category, 0) + 1
+            now = self.clock()
+            emit = now - self._last.get(category, -float("inf")) >= 300
+            if emit:
+                self._last[category] = now
+        if emit:
+            logger.exception("shadow %s failed (count=%s); collection and alerts continue", category, count)
+
+    def counts(self):
+        with self._lock:
+            return dict(self._counts)
 
 
 def validate_shadow_settings(settings):
@@ -83,11 +108,13 @@ def raw_base(exchange, raw_symbol, dex=None):
 
 
 class ExecutionRoutes:
-    def __init__(self, native="hyperliquid,lighter,bitget", refresh_seconds=1800, fetch=None, clock=monotonic):
+    def __init__(self, native="hyperliquid,lighter,bitget", refresh_seconds=1800, fetch=None, clock=monotonic,
+                 on_error=None):
         self.native = frozenset(x.strip().lower() for x in native.split(",") if x.strip())
         self.refresh_seconds = refresh_seconds
         self.fetch = fetch or self._fetch
         self.clock = clock
+        self.on_error = on_error or ShadowErrorLog(clock).record
         self.entries = set()
         self.updated_at = None
         self.retry_at = 0.0
@@ -110,7 +137,7 @@ class ExecutionRoutes:
         except Exception:
             self.errors += 1
             self.retry_at = self.clock() + 900
-            logger.warning("shadow CrossEx catalogue refresh failed; retaining previous entries")
+            self.on_error("catalog")
             return
         self.entries = entries
         self._route_cache.clear()

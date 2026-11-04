@@ -21,8 +21,8 @@ async def test_api_auth_validation_and_empty_disabled_status(tmp_path):
     app = create_app(settings=Settings(database_url="sqlite:///" + path, dashboard_password="test-only"),
                      start_background_workers=False)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-        for path in ("/api/shadow/status", "/api/shadow/trades", "/api/shadow/buckets"):
-            assert (await client.get(path)).status_code == 401
+        for endpoint in ("/api/shadow/status", "/api/shadow/trades", "/api/shadow/buckets"):
+            assert (await client.get(endpoint)).status_code == 401
         db = await connect_database(path)
         try:
             await initialize_schema(db)
