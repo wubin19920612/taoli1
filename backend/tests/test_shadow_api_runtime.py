@@ -16,13 +16,14 @@ from shadow_helpers import NOW, pair
 
 
 @pytest.mark.asyncio
-async def test_api_auth_validation_and_empty_disabled_status():
-    app = create_app(settings=Settings(database_url="sqlite:///:memory:", dashboard_password="test-only"),
+async def test_api_auth_validation_and_empty_disabled_status(tmp_path):
+    path = str(tmp_path / "api.db")
+    app = create_app(settings=Settings(database_url="sqlite:///" + path, dashboard_password="test-only"),
                      start_background_workers=False)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         for path in ("/api/shadow/status", "/api/shadow/trades", "/api/shadow/buckets"):
             assert (await client.get(path)).status_code == 401
-        db = await connect_database(":memory:")
+        db = await connect_database(path)
         try:
             await initialize_schema(db)
             await app.state.shadow_runtime.initialize(db)
@@ -38,7 +39,7 @@ async def test_api_auth_validation_and_empty_disabled_status():
             assert (await client.get("/api/shadow/trades?limit=501")).status_code == 422
             # Data-bearing API checks require explicit enablement under PM round 2.
             app.state.shadow_runtime = ShadowRuntime(
-                Settings(shadow_enabled=True, database_url="sqlite:///:memory:"), SnapshotStore())
+                Settings(shadow_enabled=True, database_url="sqlite:///" + path), SnapshotStore())
             await app.state.shadow_runtime.initialize(db)
             book = ShadowLedger(Settings(shadow_enabled=True))
             markets, op = pair()

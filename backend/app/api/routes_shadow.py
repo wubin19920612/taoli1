@@ -1,9 +1,12 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Literal
 
+import aiosqlite
 from fastapi import APIRouter, HTTPException, Query, Request
 
+from app.db.repositories import ShadowTradeRepository
 from app.services.shadow_stats import DIMENSIONS, buckets
 
 router = APIRouter(prefix="/shadow", tags=["shadow"])
@@ -20,6 +23,20 @@ def repository(request):
     return repo
 
 
+async def read_committed(request, method, *args):
+    repository(request)  # Keep the existing not-ready response.
+    uri = Path(runtime(request).settings.sqlite_path).resolve().as_uri() + "?mode=ro"
+
+    async def read():
+        # Each request owns its reader and closes its SQLite worker before the
+        # temporary event loop exits. Never borrow the ledger's writer connection.
+        async with aiosqlite.connect(uri, uri=True) as db:
+            db.row_factory = aiosqlite.Row
+            return await getattr(ShadowTradeRepository(db), method)(*args)
+
+    return await asyncio.to_thread(lambda: asyncio.run(read()))
+
+
 @router.get("/status")
 async def status(request: Request):
     return runtime(request).status()
@@ -30,7 +47,7 @@ async def trades(request: Request, limit: int = Query(100, ge=1, le=500),
                  status: Literal["open", "closed"] | None = None):
     if not runtime(request).ledger.enabled:
         return []
-    return await repository(request).list_trades(limit, status)
+    return await read_committed(request, "list_trades", limit, status)
 
 
 @router.get("/buckets")
@@ -45,5 +62,5 @@ async def get_buckets(request: Request, dims: str = "variant,pair", since: datet
         raise HTTPException(400, "时间范围必须包含时区且起点不晚于终点")
     if not runtime(request).ledger.enabled:
         return []
-    rows = await repository(request).closed_events(since.astimezone(UTC), until.astimezone(UTC), include_fake)
+    rows = await read_committed(request, "closed_events", since.astimezone(UTC), until.astimezone(UTC), include_fake)
     return await asyncio.to_thread(buckets, rows, dimensions, include_fake)
