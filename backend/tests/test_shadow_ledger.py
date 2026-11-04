@@ -203,6 +203,64 @@ def test_open_on_settlement_excludes_it_but_keeps_next_cycle():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("reverse_restore", [False, True])
+async def test_variant_funding_recovers_after_interrupted_split_batches(tmp_path, reverse_restore):
+    db = await connect_database(str(tmp_path / "split.db"))
+    try:
+        await initialize_shadow_schema(db)
+        repo = ShadowTradeRepository(db)
+        book = ledger()
+        markets, op = pair()
+        for m, rate in zip(markets, [0.01, 0.03]):
+            m.funding_rate_pct = rate
+            m.funding_interval_hours = 1
+            m.funding_next_time = NOW + timedelta(seconds=30)
+        book.process(markets, [op.model_copy(update={"id": str(i)}) for i in range(101)], NOW)
+        await book.flush(repo)
+        now = NOW + timedelta(seconds=31)
+        quotes = fresh(markets, now)
+        for m in quotes:
+            m.funding_next_time += timedelta(hours=1)
+        book.process(quotes, [], now)
+        target = book.positions["0"].rows
+        # Force the two variants across the real 200-row commit boundary.
+        items = book.pending.rows
+        first, second = (r["id"] for r in target)
+        book.pending.rows = {first: items[first], **{k: v for k, v in items.items()
+                             if k not in (first, second)}, second: items[second]}
+        save = repo.save_batch
+        batches = []
+
+        async def interrupted(rows):
+            batches.append(len(rows))
+            if len(batches) == 2:
+                raise RuntimeError("interrupted after first committed chunk")
+            await save(rows)
+
+        repo.save_batch = interrupted
+        with pytest.raises(RuntimeError, match="interrupted"):
+            await book.flush(repo)
+        assert batches == [200, 2]
+        rows, cooldowns = await repo.restore(now)
+        target_rows = sorted((r for r in rows if r["opportunity_id"] == "0"),
+                             key=lambda r: r["funding_bps"], reverse=not reverse_restore)
+        assert sorted(r["funding_bps"] for r in target_rows) == [0, 2]
+        recovered = ledger()
+        recovered.restore(target_rows, cooldowns)
+        recovered.process(quotes, [], now)
+        assert [r["funding_bps"] for r in recovered.positions["0"].rows] == [2, 2]
+        repo.save_batch = save
+        await recovered.flush(repo)
+        recovered_again = ledger()
+        saved, cooldowns = await repo.restore(now)
+        recovered_again.restore([r for r in saved if r["opportunity_id"] == "0"], cooldowns)
+        recovered_again.process(quotes, [], now)
+        assert [r["funding_bps"] for r in recovered_again.positions["0"].rows] == [2, 2]
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
 async def test_batch_failure_is_atomic_and_preserves_prior_writes():
     db = await connect_database(":memory:")
     try:

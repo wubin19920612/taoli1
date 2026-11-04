@@ -79,7 +79,7 @@ class PendingRows(Mapping):
     def __getitem__(self, key):
         row, position = self.rows[key]
         payload = row.payload() if isinstance(row, TradeRow) else dict(row)
-        payload["tracking"] = position.state()
+        payload["tracking"] = {**position.state(), "funding": payload.pop("_funding")}
         return payload
 
     def __iter__(self):
@@ -99,12 +99,16 @@ class Position:
     open_spread: float
     last_prices: list
     last_seen: list
-    funding: list
     rows: list = field(default_factory=list)
+    funding_due: float | None = None
+
+    def refresh_funding_due(self):
+        self.funding_due = min((s["next"] for r in self.rows for s in r["_funding"]
+                                if s["next"] is not None), default=None)
 
     def state(self):
         return {"keys": self.keys, "opened": self.opened, "open_spread": self.open_spread,
-                "last_prices": self.last_prices, "last_seen": self.last_seen, "funding": self.funding}
+                "last_prices": self.last_prices, "last_seen": self.last_seen}
 
 
 class ShadowLedger:
@@ -129,6 +133,7 @@ class ShadowLedger:
         positions = {}
         for row in rows:
             state = row.pop("tracking")
+            row["_funding"] = state.pop("funding")
             key = row["opportunity_id"]
             if key not in positions:
                 state["keys"] = tuple(tuple(k) for k in state["keys"])
@@ -141,6 +146,7 @@ class ShadowLedger:
         self.deadlines.clear()
         self.timers.clear()
         for key, position in positions.items():
+            position.refresh_funding_due()
             for market in position.keys:
                 self.by_market[market].add(key)
             self._schedule(key, position, position.opened)
@@ -149,9 +155,8 @@ class ShadowLedger:
         due = min(min(position.last_seen) + 600, position.opened + 172800)
         if ts < position.opened + 86400:
             due = min(due, position.opened + 86400)
-        for schedule in position.funding:
-            if schedule["next"] is not None and schedule["next"] > ts:
-                due = min(due, schedule["next"])
+        if position.funding_due is not None and position.funding_due > ts:
+            due = min(due, position.funding_due)
         self.deadlines[key] = due
         heapq.heappush(self.timers, (due, key))
 
@@ -160,12 +165,12 @@ class ShadowLedger:
             self.pending.queue(row, position)
 
     @staticmethod
-    def _funding(position, legs, now):
+    def _funding(opened, schedules, legs, now):
         total, unknown = 0.0, 0
         if all(s["next"] is None and (m is None or m.funding_next_time is None)
-               for s, m in zip(position.funding, legs)):
+               for s, m in zip(schedules, legs)):
             return total, unknown
-        for index, (schedule, market) in enumerate(zip(position.funding, legs)):
+        for index, (schedule, market) in enumerate(zip(schedules, legs)):
             if schedule["spot"]:
                 continue
             due, rate, interval = schedule["next"], schedule["rate"], schedule["interval"]
@@ -175,7 +180,7 @@ class ShadowLedger:
                 rate = market.funding_rate_pct
             # Use the rate observed for this settlement, never the next cycle's
             # rate published after it. Last-known rates across gaps are estimates.
-            if due is not None and position.opened < due <= now:
+            if due is not None and opened < due <= now:
                 count = 1 + int((now - due) // interval) if interval > 0 else 1
                 if rate is None:
                     unknown += count
@@ -183,7 +188,7 @@ class ShadowLedger:
                     total += (-1 if index == 0 else 1) * rate * 100 * count
                 schedule["last"] = due + (count - 1) * interval
                 schedule["next"] = due + count * interval if interval > 0 else None
-            elif due is not None and due <= position.opened:
+            elif due is not None and due <= opened:
                 # Opening exactly on a settlement does not earn it, but the
                 # schedule must still advance rather than becoming stuck.
                 schedule["next"] = due + interval if interval > 0 else None
@@ -227,7 +232,18 @@ class ShadowLedger:
             buy_bid, sell_ask = position.last_prices
             close = 200 * (sell_ask - buy_bid) / (buy_bid + sell_ask)
             holding = ts - position.opened
-            funding, unknown = self._funding(position, [buy_info[0] if buy_info else None, sell_info[0] if sell_info else None], min(ts, min(position.last_seen) + 600))
+            legs = (buy_info[0] if buy_info else None, sell_info[0] if sell_info else None)
+            funding = unknown = 0
+            if (position.funding_due is not None or (legs[0] is not None and legs[0].funding_next_time)
+                    or (legs[1] is not None and legs[1].funding_next_time)):
+                funding_now = min(ts, min(position.last_seen) + 600)
+                for row in position.rows:
+                    delta, missing = self._funding(position.opened, row["_funding"], legs, funding_now)
+                    row["funding_bps"] += delta
+                    row["funding_unknown_settlements"] += missing
+                    funding += abs(delta)
+                    unknown += missing
+                position.refresh_funding_due()
             # The common steady-state path needs no row allocations or writes.
             # Both variants remain open above their maximum convergence threshold.
             if (not stale and buy_fresh and sell_fresh and not funding and not unknown
@@ -238,8 +254,6 @@ class ShadowLedger:
             remaining = []
             closed = []
             for row in position.rows:
-                row["funding_bps"] += funding
-                row["funding_unknown_settlements"] += unknown
                 reason = None
                 if stale:
                     reason = "stale"
@@ -315,9 +329,11 @@ class ShadowLedger:
             )
             position = Position(keys, ts, op.open_spread_pct,
                                 [legs[0].bid, legs[1].ask], [ts - a for a in ages],
-                                [funding_state(m) for m in legs],
-                                [TradeRow(common, id=uuid4().hex, variant=v) for v in VARIANTS])
-            self._funding(position, legs, ts)
+                                [TradeRow(common, id=uuid4().hex, variant=v,
+                                          _funding=[funding_state(m) for m in legs]) for v in VARIANTS])
+            for row in position.rows:
+                self._funding(ts, row["_funding"], legs, ts)
+            position.refresh_funding_due()
             self.positions[op.id] = position
             for key in keys:
                 self.by_market[key].add(op.id)
