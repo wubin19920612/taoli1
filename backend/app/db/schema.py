@@ -714,6 +714,14 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
     from app.db.market_identity_repository import initialize_market_identity_schema
 
     await initialize_market_identity_schema(db)
+    await initialize_auth_schema(db)
+    await db.commit()
+
+
+async def initialize_auth_schema(db: aiosqlite.Connection) -> None:
+    from app.db.auth import AUTH_SCHEMA
+
+    await db.executescript(AUTH_SCHEMA)
     await db.commit()
 
 

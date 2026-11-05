@@ -1,8 +1,7 @@
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 
-from app.core.security import dashboard_password_header, verify_dashboard_password
 from app.db.repositories import AlertEventRepository, AlertRuleRepository
 from app.models.alert import AlertEvent, AlertRule
 from app.models.settings import AlertMessageTemplateSettings
@@ -10,10 +9,6 @@ from app.services.alert_metrics import observe_alert_metrics
 from app.services.alert_messages import build_alert_message
 
 router = APIRouter(prefix="/alerts")
-
-
-def _verify_write_access(request: Request, password: str | None) -> None:
-    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
 
 
 def _rule_repo(request: Request) -> AlertRuleRepository:
@@ -80,9 +75,7 @@ async def list_rules(request: Request) -> list[AlertRule]:
 async def create_rule(
     rule: AlertRule,
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ) -> AlertRule:
-    _verify_write_access(request, password)
     return await _rule_repo(request).create(rule)
 
 
@@ -91,9 +84,7 @@ async def update_rule(
     rule_id: str,
     rule: AlertRule,
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ) -> AlertRule:
-    _verify_write_access(request, password)
     updated = rule.model_copy(update={"id": rule_id})
     return await _rule_repo(request).upsert(updated)
 
@@ -102,9 +93,7 @@ async def update_rule(
 async def delete_rule(
     rule_id: str,
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ) -> dict[str, str]:
-    _verify_write_access(request, password)
     await _rule_repo(request).delete(rule_id)
     return {"status": "deleted"}
 
@@ -122,9 +111,7 @@ async def list_events(request: Request, limit: int = 100) -> list[AlertEvent]:
 @router.post("/test", response_model=AlertEvent)
 async def create_test_event(
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ) -> AlertEvent:
-    _verify_write_access(request, password)
     event = AlertEvent(
         rule_id="manual-test",
         opportunity_id="manual-test",

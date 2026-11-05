@@ -74,10 +74,16 @@ def test_unknown_volume_allowed_but_known_low_volume_rejected(buy, sell, expecte
 
 def test_config_defaults_and_environment(monkeypatch):
     assert not Settings().shadow_enabled
-    monkeypatch.setenv("SHADOW_ENABLED", "1")
-    monkeypatch.setenv("SHADOW_MAX_OPEN", "100")
+    monkeypatch.delenv("SHADOW_ENABLED", raising=False)
     get_settings.cache_clear()
     try:
+        assert get_settings().shadow_enabled is False
+        monkeypatch.setenv("SHADOW_ENABLED", "0")
+        get_settings.cache_clear()
+        assert get_settings().shadow_enabled is False
+        monkeypatch.setenv("SHADOW_ENABLED", "1")
+        monkeypatch.setenv("SHADOW_MAX_OPEN", "100")
+        get_settings.cache_clear()
         assert get_settings().shadow_enabled
         assert get_settings().shadow_max_open == 100
     finally:

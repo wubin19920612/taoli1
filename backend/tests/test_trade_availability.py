@@ -575,7 +575,7 @@ async def test_monitor_retries_recovery_when_feishu_send_fails() -> None:
 
 def test_trade_status_routes_return_exact_market_and_persist_watch() -> None:
     app = create_app(
-        settings=Settings(database_url="sqlite:///:memory:"),
+        settings=Settings(dashboard_auth_disabled=True, database_url="sqlite:///:memory:"),
         start_background_workers=False,
     )
     now = datetime.now(UTC)
@@ -608,3 +608,6 @@ def test_trade_status_routes_return_exact_market_and_persist_watch() -> None:
     assert created.json()["last_buy_reduce_only_state"] == "available"
     assert len(watches.json()) == 1
     assert deleted.status_code == 200
+
+
+pytestmark = pytest.mark.usefixtures("legacy_auth_sessions")

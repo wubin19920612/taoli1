@@ -1,3 +1,4 @@
+from auth_helpers import TEST_TOTP_SECRET, session_headers
 import sqlite3
 
 import pytest
@@ -15,15 +16,15 @@ from app.services.account_connections import (
 
 
 def settings(tmp_path, *, password: str = "secret", key: str | None = None) -> Settings:
-    return Settings(
-        dashboard_password=password,
+    return Settings(dashboard_totp_secret=TEST_TOTP_SECRET,
+        dashboard_password=password, dashboard_auth_disabled=not password,
         account_credentials_master_key=key or Fernet.generate_key().decode(),
         database_url=f"sqlite:///{(tmp_path / 'accounts.db').as_posix()}",
     )
 
 
 def headers() -> dict[str, str]:
-    return {"X-Dashboard-Password": "secret"}
+    return session_headers("secret")
 
 
 def test_account_credential_cipher_round_trip_and_rejects_missing_or_invalid_key() -> None:
@@ -181,3 +182,6 @@ async def test_account_connection_service_closes_cached_providers_on_shutdown() 
 
     assert provider.closed is True
     assert service._provider_cache == {}
+
+
+pytestmark = pytest.mark.usefixtures("legacy_auth_sessions")

@@ -1,3 +1,4 @@
+from auth_helpers import TEST_TOTP_SECRET, session_headers
 from datetime import UTC, datetime
 
 import pytest
@@ -288,7 +289,7 @@ async def test_gate_provider_parses_real_open_positions_and_dual_sides() -> None
 
 def test_hidden_position_identity_persists_across_app_restart(tmp_path) -> None:
     database_path = tmp_path / "floating-position-settings.db"
-    app_settings = Settings(
+    app_settings = Settings(dashboard_totp_secret=TEST_TOTP_SECRET,
         dashboard_password="secret",
         database_url=f"sqlite:///{database_path.as_posix()}",
     )
@@ -296,25 +297,25 @@ def test_hidden_position_identity_persists_across_app_restart(tmp_path) -> None:
     with TestClient(create_app(settings=app_settings)) as client:
         saved = client.post(
             "/api/settings/floating-watch/positions",
-            headers={"X-Dashboard-Password": "secret"},
+            headers=session_headers("secret"),
             json={"action": "add", "position": hidden},
         )
         assert saved.status_code == 200
         assert saved.json()["hidden_positions"] == [hidden]
         watch_updated = client.post(
             "/api/settings/floating-watch/items",
-            headers={"X-Dashboard-Password": "secret"},
+            headers=session_headers("secret"),
             json={"action": "add", "item_type": "symbol", "value": "eth"},
         )
         assert watch_updated.status_code == 200
         assert watch_updated.json()["hidden_positions"] == [hidden]
 
     with TestClient(create_app(settings=app_settings)) as client:
-        restored = client.get("/api/settings/floating-watch", headers={"X-Dashboard-Password": "secret"}).json()
+        restored = client.get("/api/settings/floating-watch", headers=session_headers("secret")).json()
         assert restored["hidden_positions"] == [hidden]
         removed = client.post(
             "/api/settings/floating-watch/positions",
-            headers={"X-Dashboard-Password": "secret"},
+            headers=session_headers("secret"),
             json={"action": "remove", "position": hidden},
         )
         assert removed.json()["hidden_positions"] == []
@@ -325,7 +326,7 @@ def test_account_position_api_does_not_report_unconfigured_account_as_empty(
 ) -> None:
     monkeypatch.delenv("GATE_API_KEY", raising=False)
     monkeypatch.delenv("GATE_API_SECRET", raising=False)
-    app = create_app(settings=Settings(database_url="sqlite:///:memory:"))
+    app = create_app(settings=Settings(dashboard_auth_disabled=True, database_url="sqlite:///:memory:"))
 
     with TestClient(app) as client:
         response = client.get("/api/account-positions")
@@ -335,3 +336,6 @@ def test_account_position_api_does_not_report_unconfigured_account_as_empty(
     assert response.json()["accounts"][0]["configured"] is False
     assert response.json()["accounts"][0]["state"] == "not_configured"
     assert response.json()["accounts"][0]["message"] == "尚未配置账户凭据"
+
+
+pytestmark = pytest.mark.usefixtures("legacy_auth_sessions")

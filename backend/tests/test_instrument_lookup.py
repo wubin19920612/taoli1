@@ -49,7 +49,7 @@ def test_instrument_lookup_groups_exact_symbol_across_all_exchanges() -> None:
     store.set_exchange_errors({"bitget:future": "temporary timeout"})
     app = create_app(
         snapshot_store=store,
-        settings=Settings(database_url="sqlite:///:memory:"),
+        settings=Settings(dashboard_auth_disabled=True, database_url="sqlite:///:memory:"),
     )
 
     with TestClient(app) as client:
@@ -87,7 +87,7 @@ def test_statistics_endpoint_reuses_exact_lookup_without_blocking_basic_quotes()
     now = datetime.now(UTC)
     store = SnapshotStore()
     store.set_all_markets([market("BTCUSDT", "binance", MarketType.FUTURE, 100, now)])
-    app = create_app(snapshot_store=store, settings=Settings(database_url="sqlite:///:memory:"))
+    app = create_app(snapshot_store=store, settings=Settings(dashboard_auth_disabled=True, database_url="sqlite:///:memory:"))
     service = AsyncMock()
     service.lookup.return_value = InstrumentStatisticsResult(symbol="BTCUSDT", observed_at=now)
     with TestClient(app) as client:
@@ -106,7 +106,7 @@ def test_instrument_lookup_falls_back_to_filtered_markets_for_injected_stores() 
     store.set_markets([market("ETHUSDT", "okx", MarketType.SPOT, 4_000, now)])
     app = create_app(
         snapshot_store=store,
-        settings=Settings(database_url="sqlite:///:memory:"),
+        settings=Settings(dashboard_auth_disabled=True, database_url="sqlite:///:memory:"),
     )
 
     with TestClient(app) as client:
@@ -129,7 +129,7 @@ def test_instrument_lookup_resolves_exchange_alias_to_canonical_symbol() -> None
     )
     app = create_app(
         snapshot_store=store,
-        settings=Settings(database_url="sqlite:///:memory:"),
+        settings=Settings(dashboard_auth_disabled=True, database_url="sqlite:///:memory:"),
     )
 
     class SettingsRepository:
@@ -170,7 +170,7 @@ def test_instrument_lookup_resolves_hyperliquid_raw_alias_and_exact_dex() -> Non
     )
     app = create_app(
         snapshot_store=store,
-        settings=Settings(database_url="sqlite:///:memory:"),
+        settings=Settings(dashboard_auth_disabled=True, database_url="sqlite:///:memory:"),
     )
 
     with TestClient(app) as client:
@@ -220,7 +220,7 @@ def test_anthropic_lookup_matches_independent_robinhood_lighter_route() -> None:
     )
     app = create_app(
         snapshot_store=store,
-        settings=Settings(database_url="sqlite:///:memory:"),
+        settings=Settings(dashboard_auth_disabled=True, database_url="sqlite:///:memory:"),
     )
 
     class Astro:
@@ -292,7 +292,7 @@ def test_instrument_lookup_lists_multiple_hyperliquid_dex_candidates() -> None:
     )
     app = create_app(
         snapshot_store=store,
-        settings=Settings(database_url="sqlite:///:memory:"),
+        settings=Settings(dashboard_auth_disabled=True, database_url="sqlite:///:memory:"),
     )
 
     class SettingsRepository:
@@ -343,7 +343,7 @@ def test_instrument_lookup_keeps_ignored_exchange_basics_but_excludes_its_spread
     )
     app = create_app(
         snapshot_store=store,
-        settings=Settings(database_url="sqlite:///:memory:"),
+        settings=Settings(dashboard_auth_disabled=True, database_url="sqlite:///:memory:"),
     )
 
     class SettingsRepository:
@@ -359,3 +359,6 @@ def test_instrument_lookup_keeps_ignored_exchange_basics_but_excludes_its_spread
     gate = next(item for item in payload["exchanges"] if item["exchange"] == "gate")
     assert gate["future"] is not None
     assert payload["spreads"] == []
+
+
+pytestmark = pytest.mark.usefixtures("legacy_auth_sessions")

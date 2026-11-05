@@ -11,6 +11,7 @@ import pytest
 
 from app.core.config import Settings
 from app.db.database import connect_database
+from app.db.auth import AuthStore
 from app.db.repositories import ShadowTradeRepository
 from app.db.schema import initialize_shadow_schema
 from app.main import create_app
@@ -18,6 +19,7 @@ from app.services.shadow_ledger import ShadowLedger
 from app.services.shadow_runtime import ShadowRuntime
 from app.services.snapshot_consumers import PublishedSnapshot
 from app.services.snapshot_store import SnapshotStore
+from auth_helpers import IsolatedSessionLookup, TEST_TOTP_SECRET, seed_sessions, session_headers
 from shadow_helpers import NOW, pair
 
 
@@ -68,13 +70,15 @@ async def test_disabled_runtime_never_dispatches_or_mutates_shadow_table(monkeyp
 @pytest.mark.asyncio
 async def test_disabled_api_hides_existing_rows():
     app = create_app(settings=Settings(shadow_enabled=False, database_url="sqlite:///:memory:",
-                                     dashboard_password="test-only"), start_background_workers=False)
+                                     dashboard_password="test-only", dashboard_totp_secret=TEST_TOTP_SECRET),
+                     start_background_workers=False)
+    app.state.auth_store = IsolatedSessionLookup()
     db = await connect_database(":memory:")
     try:
         await seed_trades(db)
         await app.state.shadow_runtime.initialize(db)
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
-                                     headers={"X-Dashboard-Password": "test-only"}) as client:
+                                     headers=session_headers("test-password")) as client:
             assert (await client.get("/api/shadow/trades")).json() == []
             assert (await client.get("/api/shadow/buckets", params={
                 "since": NOW.isoformat(), "until": (NOW + timedelta(days=1)).isoformat()})).json() == []
@@ -104,7 +108,9 @@ async def test_disabled_lifespan_registers_no_shadow_tasks_or_consumer(monkeypat
 async def test_api_reads_only_committed_rows_across_rollback_and_commit(tmp_path):
     path = str(tmp_path / "read isolation.db")
     app = create_app(settings=Settings(shadow_enabled=True, database_url="sqlite:///" + path,
-                                     dashboard_password="test-only"), start_background_workers=False)
+                                     dashboard_password="test-only", dashboard_totp_secret=TEST_TOTP_SECRET),
+                     start_background_workers=False)
+    app.state.auth_store = IsolatedSessionLookup()
     runtime = app.state.shadow_runtime
     await runtime.initialize(None)
     try:
@@ -114,7 +120,7 @@ async def test_api_reads_only_committed_rows_across_rollback_and_commit(tmp_path
         committed = await runtime.repo.list_trades()
         pending = [{**r, "id": r["id"] + "pending", "opportunity_id": "pending"} for r in committed]
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
-                                     headers={"X-Dashboard-Password": "test-only"}) as client:
+                                     headers=session_headers("test-password")) as client:
             async def counts():
                 trades = await client.get("/api/shadow/trades?status=closed")
                 buckets = await client.get("/api/shadow/buckets", params={
@@ -143,8 +149,11 @@ async def test_api_reads_only_committed_rows_across_rollback_and_commit(tmp_path
 async def test_api_reader_connection_is_read_only_and_off_event_loop(tmp_path, monkeypatch):
     import app.api.routes_shadow as routes
     path = str(tmp_path / "read # only.db")
-    app = create_app(settings=Settings(shadow_enabled=True, database_url="sqlite:///" + path),
+    app = create_app(settings=Settings(shadow_enabled=True, database_url="sqlite:///" + path,
+                                     dashboard_password="test-only", dashboard_totp_secret=TEST_TOTP_SECRET),
                      start_background_workers=False)
+    app.state.auth_store = await AuthStore.open(":memory:")
+    await seed_sessions(app.state.auth_store)
     runtime = app.state.shadow_runtime
     await runtime.initialize(None)
     original = routes.aiosqlite.connect
@@ -157,7 +166,8 @@ async def test_api_reader_connection_is_read_only_and_off_event_loop(tmp_path, m
     monkeypatch.setattr(routes.aiosqlite, "connect", connect)
     try:
         await seed_trades(runtime.db)
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
+                                     headers=session_headers("test-password")) as client:
             assert (await client.get("/api/shadow/trades")).status_code == 200
         assert len(connections) == 1
         uri, kwargs, thread = connections[0]
@@ -168,6 +178,7 @@ async def test_api_reader_connection_is_read_only_and_off_event_loop(tmp_path, m
                 db.execute("DELETE FROM shadow_trades")
     finally:
         await runtime.aclose()
+        await app.state.auth_store.close()
 
 
 @pytest.mark.asyncio
@@ -327,8 +338,10 @@ async def test_runtime_error_paths_use_independent_category_limits(monkeypatch, 
                                              ("statistics", "buckets")])
 async def test_api_errors_are_rate_limited_and_visible_in_status(tmp_path, monkeypatch, caplog, category, endpoint):
     import app.api.routes_shadow as routes
-    app = create_app(settings=Settings(shadow_enabled=True, database_url="sqlite:///" + str(tmp_path / "errors.db")),
+    app = create_app(settings=Settings(shadow_enabled=True, database_url="sqlite:///" + str(tmp_path / "errors.db"),
+                                     dashboard_password="test-only", dashboard_totp_secret=TEST_TOTP_SECRET),
                      start_background_workers=False)
+    app.state.auth_store = IsolatedSessionLookup()
     runtime = app.state.shadow_runtime
     await runtime.initialize(None)
 
@@ -344,7 +357,8 @@ async def test_api_errors_are_rate_limited_and_visible_in_status(tmp_path, monke
         monkeypatch.setattr(routes.ShadowTradeRepository, category.removeprefix("read_"), broken_async)
     try:
         with caplog.at_level(logging.ERROR):
-            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
+                                         headers=session_headers("test-password")) as client:
                 for _ in range(3):
                     assert (await client.get("/api/shadow/" + endpoint)).status_code == 503
                 state = (await client.get("/api/shadow/status")).json()

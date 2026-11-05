@@ -30,7 +30,6 @@ import {
   createAccountConnection,
   deleteAccountConnection,
   listAccountConnections,
-  saveDashboardPassword,
   testDraftAccountConnection,
   testSavedAccountConnection,
   updateAccountConnection
@@ -103,10 +102,6 @@ export function AccountConnectionsPage() {
   const [overview, setOverview] = useState<AccountConnectionOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [password, setPassword] = useState(
-    () => window.localStorage.getItem("dashboard_password") ?? ""
-  );
-  const [passwordEditing, setPasswordEditing] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<AccountConnection | null>(null);
   const [saving, setSaving] = useState(false);
@@ -119,7 +114,6 @@ export function AccountConnectionsPage() {
       setOverview(await listAccountConnections());
       setError("");
     } catch (caught) {
-      setPasswordEditing(true);
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
       setLoading(false);
@@ -380,39 +374,7 @@ export function AccountConnectionsPage() {
         </Button>
       </header>
 
-      <section className="account-connections-auth" aria-label="面板访问密码">
-        {password && overview && !error && !loading && !passwordEditing ? (
-          <Typography.Text>
-            <SafetyCertificateOutlined /> 已验证 · <Button type="link" size="small" onClick={() => setPasswordEditing(true)}>修改</Button>
-          </Typography.Text>
-        ) : <>
-          <Input.Password
-            value={password}
-            prefix={<SafetyCertificateOutlined />}
-            placeholder="仪表盘密码"
-            aria-label="仪表盘密码"
-            onChange={(event) => {
-              setPasswordEditing(true);
-              setPassword(event.target.value);
-            }}
-            onPressEnter={() => {
-              saveDashboardPassword(password);
-              setPasswordEditing(false);
-              void load();
-            }}
-          />
-          <Button
-            icon={<ReloadOutlined />}
-            onClick={() => {
-              saveDashboardPassword(password);
-              setPasswordEditing(false);
-              void load();
-            }}
-          >
-            保存并刷新
-          </Button>
-        </>}
-      </section>
+      <Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新账户</Button>
 
       {error ? <Alert type="error" showIcon closable message={error} onClose={() => setError("")} /> : null}
       {overview && !overview.storage_ready ? (

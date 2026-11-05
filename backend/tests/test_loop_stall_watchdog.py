@@ -225,7 +225,7 @@ async def test_main_lifespan_watchdog_shutdown(monkeypatch, enabled):
     from app.main import create_app
 
     monkeypatch.setenv("LOOP_STALL_WATCHDOG_ENABLED", str(enabled))
-    app = create_app(settings=Settings(database_url="sqlite:///:memory:"),
+    app = create_app(settings=Settings(dashboard_auth_disabled=True, database_url="sqlite:///:memory:"),
                      start_background_workers=False)
     async with app.router.lifespan_context(app):
         watchdog = app.state.loop_stall_watchdog
@@ -287,3 +287,6 @@ def test_stall_gc_includes_pause_before_detection_and_excludes_after_recovery(ou
     row, = records(output)
     assert row["gc_ms"] == 250.0
     assert row["gc_gen2"] == 1
+
+
+pytestmark = pytest.mark.usefixtures("legacy_auth_sessions")

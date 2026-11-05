@@ -13,10 +13,9 @@ function announce(settings: FloatingWatchSettings): void {
 async function mutate(
   action: "add" | "remove",
   itemType: "symbol" | "pair",
-  value: string,
-  password?: string
+  value: string
 ): Promise<FloatingWatchSettings> {
-  const saved = await mutateFloatingWatchItem(action, itemType, value, password);
+  const saved = await mutateFloatingWatchItem(action, itemType, value);
   announce(saved);
   return saved;
 }
@@ -25,8 +24,8 @@ export async function addFloatingWatchSymbol(symbol: string): Promise<FloatingWa
   return mutate("add", "symbol", symbol);
 }
 
-export async function addFloatingWatchPair(pairId: string, password?: string): Promise<FloatingWatchSettings> {
-  return mutate("add", "pair", pairId, password);
+export async function addFloatingWatchPair(pairId: string): Promise<FloatingWatchSettings> {
+  return mutate("add", "pair", pairId);
 }
 
 export async function removeFloatingWatchSymbol(symbol: string): Promise<FloatingWatchSettings> {

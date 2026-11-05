@@ -1,6 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 
-from app.core.security import dashboard_password_header, verify_dashboard_password
 from app.db.repositories import PhonePriceAlertEventRepository, PhonePriceAlertRuleRepository
 from app.models.phone_alert import (
     PhonePriceAlertDiagnostic,
@@ -15,10 +14,6 @@ from app.services.phone_price_alerts import (
 )
 
 router = APIRouter(prefix="/phone-alerts")
-
-
-def _verify_write_access(request: Request, password: str | None) -> None:
-    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
 
 
 def _rule_repo(request: Request) -> PhonePriceAlertRuleRepository:
@@ -44,9 +39,7 @@ async def list_rules(request: Request) -> list[PhonePriceAlertRule]:
 async def create_rule(
     rule: PhonePriceAlertRule,
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ) -> PhonePriceAlertRule:
-    _verify_write_access(request, password)
     return await _rule_repo(request).create(rule)
 
 
@@ -55,9 +48,7 @@ async def update_rule(
     rule_id: str,
     rule: PhonePriceAlertRule,
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ) -> PhonePriceAlertRule:
-    _verify_write_access(request, password)
     return await _rule_repo(request).upsert(rule.model_copy(update={"id": rule_id}))
 
 
@@ -65,9 +56,7 @@ async def update_rule(
 async def delete_rule(
     rule_id: str,
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ) -> dict[str, str]:
-    _verify_write_access(request, password)
     await _rule_repo(request).delete(rule_id)
     return {"status": "deleted"}
 

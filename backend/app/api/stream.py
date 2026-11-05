@@ -1,8 +1,10 @@
 import asyncio
 import json
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
+
+from app.core.security import require_authentication
 
 router = APIRouter()
 
@@ -11,6 +13,12 @@ async def _event_stream(request: Request):
     last_payload = ""
     while True:
         if await request.is_disconnected():
+            break
+        # Recheck even when the snapshot is unchanged. Never send an auth error
+        # or credentials over an already established stream; just close it.
+        try:
+            await require_authentication(request)
+        except HTTPException:
             break
         store = request.app.state.snapshot_store
         payload = json.dumps(

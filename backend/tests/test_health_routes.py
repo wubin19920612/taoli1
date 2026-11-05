@@ -1,3 +1,4 @@
+from auth_helpers import TEST_TOTP_SECRET, session_headers
 import asyncio
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -17,7 +18,7 @@ from app.services.collector import MarketCollector
 @pytest.fixture
 def app():
     # ASGITransport deliberately skips lifespan: no external workers or real database.
-    return create_app(settings=Settings(dashboard_password="test-password"), start_collector=True)
+    return create_app(settings=Settings(dashboard_totp_secret=TEST_TOTP_SECRET, dashboard_password="test-password"), start_collector=True)
 
 
 @pytest.fixture
@@ -48,7 +49,7 @@ async def test_legacy_health_exact_fields_and_filters_are_preserved(app, client)
     app.state.settings_repo = SimpleNamespace(
         get_risk_settings=AsyncMock(return_value=RiskSettings(ignored_exchanges=["okx"])),
     )
-    response = await client.get("/api/health")
+    response = await client.get("/api/health", headers=session_headers("test-password"))
     assert response.status_code == 200
     # Capture of the legacy contract; no supervision fields added to it.
     assert response.json() == {
@@ -102,7 +103,7 @@ async def test_single_exchange_failure_does_not_affect_ready(app, client):
     await collector.collect_once()
     assert app.state.snapshot_store.get_exchange_errors()
     assert (await client.get("/api/health/ready")).status_code == 200
-    detail = (await client.get("/api/health/detail", headers={"X-Dashboard-Password": "test-password"})).json()
+    detail = (await client.get("/api/health/detail", headers=session_headers("test-password"))).json()
     assert detail["exchanges"]["broken"]["last_success_at"] is None
     assert detail["exchanges"]["broken"]["data_age_seconds"] is None
     assert detail["exchanges"]["healthy"]["data_age_seconds"] >= 0
@@ -116,7 +117,7 @@ async def test_api_only_ready_does_not_require_collector(app, client):
 
 async def test_detail_password_metrics_and_nested_cache_counts(app, client, monkeypatch):
     assert (await client.get("/api/health/detail")).status_code == 401
-    assert (await client.get("/api/health/detail", headers={"X-Dashboard-Password": "wrong"})).status_code == 401
+    assert (await client.get("/api/health/detail", headers=session_headers("wrong"))).status_code == 401
     caches = {
         "_REALTIME_PAIR_SPREAD_CACHE": {"private-key": [None, None]},
         "_REALTIME_PAIR_FUNDING_CACHE": {"a": [None], "b": []},
@@ -128,7 +129,7 @@ async def test_detail_password_metrics_and_nested_cache_counts(app, client, monk
     collector = MarketCollector([], app.state.snapshot_store)
     app.state.market_collector = collector
     await collector.collect_once()
-    response = await client.get("/api/health/detail", headers={"X-Dashboard-Password": "test-password"})
+    response = await client.get("/api/health/detail", headers=session_headers("test-password"))
     assert response.status_code == 200
     data = response.json()
     assert data["snapshot"]["generation"] == 1
@@ -157,13 +158,13 @@ async def test_trade_availability_failure_visible_in_detail_then_recovers(app, c
 
     app.state.task_supervisor.start("trade-availability-monitor", fail_once, restart=True, critical=False)
     await asyncio.sleep(0)
-    response = await client.get("/api/health/detail", headers={"X-Dashboard-Password": "test-password"})
+    response = await client.get("/api/health/detail", headers=session_headers("test-password"))
     assert response.json()["tasks"]["trade-availability-monitor"]["state"] == "failed"
     assert "secret" not in response.text
     async with asyncio.timeout(1):
         while calls < 2:
             await asyncio.sleep(0.001)
-    response = await client.get("/api/health/detail", headers={"X-Dashboard-Password": "test-password"})
+    response = await client.get("/api/health/detail", headers=session_headers("test-password"))
     assert response.json()["tasks"]["trade-availability-monitor"]["state"] == "running"
     assert response.json()["tasks"]["trade-availability-monitor"]["restarts"] == 1
 
@@ -177,7 +178,7 @@ async def test_detail_includes_snapshot_consumer_and_collector_runtime(app, clie
     slot.put(PublishedSnapshot(2, datetime.now(UTC), (), ()))
     app.state.snapshot_consumers = {consumer.name: consumer}
     app.state.market_collector = MarketCollector([], app.state.snapshot_store)
-    response = await client.get("/api/health/detail", headers={"X-Dashboard-Password": "test-password"})
+    response = await client.get("/api/health/detail", headers=session_headers("test-password"))
     assert response.status_code == 200
     assert response.json()["collector_runtime"] == {"risk_settings_fallbacks": 0}
     assert response.json()["snapshot_consumers"][consumer.name] == {
@@ -200,7 +201,7 @@ async def test_detail_optional_metrics_fail_independently(app, client, monkeypat
         app.state.snapshot_consumers = {"broken": SimpleNamespace(stats=broken)}
     else:
         monkeypatch.setattr(collector, "runtime_stats", broken)
-    response = await client.get("/api/health/detail", headers={"X-Dashboard-Password": "test-password"})
+    response = await client.get("/api/health/detail", headers=session_headers("test-password"))
     data = response.json()
     assert response.status_code == 200
     assert broken_field not in data
@@ -209,5 +210,8 @@ async def test_detail_optional_metrics_fail_independently(app, client, monkeypat
 
 
 async def test_detail_without_collector_omits_runtime(app, client):
-    data = (await client.get("/api/health/detail", headers={"X-Dashboard-Password": "test-password"})).json()
+    data = (await client.get("/api/health/detail", headers=session_headers("test-password"))).json()
     assert "collector_runtime" not in data
+
+
+pytestmark = pytest.mark.usefixtures("legacy_auth_sessions")

@@ -1,10 +1,9 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import ValidationError
 
-from app.core.security import dashboard_password_header, verify_dashboard_password
 from app.models.market import MarketType
 from app.models.pair_range_backtest import PairRangeBacktestRequest, PairRangeBacktestResult
 from app.models.pair_spread import (
@@ -195,9 +194,7 @@ async def upsert_pair_spread_preset(
     preset_id: str,
     preset: PairSpreadPreset,
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ) -> PairSpreadPreset:
-    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
     if preset_id != preset.id:
         raise HTTPException(status_code=422, detail="Preset id does not match request path")
     try:
@@ -212,9 +209,7 @@ async def upsert_pair_spread_preset(
 async def merge_pair_spread_presets(
     payload: PairSpreadPresetMergeRequest,
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ) -> list[PairSpreadPreset]:
-    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
     try:
         return await _preset_repo(request).merge(payload.presets)
     except PairSpreadPresetBusyError as exc:
@@ -227,9 +222,7 @@ async def merge_pair_spread_presets(
 async def delete_pair_spread_preset(
     preset_id: str,
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ) -> dict[str, bool]:
-    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
     try:
         await _preset_repo(request).delete(preset_id)
     except PairSpreadPresetBusyError as exc:
@@ -323,9 +316,7 @@ async def start_pair_spread_funding_record(
     payload: PairSpreadFundingRecordRequest,
     request: Request,
     hours: int = Query(default=72, ge=PAIR_SPREAD_MIN_HOURS),
-    password: str | None = Depends(dashboard_password_header),
 ) -> PairSpreadFundingRecordStatus:
-    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
     record_request, leg1_alias, leg2_alias = await _funding_request_from_payload(request, payload)
     status = await _funding_recorder(request).upsert_watch(record_request, hours=hours)
     return _display_funding_status(status, leg1_alias=leg1_alias, leg2_alias=leg2_alias)
@@ -336,9 +327,7 @@ async def stop_pair_spread_funding_record(
     payload: PairSpreadFundingRecordRequest,
     request: Request,
     hours: int = Query(default=72, ge=PAIR_SPREAD_MIN_HOURS),
-    password: str | None = Depends(dashboard_password_header),
 ) -> PairSpreadFundingRecordStatus:
-    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
     record_request, leg1_alias, leg2_alias = await _funding_request_from_payload(request, payload)
     status = await _funding_recorder(request).delete_watch(record_request, hours=hours)
     return _display_funding_status(status, leg1_alias=leg1_alias, leg2_alias=leg2_alias)
@@ -525,9 +514,7 @@ async def query_pair_spread_funding_history(
 async def backtest_pair_spread_range(
     payload: PairRangeBacktestRequest,
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ) -> PairRangeBacktestResult:
-    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
     resolver = await _symbol_alias_resolver(request)
     try:
         legs = [

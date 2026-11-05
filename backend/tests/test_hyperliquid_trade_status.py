@@ -195,7 +195,7 @@ async def test_monitor_notifies_only_when_cap_state_recovers() -> None:
 
 def test_hyperliquid_trade_status_routes_return_diagnostics_and_persist_watch() -> None:
     app = create_app(
-        settings=Settings(database_url="sqlite:///:memory:"),
+        settings=Settings(dashboard_auth_disabled=True, database_url="sqlite:///:memory:"),
         start_background_workers=False,
     )
     now = datetime.now(UTC)
@@ -231,7 +231,7 @@ def test_hyperliquid_trade_status_routes_return_diagnostics_and_persist_watch() 
 
 def test_hyperliquid_trade_status_route_maps_upstream_failure_to_bad_gateway() -> None:
     app = create_app(
-        settings=Settings(database_url="sqlite:///:memory:"),
+        settings=Settings(dashboard_auth_disabled=True, database_url="sqlite:///:memory:"),
         start_background_workers=False,
     )
     service = AsyncMock()
@@ -243,3 +243,6 @@ def test_hyperliquid_trade_status_route_maps_upstream_failure_to_bad_gateway() -
 
     assert response.status_code == 502
     assert response.json() == {"detail": "upstream unavailable"}
+
+
+pytestmark = pytest.mark.usefixtures("legacy_auth_sessions")

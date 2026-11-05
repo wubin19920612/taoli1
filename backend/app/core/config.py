@@ -104,10 +104,22 @@ class Settings:
     native_route_exchanges: str = "hyperliquid,lighter,bitget"
     crossex_catalog_refresh_seconds: int = 1800
 
+    dashboard_totp_secret: str = ""
+    dashboard_api_token: str = ""
+    dashboard_session_days: int = 30
+    dashboard_auth_disabled: bool = False
+    trusted_proxy_ips: str = "172.18.0.0/24"
+
+    def __repr__(self) -> str:
+        # Configuration can contain credentials; never reveal them via exception/debug repr.
+        return "Settings(<redacted>)"
+
     def __post_init__(self) -> None:
         from app.services.execution_routes import validate_shadow_settings
 
         validate_shadow_settings(self)
+        if type(self.dashboard_session_days) is not int or not 1 <= self.dashboard_session_days <= 30:
+            raise ValueError("DASHBOARD_SESSION_DAYS must be between 1 and 30")
         if not math.isfinite(self.hl_bbo_max_age_seconds) or self.hl_bbo_max_age_seconds <= 0:
             raise ValueError("hl_bbo_max_age_seconds must be finite and positive")
         if type(self.hl_bbo_max_coins) is not int or self.hl_bbo_max_coins <= 0:
@@ -241,6 +253,11 @@ def get_settings() -> Settings:
     feishu_live_send_enabled = bool_env("FEISHU_LIVE_SEND_ENABLED", False)
 
     return Settings(
+        dashboard_totp_secret=os.getenv("DASHBOARD_TOTP_SECRET", "").strip(),
+        dashboard_api_token=os.getenv("DASHBOARD_API_TOKEN", ""),
+        dashboard_session_days=int(os.getenv("DASHBOARD_SESSION_DAYS", "30")),
+        dashboard_auth_disabled=bool_env("DASHBOARD_AUTH_DISABLED", False),
+        trusted_proxy_ips=os.getenv("TRUSTED_PROXY_IPS", "172.18.0.0/24"),
         disabled_features=frozenset(os.getenv("DISABLED_FEATURES", "").split(",")),
         app_name=os.getenv("APP_NAME", "Arbitrage Radar"),
         environment=environment,

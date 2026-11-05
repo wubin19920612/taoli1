@@ -1562,7 +1562,7 @@ describe("FloatingWatchPanel", () => {
       [null, "verified-password"],
       ["rejected-password", "verified-password"],
       ["rejected-password", null]
-    ])("resumes on a password change from %s to %s and clears the old block", async (initial, changed) => {
+    ])("ignores obsolete password storage changes from %s to %s until manual retry", async (initial, changed) => {
       if (initial !== null) window.localStorage.setItem("dashboard_password", initial);
       await renderPanel();
       await poll();
@@ -1572,6 +1572,8 @@ describe("FloatingWatchPanel", () => {
       if (changed === null) window.localStorage.removeItem("dashboard_password");
       else window.localStorage.setItem("dashboard_password", changed);
       await poll();
+      expect(apiClient.listAstroPairs).toHaveBeenCalledTimes(1);
+      await click("刷新关注行情");
       expect(apiClient.listAstroPairs).toHaveBeenCalledTimes(2);
 
       if (initial === null) window.localStorage.removeItem("dashboard_password");
@@ -1606,7 +1608,6 @@ describe("FloatingWatchPanel", () => {
     });
 
     it.each([
-      ["upstream 401", new apiClient.ApiError("Astro upstream unauthorized", 401)],
       ["server 500", new apiClient.ApiError("Astro server error", 500)],
       ["500 with the password message", new apiClient.ApiError(passwordMessage, 500)],
       ["network error", new TypeError("Failed to fetch")],
@@ -1683,7 +1684,7 @@ describe("FloatingWatchPanel", () => {
       expect(screen.queryByText("Astro 卡片读取失败：old server error")).toBeNull();
     });
 
-    it("blocks the request password and retries a password changed while the latest request was pending", async () => {
+    it("requires an explicit retry after an in-flight session rejection", async () => {
       let rejectRequest!: (error: Error) => void;
       vi.mocked(apiClient.listAstroPairs)
         .mockReturnValueOnce(new Promise((_resolve, reject) => {
@@ -1699,12 +1700,14 @@ describe("FloatingWatchPanel", () => {
       });
       expect(screen.getByText("Astro 0")).not.toBeNull();
       await poll();
+      expect(apiClient.listAstroPairs).toHaveBeenCalledTimes(1);
+      await click("刷新关注行情");
       expect(apiClient.listAstroPairs).toHaveBeenCalledTimes(2);
       expect(screen.getByText("Astro 3 · 1 持仓")).not.toBeNull();
       expect(screen.queryByText(`Astro 卡片读取失败：${passwordMessage}`)).toBeNull();
     });
 
-    it("blocks the password the request was sent with, not the one saved at rejection time", async () => {
+    it("does not use obsolete storage to resume after a session rejection", async () => {
       let rejectRequest!: (error: Error) => void;
       vi.mocked(apiClient.listAstroPairs).mockReturnValueOnce(new Promise((_resolve, reject) => {
         rejectRequest = reject;
@@ -1717,8 +1720,8 @@ describe("FloatingWatchPanel", () => {
         rejectRequest(passwordError());
       });
       await poll();
-      // The rejected password differs from the one now saved, so polling resumes.
-      expect(apiClient.listAstroPairs).toHaveBeenCalledTimes(2);
+      // Changing obsolete storage cannot authorize another request.
+      expect(apiClient.listAstroPairs).toHaveBeenCalledTimes(1);
       expect(apiClient.getFloatingWatchSettings).toHaveBeenCalledTimes(2);
     });
 

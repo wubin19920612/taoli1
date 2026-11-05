@@ -1,3 +1,4 @@
+import { AuthGate } from "./components/AuthGate";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { ConfigProvider, theme } from "antd";
@@ -24,7 +25,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
         }
       }}
     >
-      <AppShell />
+      <AuthGate><AppShell /></AuthGate>
     </ConfigProvider>
   </React.StrictMode>
 );

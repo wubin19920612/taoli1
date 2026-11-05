@@ -1,6 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 
-from app.core.security import dashboard_password_header, verify_dashboard_password
 from app.db.repositories import IndexComponentRepository
 from app.models.index_component import (
     IndexComponentAutoWatchSettings,
@@ -18,9 +17,7 @@ router = APIRouter(prefix="/index-components")
 @router.get("/notifications", response_model=IndexComponentNotificationSettings)
 async def get_index_component_notifications(
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ) -> IndexComponentNotificationSettings:
-    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
     return await request.app.state.settings_repo.get_index_component_notification_settings()
 
 
@@ -28,9 +25,7 @@ async def get_index_component_notifications(
 async def update_index_component_notifications(
     settings: IndexComponentNotificationSettings,
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ) -> IndexComponentNotificationSettings:
-    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
     return await request.app.state.settings_repo.set_index_component_notification_settings(settings)
 
 
@@ -44,9 +39,7 @@ def _auto_watch(request: Request) -> IndexComponentAutoWatchService:
 @router.get("/auto-watch", response_model=IndexComponentAutoWatchStatus)
 async def get_index_component_auto_watch(
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ) -> IndexComponentAutoWatchStatus:
-    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
     return await _auto_watch(request).status()
 
 
@@ -54,18 +47,14 @@ async def get_index_component_auto_watch(
 async def update_index_component_auto_watch(
     settings: IndexComponentAutoWatchSettings,
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ) -> IndexComponentAutoWatchStatus:
-    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
     return await _auto_watch(request).configure(settings)
 
 
 @router.post("/auto-watch/sync", response_model=IndexComponentAutoWatchStatus)
 async def sync_index_component_auto_watch(
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ) -> IndexComponentAutoWatchStatus:
-    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
     return await _auto_watch(request).sync(force=True)
 
 

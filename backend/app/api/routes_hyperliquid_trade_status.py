@@ -1,8 +1,7 @@
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 
-from app.core.security import dashboard_password_header, verify_dashboard_password
 from app.models.hyperliquid_trade_status import (
     HyperliquidTradeStatusResult,
     HyperliquidTradeStatusWatch,
@@ -33,10 +32,6 @@ def _repository(request: Request) -> HyperliquidTradeStatusWatchRepository:
     return repository
 
 
-def _verify_write(request: Request, password: str | None) -> None:
-    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
-
-
 @router.get("/{symbol}", response_model=HyperliquidTradeStatusResult)
 async def get_trade_status(
     symbol: str,
@@ -61,9 +56,7 @@ async def list_watches(request: Request) -> list[HyperliquidTradeStatusWatch]:
 async def create_watch(
     payload: HyperliquidTradeStatusWatchCreate,
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ) -> HyperliquidTradeStatusWatch:
-    _verify_write(request, password)
     dex = normalize_hyperliquid_dex(payload.dex or hyperliquid_dex_from_raw_symbol(payload.raw_symbol))
     result = await _service(request).fetch_status(
         payload.symbol,
@@ -111,8 +104,6 @@ async def create_watch(
 async def delete_watch(
     watch_id: str,
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ) -> dict[str, str]:
-    _verify_write(request, password)
     await _repository(request).delete(watch_id)
     return {"status": "deleted"}

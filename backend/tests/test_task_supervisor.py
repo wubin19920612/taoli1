@@ -113,7 +113,7 @@ async def test_non_restart_failure_and_cancel_during_backoff():
 
 async def test_shutdown_failed_task_still_closes_clients_and_database(tmp_path, caplog):
     app = create_app(
-        settings=Settings(database_url=f"sqlite:///{tmp_path / 'shutdown.db'}"),
+        settings=Settings(dashboard_auth_disabled=True, database_url=f"sqlite:///{tmp_path / 'shutdown.db'}"),
         start_background_workers=False,
     )
     closed = AsyncMock()
@@ -235,7 +235,7 @@ async def test_loop_heartbeats_on_completed_and_failed_iterations(loop_name, ok)
     if loop_name == "market-collector":
         factory = lambda: run_collector_loop(SimpleNamespace(collect_once=operation), 0.01, stop)
     elif loop_name == "alert-loop":
-        app = create_app(start_background_workers=False, settings=Settings())
+        app = create_app(start_background_workers=False, settings=Settings(dashboard_auth_disabled=True, ))
         app.state.alert_rule_repo = SimpleNamespace(list=operation)
         app.state.alert_event_repo = SimpleNamespace()
         app.state.alert_delivery_store = SimpleNamespace(prune=AsyncMock())
@@ -269,3 +269,6 @@ async def test_announcement_source_heartbeat_uses_supervisor_context():
     )
     assert supervisor.statuses["announcement-loop"].iterations == 1
     assert supervisor.statuses["announcement-loop"].last_ok_at is not None
+
+
+pytestmark = pytest.mark.usefixtures("legacy_auth_sessions")

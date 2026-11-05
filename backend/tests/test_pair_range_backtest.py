@@ -1,3 +1,7 @@
+from auth_helpers import TEST_TOTP_SECRET, session_headers, IsolatedSessionLookup
+from app.core.config import Settings
+from app.core.security import require_dashboard_password
+from fastapi import Depends
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -358,8 +362,9 @@ async def test_data_loader_only_fetches_endpoints_and_funding_once(same_leg):
 @pytest.fixture
 def route_app():
     app = FastAPI()
-    app.include_router(router, prefix="/api")
-    app.state.settings = SimpleNamespace(dashboard_password="test-password")
+    app.include_router(router, prefix="/api", dependencies=[Depends(require_dashboard_password)])
+    app.state.settings = Settings(dashboard_password="test-password", dashboard_totp_secret=TEST_TOTP_SECRET)
+    app.state.auth_store = IsolatedSessionLookup()
     request = request_for()
     result = calculate(request, data_for(request, request.leg1), data_for(request, request.leg2))
     service = SimpleNamespace(
@@ -376,7 +381,7 @@ async def post(app, payload, password="test-password"):
         return await client.post(
             "/api/pair-spread/range-backtest",
             json=payload,
-            headers={"X-Dashboard-Password": password},
+            headers=session_headers(password),
         )
 
 

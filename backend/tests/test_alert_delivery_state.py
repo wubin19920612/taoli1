@@ -102,7 +102,7 @@ async def test_pending_crash_is_recovered_by_real_app_startup_once(tmp_path):
         await db.close()
 
     for _ in range(2):
-        app = create_app(settings=Settings(database_url=f"sqlite:///{path}"),
+        app = create_app(settings=Settings(dashboard_auth_disabled=True, database_url=f"sqlite:///{path}"),
                          start_background_workers=False)
         async with app.router.lifespan_context(app):
             engine = app.state.alert_engine
@@ -341,3 +341,6 @@ async def test_loop_prunes_once_per_day_and_keeps_long_cooldowns(delivery_store)
     delivery_store.prune.assert_awaited_once()
     cutoff, = delivery_store.prune.await_args.args
     assert before - timedelta(days=11) <= cutoff <= after - timedelta(days=11)
+
+
+pytestmark = pytest.mark.usefixtures("legacy_auth_sessions")

@@ -1,10 +1,9 @@
 from datetime import UTC, datetime
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from app.core.security import dashboard_password_header, verify_dashboard_password
 from app.models.market_identity import BindingMutation, MarketKey, MarketValidationSettings
 
 router = APIRouter(prefix="/market-identities")
@@ -15,10 +14,6 @@ def service(request):
     if result is None:
         raise HTTPException(status_code=503, detail="市场核验服务未就绪")
     return result
-
-
-def authorize(request, password):
-    verify_dashboard_password(request.app.state.settings.dashboard_password, password)
 
 
 @router.get("")
@@ -69,9 +64,7 @@ async def settings(request: Request):
 async def update_settings(
     value: MarketValidationSettings,
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ):
-    authorize(request, password)
     validator = service(request)
     await validator.repository.save_settings(value)
     await validator.refresh()
@@ -93,9 +86,7 @@ def _refresh_store(validator):
 async def binding_preview(
     value: BindingMutation,
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ):
-    authorize(request, password)
     validator = service(request)
     key = value.binding.market
     affected = [
@@ -118,9 +109,7 @@ async def binding_preview(
 async def update_binding(
     value: BindingMutation,
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ):
-    authorize(request, password)
     validator = service(request)
     try:
         saved = await validator.repository.save_binding(value)
@@ -150,9 +139,7 @@ class ReviewRequest(BaseModel):
 async def review(
     value: ReviewRequest,
     request: Request,
-    password: str | None = Depends(dashboard_password_header),
 ):
-    authorize(request, password)
     validator = service(request)
     rows = validator.store.get_all_markets()
     legs = []
@@ -170,8 +157,7 @@ async def review(
 
 
 @router.get("/card-audit")
-async def card_audit(request: Request, password: str | None = Depends(dashboard_password_header)):
-    authorize(request, password)
+async def card_audit(request: Request):
     validator = service(request)
     client = getattr(request.app.state, "astro_client", None)
     if client is None:

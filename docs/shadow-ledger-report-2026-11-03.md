@@ -263,3 +263,132 @@ SHADOW_BENCHMARK {"capture_median_ms": 2.7231998974457383, "changed_fraction": 1
 返工仅涉及 shadow runtime/ledger/scorer、config 默认值、main 的影子消费者入口、两个影子测试文件以及本报告和交接文档。`schema.py`、`repositories.py`、collector、Astro/arb-mvp、history 写入及前端均无本轮差异；`git diff --check` 通过。用户规格已由基线 `dc0fec6` 跟踪，本轮未修改。
 
 没有 push、服务器连接、备份、部署或线上验证。忽略目录 `.pytest-tmp/` 的日志/诊断脚本/测试库与既有 node_modules 均保留。交接见 [task-handoff-2026-11-03-shadow-ledger.md](task-handoff-2026-11-03-shadow-ledger.md)；下一步是本模块的 PM 锁定环境与独立验收，真实行情及生产操作需要另行授权。
+
+## 合入已上线部署分支与登录鉴权回归（2026-11-05）
+
+本轮仅在 `codex/shadow-ledger` 工作树本地合并。合并前 HEAD 为 `6d4389db6279b2bc9b66541ee0f9e9886257b96b`，工作区干净；已 fetch 的 `origin/codex/frontend-localization-polish` 核对为 `9a362a824276ec3c6cf6e560fc39e11bd88a1790`。执行 `git merge --no-ff --no-edit origin/codex/frontend-localization-polish`；`--no-edit` 仅使用默认合并说明，保留两父提交合并。
+
+冲突均同时保留两边语义：
+
+- `backend/app/core/config.py`：保留影子配置字段、默认值及 `validate_shadow_settings(self)`，同时保留验证码登录字段、Settings repr 脱敏和会话天数 1–30 的校验。
+- `backend/app/main.py`：同时初始化影子运行时与独立认证存储；同时注册影子路由和登录路由，统一使用 `Depends(require_dashboard_password)`。该历史名称的守卫现已委托新 `require_authentication`，关闭时同时释放两类资源。影子消费者及关闭开关逻辑保留。
+- 自动合并的 `frontend/src/api/client.ts` 保留三项影子 API 调用，同时改走新 `sessionFetch` 的同源 Cookie 请求。
+
+逐条确认：
+
+1. 当前全部 `/api/shadow*` 路由为 `GET /api/shadow/status`、`GET /api/shadow/trades`、`GET /api/shadow/buckets`，全部经过新会话 Cookie 或 `X-Api-Token` 鉴权。`backend/tests/test_route_permissions.py` 新增三对 method/path 的保留清单断言，并动态遍历所有该前缀下的路由和方法，在生产配置、影子开启/关闭两种状态下分别检查有效 Cookie、有效 Token 返回 200，以及无凭据、旧密码头、无效 Cookie、无效 Token 返回 401，错误体精确为 `{"detail": "Authentication required"}`。仅模拟业务读取，不替换认证守卫或真实 AuthStore。原 118 对保留端点基线、公开端点集合、逐方法 401 及生产缺配置拒绝等断言全部保留。
+2. `SHADOW_ENABLED` 默认仍为 0：`Settings.shadow_enabled=False`、`get_settings()` 使用 `bool_env("SHADOW_ENABLED", False)`。扩展原配置测试，明确检查环境变量缺省、显式 `0` 均关闭，显式 `1` 才开启；原配置非法值断言保留。
+3. `docker-compose.yml` 固定子网仍为 `172.18.0.0/24`、网关 `172.18.0.1`；后端可信代理默认 `/24` 和前端 nginx 网关 `/32` 保留。现有 `test_login_2fa_review.py::test_proxy_defaults_match_fixed_compose_network` 等配置契约测试通过。认证核心、Compose、前端 nginx 及两份验证码登录测试与目标分支完全一致。
+
+影子 API 原测试仅迁移鉴权准备：配置合成 TOTP、使用真实会话检查，保留所有关闭隐藏、校验错误、事务提交/回滚隔离、只读连接、工作线程及错误计数断言。只读连接观测前预先打开认证存储，仍严格断言一次影子读取仅建立一个 `mode=ro` 连接；没有增加连接计数白名单或放宽断言。
+
+环境：Windows PowerShell、本机 Python 3.12.10；FastAPI 0.135.1、Starlette 0.52.1、Pydantic 2.12.5、aiosqlite 0.22.1、httpx 0.28.1、pytest 8.4.2、pytest-asyncio 0.25.3；Node 24.14.0、npm 11.9.0。使用已有 Python 包和 `frontend/node_modules`，未安装依赖。本轮不替代锁定依赖或线上验收。后端所有命令均在 `backend` 目录执行，沿用项目离线保护和默认 `not network and not benchmark` 选择规则，另单独启用影子 benchmark；未运行 WSL。
+
+首次回归诊断命令：
+
+```powershell
+python -m pytest tests/test_route_permissions.py tests/test_shadow_api_runtime.py tests/test_shadow_review_regressions.py -q -p no:cacheprovider --basetemp ../.pytest-tmp/merge-2fa-initial
+```
+
+原始汇总（退出码 1；当时影子业务夹具仍使用旧密码头或未配置登录，新权限矩阵已通过）：
+
+```text
+7 failed, 47 passed in 20.24s
+```
+
+首次完整定向回归迁移后，连接观测把按请求临时创建的认证库连接也计入影子读取，触发原 `len(connections) == 1` 断言；修正夹具初始化顺序，未修改该断言。该次原始汇总（退出码 1）：
+
+```text
+1 failed, 182 passed, 2 deselected in 23.80s
+```
+
+最终定向回归命令（收集全部 `test_shadow*.py`、权限矩阵及全部 `test_login_2fa*.py`）：
+
+```powershell
+$testFiles = @(Get-ChildItem -Path tests/test_shadow*.py | ForEach-Object { $_.FullName })
+$testFiles += 'tests/test_route_permissions.py'
+$testFiles += @(Get-ChildItem -Path tests/test_login_2fa*.py | ForEach-Object { $_.FullName })
+python -m pytest @testFiles -q -p no:cacheprovider --basetemp ../.pytest-tmp/merge-2fa-targeted-final
+```
+
+原始汇总（退出码 0；两项 deselected 为后续单独运行的影子性能基准）：
+
+```text
+183 passed, 2 deselected in 22.64s
+```
+
+额外独立运行影子性能基准，未与其他测试并行：
+
+```powershell
+python -m pytest tests/test_shadow_benchmark.py -q -s -m benchmark -p no:cacheprovider --basetemp ../.pytest-tmp/merge-2fa-benchmark
+```
+
+首次原始汇总（退出码 1）：
+
+```text
+1 failed, 1 passed in 4.05s
+```
+
+失败为压力场景事件循环中位 `3.245200146920979 ms > 3 ms`；该场景 P95 为 4.834 ms、最大 7.511 ms、工作线程墙钟中位 19.248 ms、RSS 增量 26.422 MiB，其他预算通过，真实规模场景通过。`shadow_runtime.py`、`shadow_ledger.py` 和 `test_shadow_benchmark.py` 均与合并前完全一致，没有修改实现、性能断言或阈值。
+
+后端全量命令：
+
+```powershell
+python -m pytest -q -p no:cacheprovider --basetemp ../.pytest-tmp/merge-2fa-full
+```
+
+原始汇总（退出码 0）：
+
+```text
+2586 passed, 8 deselected, 12 warnings in 155.34s (0:02:35)
+```
+
+8 项按项目默认 network/benchmark 标记排除，其中 2 项影子 benchmark 已单独运行。12 条 warning 为已有 `datetime.utcnow()` 弃用提示。未扩大排除清单、添加 skip 或降低断言。
+
+全量结束后，再次独立运行同一影子基准源码（与前端测试也不并行）：
+
+```powershell
+python -m pytest tests/test_shadow_benchmark.py -q -s -m benchmark -p no:cacheprovider --basetemp ../.pytest-tmp/merge-2fa-benchmark-final
+```
+
+复核原始汇总（退出码 1）：
+
+```text
+1 failed, 1 passed in 4.19s
+```
+
+压力场景仍在事件循环中位断言失败：`3.1916999723762274 ms > 3 ms`；该次最大耗时为 43.992 ms，也超出既有 20 ms 预算（测试先在中位断言停止），P95 为 4.236 ms、工作线程墙钟中位 19.534 ms、RSS 增量 26.930 MiB。真实规模场景中位 1.083 ms、最大 2.426 ms、工作线程墙钟中位 5.448 ms、RSS 增量 4.434 MiB，全部断言通过。**影子压力性能基准本轮未通过**，不得据此开启生产；两次结果及原阈值保留，原因尚未定位，不能仅凭源码未变断言是机器波动。性能优化不扩展到本次合并任务。
+
+因合并包含前端改动，在 `frontend` 目录运行本地 TypeScript 编译器：
+
+```powershell
+.\node_modules\.bin\tsc.cmd --noEmit
+```
+
+编译器无诊断输出，执行器原始退出码行：
+
+```text
+TSC_EXIT_CODE=0
+```
+
+前端全量 Vitest 在后端与性能基准全部结束后单独运行，固定两个 worker 降低本机资源争用：
+
+```powershell
+npm.cmd test -- --reporter=dot --maxWorkers=2 --minWorkers=2
+```
+
+原始汇总（退出码 0）：
+
+```text
+ Test Files  33 passed (33)
+      Tests  427 passed (427)
+   Duration  234.28s (transform 1.41s, setup 155.02s, collect 72.96s, tests 183.34s, environment 44.57s, prepare 3.93s)
+```
+
+包含影子页面、登录、API 客户端、旧 origin 清理及 Hyperliquid DEX 相关前端用例；有 React act 等既有 warning，未修改超时、排除用例或降低断言，合并后前端没有额外补丁。
+
+本轮完整原始日志均留在被忽略的 `.pytest-tmp/`，不纳入提交：`merge-2fa-initial.log`、`merge-2fa-targeted.log`、`merge-2fa-targeted-final.log`、`merge-2fa-benchmark.log`、`merge-2fa-full.log`、`merge-2fa-benchmark-final.log`、`merge-2fa-tsc.log`（空日志）和 `merge-2fa-vitest.log`；测试数据库/临时文件位于同名前缀目录。既有产物没有清理。
+
+Git 范围检查：原报告前缀与合并前完全一致，本轮仅末尾追加；冲突全部解决，保留两父提交；除目标分支变更外，仅包含本轮必要的影子测试迁移、矩阵补充及报告/交接，未包含测试输出、依赖目录、数据库或其他任务文件。`git diff --check` 和暂存差异检查通过。提交号以本分支最终 `git log -1` 为准，交接见 [task-handoff-2026-11-05-shadow-ledger.md](task-handoff-2026-11-05-shadow-ledger.md)。
+
+按本次明确范围，没有 push、连接服务器、备份、部署、线上验证或运行 WSL。认证与功能回归通过，压力性能基准未通过；后续本模块复核与新模块工作请按交接范围分别继续。

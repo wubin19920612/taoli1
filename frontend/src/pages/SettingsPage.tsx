@@ -1,3 +1,4 @@
+import { LoginDevices } from "../components/LoginDevices";
 import { CloseOutlined, DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
 import {
   Alert,
@@ -32,7 +33,6 @@ import {
   getServiceControlStatus,
   listAlertRules,
   restartServiceControl,
-  saveDashboardPassword,
   updateAlertMessageTemplate,
   updateAstroAutomationSettings,
   updateAstroCardSettings,
@@ -1210,12 +1210,7 @@ export function SettingsPage() {
                       应用
                     </Button>
                   </div>
-                  <Space.Compact className="password-row">
-                    <Input.Password
-                      placeholder="Dashboard Password"
-                      onChange={(event) => saveDashboardPassword(event.target.value)}
-                    />
-                  </Space.Compact>
+                  <LoginDevices />
                   <div className="service-control">
                     <Typography.Title level={5}>服务控制</Typography.Title>
                     <Alert

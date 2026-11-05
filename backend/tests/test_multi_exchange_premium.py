@@ -1,3 +1,4 @@
+from auth_helpers import TEST_TOTP_SECRET, session_headers
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -236,15 +237,15 @@ def test_blacklists_and_duplicate_markets():
 
 def test_risk_settings_persist_and_validate(tmp_path):
     url = "sqlite:///" + (tmp_path / "premium.db").as_posix()
-    config = Settings(database_url=url, dashboard_password="test-secret")
+    config = Settings(dashboard_totp_secret=TEST_TOTP_SECRET, database_url=url, dashboard_password="test-secret")
     with TestClient(create_app(settings=config)) as client:
-        baseline = client.get("/api/settings/risk", headers={"X-Dashboard-Password": "test-secret"}).json()
+        baseline = client.get("/api/settings/risk", headers=session_headers("test-secret")).json()
         assert baseline["multi_exchange_premium_threshold_pct"] == 2
         payload = {**baseline, "multi_exchange_premium_threshold_pct": 3.5}
         assert client.put("/api/settings/risk", json=payload).status_code == 401
         # Match the existing dashboard authentication header.
         response = client.put(
-            "/api/settings/risk", json=payload, headers={"X-Dashboard-Password": "test-secret"}
+            "/api/settings/risk", json=payload, headers=session_headers("test-secret")
         )
         assert response.status_code == 200
         for invalid in (0, -1):
@@ -252,13 +253,13 @@ def test_risk_settings_persist_and_validate(tmp_path):
                 client.put(
                     "/api/settings/risk",
                     json={**payload, "multi_exchange_premium_threshold_pct": invalid},
-                    headers={"X-Dashboard-Password": "test-secret"},
+                    headers=session_headers("test-secret"),
                 ).status_code
                 == 422
             )
     with TestClient(create_app(settings=config)) as client:
         assert (
-            client.get("/api/settings/risk", headers={"X-Dashboard-Password": "test-secret"}).json()["multi_exchange_premium_threshold_pct"] == 3.5
+            client.get("/api/settings/risk", headers=session_headers("test-secret")).json()["multi_exchange_premium_threshold_pct"] == 3.5
         )
 
 
@@ -347,3 +348,6 @@ async def test_rotation_covers_more_than_one_batch(monkeypatch):
         await monitor.run_once()
     assert app.state.feishu_notifier.send_text.await_count == 3
     assert monitor.status["eligible_symbols"] == 3
+
+
+pytestmark = pytest.mark.usefixtures("legacy_auth_sessions")

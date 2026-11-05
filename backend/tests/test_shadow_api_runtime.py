@@ -12,14 +12,17 @@ from app.services.shadow_runtime import ShadowRuntime
 from app.services.shadow_ledger import ShadowLedger
 from app.services.snapshot_consumers import PublishedSnapshot
 from app.services.snapshot_store import SnapshotStore
+from auth_helpers import IsolatedSessionLookup, TEST_TOTP_SECRET, session_headers
 from shadow_helpers import NOW, pair
 
 
 @pytest.mark.asyncio
 async def test_api_auth_validation_and_empty_disabled_status(tmp_path):
     path = str(tmp_path / "api.db")
-    app = create_app(settings=Settings(database_url="sqlite:///" + path, dashboard_password="test-only"),
+    app = create_app(settings=Settings(database_url="sqlite:///" + path, dashboard_password="test-only",
+                                     dashboard_totp_secret=TEST_TOTP_SECRET),
                      start_background_workers=False)
+    app.state.auth_store = IsolatedSessionLookup()
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         for endpoint in ("/api/shadow/status", "/api/shadow/trades", "/api/shadow/buckets"):
             assert (await client.get(endpoint)).status_code == 401
@@ -27,7 +30,7 @@ async def test_api_auth_validation_and_empty_disabled_status(tmp_path):
         try:
             await initialize_schema(db)
             await app.state.shadow_runtime.initialize(db)
-            client.headers["X-Dashboard-Password"] = "test-only"
+            client.headers.update(session_headers("test-password"))
             status = (await client.get("/api/shadow/status")).json()
             assert status["enabled"] is False and status["open_count"] == 0
             assert (await client.get("/api/shadow/buckets")).json() == []
