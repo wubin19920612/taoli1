@@ -677,3 +677,74 @@ FSHADOW_BENCHMARK {"asset_index_assets": 500, "calculate_wall_median_ms": 4.5261
 按第 17 条停止，先由 PM 决定后续性能方案，包括是否允许固定周期处理；本任务未自行节流、放宽断言或更改预算。后续生产代码若改动，需重跑相称回归与完整连续三次基准。
 
 没有 push、服务器连接、WSL、线上备份、部署、实时公网行情运行或修改其他进程。线上状态未检查，SHADOW_ENABLED 默认仍为 0。工作区外仅因本地提交写入已授权的 Git worktree 元数据。原始日志、SQLite 和临时目录留在忽略目录 `.pytest-tmp/round3b-*`，不提交测试输出文件；本报告只嵌入要求的原始汇总行。既有产物不清理，独立审查及锁定环境验收仍未完成，不能称为生产验收通过。
+
+## 第三轮补充三：发布隔离与机会版本（2026-11-05，第 18–20 条）
+
+本轮从 `6051fe0` 开始，仍在指定 `shadow-ledger` worktree / `codex/shadow-ledger` 分支。本轮授权覆盖第 18–20 条：两项修复分别先写失败回归再修复；基准仅运行一次 production、只记录，不因超预算停止。没有变更性能预算、配置或既有测试断言。初始唯一未提交文件为任务书新增的补充三，原样随第一个提交纳入。
+
+### 实现与分步提交
+
+- `5f1d4a3 fix(shadow): preserve held snapshots when publication fails`：`_finish_round` 收到 worker 结果后先更新不可变持仓 id / 市场 key 快照；展示发布异常单独隔离并继续更新 status / 耗时。仍调用原有限频 `error("publish")`。第 18 条回归使用真实 SQLite：开仓两行后注入发布异常，下一轮机会消失但盘口收敛，两行必须按当前时间 `converged`，持仓快照与 status 必须清空。
+- `4d24716 fix(shadow): reject publication after opportunity version changes`：`SnapshotStore.opportunities_version` 从 0 开始，每次 `set_opportunities` 都递增，含空列表、重复列表及影子自身发布。原 setter 仍返回 None，getter 仍返回新列表并保留元素引用，其他消费者接口不变。新增 `set_opportunities_if_version`，在同一 RLock 中校验版本并调用原 setter，避免校验/写回之间出现覆盖。
+- 影子在 `submit` 捕获输入时、首次 dispatch/yield 前保存机会版本，传经分片捕获和 worker；发布前版本不匹配则跳过展示并累加 `/api/shadow/status.skipped_publications`，原 generation 校验保留。跳过展示不取消计算、持仓快照或数据库提交。锁内校验失败也计入同一计数。
+- 第 19 条回归使用真实 `routes_market_identities._refresh_store` 和 `MarketValidationService`，分别在市场选择阶段、账本 worker 阶段暂停 dispatch，再刷新并清空机会；恢复任务后列表必须仍为空、generation 不变、版本不被旧任务推进。随后机会消失仍能收敛平仓，连续两次影子自己的发布正确推进版本且不误计跳过。
+- 新增测试只在 `backend/tests/test_shadow_publication_regressions.py`。生产代码仅改 `shadow_runtime.py`、`snapshot_store.py`；没有修改 schema/repositories、采集调度、Astro/arb-mvp、opportunity_history、前端或基准源码。`git diff --check` 通过。
+
+### 失败回归与定向测试原始汇总
+
+全部在本机 Windows / Python 3.12.10 运行，解释器 `Python312/python.exe`，`venv=False`；未安装或更新依赖，不能替代锁定依赖 venv 验收。命令 cwd 为 `backend`，临时目录均指定到被忽略的 `.pytest-tmp/round3c-*` scratchpad。完整日志保留在同名前缀 `.log`，不提交输出文件。
+
+```powershell
+python -m pytest tests/test_shadow_publication_regressions.py -q --tb=short -p no:cacheprovider --basetemp ../.pytest-tmp/round3c-h1-red
+python -m pytest tests/test_shadow_publication_regressions.py -q --tb=short -p no:cacheprovider --basetemp ../.pytest-tmp/round3c-h1-green
+python -m pytest tests/test_shadow_publication_regressions.py -k 'identity_refresh or opportunity_versions' -q --tb=short -p no:cacheprovider --basetemp ../.pytest-tmp/round3c-h2-red
+python -m pytest tests/test_shadow_publication_regressions.py -q --tb=short -p no:cacheprovider --basetemp ../.pytest-tmp/round3c-h2-green
+$shadowTests = @(Get-ChildItem tests/test_shadow*.py | ForEach-Object { $_.FullName })
+python -m pytest @shadowTests tests/test_route_permissions.py tests/test_snapshot_consumers.py tests/test_market_identity_routes.py -q --tb=short -p no:cacheprovider --basetemp ../.pytest-tmp/round3c-targeted
+```
+
+按上述顺序，原始汇总行如下；退出码依次为 1 / 0 / 1 / 0 / 0：
+
+```text
+1 failed in 1.10s
+1 passed in 0.54s
+3 failed, 1 deselected in 1.63s
+4 passed in 1.11s
+154 passed, 3 deselected in 21.49s
+```
+
+H1 红灯发生在“下一轮两行应 `converged`”断言，直接复现持仓 key 快照丢失。H2 两个异步用例红灯均发生在刷新清空后旧机会被恢复；另一个用例因缺少版本 API 失败。所有红灯都在对应生产修复之前执行，未加 skip/xfail。定向测试包含全部影子测试、`test_route_permissions`，并补跑快照消费者和身份路由；3 deselected 是原配置默认排除的影子 benchmark 参数，production 单独运行见下。
+
+### backend 全量与一次 production 基准
+
+定向测试后运行全量，完成后再启动独立 production 基准进程，没有同时跑两组测试，也没有重跑挑选结果。第 20 条是本轮基准运行规则；不再套用上一轮“三次全部通过才能继续交付”的要求。
+
+```powershell
+python -m pytest -q --tb=short -p no:cacheprovider --basetemp ../.pytest-tmp/round3c-full
+python -m pytest 'tests/test_shadow_benchmark.py::test_shadow_resource_budgets[production]' -q -s --tb=short -m benchmark -p no:cacheprovider --basetemp ../.pytest-tmp/round3c-production-once
+```
+
+后端全量退出码 0，原始汇总：
+
+```text
+2601 passed, 9 deselected, 12 warnings in 150.60s (0:02:30)
+```
+
+9 deselected 来自项目原有 network/benchmark marker 排除，没有新增排除。12 条均为 `datetime.utcnow()` 弃用警告，出现在 `test_api` / `test_index_components`，没有线程未处理异常警告。本轮没有前端改动，未重复前端测试或构建。
+
+production 基准退出码 1：事件循环中位 `5.761399865150452 ms > 5 ms`，该断言失败；预算保持原样。运行前系统 CPU 负载 40%。事件循环 p95 8.223 ms / 连续占用最大 7.135 ms，按现有定义前者统计整轮各片累计、后者统计最大单片，二者口径不同；累计单轮最大 19.175 ms。worker 墙钟中位 17.508 ms / RSS 增量 28.574 MiB 均在原预算内。`within_time_budget=true` 仅表示 worker 预算，不表示整个基准通过。
+
+耗时分布：capture 中位 4.631 ms，publish 中位 1.108 ms；worker 选择阶段中位 8.144 ms、计算阶段中位 9.552 ms。分钟轮捕获累计 13.980 ms、发布 2.103 ms、worker 墙钟 160.961 ms。仅报告实测，不进行性能优化、预算调整或固定周期节流。保留 12000 PriceState / 6000 资产索引 / 750 展示缓存 / 1500 未平行。
+
+完整原始汇总行如下：
+
+```text
+SHADOW_BENCHMARK {"asset_index_assets": 6000, "calculate_wall_median_ms": 9.552399977110326, "capture_median_ms": 4.630900104530156, "changed_fraction": 0.3333333333333333, "checkpoint_capture_ms": 13.980000279843807, "checkpoint_capture_segments_ms": [5.1512999925762415, 0.1357999863103032, 0.46870007645338774, 0.9024000028148293, 0.7933999877423048, 1.1820000363513827, 0.7300000870600343, 0.7284000748768449, 0.7693000370636582, 0.7408000528812408, 0.7588999578729272, 0.7445999654009938, 0.8744000224396586], "checkpoint_event_loop_ms": 16.082600341178477, "checkpoint_publish_ms": 2.1026000613346696, "checkpoint_worker_phases_ms": {"ledger_flush_ms": 51.215399987995625, "prepare_ms": 3.6198999732732773, "routes_ms": 0.5613999674096704, "score_ms": 23.71290000155568}, "checkpoint_worker_wall_ms": 160.96120001748204, "display_cache_entries": 750, "event_loop_max_ms": 7.134899846278131, "event_loop_median_ms": 5.761399865150452, "event_loop_p95_ms": 8.223199867643416, "event_loop_total_max_ms": 19.174600020051003, "markets": 12000, "open_event_loop_ms": 19.174600020051003, "open_rows": 1500, "open_worker_wall_ms": 151.60569990985096, "opportunities": 5500, "price_states": 12000, "publish_median_ms": 1.108399941585958, "recomputed_median": 250, "rounds": 51, "rss_delta_mib": 28.57421875, "scenario": "production", "select_wall_median_ms": 8.14439996611327, "system_cpu_before_pct": 40.0, "within_memory_budget": true, "within_time_budget": true, "worker_cpu_mean_ms": 16.850490196078432, "worker_cpu_median_ms": 15.625, "worker_phase_medians_ms": {"ledger_flush_ms": 0.9466999908909202, "prepare_ms": 1.7516999505460262, "routes_ms": 0.5883000558242202, "score_ms": 1.8714000470936298}, "worker_wall_median_ms": 17.507500131614506}
+1 failed in 4.01s
+```
+
+### 本轮交付边界
+
+第 18–20 条的本地修复与要求的验证完成，production 性能仍未通过，不能据此开启生产；默认 `SHADOW_ENABLED=0`。下一步性能方案仍需 PM 决策，本轮未作任务书之外的业务/预算决策。没有 push、服务器连接、WSL、备份、部署或线上验证；线上状态未检查。仅本地提交需要写入主仓库中的该 worktree Git 元数据，已按授权执行。
+
+本轮日志和临时 SQLite 全部保存在已忽略的 `.pytest-tmp/round3c-*`，既有产物保留，不提交测试输出。交接追加到 `docs/task-handoff-2026-11-05-shadow-ledger.md`。本轮是本机功能回归与一次性能记录，锁定环境及独立只读审查仍为后续验收项。

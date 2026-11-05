@@ -65,3 +65,19 @@
 - 线上未检查。没有 push、服务器连接、备份、部署、WSL 或公网行情运行；SHADOW_ENABLED 默认 0。禁止范围（schema/repositories、采集调度、Astro/arb-mvp、opportunity_history）未改。
 - 本次 `.pytest-tmp/round3b-*` 日志/SQLite 已忽略且未提交；此前 `.pytest-tmp/round3-*` 等产物保留。交付时无本任务未跟踪源文件，不清理其他产物。初始唯一用户 WIP 补充二已随首个提交纳入。
 - 后续改动需保留全部断言，重跑相称回归与连续三次基准；独立只读审查/锁定环境验收尚未执行。无依赖的新模块另开任务。
+
+## 第三轮补充三已完成（2026-11-05，第 18–20 条）
+
+本节是当前继续入口。本轮基准要求由第 20 条覆盖为“仅一次 production，只记录、不因未达标停止”，不沿用上一节的三次运行交付门槛；性能预算数值和既有断言均保持。
+
+- 范围：仅修复发布异常丢失持仓快照、身份刷新后进行中的影子任务恢复旧机会；不扩展性能优化。起始基线 `6051fe0`，分支 `codex/shadow-ledger`，工作树 `C:/Users/wubin/Desktop/code/codex/taoli1/.worktrees/shadow-ledger`。
+- 本地分步提交：`5f1d4a3 fix(shadow): preserve held snapshots when publication fails`，包含初始唯一用户 WIP（任务书补充三原文）；`4d24716 fix(shadow): reject publication after opportunity version changes`。报告和本交接另作 conventional docs 提交，见 git log。
+- H1 入口：`shadow_runtime.py::_finish_round`。先接收 worker 的不可变持仓 id/key，再隔离展示发布异常，继续更新 status 和耗时。开仓后发布失败、下一轮机会消失而盘口收敛时，两变体正常平仓。异常仍用原有限频日志和计数。
+- H2 入口：`snapshot_store.py::set_opportunities` / `opportunities_version` / `set_opportunities_if_version`，以及 runtime 的 submit → 分片捕获 → finish。每次 setter 都推进版本，影子在首次 yield 前记录版本，发布前不同则放弃展示；锁内再次校验并经原 setter 写回，影子自己的发布也递增。status 新增累计 `skipped_publications`，账本、持仓快照和写库不受跳过展示影响。
+- 新测试：`test_shadow_publication_regressions.py`。第 18 条先红 `1 failed` 后绿 `1 passed`；第 19 条先红 `3 failed, 1 deselected` 后与 H1 合跑 `4 passed`。真实 `_refresh_store` + `MarketValidationService` 分别在市场选择和 worker dispatch 阶段清空机会，断言旧任务不能回填，持仓继续处理；另外覆盖所有 setter 调用、重复/空列表、旧消费者返回行为和连续影子发布版本。
+- 影子 + `test_route_permissions` + 快照消费者 + 身份路由：`154 passed, 3 deselected in 21.49s`。backend 全量：`2601 passed, 9 deselected, 12 warnings in 150.60s (0:02:30)`，警告均为 datetime.utcnow 弃用，没有线程未处理异常。默认 network/benchmark 排除未变。Python 3.12.10 / Windows，venv=False，未安装依赖；不是锁定 venv 验收。未改前端，本轮未重跑前端测试/构建。
+- production 仅运行 1 次，原严格断言退出 1：`1 failed in 4.01s`。CPU 前负载 40%；loop 中位 5.761 ms >5，p95 8.223 ms，最大连续片段 7.135 ms（累计整轮最大 19.175 ms）；worker 墙钟中位 17.508 ms，RSS 28.574 MiB。报告已包含完整原始 SHADOW_BENCHMARK 行、pytest 汇总、命令和耗时分布。按第 20 条完成记录，未重跑、放宽断言或调整预算。
+- 改动边界：生产仅 `shadow_runtime.py` / `snapshot_store.py`，测试仅新增回归文件，文档为任务书/报告/本交接。未改数据库 schema/repositories、采集调度、Astro/arb-mvp、opportunity_history、配置或基准文件。
+- 线上状态未检查、未变更；没有 push、服务器连接、备份、部署或 WSL。默认 SHADOW_ENABLED=0。本地功能验证通过不代表生产性能通过，不开启生产。
+- 产物：`.pytest-tmp/round3c-*` 的日志/临时 SQLite 已忽略且不提交；所有既有产物保留。没有本轮未跟踪源文件遗留，提交后用 git status 复核。
+- 下一步：可从上述提交做独立只读审查；后续性能方案仍需 PM 决策，并另行取得锁定环境验收。不要自行节流、更改预算或启用生产。无依赖的新模块另开任务，本模块连续性使用本交接和详细报告末节。
