@@ -1029,3 +1029,107 @@ production 第 3 次（未修改的 v1 实现）：
 SHADOW_BENCHMARK {"asset_index_assets": 6000, "calculate_wall_median_ms": 10.151399997994304, "capture_median_ms": 4.412799957208335, "changed_fraction": 0.3333333333333333, "checkpoint_capture_ms": 13.336699805222452, "checkpoint_capture_segments_ms": [4.696300020441413, 0.07670000195503235, 0.41199999395757914, 0.7670000195503235, 0.6977999582886696, 1.294399960897863, 0.7585999555885792, 0.7969000143930316, 0.7719999412074685, 0.7408999372273684, 0.7505000103265047, 0.7239000406116247, 0.8496999507769942], "checkpoint_event_loop_ms": 15.67789982073009, "checkpoint_publish_ms": 2.3412000155076385, "checkpoint_worker_phases_ms": {"ledger_flush_ms": 61.78150000050664, "prepare_ms": 1.8312999745830894, "routes_ms": 1.536700059659779, "score_ms": 27.24660001695156}, "checkpoint_worker_wall_ms": 177.05219995696098, "display_cache_entries": 750, "event_loop_max_ms": 8.695799973793328, "event_loop_median_ms": 5.587999941781163, "event_loop_p95_ms": 9.94889996945858, "event_loop_total_max_ms": 20.01109963748604, "markets": 12000, "open_event_loop_ms": 20.01109963748604, "open_rows": 1500, "open_worker_wall_ms": 155.7891999837011, "opportunities": 5500, "price_states": 12000, "publish_median_ms": 1.1205000337213278, "recomputed_median": 250, "rounds": 51, "rss_delta_mib": 26.74609375, "scenario": "production", "select_wall_median_ms": 7.696500048041344, "system_cpu_before_pct": 25.555555555555554, "within_memory_budget": true, "within_time_budget": true, "worker_cpu_mean_ms": 21.139705882352942, "worker_cpu_median_ms": 15.625, "worker_phase_medians_ms": {"ledger_flush_ms": 0.9982000337913632, "prepare_ms": 1.7479999223724008, "routes_ms": 0.6299000233411789, "score_ms": 1.8958000000566244}, "worker_wall_median_ms": 17.51259993761778}
 1 passed, 2 deselected in 3.29s
 ```
+
+## 第四轮 v2 本地交付（2026-11-05，第 26–32 条）
+
+本节取代上一节的停止状态。第 32 条已明确退役不触发冷却；本轮完成 v2 实现、锁定环境全量回归和连续三次 production 基准，全部通过。没有 push、连接服务器、备份、部署、WSL 或公网行情运行；默认 SHADOW_ENABLED=0 未改。
+
+### 分支、提交与范围
+
+- 指定 worktree：taoli1/.worktrees/shadow-ledger；分支 codex/shadow-ledger；起始基线 ce1513edbcb1ad9a94058cc3f4274acc31d8c100。
+- 6ae830b test(shadow): cover v2 crossing quotas and retirement rules：先补失败测试，原样纳入用户未提交的第 32 条；原有两项红灯断言未改。
+- fed74ff feat(shadow): record v2 crossings with quotas and legacy retirement：实现、回归场景准备和部分平仓后恢复的补充覆盖。
+- 6c6f66a test(shadow): prepare v2 benchmark startup baselines：基准仅调整启动/种子准备，未改预算、测量范围或断言。
+- 报告和交接另作 conventional docs 提交，提交号见本分支 git log。
+- 生产变更仅 shadow_ledger.py、shadow_runtime.py、shadow_stats.py、routes_shadow.py 和 ShadowTradeRepository；没有 schema 迁移、采集调度、Astro、arb-mvp、opportunity_history、前端或配置改动。
+
+### 行为与实现入口
+
+- shadow_ledger.py：策略版本为 shadow-v2；last_above 保留最近 60 秒达到门槛的机会 id，每轮清理过期记录，retry_events 同步收缩，不积累进程生命周期历史。空首轮也完成基线登记；首轮达到门槛的不同 id 计入 baseline_skipped，不开仓。restore 重置内存事件状态。
+- 新上穿且无持仓/冷却时才尝试开仓。缺腿、报价过期等暂时问题保留事件；短暂无观测不等于明确跌破门槛，事件可在返回时重试；明确低于门槛取消重试。达到门槛的时间持续更新，重新准入要距离最近一次达到门槛至少 60 秒。持仓中或 cooldown 内的上穿不会在条件解除后自动补开。
+- 名额按行：lt500=floor(max_open*30%)，unknown=floor(max_open*10%)，spot/spot=floor(max_open*20%)，symbol=6。两行必须一起容纳才开仓；平仓逐行释放，restore 从实际剩余行重建计数，零计数项删除。总容量/流动性/市场类型/symbol 的检查顺序固定，每次拒绝只记录第一个原因，事件立即消耗；dropped_by_reason 合计等于 dropped。
+- shadow_runtime.py：预筛选额外携带低于实际开仓门槛的 id 元组，避免候选集合丢掉“取消重试”信号。保留原混合发布与版本校验。状态从 worker 拷贝发布；status 再复制 dropped_by_reason，调用方不能修改已发布计数。
+- repositories.py：只把 v1 未平仓行改为 retired，closed_at=恢复时刻，net_bps=None；使用已有每批至多 200 行写入入口，不删历史。重复 restore 不重写已退役行的时间。恢复 cooldown 排除 retired，v1 真实平仓仍保持原 cooldown（第 32 条只排除退役）。
+- routes_shadow.py / repositories.py：buckets 默认参数是当前 STRATEGY_VERSION，显式 strategy_version=shadow-v1 才查询旧版本，SQL 参数绑定；trades 仍能看历史。收益查询以及 shadow_stats.statistics/buckets 都排除 retired，测试还覆盖错误带有数值 net_bps 的 retired 行。
+- 平仓原因、止损、收敛、超时、资金费、滑点与流动性标签算法原样保留；没有发现需要新增 PM 决策的账本取舍。
+
+### 测试迁移及复核
+
+先补失败测试后实现。新增覆盖启动存量/空基线、59/60 秒边界、短暂缺失、冷却结束仍需重新上穿、无新鲜报价重试和明确低价取消、全部分类名额及取整、拒绝后容量释放不重试、部分平仓与恢复名额、事件窗口清理、退役/历史/统计/真实冷却保留、API 版本参数与状态快照隔离。实际预筛选 runtime 与测试全量路径逐轮对照基线、上穿、名额、重试取消、持仓、冷却和诊断。
+
+旧断言全部保留；旧测试只改场景准备：
+- 针对开平仓/资金费/事务/线程/发布的用例先运行空基线。重启的真实 restore 仍重置基线，未绕过生产判断。
+- 202 行分批资金费用例把 101 个机会分到不同 symbol，保留 200+2 中断边界、2/0 恢复为 2/2 的断言。
+- 固定种子综合等价序列增加空基线，C 在 A 释放容量时才上穿，以继续覆盖止损，保留原开平仓分项、funding、stale、重启、收益行等价及至少三次开仓时间断言。
+- production 用 v2 空基线后开仓种子，再真实恢复 750 对/1500 行；实际测量仍含恢复后首轮、51 个变化轮及 +61 秒分钟全量/检查点。其余两个基准场景仅补空基线，本轮按用户要求只执行 production。
+- 初次兼容回归的两项失败分别来自综合序列中 C 的旧式容量释放重试假设、关闭线程测试尚未准备基线，均调整输入场景解决，没有删除或放宽断言。
+
+本轮自查了 DEX 精确键、计数释放、恢复、状态所有权、SQL 参数绑定、禁用路径和 diff；没有启动子代理或另做独立审查。未改前端，本轮不运行前端测试/构建。
+
+锁定环境实测：Windows Python 3.12.10，sys.prefix 为用户指定 venv-lock，venv=True；没有安装/升级依赖。命令均在 backend 目录执行，PYTHONPATH=.，-p no:cacheprovider；basetemp 全部位于 venv 同级 scratchpad。
+
+原始 pytest 汇总（按执行顺序，日志保存在 .pytest-tmp/round4b-*.log）：
+
+```text
+round4b-red: 14 failed, 1 passed in 4.28s
+round4b-equal-red: 1 failed, 7 deselected in 0.79s
+round4b-green: 16 passed, 7 deselected in 3.47s
+round4b-target: 2 failed, 142 passed, 3 deselected in 19.81s
+round4b-target2: 144 passed, 3 deselected in 11.67s
+round4b-partial: 19 passed in 4.35s
+2624 passed, 9 deselected, 13 warnings in 135.58s (0:02:15)
+```
+
+全量退出 0。13 条均为既有弃用警告（12 datetime.utcnow、1 Starlette/httpx），没有线程未处理异常。默认 network/benchmark 排除规则未改；production 已另行显式运行。
+
+可复现命令（测试选择与各日志对应；完整路径保留）：
+
+```powershell
+$env:PYTHONPATH='.'
+$python='C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/435b98f6-0522-4055-9b28-46a94def1380/scratchpad/venv-lock/Scripts/python.exe'
+$scratch='C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/435b98f6-0522-4055-9b28-46a94def1380/scratchpad'
+& $python -m pytest tests -q -p no:cacheprovider --basetemp="$scratch/shadow-r4b-full-20261105"
+foreach ($round in 1..3) {
+    & $python -m pytest tests/test_shadow_benchmark.py -m benchmark -k production -q -s -p no:cacheprovider --basetemp="$scratch/shadow-r4b-bench-$round-20261105"
+}
+```
+
+### 三次 production 基准
+
+连续三次均退出 0，未重跑挑选。原预算：事件循环中位 ≤7 ms、p95 ≤15 ms、最大连续片段 ≤80 ms；worker 墙钟中位 ≤30 ms；RSS 增量 ≤30 MiB，全部满足。场景仍为 12000 市场、5500 机会（650 达门槛）、750 对持仓，每轮 1/3 报价变化。
+
+| 次数 | CPU 前负载 % | loop 中位 ms | p95 ms | 最大连续片段 ms | worker 墙钟中位 ms | RSS MiB |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 63.587 | 6.092 | 7.484 | 7.787 | 17.633 | 27.516 |
+| 2 | 29.609 | 6.364 | 7.769 | 8.879 | 17.212 | 27.391 |
+| 3 | 60.773 | 6.937 | 7.953 | 8.299 | 18.357 | 26.891 |
+
+第三次事件循环中位仅比上限低约 0.063 ms，余量较小；本机基准只防退化，不能推断线上灰度结果。普通轮主要耗时为 capture 中位 4.891–5.722 ms、worker 选择 7.706–7.991 ms 和计算 9.425–10.357 ms。检查点 ledger_flush 51.512–54.732 ms、score 22.318–24.165 ms 在工作线程；没有因此变更中位预算或引入节流。
+
+下面三条 SHADOW_BENCHMARK 与 pytest 汇总直接从各原始日志逐行复制：
+
+
+production 第 1 次：
+
+```text
+SHADOW_BENCHMARK {"asset_index_assets": 6000, "calculate_wall_median_ms": 9.845499997027218, "capture_median_ms": 4.8914001090452075, "changed_fraction": 0.3333333333333333, "checkpoint_capture_ms": 15.396700007840991, "checkpoint_capture_segments_ms": [6.228200043551624, 0.048600020818412304, 0.3952999832108617, 0.758300069719553, 0.6812999490648508, 1.3204999268054962, 1.1454999912530184, 0.8086999878287315, 0.8027999429032207, 0.7823000196367502, 0.7687000324949622, 0.7831000257283449, 0.8734000148251653], "checkpoint_event_loop_ms": 17.405200051143765, "checkpoint_publish_ms": 2.0085000433027744, "checkpoint_worker_phases_ms": {"ledger_flush_ms": 53.7764000473544, "prepare_ms": 1.8876999383792281, "routes_ms": 0.6190999411046505, "score_ms": 24.16530007030815}, "checkpoint_worker_wall_ms": 159.70720001496375, "display_cache_entries": 750, "event_loop_max_ms": 7.78679980430752, "event_loop_median_ms": 6.092499941587448, "event_loop_p95_ms": 7.483999943360686, "event_loop_total_max_ms": 19.39239981584251, "markets": 12000, "open_event_loop_ms": 19.39239981584251, "open_rows": 1500, "open_worker_wall_ms": 184.2002000194043, "opportunities": 5500, "price_states": 12000, "publish_median_ms": 1.0939000640064478, "recomputed_median": 250, "rounds": 51, "rss_delta_mib": 27.515625, "scenario": "production", "select_wall_median_ms": 7.9474999802187085, "system_cpu_before_pct": 63.58695652173913, "within_memory_budget": true, "within_time_budget": true, "worker_cpu_mean_ms": 19.607843137254903, "worker_cpu_median_ms": 15.625, "worker_phase_medians_ms": {"ledger_flush_ms": 1.1816000333055854, "prepare_ms": 1.6630999743938446, "routes_ms": 0.5891000619158149, "score_ms": 1.699900021776557}, "worker_wall_median_ms": 17.63280003797263}
+1 passed, 2 deselected in 3.27s
+```
+
+
+production 第 2 次：
+
+```text
+SHADOW_BENCHMARK {"asset_index_assets": 6000, "calculate_wall_median_ms": 9.425300057046115, "capture_median_ms": 5.307400017045438, "changed_fraction": 0.3333333333333333, "checkpoint_capture_ms": 13.836400117725134, "checkpoint_capture_segments_ms": [5.044499994255602, 0.05150004290044308, 0.41770003736019135, 0.7803000044077635, 0.682900077663362, 1.0651000775396824, 0.7257000543177128, 0.7881000638008118, 0.727499951608479, 0.7229999173432589, 0.7613999769091606, 1.0029999539256096, 1.0656999656930566], "checkpoint_event_loop_ms": 16.212700051255524, "checkpoint_publish_ms": 2.3762999335303903, "checkpoint_worker_phases_ms": {"ledger_flush_ms": 51.511800033040345, "prepare_ms": 1.8308000871911645, "routes_ms": 0.5914999637752771, "score_ms": 22.50580000691116}, "checkpoint_worker_wall_ms": 155.64230002928525, "display_cache_entries": 750, "event_loop_max_ms": 8.878799970261753, "event_loop_median_ms": 6.36360002681613, "event_loop_p95_ms": 7.768599898554385, "event_loop_total_max_ms": 19.882399938069284, "markets": 12000, "open_event_loop_ms": 19.882399938069284, "open_rows": 1500, "open_worker_wall_ms": 153.09649996925145, "opportunities": 5500, "price_states": 12000, "publish_median_ms": 1.0801000753417611, "recomputed_median": 250, "rounds": 51, "rss_delta_mib": 27.390625, "scenario": "production", "select_wall_median_ms": 7.706400007009506, "system_cpu_before_pct": 29.60893854748603, "within_memory_budget": true, "within_time_budget": true, "worker_cpu_mean_ms": 16.850490196078432, "worker_cpu_median_ms": 15.625, "worker_phase_medians_ms": {"ledger_flush_ms": 1.172599964775145, "prepare_ms": 1.6550000291317701, "routes_ms": 0.5848999135196209, "score_ms": 1.8316000932827592}, "worker_wall_median_ms": 17.211600090377033}
+1 passed, 2 deselected in 3.21s
+```
+
+
+production 第 3 次：
+
+```text
+SHADOW_BENCHMARK {"asset_index_assets": 6000, "calculate_wall_median_ms": 10.35650004632771, "capture_median_ms": 5.721700028516352, "changed_fraction": 0.3333333333333333, "checkpoint_capture_ms": 13.553000171668828, "checkpoint_capture_segments_ms": [5.053700064308941, 0.04740001168102026, 0.4051999421790242, 0.7727000629529357, 0.6936000427231193, 1.052300096489489, 0.7560000522062182, 0.7792999967932701, 0.8503999561071396, 0.7546000415459275, 0.7682000286877155, 0.7521999068558216, 0.867399969138205], "checkpoint_event_loop_ms": 15.76450013089925, "checkpoint_publish_ms": 2.211499959230423, "checkpoint_worker_phases_ms": {"ledger_flush_ms": 54.731600102968514, "prepare_ms": 1.8915999680757523, "routes_ms": 0.6114999996498227, "score_ms": 22.31750008650124}, "checkpoint_worker_wall_ms": 160.52620008122176, "display_cache_entries": 750, "event_loop_max_ms": 8.298799977637827, "event_loop_median_ms": 6.9373000878840685, "event_loop_p95_ms": 7.952700019814074, "event_loop_total_max_ms": 20.460700150579214, "markets": 12000, "open_event_loop_ms": 20.460700150579214, "open_rows": 1500, "open_worker_wall_ms": 164.8198999464512, "opportunities": 5500, "price_states": 12000, "publish_median_ms": 1.15099991671741, "recomputed_median": 250, "rounds": 51, "rss_delta_mib": 26.890625, "scenario": "production", "select_wall_median_ms": 7.991399965249002, "system_cpu_before_pct": 60.773480662983424, "within_memory_budget": true, "within_time_budget": true, "worker_cpu_mean_ms": 20.833333333333332, "worker_cpu_median_ms": 15.625, "worker_phase_medians_ms": {"ledger_flush_ms": 1.2874000240117311, "prepare_ms": 1.7169000348076224, "routes_ms": 0.5876000504940748, "score_ms": 1.8364000134170055}, "worker_wall_median_ms": 18.357499968260527}
+1 passed, 2 deselected in 3.34s
+```
+
+交付产物：本轮日志为 .pytest-tmp/round4b-{red,equal-red,green,target,target2,partial,full,bench-1,bench-2,bench-3}.log；临时 SQLite 位于上述 scratchpad/shadow-r4b-*-20261105。全部忽略且不提交，既有测试产物保留。最终只暂存本模块源码、测试、任务书、报告和交接；本地提交完成后用 git status 复核。线上状态未检查；下一步如需独立审查或生产灰度，使用本报告与最新交接另行授权，无依赖模块另开任务。

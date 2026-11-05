@@ -114,3 +114,24 @@
 - 线上未检查/未变更；未 push、未连接服务器、未运行 WSL、未备份/部署。前端无改动，未跑前端测试。没有安装或升级依赖。
 - 产物：`.pytest-tmp/round4-red.log`、`round4-full.log`、`round4-bench-{1,2,3}.log` 已忽略且未提交；临时库在 scratchpad 的 `shadow-r4-*-20261105` 目录。既有产物保留。本轮交付仅新测试、任务书、报告和本交接；无生产文件改动。提交后复核 git status，不清理其他文件。
 - 下一步仍属于影子账本模块：先补足上述 PM 决策，再实现第 26–31 条；无直接依赖的新模块另开任务。
+
+## 第四轮 v2 已完成（2026-11-05，第 26–32 条；当前继续入口）
+
+本节取代上节停止状态。第 32 条明确 retired 不参与 cooldown；本轮已完成实现、锁定依赖后端全量和连续三次 production 基准，全部通过。没有发现需要新增 PM 决策的账本取舍。
+
+- 范围：只处理影子账本上穿事件、60 秒重新准入、启动基线、按行分类名额、单事件 dropped、v1 退役、统计版本隔离，以及对应预筛选等价性与回归。
+- 工作树 `C:/Users/wubin/Desktop/code/codex/taoli1/.worktrees/shadow-ledger`；分支 `codex/shadow-ledger`；起始基线 `ce1513edbcb1ad9a94058cc3f4274acc31d8c100`。初始唯一 WIP 是任务书第 32 条，已原样随测试提交纳入。
+- 分步提交：`6ae830b test(shadow): cover v2 crossing quotas and retirement rules`；`fed74ff feat(shadow): record v2 crossings with quotas and legacy retirement`；`6c6f66a test(shadow): prepare v2 benchmark startup baselines`。本报告/交接另作 docs 提交，见 git log。
+- 入口 `shadow_ledger.py`：`STRATEGY_VERSION=shadow-v2`；`process` 维护 last_above/retry_events，首轮只登记新事件，仍管理恢复的已有持仓。每轮清除 60 秒窗口外的 id，避免生命周期累积；低价取消重试，短暂无观测保留可重试事件，容量/名额拒绝立即消耗。冷却结束后必须重新上穿。
+- 名额：总容量不变；lt500 ≤floor(max_open*30%)、unknown ≤floor(max_open*10%)、spot/spot ≤floor(max_open*20%)，单 symbol ≤6 行；两变体一起准入，平仓逐行释放。`_count_row` 和 `restore` 从剩余行重建计数；拒绝原因按 capacity/liquidity/market_type/symbol 顺序只记一个，合计等于 dropped。无新增环境变量。
+- `shadow_runtime.py`：预筛选把低于开仓门槛的 id 单独传入 worker，用于取消事件重试；原混合发布、精确 DEX/MarketKey、快照版本校验保留。status 增加 baseline_skipped、dropped_by_reason，计数按 worker 快照发布且返回副本。
+- `ShadowTradeRepository.restore`：v1 未平行每批至多 200 行改为 retired，closed_at=恢复时间，net_bps=None，保留历史；再次恢复不改已退役时间。cooldown 重建只新增排除 retired，保留 v1 真实平仓的原冷却。关闭状态仍不进入恢复/写入路径。
+- `routes_shadow.py` / `closed_events`：buckets 默认只取当前版本，显式 strategy_version=shadow-v1 查询旧版本，参数绑定；trades 保留历史可见性。`shadow_stats.py` 再次排除 retired，即便错误携带数值 net_bps 也不进入收益统计。
+- 测试入口：`test_shadow_round4.py`（现 19 项，原有两项断言不变）；`test_shadow_prefilter_equivalence.py` 新增实际 runtime/全量的多轮基线、上穿、名额、重试取消对照，并保留原固定种子综合生命周期等价性。部分平仓恢复、状态副本、真实 v1 冷却和 retired 收益排除均覆盖。
+- 旧测试只调整准备：显式空基线；202 行跨批资金费用例分散 symbol；综合序列的 C 改为容量释放后上穿，以继续覆盖 stop。原断言/默认排除/性能预算均保留。基准只补种子/首轮基线，production 仍恢复 750 对/1500 行，测量包含首轮和 +61 秒分钟轮。
+- 原始结果：新增先红 `14 failed, 1 passed in 4.28s`，新增等价先红 `1 failed, 7 deselected in 0.79s`；实现定向 `16 passed, 7 deselected in 3.47s`；旧场景初次迁移 `2 failed, 142 passed, 3 deselected in 19.81s`，准备修正后 `144 passed, 3 deselected in 11.67s`；最后补充部分恢复用例 `19 passed in 4.35s`。失败原因与全部原始行见详细报告末节。
+- 后端全量：`2624 passed, 9 deselected, 13 warnings in 135.58s (0:02:15)`，退出 0。13 条为既有弃用警告，无线程未处理异常。Windows Python 3.12.10、用户指定 venv-lock、venv=True；没有安装/升级依赖。backend 下 PYTHONPATH=.、-p no:cacheprovider，basetemp 在 venv 同级 scratchpad。未改前端，本轮不跑前端测试/构建。
+- 连续三次 production：`1 passed, 2 deselected in 3.27s`；`1 passed, 2 deselected in 3.21s`；`1 passed, 2 deselected in 3.34s`，全部退出 0。loop 中位 6.092/6.364/6.937 ms，p95 7.484/7.769/7.953 ms，最大连续片段 7.787/8.879/8.299 ms，worker 墙钟中位 17.633/17.212/18.357 ms，RSS 27.516/27.391/26.891 MiB。三条完整 SHADOW_BENCHMARK 原始行、CPU 前负载和分项均在[详细报告末节](shadow-ledger-report-2026-11-03.md#第四轮-v2-本地交付2026-11-05第-2632-条)。未重跑挑选；第三次 loop 中位离 7 ms 上限仅约 0.063 ms，本机通过不能替代生产灰度。
+- 线上未检查/未变更：按用户要求未 push、未连接服务器、未运行 WSL、未备份/部署/灰度。默认 SHADOW_ENABLED=0；没有 schema、采集调度、Astro、arb-mvp、机会历史、配置或前端变更。本轮自查代码/diff，未另做独立审查。
+- 产物：`.pytest-tmp/round4b-*.log` 及 scratchpad 的 `shadow-r4b-*-20261105` 临时库均保留且不提交。无新增未跟踪交付源文件，旧产物不清理；只显式暂存本任务文件，文档提交后以 git status 复核。
+- 下一步：本地实现与本轮验收已交付；如需独立审查或生产灰度，基于以上提交继续并遵守新的明确授权。无直接依赖模块另开任务；继续本模块使用本交接与详细报告，无需依赖旧对话。
