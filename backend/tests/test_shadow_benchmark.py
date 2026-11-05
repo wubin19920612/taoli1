@@ -19,7 +19,7 @@ from app.services.shadow_runtime import ShadowRuntime
 from app.services.snapshot_consumers import PublishedSnapshot
 from app.services.snapshot_store import SnapshotStore
 from app.services.spread_engine import build_directional_opportunity
-from shadow_helpers import NOW, market
+from shadow_helpers import NOW, market, empty_baseline
 
 
 def working_set():
@@ -75,6 +75,7 @@ async def test_shadow_resource_budgets(tmp_path, scenario, positions, op_count, 
         seed = ShadowLedger(Settings(shadow_enabled=True, shadow_max_open=1500))
         try:
             await initialize_shadow_schema(db)
+            empty_baseline(seed)
             seed.process(markets, opportunities[:positions], NOW)
             await seed.flush(ShadowTradeRepository(db))
             assert seed.open_count == 1500
@@ -99,6 +100,10 @@ async def test_shadow_resource_budgets(tmp_path, scenario, positions, op_count, 
                                     database_url="sqlite:///" + path), store)
     runtime.catalog.entries = {("BINANCE", "FUTURE", f"C{i}", "") for i in range(positions)}
     await runtime.initialize(db)
+    if scenario != "production":
+        # The measured opening round is a new crossing, after an empty startup
+        # baseline. Production instead restores the full 750-pair seed above.
+        empty_baseline(runtime.ledger)
     loop_times, cpus, walls, recomputed, captures, publishes = [], [], [], [], [], []
     segments, selections, calculations, phases = [], [], [], []
 
