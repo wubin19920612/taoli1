@@ -954,3 +954,78 @@ FSHADOW_BENCHMARK {"asset_index_assets": 500, "calculate_wall_median_ms": 6.3483
 代码及用户任务书已分步 conventional commits；本报告和 `docs/task-handoff-2026-11-05-shadow-ledger.md` 另作 docs 提交。未 push、未连接服务器、未运行 WSL，未备份/部署/灰度或验证线上；`SHADOW_ENABLED` 默认 0 不变。未改 schema/repositories、Astro/arb-mvp、机会历史写入、配置或身份刷新业务逻辑。既有产物保留，日志与临时库已忽略且不提交。
 
 第 23、25 条实现及要求的验证/记录完成，但三次性能门槛未通过，按既有停止规则不扩展优化。下一步由 PM 根据原始耗时决定性能方案，再在单独授权的运维任务中做灰度；本轮不启动。独立审查、锁定环境验收仍待安排。其他无直接依赖模块另开任务。
+
+## PM 第四轮停止报告（2026-11-05，第 26–31 条）
+
+本轮未完成实现。按第 31 条“若发现账本行为依赖第 26–29 条未说明的取舍，停下写入报告，不要自行决定”停止生产代码修改。只提交任务书原有未提交内容、两项明确要求的失败测试以及报告/交接；没有改变任何既有测试、预算或场景准备。
+
+### 已复现的取舍：v1 退役是否触发 v2 冷却
+
+当前 `ShadowTradeRepository.restore`（`backend/app/db/repositories.py:83`）以 `MAX(closed_at)` 恢复最近 10 分钟的 cooldown，查询没有策略版本或 `exit_reason` 过滤。`ShadowLedger.restore` 直接接收该映射；`process`（`shadow_ledger.py:208/300`）在 600 秒内跳过相同 `opportunity_id`。
+
+第 29 条要求恢复时将 v1 未平行设置为 `retired`、`closed_at=恢复时刻`。因此，如果按现有查询恢复冷却，退役也会触发新的 10 分钟禁开期；即使首轮基线后已持续低于门槛 60 秒并重新上穿，v2 仍不能开仓。若从 cooldown 查询排除退役，则相同序列可以开仓。第 26 条要求保留原 cooldown，第 29 条说明退役不进入账本/名额/收益统计，但没有明确退役是否属于触发 cooldown 的平仓。两种选择都会影响开仓时机，不能仅当作统计实现细节。
+
+复现使用锁定 venv、临时内存 SQLite 和现有 repository：保存一条 `strategy_version=shadow-v1`、`exit_reason=retired`、`closed_at=2026-11-05T00:00:00+00:00`、`net_bps=None` 的行，61 秒后调用 `repo.restore`，原始输出为：
+
+```text
+{"cooldowns": {"same-op": 1793836800.0}, "open_rows": 0, "retired_in_cooldown": true, "seconds_remaining": 539}
+```
+
+这是对退役行进入既有恢复查询的合成复现，不代表已实现自动退役，也不是线上数据。需要 PM 明确：退役是否触发冷却；如果做版本隔离，排除范围是仅 `retired`，还是包括旧版本正常平仓记录。当前未选择任一规则。
+
+### 失败测试与本地提交
+
+- 起始基线 `ac602b9`，分支 `codex/shadow-ledger`，指定 worktree 未变。
+- 初始唯一 WIP 为任务书第四轮 19 行，已原样纳入 `14d6d1f test(shadow): capture round four baseline and retirement requirements`。
+- 新增 `backend/tests/test_shadow_round4.py`：启动首轮不应开仓；repository 恢复时 v1 应退役且保留历史、空净收益。这两项没有为未决 cooldown 规则写入预设答案。
+- 先运行失败测试，再执行取舍复现；没有开始生产实现。红灯原始汇总：
+
+```text
+2 failed in 1.27s
+```
+
+首项实际 `open_count=2`，预期 0；第二项实际仍恢复一条 v1 未平行，预期为空。没有 xfail、skip、放宽断言或修改旧测试。其他第四轮测试及生产实现尚未完成，包括上穿/重试/名额/status/版本统计，以及全量与预筛选多轮等价性扩展。
+
+### 验证环境和命令
+
+Windows Python 3.12.10，`sys.prefix != sys.base_prefix` 为 True，使用用户指定的 `scratchpad/venv-lock/Scripts/python.exe`，没有安装或升级依赖。所有 pytest 在 `backend` 目录运行，`PYTHONPATH=.`，禁用 cacheprovider；basetemp 均是 venv 同级 scratchpad 下独立的新目录。
+
+```powershell
+$env:PYTHONPATH='.'
+$round4Scratch='C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/435b98f6-0522-4055-9b28-46a94def1380/scratchpad'
+& "$round4Scratch/venv-lock/Scripts/python.exe" -m pytest tests/test_shadow_round4.py -q -p no:cacheprovider --basetemp "$round4Scratch/shadow-r4-red-20261105"
+& "$round4Scratch/venv-lock/Scripts/python.exe" -m pytest tests -q -p no:cacheprovider --basetemp "$round4Scratch/shadow-r4-full-20261105"
+# 以下命令依次执行三次，$round4Run 分别为 1、2、3；没有重跑挑选。
+& "$round4Scratch/venv-lock/Scripts/python.exe" -m pytest tests/test_shadow_benchmark.py -q -s -m benchmark -k production -p no:cacheprovider --basetemp "$round4Scratch/shadow-r4-bench-$round4Run-20261105"
+```
+
+全量保留原 `not network and not benchmark` 默认排除；production 基准单独运行。以下基准仅度量未修改的 v1 实现，不能作为第四轮完成验收；原预算和夹具完全未改。日志在忽略目录 `.pytest-tmp/round4-*.log`，临时数据库在上述 scratchpad 内。没有 push、服务器连接、WSL、部署、灰度或线上验证；`SHADOW_ENABLED=0` 默认值保持。
+
+### 全量测试与三次 production 原始汇总
+
+全量退出码 1；仅两项新增的第四轮红灯失败，既有 2604 项通过。13 个警告包括 12 个 datetime.utcnow 弃用警告和 1 个 Starlette/httpx 弃用警告；没有线程未处理异常。
+
+```text
+2 failed, 2604 passed, 9 deselected, 13 warnings in 127.55s (0:02:07)
+```
+
+production 第 1 次（未修改的 v1 实现）：
+
+```text
+SHADOW_BENCHMARK {"asset_index_assets": 6000, "calculate_wall_median_ms": 9.037100011482835, "capture_median_ms": 4.3268000008538365, "changed_fraction": 0.3333333333333333, "checkpoint_capture_ms": 14.010599814355373, "checkpoint_capture_segments_ms": [4.804999916814268, 0.14759995974600315, 0.45950000640004873, 0.9949998930096626, 0.7514999015256763, 1.2999000027775764, 0.8413000032305717, 0.7978000212460756, 0.750900013372302, 0.7674000225961208, 0.7715000538155437, 0.7537000346928835, 0.8694999851286411], "checkpoint_event_loop_ms": 16.060899826698005, "checkpoint_publish_ms": 2.050300012342632, "checkpoint_worker_phases_ms": {"ledger_flush_ms": 54.50329999439418, "prepare_ms": 1.8025999888777733, "routes_ms": 0.6179000483825803, "score_ms": 23.370199953205884}, "checkpoint_worker_wall_ms": 157.19749999698251, "display_cache_entries": 750, "event_loop_max_ms": 7.8743998892605305, "event_loop_median_ms": 5.4564999882131815, "event_loop_p95_ms": 7.375099929049611, "event_loop_total_max_ms": 18.99919961579144, "markets": 12000, "open_event_loop_ms": 18.99919961579144, "open_rows": 1500, "open_worker_wall_ms": 148.99150002747774, "opportunities": 5500, "price_states": 12000, "publish_median_ms": 1.067299977876246, "recomputed_median": 250, "rounds": 51, "rss_delta_mib": 27.41796875, "scenario": "production", "select_wall_median_ms": 7.4995000613853335, "system_cpu_before_pct": 27.173913043478258, "within_memory_budget": true, "within_time_budget": true, "worker_cpu_mean_ms": 17.46323529411765, "worker_cpu_median_ms": 15.625, "worker_phase_medians_ms": {"ledger_flush_ms": 0.9266000706702471, "prepare_ms": 1.6417000442743301, "routes_ms": 0.5842000246047974, "score_ms": 1.7221999587491155}, "worker_wall_median_ms": 16.49060007184744}
+1 passed, 2 deselected in 3.09s
+```
+
+production 第 2 次（未修改的 v1 实现）：
+
+```text
+SHADOW_BENCHMARK {"asset_index_assets": 6000, "calculate_wall_median_ms": 9.957600035704672, "capture_median_ms": 4.81400010176003, "changed_fraction": 0.3333333333333333, "checkpoint_capture_ms": 13.89500021468848, "checkpoint_capture_segments_ms": [4.750100080855191, 0.1314000692218542, 0.4616999067366123, 0.8168000495061278, 0.7272000657394528, 0.7903999648988247, 0.7505000103265047, 0.7743000751361251, 0.7429000688716769, 1.532500027678907, 0.813600025139749, 0.7547999266535044, 0.8487999439239502], "checkpoint_event_loop_ms": 15.937600168399513, "checkpoint_publish_ms": 2.042599953711033, "checkpoint_worker_phases_ms": {"ledger_flush_ms": 59.75709995254874, "prepare_ms": 3.156399936415255, "routes_ms": 0.5519000114873052, "score_ms": 22.80220005195588}, "checkpoint_worker_wall_ms": 164.751400006935, "display_cache_entries": 750, "event_loop_max_ms": 12.053900049068034, "event_loop_median_ms": 5.979900015518069, "event_loop_p95_ms": 13.273000018671155, "event_loop_total_max_ms": 17.94779987540096, "markets": 12000, "open_event_loop_ms": 17.94779987540096, "open_rows": 1500, "open_worker_wall_ms": 156.3069000840187, "opportunities": 5500, "price_states": 12000, "publish_median_ms": 1.1554000666365027, "recomputed_median": 250, "rounds": 51, "rss_delta_mib": 27.296875, "scenario": "production", "select_wall_median_ms": 8.011900004930794, "system_cpu_before_pct": 31.491712707182316, "within_memory_budget": true, "within_time_budget": true, "worker_cpu_mean_ms": 16.850490196078432, "worker_cpu_median_ms": 15.625, "worker_phase_medians_ms": {"ledger_flush_ms": 0.9745999705046415, "prepare_ms": 1.7717999871820211, "routes_ms": 0.5970000056549907, "score_ms": 1.8946999916806817}, "worker_wall_median_ms": 17.950800131075084}
+1 passed, 2 deselected in 3.25s
+```
+
+production 第 3 次（未修改的 v1 实现）：
+
+```text
+SHADOW_BENCHMARK {"asset_index_assets": 6000, "calculate_wall_median_ms": 10.151399997994304, "capture_median_ms": 4.412799957208335, "changed_fraction": 0.3333333333333333, "checkpoint_capture_ms": 13.336699805222452, "checkpoint_capture_segments_ms": [4.696300020441413, 0.07670000195503235, 0.41199999395757914, 0.7670000195503235, 0.6977999582886696, 1.294399960897863, 0.7585999555885792, 0.7969000143930316, 0.7719999412074685, 0.7408999372273684, 0.7505000103265047, 0.7239000406116247, 0.8496999507769942], "checkpoint_event_loop_ms": 15.67789982073009, "checkpoint_publish_ms": 2.3412000155076385, "checkpoint_worker_phases_ms": {"ledger_flush_ms": 61.78150000050664, "prepare_ms": 1.8312999745830894, "routes_ms": 1.536700059659779, "score_ms": 27.24660001695156}, "checkpoint_worker_wall_ms": 177.05219995696098, "display_cache_entries": 750, "event_loop_max_ms": 8.695799973793328, "event_loop_median_ms": 5.587999941781163, "event_loop_p95_ms": 9.94889996945858, "event_loop_total_max_ms": 20.01109963748604, "markets": 12000, "open_event_loop_ms": 20.01109963748604, "open_rows": 1500, "open_worker_wall_ms": 155.7891999837011, "opportunities": 5500, "price_states": 12000, "publish_median_ms": 1.1205000337213278, "recomputed_median": 250, "rounds": 51, "rss_delta_mib": 26.74609375, "scenario": "production", "select_wall_median_ms": 7.696500048041344, "system_cpu_before_pct": 25.555555555555554, "within_memory_budget": true, "within_time_budget": true, "worker_cpu_mean_ms": 21.139705882352942, "worker_cpu_median_ms": 15.625, "worker_phase_medians_ms": {"ledger_flush_ms": 0.9982000337913632, "prepare_ms": 1.7479999223724008, "routes_ms": 0.6299000233411789, "score_ms": 1.8958000000566244}, "worker_wall_median_ms": 17.51259993761778}
+1 passed, 2 deselected in 3.29s
+```

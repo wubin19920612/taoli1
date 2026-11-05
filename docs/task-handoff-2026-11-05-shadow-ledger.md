@@ -96,3 +96,21 @@
 - 当前结论：第 23、25 条实现及要求的验证/记录完成，但三次全部达标的性能门槛未通过；不重跑挑选、不继续放宽预算、不自行节流。下一步由 PM 决定性能方案；独立审查、锁定环境验收尚未做。无依赖的新模块另开任务。
 - 线上未检查、未变更。未 push、未连接服务器、未运行 WSL，未备份/部署/灰度。默认 SHADOW_ENABLED=0；未改数据库、Astro/arb-mvp、机会历史写入、配置和身份刷新业务逻辑。
 - 产物：`.pytest-tmp/round3e-*` 完整日志及临时数据库已忽略、未提交；既有产物保留。无新增未跟踪交付源文件；仅显式暂存本轮文件，最终以 git status 复核。
+
+## 第四轮停止交接（2026-11-05，第 26–31 条）
+
+本节为当前继续入口。第四轮尚未实现；按第 31 条停止，不得把下面的 v1 基准通过解释为 v2 验收完成。
+
+- 目标：上穿事件、60 秒重新准入、启动基线、分类名额、单事件 dropped、v1 退役及统计版本隔离；仅本模块，不扩展其他功能。
+- 分支 `codex/shadow-ledger`，起始基线 `ac602b9`，工作树 `C:/Users/wubin/Desktop/code/codex/taoli1/.worktrees/shadow-ledger`。唯一初始 WIP 是任务书第四轮 19 行，已原样随 `14d6d1f test(shadow): capture round four baseline and retirement requirements` 提交；报告和交接另作 conventional docs 提交，见 git log。
+- 完成：新增 `backend/tests/test_shadow_round4.py`，先跑出启动首轮仍开仓、v1 恢复未退役两个失败；随后用临时内存 SQLite 复现退役冷却问题。生产实现、既有测试和基准文件均未修改。新测试保留严格红灯，没有 xfail/skip。
+- **停止原因**：`repositories.py::ShadowTradeRepository.restore` 从所有已平仓行取 `MAX(closed_at)`，没有策略或退出原因过滤。合成 v1 `retired` 行在恢复 61 秒后仍进入 cooldown，剩余 539 秒。`shadow_ledger.py::restore/process` 直接接收并应用这一冷却。第 26 条保留原 cooldown，第 29 条让退役设置当前 `closed_at`，但未明确退役是否触发 v2 冷却；保留和排除会改变后续上穿的开仓结果。
+- PM 待明确：退役是否触发冷却；若排除，是否仅排除 `retired`，还是也隔离 v1 正常平仓的 cooldown。不要在代码或测试里预选答案。详见报告末节的合成复现和原始输出。
+- 关键入口：`shadow_ledger.py` 事件/名额及 cooldown；`shadow_runtime.py` 恢复/状态与预筛选；`shadow_stats.py` 收益排除；`repositories.py` 恢复和统计查询；后续还需沿现有 shadow buckets 路由加入显式策略筛选。`STRATEGY_VERSION` 当前仍是 `shadow-v1`，默认 `SHADOW_ENABLED=0` 未变。
+- 锁定环境：用户指定 `scratchpad/venv-lock/Scripts/python.exe`，Windows Python 3.12.10，venv=True；在 backend 设置 `PYTHONPATH=.`，禁用 cacheprovider，所有 basetemp 位于 venv 同级 scratchpad。命令和完整原始输出已写入 `docs/shadow-ledger-report-2026-11-03.md`。
+- 先红：`2 failed in 1.27s`。全量：`2 failed, 2604 passed, 9 deselected, 13 warnings in 127.55s (0:02:07)`。仅新增两项红灯失败；13 警告为 12 个 datetime.utcnow 和 1 个 Starlette/httpx 弃用，无线程未处理异常。既有 network/benchmark 默认排除不变。
+- production 连续三次：`1 passed, 2 deselected in 3.09s`；`1 passed, 2 deselected in 3.25s`；`1 passed, 2 deselected in 3.29s`。仅基线 v1 的性能记录，没有预算或夹具调整。loop 中位 5.456/5.980/5.588 ms，worker 墙钟中位 16.491/17.951/17.513 ms，RSS 27.418/27.297/26.746 MiB；报告保留三条完整 SHADOW_BENCHMARK 原始行。未重跑挑选。
+- 未完成：除两项红灯外的第四轮测试、全部生产实现、上穿/基线/名额的全量与预筛选多轮等价性，以及实现后的全量/基准验收。待 PM 决策后从本轮失败测试继续；既有测试只能按新规则调整准备，不能放宽断言。
+- 线上未检查/未变更；未 push、未连接服务器、未运行 WSL、未备份/部署。前端无改动，未跑前端测试。没有安装或升级依赖。
+- 产物：`.pytest-tmp/round4-red.log`、`round4-full.log`、`round4-bench-{1,2,3}.log` 已忽略且未提交；临时库在 scratchpad 的 `shadow-r4-*-20261105` 目录。既有产物保留。本轮交付仅新测试、任务书、报告和本交接；无生产文件改动。提交后复核 git status，不清理其他文件。
+- 下一步仍属于影子账本模块：先补足上述 PM 决策，再实现第 26–31 条；无直接依赖的新模块另开任务。
