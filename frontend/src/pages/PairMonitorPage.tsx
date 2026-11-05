@@ -4113,9 +4113,13 @@ export function fundingHistoryFailedForLeg(warnings: string[], leg: PairSpreadLe
   return warnings.some((warning) => warning.startsWith(prefix));
 }
 
-function missingFundingRateTitle(leg: PairSpreadLegQuery | null | undefined, warnings: string[]): string {
+function missingFundingRateTitle(
+  leg: PairSpreadLegQuery | null | undefined,
+  warnings: string[],
+  requestFailed = false
+): string {
   if (leg?.market_type === "spot") return "现货无资金费率";
-  return fundingHistoryFailedForLeg(warnings, leg) ? "该腿费率取数失败" : "该时点无结算";
+  return requestFailed || fundingHistoryFailedForLeg(warnings, leg) ? "该腿费率取数失败" : "该时点无结算";
 }
 
 function fundingRateColumnTitle(leg: PairSpreadLegQuery | null | undefined, fallback: string): ReactNode {
@@ -4531,6 +4535,7 @@ export function PairMonitorPage() {
   const [fundingSummaryRows, setFundingSummaryRows] = useState<FundingRateDiffRow[] | null>(null);
   const [fundingSummaryLoading, setFundingSummaryLoading] = useState(false);
   const [fundingSummaryError, setFundingSummaryError] = useState("");
+  const [fundingSummaryRequestFailed, setFundingSummaryRequestFailed] = useState(false);
   const initialDayCompareLoadedRef = useRef(false);
   const savedPresetGroups = useMemo(() => groupSavedPairPresets(savedPresets), [savedPresets]);
   const normalizedSavedPresetSearch = savedPresetSearch.trim().toLowerCase();
@@ -4675,8 +4680,9 @@ export function PairMonitorPage() {
   const fundingSummaryActive = Boolean(fundingSummaryStart.trim() || fundingSummaryEnd.trim());
   const fundingHistoryWarnings = (result?.warnings ?? []).filter((warning) => warning.includes("历史资金费率失败"));
   const activeFundingWarnings = fundingSummaryActive ? fundingSummaryError.split("；") : fundingHistoryWarnings;
-  const leftMissingFundingTitle = missingFundingRateTitle(result?.leg1, activeFundingWarnings);
-  const rightMissingFundingTitle = missingFundingRateTitle(result?.leg2, activeFundingWarnings);
+  const activeFundingRequestFailed = fundingSummaryActive && fundingSummaryRequestFailed;
+  const leftMissingFundingTitle = missingFundingRateTitle(result?.leg1, activeFundingWarnings, activeFundingRequestFailed);
+  const rightMissingFundingTitle = missingFundingRateTitle(result?.leg2, activeFundingWarnings, activeFundingRequestFailed);
   const fundingSummarySourceRows = fundingSummaryActive ? fundingSummaryRows ?? [] : fundingDiffRows;
   const fundingRateTotalSummary = useMemo(
     () => buildFundingRateTotalSummary(fundingSummarySourceRows, result, fundingSummaryStart, fundingSummaryEnd),
@@ -5163,6 +5169,7 @@ export function PairMonitorPage() {
   useEffect(() => {
     setFundingSummaryRows(null);
     setFundingSummaryError("");
+    setFundingSummaryRequestFailed(false);
     setFundingSummaryStart("");
     setFundingSummaryEnd("");
     setFundingSummaryDraftStart("");
@@ -5175,6 +5182,7 @@ export function PairMonitorPage() {
     setFundingSummaryStart(nextStart);
     setFundingSummaryEnd(nextEnd);
     setFundingSummaryError("");
+    setFundingSummaryRequestFailed(false);
 
     if (!nextStart && !nextEnd) {
       setFundingSummaryRows(null);
@@ -5235,6 +5243,7 @@ export function PairMonitorPage() {
     } catch (exc) {
       setFundingSummaryRows([]);
       setFundingSummaryError(exc instanceof Error ? exc.message : String(exc));
+      setFundingSummaryRequestFailed(true);
     } finally {
       setFundingSummaryLoading(false);
     }
@@ -6335,6 +6344,7 @@ export function PairMonitorPage() {
                       setFundingSummaryEnd("");
                       setFundingSummaryRows(null);
                       setFundingSummaryError("");
+                      setFundingSummaryRequestFailed(false);
                     }}
                   >
                     清空时间

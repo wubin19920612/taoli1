@@ -1979,6 +1979,113 @@ describe("PairMonitorPage", () => {
     expect(fundingTableCells(card)[0][1].textContent).toBe("-0.1000%");
   });
 
+  async function applyFundingTestRange() {
+    fireEvent.change(screen.getByLabelText("资金费率累计开始时间"), { target: { value: "2026-07-24T07:30" } });
+    fireEvent.change(screen.getByLabelText("资金费率累计结束时间"), { target: { value: "2026-07-24T09:30" } });
+    await userEvent.click(screen.getByRole("button", { name: /确定资金费率累计时间/ }));
+  }
+
+  it.each(["HTTP 503", "network error"])("marks both legs failed after a funding range %s and clears failure on retry", async (failure) => {
+    const card = await queryFundingCard();
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    let shouldFail = true;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (!String(input).includes("/pair-spread/funding-history")) return fallback(input, init);
+      if (shouldFail) {
+        if (failure === "network error") throw new TypeError("Failed to fetch");
+        return Response.json({ detail: "Funding service unavailable" }, { status: 503 });
+      }
+      const response = await fallback(input, init);
+      const data = await response.json();
+      data.funding_history = [
+        { exchange: data.leg1.exchange, symbol: data.leg1.symbol, funding_time: "2026-07-24T00:00:00Z", funding_rate_pct: 0.01 },
+        { exchange: data.leg2.exchange, symbol: data.leg2.symbol, funding_time: "2026-07-24T01:00:00Z", funding_rate_pct: 0.02 }
+      ];
+      return Response.json(data);
+    });
+
+    await applyFundingTestRange();
+    const errorMessage = failure === "network error" ? "Failed to fetch" : "Funding service unavailable";
+    expect(await within(card).findByText(errorMessage)).toBeTruthy();
+    for (const label of ["左侧合计", "右侧合计"]) {
+      expect(summaryMetric(card, label).textContent).toBe("—");
+      expect(summaryMetric(card, label).title).toBe("该腿费率取数失败");
+    }
+
+    shouldFail = false;
+    await userEvent.click(screen.getByRole("button", { name: /确定资金费率累计时间/ }));
+    await waitFor(() => expect(fundingTableCells(card)).toHaveLength(2));
+    expect(within(card).queryByRole("alert")).toBeNull();
+    const rows = fundingTableCells(card);
+    expect(within(rows[0][1]).getByText("—").title).toBe("该时点无结算");
+    expect(within(rows[1][2]).getByText("—").title).toBe("该时点无结算");
+    expect(summaryMetric(card, "左侧合计").textContent).toBe("+0.0100%");
+    expect(summaryMetric(card, "右侧合计").textContent).toBe("+0.0200%");
+  });
+
+  it.each(["left", "right"] as const)("keeps the spot %s leg title when the funding range request fails", async (spotSide) => {
+    mockFundingQuery((data) => {
+      data[spotSide === "left" ? "leg1" : "leg2"].market_type = "spot";
+    });
+    const card = await queryFundingCard(spotSide === "left" ? "spot" : "future");
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (!String(input).includes("/pair-spread/funding-history")) return fallback(input, init);
+      return Response.json({ detail: "Funding service unavailable" }, { status: 503 });
+    });
+
+    await applyFundingTestRange();
+    expect(await within(card).findByText("Funding service unavailable")).toBeTruthy();
+    expect(summaryMetric(card, spotSide === "left" ? "左侧合计" : "右侧合计").title).toBe("现货无资金费率");
+    expect(summaryMetric(card, spotSide === "left" ? "右侧合计" : "左侧合计").title).toBe("该腿费率取数失败");
+  });
+
+  it("clears both funding range failure titles when the time range is cleared", async () => {
+    mockFundingQuery((data) => {
+      data.funding_history = [
+        { ...data.funding_history[0], funding_time: "2026-07-24T00:00:00Z" },
+        { ...data.funding_history[1], funding_time: "2026-07-24T01:00:00Z" }
+      ];
+    });
+    const card = await queryFundingCard();
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (!String(input).includes("/pair-spread/funding-history")) return fallback(input, init);
+      throw new TypeError("Failed to fetch");
+    });
+
+    await applyFundingTestRange();
+    expect(await within(card).findByText("Failed to fetch")).toBeTruthy();
+    expect(summaryMetric(card, "左侧合计").title).toBe("该腿费率取数失败");
+    expect(summaryMetric(card, "右侧合计").title).toBe("该腿费率取数失败");
+
+    await userEvent.click(screen.getByRole("button", { name: "清空时间" }));
+    expect(within(card).queryByRole("alert")).toBeNull();
+    const rows = fundingTableCells(card);
+    expect(rows).toHaveLength(2);
+    expect(within(rows[0][1]).getByText("—").title).toBe("该时点无结算");
+    expect(within(rows[1][2]).getByText("—").title).toBe("该时点无结算");
+  });
+
+  it.each(["left", "right"] as const)("marks only the %s leg failed for a funding range warning", async (failedSide) => {
+    const card = await queryFundingCard();
+    const fallback = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const response = await fallback(input, init);
+      if (!String(input).includes("/pair-spread/funding-history")) return response;
+      const data = await response.json();
+      const leg = data[failedSide === "left" ? "leg1" : "leg2"];
+      data.funding_history = [];
+      data.warnings = [`${leg.exchange}:${leg.symbol} 历史资金费率失败: range timeout`];
+      return Response.json(data);
+    });
+
+    await applyFundingTestRange();
+    expect(await within(card).findByText(/历史资金费率失败: range timeout/)).toBeTruthy();
+    expect(summaryMetric(card, failedSide === "left" ? "左侧合计" : "右侧合计").title).toBe("该腿费率取数失败");
+    expect(summaryMetric(card, failedSide === "left" ? "右侧合计" : "左侧合计").title).toBe("该时点无结算");
+  });
+
   it("keeps zero and both populated funding legs as numeric values", async () => {
     mockFundingQuery((data) => {
       data.funding_history = data.funding_history.slice(0, 2).map((point, index) => ({
