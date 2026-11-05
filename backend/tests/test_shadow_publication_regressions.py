@@ -14,6 +14,54 @@ from shadow_helpers import NOW, pair
 
 
 @pytest.mark.asyncio
+async def test_queued_snapshot_before_identity_refresh_cannot_restore_old_opportunities(tmp_path):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from app.api.routes_market_identities import _refresh_store
+    from app.services.collector import MarketCollector
+    from app.services.market_validation_review import MarketValidationService
+    from app.services.snapshot_consumers import LatestSnapshotSlot
+
+    store = SnapshotStore()
+    runtime = ShadowRuntime(Settings(shadow_enabled=True,
+        database_url="sqlite:///" + str(tmp_path / "queued-refresh.db")), store)
+    await runtime.initialize(None)
+    shadow_slot, history_slot = LatestSnapshotSlot(), LatestSnapshotSlot()
+    recorder = SimpleNamespace(record=AsyncMock())
+    collector = MarketCollector([], store, snapshot_slots=[shadow_slot, history_slot],
+                                history_recorder=recorder)
+    markets, op = pair()
+    store.set_all_markets(markets)
+    store.set_markets(markets)
+    store.set_opportunities([op])
+    store.mark_published(NOW)
+    try:
+        # Exercise the actual publisher/mailbox before any shadow submit runs.
+        collector._publish_to_slots(markets, [op])
+        _refresh_store(MarketValidationService(None, store))
+        assert store.get_opportunities() == []
+        assert store.opportunities_version == 2
+        queued = await shadow_slot.get_newer(0, asyncio.Event())
+        history = await history_slot.get_newer(0, asyncio.Event())
+        assert queued is history
+        await collector.record_history(history)
+        recorder.record.assert_awaited_once_with([op], now=NOW)
+        assert history.opportunities[0] is op and history.markets[0] is markets[0]
+
+        await runtime.consume(queued)
+        assert store.get_opportunities() == []
+        assert store.opportunities_version == 2
+        assert runtime.status()["skipped_publications"] == 1
+        assert runtime.status()["open_count"] == 2
+        assert await runtime.repo.count_open() == 2
+        assert runtime._held[0] == frozenset({op.id})
+        assert runtime.errors == 0
+    finally:
+        await runtime.aclose()
+
+
+@pytest.mark.asyncio
 async def test_publish_failure_preserves_held_snapshot_and_closes_missing_opportunity(tmp_path, monkeypatch):
     store = SnapshotStore()
     runtime = ShadowRuntime(Settings(shadow_enabled=True,
