@@ -4,6 +4,7 @@ from array import array
 from collections import defaultdict
 from dataclasses import dataclass, field
 from functools import lru_cache
+import heapq
 from statistics import fmean, median, pstdev
 
 from app.services.spread_engine import _market_observed_at, _has_executable_book
@@ -47,7 +48,7 @@ class MinuteRing:
         self.count -= 1
 
 
-@lru_cache(maxsize=10000)
+@lru_cache(maxsize=20000)
 def _identity(exchange, market_type, raw, dex, multiplier, size):
     dex = dex.lower() if dex else (raw.split(":", 1)[0].lower() if ":" in raw else "main") if exchange == "hyperliquid" and market_type == "future" else ""
     value = (exchange.lower(), str(market_type), raw, dex, f"{multiplier:.12g}")
@@ -97,11 +98,12 @@ class PriceState:
     mid: float
     changed: float
     seen: float
+    asset: str = ""
     samples: MinuteRing = field(default_factory=lambda: MinuteRing(16, 3))
 
 
 class FakeOpportunityScorer:
-    def __init__(self, max_markets=6000, max_series=3000):
+    def __init__(self, max_markets=20000, max_series=3000):
         self.prices = {}
         self.spreads = {}
         self.max_markets = max_markets
@@ -114,18 +116,78 @@ class FakeOpportunityScorer:
         self.hard = set()
         self.frozen = set()
 
-    def score(self, markets, opportunities, now, prepared=None, changed=None):
+    def _remove_price(self, key):
+        self.prices.pop(key, None)
+        asset = self.assets.pop(key, None)
+        if asset is not None:
+            self.groups[asset].pop(key, None)
+        self.hard.discard(key)
+        self.frozen.discard(key)
+
+    def score(self, markets, opportunities, now, prepared=None, changed=None,
+              *, related_assets=None, history=(), clear_spreads=()):
         ts = now.timestamp()
         minute = int(ts // 60)
         # Expire absent keys as well as per-key rings: changing listings cannot
         # accumulate an unbounded dictionary over a long-running process.
         new_minute = minute != self.last_prune_minute
         if new_minute:
-            self.prices = {k: v for k, v in self.prices.items() if ts - v.seen <= 900}
+            for key in [k for k, v in self.prices.items() if ts - v.seen > 900]:
+                self._remove_price(key)
             self.spreads = {k: v for k, v in self.spreads.items() if minute - v[-1][0] < 60}
             self.last_prune_minute = minute
         prepared = prepared if prepared is not None else prepare_markets(markets, now)
         changed = self.changes.update(prepared) if changed is None else changed
+        for op_id in clear_spreads:
+            self.spreads.pop(op_id, None)
+        related_assets = (set(related_assets) if related_assets is not None else
+                          {m.asset_id or m.symbol for m in markets})
+        # One bounded heap per round, never a full scan per admission. Related
+        # assets are protected even when the minute history arrives first.
+        evictable = [(s.seen, k) for k, s in self.prices.items()
+                     if s.asset not in related_assets] if len(self.prices) + len(prepared) + len(history) >= self.max_markets else []
+        heapq.heapify(evictable)
+
+        def observe(key, market):
+            mid = (market.bid + market.ask) / 2
+            state = self.prices.get(key)
+            if state is None:
+                if len(self.prices) >= self.max_markets:
+                    while evictable:
+                        seen, victim = heapq.heappop(evictable)
+                        candidate = self.prices.get(victim)
+                        if candidate is None or candidate.asset in related_assets:
+                            continue
+                        if candidate.seen != seen:
+                            heapq.heappush(evictable, (candidate.seen, victim))
+                            continue
+                        self._remove_price(victim)
+                        break
+                    else:
+                        self.dropped += 1
+                        return None
+                state = self.prices[key] = PriceState(mid, ts, ts, market.asset_id or market.symbol)
+                if state.asset not in related_assets:
+                    heapq.heappush(evictable, (ts, key))
+            if mid != state.mid:
+                state.changed = ts
+            state.mid, state.seen = mid, ts
+            state.asset = market.asset_id or market.symbol
+            if state.samples and state.samples[-1][0] == minute:
+                m, low, high = state.samples[-1]
+                if mid < low or mid > high:
+                    state.samples[-1] = (m, min(low, mid), max(high, mid))
+            else:
+                state.samples.append((minute, mid, mid))
+            return state
+
+        # Unrelated minute samples feed frozen-leg history only, never current
+        # median votes or ledger books. changed can lag <=60s; intraminute
+        # reversals/extrema can be missed (PM 10). Shards may differ by one
+        # capture cycle (PM 14).
+        for key, (market, _, fresh) in prepare_markets(history, now).items():
+            if fresh and key not in prepared:
+                observe(key, market)
         dirty = set(self.groups) if new_minute else set()
         if new_minute:
             changed = changed | {key for key, info in prepared.items() if info[2]}
@@ -143,22 +205,9 @@ class FakeOpportunityScorer:
                 self.frozen.discard(key)
             if info is None or not info[2]:
                 continue
-            mid = (market.bid + market.ask) / 2
-            state = self.prices.get(key)
+            state = observe(key, market)
             if state is None:
-                if len(self.prices) >= self.max_markets:
-                    self.dropped += 1
-                    continue
-                state = self.prices[key] = PriceState(mid, ts, ts)
-            if mid != state.mid:
-                state.changed = ts
-            state.mid, state.seen = mid, ts
-            if state.samples and state.samples[-1][0] == minute:
-                m, low, high = state.samples[-1]
-                if mid < low or mid > high:
-                    state.samples[-1] = (m, min(low, mid), max(high, mid))
-            else:
-                state.samples.append((minute, mid, mid))
+                continue
             asset = market.asset_id or market.symbol
             # Reviewed incompatible identities must not vote on each other's price.
             if market.identity_collision and not market.asset_id:
