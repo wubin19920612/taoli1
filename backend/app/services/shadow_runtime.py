@@ -77,6 +77,7 @@ class ShadowRuntime:
         self.last_duration_ms = None
         self.stored_open_count = 0
         self.skipped_rounds = 0
+        self.skipped_publications = 0
         self._active = None
         self._display_cache = {}
         self._input_cache = {}
@@ -130,6 +131,8 @@ class ShadowRuntime:
             self.skipped_rounds += 1
             return None
         try:
+            # Capture before any dispatch/yield, including sliced market capture.
+            opportunities_version = self.store.opportunities_version
             held_ids, held_keys = self._held
             related = tuple(op for op in snapshot.opportunities
                             if op.open_spread_pct >= self.ledger.minimum or op.id in held_ids)
@@ -142,7 +145,7 @@ class ShadowRuntime:
             catalog_status = (self.catalog.updated_at, len(entries), self.catalog.errors)
             validations = tuple(op.validation for op in related)
             timing = []
-            task = asyncio.create_task(self._capture_round(snapshot, related, held_keys, validations, frozen, entries, catalog_status, timing))
+            task = asyncio.create_task(self._capture_round(snapshot, related, held_keys, validations, frozen, entries, catalog_status, timing, opportunities_version))
             self._active = task
             timing.append((perf_counter() - started) * 1000)
             return task
@@ -172,7 +175,7 @@ class ShadowRuntime:
         selected = tuple(prepared[k] for k in keys if k in prepared)
         return selected, frozenset(assets), (thread_time() - cpu) * 1000, (perf_counter() - started) * 1000
 
-    async def _capture_round(self, snapshot, related, held_keys, validations, frozen, entries, catalog_status, timing):
+    async def _capture_round(self, snapshot, related, held_keys, validations, frozen, entries, catalog_status, timing, opportunities_version):
         try:
             minute = int(snapshot.published_at.timestamp() // 60)
             new_minute = minute != self._sample_minute
@@ -197,7 +200,7 @@ class ShadowRuntime:
             started = perf_counter()
             frozen = frozen._replace(history=tuple(history))
             work = self._finish(snapshot.generation, validations, frozen, entries, catalog_status,
-                                segments, snapshot.opportunities, select_cpu, select_wall)
+                                segments, snapshot.opportunities, select_cpu, select_wall, opportunities_version)
             del frozen, captured, history, selected, snapshot, related
             segments[-1] += (perf_counter() - started) * 1000
             await work
@@ -221,7 +224,7 @@ class ShadowRuntime:
         except Exception:
             self.error("publish")
 
-    async def _finish_round(self, generation, validations, frozen, entries, catalog_status, timing, originals, select_cpu, select_wall):
+    async def _finish_round(self, generation, validations, frozen, entries, catalog_status, timing, originals, select_cpu, select_wall, opportunities_version):
         dispatch_ms = sum(timing)
         annotations, status, cpu_ms, wall_ms = await asyncio.to_thread(self._work, frozen, entries)
         resumed = perf_counter()
@@ -230,13 +233,18 @@ class ShadowRuntime:
         # next round needs these keys even if the opportunity has disappeared.
         self._held = status.pop("held", self._held)
         try:
-            if self.store.generation == generation and annotations is not None:
+            if self.store.opportunities_version != opportunities_version:
+                self.skipped_publications += 1
+            elif self.store.generation == generation and annotations is not None:
                 if display_changed or validations != self._validation_cache:
                     for validation, target in zip(validations, annotations):
                         target.__dict__["validation"] = validation
                 self._validation_cache = validations
                 by_id = {op.id: op for op in annotations}
-                self.store.set_opportunities([by_id.get(op.id, op) for op in originals])
+                if not self.store.set_opportunities_if_version(
+                    [by_id.get(op.id, op) for op in originals], opportunities_version,
+                ):
+                    self.skipped_publications += 1
         except Exception:
             self.error("publish")
         status.update(catalog_updated_at=catalog_status[0], catalog_entries=catalog_status[1],
@@ -364,6 +372,7 @@ class ShadowRuntime:
         counts = self.error_log.counts()
         return {"catalog_updated_at": None, "catalog_entries": 0, "catalog_errors": 0,
                 "last_duration_ms": None, **self._published, "skipped_rounds": self.skipped_rounds,
+                "skipped_publications": self.skipped_publications,
                 "errors": sum(counts.values()), "error_counts": counts,
                 "catalog_errors": self.catalog.errors}
 

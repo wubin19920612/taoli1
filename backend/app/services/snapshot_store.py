@@ -13,6 +13,7 @@ class SnapshotStore:
         self._markets: list[MarketSnapshot] = []
         self._all_markets: list[MarketSnapshot] | None = None
         self._opportunities: list[Opportunity] = []
+        self._opportunities_version = 0
         self._exchange_errors: dict[str, str] = {}
 
     def set_markets(self, markets: list[MarketSnapshot]) -> None:
@@ -35,6 +36,23 @@ class SnapshotStore:
     def set_opportunities(self, opportunities: list[Opportunity]) -> None:
         with self._lock:
             self._opportunities = opportunities
+            self._opportunities_version += 1
+
+    @property
+    def opportunities_version(self) -> int:
+        with self._lock:
+            return self._opportunities_version
+
+    def set_opportunities_if_version(
+        self, opportunities: list[Opportunity], expected_version: int,
+    ) -> bool:
+        """Publish annotations only while their source list is still current."""
+        with self._lock:
+            if self._opportunities_version != expected_version:
+                return False
+            # Use the same setter so shadow publications advance the version too.
+            self.set_opportunities(opportunities)
+            return True
 
     def get_opportunities(self) -> list[Opportunity]:
         with self._lock:
