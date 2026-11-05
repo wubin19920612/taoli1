@@ -566,3 +566,114 @@ FSHADOW_BENCHMARK {"capture_median_ms": 1.0282000293955207, "changed_fraction": 
 仅提交测试、原任务书两段决策和报告/交接；`backend/app`、数据库 schema/repositories、采集器、Astro/arb-mvp、前端及默认 SHADOW_ENABLED 均无修改。完整日志/数据库留在忽略目录 `.pytest-tmp/round3-*`，不提交测试输出文件、不清理既有产物。`git diff --check` 通过；本地测试提交为 `824f771`，后续文档提交记录见 `git log`。
 
 没有 push、服务器连接、线上备份、部署、线上验证或 WSL 操作。线上状态未检查；SHADOW_ENABLED 默认仍为 0。后续先由 PM 解决容量准入与精确等价性的冲突，再继续本模块；其他无依赖模块另开任务。交接见 `docs/task-handoff-2026-11-05-shadow-ledger.md` 的第三轮追加章节。
+
+
+## 第三轮补充二实施与本地验收（2026-11-05，续 929a3f1）
+
+本节覆盖 PM 第三轮第 1–17 条，取代前节“尚未实现/等待容量决策”的继续入口。基线 `929a3f1`，指定 shadow-ledger 工作树，分支 `codex/shadow-ledger`。用户未提交的补充二原样随首个实现提交 `1c76a16` 提交。
+
+**结论：生产实现及功能回归已完成，但三次 production 基准均未通过，按第 17 条停止性能改动，等待 PM 决定后续方案。** 未放宽预算、未自行加节流、未引入独立进程、未挑选重跑结果。第 16 条未触发，production RSS 三次均 ≤30 MiB。
+
+### 生产实现与所有权
+
+- `ShadowRuntime.submit` 仅冻结达到开仓门槛或已持仓 id 的机会；worker 将持仓 id/精确市场 key 以 frozenset 发布，事件循环不遍历可变持仓。即使机会消失，全部持仓腿仍参与当前轮。
+- `_select_markets` 在 worker 建立当前快照精确 key 查找表，保留 exchange/type/raw symbol/DEX/倍率；相关两腿和全部持仓腿直接从该表取得。资产→市场索引在分钟轮 worker 构建，普通轮事件循环不扫描全市场。查找 CPU/墙钟计入 worker 总预算。
+- 同资产扩展市场每轮送评分器。新出现的同资产市场最多晚 60 秒进入 median 投票，这是第 15 条新增豁免；精确机会腿和持仓腿不受此延迟影响。
+- 每个新分钟按最多 1000 个来源市场一片捕获非相关历史，片间 `asyncio.sleep(0)`。single-flight 覆盖查找、分片、计算和发布，期间新轮直接计入 skipped_rounds。相关盘口分片前单独捕获；后续分片只能更新 frozen_leg 历史，不覆盖当轮账本盘口或 median 现价。
+- 行情所有权依据：`collector._store_adapter_result` 用 `pack` 保存；`_combined_exchange_markets` 每轮 `unpack_async` 重建模型及可变列表；身份 `annotate` 返回 `model_copy`，API 刷新替换 store 列表；PublishedSnapshot 是 frozen dataclass + tuple。生产发布后无原地行情修改路径。模型类型自身并非 frozen，故保留相关字段/列表的冻结，只在 worker 查找期间读取发布引用。新增压缩缓存解包隔离测试，原有 worker 运行中修改源字段/列表的测试未放宽且通过。
+- 混合发布按原顺序逐 id 替换相关对象，非相关对象、数量、默认空标注保持不变；输入/展示缓存只含相关机会。API JSON、告警判断和前端列表增加回归。history/index 等 mailbox 消费者仍接收原 PublishedSnapshot；store 的 API、stream、health、按 id 查找仍接收 Opportunity 模型，没有引入新行类型。
+
+### 容量、评分与等价性
+
+- PriceState 默认上限 20000；`scorer_price_states` 和既有 `scorer_dropped` 由 worker 发布到 status。饱和时保护全部相关资产，按 seen 淘汰最旧非相关市场；没有可淘汰市场才 dropped。每轮最多构造一个有界候选堆，准入时不逐次全表扫描；同轮 seen 更新通过堆顶校验维持顺序。
+- 精确身份 LRU 容量从 10000 改为 20000，避免 12000 市场逐轮查找时缓存抖动；没有修改资源预算。824f771 的两个容量反例改为优先准入及完整投票语义。原 `test_shadow_fake.py` 未修改，其 2 市场/1 序列、dropped=2 的断言继续通过。
+- 非相关资产分钟采样的 changed 最多比全量路径晚 60 秒；分钟内先变后回及高低点可能遗漏。分片之间允许相差一个捕获周期；仅影响 frozen_leg 历史。代码注释及 59 秒偏差回归落实第 10/14 条。
+- 固定种子 `20261105` 的组合序列用实际生产 runtime 对照测试内全量评分/账本，逐轮比较全部持久化交易字段（除随机 UUID）、各变体持仓及 funding 状态、冷却和丢弃计数。覆盖门槛上下穿、部分变体平仓、机会消失、缺失/过期盘口、max_open、资金费结算、检查点、真实 SQLite 持久化后重启、冷却拒绝及再次开仓。
+- 单独回归：BMT 冻结 16 分钟、此前可成交价差低于门槛，首次越阈开仓行立即带 frozen_leg；新同资产第三交易所最迟下一分钟参与 median；plateau 满 60 样本后，机会消失保留历史、跌破门槛立即清除，重新出现不误报。
+- 全量对照仅存在于测试，生产无切换开关。未修改 schema/repositories、采集调度、opportunity_history、Astro/arb-mvp。
+
+### 功能验收与环境
+
+- 影子相关测试 + test_route_permissions：`121 passed, 3 deselected in 18.04s`；3 个 benchmark 按原项目默认 marker 排除，随后单独连续执行。
+- 后端全量：`2597 passed, 9 deselected, 12 warnings in 178.90s (0:02:58)`；默认排除 network/benchmark，未新增跳过。12 条均为既有 datetime.utcnow 弃用警告，无 PytestUnhandledThreadExceptionWarning。
+- 前端 OpportunityTable + ShadowLedgerPage：17 passed；前端全量：33 文件、428 测试通过，110.77 秒；有 React/Ant Design act 警告。
+- `npm.cmd run build` 成功，含 `tsc -b` 与 Vite production build；Vite 阶段 8.28 秒。
+- Windows，Python 3.12.10，pytest 8.4.2，pydantic 2.12.5，aiosqlite 0.22.1；venv=False，沿用现有依赖，未安装/升级。这不是锁定依赖 venv 的独立验收。
+- 本地提交：`1c76a16`（实现、补充二、组合等价性等），`c443c8b`（分片/准入/混合发布回归和基准计量）；本报告与交接另有文档提交，见 git log。独立只读审查仍需后续安排，本轮仅做本地自查。
+
+测试命令（后端从 backend、前端从 frontend 执行，所有 pytest 临时路径在忽略的 scratchpad）：
+
+```powershell
+$shadowTests = @(Get-ChildItem tests/test_shadow*.py | ForEach-Object { $_.FullName })
+python -m pytest @shadowTests tests/test_route_permissions.py -q --tb=short -p no:cacheprovider --basetemp ../.pytest-tmp/round3b-targeted
+python -m pytest -q --tb=short -p no:cacheprovider --basetemp ../.pytest-tmp/round3b-full
+npm.cmd test
+npm.cmd run build
+```
+
+### 连续三次最终基准：未通过
+
+回归和构建全部结束后，在 backend 目录依次运行 N=1,2,3；每次独立 Python 进程，每次记录运行前系统 CPU 负载，没有额外重跑：
+
+```powershell
+python -m pytest tests/test_shadow_benchmark.py -q -s --tb=short -m benchmark -p no:cacheprovider --basetemp ../.pytest-tmp/round3b-benchmark-N
+```
+
+production 最大值按第 14 条计连续占用片段；中位/p95 仍按整轮各片累计占用 + 混合发布统计，累计单轮最大值保留为 event_loop_total_max_ms。stress/realistic 最大值仍用原整轮口径。所有数值预算保持本轮基线不变；第 5 条 stress 中位 5 ms/墙钟 30 ms 已在 824f771 中落地。原字段 within_time_budget 只表示 worker 判定，不代表整个测试通过，事件循环有独立严格断言。
+
+| 次数 | 场景 | 系统 CPU 前负载 % | loop 中位 / p95 / 最大 ms | worker CPU / 墙钟中位 ms | RSS MiB |
+| --- | --- | --- | --- | --- | --- |
+| 1 | stress | 14.365 | 4.050 / 5.321 / 36.349 | 15.625 / 20.625 | 27.059 |
+| 1 | realistic | 16.571 | 1.283 / 1.659 / 2.604 | 0.000 / 6.017 | 4.535 |
+| 1 | production | 25.000 | 6.204 / 9.632 / 70.711 | 15.625 / 18.552 | 28.105 |
+| 2 | stress | 25.414 | 4.028 / 6.153 / 38.333 | 15.625 / 21.330 | 27.078 |
+| 2 | realistic | 17.318 | 1.171 / 1.729 / 2.745 | 0.000 / 5.696 | 4.676 |
+| 2 | production | 17.222 | 6.232 / 8.405 / 8.805 | 15.625 / 18.764 | 27.969 |
+| 3 | stress | 6.952 | 3.872 / 5.107 / 38.322 | 15.625 / 21.008 | 27.340 |
+| 3 | realistic | 7.182 | 1.225 / 2.025 / 2.865 | 0.000 / 5.404 | 4.340 |
+| 3 | production | 9.884 | 6.141 / 8.787 / 8.715 | 15.625 / 18.376 | 27.168 |
+
+耗时分布与残余问题：
+
+- production loop 中位 6.204 / 6.232 / 6.141 ms >5，三次均失败；p95 9.632 / 8.405 / 8.787 ms 均 ≤15。首次最大连续占用 70.711 ms >40，位于 +61 秒分钟历史捕获片；后两次最大 8.805 / 8.715 ms。片大小限制了输入数量，仍不能保证实际连续占用预算。
+- production capture 中位 4.885 / 5.039 / 4.971 ms，publish 中位 1.174 / 1.174 / 1.136 ms；普通轮成本集中于预筛选/冻结及混合列表发布。分项中位不应直接相加作为整轮中位。
+- production worker 总墙钟中位 18.552 / 18.764 / 18.376 ms，均 ≤30；全量 key 查找/相关集合选择中位 8.596 / 8.870 / 8.475 ms，计算中位 10.094 / 10.462 / 10.023 ms。计算子阶段 prepare 约 1.82–1.96 ms、score 约 1.92–2.03 ms、routes 约 0.64–0.69 ms、ledger/flush 约 0.95–0.99 ms；剩余包含模型构造、展示缓存及循环包装，未对未单测子函数做精确归因。
+- production 分钟轮 worker 墙钟 105.577 / 190.135 / 162.855 ms；评分子阶段 25.671 / 27.456 / 23.404 ms，ledger/flush 54.478 / 53.218 / 51.598 ms。首次 70.711 ms 捕获尖峰未做 GC/调度归因，不将猜测当作证据。
+- production RSS 28.105 / 27.969 / 27.168 MiB，均通过但余量有限。实测保留 12000 PriceState、6000 资产索引条目、750 展示缓存条目、1500 未平行；20000 是容量上限，不是该场景实际占用。
+- stress 三次 worker CPU 中位 15.625 ms、墙钟 20.625 / 21.330 / 21.008 ms 均通过，但 loop 最大 36.349 / 38.333 / 38.322 ms >20，三次失败。realistic 三次所有断言通过。
+
+九条原始汇总行如下，保留 pytest 点号/失败前缀；三次 pytest 均退出码 1：
+
+第 1 次，pytest 退出码 1：
+
+```text
+SHADOW_BENCHMARK {"asset_index_assets": 1500, "calculate_wall_median_ms": 17.754499916918576, "capture_median_ms": 3.5342000192031264, "changed_fraction": 1.0, "checkpoint_capture_ms": 2.748599974438548, "checkpoint_capture_segments_ms": [2.57210002746433, 0.05859998054802418, 0.05619996227324009, 0.061700004152953625], "checkpoint_event_loop_ms": 3.423699992708862, "checkpoint_publish_ms": 0.6751000182703137, "checkpoint_worker_phases_ms": {"ledger_flush_ms": 114.52549998648465, "prepare_ms": 4.778799950145185, "routes_ms": 36.01289994549006, "score_ms": 6.623600027523935}, "checkpoint_worker_wall_ms": 169.36499997973442, "display_cache_entries": 1000, "event_loop_max_ms": 36.349200177937746, "event_loop_median_ms": 4.049699986353517, "event_loop_p95_ms": 5.321099888533354, "event_loop_total_max_ms": 36.349200177937746, "markets": 3000, "open_event_loop_ms": 8.847099961712956, "open_rows": 3000, "open_worker_wall_ms": 201.9923001062125, "opportunities": 1000, "price_states": 3000, "publish_median_ms": 0.4814999410882592, "recomputed_median": 1500, "rounds": 51, "rss_delta_mib": 27.05859375, "scenario": "stress", "select_wall_median_ms": 2.9352999990805984, "system_cpu_before_pct": 14.364640883977897, "within_memory_budget": true, "within_time_budget": true, "worker_cpu_mean_ms": 22.36519607843137, "worker_cpu_median_ms": 15.625, "worker_phase_medians_ms": {"ledger_flush_ms": 3.268800093792379, "prepare_ms": 3.7391999503597617, "routes_ms": 0.772200059145689, "score_ms": 5.539899924769998}, "worker_wall_median_ms": 20.62520000617951}
+FSHADOW_BENCHMARK {"asset_index_assets": 500, "calculate_wall_median_ms": 5.0629000179469585, "capture_median_ms": 1.0474000591784716, "changed_fraction": 0.3333333333333333, "checkpoint_capture_ms": 0.9945998899638653, "checkpoint_capture_segments_ms": [0.9419999551028013, 0.05259993486106396], "checkpoint_event_loop_ms": 1.1947999009862542, "checkpoint_publish_ms": 0.20020001102238894, "checkpoint_worker_phases_ms": {"ledger_flush_ms": 24.655900080688298, "prepare_ms": 1.6349999932572246, "routes_ms": 0.5049000028520823, "score_ms": 2.059000078588724}, "checkpoint_worker_wall_ms": 32.65029995236546, "display_cache_entries": 400, "event_loop_max_ms": 2.6036000344902277, "event_loop_median_ms": 1.2829001061618328, "event_loop_p95_ms": 1.6585999401286244, "event_loop_total_max_ms": 2.6036000344902277, "markets": 1000, "open_event_loop_ms": 2.6036000344902277, "open_rows": 1000, "open_worker_wall_ms": 55.631899973377585, "opportunities": 400, "price_states": 1000, "publish_median_ms": 0.22030004765838385, "recomputed_median": 167, "rounds": 51, "rss_delta_mib": 4.53515625, "scenario": "realistic", "select_wall_median_ms": 0.9265999542549253, "system_cpu_before_pct": 16.57142857142857, "within_memory_budget": true, "within_time_budget": true, "worker_cpu_mean_ms": 4.595588235294118, "worker_cpu_median_ms": 0.0, "worker_phase_medians_ms": {"ledger_flush_ms": 0.39840000681579113, "prepare_ms": 1.01200002245605, "routes_ms": 0.3152000717818737, "score_ms": 0.8443000260740519}, "worker_wall_median_ms": 6.01669994648546}
+.SHADOW_BENCHMARK {"asset_index_assets": 6000, "calculate_wall_median_ms": 10.09420002810657, "capture_median_ms": 4.8853999469429255, "changed_fraction": 0.3333333333333333, "checkpoint_capture_ms": 84.12849972955883, "checkpoint_capture_segments_ms": [4.5897999079898, 0.07259997073560953, 0.46520004980266094, 1.6021999763324857, 1.089200028218329, 70.71129989344627, 0.7689000340178609, 0.7495000027120113, 0.7872999412938952, 0.7302999729290605, 0.7392000406980515, 0.7475999882444739, 1.0753999231383204], "checkpoint_event_loop_ms": 86.44719969015568, "checkpoint_publish_ms": 2.3186999605968595, "checkpoint_worker_phases_ms": {"ledger_flush_ms": 54.477799916639924, "prepare_ms": 3.113799961283803, "routes_ms": 0.6967000663280487, "score_ms": 25.670900009572506}, "checkpoint_worker_wall_ms": 105.57709995191544, "display_cache_entries": 750, "event_loop_max_ms": 70.71129989344627, "event_loop_median_ms": 6.204100092872977, "event_loop_p95_ms": 9.632100001908839, "event_loop_total_max_ms": 86.44719969015568, "markets": 12000, "open_event_loop_ms": 20.94440010841936, "open_rows": 1500, "open_worker_wall_ms": 251.9046999514103, "opportunities": 5500, "price_states": 12000, "publish_median_ms": 1.1741999769583344, "recomputed_median": 250, "rounds": 51, "rss_delta_mib": 28.10546875, "scenario": "production", "select_wall_median_ms": 8.595899911597371, "system_cpu_before_pct": 25.0, "within_memory_budget": true, "within_time_budget": true, "worker_cpu_mean_ms": 21.139705882352942, "worker_cpu_median_ms": 15.625, "worker_phase_medians_ms": {"ledger_flush_ms": 0.9504999034106731, "prepare_ms": 1.8224999075755477, "routes_ms": 0.6418999982997775, "score_ms": 1.9169999286532402}, "worker_wall_median_ms": 18.552300054579973}
+2 failed, 1 passed in 7.41s
+```
+
+第 2 次，pytest 退出码 1：
+
+```text
+SHADOW_BENCHMARK {"asset_index_assets": 1500, "calculate_wall_median_ms": 18.341299961321056, "capture_median_ms": 3.479299950413406, "changed_fraction": 1.0, "checkpoint_capture_ms": 3.664399730041623, "checkpoint_capture_segments_ms": [3.3480998827144504, 0.10249996557831764, 0.10649999603629112, 0.10729988571256399], "checkpoint_event_loop_ms": 4.255599691532552, "checkpoint_publish_ms": 0.5911999614909291, "checkpoint_worker_phases_ms": {"ledger_flush_ms": 107.82769997604191, "prepare_ms": 5.715099978260696, "routes_ms": 42.67719993367791, "score_ms": 7.414399995468557}, "checkpoint_worker_wall_ms": 172.19119996298105, "display_cache_entries": 1000, "event_loop_max_ms": 38.33250002935529, "event_loop_median_ms": 4.02809982188046, "event_loop_p95_ms": 6.15289993584156, "event_loop_total_max_ms": 38.33250002935529, "markets": 3000, "open_event_loop_ms": 8.795899921096861, "open_rows": 3000, "open_worker_wall_ms": 200.17720002215356, "opportunities": 1000, "price_states": 3000, "publish_median_ms": 0.49999996554106474, "recomputed_median": 1500, "rounds": 51, "rss_delta_mib": 27.078125, "scenario": "stress", "select_wall_median_ms": 3.0607000226154923, "system_cpu_before_pct": 25.41436464088398, "within_memory_budget": true, "within_time_budget": true, "worker_cpu_mean_ms": 23.284313725490197, "worker_cpu_median_ms": 15.625, "worker_phase_medians_ms": {"ledger_flush_ms": 3.720299922861159, "prepare_ms": 3.892799955792725, "routes_ms": 0.8036000654101372, "score_ms": 5.5327999871224165}, "worker_wall_median_ms": 21.330100018531084}
+FSHADOW_BENCHMARK {"asset_index_assets": 500, "calculate_wall_median_ms": 4.80919994879514, "capture_median_ms": 0.9590999688953161, "changed_fraction": 0.3333333333333333, "checkpoint_capture_ms": 0.9171999990940094, "checkpoint_capture_segments_ms": [0.866799964569509, 0.05040003452450037], "checkpoint_event_loop_ms": 1.1445999843999743, "checkpoint_publish_ms": 0.22739998530596495, "checkpoint_worker_phases_ms": {"ledger_flush_ms": 25.615100050345063, "prepare_ms": 0.978299998678267, "routes_ms": 0.31459995079785585, "score_ms": 1.7336000455543399}, "checkpoint_worker_wall_ms": 31.56089992262423, "display_cache_entries": 400, "event_loop_max_ms": 2.744999947026372, "event_loop_median_ms": 1.1710000690072775, "event_loop_p95_ms": 1.729399897158146, "event_loop_total_max_ms": 2.744999947026372, "markets": 1000, "open_event_loop_ms": 2.744999947026372, "open_rows": 1000, "open_worker_wall_ms": 55.361300124786794, "opportunities": 400, "price_states": 1000, "publish_median_ms": 0.20889996085315943, "recomputed_median": 167, "rounds": 51, "rss_delta_mib": 4.67578125, "scenario": "realistic", "select_wall_median_ms": 0.8672000840306282, "system_cpu_before_pct": 17.31843575418994, "within_memory_budget": true, "within_time_budget": true, "worker_cpu_mean_ms": 5.208333333333333, "worker_cpu_median_ms": 0.0, "worker_phase_medians_ms": {"ledger_flush_ms": 0.4000000189989805, "prepare_ms": 0.9880000725388527, "routes_ms": 0.32130000181496143, "score_ms": 0.8304000366479158}, "worker_wall_median_ms": 5.696399952284992}
+.SHADOW_BENCHMARK {"asset_index_assets": 6000, "calculate_wall_median_ms": 10.462000034749508, "capture_median_ms": 5.038700066506863, "changed_fraction": 0.3333333333333333, "checkpoint_capture_ms": 15.210800105705857, "checkpoint_capture_segments_ms": [4.881200031377375, 0.0610999995842576, 0.47610001638531685, 1.4513999922201037, 1.225799904204905, 1.6293999506160617, 0.7405000505968928, 0.7613999769091606, 0.7381000323221087, 0.7412999402731657, 0.7611000910401344, 0.7255000527948141, 1.0179000673815608], "checkpoint_event_loop_ms": 17.403400037437677, "checkpoint_publish_ms": 2.19259993173182, "checkpoint_worker_phases_ms": {"ledger_flush_ms": 53.218499990180135, "prepare_ms": 2.2264999570325017, "routes_ms": 0.7621999830007553, "score_ms": 27.45579998008907}, "checkpoint_worker_wall_ms": 190.13479992281646, "display_cache_entries": 750, "event_loop_max_ms": 8.804500102996826, "event_loop_median_ms": 6.2324999598786235, "event_loop_p95_ms": 8.405300206504762, "event_loop_total_max_ms": 20.45209996867925, "markets": 12000, "open_event_loop_ms": 20.45209996867925, "open_rows": 1500, "open_worker_wall_ms": 155.05890001077205, "opportunities": 5500, "price_states": 12000, "publish_median_ms": 1.1735999723896384, "recomputed_median": 250, "rounds": 51, "rss_delta_mib": 27.96875, "scenario": "production", "select_wall_median_ms": 8.870399906300008, "system_cpu_before_pct": 17.22222222222223, "within_memory_budget": true, "within_time_budget": true, "worker_cpu_mean_ms": 19.91421568627451, "worker_cpu_median_ms": 15.625, "worker_phase_medians_ms": {"ledger_flush_ms": 0.9902000892907381, "prepare_ms": 1.9616000354290009, "routes_ms": 0.6863001035526395, "score_ms": 2.034100005403161}, "worker_wall_median_ms": 18.764100037515163}
+2 failed, 1 passed in 7.37s
+```
+
+第 3 次，pytest 退出码 1：
+
+```text
+SHADOW_BENCHMARK {"asset_index_assets": 1500, "calculate_wall_median_ms": 17.720800009556115, "capture_median_ms": 3.395100007764995, "changed_fraction": 1.0, "checkpoint_capture_ms": 3.6863001296296716, "checkpoint_capture_segments_ms": [3.0608000233769417, 0.21650001872330904, 0.18690002616494894, 0.2221000613644719], "checkpoint_event_loop_ms": 4.17700014077127, "checkpoint_publish_ms": 0.4907000111415982, "checkpoint_worker_phases_ms": {"ledger_flush_ms": 107.00930003076792, "prepare_ms": 3.346299985423684, "routes_ms": 35.8275999315083, "score_ms": 5.76349999755621}, "checkpoint_worker_wall_ms": 159.59679998923093, "display_cache_entries": 1000, "event_loop_max_ms": 38.322399952448905, "event_loop_median_ms": 3.8717000279575586, "event_loop_p95_ms": 5.106800002977252, "event_loop_total_max_ms": 38.322399952448905, "markets": 3000, "open_event_loop_ms": 9.033299866132438, "open_rows": 3000, "open_worker_wall_ms": 198.28509993385524, "opportunities": 1000, "price_states": 3000, "publish_median_ms": 0.4848999669775367, "recomputed_median": 1500, "rounds": 51, "rss_delta_mib": 27.33984375, "scenario": "stress", "select_wall_median_ms": 2.7666999958455563, "system_cpu_before_pct": 6.951871657754005, "within_memory_budget": true, "within_time_budget": true, "worker_cpu_mean_ms": 23.284313725490197, "worker_cpu_median_ms": 15.625, "worker_phase_medians_ms": {"ledger_flush_ms": 3.256899886764586, "prepare_ms": 3.588199964724481, "routes_ms": 0.798500026576221, "score_ms": 5.577299976721406}, "worker_wall_median_ms": 21.008400013670325}
+FSHADOW_BENCHMARK {"asset_index_assets": 500, "calculate_wall_median_ms": 4.526100005023181, "capture_median_ms": 1.0011999402195215, "changed_fraction": 0.3333333333333333, "checkpoint_capture_ms": 1.0399001184850931, "checkpoint_capture_segments_ms": [0.9874000679701567, 0.05250005051493645], "checkpoint_event_loop_ms": 1.2624001828953624, "checkpoint_publish_ms": 0.22250006441026926, "checkpoint_worker_phases_ms": {"ledger_flush_ms": 25.480000069364905, "prepare_ms": 0.8787000551819801, "routes_ms": 0.3109999233856797, "score_ms": 1.8217000178992748}, "checkpoint_worker_wall_ms": 31.413299962878227, "display_cache_entries": 400, "event_loop_max_ms": 2.865399932488799, "event_loop_median_ms": 1.224899897351861, "event_loop_p95_ms": 2.0249999361112714, "event_loop_total_max_ms": 2.865399932488799, "markets": 1000, "open_event_loop_ms": 2.865399932488799, "open_rows": 1000, "open_worker_wall_ms": 55.05639989860356, "opportunities": 400, "price_states": 1000, "publish_median_ms": 0.2128999913111329, "recomputed_median": 167, "rounds": 51, "rss_delta_mib": 4.33984375, "scenario": "realistic", "select_wall_median_ms": 0.8362999651581049, "system_cpu_before_pct": 7.182320441988955, "within_memory_budget": true, "within_time_budget": true, "worker_cpu_mean_ms": 2.7573529411764706, "worker_cpu_median_ms": 0.0, "worker_phase_medians_ms": {"ledger_flush_ms": 0.3790999762713909, "prepare_ms": 0.9295000927522779, "routes_ms": 0.3007999621331692, "score_ms": 0.8234999841079116}, "worker_wall_median_ms": 5.404299939982593}
+.SHADOW_BENCHMARK {"asset_index_assets": 6000, "calculate_wall_median_ms": 10.022800066508353, "capture_median_ms": 4.971499904058874, "changed_fraction": 0.3333333333333333, "checkpoint_capture_ms": 13.131599873304367, "checkpoint_capture_segments_ms": [4.007900017313659, 0.05589995998889208, 0.448299921117723, 0.8429000154137611, 0.7911999709904194, 1.1011000024154782, 1.0131000308319926, 0.8368999697268009, 0.7912999717518687, 0.7618999807164073, 0.736100017093122, 0.7376000285148621, 1.0073999874293804], "checkpoint_event_loop_ms": 14.287199941463768, "checkpoint_publish_ms": 1.1556000681594014, "checkpoint_worker_phases_ms": {"ledger_flush_ms": 51.59839999396354, "prepare_ms": 2.0168001065030694, "routes_ms": 0.8471999317407608, "score_ms": 23.403899976983666}, "checkpoint_worker_wall_ms": 162.85530000459403, "display_cache_entries": 750, "event_loop_max_ms": 8.715100004337728, "event_loop_median_ms": 6.140699959360063, "event_loop_p95_ms": 8.787200087681413, "event_loop_total_max_ms": 21.51169953867793, "markets": 12000, "open_event_loop_ms": 21.51169953867793, "open_rows": 1500, "open_worker_wall_ms": 193.08619992807508, "opportunities": 5500, "price_states": 12000, "publish_median_ms": 1.1356000322848558, "recomputed_median": 250, "rounds": 51, "rss_delta_mib": 27.16796875, "scenario": "production", "select_wall_median_ms": 8.475000038743019, "system_cpu_before_pct": 9.883720930232553, "within_memory_budget": true, "within_time_budget": true, "worker_cpu_mean_ms": 17.769607843137255, "worker_cpu_median_ms": 15.625, "worker_phase_medians_ms": {"ledger_flush_ms": 0.9846000466495752, "prepare_ms": 1.868200022727251, "routes_ms": 0.6754000205546618, "score_ms": 1.931800041347742}, "worker_wall_median_ms": 18.375700106844306}
+2 failed, 1 passed in 7.29s
+```
+
+
+### 停止与交付边界
+
+按第 17 条停止，先由 PM 决定后续性能方案，包括是否允许固定周期处理；本任务未自行节流、放宽断言或更改预算。后续生产代码若改动，需重跑相称回归与完整连续三次基准。
+
+没有 push、服务器连接、WSL、线上备份、部署、实时公网行情运行或修改其他进程。线上状态未检查，SHADOW_ENABLED 默认仍为 0。工作区外仅因本地提交写入已授权的 Git worktree 元数据。原始日志、SQLite 和临时目录留在忽略目录 `.pytest-tmp/round3b-*`，不提交测试输出文件；本报告只嵌入要求的原始汇总行。既有产物不清理，独立审查及锁定环境验收仍未完成，不能称为生产验收通过。

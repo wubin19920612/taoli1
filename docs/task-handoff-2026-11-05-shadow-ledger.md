@@ -47,3 +47,21 @@
 ```text
 2 failed, 2587 passed, 9 deselected, 12 warnings in 182.35s (0:03:02)
 ```
+
+
+## 第三轮补充二已实现；按第 17 条停止（2026-11-05）
+
+本节取代前文“仅有测试、尚未实现预筛选、等待容量决策”的继续入口。
+
+- 范围：影子账本生产预筛选、相关资产扩展、分钟分片历史、容量优先准入、混合列表发布；第 3/10 条组合等价性及前后端回归。无其他模块扩展。
+- 基线 `929a3f1`，分支 `codex/shadow-ledger`，指定 worktree `C:/Users/wubin/Desktop/code/codex/taoli1/.worktrees/shadow-ledger`。本地提交 `1c76a16` 为实现（含用户未提交的补充二），`c443c8b` 为分片/发布回归和基准计量；本交接和报告另有文档提交，见 git log。
+- 入口：`backend/app/services/shadow_runtime.py` 的 submit / _select_markets / _capture_round / _finish_round；`fake_opportunity.py` 的优先准入与 history 参数；`test_shadow_prefilter_equivalence.py` 的生产 runtime 全量对照；`test_shadow_selection_runtime.py` 的所有权、准入、分片及混合 API/告警回归；前端 `OpportunityTable.test.tsx` 混合列表回归；benchmark 新增连续片段及子阶段计量。
+- 规则：PriceState 上限 20000，相关资产不可被非相关市场挤掉；相关已准入市场全部参与 median。普通轮全市场 key 查找在 worker，分钟轮构建资产索引；每片最多 1000 来源市场并让出循环，新轮跳过计数。非相关对象原样发布，持仓 id/key 是不可变 worker 发布值。低于门槛的机会仍传清除 id，防止 plateau 历史残留。
+- 允许差异：从未相关资产 changed 最多滞后 60 秒，分钟内往返/极值可能遗漏；分片时间差只用于 frozen 历史；同资产新市场最多晚 60 秒进入 median，精确开平仓腿从本轮查找直接取得。生产无全量路径开关。
+- 行情引用依据：collector 从 pack/unpack_async 每轮重建模型，身份 annotate 返回 model_copy；发布 tuple 只读。相关数据仍冻结，原有 mutable-source 隔离测试未放宽。
+- 测试：影子+权限 121 passed/3 deselected；后端全量 2597 passed/9 deselected/12 弃用警告；前端全量 33 文件/428 测试通过；npm.cmd run build（含 tsc）通过。Windows Python 3.12.10，venv=False，未安装依赖；不是锁定 venv 独立验收。
+- 三次完整 benchmark 均 `2 failed, 1 passed`。production loop 中位 6.204/6.232/6.141 ms >5，首次分钟片段 70.711 ms >40；worker 墙钟中位 18.552/18.764/18.376 ms 和 RSS 28.105/27.969/27.168 MiB 达标。stress 最大 36.349/38.333/38.322 ms >20；realistic 全通过。详见报告末节九条原始汇总行与子阶段分布。
+- 停止原因：第 17 条，全部实现后 production 仍不达标；第 16 条 RSS 未触发。未修改预算、未重跑挑选结果、未自行节流或引入独立进程。后续先由 PM 决定性能方案（是否允许固定周期），不得在无新决策时继续扩展优化或启用生产。
+- 线上未检查。没有 push、服务器连接、备份、部署、WSL 或公网行情运行；SHADOW_ENABLED 默认 0。禁止范围（schema/repositories、采集调度、Astro/arb-mvp、opportunity_history）未改。
+- 本次 `.pytest-tmp/round3b-*` 日志/SQLite 已忽略且未提交；此前 `.pytest-tmp/round3-*` 等产物保留。交付时无本任务未跟踪源文件，不清理其他产物。初始唯一用户 WIP 补充二已随首个提交纳入。
+- 后续改动需保留全部断言，重跑相称回归与连续三次基准；独立只读审查/锁定环境验收尚未执行。无依赖的新模块另开任务。
