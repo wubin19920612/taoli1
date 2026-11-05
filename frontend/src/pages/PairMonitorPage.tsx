@@ -2132,11 +2132,19 @@ function MetricCard({
   );
 }
 
-function FundingRateValue({ value, strong = false }: { value: number | null | undefined; strong?: boolean }) {
+function FundingRateValue({ value, strong = false, missingTitle = "该时点无结算" }: {
+  value: number | null | undefined;
+  strong?: boolean;
+  missingTitle?: string;
+}) {
+  const rate = finiteRate(value);
   const tone = fundingRateTone(value);
   return (
-    <span className={`pair-funding-rate-value pair-funding-rate-${tone}${strong ? " pair-funding-rate-strong" : ""}`}>
-      {signedPct(value, 4)}
+    <span
+      className={`pair-funding-rate-value pair-funding-rate-${tone}${strong ? " pair-funding-rate-strong" : ""}`}
+      title={rate === null ? missingTitle : undefined}
+    >
+      {rate === null ? "—" : signedPct(rate, 4)}
     </span>
   );
 }
@@ -4099,6 +4107,21 @@ function fundingPointBelongsTo(point: PairSpreadFundingPoint, leg: PairSpreadLeg
   return fundingLegKey(point.exchange, point.symbol, point.dex) === fundingLegKey(leg.exchange, leg.symbol, leg.dex);
 }
 
+export function fundingHistoryFailedForLeg(warnings: string[], leg: PairSpreadLegQuery | null | undefined): boolean {
+  if (!leg) return false;
+  const prefix = `${leg.exchange}:${leg.dex ? `${leg.dex}:` : ""}${leg.symbol} 历史资金费率失败`;
+  return warnings.some((warning) => warning.startsWith(prefix));
+}
+
+function missingFundingRateTitle(
+  leg: PairSpreadLegQuery | null | undefined,
+  warnings: string[],
+  requestFailed = false
+): string {
+  if (leg?.market_type === "spot") return "现货无资金费率";
+  return requestFailed || fundingHistoryFailedForLeg(warnings, leg) ? "该腿费率取数失败" : "该时点无结算";
+}
+
 function fundingRateColumnTitle(leg: PairSpreadLegQuery | null | undefined, fallback: string): ReactNode {
   if (!leg) {
     return fallback;
@@ -4106,7 +4129,7 @@ function fundingRateColumnTitle(leg: PairSpreadLegQuery | null | undefined, fall
   return (
     <span className="pair-funding-column-title">
       <span>
-        {leg.exchange === "hyperliquid" ? hyperliquidDexText(leg.dex) : exchangeLabels[leg.exchange] ?? leg.exchange} 费率
+        {leg.exchange === "hyperliquid" ? hyperliquidDexText(leg.dex) : exchangeLabels[leg.exchange] ?? leg.exchange} {leg.market_type === "spot" ? "现货" : "费率"}
       </span>
       <small>{leg.symbol}</small>
     </span>
@@ -4146,21 +4169,21 @@ function buildFundingRateDiffRowsFromHistory(
 
   const historyRows = [...rowsByTime.values()]
     .map((row) => {
-      const leftRate = finiteRate(row.left_rate_pct) ?? 0;
-      const rightRate = finiteRate(row.right_rate_pct) ?? 0;
+      const leftRate = finiteRate(row.left_rate_pct);
+      const rightRate = finiteRate(row.right_rate_pct);
       // 净费率按右侧费率减左侧费率，和价差方向保持一致。
       return {
         ...row,
         left_rate_pct: leftRate,
         right_rate_pct: rightRate,
-        net_rate_pct: rightRate - leftRate
+        net_rate_pct: leftRate === null && rightRate === null ? null : (rightRate ?? 0) - (leftRate ?? 0)
       };
     })
     .sort((a, b) => dayjs.utc(b.funding_time).valueOf() - dayjs.utc(a.funding_time).valueOf());
   return historyRows;
 }
 
-function buildFundingRateDiffRows(result: PairSpreadQueryResult | null): FundingRateDiffRow[] {
+export function buildFundingRateDiffRows(result: PairSpreadQueryResult | null): FundingRateDiffRow[] {
   if (!result) {
     return [];
   }
@@ -4177,15 +4200,13 @@ function buildFundingRateDiffRows(result: PairSpreadQueryResult | null): Funding
   if (!current || (leftRate === null && rightRate === null)) {
     return [];
   }
-  const currentLeftRate = leftRate ?? 0;
-  const currentRightRate = rightRate ?? 0;
   return [
     {
       funding_time: current.observed_at,
-      left_rate_pct: currentLeftRate,
-      right_rate_pct: currentRightRate,
-      // 当前快照缺一侧资金费率时按 0 处理，避免净费率展示为空。
-      net_rate_pct: currentRightRate - currentLeftRate,
+      left_rate_pct: leftRate,
+      right_rate_pct: rightRate,
+      // 仅计算净费率时将缺失的一侧按 0 处理。
+      net_rate_pct: (rightRate ?? 0) - (leftRate ?? 0),
       source: "current"
     }
   ];
@@ -4261,17 +4282,19 @@ function buildFundingRateTotalSummary(
   });
   const totals = filteredRows.reduce(
     (acc, row) => {
-      acc.left += finiteRate(row.left_rate_pct) ?? 0;
-      acc.right += finiteRate(row.right_rate_pct) ?? 0;
+      const leftRate = finiteRate(row.left_rate_pct);
+      const rightRate = finiteRate(row.right_rate_pct);
+      if (leftRate !== null) acc.left = (acc.left ?? 0) + leftRate;
+      if (rightRate !== null) acc.right = (acc.right ?? 0) + rightRate;
       acc.net += finiteRate(row.net_rate_pct) ?? 0;
       return acc;
     },
-    { left: 0, right: 0, net: 0 }
+    { left: null as number | null, right: null as number | null, net: 0 }
   );
   return {
     rows: filteredRows,
-    left_total_pct: filteredRows.length ? totals.left : null,
-    right_total_pct: filteredRows.length ? totals.right : null,
+    left_total_pct: result?.leg1.market_type === "spot" ? null : totals.left,
+    right_total_pct: result?.leg2.market_type === "spot" ? null : totals.right,
     net_total_pct: filteredRows.length ? totals.net : null,
     start_at: start?.toISOString() ?? null,
     end_at: end?.toISOString() ?? null,
@@ -4303,18 +4326,16 @@ function realtimeFundingPointToRow(point: PairSpreadRealtimeFundingPoint): Fundi
   if (leftRate === null && rightRate === null && netRate === null) {
     return null;
   }
-  const normalizedLeftRate = leftRate ?? 0;
-  const normalizedRightRate = rightRate ?? 0;
   return {
     funding_time: fundingTimeBucket(point.bucket_at),
-    left_rate_pct: normalizedLeftRate,
-    right_rate_pct: normalizedRightRate,
-    net_rate_pct: netRate ?? normalizedRightRate - normalizedLeftRate,
+    left_rate_pct: leftRate,
+    right_rate_pct: rightRate,
+    net_rate_pct: leftRate === null && rightRate === null ? null : netRate ?? (rightRate ?? 0) - (leftRate ?? 0),
     source: "realtime"
   };
 }
 
-function buildRealtimeFundingRateDiffRows(result: PairSpreadQueryResult | null): FundingRateDiffRow[] {
+export function buildRealtimeFundingRateDiffRows(result: PairSpreadQueryResult | null): FundingRateDiffRow[] {
   if (!result) {
     return [];
   }
@@ -4333,20 +4354,18 @@ function buildRealtimeFundingRateDiffRows(result: PairSpreadQueryResult | null):
   if (!current || (leftRate === null && rightRate === null)) {
     return [];
   }
-  const currentLeftRate = leftRate ?? 0;
-  const currentRightRate = rightRate ?? 0;
   return [
     {
       funding_time: current.observed_at,
-      left_rate_pct: currentLeftRate,
-      right_rate_pct: currentRightRate,
-      net_rate_pct: currentRightRate - currentLeftRate,
+      left_rate_pct: leftRate,
+      right_rate_pct: rightRate,
+      net_rate_pct: (rightRate ?? 0) - (leftRate ?? 0),
       source: "current"
     }
   ];
 }
 
-function buildMinuteFundingRateDiffRows(status: PairSpreadFundingRecordStatus | null): FundingRateDiffRow[] {
+export function buildMinuteFundingRateDiffRows(status: PairSpreadFundingRecordStatus | null): FundingRateDiffRow[] {
   if (!status?.watched) {
     return [];
   }
@@ -4358,13 +4377,11 @@ function buildMinuteFundingRateDiffRows(status: PairSpreadFundingRecordStatus | 
       if (leftRate === null && rightRate === null && netRate === null) {
         return null;
       }
-      const normalizedLeftRate = leftRate ?? 0;
-      const normalizedRightRate = rightRate ?? 0;
       return {
         funding_time: fundingTimeBucket(point.bucket_at),
-        left_rate_pct: normalizedLeftRate,
-        right_rate_pct: normalizedRightRate,
-        net_rate_pct: netRate ?? normalizedRightRate - normalizedLeftRate,
+        left_rate_pct: leftRate,
+        right_rate_pct: rightRate,
+        net_rate_pct: leftRate === null && rightRate === null ? null : netRate ?? (rightRate ?? 0) - (leftRate ?? 0),
         source: "minute_record" as const
       };
     })
@@ -4518,6 +4535,7 @@ export function PairMonitorPage() {
   const [fundingSummaryRows, setFundingSummaryRows] = useState<FundingRateDiffRow[] | null>(null);
   const [fundingSummaryLoading, setFundingSummaryLoading] = useState(false);
   const [fundingSummaryError, setFundingSummaryError] = useState("");
+  const [fundingSummaryRequestFailed, setFundingSummaryRequestFailed] = useState(false);
   const initialDayCompareLoadedRef = useRef(false);
   const savedPresetGroups = useMemo(() => groupSavedPairPresets(savedPresets), [savedPresets]);
   const normalizedSavedPresetSearch = savedPresetSearch.trim().toLowerCase();
@@ -4660,6 +4678,11 @@ export function PairMonitorPage() {
     [fundingRecordStatus]
   );
   const fundingSummaryActive = Boolean(fundingSummaryStart.trim() || fundingSummaryEnd.trim());
+  const fundingHistoryWarnings = (result?.warnings ?? []).filter((warning) => warning.includes("历史资金费率失败"));
+  const activeFundingWarnings = fundingSummaryActive ? fundingSummaryError.split("；") : fundingHistoryWarnings;
+  const activeFundingRequestFailed = fundingSummaryActive && fundingSummaryRequestFailed;
+  const leftMissingFundingTitle = missingFundingRateTitle(result?.leg1, activeFundingWarnings, activeFundingRequestFailed);
+  const rightMissingFundingTitle = missingFundingRateTitle(result?.leg2, activeFundingWarnings, activeFundingRequestFailed);
   const fundingSummarySourceRows = fundingSummaryActive ? fundingSummaryRows ?? [] : fundingDiffRows;
   const fundingRateTotalSummary = useMemo(
     () => buildFundingRateTotalSummary(fundingSummarySourceRows, result, fundingSummaryStart, fundingSummaryEnd),
@@ -4702,14 +4725,14 @@ export function PairMonitorPage() {
         dataIndex: "left_rate_pct",
         align: "right",
         width: 138,
-        render: (value: number | null) => <FundingRateValue value={value} />
+        render: (value: number | null) => <FundingRateValue value={value} missingTitle={leftMissingFundingTitle} />
       },
       {
         title: fundingRateColumnTitle(result?.leg2, "右侧费率"),
         dataIndex: "right_rate_pct",
         align: "right",
         width: 138,
-        render: (value: number | null) => <FundingRateValue value={value} />
+        render: (value: number | null) => <FundingRateValue value={value} missingTitle={rightMissingFundingTitle} />
       },
       {
         title: "净费率",
@@ -4719,7 +4742,7 @@ export function PairMonitorPage() {
         render: (value: number | null) => <FundingRateValue value={value} strong />
       }
     ],
-    [result?.leg1, result?.leg2]
+    [result?.leg1, result?.leg2, leftMissingFundingTitle, rightMissingFundingTitle]
   );
 
   const loadFundingRecordStatus = useCallback(async (pairResult: PairSpreadQueryResult) => {
@@ -5146,6 +5169,7 @@ export function PairMonitorPage() {
   useEffect(() => {
     setFundingSummaryRows(null);
     setFundingSummaryError("");
+    setFundingSummaryRequestFailed(false);
     setFundingSummaryStart("");
     setFundingSummaryEnd("");
     setFundingSummaryDraftStart("");
@@ -5158,6 +5182,7 @@ export function PairMonitorPage() {
     setFundingSummaryStart(nextStart);
     setFundingSummaryEnd(nextEnd);
     setFundingSummaryError("");
+    setFundingSummaryRequestFailed(false);
 
     if (!nextStart && !nextEnd) {
       setFundingSummaryRows(null);
@@ -5218,6 +5243,7 @@ export function PairMonitorPage() {
     } catch (exc) {
       setFundingSummaryRows([]);
       setFundingSummaryError(exc instanceof Error ? exc.message : String(exc));
+      setFundingSummaryRequestFailed(true);
     } finally {
       setFundingSummaryLoading(false);
     }
@@ -6261,11 +6287,11 @@ export function PairMonitorPage() {
                 <div className="pair-funding-summary-metrics">
                   <span>
                     <Typography.Text type="secondary">右侧合计</Typography.Text>
-                    <FundingRateValue value={fundingRateTotalSummary.right_total_pct} />
+                    <FundingRateValue value={fundingRateTotalSummary.right_total_pct} missingTitle={rightMissingFundingTitle} />
                   </span>
                   <span>
                     <Typography.Text type="secondary">左侧合计</Typography.Text>
-                    <FundingRateValue value={fundingRateTotalSummary.left_total_pct} />
+                    <FundingRateValue value={fundingRateTotalSummary.left_total_pct} missingTitle={leftMissingFundingTitle} />
                   </span>
                   <span>
                     <Typography.Text type="secondary">计入点数</Typography.Text>
@@ -6318,6 +6344,7 @@ export function PairMonitorPage() {
                       setFundingSummaryEnd("");
                       setFundingSummaryRows(null);
                       setFundingSummaryError("");
+                      setFundingSummaryRequestFailed(false);
                     }}
                   >
                     清空时间
@@ -6325,7 +6352,20 @@ export function PairMonitorPage() {
                 </div>
               </div>
               {fundingSummaryError ? (
-                <Alert type="warning" message={fundingSummaryError} showIcon />
+                <Alert
+                  type="warning"
+                  message={fundingSummaryError}
+                  description={fundingSummaryError.includes("历史资金费率失败") ? "合计和净费率只包含已取到的数据" : undefined}
+                  showIcon
+                />
+              ) : null}
+              {!fundingSummaryActive && fundingHistoryWarnings.length ? (
+                <Alert
+                  type="warning"
+                  message={fundingHistoryWarnings.join("；")}
+                  description="合计和净费率只包含已取到的数据"
+                  showIcon
+                />
               ) : null}
               {!fundingSummaryLoading && fundingRateTotalSummary.warning ? (
                 <Alert type="warning" message={fundingRateTotalSummary.warning} showIcon />
