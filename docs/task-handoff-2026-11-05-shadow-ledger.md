@@ -81,3 +81,18 @@
 - 线上状态未检查、未变更；没有 push、服务器连接、备份、部署或 WSL。默认 SHADOW_ENABLED=0。本地功能验证通过不代表生产性能通过，不开启生产。
 - 产物：`.pytest-tmp/round3c-*` 的日志/临时 SQLite 已忽略且不提交；所有既有产物保留。没有本轮未跟踪源文件遗留，提交后用 git status 复核。
 - 下一步：可从上述提交做独立只读审查；后续性能方案仍需 PM 决策，并另行取得锁定环境验收。不要自行节流、更改预算或启用生产。无依赖的新模块另开任务，本模块连续性使用本交接和详细报告末节。
+
+## 第三轮补充五本地交付（2026-11-05，第 23、25 条）
+
+本节取代前文的当前继续入口；第 24 条不改代码、不加补发。
+
+- 范围：快照发布时绑定机会版本，避免旧快照入队后身份刷新、消费时恢复旧机会；按 PM 第 25 条调整 stress 两项预算。指定工作树和分支不变，起始基线 `778817288167e092b6f28b2cab2e35acce33d771`。初始唯一用户 WIP 是任务书补充五，已原样纳入。
+- 分步本地提交：`9a64cbc test(shadow): reproduce stale queued snapshot publication`（先红及任务书）；`0019c3c fix(shadow): bind opportunity versions to published snapshots`；`8e38a59 test(shadow): apply approved stress timing budgets`。本交接与报告另作 docs 提交，见 git log。
+- 入口：`snapshot_consumers.py::PublishedSnapshot.opportunities_version`、`collector.py::_publish_to_slots`、`shadow_runtime.py::submit/run_inline_observer`。两个发布入口在无 await 的构造段捕获版本；submit 不再读取当前 store 版本。条件发布失配只计 `skipped_publications`，账本和持仓状态照常处理。默认版本 None 保留其他消费者的旧构造方式，但影子不允许缺版本快照回写展示。
+- 测试入口：`test_shadow_publication_regressions.py` 新增真实队列入队 → 真实 `_refresh_store` 清空 → 消费旧快照、无版本拒绝回写、inline 绑定版本；`test_snapshot_consumers.py` 检查版本不可变及历史消费者不变。既有 shadow 合成快照增加显式版本，旧断言全部保留。基准每轮断言没有弃发，保留真实发布开销。
+- 预算：stress 去掉 CPU 中位断言但保留该指标，墙钟中位 ≤30 ms，事件循环最大 ≤50 ms；其他预算不变。第 24 条保持持续弃发，不补发；本机基准只防退化，开启判断看生产灰度。
+- 验证原始汇总：先红 `1 failed, 4 deselected in 1.99s`；定向 `72 passed in 21.50s`；backend 全量 `2604 passed, 9 deselected, 12 warnings in 202.73s (0:03:22)`。警告均为既有 datetime.utcnow 弃用。Windows Python 3.12.10、venv=False，未安装依赖；默认 network/benchmark 排除不变。未改前端，未运行前端测试/构建。
+- 三次完整基准：`3 passed in 7.51s`、`3 passed in 7.40s`、`2 failed, 1 passed in 10.05s`。第三次 stress 墙钟中位 32.856 >30、loop 中位 5.863 >5、p95 11.514 >10；production loop 中位 7.474 >7。realistic 三次通过，所有 RSS <30 MiB。第二次 production 连续片段 71.940 ms（整轮累计 87.942 ms）按现有连续片段 ≤80 ms 口径通过。全部九条原始 benchmark 行、CPU 前负载、汇总与耗时分项见详细报告末节。
+- 当前结论：第 23、25 条实现及要求的验证/记录完成，但三次全部达标的性能门槛未通过；不重跑挑选、不继续放宽预算、不自行节流。下一步由 PM 决定性能方案；独立审查、锁定环境验收尚未做。无依赖的新模块另开任务。
+- 线上未检查、未变更。未 push、未连接服务器、未运行 WSL，未备份/部署/灰度。默认 SHADOW_ENABLED=0；未改数据库、Astro/arb-mvp、机会历史写入、配置和身份刷新业务逻辑。
+- 产物：`.pytest-tmp/round3e-*` 完整日志及临时数据库已忽略、未提交；既有产物保留。无新增未跟踪交付源文件；仅显式暂存本轮文件，最终以 git status 复核。
