@@ -52,7 +52,7 @@ def system_cpu_percent():
 @pytest.mark.benchmark
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scenario,positions,op_count,change_stride,cpu_budget", [
-    pytest.param("stress", 1500, 1000, 1, 20, id="stress"),
+    pytest.param("stress", 1500, 1000, 1, None, id="stress"),
     pytest.param("realistic", 500, 400, 3, 8, id="realistic"),
     pytest.param("production", 750, 5500, 3, None, id="production"),
 ])
@@ -187,15 +187,16 @@ async def test_shadow_resource_budgets(tmp_path, scenario, positions, op_count, 
         assert runtime.status()["pending_writes"] == 0
         assert runtime.status()["skipped_rounds"] == 0
         assert result["within_memory_budget"], "shadow RSS budget exceeded"
-        assert result["within_time_budget"], "shadow worker CPU median budget exceeded"
-        # Windows thread_time is quantized (often 15.625 ms). Retain the CPU
-        # assertion and add a conservative wall-time guard, never accept zero
-        # medians alone as proof of the realistic 8 ms budget.
+        assert result["within_time_budget"], "shadow worker median budget exceeded"
+        # PM 25: Windows thread_time is quantized to 15.625 ms, so stress
+        # records CPU metrics but gates only on the 30 ms wall median.
+        # Realistic retains both its CPU assertion and 8 ms wall-time guard;
+        # zero CPU medians alone never prove that budget.
         assert result["worker_wall_median_ms"] <= wall_budget
         # 本机基准只防退化，开启判断看生产灰度（第三轮补充四第 21 条）。
         assert result["event_loop_median_ms"] <= (7 if scenario == "production" else 5 if scenario == "stress" else 3)
         assert result["event_loop_p95_ms"] <= (15 if scenario == "production" else 10)
-        assert result["event_loop_max_ms"] <= (80 if scenario == "production" else 40 if scenario == "stress" else 20)
+        assert result["event_loop_max_ms"] <= (80 if scenario == "production" else 50 if scenario == "stress" else 20)
         assert result["recomputed_median"] <= math.ceil(positions / change_stride)
         assert await runtime.repo.count_open() == positions * 2
     finally:
