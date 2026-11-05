@@ -52,6 +52,25 @@ describe("OpportunityTable", () => {
     window.history.pushState({}, "", "/");
   });
 
+  it("renders mixed shadow annotations without dropping or reordering rows", () => {
+    const plain = { ...row, id: "plain", symbol: "PLAINUSDT", open_spread_pct: 0.1 };
+    const annotated = { ...row, id: "annotated", symbol: "MARKEDUSDT", fake_score: 2,
+      fake_flag: true, fake_reasons: ["median_outlier"], executable: true,
+      buy_routes: ["crossex"], sell_routes: ["native"] };
+    const last = { ...row, id: "last", symbol: "LASTUSDT", open_spread_pct: -0.1 };
+    const before = JSON.stringify(plain);
+    const { rerender } = render(<OpportunityTable opportunities={[plain, annotated, last]} loading={false} sortBy="open_spread_pct" sortOrder="desc" onSortChange={vi.fn()} />);
+    expect(Array.from(document.querySelectorAll("tbody tr[data-row-key]"),
+      (element) => element.getAttribute("data-row-key"))).toEqual(["plain", "annotated", "last"]);
+    expect(screen.getByText("PLAINUSDT")).toBeTruthy();
+    expect(screen.getByText("MARKEDUSDT")).toBeTruthy();
+    expect(screen.getByText("LASTUSDT")).toBeTruthy();
+    const plainText = document.querySelector('tr[data-row-key="plain"]')?.textContent;
+    rerender(<OpportunityTable opportunities={[plain, last]} loading={false} sortBy="open_spread_pct" sortOrder="desc" onSortChange={vi.fn()} />);
+    expect(document.querySelector('tr[data-row-key="plain"]')?.textContent).toBe(plainText);
+    expect(JSON.stringify(plain)).toBe(before);
+  });
+
   it("shows each leg's age and source metadata independently", async () => {
     render(<OpportunityTable opportunities={[{
       ...row,

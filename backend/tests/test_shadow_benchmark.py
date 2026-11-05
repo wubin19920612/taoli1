@@ -100,6 +100,7 @@ async def test_shadow_resource_budgets(tmp_path, scenario, positions, op_count, 
     runtime.catalog.entries = {("BINANCE", "FUTURE", f"C{i}", "") for i in range(positions)}
     await runtime.initialize(db)
     loop_times, cpus, walls, recomputed, captures, publishes = [], [], [], [], [], []
+    segments, selections, calculations, phases = [], [], [], []
 
     async def run(now, ops):
         store.mark_published(now)
@@ -110,6 +111,10 @@ async def test_shadow_resource_budgets(tmp_path, scenario, positions, op_count, 
         state = runtime.status()
         loop_times.append(state["last_duration_ms"])
         captures.append(state["capture_ms"])
+        segments.append(state["event_loop_max_segment_ms"])
+        selections.append(state["select_wall_ms"])
+        calculations.append(state["calculate_wall_ms"])
+        phases.append(state["worker_phases_ms"])
         publishes.append(state["publish_ms"])
         assert state["errors"] == 0
         return state
@@ -151,7 +156,16 @@ async def test_shadow_resource_budgets(tmp_path, scenario, positions, op_count, 
                   "publish_median_ms": statistics.median(publishes),
                   "event_loop_median_ms": statistics.median(loop_times),
                   "event_loop_p95_ms": sorted(loop_times)[math.ceil(len(loop_times) * .95) - 1],
-                  "event_loop_max_ms": max(loop_times),
+                  "event_loop_max_ms": max(segments) if scenario == "production" else max(loop_times),
+                  "event_loop_total_max_ms": max(loop_times),
+                  "select_wall_median_ms": statistics.median(selections),
+                  "calculate_wall_median_ms": statistics.median(calculations),
+                  "checkpoint_capture_segments_ms": checkpoint["capture_segments_ms"],
+                  "price_states": runtime.status()["scorer_price_states"],
+                  "worker_phase_medians_ms": {k: statistics.median(p[k] for p in phases) for k in phases[-1]},
+                  "checkpoint_worker_phases_ms": checkpoint["worker_phases_ms"],
+                  "asset_index_assets": len(runtime._asset_index),
+                  "display_cache_entries": len(runtime._display_cache),
                   "worker_cpu_median_ms": statistics.median(cpus),
                   "worker_cpu_mean_ms": statistics.mean(cpus),
                   "worker_wall_median_ms": statistics.median(walls),
