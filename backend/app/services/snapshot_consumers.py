@@ -21,6 +21,9 @@ class PublishedSnapshot:
     published_at: datetime
     markets: tuple[MarketSnapshot, ...]
     opportunities: tuple[Opportunity, ...]
+    # Bound by the publisher before enqueueing. Legacy consumers need no token;
+    # shadow may process their snapshots but cannot publish without one.
+    opportunities_version: int | None = None
 
 
 class LatestSnapshotSlot:

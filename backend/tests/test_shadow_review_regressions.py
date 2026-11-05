@@ -50,7 +50,8 @@ async def test_disabled_runtime_never_dispatches_or_mutates_shadow_table(monkeyp
         await db.set_trace_callback(statements.append)
         monkeypatch.setattr(asyncio, "to_thread", record_dispatch)
         await runtime.initialize(db)
-        await runtime.consume(PublishedSnapshot(1, NOW + timedelta(days=31), (), ()))
+        await runtime.consume(PublishedSnapshot(1, NOW + timedelta(days=31), (), (),
+            opportunities_version=runtime.store.opportunities_version))
         stop = asyncio.Event()
         stop.set()
         await runtime.run_inline_observer(stop)
@@ -194,14 +195,17 @@ async def test_capture_errors_are_rate_limited_and_counted_by_category(monkeypat
     monkeypatch.setattr(module, "freeze_snapshot", broken)
     with caplog.at_level(logging.ERROR):
         for _ in range(3):
-            assert await runtime.submit(PublishedSnapshot(1, NOW, (), ())) is None
+            assert await runtime.submit(PublishedSnapshot(1, NOW, (), (),
+                opportunities_version=runtime.store.opportunities_version)) is None
         assert len(caplog.records) == 1
         assert runtime.status()["error_counts"] == {"capture": 3}
         clock[0] += 299
-        await runtime.submit(PublishedSnapshot(1, NOW, (), ()))
+        await runtime.submit(PublishedSnapshot(1, NOW, (), (),
+            opportunities_version=runtime.store.opportunities_version))
         assert len(caplog.records) == 1
         clock[0] += 1
-        await runtime.submit(PublishedSnapshot(1, NOW, (), ()))
+        await runtime.submit(PublishedSnapshot(1, NOW, (), (),
+            opportunities_version=runtime.store.opportunities_version))
         assert len(caplog.records) == 2
         assert runtime.status()["errors"] == 5
         counts = runtime.status()["error_counts"]
@@ -240,7 +244,8 @@ async def test_publish_failure_is_isolated_and_close_still_drains(tmp_path, monk
     try:
         with caplog.at_level(logging.ERROR):
             for _ in range(3):
-                await runtime.consume(PublishedSnapshot(runtime.store.generation, NOW, (), ()))
+                await runtime.consume(PublishedSnapshot(runtime.store.generation, NOW, (), (),
+                    opportunities_version=runtime.store.opportunities_version))
         assert len(caplog.records) == 1
         assert runtime.status()["error_counts"] == {"publish": 3}
     finally:
@@ -271,7 +276,8 @@ async def test_cancelled_close_waits_for_worker_before_closing_connection(tmp_pa
     runtime.db.close = recorded_close
     markets, op = pair()
     try:
-        await runtime.submit(PublishedSnapshot(1, NOW, tuple(markets), (op,)))
+        await runtime.submit(PublishedSnapshot(1, NOW, tuple(markets), (op,),
+            opportunities_version=runtime.store.opportunities_version))
         await wait_started(entered)
         closing = asyncio.create_task(runtime.aclose())
         await asyncio.sleep(0)
@@ -319,7 +325,8 @@ async def test_runtime_error_paths_use_independent_category_limits(monkeypatch, 
                 if category == "initialize":
                     await runtime.initialize(db)
                 else:
-                    await runtime.consume(PublishedSnapshot(1, NOW, (), ()))
+                    await runtime.consume(PublishedSnapshot(1, NOW, (), (),
+                        opportunities_version=runtime.store.opportunities_version))
         assert len(caplog.records) == 1
         assert runtime.status()["error_counts"] == {category: 3}
         # A different category is not suppressed by the first category's window.

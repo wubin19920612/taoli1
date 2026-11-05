@@ -161,7 +161,8 @@ async def test_runtime_matches_full_path_combined_seeded_sequence(tmp_path):
             full.process(quotes, ops, now, annotations)
             await full.flush(repo)
             store.mark_published(now)
-            await runtime.consume(PublishedSnapshot(store.generation, now, tuple(quotes), tuple(ops)))
+            await runtime.consume(PublishedSnapshot(store.generation, now, tuple(quotes), tuple(ops),
+                opportunities_version=runtime.store.opportunities_version))
             assert runtime.errors == 0
             assert runtime.ledger.open_count == full.open_count
             assert runtime.ledger.dropped == full.dropped
@@ -235,7 +236,8 @@ async def test_bmt_first_threshold_crossing_already_has_frozen_leg(tmp_path):
             op = build_directional_opportunity(quotes[0], quotes[3], mode="FF")
             assert (op.open_spread_pct >= .2) == (minute == 16)
             store.mark_published(now)
-            await runtime.consume(PublishedSnapshot(store.generation, now, tuple(quotes), (op,)))
+            await runtime.consume(PublishedSnapshot(store.generation, now, tuple(quotes), (op,),
+                opportunities_version=runtime.store.opportunities_version))
             if minute < 16:
                 assert runtime.ledger.open_count == 0
                 assert store.get_opportunities()[0] is op
@@ -261,7 +263,8 @@ async def test_unrelated_changed_time_and_new_peer_delay_are_at_most_sixty_secon
         quotes = [market(price=100 if second == 0 else 101, timestamp=now)]
         full.score(quotes, [], now)
         store.mark_published(now)
-        await runtime.consume(PublishedSnapshot(store.generation, now, tuple(quotes), ()))
+        await runtime.consume(PublishedSnapshot(store.generation, now, tuple(quotes), (),
+            opportunities_version=runtime.store.opportunities_version))
         key = market_key(quotes[0])
         if second < 60:
             assert runtime.scorer.prices[key].changed == NOW.timestamp()
@@ -275,7 +278,8 @@ async def test_unrelated_changed_time_and_new_peer_delay_are_at_most_sixty_secon
                   (("binance", 100), ("bitget", 104), ("okx", 100))]
         op = build_directional_opportunity(quotes[0], quotes[1], mode="FF")
         store.mark_published(now)
-        await runtime.consume(PublishedSnapshot(store.generation, now, tuple(quotes), (op,)))
+        await runtime.consume(PublishedSnapshot(store.generation, now, tuple(quotes), (op,),
+            opportunities_version=runtime.store.opportunities_version))
         assert ("median_outlier" in store.get_opportunities()[0].fake_reasons) == (second == 120)
     assert runtime.errors == 0
     await runtime.aclose()
@@ -296,22 +300,26 @@ async def test_filtered_below_threshold_clears_plateau_but_absence_preserves_it(
         now = NOW + timedelta(minutes=minute)
         full.score([], [op], now)
         store.mark_published(now)
-        await runtime.consume(PublishedSnapshot(store.generation, now, (), (op,)))
+        await runtime.consume(PublishedSnapshot(store.generation, now, (), (op,),
+            opportunities_version=runtime.store.opportunities_version))
     assert "spread_plateau" in store.get_opportunities()[0].fake_reasons
     now += timedelta(seconds=1)
     full.score([], [], now)
     store.mark_published(now)
-    await runtime.consume(PublishedSnapshot(store.generation, now, (), ()))
+    await runtime.consume(PublishedSnapshot(store.generation, now, (), (),
+        opportunities_version=runtime.store.opportunities_version))
     assert op.id in full.spreads and op.id in runtime.scorer.spreads
     low = op.model_copy(update={"open_spread_pct": .1})
     full.score([], [low], now)
     store.mark_published(now)
-    await runtime.consume(PublishedSnapshot(store.generation, now, (), (low,)))
+    await runtime.consume(PublishedSnapshot(store.generation, now, (), (low,),
+        opportunities_version=runtime.store.opportunities_version))
     assert not full.spreads and not runtime.scorer.spreads
     assert store.get_opportunities()[0] is low
     now += timedelta(seconds=1)
     expected = full.score([], [op], now)
     store.mark_published(now)
-    await runtime.consume(PublishedSnapshot(store.generation, now, (), (op,)))
+    await runtime.consume(PublishedSnapshot(store.generation, now, (), (op,),
+        opportunities_version=runtime.store.opportunities_version))
     assert store.get_opportunities()[0].fake_reasons == expected[op.id]["fake_reasons"] == []
     await runtime.aclose()

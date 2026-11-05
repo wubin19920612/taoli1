@@ -234,6 +234,12 @@ async def test_published_snapshot_contains_filtered_models_and_history_keeps_the
     assert item.opportunities and len(item.markets) == 2
     assert item.opportunities == tuple(result.opportunities)
     assert item.opportunities[0] is result.opportunities[0]
+    assert item.opportunities_version == collector.store.opportunities_version == 1
+    collector.store.set_opportunities([])
+    assert collector.store.opportunities_version == 2
+    assert item.opportunities_version == 1
+    with pytest.raises(FrozenInstanceError):
+        item.opportunities_version = 2
     before = [op.model_dump() for op in item.opportunities]
     result.opportunities.clear()
     await collector.record_history(item)

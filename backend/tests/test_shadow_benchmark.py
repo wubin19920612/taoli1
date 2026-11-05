@@ -104,7 +104,8 @@ async def test_shadow_resource_budgets(tmp_path, scenario, positions, op_count, 
 
     async def run(now, ops):
         store.mark_published(now)
-        snapshot = PublishedSnapshot(store.generation, now, tuple(markets), tuple(ops))
+        snapshot = PublishedSnapshot(store.generation, now, tuple(markets), tuple(ops),
+            opportunities_version=runtime.store.opportunities_version)
         # Runtime reports synchronous event-loop occupancy, excluding await time.
         # Includes immutable capture, dispatch and generation-checked publication.
         await runtime.consume(snapshot)
@@ -117,6 +118,7 @@ async def test_shadow_resource_budgets(tmp_path, scenario, positions, op_count, 
         phases.append(state["worker_phases_ms"])
         publishes.append(state["publish_ms"])
         assert state["errors"] == 0
+        assert state["skipped_publications"] == 0
         return state
 
     try:

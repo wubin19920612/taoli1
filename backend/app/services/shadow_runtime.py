@@ -131,8 +131,9 @@ class ShadowRuntime:
             self.skipped_rounds += 1
             return None
         try:
-            # Capture before any dispatch/yield, including sliced market capture.
-            opportunities_version = self.store.opportunities_version
+            # The queue may predate an identity refresh. Never pair old contents
+            # with the store's current version when consuming a queued snapshot.
+            opportunities_version = snapshot.opportunities_version
             held_ids, held_keys = self._held
             related = tuple(op for op in snapshot.opportunities
                             if op.open_spread_pct >= self.ledger.minimum or op.id in held_ids)
@@ -352,7 +353,8 @@ class ShadowRuntime:
             if self.store.generation > generation:
                 generation = self.store.generation
                 await self.submit(PublishedSnapshot(generation, self.store.published_at,
-                    tuple(self.store.get_markets()), tuple(self.store.get_opportunities())))
+                    tuple(self.store.get_markets()), tuple(self.store.get_opportunities()),
+                    opportunities_version=self.store.opportunities_version))
             try:
                 await asyncio.wait_for(stop.wait(), 0.1)
             except TimeoutError:

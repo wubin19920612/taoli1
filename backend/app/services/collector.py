@@ -316,6 +316,7 @@ class MarketCollector:
             published_at=self.store.published_at,
             markets=tuple(markets),
             opportunities=tuple(opportunities),
+            opportunities_version=self.store.opportunities_version,
         )
         for slot in self.snapshot_slots:
             slot.put(snapshot)

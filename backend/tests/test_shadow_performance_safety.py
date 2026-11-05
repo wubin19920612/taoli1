@@ -43,7 +43,8 @@ async def test_cancelled_consumer_keeps_guard_and_status_until_worker_finishes()
             await original_save(rows)
 
         runtime.repo.save_batch = slow_save
-        task = asyncio.create_task(runtime.consume(PublishedSnapshot(1, NOW, tuple(markets), (op,))))
+        task = asyncio.create_task(runtime.consume(PublishedSnapshot(1, NOW, tuple(markets), (op,),
+            opportunities_version=runtime.store.opportunities_version)))
         await wait_started(entered)
         # Worker has modified ledger but has not published this round's status.
         before = runtime.status()
@@ -53,7 +54,8 @@ async def test_cancelled_consumer_keeps_guard_and_status_until_worker_finishes()
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
-        await runtime.consume(PublishedSnapshot(2, NOW, (), ()))
+        await runtime.consume(PublishedSnapshot(2, NOW, (), (),
+            opportunities_version=runtime.store.opportunities_version))
         assert runtime.status()["skipped_rounds"] == 1
         assert not runtime._active.done()
         closing = asyncio.create_task(runtime.aclose())
@@ -92,7 +94,8 @@ async def test_worker_uses_detached_inputs_and_captured_catalogue():
         markets, op = pair()
         runtime.catalog.entries = {("BINANCE", "FUTURE", "BTC", "")}
         runtime.store.mark_published(NOW)
-        task = await runtime.submit(PublishedSnapshot(1, NOW, tuple(markets), (op,)))
+        task = await runtime.submit(PublishedSnapshot(1, NOW, tuple(markets), (op,),
+            opportunities_version=runtime.store.opportunities_version))
         await wait_started(entered)
         markets[0].bid = markets[0].ask = 999
         markets[0].estimated_fields.append("bid")
@@ -118,7 +121,8 @@ async def test_worker_uses_detached_inputs_and_captured_catalogue():
         runtime.store.mark_published(NOW)
         sentinel = op.model_copy(update={"fake_score": 123})
         runtime.store.set_opportunities([sentinel])
-        await runtime.consume(PublishedSnapshot(1, NOW, (), ()))
+        await runtime.consume(PublishedSnapshot(1, NOW, (), (),
+            opportunities_version=runtime.store.opportunities_version))
         assert runtime.store.get_opportunities()[0] is sentinel
     finally:
         release.set()
@@ -172,7 +176,8 @@ async def test_chunks_retry_before_next_generation_and_encode_off_loop(monkeypat
 
         monkeypatch.setattr(repositories.json, "dumps", checked_dumps)
         runtime.repo.save_batch = fail_second
-        await runtime.consume(PublishedSnapshot(1, NOW, tuple(markets), tuple(ops)))
+        await runtime.consume(PublishedSnapshot(1, NOW, tuple(markets), tuple(ops),
+            opportunities_version=runtime.store.opportunities_version))
         assert failed and batches == [200, 200]
         assert runtime.status()["pending_writes"] == 210
         assert await runtime.repo.count_open() == 200
@@ -180,7 +185,8 @@ async def test_chunks_retry_before_next_generation_and_encode_off_loop(monkeypat
         now = NOW + timedelta(seconds=1)
         for quote in markets:
             quote.timestamp, quote.bid, quote.ask = now, 100, 100
-        await runtime.consume(PublishedSnapshot(2, now, tuple(markets), ()))
+        await runtime.consume(PublishedSnapshot(2, now, tuple(markets), (),
+            opportunities_version=runtime.store.opportunities_version))
         assert batches == [200, 200, 200, 10, 200, 200, 10]
         assert runtime.status()["pending_writes"] == runtime.status()["open_count"] == 0
         assert len(await runtime.repo.list_trades(limit=500, status="closed")) == 410

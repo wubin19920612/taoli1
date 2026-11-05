@@ -76,7 +76,8 @@ async def test_runtime_preserves_published_models_and_isolates_failed_writes(cap
         markets, op = pair()
         store.set_opportunities([op])
         store.mark_published(NOW)
-        snapshot = PublishedSnapshot(store.generation, NOW, tuple(markets), (op,))
+        snapshot = PublishedSnapshot(store.generation, NOW, tuple(markets), (op,),
+            opportunities_version=runtime.store.opportunities_version)
         await runtime.consume(snapshot)
         assert op.fake_score is None and op.buy_routes == []
         assert store.get_opportunities()[0].fake_score == 0
@@ -89,13 +90,15 @@ async def test_runtime_preserves_published_models_and_isolates_failed_writes(cap
         closing = tuple(m.model_copy(update={"timestamp": now, "bid": 100, "ask": 100}) for m in markets)
         with caplog.at_level(logging.ERROR):
             for _ in range(3):
-                await runtime.consume(PublishedSnapshot(2, now, closing, ()))
+                await runtime.consume(PublishedSnapshot(2, now, closing, (),
+                    opportunities_version=runtime.store.opportunities_version))
         assert runtime.errors == 3
         assert sum("shadow consumer failed" in r.message for r in caplog.records) == 1
         assert len(runtime.ledger.pending) == 2
         assert store.get_opportunities()  # older generation never overwrites newer store
         runtime.repo.save_batch = original_save
-        await runtime.consume(PublishedSnapshot(2, now, closing, ()))
+        await runtime.consume(PublishedSnapshot(2, now, closing, (),
+            opportunities_version=runtime.store.opportunities_version))
         assert not runtime.ledger.pending
         assert len(await runtime.repo.list_trades(status="closed")) == 2
     finally:

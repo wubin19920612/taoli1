@@ -46,7 +46,8 @@ async def test_full_capture_yields_every_thousand_and_guards_single_flight(monke
     runtime = ShadowRuntime(Settings(shadow_enabled=True), store)
     related, op = pair()
     background = [market(symbol=f"BG{i}", raw_symbol=f"BG{i}") for i in range(2501)]
-    snapshot = PublishedSnapshot(1, NOW, tuple(related + background), (op,))
+    snapshot = PublishedSnapshot(1, NOW, tuple(related + background), (op,),
+        opportunities_version=runtime.store.opportunities_version)
     calls, widths, current_width = [], [], [0]
     original_sleep, original_values = asyncio.sleep, module._market_values
 
@@ -58,7 +59,8 @@ async def test_full_capture_yields_every_thousand_and_guards_single_flight(monke
         widths.append(current_width[0])
         current_width[0] = 0
         calls.append(delay)
-        assert await runtime.submit(PublishedSnapshot(2, NOW, (), ())) is None
+        assert await runtime.submit(PublishedSnapshot(2, NOW, (), (),
+            opportunities_version=runtime.store.opportunities_version)) is None
         # Later shards may see newer history. Current related prices must stay
         # detached, so this cannot turn the current opening into an outlier.
         related[1].bid = related[1].ask = 999
@@ -112,7 +114,8 @@ async def test_mixed_list_preserves_objects_order_api_serialization_and_alerts(t
     low2 = op.model_copy(update={"id": "unrelated2", "open_spread_pct": -.1})
     original_dump = low.model_dump(mode="json")
     store.mark_published(NOW)
-    await runtime.consume(PublishedSnapshot(store.generation, NOW, tuple(quotes), (low, op, low2)))
+    await runtime.consume(PublishedSnapshot(store.generation, NOW, tuple(quotes), (low, op, low2),
+        opportunities_version=runtime.store.opportunities_version))
     mixed = store.get_opportunities()
     assert [o.id for o in mixed] == [low.id, op.id, low2.id]
     assert mixed[0] is low and mixed[2] is low2 and mixed[1] is not op

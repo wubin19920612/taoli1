@@ -57,6 +57,66 @@ async def test_queued_snapshot_before_identity_refresh_cannot_restore_old_opport
         assert await runtime.repo.count_open() == 2
         assert runtime._held[0] == frozenset({op.id})
         assert runtime.errors == 0
+        assert queued.opportunities_version == 1
+    finally:
+        await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_unversioned_snapshot_processes_ledger_without_publishing(tmp_path):
+    store = SnapshotStore()
+    runtime = ShadowRuntime(Settings(shadow_enabled=True,
+        database_url="sqlite:///" + str(tmp_path / "unversioned.db")), store)
+    await runtime.initialize(None)
+    markets, op = pair()
+    store.mark_published(NOW)
+    try:
+        # Four-argument construction remains valid for legacy consumers, but
+        # shadow must never infer its source version from the current store.
+        await runtime.consume(PublishedSnapshot(store.generation, NOW, tuple(markets), (op,)))
+        assert store.get_opportunities() == []
+        assert store.opportunities_version == 0
+        assert runtime.status()["skipped_publications"] == 1
+        assert runtime.status()["open_count"] == await runtime.repo.count_open() == 2
+        assert runtime.errors == 0
+    finally:
+        await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_inline_observer_binds_version_before_submit(tmp_path, monkeypatch):
+    from app.api.routes_market_identities import _refresh_store
+    from app.services.market_validation_review import MarketValidationService
+
+    store = SnapshotStore()
+    runtime = ShadowRuntime(Settings(shadow_enabled=True,
+        database_url="sqlite:///" + str(tmp_path / "inline-version.db")), store)
+    await runtime.initialize(None)
+    markets, op = pair()
+    store.set_all_markets(markets)
+    store.set_markets(markets)
+    store.set_opportunities([op])
+    store.mark_published(NOW)
+    stop = asyncio.Event()
+    original_submit = runtime.submit
+
+    async def refresh_before_submit(snapshot):
+        assert snapshot.opportunities_version == 1
+        assert snapshot.opportunities == (op,)
+        _refresh_store(MarketValidationService(None, store))
+        task = await original_submit(snapshot)
+        await task
+        stop.set()
+        return task
+
+    monkeypatch.setattr(runtime, "submit", refresh_before_submit)
+    try:
+        await asyncio.wait_for(runtime.run_inline_observer(stop), timeout=5)
+        assert store.get_opportunities() == []
+        assert store.opportunities_version == 2
+        assert runtime.status()["skipped_publications"] == 1
+        assert runtime.status()["open_count"] == 2
+        assert runtime.errors == 0
     finally:
         await runtime.aclose()
 
@@ -76,7 +136,8 @@ async def test_publish_failure_preserves_held_snapshot_and_closes_missing_opport
     try:
         store.mark_published(NOW)
         monkeypatch.setattr(store, "set_opportunities", fail_publish)
-        await runtime.consume(PublishedSnapshot(store.generation, NOW, tuple(markets), (op,)))
+        await runtime.consume(PublishedSnapshot(store.generation, NOW, tuple(markets), (op,),
+            opportunities_version=runtime.store.opportunities_version))
         assert await runtime.repo.count_open() == 2
         assert runtime.status()["error_counts"]["publish"] == 1
         held_after_open = runtime._held
@@ -86,7 +147,8 @@ async def test_publish_failure_preserves_held_snapshot_and_closes_missing_opport
         now = NOW + timedelta(seconds=1)
         closing = tuple(m.model_copy(update={"timestamp": now, "bid": 100, "ask": 100}) for m in markets)
         store.mark_published(now)
-        await runtime.consume(PublishedSnapshot(store.generation, now, closing, ()))
+        await runtime.consume(PublishedSnapshot(store.generation, now, closing, (),
+            opportunities_version=runtime.store.opportunities_version))
         rows = await runtime.repo.list_trades()
         assert len(rows) == 2
         assert all(row["exit_reason"] == "converged" for row in rows)
@@ -127,7 +189,8 @@ async def test_identity_refresh_during_shadow_round_cannot_restore_old_opportuni
 
     monkeypatch.setattr(asyncio, "to_thread", paused_dispatch)
     try:
-        task = await runtime.submit(PublishedSnapshot(generation, NOW, tuple(markets), (op,)))
+        task = await runtime.submit(PublishedSnapshot(generation, NOW, tuple(markets), (op,),
+            opportunities_version=runtime.store.opportunities_version))
         await asyncio.wait_for(entered.wait(), timeout=5)
         _refresh_store(validator)
         assert store.generation == generation
@@ -148,12 +211,14 @@ async def test_identity_refresh_during_shadow_round_cannot_restore_old_opportuni
         now = NOW + timedelta(seconds=1)
         closing = tuple(m.model_copy(update={"timestamp": now, "bid": 100, "ask": 100}) for m in markets)
         store.mark_published(now)
-        await runtime.consume(PublishedSnapshot(store.generation, now, closing, ()))
+        await runtime.consume(PublishedSnapshot(store.generation, now, closing, (),
+            opportunities_version=runtime.store.opportunities_version))
         assert runtime.status()["open_count"] == 0
         assert all(row["exit_reason"] == "converged" for row in await runtime.repo.list_trades())
         assert store.opportunities_version == 3
         store.mark_published(now)
-        await runtime.consume(PublishedSnapshot(store.generation, now, closing, ()))
+        await runtime.consume(PublishedSnapshot(store.generation, now, closing, (),
+            opportunities_version=runtime.store.opportunities_version))
         assert store.opportunities_version == 4
         assert runtime.status()["skipped_publications"] == 1
     finally:
