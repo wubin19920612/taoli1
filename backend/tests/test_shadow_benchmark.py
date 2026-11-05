@@ -190,9 +190,10 @@ async def test_shadow_resource_budgets(tmp_path, scenario, positions, op_count, 
         # assertion and add a conservative wall-time guard, never accept zero
         # medians alone as proof of the realistic 8 ms budget.
         assert result["worker_wall_median_ms"] <= wall_budget
-        assert result["event_loop_median_ms"] <= (5 if scenario in {"stress", "production"} else 3)
+        # 本机基准只防退化，开启判断看生产灰度（第三轮补充四第 21 条）。
+        assert result["event_loop_median_ms"] <= (7 if scenario == "production" else 5 if scenario == "stress" else 3)
         assert result["event_loop_p95_ms"] <= (15 if scenario == "production" else 10)
-        assert result["event_loop_max_ms"] <= (40 if scenario == "production" else 20)
+        assert result["event_loop_max_ms"] <= (80 if scenario == "production" else 40 if scenario == "stress" else 20)
         assert result["recomputed_median"] <= math.ceil(positions / change_stride)
         assert await runtime.repo.count_open() == positions * 2
     finally:
