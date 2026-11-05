@@ -30,6 +30,66 @@ def selected_inputs(markets, opportunities, ledger, scorer, now):
     return [m for m in markets if market_key(m) in keys or (m.asset_id or m.symbol) in assets], related
 
 
+@pytest.mark.asyncio
+async def test_round4_runtime_full_crossings_baseline_quotas_and_retry(tmp_path):
+    from app.db.database import connect_database
+    from app.services.shadow_runtime import ShadowRuntime
+    from app.services.snapshot_consumers import PublishedSnapshot
+    from app.services.snapshot_store import SnapshotStore
+    from shadow_helpers import pair
+
+    settings = Settings(shadow_enabled=True, shadow_max_open=10,
+                        database_url="sqlite:///" + str(tmp_path / "round4-equal.db"))
+    store = SnapshotStore()
+    runtime = ShadowRuntime(settings, store)
+    full = ShadowLedger(settings)
+    db = await connect_database(settings.sqlite_path)
+    markets, base = pair()
+    a = base.model_copy(update={"id": "A", "buy_volume_24h_usdt": 100})
+    b = base.model_copy(update={"id": "B", "buy_volume_24h_usdt": 100})
+    c = base.model_copy(update={"id": "C", "buy_volume_24h_usdt": None})
+    retry = base.model_copy(update={"id": "retry"})
+    low = retry.model_copy(update={"open_spread_pct": .1})
+    # Baseline, short absence, new crossings hitting both liquidity quotas,
+    # stale-event cancellation by a filtered-out low quote, close, re-cross.
+    steps = [(0, [a], 2, 101), (1, [], 2, 101), (59, [a], 2, 101),
+             (60, [], 2, 101), (119, [a, b, c], 2, 101),
+             (120, [retry], 1, 101), (121, [low], 2, 101),
+             (122, [retry, b, c], 2, 101), (123, [], 2, 100),
+             (124, [b, c], 2, 101), (184, [b, c, retry], 2, 101)]
+    try:
+        await runtime.initialize(db)
+        for second, ops, leg_count, price in steps:
+            now = NOW + timedelta(seconds=second)
+            quotes = [m.model_copy(update={"timestamp": now}) for m in markets]
+            quotes[1] = quotes[1].model_copy(update={"bid": price, "ask": price})
+            quotes = quotes[:leg_count]
+            full.process(quotes, ops, now)
+            store.mark_published(now)
+            await runtime.consume(PublishedSnapshot(store.generation, now, tuple(quotes), tuple(ops),
+                opportunities_version=store.opportunities_version))
+            assert runtime.errors == 0
+            assert full.open_count == runtime.ledger.open_count
+            assert full.dropped_by_reason == runtime.status()["dropped_by_reason"]
+            assert full.baseline_skipped == runtime.status()["baseline_skipped"]
+            assert full.last_above == runtime.ledger.last_above
+            assert full.retry_events == runtime.ledger.retry_events
+            assert set(full.positions) == set(runtime.ledger.positions)
+            assert full.cooldowns == runtime.ledger.cooldowns
+            if second == 59:
+                assert full.open_count == 0 and full.baseline_skipped == 1
+            if second == 119:
+                assert full.open_count == 2 and full.dropped_by_reason["liquidity"] == 2
+            if second in (122, 124):
+                assert "retry" not in full.positions
+            if second == 184:
+                assert full.open_count == 4
+                assert full.dropped == sum(full.dropped_by_reason.values()) == 3
+    finally:
+        await runtime.aclose()
+        await db.close()
+
+
 @pytest.mark.parametrize("capacity,initial_count", [
     pytest.param(6000, 3, id="below-capacity-control"),
     pytest.param(6, 3, id="small-capacity-counterexample"),
