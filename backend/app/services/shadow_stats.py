@@ -27,7 +27,8 @@ def event_day(row):
 
 
 def statistics(rows, seed=20261103):
-    rows = sorted((r for r in rows if r.get("closed_at") and r.get("net_bps") is not None),
+    rows = sorted((r for r in rows if r.get("closed_at") and r.get("net_bps") is not None
+                   and r.get("exit_reason") != "retired"),
                   key=lambda r: (r["closed_at"], r["id"]))
     n = len(rows)
     if not n:
@@ -90,6 +91,6 @@ def buckets(rows, dims, include_fake=False):
         raise ValueError("Invalid shadow dimensions")
     groups = defaultdict(list)
     for row in rows:
-        if row.get("closed_at") and (include_fake or not row["fake_flag"]):
+        if row.get("closed_at") and row.get("exit_reason") != "retired" and (include_fake or not row["fake_flag"]):
             groups[tuple(row[dim] for dim in dims)].append(row)
     return [{"dimensions": dict(zip(dims, key)), **statistics(group)} for key, group in groups.items()]

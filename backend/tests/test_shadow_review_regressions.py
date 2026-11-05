@@ -20,12 +20,13 @@ from app.services.shadow_runtime import ShadowRuntime
 from app.services.snapshot_consumers import PublishedSnapshot
 from app.services.snapshot_store import SnapshotStore
 from auth_helpers import IsolatedSessionLookup, TEST_TOTP_SECRET, seed_sessions, session_headers
-from shadow_helpers import NOW, pair
+from shadow_helpers import NOW, pair, empty_baseline
 
 
 async def seed_trades(db):
     await initialize_shadow_schema(db)
     book = ShadowLedger(Settings(shadow_enabled=True))
+    empty_baseline(book)
     markets, op = pair()
     book.process(markets, [op], NOW)
     closed = NOW + timedelta(seconds=1)
@@ -258,6 +259,7 @@ async def test_cancelled_close_waits_for_worker_before_closing_connection(tmp_pa
     runtime = ShadowRuntime(Settings(shadow_enabled=True, database_url="sqlite:///" + str(tmp_path / "close.db")),
                             SnapshotStore())
     await runtime.initialize(None)
+    empty_baseline(runtime.ledger)
     entered, release = threading.Event(), threading.Event()
     events = []
     save, close = runtime.repo.save_batch, runtime.db.close

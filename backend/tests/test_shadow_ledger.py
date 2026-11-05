@@ -8,11 +8,11 @@ from app.db.repositories import ShadowTradeRepository
 from app.db.schema import initialize_schema, initialize_shadow_schema
 from app.services.shadow_ledger import ShadowLedger, liquidity_tier, spread_tier
 from app.services.spread_engine import midpoint_spread_pct
-from shadow_helpers import NOW, pair
+from shadow_helpers import NOW, pair, empty_baseline
 
 
 def ledger(**kwargs):
-    return ShadowLedger(Settings(shadow_enabled=True, **kwargs))
+    return empty_baseline(ShadowLedger(Settings(shadow_enabled=True, **kwargs)))
 
 
 def fresh(markets, now, *, sell_price=None):
@@ -215,7 +215,7 @@ async def test_variant_funding_recovers_after_interrupted_split_batches(tmp_path
             m.funding_rate_pct = rate
             m.funding_interval_hours = 1
             m.funding_next_time = NOW + timedelta(seconds=30)
-        book.process(markets, [op.model_copy(update={"id": str(i)}) for i in range(101)], NOW)
+        book.process(markets, [op.model_copy(update={"id": str(i), "symbol": f"COIN{i}"}) for i in range(101)], NOW)
         await book.flush(repo)
         now = NOW + timedelta(seconds=31)
         quotes = fresh(markets, now)

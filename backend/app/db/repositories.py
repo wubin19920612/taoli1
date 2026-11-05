@@ -32,6 +32,7 @@ from app.models.index_component import (
 )
 from app.models.market import MarketType
 from app.models.opportunity import Opportunity, OpportunityType
+from app.services.shadow_ledger import STRATEGY_VERSION
 from app.models.astro_preadd import AstroPreaddSettings
 from app.models.funding_arbitrage import FundingArbitrageSettings
 from app.models.phone_alert import PhonePriceAlertEvent, PhonePriceAlertRule
@@ -83,12 +84,26 @@ class ShadowTradeRepository:
     async def restore(self, now):
         async with self.db.execute("SELECT payload FROM shadow_trades WHERE closed_at IS NULL") as cursor:
             rows = [json.loads(r["payload"]) for r in await cursor.fetchall()]
+        retired = []
+        current = []
+        for row in rows:
+            if row.get("strategy_version") == "shadow-v1":
+                row.update(exit_reason="retired", closed_at=now.isoformat(), net_bps=None)
+                retired.append(row)
+            else:
+                current.append(row)
+        # Use the existing bounded transactional writer. Interrupted retirement
+        # is idempotent: already committed rows are closed and retain their time.
+        for offset in range(0, len(retired), 200):
+            await self.save_batch(retired[offset:offset + 200])
         cutoff = (now - timedelta(minutes=10)).isoformat()
         async with self.db.execute("""SELECT opportunity_id, MAX(closed_at) AS closed_at
-            FROM shadow_trades WHERE closed_at >= ? GROUP BY opportunity_id""", (cutoff,)) as cursor:
+            FROM shadow_trades WHERE closed_at >= ?
+            AND COALESCE(json_extract(payload, '$.exit_reason'), '') != 'retired'
+            GROUP BY opportunity_id""", (cutoff,)) as cursor:
             cooldowns = {r["opportunity_id"]: datetime.fromisoformat(r["closed_at"]).timestamp()
                          for r in await cursor.fetchall()}
-        return rows, cooldowns
+        return current, cooldowns
 
     async def list_trades(self, limit=100, status=None):
         where = " WHERE closed_at IS NULL" if status == "open" else " WHERE closed_at IS NOT NULL" if status == "closed" else ""
@@ -104,17 +119,19 @@ class ShadowTradeRepository:
         async with self.db.execute("SELECT COUNT(*) FROM shadow_trades WHERE closed_at IS NULL") as cursor:
             return (await cursor.fetchone())[0]
 
-    async def closed_events(self, since, until, include_fake=False):
+    async def closed_events(self, since, until, include_fake=False, strategy_version=STRATEGY_VERSION):
         # Statistics do not need recovery state or full market metadata. Project
         # only event fields rather than decoding every multi-kilobyte payload.
         fields = ("net_bps", "spread_bps", "slippage_bps", "fees_bps", "funding_bps",
                   "pair", "spread_tier", "liquidity", "routes", "executable", "strategy_version")
         projection = ", ".join(f"json_extract(payload, '$.{name}') AS {name}" for name in fields)
         query = f"SELECT id, symbol, closed_at, variant, fake_flag, {projection} FROM shadow_trades WHERE closed_at >= ? AND closed_at <= ?"
+        query += " AND json_extract(payload, '$.strategy_version') = ?"
+        query += " AND COALESCE(json_extract(payload, '$.exit_reason'), '') != 'retired'"
         if not include_fake:
             query += " AND fake_flag = 0"
         query += " ORDER BY closed_at, id"
-        async with self.db.execute(query, (since.isoformat(), until.isoformat())) as cursor:
+        async with self.db.execute(query, (since.isoformat(), until.isoformat(), strategy_version)) as cursor:
             rows = [dict(r) for r in await cursor.fetchall()]
         for row in rows:
             row["fake_flag"] = bool(row["fake_flag"])

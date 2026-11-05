@@ -140,6 +140,33 @@ def test_expired_crossing_metadata_does_not_accumulate():
     assert not book.retry_events
 
 
+@pytest.mark.parametrize("kind", ["lt500", "unknown", "spot", "symbol"])
+def test_partial_variant_restore_uses_remaining_row_quota(kind):
+    maximum = 30 if kind == "unknown" else 15 if kind == "spot" else 10
+    book = ready_book(shadow_max_open=maximum)
+    markets, op = pair()
+    if kind in {"lt500", "unknown"}:
+        op = op.model_copy(update={"buy_volume_24h_usdt": 100 if kind == "lt500" else None})
+    if kind == "spot":
+        markets = [m.model_copy(update={"market_type": "spot"}) for m in markets]
+        op = op.model_copy(update={"buy_market_type": "spot", "sell_market_type": "spot"})
+    count = 3 if kind == "symbol" else 1
+    tick(book, 0, [op.model_copy(update={"id": str(i)}) for i in range(count)], markets)
+    tick(book, 1, [], markets, sell=100.4)
+    open_rows = [r for r in book.pending.values() if not r["closed_at"]]
+    assert len(open_rows) == count
+    restored = ShadowLedger(Settings(shadow_enabled=True, shadow_max_open=maximum))
+    restored.restore(deepcopy(open_rows), dict(book.cooldowns))
+    tick(restored, 2, [], markets)
+    tick(restored, 3, [op.model_copy(update={"id": "new"})], markets)
+    assert restored.open_count == count + 2
+    assert restored.dropped == 0
+    tick(restored, 4, [], markets, sell=100)
+    assert restored.open_count == 0
+    assert not restored.symbol_counts and not restored.liquidity_counts
+    assert restored.spot_count == 0
+
+
 def test_startup_registers_existing_spread_without_opening():
     book = ShadowLedger(Settings(shadow_enabled=True))
     markets, opportunity = pair()
@@ -255,6 +282,9 @@ async def test_status_and_bucket_api_strategy_selection(tmp_path):
             assert state["baseline_skipped"] == 0
             assert state["dropped_by_reason"] == dict.fromkeys(
                 ("capacity", "liquidity", "market_type", "symbol"), 0)
+            snapshot = rt.status()
+            snapshot["dropped_by_reason"]["capacity"] = 99
+            assert rt.status()["dropped_by_reason"]["capacity"] == 0
             params = {"since": NOW.isoformat(), "until": (NOW + timedelta(seconds=2)).isoformat()}
             current = await client.get("/api/shadow/buckets", params=params)
             old = await client.get("/api/shadow/buckets", params={**params, "strategy_version": "shadow-v1"})

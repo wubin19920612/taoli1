@@ -12,7 +12,7 @@ from app.services.fake_opportunity import MarketChanges, opportunity_keys, prepa
 from app.services.spread_engine import _market_observed_at
 
 VARIANTS = ("conv-0.1", "conv-half")
-STRATEGY_VERSION = "shadow-v1"
+STRATEGY_VERSION = "shadow-v2"
 
 
 def liquidity_tier(buy, sell):
@@ -121,6 +121,17 @@ class ShadowLedger:
         self.cooldowns = {}
         self.open_count = 0
         self.dropped = 0
+        self.dropped_by_reason = dict.fromkeys(("capacity", "liquidity", "market_type", "symbol"), 0)
+        self.baseline_skipped = 0
+        self.baseline_pending = True
+        self.last_above = {}
+        self.retry_events = set()
+        # Quotas count variant rows, including partially closed/restored pairs.
+        self.liquidity_limits = {"lt500": self.maximum * 30 // 100, "unknown": self.maximum // 10}
+        self.spot_limit = self.maximum // 5
+        self.liquidity_counts = defaultdict(int)
+        self.symbol_counts = defaultdict(int)
+        self.spot_count = 0
         self.pending = PendingRows()
         self.checkpoint_at = 0.0
         self.by_market = defaultdict(set)
@@ -142,6 +153,15 @@ class ShadowLedger:
         self.positions = positions
         self.open_count = len(rows)
         self.cooldowns = cooldowns
+        # Crossing state belongs to this process, never persisted in trade rows.
+        self.baseline_pending = True
+        self.last_above.clear()
+        self.retry_events.clear()
+        self.liquidity_counts.clear()
+        self.symbol_counts.clear()
+        self.spot_count = 0
+        for row in rows:
+            self._count_row(row, 1)
         self.by_market.clear()
         self.deadlines.clear()
         self.timers.clear()
@@ -150,6 +170,28 @@ class ShadowLedger:
             for market in position.keys:
                 self.by_market[market].add(key)
             self._schedule(key, position, position.opened)
+
+    def _count_row(self, row, delta):
+        for counts, key in ((self.liquidity_counts, row["liquidity"]),
+                            (self.symbol_counts, row["symbol"])):
+            counts[key] += delta
+            if not counts[key]:
+                del counts[key]
+        if row["buy_market_key"]["market_type"] == row["sell_market_key"]["market_type"] == "spot":
+            self.spot_count += delta
+
+    def _quota_reason(self, op, tier):
+        # One event has one primary refusal reason, in total/category order.
+        size = len(VARIANTS)
+        if self.open_count + size > self.maximum:
+            return "capacity"
+        if tier in self.liquidity_limits and self.liquidity_counts.get(tier, 0) + size > self.liquidity_limits[tier]:
+            return "liquidity"
+        if op.buy_market_type == op.sell_market_type == "spot" and self.spot_count + size > self.spot_limit:
+            return "market_type"
+        if self.symbol_counts.get(op.symbol, 0) + size > 6:
+            return "symbol"
+        return None
 
     def _schedule(self, key, position, ts):
         due = min(min(position.last_seen) + 600, position.opened + 172800)
@@ -200,12 +242,19 @@ class ShadowLedger:
                     schedule["interval"] = (market.funding_interval_hours or 0) * 3600
         return total, unknown
 
-    def process(self, markets, opportunities, now, annotations=None, prepared=None, changed=None):
+    def process(self, markets, opportunities, now, annotations=None, prepared=None, changed=None,
+                below_threshold=()):
         if not self.enabled:
             return
         ts = now.timestamp()
         prepared = prepared if prepared is not None else prepare_markets(markets, now)
         self.cooldowns = {k: v for k, v in self.cooldowns.items() if ts - v < 600}
+        # Keep only the last 60 seconds of reached-threshold ids, not lifetime
+        # history. A missing observation does not assert a below-threshold price;
+        # pending quote retries survive short gaps, but explicit low quotes cancel.
+        self.last_above = {k: v for k, v in self.last_above.items() if ts - v < 60}
+        self.retry_events.intersection_update(self.last_above)
+        self.retry_events.difference_update(below_threshold)
         checkpoint = ts >= self.checkpoint_at
         changed = self.changes.update(prepared) if changed is None else changed
         affected = set()
@@ -275,6 +324,7 @@ class ShadowLedger:
                     row["net_bps"] = row["spread_bps"] - row["slippage_bps"] - row["fees_bps"] + row["funding_bps"]
                     closed.append(row)
                     self.open_count -= 1
+                    self._count_row(row, -1)
                     self.cooldowns[op_id] = ts
                 else:
                     remaining.append(row)
@@ -297,7 +347,27 @@ class ShadowLedger:
                 self._queue(position)
             self.checkpoint_at = ts + 60
         for op in opportunities:
-            if op.open_spread_pct < self.minimum or op.id in self.positions or op.id in self.cooldowns:
+            if op.open_spread_pct < self.minimum:
+                self.retry_events.discard(op.id)
+                continue
+            crossing = op.id not in self.last_above
+            self.last_above[op.id] = ts
+            if self.baseline_pending:
+                self.baseline_skipped += int(crossing)
+                continue
+            if crossing:
+                self.retry_events.add(op.id)
+            if op.id in self.positions or op.id in self.cooldowns:
+                self.retry_events.discard(op.id)
+                continue
+            if op.id not in self.retry_events:
+                continue
+            tier = liquidity_tier(op.buy_volume_24h_usdt, op.sell_volume_24h_usdt)
+            reason = self._quota_reason(op, tier)
+            if reason:
+                self.retry_events.discard(op.id)
+                self.dropped += 1
+                self.dropped_by_reason[reason] += 1
                 continue
             keys = opportunity_keys(op)
             info = [prepared.get(k) for k in keys]
@@ -307,11 +377,7 @@ class ShadowLedger:
             ages = [ts - i[1] for i in info]
             if any(age < 0 or age > 10 for age in ages):
                 continue
-            if self.open_count + len(VARIANTS) > self.maximum:
-                self.dropped += 1
-                continue
             fields = annotations.get(op.id, {}) if annotations else {}
-            tier = liquidity_tier(op.buy_volume_24h_usdt, op.sell_volume_24h_usdt)
             routes = [fields.get("buy_routes", op.buy_routes), fields.get("sell_routes", op.sell_routes)]
             common = dict(
                 opportunity_id=op.id, symbol=op.symbol, buy_market_key=market_key_json(keys[0]),
@@ -339,7 +405,12 @@ class ShadowLedger:
                 self.by_market[key].add(op.id)
             self._schedule(op.id, position, ts)
             self.open_count += len(VARIANTS)
+            for row in position.rows:
+                self._count_row(row, 1)
+            self.retry_events.discard(op.id)
             self._queue(position)
+
+        self.baseline_pending = False
 
         # Replaced deadlines must not accumulate across millions of quote ticks.
         if len(self.timers) > max(64, 2 * len(self.positions)):

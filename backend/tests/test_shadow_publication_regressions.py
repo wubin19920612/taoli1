@@ -10,7 +10,7 @@ from app.services.fake_opportunity import market_key
 from app.services.shadow_runtime import ShadowRuntime
 from app.services.snapshot_consumers import PublishedSnapshot
 from app.services.snapshot_store import SnapshotStore
-from shadow_helpers import NOW, pair
+from shadow_helpers import NOW, pair, empty_baseline
 
 
 @pytest.mark.asyncio
@@ -27,6 +27,7 @@ async def test_queued_snapshot_before_identity_refresh_cannot_restore_old_opport
     runtime = ShadowRuntime(Settings(shadow_enabled=True,
         database_url="sqlite:///" + str(tmp_path / "queued-refresh.db")), store)
     await runtime.initialize(None)
+    empty_baseline(runtime.ledger)
     shadow_slot, history_slot = LatestSnapshotSlot(), LatestSnapshotSlot()
     recorder = SimpleNamespace(record=AsyncMock())
     collector = MarketCollector([], store, snapshot_slots=[shadow_slot, history_slot],
@@ -68,6 +69,7 @@ async def test_unversioned_snapshot_processes_ledger_without_publishing(tmp_path
     runtime = ShadowRuntime(Settings(shadow_enabled=True,
         database_url="sqlite:///" + str(tmp_path / "unversioned.db")), store)
     await runtime.initialize(None)
+    empty_baseline(runtime.ledger)
     markets, op = pair()
     store.mark_published(NOW)
     try:
@@ -92,6 +94,7 @@ async def test_inline_observer_binds_version_before_submit(tmp_path, monkeypatch
     runtime = ShadowRuntime(Settings(shadow_enabled=True,
         database_url="sqlite:///" + str(tmp_path / "inline-version.db")), store)
     await runtime.initialize(None)
+    empty_baseline(runtime.ledger)
     markets, op = pair()
     store.set_all_markets(markets)
     store.set_markets(markets)
@@ -127,6 +130,7 @@ async def test_publish_failure_preserves_held_snapshot_and_closes_missing_opport
     runtime = ShadowRuntime(Settings(shadow_enabled=True,
         database_url="sqlite:///" + str(tmp_path / "publish-failure.db")), store)
     await runtime.initialize(None)
+    empty_baseline(runtime.ledger)
     markets, op = pair()
     original_set = store.set_opportunities
 
@@ -172,6 +176,7 @@ async def test_identity_refresh_during_shadow_round_cannot_restore_old_opportuni
     runtime = ShadowRuntime(Settings(shadow_enabled=True,
         database_url="sqlite:///" + str(tmp_path / "identity-refresh.db")), store)
     await runtime.initialize(None)
+    empty_baseline(runtime.ledger)
     markets, op = pair()
     store.set_all_markets(markets)
     store.set_markets(markets)

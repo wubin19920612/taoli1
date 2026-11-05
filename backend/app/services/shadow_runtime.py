@@ -29,7 +29,7 @@ _op_projection = itemgetter(*(DISPLAY_FIELDS.index(k) for k in OP_FIELDS[:-3]))
 _DISPLAY_TEMPLATE = Opportunity.model_construct()
 
 
-FrozenSnapshot = namedtuple("FrozenSnapshot", "generation published_at markets opportunities market_lists op_lists history related_assets clear_spreads", defaults=((), frozenset(), ()))
+FrozenSnapshot = namedtuple("FrozenSnapshot", "generation published_at markets opportunities market_lists op_lists history related_assets clear_spreads below_threshold", defaults=((), frozenset(), (), ()))
 
 
 def freeze_snapshot(snapshot, previous=None):
@@ -141,7 +141,8 @@ class ShadowRuntime:
             # Freeze presentation input before yielding, including mutable lists.
             frozen, self._input_cache = freeze_snapshot(
                 PublishedSnapshot(snapshot.generation, snapshot.published_at, (), related), self._input_cache)
-            frozen = frozen._replace(clear_spreads=clear_spreads)
+            frozen = frozen._replace(clear_spreads=clear_spreads, below_threshold=tuple(
+                op.id for op in snapshot.opportunities if op.open_spread_pct < self.ledger.minimum))
             entries = frozenset(self.catalog.entries)
             catalog_status = (self.catalog.updated_at, len(entries), self.catalog.errors)
             validations = tuple(op.validation for op in related)
@@ -272,6 +273,7 @@ class ShadowRuntime:
 
     def _calculate(self, snapshot, entries):
         history, assets, clear_spreads = snapshot.history, snapshot.related_assets, snapshot.clear_spreads
+        below_threshold = snapshot.below_threshold
         payloads = snapshot.opportunities
         lists = snapshot.op_lists
         # These fixed-width tuples come exclusively from freeze_snapshot's
@@ -281,7 +283,7 @@ class ShadowRuntime:
                   for values, fields in zip(snapshot.markets, snapshot.market_lists)),
             tuple(tuple.__new__(OpportunityInput, _op_projection(values) + fields[-3:])
                   for values, fields in zip(payloads, lists)))
-        annotations = asyncio.run(self._process(snapshot, entries, history, assets, clear_spreads))
+        annotations = asyncio.run(self._process(snapshot, entries, history, assets, clear_spreads, below_threshold))
         display, cache, display_changed = [], {}, False
         if annotations is not None:
             for op, values, fields in zip(snapshot.opportunities, payloads, lists):
@@ -305,7 +307,7 @@ class ShadowRuntime:
             self._display_cache = cache
         return (display if annotations is not None else None), {**self._worker_status(), "display_changed": display_changed}
 
-    async def _process(self, snapshot, entries, history=(), assets=None, clear_spreads=()):
+    async def _process(self, snapshot, entries, history=(), assets=None, clear_spreads=(), below_threshold=()):
         if not self.ledger.enabled:
             return None
         annotations = None
@@ -338,7 +340,8 @@ class ShadowRuntime:
             self._phase_times["routes_ms"] = (perf_counter() - started) * 1000
             started = perf_counter()
             if self.repo is not None and self.ledger.enabled:
-                self.ledger.process(snapshot.markets, snapshot.opportunities, snapshot.published_at, annotations, prepared, changed)
+                self.ledger.process(snapshot.markets, snapshot.opportunities, snapshot.published_at, annotations, prepared, changed,
+                                    below_threshold=below_threshold)
                 await self.ledger.flush(self.repo)
             self._phase_times["ledger_flush_ms"] = (perf_counter() - started) * 1000
         except Exception:
@@ -364,6 +367,8 @@ class ShadowRuntime:
         return {"enabled": self.ledger.enabled, "ready": self.restored,
                 "open_count": self.ledger.open_count if self.ledger.enabled else self.stored_open_count,
                 "dropped": self.ledger.dropped, "errors": self.errors,
+                "dropped_by_reason": dict(self.ledger.dropped_by_reason),
+                "baseline_skipped": self.ledger.baseline_skipped,
                 "pending_writes": len(self.ledger.pending), "scorer_dropped": self.scorer.dropped,
                 "scorer_price_states": len(self.scorer.prices),
                 "held": (frozenset(self.ledger.positions), frozenset(self.ledger.by_market)),
@@ -374,6 +379,7 @@ class ShadowRuntime:
         counts = self.error_log.counts()
         return {"catalog_updated_at": None, "catalog_entries": 0, "catalog_errors": 0,
                 "last_duration_ms": None, **self._published, "skipped_rounds": self.skipped_rounds,
+                "dropped_by_reason": dict(self._published["dropped_by_reason"]),
                 "skipped_publications": self.skipped_publications,
                 "errors": sum(counts.values()), "error_counts": counts,
                 "catalog_errors": self.catalog.errors}

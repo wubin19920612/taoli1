@@ -173,7 +173,7 @@ async def test_runtime_matches_full_path_combined_seeded_sequence(tmp_path):
     # Cross up/down, partial variant exit, missing/stale legs, disappeared ops,
     # max-open refusal, settlement at 30s, checkpoint and restart at 62s,
     # cooldown refusals and reopen after 600s are in one continuous sequence.
-    steps = [0, 5, 10, 20, 31, 61, 62, 100, 200, 610, 611, 672, 1220, 1280]
+    steps = [-1, 0, 5, 10, 20, 31, 61, 62, 100, 200, 610, 611, 672, 1220, 1280]
 
     def normalized(rows):
         values = []
@@ -195,6 +195,10 @@ async def test_runtime_matches_full_path_combined_seeded_sequence(tmp_path):
                     spread = .3 if second == 5 else .05 if second < 20 else .5
                 if name == "C" and second >= 100:
                     spread = 3 if second == 100 else .05
+                if name == "C" and second < 10:
+                    # Cross after A releases capacity; a v2 refusal at t=0
+                    # must not be silently retried once capacity frees.
+                    spread = .05
                 if name == "D" and second < 20:
                     spread = .05
                 legs = [market(ex, price * (1 + (spread / 100 if leg else 0)),
@@ -215,6 +219,8 @@ async def test_runtime_matches_full_path_combined_seeded_sequence(tmp_path):
             # must not influence any ledger accounting or diagnostic annotation.
             quotes.extend(market(symbol=f"BG{i}", raw_symbol=f"BG{i}", timestamp=now)
                           for i in range(20))
+            if second == -1:
+                ops = []  # Empty startup baseline; the original lifecycle follows.
             annotations = scorer.score(quotes, ops, now)
             for op in ops:
                 annotations[op.id].update(runtime.worker_catalog.fields(op))

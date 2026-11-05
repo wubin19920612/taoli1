@@ -14,7 +14,7 @@ from app.services.shadow_runtime import ShadowRuntime, freeze_snapshot
 from app.services.snapshot_consumers import PublishedSnapshot
 from app.services.snapshot_store import SnapshotStore
 from app.services.spread_engine import build_directional_opportunity
-from shadow_helpers import NOW, market, pair
+from shadow_helpers import NOW, market, pair, empty_baseline
 
 
 async def wait_started(event):
@@ -31,6 +31,7 @@ async def test_cancelled_consumer_keeps_guard_and_status_until_worker_finishes()
     try:
         await initialize_schema(db)
         await runtime.initialize(db)
+        empty_baseline(runtime.ledger)
         markets, op = pair()
         runtime.store.mark_published(NOW)
         original_save = runtime.repo.save_batch
@@ -90,6 +91,7 @@ async def test_worker_uses_detached_inputs_and_captured_catalogue():
     try:
         await initialize_schema(db)
         await runtime.initialize(db)
+        empty_baseline(runtime.ledger)
         runtime._calculate = blocked
         markets, op = pair()
         runtime.catalog.entries = {("BINANCE", "FUTURE", "BTC", "")}
@@ -152,6 +154,7 @@ async def test_chunks_retry_before_next_generation_and_encode_off_loop(monkeypat
     try:
         await initialize_schema(db)
         await runtime.initialize(db)
+        empty_baseline(runtime.ledger)
         markets, ops = [], []
         for i in range(205):
             legs = [market(ex, price, symbol=f"X{i}USDT", raw_symbol=f"X{i}USDT")
@@ -198,6 +201,7 @@ async def test_chunks_retry_before_next_generation_and_encode_off_loop(monkeypat
 
 def test_incremental_ledger_handles_funding_stale_and_checkpoint_without_new_quotes():
     ledger = ShadowLedger(Settings(shadow_enabled=True))
+    empty_baseline(ledger)
     markets, op = pair()
     for quote, rate in zip(markets, (.01, .03)):
         quote.funding_next_time = NOW + timedelta(seconds=5)
@@ -221,6 +225,7 @@ def test_incremental_ledger_handles_funding_stale_and_checkpoint_without_new_quo
 
 def test_market_index_uses_exact_dex_and_timers_stay_bounded():
     ledger = ShadowLedger(Settings(shadow_enabled=True))
+    empty_baseline(ledger)
     buy = market("binance")
     xyz = market("hyperliquid", 101, raw_symbol="xyz:BTC", dex="xyz")
     abc = market("hyperliquid", 101, raw_symbol="abc:BTC", dex="abc")

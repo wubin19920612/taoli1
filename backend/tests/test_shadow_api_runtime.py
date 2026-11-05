@@ -13,7 +13,7 @@ from app.services.shadow_ledger import ShadowLedger
 from app.services.snapshot_consumers import PublishedSnapshot
 from app.services.snapshot_store import SnapshotStore
 from auth_helpers import IsolatedSessionLookup, TEST_TOTP_SECRET, session_headers
-from shadow_helpers import NOW, pair
+from shadow_helpers import NOW, pair, empty_baseline
 
 
 @pytest.mark.asyncio
@@ -45,6 +45,7 @@ async def test_api_auth_validation_and_empty_disabled_status(tmp_path):
                 Settings(shadow_enabled=True, database_url="sqlite:///" + path), SnapshotStore())
             await app.state.shadow_runtime.initialize(db)
             book = ShadowLedger(Settings(shadow_enabled=True))
+            empty_baseline(book)
             markets, op = pair()
             book.process(markets, [op], NOW)
             await book.flush(app.state.shadow_runtime.repo)
@@ -73,6 +74,7 @@ async def test_runtime_preserves_published_models_and_isolates_failed_writes(cap
     try:
         await initialize_schema(db)
         await runtime.initialize(db)
+        empty_baseline(runtime.ledger)
         markets, op = pair()
         store.set_opportunities([op])
         store.mark_published(NOW)

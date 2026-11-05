@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.db.repositories import ShadowTradeRepository
 from app.services.shadow_stats import DIMENSIONS, buckets
+from app.services.shadow_ledger import STRATEGY_VERSION
 
 router = APIRouter(prefix="/shadow", tags=["shadow"])
 
@@ -56,7 +57,8 @@ async def trades(request: Request, limit: int = Query(100, ge=1, le=500),
 
 @router.get("/buckets")
 async def get_buckets(request: Request, dims: str = "variant,pair", since: datetime | None = None,
-                      until: datetime | None = None, include_fake: bool = False):
+                      until: datetime | None = None, include_fake: bool = False,
+                      strategy_version: str = STRATEGY_VERSION):
     dimensions = [s.strip() for s in dims.split(",") if s.strip()]
     if not set(dimensions) <= DIMENSIONS or len(dimensions) != len(set(dimensions)):
         raise HTTPException(400, "无效或重复的统计维度")
@@ -66,7 +68,8 @@ async def get_buckets(request: Request, dims: str = "variant,pair", since: datet
         raise HTTPException(400, "时间范围必须包含时区且起点不晚于终点")
     if not runtime(request).ledger.enabled:
         return []
-    rows = await read_committed(request, "closed_events", since.astimezone(UTC), until.astimezone(UTC), include_fake)
+    rows = await read_committed(request, "closed_events", since.astimezone(UTC), until.astimezone(UTC), include_fake,
+                                strategy_version)
     try:
         return await asyncio.to_thread(buckets, rows, dimensions, include_fake)
     except Exception:

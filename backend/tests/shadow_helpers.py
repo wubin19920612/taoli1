@@ -1,9 +1,16 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from app.models.market import MarketSnapshot
 from app.services.spread_engine import build_directional_opportunity
 
 NOW = datetime(2026, 11, 3, tzinfo=UTC)
+
+
+def empty_baseline(book, now=NOW):
+    """Prepare a v2 ledger for tests whose subject is a subsequent new event."""
+    book.process([], [], now - timedelta(seconds=1))
+    assert book.open_count == 0
+    return book
 
 
 def market(exchange="binance", price=100, **kwargs):
