@@ -5193,6 +5193,21 @@ body {
   grid-column: auto;
 }
 
+@media (min-width: 1201px) {
+  .pair-funding-grid > *,
+  .pair-funding-grid > .pair-funding-diff-card > * {
+    min-width: 0;
+  }
+
+  .pair-funding-grid > .pair-funding-diff-card:only-child {
+    grid-column: 1 / -1;
+  }
+
+  .pair-funding-grid > .pair-funding-diff-card .pair-funding-summary-panel {
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  }
+}
+
 .pair-spread-points-card {
   grid-column: 1 / -1;
 }
