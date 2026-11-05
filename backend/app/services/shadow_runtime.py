@@ -226,13 +226,19 @@ class ShadowRuntime:
         annotations, status, cpu_ms, wall_ms = await asyncio.to_thread(self._work, frozen, entries)
         resumed = perf_counter()
         display_changed = status.pop("display_changed", False)
-        if self.store.generation == generation and annotations is not None:
-            if display_changed or validations != self._validation_cache:
-                for validation, target in zip(validations, annotations):
-                    target.__dict__["validation"] = validation
-            self._validation_cache = validations
-            by_id = {op.id: op for op in annotations}
-            self.store.set_opportunities([by_id.get(op.id, op) for op in originals])
+        # Ledger progress must survive a failed presentation publication: the
+        # next round needs these keys even if the opportunity has disappeared.
+        self._held = status.pop("held", self._held)
+        try:
+            if self.store.generation == generation and annotations is not None:
+                if display_changed or validations != self._validation_cache:
+                    for validation, target in zip(validations, annotations):
+                        target.__dict__["validation"] = validation
+                self._validation_cache = validations
+                by_id = {op.id: op for op in annotations}
+                self.store.set_opportunities([by_id.get(op.id, op) for op in originals])
+        except Exception:
+            self.error("publish")
         status.update(catalog_updated_at=catalog_status[0], catalog_entries=catalog_status[1],
                       catalog_errors=catalog_status[2], worker_cpu_ms=cpu_ms + select_cpu, worker_wall_ms=wall_ms + select_wall,
                       select_wall_ms=select_wall, calculate_wall_ms=wall_ms)
@@ -244,7 +250,6 @@ class ShadowRuntime:
         status["last_duration_ms"] = self.last_duration_ms
         status["capture_ms"] = dispatch_ms
         status["publish_ms"] = self.last_duration_ms - dispatch_ms
-        self._held = status.pop("held", self._held)
         self._published = status
 
     def _work(self, snapshot, entries):
