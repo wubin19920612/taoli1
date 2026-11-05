@@ -392,3 +392,177 @@ npm.cmd test -- --reporter=dot --maxWorkers=2 --minWorkers=2
 Git 范围检查：原报告前缀与合并前完全一致，本轮仅末尾追加；冲突全部解决，保留两父提交；除目标分支变更外，仅包含本轮必要的影子测试迁移、矩阵补充及报告/交接，未包含测试输出、依赖目录、数据库或其他任务文件。`git diff --check` 和暂存差异检查通过。提交号以本分支最终 `git log -1` 为准，交接见 [task-handoff-2026-11-05-shadow-ledger.md](task-handoff-2026-11-05-shadow-ledger.md)。
 
 按本次明确范围，没有 push、连接服务器、备份、部署、线上验证或运行 WSL。认证与功能回归通过，压力性能基准未通过；后续本模块复核与新模块工作请按交接范围分别继续。
+
+
+## PM 第三轮：测试先行，触发第 11 条停止（2026-11-05）
+
+本轮基线 `b6c999f`，分支 `codex/shadow-ledger`，工作树 `.worktrees/shadow-ledger`。用户已有未提交改动仅为任务书「PM decisions 第三轮」和「第三轮补充」，原文完整随首个提交 `824f771` 一起提交。首个提交还包含等价性反例与 production 基准；没有实现提交，生产代码与基线逐文件相同。
+
+**结论：未完成第三轮功能验收，已按第 11 条停止实现。** 发现除第 10 条 frozen_leg 采样差异以外的容量准入依赖。停止后只完成用户指定的基线验证、证据归档和本地提交，没有自行决定扩容、淘汰规则或降低等价性标准。
+
+### 新阻塞：全局 PriceState 容量影响相关资产评分
+
+入口：`backend/app/services/fake_opportunity.py:104` 的默认 `max_markets=6000`，`:149` 达到上限时丢弃新市场。该上限由所有资产共同占用，不只由相关机会占用；12,000 市场也无法全部各自保有 PriceState。`score` 的新市场准入依赖不相关市场在分钟内的出现顺序。
+
+`test_shadow_prefilter_equivalence.py` 以固定随机种子 `20261105` 构造三轮，测试内全量对照与按第 1/8/9 条选择的候选路径调用同一个现有 scorer/ledger：
+
+1. 分钟边界：两条路径都收到 5997 个市场。
+2. +1 秒：新增三个不相关市场，全量路径分配剩余三个名额；分钟采样路径不处理它们。
+3. +2 秒：新相关资产在 Binance/Bitget/OKX 的价格为 100/104/100，形成可开仓机会。全量路径因容量满而丢弃三个目标市场；候选路径纳入同资产全部三个市场并命中 median_outlier。
+
+两边开仓数量和时间一致，但全量 `fake_score=0, fake_flag=false, fake_reasons=[]`，候选 `fake_score=2, fake_flag=true, fake_reasons=[median_outlier]`，开仓行保存的 fake 元数据不一致。这会改变默认排除假机会的统计集合。缩小到容量 6 的最小反例也失败；未到容量的对照通过。
+
+这是 **median_outlier 的精确等价性失败**，不是 frozen_leg 的时间误差，不能套用第 10 条豁免。候选选择器仅在测试内建模；没有声称完整预筛选生产路径已实现，也没有将失败测试改为 xfail/skip。UUID 为独立生成，行比较只排除 `id`，其余分项和 tracking 都保留。
+
+PM 待决策：12,000 市场下 PriceState 的容量、准入/淘汰规则，以及容量满时全量与预筛选如何保持精确评分等价。单纯提高容量只能推迟饱和，不能证明更大或动态市场集合下等价；本轮没有擅自提高上限，也没有实现全市场逐轮准入扫描。
+
+停止点发生在等价性测试的容量分支。完整的跨门槛、消失、过期、冷却、max_open、结算、检查点、重启组合序列，以及 BMT 首次越阈 frozen_leg、60 秒采样界限、spread_plateau 清除、混合列表前后端回归，均留待 PM 决策后继续。第 10 条允许的 frozen_leg 差异仍严格限于从未相关资产的采样：changed 最多晚 60 秒，以及分钟内先变后回/高低点可能漏采；本轮没有修改相关生产注释，因为没有实施采样路径。
+
+首次等价性红灯原始汇总（退出码 1）：
+
+```text
+SHADOW_EQUIVALENCE {"capacity": 6000, "full": {"fake_flag": true, "fake_reasons": ["median_outlier"], "fake_score": 2}, "full_dropped": 0, "full_price_states": 9, "initial_markets": 3, "opening_metadata_equal": true, "selected": {"fake_flag": true, "fake_reasons": ["median_outlier"], "fake_score": 2}, "selected_dropped": 0, "selected_price_states": 6}
+.SHADOW_EQUIVALENCE {"capacity": 6, "full": {"fake_flag": false, "fake_reasons": [], "fake_score": 0}, "full_dropped": 3, "full_price_states": 6, "initial_markets": 3, "opening_metadata_equal": false, "selected": {"fake_flag": true, "fake_reasons": ["median_outlier"], "fake_score": 2}, "selected_dropped": 0, "selected_price_states": 6}
+FSHADOW_EQUIVALENCE {"capacity": 6000, "full": {"fake_flag": false, "fake_reasons": [], "fake_score": 0}, "full_dropped": 3, "full_price_states": 6000, "initial_markets": 5997, "opening_metadata_equal": false, "selected": {"fake_flag": true, "fake_reasons": ["median_outlier"], "fake_score": 2}, "selected_dropped": 0, "selected_price_states": 6000}
+        print("SHADOW_EQUIVALENCE " + json.dumps({
+        print("SHADOW_EQUIVALENCE " + json.dumps({
+2 failed, 1 passed in 1.16s
+```
+
+### production 基准和最终连续三次当前代码基线
+
+新增场景为 5500 机会、12000 市场、650 个达到 0.2% 门槛、750 对持仓（1500 行）。测试先通过影子表保存 750 对，再由 runtime 正常恢复；100 对持仓当前低于开仓门槛。低开仓价差来自实际 bid/ask，较宽盘口使这些已持仓机会的平仓价差仍高于收敛目标，不是单纯覆盖机会字段。每轮三分之一报价变化。NOW 初始轮、51 个一秒常规轮及 +61 秒分钟全量/检查点轮均经过 runtime；后两类尖峰计入事件循环 p95/max。production 基准在当前尚未预筛选代码上执行，是失败基线，不是优化后验收结果。
+
+运行前负载通过 Windows GetSystemTimes 采样 0.2 秒，记录全系统所有核的繁忙比例。基准进程顺序运行，未与本任务其他测试并行；没有停止其他用户进程或宣称系统独占。RSS 为 Windows 工作集增量。CPU thread_time 量化仍保留既有限制和墙钟保护。
+
+只调整第 5 条明确授权的 stress 事件循环中位 3→5 ms、worker 墙钟 20→30 ms，CPU 中位仍 20 ms。realistic 所有原预算保持，stress p95/max 和所有 RSS 预算保持。production 使用第 4 条预算；没有提高任何失败阈值。
+
+最终命令在 backend 目录逐次运行（N=1,2,3，每次独立 Python 进程）：
+
+```powershell
+python -m pytest tests/test_shadow_benchmark.py -q -s --tb=short -m benchmark -p no:cacheprovider --basetemp ../.pytest-tmp/round3-final-baseline-N
+```
+
+| 次数 | 场景 | CPU 前负载 % | 事件循环中位 / p95 / 最大 ms | worker CPU / 墙钟中位 ms | RSS 增量 MiB |
+| --- | --- | --- | --- | --- | --- |
+| 1 | stress | 21.31 | 4.085 / 5.540 / 8.003 | 15.625 / 24.822 | 26.520 |
+| 1 | realistic | 45.56 | 1.481 / 2.232 / 3.025 | 0.000 / 6.988 | 3.816 |
+| 1 | production | 56.91 | 28.149 / 149.625 / 162.866 | 203.125 / 198.400 | 70.539 |
+| 2 | stress | 26.26 | 4.967 / 6.337 / 10.911 | 31.250 / 28.807 | 26.875 |
+| 2 | realistic | 37.36 | 1.195 / 1.829 / 3.679 | 0.000 / 5.645 | 3.637 |
+| 2 | production | 32.42 | 124.785 / 158.780 / 172.807 | 125.000 / 121.657 | 70.820 |
+| 3 | stress | 13.11 | 4.136 / 5.529 / 12.175 | 31.250 / 25.938 | 26.805 |
+| 3 | realistic | 64.48 | 2.318 / 3.317 / 3.960 | 15.625 / 10.464 | 4.465 |
+| 3 | production | 53.30 | 34.048 / 167.282 / 171.254 | 218.750 / 232.198 | 70.273 |
+
+production 三次均失败。stress 第一次通过，第二/三次 CPU 中位 31.25 ms 超过 20 ms；realistic 前两次通过，第三次 CPU 15.625 ms 和墙钟 10.464 ms 均超过 8 ms。不从多次结果中挑选通过者。
+
+事件循环主要耗时位于捕获/dispatch（包含 `shadow_runtime.py:35 freeze_snapshot`）：production 三次 capture 中位 27.026 / 123.717 / 32.314 ms，publish 中位 1.252 / 1.233 / 1.380 ms。+61 秒分钟全量轮 capture 为 127.512 / 22.213 / 149.193 ms，publish 为 1.252 / 0.071 / 1.138 ms，合计 128.764 / 22.284 / 150.331 ms；第一、三次超过 40 ms。该轮 worker 墙钟为 325.302 / 172.084 / 354.763 ms。这里测的是原代码全量捕获，不能推断优化后全量轮一定无法达标；本轮停止实现的独立充分依据是容量等价性反例。
+
+worker 包含 `_calculate` 的全量输入重建/显示模型处理、`_process` 的评分/账本/写库；上述字段是 worker 总时间，不能据此宣称其中某个子函数占比。没有把未实测的细分热点当作结论。
+
+最终连续三次原始汇总行（均退出码 1；保留 pytest 点号前缀）：
+
+第 1 次：
+
+```text
+SHADOW_BENCHMARK {"capture_median_ms": 3.9775000186637044, "changed_fraction": 1.0, "checkpoint_capture_ms": 4.6681000385433435, "checkpoint_event_loop_ms": 4.948299960233271, "checkpoint_publish_ms": 0.2801999216899276, "checkpoint_worker_wall_ms": 237.83890006598085, "event_loop_max_ms": 8.003200055100024, "event_loop_median_ms": 4.085200023837388, "event_loop_p95_ms": 5.539900157600641, "markets": 3000, "open_event_loop_ms": 8.003200055100024, "open_rows": 3000, "open_worker_wall_ms": 195.9015999455005, "opportunities": 1000, "publish_median_ms": 0.2405000850558281, "recomputed_median": 1500, "rounds": 51, "rss_delta_mib": 26.51953125, "scenario": "stress", "system_cpu_before_pct": 21.311475409836067, "within_memory_budget": true, "within_time_budget": true, "worker_cpu_mean_ms": 26.96078431372549, "worker_cpu_median_ms": 15.625, "worker_wall_median_ms": 24.822000064887106}
+.SHADOW_BENCHMARK {"capture_median_ms": 1.409800024703145, "changed_fraction": 0.3333333333333333, "checkpoint_capture_ms": 1.6680000117048621, "checkpoint_event_loop_ms": 1.7312000272795558, "checkpoint_publish_ms": 0.06320001557469368, "checkpoint_worker_wall_ms": 45.162800000980496, "event_loop_max_ms": 3.025099984370172, "event_loop_median_ms": 1.481400104239583, "event_loop_p95_ms": 2.2319001145660877, "markets": 1000, "open_event_loop_ms": 2.437699935398996, "open_rows": 1000, "open_worker_wall_ms": 73.10240005608648, "opportunities": 400, "publish_median_ms": 0.06410002242773771, "recomputed_median": 167, "rounds": 51, "rss_delta_mib": 3.81640625, "scenario": "realistic", "system_cpu_before_pct": 45.55555555555556, "within_memory_budget": true, "within_time_budget": true, "worker_cpu_mean_ms": 7.965686274509804, "worker_cpu_median_ms": 0.0, "worker_wall_median_ms": 6.987800006754696}
+.SHADOW_BENCHMARK {"capture_median_ms": 27.025500079616904, "changed_fraction": 0.3333333333333333, "checkpoint_capture_ms": 127.51200003549457, "checkpoint_event_loop_ms": 128.76360001973808, "checkpoint_publish_ms": 1.2515999842435122, "checkpoint_worker_wall_ms": 325.3019000403583, "event_loop_max_ms": 162.86570008378476, "event_loop_median_ms": 28.148800134658813, "event_loop_p95_ms": 149.62489996105433, "markets": 12000, "open_event_loop_ms": 47.206100076437, "open_rows": 1500, "open_worker_wall_ms": 437.48379999306053, "opportunities": 5500, "publish_median_ms": 1.2515999842435122, "recomputed_median": 250, "rounds": 51, "rss_delta_mib": 70.5390625, "scenario": "production", "system_cpu_before_pct": 56.9060773480663, "within_memory_budget": false, "within_time_budget": false, "worker_cpu_mean_ms": 158.70098039215685, "worker_cpu_median_ms": 203.125, "worker_wall_median_ms": 198.39989999309182}
+1 failed, 2 passed in 20.36s
+```
+
+第 2 次：
+
+```text
+SHADOW_BENCHMARK {"capture_median_ms": 4.681600024923682, "changed_fraction": 1.0, "checkpoint_capture_ms": 3.222899977117777, "checkpoint_event_loop_ms": 3.2387999817728996, "checkpoint_publish_ms": 0.015900004655122757, "checkpoint_worker_wall_ms": 250.79710001591593, "event_loop_max_ms": 10.911299963481724, "event_loop_median_ms": 4.967199987731874, "event_loop_p95_ms": 6.336500053294003, "markets": 3000, "open_event_loop_ms": 10.911299963481724, "open_rows": 3000, "open_worker_wall_ms": 291.67269996833056, "opportunities": 1000, "publish_median_ms": 0.22229994647204876, "recomputed_median": 1500, "rounds": 51, "rss_delta_mib": 26.875, "scenario": "stress", "system_cpu_before_pct": 26.256983240223462, "within_memory_budget": true, "within_time_budget": false, "worker_cpu_mean_ms": 32.169117647058826, "worker_cpu_median_ms": 31.25, "worker_wall_median_ms": 28.807300026528537}
+FSHADOW_BENCHMARK {"capture_median_ms": 1.1273999698460102, "changed_fraction": 0.3333333333333333, "checkpoint_capture_ms": 1.1949000181630254, "checkpoint_event_loop_ms": 1.3043999206274748, "checkpoint_publish_ms": 0.1094999024644494, "checkpoint_worker_wall_ms": 45.324299950152636, "event_loop_max_ms": 3.6790999583899975, "event_loop_median_ms": 1.1948999017477036, "event_loop_p95_ms": 1.8289999570697546, "markets": 1000, "open_event_loop_ms": 3.6790999583899975, "open_rows": 1000, "open_worker_wall_ms": 89.47909995913506, "opportunities": 400, "publish_median_ms": 0.04779989831149578, "recomputed_median": 167, "rounds": 51, "rss_delta_mib": 3.63671875, "scenario": "realistic", "system_cpu_before_pct": 37.362637362637365, "within_memory_budget": true, "within_time_budget": true, "worker_cpu_mean_ms": 4.901960784313726, "worker_cpu_median_ms": 0.0, "worker_wall_median_ms": 5.644800025038421}
+.SHADOW_BENCHMARK {"capture_median_ms": 123.71749989688396, "changed_fraction": 0.3333333333333333, "checkpoint_capture_ms": 22.213199990801513, "checkpoint_event_loop_ms": 22.284299950115383, "checkpoint_publish_ms": 0.07109995931386948, "checkpoint_worker_wall_ms": 172.08430008031428, "event_loop_max_ms": 172.80709987971932, "event_loop_median_ms": 124.78529987856746, "event_loop_p95_ms": 158.78009994048625, "markets": 12000, "open_event_loop_ms": 45.06260005291551, "open_rows": 1500, "open_worker_wall_ms": 383.2054999656975, "opportunities": 5500, "publish_median_ms": 1.2329999590292573, "recomputed_median": 250, "rounds": 51, "rss_delta_mib": 70.8203125, "scenario": "production", "system_cpu_before_pct": 32.417582417582416, "within_memory_budget": false, "within_time_budget": false, "worker_cpu_mean_ms": 162.07107843137254, "worker_cpu_median_ms": 125.0, "worker_wall_median_ms": 121.65740004274994}
+2 failed, 1 passed in 21.30s
+```
+
+第 3 次：
+
+```text
+SHADOW_BENCHMARK {"capture_median_ms": 3.782800049521029, "changed_fraction": 1.0, "checkpoint_capture_ms": 3.0610000248998404, "checkpoint_event_loop_ms": 3.343000076711178, "checkpoint_publish_ms": 0.28200005181133747, "checkpoint_worker_wall_ms": 253.82250000257045, "event_loop_max_ms": 12.175100040622056, "event_loop_median_ms": 4.136100062169135, "event_loop_p95_ms": 5.529399961233139, "markets": 3000, "open_event_loop_ms": 12.175100040622056, "open_rows": 3000, "open_worker_wall_ms": 263.49290006328374, "opportunities": 1000, "publish_median_ms": 0.2172999083995819, "recomputed_median": 1500, "rounds": 51, "rss_delta_mib": 26.8046875, "scenario": "stress", "system_cpu_before_pct": 13.11475409836066, "within_memory_budget": true, "within_time_budget": false, "worker_cpu_mean_ms": 32.169117647058826, "worker_cpu_median_ms": 31.25, "worker_wall_median_ms": 25.937999947927892}
+FSHADOW_BENCHMARK {"capture_median_ms": 2.1915999241173267, "changed_fraction": 0.3333333333333333, "checkpoint_capture_ms": 1.9307000329717994, "checkpoint_event_loop_ms": 2.0580000709742308, "checkpoint_publish_ms": 0.1273000380024314, "checkpoint_worker_wall_ms": 68.02989996504039, "event_loop_max_ms": 3.9604000048711896, "event_loop_median_ms": 2.317999955266714, "event_loop_p95_ms": 3.3174999989569187, "markets": 1000, "open_event_loop_ms": 3.845999948680401, "open_rows": 1000, "open_worker_wall_ms": 108.13919990323484, "opportunities": 400, "publish_median_ms": 0.11250004172325134, "recomputed_median": 167, "rounds": 51, "rss_delta_mib": 4.46484375, "scenario": "realistic", "system_cpu_before_pct": 64.48087431693989, "within_memory_budget": true, "within_time_budget": false, "worker_cpu_mean_ms": 10.416666666666666, "worker_cpu_median_ms": 15.625, "worker_wall_median_ms": 10.463700047694147}
+FSHADOW_BENCHMARK {"capture_median_ms": 32.31389995198697, "changed_fraction": 0.3333333333333333, "checkpoint_capture_ms": 149.19310004916042, "checkpoint_event_loop_ms": 150.33069998025894, "checkpoint_publish_ms": 1.1375999310985208, "checkpoint_worker_wall_ms": 354.7627000370994, "event_loop_max_ms": 171.25439981464297, "event_loop_median_ms": 34.04839988797903, "event_loop_p95_ms": 167.2823999542743, "markets": 12000, "open_event_loop_ms": 50.852099899202585, "open_rows": 1500, "open_worker_wall_ms": 487.64399997889996, "opportunities": 5500, "publish_median_ms": 1.3797000283375382, "recomputed_median": 250, "rounds": 51, "rss_delta_mib": 70.2734375, "scenario": "production", "system_cpu_before_pct": 53.2967032967033, "within_memory_budget": false, "within_time_budget": false, "worker_cpu_mean_ms": 185.66176470588235, "worker_cpu_median_ms": 218.75, "worker_wall_median_ms": 232.19759995117784}
+3 failed in 24.02s
+```
+
+### 回归结果与环境边界
+
+当前本机 Windows / Python 3.12.10，`venv=False`；pytest 8.4.2、pytest-asyncio 0.25.3、pydantic 2.12.5、aiosqlite 0.22.1。沿用现有环境，没有安装/更新依赖；不能将此称为锁定依赖 venv 验收。
+
+影子相关测试与 `test_route_permissions`（项目默认排除 benchmark/network）：
+
+```powershell
+$shadowTests = @(Get-ChildItem tests/test_shadow*.py | ForEach-Object { $_.FullName })
+python -m pytest @shadowTests tests/test_route_permissions.py -q --tb=short -p no:cacheprovider --basetemp ../.pytest-tmp/round3-targeted
+```
+
+```text
+SHADOW_EQUIVALENCE {"capacity": 6, "full": {"fake_flag": false, "fake_reasons": [], "fake_score": 0}, "full_dropped": 3, "full_price_states": 6, "initial_markets": 3, "opening_metadata_equal": false, "selected": {"fake_flag": true, "fake_reasons": ["median_outlier"], "fake_score": 2}, "selected_dropped": 0, "selected_price_states": 6}
+SHADOW_EQUIVALENCE {"capacity": 6000, "full": {"fake_flag": false, "fake_reasons": [], "fake_score": 0}, "full_dropped": 3, "full_price_states": 6000, "initial_markets": 5997, "opening_metadata_equal": false, "selected": {"fake_flag": true, "fake_reasons": ["median_outlier"], "fake_score": 2}, "selected_dropped": 0, "selected_price_states": 6000}
+2 failed, 111 passed, 3 deselected in 29.59s
+```
+
+后端全量（沿用项目默认 marker，未增加跳过项；benchmark 已单独运行）：
+
+```powershell
+python -m pytest -q --tb=short -p no:cacheprovider --basetemp ../.pytest-tmp/round3-full
+```
+
+```text
+SHADOW_EQUIVALENCE {"capacity": 6, "full": {"fake_flag": false, "fake_reasons": [], "fake_score": 0}, "full_dropped": 3, "full_price_states": 6, "initial_markets": 3, "opening_metadata_equal": false, "selected": {"fake_flag": true, "fake_reasons": ["median_outlier"], "fake_score": 2}, "selected_dropped": 0, "selected_price_states": 6}
+SHADOW_EQUIVALENCE {"capacity": 6000, "full": {"fake_flag": false, "fake_reasons": [], "fake_score": 0}, "full_dropped": 3, "full_price_states": 6000, "initial_markets": 5997, "opening_metadata_equal": false, "selected": {"fake_flag": true, "fake_reasons": ["median_outlier"], "fake_score": 2}, "selected_dropped": 0, "selected_price_states": 6000}
+2 failed, 2587 passed, 9 deselected, 12 warnings in 182.35s (0:03:02)
+```
+
+以上退出码均为 1。仅新增的两个容量反例失败；既有影子、权限及其他后端用例未放宽。没有在失败的状态下宣称全量通过。未实现展示变化，所以没有运行新混合列表的前端验收。
+
+### 夹具开发期间的非最终测量（保留历史，不计作最终三次）
+
+第一次尝试在 seed 写库前未初始化 shadow schema，production 报 `sqlite3.OperationalError: no such table: shadow_trades`，尚未得到 production 测量。修正测试夹具初始化与异常时关闭连接后继续；没有修改数据库生产代码。该次 pytest 输出后未正常退出，终止了本任务的测试会话，未终止其他进程。
+
+```text
+SHADOW_BENCHMARK {"capture_median_ms": 2.983099897392094, "changed_fraction": 1.0, "checkpoint_capture_ms": 2.7350999880582094, "checkpoint_event_loop_ms": 2.8310000197961926, "checkpoint_publish_ms": 0.09590003173798323, "checkpoint_worker_wall_ms": 166.08260001521558, "event_loop_max_ms": 39.44369999226183, "event_loop_median_ms": 3.1049998942762613, "event_loop_p95_ms": 4.606300033628941, "markets": 3000, "open_event_loop_ms": 6.984100094996393, "open_rows": 3000, "open_worker_wall_ms": 196.02279993705451, "opportunities": 1000, "publish_median_ms": 0.14739995822310448, "recomputed_median": 1500, "rounds": 51, "rss_delta_mib": 26.8046875, "scenario": "stress", "system_cpu_before_pct": 28.57142857142857, "within_memory_budget": true, "within_time_budget": true, "worker_cpu_mean_ms": 21.752450980392158, "worker_cpu_median_ms": 15.625, "worker_wall_median_ms": 19.368099980056286}
+FSHADOW_BENCHMARK {"capture_median_ms": 1.641599927097559, "changed_fraction": 0.3333333333333333, "checkpoint_capture_ms": 1.9271000055596232, "checkpoint_event_loop_ms": 1.936799963004887, "checkpoint_publish_ms": 0.009699957445263863, "checkpoint_worker_wall_ms": 54.04289998114109, "event_loop_max_ms": 3.87450004927814, "event_loop_median_ms": 1.7032999312505126, "event_loop_p95_ms": 2.5334000820294023, "markets": 1000, "open_event_loop_ms": 2.5334999663755298, "open_rows": 1000, "open_worker_wall_ms": 83.439200068824, "opportunities": 400, "publish_median_ms": 0.06929994560778141, "recomputed_median": 167, "rounds": 51, "rss_delta_mib": 4.22265625, "scenario": "realistic", "system_cpu_before_pct": 51.39664804469274, "within_memory_budget": true, "within_time_budget": true, "worker_cpu_mean_ms": 7.659313725490196, "worker_cpu_median_ms": 0.0, "worker_wall_median_ms": 7.496600039303303}
+            print("SHADOW_BENCHMARK " + json.dumps(result, sort_keys=True))
+2 failed, 1 passed in 5.50s
+```
+
+随后三次初版夹具只覆盖机会的 open_spread_pct 字段，当前盘口仍对应 0.5%。为避免不自洽的输入，最终夹具改用实际盘口构造低于门槛机会，再完整连续重跑三次；没有修改预算。初版结果不能代替上面的最终证据，原始行保留如下：
+
+初版第 1 次：
+
+```text
+SHADOW_BENCHMARK {"capture_median_ms": 2.8753000078722835, "changed_fraction": 1.0, "checkpoint_capture_ms": 2.3577999090775847, "checkpoint_event_loop_ms": 2.4712998420000076, "checkpoint_publish_ms": 0.11349993292242289, "checkpoint_worker_wall_ms": 191.18389999493957, "event_loop_max_ms": 7.270799833349884, "event_loop_median_ms": 3.175400081090629, "event_loop_p95_ms": 4.462799872271717, "markets": 3000, "open_event_loop_ms": 7.270799833349884, "open_rows": 3000, "open_worker_wall_ms": 188.74470004811883, "opportunities": 1000, "publish_median_ms": 0.13689999468624592, "recomputed_median": 1500, "rounds": 51, "rss_delta_mib": 27.1484375, "scenario": "stress", "system_cpu_before_pct": 20.441988950276247, "within_memory_budget": true, "within_time_budget": true, "worker_cpu_mean_ms": 23.897058823529413, "worker_cpu_median_ms": 15.625, "worker_wall_median_ms": 18.867700011469424}
+.SHADOW_BENCHMARK {"capture_median_ms": 0.9867000626400113, "changed_fraction": 0.3333333333333333, "checkpoint_capture_ms": 0.8078999817371368, "checkpoint_event_loop_ms": 0.8577998960390687, "checkpoint_publish_ms": 0.04989991430193186, "checkpoint_worker_wall_ms": 30.914500006474555, "event_loop_max_ms": 2.5740000419318676, "event_loop_median_ms": 1.0187000734731555, "event_loop_p95_ms": 1.6497999895364046, "markets": 1000, "open_event_loop_ms": 2.5740000419318676, "open_rows": 1000, "open_worker_wall_ms": 57.97770002391189, "opportunities": 400, "publish_median_ms": 0.04989991430193186, "recomputed_median": 167, "rounds": 51, "rss_delta_mib": 4.0703125, "scenario": "realistic", "system_cpu_before_pct": 10.857142857142854, "within_memory_budget": true, "within_time_budget": true, "worker_cpu_mean_ms": 4.595588235294118, "worker_cpu_median_ms": 0.0, "worker_wall_median_ms": 4.696300020441413}
+.SHADOW_BENCHMARK {"capture_median_ms": 16.74660004209727, "changed_fraction": 0.3333333333333333, "checkpoint_capture_ms": 114.67289994470775, "checkpoint_event_loop_ms": 115.45269994530827, "checkpoint_publish_ms": 0.7798000006005168, "checkpoint_worker_wall_ms": 254.07929997891188, "event_loop_max_ms": 123.75789997167885, "event_loop_median_ms": 17.616599914617836, "event_loop_p95_ms": 121.08300009276718, "markets": 12000, "open_event_loop_ms": 44.51489995699376, "open_rows": 1500, "open_worker_wall_ms": 408.4302999544889, "opportunities": 5500, "publish_median_ms": 0.9050999069586396, "recomputed_median": 250, "rounds": 51, "rss_delta_mib": 66.8671875, "scenario": "production", "system_cpu_before_pct": 13.812154696132595, "within_memory_budget": false, "within_time_budget": false, "worker_cpu_mean_ms": 134.19117647058823, "worker_cpu_median_ms": 171.875, "worker_wall_median_ms": 173.4611999709159}
+1 failed, 2 passed in 16.02s
+```
+
+初版第 2 次：
+
+```text
+SHADOW_BENCHMARK {"capture_median_ms": 2.5124000385403633, "changed_fraction": 1.0, "checkpoint_capture_ms": 3.0263999942690134, "checkpoint_event_loop_ms": 3.2001000363379717, "checkpoint_publish_ms": 0.17370004206895828, "checkpoint_worker_wall_ms": 159.00159999728203, "event_loop_max_ms": 8.482399978674948, "event_loop_median_ms": 2.654799958691001, "event_loop_p95_ms": 3.5252999514341354, "markets": 3000, "open_event_loop_ms": 8.482399978674948, "open_rows": 3000, "open_worker_wall_ms": 216.14060003776103, "opportunities": 1000, "publish_median_ms": 0.11929997708648443, "recomputed_median": 1500, "rounds": 51, "rss_delta_mib": 27.33984375, "scenario": "stress", "system_cpu_before_pct": 19.444444444444443, "within_memory_budget": true, "within_time_budget": true, "worker_cpu_mean_ms": 18.38235294117647, "worker_cpu_median_ms": 15.625, "worker_wall_median_ms": 16.630499972961843}
+.SHADOW_BENCHMARK {"capture_median_ms": 0.7553999312222004, "changed_fraction": 0.3333333333333333, "checkpoint_capture_ms": 0.6925000343471766, "checkpoint_event_loop_ms": 0.7284000748768449, "checkpoint_publish_ms": 0.03590004052966833, "checkpoint_worker_wall_ms": 29.89760006312281, "event_loop_max_ms": 2.5748000480234623, "event_loop_median_ms": 0.8134000236168504, "event_loop_p95_ms": 1.2271999148651958, "markets": 1000, "open_event_loop_ms": 2.5748000480234623, "open_rows": 1000, "open_worker_wall_ms": 50.93160003889352, "opportunities": 400, "publish_median_ms": 0.06469991058111191, "recomputed_median": 167, "rounds": 51, "rss_delta_mib": 4.06640625, "scenario": "realistic", "system_cpu_before_pct": 22.22222222222222, "within_memory_budget": true, "within_time_budget": true, "worker_cpu_mean_ms": 4.28921568627451, "worker_cpu_median_ms": 0.0, "worker_wall_median_ms": 4.090600064955652}
+.SHADOW_BENCHMARK {"capture_median_ms": 112.4412000644952, "changed_fraction": 0.3333333333333333, "checkpoint_capture_ms": 109.40209997352213, "checkpoint_event_loop_ms": 110.12900003697723, "checkpoint_publish_ms": 0.7269000634551048, "checkpoint_worker_wall_ms": 248.8431999227032, "event_loop_max_ms": 137.24090007599443, "event_loop_median_ms": 113.454700098373, "event_loop_p95_ms": 121.573599986732, "markets": 12000, "open_event_loop_ms": 31.691799988038838, "open_rows": 1500, "open_worker_wall_ms": 404.9447999568656, "opportunities": 5500, "publish_median_ms": 0.9261999512091279, "recomputed_median": 250, "rounds": 51, "rss_delta_mib": 67.07421875, "scenario": "production", "system_cpu_before_pct": 25.730994152046783, "within_memory_budget": false, "within_time_budget": false, "worker_cpu_mean_ms": 111.21323529411765, "worker_cpu_median_ms": 78.125, "worker_wall_median_ms": 70.86829992476851}
+1 failed, 2 passed in 15.18s
+```
+
+初版第 3 次：
+
+```text
+SHADOW_BENCHMARK {"capture_median_ms": 2.5668999878689647, "changed_fraction": 1.0, "checkpoint_capture_ms": 2.5025999639183283, "checkpoint_event_loop_ms": 2.641999861225486, "checkpoint_publish_ms": 0.13939989730715752, "checkpoint_worker_wall_ms": 159.3948999652639, "event_loop_max_ms": 38.060100050643086, "event_loop_median_ms": 2.6779999025166035, "event_loop_p95_ms": 3.9048000471666455, "markets": 3000, "open_event_loop_ms": 7.7809999929741025, "open_rows": 3000, "open_worker_wall_ms": 187.10940005257726, "opportunities": 1000, "publish_median_ms": 0.1303000608459115, "recomputed_median": 1500, "rounds": 51, "rss_delta_mib": 26.9453125, "scenario": "stress", "system_cpu_before_pct": 10.982658959537572, "within_memory_budget": true, "within_time_budget": true, "worker_cpu_mean_ms": 19.301470588235293, "worker_cpu_median_ms": 15.625, "worker_wall_median_ms": 16.70629996806383}
+FSHADOW_BENCHMARK {"capture_median_ms": 1.0282000293955207, "changed_fraction": 0.3333333333333333, "checkpoint_capture_ms": 0.8529000915586948, "checkpoint_event_loop_ms": 0.8604001486673951, "checkpoint_publish_ms": 0.007500057108700275, "checkpoint_worker_wall_ms": 28.56529993005097, "event_loop_max_ms": 3.323900164104998, "event_loop_median_ms": 1.0907999239861965, "event_loop_p95_ms": 1.3589001027867198, "markets": 1000, "open_event_loop_ms": 3.323900164104998, "open_rows": 1000, "open_worker_wall_ms": 53.10999997891486, "opportunities": 400, "publish_median_ms": 0.04179996903985739, "recomputed_median": 167, "rounds": 51, "rss_delta_mib": 4.234375, "scenario": "realistic", "system_cpu_before_pct": 65.38461538461539, "within_memory_budget": true, "within_time_budget": true, "worker_cpu_mean_ms": 3.982843137254902, "worker_cpu_median_ms": 0.0, "worker_wall_median_ms": 4.601299995556474}
+.SHADOW_BENCHMARK {"capture_median_ms": 16.35529997292906, "changed_fraction": 0.3333333333333333, "checkpoint_capture_ms": 16.340099973604083, "checkpoint_event_loop_ms": 17.366799875162542, "checkpoint_publish_ms": 1.0266999015584588, "checkpoint_worker_wall_ms": 148.58139993157238, "event_loop_max_ms": 148.48420000635087, "event_loop_median_ms": 17.18199998140335, "event_loop_p95_ms": 135.69500006269664, "markets": 12000, "open_event_loop_ms": 31.728699919767678, "open_rows": 1500, "open_worker_wall_ms": 313.91530006658286, "opportunities": 5500, "publish_median_ms": 0.8248001104220748, "recomputed_median": 250, "rounds": 51, "rss_delta_mib": 66.28515625, "scenario": "production", "system_cpu_before_pct": 16.763005780346816, "within_memory_budget": false, "within_time_budget": false, "worker_cpu_mean_ms": 128.9828431372549, "worker_cpu_median_ms": 156.25, "worker_wall_median_ms": 170.2182999579236}
+2 failed, 1 passed in 15.17s
+```
+
+### 交付边界
+
+仅提交测试、原任务书两段决策和报告/交接；`backend/app`、数据库 schema/repositories、采集器、Astro/arb-mvp、前端及默认 SHADOW_ENABLED 均无修改。完整日志/数据库留在忽略目录 `.pytest-tmp/round3-*`，不提交测试输出文件、不清理既有产物。`git diff --check` 通过；本地测试提交为 `824f771`，后续文档提交记录见 `git log`。
+
+没有 push、服务器连接、线上备份、部署、线上验证或 WSL 操作。线上状态未检查；SHADOW_ENABLED 默认仍为 0。后续先由 PM 解决容量准入与精确等价性的冲突，再继续本模块；其他无依赖模块另开任务。交接见 `docs/task-handoff-2026-11-05-shadow-ledger.md` 的第三轮追加章节。
