@@ -137,6 +137,9 @@ async def test_every_shadow_route_uses_session_or_api_token(
     # Isolate business reads only; keep the central guard and real AuthStore intact.
     read = AsyncMock(return_value=[])
     monkeypatch.setattr("app.api.routes_shadow.read_committed", read)
+    # Buckets now query through the child; isolate that business boundary too.
+    app.state.shadow_runtime._published["ready"] = True
+    monkeypatch.setattr(app.state.shadow_runtime, "statistics", AsyncMock(return_value=[]))
     headers = {
         "missing": {},
         "legacy_password": {"X-Dashboard-Password": PASSWORD},

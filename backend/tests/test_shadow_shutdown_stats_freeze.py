@@ -128,6 +128,17 @@ async def test_shutdown_supervisor_error_still_reaps_child(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_shutdown_deadline_also_bounds_executor_queueing(tmp_path, monkeypatch):
+    import app.services.shadow_runtime as module
+    rt = runtime_for(tmp_path)
+    await rt.initialize()
+    async def unavailable_executor(*args, **kwargs):
+        await asyncio.Event().wait()
+    monkeypatch.setattr(module.asyncio, "to_thread", unavailable_executor)
+    await measured_close(rt)
+
+
+@pytest.mark.asyncio
 async def test_lifespan_shadow_close_error_does_not_skip_other_resources(tmp_path, monkeypatch):
     from app.main import create_app
     from app.core.config import Settings
