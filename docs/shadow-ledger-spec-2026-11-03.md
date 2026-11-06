@@ -196,3 +196,13 @@
 36. 故障隔离：子进程崩溃/超时/异常绝不抛到主流程。崩溃后最多自动重启 3 次（指数退避，从 5s 起），之后标记 error 并保持停用直到后端重启。子进程 RSS 超过 SHADOW_CHILD_MAX_RSS_MB（新配置，默认 250）时停止子进程、记 error、不再重启。aclose 时先请求优雅退出（落盘 pending writes），10s 未退出则 terminate。子进程独占 SQLite 写入 shadow 表；主进程不得再写 shadow 表（只读 API 若需查询，沿用现有读路径并确认在 WAL 下无锁冲突）。
 37. 新配置 SHADOW_MIN_LIQUIDITY_USD（默认 0 = 不过滤，行为与现在一致）：24h 成交额低于该值、或成交额未知的机会，在准入阶段丢弃并计入 dropped_by_reason.liquidity。是否在生产设置由 PM 决定，你不要改任何 .env。
 38. SHADOW_ENABLED=0 时不得启动子进程，开销为零。
+
+## PM decisions 第五轮补充一（原文追加到 spec 末尾）
+39. 主进程每轮的抽取与序列化必须是“增量”的，子进程保存镜像：
+   a. 执行目录 catalog.entries 只在 catalog.updated_at（或等价版本）变化时发送，不得每轮 pickle。
+   b. 市场目录字段（directory_values）只发送新增/删除/字段变化的市场；判断变化不得每轮对 12000 个市场全量构建 tuple 再比较——优先用市场对象身份、快照/存储已有的版本号或时间戳；若没有可用版本，可在 store 侧加一个最小的变更计数，但不能改变现有公开行为。
+   c. 报价字段（market_values）只发送自上一轮以来变化的市场（按报价时间戳或版本），子进程按 key 合并。
+   d. 阈值（id/spread）可以每轮发，但用紧凑编码（例如 array('d') + 顺序/ID 表仅在集合变化时发送），不要逐个构建 dict→tuple。
+   e. 子进程镜像与主进程不同步（序号断档、子进程重启、队列丢弃）时，下一轮发全量重同步，计数 resync_count 进状态。
+40. 主线程单段占用：抽取工作按块切分（每块后 await asyncio.sleep(0)），event_loop_max_segment_ms 中位 ≤3ms；整轮主线程墙钟合计中位 ≤5ms（Windows 下 thread_time 有 15.6ms 量化，以 perf_counter 墙钟为准，并在报告里说明）。
+41. 基准预算不放宽：production 场景 loop 中位 ≤7ms，stress 场景 ≤5ms，realistic 照旧。正确性：增量模式与全量模式在同一输入序列上产生完全相同的开/平仓记录（新增等价测试，含 resync 场景）。
