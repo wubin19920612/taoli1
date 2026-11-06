@@ -67,10 +67,12 @@ async def get_buckets(request: Request, dims: str = "variant,pair", since: datet
         raise HTTPException(400, "时间范围必须包含时区且起点不晚于终点")
     if not runtime(request).settings.shadow_enabled:
         return []
-    rows = await read_committed(request, "closed_events", since.astimezone(UTC), until.astimezone(UTC), include_fake,
-                                strategy_version)
+    repository(request)
     try:
-        return await runtime(request).statistics(rows, dimensions, include_fake)
+        return await runtime(request).statistics(since.astimezone(UTC), until.astimezone(UTC),
+                                                dimensions, include_fake, strategy_version)
+    except HTTPException:
+        raise
     except Exception:
         runtime(request).error("statistics")
         raise HTTPException(503, "影子账本统计暂不可用") from None

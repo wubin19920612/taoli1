@@ -1128,34 +1128,38 @@ def create_app(
             stop_event.set()
             loop_stall_watchdog.stop()
             await supervisor.stop()
-            await app.state.shadow_runtime.aclose()
-            await app.state.market_validation.aclose()
-            if collector is not None:
-                await collector.close()
-            if announcement_provider is not None:
-                await announcement_provider.aclose()
-            await _close_state_resources(
-                app,
-                "astro_client",
-                "service_controller",
-                # The manager owns client shutdown when present.
-                "gate_twap_manager" if app.state.gate_twap_manager is not None else "gate_twap_client",
-                "pair_spread_funding_recorder",
-                "trade_availability_service",
-                "hyperliquid_trade_status_service",
-                "account_connection_service",
-                "instrument_market_cap_service",
-                "instrument_statistics_service",
-                "feishu_notifier",
-            )
-            if identity_db is not db:
-                await identity_db.close()
-            if preset_db is not db:
-                await preset_db.close()
-            if attempts_db is not db:
-                await attempts_db.close()
-            await app.state.auth_store.close()
-            await db.close()
+            try:
+                await app.state.shadow_runtime.aclose()
+            except Exception:
+                app.state.shadow_runtime.error("shutdown_lifespan")
+            finally:
+                await app.state.market_validation.aclose()
+                if collector is not None:
+                    await collector.close()
+                if announcement_provider is not None:
+                    await announcement_provider.aclose()
+                await _close_state_resources(
+                    app,
+                    "astro_client",
+                    "service_controller",
+                    # The manager owns client shutdown when present.
+                    "gate_twap_manager" if app.state.gate_twap_manager is not None else "gate_twap_client",
+                    "pair_spread_funding_recorder",
+                    "trade_availability_service",
+                    "hyperliquid_trade_status_service",
+                    "account_connection_service",
+                    "instrument_market_cap_service",
+                    "instrument_statistics_service",
+                    "feishu_notifier",
+                )
+                if identity_db is not db:
+                    await identity_db.close()
+                if preset_db is not db:
+                    await preset_db.close()
+                if attempts_db is not db:
+                    await attempts_db.close()
+                await app.state.auth_store.close()
+                await db.close()
 
     app = FastAPI(title=app_settings.app_name, lifespan=lifespan)
     app.state.task_supervisor = TaskSupervisor()

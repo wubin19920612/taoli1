@@ -5,7 +5,6 @@ import pickle
 import queue
 import threading
 from time import monotonic, perf_counter, thread_time_ns
-from operator import attrgetter
 from array import array
 
 from app.services.execution_routes import ExecutionRoutes, ShadowErrorLog
@@ -33,6 +32,11 @@ class ShadowRuntime:
         self._epoch = 0
         self._closing = self._disabled = False
         self._close_task = None
+        self._shutdown_deadline = None
+        self._dispose_lock = asyncio.Lock()
+        self._frozen_markets = ()
+        self._frozen_ops = ()
+        self._previous_markets = ()
         self._busy_since = None
         self._rss_exceeded = False
         self._transport_error = None
@@ -86,7 +90,9 @@ class ShadowRuntime:
         self._rss_exceeded = False
         self._transport_error = None
         self._incoming, self._outgoing = ctx.Queue(maxsize=1), ctx.Queue(maxsize=1)
-        self._stop = ctx.Event()
+        # No shared Event: a killed child may permanently own its condition lock.
+        # Stop travels through the parent's nonblocking queue producer instead.
+        self._stop = None
         # Whitelist configuration: credentials and unrelated app config never cross IPC.
         config = {name: getattr(self.settings, name) for name in (
             "shadow_enabled", "shadow_min_open_pct", "shadow_max_open", "shadow_slippage_bps",
@@ -115,6 +121,9 @@ class ShadowRuntime:
         while not stopped.is_set():
             try:
                 message = outgoing.get(timeout=.1)
+                if message[0] == "statistics" and isinstance(message[2], bytes):
+                    kind, token, payload, status = message
+                    message = kind, token, pickle.loads(payload), status
             except queue.Empty:
                 continue
             except (EOFError, OSError, ValueError):
@@ -228,6 +237,36 @@ class ShadowRuntime:
         self._context = (snapshot, [], [])
         self._capture_phases = dict.fromkeys(("thresholds", "directory", "quotes"), 0.0)
         self._capture_phase = "thresholds"
+        # Freeze before submit can return or any shard can yield. Reuse detached
+        # dictionaries when content is equal; quote timestamps alone are not a
+        # revision (same-timestamp mutations must still be captured).
+        self._segment_started, self._segment_cpu = perf_counter(), thread_time_ns()
+        try:
+            previous = self._frozen_markets
+            frozen = []
+            for i, model in enumerate(snapshot.markets):
+                data = model.__dict__
+                old = previous[i] if i < len(previous) else None
+                if old is not None and data == old:
+                    frozen.append(old)
+                else:
+                    row = data.copy()
+                    row["estimated_fields"] = list(row["estimated_fields"])
+                    frozen.append(row)
+            self._previous_markets = previous
+            self._frozen_markets = frozen
+            self._frozen_ops = []
+            for model in snapshot.opportunities:
+                row = model.__dict__.copy()
+                for name in ("buy_routes", "sell_routes", "fake_reasons"):
+                    row[name] = tuple(row[name])
+                self._frozen_ops.append(row)
+            self._frozen_catalog = (self.catalog.updated_at, id(self.catalog.entries), self.catalog.entries.copy())
+        except Exception:
+            self._capture_failed()
+            return self._active
+        finally:
+            self._record_segment()
         self._capture_task = asyncio.create_task(self._timed_capture(self._capture_start(self._serial), "thresholds"))
         return self._active
 
@@ -272,17 +311,17 @@ class ShadowRuntime:
             ids, spreads = [], array("d")
             for offset in range(0, len(snapshot.opportunities), CAPTURE_CHUNK_SIZE):
                 def capture():
-                    ops = snapshot.opportunities[offset:offset + CAPTURE_CHUNK_SIZE]
-                    ids.extend(map(attrgetter("id"), ops))
-                    spreads.extend(map(attrgetter("open_spread_pct"), ops))
+                    ops = self._frozen_ops[offset:offset + CAPTURE_CHUNK_SIZE]
+                    ids.extend(op["id"] for op in ops)
+                    spreads.extend(op["open_spread_pct"] for op in ops)
                 await self._slice(capture)
                 await self._yield_capture()
             def dispatch():
                 id_table = tuple(ids)
                 changed_ids = id_table if full or id_table != self._threshold_ids else None
                 self._threshold_ids = id_table
-                version = (self.catalog.updated_at, id(self.catalog.entries))
-                entries = self.catalog.entries if full or version != self._catalog_version else None
+                version = self._frozen_catalog[:2]
+                entries = self._frozen_catalog[2] if full or version != self._catalog_version else None
                 self._catalog_version = version
                 self._round_sequence += 1
                 payload = self._encode("round", (self._round_sequence, full, snapshot.published_at,
@@ -317,9 +356,10 @@ class ShadowRuntime:
                     def capture_directory():
                         delta = []
                         for i in range(offset, min(offset + CAPTURE_CHUNK_SIZE, len(snapshot.markets))):
-                            m = snapshot.markets[i]
-                            d = m.__dict__
+                            d = self._frozen_markets[i]
                             old = self._directory[i] if i < len(self._directory) else None
+                            if old is not None and i < len(self._previous_markets) and d is self._previous_markets[i]:
+                                continue
                             if old is None or not (
                                 d["exchange"] == old[0] and d["market_type"] == old[1]
                                 and d["raw_symbol"] == old[2] and d["dex"] == old[3]
@@ -342,7 +382,7 @@ class ShadowRuntime:
                     def capture_ops():
                         rows = []
                         for i in indices[offset:offset + CAPTURE_CHUNK_SIZE]:
-                            values = op_values(snapshot.opportunities[i].__dict__)
+                            values = op_values(self._frozen_ops[i])
                             rows.append(values[:-3] + (tuple(values[-3]), tuple(values[-2]), tuple(values[-1])))
                         op_chunks.append(self._encode("op_rows", rows))
                     await self._slice(capture_ops)
@@ -360,7 +400,7 @@ class ShadowRuntime:
                     def capture_quotes():
                         delta = []
                         for i in indices[offset:offset + CAPTURE_CHUNK_SIZE]:
-                            values = market_values(snapshot.markets[i].__dict__)
+                            values = market_values(self._frozen_markets[i])
                             # Mutable list leaves must never share producer state.
                             values = values[:-1] + (tuple(values[-1]),)
                             if self._quotes.get(i) != values:
@@ -381,11 +421,7 @@ class ShadowRuntime:
         if task is not None:
             await asyncio.shield(task)
 
-    async def statistics(self, rows, dims, include_fake):
-        # No bootstrap or worker is needed for the empty result identity.
-        # API readiness is checked by read_committed before reaching this method.
-        if not rows:
-            return []
+    async def statistics(self, since, until, dims, include_fake, strategy_version):
         # Statistics share the same single-flight slot. A waiting API owns no
         # queued compute; incoming market rounds skip while statistics runs.
         while self._active is not None and not self._active.done():
@@ -393,7 +429,8 @@ class ShadowRuntime:
         if self._closing or self._disabled or not self._published["ready"]:
             raise RuntimeError("shadow worker unavailable")
         self._serial += 1
-        self._incoming.put_nowait(("statistics", self._serial, pickle.dumps((rows, dims, include_fake), protocol=5)))
+        self._incoming.put_nowait(("statistics", self._serial,
+            self._encode("statistics", (since, until, dims, include_fake, strategy_version))))
         self._active = asyncio.get_running_loop().create_future()
         self._busy_since = monotonic()
         result = await asyncio.shield(self._active)
@@ -459,34 +496,62 @@ class ShadowRuntime:
         self._ready.set()
 
     async def _dispose(self, force=False):
+        async with self._dispose_lock:
+            await self._dispose_owned(force)
+
+    async def _dispose_owned(self, force=False):
         if self._capture_task is not None and not self._capture_task.done():
             self._capture_task.cancel()
             await asyncio.gather(self._capture_task, return_exceptions=True)
         self._needs_resync = True
         process = self._process
+        # Normal fault recovery has the same bounded terminate/kill ladder.
+        deadline = self._shutdown_deadline or monotonic() + 4.5
+        def remaining(cap):
+            return max(0, min(cap, deadline - monotonic()))
+        async def join(target, cap):
+            timeout = remaining(cap)
+            if timeout <= 0:
+                return
+            try:
+                # Bound executor queueing too, not just the blocking join call.
+                await asyncio.wait_for(asyncio.to_thread(target.join, timeout), timeout)
+            except TimeoutError:
+                pass
         if process is not None and process.pid is not None:
             if force and process.is_alive():
-                process.terminate()
-            while process.is_alive():
-                await asyncio.sleep(.02)
-            process.join(timeout=0)
-            process.close()
+                try:
+                    process.terminate()
+                except OSError:
+                    self.error("shutdown_terminate")
+            await join(process, 2)
+            if process.is_alive():
+                try:
+                    process.kill()
+                except OSError:
+                    self.error("shutdown_kill")
+                await join(process, 2)
+            if process.is_alive():
+                self.error("shutdown_kill_timeout")
+            else:
+                process.close()
         if self._reader_stop is not None:
             self._reader_stop.set()
         if self._reader is not None:
-            await asyncio.to_thread(self._reader.join, .5)
+            await join(self._reader, .5)
         for channel in (self._incoming, self._outgoing):
             if channel is not None:
                 channel.cancel_join_thread()
                 channel.close()
-        self._process = self._incoming = self._outgoing = None
-        self._reader = None
+        self._process = self._incoming = self._outgoing = self._stop = None
+        self._reader = self._reader_stop = None
         self._epoch += 1
         self._published["worker_pid"] = None
         self._display_cache.clear()
         self._directory.clear()
         self._quotes.clear()
         self._threshold_ids = ()
+        self._frozen_markets = self._previous_markets = self._frozen_ops = ()
 
     def status(self):
         counts = dict(self._child_error_totals)
@@ -520,30 +585,52 @@ class ShadowRuntime:
         if not self.settings.shadow_enabled:
             return
         if self._close_task is None:
+            self._shutdown_deadline = monotonic() + SHUTDOWN_SECONDS + 4.5
             self._close_task = asyncio.create_task(self._shutdown())
         try:
             await asyncio.shield(self._close_task)
         except asyncio.CancelledError:
-            await asyncio.shield(self._close_task)
+            try:
+                await asyncio.shield(self._close_task)
+            except Exception:
+                self.error("shutdown")
             raise
+        except Exception:
+            self.error("shutdown")
 
     async def _shutdown(self):
-        if self._supervisor is not None:
-            await self._supervisor
-        deadline = monotonic() + SHUTDOWN_SECONDS
+        deadline = self._shutdown_deadline - 4.5
         # Accepted capture may still be yielding before sending its first frame.
         # Let it drain within the same shutdown deadline before asking the idle
         # child to exit; otherwise the stop flag can race with that first frame.
-        while self._active is not None and not self._active.done() and monotonic() < deadline:
-            await asyncio.sleep(.01)
-        if self._stop is not None:
-            self._stop.set()
-        while self._process is not None and self._process.is_alive() and monotonic() < deadline:
-            await asyncio.sleep(.02)
-        if self._process is not None and self._process.is_alive():
-            self.error("shutdown_timeout")
-        await self._dispose(force=True)
-        self._published["ready"] = False
-        self._context = None
-        if self._active is not None and not self._active.done():
-            self._active.set_result(None)
+        try:
+            if self._supervisor is not None:
+                try:
+                    await asyncio.wait_for(asyncio.shield(self._supervisor), max(0, deadline - monotonic()))
+                except TimeoutError:
+                    self._supervisor.cancel()
+                    await asyncio.gather(self._supervisor, return_exceptions=True)
+                    raise
+            while self._active is not None and not self._active.done() and monotonic() < deadline:
+                await asyncio.sleep(.01)
+            if self._incoming is not None:
+                try:
+                    self._incoming.put_nowait(("stop", 0, b""))
+                except (queue.Full, OSError, ValueError):
+                    self.error("shutdown_notify")
+            while self._process is not None and self._process.is_alive() and monotonic() < deadline:
+                await asyncio.sleep(.02)
+            if self._process is not None and self._process.is_alive():
+                self.error("shutdown_timeout")
+        except (Exception, asyncio.CancelledError):
+            self.error("shutdown_wait")
+        finally:
+            try:
+                await self._dispose(force=True)
+            except Exception:
+                self.error("shutdown_dispose")
+            finally:
+                self._published["ready"] = False
+                self._context = None
+                if self._active is not None and not self._active.done():
+                    self._active.set_result(None)

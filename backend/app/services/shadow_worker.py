@@ -155,6 +155,30 @@ class ShadowWorker:
 
 
 
+async def _statistics(settings, query):
+    """Keep history, aggregation and response sizing entirely in the child."""
+    import json
+    import pickle
+    from pathlib import Path
+    import aiosqlite
+    from app.services.shadow_ipc import MAX_STATISTICS_BYTES
+    from app.services.shadow_stats import buckets
+    since, until, dims, include_fake, strategy_version = query
+    uri = Path(settings["sqlite_path"]).resolve().as_uri() + "?mode=ro"
+    async with aiosqlite.connect(uri, uri=True) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await ShadowTradeRepository(db).closed_events(since, until, include_fake, strategy_version)
+    result = buckets(rows, dims, include_fake)
+    # Bound both IPC and eventual API serialization. Preserve complete curves;
+    # over-limit requests use the existing 503 path, never sampled/truncated data.
+    if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) > MAX_STATISTICS_BYTES:
+        raise ValueError("shadow statistics response limit exceeded")
+    encoded = pickle.dumps(result, protocol=5)
+    if len(encoded) > MAX_STATISTICS_BYTES:
+        raise ValueError("shadow statistics IPC limit exceeded")
+    return encoded
+
+
 def run_child(settings, incoming, outgoing, stop):
     """Single owner of ledger/scorer and the shadow SQLite writer."""
     import os
@@ -162,7 +186,6 @@ def run_child(settings, incoming, outgoing, stop):
     import queue
     from types import SimpleNamespace
     from app.services.shadow_ipc import MarketInput as WireMarket, OpportunityInput as WireOpportunity, MarketDirectory, rss_mb
-    from app.services.shadow_stats import buckets
 
     async def run():
         worker = ShadowWorker(SimpleNamespace(**settings))
@@ -184,16 +207,16 @@ def run_child(settings, incoming, outgoing, stop):
                 try:
                     kind, token, payload = incoming.get(timeout=.1)
                 except queue.Empty:
-                    if stop.is_set():
-                        break
                     continue
+                if kind == "stop":
+                    break
                 started, cpu = perf_counter(), thread_time()
                 result = None
                 ipc_wait = 0.0
                 try:
                     data = pickle.loads(payload)
                     if kind == "statistics":
-                        result = buckets(*data)
+                        result = await _statistics(settings, data)
                     else:
                         next_sequence, full, now, ids, spreads, catalog = data
                         if not full and (not synchronized or next_sequence != sequence + 1):
@@ -263,9 +286,11 @@ def run_child(settings, incoming, outgoing, stop):
                     if kind == "round":
                         status.update(select_wall_ms=select_wall, calculate_wall_ms=calculate_wall, mirror_sequence=sequence)
                 except Exception:
-                    synchronized = False
-                    worker.error("worker")
-                    status = {**worker._worker_status(), "error_counts": worker.error_log.counts(), "resync_required": True}
+                    if kind == "round":
+                        synchronized = False
+                    worker.error("statistics" if kind == "statistics" else "worker")
+                    status = {**worker._worker_status(), "error_counts": worker.error_log.counts(),
+                              "resync_required": kind == "round"}
                 outgoing.put((kind, token, result, status))
         finally:
             status = await worker._close_worker()
