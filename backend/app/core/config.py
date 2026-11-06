@@ -100,6 +100,7 @@ class Settings:
     shadow_enabled: bool = False
     shadow_min_open_pct: float = 0.2
     shadow_child_max_rss_mb: float = 250
+    shadow_shutdown_timeout_seconds: float = 6
     shadow_min_liquidity_usd: float = 0
     shadow_max_open: int = 1500
     shadow_slippage_bps: str = '{"gt50k":2,"5k-50k":5,"500-5k":15,"lt500":30,"unknown":30}'
@@ -120,6 +121,10 @@ class Settings:
         from app.services.execution_routes import validate_shadow_settings
 
         validate_shadow_settings(self)
+        timeout = self.shadow_shutdown_timeout_seconds
+        if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
+                or not math.isfinite(timeout) or not 1 <= timeout <= 8):
+            raise ValueError("SHADOW_SHUTDOWN_TIMEOUT_SECONDS must be finite and between 1 and 8")
         if type(self.dashboard_session_days) is not int or not 1 <= self.dashboard_session_days <= 30:
             raise ValueError("DASHBOARD_SESSION_DAYS must be between 1 and 30")
         if not math.isfinite(self.hl_bbo_max_age_seconds) or self.hl_bbo_max_age_seconds <= 0:
@@ -347,6 +352,7 @@ def get_settings() -> Settings:
         shadow_min_open_pct=float(os.getenv("SHADOW_MIN_OPEN_PCT", "0.2")),
         shadow_max_open=int(os.getenv("SHADOW_MAX_OPEN", "1500")),
         shadow_child_max_rss_mb=float(os.getenv("SHADOW_CHILD_MAX_RSS_MB", "250")),
+        shadow_shutdown_timeout_seconds=float(os.getenv("SHADOW_SHUTDOWN_TIMEOUT_SECONDS", "6")),
         shadow_min_liquidity_usd=float(os.getenv("SHADOW_MIN_LIQUIDITY_USD", "0")),
         shadow_slippage_bps=os.getenv("SHADOW_SLIPPAGE_BPS", Settings.shadow_slippage_bps),
         native_route_exchanges=os.getenv("NATIVE_ROUTE_EXCHANGES", "hyperliquid,lighter,bitget"),

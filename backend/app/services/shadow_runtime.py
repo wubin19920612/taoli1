@@ -15,7 +15,9 @@ from app.services.snapshot_consumers import PublishedSnapshot
 RESTART_BASE_SECONDS = 5
 MAX_RESTARTS = 3
 WORK_TIMEOUT_SECONDS = 60
-SHUTDOWN_SECONDS = 10
+SHUTDOWN_GRACE_SECONDS = 4
+SHUTDOWN_JOIN_SECONDS = 1
+SHUTDOWN_MAX_SECONDS = SHUTDOWN_GRACE_SECONDS + 2 * SHUTDOWN_JOIN_SECONDS
 
 
 class ShadowRuntime:
@@ -34,6 +36,7 @@ class ShadowRuntime:
         self._closing = self._disabled = False
         self._close_task = None
         self._shutdown_deadline = None
+        self._shutdown_grace_deadline = None
         self._dispose_lock = asyncio.Lock()
         self._frozen_markets = ()
         self._frozen_ops = ()
@@ -504,7 +507,7 @@ class ShadowRuntime:
         self._needs_resync = True
         process = self._process
         # Normal fault recovery has the same bounded terminate/kill ladder.
-        deadline = self._shutdown_deadline or monotonic() + 4.5
+        deadline = self._shutdown_deadline or monotonic() + 2 * SHUTDOWN_JOIN_SECONDS
         def remaining(cap):
             return max(0, min(cap, deadline - monotonic()))
         async def join(target, cap):
@@ -522,13 +525,15 @@ class ShadowRuntime:
                     process.terminate()
                 except OSError:
                     self.error("shutdown_terminate")
-            await join(process, 2)
+            # Reserve a kill/join window even for a configured total below 2s.
+            reap_budget = min(2 * SHUTDOWN_JOIN_SECONDS, max(0, deadline - monotonic()))
+            await join(process, reap_budget / 2)
             if process.is_alive():
                 try:
                     process.kill()
                 except OSError:
                     self.error("shutdown_kill")
-                await join(process, 2)
+                await join(process, SHUTDOWN_JOIN_SECONDS)
             if process.is_alive():
                 self.error("shutdown_kill_timeout")
             else:
@@ -584,7 +589,12 @@ class ShadowRuntime:
         if not self.settings.shadow_enabled:
             return
         if self._close_task is None:
-            self._shutdown_deadline = monotonic() + SHUTDOWN_SECONDS + 4.5
+            # PM 49 accepts config 1-8s, with a hard 6s runtime ceiling so the
+            # container's default 10s stop window still leaves cleanup time.
+            timeout = min(self.settings.shadow_shutdown_timeout_seconds, SHUTDOWN_MAX_SECONDS)
+            started = monotonic()
+            self._shutdown_deadline = started + timeout
+            self._shutdown_grace_deadline = started + max(0, timeout - 2 * SHUTDOWN_JOIN_SECONDS)
             self._close_task = asyncio.create_task(self._shutdown())
         try:
             await asyncio.shield(self._close_task)
@@ -598,7 +608,7 @@ class ShadowRuntime:
             self.error("shutdown")
 
     async def _shutdown(self):
-        deadline = self._shutdown_deadline - 4.5
+        deadline = self._shutdown_grace_deadline
         # Accepted capture may still be yielding before sending its first frame.
         # Let it drain within the same shutdown deadline before asking the idle
         # child to exit; otherwise the stop flag can race with that first frame.
@@ -609,7 +619,7 @@ class ShadowRuntime:
                 except TimeoutError:
                     self._supervisor.cancel()
                     await asyncio.gather(self._supervisor, return_exceptions=True)
-                    raise
+                    self.error("shutdown_wait")
             while self._active is not None and not self._active.done() and monotonic() < deadline:
                 await asyncio.sleep(.01)
             if self._incoming is not None:
