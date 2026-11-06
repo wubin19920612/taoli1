@@ -7,7 +7,7 @@ import pytest
 
 from app.core.config import Settings
 from app.services.fake_opportunity import FakeOpportunityScorer, market_key
-from app.services.shadow_runtime import ShadowRuntime
+from shadow_worker_harness import ShadowRuntime
 from app.services.snapshot_consumers import PublishedSnapshot
 from app.services.snapshot_store import SnapshotStore
 from app.services.spread_engine import build_directional_opportunity
@@ -41,7 +41,7 @@ def test_capacity_protects_related_markets_and_evicts_oldest_seen():
 
 @pytest.mark.asyncio
 async def test_full_capture_yields_every_thousand_and_guards_single_flight(monkeypatch):
-    import app.services.shadow_runtime as module
+    import shadow_worker_harness as module
     store = SnapshotStore()
     runtime = ShadowRuntime(Settings(shadow_enabled=True), store)
     related, op = pair()
@@ -135,3 +135,10 @@ async def test_mixed_list_preserves_objects_order_api_serialization_and_alerts(t
     assert set(runtime._display_cache) == {op.id}
     assert set(runtime._input_cache) == {op.id}
     await runtime.aclose()
+
+
+@pytest.fixture(autouse=True)
+def child_core_runtime_for_injection(monkeypatch):
+    """These tests inject failures into the child core, not the IPC transport."""
+    import app.main
+    monkeypatch.setattr(app.main, "ShadowRuntime", ShadowRuntime)

@@ -7,7 +7,7 @@ import pytest
 
 from app.core.config import Settings
 from app.services.fake_opportunity import market_key
-from app.services.shadow_runtime import ShadowRuntime
+from shadow_worker_harness import ShadowRuntime
 from app.services.snapshot_consumers import PublishedSnapshot
 from app.services.snapshot_store import SnapshotStore
 from shadow_helpers import NOW, pair, empty_baseline

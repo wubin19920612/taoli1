@@ -8,7 +8,7 @@ from app.core.config import Settings
 from app.db.database import connect_database
 from app.db.schema import initialize_schema
 from app.main import create_app
-from app.services.shadow_runtime import ShadowRuntime
+from shadow_worker_harness import ShadowRuntime
 from app.services.shadow_ledger import ShadowLedger
 from app.services.snapshot_consumers import PublishedSnapshot
 from app.services.snapshot_store import SnapshotStore
@@ -110,10 +110,17 @@ async def test_runtime_preserves_published_models_and_isolates_failed_writes(cap
 
 @pytest.mark.asyncio
 async def test_shadow_schema_failure_does_not_escape_startup(monkeypatch):
-    import app.services.shadow_runtime as module
+    import shadow_worker_harness as module
     async def broken(db):
         raise RuntimeError("synthetic shadow schema failure")
     monkeypatch.setattr(module, "initialize_shadow_schema", broken)
     runtime = ShadowRuntime(Settings(shadow_enabled=True, database_url="sqlite:///:memory:"), SnapshotStore())
     await runtime.initialize(None)
     assert not runtime.status()["ready"] and runtime.errors == 1
+
+
+@pytest.fixture(autouse=True)
+def child_core_runtime_for_injection(monkeypatch):
+    """These tests inject failures into the child core, not the IPC transport."""
+    import app.main
+    monkeypatch.setattr(app.main, "ShadowRuntime", ShadowRuntime)

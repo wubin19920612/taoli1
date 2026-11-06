@@ -33,7 +33,7 @@ def selected_inputs(markets, opportunities, ledger, scorer, now):
 @pytest.mark.asyncio
 async def test_round4_runtime_full_crossings_baseline_quotas_and_retry(tmp_path):
     from app.db.database import connect_database
-    from app.services.shadow_runtime import ShadowRuntime
+    from shadow_worker_harness import ShadowRuntime
     from app.services.snapshot_consumers import PublishedSnapshot
     from app.services.snapshot_store import SnapshotStore
     from shadow_helpers import pair
@@ -154,7 +154,7 @@ async def test_runtime_matches_full_path_combined_seeded_sequence(tmp_path):
     from app.db.database import connect_database
     from app.db.schema import initialize_shadow_schema
     from app.db.repositories import ShadowTradeRepository
-    from app.services.shadow_runtime import ShadowRuntime
+    from shadow_worker_harness import ShadowRuntime
     from app.services.snapshot_consumers import PublishedSnapshot
     from app.services.snapshot_store import SnapshotStore
 
@@ -277,7 +277,7 @@ async def test_runtime_matches_full_path_combined_seeded_sequence(tmp_path):
 async def test_bmt_first_threshold_crossing_already_has_frozen_leg(tmp_path):
     import math
     from app.db.database import connect_database
-    from app.services.shadow_runtime import ShadowRuntime
+    from shadow_worker_harness import ShadowRuntime
     from app.services.snapshot_consumers import PublishedSnapshot
     from app.services.snapshot_store import SnapshotStore
 
@@ -317,7 +317,7 @@ async def test_bmt_first_threshold_crossing_already_has_frozen_leg(tmp_path):
 
 @pytest.mark.asyncio
 async def test_unrelated_changed_time_and_new_peer_delay_are_at_most_sixty_seconds():
-    from app.services.shadow_runtime import ShadowRuntime
+    from shadow_worker_harness import ShadowRuntime
     from app.services.snapshot_consumers import PublishedSnapshot
     from app.services.snapshot_store import SnapshotStore
 
@@ -353,7 +353,7 @@ async def test_unrelated_changed_time_and_new_peer_delay_are_at_most_sixty_secon
 
 @pytest.mark.asyncio
 async def test_filtered_below_threshold_clears_plateau_but_absence_preserves_it():
-    from app.services.shadow_runtime import ShadowRuntime
+    from shadow_worker_harness import ShadowRuntime
     from app.services.snapshot_consumers import PublishedSnapshot
     from app.services.snapshot_store import SnapshotStore
     from shadow_helpers import pair

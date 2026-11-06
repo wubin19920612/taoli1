@@ -10,7 +10,7 @@ from app.db.database import connect_database
 from app.db.schema import initialize_schema
 from app.services.fake_opportunity import FakeOpportunityScorer, opportunity_keys
 from app.services.shadow_ledger import ShadowLedger
-from app.services.shadow_runtime import ShadowRuntime, freeze_snapshot
+from shadow_worker_harness import ShadowRuntime, freeze_snapshot
 from app.services.snapshot_consumers import PublishedSnapshot
 from app.services.snapshot_store import SnapshotStore
 from app.services.spread_engine import build_directional_opportunity

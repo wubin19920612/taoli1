@@ -16,7 +16,7 @@ from app.db.repositories import ShadowTradeRepository
 from app.db.schema import initialize_shadow_schema
 from app.main import create_app
 from app.services.shadow_ledger import ShadowLedger
-from app.services.shadow_runtime import ShadowRuntime
+from shadow_worker_harness import ShadowRuntime
 from app.services.snapshot_consumers import PublishedSnapshot
 from app.services.snapshot_store import SnapshotStore
 from auth_helpers import IsolatedSessionLookup, TEST_TOTP_SECRET, seed_sessions, session_headers
@@ -185,7 +185,7 @@ async def test_api_reader_connection_is_read_only_and_off_event_loop(tmp_path, m
 
 @pytest.mark.asyncio
 async def test_capture_errors_are_rate_limited_and_counted_by_category(monkeypatch, caplog):
-    import app.services.shadow_runtime as module
+    import shadow_worker_harness as module
     runtime = ShadowRuntime(Settings(shadow_enabled=True), SnapshotStore())
     clock = [100.0]
     monkeypatch.setattr(module, "monotonic", lambda: clock[0])
@@ -303,7 +303,7 @@ async def test_cancelled_close_waits_for_worker_before_closing_connection(tmp_pa
 @pytest.mark.asyncio
 @pytest.mark.parametrize("category", ["initialize", "consumer", "worker"])
 async def test_runtime_error_paths_use_independent_category_limits(monkeypatch, caplog, category):
-    import app.services.shadow_runtime as module
+    import shadow_worker_harness as module
     runtime = ShadowRuntime(Settings(shadow_enabled=True, database_url="sqlite:///:memory:"), SnapshotStore())
     db = await connect_database(":memory:")
 
@@ -361,7 +361,7 @@ async def test_api_errors_are_rate_limited_and_visible_in_status(tmp_path, monke
         raise RuntimeError("synthetic statistics failure")
 
     if category == "statistics":
-        monkeypatch.setattr(routes, "buckets", broken_sync)
+        monkeypatch.setattr(runtime, "statistics", broken_async)
     else:
         monkeypatch.setattr(routes.ShadowTradeRepository, category.removeprefix("read_"), broken_async)
     try:
@@ -376,3 +376,10 @@ async def test_api_errors_are_rate_limited_and_visible_in_status(tmp_path, monke
         assert state["errors"] == 3
     finally:
         await runtime.aclose()
+
+
+@pytest.fixture(autouse=True)
+def child_core_runtime_for_injection(monkeypatch):
+    """These tests inject failures into the child core, not the IPC transport."""
+    import app.main
+    monkeypatch.setattr(app.main, "ShadowRuntime", ShadowRuntime)

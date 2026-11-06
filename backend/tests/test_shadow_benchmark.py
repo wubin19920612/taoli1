@@ -98,14 +98,16 @@ async def test_shadow_resource_budgets(tmp_path, scenario, positions, op_count, 
     baseline = working_set()
     runtime = ShadowRuntime(Settings(shadow_enabled=True, shadow_max_open=3000,
                                     database_url="sqlite:///" + path), store)
-    runtime.catalog.entries = {("BINANCE", "FUTURE", f"C{i}", "") for i in range(positions)}
+    runtime.catalog.entries = {("BINANCE", "FUTURE", f"C{i}", "")
+                               for i in range(4600 if scenario == "production" else positions)}
     await runtime.initialize(db)
     if scenario != "production":
         # The measured opening round is a new crossing, after an empty startup
         # baseline. Production instead restores the full 750-pair seed above.
-        empty_baseline(runtime.ledger)
+        await runtime.consume(PublishedSnapshot(0, NOW, (), (),
+            opportunities_version=store.opportunities_version))
     loop_times, cpus, walls, recomputed, captures, publishes = [], [], [], [], [], []
-    segments, selections, calculations, phases = [], [], [], []
+    segments, selections, calculations, phases, main_cpus, capture_stages = [], [], [], [], [], []
 
     async def run(now, ops):
         store.mark_published(now)
@@ -117,6 +119,8 @@ async def test_shadow_resource_budgets(tmp_path, scenario, positions, op_count, 
         state = runtime.status()
         loop_times.append(state["last_duration_ms"])
         captures.append(state["capture_ms"])
+        main_cpus.append(state["main_cpu_ms"])
+        capture_stages.append(state["capture_segments_ms"])
         segments.append(state["event_loop_max_segment_ms"])
         selections.append(state["select_wall_ms"])
         calculations.append(state["calculate_wall_ms"])
@@ -156,12 +160,15 @@ async def test_shadow_resource_budgets(tmp_path, scenario, positions, op_count, 
         rss_mib = (working_set() - baseline) / 1024 / 1024
         wall_budget = 30 if scenario in {"stress", "production"} else cpu_budget
         result = {"scenario": scenario, "system_cpu_before_pct": cpu_before,
-                  "markets": len(markets),
+                  "markets": len(markets), "catalog_entries": len(runtime.catalog.entries),
                   "open_rows": positions * 2, "opportunities": op_count, "rounds": len(cpus),
                   "changed_fraction": 1 / change_stride,
                   "capture_median_ms": statistics.median(captures),
                   "publish_median_ms": statistics.median(publishes),
                   "event_loop_median_ms": statistics.median(loop_times),
+                  "main_cpu_median_ms": statistics.median(main_cpus),
+                  "capture_stage_medians_ms": [statistics.median(s[i] for s in capture_stages) for i in range(3)],
+                  "child_rss_mb": runtime.status()["child_rss_mb"],
                   "event_loop_p95_ms": sorted(loop_times)[math.ceil(len(loop_times) * .95) - 1],
                   "event_loop_max_ms": max(segments) if scenario == "production" else max(loop_times),
                   "event_loop_total_max_ms": max(loop_times),
@@ -171,8 +178,8 @@ async def test_shadow_resource_budgets(tmp_path, scenario, positions, op_count, 
                   "price_states": runtime.status()["scorer_price_states"],
                   "worker_phase_medians_ms": {k: statistics.median(p[k] for p in phases) for k in phases[-1]},
                   "checkpoint_worker_phases_ms": checkpoint["worker_phases_ms"],
-                  "asset_index_assets": len(runtime._asset_index),
-                  "display_cache_entries": len(runtime._display_cache),
+                  "asset_index_assets": runtime.status()["asset_index_assets"],
+                  "display_cache_entries": runtime.status()["display_cache_entries"],
                   "worker_cpu_median_ms": statistics.median(cpus),
                   "worker_cpu_mean_ms": statistics.mean(cpus),
                   "worker_wall_median_ms": statistics.median(walls),
@@ -187,6 +194,9 @@ async def test_shadow_resource_budgets(tmp_path, scenario, positions, op_count, 
                   "within_time_budget": (statistics.median(cpus) <= cpu_budget
                                          if cpu_budget is not None else statistics.median(walls) <= wall_budget)}
         print("SHADOW_BENCHMARK " + json.dumps(result, sort_keys=True))
+        print("SHADOW_BENCHMARK_SUMMARY " + json.dumps({key: result[key] for key in (
+            "scenario", "system_cpu_before_pct", "event_loop_median_ms", "main_cpu_median_ms",
+            "capture_stage_medians_ms", "worker_wall_median_ms", "child_rss_mb")}, sort_keys=True))
         assert runtime.errors == 0
         assert runtime.status()["open_count"] == positions * 2
         assert runtime.status()["pending_writes"] == 0
@@ -203,7 +213,9 @@ async def test_shadow_resource_budgets(tmp_path, scenario, positions, op_count, 
         assert result["event_loop_p95_ms"] <= (15 if scenario == "production" else 10)
         assert result["event_loop_max_ms"] <= (80 if scenario == "production" else 50 if scenario == "stress" else 20)
         assert result["recomputed_median"] <= math.ceil(positions / change_stride)
-        assert await runtime.repo.count_open() == positions * 2
+        assert await ShadowTradeRepository(db).count_open() == positions * 2
+        assert result["main_cpu_median_ms"] < 5
+        assert result["child_rss_mb"] <= runtime.settings.shadow_child_max_rss_mb
     finally:
         await runtime.aclose()
         await db.close()

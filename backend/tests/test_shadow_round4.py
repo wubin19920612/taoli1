@@ -255,7 +255,10 @@ async def test_retirement_preserves_history_excludes_stats_and_never_cools_down(
 
 
 @pytest.mark.asyncio
-async def test_status_and_bucket_api_strategy_selection(tmp_path):
+async def test_status_and_bucket_api_strategy_selection(tmp_path, monkeypatch):
+    import app.main
+    from shadow_worker_harness import ShadowRuntime
+    monkeypatch.setattr(app.main, "ShadowRuntime", ShadowRuntime)
     import httpx
     from app.main import create_app
     from auth_helpers import IsolatedSessionLookup, TEST_TOTP_SECRET, session_headers
