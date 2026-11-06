@@ -224,8 +224,7 @@ async def test_rss_limit_disables_without_restart(tmp_path):
 async def test_timeout_and_shutdown_terminate_hung_child(tmp_path, monkeypatch):
     import app.services.shadow_runtime as module
     monkeypatch.setattr(module, "child_entry", hung_child)
-    monkeypatch.setattr(module, "SHUTDOWN_SECONDS", .2)
-    rt = runtime_for(tmp_path)
+    rt = runtime_for(tmp_path, shadow_shutdown_timeout_seconds=1)
     try:
         await rt.initialize()
         monkeypatch.setattr(module, "WORK_TIMEOUT_SECONDS", .3)
@@ -235,7 +234,7 @@ async def test_timeout_and_shutdown_terminate_hung_child(tmp_path, monkeypatch):
     finally:
         await rt.aclose()
     monkeypatch.setattr(module, "WORK_TIMEOUT_SECONDS", 60)
-    rt = runtime_for(tmp_path)
+    rt = runtime_for(tmp_path, shadow_shutdown_timeout_seconds=1)
     await rt.initialize()
     await rt.aclose()
     assert rt._process is None and rt.status()["error_counts"]["shutdown_timeout"] == 1

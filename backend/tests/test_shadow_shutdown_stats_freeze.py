@@ -8,8 +8,39 @@ from time import perf_counter
 
 import pytest
 
+from app.core.config import Settings, get_settings
 from shadow_helpers import NOW, market
 from test_shadow_process import eventually, fresh_pair, rows, runtime_for, tick
+
+
+def test_shutdown_timeout_defaults_and_environment(monkeypatch):
+    monkeypatch.setattr("app.core.config.find_dotenv", lambda **kwargs: "")
+    monkeypatch.delenv("SHADOW_SHUTDOWN_TIMEOUT_SECONDS", raising=False)
+    assert Settings().shadow_shutdown_timeout_seconds == 6
+    assert get_settings.__wrapped__().shadow_shutdown_timeout_seconds == 6
+
+
+@pytest.mark.parametrize("seconds", [1, 2.5, 6, 8])
+def test_shutdown_timeout_accepts_range_and_environment(monkeypatch, seconds):
+    monkeypatch.setattr("app.core.config.find_dotenv", lambda **kwargs: "")
+    monkeypatch.setenv("SHADOW_SHUTDOWN_TIMEOUT_SECONDS", str(seconds))
+    assert Settings(shadow_shutdown_timeout_seconds=seconds).shadow_shutdown_timeout_seconds == seconds
+    assert get_settings.__wrapped__().shadow_shutdown_timeout_seconds == seconds
+
+
+@pytest.mark.parametrize("seconds", [0, .999, 8.001, float("nan"), float("inf"),
+                                     float("-inf"), True, False, None, "6"])
+def test_shutdown_timeout_rejects_invalid_settings(seconds):
+    with pytest.raises(ValueError, match="SHADOW_SHUTDOWN_TIMEOUT_SECONDS"):
+        Settings(shadow_shutdown_timeout_seconds=seconds)
+
+
+@pytest.mark.parametrize("seconds", ["", "invalid", "0", "0.999", "8.001", "nan", "inf", "-inf"])
+def test_shutdown_timeout_rejects_invalid_environment(monkeypatch, seconds):
+    monkeypatch.setattr("app.core.config.find_dotenv", lambda **kwargs: "")
+    monkeypatch.setenv("SHADOW_SHUTDOWN_TIMEOUT_SECONDS", seconds)
+    with pytest.raises(ValueError):
+        get_settings.__wrapped__()
 
 
 def locked_child(config, incoming, outgoing, stop):
@@ -21,6 +52,20 @@ def locked_child(config, incoming, outgoing, stop):
         import time
         while True:
             time.sleep(.1)
+
+
+def pending_writes_child(config, incoming, outgoing, stop):
+    from app.services.shadow_ledger import ShadowLedger
+    from app.services.shadow_worker import ShadowWorker, run_child
+    flush, close = ShadowLedger.flush, ShadowWorker._close_worker
+    async def defer_flush(self, repository):
+        pass
+    async def closing(self):
+        ShadowLedger.flush = flush
+        return await close(self)
+    ShadowLedger.flush = defer_flush
+    ShadowWorker._close_worker = closing
+    run_child(config, incoming, outgoing, stop)
 
 
 async def measured_close(rt):
@@ -40,9 +85,41 @@ async def measured_close(rt):
     finally:
         done = True
         await beat
-    assert perf_counter() - started < 15
+    # PM 49 replaces the old 15s specification; this is a stricter deadline.
+    assert perf_counter() - started < min(rt.settings.shadow_shutdown_timeout_seconds, 6)
     assert gaps and max(gaps) < .25
     assert rt._process is None and rt._incoming is None and rt._stop is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("seconds", [1, 2.5, 6, 8])
+async def test_shutdown_starts_one_deadline_and_never_renews_it(tmp_path, monkeypatch, seconds):
+    import app.services.shadow_runtime as module
+    rt = runtime_for(tmp_path, shadow_shutdown_timeout_seconds=seconds)
+    monkeypatch.setattr(module, "monotonic", lambda: 100)
+    await rt.aclose()
+    assert rt._shutdown_deadline == 100 + min(seconds, 6)
+    monkeypatch.setattr(module, "monotonic", lambda: 200)
+    await rt.aclose()
+    assert rt._shutdown_deadline == 100 + min(seconds, 6)
+
+
+@pytest.mark.asyncio
+async def test_graceful_shutdown_flushes_pending_writes_within_new_deadline(tmp_path, monkeypatch):
+    import app.services.shadow_runtime as module
+    monkeypatch.setattr(module, "child_entry", pending_writes_child)
+    rt = runtime_for(tmp_path)
+    try:
+        await rt.initialize()
+        await tick(rt, NOW)
+        quotes, op = fresh_pair(NOW)
+        await tick(rt, NOW, quotes, [op])
+        assert rt.status()["pending_writes"] == 2 and await rows(rt) == []
+        await measured_close(rt)
+        assert len(await rows(rt)) == 2 and rt.status()["pending_writes"] == 0
+        assert rt.errors == 0
+    finally:
+        await rt.aclose()
 
 
 @pytest.mark.asyncio
@@ -89,29 +166,36 @@ async def test_stopped_child_close_is_bounded_and_does_not_block_loop(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_terminate_failure_escalates_to_kill_with_threaded_joins(tmp_path, monkeypatch):
+@pytest.mark.parametrize("seconds", [1, 6])
+async def test_terminate_failure_escalates_to_kill_with_threaded_joins(tmp_path, monkeypatch, seconds):
     import threading
     from test_shadow_process import hung_child
     import app.services.shadow_runtime as module
     monkeypatch.setattr(module, "child_entry", hung_child)
-    rt = runtime_for(tmp_path)
+    rt = runtime_for(tmp_path, shadow_shutdown_timeout_seconds=seconds)
     await rt.initialize()
     process = rt._process
-    joins, kills = [], []
+    joins, kills, terminations = [], [], []
     join, kill = process.join, process.kill
     def checked_join(timeout):
         assert threading.current_thread() is not threading.main_thread()
-        assert 0 <= timeout <= 2
+        assert 0 < timeout <= min(1, seconds / 2)
         joins.append(timeout)
         return join(timeout)
+    def ignored_terminate():
+        terminations.append(perf_counter())
     def checked_kill():
-        kills.append(True)
+        kills.append(perf_counter())
         kill()
     monkeypatch.setattr(process, "join", checked_join)
-    monkeypatch.setattr(process, "terminate", lambda: None)
+    monkeypatch.setattr(process, "terminate", ignored_terminate)
     monkeypatch.setattr(process, "kill", checked_kill)
+    started = perf_counter()
     await measured_close(rt)
-    assert len(joins) == 2 and kills == [True]
+    assert len(joins) == 2 and len(kills) == len(terminations) == 1
+    assert terminations[0] - started <= max(0, min(4, seconds - 2)) + .15
+    assert kills[0] - terminations[0] <= min(1, seconds / 2) + .15
+    assert "shutdown_kill_timeout" not in rt.status()["error_counts"]
 
 
 @pytest.mark.asyncio
