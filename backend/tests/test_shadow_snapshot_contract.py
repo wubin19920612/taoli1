@@ -3,7 +3,8 @@
 Tracks annotations, constructor/annotated-call results, store getters, aliases,
 container indexing/iteration and list-field aliases. This is a regression guard,
 not a whole-program type checker: dynamic reflection and untyped external helper
-returns still require review. No producer file is exempted by an allowlist.
+returns still require review. PM 48 permits only five explicitly reviewed
+pre-publication assignments; no producer file is exempted as a whole.
 """
 import ast
 from pathlib import Path
@@ -21,6 +22,15 @@ LIST_FIELDS = {
     cls.__name__: {name for name, field in cls.model_fields.items() if "list[" in str(field.annotation)}
     for cls in (MarketSnapshot, Opportunity)
 }
+# PM 48: these five instances were freshly constructed and not yet in the store.
+# Keys are relative to backend/app; each key must match exactly one assignment.
+UNPUBLISHED_ASSIGNMENTS = frozenset({
+    ("api/routes_astro.py", "_find_instrument_opportunity", "comparison_kind"),
+    ("services/collector.py", "_collect_once", "validation"),
+    ("services/collector.py", "_collect_once", "risk_labels"),
+    ("services/collector.py", "_build_labeled_opportunities", "risk_labels"),
+    ("services/collector.py", "_build_labeled_opportunities_async", "risk_labels"),
+})
 
 
 def leaf_name(node):
@@ -46,7 +56,7 @@ def annotation(node, aliases):
     return None
 
 
-def mutation_errors(sources):
+def mutation_errors(sources, allowed_assignments=()):
     trees = {name: ast.parse(source, filename=name) for name, source in sources.items()}
     aliases = {node.asname or node.name: node.name for tree in trees.values()
                for node in ast.walk(tree) if isinstance(node, ast.alias)}
@@ -61,10 +71,12 @@ def mutation_errors(sources):
                    get_all_markets=("container", "MarketSnapshot"),
                    get_opportunities=("container", "Opportunity"))
     errors = set()
+    allowed_hits = {key: set() for key in allowed_assignments}
 
     class Guard(ast.NodeVisitor):
         def __init__(self, filename):
             self.filename, self.env = filename, {}
+            self.function = None
 
         def kind(self, node):
             if isinstance(node, ast.Name):
@@ -139,17 +151,24 @@ def mutation_errors(sources):
             self.generic_visit(node)
             self.env = outer
 
-        def check_target(self, target):
+        def check_target(self, target, *, allow_assignment=False):
             if isinstance(target, ast.Attribute) and self.kind(target.value) in MODELS:
+                key = (self.filename, self.function, target.attr)
+                if allow_assignment and key in allowed_hits:
+                    # Fixed-point passes revisit nodes; count distinct sites only.
+                    allowed_hits[key].add((target.lineno, target.col_offset))
+                    if len(allowed_hits[key]) == 1:
+                        return
                 self.report(target)
             elif isinstance(target, ast.Subscript) and self.kind(target.value) == "field":
                 self.report(target)
             elif isinstance(target, (ast.Tuple, ast.List)):
                 for part in target.elts:
-                    self.check_target(part)
+                    self.check_target(part, allow_assignment=allow_assignment)
 
         def visit_FunctionDef(self, node):
             outer, self.env = self.env, self.env.copy()
+            outer_function, self.function = self.function, node.name
             for arg in (*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs):
                 kind = annotation(arg.annotation, aliases)
                 if kind:
@@ -160,17 +179,18 @@ def mutation_errors(sources):
                 for statement in node.body:
                     self.visit(statement)
             self.env = outer
+            self.function = outer_function
 
         visit_AsyncFunctionDef = visit_FunctionDef
 
         def visit_Assign(self, node):
             for target in node.targets:
-                self.check_target(target)
+                self.check_target(target, allow_assignment=True)
                 self.bind(target, self.kind(node.value))
             self.generic_visit(node)
 
         def visit_AnnAssign(self, node):
-            self.check_target(node.target)
+            self.check_target(node.target, allow_assignment=True)
             self.bind(node.target, annotation(node.annotation, aliases) or self.kind(node.value))
             self.generic_visit(node)
 
@@ -204,6 +224,9 @@ def mutation_errors(sources):
 
     for filename, tree in trees.items():
         Guard(filename).visit(tree)
+    for (filename, function, attribute), hits in allowed_hits.items():
+        if not hits:
+            errors.add(f"{filename}:{function}:{attribute}: stale unpublished-assignment allowlist entry")
     return sorted(errors)
 
 
@@ -213,7 +236,7 @@ def test_production_does_not_mutate_snapshot_models():
                for path in app.rglob("*.py")
                if "tests" not in path.parts and not any("shadow" in part for part in path.relative_to(app).parts)}
     assert "services/snapshot_store.py" in sources
-    assert mutation_errors(sources) == []
+    assert mutation_errors(sources, UNPUBLISHED_ASSIGNMENTS) == []
 
 
 @pytest.mark.parametrize("body", [
@@ -255,3 +278,60 @@ def f(odd: MarketSnapshot, other: OrderBookSnapshot):
     store.set_markets(batch)
     other.bid = 2
 """}) == []
+
+
+@pytest.mark.parametrize("entry", sorted(UNPUBLISHED_ASSIGNMENTS))
+@pytest.mark.parametrize("annotation_text", ["", ": object"])
+def test_guard_allows_only_explicit_unpublished_assignments(entry, annotation_text):
+    filename, function, attribute = entry
+    # Line numbers and local variable names are not part of the approved key.
+    source = f"\n\ndef {function}(odd: Opportunity):\n    odd.{attribute}{annotation_text} = None"
+    assert mutation_errors({filename: source}, {entry}) == []
+
+
+@pytest.mark.parametrize("filename,function,attribute", [
+    ("other/collector.py", "_collect_once", "risk_labels"),
+    ("services/collector.py", "other_function", "risk_labels"),
+    ("services/collector.py", "_collect_once", "symbol"),
+])
+def test_guard_rejects_assignments_outside_exact_allowlist_key(filename, function, attribute):
+    entry = ("services/collector.py", "_collect_once", "risk_labels")
+    source = f"def {function}(odd: Opportunity):\n    odd.{attribute} = None"
+    errors = mutation_errors({filename: source}, {entry})
+    assert f"{filename}:2: odd.{attribute}" in errors
+
+
+@pytest.mark.parametrize("entry", sorted(UNPUBLISHED_ASSIGNMENTS))
+@pytest.mark.parametrize("missing_file", [False, True])
+def test_guard_rejects_stale_unpublished_assignment_entries(entry, missing_file):
+    filename, function, attribute = entry
+    sources = {} if missing_file else {filename: f"def {function}(odd: Opportunity):\n    return odd"}
+    assert mutation_errors(sources, {entry}) == [
+        f"{filename}:{function}:{attribute}: stale unpublished-assignment allowlist entry"
+    ]
+
+
+def test_guard_rejects_additional_assignment_with_same_allowlist_key():
+    entry = ("services/collector.py", "_collect_once", "risk_labels")
+    source = """
+def _collect_once(odd: Opportunity):
+    odd.risk_labels = []
+    odd.risk_labels = ['new mutation']
+"""
+    assert "services/collector.py:4: odd.risk_labels" in mutation_errors({entry[0]: source}, {entry})
+
+
+@pytest.mark.parametrize("body", [
+    "odd.risk_labels += ['bad']", "del odd.risk_labels",
+    "odd.risk_labels.append('bad')", "odd.risk_labels[0] = 'bad'",
+    "labels = odd.risk_labels\nlabels.clear()",
+    "setattr(odd, 'risk_labels', [])", "delattr(odd, 'risk_labels')",
+    "def nested():\n    odd.risk_labels = ['bad']",
+])
+def test_guard_allowlist_does_not_exempt_other_mutations(body):
+    entry = ("services/collector.py", "_collect_once", "risk_labels")
+    source = "def _collect_once(odd: Opportunity):\n    odd.risk_labels = []\n"
+    source += "\n".join("    " + line for line in body.splitlines())
+    errors = mutation_errors({entry[0]: source}, {entry})
+    assert errors
+    assert all("stale" not in error for error in errors)
