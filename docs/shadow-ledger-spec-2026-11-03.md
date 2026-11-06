@@ -187,3 +187,12 @@
 ### 第四轮补充一（回应 ce1513e 的冷却问题）
 
 32. **退役不触发冷却**：`retired` 不是真实平仓，既不写入也不恢复 v2 的 cooldown；重启后从历史行重建 cooldown 时也要排除 `retired`。退役机会仍要遵守第 26 条：基线轮只登记，重新上穿才开仓。
+
+## PM decisions 第五轮（2026-11-06，影子计算移出主进程）
+
+33. 影子账本的重计算（市场预筛选、_calculate/_work、ledger 状态、shadow 表的读写与恢复）全部放到一个独立子进程中执行；主进程不再持有 ShadowLedger 状态，也不再为影子开线程做 CPU 计算。用 multiprocessing 的 spawn 上下文，子进程只 import 影子需要的模块（不 import FastAPI 应用、采集器）。
+34. 主进程每轮只做：从快照中抽取影子所需的最小输入（只含预筛选需要的字段，原样 dict/tuple，可 pickle），非阻塞地发给子进程；子进程忙（上一轮未完成）时跳过本轮并计入 skipped_rounds。主进程侧抽取+序列化的 CPU 时间在状态中报告为 main_cpu_ms，目标中位 <5ms（生产规模 ~4600 条目录、~12000 价格状态）。
+35. 结果回传（annotations/状态）通过子进程→主进程的队列异步读取，读取不能阻塞事件循环（不得在事件循环里同步 get；可用专用读取线程只做 I/O 和反序列化，或 loop.add_reader 一类方式）。现有 API 输出字段与语义不变；状态新增 worker_pid、child_rss_mb、main_cpu_ms、child_restarts。
+36. 故障隔离：子进程崩溃/超时/异常绝不抛到主流程。崩溃后最多自动重启 3 次（指数退避，从 5s 起），之后标记 error 并保持停用直到后端重启。子进程 RSS 超过 SHADOW_CHILD_MAX_RSS_MB（新配置，默认 250）时停止子进程、记 error、不再重启。aclose 时先请求优雅退出（落盘 pending writes），10s 未退出则 terminate。子进程独占 SQLite 写入 shadow 表；主进程不得再写 shadow 表（只读 API 若需查询，沿用现有读路径并确认在 WAL 下无锁冲突）。
+37. 新配置 SHADOW_MIN_LIQUIDITY_USD（默认 0 = 不过滤，行为与现在一致）：24h 成交额低于该值、或成交额未知的机会，在准入阶段丢弃并计入 dropped_by_reason.liquidity。是否在生产设置由 PM 决定，你不要改任何 .env。
+38. SHADOW_ENABLED=0 时不得启动子进程，开销为零。
