@@ -212,3 +212,10 @@
 43. P2 有界关闭：shadow_runtime.py:468 terminate() 后无限 join。统一一个关闭期限（总计 ≤15s）：优雅退出 10s → terminate → join 2s → kill → join 2s；所有阻塞 join 放到线程里，不阻塞事件循环；_shutdown 先建立期限再等监督任务；aclose 的异常不得穿透 lifespan，用 finally 保证其余资源继续关闭（记 error）。
 44. P2 统计接口：shadow_runtime.py:396 在主进程对全部历史行同步 pickle。改为只把统计查询参数发给子进程，由子进程读 SQLite 计算并回传结果；结果大小有上限，主进程侧无 O(行数) 工作。API 输出不变。
 45. P2 快照冻结语义：生产代码直到 shadow_runtime.py:363 才读报价，之前已多次让出，期间原地修改会进入本轮计算。恢复一致冻结：一轮内所有分片使用同一时刻的输入（例如在第一次让出前记录本轮需要的引用/版本，或检测期间变化则本轮作废并计 skipped_rounds）。并把 backend/tests/test_shadow_selection_runtime.py:44 这类“分片期间修改报价仍使用原值”的回归接到真实 spawn 路径，不能只测 harness。
+
+## PM decisions 第五轮补充三（原文追加到 spec 末尾）
+46. 第 45 条的冻结改为“引用冻结”。依据（PM 已核实）：backend/app/services/snapshot_store.py 的 set_markets/set_opportunities 整体替换列表，get_* 返回列表副本；生产代码中没有对已发布 MarketSnapshot/Opportunity 字段或其列表的原地修改。因此已发布对象视为不可变，这是影子运行时依赖的契约，写进 spec。
+   a. submit 在第一次让出前只做 O(n) 的引用捕获：tuple(snapshot.markets)、tuple(snapshot.opportunities)、catalog 版本与 entries 引用；后续所有分片都从这份引用元组读取。不得逐对象复制 __dict__ / 列表。
+   b. 回归测试改为验证替换语义：在真实 spawn 路径下，分片进行期间 store 被 set_markets/set_opportunities 替换成新列表（含报价变化、市场增删），本轮仍完全使用旧引用的值，下一轮使用新值。删除或改写依赖“原地修改已发布对象”的用例，并在报告中列出理由（契约变更，不是放宽）。
+   c. 增加一个契约守护测试：扫描 backend/app（不含 tests、shadow 模块）中对 MarketSnapshot/Opportunity 实例字段的属性赋值或其列表字段的 append/extend/clear 等原地修改（AST 级即可，覆盖常见变量名不够就按类型注解/调用来源做最佳努力），发现即失败，以防将来有人打破契约。
+47. 性能目标：production loop 中位回到 ≤15ms（第六轮水平 12.9–15.0ms），单段中位 ≤3ms，RSS 增量 ≤30MiB；原 7ms 预算断言保持不变（已知不达标，不要改）。
