@@ -45,6 +45,10 @@ class ShadowErrorLog:
 
 
 def validate_shadow_settings(settings):
+    if not math.isfinite(settings.shadow_child_max_rss_mb) or settings.shadow_child_max_rss_mb <= 0:
+        raise ValueError("SHADOW_CHILD_MAX_RSS_MB must be finite and positive")
+    if not math.isfinite(settings.shadow_min_liquidity_usd) or settings.shadow_min_liquidity_usd < 0:
+        raise ValueError("SHADOW_MIN_LIQUIDITY_USD must be finite and nonnegative")
     if not math.isfinite(settings.shadow_min_open_pct) or settings.shadow_min_open_pct < 0:
         raise ValueError("SHADOW_MIN_OPEN_PCT must be finite and nonnegative")
     if type(settings.shadow_max_open) is not int or not 2 <= settings.shadow_max_open <= 3000:

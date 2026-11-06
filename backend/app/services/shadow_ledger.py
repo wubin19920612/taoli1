@@ -1,6 +1,7 @@
 """Paper observations only. No account, order, or opportunity-history dependencies."""
 
 import json
+import math
 import heapq
 from collections import defaultdict
 from collections.abc import Mapping
@@ -115,6 +116,7 @@ class ShadowLedger:
     def __init__(self, settings):
         self.enabled = settings.shadow_enabled
         self.minimum = settings.shadow_min_open_pct
+        self.min_liquidity = settings.shadow_min_liquidity_usd
         self.maximum = settings.shadow_max_open
         self.slippage = json.loads(settings.shadow_slippage_bps)
         self.positions = {}
@@ -363,7 +365,10 @@ class ShadowLedger:
             if op.id not in self.retry_events:
                 continue
             tier = liquidity_tier(op.buy_volume_24h_usdt, op.sell_volume_24h_usdt)
-            reason = self._quota_reason(op, tier)
+            volumes = (op.buy_volume_24h_usdt, op.sell_volume_24h_usdt)
+            reason = ("liquidity" if self.min_liquidity > 0 and any(
+                v is None or not math.isfinite(v) or v < self.min_liquidity for v in volumes
+            ) else self._quota_reason(op, tier))
             if reason:
                 self.retry_events.discard(op.id)
                 self.dropped += 1

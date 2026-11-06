@@ -18,10 +18,9 @@ def runtime(request):
 
 
 def repository(request):
-    repo = runtime(request).repo
-    if repo is None:
+    if not runtime(request).status()["ready"]:
         raise HTTPException(503, "影子账本数据库尚未就绪")
-    return repo
+    return True
 
 
 async def read_committed(request, method, *args):
@@ -50,7 +49,7 @@ async def status(request: Request):
 @router.get("/trades")
 async def trades(request: Request, limit: int = Query(100, ge=1, le=500),
                  status: Literal["open", "closed"] | None = None):
-    if not runtime(request).ledger.enabled:
+    if not runtime(request).settings.shadow_enabled:
         return []
     return await read_committed(request, "list_trades", limit, status)
 
@@ -66,12 +65,12 @@ async def get_buckets(request: Request, dims: str = "variant,pair", since: datet
     since, until = since or now - timedelta(days=30), until or now
     if since.tzinfo is None or until.tzinfo is None or since > until:
         raise HTTPException(400, "时间范围必须包含时区且起点不晚于终点")
-    if not runtime(request).ledger.enabled:
+    if not runtime(request).settings.shadow_enabled:
         return []
     rows = await read_committed(request, "closed_events", since.astimezone(UTC), until.astimezone(UTC), include_fake,
                                 strategy_version)
     try:
-        return await asyncio.to_thread(buckets, rows, dimensions, include_fake)
+        return await runtime(request).statistics(rows, dimensions, include_fake)
     except Exception:
         runtime(request).error("statistics")
         raise HTTPException(503, "影子账本统计暂不可用") from None
