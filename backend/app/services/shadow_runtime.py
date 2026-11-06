@@ -6,9 +6,10 @@ import queue
 import threading
 from time import monotonic, perf_counter, thread_time_ns
 from operator import attrgetter
+from array import array
 
 from app.services.execution_routes import ExecutionRoutes, ShadowErrorLog
-from app.services.shadow_ipc import child_entry, market_values, op_values, directory_values, threshold_values, rss_mb
+from app.services.shadow_ipc import child_entry, market_values, op_values, directory_values, rss_mb, CAPTURE_CHUNK_SIZE
 from app.services.snapshot_consumers import PublishedSnapshot
 
 RESTART_BASE_SECONDS = 5
@@ -44,7 +45,15 @@ class ShadowRuntime:
             recomputed_positions=0, worker_phases_ms={}, last_duration_ms=None,
             worker_pid=None, child_rss_mb=None, main_cpu_ms=None)
         self._display_cache = {}
-        self._wire_cache = {}
+        self._round_sequence = 0
+        self._needs_resync = True
+        self.resync_count = 0
+        self._sent_full = False
+        self._directory = []
+        self._quotes = {}
+        self._threshold_ids = ()
+        self._catalog_version = None
+        self._capture_task = None
         self._child_errors = {}
         self._child_error_totals = {}
 
@@ -135,9 +144,16 @@ class ShadowRuntime:
         if epoch != self._epoch:
             return
         kind, token, result, status = message
-        if kind == "capture":
-            self._capture_reply(token, result)
+        if kind in {"capture", "round"} and (token != self._serial or self._context is None):
             return
+        if kind == "capture":
+            self._capture_task = asyncio.create_task(self._timed_capture(self._capture_reply(token, result), result[0]))
+            return
+        if kind == "round":
+            if status.pop("resync_required", False):
+                self._needs_resync = True
+            else:
+                self._needs_resync = status.get("mirror_sequence") != self._round_sequence
         self._held = status.pop("held", self._held)
         self._child_errors = status.pop("error_counts", {})
         self._published.update(status)
@@ -166,17 +182,19 @@ class ShadowRuntime:
                     # Unrelated rows retain object identity, order and count.
                     display, cache = [], {}
                     for op in originals:
-                        fields = result.get(op.id)
+                        values_dict = op.__dict__
+                        op_id = values_dict["id"]
+                        fields = result.get(op_id)
                         if fields is None:
                             display.append(op)
                             continue
-                        previous = self._display_cache.get(op.id)
-                        values = tuple(op.__dict__.values())
+                        previous = self._display_cache.get(op_id)
+                        values = tuple(values_dict.values())
                         if previous is not None and previous[:2] == (values, fields):
                             entry = previous
                         else:
                             entry = (values, fields, op.model_copy(update=fields))
-                        cache[op.id] = entry
+                        cache[op_id] = entry
                         display.append(entry[2])
                     self._display_cache = cache
                     if not self.store.set_opportunities_if_version(display, version):
@@ -187,7 +205,8 @@ class ShadowRuntime:
             publish_ms = (perf_counter() - resumed) * 1000
             self._published.update(main_cpu_ms=cpu_ms, capture_ms=capture_ms, publish_ms=publish_ms,
                 last_duration_ms=capture_ms + publish_ms,
-                capture_segments_ms=tuple(segments), event_loop_max_segment_ms=max(*segments, publish_ms),
+                capture_segments_ms=tuple(segments), capture_phases_ms=dict(self._capture_phases),
+                event_loop_max_segment_ms=max(*segments, publish_ms),
                 catalog_updated_at=self.catalog.updated_at, catalog_entries=len(self.catalog.entries))
         self._busy_since = None
         if not self._active.done():
@@ -201,59 +220,161 @@ class ShadowRuntime:
                 or (self._active is not None and not self._active.done())):
             self.skipped_rounds += 1
             return None
-        started, cpu = perf_counter(), thread_time_ns()
-        try:
-            # Stage 1 contains only id/spread. Selection runs exclusively in the
-            # child, which requests exact directory/quote indices in stages 2/3.
-            thresholds = tuple(map(threshold_values, map(attrgetter("__dict__"), snapshot.opportunities)))
-            encoded_thresholds = self._encode("thresholds", thresholds)
-            payload = pickle.dumps((snapshot.published_at, encoded_thresholds, self.catalog.entries), protocol=5)
-            self._serial += 1
-            self._incoming.put_nowait(("round", self._serial, payload))
-            capture_ms = (perf_counter() - started) * 1000
-            cpu_ms = (thread_time_ns() - cpu) / 1e6
-            self._context = (snapshot, [capture_ms], [cpu_ms])
-            self._active = asyncio.get_running_loop().create_future()
-            self._busy_since = monotonic()
-            return self._active
-        except queue.Full:
-            self.skipped_rounds += 1
-        except Exception:
-            self.error("capture")
-        return None
+        # Reserve before the first cooperative yield. Cancellation of a caller
+        # never releases this slot while capture/IPC still owns the snapshot.
+        self._active = asyncio.get_running_loop().create_future()
+        self._serial += 1
+        self._busy_since = monotonic()
+        self._context = (snapshot, [], [])
+        self._capture_phases = dict.fromkeys(("thresholds", "directory", "quotes"), 0.0)
+        self._capture_phase = "thresholds"
+        self._capture_task = asyncio.create_task(self._timed_capture(self._capture_start(self._serial), "thresholds"))
+        return self._active
 
     def _encode(self, name, data):
-        previous = self._wire_cache.get(name)
-        if previous is not None and previous[0] == data:
-            return previous[1]
-        encoded = pickle.dumps(data, protocol=5)
-        self._wire_cache[name] = (data, encoded)
-        return encoded
+        return pickle.dumps(data, protocol=5)
 
-    def _capture_reply(self, token, request):
+    def _record_segment(self):
+        if self._context is not None:
+            elapsed = (perf_counter() - self._segment_started) * 1000
+            self._context[1].append(elapsed)
+            self._capture_phases[self._capture_phase] += elapsed
+            self._context[2].append((thread_time_ns() - self._segment_cpu) / 1e6)
+
+    async def _timed_capture(self, work, phase):
+        # Include loop/setup/cleanup overhead, not just projection calls. Only
+        # cooperative await time and child IPC wait are excluded from occupancy.
+        self._capture_phase = phase
+        self._segment_started, self._segment_cpu = perf_counter(), thread_time_ns()
+        try:
+            await work
+        finally:
+            self._record_segment()
+
+    async def _yield_capture(self):
+        self._record_segment()
+        await asyncio.sleep(0)
+        self._segment_started, self._segment_cpu = perf_counter(), thread_time_ns()
+
+    async def _slice(self, action):
+        return action()
+
+    async def _capture_start(self, token):
+        try:
+            snapshot = self._context[0]
+            full = self._needs_resync
+            if full:
+                def reset_mirrors():
+                    self._directory.clear()
+                    self._quotes.clear()
+                await self._slice(reset_mirrors)
+                await self._yield_capture()
+            ids, spreads = [], array("d")
+            for offset in range(0, len(snapshot.opportunities), CAPTURE_CHUNK_SIZE):
+                def capture():
+                    ops = snapshot.opportunities[offset:offset + CAPTURE_CHUNK_SIZE]
+                    ids.extend(map(attrgetter("id"), ops))
+                    spreads.extend(map(attrgetter("open_spread_pct"), ops))
+                await self._slice(capture)
+                await self._yield_capture()
+            def dispatch():
+                id_table = tuple(ids)
+                changed_ids = id_table if full or id_table != self._threshold_ids else None
+                self._threshold_ids = id_table
+                version = (self.catalog.updated_at, id(self.catalog.entries))
+                entries = self.catalog.entries if full or version != self._catalog_version else None
+                self._catalog_version = version
+                self._round_sequence += 1
+                payload = self._encode("round", (self._round_sequence, full, snapshot.published_at,
+                                                  changed_ids, spreads, entries))
+                self._incoming.put_nowait(("round", token, payload))
+                if full:
+                    self.resync_count += int(self._sent_full)
+                    self._sent_full = True
+            await self._slice(dispatch)
+        except Exception:
+            self._capture_failed()
+
+    def _capture_failed(self):
+        self.error("capture")
+        self._needs_resync = True
+        self._transport_error = "transport"
+
+    async def _capture_reply(self, token, request):
         if token != self._serial or self._context is None:
             return
-        started, cpu = perf_counter(), thread_time_ns()
-        snapshot, segments, cpus = self._context
+        snapshot = self._context[0]
         kind, indices = request
+        self._capture_phase = kind
         try:
+            chunks = []
             if kind == "directory":
-                data = (tuple(map(directory_values, map(attrgetter("__dict__"), snapshot.markets))),
-                        tuple(values[:-3] + tuple(tuple(v) for v in values[-3:])
-                              for values in (op_values(snapshot.opportunities[i].__dict__) for i in indices)))
+                # The collector replaces models, but synthetic/inline producers
+                # may also mutate them. Neither object identity nor quote time
+                # alone is a metadata revision. Compare cached immutable leaves
+                # directly; only changed rows allocate directory tuples.
+                for offset in range(0, len(snapshot.markets), CAPTURE_CHUNK_SIZE):
+                    def capture_directory():
+                        delta = []
+                        for i in range(offset, min(offset + CAPTURE_CHUNK_SIZE, len(snapshot.markets))):
+                            m = snapshot.markets[i]
+                            d = m.__dict__
+                            old = self._directory[i] if i < len(self._directory) else None
+                            if old is None or not (
+                                d["exchange"] == old[0] and d["market_type"] == old[1]
+                                and d["raw_symbol"] == old[2] and d["dex"] == old[3]
+                                and d["symbol_alias_price_multiplier"] == old[4]
+                                and d["contract_size_multiplier"] == old[5]
+                                and d["asset_id"] == old[6] and d["symbol"] == old[7]):
+                                row = directory_values(d)
+                                delta.append((i, row))
+                                self._quotes.pop(i, None)
+                                if old is None:
+                                    self._directory.append(row)
+                                else:
+                                    self._directory[i] = row
+                        if delta:
+                            chunks.append(self._encode("directory_delta", delta))
+                    await self._slice(capture_directory)
+                    await self._yield_capture()
+                op_chunks = []
+                for offset in range(0, len(indices), CAPTURE_CHUNK_SIZE):
+                    def capture_ops():
+                        rows = []
+                        for i in indices[offset:offset + CAPTURE_CHUNK_SIZE]:
+                            values = op_values(snapshot.opportunities[i].__dict__)
+                            rows.append(values[:-3] + (tuple(values[-3]), tuple(values[-2]), tuple(values[-1])))
+                        op_chunks.append(self._encode("op_rows", rows))
+                    await self._slice(capture_ops)
+                    await self._yield_capture()
+                def dispatch():
+                    size = len(snapshot.markets)
+                    for i in range(size, len(self._directory)):
+                        self._quotes.pop(i, None)
+                    del self._directory[size:]
+                    self._incoming.put_nowait((kind, token, pickle.dumps((size, chunks, op_chunks), protocol=5)))
+                await self._slice(dispatch)
             elif kind == "quotes":
-                markets = snapshot.markets if indices is None else (snapshot.markets[i] for i in indices)
-                data = tuple(map(market_values, map(attrgetter("__dict__"), markets)))
+                indices = range(len(snapshot.markets)) if indices is None else indices
+                for offset in range(0, len(indices), CAPTURE_CHUNK_SIZE):
+                    def capture_quotes():
+                        delta = []
+                        for i in indices[offset:offset + CAPTURE_CHUNK_SIZE]:
+                            values = market_values(snapshot.markets[i].__dict__)
+                            # Mutable list leaves must never share producer state.
+                            values = values[:-1] + (tuple(values[-1]),)
+                            if self._quotes.get(i) != values:
+                                self._quotes[i] = values
+                                delta.append((i, values))
+                        if delta:
+                            chunks.append(self._encode("quote_delta", delta))
+                    await self._slice(capture_quotes)
+                    await self._yield_capture()
+                await self._slice(lambda: self._incoming.put_nowait((kind, token, pickle.dumps(chunks, protocol=5))))
             else:
                 raise ValueError("invalid shadow capture request")
-            payload = self._encode(kind, data) if kind == "directory" else pickle.dumps(data, protocol=5)
-            self._incoming.put_nowait((kind, token, payload))
         except Exception:
-            self.error("capture")
-            self._transport_error = "transport"
-        finally:
-            segments.append((perf_counter() - started) * 1000)
-            cpus.append((thread_time_ns() - cpu) / 1e6)
+            self._capture_failed()
 
     async def consume(self, snapshot):
         task = await self.submit(snapshot)
@@ -338,6 +459,10 @@ class ShadowRuntime:
         self._ready.set()
 
     async def _dispose(self, force=False):
+        if self._capture_task is not None and not self._capture_task.done():
+            self._capture_task.cancel()
+            await asyncio.gather(self._capture_task, return_exceptions=True)
+        self._needs_resync = True
         process = self._process
         if process is not None and process.pid is not None:
             if force and process.is_alive():
@@ -359,7 +484,9 @@ class ShadowRuntime:
         self._epoch += 1
         self._published["worker_pid"] = None
         self._display_cache.clear()
-        self._wire_cache.clear()
+        self._directory.clear()
+        self._quotes.clear()
+        self._threshold_ids = ()
 
     def status(self):
         counts = dict(self._child_error_totals)
@@ -371,7 +498,7 @@ class ShadowRuntime:
                 "enabled": self.settings.shadow_enabled, "disabled": self._disabled,
                 "skipped_rounds": self.skipped_rounds, "skipped_publications": self.skipped_publications,
                 "errors": sum(counts.values()), "error_counts": counts, "catalog_errors": self.catalog.errors,
-                "child_restarts": self.child_restarts}
+                "child_restarts": self.child_restarts, "resync_count": self.resync_count}
 
     async def run_inline_observer(self, stop):
         if not self.settings.shadow_enabled:
@@ -403,9 +530,14 @@ class ShadowRuntime:
     async def _shutdown(self):
         if self._supervisor is not None:
             await self._supervisor
+        deadline = monotonic() + SHUTDOWN_SECONDS
+        # Accepted capture may still be yielding before sending its first frame.
+        # Let it drain within the same shutdown deadline before asking the idle
+        # child to exit; otherwise the stop flag can race with that first frame.
+        while self._active is not None and not self._active.done() and monotonic() < deadline:
+            await asyncio.sleep(.01)
         if self._stop is not None:
             self._stop.set()
-        deadline = monotonic() + SHUTDOWN_SECONDS
         while self._process is not None and self._process.is_alive() and monotonic() < deadline:
             await asyncio.sleep(.02)
         if self._process is not None and self._process.is_alive():

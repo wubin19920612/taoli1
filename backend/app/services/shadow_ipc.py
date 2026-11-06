@@ -1,8 +1,20 @@
-"""Spawn-safe wire definitions. Importing this module never loads the application."""
+"""Spawn-safe wire definitions. Importing this module never loads the application.
+
+Each round has a separate monotonic mirror sequence (statistics tokens do not
+advance it). The header is (sequence, full, now, optional_ids, array('d'),
+optional_catalog). Directory frames carry (size, delta_chunks, opportunity_chunks);
+quote frames carry delta_chunks. A delta row is (slot, immutable_field_tuple).
+Slots are directory handles, not normalized tickers: each row retains exchange,
+market type, raw symbol, DEX and both multipliers. A changed/reused slot invalidates
+its quote. Truncation deletes all trailing slots. Full resets only the mirrors,
+never the ledger. Only an acknowledged contiguous sequence permits another delta.
+"""
 import os
 import sys
 from collections import namedtuple
 from operator import itemgetter
+
+CAPTURE_CHUNK_SIZE = 500
 
 MARKET_FIELDS = "exchange market_type raw_symbol dex symbol_alias_price_multiplier contract_size_multiplier timestamp upstream_timestamp bid ask quote_kind funding_next_time funding_rate_pct funding_interval_hours asset_id symbol identity_collision estimated_fields".split()
 OP_FIELDS = "id symbol open_spread_pct buy_exchange buy_market_type buy_raw_symbol buy_dex buy_price_multiplier buy_contract_size_multiplier sell_exchange sell_market_type sell_raw_symbol sell_dex sell_price_multiplier sell_contract_size_multiplier buy_volume_24h_usdt sell_volume_24h_usdt buy_fee_pct sell_fee_pct fake_score fake_flag executable buy_routes sell_routes fake_reasons".split()
@@ -11,7 +23,6 @@ OpportunityInput = namedtuple("OpportunityInput", OP_FIELDS)
 DIRECTORY_FIELDS = "exchange market_type raw_symbol dex symbol_alias_price_multiplier contract_size_multiplier asset_id symbol".split()
 MarketDirectory = namedtuple("MarketDirectory", DIRECTORY_FIELDS)
 directory_values = itemgetter(*DIRECTORY_FIELDS)
-threshold_values = itemgetter("id", "open_spread_pct")
 market_values = itemgetter(*MARKET_FIELDS)
 op_values = itemgetter(*OP_FIELDS)
 

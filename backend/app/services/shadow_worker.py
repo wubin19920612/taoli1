@@ -174,6 +174,12 @@ def run_child(settings, incoming, outgoing, stop):
             if not worker.restored:
                 return
             minute = None
+            sequence = 0
+            synchronized = False
+            directory = []
+            quotes = {}
+            threshold_ids = ()
+            entries = set()
             while True:
                 try:
                     kind, token, payload = incoming.get(timeout=.1)
@@ -189,8 +195,22 @@ def run_child(settings, incoming, outgoing, stop):
                     if kind == "statistics":
                         result = buckets(*data)
                     else:
-                        now, encoded_thresholds, entries = data
-                        thresholds = pickle.loads(encoded_thresholds)
+                        next_sequence, full, now, ids, spreads, catalog = data
+                        if not full and (not synchronized or next_sequence != sequence + 1):
+                            outgoing.put((kind, token, None, {**worker._worker_status(),
+                                "error_counts": worker.error_log.counts(), "resync_required": True}))
+                            continue
+                        if full:
+                            directory.clear()
+                            quotes.clear()
+                            minute = None
+                        if ids is not None:
+                            threshold_ids = ids
+                        if len(threshold_ids) != len(spreads):
+                            raise ValueError("invalid shadow threshold table")
+                        thresholds = tuple(zip(threshold_ids, spreads))
+                        if catalog is not None:
+                            entries = catalog
                         held_ids, held_keys = worker._worker_status()["held"]
                         related_indices = tuple(i for i, (key, spread) in enumerate(thresholds)
                                                 if spread >= worker.ledger.minimum or key in held_ids)
@@ -200,9 +220,16 @@ def run_child(settings, incoming, outgoing, stop):
                         ipc_wait += perf_counter() - waiting
                         if (next_kind, next_token) != ("directory", token):
                             raise ValueError("invalid shadow directory reply")
-                        directory_rows, op_rows = pickle.loads(payload)
-                        directory = tuple(MarketDirectory(*row) for row in directory_rows)
-                        related = tuple(WireOpportunity(*row) for row in op_rows)
+                        size, chunks, op_chunks = pickle.loads(payload)
+                        for i in range(size, len(directory)):
+                            quotes.pop(i, None)
+                        del directory[size:]
+                        directory.extend([None] * (size - len(directory)))
+                        for chunk in chunks:
+                            for i, row in pickle.loads(chunk):
+                                directory[i] = MarketDirectory(*row)
+                                quotes.pop(i, None)
+                        related = tuple(WireOpportunity(*row) for chunk in op_chunks for row in pickle.loads(chunk))
                         current_minute = int(now.timestamp() // 60)
                         selected, assets, _, select_wall = worker._select_markets(directory, related, held_keys, current_minute != minute)
                         selected_ids = {id(m) for m in selected}
@@ -213,14 +240,13 @@ def run_child(settings, incoming, outgoing, stop):
                         ipc_wait += perf_counter() - waiting
                         if (next_kind, next_token) != ("quotes", token):
                             raise ValueError("invalid shadow quote reply")
-                        market_rows = pickle.loads(payload)
-                        markets = tuple(WireMarket(*row) for row in market_rows)
-                        if current_minute != minute:
-                            selected = tuple(markets[i] for i in indices)
-                            history = tuple(m for m in markets if (m.asset_id or m.symbol) not in assets)
-                        else:
-                            selected, history = markets, ()
+                        for chunk in pickle.loads(payload):
+                            for i, row in pickle.loads(chunk):
+                                quotes[i] = WireMarket(*row)
+                        selected = tuple(quotes[i] for i in indices)
+                        history = tuple(m for m in quotes.values() if (m.asset_id or m.symbol) not in assets) if current_minute != minute else ()
                         minute = current_minute
+                        sequence, synchronized = next_sequence, True
                         calculate_start = perf_counter()
                         result = await worker._process(PublishedSnapshot(0, now, selected, related), entries,
                             history, assets, tuple(key for key, spread in thresholds if spread < 1),
@@ -235,10 +261,11 @@ def run_child(settings, incoming, outgoing, stop):
                                   asset_index_assets=len(worker._asset_index),
                                   display_cache_entries=len(result) if kind == "round" and result else 0)
                     if kind == "round":
-                        status.update(select_wall_ms=select_wall, calculate_wall_ms=calculate_wall)
+                        status.update(select_wall_ms=select_wall, calculate_wall_ms=calculate_wall, mirror_sequence=sequence)
                 except Exception:
+                    synchronized = False
                     worker.error("worker")
-                    status = {**worker._worker_status(), "error_counts": worker.error_log.counts()}
+                    status = {**worker._worker_status(), "error_counts": worker.error_log.counts(), "resync_required": True}
                 outgoing.put((kind, token, result, status))
         finally:
             status = await worker._close_worker()
