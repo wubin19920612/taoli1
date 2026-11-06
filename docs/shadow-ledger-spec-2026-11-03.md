@@ -206,3 +206,9 @@
    e. 子进程镜像与主进程不同步（序号断档、子进程重启、队列丢弃）时，下一轮发全量重同步，计数 resync_count 进状态。
 40. 主线程单段占用：抽取工作按块切分（每块后 await asyncio.sleep(0)），event_loop_max_segment_ms 中位 ≤3ms；整轮主线程墙钟合计中位 ≤5ms（Windows 下 thread_time 有 15.6ms 量化，以 perf_counter 墙钟为准，并在报告里说明）。
 41. 基准预算不放宽：production 场景 loop 中位 ≤7ms，stress 场景 ≤5ms，realistic 照旧。正确性：增量模式与全量模式在同一输入序列上产生完全相同的开/平仓记录（新增等价测试，含 resync 场景）。
+
+## PM decisions 第五轮补充二（原文追加到 spec 末尾）
+42. P1 关闭通知不得依赖跨进程锁：backend/app/services/shadow_runtime.py:540 同步调用 multiprocessing Event.set()，子进程（shadow_worker.py:187 is_set()）持锁时被杀会留下死锁，阻塞主事件循环。改为不依赖子进程持锁的退出通知（例如经已有队列发送 stop 消息，或主进程端非阻塞写 pipe），并在 _dispose() 回收时丢弃旧通知对象；退避期间关闭不得访问已回收对象。
+43. P2 有界关闭：shadow_runtime.py:468 terminate() 后无限 join。统一一个关闭期限（总计 ≤15s）：优雅退出 10s → terminate → join 2s → kill → join 2s；所有阻塞 join 放到线程里，不阻塞事件循环；_shutdown 先建立期限再等监督任务；aclose 的异常不得穿透 lifespan，用 finally 保证其余资源继续关闭（记 error）。
+44. P2 统计接口：shadow_runtime.py:396 在主进程对全部历史行同步 pickle。改为只把统计查询参数发给子进程，由子进程读 SQLite 计算并回传结果；结果大小有上限，主进程侧无 O(行数) 工作。API 输出不变。
+45. P2 快照冻结语义：生产代码直到 shadow_runtime.py:363 才读报价，之前已多次让出，期间原地修改会进入本轮计算。恢复一致冻结：一轮内所有分片使用同一时刻的输入（例如在第一次让出前记录本轮需要的引用/版本，或检测期间变化则本轮作废并计 skipped_rounds）。并把 backend/tests/test_shadow_selection_runtime.py:44 这类“分片期间修改报价仍使用原值”的回归接到真实 spawn 路径，不能只测 harness。
