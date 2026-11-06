@@ -223,3 +223,7 @@
 ## PM decisions 第五轮补充四（原文追加到 spec 末尾）
 
 48. AST 守护允许“可证明尚未发布的新建实例”赋值，采用显式白名单：以 (相对文件路径, 所在函数名, 属性名) 为键，只放这 5 处——api/routes_astro.py build_directional_opportunity 所在函数 comparison_kind；services/collector.py 中 274 行 validation、277/590/622 行 risk_labels 各自所在函数。PM 已核对源码：这些对象均为本轮刚构造、尚未进入 store。白名单之外的任何新命中仍失败；白名单条目若已不存在于源码中也要失败（防止名单腐烂）。
+
+## PM decisions 第五轮补充五（原文追加到 spec 末尾）
+
+49. 不改 compose/部署文件；把影子关闭总期限压到 ≤6s：优雅退出（含落盘 pending writes）≤4s → terminate → join ≤1s → kill → join ≤1s；期限做成配置 SHADOW_SHUTDOWN_TIMEOUT_SECONDS（默认 6，校验 1–8）。容器被强杀时子进程随容器一起结束，不会成为孤儿，未落盘的影子写入可丢（影子数据非关键）。更新相关测试里的期限断言为新值（这是规格变更，在报告里说明，不是放宽）。
