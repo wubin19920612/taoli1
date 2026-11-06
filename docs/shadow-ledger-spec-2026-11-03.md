@@ -219,3 +219,7 @@
    b. 回归测试改为验证替换语义：在真实 spawn 路径下，分片进行期间 store 被 set_markets/set_opportunities 替换成新列表（含报价变化、市场增删），本轮仍完全使用旧引用的值，下一轮使用新值。删除或改写依赖“原地修改已发布对象”的用例，并在报告中列出理由（契约变更，不是放宽）。
    c. 增加一个契约守护测试：扫描 backend/app（不含 tests、shadow 模块）中对 MarketSnapshot/Opportunity 实例字段的属性赋值或其列表字段的 append/extend/clear 等原地修改（AST 级即可，覆盖常见变量名不够就按类型注解/调用来源做最佳努力），发现即失败，以防将来有人打破契约。
 47. 性能目标：production loop 中位回到 ≤15ms（第六轮水平 12.9–15.0ms），单段中位 ≤3ms，RSS 增量 ≤30MiB；原 7ms 预算断言保持不变（已知不达标，不要改）。
+
+## PM decisions 第五轮补充四（原文追加到 spec 末尾）
+
+48. AST 守护允许“可证明尚未发布的新建实例”赋值，采用显式白名单：以 (相对文件路径, 所在函数名, 属性名) 为键，只放这 5 处——api/routes_astro.py build_directional_opportunity 所在函数 comparison_kind；services/collector.py 中 274 行 validation、277/590/622 行 risk_labels 各自所在函数。PM 已核对源码：这些对象均为本轮刚构造、尚未进入 store。白名单之外的任何新命中仍失败；白名单条目若已不存在于源码中也要失败（防止名单腐烂）。
