@@ -1,5 +1,4 @@
 """Real spawn delta protocol, including recovery without resetting the ledger."""
-import pickle
 from datetime import timedelta
 
 import pytest
@@ -36,6 +35,18 @@ async def test_incremental_wire_omits_unchanged_catalog_directory_and_quotes(tmp
         sent.clear()
         await tick(rt, NOW, quotes, [op])
         assert sum(len(data) for name, data in sent if name == "directory_delta") == 1
+        # Object identity and quote time are not a reliable metadata version.
+        quotes[0].asset_id = "mutated-without-new-quote"
+        sent.clear()
+        await tick(rt, NOW, quotes, [op])
+        assert sum(len(data) for name, data in sent if name == "directory_delta") == 1
+        rt.catalog.entries = {("BINANCE", "FUTURE", "BTC", "")}
+        sent.clear()
+        await tick(rt, NOW, quotes, [op])
+        assert next(data for name, data in sent if name == "round")[5] == rt.catalog.entries
+        sent.clear()
+        await tick(rt, NOW, quotes, [op.model_copy(update={"id": "new-id"})])
+        assert next(data for name, data in sent if name == "round")[3] == ("new-id",)
         assert rt.errors == 0
     finally:
         await rt.aclose()
@@ -43,6 +54,8 @@ async def test_incremental_wire_omits_unchanged_catalog_directory_and_quotes(tmp
 
 @pytest.mark.asyncio
 async def test_delta_and_forced_full_records_identical_including_gap_and_deletion(tmp_path):
+    (tmp_path / "full").mkdir()
+    (tmp_path / "delta").mkdir()
     full = runtime_for(tmp_path / "full")
     delta = runtime_for(tmp_path / "delta")
     import json
@@ -79,3 +92,56 @@ async def test_delta_and_forced_full_records_identical_including_gap_and_deletio
     finally:
         await full.aclose()
         await delta.aclose()
+
+
+@pytest.mark.asyncio
+async def test_queue_loss_restarts_with_full_mirror_and_counts_resync(tmp_path, monkeypatch):
+    import queue
+    import app.services.shadow_runtime as module
+    from test_shadow_process import eventually
+    monkeypatch.setattr(module, "RESTART_BASE_SECONDS", .01)
+    rt = runtime_for(tmp_path)
+    try:
+        await rt.initialize()
+        await tick(rt, NOW)
+        old_pid = rt.status()["worker_pid"]
+        def lost(message):
+            raise queue.Full
+        monkeypatch.setattr(rt._incoming, "put_nowait", lost)
+        await tick(rt, NOW)
+        await eventually(lambda: rt.status()["ready"] and rt.status()["worker_pid"] != old_pid)
+        quotes, op = fresh_pair(NOW)
+        await tick(rt, NOW, quotes, [op])
+        assert rt.status()["resync_count"] == 1
+        assert rt.status()["baseline_skipped"] == 1  # restarted ledger baseline
+        assert rt.status()["error_counts"] == {"capture": 1, "transport": 1}
+        assert not rt._needs_resync
+    finally:
+        await rt.aclose()
+
+
+@pytest.mark.asyncio
+async def test_capture_yields_and_single_flight_covers_first_frame(tmp_path, monkeypatch):
+    import asyncio
+    import app.services.shadow_runtime as module
+    from app.services.snapshot_consumers import PublishedSnapshot
+    from shadow_helpers import market
+    rt = runtime_for(tmp_path)
+    quotes = [market(symbol=f"C{i}", raw_symbol=f"C{i}") for i in range(1201)]
+    original_sleep = asyncio.sleep
+    yields = 0
+    async def yielding(delay):
+        nonlocal yields
+        if delay == 0:
+            yields += 1
+            assert await rt.submit(PublishedSnapshot(0, NOW, (), ())) is None
+        await original_sleep(delay)
+    try:
+        await rt.initialize()
+        monkeypatch.setattr(module.asyncio, "sleep", yielding)
+        await tick(rt, NOW, quotes)
+        assert yields >= 6  # both directory and full quotes span >= 3 blocks
+        assert rt.skipped_rounds == yields
+        assert rt.errors == 0
+    finally:
+        await rt.aclose()

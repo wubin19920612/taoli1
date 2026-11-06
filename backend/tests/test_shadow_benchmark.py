@@ -120,7 +120,7 @@ async def test_shadow_resource_budgets(tmp_path, scenario, positions, op_count, 
         loop_times.append(state["last_duration_ms"])
         captures.append(state["capture_ms"])
         main_cpus.append(state["main_cpu_ms"])
-        capture_stages.append(state["capture_segments_ms"])
+        capture_stages.append(tuple(state["capture_phases_ms"][k] for k in ("thresholds", "directory", "quotes")))
         segments.append(state["event_loop_max_segment_ms"])
         selections.append(state["select_wall_ms"])
         calculations.append(state["calculate_wall_ms"])
@@ -167,6 +167,7 @@ async def test_shadow_resource_budgets(tmp_path, scenario, positions, op_count, 
                   "publish_median_ms": statistics.median(publishes),
                   "event_loop_median_ms": statistics.median(loop_times),
                   "main_cpu_median_ms": statistics.median(main_cpus),
+                  "event_loop_segment_median_ms": statistics.median(segments),
                   "capture_stage_medians_ms": [statistics.median(s[i] for s in capture_stages) for i in range(3)],
                   "child_rss_mb": runtime.status()["child_rss_mb"],
                   "event_loop_p95_ms": sorted(loop_times)[math.ceil(len(loop_times) * .95) - 1],
@@ -196,7 +197,7 @@ async def test_shadow_resource_budgets(tmp_path, scenario, positions, op_count, 
         print("SHADOW_BENCHMARK " + json.dumps(result, sort_keys=True))
         print("SHADOW_BENCHMARK_SUMMARY " + json.dumps({key: result[key] for key in (
             "scenario", "system_cpu_before_pct", "event_loop_median_ms", "main_cpu_median_ms",
-            "capture_stage_medians_ms", "worker_wall_median_ms", "child_rss_mb")}, sort_keys=True))
+            "capture_stage_medians_ms", "worker_wall_median_ms", "child_rss_mb", "event_loop_segment_median_ms")}, sort_keys=True))
         assert runtime.errors == 0
         assert runtime.status()["open_count"] == positions * 2
         assert runtime.status()["pending_writes"] == 0
@@ -214,6 +215,11 @@ async def test_shadow_resource_budgets(tmp_path, scenario, positions, op_count, 
         assert result["event_loop_max_ms"] <= (80 if scenario == "production" else 50 if scenario == "stress" else 20)
         assert result["recomputed_median"] <= math.ceil(positions / change_stride)
         assert await ShadowTradeRepository(db).count_open() == positions * 2
+        # PM 40: Windows thread_time is quantized at 15.625 ms. Wall-clock
+        # occupancy is authoritative. Retain the pre-existing CPU guard as well;
+        # a quantized CPU reading alone does not establish wall-clock compliance.
+        assert result["event_loop_segment_median_ms"] <= 3
+        assert result["event_loop_median_ms"] <= 5
         assert result["main_cpu_median_ms"] < 5
         assert result["child_rss_mb"] <= runtime.settings.shadow_child_max_rss_mb
     finally:
