@@ -75,7 +75,7 @@ async def test_cancelled_consumer_keeps_guard_and_status_until_worker_finishes()
 
 
 @pytest.mark.asyncio
-async def test_worker_uses_detached_inputs_and_captured_catalogue():
+async def test_worker_keeps_inputs_after_producer_replacement():
     runtime = ShadowRuntime(Settings(shadow_enabled=True, database_url="sqlite:///:memory:"), SnapshotStore())
     db = await connect_database(":memory:")
     entered, release = threading.Event(), threading.Event()
@@ -99,11 +99,11 @@ async def test_worker_uses_detached_inputs_and_captured_catalogue():
         task = await runtime.submit(PublishedSnapshot(1, NOW, tuple(markets), (op,),
             opportunities_version=runtime.store.opportunities_version))
         await wait_started(entered)
-        markets[0].bid = markets[0].ask = 999
-        markets[0].estimated_fields.append("bid")
-        op.open_spread_pct = 999
-        op.risk_labels.append("changed-after-capture")
-        runtime.catalog.entries.clear()
+        markets[0] = markets[0].model_copy(update={"bid": 999, "ask": 999,
+                                                 "estimated_fields": ["bid"]})
+        op = op.model_copy(update={"open_spread_pct": 999, "risk_labels": ["changed-after-capture"]})
+        runtime.store.set_markets(markets)
+        runtime.catalog.entries = set()
         release.set()
         await task
         rows = await runtime.repo.list_trades()
@@ -132,14 +132,14 @@ async def test_worker_uses_detached_inputs_and_captured_catalogue():
         await db.close()
 
 
-def test_capture_cache_detects_in_place_nested_list_and_scalar_changes():
+def test_capture_cache_detects_replaced_nested_list_and_scalar_values():
     markets, op = pair()
     snapshot = PublishedSnapshot(1, NOW, tuple(markets), (op,))
     frozen, cache = freeze_snapshot(snapshot)
     same, _ = freeze_snapshot(snapshot, cache)
     assert same.opportunities[0] is frozen.opportunities[0]
-    op.risk_labels.append("new")
-    op.open_spread_pct = 3
+    op = op.model_copy(update={"risk_labels": [*op.risk_labels, "new"], "open_spread_pct": 3})
+    snapshot = PublishedSnapshot(2, NOW, tuple(markets), (op,))
     changed, _ = freeze_snapshot(snapshot, cache)
     assert changed.opportunities[0] is not frozen.opportunities[0]
     assert "new" not in frozen.op_lists[0][2]

@@ -61,9 +61,9 @@ async def test_full_capture_yields_every_thousand_and_guards_single_flight(monke
         calls.append(delay)
         assert await runtime.submit(PublishedSnapshot(2, NOW, (), (),
             opportunities_version=runtime.store.opportunities_version)) is None
-        # Later shards may see newer history. Current related prices must stay
-        # detached, so this cannot turn the current opening into an outlier.
-        related[1].bid = related[1].ask = 999
+        # Replacement leaves the published model unchanged (PM 46 contract).
+        related[1] = related[1].model_copy(update={"bid": 999, "ask": 999})
+        store.set_markets(related + background)
         await original_sleep(delay)
 
     monkeypatch.setattr(module, "_market_values", values)

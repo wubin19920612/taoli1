@@ -35,8 +35,8 @@ async def test_incremental_wire_omits_unchanged_catalog_directory_and_quotes(tmp
         sent.clear()
         await tick(rt, NOW, quotes, [op])
         assert sum(len(data) for name, data in sent if name == "directory_delta") == 1
-        # Object identity and quote time are not a reliable metadata version.
-        quotes[0].asset_id = "mutated-without-new-quote"
+        # A replacement may change metadata without a new quote timestamp.
+        quotes[0] = quotes[0].model_copy(update={"asset_id": "replaced-without-new-quote"})
         sent.clear()
         await tick(rt, NOW, quotes, [op])
         assert sum(len(data) for name, data in sent if name == "directory_delta") == 1
@@ -68,13 +68,12 @@ async def test_delta_and_forced_full_records_identical_including_gap_and_deletio
         quotes, op = fresh_pair(NOW)
         for second in (0, 1, 2, 3, 4, 65, 700, 701):
             now = NOW + timedelta(seconds=second)
-            for quote in quotes:
-                quote.timestamp = now
+            quotes = [quote.model_copy(update={"timestamp": now}) for quote in quotes]
             ops = [] if second in (0, 4, 65, 700) else [op]
             if second == 3:
-                quotes[1].bid = quotes[1].ask = 100
+                quotes[1] = quotes[1].model_copy(update={"bid": 100, "ask": 100})
             if second == 701:
-                quotes[1].bid = quotes[1].ask = 101
+                quotes[1] = quotes[1].model_copy(update={"bid": 101, "ask": 101})
             current = quotes[:1] if second == 65 else list(reversed(quotes)) if second == 700 else quotes
             if second == 2:
                 # Simulate a lost acknowledgement / sequence gap. The rejected

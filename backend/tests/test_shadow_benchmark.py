@@ -139,22 +139,20 @@ async def test_shadow_resource_budgets(tmp_path, scenario, positions, op_count, 
                 if index % change_stride != i % change_stride:
                     continue
                 price = 100 + math.sin(i / 5) * 0.2
-                # Reuse fixture models as in the original benchmark; allocation
-                # churn in the synthetic producer is not shadow resident memory.
-                # Content revisions must work even when object identity is stable.
+                # PM 46: producers replace published objects. Build replacements
+                # outside runtime timing; retain their RSS cost in this benchmark.
                 for leg in range(2):
                     quote = markets[index * 2 + leg]
-                    quote.timestamp = now
-                    quote.ask = price * (1.005 if leg else 1)
-                    quote.bid = (price * (1.001 if leg else .995)
-                                 if scenario == "production" and index >= 650 else quote.ask)
+                    ask = price * (1.005 if leg else 1)
+                    bid = (price * (1.001 if leg else .995)
+                           if scenario == "production" and index >= 650 else ask)
+                    markets[index * 2 + leg] = quote.model_copy(update={"timestamp": now, "ask": ask, "bid": bid})
             state = await run(now, opportunities[:op_count])
             cpus.append(state["worker_cpu_ms"])
             walls.append(state["worker_wall_ms"])
             recomputed.append(state["recomputed_positions"])
         now = NOW + timedelta(seconds=61)
-        for quote in markets:
-            quote.timestamp = now
+        markets = [quote.model_copy(update={"timestamp": now}) for quote in markets]
         checkpoint = await run(now, opportunities[:op_count])
         gc.collect()
         rss_mib = (working_set() - baseline) / 1024 / 1024

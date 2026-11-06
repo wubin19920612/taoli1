@@ -157,26 +157,53 @@ async def test_lifespan_shadow_close_error_does_not_skip_other_resources(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_real_spawn_all_shards_use_pre_yield_prices(tmp_path, monkeypatch):
+@pytest.mark.parametrize("replace_phase", ["thresholds", "directory", "quotes"])
+async def test_real_spawn_all_shards_use_captured_references(tmp_path, monkeypatch, replace_phase):
+    from app.services.snapshot_consumers import PublishedSnapshot
+    from app.services.shadow_ipc import directory_values, market_values, op_values
     rt = runtime_for(tmp_path)
     try:
         await rt.initialize()
         await tick(rt, NOW - timedelta(minutes=1))
         quotes, op = fresh_pair(NOW)
         background = [market(symbol=f"BG{i}", raw_symbol=f"BG{i}") for i in range(1201)]
+        old_markets = background + quotes
+        old_ops = [op.model_copy(update={"id": f"below{i}", "open_spread_pct": -1})
+                   for i in range(501)] + [op]
+        new_markets = background[2:] + [q.model_copy(update={"bid": 100, "ask": 100}) for q in quotes]
+        new_markets.append(market(symbol="ADDED", raw_symbol="ADDED"))
+        new_ops = [op.model_copy(update={"open_spread_pct": -1, "buy_routes": ["replacement"]})]
+        old_catalog = {("BINANCE", "FUTURE", "BTC", "")}
+        rt.catalog.entries = old_catalog
+        rt.store.set_markets(old_markets)
+        rt.store.set_opportunities(old_ops)
+        sent = []
+        encode = rt._encode
+        def recording(kind, data):
+            sent.append((kind, data))
+            return encode(kind, data)
+        monkeypatch.setattr(rt, "_encode", recording)
         original = rt._yield_capture
         changed = False
-        async def mutate():
+        async def replace():
             nonlocal changed
-            if not changed:
+            if not changed and rt._capture_phase == replace_phase:
                 changed = True
-                quotes[1].bid = quotes[1].ask = 999
-                quotes[1].estimated_fields.append("bid")
-                op.open_spread_pct = -1
-                op.buy_routes.append("mutated")
+                rt.store.set_markets(new_markets)
+                rt.store.set_opportunities(new_ops)
+                rt.catalog.entries = set()
             await original()
-        monkeypatch.setattr(rt, "_yield_capture", mutate)
-        await tick(rt, NOW, background + quotes, [op])
+        monkeypatch.setattr(rt, "_yield_capture", replace)
+        rt.store.mark_published(NOW)
+        # Use store getter lists to exercise the tuple capture boundary too.
+        snapshot = PublishedSnapshot(rt.store.generation, NOW, rt.store.get_markets(),
+            rt.store.get_opportunities(), opportunities_version=rt.store.opportunities_version)
+        task = await rt.submit(snapshot)
+        assert isinstance(rt._frozen_markets, tuple) and isinstance(rt._frozen_ops, tuple)
+        assert all(a is b for a, b in zip(rt._frozen_markets, old_markets, strict=True))
+        assert all(a is b for a, b in zip(rt._frozen_ops, old_ops, strict=True))
+        assert rt._frozen_catalog[2] is old_catalog
+        await task
         assert changed and rt.errors == 0
         records = await rows(rt)
         assert len(records) == 2
@@ -184,6 +211,31 @@ async def test_real_spawn_all_shards_use_pre_yield_prices(tmp_path, monkeypatch)
         assert rt.status()["scorer_price_states"] == 1203
         assert rt._quotes[1202][8:10] == (101, 101)
         assert rt._quotes[1202][-1] == ()
+        assert rt._directory == [directory_values(m.__dict__) for m in old_markets]
+        def wire_market(m):
+            values = market_values(m.__dict__)
+            return values[:-1] + (tuple(values[-1]),)
+        def wire_op(o):
+            values = op_values(o.__dict__)
+            return values[:-3] + tuple(tuple(v) for v in values[-3:])
+        assert rt._quotes == {i: wire_market(m) for i, m in enumerate(old_markets)}
+        header = next(data for kind, data in sent if kind == "round")
+        assert header[3] == tuple(o.id for o in old_ops)
+        assert list(header[4]) == [o.open_spread_pct for o in old_ops]
+        assert header[5] == old_catalog
+        assert [row for kind, data in sent if kind == "op_rows" for row in data] == [wire_op(op)]
+        assert rt.skipped_publications == 1
+        assert rt.store.get_opportunities() == new_ops
+        sent.clear()
+        # Minute checkpoint reads all markets, including added/deleted slots.
+        await tick(rt, NOW + timedelta(seconds=61), rt.store.get_markets(), rt.store.get_opportunities())
+        assert rt.errors == 0
+        assert rt._directory == [directory_values(m.__dict__) for m in new_markets]
+        assert rt._quotes == {i: wire_market(m) for i, m in enumerate(new_markets)}
+        header = next(data for kind, data in sent if kind == "round")
+        assert header[3] == (op.id,) and list(header[4]) == [-1]
+        assert header[5] == set()
+        assert [row for kind, data in sent if kind == "op_rows" for row in data] == [wire_op(new_ops[0])]
     finally:
         await rt.aclose()
 
