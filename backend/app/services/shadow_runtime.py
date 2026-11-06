@@ -4,6 +4,7 @@ import multiprocessing
 import pickle
 import queue
 import threading
+from weakref import ref
 from time import monotonic, perf_counter, thread_time_ns
 from array import array
 
@@ -36,7 +37,6 @@ class ShadowRuntime:
         self._dispose_lock = asyncio.Lock()
         self._frozen_markets = ()
         self._frozen_ops = ()
-        self._previous_markets = ()
         self._busy_since = None
         self._rss_exceeded = False
         self._transport_error = None
@@ -54,6 +54,7 @@ class ShadowRuntime:
         self.resync_count = 0
         self._sent_full = False
         self._directory = []
+        self._directory_sources = []
         self._quotes = {}
         self._threshold_ids = ()
         self._catalog_version = None
@@ -182,7 +183,7 @@ class ShadowRuntime:
             resumed = perf_counter()
             context, self._context = self._context, None
             snapshot, segments, cpus = context
-            generation, version, originals = snapshot.generation, snapshot.opportunities_version, snapshot.opportunities
+            generation, version, originals = snapshot.generation, snapshot.opportunities_version, self._frozen_ops
             capture_ms, cpu_ms = sum(segments), sum(cpus)
             try:
                 if self.store.opportunities_version != version:
@@ -198,11 +199,11 @@ class ShadowRuntime:
                             display.append(op)
                             continue
                         previous = self._display_cache.get(op_id)
-                        values = tuple(values_dict.values())
-                        if previous is not None and previous[:2] == (values, fields):
+                        if previous is not None and previous[1] == fields and (
+                                previous[0] is op or previous[0].__dict__ == values_dict):
                             entry = previous
                         else:
-                            entry = (values, fields, op.model_copy(update=fields))
+                            entry = (op, fields, op.model_copy(update=fields))
                         cache[op_id] = entry
                         display.append(entry[2])
                     self._display_cache = cache
@@ -210,6 +211,9 @@ class ShadowRuntime:
                         self.skipped_publications += 1
             except Exception:
                 self.error("publish")
+            # The child acknowledged every shard. Do not keep the producer's
+            # previous model generation alive while the next batch is built.
+            self._frozen_markets = self._frozen_ops = ()
             del originals, snapshot, context
             publish_ms = (perf_counter() - resumed) * 1000
             self._published.update(main_cpu_ms=cpu_ms, capture_ms=capture_ms, publish_ms=publish_ms,
@@ -237,31 +241,14 @@ class ShadowRuntime:
         self._context = (snapshot, [], [])
         self._capture_phases = dict.fromkeys(("thresholds", "directory", "quotes"), 0.0)
         self._capture_phase = "thresholds"
-        # Freeze before submit can return or any shard can yield. Reuse detached
-        # dictionaries when content is equal; quote timestamps alone are not a
-        # revision (same-timestamp mutations must still be captured).
+        # PM 46: published models and their list fields are immutable by contract.
+        # Capture only references before returning/yielding; producers replace
+        # whole batches. All shards (including their lengths) use these tuples.
         self._segment_started, self._segment_cpu = perf_counter(), thread_time_ns()
         try:
-            previous = self._frozen_markets
-            frozen = []
-            for i, model in enumerate(snapshot.markets):
-                data = model.__dict__
-                old = previous[i] if i < len(previous) else None
-                if old is not None and data == old:
-                    frozen.append(old)
-                else:
-                    row = data.copy()
-                    row["estimated_fields"] = list(row["estimated_fields"])
-                    frozen.append(row)
-            self._previous_markets = previous
-            self._frozen_markets = frozen
-            self._frozen_ops = []
-            for model in snapshot.opportunities:
-                row = model.__dict__.copy()
-                for name in ("buy_routes", "sell_routes", "fake_reasons"):
-                    row[name] = tuple(row[name])
-                self._frozen_ops.append(row)
-            self._frozen_catalog = (self.catalog.updated_at, id(self.catalog.entries), self.catalog.entries.copy())
+            self._frozen_markets = tuple(snapshot.markets)
+            self._frozen_ops = tuple(snapshot.opportunities)
+            self._frozen_catalog = (self.catalog.updated_at, id(self.catalog.entries), self.catalog.entries)
         except Exception:
             self._capture_failed()
             return self._active
@@ -305,15 +292,17 @@ class ShadowRuntime:
             if full:
                 def reset_mirrors():
                     self._directory.clear()
+                    self._directory_sources.clear()
                     self._quotes.clear()
                 await self._slice(reset_mirrors)
                 await self._yield_capture()
             ids, spreads = [], array("d")
-            for offset in range(0, len(snapshot.opportunities), CAPTURE_CHUNK_SIZE):
+            for offset in range(0, len(self._frozen_ops), CAPTURE_CHUNK_SIZE):
                 def capture():
-                    ops = self._frozen_ops[offset:offset + CAPTURE_CHUNK_SIZE]
-                    ids.extend(op["id"] for op in ops)
-                    spreads.extend(op["open_spread_pct"] for op in ops)
+                    for op in self._frozen_ops[offset:offset + CAPTURE_CHUNK_SIZE]:
+                        data = op.__dict__
+                        ids.append(data["id"])
+                        spreads.append(data["open_spread_pct"])
                 await self._slice(capture)
                 await self._yield_capture()
             def dispatch():
@@ -342,24 +331,31 @@ class ShadowRuntime:
     async def _capture_reply(self, token, request):
         if token != self._serial or self._context is None:
             return
-        snapshot = self._context[0]
         kind, indices = request
         self._capture_phase = kind
         try:
             chunks = []
             if kind == "directory":
-                # The collector replaces models, but synthetic/inline producers
-                # may also mutate them. Neither object identity nor quote time
-                # alone is a metadata revision. Compare cached immutable leaves
-                # directly; only changed rows allocate directory tuples.
-                for offset in range(0, len(snapshot.markets), CAPTURE_CHUNK_SIZE):
+                # Replacements can change metadata at the same quote timestamp.
+                # Compare immutable leaves; only changed rows allocate tuples.
+                markets, directory, sources = self._frozen_markets, self._directory, self._directory_sources
+                for offset in range(0, len(markets), CAPTURE_CHUNK_SIZE):
                     def capture_directory():
                         delta = []
-                        for i in range(offset, min(offset + CAPTURE_CHUNK_SIZE, len(snapshot.markets))):
-                            d = self._frozen_markets[i]
-                            old = self._directory[i] if i < len(self._directory) else None
-                            if old is not None and i < len(self._previous_markets) and d is self._previous_markets[i]:
+                        for i in range(offset, min(offset + CAPTURE_CHUNK_SIZE, len(markets))):
+                            model = markets[i]
+                            # Weak refs permit the identity fast path under PM 46
+                            # without retaining an entire previous model batch or
+                            # confusing a reused id with the old object.
+                            if i < len(sources) and sources[i]() is model:
                                 continue
+                            source = ref(model)
+                            if i < len(sources):
+                                sources[i] = source
+                            else:
+                                sources.append(source)
+                            d = model.__dict__
+                            old = directory[i] if i < len(directory) else None
                             if old is None or not (
                                 d["exchange"] == old[0] and d["market_type"] == old[1]
                                 and d["raw_symbol"] == old[2] and d["dex"] == old[3]
@@ -370,9 +366,9 @@ class ShadowRuntime:
                                 delta.append((i, row))
                                 self._quotes.pop(i, None)
                                 if old is None:
-                                    self._directory.append(row)
+                                    directory.append(row)
                                 else:
-                                    self._directory[i] = row
+                                    directory[i] = row
                         if delta:
                             chunks.append(self._encode("directory_delta", delta))
                     await self._slice(capture_directory)
@@ -382,26 +378,28 @@ class ShadowRuntime:
                     def capture_ops():
                         rows = []
                         for i in indices[offset:offset + CAPTURE_CHUNK_SIZE]:
-                            values = op_values(self._frozen_ops[i])
+                            values = op_values(self._frozen_ops[i].__dict__)
                             rows.append(values[:-3] + (tuple(values[-3]), tuple(values[-2]), tuple(values[-1])))
                         op_chunks.append(self._encode("op_rows", rows))
                     await self._slice(capture_ops)
                     await self._yield_capture()
                 def dispatch():
-                    size = len(snapshot.markets)
+                    size = len(self._frozen_markets)
                     for i in range(size, len(self._directory)):
                         self._quotes.pop(i, None)
                     del self._directory[size:]
+                    del self._directory_sources[size:]
                     self._incoming.put_nowait((kind, token, pickle.dumps((size, chunks, op_chunks), protocol=5)))
                 await self._slice(dispatch)
             elif kind == "quotes":
-                indices = range(len(snapshot.markets)) if indices is None else indices
+                indices = range(len(self._frozen_markets)) if indices is None else indices
                 for offset in range(0, len(indices), CAPTURE_CHUNK_SIZE):
                     def capture_quotes():
                         delta = []
                         for i in indices[offset:offset + CAPTURE_CHUNK_SIZE]:
-                            values = market_values(self._frozen_markets[i])
-                            # Mutable list leaves must never share producer state.
+                            values = market_values(self._frozen_markets[i].__dict__)
+                            # Wire/cache leaves are tuples; no per-object copying
+                            # occurs in the synchronous reference capture above.
                             values = values[:-1] + (tuple(values[-1]),)
                             if self._quotes.get(i) != values:
                                 self._quotes[i] = values
@@ -549,9 +547,10 @@ class ShadowRuntime:
         self._published["worker_pid"] = None
         self._display_cache.clear()
         self._directory.clear()
+        self._directory_sources.clear()
         self._quotes.clear()
         self._threshold_ids = ()
-        self._frozen_markets = self._previous_markets = self._frozen_ops = ()
+        self._frozen_markets = self._frozen_ops = ()
 
     def status(self):
         counts = dict(self._child_error_totals)
