@@ -329,6 +329,10 @@ class ShadowRuntime(ShadowWorker):
 
 
 
-    async def statistics(self, rows, dims, include_fake):
+    async def statistics(self, since, until, dims, include_fake, strategy_version):
+        from types import SimpleNamespace
+        from app.api.routes_shadow import read_committed
         from app.services.shadow_stats import buckets
+        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(shadow_runtime=self)))
+        rows = await read_committed(request, "closed_events", since, until, include_fake, strategy_version)
         return buckets(rows, dims, include_fake)
