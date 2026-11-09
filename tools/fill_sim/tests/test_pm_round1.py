@@ -271,18 +271,20 @@ class FundingEngineTests(base.OfflineCase):
 
 
 class GuardAndReportTests(base.OfflineCase):
-    def test_default_fees_match_env_and_unverified_entries_are_reported(self):
+    def test_default_fees_match_env_and_pm_verified_binance(self):
         fees = json.loads(default_fees_json())
         example = Path(__file__).parents[1]/"deploy/fill-sim.env.example"
         raw = next(s.split("=",1)[1] for s in example.read_text().splitlines() if s.startswith("FILL_SIM_FEES_JSON="))
         self.assertEqual(json.loads(raw.strip("'")),fees)
-        self.assertEqual(unconfigured_fees(fees),["binance:future"])
+        self.assertEqual(unconfigured_fees(fees),[])
+        self.assertEqual(fees["binance"]["future"], .0005)
+        self.assertEqual(unconfigured_fees({**fees, "binance": {"spot": .001, "future": None}}), ["binance:future"])
         self.assertEqual(fees["aster"]["future"],.0004)
         self.assertTrue(all(fees[ex]["spot"] is not None for ex in EXCHANGES))
         with tempfile.TemporaryDirectory() as temp:
             store = base.Store(Path(temp)/"fees.db")
             try:
-                self.assertEqual(window(store,0,1)["unconfigured_fees"],["binance:future"])
+                self.assertEqual(window(store,0,1)["unconfigured_fees"],[])
             finally:
                 store.close()
 

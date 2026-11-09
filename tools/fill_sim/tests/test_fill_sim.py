@@ -711,7 +711,7 @@ class StorageReportTests(OfflineCase):
         self.assertEqual(state["api_failures"],0)
         self.assertIsNone(state["funding_unknown_ratio"])
         self.assertEqual(state["funding_observations"],0)
-        self.assertEqual(state["unconfigured_fees"],["binance:future"])
+        self.assertEqual(state["unconfigured_fees"],[])
         self.assertTrue(all(s["requests"]==0 for s in state["exchanges"].values()))
 
     def test_production_code_has_no_backend_or_third_party_imports(self):
