@@ -1,0 +1,595 @@
+{
+  "spec": {
+    "url": "https://fapi.binance.com/fapi/v1/exchangeInfo",
+    "received_at": 1794207051.8301167,
+    "response": {
+      "timezone": "UTC",
+      "serverTime": 1794204813342,
+      "futuresType": "U_MARGINED",
+      "rateLimits": [
+        {
+          "rateLimitType": "REQUEST_WEIGHT",
+          "interval": "MINUTE",
+          "intervalNum": 1,
+          "limit": 2400
+        },
+        {
+          "rateLimitType": "ORDERS",
+          "interval": "MINUTE",
+          "intervalNum": 1,
+          "limit": 1200
+        },
+        {
+          "rateLimitType": "ORDERS",
+          "interval": "SECOND",
+          "intervalNum": 10,
+          "limit": 300
+        }
+      ],
+      "exchangeFilters": [],
+      "assets": [
+        {
+          "asset": "USDT",
+          "marginAvailable": true,
+          "autoAssetExchange": "-10000"
+        },
+        {
+          "asset": "BTC",
+          "marginAvailable": true,
+          "autoAssetExchange": "-0.10000000"
+        },
+        {
+          "asset": "BNB",
+          "marginAvailable": true,
+          "autoAssetExchange": "0"
+        },
+        {
+          "asset": "ETH",
+          "marginAvailable": true,
+          "autoAssetExchange": "0"
+        },
+        {
+          "asset": "USDC",
+          "marginAvailable": true,
+          "autoAssetExchange": "-10000"
+        },
+        {
+          "asset": "FDUSD",
+          "marginAvailable": true,
+          "autoAssetExchange": "0"
+        },
+        {
+          "asset": "BNFCR",
+          "marginAvailable": true,
+          "autoAssetExchange": "-5000"
+        },
+        {
+          "asset": "BFUSD",
+          "marginAvailable": true,
+          "autoAssetExchange": "0"
+        },
+        {
+          "asset": "LDUSDT",
+          "marginAvailable": true,
+          "autoAssetExchange": "0"
+        },
+        {
+          "asset": "RWUSD",
+          "marginAvailable": true,
+          "autoAssetExchange": "0"
+        },
+        {
+          "asset": "USD1",
+          "marginAvailable": true,
+          "autoAssetExchange": "-5000"
+        },
+        {
+          "asset": "U",
+          "marginAvailable": true,
+          "autoAssetExchange": "-5000"
+        }
+      ],
+      "symbols": [
+        {
+          "symbol": "BTCUSDT",
+          "pair": "BTCUSDT",
+          "contractType": "PERPETUAL",
+          "deliveryDate": 4133404800000,
+          "onboardDate": 1567965300000,
+          "status": "TRADING",
+          "maintMarginPercent": "2.5000",
+          "requiredMarginPercent": "5.0000",
+          "baseAsset": "BTC",
+          "quoteAsset": "USDT",
+          "marginAsset": "USDT",
+          "pricePrecision": 2,
+          "quantityPrecision": 3,
+          "baseAssetPrecision": 8,
+          "quotePrecision": 8,
+          "underlyingType": "COIN",
+          "underlyingSubType": [
+            "PoW",
+            "Crypto"
+          ],
+          "triggerProtect": "0.0300",
+          "liquidationFee": "0.012500",
+          "marketTakeBound": "0.03",
+          "maxMoveOrderLimit": 10000,
+          "filters": [
+            {
+              "filterType": "PRICE_FILTER",
+              "tickSize": "0.10",
+              "maxPrice": "4529764",
+              "minPrice": "556.80"
+            },
+            {
+              "filterType": "LOT_SIZE",
+              "maxQty": "1000",
+              "stepSize": "0.001",
+              "minQty": "0.001"
+            },
+            {
+              "stepSize": "0.001",
+              "minQty": "0.001",
+              "filterType": "MARKET_LOT_SIZE",
+              "maxQty": "120"
+            },
+            {
+              "filterType": "MAX_NUM_ORDERS",
+              "limit": 200
+            },
+            {
+              "notional": "50",
+              "filterType": "MIN_NOTIONAL"
+            },
+            {
+              "filterType": "PERCENT_PRICE",
+              "multiplierDown": "0.9700",
+              "multiplierUp": "1.0300",
+              "multiplierDecimal": "4"
+            },
+            {
+              "filterType": "POSITION_RISK_CONTROL",
+              "positionControlSide": "NONE"
+            }
+          ],
+          "orderTypes": [
+            "LIMIT",
+            "MARKET",
+            "STOP",
+            "STOP_MARKET",
+            "TAKE_PROFIT",
+            "TAKE_PROFIT_MARKET",
+            "TRAILING_STOP_MARKET"
+          ],
+          "timeInForce": [
+            "GTC",
+            "IOC",
+            "FOK",
+            "GTX",
+            "GTD"
+          ],
+          "permissionSets": [
+            "GRID",
+            "COPY",
+            "DCA",
+            "PSB"
+          ]
+        }
+      ]
+    }
+  },
+  "depth": {
+    "url": "https://fapi.binance.com/fapi/v1/depth?symbol=BTCUSDT&limit=50",
+    "received_at": 1794207052.4496393,
+    "response": {
+      "lastUpdateId": 12055251707631,
+      "E": 1794207049712,
+      "T": 1794207049708,
+      "bids": [
+        [
+          "74217.20",
+          "16.357"
+        ],
+        [
+          "74217.10",
+          "0.413"
+        ],
+        [
+          "74217.00",
+          "0.004"
+        ],
+        [
+          "74216.90",
+          "0.003"
+        ],
+        [
+          "74216.70",
+          "0.001"
+        ],
+        [
+          "74215.70",
+          "0.001"
+        ],
+        [
+          "74215.50",
+          "0.001"
+        ],
+        [
+          "74215.40",
+          "0.070"
+        ],
+        [
+          "74215.30",
+          "0.408"
+        ],
+        [
+          "74215.00",
+          "0.002"
+        ],
+        [
+          "74214.80",
+          "0.002"
+        ],
+        [
+          "74214.70",
+          "0.101"
+        ],
+        [
+          "74214.30",
+          "0.298"
+        ],
+        [
+          "74214.20",
+          "0.587"
+        ],
+        [
+          "74214.10",
+          "0.001"
+        ],
+        [
+          "74214.00",
+          "0.003"
+        ],
+        [
+          "74213.50",
+          "0.007"
+        ],
+        [
+          "74213.40",
+          "0.065"
+        ],
+        [
+          "74213.30",
+          "0.012"
+        ],
+        [
+          "74213.20",
+          "0.005"
+        ],
+        [
+          "74213.00",
+          "0.086"
+        ],
+        [
+          "74212.90",
+          "0.217"
+        ],
+        [
+          "74212.80",
+          "0.068"
+        ],
+        [
+          "74212.60",
+          "0.001"
+        ],
+        [
+          "74212.30",
+          "0.002"
+        ],
+        [
+          "74212.10",
+          "0.001"
+        ],
+        [
+          "74212.00",
+          "0.003"
+        ],
+        [
+          "74211.80",
+          "0.502"
+        ],
+        [
+          "74211.60",
+          "0.008"
+        ],
+        [
+          "74211.50",
+          "0.005"
+        ],
+        [
+          "74211.40",
+          "0.283"
+        ],
+        [
+          "74211.20",
+          "0.264"
+        ],
+        [
+          "74211.10",
+          "0.001"
+        ],
+        [
+          "74210.60",
+          "0.002"
+        ],
+        [
+          "74210.50",
+          "0.346"
+        ],
+        [
+          "74210.40",
+          "0.232"
+        ],
+        [
+          "74210.30",
+          "0.001"
+        ],
+        [
+          "74210.20",
+          "0.010"
+        ],
+        [
+          "74210.00",
+          "0.028"
+        ],
+        [
+          "74209.90",
+          "0.001"
+        ],
+        [
+          "74209.80",
+          "0.050"
+        ],
+        [
+          "74209.70",
+          "0.072"
+        ],
+        [
+          "74209.50",
+          "0.018"
+        ],
+        [
+          "74209.40",
+          "0.869"
+        ],
+        [
+          "74209.30",
+          "0.001"
+        ],
+        [
+          "74209.10",
+          "0.012"
+        ],
+        [
+          "74209.00",
+          "0.001"
+        ],
+        [
+          "74208.90",
+          "0.206"
+        ],
+        [
+          "74208.80",
+          "0.068"
+        ],
+        [
+          "74208.50",
+          "0.008"
+        ]
+      ],
+      "asks": [
+        [
+          "74217.30",
+          "1.672"
+        ],
+        [
+          "74217.40",
+          "0.003"
+        ],
+        [
+          "74217.50",
+          "0.009"
+        ],
+        [
+          "74217.60",
+          "0.003"
+        ],
+        [
+          "74217.70",
+          "0.002"
+        ],
+        [
+          "74217.80",
+          "0.001"
+        ],
+        [
+          "74218.30",
+          "0.002"
+        ],
+        [
+          "74218.50",
+          "0.003"
+        ],
+        [
+          "74218.70",
+          "0.004"
+        ],
+        [
+          "74218.80",
+          "0.001"
+        ],
+        [
+          "74219.00",
+          "2.025"
+        ],
+        [
+          "74219.10",
+          "0.010"
+        ],
+        [
+          "74219.30",
+          "0.001"
+        ],
+        [
+          "74219.70",
+          "0.002"
+        ],
+        [
+          "74220.00",
+          "0.003"
+        ],
+        [
+          "74220.10",
+          "0.060"
+        ],
+        [
+          "74220.30",
+          "0.006"
+        ],
+        [
+          "74220.50",
+          "0.002"
+        ],
+        [
+          "74220.70",
+          "0.001"
+        ],
+        [
+          "74221.00",
+          "0.001"
+        ],
+        [
+          "74221.10",
+          "0.002"
+        ],
+        [
+          "74221.30",
+          "0.004"
+        ],
+        [
+          "74221.40",
+          "0.567"
+        ],
+        [
+          "74221.50",
+          "0.002"
+        ],
+        [
+          "74221.60",
+          "0.001"
+        ],
+        [
+          "74221.70",
+          "0.001"
+        ],
+        [
+          "74221.80",
+          "0.001"
+        ],
+        [
+          "74221.90",
+          "0.163"
+        ],
+        [
+          "74222.10",
+          "0.022"
+        ],
+        [
+          "74222.20",
+          "0.283"
+        ],
+        [
+          "74222.40",
+          "0.677"
+        ],
+        [
+          "74222.50",
+          "0.008"
+        ],
+        [
+          "74222.70",
+          "0.280"
+        ],
+        [
+          "74222.90",
+          "0.055"
+        ],
+        [
+          "74223.00",
+          "0.003"
+        ],
+        [
+          "74223.10",
+          "0.001"
+        ],
+        [
+          "74223.20",
+          "0.012"
+        ],
+        [
+          "74223.30",
+          "0.002"
+        ],
+        [
+          "74223.50",
+          "0.003"
+        ],
+        [
+          "74223.80",
+          "0.010"
+        ],
+        [
+          "74223.90",
+          "0.002"
+        ],
+        [
+          "74224.00",
+          "0.004"
+        ],
+        [
+          "74224.10",
+          "0.230"
+        ],
+        [
+          "74224.30",
+          "0.002"
+        ],
+        [
+          "74224.40",
+          "0.010"
+        ],
+        [
+          "74224.50",
+          "0.007"
+        ],
+        [
+          "74224.70",
+          "0.005"
+        ],
+        [
+          "74224.80",
+          "0.118"
+        ],
+        [
+          "74224.90",
+          "0.007"
+        ],
+        [
+          "74225.00",
+          "0.002"
+        ]
+      ]
+    }
+  }
+}
