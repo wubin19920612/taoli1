@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS seen (id TEXT PRIMARY KEY, t1 REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS runtime (
  ts REAL PRIMARY KEY, observed REAL NOT NULL, rss REAL, stalls_ok INTEGER, limits_ok INTEGER);
+CREATE TABLE IF NOT EXISTS rate_limit_samples (ts REAL PRIMARY KEY, delta INTEGER NOT NULL);
 """
 
 
@@ -85,24 +86,45 @@ class Store:
     def runtime(self, now, observed, rss, metrics, own_rate_limits):
         stalls = metrics.get("taoli_stalls_not_worse")
         limits = metrics.get("no_429_increase")
-        if own_rate_limits:
+        # Persist the sampling baseline in the same transaction as evidence.
+        # Older databases can seed it from their persisted limiter snapshot.
+        old = self.meta("runtime_rate_limits")
+        if old is None:
+            old = sum(s.get("rate_limits", 0) for s in self.meta("limiter", {}).values())
+        delta = own_rate_limits-old if own_rate_limits >= old else own_rate_limits
+        if delta:
             limits = False
         self.db.execute("INSERT OR REPLACE INTO runtime VALUES (?,?,?,?,?)", (
             now, max(0, observed), rss,
             int(stalls) if isinstance(stalls, bool) else None,
             int(limits) if isinstance(limits, bool) else None))
+        self.set_meta("runtime_rate_limits", own_rate_limits)
+        self.db.execute("INSERT OR REPLACE INTO rate_limit_samples VALUES (?,?)", (now, delta))
 
     def runtime_window(self, since, until):
-        rows = self.db.execute("SELECT observed,rss,stalls_ok,limits_ok FROM runtime WHERE ts>=? AND ts<?", (since,until)).fetchall()
-        observed = sum(r[0] for r in rows)
-        def evidence(index):
-            if not rows or any(r[index] is None for r in rows):
-                return None
-            return all(r[index] == 1 for r in rows)
-        rss = max((r[1] for r in rows if r[1] is not None), default=None)
-        if any(r[1] is None for r in rows):
-            rss = None
-        return observed, dict(max_rss_mb=rss, taoli_stalls_not_worse=evidence(2), no_429_increase=evidence(3))
+        n, observed, rss_n, rss, stalls_n, stalls, limits_n, limits = self.db.execute(
+            "SELECT count(*),coalesce(sum(observed),0),count(rss),max(rss),"
+            "count(stalls_ok),min(stalls_ok),count(limits_ok),min(limits_ok) "
+            "FROM runtime WHERE ts>=? AND ts<?", (since, until)).fetchone()
+        return observed, dict(max_rss_mb=rss if n and rss_n == n else None,
+                              taoli_stalls_not_worse=bool(stalls) if n and stalls_n == n else None,
+                              no_429_increase=bool(limits) if n and limits_n == n else None)
+
+    def status_counts(self, since, until):
+        """Scalar SQL only: status never constructs a trading report/window."""
+        events = opened = observations = unknown = 0
+        for connection in self.sources():
+            events += connection.execute("SELECT count(*) FROM events WHERE t1>=? AND t1<?", (since, until)).fetchone()[0]
+            opened += connection.execute("SELECT count(*) FROM fills f JOIN events e ON e.id=f.event_id "
+                                         "WHERE e.t1>=? AND e.t1<? AND f.variant='measured' AND f.amount=300 AND f.status='opened'",
+                                         (since, until)).fetchone()[0]
+            n, u = connection.execute("SELECT count(*),coalesce(sum(coalesce(json_extract(data,'$.funding_known'),0)=0),0) "
+                                      "FROM positions WHERE coalesce(closed_at,opened_at)>=? AND coalesce(closed_at,opened_at)<?",
+                                      (since, until)).fetchone()
+            observations += n
+            unknown += u
+        return dict(events=events, measured_300_open_events=opened, funding_observations=observations,
+                    funding_unknown=unknown, funding_unknown_ratio=unknown/observations if observations else None)
 
     def seen(self, event_id):
         return self.db.execute("SELECT 1 FROM seen WHERE id=?", (event_id,)).fetchone() is not None
@@ -136,10 +158,19 @@ class Store:
                         if not self.db.execute("SELECT 1 FROM fills WHERE id=?", (fid,)).fetchone():
                             self.fill(dict(id=fid, event_id=e["id"], variant=variant, amount=amount, status="interrupted_restart"))
 
+    def sources(self):
+        paths = sorted(self.path.parent.glob(self.path.stem + "-????-??-??.db")) + [self.path]
+        for path in paths:
+            connection = self.db if path == self.path else sqlite3.connect("file:" + path.as_posix() + "?mode=ro", uri=True)
+            try:
+                yield connection
+            finally:
+                if connection is not self.db:
+                    connection.close()
+
     def rows(self, table, since=None, until=None, by_close=False):
         if table not in ("events", "fills", "positions"):
             raise ValueError("invalid_table")
-        paths = sorted(self.path.parent.glob(self.path.stem + "-????-??-??.db")) + [self.path]
         source, field = table + " t", "t.t1"
         if table == "fills":
             source = "fills t JOIN events e ON e.id=t.event_id"
@@ -152,14 +183,9 @@ class Store:
                 clauses.append(field + operator + "?")
                 params.append(bound)
         query = "SELECT t.data FROM " + source + (" WHERE " + " AND ".join(clauses) if clauses else "")
-        for path in paths:
-            connection = self.db if path == self.path else sqlite3.connect("file:" + path.as_posix() + "?mode=ro", uri=True)
-            try:
-                for (raw,) in connection.execute(query, params):
-                    yield json.loads(raw)
-            finally:
-                if connection is not self.db:
-                    connection.close()
+        for connection in self.sources():
+            for (raw,) in connection.execute(query, params):
+                yield json.loads(raw)
 
     def rotate(self, now):
         """Move completed event families to their discovery-date archive.
@@ -196,6 +222,7 @@ class Store:
             with self.transaction():
                 self.db.execute("DELETE FROM seen WHERE t1 < ? AND id NOT IN (SELECT id FROM events)", (now - 30 * 86400,))
                 self.db.execute("DELETE FROM runtime WHERE ts < ?", (now-30*86400,))
+                self.db.execute("DELETE FROM rate_limit_samples WHERE ts < ?", (now-30*86400,))
                 self.db.execute("DELETE FROM meta WHERE key LIKE 'shadow:%' AND substr(key,8) NOT IN (SELECT id FROM seen)")
                 self.set_meta("rotation_day", today)
         finally:

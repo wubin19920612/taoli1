@@ -206,7 +206,7 @@ def closing(position, a, b, now, stale=False):
     funding, known = funding_pnl(position.get("funding"), position["opened_at"], now, na, nb)
     pnl = ca - na + nb - cb - fees + dec(funding)
     return dict(closed_at=now, holding_seconds=age, exit_reason=reason,
-                close_buy=fa, close_sell=fb, close_spread_bps=spread,
+                close_buy=fa, close_sell=fb, close_spread_bps=spread, exit_pricing="priced",
                 fees_usd=float(fees), funding_usd=funding, funding_known=known,
                 funding_estimated=True, net_usd=float(pnl), net_bps=float(pnl / na * 10000),
                 main_eligible=not stale and known,

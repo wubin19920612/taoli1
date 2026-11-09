@@ -17,13 +17,13 @@ def pair_key(payload):
     return payload["symbol"] + "|" + "|".join(sorted(payload[k]["exchange"] for k in ("buy_market_key", "sell_market_key")))
 
 
-def trigger_reason(payload, now):
+SPEC_CAPACITY = 256
+SPEC_IDLE_TTL = 21600
+
+
+def business_reason(payload):
+    """Eligibility is independent of when/whether execution can run."""
     try:
-        opened = timestamp(payload["opened_at"])
-        if now - opened > 120:
-            return "skipped_stale_trigger"
-        if opened > now + 5:
-            return "skipped_future_trigger"
         if (payload.get("strategy_version") != "shadow-v2" or payload.get("variant") != "conv-half"
                 or payload.get("spread_tier") not in ("0.5–1%", "1–2%", "2–5%", ">5%")
                 or payload.get("liquidity") not in ("gt50k", "5k-50k")
@@ -36,6 +36,21 @@ def trigger_reason(payload, now):
             return "same_market"
     except (KeyError, ValueError, TypeError, AttributeError):
         return "invalid_trigger"
+    return None
+
+
+def trigger_reason(payload, now):
+    reason = business_reason(payload)
+    if reason:
+        return reason
+    try:
+        opened = timestamp(payload["opened_at"])
+    except (KeyError, ValueError, TypeError, AttributeError):
+        return "invalid_trigger"
+    if now-opened > 120:
+        return "skipped_stale_trigger"
+    if opened > now+5:
+        return "skipped_future_trigger"
     return None
 
 
@@ -55,7 +70,9 @@ class Engine:
         self.cache = store.meta("spec_cache", {})
         self.want_specs = {}
         self.spec_retry = {}
-        # Refresh all persisted instruments on startup; bounded incremental work.
+        self.spec_used = {}
+        self._prune_specs()
+        # Refresh retained instruments on startup; bounded incremental work.
         for value in self.cache.values():
             m = Market(**value["market"])
             self.want_specs[m.key] = m
@@ -63,12 +80,18 @@ class Engine:
             raw = "BTC_USDT" if ex == "gate" else ("BTC-USDT-SWAP" if ex == "okx" else "BTCUSDT")
             m = Market(ex, "future", raw)
             self.want_specs.setdefault(m.key, m)
+        self.spec_used.update({k: clock() for k in self.want_specs})
+        self._prune_specs()
         self.last_tick = clock()
 
     def spec(self, market):
+        self.spec_used[market.key] = self.clock()
         value = self.cache.get(market.key)
+        if value:
+            value["used_at"] = self.clock()
         if not value or self.clock() - value["at"] >= 21600:
             self.want_specs[market.key] = market
+            self._prune_specs()
             return None
         spec = Spec(**value["spec"])
         spec.validate(market)
@@ -175,7 +198,7 @@ class Engine:
                 self._update_shadow(identity, payload["net_bps"])
             return
         reason = trigger_reason(payload, now)
-        event = dict(id=identity, payload=payload, t0=None, t1=now, status=reason or "pending", filter_passed=reason is None)
+        event = dict(id=identity, payload=payload, t0=None, t1=now, status=reason or "pending", filter_passed=business_reason(payload) is None)
         try:
             event["t0"] = timestamp(payload["opened_at"])
         except (KeyError, ValueError, TypeError, AttributeError):
@@ -354,7 +377,7 @@ class Engine:
                 result["forced_exit_reason"] = "stale_exit" if stale else "timeout_48h"
             else:
                 result = dict(closed_at=now, holding_seconds=now-p["opened_at"], exit_reason="unpriced_exit",
-                              main_eligible=False, funding_known=False, net_bps=None, net_usd=None)
+                              main_eligible=False, exit_pricing="unpriced", net_bps=None, net_usd=None)
         if result:
             p.update(result)
             self.positions.pop(p["id"], None)
@@ -434,7 +457,48 @@ class Engine:
                 self.pending.pop(key, None)
         self._refresh_specs()
 
+    def _prune_specs(self):
+        now = self.clock()
+        dependencies = {Market(**m).key for e in (*self.pending.values(), *self.positions.values())
+                        for m in e.get("markets", [])}
+        for key in dependencies:
+            self.spec_used[key] = now
+            if key in self.cache:
+                self.cache[key]["used_at"] = now
+        removed = False
+        for key, value in list(self.cache.items()):
+            if key not in dependencies and now-value.get("used_at", value["at"]) >= SPEC_IDLE_TTL:
+                del self.cache[key]
+                removed = True
+        for key in sorted(self.cache, key=lambda k: (k in dependencies,
+                          self.cache[k].get("used_at", self.cache[k]["at"]))):
+            if len(self.cache) <= SPEC_CAPACITY:
+                break
+            del self.cache[key]
+            removed = True
+        for key in set(self.want_specs) | set(self.spec_retry):
+            if key not in dependencies and (key in self.spec_retry or
+                    now-self.spec_used.get(key, 0) >= SPEC_IDLE_TTL):
+                # A failed stale cache must not recreate the abandoned retry on
+                # the next tick's periodic refresh scan.
+                if key in self.spec_retry and key in self.cache:
+                    del self.cache[key]
+                    removed = True
+                self.want_specs.pop(key, None)
+                self.spec_retry.pop(key, None)
+        for key in sorted(self.want_specs, key=lambda k: (k in dependencies, self.spec_used.get(k, 0))):
+            if len(self.want_specs) <= SPEC_CAPACITY:
+                break
+            self.want_specs.pop(key, None)
+            self.spec_retry.pop(key, None)
+        retained = set(self.cache) | set(self.want_specs) | set(self.spec_jobs) | dependencies
+        self.spec_used = {k: v for k, v in self.spec_used.items() if k in retained}
+        if removed:
+            with self.store.transaction():
+                self.store.set_meta("spec_cache", self.cache)
+
     def _refresh_specs(self):
+        cache_changed = False
         for key, (m, future) in list(self.spec_jobs.items()):
             if not future.done():
                 continue
@@ -443,17 +507,19 @@ class Engine:
                 spec = parse_spec(m, future.result())
                 self.cache[key] = dict(at=self.clock(), spec=asdict(spec), market=asdict(m))
                 self.want_specs.pop(key, None)
+                self.spec_retry.pop(key, None)
+                cache_changed = True
             except Exception:
                 # Retry no faster than 60s; cache remains stale and unusable for opens.
                 self.spec_retry[key] = self.clock() + 60
                 self.want_specs[key] = m
-            with self.store.transaction():
-                self.store.set_meta("spec_cache", self.cache)
-        if not hasattr(self, "spec_retry"):
-            self.spec_retry = {}
         for key, value in list(self.cache.items()):
             if self.clock() - value["at"] >= 21600:
                 self.want_specs[key] = Market(**value["market"])
+        self._prune_specs()
+        if cache_changed:
+            with self.store.transaction():
+                self.store.set_meta("spec_cache", self.cache)
         if self.tracking_due():
             return
         pending_keys = {Market(**m).key for e in self.pending.values() for m in e.get("markets", [])}
@@ -466,6 +532,7 @@ class Engine:
             self.spec_jobs[key] = (m, future)
             del self.want_specs[key]
 
-    def close(self):
+    def close(self, discard=False):
         self.executor.shutdown(wait=True)
-        self._finish_jobs()
+        if not discard:
+            self._finish_jobs()

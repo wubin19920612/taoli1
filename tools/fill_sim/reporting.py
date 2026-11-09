@@ -1,22 +1,33 @@
 """UTC daily statistics and day-cluster bootstrap. Unknown evidence cannot pass."""
 from collections import Counter, defaultdict
 import random
-from statistics import mean
+from pathlib import Path
+import sqlite3
+import tempfile
 from .core import AMOUNTS, day
 
 
 def stats(rows):
-    values = [r["net_bps"] for r in rows]
-    return {"n": len(values), "mean_bps": mean(values) if values else None,
-            "win_rate": sum(v > 0 for v in values) / len(values) if values else None,
-            "usd": sum(r["net_usd"] for r in rows)}
+    n = wins = total = usd = 0
+    for row in rows:
+        n += 1
+        total += row["net_bps"]
+        wins += row["net_bps"] > 0
+        usd += row["net_usd"]
+    return dict(n=n, mean_bps=total/n if n else None,
+                win_rate=wins/n if n else None, usd=usd)
 
 
 def bootstrap_lower(rows, samples=2000, seed=1905):
-    days = defaultdict(list)
+    days = defaultdict(lambda: [0, 0])
     for row in rows:
-        days[day(row["closed_at"])].append(row["net_bps"])
-    groups = [(sum(v), len(v)) for v in days.values()]
+        group = days[day(row["closed_at"])]
+        group[0] += row["net_bps"]
+        group[1] += 1
+    return bootstrap_groups(list(days.values()), samples, seed)
+
+
+def bootstrap_groups(groups, samples=2000, seed=1905):
     if len(groups) < 2:
         return None
     rng, values = random.Random(seed), []
@@ -29,49 +40,90 @@ def bootstrap_lower(rows, samples=2000, seed=1905):
 
 
 def summarize(events, fills, positions):
-    events, fills, positions = list(events), list(fills), list(positions)
-    closed = [p for p in positions if p.get("closed_at") is not None]
-    eligible = [p for p in closed if p.get("main_eligible")]
-    main = [p for p in eligible if p["variant"] == "measured" and p["amount"] == 300]
-    opened = [f for f in fills if f["variant"] == "measured" and f["amount"] == 300 and f["status"] == "opened"]
-    considered = [e for e in events if e.get("filter_passed")]
-    counts = Counter(p["symbol"] for p in main)
-    top = sorted(counts, key=lambda s: (-counts[s], s))[:3]
-    remainder = [p for p in main if p["symbol"] not in top]
-    amount_stats = {str(n): stats([p for p in eligible if p["variant"] == "measured" and p["amount"] == n]) for n in AMOUNTS}
-    biases = sorted(p["shadow_net_bps"] - p["net_bps"] for p in main if p.get("shadow_net_bps") is not None)
+    """Spool narrow rows to disk; Python retains only output groups and days.
+
+    Exact distinct counts and bias order statistics also stay in SQLite. This
+    accepts one-shot streams, including archives, without materializing trades.
+    """
+    with tempfile.TemporaryDirectory(prefix="fill-report-") as temp:
+        db = sqlite3.connect(str(Path(temp) / "aggregate.db"))
+        try:
+            db.execute("PRAGMA cache_size=-1024")
+            db.execute("PRAGMA temp_store=FILE")
+            db.execute("PRAGMA journal_mode=OFF")
+            db.execute("PRAGMA synchronous=OFF")
+            return _summarize(db, events, fills, positions)
+        finally:
+            db.close()
+
+
+def _summarize(db, events, fills, positions):
+    event_count = considered = 0
+    reasons = Counter()
+    for e in events:
+        event_count += 1
+        considered += bool(e.get("filter_passed"))
+        reasons[e["status"]] += 1
+    db.execute("CREATE TABLE opened (event_id TEXT, symbol TEXT, pair TEXT)")
+    db.executemany("INSERT INTO opened VALUES (?,?,?)", (
+        (f["event_id"], f["symbol"], f["pair"]) for f in fills
+        if f["variant"] == "measured" and f["amount"] == 300 and f["status"] == "opened"))
+    db.execute("""CREATE TABLE p (variant TEXT, amount INTEGER, symbol TEXT, pair TEXT,
+               spread_tier TEXT, closed_at REAL, eligible INTEGER, known INTEGER,
+               reason TEXT, net_bps REAL, net_usd REAL, shadow REAL, pricing TEXT)""")
+    db.executemany("INSERT INTO p VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+        (p.get("variant"), p.get("amount"), p.get("symbol"), p.get("pair"), p.get("spread_tier"),
+         p.get("closed_at"), bool(p.get("main_eligible")), bool(p.get("funding_known")),
+         p.get("exit_reason"), p.get("net_bps"), p.get("net_usd"), p.get("shadow_net_bps"),
+         p.get("exit_pricing", "unpriced" if p.get("exit_reason") == "unpriced_exit" else "priced"))
+        for p in positions))
+    db.execute("CREATE VIEW closed AS SELECT rowid AS seq,* FROM p WHERE closed_at IS NOT NULL AND pricing='priced' AND net_bps IS NOT NULL")
+    db.execute("CREATE VIEW eligible AS SELECT * FROM closed WHERE eligible=1")
+    db.execute("CREATE VIEW main AS SELECT * FROM eligible WHERE variant='measured' AND amount=300")
+    def aggregate(source, condition="1", params=()):
+        n, avg, wins, usd = db.execute(
+            "SELECT count(*),avg(net_bps),sum(net_bps>0),coalesce(sum(net_usd),0) FROM "
+            + source + " WHERE " + condition, params).fetchone()
+        return dict(n=n, mean_bps=avg, win_rate=wins/n if n else None, usd=usd)
+    top = [r[0] for r in db.execute("SELECT symbol FROM main GROUP BY symbol ORDER BY count(*) DESC,symbol LIMIT 3")]
+    marks = ",".join("?" for _ in top) or "NULL"
+    variants = {v: {str(n): aggregate("eligible", "variant=? AND amount=?", (v,n))
+                   for n in AMOUNTS} for v in ("measured", "plus_1s", "leg_delay")}
+    amounts = variants["measured"]
     grouped = {}
     for key in ("pair", "symbol", "spread_tier"):
-        groups = defaultdict(list)
-        for p in main:
-            groups[p[key]].append(p)
-        grouped[key] = {k: stats(v) for k, v in sorted(groups.items())}
-    return dict(events=len(events), considered_events=len(considered),
-                skipped_reasons=dict(Counter(e["status"] for e in events)),
-                still_there_rate=len(opened) / len(considered) if considered else None,
-                measured_300_open_events=len({f["event_id"] for f in opened}),
-                coins=len({f["symbol"] for f in opened}), pairs=len({f["pair"] for f in opened}),
-                amounts=amount_stats, main=stats(main),
-                variants={v:{str(n):stats([p for p in eligible if p["variant"]==v and p["amount"]==n])
-                             for n in AMOUNTS} for v in ("measured","plus_1s","leg_delay")},
-                provisional_price_only={str(n):stats([p for p in closed if p["variant"]=="measured" and p["amount"]==n
-                                                      and p.get("exit_reason") not in ("stale_exit","unpriced_exit")])
-                                        for n in AMOUNTS},
-                capacity_curve=[dict(amount=n, **amount_stats[str(n)]) for n in AMOUNTS],
-                first_nonpositive_amount=next((n for n in AMOUNTS if amount_stats[str(n)]["mean_bps"] is not None and amount_stats[str(n)]["mean_bps"] <= 0), None),
-                lower_90_bps=bootstrap_lower(main), top3=top, without_top3=stats(remainder),
-                top3_stats=stats([p for p in main if p["symbol"] in top]),
-                leg_delay=stats([p for p in eligible if p["variant"] == "leg_delay" and p["amount"] == 300]),
-                shadow_bias={"n": len(biases), "mean": mean(biases) if biases else None,
-                             "p10": biases[int((len(biases)-1)*.1)] if biases else None,
-                             "p50": biases[len(biases)//2] if biases else None,
-                             "p90": biases[int((len(biases)-1)*.9)] if biases else None},
-                groups=grouped, stale_exits=stats([p for p in closed if p.get("exit_reason") == "stale_exit"]),
-                funding_unknown=sum(not p.get("funding_known", False) for p in positions),
-                funding_observations=len(positions),
-                funding_unknown_ratio=(sum(not p.get("funding_known", False) for p in positions) / len(positions)
-                                       if positions else None),
-                open_positions=sum(p.get("closed_at") is None for p in positions))
+        grouped[key] = {k: dict(n=n, mean_bps=avg, win_rate=wins/n, usd=usd)
+                        for k,n,avg,wins,usd in db.execute(
+                            "SELECT " + key + ",count(*),avg(net_bps),sum(net_bps>0),sum(net_usd) "
+                            "FROM main GROUP BY " + key + " ORDER BY " + key)}
+    days = list(db.execute("SELECT sum(net_bps),count(*) FROM main GROUP BY date(closed_at,'unixepoch') ORDER BY min(seq)"))
+    bias_n, bias_mean = db.execute("SELECT count(*),avg(shadow-net_bps) FROM main WHERE shadow IS NOT NULL").fetchone()
+    def percentile(offset):
+        if not bias_n:
+            return None
+        return db.execute("SELECT shadow-net_bps FROM main WHERE shadow IS NOT NULL "
+                          "ORDER BY shadow-net_bps LIMIT 1 OFFSET ?", (offset,)).fetchone()[0]
+    opened, open_events, coins, pairs = db.execute(
+        "SELECT count(*),count(DISTINCT event_id),count(DISTINCT symbol),count(DISTINCT pair) FROM opened").fetchone()
+    observations, unknown, open_positions = db.execute(
+        "SELECT count(*),coalesce(sum(known=0),0),coalesce(sum(closed_at IS NULL),0) FROM p").fetchone()
+    return dict(events=event_count, considered_events=considered, skipped_reasons=dict(reasons),
+                still_there_rate=opened/considered if considered else None,
+                measured_300_open_events=open_events, coins=coins, pairs=pairs,
+                amounts=amounts, main=aggregate("main"), variants=variants,
+                provisional_price_only={str(n): aggregate("closed", "variant='measured' AND amount=? AND reason NOT IN ('stale_exit','unpriced_exit')", (n,)) for n in AMOUNTS},
+                capacity_curve=[dict(amount=n, **amounts[str(n)]) for n in AMOUNTS],
+                first_nonpositive_amount=next((n for n in AMOUNTS if amounts[str(n)]["mean_bps"] is not None and amounts[str(n)]["mean_bps"] <= 0), None),
+                lower_90_bps=bootstrap_groups(days), top3=top,
+                without_top3=aggregate("main", "symbol NOT IN ("+marks+")" if top else "1", top),
+                top3_stats=aggregate("main", "symbol IN ("+marks+")", top),
+                leg_delay=variants["leg_delay"]["300"],
+                shadow_bias=dict(n=bias_n, mean=bias_mean, p10=percentile(int((bias_n-1)*.1)),
+                                 p50=percentile(bias_n//2), p90=percentile(int((bias_n-1)*.9))),
+                groups=grouped, stale_exits=aggregate("closed", "reason='stale_exit'"),
+                funding_unknown=unknown, funding_observations=observations,
+                funding_unknown_ratio=unknown/observations if observations else None,
+                open_positions=open_positions)
 
 
 def gates(summary, observed_seconds, resources=None):

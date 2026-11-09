@@ -99,22 +99,14 @@ def guard(path, now):
 
 
 def window(store, since, until):
-    # Drop stored books/payloads before aggregation to stay inside the RSS budget.
-    events = [{k:e[k] for k in ("id","status","filter_passed","t1") if k in e}
-              for e in store.rows("events", since, until)]
-    fills = [{k:f[k] for k in ("event_id","variant","amount","status","symbol","pair","t1") if k in f}
-             for f in store.rows("fills", since, until)]
-    # Daily income is attributed to close day, including older opening cohorts.
-    positions = []
-    for p in store.rows("positions", since, until, by_close=True):
-        ts = p.get("closed_at") if p.get("closed_at") is not None else p["opened_at"]
-        if since <= ts < until:
+    def positions():
+        for p in store.rows("positions", since, until, by_close=True):
             shadow = store.meta("shadow:" + p["event_id"])
             if shadow is not None:
                 p["shadow_net_bps"] = shadow
-            positions.append({k:v for k,v in p.items() if k not in
-                              ("fill","markets","specs","last_books","last_executable_exit","funding","close_buy","close_sell")})
-    result = summarize(events, fills, positions)
+            yield p
+    result = summarize(store.rows("events", since, until),
+                       store.rows("fills", since, until), positions())
     result["unconfigured_fees"] = store.meta("unconfigured_fees", unconfigured_fees(json.loads(default_fees_json())))
     return result
 
@@ -155,10 +147,11 @@ def run(args):
     api_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="shadow-api")
     future, stopped, guard_stop = None, False, None
     started = time.time()
-    next_status = next_daily = 0
+    next_status = next_daily = next_guard = 0
     observation = store.meta("observation_seconds", 0)
     recorded_observation = observation
     metrics = {}
+    state = dict(funding_unknown_ratio=None, funding_observations=0, statistics_timestamp=None)
     max_rss = store.meta("max_rss_mb", 0)
     previous = started
 
@@ -170,22 +163,32 @@ def run(args):
     try:
         while not stopped:
             now = time.time()
-            if now >= next_status:
+            if now >= next_guard:
                 guard_stop, metrics = guard(args.guard_file, now)
                 rss = rss_mb()
                 if rss is not None:
                     max_rss = max(max_rss, rss)
-                if rss is not None and rss >= 120:
-                    guard_stop = "rss_limit"
-                summary = window(store, now - now % 86400, now + .001)
-                state = dict(timestamp=now, uptime_seconds=now-started, observation_seconds=observation,
+                    if rss >= 120:
+                        guard_stop = "rss_limit"
+                next_guard = now + 1
+                if guard_stop:
+                    # Stop immediately: no full report or archive work after guard.
+                    state.update(
+                        timestamp=now, stop_reason=guard_stop, exchanges=limiter.snapshot(),
+                        api_failures=api.failures, rss_mb=rss, max_rss_mb=max_rss,
+                        resource_evidence=metrics, unconfigured_fees=unconfigured_fees(fees))
+                    atomic_json(Path(args.out) / "status.json", state)
+                    break
+            if now >= next_status:
+                summary = store.status_counts(now - now % 86400, now + .001)
+                state = dict(timestamp=now, statistics_timestamp=now, uptime_seconds=now-started, observation_seconds=observation,
                              rss_mb=rss, max_rss_mb=max_rss, exchanges=limiter.snapshot(), api_failures=api.failures,
                              positions=len(engine.positions), active_events=len(engine.active_events()),
                              today_events=summary["events"], today_open_events=summary["measured_300_open_events"],
                              funding_unknown=summary["funding_unknown"],
                              funding_observations=summary["funding_observations"],
                              funding_unknown_ratio=summary["funding_unknown_ratio"],
-                             unconfigured_fees=summary["unconfigured_fees"],
+                             unconfigured_fees=unconfigured_fees(fees),
                              open_funding_unknown_ratio=(sum(not p.get("funding_known", False) for p in engine.positions.values())
                                                          / len(engine.positions) if engine.positions else None),
                              stop_reason=guard_stop, resource_evidence=metrics)
@@ -199,8 +202,6 @@ def run(args):
                                        ("observation_seconds", observation), ("max_rss_mb", max_rss)):
                         store.set_meta(key, value)
                 next_status = now + 30
-                if guard_stop:
-                    break
             engine.tick()
             if future is not None and future.done():
                 payloads = future.result()
@@ -221,7 +222,7 @@ def run(args):
             time.sleep(.05)
     finally:
         api_pool.shutdown(wait=True)
-        engine.close()
+        engine.close(discard=bool(guard_stop))
         with store.transaction():
             store.runtime(time.time(), observation-recorded_observation, rss_mb(), metrics,
                           sum(s["rate_limits"] for s in limiter.stats.values()))
@@ -230,7 +231,8 @@ def run(args):
             store.set_meta("api_next_poll", api.next_poll)
             store.set_meta("api_streak", api.streak)
             store.set_meta("observation_seconds", observation)
-        publish_daily(store, args.out, time.time())
+        if not guard_stop:
+            publish_daily(store, args.out, time.time())
         store.close()
     if guard_stop:
         print("STOP " + guard_stop)

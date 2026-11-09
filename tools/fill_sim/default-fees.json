@@ -1,7 +1,7 @@
 {
   "gate": {"future": 0.0005, "spot": 0.001},
   "bitget": {"future": 0.0006, "spot": 0.001},
-  "binance": {"future": null, "spot": 0.001},
+  "binance": {"future": 0.0005, "spot": 0.001},
   "bybit": {"future": 0.00055, "spot": 0.001},
   "okx": {"future": 0.0005, "spot": 0.001},
   "aster": {"future": 0.0004, "spot": 0.0004}
