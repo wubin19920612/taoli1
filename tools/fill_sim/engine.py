@@ -445,13 +445,14 @@ class Engine:
             for p in list(self.positions.values()):
                 if now-p["opened_at"] < 172800:
                     continue
+                stale = any(t is not None and now-t >= 60 for t in p.get("failed_since", [None, None]))
                 result = None
                 for field in ("last_books", "last_executable_exit"):
                     saved = p.get(field)
                     if not saved or len(saved) != 2 or not all(saved):
                         continue
                     try:
-                        result = closing(p, *(Book(**b) for b in saved), now)
+                        result = closing(p, *(Book(**b) for b in saved), now, stale)
                     except ValueError:
                         continue
                     if field == "last_executable_exit":
@@ -460,7 +461,7 @@ class Engine:
                     break
                 if result is None:
                     result = dict(closed_at=now, holding_seconds=now-p["opened_at"],
-                                  exit_reason="unpriced_exit", forced_exit_reason="timeout_48h",
+                                  exit_reason="unpriced_exit", forced_exit_reason="stale_exit" if stale else "timeout_48h",
                                   main_eligible=False, exit_pricing="unpriced", net_bps=None, net_usd=None)
                 p.update(result)
                 self.positions.pop(p["id"])

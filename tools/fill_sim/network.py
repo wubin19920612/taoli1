@@ -102,8 +102,9 @@ def connect_addresses(addresses, port, deadline, timeout, clock):
     error = OSError("dns_no_addresses")
     for family, kind, protocol, _, address in addresses:
         budget = remaining_timeout(deadline, timeout, clock)
-        sock = socket.socket(family, kind, protocol)
+        sock = None
         try:
+            sock = socket.socket(family, kind, protocol)
             sock.settimeout(budget)
             sock.connect((address[0], port, *address[2:]))
             # HTTPSConnection wraps this socket next; bound the TLS handshake too.
@@ -111,7 +112,8 @@ def connect_addresses(addresses, port, deadline, timeout, clock):
             return sock
         except OSError as exc:
             error = exc
-            sock.close()
+            if sock is not None:
+                sock.close()
     raise error
 
 
@@ -149,7 +151,8 @@ def get_json(url, headers=None, timeout=3, total_timeout=8, clock=time.monotonic
     deadline = clock() + total_timeout
     addresses = (resolver or DNS_RESOLVER).resolve(parsed.hostname, deadline)
     cls = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
-    conn = cls(parsed.hostname, parsed.port, timeout=remaining_timeout(deadline, timeout, clock))
+    port = parsed.port if parsed.port is not None else cls.default_port
+    conn = cls(parsed.hostname, port, timeout=remaining_timeout(deadline, timeout, clock))
     # Keep conn.host unchanged: Host, TLS SNI and certificate verification all use
     # the original hostname. Only the TCP socket factory consumes resolved IPs.
     conn._create_connection = lambda address, *args: connect_addresses(
