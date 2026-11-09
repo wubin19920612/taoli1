@@ -12,12 +12,14 @@ from .funding import fetch_funding
 
 class SmokeClient(PublicClient):
     def fetch(self, ex, url, reserved=False):
-        if not reserved:
-            while not self.limiter.acquire([ex]):
-                if self.limiter.stats[ex]["paused_until"] > time.time():
-                    raise RateLimited("exchange_paused")
+        while True:
+            try:
+                return super().fetch(ex, url)
+            except RateLimited as exc:
+                if str(exc) != "local_rate_limit":
+                    raise
                 time.sleep(.15)
-        return super().fetch(ex, url, reserved=True)
+
 
 
 def run(fixtures=None, include_spot=False):
@@ -36,9 +38,7 @@ def run(fixtures=None, include_spot=False):
                     url = endpoint(m, kind)
                     if client.limiter.stats[ex]["paused_until"] > time.time():
                         raise RateLimited("exchange_paused")
-                    while not client.limiter.acquire([ex]):
-                        time.sleep(0.15)
-                    payload = client.fetch(ex, url, reserved=True)
+                    payload = client.fetch(ex, url)
                     received = time.time()
                     if kind == "spec":
                         spec = parse_spec(m, payload)

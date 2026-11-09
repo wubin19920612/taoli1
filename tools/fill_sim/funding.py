@@ -89,3 +89,41 @@ def fetch_funding(client, m, clock, reserved=False, record=None):
     result = parse_funding(m, payloads[0], captured, payloads[1] if len(payloads) > 1 else None)
     result["source_urls"] = urls
     return result
+
+
+def queue_funding(requests, m, clock):
+    """Each GET, including fundingInfo, enters the same opening-priority queue."""
+    from concurrent.futures import Future
+    result = Future()
+    urls, payloads, captured = funding_urls(m), [], []
+    current = []
+
+    def cancel_current(future):
+        if future.cancelled() and current:
+            current[0].cancel()
+    result.add_done_callback(cancel_current)
+    if not urls:
+        result.set_result({"spot": True})
+        return result
+
+    def completed(future):
+        if result.cancelled():
+            return
+        try:
+            payloads.append(future.result())
+            captured.append(clock())
+            if len(payloads) < len(urls):
+                current[:] = [requests.submit(m.exchange, urls[len(payloads)], 1)]
+                current[0].add_done_callback(completed)
+            else:
+                snapshot = parse_funding(m, payloads[0], captured[0],
+                                         payloads[1] if len(payloads) > 1 else None)
+                snapshot["source_urls"] = urls
+                if result.set_running_or_notify_cancel():
+                    result.set_result(snapshot)
+        except Exception as exc:
+            if result.set_running_or_notify_cancel():
+                result.set_exception(exc)
+    current[:] = [requests.submit(m.exchange, urls[0], 1)]
+    current[0].add_done_callback(completed)
+    return result

@@ -1,6 +1,5 @@
 """Bounded asynchronous scheduler; one SQLite writer, positions first."""
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 import hashlib
 import json
@@ -9,7 +8,8 @@ from .core import (AMOUNTS, EXCHANGES, Market, Spec, Book, timestamp, opening,
                    closing, track_interval, walk, dec)
 from .exchanges import endpoint, parse_book, parse_spec
 from .network import RateLimited
-from .funding import TTL, fetch_funding
+from .funding import TTL, queue_funding
+from .scheduler import DaemonPool, RequestQueue
 
 
 def pair_key(payload):
@@ -57,13 +57,14 @@ def trigger_reason(payload, now):
 class Engine:
     def __init__(self, store, client, fees, clock=time.time, executor=None):
         self.store, self.client, self.fees, self.clock = store, client, fees, clock
-        self.executor = executor or ThreadPoolExecutor(max_workers=4, thread_name_prefix="public-depth")
+        self.executor = executor or DaemonPool(max_workers=4, thread_name_prefix="public-depth")
+        self.requests = RequestQueue(client, clock)
         store.recover()
         self.positions = {p["id"]: p for p in store.open_positions()}
         for p in self.positions.values():
             p.setdefault("failed_since", [None, None])
             for i, last in enumerate(p["last_good"]):
-                if clock() - last > 60 and p["failed_since"][i] is None:
+                if clock() - last > 60 and p["failed_since"][i] is None and p.get("tracking_status") != "rate_limited_delay":
                     p["failed_since"][i] = last
         self.pending, self.jobs, self.spec_jobs = {}, {}, {}
         self.funding_cache, self.funding_jobs = {}, {}
@@ -103,15 +104,14 @@ class Engine:
     def _inflight(self):
         return sum(len(job["futures"]) for job in self.jobs.values()) + len(self.spec_jobs) + len(self.funding_jobs)
 
-    def _fetch_book(self, market, spec):
-        raw = self.client.fetch(market.exchange, endpoint(market, "depth"), reserved=True)
-        return parse_book(market, spec, raw, self.clock())
+    def _fetch_book(self, market, spec, priority=1):
+        return self.requests.submit(market.exchange, endpoint(market, "depth"), priority,
+                                    lambda raw: parse_book(market, spec, raw, self.clock()))
 
     def _submit(self, key, kind, event, markets, specs):
-        if self._inflight() + 2 > 4 or not self.client.limiter.acquire([m.exchange for m in markets]):
-            return False
-        futures = [self.executor.submit(self._fetch_book, m, s) for m, s in zip(markets, specs)]
-        self.jobs[key] = dict(kind=kind, event=event, futures=futures)
+        futures = [self._fetch_book(m, s, 0 if kind == "track" else 1)
+                   for m, s in zip(markets, specs)]
+        self.jobs[key] = dict(kind=kind, event=event, futures=futures, accounted=[0., 0.], observed=[False, False])
         return True
 
     def _cached_funding(self, m):
@@ -138,8 +138,13 @@ class Engine:
 
     def _finish_funding(self):
         now = self.clock()
+        needed = {Market(**m).key for e in self.pending.values()
+                  if e.get("status") == "awaiting_funding" for m in e["markets"]}
         for key, future in list(self.funding_jobs.items()):
             if not future.done():
+                if key not in needed:
+                    future.cancel()
+                    del self.funding_jobs[key]
                 continue
             del self.funding_jobs[key]
             try:
@@ -159,22 +164,19 @@ class Engine:
         values = [self._cached_funding(m) for m in markets]
         ready = all(v is not None for v in values)
         expired = now >= event["funding_deadline"]
-        if not ready and not expired and not self.tracking_due():
+        if not ready and not expired:
             for m, value in zip(markets, values):
                 if value is None and m.key not in self.funding_jobs:
-                    if self._inflight() < 4 and self.client.limiter.acquire([m.exchange]):
-                        self.funding_jobs[m.key] = self.executor.submit(
-                            fetch_funding, self.client, m, self.clock, True)
+                    self.funding_jobs[m.key] = queue_funding(self.requests, m, self.clock)
         if not (ready or expired):
             return
         event["funding"] = [v["snapshot"] if v else None for v in values]
         event["funding_errors"] = [v.get("error") if v else "funding_timeout_or_budget" for v in values]
         specs = [Spec(**s) for s in event["specs"]]
-        # Funding may have consumed this second's budget. Wait only within the
-        # bounded opening phase, and always let due position tracking go first.
+        # Funding and opening depth use the same fair queue of actual sends.
         if now-event["t0"] > 120:
             reason = "skipped_stale_trigger"
-        elif not self.tracking_due() and self._submit(event["id"], "first", event, markets, specs):
+        elif self._submit(event["id"], "first", event, markets, specs):
             reason = None
         elif now < event["funding_deadline"]+1:
             return
@@ -235,13 +237,14 @@ class Engine:
                     reason = str(exc)
             if reason is None:
                 event["specs"] = [asdict(s) for s in specs]
-                if self.tracking_due() or not self._start_open(event, markets, specs):
+                if not self._start_open(event, markets, specs):
                     reason = "skipped_rate_limit"
                 else:
                     self.pending[identity] = event
         event["status"] = reason or event["status"]
         with self.store.transaction():
             self.store.event(event)
+        self.requests.pump(self.executor)
 
     def _update_shadow(self, identity, net_bps):
         try:
@@ -298,6 +301,53 @@ class Engine:
                 self.store.fill(dict(id="%s:%s:%d" % (event["id"], variant, amount),
                                      event_id=event["id"], variant=variant, amount=amount,
                                      status=reason, t1=event["t1"]))
+
+    def _account_local_wait(self):
+        now = self.clock()
+        changed = {}
+        for key, job in self.jobs.items():
+            if job["kind"] != "track":
+                continue
+            for i, future in enumerate(job["futures"]):
+                delta = future.local_wait - job["accounted"][i]
+                job["accounted"][i] = future.local_wait
+                completed = future.done() and not job["observed"][i]
+                book = None
+                if completed:
+                    job["observed"][i] = True
+                    try:
+                        book = future.result()
+                    except Exception:
+                        pass
+                for p in self.positions.values():
+                    if p["event_id"] != key:
+                        continue
+                    failed = p.setdefault("failed_since", [None, None])
+                    if failed[i] is not None:
+                        failed[i] += delta
+                    # A good leg is healthy immediately, even if its partner is queued.
+                    if completed:
+                        if book is not None:
+                            failed[i] = None
+                            p["last_good"][i] = book.received_at
+                            p["last_books"][i] = book.to_dict()
+                        elif failed[i] is None:
+                            failed[i] = now
+                        changed[p["id"]] = p
+                    if future.sent_at is None and now - p["last_good"][i] >= 60 and future.local_wait > 0:
+                        if p.get("tracking_status") != "rate_limited_delay":
+                            p["tracking_status"] = "rate_limited_delay"
+                            changed[p["id"]] = p
+                        p["rate_limited_delay_seconds"] = future.local_wait
+                    # Persist adjusted timers at most once per second while queued.
+                    if delta and now - job.get("wait_saved_at", 0) >= 1:
+                        changed[p["id"]] = p
+            if now - job.get("wait_saved_at", 0) >= 1:
+                job["wait_saved_at"] = now
+        if changed:
+            with self.store.transaction():
+                for p in changed.values():
+                    self.store.position(p)
 
     def _finish_jobs(self):
         for key, job in list(self.jobs.items()):
@@ -359,6 +409,8 @@ class Engine:
             elif failed_since[i] is None:
                 failed_since[i] = now
         stale = any(t is not None and now - t >= 60 for t in failed_since)
+        if all(books):
+            p["tracking_status"] = "healthy"
         p["next_track"] = now + track_interval(now-p["opened_at"])
         result = None
         if stale or all(books):
@@ -387,11 +439,29 @@ class Engine:
         now = self.clock()
         return any(p["next_track"] <= now and p["event_id"] not in self.jobs for p in self.positions.values())
 
+    def _expire_open_jobs(self):
+        for key, job in list(self.jobs.items()):
+            if job["kind"] == "track" or self.clock() - job["event"]["t0"] <= 120:
+                continue
+            for future in job["futures"]:
+                future.cancel()
+            event = job["event"]
+            variants = ("measured", "plus_1s", "leg_delay") if job["kind"] == "first" else ("plus_1s", "leg_delay")
+            with self.store.transaction():
+                self._failed_variants(event, variants, "skipped_stale_trigger")
+                event["status"] = "skipped_stale_trigger"
+                self.store.event(event)
+            del self.jobs[key]
+            self.pending.pop(key, None)
+
     def tick(self):
         now = self.clock()
+        self._expire_open_jobs()
+        self.requests.pump(self.executor)
+        self._account_local_wait()
         self._finish_jobs()
         self._finish_funding()
-        # Stale checks do not depend on request admission or an exchange unpausing.
+        # True outages still expire while locally queued time has been subtracted.
         with self.store.transaction():
             for p in list(self.positions.values()):
                 if any(t is not None and now - t >= 60 for t in p.get("failed_since", [None, None])):
@@ -402,13 +472,7 @@ class Engine:
                 groups.setdefault(p["event_id"], p)
         for key, p in groups.items():
             if key not in self.jobs:
-                admitted = self._submit(key, "track", None, [Market(**m) for m in p["markets"]], [Spec(**s) for s in p["specs"]])
-                if not admitted:
-                    with self.store.transaction():
-                        for row in self.positions.values():
-                            if row["event_id"] == key:
-                                row["failed_since"] = [t if t is not None else now for t in row.get("failed_since", [None, None])]
-                                self.store.position(row)
+                self._submit(key, "track", None, [Market(**m) for m in p["markets"]], [Spec(**s) for s in p["specs"]])
         for key, event in list(self.pending.items()):
             if event["status"] == "awaiting_funding":
                 self._advance_funding(event)
@@ -436,7 +500,7 @@ class Engine:
                         reason = "skipped_stale_trigger"
                     else:
                         event["specs"] = [asdict(s) for s in specs]
-                        if self.tracking_due() or not self._start_open(event, markets, specs):
+                        if not self._start_open(event, markets, specs):
                             reason = "skipped_rate_limit"
                 except ValueError as exc:
                     reason = str(exc)
@@ -449,13 +513,14 @@ class Engine:
                 continue
             if key in self.jobs or event.get("delayed_due", float("inf")) > now:
                 continue
-            if self.tracking_due() or not self._submit(key, "delayed", event, [Market(**m) for m in event["markets"]], [Spec(**s) for s in event["specs"]]):
+            if not self._submit(key, "delayed", event, [Market(**m) for m in event["markets"]], [Spec(**s) for s in event["specs"]]):
                 with self.store.transaction():
                     self._failed_variants(event, ("plus_1s", "leg_delay"), "skipped_rate_limit")
                     event["status"] = "delayed_rate_limit"
                     self.store.event(event)
                 self.pending.pop(key, None)
         self._refresh_specs()
+        self.requests.pump(self.executor)
 
     def _prune_specs(self):
         now = self.clock()
@@ -491,6 +556,12 @@ class Engine:
                 break
             self.want_specs.pop(key, None)
             self.spec_retry.pop(key, None)
+        for key in sorted(self.spec_jobs, key=lambda k: (k in dependencies, self.spec_used.get(k, 0))):
+            future = self.spec_jobs[key][1]
+            if key not in dependencies and (future.priority == 1 or
+                    len(self.spec_jobs) > SPEC_CAPACITY or now-self.spec_used.get(key, 0) >= SPEC_IDLE_TTL):
+                future.cancel()
+                del self.spec_jobs[key]
         retained = set(self.cache) | set(self.want_specs) | set(self.spec_jobs) | dependencies
         self.spec_used = {k: v for k, v in self.spec_used.items() if k in retained}
         if removed:
@@ -499,6 +570,10 @@ class Engine:
 
     def _refresh_specs(self):
         cache_changed = False
+        pending_keys = {Market(**m).key for e in self.pending.values() for m in e.get("markets", [])}
+        for key, (_, future) in self.spec_jobs.items():
+            if key in pending_keys:
+                self.requests.promote(future, 1)
         for key, (m, future) in list(self.spec_jobs.items()):
             if not future.done():
                 continue
@@ -520,19 +595,16 @@ class Engine:
         if cache_changed:
             with self.store.transaction():
                 self.store.set_meta("spec_cache", self.cache)
-        if self.tracking_due():
-            return
         pending_keys = {Market(**m).key for e in self.pending.values() for m in e.get("markets", [])}
         for key, m in sorted(self.want_specs.items(), key=lambda item: item[0] not in pending_keys):
             if key in self.spec_jobs or self.spec_retry.get(key, 0) > self.clock():
                 continue
-            if self._inflight() >= 4 or not self.client.limiter.acquire([m.exchange]):
-                continue
-            future = self.executor.submit(self.client.fetch, m.exchange, endpoint(m, "spec"), True)
+            future = self.requests.submit(m.exchange, endpoint(m, "spec"), 1 if key in pending_keys else 2)
             self.spec_jobs[key] = (m, future)
             del self.want_specs[key]
 
     def close(self, discard=False):
-        self.executor.shutdown(wait=True)
+        self.requests.close()
+        self.executor.shutdown(wait=not discard)
         if not discard:
             self._finish_jobs()

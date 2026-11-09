@@ -1,6 +1,5 @@
 """python3 -m fill_sim {run,report,smoke}; run from tools or set PYTHONPATH."""
 import argparse
-from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
@@ -12,6 +11,7 @@ from .engine import Engine
 from .network import Limiter, PublicClient, ShadowAPI
 from .reporting import summarize, gates
 from .storage import Store, atomic_json, run_lock
+from .scheduler import DaemonPool
 
 
 def default_fees_json():
@@ -64,6 +64,22 @@ def rss_mb():
         return int(fields[1]) * os.sysconf("SC_PAGE_SIZE") / 1024 ** 2
     except (OSError, ValueError):
         return None
+
+
+def service_memory(cgroup_root=Path("/sys/fs/cgroup"), membership=Path("/proc/self/cgroup")):
+    """cgroup v2 service usage, never the host/root cgroup by accident."""
+    try:
+        relative = next(line.split(":", 2)[2] for line in membership.read_text().splitlines()
+                        if line.startswith("0::"))
+        root = cgroup_root.resolve()
+        path = (root / relative.lstrip("/") / "memory.current").resolve()
+        path.relative_to(root)
+        used = int(path.read_text().strip())
+        if used < 0:
+            raise ValueError("invalid_memory")
+        return used / 1024 ** 2, "cgroup_memory.current", str(path)
+    except (OSError, ValueError, StopIteration):
+        return rss_mb(), "process_rss_fallback", None
 
 
 def guard(path, now):
@@ -144,7 +160,7 @@ def run(args):
     api.next_poll = max(time.time(), store.meta("api_next_poll", 0))
     api.streak = store.meta("api_streak", 0)
     engine = Engine(store, PublicClient(limiter), fees)
-    api_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="shadow-api")
+    api_pool = DaemonPool(max_workers=1, thread_name_prefix="shadow-api")
     future, stopped, guard_stop = None, False, None
     started = time.time()
     next_status = next_daily = next_guard = 0
@@ -165,24 +181,26 @@ def run(args):
             now = time.time()
             if now >= next_guard:
                 guard_stop, metrics = guard(args.guard_file, now)
-                rss = rss_mb()
+                rss, memory_source, memory_path = service_memory()
                 if rss is not None:
                     max_rss = max(max_rss, rss)
                     if rss >= 120:
-                        guard_stop = "rss_limit"
+                        guard_stop = "memory_limit"
                 next_guard = now + 1
                 if guard_stop:
                     # Stop immediately: no full report or archive work after guard.
                     state.update(
                         timestamp=now, stop_reason=guard_stop, exchanges=limiter.snapshot(),
                         api_failures=api.failures, rss_mb=rss, max_rss_mb=max_rss,
+                        memory_mb=rss, memory_source=memory_source, memory_path=memory_path,
                         resource_evidence=metrics, unconfigured_fees=unconfigured_fees(fees))
                     atomic_json(Path(args.out) / "status.json", state)
                     break
             if now >= next_status:
                 summary = store.status_counts(now - now % 86400, now + .001)
                 state = dict(timestamp=now, statistics_timestamp=now, uptime_seconds=now-started, observation_seconds=observation,
-                             rss_mb=rss, max_rss_mb=max_rss, exchanges=limiter.snapshot(), api_failures=api.failures,
+                             rss_mb=rss, max_rss_mb=max_rss, memory_mb=rss, memory_source=memory_source,
+                             memory_path=memory_path, exchanges=limiter.snapshot(), api_failures=api.failures,
                              positions=len(engine.positions), active_events=len(engine.active_events()),
                              today_events=summary["events"], today_open_events=summary["measured_300_open_events"],
                              funding_unknown=summary["funding_unknown"],
@@ -221,10 +239,10 @@ def run(args):
             previous = now
             time.sleep(.05)
     finally:
-        api_pool.shutdown(wait=True)
+        api_pool.shutdown(wait=not bool(guard_stop))
         engine.close(discard=bool(guard_stop))
         with store.transaction():
-            store.runtime(time.time(), observation-recorded_observation, rss_mb(), metrics,
+            store.runtime(time.time(), observation-recorded_observation, service_memory()[0], metrics,
                           sum(s["rate_limits"] for s in limiter.stats.values()))
             store.set_meta("limiter", limiter.stats)
             store.set_meta("api_failures", api.failures)
