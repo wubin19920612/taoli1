@@ -1,0 +1,31 @@
+[Unit]
+Description=Public order book paper fill simulator
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/wubin/fill-sim
+EnvironmentFile=/home/ubuntu/wubin/fill-sim/fill-sim.env
+Environment=PYTHONPATH=/home/ubuntu/wubin/fill-sim/tools
+ExecStart=/usr/bin/python3 -m fill_sim run
+Restart=always
+RestartSec=10
+RestartPreventExitStatus=78
+MemoryHigh=100M
+MemoryMax=120M
+OOMScoreAdjust=1000
+Nice=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/wubin/fill-sim/var /home/ubuntu/wubin/fill-sim/out
+UMask=0077
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target
