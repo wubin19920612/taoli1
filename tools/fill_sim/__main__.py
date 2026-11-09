@@ -8,7 +8,7 @@ import sys
 import time
 from .core import EXCHANGES, day, dec
 from .engine import Engine
-from .network import Limiter, PublicClient, ShadowAPI
+from .network import DNS_RESOLVER, Limiter, PublicClient, ShadowAPI
 from .reporting import summarize, gates
 from .storage import Store, atomic_json, run_lock
 from .scheduler import DaemonPool
@@ -179,13 +179,20 @@ def run(args):
     try:
         while not stopped:
             now = time.time()
-            if now >= next_guard:
+            dns = DNS_RESOLVER.snapshot()
+            workers = dict(public=engine.executor.snapshot(), api=api_pool.snapshot())
+            runtime_stop = dns["stop_reason"]
+            for name, worker in workers.items():
+                if worker["all_busy_seconds"] > 30:
+                    runtime_stop = runtime_stop or name + "_workers_stalled"
+            if runtime_stop or now >= next_guard:
                 guard_stop, metrics = guard(args.guard_file, now)
                 rss, memory_source, memory_path = service_memory()
                 if rss is not None:
                     max_rss = max(max_rss, rss)
                     if rss >= 120:
                         guard_stop = "memory_limit"
+                guard_stop = runtime_stop or guard_stop
                 next_guard = now + 1
                 if guard_stop:
                     # Stop immediately: no full report or archive work after guard.
@@ -193,6 +200,7 @@ def run(args):
                         timestamp=now, stop_reason=guard_stop, exchanges=limiter.snapshot(),
                         api_failures=api.failures, rss_mb=rss, max_rss_mb=max_rss,
                         memory_mb=rss, memory_source=memory_source, memory_path=memory_path,
+                        dns=dns, workers=workers,
                         resource_evidence=metrics, unconfigured_fees=unconfigured_fees(fees))
                     atomic_json(Path(args.out) / "status.json", state)
                     break
@@ -201,6 +209,7 @@ def run(args):
                 state = dict(timestamp=now, statistics_timestamp=now, uptime_seconds=now-started, observation_seconds=observation,
                              rss_mb=rss, max_rss_mb=max_rss, memory_mb=rss, memory_source=memory_source,
                              memory_path=memory_path, exchanges=limiter.snapshot(), api_failures=api.failures,
+                             dns=dns, workers=workers,
                              positions=len(engine.positions), active_events=len(engine.active_events()),
                              today_events=summary["events"], today_open_events=summary["measured_300_open_events"],
                              funding_unknown=summary["funding_unknown"],

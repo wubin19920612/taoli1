@@ -3,6 +3,7 @@ from collections import Counter, deque
 import http.client
 import io
 import json
+import socket
 import threading
 import time
 from urllib.error import HTTPError
@@ -19,6 +20,99 @@ class NoRedirect(HTTPRedirectHandler):
 
 class RateLimited(Exception):
     pass
+
+
+class Resolver:
+    """Isolate uncancellable getaddrinfo; abandoned daemons never send HTTP.
+
+    Only the waiting caller publishes a successful result to the hostname cache.
+    A stop latch survives late completions so the main loop cannot miss the cap.
+    """
+    def __init__(self, lookup=None, clock=time.monotonic, wait_timeout=2):
+        self.lookup, self.clock, self.wait_timeout = lookup, clock, wait_timeout
+        self.lock = threading.Lock()
+        self.cache = {}
+        self.abandoned_active = self.abandoned_total = 0
+        self.stop_reason = None
+
+    def snapshot(self):
+        with self.lock:
+            return dict(abandoned_active=self.abandoned_active, abandoned_total=self.abandoned_total,
+                        cached_hosts=len(self.cache), stop_reason=self.stop_reason)
+
+    def resolve(self, hostname, deadline):
+        with self.lock:
+            if self.stop_reason:
+                raise OSError(self.stop_reason)
+            now = self.clock()
+            if now >= deadline:
+                raise TimeoutError("request_deadline")
+            self.cache = {host: item for host, item in self.cache.items() if now < item[0]}
+            if hostname in self.cache:
+                return self.cache[hostname][1]
+        done = threading.Event()
+        job = dict(abandoned=False)
+
+        def lookup():
+            try:
+                job["result"] = (self.lookup or socket.getaddrinfo)(hostname, None, type=socket.SOCK_STREAM)
+                if not job["result"]:
+                    raise OSError("dns_no_addresses")
+            except Exception as exc:
+                job["error"] = exc
+            finally:
+                with self.lock:
+                    if job["abandoned"]:
+                        self.abandoned_active -= 1
+                    done.set()
+
+        # Mark abandonment under the same lock used by completion.
+        started = self.clock()
+        wait_until = min(deadline, started+self.wait_timeout)
+        thread = threading.Thread(target=lookup, name="fill-sim-dns", daemon=True)
+        thread.start()
+        completed = done.wait(max(0, wait_until-self.clock()))
+        with self.lock:
+            if not completed or self.clock() >= wait_until:
+                if not done.is_set():
+                    job["abandoned"] = True
+                    self.abandoned_active += 1
+                    self.abandoned_total += 1
+                    if self.abandoned_active >= 8:
+                        self.stop_reason = "dns_abandoned_limit"
+                raise TimeoutError("request_deadline")
+            if "error" in job:
+                raise job["error"]
+            self.cache[hostname] = (self.clock()+300, job["result"])
+            return job["result"]
+
+
+DNS_RESOLVER = Resolver()
+
+
+def remaining_timeout(deadline, timeout, clock):
+    remaining = deadline - clock()
+    if remaining <= 0:
+        raise TimeoutError("request_deadline")
+    return min(timeout, remaining)
+
+
+def connect_addresses(addresses, port, deadline, timeout, clock):
+    """Connect numeric sockaddrs without a second DNS call; one shared budget."""
+    error = OSError("dns_no_addresses")
+    for family, kind, protocol, _, address in addresses:
+        budget = remaining_timeout(deadline, timeout, clock)
+        sock = socket.socket(family, kind, protocol)
+        try:
+            sock.settimeout(budget)
+            sock.connect((address[0], port, *address[2:]))
+            # HTTPSConnection wraps this socket next; bound the TLS handshake too.
+            sock.settimeout(remaining_timeout(deadline, timeout, clock))
+            return sock
+        except OSError as exc:
+            error = exc
+            sock.close()
+    raise error
 
 
 class DeadlineReader(io.RawIOBase):
@@ -48,13 +142,18 @@ class DeadlineSocket:
         return io.BufferedReader(DeadlineReader(self.sock, self.deadline, self.timeout, self.clock))
 
 
-def get_json(url, headers=None, timeout=3, total_timeout=8, clock=time.monotonic):
+def get_json(url, headers=None, timeout=3, total_timeout=8, clock=time.monotonic, resolver=None):
     parsed = urlsplit(url)
     if parsed.scheme not in ("https", "http") or not parsed.hostname or parsed.username or parsed.password:
         raise ValueError("invalid_http_url")
     deadline = clock() + total_timeout
+    addresses = (resolver or DNS_RESOLVER).resolve(parsed.hostname, deadline)
     cls = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
-    conn = cls(parsed.hostname, parsed.port, timeout=min(timeout, total_timeout))
+    conn = cls(parsed.hostname, parsed.port, timeout=remaining_timeout(deadline, timeout, clock))
+    # Keep conn.host unchanged: Host, TLS SNI and certificate verification all use
+    # the original hostname. Only the TCP socket factory consumes resolved IPs.
+    conn._create_connection = lambda address, *args: connect_addresses(
+        addresses, address[1], deadline, timeout, clock)
     response = None
     try:
         conn.connect()

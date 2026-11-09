@@ -3,15 +3,18 @@ from concurrent.futures import Future
 import heapq
 import queue
 import threading
+import time
 
 from .network import RateLimited
 
 
 class DaemonPool:
     # No concurrent.futures executor atexit join: guard must not wait for DNS/IO.
-    def __init__(self, max_workers=4, thread_name_prefix="public-depth"):
+    def __init__(self, max_workers=4, thread_name_prefix="public-depth", clock=time.monotonic):
         self.queue = queue.Queue()
         self.closed = False
+        self.clock, self.lock = clock, threading.Lock()
+        self.busy, self.all_busy_since = 0, None
         self.threads = [threading.Thread(target=self._worker, name=f"{thread_name_prefix}-{i}",
                                         daemon=True) for i in range(max_workers)]
         for thread in self.threads:
@@ -24,10 +27,27 @@ class DaemonPool:
                 return
             future, fn, args = item
             if future.set_running_or_notify_cancel():
+                with self.lock:
+                    self.busy += 1
+                    if self.busy == len(self.threads):
+                        self.all_busy_since = self.clock()
                 try:
                     future.set_result(fn(*args))
                 except BaseException as exc:
                     future.set_exception(exc)
+                finally:
+                    with self.lock:
+                        self.busy -= 1
+                        self.all_busy_since = None
+
+    def snapshot(self):
+        with self.lock:
+            return dict(busy=self.busy, capacity=len(self.threads),
+                        all_busy_seconds=(self.clock()-self.all_busy_since
+                                          if self.all_busy_since is not None else 0))
+
+    def stalled(self):
+        return self.snapshot()["all_busy_seconds"] > 30
 
     def submit(self, fn, *args):
         if self.closed:

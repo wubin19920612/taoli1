@@ -439,6 +439,40 @@ class Engine:
         now = self.clock()
         return any(p["next_track"] <= now and p["event_id"] not in self.jobs for p in self.positions.values())
 
+    def _expire_positions(self, now):
+        """The holding deadline is independent of network jobs and stale timers."""
+        with self.store.transaction():
+            for p in list(self.positions.values()):
+                if now-p["opened_at"] < 172800:
+                    continue
+                result = None
+                for field in ("last_books", "last_executable_exit"):
+                    saved = p.get(field)
+                    if not saved or len(saved) != 2 or not all(saved):
+                        continue
+                    try:
+                        result = closing(p, *(Book(**b) for b in saved), now)
+                    except ValueError:
+                        continue
+                    if field == "last_executable_exit":
+                        # Keep the existing conservative exclusion for depth fallback.
+                        result.update(main_eligible=False, exit_price_fallback=True)
+                    break
+                if result is None:
+                    result = dict(closed_at=now, holding_seconds=now-p["opened_at"],
+                                  exit_reason="unpriced_exit", forced_exit_reason="timeout_48h",
+                                  main_eligible=False, exit_pricing="unpriced", net_bps=None, net_usd=None)
+                p.update(result)
+                self.positions.pop(p["id"])
+                self.store.position(p)
+        # Cancel queued legs; running legs may finish but cannot update closed rows.
+        live_events = {p["event_id"] for p in self.positions.values()}
+        for key, job in list(self.jobs.items()):
+            if job["kind"] == "track" and key not in live_events:
+                for future in job["futures"]:
+                    future.cancel()
+                del self.jobs[key]
+
     def _expire_open_jobs(self):
         for key, job in list(self.jobs.items()):
             if job["kind"] == "track" or self.clock() - job["event"]["t0"] <= 120:
@@ -459,6 +493,7 @@ class Engine:
         self._expire_open_jobs()
         self.requests.pump(self.executor)
         self._account_local_wait()
+        self._expire_positions(now)
         self._finish_jobs()
         self._finish_funding()
         # True outages still expire while locally queued time has been subtracted.
