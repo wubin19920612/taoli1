@@ -320,7 +320,7 @@ class NetworkTests(OfflineCase):
 
 class EngineTests(OfflineCase):
     def setUp(self):
-        super().setUp()
+        OfflineCase.setUp(self)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.store = Store(Path(self.temp.name)/"fill_sim.db")
@@ -342,6 +342,8 @@ class EngineTests(OfflineCase):
         for leg in ("buy_market_key","sell_market_key"):
             m = Market.from_payload(event(self.clock)[leg])
             self.engine.cache[m.key] = dict(at=self.clock(),market=asdict(m),spec=asdict(spec()))
+            self.engine.funding_cache[m.key] = dict(at=self.clock(), snapshot=dict(
+                rate="0", next=self.clock()+1000, interval=28800, captured_at=self.clock()), error=None)
 
     def open_three(self):
         self.engine.ingest(event(self.clock))
@@ -707,6 +709,9 @@ class StorageReportTests(OfflineCase):
         self.assertIn("STOP guard_file_required",stdout.getvalue())
         state = json.loads((Path(self.temp.name)/"out/status.json").read_text())
         self.assertEqual(state["api_failures"],0)
+        self.assertIsNone(state["funding_unknown_ratio"])
+        self.assertEqual(state["funding_observations"],0)
+        self.assertEqual(state["unconfigured_fees"],["binance:future"])
         self.assertTrue(all(s["requests"]==0 for s in state["exchanges"].values()))
 
     def test_production_code_has_no_backend_or_third_party_imports(self):

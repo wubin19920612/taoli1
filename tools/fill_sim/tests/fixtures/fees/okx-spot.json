@@ -1,0 +1,30 @@
+{
+  "url": "https://www.okx.com/fees",
+  "queried_date": "2026-11-09",
+  "received_at": 1794208570.3833282,
+  "source": "Public HTML embedded tableData.normal, extracted unchanged",
+  "response": [
+    {
+      "assetType": 1,
+      "discount": 0,
+      "level": 0,
+      "levelName": "Regular user",
+      "lowerAssetVolume": 0,
+      "lowerOkbVolume": -1,
+      "lowerTradeVolume": 0,
+      "makerFee": 0.0008,
+      "nextLevelMakerFeeSave": null,
+      "nextLevelTakerFeeSave": null,
+      "okbType": 0,
+      "spread": 0,
+      "standardMakerFee": 0.0008,
+      "standardTakerFee": 0.001,
+      "takerFee": 0.001,
+      "tradeType": 1,
+      "upperAssetVolume": 100000,
+      "upperOkbVolume": -1,
+      "upperTradeVolume": 1000000,
+      "withdrawLimit": 10000000
+    }
+  ]
+}

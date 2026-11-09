@@ -1,0 +1,51 @@
+[
+  {
+    "url": "https://api.bybit.com/v5/market/tickers?category=linear&symbol=BTCUSDT",
+    "received_at": 1794208634.698087,
+    "response": {
+      "retCode": 0,
+      "retMsg": "OK",
+      "result": {
+        "category": "linear",
+        "list": [
+          {
+            "symbol": "BTCUSDT",
+            "lastPrice": "73943.50",
+            "indexPrice": "73977.43",
+            "markPrice": "73948.30",
+            "prevPrice24h": "75849.00",
+            "price24hPcnt": "-0.025122",
+            "highPrice24h": "76175.30",
+            "lowPrice24h": "73400.00",
+            "prevPrice1h": "74486.40",
+            "openInterest": "69936.081",
+            "openInterestValue": "5171654298.61",
+            "singleOpenInterest": "34968.041",
+            "singleOpenInterestValue": "2585827186.28",
+            "turnover24h": "4553072003.5705",
+            "volume24h": "60852.7060",
+            "fundingRate": "0.00009296",
+            "nextFundingTime": "1794211200000",
+            "predictedDeliveryPrice": "",
+            "basisRate": "",
+            "deliveryFeeRate": "",
+            "deliveryTime": "0",
+            "ask1Size": "1.168",
+            "bid1Price": "73943.40",
+            "ask1Price": "73943.50",
+            "bid1Size": "4.541",
+            "basis": "",
+            "preOpenPrice": "",
+            "preQty": "",
+            "curPreListingPhase": "",
+            "fundingIntervalHour": "8",
+            "basisRateYear": "",
+            "fundingCap": "0.00333"
+          }
+        ]
+      },
+      "retExtInfo": {},
+      "time": 1794208631936
+    }
+  }
+]
