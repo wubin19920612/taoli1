@@ -107,16 +107,24 @@ Linux `MemAvailable <200 MiB` 和本服务内存 `>=120 MiB` 由 fill-sim 自己
 
 ## 审查修复后的资源与统计口径
 
-- 同进程 `http.client`，HTTPS 默认验证证书，不跟随重定向；已删除 `http_worker.py`，不再每请求创建进程。socket recv 最多等待 3 秒，每次 recv 和每块响应后检查单调时钟的 8 秒总截止，必要时缩短 socket timeout。慢头、chunked 分隔符和慢体都受检查；finally 关闭响应和连接，超时计入交易所 `timeouts`/`errors`（API 计失败退避）。系统 DNS 调用不能由标准库强制中断；守护退出不依赖其返回。
+- 同进程 `http.client`，HTTPS 默认验证证书，不跟随重定向；已删除 `http_worker.py`，不再每请求创建进程。单调时钟的 8 秒总截止覆盖 DNS、TCP、多地址重试、TLS、发送及读取；socket 操作最多等待 3 秒，并按剩余预算缩短。慢头、chunked 分隔符和慢体均逐 recv 检查；finally 关闭响应和连接，超时计入交易所 `timeouts`/`errors`（API 计失败退避）。DNS 隔离及看门狗见下节。
 - 无调度预留。工作线程从同一优先队列选任务时原子执行唯一限流器的准入；无额度时不占用线程等待。为覆盖准入后 DNS/线程调度造成的实际发送延迟，该层额度在传输中占用、完成后保留一秒，比仅按开始时间计窗更保守，仍满足滚动秒窗同所最多 2、全局最多 8。`reserved` 仅是旧手动调用的兼容参数，不能绕过准入；smoke 也经过此 gate。
 - 同优先级按入队顺序服务。已有三个非开仓发送且仍有开仓等待时，下个名额必须服务开仓；若该交易所暂时无额度，保留此次机会，不让其他持仓请求抢走。第二个资金费 GET 也入队；预热规格成为开仓依赖时提升优先级。过期/失去依赖的排队任务取消，规格任务集限制在 256 个市场。
-- 持仓按腿记录本地队列等待，从真实失败计时中扣除；单腿成功立即更新健康状态，不等另一腿。等待导致超过 60 秒未更新时持久化 `tracking_status=rate_limited_delay` 和等待秒数，不因此平仓；恢复健康后标为 `healthy`。真实网络/解析错误或远端暂停连续 60 秒仍触发 stale_exit。已持久化本地等待标记在重启恢复时保留。
+- 持仓按腿记录本地队列等待，从真实失败计时中扣除；单腿成功立即更新健康状态，不等另一腿。等待导致超过 60 秒未更新时持久化 `tracking_status=rate_limited_delay` 和等待秒数，只豁免 stale_exit；恢复健康后标为 `healthy`。真实网络/解析错误或远端暂停连续 60 秒仍触发 stale_exit。48h 上限每次 tick 独立检查，不受本地排队、在途请求或下次跟踪时间影响。已持久化本地等待标记在重启恢复时保留。
 - 规格有效期及闲置 TTL 均为 6 小时；缓存和待取队列各最多 256 个市场，优先保留活动依赖。失败至少间隔 60 秒重试，最后一个持仓/待处理事件依赖结束后清除失败任务及陈旧缓存，避免重新生成重试。
 - `filter_passed` 独立表示业务资格。合格但 stale/future、重复、容量、费率、规格或预算不足等执行跳过继续进覆盖率分母。
 - 无法定价退出使用 `exit_pricing=unpriced`，保留真实 `funding_known`；可定价退出为 priced，收益统计独立要求 priced。
 - 日报/report 流式读取主库和归档，窄字段落到临时 SQLite；去重、分组、精确分位数在 SQL 中完成。Python 保留输出分组及每日 bootstrap 合计，不保留事件/仓位列表。临时库使用 1 MiB 页缓存并自动清理；分组输出大小取决于不同币种/交易对数。status 使用独立标量 SQL。
 - `runtime_rate_limits` 持久化累计计数基线，`rate_limit_samples(ts,delta)` 保存采样区间增量，同事务写入窗口证据。重启沿用基线，旧库从 limiter 快照初始化。新增限频才让本采样失败；窗口按采样结束时间计算，缺外部比较仍为 UNKNOWN；采样与 runtime 同保留 30 天。
-- 报告 RSS 测试衡量报告进程增量。公开请求使用 4 个 daemon 线程，Shadow API 使用 1 个 daemon 线程，无每请求子进程。目标 systemd 的 120 MiB cgroup 总预算仍需在目标机验证。
+- 报告 RSS 测试衡量报告进程增量。公开请求使用 4 个 daemon 线程，Shadow API 使用 1 个 daemon 线程，DNS 缓存未命中时创建独立 daemon 解析线程，无每请求子进程。目标 systemd 的 120 MiB cgroup 总预算仍需在目标机验证。
+
+## DNS、worker 看门狗与 48h 上限（H1/H2）
+
+- `network.Resolver` 为公开请求和 Shadow API 共享。DNS 最多等 2 秒，剩余总预算不足时按剩余时间等待；超时的请求立即失败，`PublicClient` 的 finally 释放在途发送计数，既有保守滚动窗口仍保留。系统 `getaddrinfo` 无法强制取消，遗留解析线程只能返回地址，不能连接或发 HTTP，也不能把超时后的结果写入缓存。
+- 按主机名缓存成功解析结果 300 秒（不按端口重复解析）；失败不缓存，过期按需清理。TCP 直接使用解析得到的 IPv4/IPv6 sockaddr，不再做第二次 DNS；`HTTPConnection.host` 保持原主机名，因此 Host、TLS SNI 和证书校验均针对原主机名，仍使用默认可信证书及 hostname 校验。
+- status 的 `dns.abandoned_active` 是尚未返回的已放弃解析数，`abandoned_total` 是当前进程累计放弃数，`cached_hosts` 是缓存条目数。并存放弃数达到 8 时锁存 `dns_abandoned_limit`，拒绝继续解析；即使线程随后返回，停止原因也不撤销。主循环检测后按既有受控停止路径写 status、提交/关闭 SQLite，不等待 daemon，以 **78** 退出。
+- 每个主循环检查公开池和 API 池实际执行中的 worker。`workers.public` / `workers.api` 包含 `busy`、`capacity`、`all_busy_seconds`；只有全池连续占用 **>30 秒** 才触发 `public_workers_stalled` / `api_workers_stalled`，任一 worker 完成就重置连续计时。使用单调时钟，排队长度不冒充占用时间。同步日报/轮转仍可能延后主循环检测；没有改变既有检测后 <=10 秒退出的验收边界。
+- 48h 到期先使用 `last_books` 的最后可用两腿盘口、按原数量吃单；深度不足则尝试 `last_executable_exit`。定价成功为 `timeout_48h`，记录盘口原始时间；旧可执行快照回退额外标 `exit_price_fallback=true`，沿用保守的 `main_eligible=false`。均不可定价则为 `unpriced_exit`，`forced_exit_reason=timeout_48h`，收益为 null，不进主收益。清除无存续持仓的跟踪任务并取消未发送腿；已在途的结果不能回写已关闭持仓。
 
 ## 服务内存口径（G3）
 

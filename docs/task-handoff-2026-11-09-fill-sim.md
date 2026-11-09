@@ -384,3 +384,63 @@ REPORT_RSS events=6000 fills=72000 positions=72000 peak_delta_mib=2.070
 - 本机没有目标 systemd/cgroup 环境。cgroup 取值/回退使用真实临时文件和 status 验证；Linux 总预算、页缓存、目标解释器行为及七天观察尚待独立授权验收。`rss_mb`/`max_rss_mb` 是兼容字段，当前取值为服务内存采样；旧历史 RSS 不能自动升级为 cgroup 证据，README 已写清楚。
 - 原始输出已提交；包内 var/test-tmp、调试输出和原 pycache 由既有 .gitignore 忽略，未清理或覆盖不明归属产物。无待交接的未跟踪业务文件，无真实凭据写入仓库。
 - 本轮止于本地 test/feat/docs 提交。下一任务从 `3271be2` 至本轮 HEAD 做独立复审，再决定是否开展目标机验收；生产备份、部署、推送均未执行。其他模块请新建任务，不扩展本轮范围。
+
+---
+
+## PM 第三轮 H1–H2 修复交接（2026-11-09）
+
+本节更新前轮 DNS 无法及时释放 worker，以及本地排队可能超过 48h 的行为。复审输入为用户指定临时目录中的 `fillsim-review3.log` 末尾；本轮只处理 fill-sim 的 DNS/连接截止、worker 看门狗和独立持仓期限。
+
+### 基线、范围与提交
+
+- worktree：`C:/Users/wubin/Desktop/code/codex/taoli1/.worktrees/fill-sim`；分支 `codex/fill-sim`；开始 HEAD `119eddeca76d22c4bf423fb162e7ec1c7ba6b5db`，开始时工作区干净。
+- 实现前已将用户 H1、H2 和测试要求原文追加到任务书末尾的“PM decisions 第三轮补充”。
+- `a347d87` — `test(fill-sim): cover bounded DNS watchdog and independent expiry`：新增 15 项测试及完整原始输出；原有测试文件和断言均未修改。日志验证的是本轮最终测试与实现组合。
+- `693068b` — `feat(fill-sim): bound DNS and enforce holding deadlines per tick`：四个实现文件 `network.py`、`scheduler.py`、`__main__.py`、`engine.py`。
+- README、任务书、本节为独立 docs 提交；用 `git log -1 --format=%H -- docs/task-handoff-2026-11-09-fill-sim.md` 获取其提交号，避免自引用。
+- 共 9 个文件：上述四个实现文件、`tests/test_pm_round3.py`、`tests/test-output-pm-round3.txt`、包内 README、指定的两个 docs。没有范围外改动、没有新增依赖。
+
+### 实现入口与业务规则
+
+| 决定 | 实现 | 验证 |
+| --- | --- | --- |
+| H1 DNS | `network.Resolver` 使用专用 daemon 线程运行 getaddrinfo，请求线程只等待 min(2s, 剩余总预算)。按主机名缓存成功结果 300s，失败和迟到结果不缓存。PublicClient finally 释放在途额度；保留既有完成后滚动窗口，不放宽发送限额。 | 50ms 总截止时 DNS 仍阻塞但 Future 已超时，同所后续请求继续；默认 DNS 等待实测约 2s；4 个 worker 同时阻塞后释放，排队的真实 loopback HTTP 完成，放弃的 DNS 仍未返回。 |
+| H1 放弃上限 | 线程完成与放弃使用同一把锁；并存放弃数达到 8 时锁存 `dns_abandoned_limit`，拒绝新解析。晚返回降低 active 但不能解除停止。公开接口与 Shadow API 共用解析器。 | 逐次校验 1–7 不停止、第 8 停止，第 9 不再启动解析；释放后 active=0、累计=8、缓存=0、停止锁存。真实子进程永久阻塞 DNS，以 78 退出，落盘 SQLite integrity_check=ok。 |
+| H1 连接/TLS | `connect_addresses` 直接连接 IPv4/IPv6 sockaddr，所有地址重试共用同一个 8s 截止。HTTPConnection 保留原 host；默认 TLS 信任及 hostname 校验不变，握手 timeout 按 TCP 完成后的剩余预算缩短。 | mock 默认 SSLContext 检查 CERT_REQUIRED/check_hostname、原 hostname SNI、HTTP Host、数字 IP connect、禁止二次 DNS；证书错误传播并关闭 socket。虚拟时钟覆盖 DNS+TCP+TLS+读取累计8s、多地址预算及最后0.5s握手预算；旧慢头/慢体/chunked loopback 回归保持。 |
+| H1 看门狗 | `DaemonPool` 记录真实执行占用与全池连续占用起点，单调时钟计时。`run` 每轮检测公开池/API池，全部占用 >30s 分别以 `public_workers_stalled` / `api_workers_stalled` 受控停止78；任一完成重置连续计时。status 记录 dns、workers 快照。 | 真线程+虚拟时钟验证3/4占用不触发、30s不触发、30.001s触发及完成重置；真实子进程使用虚拟看门狗时钟触发78，不等待阻塞worker；不是实际等待30秒的计时实测。 |
+| H2 每 tick 到期 | `Engine._expire_positions` 位于完成任务处理之前，独立检查 age>=172800，不依赖 next_track、任务完成或本地等待。优先用 last_books，深度不够再用 last_executable_exit；priced 原因为 timeout_48h，旧快照回退仍不进主收益。无可用报价为 unpriced_exit，forced_exit_reason=timeout_48h、收益null、main_eligible=false。 | 真实 PublicClient+线程池+虚拟时钟，4组 Gate/Aster、每所0.01/s，仅发送2次；64.95秒时仍持仓，到65秒恰好持有172800秒的tick全部关闭。保留原65秒本地等待免stale测试；另覆盖next_track尚未到、永不完成Future、旧快照和无报价。 |
+
+48h 关闭后取消无存续仓位的跟踪任务及未发送腿；已在途 Future 可自然完成，但从 jobs 脱离，不能回写或重新打开已关闭持仓。盘口原始时间保留在 close_tA/close_tB 等字段中，历史快照价格仍为模拟估值。未修改 core 的费用、资金费、倍率或 stale 判断规则。
+
+### 验证与原始汇总
+
+Windows Python **3.12.10**、SQLite **3.49.1**。完整命令 `python -B -m unittest discover -s tools/fill_sim/tests -v`，TEMP/TMP 指向包内既有忽略目录 `tools/fill_sim/var/test-tmp`；subprocess 原样合并 stdout/stderr 保存到 `tools/fill_sim/tests/test-output-pm-round3.txt`。最终 **151 = 原136 + 新15**，无失败、错误或跳过；没有修改原测试文件或放宽断言。测试先行时新增用例失败，H2 两个用例直接复现原实现缺陷。
+
+```text
+----------------------------------------------------------------------
+Ran 151 tests in 30.601s
+
+OK
+FAIRNESS sends=120 tracking=80 opening=40 every_four=PASS
+HTTP_DEFAULT_DEADLINE seconds=8.000 timeout_count=1
+DAEMON_GUARD_EXIT code=78 seconds_after_trigger=0.015
+STOP memory_limit
+STOP test_guard
+FOUR_GROUPS seconds=65 latency=.3 sends={'C0USDT': 20, 'C0_USDT': 20, 'C1USDT': 20, 'C1_USDT': 20, 'C2USDT': 20, 'C2_USDT': 20, 'C3USDT': 20, 'C3_USDT': 20} open=4 closed=0
+DNS_DEFAULT_WAIT seconds=2.015 abandoned_active=1
+DNS_FOUR_WORKERS abandoned=4 sending=0 queued_http=PASS
+RUNTIME_STOP reason=dns_abandoned_limit code=78 seconds=6.562
+RUNTIME_STOP reason=public_workers_stalled code=78 seconds=0.594
+GUARD_EXIT code=78 seconds_after_trigger=0.015
+REPORT_RSS events=6000 fills=72000 positions=72000 peak_delta_mib=1.656
+```
+
+另通过全部 **17** 个 Python 文件的 `ast.parse(feature_version=(3,10))` 和 `git diff --check`。本轮 TLS 使用 mock SSLContext 验证，没有声称完成外网 HTTPS 或目标 Python 3.10 运行验证。DNS 停止的6.562s是子进程启动至退出；watchdog 的0.594s使用虚拟时钟推进至30.001s，两者都验证实际进程退出码及磁盘数据库完整性。
+
+### 线上状态、边界与后续
+
+- 按本轮指令，仅本地 test/feat/docs 提交；未 push、SSH、WSL，未备份线上库、部署或验收线上接口。没有生产版本变更。
+- 系统 DNS 仍不可强制取消，但请求等待已受2s/总截止约束，遗留线程有并存计数与78停止上限。停止不等待 daemon，SQLite 仍由主线程提交关闭。同步日报/轮转仍可能延后主循环看门狗检测，沿用前轮检测后 <=10s 的退出边界。
+- 本机未运行目标 Ubuntu Python 3.10、systemd/cgroup；总服务120 MiB预算及七天观察尚未验收。实现者自查通过不等于独立复审通过。
+- 包内 var/test-tmp、阶段调试输出及原有 pycache 仍被既有 .gitignore 忽略，未清理不明归属产物；无待交接的未跟踪业务文件。正式原始输出随 test 提交保存。
+- 下一任务对 `119edde..HEAD` 做第三轮独立复审，重点核对 resolver 超时/计数竞态、TCP/TLS 原主机名与总预算、低发送率和在途任务下的48h退出。目标机工作须按后续授权执行；其他功能模块另开任务。
