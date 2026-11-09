@@ -5,7 +5,6 @@ from dataclasses import asdict
 import gc
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
-import os
 from pathlib import Path
 import subprocess
 import sys
@@ -13,6 +12,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 from tools.fill_sim import __main__ as app
 from tools.fill_sim.core import EXCHANGES, Market
@@ -22,6 +22,32 @@ from tools.fill_sim.tests import test_fill_sim as base
 
 
 class SendAdmissionTests(base.OfflineCase):
+    def test_transport_delayed_after_admission_retains_its_quota(self):
+        clock = base.Clock(0)
+        entered, release = threading.Event(), threading.Event()
+        sent = []
+        def transport(url):
+            if url == 'delayed':
+                entered.set()
+                self.assertTrue(release.wait(2))
+            sent.append(clock())
+            return {}
+        client = PublicClient(Limiter(clock=clock), transport)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(client.fetch, 'gate', 'delayed', True)
+            self.assertTrue(entered.wait(1))
+            clock.advance(2)
+            client.fetch('gate', 'new', True)
+            with self.assertRaises(RateLimited):
+                client.fetch('gate', 'excess', True)
+            release.set()
+            future.result(timeout=1)
+        self.assertEqual(sent, [2, 2])
+        with self.assertRaises(RateLimited):
+            client.fetch('gate', 'excess', True)
+        clock.advance(1)
+        client.fetch('gate', 'next', True)
+
     def test_delayed_reservations_cannot_be_redeemed_across_windows(self):
         clock = base.Clock(0)
         sent = []
@@ -137,6 +163,47 @@ class EngineReviewTests(base.OfflineCase):
         self.assertLessEqual(len(self.engine.want_specs), SPEC_CAPACITY)
         self.assertLessEqual(len(self.engine.spec_retry), SPEC_CAPACITY)
 
+    def test_spec_queue_capacity_and_idle_ttl_without_cache_entries(self):
+        from tools.fill_sim.engine import SPEC_CAPACITY, SPEC_IDLE_TTL
+        self.engine.cache.clear()
+        for n in range(SPEC_CAPACITY+40):
+            self.engine.spec(Market('gate','future','C%d_USDT' % n))
+        self.assertEqual(len(self.engine.want_specs), SPEC_CAPACITY)
+        self.assertLessEqual(len(self.engine.spec_used), SPEC_CAPACITY)
+        self.clock.advance(SPEC_IDLE_TTL)
+        self.engine._prune_specs()
+        self.assertFalse(self.engine.want_specs)
+        self.assertFalse(self.engine.spec_used)
+
+    def test_failed_spec_kept_only_until_last_dependency_disappears(self):
+        self.engine.cache.clear()
+        self.engine.ingest(base.event(self.clock))
+        self.engine.tick()
+        self.engine.tick()
+        self.assertEqual(len(self.engine.spec_retry), 2)
+        self.engine.pending.clear()
+        self.engine._prune_specs()
+        self.assertFalse(self.engine.spec_retry)
+        self.assertFalse(self.engine.want_specs)
+
+    def test_abandoned_failed_refresh_cannot_requeue_from_stale_cache(self):
+        for value in self.engine.cache.values():
+            value['at'] = self.clock()-21600
+            value['used_at'] = self.clock()
+        self.engine.ingest(base.event(self.clock))
+        self.engine.tick()
+        self.engine.tick()
+        self.assertTrue(self.engine.spec_retry)
+        self.engine.pending.clear()
+        self.engine._prune_specs()
+        calls = self.client.limiter.snapshot()
+        self.clock.advance(61)
+        self.engine.tick()
+        self.assertFalse(self.engine.cache)
+        self.assertFalse(self.engine.want_specs)
+        self.assertFalse(self.engine.spec_retry)
+        self.assertEqual(self.client.limiter.snapshot(), calls)
+
 
 class ResourceReviewTests(base.OfflineCase):
     def setUp(self):
@@ -145,6 +212,45 @@ class ResourceReviewTests(base.OfflineCase):
         self.addCleanup(self.temp.cleanup)
         self.store = base.Store(Path(self.temp.name)/'review.db')
         self.addCleanup(self.store.close)
+
+    def test_status_scalar_queries_match_report_across_archives_and_late_closes(self):
+        now = 1794206000
+        with self.store.transaction():
+            for i in range(4):
+                t = now-86400 if i < 2 else now
+                e = dict(id=str(i), t1=t, status='evaluated', filter_passed=True)
+                self.store.event(e)
+                f = dict(id=str(i), event_id=str(i), variant='measured', amount=300,
+                         status='opened', symbol='BTC', pair='gate|aster', t1=t)
+                self.store.fill(f)
+                p = dict(**f, opened_at=t, closed_at=None if i==3 else now,
+                         funding_known=i%2==0, main_eligible=False,
+                         net_bps=1, net_usd=.1, exit_reason='converged')
+                self.store.position(p)
+        self.store.rotate(now)
+        expected = app.window(self.store, now-100, now+1)
+        with patch.object(self.store, 'rows', side_effect=AssertionError('status loaded rows')):
+            actual = self.store.status_counts(now-100, now+1)
+        self.assertEqual(actual, {key: expected[key] for key in actual})
+        self.assertEqual(actual['events'], 2)
+        self.assertEqual(actual['funding_observations'], 4)
+
+    def test_upgrade_seeds_counter_baseline_from_limiter_and_missing_evidence_stays_unknown(self):
+        with self.store.transaction():
+            self.store.set_meta('limiter', {'gate': dict(rate_limits=3)})
+            self.store.runtime(100, 30, 40, dict(no_429_increase=True), 3)
+            self.store.runtime(130, 30, 40, {}, 3)
+        self.assertTrue(self.store.runtime_window(100,130)[1]['no_429_increase'])
+        self.assertIsNone(self.store.runtime_window(130,131)[1]['no_429_increase'])
+
+    def test_unpriced_state_excludes_income_independently_of_funding(self):
+        p = dict(variant='measured', amount=300, symbol='BTC', pair='gate|aster',
+                 spread_tier='1-2%', closed_at=1, funding_known=True, main_eligible=True,
+                 net_bps=10, net_usd=1, exit_reason='converged', exit_pricing='unpriced')
+        result = summarize([], [], [p])
+        self.assertEqual(result['funding_unknown_ratio'], 0)
+        self.assertEqual(result['main']['n'], 0)
+        self.assertEqual(result['provisional_price_only']['300']['n'], 0)
 
     def test_429_deltas_survive_restart_and_expire_with_window(self):
         good = dict(taoli_stalls_not_worse=True, no_429_increase=True)
@@ -160,6 +266,8 @@ class ResourceReviewTests(base.OfflineCase):
                 other.runtime(8*86400+60, 30, 40, good, 2)
             self.assertTrue(other.runtime_window(8*86400,8*86400+60)[1]['no_429_increase'])
             self.assertFalse(other.runtime_window(8*86400+60,9*86400)[1]['no_429_increase'])
+            self.assertEqual(list(other.db.execute('SELECT delta FROM rate_limit_samples ORDER BY ts')),
+                             [(1,), (0,), (0,), (1,)])
         finally:
             other.close()
 
@@ -219,6 +327,23 @@ class DeadlineTests(unittest.TestCase):
             def do_GET(self):
                 started.set()
                 try:
+                    if self.path == '/limited':
+                        self.send_response(429)
+                        self.send_header('Retry-After', '120')
+                        self.end_headers()
+                        return
+                    if self.path == '/redirect':
+                        self.send_response(302)
+                        self.send_header('Location', '/body')
+                        self.end_headers()
+                        return
+                    if self.path == '/good':
+                        body = b'{"ok":true}'
+                        self.send_response(200)
+                        self.send_header('Content-Length', str(len(body)))
+                        self.end_headers()
+                        self.wfile.write(body)
+                        return
                     if self.path == '/headers':
                         self.wfile.write(b'HTTP/1.1 200 OK\r\nX-Slow: ')
                     else:
@@ -245,6 +370,17 @@ class DeadlineTests(unittest.TestCase):
                 get_json(self.url+path, timeout=.7)
             self.assertLess(time.monotonic()-start, 2)
             self.assertTrue(self.started.is_set())
+
+    def test_worker_success_http_pause_and_redirect_behavior(self):
+        self.assertEqual(get_json(self.url+'/good'), {'ok': True})
+        client = PublicClient(Limiter())
+        with self.assertRaises(RateLimited):
+            client.fetch('gate', self.url+'/limited')
+        self.assertGreaterEqual(client.limiter.snapshot()['gate']['paused_until']-time.time(), 119)
+        from urllib.error import HTTPError
+        with self.assertRaises(HTTPError) as caught:
+            get_json(self.url+'/redirect')
+        self.assertEqual(caught.exception.code, 302)
 
     def test_guard_exits_78_with_inflight_http_within_ten_seconds(self):
         with tempfile.TemporaryDirectory() as temp:
