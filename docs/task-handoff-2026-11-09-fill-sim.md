@@ -444,3 +444,26 @@ REPORT_RSS events=6000 fills=72000 positions=72000 peak_delta_mib=1.656
 - 本机未运行目标 Ubuntu Python 3.10、systemd/cgroup；总服务120 MiB预算及七天观察尚未验收。实现者自查通过不等于独立复审通过。
 - 包内 var/test-tmp、阶段调试输出及原有 pycache 仍被既有 .gitignore 忽略，未清理不明归属产物；无待交接的未跟踪业务文件。正式原始输出随 test 提交保存。
 - 下一任务对 `119edde..HEAD` 做第三轮独立复审，重点核对 resolver 超时/计数竞态、TCP/TLS 原主机名与总预算、低发送率和在途任务下的48h退出。目标机工作须按后续授权执行；其他功能模块另开任务。
+
+## 第四次复审三项修复（2026-11-09）
+
+分支 `codex/fill-sim`，基线 `ee44b3faca03f6a225ad81b890cecf1cfb4647b3`，开始时工作区干净；输入为指定 `fillsim-review4.log` 末尾。本轮仅修复以下三项，两个实现文件合计新增9行、删除5行。
+
+- `engine.py::_expire_positions`：沿用真实故障判定（任一腿 `failed_since` 非空且已满60秒，在本地等待扣除之后检查），48h到期时优先 `stale_exit / main_eligible=false`；盘口未达到故障阈值时保留 `timeout_48h` 及既有资金费/回退排除条件。旧可执行快照仍排除主收益；无报价仍为 `unpriced_exit`，`forced_exit_reason` 按真实故障标记 `stale_exit`。
+- `network.py::connect_addresses`：socket创建进入逐地址try；AAAA创建抛出 `EAFNOSUPPORT` 后继续IPv4，全部失败后抛出最后错误；仅关闭已创建socket，保留共用截止和IPv6 sockaddr的flowinfo/scopeid。
+- `network.py::get_json`：端口缺省时显式传入HTTPS 443 / HTTP 80，避免裸IPv6再次解析；保留显式端口、Host、TLS原主机名及证书校验。
+
+新增 `tests/test_pm_round4.py` 共7项回归，先在基线上复现三项缺陷，再验证修复；覆盖任一腿60秒边界、59.999秒/本地等待、深度回退/无报价、逐地址创建失败和关闭、HTTP/HTTPS IPv6默认及显式端口。原有测试文件和断言未修改或放宽。
+
+Windows Python 3.12.10，运行全部 `python -B -m unittest discover -s tools/fill_sim/tests -v`；TEMP/TMP指向包内忽略目录 `var/test-tmp`，stdout/stderr原样合并保存至 `tools/fill_sim/tests/test-output-pm-round4.txt`。158项全部通过，无失败、错误或跳过，原始汇总：
+
+```text
+----------------------------------------------------------------------
+Ran 158 tests in 30.296s
+
+OK
+```
+
+全部18个Python文件通过Python 3.10 AST语法检查，`git diff --check`通过；TLS身份/端口回归使用mock，未作外网HTTPS或目标Linux/Python 3.10运行验收。
+
+本地提交：`d73ff64`（test：新增测试及最终全量原始输出）、`4fe5ed7`（feat：两个实现文件）；本节单独docs提交，提交号见本文件最新Git记录。仅改 `tools/fill_sim/` 和本交接文件；包内原有忽略产物及本轮阶段日志保留，无新增未跟踪业务文件。未push、SSH或WSL，未备份/部署/验证线上，生产版本未变。下一任务可对 `ee44b3f..HEAD` 独立复审这三项；其他功能模块另开任务。
