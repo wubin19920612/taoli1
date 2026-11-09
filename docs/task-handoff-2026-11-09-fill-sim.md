@@ -319,3 +319,68 @@ REPORT_RSS events=6000 fills=72000 positions=72000 peak_delta_mib=1.898
 - SQLite 自动创建新的 rate_limit_samples 辅助表；其余交易表结构不变。默认费率不代表任何特定账户或特殊费率组，资金费仍按开仓快照估算。
 - 本轮开始无其他 WIP。测试临时库由 TemporaryDirectory 清理，可写目录及原有 pycache 受包内既有 .gitignore 忽略；原始测试日志已提交，没有需交接的未跟踪业务文件。
 - 下一步为新任务中的独立复审：从上述基线与本轮提交检查 8 项修复，再按独立授权做目标运行时、生产 guard 和整体 cgroup 资源验收。本轮不推送、不部署，不开始其他模块。
+
+---
+
+## PM 第二轮 G1–G3 修复交接（2026-11-09）
+
+本节覆盖前文关于双层预留、HTTP 子进程和仅主进程 RSS 的旧实现描述。复审输入为用户指定 `fillsim-review2.log` 末尾：4 组 Gate/Aster 在 300ms 响应下后两组饥饿并错误 stale_exit；每请求启动 Python 进程且资源监控遗漏子进程。本轮模块仅为 fill-sim 的 HTTP、发送调度、守护和对应测试。
+
+### 基线、范围、提交
+
+- 指定 worktree：`C:/Users/wubin/Desktop/code/codex/taoli1/.worktrees/fill-sim`，分支 `codex/fill-sim`，开始 HEAD `3271be2731f7f611f8343b145b69de4efb099186`，开始时工作区干净。
+- 实现前已将用户提供的 G1、G2、G3 和测试要求原文追加到 `docs/fill-sim-spec-2026-11-09.md` 的“PM decisions 第二轮补充”。
+- `f682b6c` — `test(fill-sim): cover fair sends deadlines and service memory`：测试与完整原始输出。
+- `bcde07f` — `feat(fill-sim): unify fair admission and bound daemon HTTP`：G1–G3 实现和 smoke 兼容修正。
+- README、任务书和本节为独立 docs 提交；用 `git log -1 --format=%H -- docs/task-handoff-2026-11-09-fill-sim.md` 取得其提交号，避免自引用。
+- 只修改 `tools/fill_sim/`，以及 docs 下的任务书、本交接这两个文件。实现文件为 `network.py`、新增 `scheduler.py`、`engine.py`、`funding.py`、`__main__.py`、`smoke.py`；删除每请求进程实现 `http_worker.py`。没有 backend/frontend、compose、部署配置、真实 env 或其他模块改动。
+- 已创建本地提交；未 push、未 SSH、未使用 WSL。未进行线上备份、部署或生产验证，线上版本不变。
+
+### 实现与业务边界
+
+| 决定 | 当前实现 | 验证入口 |
+| --- | --- | --- |
+| G1 HTTP | `network.get_json` 使用同进程 `http.client`；HTTPS 默认验证证书，不跟随重定向。socket recv 最多 3s；8s 单调时钟总截止，每个 recv、每块响应检查，剩余时间更短则缩短 socket timeout。自定义原始读取器覆盖响应头、chunked 分隔符和响应体。finally 关闭响应及连接；超时记录 errors/timeouts。 | 默认 8s 慢体、重复慢头/慢体/chunked、禁止 Popen、连接与线程清理；保留原 0.7s 注入截止测试的 <2s 断言。 |
+| G1 guard | `scheduler.DaemonPool` 为公开请求提供 4 个 daemon 线程，API 单独 1 个 daemon 线程；没有标准 ThreadPoolExecutor 的解释器退出 join。guard 检测后先写 status，关闭队列并 shutdown(wait=False)，不入账在途结果、不做完整日报，以 78 退出。 | 真实 loopback 在途 HTTP 退出；另用永久阻塞 60s 的 worker 验证主进程完全不依赖请求返回，均断言 <=10s。 |
+| G2 单一准入 | 删除调度 acquire 和独立预留桶。`RequestQueue` 只有一个优先队列，工作线程选任务并原子调用同一个 Limiter；未获准入仍排队，下个可用名额重试，不推进持仓 next_track。所有规格/盘口/资金费请求，包括第二个 fundingInfo GET，都走该队列。手动 smoke 改用同一个发送 gate。 | 真实 PublicClient + 真线程池 + 可注入虚拟时钟复现 4 组/65s/300ms；旧并发、跨窗、延迟发送断言保留。 |
+| G2 公平份额 | 持仓优先，同级 FIFO；存在新开仓等待时最多连续 3 个非开仓发送，第 4 个留给开仓及其规格/资金费依赖。若开仓所属交易所无额度，等待其额度，不让别的跟踪抢走这次机会。预热规格被新事件依赖后提升优先级。 | 80 个跟踪 +40 个开仓请求，逐个滑动四发送窗口检查；额外检查开仓交易所满额时保留第 4 名额、依赖提升和取消资金费链不占名额。 |
+| G2 stale | 按腿累计本地排队时间并从真实失败计时扣除，成功腿立即更新健康状态；本地等待超过 60s 未更新时持久化 `tracking_status=rate_limited_delay` 和等待秒数，不因此平仓。恢复成功标 healthy。真实网络失败/远端暂停的 60s 规则保留。 | 本地低额度 65s 无平仓；已有 30s 真实失败再等 65s 本地额度仍不错误平仓；一腿恢复而另一腿排队；真实远端故障仍 stale_exit。 |
+| G3 内存 | `service_memory()` 按 `/proc/self/cgroup` 的 v2 本服务路径读取 `/sys/fs/cgroup/.../memory.current`。status/guard 使用同一采样；不可读回退进程 RSS，明确 `memory_source`、`memory_path`、`memory_mb`。120 MiB 阈值不变，停止原因 memory_limit。 | 本服务文件优先于宿主根文件、无效/越界路径回退；121 MiB cgroup 即使 RSS=1 MiB 仍写状态并返回78；fallback 来源也写入真实 status 文件。 |
+
+限流器仍采取保守的同一层计数：传输在途占额度、完成后保留一秒，以覆盖准入后的 DNS/调度延迟，保证实际发送滚动秒窗 ≤2/8；这没有增加另一层调度预留。慢请求吞吐可能低于配置上限。为满足开仓第 4 名额，开仓所在交易所暂满时可能暂不使用其他所空闲额度。
+
+队列生命周期也随之调整：事件超过 120 秒取消未完成的开仓阶段；资金费等待结束后取消无依赖的排队链；规格排队任务按依赖、TTL 和 256 容量清理，避免原缓存修复因引入队列而回退。工作线程只完成网络/解析 Future，SQLite 仍由主线程写入。
+
+### 测试变化说明与最终原始输出
+
+没有提高超时验收上限、降低每组请求要求或放宽已有收益/资源阈值。原测试调用已删除的 acquire 改为真实 PublicClient 发送；原引擎夹具不再替换 `_fetch_book`，只注入原始盘口 transport，保留实际准入及解析。按 G2 更新两项旧行为断言：新开仓从立即 skipped 改为 pending 并断言后续精确开出 4 个仓位；资金费从“有 tracking_due 就完全禁止”改为同队列准入，持仓优先和每四份额由真实并发用例验证。异步远端拒绝多收集一轮结果，8 条拒绝/4 个仓位断言保持；放弃的资金费任务改为精确断言 0 个残留。旧截止测试仅将注入参数改名为 total_timeout，0.7s 截止及 <2s 断言不变。
+
+最终全部 unittest：**136 = 原119 + 新17**。Windows Python **3.12.10**、SQLite **3.49.1**；全部 **16** 个 Python 文件通过 `ast.parse(feature_version=(3,10))`。目标 Python 3.10.12 / SQLite 3.37 尚未实跑。
+
+命令：`python -B -m unittest discover -s tools/fill_sim/tests -v`，TEMP/TMP 指向包内既有忽略目录 `tools/fill_sim/var/test-tmp`。通过 Python subprocess 将 stdout/stderr 原始合流保存，避免 PowerShell 换行和错误流包装。完整输出：`tools/fill_sim/tests/test-output-pm-round2.txt`。
+
+```text
+----------------------------------------------------------------------
+Ran 136 tests in 19.266s
+
+OK
+FAIRNESS sends=120 tracking=80 opening=40 every_four=PASS
+HTTP_DEFAULT_DEADLINE seconds=8.000 timeout_count=1
+DAEMON_GUARD_EXIT code=78 seconds_after_trigger=0.015
+STOP memory_limit
+STOP test_guard
+FOUR_GROUPS seconds=65 latency=.3 sends={'C0USDT': 20, 'C0_USDT': 20, 'C1USDT': 20, 'C1_USDT': 20, 'C2USDT': 20, 'C2_USDT': 20, 'C3USDT': 20, 'C3_USDT': 20} open=4 closed=0
+GUARD_EXIT code=78 seconds_after_trigger=0.031
+REPORT_RSS events=6000 fills=72000 positions=72000 peak_delta_mib=2.070
+```
+
+4 组用例还逐市场断言 >=15 次发送、首尾和相邻抓取间隔均 <=6s、8 个市场均被服务、每个滚动一秒窗符合限额；实际每腿均20次。重复逐字节测试覆盖慢头、慢体、chunked 各两次，所有服务端连接归零、所有新建 pool 线程退出，线程集合回到测试前。测试未降低断言来掩盖饥饿或泄漏。
+
+`git diff --check`、暂存路径检查通过；没有新增依赖。最终测试使用离线响应或自建 loopback 服务，不要求交易所或 taoli1 在线。这里只提供实现者自查结果，不代表独立复审已经通过。
+
+### 已知边界、产物、下一步
+
+- 系统 DNS 解析不能由标准库强制中断；接收路径的8s截止已实测，guard 则通过 daemon 和不等待请求保证不受阻塞 worker 牵制。同步日报/轮转仍可能延后 guard 的检测时刻；本轮 <=10s 从检测到停止条件计。
+- 本机没有目标 systemd/cgroup 环境。cgroup 取值/回退使用真实临时文件和 status 验证；Linux 总预算、页缓存、目标解释器行为及七天观察尚待独立授权验收。`rss_mb`/`max_rss_mb` 是兼容字段，当前取值为服务内存采样；旧历史 RSS 不能自动升级为 cgroup 证据，README 已写清楚。
+- 原始输出已提交；包内 var/test-tmp、调试输出和原 pycache 由既有 .gitignore 忽略，未清理或覆盖不明归属产物。无待交接的未跟踪业务文件，无真实凭据写入仓库。
+- 本轮止于本地 test/feat/docs 提交。下一任务从 `3271be2` 至本轮 HEAD 做独立复审，再决定是否开展目标机验收；生产备份、部署、推送均未执行。其他模块请新建任务，不扩展本轮范围。

@@ -39,7 +39,7 @@ python3 -m fill_sim run --env-file /path/to/fill-sim.env
 - 开仓阈值按设计公式扣除预估四笔 taker 费后净 10 bp。平仓回补开仓的原始币数，不按新价格另算数量；实际开平四笔费用按各自成交金额计。净 bp 分母为买腿实际开仓金额。收敛判断使用开平两腿 VWAP 的毛价差，与 shadow conv-half 对齐。
 - 24h 且收敛过半与即时 half 收敛逻辑重叠，代码在 24h 后将符合条件的退出标成 `timeout_24h_converged`；48h 强制退出。数据连续失败 60 秒使用各腿最后成功盘口，标记 stale，排除主收益。正常 60 秒采样不被误判为断流；重启间隔超过 60 秒则视为数据中断。
 - 如强平时最后盘口仍不足以回补全部数量，退回上次可完整平仓的盘口并标 stale；从未有可平仓盘口则记 `unpriced_exit`，没有虚构收益。
-- 令牌桶及滚动秒窗共同控制每所 ≤2/s、全局 ≤8/s（可调低），规格与盘口共用预算；最多 4 个公开 HTTP 请求在途。持仓优先，未获预算的新开/延迟阶段记 `skipped_rate_limit`。429/418/限频码暂停至少 60 秒并指数退避至 3600 秒；尊重更长的数字 Retry-After，Bybit 403 保守暂停至少 600 秒。
+- 只有一层发送准入：每所 ≤2/s、全局 ≤8/s 滚动窗口（可调低），规格、盘口、资金费共用预算；最多 4 个公开 HTTP 请求在途。一个优先队列统一调度：持仓优先，有新开仓等待时每 4 个发送名额至少 1 个归新开仓及其规格/资金费依赖。本地无额度时等下个名额，不推进持仓下次跟踪时间。429/418/限频码暂停至少 60 秒并指数退避至 3600 秒；尊重更长的数字 Retry-After，Bybit 403 保守暂停至少 600 秒。
 
 ## 资金费和手续费边界
 
@@ -47,7 +47,7 @@ python3 -m fill_sim run --env-file /path/to/fill-sim.env
 
 - 在首轮盘口前获取合约腿的 rate / next / interval，并保存原始市场 key、捕获时间、来源 URL。rate 是小数比率，next 是 UTC 秒，interval 是秒；现货为 `{"spot":true}`，资金费恒为 0。Binance/Aster 需要 premiumIndex 和 fundingInfo 两个公开请求，其余每腿一个。Binance fundingInfo 返回配置列表；只提取该 exact symbol，不访问行情列表。
 - `exchange|market_type|raw_symbol` 缓存 300 秒，最多 2048 个市场；成功及失败结果均缓存，失败仍是未知而非零。已过 next 结算点的成功快照不能用于新开仓。市场缓存只在内存，重启后重取；已开仓快照随仓位持久化，不被以后刷新覆盖。
-- 异步等待资金费最多 7 秒（覆盖两个 3 秒 socket timeout），随后最多再等 1 秒盘口预算；始终先调度到期持仓，最多 4 个公开请求在途。规格、盘口、资金费共用原来的令牌桶与滚动秒窗，不提高请求上限。额度、超时或解析失败记 funding_errors，盘口可取时仍模拟并标未知；盘口也无预算则记 skipped_rate_limit。等待占用 10 个机会组限额，算入实测延迟。三变体和四金额档共用本次快照，不重复获取；若延迟变体开仓已跨过快照结算时间，保守标未知。
+- 异步等待资金费最多 7 秒；单个 HTTP 请求允许 8 秒总截止，所以等待到期可能先按未知资金费继续，取消无依赖的剩余排队资金费任务。盘口进入公平队列，最多 4 个公开请求在途。超时或解析失败记 funding_errors；本地无额度等下个名额，远端限频记 skipped_rate_limit。事件超过 120 秒后取消未完成的开仓阶段并记 skipped_stale_trigger。等待占用 10 个机会组限额，算入实测延迟。三变体和四金额档共用快照；延迟变体跨过快照结算时间时保守标未知。
 - 合约在持仓跨结算时，以开仓费率和间隔重复估算：多头支付、空头收取。`funding_estimated=true`；不声称使用了最终结算费率。字段缺失、错误市场、缺少周期、非有限数字、已过期结算点、带服务端时间但偏差超过 90 秒的响应均不能当已知。
 - `funding_known=false` 的仓位排除主收益和盈利通过线，保留原有 `provisional_price_only` 辅助统计。该辅助统计沿用所有非 stale/unpriced 已平仓样本（也包含已知资金费样本），不是独立的未知资金费样本集。
 - 状态和日报新增 `funding_unknown`、`funding_observations`、`funding_unknown_ratio`：按三变体 × 四金额档的仓位数计数，任一腿未知即该仓位未知，比例=未知数/观察仓位数，无仓位为 null。日报窗口包括当日开仓且仍未平仓的仓位及当日平仓的仓位；status 的这三项采用今日 UTC 同一口径，另有 `open_funding_unknown_ratio` 覆盖所有当前未平仓仓位。
@@ -83,9 +83,9 @@ PM 的服务器监控通过 `FILL_SIM_GUARD_FILE` / `--guard-file` 指定绝对�
 {"timestamp":1794206000,"taoli_stalls_last_hour":2,"taoli_stalls_not_worse":true,"no_429_increase":true}
 ```
 
-启动时在任何网络请求之前检查，之后主循环每 1 秒检查一次，状态仍每 30 秒采样。路径未配置 → `guard_file_required`；文件不存在/无权限/非对象/格式错误/缺必填字段 → `guard_metrics_unavailable`。以上停止条件写入 status.stop_reason，退出码 **78**，systemd 的 `RestartPreventExitStatus=78` 阻止自动重启。同步统计/轮转耗时可能延后检测；检测后跳过完整日报与在途结果入账，等待受总截止时间约束的请求结束，测试要求检测后 <=10 秒退出。停止状态保留最近成功统计，`statistics_timestamp` 标记采样时间，启动即停止时为 null。
+启动时在任何网络请求之前检查，之后主循环每 1 秒检查一次，状态仍每 30 秒采样。路径未配置 → `guard_file_required`；文件不存在/无权限/非对象/格式错误/缺必填字段 → `guard_metrics_unavailable`。以上停止条件写入 status.stop_reason，退出码 **78**，systemd 的 `RestartPreventExitStatus=78` 阻止自动重启。同步统计/轮转耗时可能延后检测；检测后跳过完整日报与在途结果入账，主线程不等待在途请求，daemon 工作线程不参与解释器退出 join，测试要求检测后 <=10 秒写完状态并退出。停止状态保留最近成功统计，`statistics_timestamp` 标记采样时间，启动即停止时为 null。
 
-Linux `MemAvailable <200 MiB` 和本进程 `RSS >=120 MiB` 由 fill-sim 自己读取，分别记 `low_memory`、`rss_limit`，无需 PM 在 JSON 中填写。`taoli_stalls_not_worse` / `no_429_increase` 的基线、统计区间须由 PM 真实维护，不能固定填 true。未接入生产的守护与七天资源验收仍未完成。
+Linux `MemAvailable <200 MiB` 和本服务内存 `>=120 MiB` 由 fill-sim 自己读取，分别记 `low_memory`、`memory_limit`，无需 PM 在 JSON 中填写。服务内存的 cgroup 读取和 RSS 回退见末节。`taoli_stalls_not_worse` / `no_429_increase` 的基线、统计区间须由 PM 真实维护，不能固定填 true。未接入生产的守护与七天资源验收仍未完成。
 
 ## 代码入口
 
@@ -95,7 +95,8 @@ Linux `MemAvailable <200 MiB` 和本进程 `RSS >=120 MiB` 由 fill-sim 自己�
 | `exchanges.py` | 六家 exact symbol 公开规格/深度请求与解析 |
 | `funding.py` | 六家公开资金费端点、周期与时间单位解析 |
 | `default-fees.json` | 官方核对后的默认费用，未确认项为 null |
-| `network.py` | GET、限频预算、暂停、API 轮询退避 |
+| `network.py` | 同进程 GET、逐 recv 截止检查、唯一发送限流器、API 退避 |
+| `scheduler.py` | daemon 线程池、公开请求优先队列、开仓保底份额 |
 | `engine.py` | 机会组上限、三变体、持仓优先调度及恢复 |
 | `storage.py` | SQLite、事务、日归档、进程锁、运行证据 |
 | `reporting.py` | 聚合、bootstrap、通过线 |
@@ -106,11 +107,24 @@ Linux `MemAvailable <200 MiB` 和本进程 `RSS >=120 MiB` 由 fill-sim 自己�
 
 ## 审查修复后的资源与统计口径
 
-- 每次 HTTP 总截止时间 3 秒，覆盖进程启动、DNS、TLS、慢速响应头/响应体；标准库 `http_worker.py` 到期被 kill 并回收。两个资金费请求各自受此总时限约束。URL/请求头走私有 stdin，不进入命令行，禁止重定向。
-- 调度预留只控制工作提交；每个 PublicClient 请求（含 reserved）还须经过发送准入。额度在整个传输期间占用，完成后再保留一秒，避免 worker 启动/DNS/调度延迟造成额度提前跨窗释放。任意滚动一秒窗同所最多 2、全局最多 8；慢请求时有效吞吐会更保守。
+- 同进程 `http.client`，HTTPS 默认验证证书，不跟随重定向；已删除 `http_worker.py`，不再每请求创建进程。socket recv 最多等待 3 秒，每次 recv 和每块响应后检查单调时钟的 8 秒总截止，必要时缩短 socket timeout。慢头、chunked 分隔符和慢体都受检查；finally 关闭响应和连接，超时计入交易所 `timeouts`/`errors`（API 计失败退避）。系统 DNS 调用不能由标准库强制中断；守护退出不依赖其返回。
+- 无调度预留。工作线程从同一优先队列选任务时原子执行唯一限流器的准入；无额度时不占用线程等待。为覆盖准入后 DNS/线程调度造成的实际发送延迟，该层额度在传输中占用、完成后保留一秒，比仅按开始时间计窗更保守，仍满足滚动秒窗同所最多 2、全局最多 8。`reserved` 仅是旧手动调用的兼容参数，不能绕过准入；smoke 也经过此 gate。
+- 同优先级按入队顺序服务。已有三个非开仓发送且仍有开仓等待时，下个名额必须服务开仓；若该交易所暂时无额度，保留此次机会，不让其他持仓请求抢走。第二个资金费 GET 也入队；预热规格成为开仓依赖时提升优先级。过期/失去依赖的排队任务取消，规格任务集限制在 256 个市场。
+- 持仓按腿记录本地队列等待，从真实失败计时中扣除；单腿成功立即更新健康状态，不等另一腿。等待导致超过 60 秒未更新时持久化 `tracking_status=rate_limited_delay` 和等待秒数，不因此平仓；恢复健康后标为 `healthy`。真实网络/解析错误或远端暂停连续 60 秒仍触发 stale_exit。已持久化本地等待标记在重启恢复时保留。
 - 规格有效期及闲置 TTL 均为 6 小时；缓存和待取队列各最多 256 个市场，优先保留活动依赖。失败至少间隔 60 秒重试，最后一个持仓/待处理事件依赖结束后清除失败任务及陈旧缓存，避免重新生成重试。
 - `filter_passed` 独立表示业务资格。合格但 stale/future、重复、容量、费率、规格或预算不足等执行跳过继续进覆盖率分母。
 - 无法定价退出使用 `exit_pricing=unpriced`，保留真实 `funding_known`；可定价退出为 priced，收益统计独立要求 priced。
 - 日报/report 流式读取主库和归档，窄字段落到临时 SQLite；去重、分组、精确分位数在 SQL 中完成。Python 保留输出分组及每日 bootstrap 合计，不保留事件/仓位列表。临时库使用 1 MiB 页缓存并自动清理；分组输出大小取决于不同币种/交易对数。status 使用独立标量 SQL。
 - `runtime_rate_limits` 持久化累计计数基线，`rate_limit_samples(ts,delta)` 保存采样区间增量，同事务写入窗口证据。重启沿用基线，旧库从 limiter 快照初始化。新增限频才让本采样失败；窗口按采样结束时间计算，缺外部比较仍为 UNKNOWN；采样与 runtime 同保留 30 天。
-- 报告 RSS 测试衡量报告进程增量。目标 systemd 的 120 MiB cgroup 总预算须连同最多 4 个公开请求 worker 和 1 个 Shadow API worker 在目标机验证。
+- 报告 RSS 测试衡量报告进程增量。公开请求使用 4 个 daemon 线程，Shadow API 使用 1 个 daemon 线程，无每请求子进程。目标 systemd 的 120 MiB cgroup 总预算仍需在目标机验证。
+
+## 服务内存口径（G3）
+
+每秒守护检查和每 30 秒 status 使用同一个 `service_memory()`：读取 `/proc/self/cgroup` 的 `0::` 路径，在 `/sys/fs/cgroup/<本服务路径>/memory.current` 读取 cgroup v2 字节数并除以 1024²。不会优先读取宿主机根 cgroup 代替本服务。cgroup namespace 中路径为 `/` 时读取该 namespace 根的 `memory.current`。
+
+- `memory_mb`：本次采样，单位 MiB；`memory_source=cgroup_memory.current`；`memory_path`：实际文件路径。
+- cgroup 文件缺失、不可读、非法或不是 v2 时回退本进程 RSS，标明 `memory_source=process_rss_fallback`、`memory_path=null`；RSS 也不可读时数值为 null。Windows 实测属于回退情况。
+- 为兼容既有报告，`rss_mb` 是 `memory_mb` 的同值别名，`max_rss_mb` 和 runtime 中的同名指标沿用该采样口径；名字不再表示只测主进程。历史峰值可能混有升级前的 RSS，不把旧证据自动认定为 cgroup 验收。
+- 守护以本次采样 `>=120 MiB` 触发 `memory_limit`，同时写明来源。cgroup 包含服务进程/线程及计费的页缓存等；RSS 回退不能证明整个服务满足 systemd 总预算。
+
+本地回归覆盖真实 PublicClient、线程池、虚拟时钟、loopback 慢速逐字节返回和实际进程退出。目标 Ubuntu Python 3.10 / cgroup / systemd 行为与七天观察尚须单独验收。

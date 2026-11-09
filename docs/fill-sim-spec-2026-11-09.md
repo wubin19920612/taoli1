@@ -61,3 +61,10 @@ F1 资金费：PM 已核实 /api/shadow/trades 会删掉 payload.tracking（back
 F2 现货手续费：联网查 6 家官方 VIP0 现货 taker 费率并填入默认配置（合约费率同样再核一遍），在交接里附每条出处链接与查询日期；查不到的保持 null 并在报告列出。
 F3 现货做空：现货腿出现在 sell（做空）一侧时不开仓，记 unsupported_spot_short，计入覆盖率分母，不进主收益。
 F4 guard.json 由 PM 在服务器侧生成（不用你写生产监控），把它的字段契约（字段名、类型、过期秒数、缺失时行为）写进 tools/fill_sim/README.md 的单独一节，便于 PM 照着生成。
+
+## PM decisions 第二轮补充
+
+G1 去掉每请求起子进程的 HTTP 实现。改为同进程 http.client（HTTPS）分块读取：每次 recv 有 socket 超时（3s），每读完一块检查总截止时间（8s），超过即关闭连接、记超时。工作线程设为 daemon；guard 触发后主线程不等待在途请求，在 ≤10s 内写完状态并以 78 退出。
+G2 限频只保留一层：在真正发送前由同一个限流器（每所 2/s、全局 8/s 滚动窗口）准入，调度层不再单独预留。用一个优先队列：持仓跟踪优先，但新开仓保底份额（每 4 个发送名额至少 1 个给新开仓，若有待处理的）。准入失败不得把该持仓的下次跟踪推迟整个周期，只在下一个可用名额重试；持仓连续 60 秒真正抓不到盘口才算 stale_exit，被本地限流挡住的时间不能算作“抓不到”（若因本地限流导致超过 60s，记 rate_limited_delay，不平仓）。
+G3 资源：status.json 和守护的内存判断改为读本服务 cgroup 的 memory.current（/sys/fs/cgroup 下，读不到时回退为本进程 RSS 并标明），README 写清楚。
+测试：必须用真实 PublicClient + 线程池 + 可注入虚拟时钟，复现审查里的 4 组 Gate/Aster 持仓 65 秒场景，证明每组都持续被跟踪且无错误平仓；新开仓保底份额测试；慢速逐字节返回的假服务器（loopback）测试总截止生效且无线程/连接泄漏；guard 退出 ≤10s。全部 unittest 原始汇总行；交接追加本轮；test/feat/docs 分开 commit；只改 tools/fill_sim/ 与 docs 两个文件；不 push/SSH/WSL；不放宽断言。
