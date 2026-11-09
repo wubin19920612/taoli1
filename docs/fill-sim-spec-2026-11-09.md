@@ -54,3 +54,10 @@
 2. 测试汇总行（用 Python 3.10 兼容语法；本机若无 3.10，说明用的版本并确保没用 3.11+ 语法，例如 `tomllib`、`ExceptionGroup`、`asyncio.TaskGroup`）。
 3. **联网冒烟一次**：用真实公开接口，对 6 家各取 1 个合约的深度和规格并打印解析结果（不需要 taoli1 API，可用一个手写的假影子事件跑完一轮开仓计算并打印 fills）。
 4. 交接报告 `docs/task-handoff-2026-11-09-fill-sim.md`：文件清单、提交 hash、各所接口与限频依据（附官方文档链接）、手续费配置待核对项、剩余风险。
+
+## PM decisions 第一轮补充
+
+F1 资金费：PM 已核实 /api/shadow/trades 会删掉 payload.tracking（backend/app/db/repositories.py list_trades pop），不能依赖上游。允许 fill-sim 调用各所**公开**资金费接口（例如 Binance premiumIndex、Bybit tickers、OKX funding-rate、Gate 合约 contract/funding、Bitget current-fund-rate、Aster premiumIndex；以官方文档为准），在开仓时对合约腿各取一次 rate/下次结算时间/间隔，走同一令牌桶，按市场缓存 5 分钟。取不到才按现有逻辑标 provisional 并排除主收益；状态与日报里报告 funding_unknown 比例。现货腿资金费为 0。
+F2 现货手续费：联网查 6 家官方 VIP0 现货 taker 费率并填入默认配置（合约费率同样再核一遍），在交接里附每条出处链接与查询日期；查不到的保持 null 并在报告列出。
+F3 现货做空：现货腿出现在 sell（做空）一侧时不开仓，记 unsupported_spot_short，计入覆盖率分母，不进主收益。
+F4 guard.json 由 PM 在服务器侧生成（不用你写生产监控），把它的字段契约（字段名、类型、过期秒数、缺失时行为）写进 tools/fill_sim/README.md 的单独一节，便于 PM 照着生成。

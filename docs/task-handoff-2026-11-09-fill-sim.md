@@ -133,3 +133,120 @@ SMOKE exchanges=6 markets=12 failures=0
 开始时工作区干净，交付只含本模块新文件。没有需要保留的其他任务 WIP；运行产生的 `__pycache__` 已被包内 `.gitignore` 忽略，不纳入提交；测试临时库自动清理，没有实际 env 或密钥产物。
 
 下一步在独立审查/验收任务中使用本交接，先审查资金费缺口及生产守护输入契约、核对费用，再在目标 Python/SQLite 上跑同一套离线测试。按用户授权另开部署/七天观察任务，不能在本次任务中推送、SSH 或启动生产服务。
+
+---
+
+## PM decisions 第一轮补充实现记录（2026-11-09）
+
+前文保留为上一轮历史记录。**本节更新前文风险 1、2、3、5 中关于资金费来源、手续费、守护字段和现货卖腿的状态**；生产部署、目标运行时及七天观察仍未验收。
+
+### 范围、分支与本地提交
+
+- 同一 worktree、分支 `codex/fill-sim`；本轮基线 `448a2901c7eb8d7d1976b5be712a4901e7cb740a`，开始时工作区干净。
+- 已将用户 F1–F4 原文追加在 `docs/fill-sim-spec-2026-11-09.md` 末尾“PM decisions 第一轮补充”，再实现。
+- feat：`1f207b4d430992dc6c4933f2d73d4af6d9942a2b` — `feat(fill-sim): apply PM funding fees and spot short decisions`。
+- test：`06e14b8b40814667491d7d259981a6e19b37837e` — `test(fill-sim): verify public funding cache and PM guard boundaries`。
+- docs：本文、规格补充、README 与夹具说明单独提交；用 `git log -1 --format=%H -- docs/task-handoff-2026-11-09-fill-sim.md` 定位最终 docs 提交，避免自引用哈希。
+- 遵守 §6：仅修改 fill-sim 包和本模块文档；未改 backend/frontend/compose/既有部署脚本/真实 .env。未读交易所密钥、未读真实 taoli1 token、未下单、未 push、未 SSH、未用 WSL。Git worktree 索引位于主仓库 .git，暂存/提交使用授权的本地写权限，未操作其他分支。
+- 无生产备份、无部署、无线上版本变更；这些操作不在本轮授权范围。
+
+### 实现与关键入口
+
+| 文件 | 本轮变更 |
+| --- | --- |
+| `tools/fill_sim/funding.py`（新增） | 六家公开资金费 URL、rate/next/interval 单位解析、exact symbol 校验、时间有效性；Binance/Aster 另取 fundingInfo，缺周期不默认 8 小时 |
+| `engine.py` | 移除对上游 fill_sim_funding 的依赖；资金费异步阶段、市场 300 秒缓存、失败降级、仓位快照；现货 sell 记 unsupported_spot_short |
+| `network.py`、`exchanges.py` | 同一 PublicClient/令牌桶/暂停计数；允许 Binance/Aster 的公开配置数组响应 |
+| `storage.py` | awaiting_funding 加入重启中断恢复与活动事件禁止归档条件；无数据库表结构迁移 |
+| `reporting.py`、`__main__.py` | 状态/日报 funding_unknown 比例及分母、当前所有持仓未知比例、unconfigured_fees；默认配置加载；guard 字段严格类型检查 |
+| `default-fees.json`（新增）、`deploy/fill-sim.env.example` | 六家现货默认费、复核合约费，Aster 改为 0.0004，Binance 合约未核实设 null；CLI/env 可整体覆盖 |
+| `smoke.py` | 合约 smoke 同时获取并打印六家资金费，录制独立 funding 夹具；仍只用公开 GET |
+| `tests/test_pm_round1.py`（新增）、`tests/test_fill_sim.py` | 增加 25 项离线回归，合计 101 项；原引擎测试改为种入明确的公共资金费缓存，避免继续依赖 payload |
+| `tests/fixtures/funding/*.json`（新增） | 六家 BTC 资金费原始响应、URL、接收时间；配置列表仅裁剪精确 BTC 行 |
+| `tests/fixtures/fees/okx-spot.json`（新增） | OKX 官方费用页 HTML 内嵌 Regular user 现货行的原样提取证据 |
+| `tests/fixtures/*_{future,spot}.json` | 本轮联网重录 12 份规格/盘口；原始旧日志保留为历史记录 |
+| `tests/test-output-pm-round1.txt`、`tests/smoke-output-pm-round1.txt`（新增） | 本轮最终完整原始输出 |
+| `README.md`、夹具 README、规格和本文 | 更新运行口径、单独 guard.json 契约、来源及本轮交接 |
+
+### F1 资金费行为与官方接口
+
+所有资金费请求使用原 PublicClient；和规格/深度共享 **每所 ≤2/s、全局 ≤8/s** 令牌桶及滚动秒窗，沿用限频暂停/退避。这个预算仅约束本进程，不是共享出口的总预算。
+
+| 交易所 | 公开请求与字段映射 | 官方文档（查询 2026-11-09） |
+| --- | --- | --- |
+| Gate | `/api/v4/futures/usdt/contracts/{raw}`；funding_rate、funding_next_apply（秒）、funding_interval（秒） | [Gate Futures API](https://www.gate.com/docs/developers/apiv4/en/futures/) |
+| Bitget | `/api/v2/mix/market/current-fund-rate?symbol=…&productType=USDT-FUTURES`；fundingRate、nextUpdate（毫秒→秒）、fundingRateInterval（小时→秒） | [Classic Contract Market / Get Current Funding Rate](https://www.bitget.com/docs/catalog/classic-contract-market/classic-contract-market)：20 次/秒/IP；已找到迁移后的具体文档 |
+| Binance | `/fapi/v1/premiumIndex?symbol=…`；lastFundingRate、nextFundingTime（毫秒→秒）；另 `/fapi/v1/fundingInfo` 取该 raw symbol 的 fundingIntervalHours（小时→秒） | [Binance Market Data / Mark Price / Get Funding Rate Info](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/market-data)：fundingInfo 与 fundingRate 共用 500/5min/IP；它是资金费配置列表，不是行情 ticker 列表 |
+| Bybit | `/v5/market/tickers?category=linear&symbol=…`；fundingRate、nextFundingTime（毫秒→秒）、fundingIntervalHour（小时→秒） | [Get Tickers](https://bybit-exchange.github.io/docs/v5/market/tickers)，严格传单个 symbol，不拉 ticker 列表 |
+| OKX | `/api/v5/public/funding-rate?instId=…`；fundingRate；**fundingTime 才是最近待结算时间**；间隔为 nextFundingTime − fundingTime，均毫秒→秒 | [OKX Get Funding Rate](https://www.okx.com/docs-v5/en/#public-data-rest-api-get-funding-rate)：nextFundingTime 是再下一期，不能直接当最近结算点 |
+| Aster | 推荐 V3：`/fapi/v3/premiumIndex?symbol=…` 和 `/fapi/v3/fundingInfo?symbol=…`；lastFundingRate、nextFundingTime、fundingIntervalHours | [官方 V3 文档](https://github.com/asterdex/api-docs/blob/master/V3%28Recommended%29/EN/aster-finance-futures-api-v3.md)，两个 public GET 各 weight 1；本轮未迁移已有 V1 规格/深度 |
+
+每个新机会在首轮盘口之前获取两腿资金费，缓存键 `exchange|market_type|raw_symbol`，成功和失败结果缓存 300 秒（最多 2048 个市场）；已跨结算点的成功快照立即失效。Binance 配置接口官方说明只涵盖调整过的市场，若目标缺失则未知，不擅自补 8 小时。现货零资金费，无资金费 HTTP。
+
+资金费阶段最多等 7 秒，盘口预算最多等到该阶段开始后第 8 秒；不会阻塞主循环，不会无限排队，持仓跟踪先调度。失败/预算不足则记录资金费未知，盘口可用时仍开 provisional 仓位；盘口也不能获取时按原逻辑跳过。首轮、+1s、腿间延迟及四金额档共用快照，不为每档多发请求；若延迟变体开仓已跨结算或快照超过 300 秒，则该变体资金费未知。完整快照随 positions 保存，重启不改写旧仓位费率，内存缓存重建。
+
+`funding_known=false` 不计主收益。估算仍是“开仓费率 × 每次跨越的结算点”，多头支付、空头收取，保留 funding_estimated，不是最终资金费历史回放。状态与日报的 funding_unknown_ratio 按仓位（3 变体 × 4 档）计数，分子是任一腿未知的仓位数，分母 funding_observations；分母 0 时 null。日报按当日未平开仓及当日平仓窗口，status 同用今日窗口；open_funding_unknown_ratio 另覆盖所有当前持仓。
+
+### F2 默认手续费复核
+
+下表均为 taker，无代币折扣、返佣或活动；配置值为小数比率。普通加密资产/USDT 市场公开基准，不是特定账户费率证明。**六家现货均已填入；未确认项仅 `binance:future`，默认 null，状态/日报/report 的 unconfigured_fees 会列出。**
+
+| 交易所 | 现货 taker（配置值） | USDT 合约 taker（配置值） | 官方出处与证据 | 查询日期 |
+| --- | --- | --- | --- | --- |
+| Gate | 0.100%（0.001） | 0.0500%（0.0005） | [2026-04-09 现货及合约费率调整公告](https://www.gate.com/announcements/article/50390)：VIP0 现货 0.100%，合约 A/B/C 组 VIP0 均 0.0500%。不采用 Learn 文章的旧 0.20% 或 contracts 响应中的未绑定 VIP 手续费字段 | 2026-11-09 |
+| Bitget | 0.1%（0.001） | 0.06%（0.0006） | [Trading Fees FAQ](https://www.bitget.com/support/articles/12560603892734/) 明示基础 spot/futures taker，未计 BGB/VIP 优惠 | 2026-11-09 |
+| Binance | 0.100%（0.001） | **未核实（null）** | [现货 Regular User 费率表](https://www.binance.com/en/fee/trading) 可读；[USDS-M 费率表](https://www.binance.com/en/fee/futureFee) 本次 No records found，本机公开抓取为空；[官方 FAQ](https://www.binance.com/en/support/faq/detail/360033544231) 的 0.05% 明示 hypothetical fee rates，故不当成已确认当前费率填入 | 2026-11-09 |
+| Bybit | 0.1000%（0.001） | 0.0550%（0.00055） | [Trading Fee Structure](https://www.bybit.com/en/help-center/article/Trading-Fee-Structure)：VIP0 Crypto-Crypto spot 与普通 perpetual/futures；特殊板块、地区有不同表 | 2026-11-09 |
+| OKX | 0.100%（0.001） | 0.05%（0.0005） | [公开费用页](https://www.okx.com/fees) HTML 的 tableData.normal 原始 Regular user 行：level=0、tradeType=1、takerFee=0.001（证据已存 fees/okx-spot.json）；[合约费率说明](https://www.okx.com/help/how-to-calculate-the-contract-transaction-fee) 明示普通 Lv1 taker 0.05%。不套用 UAE/EEA/US 地区另一套现货表 | 2026-11-09 |
+| Aster | 0.04%（0.0004） | 0.04%（0.0004） | [Spot Fee Structure](https://docs.asterdex.com/trading/spot/spot-fee-structure)、[USDT Perpetual Fees](https://docs.asterdex.com/trading/perpetuals/fees-and-specs/fees)；合约已从旧设计 0.035% 更新。 [VIP Program](https://docs.asterdex.com/program-and-rewards/vip-program) 区分 General、Group B 与 RWA，不能视为所有市场统一费率 | 2026-11-09 |
+
+默认 null 会使 Binance 合约相关事件 fee_unconfigured，覆盖率分母仍保留；六家资金费冒烟与解析测试独立于交易手续费配置，故 Binance 资金费解析通过不等于已允许其默认配置开仓。下轮可在获得真实当前官方费率表依据后补齐该项。显式 CLI/env JSON 为整体覆盖，不填的项继续拒绝；unconfigured_fees 对应最近一次 run 配置，并非逐笔历史配置快照。
+
+### F3 / F4
+
+- sell.market_type=spot：`unsupported_spot_short`，filter_passed 保持 true；不请求该事件的规格/资金费/盘口，不产生持仓，计入 considered_events 和还在率分母。buy spot + sell future 允许模拟，spot 资金费为零。
+- PM 负责生产 guard.json。`tools/fill_sim/README.md` 新增独立“guard.json 字段契约（由 PM 生成）”：timestamp 必须有限数值 UTC 秒，最多旧 90 秒、最多超前 5 秒；卡顿次数必须非负整数，>4 停止；两个基线比较字段为布尔，缺失允许运行但资源证据 UNKNOWN，false 不单独立即停服。缺必填项/坏格式/类型错误停服 78；验证了 90 秒、5 秒边界和 NaN/Infinity/bool/string 等异常。未写生产监控。
+
+### 本轮验收原始结果
+
+环境仍为 Windows Python **3.12.10**、SQLite **3.49.1**。实际执行全部 unittest；全部 13 个 Python 文件通过 `ast.parse(feature_version=(3,10))`，`python -m compileall -q tools/fill_sim` 成功，提交前 `git diff --cached --check` 成功。目标 Ubuntu Python 3.10.12/SQLite 3.37 实机仍未运行。
+
+```text
+python -m unittest discover -s tools/fill_sim/tests -v
+----------------------------------------------------------------------
+Ran 101 tests in 1.075s
+
+OK
+```
+
+完整原始输出在 `tools/fill_sim/tests/test-output-pm-round1.txt`。新增覆盖：六家录制资金费解析、小时/毫秒/秒转换、负率及实际周期、OKX 最近结算点、缺周期不猜、市场错配/重复/非有限/过期响应、两次请求共享限频、429 暂停、300 秒 TTL/负缓存/跨结算失效、多变体共用/跨事件复用、异常 provisional 主收益排除、快照持久化/等待中重启、超时不阻塞持仓、现货方向与覆盖分母、状态/日报未知比例、默认费用一致性和 null 列表、guard 字段契约。
+
+联网命令及原始摘要：
+
+```text
+python -m tools.fill_sim.smoke --include-spot --fixtures tools/fill_sim/tests/fixtures
+SMOKE exchanges=6 markets=12 failures=0
+FUNDING exchanges=6 parsed=6 failures=0
+```
+
+最终录制 **2026-11-09 07:17:06–07:17:29 UTC** 左右完成，共 32 次公开 GET：12 市场 ×（规格+深度）=24，资金费=8（Binance/Aster 各 2，其余各 1）。完整输出在 `tools/fill_sim/tests/smoke-output-pm-round1.txt`。六家资金费解析摘要（rate 是小数比率，不是百分数）：
+
+| 市场 | rate | next（UTC 秒） | interval（秒） | captured_at（UTC） |
+| --- | ---: | ---: | ---: | --- |
+| gate future BTC_USDT | 0.0001 | 1794211200 | 28800 | 07:17:08.290068 |
+| bitget future BTCUSDT | 0.0001 | 1794211200 | 28800 | 07:17:09.762993 |
+| binance future BTCUSDT | 0.00010000 | 1794211200 | 28800 | 07:17:11.567260 |
+| bybit future BTCUSDT | 0.00009296 | 1794211200 | 28800 | 07:17:14.698087 |
+| okx future BTC-USDT-SWAP | 0.0000995657001196 | 1794211200 | 28800 | 07:17:16.172263 |
+| aster future BTCUSDT | 0.00010000 | 1794211200 | 28800 | 07:17:23.194662 |
+
+六个 next 均为当日 08:00:00 UTC；本次 BTC 都是 8 小时，代码和测试仍接受真实 1/4 小时等周期，不由 BTC 推断所有市场。四档 Gate→Aster 示例均 gone，净价差约 -17.12093 bp；采用新费用，仍是非同步快照工程示例，不是可交易结论。
+
+### 剩余风险与下一任务
+
+1. Binance 合约默认 null 是本轮唯一未取得当前公开费率表的项；其事件默认跳过，不能以 FAQ 假设偷偷补齐。
+2. 资金费来源缺口已补，但使用开仓快照估算，不覆盖持仓中费率/结算间隔变化或最终扣款。5 分钟负缓存可能延后恢复；到期立即失效、冷请求和共享预算会增大实测延迟，须用真实观察判断影响。
+3. 费用配置仍按 exchange × market_type，不能自动识别所有特殊费率组/活动/地区。特别是 Aster Group B/RWA、Bybit 特殊板块，生产观察前要明确普通市场范围或另开任务扩展精确市场费率，不能用当前默认宣称这些组净收益已核实。
+4. 本轮未做独立子代理审查；已自查差异、运行回归及公开冒烟。代码供下一独立审查/Claude 验收任务使用，未获实盘或生产资源验收结论。
+5. PM 生成 guard、Ubuntu 目标运行时验证、七天观察与共享出口影响仍待下一部署/验收任务。Aster 新资金费用 V3，原规格/深度 V1 的接口演进风险仍存在。
+6. 开始时无其他 WIP；只提交本轮模块文件，未跟踪测试缓存由既有 .gitignore 忽略，无真实 env、密钥或运行库产物。下一模块请另建任务并从本节继续；本轮到本地提交和交接为止。

@@ -17,7 +17,7 @@ python -m compileall -q tools/fill_sim
 python -m tools.fill_sim.smoke --include-spot --fixtures tools/fill_sim/tests/fixtures
 ```
 
-冒烟顺序获取六家 BTC 合约/现货规格和 50 档深度，打印转换结果与四档模拟 fills；跨所 BTC 示例是非同步快照的工程演示，不能用于交易判断。费用来自 `deploy/fill-sim.env.example`，仅为设计稿假设。
+冒烟顺序获取六家 BTC 合约/现货规格和 50 档深度，以及六家合约资金费快照，打印解析结果与四档模拟 fills；跨所 BTC 示例是非同步快照的工程演示，不能用于交易判断。费用来自 `deploy/fill-sim.env.example`；2026-11-09 官方核对出处及未确认项见本轮交接。
 
 进入 `tools/` 后可使用任务书的命令形式：
 
@@ -43,13 +43,18 @@ python3 -m fill_sim run --env-file /path/to/fill-sim.env
 
 ## 资金费和手续费边界
 
-普通 taoli1 `/api/shadow/trades` payload 未保证提供两腿开仓资金费率、下次结算时间和周期；不能用影子最终 funding_bps 代替独立模拟仓位的持仓资金费。本期按“只请求深度/规格接口”约束，没有增加资金费或 ticker 列表请求。
+按“PM decisions 第一轮补充”，独立请求公开资金费，不读取或信任上游 `payload.tracking`、`fill_sim_funding` 或影子最终 funding_bps。各所端点、字段和官方来源见本轮交接。
 
-纯计算层支持可审计的开仓快照字段 `fill_sim_funding`（两腿列表），每腿为 `{"rate": 0.0001, "next": 1794206000, "interval": 28800}`。rate 单位为比率，next 为 UTC 秒，interval 为秒。现货自动为零；合约在每个跨过的结算时点按开仓快照估算，多头支付、空头收取。该可选字段当前上游没有接通，属于明确的集成缺口。
+- 在首轮盘口前获取合约腿的 rate / next / interval，并保存原始市场 key、捕获时间、来源 URL。rate 是小数比率，next 是 UTC 秒，interval 是秒；现货为 `{"spot":true}`，资金费恒为 0。Binance/Aster 需要 premiumIndex 和 fundingInfo 两个公开请求，其余每腿一个。Binance fundingInfo 返回配置列表；只提取该 exact symbol，不访问行情列表。
+- `exchange|market_type|raw_symbol` 缓存 300 秒，最多 2048 个市场；成功及失败结果均缓存，失败仍是未知而非零。已过 next 结算点的成功快照不能用于新开仓。市场缓存只在内存，重启后重取；已开仓快照随仓位持久化，不被以后刷新覆盖。
+- 异步等待资金费最多 7 秒（覆盖两个 3 秒 socket timeout），随后最多再等 1 秒盘口预算；始终先调度到期持仓，最多 4 个公开请求在途。规格、盘口、资金费共用原来的令牌桶与滚动秒窗，不提高请求上限。额度、超时或解析失败记 funding_errors，盘口可取时仍模拟并标未知；盘口也无预算则记 skipped_rate_limit。等待占用 10 个机会组限额，算入实测延迟。三变体和四金额档共用本次快照，不重复获取；若延迟变体开仓已跨过快照结算时间，保守标未知。
+- 合约在持仓跨结算时，以开仓费率和间隔重复估算：多头支付、空头收取。`funding_estimated=true`；不声称使用了最终结算费率。字段缺失、错误市场、缺少周期、非有限数字、已过期结算点、带服务端时间但偏差超过 90 秒的响应均不能当已知。
+- `funding_known=false` 的仓位排除主收益和盈利通过线，保留原有 `provisional_price_only` 辅助统计。该辅助统计沿用所有非 stale/unpriced 已平仓样本（也包含已知资金费样本），不是独立的未知资金费样本集。
+- 状态和日报新增 `funding_unknown`、`funding_observations`、`funding_unknown_ratio`：按三变体 × 四金额档的仓位数计数，任一腿未知即该仓位未知，比例=未知数/观察仓位数，无仓位为 null。日报窗口包括当日开仓且仍未平仓的仓位及当日平仓的仓位；status 的这三项采用今日 UTC 同一口径，另有 `open_funding_unknown_ratio` 覆盖所有当前未平仓仓位。
 
-缺快照的仓位仍可模拟、记录价格损益，但 `funding_known=false`，不计入主收益或盈利通过线。日报提供 `provisional_price_only` 用于观察这类不完整结果，不能作为完整净收益。默认全是合约腿时，此缺口会使主收益样本不足；上线观察前须另行授权并实现公开资金费数据来源或扩展上游契约，不能声称已具备完整盈利验收条件。
+默认费用在 `default-fees.json`，env 样例同步列出；`--fees-json` / `FILL_SIM_FEES_JSON` 可以整体覆盖，显式缺项或 null 不会偷偷补默认。费率单位为小数比率，基于普通 USDT 加密资产市场的公开 VIP0/普通等级，不计代币折扣、返佣和活动。六家现货默认已补齐；Aster USDT 合约由 0.00035 改为 0.0004。Binance 合约动态费率表本次未取得，FAQ 的 0.05% 明示为假设示例，故暂为 null，涉及该腿记 `fee_unconfigured`。`unconfigured_fees` 在状态/日报/report 列出最近一次 run 配置缺项（无运行配置时列出软件默认缺项），不代表逐笔历史费率。
 
-`FILL_SIM_FEES_JSON` 按 exchange × future/spot 配置小数费率，无生产代码默认费率。样例合约费仅来自设计稿，尚未逐所核验最新 VIP0/地区/活动条件；现货费默认 null，涉及现货时记录 `fee_unconfigured`。现货卖腿仅模拟已有币库存卖出，不证明可借币做空；借贷利息、库存/保证金/账户权限和实际撮合不在本模型内。
+现货出现在 sell 一侧时，在规格/资金费/盘口请求前记 `unsupported_spot_short`，不开仓，保留在过滤通过事件和覆盖率分母。现货 buy + 合约 sell 允许模拟。借贷利息、库存/保证金/账户权限和实际撮合仍不在本模型内。特殊板块、Aster Group B/RWA、Bybit 创新区/盘前等费率不能套用普通默认；部署前须确认实际市场范围和账户地区。
 
 ## 持久化、报表、资源
 
@@ -61,13 +66,26 @@ python3 -m fill_sim run --env-file /path/to/fill-sim.env
 - `report --days 7` 逐项输出 PASS / FAIL / UNKNOWN；缺资源基线证据为 UNKNOWN，退出码 1；全部通过退出码 0。
 - systemd 模板不会自行安装。准备代码时保留 `tools/fill_sim` 布局，部署根目录为 `/home/ubuntu/wubin/fill-sim`，预先建立可写 `var/`、`out/`，其余只读。资源超限/守护异常退出码 78，`RestartPreventExitStatus=78` 阻止自动重启绕过守护。
 
-现有生产守护需原子写本地 JSON 文件（示例是结构说明，**不是实测证据**）：
+## guard.json 字段契约（由 PM 生成）
+
+PM 的服务器监控通过 `FILL_SIM_GUARD_FILE` / `--guard-file` 指定绝对路径。fill-sim 只读该文件，本包不生成生产监控数据。文件必须是 UTF-8 **无 BOM** JSON 对象；建议每 30 秒或更快在同目录写临时文件，再原子 rename/replace，避免读到半份 JSON。额外字段忽略。
+
+| 字段 | JSON 类型 / 单位 | 必填与缺失行为 | 有效值及用途 |
+| --- | --- | --- | --- |
+| `timestamp` | 有限 number，UTC Unix **秒**（可含小数，不是毫秒或字符串） | 必填；缺失/类型错误 → `guard_metrics_unavailable` | 检查时 `-5 <= now-timestamp <= 90`；超过 **90 秒**或超前超过 **5 秒** → `guard_metrics_stale`。边界 90/-5 秒有效。NaN/Infinity/bool 不接受。 |
+| `taoli_stalls_last_hour` | integer，最近滚动 3600 秒的 taoli1 卡顿次数 | 必填；缺失/负数/小数/bool/字符串 → `guard_metrics_unavailable` | 0–4 可继续；>4 → `taoli_stalls` 停止。卡顿定义与基线采集方法由 PM 沿用生产监控。 |
+| `taoli_stalls_not_worse` | boolean | 资源验收需要；缺失允许运行，但对应资源证据 UNKNOWN；存在但不是 bool → `guard_metrics_unavailable` | true 表示不劣于 PM 选定的对照基线；false 作为资源验收不通过证据，不单独触发立即停止。 |
+| `no_429_increase` | boolean | 同上 | true 表示共享出口/taoli1 的限频情况较基线未增加；false 使资源验收不通过，不单独触发立即停止。本服务自身限频计数还会独立参与验收。 |
+
+结构示例（**不是实测证据**，必须替换时间戳和测量值）：
 
 ```json
 {"timestamp":1794206000,"taoli_stalls_last_hour":2,"taoli_stalls_not_worse":true,"no_429_increase":true}
 ```
 
-每 30 秒检查 Linux MemAvailable <200 MiB、RSS ≥120 MiB、taoli1 卡顿 >4/h，任一满足则停服。守护文件缺失/超过 90 秒/格式错误也停服。布尔字段用于观察期资源通过线，需由生产监控提供对比基线，本任务未修改既有守护脚本、未连接生产机。
+启动时在任何网络请求之前检查，之后每 30 秒检查一次。路径未配置 → `guard_file_required`；文件不存在/无权限/非对象/格式错误/缺必填字段 → `guard_metrics_unavailable`。以上停止条件写入 status.stop_reason，退出码 **78**，systemd 的 `RestartPreventExitStatus=78` 阻止自动重启。轮询不是实时监控，超过 90 秒后最迟下一个 30 秒检查点停服。
+
+Linux `MemAvailable <200 MiB` 和本进程 `RSS >=120 MiB` 由 fill-sim 自己读取，分别记 `low_memory`、`rss_limit`，无需 PM 在 JSON 中填写。`taoli_stalls_not_worse` / `no_429_increase` 的基线、统计区间须由 PM 真实维护，不能固定填 true。未接入生产的守护与七天资源验收仍未完成。
 
 ## 代码入口
 
@@ -75,6 +93,8 @@ python3 -m fill_sim run --env-file /path/to/fill-sim.env
 | --- | --- |
 | `core.py` | 身份/规格/盘口模型、Decimal VWAP、取整、退出及资金费计算 |
 | `exchanges.py` | 六家 exact symbol 公开规格/深度请求与解析 |
+| `funding.py` | 六家公开资金费端点、周期与时间单位解析 |
+| `default-fees.json` | 官方核对后的默认费用，未确认项为 null |
 | `network.py` | GET、限频预算、暂停、API 轮询退避 |
 | `engine.py` | 机会组上限、三变体、持仓优先调度及恢复 |
 | `storage.py` | SQLite、事务、日归档、进程锁、运行证据 |
