@@ -126,7 +126,7 @@ class Store:
     def recover(self):
         # Never replay partial opening sequences using new books after restart.
         with self.transaction():
-            for (raw,) in self.db.execute("SELECT data FROM events WHERE status IN ('pending','measured','awaiting_specs')").fetchall():
+            for (raw,) in self.db.execute("SELECT data FROM events WHERE status IN ('pending','measured','awaiting_specs','awaiting_funding')").fetchall():
                 e = json.loads(raw)
                 e["status"] = "interrupted_restart"
                 self.event(e)
@@ -173,7 +173,7 @@ class Store:
             return
         self.db.commit()
         dates = [r[0] for r in self.db.execute("""SELECT DISTINCT date(t1,'unixepoch') FROM events
-            WHERE date(t1,'unixepoch') < ? AND status NOT IN ('pending','measured','awaiting_specs')
+            WHERE date(t1,'unixepoch') < ? AND status NOT IN ('pending','measured','awaiting_specs','awaiting_funding')
             AND id NOT IN (SELECT event_id FROM positions WHERE closed_at IS NULL)""", (today,))]
         self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         self.db.execute("PRAGMA journal_mode=DELETE")
@@ -186,7 +186,7 @@ class Store:
                 self.db.execute("ATTACH DATABASE ? AS archive", (str(archive),))
                 try:
                     with self.transaction():
-                        self.db.execute("CREATE TEMP TABLE moving AS SELECT id FROM events WHERE date(t1,'unixepoch')=? AND status NOT IN ('pending','measured','awaiting_specs') AND id NOT IN (SELECT event_id FROM positions WHERE closed_at IS NULL)", (date,))
+                        self.db.execute("CREATE TEMP TABLE moving AS SELECT id FROM events WHERE date(t1,'unixepoch')=? AND status NOT IN ('pending','measured','awaiting_specs','awaiting_funding') AND id NOT IN (SELECT event_id FROM positions WHERE closed_at IS NULL)", (date,))
                         for table, key in (("events", "id"), ("fills", "event_id"), ("positions", "event_id")):
                             self.db.execute("INSERT OR REPLACE INTO archive.%s SELECT * FROM main.%s WHERE %s IN (SELECT id FROM moving)" % (table, table, key))
                             self.db.execute("DELETE FROM main.%s WHERE %s IN (SELECT id FROM moving)" % (table, key))

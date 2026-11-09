@@ -35,6 +35,10 @@ def endpoint(m, kind):
 
 
 def check_response(ex, data):
+    if isinstance(data, list) and ex in ("binance", "aster"):
+        for row in data:
+            check_response(ex, row)
+        return
     if not isinstance(data, dict):
         raise ValueError("invalid_response")
     code = str(data.get("retCode" if ex == "bybit" else "code", "0"))

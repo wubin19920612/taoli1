@@ -9,6 +9,7 @@ from .core import (AMOUNTS, EXCHANGES, Market, Spec, Book, timestamp, opening,
                    closing, track_interval, walk, dec)
 from .exchanges import endpoint, parse_book, parse_spec
 from .network import RateLimited
+from .funding import TTL, fetch_funding
 
 
 def pair_key(payload):
@@ -38,28 +39,6 @@ def trigger_reason(payload, now):
     return None
 
 
-def funding_snapshot(payload, markets):
-    # Public shadow payload normally omits internal tracking funding. Optional
-    # explicit snapshots use ratio/seconds; never reuse mutable closing estimates.
-    supplied = payload.get("fill_sim_funding")
-    snapshots = []
-    for i, m in enumerate(markets):
-        if m.market_type == "spot":
-            snapshots.append({"spot": True})
-        elif isinstance(supplied, list) and len(supplied) == 2:
-            s = supplied[i]
-            try:
-                valid = isinstance(s, dict) and dec(s["interval"]) > 0
-                if valid:
-                    s = dict(rate=str(dec(s["rate"])), next=float(dec(s["next"])), interval=float(dec(s["interval"])))
-                snapshots.append(s if valid else None)
-            except (KeyError, ValueError, TypeError):
-                snapshots.append(None)
-        else:
-            snapshots.append(None)
-    return snapshots
-
-
 class Engine:
     def __init__(self, store, client, fees, clock=time.time, executor=None):
         self.store, self.client, self.fees, self.clock = store, client, fees, clock
@@ -72,6 +51,7 @@ class Engine:
                 if clock() - last > 60 and p["failed_since"][i] is None:
                     p["failed_since"][i] = last
         self.pending, self.jobs, self.spec_jobs = {}, {}, {}
+        self.funding_cache, self.funding_jobs = {}, {}
         self.cache = store.meta("spec_cache", {})
         self.want_specs = {}
         self.spec_retry = {}
@@ -98,7 +78,7 @@ class Engine:
         return {p["event_id"] for p in self.positions.values()} | set(self.pending)
 
     def _inflight(self):
-        return sum(len(job["futures"]) for job in self.jobs.values()) + len(self.spec_jobs)
+        return sum(len(job["futures"]) for job in self.jobs.values()) + len(self.spec_jobs) + len(self.funding_jobs)
 
     def _fetch_book(self, market, spec):
         raw = self.client.fetch(market.exchange, endpoint(market, "depth"), reserved=True)
@@ -110,6 +90,79 @@ class Engine:
         futures = [self.executor.submit(self._fetch_book, m, s) for m, s in zip(markets, specs)]
         self.jobs[key] = dict(kind=kind, event=event, futures=futures)
         return True
+
+    def _cached_funding(self, m):
+        if m.market_type == "spot":
+            return dict(at=self.clock(), snapshot={"spot": True}, error=None)
+        value = self.funding_cache.get(m.key)
+        if value and 0 <= self.clock() - value["at"] < TTL:
+            snapshot = value["snapshot"]
+            if snapshot is None or snapshot["next"] > self.clock():
+                return value
+        return None
+
+    def _start_open(self, event, markets, specs):
+        values = [self._cached_funding(m) for m in markets]
+        if all(v is not None for v in values):
+            event["funding"] = [v["snapshot"] for v in values]
+            event["funding_errors"] = [v.get("error") for v in values]
+            admitted = self._submit(event["id"], "first", event, markets, specs)
+            if admitted:
+                event["status"] = "pending"
+            return admitted
+        event.update(status="awaiting_funding", funding_deadline=self.clock()+7)
+        return True
+
+    def _finish_funding(self):
+        now = self.clock()
+        for key, future in list(self.funding_jobs.items()):
+            if not future.done():
+                continue
+            del self.funding_jobs[key]
+            try:
+                snapshot, error = future.result(), None
+            except Exception as exc:
+                snapshot, error = None, type(exc).__name__
+            self.funding_cache[key] = dict(at=snapshot["captured_at"] if snapshot else now,
+                                          snapshot=snapshot, error=error)
+        self.funding_cache = {k:v for k,v in self.funding_cache.items() if 0 <= now-v["at"] < TTL}
+        # Bound memory even during a very large unique-market trigger burst.
+        if len(self.funding_cache) > 2048:
+            self.funding_cache = dict(sorted(self.funding_cache.items(), key=lambda kv: kv[1]["at"])[-2048:])
+
+    def _advance_funding(self, event):
+        markets = [Market(**m) for m in event["markets"]]
+        now = self.clock()
+        values = [self._cached_funding(m) for m in markets]
+        ready = all(v is not None for v in values)
+        expired = now >= event["funding_deadline"]
+        if not ready and not expired and not self.tracking_due():
+            for m, value in zip(markets, values):
+                if value is None and m.key not in self.funding_jobs:
+                    if self._inflight() < 4 and self.client.limiter.acquire([m.exchange]):
+                        self.funding_jobs[m.key] = self.executor.submit(
+                            fetch_funding, self.client, m, self.clock, True)
+        if not (ready or expired):
+            return
+        event["funding"] = [v["snapshot"] if v else None for v in values]
+        event["funding_errors"] = [v.get("error") if v else "funding_timeout_or_budget" for v in values]
+        specs = [Spec(**s) for s in event["specs"]]
+        # Funding may have consumed this second's budget. Wait only within the
+        # bounded opening phase, and always let due position tracking go first.
+        if now-event["t0"] > 120:
+            reason = "skipped_stale_trigger"
+        elif not self.tracking_due() and self._submit(event["id"], "first", event, markets, specs):
+            reason = None
+        elif now < event["funding_deadline"]+1:
+            return
+        else:
+            reason = "skipped_rate_limit"
+        with self.store.transaction():
+            event["status"] = reason or "pending"
+            self.store.event(event)
+            if reason:
+                self._failed_variants(event, ("measured", "plus_1s", "leg_delay"), reason)
+                self.pending.pop(event["id"], None)
 
     def ingest(self, payload):
         now = self.clock()
@@ -132,7 +185,9 @@ class Engine:
             key = pair_key(payload)
             active_keys = {p["pair_key"] for p in self.positions.values()} | {p["pair_key"] for p in self.pending.values()}
             event.update(pair_key=key, markets=[asdict(m) for m in markets])
-            if key in active_keys:
+            if markets[1].market_type == "spot":
+                reason = "unsupported_spot_short"
+            elif key in active_keys:
                 reason = "skipped_duplicate_position"
             elif len(self.active_events()) >= 10:
                 reason = "skipped_capacity"
@@ -157,11 +212,11 @@ class Engine:
                     reason = str(exc)
             if reason is None:
                 event["specs"] = [asdict(s) for s in specs]
-                if self.tracking_due() or not self._submit(identity, "first", event, markets, specs):
+                if self.tracking_due() or not self._start_open(event, markets, specs):
                     reason = "skipped_rate_limit"
                 else:
                     self.pending[identity] = event
-        event["status"] = reason or "pending"
+        event["status"] = reason or event["status"]
         with self.store.transaction():
             self.store.event(event)
 
@@ -186,6 +241,10 @@ class Engine:
         payload, now = event["payload"], self.clock()
         markets = [Market(**m) for m in event["markets"]]
         specs = [Spec(**s) for s in event["specs"]]
+        # Never roll an expired pre-settlement quote into a new funding period.
+        funding = [s if s and (s.get("spot") or
+                   (0 <= now-s["captured_at"] < TTL and s["next"] > now)) else None
+                   for s in event["funding"]]
         for amount in AMOUNTS:
             f = opening(*books, *specs, amount, *(self.fees[m.exchange][m.market_type] for m in markets))
             f.update(id="%s:%s:%d" % (event["id"], variant, amount), event_id=event["id"], variant=variant,
@@ -203,7 +262,9 @@ class Engine:
                          last_books=[b.to_dict() for b in books],
                          last_good=[b.received_at for b in books],
                          failed_since=[None, None],
-                         funding=funding_snapshot(payload, markets),
+                         funding=funding,
+                         funding_known=all(s is not None for s in funding),
+                         funding_errors=event.get("funding_errors", []),
                          shadow_net_bps=payload.get("net_bps") if payload.get("closed_at") else None)
                 self.positions[p["id"]] = p
                 self.store.position(p)
@@ -306,6 +367,7 @@ class Engine:
     def tick(self):
         now = self.clock()
         self._finish_jobs()
+        self._finish_funding()
         # Stale checks do not depend on request admission or an exchange unpausing.
         with self.store.transaction():
             for p in list(self.positions.values()):
@@ -325,6 +387,9 @@ class Engine:
                                 row["failed_since"] = [t if t is not None else now for t in row.get("failed_since", [None, None])]
                                 self.store.position(row)
         for key, event in list(self.pending.items()):
+            if event["status"] == "awaiting_funding":
+                self._advance_funding(event)
+                continue
             if event["status"] == "awaiting_specs":
                 markets = [Market(**m) for m in event["markets"]]
                 reason = None
@@ -348,12 +413,12 @@ class Engine:
                         reason = "skipped_stale_trigger"
                     else:
                         event["specs"] = [asdict(s) for s in specs]
-                        if self.tracking_due() or not self._submit(key, "first", event, markets, specs):
+                        if self.tracking_due() or not self._start_open(event, markets, specs):
                             reason = "skipped_rate_limit"
                 except ValueError as exc:
                     reason = str(exc)
                 with self.store.transaction():
-                    event["status"] = reason or "pending"
+                    event["status"] = reason or event["status"]
                     self.store.event(event)
                     if reason:
                         self._failed_variants(event, ("measured", "plus_1s", "leg_delay"), reason)

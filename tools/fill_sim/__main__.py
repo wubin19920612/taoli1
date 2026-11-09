@@ -14,6 +14,15 @@ from .reporting import summarize, gates
 from .storage import Store, atomic_json, run_lock
 
 
+def default_fees_json():
+    return Path(__file__).with_name("default-fees.json").read_text(encoding="utf-8")
+
+
+def unconfigured_fees(fees):
+    return [ex+":"+kind for ex in EXCHANGES for kind in ("future", "spot")
+            if fees.get(ex, {}).get(kind) is None]
+
+
 def load_env(path):
     """Explicit fill-sim env only, never repository .env; no shell interpolation."""
     if not path:
@@ -67,6 +76,16 @@ def guard(path, now):
         return "guard_file_required", {}
     try:
         metrics = json.loads(Path(path).read_text(encoding="utf-8"))
+        if not isinstance(metrics, dict):
+            raise ValueError("invalid_guard")
+        if type(metrics["timestamp"]) not in (int, float):
+            raise ValueError("invalid_guard")
+        dec(metrics["timestamp"])
+        if type(metrics["taoli_stalls_last_hour"]) is not int:
+            raise ValueError("invalid_guard")
+        for field in ("taoli_stalls_not_worse", "no_429_increase"):
+            if field in metrics and type(metrics[field]) is not bool:
+                raise ValueError("invalid_guard")
         age = now - metrics["timestamp"]
         if age < -5 or age > 90:
             return "guard_metrics_stale", metrics
@@ -95,7 +114,9 @@ def window(store, since, until):
                 p["shadow_net_bps"] = shadow
             positions.append({k:v for k,v in p.items() if k not in
                               ("fill","markets","specs","last_books","last_executable_exit","funding","close_buy","close_sell")})
-    return summarize(events, fills, positions)
+    result = summarize(events, fills, positions)
+    result["unconfigured_fees"] = store.meta("unconfigured_fees", unconfigured_fees(json.loads(default_fees_json())))
+    return result
 
 
 def publish_daily(store, out, now):
@@ -123,6 +144,8 @@ def run(args):
             if kind not in ("spot", "future") or (value is not None and not 0 <= dec(value) < 1):
                 raise ValueError("invalid_fees")
     store = Store(args.db)
+    with store.transaction():
+        store.set_meta("unconfigured_fees", unconfigured_fees(fees))
     limiter = Limiter(args.exchange_rate, args.global_rate, state=store.meta("limiter"))
     api = ShadowAPI(args.api_base, os.environ.get("TAOLI1_API_TOKEN", ""))
     api.failures = store.meta("api_failures", 0)
@@ -159,6 +182,12 @@ def run(args):
                              rss_mb=rss, max_rss_mb=max_rss, exchanges=limiter.snapshot(), api_failures=api.failures,
                              positions=len(engine.positions), active_events=len(engine.active_events()),
                              today_events=summary["events"], today_open_events=summary["measured_300_open_events"],
+                             funding_unknown=summary["funding_unknown"],
+                             funding_observations=summary["funding_observations"],
+                             funding_unknown_ratio=summary["funding_unknown_ratio"],
+                             unconfigured_fees=summary["unconfigured_fees"],
+                             open_funding_unknown_ratio=(sum(not p.get("funding_known", False) for p in engine.positions.values())
+                                                         / len(engine.positions) if engine.positions else None),
                              stop_reason=guard_stop, resource_evidence=metrics)
                 atomic_json(Path(args.out) / "status.json", state)
                 with store.transaction():
@@ -220,7 +249,7 @@ def main(argv=None):
     parser.add_argument("--db", default=os.environ.get("FILL_SIM_DB", "fill_sim.db"))
     parser.add_argument("--out", default=os.environ.get("FILL_SIM_OUT", "out"))
     parser.add_argument("--api-base", default=os.environ.get("TAOLI1_API_BASE", "http://127.0.0.1:8000"))
-    parser.add_argument("--fees-json", default=os.environ.get("FILL_SIM_FEES_JSON", "{}"))
+    parser.add_argument("--fees-json", default=os.environ.get("FILL_SIM_FEES_JSON", default_fees_json()))
     parser.add_argument("--exchange-rate", type=float, default=float(os.environ.get("FILL_SIM_EXCHANGE_RATE", 2)))
     parser.add_argument("--global-rate", type=float, default=float(os.environ.get("FILL_SIM_GLOBAL_RATE", 8)))
     parser.add_argument("--guard-file", default=os.environ.get("FILL_SIM_GUARD_FILE"))

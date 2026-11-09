@@ -67,7 +67,10 @@ def summarize(events, fills, positions):
                              "p50": biases[len(biases)//2] if biases else None,
                              "p90": biases[int((len(biases)-1)*.9)] if biases else None},
                 groups=grouped, stale_exits=stats([p for p in closed if p.get("exit_reason") == "stale_exit"]),
-                funding_unknown=sum(not p.get("funding_known", False) for p in closed),
+                funding_unknown=sum(not p.get("funding_known", False) for p in positions),
+                funding_observations=len(positions),
+                funding_unknown_ratio=(sum(not p.get("funding_known", False) for p in positions) / len(positions)
+                                       if positions else None),
                 open_positions=sum(p.get("closed_at") is None for p in positions))
 
 

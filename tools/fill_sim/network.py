@@ -34,7 +34,7 @@ class Limiter:
     """Token buckets plus rolling one-second guard: no burst can exceed 2/8.
 
     Admission is nonblocking. Callers dispatch due positions before new events.
-    Specs and depth share the same budget. Clocks and counters survive restart.
+    Specs, funding and depth share the same budget. Counters survive restart.
     """
     def __init__(self, per_exchange=2, global_rate=8, clock=time.time, state=None):
         if not 0 < per_exchange <= 2 or not 0 < global_rate <= 8:
