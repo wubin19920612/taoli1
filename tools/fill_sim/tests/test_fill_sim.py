@@ -29,6 +29,16 @@ class OfflineCase(unittest.TestCase):
         self.addCleanup(self.no_network.stop)
 
 
+def send(limiter, exchanges):
+    client = PublicClient(limiter, lambda url: {})
+    try:
+        for ex in exchanges:
+            client.fetch(ex, ex)
+        return True
+    except RateLimited:
+        return False
+
+
 class Clock:
     def __init__(self, now=1794206000.0):
         self.now = now
@@ -228,33 +238,33 @@ class NetworkTests(OfflineCase):
         c, limiter = Clock(), None
         limiter = Limiter(clock=c)
         for ex in ("gate","binance","bybit","okx"):
-            self.assertTrue(limiter.acquire([ex,ex]))
-        self.assertFalse(limiter.acquire(["aster"]))
+            self.assertTrue(send(limiter, [ex,ex]))
+        self.assertFalse(send(limiter, ["aster"]))
         c.advance(.5)
-        self.assertFalse(limiter.acquire(["gate"]))
+        self.assertFalse(send(limiter, ["gate"]))
         c.advance(.5)
-        self.assertTrue(limiter.acquire(["gate","gate"]))
+        self.assertTrue(send(limiter, ["gate","gate"]))
 
-    def test_atomic_pair_reservation_does_not_consume_other_bucket(self):
+    def test_rejected_send_does_not_consume_other_venue(self):
         limiter = Limiter(clock=Clock())
-        self.assertTrue(limiter.acquire(["gate","gate"]))
-        self.assertFalse(limiter.acquire(["gate","aster"]))
-        self.assertTrue(limiter.acquire(["aster","aster"]))
+        self.assertTrue(send(limiter, ["gate","gate"]))
+        self.assertFalse(send(limiter, ["gate","aster"]))
+        self.assertTrue(send(limiter, ["aster","aster"]))
 
     def test_429_pause_exponential_and_restart(self):
         c = Clock()
         limiter = Limiter(clock=c)
         limiter.throttled("gate")
-        self.assertFalse(limiter.acquire(["gate"]))
+        self.assertFalse(send(limiter, ["gate"]))
         c.advance(60)
-        self.assertTrue(limiter.acquire(["gate"]))
+        self.assertTrue(send(limiter, ["gate"]))
         limiter.throttled("gate")
         c.advance(119)
-        self.assertFalse(limiter.acquire(["gate"]))
+        self.assertFalse(send(limiter, ["gate"]))
         recovered = Limiter(clock=c,state=limiter.stats)
-        self.assertFalse(recovered.acquire(["gate"]))
+        self.assertFalse(send(recovered, ["gate"]))
         c.advance(1)
-        self.assertTrue(recovered.acquire(["gate"]))
+        self.assertTrue(send(recovered, ["gate"]))
         self.assertEqual(recovered.stats["gate"]["rate_limits"],2)
 
     def test_http_418_429_and_body_code_are_accounted(self):
@@ -303,11 +313,11 @@ class NetworkTests(OfflineCase):
     def test_subsecond_budget_can_be_lowered_below_one(self):
         c = Clock()
         limiter = Limiter(.5, 8, clock=c)
-        self.assertTrue(limiter.acquire(["gate"]))
+        self.assertTrue(send(limiter, ["gate"]))
         c.advance(1)
-        self.assertFalse(limiter.acquire(["gate"]))
+        self.assertFalse(send(limiter, ["gate"]))
         c.advance(1)
-        self.assertTrue(limiter.acquire(["gate"]))
+        self.assertTrue(send(limiter, ["gate"]))
 
     def test_non200_api_response_uses_same_backoff(self):
         def transport(*a,**k):
@@ -332,13 +342,17 @@ class EngineTests(OfflineCase):
         self.addCleanup(self.engine.close)
         self.calls = []
         self.buy, self.sell = book(99,100,self.clock()), book(102,103,self.clock())
-        def fetch(m,s):
-            self.calls.append(m.exchange)
-            source = self.buy if m.exchange == "gate" else self.sell
+        def depth_transport(url):
+            if "order_book" not in url and "depth" not in url:
+                return {}
+            ex = "gate" if "gateio" in url else "aster"
+            self.calls.append(ex)
+            source = self.buy if ex == "gate" else self.sell
             if source is None:
                 raise ValueError("outage")
-            return replace(source,received_at=self.clock(),exchange_at=self.clock())
-        self.engine._fetch_book = fetch
+            return {"bids": source.bids, "asks": source.asks}
+        self.depth_transport = depth_transport
+        self.client.transport = depth_transport
         for leg in ("buy_market_key","sell_market_key"):
             m = Market.from_payload(event(self.clock)[leg])
             self.engine.cache[m.key] = dict(at=self.clock(),market=asdict(m),spec=asdict(spec()))
@@ -405,12 +419,17 @@ class EngineTests(OfflineCase):
     def test_positions_get_budget_before_new_openings(self):
         self.open_three()
         self.clock.advance(3)
-        self.assertTrue(self.client.limiter.acquire(["gate","aster"]))
+        self.assertTrue(send(self.client.limiter, ["gate","aster"]))
         self.engine.tick()
         self.engine.ingest(event(self.clock,"e2","OTHER"))
-        self.assertEqual(list(self.store.rows("events"))[-1]["status"],"skipped_rate_limit")
+        self.assertEqual(list(self.store.rows("events"))[-1]["status"],"pending")
         self.assertEqual(self.calls[-2:],["gate","aster"])
-        self.assertEqual(len(self.engine.jobs),1)
+        self.assertEqual(len(self.engine.jobs),2)
+        self.assertEqual(len(self.calls),6)
+        self.clock.advance(1)
+        self.engine.tick()
+        self.engine.tick()
+        self.assertEqual(sum(p["event_id"]=="e2" for p in self.engine.positions.values()),4)
 
     def test_restart_recovers_positions_and_ids_and_marks_partial_variants(self):
         self.engine.ingest(event(self.clock))
@@ -499,6 +518,7 @@ class EngineTests(OfflineCase):
         self.engine.tick()
         self.clock.advance(1)
         self.client.limiter.throttled("gate")
+        self.engine.tick()
         self.engine.tick()
         self.assertEqual(sum(f["status"]=="skipped_rate_limit" for f in self.store.rows("fills")),8)
         self.assertFalse(self.engine.pending)

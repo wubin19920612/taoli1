@@ -48,15 +48,13 @@ class SendAdmissionTests(base.OfflineCase):
         clock.advance(1)
         client.fetch('gate', 'next', True)
 
-    def test_delayed_reservations_cannot_be_redeemed_across_windows(self):
+    def test_reserved_argument_cannot_bypass_single_send_gate(self):
         clock = base.Clock(0)
         sent = []
         limiter = Limiter(clock=clock)
         client = PublicClient(limiter, lambda url: (sent.append((clock(), url)) or {}))
-        self.assertTrue(limiter.acquire(['gate', 'gate']))
         client.fetch('gate', 'gate', reserved=True)
         clock.advance(1)
-        self.assertTrue(limiter.acquire(['gate', 'gate']))
         for _ in range(3):
             try:
                 client.fetch('gate', 'gate', reserved=True)
@@ -367,7 +365,7 @@ class DeadlineTests(unittest.TestCase):
         for path in ('/headers', '/body'):
             start = time.monotonic()
             with self.assertRaisesRegex((TimeoutError, ValueError), 'deadline'):
-                get_json(self.url+path, timeout=.7)
+                get_json(self.url+path, total_timeout=.7)
             self.assertLess(time.monotonic()-start, 2)
             self.assertTrue(self.started.is_set())
 
@@ -399,7 +397,7 @@ def guard(path, now):
     return None, dict(timestamp=now, taoli_stalls_last_hour=0)
 app.guard = guard
 # Both executor paths use real trickling HTTP. No exchange requests.
-PublicClient.fetch = lambda self, *args, **kwargs: get_json(url+'/body')
+PublicClient._perform = lambda self, *args, **kwargs: get_json(url+'/body')
 sys.exit(app.main(['run','--db',root+'/run.db','--out',root+'/out','--api-base',url]))
 '''
             proc = subprocess.Popen([sys.executable, '-B', '-c', code, temp, self.url],

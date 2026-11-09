@@ -94,7 +94,7 @@ class FundingParserTests(base.OfflineCase):
         client = PublicClient(Limiter(clock=c),transport)
         fetch_funding(client,market("binance"),c)
         self.assertEqual(len(urls),2)
-        self.assertFalse(client.limiter.acquire(["binance"]))
+        self.assertFalse(base.send(client.limiter, ["binance"]))
         with self.assertRaises(RateLimited):
             fetch_funding(client,market("binance"),c)
 
@@ -106,13 +106,15 @@ class FundingParserTests(base.OfflineCase):
         with self.assertRaises(RateLimited):
             fetch_funding(client,market("gate"),c)
         self.assertEqual(client.limiter.stats["gate"]["paused_until"],150)
-        self.assertFalse(client.limiter.acquire(["gate"]))
+        self.assertFalse(base.send(client.limiter, ["gate"]))
 
 
 class FundingEngineTests(base.OfflineCase):
     setUp = base.EngineTests.setUp
 
     def public_transport(self, url):
+        if "order_book" in url or "depth" in url:
+            return self.depth_transport(url)
         self.funding_calls.append(url)
         if "gateio" in url:
             return {"name":"BTC_USDT","funding_rate":"0.0001","funding_interval":3600,
@@ -231,16 +233,20 @@ class FundingEngineTests(base.OfflineCase):
         self.engine.tick()
         self.assertEqual(len(self.engine.positions),4)
         self.assertTrue(all(not p["funding_known"] for p in self.engine.positions.values()))
-        self.assertEqual(self.engine._inflight(),2)
+        self.assertEqual(self.engine._inflight(),0)
+        self.assertFalse(self.engine.funding_jobs)
         self.engine.funding_jobs.clear()
 
-    def test_funding_requests_yield_to_due_tracking(self):
+    def test_funding_requests_share_opening_queue_without_reservations(self):
         self.engine.funding_cache.clear()
         self.engine.ingest(base.event(self.clock))
-        with patch.object(self.engine,"tracking_due",return_value=True):
-            self.engine.tick()
-        self.assertFalse(self.engine.funding_jobs)
-        self.assertTrue(all(s["requests"]==0 for s in self.client.limiter.stats.values()))
+        sent = []
+        self.client.transport = lambda url: (sent.append(url) or {})
+        self.engine.tick()
+        self.assertEqual(len(self.engine.funding_jobs),2)
+        self.assertEqual(len(sent),2)
+        self.assertEqual(sum(s["requests"] for s in self.client.limiter.stats.values()),2)
+        self.assertFalse(hasattr(self.client.limiter, "acquire"))
 
     def test_spot_sell_rejected_before_specs_and_in_coverage_denominator(self):
         self.engine.cache.clear()
