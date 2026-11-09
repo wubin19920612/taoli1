@@ -254,3 +254,68 @@ FUNDING exchanges=6 parsed=6 failures=0
 ## PM 补充（2026-11-09）：币安合约费率已核实
 
 PM 在官方页面 https://www.binance.com/en/fee/futureFee 核实（浏览器渲染后读取表格）：USDⓈ-M 合约 Regular User（30 天成交 < 500 万美元）USDT 保证金 maker 0.0200% / taker 0.0500%；BNB 抵扣 9 折后 0.0180% / 0.0450%。fill-sim 采用 taker 0.0005，不假设 BNB 抵扣。该页面是前端渲染的，直接抓 HTML 拿不到表格，这就是之前查不到的原因。
+
+---
+
+## 只读审查 8 项修复记录（2026-11-09）
+
+本节是当前实现状态，前文为历史记录。修复范围对应用户提供的 fillsim-review.log 末尾 P1-1、P1-2、P2-3 至 P2-8，共 8 项。模块目标为 fill-sim 的限频、停止边界、资源占用与统计正确性。
+
+### 分支、基线与本地提交
+
+- Worktree：`C:/Users/wubin/Desktop/code/codex/taoli1/.worktrees/fill-sim`，分支 `codex/fill-sim`。
+- 开始 HEAD：`99c54abddd03d041ec2d94159c1ed4ebc0c3bc1f`；开始时工作区干净。
+- `cedfcad` — `test(fill-sim): regress all eight review findings`：先加入失败回归；配置期望按 PM 已核实费率更新。
+- `f8a28aa` — `feat(fill-sim): bound requests caches and report aggregation`：8 项修复实现。
+- `4ce69db` — `test(fill-sim): verify delayed sends and record full review regression`：补充并发、归档和增量证据回归，保存最终全部测试原始输出。
+- 本节和包内 README 独立 docs 提交；用 `git log -1 --format=%H -- docs/task-handoff-2026-11-09-fill-sim.md` 获取其 hash，避免自引用。
+- 仅修改 `tools/fill_sim/` 和本交接文件；未改任务书、backend/frontend、compose、真实 env 或其他任务文件。未 push、未 SSH、未使用 WSL，未读真实凭据、未访问交易所或执行下单。测试仅使用自建 loopback HTTP 服务。
+- 无生产备份、部署或线上验证；生产版本不变。本轮验收到本地提交为止。
+
+### 逐项修复与验证入口
+
+| 问题 | 修复与业务行为 | 回归证据 |
+| --- | --- | --- |
+| P1-1 实际发送限频 | `network.py` 将调度 acquire 与最终 admit_send 分开，reserved 也必须经过实际准入。额度在整个 transport 调用期间占用，完成后再保留一秒，防止进程启动/DNS/线程暂停造成额度提前跨窗释放。预算仍同所 2、全局 8；慢响应时吞吐会更保守 | 重放旧的跨窗延迟序列；150 组不规则时刻、混合 reserved/direct、多交易所请求，对每个发送点开始的一秒窗检查上限；24 并发请求；额外验证准入后传输暂停 2 秒的情况 |
+| P1-2 HTTP 总截止与 guard 退出 | `get_json` 在私有管道中向标准库 `http_worker.py` 发送请求配置，每次总截止 3 秒；包括 DNS、TLS、慢头/慢体，到期 kill 并回收子进程。请求头不进入命令行，不跟随重定向。guard/RSS 在主循环每秒检查，检测停止后不跑完整日报，也不入账在途结果；既有恢复逻辑处理未完成事件 | loopback 连续每 0.1 秒返回一个字节，覆盖响应头/响应体；真实 run 子进程同时有公开请求/Shadow API 请求在途，实际退出码 78，触发后 2.031 秒，断言 <=10 秒；HTTP 429/Retry-After、302 不跟随及正常响应也验证 |
+| P2-3 报表/状态内存 | `window` 流式读取，`reporting.summarize` 使用可写临时目录中的窄字段 SQLite；1 MiB 页缓存，SQL distinct/分组/精确分位数，Python 保留输出分组及每日 bootstrap 合计。`Store.status_counts` 独立标量 SQL，状态不再构造完整报告。runtime_window 也改 SQL 聚合 | 6,000 开仓事件 ×3 变体 ×4 金额，共 72,000 fills 和 72,000 positions，后台采样峰值 RSS 增量 **1.898 MiB <20 MiB**；断言完整计数与偏差统计；归档/跨日平仓的 status 与 report 计数相同且禁止 status 调用 rows |
+| P2-4 规格缓存和失败重试 | `SPEC_CAPACITY=256`，缓存/待取队列各有容量上限，闲置 TTL=21,600 秒；优先保留当前持仓和待处理事件依赖。失败至少间隔 60 秒，失去所有依赖时清除失败任务及其陈旧缓存，避免下一次刷新扫描重新生成任务；成功清除 retry | 容量超限、闲置到期、活动依赖保留、事件到期后无请求、失败陈旧缓存不能复活、无缓存的队列 TTL/容量 |
+| P2-5 覆盖率资格 | `business_reason` 独立决定 `filter_passed`，时间检查由 `trigger_reason` 处理；业务合格的 stale/future 与其他执行跳过继续进入 considered_events | stale 和 future 两个合格事件进分母；业务不合格的过期事件不进；原 spot sell/重复/容量等断言保留 |
+| P2-6 窗口限频增量 | `runtime_rate_limits` meta 持久化上一采样累计值；同事务写 `rate_limit_samples(ts,delta)` 和 runtime 证据。仅新增限频让本区间失败；重启沿用基线，旧数据库从 limiter 快照初始化。两张采样表保留 30 天，窗口按采样结束时间选择；缺外部比较仍 UNKNOWN | 8 天前一次 429 不污染后续 7 天；真实 SQLite 重开后不重复计数；新 429 仍失败；采样 delta 原样断言 `[1,0,0,1]`；升级基线和缺失证据边界 |
+| P2-7 资金费与退出定价 | 无法定价退出保留原 `funding_known`；独立 `exit_pricing=unpriced`，正常定价为 priced。收益聚合要求 priced，即便误带 main_eligible 也不能混入收益 | 12 子仓位、其中 1 个实际资金费未知，全部 unpriced 后未知计数仍为 1/12，收益样本为 0；单独验证 exit_pricing 的收益过滤 |
+| P2-8 Binance 配置 | 使用 PM 在本文件上一节核实的 Regular User U 本位 USDT taker **0.0005**，同步默认 JSON 与已有 env 示例；默认 unconfigured_fees 为空，显式 null 仍报告缺项 | 两配置完整相等，Binance 精确等于 .0005，显式 null 仍出现在缺项列表。未降低既有断言或调整风险阈值 |
+
+### 最终原始测试结果
+
+环境：Windows Python **3.12.10**，SQLite **3.49.1**。所有 **15** 个 Python 文件通过 `ast.parse(feature_version=(3,10))`；目标 Ubuntu Python 3.10.12 / SQLite 3.37 仍未运行。测试使用实际可写临时目录 `tools/fill_sim/var/test-tmp`，通过子进程 stdout/stderr 合并直接保存 UTF-8 原始输出，避免 PowerShell 重排输出行。
+
+执行命令等价于：
+
+```powershell
+$env:TEMP = (Resolve-Path tools/fill_sim/var/test-tmp).Path
+$env:TMP = $env:TEMP
+python -B -m unittest discover -s tools/fill_sim/tests -v
+```
+
+最终原始汇总行（完整输出：`tools/fill_sim/tests/test-output-review.txt`）：
+
+```text
+----------------------------------------------------------------------
+Ran 119 tests in 9.032s
+
+OK
+GUARD_EXIT code=78 seconds_after_trigger=2.031
+REPORT_RSS events=6000 fills=72000 positions=72000 peak_delta_mib=1.898
+```
+
+119 项=原有 101 项 + 本轮 18 项回归；原有费率期望按 PM 决定更新，其他原有断言没有放宽。额外用 `git show 99c54ab:tools/fill_sim/reporting.py` 的基线实现对照 350 事件/700 仓位（打乱日期顺序）：所有报告字段相同，数值差异 <1e-10；bootstrap 保留每日组首次出现顺序及既有随机种子/样本数。`git diff --check` 与提交前暂存差异检查通过。此次只做本地实现与自查，没有独立审查者的通过结论。
+
+### 当前边界与下一步
+
+- 报表已消除按交易条数保留 Python 列表的内存增长；返回 JSON 的分组大小仍取决于不同币种/交易对数，临时 SQLite 磁盘空间随输入规模增长，目录必须可写。
+- 报告的 1.898 MiB 是报告进程峰值增量；HTTP worker 新增进程启动成本。systemd 的 120 MiB cgroup 上限包含所有子进程，需要在目标机连同最多 4 个公开请求 worker 和 1 个 API worker 验证整体资源。没有据此宣称目标服务资源或七天观察已验收。
+- guard 检查在主循环进行，同步日报/轮转耗时可能延后检测；<=10 秒测试从检测到停止条件开始。停止时保留最近一次状态统计，`statistics_timestamp` 是其采样时间；启动即停时该字段为 null。检测后不再执行完整报表，剩余网络工作有总截止。
+- 已留存的旧事件 filter_passed、旧 unpriced 的 funding_known、旧 runtime 失败标记未自动回写。修复保证新事件和新采样口径；历史错误记录如需修正，应独立核实原始快照后处理，不能默认为干净观察证据。
+- SQLite 自动创建新的 rate_limit_samples 辅助表；其余交易表结构不变。默认费率不代表任何特定账户或特殊费率组，资金费仍按开仓快照估算。
+- 本轮开始无其他 WIP。测试临时库由 TemporaryDirectory 清理，可写目录及原有 pycache 受包内既有 .gitignore 忽略；原始测试日志已提交，没有需交接的未跟踪业务文件。
+- 下一步为新任务中的独立复审：从上述基线与本轮提交检查 8 项修复，再按独立授权做目标运行时、生产 guard 和整体 cgroup 资源验收。本轮不推送、不部署，不开始其他模块。

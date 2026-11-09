@@ -4,7 +4,7 @@
 
 ## 本地验证
 
-在仓库根目录执行（单元测试强制阻断 socket connect）：
+在仓库根目录执行。解析/引擎测试阻断 socket connect；HTTP 截止时间与 guard 退出测试仅访问测试自建的 127.0.0.1 服务。受限环境请先将 TEMP/TMP 指向可写临时目录：
 
 ```powershell
 python -m unittest discover -s tools/fill_sim/tests -v
@@ -52,7 +52,7 @@ python3 -m fill_sim run --env-file /path/to/fill-sim.env
 - `funding_known=false` 的仓位排除主收益和盈利通过线，保留原有 `provisional_price_only` 辅助统计。该辅助统计沿用所有非 stale/unpriced 已平仓样本（也包含已知资金费样本），不是独立的未知资金费样本集。
 - 状态和日报新增 `funding_unknown`、`funding_observations`、`funding_unknown_ratio`：按三变体 × 四金额档的仓位数计数，任一腿未知即该仓位未知，比例=未知数/观察仓位数，无仓位为 null。日报窗口包括当日开仓且仍未平仓的仓位及当日平仓的仓位；status 的这三项采用今日 UTC 同一口径，另有 `open_funding_unknown_ratio` 覆盖所有当前未平仓仓位。
 
-默认费用在 `default-fees.json`，env 样例同步列出；`--fees-json` / `FILL_SIM_FEES_JSON` 可以整体覆盖，显式缺项或 null 不会偷偷补默认。费率单位为小数比率，基于普通 USDT 加密资产市场的公开 VIP0/普通等级，不计代币折扣、返佣和活动。六家现货默认已补齐；Aster USDT 合约由 0.00035 改为 0.0004。Binance 合约动态费率表本次未取得，FAQ 的 0.05% 明示为假设示例，故暂为 null，涉及该腿记 `fee_unconfigured`。`unconfigured_fees` 在状态/日报/report 列出最近一次 run 配置缺项（无运行配置时列出软件默认缺项），不代表逐笔历史费率。
+默认费用在 `default-fees.json`，env 样例同步列出；`--fees-json` / `FILL_SIM_FEES_JSON` 可以整体覆盖，显式缺项或 null 不会偷偷补默认。费率单位为小数比率，基于普通 USDT 加密资产市场的公开 VIP0/普通等级，不计代币折扣、返佣和活动。六家现货默认已补齐；Aster USDT 合约由 0.00035 改为 0.0004。PM 已在官方动态费率表核实 Binance U 本位 Regular User 的 USDT taker 0.0500%，默认值为 0.0005，与 env 样例一致，不采用 BNB 抵扣。`unconfigured_fees` 在状态/日报/report 列出最近一次 run 配置缺项（无运行配置时列出软件默认缺项），不代表逐笔历史费率。
 
 现货出现在 sell 一侧时，在规格/资金费/盘口请求前记 `unsupported_spot_short`，不开仓，保留在过滤通过事件和覆盖率分母。现货 buy + 合约 sell 允许模拟。借贷利息、库存/保证金/账户权限和实际撮合仍不在本模型内。特殊板块、Aster Group B/RWA、Bybit 创新区/盘前等费率不能套用普通默认；部署前须确认实际市场范围和账户地区。
 
@@ -83,7 +83,7 @@ PM 的服务器监控通过 `FILL_SIM_GUARD_FILE` / `--guard-file` 指定绝对�
 {"timestamp":1794206000,"taoli_stalls_last_hour":2,"taoli_stalls_not_worse":true,"no_429_increase":true}
 ```
 
-启动时在任何网络请求之前检查，之后每 30 秒检查一次。路径未配置 → `guard_file_required`；文件不存在/无权限/非对象/格式错误/缺必填字段 → `guard_metrics_unavailable`。以上停止条件写入 status.stop_reason，退出码 **78**，systemd 的 `RestartPreventExitStatus=78` 阻止自动重启。轮询不是实时监控，超过 90 秒后最迟下一个 30 秒检查点停服。
+启动时在任何网络请求之前检查，之后主循环每 1 秒检查一次，状态仍每 30 秒采样。路径未配置 → `guard_file_required`；文件不存在/无权限/非对象/格式错误/缺必填字段 → `guard_metrics_unavailable`。以上停止条件写入 status.stop_reason，退出码 **78**，systemd 的 `RestartPreventExitStatus=78` 阻止自动重启。同步统计/轮转耗时可能延后检测；检测后跳过完整日报与在途结果入账，等待受总截止时间约束的请求结束，测试要求检测后 <=10 秒退出。停止状态保留最近成功统计，`statistics_timestamp` 标记采样时间，启动即停止时为 null。
 
 Linux `MemAvailable <200 MiB` 和本进程 `RSS >=120 MiB` 由 fill-sim 自己读取，分别记 `low_memory`、`rss_limit`，无需 PM 在 JSON 中填写。`taoli_stalls_not_worse` / `no_429_increase` 的基线、统计区间须由 PM 真实维护，不能固定填 true。未接入生产的守护与七天资源验收仍未完成。
 
@@ -103,3 +103,14 @@ Linux `MemAvailable <200 MiB` 和本进程 `RSS >=120 MiB` 由 fill-sim 自己�
 | `smoke.py` | 手动联网录制夹具及四档演示 |
 | `tests/` | 离线测试、十二份公开录制夹具、验收原始输出 |
 | `deploy/` | 待审阅的 systemd 与 env 样例 |
+
+## 审查修复后的资源与统计口径
+
+- 每次 HTTP 总截止时间 3 秒，覆盖进程启动、DNS、TLS、慢速响应头/响应体；标准库 `http_worker.py` 到期被 kill 并回收。两个资金费请求各自受此总时限约束。URL/请求头走私有 stdin，不进入命令行，禁止重定向。
+- 调度预留只控制工作提交；每个 PublicClient 请求（含 reserved）还须经过发送准入。额度在整个传输期间占用，完成后再保留一秒，避免 worker 启动/DNS/调度延迟造成额度提前跨窗释放。任意滚动一秒窗同所最多 2、全局最多 8；慢请求时有效吞吐会更保守。
+- 规格有效期及闲置 TTL 均为 6 小时；缓存和待取队列各最多 256 个市场，优先保留活动依赖。失败至少间隔 60 秒重试，最后一个持仓/待处理事件依赖结束后清除失败任务及陈旧缓存，避免重新生成重试。
+- `filter_passed` 独立表示业务资格。合格但 stale/future、重复、容量、费率、规格或预算不足等执行跳过继续进覆盖率分母。
+- 无法定价退出使用 `exit_pricing=unpriced`，保留真实 `funding_known`；可定价退出为 priced，收益统计独立要求 priced。
+- 日报/report 流式读取主库和归档，窄字段落到临时 SQLite；去重、分组、精确分位数在 SQL 中完成。Python 保留输出分组及每日 bootstrap 合计，不保留事件/仓位列表。临时库使用 1 MiB 页缓存并自动清理；分组输出大小取决于不同币种/交易对数。status 使用独立标量 SQL。
+- `runtime_rate_limits` 持久化累计计数基线，`rate_limit_samples(ts,delta)` 保存采样区间增量，同事务写入窗口证据。重启沿用基线，旧库从 limiter 快照初始化。新增限频才让本采样失败；窗口按采样结束时间计算，缺外部比较仍为 UNKNOWN；采样与 runtime 同保留 30 天。
+- 报告 RSS 测试衡量报告进程增量。目标 systemd 的 120 MiB cgroup 总预算须连同最多 4 个公开请求 worker 和 1 个 Shadow API worker 在目标机验证。
