@@ -61,6 +61,8 @@ from app.db.repositories import (
 from app.db.schema import initialize_schema
 from app.exchanges.hyperliquid import HyperliquidAdapter
 from app.exchanges.hyperliquid_bbo import HyperliquidBboStream
+from app.exchanges.gate import GateAdapter
+from app.services.gate_bbo_runtime import GateBboRuntime
 from app.services.astro_card_attempts import AstroCardAttemptRepository
 from app.db.market_identity_repository import MarketIdentityRepository
 from app.services.market_validation_review import MarketValidationService
@@ -818,6 +820,7 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         stop_event = asyncio.Event()
         app.state.hyperliquid_bbo_stream = None
+        app.state.gate_bbo_runtime = GateBboRuntime(app_settings, store)
         if not app.state.settings.dashboard_password:
             logger.warning("DASHBOARD_PASSWORD is empty; protected API routes deny access unless explicit non-production auth bypass is enabled")
         db_path = _sqlite_path(app_settings)
@@ -947,6 +950,12 @@ def create_app(
                 name="market-identity-catalog",
             )
             exchange_adapters = default_exchange_adapters()
+            for adapter in exchange_adapters:
+                if isinstance(adapter, GateAdapter):
+                    adapter.bbo_runtime = app.state.gate_bbo_runtime
+                    adapter.batch_quotes_executable = app_settings.gate_batch_quotes_executable
+            if start_background_workers:
+                await app.state.gate_bbo_runtime.start()
             if start_background_workers and app_settings.hl_bbo_enabled:
                 hyperliquid_adapter = next(
                     (adapter for adapter in exchange_adapters if isinstance(adapter, HyperliquidAdapter)),
@@ -1129,7 +1138,17 @@ def create_app(
             loop_stall_watchdog.stop()
             await supervisor.stop()
             try:
-                await app.state.shadow_runtime.aclose()
+                # Both process deadlines begin together; Gate consumes no extra
+                # sequential time from shadow's existing six-second budget.
+                close_results = await asyncio.gather(
+                    app.state.shadow_runtime.aclose(), app.state.gate_bbo_runtime.aclose(),
+                    return_exceptions=True,
+                )
+                for name, result in zip(("shadow", "gate_bbo"), close_results):
+                    if isinstance(result, BaseException):
+                        if name == "shadow":
+                            app.state.shadow_runtime.error("shutdown_lifespan")
+                        logger.error("%s runtime shutdown failed: %s", name, type(result).__name__)
             except Exception:
                 app.state.shadow_runtime.error("shutdown_lifespan")
             finally:

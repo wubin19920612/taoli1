@@ -1,3 +1,6 @@
+import math
+from datetime import UTC, datetime
+
 from app.exchanges.base import (
     ExchangeAdapter,
     next_aligned_funding_time,
@@ -14,6 +17,40 @@ from app.models.orderbook import OrderBookSnapshot
 
 class GateAdapter(ExchangeAdapter):
     name = "gate"
+
+    def __init__(self, client=None, *, bbo_runtime=None, batch_quotes_executable=False):
+        super().__init__(client)
+        self.bbo_runtime = bbo_runtime
+        self.batch_quotes_executable = batch_quotes_executable
+
+    def _merge_bbo(self, row: MarketSnapshot) -> MarketSnapshot:
+        # Operational rollback restores the entire original ticker object, even
+        # when the socket is enabled and has a newer quote.
+        if self.batch_quotes_executable:
+            return row
+        bbo = self.bbo_runtime.get_fresh(row.market_type, row.raw_symbol) if self.bbo_runtime else None
+        scale = row.contract_size_multiplier if row.market_type == MarketType.FUTURE else 1
+        # Gate futures B/A are contract counts. Snapshot sizes are base quantity;
+        # unknown contract metadata must not create invented executable depth.
+        if scale is None or not math.isfinite(scale) or scale <= 0:
+            bbo = None
+        if bbo is not None and any(not math.isfinite(size * scale) or size * scale <= 0
+                                   for size in (bbo[1], bbo[3])):
+            bbo = None
+        if self.bbo_runtime is not None:
+            self.bbo_runtime.record_merge(bbo is not None)
+        if bbo is None:
+            return row.model_copy(update={
+                "is_estimated": True,
+                "estimated_fields": list(dict.fromkeys([*row.estimated_fields, "bid", "ask"])),
+                "quote_time_source": "received_batch",
+            })
+        bid, bid_size, ask, ask_size, stamp, _, _ = bbo
+        return row.model_copy(update={
+            "bid": bid, "ask": ask, "bid_size": bid_size * scale, "ask_size": ask_size * scale,
+            "upstream_timestamp": datetime.fromtimestamp(stamp / 1000, tz=UTC),
+            "quote_time_source": "ws",
+        })
 
     async def fetch_spot_tickers(self) -> list[MarketSnapshot]:
         data = await self.get_json("https://api.gateio.ws/api/v4/spot/tickers")
@@ -45,7 +82,7 @@ class GateAdapter(ExchangeAdapter):
                     upstream_timestamp=parse_datetime_seconds(item.get("time")),
                 )
             )
-        return rows
+        return [self._merge_bbo(row) for row in rows]
 
     async def fetch_future_tickers(self) -> list[MarketSnapshot]:
         data = await self.get_json("https://api.gateio.ws/api/v4/futures/usdt/tickers")
@@ -100,7 +137,7 @@ class GateAdapter(ExchangeAdapter):
                     ),
                 )
             )
-        return rows
+        return [self._merge_bbo(row) for row in rows]
 
     async def fetch_order_book(
         self,

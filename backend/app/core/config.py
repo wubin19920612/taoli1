@@ -41,6 +41,13 @@ class Settings:
     hl_bbo_enabled: bool = True
     hl_bbo_max_age_seconds: float = 10.0
     hl_bbo_max_coins: int = 450
+    gate_bbo_enabled: bool = False
+    gate_batch_quotes_executable: bool = False
+    gate_bbo_min_volume_usd: float = 5_000_000
+    gate_bbo_max_futures: int = 300
+    gate_bbo_max_spot: int = 300
+    gate_bbo_quote_max_age_seconds: float = 120
+    gate_bbo_child_max_rss_mb: float = 120
     alert_match_concurrency: int = 3
     alert_diagnostic_timeout_seconds: float = 20.0
     alert_orderbook_timeout_seconds: float = 15.0
@@ -121,6 +128,18 @@ class Settings:
         from app.services.execution_routes import validate_shadow_settings
 
         validate_shadow_settings(self)
+        for name in ("gate_bbo_enabled", "gate_batch_quotes_executable"):
+            if type(getattr(self, name)) is not bool:
+                raise ValueError(f"{name.upper()} must be boolean")
+        for name in ("gate_bbo_max_futures", "gate_bbo_max_spot"):
+            value = getattr(self, name)
+            if type(value) is not int or not 1 <= value <= 1000:
+                raise ValueError(f"{name.upper()} must be an integer between 1 and 1000")
+        for name in ("gate_bbo_min_volume_usd", "gate_bbo_quote_max_age_seconds", "gate_bbo_child_max_rss_mb"):
+            value = getattr(self, name)
+            if (isinstance(value, bool) or not isinstance(value, (float, int))
+                    or not math.isfinite(value) or value <= 0):
+                raise ValueError(f"{name.upper()} must be finite and positive")
         timeout = self.shadow_shutdown_timeout_seconds
         if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
                 or not math.isfinite(timeout) or not 1 <= timeout <= 8):
@@ -253,6 +272,11 @@ def get_settings() -> Settings:
         return value.strip().lower() in {"1", "true", "yes", "on"}
 
     environment = os.getenv("ENVIRONMENT", "development")
+    def gate_bool_env(name: str) -> bool:
+        value = os.getenv(name, "0").strip().lower()
+        if value not in {"0", "1", "true", "false", "yes", "no", "on", "off"}:
+            raise ValueError(f"{name} must be a boolean (0/1)")
+        return value in {"1", "true", "yes", "on"}
     database_url = _resolve_sqlite_database_url(
         os.getenv("DATABASE_URL", "sqlite:///./data/radar.db"),
         dotenv_path or None,
@@ -274,6 +298,13 @@ def get_settings() -> Settings:
         hl_bbo_enabled=bool_env("HL_BBO_ENABLED", True),
         hl_bbo_max_age_seconds=float(os.getenv("HL_BBO_MAX_AGE_SECONDS", "10")),
         hl_bbo_max_coins=int(os.getenv("HL_BBO_MAX_COINS", "450")),
+        gate_bbo_enabled=gate_bool_env("GATE_BBO_ENABLED"),
+        gate_batch_quotes_executable=gate_bool_env("GATE_BATCH_QUOTES_EXECUTABLE"),
+        gate_bbo_min_volume_usd=float(os.getenv("GATE_BBO_MIN_VOLUME_USD", "5000000")),
+        gate_bbo_max_futures=int(os.getenv("GATE_BBO_MAX_FUTURES", "300")),
+        gate_bbo_max_spot=int(os.getenv("GATE_BBO_MAX_SPOT", "300")),
+        gate_bbo_quote_max_age_seconds=float(os.getenv("GATE_BBO_QUOTE_MAX_AGE_SECONDS", "120")),
+        gate_bbo_child_max_rss_mb=float(os.getenv("GATE_BBO_CHILD_MAX_RSS_MB", "120")),
         alert_match_concurrency=_bounded_alert_number(
             os.getenv("ALERT_MATCH_CONCURRENCY", "3"), 3, 8, integer=True,
         ),
