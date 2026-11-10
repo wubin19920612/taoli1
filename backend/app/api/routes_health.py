@@ -47,13 +47,17 @@ async def health(request: Request, response: Response) -> dict:
         return {"status": "ok"}
     store = request.app.state.snapshot_store
     settings = await _risk_settings(request)
-    return {
+    result = {
         "status": "ok",
         "markets": len(filter_markets(store.get_markets(), settings)),
         "opportunities": len(filter_opportunities(store.get_opportunities(), settings)),
         "exchange_errors": filter_exchange_errors(store.get_exchange_errors(), settings),
         "exchange_states": _exchange_states(request, settings),
     }
+    runtime = getattr(request.app.state, "gate_bbo_runtime", None)
+    if runtime is not None:
+        result["gate_bbo"] = runtime.status()
+    return result
 
 
 @router.get("/health/live")
