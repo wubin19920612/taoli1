@@ -74,3 +74,11 @@
 - 只修改以上两项涉及的实现、测试/冒烟工具、证据与任务文档。用上述锁定 venv 重跑全量 pytest，
   保留并报告原始汇总，交接文档追加本轮；按 test/feat/docs 分开提交，不 amend、不 push、不 SSH、不 WSL，
   不放宽原有断言。
+
+## PM decisions 第二轮（审查打回修复）
+
+R1（P1）`services/market_validation_review.py`（约 319、366 行）：预览/复核留下的 REST 盘口缓存不得覆盖更新的 Gate WS 报价（按报价时间取较新者），也不得撤销 Gate 的 `received_batch` 回退标记（`is_estimated`/`estimated_fields`）。补完整链路测试：采集 → 缓存合并 → 发布快照。
+R2（P2）`services/market_identity.py`（约 80 行）及时间来源辅助函数：保留显式的 `ws` / `received_batch`，不得改写成 upstream/received。测试断言**最终发布快照**里的 quote_time_source 和 estimated 字段。
+R3（P2）`exchanges/gate.py`：`get_fresh()`、`record_merge()` 的任何异常都按单行隔离，该行返回 estimated 回退，不得让整个 ticker 方法失败；异常计数进 gate_bbo 统计，并限频记录日志。
+R4（性能）测量 Gate 合约 + 现货每轮合并的主线程耗时（约 1000 合约、约 2300 现货；用真实规模的假数据，锁定 venv，跑 3 次）。若 >3ms，改为在构造 MarketSnapshot 时直接合并、避免逐行 `model_copy`。在交接里贴耗时数字。
+允许修改上面列出的文件和它们的测试，其余约束不变。
