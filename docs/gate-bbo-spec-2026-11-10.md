@@ -61,3 +61,16 @@
 
 ## 5. 交付
 交接文档 `docs/task-handoff-2026-11-10-gate-bbo.md`，写清：文件清单、提交 hash、配置项、合并规则、关闭时间实测、冒烟结果、剩余风险。
+
+## 6. PM 补充决定（2026-11-10，本轮有效）
+
+- 授权修改 `backend/app/api/routes_health.py`，将已有 `GateBboRuntime.status()` 摘要接入
+  `/api/health`。沿用现有 health 认证规则；匿名只返回 `{"status":"ok"}`，不读取或暴露进程指标。
+  不存在 runtime 时保持原响应字段，补充离线测试。
+- Gate 没有 JCT 现货，本轮 30 秒冒烟的现货改为 `AKE_USDT`、`BTC_USDT`；
+  合约仍为 `AKE_USDT`、`JCT_USDT`、`BTC_USDT`。使用已经修复的消息速率计数，
+  严格验证这五个市场全部收到数据、连接 live 和关闭时限；只重跑一次。
+- 新录制及结果以 `*-2026-11-10-pm.json` 另存到原夹具目录；保留旧六市场冒烟及其失败证据。
+- 只修改以上两项涉及的实现、测试/冒烟工具、证据与任务文档。用上述锁定 venv 重跑全量 pytest，
+  保留并报告原始汇总，交接文档追加本轮；按 test/feat/docs 分开提交，不 amend、不 push、不 SSH、不 WSL，
+  不放宽原有断言。

@@ -187,3 +187,123 @@ REST 对 `spot/currency_pairs/JCT_USDT` 和 `spot/order_book?currency_pair=JCT_U
 生产没有改变。2 小时/24 小时灰度、主事件循环 CPU/卡顿变化、生产 quote 对齐和 fill-sim 落差
 均未验证；这些需要另一个获准部署/运维任务。本任务不扩展到 D5 的 fill-sim 归档。
 当前没有原有 WIP；本任务生成的 pytest 日志/临时目录被 `.gitignore` 忽略并保留。
+
+## PM 补充决定执行记录（2026-11-10，本轮追加）
+
+### 范围、状态与提交
+
+分支仍为 `codex/gate-bbo`；本轮起点为
+`e1c7b6b6146dc72ac4b2a42ff2ee325fe3507ba7`，开始时工作区干净。
+PM 已明确授权 health 文件，并将冒烟改为现货 AKE/BTC、合约 AKE/JCT/BTC。
+**本轮两项本地验收均已通过**；前文 health 待授权及必须覆盖 JCT 现货的待确认项已由本轮决定解决。
+前文记录作为历史保留，旧六市场冒烟失败仍是当时的真实结果。
+
+- test：`07be23247ee6978d4397ee16c3789b69f02cd402`。
+- feat：`4b164a5bfabd2c0c92da506112e4e6dc9736d60b`。
+- docs：本追加记录与任务书的 PM 补充决定单独提交；执行
+  `git log -1 --format='%H %s' -- docs/task-handoff-2026-11-10-gate-bbo.md` 可查，避免自引用 hash。
+
+test 在 feat 之前，因此单独检出 test 提交时，新增摘要用例预期失败；与后续 feat 组合验收。
+均为追加本地提交，没有 amend 或推送。
+
+### 本轮文件与行为
+
+- `backend/app/api/routes_health.py`：认证成功后，runtime 存在时增加
+  `gate_bbo = GateBboRuntime.status()`。直接复用既有状态和计数，不重复计算或改变计数口径。
+  匿名及无效凭据仍只返回 `{"status":"ok"}`，不会调用 `status()`；保留 `Cache-Control: no-store`。
+  runtime 缺失或为 None 时保留旧响应的精确字段；WS 关闭但正常 lifespan 已创建 runtime 时仍显示摘要。
+- `backend/tests/test_gate_bbo_health.py`：新增 13 个离线用例，覆盖真实会话/API token 认证、
+  连接/进程/消息速率和合并命中/回退计数、读取不修改计数、匿名/错误凭据/开发绕过不泄露、
+  无 runtime 的旧字段合同，以及正常 lifespan 中关闭 WS 的摘要。继承全局禁止外网夹具。
+- `backend/tests/gate_bbo_smoke.py`：明确区分现货两市场、合约三市场，使用不同文件名保存新证据。
+  覆盖断言仍要求订阅集合与收到数据的集合完全相等；批次数、连接 live 和 `<2s` 关闭断言保留。
+- `backend/tests/fixtures/gate_bbo/recorded-2026-11-10-pm.json`：本轮公开 WS ack 与更新录制。
+- 同目录 `smoke-child-2026-11-10-pm.json`：本轮子进程统计。
+- 同目录 `smoke-result-2026-11-10-pm.json`：本轮完整结果，新增订阅清单以便核对。
+- `docs/gate-bbo-spec-2026-11-10.md`：仅追加本轮 PM 决定。
+- 本交接文档：仅追加本轮记录。
+
+现有 HL BBO 的统计入口是 `HyperliquidBboStream.stats()`，health 没有单独的 HL 字段；
+本轮按任务书约定，在同一 health 摘要位置接入 Gate 的现有状态，沿用现有认证保护。
+没有扩大到 `/health/detail` 或修改 HL 模块。
+没有更改 Gate 生产计数实现、配置、报价合并规则或其他业务模块，也没有编辑既有离线测试。
+
+### 锁定 venv 验证及原始汇总
+
+全部使用任务书指定解释器：
+`C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/435b98f6-0522-4055-9b28-46a94def1380/scratchpad/venv-lock/Scripts/python.exe`。
+在 `backend` 目录设置 `$env:PYTHONPATH='.'`，执行以下参数。
+
+全量：
+
+```text
+-m pytest tests -q -p no:cacheprovider --basetemp=../.pytest-tmp/gate-bbo-full
+2861 passed, 9 deselected, 13 warnings in 189.87s (0:03:09)
+```
+
+本轮新增 health 测试最终单跑：
+
+```text
+-m pytest tests/test_gate_bbo_health.py -q -p no:cacheprovider --basetemp=../.pytest-tmp/gate-bbo-health-pm-final
+13 passed in 7.06s
+```
+
+全部 Gate BBO 测试合跑：
+
+```text
+-m pytest tests/test_gate_bbo.py tests/test_gate_bbo_process.py tests/test_gate_bbo_health.py -q -p no:cacheprovider --basetemp=../.pytest-tmp/gate-bbo-pm-new
+123 passed in 21.49s
+```
+
+新测试曾先在未接入 health 时得到预期的 `3 failed, 10 passed in 7.09s`；随后完成接入。
+全量包含原有 health 精确字段/过滤和认证回归测试；未放宽原有测试或断言，未压制 warnings。
+9 项 deselected 来自既有默认 `not network and not benchmark` 配置，执行参数未改变。
+Ruff 检查新增测试及修改后的冒烟工具为 `All checks passed!`。
+`routes_health.py` 的基线和本轮均有相同 5 条既有告警（I001、两处 S110/BLE001），未为此扩展修改。
+本轮 diff 检查通过。
+
+原始日志保留于被忽略的本机目录：
+
+- `.pytest-tmp/gate-bbo-full-pm-2026-11-10.log`。
+- `.pytest-tmp/gate-bbo-health-pm-final.log`。
+- `.pytest-tmp/gate-bbo-pm-new.log`。
+- `.pytest-tmp/gate-bbo-smoke-pm-2026-11-10.log`。
+
+### 本轮 30 秒公开 WS 冒烟
+
+使用同一锁定解释器执行 `tests/gate_bbo_smoke.py` **一次**，退出码 0。
+只访问公开 WS，不请求私有接口；与全量 pytest 串行运行。
+现货 `AKE_USDT`、`BTC_USDT`；合约 `AKE_USDT`、`JCT_USDT`、`BTC_USDT`，五市场全部收到数据。
+修复后的生产消息速率来自既有 worker 的实际启动窗口，不再以 300 秒作启动期分母。
+
+| 观测 | 现货 | 合约 |
+|---|---:|---:|
+| 结束前最后 IPC 的 messages | 1238 | 2815 |
+| 结束前最后 IPC 的 messages_per_second | 42.144681 | 95.829787 |
+| 子进程全部 update 数 | 1243 | 2841 |
+| update/秒（子进程实际观测 29.766 秒） | 41.759054 | 95.444467 |
+| 子进程接收时 `now-t` 中位 ms | 212.291 | 213.366 |
+| 子进程接收时 `now-t` p90 ms | 251.499 | 255.306 |
+| 主进程见到新值时 `now-t` 中位 ms | 258.567 | 255.285 |
+| 主进程见到新值时 `now-t` p90 ms | 367.529 | 373.055 |
+
+共 144 IPC 包，末包 5 个市场；RSS 32.746094 MB，CPU 1.359375 秒。
+两连接结束时均 connected/live，发送/请求订阅数为现货 2、合约 3，无重连、无子进程重启。
+本轮关闭实测 `0.24495409987866879` 秒，严格 `<2s`。
+冒烟直接验证 worker/runtime/IPC，没有运行适配器采集合并，故其 merge_hits/merge_fallbacks 均为 0；
+合并路径由原离线测试覆盖，health 对计数的原样展示另有新增用例。
+
+status 是结束前最后 IPC 的计数和启动窗口速率，消息口径包含 ack 等 worker 认可的消息；
+child 是关闭完成后汇总的全部逐条 update，统计截止点不同；parent 只采样批量后的新值，
+因此三者样本数及速率不能直接视为相同口径。
+
+旧 `recorded.json`、`smoke-child.json`、`smoke-result.json`、`jct-spot-rest.json`、
+`edge-cases.json` 共 5 个原文件，运行前后 SHA256 全部相同，Git diff 也为空。
+旧速率错误与缺失 JCT 现货的证据没有被覆盖或修改。
+
+### 线上状态与剩余边界
+
+本轮按明确限制仅本地交付：未 push、SSH、WSL、部署、备份线上数据库或改变线上版本。
+本轮开始没有其他 WIP；新增证据全部随 test 提交，日志与 pytest 临时文件继续被忽略并保留。
+本轮本地验收已完成，生产 2h/24h 灰度、CPU/卡顿及 fill-sim 对齐仍未验证。
+下一步如需部署和灰度，应在新的部署/运维任务中使用本交接继续；不在本任务扩展范围。
