@@ -11,7 +11,15 @@ from statistics import median
 from time import monotonic, perf_counter, time
 
 FIXTURES = Path(__file__).parent / "fixtures" / "gate_bbo"
-SYMBOLS = ["AKE_USDT", "JCT_USDT", "BTC_USDT"]
+SUBSCRIPTIONS = {
+    "spot": ["AKE_USDT", "BTC_USDT"],
+    "future": ["AKE_USDT", "JCT_USDT", "BTC_USDT"],
+}
+# Keep the original six-market run and its pre-fix rate counters as historical evidence.
+RUN_TAG = "2026-11-10-pm"
+RECORDING_PATH = FIXTURES / f"recorded-{RUN_TAG}.json"
+CHILD_PATH = FIXTURES / f"smoke-child-{RUN_TAG}.json"
+RESULT_PATH = FIXTURES / f"smoke-result-{RUN_TAG}.json"
 
 
 def quantiles(values):
@@ -48,10 +56,10 @@ def recording_child(incoming, outgoing):
     finally:
         elapsed = monotonic() - started
         FIXTURES.mkdir(parents=True, exist_ok=True)
-        (FIXTURES / "recorded.json").write_text(json.dumps(records, indent=2) + "\n", encoding="utf-8")
+        RECORDING_PATH.write_text(json.dumps(records, indent=2) + "\n", encoding="utf-8")
         summary = {kind: {**quantiles(values), "messages_per_second": len(values) / elapsed}
                    for kind, values in ages.items()}
-        (FIXTURES / "smoke-child.json").write_text(json.dumps({
+        CHILD_PATH.write_text(json.dumps({
             "elapsed_seconds": elapsed, "connections": summary,
         }, indent=2) + "\n", encoding="utf-8")
         incoming.close()
@@ -64,7 +72,7 @@ async def main():
 
     module.child_entry = recording_child
     rt = module.GateBboRuntime(Settings(gate_bbo_enabled=True))
-    rt.set_subscriptions({kind: SYMBOLS for kind in ("spot", "future")})
+    rt.set_subscriptions(SUBSCRIPTIONS)
     ages = {kind: [] for kind in ("spot", "future")}
     seen = {}
     started = monotonic()
@@ -81,16 +89,16 @@ async def main():
         closing = perf_counter()
         await rt.aclose()
         close_seconds = perf_counter() - closing
-    child_path = FIXTURES / "smoke-child.json"
     result = {"duration_seconds": 30, "shutdown_seconds": close_seconds,
+        "subscriptions": SUBSCRIPTIONS,
         "status": status, "parent_now_minus_t": {kind: quantiles(values) for kind, values in ages.items()},
-        "child": json.loads(child_path.read_text()) if child_path.exists() else None,
+        "child": json.loads(CHILD_PATH.read_text()) if CHILD_PATH.exists() else None,
         "observed_markets": sorted(f"{kind}:{symbol}" for kind, symbol in seen)}
     FIXTURES.mkdir(parents=True, exist_ok=True)
-    (FIXTURES / "smoke-result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    RESULT_PATH.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result, indent=2), flush=True)
     assert status["batches"] > 0 and close_seconds < 2
-    assert set(seen) == {(kind, symbol) for kind in ("spot", "future") for symbol in SYMBOLS}
+    assert set(seen) == {(kind, symbol) for kind, symbols in SUBSCRIPTIONS.items() for symbol in symbols}
     assert all(status["connections"][kind]["live"] for kind in ("spot", "future"))
 
 
