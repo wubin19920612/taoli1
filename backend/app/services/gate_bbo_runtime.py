@@ -70,6 +70,9 @@ class GateBboRuntime:
         self._mail_scheduled = False
         self.restarts = self.batches = self.batch_size = 0
         self.merge_hits = self.merge_fallbacks = 0
+        self.merge_errors = 0
+        self.last_merge_error = None
+        self._merge_error_log_at = 0
         self.last_error = None
 
     def _alive(self):
@@ -100,6 +103,18 @@ class GateBboRuntime:
             self.merge_hits += 1
         else:
             self.merge_fallbacks += 1
+
+    def record_merge_error(self, stage, exc):
+        # Keep independent of record_merge: that instrumentation may be the
+        # failing operation. Counters include suppressed logs; never log payloads.
+        self.merge_errors += 1
+        self.last_merge_error = {"stage": stage, "type": type(exc).__name__}
+        now = monotonic()
+        if now >= self._merge_error_log_at:
+            self._merge_error_log_at = now + 60
+            logger.warning(json.dumps({"gate_bbo": {
+                "merge_errors": self.merge_errors, "last_merge_error": self.last_merge_error,
+            }}, separators=(",", ":")))
 
     def set_subscriptions(self, selected):
         self._subscriptions = {kind: list(selected.get(kind, ()))[:cap] for kind, cap in (
@@ -359,4 +374,5 @@ class GateBboRuntime:
             "rss_mb": self._rss, "cpu_seconds": self._cpu, "restarts": self.restarts,
             "batches": self.batches, "batch_size": self.batch_size, "merge_hits": self.merge_hits,
             "merge_fallbacks": self.merge_fallbacks, "last_error": self.last_error,
+            "merge_errors": self.merge_errors, "last_merge_error": self.last_merge_error,
             "restart_in_seconds": max(0, self._restart_at - now) if self._restart_at is not None else None}

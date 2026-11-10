@@ -24,33 +24,50 @@ class GateAdapter(ExchangeAdapter):
         self.batch_quotes_executable = batch_quotes_executable
 
     def _merge_bbo(self, row: MarketSnapshot) -> MarketSnapshot:
-        # Operational rollback restores the entire original ticker object, even
-        # when the socket is enabled and has a newer quote.
+        # Compatibility for callers with an existing snapshot. Collection uses
+        # _bbo_fields before construction, avoiding a second snapshot per ticker.
         if self.batch_quotes_executable:
             return row
-        bbo = self.bbo_runtime.get_fresh(row.market_type, row.raw_symbol) if self.bbo_runtime else None
         scale = row.contract_size_multiplier if row.market_type == MarketType.FUTURE else 1
-        # Gate futures B/A are contract counts. Snapshot sizes are base quantity;
-        # unknown contract metadata must not create invented executable depth.
-        if scale is None or not math.isfinite(scale) or scale <= 0:
-            bbo = None
-        if bbo is not None and any(not math.isfinite(size * scale) or size * scale <= 0
-                                   for size in (bbo[1], bbo[3])):
-            bbo = None
-        if self.bbo_runtime is not None:
-            self.bbo_runtime.record_merge(bbo is not None)
-        if bbo is None:
-            return row.model_copy(update={
-                "is_estimated": True,
-                "estimated_fields": list(dict.fromkeys([*row.estimated_fields, "bid", "ask"])),
-                "quote_time_source": "received_batch",
-            })
-        bid, bid_size, ask, ask_size, stamp, _, _ = bbo
-        return row.model_copy(update={
-            "bid": bid, "ask": ask, "bid_size": bid_size * scale, "ask_size": ask_size * scale,
-            "upstream_timestamp": datetime.fromtimestamp(stamp / 1000, tz=UTC),
-            "quote_time_source": "ws",
-        })
+        fields = self._bbo_fields(row.market_type, row.raw_symbol, scale)
+        if fields.get("is_estimated"):
+            fields["estimated_fields"] = list(dict.fromkeys([*row.estimated_fields, "bid", "ask"]))
+        return row.model_copy(update=fields)
+
+    def _bbo_fields(self, kind, raw_symbol, scale):
+        if self.batch_quotes_executable:
+            return {}
+        stage = "get_fresh"
+        try:
+            bbo = self.bbo_runtime.get_fresh(kind, raw_symbol) if self.bbo_runtime else None
+            # Futures B/A are contracts; snapshots store base quantity. Reject
+            # missing metadata and overflow/underflow rather than invent depth.
+            if bbo is not None and (
+                scale is None or not math.isfinite(scale) or scale <= 0
+                or any(not math.isfinite(size * scale) or size * scale <= 0
+                       for size in (bbo[1], bbo[3]))
+            ):
+                bbo = None
+            fields = None
+            if bbo is not None:
+                bid, bid_size, ask, ask_size, stamp, _, _ = bbo
+                fields = {
+                    "bid": bid, "ask": ask, "bid_size": bid_size * scale, "ask_size": ask_size * scale,
+                    "upstream_timestamp": datetime.fromtimestamp(stamp / 1000, tz=UTC),
+                    "quote_time_source": "ws",
+                }
+            stage = "record_merge"
+            if self.bbo_runtime is not None:
+                self.bbo_runtime.record_merge(bbo is not None)
+            if fields is not None:
+                return fields
+        except Exception as exc:  # noqa: BLE001 - isolate optional BBO failure per ticker.
+            try:
+                self.bbo_runtime.record_merge_error(stage, exc)
+            except Exception:  # noqa: BLE001, S110 - do not recursively log a diagnostics failure.
+                pass
+        return {"is_estimated": True, "estimated_fields": ["bid", "ask"],
+                "quote_time_source": "received_batch"}
 
     async def fetch_spot_tickers(self) -> list[MarketSnapshot]:
         data = await self.get_json("https://api.gateio.ws/api/v4/spot/tickers")
@@ -66,23 +83,23 @@ class GateAdapter(ExchangeAdapter):
                 continue
             symbol, base, quote = normalize_usdt_symbol(raw)
             vol = parse_float(item.get("quote_volume"))
-            rows.append(
-                MarketSnapshot(
-                    symbol=symbol,
-                    base=base,
-                    quote=quote,
-                    exchange=self.name,
-                    market_type=MarketType.SPOT,
-                    bid=bid,
-                    ask=ask,
-                    volume_24h_usdt=vol,
-                    timestamp=now,
-                    raw_symbol=item.get("currency_pair", raw),
-                    data_source="Gate public spot tickers",
-                    upstream_timestamp=parse_datetime_seconds(item.get("time")),
-                )
-            )
-        return [self._merge_bbo(row) for row in rows]
+            fields = {
+                "symbol": symbol,
+                "base": base,
+                "quote": quote,
+                "exchange": self.name,
+                "market_type": MarketType.SPOT,
+                "bid": bid,
+                "ask": ask,
+                "volume_24h_usdt": vol,
+                "timestamp": now,
+                "raw_symbol": item.get("currency_pair", raw),
+                "data_source": "Gate public spot tickers",
+                "upstream_timestamp": parse_datetime_seconds(item.get("time")),
+            }
+            fields.update(self._bbo_fields(MarketType.SPOT, fields["raw_symbol"], 1))
+            rows.append(MarketSnapshot(**fields))
+        return rows
 
     async def fetch_future_tickers(self) -> list[MarketSnapshot]:
         data = await self.get_json("https://api.gateio.ws/api/v4/futures/usdt/tickers")
@@ -110,34 +127,36 @@ class GateAdapter(ExchangeAdapter):
                 now,
                 interval_hours,
             )
-            rows.append(
-                MarketSnapshot(
-                    symbol=symbol,
-                    base=base,
-                    quote=quote,
-                    exchange=self.name,
-                    market_type=MarketType.FUTURE,
-                    bid=bid,
-                    ask=ask,
-                    volume_24h_usdt=parse_float(item.get("volume_24h_quote")),
-                    funding_rate_pct=funding * 100 if funding is not None else None,
-                    funding_next_rate_pct=indicative * 100 if indicative is not None else None,
-                    funding_interval_hours=interval_hours,
-                    funding_next_time=next_time,
-                    mark_price=parse_float(item.get("mark_price")),
-                    index_price=parse_float(item.get("index_price")),
-                    timestamp=now,
-                    raw_symbol=contract,
-                    contract_size_multiplier=parse_float(
-                        contract_metadata.get("quanto_multiplier")
-                    ),
-                    data_source="Gate public futures tickers + contracts",
-                    upstream_timestamp=parse_datetime_seconds(
-                        item.get("time") or item.get("update_time")
-                    ),
-                )
-            )
-        return [self._merge_bbo(row) for row in rows]
+            fields = {
+                "symbol": symbol,
+                "base": base,
+                "quote": quote,
+                "exchange": self.name,
+                "market_type": MarketType.FUTURE,
+                "bid": bid,
+                "ask": ask,
+                "volume_24h_usdt": parse_float(item.get("volume_24h_quote")),
+                "funding_rate_pct": funding * 100 if funding is not None else None,
+                "funding_next_rate_pct": indicative * 100 if indicative is not None else None,
+                "funding_interval_hours": interval_hours,
+                "funding_next_time": next_time,
+                "mark_price": parse_float(item.get("mark_price")),
+                "index_price": parse_float(item.get("index_price")),
+                "timestamp": now,
+                "raw_symbol": contract,
+                "contract_size_multiplier": parse_float(
+                    contract_metadata.get("quanto_multiplier")
+                ),
+                "data_source": "Gate public futures tickers + contracts",
+                "upstream_timestamp": parse_datetime_seconds(
+                    item.get("time") or item.get("update_time")
+                ),
+            }
+            fields.update(self._bbo_fields(
+                MarketType.FUTURE, contract, fields["contract_size_multiplier"],
+            ))
+            rows.append(MarketSnapshot(**fields))
+        return rows
 
     async def fetch_order_book(
         self,

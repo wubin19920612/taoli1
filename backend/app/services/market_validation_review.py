@@ -301,6 +301,11 @@ class MarketValidationService:
         )
 
     def _cached_book(self, row, now, stale_after):
+        # A previous manual review must not turn batch fallback quotes back into
+        # executable books during ordinary collection. Fresh manual reviews use
+        # _book_row directly and retain their explicit REST qualification path.
+        if row.exchange == "gate" and row.quote_time_source == "received_batch":
+            return row
         try:
             cached = self.books.get(MarketKey.from_snapshot(row).key)
         except ValueError:
@@ -316,6 +321,10 @@ class MarketValidationService:
             return row
         if (fx_bid, fx_ask) != (row.quote_conversion_bid, row.quote_conversion_ask):
             return row
+        if row.exchange == "gate" and row.quote_time_source == "ws":
+            quote_time = row.upstream_timestamp
+            if quote_time is None or utc(book.timestamp) <= utc(quote_time):
+                return row
         return self._book_row(row, book)
 
     @staticmethod

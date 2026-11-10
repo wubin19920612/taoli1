@@ -7,6 +7,7 @@ from types import MappingProxyType
 
 from app.models.market import MarketSnapshot
 from app.models.market_identity import MarketBinding, MarketKey, utc
+from app.services.quote_age import market_time_source
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,11 +78,7 @@ class MarketIdentityRegistry:
         common = {
             "identity_enforced": self.mode == "enforce",
             "identity_checked": True,
-            "quote_time_source": row.quote_time_source
-            if row.book_timestamp
-            else "upstream"
-            if row.upstream_timestamp
-            else "received",
+            "quote_time_source": market_time_source(row),
         }
         if binding is None:
             return row.model_copy(

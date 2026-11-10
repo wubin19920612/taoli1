@@ -42,6 +42,6 @@ def market_source_timestamp(market: MarketSnapshot) -> datetime | None:
 
 
 def market_time_source(market: MarketSnapshot) -> str:
-    if market.book_timestamp is not None:
+    if market.quote_time_source in {"ws", "received_batch"} or market.book_timestamp is not None:
         return market.quote_time_source
     return "upstream" if market.upstream_timestamp is not None else "received"
