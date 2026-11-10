@@ -307,3 +307,130 @@ child 是关闭完成后汇总的全部逐条 update，统计截止点不同；p
 本轮开始没有其他 WIP；新增证据全部随 test 提交，日志与 pytest 临时文件继续被忽略并保留。
 本轮本地验收已完成，生产 2h/24h 灰度、CPU/卡顿及 fill-sim 对齐仍未验证。
 下一步如需部署和灰度，应在新的部署/运维任务中使用本交接继续；不在本任务扩展范围。
+
+## PM decisions 第二轮执行记录（R1–R4，2026-11-10）
+
+### 范围、基线与修复
+
+本轮基线 `16b19bf019d4169eb9914b3f0ac4e18be239dc83`，分支 `codex/gate-bbo`；开始时工作区干净。
+已读任务书末尾 R1–R4 和本机 `gatebbo-review.log` 最后结论。本轮严格离线；不 push、SSH、WSL 或部署。
+前轮“本地验收通过”只描述当轮 health/冒烟范围；这次追加修复审查指出的采集发布链路缺陷。
+
+- R1：`backend/app/services/market_validation_review.py::_cached_book` 对 Gate 的
+  `received_batch` 行直接保留原报价及 estimated 标记。对 Gate WS 行比较 UTC 报价时间，
+  REST 缓存时间严格晚于 WS 时间才允许覆盖；同一时刻保留 WS。原有 revision、fingerprint、
+  FX 和缓存过期检查仍保留。显式人工 fresh review 直接使用 `_book_row`，仍可重新取盘口复核。
+- R2：`backend/app/services/market_identity.py` 统一调用
+  `backend/app/services/quote_age.py::market_time_source`；后者保留显式 `ws` / `received_batch`，
+  其他来源继续沿用原来的 book/upstream/received 推导。选择真正更新的 REST 盘口时使用该盘口自身的来源。
+- R3：`backend/app/exchanges/gate.py::_bbo_fields` 在每行内隔离 `get_fresh`、数量换算及
+  `record_merge` 异常；发生异常时保留 REST 价格并标 estimated，后续行继续处理。
+  `backend/app/services/gate_bbo_runtime.py` 新增 `merge_errors` 和 `last_merge_error`，
+  已有 status/health/300 秒统计日志自动包含它们。异常日志最多每 60 秒一条，计数不采样；
+  只记阶段与异常类型，不写异常文本。日志输出故障也不会丢弃 ticker。
+  `merge_errors` 独立于 `record_merge` 的命中/普通回退计数，避免依赖已故障的计数方法；异常回退另看此计数。
+- R4：合约/现货采集在 `MarketSnapshot` 构造前选择并写入 BBO 字段，每行只构造一次。
+  原 `_merge_bbo` 保留为已有快照调用者的兼容入口，采集方法不再调用它。
+  回滚开关仍返回完整旧字段，未调整任何现有测试或断言。
+
+新增测试文件：
+
+- `backend/tests/test_gate_bbo_review.py`：53 项离线测试。真实 `MarketCollector.collect_once`
+  经过压缩缓存、身份标注、REST 缓存合并，断言最终 `PublishedSnapshot`、store 与结果中的
+  价格、数量、时间来源、estimated 和可执行性；覆盖两类市场、WS/关闭/静默/过期、
+  无缓存及旧/同刻/较新缓存。另覆盖两种 BBO 方法的三种异常、行间隔离、异常统计和日志限频、
+  日志自身失败、构造路径禁止 `model_copy`、时间来源辅助函数以及人工 fresh book 能力。
+- `backend/tests/test_gate_bbo_merge_timing.py`：显式 `benchmark` 标记的离线三轮测量；
+  默认全量中 deselect，单独运行，不设易抖动的机器耗时断言。数量/命中数/主线程断言均严格保留。
+
+### R4 主线程测量（锁定 venv，毫秒）
+
+1000 合约 + 2300 现货，每侧 300 个订阅，合计每轮 600 个新鲜 WS 命中、2700 个回退。
+使用真实 `GateBboRuntime.get_fresh/record_merge` 和真实适配器；仅替换 HTTP 响应、进程存活指示
+及内存行情输入。全部在主线程串行运行，用 `perf_counter_ns` 测量经过时间，不是进程总 CPU 时间。
+测试与性能测量没有并发执行，未访问外网。
+
+| 运行 | 修改前合并 | 修改后合并（含字段写入） | 修改前完整双类采集 | 修改后完整双类采集 |
+|---|---:|---:|---:|---:|
+| 1 | 11.5937 | 2.7750 | 29.8576 | 21.6888 |
+| 2 | 35.2070 | 4.0810 | 34.1122 | 24.4921 |
+| 3 | 13.2775 | 4.1838 | 31.2133 | 44.6739 |
+
+“合并”修改前包含实际 `_merge_bbo` 与 `model_copy`；修改后包含实际 `_bbo_fields` 和
+`fields.update`，两者均排除输入构造、HTTP 和 `MarketSnapshot` 首次构造。
+“完整双类采集”包含离线响应读取、原字段解析、合并与模型构造；不能用合并时间代表整个采集耗时。
+基线三轮均超过 3ms，因此按 R4 执行了构造时合并优化。**优化后三轮并非全部低于 3ms**，
+完整采集也存在抖动；不将本机三次测量当成线上 CPU/卡顿验收。
+
+中间版曾仅测字段选择，结果 2.7129 / 3.1912 / 3.2812 ms；发现缺少 `fields.update` 后，
+补齐该计时范围，以表中最终三轮为准，不删除中间日志。
+
+命令（仍在 backend，`PYTHONPATH=.`，使用任务书的 `venv-lock/Scripts/python.exe`）：
+
+```text
+-m pytest tests/test_gate_bbo_merge_timing.py -q -s -m benchmark -p no:cacheprovider --basetemp=../.pytest-tmp/gate-bbo-r4-after-final
+1 passed in 0.46s
+```
+
+原始性能输出保存在 `.pytest-tmp/gate-bbo-r4-before.log`、
+`.pytest-tmp/gate-bbo-r4-after.log`、`.pytest-tmp/gate-bbo-r4-after-final.log`。
+
+### 锁定 venv 全量验证与原始汇总
+
+本轮解释器始终为：
+`C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/435b98f6-0522-4055-9b28-46a94def1380/scratchpad/venv-lock/Scripts/python.exe`。
+在 `backend` 下设置 `$env:PYTHONPATH='.'`。
+
+最终全量命令及未经改写的汇总行：
+
+```text
+-m pytest tests -q -p no:cacheprovider --basetemp=../.pytest-tmp/gate-bbo-full-r2-fresh
+2914 passed, 10 deselected, 13 warnings in 205.36s (0:03:25)
+```
+
+本轮新增功能回归单跑：
+
+```text
+-m pytest tests/test_gate_bbo_review.py -q -p no:cacheprovider --basetemp=../.pytest-tmp/gate-bbo-review-new-final
+53 passed in 0.70s
+```
+
+新增性能用例另按前述命令单跑三轮，`1 passed in 0.46s`。
+全量比前轮增加 53 passed；deselected 从 9 增至 10 是新增了显式 benchmark，
+仍沿用项目默认 `not network and not benchmark`，没有跳过功能用例。
+13 warnings 仍为 Starlette/httpx 与 Pydantic utcnow 弃用提示；未压制告警或放宽既有断言。
+所有五个实现文件、两个新增测试文件的 Ruff 结果 `All checks passed!`；`git diff --check` 通过。
+全量包含已有 spawn、RSS/重启、Gate `<2s` 和 Gate/shadow 并行 `<6s` 关闭用例，
+本轮没有另录制关闭耗时，没有联网重跑冒烟，也没有改动前轮原始证据。
+
+临时目录问题与保留证据：
+
+- 首次严格使用任务书的 `--basetemp=../.pytest-tmp/gate-bbo-full`，原始结果为
+  `2712 passed, 10 deselected, 215 warnings, 202 errors in 106.98s (0:01:46)`。
+  错误均为旧目录拒绝访问导致的临时目录 setup 错误，日志保存在
+  `.pytest-tmp/gate-bbo-full-r2-2026-11-10.log`。
+- 尝试同父目录保留改名失败，旧目录在提升权限后仍拒绝访问，未修改 ACL。
+  一次仍使用旧目录的重跑在再次出现 setup error 后被中断，保留
+  `.pytest-tmp/gate-bbo-full-r2-verified-2026-11-10.log`，它不是通过证据。
+- 最终仅更换同级 basetemp 为 `gate-bbo-full-r2-fresh`，其余命令和依赖不变，取得上述全绿结果。
+  没有删除旧目录；失败的 Move-Item 留下 `gate-bbo-full-preserved-before-r2`、
+  `gate-bbo-full-preserved-r2-original` 目标目录，均保留，不作为已完成备份声明。
+- 最终原始日志为 `.pytest-tmp/gate-bbo-full-r2-fresh-2026-11-10.log`、
+  `.pytest-tmp/gate-bbo-review-new-final.log`。初始红测日志与中间修复日志也保留；
+  初版新增关闭开关夹具错误地修改 frozen Settings，之后改为 `dataclasses.replace`，未变更任何断言。
+
+### 本地提交、工作区与下一步
+
+- test：`c49445966dd5c6a02dbf57250cf957cb4946fce1`。
+- feat：`49d67abbfd171ae110bd9b23249865f82b0bd07d`。
+- docs：本轮交接追加独立提交；用
+  `git log -1 --format='%H %s' -- docs/task-handoff-2026-11-10-gate-bbo.md` 查得，避免自引用 hash。
+
+test 提交先于 feat，需组合使用；没有 amend。提交仅包含本轮文件，已有测试文件没有修改。
+未跟踪测试产物均在被忽略的 `.pytest-tmp` 内保留；没有删除旧 WIP 或改变线上版本。
+本轮无 push、SSH、WSL、外网请求、部署或线上数据库操作。
+
+本轮 R1–R3 功能回归通过，R4 已完成触发条件要求的构造时合并及前后三轮测量；
+残余限制是优化后本机合并仍有两轮超过 3ms，不能宣称稳定低于该数值。
+下一步可基于这些提交复审；如需线上灰度或进一步性能验收，应在新的部署/性能任务中继续，
+沿用本交接并单独授权，不扩大本轮范围。
