@@ -1,0 +1,9 @@
+{
+  "provenance": "Synthetic protocol edge cases; real public WS frames are in recorded.json.",
+  "messages": [
+    {"channel":"spot.book_ticker","event":"subscribe","result":{"status":"success"}},
+    {"channel":"spot.book_ticker","event":"update","result":{"t":1794312000000,"u":11,"s":"BTC_USDT","b":"","B":"0","a":"101","A":"3"}},
+    {"channel":"spot.book_ticker","event":"update","result":{"t":1794312000000,"u":12,"s":"BTC_USDT","b":"NaN","B":"2","a":"101","A":"3"}},
+    {"channel":"spot.book_ticker","event":"subscribe","error":{"code":2,"message":"fixture subscription failure"}}
+  ]
+}

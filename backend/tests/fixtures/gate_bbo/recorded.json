@@ -1,0 +1,328 @@
+[
+  {
+    "kind": "spot",
+    "received_epoch_ms": 1794275628976.1252,
+    "message": {
+      "time": 1794275628,
+      "time_ms": 1794275628786,
+      "conn_id": "1f76e3938858b5c8",
+      "trace_id": "cce1d0aed6f573fd839a67f21feac345",
+      "channel": "spot.book_ticker",
+      "event": "subscribe",
+      "payload": [
+        "AKE_USDT",
+        "BTC_USDT",
+        "JCT_USDT"
+      ],
+      "result": {
+        "status": "success"
+      },
+      "requestId": "cce1d0aed6f573fd839a67f21feac345"
+    }
+  },
+  {
+    "kind": "future",
+    "received_epoch_ms": 1794275628987.0483,
+    "message": {
+      "time": 1794275628,
+      "time_ms": 1794275628794,
+      "conn_id": "f924b41cddd6b2e2",
+      "trace_id": "ea37505432551fe10c3624905d17d819",
+      "channel": "futures.book_ticker",
+      "event": "subscribe",
+      "payload": [
+        "AKE_USDT",
+        "BTC_USDT",
+        "JCT_USDT"
+      ],
+      "result": {
+        "status": "success"
+      }
+    }
+  },
+  {
+    "kind": "future",
+    "received_epoch_ms": 1794275628998.2178,
+    "message": {
+      "time": 1794275628,
+      "time_ms": 1794275628805,
+      "channel": "futures.book_ticker",
+      "event": "update",
+      "result": {
+        "t": 1794275628796,
+        "u": 130955218941,
+        "s": "BTC_USDT",
+        "b": "75001.2",
+        "B": 37745,
+        "a": "75001.3",
+        "A": 2909
+      }
+    }
+  },
+  {
+    "kind": "future",
+    "received_epoch_ms": 1794275629001.2205,
+    "message": {
+      "time": 1794275628,
+      "time_ms": 1794275628811,
+      "channel": "futures.book_ticker",
+      "event": "update",
+      "result": {
+        "t": 1794275628810,
+        "u": 8591722671,
+        "s": "AKE_USDT",
+        "b": "0.0027222",
+        "B": 60,
+        "a": "0.0027258",
+        "A": 64
+      }
+    }
+  },
+  {
+    "kind": "future",
+    "received_epoch_ms": 1794275629011.594,
+    "message": {
+      "time": 1794275628,
+      "time_ms": 1794275628815,
+      "channel": "futures.book_ticker",
+      "event": "update",
+      "result": {
+        "t": 1794275628813,
+        "u": 8591722679,
+        "s": "AKE_USDT",
+        "b": "0.0027231",
+        "B": 48,
+        "a": "0.0027258",
+        "A": 64
+      }
+    }
+  },
+  {
+    "kind": "spot",
+    "received_epoch_ms": 1794275629011.594,
+    "message": {
+      "time": 1794275628,
+      "time_ms": 1794275628816,
+      "channel": "spot.book_ticker",
+      "event": "update",
+      "result": {
+        "t": 1794275628811,
+        "u": 2315846169,
+        "s": "AKE_USDT",
+        "b": "0.002722",
+        "B": "20572",
+        "a": "0.002726",
+        "A": "20572"
+      }
+    }
+  },
+  {
+    "kind": "future",
+    "received_epoch_ms": 1794275629051.8687,
+    "message": {
+      "time": 1794275628,
+      "time_ms": 1794275628860,
+      "channel": "futures.book_ticker",
+      "event": "update",
+      "result": {
+        "t": 1794275628859,
+        "u": 2193272530,
+        "s": "JCT_USDT",
+        "b": "0.009729",
+        "B": 7,
+        "a": "0.009737",
+        "A": 1
+      }
+    }
+  },
+  {
+    "kind": "future",
+    "received_epoch_ms": 1794275629060.0642,
+    "message": {
+      "time": 1794275628,
+      "time_ms": 1794275628866,
+      "channel": "futures.book_ticker",
+      "event": "update",
+      "result": {
+        "t": 1794275628863,
+        "u": 2193272556,
+        "s": "JCT_USDT",
+        "b": "0.009729",
+        "B": 13,
+        "a": "0.009737",
+        "A": 1
+      }
+    }
+  },
+  {
+    "kind": "future",
+    "received_epoch_ms": 1794275629102.5786,
+    "message": {
+      "time": 1794275628,
+      "time_ms": 1794275628910,
+      "channel": "futures.book_ticker",
+      "event": "update",
+      "result": {
+        "t": 1794275628909,
+        "u": 2193272604,
+        "s": "JCT_USDT",
+        "b": "0.009729",
+        "B": 6,
+        "a": "0.009737",
+        "A": 1
+      }
+    }
+  },
+  {
+    "kind": "spot",
+    "received_epoch_ms": 1794275629222.503,
+    "message": {
+      "time": 1794275629,
+      "time_ms": 1794275629031,
+      "channel": "spot.book_ticker",
+      "event": "update",
+      "result": {
+        "t": 1794275629026,
+        "u": 2315846207,
+        "s": "AKE_USDT",
+        "b": "0.002722",
+        "B": "20572",
+        "a": "0.002726",
+        "A": "42835"
+      }
+    }
+  },
+  {
+    "kind": "future",
+    "received_epoch_ms": 1794275629246.9883,
+    "message": {
+      "time": 1794275629,
+      "time_ms": 1794275629055,
+      "channel": "futures.book_ticker",
+      "event": "update",
+      "result": {
+        "t": 1794275629053,
+        "u": 8591722729,
+        "s": "AKE_USDT",
+        "b": "0.0027231",
+        "B": 176,
+        "a": "0.0027258",
+        "A": 64
+      }
+    }
+  },
+  {
+    "kind": "future",
+    "received_epoch_ms": 1794275629298.5693,
+    "message": {
+      "time": 1794275629,
+      "time_ms": 1794275629105,
+      "channel": "futures.book_ticker",
+      "event": "update",
+      "result": {
+        "t": 1794275629105,
+        "u": 130955219174,
+        "s": "BTC_USDT",
+        "b": "75001.2",
+        "B": 37745,
+        "a": "75001.3",
+        "A": 1492
+      }
+    }
+  },
+  {
+    "kind": "spot",
+    "received_epoch_ms": 1794275629306.5652,
+    "message": {
+      "time": 1794275629,
+      "time_ms": 1794275629114,
+      "channel": "spot.book_ticker",
+      "event": "update",
+      "result": {
+        "t": 1794275629108,
+        "u": 2315846239,
+        "s": "AKE_USDT",
+        "b": "0.002722",
+        "B": "20572",
+        "a": "0.002725",
+        "A": "22368"
+      }
+    }
+  },
+  {
+    "kind": "future",
+    "received_epoch_ms": 1794275629306.5652,
+    "message": {
+      "time": 1794275629,
+      "time_ms": 1794275629115,
+      "channel": "futures.book_ticker",
+      "event": "update",
+      "result": {
+        "t": 1794275629105,
+        "u": 130955219175,
+        "s": "BTC_USDT",
+        "b": "75001.2",
+        "B": 37745,
+        "a": "75001.3",
+        "A": 295
+      }
+    }
+  },
+  {
+    "kind": "spot",
+    "received_epoch_ms": 1794275629641.0105,
+    "message": {
+      "time": 1794275629,
+      "time_ms": 1794275629348,
+      "channel": "spot.book_ticker",
+      "event": "update",
+      "result": {
+        "t": 1794275629347,
+        "u": 41084628750,
+        "s": "BTC_USDT",
+        "b": "75038.5",
+        "B": "0.166179",
+        "a": "75038.6",
+        "A": "0.109326"
+      }
+    }
+  },
+  {
+    "kind": "spot",
+    "received_epoch_ms": 1794275629641.0105,
+    "message": {
+      "time": 1794275629,
+      "time_ms": 1794275629355,
+      "channel": "spot.book_ticker",
+      "event": "update",
+      "result": {
+        "t": 1794275629348,
+        "u": 41084628753,
+        "s": "BTC_USDT",
+        "b": "75038.5",
+        "B": "0.166179",
+        "a": "75038.6",
+        "A": "0.082656"
+      }
+    }
+  },
+  {
+    "kind": "spot",
+    "received_epoch_ms": 1794275630214.7593,
+    "message": {
+      "time": 1794275630,
+      "time_ms": 1794275630022,
+      "channel": "spot.book_ticker",
+      "event": "update",
+      "result": {
+        "t": 1794275630018,
+        "u": 41084628908,
+        "s": "BTC_USDT",
+        "b": "75038.5",
+        "B": "0.082761",
+        "a": "75038.6",
+        "A": "0.082656"
+      }
+    }
+  }
+]

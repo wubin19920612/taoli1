@@ -1,0 +1,17 @@
+{
+  "elapsed_seconds": 29.67200000002049,
+  "connections": {
+    "spot": {
+      "samples": 573,
+      "median_ms": 197.253662109375,
+      "p90_ms": 226.65185546875,
+      "messages_per_second": 19.311135076826783
+    },
+    "future": {
+      "samples": 2229,
+      "median_ms": 196.473876953125,
+      "p90_ms": 222.02587890625,
+      "messages_per_second": 75.12132650304869
+    }
+  }
+}

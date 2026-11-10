@@ -1,0 +1,15 @@
+{
+  "checked_after_smoke": true,
+  "requests": [
+    {
+      "url": "https://api.gateio.ws/api/v4/spot/currency_pairs/JCT_USDT",
+      "http_status": 400,
+      "body": {"label": "INVALID_CURRENCY_PAIR", "message": "Invalid currency pair JCT_USDT"}
+    },
+    {
+      "url": "https://api.gateio.ws/api/v4/spot/order_book?currency_pair=JCT_USDT&limit=1",
+      "http_status": 400,
+      "body": {"label": "INVALID_CURRENCY_PAIR", "message": "Invalid currency pair JCT_USDT"}
+    }
+  ]
+}

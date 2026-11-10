@@ -1,0 +1,76 @@
+{
+  "duration_seconds": 30,
+  "shutdown_seconds": 0.14431020012125373,
+  "status": {
+    "enabled": true,
+    "batch_quotes_executable": false,
+    "connections": {
+      "spot": {
+        "connected": true,
+        "live": true,
+        "subscribed": 3,
+        "requested": 3,
+        "messages": 571,
+        "messages_per_second": 1.9033333333333333,
+        "reconnects": 0,
+        "last_error": null
+      },
+      "future": {
+        "connected": true,
+        "live": true,
+        "subscribed": 3,
+        "requested": 3,
+        "messages": 2212,
+        "messages_per_second": 7.373333333333333,
+        "reconnects": 0,
+        "last_error": null
+      }
+    },
+    "pid": 29412,
+    "rss_mb": 32.7109375,
+    "cpu_seconds": 1.125,
+    "restarts": 0,
+    "batches": 143,
+    "batch_size": 5,
+    "merge_hits": 0,
+    "merge_fallbacks": 0,
+    "last_error": null,
+    "restart_in_seconds": null
+  },
+  "parent_now_minus_t": {
+    "spot": {
+      "samples": 166,
+      "median_ms": 266.3641357421875,
+      "p90_ms": 369.69970703125
+    },
+    "future": {
+      "samples": 329,
+      "median_ms": 248.4384765625,
+      "p90_ms": 363.884765625
+    }
+  },
+  "child": {
+    "elapsed_seconds": 29.67200000002049,
+    "connections": {
+      "spot": {
+        "samples": 573,
+        "median_ms": 197.253662109375,
+        "p90_ms": 226.65185546875,
+        "messages_per_second": 19.311135076826783
+      },
+      "future": {
+        "samples": 2229,
+        "median_ms": 196.473876953125,
+        "p90_ms": 222.02587890625,
+        "messages_per_second": 75.12132650304869
+      }
+    }
+  },
+  "observed_markets": [
+    "future:AKE_USDT",
+    "future:BTC_USDT",
+    "future:JCT_USDT",
+    "spot:AKE_USDT",
+    "spot:BTC_USDT"
+  ]
+}
