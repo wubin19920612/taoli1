@@ -1,6 +1,6 @@
 # crossex-exec
 
-独立的 Python 3.10+ 标准库服务，CrossEx 下单覆盖 Gate / Binance / Bybit / OKX / Aster，Bitget 使用 Classic v2 mix。默认影子模式。此交付仅本地验证，没有部署、账户实测或实盘授权。
+独立的 Python 3.10+ 标准库服务，CrossEx 下单覆盖 Gate / Binance / Bybit / OKX / Aster，Bitget 使用 UTA v3。默认影子模式。此交付仅本地验证，没有部署、账户实测或实盘授权。
 
 ## 入口
 
@@ -9,13 +9,13 @@
 ```text
 python -m unittest discover -s tools/crossex_exec/tests -v
 python -m unittest discover -s tools/fill_sim/tests -v
-python -m tools.crossex_exec report --db /var/lib/crossex-exec/crossex-exec.db
+python -m tools.crossex_exec report --db /home/ubuntu/wubin/crossex-exec/var/crossex-exec.db
 ```
 
 未来经独立验收后，Linux 服务入口是：
 
 ```text
-python3 -m tools.crossex_exec run --env-file /etc/crossex-exec/credentials.env
+python3 -m tools.crossex_exec run --env-file /home/ubuntu/wubin/crossex-exec/crossex-exec.env
 ```
 
 `run` 会读账户鉴权接口，因此不属于本次会话的允许运行范围。没有真实费率或账户核对资料时拒绝开仓；不会采用公开默认手续费替代真实手续费。`report` 只读业务数据，不访问网络，但 SQLite 打开时会检查已有表结构。
@@ -29,6 +29,7 @@ python3 -m tools.crossex_exec run --env-file /etc/crossex-exec/credentials.env
 | `adapters.py` / `transport.py` | 两家签名、IOC、查单、撤单、分页成交、账户只读接口、限频与总超时 |
 | `execution.py` | 意图落库、发送、ACK、终态、未知结果、恢复；两腿并发 |
 | `accounts.py` | 持仓模式、3 倍杠杆、真实费率、保证金率及持仓归一化 |
+| `limits.py` | 150/600/150 USD 硬上限、独立权益基线、每笔开仓发送前校验 |
 | `engine.py` | 触发、持仓管理、最多三次补平、60 秒对账、风险停开/全平 |
 | `storage.py` / `security.py` | SQLite WAL/FULL、事务、文件权限与脱敏 |
 | `reporting.py` / `__main__.py` | 模拟与真实成交比较、CLI、300 秒 JSON 状态、即时 JSON 告警 |
@@ -37,23 +38,26 @@ python3 -m tools.crossex_exec run --env-file /etc/crossex-exec/credentials.env
 
 ## 配置
 
-只读取显式传入的 env 文件，不继承进程环境中的密钥。文件必须为服务用户所有、普通文件、POSIX 权限 **0600**；Linux 禁止符号链接。Windows 不能提供这组 POSIX 保证，因此只用于离线测试，不运行服务。
+只读取 `--env-file` 指定的文件，默认 `/home/ubuntu/wubin/crossex-exec/crossex-exec.env`，不继承进程环境中的密钥。文件必须为服务用户所有、普通文件、POSIX 权限 **0600**；Linux 禁止符号链接。Windows 不能提供这组 POSIX 保证，因此只用于离线测试，不运行服务。
 
 | 变量 | 默认值/要求 |
 |---|---|
 | `CROSSEX_LIVE_ENABLED` | `0`；只有用户本人可在后续验收后设为 `1` |
-| `CROSSEX_DB` | CLI：`var/crossex-exec.db`；模板：`/var/lib/crossex-exec/crossex-exec.db` |
-| `CROSSEX_STOP_FILE` | CLI：`var/STOP`；模板：`/var/lib/crossex-exec/STOP`；**存在即停开** |
-| `CROSSEX_POSITION_MODE` | `SINGLE`，另支持 `DUAL`，必须与账户一致 |
-| `BITGET_POSITION_MODE` | `one_way_mode`，另支持 `hedge_mode`，必须与账户一致 |
-| `BITGET_RISK_RATE_CONFIRMED` | `0`；核实 Classic `crossedRiskRate` 为维持保证金/权益口径后方可设 `1` |
+| `CROSSEX_DB` | `/home/ubuntu/wubin/crossex-exec/var/crossex-exec.db` |
+| `CROSSEX_STOP_FILE` | `/home/ubuntu/wubin/crossex-exec/var/STOP`；**存在即停开** |
+| `CROSSEX_POSITION_MODE` | `DUAL`，另支持 `SINGLE`，必须与账户一致 |
+| `BITGET_POSITION_MODE` | `hedge_mode`，另支持 `one_way_mode`，必须与账户一致 |
+| `BITGET_RISK_RATE_CONFIRMED` | `0`；核实 UTA `effEquity / mmr` 倍数口径后方可设 `1`；实盘启动要求此确认 |
+| `CROSSEX_MAX_LEG_USD` | `150`；只可调低，必须为正数 |
+| `CROSSEX_MAX_TOTAL_USD` | `600`；只可调低，两腿总和，不取对冲净额 |
+| `CROSSEX_MAX_EQUITY_DROP_USD` | `150`；只可调低，任一账户独立触发 |
 | `CROSSEX_BASES` | 空表示所有可精确映射的基础币；可用逗号分隔的精确基础币收窄范围 |
 | `TAOLI_BASE_URL` | `http://127.0.0.1:8000`，按实际服务端口配置 |
 | `TAOLI_API_TOKEN` | 空；如 taoli1 需要认证则由用户在私有文件中配置 |
-| `GATE_API_KEY` / `GATE_API_SECRET` | 空；仅 CrossEx 所需权限 |
-| `BITGET_API_KEY` / `BITGET_API_SECRET` / `BITGET_API_PASSPHRASE` | 空；仅合约所需权限 |
+| `CROSSEX_API_KEY` / `CROSSEX_API_SECRET` | 空；仅 CrossEx 所需权限 |
+| `BITGET_API_KEY` / `BITGET_API_SECRET` / `BITGET_API_PASSPHRASE` | 空；UTA 交易及账户管理读取权限，实盘才需交易写权限 |
 
-应用不修改账户模式、杠杆、资产模式或权限。CrossEx 必须为 `CROSS_EXCHANGE`，各目标合约杠杆必须已经是 3；Bitget 必须为 Classic v2、crossed、配置的持仓模式和 3 倍杠杆。
+应用不修改账户模式、杠杆、资产模式或权限。CrossEx 必须为 `CROSS_EXCHANGE`，各目标合约杠杆必须已经是 3；Bitget 必须为 `accountMode=unified`、`assetMode=multi_assets` 和配置的 `holdMode`。逐合约 `symbolConfigList` 必须为 crossed、3 倍杠杆。模式检查失败直接拒绝启动，不用空仓推断模式。旧 `GATE_API_*` 配置会被拒绝。
 
 ## 安全语义与运营
 
@@ -65,8 +69,13 @@ python3 -m tools.crossex_exec run --env-file /etc/crossex-exec/credentials.env
 - 订单确认默认每 200ms 查询，最多 10s（限频可延迟查询）；超时保留 `UNKNOWN` 和敞口。成交记录延迟则保留 `accounting_pending`，60s 再补拉，不用 ACK 价格代替成交价。
 - 单腿补平最多三次，额外容差依次为 13/23/33bp，进度持久化。价格量化到真实 tick。正常平仓为并发 reduce-only IOC，部分平仓只继续减仓。
 - 盘口丢失时采用**该腿自己的最后盘口**，不把另一所价格冒充该腿可成交价；扩大限价仍不保证能成交。剩余仓位一直保留并告警。
-- 风险计算同时使用逐笔真实费用/已实现损益/浮动损益和账户权益变化的较差结果。需要专用账户；账户间转账/提现会改变权益基线，不能在运行时随意操作。
-- `HALTING` 表示累计亏损触发、仍在处理剩余或未知敞口；确认本地和远端均为空后才写 `HALTED` 并退出。`HALTED` 阻止自动重启。不得删除整个数据库“复位”。
+- Bitget 私有接口只有 UTA v3，签名传输层拒绝非 v3 路径。复用的免鉴权公开行情仍使用 v2 market。双向开平仓由实际 `side` + `posSide` 表达；`reduceOnly=yes` 仅用于单向模式。clientOid 最长 32 字符。
+- CrossEx 保证金率使用 `maintenance_margin_rate` 并核对余额/维持保证金口径；Bitget 使用账户 `effEquity / mmr`，分母为 0 视为安全。两者 <3 停开、<2 全平。
+- `HardLimits.check_order` 统一校验三项硬上限：整对预检、下单适配器调用前、限频和建连后均重新检查。总额度按远端标记名义额与本地确认敞口逐市场取较大值，再计入待发及未知订单剩余量。减仓不受单腿及总额上限限制，也不因风险读取失败而被阻断。
+- 首次启动保存 CrossEx `margin_balance` 和 Bitget `usdtEquity` 的独立基线；重启记录当前值并保留原基线，避免清除损失。任一边下降达到限额即进入 HALTING，全平确认后 HALTED。存在实盘历史而缺少独立基线时拒绝启动，需要人工核对迁移。
+- CrossEx 任意正 liability 写入事件日志和每 300 秒状态 JSON。费率刷新失败会清除对应旧费率，读不到就不允许该市场开仓。
+- 风险计算同时使用逐笔真实费用/已实现损益/浮动损益和账户权益变化的较差结果。使用用户选定的 UTA 账户；运行期间应避免其他策略交易，账户间转账/提现也会改变权益基线并可能触发停机。
+- `HALTING` 表示累计亏损或独立账户回撤触发、仍在处理剩余或未知敞口；确认本地和远端均为空后才写 `HALTED` 并退出。`HALTED` 阻止自动重启。不得删除整个数据库“复位”。
 - `stop_reason` 为持久化停开原因。未知单、对账差异、补平失败需人工只读核查后清理；文件 STOP 和日亏停开不阻止减仓。服务不会自动解除这些异常锁存。
 - 资金费跨期、非 USDT 手续费或优惠券扣费不会被猜成零成本。跨期成交报告保留 `trading_net_usd`，完整 `net_usd=null`，停开等待账单核对。
 - 告警写本地事件表，并由 CLI 输出即时 JSON 到 journal；没有发送飞书、邮件等外部通知。状态 JSON 每 300 秒输出。
@@ -74,6 +83,6 @@ python3 -m tools.crossex_exec run --env-file /etc/crossex-exec/credentials.env
 
 ## 部署模板（本次未安装）
 
-`deploy/crossex-exec.service` 使用专用用户 `crossex-exec`、代码目录 `/opt/taoli1`、私有配置 `/etc/crossex-exec/credentials.env`、状态目录 `/var/lib/crossex-exec`，设置 `MemoryMax=80M`、`Restart=on-failure`、`UMask=0077`。配置目录和文件应仅由服务用户读取，文件模式必须 0600。没有 systemd `EnvironmentFile`，由应用自己打开文件验证权限。
+`deploy/crossex-exec.service` 使用用户 `ubuntu`、代码目录 `/home/ubuntu/wubin/taoli1`、私有配置 `/home/ubuntu/wubin/crossex-exec/crossex-exec.env`、状态目录 `/home/ubuntu/wubin/crossex-exec/var`，设置 `MemoryMax=80M`、`Restart=on-failure`、`UMask=0077`。配置目录和文件应仅由服务用户读取，文件模式必须 0600。没有 systemd `EnvironmentFile`，由应用自己打开文件验证权限。安装前需确认实际代码位置、创建 var 目录并核对所有者；`ProtectHome=read-only` 配合只允许 var 写入，本次没有安装或启动模板。
 
 实际安装、Linux 80M 内存验收、账户核对、24h 影子验收及开实盘开关均留待新任务。详细证据、接口 URL 和未确认事项见 [交接文档](../../docs/task-handoff-2026-11-11-crossex-exec.md)。

@@ -1,5 +1,7 @@
 # crossex-exec 本地实现交接 — 2026-11-11
 
+> **当前状态：第二轮 7 项已在本地完成，详见文末“第二轮交付”。** 下方第一轮记录保留作历史证据；其中 Classic v2、旧变量名、旧路径和 crossedRiskRate 口径已被第二轮替代。第二轮没有任何真实鉴权请求或生产动作。
+
 ## 目标、范围与状态
 
 按 `docs/crossex-exec-spec-2026-11-11.md` 和 `docs/crossex-live-design-2026-11-11.md` 实现独立的小额执行服务：CrossEx 五所永续 + Bitget Classic v2 USDT 永续，标准库、SQLite、默认影子模式。此任务的用户约束覆盖项目默认推送/上线流程。
@@ -149,3 +151,107 @@ env 变量全表在 `tools/crossex_exec/README.md`，模板含 14 个名称及�
 - 告警只有本地 JSON/journal，没有接入外部通知渠道。
 
 下一任务应先做独立代码审查与 C1 只读账户核对，再在 **仍为 0 的实盘开关** 下完成 C3 的 24h 影子与资源/调度验收。C4 只能由用户本人启用。不得依据本交接直接开启实盘。
+
+## 第二轮交付（2026-11-11）
+
+### 范围、分支与提交
+
+按 `docs/crossex-exec-round2-2026-11-11.md` 的 7 项修改。指定 worktree：`C:\Users\wubin\Desktop\code\codex\taoli1\.worktrees\crossex-exec`；分支 `codex/crossex-exec`；本轮基线 `cd58156b94be7748e9b9020989b5872153a87e78`，开始时工作区干净。
+
+本轮真实联网仅阅读官方文档；账户事实来自用户提供的脱敏 C1 文档，未由本会话重复核查。所有签名 HTTP 测试使用虚构凭据和 127.0.0.1 假服务，socket/DNS 守护禁止测试访问外网。未读取真实密钥文件，未运行服务 `run` 命令。
+
+| 类型 | 完整提交 hash | 内容 |
+|---|---|---|
+| test | `2e44d69b09ea7939f9edf56103c01d77cae0c31d` | UTA 字段、签名示例输入、费用、模式和三项硬上限契约；先观察旧实现失败 |
+| test | `6037d0a0d187346460c4a3e957ce0e9b6e7627f6` | 补充回撤全平、重启恢复、负债日志、真实签名的本地账户读取 |
+| feat | `4825fc5879d6cb9e1007ff6c88ec90bd4951ddcb` | UTA v3、硬风控、配置和服务模板 |
+| feat | `286721c791fdceae9fd968e0eae1ac581d58e0b0` | 删除新 limits.py 的末尾多余空行；不改变行为，未 amend |
+| test | `fd0e4dd332e43f7e15b7514e1f3eba1687c892dc` | 删除新增测试文件的末尾多余空行；不改变行为，未 amend |
+| docs | 随本节与 README 单独提交 | 用下面的命令取得自引用提交号 |
+
+```text
+git log -1 --format=%H -- docs/task-handoff-2026-11-11-crossex-exec.md
+```
+
+只有本任务文件进入提交；未修改 backend、compose、既有部署脚本、真实 `.env` 或 fill-sim。没有 push、SSH、WSL、amend、生产备份或部署；线上版本未变。交付工作区无新增未跟踪产物，Python 缓存由既有 ignore 排除。
+
+### 7 项验收映射
+
+| 项目 | 实现与证据 |
+|---|---|
+| 1. Bitget UTA v3 | `adapters.py::Bitget` 全部私有路径改为 v3；下单 qty/timeInForce/posSide，查单 orderStatus/cumExecQty，成交 execId/execQty/execPrice/fee/createdTime，分页 list/cursor。空持仓 list=null 归一为空列表；缺少 list 不伪装为空。签名传输层拒绝非 v3 路径。 |
+| 2. 持仓模式 | CrossEx 默认 DUAL，Bitget 默认 hedge_mode。`Accounts.validate_startup` 和 `Engine.startup` 先读账户与 settings，明确检查 unified/holdMode，不一致直接异常退出，不进入行情初始化或下单。外部 Bitget 挂单拒绝启动，本程序已落库待确认订单允许进入恢复。 |
+| 3. 环境变量 | CLI 和示例使用 CROSSEX_API_KEY/CROSSEX_API_SECRET 及 BITGET_API_KEY/BITGET_API_SECRET/BITGET_API_PASSPHRASE；load_env 明确拒绝 GATE_API_*，无旧变量回退。 |
+| 4. 路径 | 默认 DB 为 `/home/ubuntu/wubin/crossex-exec/var/crossex-exec.db`，STOP 为同目录 `/STOP`，env 为 `/home/ubuntu/wubin/crossex-exec/crossex-exec.env`；CLI、示例和 systemd 模板一致。 |
+| 5. 硬上限 | 新增 `limits.py`：MAX_LEG_USD=150、MAX_TOTAL_USD=600、MAX_EQUITY_DROP_USD=150。配置只接受不超过常量的正数，NaN/Inf 不允许。整对预检、每笔调用 place 前、通过限频/建连后，均调用同一 `HardLimits.check_order` 重新读取并检查三项。 |
+| 6. 保证金倍数 | CrossEx 使用 maintenance_margin_rate 并校验余额/maintenance_margin；maintenance_margin=0 安全。Bitget 使用账户 effEquity/mmr；mmr=0 安全。<3 停开、<2 请求全平。上线前仍须核实 Bitget 口径；BITGET_RISK_RATE_CONFIRMED 默认 0。 |
+| 7. 实际费率 | CrossEx 精确匹配 exchange_type 和 symbol，special_fee_list 的 taker_fee_rate 优先，其次 future_taker_fee；Bitget 对每个精确合约请求 v3 fee-rate。刷新失败清除该市场旧值，读不到不开仓。Bitget fee-rate 按官方 3 次/秒限频。 |
+
+关键调用链：`Engine.ingest → Executor.execute_pair → Executor.execute → adapter.place → Transport.request(before_send)`；整对和单笔所有开仓入口复用 `HardLimits.check_order`。两腿 ID 先落库，意图计入额度后才启动工作线程。已知超限在调用下单适配器前即返回 UNSENT；限频/建连期间变化在 before_send 阶段再次拒发，测试断言下单适配器/实际发送均没有越过对应边界。
+
+总名义额按市场原始 symbol、venue、position side 区分：远端标记名义额和本地已确认剩余仓位的保守名义额逐键取大，再加 INTENT/SENT/ACK/UNKNOWN 的未确认剩余数量 × 限价。多空不相抵；并发待发和未知订单预留额度，可能保守重复计数而拒绝机会。减仓不消耗开仓额度；无需等待风险读取成功，仍可发出平仓意图。
+
+权益分别取 CrossEx `margin_balance`、Bitget `usdtEquity`。首次启动持久化 `account_equity_baseline`，每次启动记录当前值并保留原基线；重启不抹掉亏损。有实盘订单历史但缺少该基线时拒绝启动。任一账户下降达到 150 USD（或更低配置）立即锁存 HALTING，等待并发工作线程结束再由协调器全平，确认本地与远端都无仓位才写 HALTED。无法平掉或订单未知时保留 HALTING，不假报清仓。启动时已知回撤会在目录和费率初始化前尝试全平。原有日亏 20、累计亏 100 风控继续有效，可能更早触发。
+
+CrossEx `assets[]` 任何正 liability 都写入 `ACCOUNT_LIABILITY` 事件、状态元数据，并由每 300 秒状态 JSON 输出；日志同时带两边权益基线与最近权益。只保存必要的 coin/exchange_type/liability，不保存原始私有响应。
+
+双向平仓使用 UTA 的 `side=sell,posSide=long` 或 `side=buy,posSide=short`；不能照搬 v2 tradeSide。UTA reduceOnly 仅适用于单向模式，因此双向减仓意图由上述字段表达。生成的 clientOid 已从 35 字符改为 32 字符，适配器拒绝超过上限的编号。
+
+本轮代码文件：新增 `tools/crossex_exec/limits.py`；修改 `__main__.py`、`accounts.py`、`adapters.py`、`engine.py`、`execution.py`、`security.py`、`transport.py`、两个 deploy 模板。测试文件：修改 `tests/test_exec.py`、`tests/test_engine.py`，新增 `tests/test_round2.py`。文档：本交接和 `tools/crossex_exec/README.md`。
+
+### 官方 UTA 接口出处
+
+以下均在本轮阅读；只访问文档页面，没有执行页面中的 curl/API 示例。
+
+| 路径 / 用途 | 官方 URL |
+|---|---|
+| POST `/api/v3/trade/place-order` | https://www.bitget.com/legacy-docs/uta/trade/Place-Order |
+| GET `/api/v3/trade/order-info` | https://www.bitget.com/legacy-docs/uta/trade/Get-Order-Details |
+| POST `/api/v3/trade/cancel-order` | https://www.bitget.com/legacy-docs/uta/trade/Cancel-Order |
+| GET `/api/v3/trade/fills` | https://www.bitget.com/legacy-docs/uta/trade/Get-Order-Fills |
+| GET `/api/v3/trade/unfilled-orders` | https://www.bitget.com/legacy-docs/uta/trade/Get-Order-Pending |
+| GET `/api/v3/position/current-position` | https://www.bitget.com/legacy-docs/uta/trade/Get-Position |
+| GET `/api/v3/account/assets` | https://www.bitget.com/legacy-docs/uta/account/Get-Account |
+| GET `/api/v3/account/fee-rate` | https://www.bitget.com/legacy-docs/uta/account/Get-Account-Fee-Rate |
+| GET `/api/v3/account/settings` | https://www.bitget.com/docs/catalog/account/account-settings |
+| 当前合并版订单文档 | https://www.bitget.com/docs/catalog/trading/order-management |
+| UTA 签名与官方 GET/POST 示例输入 | https://www.bitget.com/docs/uta/quick-start |
+| v2→v3 签名保持不变 | https://www.bitget.com/docs/classic/uta-api-upgrade-guide |
+| CrossEx 账户、仓位、费率与 special 字段 | https://www.gate.com/docs/developers/crossex/en/ |
+
+Bitget `legacy-docs/uta` 是官方旧版展示站点的 **UTA v3** 文档，并非保留 Classic v2 实现。复用的 Bitget **免鉴权公开行情**仍沿用 fill-sim 的 v2 market 接口；本轮要求的下单、查单、撤单、成交、仓位、资产、费用和设置全部已切 v3。
+
+签名测试使用当前 UTA Quick Start 的固定 GET（fee-rate）和 POST（place-order）预映像、时间戳和请求体。页面未提供固定 secret 对应的官方输出摘要；使用虚构 secret 独立 HMAC 计算期望值，并由本地 HTTP 服务再次验证实际请求字节。不能将其表述成“官方输出摘要向量已验收”。Gate 原有官方 GET/POST 固定输出向量继续通过。
+
+### 本轮测试与检查
+
+最终原始汇总如下。新增执行服务测试含本地 HTTP 和 mock，外网守护启用；fill-sim 本轮未改动。
+
+```text
+python -m unittest discover -s tools/crossex_exec/tests -v
+----------------------------------------------------------------------
+Ran 76 tests in 52.160s
+
+OK
+
+python -m unittest discover -s tools/fill_sim/tests -v
+----------------------------------------------------------------------
+Ran 158 tests in 29.483s
+
+OK
+```
+
+最初 15 项新增契约在旧实现下出现 3 failures、11 errors，确认覆盖了迁移缺口；实现后与后续补充测试全部通过。最终测试之后仅删除实现及测试 Python 文件末尾空行和更新文档，没有行为改动。Python 3.10 语法解析检查、CLI `--help`、最终完整差异 `git diff --check` 通过。运行环境仍为 Windows/Python 3.12.10，不是 Ubuntu/systemd 验收。
+
+### 当前配置与上线前必须确认
+
+示例现有 17 项：`CROSSEX_LIVE_ENABLED`、`CROSSEX_DB`、`CROSSEX_STOP_FILE`、`CROSSEX_POSITION_MODE`、`BITGET_POSITION_MODE`、`BITGET_RISK_RATE_CONFIRMED`、`CROSSEX_BASES`、`TAOLI_BASE_URL`、`TAOLI_API_TOKEN`、`CROSSEX_API_KEY`、`CROSSEX_API_SECRET`、`BITGET_API_KEY`、`BITGET_API_SECRET`、`BITGET_API_PASSPHRASE`、`CROSSEX_MAX_LEG_USD`、`CROSSEX_MAX_TOTAL_USD`、`CROSSEX_MAX_EQUITY_DROP_USD`。密钥默认均为空，实盘开关仍为 0。
+
+1. **Bitget 保证金口径**：按 PM 要求用账户 `effEquity / mmr` 得倍数，与 CrossEx 使用相同 3/2 阈值。官方分别描述为 USD 有效权益和 USD 维持保证金，但实际 multi_assets 的折扣、借贷、极端余额及与网页风险指标的对应关系仍需上线前核对；不能混用 position 接口的 mmr 比率，也不能拿 mgnRatio 直接比较。确认后才可设置 `BITGET_RISK_RATE_CONFIRMED=1`。
+2. **逐合约与实仓字段**：C1 已提供 unified/hedge_mode/DUAL 及空仓事实；仍需核对目标合约 crossed/3 倍杠杆、持仓非空时的 posSide/total/markPrice/unrealisedPnl，以及 CrossEx position_qty/mark_price/upnl 的账户实际返回。字段缺失或模式不符会停开/拒绝启动。
+3. **成交和费用**：核实 UTA `feeDetail[].fee` 正负号、USDT 扣费币种、特殊优惠、special 费率和分页/成交延迟；官方例子 fee 为正成本，本轮按该例解析。BGB/优惠券等非 USDT 成本仍保留未知记账，不假定零费用。真实双向减仓及 IOC 撮合尚未验证。
+4. **查询时效与恢复**：当前订单文档提示 API 下单的 cancelled 历史仅保留 2 小时；查不到不能证明没有成交，本程序不会重发未知单。旧 v2 实盘订单/旧数据库不能未经核对直接迁移；基线或订单格式不兼容时需要人工复核，不删除数据库绕过。
+5. **3 万 USDT 账户的运行边界**：用户已决定使用该账户，不要求另开账户；运行期间仍应避免外部交易及转账，外部持仓/挂单会阻止正常启动或对账。两边权益不能互相抵销；资金流出会触发回撤，不自动解释为转账。硬额度在发送检查时约束新增风险，价格后续变化、并行外部交易和非原子快照无法由本地程序绝对锁住；发现残仓不会假报 HALTED。
+6. **Linux 和延迟验收**：确认代码根目录 `/home/ubuntu/wubin/taoli1`、运行用户 ubuntu、env 所有者与 0600、预建 var 的权限、ProtectHome/ReadWritePaths、Python 3.10/SQLite 3.37、80M 内存。新增发送前风险读取会增加请求数和两腿时间差；每次读取和最终写请求有界，但整段复核并非原来的单次 2 秒总预算，必须在 C3 量出限频、调度和单腿风险。远端故障时停止开仓并保留真实敞口。
+
+下一任务只做独立审查及后续获准的 C3 影子验收；C1 数据若要刷新须在新任务明确授权。当前工作没有部署或开启实盘，C4 开关仍由用户本人控制。
