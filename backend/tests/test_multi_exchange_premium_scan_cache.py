@@ -395,6 +395,136 @@ async def test_one_scan_per_generation_and_settings_value(clock, monkeypatch):
     print("SCAN_COUNTS: first_batch=1 same_values=0 generation_change=1 settings_change=1 return_to_old_settings=1")
 
 
+async def test_three_concurrent_evaluations_share_one_scan(clock, monkeypatch):
+    monitor, state, settings = make_monitor()
+    started = asyncio.Event()
+    release = asyncio.Event()
+    entered = asyncio.Event()
+    original_scan = premium._scan_eligibility_async
+    original_current = monitor._current_eligibility_async
+    callers = 0
+
+    async def gated_scan(markets, risk):
+        started.set()
+        await release.wait()
+        return await original_scan(markets, risk)
+
+    async def count_callers(*args):
+        nonlocal callers
+        callers += 1
+        if callers == 3:
+            entered.set()
+        return await original_current(*args)
+
+    scan = AsyncMock(side_effect=gated_scan)
+    monkeypatch.setattr(premium, "_scan_eligibility_async", scan)
+    monkeypatch.setattr(monitor, "_current_eligibility_async", count_callers)
+    tasks = [asyncio.create_task(monitor._evaluate_results([])) for _ in range(3)]
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        await asyncio.wait_for(started.wait(), timeout=2)
+        assert scan.await_count == 1
+        assert not any(task.done() for task in tasks)
+        release.set()
+        await asyncio.wait_for(asyncio.gather(*tasks), timeout=2)
+        assert scan.await_count == 1
+        assert monitor._scan_cache is not None
+        assert monitor._scan_inflight == {}
+        await monitor._evaluate_results([])
+        assert scan.await_count == 1
+        state.snapshot_store.publish(make_rows())
+        await monitor._evaluate_results([])
+        assert scan.await_count == 2
+        settings.ignored_exchanges.append("gate")
+        await monitor._evaluate_results([])
+        assert scan.await_count == 3
+    finally:
+        release.set()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def test_publication_during_scan_does_not_cancel_other_asset_tasks(clock, monkeypatch):
+    monitor, state, _ = make_monitor()
+    # start_batch performs the initial scan before any network observations return.
+    task, gates, done = await start_batch(monitor)
+    started = asyncio.Event()
+    release = asyncio.Event()
+    original_scan = premium._scan_eligibility_async
+
+    async def gated_scan(markets, settings):
+        started.set()
+        await release.wait()
+        return await original_scan(markets, settings)
+
+    monkeypatch.setattr(premium, "_scan_eligibility_async", gated_scan)
+    try:
+        state.snapshot_store.publish(make_rows())
+        gates["asset0000"].set()
+        await asyncio.wait_for(started.wait(), timeout=2)
+        # Publish a replacement while asset 0 scans; the other 15 assets still wait.
+        replacement = [row.model_copy(update={"bid": 95, "ask": 97}) for row in make_rows()]
+        state.snapshot_store.publish(replacement)
+        release.set()
+        await asyncio.wait_for(done["asset0000"].wait(), timeout=2)
+        assert monitor._scan_cache is None
+        assert not task.done()
+        assert not done["asset0001"].is_set()
+        for gate in gates.values():
+            gate.set()
+        await asyncio.wait_for(task, timeout=5)
+        assert all(signal.is_set() for signal in done.values())
+        assert state.alert_event_repo.create.await_count == 16
+        assert state.feishu_notifier.send_text.await_count == 16
+        assert monitor.status["last_batch_symbols"] == 16
+        assert all(a is b for a, b in zip(monitor._scan_cache[2], replacement, strict=True))
+        assert monitor._scan_inflight == {}
+    finally:
+        release.set()
+        for gate in gates.values():
+            gate.set()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("version_change", ["generation", "markets_version", "rows_only"])
+async def test_older_inflight_scan_cannot_overwrite_newer_cache(clock, monkeypatch, version_change):
+    monitor, state, settings = make_monitor(rows=make_rows(1))
+    store = state.snapshot_store
+    store.markets_version = 1
+    original = list(store.rows)
+    started = asyncio.Event()
+    release = asyncio.Event()
+    scan = premium._scan_eligibility_async
+
+    async def gate_old(markets, risk):
+        if markets[0] is original[0]:
+            started.set()
+            await release.wait()
+        return await scan(markets, risk)
+
+    monkeypatch.setattr(premium, "_scan_eligibility_async", gate_old)
+    old_task = asyncio.create_task(monitor._current_eligibility_async(settings, START))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=2)
+        replacement = [row.model_copy(update={"asset_id": "replacement"}) for row in original]
+        store.rows = replacement
+        if version_change == "generation":
+            store.generation += 1
+        elif version_change == "markets_version":
+            store.markets_version += 1
+        latest, _ = await monitor._current_eligibility_async(settings, START)
+        assert list(latest.values()) == [replacement]
+        cached = monitor._scan_cache
+        release.set()
+        previous, _ = await asyncio.wait_for(old_task, timeout=2)
+        assert list(previous.values()) == [original]
+        assert monitor._scan_cache is cached
+        assert all(a is b for a, b in zip(cached[2], replacement, strict=True))
+        assert monitor._scan_inflight == {}
+    finally:
+        release.set()
+        await asyncio.gather(old_task, return_exceptions=True)
+
+
 async def test_expiry_boundary_rechecks_without_scanning(clock, monkeypatch):
     rows = make_rows(1)[:2]
     expiry = START + timedelta(seconds=1)

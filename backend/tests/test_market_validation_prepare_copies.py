@@ -289,7 +289,9 @@ def test_prepare_pairing_and_scheduling_source_is_unchanged():
         '        self._prepared_rows = {\n'
         '            id(row): (row, key) for row, key in zip(annotated, market_keys, strict=True)\n'
         '        }\n'
-        '        self._prepared_fx = prepared_fx\n': 1,
+        '        self._prepared_fx = prepared_fx\n'
+        '        self._prepared_collision = collision_symbols\n'
+        '        self._discard_stale_market_index()\n': 1,
     })
     normalized = []
     for index, source in enumerate(sources):

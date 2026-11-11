@@ -185,11 +185,12 @@ async def test_premium_scan_publication_change_does_not_cache_old_rows(monkeypat
     new.store.set_markets(rows)
     app = SimpleNamespace(state=SimpleNamespace(snapshot_store=new.store))
     monitor = premium.MultiExchangePremiumMonitor(app)
+    expected = premium._eligible_at(premium._scan_eligibility(rows, RiskSettings()), NOW)
     budget = CountingBudget(lambda frame: new.store.mark_published(NOW))
     monkeypatch.setattr(premium, "YieldBudget", lambda: budget)
-    with pytest.raises(ValueError, match="changed"):
-        await monitor._current_eligibility_async(RiskSettings(), NOW)
+    assert await monitor._current_eligibility_async(RiskSettings(), NOW) == expected
     assert monitor._scan_cache is None
+    assert monitor._scan_inflight == {}
 
 
 async def test_alert_loop_awaits_async_filter_and_records_recomputed(monkeypatch):
@@ -525,7 +526,9 @@ def test_prepare_business_tail_matches_baseline_after_exact_additions():
         '        self._prepared_rows = {\n'
         '            id(row): (row, key) for row, key in zip(annotated, market_keys, strict=True)\n'
         '        }\n'
-        '        self._prepared_fx = prepared_fx\n',
+        '        self._prepared_fx = prepared_fx\n'
+        '        self._prepared_collision = collision_symbols\n'
+        '        self._discard_stale_market_index()\n',
     ]
     for addition in additions:
         assert actual.count(addition) == 1
