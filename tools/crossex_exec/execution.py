@@ -86,8 +86,12 @@ class Executor:
             gate=threading.Barrier(len(intents),action=authorize,timeout=max(3,self.confirm_timeout))
             gate.approved=approved
         with ThreadPoolExecutor(max_workers=2,thread_name_prefix='ioc') as pool:
-            jobs=[pool.submit(self.execute,i,send_gate=gate) for i in intents]
-            return [f.result() for f in jobs]
+            jobs=[pool.submit(self.execute,i,send_gate=gate,defer_confirm=True) for i in intents]
+            dispatched=[f.result() for f in jobs]
+            # Both admitted sends finish before a confirmation failure can latch
+            # unknown_order. A slow dispatch must not race its peer's recovery.
+            jobs=[pool.submit(self.confirm,i) if i['state'] in NONTERMINAL else None for i in dispatched]
+            return [job.result() if job else i for i,job in zip(dispatched,jobs)]
 
     def prepare(self,i):
         validate_intent(i)
@@ -99,7 +103,7 @@ class Executor:
                 return i
             return existing
 
-    def execute(self,intent,*,send_gate=None):
+    def execute(self,intent,*,send_gate=None,defer_confirm=False):
         with self.lock:
             mutex=self.locks.setdefault(intent['cid'],threading.Lock())
         with mutex:
@@ -111,14 +115,14 @@ class Executor:
             if not self.live:
                 if i['state']!='INTENT':
                     # A prior live attempt cannot become a shadow success after restart.
-                    return self.confirm(i)
+                    return i if defer_confirm else self.confirm(i)
                 i.update(state='SHADOW',accounting_pending=False)
                 self.save(i,'SHADOW')
                 return i
             if i['state']!='INTENT':
                 if send_gate and not send_gate.approved.is_set():
                     send_gate.abort()
-                return self.confirm(i)
+                return i if defer_confirm else self.confirm(i)
             adapter=self.adapter(i)
             def sent():
                 if send_gate:
@@ -156,7 +160,7 @@ class Executor:
                     return i
                 i.update(state='UNKNOWN',reason=kind)
                 self.save(i,'UNKNOWN')
-            return self.confirm(i)
+            return i if defer_confirm else self.confirm(i)
 
     def confirm(self,i):
         adapter=self.adapter(i)
