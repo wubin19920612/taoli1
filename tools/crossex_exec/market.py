@@ -1,5 +1,6 @@
 """Public market data via fill-sim's bounded transport, parsers and send scheduler."""
 import time
+import threading
 from urllib.parse import urlencode
 from tools.fill_sim.core import Market, dec
 from tools.fill_sim.exchanges import endpoint, parse_spec, parse_book, exact, check_response
@@ -145,9 +146,15 @@ class MarketData:
         self.queue=RequestQueue(self.client,clock)
         self.pool=DaemonPool(max_workers=4,thread_name_prefix='exec-public')
         self.mapping={}
+        self.catalog_errors={}
+        self._pump_lock=threading.Lock()
+        self._mapping_lock=threading.Lock()
+        self.closed=False
 
     def close(self):
-        self.store.set_meta('public_limiter',self.client.limiter.snapshot())
+        with self._mapping_lock:
+            self.closed=True
+            self.store.set_meta('public_limiter',self.client.limiter.snapshot())
         self.queue.close()
         self.pool.shutdown(wait=False)
 
@@ -155,7 +162,8 @@ class MarketData:
         jobs=[self.queue.submit(ex,url,priority,convert) for ex,url,convert in items]
         deadline=time.monotonic()+10
         while not all(j.done() for j in jobs) and time.monotonic()<deadline:
-            self.queue.pump(self.pool)
+            with self._pump_lock:
+                self.queue.pump(self.pool)
             time.sleep(.01)
         results=[]
         for j in jobs:
@@ -170,40 +178,62 @@ class MarketData:
                 results.append(None)
         return results
 
-    def fetch(self,ex,url):
-        return self.batch([(ex,url,None)])[0]
+    def fetch(self,ex,url,priority=1):
+        return self.batch([(ex,url,None)],priority=priority)[0]
 
     def bootstrap(self,bases=()):
-        rules=self.fetch('gate',RULES_URL)
-        mapped={}
-        ambiguous=set()
+        if not bases:
+            self.publish_mapping({},{})
+            return self.mapping
+        try:
+            rules=self.fetch('gate',RULES_URL,priority=2)
+        except Exception:
+            rules=None
+        mapped={k:i for k,i in self.mapping.items() if i.spec.base in bases}
+        errors={}
         for ex,url in CATALOGS.items():
-            data=self.fetch(ex,url)
-            pages=0
-            while True:
-                for row in native_rows(ex,data):
-                    try:
-                        i=native_instrument(ex,row,rules)
-                        if not bases or i.spec.base in bases:
-                            if i.market.key in mapped or i.market.key in ambiguous:
-                                ambiguous.add(i.market.key)
-                                mapped.pop(i.market.key,None)
-                                continue
-                            mapped[i.market.key]=i
-                    except (ValueError,KeyError,TypeError):
-                        continue
-                cursor=data.get('result',{}).get('nextPageCursor') if ex=='bybit' else None
-                if not cursor:
-                    break
-                pages+=1
-                if pages>=10:
-                    raise ValueError('catalog_pagination_incomplete')
-                data=self.fetch(ex,url+'&'+urlencode(dict(cursor=cursor)))
-        if not mapped:
-            raise ValueError('no_exact_markets')
-        self.mapping=mapped
-        self.store.set_meta('mapping',dict(at=self.clock(),instruments={k:v.dump() for k,v in mapped.items()}))
+            if self.closed:
+                return self.mapping
+            venue={}
+            ambiguous=set()
+            try:
+                if rules is None and ex!='bitget':
+                    raise ValueError('crossex_rules_unavailable')
+                data=self.fetch(ex,url,priority=2)
+                pages=0
+                while True:
+                    for row in native_rows(ex,data):
+                        try:
+                            i=native_instrument(ex,row,rules)
+                            if i.spec.base in bases:
+                                if i.market.key in venue or i.market.key in ambiguous:
+                                    ambiguous.add(i.market.key)
+                                    venue.pop(i.market.key,None)
+                                    continue
+                                venue[i.market.key]=i
+                        except (ValueError,KeyError,TypeError):
+                            continue
+                    cursor=data.get('result',{}).get('nextPageCursor') if ex=='bybit' else None
+                    if not cursor:
+                        break
+                    pages+=1
+                    if pages>=10:
+                        raise ValueError('catalog_pagination_incomplete')
+                    data=self.fetch(ex,url+'&'+urlencode(dict(cursor=cursor)),priority=2)
+            except Exception:
+                venue={}
+                errors[ex]='catalog_unavailable'
+            mapped={k:i for k,i in mapped.items() if i.market.exchange!=ex}
+            mapped.update(venue)
+            self.publish_mapping(mapped,errors)
         return mapped
+
+    def publish_mapping(self,mapped,errors):
+        with self._mapping_lock:
+            if not self.closed:
+                self.mapping=dict(mapped)
+                self.catalog_errors=dict(errors)
+                self.store.set_meta('mapping',dict(at=self.clock(),errors=errors,instruments={k:v.dump() for k,v in mapped.items()}))
 
     def books(self,instruments):
         return self.batch([(i.market.exchange,endpoint(i.market,'depth').replace('/fapi/v1/','/fapi/v3/')

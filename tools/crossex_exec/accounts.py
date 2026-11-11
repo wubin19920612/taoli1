@@ -1,4 +1,5 @@
 """Read-only startup validation and independent account risk measures."""
+import time
 from tools.fill_sim.core import dec
 from .policy import Instrument
 
@@ -74,36 +75,56 @@ def local_positions(pairs):
 
 
 class Accounts:
-    def __init__(self,cross,bitget,*,risk_confirmed=False):
+    def __init__(self,cross,bitget,*,risk_confirmed=False,clock=time.time):
         self.cross,self.bitget,self.risk_confirmed=cross,bitget,risk_confirmed
+        self.clock=clock
         self.fees_by_market={}
+        self.fee_times_by_market={}
         self.leverages={}
 
     def fees(self,instruments):
         # A failed refresh must revoke stale rates, even if the caller catches it.
-        self.fees_by_market={}
-        self.leverages={}
+        instruments=tuple(instruments)
+        allowed={i.market.key for i in instruments}
+        self.fees_by_market={k:v for k,v in self.fees_by_market.items() if k in allowed}
+        self.fee_times_by_market={k:v for k,v in self.fee_times_by_market.items() if k in allowed}
+        if not instruments:
+            return {}
+        cross_at=self.clock()
         try:
             cross=self.cross.fees()
         except Exception:
             cross=[]
         mapped={}
         for i in instruments:
+            captured_at=self.clock() if i.market.exchange=='bitget' else cross_at
             try:
                 if i.market.exchange=='bitget':
                     rate=self.bitget.fee(i.symbol)
                 else:
                     rows=[r for r in cross if r['exchange_type']==i.market.exchange.upper()]
                     if len(rows)!=1:
-                        continue
+                        raise ValueError('fee_market_missing')
                     specials=[r for r in rows[0].get('special_fee_list',[]) if r['symbol']==i.symbol]
                     if len(specials)>1:
-                        continue
+                        raise ValueError('fee_market_ambiguous')
                     rate=specials[0]['taker_fee_rate'] if specials else rows[0]['future_taker_fee']
                 if 0<=dec(rate)<dec('.02'):
                     mapped[i.market.key]=str(rate)
             except Exception:
-                continue
+                pass
+            # Publish each contract independently; one slow/missing rate cannot
+            # revoke already verified fees for a different contract.
+            current=dict(self.fees_by_market)
+            current.pop(i.market.key,None)
+            if i.market.key in mapped:
+                current[i.market.key]=mapped[i.market.key]
+            times=dict(self.fee_times_by_market)
+            times.pop(i.market.key,None)
+            if i.market.key in mapped:
+                times[i.market.key]=captured_at
+            self.fees_by_market=current
+            self.fee_times_by_market=times
         self.fees_by_market=mapped
         try:
             self.leverages=self.cross.leverage([])

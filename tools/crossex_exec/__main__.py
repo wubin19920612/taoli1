@@ -74,19 +74,12 @@ def main(argv=None):
             try:
                 engine.startup(tuple(filter(None,config.get('CROSSEX_BASES','').split(','))))
                 api_service=start_api(config,path,logger=emit)
-                last_status=last_refresh=0
+                last_status=0
                 while not shutdown and store.meta('state')!='HALTED':
                     try:
                         engine.tick()
-                        # Hourly fee refresh; catalog rebuild only when flat (6h).
                         now=time.time()
-                        if now-last_refresh>=3600:
-                            accounts.fees(market.mapping.values())
-                            store.set_meta('actual_fees',dict(at=now,rates=accounts.fees_by_market))
-                            last_refresh=now
-                        if now-store.meta('mapping')['at']>=21600 and not store.pairs(active=True):
-                            market.bootstrap(tuple(filter(None,config.get('CROSSEX_BASES','').split(','))))
-                        rows=source.poll()
+                        rows=source.poll() if engine.can_open() else []
                         if rows:
                             # Each accepted pair can take 10s to confirm; service exits
                             # this batch after one fresh trigger to revisit risk/positions.
@@ -103,7 +96,6 @@ def main(argv=None):
                             last_status=now
                     except Exception:
                         engine.alert('cycle_failed_closed')
-                        emit('alert',reason='cycle_failed_closed')
                     time.sleep(.2)
                 if shutdown:
                     engine.flatten_all('shutdown')
@@ -114,6 +106,7 @@ def main(argv=None):
             finally:
                 if api_service is not None:
                     api_service.close()
+                engine.close()
                 market.close()
 
 

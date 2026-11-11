@@ -8,11 +8,12 @@ from .transport import APIError
 
 
 class Executor:
-    def __init__(self, store, adapters, *, live=False, poll_interval=.2, confirm_timeout=10, can_open=lambda: True, check_order=None):
+    def __init__(self, store, adapters, *, live=False, poll_interval=.2, confirm_timeout=10, can_open=lambda: True, check_order=None, alert=None):
         self.store,self.adapters,self.live=store,adapters,live
         self.poll_interval,self.confirm_timeout=poll_interval,confirm_timeout
         self.can_open=can_open
         self.check_order=check_order
+        self.alert=alert or (lambda reason:self.store.set_meta('stop_reason',reason))
         self.locks,self.lock= {},threading.Lock()
 
     def adapter(self,i):
@@ -102,6 +103,8 @@ class Executor:
                     i.update(oid=status['oid'],state='ACK',ack_ms=time.time()*1000)
                     self.store.save_order(i,'ACK')
                 i.update(venue_state=status['venue_state'],filled=status['filled'],rejected=status['rejected'])
+                if status.get('average_price') is not None:
+                    i['average_price']=status['average_price']
                 if status['terminal']:
                     i.update(state='TERMINAL',terminal_ms=time.time()*1000)
                     self.store.save_order(i,'TERMINAL')
@@ -111,7 +114,7 @@ class Executor:
             time.sleep(min(self.poll_interval,max(0,deadline-time.monotonic())))
         i.update(state='UNKNOWN',reason='confirmation_deadline')
         self.store.save_order(i,'UNKNOWN')
-        self.store.set_meta('stop_reason','unknown_order')
+        self.alert('unknown_order')
         return i
 
     def account(self,i):
@@ -122,7 +125,7 @@ class Executor:
                 i.update(self.adapter(i).fills(i))
             except Exception:
                 i['accounting_pending']=True
-                self.store.set_meta('stop_reason','fills_pending')
+                self.alert('fills_pending')
         self.store.save_order(i,'FILLS' if not i['accounting_pending'] else 'FILLS_PENDING')
         return i
 
@@ -139,7 +142,7 @@ class Executor:
     def recover(self):
         for i in self.store.all_orders():
             if i['state'] in ('SENT','ACK','UNKNOWN'):
-                self.confirm(i)
+                self.cancel(i) if self.live else self.confirm(i)
             elif i['state']=='INTENT':
                 # No automatic stale-entry send after process death.
                 i.update(state='UNSENT',accounting_pending=False,reason='restart_before_send')

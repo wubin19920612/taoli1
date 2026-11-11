@@ -11,8 +11,9 @@ DEFAULT_ENV = '/home/ubuntu/wubin/crossex-exec/crossex-exec.env'
 
 
 class HardLimits:
-    def __init__(self,store,snapshot,config=None):
+    def __init__(self,store,snapshot,config=None,alert=None):
         self.store,self.snapshot=store,snapshot
+        self.alert=alert
         self.lock=threading.RLock()
         config=config or {}
         def lowered(name,ceiling):
@@ -52,6 +53,8 @@ class HardLimits:
             self.store.set_meta('state','HALTING')
             self.store.set_meta('stop_reason','account_equity_drop')
             self.store.event('EQUITY_HALT',dict(venues=breached,current=equities,baseline=baseline))
+            if self.alert:
+                self.alert('account_equity_drop')
         return bool(breached)
 
     def exposure(self,snapshot,intent):
@@ -84,7 +87,7 @@ class HardLimits:
         if intent['reduce_only']:
             return
         with self.lock:
-            snapshot=self.snapshot()  # fresh account/position reads for EACH send
+            snapshot=self.snapshot()  # Engine supplies a <=10s cache; never private I/O here.
             breached=self.check_equity(snapshot)
             notional=dec(intent['quantity'])*dec(intent['price'])
             total=self.exposure(snapshot,intent)

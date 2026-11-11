@@ -37,8 +37,13 @@ def checked_status(data, i, *, gate):
     filled = dec(data[qty])
     if filled < 0 or filled > dec(i['quantity']):
         raise APIError('invalid_response')
+    average=data.get('avg_price' if gate else 'avgPrice')
+    try:
+        average=str(dec(average)) if average is not None and dec(average)>0 else None
+    except ValueError:
+        average=None
     return dict(oid=identifier(data[oid]), venue_state=state, filled=str(data[qty]), terminal=state in terminal,
-                rejected=state in ('FAIL','REJECT'))
+                rejected=state in ('FAIL','REJECT'),average_price=average)
 
 
 def summarize_fills(rows, i, gate):

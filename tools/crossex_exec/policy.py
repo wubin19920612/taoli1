@@ -1,7 +1,7 @@
 """Pure Decimal execution policy. All sizes are base units, all rates fractions."""
 from dataclasses import dataclass, asdict, replace
 from decimal import ROUND_CEILING, ROUND_FLOOR
-from tools.fill_sim.core import Market, Spec, common_step, opening, dec
+from tools.fill_sim.core import Market, Spec, common_step, opening, dec, walk
 
 
 @dataclass
@@ -77,14 +77,53 @@ def review(instruments, books, fees, funding, turnovers, now):
     # Count one settlement per leg, explicitly retaining unequal cycle lengths.
     # Do not use expected income to rescue a failing spread.
     funding_cost=max(dec(0),dec(funding[0]['rate'])-dec(funding[1]['rate']))*10000
-    result=opening(*books,instruments[0].spec,instruments[1].spec,100,*fees,threshold=15+funding_cost)
+    # Minimums apply to the final rounded LIMIT, not the preliminary VWAP.
+    specs=[replace(i.spec,min_qty='0',min_notional='0') for i in instruments]
+    result=opening(*books,*specs,100,*fees,threshold=15+funding_cost)
     if result['status']!='opened':
         raise ValueError('review_rejected')
-    result['net_bps']=float(dec(result['net_bps'])-funding_cost)
-    result['funding_cost_bps']=str(funding_cost)
-    result['limits']=[limit_price(result[k]['deepest'],side,i.tick) for i,k,side in
-                      zip(instruments,('buy','sell'),('buy','sell'))]
+    quantity=dec(result['quantity'])
+    step=common_step(*(i.spec.qty_step for i in instruments))
+    for attempt in range(2):
+        fills=[walk(books[0].asks,quantity=quantity),walk(books[1].bids,quantity=quantity)]
+        prices=[limit_price(f['deepest'],side,i.tick) for f,side,i in zip(fills,('buy','sell'),instruments)]
+        if any(quantity>dec(i.spec.max_qty) or quantity*dec(p)>150 for i,p in zip(instruments,prices)):
+            raise ValueError('final_size_above_max')
+        if all(quantity>=dec(i.spec.min_qty) and quantity*dec(p)>=dec(i.spec.min_notional)
+               for i,p in zip(instruments,prices)):
+            break
+        if attempt:
+            raise ValueError('final_size_below_min')
+        quantity+=step
+    gross=(dec(fills[1]['vwap'])/dec(fills[0]['vwap'])-1)*10000
+    net=gross-2*sum(map(dec,fees))*10000-funding_cost
+    if net<15:
+        raise ValueError('review_rejected')
+    result.update(quantity=str(quantity),buy=fills[0],sell=fills[1],gross_bps=float(gross),net_bps=float(net),
+                  funding_cost_bps=str(funding_cost),limits=prices)
     return result
+
+
+def send_review(pair, orders, fees, now):
+    """Pure last-moment check: no account or market network calls in workers."""
+    if len(orders)!=2 or len(fees)!=2:
+        raise ValueError('opening_pair_missing')
+    books=pair['last_books']
+    for b in books:
+        if not 0<=now-b['received_at']<=2 or (b.get('exchange_at') is not None and not -5<=now-b['exchange_at']<=2):
+            raise ValueError('send_book_stale')
+    if any(f is None or not 0<=dec(f)<dec('.02') for f in fees):
+        raise ValueError('send_fees_missing')
+    fills=[walk(books[0]['asks'],quantity=orders[0]['quantity']),walk(books[1]['bids'],quantity=orders[1]['quantity'])]
+    if dec(orders[0]['quantity'])!=dec(orders[1]['quantity']):
+        raise ValueError('opening_quantity_mismatch')
+    funding=pair['funding']
+    if any(not s.get('history_ok') or not 0<=now-s['captured_at']<=300 or s['next']-now<1800 for s in funding):
+        raise ValueError('send_funding_stale')
+    cost=max(dec(0),dec(funding[0]['rate'])-dec(funding[1]['rate']))*10000
+    net=(dec(fills[1]['vwap'])/dec(fills[0]['vwap'])-1)*10000-2*sum(map(dec,fees))*10000-cost
+    if net<15 or dec(fills[0]['deepest'])>dec(orders[0]['price']) or dec(fills[1]['deepest'])<dec(orders[1]['price']):
+        raise ValueError('send_spread_or_limit_changed')
 
 
 def exit_reason(*, age, spread, entry_spread, pnl, notional, next_funding, stale_age):
