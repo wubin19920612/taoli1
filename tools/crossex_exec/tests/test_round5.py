@@ -1,6 +1,7 @@
 """Round-five state regressions; in-memory venues and a faulting local journal."""
 import copy
 import sqlite3
+import threading
 import unittest
 from unittest.mock import Mock, patch
 
@@ -213,6 +214,23 @@ class Round5Tests(unittest.TestCase):
             self.engine.executor.execute_pair(orders)
         self.assertFalse([r for r in self.trace if r[0] == 'place'])
         self.assertTrue(all(o['state'] == 'UNSENT' for o in self.store.all_orders()))
+
+    def test_r3_pair_dispatch_finishes_before_confirmation_can_latch_peer(self):
+        orders = self.open_intents()
+        confirmed = threading.Event()
+        early = []
+        detail, place = self.venues[0].detail, self.venues[1].place
+        def observe(order, deadline=None):
+            confirmed.set()
+            return detail(order, deadline)
+        def delayed_peer(order, before_send):
+            before_send()
+            early.append(confirmed.wait(.03))
+            return place(order, lambda:None)
+        with (patch.object(self.venues[0], 'detail', side_effect=observe),
+              patch.object(self.venues[1], 'place', side_effect=delayed_peer)):
+            self.engine.executor.execute_pair(orders)
+        self.assertEqual(early, [False])
 
     def test_r4_close_before_first_new_day_snapshot_uses_last_saved_upnl(self):
         pair = self.pair()

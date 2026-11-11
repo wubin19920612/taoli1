@@ -358,7 +358,7 @@ class InvariantSimulationTests(unittest.TestCase):
                   f'I1_failures={len(exposure_violations)} coverage={dict(sorted(coverage.items()))}')
             self.assertFalse(exposure_violations, f'I1 close violations={exposure_violations}')
         except Exception as error:
-            self.fail(f'seed={SEED} checked_rounds={len(sequence)} error={error}\nsteps={json.dumps(first_failure_steps or sequence)}')
+            self.fail(f'seed={SEED} checked_rounds={len(sequence)} error={error}\nsteps={json.dumps(sequence)}')
         finally:
             if world:
                 world.engine.close()
