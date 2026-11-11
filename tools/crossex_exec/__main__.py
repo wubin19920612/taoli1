@@ -15,6 +15,7 @@ from .market import MarketData
 from .engine import Engine
 from .limits import DEFAULT_VAR, DEFAULT_ENV
 from .reporting import report
+from .api import start_api
 from tools.fill_sim.network import ShadowAPI
 
 
@@ -69,8 +70,10 @@ def main(argv=None):
             signal.signal(signal.SIGTERM,stop)
             signal.signal(signal.SIGINT,stop)
             source=ShadowAPI(config.get('TAOLI_BASE_URL','http://127.0.0.1:8000'),config.get('TAOLI_API_TOKEN',''))
+            api_service=None
             try:
                 engine.startup(tuple(filter(None,config.get('CROSSEX_BASES','').split(','))))
+                api_service=start_api(config,path,logger=emit)
                 last_status=last_refresh=0
                 while not shutdown and store.meta('state')!='HALTED':
                     try:
@@ -109,6 +112,8 @@ def main(argv=None):
                         return 1
                 return 0
             finally:
+                if api_service is not None:
+                    api_service.close()
                 market.close()
 
 
