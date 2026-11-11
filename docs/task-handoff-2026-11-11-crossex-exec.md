@@ -1,6 +1,6 @@
 # crossex-exec 本地实现交接 — 2026-11-11
 
-> **当前状态：只读数据 API 轮已在本地完成，详见文末“只读数据 API 交付”。** 第二轮 7 项和第一轮记录保留作历史证据；其中第一轮 Classic v2、旧变量名、旧路径和 crossedRiskRate 口径已被第二轮替代。API 轮没有外网访问或生产动作。
+> **当前状态：第三轮 11 项修复已在本地完成，详见文末“第三轮修复交付”。** 只读数据 API、第二轮 7 项和第一轮记录保留作历史证据；第一轮 Classic v2、旧变量名、旧路径和 crossedRiskRate 口径已被第二轮替代，第二轮同步账户/目录/费率读取的描述已被第三轮替代。第三轮没有外网访问或生产动作。
 
 ## 目标、范围与状态
 
@@ -345,3 +345,89 @@ OK
 尚未验证 Ubuntu 22.04 / Python 3.10 / SQLite 3.37 的实际运行、systemd/数据库只读文件权限、真实 Docker bridge `172.18.0.1:8795` 可达性、Linux 80M 内存及并行交易下的延迟。缓存 journal 字段不是实时交易所快照；接口读取保护不证明整个进程绝不会发生资源竞争。契约只有 `before=closed_at`：同时间记录超过单页时，严格时间游标可能跳过同时间剩余项，未擅自增加复合游标。
 
 下一模块请新建任务，从本交接及 `docs/live-exec-contract-2026-11-11.md` 开始进行 taoli1 实盘页面对接/独立验收；如需 Linux 部署、C1/C3 或联网检查，须由后续任务授权。当前 API 交付不构成开启实盘或部署授权。
+
+## 第三轮修复交付（2026-11-11）
+
+### 范围、基线与提交
+
+严格按 `docs/crossex-exec-round3-2026-11-11.md` 的 5 项 P0、5 项 P1、1 项 P2 修复。先依次阅读第三轮清单和本交接，再读取任务书及代码；任务限于执行模块，不扩展到页面、生产运维或新策略。
+
+- 指定 worktree：`C:\Users\wubin\Desktop\code\codex\taoli1\.worktrees\crossex-exec`；分支 `codex/crossex-exec`。
+- 基线：`0b94623f520ea5d1ca4ebb4a73c3def5f78ecdaa`；开始时工作区干净。
+- 用户要求覆盖项目默认上线流程：不联网、不调用真实鉴权接口、不 push、不 SSH、不 WSL、不 amend，按 test/feat/docs 分开本地提交。
+- 没有读取真实 env/凭据，没有运行真实 `run`。第三轮新增用内存交易所和临时 SQLite；完整旧回归中的 HTTP 仅到 127.0.0.1 假服务，虚构签名凭据，socket/DNS 外网守护保留。
+
+| 类型 | 完整提交 hash | 内容 |
+|---|---|---|
+| test | `412a016cd7215c76d46a9e6f54c51be59ed61776` | 首批 20 项，11 项问题均先在旧实现复现 |
+| test | `c4146ab1669ec7658421fe770f6d69313e7f902b` | 追加迟到成交、发送前等待、缓存、HALTING 账户故障等；旧 Engine 夹具显式发布账户缓存 |
+| test | `f36bbf72eca487911eb4a5a7937beb4e8e9fc0d2` | 补足普通跟踪、目录重试、白名单、最小数量和逐合约费率隔离，共 33 项新测试 |
+| feat | `2c463b80c87444d77711b91ff9c25d948bd82996` | 11 项实现及 systemd 模板 |
+| docs | 随本节及 README 独立提交 | 用下列命令获取，不硬编码自身 hash |
+
+```text
+git log -1 --format=%H -- docs/task-handoff-2026-11-11-crossex-exec.md
+```
+
+本地 Git worktree 索引在父仓库，普通沙箱写入被拒绝后，按已有提交授权通过自动审批写入对应 Git 元数据；所有 commit 禁用 hooks 和 GPG 签名，不触发外部动作。没有 amend、回退或强制操作。
+
+### 11 项修复位置与测试映射
+
+下列实现路径均相对 `tools/crossex_exec/`。新增测试全部在 `tests/test_round3.py`；`Round3PolicyTests` 覆盖目录分所、数量策略、回包解析和费率隔离，其余在 `Round3Tests`。以下逐项列出全部 33 个测试名。
+
+| 项目 | 修复位置与行为 | 对应测试名 |
+|---|---|---|
+| 1. UNKNOWN 不阻塞实际平仓 | `engine.py:386 resolve_exposure`、`:325 refresh_pair`、`:515 close_pair`、`:548 track`，`execution.py:132 cancel`、`:142 recover`。先撤原单再查原订单号，随后读两腿真实持仓；持仓锚点不伪造订单成交，迟到回报不重复计数。HALTING 也可减仓，未确认订单继续保留。 | `test_r1_unknown_cancel_query_positions_then_close_both_legs`；`test_r1_halting_recovers_unknown_and_retains_unresolved_order`；`test_r1_late_entry_fill_after_remote_flat_never_reopens_or_double_closes`；`test_r1_missing_position_snapshot_does_not_guess_a_close_quantity`；`test_r1_regular_tracking_uses_unknown_recovery_path` |
+| 2. 补平步长与最小额 | `engine.py:420 reduction_intent`、`:457 repair_intents`、`:487 balance`、`:451 unhedged`。先向下取整减多余腿；不足一步时仅用合法的两腿减仓计划降低最终净敞口。所有计划校验本腿最小数量/名义额、最大量、剩余量；无法处理记录裸露量并停开。 | `test_r2_repair_rounds_down_then_minimizes_residual_with_both_steps`；`test_r2_substep_residual_reduces_other_leg_without_opening`；`test_r2_untradable_dust_records_exposure_and_sends_nothing` |
+| 3. 模拟异常不挡退出 | `engine.py:548 track`。真实退出计算使用实际剩余量；`closing()` 只记录，所有模拟异常被隔离，真实平仓仍执行。 | `test_r3_simulation_failure_never_blocks_actual_quantity_exit` |
+| 4. 目录后台初始化/重试 | `engine.py:142 startup`、`:89 refresh_reference`、`:121 start_background`；`market.py:184 bootstrap`、`:231 publish_mapping`；`background.py:26 PeriodicWorker`。恢复/对账先于目录，单所目录失败只撤销该所开仓映射；30 秒后重试，不终止管理循环。公开请求泵加锁，目录低优先级，跟踪优先。 | `test_r4_catalog_failure_does_not_abort_startup_or_position_tracking`；`test_r4_blocked_catalog_runs_in_background_while_tracking`；`test_r4_one_catalog_failure_keeps_healthy_venue_and_retries`；`test_r4_failed_catalog_is_retried_after_backoff` |
+| 5. HALTING 持续恢复 | `engine.py:142 startup`、`:623 flatten_all`、`:645 tick`；`deploy/crossex-exec.service:5`。失败不抛出退出，按 2/4/8/16/32/60 秒退避并持续重试；本地活动仓位/未知订单和远端都清空才 HALTED。模板 `StartLimitIntervalSec=0`，保留 `RestartSec=10`。 | `test_r5_halting_restart_retries_with_backoff_until_flat`；`test_r5_halting_startup_account_outage_stays_in_process`；`test_r5_service_never_exhausts_restart_budget` |
+| 6. 最终限价最小额 | `policy.py:59 review`。初始模拟不提前拒绝可修正的最小量，最终 quantity × limit 检查不足时只加一个共同步长，重新计算深度/限价/净价差并校验数量上限、150 USD 硬顶；仍不满足即拒绝。配置中更低的硬额由发送前 HardLimits 再校验。 | `test_r6_final_sell_limit_minimum_bumps_one_common_step`；`test_r6_min_quantity_bumps_once_and_still_invalid_minimum_rejects` |
+| 7. 缓存账户与发送前盘口 | `background.py:7 SnapshotCache`；`engine.py:76 refresh_accounts`、`:63 check_order`；`limits.py:85 check_order`；`policy.py:107 send_review`；`execution.py:22 execute_pair`、`:69 sent`。账户按 5 秒周期后台刷新，缓存按读取开始时计龄、超过 10 秒拒开；整对预检和实际发送前均检查两腿盘口 ≤2 秒、净价差 ≥15bp、限价可成交和资金费/费率时效；两腿并发。 | `test_r7_account_admission_uses_cache_and_rejects_older_than_ten_seconds`；`test_r7_twelve_second_books_send_neither_leg`；`test_r7_net_spread_rechecked_before_either_worker_sends`；`test_r7_two_workers_reach_send_barrier_without_account_io`；`test_r7_after_limiter_wait_rechecks_book_age`；`test_r7_slow_account_refresh_does_not_hold_admission_lock` |
+| 8. 缺成交价仍做退出判断 | `adapters.py:25 checked_status`、`execution.py:96 confirm`、`engine.py:548 track`。成交均价缺失时优先用订单查询均价，再用限价保守估计；只用于风控，真实收益仍保留未知。超时和资金费退出仍先判断。 | `test_r8_checked_status_retains_venue_average_fields`；`test_r8_missing_fills_use_order_average_or_conservative_limit_for_exit` |
+| 9. UTC 日亏锁持久化 | `engine.py:200 reconcile`、`:133 can_open`。SQLite meta 存 `daily_loss_day`，当天盈亏回升、重建 Engine 均不解锁，跨日自动清理当日日锁，不清理其他异常原因。 | `test_r9_daily_loss_latch_survives_recovery_restart_and_expires_utc` |
+| 10. 费率后台、逐合约隔离 | `accounts.py:85 fees`、`engine.py:89 refresh_reference`、`:53 fees_for`、`__main__.py:26 main`。从主循环移除小时同步刷新；只传白名单合约，逐合约发布费率及时间戳，失败仅撤销该合约值。空白名单不拉费率/不开新仓。 | `test_r10_fee_refresh_background_whitelist_and_tracking`；`test_r10_fresh_contract_fees_survive_other_contract_refresh_delay`；`test_r10_empty_whitelist_reads_no_contract_fees`；`test_r10_failed_contract_revokes_only_its_fee_and_timestamp` |
+| 11. 首次及新原因告警 | `engine.py:40 alert`、`execution.py:96 confirm`/`:120 account`、`limits.py:40 check_equity`。执行器与硬风控进入统一告警入口，去重依据本进程已输出原因及锁状态，不被提前写入 stop_reason 吞掉首次输出；清除后再次进入同原因也输出。 | `test_r11_first_executor_stop_and_new_reason_reach_journal_once`；`test_r11_same_reason_after_clearing_is_a_new_stop` |
+
+### 验证证据
+
+首批测试在修改实现之前执行：
+
+```text
+Ran 20 tests in 4.360s
+
+FAILED (failures=15, errors=6)
+```
+
+这些失败覆盖全部 11 项原问题。增加恢复边界后，28 项测试还复现了 HALTING 启动账户故障、逐合约费率时效、清锁后同原因告警三个缺口（2 failures、1 error），再修复并补齐为 33 项。旧 Engine 测试夹具改为显式发布缓存和使用实际 Engine 发送检查；没有删减原有断言或放宽风险阈值。
+
+最终两条命令及原始汇总如下；取得这些结果之后，没有再修改实现或测试，只更新 README 和本交接。
+
+```text
+python -m unittest discover -s tools/crossex_exec/tests -v
+----------------------------------------------------------------------
+Ran 133 tests in 52.513s
+
+OK
+
+python -m unittest discover -s tools/fill_sim/tests -v
+----------------------------------------------------------------------
+Ran 158 tests in 29.166s
+
+OK
+```
+
+执行器的 133 项包含全部 24 项只读 API 测试。相对本轮基线，`api_data.py`、`api.py`、`tests/test_api.py` 和整个 `tools/fill_sim` 无差异。只读接口结构/权限/故障隔离保持原有契约。全部 22 个执行器 Python 文件通过 `ast.parse(feature_version=(3,10))`，CLI `--help` 与 `git diff --check` 通过。环境为 Windows / Python 3.12.10 / SQLite 3.49.1，不是 Ubuntu 或 systemd 验收。
+
+### 关键运行规则与剩余边界
+
+1. 恢复持仓锚点只说明交易所该次快照数量，不代表未知订单已终结。`position_anchor.unresolved` 的迟到成交不会再叠加到已包含它的仓位；下次恢复重新撤/查并读取持仓。恢复时拿不到真实持仓，不猜测数量、不重发原开仓订单。清零前不伪报 HALTED。
+2. 小于粗步长的差额，可能需要先规划粗腿一步以及细腿相应减仓；两条都是减仓，只有计划后的绝对净敞口更小时才采用。仍是非原子的跨交易所 IOC，单腿拒绝/部分成交可能留下敞口；重试不保证消除所有尾差，最终裸露量持久化并告警。最小名义额按通用规则检查，未假定交易所有额外的 dust 豁免。
+3. `CROSSEX_BASES` 空值语义改为不开新仓。必须明确白名单；不会默认为全市场逐合约拉费率。后台目录/费率失败记录固定诊断，按失败场景重试；已有仓位用自身持久化规格继续跟踪和减仓。
+4. 账户任务按 5 秒周期调度，不代表远端慢请求能在 5 秒内完成。缓存超过 10 秒不准开；减仓不依赖账户缓存可用。盘口最终检查为纯本地复核，不在下单工作线程内重新发私有读取。两腿仍无法获得跨所原子成交保证。
+5. 本轮订单均价解析的回包夹具覆盖 CrossEx `avg_price` / Bitget `avgPrice`，缺失或无效回退到限价用于退出判断。没有用本轮离线测试宣称真实交易所回包、权限、撮合或费率已获验证；不会把估值填成 API 的真实 `entry_vwap` 或净收益。
+6. 后台账户、目录/费率线程是有界数量的 daemon，关闭时停止继续发布 journal；真实网络总时限、并行压力、Linux 80M 内存及长期运行仍需后续获准验收。schema 沿用原有 meta/orders/pairs，不修改只读 API 投影代码。
+
+新增 `background.py`、`tests/test_round3.py`；实现修改 `engine.py/policy.py/execution.py/limits.py/accounts.py/adapters.py/market.py/__main__.py` 和 service 模板；测试夹具修改 `tests/test_engine.py`；文档修改本交接和 README。没有修改 backend、compose、真实 `.env` 或既有生产部署脚本。临时测试日志位于本机 `%TEMP%`，没有入库；没有待保留的新未跟踪工作区产物。
+
+线上状态：未 push、未 SSH、未 WSL、未调用真实鉴权接口、未联网、未做生产备份或部署，线上版本未改变。没有 amend 或实盘开关变更。下一模块请新建任务，从第三轮清单和本节开始做独立复核；任何联网、账户、Linux/C3 或上线动作都须在后续任务明确授权，本轮本地通过不等于开启实盘验收。
