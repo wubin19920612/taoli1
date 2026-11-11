@@ -1,6 +1,6 @@
 # crossex-exec 本地实现交接 — 2026-11-11
 
-> **当前状态：第二轮 7 项已在本地完成，详见文末“第二轮交付”。** 下方第一轮记录保留作历史证据；其中 Classic v2、旧变量名、旧路径和 crossedRiskRate 口径已被第二轮替代。第二轮没有任何真实鉴权请求或生产动作。
+> **当前状态：只读数据 API 轮已在本地完成，详见文末“只读数据 API 交付”。** 第二轮 7 项和第一轮记录保留作历史证据；其中第一轮 Classic v2、旧变量名、旧路径和 crossedRiskRate 口径已被第二轮替代。API 轮没有外网访问或生产动作。
 
 ## 目标、范围与状态
 
@@ -255,3 +255,93 @@ OK
 6. **Linux 和延迟验收**：确认代码根目录 `/home/ubuntu/wubin/taoli1`、运行用户 ubuntu、env 所有者与 0600、预建 var 的权限、ProtectHome/ReadWritePaths、Python 3.10/SQLite 3.37、80M 内存。新增发送前风险读取会增加请求数和两腿时间差；每次读取和最终写请求有界，但整段复核并非原来的单次 2 秒总预算，必须在 C3 量出限频、调度和单腿风险。远端故障时停止开仓并保留真实敞口。
 
 下一任务只做独立审查及后续获准的 C3 影子验收；C1 数据若要刷新须在新任务明确授权。当前工作没有部署或开启实盘，C4 开关仍由用户本人控制。
+
+## 只读数据 API 交付（2026-11-11）
+
+### 目标、范围、基线与提交
+
+本轮模块是 `tools/crossex_exec` 的只读数据接口，按 `docs/live-exec-contract-2026-11-11.md` 实现 `GET /api/v1/summary|positions|trades|stats`。开始前已读任务书、第二轮要求、现有交接、契约及实际存储/调用链。
+
+- 指定 worktree：`C:\Users\wubin\Desktop\code\codex\taoli1\.worktrees\crossex-exec-api`。
+- 分支：`codex/crossex-exec-api`。
+- 基线：`af5f88bac5b86d05dfdd656e022e26076a35cae1`；开始时工作区干净。
+- 本轮用户要求只在本地交付，不联网、不 push、不 SSH、不 WSL、不 amend，覆盖项目默认上线流程。测试 HTTP 仅到 `127.0.0.1`，使用虚构凭据并保留 socket/DNS 禁外网守护。没有读取真实 env/凭据、调用真实账户接口或启动真实执行服务。
+
+| 类型 | 完整提交 hash | 内容 |
+|---|---|---|
+| test | `f89dcbf1be2b11a2c17851d21f29b6e9d3df08b3` | 23 项只读接口契约、权限、故障隔离和数据口径测试 |
+| feat | `3ae5e479015abe1ea0900b36c32cab7019767c8c` | HTTP 服务、独立只读投影、`__main__` 启停接线、三项 env 示例 |
+| test | `680b0f8f26a8f0b68d1e3a2586322a21ae1b4ffe` | 补充监听禁止反向 DNS 的回归测试，合计 24 项 API 测试 |
+| feat | `178989f8f63aa7be089cfbee0ea55b5e083f4201` | 直接绑定数字 IP，去掉 HTTPServer 默认的隐式反向 DNS 查询 |
+| docs | 随本节及 README 单独提交 | 本轮证据、字段口径、配置和剩余验收边界 |
+
+docs 提交号通过 `git log -1 --format=%H -- docs/task-handoff-2026-11-11-crossex-exec.md` 取得，不硬编码自引用 hash。全部为新提交，无 amend。父仓库中的该 worktree Git 索引需要沙箱外写权限，已按用户的本地提交授权通过自动审批；Git hooks 在提交命令中禁用，确保不触发联网动作。
+
+### 文件与关键调用链
+
+| 文件 | 本轮变化 |
+|---|---|
+| `tools/crossex_exec/tests/test_api.py` | 新增隔离的临时 SQLite、loopback HTTP、故障注入及字段断言 |
+| `tools/crossex_exec/api.py` | 新增 token 校验、监听白名单、仅 GET、固定错误响应、daemon 线程生命周期 |
+| `tools/crossex_exec/api_data.py` | 新增只读连接、请求预算、显式字段投影、统计及精确 fill-sim 匹配 |
+| `tools/crossex_exec/__main__.py` | 仅增加导入和 4 行启动/关闭接线；成功 `engine.startup()` 后启动，finally 关闭 |
+| `tools/crossex_exec/deploy/crossex-exec.env.example` | 增加 `CROSSEX_EXEC_API_TOKEN`、`CROSSEX_EXEC_API_BIND`、`FILL_SIM_DB` |
+| `tools/crossex_exec/README.md`、本交接 | 增加接口行为、公式、未知值和验证边界 |
+
+调用链：`__main__.main → start_api → APIService`；HTTP 工作线程 `dispatch → JournalView.get → readonly → position/trade/statistics`。API 模块不接收 Engine、Accounts 或执行 Store，不调用下单、撤单、账户或行情接口。`engine.py/accounts.py/execution.py/limits.py/policy.py/adapters.py/transport.py/security.py/storage.py`、fill-sim、backend、compose、systemd 模板及真实 `.env` 本轮均未修改。
+
+### 配置与行为
+
+沿用现有 `load_env` 的私有文件入口、0600/所有者检查，不新增进程环境凭据回退。env 示例现在共 20 个变量；此前 17 个保留，新增：
+
+```text
+CROSSEX_EXEC_API_TOKEN=
+CROSSEX_EXEC_API_BIND=127.0.0.1:8795,172.18.0.1:8795
+FILL_SIM_DB=
+```
+
+1. token 为空/只有空白时，不创建 API 对象或监听，并记录 `api_disabled_no_token`。单个 `X-Api-Token` 与配置原值通过 `hmac.compare_digest(bytes,bytes)` 比较；缺失、错误、重复头返回 401。认证成功的所有非 GET 方法（含 HEAD/OPTIONS/未知 verb）返回 405。
+2. 地址配置可选择默认两个地址中的一个或两个，可省略端口，端口固定 8795。拒绝 `0.0.0.0`、IPv6 wildcard、其他 IP、主机名和其他端口。直接数字 IP 绑定，不执行反向 DNS。默认 bridge 不存在时记录 `api_bind_unavailable`，保留 loopback；各监听故障互不传播。
+3. 两种数据库都用独立 URI `mode=ro` 连接，启用 `query_only`，authorizer 只允许 SELECT/READ/受限函数/只读事务；禁止 INSERT/UPDATE/DELETE、建表、ATTACH、关闭 query_only。不存在的 DB 不创建。执行库读取结束即释放快照，不借用写连接、Store.lock 或交易执行线程。
+4. API 请求/监听/启动/日志异常被隔离，不设置 STOP、HALTING/HALTED 或交易风险状态。连接与响应错误无 traceback、原始 URL、请求头或异常文本；字段白名单之后再脱敏已注册凭据及签名。未加入任何 API 写路由。
+5. HTTP 只有两个有界的监听工作线程，不按请求无界创建线程；查询并发 1，繁忙返回 503。SQLite 等锁 50ms，查询读预算 2s、JSON 输入预算 8 MiB；预算不足返回不可用，不输出截断统计。关闭 API 不等待其 I/O 线程结束。
+6. 时间均为 UTC ISO8601，金额/数量/bp 均为数字，所有契约字段保留，未知为 `null`。分页默认 200、上限 500；非法参数/重复参数 400，`before` 必须带时区。统计默认滚动 7 天，允许 1–365 天，16 个宽 25bp 的桶覆盖 [-200,200]，越界放两端。
+7. 模拟结果只匹配同一 shadow 事件、`measured/100`、相同方向两个完整 Market 身份及已关闭 position；支持 fill-sim 的同目录日期归档。缺失、读不到、损坏、未关闭或重复匹配为 `sim=null`。不会退回到同 ticker、其他金额/延迟版本或执行器的复核估值。
+
+详细公式见 README“只读数据接口”。对 UI 接入尤其重要：
+
+- 当前 journal 没有交易所 mark，因此 `mark_price=null`；当前价差/浮动毛收益只按各自最近 60 秒内盘口深度计算，失效则 null。`stop_distance_bps` 只描述价差止损距离。
+- `today/total` 汇总已关闭交易；`caps.total_open_usd` 是本地剩余量按开仓成交价计量，不含远端未知仓位/未确认订单预留。两者均不是执行器发送前风控函数的替代。
+- 账户健康参考最近 60 秒内对账；过期标记 error/ok=false；无保证金占用哨兵映射为 null。费率仅在同 route 的已知有效市场费率一致时输出单值；special 导致不同则 null。
+- 模拟 gross 为往返开平仓毛收益，`slippage_bps=实际净 bp−模拟净 bp`。为对应契约负向尾部示例，slippage p90 为下十分位，时间差 p90 为上九十分位；均线性插值。该差值包含持有期及费用差异，不是纯粹撮合滑点。
+- 原 shadow 档位只从精确匹配的模拟记录读取，取不到用 `key=null` 分组；不根据事后实际价差猜档位。未知记账不冒充 0 或盈利。
+
+### 验证与原始汇总
+
+Windows / Python 3.12.10 / SQLite 3.49.1；没有 WSL、Ubuntu 或真实账户环境。所有新增 Python 与 `__main__` 通过 Python 3.10 AST 语法检查，CLI `--help` 和完整差异 `git diff --check` 通过。
+
+先新增测试，观察 API 模块缺失产生预期 ImportError；随后实现并扩展为 23 项。开发中修正了一个测试的浮点精确比较和临时 SQLite 连接关闭问题。交付复核发现标准库 HTTPServer 绑定时会调用 `getfqdn`，先补测试观察失败，再改为直接绑定，合计 24 项 API 测试。最终执行服务完整回归 100 项通过；fill-sim 本轮未改动，完整回归 158 项通过。下列最终结果取得后未再修改实现或测试。
+
+```text
+python -m unittest discover -s tools/crossex_exec/tests -v
+----------------------------------------------------------------------
+Ran 100 tests in 53.052s
+
+OK
+
+python -m unittest discover -s tools/fill_sim/tests -v
+----------------------------------------------------------------------
+Ran 158 tests in 29.744s
+
+OK
+```
+
+新测试具体覆盖：四端点字段完整、空/缺失字段 null、数字/UTC、实际 VWAP/费用/时间差、出场原因映射、分页限制与时间边界、统计桶和分位数、模拟事件/金额/版本/Market 身份及归档/缺失/损坏/重复、过期账户和费率、未知记账、401/重复头/405、常量时间比较被调用、错误与所有正常响应脱敏、协议解析错误不反射输入、只读连接 DDL/DML/ATTACH/pragma 被拒绝、不创建缺失 DB、WAL 快照下写事务仍能完成、API 读取异常后真实 `Engine.tick()` 继续对账、监听/绑定/线程启动/日志故障隔离、CLI 主循环继续，以及未配置 token 不启动。
+
+### 线上状态、残余边界与下一步
+
+未 push、SSH、WSL、amend、联网、生产备份或部署；线上版本未改变。没有启动真实 `run`，没有实盘开关或风控行为变化。交付仅包含上表文件，没有新增待保留的未跟踪产物；Python 缓存继续由既有 ignore 规则排除。
+
+尚未验证 Ubuntu 22.04 / Python 3.10 / SQLite 3.37 的实际运行、systemd/数据库只读文件权限、真实 Docker bridge `172.18.0.1:8795` 可达性、Linux 80M 内存及并行交易下的延迟。缓存 journal 字段不是实时交易所快照；接口读取保护不证明整个进程绝不会发生资源竞争。契约只有 `before=closed_at`：同时间记录超过单页时，严格时间游标可能跳过同时间剩余项，未擅自增加复合游标。
+
+下一模块请新建任务，从本交接及 `docs/live-exec-contract-2026-11-11.md` 开始进行 taoli1 实盘页面对接/独立验收；如需 Linux 部署、C1/C3 或联网检查，须由后续任务授权。当前 API 交付不构成开启实盘或部署授权。

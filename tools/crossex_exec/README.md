@@ -33,6 +33,7 @@ python3 -m tools.crossex_exec run --env-file /home/ubuntu/wubin/crossex-exec/cro
 | `engine.py` | 触发、持仓管理、最多三次补平、60 秒对账、风险停开/全平 |
 | `storage.py` / `security.py` | SQLite WAL/FULL、事务、文件权限与脱敏 |
 | `reporting.py` / `__main__.py` | 模拟与真实成交比较、CLI、300 秒 JSON 状态、即时 JSON 告警 |
+| `api.py` / `api_data.py` | 可选的鉴权只读 HTTP 服务、独立 SQLite 只读连接、契约字段投影和同事件 fill-sim 对照 |
 
 复用 `fill_sim` 的 `Market/Spec/Book`、`opening/closing/walk/common_step/track_interval`、原始盘口/规格/资金费解析、`ShadowAPI`、`PublicClient/Limiter/RequestQueue/DaemonPool` 及有总时限的 DNS/HTTP 基础设施。唯一的 fill-sim 修改是允许校验 Gate 的列表响应（目录、ticker、资金费历史）。
 
@@ -56,8 +57,42 @@ python3 -m tools.crossex_exec run --env-file /home/ubuntu/wubin/crossex-exec/cro
 | `TAOLI_API_TOKEN` | 空；如 taoli1 需要认证则由用户在私有文件中配置 |
 | `CROSSEX_API_KEY` / `CROSSEX_API_SECRET` | 空；仅 CrossEx 所需权限 |
 | `BITGET_API_KEY` / `BITGET_API_SECRET` / `BITGET_API_PASSPHRASE` | 空；UTA 交易及账户管理读取权限，实盘才需交易写权限 |
+| `CROSSEX_EXEC_API_TOKEN` | 空；非空才启动数据接口，与 `X-Api-Token` 常量时间比较；仍只从上述私有 env 文件读取 |
+| `CROSSEX_EXEC_API_BIND` | `127.0.0.1:8795,172.18.0.1:8795`；逗号分隔，可只选其中一个；可省略 `:8795`，不允许其他地址或端口 |
+| `FILL_SIM_DB` | 空；可选 fill-sim 主数据库路径，同时只读检索其同目录日期归档；未配置或无法匹配时 `sim=null` |
 
 应用不修改账户模式、杠杆、资产模式或权限。CrossEx 必须为 `CROSS_EXCHANGE`，各目标合约杠杆必须已经是 3；Bitget 必须为 `accountMode=unified`、`assetMode=multi_assets` 和配置的 `holdMode`。逐合约 `symbolConfigList` 必须为 crossed、3 倍杠杆。模式检查失败直接拒绝启动，不用空仓推断模式。旧 `GATE_API_*` 配置会被拒绝。
+
+## 只读数据接口
+
+响应字段以 [`docs/live-exec-contract-2026-11-11.md`](../../docs/live-exec-contract-2026-11-11.md) 为准。`__main__` 在执行器成功启动后接线启动 API，退出时关闭监听；`report` 不启动 API。接口不调用账户、行情或交易 API，不使用执行器的数据库连接或锁。
+
+| GET 路径 | 行为 |
+|---|---|
+| `/api/v1/summary` | UTC 生成时间、模式、停开状态、额度、最近持久化权益/对账、已平仓损益及真实费率 |
+| `/api/v1/positions` | 活动持仓；影子意图不算实际仓位 |
+| `/api/v1/trades?limit=200&before=<closed_at>` | `CLOSED` 记录按关闭时间倒序；同时间按 ID 倒序；`before` 为严格小于、必须带时区；`limit` 最大 500 |
+| `/api/v1/stats?days=7` | 最近连续 N×24 小时内关闭的记录；`days` 为 1–365；未知收益不混入直方图 |
+
+每个请求必须携带一个 `X-Api-Token`。缺失、错误或重复 token 返回 401；鉴权成功的非 GET 请求返回 405。参数错误为 400，未知路径为 404，读取失败或繁忙为 503；响应均不缓存。错误响应和日志使用固定原因，不回显 URL、请求头、数据库内容或异常文本。
+
+默认启动两个独立 IPv4 监听，直接绑定数字 IP，不执行标准库 HTTPServer 默认的反向 DNS 查询；本机没有 `172.18.0.1` 时记录 `api_bind_unavailable`，保留 `127.0.0.1`。地址配置仅接受上表中的两个地址，禁止 wildcard/公网/主机名和改端口。未配置 token 时记录 `api_disabled_no_token`，不创建监听或数据库读取器。绑定失败、请求异常、监听线程异常和日志异常均隔离，不修改执行状态。
+
+执行库及模拟库均采用 URI `mode=ro`、`query_only=ON` 和 SQLite authorizer：拒绝 DML、DDL、ATTACH 及关闭只读限制。执行库每次请求独立短事务快照，完成读取后立即关闭连接；不创建缺失数据库。每个监听只有一个 daemon 工作线程，全服务只允许一个数据查询，忙时立即返回 503；SQLite 等锁最多 50ms，读查询预算 2 秒、累计 JSON 输入预算 8 MiB。预算超限返回不可用，不截断统计后冒充完整结果；这是资源保护，不是 Linux 80M 内存或交易延迟验收。
+
+字段口径：
+
+- 数值以 JSON 数字返回，时间统一 UTC ISO8601，缺失字段保留为 `null`。仅输出契约列出的字段，并对配置中的凭据/token 和已注册签名再次脱敏。
+- `today/total` 为已平仓交易的汇总，今日按 UTC 关闭日期划分；不包含未平仓费用和浮盈亏，不替代执行器的日亏/累计亏风控计算。任一成员记账未知时，相应合计及胜数为 `null`。跨资金费结算尚未确认的资金费和净收益保持未知；确认未跨期的资金费是 0。
+- `entry_vwap/exit_vwap` 来自真实成交，平仓多笔按数量加权；不使用意图限价。`net_bps` 分母为多头开仓实际名义额；两腿时间差来自开仓订单 `sent_ms/fill_ms`。
+- `caps.total_open_usd` 是本地剩余量 × 开仓成交均价的两腿名义额之和，不含未确认订单预留及交易所未入本地的仓位，不等同于发送前硬风控总敞口。账户 `drop_usd=max(0,baseline-current)`，两边独立。`HALTING/HALTED` 均令 `halted=true`，此字段不证明已经全部平仓。
+- 账户 `ok` 表示最近对账数据是否可用，不表示可开仓；对账超过 60 秒或失败时不报告健康。原执行器无保证金占用的 `1e30` 哨兵投影为 `margin_multiple=null`。多市场费率一致且 1 小时内刷新成功才给单个 route 的 taker 值；不一致返回 `null`，不掩盖 special 费率。
+- 库里未保存真实标记价格，因此 `mark_price=null`。当前价差和浮动毛收益按两腿各自 60 秒内的缓存盘口、剩余量和深度 VWAP 计算，盘口不足/过期则为 `null`；不是即时交易所标记收益，未扣未实现平仓费和资金费。`stop_distance_bps` 是距离“开仓价差 +50bp”价差止损的距离；独立的浮亏 1% 止损规则未改变。
+- `sim` 严格匹配 `trigger_id == fill-sim.event_id`、`measured`、100 USD、相同方向的两个完整 Market 身份，以及已平仓结果。不会拿同 ticker、300 USD、延迟版本或执行器开仓复核估值替代。重复匹配视为不确定。`sim.gross_bps` 由模拟开平仓名义额重建往返毛收益，不是开仓价差；`sim.net_bps` 使用已知资金费口径的模拟结果。
+- `slippage_bps=实际 net_bps−sim.net_bps`，负数表示实际结果更差，包含两种执行轨迹、费用及持有期的综合差异，不是单笔撮合滑点。为对应契约示例中的负向尾部，`slippage_bps_p90` 取有符号差异的下十分位；成交时间差 p90 取上九十分位，均线性插值。`vs_sim.n` 只统计可计算差异的匹配交易；时间差和单腿率统计所有关闭记录，未知标志使单腿率为 `null`。
+- `by_spread_tier` 使用匹配模拟记录保留的原 shadow 档位。执行库未单独保存该字段，无法取得时用 `key=null` 组，不从事后实际价差倒推。其余分组存在未知收益时，相应合计/均值/胜率为 `null`。
+
+`before` 只有关闭时间游标；同一关闭时间超过单页容量时，严格小于游标会跳过同时间的其余项，这是现有契约的边界。接口不会自动改契约增加复合游标。
 
 ## 安全语义与运营
 
