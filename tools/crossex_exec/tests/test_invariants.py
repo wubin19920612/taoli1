@@ -156,6 +156,7 @@ class World:
         self.sends, self.cancels = [], 0
         self.batches, self.recoveries = [], []
         self.send_batches, self.admissions = {}, {}
+        self.close_obligations = set()
         self.venues = [SimVenue(self, n) for n in (0, 1)]
         self.instruments = [instrument(), instrument('bitget')]
         for i in self.instruments:
@@ -193,10 +194,15 @@ class World:
             for intent in intents:
                 self.send_batches[intent['cid']] = batch
             self.batches.append(batch)
+            if batch['paired_close']:
+                self.close_obligations.add(intents[0]['pair_id'])
             try:
                 return execute_pair(intents)
             finally:
                 batch.update(after=[v.quantity for v in self.venues], last_send=len(self.sends))
+                if not any(batch['after']):
+                    for intent in intents:
+                        self.close_obligations.discard(intent['pair_id'])
 
         def observe_admission(intents):
             result = check_pair(intents)
@@ -347,7 +353,7 @@ class InvariantSimulationTests(unittest.TestCase):
                     coverage['scheduled_'+fault] += 1
                     first_send, first_cancel = len(w.sends), w.cancels
                     first_batch, first_recovery = len(w.batches), len(w.recoveries)
-                    outstanding = [p for p in w.store.pairs(active=True) if p.get('exit_reason')
+                    outstanding = [p for p in w.store.pairs() if p['id'] in w.close_obligations
                                    and w.venues[0].quantity != w.venues[1].quantity]
                     retry_due = any(w.now >= p.get('next_close', 0) for p in outstanding)
                     if fault == 'restart':
@@ -413,9 +419,10 @@ class InvariantSimulationTests(unittest.TestCase):
                     if exposure:
                         self.assertFalse(w.engine.can_open(), 'I1d opening gate permits outstanding exposure')
                         exercised['1d'] += 1
-                        for pair in w.store.pairs(active=True):
-                            if not pair.get('exit_reason'):
+                        for pair in w.store.pairs():
+                            if pair['id'] not in w.close_obligations:
                                 continue
+                            self.assertNotEqual(pair['state'], 'CLOSED', 'I1c close obligation hidden by CLOSED state')
                             step = min(dec(i['spec']['qty_step']) for i in pair['instruments'])
                             if exposure > step:
                                 self.assertIn(pair['id'], w.store.meta('stop_locks', {}).get('unhedged_position', []),
