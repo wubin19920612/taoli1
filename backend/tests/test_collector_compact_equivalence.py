@@ -28,7 +28,7 @@ class LegacyCollector(MarketCollector):
         for market in self.store.get_markets():
             self._exchange_snapshots.setdefault(market.exchange, []).append(market)
 
-    def _store_adapter_result(
+    async def _store_adapter_result(
         self,
         exchange_name: str,
         result: AdapterPollResult,

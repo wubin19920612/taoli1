@@ -270,9 +270,9 @@ async def test_collector_queues_rounds_and_pins_risk_across_yields(fixed_clock, 
     validate = service.validate
     labels = collector_module.risk_labels_for
 
-    def record_validate(a, b, risk):
+    def record_validate(a, b, risk, **kwargs):
         observed.append((asyncio.current_task().get_name(), risk))
-        return validate(a, b, risk)
+        return validate(a, b, risk, **kwargs)
 
     def record_labels(item, risk, *args, **kwargs):
         observed.append((asyncio.current_task().get_name(), risk))
