@@ -98,4 +98,3 @@ class HardLimits:
                 self.store.set_meta('flatten_requested',True)
             if len(snapshot['margins'])!=2 or any(m is None or dec(m)<3 for m in snapshot['margins']):
                 raise ValueError('margin_open_limit')
-
