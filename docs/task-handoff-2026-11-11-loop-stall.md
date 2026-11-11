@@ -142,3 +142,83 @@ LOOP_STALL_BENCH_SUMMARY {"alert_cold_reduction_pct": 42.88893357192944, "alert_
 6. 工作区原始改动和未跟踪文件：开始时无。验证日志留在被 Git 忽略的 `output/loop-stall-*.txt`，pytest 临时文件在被忽略的 `.pytest-tmp/`；没有清理用户文件。
 
 解决当前验收阻断并完成只读复核后，部署与生产观察应另开服务器运维任务，沿用本交接；本任务没有发布授权。
+
+## 本轮追加：PM 两项决定（2026-11-11）
+
+本节记录本轮最新结果，覆盖上文“源码断言冲突待授权”和“告警过滤变化后只能等下一轮”的旧状态。范围仅为 PM 授权的源码白名单断言和告警过滤有界重试；未扩展到其他模块。工作树、分支不变，本轮起点为 `dd3cf08`，起始工作区干净。
+
+**本轮本地全量已通过，原源码断言阻断项已解决。** 生产验收和独立审查状态仍按本节末尾边界执行。
+
+### 本轮提交与文件
+
+| 类型 | 提交 | 文件与内容 |
+|---|---|---|
+| test | `37c6778f251f13a5594f8e5c6c7b67ee9c4891a7` | `backend/tests/test_market_validation_prepare_copies.py`：将获授权的断言改为精确白名单剔除后逐字相等，并检查 cooperative 分支 |
+| feat | `433765ef6a70c815e4b49492062824cb6d518b49` | `backend/app/services/market_validation_review.py`、`backend/app/main.py`：专用异常、两次立即重试、耗尽后 warning 跳过、重试和跳过计时统计 |
+| test | `bbdfc39f8c8b1a32eeb5747daa71b0774dab6e31` | `backend/tests/test_loop_stall.py`：13 个新增回归、专用异常类型附加断言、既有 JSON 预期补零值字段 |
+| docs | 本节单独提交 | `docs/task-handoff-2026-11-11-loop-stall.md`；自身提交号用 `git log -1 --format=%H -- docs/task-handoff-2026-11-11-loop-stall.md` 获取 |
+
+全部为新增本地提交，没有 amend。实现与测试分别提交，没有修改冻结参考实现或 pytest 配置。
+
+### 源码断言的精确边界
+
+`test_prepare_pairing_and_scheduling_source_is_unchanged` 仍保留原来的比较范围：`prepare()` 从 `if self.collision_symbols:` 之后到返回。对两边源码使用相同的白名单处理，生产侧必须精确匹配以下固定数量的完整语句块，冻结参考侧必须没有这些新增块；剔除后不做 dedent、格式化或空白规范化，直接逐字比较。
+
+- 三个完整的 `if cooperative:` / `await budget.maybe_yield()` / epoch 比较及原文 `ValueError` 块：16 空格缩进两处，20 空格缩进一处。
+- 一个独立的 epoch 比较及原文 `ValueError` 块。
+- 一组完整的 `_prepared_epoch`、`_prepared_rows`（含与 `market_keys` 的 strict zip）和 `_prepared_fx` 赋值。
+
+`market_keys` 的建立和 append 位于原比较边界之前，本次没有扩大剔除范围。另用 AST 检查整个 `prepare()` 中每个 `await budget.maybe_yield()` 都处于 `if cooperative` 的正分支，else 分支不算。白名单之外的任何尾部改动、块内容/缩进/数量变动仍会失败。其他业务、内存和行为断言保留；两处原 `pytest.raises(ValueError, match=...)` 还追加了精确专用异常类型断言。
+
+### 告警循环与日志
+
+- `market_validation_review.py:33` 定义 `AlertFilterChanged(ValueError)`；`:931` 的异步过滤在让出后发现 `_mutation_epoch`、`generation` 或 `markets_version` 改变时抛此类，保留原错误文字，不返回部分结果。抛出前记录该次实际重算条数。
+- `main.py:730` 最多执行三次尝试，即首次加两次立即重试。每次都重新执行 `snapshot_store.get_opportunities()`、通用过滤和异步身份过滤，丢弃失败尝试的结果。
+- 第三次仍变化时，记录 skipped 计时样本，跳过规则筛选、引擎评估和后续发送，心跳为失败，继续原来的轮间等待。`main.py:796` 只捕获此专用异常并输出一行 warning：`alert filtering skipped after 2 retries: mapping or snapshot kept changing`，不记录 traceback。
+- 普通 `ValueError`（即使文字相同）和其他异常仍走原 `logger.exception("alert loop failed")`；取消继续向上传播。
+
+`_AlertFilterTiming` 仍按 300 秒窗口输出 JSON。新增 `retries` 为窗口内实际重试次数总和（每轮 0–2），`skipped` 为因持续变化而跳过的轮数。`count` 现在包含成功轮和这些跳过轮；`filter_ms` 为整轮所有过滤尝试的墙钟耗时；`recomputed` 累计所有尝试的实际重算条数，包括后来因版本变化而作废的工作。一般异常和取消仍不计入样本。所有字段在窗口输出后清零。
+
+```json
+{"alert_filter_timing":{"count":3,"filter_ms":{"p50":20,"max":30},"recomputed":15,"retries":3,"skipped":1}}
+```
+
+### 本轮验证
+
+仍使用上文同一锁定 venv，运行目录 `backend`，`PYTHONPATH=.`。没有安装依赖或访问外网，沿用现有 conftest 的离线保护和默认 network/benchmark 排除。
+
+白名单测试文件的原始汇总：
+
+```text
+46 passed in 2.18s
+```
+
+定向回归原始汇总（37 项 loop-stall 回归和 46 项 prepare 回归）：
+
+```text
+83 passed in 23.25s
+```
+
+定向命令：`-m pytest tests/test_loop_stall.py tests/test_market_validation_prepare_copies.py -q -p no:cacheprovider --basetemp=../.pytest-tmp/loop-stall-new2`。原始日志：`output/loop-stall-new2.txt`。
+
+13 个新增回归覆盖：三种变化来源（发布 generation、映射 epoch、仅 markets_version）分别在第一次/第二次重试恢复或连续三次变化后跳过；逐次重取机会并重跑通用过滤；丢弃旧结果；耗尽后仅一行 warning、无 exception 日志/traceback且不调用下游；非专用异常不重试；取消传播；计时窗口累计和清零。既有完整 JSON 相等断言仅增加需求新增字段的预期零值，未移除其他字段断言。
+
+全量命令保持本轮要求：
+
+```text
+-m pytest tests -q -p no:cacheprovider --basetemp=../.pytest-tmp/loop-stall-full2
+```
+
+全量原始汇总（退出码 0）：
+
+```text
+2951 passed, 11 deselected, 13 warnings in 202.81s (0:03:22)
+```
+
+原始日志：`output/loop-stall-full2.txt`。11 项为现有配置默认排除的 network/benchmark；13 条 warning 来自 Starlette/httpx 和 `datetime.utcnow()` 的弃用提示，没有调整依赖或过滤 warning。
+
+### 交付状态与后续边界
+
+本轮仅本地验证和提交；**未 push、未 SSH、未 WSL、未联网、未部署、未 amend**。没有查询线上版本、备份或容器健康，线上验收仍不在本轮范围内。GC、prepare 业务规则、判定能力/原因码、复核后台 I/O、交易标识规则和其他模块均未改动，既有基准结果保留，本轮没有重跑基准或声称新的生产性能结果。
+
+持续变化仍可能使该轮告警延后；现在最多两次立即重试，然后 warning 跳过，避免无界循环。每轮最坏可承担三次过滤工作，其耗时和重算量可从新字段关联观察。本轮原始日志保留在被忽略的 `output/`，临时文件位于被忽略的 `.pytest-tmp/`；没有删除或清理旧产物。后续独立审查、部署和生产观察请另开任务并沿用本交接。
