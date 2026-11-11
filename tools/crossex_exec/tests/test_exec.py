@@ -25,16 +25,24 @@ from tools.crossex_exec.execution import Executor
 
 def setUpModule():
     original = socket.socket.connect
+    resolve = socket.getaddrinfo
     def local_only(sock, address):
         if address[0] not in ('127.0.0.1', '::1'):
             raise AssertionError('external_network_forbidden')
         return original(sock, address)
-    global network_guard
+    def local_dns(host, *args, **kwargs):
+        if host not in ('127.0.0.1','::1','localhost'):
+            raise AssertionError('external_dns_forbidden')
+        return resolve(host,*args,**kwargs)
+    global network_guard, dns_guard
     network_guard = patch.object(socket.socket, 'connect', local_only)
+    dns_guard=patch.object(socket,'getaddrinfo',local_dns)
     network_guard.start()
+    dns_guard.start()
 
 
 def tearDownModule():
+    dns_guard.stop()
     network_guard.stop()
 
 
@@ -57,6 +65,8 @@ class FakeVenue:
         self.fill = '1'
         self.timeout_once = self.reject = self.not_found = False
         self.never_terminal = False
+        self.reject_reduce = False
+        self.barrier = None
         owner = self
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *args):
@@ -91,11 +101,17 @@ class FakeVenue:
                 if self.command == 'POST' and (path.path.endswith('/orders') or path.path.endswith('/place-order')):
                     cid = data.get('text', data.get('clientOid'))
                     if cid in owner.orders:
-                        return self.reply(400, {'label': 'TRADE_ORDER_DUPLICATE_ERROR', 'code': '40786'})
+                        return self.reply(400, {'label': 'TRADE_ORDER_DUPLICATE_ERROR', 'code': '45034'})
                     if owner.reject:
                         return self.reply(400, {'label': 'TRADE_INVALID_ORDER_QTY', 'code': '40017',
                                                'message': 'test-secret test-pass test-key'})
-                    owner.orders[cid] = dict(id=str(len(owner.orders)+1), polls=0, data=data)
+                    reduce = data.get('reduce_only')=='true' or data.get('reduceOnly')=='YES' or data.get('tradeSide')=='close'
+                    if reduce and owner.reject_reduce:
+                        return self.reply(400, {'label':'TRADE_INVALID_ORDER_QTY','code':'40017'})
+                    fill = min(dec(owner.fill),dec(data.get('qty',data.get('size'))))
+                    owner.orders[cid] = dict(id=str(len(owner.orders)+1), polls=0, data=data, fill=str(fill))
+                    if owner.barrier and not reduce:
+                        owner.barrier.wait(timeout=2)
                     if owner.timeout_once:
                         owner.timeout_once = False
                         return self.reply(503, {'message': 'test-secret test-pass test-key'})
@@ -106,27 +122,27 @@ class FakeVenue:
                     for cid, order in owner.orders.items():
                         if owner.venue == 'gate':
                             rows.append(dict(transaction_id='t'+order['id'], order_id=order['id'], text=cid,
-                                             symbol=order['data']['symbol'], qty=owner.fill, price='100',
+                                             symbol=order['data']['symbol'], qty=order['fill'], price='100',
                                              fee='.02', fee_coin='USDT', create_time='1700000000000'))
                         else:
                             rows.append(dict(tradeId='t'+order['id'], orderId=order['id'], symbol='BTCUSDT',
-                                             baseVolume=owner.fill, price='100', feeDetail=[{'feeCoin':'USDT','totalFee':'-.02'}],
+                                             baseVolume=order['fill'], price='100', feeDetail=[{'feeCoin':'USDT','totalFee':'-.02'}],
                                              cTime='1700000000000'))
                     return self.reply(200, rows if owner.venue == 'gate' else {'fillList':rows, 'endId':''})
                 query = parse_qs(path.query)
                 identity = path.path.rsplit('/', 1)[-1] if owner.venue == 'gate' else query.get('orderId', query.get('clientOid', ['']))[0]
                 found = next(((cid, o) for cid, o in owner.orders.items() if identity in (cid, o['id'])), None)
                 if found is None or owner.not_found:
-                    return self.reply(404, {'label':'TRADE_ORDER_NOT_FOUND_ERROR', 'code':'43025'})
+                    return self.reply(404, {'label':'TRADE_ORDER_NOT_FOUND_ERROR', 'code':'43001'})
                 cid, order = found
                 order['polls'] += 1
                 terminal = order['polls'] > 1 and not owner.never_terminal
                 if owner.venue == 'gate':
                     result = dict(order_id=order['id'], text=cid, symbol=order['data']['symbol'],
-                                  state='CANCELLED' if terminal else 'OPEN', executed_qty=owner.fill if terminal else '0')
+                                  state='CANCELLED' if terminal else 'OPEN', executed_qty=order['fill'] if terminal else '0')
                 else:
                     result = dict(orderId=order['id'], clientOid=cid, symbol='BTCUSDT',
-                                  state='canceled' if terminal else 'live', baseVolume=owner.fill if terminal else '0')
+                                  state='canceled' if terminal else 'live', baseVolume=order['fill'] if terminal else '0')
                 self.reply(200, result)
 
             def reply(self, status, data):
@@ -136,7 +152,10 @@ class FakeVenue:
                 self.send_response(status)
                 self.send_header('Content-Length', str(len(raw)))
                 self.end_headers()
-                self.wfile.write(raw)
+                try:
+                    self.wfile.write(raw)
+                except (BrokenPipeError,ConnectionResetError,ConnectionAbortedError):
+                    pass  # The deadline tests intentionally abandon responses.
         self.server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -209,7 +228,7 @@ class HTTPExecutionTests(unittest.TestCase):
         cred = Credentials('test-key','test-secret','test-pass')
         self.cross = CrossEx(Transport('gate', cred, base=self.gate.url, live=True, local_test=True))
         self.bitget = Bitget(Transport('bitget', cred, base=self.bg.url, live=True, local_test=True), 'one_way_mode')
-        self.exec = Executor(self.store, {'crossex':self.cross,'bitget':self.bitget}, live=True, poll_interval=.001, confirm_timeout=1)
+        self.exec = Executor(self.store, {'crossex':self.cross,'bitget':self.bitget}, live=True, poll_interval=.001, confirm_timeout=3)
 
     def tearDown(self):
         self.gate.close()
@@ -249,15 +268,17 @@ class HTTPExecutionTests(unittest.TestCase):
         self.assertEqual(len(self.gate.calls), count)
 
     def test_duplicate_server_rejection_is_queried(self):
-        i = intent()
-        self.cross.place(i)
-        self.assertEqual(self.exec.execute(i)['state'], 'TERMINAL')
-        self.assertEqual(sum(c[0]=='POST' for c in self.gate.calls), 2)
+        for ex,adapter,fake in [('binance',self.cross,self.gate),('bitget',self.bitget,self.bg)]:
+            with self.subTest(exchange=ex):
+                i = intent('ce-duplicate-'+ex,ex)
+                adapter.place(i)
+                self.assertEqual(self.exec.execute(i)['state'], 'TERMINAL')
+                self.assertEqual(sum(c[0]=='POST' for c in fake.calls), 2)
 
     def test_partial_fill(self):
         self.bg.fill = '.4'
         result = self.exec.execute(intent(ex='bitget'))
-        self.assertEqual(result['filled'], '.4')
+        self.assertEqual(dec(result['filled']), dec('.4'))
 
     def test_shadow_never_calls_place_or_cancel(self):
         self.exec.live = False
@@ -296,13 +317,47 @@ class HTTPExecutionTests(unittest.TestCase):
             self.assertNotIn('test-pass',str(error))
 
     def test_sent_is_after_admission(self):
-        def before():
+        def before(*args):
             self.assertEqual(self.store.order('ce-test')['state'], 'INTENT')
             raise APIError('rate_limited')
         with patch.object(self.cross.http, 'admit', side_effect=before):
             result = self.exec.execute(intent())
         self.assertEqual(result['state'], 'UNSENT')
         self.assertFalse(self.gate.calls)
+
+    def test_nonterminal_deadline_is_bounded_and_remains_unknown(self):
+        self.gate.never_terminal=True
+        self.exec.confirm_timeout=.08
+        start=time.monotonic()
+        result=self.exec.execute(intent())
+        self.assertEqual(result['state'],'UNKNOWN')
+        self.assertLess(time.monotonic()-start,.4)
+
+    def test_terminal_fill_backfill_retries_without_resending(self):
+        with patch.object(self.cross,'fills',side_effect=APIError('unknown')):
+            result=self.exec.execute(intent())
+        self.assertTrue(result['accounting_pending'])
+        self.exec.recover()
+        self.assertFalse(self.store.order(result['cid'])['accounting_pending'])
+        self.assertEqual(sum(c[0]=='POST' for c in self.gate.calls),1)
+
+    def test_foreign_origins_and_plain_http_production_rejected(self):
+        cred=Credentials('test-key','test-secret','test-pass')
+        for url in ('http://api.gateio.ws','https://example.com','http://127.0.0.1:1234'):
+            with self.subTest(url=url),self.assertRaises(ValueError):
+                Transport('gate',cred,base=url)
+
+    def test_log_redaction(self):
+        import io
+        from contextlib import redirect_stdout
+        from tools.crossex_exec.__main__ import emit
+        self.exec.execute(intent())
+        signature=self.gate.calls[0][3]['SIGN']
+        output=io.StringIO()
+        with redirect_stdout(output):
+            emit('test',message='test-key test-secret test-pass '+signature)
+        for secret in ('test-key','test-secret','test-pass',signature):
+            self.assertNotIn(secret,output.getvalue())
 
 
 class PersistenceTests(unittest.TestCase):
