@@ -174,8 +174,9 @@ async def test_old_published_rows_after_next_prepare_fall_back(monkeypatch):
 async def test_filter_snapshot_change_during_yield_aborts():
     new, _, opportunities = await prepared(MarketValidationService, workload(2))
     budget = CountingBudget(lambda frame: new.store.mark_published(NOW))
-    with pytest.raises(ValueError, match="snapshot changed"):
+    with pytest.raises(ValueError, match="snapshot changed") as error:
         await new.filter_opportunities_async(opportunities, RiskSettings(), budget)
+    assert type(error.value) is review.AlertFilterChanged
 
 
 async def test_premium_scan_publication_change_does_not_cache_old_rows(monkeypatch):
@@ -255,8 +256,9 @@ async def test_filter_fresh_validation_reused_without_recompute():
 async def test_filter_mapping_change_during_yield_never_returns_stale_capabilities():
     new, rows, opportunities = await prepared(MarketValidationService, workload(2))
     budget = CountingBudget(lambda frame: new.invalidate())
-    with pytest.raises(ValueError, match="changed"):
+    with pytest.raises(ValueError, match="changed") as error:
         await new.filter_opportunities_async(opportunities, RiskSettings(), budget)
+    assert type(error.value) is review.AlertFilterChanged
 
 
 def test_alert_filter_timing_300_second_window_json_and_reset(monkeypatch):
@@ -275,11 +277,178 @@ def test_alert_filter_timing_300_second_window_json_and_reset(monkeypatch):
     timing.record(20, 5)
     assert json.loads(log.call_args.args[0]) == {"alert_filter_timing": {
         "count": 3, "filter_ms": {"p50": 20, "max": 30}, "recomputed": 15,
+        "retries": 0, "skipped": 0,
     }}
     now[0] += 300
     timing.record(2, 0)
     assert json.loads(log.call_args.args[0]) == {"alert_filter_timing": {
         "count": 1, "filter_ms": {"p50": 2, "max": 2}, "recomputed": 0,
+        "retries": 0, "skipped": 0,
+    }}
+
+
+@pytest.fixture
+async def alert_retry_loop(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from app import main
+
+    validator, rows, opportunities = await prepared(MarketValidationService, workload(3))
+    opportunities = opportunities[1:]
+    validator.store.set_opportunities(opportunities)
+    validator.filter_opportunities_async = AsyncMock(wraps=validator.filter_opportunities_async)
+    validator.store.get_opportunities = Mock(wraps=validator.store.get_opportunities)
+    stop = asyncio.Event()
+    app = SimpleNamespace(state=SimpleNamespace(
+        snapshot_store=validator.store, market_validation=validator,
+        alert_rule_repo=SimpleNamespace(list=AsyncMock(return_value=[])),
+        alert_event_repo=Mock(), alert_delivery_store=SimpleNamespace(prune=AsyncMock()),
+        alert_engine=SimpleNamespace(evaluate=Mock(return_value=[])),
+    ))
+    monkeypatch.setattr(main, "datetime", Clock)
+    monkeypatch.setattr(main, "_refresh_astro_runtime_settings", AsyncMock())
+    general_filter = Mock(side_effect=lambda items, risk: items)
+    rule_filter = Mock(side_effect=lambda items, *args, **kwargs: items)
+    monkeypatch.setattr(main, "filter_opportunities", general_filter)
+    monkeypatch.setattr(main, "filter_opportunities_by_alert_rules", rule_filter)
+    timing = Mock()
+    monkeypatch.setattr(main, "_AlertFilterTiming", lambda: timing)
+    heartbeat = Mock(side_effect=lambda *args, **kwargs: stop.set())
+    monkeypatch.setattr(main, "beat", heartbeat)
+    exception_log = Mock(wraps=main.logger.exception)
+    monkeypatch.setattr(main.logger, "exception", exception_log)
+    return SimpleNamespace(
+        app=app, validator=validator, opportunities=opportunities, rows=rows,
+        stop=stop, timing=timing, heartbeat=heartbeat, exception_log=exception_log,
+        general_filter=general_filter, rule_filter=rule_filter,
+    )
+
+
+@pytest.mark.parametrize("change", ["snapshot", "mapping", "markets"])
+@pytest.mark.parametrize("changes", [1, 2, 3])
+async def test_alert_loop_retries_changed_filter_then_succeeds_or_skips(
+    monkeypatch, caplog, alert_retry_loop, change, changes,
+):
+    import logging
+    from app import main
+
+    loop = alert_retry_loop
+    budgets = []
+    latest = loop.opportunities
+    inputs = []
+
+    def make_budget():
+        changed = False
+        inputs.append([item.id for item in latest])
+
+        def mutate(frame):
+            nonlocal changed, latest
+            if changed or len(budgets) > changes:
+                return
+            changed = True
+            latest = [item.model_copy(update={"id": item.id + "-new"}) for item in latest]
+            loop.validator.store.set_opportunities(latest)
+            if change == "snapshot":
+                loop.validator.store.mark_published(NOW)
+            elif change == "markets":
+                loop.validator.store.set_all_markets(loop.rows)
+            else:
+                loop.validator.invalidate()
+
+        budget = CountingBudget(mutate)
+        budgets.append(budget)
+        return budget
+
+    monkeypatch.setattr(review, "YieldBudget", make_budget)
+    with caplog.at_level(logging.WARNING, logger=main.logger.name):
+        await asyncio.wait_for(main._run_alert_loop(loop.app, 60, loop.stop), timeout=2)
+
+    attempts = min(changes + 1, 3)
+    skipped = changes == 3
+    assert len(budgets) == attempts
+    assert loop.validator.filter_opportunities_async.await_count == attempts
+    assert loop.validator.store.get_opportunities.call_count == attempts
+    assert loop.general_filter.call_count == attempts
+    assert [
+        [item.id for item in call.args[0]]
+        for call in loop.validator.filter_opportunities_async.await_args_list
+    ] == inputs
+    assert all(before != after for before, after in zip(inputs, inputs[1:]))
+    loop.timing.record.assert_called_once()
+    assert loop.timing.record.call_args.args[0] >= 0
+    assert loop.timing.record.call_args.args[1] == (3 if skipped else 2 + changes)
+    assert loop.timing.record.call_args.kwargs == {"retries": min(changes, 2), "skipped": skipped}
+    loop.heartbeat.assert_called_once_with("alert-loop", ok=not skipped)
+    loop.exception_log.assert_not_called()
+    warnings = [record for record in caplog.records if record.levelno >= logging.WARNING]
+    if skipped:
+        loop.rule_filter.assert_not_called()
+        loop.app.state.alert_engine.evaluate.assert_not_called()
+        assert len(warnings) == 1
+        assert warnings[0].levelno == logging.WARNING
+        assert warnings[0].exc_info is None
+        assert "skipped" in warnings[0].getMessage() and "2 retries" in warnings[0].getMessage()
+        assert "alert loop failed" not in caplog.text
+    else:
+        loop.rule_filter.assert_called_once()
+        loop.app.state.alert_engine.evaluate.assert_called_once()
+        assert [item.id for item in loop.app.state.alert_engine.evaluate.call_args.args[0]] == [
+            item.id for item in latest
+        ]
+        assert not warnings
+
+
+@pytest.mark.parametrize("error_type", [ValueError, RuntimeError])
+async def test_alert_loop_does_not_retry_unrelated_filter_errors(alert_retry_loop, error_type):
+    from app import main
+
+    loop = alert_retry_loop
+    # Even an identical message must not make a plain ValueError retryable.
+    loop.validator.filter_opportunities_async.side_effect = error_type(
+        "mapping or snapshot changed during alert filtering"
+    )
+    await asyncio.wait_for(main._run_alert_loop(loop.app, 60, loop.stop), timeout=2)
+    loop.validator.filter_opportunities_async.assert_awaited_once()
+    loop.validator.store.get_opportunities.assert_called_once()
+    loop.exception_log.assert_called_once_with("alert loop failed")
+    loop.timing.record.assert_not_called()
+    loop.app.state.alert_engine.evaluate.assert_not_called()
+
+
+async def test_alert_loop_filter_cancellation_propagates_without_retry(alert_retry_loop):
+    from app import main
+
+    loop = alert_retry_loop
+    loop.validator.filter_opportunities_async.side_effect = asyncio.CancelledError()
+    with pytest.raises(asyncio.CancelledError):
+        await main._run_alert_loop(loop.app, 60, loop.stop)
+    loop.validator.filter_opportunities_async.assert_awaited_once()
+    loop.exception_log.assert_not_called()
+    loop.timing.record.assert_not_called()
+    loop.heartbeat.assert_not_called()
+
+
+def test_alert_filter_timing_counts_retries_and_skips_and_resets(monkeypatch):
+    import json
+    from app import main
+
+    now = [1000.0]
+    monkeypatch.setattr(main, "monotonic", lambda: now[0])
+    log = Mock()
+    monkeypatch.setattr(main.alert_timing_logger, "info", log)
+    timing = main._AlertFilterTiming()
+    timing.record(10, 1, retries=1, skipped=False)
+    now[0] += 300
+    timing.record(20, 2, retries=2, skipped=True)
+    assert json.loads(log.call_args.args[0]) == {"alert_filter_timing": {
+        "count": 2, "filter_ms": {"p50": 15, "max": 20}, "recomputed": 3,
+        "retries": 3, "skipped": 1,
+    }}
+    now[0] += 300
+    timing.record(5, 0)
+    assert json.loads(log.call_args.args[0]) == {"alert_filter_timing": {
+        "count": 1, "filter_ms": {"p50": 5, "max": 5}, "recomputed": 0,
+        "retries": 0, "skipped": 0,
     }}
 
 
@@ -336,7 +505,7 @@ async def test_prepare_mapping_change_in_combination_aborts_before_invalidation(
 
 
 def test_prepare_business_tail_matches_baseline_after_exact_additions():
-    """Additional audit; the existing literal-source assertion remains untouched."""
+    """Also audit against the frozen 00dfa9e reference."""
     from textwrap import dedent
     marker = "        if self.collision_symbols:\n"
     actual = inspect.getsource(MarketValidationService.prepare).split(marker, 1)[1]
