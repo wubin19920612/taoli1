@@ -42,6 +42,7 @@ import {
 
 type PageKey =
   | "shadow-ledger"
+  | "live-exec"
   | "dashboard"
   | "funding"
   | "instrument"
@@ -62,6 +63,7 @@ type NavigationItem = {
 
 const lazyPages: Record<PageKey, LazyPage> = {
   "shadow-ledger": lazy(() => import("../pages/ShadowLedgerPage").then((module) => ({ default: module.ShadowLedgerPage }))),
+  "live-exec": lazy(() => import("../pages/LiveExecPage").then((module) => ({ default: module.LiveExecPage }))),
   dashboard: lazy(() =>
     import("../pages/DashboardPage").then((module) => ({ default: module.DashboardPage }))
   ),
@@ -126,6 +128,7 @@ const defaultNavigationItems: NavigationItem[] = [
   { key: "gate-twap", icon: <ClockCircleOutlined />, label: "Gate 定时减仓" },
   { key: "index-components", icon: <NodeIndexOutlined />, label: "指数成分变更" },
   { key: "shadow-ledger", icon: <OrderedListOutlined />, label: "影子账本" },
+  { key: "live-exec", icon: <StockOutlined />, label: "实盘" },
   { key: "announcements", icon: <NotificationOutlined />, label: "交易所公告" },
   { key: "account-connections", icon: <KeyOutlined />, label: "账户连接" },
   { key: "settings", icon: <SettingOutlined />, label: "参数与告警" }
@@ -189,6 +192,10 @@ function normalizeNavigationOrder(value: unknown): PageKey[] {
       && isPageKey(key)
       && requested.indexOf(key) === index
   );
+  // Insert the new page beside the ledger for users with an existing saved menu.
+  if (known.includes("shadow-ledger") && !known.includes("live-exec")) {
+    known.splice(known.indexOf("shadow-ledger") + 1, 0, "live-exec");
+  }
   return [...known, ...defaultNavigationOrder.filter((key) => !known.includes(key))];
 }
 
