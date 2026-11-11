@@ -14,6 +14,7 @@ from app.models.market import MarketSnapshot, MarketType
 from app.models.market_identity import MarketKey, utc
 from app.models.premium_index import SUPPORTED_PREMIUM_INDEX_EXCHANGES
 from app.models.settings import FeeSettings, RiskSettings
+from app.runtime.cooperative import YieldBudget
 from app.services.data_filters import filter_markets
 from app.services.market_sessions import is_market_snapshot_tradable
 from app.services.pair_validation import validate_pair
@@ -35,11 +36,12 @@ class _EligibilityScan:
     has_duplicates: bool
 
 
-def _scan_eligibility(markets: list[MarketSnapshot], settings: RiskSettings):
+def _scan_eligibility_steps(markets: list[MarketSnapshot], settings: RiskSettings):
     groups = defaultdict(list)
     by_market = {}
     has_duplicates = False
     for position, market in enumerate(filter_markets(markets, settings)):
+        yield
         if (
             market.market_type != MarketType.FUTURE
             or market.exchange not in SUPPORTED_PREMIUM_INDEX_EXCHANGES
@@ -64,6 +66,27 @@ def _scan_eligibility(markets: list[MarketSnapshot], settings: RiskSettings):
         has_duplicates |= key in by_market
         by_market[key] = (group, market)
     return _EligibilityScan(dict(groups), by_market, has_duplicates)
+
+
+
+def _scan_eligibility(markets: list[MarketSnapshot], settings: RiskSettings):
+    steps = _scan_eligibility_steps(markets, settings)
+    while True:
+        try:
+            next(steps)
+        except StopIteration as done:
+            return done.value
+
+
+async def _scan_eligibility_async(markets, settings, budget=None):
+    budget = budget or YieldBudget()
+    steps = _scan_eligibility_steps(markets, settings)
+    while True:
+        try:
+            next(steps)
+        except StopIteration as done:
+            return done.value
+        await budget.maybe_yield()
 
 
 def _eligible_at(scan: _EligibilityScan, now: datetime):
@@ -285,6 +308,27 @@ class MultiExchangePremiumMonitor:
             self._scan_cache = (cache_key, _scan_eligibility(markets, settings), markets)
         return _eligible_at(self._scan_cache[1], now)
 
+    async def _current_eligibility_async(self, settings: RiskSettings, now: datetime):
+        store = self.app.state.snapshot_store
+        cache_key = (store.generation, settings.model_dump_json())
+        markets_version = getattr(store, "markets_version", None)
+        markets = store.get_markets()
+        if (
+            self._scan_cache is None
+            or self._scan_cache[0] != cache_key
+            or not _same_market_rows(self._scan_cache[2], markets)
+        ):
+            # Drop the previous full scan before retaining its replacement.
+            # Keep the input copy alive: binding refreshes can replace rows
+            # without advancing generation, so compare row objects directly.
+            self._scan_cache = None
+            scan = await _scan_eligibility_async(markets, settings)
+            if (cache_key != (store.generation, settings.model_dump_json())
+                    or markets_version != getattr(store, "markets_version", None)):
+                raise ValueError("snapshot or settings changed during premium scan")
+            self._scan_cache = (cache_key, scan, markets)
+        return _eligible_at(self._scan_cache[1], now)
+
     async def _point(self, market):
         # At most two market queries/sec/exchange, with bounded global concurrency.
         async with self._slots:
@@ -324,7 +368,7 @@ class MultiExchangePremiumMonitor:
         if not settings.multi_exchange_premium_alert_enabled:
             return
         now = datetime.now(UTC)
-        groups = self._current_eligibility(settings, now)[0]
+        groups = (await self._current_eligibility_async(settings, now))[0]
         keys = sorted(groups)
         self.status["eligible_symbols"] = len(keys)
         remaining = [key for key in keys if self._cursor is None or key > self._cursor]
@@ -361,7 +405,7 @@ class MultiExchangePremiumMonitor:
         if not settings.multi_exchange_premium_alert_enabled:
             return
         now = datetime.now(UTC)
-        current, by_market = self._current_eligibility(settings, now)
+        current, by_market = await self._current_eligibility_async(settings, now)
         observations = defaultdict(list)
         for result in results:
             if result is None:

@@ -21,7 +21,7 @@ from app.models.opportunity import Opportunity
 from app.models.settings import FeeSettings, RiskSettings
 from app.runtime.cooperative import YieldBudget
 from app.runtime.supervisor import StageTimings, beat
-from app.services.compact_markets import CompactMarkets, pack
+from app.services.compact_markets import CompactMarkets, pack, pack_async
 from app.services.data_filters import (
     filter_markets_async,
     filter_opportunities,
@@ -271,7 +271,7 @@ class MarketCollector:
                     b = by_key.get((item.sell_exchange, item.sell_market_type, item.sell_raw_symbol))
                     if a is None or b is None:
                         continue
-                    item.validation = self.market_validation.validate(a, b, risk)
+                    item.validation = self.market_validation.validate(a, b, risk, annotated=True)
                     if self.market_validation.should_enforce(item.validation) and not item.validation.capabilities.same_asset_opportunity:
                         continue
                     item.risk_labels = risk_labels_for(item, risk, now)
@@ -444,9 +444,9 @@ class MarketCollector:
                         errors={adapter.name: _error_message(result)},
                         should_cool_down=True,
                     )
-                self._store_adapter_result(adapter.name, result, now)
+                await self._store_adapter_result(adapter.name, result, now)
 
-    def _store_adapter_result(
+    async def _store_adapter_result(
         self,
         exchange_name: str,
         result: AdapterPollResult,
@@ -456,7 +456,7 @@ class MarketCollector:
         state.in_flight = False
         if result.errors:
             if result.markets and not result.should_cool_down:
-                self._exchange_snapshots[exchange_name] = pack(result.markets)
+                self._exchange_snapshots[exchange_name] = await pack_async(result.markets, YieldBudget())
             self._exchange_errors[exchange_name] = result.errors
             state.last_error_at = now
             state.consecutive_failures += 1
@@ -473,7 +473,7 @@ class MarketCollector:
                 state.next_due_at = now + timedelta(seconds=self.poll_interval_seconds)
             return
 
-        self._exchange_snapshots[exchange_name] = pack(result.markets)
+        self._exchange_snapshots[exchange_name] = await pack_async(result.markets, YieldBudget())
         self._exchange_errors.pop(exchange_name, None)
         state.status = "healthy"
         state.last_success_at = now

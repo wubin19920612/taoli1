@@ -72,9 +72,7 @@ class CompactMarkets:
         return m
 
 
-def pack(markets: Sequence[MarketSnapshot]) -> CompactMarkets:
-    rows = []
-    mutable_fields = set()
+def _pack_rows(markets, mutable_fields):
     for market in markets:
         values = []
         for name in _FIELDS:
@@ -84,7 +82,26 @@ def pack(markets: Sequence[MarketSnapshot]) -> CompactMarkets:
                 value = _copy_mutable(value)
             values.append(value)
         bitmap = sum(bit for name, bit in _FIELD_BITS if name in market.model_fields_set)
-        rows.append((*values, bitmap))
+        yield (*values, bitmap)
+
+
+def pack(markets: Sequence[MarketSnapshot]) -> CompactMarkets:
+    mutable_fields = set()
+    rows = tuple(_pack_rows(markets, mutable_fields))
+    return CompactMarkets(
+        rows=rows,
+        mutable_fields=tuple(name for name in _FIELDS if name in mutable_fields),
+    )
+
+
+async def pack_async(markets: Sequence[MarketSnapshot], budget: YieldBudget) -> CompactMarkets:
+    mutable_fields = set()
+    rows = []
+    for index, row in enumerate(_pack_rows(markets, mutable_fields), 1):
+        rows.append(row)
+        if index % 200 == 0:
+            await budget.maybe_yield()
+    await budget.maybe_yield()
     return CompactMarkets(
         rows=tuple(rows),
         mutable_fields=tuple(name for name in _FIELDS if name in mutable_fields),

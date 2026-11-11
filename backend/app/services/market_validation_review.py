@@ -15,6 +15,7 @@ import httpx
 from app.models.market_identity import MarketKey, MarketValidationSettings, utc
 from app.models.settings import RiskSettings
 from app.runtime.cooperative import YieldBudget
+from app.services import pair_validation
 from app.services.market_identity import MarketIdentityRegistry
 from app.services.orderbook_validator import OrderBookDepthValidator
 from app.services.pair_validation import validate_pair
@@ -204,6 +205,12 @@ class MarketValidationService:
         self.fx_retry_at = datetime.min.replace(tzinfo=UTC)
         self._refresh_lock = asyncio.Lock()
         self._mutation_epoch = 0
+        self._prepared_epoch = None
+        self._prepared_rows = {}
+        self._prepared_fx = None
+        self._market_index_cache = None
+        self._market_legs_cache = {}
+        self.last_filter_recomputed = 0
         self._last_incident = _ExpiryCache()
         self.collision_symbols = set()
         self.invalidated_ids = set()
@@ -348,6 +355,7 @@ class MarketValidationService:
     async def prepare(self, markets, risk):
         budget = YieldBudget()
         now = datetime.now(UTC)
+        prepared_fx = self.fx
         # A registry's bindings are immutable, but replace() changes its reference.
         # Copy the reader so every row in an attempt sees the same mapping/mode.
         for attempt in range(3):
@@ -355,6 +363,7 @@ class MarketValidationService:
             registry = copy(self.registry)
             cooperative = attempt < 2
             unknown = []
+            market_keys = []
             discovered = self.discovered.copy()
             for row in markets:
                 if cooperative:
@@ -362,7 +371,9 @@ class MarketValidationService:
                 try:
                     key = MarketKey.from_snapshot(row).key
                 except ValueError:
+                    market_keys.append(None)
                     continue
+                market_keys.append(key)
                 if key not in discovered:
                     unknown.append(row)
                     discovered.add(key)
@@ -418,8 +429,16 @@ class MarketValidationService:
 
             invalid = set()
             for symbol in self.collision_symbols:
+                if cooperative:
+                    await budget.maybe_yield()
+                    if epoch != self._mutation_epoch:
+                        raise ValueError("mapping changed during preparation")
                 collision_rows = [row for row in annotated if row.symbol == symbol and row.asset_id]
                 for a, b in combinations(collision_rows, 2):
+                    if cooperative:
+                        await budget.maybe_yield()
+                        if epoch != self._mutation_epoch:
+                            raise ValueError("mapping changed during preparation")
                     if a.asset_id == b.asset_id:
                         continue
                     for first, second in ((a, b), (b, a)):
@@ -430,6 +449,8 @@ class MarketValidationService:
             if fresh_invalid:
                 await self.repository.invalidate_opportunities(fresh_invalid)
                 self.invalidated_ids.update(fresh_invalid)
+        if epoch != self._mutation_epoch:
+            raise ValueError("mapping changed during preparation")
         if (
             any(row.original_quote_currency == "USDC" for row in annotated)
             and now >= self.fx_retry_at
@@ -455,6 +476,10 @@ class MarketValidationService:
         candidates = []
         for legs in groups.values():
             for a, b in combinations(legs, 2):
+                if cooperative:
+                    await budget.maybe_yield()
+                    if epoch != self._mutation_epoch:
+                        raise ValueError("mapping changed during preparation")
                 if a.exchange == b.exchange and a.market_type == b.market_type:
                     continue
                 spread = abs(2 * (b.bid - a.ask) / (b.bid + a.ask) * 100)
@@ -490,6 +515,11 @@ class MarketValidationService:
             self._bounded_put(self.review_attempted, key, now.timestamp(), limit=5000)
             task = asyncio.create_task(self._background_review(a, b, risk, key))
             self.tasks[key] = task
+        self._prepared_epoch = epoch
+        self._prepared_rows = {
+            id(row): (row, key) for row, key in zip(annotated, market_keys, strict=True)
+        }
+        self._prepared_fx = prepared_fx
         return annotated
 
     @staticmethod
@@ -731,21 +761,40 @@ class MarketValidationService:
         self._bounded_put(self.reviews, self.pair_key(a, b), result)
         return result, a, b
 
-    def validate(self, a, b, risk=None, *, comparison_kind="same_asset"):
+    def validate(self, a, b, risk=None, *, comparison_kind="same_asset", annotated=False):
         risk = risk or RiskSettings()
         now = datetime.now(UTC)
-        a, b = self.annotate(a, now), self.annotate(b, now)
-        cached = self.reviews.get(self.pair_key(a, b))
+        prepared_a = self._prepared_rows.get(id(a)) if annotated else None
+        prepared_b = self._prepared_rows.get(id(b)) if annotated else None
+        reuse = (
+            annotated
+            and self._prepared_epoch == self._mutation_epoch
+            and self._prepared_fx == self.fx
+            and prepared_a is not None and prepared_a[0] is a and prepared_a[1] is not None
+            and prepared_b is not None and prepared_b[0] is b and prepared_b[1] is not None
+            and (a.identity_status != "verified" or not a.binding_valid_until
+                 or utc(a.binding_valid_until) > now)
+            and (b.identity_status != "verified" or not b.binding_valid_until
+                 or utc(b.binding_valid_until) > now)
+        )
+        if reuse:
+            # prepare already validated these exact immutable market identities.
+            # Reuse their encoded keys as well as their annotations.
+            key = (prepared_a[1], prepared_b[1], a.binding_revision, b.binding_revision,
+                   a.binding_fingerprint, b.binding_fingerprint)
+        else:
+            a, b = self.annotate(a, now), self.annotate(b, now)
+            key = self.pair_key(a, b)
+        cached = self.reviews.get(key)
         # Cached depth reviews can qualify only that exact sampled quote.
-        from app.services.pair_validation import quote_fingerprint
-
+        fingerprint = pair_validation.quote_fingerprint(a, b)
         cached_blockers = set(cached.reason_codes) if cached else set()
         if self.settings.mode == "shadow":
             cached_blockers -= {"ASSET_IDENTITY_UNVERIFIED", "UNIT_UNVERIFIED"}
         passed = bool(
             cached
             and cached.expires_at > now
-            and cached.quote_fingerprint == quote_fingerprint(a, b)
+            and cached.quote_fingerprint == fingerprint
             and not cached_blockers
         )
         result = validate_pair(
@@ -757,36 +806,58 @@ class MarketValidationService:
             stale_after_seconds=risk.stale_after_seconds,
             max_leg_time_skew_seconds=self.settings.max_leg_time_skew_seconds,
             review_passed=passed,
+            quote_fingerprint=fingerprint,
         )
         result.registry_revision = self._mutation_epoch
         return result
 
     def _market_index(self):
+        version = (self.store.generation, self.store.markets_version)
+        if self._market_index_cache is not None and self._market_index_cache[0] == version:
+            return self._market_index_cache[1]
         result = {}
         for row in self.store.get_all_markets():
-            try:
-                key = MarketKey.from_snapshot(row).key
-            except ValueError:
-                continue
+            prepared = self._prepared_rows.get(id(row))
+            if prepared is not None and prepared[0] is row:
+                key = prepared[1]
+                if key is None:
+                    continue
+            else:
+                try:
+                    key = MarketKey.from_snapshot(row).key
+                except ValueError:
+                    continue
             previous = result.get(key)
             if previous is None or row.timestamp > previous.timestamp:
                 result[key] = row
+        self._market_index_cache = (version, result)
+        self._market_legs_cache = {
+            (row.exchange, row.market_type, row.raw_symbol, row.dex): row
+            for row in result.values()
+        }
         return result
 
     def _opportunity_legs(self, opportunity, index=None):
         legs = []
         index = self._market_index() if index is None else index
+        cache = (self._market_legs_cache if self._market_index_cache is not None
+                 and self._market_index_cache[1] is index else None)
         for side in ("buy", "sell"):
             raw = getattr(opportunity, side + "_raw_symbol")
             if not raw:
                 raise ValueError("missing exact raw market identity")
-            key = MarketKey(
-                exchange=getattr(opportunity, side + "_exchange"),
-                market_type=getattr(opportunity, side + "_market_type"),
-                raw_symbol=raw,
-                dex=getattr(opportunity, side + "_dex"),
-            )
-            row = index.get(key.key)
+            exact = (getattr(opportunity, side + "_exchange"),
+                     getattr(opportunity, side + "_market_type"), raw,
+                     getattr(opportunity, side + "_dex"))
+            row = cache.get(exact) if cache is not None else None
+            if row is None:
+                key = MarketKey(exchange=exact[0], market_type=exact[1],
+                                raw_symbol=exact[2], dex=exact[3])
+                row = index.get(key.key)
+                # Cache only successful exact resolutions within this snapshot.
+                # Bound alternate spellings supplied by manual/API callers too.
+                if row is not None and cache is not None and len(cache) < 2 * len(index):
+                    cache[exact] = row
             if row is None:
                 raise ValueError("exact live market is not available")
             legs.append(row)
@@ -806,8 +877,8 @@ class MarketValidationService:
             result = self.validate(a, b, risk, comparison_kind=opportunity.comparison_kind)
         return result, a, b
 
-    def filter_opportunities(self, opportunities, risk):
-        result = []
+    def _filter_opportunities(self, opportunities, risk, stats):
+        """One shared business path; yield once per input, including rejected rows."""
         index = None
         now = datetime.now(UTC)
         for item in opportunities:
@@ -820,25 +891,54 @@ class MarketValidationService:
                     not self.should_enforce(item.validation)
                     or item.validation.capabilities.strategy_alert
                 ):
-                    result.append(item)
+                    yield item
+                else:
+                    yield None
                 continue
             try:
                 if index is None:
                     index = self._market_index()
                 a, b = self._opportunity_legs(item, index)
-                validation = self.validate(a, b, risk, comparison_kind=item.comparison_kind)
-            except ValueError:
-                continue
-            if self.should_enforce(validation) and not validation.capabilities.strategy_alert:
-                continue
-            result.append(
-                item.model_copy(
-                    update={
-                        "validation": validation,
-                        "identity_enforced": self.should_enforce(validation),
-                    }
+                stats[0] += 1
+                validation = self.validate(
+                    a, b, risk, comparison_kind=item.comparison_kind, annotated=True,
                 )
+            except ValueError:
+                yield None
+                continue
+            enforce = self.should_enforce(validation)
+            if enforce and not validation.capabilities.strategy_alert:
+                yield None
+                continue
+            yield item.model_copy(
+                update={
+                    "validation": validation,
+                    "identity_enforced": enforce,
+                }
             )
+
+    def filter_opportunities(self, opportunities, risk):
+        stats = [0]
+        result = [item for item in self._filter_opportunities(opportunities, risk, stats)
+                  if item is not None]
+        self.last_filter_recomputed = stats[0]
+        return result
+
+    async def filter_opportunities_async(self, opportunities, risk, budget=None):
+        budget = budget or YieldBudget()
+        epoch = self._mutation_epoch
+        version = (self.store.generation, self.store.markets_version)
+        result = []
+        stats = [0]
+        for item in self._filter_opportunities(opportunities, risk, stats):
+            if item is not None:
+                result.append(item)
+            await budget.maybe_yield()
+            # Never return a partially qualified batch spanning a binding/snapshot update.
+            if (epoch != self._mutation_epoch
+                    or version != (self.store.generation, self.store.markets_version)):
+                raise ValueError("mapping or snapshot changed during alert filtering")
+        self.last_filter_recomputed = stats[0]
         return result
 
     def coverage(self, markets=None):

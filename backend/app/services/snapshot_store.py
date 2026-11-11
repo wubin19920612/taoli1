@@ -9,6 +9,7 @@ class SnapshotStore:
     def __init__(self) -> None:
         self._lock = RLock()
         self.generation = 0
+        self.markets_version = 0
         self.published_at: datetime | None = None
         self._markets: list[MarketSnapshot] = []
         self._all_markets: list[MarketSnapshot] | None = None
@@ -19,6 +20,7 @@ class SnapshotStore:
     def set_markets(self, markets: list[MarketSnapshot]) -> None:
         with self._lock:
             self._markets = markets
+            self.markets_version += 1
 
     def get_markets(self) -> list[MarketSnapshot]:
         with self._lock:
@@ -27,6 +29,7 @@ class SnapshotStore:
     def set_all_markets(self, markets: list[MarketSnapshot]) -> None:
         with self._lock:
             self._all_markets = list(markets)
+            self.markets_version += 1
 
     def get_all_markets(self) -> list[MarketSnapshot]:
         with self._lock:

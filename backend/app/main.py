@@ -654,8 +654,35 @@ async def _process_alert_match(
         ))
 
 
+class _AlertFilterTiming:
+    """One local aggregation window per alert loop; no per-opportunity log traffic."""
+
+    def __init__(self):
+        self.started = monotonic()
+        self.samples = []
+        self.recomputed = 0
+
+    def record(self, filter_ms, recomputed):
+        from statistics import median
+
+        self.samples.append(filter_ms)
+        self.recomputed += recomputed
+        now = monotonic()
+        if now - self.started < 300:
+            return
+        alert_timing_logger.info(json.dumps({"alert_filter_timing": {
+            "count": len(self.samples),
+            "filter_ms": {"p50": median(self.samples), "max": max(self.samples)},
+            "recomputed": self.recomputed,
+        }}, separators=(",", ":")))
+        self.started = now
+        self.samples.clear()
+        self.recomputed = 0
+
+
 async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asyncio.Event) -> None:
     last_delivery_prune: datetime | None = None
+    filter_timing = _AlertFilterTiming()
     write_lock = asyncio.Lock()
     app_settings = getattr(app.state, "settings", Settings())
     while not stop_event.is_set():
@@ -689,10 +716,15 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
             )
             await _refresh_astro_runtime_settings(app, settings_repo)
             now = datetime.now(UTC)
+            filter_started = monotonic()
             opportunities = filter_opportunities(app.state.snapshot_store.get_opportunities(), settings)
             identity_validator = getattr(app.state, "market_validation", None)
             if identity_validator is not None:
-                opportunities = identity_validator.filter_opportunities(opportunities, settings)
+                opportunities = await identity_validator.filter_opportunities_async(opportunities, settings)
+            filter_timing.record(
+                (monotonic() - filter_started) * 1000,
+                identity_validator.last_filter_recomputed if identity_validator is not None else 0,
+            )
             opportunities = filter_opportunities_by_alert_rules(
                 opportunities,
                 rules,

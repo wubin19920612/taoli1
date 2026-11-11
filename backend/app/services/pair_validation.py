@@ -14,7 +14,7 @@ from app.models.market_identity import (
 )
 
 
-def quote_fingerprint(a, b):
+def _quote_fingerprint(a, b):
     values = [
         (
             r.bid,
@@ -29,6 +29,9 @@ def quote_fingerprint(a, b):
     return hashlib.sha256(json.dumps(values).encode()).hexdigest()
 
 
+quote_fingerprint = _quote_fingerprint
+
+
 def validate_pair(
     a,
     b,
@@ -39,6 +42,7 @@ def validate_pair(
     max_leg_time_skew_seconds=10,
     huge_spread_pct=10,
     review_passed=False,
+    quote_fingerprint=None,
 ):
     now = utc(now or datetime.now(UTC))
     blockers = []
@@ -178,7 +182,9 @@ def validate_pair(
         sell_revision=b.binding_revision,
         buy_spec_fingerprint=a.binding_fingerprint,
         sell_spec_fingerprint=b.binding_fingerprint,
-        quote_fingerprint=quote_fingerprint(a, b),
+        quote_fingerprint=(
+            _quote_fingerprint(a, b) if quote_fingerprint is None else quote_fingerprint
+        ),
         blockers=blockers,
         warnings=warnings,
         capabilities=PairCapabilities(
