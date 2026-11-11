@@ -22,6 +22,7 @@ function failureLabel(reason: string): string {
 const number = (value: number | null | undefined, digits = 2) =>
   value == null || !Number.isFinite(value) ? "—" : value.toFixed(digits);
 const percentage = (value: number | null | undefined) => value == null ? "—" : `${number(value * 100, 1)}%`;
+const feeRate = (value: number | null | undefined) => value == null ? "—" : `${number(value * 100, 4)}%`;
 const price = (value: number | null | undefined) => value == null ? "—" : value.toLocaleString("zh-CN", { maximumSignificantDigits: 10 });
 const side = (value: string | null) => value === "long" ? "多" : value === "short" ? "空" : "—";
 const date = (value: string | null) => value && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString("zh-CN", { hour12: false }) : "—";
@@ -73,7 +74,7 @@ function Summary({ data }: { data: LiveSummary | null }) {
     {!data ? <Empty description="暂无汇总数据" /> : <Space direction="vertical" style={{ width: "100%" }}>
       <Space wrap>
         <Tag color={data.mode === "live" ? "volcano" : "blue"}>{data.mode === "live" ? "实盘模式" : data.mode === "shadow" ? "影子模式" : "模式未知"}</Tag>
-        <Tag color={data.halted ? "red" : undefined}>{data.halted ? `熔断${data.halt_reason ? `：${data.halt_reason}` : ""}` : data.halted === false ? "未熔断" : "熔断状态未知"}</Tag>
+        <Tag color={data.halted ? "red" : undefined}>{data.halted ? "熔断" : data.halted === false ? "未熔断" : "熔断状态未知"}{data.halt_reason ? `：${data.halt_reason}` : ""}</Tag>
         <Tag color={data.stop_file || data.opening_paused_reason ? "orange" : undefined}>
           {data.stop_file || data.opening_paused_reason ? `暂停开仓${data.opening_paused_reason ? `：${data.opening_paused_reason}` : "（停止文件）"}` : data.stop_file === false ? "开仓未暂停" : "开仓状态未知"}
         </Tag>
@@ -87,7 +88,7 @@ function Summary({ data }: { data: LiveSummary | null }) {
         <Descriptions.Item label="已开名义额">{number(data.caps?.total_open_usd)} / {number(data.caps?.total_max_usd)} USD</Descriptions.Item>
         <Descriptions.Item label="持仓对数">{number(data.caps?.open_pairs, 0)} / {number(data.caps?.max_pairs, 0)}</Descriptions.Item>
         <Descriptions.Item label="单腿名义额上限">{number(data.caps?.leg_max_usd)} USD</Descriptions.Item>
-        <Descriptions.Item label="通道吃单费率">{percentage(data.fees?.crossex_taker)} / {percentage(data.fees?.bitget_taker)}（crossex / bitget）</Descriptions.Item>
+        <Descriptions.Item label="通道吃单费率">{feeRate(data.fees?.crossex_taker)} / {feeRate(data.fees?.bitget_taker)}（crossex / bitget）</Descriptions.Item>
       </Descriptions>
       <Row gutter={[12, 12]}>
         <Col xs={24} xl={12}><Account name="crossex" data={data.accounts?.crossex ?? null} dropMax={data.caps?.equity_drop_max_usd ?? null} /></Col>
