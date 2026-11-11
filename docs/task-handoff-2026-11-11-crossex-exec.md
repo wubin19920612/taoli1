@@ -1,6 +1,6 @@
 # crossex-exec 本地实现交接 — 2026-11-11
 
-> **当前状态：第五轮 5 项修复已实现，20 项专项测试通过；整体验收未通过，详见文末“第五轮本地修复与待决验收”。** 固定种子模拟器跑满 2400 回合，严格第 1 条不变量仍失败，平仓验收口径等待用户明确选择。历史轮次保留作证据；当前停开锁、流水/实仓分离、恢复顺序和日界基线以第五轮为准。第四轮曾联网核实官方均价字段，第五轮完全离线。
+> **当前状态：第六轮本地验收通过，见文末“第六轮交付”。** 第五轮 PM 补充已完成 1a–1d 的严格验收；第六轮保留全部不变量，三个原种子各 2448 回合通过，执行器 229 项、fill-sim 158 项通过。历史失败及当时的待决状态保留作证据。当前新增常态基准、超额开平仓、小时资金费 ×2h、冷却和观测字段；没有推送、部署、真实行情或鉴权接口调用。
 
 ## 目标、范围与状态
 
@@ -754,3 +754,123 @@ OK
 第五轮 PM 补充的本地验收已收尾。下一个模块请新建任务，从本节与 PM 决定开始；联网、账户验证、Linux 验收或上线仍需后续任务明确授权。
 
 最终 Git 状态检查时新出现未跟踪文件 `docs/crossex-exec-round6-2026-11-11.md`，本轮未创建、未读取、未修改、未暂存，保留原样供下一任务处理；本轮提交后工作区因此不标记为完全干净。第五轮实现及测试没有再次变动。
+
+## 第六轮交付（2026-11-11）
+
+### 范围、基线和提交
+
+按要求先读第六轮任务书，再读本交接。模块限于常态基准、超额开平仓、小时资金费成本、冷却及只读观测。worktree：`C:\Users\wubin\Desktop\code\codex\taoli1\.worktrees\crossex-exec`；分支：`codex/crossex-exec`；基线：`ff4af35208117761a56d8589e0474fa0cdb8ea08`。开始时工作区干净，第六轮任务书已在基线中。
+
+先测试、后实现，只核实官方公开接口文档。未执行文档示例、调用真实行情或鉴权接口、读取真实env/密钥、运行服务run、push、SSH、WSL、amend、备份或部署生产。测试使用内存交易所及127.0.0.1假HTTP服务，保留socket/DNS外网守护。
+
+| 类型 | 完整提交 hash | 内容 |
+|---|---|---|
+| test | `6ff69e8b1cf0243d54201391a1015d3a675d0ea7` | 首批24项契约、旧测试的合成基准历史、模拟器基准/冷却检查 |
+| test | `1e14895bf2f77f0b57a4c9cbb8966f6aef2214d7` | 扩为30项专项；实际限频计数、亏损退出、无基准拒绝和发送时效；退出场景隔离 |
+| feat | `d836978cc307f1356f1718fd369897e30b618b6f` | 六个实现文件：基准、策略、原子冷却和观测 |
+| docs | 随本节、契约与README独立提交 | 本轮规则、官方出处和原始证据 |
+
+docs hash：`git log -1 --format=%H -- docs/task-handoff-2026-11-11-crossex-exec.md`。所有提交禁用hooks/GPG。worktree索引在父仓库，普通写入被文件沙箱拒绝后，按已授权的本地提交范围通过自动审批写入；没有自动审批拒绝待处理。
+
+### 文件、入口与规则
+
+| 文件（相对 tools/crossex_exec） | 内容 |
+|---|---|
+| `baseline.py`（新增） | `BATCH_URLS/parse_tickers`、`Baseline.record/status/require`、无方向组合键及冷却条件 |
+| `market.py` | `baseline_quotes`每所一个全市场GET，复用queue/client/limiter，priority=2 |
+| `storage.py` | 新增baseline_samples及时间索引、30s去重/24h清理；关闭记录与冷却原子提交 |
+| `policy.py` | 小时资金费×2h、review/send_review净超额门槛、冻结超额止盈 |
+| `engine.py` | 独立30s基准任务；ingest和原共享准入关口检查；保存快照；track传入新止盈参数 |
+| `api_data.py` | positions/trades三项bp、summary三项计数，保留原字段 |
+| `tests/test_round6.py`（新增） | 30项离线专项测试 |
+| `tests/baseline_fixtures.py`（新增） | 真实统计所用合成30s历史，不绕过生产准入门 |
+
+旧测试改动：`test_api.py/test_engine.py/test_exec.py/test_round3.py/test_invariants.py`。原HTTP退出测试的五个共享子场景改为独立临时数据库测试，原退出断言保留，另加实际亏损退出后拒绝下一触发的集成测试。
+
+`execution.py`、适配器、私有传输、账户、硬上限、停开锁，以及Engine恢复/补平/平仓执行/熔断函数均未改。整个fill-sim、backend、frontend、compose、部署脚本/模板和真实.env未改。共享准入关口在读完基准后重新取时间，读取耗时计入盘口2s限制。
+
+1. **采样**：独立于taoli1/CrossEx行情。只接受白名单精确USDT永续代码，不归并倍率或交割代码。重复、空、非正、交叉、NaN/Inf报价拒绝。有时间戳时拒绝超过90s旧值或领先5s；Gate批量ticker无报价时间戳，以有总时限的本轮接收时间为准。一所失败不复用上轮报价；整轮超过20s丢弃。
+2. **存储**：键为`base|字典序交易所a|交易所b`，价差`(mid_b/mid_a-1)*10000`。每30s桶首个有效点落库，采样时删除24h外样本；统计仅取最近6h。中位数/MAD使用Decimal。反向先把每个样本变为`(1/(1+bps/10000)-1)*10000`再求中位数，不能简单取负。
+3. **预热/拉黑**：有效点≥300、首末跨度≥10800s、最新点≤90s才ready。缺历史/断流时`baseline_warming`，无0基准回退。规范方向`abs(baseline)≥80`或`MAD≥40`时`structural_spread`；首次预热后评估，再每600s评估。拉黑和评估时刻落库，重启保留；缺数据不解除旧拉黑，数据恢复后可自动恢复。
+4. **开仓**：原50档深度、100USDT、步长/限价/最小额/150/600上限不变。以最终合法数量VWAP求S，`excess=S-baseline`；`excess−2*(taker_long+taker_short)*10000−funding_cost_bps≥15bp`才通过。真实账户费率缺失仍拒绝。例：常态40bp、当前60bp只算20bp超额，四笔费用共5bp且资金费0时恰好通过。
+5. **退出**：开仓冻结`baseline_at_open/excess_at_open`；可平仓价差≤`baseline_at_open+excess_at_open/2`止盈，持有中不跟随新基准。反向50bp、浮亏1%、7200s、结算前300s、陈旧60s退出均保留。升级前缺快照旧持仓保留原半价差止盈，API为null，不伪造历史。
+6. **资金费**：`max(0,rate_long*3600/interval_long_seconds−rate_short*3600/interval_short_seconds)*2*10000`。每腿先按公开读取的实际周期折算小时，再合计截断收款；不是直接相减一期费率，也不对每条收款腿单独截断。缺任一费率或周期、非正周期、非有限值均拒绝。原24h历史完整性、绝对费率0.5%黑名单和结算前30min不开仍有效。成本为预估，保留interval/next/estimated，实际跨期资金费未知仍为null。
+7. **冷却**：CLOSED、资金费/费用完整已知、net_usd<0，且退出原因映射为stop_loss/max_hold/pre_funding/stale/one_leg时，写`pair_cooldowns[key]=max(旧截止时间,closed_at+86400)`。覆盖内部loss_limit/adverse_spread/max_age/funding_exit/funding_unknown/stale_exit/repair_failed/unknown_order/unhedged_position别名。双向共用，盈利/零收益、converged/halt和未知收益不触发。延迟费用确认后再判断，期限从原关闭时刻算。事务注入失败时关闭记录与冷却一起回滚；重启/重复刷新不延长期限。未知记账仍由原停开锁保护。
+8. **观测**：新增bp字段均为开仓复核估算快照，不替换实际成交价差/收益。summary按无方向组合计数，ready可与拉黑/冷却重叠。API仍独立只读；契约只增加字段和说明。fill-sim估值保持原策略，不把它称为第六轮同策略回测。
+
+### 官方公开批量接口出处（本轮核实）
+
+仅打开官方文档，未访问下面的实际行情URL。每轮六个请求均进入共享限频预算（每所2/s、全局8/s及429退避），每30s每所一次。Binance全市场权重5（新增10权重/分钟），Aster全市场权重2（新增4权重/分钟）；现有limiter按请求次数记账，不声称它独立实现了交易所原生权重模型。
+
+| 交易所 | 实际公开GET（不传symbol/contract） | 字段 | 官方出处 |
+|---|---|---|---|
+| Binance | `https://fapi.binance.com/fapi/v1/ticker/bookTicker` | symbol、bidPrice、askPrice、time | [USD-M Symbol Order Book Ticker](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/market-data#symbol-order-book-ticker) |
+| Bybit | `https://api.bybit.com/v5/market/tickers?category=linear` | result.category/list、symbol、bid1Price、ask1Price、time | [Get Tickers](https://bybit-exchange.github.io/docs/v5/market/tickers) |
+| OKX | `https://www.okx.com/api/v5/market/tickers?instType=SWAP` | instType、instId、bidPx、askPx、ts | [GET Tickers](https://www.okx.com/docs-v5/en/#order-book-trading-market-data-get-tickers) |
+| Gate | `https://api.gateio.ws/api/v4/futures/usdt/tickers` | contract、highest_bid、lowest_ask | [Get all futures trading statistics](https://www.gate.com/docs/developers/apiv4/en/futures/#get-all-futures-trading-statistics) |
+| Bitget | `https://api.bitget.com/api/v3/market/tickers?category=USDT-FUTURES` | category、symbol、bid1Price、ask1Price、requestTime | [UTA Get Tickers](https://www.bitget.com/legacy-docs/uta/public/Tickers) |
+| Aster | `https://fapi.asterdex.com/fapi/v3/ticker/bookTicker` | symbol、bidPrice、askPrice、time | [官方Futures V3](https://github.com/asterdex/api-docs/blob/master/V3%28Recommended%29/EN/aster-finance-futures-api-v3.md#symbol-order-book-ticker) |
+
+**Aster与任务书示例的差异**：任务书列v1；当前[官方仓库](https://github.com/asterdex/api-docs)明确推荐新集成用V3，Futures V3文档明确提供全市场bookTicker，因此采用v3，与现有执行器Aster公开目录/深度一致。未对旧v1文档作推断，没有请求实际API验证可用性。
+
+资金费周期来源沿用公开解析：Binance/Aster的premiumIndex+fundingInfo.fundingIntervalHours；Bybit ticker.fundingIntervalHour；Gate contract.funding_interval（秒）；OKX的nextFundingTime−fundingTime（毫秒差转秒）；Bitget公开v2 current-fund-rate.fundingRateInterval（小时）。出处为上述Binance/Aster/Bybit/Gate文档及[OKX funding-rate](https://www.okx.com/docs-v5/en/#public-data-rest-api-get-funding-rate)、[Bitget Classic Market](https://www.bitget.com/docs/catalog/classic-contract-market/classic-contract-market#get-current-funding-rate)。Binance fundingInfo若无目标市场记录，拒绝开仓而不推断8h。
+
+### 测试过程和最终证据
+
+修改实现前首批：`Ran 24 tests in 0.065s / FAILED (failures=1, errors=23)`；模块/接口缺失及旧发送公式按预期失败。后来慢基准读取测试先复现：`Ran 29 tests in 0.445s / FAILED (failures=1)`，缺省基准测试加入后也先失败，再修正。期间纠正一次测试资源清理顺序：MarketData先于SQLite关闭。
+
+第一次完整219项回归仅旧共享退出子场景失败4次，原因是前一笔亏损正确触发新冷却；拆为五项独立测试后，原退出断言全通过。最终229项包括原195项覆盖、拆分新增4项及第六轮30项。没有skip/xfail、删除安全断言或提高阈值。下面原始输出来自实现与测试停止修改之后；之后仅提交已测试实现并更新文档。
+
+```text
+python -m unittest discover -s tools/crossex_exec/tests -v
+----------------------------------------------------------------------
+Ran 229 tests in 101.548s
+
+OK
+
+python -m unittest discover -s tools/fill_sim/tests -v
+----------------------------------------------------------------------
+Ran 158 tests in 29.588s
+
+OK
+
+```
+
+不变量入口仍为 `tests/test_invariants.py::InvariantSimulationTests`，种子 **20261111、20261112、20261113**，每个 **2448回合**，合计 **7344回合**。保留原2400随机回合顺序和48个故障可达性回合；每种子600影子回合、1848 live假交易所回合。1a/1b/1c/1d及2–7全部通过，每条每种子checks=2448。N=1仍指下一协调器步骤进入真实恢复尝试，不保证成交期限。
+
+模拟器加入持久化的合成40bp历史，随后追加独立公共中间价观测；跨午夜缺口不回填。重启复制已提交样本、结构状态和冷却。不清冷却、不mock准入门。每次开仓检查冻结基准和冷却截止时间；新增coverage必须大于0。基准/冷却减少了部分开仓次数，但所有原故障与非空覆盖断言保留。
+
+以下为实际触发条件的exercised次数，不是独立交易数：
+
+| 种子 | 回合 | 1a | 1b | 1c | 1d | 2 | 3 | 4 | 5 | 6 | 7 | 基准准入 | 冷却生效回合 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 20261111 | 2448 | 111 | 164 | 52 | 254 | 230 | 275 | 230 | 600 | 58 | 395 | 230 | 424 |
+| 20261112 | 2448 | 101 | 174 | 29 | 246 | 222 | 275 | 222 | 600 | 65 | 395 | 222 | 207 |
+| 20261113 | 2448 | 80 | 154 | 36 | 225 | 206 | 234 | 206 | 600 | 61 | 407 | 206 | 276 |
+
+原始模拟器行（只去掉unittest同行测试名前缀；查询重试数随线程调度变化）：
+
+```text
+INVARIANTS seed=20261111 rounds=2448 random_rounds=2400 N=1 checks={'1a': 2448, '1b': 2448, '1c': 2448, '1d': 2448, '2': 2448, '3': 2448, '4': 2448, '5': 2448, '6': 2448, '7': 2448} exercised={'1a': 111, '1b': 164, '1c': 52, '1d': 254, '2': 230, '3': 275, '4': 230, '5': 600, '6': 58, '7': 395} coverage={'account_failures': 151, 'baseline_admission': 230, 'cooldown_active': 424, 'db_failures': 52, 'full_fill': 366, 'halted': 394, 'halting_retry': 1, 'intent_write_abort': 51, 'open': 230, 'partial_fill': 78, 'position_failures': 138, 'position_read': 3506, 'query': 9775, 'query_failures': 2528, 'recovery_obligation': 58, 'reduce': 275, 'restarts': 142, 'scheduled_account': 149, 'scheduled_adverse': 133, 'scheduled_database': 140, 'scheduled_detail': 148, 'scheduled_equity': 142, 'scheduled_midnight': 121, 'scheduled_none': 458, 'scheduled_partial': 164, 'scheduled_positions': 136, 'scheduled_restart': 142, 'scheduled_spread': 129, 'scheduled_stale': 150, 'scheduled_timeout_ack': 146, 'scheduled_timeout_unknown': 146, 'scheduled_zero': 144, 'timeout_ack': 68, 'timeout_unknown': 53, 'zero_fill': 61}
+INVARIANTS seed=20261112 rounds=2448 random_rounds=2400 N=1 checks={'1a': 2448, '1b': 2448, '1c': 2448, '1d': 2448, '2': 2448, '3': 2448, '4': 2448, '5': 2448, '6': 2448, '7': 2448} exercised={'1a': 101, '1b': 174, '1c': 29, '1d': 246, '2': 222, '3': 275, '4': 222, '5': 600, '6': 65, '7': 395} coverage={'account_failures': 116, 'baseline_admission': 222, 'cooldown_active': 207, 'db_failures': 59, 'full_fill': 352, 'halted': 392, 'halting_retry': 3, 'intent_write_abort': 57, 'open': 222, 'partial_fill': 99, 'position_failures': 139, 'position_read': 3549, 'query': 9156, 'query_failures': 649, 'recovery_obligation': 65, 'reduce': 275, 'restarts': 142, 'scheduled_account': 116, 'scheduled_adverse': 135, 'scheduled_database': 149, 'scheduled_detail': 128, 'scheduled_equity': 138, 'scheduled_midnight': 134, 'scheduled_none': 458, 'scheduled_partial': 159, 'scheduled_positions': 138, 'scheduled_restart': 142, 'scheduled_spread': 184, 'scheduled_stale': 145, 'scheduled_timeout_ack': 139, 'scheduled_timeout_unknown': 149, 'scheduled_zero': 134, 'timeout_ack': 60, 'timeout_unknown': 63, 'zero_fill': 46}
+INVARIANTS seed=20261113 rounds=2448 random_rounds=2400 N=1 checks={'1a': 2448, '1b': 2448, '1c': 2448, '1d': 2448, '2': 2448, '3': 2448, '4': 2448, '5': 2448, '6': 2448, '7': 2448} exercised={'1a': 80, '1b': 154, '1c': 36, '1d': 225, '2': 206, '3': 234, '4': 206, '5': 600, '6': 61, '7': 407} coverage={'account_failures': 134, 'baseline_admission': 206, 'cooldown_active': 276, 'db_failures': 62, 'full_fill': 332, 'halted': 406, 'halting_retry': 1, 'intent_write_abort': 60, 'open': 206, 'partial_fill': 66, 'position_failures': 141, 'position_read': 3423, 'query': 11969, 'query_failures': 1554, 'recovery_obligation': 61, 'reduce': 234, 'restarts': 114, 'scheduled_account': 134, 'scheduled_adverse': 151, 'scheduled_database': 156, 'scheduled_detail': 134, 'scheduled_equity': 144, 'scheduled_midnight': 142, 'scheduled_none': 458, 'scheduled_partial': 152, 'scheduled_positions': 141, 'scheduled_restart': 114, 'scheduled_spread': 153, 'scheduled_stale': 145, 'scheduled_timeout_ack': 157, 'scheduled_timeout_unknown': 134, 'scheduled_zero': 133, 'timeout_ack': 59, 'timeout_unknown': 77, 'zero_fill': 42}
+```
+
+完整原始日志位于被Git忽略的output目录：
+
+| 文件 | SHA-256 |
+|---|---|
+| `output/crossex-round6-final-unittest.log` | `4dd2075905bb7f526e039de12d7c1380b93b8400367a21460848503f9ce163ab` |
+| `output/crossex-round6-fill-sim.log` | `b82a452fc683ffda96e5e121f03b3b38e3c73177607eb03f1f06307d754eae69` |
+
+红测及首次完整回归诊断保留于 `output/crossex-round6-red.log`、`output/crossex-round6-admission-red.log`、`output/crossex-round6-first-suite.log`；不入库。Windows / Python 3.12.10 / SQLite 3.49.1，30个执行器Python文件通过Python 3.10 AST语法检查，CLI `--help`及 `git diff --check` 通过。
+
+### 线上状态、保留文件与下一步
+
+没有推送、生产备份、部署或线上验证；线上版本未变，实盘开关未改。官方文档核实不证明当前真实API可用、数据质量、账户模式/费率/成交时序或实盘撮合。Ubuntu/Python 3.10/SQLite 3.37实机、systemd、80M内存及白名单规模下的长期采样/写库/调度延迟仍待独立验收。新增样本表为追加式schema升级，不删除旧订单、仓位或元数据。
+
+未知费用/跨期资金费不冒充净收益，仍停开等核对；历史缺基准快照不会被回填。正常预热至少3小时；长时间断流可能重新预热。真实交易所故障、流动性或最小量仍可能留敞口，原恢复/锁/退避机制保留，本地模拟通过不构成开启实盘授权。
+
+执行中出现非本任务创建的未跟踪文件 `docs/crossex-exec-round7-pending-2026-11-11.md`，只记录路径，未读取、修改或暂存，保留原样。因而交付工作区不标为完全干净；本轮代码/测试/文档均分组提交，其余产物是既有忽略范围内的日志和Python缓存。
+
+第六轮本地交付完成。下一模块请新建任务，从本节、当前契约和对应待办文档继续；真实接口、账户、Linux/C3或上线验收需后续任务明确授权。
