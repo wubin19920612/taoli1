@@ -1,0 +1,32 @@
+[Unit]
+Description=Small-notional CrossEx and Bitget IOC execution
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=crossex-exec
+Group=crossex-exec
+WorkingDirectory=/opt/taoli1
+ExecStart=/usr/bin/python3 -m tools.crossex_exec run --env-file /etc/crossex-exec/credentials.env
+Restart=on-failure
+RestartSec=10
+MemoryMax=80M
+TimeoutStopSec=180
+UMask=0077
+StateDirectory=crossex-exec
+StateDirectoryMode=0700
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/crossex-exec
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+StandardOutput=journal
+StandardError=journal
+Environment=PYTHONDONTWRITEBYTECODE=1
+
+[Install]
+WantedBy=multi-user.target

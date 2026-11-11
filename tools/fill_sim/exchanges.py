@@ -35,7 +35,7 @@ def endpoint(m, kind):
 
 
 def check_response(ex, data):
-    if isinstance(data, list) and ex in ("binance", "aster"):
+    if isinstance(data, list) and ex in ("binance", "aster", "gate"):
         for row in data:
             check_response(ex, row)
         return
