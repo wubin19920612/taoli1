@@ -27,6 +27,7 @@ REAL_ASYNC_CLIENT = httpx.AsyncClient
 def context(monkeypatch):
     app = create_app(settings=Settings(
         environment="test", database_url="sqlite:///:memory:",
+        dashboard_password="test-password",
         dashboard_totp_secret=TEST_TOTP_SECRET,
         crossex_exec_url="http://exec.test:8795/", crossex_exec_api_key=TOKEN,
     ))

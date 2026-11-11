@@ -98,7 +98,7 @@ describe("AppShell", () => {
     render(<AppShell />);
     const labels = visibleMenuLabels();
     expect(labels[labels.indexOf("影子账本") + 1]).toBe("实盘");
-    await userEvent.click(screen.getByRole("menuitem", { name: "实盘" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: /实盘/ }));
     expect(await screen.findByText("实盘页面测试")).toBeTruthy();
     expect(new URLSearchParams(window.location.search).get("page")).toBe("live-exec");
   });
