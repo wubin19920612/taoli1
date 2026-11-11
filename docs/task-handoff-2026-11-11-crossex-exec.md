@@ -1,6 +1,6 @@
 # crossex-exec 本地实现交接 — 2026-11-11
 
-> **当前状态：第四轮 8 项修复已在本地完成，详见文末“第四轮修复交付”。** 前三轮及只读数据 API 记录保留作历史证据；第一轮 Classic v2、旧变量名、旧路径和 crossedRiskRate 口径已被第二轮替代，第二轮同步账户/目录/费率读取的描述已被第三轮替代。第三轮的两腿补平、独立发单复核、分离费率时间戳、CrossEx avg_price 和异常锁说明以第四轮为准。第四轮联网仅核实两家官方订单均价字段，没有账户鉴权或生产动作。
+> **当前状态：第五轮 5 项修复已实现，20 项专项测试通过；整体验收未通过，详见文末“第五轮本地修复与待决验收”。** 固定种子模拟器跑满 2400 回合，严格第 1 条不变量仍失败，平仓验收口径等待用户明确选择。历史轮次保留作证据；当前停开锁、流水/实仓分离、恢复顺序和日界基线以第五轮为准。第四轮曾联网核实官方均价字段，第五轮完全离线。
 
 ## 目标、范围与状态
 
@@ -530,3 +530,104 @@ OK
 最终为本地交付，无待保留的新未跟踪工作区文件；Python 缓存由既有 ignore 规则排除。未 push、SSH、WSL、amend、鉴权接口调用、真实服务启动、生产备份或部署，线上版本与实盘开关未改变。尚未验证 Ubuntu 22.04 / Python 3.10 / SQLite 3.37 实机、systemd、80M 内存、真实账户时序、撮合和长期运行。
 
 本模块结束。下一模块请新建任务，从第四轮清单、本节及 feat 提交开始独立复核；C1/C3、Linux/生产动作及开启实盘须另有明确授权。本地回归通过不代表实盘验收通过。
+
+## 第五轮本地修复与待决验收（2026-11-11）
+
+### 状态、范围与提交
+
+**当前未完成整体验收：5 项修复和 20 项专项回归通过，但严格第 1 条不变量失败。** 没有修改断言来伪造通过，没有停止自动平仓来规避测试。用户已收到异步澄清，尚未答复：补平严格不增裸露、正常双腿平仓允许暂时裸露并持续恢复，或所有减仓都严格不增裸露（相等双腿因此不能自动平仓）。选择会影响既有退出/止损行为，不能擅自代选。
+
+先读 `docs/crossex-exec-round5-2026-11-11.md`，再读本交接。任务仅为 crossex-exec 第五轮，worktree 为 `C:\Users\wubin\Desktop\code\codex\taoli1\.worktrees\crossex-exec`；分支 `codex/crossex-exec`；基线 `c5134803291ce8f98bd86e554779458e1a0a19b7`，开始时工作区干净。
+
+完全离线；未读取真实凭据、调用真实鉴权接口、运行服务 `run`、push、SSH、WSL、amend、生产备份或部署。HTTP 测试仅使用原有 loopback 假服务和虚构签名，保留 socket/DNS 外网守护。普通 Git 写索引因父仓库在可写根外被文件沙箱拒绝，随后按用户已授权的本地提交范围通过自动审批；所有提交禁用 hooks 和 GPG 签名。
+
+| 类型 | 完整 hash | 内容 |
+|---|---|---|
+| test | `b21e284e42ec433da21f5d8d8e0ea95136cd0d17` | 先提交覆盖全部 5 项的 14 个失败复现 |
+| test | `3b1e9fa05e92117b3369169bd5ac01a7ad153e7d` | 固定种子模拟器、旧测试按新契约适配、HALTED/迁移/历史持仓/退出边界 |
+| feat | `c1a03c2c1fd4150f49f938a294c45e92c3755928` | 独立锁、流水/实仓分离、订单内存待写及恢复、午夜基线 |
+| test | `f3cb7614195a53c4719c0515ab1c212f3061efa3` | 两腿发送完成前不启动确认的先失败测试；失败时完整输出步骤序列 |
+| feat | `2048f2fc0ce4d0b4992e1ca11dc6fd4d71431e6c` | 共享放行后先完成两腿发送，再并发确认 |
+| docs | 随本节与 README 单独提交 | 当前真实证据及待决口径；不硬编码自身 hash |
+
+docs hash：`git log -1 --format=%H -- docs/task-handoff-2026-11-11-crossex-exec.md`。未改写任何既有提交。
+
+### 5 项修复位置与全部专项测试
+
+代码路径相对 `tools/crossex_exec/`；以下 20 项均在 `tests/test_round5.py::Round5Tests`。行号对应上述最终 feat。
+
+| 项目 | 修复位置及规则 | 测试名 |
+|---|---|---|
+| 1. 独立停开锁 | `stops.py:6 StopLocks`；`engine.py:50 alert`、`:164 can_open`、`:518 clear_repair_locks`、`:618 balance`；`limits.py::check_equity`。按原因和 pair 保存集合，展示原因不覆盖其他锁。补平锁只在实仓相等、流水一致、无非终态/待记账订单、补平结束时解除；停止补平仍允许正常退出。HALTED 不被后台改回 HALTING。 | `test_r1_matching_ledger_cannot_clear_failed_repair_lock`；`test_r1_balanced_remote_clears_only_this_pairs_repair_locks`；`test_r1_lock_set_survives_restart_and_halted_is_never_auto_cleared`；`test_r1_background_equity_check_cannot_revive_halted`；`test_r1_legacy_singleton_repair_lock_migrates_to_pair_owner`；`test_r1_stopped_repair_still_allows_scheduled_exit` |
+| 2. 流水/实仓分离 | `engine.py:453 refresh_pair`、`:511 save_remote`、`:282 reconcile_positions`、`:542 resolve_exposure`。`remaining` 仅累计成交；`remote_remaining/remote_captured_at` 独立保存实仓。旧 anchor 不再作为流水基准；记账未完成时不累计匹配解锁；历史 CLOSED 不获得新 pair 的远端仓位。 | `test_r2_remote_snapshot_never_overwrites_fill_ledger`；`test_r2_pending_fill_accounting_never_advances_unlock_streak`；`test_r2_legacy_anchor_is_not_a_local_ledger_baseline`；`test_r2_closed_history_cannot_claim_new_pairs_remote_position` |
+| 3. 写失败与非终态恢复 | `execution.py:30 orders`、`:36 save`、`:47 flush`、`:55 execute_pair`、`recover`；`engine.py:815 tick`、`recover_pair/resolve_exposure`。内存待写状态优先于旧数据库状态，重试只补写，不重发；SENT 落库前失败不发送。每 tick 检查 SENT/ACK/UNKNOWN，不依赖 pair 的缓存状态/调度时间。发送与确认分阶段，避免先完成的一腿在另一腿尚未完成发送时启动 UNKNOWN 恢复。 | `test_r3_unknown_write_failure_retains_recovery_and_retries_write`；`test_r3_every_tick_recovers_sent_even_when_pair_state_and_schedule_are_stale`；`test_r3_failed_sent_commit_never_calls_the_exchange`；`test_r3_pair_dispatch_finishes_before_confirmation_can_latch_peer` |
+| 4. 午夜前最后浮亏基线 | `engine.py:242 roll_daily_upnl`、`:262 save_tracking_upnl`、`totals/track/close_pair/resolve_exposure`；`accounts.py:149 position_snapshot`。持续保存 `last_upnl` 各仓和汇总值；跨日先冻结旧值再存新观测，不受新日首次快照前平仓影响。持仓接口有浮盈亏时保存，缺字段不阻止已知数量的恢复。 | `test_r4_close_before_first_new_day_snapshot_uses_last_saved_upnl`；`test_r4_tracking_saves_each_position_upnl_before_midnight_and_restart`；`test_r4_position_recovery_saves_available_upnl_without_blocking_on_missing_upnl` |
+| 5. HALTING 启动恢复 | `engine.py:176 startup`、`flatten_all`；`execution.py::recover`；`accounts.py:149 position_snapshot`。INTENT 先转 UNSENT；恢复先于账户验证，持仓读取不调用余额或 settings。远端或订单仍未知则保留 HALTING、按轮后退避重试。 | `test_r5_halting_startup_account_failure_still_retires_intent`；`test_r5_account_outage_does_not_block_position_only_recovery`；`test_r5_position_reader_does_not_require_account_or_settings` |
+
+旧测试调整均有契约依据：恢复顺序改为先查后撤；持仓失败注入独立持仓读取器；旧“新日首次快照为基线”改为上日最后保存值；账户启动失败前仍须恢复订单。没有删除原测试、提高风险阈值或放宽模拟器断言。
+
+### 模拟器、复现和待决口径
+
+入口：`tests/test_invariants.py::InvariantSimulationTests.test_fault_invariants_seed_20261111_2400_rounds`。调用真实 Engine/Executor，使用可注入一次提交失败的假数据库和独立假交易所；重启丢弃进程对象，仅从已提交副本恢复。固定种子 **20261111**，**2400 回合**，为 100 个各 24 步的状态序列，其中 600 步影子、1800 步 live 假交易所。每步均执行 7 条断言；失败即输出种子和步骤序列，第 1 条失败会收集并继续跑满回合，最终仍以失败退出，不 skip、不 xfail。
+
+覆盖部分/零成交、发送后超时并迟到 ACK 或保持 UNKNOWN、查单失败、独立持仓接口失败、一次数据库提交失败、从已提交副本重启、跨 UTC 午夜、盘口过期、价差消失、大幅反向价格引发止损/熔断，并额外覆盖账户不可读。部分/零成交还与退出价格组合，防止只测试开仓部分成交而漏掉不对称平仓。
+
+**N=1**：若本轮跟踪前有非终态订单或已知净裸露，下一次协调器 tick 就进入查询/撤单/读取实仓/补平或平仓的恢复路径。HALTING 进入后可等待已记录的退避期限；每次到期继续尝试，未证明实仓和非终态订单都清零不得 HALTED。N 是协调器步数，不是秒数，也不保证交易所故障在 N 步内消失。
+
+最终实际覆盖包括：296 笔开仓、359 笔减仓、112 次部分成交、73 次零成交、72 次 timeout 后 ACK、86 次 timeout 后 UNKNOWN、78 次写失败、142 次重启、111 次恢复义务检查、140 次持仓读取失败、151 次账户失败。查单重试次数随实际线程调度和确认时间预算变化，不用固定循环次数冒充固定延迟；随机注入计划和数量使用固定种子。
+
+**结果：第 2–7 条通过，补平逐笔不扩大净裸露通过；第 1 条对正常双腿平仓的严格要求失败 14 次。** 第一个反例在零基步骤 **76**（第 77 回合）：原实仓 `0.980 / 0.980`，止损平仓时两腿成交比例为 `0.25 / 1`；三轮减仓后实仓 `0.414 / 0`，净裸露从 `0` 变成 `0.414`。这已经是整轮结束后的检查，不只是第一腿成交的短暂中间状态。
+
+两家交易所的 IOC 不是原子撮合；只要允许一腿零成交或独立失败，不能同时保证“相等的两腿自动平仓”和“净裸露每轮绝不增大”。本轮保留正常退出机制和严格失败证据。未采用“相等两腿不平仓”或“只验证补平”的替代验收，等待用户明确口径；当前不能声称 7 条不变量全部通过或可以实盘。
+
+模拟器还暴露了共享放行后的一条确认时序边界：先完成的一腿可能在另一腿仍发送时写 UNKNOWN 锁。先补测试观察 `early=[True]`，再将 `execute_pair` 拆为发送汇合、并发确认两阶段；最终模拟器第 2 条通过。
+
+### 测试原始汇总与运行边界
+
+首批测试在修改实现前：
+
+```text
+Ran 14 tests in 0.296s
+
+FAILED (failures=12, errors=2)
+```
+
+新增迁移、HALTED、历史仓位和停止补平后的正常退出边界也先观察到 4 项失败；持仓浮盈亏字段及两腿发送/确认时序分别先观察到缺字段错误和断言失败，再修复。最终专项：
+
+```text
+Ran 20 tests in 0.861s
+
+OK
+```
+
+最终两条完整 unittest 命令及原始汇总（**第一条未通过**）：
+
+```text
+python -m unittest discover -s tools/crossex_exec/tests -v
+----------------------------------------------------------------------
+Ran 183 tests in 71.211s
+
+FAILED (failures=1)
+
+python -m unittest discover -s tools/fill_sim/tests -v
+----------------------------------------------------------------------
+Ran 158 tests in 29.279s
+
+OK
+```
+
+183 项中 182 项通过，唯一失败为上述严格第 1 条模拟器断言；包含全部原有只读 API 测试。模拟器原始计数：
+
+```text
+INVARIANTS seed=20261111 rounds=2400 N=1 checks={1: 2400, 2: 2400, 3: 2400, 4: 2400, 5: 2400, 6: 2400, 7: 2400} I1_failures=14
+```
+
+Windows / Python 3.12.10；26 个 Python 文件通过 `ast.parse(feature_version=(3,10))`，CLI `--help`、`git diff --check` 通过。完整原始输出在本机 `%TEMP%/crossex-round5-final-unittest.log` 和 `%TEMP%/crossex-round5-fill-sim-unittest.log`，种子/步骤也在前者，日志不入库。未重新运行未修改的 fill-sim 测试来替换已经取得的原始结果。
+
+### 文件、线上状态与下一步
+
+实现仅修改 `engine.py/execution.py/accounts.py/limits.py` 并新增 `stops.py`；测试新增 `test_round5.py/test_invariants.py`，适配 `test_engine.py/test_round3.py/test_round4.py`；文档为本交接及 README。未修改只读 API 实现、整个 fill-sim、backend、compose、部署脚本/模板、真实 env 或实盘开关。Python 缓存仍被忽略，没有需保留的新未跟踪工作区产物。
+
+没有 push、生产备份、部署和线上验证，线上版本未变。未验证 Linux/systemd/80M 内存、真实账户时序或撮合。`remaining` 为流水字段，成交回报落后于实仓减仓时可以暂时为负并标记待记账；不得拿它冒充远端实仓。人工复核 HALTED 时不得只删除 `stop_reason` 或整个数据库绕过独立锁。
+
+下一步仍在本模块：收到用户对第 1 条的明确口径后，先补相应测试，再按 test/feat/docs 新提交收尾，重新跑 crossex-exec 完整套件并更新本节。当前不要转入新模块或把第五轮标为完成；完成后再为下一个模块新建任务。
