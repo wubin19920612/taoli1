@@ -1,11 +1,13 @@
 """M1-C: frozen f794324 reference, offline equivalence and allocation gates."""
 
+import ast
 import asyncio
 import gc
 import inspect
 import tracemalloc
 from datetime import UTC, datetime, timedelta
 from itertools import combinations
+from textwrap import dedent
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -268,9 +270,48 @@ def test_public_annotate_keeps_original_behavior(collision, now):
 
 def test_prepare_pairing_and_scheduling_source_is_unchanged():
     marker = "        if self.collision_symbols:\n"
-    assert inspect.getsource(MarketValidationService.prepare).split(marker, 1)[1] == (
-        inspect.getsource(LegacyValidationService.prepare).split(marker, 1)[1]
-    )
+    sources = [inspect.getsource(cls.prepare) for cls in (
+        MarketValidationService, LegacyValidationService,
+    )]
+    # Keep the original comparison boundary and every remaining byte. Only
+    # these complete, exact additions may be removed, with fixed counts.
+    additions = {}
+    for width, count in ((16, 2), (20, 1)):
+        indent = " " * width
+        additions[(indent + "if cooperative:\n"
+                   + indent + "    await budget.maybe_yield()\n"
+                   + indent + "    if epoch != self._mutation_epoch:\n"
+                   + indent + '        raise ValueError("mapping changed during preparation")\n')] = count
+    additions.update({
+        '        if epoch != self._mutation_epoch:\n'
+        '            raise ValueError("mapping changed during preparation")\n': 1,
+        '        self._prepared_epoch = epoch\n'
+        '        self._prepared_rows = {\n'
+        '            id(row): (row, key) for row, key in zip(annotated, market_keys, strict=True)\n'
+        '        }\n'
+        '        self._prepared_fx = prepared_fx\n': 1,
+    })
+    normalized = []
+    for index, source in enumerate(sources):
+        tail = source.split(marker, 1)[1]
+        for addition, count in additions.items():
+            assert tail.count(addition) == (count if index == 0 else 0)
+            tail = tail.replace(addition, "")
+        normalized.append(tail)
+        # Check all prepare yields, including those before the comparison
+        # boundary. An else branch of `if cooperative` does not qualify.
+        tree = ast.parse(dedent(source))
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Await)
+                    and ast.unparse(node.value) == "budget.maybe_yield()"):
+                assert any(
+                    isinstance(guard, ast.If)
+                    and isinstance(guard.test, ast.Name)
+                    and guard.test.id == "cooperative"
+                    and any(node is child for stmt in guard.body for child in ast.walk(stmt))
+                    for guard in ast.walk(tree)
+                ), f"unguarded yield at line {node.lineno}"
+    assert normalized[0] == normalized[1]
 
 
 @pytest.mark.asyncio
