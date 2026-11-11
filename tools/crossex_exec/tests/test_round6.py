@@ -423,4 +423,3 @@ class EngineBaselineTests(unittest.TestCase):
         with patch.object(self.market,'baseline_quotes',return_value={'binance':{'BTC':'100'},'bitget':{'BTC':'100.4'}}) as quotes:
             self.engine.refresh_baselines()
             quotes.assert_called_once_with(('BTC',))
-
