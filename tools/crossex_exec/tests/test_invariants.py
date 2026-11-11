@@ -19,9 +19,10 @@ from test_engine import trigger
 from test_exec import instrument, setUpModule, tearDownModule
 
 
-SEED = 20261111
+SEEDS = (20261111, 20261112, 20261113)
 ROUNDS = 2400
 RECOVERY_BOUND = 1
+INVARIANTS = ('1a', '1b', '1c', '1d', '2', '3', '4', '5', '6', '7')
 FAULTS = ('partial', 'zero', 'timeout_ack', 'timeout_unknown', 'detail', 'positions',
           'database', 'restart', 'midnight', 'stale', 'spread', 'adverse', 'equity', 'account')
 
@@ -110,7 +111,7 @@ class SimVenue:
                                            unknown=w.fault == 'timeout_unknown', sent_step=w.step)
             row = dict(order=copy.deepcopy(order), before=before, after=[v.quantity for v in w.venues],
                        locked=bool(w.store.meta('stop_locks', {})), live=w.engine.live,
-                       closing=any(p.get('exit_reason') for p in w.store.pairs() if p['id']==order['pair_id']),
+                       batch=w.send_batches.get(order['cid']), admission=w.admissions.get(order['cid']),
                        total=sum(v.quantity*w.prices[n] for n,v in enumerate(w.venues)))
             w.sends.append(row)
             w.coverage['reduce' if order['reduce_only'] else 'open'] += 1
@@ -152,6 +153,8 @@ class World:
         self.fractions = [dec(1), dec(1)]
         self.prices = [dec(100), dec(102)]
         self.sends, self.cancels = [], 0
+        self.batches, self.recoveries = [], []
+        self.send_batches, self.admissions = {}, {}
         self.venues = [SimVenue(self, n) for n in (0, 1)]
         self.instruments = [instrument(), instrument('bitget')]
         for i in self.instruments:
@@ -177,6 +180,40 @@ class World:
         engine.executor.poll_interval = .0002
         # No background jobs, DNS, account transports or real wall-clock inputs.
         engine.start_background = lambda bases:None
+        execute_pair = engine.executor.execute_pair
+        check_pair = engine.executor.check_pair
+        resolve = engine.resolve_exposure
+
+        def observe_pair(intents):
+            # Classify the actual dispatch, never a pair's sticky exit_reason.
+            batch = dict(before=[v.quantity for v in self.venues], step=self.step,
+                         paired_close=len(intents) == 2 and {i['leg'] for i in intents} == {0, 1}
+                         and all(i['reduce_only'] for i in intents), first_send=len(self.sends))
+            for intent in intents:
+                self.send_batches[intent['cid']] = batch
+            self.batches.append(batch)
+            try:
+                return execute_pair(intents)
+            finally:
+                batch.update(after=[v.quantity for v in self.venues], last_send=len(self.sends))
+
+        def observe_admission(intents):
+            result = check_pair(intents)
+            # The existing shared gate admits both entry legs before either sends.
+            # An already-admitted peer is not a second, newly admitted position.
+            admission = dict(before=[v.quantity for v in self.venues],
+                             locked=bool(engine.stops), cids={i['cid'] for i in intents})
+            for intent in intents:
+                self.admissions[intent['cid']] = admission
+            return result
+
+        def observe_recovery(pair):
+            self.recoveries.append(dict(step=self.step, at=self.now, pair_id=pair['id'], sends=len(self.sends)))
+            return resolve(pair)
+
+        engine.executor.execute_pair = observe_pair
+        engine.executor.check_pair = observe_admission
+        engine.resolve_exposure = observe_recovery
         return engine
 
     def books(self, instruments):
@@ -240,12 +277,33 @@ class World:
 
 class InvariantSimulationTests(unittest.TestCase):
     def test_fault_invariants_seed_20261111_2400_rounds(self):
-        rng = random.Random(SEED)
+        self.run_seed(SEEDS[0])
+
+    def test_fault_invariants_seed_20261112_2400_rounds(self):
+        self.run_seed(SEEDS[1])
+
+    def test_fault_invariants_seed_20261113_2400_rounds(self):
+        self.run_seed(SEEDS[2])
+
+    def assert_reduction(self, sent, exercised):
+        before, after, batch = sent['before'], sent['after'], sent['batch']
+        if batch and batch['paired_close']:
+            self.assertLessEqual(abs(after[0]-after[1]), max(batch['before']), 'I1b transient bound')
+            self.assertTrue(all(0 <= a <= b for a, b in zip(after, batch['before'])), 'I1b crossed zero')
+            exercised['1b'] += 1
+        else:
+            self.assertLessEqual(abs(after[0]-after[1]), abs(before[0]-before[1]), 'I1a single reduction')
+            exercised['1a'] += 1
+        self.assertLessEqual(dec(sent['order']['quantity']), before[sent['order']['leg']], 'I3 oversized close')
+        self.assertTrue(all(0 <= a <= b for a,b in zip(after,before)), 'I3 crossed zero')
+        exercised['3'] += 1
+
+    def run_seed(self, seed):
+        rng = random.Random(seed)
         coverage = Counter()
         sequence = []
         checks = Counter()
-        exposure_violations = []
-        first_failure_steps = None
+        exercised = Counter()
         serial = iter(range(1, 1000000))
         world = None
         try:
@@ -279,6 +337,10 @@ class InvariantSimulationTests(unittest.TestCase):
                                          prices=list(map(str,w.prices)), live=w.live))
                     coverage['scheduled_'+fault] += 1
                     first_send, first_cancel = len(w.sends), w.cancels
+                    first_batch, first_recovery = len(w.batches), len(w.recoveries)
+                    outstanding = [p for p in w.store.pairs(active=True) if p.get('exit_reason')
+                                   and w.venues[0].quantity != w.venues[1].quantity]
+                    retry_due = any(w.now >= p.get('next_close', 0) for p in outstanding)
                     if fault == 'restart':
                         w.restart()
                     w.references()
@@ -308,57 +370,77 @@ class InvariantSimulationTests(unittest.TestCase):
                             entered = any(e['kind'] in ('RECOVERY_ATTEMPT','POSITION_RECOVERY') for e in w.store.events()[events_before:])
                             self.assertTrue(entered or coverage['query'] > queries_before, 'I6 recovery bound N=1')
                             coverage['recovery_obligation'] += 1
+                            exercised['6'] += 1
                         # I7: HALTING either proves flat or schedules another finite retry.
                         if w.store.meta('state') == 'HALTING':
                             self.assertGreater(w.engine.next_halt, w.now, 'I7 missing retry deadline')
                             self.assertGreater(w.engine.halt_attempts, halt_attempts, 'I7 no retry progress')
                             coverage['halting_retry'] += 1
+                            exercised['7'] += 1
                     for sent in w.sends[first_send:]:
                         order, before, after = sent['order'], sent['before'], sent['after']
                         if order['reduce_only']:
-                            # A repair is independently safe even between venue fills.
-                            if not sent['closing']:
-                                self.assertLessEqual(abs(after[0]-after[1]), abs(before[0]-before[1]), 'I1 repair')
-                            # I3 checks requested quantity as well as the fake venue's reduce-only result.
-                            self.assertLessEqual(dec(order['quantity']), before[order['leg']], 'I3 oversized close')
-                            self.assertTrue(all(0 <= a <= b for a,b in zip(after,before)), 'I3 crossed zero')
+                            self.assert_reduction(sent, exercised)
                         else:
                             self.assertFalse(sent['locked'], 'I2 opening while locked')
+                            self.assertIsNotNone(sent['admission'], 'I1d missing shared admission')
+                            self.assertEqual(*sent['admission']['before'], 'I1d admitting entry with exposure')
+                            self.assertFalse(sent['admission']['locked'], 'I2 admission while locked')
                             self.assertLessEqual(dec(order['quantity'])*dec(order['price']), 150, 'I4 leg cap')
                             self.assertLessEqual(sent['total'], 600, 'I4 total cap')
-                    reductions = [s for s in w.sends[first_send:] if s['order']['reduce_only']]
-                    if reductions:
-                        before, after = reductions[0]['before'], reductions[-1]['after']
-                        # The specified invariant is checked after the entire tick,
-                        # so an ordinary fully-filled two-leg close is permitted.
-                        try:
-                            self.assertLessEqual(abs(after[0]-after[1]), abs(before[0]-before[1]), 'I1 close')
-                        except AssertionError:
-                            exposure_violations.append(dict(step=index,before=list(map(str,before)),after=list(map(str,after))))
-                            if first_failure_steps is None:
-                                first_failure_steps = list(sequence)
-                                print(f'FIRST_INVARIANT_FAILURE seed={SEED} violation={exposure_violations[-1]} steps={json.dumps(sequence)}',flush=True)
+                            for invariant in ('1d', '2', '4'):
+                                exercised[invariant] += 1
+                    # I1c: inspect real recovery calls and durable deadlines, not
+                    # just a RECOVERY_ATTEMPT event that could be a no-op.
+                    for batch in w.batches[first_batch:]:
+                        if batch['paired_close'] and batch['after'][0] != batch['after'][1]:
+                            self.assertTrue(any(r['sends'] >= batch['last_send'] and r['step']-batch['step'] <= RECOVERY_BOUND
+                                                for r in w.recoveries[first_recovery:]), 'I1c no recovery after close')
+                            exercised['1c'] += 1
+                    if retry_due:
+                        self.assertGreater(len(w.recoveries), first_recovery, 'I1c due retry made no position recovery attempt')
+                        exercised['1c'] += 1
+                    exposure = abs(w.venues[0].quantity-w.venues[1].quantity)
+                    if exposure:
+                        self.assertFalse(w.engine.can_open(), 'I1d opening gate permits outstanding exposure')
+                        exercised['1d'] += 1
+                        for pair in w.store.pairs(active=True):
+                            if not pair.get('exit_reason'):
+                                continue
+                            step = min(dec(i['spec']['qty_step']) for i in pair['instruments'])
+                            if exposure > step:
+                                self.assertIn(pair['id'], w.store.meta('stop_locks', {}).get('unhedged_position', []),
+                                              'I1c residual exposure missing unhedged lock')
+                                alerts = [json.loads(e['value']) for e in w.store.events() if e['kind'] == 'ALERT']
+                                self.assertTrue(any(a.get('reason') == 'unhedged_position' and a.get('pair_id') == pair['id']
+                                                    for a in alerts), 'I1c residual exposure missing alert')
+                            self.assertGreater(pair.get('next_close', 0), w.now, 'I1c no durable retry deadline')
+                            self.assertLessEqual(pair['next_close']-w.now, 60, 'I1c retry exceeds bounded backoff')
+                            exercised['1c'] += 1
                     if not w.live:
                         self.assertEqual(len(w.sends)-first_send, 0, 'I5 shadow placed')
                         self.assertEqual(w.cancels-first_cancel, 0, 'I5 shadow cancelled')
+                        exercised['5'] += 1
                     if w.store.meta('state') == 'HALTED':
                         self.assertTrue(all(v.quantity == 0 for v in w.venues), 'I7 halted with remote position')
                         self.assertFalse(any(o['state'] in NONTERMINAL for o in w.engine.executor.orders()), 'I7 halted with unknown')
                         coverage['halted'] += 1
+                        exercised['7'] += 1
                     coverage['db_failures'] += w.store.failures
                     w.store.failures = 0
-                    for invariant in range(1,8):
+                    for invariant in INVARIANTS:
                         checks[invariant] += 1
             self.assertEqual(set(checks.values()), {ROUNDS})
+            for invariant in INVARIANTS:
+                self.assertGreater(exercised[invariant], 0, 'vacuous invariant: '+invariant)
             for key in (*(f'scheduled_{f}' for f in FAULTS), 'open','reduce','partial_fill','zero_fill','timeout_ack','timeout_unknown',
                         'restarts','db_failures','recovery_obligation','halting_retry','halted',
                         'query_failures','position_failures','account_failures'):
                 self.assertGreater(coverage[key], 0, 'vacuous fault coverage: '+key)
-            print(f'INVARIANTS seed={SEED} rounds={ROUNDS} N={RECOVERY_BOUND} checks={dict(checks)} '
-                  f'I1_failures={len(exposure_violations)} coverage={dict(sorted(coverage.items()))}')
-            self.assertFalse(exposure_violations, f'I1 close violations={exposure_violations}')
+            print(f'INVARIANTS seed={seed} rounds={ROUNDS} N={RECOVERY_BOUND} checks={dict(checks)} '
+                  f'exercised={dict(sorted(exercised.items()))} coverage={dict(sorted(coverage.items()))}', flush=True)
         except Exception as error:
-            self.fail(f'seed={SEED} checked_rounds={len(sequence)} error={error}\nsteps={json.dumps(sequence)}')
+            self.fail(f'seed={seed} checked_rounds={len(sequence)} error={error}\nsteps={json.dumps(sequence)}')
         finally:
             if world:
                 world.engine.close()
