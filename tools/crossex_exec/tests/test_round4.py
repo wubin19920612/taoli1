@@ -265,6 +265,21 @@ class Round4Tests(unittest.TestCase):
         self.assertEqual(self.engine.totals(), (dec('0'), dec('-20')))
         self.assertEqual(self.engine.risk, 'RUN')
 
+    def test_r5_midnight_during_reconcile_waits_without_permanent_stop(self):
+        self.now[0] += 86400-.1
+        self.data['upnl'] = '-20'
+        original = self.engine.reconcile_positions
+        def cross_midnight(snapshot):
+            matched = original(snapshot)
+            self.now[0] += .2
+            return matched
+        with patch.object(self.engine, 'reconcile_positions', side_effect=cross_midnight):
+            self.engine.reconcile()
+        self.assertNotEqual(self.store.meta('stop_reason'), 'account_snapshot_unavailable')
+        self.engine.reconcile()
+        self.assertEqual(self.engine.totals()[0], 0)
+        self.assertTrue(self.engine.can_open())
+
     def test_r6_pre_fill_or_equal_snapshot_never_flags_mismatch(self):
         self.pair()
         for order in self.store.all_orders():
