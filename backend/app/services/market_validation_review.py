@@ -212,6 +212,7 @@ class MarketValidationService:
         self._prepared_epoch = None
         self._prepared_rows = {}
         self._prepared_fx = None
+        self._prepared_collision = None
         self._market_index_cache = None
         self._market_legs_cache = {}
         self.last_filter_recomputed = 0
@@ -427,6 +428,7 @@ class MarketValidationService:
         # refresh ran there; never publish collisions or invalidate from that epoch.
         if epoch != self._mutation_epoch:
             raise ValueError("mapping changed during preparation")
+        self._prepared_rows = {}
         self.collision_symbols = collision_symbols
         if self.collision_symbols:
             from app.services.spread_engine import opportunity_id, pair_allowed
@@ -524,6 +526,8 @@ class MarketValidationService:
             id(row): (row, key) for row, key in zip(annotated, market_keys, strict=True)
         }
         self._prepared_fx = prepared_fx
+        self._prepared_collision = collision_symbols
+        self._discard_stale_market_index()
         return annotated
 
     @staticmethod
@@ -774,6 +778,7 @@ class MarketValidationService:
             annotated
             and self._prepared_epoch == self._mutation_epoch
             and self._prepared_fx == self.fx
+            and self.collision_symbols is self._prepared_collision
             and prepared_a is not None and prepared_a[0] is a and prepared_a[1] is not None
             and prepared_b is not None and prepared_b[0] is b and prepared_b[1] is not None
             and (a.identity_status != "verified" or not a.binding_valid_until
@@ -814,6 +819,14 @@ class MarketValidationService:
         )
         result.registry_revision = self._mutation_epoch
         return result
+
+    def _discard_stale_market_index(self):
+        if (self._market_index_cache is not None
+                and self._market_index_cache[0] != (
+                    self.store.generation, self.store.markets_version,
+                )):
+            self._market_index_cache = None
+            self._market_legs_cache = {}
 
     def _market_index(self):
         version = (self.store.generation, self.store.markets_version)
@@ -922,6 +935,7 @@ class MarketValidationService:
             )
 
     def filter_opportunities(self, opportunities, risk):
+        self._discard_stale_market_index()
         stats = [0]
         result = [item for item in self._filter_opportunities(opportunities, risk, stats)
                   if item is not None]
@@ -929,6 +943,7 @@ class MarketValidationService:
         return result
 
     async def filter_opportunities_async(self, opportunities, risk, budget=None):
+        self._discard_stale_market_index()
         budget = budget or YieldBudget()
         epoch = self._mutation_epoch
         version = (self.store.generation, self.store.markets_version)

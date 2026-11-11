@@ -276,6 +276,7 @@ class MultiExchangePremiumMonitor:
         self.service = service or PremiumIndexQueryService()
         self._cursor = None
         self._scan_cache = None
+        self._scan_inflight = {}
         self._next_allowed = {}
         self._locks = defaultdict(asyncio.Lock)
         self._request_at = defaultdict(float)
@@ -294,7 +295,8 @@ class MultiExchangePremiumMonitor:
 
     def _current_eligibility(self, settings: RiskSettings, now: datetime):
         store = self.app.state.snapshot_store
-        cache_key = (store.generation, settings.model_dump_json())
+        cache_key = (store.generation, getattr(store, "markets_version", None),
+                     settings.model_dump_json())
         markets = store.get_markets()
         if (
             self._scan_cache is None
@@ -310,8 +312,8 @@ class MultiExchangePremiumMonitor:
 
     async def _current_eligibility_async(self, settings: RiskSettings, now: datetime):
         store = self.app.state.snapshot_store
-        cache_key = (store.generation, settings.model_dump_json())
-        markets_version = getattr(store, "markets_version", None)
+        cache_key = (store.generation, getattr(store, "markets_version", None),
+                     settings.model_dump_json())
         markets = store.get_markets()
         if (
             self._scan_cache is None
@@ -322,12 +324,35 @@ class MultiExchangePremiumMonitor:
             # Keep the input copy alive: binding refreshes can replace rows
             # without advancing generation, so compare row objects directly.
             self._scan_cache = None
-            scan = await _scan_eligibility_async(markets, settings)
-            if (cache_key != (store.generation, settings.model_dump_json())
-                    or markets_version != getattr(store, "markets_version", None)):
-                raise ValueError("snapshot or settings changed during premium scan")
-            self._scan_cache = (cache_key, scan, markets)
-        return _eligible_at(self._scan_cache[1], now)
+            pending = self._scan_inflight.get(cache_key)
+            if pending is None or not _same_market_rows(pending[1], markets):
+                task = asyncio.create_task(self._scan_snapshot(
+                    cache_key, markets, settings, settings.model_copy(deep=True),
+                ))
+                self._scan_inflight[cache_key] = (task, markets)
+            else:
+                task = pending[0]
+            # One cancelled caller must not cancel the other assets' shared scan.
+            scan = await asyncio.shield(task)
+        else:
+            scan = self._scan_cache[1]
+        return _eligible_at(scan, now)
+
+    async def _scan_snapshot(self, cache_key, markets, settings, scan_settings):
+        try:
+            scan = await _scan_eligibility_async(markets, scan_settings)
+            store = self.app.state.snapshot_store
+            if (cache_key == (store.generation, getattr(store, "markets_version", None),
+                              settings.model_dump_json())
+                    and _same_market_rows(markets, store.get_markets())):
+                self._scan_cache = (cache_key, scan, markets)
+            # A publication only prevents caching; this caller still evaluates
+            # the exact list captured at the start of its scan.
+            return scan
+        finally:
+            pending = self._scan_inflight.get(cache_key)
+            if pending is not None and pending[0] is asyncio.current_task():
+                del self._scan_inflight[cache_key]
 
     async def _point(self, market):
         # At most two market queries/sec/exchange, with bounded global concurrency.
