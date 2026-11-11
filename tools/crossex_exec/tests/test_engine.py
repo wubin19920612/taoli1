@@ -70,14 +70,17 @@ class EngineTests(unittest.TestCase):
         self.engine=Engine(self.store,self.market,self.accounts,live=True,stop_file=Path(self.tmp.name)/'STOP')
         self.engine.executor=self.exec
         self.exec.can_open=self.engine.can_open
-        self.exec.check_order=self.engine.limits.check_order
+        self.exec.check_order=self.engine.check_order
+        self.exec.alert=self.engine.alert
         self.engine.limits.initialize(self.accounts.snapshot())
+        self.engine.account_cache.publish(self.accounts.snapshot())
         self.engine.risk='RUN'
         self.engine.last_reconcile=time.time()
         self.store.set_meta('mapping',{'at':time.time()})
         self.store.set_meta('actual_fees',{'at':time.time()})
 
     def tearDown(self):
+        self.engine.close()
         fixtures.HTTPExecutionTests.tearDown(self)
 
     def test_startup_mode_error_propagates_before_recovery_or_market(self):
@@ -117,6 +120,7 @@ class EngineTests(unittest.TestCase):
 
     def test_admission_equity_drop_blocks_both_apis_and_halts(self):
         self.accounts.data['equity_by_venue']['bitget']='29850'
+        self.engine.account_cache.publish(self.accounts.snapshot())
         with (patch.object(self.cross,'place') as cross_place,
               patch.object(self.bitget,'place') as bitget_place):
             self.engine.ingest(trigger())
@@ -301,6 +305,7 @@ class EngineTests(unittest.TestCase):
         scenarios=('max_age','funding_exit','adverse_spread','loss_limit','converged')
         for n,reason in enumerate(scenarios):
             with self.subTest(reason=reason):
+                self.engine.account_cache.publish(self.accounts.snapshot())
                 p=self.engine.ingest(trigger('exit-'+str(n)))
                 self.assertIsNotNone(p)
                 if reason=='max_age':

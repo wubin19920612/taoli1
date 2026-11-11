@@ -141,6 +141,25 @@ class Round3Tests(unittest.TestCase):
         self.assertEqual(self.store.meta('state'), 'HALTING')
         self.assertTrue(self.store.pairs(active=True))
 
+    def test_r1_late_entry_fill_after_remote_flat_never_reopens_or_double_closes(self):
+        pair = self.pair(('.7', '.4'), unknown=True)
+        self.engine.close_pair(pair, 'manual')
+        count = len([r for r in self.trace if r[0] == 'place'])
+        entry = next(o for o in self.store.all_orders() if o['state'] == 'UNKNOWN')
+        self.venues[0].unresolved = False
+        self.venues[0].orders[entry['cid']] = '.7'
+        self.engine.close_pair(pair, 'manual')
+        self.assertEqual(pair['state'], 'CLOSED')
+        self.assertEqual(list(map(dec, pair['remaining'])), [0, 0])
+        self.assertEqual(len([r for r in self.trace if r[0] == 'place']), count)
+
+    def test_r1_missing_position_snapshot_does_not_guess_a_close_quantity(self):
+        pair = self.pair(unknown=True)
+        self.accounts.snapshot.side_effect = ValueError('snapshot_missing')
+        self.engine.close_pair(pair, 'manual')
+        self.assertFalse([r for r in self.trace if r[0] == 'place'])
+        self.assertEqual(pair['state'], 'UNKNOWN')
+
     def test_r2_repair_rounds_down_then_minimizes_residual_with_both_steps(self):
         pair = self.pair(('1.006', '.99'), steps=('.01', '.001'))
         self.engine.balance(pair)
@@ -231,6 +250,18 @@ class Round3Tests(unittest.TestCase):
         self.assertNotIn('StartLimitBurst=3', text)
         self.assertIn('RestartSec=10', text)
 
+    def test_r5_halting_startup_account_outage_stays_in_process(self):
+        self.pair()
+        self.store.set_meta('state', 'HALTING')
+        self.accounts.validate_startup.side_effect = ValueError('account_outage')
+        self.accounts.snapshot.side_effect = ValueError('account_outage')
+        self.engine.startup(('BTC',))
+        self.assertEqual(self.store.meta('state'), 'HALTING')
+        self.accounts.snapshot.side_effect = self.snapshot
+        self.now[0] += 61
+        self.engine.tick()
+        self.assertEqual(self.store.meta('state'), 'HALTED')
+
     def publish(self):
         self.engine.account_cache.publish(self.snapshot())
 
@@ -276,6 +307,57 @@ class Round3Tests(unittest.TestCase):
         result = self.engine.executor.execute_pair(orders)
         self.assertTrue(all(r['state'] == 'UNSENT' for r in result))
         self.assertFalse([r for r in self.trace if r[0] == 'place'])
+
+    def test_r7_two_workers_reach_send_barrier_without_account_io(self):
+        orders = self.open_intents()
+        barrier = threading.Barrier(2)
+        originals = [v.place for v in self.venues]
+        def send(n, order, before_send):
+            barrier.wait(1)
+            return originals[n](order, before_send)
+        self.accounts.snapshot.reset_mock()
+        with (patch.object(self.venues[0], 'place', side_effect=lambda i,before_send:send(0,i,before_send)),
+              patch.object(self.venues[1], 'place', side_effect=lambda i,before_send:send(1,i,before_send))):
+            results = self.engine.executor.execute_pair(orders)
+        self.assertEqual([r['state'] for r in results], ['TERMINAL', 'TERMINAL'])
+        self.accounts.snapshot.assert_not_called()
+
+    def test_r7_after_limiter_wait_rechecks_book_age(self):
+        orders = self.open_intents()
+        barrier = threading.Barrier(2, action=lambda:self.now.__setitem__(0, self.now[0]+3))
+        originals = [v.place for v in self.venues]
+        def send(n, order, before_send):
+            barrier.wait(1)
+            return originals[n](order, before_send)
+        with (patch.object(self.venues[0], 'place', side_effect=lambda i,before_send:send(0,i,before_send)),
+              patch.object(self.venues[1], 'place', side_effect=lambda i,before_send:send(1,i,before_send))):
+            results = self.engine.executor.execute_pair(orders)
+        self.assertEqual([r['state'] for r in results], ['UNSENT', 'UNSENT'])
+        self.assertFalse([r for r in self.trace if r[0] == 'place'])
+
+    def test_r7_slow_account_refresh_does_not_hold_admission_lock(self):
+        self.publish()
+        entered, release = threading.Event(), threading.Event()
+        def snapshot():
+            entered.set()
+            release.wait(2)
+            return self.snapshot()
+        self.accounts.snapshot.side_effect = snapshot
+        worker = threading.Thread(target=self.engine.refresh_accounts)
+        worker.start()
+        try:
+            self.assertTrue(entered.wait(1))
+            pair = self.pair()
+            order = self.engine.new_intent(pair, 0, '.1', '100', False)
+            started = time.monotonic()
+            self.engine.limits.check_order(order)
+            self.assertLess(time.monotonic()-started, .2)
+            self.now[0] += 11
+            with self.assertRaises(ValueError):
+                self.engine.limits.check_order(order)
+        finally:
+            release.set()
+            worker.join(2)
 
     def test_r8_missing_fills_use_order_average_or_conservative_limit_for_exit(self):
         for fallback in ('average', 'limit'):
@@ -339,6 +421,13 @@ class Round3Tests(unittest.TestCase):
             track.assert_called()
         release.set()
 
+    def test_r10_fresh_contract_fees_survive_other_contract_refresh_delay(self):
+        orders = self.open_intents()
+        self.accounts.fee_times_by_market = {k:self.now[0] for k in self.accounts.fees_by_market}
+        self.store.set_meta('actual_fees', {'at':self.now[0]-3601, 'rates':self.accounts.fees_by_market})
+        results = self.engine.executor.execute_pair(orders)
+        self.assertEqual([r['state'] for r in results], ['TERMINAL', 'TERMINAL'])
+
     def test_r11_first_executor_stop_and_new_reason_reach_journal_once(self):
         pair = self.pair(unknown=True)
         order = self.store.all_orders()[0]
@@ -349,6 +438,12 @@ class Round3Tests(unittest.TestCase):
         self.engine.alert('fills_pending')
         self.engine.alert('unknown_order')
         self.assertEqual(self.sink.call_args_list.count(unittest.mock.call('unknown_order')), 2)
+
+    def test_r11_same_reason_after_clearing_is_a_new_stop(self):
+        self.engine.alert('daily_loss')
+        self.store.set_meta('stop_reason', None)
+        self.engine.alert('daily_loss')
+        self.assertEqual(self.sink.call_count, 2)
 
 
 class Round3PolicyTests(unittest.TestCase):
