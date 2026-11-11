@@ -6,6 +6,7 @@ vi.mock("../src/pages/DashboardPage", () => ({
   DashboardPage: () => <div>Dashboard</div>
 }));
 vi.mock("../src/pages/GateTwapPage", () => ({ GateTwapPage: () => <div>Gate TWAP</div> }));
+vi.mock("../src/pages/LiveExecPage", () => ({ LiveExecPage: () => <div>实盘页面测试</div> }));
 
 import { AppShell } from "../src/components/AppShell";
 
@@ -19,6 +20,7 @@ const defaultNavigationOrder = [
   "gate-twap",
   "index-components",
   "shadow-ledger",
+  "live-exec",
   "announcements",
   "account-connections",
   "settings"
@@ -89,6 +91,16 @@ describe("AppShell", () => {
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
+  });
+
+  it("places live execution after the shadow ledger for saved menus and lazy-loads it", async () => {
+    localStorage.setItem(navigationOrderStorageKey, JSON.stringify(defaultNavigationOrder.filter(key => key !== "live-exec")));
+    render(<AppShell />);
+    const labels = visibleMenuLabels();
+    expect(labels[labels.indexOf("影子账本") + 1]).toBe("实盘");
+    await userEvent.click(screen.getByRole("menuitem", { name: "实盘" }));
+    expect(await screen.findByText("实盘页面测试")).toBeTruthy();
+    expect(new URLSearchParams(window.location.search).get("page")).toBe("live-exec");
   });
 
   it("switches to the quiet palette and persists the selection", async () => {
