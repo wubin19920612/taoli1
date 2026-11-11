@@ -15,6 +15,7 @@ class HardLimits:
         self.store,self.snapshot=store,snapshot
         self.alert=alert
         self.lock=threading.RLock()
+        self._last_equity_halt=None
         config=config or {}
         def lowered(name,ceiling):
             value=dec(config.get(name,ceiling))
@@ -51,10 +52,14 @@ class HardLimits:
             # The coordinator flattens AFTER concurrent IOC workers join. Never
             # close an in-flight pair recursively from inside a send callback.
             self.store.set_meta('state','HALTING')
-            self.store.set_meta('stop_reason','account_equity_drop')
-            self.store.event('EQUITY_HALT',dict(venues=breached,current=equities,baseline=baseline))
+            values=dict(venues=breached,current=equities,baseline=baseline)
             if self.alert:
-                self.alert('account_equity_drop')
+                self.alert('account_equity_drop',details=values,event_kind='EQUITY_HALT')
+            else:
+                if values!=self._last_equity_halt:
+                    self.store.event('EQUITY_HALT',values)
+                    self._last_equity_halt=values
+                self.store.set_meta('stop_reason','account_equity_drop')
         return bool(breached)
 
     def exposure(self,snapshot,intent):

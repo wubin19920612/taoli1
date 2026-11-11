@@ -13,6 +13,10 @@ from .limits import HardLimits, DEFAULT_VAR
 from .background import SnapshotCache, PeriodicWorker
 
 
+class DailyBaselinePending(ValueError):
+    """The UTC date changed while processing the previous day's snapshot."""
+
+
 class Engine:
     def __init__(self,store,market,accounts,*,live=False,stop_file=DEFAULT_VAR+'/STOP',clock=time.time,alert_sink=None,config=None):
         self.store,self.market,self.accounts,self.live,self.clock=store,market,accounts,live,clock
@@ -23,6 +27,8 @@ class Engine:
         self.last_accounting_retry=0
         self.alert_sink=alert_sink
         self._last_alert_reason=None
+        self._last_alert_values=None
+        self._halt_alerts={}
         self._alert_lock=threading.RLock()
         self._lifecycle_lock=threading.RLock()
         self._closed=False
@@ -35,43 +41,57 @@ class Engine:
         self.account_cache=SnapshotCache(clock)
         self.limits=HardLimits(store,self.account_cache.read,config,alert=self.alert)
         self.executor=Executor(store,{'crossex':accounts.cross,'bitget':accounts.bitget},live=live,
-                               can_open=self.can_open,check_order=self.check_order,alert=self.alert)
+                               can_open=self.can_open,check_order=self.check_order,check_pair=self.check_pair,
+                               alert=self.alert,clock=clock)
 
-    def alert(self,reason):
+    def alert(self,reason,*,details=None,event_kind=None):
         with self._alert_lock:
-            changed=self._last_alert_reason!=reason or self.store.meta('stop_reason')!=reason
+            values=details or {}
+            if self.store.meta('state')=='HALTING':
+                changed=reason not in self._halt_alerts or self._halt_alerts[reason]!=values
+                self._halt_alerts[reason]=values
+            else:
+                self._halt_alerts.clear()
+                changed=(self._last_alert_reason!=reason or self._last_alert_values!=values
+                         or self.store.meta('stop_reason')!=reason)
             self.store.set_meta('stop_reason',reason)
             if changed:
-                self.store.event('ALERT',{'reason':reason})
+                if event_kind:
+                    self.store.event(event_kind,values)
+                self.store.event('ALERT',dict(reason=reason,**values))
                 self._last_alert_reason=reason
+                self._last_alert_values=values
                 if self.alert_sink:
                     try:
                         self.alert_sink(reason)
                     except Exception:
                         self.store.event('ALERT_SINK_FAILED',{'reason':reason})
 
-    def fees_for(self,instruments):
-        rates=self.accounts.fees_by_market
-        times=getattr(self.accounts,'fee_times_by_market',None)
-        meta=self.store.meta('actual_fees',{})
+    def fees_for(self,instruments,now=None):
+        snapshots=self.accounts.fee_snapshots
+        now=self.clock() if now is None else now
+        rates=[]
         for i in instruments:
-            at=times.get(i.market.key,0) if isinstance(times,dict) else meta.get('at',0)
-            if not 0<=self.clock()-at<=3600 or i.market.key not in rates:
+            version=snapshots.get(i.market.key)
+            if version is None or not 0<=now-version.captured_at<=3600:
                 raise ValueError('actual_fee_missing_or_stale')
-        return [rates[i.market.key] for i in instruments]
+            rates.append(version.rate)
+        return rates
 
     def check_order(self,intent):
         self.limits.check_order(intent)
-        if intent['reduce_only']:
-            return
-        pair=next(p for p in self.store.pairs(active=True) if p['id']==intent['pair_id'])
-        orders=sorted([o for o in self.store.all_orders() if o['pair_id']==pair['id'] and not o['reduce_only']
-                       and o['state']!='UNSENT'],key=lambda o:o['leg'])
+
+    def check_pair(self,intents):
+        if len(intents)!=2 or {i['leg'] for i in intents}!={0,1} or len({i['pair_id'] for i in intents})!=1:
+            raise ValueError('opening_pair_missing')
+        now=self.clock()
+        pair=next(p for p in self.store.pairs(active=True) if p['id']==intents[0]['pair_id'])
+        orders=sorted(intents,key=lambda o:o['leg'])
         instruments=[Instrument.load(i) for i in pair['instruments']]
         if any(i.market.key not in self.market.mapping for i in instruments):
             raise ValueError('send_catalog_unavailable')
-        fees=self.fees_for(instruments)
-        send_review(pair,orders,fees,self.clock())
+        fees=self.fees_for(instruments,now)
+        send_review(pair,orders,fees,now)
 
     def refresh_accounts(self):
         started=self.clock()
@@ -81,6 +101,7 @@ class Engine:
                 if not self._closed:
                     self.account_cache.publish(snapshot,started)
                     self.limits.check_equity(snapshot)
+                    self.roll_daily_upnl(snapshot,started)
         except Exception:
             with self._lifecycle_lock:
                 if not self._closed:
@@ -105,14 +126,15 @@ class Engine:
             try:
                 rates=self.accounts.fees(instruments) if instruments else {}
                 if not instruments:
-                    self.accounts.fees_by_market={}
+                    self.accounts.fee_snapshots={}
             except Exception:
                 rates={}
-                self.accounts.fees_by_market={}
+                self.accounts.fee_snapshots={}
             with self._lifecycle_lock:
                 if not self._closed:
-                    times=getattr(self.accounts,'fee_times_by_market',{})
-                    self.store.set_meta('actual_fees',dict(at=now,rates=rates,times=times if isinstance(times,dict) else {}))
+                    versions=self.accounts.fee_snapshots
+                    self.store.set_meta('actual_fees',dict(at=now,rates={k:v.rate for k,v in versions.items()},
+                        times={k:v.captured_at for k,v in versions.items()}))
                     if keys-set(rates):
                         self.store.event('FEES_UNAVAILABLE',{'markets':sorted(keys-set(rates))})
             self.next_fees=now+(30 if keys-set(rates) else 3600)
@@ -121,8 +143,13 @@ class Engine:
     def start_background(self,bases):
         self.bases=tuple(bases)
         if not self.workers:
-            self.workers=[PeriodicWorker(self.refresh_accounts,5,'exec-accounts'),
-                          PeriodicWorker(self.refresh_reference,5,'exec-reference')]
+            self.workers=[PeriodicWorker(self.refresh_accounts,5,'exec-accounts',self.background_error),
+                          PeriodicWorker(self.refresh_reference,5,'exec-reference',self.background_error)]
+
+    def background_error(self,worker,kind):
+        with self._lifecycle_lock:
+            if not self._closed:
+                self.store.event('BACKGROUND_FAILED',dict(worker=worker,error_type=kind))
 
     def close(self):
         with self._lifecycle_lock:
@@ -135,6 +162,7 @@ class Engine:
         rejected=sum(o['state']=='REJECTED' or o.get('rejected',False) for o in recent)
         local_ok=(self.store.meta('single_failures',0)<3 and (not recent or dec(rejected)/len(recent)<=dec('.3')))
         return (local_ok and self.risk=='RUN' and not self.stop_file.exists() and not self.store.meta('stop_reason')
+                and not self.store.meta('position_mismatch')
                 and self.store.meta('daily_loss_day')!=day(self.clock())
                 and not self.store.meta('flatten_requested')
                 and self.store.meta('state') not in ('HALTED','HALTING') and 0<=self.clock()-self.last_reconcile<60)
@@ -195,7 +223,49 @@ class Engine:
             if day((o.get('fill_ms') or o['created_at']*1000)/1000)==today:
                 daily+=realized
         floating=dec(self.snapshot['upnl']) if self.snapshot else dec(0)
-        return daily+floating,total+floating
+        baseline=self.roll_daily_upnl(self.snapshot or {},(self.snapshot or {}).get('captured_at',self.clock()))
+        if not baseline or baseline['day']!=today:
+            raise DailyBaselinePending('daily_baseline_pending')
+        return daily+floating-dec(baseline['upnl']),total+floating
+
+    def roll_daily_upnl(self,snapshot,captured_at):
+        with self._lifecycle_lock:
+            today=day(self.clock())
+            baseline=self.store.meta('daily_upnl')
+            if (not baseline or baseline['day']!=today) and day(captured_at)==today:
+                # Persist the first fresh observation of the UTC day, including
+                # each position. A previous-day in-flight refresh cannot set it.
+                baseline=dict(day=today,upnl=str(snapshot.get('upnl','0')),
+                              positions=snapshot.get('upnl_by_position',{}),captured_at=captured_at)
+                self.store.set_meta('daily_upnl',baseline)
+            return baseline
+
+    def reconcile_positions(self,snapshot):
+        captured=snapshot['captured_at']
+        latest=max((max(float(o.get('fill_observed_at',0)),float(o.get('fill_ms') or 0)/1000,
+                        float(o.get('terminal_ms') or 0)/1000)
+                    for o in self.store.all_orders() if dec(o.get('filled',0))>0),default=0)
+        if captured<=latest:
+            # The snapshot may have started before an IOC completed. It says
+            # nothing about the new position; wait for a later background read.
+            return None
+        same=snapshot['positions']==local_positions(self.store.pairs(active=True))
+        previous=self.store.meta('position_snapshot_at',0)
+        if captured>previous:
+            self.store.set_meta('position_snapshot_at',captured)
+            if not same:
+                self.store.set_meta('position_mismatch',True)
+                self.store.set_meta('position_match_streak',0)
+                self.alert('position_mismatch')
+            elif self.store.meta('position_mismatch') or self.store.meta('stop_reason')=='position_mismatch':
+                streak=self.store.meta('position_match_streak',0)+1
+                self.store.set_meta('position_match_streak',streak)
+                if streak>=3:
+                    self.store.set_meta('position_mismatch',False)
+                    if self.store.meta('stop_reason')=='position_mismatch':
+                        self.store.set_meta('stop_reason',None)
+                    self.store.event('POSITION_MATCH_RECOVERED',dict(consecutive=streak,captured_at=captured))
+        return same
 
     def reconcile(self):
         try:
@@ -207,10 +277,14 @@ class Engine:
                 started=self.clock()
                 self.snapshot=self.accounts.snapshot()
                 self.account_cache.publish(self.snapshot,started)
+                self.snapshot=self.account_cache.read()
             equity_halt=self.limits.check_equity(self.snapshot)
-            same=self.snapshot['positions']==local_positions(self.store.pairs(active=True))
-            if not same:
-                self.alert('position_mismatch')
+            if day(self.snapshot['captured_at'])!=day(self.clock()):
+                self.risk='STOP'
+                if equity_halt:
+                    self.flatten_all('circuit_breaker')
+                return
+            same=self.reconcile_positions(self.snapshot)
             self.last_reconcile=self.clock()
             daily,total=self.totals()
             current_day=day(self.clock())
@@ -249,6 +323,8 @@ class Engine:
                 self.store.set_meta('state','HALTING')
             if self.risk in ('HALTED','FLATTEN') or self.store.meta('state')=='HALTING':
                 self.flatten_all('circuit_breaker')
+        except DailyBaselinePending:
+            self.risk='STOP'
         except Exception:
             self.risk='STOP'
             self.alert('account_snapshot_unavailable')
@@ -450,39 +526,27 @@ class Engine:
 
     def unhedged(self,pair):
         a,b=map(dec,pair['remaining'])
-        self.store.event('UNHEDGED',{'pair_id':pair['id'],'quantity':str(abs(a-b)),
-                                    'remaining':pair['remaining'],'excess_leg':0 if a>b else 1})
-        self.alert('unhedged_position')
+        self.alert('unhedged_position',event_kind='UNHEDGED',details={'pair_id':pair['id'],
+            'quantity':str(abs(a-b)),'remaining':list(pair['remaining']),'excess_leg':0 if a>b else 1})
 
     def repair_intents(self,pair,bps):
         quantities=list(map(dec,pair['remaining']))
         leg=0 if quantities[0]>quantities[1] else 1
-        other=1-leg
         diff=abs(quantities[0]-quantities[1])
         try:
             return [self.reduction_intent(pair,leg,diff,bps)]
         except ValueError:
             pass
-        # A sub-step excess can require a step on the coarse leg followed by
-        # reducing the now-excess fine leg. Both orders only CLOSE; choose this
-        # plan only if its final absolute exposure is strictly smaller.
+        # A coarse step may cross zero only if THIS SINGLE order reduces the
+        # absolute exposure. Never rely on a future fill on the opposite venue.
         step=dec(pair['instruments'][leg]['spec']['qty_step'])
         cut=(diff/step).to_integral_value(rounding=ROUND_CEILING)*step
-        if cut<=diff or cut>quantities[leg]:
+        if cut<=diff or cut>quantities[leg] or abs(diff-cut)>=diff:
             return []
-        other_step=dec(pair['instruments'][other]['spec']['qty_step'])
-        remainder=cut-diff
-        options=[]
-        for rounding in (ROUND_FLOOR,ROUND_CEILING):
-            other_cut=(remainder/other_step).to_integral_value(rounding=rounding)*other_step
-            if abs(remainder-other_cut)>=diff or other_cut>quantities[other]:
-                continue
-            try:
-                plan=[self.reduction_intent(pair,leg,cut,bps),self.reduction_intent(pair,other,other_cut,bps)]
-                options.append((abs(remainder-other_cut),other_cut,plan))
-            except ValueError:
-                continue
-        return min(options,key=lambda option:option[:2])[2] if options else []
+        try:
+            return [self.reduction_intent(pair,leg,cut,bps)]
+        except ValueError:
+            return []
 
     def balance(self,pair):
         self.refresh_pair(pair)
@@ -491,6 +555,13 @@ class Engine:
             return
         if dec(pair['remaining'][0])==dec(pair['remaining'][1]):
             self.store.set_meta('single_failures',0)
+            return
+        if pair.get('repair_stopped'):
+            return
+        if not self.resolve_exposure(pair):
+            pair['repair_stopped']=True
+            self.store.pair(pair)
+            self.unhedged(pair)
             return
         if not pair['single_failure']:
             pair['single_failure']=True
@@ -505,11 +576,21 @@ class Engine:
                 break
             pair['repair_attempts']=attempt
             self.store.pair(pair)
-            results=self.executor.execute_pair(intents)
+            result=self.executor.execute(intents[0])
             self.refresh_pair(pair)
-            if any(result['state']=='UNKNOWN' for result in results):
+            # Confirm/query the one IOC, then reread BOTH venue positions before
+            # choosing a new quantity. A zero fill or increased exposure ends repair.
+            if not self.resolve_exposure(pair):
+                pair['repair_stopped']=True
+                self.store.pair(pair)
+                self.unhedged(pair)
+                return
+            exposure=abs(dec(pair['remaining'][0])-dec(pair['remaining'][1]))
+            if result['state']=='UNKNOWN' or exposure>=abs(a-b):
                 break
         if dec(pair['remaining'][0])!=dec(pair['remaining'][1]):
+            pair['repair_stopped']=True
+            self.store.pair(pair)
             self.unhedged(pair)
 
     def close_pair(self,pair,reason):
@@ -626,21 +707,24 @@ class Engine:
             return
         if halting:
             self.halt_attempts+=1
-            self.next_halt=self.clock()+min(60,2**min(self.halt_attempts,6))
-        for p in self.store.pairs(active=True):
-            try:
-                self.close_pair(p,reason)
-            except Exception:
-                self.alert('flatten_retry_pending')
-        if self.store.meta('state')=='HALTING':
-            # A process must not exit successfully with residual or unknown exposure.
-            try:
-                remote=self.accounts.snapshot()['positions']
-            except Exception:
-                self.alert('flatten_snapshot_unavailable')
-                return
-            if not self.store.pairs(active=True) and not remote:
-                self.store.set_meta('state','HALTED')
+        try:
+            for p in self.store.pairs(active=True):
+                try:
+                    self.close_pair(p,reason)
+                except Exception:
+                    self.alert('flatten_retry_pending')
+            if self.store.meta('state')=='HALTING':
+                # A process must not exit successfully with residual or unknown exposure.
+                try:
+                    remote=self.accounts.snapshot()['positions']
+                except Exception:
+                    self.alert('flatten_snapshot_unavailable')
+                    return
+                if not self.store.pairs(active=True) and not remote:
+                    self.store.set_meta('state','HALTED')
+        finally:
+            if halting:
+                self.next_halt=self.clock()+min(60,2**min(self.halt_attempts,6))
 
     def tick(self):
         if self.store.meta('state')=='HALTED':

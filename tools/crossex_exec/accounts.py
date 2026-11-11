@@ -1,5 +1,6 @@
 """Read-only startup validation and independent account risk measures."""
 import time
+from dataclasses import dataclass
 from tools.fill_sim.core import dec
 from .policy import Instrument
 
@@ -74,20 +75,32 @@ def local_positions(pairs):
     return result
 
 
+@dataclass(frozen=True)
+class FeeSnapshot:
+    rate: str
+    captured_at: float
+
+
 class Accounts:
     def __init__(self,cross,bitget,*,risk_confirmed=False,clock=time.time):
         self.cross,self.bitget,self.risk_confirmed=cross,bitget,risk_confirmed
         self.clock=clock
-        self.fees_by_market={}
-        self.fee_times_by_market={}
+        self.fee_snapshots={}
         self.leverages={}
+
+    @property
+    def fees_by_market(self):
+        return {k:v.rate for k,v in self.fee_snapshots.items()}
+
+    @property
+    def fee_times_by_market(self):
+        return {k:v.captured_at for k,v in self.fee_snapshots.items()}
 
     def fees(self,instruments):
         # A failed refresh must revoke stale rates, even if the caller catches it.
         instruments=tuple(instruments)
         allowed={i.market.key for i in instruments}
-        self.fees_by_market={k:v for k,v in self.fees_by_market.items() if k in allowed}
-        self.fee_times_by_market={k:v for k,v in self.fee_times_by_market.items() if k in allowed}
+        self.fee_snapshots={k:v for k,v in self.fee_snapshots.items() if k in allowed}
         if not instruments:
             return {}
         cross_at=self.clock()
@@ -115,17 +128,12 @@ class Accounts:
                 pass
             # Publish each contract independently; one slow/missing rate cannot
             # revoke already verified fees for a different contract.
-            current=dict(self.fees_by_market)
+            current=dict(self.fee_snapshots)
             current.pop(i.market.key,None)
             if i.market.key in mapped:
-                current[i.market.key]=mapped[i.market.key]
-            times=dict(self.fee_times_by_market)
-            times.pop(i.market.key,None)
-            if i.market.key in mapped:
-                times[i.market.key]=captured_at
-            self.fees_by_market=current
-            self.fee_times_by_market=times
-        self.fees_by_market=mapped
+                current[i.market.key]=FeeSnapshot(mapped[i.market.key],captured_at)
+            # One publication carries both fields; readers retain that version.
+            self.fee_snapshots=current
         try:
             self.leverages=self.cross.leverage([])
         except Exception:
@@ -145,7 +153,7 @@ class Accounts:
         ga,ba=self.cross.positions(),self.bitget.positions()
         positions=remote_positions(ga,ba)
         upnl=sum((dec(r['upnl']) for r in ga),dec(0))+sum((dec(r['unrealisedPnl']) for r in ba),dec(0))
-        notionals={}
+        notionals,upnl_by_position={},{}
         for venue,rows in (('crossex',ga),('bitget',ba)):
             for row in rows:
                 normalized=remote_positions([row],[]) if venue=='crossex' else remote_positions([],[row])
@@ -154,11 +162,12 @@ class Accounts:
                     if price<=0:
                         raise ValueError('position_mark_missing')
                     notionals[key]=str(qty*price)
+                    upnl_by_position[key]=str(dec(row['upnl' if venue=='crossex' else 'unrealisedPnl']))
         equities=dict(crossex=str(dec(a['margin_balance'])),bitget=str(dec(b['usdtEquity'])))
         liabilities=[{k:r[k] for k in ('coin','exchange_type','liability')} for r in a['assets'] if dec(r['liability'])>0]
         return dict(margins=[str(m) if m is not None else None for m in margins],positions=positions,upnl=str(upnl),
                     equity=str(sum(map(dec,equities.values()))),equity_by_venue=equities,
-                    notionals=notionals,liabilities=liabilities)
+                    notionals=notionals,liabilities=liabilities,upnl_by_position=upnl_by_position)
 
     def check_instruments(self,instruments):
         for i in instruments:

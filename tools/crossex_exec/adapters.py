@@ -37,7 +37,7 @@ def checked_status(data, i, *, gate):
     filled = dec(data[qty])
     if filled < 0 or filled > dec(i['quantity']):
         raise APIError('invalid_response')
-    average=data.get('avg_price' if gate else 'avgPrice')
+    average=data.get('executed_avg_price' if gate else 'avgPrice')
     try:
         average=str(dec(average)) if average is not None and dec(average)>0 else None
     except ValueError:
