@@ -9,8 +9,8 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from tools.fill_sim.core import Book, dec
-from tools.crossex_exec.accounts import Accounts
+from tools.fill_sim.core import Book, dec, day
+from tools.crossex_exec.accounts import Accounts, FeeSnapshot
 from tools.crossex_exec.adapters import checked_status
 from tools.crossex_exec.engine import Engine
 from tools.crossex_exec.market import MarketData
@@ -71,6 +71,7 @@ class Round3Tests(unittest.TestCase):
                          notionals={}, liabilities=[])
         self.accounts = Mock(cross=self.venues[0], bitget=self.venues[1])
         self.accounts.fees_by_market = {k:'.0002' for k in self.market.mapping}
+        self.accounts.fee_snapshots = {k:FeeSnapshot(v,self.now[0]) for k,v in self.accounts.fees_by_market.items()}
         self.accounts.snapshot.side_effect = self.snapshot
         self.accounts.validate_startup.side_effect = self.snapshot
         self.accounts.fees.side_effect = lambda instruments: {i.market.key:'.0002' for i in instruments}
@@ -82,6 +83,7 @@ class Round3Tests(unittest.TestCase):
         self.engine.limits.initialize(self.snapshot())
         self.engine.risk = 'RUN'
         self.engine.last_reconcile = self.now[0]
+        self.store.set_meta('daily_upnl', dict(day=day(self.now[0]), upnl='0', positions={}))
         # Cleanup remains usable on the original implementation during the red run.
         self.addCleanup(lambda: getattr(self.engine, 'close', lambda:None)())
 
@@ -439,7 +441,7 @@ class Round3Tests(unittest.TestCase):
 
     def test_r10_fresh_contract_fees_survive_other_contract_refresh_delay(self):
         orders = self.open_intents()
-        self.accounts.fee_times_by_market = {k:self.now[0] for k in self.accounts.fees_by_market}
+        self.accounts.fee_snapshots = {k:FeeSnapshot(v,self.now[0]) for k,v in self.accounts.fees_by_market.items()}
         self.store.set_meta('actual_fees', {'at':self.now[0]-3601, 'rates':self.accounts.fees_by_market})
         results = self.engine.executor.execute_pair(orders)
         self.assertEqual([r['state'] for r in results], ['TERMINAL', 'TERMINAL'])
@@ -448,7 +450,7 @@ class Round3Tests(unittest.TestCase):
         self.engine.bases = ()
         self.engine.refresh_reference()
         self.accounts.fees.assert_not_called()
-        self.assertEqual(self.accounts.fees_by_market, {})
+        self.assertEqual(self.accounts.fee_snapshots, {})
 
     def test_r11_first_executor_stop_and_new_reason_reach_journal_once(self):
         pair = self.pair(unknown=True)

@@ -68,6 +68,7 @@ class FakeVenue:
         self.never_terminal = False
         self.reject_reduce = False
         self.barrier = None
+        self.on_fill = None
         owner = self
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *args):
@@ -115,6 +116,8 @@ class FakeVenue:
                         return self.reply(400, {'label':'TRADE_INVALID_ORDER_QTY','code':'40017'})
                     fill = min(dec(owner.fill),dec(data.get('qty',data.get('size'))))
                     owner.orders[cid] = dict(id=str(len(owner.orders)+1), polls=0, data=data, fill=str(fill))
+                    if owner.on_fill:
+                        owner.on_fill(data,fill,reduce)
                     if owner.barrier and not reduce:
                         owner.barrier.wait(timeout=2)
                     if owner.timeout_once:
@@ -144,10 +147,12 @@ class FakeVenue:
                 terminal = order['polls'] > 1 and not owner.never_terminal
                 if owner.venue == 'gate':
                     result = dict(order_id=order['id'], text=cid, symbol=order['data']['symbol'],
-                                  state='CANCELLED' if terminal else 'OPEN', executed_qty=order['fill'] if terminal else '0')
+                                  state='CANCELLED' if terminal else 'OPEN', executed_qty=order['fill'] if terminal else '0',
+                                  executed_avg_price='100' if terminal else '0')
                 else:
                     result = dict(orderId=order['id'], clientOid=cid, symbol='BTCUSDT',
-                                  category='USDT-FUTURES', orderStatus='cancelled' if terminal else 'new', cumExecQty=order['fill'] if terminal else '0')
+                                  category='USDT-FUTURES', orderStatus='cancelled' if terminal else 'new', cumExecQty=order['fill'] if terminal else '0',
+                                  avgPrice='100' if terminal else '0')
                 self.reply(200, result)
 
             def reply(self, status, data):

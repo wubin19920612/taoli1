@@ -5,8 +5,8 @@ import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-from tools.fill_sim.core import Book, Market, Spec, dec
-from tools.crossex_exec.accounts import Accounts, gate_margin, bitget_margin, local_positions, remote_positions
+from tools.fill_sim.core import Book, Market, Spec, dec, day
+from tools.crossex_exec.accounts import Accounts, FeeSnapshot, gate_margin, bitget_margin, local_positions, remote_positions
 from tools.crossex_exec.engine import Engine
 from tools.crossex_exec.market import parse_history, native_instrument, turnover
 from tools.crossex_exec.policy import mapped_instrument
@@ -41,6 +41,7 @@ class FakeAccounts:
     def __init__(self,cross,bitget,market):
         self.cross,self.bitget=cross,bitget
         self.fees_by_market={k:'.0002' for k in market.mapping}
+        self.fee_snapshots={k:FeeSnapshot(v,time.time()) for k,v in self.fees_by_market.items()}
         self.data=dict(positions={},margins=['4','4'],upnl='0', equity_by_venue={'crossex':'1000','bitget':'30000'}, notionals={}, liabilities=[])
 
     def validate_startup(self):
@@ -67,10 +68,24 @@ class EngineTests(unittest.TestCase):
         fixtures.HTTPExecutionTests.setUp(self)
         self.market=FakeMarket()
         self.accounts=FakeAccounts(self.cross,self.bitget,self.market)
+        def apply_fill(venue, order, quantity, reduce):
+            side=(order.get('position_side') or order.get('posSide') or 'none').lower()
+            if side=='none':
+                side='long' if (order['side'].lower()=='buy') != reduce else 'short'
+            key='|'.join((venue,order['symbol'],side))
+            positions=self.accounts.data['positions']
+            remaining=positions.get(key,dec(0))+quantity*(-1 if reduce else 1)
+            if remaining:
+                positions[key]=remaining
+            else:
+                positions.pop(key,None)
+        self.gate.on_fill=lambda o,q,r:apply_fill('crossex',o,q,r)
+        self.bg.on_fill=lambda o,q,r:apply_fill('bitget',o,q,r)
         self.engine=Engine(self.store,self.market,self.accounts,live=True,stop_file=Path(self.tmp.name)/'STOP')
         self.engine.executor=self.exec
         self.exec.can_open=self.engine.can_open
         self.exec.check_order=self.engine.check_order
+        self.exec.check_pair=self.engine.check_pair
         self.exec.alert=self.engine.alert
         self.engine.limits.initialize(self.accounts.snapshot())
         self.engine.account_cache.publish(self.accounts.snapshot())
@@ -78,6 +93,7 @@ class EngineTests(unittest.TestCase):
         self.engine.last_reconcile=time.time()
         self.store.set_meta('mapping',{'at':time.time()})
         self.store.set_meta('actual_fees',{'at':time.time()})
+        self.store.set_meta('daily_upnl',dict(day=day(time.time()),upnl='0',positions={}))
 
     def tearDown(self):
         self.engine.close()
@@ -164,11 +180,11 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(repair['side'],'SELL')
         self.assertEqual(self.store.meta('single_failures'),1)
 
-    def test_repair_failure_three_tries_stops_opening(self):
+    def test_repair_zero_fill_stops_after_first_attempt(self):
         self.bg.fill='0.4'
         self.gate.reject_reduce=True
         p=self.engine.ingest(trigger())
-        self.assertEqual(sum(c[0]=='POST' for c in self.gate.calls),4)
+        self.assertEqual(sum(c[0]=='POST' for c in self.gate.calls),2)
         self.assertEqual(self.store.meta('stop_reason'),'unhedged_position')
         self.assertFalse(self.engine.can_open())
         self.assertNotEqual(*map(dec,p['remaining']))

@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 from tools.fill_sim.core import day, dec
 from tools.crossex_exec.accounts import Accounts
 from tools.crossex_exec.adapters import checked_status
+from tools.crossex_exec.transport import APIError
 from tools.crossex_exec.background import PeriodicWorker
 from tools.crossex_exec.engine import Engine
 from tools.crossex_exec.policy import send_review
@@ -43,6 +44,7 @@ class Round4Tests(unittest.TestCase):
         pair = self.pair(('.107', '.1'), steps=('.01', '.001'))
         self.venues[0].reject = True
         self.engine.balance(pair)
+        self.engine.balance(self.store.pairs()[0])  # Stopped repair must survive later ticks.
         self.assertEqual(len(self.placed()), 1)
         self.assertEqual(self.placed()[0][1], 0)
         self.assertEqual(list(map(dec, pair['remaining'])), [dec('.107'), dec('.1')])
@@ -74,6 +76,13 @@ class Round4Tests(unittest.TestCase):
             self.engine.balance(pair)
         self.assertEqual(len(self.placed()), 1)
         self.assertFalse(self.engine.can_open())
+
+    def test_r1_initial_repair_uses_current_remote_excess_leg(self):
+        pair = self.pair(('.107', '.1'), steps=('.01', '.001'))
+        self.venues[0].quantity = dec('.09')
+        self.engine.balance(pair)
+        self.assertEqual([(r[1], dec(r[2])) for r in self.placed()], [(1, dec('.01'))])
+        self.assertEqual(self.venues[0].quantity, self.venues[1].quantity)
 
     def test_r2_asymmetric_book_ages_reject_both_legs(self):
         orders = self.open_intents()
@@ -128,6 +137,23 @@ class Round4Tests(unittest.TestCase):
             result = self.engine.executor.execute_pair(orders)
         self.assertEqual([r['state'] for r in result], ['UNSENT', 'UNSENT'])
         self.assertFalse(self.placed())
+
+    def test_r2_send_failure_does_not_revoke_shared_admission(self):
+        orders = self.open_intents()
+        aborts = []
+        original = threading.Barrier.abort
+        def abort(gate):
+            aborts.append(True)
+            return original(gate)
+        def rejected(order, before_send):
+            before_send()
+            raise APIError('rejected')
+        with (patch.object(self.venues[0], 'place', side_effect=rejected),
+              patch.object(threading.Barrier, 'abort', abort)):
+            result = self.engine.executor.execute_pair(orders)
+        self.assertEqual(result[0]['state'], 'REJECTED')
+        self.assertEqual(result[1]['state'], 'TERMINAL')
+        self.assertFalse(aborts)
 
     def test_r3_old_rate_cannot_borrow_new_timestamp(self):
         i = instrument()
@@ -205,6 +231,40 @@ class Round4Tests(unittest.TestCase):
         second.reconcile()
         self.assertEqual(second.risk, 'STOP')
 
+    def test_r5_previous_day_cache_cannot_set_new_daily_baseline(self):
+        self.engine.reconcile()
+        self.data['upnl'] = '-20'
+        self.now[0] += 86400-1
+        self.engine.reconcile()
+        self.engine.workers = [Mock()]
+        old_baseline = self.store.meta('daily_upnl')
+        self.now[0] += 1
+        self.engine.reconcile()
+        self.assertEqual(self.store.meta('daily_upnl'), old_baseline)
+        self.assertFalse(self.engine.can_open())
+        self.data['upnl'] = '-25'
+        self.now[0] += 1
+        self.publish()
+        self.engine.reconcile()
+        self.assertEqual(self.engine.totals()[0], 0)
+        self.assertTrue(self.engine.can_open())
+
+    def test_r5_realizing_overnight_loss_does_not_count_it_twice(self):
+        pair = self.pair()
+        self.engine.reconcile()
+        self.data['upnl'] = '-20'
+        self.engine.reconcile()
+        self.now[0] += 86400
+        self.engine.reconcile()
+        original = self.venues[0].fills
+        with patch.object(self.venues[0], 'fills', side_effect=lambda o:dict(original(o), vwap='80')):
+            self.engine.close_pair(pair, 'test')
+        self.data['upnl'] = '0'
+        self.now[0] += 1
+        self.engine.reconcile()
+        self.assertEqual(self.engine.totals(), (dec('0'), dec('-20')))
+        self.assertEqual(self.engine.risk, 'RUN')
+
     def test_r6_pre_fill_or_equal_snapshot_never_flags_mismatch(self):
         self.pair()
         for order in self.store.all_orders():
@@ -241,6 +301,20 @@ class Round4Tests(unittest.TestCase):
         self.assertIsNone(self.store.meta('stop_reason'))
         self.assertTrue(self.engine.can_open())
         self.assertEqual(sum(e['kind'] == 'POSITION_MATCH_RECOVERED' for e in self.store.events()), 1)
+
+    def test_r6_partial_fill_observation_survives_unknown_confirmation(self):
+        self.pair(unknown=True)
+        order = next(o for o in self.store.all_orders() if o['state'] == 'UNKNOWN')
+        response = dict(oid=order['oid'], venue_state='PARTIALLY_FILLED', filled='.5', terminal=False, rejected=False)
+        with patch.object(self.venues[0], 'detail', side_effect=[response, ValueError('query unavailable')]):
+            self.engine.executor.confirm(order)
+        stored = self.store.order(order['cid'])
+        self.assertEqual(stored['state'], 'UNKNOWN')
+        self.assertEqual(stored.get('fill_observed_at'), self.now[0])
+        self.engine.workers = [Mock()]
+        self.engine.account_cache.publish(dict(self.snapshot(), positions={}), self.now[0]-.1)
+        self.engine.reconcile()
+        self.assertNotEqual(self.store.meta('stop_reason'), 'position_mismatch')
 
     def test_r6_mismatch_resets_recovery_streak_and_preserves_other_stop(self):
         self.engine.workers = [Mock()]
@@ -281,6 +355,18 @@ class Round4Tests(unittest.TestCase):
         self.assertEqual(self.sink.call_count, 2)
         self.assertEqual(sum(e['kind'] == 'ALERT' for e in self.store.events()), 2)
 
+    def test_r7_unhedged_event_and_alert_change_together(self):
+        pair = self.pair(('1', '.999'))
+        self.store.set_meta('state', 'HALTING')
+        for _ in range(5):
+            self.engine.unhedged(pair)
+        self.assertEqual(sum(e['kind'] == 'UNHEDGED' for e in self.store.events()), 1)
+        self.assertEqual(self.sink.call_count, 1)
+        pair['remaining'][1] = '.998'
+        self.engine.unhedged(pair)
+        self.assertEqual(sum(e['kind'] == 'UNHEDGED' for e in self.store.events()), 2)
+        self.assertEqual(self.sink.call_count, 2)
+
     def test_r8_outer_worker_exception_logged_throttled_and_sanitized(self):
         clock = [0.0]
         def callback():
@@ -300,6 +386,19 @@ class Round4Tests(unittest.TestCase):
             with self.assertLogs('tools.crossex_exec.background', level='ERROR') as repeated:
                 worker.run()
             self.assertEqual(len(repeated.output), 1)
+
+    def test_r8_distinct_worker_errors_reach_journal_once_each(self):
+        callback = Mock(side_effect=[ValueError('secret-a'), TypeError('secret-b'), ValueError('secret-c')])
+        with patch('tools.crossex_exec.background.threading.Thread.start'):
+            worker = PeriodicWorker(callback, 5, 'test-worker', on_error=self.engine.background_error)
+        worker.stopped = Mock()
+        worker.stopped.is_set.side_effect = [False, False, False, True]
+        with self.assertLogs('tools.crossex_exec.background', level='ERROR') as logs:
+            worker.run()
+        self.assertEqual(len(logs.output), 2)
+        events = [e for e in self.store.events() if e['kind'] == 'BACKGROUND_FAILED']
+        self.assertEqual(len(events), 2)
+        self.assertNotIn('secret-', str(events))
 
     def test_r8_halting_backoff_begins_after_slow_round_finishes(self):
         self.pair()
