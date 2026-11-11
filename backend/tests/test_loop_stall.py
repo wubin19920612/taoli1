@@ -108,11 +108,113 @@ async def test_market_index_reuses_version_and_invalidates_setters_and_publicati
     assert len(new._market_index()) == 1
 
 
+async def test_exact_leg_cache_keeps_dex_identity_and_expires_with_index():
+    new, rows, opportunities = await prepared(MarketValidationService, workload(2))
+    item = opportunities[1].model_copy(update={
+        "buy_exchange": "hyperliquid", "buy_raw_symbol": "xyz:TOKEN1", "buy_dex": "xyz",
+    })
+    assert new._opportunity_legs(item)[0] is rows[5]
+    assert new._opportunity_legs(item)[0] is rows[5]
+    with pytest.raises(ValueError, match="DEX"):
+        new._opportunity_legs(item.model_copy(update={"buy_dex": "io"}))
+    replacement = rows[5].model_copy(update={"bid": 99})
+    new.store.set_all_markets(rows[:5] + [replacement])
+    assert new._opportunity_legs(item)[0] is replacement
+    # An explicitly supplied index must never borrow rows from the cached snapshot.
+    with pytest.raises(ValueError, match="not available"):
+        new._opportunity_legs(item, {})
+
+
+async def test_prepared_invalid_dex_keeps_legacy_validation_error():
+    rows, bindings, _ = workload(2)
+    rows = [rows[5].model_copy(update={"dex": "io"}), rows[3]]
+    new = service(MarketValidationService, bindings)
+    annotated = await new.prepare(rows, RiskSettings())
+    assert annotated[0].identity_status == "conflict"
+    with pytest.raises(ValueError, match="DEX"):
+        new.validate(*annotated, annotated=True)
+    with pytest.raises(ValueError, match="DEX"):
+        new.validate(*annotated)
+
+
 def test_pair_fingerprint_optional_reuses_supplied_value(monkeypatch):
     rows, _, _ = workload(1)
     expected = pair_validation.quote_fingerprint(*rows[:2])
     assert pair_validation.validate_pair(*rows[:2], now=NOW, quote_fingerprint=expected).quote_fingerprint == expected
     assert pair_validation.validate_pair(*rows[:2], now=NOW).quote_fingerprint == expected
+    recompute = Mock(side_effect=AssertionError("fingerprint was recomputed"))
+    monkeypatch.setattr(pair_validation, "_quote_fingerprint", recompute)
+    assert pair_validation.validate_pair(*rows[:2], now=NOW, quote_fingerprint=expected).quote_fingerprint == expected
+    recompute.assert_not_called()
+
+
+async def test_validate_fingerprints_once_with_cached_review(monkeypatch):
+    new, rows, _ = await prepared(MarketValidationService, workload(2))
+    a, b = rows[3:5]
+    new.reviews[new.pair_key(a, b)] = new.validate(a, b)
+    fingerprint = Mock(wraps=pair_validation.quote_fingerprint)
+    monkeypatch.setattr(pair_validation, "quote_fingerprint", fingerprint)
+    monkeypatch.setattr(pair_validation, "_quote_fingerprint", fingerprint)
+    new.validate(a, b, annotated=True)
+    assert fingerprint.call_count == 1
+
+
+async def test_old_published_rows_after_next_prepare_fall_back(monkeypatch):
+    new, rows, opportunities = await prepared(MarketValidationService, workload(2))
+    # A new prepare can finish before the collector publishes its rows.
+    await new.prepare(workload(2)[0], RiskSettings())
+    annotate = Mock(wraps=new.annotate)
+    monkeypatch.setattr(new, "annotate", annotate)
+    new.validate(*rows[3:5], annotated=True)
+    assert annotate.call_count == 2
+
+
+async def test_filter_snapshot_change_during_yield_aborts():
+    new, _, opportunities = await prepared(MarketValidationService, workload(2))
+    budget = CountingBudget(lambda frame: new.store.mark_published(NOW))
+    with pytest.raises(ValueError, match="snapshot changed"):
+        await new.filter_opportunities_async(opportunities, RiskSettings(), budget)
+
+
+async def test_premium_scan_publication_change_does_not_cache_old_rows(monkeypatch):
+    from types import SimpleNamespace
+    new, rows, _ = await prepared(MarketValidationService, workload(2))
+    new.store.set_markets(rows)
+    app = SimpleNamespace(state=SimpleNamespace(snapshot_store=new.store))
+    monitor = premium.MultiExchangePremiumMonitor(app)
+    budget = CountingBudget(lambda frame: new.store.mark_published(NOW))
+    monkeypatch.setattr(premium, "YieldBudget", lambda: budget)
+    with pytest.raises(ValueError, match="changed"):
+        await monitor._current_eligibility_async(RiskSettings(), NOW)
+    assert monitor._scan_cache is None
+
+
+async def test_alert_loop_awaits_async_filter_and_records_recomputed(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from app import main
+    new, _, opportunities = await prepared(MarketValidationService, workload(2))
+    new.store.set_opportunities(opportunities)
+    stop = asyncio.Event()
+    engine = Mock()
+    engine.evaluate.side_effect = lambda *args, **kwargs: (stop.set() or [])
+    new.filter_opportunities_async = AsyncMock(wraps=new.filter_opportunities_async)
+    new.filter_opportunities = Mock(side_effect=AssertionError("sync alert path"))
+    app = SimpleNamespace(state=SimpleNamespace(
+        snapshot_store=new.store, market_validation=new,
+        alert_rule_repo=SimpleNamespace(list=AsyncMock(return_value=[])),
+        alert_event_repo=Mock(), alert_delivery_store=SimpleNamespace(prune=AsyncMock()),
+        alert_engine=engine,
+    ))
+    monkeypatch.setattr(main, "datetime", Clock)
+    monkeypatch.setattr(main, "_refresh_astro_runtime_settings", AsyncMock())
+    monkeypatch.setattr(main, "filter_opportunities", lambda items, risk: items)
+    timing = Mock()
+    monkeypatch.setattr(main, "_AlertFilterTiming", lambda: timing)
+    await asyncio.wait_for(main._run_alert_loop(app, 0.01, stop), timeout=2)
+    new.filter_opportunities_async.assert_awaited_once()
+    new.filter_opportunities.assert_not_called()
+    assert timing.record.call_args.args[1] == 2
 
 
 async def test_pack_async_exact_values_fields_and_mutable_isolation(large):
@@ -124,7 +226,8 @@ async def test_pack_async_exact_values_fields_and_mutable_isolation(large):
     assert actual == expected
     assert sum(budget.calls.values()) >= len(rows) // 200
     restored = actual.unpack()
-    assert dump(restored) == dump(rows)
+    with pytest.warns(UserWarning, match="Pydantic serializer warnings"):
+        assert dump(restored) == dump(rows)
     assert [r.model_fields_set for r in restored] == [r.model_fields_set for r in rows]
     rows[0].estimated_fields[0]["nested"].append("mutated")
     assert actual.unpack()[0].estimated_fields == [{"nested": ["bid"]}]
@@ -228,6 +331,35 @@ async def test_prepare_mapping_change_in_combination_aborts_before_invalidation(
     with pytest.raises(ValueError, match="changed"):
         await validator.prepare(rows, RiskSettings())
     validator.repository.invalidate_opportunities.assert_not_awaited()
+
+
+def test_prepare_business_tail_matches_baseline_after_exact_additions():
+    """Additional audit; the existing literal-source assertion remains untouched."""
+    from textwrap import dedent
+    marker = "        if self.collision_symbols:\n"
+    actual = inspect.getsource(MarketValidationService.prepare).split(marker, 1)[1]
+    expected = inspect.getsource(legacy.LegacyValidation.prepare).split(marker, 1)[1]
+    for width, count in ((16, 2), (20, 1)):
+        indent = " " * width
+        addition = (indent + "if cooperative:\n"
+                    + indent + "    await budget.maybe_yield()\n"
+                    + indent + "    if epoch != self._mutation_epoch:\n"
+                    + indent + '        raise ValueError("mapping changed during preparation")\n')
+        assert actual.count(addition) == count
+        actual = actual.replace(addition, "")
+    additions = [
+        '        if epoch != self._mutation_epoch:\n'
+        '            raise ValueError("mapping changed during preparation")\n',
+        '        self._prepared_epoch = epoch\n'
+        '        self._prepared_rows = {\n'
+        '            id(row): (row, key) for row, key in zip(annotated, market_keys, strict=True)\n'
+        '        }\n'
+        '        self._prepared_fx = prepared_fx\n',
+    ]
+    for addition in additions:
+        assert actual.count(addition) == 1
+        actual = actual.replace(addition, "")
+    assert dedent(actual) == dedent(expected)
 
 
 @pytest.mark.parametrize("mode", ["shadow", "enforce"])

@@ -1,13 +1,13 @@
 """Frozen 00dfa9e loop-stall oracle. Never substitute optimized implementations."""
 import asyncio
 from copy import copy
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from itertools import combinations
 from app.models.market_identity import MarketKey
 from app.models.settings import RiskSettings
 from app.runtime.cooperative import YieldBudget
 from app.services.market_validation_review import MarketValidationService
-from app.services.collector import MarketCollector, CollectionResult
+from app.services.collector import MarketCollector, CollectionResult, AdapterPollResult
 from app.services.data_filters import filter_markets_async, filter_opportunities, ignored_exchange_set
 from app.services.risk_labels import risk_labels_for
 from app.services.symbol_aliases import apply_symbol_aliases_async
@@ -455,6 +455,41 @@ class LegacyValidation(MarketValidationService):
             return result
 
 class LegacyCollector(MarketCollector):
+    async def _store_adapter_result(
+        self,
+        exchange_name: str,
+        result: AdapterPollResult,
+        now: datetime,
+    ) -> None:
+        state = self._state_for(exchange_name)
+        state.in_flight = False
+        if result.errors:
+            if result.markets and not result.should_cool_down:
+                self._exchange_snapshots[exchange_name] = pack(result.markets)
+            self._exchange_errors[exchange_name] = result.errors
+            state.last_error_at = now
+            state.consecutive_failures += 1
+            if result.should_cool_down:
+                cooldown_seconds = result.cooldown_seconds or self._cooldown_seconds(
+                    state.consecutive_failures
+                )
+                state.status = "cooling_down"
+                state.cooldown_until = now + timedelta(seconds=cooldown_seconds)
+                state.next_due_at = state.cooldown_until
+            else:
+                state.status = "degraded"
+                state.cooldown_until = None
+                state.next_due_at = now + timedelta(seconds=self.poll_interval_seconds)
+            return
+
+        self._exchange_snapshots[exchange_name] = pack(result.markets)
+        self._exchange_errors.pop(exchange_name, None)
+        state.status = "healthy"
+        state.last_success_at = now
+        state.consecutive_failures = 0
+        state.cooldown_until = None
+        state.next_due_at = now + timedelta(seconds=self.poll_interval_seconds)
+
     async def _collect_once(self, sample: dict[str, float]) -> CollectionResult:
             if self.risk_settings_loader is not None:
                 try:
@@ -562,3 +597,63 @@ class LegacyCollector(MarketCollector):
                 opportunities=filtered_opportunities,
                 exchange_errors=errors,
             )
+
+
+# Frozen synchronous CPU loops from the same baseline (support types are unchanged).
+from collections import defaultdict
+from collections.abc import Sequence
+from app.models.market import MarketSnapshot, MarketType
+from app.models.premium_index import SUPPORTED_PREMIUM_INDEX_EXCHANGES
+from app.services.data_filters import filter_markets
+from app.services.multi_exchange_premium import _EligibilityScan
+from app.services.compact_markets import CompactMarkets, _FIELDS, _FIELD_BITS, _CONTAINERS, _copy_mutable
+
+
+def pack(markets: Sequence[MarketSnapshot]) -> CompactMarkets:
+    rows = []
+    mutable_fields = set()
+    for market in markets:
+        values = []
+        for name in _FIELDS:
+            value = getattr(market, name)
+            if isinstance(value, _CONTAINERS):
+                mutable_fields.add(name)
+                value = _copy_mutable(value)
+            values.append(value)
+        bitmap = sum(bit for name, bit in _FIELD_BITS if name in market.model_fields_set)
+        rows.append((*values, bitmap))
+    return CompactMarkets(
+        rows=tuple(rows),
+        mutable_fields=tuple(name for name in _FIELDS if name in mutable_fields),
+    )
+
+
+def _scan_eligibility(markets: list[MarketSnapshot], settings: RiskSettings):
+    groups = defaultdict(list)
+    by_market = {}
+    has_duplicates = False
+    for position, market in enumerate(filter_markets(markets, settings)):
+        if (
+            market.market_type != MarketType.FUTURE
+            or market.exchange not in SUPPORTED_PREMIUM_INDEX_EXCHANGES
+            or market.identity_status != "verified"
+            or market.unit_status != "verified"
+            or not market.asset_id
+            or not market.binding_valid_until
+        ):
+            continue
+        try:
+            key = MarketKey.from_snapshot(market).key
+        except ValueError:
+            continue
+        # Valuation contracts with different tracking definitions are distinct instruments.
+        group = (
+            market.asset_id,
+            market.asset_kind or "",
+            market.contract_kind,
+            market.tracking_definition if market.contract_kind == "valuation" else "",
+        )
+        groups[group].append((position, key, market))
+        has_duplicates |= key in by_market
+        by_market[key] = (group, market)
+    return _EligibilityScan(dict(groups), by_market, has_duplicates)
