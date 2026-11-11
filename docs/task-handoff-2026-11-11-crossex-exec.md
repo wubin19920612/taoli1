@@ -631,3 +631,124 @@ Windows / Python 3.12.10；26 个 Python 文件通过 `ast.parse(feature_version
 没有 push、生产备份、部署和线上验证，线上版本未变。未验证 Linux/systemd/80M 内存、真实账户时序或撮合。`remaining` 为流水字段，成交回报落后于实仓减仓时可以暂时为负并标记待记账；不得拿它冒充远端实仓。人工复核 HALTED 时不得只删除 `stop_reason` 或整个数据库绕过独立锁。
 
 下一步仍在本模块：收到用户对第 1 条的明确口径后，先补相应测试，再按 test/feat/docs 新提交收尾，重新跑 crossex-exec 完整套件并更新本节。当前不要转入新模块或把第五轮标为完成；完成后再为下一个模块新建任务。
+
+## 第五轮 PM 决定补充验收（2026-11-11）
+
+**本次本地验收完成：1a/1b/1c/1d 与 2–7 全部严格通过，三个种子各 2448 回合，两条完整 unittest 均通过。** 本节接续前面的历史记录，取代其中“口径待决、整体验收未通过”的当前状态；保留原失败证据，不修改旧结论发生时的记录。
+
+### 范围、基线与提交
+
+- 先读取 `docs/crossex-exec-round5-2026-11-11.md` 末尾 PM 决定和本交接第五轮部分。本次只处理 crossex-exec 第五轮不变量及其暴露的恢复问题。
+- worktree：`C:\Users\wubin\Desktop\code\codex\taoli1\.worktrees\crossex-exec`；分支：`codex/crossex-exec`；基线：`9036b1856105d0d51254626c54df98bf03a46da1`；开始时工作区干净。
+- 不变量 1 的拆分是 **PM 明确决定，不是放宽断言**。新定义先独立 test 提交；实现修复随后独立 feat；本节与 README 独立 docs。不改写旧提交，没有 amend。
+- 全程本地操作，未联网、push、SSH、WSL、读取真实凭据、运行服务 `run`、备份生产或部署。只使用内存交易所、假数据库及已有 loopback HTTP 测试；外网 socket/DNS 守护仍在。
+
+| 类型 | 完整提交 hash | 内容 |
+|---|---|---|
+| test | `2bba9e5a323272854a417cd5a55f5636c0a56305` | PM 四条独立断言、三个种子及首批 7 项定向复现 |
+| test | `9324caa869fb4dd12928a233e2da5241ea68ee73` | 保留原随机回合并追加故障可达性覆盖；补齐平仓后读取失败、慢请求及单腿最小额边界，共 10 项定向测试 |
+| test | `f45479ad741e59a2ba016eec3c5178733a09d6f3` | 从实际双腿发单建立恢复义务，避免 `exit_reason` 漏写或错误 CLOSED 状态隐藏失败 |
+| feat | `636534abaa1934d8d8aa2c83fab5c6fc086ac2e9` | 单腿安全检查、裸露门禁、持续恢复、持久化退避、发送后持仓未知标记 |
+| docs | 随本节及 README 单独提交 | 原始结果、计数、规则、边界及下一步；不硬编码自身 hash |
+
+本节 docs hash：`git log -1 --format=%H -- docs/task-handoff-2026-11-11-crossex-exec.md`。本地 Git 索引位于父仓库，通过已授权范围的自动审批写入；仅暂存本任务文件，提交禁用 hooks 和 GPG 签名。
+
+### 不变量的严格口径
+
+| 不变量 | 实际断言 |
+|---|---|
+| 1a | 对每笔实际单腿 reduce-only 发单，检查 `abs(after[0]-after[1]) <= abs(before[0]-before[1])`。包括退出过程中的单腿单，不以 `exit_reason` 豁免。 |
+| 1b | 仅把同一实际批次包含两条不同腿且均为 reduce-only 的发单视为双腿平仓。逐笔中间成交与整批数量均受原批次实仓约束：净裸露绝对值不超过平仓前较大单腿数量 `max(before)`，每条腿均满足 `0 <= after <= before`；等仓时上界就是原单腿数量。 |
+| 1c | 双腿平仓残余裸露后，N=1 内实际进入查询/撤单/两腿持仓读取/补平恢复。读取可能失败，但不能只写一条 RECOVERY_ATTEMPT 事件冒充执行。残余量大于一个步长时，检查该 pair 的 `unhedged_position` 锁及 ALERT；未清零的恢复义务有持久化且不超过 60 秒的重试期限，到期必须实际尝试读取和恢复。 |
+| 1d | 每个新开仓批次的共享放行时实仓必须等量；发送行必须关联该放行记录。每个回合结束只要还有任何差额，`can_open()` 必须为 false。未靠“已有锁”间接推断，而有专项测试验证缺锁、旧平衡快照下仍拒绝新开仓。 |
+| 2–7 | 保留停开锁、禁止穿零、150/600 硬上限、影子零发单/撤单、N=1 恢复、HALTING 清零或继续有限退避的原有断言。 |
+
+1d 沿用第四、五轮已有的双腿共享放行：同批的两个开仓腿在任何一腿发送前共同获准，随后完成该批对冲发送；同批第二腿不是再次申请的新仓。检查新批次放行前的实仓，并检查每回合结束的门禁，不在第一腿成交后取消已经共同放行的对冲腿。
+
+**N=1 是协调器步数，不是秒数或保证成交的期限。** 首次发现临时裸露即进入恢复；失败后在每次 tick 处理恢复义务，新的减仓遵守持久化的 2/4/8/16/32/60 秒退避，60 秒封顶后持续重试。退避从本轮完成时刻开始，慢请求、异常和重启均不能把期限重置为立即发送。非终态订单的查询/撤销/确认不因减仓退避停止。
+
+模拟器的两个合约步长都是 `.001`；通用阈值取两腿步长的较小值。1a/1b 没有浮点容差或步长豁免。锁的解除仍要求实仓等量、流水一致、无待写/非终态/待记账状态且补平结束；小于等于一步也不会自动假报完全平仓。
+
+### 修复入口与定向测试
+
+实现仅改 `tools/crossex_exec/engine.py`。新定向测试位于 `tests/test_pm_invariants.py::PMInvariantTests`，以下行号对应 feat 提交。
+
+| 位置与修复 | 测试名 |
+|---|---|
+| `can_open:164`：直接检查本地流水、远端数量差和 `remote_pending`，缺少停开锁也拒绝新开仓批次。 | `test_i1d_remote_exposure_blocks_admission_without_a_stop_lock`；`test_i1d_local_exposure_blocks_admission_with_old_balanced_remote` |
+| `_close_pair:714`：第一批双腿平仓后重读实仓，残余差额优先逐单补平；双腿计划只剩一笔合法订单时仍检查该笔不得增裸露。 | `test_i1a_one_untradable_close_leg_cannot_turn_pair_into_unsafe_single`；`test_i1a_single_close_cannot_hide_behind_exit_reason`；`test_i1b_checks_intermediate_fill_and_original_batch_bound` |
+| `needs_recovery:532`、`recover_pair:538`、`balance:626`：退出未完成、实仓未知或补平停止均继续恢复；`repair_stopped` 停止当前补平轮次，之后按退避退出剩余仓位。 | `test_i1c_stopped_entry_repair_eventually_retries_remaining_positions` |
+| `close_pair:686`、`unhedged:597`：残余裸露加 pair 独立锁并告警，保存 `next_close/close_attempts`，持续退避；重启保留期限。 | `test_i1c_incomplete_close_locks_alerts_and_retries_to_flat`；`test_i1c_close_retry_survives_restart_and_backs_off_from_completion`；`test_i1c_retry_deadline_starts_after_slow_snapshot_failure` |
+| `refresh_pair:456`、`save_remote:514`、`clear_repair_locks:521`、`_close_pair`：发单前保存 `remote_pending`，新实仓快照成功才清除；失败时不得以旧平衡数量清锁或报 CLOSED，告警数量/剩余量/超额腿为 null。 | `test_i1c_post_close_snapshot_failure_latches_uncertain_exposure` |
+| `close_pair` 的退避入口：继续确认迟到成交，退避仅约束新的减仓。 | 原有 `test_round3.Round3Tests.test_r1_late_entry_fill_after_remote_flat_never_reopens_or_double_closes`，断言未修改 |
+
+定向测试先观察到 `Ran 7 tests in 0.143s / FAILED (failures=5)`。三个种子在旧实现上的首个失败分别为 20261111 第 77 回合、20261112 第 28 回合缺少 unhedged 锁，以及 20261113 第 46 回合缺少持久化重试期限。后补的发送后持仓失败测试也先失败，再修复。没有 skip、xfail、捕获断言后当作通过或删除既有回归。
+
+### 模拟器回合、计数与原始输出
+
+入口为 `tests/test_invariants.py::InvariantSimulationTests.test_fault_invariants_seed_<seed>_2448_rounds`。三个种子固定为 **20261111、20261112、20261113**，每个 **2448 回合**，合计 **7344 回合**。每个种子保留原来的 2400 回合随机生成方式和顺序，再追加两个 24 步 live 假交易所序列；每种子共 600 步 shadow、1848 步 live 假交易所。
+
+追加 48 回合的原因：初次长跑中，新种子 20261112 的查单故障只调度到了无待查单场景，20261113 没有实际发生 HALTING 失败重试，非空覆盖断言正确失败。保留这些断言及全部随机回合，追加“UNKNOWN 后查单失败”和“HALTING 单腿零成交后持续恢复”序列，使故障真正到达相关路径；没有更换失败种子，也没有用定向回合替换原 2400 回合。
+
+仍覆盖部分/零成交、超时后 ACK/UNKNOWN、查单与持仓读取失败、一次数据库写失败、从已提交副本恢复、UTC 午夜、过期盘口/消失价差、逆向价格/熔断，并额外覆盖账户失败。随机注入计划和数量可复现；查询重试次数受真实线程调度和确认时间预算影响。失败输出种子和完整步骤序列。
+
+`checks` 是每回合对完整不变量组的检查次数，含该回合没有对应发单/故障时的条件检查：
+
+| 种子 | 1a | 1b | 1c | 1d | 2 | 3 | 4 | 5 | 6 | 7 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 20261111 | 2448 | 2448 | 2448 | 2448 | 2448 | 2448 | 2448 | 2448 | 2448 | 2448 |
+| 20261112 | 2448 | 2448 | 2448 | 2448 | 2448 | 2448 | 2448 | 2448 | 2448 | 2448 |
+| 20261113 | 2448 | 2448 | 2448 | 2448 | 2448 | 2448 | 2448 | 2448 | 2448 | 2448 |
+
+`exercised` 另外统计条件实际成立时的检查次数，并逐种子断言每项都大于零。一次回合可包含多次发单/恢复检查，这不是独立交易数：
+
+| 种子 | 1a | 1b | 1c | 1d | 2 | 3 | 4 | 5 | 6 | 7 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 20261111 | 148 | 242 | 58 | 360 | 328 | 390 | 328 | 600 | 96 | 408 |
+| 20261112 | 145 | 242 | 37 | 350 | 316 | 387 | 316 | 600 | 87 | 410 |
+| 20261113 | 114 | 216 | 42 | 328 | 304 | 330 | 304 | 600 | 86 | 447 |
+
+以下复制最终模拟器输出（仅去掉 unittest 同行测试名前缀）：
+
+```text
+INVARIANTS seed=20261111 rounds=2448 random_rounds=2400 N=1 checks={'1a': 2448, '1b': 2448, '1c': 2448, '1d': 2448, '2': 2448, '3': 2448, '4': 2448, '5': 2448, '6': 2448, '7': 2448} exercised={'1a': 148, '1b': 242, '1c': 58, '1d': 360, '2': 328, '3': 390, '4': 328, '5': 600, '6': 96, '7': 408} coverage={'account_failures': 151, 'db_failures': 89, 'full_fill': 526, 'halted': 406, 'halting_retry': 2, 'intent_write_abort': 88, 'open': 328, 'partial_fill': 119, 'position_failures': 139, 'position_read': 3668, 'query': 17400, 'query_failures': 4052, 'recovery_obligation': 96, 'reduce': 390, 'restarts': 142, 'scheduled_account': 149, 'scheduled_adverse': 133, 'scheduled_database': 140, 'scheduled_detail': 148, 'scheduled_equity': 142, 'scheduled_midnight': 121, 'scheduled_none': 458, 'scheduled_partial': 164, 'scheduled_positions': 136, 'scheduled_restart': 142, 'scheduled_spread': 129, 'scheduled_stale': 150, 'scheduled_timeout_ack': 146, 'scheduled_timeout_unknown': 146, 'scheduled_zero': 144, 'timeout_ack': 82, 'timeout_unknown': 99, 'zero_fill': 73}
+INVARIANTS seed=20261112 rounds=2448 random_rounds=2400 N=1 checks={'1a': 2448, '1b': 2448, '1c': 2448, '1d': 2448, '2': 2448, '3': 2448, '4': 2448, '5': 2448, '6': 2448, '7': 2448} exercised={'1a': 145, '1b': 242, '1c': 37, '1d': 350, '2': 316, '3': 387, '4': 316, '5': 600, '6': 87, '7': 410} coverage={'account_failures': 116, 'db_failures': 84, 'full_fill': 499, 'halted': 406, 'halting_retry': 4, 'intent_write_abort': 81, 'open': 316, 'partial_fill': 144, 'position_failures': 141, 'position_read': 3706, 'query': 11978, 'query_failures': 655, 'recovery_obligation': 87, 'reduce': 387, 'restarts': 142, 'scheduled_account': 116, 'scheduled_adverse': 135, 'scheduled_database': 149, 'scheduled_detail': 128, 'scheduled_equity': 138, 'scheduled_midnight': 134, 'scheduled_none': 458, 'scheduled_partial': 159, 'scheduled_positions': 138, 'scheduled_restart': 142, 'scheduled_spread': 184, 'scheduled_stale': 145, 'scheduled_timeout_ack': 139, 'scheduled_timeout_unknown': 149, 'scheduled_zero': 134, 'timeout_ack': 76, 'timeout_unknown': 83, 'zero_fill': 60}
+INVARIANTS seed=20261113 rounds=2448 random_rounds=2400 N=1 checks={'1a': 2448, '1b': 2448, '1c': 2448, '1d': 2448, '2': 2448, '3': 2448, '4': 2448, '5': 2448, '6': 2448, '7': 2448} exercised={'1a': 114, '1b': 216, '1c': 42, '1d': 328, '2': 304, '3': 330, '4': 304, '5': 600, '6': 86, '7': 447} coverage={'account_failures': 134, 'db_failures': 94, 'full_fill': 480, 'halted': 446, 'halting_retry': 1, 'intent_write_abort': 91, 'open': 304, 'partial_fill': 94, 'position_failures': 141, 'position_read': 3559, 'query': 16709, 'query_failures': 1576, 'recovery_obligation': 86, 'reduce': 330, 'restarts': 114, 'scheduled_account': 134, 'scheduled_adverse': 151, 'scheduled_database': 156, 'scheduled_detail': 134, 'scheduled_equity': 144, 'scheduled_midnight': 142, 'scheduled_none': 458, 'scheduled_partial': 152, 'scheduled_positions': 141, 'scheduled_restart': 114, 'scheduled_spread': 153, 'scheduled_stale': 145, 'scheduled_timeout_ack': 157, 'scheduled_timeout_unknown': 134, 'scheduled_zero': 133, 'timeout_ack': 78, 'timeout_unknown': 113, 'zero_fill': 60}
+```
+
+### 两条 unittest 的原始汇总
+
+最终执行器命令是在实现和测试停止修改后执行；之后仅提交已测试的实现以及更新文档。fill-sim 未发生代码或测试修改，保留下列本轮实际运行结果，不为调整耗时而重复执行。
+
+```text
+python -m unittest discover -s tools/crossex_exec/tests -v
+----------------------------------------------------------------------
+Ran 195 tests in 95.251s
+
+OK
+
+python -m unittest discover -s tools/fill_sim/tests -v
+----------------------------------------------------------------------
+Ran 158 tests in 29.670s
+
+OK
+```
+
+195 项包括三个种子的完整模拟器、10 项新 PM 定向测试及全部原有 API/执行器回归。Windows / Python 3.12.10 / SQLite 3.49.1；27 个执行器 Python 文件通过 `ast.parse(feature_version=(3,10))`，CLI `--help`、`git diff --check` 通过。未引入依赖安装或网络查询。
+
+完整原始日志保留在本地被 Git 忽略的 output 目录：
+
+| 文件 | SHA-256 |
+|---|---|
+| `output/crossex-pm-final-unittest.log` | `03bb87bdec7aa29a7f28b71f539adaf00a87483aa608ac90644dea01d3d60353` |
+| `output/crossex-pm-fill-sim.log` | `2a4f86816b915aa378d429fe5873364cd85c05413bc6ac7babc01fa94f747609` |
+
+诊断日志 `output/crossex-pm-red.log`、`output/crossex-invariants-red.log`、`output/crossex-pm-edge-red.log`、`output/crossex-pm-full-check.log` 等同样保留，不入库。
+
+### 线上状态、文件与下一步
+
+本次只修改 `engine.py`、`tests/test_invariants.py`、新增 `tests/test_pm_invariants.py`，并更新 README 和本交接。只读 API、整个 fill-sim、backend、frontend、compose、部署配置与 PM 决定原文均未改。没有其他任务的修改或未跟踪文件被暂存；测试日志和 Python 缓存保留在忽略范围内。
+
+未 push、生产备份、部署或线上验证，线上版本未变。实盘撮合、Linux/systemd/80M 内存、真实账户时序仍未验收。远端持续不可用、流动性不足或最小下单量导致无法消除尾差时，仍可能有持仓：保留锁、告警和持续重试，不承诺 N=1 内成交。
+
+第五轮 PM 补充的本地验收已收尾。下一个模块请新建任务，从本节与 PM 决定开始；联网、账户验证、Linux 验收或上线仍需后续任务明确授权。
