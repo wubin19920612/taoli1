@@ -56,13 +56,33 @@ def limit_price(deepest, side, tick, bps=3):
     return format(price,'f')
 
 
-def review(instruments, books, fees, funding, turnovers, now):
+def funding_cost_bps(funding):
+    if len(funding)!=2:
+        raise ValueError('funding_unknown_or_near')
+    hourly=[]
+    for row in funding:
+        if not row or row.get('rate') is None or row.get('interval') is None:
+            raise ValueError('funding_unknown_or_near')
+        rate,interval=dec(row['rate']),dec(row['interval'])
+        if interval<=0:
+            raise ValueError('funding_unknown_or_near')
+        hourly.append(rate*3600/interval)
+    # Positive funding: long pays, short receives. Clamp AFTER combining legs;
+    # expected income never rescues an otherwise insufficient excess spread.
+    return max(dec(0),hourly[0]-hourly[1])*2*10000
+
+
+def review(instruments, books, fees, funding, turnovers, now, *, baseline_bps=None):
     if len(instruments)!=2 or len(books)!=2 or len(funding)!=2 or len(fees)!=2:
         raise ValueError('two_legs_required')
     if instruments[0].spec.base!=instruments[1].spec.base or instruments[0].market.exchange==instruments[1].market.exchange:
         raise ValueError('identity_mismatch')
     if any(dec(v)<5000000 for v in turnovers) or len(turnovers)!=2:
         raise ValueError('turnover_below_minimum')
+    if baseline_bps is None:
+        raise ValueError('baseline_warming')
+    baseline=dec(baseline_bps)
+    funding_cost=funding_cost_bps(funding)
     for i,b,f,s in zip(instruments,books,fees,funding):
         i.spec.validate(i.market)
         if i.market.market_type!='future' or f is None or not 0<=dec(f)<dec('.02'):
@@ -70,16 +90,13 @@ def review(instruments, books, fees, funding, turnovers, now):
         if not 0<=now-b.received_at<=3 or (b.exchange_at is not None and not -5<=now-b.exchange_at<=3):
             raise ValueError('stale_book')
         if (not s or not s.get('history_ok') or not 0<=now-s['captured_at']<=300
-                or s['next']-now<1800 or s['interval']<=0):
+                or s['next']-now<1800):
             raise ValueError('funding_unknown_or_near')
         if max(abs(dec(s['rate'])),dec(s['max_abs_24h']))>dec('.005'):
             raise ValueError('funding_blacklist')
-    # Count one settlement per leg, explicitly retaining unequal cycle lengths.
-    # Do not use expected income to rescue a failing spread.
-    funding_cost=max(dec(0),dec(funding[0]['rate'])-dec(funding[1]['rate']))*10000
     # Minimums apply to the final rounded LIMIT, not the preliminary VWAP.
     specs=[replace(i.spec,min_qty='0',min_notional='0') for i in instruments]
-    result=opening(*books,*specs,100,*fees,threshold=15+funding_cost)
+    result=opening(*books,*specs,100,*fees,threshold=15+baseline+funding_cost)
     if result['status']!='opened':
         raise ValueError('review_rejected')
     quantity=dec(result['quantity'])
@@ -96,11 +113,12 @@ def review(instruments, books, fees, funding, turnovers, now):
             raise ValueError('final_size_below_min')
         quantity+=step
     gross=(dec(fills[1]['vwap'])/dec(fills[0]['vwap'])-1)*10000
-    net=gross-2*sum(map(dec,fees))*10000-funding_cost
+    excess=gross-baseline
+    net=excess-2*sum(map(dec,fees))*10000-funding_cost
     if net<15:
         raise ValueError('review_rejected')
     result.update(quantity=str(quantity),buy=fills[0],sell=fills[1],gross_bps=float(gross),net_bps=float(net),
-                  funding_cost_bps=str(funding_cost),limits=prices)
+                  baseline_bps=str(baseline),excess_bps=str(excess),funding_cost_bps=str(funding_cost),limits=prices)
     return result
 
 
@@ -120,13 +138,15 @@ def send_review(pair, orders, fees, now):
     funding=pair['funding']
     if any(not s.get('history_ok') or not 0<=now-s['captured_at']<=300 or s['next']-now<1800 for s in funding):
         raise ValueError('send_funding_stale')
-    cost=max(dec(0),dec(funding[0]['rate'])-dec(funding[1]['rate']))*10000
-    net=(dec(fills[1]['vwap'])/dec(fills[0]['vwap'])-1)*10000-2*sum(map(dec,fees))*10000-cost
+    cost=funding_cost_bps(funding)
+    net=((dec(fills[1]['vwap'])/dec(fills[0]['vwap'])-1)*10000-dec(pair['baseline_at_open'])
+         -2*sum(map(dec,fees))*10000-cost)
     if net<15 or dec(fills[0]['deepest'])>dec(orders[0]['price']) or dec(fills[1]['deepest'])<dec(orders[1]['price']):
         raise ValueError('send_spread_or_limit_changed')
 
 
-def exit_reason(*, age, spread, entry_spread, pnl, notional, next_funding, stale_age):
+def exit_reason(*, age, spread, entry_spread, pnl, notional, next_funding, stale_age,
+                baseline_at_open=None, excess_at_open=None):
     if stale_age>=60:
         return 'stale_exit'
     if age>=7200:
@@ -137,7 +157,9 @@ def exit_reason(*, age, spread, entry_spread, pnl, notional, next_funding, stale
         return 'loss_limit'
     if dec(spread)>=dec(entry_spread)+50:
         return 'adverse_spread'
-    if dec(spread)<=dec(entry_spread)/2:
+    target=(dec(baseline_at_open)+dec(excess_at_open)/2
+            if baseline_at_open is not None and excess_at_open is not None else dec(entry_spread)/2)
+    if dec(spread)<=target:
         return 'converged'
     return None
 

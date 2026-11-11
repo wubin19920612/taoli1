@@ -18,6 +18,7 @@ EXIT_REASONS = {
     'converged': 'converged', 'loss_limit': 'stop_loss', 'adverse_spread': 'stop_loss',
     'max_age': 'max_hold', 'funding_exit': 'pre_funding', 'funding_unknown': 'pre_funding',
     'stale_exit': 'stale', 'one_leg': 'one_leg', 'unhedged_position': 'one_leg',
+    'repair_failed': 'one_leg', 'unknown_order': 'one_leg',
     'circuit_breaker': 'halt', 'account_equity_drop': 'halt', 'startup_equity_drop': 'halt',
     'margin_ratio': 'halt', 'shutdown': 'halt',
     **{v: v for v in ('stop_loss', 'max_hold', 'pre_funding', 'stale', 'halt')},
@@ -178,6 +179,12 @@ def _spread(a, b):
     return (b/a-1)*10000 if a and b is not None else None
 
 
+def observations(pair):
+    return dict(baseline_bps=number(pair.get('baseline_at_open')),
+                excess_bps=number(pair.get('excess_at_open')),
+                funding_cost_bps=number(pair.get('fill', {}).get('funding_cost_bps')))
+
+
 def position(pair, orders, now):
     legs, prices, quantities = [], [], pair.get('remaining', [None, None])
     for n, instrument in enumerate(_instruments(pair)):
@@ -213,7 +220,7 @@ def position(pair, orders, now):
                 current_spread_bps=spread, unrealized_usd=pnl, unrealized_bps=pnl_bps,
                 next_funding_at=utc(next_funding),
                 stop_distance_bps=entry+50-spread if entry is not None and spread is not None else None,
-                max_hold_at=utc(opened+7200) if opened is not None else None, status=status)
+                max_hold_at=utc(opened+7200) if opened is not None else None, status=status, **observations(pair))
 
 
 def trade(pair, orders, simulation=None):
@@ -244,7 +251,8 @@ def trade(pair, orders, simulation=None):
                 exit_reason=EXIT_REASONS.get(pair.get('exit_reason')),
                 sim=sim, slippage_bps=bps-sim['net_bps'] if bps is not None and sim and sim['net_bps'] is not None else None,
                 leg_send_gap_ms=_gap(orders, 'sent_ms'), leg_fill_gap_ms=_gap(orders, 'fill_ms'),
-                one_leg_incident=pair.get('single_failure') if isinstance(pair.get('single_failure'), bool) else None)
+                one_leg_incident=pair.get('single_failure') if isinstance(pair.get('single_failure'), bool) else None,
+                **observations(pair))
 
 
 def _sim_projection(row, pair):
@@ -387,7 +395,7 @@ class JournalView:
             if endpoint == 'summary':
                 meta = {key: budget.decode(raw) for key, raw in conn.execute(
                     "SELECT key,value FROM meta WHERE key IN ('state','stop_reason','live_mode','account_equity_baseline',"
-                    "'account_equity_current','actual_fees','flatten_requested')")}
+                    "'account_equity_current','actual_fees','flatten_requested','baseline_status','pair_cooldowns')")}
                 events = {}
                 for kind in ('RECONCILE', 'ALERT'):
                     row = conn.execute('SELECT at,value FROM events WHERE kind=? ORDER BY id DESC LIMIT 1', (kind,)).fetchone()
@@ -439,6 +447,12 @@ class JournalView:
         paused = halt_reason or ('STOP' if stop else stopped)
         if not paused and (not fresh or reconcile.get('risk') != 'RUN' or meta.get('flatten_requested')):
             paused = 'account_snapshot_stale' if not fresh else 'risk_stopped'
+        baselines = list((meta.get('baseline_status') or {}).values())
+        ready = sum(s.get('ready') is True and number(s.get('latest_at')) is not None
+                    and 0 <= now-number(s['latest_at']) <= 90 and 0 <= now-s['at'] <= 90 for s in baselines)
+        blacklisted = sum(s.get('blocked') is True for s in baselines)
+        cooling = sum(number(until) is not None and number(until) > now
+                      for until in (meta.get('pair_cooldowns') or {}).values())
         return dict(generated_at=utc(now), mode=('live' if meta['live_mode'] else 'shadow')
                     if isinstance(meta.get('live_mode'), bool) else self.mode,
                     halted=halted, halt_reason=halt_reason, stop_file=stop, opening_paused_reason=paused,
@@ -446,4 +460,5 @@ class JournalView:
                               total_open_usd=complete_sum(l['notional_usd'] for p in active for l in p['legs'])),
                     accounts=accounts, today=dict(_totals(today), daily_loss_limit_usd=20),
                     total=dict(_totals(closed), total_loss_limit_usd=100), fees=fees,
+                    baseline_ready_pairs=ready,structural_spread_pairs=blacklisted,cooldown_pairs=cooling,
                     last_error=reason(events['ALERT'][1].get('reason')))

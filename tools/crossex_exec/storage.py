@@ -5,6 +5,7 @@ import threading
 import time
 from contextlib import contextmanager
 from .security import REDACTOR
+from .baseline import cooldown_for, RETENTION_SECONDS
 
 
 def encode(value):
@@ -25,6 +26,10 @@ class Store:
             CREATE TABLE IF NOT EXISTS pairs (id TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS triggers (id TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, at REAL NOT NULL, cid TEXT, kind TEXT, value TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS baseline_samples (
+                pair_key TEXT NOT NULL, bucket INTEGER NOT NULL, at REAL NOT NULL, bps TEXT NOT NULL,
+                PRIMARY KEY(pair_key,bucket));
+            CREATE INDEX IF NOT EXISTS baseline_samples_at ON baseline_samples(at);
         ''')
 
     def __enter__(self):
@@ -84,8 +89,26 @@ class Store:
             return [json.loads(r[0]) for r in self.db.execute('SELECT value FROM orders')]
 
     def pair(self, value):
-        with self.lock:
+        with self.transaction():
             self.db.execute('INSERT INTO pairs VALUES (?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value',(value['id'],encode(value)))
+            cooldown = cooldown_for(value)
+            if cooldown:
+                key, until = cooldown
+                rows = self.meta('pair_cooldowns', {})
+                if until > rows.get(key, 0):
+                    rows[key] = until
+                    self.set_meta('pair_cooldowns', rows)
+
+    def add_baseline_samples(self, rows, now):
+        with self.transaction():
+            self.db.executemany('INSERT OR IGNORE INTO baseline_samples VALUES (?,?,?,?)', rows)
+            self.db.execute('DELETE FROM baseline_samples WHERE at < ?', (now-RETENTION_SECONDS,))
+
+    def baseline_samples(self, key, since, until):
+        with self.lock:
+            return [(r[0],r[1]) for r in self.db.execute(
+                'SELECT at,bps FROM baseline_samples WHERE pair_key=? AND at>=? AND at<=? ORDER BY bucket',
+                (key,since,until))]
 
     def pairs(self, active=False):
         with self.lock:

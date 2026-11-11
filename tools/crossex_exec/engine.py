@@ -12,6 +12,7 @@ from .execution import Executor, NONTERMINAL
 from .limits import HardLimits, DEFAULT_VAR
 from .background import SnapshotCache, PeriodicWorker
 from .stops import StopLocks
+from .baseline import Baseline
 
 
 class DailyBaselinePending(ValueError):
@@ -35,6 +36,7 @@ class Engine:
         self._closed=False
         self.workers=[]
         self.bases=None
+        self.baseline=Baseline(store,clock)
         self.next_catalog=self.next_fees=0
         self.fee_keys=set()
         self.next_halt=0
@@ -94,6 +96,8 @@ class Engine:
         instruments=[Instrument.load(i) for i in pair['instruments']]
         if any(i.market.key not in self.market.mapping for i in instruments):
             raise ValueError('send_catalog_unavailable')
+        self.baseline.require(pair['base'],*(i.market.exchange for i in instruments))
+        now=self.clock()
         fees=self.fees_for(instruments,now)
         send_review(pair,orders,fees,now)
 
@@ -144,11 +148,23 @@ class Engine:
             self.next_fees=now+(30 if keys-set(rates) else 3600)
             self.fee_keys=keys
 
+    def refresh_baselines(self):
+        bases=self.bases or ()
+        started=self.clock()
+        mids=self.market.baseline_quotes(bases)
+        with self._lifecycle_lock:
+            if not self._closed:
+                # Never combine a delayed round with newly captured quotes.
+                if not 0<=self.clock()-started<=20:
+                    mids={}
+                self.baseline.record(mids,bases)
+
     def start_background(self,bases):
         self.bases=tuple(bases)
         if not self.workers:
             self.workers=[PeriodicWorker(self.refresh_accounts,5,'exec-accounts',self.background_error),
-                          PeriodicWorker(self.refresh_reference,5,'exec-reference',self.background_error)]
+                          PeriodicWorker(self.refresh_reference,5,'exec-reference',self.background_error),
+                          PeriodicWorker(self.refresh_baselines,30,'exec-baseline',self.background_error)]
 
     def background_error(self,worker,kind):
         with self._lifecycle_lock:
@@ -410,18 +426,22 @@ class Engine:
                 raise ValueError('position_limit')
             if now-self.store.meta('mapping')['at']>21600:
                 raise ValueError('reference_data_stale')
+            baseline=self.baseline.require(base,*(i.market.exchange for i in instruments))
             self.accounts.check_instruments(instruments)
             fees=self.fees_for(instruments)
             funding=self.market.funding(instruments)
             turnovers=self.market.turnovers(instruments)
             books=self.market.books(instruments)
-            fill=review(instruments,books,fees,funding,turnovers,self.clock())
+            fill=review(instruments,books,fees,funding,turnovers,self.clock(),baseline_bps=baseline['baseline_bps'])
             if self.clock()-now>120 or not self.can_open():
                 raise ValueError('open_gate_changed')
-        except Exception:
-            self.store.event('SKIP',{'id':identity,'reason':'review_failed_closed'})
+        except Exception as error:
+            reason=str(error) if isinstance(error,ValueError) and str(error) in (
+                'baseline_warming','structural_spread','pair_cooldown') else 'review_failed_closed'
+            self.store.event('SKIP',{'id':identity,'reason':reason})
             return
         pair=dict(id=uuid.uuid4().hex,trigger_id=identity,base=base,state='OPENING',opened_at=self.clock(),
+                  baseline_at_open=fill['baseline_bps'],excess_at_open=fill['excess_bps'],
                   instruments=[i.dump() for i in instruments],fill=fill,funding=funding,turnovers=turnovers,
                   remaining=['0','0'],last_books=[b.to_dict() for b in books],last_good=[b.received_at for b in books],
                   next_track=self.clock()+3,single_failure=False,repair_attempts=0,round=0)
@@ -831,7 +851,8 @@ class Engine:
             notional=a*entry[0]
             pnl=a*(dec(sell['vwap'])-entry[0]+entry[1]-dec(buy['vwap']))
             reason=exit_reason(age=age,spread=spread,entry_spread=entry_spread,pnl=pnl,
-                               notional=notional,next_funding=next_funding,stale_age=stale)
+                               notional=notional,next_funding=next_funding,stale_age=stale,
+                               baseline_at_open=pair.get('baseline_at_open'),excess_at_open=pair.get('excess_at_open'))
             if reason:
                 # Retain fill-sim's estimate, never mislabel it realized accounting.
                 try:

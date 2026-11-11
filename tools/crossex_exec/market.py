@@ -8,6 +8,7 @@ from tools.fill_sim.funding import funding_urls, parse_funding
 from tools.fill_sim.network import PublicClient, Limiter
 from tools.fill_sim.scheduler import RequestQueue, DaemonPool
 from .policy import mapped_instrument
+from .baseline import BATCH_URLS, parse_tickers
 
 RULES_URL='https://api.gateio.ws/api/v4/crossex/rule/symbols'
 CATALOGS={
@@ -239,6 +240,13 @@ class MarketData:
         return self.batch([(i.market.exchange,endpoint(i.market,'depth').replace('/fapi/v1/','/fapi/v3/')
                             if i.market.exchange=='aster' else endpoint(i.market,'depth'),
                             lambda d,i=i:parse_book(i.market,i.spec,d,self.clock())) for i in instruments],priority=0,partial=True)
+
+    def baseline_quotes(self,bases):
+        if not bases:
+            return {}
+        results=self.batch([(ex,url,lambda data,ex=ex:parse_tickers(ex,data,bases,self.clock()))
+                            for ex,url in BATCH_URLS.items()],priority=2,partial=True)
+        return {ex:rows for ex,rows in zip(BATCH_URLS,results) if rows is not None}
 
     def funding(self,instruments):
         results=[]
