@@ -53,6 +53,9 @@ class FakeAccounts:
     def snapshot(self):
         return self.data
 
+    def position_snapshot(self):
+        return dict(positions=self.data['positions'])
+
     def fees(self,instruments):
         return self.fees_by_market
 
@@ -99,13 +102,13 @@ class EngineTests(unittest.TestCase):
         self.engine.close()
         fixtures.HTTPExecutionTests.tearDown(self)
 
-    def test_startup_mode_error_propagates_before_recovery_or_market(self):
+    def test_startup_mode_error_propagates_after_order_recovery_before_market(self):
         with (patch.object(self.accounts,'validate_startup',side_effect=ValueError('mode_mismatch')),
               patch.object(self.exec,'recover') as recover,
               patch.object(self.market,'bootstrap') as bootstrap):
             with self.assertRaisesRegex(ValueError,'mode_mismatch'):
                 self.engine.startup()
-            recover.assert_not_called()
+            recover.assert_called_once()
             bootstrap.assert_not_called()
 
     def test_foreign_unfilled_blocks_startup_but_owned_order_recovers(self):

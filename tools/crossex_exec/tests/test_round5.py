@@ -78,6 +78,32 @@ class Round5Tests(unittest.TestCase):
         second.tick()
         self.assertEqual(self.store.meta('state'), 'HALTED')
 
+    def test_r1_background_equity_check_cannot_revive_halted(self):
+        self.store.set_meta('state', 'HALTED')
+        self.data['equity_by_venue']['crossex'] = '800'
+        self.engine.refresh_accounts()
+        self.assertEqual(self.store.meta('state'), 'HALTED')
+
+    def test_r1_legacy_singleton_repair_lock_migrates_to_pair_owner(self):
+        pair = self.pair(('.107', '.1'), steps=('.01', '.001'))
+        pair['repair_stopped'] = True
+        self.store.pair(pair)
+        self.store.set_meta('stop_locks', None)
+        self.store.set_meta('stop_reason', 'unhedged_position')
+        second = Engine(self.store, self.market, self.accounts, live=True, clock=lambda:self.now[0])
+        self.addCleanup(second.close)
+        self.assertEqual(self.store.meta('stop_locks')['unhedged_position'], [pair['id']])
+
+    def test_r1_stopped_repair_still_allows_scheduled_exit(self):
+        pair = self.pair(('.107', '.1'), steps=('.01', '.001'))
+        self.venues[0].reject = True
+        self.engine.balance(pair)
+        self.venues[0].reject = False
+        self.now[0] += 7201
+        self.engine.track(pair)
+        self.assertEqual(pair.get('exit_reason'), 'max_age')
+        self.assertLess(self.venues[0].quantity, dec('.107'))
+
     def test_r2_remote_snapshot_never_overwrites_fill_ledger(self):
         pair = self.pair()
         before = copy.deepcopy(self.store.all_orders())
@@ -113,6 +139,27 @@ class Round5Tests(unittest.TestCase):
         self.engine.refresh_pair(pair)
         self.assertEqual(list(map(dec, pair['remaining'])), [dec(1), dec(1)])
         self.assertNotIn('position_anchor', pair)
+
+    def test_r2_closed_history_cannot_claim_new_pairs_remote_position(self):
+        old = self.pair()
+        self.engine.close_pair(old, 'test')
+        # Preserve the closed journal under its original identity, then open a new pair.
+        newer = copy.deepcopy(old)
+        newer.update(id='newer', state='OPEN', remaining=['.2','.2'], remote_remaining=['.2','.2'])
+        newer.pop('exit_reason', None)
+        newer.pop('closed_at', None)
+        for n in (0,1):
+            self.venues[n].quantity = dec('.2')
+            order = self.engine.new_intent(newer, n, '.2', str((100,102)[n]), False)
+            order.update(state='TERMINAL', filled='.2', fee='0', vwap=str((100,102)[n]), accounting_pending=False)
+            self.store.save_order(order)
+        self.store.pair(newer)
+        self.matching_snapshots()
+        self.engine.tick()
+        saved = next(p for p in self.store.pairs() if p['id'] == old['id'])
+        self.assertEqual(saved['state'], 'CLOSED')
+        self.assertEqual(list(map(dec,saved['remote_remaining'])), [dec(0),dec(0)])
+        self.assertEqual([v.quantity for v in self.venues], [dec('.2'),dec('.2')])
 
     def test_r3_unknown_write_failure_retains_recovery_and_retries_write(self):
         orders = self.open_intents()
@@ -181,7 +228,7 @@ class Round5Tests(unittest.TestCase):
         self.engine.reconcile()
         self.assertEqual(self.engine.totals(), (dec(0), dec('-20')))
         self.assertEqual(self.store.meta('daily_upnl')['positions'], {'long':'-25', 'short':'5'})
-        self.assertEqual(self.store.meta('daily_upnl')['captured_at'], self.now[0]-4)
+        self.assertEqual(self.store.meta('daily_upnl')['captured_at'], self.now[0]-3)
         self.assertNotEqual(self.store.meta('daily_loss_day'), day(self.now[0]))
 
     def test_r4_tracking_saves_each_position_upnl_before_midnight_and_restart(self):
@@ -235,3 +282,16 @@ class Round5Tests(unittest.TestCase):
         self.assertEqual(accounts.position_snapshot()['positions'], {})
         cross.account.assert_not_called()
         bitget.settings.assert_not_called()
+
+    def test_r4_position_recovery_saves_available_upnl_without_blocking_on_missing_upnl(self):
+        cross, bitget = Mock(), Mock()
+        cross.positions.return_value = [dict(symbol='X', position_side='LONG', position_qty='1', upnl='-7')]
+        bitget.positions.return_value = []
+        accounts = Accounts(cross, bitget, clock=lambda:self.now[0])
+        snap = accounts.position_snapshot()
+        self.assertEqual(snap['upnl'], '-7')
+        self.assertEqual(snap['upnl_by_position'], {'crossex|X|long':'-7'})
+        del cross.positions.return_value[0]['upnl']
+        snap = accounts.position_snapshot()
+        self.assertEqual(snap['positions'], {'crossex|X|long':dec(1)})
+        self.assertNotIn('upnl', snap)

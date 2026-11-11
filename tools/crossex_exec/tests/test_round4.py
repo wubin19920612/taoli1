@@ -70,7 +70,7 @@ class Round4Tests(unittest.TestCase):
         original = self.venues[0].place
         def send(order, before_send):
             oid = original(order, before_send)
-            self.accounts.snapshot.side_effect = ValueError('positions unavailable')
+            self.accounts.position_snapshot.side_effect = ValueError('positions unavailable')
             return oid
         with patch.object(self.venues[0], 'place', side_effect=send):
             self.engine.balance(pair)
@@ -237,16 +237,16 @@ class Round4Tests(unittest.TestCase):
         self.now[0] += 86400-1
         self.engine.reconcile()
         self.engine.workers = [Mock()]
-        old_baseline = self.store.meta('daily_upnl')
         self.now[0] += 1
         self.engine.reconcile()
-        self.assertEqual(self.store.meta('daily_upnl'), old_baseline)
+        self.assertEqual(self.store.meta('daily_upnl')['day'], day(self.now[0]))
+        self.assertEqual(self.store.meta('daily_upnl')['upnl'], '-20')
         self.assertFalse(self.engine.can_open())
         self.data['upnl'] = '-25'
         self.now[0] += 1
         self.publish()
         self.engine.reconcile()
-        self.assertEqual(self.engine.totals()[0], 0)
+        self.assertEqual(self.engine.totals()[0], dec('-5'))
         self.assertTrue(self.engine.can_open())
 
     def test_r5_realizing_overnight_loss_does_not_count_it_twice(self):

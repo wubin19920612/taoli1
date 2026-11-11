@@ -73,6 +73,7 @@ class Round3Tests(unittest.TestCase):
         self.accounts.fees_by_market = {k:'.0002' for k in self.market.mapping}
         self.accounts.fee_snapshots = {k:FeeSnapshot(v,self.now[0]) for k,v in self.accounts.fees_by_market.items()}
         self.accounts.snapshot.side_effect = self.snapshot
+        self.accounts.position_snapshot.side_effect = self.snapshot
         self.accounts.validate_startup.side_effect = self.snapshot
         self.accounts.fees.side_effect = lambda instruments: {i.market.key:'.0002' for i in instruments}
         self.sink = Mock()
@@ -129,8 +130,8 @@ class Round3Tests(unittest.TestCase):
         self.assertEqual({(r[1], dec(r[2])) for r in placed}, {(0, dec('.7')), (1, dec('.4'))})
         self.assertTrue(all(r[3] for r in placed))
         kinds = [r[0] for r in self.trace]
-        self.assertLess(kinds.index('cancel'), kinds.index('detail'))
-        self.assertLess(kinds.index('detail'), kinds.index('snapshot'))
+        self.assertLess(kinds.index('detail'), kinds.index('cancel'))
+        self.assertLess(kinds.index('cancel'), kinds.index('snapshot'))
         self.assertLess(kinds.index('snapshot'), kinds.index('place'))
         self.assertEqual(self.trace[0][2], 'entry-0')
         self.assertTrue(all(v.quantity == 0 for v in self.venues))
@@ -157,7 +158,7 @@ class Round3Tests(unittest.TestCase):
 
     def test_r1_missing_position_snapshot_does_not_guess_a_close_quantity(self):
         pair = self.pair(unknown=True)
-        self.accounts.snapshot.side_effect = ValueError('snapshot_missing')
+        self.accounts.position_snapshot.side_effect = ValueError('snapshot_missing')
         self.engine.close_pair(pair, 'manual')
         self.assertFalse([r for r in self.trace if r[0] == 'place'])
         self.assertEqual(pair['state'], 'UNKNOWN')
@@ -273,9 +274,11 @@ class Round3Tests(unittest.TestCase):
         self.store.set_meta('state', 'HALTING')
         self.accounts.validate_startup.side_effect = ValueError('account_outage')
         self.accounts.snapshot.side_effect = ValueError('account_outage')
+        self.accounts.position_snapshot.side_effect = ValueError('positions_outage')
         self.engine.startup(('BTC',))
         self.assertEqual(self.store.meta('state'), 'HALTING')
         self.accounts.snapshot.side_effect = self.snapshot
+        self.accounts.position_snapshot.side_effect = self.snapshot
         self.now[0] += 61
         self.engine.tick()
         self.assertEqual(self.store.meta('state'), 'HALTED')
