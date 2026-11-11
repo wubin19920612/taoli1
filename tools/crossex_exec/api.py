@@ -3,6 +3,7 @@ import errno
 import hmac
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
+from socketserver import TCPServer
 import threading
 from urllib.parse import parse_qs, urlsplit
 
@@ -42,6 +43,12 @@ class _Server(HTTPServer):
     allow_reuse_address = False
     request_queue_size = 8
     timeout = .2
+
+    def server_bind(self):
+        # HTTPServer.server_bind calls getfqdn (reverse DNS). Bind numeric IPs
+        # directly so this read-only service never initiates a DNS/network lookup.
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address
 
     def get_request(self):
         sock, address = super().get_request()
