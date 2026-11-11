@@ -1,6 +1,7 @@
 """Non-overridable ceilings and a single admission check for every opening send."""
 import threading
 from tools.fill_sim.core import dec
+from .stops import StopLocks
 
 
 MAX_LEG_USD = dec('150')
@@ -14,6 +15,7 @@ class HardLimits:
     def __init__(self,store,snapshot,config=None,alert=None):
         self.store,self.snapshot=store,snapshot
         self.alert=alert
+        self.stops=None if alert else StopLocks(store)
         self.lock=threading.RLock()
         self._last_equity_halt=None
         config=config or {}
@@ -51,7 +53,8 @@ class HardLimits:
         if breached:
             # The coordinator flattens AFTER concurrent IOC workers join. Never
             # close an in-flight pair recursively from inside a send callback.
-            self.store.set_meta('state','HALTING')
+            if self.store.meta('state')!='HALTED':
+                self.store.set_meta('state','HALTING')
             values=dict(venues=breached,current=equities,baseline=baseline)
             if self.alert:
                 self.alert('account_equity_drop',details=values,event_kind='EQUITY_HALT')
@@ -59,7 +62,7 @@ class HardLimits:
                 if values!=self._last_equity_halt:
                     self.store.event('EQUITY_HALT',values)
                     self._last_equity_halt=values
-                self.store.set_meta('stop_reason','account_equity_drop')
+                self.stops.add('account_equity_drop')
         return bool(breached)
 
     def exposure(self,snapshot,intent):

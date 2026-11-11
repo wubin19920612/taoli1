@@ -146,6 +146,22 @@ class Accounts:
         snapshot['open_orders']=self.bitget.open_orders()
         return snapshot
 
+    def position_snapshot(self):
+        # Recovery must not depend on balances, margin units, settings or fees.
+        started=self.clock()
+        gate,bitget=self.cross.positions(),self.bitget.positions()
+        result=dict(positions=remote_positions(gate,bitget),captured_at=started)
+        floating={}
+        try:
+            for rows,is_gate in ((gate,True),(bitget,False)):
+                for row in rows:
+                    keys=remote_positions([row],[]) if is_gate else remote_positions([],[row])
+                    for key in keys:
+                        floating[key]=str(dec(row['upnl' if is_gate else 'unrealisedPnl']))
+        except (KeyError,ValueError,TypeError):
+            return result  # Unknown PnL must not obstruct known-quantity reduction.
+        return dict(result,upnl=str(sum(map(dec,floating.values()),dec(0))),upnl_by_position=floating)
+
     def snapshot(self):
         a,b=self.cross.account(),self.bitget.account()
         bitget_settings(self.bitget.settings(),self.bitget.mode)

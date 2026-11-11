@@ -1,10 +1,15 @@
 """Durable IOC lifecycle. Unknown outcomes are never automatically re-submitted."""
 import threading
 import time
+from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
 from tools.fill_sim.core import dec
 from .adapters import validate_intent
 from .transport import APIError
+from .stops import StopLocks
+
+
+NONTERMINAL = frozenset(('SENT', 'ACK', 'UNKNOWN'))
 
 
 class Executor:
@@ -14,8 +19,35 @@ class Executor:
         self.can_open=can_open
         self.check_order=check_order
         self.check_pair,self.clock=check_pair,clock
-        self.alert=alert or (lambda reason:self.store.set_meta('stop_reason',reason))
-        self.locks,self.lock= {},threading.Lock()
+        self.alert=alert or StopLocks(store).add
+        self.locks,self.lock= {},threading.RLock()
+        self.pending_writes={}
+
+    def order(self,cid):
+        with self.lock:
+            return deepcopy(self.pending_writes[cid][0]) if cid in self.pending_writes else self.store.order(cid)
+
+    def orders(self):
+        with self.lock:
+            rows={o['cid']:o for o in self.store.all_orders()}
+            rows.update({cid:deepcopy(row) for cid,(row,_) in self.pending_writes.items()})
+            return list(rows.values())
+
+    def save(self,order,kind=None):
+        """Retain observations before attempting I/O; retries never resend orders."""
+        with self.lock:
+            self.pending_writes[order['cid']]=(deepcopy(order),kind)
+            try:
+                self.store.save_order(order,kind)
+            except Exception:
+                return False
+            self.pending_writes.pop(order['cid'],None)
+            return True
+
+    def flush(self):
+        with self.lock:
+            for order,kind in list(self.pending_writes.values()):
+                self.save(order,kind)
 
     def adapter(self,i):
         return self.adapters['bitget' if i['instrument']['market']['exchange']=='bitget' else 'crossex']
@@ -24,16 +56,16 @@ class Executor:
         # Commit BOTH IDs before either worker may send.
         for i in intents:
             self.prepare(i)
-        if self.live and self.check_order and all(self.store.order(i['cid'])['state']=='INTENT' for i in intents):
+        if self.live and self.check_order and all(self.order(i['cid'])['state']=='INTENT' for i in intents):
             try:
                 for i in intents:
                     self.check_order(i)
             except Exception:
                 results=[]
                 for i in intents:
-                    row=self.store.order(i['cid'])
+                    row=self.order(i['cid'])
                     row.update(state='UNSENT',accounting_pending=False,reason='pair_risk_admission')
-                    self.store.save_order(row,'UNSENT')
+                    self.save(row,'UNSENT')
                     results.append(row)
                 return results
         gate=None
@@ -60,7 +92,7 @@ class Executor:
     def prepare(self,i):
         validate_intent(i)
         with self.lock:
-            existing=self.store.order(i['cid'])
+            existing=self.order(i['cid'])
             if existing is None:
                 i=dict(i,state='INTENT',filled='0',oid=None,accounting_pending=True)
                 self.store.save_order(i,'INTENT')
@@ -81,7 +113,7 @@ class Executor:
                     # A prior live attempt cannot become a shadow success after restart.
                     return self.confirm(i)
                 i.update(state='SHADOW',accounting_pending=False)
-                self.store.save_order(i,'SHADOW')
+                self.save(i,'SHADOW')
                 return i
             if i['state']!='INTENT':
                 if send_gate and not send_gate.approved.is_set():
@@ -99,28 +131,31 @@ class Executor:
                             self.check_pair([i])
                         if not self.can_open():
                             raise APIError('rejected')
-                i.update(state='SENT',sent_ms=self.clock()*1000)
-                self.store.save_order(i,'SENT')
+                sent_row=dict(i,state='SENT',sent_ms=self.clock()*1000)
+                # Write-ahead is mandatory BEFORE transport may send. If it fails,
+                # i remains INTENT and is safely retired as UNSENT by the handler.
+                self.store.save_order(sent_row,'SENT')
+                i.update(sent_row)
             try:
                 if self.check_order and not send_gate:
                     self.check_order(i)  # known breaches never reach adapter.place
                 oid=adapter.place(i,before_send=sent)
                 i.update(oid=oid,state='ACK',ack_ms=self.clock()*1000)
-                self.store.save_order(i,'ACK')
+                self.save(i,'ACK')
             except Exception as error:
                 if send_gate and not send_gate.approved.is_set():
                     send_gate.abort()
                 kind=error.kind if isinstance(error,APIError) else 'unknown'
                 if i['state']=='INTENT':
                     i.update(state='UNSENT',accounting_pending=False,reason=kind)
-                    self.store.save_order(i,'UNSENT')
+                    self.save(i,'UNSENT')
                     return i
                 if kind=='rejected':
                     i.update(state='REJECTED',accounting_pending=False,reason=kind)
-                    self.store.save_order(i,'REJECTED')
+                    self.save(i,'REJECTED')
                     return i
                 i.update(state='UNKNOWN',reason=kind)
-                self.store.save_order(i,'UNKNOWN')
+                self.save(i,'UNKNOWN')
             return self.confirm(i)
 
     def confirm(self,i):
@@ -131,23 +166,23 @@ class Executor:
                 status=adapter.detail(i,deadline=deadline)
                 if not i.get('oid'):
                     i.update(oid=status['oid'],state='ACK',ack_ms=self.clock()*1000)
-                    self.store.save_order(i,'ACK')
+                    self.save(i,'ACK')
                 if dec(status['filled'])>dec(i.get('filled',0)):
                     i['fill_observed_at']=self.clock()
                 i.update(venue_state=status['venue_state'],filled=status['filled'],rejected=status['rejected'])
                 # Persist partial/late fill observation even if confirmation times out.
-                self.store.save_order(i)
+                self.save(i)
                 if status.get('average_price') is not None:
                     i['average_price']=status['average_price']
                 if status['terminal']:
                     i.update(state='TERMINAL',terminal_ms=self.clock()*1000)
-                    self.store.save_order(i,'TERMINAL')
+                    self.save(i,'TERMINAL')
                     return self.account(i)
             except Exception:
                 pass
             time.sleep(min(self.poll_interval,max(0,deadline-time.monotonic())))
         i.update(state='UNKNOWN',reason='confirmation_deadline')
-        self.store.save_order(i,'UNKNOWN')
+        self.save(i,'UNKNOWN')
         self.alert('unknown_order')
         return i
 
@@ -160,7 +195,7 @@ class Executor:
             except Exception:
                 i['accounting_pending']=True
                 self.alert('fills_pending')
-        self.store.save_order(i,'FILLS' if not i['accounting_pending'] else 'FILLS_PENDING')
+        self.save(i,'FILLS' if not i['accounting_pending'] else 'FILLS_PENDING')
         return i
 
     def cancel(self,i):
@@ -173,13 +208,19 @@ class Executor:
         # Cancellation ACK is not a terminal fill confirmation.
         return self.confirm(i)
 
-    def recover(self):
-        for i in self.store.all_orders():
-            if i['state'] in ('SENT','ACK','UNKNOWN'):
-                self.cancel(i) if self.live else self.confirm(i)
-            elif i['state']=='INTENT':
+    def recover(self,*,startup=True,pair_id=None):
+        self.flush()
+        for i in self.orders():
+            if pair_id is not None and i['pair_id']!=pair_id:
+                continue
+            if i['state'] in NONTERMINAL:
+                i=self.confirm(i)
+                if i['state'] in NONTERMINAL and self.live:
+                    self.cancel(i)
+            elif startup and i['state']=='INTENT':
                 # No automatic stale-entry send after process death.
                 i.update(state='UNSENT',accounting_pending=False,reason='restart_before_send')
-                self.store.save_order(i,'UNSENT')
+                self.save(i,'UNSENT')
             elif i['state']=='TERMINAL' and i.get('accounting_pending'):
                 self.account(i)
+        self.flush()

@@ -8,9 +8,10 @@ from tools.fill_sim.core import Book, Market, dec, walk, closing, track_interval
 from tools.fill_sim.engine import trigger_reason
 from .accounts import local_positions
 from .policy import Instrument, review, exit_reason, risk_decision, limit_price, send_review
-from .execution import Executor
+from .execution import Executor, NONTERMINAL
 from .limits import HardLimits, DEFAULT_VAR
 from .background import SnapshotCache, PeriodicWorker
+from .stops import StopLocks
 
 
 class DailyBaselinePending(ValueError):
@@ -38,7 +39,9 @@ class Engine:
         self.fee_keys=set()
         self.next_halt=0
         self.halt_attempts=0
+        self._repairing=set()
         self.account_cache=SnapshotCache(clock)
+        self.stops=StopLocks(store)
         self.limits=HardLimits(store,self.account_cache.read,config,alert=self.alert)
         self.executor=Executor(store,{'crossex':accounts.cross,'bitget':accounts.bitget},live=live,
                                can_open=self.can_open,check_order=self.check_order,check_pair=self.check_pair,
@@ -54,7 +57,8 @@ class Engine:
                 self._halt_alerts.clear()
                 changed=(self._last_alert_reason!=reason or self._last_alert_values!=values
                          or self.store.meta('stop_reason')!=reason)
-            self.store.set_meta('stop_reason',reason)
+            owner=values.get('pair_id','global') if reason in ('unhedged_position','repair_stopped') else 'global'
+            self.stops.add(reason,owner)
             if changed:
                 if event_kind:
                     self.store.event(event_kind,values)
@@ -158,10 +162,12 @@ class Engine:
             worker.close()
 
     def can_open(self):
-        recent=[o for o in self.store.all_orders() if o.get('sent_ms',0)>=self.clock()*1000-3600000]
+        orders=self.executor.orders()
+        recent=[o for o in orders if o.get('sent_ms',0)>=self.clock()*1000-3600000]
         rejected=sum(o['state']=='REJECTED' or o.get('rejected',False) for o in recent)
         local_ok=(self.store.meta('single_failures',0)<3 and (not recent or dec(rejected)/len(recent)<=dec('.3')))
-        return (local_ok and self.risk=='RUN' and not self.stop_file.exists() and not self.store.meta('stop_reason')
+        return (local_ok and self.risk=='RUN' and not self.stop_file.exists() and not self.stops
+                and not self.executor.pending_writes and not any(o['state'] in NONTERMINAL for o in orders)
                 and not self.store.meta('position_mismatch')
                 and self.store.meta('daily_loss_day')!=day(self.clock())
                 and not self.store.meta('flatten_requested')
@@ -173,6 +179,14 @@ class Engine:
         if previous is not None and previous!=self.live and self.store.pairs(active=True):
             raise ValueError('mode_change_with_live_positions')
         self.store.set_meta('live_mode',self.live)
+        known={o['cid'] for o in self.executor.orders() if o['state'] in NONTERMINAL
+               and o['instrument']['market']['exchange']=='bitget'}
+        # Even a failed account/mode check cannot strand a durable INTENT or SENT.
+        self.executor.recover()
+        for pair in self.store.pairs(active=True):
+            self.refresh_pair(pair)
+            if self.needs_recovery(pair):
+                self.recover_pair(pair)
         started=self.clock()
         try:
             self.snapshot=self.accounts.validate_startup()
@@ -183,12 +197,9 @@ class Engine:
             self.flatten_all('startup_halt_recovery')
             return
         self.account_cache.publish(self.snapshot,started)
-        known={o['cid'] for o in self.store.all_orders() if o['state'] in ('SENT','ACK','UNKNOWN')
-               and o['instrument']['market']['exchange']=='bitget'}
         if any(o['clientOid'] not in known for o in self.snapshot.get('open_orders',[])):
             raise ValueError('foreign_bitget_unfilled_orders')
         self.limits.initialize(self.snapshot)
-        self.executor.recover()
         # Rebuild from the immutable journal, including crash after terminal before pair save.
         for pair in self.store.pairs(active=True):
             self.refresh_pair(pair)
@@ -204,7 +215,7 @@ class Engine:
     def totals(self):
         total=daily=dec(0)
         today=day(self.clock())
-        orders=self.store.all_orders()
+        orders=self.executor.orders()
         entries={(o['pair_id'],o['leg']):o for o in orders if not o['reduce_only'] and o.get('vwap')}
         for o in orders:
             if o['state']=='SHADOW':
@@ -232,24 +243,62 @@ class Engine:
         with self._lifecycle_lock:
             today=day(self.clock())
             baseline=self.store.meta('daily_upnl')
-            if (not baseline or baseline['day']!=today) and day(captured_at)==today:
-                # Persist the first fresh observation of the UTC day, including
-                # each position. A previous-day in-flight refresh cannot set it.
-                baseline=dict(day=today,upnl=str(snapshot.get('upnl','0')),
-                              positions=snapshot.get('upnl_by_position',{}),captured_at=captured_at)
-                self.store.set_meta('daily_upnl',baseline)
+            last=self.store.meta('last_upnl')
+            observation=None
+            if 'upnl' in snapshot:
+                observation=dict(upnl=str(snapshot['upnl']),positions=snapshot.get('upnl_by_position',{}),
+                                 captured_at=captured_at)
+            if not baseline or baseline['day']!=today:
+                source=last if last and day(last['captured_at'])<today else observation
+                if source and (source is last or day(captured_at)==today):
+                    # Freeze the last PRE-midnight observation before recording any
+                    # new-day observation (the position may already be closed).
+                    baseline=dict(source,day=today)
+                    self.store.set_meta('daily_upnl',baseline)
+            if observation and (not last or captured_at>=last['captured_at']):
+                self.store.set_meta('last_upnl',observation)
             return baseline
+
+    def save_tracking_upnl(self,pair,books,now):
+        """Persist a per-position exit-price estimate before any tracking close."""
+        if not all(books):
+            return
+        positions=dict((self.store.meta('last_upnl') or {}).get('positions',{}))
+        entries={o['leg']:o for o in self.executor.orders() if o['pair_id']==pair['id'] and not o['reduce_only']}
+        try:
+            for n,q in enumerate(self.quantities(pair)):
+                key=self.position_key(pair,n)
+                if not q:
+                    positions.pop(key,None)
+                    continue
+                entry=entries[n]
+                price=dec(entry.get('vwap') or entry.get('average_price') or entry['price'])
+                mark=dec(walk(books[n].bids if n==0 else books[n].asks,quantity=q)['vwap'])
+                positions[key]=str(q*(mark-price)*(1 if n==0 else -1))
+        except (KeyError,ValueError,TypeError):
+            return
+        self.roll_daily_upnl(dict(upnl=str(sum(map(dec,positions.values()),dec(0))),upnl_by_position=positions),now)
 
     def reconcile_positions(self,snapshot):
         captured=snapshot['captured_at']
+        orders=self.executor.orders()
+        if self.executor.pending_writes or any(o['state'] in NONTERMINAL or o.get('accounting_pending') for o in orders):
+            self.store.set_meta('position_match_streak',0)
+            return None
         latest=max((max(float(o.get('fill_observed_at',0)),float(o.get('fill_ms') or 0)/1000,
                         float(o.get('terminal_ms') or 0)/1000)
-                    for o in self.store.all_orders() if dec(o.get('filled',0))>0),default=0)
+                    for o in orders if dec(o.get('filled',0))>0),default=0)
         if captured<=latest:
             # The snapshot may have started before an IOC completed. It says
             # nothing about the new position; wait for a later background read.
             return None
-        same=snapshot['positions']==local_positions(self.store.pairs(active=True))
+        pairs=self.store.pairs()
+        for pair in pairs:
+            if pair['state'] not in ('SHADOW','SKIPPED','CLOSED'):
+                self.refresh_pair(pair)
+                self.save_remote(pair,snapshot)
+                self.clear_repair_locks(pair)
+        same=snapshot['positions']==local_positions([p for p in pairs if p['state'] not in ('SHADOW','SKIPPED')])
         previous=self.store.meta('position_snapshot_at',0)
         if captured>previous:
             self.store.set_meta('position_snapshot_at',captured)
@@ -262,9 +311,11 @@ class Engine:
                 self.store.set_meta('position_match_streak',streak)
                 if streak>=3:
                     self.store.set_meta('position_mismatch',False)
-                    if self.store.meta('stop_reason')=='position_mismatch':
-                        self.store.set_meta('stop_reason',None)
+                    self.stops.discard('position_mismatch')
                     self.store.event('POSITION_MATCH_RECOVERED',dict(consecutive=streak,captured_at=captured))
+        if same:
+            for reason in ('unknown_order','unknown_close','accounting_pending','fills_pending','entry_accounting_unknown'):
+                self.stops.discard(reason)
         return same
 
     def reconcile(self):
@@ -279,6 +330,7 @@ class Engine:
                 self.account_cache.publish(self.snapshot,started)
                 self.snapshot=self.account_cache.read()
             equity_halt=self.limits.check_equity(self.snapshot)
+            self.roll_daily_upnl(self.snapshot,self.snapshot['captured_at'])
             if day(self.snapshot['captured_at'])!=day(self.clock()):
                 self.risk='STOP'
                 if equity_halt:
@@ -290,8 +342,7 @@ class Engine:
             current_day=day(self.clock())
             if self.store.meta('daily_loss_day') not in (None,current_day):
                 self.store.set_meta('daily_loss_day',None)
-                if self.store.meta('stop_reason')=='daily_loss':
-                    self.store.set_meta('stop_reason',None)
+                self.stops.discard('daily_loss')
             # Equity delta also catches funding/fees delayed beyond the trade journal.
             # Transfers are deliberately not assumed to be profit: use dedicated accounts.
             equity=self.snapshot.get('equity')
@@ -319,7 +370,8 @@ class Engine:
             if self.store.meta('daily_loss_day')==current_day and self.risk=='RUN':
                 self.risk='STOP'
             self.store.event('RECONCILE',dict(matched=same,margins=self.snapshot['margins'],daily=str(daily),total=str(total),risk=self.risk))
-            if total<=-100 or equity_halt:
+            self.stops.discard('account_snapshot_unavailable')
+            if (total<=-100 or equity_halt) and self.store.meta('state')!='HALTED':
                 self.store.set_meta('state','HALTING')
             if self.risk in ('HALTED','FLATTEN') or self.store.meta('state')=='HALTING':
                 self.flatten_all('circuit_breaker')
@@ -399,7 +451,7 @@ class Engine:
                     reduce_only=reduce,created_at=self.clock(),estimate=estimate if reduce else pair['fill']['buy' if leg==0 else 'sell']['vwap'])
 
     def refresh_pair(self,pair):
-        orders=[o for o in self.store.all_orders() if o['pair_id']==pair['id']]
+        orders=[o for o in self.executor.orders() if o['pair_id']==pair['id']]
         entries=sorted([o for o in orders if not o['reduce_only']],key=lambda o:o['leg'])
         for field,name in (('sent_ms','send_delta_ms'),('fill_ms','fill_delta_ms')):
             values=[o.get(field) for o in entries]
@@ -420,31 +472,19 @@ class Engine:
             if q and o.get('vwap') is not None:
                 cash+=q*dec(o['vwap'])*(1 if o['side']=='sell' else -1)
                 fees+=dec(o['fee'])
-        journal_remaining=list(remaining)
-        anchor=pair.get('position_anchor')
+        anchor=pair.pop('position_anchor',None)
         if anchor:
-            remaining=list(map(dec,anchor['remaining']))
-            for o in orders:
-                # A delayed report for an order present in the remote snapshot
-                # must not count its fills twice. Re-read positions before acting.
-                if o['cid'] in anchor['unresolved']:
-                    unknown=True
-                    continue
-                delta=dec(o.get('filled',0))-dec(anchor['filled'].get(o['cid'],0))
-                remaining[o['leg']]+=delta*(-1 if o['reduce_only'] else 1)
-            if remaining!=journal_remaining:
-                pending=True
+            pair.update(remote_remaining=anchor['remaining'],remote_captured_at=anchor['at'])
         if min(remaining)<0:
-            self.alert('negative_local_position')
-            pair['state']='UNKNOWN'
-            self.store.pair(pair)
-            return
+            pending=True  # Delayed entry accounting can trail a confirmed close.
+            if not unknown:
+                self.alert('negative_local_position')
         pair['remaining']=[str(q) for q in remaining]
         pair['accounting_pending']=pending
         pair['net_usd']=str(cash-fees) if not pending and not any(remaining) and not unknown else None
         if unknown:
             pair['state']='UNKNOWN'
-        elif not any(remaining):
+        elif not any(remaining) and not any(map(dec,pair.get('remote_remaining',['0','0']))):
             pair.update(state='CLOSED',closed_at=pair.get('closed_at',self.clock()))
             pair['funding_known']=all(pair['closed_at']<s['next'] for s in pair['funding'])
             if not pair['funding_known']:
@@ -459,44 +499,69 @@ class Engine:
             pair['state']='OPEN'
         self.store.pair(pair)
 
-    def resolve_exposure(self,pair):
-        """Cancel/query original IDs, then anchor BOTH legs to venue positions.
+    @staticmethod
+    def position_key(pair,leg):
+        i=Instrument.load(pair['instruments'][leg])
+        return '|'.join(('bitget' if i.market.exchange=='bitget' else 'crossex',i.symbol,'long' if leg==0 else 'short'))
 
-        The anchor never fabricates fills, fees or a terminal order. It survives
-        restart and isolates subsequent reduce fills from delayed entry reports.
-        """
+    @staticmethod
+    def quantities(pair):
+        return list(map(dec,pair.get('remote_remaining',pair['remaining'])))
+
+    def save_remote(self,pair,snapshot):
+        quantities=[str(dec(snapshot['positions'].get(self.position_key(pair,n),0))) for n in (0,1)]
+        if any(dec(q)<0 for q in quantities):
+            raise ValueError('negative_remote_position')
+        pair.update(remote_remaining=quantities,remote_captured_at=snapshot.get('captured_at',self.clock()))
+        self.store.pair(pair)
+
+    def clear_repair_locks(self,pair):
+        orders=[o for o in self.executor.orders() if o['pair_id']==pair['id']]
+        complete=not self.executor.pending_writes and not any(o['state'] in NONTERMINAL or o.get('accounting_pending') for o in orders)
+        if ('remote_remaining' in pair and complete and pair['id'] not in self._repairing
+                and dec(pair['remote_remaining'][0])==dec(pair['remote_remaining'][1])
+                and list(map(dec,pair['remaining']))==self.quantities(pair)):
+            pair['repair_stopped']=False
+            self.store.pair(pair)
+            for reason in ('unhedged_position','repair_stopped'):
+                self.stops.discard(reason,pair['id'])
+
+    def needs_recovery(self,pair):
+        return (any(o['state'] in NONTERMINAL for o in self.executor.orders() if o['pair_id']==pair['id'])
+                or pair['state']=='UNKNOWN' or len(set(self.quantities(pair)))>1
+                or pair.get('repair_stopped',False))
+
+    def recover_pair(self,pair):
+        self.store.event('RECOVERY_ATTEMPT',dict(pair_id=pair['id']))
+        if (pair.get('exit_reason') or self.store.meta('state')=='HALTING'
+                or any(o['state'] in NONTERMINAL for o in self.executor.orders() if o['pair_id']==pair['id'])):
+            self.close_pair(pair,pair.get('exit_reason','unknown_order'))
+        else:
+            self.balance(pair)
+
+    def resolve_exposure(self,pair):
+        """Query, cancel if unresolved, then read BOTH positions; never rewrite fills."""
         if not self.live:
             return False
-        orders=[o for o in self.store.all_orders() if o['pair_id']==pair['id']]
-        for o in orders:
-            if o['state'] in ('SENT','ACK','UNKNOWN'):
-                self.executor.cancel(o)
+        self.executor.recover(startup=False,pair_id=pair['id'])
         try:
-            snapshot=self.accounts.snapshot()
-            quantities=[]
-            for n,raw in enumerate(pair['instruments']):
-                i=Instrument.load(raw)
-                venue='bitget' if i.market.exchange=='bitget' else 'crossex'
-                key='|'.join((venue,i.symbol,'long' if n==0 else 'short'))
-                quantities.append(str(dec(snapshot['positions'].get(key,0))))
-            if any(dec(q)<0 for q in quantities):
-                raise ValueError('negative_remote_position')
+            snapshot=self.accounts.position_snapshot()
+            self.save_remote(pair,snapshot)
+            self.roll_daily_upnl(snapshot,snapshot.get('captured_at',self.clock()))
         except Exception:
             self.alert('unknown_exposure_unavailable')
             return False
-        orders=[o for o in self.store.all_orders() if o['pair_id']==pair['id']]
-        pair['position_anchor']=dict(at=self.clock(),remaining=quantities,
-            filled={o['cid']:o.get('filled','0') for o in orders},
-            unresolved=[o['cid'] for o in orders if o['state'] in ('SENT','ACK','UNKNOWN','INTENT')])
-        self.store.event('POSITION_RECOVERY',{'pair_id':pair['id'],'remaining':quantities,
-                                             'unresolved':pair['position_anchor']['unresolved']})
+        self.store.event('POSITION_RECOVERY',{'pair_id':pair['id'],'remaining':pair['remote_remaining'],
+            'unresolved':[o['cid'] for o in self.executor.orders() if o['pair_id']==pair['id'] and o['state'] in NONTERMINAL]})
         self.refresh_pair(pair)
+        self.clear_repair_locks(pair)
+        self.stops.discard('unknown_exposure_unavailable')
         return True
 
     def reduction_intent(self,pair,leg,quantity,bps,book=None):
         i=Instrument.load(pair['instruments'][leg])
         step=dec(i.spec.qty_step)
-        quantity=(min(dec(quantity),dec(pair['remaining'][leg]),dec(i.spec.max_qty))/step).to_integral_value(rounding=ROUND_FLOOR)*step
+        quantity=(min(dec(quantity),dec(pair['remote_remaining'][leg]),dec(i.spec.max_qty))/step).to_integral_value(rounding=ROUND_FLOOR)*step
         if quantity<=0 or quantity<dec(i.spec.min_qty):
             raise ValueError('reduction_below_min')
         if book is None:
@@ -525,12 +590,14 @@ class Engine:
         return self.executor.execute(self.reduction_intent(pair,leg,quantity,bps))
 
     def unhedged(self,pair):
-        a,b=map(dec,pair['remaining'])
+        a,b=self.quantities(pair)
+        if pair.get('repair_stopped'):
+            self.stops.add('repair_stopped',pair['id'])
         self.alert('unhedged_position',event_kind='UNHEDGED',details={'pair_id':pair['id'],
-            'quantity':str(abs(a-b)),'remaining':list(pair['remaining']),'excess_leg':0 if a>b else 1})
+            'quantity':str(abs(a-b)),'remaining':[str(a),str(b)],'excess_leg':0 if a>b else 1})
 
     def repair_intents(self,pair,bps):
-        quantities=list(map(dec,pair['remaining']))
+        quantities=self.quantities(pair)
         leg=0 if quantities[0]>quantities[1] else 1
         diff=abs(quantities[0]-quantities[1])
         try:
@@ -549,26 +616,36 @@ class Engine:
             return []
 
     def balance(self,pair):
+        self._repairing.add(pair['id'])
+        try:
+            self._balance(pair)
+        finally:
+            self._repairing.discard(pair['id'])
+            self.clear_repair_locks(pair)
+
+    def _balance(self,pair):
         self.refresh_pair(pair)
         if pair['state']=='UNKNOWN':
             self.close_pair(pair,'unknown_order')
-            return
-        if dec(pair['remaining'][0])==dec(pair['remaining'][1]):
-            self.store.set_meta('single_failures',0)
-            return
-        if pair.get('repair_stopped'):
             return
         if not self.resolve_exposure(pair):
             pair['repair_stopped']=True
             self.store.pair(pair)
             self.unhedged(pair)
             return
+        if len(set(self.quantities(pair)))==1:
+            self.store.set_meta('single_failures',0)
+            return
+        if pair.get('repair_stopped'):
+            self.unhedged(pair)
+            return
+        self.unhedged(pair)
         if not pair['single_failure']:
             pair['single_failure']=True
             self.store.set_meta('single_failures',self.store.meta('single_failures',0)+1)
         self.store.pair(pair)
         for attempt in range(pair.get('repair_attempts',0)+1,4):
-            a,b=map(dec,pair['remaining'])
+            a,b=self.quantities(pair)
             if a==b:
                 return
             intents=self.repair_intents(pair,3+10*attempt)
@@ -585,17 +662,20 @@ class Engine:
                 self.store.pair(pair)
                 self.unhedged(pair)
                 return
-            exposure=abs(dec(pair['remaining'][0])-dec(pair['remaining'][1]))
+            exposure=abs(self.quantities(pair)[0]-self.quantities(pair)[1])
             if result['state']=='UNKNOWN' or exposure>=abs(a-b):
                 break
-        if dec(pair['remaining'][0])!=dec(pair['remaining'][1]):
+        if len(set(self.quantities(pair)))>1:
             pair['repair_stopped']=True
             self.store.pair(pair)
             self.unhedged(pair)
 
     def close_pair(self,pair,reason):
+        self.roll_daily_upnl({},self.clock())
         self.refresh_pair(pair)
-        if pair['state']=='UNKNOWN' and not self.resolve_exposure(pair):
+        if pair['state']=='CLOSED':
+            return
+        if not self.resolve_exposure(pair):
             return
         if pair['state']=='CLOSED':
             return
@@ -603,7 +683,7 @@ class Engine:
         self.store.pair(pair)
         # Concurrent reduce-only closes. Never reopen a leg to repair a close.
         for attempt in range(3):
-            quantities=list(map(dec,pair['remaining']))
+            quantities=self.quantities(pair)
             indices=[n for n in (0,1) if quantities[n]>0]
             if not indices:
                 return
@@ -619,20 +699,24 @@ class Engine:
             if not intents:
                 return
             result=self.executor.execute_pair(intents)
-            self.refresh_pair(pair)
+            if not self.resolve_exposure(pair):
+                return
             if any(o['state']=='UNKNOWN' for o in result):
                 self.alert('unknown_close')
                 return
-        if any(dec(q) for q in pair['remaining']):
+        if any(self.quantities(pair)):
             self.alert('close_incomplete')
 
     def track(self,pair):
+        self.roll_daily_upnl({},self.clock())
+        self.refresh_pair(pair)
         if pair['state']=='UNKNOWN':
             self.close_pair(pair,pair.get('exit_reason','unknown_order'))
             return
         now=self.clock()
         instruments=[Instrument.load(i) for i in pair['instruments']]
         books=self.market.books(instruments)
+        self.save_tracking_upnl(pair,books,now)
         for n,b in enumerate(books):
             if b:
                 pair['last_books'][n]=b.to_dict()
@@ -668,7 +752,7 @@ class Engine:
                 return
         if not all(books):
             return
-        a,b=map(dec,pair['remaining'])
+        a,b=self.quantities(pair)
         if a!=b:
             self.balance(pair)
             return
@@ -708,6 +792,7 @@ class Engine:
         if halting:
             self.halt_attempts+=1
         try:
+            self.executor.recover(startup=False)
             for p in self.store.pairs(active=True):
                 try:
                     self.close_pair(p,reason)
@@ -716,11 +801,12 @@ class Engine:
             if self.store.meta('state')=='HALTING':
                 # A process must not exit successfully with residual or unknown exposure.
                 try:
-                    remote=self.accounts.snapshot()['positions']
+                    remote=self.accounts.position_snapshot()['positions']
                 except Exception:
                     self.alert('flatten_snapshot_unavailable')
                     return
-                if not self.store.pairs(active=True) and not remote:
+                if (not self.store.pairs(active=True) and not remote and not self.executor.pending_writes
+                        and not any(o['state'] in NONTERMINAL or o['state']=='INTENT' for o in self.executor.orders())):
                     self.store.set_meta('state','HALTED')
         finally:
             if halting:
@@ -729,6 +815,19 @@ class Engine:
     def tick(self):
         if self.store.meta('state')=='HALTED':
             return
+        self.stops.flush()
+        self.roll_daily_upnl({},self.clock())
+        pending={o['pair_id'] for o in self.executor.orders() if o['state'] in NONTERMINAL}
+        self.executor.recover(startup=False)
+        for p in self.store.pairs():
+            if p['state'] in ('SHADOW','SKIPPED','CLOSED') and p['id'] not in pending:
+                continue
+            self.refresh_pair(p)
+            if p['id'] in pending or self.needs_recovery(p):
+                if self.store.meta('state')=='HALTING':
+                    self.store.event('RECOVERY_ATTEMPT',dict(pair_id=p['id']))
+                else:
+                    self.recover_pair(p)
         if self.store.meta('state')=='HALTING':
             self.flatten_all('circuit_breaker')
             return
