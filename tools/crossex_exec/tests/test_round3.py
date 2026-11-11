@@ -160,6 +160,12 @@ class Round3Tests(unittest.TestCase):
         self.assertFalse([r for r in self.trace if r[0] == 'place'])
         self.assertEqual(pair['state'], 'UNKNOWN')
 
+    def test_r1_regular_tracking_uses_unknown_recovery_path(self):
+        pair = self.pair(('.7', '.4'), unknown=True)
+        self.engine.track(pair)
+        self.assertTrue(all(v.quantity == 0 for v in self.venues))
+        self.assertTrue(any(r[0] == 'cancel' for r in self.trace))
+
     def test_r2_repair_rounds_down_then_minimizes_residual_with_both_steps(self):
         pair = self.pair(('1.006', '.99'), steps=('.01', '.001'))
         self.engine.balance(pair)
@@ -220,6 +226,16 @@ class Round3Tests(unittest.TestCase):
                 self.engine.tick()
                 track.assert_called()
             release.set()
+
+    def test_r4_failed_catalog_is_retried_after_backoff(self):
+        self.engine.bases = ('BTC',)
+        with patch.object(self.market, 'bootstrap', side_effect=[ValueError('down'), self.market.mapping]) as bootstrap:
+            self.engine.refresh_reference()
+            self.engine.refresh_reference()
+            self.assertEqual(bootstrap.call_count, 1)
+            self.now[0] += 30
+            self.engine.refresh_reference()
+            self.assertEqual(bootstrap.call_count, 2)
 
     def test_r5_halting_restart_retries_with_backoff_until_flat(self):
         self.pair()
@@ -428,6 +444,12 @@ class Round3Tests(unittest.TestCase):
         results = self.engine.executor.execute_pair(orders)
         self.assertEqual([r['state'] for r in results], ['TERMINAL', 'TERMINAL'])
 
+    def test_r10_empty_whitelist_reads_no_contract_fees(self):
+        self.engine.bases = ()
+        self.engine.refresh_reference()
+        self.accounts.fees.assert_not_called()
+        self.assertEqual(self.accounts.fees_by_market, {})
+
     def test_r11_first_executor_stop_and_new_reason_reach_journal_once(self):
         pair = self.pair(unknown=True)
         order = self.store.all_orders()[0]
@@ -458,6 +480,32 @@ class Round3PolicyTests(unittest.TestCase):
         instruments[1].spec = replace(instruments[1].spec, max_qty='.980')
         with self.assertRaises(ValueError):
             review(instruments, books, ['.0002']*2, funding, ['5000000']*2, 1000)
+
+    def test_r6_min_quantity_bumps_once_and_still_invalid_minimum_rejects(self):
+        instruments = [instrument(), instrument('bitget')]
+        books = [Book([['99', '10']], [['100', '10']], 1000), Book([['102', '10']], [['103', '10']], 1000)]
+        funding = [dict(rate='0', next=5000, interval=28800, captured_at=1000, history_ok=True, max_abs_24h='0')]*2
+        instruments[0].spec = replace(instruments[0].spec, min_qty='.981')
+        self.assertEqual(dec(review(instruments, books, ['.0002']*2, funding, ['5000000']*2, 1000)['quantity']), dec('.981'))
+        instruments[0].spec = replace(instruments[0].spec, min_qty='.982')
+        with self.assertRaises(ValueError):
+            review(instruments, books, ['.0002']*2, funding, ['5000000']*2, 1000)
+
+    def test_r10_failed_contract_revokes_only_its_fee_and_timestamp(self):
+        cross, bitget = Mock(), Mock()
+        a, b = instrument(), instrument('bitget')
+        cross.fees.return_value = [dict(exchange_type='BINANCE', future_taker_fee='.0002')]
+        cross.leverage.return_value = {}
+        bitget.fee.return_value = '.0006'
+        accounts = Accounts(cross, bitget, clock=lambda:1000)
+        accounts.fees([a, b])
+        bitget.fee.side_effect = ValueError('down')
+        rates = accounts.fees([a, b])
+        self.assertEqual(rates, {a.market.key:'.0002'})
+        self.assertEqual(accounts.fee_times_by_market, {a.market.key:1000})
+        cross.fees.return_value = []
+        bitget.fee.side_effect = None
+        self.assertEqual(accounts.fees([a, b]), {b.market.key:'.0006'})
 
     def test_r8_checked_status_retains_venue_average_fields(self):
         for gate, field in ((True, 'avg_price'), (False, 'avgPrice')):
