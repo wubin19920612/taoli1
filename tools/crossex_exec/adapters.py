@@ -23,13 +23,15 @@ def validate_intent(i):
 
 
 def checked_status(data, i, *, gate):
-    oid, cid, qty = ('order_id','text','executed_qty') if gate else ('orderId','clientOid','baseVolume')
+    oid, cid, qty = ('order_id','text','executed_qty') if gate else ('orderId','clientOid','cumExecQty')
     if (data.get('symbol') != i['instrument']['symbol'] or data.get(cid) != i['cid']
             or (i.get('oid') and str(data.get(oid)) != i['oid'])):
         raise APIError('invalid_response')
-    state = data['state']
-    terminal = {'FILLED','CANCELLED','FAIL','REJECT'} if gate else {'filled','canceled'}
-    active = {'NEW','OPEN','PARTIALLY_FILLED'} if gate else {'live','partially_filled'}
+    if not gate and data.get('category') != 'USDT-FUTURES':
+        raise APIError('invalid_response')
+    state = data['state' if gate else 'orderStatus']
+    terminal = {'FILLED','CANCELLED','FAIL','REJECT'} if gate else {'filled','cancelled'}
+    active = {'NEW','OPEN','PARTIALLY_FILLED'} if gate else {'live','new','partially_filled'}
     if state not in terminal | active:
         raise APIError('invalid_response')
     filled = dec(data[qty])
@@ -47,11 +49,11 @@ def summarize_fills(rows, i, gate):
             continue
         if r['symbol'] != i['instrument']['symbol']:
             raise APIError('invalid_response')
-        tid = identifier(r['transaction_id' if gate else 'tradeId'])
+        tid = identifier(r['transaction_id' if gate else 'execId'])
         if tid in unique:
             continue
         unique.add(tid)
-        q, p = dec(r['qty' if gate else 'baseVolume']), dec(r['price'])
+        q, p = dec(r['qty' if gate else 'execQty']), dec(r['price' if gate else 'execPrice'])
         if q <= 0 or p <= 0:
             raise APIError('invalid_response')
         quantity += q
@@ -66,8 +68,8 @@ def summarize_fills(rows, i, gate):
             for part in r['feeDetail']:
                 if part['feeCoin'] != 'USDT' or part.get('deduction','no') != 'no':
                     raise APIError('invalid_response')
-                fee -= dec(part['totalFee'])  # Bitget cash-flow sign, Gate cost sign.
-        times.append(float(dec(r['create_time' if gate else 'cTime'])))
+                fee += dec(part['fee'])  # UTA v3 documents a positive fee cost.
+        times.append(float(dec(r['create_time' if gate else 'createdTime'])))
     if quantity != dec(i['filled']):
         raise APIError('invalid_response')
     return dict(vwap=str(cost/quantity) if quantity else None, fee=str(fee),
@@ -75,7 +77,7 @@ def summarize_fills(rows, i, gate):
 
 
 class CrossEx:
-    def __init__(self, http, mode='SINGLE'):
+    def __init__(self, http, mode='DUAL'):
         if mode not in ('SINGLE','DUAL'):
             raise ValueError('invalid_position_mode')
         self.http, self.mode = http, mode
@@ -124,61 +126,82 @@ class CrossEx:
 
 
 class Bitget:
-    def __init__(self, http, mode='one_way_mode'):
+    def __init__(self, http, mode='hedge_mode'):
         if mode not in ('one_way_mode','hedge_mode'):
             raise ValueError('invalid_position_mode')
         self.http, self.mode = http, mode
 
     def place(self, i, before_send=None):
         validate_intent(i)
-        data = dict(symbol=i['instrument']['symbol'], productType='USDT-FUTURES', marginMode='crossed',
-                    marginCoin='USDT', size=i['quantity'], price=i['price'], orderType='limit', force='ioc',clientOid=i['cid'])
+        if len(i['cid']) > 32:
+            raise ValueError('bitget_client_id_too_long')
+        expected = ('sell' if i['position_side']=='long' else 'buy') if i['reduce_only'] else ('buy' if i['position_side']=='long' else 'sell')
+        if i['side'] != expected:
+            raise ValueError('inconsistent_position_direction')
+        data = dict(symbol=i['instrument']['symbol'], category='USDT-FUTURES', marginMode='crossed',
+                    qty=i['quantity'], price=i['price'], side=i['side'], orderType='limit',
+                    timeInForce='ioc',clientOid=i['cid'])
         if self.mode == 'hedge_mode':
-            data.update(side='buy' if i['position_side']=='long' else 'sell',tradeSide='close' if i['reduce_only'] else 'open')
+            # UTA closes by opposite side + the existing position side.
+            # reduceOnly is documented ONLY for one-way mode.
+            data['posSide']=i['position_side']
         else:
-            data.update(side=i['side'],reduceOnly='YES' if i['reduce_only'] else 'NO')
-        response = self.http.request('POST','/api/v2/mix/order/place-order',body=data,before_send=before_send,group='write')
+            data['reduceOnly']='yes' if i['reduce_only'] else 'no'
+        response = self.http.request('POST','/api/v3/trade/place-order',body=data,before_send=before_send,group='write')
         if response.get('clientOid') != i['cid']:
             raise APIError('invalid_response')
-        # Documented reduce-only ACK may omit orderId; immediately query clientOid.
         return identifier(response['orderId']) if response.get('orderId') else None
 
     def detail(self, i, deadline=None):
-        params = dict(symbol=i['instrument']['symbol'],productType='USDT-FUTURES')
-        params.update({'orderId':i['oid']} if i.get('oid') else {'clientOid':i['cid']})
-        return checked_status(self.http.request('GET','/api/v2/mix/order/detail',params,deadline=deadline),i,gate=False)
+        params = {'orderId':i['oid']} if i.get('oid') else {'clientOid':i['cid']}
+        return checked_status(self.http.request('GET','/api/v3/trade/order-info',params,deadline=deadline),i,gate=False)
 
     def cancel(self, i):
-        body = dict(symbol=i['instrument']['symbol'],productType='USDT-FUTURES',marginCoin='USDT')
+        body = dict(category='USDT-FUTURES')
         body.update({'orderId':i['oid']} if i.get('oid') else {'clientOid':i['cid']})
-        return self.http.request('POST','/api/v2/mix/order/cancel-order',body=body,group='write')
+        return self.http.request('POST','/api/v3/trade/cancel-order',body=body,group='write')
 
-    def fills(self, i):
-        rows, cursor = [], None
+    def paged(self, path, params):
+        rows, seen = [], set()
+        params=dict(params,limit=100)
         for _ in range(20):
-            params = dict(symbol=i['instrument']['symbol'],productType='USDT-FUTURES',orderId=i['oid'],limit=100)
-            if cursor:
-                params['idLessThan'] = cursor
-            data = self.http.request('GET','/api/v2/mix/order/fills',params)
-            rows.extend(data['fillList'])
-            if len(data['fillList']) < 100:
-                return summarize_fills(rows,i,False)
-            new_cursor = data['endId']
-            if not new_cursor or new_cursor == cursor:
-                break
-            cursor = new_cursor
+            data=self.http.request('GET',path,params)
+            batch=data['list']
+            if not isinstance(batch,list):
+                raise APIError('invalid_response')
+            rows.extend(batch)
+            if len(batch)<100:
+                return rows
+            cursor=data['cursor']
+            if not cursor or cursor in seen:
+                raise APIError('invalid_response')
+            seen.add(cursor)
+            params['cursor']=cursor
         raise APIError('invalid_response')
 
-    def account(self, symbol):
-        return self.http.request('GET','/api/v2/mix/account/account',
-                                 dict(symbol=symbol,productType='USDT-FUTURES',marginCoin='USDT'),group='account')
+    def fills(self, i):
+        rows=self.paged('/api/v3/trade/fills',dict(category='USDT-FUTURES',orderId=i['oid']))
+        return summarize_fills(rows,i,False)
+
+    def account(self):
+        return self.http.request('GET','/api/v3/account/assets',group='account')
+
+    def settings(self):
+        return self.http.request('GET','/api/v3/account/settings',group='account')
 
     def positions(self):
-        return self.http.request('GET','/api/v2/mix/position/all-position',
-                                 dict(productType='USDT-FUTURES',marginCoin='USDT'),group='position')
+        data=self.http.request('GET','/api/v3/position/current-position',
+                               dict(category='USDT-FUTURES'),group='position')
+        rows=data['list']  # C1 observed null specifically for an empty position list.
+        if rows is None:
+            return []
+        if not isinstance(rows,list):
+            raise ValueError('positions_unknown')
+        return rows
+
+    def open_orders(self):
+        return self.paged('/api/v3/trade/unfilled-orders',dict(category='USDT-FUTURES'))
 
     def fee(self, symbol):
-        return self.http.request('GET','/api/v2/common/trade-rate',dict(symbol=symbol,businessType='mix'),group='fee')['takerFeeRate']
-
-    def fees(self):
-        return self.http.request('GET','/api/v2/common/all-trade-rate',dict(businessType='mix'),group='fee')
+        return self.http.request('GET','/api/v3/account/fee-rate',
+                                 dict(symbol=symbol,category='USDT-FUTURES'),group='fee')['takerFeeRate']

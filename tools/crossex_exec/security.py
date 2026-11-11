@@ -73,6 +73,8 @@ def load_env(path):
             name, sep, value = line.partition('=')
             if not sep or not re.fullmatch('[A-Z][A-Z0-9_]*', name) or name in values:
                 raise ValueError('invalid_env_file')
+            if name.startswith('GATE_API_'):
+                raise ValueError('legacy_gate_env_not_supported')
             values[name] = value
         REDACTOR.register(*(v for k,v in values.items() if any(s in k for s in ('KEY','SECRET','PASSPHRASE','TOKEN'))))
         return values

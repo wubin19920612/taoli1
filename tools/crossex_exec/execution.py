@@ -8,10 +8,11 @@ from .transport import APIError
 
 
 class Executor:
-    def __init__(self, store, adapters, *, live=False, poll_interval=.2, confirm_timeout=10, can_open=lambda: True):
+    def __init__(self, store, adapters, *, live=False, poll_interval=.2, confirm_timeout=10, can_open=lambda: True, check_order=None):
         self.store,self.adapters,self.live=store,adapters,live
         self.poll_interval,self.confirm_timeout=poll_interval,confirm_timeout
         self.can_open=can_open
+        self.check_order=check_order
         self.locks,self.lock= {},threading.Lock()
 
     def adapter(self,i):
@@ -21,6 +22,18 @@ class Executor:
         # Commit BOTH IDs before either worker may send.
         for i in intents:
             self.prepare(i)
+        if self.live and self.check_order and all(self.store.order(i['cid'])['state']=='INTENT' for i in intents):
+            try:
+                for i in intents:
+                    self.check_order(i)
+            except Exception:
+                results=[]
+                for i in intents:
+                    row=self.store.order(i['cid'])
+                    row.update(state='UNSENT',accounting_pending=False,reason='pair_risk_admission')
+                    self.store.save_order(row,'UNSENT')
+                    results.append(row)
+                return results
         with ThreadPoolExecutor(max_workers=2,thread_name_prefix='ioc') as pool:
             jobs=[pool.submit(self.execute,i) for i in intents]
             return [f.result() for f in jobs]
@@ -53,11 +66,15 @@ class Executor:
                 return self.confirm(i)
             adapter=self.adapter(i)
             def sent():
+                if self.check_order:
+                    self.check_order(i)
                 if not i['reduce_only'] and not self.can_open():
                     raise APIError('rejected')
                 i.update(state='SENT',sent_ms=time.time()*1000)
                 self.store.save_order(i,'SENT')
             try:
+                if self.check_order:
+                    self.check_order(i)  # known breaches never reach adapter.place
                 oid=adapter.place(i,before_send=sent)
                 i.update(oid=oid,state='ACK',ack_ms=time.time()*1000)
                 self.store.save_order(i,'ACK')

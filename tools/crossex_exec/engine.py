@@ -7,10 +7,11 @@ from tools.fill_sim.engine import trigger_reason
 from .accounts import local_positions
 from .policy import Instrument, review, exit_reason, risk_decision, limit_price
 from .execution import Executor
+from .limits import HardLimits, DEFAULT_VAR
 
 
 class Engine:
-    def __init__(self,store,market,accounts,*,live=False,stop_file='var/STOP',clock=time.time,alert_sink=None):
+    def __init__(self,store,market,accounts,*,live=False,stop_file=DEFAULT_VAR+'/STOP',clock=time.time,alert_sink=None,config=None):
         self.store,self.market,self.accounts,self.live,self.clock=store,market,accounts,live,clock
         self.stop_file=Path(stop_file)
         self.risk='STOP'
@@ -18,7 +19,9 @@ class Engine:
         self.snapshot=None
         self.last_accounting_retry=0
         self.alert_sink=alert_sink
-        self.executor=Executor(store,{'crossex':accounts.cross,'bitget':accounts.bitget},live=live,can_open=self.can_open)
+        self.limits=HardLimits(store,accounts.snapshot,config)
+        self.executor=Executor(store,{'crossex':accounts.cross,'bitget':accounts.bitget},live=live,
+                               can_open=self.can_open,check_order=self.limits.check_order)
 
     def alert(self,reason):
         changed=self.store.meta('stop_reason')!=reason
@@ -32,6 +35,7 @@ class Engine:
         rejected=sum(o['state']=='REJECTED' or o.get('rejected',False) for o in recent)
         local_ok=(self.store.meta('single_failures',0)<3 and (not recent or dec(rejected)/len(recent)<=dec('.3')))
         return (local_ok and self.risk=='RUN' and not self.stop_file.exists() and not self.store.meta('stop_reason')
+                and not self.store.meta('flatten_requested')
                 and self.store.meta('state') not in ('HALTED','HALTING') and 0<=self.clock()-self.last_reconcile<60)
 
     def startup(self,bases=()):
@@ -40,10 +44,22 @@ class Engine:
         if previous is not None and previous!=self.live and self.store.pairs(active=True):
             raise ValueError('mode_change_with_live_positions')
         self.store.set_meta('live_mode',self.live)
+        self.snapshot=self.accounts.validate_startup()
+        known={o['cid'] for o in self.store.all_orders() if o['state'] in ('SENT','ACK','UNKNOWN')
+               and o['instrument']['market']['exchange']=='bitget'}
+        if any(o['clientOid'] not in known for o in self.snapshot.get('open_orders',[])):
+            raise ValueError('foreign_bitget_unfilled_orders')
+        self.limits.initialize(self.snapshot)
         self.executor.recover()
         # Rebuild from the immutable journal, including crash after terminal before pair save.
         for pair in self.store.pairs(active=True):
             self.refresh_pair(pair)
+        if self.store.meta('state')=='HALTING':
+            # A known equity breach must not wait for catalog/fee bootstrap.
+            self.flatten_all('startup_equity_drop')
+            if self.store.meta('state')=='HALTED':
+                return
+            raise ValueError('startup_halt_residual_exposure')
         self.market.bootstrap(bases)
         fees=self.accounts.fees(self.market.mapping.values())
         self.store.set_meta('actual_fees',dict(at=self.clock(),rates=fees))
@@ -78,6 +94,7 @@ class Engine:
     def reconcile(self):
         try:
             self.snapshot=self.accounts.snapshot()
+            equity_halt=self.limits.check_equity(self.snapshot)
             same=self.snapshot['positions']==local_positions(self.store.pairs(active=True))
             if not same:
                 self.alert('position_mismatch')
@@ -105,7 +122,7 @@ class Engine:
             self.risk=risk_decision(daily=daily,total=total,margins=self.snapshot['margins'],
                 single_failures=self.store.meta('single_failures',0),rejected=rejected,attempted=len(recent),reconciled=same)
             self.store.event('RECONCILE',dict(matched=same,margins=self.snapshot['margins'],daily=str(daily),total=str(total),risk=self.risk))
-            if total<=-100:
+            if total<=-100 or equity_halt:
                 self.store.set_meta('state','HALTING')
             if self.risk in ('HALTED','FLATTEN') or self.store.meta('state')=='HALTING':
                 self.flatten_all('circuit_breaker')
@@ -161,6 +178,12 @@ class Engine:
             self.store.pair(pair)
             return pair
         self.refresh_pair(pair)
+        if self.store.meta('state')=='HALTING':
+            self.flatten_all('account_equity_drop')
+            return pair
+        if self.store.meta('flatten_requested'):
+            self.flatten_all('margin_ratio')
+            return pair
         if any(o['state']=='UNKNOWN' for o in results):
             self.alert('unknown_order')
         else:
@@ -170,7 +193,7 @@ class Engine:
     def new_intent(self,pair,leg,quantity,price,reduce,estimate=None):
         i=Instrument.load(pair['instruments'][leg])
         side=('sell' if leg==0 else 'buy') if reduce else ('buy' if leg==0 else 'sell')
-        return dict(cid='ce-'+uuid.uuid4().hex,pair_id=pair['id'],leg=leg,instrument=i.dump(),
+        return dict(cid='ce-'+uuid.uuid4().hex[:29],pair_id=pair['id'],leg=leg,instrument=i.dump(),
                     side=side,position_side='long' if leg==0 else 'short',quantity=str(quantity),price=str(price),
                     reduce_only=reduce,created_at=self.clock(),estimate=estimate if reduce else pair['fill']['buy' if leg==0 else 'sell']['vwap'])
 
@@ -410,3 +433,7 @@ class Engine:
             self.reconcile()
         if self.store.meta('state')=='HALTING':
             self.flatten_all('circuit_breaker')
+        elif self.store.meta('flatten_requested'):
+            self.flatten_all('margin_ratio')
+            if not self.store.pairs(active=True):
+                self.store.set_meta('flatten_requested',False)

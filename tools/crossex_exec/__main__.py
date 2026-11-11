@@ -13,6 +13,7 @@ from .adapters import CrossEx, Bitget
 from .accounts import Accounts
 from .market import MarketData
 from .engine import Engine
+from .limits import DEFAULT_VAR, DEFAULT_ENV
 from .reporting import report
 from tools.fill_sim.network import ShadowAPI
 
@@ -25,9 +26,9 @@ def main(argv=None):
     parser=argparse.ArgumentParser(description='CrossEx/Bitget execution; no keys in CLI or process environment')
     sub=parser.add_subparsers(dest='command',required=True)
     run=sub.add_parser('run')
-    run.add_argument('--env-file',required=True)
+    run.add_argument('--env-file',default=DEFAULT_ENV)
     reporting=sub.add_parser('report')
-    reporting.add_argument('--db',default='var/crossex-exec.db')
+    reporting.add_argument('--db',default=DEFAULT_VAR+'/crossex-exec.db')
     args=parser.parse_args(argv)
     if args.command=='report':
         if not Path(args.db).is_file():
@@ -43,7 +44,7 @@ def main(argv=None):
     risk_confirmed=config.get('BITGET_RISK_RATE_CONFIRMED','0')=='1'
     if live and not risk_confirmed:
         raise ValueError('bitget_risk_convention_unconfirmed')
-    path=Path(config.get('CROSSEX_DB','var/crossex-exec.db'))
+    path=Path(config.get('CROSSEX_DB',DEFAULT_VAR+'/crossex-exec.db'))
     path.parent.mkdir(parents=True,exist_ok=True)
     # flock held for full process lifetime prevents two services sharing a journal.
     import fcntl
@@ -51,15 +52,15 @@ def main(argv=None):
         fcntl.flock(process_lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
         with Store(path) as store:
             store.assert_startable()
-            cross=CrossEx(Transport('gate',Credentials(config.get('GATE_API_KEY',''),config.get('GATE_API_SECRET','')),live=live),
-                          config.get('CROSSEX_POSITION_MODE','SINGLE'))
+            cross=CrossEx(Transport('gate',Credentials(config.get('CROSSEX_API_KEY',''),config.get('CROSSEX_API_SECRET','')),live=live),
+                          config.get('CROSSEX_POSITION_MODE','DUAL'))
             bitget=Bitget(Transport('bitget',Credentials(config.get('BITGET_API_KEY',''),config.get('BITGET_API_SECRET',''),
                                                        config.get('BITGET_API_PASSPHRASE','')),live=live),
-                          config.get('BITGET_POSITION_MODE','one_way_mode'))
+                          config.get('BITGET_POSITION_MODE','hedge_mode'))
             market=MarketData(store)
             accounts=Accounts(cross,bitget,risk_confirmed=risk_confirmed)
-            engine=Engine(store,market,accounts,live=live,stop_file=config.get('CROSSEX_STOP_FILE','var/STOP'),
-                          alert_sink=lambda reason:emit('alert',reason=reason))
+            engine=Engine(store,market,accounts,live=live,stop_file=config.get('CROSSEX_STOP_FILE',DEFAULT_VAR+'/STOP'),
+                          alert_sink=lambda reason:emit('alert',reason=reason),config=config)
             shutdown=False
             def stop(signum,frame):
                 nonlocal shutdown
@@ -92,7 +93,10 @@ def main(argv=None):
                                     break
                         if now-last_status>=300:
                             emit('status',live=live,state=store.meta('state','RUNNING'),risk=engine.risk,
-                                 stop_reason=store.meta('stop_reason'),active_pairs=len(store.pairs(active=True)))
+                                 stop_reason=store.meta('stop_reason'),active_pairs=len(store.pairs(active=True)),
+                                 liabilities=store.meta('liabilities',[]),
+                                 equity_baseline=store.meta('account_equity_baseline'),
+                                 equity_current=store.meta('account_equity_current'))
                             last_status=now
                     except Exception:
                         engine.alert('cycle_failed_closed')

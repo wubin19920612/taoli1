@@ -45,6 +45,8 @@ class Transport:
 
     def admit(self, group='query', budget_deadline=None):
         limit = (20 if self.venue == 'gate' else 10) if group == 'query' else (10 if group == 'write' else 5)
+        if self.venue == 'bitget' and group == 'fee':
+            limit = 3
         deadline = min(time.monotonic()+2,budget_deadline) if budget_deadline is not None else time.monotonic()+2
         while True:
             with self.lock:
@@ -60,6 +62,8 @@ class Transport:
             time.sleep(.01)
 
     def request(self, method, path, params=None, body=None, before_send=None, group='query', deadline=None):
+        if self.venue=='bitget' and not path.startswith('/api/v3/'):
+            raise APIError('forbidden_endpoint')
         if method != 'GET' and not self.live:
             raise APIError('shadow_write')
         if not self.credentials.key or not self.credentials.secret or (self.venue == 'bitget' and not self.credentials.passphrase):
@@ -68,13 +72,6 @@ class Transport:
         self.admit(group,deadline)
         payload = json.dumps(body, separators=(',',':'), ensure_ascii=True) if body is not None else ''
         query = urlencode(sorted((params or {}).items()))
-        ts = str(int(time.time() * (1 if self.venue == 'gate' else 1000)))
-        signature = (gate_sign if self.venue == 'gate' else bitget_sign)(self.credentials.secret,method,path,query,payload,ts)
-        REDACTOR.signature(signature)
-        headers = {'Content-Type':'application/json', 'Connection':'close', 'User-Agent':'taoli1-crossex-exec/1'}
-        headers.update({'KEY':self.credentials.key, 'Timestamp':ts, 'SIGN':signature} if self.venue == 'gate' else
-                       {'ACCESS-KEY':self.credentials.key, 'ACCESS-TIMESTAMP':ts, 'ACCESS-SIGN':signature,
-                        'ACCESS-PASSPHRASE':self.credentials.passphrase})
         parsed = self.parsed
         cls = http.client.HTTPSConnection if parsed.scheme == 'https' else http.client.HTTPConnection
         conn = cls(parsed.hostname, parsed.port, timeout=self.timeout)
@@ -86,6 +83,16 @@ class Transport:
             conn.connect()
             if before_send:
                 before_send()  # Admission and connection precede durable SENT.
+                # The guard does bounded read-only requests. Give the write its
+                # own bounded wire budget and sign AFTER the guard completes.
+                deadline=time.monotonic()+self.timeout
+            ts = str(int(time.time() * (1 if self.venue == 'gate' else 1000)))
+            signature = (gate_sign if self.venue == 'gate' else bitget_sign)(self.credentials.secret,method,path,query,payload,ts)
+            REDACTOR.signature(signature)
+            headers = {'Content-Type':'application/json', 'Connection':'close', 'User-Agent':'taoli1-crossex-exec/1'}
+            headers.update({'KEY':self.credentials.key, 'Timestamp':ts, 'SIGN':signature} if self.venue == 'gate' else
+                           {'ACCESS-KEY':self.credentials.key, 'ACCESS-TIMESTAMP':ts, 'ACCESS-SIGN':signature,
+                            'ACCESS-PASSPHRASE':self.credentials.passphrase})
             conn.sock.settimeout(max(.001,deadline-time.monotonic()))
             conn.request(method, path+('?' + query if query else ''), body=payload.encode(), headers=headers)
             response = http.client.HTTPResponse(DeadlineSocket(conn.sock,deadline,self.timeout,time.monotonic), method=method)
