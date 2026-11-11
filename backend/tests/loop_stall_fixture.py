@@ -27,12 +27,16 @@ def workload(groups=4000):
         symbol = f"TOKEN{i}USDT"
         for leg, exchange in enumerate(("bitget", "gate", "hyperliquid")):
             raw = f"xyz:TOKEN{i}" if leg == 2 else symbol
+            batch_fallback = leg == 1 and i % 41 == 3
             row = MarketSnapshot(
                 symbol=symbol, base=f"TOKEN{i}", exchange=exchange, raw_symbol=raw,
                 dex="xyz" if leg == 2 else None, market_type="future",
                 bid=100 + leg, ask=100.1 + leg, bid_size=100, ask_size=110,
                 timestamp=NOW, upstream_timestamp=NOW,
-                quote_time_source=("received_batch" if i % 2 else "ws") if leg == 1 else "upstream",
+                quote_time_source=("received_batch" if batch_fallback else "ws") if leg == 1 else "upstream",
+                quote_kind="reference" if batch_fallback else "book",
+                is_estimated=batch_fallback,
+                estimated_fields=["bid", "ask"] if batch_fallback else [],
                 volume_24h_usdt=2_000_000, funding_rate_pct=0.01, funding_interval_hours=8,
             )
             rows.append(row)

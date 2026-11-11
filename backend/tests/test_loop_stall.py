@@ -49,6 +49,8 @@ async def test_large_validation_and_filter_match_frozen_00dfa9e(large, mode):
     assert any(r.identity_collision for r in rows)
     assert any(r.identity_status == "expired" for r in rows)
     assert {"received_batch", "ws"} <= {r.quote_time_source for r in rows}
+    assert all(r.quote_kind == "reference" and {"bid", "ask"} <= set(r.estimated_fields)
+               for r in rows if r.quote_time_source == "received_batch")
     assert any(r.quote_conversion_source for r in rows)
     risk = RiskSettings()
     for i, item in enumerate(opportunities):
