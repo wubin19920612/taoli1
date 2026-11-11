@@ -49,6 +49,7 @@ describe("实盘契约页面", () => {
     expect(screen.getByText("单腿处理中").className).toContain("red");
     expect(screen.getByText("200.00 / 600.00 USD")).toBeTruthy();
     expect(screen.getByText("1 / 3")).toBeTruthy();
+    expect(screen.getByText("0.0480% / 0.0600%（crossex / bitget）")).toBeTruthy();
     expect(screen.getAllByText(/crossex/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/多/).length).toBeGreaterThan(0);
     const chart = chartMocks[0];
@@ -168,5 +169,15 @@ describe("实盘契约页面", () => {
     });
     await act(async () => { await vi.advanceTimersByTimeAsync(30000); });
     expect(screen.getByRole("button", { name: "加载更多" }).hasAttribute("disabled")).toBe(false);
+  });
+
+  it("retains an upstream halt reason when the halt flag has cleared", async () => {
+    fetchMock.mockImplementation(async (input: string) => {
+      const path = new URL(input).pathname.split("/").pop() as keyof typeof liveFixtures;
+      return { ok: true, status: 200, json: async () => ({ available: true,
+        data: path === "summary" ? { ...liveFixtures.summary, halted: false } : liveFixtures[path] }) };
+    });
+    render(<LiveExecPage />); await flush();
+    expect(screen.getByText("未熔断：权益保护")).toBeTruthy();
   });
 });
