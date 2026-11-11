@@ -105,7 +105,7 @@ class FakeVenue:
                     if owner.reject:
                         return self.reply(400, {'label': 'TRADE_INVALID_ORDER_QTY', 'code': '40017',
                                                'message': 'test-secret test-pass test-key'})
-                    reduce = data.get('reduce_only')=='true' or data.get('reduceOnly')=='YES' or data.get('tradeSide')=='close'
+                    reduce = data.get('reduce_only')=='true' or data.get('reduceOnly')=='yes' or (data.get('posSide')=='long' and data.get('side')=='sell') or (data.get('posSide')=='short' and data.get('side')=='buy')
                     if reduce and owner.reject_reduce:
                         return self.reply(400, {'label':'TRADE_INVALID_ORDER_QTY','code':'40017'})
                     fill = min(dec(owner.fill),dec(data.get('qty',data.get('size'))))
@@ -125,10 +125,10 @@ class FakeVenue:
                                              symbol=order['data']['symbol'], qty=order['fill'], price='100',
                                              fee='.02', fee_coin='USDT', create_time='1700000000000'))
                         else:
-                            rows.append(dict(tradeId='t'+order['id'], orderId=order['id'], symbol='BTCUSDT',
-                                             baseVolume=order['fill'], price='100', feeDetail=[{'feeCoin':'USDT','totalFee':'-.02'}],
-                                             cTime='1700000000000'))
-                    return self.reply(200, rows if owner.venue == 'gate' else {'fillList':rows, 'endId':''})
+                            rows.append(dict(execId='t'+order['id'], orderId=order['id'], symbol='BTCUSDT',
+                                             execQty=order['fill'], execPrice='100', feeDetail=[{'feeCoin':'USDT','fee':'.02'}],
+                                             createdTime='1700000000000'))
+                    return self.reply(200, rows if owner.venue == 'gate' else {'list':rows, 'cursor':''})
                 query = parse_qs(path.query)
                 identity = path.path.rsplit('/', 1)[-1] if owner.venue == 'gate' else query.get('orderId', query.get('clientOid', ['']))[0]
                 found = next(((cid, o) for cid, o in owner.orders.items() if identity in (cid, o['id'])), None)
@@ -142,7 +142,7 @@ class FakeVenue:
                                   state='CANCELLED' if terminal else 'OPEN', executed_qty=order['fill'] if terminal else '0')
                 else:
                     result = dict(orderId=order['id'], clientOid=cid, symbol='BTCUSDT',
-                                  state='canceled' if terminal else 'live', baseVolume=order['fill'] if terminal else '0')
+                                  category='USDT-FUTURES', orderStatus='cancelled' if terminal else 'new', cumExecQty=order['fill'] if terminal else '0')
                 self.reply(200, result)
 
             def reply(self, status, data):
@@ -180,10 +180,10 @@ class SignatureTests(unittest.TestCase):
 
     def test_bitget_document_preimage(self):
         # Official preimage, independently chosen synthetic secret; docs give no output digest.
-        pre = '16273667805456GET/api/mix/v2/market/depth?limit=20&symbol=BTCUSDT'
+        pre = '16273667805456GET/api/v3/account/fee-rate?category=SPOT&symbol=BTCUSDT'
         expected = base64.b64encode(hmac.new(b'secret', pre.encode(), hashlib.sha256).digest()).decode()
-        self.assertEqual(bitget_sign('secret', 'GET', '/api/mix/v2/market/depth',
-                                    'limit=20&symbol=BTCUSDT', '', '16273667805456'), expected)
+        self.assertEqual(bitget_sign('secret', 'GET', '/api/v3/account/fee-rate',
+                                    'category=SPOT&symbol=BTCUSDT', '', '16273667805456'), expected)
 
 
 class PolicyTests(unittest.TestCase):
@@ -301,7 +301,7 @@ class HTTPExecutionTests(unittest.TestCase):
         self.bitget.mode = 'hedge_mode'
         self.bitget.place(intent(ex='bitget', side='sell', reduce=True))
         sent = self.bg.calls[-1][2]
-        self.assertEqual((sent['side'],sent['tradeSide']), ('buy','close'))
+        self.assertEqual((sent['side'],sent['posSide']), ('sell','long'))
         self.assertNotIn('reduceOnly',sent)
 
     def test_secrets_are_not_in_db_or_exceptions(self):
@@ -373,7 +373,7 @@ class PersistenceTests(unittest.TestCase):
     def test_env_permissions_and_no_process_env_fallback(self):
         with tempfile.TemporaryDirectory() as tmp:
             p = Path(tmp)/'secrets'
-            p.write_text('CROSSEX_LIVE_ENABLED=0\nGATE_API_KEY=\n',encoding='utf8')
+            p.write_text('CROSSEX_LIVE_ENABLED=0\nCROSSEX_API_KEY=\n',encoding='utf8')
             # Windows has no POSIX mode 0600: emulate stat only for parsing test.
             import os
             st = p.stat()

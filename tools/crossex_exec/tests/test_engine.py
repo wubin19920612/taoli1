@@ -41,7 +41,10 @@ class FakeAccounts:
     def __init__(self,cross,bitget,market):
         self.cross,self.bitget=cross,bitget
         self.fees_by_market={k:'.0002' for k in market.mapping}
-        self.data=dict(positions={},margins=['4','4'],upnl='0')
+        self.data=dict(positions={},margins=['4','4'],upnl='0', equity_by_venue={'crossex':'1000','bitget':'30000'}, notionals={}, liabilities=[])
+
+    def validate_startup(self):
+        return self.snapshot()
 
     def check_instruments(self,instruments):
         pass
@@ -67,6 +70,8 @@ class EngineTests(unittest.TestCase):
         self.engine=Engine(self.store,self.market,self.accounts,live=True,stop_file=Path(self.tmp.name)/'STOP')
         self.engine.executor=self.exec
         self.exec.can_open=self.engine.can_open
+        self.exec.check_order=self.engine.limits.check_order
+        self.engine.limits.initialize(self.accounts.snapshot())
         self.engine.risk='RUN'
         self.engine.last_reconcile=time.time()
         self.store.set_meta('mapping',{'at':time.time()})
@@ -304,12 +309,12 @@ class MarketSafetyTests(unittest.TestCase):
         self.assertFalse(parse_history(m,rows(good[1:]),s,now)['history_ok'])
         self.assertFalse(parse_history(m,rows([good[0],good[-1]]),s,now)['history_ok'])
 
-    def test_bitget_risk_convention_requires_confirmation(self):
-        d=dict(posMode='one_way_mode',marginMode='crossed',marginCoin='USDT',crossedMarginLeverage='3',accountEquity='100',crossedRiskRate='.25')
-        self.assertIsNone(bitget_margin(d,'one_way_mode'))
-        self.assertEqual(bitget_margin(d,'one_way_mode',True),4)
+    def test_bitget_uta_margin_ratio(self):
+        d=dict(effEquity='1200',mmr='300',usdtEquity='1500')
+        self.assertEqual(bitget_margin(d),4)
+        self.assertEqual(bitget_margin(dict(d,mmr='0')),dec('1e30'))
         with self.assertRaises(ValueError):
-            bitget_margin(d,'hedge_mode',True)
+            bitget_margin(dict(d,mmr='-1'))
 
     def test_gate_margin_ratio_checks_units(self):
         d=dict(position_mode='SINGLE',account_mode='CROSS_EXCHANGE',exchange_type='CROSSEX',margin_balance='1200',maintenance_margin='250',maintenance_margin_rate='4.8')
@@ -319,7 +324,7 @@ class MarketSafetyTests(unittest.TestCase):
 
     def test_positions_preserve_side_and_full_symbol(self):
         gate=[dict(symbol='GATE_FUTURE_BTC_USDT',position_side='NONE',position_qty='-.1')]
-        bg=[dict(symbol='BTCUSDT',holdSide='long',total='.1',marginMode='crossed')]
+        bg=[dict(symbol='BTCUSDT',posSide='long',total='.1',marginMode='crossed')]
         self.assertEqual(remote_positions(gate,bg),{'crossex|GATE_FUTURE_BTC_USDT|short':dec('.1'),'bitget|BTCUSDT|long':dec('.1')})
 
     def test_okx_turnover_is_lower_bound(self):
