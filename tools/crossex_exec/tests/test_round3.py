@@ -508,7 +508,7 @@ class Round3PolicyTests(unittest.TestCase):
         self.assertEqual(accounts.fees([a, b]), {b.market.key:'.0006'})
 
     def test_r8_checked_status_retains_venue_average_fields(self):
-        for gate, field in ((True, 'avg_price'), (False, 'avgPrice')):
+        for gate, field in ((True, 'executed_avg_price'), (False, 'avgPrice')):
             i = dict(cid='x', oid='42', quantity='1', instrument=instrument().dump())
             raw = dict(symbol=i['instrument']['symbol'], **{field:'101.2'})
             raw.update(dict(order_id='42', text='x', executed_qty='1', state='FILLED') if gate else
