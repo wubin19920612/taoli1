@@ -1,6 +1,6 @@
 # crossex-exec 本地实现交接 — 2026-11-11
 
-> **当前状态：第三轮 11 项修复已在本地完成，详见文末“第三轮修复交付”。** 只读数据 API、第二轮 7 项和第一轮记录保留作历史证据；第一轮 Classic v2、旧变量名、旧路径和 crossedRiskRate 口径已被第二轮替代，第二轮同步账户/目录/费率读取的描述已被第三轮替代。第三轮没有外网访问或生产动作。
+> **当前状态：第四轮 8 项修复已在本地完成，详见文末“第四轮修复交付”。** 前三轮及只读数据 API 记录保留作历史证据；第一轮 Classic v2、旧变量名、旧路径和 crossedRiskRate 口径已被第二轮替代，第二轮同步账户/目录/费率读取的描述已被第三轮替代。第三轮的两腿补平、独立发单复核、分离费率时间戳、CrossEx avg_price 和异常锁说明以第四轮为准。第四轮联网仅核实两家官方订单均价字段，没有账户鉴权或生产动作。
 
 ## 目标、范围与状态
 
@@ -431,3 +431,102 @@ OK
 新增 `background.py`、`tests/test_round3.py`；实现修改 `engine.py/policy.py/execution.py/limits.py/accounts.py/adapters.py/market.py/__main__.py` 和 service 模板；测试夹具修改 `tests/test_engine.py`；文档修改本交接和 README。没有修改 backend、compose、真实 `.env` 或既有生产部署脚本。临时测试日志位于本机 `%TEMP%`，没有入库；没有待保留的新未跟踪工作区产物。
 
 线上状态：未 push、未 SSH、未 WSL、未调用真实鉴权接口、未联网、未做生产备份或部署，线上版本未改变。没有 amend 或实盘开关变更。下一模块请新建任务，从第三轮清单和本节开始做独立复核；任何联网、账户、Linux/C3 或上线动作都须在后续任务明确授权，本轮本地通过不等于开启实盘验收。
+
+## 第四轮修复交付（2026-11-11）
+
+### 范围、基线与提交
+
+按用户指定顺序先读 `docs/crossex-exec-round4-2026-11-11.md`，再读本交接；仅处理执行器第四轮 8 项。每项均先写复现测试，在未修复实现上观察失败，再修复。用户本轮允许联网核实 CrossEx/Bitget 官方文档字段，覆盖第四轮清单中较早的“不联网”；除此之外不联网，绝不调用真实鉴权接口。
+
+- worktree：`C:\Users\wubin\Desktop\code\codex\taoli1\.worktrees\crossex-exec`；分支 `codex/crossex-exec`。
+- 基线：`e0476b9afb8143172a986a5abc9da535824ed16f`；开始时工作区干净。
+- 没有 push、SSH、WSL、amend、读取真实 env/密钥或运行服务 `run`，没有生产备份或部署。
+- 所有测试只使用内存交易所或 `127.0.0.1` 假服务器，虚构凭据，继续保留 socket/DNS 外网守护。
+
+| 类型 | 完整提交 hash | 内容 |
+|---|---|---|
+| test | `18a571451fa6f63488a414c7655e323a4d0ec738` | 首批 21 项覆盖全部 8 项问题；修正旧 CrossEx 均价夹具 |
+| test | `c60ae0fd48b021fda305858577d881f001447187` | 持久化停止补平、共享放行、跨日缓存、部分成交观察、异常日志边界；共 28 项新测试及旧夹具适配 |
+| test | `271f8048a7870c4f1b04e1c197036f0890fe61eb` | 补充对账执行到一半跨过 UTC 午夜的复现，合计 29 项 |
+| feat | `c04ce7eac430ffc35fe7e4f4e875953044f6cef4` | 全部 8 项实现，6 个执行器文件 |
+| docs | 随本节和 README 单独提交 | 本轮证据、官方字段出处、规则及边界；避免硬编码自引用 hash |
+
+取得本节 docs 提交号：
+
+```text
+git log -1 --format=%H -- docs/task-handoff-2026-11-11-crossex-exec.md
+```
+
+父仓库中的 worktree 索引不在可写根内；普通 `git add` 被文件沙箱拒绝后，按已获授权的本地提交范围通过自动审批写入 Git 元数据。所有提交均禁用 hooks 和 GPG 签名，无外部副作用，没有 amend 或回退。
+
+### 8 项修复位置与测试名
+
+实现路径相对 `tools/crossex_exec/`；下表全部新增测试均在 `tests/test_round4.py::Round4Tests`。行号对应本轮 feat 提交。
+
+| 项目 | 修复位置与行为 | 对应测试名 |
+|---|---|---|
+| 1. 补平不扩大裸露敞口 | `engine.py:532 repair_intents`、`:551 balance`、`resolve_exposure`。先读两腿真实持仓；每次只发一笔，确认后再读两腿并重新计算。单笔理论执行也须降低绝对裸露量；实际量未严格下降、零成交或无法读取持仓就持久化 `repair_stopped`、停开和告警。 | `test_r1_coarse_step_zero_fill_never_exceeds_original_exposure`；`test_r1_zero_fill_stops_before_other_leg_or_retry`；`test_r1_partial_fill_replans_from_both_remote_positions`；`test_r1_snapshot_failure_after_send_stops_further_repair`；`test_r1_initial_repair_uses_current_remote_excess_leg` |
+| 2. 两腿一次共享复核 | `execution.py:23 execute_pair`、`:70 execute`；`engine.py:84 check_pair`，复用 `policy.py::send_review`。两腿通过限频和建连后才进入有界屏障，action 在同一个时刻只做一次盘口/价差/费率/资金费复核，结论同时适用于两腿；工作线程只执行发送。硬额度仍在整对进入适配器前和共享关口检查。 | `test_r2_asymmetric_book_ages_reject_both_legs`；`test_r2_late_second_worker_rejects_entire_pair`；`test_r2_shared_review_runs_once_after_both_workers_ready`；`test_r2_failure_before_barrier_releases_peer_without_sending`；`test_r2_send_failure_does_not_revoke_shared_admission` |
+| 3. 费率和时间戳同版本 | `accounts.py:79 FeeSnapshot`、`:99 fees`；`engine.py:70 fees_for`、`refresh_reference`。frozen dataclass 同时保存 rate/captured_at，逐合约复制映射后一次替换发布，读取整份版本后检查时间；旧 rates/times 属性仅为派生投影，不用于发送校验。 | `test_r3_old_rate_cannot_borrow_new_timestamp`；`test_r3_published_fee_version_is_immutable_and_replaced` |
+| 4. 订单均价字段 | `adapters.py:25 checked_status`。CrossEx 使用 `executed_avg_price`，不接受旧错误字段 `avg_price`；Bitget UTA 仍使用核实后的 `avgPrice`。`test_round3.py` 及本地 HTTP 夹具同步修正。 | `test_r4_order_average_uses_documented_fields_only`；原有 `Round3PolicyTests.test_r8_checked_status_retains_venue_average_fields` 继续验证 |
+| 5. 新一天只计算浮盈亏变化 | `engine.py:204 totals`、`:231 roll_daily_upnl`、`:270 reconcile`、`refresh_accounts`；`accounts.py:149 snapshot` 增加按完整持仓身份的浮盈亏。`daily_upnl` 持久化当日各仓和汇总基准；昨日缓存不能建立今日基准，对账中跨日只暂时停开、等待新快照，不写永久账户故障锁。 | `test_r5_unchanged_overnight_loss_does_not_lock_new_day`；`test_r5_baseline_survives_restart_and_only_new_loss_latches`；`test_r5_previous_day_cache_cannot_set_new_daily_baseline`；`test_r5_realizing_overnight_loss_does_not_count_it_twice`；`test_r5_midnight_during_reconcile_waits_without_permanent_stop` |
+| 6. 对账时序和自动解除 | `background.py:8 SnapshotCache`；`execution.py:126 confirm`；`engine.py:243 reconcile_positions`。快照携带读取起点，须严格晚于本地最新成交观察/成交时间；部分成交在 UNKNOWN 前也持久化观察时间。连续三次不同的新快照一致才清除 `position_mismatch`，写 `POSITION_MATCH_RECOVERED`；重复缓存不计数，新的差异重置，其他原因保留。 | `test_r6_pre_fill_or_equal_snapshot_never_flags_mismatch`；`test_r6_three_distinct_matching_snapshots_clear_and_log`；`test_r6_mismatch_resets_recovery_streak_and_preserves_other_stop`；`test_r6_partial_fill_observation_survives_unknown_confirmation` |
+| 7. HALTING 事件和告警去重 | `limits.py:41 check_equity`；`engine.py:47 alert`、`unhedged`。`EQUITY_HALT`/`UNHEDGED` 及 `ALERT`/告警 sink 共用一次原因和数值比较；同一 HALTING 周期内多个相同原因轮流出现也不重复，数值变化重新输出。 | `test_r7_equity_events_and_alerts_share_value_sensitive_dedup`；`test_r7_halting_multiple_unchanged_reasons_do_not_repeat`；`test_r7_unhedged_event_and_alert_change_together` |
+| 8. 线程异常和轮后退避 | `background.py:27 PeriodicWorker`、`:36 run`，`engine.py::background_error`、`:704 flatten_all`。最外层异常同时写标准日志和固定字段事件，同类型每 60 秒最多一次；不输出异常正文/traceback。HALTING 使用 finally 在本轮结束后设置下一次 2/4/8/16/32/60 秒退避，慢请求及异常返回均覆盖。 | `test_r8_outer_worker_exception_logged_throttled_and_sanitized`；`test_r8_distinct_worker_errors_reach_journal_once_each`；`test_r8_halting_backoff_begins_after_slow_round_finishes`；`test_r8_snapshot_error_also_sets_backoff_after_completion` |
+
+关键数量证据：审查场景 `1 / 0.999`、步长 `.1 / .001` 的原裸露量为 `.001`；第一腿拟减 `.1` 本身会把裸露量变成 `.099`，因此现在直接拒绝此计划，没有第二笔依赖假设成交的单。原测试注入第一腿零成交时，旧实现最终裸露量为 `.100`，新实现仍为 `.001`。另以 `.107 / .1` 覆盖合法粗步长：第一笔零成交即停止；第一笔 `.01` 只成交 `.008` 时，第二笔按实仓只减 `.001`，不能沿用原先假设的 `.003`。
+
+共享放行仍不是跨交易所原子成交：任一腿在放行后的网络、交易所接单或撮合阶段仍可能失败，原 UNKNOWN 恢复和单腿风险处理继续生效。补平停止标记只禁止继续补平，不阻止正常退出/风险全平。
+
+### 官方字段核实
+
+本轮只打开下列两家官方文档，未运行示例 curl、请求交易 API 或读取账户凭据：
+
+| 官方来源 | 路径与已核实字段 |
+|---|---|
+| [Gate CrossEx API v1.0.8](https://www.gate.com/docs/developers/crossex/en/) | 订单详情 `GET /crossex/orders/{order_id}` 的 `CrossexOrder` schema：`executed_avg_price`，类型 string，成交均价；`executed_qty` 为已成交基础币数量。旧 `avg_price` 夹具不符合该 schema。 |
+| [Bitget UTA Get Order Details](https://www.bitget.com/legacy-docs/uta/trade/Get-Order-Details) | `GET /api/v3/trade/order-info`：`avgPrice` 为 Average executed price，类型 string；`cumExecQty` 为基础币累计成交量。该页明确是 UTA v3，不能与 Classic v2 字段混用。 |
+
+两者均仅用于订单详情价格兜底风控；真实 `vwap`、手续费及收益继续由逐笔成交校验，缺失则保持记账未知。
+
+### 复现和最终验证
+
+首批测试在修改任何实现前执行，全部 8 项均有失败证据：
+
+```text
+Ran 21 tests in 0.405s
+
+FAILED (failures=18, errors=1)
+```
+
+随后追加边界测试先得到 `Ran 25 tests in 0.505s / FAILED (failures=5)`，再修复持久化停止补平、初始远端持仓、放行后取消屏障、跨日旧缓存、裸露事件去重。最后单独复现对账执行中跨午夜的永久停开，结果为 `Ran 1 test in 0.016s / FAILED (failures=1)`，再增加等待新日基准的专门异常路径。最终新增 29 项。
+
+完整回归时同步更新旧夹具：假 HTTP 服务器按实际已成交量更新持仓，兼容单双向字段；费率夹具显式发布不可变版本；日亏测试显式建立期初 0 基准。旧“零成交仍试三次”断言按本轮要求改为“第一笔后立即停止”，没有放宽风控阈值或删除原有安全覆盖。修正假服务器单向持仓字段遗漏后，旧 Engine 33 项通过。
+
+最终两条 unittest 命令和原始汇总行：
+
+```text
+python -m unittest discover -s tools/crossex_exec/tests -v
+----------------------------------------------------------------------
+Ran 162 tests in 55.823s
+
+OK
+
+python -m unittest discover -s tools/fill_sim/tests -v
+----------------------------------------------------------------------
+Ran 158 tests in 29.462s
+
+OK
+```
+
+执行器 162 项包含全部 24 项只读 API 测试。取得最终结果之后没有再修改实现或测试。全套 23 个 Python 文件通过 `ast.parse(feature_version=(3,10))`；CLI `--help` 与 `git diff --check` 通过。运行环境为 Windows / Python 3.12.10 / SQLite 3.49.1。执行器完整原始输出保存在本机 `%TEMP%/crossex-round4-final-unittest.log`，不入库。
+
+### 文件、线上状态和下一步
+
+本轮修改实现 `accounts.py/adapters.py/background.py/engine.py/execution.py/limits.py`；新增 `tests/test_round4.py`，修改 `tests/test_engine.py/tests/test_exec.py/tests/test_round3.py`；文档仅本交接和 README。相对基线，整个 `tools/fill_sim`、只读 API 三文件、backend、compose、部署脚本和模板均无修改。没有新增环境变量、真实 `.env` 或秘密入库。
+
+日界线采用 UTC 换日后的首个有效账户观测，保存各仓浮盈亏及总额；后台按 5 秒周期调度，真实请求可能更慢，不能把缓存称为精确午夜的交易所报价。昨日缓存或正在跨日的对账只暂时停开，等到新快照再判定；当天已存在的亏损锁和其他风控不会因重启丢失。持仓一致恢复需要三个不同采样起点，受既有 60 秒对账调度影响。HALTING 告警去重为进程内同一停机周期，重启可再次输出首条诊断。
+
+最终为本地交付，无待保留的新未跟踪工作区文件；Python 缓存由既有 ignore 规则排除。未 push、SSH、WSL、amend、鉴权接口调用、真实服务启动、生产备份或部署，线上版本与实盘开关未改变。尚未验证 Ubuntu 22.04 / Python 3.10 / SQLite 3.37 实机、systemd、80M 内存、真实账户时序、撮合和长期运行。
+
+本模块结束。下一模块请新建任务，从第四轮清单、本节及 feat 提交开始独立复核；C1/C3、Linux/生产动作及开启实盘须另有明确授权。本地回归通过不代表实盘验收通过。
