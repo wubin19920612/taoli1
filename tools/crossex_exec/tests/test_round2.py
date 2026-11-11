@@ -276,4 +276,3 @@ class Round2HTTPTests(unittest.TestCase):
                     load_env(path)
                 path.write_text('CROSSEX_API_KEY=\nCROSSEX_API_SECRET=\n',encoding='utf8')
                 self.assertEqual(set(load_env(path)),{'CROSSEX_API_KEY','CROSSEX_API_SECRET'})
-
