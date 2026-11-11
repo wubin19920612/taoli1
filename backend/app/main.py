@@ -65,7 +65,7 @@ from app.exchanges.gate import GateAdapter
 from app.services.gate_bbo_runtime import GateBboRuntime
 from app.services.astro_card_attempts import AstroCardAttemptRepository
 from app.db.market_identity_repository import MarketIdentityRepository
-from app.services.market_validation_review import MarketValidationService
+from app.services.market_validation_review import AlertFilterChanged, MarketValidationService
 from app.services.market_identity_catalog import OfficialMarketIdentityCatalog
 from app.models.alert import AlertEvent
 from app.models.orderbook import DepthValidationResult
@@ -661,12 +661,16 @@ class _AlertFilterTiming:
         self.started = monotonic()
         self.samples = []
         self.recomputed = 0
+        self.retries = 0
+        self.skipped = 0
 
-    def record(self, filter_ms, recomputed):
+    def record(self, filter_ms, recomputed, *, retries=0, skipped=False):
         from statistics import median
 
         self.samples.append(filter_ms)
         self.recomputed += recomputed
+        self.retries += retries
+        self.skipped += int(skipped)
         now = monotonic()
         if now - self.started < 300:
             return
@@ -674,10 +678,14 @@ class _AlertFilterTiming:
             "count": len(self.samples),
             "filter_ms": {"p50": median(self.samples), "max": max(self.samples)},
             "recomputed": self.recomputed,
+            "retries": self.retries,
+            "skipped": self.skipped,
         }}, separators=(",", ":")))
         self.started = now
         self.samples.clear()
         self.recomputed = 0
+        self.retries = 0
+        self.skipped = 0
 
 
 async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asyncio.Event) -> None:
@@ -717,13 +725,32 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
             await _refresh_astro_runtime_settings(app, settings_repo)
             now = datetime.now(UTC)
             filter_started = monotonic()
-            opportunities = filter_opportunities(app.state.snapshot_store.get_opportunities(), settings)
             identity_validator = getattr(app.state, "market_validation", None)
-            if identity_validator is not None:
-                opportunities = await identity_validator.filter_opportunities_async(opportunities, settings)
+            recomputed = 0
+            for retries in range(3):  # Initial attempt plus at most two immediate retries.
+                opportunities = filter_opportunities(
+                    app.state.snapshot_store.get_opportunities(), settings,
+                )
+                try:
+                    if identity_validator is not None:
+                        opportunities = await identity_validator.filter_opportunities_async(
+                            opportunities, settings,
+                        )
+                except AlertFilterChanged:
+                    recomputed += identity_validator.last_filter_recomputed
+                    if retries < 2:
+                        continue
+                    filter_timing.record(
+                        (monotonic() - filter_started) * 1000, recomputed,
+                        retries=retries, skipped=True,
+                    )
+                    raise
+                if identity_validator is not None:
+                    recomputed += identity_validator.last_filter_recomputed
+                break
             filter_timing.record(
-                (monotonic() - filter_started) * 1000,
-                identity_validator.last_filter_recomputed if identity_validator is not None else 0,
+                (monotonic() - filter_started) * 1000, recomputed,
+                retries=retries, skipped=False,
             )
             opportunities = filter_opportunities_by_alert_rules(
                 opportunities,
@@ -766,6 +793,9 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                     task.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
                 raise
+        except AlertFilterChanged:
+            beat("alert-loop", ok=False)
+            logger.warning("alert filtering skipped after 2 retries: mapping or snapshot kept changing")
         except Exception:
             beat("alert-loop", ok=False)
             logger.exception("alert loop failed")

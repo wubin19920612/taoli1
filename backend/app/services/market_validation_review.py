@@ -30,6 +30,10 @@ if not timing_logger.handlers:
 _manual_books = ContextVar("astro_manual_books", default=None)
 
 
+class AlertFilterChanged(ValueError):
+    """The alert batch must be retried against the current mapping/snapshot."""
+
+
 class ManualMappingChanged(ValueError):
     def __init__(self):
         super().__init__("市场映射已改变，请重新预览")
@@ -937,7 +941,8 @@ class MarketValidationService:
             # Never return a partially qualified batch spanning a binding/snapshot update.
             if (epoch != self._mutation_epoch
                     or version != (self.store.generation, self.store.markets_version)):
-                raise ValueError("mapping or snapshot changed during alert filtering")
+                self.last_filter_recomputed = stats[0]
+                raise AlertFilterChanged("mapping or snapshot changed during alert filtering")
         self.last_filter_recomputed = stats[0]
         return result
 
