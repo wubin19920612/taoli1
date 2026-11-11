@@ -18,6 +18,7 @@ from tools.crossex_exec.policy import review
 from tools.crossex_exec.storage import Store
 from test_exec import instrument, setUpModule, tearDownModule
 from test_engine import FakeMarket
+from baseline_fixtures import seed_baseline
 
 
 class Venue:
@@ -85,6 +86,7 @@ class Round3Tests(unittest.TestCase):
         self.engine.risk = 'RUN'
         self.engine.last_reconcile = self.now[0]
         self.store.set_meta('daily_upnl', dict(day=day(self.now[0]), upnl='0', positions={}))
+        seed_baseline(self.store,self.now[0])
         # Cleanup remains usable on the original implementation during the red run.
         self.addCleanup(lambda: getattr(self.engine, 'close', lambda:None)())
 
@@ -105,6 +107,7 @@ class Round3Tests(unittest.TestCase):
         funding = [dict(rate='0', interval=28800, next=self.now[0]+10000, captured_at=self.now[0],
                         history_ok=True, max_abs_24h='0') for _ in (0, 1)]
         pair = dict(id='p', base='BTC', state='OPEN', opened_at=self.now[0],
+                    baseline_at_open='0', excess_at_open='200',
                     instruments=[i.dump() for i in instruments], remaining=list(quantities),
                     last_books=[b.to_dict() for b in books], last_good=[self.now[0]]*2,
                     next_track=self.now[0], single_failure=False, repair_attempts=0, funding=funding,

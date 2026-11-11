@@ -13,6 +13,7 @@ from tools.crossex_exec.policy import mapped_instrument
 from tools.crossex_exec.reporting import report
 import test_exec as fixtures
 from test_exec import instrument, intent, setUpModule, tearDownModule
+from baseline_fixtures import seed_baseline
 
 
 class FakeMarket:
@@ -22,6 +23,9 @@ class FakeMarket:
 
     def bootstrap(self,bases=()):
         return self.mapping
+
+    def baseline_quotes(self,bases):
+        return {}
 
     def books(self,instruments):
         if self.missing:
@@ -97,6 +101,7 @@ class EngineTests(unittest.TestCase):
         self.store.set_meta('mapping',{'at':time.time()})
         self.store.set_meta('actual_fees',{'at':time.time()})
         self.store.set_meta('daily_upnl',dict(day=day(time.time()),upnl='0',positions={}))
+        seed_baseline(self.store,time.time())
 
     def tearDown(self):
         self.engine.close()

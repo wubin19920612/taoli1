@@ -17,6 +17,7 @@ from tools.crossex_exec.execution import NONTERMINAL
 from tools.crossex_exec.transport import APIError
 from test_engine import trigger
 from test_exec import instrument, setUpModule, tearDownModule
+from baseline_fixtures import seed_baseline
 
 
 SEEDS = (20261111, 20261112, 20261113)
@@ -63,7 +64,24 @@ class FakeDatabase:
                 self.event(kind, order, order['cid'])
 
     def pair(self, pair):
+        from tools.crossex_exec.baseline import cooldown_for
+        cooldown = cooldown_for(pair)
+        if cooldown:
+            key, until = cooldown
+            rows = self.meta('pair_cooldowns', {})
+            rows[key] = max(rows.get(key, 0), until)
+            self.set_meta('pair_cooldowns', rows)
         self.data['pairs'][pair['id']] = copy.deepcopy(pair)
+
+    def add_baseline_samples(self, rows, now):
+        samples = self.data.setdefault('baseline_samples', {})
+        for key, bucket, at, value in rows:
+            samples.setdefault((key,bucket), (at,value))
+        self.data['baseline_samples'] = {k:v for k,v in samples.items() if v[0]>=now-86400}
+
+    def baseline_samples(self, key, since, until):
+        return sorted(v for (k,b),v in self.data.get('baseline_samples', {}).items()
+                      if k==key and since<=v[0]<=until)
 
     def pairs(self, active=False):
         values = copy.deepcopy(list(self.data['pairs'].values()))
@@ -162,6 +180,7 @@ class World:
         for i in self.instruments:
             i.spec = replace(i.spec, min_notional='0')
         self.store = FakeDatabase()
+        seed_baseline(self.store,self.now,'40')
         self.market = SimpleNamespace(mapping={i.market.key:i for i in self.instruments}, books=self.books,
             funding=lambda instruments:[dict(rate='0', interval=28800, next=self.now+10000,
                 captured_at=self.now, history_ok=True, max_abs_24h='0') for _ in instruments],
@@ -261,6 +280,11 @@ class World:
                     margins=['4','4'], liabilities=[], notionals={})
 
     def references(self):
+        # Append independent synthetic public observations; never clear cooldowns
+        # or replace the production baseline gate. Midnight gaps do not backfill.
+        from tools.crossex_exec.baseline import Baseline
+        Baseline(self.store,lambda:self.now).record(
+            {'binance':{'BTC':'100'},'bitget':{'BTC':'100.4'}},('BTC',))
         self.store.set_meta('mapping', dict(at=self.now))
         self.accounts.fee_snapshots = {i.market.key:FeeSnapshot('.0002',self.now) for i in self.instruments}
         try:
@@ -397,6 +421,10 @@ class InvariantSimulationTests(unittest.TestCase):
                         if order['reduce_only']:
                             self.assert_reduction(sent, exercised)
                         else:
+                            pair = next(p for p in w.store.pairs() if p['id']==order['pair_id'])
+                            self.assertEqual(dec(pair['baseline_at_open']),40)
+                            self.assertLessEqual(w.store.meta('pair_cooldowns',{}).get('BTC|binance|bitget',0),w.now)
+                            coverage['baseline_admission'] += 1
                             self.assertFalse(sent['locked'], 'I2 opening while locked')
                             self.assertIsNotNone(sent['admission'], 'I1d missing shared admission')
                             self.assertEqual(*sent['admission']['before'], 'I1d admitting entry with exposure')
@@ -443,6 +471,8 @@ class InvariantSimulationTests(unittest.TestCase):
                         coverage['halted'] += 1
                         exercised['7'] += 1
                     coverage['db_failures'] += w.store.failures
+                    if w.store.meta('pair_cooldowns',{}).get('BTC|binance|bitget',0)>w.now:
+                        coverage['cooldown_active'] += 1
                     w.store.failures = 0
                     for invariant in INVARIANTS:
                         checks[invariant] += 1
@@ -451,7 +481,7 @@ class InvariantSimulationTests(unittest.TestCase):
                 self.assertGreater(exercised[invariant], 0, 'vacuous invariant: '+invariant)
             for key in (*(f'scheduled_{f}' for f in FAULTS), 'open','reduce','partial_fill','zero_fill','timeout_ack','timeout_unknown',
                         'restarts','db_failures','recovery_obligation','halting_retry','halted',
-                        'query_failures','position_failures','account_failures'):
+                        'query_failures','position_failures','account_failures','baseline_admission','cooldown_active'):
                 self.assertGreater(coverage[key], 0, 'vacuous fault coverage: '+key)
             print(f'INVARIANTS seed={seed} rounds={ROUNDS} random_rounds={RANDOM_ROUNDS} N={RECOVERY_BOUND} checks={dict(checks)} '
                   f'exercised={dict(sorted(exercised.items()))} coverage={dict(sorted(coverage.items()))}', flush=True)
