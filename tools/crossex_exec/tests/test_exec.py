@@ -62,6 +62,7 @@ class FakeVenue:
     """Models asynchronous ACK, terminal IOC and delayed/ambiguous responses."""
     def __init__(self, venue):
         self.venue, self.orders, self.calls = venue, {}, []
+        self.responses={}
         self.fill = '1'
         self.timeout_once = self.reject = self.not_found = False
         self.never_terminal = False
@@ -98,6 +99,10 @@ class FakeVenue:
                     valid = self.headers['ACCESS-SIGN'] == expected and self.headers['ACCESS-PASSPHRASE'] == 'test-pass'
                 if not valid:
                     return self.reply(401, {'label': 'INVALID_SIGNATURE', 'code': '40009'})
+                if owner.venue=='bitget' and not path.path.startswith('/api/v3/'):
+                    return self.reply(400,{'code':'40085'})
+                if path.path in owner.responses:
+                    return self.reply(200,owner.responses[path.path])
                 if self.command == 'POST' and (path.path.endswith('/orders') or path.path.endswith('/place-order')):
                     cid = data.get('text', data.get('clientOid'))
                     if cid in owner.orders:

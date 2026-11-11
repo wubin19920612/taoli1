@@ -80,6 +80,58 @@ class EngineTests(unittest.TestCase):
     def tearDown(self):
         fixtures.HTTPExecutionTests.tearDown(self)
 
+    def test_startup_mode_error_propagates_before_recovery_or_market(self):
+        with (patch.object(self.accounts,'validate_startup',side_effect=ValueError('mode_mismatch')),
+              patch.object(self.exec,'recover') as recover,
+              patch.object(self.market,'bootstrap') as bootstrap):
+            with self.assertRaisesRegex(ValueError,'mode_mismatch'):
+                self.engine.startup()
+            recover.assert_not_called()
+            bootstrap.assert_not_called()
+
+    def test_foreign_unfilled_blocks_startup_but_owned_order_recovers(self):
+        self.accounts.data['open_orders']=[dict(clientOid='foreign')]
+        with self.assertRaisesRegex(ValueError,'foreign_bitget'):
+            self.engine.startup()
+        i=dict(intent('owned',ex='bitget'),state='UNKNOWN',filled='0',leg=1)
+        self.store.save_order(i)
+        self.accounts.data['open_orders']=[dict(clientOid='owned')]
+        with patch.object(self.exec,'recover') as recover:
+            self.engine.startup()
+            recover.assert_called_once()
+
+    def test_individual_equity_drop_flattens_even_when_combined_equity_gains(self):
+        self.engine.ingest(trigger())
+        self.accounts.data['equity_by_venue']={'crossex':'1200','bitget':'29850'}
+        self.accounts.data['positions']=local_positions(self.store.pairs(active=True))
+        original=self.engine.close_pair
+        def close(pair,reason):
+            original(pair,reason)
+            self.accounts.data['positions']={}
+        with patch.object(self.engine,'close_pair',side_effect=close):
+            self.engine.reconcile()
+        self.assertEqual(self.store.meta('state'),'HALTED')
+        closes=[o for o in self.store.all_orders() if o['reduce_only']]
+        self.assertEqual(len(closes),2)
+        self.assertTrue(all(o['state']=='TERMINAL' for o in closes))
+
+    def test_admission_equity_drop_blocks_both_apis_and_halts(self):
+        self.accounts.data['equity_by_venue']['bitget']='29850'
+        with (patch.object(self.cross,'place') as cross_place,
+              patch.object(self.bitget,'place') as bitget_place):
+            self.engine.ingest(trigger())
+            cross_place.assert_not_called()
+            bitget_place.assert_not_called()
+        self.assertEqual(self.store.meta('state'),'HALTED')
+
+    def test_restart_equity_halt_flattens_before_catalog_bootstrap(self):
+        self.engine.ingest(trigger())
+        self.accounts.data['equity_by_venue']['bitget']='29850'
+        with patch.object(self.market,'bootstrap',side_effect=AssertionError('must flatten first')):
+            self.engine.startup()
+        self.assertEqual(self.store.meta('state'),'HALTED')
+        self.assertFalse(self.store.pairs(active=True))
+
     def test_full_shadow_pipeline_persists_prices_without_private_writes(self):
         self.engine.live=self.exec.live=False
         with (patch.object(self.cross,'place',side_effect=AssertionError('place')),

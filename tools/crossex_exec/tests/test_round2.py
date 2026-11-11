@@ -162,8 +162,8 @@ class HardLimitTests(unittest.TestCase):
     def test_pending_pair_and_unknown_reserve_capacity(self):
         self.snapshot['notionals']={'external':'450'}
         results=self.executor.execute_pair([intent('first'),intent('second',ex='bitget')])
-        # Both intents reserve capacity before threads run; at most one can pass.
-        self.assertLessEqual(sum(r['state']=='TERMINAL' for r in results),1)
+        self.assertTrue(all(r['state']=='UNSENT' for r in results))
+        self.adapter.place.assert_not_called()
         pending=dict(intent('pending',quantity='5.01'),state='UNKNOWN',filled='0',oid=None)
         self.store.save_order(pending)
         self.adapter.reset_mock()
@@ -213,4 +213,67 @@ class HardLimitTests(unittest.TestCase):
         self.snapshot['equity_by_venue']['bitget']='29900'
         self.limits.initialize(self.snapshot)
         self.assertEqual(self.store.meta('account_equity_baseline')['bitget'],'30000')
+
+    def test_margin_thresholds_request_flatten_and_do_not_send(self):
+        self.snapshot['margins']=['4','1.99']
+        self.assert_blocked(intent())
+        self.assertTrue(self.store.meta('flatten_requested'))
+
+    def test_liability_written_to_state_and_event(self):
+        self.snapshot['liabilities']=[dict(coin='USDC',exchange_type='LIGHTER',liability='498.86')]
+        self.limits.check_order(intent())
+        self.assertEqual(self.store.meta('liabilities'),self.snapshot['liabilities'])
+        self.assertTrue(any(e['kind']=='ACCOUNT_LIABILITY' for e in self.store.events()))
+
+    def test_missing_baseline_with_live_history_requires_manual_review(self):
+        self.store.set_meta('account_equity_baseline',None)
+        self.store.save_order(dict(intent(),state='TERMINAL',filled='1'))
+        with self.assertRaisesRegex(ValueError,'baseline_missing'):
+            self.limits.initialize(self.snapshot)
+
+
+class Round2HTTPTests(unittest.TestCase):
+    def test_uta_read_paths_use_signed_loopback_and_c1_shapes(self):
+        from test_exec import FakeVenue
+        from tools.crossex_exec.security import Credentials
+        from tools.crossex_exec.transport import Transport
+        cross,bg=FakeVenue('gate'),FakeVenue('bitget')
+        self.addCleanup(cross.close)
+        self.addCleanup(bg.close)
+        cross.responses={
+            '/api/v4/crossex/accounts':cross_account(),
+            '/api/v4/crossex/positions':[],
+            '/api/v4/crossex/positions/leverage':{instrument().symbol:'3'},
+            '/api/v4/crossex/fee':[dict(exchange_type='BINANCE',future_taker_fee='.00048',special_fee_list=[])]}
+        bg.responses={
+            '/api/v3/account/settings':settings(),
+            '/api/v3/account/assets':dict(usdtEquity='30000',effEquity='1200',mmr='300'),
+            '/api/v3/account/fee-rate':dict(takerFeeRate='.0006'),
+            '/api/v3/position/current-position':{'list':None},
+            '/api/v3/trade/unfilled-orders':{'list':[],'cursor':''}}
+        credentials=Credentials('test-key','test-secret','test-pass')
+        a=Accounts(CrossEx(Transport('gate',credentials,base=cross.url,local_test=True)),
+                   Bitget(Transport('bitget',credentials,base=bg.url,local_test=True)),risk_confirmed=True)
+        self.assertEqual(a.validate_startup()['positions'],{})
+        self.assertEqual(a.fees([instrument(),instrument('bitget')])[instrument('bitget').market.key],'.0006')
+        a.check_instruments([instrument(),instrument('bitget')])
+        self.assertTrue(all(c[1].startswith('/api/v3/') for c in bg.calls))
+        self.assertTrue(all(c[0]=='GET' for c in cross.calls+bg.calls))
+        before=len(bg.calls)
+        with self.assertRaises(Exception):
+            a.bitget.http.request('GET','/api/v2/mix/account/account')
+        self.assertEqual(len(bg.calls),before)
+
+    def test_legacy_env_is_rejected_and_new_names_are_loaded(self):
+        import os
+        from tools.crossex_exec.security import load_env
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'private'
+            st=type('Stat',(),{'st_mode':0o100600,'st_uid':getattr(os,'getuid',lambda:0)()})()
+            with patch('tools.crossex_exec.security.os.fstat',return_value=st):
+                path.write_text('GATE_API_KEY=\n',encoding='utf8')
+                with self.assertRaisesRegex(ValueError,'legacy_gate_env'):
+                    load_env(path)
+                path.write_text('CROSSEX_API_KEY=\nCROSSEX_API_SECRET=\n',encoding='utf8')
+                self.assertEqual(set(load_env(path)),{'CROSSEX_API_KEY','CROSSEX_API_SECRET'})
 
