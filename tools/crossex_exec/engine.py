@@ -163,10 +163,13 @@ class Engine:
 
     def can_open(self):
         orders=self.executor.orders()
+        exposed=any(p.get('remote_pending') or len(set(map(dec,p.get(field,['0','0']))))>1
+                    for p in self.store.pairs(active=True) if p['state'] not in ('SHADOW','SKIPPED')
+                    for field in ('remaining','remote_remaining'))
         recent=[o for o in orders if o.get('sent_ms',0)>=self.clock()*1000-3600000]
         rejected=sum(o['state']=='REJECTED' or o.get('rejected',False) for o in recent)
         local_ok=(self.store.meta('single_failures',0)<3 and (not recent or dec(rejected)/len(recent)<=dec('.3')))
-        return (local_ok and self.risk=='RUN' and not self.stop_file.exists() and not self.stops
+        return (local_ok and not exposed and self.risk=='RUN' and not self.stop_file.exists() and not self.stops
                 and not self.executor.pending_writes and not any(o['state'] in NONTERMINAL for o in orders)
                 and not self.store.meta('position_mismatch')
                 and self.store.meta('daily_loss_day')!=day(self.clock())
@@ -484,7 +487,7 @@ class Engine:
         pair['net_usd']=str(cash-fees) if not pending and not any(remaining) and not unknown else None
         if unknown:
             pair['state']='UNKNOWN'
-        elif not any(remaining) and not any(map(dec,pair.get('remote_remaining',['0','0']))):
+        elif not any(remaining) and not any(map(dec,pair.get('remote_remaining',['0','0']))) and not pair.get('remote_pending'):
             pair.update(state='CLOSED',closed_at=pair.get('closed_at',self.clock()))
             pair['funding_known']=all(pair['closed_at']<s['next'] for s in pair['funding'])
             if not pair['funding_known']:
@@ -512,13 +515,13 @@ class Engine:
         quantities=[str(dec(snapshot['positions'].get(self.position_key(pair,n),0))) for n in (0,1)]
         if any(dec(q)<0 for q in quantities):
             raise ValueError('negative_remote_position')
-        pair.update(remote_remaining=quantities,remote_captured_at=snapshot.get('captured_at',self.clock()))
+        pair.update(remote_remaining=quantities,remote_captured_at=snapshot.get('captured_at',self.clock()),remote_pending=False)
         self.store.pair(pair)
 
     def clear_repair_locks(self,pair):
         orders=[o for o in self.executor.orders() if o['pair_id']==pair['id']]
         complete=not self.executor.pending_writes and not any(o['state'] in NONTERMINAL or o.get('accounting_pending') for o in orders)
-        if ('remote_remaining' in pair and complete and pair['id'] not in self._repairing
+        if ('remote_remaining' in pair and not pair.get('remote_pending') and complete and pair['id'] not in self._repairing
                 and dec(pair['remote_remaining'][0])==dec(pair['remote_remaining'][1])
                 and list(map(dec,pair['remaining']))==self.quantities(pair)):
             pair['repair_stopped']=False
@@ -529,13 +532,15 @@ class Engine:
     def needs_recovery(self,pair):
         return (any(o['state'] in NONTERMINAL for o in self.executor.orders() if o['pair_id']==pair['id'])
                 or pair['state']=='UNKNOWN' or len(set(self.quantities(pair)))>1
+                or pair.get('remote_pending') or (pair.get('exit_reason') and pair['state']!='CLOSED')
                 or pair.get('repair_stopped',False))
 
     def recover_pair(self,pair):
         self.store.event('RECOVERY_ATTEMPT',dict(pair_id=pair['id']))
         if (pair.get('exit_reason') or self.store.meta('state')=='HALTING'
+                or pair.get('repair_stopped')
                 or any(o['state'] in NONTERMINAL for o in self.executor.orders() if o['pair_id']==pair['id'])):
-            self.close_pair(pair,pair.get('exit_reason','unknown_order'))
+            self.close_pair(pair,pair.get('exit_reason','repair_failed' if pair.get('repair_stopped') else 'unknown_order'))
         else:
             self.balance(pair)
 
@@ -591,10 +596,13 @@ class Engine:
 
     def unhedged(self,pair):
         a,b=self.quantities(pair)
+        uncertain=pair.get('remote_pending',False)
         if pair.get('repair_stopped'):
             self.stops.add('repair_stopped',pair['id'])
         self.alert('unhedged_position',event_kind='UNHEDGED',details={'pair_id':pair['id'],
-            'quantity':str(abs(a-b)),'remaining':[str(a),str(b)],'excess_leg':0 if a>b else 1})
+            'quantity':None if uncertain else str(abs(a-b)),
+            'remaining':None if uncertain else [str(a),str(b)],
+            'excess_leg':None if uncertain else 0 if a>b else 1})
 
     def repair_intents(self,pair,bps):
         quantities=self.quantities(pair)
@@ -622,6 +630,11 @@ class Engine:
         finally:
             self._repairing.discard(pair['id'])
             self.clear_repair_locks(pair)
+            if pair.get('repair_stopped') and not pair.get('next_close'):
+                # Stop this repair round, not recovery forever. The coordinator
+                # will retire the remaining positions after the persisted delay.
+                pair['next_close']=self.clock()+2
+                self.store.pair(pair)
 
     def _balance(self,pair):
         self.refresh_pair(pair)
@@ -675,34 +688,80 @@ class Engine:
         self.refresh_pair(pair)
         if pair['state']=='CLOSED':
             return
+        if self.clock()<pair.get('next_close',0):
+            # Backoff governs new reductions, never delayed fill confirmation.
+            self.executor.recover(startup=False,pair_id=pair['id'])
+            self.refresh_pair(pair)
+            return
+        pair.update(exit_reason=pair.get('exit_reason',reason),close_attempts=pair.get('close_attempts',0)+1)
+        self.store.pair(pair)
+        try:
+            self._close_pair(pair,reason)
+        finally:
+            # Even unavailable snapshots, journal failures and UNKNOWN results
+            # retain a durable exit obligation. Delay starts AFTER this round.
+            if pair['state']!='CLOSED':
+                pair['next_close']=self.clock()+min(60,2**min(pair['close_attempts'],6))
+                self.store.pair(pair)
+                if pair.get('remote_pending') or len(set(self.quantities(pair)))>1:
+                    self.unhedged(pair)
+                self.store.event('CLOSE_RETRY',dict(pair_id=pair['id'],attempt=pair['close_attempts'],
+                                                   next_close=pair['next_close']))
+            else:
+                pair['next_close']=0
+                self.store.pair(pair)
+
+    def _close_pair(self,pair,reason):
         if not self.resolve_exposure(pair):
             return
         if pair['state']=='CLOSED':
             return
         pair.update(state='CLOSING',exit_reason=reason)
         self.store.pair(pair)
-        # Concurrent reduce-only closes. Never reopen a leg to repair a close.
+        # The first two-leg close may create transient exposure. Subsequent
+        # reductions repair that imbalance before another two-leg dispatch.
         for attempt in range(3):
             quantities=self.quantities(pair)
             indices=[n for n in (0,1) if quantities[n]>0]
             if not indices:
                 return
-            instruments=[Instrument.load(pair['instruments'][n]) for n in indices]
-            books=self.market.books(instruments)
-            intents=[]
-            for n,i,b in zip(indices,instruments,books):
-                try:
-                    bps=3+10*attempt+(10 if reason=='stale_exit' else 0)
-                    intents.append(self.reduction_intent(pair,n,quantities[n],bps,b))
-                except ValueError:
-                    self.unhedged(pair)
+            bps=3+10*attempt+(10 if reason=='stale_exit' else 0)
+            if pair.get('close_repair') and quantities[0]!=quantities[1]:
+                intents=self.repair_intents(pair,bps)
+            else:
+                instruments=[Instrument.load(pair['instruments'][n]) for n in indices]
+                books=self.market.books(instruments)
+                intents=[]
+                for n,i,b in zip(indices,instruments,books):
+                    try:
+                        intents.append(self.reduction_intent(pair,n,quantities[n],bps,b))
+                    except ValueError:
+                        self.unhedged(pair)
             if not intents:
                 return
+            if len(intents)==1:
+                after=list(quantities)
+                after[intents[0]['leg']]-=dec(intents[0]['quantity'])
+                if abs(after[0]-after[1])>abs(quantities[0]-quantities[1]):
+                    self.unhedged(pair)
+                    return
+            # A crash or unreadable post-send snapshot must not leave the old
+            # balanced snapshot looking like proof that this close is hedged.
+            pair.update(remote_pending=True,close_repair=True)
+            self.store.pair(pair)
             result=self.executor.execute_pair(intents)
+            self.refresh_pair(pair)
             if not self.resolve_exposure(pair):
                 return
+            remaining=self.quantities(pair)
+            pair['close_repair']=remaining[0]!=remaining[1]
+            self.store.pair(pair)
+            if pair['close_repair']:
+                self.unhedged(pair)
             if any(o['state']=='UNKNOWN' for o in result):
                 self.alert('unknown_close')
+                return
+            if len(intents)==1 and abs(remaining[0]-remaining[1])>=abs(quantities[0]-quantities[1]):
                 return
         if any(self.quantities(pair)):
             self.alert('close_incomplete')
