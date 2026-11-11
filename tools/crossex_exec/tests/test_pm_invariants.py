@@ -1,6 +1,7 @@
 """PM's round-five exposure contract, including persistent retry obligations."""
 import unittest
 from collections import Counter
+from unittest.mock import patch
 
 from tools.fill_sim.core import dec
 from test_exec import setUpModule, tearDownModule
@@ -100,3 +101,46 @@ class PMInvariantTests(unittest.TestCase):
         self.engine.last_reconcile = self.now[0]
         self.assertFalse(self.engine.stops)
         self.assertFalse(self.engine.can_open())
+
+    def test_i1c_post_close_snapshot_failure_latches_uncertain_exposure(self):
+        world = self.world()
+        pair = world.store.pairs(active=True)[0]
+        world.fractions = [dec('.5'), dec(1)]
+        sent = len(world.sends)
+        positions = world.positions
+        def snapshot():
+            if len(world.sends) > sent:
+                raise ValueError('post-send position outage')
+            return positions()
+        with patch.object(world.accounts, 'position_snapshot', side_effect=snapshot):
+            world.engine.close_pair(pair, 'test_partial_exit')
+        self.assertNotEqual(world.venues[0].quantity, world.venues[1].quantity)
+        self.assertIn(pair['id'], world.store.meta('stop_locks', {}).get('unhedged_position', []))
+        self.assertGreater(pair.get('next_close', 0), world.now)
+        self.assertFalse(world.engine.can_open())
+        world.now = pair['next_close']
+        world.fractions = [dec(1), dec(1)]
+        world.engine.tick()
+        self.assertTrue(all(v.quantity == 0 for v in world.venues))
+
+    def test_i1c_retry_deadline_starts_after_slow_snapshot_failure(self):
+        world = self.world()
+        pair = world.store.pairs(active=True)[0]
+        def unavailable():
+            world.now += 17
+            raise ValueError('slow position outage')
+        with patch.object(world.accounts, 'position_snapshot', side_effect=unavailable):
+            world.engine.close_pair(pair, 'test_outage')
+        self.assertEqual(pair.get('next_close'), world.now+2)
+        self.assertEqual(pair.get('exit_reason'), 'test_outage')
+
+    def test_i1a_one_untradable_close_leg_cannot_turn_pair_into_unsafe_single(self):
+        world = self.world()
+        pair = world.store.pairs(active=True)[0]
+        pair['instruments'][1]['spec']['min_notional'] = '1000'
+        world.store.pair(pair)
+        sent = len(world.sends)
+        world.engine.close_pair(pair, 'test_minimum')
+        self.assertEqual(len(world.sends), sent)
+        self.assertEqual(world.venues[0].quantity, world.venues[1].quantity)
+        self.assertGreater(pair.get('next_close', 0), world.now)

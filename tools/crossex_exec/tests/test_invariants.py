@@ -20,7 +20,8 @@ from test_exec import instrument, setUpModule, tearDownModule
 
 
 SEEDS = (20261111, 20261112, 20261113)
-ROUNDS = 2400
+RANDOM_ROUNDS = 2400
+ROUNDS = RANDOM_ROUNDS+48
 RECOVERY_BOUND = 1
 INVARIANTS = ('1a', '1b', '1c', '1d', '2', '3', '4', '5', '6', '7')
 FAULTS = ('partial', 'zero', 'timeout_ack', 'timeout_unknown', 'detail', 'positions',
@@ -276,13 +277,13 @@ class World:
 
 
 class InvariantSimulationTests(unittest.TestCase):
-    def test_fault_invariants_seed_20261111_2400_rounds(self):
+    def test_fault_invariants_seed_20261111_2448_rounds(self):
         self.run_seed(SEEDS[0])
 
-    def test_fault_invariants_seed_20261112_2400_rounds(self):
+    def test_fault_invariants_seed_20261112_2448_rounds(self):
         self.run_seed(SEEDS[1])
 
-    def test_fault_invariants_seed_20261113_2400_rounds(self):
+    def test_fault_invariants_seed_20261113_2448_rounds(self):
         self.run_seed(SEEDS[2])
 
     def assert_reduction(self, sent, exercised):
@@ -313,12 +314,20 @@ class InvariantSimulationTests(unittest.TestCase):
                     if episode_step == 0:
                         if world:
                             world.engine.close()
-                        world = World(live=(index//24)%4 != 0, coverage=coverage)
+                        world = World(live=index >= RANDOM_ROUNDS or (index//24)%4 != 0, coverage=coverage)
                     w = world
                     w.step = index
                     fault = 'none' if episode_step in (1, 21, 22, 23) else rng.choice(FAULTS)
                     if episode_step == 0:
                         fault = ('none','partial','zero','timeout_ack','timeout_unknown','database','stale','spread')[(index//24)%8]
+                    # Retain all original 2400 random rounds, then add two live
+                    # episodes so query outage and HALTING retry cannot be vacuous
+                    # merely because a randomly scheduled fault hit an empty world.
+                    if index >= RANDOM_ROUNDS:
+                        tail = index-RANDOM_ROUNDS
+                        fault = {0:'timeout_unknown', 1:'detail', 24:'none', 25:'zero'}.get(tail, 'none')
+                        if tail == 25:
+                            w.store.set_meta('state', 'HALTING')
                     w.fault = fault
                     w.now += 61 if w.store.meta('state') == 'HALTING' else 3
                     if fault == 'midnight':
@@ -437,7 +446,7 @@ class InvariantSimulationTests(unittest.TestCase):
                         'restarts','db_failures','recovery_obligation','halting_retry','halted',
                         'query_failures','position_failures','account_failures'):
                 self.assertGreater(coverage[key], 0, 'vacuous fault coverage: '+key)
-            print(f'INVARIANTS seed={seed} rounds={ROUNDS} N={RECOVERY_BOUND} checks={dict(checks)} '
+            print(f'INVARIANTS seed={seed} rounds={ROUNDS} random_rounds={RANDOM_ROUNDS} N={RECOVERY_BOUND} checks={dict(checks)} '
                   f'exercised={dict(sorted(exercised.items()))} coverage={dict(sorted(coverage.items()))}', flush=True)
         except Exception as error:
             self.fail(f'seed={seed} checked_rounds={len(sequence)} error={error}\nsteps={json.dumps(sequence)}')
