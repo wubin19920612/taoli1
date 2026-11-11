@@ -482,22 +482,22 @@ class Round3PolicyTests(unittest.TestCase):
         instruments[1].spec = replace(instruments[1].spec, min_notional='99.94')
         books = [Book([['99', '10']], [['100', '10']], 1000), Book([['102', '10']], [['103', '10']], 1000)]
         funding = [dict(rate='0', next=5000, interval=28800, captured_at=1000, history_ok=True, max_abs_24h='0')]*2
-        result = review(instruments, books, ['.0002']*2, funding, ['5000000']*2, 1000)
+        result = review(instruments, books, ['.0002']*2, funding, ['5000000']*2, 1000, baseline_bps=0)
         self.assertEqual(dec(result['quantity']), dec('.981'))
         self.assertGreaterEqual(dec(result['quantity'])*dec(result['limits'][1]), dec('99.94'))
         instruments[1].spec = replace(instruments[1].spec, max_qty='.980')
         with self.assertRaises(ValueError):
-            review(instruments, books, ['.0002']*2, funding, ['5000000']*2, 1000)
+            review(instruments, books, ['.0002']*2, funding, ['5000000']*2, 1000, baseline_bps=0)
 
     def test_r6_min_quantity_bumps_once_and_still_invalid_minimum_rejects(self):
         instruments = [instrument(), instrument('bitget')]
         books = [Book([['99', '10']], [['100', '10']], 1000), Book([['102', '10']], [['103', '10']], 1000)]
         funding = [dict(rate='0', next=5000, interval=28800, captured_at=1000, history_ok=True, max_abs_24h='0')]*2
         instruments[0].spec = replace(instruments[0].spec, min_qty='.981')
-        self.assertEqual(dec(review(instruments, books, ['.0002']*2, funding, ['5000000']*2, 1000)['quantity']), dec('.981'))
+        self.assertEqual(dec(review(instruments, books, ['.0002']*2, funding, ['5000000']*2, 1000, baseline_bps=0)['quantity']), dec('.981'))
         instruments[0].spec = replace(instruments[0].spec, min_qty='.982')
         with self.assertRaises(ValueError):
-            review(instruments, books, ['.0002']*2, funding, ['5000000']*2, 1000)
+            review(instruments, books, ['.0002']*2, funding, ['5000000']*2, 1000, baseline_bps=0)
 
     def test_r10_failed_contract_revokes_only_its_fee_and_timestamp(self):
         cross, bitget = Mock(), Mock()

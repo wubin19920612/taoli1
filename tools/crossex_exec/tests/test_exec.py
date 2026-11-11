@@ -203,12 +203,12 @@ class PolicyTests(unittest.TestCase):
         b.spec = Spec('BTC','USDT','1','.002','.002','5')
         books = [Book([['99','10']], [['100','10']], 1000), Book([['102','10']], [['103','10']], 1000)]
         funding = [dict(rate='.0001', next=5000, interval=28800, captured_at=1000, history_ok=True, max_abs_24h='.001')]*2
-        result = review([a,b], books, ['.0002','.0006'], funding, ['5000000']*2, 1000)
+        result = review([a,b], books, ['.0002','.0006'], funding, ['5000000']*2, 1000, baseline_bps=0)
         self.assertEqual(dec(result['quantity']) % dec('.006'), 0)
         self.assertEqual(result['limits'], ['100.03','101.96'])
         for field, value in [('next', 1100), ('max_abs_24h', '.006'), ('history_ok', False)]:
             with self.subTest(field=field), self.assertRaises(ValueError):
-                review([a,b], books, ['.0002','.0006'], [dict(funding[0], **{field:value}), funding[1]], ['5000000']*2, 1000)
+                review([a,b], books, ['.0002','.0006'], [dict(funding[0], **{field:value}), funding[1]], ['5000000']*2, 1000, baseline_bps=0)
 
     def test_close_conditions(self):
         base = dict(age=100, spread=90, entry_spread=100, pnl=0, notional=100, next_funding=2000, stale_age=0)

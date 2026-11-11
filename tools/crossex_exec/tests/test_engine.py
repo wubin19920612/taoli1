@@ -325,30 +325,42 @@ class EngineTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'mode_change'):
             self.engine.startup()
 
-    def test_close_each_policy_signal_reaches_reduce_http(self):
-        scenarios=('max_age','funding_exit','adverse_spread','loss_limit','converged')
-        for n,reason in enumerate(scenarios):
-            with self.subTest(reason=reason):
-                self.engine.account_cache.publish(self.accounts.snapshot())
-                p=self.engine.ingest(trigger('exit-'+str(n)))
-                self.assertIsNotNone(p)
-                if reason=='max_age':
-                    p['opened_at']=time.time()-7200
-                elif reason=='funding_exit':
-                    p['funding'][0]['next']=time.time()+299
-                if reason=='converged':
-                    books=[Book([['101','10']],[['102','10']],time.time()),Book([['99','10']],[['100','10']],time.time())]
-                elif reason=='loss_limit':
-                    books=[Book([['98','10']],[['99','10']],time.time()),Book([['99','10']],[['100','10']],time.time())]
-                else:
-                    # Positive spread > 50bp, but absolute loss below 1%.
-                    books=[Book([['100','10']],[['100.1','10']],time.time()),Book([['100.5','10']],[['100.6','10']],time.time())]
-                # Save modified entry timestamps before track/refresh reads the journal.
-                self.store.pair(p)
-                with patch.object(self.market,'books',return_value=books):
-                    self.engine.track(p)
-                self.assertEqual(p['state'],'CLOSED')
-                self.assertEqual(p['exit_reason'],reason)
+    def close_policy_signal(self,reason):
+        self.engine.account_cache.publish(self.accounts.snapshot())
+        p=self.engine.ingest(trigger('exit-'+reason))
+        self.assertIsNotNone(p)
+        if reason=='max_age':
+            p['opened_at']=time.time()-7200
+        elif reason=='funding_exit':
+            p['funding'][0]['next']=time.time()+299
+        if reason=='converged':
+            books=[Book([['101','10']],[['102','10']],time.time()),Book([['99','10']],[['100','10']],time.time())]
+        elif reason=='loss_limit':
+            books=[Book([['98','10']],[['99','10']],time.time()),Book([['99','10']],[['100','10']],time.time())]
+        else:
+            # Positive spread > 50bp, but absolute loss below 1%.
+            books=[Book([['100','10']],[['100.1','10']],time.time()),Book([['100.5','10']],[['100.6','10']],time.time())]
+        # Save modified entry timestamps before track/refresh reads the journal.
+        self.store.pair(p)
+        with patch.object(self.market,'books',return_value=books):
+            self.engine.track(p)
+        self.assertEqual(p['state'],'CLOSED')
+        self.assertEqual(p['exit_reason'],reason)
+
+    def test_close_max_age_reaches_reduce_http(self):
+        self.close_policy_signal('max_age')
+
+    def test_close_funding_exit_reaches_reduce_http(self):
+        self.close_policy_signal('funding_exit')
+
+    def test_close_adverse_spread_reaches_reduce_http(self):
+        self.close_policy_signal('adverse_spread')
+
+    def test_close_loss_limit_reaches_reduce_http(self):
+        self.close_policy_signal('loss_limit')
+
+    def test_close_converged_reaches_reduce_http(self):
+        self.close_policy_signal('converged')
 
     def test_funding_overrun_not_reported_as_known_profit(self):
         p=self.engine.ingest(trigger())

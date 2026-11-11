@@ -10,6 +10,7 @@ from tools.fill_sim.core import Book, dec
 from tools.crossex_exec.storage import Store
 from tools.crossex_exec.policy import review, send_review, exit_reason
 from tools.crossex_exec.market import MarketData
+from tools.fill_sim.network import PublicClient, Limiter
 from tools.crossex_exec.api_data import JournalView, position, trade
 from test_exec import instrument, setUpModule, tearDownModule
 from baseline_fixtures import seed_baseline
@@ -199,6 +200,10 @@ class PricingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             review(*args, baseline_bps='40')
 
+    def test_missing_baseline_has_no_implicit_zero_fallback(self):
+        with self.assertRaisesRegex(ValueError,'baseline_warming'):
+            review(*self.inputs())
+
     def test_depth_vwap_is_used_instead_of_best_quote(self):
         args = list(self.inputs())
         args[1][1].bids = [['100.6','.1'], ['100.1','10']]
@@ -286,7 +291,6 @@ class PublicBatchTests(unittest.TestCase):
         from tools.crossex_exec.baseline import BATCH_URLS
         with tempfile.TemporaryDirectory() as tmp, Store(Path(tmp)/'db') as store:
             market = MarketData(store, clock=lambda:NOW)
-            self.addCleanup(market.close)
             def batch(items, priority=1, partial=False):
                 self.assertEqual(len(items),6)
                 self.assertTrue(partial)
@@ -298,6 +302,24 @@ class PublicBatchTests(unittest.TestCase):
                 self.assertEqual(set(result), set(BATCH_URLS)-{'gate'})
                 market.baseline_quotes(())
                 self.assertEqual(call.call_count,1)
+            market.close()
+
+    def test_batch_sends_are_counted_by_shared_limiter(self):
+        from tools.crossex_exec.baseline import BATCH_URLS
+        with tempfile.TemporaryDirectory() as tmp, Store(Path(tmp)/'db') as store:
+            calls=[]
+            def transport(url):
+                calls.append(url)
+                ex=next(k for k,v in BATCH_URLS.items() if v==url)
+                return self.payload(ex)
+            limiter=Limiter()
+            market=MarketData(store,clock=lambda:NOW,client=PublicClient(limiter,transport=transport))
+            try:
+                self.assertEqual(len(market.baseline_quotes(('BTC',))),6)
+                self.assertEqual(sorted(calls),sorted(BATCH_URLS.values()))
+                self.assertTrue(all(limiter.stats[ex]['requests']==1 for ex in BATCH_URLS))
+            finally:
+                market.close()
 
 
 class EngineBaselineTests(unittest.TestCase):
@@ -348,6 +370,49 @@ class EngineBaselineTests(unittest.TestCase):
         orders = [self.engine.new_intent(p,n,'1','100.03' if n==0 else '101.96',False) for n in (0,1)]
         self.store.set_meta('pair_cooldowns',{'BTC|binance|bitget':self.now[0]+86400})
         with self.assertRaisesRegex(ValueError,'pair_cooldown'):
+            self.engine.check_pair(orders)
+
+    def test_realized_losing_close_blocks_next_trigger(self):
+        p=self.engine.ingest(self.trigger())
+        self.assertIsNotNone(p)
+        for venue in self.venues:
+            original=venue.fills
+            venue.fills=lambda order,original=original:dict(original(order),fee='.1')
+        self.engine.close_pair(p,'loss_limit')
+        self.assertEqual(p['state'],'CLOSED')
+        self.assertLess(dec(p['net_usd']),0)
+        self.assertIsNone(self.engine.ingest(self.trigger('after-loss')))
+        self.assertEqual(json.loads(self.store.events()[-1]['value'])['reason'],'pair_cooldown')
+
+    def test_structural_ingest_is_explicit_and_never_reads_books(self):
+        self.store.db.execute('DELETE FROM baseline_samples')
+        seed_baseline(self.store,self.now[0],'80')
+        payload=self.trigger()
+        with patch.object(self.market,'books') as books:
+            self.assertIsNone(self.engine.ingest(payload))
+            books.assert_not_called()
+        self.assertEqual(json.loads(self.store.events()[-1]['value'])['reason'],'structural_spread')
+
+    def test_missing_baseline_at_send_fails_closed(self):
+        p=self.pair(('0','0'))
+        p.update(state='OPENING')
+        p.pop('baseline_at_open')
+        self.store.pair(p)
+        orders=[self.engine.new_intent(p,n,'1','100.03' if n==0 else '101.96',False) for n in (0,1)]
+        with self.assertRaises((ValueError,KeyError)):
+            self.engine.check_pair(orders)
+
+    def test_send_book_age_includes_time_spent_reading_baseline(self):
+        p=self.pair(('0','0'))
+        p.update(state='OPENING')
+        self.store.pair(p)
+        orders=[self.engine.new_intent(p,n,'1','100.03' if n==0 else '101.96',False) for n in (0,1)]
+        require=self.engine.baseline.require
+        def slow(*args):
+            result=require(*args)
+            self.now[0]+=2.01
+            return result
+        with patch.object(self.engine.baseline,'require',side_effect=slow), self.assertRaisesRegex(ValueError,'send_book_stale'):
             self.engine.check_pair(orders)
 
     def test_baseline_background_worker_is_thirty_seconds_and_separate(self):
