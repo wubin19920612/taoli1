@@ -222,3 +222,107 @@ LOOP_STALL_BENCH_SUMMARY {"alert_cold_reduction_pct": 42.88893357192944, "alert_
 本轮仅本地验证和提交；**未 push、未 SSH、未 WSL、未联网、未部署、未 amend**。没有查询线上版本、备份或容器健康，线上验收仍不在本轮范围内。GC、prepare 业务规则、判定能力/原因码、复核后台 I/O、交易标识规则和其他模块均未改动，既有基准结果保留，本轮没有重跑基准或声称新的生产性能结果。
 
 持续变化仍可能使该轮告警延后；现在最多两次立即重试，然后 warning 跳过，避免无界循环。每轮最坏可承担三次过滤工作，其耗时和重算量可从新字段关联观察。本轮原始日志保留在被忽略的 `output/`，临时文件位于被忽略的 `.pytest-tmp/`；没有删除或清理旧产物。后续独立审查、部署和生产观察请另开任务并沿用本交接。
+
+## 本轮追加：只读审查四项修复（2026-11-11）
+
+本节是 P1、P2a、P2b、P3 的最新交付记录，覆盖上文关于溢价扫描遇到发布即中止、旧索引可能长期保留以及本轮未重跑基准的旧状态。范围仅为 PM 指定的四项修法及其回归；没有扩展到 shadow 进程关闭或其他模块。工作树仍为 `C:/Users/wubin/Desktop/code/codex/taoli1/.worktrees/loop-stall`，分支仍为 `codex/loop-stall`；起点 `c05e59f1b439c0780dc35cf6f92de839f0fef868`，开始时工作区干净。
+
+### 提交与文件
+
+| 类型 | 提交 | 文件与内容 |
+|---|---|---|
+| feat | `e25171f0d43fec019edbc608d63150d0d0ab85de` | `backend/app/services/market_validation_review.py`、`backend/app/services/multi_exchange_premium.py`：四项实现 |
+| test | `56db4ea17f4c995db8e6f7e06fc0aa491687b44f` | `backend/tests/test_loop_stall_review_fixes.py`、`backend/tests/test_multi_exchange_premium_scan_cache.py`：10 项新增回归；`backend/tests/test_loop_stall.py`、`backend/tests/test_market_validation_prepare_copies.py`：对应行为和精确源码预期 |
+| docs | 本节单独提交 | 仅本交接文档；自身 hash 用 `git log -1 --format=%H -- docs/task-handoff-2026-11-11-loop-stall.md` 获取 |
+
+实现、测试、文档分别创建新提交，没有 amend。只暂存本轮文件；`git diff --check` 通过。没有修改冻结参考实现、pytest 配置、GC、复核判定、原因码或能力，也没有修改前端、compose、部署脚本、`.env`。
+
+### 实现与业务边界
+
+- **P1**：`prepare()` 在给 `self.collision_symbols` 赋新对象之前清空 `_prepared_rows`；结束时记录 `_prepared_collision = collision_symbols`。`validate(annotated=True)` 的复用还必须满足 `self.collision_symbols is self._prepared_collision`，其他 epoch、FX、对象来源、精确市场键及过期检查保留。回归在新 collision 发布后的让出点暂停 prepare，证明 epoch 未变时旧行仍走两次 annotate，以 `ASSET_IDENTITY_CONFLICT` 拦截，结果与完整路径逐字段一致（仅排除 `validated_at`）。另测直接替换 collision 对象的复用失效。夹具含一条未核验腿；原规则允许已核验同资产双腿继续匹配，未改变该规则。
+- **P2a**：溢价监控的 `_scan_inflight` 按 `(generation, markets_version, settings JSON)` 合并扫描 Task，并核对输入行对象，保留无 generation 变化时的行替换检测。扫描使用起始设置的深拷贝，完成后只在当前版本、设置与行对象仍匹配时写入单版本 `_scan_cache`；进行中记录在 finally 清理。调用方通过 shield 等待共享 Task。三个并发 `_evaluate_results([])` 只执行一次资格扫描，随后同版本命中缓存，发布或设置变更后重扫。
+- **P2b**：扫描期间发布不再抛出原 ValueError；调用方使用开始时取到的行情列表所得结果。版本变化只阻止该旧结果进入缓存，不覆盖已完成的新版本缓存。真实 `run_once()` / TaskGroup 回归让一个币种在扫描时遇到新发布，其余 15 个币种仍可完成，16 条通知和事件均由本地 AsyncMock 接收；没有联网或真实发送。另测旧扫描晚于新扫描完成，覆盖 generation、仅 markets_version、仅行对象变化三种情况。
+- **P3**：新增 `_discard_stale_market_index()`，在同步/异步过滤入口及 prepare 结束调用；发现缓存版本与 store 不一致时同时清空 `_market_index_cache` 和 `_market_legs_cache`。三个入口分别以连续三轮发布及 weakref 断言最早一版行已释放；过滤用仍有效的既有 validation，断言重算数为 0，覆盖不调用 `_market_index()` 的路径。
+
+本轮没有新增或移动 `budget.maybe_yield()`，已有让出点和第三次 prepare 同步回退约束保留。两条源码审计保留原比较范围、精确块计数、逐字比较及 cooperative AST 检查，只把本轮要求的 `_prepared_collision` 记录和旧索引清理两条完整语句加入精确预期。P2b 的旧抛错测试按 PM 决定改为起始快照结果相等，同时继续断言不缓存旧扫描并新增进行中记录清空断言；其他已有断言及基准门槛未放宽。
+
+### 锁定环境与本轮测试
+
+解释器仍为：
+
+```text
+C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/435b98f6-0522-4055-9b28-46a94def1380/scratchpad/venv-lock/Scripts/python.exe
+```
+
+以下测试全部在 `backend` 目录、`PYTHONPATH=.` 下执行，未安装依赖、未联网。全量默认的 network/benchmark 排除配置及离线保护保持原样。
+
+10 项新增回归单独汇总，原始日志 `output/loop-stall-review-new3-final.txt`：
+
+```text
+10 passed, 20 deselected in 1.06s
+```
+
+命令参数：
+
+```text
+-m pytest tests/test_loop_stall_review_fixes.py tests/test_multi_exchange_premium_scan_cache.py -k "old_prepared or collision_object or three_publications or three_concurrent or publication_during_scan or older_inflight" -q -p no:cacheprovider --basetemp=../.pytest-tmp/loop-stall-review-new3-final
+```
+
+指定全量命令原样运行两次，期间没有修改任何源码、测试或断言：
+
+```text
+-m pytest tests -q -p no:cacheprovider --basetemp=../.pytest-tmp/loop-stall-full3
+```
+
+首次全量退出码 1，原始日志 `output/loop-stall-full3.txt`：
+
+```text
+1 failed, 2960 passed, 11 deselected, 13 warnings in 252.79s (0:04:12)
+```
+
+唯一失败是 `tests/test_shadow_shutdown_stats_freeze.py::test_terminate_failure_escalates_to_kill_with_threaded_joins[1]`。`checked_join` 的既有上限为 0.5 秒，实际收到 `0.5150000001303852`，导致后续关闭资源断言失败。`shadow_runtime.py` 和该测试相对本轮起点均无 diff；没有修复或放宽此范围外测试。原样单独复跑退出码 0，日志 `output/loop-stall-shadow-recheck3.txt`：
+
+```text
+1 passed in 2.20s
+```
+
+随后同代码、同全量命令复跑退出码 0，原始日志单独保存在 `output/loop-stall-full3-rerun.txt`，没有覆盖首次失败日志：
+
+```text
+2961 passed, 11 deselected, 13 warnings in 199.70s (0:03:19)
+```
+
+11 项仍为默认排除的 network/benchmark；13 条 warning 仍为 Starlette/httpx 和 `datetime.utcnow()` 弃用提示，没有过滤或修改依赖。
+
+### 本轮三次基准
+
+基准独立于其他 pytest 进程运行，命令与指定 basetemp 完全一致：
+
+```text
+-m pytest tests/test_loop_stall_benchmark.py -m benchmark -q -s -p no:cacheprovider --basetemp=../.pytest-tmp/loop-stall-bench3
+```
+
+同一份 12,000 行行情、4,000 条机会，三轮新旧均接受 3,569 条；GC、冻结对照、计时方式及全部断言未变。单位 ms，表格四舍五入；完整每轮 `LOOP_STALL_BENCH` 在 `output/loop-stall-bench3.txt`。
+
+| 次数 | 构建旧→新 | 冷告警旧→新 | 热告警旧→新 | 全阶段最长段旧→新 |
+|---|---|---|---|---|
+| 1 | 224.913 → 95.855 | 281.515 → 150.561 | 266.466 → 137.220 | 281.515 → 29.786 |
+| 2 | 196.563 → 96.698 | 278.449 → 152.853 | 335.369 → 142.412 | 335.368 → 25.768 |
+| 3 | 185.240 → 101.875 | 261.488 → 149.767 | 265.159 → 140.198 | 265.160 → 34.436 |
+
+原始汇总（退出码 0）：
+
+```text
+LOOP_STALL_BENCH_SUMMARY {"alert_cold_reduction_pct": 45.92862019585583, "alert_reduction_pct": 47.386081041368215, "build_reduction_pct": 50.80541648810628, "new_max_segment_ms": 34.43649993278086}
+1 passed in 12.87s
+```
+
+构建、冷告警、热告警中位数降幅均达到原有 ≥40% 门槛，新路径全阶段最长同步段 34.436500ms，低于原有 200ms 门槛。
+
+### 状态、风险与下一步
+
+四项修法和本地验证已完成；**未 push、未 SSH、未 WSL、未联网、未部署、未 amend**。未访问线上版本、数据库备份或容器健康，不能据此宣称生产验收。原有告警有界重试未改；溢价评估在发布交界允许按扫描开始时的旧行情列表完成，这是本轮 PM 明确要求的行为，旧结果不会成为新版本缓存。
+
+首次全量出现过的 shadow 关闭计时失败仍是范围外风险；单项和完整复跑均通过，只能说明本轮复跑未复现，不能证明该波动已根治。合成基准也不替代生产持续性能与常驻内存验收。本轮只做自身 diff 核对，没有新增独立第二审查者验收。
+
+开始时没有原有未提交或未跟踪文件；本轮运行日志留在被忽略的 `output/loop-stall-*.txt`，pytest 临时产物位于被忽略的 `.pytest-tmp/`。后续独立审查、范围外 shadow 问题调查或部署/生产观察请另开对应模块任务，沿用本交接；当前任务无推送或线上操作授权。
