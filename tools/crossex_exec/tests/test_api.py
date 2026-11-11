@@ -4,6 +4,7 @@ import errno
 import http.client
 import json
 import sqlite3
+import socket
 import sys
 import tempfile
 import threading
@@ -473,6 +474,12 @@ class HTTPTests(APIFixture, unittest.TestCase):
         self.assertEqual(status, 503)
         self.assertNotIn(str(missing), body)
         self.assertFalse(missing.exists())
+
+    def test_listener_start_never_performs_reverse_dns(self):
+        with patch.object(socket, 'getfqdn', side_effect=AssertionError('reverse DNS forbidden')) as dns:
+            service = self.start()
+            self.assertEqual(self.request(service)[0], 200)
+            dns.assert_not_called()
 
     def test_query_validation_and_capped_limit(self):
         for i in range(502):
