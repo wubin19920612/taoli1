@@ -1,11 +1,12 @@
 """Independent, owner-scoped opening locks. stop_reason is only a UI projection."""
-import threading
 
 
 class StopLocks:
     def __init__(self, store):
         self.store = store
-        self.lock = threading.RLock()
+        # One journal-scoped lock protects persistence AND in-memory latches.
+        # A second lock here would invert Store -> StopLocks in the send barrier.
+        self.lock = store.lock
         saved = store.meta('stop_locks')
         pairs=store.pairs(active=True)
         self.reasons = {k:set(v) for k,v in (saved or {}).items()}
@@ -40,6 +41,11 @@ class StopLocks:
 
     def add(self, reason, owner='global'):
         with self.lock:
+            if owner in self.reasons.get(reason, ()):
+                if self.store.meta('stop_reason')!=reason:
+                    self.dirty=True
+                self.flush(reason)
+                return
             self.reasons.setdefault(reason, set()).add(owner)
             self.dirty = True
             self.flush(reason)
@@ -58,3 +64,20 @@ class StopLocks:
     def __bool__(self):
         with self.lock:
             return bool(self.reasons) or self.dirty
+
+    def recovered(self, reason, event_kind, values):
+        """A recovery event and its owner-scoped unlock commit together."""
+        with self.lock:
+            if 'global' not in self.reasons.get(reason,()):
+                return
+            before={k:set(v) for k,v in self.reasons.items()}
+            try:
+                with self.store.transaction():
+                    self.store.event(event_kind,values)
+                    self.discard(reason)
+                    if self.dirty:
+                        raise OSError('stop_lock_persistence_failed')
+            except Exception:
+                self.reasons=before
+                self.dirty=True
+                raise

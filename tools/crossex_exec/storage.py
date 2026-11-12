@@ -7,7 +7,7 @@ from pathlib import Path
 from weakref import WeakValueDictionary
 from contextlib import contextmanager
 from .security import REDACTOR
-from .baseline import cooldown_for, RETENTION_SECONDS
+from .baseline import cooldown_for, RETENTION_SECONDS, SAMPLE_SECONDS
 from .public_store import PublicStore, PUBLIC_KEYS
 
 
@@ -35,7 +35,8 @@ def matches_order(order, *, pair_id=None, states=None, exclude_states=(), sent_s
     return ((pair_id is None or order.get('pair_id') == pair_id)
             and (states is None or order.get('state') in states)
             and order.get('state') not in exclude_states
-            and (sent_since is None or order.get('sent_ms', 0) >= sent_since)
+            and (sent_since is None or (order['sent_ms'] if order.get('sent_ms') is not None
+                                       else order.get('sent_persisted_ms') or 0) >= sent_since)
             and (accounting_pending is None or bool(order.get('accounting_pending')) == accounting_pending)
             and (reduce_only is None or bool(order.get('reduce_only')) == reduce_only))
 
@@ -61,6 +62,7 @@ class Store(PublicStore):
             CREATE INDEX IF NOT EXISTS orders_pair ON orders(json_extract(value,'$.pair_id'));
             CREATE INDEX IF NOT EXISTS orders_state ON orders(json_extract(value,'$.state'));
             CREATE INDEX IF NOT EXISTS orders_sent ON orders(coalesce(json_extract(value,'$.sent_ms'),0));
+            CREATE INDEX IF NOT EXISTS orders_send_activity ON orders(coalesce(json_extract(value,'$.sent_ms'),json_extract(value,'$.sent_persisted_ms'),0));
             CREATE INDEX IF NOT EXISTS pairs_state ON pairs(json_extract(value,'$.state'));
         ''')
         with self.lock:
@@ -170,7 +172,7 @@ class Store(PublicStore):
                              '('+','.join('?' for _ in values)+')')
                 params.extend(values)
         if sent_since is not None:
-            terms.append("coalesce(json_extract(value,'$.sent_ms'),0)>=?")
+            terms.append("coalesce(json_extract(value,'$.sent_ms'),json_extract(value,'$.sent_persisted_ms'),0)>=?")
             params.append(sent_since)
         for field, value in (('accounting_pending', accounting_pending), ('reduce_only', reduce_only)):
             if value is not None:
@@ -201,8 +203,9 @@ class Store(PublicStore):
     def baseline_samples(self, key, since, until):
         with self.lock:
             return [(r[0],r[1]) for r in self.db.execute(
-                'SELECT at,bps FROM baseline_samples WHERE pair_key=? AND at>=? AND at<=? ORDER BY bucket',
-                (key,since,until))]
+                'SELECT at,bps FROM baseline_samples WHERE pair_key=? AND bucket>=? AND bucket<=? '
+                'AND at>=? AND at<=? ORDER BY bucket',
+                (key,int(since//SAMPLE_SECONDS),int(until//SAMPLE_SECONDS),since,until))]
 
     def get_pair(self, pair_id):
         with self.lock:

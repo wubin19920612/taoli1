@@ -23,7 +23,9 @@ def category(ex, row):
     if isinstance(subs, list):
         tokens.update(str(v).upper() for v in subs)
     base=str(row.get('baseAsset',row.get('baseCoin',row.get('baseCcy','')))).upper()
-    if base in PRE_IPO_BASES or row.get('isPreListing') is True or row.get('is_pre_market') is True or tokens & {'PREMARKET', 'PRE_MARKET', 'PRE_IPO'}:
+    if (base in PRE_IPO_BASES or row.get('isPreListing') is True or row.get('is_pre_market') is True
+            or str(row.get('ruleType','')).lower() in ('pre_market','rebase_contract')
+            or tokens & {'PREMARKET', 'PRE_MARKET', 'PRE_IPO'}):
         return 'pre_ipo'
     if base in COMMODITY_BASES or tokens & {'COMMODITY', 'COMMODITIES', 'METALS', 'METAL', 'GOLD', 'FOREX', 'INDICES', 'BONDS'}:
         return 'commodity'
@@ -80,6 +82,7 @@ class Universe:
                 or any(not isinstance(k, str) for k in selected) or len(set(selected)) != len(selected)
                 or (alias(base)[0] in PRE_IPO_BASES|COMMODITY_BASES and kind not in FORBIDDEN)
                 or any(k not in catalog or catalog[k].spec.base != base
+                       or (catalog[k].trading_blocked and kind not in FORBIDDEN)
                        or (catalog[k].category in FORBIDDEN and kind not in FORBIDDEN) for k in selected)):
             raise ValueError('invalid_classification')
         underlying = value.get('underlying_market')
@@ -112,7 +115,7 @@ class Universe:
         choice = self._decisions().get(i.spec.base, {})
         if choice.get('excluded') or self._decisions().get(i.base, {}).get('excluded'):
             raise ValueError('excluded')
-        if i.category in FORBIDDEN or choice.get('category') in FORBIDDEN or alias(i.spec.base)[0] in PRE_IPO_BASES|COMMODITY_BASES:
+        if i.trading_blocked or i.category in FORBIDDEN or choice.get('category') in FORBIDDEN or alias(i.spec.base)[0] in PRE_IPO_BASES|COMMODITY_BASES:
             raise ValueError('category_unconfirmed')
         if i.market.key in choice.get('markets', []):
             return choice['category'], choice.get('underlying_market')
@@ -132,7 +135,7 @@ class Universe:
         old = self.store.meta('symbol_mappings', {})
         groups, current = {}, {}
         for i in catalog.values():
-            if i.category not in FORBIDDEN and alias(i.spec.base)[0] not in PRE_IPO_BASES|COMMODITY_BASES:
+            if not i.trading_blocked and i.category not in FORBIDDEN and alias(i.spec.base)[0] not in PRE_IPO_BASES|COMMODITY_BASES:
                 base, factor = alias(i.spec.base)
                 groups.setdefault(base, []).append((i, factor))
         for base, members in groups.items():
@@ -167,6 +170,7 @@ class Universe:
         return [r for r in self.store.meta('symbol_mappings', {}).values()
                 if r.get('available', True) and r['base'] not in PRE_IPO_BASES
                 and all(k['market_key'] in catalog and catalog[k['market_key']].category not in FORBIDDEN
+                        and not catalog[k['market_key']].trading_blocked
                         and decisions.get(catalog[k['market_key']].spec.base,{}).get('category') not in FORBIDDEN for k in r['legs'])]
 
     def decide_mapping(self, identity, status):
@@ -233,7 +237,8 @@ class Universe:
         quotes, decisions = self.store.meta('market_tickers', {}), self._decisions()
         result = {}
         for i in self.catalog().values():
-            if (i.category=='pre_ipo' or decisions.get(i.spec.base,{}).get('category')=='pre_ipo'
+            if (i.category=='pre_ipo' or i.rule_type in ('pre_market','rebase_contract')
+                    or decisions.get(i.spec.base,{}).get('category')=='pre_ipo'
                     or alias(i.spec.base)[0] in PRE_IPO_BASES):
                 continue
             decision = decisions.get(i.spec.base, {})
@@ -246,8 +251,9 @@ class Universe:
             except ValueError:
                 effective,market,eligible = decision.get('category',i.category),decision.get('underlying_market'),False
             row['markets'].append(dict(market_key=i.market.key, raw_symbol=i.market.raw_symbol, exchange=i.market.exchange,
-                category=i.category, volume_usd=quote.get('volume') if 0 <= self.clock()-quote.get('at', 0) <= 300 else None,
+                category=i.category, rule_type=i.rule_type, trading_blocked=i.trading_blocked,
+                volume_usd=quote.get('volume') if 0 <= self.clock()-quote.get('at', 0) <= 300 else None,
                 volume_basis=quote.get('volume_basis'),at=quote.get('at'),selected=i.market.key in decision.get('markets', []),
                 effective_category=effective,underlying_market=market,eligible=eligible,
-                needs_classification=not eligible and effective not in FORBIDDEN and not decision.get('excluded',False)))
+                needs_classification=not eligible and not i.trading_blocked and effective not in FORBIDDEN and not decision.get('excluded',False)))
         return list(result.values())

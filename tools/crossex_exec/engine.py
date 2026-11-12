@@ -21,6 +21,9 @@ from .sizing import size_plan
 from .universe import Universe, check_mapping_ratio
 
 
+ACCOUNT_RECOVERY_SNAPSHOTS = 3
+
+
 class DailyBaselinePending(ValueError):
     """The UTC date changed while processing the previous day's snapshot."""
 
@@ -37,8 +40,13 @@ class Engine:
         self._last_alert_reason=None
         self._last_alert_values=None
         self._halt_alerts={}
-        self._alert_lock=threading.RLock()
-        self._lifecycle_lock=threading.RLock()
+        # Lock order: coordinator (when needed) -> Executor -> Store. All
+        # account/alert/stop state uses the SAME Store RLock, never an AB/BA pair.
+        self._alert_lock=self._lifecycle_lock=store.lock
+        self._coordinator_lock=threading.RLock()
+        self._account_fresh_streak=self._liability_clear_streak=0
+        self._account_fresh_at=None
+        self._equity_admin_active=False
         self._closed=False
         self.workers=[]
         self.bases=None
@@ -171,6 +179,8 @@ class Engine:
                 if not self.can_open(ignore_cids={i['cid'] for i in intents}):
                     raise ValueError('open_gate_changed')
                 config=pair.get('config_at_open')
+                if config:
+                    self.check_cached_volumes(instruments,config['values'])
                 limits=self.opening_limits.restricted(config['values']) if config else self.opening_limits
                 # Last check: all preceding reads/commits consume this budget.
                 # Success performs no further I/O before releasing BOTH senders.
@@ -257,17 +267,58 @@ class Engine:
 
     def refresh_accounts(self):
         started=self.clock()
+        revision=self.store.meta('equity_baseline_revision',0)
         try:
             snapshot=self.accounts.snapshot()
             with self._lifecycle_lock:
                 if not self._closed:
+                    if self._equity_admin_active or revision!=self.store.meta('equity_baseline_revision',0):
+                        self.store.event('ACCOUNT_REFRESH_SUPERSEDED',dict(started_at=started,revision=revision))
+                        return
                     self.account_cache.publish(snapshot,started)
                     self.limits.check_equity(snapshot)
                     self.roll_daily_upnl(snapshot,started)
+                    self.observe_account_snapshot(snapshot,started)
         except Exception:
             with self._lifecycle_lock:
                 if not self._closed:
+                    self._account_fresh_streak=self._liability_clear_streak=0
                     self.store.event('ACCOUNT_REFRESH_FAILED')
+
+    def observe_account_snapshot(self,snapshot,captured_at):
+        """Only distinct, consecutive, fully fresh reads recover their own lock."""
+        with self.store.lock:
+            now=self.clock()
+            age=now-captured_at
+            fresh=0<=age<=10
+            refresh=self.store.meta('account_refresh')
+            if not refresh or captured_at>refresh['captured_at']:
+                self.store.set_meta('account_refresh',dict(captured_at=captured_at,completed_at=now,
+                                    age_seconds=age,fresh=fresh))
+            if not fresh:
+                self._account_fresh_streak=self._liability_clear_streak=0
+                self.alert('account_snapshot_unavailable')
+                return
+            previous=self._account_fresh_at
+            if previous is not None and captured_at<=previous:
+                return
+            if previous is not None and captured_at-previous>10:
+                self._account_fresh_streak=self._liability_clear_streak=0
+            self._account_fresh_at=captured_at
+            self._account_fresh_streak+=1
+            self._liability_clear_streak=0 if snapshot['liabilities'] else self._liability_clear_streak+1
+            if self._account_fresh_streak>=ACCOUNT_RECOVERY_SNAPSHOTS:
+                self.stops.recovered('account_snapshot_unavailable','ACCOUNT_SNAPSHOT_RECOVERED',
+                    dict(consecutive=self._account_fresh_streak,captured_at=captured_at,age_seconds=age))
+            if self._liability_clear_streak>=ACCOUNT_RECOVERY_SNAPSHOTS:
+                self.stops.recovered('account_liability','ACCOUNT_LIABILITY_RECOVERED',
+                    dict(consecutive=self._liability_clear_streak,captured_at=captured_at))
+
+    def rebaseline(self,*,confirm,reason,source,release_halt=False):
+        from .equity import EquityAdmin
+        with self._coordinator_lock:
+            return EquityAdmin(self.store,self.accounts,engine=self,clock=self.clock).apply(
+                confirm=confirm,reason=reason,source=source,release_halt=release_halt)
 
     def refresh_reference(self):
         now=self.clock()
@@ -348,7 +399,7 @@ class Engine:
                 recent+=1
                 rejected+=o['state']=='REJECTED' or o.get('rejected',False)
         local_ok=(self.store.meta('single_failures',0)<3 and (not recent or dec(rejected)/recent<=dec('.3')))
-        return (local_ok and not exposed and self.risk=='RUN' and not self.stop_file.exists() and not self.stops
+        return (local_ok and not exposed and self.risk=='RUN' and not self._equity_admin_active and not self.stop_file.exists() and not self.stops
                 and not self.executor.pending_writes and not any(o['cid'] not in ignore_cids
                     for o in self.executor.iter_orders(states=NONTERMINAL))
                 and not self.store.meta('position_mismatch')
@@ -418,6 +469,10 @@ class Engine:
             if day((o.get('fill_ms') or o['created_at']*1000)/1000)==today:
                 daily+=realized
         floating=dec(self.snapshot['upnl']) if self.snapshot else dec(0)
+        offset=self.store.meta('risk_pnl_baseline',{})
+        total-=dec(offset.get('total',0))
+        if offset.get('day')==today:
+            daily-=dec(offset.get('daily',0))
         baseline=self.roll_daily_upnl(self.snapshot or {},(self.snapshot or {}).get('captured_at',self.clock()))
         if not baseline or baseline['day']!=today:
             raise DailyBaselinePending('daily_baseline_pending')
@@ -516,6 +571,7 @@ class Engine:
                 self.snapshot=self.account_cache.read()
             equity_halt=self.limits.check_equity(self.snapshot)
             self.roll_daily_upnl(self.snapshot,self.snapshot['captured_at'])
+            self.observe_account_snapshot(self.snapshot,self.snapshot['captured_at'])
             if day(self.snapshot['captured_at'])!=day(self.clock()):
                 self.risk='STOP'
                 if equity_halt:
@@ -560,15 +616,17 @@ class Engine:
             if self.store.meta('daily_loss_day')==current_day and self.risk=='RUN':
                 self.risk='STOP'
             self.store.event('RECONCILE',dict(matched=same,margins=self.snapshot['margins'],daily=str(daily),total=str(total),risk=self.risk))
-            self.stops.discard('account_snapshot_unavailable')
             if (total<=-dec(settings['total_loss_stop_usd']) or equity_halt) and self.store.meta('state')!='HALTED':
                 self.store.set_meta('state','HALTING')
+                if not equity_halt:
+                    self.store.set_meta('halt_reason','total_loss')
             if self.risk in ('HALTED','FLATTEN') or self.store.meta('state')=='HALTING':
                 self.flatten_all('circuit_breaker')
         except DailyBaselinePending:
             self.risk='STOP'
         except Exception:
             self.risk='STOP'
+            self._account_fresh_streak=self._liability_clear_streak=0
             self.alert('account_snapshot_unavailable')
 
     def risk_settings(self):
@@ -580,6 +638,8 @@ class Engine:
         if self.limits.check_equity(snapshot):
             self.flatten_all('account_equity_drop')
             raise ValueError('account_equity_halt')
+        if snapshot['liabilities']:
+            raise ValueError('account_liability')
         loss=self.store.meta('account_loss_current',{})
         if (dec(loss.get('daily',0))<=-dec(values['daily_loss_stop_usd'])
                 or dec(loss.get('total',0))<=-dec(values['total_loss_stop_usd'])):
@@ -590,7 +650,12 @@ class Engine:
             raise ValueError('runtime_equity_limit')
 
     def check_volumes(self,instruments,values):
-        turnovers=self.market.turnovers(instruments)
+        return self.validate_volumes(instruments,values,self.market.turnovers(instruments))
+
+    def check_cached_volumes(self,instruments,values):
+        return self.validate_volumes(instruments,values,self.market.cached_turnovers(instruments))
+
+    def validate_volumes(self,instruments,values,turnovers):
         try:
             if len(turnovers)!=2 or any(dec(v)<0 for v in turnovers):
                 raise ValueError('volume_unknown')
@@ -604,6 +669,10 @@ class Engine:
         return turnovers
 
     def ingest(self,payload):
+        with self._coordinator_lock:
+            return self._ingest(payload)
+
+    def _ingest(self,payload):
         now=self.clock()
         identity=payload.get('id')
         if not isinstance(identity,str) or not identity or len(identity)>128:
@@ -1121,6 +1190,10 @@ class Engine:
                 self.next_halt=self.clock()+min(60,2**min(self.halt_attempts,6))
 
     def tick(self):
+        with self._coordinator_lock:
+            return self._tick()
+
+    def _tick(self):
         if self.store.meta('state')=='HALTED':
             return
         self.stops.flush()

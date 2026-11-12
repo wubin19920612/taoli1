@@ -1,5 +1,7 @@
 """python -m tools.crossex_exec run --env-file /private/path (shadow by default)."""
 import argparse
+from contextlib import contextmanager
+import http.client
 import json
 import os
 from pathlib import Path
@@ -16,6 +18,7 @@ from .engine import Engine
 from .limits import DEFAULT_VAR, DEFAULT_ENV
 from .reporting import report
 from .api import start_api
+from .equity import EquityAdmin
 from tools.fill_sim.network import ShadowAPI
 
 
@@ -23,11 +26,80 @@ def emit(kind,**fields):
     print(json.dumps(REDACTOR.clean(dict(kind=kind,at=time.time(),**fields)),allow_nan=False),flush=True)
 
 
+@contextmanager
+def maintenance_lock(path):
+    """Use the SAME lifetime flock as run; never bypass a running coordinator."""
+    import fcntl
+    with open(str(path)+'.lock','a',encoding='utf-8') as lock:
+        try:
+            fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            acquired=True
+        except BlockingIOError:
+            acquired=False
+        yield acquired
+
+
+def running_rebaseline(config,reason):
+    from .api import parse_bind
+    token=config.get('CROSSEX_EXEC_ADMIN_TOKEN','')
+    if not token or token==config.get('CROSSEX_EXEC_API_TOKEN'):
+        raise ValueError('running_executor_admin_required')
+    addresses=parse_bind(config.get('CROSSEX_EXEC_API_BIND'))
+    address=next((a for a in addresses if a[0]=='127.0.0.1'),addresses[0])
+    conn=http.client.HTTPConnection(*address,timeout=20)
+    try:
+        conn.request('POST','/api/v1/equity/rebaseline',body=json.dumps(dict(confirm=True,reason=reason)),
+                     headers={'X-Api-Token':token,'Content-Type':'application/json'})
+        response=conn.getresponse()
+        raw=response.read(131073)
+        if len(raw)>131072:
+            raise ValueError('admin_response_invalid')
+        value=json.loads(raw)
+        if response.status!=200:
+            from .equity import ADMIN_REFUSALS
+            if isinstance(value,dict) and value.get('error') in ADMIN_REFUSALS:
+                raise ValueError(value['error'])
+            raise ValueError('running_rebaseline_refused')
+        return value
+    finally:
+        conn.close()
+
+
+def run_maintenance(config,args):
+    path=Path(config.get('CROSSEX_DB',DEFAULT_VAR+'/crossex-exec.db'))
+    if not path.is_file():
+        raise ValueError('database_not_found')
+    with maintenance_lock(path) as acquired:
+        if not acquired:
+            if args.command!='rebaseline':
+                raise ValueError('release_requires_stopped_service')
+            result=running_rebaseline(config,args.reason)
+        else:
+            # Live writes are disabled even when the env is configured for live.
+            cross=CrossEx(Transport('gate',Credentials(config.get('CROSSEX_API_KEY',''),config.get('CROSSEX_API_SECRET','')),
+                                    live=False),config.get('CROSSEX_POSITION_MODE','DUAL'))
+            bitget=Bitget(Transport('bitget',Credentials(config.get('BITGET_API_KEY',''),config.get('BITGET_API_SECRET',''),
+                             config.get('BITGET_API_PASSPHRASE','')),live=False),config.get('BITGET_POSITION_MODE','hedge_mode'))
+            with Store(path) as store:
+                result=EquityAdmin(store,Accounts(cross,bitget)).apply(confirm=args.confirm,reason=args.reason,
+                            source='cli',release_halt=args.command=='release-halt')
+        emit('maintenance_complete',action=args.command,result=result)
+        return 0
+
+
 def main(argv=None):
     parser=argparse.ArgumentParser(description='CrossEx/Bitget execution; no keys in CLI or process environment')
     sub=parser.add_subparsers(dest='command',required=True)
     run=sub.add_parser('run')
     run.add_argument('--env-file',default=DEFAULT_ENV)
+    for command in ('release-halt','rebaseline'):
+        admin=sub.add_parser(command)
+        admin.add_argument('--env-file',default=DEFAULT_ENV)
+        admin.add_argument('--reason',default='manual_'+command.replace('-','_'))
+        if command=='release-halt':
+            admin.add_argument('--confirm',required=True,help='Exact current halt reason')
+        else:
+            admin.add_argument('--confirm',required=True,action='store_true')
     reporting=sub.add_parser('report')
     reporting.add_argument('--db',default=DEFAULT_VAR+'/crossex-exec.db')
     args=parser.parse_args(argv)
@@ -39,6 +111,16 @@ def main(argv=None):
         return 0
     # A local development machine cannot satisfy POSIX ownership/mode guarantees.
     config=load_env(args.env_file)
+    if args.command in ('release-halt','rebaseline'):
+        try:
+            return run_maintenance(config,args)
+        except ValueError as error:
+            # All known refusal messages are local constants; never echo an
+            # exchange response, file content, credential or arbitrary exception.
+            from .equity import ADMIN_REFUSALS
+            reason=str(error) if str(error) in ADMIN_REFUSALS else 'maintenance_failed_closed'
+            emit('maintenance_refused',action=args.command,reason=reason)
+            return 1
     if config.get('CROSSEX_LIVE_ENABLED','0') not in ('0','1'):
         raise ValueError('invalid_live_switch')
     live=config.get('CROSSEX_LIVE_ENABLED','0')=='1'
@@ -73,7 +155,7 @@ def main(argv=None):
             api_service=None
             try:
                 engine.startup(tuple(filter(None,config.get('CROSSEX_BASES','').split(','))))
-                api_service=start_api(config,path,logger=emit)
+                api_service=start_api(config,path,logger=emit,equity_admin=engine.rebaseline)
                 last_status=0
                 while not shutdown and store.meta('state')!='HALTED':
                     try:

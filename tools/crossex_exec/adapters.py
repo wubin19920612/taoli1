@@ -123,6 +123,14 @@ class CrossEx:
     def positions(self):
         return self.http.request('GET','/api/v4/crossex/positions',group='position')
 
+    def open_orders(self):
+        # Documented complete current list; no symbol/venue filter may hide debt
+        # or foreign orders during an administrative flat-account verification.
+        rows=self.http.request('GET','/api/v4/crossex/open_orders')
+        if not isinstance(rows,list):
+            raise APIError('invalid_response')
+        return rows
+
     def fees(self):
         return self.http.request('GET','/api/v4/crossex/fee',group='fee')
 

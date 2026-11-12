@@ -14,6 +14,7 @@ class Instrument:
     canonical_base: str = None
     quantity_multiplier: str = '1'
     mapping_id: str = None
+    rule_type: str = None
 
     @property
     def base(self):
@@ -45,7 +46,11 @@ class Instrument:
     @classmethod
     def load(cls, row):
         return cls(Market(**row['market']),Spec(**row['spec']),row['symbol'],row['tick'],
-                   **{k:row[k] for k in ('category','canonical_base','quantity_multiplier','mapping_id') if k in row})
+                   **{k:row[k] for k in ('category','canonical_base','quantity_multiplier','mapping_id','rule_type') if k in row})
+
+    @property
+    def trading_blocked(self):
+        return self.market.exchange=='okx' and self.rule_type not in (None,'','normal')
 
 
 def mapped_instrument(market, spec, native_tick, rules):

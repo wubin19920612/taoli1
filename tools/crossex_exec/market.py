@@ -85,6 +85,9 @@ def native_instrument(ex,row,rules):
         raise ValueError('native_identity_mismatch')
     instrument = mapped_instrument(market,spec,tick,rules)
     instrument.category = category(ex, row)
+    if ex=='okx':
+        rule=row.get('ruleType')
+        instrument.rule_type=rule if rule is None or isinstance(rule,str) and len(rule)<=64 else 'unknown'
     return instrument
 
 
@@ -304,11 +307,16 @@ class MarketData:
                 rows=self.refresh_tickers()
             except Exception:
                 raise ValueError('volume_unknown') from None
+        return self.cached_turnovers(instruments)
+
+    def cached_turnovers(self,instruments):
+        """Final release may only inspect already-published public observations."""
+        rows=self.store.meta('market_tickers',{})
         try:
             if any(not 0<=self.clock()-rows[i.market.key]['at']<=300 for i in instruments):
                 raise ValueError('volume_unknown')
             return [rows[i.market.key]['volume'] for i in instruments]
-        except (KeyError,TypeError):
+        except (KeyError,TypeError,ValueError):
             raise ValueError('volume_unknown') from None
 
     def refresh_tickers(self):
@@ -345,7 +353,7 @@ class MarketData:
         decisions=universe._decisions()
         for key,row in rows.items():
             i=self.mapping.get(key)
-            if (i is None or i.category in ('pre_ipo','commodity')
+            if (i is None or i.trading_blocked or i.category in ('pre_ipo','commodity')
                     or alias(i.spec.base)[0] in PRE_IPO_BASES|COMMODITY_BASES
                     or not 0<=self.clock()-row['at']<=FRESH_SECONDS
                     or decisions.get(i.spec.base,{}).get('category') in ('pre_ipo','commodity')):

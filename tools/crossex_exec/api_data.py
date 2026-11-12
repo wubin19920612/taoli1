@@ -32,6 +32,7 @@ REASONS = frozenset((
     'unknown_order', 'negative_local_position', 'funding_settlement_accounting_required',
     'unhedged_position', 'unknown_close', 'close_incomplete', 'funding_refresh_failed',
     'exit_pricing_unavailable', 'fills_pending', 'cycle_failed_closed',
+    'account_liability', 'total_loss', 'daily_loss', 'repair_stopped',
 ))
 
 
@@ -459,7 +460,8 @@ class JournalView:
             if endpoint == 'summary':
                 meta = {key: budget.decode(raw) for key, raw in conn.execute(
                     "SELECT key,value FROM meta WHERE key IN ('state','stop_reason','live_mode','account_equity_baseline',"
-                    "'account_equity_current','actual_fees','flatten_requested','baseline_status','pair_cooldowns','opening_skip_counts','runtime_config')")}
+                    "'account_equity_current','actual_fees','flatten_requested','baseline_status','pair_cooldowns','opening_skip_counts','runtime_config',"
+                    "'halt_reason','account_refresh','equity_baseline_revision','liabilities','stop_locks')")}
                 if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='baseline_state'").fetchone():
                     meta['baseline_status']=public_read(conn,'baseline_status',budget=budget)
                 events = {}
@@ -511,7 +513,7 @@ class JournalView:
                     fees[venue+'_taker'] = values[0]
         state, stop = meta.get('state'), self.stop_file.exists()
         halted = state in ('HALTING', 'HALTED')
-        halt_reason = (stopped or state.lower()) if halted else None
+        halt_reason = (reason(meta.get('halt_reason')) or stopped or state.lower()) if halted else None
         paused = halt_reason or ('STOP' if stop else stopped)
         if not paused and (not fresh or reconcile.get('risk') != 'RUN' or meta.get('flatten_requested')):
             paused = 'account_snapshot_stale' if not fresh else 'risk_stopped'
@@ -524,6 +526,10 @@ class JournalView:
         current={k:r['default'] for k,r in SCHEMA.items()} | (meta.get('runtime_config') or {}).get('values',{})
         frozen=[p.get('config_at_open') or {} for p in active]
         risk={k:min(v.get(k,SCHEMA[k]['default']) for v in (frozen or [current])) for k in RISK_NAMES}
+        refresh=meta.get('account_refresh') or {}
+        captured=number(refresh.get('captured_at'))
+        snapshot_age=now-captured if captured is not None else None
+        snapshot_fresh=snapshot_age is not None and 0<=snapshot_age<=10
         return dict(generated_at=utc(now), mode=('live' if meta['live_mode'] else 'shadow')
                     if isinstance(meta.get('live_mode'), bool) else self.mode,
                     halted=halted, halt_reason=halt_reason, stop_file=stop, opening_paused_reason=paused,
@@ -531,6 +537,12 @@ class JournalView:
                               total_open_usd=complete_sum(l['notional_usd'] for p in active for l in p['legs'])),
                     config_version=(meta.get('runtime_config') or {}).get('version',0),
                     effective_risk_limits=risk,
+                    equity_baseline_revision=meta.get('equity_baseline_revision',0),
+                    account_snapshot=dict(captured_at=utc(captured),completed_at=utc(refresh.get('completed_at')),
+                        age_seconds=snapshot_age,refresh_seconds=number(refresh.get('age_seconds')),fresh=snapshot_fresh),
+                    liabilities=[dict(coin=text_field(r.get('coin')),exchange_type=text_field(r.get('exchange_type')),
+                                      liability=number(r.get('liability'))) for r in meta.get('liabilities',[])],
+                    stop_locks={reason(k):[text_field(v) for v in owners] for k,owners in meta.get('stop_locks',{}).items()},
                     accounts=accounts, today=dict(_totals(today), daily_loss_limit_usd=risk['daily_loss_stop_usd']),
                     total=dict(_totals(closed), total_loss_limit_usd=risk['total_loss_stop_usd']), fees=fees,
                     baseline_ready_pairs=ready,structural_spread_pairs=blacklisted,cooldown_pairs=cooling,

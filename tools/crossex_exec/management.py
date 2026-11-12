@@ -18,10 +18,42 @@ def mapping_view(row):
                            quantity_multiplier=number(leg['quantity_multiplier'])) for leg in row['legs']])
 
 
+def equity_view(row):
+    """Project an audit without changing exact Decimal strings in the journal."""
+    result=dict(row)
+    for key in ('at','captured_at'):
+        if key in result:
+            result[key]=utc(result[key])
+    for name in ('old','new'):
+        if name not in result:
+            continue
+        values=dict(result[name])
+        equities=values.get('account_equity_baseline')
+        if equities is not None:
+            values['account_equity_baseline']={v:number(q) for v,q in equities.items()}
+        values['equity_baseline']=number(values.get('equity_baseline'))
+        for field,amounts in (('daily_equity',('equity',)),('daily_upnl',('upnl',)),
+                             ('risk_pnl_baseline',('total','daily'))):
+            raw=values.get(field)
+            if raw is None:
+                continue
+            item=dict(raw)
+            for amount in amounts:
+                item[amount]=number(item.get(amount))
+            if field=='daily_upnl':
+                item['captured_at']=utc(item.get('captured_at'))
+                item['positions']={k:number(v) for k,v in item.get('positions',{}).items()}
+            values[field]=item
+        result[name]=values
+    return result
+
+
 def write_route(method, path):
     if method == 'PUT' and path == '/api/v1/config':
         return ('config',)
     if method == 'POST':
+        if path == '/api/v1/equity/rebaseline':
+            return ('equity','rebaseline')
         match = re.fullmatch('/api/v1/universe/([A-Z0-9]{1,40})/(exclude|unexclude|classify)', path)
         if match:
             return ('universe', *match.groups())
@@ -50,8 +82,9 @@ class ReadStore:
 
 
 class Management:
-    def __init__(self, path):
+    def __init__(self, path, equity_admin=None):
         self.path = Path(path)
+        self.equity_admin=equity_admin
 
     def get(self, endpoint):
         budget = Budget()
@@ -76,6 +109,15 @@ class Management:
             raise OSError('database_unavailable')
         if not isinstance(body, dict):
             raise ValueError('invalid_body')
+        if route==('equity','rebaseline'):
+            reason=body.get('reason')
+            if (set(body)!={'confirm','reason'} or body['confirm'] is not True
+                    or not isinstance(reason,str) or not reason.strip() or len(reason)>200
+                    or any(ord(c)<32 for c in reason)):
+                raise ValueError('invalid_body')
+            if self.equity_admin is None:
+                raise OSError('running_executor_required')
+            return equity_view(self.equity_admin(confirm=True,reason=reason,source='admin_api'))
         with Store(self.path) as store:
             if route == ('config',):
                 return Settings(store).update(body, source='admin_api')

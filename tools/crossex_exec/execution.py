@@ -123,7 +123,7 @@ class Executor:
                         self.check_pair(intents)
                     if not self.can_open():
                         raise APIError('rejected')
-                    sent_rows=[dict(self.order(i['cid']),state='SENT',sent_ms=self.clock()*1000) for i in intents]
+                    sent_rows=[dict(self.order(i['cid']),state='SENT',sent_persisted_ms=self.clock()*1000) for i in intents]
                     self.store.save_orders(sent_rows,'SENT')
                     # FULL commits may take longer than the entire book-age budget.
                     # No sender is released until BOTH durable writes and the final
@@ -197,11 +197,16 @@ class Executor:
                             self.check_pair([i])
                         if not self.can_open():
                             raise APIError('rejected')
-                sent_row=dict(i,state='SENT',sent_ms=self.clock()*1000)
+                sent_row=dict(i,state='SENT',sent_persisted_ms=self.clock()*1000)
                 # Write-ahead is mandatory BEFORE transport may send. If it fails,
                 # i remains INTENT and is safely retired as UNSENT by the handler.
                 self.store.save_order(sent_row,'SENT')
                 i.update(sent_row)
+            def on_send():
+                # Memory only, immediately before writing the signed request.
+                # Missing observations (including a crash) remain unknown.
+                i['sent_ms']=self.clock()*1000
+            sent.on_send=on_send
             try:
                 if self.check_order and not send_gate:
                     self.check_order(i)  # known breaches never reach adapter.place

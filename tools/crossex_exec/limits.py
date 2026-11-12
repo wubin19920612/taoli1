@@ -1,5 +1,4 @@
 """Non-overridable ceilings and a single admission check for every opening send."""
-import threading
 from itertools import chain
 from tools.fill_sim.core import dec
 from .stops import StopLocks
@@ -18,7 +17,7 @@ class HardLimits:
         self.store,self.snapshot=store,snapshot
         self.alert=alert
         self.stops=None if alert else StopLocks(store)
-        self.lock=threading.RLock()
+        self.lock=store.lock
         self._last_equity_halt=None
         config=config or {}
         def lowered(name,ceiling):
@@ -43,6 +42,10 @@ class HardLimits:
         self.check_equity(snapshot)
 
     def check_equity(self,snapshot):
+        with self.lock:
+            return self._check_equity(snapshot)
+
+    def _check_equity(self,snapshot):
         equities=self.equities(snapshot)
         baseline=self.store.meta('account_equity_baseline')
         if baseline is None:
@@ -50,7 +53,12 @@ class HardLimits:
         self.store.set_meta('account_equity_current',equities)
         self.store.set_meta('liabilities',snapshot['liabilities'])
         if snapshot['liabilities']:
-            self.store.event('ACCOUNT_LIABILITY',{'assets':snapshot['liabilities']})
+            if self.alert:
+                self.alert('account_liability',details={'assets':snapshot['liabilities']},event_kind='ACCOUNT_LIABILITY')
+            else:
+                if 'account_liability' not in self.stops.reasons:
+                    self.store.event('ACCOUNT_LIABILITY',{'assets':snapshot['liabilities']})
+                self.stops.add('account_liability')
         threshold=min(self.drop,MAX_EQUITY_DROP_USD,dec(risk_settings(self.store)['max_equity_drop_usd']))
         breached=[v for v in equities if dec(baseline[v])-dec(equities[v])>=threshold]
         if breached:
@@ -58,6 +66,7 @@ class HardLimits:
             # close an in-flight pair recursively from inside a send callback.
             if self.store.meta('state')!='HALTED':
                 self.store.set_meta('state','HALTING')
+                self.store.set_meta('halt_reason','account_equity_drop')
             values=dict(venues=breached,current=equities,baseline=baseline)
             if self.alert:
                 self.alert('account_equity_drop',details=values,event_kind='EQUITY_HALT')
@@ -106,6 +115,8 @@ class HardLimits:
             values=pair.get('config_at_open',{}).get('values',{})
             if breached or self.store.meta('state') in ('HALTING','HALTED'):
                 raise ValueError('account_equity_halt')
+            if snapshot['liabilities']:
+                raise ValueError('account_liability')
             if notional>min(self.leg,MAX_LEG_USD,dec(values.get('order_usd_max',MAX_LEG_USD))):
                 raise ValueError('leg_notional_limit')
             if total>min(self.total,MAX_TOTAL_USD,dec(values.get('max_total_open_usd',MAX_TOTAL_USD))):

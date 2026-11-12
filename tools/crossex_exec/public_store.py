@@ -91,9 +91,9 @@ class PublicStore:
                         raise ValueError('invalid_public_mid')
                     rows.append((ex,base,str(mid)))
             stamp = float(dec(value['at']))
-            self.db.execute('DELETE FROM baseline_quotes')
-            self.db.executemany('INSERT INTO baseline_quotes VALUES (?,?,?)', rows)
-            self.db.execute('INSERT OR REPLACE INTO public_round VALUES (?,?)',(key,stamp))
+            self.replace_public_rows('baseline_quotes',('exchange','base','mid'),2,rows)
+            self.db.execute('INSERT INTO public_round VALUES (?,?) ON CONFLICT(name) DO UPDATE SET at=excluded.at '
+                            'WHERE public_round.at IS NOT excluded.at',(key,stamp))
         elif key == 'market_tickers':
             rows = []
             for identity,q in value.items():
@@ -107,8 +107,7 @@ class PublicStore:
                     raise ValueError('invalid_volume_basis')
                 rows.append((identity,str(mid),str(volume),float(dec(q['at'])),
                              float(dec(q.get('received_at',q['at']))),basis))
-            self.db.execute('DELETE FROM market_tickers')
-            self.db.executemany('INSERT INTO market_tickers VALUES (?,?,?,?,?,?)',rows)
+            self.replace_public_rows('market_tickers',('market_key','mid','volume','at','received_at','volume_basis'),1,rows)
         else:
             raise ValueError('unknown_public_table')
 
@@ -116,6 +115,19 @@ class PublicStore:
         with self.lock:
             row = self.db.execute('SELECT * FROM baseline_state WHERE key=?',(key,)).fetchone()
             return state_row(row) if row else {}
+
+    def replace_public_rows(self, table, columns, key_count, rows):
+        """Diff a complete round: unchanged rows stay put, absent rows are revoked."""
+        if table not in ('baseline_quotes','market_tickers'):
+            raise ValueError('unknown_public_table')
+        old={tuple(r[:key_count]):tuple(r) for r in self.db.execute('SELECT * FROM '+table)}
+        new={tuple(r[:key_count]):tuple(r) for r in rows}
+        self.db.executemany('DELETE FROM '+table+' WHERE '+' AND '.join(k+'=?' for k in columns[:key_count]),
+                            (key for key in old if key not in new))
+        self.db.executemany('INSERT INTO '+table+' VALUES ('+','.join('?' for _ in columns)+') '
+            'ON CONFLICT('+','.join(columns[:key_count])+') DO UPDATE SET '+
+            ','.join(k+'=excluded.'+k for k in columns[key_count:]),
+            (row for key,row in new.items() if old.get(key)!=row))
 
     def save_baseline_state(self, state):
         base,a,b = state['key'].split('|')
@@ -133,7 +145,10 @@ class PublicStore:
                 value = str(number) if name in ('baseline_bps','mad_bps') else float(number)
             row.append(value)
         with self.lock:
-            self.db.execute('INSERT OR REPLACE INTO baseline_state VALUES (?,?,?,?,?,?,?,?,?,?)',row)
+            fields=STATE_COLUMNS[1:]
+            self.db.execute('INSERT INTO baseline_state VALUES (?,?,?,?,?,?,?,?,?,?) '
+                'ON CONFLICT(key) DO UPDATE SET '+','.join(k+'=excluded.'+k for k in fields)+
+                ' WHERE '+' OR '.join('baseline_state.'+k+' IS NOT excluded.'+k for k in fields),row)
 
     def prune_baseline_states(self, bases):
         bases = set(bases)

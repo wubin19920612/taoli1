@@ -94,6 +94,9 @@ class Transport:
                            {'ACCESS-KEY':self.credentials.key, 'ACCESS-TIMESTAMP':ts, 'ACCESS-SIGN':signature,
                             'ACCESS-PASSPHRASE':self.credentials.passphrase})
             conn.sock.settimeout(max(.001,deadline-time.monotonic()))
+            on_send=getattr(before_send,'on_send',None)
+            if on_send:
+                on_send()  # In-memory observation only; never a per-leg risk gate.
             conn.request(method, path+('?' + query if query else ''), body=payload.encode(), headers=headers)
             response = http.client.HTTPResponse(DeadlineSocket(conn.sock,deadline,self.timeout,time.monotonic), method=method)
             response.begin()
