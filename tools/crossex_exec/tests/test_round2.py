@@ -221,7 +221,8 @@ class HardLimitTests(unittest.TestCase):
 
     def test_liability_written_to_state_and_event(self):
         self.snapshot['liabilities']=[dict(coin='USDC',exchange_type='LIGHTER',liability='498.86')]
-        self.limits.check_order(intent())
+        with self.assertRaisesRegex(ValueError,'account_liability'):
+            self.limits.check_order(intent())
         self.assertEqual(self.store.meta('liabilities'),self.snapshot['liabilities'])
         self.assertTrue(any(e['kind']=='ACCOUNT_LIABILITY' for e in self.store.events()))
 

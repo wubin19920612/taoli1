@@ -6,6 +6,35 @@ from test_exec import setUpModule, tearDownModule
 
 
 class IncrementalTests(unittest.TestCase):
+    def test_crash_before_wire_observation_keeps_recent_risk_window(self):
+        from test_exec import intent
+        from tools.crossex_exec.storage import matches_order
+        with Store(':memory:') as store:
+            row=dict(intent(),state='REJECTED',sent_persisted_ms=1000,filled='0',accounting_pending=False)
+            store.save_order(row)
+            self.assertEqual([o['cid'] for o in store.iter_orders(sent_since=1000)],[row['cid']])
+            self.assertTrue(matches_order(row,sent_since=1000))
+            self.assertFalse(matches_order(row,sent_since=1001))
+            self.assertNotIn('sent_ms',store.order(row['cid']))
+            row['sent_ms']=1100
+            store.save_order(row)
+            self.assertEqual(len(list(store.iter_orders(sent_since=1100))),1)
+            self.assertTrue(matches_order(row,sent_since=1100))
+            self.assertEqual(list(store.iter_orders(sent_since=1101)),[])
+
+    def test_sample_window_uses_bucket_range_without_changing_exact_time_edges(self):
+        with Store(':memory:') as store:
+            key='BTC|binance|bitget'
+            store.add_baseline_samples([(key,int(t//30),t,str(t)) for t in (29,30,60,91)],100)
+            self.assertEqual(store.baseline_samples(key,30,90),[(30,'30'),(60,'60')])
+            queries=[]
+            store.db.set_trace_callback(queries.append)
+            self.assertEqual(store.baseline_samples(key,31,91),[(60,'60'),(91,'91')])
+            query=next(q for q in queries if 'SELECT at,bps' in q)
+            plan=' '.join(str(tuple(r)) for r in store.db.execute('EXPLAIN QUERY PLAN '+query))
+            self.assertIn('bucket>?',plan)
+            self.assertIn('bucket<?',plan)
+
     def test_identical_public_round_is_noop_and_removed_quotes_are_revoked(self):
         with Store(':memory:') as store:
             for key,value,smaller in (

@@ -39,6 +39,7 @@ STATS = {'days', 'n', 'histogram', 'by_symbol', 'by_pair', 'by_exit_reason',
          'by_spread_tier', 'vs_sim'}
 # Additive round-eight fields; all original keys and value assertions remain.
 SUMMARY |= {'config_version', 'effective_risk_limits'}
+SUMMARY |= {'account_snapshot', 'equity_baseline_revision', 'liabilities', 'stop_locks'}
 POSITION |= {'config_version', 'config_at_open', 'sizing', 'turnovers_usd'}
 TRADE |= {'config_version', 'config_at_open', 'sizing', 'turnovers_usd'}
 

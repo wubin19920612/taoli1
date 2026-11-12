@@ -31,6 +31,7 @@ class Venue:
 
     def place(self, order, before_send):
         before_send()
+        getattr(before_send,'on_send',lambda:None)()
         self.owner.trace.append(('place', self.leg, order['quantity'], order['reduce_only']))
         if self.reject:
             raise ValueError('injected_rejection')

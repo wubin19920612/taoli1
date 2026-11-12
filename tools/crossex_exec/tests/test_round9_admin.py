@@ -186,6 +186,88 @@ class EquityTests(unittest.TestCase):
         self.assertNotIn(self.store.meta('state'),('HALTING','HALTED'))
         self.assertEqual(self.engine.account_cache.read()['equity_by_venue'],self.data['equity_by_venue'])
 
+    def test_prior_realized_loss_is_audited_new_losses_still_halt_at_original_limit(self):
+        pair=self.pair()
+        self.engine.close_pair(pair,'manual')
+        order=self.store.all_orders()[0]
+        order['fee']='200'
+        self.store.save_order(order)
+        self.prepare(True)
+        result=self.change(True)
+        self.assertEqual(result['new']['risk_pnl_baseline']['total'],'-200')
+        self.engine.reconcile()
+        self.assertEqual(self.engine.totals(),(dec(0),dec(0)))
+        self.assertEqual(self.store.order(order['cid'])['fee'],'200')
+        self.assertEqual(self.store.meta('state'),'RUNNING')
+        fee=dict(intent(cid='new-loss'),state='TERMINAL',filled='0',fee='100',accounting_pending=False,
+                 created_at=self.now[0])
+        self.store.save_order(fee)
+        self.engine.reconcile()
+        self.assertEqual(self.store.meta('state'),'HALTED')
+        self.assertEqual(self.store.meta('halt_reason'),'total_loss')
+
+    def test_rebaseline_never_clears_daily_stop_or_manual_stop_file(self):
+        self.prepare()
+        self.engine.alert('daily_loss')
+        self.store.set_meta('daily_loss_day',day(self.now[0]))
+        self.engine.stop_file.touch()
+        self.change()
+        self.engine.reconcile()
+        self.assertTrue(self.engine.stop_file.exists())
+        self.assertIn('daily_loss',self.store.meta('stop_locks'))
+        self.assertEqual(self.store.meta('daily_loss_day'),day(self.now[0]))
+        self.assertFalse(self.engine.can_open())
+
+    def test_new_local_order_during_remote_reads_aborts_reset(self):
+        self.prepare()
+        def new_order():
+            self.store.save_order(dict(intent(),state='SENT',filled='0',accounting_pending=True))
+            return []
+        self.venues[0].open_orders=new_order
+        self.assert_refused('local_orders_pending')
+
+    def test_rebaseline_admin_http_is_bound_to_the_running_engine(self):
+        from tools.crossex_exec.api import APIService
+        self.prepare()
+        config={'CROSSEX_EXEC_API_TOKEN':'reader-fixture','CROSSEX_EXEC_ADMIN_TOKEN':'admin-fixture'}
+        service=APIService(config,self.tmp.name+'/exec.db',None,equity_admin=self.engine.rebaseline)
+        before=self.store.meta('equity_baseline_revision',0)
+        result=service.management.write(('equity','rebaseline'),{'confirm':True,'reason':'transfer'})
+        self.assertEqual(result['source'],'admin_api')
+        self.assertEqual(self.store.meta('equity_baseline_revision'),before+1)
+        self.assertEqual(self.engine.account_cache.read()['equity_by_venue'],self.data['equity_by_venue'])
+
+    def test_admin_projection_preserves_numeric_money_and_utc_contract(self):
+        from tools.crossex_exec.api_data import utc
+        self.prepare()
+        result=Management(self.tmp.name+'/exec.db',self.engine.rebaseline).write(
+            ('equity','rebaseline'),{'confirm':True,'reason':'transfer'})
+        self.assertEqual(result['at'],utc(self.now[0]))
+        self.assertEqual(result['captured_at'],utc(self.now[0]))
+        self.assertEqual(result['new']['account_equity_baseline'],dict(crossex=29753,bitget=517))
+        self.assertEqual(result['new']['equity_baseline'],30270)
+        self.assertEqual(result['new']['daily_equity']['equity'],30270)
+        self.assertEqual(result['new']['daily_upnl']['captured_at'],utc(self.now[0]))
+        self.assertEqual(result['new']['daily_upnl']['upnl'],0)
+        self.assertEqual(result['new']['risk_pnl_baseline']['total'],0)
+        self.assertEqual(self.store.meta('equity_baseline'),'30270')
+
+    def test_unknown_terminal_state_and_snapshot_expiring_during_history_scan_refuse(self):
+        from tools.crossex_exec.equity import EquityAdmin
+        self.prepare()
+        row=dict(intent(),state='UNKNOWN_NEW_STATE',filled='0',fee='0',accounting_pending=False)
+        self.store.save_order(row)
+        self.assert_refused('local_orders_pending')
+        row.update(state='UNSENT')
+        self.store.save_order(row)
+        original=EquityAdmin.pnl_offset
+        def slow(admin):
+            value=original(admin)
+            self.now[0]+=10.01
+            return value
+        with patch.object(EquityAdmin,'pnl_offset',slow):
+            self.assert_refused('account_snapshot_stale')
+
 
 class EquityHTTPTests(api_previous.previous.APIFixture, unittest.TestCase):
     start=api_previous.AdminTests.start
@@ -214,6 +296,12 @@ class EquityHTTPTests(api_previous.previous.APIFixture, unittest.TestCase):
         handler.assert_not_called()
         self.assertEqual(self.write(service,{'confirm':True,'reason':'transfer'},path,'POST'),(200,{'revision':1}))
         handler.assert_called_once_with(confirm=True,reason='transfer',source='admin_api')
+        handler.side_effect=ValueError('remote_positions')
+        self.assertEqual(self.write(service,{'confirm':True,'reason':'transfer'},path,'POST'),
+                         (409,{'error':'remote_positions'}))
+        handler.side_effect=ValueError('private-secret')
+        self.assertEqual(self.write(service,{'confirm':True,'reason':'transfer'},path,'POST'),
+                         (400,{'error':'invalid_update'}))
 
 
 class CLITests(unittest.TestCase):
@@ -227,3 +315,32 @@ class CLITests(unittest.TestCase):
             for command in ('release-halt','rebaseline'):
                 with self.assertRaises(SystemExit):
                     cli.main([command,'--env-file','fake'])
+
+    def test_running_cli_uses_admin_endpoint_and_never_opens_second_account_client(self):
+        from contextlib import contextmanager
+        from types import SimpleNamespace
+        import tempfile
+        from pathlib import Path
+        @contextmanager
+        def locked(path):
+            yield False
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'db'
+            with Store(path):
+                pass
+            args=SimpleNamespace(command='rebaseline',confirm=True,reason='transfer')
+            with patch.object(cli,'maintenance_lock',side_effect=locked), patch.object(
+                    cli,'running_rebaseline',return_value={'revision':1}) as request, patch.object(
+                    cli,'CrossEx',side_effect=AssertionError('second private client')), patch.object(cli,'emit'):
+                self.assertEqual(cli.run_maintenance({'CROSSEX_DB':str(path)},args),0)
+                request.assert_called_once()
+                args.command='release-halt'
+                with self.assertRaisesRegex(ValueError,'release_requires_stopped_service'):
+                    cli.run_maintenance({'CROSSEX_DB':str(path)},args)
+
+    def test_rejected_precondition_is_explained_without_echoing_exception_secrets(self):
+        for cause,expected in (('remote_positions','remote_positions'),('private-secret','maintenance_failed_closed')):
+            with patch.object(cli,'load_env',return_value={}), patch.object(cli,'run_maintenance',
+                    side_effect=ValueError(cause)), patch.object(cli,'emit') as emit:
+                self.assertEqual(cli.main(['rebaseline','--confirm']),1)
+                self.assertEqual(emit.call_args.kwargs['reason'],expected)

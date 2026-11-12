@@ -86,7 +86,8 @@ class FakeDatabase:
             if (pair_id is not None and row.get('pair_id') != pair_id
                     or states is not None and row.get('state') not in states
                     or row.get('state') in exclude_states
-                    or sent_since is not None and row.get('sent_ms', 0) < sent_since
+                    or sent_since is not None and (row['sent_ms'] if row.get('sent_ms') is not None
+                                                  else row.get('sent_persisted_ms') or 0) < sent_since
                     or accounting_pending is not None and bool(row.get('accounting_pending')) != accounting_pending
                     or reduce_only is not None and bool(row.get('reduce_only')) != reduce_only):
                 continue
@@ -182,6 +183,7 @@ class SimVenue:
 
     def place(self, order, before_send):
         before_send()
+        getattr(before_send,'on_send',lambda:None)()
         w = self.world
         with w.lock:
             before = [v.quantity for v in w.venues]

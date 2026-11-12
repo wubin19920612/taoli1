@@ -197,6 +197,7 @@ class CompletionTests(unittest.TestCase):
                 v.leg, v.quantity, v.orders = leg, dec(0), {}
             def place(v, order, before_send):
                 before_send()
+                getattr(before_send,'on_send',lambda:None)()
                 q = dec(order['quantity'])
                 if not order['reduce_only'] and v.leg == 1:
                     q = (q*factors[v.leg]/2/dec('.007')).to_integral_value(rounding='ROUND_FLOOR')*dec('.007')/factors[v.leg]
