@@ -100,18 +100,13 @@ def review(instruments, books, fees, funding, turnovers, now, *, baseline_bps=No
     if result['status']!='opened':
         raise ValueError('review_rejected')
     quantity=dec(result['quantity'])
-    step=common_step(*(i.spec.qty_step for i in instruments))
-    for attempt in range(2):
-        fills=[walk(books[0].asks,quantity=quantity),walk(books[1].bids,quantity=quantity)]
-        prices=[limit_price(f['deepest'],side,i.tick) for f,side,i in zip(fills,('buy','sell'),instruments)]
-        if any(quantity>dec(i.spec.max_qty) or quantity*dec(p)>150 for i,p in zip(instruments,prices)):
-            raise ValueError('final_size_above_max')
-        if all(quantity>=dec(i.spec.min_qty) and quantity*dec(p)>=dec(i.spec.min_notional)
-               for i,p in zip(instruments,prices)):
-            break
-        if attempt:
-            raise ValueError('final_size_below_min')
-        quantity+=step
+    fills=[walk(books[0].asks,quantity=quantity),walk(books[1].bids,quantity=quantity)]
+    prices=[limit_price(f['deepest'],side,i.tick) for f,side,i in zip(fills,('buy','sell'),instruments)]
+    if any(quantity>dec(i.spec.max_qty) or quantity*dec(p)>150 for i,p in zip(instruments,prices)):
+        raise ValueError('final_size_above_max')
+    if any(quantity<dec(i.spec.min_qty) or quantity*dec(p)<dec(i.spec.min_notional)
+           for i,p in zip(instruments,prices)):
+        raise ValueError('size_too_small')
     gross=(dec(fills[1]['vwap'])/dec(fills[0]['vwap'])-1)*10000
     excess=gross-baseline
     net=excess-2*sum(map(dec,fees))*10000-funding_cost
