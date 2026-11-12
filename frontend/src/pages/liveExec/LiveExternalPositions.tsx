@@ -1,5 +1,5 @@
 import { Alert, Button, Card, Descriptions, Input, Modal, Space, Table, Tag, Typography } from "antd";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { LiveAdminConflictError, liveAdminReadError, writeLiveExecAdmin,
   type LiveExternalIdentity, type LiveExternalPositions as Registry, type LiveRemotePositions } from "../../api/liveExec";
 import { isPageHidden } from "../../utils/pageVisibility";
@@ -28,7 +28,8 @@ export function LiveExternalPositions({ registry, rows, error, remoteError, noti
   refresh: () => Promise<void>;
 }) {
   const [pending, setPending] = useState<{ row: ExternalPositionRow; identity: LiveExternalIdentity;
-    action: "register" | "unregister"; status: string } | null>(null);
+    action: "register" | "unregister"; status: string; evidence: string } | null>(null);
+  const [invalidated, setInvalidated] = useState(false);
   const [reason, setReason] = useState("");
   const [failure, setFailure] = useState<string | null>(null);
   const [modalError, setModalError] = useState<string | null>(null);
@@ -36,17 +37,31 @@ export function LiveExternalPositions({ registry, rows, error, remoteError, noti
   const [busy, setBusy] = useState(false);
   const writing = useRef(false);
   const fresh = remoteSnapshotFresh(snapshot, now);
+  // Registration covers both directions. Freeze the contract's confirmation fields,
+  // not row indexes or changing PnL marks. A renewed identical snapshot is harmless.
+  const confirmationEvidence = (identity: LiveExternalIdentity) => JSON.stringify([...(rows ?? []), ...cancellable]
+    .filter(row => row.route === identity.route && row.symbol === identity.symbol)
+    .map(row => JSON.stringify([row.identity ? identityKey(row.identity) : null, row.route, row.exchange,
+      row.symbol, row.dex, row.side, row.quantity, row.ownership, row.action ?? null])).sort());
+  const changed = !!pending && rows !== null && snapshot?.available === true
+    && pending.evidence !== confirmationEvidence(pending.identity);
+  useEffect(() => {
+    // Once invalid, reverting to the old observation cannot revive the old consent.
+    if (changed && !busy) { setInvalidated(true); setModalError(null); }
+  }, [changed, busy]);
   const actionCurrent = (identity: LiveExternalIdentity, action: "register" | "unregister") => !error && !remoteError
     && hasStatus(registry?.status) && !isPageHidden() && remoteSnapshotFresh(snapshot, Date.now())
     && [...(rows ?? []), ...cancellable].some(row => row.action === action && row.identity && identityKey(row.identity) === identityKey(identity));
   const prepare = (row: ExternalPositionRow) => {
     if (!row.action || !row.identity || !hasStatus(registry?.status) || !actionCurrent(row.identity, row.action)) return;
-    setPending({ row: { ...row }, identity: { ...row.identity }, action: row.action, status: registry.status });
+    setPending({ row: { ...row, identity: { ...row.identity } }, identity: { ...row.identity }, action: row.action,
+      status: registry.status, evidence: confirmationEvidence(row.identity) });
+    setInvalidated(false);
     setReason(""); setFailure(null); setModalError(null); setSuccess(false);
   };
   const submit = async () => {
     if (!pending || writing.current) return;
-    if (!actionCurrent(pending.identity, pending.action)) {
+    if (invalidated || pending.evidence !== confirmationEvidence(pending.identity) || !actionCurrent(pending.identity, pending.action)) {
       setModalError("快照或持仓状态已变化，请刷新后重新确认"); return;
     }
     if (!reason.trim() || [...reason].length > 200 || /[\u0000-\u001f]/.test(reason)) {
@@ -117,6 +132,8 @@ export function LiveExternalPositions({ registry, rows, error, remoteError, noti
     </Space>
     <Modal open={!!pending} title={pending ? `确认${actionLabel(pending.action)}` : "确认外仓操作"}
       okText="确认提交" cancelText="取消" confirmLoading={busy} closable={!busy} maskClosable={!busy}
+      okButtonProps={{ disabled: busy || !pending || invalidated || changed || !fresh
+        || !actionCurrent(pending.identity, pending.action) }}
       cancelButtonProps={{ disabled: busy }} onOk={() => void submit()} onCancel={() => { if (!busy) { setPending(null); setReason(""); } }}>
       {pending && <>
         <Descriptions column={1} size="small">
@@ -125,12 +142,15 @@ export function LiveExternalPositions({ registry, rows, error, remoteError, noti
           <Descriptions.Item label="业务">{pending.identity.business}</Descriptions.Item>
           <Descriptions.Item label="原始合约代码">{pending.identity.symbol}</Descriptions.Item>
           <Descriptions.Item label="方向">{direction(pending.row)}</Descriptions.Item>
+          <Descriptions.Item label="原生数量">{pending.row.quantity ?? "—"}</Descriptions.Item>
           <Descriptions.Item label="报价币">{pending.identity.quote}</Descriptions.Item>
           <Descriptions.Item label="DEX">{dexLabel(pending.identity.dex)}</Descriptions.Item>
         </Descriptions>
         <p>首次登记后，此精确合约的两个方向永久禁止本程序下单（含减仓单）；取消登记仍保留永久禁单记录。</p>
         <p>登记或取消后需显式重新建立收益基线，旧收益证明失效；操作本身不会解除停开或亏损锁。</p>
         {pending.action === "unregister" && <p>提交时执行服务会再次核对该合约多空均无远端仓位、且没有活动订单。</p>}
+        {!modalError && (invalidated || changed || !fresh || !actionCurrent(pending.identity, pending.action)) && <Alert type="warning" showIcon
+          message="快照或持仓状态已变化，旧确认不可提交；请取消后重新确认" />}
         <label>操作说明<Input.TextArea aria-label="操作说明" value={reason} disabled={busy} onChange={event => setReason(event.target.value)} /></label>
       </>}
       {modalError && <Alert type="error" showIcon message={modalError} />}

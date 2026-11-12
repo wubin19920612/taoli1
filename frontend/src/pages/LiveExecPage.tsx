@@ -8,6 +8,7 @@ import { useLiveExec } from "./liveExec/useLiveExec";
 import { LiveExecAdmin } from "./liveExec/LiveExecAdmin";
 import { useLiveExecAdmin } from "./liveExec/useLiveExecAdmin";
 import { LiveExternalPositions } from "./liveExec/LiveExternalPositions";
+import { LiveProgramRisk } from "./liveExec/LiveProgramRisk";
 import { remotePositionView } from "./liveExec/remotePositionView";
 
 const reasons: Record<string, string> = {
@@ -72,14 +73,13 @@ function Period({ title, data }: { title: string; data: LivePeriod | null }) {
     </Descriptions>
   </Card>;
 }
-function Account({ name, data, dropMax }: { name: string; data: LiveAccount | null; dropMax: number | null }) {
-  const danger = data?.drop_usd != null && dropMax != null && dropMax > 0 && data.drop_usd >= dropMax * 0.8;
+function Account({ name, data }: { name: string; data: LiveAccount | null }) {
   return <Card size="small" title={`${name} 账户`} data-testid={`live-account-${name}`}>
     {!data ? <Empty description="暂无账户数据" /> : <>
       <Descriptions size="small" column={2}>
         <Descriptions.Item label="权益">{number(data.equity_usd)} USD</Descriptions.Item>
         <Descriptions.Item label="基线">{number(data.baseline_usd)} USD</Descriptions.Item>
-        <Descriptions.Item label="较基线跌幅"><Typography.Text type={danger ? "danger" : undefined}>{number(data.drop_usd)}</Typography.Text> / {number(dropMax)} USD</Descriptions.Item>
+        <Descriptions.Item label="较基线跌幅（整户观测）"><Typography.Text>{number(data.drop_usd)}</Typography.Text> USD</Descriptions.Item>
         <Descriptions.Item label="保证金倍数">{data.margin_multiple == null ? "无保证金占用" : `${number(data.margin_multiple)} 倍`}</Descriptions.Item>
       </Descriptions>
       {data.ok === false && <Tag color="red">账户异常</Tag>}
@@ -118,7 +118,7 @@ function Summary({ data, flatten }: { data: LiveSummary | null; flatten?: LiveFl
       </Descriptions>
       <Typography.Text type="secondary">平仓状态为上次核实结果；程序已平不代表全账户已平，也不代表当前允许开仓。</Typography.Text>
       <Typography.Text type="secondary">组合计数按基础币和无方向交易所组合去重；三项可能重叠，不表示可立即开仓。</Typography.Text>
-      <Typography.Text type="secondary">汇总中的名义额及持仓对数上限为代码硬上限，当前可调参数见下方；账户回撤显示实际生效阈值。</Typography.Text>
+      <Typography.Text type="secondary">汇总中的名义额及持仓对数上限为代码硬上限，当前可调参数见下方。整户权益仅作观测；出入金和外仓盈亏不计入默认程序损失判断。整户保证金覆盖门槛继续生效。</Typography.Text>
       <Card size="small" title="累计放弃开仓原因" style={{ width: "100%" }}>
         <Typography.Paragraph type="secondary">累计放弃机会数（含影子模式），跨日和重启保留；各原因自对应功能启用后开始计数，按机会去重，不回填升级前历史。多条件失败只计首先判定的原因。</Typography.Paragraph>
         <Descriptions size="small" column={{ xs: 1, md: 2, xl: 3 }}>
@@ -129,8 +129,8 @@ function Summary({ data, flatten }: { data: LiveSummary | null; flatten?: LiveFl
         </Descriptions>
       </Card>
       <Row gutter={[12, 12]}>
-        <Col xs={24} xl={12}><Account name="crossex" data={data.accounts?.crossex ?? null} dropMax={data.effective_risk_limits?.max_equity_drop_usd ?? data.caps?.equity_drop_max_usd ?? null} /></Col>
-        <Col xs={24} xl={12}><Account name="bitget" data={data.accounts?.bitget ?? null} dropMax={data.effective_risk_limits?.max_equity_drop_usd ?? data.caps?.equity_drop_max_usd ?? null} /></Col>
+        <Col xs={24} xl={12}><Account name="crossex" data={data.accounts?.crossex ?? null} /></Col>
+        <Col xs={24} xl={12}><Account name="bitget" data={data.accounts?.bitget ?? null} /></Col>
       </Row>
       <Typography.Text type={data.last_error ? "danger" : "secondary"}>最后一个错误：{data.last_error ?? "无"}</Typography.Text>
     </Space>}
@@ -201,6 +201,7 @@ export function LiveExecPage() {
     <Typography.Title level={3}>实盘</Typography.Title>
     {error && <Alert type="warning" showIcon message={`实盘服务未连接（${failureLabel(error)}）`} />}
     <Summary data={summary} flatten={management.data["external-positions"]?.flatten_status} />
+    <LiveProgramRisk summary={summary} registry={management.data["external-positions"]} snapshot={remote} now={now} />
     <LiveExternalPositions registry={management.data["external-positions"]} rows={external.rows}
       snapshot={remote} now={now} cancellable={external.cancellable}
       error={management.errors["external-positions"]}

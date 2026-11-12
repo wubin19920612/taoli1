@@ -23,6 +23,7 @@ export interface LiveSummary {
   baseline_ready_pairs?: Num; structural_spread_pairs?: Num; cooldown_pairs?: Num;
   opening_skip_counts?: Partial<Record<LiveOpeningSkipReason, Num>> | null;
   config_version?: Num;
+  equity_baseline_revision?: Num;
   effective_risk_limits?: { max_equity_drop_usd: Num; daily_loss_stop_usd: Num; total_loss_stop_usd: Num } | null;
 }
 interface Leg {
@@ -91,8 +92,14 @@ export interface LiveFlattenStatus {
 }
 export interface LiveExternalPositions {
   status?: string; contracts: LiveExternalContract[];
-  income?: { verified?: boolean; reason?: string; at?: number } | null;
+  income?: LiveProgramIncome | null;
   flatten_status?: LiveFlattenStatus | null;
+}
+export interface LiveProgramIncome {
+  verified?: boolean | null; reason?: Text; at?: Num; scope?: Text; day?: Text;
+  captured_at?: Num; snapshot_version?: Num; revision?: Num; equity_revision?: Num;
+  program_daily?: Text; program_total?: Text; program_funding_total?: Text; program_upnl?: Text;
+  program_journal?: Text;
 }
 export interface LiveRemotePosition {
   position_key: string; route: string; symbol: string; side: string;

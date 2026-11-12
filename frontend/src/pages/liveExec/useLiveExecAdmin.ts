@@ -37,11 +37,11 @@ export function useLiveExecAdmin() {
       else void refresh();
     };
     visible();
-    // Ten-second account evidence cannot support actions on a thirty-second read cadence.
-    // One scheduler shares the controller/read slot and avoids duplicate reads at 30s.
+    // Income is bound to the current ten-second snapshot. Read both every five
+    // seconds in the same serial lane, with one copy of each at the 30s boundary.
     let tick = 0;
     const timer = window.setInterval(() => {
-      void refresh(false, ++tick % 6 === 0 ? resources : ["remote-positions"]);
+      void refresh(false, ++tick % 6 === 0 ? resources : ["external-positions", "remote-positions"]);
     }, 5000);
     document.addEventListener("visibilitychange", visible);
     return () => {
