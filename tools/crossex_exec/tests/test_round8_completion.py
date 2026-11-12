@@ -229,7 +229,7 @@ class CompletionTests(unittest.TestCase):
         accounts = SimpleNamespace(cross=venues[0],bitget=venues[1],snapshot=snapshot,
             position_snapshot=snapshot,validate_startup=snapshot,check_instruments=lambda rows:None,
             fee_snapshots={i.market.key:FeeSnapshot('0',now) for i in rows})
-        engine = Engine(store,market,accounts,live=True,clock=lambda:now)
+        engine = Engine(store,market,accounts,config={'CROSSEX_RISK_SCOPE':'dedicated_account'},live=True,clock=lambda:now)
         self.addCleanup(engine.close)
         engine.limits.initialize(snapshot())
         engine.account_cache.publish(snapshot())
@@ -257,7 +257,7 @@ class CompletionTests(unittest.TestCase):
         universe.decide_mapping(universe.mappings()[0]['id'],'rejected')
         Settings(store).update({'max_total_open_usd':0,'max_open_pairs':0},source='admin_api')
         engine.close()
-        restarted = Engine(store,market,accounts,live=True,clock=lambda:now)
+        restarted = Engine(store,market,accounts,config={'CROSSEX_RISK_SCOPE':'dedicated_account'},live=True,clock=lambda:now)
         self.addCleanup(restarted.close)
         restarted.executor.recover()
         restarted.refresh_pair(pair)

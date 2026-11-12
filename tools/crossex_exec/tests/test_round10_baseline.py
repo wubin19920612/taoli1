@@ -31,7 +31,7 @@ class BaselineRegressionTests(unittest.TestCase):
         self.market.mapping = {k: Instrument.load(v) for k, v in self.fixture['instruments'].items()}
         self.market.batch = lambda items, **kw: [self.fixture['responses'].get(url) for _, url, _ in items]
         self.accounts = Mock()
-        self.engine = Engine(self.store, self.market, self.accounts, clock=lambda: self.now,
+        self.engine = Engine(self.store, self.market, self.accounts,config={'CROSSEX_RISK_SCOPE':'dedicated_account'}, clock=lambda: self.now,
                              stop_file=Path(self.tmp.name)/'STOP')
         self.addCleanup(self.engine.close)
 

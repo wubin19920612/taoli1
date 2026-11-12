@@ -68,7 +68,7 @@ class Round5Tests(unittest.TestCase):
         self.engine.alert('manual_review')
         self.engine.alert('position_mismatch')
         self.store.set_meta('position_mismatch', True)
-        second = Engine(self.store, self.market, self.accounts, live=True, clock=lambda:self.now[0])
+        second = Engine(self.store, self.market, self.accounts,config={'CROSSEX_RISK_SCOPE':'dedicated_account'}, live=True, clock=lambda:self.now[0])
         self.addCleanup(second.close)
         self.engine = second
         self.matching_snapshots()
@@ -91,7 +91,7 @@ class Round5Tests(unittest.TestCase):
         self.store.pair(pair)
         self.store.set_meta('stop_locks', None)
         self.store.set_meta('stop_reason', 'unhedged_position')
-        second = Engine(self.store, self.market, self.accounts, live=True, clock=lambda:self.now[0])
+        second = Engine(self.store, self.market, self.accounts,config={'CROSSEX_RISK_SCOPE':'dedicated_account'}, live=True, clock=lambda:self.now[0])
         self.addCleanup(second.close)
         self.assertEqual(self.store.meta('stop_locks')['unhedged_position'], [pair['id']])
 
@@ -261,7 +261,7 @@ class Round5Tests(unittest.TestCase):
         self.assertEqual(dec(saved['upnl']), dec('-10'))
         self.assertEqual(sorted(map(dec, saved['positions'].values())), [dec('-5'), dec('-5')])
         self.now[0] += 2
-        second = Engine(self.store, self.market, self.accounts, live=True, clock=lambda:self.now[0])
+        second = Engine(self.store, self.market, self.accounts,config={'CROSSEX_RISK_SCOPE':'dedicated_account'}, live=True, clock=lambda:self.now[0])
         self.addCleanup(second.close)
         second.roll_daily_upnl(dict(upnl='0', upnl_by_position={}), self.now[0])
         self.assertEqual(dec(self.store.meta('daily_upnl')['upnl']), dec('-10'))

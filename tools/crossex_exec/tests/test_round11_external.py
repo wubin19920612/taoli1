@@ -260,7 +260,8 @@ class AccountingTests(ExternalFixture, unittest.TestCase):
                 self.equity=equity
                 loss=self.reconcile()
                 self.assertEqual(dec(loss['daily']),0)
-                self.assertLessEqual(dec(loss['total']),dec(equity)-1000)
+                # R14: external total PnL is observation only, like daily PnL.
+                self.assertEqual(dec(loss['total']),0)
                 self.assertFalse(self.store.meta('position_mismatch'))
                 self.assertFalse(self.store.meta('program_projection')['positions'])
 
@@ -276,11 +277,18 @@ class AccountingTests(ExternalFixture, unittest.TestCase):
         self.assertIn('external_income_unverifiable',self.store.meta('stop_locks'))
 
     def test_equity_and_margin_hard_limits_include_external_catastrophe(self):
+        # R14: preserve the halt/never-touch-external assertions with an actual
+        # independently proved PROGRAM loss, not the user's external loss.
+        self.store.save_order(dict(intent('own',ex='bitget'),state='TERMINAL',filled='0',
+            fee='0',leg=1,accounting_pending=False))
+        self.bg_book=[dict(id='program-loss',category='USDT-FUTURES',symbol='BTCUSDT',coin='USDT',
+            type='CONTRACT_MAIN_SETTLE_FEE_USER_OUT',amount='-150',fee='0',ts=str(int((self.now+.5)*1000)))]
+        self.bitget_equity='29850'
         self.rows=[position(self.symbol,upnl='-250')]; self.equity='740'
         self.reconcile()
         self.assertEqual(self.store.meta('state'),'HALTED')
         self.assertFalse(self.store.meta('flatten_status')['account_flat'])
-        self.assertEqual(self.store.all_orders(),[])
+        self.assertFalse(any(o['reduce_only'] for o in self.store.all_orders()))
 
     def add_trade(self,qty,side,rpnl='0',fee='.1',position_side='LONG'):
         oid='trade-'+str(len(self.trades))

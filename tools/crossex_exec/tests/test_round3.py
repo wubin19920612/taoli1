@@ -79,7 +79,7 @@ class Round3Tests(unittest.TestCase):
         self.accounts.validate_startup.side_effect = self.snapshot
         self.accounts.fees.side_effect = lambda instruments: {i.market.key:'.0002' for i in instruments}
         self.sink = Mock()
-        self.engine = Engine(self.store, self.market, self.accounts, live=True, clock=lambda:self.now[0],
+        self.engine = Engine(self.store, self.market, self.accounts,config={'CROSSEX_RISK_SCOPE':'dedicated_account'}, live=True, clock=lambda:self.now[0],
                              stop_file=Path(self.tmp.name)/'STOP', alert_sink=self.sink)
         self.engine.executor.confirm_timeout = .002
         self.engine.executor.poll_interval = .001
@@ -419,7 +419,7 @@ class Round3Tests(unittest.TestCase):
         self.data['upnl'] = '0'
         self.engine.reconcile()
         self.assertEqual(self.engine.risk, 'STOP')
-        second = Engine(self.store, self.market, self.accounts, live=True, clock=lambda:self.now[0])
+        second = Engine(self.store, self.market, self.accounts,config={'CROSSEX_RISK_SCOPE':'dedicated_account'}, live=True, clock=lambda:self.now[0])
         self.addCleanup(lambda:getattr(second, 'close', lambda:None)())
         second.reconcile()
         self.assertEqual(second.risk, 'STOP')

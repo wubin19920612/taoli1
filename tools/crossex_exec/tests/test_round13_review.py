@@ -178,10 +178,11 @@ class HistoryTests(ExternalFixture,unittest.TestCase):
 
 class NotionalTests(FXFixture,unittest.TestCase):
     def test_external_500_usdc_plus_two_50_usd_legs_exceeds_hard_600(self):
-        self.rows=[position(qty='5')]
+        # R14: retain exact FX/600 assertions with an unregistered remote row.
+        self.rows=[position('HYPERLIQUID_FUTURE_xyz:OAI_USDC',qty='5')]
         snapshot=self.engine.read_account_snapshot()
         self.engine.account_cache.publish(snapshot,self.now)
-        self.assertEqual(dec(snapshot['notionals_usd']['crossex|'+SYMBOL+'|long']),dec('506.010'))
+        self.assertEqual(dec(snapshot['notionals_usd']['crossex|HYPERLIQUID_FUTURE_xyz:OAI_USDC|long']),dec('506.010'))
         for cid,ex in (('a','binance'),('b','bitget')):
             self.store.save_order(dict(intent(cid,ex=ex,quantity='.5'),state='INTENT',filled='0'))
         self.assertEqual(self.engine.limits.exposure(snapshot),dec('606.010'))
@@ -190,6 +191,7 @@ class NotionalTests(FXFixture,unittest.TestCase):
                 self.engine.limits.check_order(row)
 
     def test_notional_requires_fx_even_with_zero_external_income(self):
+        self.rows=[position('HYPERLIQUID_FUTURE_xyz:OAI_USDC')]
         for prices,age in ((('1.01',),0),(('1.01','1.01'),60.01),(('1','9'),0)):
             self.prices,self.fx_age=prices,age
             with self.subTest(prices=prices,age=age):
@@ -199,6 +201,7 @@ class NotionalTests(FXFixture,unittest.TestCase):
                 self.engine.check_order(intent(reduce=True))
 
     def test_notional_fx_rechecked_at_send_earlier_than_account_ttl(self):
+        self.rows=[position('HYPERLIQUID_FUTURE_xyz:OAI_USDC',qty='2')]
         self.fx_age=59
         self.reconcile()
         snapshot=self.engine.account_cache.read()
@@ -241,7 +244,10 @@ def real_accounts(now, debt='0', gate_debt='0'):
         assets=[dict(coin='USDT',debt=debt,balance='30000')]),
         settings=lambda:dict(accountMode='unified',holdMode='hedge_mode',assetMode='multi_assets'),
         positions=lambda:[],open_orders=lambda:[])
-    return Accounts(cross,bg,clock=now)
+    accounts=Accounts(cross,bg,clock=now)
+    accounts.activity=lambda start,end:dict(from_ms=start,to_ms=end,complete=True,
+        crossex_book=[],crossex_trades=[],bitget_book=[])
+    return accounts
 
 
 class LiabilityTests(ExternalFixture,unittest.TestCase):

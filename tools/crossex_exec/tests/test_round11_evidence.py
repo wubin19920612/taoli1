@@ -78,7 +78,9 @@ class EvidenceTests(ExternalFixture,unittest.TestCase):
     def test_external_notional_liability_and_margin_keep_original_limits(self):
         self.change(); self.rows=[position()]
         snapshot=self.snapshot(); key=next(iter(snapshot['positions']))
-        snapshot['notionals'][key]='601'
+        # R14 preserves the 601-USD hard ceiling using an unregistered position;
+        # registered external notional is tested separately as excluded.
+        snapshot['notionals']={'crossex|BINANCE_FUTURE_ETH_USDC|long':'601'}
         # Explicit two-source FX whose conservative upper bound is exactly 1:
         # retain the original 601-USD boundary assertion without assuming a peg.
         from test_round12_fx import quotes

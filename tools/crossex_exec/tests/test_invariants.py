@@ -23,7 +23,7 @@ from baseline_fixtures import seed_baseline
 
 SEEDS = (20261111, 20261112, 20261113)
 RANDOM_ROUNDS = 2400
-ROUNDS = RANDOM_ROUNDS+168+96
+ROUNDS = RANDOM_ROUNDS+168+96+48
 RECOVERY_BOUND = 1
 INVARIANTS = ('1a', '1b', '1c', '1d', '2', '3', '4', '5', '6', '7')
 FAULTS = ('partial', 'zero', 'timeout_ack', 'timeout_unknown', 'detail', 'positions',
@@ -290,7 +290,7 @@ class World:
         self.engine.reconcile()
 
     def make_engine(self):
-        engine = Engine(self.store, self.market, self.accounts, live=self.live, clock=lambda:self.now)
+        engine = Engine(self.store, self.market, self.accounts, config={'CROSSEX_RISK_SCOPE':'dedicated_account'}, live=self.live, clock=lambda:self.now)
         engine.executor.confirm_timeout = .001
         engine.executor.poll_interval = .0002
         # No background jobs, DNS, account transports or real wall-clock inputs.
@@ -467,7 +467,7 @@ class InvariantSimulationTests(unittest.TestCase):
                                       mapping=0 if tail==72 else 1 if tail==96 else None)
                         if tail>=168:
                             from round11_simulator import enable
-                            enable(world,('catastrophe','settlement','margin','catalog')[(tail-168)//24])
+                            enable(world,('catastrophe','settlement','margin','catalog','volatility','capital')[(tail-168)//24])
                     w = world
                     w.step = index
                     fault = 'none' if episode_step in (1, 21, 22, 23) else rng.choice(FAULTS)
@@ -506,7 +506,10 @@ class InvariantSimulationTests(unittest.TestCase):
                     if fault == 'restart':
                         w.restart()
                     w.references()
-                    if index>=RANDOM_ROUNDS+168:
+                    if index>=RANDOM_ROUNDS+264:
+                        from round14_simulator import step
+                        step(w,index)
+                    elif index>=RANDOM_ROUNDS+168:
                         from round11_simulator import step
                         step(w,index)
                     skips_before = Counter(w.store.meta('opening_skip_counts', {}))
@@ -632,7 +635,10 @@ class InvariantSimulationTests(unittest.TestCase):
                     if w.store.meta('pair_cooldowns',{}).get('BTC|binance|bitget',0)>w.now:
                         coverage['cooldown_active'] += 1
                     w.store.failures = 0
-                    if index>=RANDOM_ROUNDS+168:
+                    if index>=RANDOM_ROUNDS+264:
+                        from round14_simulator import check
+                        check(self,w,first_send)
+                    elif index>=RANDOM_ROUNDS+168:
                         from round11_simulator import check
                         check(self,w,first_send)
                     for invariant in INVARIANTS:
@@ -646,6 +652,10 @@ class InvariantSimulationTests(unittest.TestCase):
                 self.assertGreater(coverage[key], 0, 'vacuous fault coverage: '+key)
             self.assertGreater(coverage['opened_pairs'], 0, 'vacuous actual new-position coverage')
             self.assertEqual(coverage['external_invariant_checks'],96)
+            self.assertEqual(coverage['round14_invariant_checks'],48)
+            self.assertEqual(coverage['isolation_open_checks'],40)
+            for key in ('external_violent_pnl','external_deposit','external_withdrawal'):
+                self.assertGreater(coverage[key],0,'vacuous round fourteen coverage: '+key)
             for key in ('external_catastrophe','external_loss','external_closed','external_margin','external_catalog_changed'):
                 self.assertGreater(coverage[key],0,'vacuous external coverage: '+key)
             for reason in OPENING_FAULTS:

@@ -439,7 +439,7 @@ class HTTPTests(APIFixture, unittest.TestCase):
         from test_engine import FakeAccounts, FakeMarket
         market = FakeMarket()
         accounts = FakeAccounts(Mock(), Mock(), market)
-        engine = Engine(self.store, market, accounts, stop_file=self.config['CROSSEX_STOP_FILE'],
+        engine = Engine(self.store, market, accounts,config={'CROSSEX_RISK_SCOPE':'dedicated_account'}, stop_file=self.config['CROSSEX_STOP_FILE'],
                         clock=lambda: NOW)
         engine.limits.initialize(accounts.snapshot())
         service = self.start()

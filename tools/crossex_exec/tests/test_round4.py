@@ -224,7 +224,7 @@ class Round4Tests(unittest.TestCase):
         self.engine.reconcile()
         self.now[0] += 86400
         self.engine.reconcile()
-        second = Engine(self.store, self.market, self.accounts, live=True, clock=lambda:self.now[0])
+        second = Engine(self.store, self.market, self.accounts,config={'CROSSEX_RISK_SCOPE':'dedicated_account'}, live=True, clock=lambda:self.now[0])
         self.addCleanup(second.close)
         self.data['upnl'] = '-39'
         second.reconcile()

@@ -114,6 +114,37 @@ class ProgramIsolationTests(IsolationFixture, unittest.TestCase):
                 state='UNKNOWN', filled='0'))
         self.assertEqual(self.engine.limits.exposure(snapshot), 600)
         self.assertGreater(self.engine.limits.exposure(snapshot, intent('extra', ex='bitget')), 600)
+        with self.assertRaisesRegex(ValueError,'total_notional_limit'):
+            self.engine.limits.check_order(intent('extra',ex='bitget'))
+        with self.assertRaisesRegex(ValueError,'leg_notional_limit'):
+            self.engine.limits.check_order(intent('large',ex='bitget',quantity='1.51'))
+
+    def test_realized_fees_funding_and_floating_are_all_program_owned(self):
+        entry=dict(intent('entry',ex='bitget'),state='TERMINAL',filled='1',fee='1',vwap='100',
+            leg=0,accounting_pending=False,fill_ms=int((self.now+.5)*1000))
+        close=dict(intent('close',ex='bitget',reduce=True),state='TERMINAL',filled='1',fee='2',
+            vwap='90',leg=0,accounting_pending=False,fill_ms=int((self.now+.5)*1000))
+        self.store.save_order(entry); self.store.save_order(close)
+        at=str(int((self.now+.5)*1000))
+        self.bg_book=[dict(id='trade',category='USDT-FUTURES',symbol='BTCUSDT',coin='USDT',
+                          type='CLOSE_LONG',amount='-10',fee='-3',ts=at)]
+        self.bitget_equity='29987'
+        self.own_funding('-7')
+        self.rows[0]['upnl']='10000'; self.equity='11000'
+        loss=self.reconcile()
+        self.assertEqual(dec(loss['daily']),-20)
+        self.assertEqual(dec(loss['total']),-20)
+        self.assertIn('daily_loss',self.store.meta('stop_locks'))
+        self.assertFalse(self.engine.can_open())
+
+    def test_unproved_legacy_funding_epoch_cannot_silently_restart_at_zero(self):
+        self.reconcile()
+        anchor=self.store.meta('external_equity_anchor')
+        anchor.pop('program_funding_carry')
+        self.store.set_meta('external_equity_anchor',anchor)
+        self.reconcile()
+        self.assertFalse(self.store.meta('external_income')['verified'])
+        self.assertFalse(self.engine.can_open())
 
     def test_missing_income_never_becomes_zero_and_external_equity_cannot_force_halt(self):
         self.reconcile()
@@ -156,6 +187,19 @@ class ProgramIsolationTests(IsolationFixture, unittest.TestCase):
             self.engine.check_order(intent(ex='bitget'))
         self.assertFalse(self.engine.can_open())
 
+    def test_order_change_during_pnl_calculation_cannot_certify_old_result(self):
+        from tools.crossex_exec import external_accounting
+        original=external_accounting.journal_pnl
+        def changed(store,now):
+            value=original(store,now)
+            store.save_order(dict(intent('late',ex='bitget'),state='TERMINAL',
+                filled='0',fee='-999',leg=1,accounting_pending=False,fill_ms=int(now*1000)))
+            return value
+        with patch.object(external_accounting,'journal_pnl',side_effect=changed):
+            self.reconcile()
+        self.assertFalse(self.store.meta('external_income')['verified'])
+        self.assertFalse(self.engine.can_open())
+
     def test_unknown_remote_position_still_mismatches_and_alert_does_not_repeat(self):
         self.rows.append(position('BINANCE_FUTURE_BTC_USDT'))
         for _ in range(4):
@@ -175,8 +219,32 @@ class ProgramIsolationTests(IsolationFixture, unittest.TestCase):
                 self.assertEqual(flatten.call_count, calls)
                 self.assertEqual(self.rows[0]['position_qty'], '1')
 
+    def test_bitget_maintenance_margin_uses_whole_account_and_only_reduces_program(self):
+        original=self.accounts.snapshot
+        for margin in ('2.99','1.99'):
+            def snapshot():
+                value=original(); value['margins'][1]=margin; return value
+            self.accounts.snapshot=snapshot
+            with self.subTest(margin=margin),patch.object(self.engine,'flatten_all') as flatten:
+                self.reconcile()
+                self.assertFalse(self.engine.can_open())
+                self.assertEqual(flatten.call_count,1 if margin=='1.99' else 0)
+                self.assertEqual(self.rows[0]['position_qty'],'1')
+
 
 class DebtAndAlertTests(IsolationFixture, unittest.TestCase):
+    def test_warning_state_and_notification_audit_commit_atomically(self):
+        self.debt()
+        save=self.store.set_meta
+        def failed(key,value):
+            if key=='external_liability_active':
+                raise OSError('injected alert state failure')
+            return save(key,value)
+        with patch.object(self.store,'set_meta',side_effect=failed),self.assertRaises(OSError):
+            self.engine.limits.check_equity(self.snapshot())
+        self.assertFalse(any(e['kind']=='EXTERNAL_LIABILITY' for e in self.store.events()))
+        self.assertIsNone(self.store.meta('alert_states'))
+
     def test_fully_attributed_native_debt_warns_without_stopping_or_blocking_send(self):
         self.debt()
         self.reconcile()
@@ -230,6 +298,15 @@ class DebtAndAlertTests(IsolationFixture, unittest.TestCase):
             self.assertEqual('account_liability' in self.store.meta('stop_locks'), n<2)
         self.assertTrue(self.engine.can_open())
 
+    def test_rebaseline_can_anchor_attributed_debt_but_cannot_clear_old_daily_lock(self):
+        self.debt()
+        self.store.set_meta('daily_loss_day',day(self.now)); self.engine.stops.add('daily_loss')
+        self.anchor()
+        self.reconcile()
+        self.assertTrue(self.store.meta('external_income')['verified'])
+        self.assertIn('daily_loss',self.store.meta('stop_locks'))
+        self.assertFalse(self.engine.can_open())
+
     def test_simultaneous_reason_alerts_and_changing_values_do_not_spam(self):
         for n in range(5):
             self.engine.alert('position_mismatch', details={'observed':n})
@@ -238,6 +315,20 @@ class DebtAndAlertTests(IsolationFixture, unittest.TestCase):
 
 
 class NoExternalEvidenceTests(ExternalFixture, unittest.TestCase):
+    def test_missing_position_pnl_cannot_be_certified_without_external_registry(self):
+        self.engine.reconcile()
+        own=dict(intent('own'),state='TERMINAL',filled='1',fee='0',vwap='100',leg=0,
+                 accounting_pending=False,fill_ms=int(self.now*1000))
+        self.store.save_order(own)
+        self.rows=[position('BINANCE_FUTURE_BTC_USDT',upnl='-200')]
+        self.equity='800'
+        original=self.accounts.snapshot
+        def missing():
+            value=original(); value['upnl_by_position']={}; return value
+        self.accounts.snapshot=missing
+        self.now+=1; self.engine.reconcile()
+        self.assertFalse(self.store.meta('external_income')['verified'])
+
     def test_default_program_scope_also_requires_complete_evidence_without_external(self):
         self.engine.reconcile()
         self.assertTrue(self.engine.can_open())
@@ -256,6 +347,18 @@ class NoExternalEvidenceTests(ExternalFixture, unittest.TestCase):
         self.engine.reconcile()
         self.assertTrue(self.engine.can_open())
         self.assertEqual(dec(self.store.meta('account_loss_current')['total']), 0)
+
+    def test_bitget_transfer_is_excluded_but_wrong_sign_or_fee_is_not(self):
+        self.engine.reconcile()
+        self.now+=1; self.bitget_equity='29000'
+        self.bg_book=[dict(id='out',category='USDT-FUTURES',symbol='',coin='USDT',
+            type='TRANSFER_OUT',amount='-1000',fee='0',ts=str(int(self.now*1000)))]
+        self.engine.reconcile()
+        self.assertTrue(self.engine.can_open())
+        self.assertEqual(dec(self.store.meta('account_loss_current')['total']),0)
+        self.bg_book[0]['fee']='-1'
+        self.now+=1; self.engine.reconcile()
+        self.assertFalse(self.engine.can_open())
 
 
 if __name__ == '__main__':

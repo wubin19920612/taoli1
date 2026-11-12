@@ -191,9 +191,11 @@ class FXAccountingTests(ExternalFixture,unittest.TestCase):
                 self.assertTrue(value['verified'])
                 self.assertEqual(dec(value['external_contribution']),dec(contribution))
                 self.assertEqual(dec(value['equity_daily']),dec(daily))
-                self.assertEqual(dec(self.store.meta('account_loss_current')['daily']),dec(daily))
-                self.assertIn('daily_loss',self.store.meta('stop_locks'))
-                self.assertFalse(self.engine.can_open())
+                # R14 keeps the old conservative FX observation, but a whole
+                # account valuation gap is no longer attributed to the program.
+                self.assertEqual(dec(self.store.meta('account_loss_current')['daily']),0)
+                self.assertNotIn('daily_loss',self.store.meta('stop_locks'))
+                self.assertTrue(self.engine.can_open())
                 self.assertEqual(self.store.all_orders(),[])
 
     def test_baseline_difference_is_native_units_then_converted(self):
@@ -284,8 +286,12 @@ class FXAccountingTests(ExternalFixture,unittest.TestCase):
         self.rows=[position(upnl='-250')]; self.equity='750'
         self.reconcile()
         self.assertFalse(self.engine.can_open())
-        self.assertEqual(self.store.meta('state'),'HALTED')
-        self.assertFalse(self.store.meta('flatten_status')['account_flat'])
+        # Unknown income stops opening; external equity alone cannot halt.
+        self.assertNotIn(self.store.meta('state'),('HALTING','HALTED'))
+        self.margin='1.5'
+        with patch.object(self.engine,'flatten_all') as flatten:
+            self.reconcile()
+        flatten.assert_called_once()
         self.assertEqual(self.store.all_orders(),[])
 
     def test_utc_rollover_verifies_carried_fx_then_restart_keeps_native_anchor(self):

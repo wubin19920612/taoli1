@@ -101,7 +101,7 @@ class EngineTests(unittest.TestCase):
                 positions.pop(key,None)
         self.gate.on_fill=lambda o,q,r:apply_fill('crossex',o,q,r)
         self.bg.on_fill=lambda o,q,r:apply_fill('bitget',o,q,r)
-        self.engine=Engine(self.store,self.market,self.accounts,live=True,stop_file=Path(self.tmp.name)/'STOP')
+        self.engine=Engine(self.store,self.market,self.accounts,config={'CROSSEX_RISK_SCOPE':'dedicated_account'},live=True,stop_file=Path(self.tmp.name)/'STOP')
         self.engine.executor=self.exec
         self.exec.can_open=self.engine.can_open
         self.exec.check_order=self.engine.check_order

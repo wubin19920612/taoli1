@@ -141,7 +141,7 @@ class HardLimitTests(unittest.TestCase):
         self.addCleanup(self.store.close)
         self.snapshot=dict(equity_by_venue={'crossex':'1000','bitget':'30000'},notionals={},margins=['4','4'],liabilities=[])
         self.provider=Mock(side_effect=lambda:self.snapshot)
-        self.limits=HardLimits(self.store,self.provider)
+        self.limits=HardLimits(self.store,self.provider,{'CROSSEX_RISK_SCOPE':'dedicated_account'})
         self.limits.initialize(self.snapshot)
         self.adapter=Mock()
         self.adapter.place.return_value='42'
@@ -195,7 +195,7 @@ class HardLimitTests(unittest.TestCase):
                        {'CROSSEX_MAX_LEG_USD':'0'}):
             with self.subTest(config=config),self.assertRaises(ValueError):
                 HardLimits(self.store,self.provider,config)
-        lower=HardLimits(self.store,self.provider,{'CROSSEX_MAX_LEG_USD':'50'})
+        lower=HardLimits(self.store,self.provider,{'CROSSEX_MAX_LEG_USD':'50','CROSSEX_RISK_SCOPE':'dedicated_account'})
         with self.assertRaises(ValueError):
             lower.check_order(intent())
         self.snapshot['equity_by_venue']={}
