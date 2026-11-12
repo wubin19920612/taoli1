@@ -102,6 +102,16 @@ class Baseline:
 
     def record(self, mids, bases, at=None):
         now = self.clock() if at is None else at
+        clean = {}
+        for ex in BATCH_URLS:
+            for base in bases:
+                try:
+                    value = dec(mids[ex][base])
+                    if value > 0:
+                        clean.setdefault(ex, {})[base] = str(value)
+                except (KeyError, TypeError, ValueError, ArithmeticError):
+                    continue
+        mids = clean
         rows = []
         for base in bases:
             for a, b in combinations(sorted(BATCH_URLS), 2):
@@ -114,11 +124,19 @@ class Baseline:
         self.store.add_baseline_samples(rows, now)
         # Remove observations of a removed whitelist base from the API counts.
         with self.store.lock:
+            # Replace the entire round, including failed/empty venues. Never
+            # merge old quotes into evidence of three simultaneously observed venues.
+            self.store.set_meta('baseline_quotes', dict(at=now, mids=mids))
             states = self.store.meta('baseline_status', {})
             self.store.set_meta('baseline_status', {k:v for k,v in states.items() if k.split('|')[0] in bases})
         for base in bases:
             for a, b in combinations(sorted(BATCH_URLS), 2):
                 self.status(base, a, b, now)
+
+    def latest(self, base):
+        snapshot = self.store.meta('baseline_quotes', {})
+        return dict(at=snapshot.get('at'), mids={ex:values[base] for ex,values in snapshot.get('mids', {}).items()
+                                                if base in values})
 
     def status(self, base, buy, sell, now=None):
         now = self.clock() if now is None else now

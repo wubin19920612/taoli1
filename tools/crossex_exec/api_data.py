@@ -10,6 +10,7 @@ import time
 
 from tools.fill_sim.core import Market, walk
 from .limits import DEFAULT_VAR, MAX_LEG_USD, MAX_TOTAL_USD, MAX_EQUITY_DROP_USD
+from .admission import SKIP_REASONS
 
 
 TIERS = ('0.5–1%', '1–2%', '2–5%', '>5%')
@@ -182,7 +183,9 @@ def _spread(a, b):
 def observations(pair):
     return dict(baseline_bps=number(pair.get('baseline_at_open')),
                 excess_bps=number(pair.get('excess_at_open')),
-                funding_cost_bps=number(pair.get('fill', {}).get('funding_cost_bps')))
+                funding_cost_bps=number(pair.get('fill', {}).get('funding_cost_bps')),
+                open_book_skew_ms=number(pair.get('open_book_skew_ms')),
+                close_book_skew_ms=number(pair.get('close_book_skew_ms')))
 
 
 def position(pair, orders, now):
@@ -395,7 +398,7 @@ class JournalView:
             if endpoint == 'summary':
                 meta = {key: budget.decode(raw) for key, raw in conn.execute(
                     "SELECT key,value FROM meta WHERE key IN ('state','stop_reason','live_mode','account_equity_baseline',"
-                    "'account_equity_current','actual_fees','flatten_requested','baseline_status','pair_cooldowns')")}
+                    "'account_equity_current','actual_fees','flatten_requested','baseline_status','pair_cooldowns','opening_skip_counts')")}
                 events = {}
                 for kind in ('RECONCILE', 'ALERT'):
                     row = conn.execute('SELECT at,value FROM events WHERE kind=? ORDER BY id DESC LIMIT 1', (kind,)).fetchone()
@@ -461,4 +464,5 @@ class JournalView:
                     accounts=accounts, today=dict(_totals(today), daily_loss_limit_usd=20),
                     total=dict(_totals(closed), total_loss_limit_usd=100), fees=fees,
                     baseline_ready_pairs=ready,structural_spread_pairs=blacklisted,cooldown_pairs=cooling,
+                    opening_skip_counts={r:meta.get('opening_skip_counts',{}).get(r,0) for r in SKIP_REASONS},
                     last_error=reason(events['ALERT'][1].get('reason')))

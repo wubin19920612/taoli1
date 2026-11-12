@@ -21,6 +21,28 @@ CATALOGS={
 }
 
 
+def parse_execution_book(market,spec,data,received_at):
+    """All six documented perpetual depth endpoints supply an exchange clock.
+
+    Do not turn a malformed response into the documented no-clock fallback.
+    Keep fill-sim's parser/behaviour unchanged; these are execution requirements.
+    """
+    ex=market.exchange
+    if ex in ('binance','aster'):
+        stamp=data.get('T',data.get('E'))
+    elif ex=='bybit':
+        row=data['result']
+        stamp=row.get('cts',row.get('ts'))
+    elif ex=='gate':
+        stamp=data.get('update',data.get('current'))
+    else:
+        row=data['data'][0] if ex=='okx' else data['data']
+        stamp=row.get('ts')
+    if stamp is None or dec(stamp)<=0:
+        raise ValueError('book_exchange_time_missing')
+    return parse_book(market,spec,data,received_at)
+
+
 def native_rows(ex,data):
     if ex=='gate':
         return data
@@ -237,9 +259,15 @@ class MarketData:
                 self.store.set_meta('mapping',dict(at=self.clock(),errors=errors,instruments={k:v.dump() for k,v in mapped.items()}))
 
     def books(self,instruments):
+        return self._books(instruments,parse_book)
+
+    def opening_books(self,instruments):
+        return self._books(instruments,parse_execution_book)
+
+    def _books(self,instruments,parser):
         return self.batch([(i.market.exchange,endpoint(i.market,'depth').replace('/fapi/v1/','/fapi/v3/')
                             if i.market.exchange=='aster' else endpoint(i.market,'depth'),
-                            lambda d,i=i:parse_book(i.market,i.spec,d,self.clock())) for i in instruments],priority=0,partial=True)
+                            lambda d,i=i:parser(i.market,i.spec,d,self.clock())) for i in instruments],priority=0,partial=True)
 
     def baseline_quotes(self,bases):
         if not bases:

@@ -119,3 +119,20 @@ class Store:
         with self.lock:
             cur = self.db.execute('INSERT OR IGNORE INTO triggers VALUES (?,?)',(identity,encode(value)))
             return cur.rowcount == 1
+
+    def skip(self, identity, reason, **details):
+        """One durable abandonment per trigger, even with two waiting senders."""
+        from .admission import SKIP_REASONS
+        with self.transaction():
+            row = self.db.execute('SELECT value FROM triggers WHERE id=?', (identity,)).fetchone()
+            trigger = json.loads(row[0]) if row else {}
+            if trigger.get('skip_reason'):
+                return
+            trigger['skip_reason'] = reason
+            self.db.execute('INSERT INTO triggers VALUES (?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value',
+                            (identity, encode(trigger)))
+            if reason in SKIP_REASONS:
+                counts = self.meta('opening_skip_counts', {})
+                counts[reason] = counts.get(reason, 0)+1
+                self.set_meta('opening_skip_counts', counts)
+            self.event('SKIP', dict(id=identity, reason=reason, **details))

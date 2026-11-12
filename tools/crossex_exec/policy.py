@@ -139,10 +139,13 @@ def send_review(pair, orders, fees, now):
     if any(not s.get('history_ok') or not 0<=now-s['captured_at']<=300 or s['next']-now<1800 for s in funding):
         raise ValueError('send_funding_stale')
     cost=funding_cost_bps(funding)
-    net=((dec(fills[1]['vwap'])/dec(fills[0]['vwap'])-1)*10000-dec(pair['baseline_at_open'])
-         -2*sum(map(dec,fees))*10000-cost)
+    gross=(dec(fills[1]['vwap'])/dec(fills[0]['vwap'])-1)*10000
+    excess=gross-dec(pair['baseline_at_open'])
+    net=excess-2*sum(map(dec,fees))*10000-cost
     if net<15 or dec(fills[0]['deepest'])>dec(orders[0]['price']) or dec(fills[1]['deepest'])<dec(orders[1]['price']):
         raise ValueError('send_spread_or_limit_changed')
+    return dict(buy=fills[0],sell=fills[1],gross_bps=float(gross),net_bps=float(net),
+                excess_bps=str(excess),funding_cost_bps=str(cost))
 
 
 def exit_reason(*, age, spread, entry_spread, pnl, notional, next_funding, stale_age,
