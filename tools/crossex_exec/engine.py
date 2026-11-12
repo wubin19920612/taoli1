@@ -23,6 +23,7 @@ from .external import ExternalRegistry, ExternalAdmin, ExternalUnverifiable, pla
 from .external_accounting import ExternalAccounting, read_snapshot
 from .external_fx import NATIVE_USD, require_fresh_fx
 from .position_values import key_currency, notional_values, value_snapshot
+from .program_risk import require_program_proof, program_notionals
 
 
 ACCOUNT_RECOVERY_SNAPSHOTS = 3
@@ -76,6 +77,14 @@ class Engine:
     def alert(self,reason,*,details=None,event_kind=None):
         with self._alert_lock:
             values=details or {}
+            if self.limits.program_scope:
+                from .alerts import emit
+                owner=values.get('pair_id','global') if reason in ('unhedged_position','repair_stopped') else 'global'
+                incident=owner not in self.stops.reasons.get(reason,())
+                self.stops.add(reason,owner)
+                emit(self.store,self.clock,reason,values,event_kind=event_kind,
+                     sink=self.alert_sink,new_incident=incident)
+                return
             if self.store.meta('state')=='HALTING':
                 changed=reason not in self._halt_alerts or self._halt_alerts[reason]!=values
                 self._halt_alerts[reason]=values
@@ -111,7 +120,7 @@ class Engine:
     def check_order(self,intent):
         with self.store.lock:
             self.external.check_order(intent)
-            if not intent['reduce_only'] and self.external.records():
+            if not intent['reduce_only'] and self.limits.program_scope:
                 self.require_external_income()
                 self.external.split(self.account_cache.read())
             self.limits.check_order(intent)
@@ -290,7 +299,7 @@ class Engine:
                     if self._equity_admin_active or revision!=self.store.meta('equity_baseline_revision',0):
                         self.store.event('ACCOUNT_REFRESH_SUPERSEDED',dict(started_at=started,revision=revision))
                         return
-                    if self.external.records():
+                    if self.limits.program_scope:
                         # A certificate belongs to one account observation. The
                         # coordinator must recompute PnL before this new cache
                         # can admit either leg, even within the 10-second TTL.
@@ -316,7 +325,7 @@ class Engine:
         evidence=getattr(error,'account_snapshot',None)
         if evidence is not None:
             self.store.set_meta('account_risk_snapshot',plain(evidence))
-            if self.external.records():
+            if self.limits.program_scope:
                 self.risk='STOP'
                 self.store.set_meta('external_failed_snapshot',plain(evidence))
                 self.store.set_meta('external_income',dict(verified=False,reason='external_identity_unverifiable',at=self.clock()))
@@ -343,7 +352,7 @@ class Engine:
                 self._account_fresh_streak=self._liability_clear_streak=0
             self._account_fresh_at=captured_at
             self._account_fresh_streak+=1
-            self._liability_clear_streak=0 if snapshot['liabilities'] else self._liability_clear_streak+1
+            self._liability_clear_streak=0 if self.limits.liabilities(snapshot)['blocking'] else self._liability_clear_streak+1
             if self._account_fresh_streak>=ACCOUNT_RECOVERY_SNAPSHOTS:
                 self.stops.recovered('account_snapshot_unavailable','ACCOUNT_SNAPSHOT_RECOVERED',
                     dict(consecutive=self._account_fresh_streak,captured_at=captured_at,age_seconds=age))
@@ -354,7 +363,7 @@ class Engine:
     def rebaseline(self,*,confirm,reason,source,release_halt=False):
         from .equity import EquityAdmin
         with self._coordinator_lock:
-            if self.external.records():
+            if self.limits.program_scope:
                 self.invalidate_external_income('external_admin_pending')
             return EquityAdmin(self.store,self.accounts,engine=self,clock=self.clock).apply(
                 confirm=confirm,reason=reason,source=source,release_halt=release_halt)
@@ -379,7 +388,7 @@ class Engine:
             self.store.set_meta('external_income',dict(verified=False,reason=reason,at=self.clock()))
 
     def read_account_snapshot(self):
-        snapshot=(read_snapshot(self.accounts,self.store,self.clock) if self.external.records()
+        snapshot=(read_snapshot(self.accounts,self.store,self.clock) if self.limits.program_scope
                   else self.accounts.snapshot())
         currencies={r['identity']['quote'] for r in self.external.records().values()}-NATIVE_USD
         try:
@@ -400,6 +409,14 @@ class Engine:
             return self._require_external_income()
 
     def _require_external_income(self):
+        if self.limits.program_scope:
+            try:
+                snapshot=self.account_cache.read()
+                require_program_proof(self.store,snapshot,self.clock())
+                notional_values(program_notionals(self.store,snapshot,self.clock()),self.clock())
+                return
+            except (KeyError,TypeError,ValueError,ArithmeticError):
+                raise ExternalUnverifiable('external_income_unverifiable') from None
         value=self.store.meta('external_income',{})
         snapshot=self.account_cache.read()
         if (value.get('verified') is not True or value.get('revision')!=self.store.meta('external_attribution_revision',0)
@@ -484,7 +501,7 @@ class Engine:
 
     def can_open(self,ignore_cids=()):
         try:
-            if self.external.records():
+            if self.limits.program_scope:
                 self.require_external_income()
             elif self.account_cache.value is not None:
                 notional_values(self.account_cache.read(),self.clock())
@@ -547,6 +564,9 @@ class Engine:
             self.start_background(bases)
 
     def totals(self,*,program=True):
+        if program and self.limits.program_scope:
+            value=require_program_proof(self.store,self.snapshot,self.clock())
+            return dec(value['program_daily']),dec(value['program_total'])
         total=daily=dec(0)
         today=day(self.clock())
         @lru_cache(maxsize=64)
@@ -639,7 +659,7 @@ class Engine:
         except (KeyError,ValueError,TypeError):
             return
         self.roll_daily_upnl(dict(upnl=str(sum(map(dec,positions.values()),dec(0))),upnl_by_position=positions),now)
-        if self.external.records():
+        if self.limits.program_scope:
             program={k:v for k,v in positions.items() if not self.external.forbidden(*k.split('|')[:2])}
             try:
                 self.roll_program_upnl(dict(upnl=str(sum(map(dec,program.values()),dec(0))),upnl_by_position=program),now)
@@ -715,9 +735,10 @@ class Engine:
             same=self.reconcile_positions(self.snapshot)
             self.last_reconcile=self.clock()
             income=None
-            if self.external.records():
+            if self.limits.program_scope:
                 projection=self.external.split(self.snapshot)
                 income=self.external_accounting.evaluate(self.snapshot,projection)
+                equity_halt=self.limits.check_equity(self.snapshot)
                 self.store.set_meta('program_projection',plain({k:projection[k] for k in
                     ('positions','upnl','upnl_by_position','external_positions','captured_at')}))
                 self.stops.recovered('external_identity_unverifiable','EXTERNAL_IDENTITY_RECOVERED',
@@ -744,14 +765,17 @@ class Engine:
                 if not daily_base or daily_base['day']!=current_day:
                     daily_base=dict(day=current_day,equity=str(equity))
                     self.store.set_meta('daily_equity',daily_base)
-                total=min(total,dec(equity)-dec(baseline))
-                daily=min(daily,dec(income['equity_daily']) if income else dec(equity)-dec(daily_base['equity']))
+                if not self.limits.program_scope:
+                    total=min(total,dec(equity)-dec(baseline))
+                    daily=min(daily,dec(equity)-dec(daily_base['equity']))
             recent=rejected=0
             for o in self.store.iter_orders(sent_since=self.clock()*1000-3600000):
                 recent+=1
                 rejected+=o['state']=='REJECTED' or o.get('rejected',False)
             settings=self.risk_settings()
-            self.store.set_meta('account_loss_current',dict(daily=str(daily),total=str(total),at=self.clock()))
+            self.store.set_meta('account_loss_current',dict(daily=str(daily),total=str(total),at=self.clock(),
+                scope='program' if self.limits.program_scope else 'dedicated_account',
+                snapshot_version=self.snapshot['snapshot_version']))
             self.risk=risk_decision(daily=daily,total=total,margins=self.snapshot['margins'],
                 single_failures=self.store.meta('single_failures',0),rejected=rejected,attempted=recent,reconciled=same,
                 daily_limit=settings['daily_loss_stop_usd'],total_limit=settings['total_loss_stop_usd'])
@@ -789,6 +813,13 @@ class Engine:
         if not snapshot:
             return
         equity_halt=self.limits.check_equity(snapshot)
+        if self.limits.program_scope:
+            # A failed ledger may not turn outside PnL/capital into program loss.
+            # Already latched program halts and whole-account margin exits survive.
+            margin=any(m is not None and dec(m)<2 for m in snapshot.get('margins',()))
+            if equity_halt or margin:
+                self.flatten_all('circuit_breaker')
+            return
         baseline=self.store.meta('equity_baseline')
         loss=dec(snapshot['equity'])-dec(baseline) if baseline is not None and snapshot.get('equity') is not None else dec(0)
         try:
@@ -813,8 +844,16 @@ class Engine:
         if self.limits.check_equity(snapshot):
             self.flatten_all('account_equity_drop')
             raise ValueError('account_equity_halt')
-        if snapshot['liabilities']:
+        if self.limits.liabilities(snapshot)['blocking']:
             raise ValueError('account_liability')
+        if self.limits.program_scope:
+            loss=require_program_proof(self.store,snapshot,self.clock())
+            if (dec(loss['program_daily'])<=-dec(values['daily_loss_stop_usd'])
+                    or dec(loss['program_total'])<=-dec(values['total_loss_stop_usd'])):
+                raise ValueError('runtime_loss_limit')
+            if dec(loss['program_total'])<=-min(self.limits.drop,dec(values['max_equity_drop_usd'])):
+                raise ValueError('runtime_equity_limit')
+            return
         loss=self.store.meta('account_loss_current',{})
         if (dec(loss.get('daily',0))<=-dec(values['daily_loss_stop_usd'])
                 or dec(loss.get('total',0))<=-dec(values['total_loss_stop_usd'])):

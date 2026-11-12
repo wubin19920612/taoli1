@@ -42,9 +42,8 @@ class SnapshotCache:
                     self.store.set_meta('account_snapshot_version',version)
                     self.store.set_meta('account_snapshot',plain(candidate))
                     self.store.set_meta('account_snapshot_error',None)
-                    if self.store.meta('external_contracts',{}):
-                        self.store.set_meta('external_income',dict(verified=False,
-                            reason='external_refresh_pending',snapshot_version=version,at=at))
+                    self.store.set_meta('external_income',dict(verified=False,
+                        reason='external_refresh_pending',snapshot_version=version,at=at))
             else:
                 version=self.version+1
                 candidate.update(captured_at=at,snapshot_version=version)

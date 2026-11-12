@@ -5,6 +5,7 @@ import time
 from tools.fill_sim.core import dec, day
 from .external import ExternalRegistry, plain
 from .external_accounting import anchor_value, read_snapshot, program_activity, verified_history
+from .program_risk import debt_attribution
 
 
 POSITION_LOCKS = frozenset(('position_mismatch','unhedged_position','repair_stopped',
@@ -28,8 +29,9 @@ def halt_reason(store):
 
 
 class EquityAdmin:
-    def __init__(self,store,accounts,*,engine=None,clock=time.time):
+    def __init__(self,store,accounts,*,engine=None,clock=time.time,scope='program'):
         self.store,self.accounts,self.engine,self.clock=store,accounts,engine,clock
+        self.program_scope=engine.limits.program_scope if engine else scope=='program' or bool(store.meta('external_contracts',{}))
 
     def local_flat(self):
         engine,store=self.engine,self.store
@@ -73,7 +75,7 @@ class EquityAdmin:
         started=self.clock()
         registry=ExternalRegistry(self.store,self.clock)
         try:
-            snapshot=(read_snapshot(self.accounts,self.store,self.clock) if registry.records() else self.accounts.snapshot())
+            snapshot=(read_snapshot(self.accounts,self.store,self.clock) if self.program_scope else self.accounts.snapshot())
         except Exception as error:
             if registry.records() and getattr(error,'account_snapshot',None) is not None:
                 self.store.set_meta('external_failed_snapshot',plain(error.account_snapshot))
@@ -92,12 +94,13 @@ class EquityAdmin:
                 raise ValueError('remote_orders')
         if not 0<=self.clock()-started<=10:
             raise ValueError('account_snapshot_stale')
-        if not isinstance(snapshot.get('liabilities'),list) or snapshot['liabilities']:
+        if not isinstance(snapshot.get('liabilities'),list) or (debt_attribution(self.store,snapshot,self.clock())['blocking']
+                if self.program_scope else snapshot['liabilities']):
             raise ValueError('account_liability')
-        if registry.records() and (len(snapshot.get('margins',()))!=2
+        if self.program_scope and (len(snapshot.get('margins',()))!=2
                 or any(m is None or dec(m)<3 for m in snapshot['margins'])):
             raise ValueError('margin_open_limit')
-        if registry.records():
+        if self.program_scope:
             try:
                 snapshot['program_funding_at_epoch']=str(program_activity(self.store,snapshot['activity'],
                     snapshot.get('accounting_at',started)))
@@ -172,7 +175,7 @@ class EquityAdmin:
                 audit=dict(old=old,new=new,at=self.clock(),captured_at=captured,reason=reason,
                            source=source,halt_reason=cause,revision=revision+1)
                 registry=ExternalRegistry(store,self.clock)
-                external_projection=registry.split(snapshot) if registry.records() else None
+                external_projection=registry.split(snapshot) if self.program_scope else None
                 if external_projection is not None:
                     # Audit the full account and exact excluded positions. These
                     # operations reset an explicit epoch, never erase ownership.

@@ -10,9 +10,27 @@ from functools import lru_cache
 from tools.fill_sim.core import dec, day
 from .external import ExternalUnverifiable, plain, route_symbol, digest
 from .external_fx import NATIVE_USD, quote_band, upper_contribution
+from .program_risk import journal_pnl, journal_fingerprint
+from .position_values import key_currency, usd_value
 
 BITGET_FUNDING = frozenset(('CONTRACT_MAIN_SETTLE_FEE_USER_IN','CONTRACT_MAIN_SETTLE_FEE_USER_OUT'))
 BITGET_TRADING = frozenset(('OPEN_LONG','OPEN_SHORT','CLOSE_LONG','CLOSE_SHORT','BUY_DEAL','SELL_DEAL'))
+
+
+def capital_transfer(row, *, bitget=False):
+    kind=row['type' if bitget else 'statement_type']
+    # Exact documented transfer enums only. No borrowing/interest/conversion
+    # aliases and no contract cash disguised as a transfer.
+    allowed=('TRANSFER_IN','TRANSFER_OUT')
+    if kind not in allowed:
+        return False
+    value=dec(row['amount' if bitget else 'change'])
+    if (row.get('symbol') not in ('',None) or not row.get('coin')
+            or (not bitget and not row.get('exchange_type'))
+            or (bitget and dec(row['fee'])!=0)
+            or (kind.endswith('_IN') and value<=0) or (kind.endswith('_OUT') and value>=0)):
+        raise ValueError('capital_transfer_unverifiable')
+    return True
 
 
 def midnight(now):
@@ -34,7 +52,7 @@ def unique_rows(rows,key,start,end):
         yield row,int(at)
 
 
-def program_activity(store,activity,captured):
+def program_activity(store,activity,captured,anchor=None):
     """Return settled daily funding only after program cash matches its fills."""
     if activity['complete'] is not True:
         raise ValueError('history_coverage')
@@ -66,8 +84,12 @@ def program_activity(store,activity,captured):
                 raise ValueError('program_cash_time_unknown')
             if start<=dec(at)<=end:
                 expected[key]+=value
-    funding=dec(0)
+    funding=new_funding=dec(0)
+    def is_new(name,identity):
+        return anchor is not None and identity not in anchor['history_index'][name]
     for row,at in unique_rows(activity['crossex_book'],'id',start,end):
+        if capital_transfer(row):
+            continue
         key=('crossex',row['symbol'])
         if key not in owned:
             continue
@@ -80,9 +102,13 @@ def program_activity(store,activity,captured):
         elif kind=='FUNDING_FEE':
             if at>=midnight(captured)*1000:
                 funding+=value
+            if is_new('crossex_book',row['id']):
+                new_funding+=value
         else:
             raise ValueError('program_cash_type_unverified')
     for row,at in unique_rows(activity['bitget_book'],'id',start,end):
+        if capital_transfer(row,bitget=True):
+            continue
         key=('bitget',row['symbol'])
         if key not in owned or row['category']!='USDT-FUTURES' or row['coin']!='USDT':
             raise ValueError('program_cash_identity')
@@ -96,11 +122,13 @@ def program_activity(store,activity,captured):
                 raise ValueError('program_funding_sign')
             if at>=midnight(captured)*1000:
                 funding+=value
+            if is_new('bitget_book',row['id']):
+                new_funding+=value
         else:
             raise ValueError('program_cash_type_unverified')
     if {k:v for k,v in expected.items() if v}!={k:v for k,v in actual.items() if v}:
         raise ValueError('program_cash_journal_mismatch')
-    return funding
+    return funding if anchor is None else (funding,dec(anchor['program_funding_carry'])+new_funding)
 
 
 def anchor_value(store,snapshot,projection,captured):
@@ -108,7 +136,7 @@ def anchor_value(store,snapshot,projection,captured):
         external_upnl=projection['external_upnl'],positions=plain(projection['external_positions']),
         external_upnl_by_position=plain(projection['external_upnl_by_position']),
         cash_balances=cash_balances(snapshot),history_index=history_index(snapshot['activity']),
-        revision=store.meta('external_attribution_revision',0),program_funding_offset='0')
+        revision=store.meta('external_attribution_revision',0),program_funding_offset='0',program_funding_carry='0')
 
 
 def cash_balances(snapshot):
@@ -248,9 +276,18 @@ class ExternalAccounting:
         original_anchor=anchor
         equity_revision=self.store.meta('equity_baseline_revision',0)
         prior_history=self.store.meta('external_verified_history')
+        original_journal=journal_fingerprint(self.store)
         captured=snapshot['captured_at']
         cutoff=snapshot.get('accounting_at',captured)
         today=day(cutoff)
+        initial=False
+        if anchor is None and not self.registry.records() and next(self.store.iter_orders(),None) is None:
+            if projection['positions']:
+                raise ValueError('program_baseline_unverifiable')
+            # A genuinely new, flat program may establish its first cash epoch.
+            # Existing history requires the explicit audited management path.
+            anchor=anchor_value(self.store,snapshot,projection,captured)
+            initial=True
         if not anchor or anchor['revision']!=self.store.meta('external_attribution_revision',0):
             raise ValueError('external_baseline_unverifiable')
         activity=snapshot['activity']
@@ -288,6 +325,8 @@ class ExternalAccounting:
             symbol=row['symbol']
             kind=row['statement_type']
             value=dec(row['change'])
+            if capital_transfer(row):
+                continue
             if kind not in ('TRANSACTION','TRADING_FEE','FUNDING_FEE','LIQUIDATION_FEE'):
                 # Transfers, repayment, interest, conversions and unknown entries
                 # are not contract income. No cancellation/zero assumption.
@@ -348,7 +387,27 @@ class ExternalAccounting:
             raise ValueError('cash_trade_mismatch')
         if {k:v for k,v in positions.items() if v}!={k:dec(v) for k,v in projection['external_positions'].items()}:
             raise ValueError('position_continuity')
-        funding=program_activity(self.store,activity,cutoff)
+        funding,total_funding=program_activity(self.store,activity,cutoff,anchor)
+        daily,realized=journal_pnl(self.store,cutoff)
+        if (set(projection['upnl_by_position'])!=set(projection['positions'])
+                or sum(map(dec,projection['upnl_by_position'].values()),dec(0))!=dec(projection['upnl'])):
+            raise ValueError('program_position_pnl_unknown')
+        floating=dec(0)
+        for key,value in projection['upnl_by_position'].items():
+            if tuple(key.split('|')[:2]) not in owned:
+                raise ValueError('program_position_unowned')
+            coin=key_currency(key)
+            floating+=usd_value(value,coin,snapshot.get('external_fx',{}),self.clock(),upper=False)
+            if coin not in NATIVE_USD:
+                required.add(coin)
+        baseline=self.store.meta('program_daily_upnl')
+        last=self.store.meta('program_last_upnl')
+        if initial:
+            baseline=dict(day=today,upnl='0',positions={},captured_at=captured)
+        elif not baseline or baseline['day']!=today:
+            if not last:
+                raise ValueError('program_baseline_unverifiable')
+            baseline=dict(last,day=today)
         fx={coin:quote_band(coin,snapshot.get('external_fx',{}).get(coin,[]),self.clock())
             for coin in sorted(required)}
         def converted(amounts):
@@ -364,6 +423,9 @@ class ExternalAccounting:
             external_cash_by_currency={k:str(v) for k,v in cash_by_currency.items()},
             external_contribution_by_currency={k:str(v) for k,v in native.items()},
             external_fx=fx,valuation='public_spot_upper_bound' if fx else 'native_usd')
+        result.update(scope='program',program_daily=str(daily+funding-dec(baseline['upnl'])+floating),
+            program_total=str(realized+total_funding+floating),program_funding_total=str(total_funding),
+            program_upnl=str(floating),program_journal=original_journal)
         if anchor['day']!=today:
             # Verify the COMPLETE carried interval first (including settlements
             # while offline), then start today's equity fallback at the same
@@ -373,6 +435,7 @@ class ExternalAccounting:
                 external_cash_by_currency=result['external_cash_by_currency'],
                 external_contribution_by_currency=result['external_contribution_by_currency'],external_fx=fx)
             anchor=anchor_value(self.store,snapshot,projection,captured)
+            anchor['program_funding_carry']=str(total_funding)
             result.update(from_ms=int(anchor['captured_at']*1000),external_cash='0',
                           external_contribution='0',equity_daily='0',
                           external_cash_by_currency={},external_contribution_by_currency={})
@@ -386,10 +449,15 @@ class ExternalAccounting:
                     or equity_revision!=self.store.meta('equity_baseline_revision',0)
                     or original_anchor!=self.store.meta('external_equity_anchor')
                     or prior_history!=self.store.meta('external_verified_history')
+                    or result['program_journal']!=journal_fingerprint(self.store)
                     or not 0<=self.clock()-captured<=10):
                 raise ValueError('external_snapshot_superseded')
             self.store.set_meta('external_equity_anchor',anchor)
             self.store.set_meta('external_income',result)
             self.store.set_meta('external_activity',plain(activity))
             self.store.set_meta('external_verified_history',history)
+            self.store.set_meta('program_daily_upnl',baseline)
+            if not last or captured>=last['captured_at']:
+                self.store.set_meta('program_last_upnl',dict(upnl=str(floating),
+                    positions=projection['upnl_by_position'],captured_at=captured))
         return result

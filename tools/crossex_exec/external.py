@@ -136,7 +136,7 @@ class ExternalRegistry:
     def split(self,snapshot,*,pnl=True):
         rows=self.records()
         if not rows:
-            return dict(snapshot,external_positions={},external_upnl='0')
+            return dict(snapshot,external_positions={},external_upnl='0',external_upnl_by_position={})
         try:
             for record in rows.values():
                 i=record['identity']
