@@ -1405,9 +1405,11 @@ $py310 = 'C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d
 |---|---|---|
 | test | `c2aa306` | 真实形态合成夹具、所有分页入口、真实 Accounts/Engine 生命周期及致命诊断先红测试 |
 | feat | `bb6cbf4` | 空数组+null 游标兼容、FATAL 落库和安全标准输出 |
-| docs | 本节所在独立提交 | 第十八轮交接、追加契约、README、下一任务及验收 JSON；自身 hash 用 git log 获取 |
+| docs | `26a7392` | 第十八轮首次交接、追加契约、README、下一任务及验收 JSON，记录单一旧断言冲突 |
+| test | `b1464a0` | 按 PM 裁决仅替换该旧反例，并在同一测试保留/补充畸形输入及错误码反例 |
+| docs | 本次独立提交 | 补充 PM 裁决、双版本完整验收与原始汇总行；自身 hash 用 git log 获取 |
 
-**当前尚未满足“双版本 unittest 全过”：有且仅有一处旧测试要求与本轮新需求直接冲突，等待用户明确是否允许修正该旧反例。** 旧测试未改，未跳过或过滤 discover；不得把以下 625/626 结果表述为全过。异步确认已发出，未把未回复当作批准。
+**PM 已明确授权修正唯一旧断言；接续验收已全部通过。** 从 `26a7392`、干净工作区接续，先完成独立 test 提交 `b1464a0`，再用 Python 3.12.10 与指定 3.10.20 各完整运行执行器 626 项和 fill-sim 158 项，退出码全为 0，含五项文件 SQLite 跨进程测试与两套三种子模拟器。下文保留首次失败记录，最终验收及原始汇总行见“PM 裁决后的接续验收”。
 
 ### 根因与分页修复
 
@@ -1432,7 +1434,7 @@ $py310 = 'C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d
 
 负向测试包括畸形活动订单启动失败、运行循环致命失败、FATAL 写入失败、打开数据库前失败及异常正文不可格式化/携带异常链。验证日志与事件只含白名单字段、异常类型/最内层模块及精确行号，失败退出 1且无订单。此冒烟覆盖离线启动集成；不等同 Linux/systemd、真实账户权限、真实 SIGTERM、API 服务或实盘验收。
 
-### TDD、全量结果与唯一待确认冲突
+### TDD、首次全量结果与已解决的旧断言冲突
 
 所有实现修改之前先跑新增测试，第二份独立红灯为 **18 项、22 errors（含 subTest）**；真实 startup 冒烟准确失败于 adapters.py 的 invalid_response。运行期故障用旧已接受的空字符串游标隔离分页问题，确认独立触达 RuntimeError。实现后新增 18 项在 Python 3.12.10 和指定 3.10.20 均通过，耗时 1.987s/2.055s。红灯、专项和全量日志及 SHA-256 见[验收 JSON](crossex-exec-r18-validation-2026-11-12.json)。
 
@@ -1441,13 +1443,99 @@ $py310 = 'C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d
 | Windows Python 3.12.10 | 626 项 / 230.772s / 1 failure | 158 项 / 32.817s / OK |
 | 指定 Windows Python 3.10.20 | 626 项 / 244.853s / 1 failure | 158 项 / 33.500s / OK |
 
-两个版本唯一失败均为 `test_round17_history.EmptyHistoryTests.test_financial_null_requires_both_keys_and_exact_terminal_shape` 的 `value={'list': [], 'cursor': None}` 子用例：旧要求抛 APIError，新需求要求正常结束。不能同时保持此反例语义和实现新需求。已请求仅把这一处过时反例迁为正例，保留其余畸形/风控断言；**尚未修改该文件**。确认后只需单独 test 提交修正该输入的预期，并重跑双版本完整执行器 discover；fill-sim 本轮已有完整通过结果。
+以上为 `26a7392` 首次交付时的结果，两个版本唯一失败均为 `test_round17_history.EmptyHistoryTests.test_financial_null_requires_both_keys_and_exact_terminal_shape` 的 `value={'list': [], 'cursor': None}` 子用例：旧要求抛 APIError，新需求要求正常结束。当时该文件未修改、等待明确授权。PM 随后裁决该旧断言与 `/api/v3/trade/unfilled-orders` 无挂单的实测形态矛盾，仅授权将此处迁为正例；接续同时重跑执行器、fill-sim 和两套模拟器，没有沿用首次通过结果充当本次验收。首次四份结果保存在验收 JSON 的 `initial_tests`，本次结果为 `tests`。
 
-原 **57 个 Python 测试/夹具文件逐字未变**（规范 CRLF 比较），**2,791 个断言、1,353 个类/函数定义**均保留。两版均完整运行并通过原 5 项真实文件 SQLite 跨进程测试。两套模拟器均通过：旧三种子 20261111/20261112/20261113 各 2712 回合、N=1、十项不变量 checks 各 2712 且 exercised 非零；默认 program 三种子各 12 场景，原 8 次开平仓、4 次明确拒单、8 次资金费延迟、20 次重启、40 次发送检查保留。完整 12 份种子统计入验收 JSON。
+首次交付时原 **57 个 Python 测试/夹具文件逐字未变**（规范 CRLF 比较），**2,791 个断言、1,353 个类/函数定义**均保留；这是授权前审计，保存在验收 JSON 的 `initial_original_test_audit`。接续后其中 **56 个文件仍逐字未变，仅获授权的测试方法发生变化**，见本次 `original_test_audit`。首次两版均通过原 5 项真实文件 SQLite 跨进程测试及两套三种子模拟器；本次重新核验的完整 12 份种子统计已更新到验收 JSON，原始汇总行同时保留在下文。
 
 110 个 Python 文件通过 3.10 语法解析，git diff --check 通过，接口契约仅追加。实施后自行审查分页拒绝分支、致命事件写入时机、脱敏和冒烟覆盖；没有调用子代理，不把自审称为独立终审。未测 CPU/RSS，未改变 MemoryMax、风控阈值、资金费证明、UNKNOWN 处理、外仓禁单或任何旧锁。
 
 复现命令仍为项目根目录 `python -m unittest discover -s tools/crossex_exec/tests -v` 和 `python -m unittest discover -s tools/fill_sim/tests -v`；3.10 使用用户指定的 `C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d5-4518-98a0-6a4761963215/scratchpad/uvpy/cpython-3.10-windows-x86_64-none/python.exe` 执行相同参数。未过滤失败测试。
+
+### PM 裁决后的接续验收
+
+接续基线为 `26a7392c092c1fa83dc35c693716785bd523da8a`，test 提交为 `b1464a0e42c3ce34702264d4bd479438fec75cdf`。本次仅修改 `tests/test_round17_history.py` 中 `test_financial_null_requires_both_keys_and_exact_terminal_shape` 一个既有方法，保留方法名称和全部其他方法；未修改业务代码或模拟器。与第十八轮原基线比较，原 57 个测试/夹具文件中 56 个规范 CRLF 后逐字不变；第十八轮三个源码及三个新增测试/夹具文件的原 SHA-256 全部匹配。
+
+**替换前：** 将 `{'list': [], 'cursor': None}` 放在畸形输入循环，要求 `financial_records(100, 200)` 抛 `APIError`。接续先重新运行该旧测试，原始结果为 `Ran 1 test in 0.002s`、`FAILED (failures=1)`，失败正是 `APIError not raised`。
+
+**替换后：** 将该输入移到同一方法的正例，要求正常返回 `[]`，并断言只发起一次请求。原缺 list 键、非列表 list、缺 cursor、null list 搭配错误游标等反例保留；补充空数组配 `cursor=0/False/{}/[]` 及缺 cursor 的反例。另经 localhost 真 Transport 验证 HTTP 200、`code=00000` 的空数组/null 成功返回；相同数据配 `code=40009` 仍抛 `APIError`，并核对诊断保留该错误码。活动订单接口已有的第十八轮正反例保持原文。全部请求仅用合成测试凭据及本地网络守护，不做真实鉴权。
+
+修改后两版先通过第十七/十八轮分页专项各 16 项，再建立独立 test 提交，随后从该提交运行以下两条完整命令；3.12 使用 `C:/Users/wubin/AppData/Local/Programs/Python/Python312/python.exe`，3.10 使用本节上文用户指定路径。SQLite 分别为 3.49.1、3.50.4。
+
+```powershell
+& $py -m unittest discover -s tools/crossex_exec/tests -v
+& $py -m unittest discover -s tools/fill_sim/tests -v
+```
+
+`$py` 分别取上述两个解释器绝对路径。没有过滤 discover、跳过测试或改为内存数据库。两套模拟器由执行器完整 discover 同次重跑，原三种子 `20261111/20261112/20261113`、2712 回合、恢复界限 N=1 和默认 program 的 12 场景全部保持。
+
+| 解释器 | 执行器全量 | fill-sim 全量 | 退出码 |
+|---|---|---|---|
+| Windows Python 3.12.10 | **626 项 / 136.112s / OK** | **158 项 / 31.313s / OK** | 两条均 0 |
+| 指定 Windows Python 3.10.20 | **626 项 / 148.040s / OK** | **158 项 / 32.327s / OK** | 两条均 0 |
+
+**验收结论：** 双版本两条 unittest 全量全部通过。每版原五项真实文件 SQLite 跨进程用例全部为 `ok`；旧模拟器各三种子的十项 checks 均为 2712，exercised 全非零，外仓检查 96、隔离检查 48；program 各三种子均为 12 场景、8 次开平仓、4 次明确拒单、8 次资金费延迟、20 次重启、40 次发送检查。共 12 份模拟器种子结果全过。该结论仅为本地离线验收，未做 Linux/systemd、线上服务或真实账户验证。
+
+本次日志目录为 `C:/Users/wubin/AppData/Local/Temp/crossex-r18-pm-20261112-212218/`，保留修改前失败、双版本分页专项、四份完整日志、解释器/命令/起止时间清单和源码审计；各路径与 SHA-256 见[第十八轮验收 JSON](crossex-exec-r18-validation-2026-11-12.json) 的 `tests`、`pm_followup`。首次失败和授权前审计分别保留在 `initial_tests`、`initial_original_test_audit`，其余历史证据可由 `26a7392` 原文件追溯。
+
+#### unittest 原始汇总行
+
+`full-py312-crossex_exec.log`
+
+```text
+Ran 626 tests in 136.112s
+
+OK
+```
+
+`full-py312-fill_sim.log`
+
+```text
+Ran 158 tests in 31.313s
+
+OK
+```
+
+`full-py310-crossex_exec.log`
+
+```text
+Ran 626 tests in 148.040s
+
+OK
+```
+
+`full-py310-fill_sim.log`
+
+```text
+Ran 158 tests in 32.327s
+
+OK
+```
+
+#### 两套模拟器原始汇总行
+
+以下保留完整 `INVARIANTS` / `PROGRAM_INVARIANTS` 输出正文，仅省略 unittest 在同一行预先写出的用例名称前缀。
+
+`full-py312-crossex_exec.log`
+
+```text
+INVARIANTS seed=20261111 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 35, '1b': 80, '1c': 25, '1d': 104, '2': 94, '3': 115, '4': 94, '5': 600, '6': 23, '7': 363} coverage={'account_failures': 151, 'baseline_admission': 94, 'cooldown_active': 167, 'db_failures': 22, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 162, 'halted': 359, 'halting_retry': 4, 'intent_write_abort': 21, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 94, 'opened_pairs': 47, 'partial_fill': 27, 'position_failures': 137, 'position_read': 4091, 'query': 4267, 'query_failures': 1428, 'recovery_obligation': 23, 'reduce': 115, 'restarts': 142, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 149, 'scheduled_adverse': 133, 'scheduled_database': 140, 'scheduled_detail': 148, 'scheduled_equity': 142, 'scheduled_midnight': 121, 'scheduled_none': 722, 'scheduled_partial': 164, 'scheduled_positions': 136, 'scheduled_restart': 142, 'scheduled_spread': 129, 'scheduled_stale': 150, 'scheduled_timeout_ack': 146, 'scheduled_timeout_unknown': 146, 'scheduled_zero': 144, 'skip_baseline_not_flat': 75, 'skip_book_skew': 28, 'skip_book_stale': 112, 'skip_funding_diff': 56, 'skip_not_single_venue_outlier': 129, 'skip_size_too_small': 1, 'skip_too_few_venues': 26, 'skip_volume_too_low': 1, 'timeout_ack': 28, 'timeout_unknown': 21, 'zero_fill': 20}
+INVARIANTS seed=20261112 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 27, '1b': 76, '1c': 13, '1d': 97, '2': 88, '3': 103, '4': 88, '5': 600, '6': 30, '7': 388} coverage={'account_failures': 116, 'baseline_admission': 88, 'cooldown_active': 24, 'db_failures': 16, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 152, 'halted': 384, 'halting_retry': 4, 'intent_write_abort': 15, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 88, 'opened_pairs': 44, 'partial_fill': 24, 'position_failures': 139, 'position_read': 4105, 'query': 5081, 'query_failures': 647, 'recovery_obligation': 30, 'reduce': 103, 'restarts': 142, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 116, 'scheduled_adverse': 135, 'scheduled_database': 149, 'scheduled_detail': 128, 'scheduled_equity': 138, 'scheduled_midnight': 134, 'scheduled_none': 722, 'scheduled_partial': 159, 'scheduled_positions': 138, 'scheduled_restart': 142, 'scheduled_spread': 184, 'scheduled_stale': 145, 'scheduled_timeout_ack': 139, 'scheduled_timeout_unknown': 149, 'scheduled_zero': 134, 'skip_baseline_not_flat': 65, 'skip_book_skew': 20, 'skip_book_stale': 86, 'skip_funding_diff': 91, 'skip_not_single_venue_outlier': 153, 'skip_size_too_small': 1, 'skip_too_few_venues': 46, 'skip_volume_too_low': 1, 'timeout_ack': 22, 'timeout_unknown': 34, 'zero_fill': 15}
+INVARIANTS seed=20261113 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 37, '1b': 98, '1c': 27, '1d': 126, '2': 114, '3': 135, '4': 114, '5': 600, '6': 31, '7': 405} coverage={'account_failures': 134, 'baseline_admission': 114, 'cooldown_active': 158, 'db_failures': 20, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 202, 'halted': 401, 'halting_retry': 4, 'intent_write_abort': 20, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 114, 'opened_pairs': 57, 'partial_fill': 27, 'position_failures': 141, 'position_read': 4089, 'query': 5609, 'query_failures': 651, 'recovery_obligation': 31, 'reduce': 135, 'restarts': 114, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 134, 'scheduled_adverse': 151, 'scheduled_database': 156, 'scheduled_detail': 134, 'scheduled_equity': 144, 'scheduled_midnight': 142, 'scheduled_none': 722, 'scheduled_partial': 152, 'scheduled_positions': 141, 'scheduled_restart': 114, 'scheduled_spread': 153, 'scheduled_stale': 145, 'scheduled_timeout_ack': 157, 'scheduled_timeout_unknown': 134, 'scheduled_zero': 133, 'skip_baseline_not_flat': 43, 'skip_book_skew': 28, 'skip_book_stale': 73, 'skip_funding_diff': 68, 'skip_not_single_venue_outlier': 132, 'skip_size_too_small': 1, 'skip_too_few_venues': 22, 'skip_volume_too_low': 1, 'timeout_ack': 39, 'timeout_unknown': 37, 'zero_fill': 20}
+PROGRAM_INVARIANTS {"coverage": {"full_fill": 40, "open": 20, "position_read": 332, "program_delayed_funding": 8, "program_episodes": 12, "program_explicit_rejection": 4, "program_roundtrip": 8, "program_send_checks": 40, "query": 40, "reduce": 20, "restarts": 20}, "seed": 20261111}
+PROGRAM_INVARIANTS {"coverage": {"full_fill": 40, "open": 20, "position_read": 332, "program_delayed_funding": 8, "program_episodes": 12, "program_explicit_rejection": 4, "program_roundtrip": 8, "program_send_checks": 40, "query": 40, "reduce": 20, "restarts": 20}, "seed": 20261112}
+PROGRAM_INVARIANTS {"coverage": {"full_fill": 40, "open": 20, "position_read": 332, "program_delayed_funding": 8, "program_episodes": 12, "program_explicit_rejection": 4, "program_roundtrip": 8, "program_send_checks": 40, "query": 40, "reduce": 20, "restarts": 20}, "seed": 20261113}
+```
+
+`full-py310-crossex_exec.log`
+
+```text
+INVARIANTS seed=20261111 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 35, '1b': 80, '1c': 25, '1d': 104, '2': 94, '3': 115, '4': 94, '5': 600, '6': 23, '7': 363} coverage={'account_failures': 151, 'baseline_admission': 94, 'cooldown_active': 167, 'db_failures': 22, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 162, 'halted': 359, 'halting_retry': 4, 'intent_write_abort': 21, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 94, 'opened_pairs': 47, 'partial_fill': 27, 'position_failures': 137, 'position_read': 4091, 'query': 413, 'query_failures': 72, 'recovery_obligation': 23, 'reduce': 115, 'restarts': 142, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 149, 'scheduled_adverse': 133, 'scheduled_database': 140, 'scheduled_detail': 148, 'scheduled_equity': 142, 'scheduled_midnight': 121, 'scheduled_none': 722, 'scheduled_partial': 164, 'scheduled_positions': 136, 'scheduled_restart': 142, 'scheduled_spread': 129, 'scheduled_stale': 150, 'scheduled_timeout_ack': 146, 'scheduled_timeout_unknown': 146, 'scheduled_zero': 144, 'skip_baseline_not_flat': 75, 'skip_book_skew': 28, 'skip_book_stale': 112, 'skip_funding_diff': 56, 'skip_not_single_venue_outlier': 129, 'skip_size_too_small': 1, 'skip_too_few_venues': 26, 'skip_volume_too_low': 1, 'timeout_ack': 28, 'timeout_unknown': 21, 'zero_fill': 20}
+INVARIANTS seed=20261112 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 27, '1b': 76, '1c': 13, '1d': 97, '2': 88, '3': 103, '4': 88, '5': 600, '6': 30, '7': 388} coverage={'account_failures': 116, 'baseline_admission': 88, 'cooldown_active': 24, 'db_failures': 16, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 152, 'halted': 384, 'halting_retry': 4, 'intent_write_abort': 15, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 88, 'opened_pairs': 44, 'partial_fill': 24, 'position_failures': 139, 'position_read': 4105, 'query': 451, 'query_failures': 33, 'recovery_obligation': 30, 'reduce': 103, 'restarts': 142, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 116, 'scheduled_adverse': 135, 'scheduled_database': 149, 'scheduled_detail': 128, 'scheduled_equity': 138, 'scheduled_midnight': 134, 'scheduled_none': 722, 'scheduled_partial': 159, 'scheduled_positions': 138, 'scheduled_restart': 142, 'scheduled_spread': 184, 'scheduled_stale': 145, 'scheduled_timeout_ack': 139, 'scheduled_timeout_unknown': 149, 'scheduled_zero': 134, 'skip_baseline_not_flat': 65, 'skip_book_skew': 20, 'skip_book_stale': 86, 'skip_funding_diff': 91, 'skip_not_single_venue_outlier': 153, 'skip_size_too_small': 1, 'skip_too_few_venues': 46, 'skip_volume_too_low': 1, 'timeout_ack': 22, 'timeout_unknown': 34, 'zero_fill': 15}
+INVARIANTS seed=20261113 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 37, '1b': 98, '1c': 27, '1d': 126, '2': 114, '3': 135, '4': 114, '5': 600, '6': 31, '7': 405} coverage={'account_failures': 134, 'baseline_admission': 114, 'cooldown_active': 158, 'db_failures': 20, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 202, 'halted': 401, 'halting_retry': 4, 'intent_write_abort': 20, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 114, 'opened_pairs': 57, 'partial_fill': 27, 'position_failures': 141, 'position_read': 4089, 'query': 530, 'query_failures': 36, 'recovery_obligation': 31, 'reduce': 135, 'restarts': 114, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 134, 'scheduled_adverse': 151, 'scheduled_database': 156, 'scheduled_detail': 134, 'scheduled_equity': 144, 'scheduled_midnight': 142, 'scheduled_none': 722, 'scheduled_partial': 152, 'scheduled_positions': 141, 'scheduled_restart': 114, 'scheduled_spread': 153, 'scheduled_stale': 145, 'scheduled_timeout_ack': 157, 'scheduled_timeout_unknown': 134, 'scheduled_zero': 133, 'skip_baseline_not_flat': 43, 'skip_book_skew': 28, 'skip_book_stale': 73, 'skip_funding_diff': 68, 'skip_not_single_venue_outlier': 132, 'skip_size_too_small': 1, 'skip_too_few_venues': 22, 'skip_volume_too_low': 1, 'timeout_ack': 39, 'timeout_unknown': 37, 'zero_fill': 20}
+PROGRAM_INVARIANTS {"coverage": {"full_fill": 40, "open": 20, "position_read": 332, "program_delayed_funding": 8, "program_episodes": 12, "program_explicit_rejection": 4, "program_roundtrip": 8, "program_send_checks": 40, "query": 40, "reduce": 20, "restarts": 20}, "seed": 20261111}
+PROGRAM_INVARIANTS {"coverage": {"full_fill": 40, "open": 20, "position_read": 332, "program_delayed_funding": 8, "program_episodes": 12, "program_explicit_rejection": 4, "program_roundtrip": 8, "program_send_checks": 40, "query": 40, "reduce": 20, "restarts": 20}, "seed": 20261112}
+PROGRAM_INVARIANTS {"coverage": {"full_fill": 40, "open": 20, "position_read": 332, "program_delayed_funding": 8, "program_episodes": 12, "program_explicit_rejection": 4, "program_roundtrip": 8, "program_send_checks": 40, "query": 40, "reduce": 20, "restarts": 20}, "seed": 20261113}
+```
 
 ### 交付边界与接续
 
@@ -1455,4 +1543,4 @@ $py310 = 'C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d
 
 Temp 保留红绿灯、双版本全量日志；新测试临时数据库由自身 fixture 清理，没有删除旧诊断、WIP 或其他任务产物。最终仓库只包含本轮提交，无新未跟踪整库或凭据。
 
-接续先取得上面单一测试冲突的明确决定并完成全量绿灯，之后再做独立终审。线上只读/影子发布应在新任务另行授权，先备份并验证真实空账户启动和持续运行；不要直接部署当前尚有测试冲突的交付，不通过删库、改证明、解锁或降低风控恢复服务。后续页面或其他模块另建任务。
+单一测试冲突已按明确裁决解决，本轮本地验收完成；下一步在新任务进行独立终审。线上只读/影子发布仍应另行授权，先备份并验证真实空账户启动和持续运行；本次全绿不等同线上验收，不通过删库、改证明、解锁或降低风控恢复服务。后续页面或其他模块另建任务。
