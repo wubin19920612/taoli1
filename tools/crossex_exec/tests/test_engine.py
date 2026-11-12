@@ -315,6 +315,8 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(len(self.gate.calls),before)
 
     def test_actual_fees_missing_or_low_volume_never_sends(self):
+        from tools.crossex_exec.settings import Settings
+        Settings(self.store).update({'min_quote_volume_usd': 5000000}, source='admin_api')
         with patch.object(self.accounts,'check_instruments',side_effect=ValueError('missing_fees')):
             self.engine.ingest(trigger())
         with patch.object(self.market,'turnovers',return_value=['4999999','9000000']):

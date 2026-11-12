@@ -37,6 +37,10 @@ TRADE = {'id', 'symbol', 'pair', 'opened_at', 'closed_at', 'held_seconds', 'legs
          'baseline_bps', 'excess_bps', 'funding_cost_bps', 'open_book_skew_ms', 'close_book_skew_ms'}
 STATS = {'days', 'n', 'histogram', 'by_symbol', 'by_pair', 'by_exit_reason',
          'by_spread_tier', 'vs_sim'}
+# Additive round-eight fields; all original keys and value assertions remain.
+SUMMARY |= {'config_version', 'effective_risk_limits'}
+POSITION |= {'config_version', 'config_at_open', 'sizing', 'turnovers_usd'}
+TRADE |= {'config_version', 'config_at_open', 'sizing', 'turnovers_usd'}
 
 
 class APIFixture:
@@ -134,7 +138,8 @@ class DataTests(APIFixture, unittest.TestCase):
         self.assertTrue(row['max_hold_at'].endswith('Z'))
         for leg in row['legs']:
             self.assertEqual(set(leg), {'exchange', 'route', 'side', 'qty', 'entry_price',
-                                        'notional_usd', 'mark_price'})
+                                        'notional_usd', 'mark_price', 'raw_symbol', 'native_base',
+                                        'quantity_multiplier', 'mapping_id', 'native_qty', 'native_entry_price'})
             self.assertIsNone(leg['mark_price'])
         p['last_books'][0]['received_at'] = NOW-61
         self.store.pair(p)
@@ -183,7 +188,9 @@ class DataTests(APIFixture, unittest.TestCase):
         self.assertEqual(row['leg_send_gap_ms'], 12)
         self.assertEqual(row['leg_fill_gap_ms'], 230)
         for leg in row['legs']:
-            self.assertEqual(set(leg), {'exchange', 'side', 'entry_vwap', 'exit_vwap', 'qty'})
+            self.assertEqual(set(leg), {'exchange', 'side', 'entry_vwap', 'exit_vwap', 'qty',
+                                        'raw_symbol','native_base','quantity_multiplier','mapping_id',
+                                        'native_qty','native_entry_price','native_exit_vwap'})
         self.assertEqual(row['legs'][0]['entry_vwap'], 100)
         self.assertEqual(row['legs'][0]['exit_vwap'], 101)
 

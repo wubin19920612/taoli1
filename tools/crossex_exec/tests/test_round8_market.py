@@ -62,3 +62,20 @@ class BatchMarketTests(unittest.TestCase):
         with patch.object(self.market, 'fetch', side_effect=ValueError('fixture unavailable')) as fetch:
             self.market.bootstrap(())
         self.assertGreater(fetch.call_count, 0)
+
+    def test_volume_cache_age_does_not_make_old_mid_quotes_fresh_samples(self):
+        rows={i.market.key:dict(mid='100',volume='1000000',at=self.now-91) for i in self.rows}
+        with patch.object(self.market,'refresh_tickers',return_value=rows):
+            mids,bases=self.market.sample_quotes(200000)
+        self.assertEqual(mids,{})
+        self.assertEqual(bases,())
+
+    def test_server_timestamp_after_request_start_uses_receipt_for_age(self):
+        def delayed(items,priority=1,partial=False):
+            self.now+=.5
+            return self.batch(items,priority,partial)
+        with patch.object(self.market,'batch',side_effect=delayed):
+            mids,bases=self.market.sample_quotes(200000)
+        self.assertEqual(set(bases),{'BTC'})
+        self.assertEqual(set(mids),{'binance','bitget'})
+        self.assertTrue(all(q['at']==1000.5 for q in self.store.meta('market_tickers').values()))

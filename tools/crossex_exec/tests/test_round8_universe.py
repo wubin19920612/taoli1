@@ -98,6 +98,54 @@ class UniverseTests(unittest.TestCase):
             self.publish(rows, prices)
             self.assertEqual(self.universe.mappings(), [])
 
+    def test_three_volume_venues_respect_stock_selection_and_mapping_confirmation(self):
+        from tools.crossex_exec.settings import Settings
+        settings=Settings(self.store).read()['values']
+        rows=[native(ex,'SKHYNIX','listed_equity') for ex in ('binance','bitget','bybit')]
+        self.publish(rows,[100]*3)
+        self.universe.classify('SKHYNIX',dict(category='listed_equity',underlying_market='KRX',markets=[i.market.key for i in rows[:2]]))
+        self.assertEqual(self.universe.volume_venues(rows[:2],settings),{'binance','bitget'})
+        self.universe.classify('SKHYNIX',dict(category='listed_equity',underlying_market='KRX',markets=[i.market.key for i in rows]))
+        self.assertEqual(self.universe.volume_venues(rows[:2],settings),{'binance','bitget','bybit'})
+        rows=[native('binance','1000SHIB'),native('bitget','SHIB'),native('bybit','SHIB')]
+        self.publish(rows,[1000,1,1])
+        mappings=self.universe.mappings()
+        first=next(r for r in mappings if rows[1].market.key in {leg['market_key'] for leg in r['legs']})
+        self.universe.decide_mapping(first['id'],'confirmed')
+        resolved=self.universe.resolve(rows[:2])
+        self.assertEqual(self.universe.volume_venues(resolved,settings),{'binance','bitget'})
+        for row in mappings:
+            self.universe.decide_mapping(row['id'],'confirmed')
+        self.assertEqual(self.universe.volume_venues(resolved,settings),{'binance','bitget','bybit'})
+
+    def test_manual_nontrading_categories_and_known_preipo_names_stay_disabled(self):
+        rows=[native(ex,'NEW') for ex in ('binance','bitget')]
+        self.publish(rows,[1,1])
+        for category in ('commodity','pre_ipo'):
+            self.universe.classify('NEW',dict(category=category,markets=[i.market.key for i in rows]))
+            with self.assertRaisesRegex(ValueError,'category_unconfirmed'):
+                self.universe.resolve(rows)
+        self.assertEqual(self.universe.describe(),[])
+        for base in ('OPENAI','ANTHROPIC'):
+            rows=[native('binance',base),native('bitget','1000'+base)]
+            self.publish(rows,[1,1000])
+            self.assertEqual(self.universe.mappings(),[])
+            self.assertEqual(self.universe.describe(),[])
+
+    def test_stock_selected_markets_do_not_fall_back_to_auto_crypto(self):
+        rows=[native(ex,'SAME') for ex in ('binance','bitget','bybit')]
+        self.publish(rows,[1]*3)
+        self.universe.classify('SAME',dict(category='listed_equity',underlying_market='US',markets=[i.market.key for i in rows[:2]]))
+        with self.assertRaisesRegex(ValueError,'category_unconfirmed'):
+            self.universe.resolve([rows[0],rows[2]])
+
+    def test_mapping_ratio_follows_sorted_leg_order(self):
+        rows=[native('bitget','SHIB'),native('binance','1000SHIB')]
+        self.publish(rows,[1,1000])
+        row,=self.universe.mappings()
+        self.assertEqual(row['legs'][0]['market_key'],rows[1].market.key)
+        self.assertEqual(dec(row['ratio']),1000)
+
 
 class ClassificationTests(unittest.TestCase):
     def test_unknown_and_noncrypto_metadata_fail_closed(self):
@@ -105,6 +153,8 @@ class ClassificationTests(unittest.TestCase):
         for ex in ('binance', 'aster', 'bybit', 'okx', 'gate', 'bitget'):
             self.assertEqual(category(ex, {}), 'unconfirmed')
         cases = [('binance', {'underlyingType': 'COIN', 'underlyingSubType': ['PREMARKET']}, 'pre_ipo'),
+                 ('binance', {'underlyingType': 'COIN'}, 'unconfirmed'),
+                 ('binance', {'underlyingType': 'COIN', 'underlyingSubType': [], 'baseAsset':'PAXG'}, 'commodity'),
                  ('binance', {'underlyingType': 'COIN', 'underlyingSubType': ['RWA']}, 'unconfirmed'),
                  ('binance', {'underlyingType': 'COIN', 'underlyingSubType': []}, 'crypto'),
                  ('okx', {'instCategory': '1'}, 'crypto'), ('okx', {'instCategory': '3'}, 'listed_equity'),

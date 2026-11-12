@@ -6,6 +6,7 @@ import sqlite3
 import threading
 import unittest
 from collections import Counter
+from contextlib import contextmanager
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -22,7 +23,7 @@ from baseline_fixtures import seed_baseline
 
 SEEDS = (20261111, 20261112, 20261113)
 RANDOM_ROUNDS = 2400
-ROUNDS = RANDOM_ROUNDS+48
+ROUNDS = RANDOM_ROUNDS+168
 RECOVERY_BOUND = 1
 INVARIANTS = ('1a', '1b', '1c', '1d', '2', '3', '4', '5', '6', '7')
 FAULTS = ('partial', 'zero', 'timeout_ack', 'timeout_unknown', 'detail', 'positions',
@@ -42,6 +43,30 @@ class FakeDatabase:
     def meta(self, key, default=None):
         with self.lock:
             return copy.deepcopy(self.data['meta'].get(key, default))
+
+    @contextmanager
+    def transaction(self):
+        with self.lock:
+            before = copy.deepcopy(self.data)
+            try:
+                yield
+            except BaseException:
+                self.data = before
+                raise
+
+    def baseline_state(self, key):
+        return self.meta('baseline_status', {}).get(key, {})
+
+    def save_baseline_state(self, state):
+        self.data['meta'].setdefault('baseline_status', {})[state['key']] = copy.deepcopy(state)
+
+    def prune_baseline_states(self, bases):
+        self.data['meta']['baseline_status'] = {k:v for k,v in self.data['meta'].get('baseline_status', {}).items()
+                                              if k.split('|')[0] in bases}
+
+    def latest_baseline(self, base):
+        snapshot = self.meta('baseline_quotes', {})
+        return dict(at=snapshot.get('at'), mids={ex:rows[base] for ex,rows in snapshot.get('mids', {}).items() if base in rows})
 
     def set_meta(self, key, value):
         with self.lock:
@@ -132,7 +157,8 @@ class SimVenue:
         w = self.world
         with w.lock:
             before = [v.quantity for v in w.venues]
-            qty = dec(order['quantity'])
+            multiplier = w.multipliers[self.leg]
+            qty = dec(order['quantity'])*multiplier
             fraction = w.fractions[self.leg]
             filled = (qty*fraction/dec('.001')).to_integral_value(rounding='ROUND_FLOOR')*dec('.001')
             if order['reduce_only']:
@@ -140,8 +166,8 @@ class SimVenue:
             self.quantity += filled*(-1 if order['reduce_only'] else 1)
             price = w.prices[self.leg]
             if order['reduce_only']:
-                self.realized += filled*(price-dec((100, 102)[self.leg]))*(1 if self.leg == 0 else -1)
-            self.orders[order['cid']] = dict(filled=str(filled), price=str(price), at=w.now,
+                self.realized += filled*(price-w.entry_prices[self.leg])*(1 if self.leg == 0 else -1)
+            self.orders[order['cid']] = dict(filled=str(filled/multiplier), price=str(price*multiplier), at=w.now,
                                            unknown=w.fault == 'timeout_unknown', sent_step=w.step)
             row = dict(order=copy.deepcopy(order), before=before, after=[v.quantity for v in w.venues], filled=filled,
                        locked=bool(w.store.meta('stop_locks', {})), live=w.engine.live,
@@ -177,7 +203,7 @@ class SimVenue:
 
 
 class World:
-    def __init__(self, live, coverage, opening_fault='none'):
+    def __init__(self, live, coverage, opening_fault='none', mapping=None):
         self.lock = threading.RLock()
         self.coverage = coverage
         self.live = live
@@ -187,14 +213,24 @@ class World:
         self.opening_fault = opening_fault
         self.fractions = [dec(1), dec(1)]
         self.prices = [dec(100), dec(102)]
+        self.multipliers = [dec(1),dec(1)]
+        if mapping is not None:
+            self.multipliers[mapping] = dec(1000)
+            self.prices = [dec(100),dec('100.5')]
+        self.entry_prices = list(self.prices)
         self.sends, self.cancels = [], 0
         self.batches, self.recoveries = [], []
         self.send_batches, self.admissions = {}, {}
         self.close_obligations = set()
         self.venues = [SimVenue(self, n) for n in (0, 1)]
         self.instruments = [instrument(), instrument('bitget')]
-        for i in self.instruments:
-            i.spec = replace(i.spec, min_notional='0')
+        for n,i in enumerate(self.instruments):
+            factor = self.multipliers[n]
+            raw_base = '1000BTC' if factor!=1 else 'BTC'
+            i.market = replace(i.market,raw_symbol=raw_base+'USDT')
+            i.symbol = raw_base+'USDT' if n==1 else 'BINANCE_FUTURE_'+raw_base+'_USDT'
+            i.tick = str(dec(i.tick)*factor)
+            i.spec = replace(i.spec, base=raw_base, qty_step=str(dec('.001')/factor), min_qty=str(dec(i.spec.min_qty)/factor), min_notional='0')
         self.store = FakeDatabase()
         # Normal history is nonzero and flat (MAD=0). The negative episode uses
         # real 15bp samples, below the structural ceiling but above v1's 10bp.
@@ -203,7 +239,10 @@ class World:
             funding=self.funding,
             open_interests=lambda instruments,books:[dict(market_key=i.market.key,usd='10000000',at=self.now,
                 unit='base',unit_verified=True,source='fixture') for i in instruments],
-            turnovers=lambda instruments:['10000000']*len(instruments))
+            turnovers=lambda instruments:['999999' if self.opening_fault=='volume_too_low' else '10000000']*len(instruments))
+        if opening_fault=='size_too_small':
+            for i in self.instruments:
+                i.spec=replace(i.spec,min_notional='51')
         self.accounts = SimpleNamespace(cross=self.venues[0], bitget=self.venues[1], snapshot=self.snapshot,
             validate_startup=self.snapshot, position_snapshot=self.positions,
             check_instruments=lambda instruments:None, fee_snapshots={})
@@ -212,6 +251,11 @@ class World:
         self.store.set_meta('daily_upnl', dict(day=day(self.now), upnl='0', positions={}))
         self.store.set_meta('equity_baseline', '31000')
         self.references()
+        if mapping is not None:
+            from tools.crossex_exec.universe import Universe
+            universe=Universe(self.store,lambda:self.now)
+            universe.discover()
+            universe.decide_mapping(universe.mappings()[0]['id'],'confirmed')
         self.engine.reconcile()
 
     def make_engine(self):
@@ -271,7 +315,8 @@ class World:
                 price = dec(100)
             received_at = self.now-100 if self.fault == 'stale' or self.opening_fault == 'book_stale' else self.now
             exchange_at = received_at-(.5 if self.opening_fault == 'book_skew' and leg == 1 else 0)
-            result.append(Book([[str(price), '20']], [[str(price), '20']],
+            factor=self.multipliers[leg]
+            result.append(Book([[str(price*factor), str(dec(20)/factor)]], [[str(price*factor), str(dec(20)/factor)]],
                                received_at, exchange_at))
         return result
 
@@ -290,8 +335,8 @@ class World:
         for n,v in enumerate(self.venues):
             if v.quantity:
                 key = '|'.join(('crossex' if n == 0 else 'bitget', self.instruments[n].symbol, 'long' if n == 0 else 'short'))
-                positions[key] = v.quantity
-                floating[key] = str(v.quantity*(self.prices[n]-dec((100, 102)[n]))*(1 if n == 0 else -1))
+                positions[key] = v.quantity/self.multipliers[n]
+                floating[key] = str(v.quantity*(self.prices[n]-self.entry_prices[n])*(1 if n == 0 else -1))
         return dict(positions=positions, upnl=str(sum(map(dec, floating.values()), dec(0))),
                     upnl_by_position=floating, captured_at=self.now)
 
@@ -300,7 +345,7 @@ class World:
             self.coverage['account_failures'] += 1
             raise ValueError('injected account failure')
         result = self.positions()
-        equities = {k:str(dec(base)+v.realized+v.quantity*(self.prices[n]-dec((100, 102)[n]))*(1 if n == 0 else -1))
+        equities = {k:str(dec(base)+v.realized+v.quantity*(self.prices[n]-self.entry_prices[n])*(1 if n == 0 else -1))
                     for n,(k,base,v) in enumerate(zip(('crossex','bitget'), (1000,30000), self.venues))}
         if self.fault == 'equity':
             equities['crossex'] = '800'
@@ -315,7 +360,9 @@ class World:
         if self.opening_fault != 'too_few_venues':
             mids['bybit'] = {'BTC':'101' if self.opening_fault == 'not_single_venue_outlier' else '100'}
         Baseline(self.store,lambda:self.now).record(mids,('BTC',))
-        self.store.set_meta('mapping', dict(at=self.now))
+        self.store.set_meta('mapping', dict(at=self.now,instruments={i.market.key:i.dump() for i in self.instruments}))
+        self.store.set_meta('market_tickers',{i.market.key:dict(at=self.now,mid=str(self.prices[n]*self.multipliers[n]),volume='10000000')
+                                            for n,i in enumerate(self.instruments)})
         self.accounts.fee_snapshots = {i.market.key:FeeSnapshot('.0002',self.now) for i in self.instruments}
         try:
             self.engine.account_cache.publish(self.snapshot(),self.now)
@@ -333,6 +380,7 @@ class World:
     def open(self):
         payload = trigger('sim-'+str(self.step))
         payload['opened_at'] = self.now
+        payload.update(buy_market_key=self.instruments[0].dump()['market'],sell_market_key=self.instruments[1].dump()['market'])
         self.engine.ingest(payload)
 
 
@@ -355,7 +403,8 @@ class InvariantSimulationTests(unittest.TestCase):
         else:
             self.assertLessEqual(abs(after[0]-after[1]), abs(before[0]-before[1]), 'I1a single reduction')
             exercised['1a'] += 1
-        self.assertLessEqual(dec(sent['order']['quantity']), before[sent['order']['leg']], 'I3 oversized close')
+        self.assertLessEqual(dec(sent['order']['quantity'])*dec(sent['order'].get('instrument',{}).get('quantity_multiplier','1')),
+                             before[sent['order']['leg']], 'I3 oversized close')
         self.assertTrue(all(0 <= a <= b for a,b in zip(after,before)), 'I3 crossed zero')
         exercised['3'] += 1
 
@@ -379,8 +428,12 @@ class InvariantSimulationTests(unittest.TestCase):
                         if world:
                             world.engine.close()
                         opening_fault = opening_rng.choice(('none',)*6+OPENING_FAULTS) if index < RANDOM_ROUNDS else 'none'
+                        tail=index-RANDOM_ROUNDS
+                        if tail in (120,144):
+                            opening_fault='volume_too_low' if tail==120 else 'size_too_small'
                         world = World(live=index >= RANDOM_ROUNDS or (index//24)%4 != 0,
-                                      coverage=coverage, opening_fault=opening_fault)
+                                      coverage=coverage, opening_fault=opening_fault,
+                                      mapping=0 if tail==72 else 1 if tail==96 else None)
                     w = world
                     w.step = index
                     fault = 'none' if episode_step in (1, 21, 22, 23) else rng.choice(FAULTS)
@@ -420,6 +473,21 @@ class InvariantSimulationTests(unittest.TestCase):
                         w.restart()
                     w.references()
                     skips_before = Counter(w.store.meta('opening_skip_counts', {}))
+                    if index >= RANDOM_ROUNDS:
+                        if tail == 49:
+                            from tools.crossex_exec.settings import Settings
+                            frozen=copy.deepcopy(w.store.pairs(active=True)[0]['config_at_open'])
+                            Settings(w.store).update({'order_usd_max':25,'min_quote_volume_usd':2000000},source='admin_api')
+                            self.assertEqual(w.store.pairs(active=True)[0]['config_at_open'],frozen)
+                            coverage['runtime_config_changed']+=1
+                        if tail == 50:
+                            w.engine.close_pair(w.store.pairs(active=True)[0],'sim_reconfigure')
+                        if tail == 51:
+                            w.open()
+                            pair=w.store.pairs(active=True)[0]
+                            self.assertEqual(pair['config_at_open']['version'],1)
+                            self.assertEqual(pair['config_at_open']['values']['order_usd_max'],25)
+                            coverage['runtime_config_new_open']+=1
                     if w.store.meta('state') != 'HALTED':
                         if episode_step >= 21:
                             w.store.set_meta('state', 'HALTING')
@@ -473,6 +541,9 @@ class InvariantSimulationTests(unittest.TestCase):
                             if sent['filled'] > 0 and pair['id'] not in opened_pairs:
                                 opened_pairs.add(pair['id'])
                                 coverage['opened_pairs'] += 1
+                                if any(m!=1 for m in w.multipliers):
+                                    coverage['mapping_opened']+=1
+                                    coverage['mapping_buy' if w.multipliers[0]!=1 else 'mapping_sell']+=1
                             self.assertEqual(*sent['admission']['before'], 'I1d admitting entry with exposure')
                             self.assertFalse(sent['admission']['locked'], 'I2 admission while locked')
                             self.assertLessEqual(dec(order['quantity'])*dec(order['price']), 150, 'I4 leg cap')
@@ -497,7 +568,7 @@ class InvariantSimulationTests(unittest.TestCase):
                             if pair['id'] not in w.close_obligations:
                                 continue
                             self.assertNotEqual(pair['state'], 'CLOSED', 'I1c close obligation hidden by CLOSED state')
-                            step = min(dec(i['spec']['qty_step']) for i in pair['instruments'])
+                            step = min(dec(i['spec']['qty_step'])*dec(i.get('quantity_multiplier','1')) for i in pair['instruments'])
                             if exposure > step:
                                 self.assertIn(pair['id'], w.store.meta('stop_locks', {}).get('unhedged_position', []),
                                               'I1c residual exposure missing unhedged lock')
@@ -536,6 +607,9 @@ class InvariantSimulationTests(unittest.TestCase):
             self.assertGreater(coverage['opened_pairs'], 0, 'vacuous actual new-position coverage')
             for reason in OPENING_FAULTS:
                 self.assertGreater(coverage['skip_'+reason], 0, 'vacuous opening rejection: '+reason)
+            for key in ('runtime_config_changed','runtime_config_new_open','mapping_opened','mapping_buy','mapping_sell',
+                        'skip_volume_too_low','skip_size_too_small'):
+                self.assertGreater(coverage[key],0,'vacuous round-eight execution: '+key)
             print(f'INVARIANTS seed={seed} rounds={ROUNDS} random_rounds={RANDOM_ROUNDS} N={RECOVERY_BOUND} checks={dict(checks)} '
                   f'exercised={dict(sorted(exercised.items()))} coverage={dict(sorted(coverage.items()))}', flush=True)
         except Exception as error:
