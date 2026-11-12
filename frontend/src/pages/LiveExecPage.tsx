@@ -8,6 +8,7 @@ import { useLiveExec } from "./liveExec/useLiveExec";
 import { LiveExecAdmin } from "./liveExec/LiveExecAdmin";
 import { useLiveExecAdmin } from "./liveExec/useLiveExecAdmin";
 import { LiveExternalPositions } from "./liveExec/LiveExternalPositions";
+import { remotePositionView } from "./liveExec/remotePositionView";
 
 const reasons: Record<string, string> = {
   converged: "收敛止盈", stop_loss: "止损", max_hold: "超时", pre_funding: "结算前平仓",
@@ -173,6 +174,8 @@ export function LiveExecPage() {
   const { summary, positions, trades, stats, error, loadingMore, canLoadMore, loadMore } = useLiveExec();
   const management = useLiveExecAdmin();
   const [now, setNow] = useState(Date.now);
+  const remote = management.data["remote-positions"];
+  const external = remotePositionView(remote, management.data["external-positions"], now);
   useEffect(() => {
     const timer = window.setInterval(() => { if (!isPageHidden()) setNow(Date.now()); }, 1000);
     return () => window.clearInterval(timer);
@@ -198,9 +201,10 @@ export function LiveExecPage() {
     <Typography.Title level={3}>实盘</Typography.Title>
     {error && <Alert type="warning" showIcon message={`实盘服务未连接（${failureLabel(error)}）`} />}
     <Summary data={summary} flatten={management.data["external-positions"]?.flatten_status} />
-    <LiveExternalPositions registry={management.data["external-positions"]} rows={null}
+    <LiveExternalPositions registry={management.data["external-positions"]} rows={external.rows}
+      snapshot={remote} now={now} cancellable={external.cancellable}
       error={management.errors["external-positions"]}
-      notice="当前远端持仓尚未核实，登记操作不可用；以下登记记录不代表当前仓位。"
+      remoteError={management.errors["remote-positions"]}
       refresh={() => management.refresh(true)} />
     <Typography.Paragraph type="secondary">基准、超额价差和预估两小时资金费成本均为开仓复核快照；开仓超额价差尚未扣除费用，预估成本不等于实际已付资金费。盘口时间差不代表订单发送或成交时间差；平仓盘口时间差可能远超 300 毫秒。历史快照缺失时显示“—”。</Typography.Paragraph>
     <Card title="当前持仓"><Table rowKey="id" size="small" columns={positionColumns} dataSource={positions}

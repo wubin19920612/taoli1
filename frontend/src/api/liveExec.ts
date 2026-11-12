@@ -94,9 +94,22 @@ export interface LiveExternalPositions {
   income?: { verified?: boolean; reason?: string; at?: number } | null;
   flatten_status?: LiveFlattenStatus | null;
 }
+export interface LiveRemotePosition {
+  position_key: string; route: string; symbol: string; side: string;
+  exchange_type?: Text; business?: Text; quote?: Text; dex?: Text; identity_verified?: boolean | null;
+  quantity?: Text; entry_price?: Text; mark_price?: Text;
+  unrealized_pnl_native?: Text; unrealized_pnl_usd?: Text;
+  valuation?: Text; valuation_verified?: boolean | null; valuation_error?: Text; ownership?: Text;
+  snapshot_at?: Text; snapshot_version?: Num; stale?: boolean | null;
+}
+export interface LiveRemotePositions {
+  available: boolean; positions: LiveRemotePosition[];
+  snapshot_at?: Text; snapshot_version?: Num; stale?: boolean | null;
+}
 export interface LiveAdminResources {
   config: LiveConfig; "config/audit": LiveConfigAudit[]; universe: LiveUniverse[]; mappings: LiveMapping[];
   "external-positions": LiveExternalPositions;
+  "remote-positions": LiveRemotePositions;
 }
 export type LiveAdminResource = keyof LiveAdminResources;
 
@@ -107,6 +120,23 @@ const readErrors: Record<string, string> = {
 export function liveAdminReadError(reason: string): string {
   const status = /^upstream_http_(\d{3})$/.exec(reason);
   return readErrors[reason] ?? (status ? `上游响应异常 ${status[1]}` : "服务不可用");
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function optionalFields(value: Record<string, unknown>, fields: string[], kind: "string" | "number" | "boolean"): boolean {
+  return fields.every(key => value[key] == null || typeof value[key] === kind);
+}
+function remoteShape(value: unknown): boolean {
+  const metadata = (row: Record<string, unknown>) => optionalFields(row, ["snapshot_at"], "string")
+    && optionalFields(row, ["snapshot_version"], "number") && optionalFields(row, ["stale"], "boolean");
+  return isObject(value) && typeof value.available === "boolean" && metadata(value)
+    && Array.isArray(value.positions) && value.positions.every(row => isObject(row)
+      && ["position_key", "route", "symbol", "side"].every(key => typeof row[key] === "string" && row[key] !== "")
+      && metadata(row) && optionalFields(row, ["identity_verified", "valuation_verified"], "boolean")
+      && optionalFields(row, ["exchange_type", "business", "quote", "dex", "quantity", "entry_price", "mark_price",
+        "unrealized_pnl_native", "unrealized_pnl_usd", "valuation", "valuation_error", "ownership"], "string"));
 }
 
 export async function getLiveExecAdmin<K extends LiveAdminResource>(
@@ -126,6 +156,7 @@ export async function getLiveExecAdmin<K extends LiveAdminResource>(
             && Number.isFinite(rule.min) && (rule.max === null || Number.isFinite(rule.max))
             && typeof rule.integer === "boolean";
         })
+      : resource === "remote-positions" ? remoteShape(data)
       : resource === "external-positions" ? data && !Array.isArray(data) && Array.isArray(data.contracts)
         && data.contracts.every((row: LiveExternalContract | null) => row && typeof row.registered === "boolean"
           && typeof row.forbidden === "boolean" && row.identity

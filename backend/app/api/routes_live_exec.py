@@ -26,6 +26,7 @@ UPSTREAM_PATHS = {
     "universe": "/api/v1/universe",
     "mappings": "/api/v1/mappings",
     "external-positions": "/api/v1/external-positions",
+    "remote-positions": "/api/v1/remote-positions",
 }
 # Uvicorn's default CLI config only enables its own loggers. Audit records must
 # reach container stdout even when the root logger remains at WARNING.
@@ -186,6 +187,15 @@ async def get_mappings(request: Request) -> dict:
 async def get_external_positions(request: Request) -> dict:
     validate_query(request, set())
     return await proxy(request, "external-positions")
+
+
+@router.get("/remote-positions")
+async def get_remote_positions(request: Request, response: Response) -> dict:
+    validate_query(request, set())
+    if request.headers.get("content-length", "0") != "0" or request.headers.get("transfer-encoding"):
+        raise HTTPException(status_code=422, detail="invalid_body")
+    response.headers["Cache-Control"] = "no-store"
+    return await proxy(request, "remote-positions")
 
 
 def _origin(value: str) -> tuple[str, str, int]:
