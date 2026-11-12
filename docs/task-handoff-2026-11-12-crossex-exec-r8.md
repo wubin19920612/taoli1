@@ -1206,3 +1206,94 @@ $py310 = 'C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d
 旧 external_equity_anchor 缺 funding_positions 时不会直接恢复开仓；需要按原人工管理路径在程序空仓、无恢复义务且新证据齐全后建立明确新起点，不能自动填旧资金费零。新历史接口没有实测鉴权权限、交易所累计值在部分/完整平仓时的真实语义、响应时延、分页量和十秒采样预算；这些未验证条件会继续停开，不能通过缩小请求窗口、忽略缺页或删库绕过。Windows 双版本离线结果不替代 Linux/systemd 或真钱验收。
 
 本模块本地交付结束。后续请在新任务继续线上只读/持续影子验收与独立终审，先读本节及[第十五轮追加契约](live-exec-contract-2026-11-11.md#第十五轮增补2026-11-12)。页面登记按钮仍使用原 ADMIN 请求和 x1 expected_status，不需要新权限或自动重试。本次未授权推送、部署、解除旧 halt_reason 或开真钱交易。
+
+## 第十六轮
+
+### 范围、基线和本地提交
+
+指定 worktree `C:/Users/wubin/Desktop/code/codex/taoli1/.worktrees/crossex-exec-r8`、分支 `codex/crossex-exec-r8`，起始 HEAD 为第十五轮终审报告提交 `b61662d`，起始工作区干净。先读 [r15 终审](crossex-exec-r15-final-review-2026-11-12.md)、第十五轮交接和契约。本轮仅处理：A 跨日相反资金费首次漏报 P1；B 大流水历史读取及诊断；C 已登记外仓下停机退出和分类报告。
+
+| 类型 | 提交 | 内容 |
+|---|---|---|
+| test | `c151116` | 首批跨日、分页、失败诊断及真实停机函数回归 |
+| test | `bd18407` | 扩至 24 项专项，补事务/迁移/权限/大账本/三仓停机及旧证据夹具修正 |
+| feat | `f9c88e6` | UTC 独立检查点、完整历史分页、诊断与停机报告 |
+| docs | 本节后续独立提交 | 契约仅追加、第十六轮交接、README、下一任务及验收 JSON；自身 SHA 用 git log 查询 |
+
+只暂存本轮列明的文件，本地提交关闭 hooks/GPG。普通 git add 因 worktree 索引位于父仓库的只读范围失败后，仅对已授权本地提交使用自动审批扩展权限；没有自动审批拒绝。无 push、SSH、WSL、amend、真实鉴权/订单、线上备份或部署。没有调用子代理；完成后自行审查证据、事务、发送门禁和安全诊断路径。
+
+### A：跨日资金费 P1
+
+入口为 `funding.py:funding_positions/daily_continuity`、`external_accounting.py:_evaluate`、`program_risk.py:require_program_proof`、`equity.py:read_flat_accounts/apply`。
+
+- 保留生命周期累计值与账本核对，再加入独立收取时间和持久化 `funding_checkpoint`。每个生命周期先确定累计增量只能落在哪个 UTC 日，再按精确 route/symbol/quote/day 合计与新增流水比较；不能先跨日净额抵销。
+- CrossEx 当前 `funding_time=0` 按官方语义证明未收取，非零值作为收取时间上界；非法/未来/倒退/与累计值冲突均拒绝。午夜后采到“最新收取仍在前一日”的仓位，可证明该日界累计值。完整关闭仓位及 UTA 无同等时钟时，使用创建/关闭/观测边界，不能证明单日归属就停开。
+- 成功 income 新增 `funding_daily_verified=true`，最终开仓和发送门禁要求此字段。检查点、日界起点、历史和收益证明同事务提交，比较原检查点及原有快照/权益/归属/订单摘要版本；失败及重启不丢旧区间。显式 rebaseline 也先验证已有区间，检查点纳入旧/新审计和回滚。
+- 回归复现同合约前日 +25、当日 -25、间隔八小时首次都漏报：原实现放行，新实现停开，不滚动起点；文件重开及补一条/两条流水都不能伪造日界证据。独立观察到前日累计 +25 的日界后，当日 -25 迟到再补齐可精确核实 daily=-25、total=0，实际 Engine 触发原日亏 20 停开锁。
+- 不同生命周期各自被创建/关闭时间限制在单日的对照组，可在跨日补齐流水后核实 daily=-25；同日相反结算允许净额核对。UTA 跨日净额为零、跨日关闭但缺收取时钟、检查点落库失败均继续停开。
+
+**保留的可用性限制：** 若一个有结算的生命周期跨多日且没有独立日界观察，完整流水回来也不足以认证原缺口，必须继续停开；未增加可人工填写金额的证据接口或绕过重基线条件。不能把此限制描述为“所有跨日账户都会自动恢复”。原单腿 150、总额 600、日亏 20、累计亏损 100、程序回撤 150 及更严配置、整户保证金 <3/<2、外仓禁单和 UNKNOWN 不重发均保留。
+
+### B：18:15 线上库副本与历史读取
+
+用户报告影子 `c85ff7c`，三笔仓位均登记、mismatch 自动解除、外仓负债仅告警。源文件为用户给定的 `crossex-exec-20261112-1815.db`，只复制到本机 Temp，以 `mode=ro&immutable=1` 查询复制件。`PRAGMA quick_check=ok`，源文件及复制件 SHA-256 为 `326bdf7c69572487b59e7a3d87c2f08b80de06a2fc71b2f59318dadbd9d347d8`，结束前再次核对源指纹未变。未将整库、用户 ID、账户余额或密钥写入仓库。
+
+**已证明：**
+
+1. orders=0、pairs=0，当前两份合约登记覆盖三笔远端持仓。失败 activity 只有 `from_ms=1794441600000/to_ms=1794478452271/complete=false`。源代码只有读取异常分支会将 activity 压缩成这三个字段；双快照变化分支会保留已经读取的历史列表。因此可定位到读取异常路径。
+2. 库中没有原始异常、页号、响应 code 或接口名，事件只有通用 external_income_unverifiable；**不能从本副本唯一判定当时是 20 页截断、游标、响应形状、权限还是限频**。没有调用真实鉴权接口进行反推。
+3. 库中没有 `external_equity_anchor`。即便历史读取恢复完整，仍须满足原显式、带审计的程序空仓建基线前提，不能自动把当前账户损益归零。未知现金流、未登记历史交易、借还款/利息等仍可能独立阻断。
+
+**已复现并修复的代码缺陷：**
+
+- CrossEx 三个历史接口和 Bitget 两个历史接口原固定 20 页用尽后只能报通用 invalid_response；新 `history.py` 读取到明确末页，保留有界请求/行数/时间预算，达到预算即停开。
+- Bitget financial-records 原遇 `len(list)<100` 就结束，未消费非空 cursor；现在短页有 cursor 仍续读，重复/缺失/非法 cursor、异常空页和重复 ID 均有明确拒绝原因。
+- 两个 UTA 历史接口原窗口超过 30 天直接拒绝，现在对完整区间分段，各段最大 30 天，闭区间边界不丢毫秒、不重复计数；跨段 ID 仍唯一。没有只拉最近部分来逃避历史核实。
+- `Accounts.activity` / `read_snapshot` 保存准确 endpoint、page、子窗口、已读行数、cursor_used、condition、error_kind 和白名单 HTTP/code；后续活动订单/账户读取、双快照变化、跨日及过期有固定 stage/condition。`ExternalAccounting.evaluate` 另提供安全的证据失败原因。
+- Engine 将诊断写入 external_failed_snapshot、失败 income 和 ALERT 审计；CLI 服务 alert 输出带相同诊断。去重比较接口/页/条件/错误码，不因时间窗口或行数刷新刷屏；无响应正文、异常正文、账户 ID、签名或原始 cursor。
+- 21001 行固定 CrossEx 账本完整经过真实适配器、现金/归属/资金费核验，income.verified=true；2100 条 UTA 记录超过 20 页仍完整读取。权限错误经 localhost 真 Transport 测试保留安全 code，不输出模拟秘密文本。
+
+每接口预算为 1024 请求、250000 行、8 秒；账户整体原十秒新鲜度和原传输限频保持。大量流水超过实际网络/时间预算、第三方在双快照期间持续交易或交易所权限不足，仍会停开并记录具体原因。本轮证明离线大账本路径成立，**没有证明线上当前 complete 已变为 true，也没有证明历史真实故障必然是分页上限**。
+
+仅查官方公开文档：[CrossEx 账本/成交/历史仓位与收取时间](https://www.gate.com/docs/developers/crossex/)、[Bitget 财务流水窗口/游标](https://www.bitget.com/legacy-docs/uta/account/Get-Financial-Records)、[Bitget 仓位历史权限](https://www.bitget.com/docs/catalog/trading/position-management)。后者仍标注 UTA trade read & write；本地代码只发 GET，没有实测或扩大账户权限。
+
+### C：停机退出的实际证据
+
+副本中的 shutdown 发生于 **2026-11-12 10:12:45.367617 UTC**，当时 flatten_status.verified=true、program_flat=false，external_positions 只有 BINANCE_FUTURE_OPENAI_USDT 一笔。HL `HYPERLIQUID_FUTURE_io:OAI_USDC` 两个方向对应的合约登记事件在 **10:13:19.959049 UTC**，晚 **34.591432 秒**。当时存在尚未登记仓位，旧退出 1 符合约定；不能把这一历史 flatten_status 当成登记齐全之后的新 stop 结果。
+
+旧代码本已在“程序已平、全户有已登记外仓”时退出 0；首批实测正向用例在修改前即通过，本轮没有假称修复了可复现的错误退出分支。新增 2/3 笔外仓、收益不可核实、之前失败停机、未登记仓位、内存未决订单回归，调用真实 flatten_all/finish_shutdown，确认已登记外仓不触发残余程序敞口，外仓从不被发送订单。
+
+实现补全可观测性：成功及有返回状态的失败均输出 `shutdown_positions`，增加 remaining_positions/local_active_pairs；失败仍输出 shutdown_residual_exposure。新鲜原始仓位、身份目录、本地活动 pair/未决订单/待记账/待写条件保持。登记齐全且程序空仓返回 0，并明确 program_flat=true/account_flat=false 和外仓快照；未登记或程序未平仍非 0。Linux 的 systemctl 和真实信号退出本轮未执行。
+
+### TDD、原断言、双版本全量结果
+
+首批 15 项在旧实现先运行，原日志记录 11 failures/8 errors（含 subTest；一项次生断言上下文错误随后修正，事件 JSON 的新测试读取方式也纠正）。真正的跨日漏报反例明确显示原实现未抛异常并滚动起点；分页上限/30 天窗口、短页 cursor 和缺诊断分别有独立红灯。后续“检查点需进入管理审计”和“旧终结记录缺可选时钟”各在相应实现前单独跑红。没有将实现后的补充边界测试冒称为首次红灯。
+
+首轮完整执行器 580 项有 1 failure/1 error，来自旧合成夹具：用采样时刻当最终关闭时刻，以及新增结算时改写已经终结的生命周期。修正 `funding_fixtures.py`，从完整合成场景事实提供收取时间，以最后成交/结算时刻关闭，终结记录保持不可变，终结之后的独立合成结算使用另一生命周期。`round15_simulator.py` 由 venue 自己的 settle 操作记录收取时刻，和被延迟的账本响应分离。未让生产代码补零、忽略历史改写或跳过日界门禁。相关 85 项随后通过。
+
+相对 `b61662d`，按 AST owner/内容/次数检查执行器及 fill-sim 的 **51 个原测试/夹具文件、2631 个原断言、1281 个类/函数入口**，均保留；没有删改/放宽原断言，没有 skip、过滤 discover 或内存库替代文件库。fill-sim 源码和测试未修改。新增专项共 24 项。
+
+在 feat `f9c88e6` 上最终完整运行：
+
+| 解释器 | 执行器 unittest discover | fill-sim unittest discover | 退出码 |
+|---|---|---|---|
+| Windows Python 3.12.10 / SQLite 3.49.1 | **589 项 / 175.579s / OK** | **158 项 / 30.301s / OK** | 全部 0 |
+| 指定 Windows Python 3.10.20 / SQLite 3.50.4 | **589 项 / 186.784s / OK** | **158 项 / 32.030s / OK** | 全部 0 |
+
+```powershell
+python -m unittest discover -s tools/crossex_exec/tests -v
+python -m unittest discover -s tools/fill_sim/tests -v
+$py310 = 'C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d5-4518-98a0-6a4761963215/scratchpad/uvpy/cpython-3.10-windows-x86_64-none/python.exe'
+& $py310 -m unittest discover -s tools/crossex_exec/tests -v
+& $py310 -m unittest discover -s tools/fill_sim/tests -v
+```
+
+两版都包含原 **5 项真实文件 SQLite 跨进程测试**。旧模拟器三个种子 20261111/20261112/20261113 每版各 **2712 回合**，十项原不变量 checks 各 2712、exercised 全部非零；外仓原 96 次和隔离 48 次检查保留。默认 program 模拟器每版三个种子各 **12 场景**，每种子包含 8 次正常开平仓、4 次明确拒单、8 次资金费延迟、20 次重启、40 次发送检查，全过。
+
+两版各 **103 个 Python 文件**通过 AST 解析；git diff --check 通过，契约与基线规范化 startswith 检查通过，只追加。[第十六轮验收 JSON](crossex-exec-r16-validation-2026-11-12.json)保存四份全量日志路径/SHA-256、两套模拟器 12 份种子记录、跨进程测试名、红灯/首轮失败日志、源文件指纹及审计。双解释器任务并发运行，耗时不是性能验收；未重新声称 CPU/RSS、真实网络或 Linux/systemd 验收。
+
+### 线上状态、文件与下一任务
+
+本轮只有本地 test/feat/docs 提交；未推送、未读取当前线上 HEAD、未线上备份或部署、未调用真实鉴权接口，影子版本仍仅按用户报告记录为 c85ff7c。Temp 保留只读副本、全部红绿灯日志和测试产物；没有清理原有缓存/产物或更改其他模块。最终 docs 提交只纳入本轮五个文档路径，不包含数据库或账号数据。
+
+下一任务先进行独立终审，再在明确授权的只读/影子任务中收集新 activity.failure，确认究竟哪个接口/页/条件阻断；若历史完整但缺起点，按原 ADMIN 及程序空仓流程显式建基线。不能删库、缩短遗留窗口、伪造 settled_ms、自动重基线或放宽时效来恢复开仓。真实权限、跨日收取时钟的线上语义、持续第三方交易时稳定窗口及大流水耗时仍需验证。发布/实盘授权、页面工作和运维分别新建任务继续。

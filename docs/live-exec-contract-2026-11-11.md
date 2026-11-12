@@ -632,3 +632,46 @@ HALTING 重启仍启动账户刷新、目录/参考数据刷新和基线采样�
 原有缺 fee 的 REJECTED 在 executor recover 时仅可通过匹配的持久化 SENT → REJECTED 审计修复；需原始事件和当前记录完全一致、明确拒绝、零成交、无 oid/成交价/成交时间/交易 ID 等冲突。存在 ACK、UNKNOWN、其他终态、身份改变、缺失审计或正成交时不适用。恢复与 `REJECTION_ACCOUNTING_RECOVERED` 审计同事务提交，失败回滚，重复执行不重复记账；不提交或重发订单，不清其他锁。
 
 公开字段核实：[CrossEx 当前/历史持仓与合约目录](https://www.gate.com/docs/developers/crossex/en/)、[Bitget UTA 当前/历史持仓](https://www.bitget.com/docs/catalog/trading/position-management)。公开文档定义 max_limit_size 为限价下单数量上限；本次 null 的存在来自用户提供的只读数据库证据，不宣称文档承诺所有交易所均返回 null。真实账户的新历史接口权限、生命周期语义、延迟、分页量和十秒预算仍待后续只读/影子验证，证据不足持续停开。
+
+## 第十六轮增补（2026-11-12）
+
+本节仅追加，补强第十五轮累计净额无法证明 UTC 分日归属的缺口；第十四轮程序风险口径、金额阈值、归属、永久禁单、UNKNOWN 不重发、发送屏障、十秒快照时效及人工管理前提均保留。本轮只有本地提交和离线验收。
+
+### UTC 分日资金费证明
+
+`income` 成功对象新增 `funding_daily_verified: true`。最终开仓关口同时要求它和原 `funding_verified`，旧成功证明缺此字段不能开仓。生命周期累计净额相等、账户余额不变，以及补回一组相反流水，均不能独自证明跨日资金费完整。
+
+内部 `funding_checkpoint` 保存上次**全部核验成功**的 captured_at、归属 revision、equity_revision、独立 funding_positions 和历史 ID/摘要。它与 external_income、历史索引及 UTC 起点在同一事务提交，提交前再次比较原检查点、原起点、快照版本、订单摘要和时效。失败不推进检查点或滚动日界；重启继续使用持久化检查点。rebaseline/release-halt 必须先验证已有区间，新检查点和旧值进入原审计事务，失败回滚。
+
+每个生命周期的累计增量在按合约净额相加之前，必须能确定落在一个 UTC 日内：下界为检查点时间与创建时间的较大者；上界为可核实的收取时间或关闭/观测时间。然后按 `route|完整原始symbol|quote|UTC日` 与新增资金费流水精确比较。资金费时间为毫秒，不按服务器本地时区分日。
+
+CrossEx 当前仓位的 `funding_time` 是独立收取时间，0 明确表示尚未收取；归一化保存为 `settled_ms`。0 与非零累计值冲突、非法/未来/创建前时间或时间倒退均拒绝。午夜之后取得的当前仓位，如果该时间仍在午夜之前，可将其累计值作为该日界的独立累计证据。不能仅从 funding_fee=0 推导无结算，也不能用“最新一条流水出现”推导所有中间结算完整。[CrossEx 官方字段定义](https://www.gate.com/docs/developers/crossex/#query-contract-positions)
+
+完整关闭仓位及 Bitget UTA 没有同等收取时钟时，仅使用生命周期和观测边界；跨日区间无法归入单日就以 `funding_utc_boundary_unproven` 停开。各自创建并结束于单日的不同生命周期，可提供逐日独立累计证据。相同单日内相反金额允许净额核对；不同日不能先互相抵销。缺少日界证据的区间即使全部账本后来补回，仍保持停开；不自动重基线或伪造日界快照。
+
+旧已终结生命周期缺可选 settled_ms 时按 unknown 比较其原字段；不是填 0，原累计值、创建/关闭时间及身份仍不可改写。旧库缺 funding_positions 的规则不变。Bitget 当前/历史 totalFunding 仍仅视为生命周期累计值，不因它为 0 就假定跨日未发生相反结算。[Bitget 官方仓位接口](https://www.bitget.com/docs/catalog/trading/position-management)
+
+### 完整历史分页与失败诊断
+
+CrossEx account_book/history_trades/history_positions 继续固定毫秒窗口、每页 1000、page 从 1 开始递增；Bitget financial-records/history-position 每页 100，下一页原样使用响应 cursor。Bitget 短页带非空 cursor 时必须继续；空页仍带 cursor、满页无 cursor、缺/非法 cursor、重复 ID 或重复 cursor 均失败。没有按资金费、ticker 或当前仓位过滤全账本。[CrossEx 历史接口](https://www.gate.com/docs/developers/crossex/#query-account-asset-change-history)、[Bitget 财务流水](https://www.bitget.com/legacy-docs/uta/account/Get-Financial-Records)
+
+取消旧固定 20 页截断。完整区间按最多 30 天切分，每个子窗为闭区间，下一窗从前窗结束毫秒 +1 开始；跨窗继续检查唯一 ID。每个接口最多 1024 次请求、250000 行、8 秒读取期限，原传输限频及两账户整体十秒新鲜度不提高。达到任一预算、权限/限频/网络失败或窗口内账户结算变化，都仍 complete=false。大账户分页可完成不等于其所有现金流已可归属；后续独立资金费、现金、成交、费用和身份核对仍必须通过。
+
+`external_failed_snapshot.activity` 保留 from_ms/to_ms/complete，并新增 `failure`，失败时保留此前成功完成的接口列表。固定诊断字段如下，不保存响应正文、异常正文、账户 ID、密钥、签名或原始 cursor：
+
+```json
+{"route":"crossex","endpoint":"/api/v4/crossex/account_book",
+ "from_ms":1794441600000,"to_ms":1794478452271,"page":2,
+ "rows_read":1000,"cursor_used":false,
+ "condition":"request_failed","error_kind":"rate_limited"}
+```
+
+历史失败具体 condition 包括 `page_budget_exhausted`、`row_budget_exhausted`、`read_deadline_exceeded`、`duplicate_id`、`cursor_repeated`、`cursor_missing_or_invalid`、`full_page_without_cursor`、`empty_page_with_cursor`、`response_shape_invalid`、`response_list_invalid`、`row_identity_missing/invalid`。传输失败可追加 HTTP 状态和白名单 api_code；未知 code 不照抄。若失败发生在活动订单或第二份账户快照，记录对应 stage。双快照不一致、跨 UTC 日、远端活动订单及超时分别记录固定条件，不能再折叠成无原因的 false。
+
+失败 `income` 可新增 `activity_failure` 和 `income_failure`，经现有 external-positions GET 返回；ALERT 审计和服务标准输出同样携带这些安全诊断。去重比较接口/页/条件/错误码，忽略窗口时间和行数变化，维持同一事件每小时提醒及恢复后再告警。归属缺失与历史读取失败分别记录，不把二者混为已核实零收益。
+
+### 停机仍以程序仓位为准
+
+`finish_shutdown` 只消费本次 flatten_all 返回值。已登记外仓、程序空仓、无活动 pair/未决订单/待记账/内存待写，且新鲜原始身份核实成功时，退出 0；无须收益证明为 true。程序未平、未登记远端仓位、身份/读取失败或上述义务未清仍退出 1，外仓永不被减仓。
+
+成功和有返回状态的失败停机都会输出 `shutdown_positions`，保留 `program_flat/account_flat/external_positions/attempt_id/verified`，追加 `remaining_positions`（剩余程序或未登记远端仓位）和 `local_active_pairs`。失败仍另外输出 shutdown_residual_exposure。旧 flatten_status 不代表新的 systemctl stop 结果，必须比对 attempt_id 与 captured_at。
