@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LiveExecPage } from "../src/pages/LiveExecPage";
 import { liveFixtures } from "./liveExecFixtures";
 
-import { fixtures, mappingId, markets } from "./liveExecAdminFixtures";
+import { fixtures, mappingId, markets, universeStatus } from "./liveExecAdminFixtures";
 
 let reads: typeof fixtures;
 let writes: { path: string; options: RequestInit }[];
@@ -22,6 +22,11 @@ beforeEach(() => {
     if (options.method && options.method !== "GET") {
       writes.push({ path, options });
       if (writeError) return { ok: false, status: 503, json: async () => ({ detail: writeError }) };
+      const body = JSON.parse(String(options.body));
+      if (path.startsWith("universe/") && body.expected_status !== reads.universe[0].status)
+        return { ok: false, status: 409, json: async () => ({ error: "status_conflict", current_status: reads.universe[0].status }) };
+      if (path.startsWith("mappings/") && (body.expected_status !== reads.mappings[0].status || body.expected_multiplier !== reads.mappings[0].multiplier))
+        return { ok: false, status: 409, json: async () => ({ error: "mapping_conflict", current_status: reads.mappings[0].status, current_multiplier: reads.mappings[0].multiplier }) };
       if (path === "config") {
         if (JSON.parse(String(options.body)).expected_version !== reads.config.version)
           return { ok: false, status: 409, json: async () => ({ error: "version_conflict", current_version: reads.config.version }) };
@@ -31,6 +36,7 @@ beforeEach(() => {
       }
       if (path.endsWith("/exclude")) reads.universe[0].excluded = true;
       if (path.endsWith("/unexclude")) reads.universe[0].excluded = false;
+      if (path.startsWith("universe/")) reads.universe[0].status = "u1:" + "b".repeat(64);
       return { ok: true, status: 200, json: async () => ({ available: true, data: {} }) };
     }
     const data = reads[path as keyof typeof reads] ?? liveFixtures[path as keyof typeof liveFixtures];
@@ -108,6 +114,7 @@ describe("实盘第八轮管理", () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(30000); });
     fireEvent.click(dialog().getByRole("button", { name: "确认提交" })); await flush();
     expect(screen.getByText("数据已被其他人修改，请刷新后重新确认")).toBeTruthy();
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(writes).toHaveLength(0);
   });
@@ -125,6 +132,7 @@ describe("实盘第八轮管理", () => {
     expect(JSON.parse(String(writes[0].options.body))).toEqual({ order_usd_max: 30, expected_version: 2 });
     expect(reads.config.values.order_usd_max).toBe(5);
     expect(screen.getByText("数据已被其他人修改，请刷新后重新确认")).toBeTruthy();
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
     expect(screen.queryByRole("dialog")).toBeNull();
     expect((screen.getByLabelText("修改 order_usd_max") as HTMLInputElement).value).toBe("5");
     expect(fetchMock.mock.calls.filter(([url, options]) => url.endsWith("/config") && !options.method)).toHaveLength(readCount + 1);
@@ -168,7 +176,7 @@ describe("实盘第八轮管理", () => {
     fireEvent.click(dialog().getByLabelText(markets[0]));
     fireEvent.click(dialog().getByRole("button", { name: "确认分类" })); await flush();
     expect(writes[0].path).toBe("universe/SKHYNIX/classify");
-    expect(JSON.parse(String(writes[0].options.body))).toEqual({ category: "listed_equity", underlying_market: "KRX", markets: [markets[0]] });
+    expect(JSON.parse(String(writes[0].options.body))).toEqual({ category: "listed_equity", underlying_market: "KRX", markets: [markets[0]], expected_status: universeStatus });
   });
 
   it("excludes and unexcludes without implicitly confirming category", async () => {
@@ -179,7 +187,9 @@ describe("实盘第八轮管理", () => {
     await click("取消排除 SKHYNIX");
     fireEvent.click(dialog().getByRole("button", { name: "确认提交" })); await flush();
     expect(writes.map(w => w.path)).toEqual(["universe/SKHYNIX/exclude", "universe/SKHYNIX/unexclude"]);
-    expect(writes.every(w => w.options.body === "{}")).toBe(true);
+    expect(writes.map(w => JSON.parse(String(w.options.body)))).toEqual([
+      { expected_status: universeStatus }, { expected_status: "u1:" + "b".repeat(64) },
+    ]);
   });
 
   it.each(["确认", "拒绝"])("requires confirmation before %s mapping", async action => {
@@ -190,7 +200,71 @@ describe("实盘第八轮管理", () => {
     expect(writes).toHaveLength(0);
     fireEvent.click(dialog().getByRole("button", { name: "确认提交" })); await flush();
     expect(writes[0].path).toBe(`mappings/${mappingId}/${action === "确认" ? "confirm" : "reject"}`);
-    expect(writes[0].options.body).toBe("{}");
+    expect(JSON.parse(String(writes[0].options.body))).toEqual({ expected_status: "pending", expected_multiplier: "1000" });
+  });
+
+  it.each([
+    ["exclude", false], ["unexclude", false], ["classify", false], ["confirm", false], ["reject", false],
+    ["exclude", true], ["unexclude", true], ["classify", true], ["confirm", true], ["reject", true],
+  ] as const)("keeps the opening snapshot for %s even if polling=%s, handles 409 and refreshes", async (action, poll) => {
+    const mapping = action === "confirm" || action === "reject";
+    if (action === "unexclude") reads.universe[0].excluded = true;
+    render(<LiveExecPage />); await flush();
+    const button = action === "classify" ? "判断类别 SKHYNIX" : action === "exclude" ? "排除 SKHYNIX"
+      : action === "unexclude" ? "取消排除 SKHYNIX" : `${action === "confirm" ? "确认" : "拒绝"}映射 PEPE`;
+    await click(button);
+    if (action === "classify") {
+      fireEvent.change(dialog().getByLabelText("类别"), { target: { value: "listed_equity" } });
+      fireEvent.change(dialog().getByLabelText("标的市场"), { target: { value: "KRX" } });
+      fireEvent.click(dialog().getByLabelText(markets[0]));
+    }
+    if (mapping) {
+      reads.mappings[0].status = "rejected";
+      reads.mappings[0].multiplier = "0.001";
+    } else reads.universe[0].status = "u1:" + "c".repeat(64);
+    if (poll) await act(async () => { await vi.advanceTimersByTimeAsync(30000); });
+    const adminReads = () => fetchMock.mock.calls.filter(([url, options]) => !options.method && /\/(config|universe|mappings|audit)$/.test(url)).length;
+    const before = adminReads();
+    fireEvent.click(dialog().getByRole("button", { name: action === "classify" ? "确认分类" : "确认提交" })); await flush();
+    expect(writes).toHaveLength(1);
+    expect(JSON.parse(String(writes[0].options.body))).toMatchObject(mapping
+      ? { expected_status: "pending", expected_multiplier: "1000" } : { expected_status: universeStatus });
+    expect(screen.getByText("数据已被其他人修改，请刷新后重新确认")).toBeTruthy();
+    expect(adminReads()).toBe(before + 4);
+    expect(screen.queryByText(/操作成功/)).toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await click(button);
+    if (action === "classify") {
+      fireEvent.change(dialog().getByLabelText("类别"), { target: { value: "listed_equity" } });
+      fireEvent.change(dialog().getByLabelText("标的市场"), { target: { value: "KRX" } });
+      fireEvent.click(dialog().getByLabelText(markets[0]));
+    }
+    fireEvent.click(dialog().getByRole("button", { name: action === "classify" ? "确认分类" : "确认提交" })); await flush();
+    expect(writes).toHaveLength(2);
+    expect(JSON.parse(String(writes[1].options.body))).toMatchObject(mapping
+      ? { expected_status: "rejected", expected_multiplier: "0.001" } : { expected_status: "u1:" + "c".repeat(64) });
+    expect(screen.getByText(/操作成功/)).toBeTruthy();
+  });
+
+  it.each(["status", "multiplier"])("honors mapping conflicts when only %s changes", async field => {
+    render(<LiveExecPage />); await flush();
+    await click("确认映射 PEPE");
+    if (field === "status") reads.mappings[0].status = "rejected";
+    else reads.mappings[0].multiplier = "1000.00";
+    fireEvent.click(dialog().getByRole("button", { name: "确认提交" })); await flush();
+    expect(screen.getByText("数据已被其他人修改，请刷新后重新确认")).toBeTruthy();
+    expect(writes).toHaveLength(1);
+  });
+
+  it("disables unsafe writes for older reads without concurrency fields", async () => {
+    Reflect.deleteProperty(reads.universe[0], "status");
+    Reflect.deleteProperty(reads.mappings[0], "multiplier");
+    render(<LiveExecPage />); await flush();
+    for (const name of ["排除 SKHYNIX", "判断类别 SKHYNIX", "确认映射 PEPE", "拒绝映射 PEPE"])
+      expect(screen.getByRole("button", { name }).hasAttribute("disabled")).toBe(true);
+    expect(writes).toHaveLength(0);
+    expect(screen.getByText("0.15 USD / 15.00 bp")).toBeTruthy();
   });
 
   it("shows read failures without clearing the existing position dashboard", async () => {

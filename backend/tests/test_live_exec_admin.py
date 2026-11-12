@@ -16,15 +16,17 @@ READ_TOKEN = "synthetic-read-token"
 ADMIN_TOKEN = "synthetic-admin-token"
 MACHINE_TOKEN = "a" * 64
 MAPPING = "0123456789abcdef01234567"
+UNIVERSE_STATUS = "u1:" + "a" * 64
+MAPPING_EXPECTED = {"expected_status": "pending", "expected_multiplier": "1000"}
 READS = ("config", "config/audit", "universe", "mappings")
 WRITES = [
     ("PUT", "config", {"order_usd_max": 30, "expected_version": 2}),
-    ("POST", "universe/SKHYNIX/exclude", {}),
-    ("POST", "universe/SKHYNIX/unexclude", {}),
+    ("POST", "universe/SKHYNIX/exclude", {"expected_status": UNIVERSE_STATUS}),
+    ("POST", "universe/SKHYNIX/unexclude", {"expected_status": UNIVERSE_STATUS}),
     ("POST", "universe/SKHYNIX/classify", {"category": "listed_equity", "underlying_market": "KRX",
-                                         "markets": ["binance|future|SKHYNIXUSDT"]}),
-    ("POST", f"mappings/{MAPPING}/confirm", {}),
-    ("POST", f"mappings/{MAPPING}/reject", {}),
+                                         "markets": ["binance|future|SKHYNIXUSDT"], "expected_status": UNIVERSE_STATUS}),
+    ("POST", f"mappings/{MAPPING}/confirm", MAPPING_EXPECTED),
+    ("POST", f"mappings/{MAPPING}/reject", MAPPING_EXPECTED),
 ]
 CSRF = {"Origin": "https://radar.test", "X-Live-Exec-CSRF": "1"}
 REAL_CLIENT = httpx.AsyncClient
@@ -257,6 +259,7 @@ def test_bad_body_framing(context, headers):
 ])
 def test_action_body_whitelists(context, path, body):
     _, client, calls, _ = context
+    body = {**({"expected_status": UNIVERSE_STATUS} if path.startswith("universe/") else MAPPING_EXPECTED), **body}
     assert client.post(f"/api/live-exec/{path}", json=body).status_code in (400, 422)
     assert not calls
 
@@ -343,3 +346,53 @@ def test_config_conflict_is_forwarded_unchanged_without_retry(context, caplog):
     assert response.content == payload
     assert len(calls) == 1
     assert "status=409" in caplog.text
+
+
+@pytest.mark.parametrize("method,path,body", WRITES[1:])
+def test_action_preconditions_required_and_conflicts_preserved(context, caplog, method, path, body):
+    _, client, calls, install = context
+    for field in (key for key in body if key.startswith("expected_")):
+        missing = {key: value for key, value in body.items() if key != field}
+        assert client.request(method, f"/api/live-exec/{path}", json=missing).status_code == 400
+    assert not calls
+    if path.startswith("universe/"):
+        payload = {"error": "status_conflict", "current_status": "u1:" + "b" * 64}
+    else:
+        payload = {"error": "mapping_conflict", "current_status": "rejected", "current_multiplier": "0.001"}
+    raw = json.dumps(payload, separators=(",", ":")).encode()
+
+    def conflict(request):
+        calls.append(request)
+        assert json.loads(request.content) == body
+        return httpx.Response(409, content=raw)
+
+    install(conflict)
+    response = client.request(method, f"/api/live-exec/{path}", json=body)
+    assert response.status_code == 409
+    assert response.content == raw
+    assert len(calls) == 1
+    assert "status=409" in caplog.text
+
+
+@pytest.mark.parametrize("path,body", [
+    ("universe/BTC/exclude", {"expected_status": value})
+    for value in (None, True, 1, {}, [], "excluded", "u1:" + "A" * 64, "u1:" + "a" * 63, "u1:" + "a" * 64 + "\n")
+] + [
+    (f"mappings/{MAPPING}/confirm", {**MAPPING_EXPECTED, "expected_status": value})
+    for value in (None, True, 1, {}, [], "unknown", "confirmed\n")
+] + [
+    (f"mappings/{MAPPING}/reject", {**MAPPING_EXPECTED, "expected_multiplier": value})
+    for value in (None, True, 1000, {}, [], "", "NaN", "Infinity", "secret", "1" * 81, "1000\n")
+])
+def test_action_precondition_types_and_bounds(context, path, body):
+    _, client, calls, _ = context
+    assert client.post(f"/api/live-exec/{path}", json=body).status_code == 400
+    assert not calls
+
+
+@pytest.mark.parametrize("multiplier", ["1000", "0.001", "1000.00", "1e3"])
+def test_mapping_multiplier_is_never_converted_to_number(context, multiplier):
+    _, client, calls, _ = context
+    body = {**MAPPING_EXPECTED, "expected_multiplier": multiplier}
+    assert client.post(f"/api/live-exec/mappings/{MAPPING}/confirm", json=body).status_code == 200
+    assert json.loads(calls[0].content) == body
