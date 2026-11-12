@@ -10,6 +10,8 @@ export interface LivePeriod {
 export interface LiveAccount {
   equity_usd: Num; baseline_usd: Num; drop_usd: Num; margin_multiple: Num; ok: boolean | null; error: Text;
 }
+export type LiveOpeningSkipReason = "book_skew" | "book_stale" | "funding_diff" | "baseline_not_flat"
+  | "not_single_venue_outlier" | "too_few_venues";
 export interface LiveSummary {
   generated_at: Text; mode: "shadow" | "live" | null; halted: boolean | null; halt_reason: Text;
   stop_file: boolean | null; opening_paused_reason: Text;
@@ -17,18 +19,24 @@ export interface LiveSummary {
   accounts: { crossex: LiveAccount | null; bitget: LiveAccount | null } | null;
   today: LivePeriod | null; total: LivePeriod | null;
   fees: { crossex_taker: Num; bitget_taker: Num } | null; last_error: Text;
+  baseline_ready_pairs?: Num; structural_spread_pairs?: Num; cooldown_pairs?: Num;
+  opening_skip_counts?: Partial<Record<LiveOpeningSkipReason, Num>> | null;
 }
 interface Leg {
   exchange: Text; side: "long" | "short" | null; qty: Num;
 }
-export interface LivePosition {
+interface LiveOpeningSnapshot {
+  baseline_bps?: Num; excess_bps?: Num; funding_cost_bps?: Num;
+  open_book_skew_ms?: Num; close_book_skew_ms?: Num;
+}
+export interface LivePosition extends LiveOpeningSnapshot {
   id: string; symbol: Text; opened_at: Text; held_seconds: Num;
   legs: (Leg & { route: Text; entry_price: Num; notional_usd: Num; mark_price: Num })[] | null;
   entry_spread_bps: Num; current_spread_bps: Num; unrealized_usd: Num; unrealized_bps: Num;
   next_funding_at: Text; stop_distance_bps: Num; max_hold_at: Text;
   status: "opening" | "open" | "closing" | "one_leg" | null;
 }
-export interface LiveTrade {
+export interface LiveTrade extends LiveOpeningSnapshot {
   id: string; symbol: Text; pair: Text; opened_at: Text; closed_at: Text; held_seconds: Num;
   legs: (Leg & { entry_vwap: Num; exit_vwap: Num })[] | null;
   entry_spread_bps: Num; fees_usd: Num; funding_usd: Num; net_usd: Num; net_bps: Num; exit_reason: Text;

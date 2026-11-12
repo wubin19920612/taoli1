@@ -1,7 +1,7 @@
 import { Alert, Button, Card, Col, Descriptions, Empty, Row, Space, Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useEffect, useState } from "react";
-import type { LiveAccount, LiveGroup, LivePeriod, LivePosition, LiveSummary, LiveTrade } from "../api/liveExec";
+import type { LiveAccount, LiveGroup, LiveOpeningSkipReason, LivePeriod, LivePosition, LiveSummary, LiveTrade } from "../api/liveExec";
 import { isPageHidden } from "../utils/pageVisibility";
 import { ProfitHistogram } from "./liveExec/ProfitHistogram";
 import { useLiveExec } from "./liveExec/useLiveExec";
@@ -11,6 +11,14 @@ const reasons: Record<string, string> = {
   stale: "行情中断", one_leg: "单腿处理", halt: "熔断",
 };
 const states = { opening: "开仓中", open: "持仓中", closing: "平仓中", one_leg: "单腿处理中" };
+const openingSkipReasons: { key: LiveOpeningSkipReason; label: string; explanation: string }[] = [
+  { key: "book_skew", label: "盘口不同步", explanation: "两腿盘口时间差超过开仓允许范围。" },
+  { key: "book_stale", label: "盘口陈旧", explanation: "盘口时间信息缺失、无效或已过期。" },
+  { key: "funding_diff", label: "资金费率检查未通过", explanation: "资金费率数据无效，或归一化后的费率、费率差超限。" },
+  { key: "baseline_not_flat", label: "基准不平坦", explanation: "历史基准偏移或波动过大，未通过平坦性检查。" },
+  { key: "not_single_venue_outlier", label: "非单一交易所异常", explanation: "价格偏离未能归因于单一交易所，未通过异常模式检查。" },
+  { key: "too_few_venues", label: "交易所数量不足", explanation: "有效且及时的参考交易所不足，无法判断单所异常。" },
+];
 const failureLabels: Record<string, string> = {
   not_configured: "未配置", timeout: "请求超时", unreachable: "上游不可达", invalid_json: "数据格式异常",
   invalid_configuration: "配置无效", request_failed: "请求失败",
@@ -89,7 +97,20 @@ function Summary({ data }: { data: LiveSummary | null }) {
         <Descriptions.Item label="持仓对数">{number(data.caps?.open_pairs, 0)} / {number(data.caps?.max_pairs, 0)}</Descriptions.Item>
         <Descriptions.Item label="单腿名义额上限">{number(data.caps?.leg_max_usd)} USD</Descriptions.Item>
         <Descriptions.Item label="通道吃单费率">{feeRate(data.fees?.crossex_taker)} / {feeRate(data.fees?.bitget_taker)}（crossex / bitget）</Descriptions.Item>
+        <Descriptions.Item label="基准预热完成数">{number(data.baseline_ready_pairs, 0)}</Descriptions.Item>
+        <Descriptions.Item label="结构性拉黑数">{number(data.structural_spread_pairs, 0)}</Descriptions.Item>
+        <Descriptions.Item label="冷却数">{number(data.cooldown_pairs, 0)}</Descriptions.Item>
       </Descriptions>
+      <Typography.Text type="secondary">组合计数按基础币和无方向交易所组合去重；三项可能重叠，不表示可立即开仓。</Typography.Text>
+      <Card size="small" title="累计放弃开仓原因" style={{ width: "100%" }}>
+        <Typography.Paragraph type="secondary">累计放弃机会数（含影子模式），跨日和重启保留；自第七轮启用后开始统计，按机会去重，不回填升级前历史。多条件失败只计首先判定的原因。</Typography.Paragraph>
+        <Descriptions size="small" column={{ xs: 1, md: 2, xl: 3 }}>
+          {openingSkipReasons.map(({ key, label, explanation }) => <Descriptions.Item key={key} label={label}>
+            <span>{number(data.opening_skip_counts?.[key], 0)}</span><br />
+            <Typography.Text type="secondary">{explanation}</Typography.Text>
+          </Descriptions.Item>)}
+        </Descriptions>
+      </Card>
       <Row gutter={[12, 12]}>
         <Col xs={24} xl={12}><Account name="crossex" data={data.accounts?.crossex ?? null} dropMax={data.caps?.equity_drop_max_usd ?? null} /></Col>
         <Col xs={24} xl={12}><Account name="bitget" data={data.accounts?.bitget ?? null} dropMax={data.caps?.equity_drop_max_usd ?? null} /></Col>
@@ -105,6 +126,11 @@ const tradeColumns: ColumnsType<LiveTrade> = [
   { title: "持有时长", dataIndex: "held_seconds", render: duration },
   { title: "两腿均价（开 → 平）", key: "legs", render: (_, row) => row.legs?.map((leg, index) => <div key={index}>{leg.exchange ?? "—"} · {side(leg.side)} · {price(leg.qty)}：{price(leg.entry_vwap)} → {price(leg.exit_vwap)}</div>) ?? "—" },
   { title: "开仓价差（bp）", dataIndex: "entry_spread_bps", render: (v: number | null) => number(v) },
+  { title: "开仓基准（bp）", dataIndex: "baseline_bps", render: (v: number | null | undefined) => number(v) },
+  { title: "开仓超额价差（bp）", dataIndex: "excess_bps", render: (v: number | null | undefined) => number(v) },
+  { title: "预估两小时资金费成本（bp）", dataIndex: "funding_cost_bps", render: (v: number | null | undefined) => number(v) },
+  { title: "开仓盘口时间差（毫秒）", dataIndex: "open_book_skew_ms", render: (v: number | null | undefined) => number(v, 0) },
+  { title: "平仓盘口时间差（毫秒）", dataIndex: "close_book_skew_ms", render: (v: number | null | undefined) => number(v, 0) },
   { title: "手续费（USD）", dataIndex: "fees_usd", render: (v: number | null) => number(v) },
   { title: "资金费（USD）", dataIndex: "funding_usd", render: (v: number | null) => number(v) },
   { title: "净利润", key: "net", render: (_, row) => <Profit usd={row.net_usd} bps={row.net_bps} /> },
@@ -138,6 +164,11 @@ export function LiveExecPage() {
     { title: "币种", dataIndex: "symbol", render: (value: string | null) => value ?? "—" },
     { title: "两腿（交易所 / 通道 / 方向 / 数量 / 开仓价 / 标记价）", key: "legs", render: (_, row) => row.legs?.map((leg, index) => <div key={index}>{leg.exchange ?? "—"} / {leg.route ?? "—"} / {side(leg.side)} / {price(leg.qty)} / {price(leg.entry_price)} / {price(leg.mark_price)}</div>) ?? "—" },
     { title: "开仓 / 当前价差（bp）", key: "spread", render: (_, row) => `${number(row.entry_spread_bps)} / ${number(row.current_spread_bps)}` },
+    { title: "开仓基准（bp）", dataIndex: "baseline_bps", render: (v: number | null | undefined) => number(v) },
+    { title: "开仓超额价差（bp）", dataIndex: "excess_bps", render: (v: number | null | undefined) => number(v) },
+    { title: "预估两小时资金费成本（bp）", dataIndex: "funding_cost_bps", render: (v: number | null | undefined) => number(v) },
+    { title: "开仓盘口时间差（毫秒）", dataIndex: "open_book_skew_ms", render: (v: number | null | undefined) => number(v, 0) },
+    { title: "平仓盘口时间差（毫秒）", dataIndex: "close_book_skew_ms", render: (v: number | null | undefined) => number(v, 0) },
     { title: "浮动盈亏", key: "pnl", render: (_, row) => <Profit usd={row.unrealized_usd} bps={row.unrealized_bps} /> },
     { title: "已持有时长", key: "held", render: (_, row) => duration(row.opened_at && Number.isFinite(Date.parse(row.opened_at)) ? (now - Date.parse(row.opened_at)) / 1000 : row.held_seconds) },
     { title: "距资金费结算", key: "funding", render: (_, row) => countdown(row.next_funding_at, now) },
@@ -150,11 +181,12 @@ export function LiveExecPage() {
     <Typography.Title level={3}>实盘</Typography.Title>
     {error && <Alert type="warning" showIcon message={`实盘服务未连接（${failureLabel(error)}）`} />}
     <Summary data={summary} />
+    <Typography.Paragraph type="secondary">基准、超额价差和预估两小时资金费成本均为开仓复核快照；开仓超额价差尚未扣除费用，预估成本不等于实际已付资金费。盘口时间差不代表订单发送或成交时间差；平仓盘口时间差可能远超 300 毫秒。历史快照缺失时显示“—”。</Typography.Paragraph>
     <Card title="当前持仓"><Table rowKey="id" size="small" columns={positionColumns} dataSource={positions}
-      pagination={false} scroll={{ x: 1900 }} locale={{ emptyText: "暂无当前持仓" }} /></Card>
+      pagination={false} scroll={{ x: 2800 }} locale={{ emptyText: "暂无当前持仓" }} /></Card>
     <Card title="已平仓记录">
       <Table rowKey="id" size="small" columns={tradeColumns} dataSource={trades}
-        pagination={false} scroll={{ x: 2500 }} locale={{ emptyText: "暂无已平仓记录" }} />
+        pagination={false} scroll={{ x: 3400 }} locale={{ emptyText: "暂无已平仓记录" }} />
       <Button style={{ marginTop: 12 }} disabled={!canLoadMore} loading={loadingMore} onClick={loadMore}>加载更多</Button>
     </Card>
     <Card title={`利润分布（近 ${stats?.days ?? "—"} 天，共 ${stats?.n ?? "—"} 笔）`}>
