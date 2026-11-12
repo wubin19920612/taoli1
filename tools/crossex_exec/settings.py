@@ -109,4 +109,4 @@ class Settings:
         return new
 
     def audit(self):
-        return [json.loads(e['value']) for e in self.store.events() if e['kind'] == 'CONFIG_CHANGED']
+        return [json.loads(e['value']) for e in self.store.events() if e['kind'] in ('CONFIG_CHANGED', 'CONFIG_CONFLICT')]

@@ -378,10 +378,10 @@ class Engine:
                           PeriodicWorker(self.refresh_reference,5,'exec-reference',self.background_error),
                           PeriodicWorker(self.refresh_baselines,30,'exec-baseline',self.background_error)]
 
-    def background_error(self,worker,kind):
+    def background_error(self,worker,kind,location):
         with self._lifecycle_lock:
             if not self._closed:
-                self.store.event('BACKGROUND_FAILED',dict(worker=worker,error_type=kind))
+                self.store.event('BACKGROUND_FAILED',dict(worker=worker,error_type=kind,location=location))
 
     def close(self):
         with self._lifecycle_lock:

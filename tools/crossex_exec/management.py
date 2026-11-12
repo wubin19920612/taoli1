@@ -1,9 +1,11 @@
 """Bounded read projections and separately authenticated local administration."""
 from pathlib import Path
 import re
+import time
 
+from tools.fill_sim.core import dec
 from .api_data import readonly, Budget, number, utc
-from .settings import Settings
+from .settings import Settings, validate
 from .storage import Store
 from .universe import Universe
 from .public_store import PUBLIC_KEYS, public_read
@@ -12,8 +14,25 @@ from .public_store import PUBLIC_KEYS, public_read
 READS = {'config', 'config/audit', 'universe', 'mappings'}
 
 
+class WriteConflict(ValueError):
+    """Fixed public response, with a separate bounded audit of the precondition."""
+    def __init__(self, kind, response, expected, **identity):
+        super().__init__(response['error'])
+        self.kind, self.response = kind, response
+        self.audit = dict(at=time.time(), source='admin_api', **identity, **expected, **response)
+        if kind == 'CONFIG_CONFLICT':
+            self.audit.update(version=response['current_version'], old={}, new={})
+
+
+def mapping_multiplier(row):
+    legs = sorted(row['legs'], key=lambda leg: leg['market_key'])
+    if len(legs) != 2 or any(dec(leg['quantity_multiplier']) <= 0 for leg in legs):
+        raise ValueError('mapping_unavailable')
+    return format((dec(legs[0]['quantity_multiplier'])/dec(legs[1]['quantity_multiplier'])).normalize(), 'f')
+
+
 def mapping_view(row):
-    return dict(id=row['id'],base=row['base'],status=row['status'],at=utc(row['at']),ratio=number(row['ratio']),
+    return dict(id=row['id'],base=row['base'],status=row['status'],multiplier=mapping_multiplier(row),at=utc(row['at']),ratio=number(row['ratio']),
                 legs=[dict(market_key=leg['market_key'],raw_base=leg['raw_base'],
                            quantity_multiplier=number(leg['quantity_multiplier'])) for leg in row['legs']])
 
@@ -77,8 +96,8 @@ class ReadStore:
         return self.cache[key]
 
     def events(self):
-        return [dict(kind='CONFIG_CHANGED', value=raw) for (raw,) in reversed(self.conn.execute(
-            "SELECT value FROM events WHERE kind='CONFIG_CHANGED' ORDER BY id DESC LIMIT 500").fetchall())]
+        return [dict(kind=kind, value=raw) for kind, raw in reversed(self.conn.execute(
+            "SELECT kind,value FROM events WHERE kind IN ('CONFIG_CHANGED','CONFIG_CONFLICT') ORDER BY id DESC LIMIT 500").fetchall())]
 
 
 class Management:
@@ -119,18 +138,61 @@ class Management:
                 raise OSError('running_executor_required')
             return equity_view(self.equity_admin(confirm=True,reason=reason,source='admin_api'))
         with Store(self.path) as store:
-            if route == ('config',):
-                return Settings(store).update(body, source='admin_api')
-            universe = Universe(store)
-            if route[0] == 'universe':
-                _, base, action = route
-                if action == 'classify':
-                    return universe.classify(base, body)
-                if body:
-                    raise ValueError('invalid_body')
-                return universe.exclude(base, action == 'exclude')
-            if route[0] == 'mappings':
-                if body:
-                    raise ValueError('invalid_body')
-                return mapping_view(universe.decide_mapping(route[1], 'confirmed' if route[2] == 'confirm' else 'rejected'))
+            conflict = None
+            with store.transaction():
+                try:
+                    return self._update(store, route, body)
+                except WriteConflict as error:
+                    # Commit the conflict event, but no mutation. Raising inside
+                    # this transaction would incorrectly roll the audit back.
+                    store.event(error.kind, error.audit)
+                    conflict = error
+            if conflict is not None:
+                raise conflict
+        raise ValueError('unknown_route')
+
+    @staticmethod
+    def _update(store, route, body):
+        if route == ('config',):
+            expected = body.get('expected_version')
+            if type(expected) is not int or expected < 0:
+                raise ValueError('invalid_expected_version')
+            changes = validate({k: v for k, v in body.items() if k != 'expected_version'})
+            settings = Settings(store)
+            current = settings.read()
+            if current['fallback']:
+                raise ValueError('config_unreadable')
+            if expected != current['version']:
+                raise WriteConflict('CONFIG_CONFLICT', dict(error='version_conflict', current_version=current['version']),
+                                    dict(expected_version=expected))
+            return settings.update(changes, source='admin_api')
+        universe = Universe(store)
+        expected = body.get('expected_status')
+        if route[0] == 'universe':
+            _, base, action = route
+            if not isinstance(expected, str) or not re.fullmatch(r'u1:[0-9a-f]{64}', expected):
+                raise ValueError('invalid_expected_status')
+            fields = {k: v for k, v in body.items() if k != 'expected_status'}
+            if action not in ('classify', 'exclude', 'unexclude') or (action != 'classify' and fields):
+                raise ValueError('invalid_body')
+            current = universe.administrative_status(base)
+            if expected != current:
+                raise WriteConflict('UNIVERSE_CONFLICT', dict(error='status_conflict', current_status=current),
+                                    dict(expected_status=expected), base=base, action=action)
+            value = universe.classify(base, fields) if action == 'classify' else universe.exclude(base, action == 'exclude')
+            return dict(value, status=universe.administrative_status(base))
+        if route[0] == 'mappings':
+            multiplier = body.get('expected_multiplier')
+            if (set(body) != {'expected_status', 'expected_multiplier'}
+                    or not isinstance(expected, str) or expected not in ('pending', 'confirmed', 'rejected')
+                    or not isinstance(multiplier, str) or not re.fullmatch(r'[0-9.eE+\-]{1,80}', multiplier)):
+                raise ValueError('invalid_body')
+            row = store.meta('symbol_mappings', {}).get(route[1])
+            if not row or not row.get('available', True) or not 0 <= universe.clock()-row['at'] <= 300:
+                raise ValueError('mapping_unavailable')
+            current = mapping_multiplier(row)
+            if expected != row['status'] or multiplier != current:
+                raise WriteConflict('MAPPING_CONFLICT', dict(error='mapping_conflict', current_status=row['status'], current_multiplier=current),
+                                    dict(expected_status=expected, expected_multiplier=multiplier), id=route[1], action=route[2])
+            return mapping_view(universe.decide_mapping(route[1], 'confirmed' if route[2] == 'confirm' else 'rejected'))
         raise ValueError('unknown_route')

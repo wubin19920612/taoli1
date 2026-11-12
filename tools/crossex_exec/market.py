@@ -8,7 +8,7 @@ from tools.fill_sim.funding import funding_urls, parse_funding
 from tools.fill_sim.network import PublicClient, Limiter
 from tools.fill_sim.scheduler import RequestQueue, DaemonPool
 from .policy import mapped_instrument
-from .baseline import BATCH_URLS, FRESH_SECONDS, parse_tickers
+from .baseline import BATCH_URLS, FRESH_SECONDS, parse_tickers, supported_base
 from .liquidity import VOLUME_URLS, parse_batch
 from .universe import Universe, category, alias, PRE_IPO_BASES, COMMODITY_BASES
 from .open_interest import oi_urls, parse_oi
@@ -359,6 +359,8 @@ class MarketData:
                     or decisions.get(i.spec.base,{}).get('category') in ('pre_ipo','commodity')):
                 continue
             base,multiplier=confirmed.get(key,(i.spec.base,dec(1)))
+            if not supported_base(base):
+                continue
             candidates.setdefault(base,[]).append((i.market.exchange,row,multiplier))
         bases=tuple(sorted(base for base,values in candidates.items()
                            if any(dec(row['volume'])>=dec(minimum) for _,row,_ in values)))

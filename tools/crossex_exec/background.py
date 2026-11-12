@@ -1,8 +1,22 @@
 """Bounded daemon refreshers; opening workers only consume an immutable cache."""
 import copy
 import logging
+import re
 import threading
 import time
+
+
+def exception_location(error):
+    """Innermost module/line only: no source, paths, locals or exception text."""
+    trace = error.__traceback__
+    if trace is None:
+        return 'unknown:0'
+    while trace.tb_next is not None:
+        trace = trace.tb_next
+    module = trace.tb_frame.f_globals.get('__name__', 'unknown')
+    if not isinstance(module, str) or not re.fullmatch(r'[A-Za-z0-9_.]{1,200}', module):
+        module = 'unknown'
+    return module+':'+str(trace.tb_lineno)
 
 
 class SnapshotCache:
@@ -40,14 +54,15 @@ class PeriodicWorker:
                 self.callback()
             except Exception as error:
                 kind=type(error).__name__
+                location=exception_location(error)
+                identity=(kind,location)
                 now=time.monotonic()
-                if now-self.last_errors.get(kind,float('-inf'))>=60:
-                    self.last_errors[kind]=now
-                    # Never log exception text, traceback, request or response.
-                    logging.getLogger(__name__).error('background_callback_failed worker=%s type=%s',self.name,kind)
+                if now-self.last_errors.get(identity,float('-inf'))>=60:
+                    self.last_errors[identity]=now
+                    logging.getLogger(__name__).error('background_callback_failed worker=%s type=%s location=%s',self.name,kind,location)
                     if self.on_error:
                         try:
-                            self.on_error(self.name,kind)
+                            self.on_error(self.name,kind,location)
                         except Exception:
                             logging.getLogger(__name__).error('background_failure_journal_unavailable worker=%s',self.name)
             self.stopped.wait(max(.2,self.interval-(time.monotonic()-started)))

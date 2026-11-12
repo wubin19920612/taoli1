@@ -32,9 +32,14 @@ COOLDOWN_REASONS = frozenset((
 ))
 
 
+def supported_base(base):
+    """Keep the existing baseline identity boundary, including ASCII-only keys."""
+    return (isinstance(base, str) and bool(base) and base.isascii()
+            and base.isalnum() and base == base.upper())
+
+
 def pair_key(base, a, b):
-    if (not isinstance(base, str) or not base or not base.isascii() or not base.isalnum()
-            or base != base.upper() or a == b or a not in BATCH_URLS or b not in BATCH_URLS):
+    if not supported_base(base) or a == b or a not in BATCH_URLS or b not in BATCH_URLS:
         raise ValueError('baseline_identity_invalid')
     return '|'.join((base, *sorted((a, b))))
 
@@ -102,6 +107,10 @@ class Baseline:
 
     def record(self, mids, bases, at=None):
         now = self.clock() if at is None else at
+        # Public catalogs can contain identities unsupported by this strategy.
+        # Isolate them before quotes, samples AND empty-round status writes;
+        # never normalize/rename them or abort valid pairs in the same round.
+        bases = tuple(base for base in bases if supported_base(base))
         clean = {}
         for ex in BATCH_URLS:
             for base in bases:

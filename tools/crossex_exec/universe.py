@@ -1,6 +1,7 @@
 """Exact market eligibility and explicitly confirmed denomination mappings."""
 from dataclasses import replace
 import hashlib
+import json
 from itertools import combinations
 import re
 import time
@@ -72,6 +73,24 @@ class Universe:
     def _decisions(self):
         return self.store.meta('universe_decisions', {})
 
+    def administrative_statuses(self, catalog=None, decisions=None):
+        """Stable across quotes; changes on decisions, ABA writes or catalog rules."""
+        catalog = self.catalog() if catalog is None else catalog
+        decisions = self._decisions() if decisions is None else decisions
+        groups = {}
+        for key, instrument in sorted(catalog.items()):
+            groups.setdefault(instrument.spec.base, {})[key] = instrument.dump()
+        return {base: self._status(decisions.get(base, {}), groups.get(base, {}))
+                for base in set(groups) | set(decisions)}
+
+    @staticmethod
+    def _status(decision, instruments):
+        raw = json.dumps([decision, instruments], sort_keys=True, separators=(',', ':'), allow_nan=False)
+        return 'u1:'+hashlib.sha256(raw.encode('utf-8')).hexdigest()
+
+    def administrative_status(self, base):
+        return self.administrative_statuses().get(base, self._status({}, {}))
+
     def classify(self, base, value):
         catalog = self.catalog()
         if not isinstance(value, dict) or set(value)-{'category', 'underlying_market', 'markets'}:
@@ -95,7 +114,8 @@ class Universe:
         with self.store.transaction():
             decisions = self._decisions()
             old = decisions.get(base, {})
-            decisions[base] = dict(old, category=kind, underlying_market=underlying, markets=selected)
+            decisions[base] = dict(old, category=kind, underlying_market=underlying, markets=selected,
+                                   revision=old.get('revision', 0)+1)
             self.store.set_meta('universe_decisions', decisions)
             self.store.event('UNIVERSE_CHANGED', dict(base=base, old=old, new=decisions[base], at=self.clock(), source='admin_api'))
         return decisions[base]
@@ -106,7 +126,7 @@ class Universe:
         with self.store.transaction():
             decisions = self._decisions()
             old = decisions.get(base, {})
-            decisions[base] = dict(old, excluded=excluded)
+            decisions[base] = dict(old, excluded=excluded, revision=old.get('revision', 0)+1)
             self.store.set_meta('universe_decisions', decisions)
             self.store.event('UNIVERSE_CHANGED', dict(base=base, old=old, new=decisions[base], at=self.clock(), source='admin_api'))
         return decisions[base]
@@ -126,7 +146,9 @@ class Universe:
         raise ValueError('category_unconfirmed')
 
     def discover(self):
-        with self.store.lock:
+        # Discovery is also a mapping writer: serialize across SQLite connections
+        # and processes, so a refresh cannot restore a stale admin decision.
+        with self.store.transaction():
             self._discover()
 
     def _discover(self):
@@ -235,14 +257,16 @@ class Universe:
 
     def describe(self):
         quotes, decisions = self.store.meta('market_tickers', {}), self._decisions()
+        catalog = self.catalog()
+        statuses = self.administrative_statuses(catalog, decisions)
         result = {}
-        for i in self.catalog().values():
+        for i in catalog.values():
             if (i.category=='pre_ipo' or i.rule_type in ('pre_market','rebase_contract')
                     or decisions.get(i.spec.base,{}).get('category')=='pre_ipo'
                     or alias(i.spec.base)[0] in PRE_IPO_BASES):
                 continue
             decision = decisions.get(i.spec.base, {})
-            row = result.setdefault(i.spec.base, dict(base=i.spec.base, excluded=bool(decision.get('excluded')),
+            row = result.setdefault(i.spec.base, dict(base=i.spec.base, status=statuses[i.spec.base], excluded=bool(decision.get('excluded')),
                 category=decision.get('category', i.category), underlying_market=decision.get('underlying_market'), markets=[]))
             quote = quotes.get(i.market.key, {})
             try:

@@ -9,7 +9,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from .api_data import JournalView, query_options
 from .security import REDACTOR, Redactor
-from .management import Management, READS, write_route
+from .management import Management, READS, WriteConflict, write_route
 
 
 PORT = 8795
@@ -176,6 +176,8 @@ class _Handler(BaseHTTPRequestHandler):
                 if route is not None:
                     try:
                         value = service.management.write(route, body)
+                    except WriteConflict as error:
+                        return self.reply(409, service.clean(error.response))
                     except ValueError as error:
                         if route==('equity','rebaseline'):
                             from .equity import ADMIN_REFUSALS
