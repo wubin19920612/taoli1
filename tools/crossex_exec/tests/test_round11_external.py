@@ -416,6 +416,30 @@ class AccountingTests(ExternalFixture, unittest.TestCase):
         self.assertEqual(dec(self.reconcile()['daily']),0)
         self.assertEqual(dec(self.store.meta('external_income')['external_contribution']),-1)
 
+    def test_failed_registration_read_revokes_income_and_preserves_failed_raw_response(self):
+        self.reconcile()
+        self.assertTrue(self.engine.can_open())
+        raw=dict(raw_positions=dict(crossex=[dict(symbol=SYMBOL,position_qty='1')]))
+        failure=ValueError('invalid_response')
+        failure.account_snapshot=raw
+        with patch.object(self.accounts,'snapshot',side_effect=failure):
+            with self.assertRaisesRegex(ValueError,'external_read_unavailable'):
+                self.change(symbol=SYMBOL)
+        self.assertFalse(self.engine.can_open())
+        self.assertFalse(self.store.meta('external_income')['verified'])
+        self.assertEqual(self.store.meta('external_failed_snapshot'),raw)
+        self.assertEqual(len(self.registry().records()),1)
+
+    def test_failed_rebaseline_cannot_reuse_old_income_and_keeps_new_evidence(self):
+        self.reconcile()
+        self.assertTrue(self.engine.can_open())
+        self.activity_complete=False
+        with self.assertRaisesRegex(ValueError,'external_income_unverifiable'):
+            self.anchor()
+        self.assertFalse(self.engine.can_open())
+        self.assertFalse(self.store.meta('external_income')['verified'])
+        self.assertFalse(self.store.meta('external_admin_snapshot')['activity']['complete'])
+
 
 class ExternalAPITests(ExternalFixture, unittest.TestCase):
     def test_admin_only_get_status_conflict_audit_and_missing_precondition(self):
