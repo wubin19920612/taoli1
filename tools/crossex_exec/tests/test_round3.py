@@ -489,9 +489,9 @@ class Round3PolicyTests(unittest.TestCase):
         instruments[1].spec = replace(instruments[1].spec, min_notional='99.94')
         books = [Book([['99', '10']], [['100', '10']], 1000), Book([['102', '10']], [['103', '10']], 1000)]
         funding = [dict(rate='0', next=5000, interval=28800, captured_at=1000, history_ok=True, max_abs_24h='0')]*2
-        result = review(instruments, books, ['.0002']*2, funding, ['5000000']*2, 1000, baseline_bps=0)
-        self.assertEqual(dec(result['quantity']), dec('.981'))
-        self.assertGreaterEqual(dec(result['quantity'])*dec(result['limits'][1]), dec('99.94'))
+        # PM 2026-11-12: floor-only sizing replaces the former .981 bump.
+        with self.assertRaisesRegex(ValueError, '^size_too_small$'):
+            review(instruments, books, ['.0002']*2, funding, ['5000000']*2, 1000, baseline_bps=0)
         instruments[1].spec = replace(instruments[1].spec, max_qty='.980')
         with self.assertRaises(ValueError):
             review(instruments, books, ['.0002']*2, funding, ['5000000']*2, 1000, baseline_bps=0)
@@ -501,7 +501,9 @@ class Round3PolicyTests(unittest.TestCase):
         books = [Book([['99', '10']], [['100', '10']], 1000), Book([['102', '10']], [['103', '10']], 1000)]
         funding = [dict(rate='0', next=5000, interval=28800, captured_at=1000, history_ok=True, max_abs_24h='0')]*2
         instruments[0].spec = replace(instruments[0].spec, min_qty='.981')
-        self.assertEqual(dec(review(instruments, books, ['.0002']*2, funding, ['5000000']*2, 1000, baseline_bps=0)['quantity']), dec('.981'))
+        # PM 2026-11-12: never add a common step to meet a minimum.
+        with self.assertRaisesRegex(ValueError, '^size_too_small$'):
+            review(instruments, books, ['.0002']*2, funding, ['5000000']*2, 1000, baseline_bps=0)
         instruments[0].spec = replace(instruments[0].spec, min_qty='.982')
         with self.assertRaises(ValueError):
             review(instruments, books, ['.0002']*2, funding, ['5000000']*2, 1000, baseline_bps=0)
