@@ -24,7 +24,7 @@ EXTERNAL_IDENTITY = {"route": "crossex", "exchange_type": "HYPERLIQUID", "busine
                      "symbol": "HYPERLIQUID_FUTURE_io:OAI_USDC", "quote": "USDC", "dex": "io"}
 EXTERNAL_BODY = {"identity": EXTERNAL_IDENTITY, "expected_status": EXTERNAL_STATUS,
                  "reason": "人工核对 Astro 外部持仓"}
-READS = ("config", "config/audit", "universe", "mappings", "external-positions")
+READS = ("config", "config/audit", "universe", "mappings", "external-positions", "remote-positions")
 WRITES = [
     ("PUT", "config", {"order_usd_max": 30, "expected_version": 2}),
     ("POST", "universe/SKHYNIX/exclude", {"expected_status": UNIVERSE_STATUS}),

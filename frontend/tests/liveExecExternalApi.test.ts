@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getLiveExecAdmin, LiveAdminConflictError, writeLiveExecAdmin } from "../src/api/liveExec";
+import { remoteSnapshot } from "./liveExecRemoteFixtures";
 
 const identity = { route: "crossex", exchange_type: "HYPERLIQUID", business: "FUTURE",
   symbol: "HYPERLIQUID_FUTURE_io:OAI_USDC", quote: "USDC", dex: "io" };
@@ -8,6 +9,21 @@ const status = "x1:" + "a".repeat(64);
 afterEach(() => vi.unstubAllGlobals());
 
 describe("外仓 API", () => {
+  it.each([true, false])("preserves remote inner availability %s and future fields", async available => {
+    const data = { ...remoteSnapshot, available, future_risk_scope: null };
+    const fetch = vi.fn(async () => ({ ok: true, json: async () => ({ available: true, data }) }));
+    vi.stubGlobal("fetch", fetch);
+    expect(await getLiveExecAdmin("remote-positions", new AbortController().signal)).toEqual({ available: true, data });
+    expect((fetch.mock.calls[0] as unknown as [string])[0]).toContain("/api/live-exec/remote-positions");
+  });
+
+  it.each([null, [], {}, { ...remoteSnapshot, positions: null }, { ...remoteSnapshot, positions: [null] },
+    { ...remoteSnapshot, positions: [{}] }, { ...remoteSnapshot, available: "true" },
+  ])("rejects malformed remote snapshots without treating them as empty: %j", async data => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ available: true, data }) })));
+    expect(await getLiveExecAdmin("remote-positions", new AbortController().signal)).toEqual({ available: false, error: "invalid_json" });
+  });
+
   it("accepts the round eleven object and preserves later optional fields", async () => {
     const data = { status, contracts: [], income: null, flatten_status: null, projection: null,
       future_optional_field: { amount: 0 } };
