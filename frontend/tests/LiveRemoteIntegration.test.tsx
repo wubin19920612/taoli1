@@ -211,9 +211,26 @@ describe("第十三轮完整远端持仓接入", () => {
     render(<LiveExecPage />); await flush(); await open(); setReason();
     await act(async () => { await vi.advanceTimersByTimeAsync(11000); });
     expect(ui().getByText(/快照已过期/)).toBeTruthy(); noEnabledActions();
+    expect((dialog().getByRole("button", { name: "确认提交" }) as HTMLButtonElement).disabled).toBe(true);
     await confirm(); expect(writes).toHaveLength(0);
     expect(dialog().getByText(/快照.*重新确认/)).toBeTruthy();
   });
+
+  it.each(["side", "quantity", "identity_proof", "row_version", "opposite_direction"])(
+    "invalidates a confirmation on the next real remote read when %s changes", async field => {
+      render(<LiveExecPage />); await flush(); await open(); setReason();
+      const row: Record<string, unknown> = { ...remotePosition };
+      if (field === "side") Object.assign(row, { side: "short", position_key: `crossex|${remoteIdentity.symbol}|short` });
+      if (field === "quantity") row.quantity = "2.000000000000000002";
+      if (field === "identity_proof") row.identity_verified = false;
+      if (field === "row_version") row.snapshot_version = 16;
+      remote.positions = field === "opposite_direction" ? [row,
+        { ...remotePosition, side: "short", position_key: `crossex|${remoteIdentity.symbol}|short` }] : [row];
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+      expect((dialog().getByRole("button", { name: "确认提交" }) as HTMLButtonElement).disabled).toBe(true);
+      expect(dialog().getByText(/持仓.*变化.*重新确认/)).toBeTruthy();
+      await confirm(); expect(writes).toHaveLength(0);
+    });
 
   it("retains the confirmed registry status when a later poll changes only the concurrency token", async () => {
     render(<LiveExecPage />); await flush(); await open(); setReason();

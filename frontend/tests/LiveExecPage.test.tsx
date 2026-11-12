@@ -84,7 +84,7 @@ describe("实盘契约页面", () => {
     expect(screen.getByText(/累计放弃机会数（含影子模式），跨日和重启保留/)).toBeTruthy();
   });
 
-  it("uses effective account risk limits after admin changes and shows round eight skip counts", async () => {
+  it("uses effective program risk limits after admin changes and shows round eight skip counts", async () => {
     const original = fetchMock.getMockImplementation()!;
     fetchMock.mockImplementation((input: string) => input.endsWith("/summary")
       ? Promise.resolve({ ok: true, status: 200, json: async () => ({ available: true, data: {
@@ -94,7 +94,8 @@ describe("实盘契约页面", () => {
           volume_too_low: 4, volume_unknown: 5, category_unconfirmed: 6 },
       } }) }) : original(input));
     render(<LiveExecPage />); await flush();
-    expect(screen.getByTestId("live-account-crossex").textContent).toContain("/ 50.00 USD");
+    expect(screen.getByTestId("live-program-risk").textContent).toContain("50.00 USD");
+    expect(screen.getByTestId("live-account-crossex").textContent).not.toContain("/ 50.00 USD");
     expect(descriptionValue("当前配置版本")).toBe("8");
     ["定量不足", "缺少有效 OI", "映射价格比不符", "成交额不足", "成交额未知", "类别未确认"].forEach((label, i) => {
       expect(descriptionValue(label)).toBe(String(i + 1));
@@ -156,7 +157,7 @@ describe("实盘契约页面", () => {
     }
     const account = screen.getByTestId("live-account-crossex");
     expect(account.textContent).toContain("无保证金占用");
-    expect(within(account).getByText("140.00").className).toContain("danger");
+    expect(within(account).getByText("140.00").className).not.toContain("danger");
     expect(screen.getByText("单腿处理中").className).toContain("red");
     expect(screen.getByText("200.00 / 600.00 USD")).toBeTruthy();
     expect(screen.getByText("1 / 3")).toBeTruthy();

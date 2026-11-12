@@ -25,6 +25,49 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("外部持仓确认与显示", () => {
+  it.each(["expired", "missing", "no_snapshot", "no_status", "read_error", "remote_error"])(
+    "disables an open confirmation after losing %s evidence", async state => {
+      const view = render(<LiveExternalPositions snapshot={remoteSnapshot} registry={registry} rows={[baseRow]} refresh={refresh} />);
+      await open();
+      fireEvent.change(screen.getByLabelText("操作说明"), { target: { value: "核实登记" } });
+      const snapshot = state === "missing" ? null : state === "no_snapshot" ? { ...remoteSnapshot, available: false }
+        : state === "expired" ? { ...remoteSnapshot, stale: true } : remoteSnapshot;
+      view.rerender(<LiveExternalPositions snapshot={snapshot} registry={state === "no_status" ? { ...registry, status: undefined } : registry}
+        error={state === "read_error" ? "timeout" : undefined} remoteError={state === "remote_error" ? "timeout" : undefined}
+        rows={[baseRow]} refresh={refresh} />);
+      expect((within(screen.getByRole("dialog")).getByRole("button", { name: "确认提交" }) as HTMLButtonElement).disabled).toBe(true);
+      await confirm(); expect(fetch).not.toHaveBeenCalled();
+    });
+
+  it.each([
+    { side: "short" }, { quantity: "2.000000000000000001" }, { ownership: "program" as const, action: undefined },
+    { identity: { ...identity, quote: "USDT" } }, { dex: "xyz" },
+  ])("permanently invalidates the old confirmation when its fields change: %j", async changes => {
+    const view = render(<LiveExternalPositions snapshot={remoteSnapshot} registry={registry} rows={[baseRow]} refresh={refresh} />);
+    await open();
+    fireEvent.change(screen.getByLabelText("操作说明"), { target: { value: "旧确认说明" } });
+    view.rerender(<LiveExternalPositions snapshot={remoteSnapshot} registry={registry} rows={[{ ...baseRow, ...changes }]} refresh={refresh} />);
+    const dialog = within(screen.getByRole("dialog"));
+    expect((dialog.getByRole("button", { name: "确认提交" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(dialog.getByText(/持仓.*变化.*重新确认/)).toBeTruthy();
+    view.rerender(<LiveExternalPositions snapshot={remoteSnapshot} registry={registry} rows={[baseRow]} refresh={refresh} />);
+    await confirm(); expect(fetch).not.toHaveBeenCalled();
+    expect((dialog.getByRole("button", { name: "确认提交" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(dialog.getByRole("button", { name: /取\s*消/ })); await flush(); await open();
+    expect((screen.getByLabelText("操作说明") as HTMLTextAreaElement).value).toBe("");
+    expect(within(screen.getByRole("dialog")).getByText("2.000")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("操作说明"), { target: { value: "重新核实" } });
+    await confirm(); expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it("rechecks the clock inside submit even before the next UI render", async () => {
+    render(<LiveExternalPositions snapshot={remoteSnapshot} registry={registry} rows={[baseRow]} refresh={refresh} />);
+    await open(); fireEvent.change(screen.getByLabelText("操作说明"), { target: { value: "核实登记" } });
+    vi.setSystemTime(new Date(Date.parse(remoteAt) + 10001));
+    await confirm(); expect(fetch).not.toHaveBeenCalled();
+    expect(within(screen.getByRole("dialog")).getByText(/快照.*重新确认/)).toBeTruthy();
+  });
+
   it("requires snapshot evidence even if an outdated caller supplies actionable rows", () => {
     // @ts-expect-error Simulate an outdated caller that omits the required snapshot proof.
     render(<LiveExternalPositions registry={registry} rows={[baseRow]} refresh={refresh} />);
