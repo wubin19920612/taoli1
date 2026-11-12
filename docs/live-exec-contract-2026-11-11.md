@@ -94,3 +94,16 @@
 修订后待实现的 universe 写路由为 `POST /api/v1/universe/{base}/exclude|unexclude|classify`，代替历史待实现清单中的 `enable|exclude` 提案；此前没有已实现的 `enable` 路由可供删除。config、audit、mappings 和独立管理令牌的要求仍按任务书执行。正式实现时应补齐请求/响应 schema；前端不可根据本状态说明假定接口已开放。
 
 summary 待追加共六项：`size_too_small / oi_missing / mapping_ratio_mismatch / volume_too_low / volume_unknown / category_unconfirmed`。保留全部原键及其计数、去重、持久化语义；trades/positions 待追加参数版本、sizing 明细和开仓时两腿成交额。用户已授权仅因新增键导致的精确相等断言扩展，实施时须在交接中逐项列出；风控行为断言不在此授权内。
+
+## 第八轮 PM 裁决后 WIP 状态（2026-11-12，未发布）
+
+最小量不足不补步长和空查询串直接 `{}` 已作为 `c1ccc0f` 本地提交。当前分支工作区另有未提交参数/动态范围/映射/管理接口实现；因新发现的旧成交额 500 万拒绝断言与任务书默认 100 万冲突，按用户要求停下等待裁决。完整证据与未完成列表见 [第八轮续跑交接](task-handoff-2026-11-12-crossex-exec-r8.md)。**以下仅记录 WIP 代码接口，未部署，不能作为前端已验收可用的承诺。**
+
+- `GET /api/v1/config`：`{version, values, fallback, schema}`；schema 的每个参数含 `default/min/max/integer`。`PUT` JSON 对象为部分参数更新，例如 `{"order_usd_max":30}`；越界、未知键、字符串代替数值、bool、非有限数、重复 JSON 键拒绝为 400，不部分生效。配置与旧/新值审计在同一 SQLite 事务提交。
+- `GET /api/v1/config/audit`：最近最多 500 条按时间顺序的修改记录，字段 `version/at/source/old/new`，`source=admin_api`。
+- `GET /api/v1/universe`：数组，每项 `base/category/excluded/underlying_market/markets`；各 market 保留 `market_key/raw_symbol/exchange/category/volume_usd/at/selected`。成交额过期显示 null，OKX 是基础币成交量乘 low24h 的保守下界。
+- `POST /api/v1/universe/{base}/exclude|unexclude`：JSON `{}`。`classify` 的 WIP body 为 `{"category":"listed_equity","underlying_market":"KRX","markets":["binance|future|SKHYNIXUSDT","bitget|future|SKHYNIXUSDT"]}`；股票/ETF 仅支持 US/KRX 且只能选定同一标的的精确 markets。普通币人工判定用 `category=crypto` 并列出精确 markets。人工标记 pre_ipo/commodity 的管理流程仍需补齐；目前禁止把已识别的这两类启用。
+- `GET /api/v1/mappings`：WIP 候选包含 `id/base/legs/status/at/ratio`；leg 含原始 `market_key/raw_base/quantity_multiplier`。`POST /api/v1/mappings/{id}/confirm|reject` 的 body 为 `{}`；未确认不可交易，确认后仍须开仓时价格比复核。
+- 写操作仅接受与只读令牌不同的 `CROSSEX_EXEC_ADMIN_TOKEN`，仍通过 `X-Api-Token`；只读令牌调用这些写接口为 403，错误令牌为 401。写 body 要求 `Content-Type: application/json`，上限 8192 字节；拒绝路径只作有界请求体清理。没有设置或相同管理令牌不会获得写权限。旧四个只读接口上的非 GET 仍 405。
+
+WIP summary 已增加六个新计数，缺记录为 0，去重与持久化沿用原触发 ID 规则；trades/positions 的 sizing、成交额、参数版本及映射数量投影**还未实现**。部分全局风控参数目前仅存储/校验，尚未完成“只作用于后续新仓”的接入；不能用 PUT 返回 200 作为这些风险参数已在完整执行链生效的证据。

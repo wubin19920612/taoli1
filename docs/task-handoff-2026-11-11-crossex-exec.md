@@ -1244,3 +1244,11 @@ OK
 先取得 PM 对上述两项行为断言的裁决，再在本 worktree 按修订后的第八轮任务书继续 TDD。现有入口仍是 `engine.py::ingest/opening_review/check_pair`、`policy.py::review/send_review`、`market.py::MarketData`、`baseline.py::Baseline`、`admission.py::OpeningLimits`、`limits.py::HardLimits`、`api.py` 和 `api_data.py`。参数与审计、动态 universe、成交额和 OI、按预筛的 SQLite 采样优化、映射数量贯穿恢复/减仓、管理 API、字段投影以及新模拟器覆盖均未交付。
 
 `codex/crossex-exec` 的终审修复由另一任务进行，本次未合并或改动其工作区。本轮遵守不 push、不 SSH、不 WSL、不 amend、不调真实鉴权接口；未备份、部署或验证线上，线上版本未触碰。Git 索引位于父仓库，普通暂存受沙箱阻止后按用户既有本地提交授权经自动审批执行，没有审批拒绝。仅暂存本任务文件，提交禁用 hooks/GPG；未读取真实凭据。没有额外未跟踪仓库文件，忽略的 Python 缓存和上述临时日志保留。
+
+## 第八轮交付（2026-11-12 再续跑，独立修复已提交，成交额断言待 PM）
+
+**第八轮仍未完成。** 本次从 `5bb0e65` 接续，按 PM 授权替换第三轮两个补步长成功断言，保留原最大量等拒绝断言；`c1ccc0f` 已提交不足量直接 `size_too_small` 和 Python 3.10 空查询串修复。Binance 三个原生合约的公开 OI/标记价比值已实测，原始响应与倍率解释已记录。
+
+继续实现时发现旧 `test_engine.py::test_actual_fees_missing_or_low_volume_never_sends` 用 `4999999/9000000` 成交额要求零发单，与任务书默认 100 万冲突。已提交具体 PM 方案：该旧测试显式配置 500 万以保留原输入与安全断言，另测默认 100 万；尚未收到批准，旧断言未改。按用户要求暂停依赖该裁决的验收。
+
+本次**有必须保留的未提交实现及六个新增未跟踪模块**，与上一个续跑不同。详细范围、test/feat 提交、两项断言替换前后、OI 证据、Python 3.10 实测、WIP 备份、回归结果和未完成事项全部转入 [2026-11-12 第八轮专用交接](task-handoff-2026-11-12-crossex-exec-r8.md)。下一任务先读新交接，不要只根据 HEAD 还原工作；不 push/SSH/WSL/amend/鉴权、不触碰线上和前端的边界继续有效。
