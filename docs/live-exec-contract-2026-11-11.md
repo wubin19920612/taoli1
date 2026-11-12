@@ -329,3 +329,93 @@ expected_status 取 `pending/confirmed/rejected`；expected_multiplier 为 1–8
 409 只在冲突审计成功提交后返回；审计、事务或数据库失败为 503，不宣称冲突审计已经落库。成功变更的审计失败时整笔回滚。ADMIN/只读令牌隔离、无真实账户调用的配置/映射/交易范围接口边界均保留。
 
 `BACKGROUND_FAILED` 内部事件新增 `location:"模块名:行号"`，与已有 worker、error_type 同时保存；后台错误日志同步增加 location。取异常最内层位置，不输出异常正文、完整 traceback、源码、绝对路径、请求/响应或局部变量。同一 worker 的同类型同位置每 60 秒最多记录一次，不同位置分别记录。本字段为内部诊断，不更改旧业务 API schema。
+
+## 第十一轮增补（2026-11-12）
+
+本节仅追加：允许用户明确登记、且本程序永久禁止交易的 CrossEx 外部合约。前文专用账户、远端全空等要求在本节明确覆盖的场景按以下条件执行，其余契约不变。登记不是忽略 ticker、解锁日亏或交易授权。
+
+### 精确身份、永久禁单和归属
+
+外仓逻辑登记表存于 `meta.external_contracts`，键为六项身份的 SHA-256。六项均必填且必须与原始完整 symbol、最新公开目录逐项一致：
+
+```json
+{"route":"crossex","exchange_type":"HYPERLIQUID","business":"FUTURE",
+ "symbol":"HYPERLIQUID_FUTURE_io:OAI_USDC","quote":"USDC","dex":"io"}
+```
+
+`dex` 使用原始 DEX 字符串；没有 DEX 的普通合约显式传空字符串。`io:OAI`、`xyz:OAI`、其他交易所 OAI 与归一后的 OPENAI 都不能互代。当前范围仅 CrossEx FUTURE、USDT/USDC；这不扩大本程序交易市场集合。
+
+每条记录包含 identity、raw_base、完整原始 rule、registered、恒为 true 的 forbidden、revision、registered_at、updated_at。首次登记即对该 route+原始 symbol 的两个方向永久禁止本程序发送任何订单，包括 reduce-only。取消登记保留记录和 forbidden 墓碑，重启、别名映射、初始准入、单腿发送及两腿 SENT 后共享发送关口都必须遵守。取消后若该精确合约重新出现远端持仓，视为不可核实，停开；不会自动平掉它。
+
+任何本程序订单历史（包括孤单、INTENT/SENT/ACK/UNKNOWN、待记账、已终态），或 pair 历史/活动仓位/恢复义务与合约重叠，禁止登记。内存中仍有待持久化或正在处理的订单也拒绝管理写。身份缺失、原始/解析持仓不一致、目录缺失/超过六小时/规则改变均停开；保留原始风险快照与失败证据，不按 ticker 补字段。
+
+### GET /api/v1/external-positions
+
+沿用独立只读令牌或 ADMIN 令牌。新增返回对象，不删除现有端点或字段：
+
+```json
+{"status":"x1:<64 hex>","contracts":[],"income":null,"flatten_status":null,"projection":null}
+```
+
+`status` 是整个登记表和原始目录规则的不透明版本；时间刷新不改变版本，内容改变会改变版本。页面须让用户查看本次 GET 的登记状态，再原样提交它。`contracts` 是上述记录列表；`income.verified=false` 不表示贡献为零。`projection` 是已成功核实的本程序投影，可能是旧值，必须结合 income、UTC 日、captured_at 和当前账户状态判断，不能单凭它展示“可交易”。
+
+### POST /api/v1/external-positions/register 或 unregister
+
+只接受 ADMIN 令牌。完整请求体如下，三个顶层字段均必填，不接受额外字段：
+
+```json
+{"identity":{"route":"crossex","exchange_type":"HYPERLIQUID","business":"FUTURE",
+             "symbol":"HYPERLIQUID_FUTURE_io:OAI_USDC","quote":"USDC","dex":"io"},
+ "expected_status":"x1:<用户实际读取的64位标记>","reason":"Astro_manual_position"}
+```
+
+reason 为 1–200 字符非空说明，不含控制字符。成功 200 返回 `{record:登记记录,status:新标记}`。取消登记必须读取新鲜完整持仓，确认该合约两个方向均无仓位，且没有该合约远端活动订单；读不到即拒绝。登记也拒绝该合约的远端活动订单，避免登记采样期间归属变化。
+
+比较当前 status、更新登记、递增 attribution revision、`EXTERNAL_CHANGED` 审计在同一 `BEGIN IMMEDIATE` 事务内完成。审计包含 old/new、source、reason、expected_status、at、全账户原始快照和远端活动订单。运行中由 Engine 协调器串行管理，读取账户期间停开；停机 CLI 持有原服务生命周期 flock。
+
+- 400：缺字段、格式/类型错误或多余字段。
+- 403：只读令牌请求写接口。
+- 409：expected_status 冲突，返回 `{error:"external_conflict",current_status:"x1:..."}`；`EXTERNAL_CONFLICT` 成功落库后才返回。不得自动获取新状态并重试。
+- 409：归属、持仓、活动订单、目录、时效等业务前提不满足，返回固定拒绝原因，如 program_ownership、program_ownership_unknown、local_orders_pending、external_remote_position、external_remote_order、external_identity_unverifiable、external_catalog_unavailable、account_snapshot_stale。
+- 503：审计/事务故障、数据库不可用，或 API 未绑定运行中的 Engine 管理回调。成功审计失败整笔回滚，不退回离线直接写库。
+
+### CLI 与重基线前提
+
+新增 `external-list --db <db>`，只读且不加载凭据；`external-register` / `external-unregister` 接受 `--env-file`、`--route crossex`、`--exchange-type`、`--business`、`--symbol`、`--quote`、`--dex`、`--expected-status` 和 `--reason`。写命令默认 reason 为 manual_external_ownership。具体示例见执行器 README。
+
+运行中 CLI 调用本机 ADMIN 写接口；停机时保持原 env 所有权/0600 校验与 flock，交易传输强制 live=False，刷新公开目录并只读鉴权账户/订单。CLI 不自动重试冲突；目录刷新产生冲突后，重新查看 external-list 再人工决定。停机时目录未初始化的首次操作同样可能先冲突，不能跳过前提。
+
+每次登记或取消登记改变收益归属域，旧收益核实结果失效，必须显式 rebaseline 建立新归属计量起点。运行中沿用 POST equity/rebaseline；停机沿用 rebaseline/release-halt CLI。允许仅剩已登记外仓，但必须满足：
+
+1. 本程序本地流水、pair、两边远端程序仓位均为空，无 INTENT/非终态/UNKNOWN/待记账/内存待写，无原仓位/恢复类锁。
+2. 两边均无远端活动订单，原始身份、目录及外仓归属可核实；双快照间现金/数量/累计结算没有变化。
+3. 采样不超过十秒、完整当日流水可读取，本程序费用/已实现与不可变订单流水一致，资金费可核实。
+4. 两边权益为正、无负债；带外仓时两边保证金倍数均至少 3。原确认规则和 release-halt 的 HALTED/精确 halt_reason 前提不变。
+
+审计 `EQUITY_REBASELINED` / `HALT_RELEASED` 新增 external_snapshot，包含全户原始账户/持仓、流水、外仓与本程序投影；新基线记录 external_equity_anchor、program_daily_upnl、program_last_upnl 和已核实资金费偏移。原历史、登记墓碑、当日日亏锁、STOP 文件和其他原因锁不删除；release-halt 仍只解除原权益停机原因。证据不足 external_income_unverifiable、身份/目录不可核实和 margin_open_limit 以 409 返回。重基线成功本身不代表允许开仓，还需后续收益核实及所有既有门禁通过。
+
+### 全户风险与程序损益的两个口径
+
+全户 account_risk_snapshot 保留完整 raw_accounts、raw_positions、equity/equity_by_venue、margins、liabilities、notionals、upnl。原 HardLimits 始终使用这份全户数据：外仓名义额计入 600 总额度，权益基线/单所回撤、保证金、负债、累计亏损均维持原规则。任意正负债仍停开告警，无外仓借款豁免。
+
+程序 program_projection 仅剔除已登记的精确外仓持仓。未登记同名合约、另一 DEX 合约或不明远端仓位仍进入 mismatch；原三次新鲜一致观测恢复条件保留。日亏取本程序已核实的已实现、费用、当日资金费和当日浮亏差；本程序现金流水须与不可变成交记录一致。
+
+原整户日权益差兜底保留，改为在同一计量起点计算 `全户权益变化 - 外仓完整净贡献`，并继续与程序日亏取较保守值。外仓净贡献 = 已核实账本现金变化（已实现、手续费、资金费、强平费）+ 外仓浮亏变化。成交历史校验开/平/增减数量、方向以及逐订单已实现/手续费，不能重复把成交金额再加到账本现金中。
+
+CrossEx account_book/history_trades 与 Bitget financial-records 使用固定毫秒窗口、有界分页、唯一流水 ID；校验历史不能消失或被改写，逐交易所/币种现金余额变化必须与账本吻合。迟到的起点之前流水、缺页、缺资金费、结算中的活动订单、未知流水类型/归属、转入转出/借还款/利息/换币等无法归属变化都停开。不能将空列表、余额总和不变或当前 upnl 抵消视作完整收益证明。证据更新失败同样不能发布已核实状态。
+
+跨 UTC 日先核对完整跨日持有区间，再以当日首次一致观测同时滚动全户日权益兜底与外仓贡献起点；程序浮亏保持上一份有效跟踪快照作为当日差分基础，本程序当日现金按 UTC 流水归属。重启保留这些起点、历史 ID 和登记版本，不伪造午夜价格，不忽略停机期间结算。
+
+**USDC 限制：**公开 CrossEx 文档没有提供可核实的历史 USDC 到整户权益计价币折算证据。本轮支持精确登记并永久禁单 `HYPERLIQUID_FUTURE_io:OAI_USDC`，但该合约非零浮亏或新增非零 USDC 现金贡献不能按 1:1 假定折算，收益核实失败即停开。逐仓/逐币种零值且现金连续性证明完整才可能通过；不同币种盈亏抵消成零不算证明。不能将此交付描述为已经恢复该真实账户交易。
+
+每个新账户缓存发布前撤销旧 external_income；开仓、最终发送需当前版本、当前 UTC 日且十秒内的核实结果。收益不可核实仍执行全户硬风险检查，必要时平本程序仓位，不能因为归属失败跳过硬止损。
+
+运行中登记/取消、带外仓重基线在读取前也撤销旧证明并停开；管理读取或业务前提失败后，不能沿用操作前的 RUN/收益证明，必须重新对账。完整管理观测保存为 external_admin_snapshot，失败读取已取得的原始部分保存为 external_failed_snapshot；这些证据写入不改变登记版本或旧权益基线。
+
+### 平仓和停机报告
+
+`flatten_all` 只处理程序归属仓位；最终禁单关口也拒绝已登记合约的 reduce-only。停止完成要求程序远端仓位、本地活动 pair、待写、INTENT/非终态及待记账义务均为空，外仓可以仍在。
+
+新增 flatten_status：`{program_flat,account_flat,external_positions,captured_at}`。有外仓时 program_flat=true、account_flat=false，写入 `PROGRAM_FLATTENED_EXTERNAL_REMAINS`；HALTED 与正常退出只证明程序仓位处理完成。shutdown 日志显式输出这两个状态和精确外仓快照。身份/目录不能核实时不报告成功全平。
+
+公开接口依据：[CrossEx 文档](https://www.gate.com/docs/developers/crossex/en/)、[Bitget UTA 账务流水](https://www.bitget.com/docs/catalog/account/assets-balance)、[Bitget UTA 枚举](https://www.bitget.com/docs/uta/enum)。本轮只核实公开文档，没有调用真实鉴权接口；真实字段时延、资金费及计价证明仍需另行授权验证。

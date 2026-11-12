@@ -240,3 +240,27 @@ python -m tools.crossex_exec.benchmark_steady --bases 187 --dynamic-bases 40 --h
 管理写请求的新必填字段：PUT config 顶层 `expected_version`；mappings confirm/reject 的 `expected_multiplier` 与 `expected_status`；universe classify/exclude/unexclude 的 `expected_status`。GET mappings 新增字符串 multiplier，GET universe 新增不透明 status；从用户所见读取结果原样回传。比较、更新和审计由同一写事务保护，冲突返回 409 并持久化审计；不要自动更新前提重试。完整 JSON 和 400/409/503 语义见[契约第十轮](../../docs/live-exec-contract-2026-11-11.md#第十轮增补2026-11-12)，此前不带前提的写入示例需要增加字段。
 
 Python 3.12.10/指定 3.10.20 各执行器 415 项、fill-sim 158 项全过，三种子各 2,568 回合；原 1,934 个断言保留。仅本地 test/feat/docs 提交，没有推送或部署。HL `io:OAI` 外部持仓只有方案比较，当前仍要求专用账户，没有新增忽略名单或解除任何风控锁。
+
+## 第十一轮：手动登记外仓
+
+本轮实施方案 (b)，取代上节“外仓尚未实现”的历史状态。完整前提、返回字段和错误码见[第十一轮追加契约](../../docs/live-exec-contract-2026-11-11.md#第十一轮增补2026-11-12)，验收与限制见[第十一轮交接](../../docs/task-handoff-2026-11-12-crossex-exec-r8.md#第十一轮)。
+
+先只读查看状态，核对完整原始合约，再提交用户实际查看的 status；以下为 POSIX 部署端示例，并非本次已经运行的鉴权操作：
+
+```sh
+python -m tools.crossex_exec external-list --db /private/crossex-exec.db
+python -m tools.crossex_exec external-register --env-file /private/crossex-exec.env \
+  --route crossex --exchange-type HYPERLIQUID --business FUTURE \
+  --symbol HYPERLIQUID_FUTURE_io:OAI_USDC --quote USDC --dex io \
+  --expected-status 'x1:<刚才查看的64位标记>' --reason Astro_manual_position
+```
+
+运行中走 ADMIN API，停机时保留原 env 0600/flock 并只读查询账户，交易传输强制关闭。目录刷新或另一用户修改造成冲突时，重新查看并决定，不自动重试。普通无 DEX 合约需要 `--dex ''`。取消登记使用同样参数的 `external-unregister`，须该合约远端两个方向无仓位且无活动订单；**取消后永久禁单仍在**。
+
+登记、取消均不能解除既有损失/恢复锁。修改归属后需在程序空仓、无未知/待记账/恢复义务、远端无活动订单、无负债且保证金至少 3 等前提下显式 rebaseline；允许仅剩已登记外仓，审计保留其完整快照。release-halt 仍要求停机及精确确认原因，保留原当日日亏锁和其他锁。
+
+程序日亏剔除经现金余额、完整账本、成交数量与费用核对的外仓净贡献；取不到证据即停开。外仓仍计入 600 总名义额、整户权益回撤、累计亏损、保证金和负债检查，程序不会自动平外仓。停机报告分 program_flat 与 account_flat，有外仓时必须明确全账户未平。
+
+当前 `io:OAI_USDC` 可以登记和永久禁单，但**非零 USDC 损益缺少可核实的历史整户权益折算证据时仍停开**；没有使用 USDC=USDT=1 的假设。原副本中的 daily_loss 也不会因登记自动清除。此实现不承诺登记后该账户立即恢复交易。
+
+双版本各执行器 457 项、fill-sim 158 项通过，三个种子各 2,664 回合，含外仓亏损、结算、目录变化和保证金/权益硬限制；[验收 JSON](../../docs/crossex-exec-r11-validation-2026-11-12.json)保留详细计数与日志指纹。本轮仅本地提交，没有 push、SSH、WSL、amend、真实鉴权或部署。
