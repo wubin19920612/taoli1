@@ -1297,3 +1297,100 @@ $py310 = 'C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d
 本轮只有本地 test/feat/docs 提交；未推送、未读取当前线上 HEAD、未线上备份或部署、未调用真实鉴权接口，影子版本仍仅按用户报告记录为 c85ff7c。Temp 保留只读副本、全部红绿灯日志和测试产物；没有清理原有缓存/产物或更改其他模块。最终 docs 提交只纳入本轮五个文档路径，不包含数据库或账号数据。
 
 下一任务先进行独立终审，再在明确授权的只读/影子任务中收集新 activity.failure，确认究竟哪个接口/页/条件阻断；若历史完整但缺起点，按原 ADMIN 及程序空仓流程显式建基线。不能删库、缩短遗留窗口、伪造 settled_ms、自动重基线或放宽时效来恢复开仓。真实权限、跨日收取时钟的线上语义、持续第三方交易时稳定窗口及大流水耗时仍需验证。发布/实盘授权、页面工作和运维分别新建任务继续。
+
+## 第十七轮
+
+### 范围、基线与提交
+
+指定 worktree `C:/Users/wubin/Desktop/code/codex/taoli1/.worktrees/crossex-exec-r8`，分支 `codex/crossex-exec-r8`，起始 HEAD `c93183a`，工作区干净。先读 [r16 终审](crossex-exec-r16-final-review-2026-11-12.md) 的 1P1 及第十六轮交接。本轮范围是起点分日证明来源、Bitget 空财务页和账户历史相关 CPU/RSS；没有页面、交易策略或线上运维改动。
+
+| 类型 | 提交 | 内容 |
+|---|---|---|
+| test | `491f3e5` | r15 错误滚日起点、升级/备份、空页/游标回归与离线资源负载 |
+| test | `db558d9` | 历史索引重复计算、签名排序、流水消失/改写与失败回归 |
+| test | `45dcb68` | JSON 类型变更与摘要重复树反例 |
+| test | `8c9795f` | 长文本内存边界、未变历史写入、真实 r15 funding 实现与签名环负载 |
+| feat | `40fe7f2` | 完整 SHA `40fe7f2f1edffde17d3741e46b4d5807305091b8`；证明来源、空页及资源修复 |
+| docs | 本节所在独立提交 | 契约只追加、交接、README、下一任务、验收 JSON；自身 SHA 用 git log 查询 |
+
+普通 git add 因索引位于父仓库只读范围失败，之后只为已授权的本地提交使用扩展权限；无自动审批拒绝。显式暂存任务路径，提交关闭 hooks/GPG。没有 push、SSH、WSL、amend、真实鉴权、线上备份/部署、真实订单或子代理调用。实施后自行审查恢复、事务、发送约束、缓存及脱敏；不把自审称为独立终审。
+
+### A：旧净额起点不得自动成为分日证明
+
+入口：`funding.py:certify_daily/require_daily_proof/daily_continuity`、`external_accounting.py:_evaluate`、`equity.py:apply`。
+
+- 起点与检查点保存 `funding_daily_proof={version:1,source,equity_revision,payload_hash}`，摘要绑定完整内容，包括历史索引、生命周期、累计 carry 和 offset。来源限新程序首次空仓、显式审计基线、已经通过逐日核验的连续区间；没有数据库自动补标记迁移。
+- 所有核验先检查起点证明；检查点缺失/不属于当前起点和基线时，只能退回有有效分日证明的起点。已有适用检查点证明损坏也拒绝。无来源、未知版本、摘要不符、旧净额起点均停开，保留旧起点及检查点。
+- 新起点/检查点仍与收益、历史及原管理审计同事务提交，继续比较快照、归属、equity_revision、原起点/检查点和订单摘要。失败回滚，旧日亏/停机锁不清。
+- 回归实际读取本地 `b61662d` 的 `external_accounting.py` 和 `funding.py` 并执行，生成前日 +25、当日 -25 首次漏报、r15 已错误滚到当天的文件库。经真实 startup/reconcile 升级与 SQLite backup 恢复，两种路径在空流水、只补一条、全部补回时均保持未认证，真实 can_open/check_order 不能放行。
+- 正向对照覆盖新认证起点检查点丢失后的核验、正常 UTC 滚日后证明来源、事务失败不留下证书；原 r16 的单日/跨日/迟到资金费回归原文保留并通过。
+
+**升级边界：** 无版本证明的 r16 起点/检查点也不能自动视为可信，因为它们可能已经经过原 P1 错误迁移。若不能提供独立历史分日/来源证据，会持续停开；本轮没有提供人工填写金额、直接导入证明或补造日界观察的接口。不要通过删起点、改 marker、删库、缩短窗口或默认累计为零恢复开仓。已有未证明区间不能借 rebaseline 绕过。诊断沿用 `funding_utc_boundary_unproven` / `external_income_unverifiable`。
+
+### B：明确空页、官方接口核实及分页
+
+用户报告影子版本为 `f559f95`，Bitget financial-records 在指定时间段无记录时返回 `data={"list":null,"cursor":null}`，原诊断为 page=1、rows_read=0、response_list_invalid。本轮没有读取线上服务；该输入事实来自用户，本地通过真实 Transport 的 localhost 成功/错误响应及适配器回归验证修复。
+
+`history.py:page_rows` 仅对 financial-records 开放明确 null/null 终止页；Transport 必须先确认 HTTP/`code="00000"` 成功。两个键必须存在。`list=null,cursor=""` 的原失败断言仍成立，缺键、null data、非成功/缺失 code、布尔/对象/非法游标仍拒绝。第一页和正常非空页之后的明确 null/null 都可结束分页。
+
+官方 [financial-records](https://www.bitget.com/legacy-docs/uta/account/Get-Financial-Records)、[history-position](https://www.bitget.com/legacy-docs/uta/trade/Get-Position-History)、[trade/fills](https://www.bitget.com/legacy-docs/uta/trade/Get-Order-Fills) 定义 list 为数组、cursor 为字符串；未查到这些页面对专门 null 空页的承诺。因此后两项保持 `list=[],cursor=""` 空页，拒绝 null/null，不外推财务流水的实测例外。[CrossEx account_book/history_trades/history_positions](https://www.gate.com/docs/developers/crossex/) 为顶层数组，继续接受 []、拒绝 null/对象；这是按 Schema 解释的空数组，并非文档提供专门空响应示例。
+
+共享分页解析也修复 Bitget fills/unfilled-orders 的“短页先返回、忽略 cursor”分支，短页非空游标必须继续，畸形终止页和重复游标继续拒绝。CrossEx 订单成交页增加明确数组验证。正成交仍必须有匹配的成交数量、币种和费用，空列表不能将正成交记成零费用。没有增加真实接口权限或改读写 API 路径。
+
+### C：热点、缓存及实测
+
+源码证明账户 worker 每 5 秒读取从 UTC 日初/未完成旧起点到当前 cutoff 的完整历史；原正常核算一轮重复构建历史索引三次，并重复写入未变化的 `external_verified_history`。离线 profile 同时定位到完整对象复制/持久化、脱敏、目录读取和历史处理，**没有取得线上 profile，不能把报告的 71% 全部归因于某一项**。
+
+最明显的随运行增长热点是 `Redactor.clean`：原实现对每个字符串都重建并排序最多 2,048 条签名集合。固定 1,000 行/4,000 字符串、满签名环的单次 CPU 对照，由基线约 **0.81719s** 降为 **0.00297s**（旧 10 次、新 100 次均取每次均值；真实旧源码离线运行，无真实秘密或鉴权）。新实现每文档快照一次集合、按长度跳过不可能匹配、只保存实际匹配项，保留敏感键过滤；长随机文本回归将额外内存从失败的约 14.8 MB 限定到测试要求的 <4 MiB。敏感键缓存 1,024 项，签名环容量不变。
+
+核算现在同轮共用一份历史索引；跨轮只复用规范 JSON 字节完全相同的已读取行摘要，新增/变化行重新计算。避免 Python `1==True` 造成缓存误认；缓存最多 25,000 行、8 MiB 行内容，超限不影响完整性判断。摘要计算不再额外复制整棵 plain 树；规范编码与旧摘要一致。已核实历史未变不再重写索引，有新增时仍按原事务提交。缓存不替代响应、不供给缺失行、不缓存可开仓结论；部分读取、消失、改写、迟到回填和失败恢复保持原检查。
+
+**与“只追加拉取”的边界：** 当前公开接口没有可用的旧页版本/摘要/删除游标，纯追加网络读取不能同时保证检测任意旧流水消失。本轮优先遵守“不降低风控”，只实现增量计算/写入缓存，保留原全窗口网络复核和频率，未实施纯追加网络拉取。没有把这一项写成已完成的网络优化；未来若要减少请求，须先有可验证的旧历史完整性机制。
+
+`tests/round17_resource_probe.py` 使用真实 Engine、SQLite、Accounts、适配器和分页，5 Hz tick、每 5 秒刷新账户、3 笔登记外仓、12,863 条目录、21,001 条合成流水，默认 program 风控，income.verified=true。固定时间段先准备/暖机，再测墙钟稳态；无真实网络/密钥。最终测量独占运行测试负载，无同时执行 unittest。
+
+| 测量 | 时长 | 单核平均 CPU | 末次 RSS | 稳态最大 RSS | 进程峰值 RSS |
+|---|---|---|---|---|---|
+| 基线 c93183a，签名环为空 | 65.046s | 32.116% | 104,681,472 B | 104,681,472 B | 122,486,784 B |
+| 最终实现，2,048 条模拟签名 | 65.168s | **19.733%** | **107,999,232 B** | **108,265,472 B** | 123,363,328 B |
+
+最终末次 RSS 约 **103.0 MiB / 108.0 MB**，稳态最大约 103.25 MiB；满足这个指定负载的 CPU ≤20%、稳态 RSS ≤120 MB。两次签名环条件不同，不宣称是完全相同输入的整进程 A/B；签名器微基准单独采用相同输入。另一次与 unittest 并行的初步结果未作为性能验收，profile 数据只用于定位、不充当稳态数字。
+
+负载没有模拟真实网络延迟、全部市场采样 worker、并发 API 客户端或 Linux/cgroup，**不是整套线上服务 71%→19.733% 的证明**。现有 `MemoryMax=192M` 保留；本地数字不足以据此调低上限，也未证明需要抬高上限。后续获准影子复测时应记录完整服务的启动峰值与稳态，若仍接近用户报告的 158 MB，再根据实测峰值评估独立资源配置；本轮没有通过扩大内存上限掩盖开销。
+
+复现命令（Windows PowerShell，在本 worktree 内）：
+
+```powershell
+$env:PYTHONPATH='tools/crossex_exec/tests;.'
+python -m round17_resource_probe --seconds 65 --rows 21001 --signatures 2048
+python -m round17_resource_probe --seconds 15 --rows 21001 --signatures 2048 --profile
+```
+
+### TDD、原断言及最终验收
+
+初始 10 项先红。首份红灯有两个恢复夹具问题（缺 validate_startup、SQLite backup 目标连接未关闭），在实施前修正后重新得到 **8 failures / 3 errors**；真实 r15 错误滚日起点在升级/恢复后 verified=true 的失败已确认。资源、JSON 类型、摘要重复树、长字符串内存、未变历史写入分别有先红再修的独立日志。后续将 r15 funding helper 也替换为原提交实际源码，最终仍通过；不把这次夹具增强冒称初次红灯。新专项最终 **19 项**。
+
+相对 `c93183a`，执行器/fill-sim 原 **53 个 Python 测试/夹具文件逐字未变**（仅规范 CRLF 比较）：2,731 个断言、1,318 个类/函数定义保留。没有删除、修改或放宽旧断言，没有 skip、缩小 discover、内存库替代文件库。契约规范化 startswith 检查通过，只追加。
+
+| 解释器 | 执行器 unittest discover | fill-sim unittest discover | 退出码 |
+|---|---|---|---|
+| Windows Python 3.12.10 / SQLite 3.49.1 | **608 项 / 128.403s / OK** | **158 项 / 29.672s / OK** | 0 |
+| 指定 Windows Python 3.10.20 / SQLite 3.50.4 | **608 项 / 137.759s / OK** | **158 项 / 30.888s / OK** | 0 |
+
+```powershell
+python -m unittest discover -s tools/crossex_exec/tests -v
+python -m unittest discover -s tools/fill_sim/tests -v
+$py310 = 'C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d5-4518-98a0-6a4761963215/scratchpad/uvpy/cpython-3.10-windows-x86_64-none/python.exe'
+& $py310 -m unittest discover -s tools/crossex_exec/tests -v
+& $py310 -m unittest discover -s tools/fill_sim/tests -v
+```
+
+两版包含全部原 **5 项真实文件 SQLite 跨进程测试**。旧模拟器每版种子 20261111/20261112/20261113 各 **2,712 回合**，十项 checks 全为 2712、exercised 全非零，外仓检查 96、隔离检查 48；默认 program 模拟器每版三个种子各 **12 场景**，8 次正常开平仓、4 次明确拒单、8 次资金费延迟、20 次重启、40 次发送检查全过。两版各 **107 个 Python 文件**语法解析通过，git diff --check 通过。
+
+全部四份测试日志、十二份模拟器计数、五项跨进程用例名、红灯与 profile/稳态日志的路径和 SHA-256、原断言审计、源码指纹见 [第十七轮验收 JSON](crossex-exec-r17-validation-2026-11-12.json)。fill-sim 双版本在本轮已完整运行，其源码/测试未变，后续只改执行器，未重复运行未变化的套件。
+
+### 线上状态、文件与下一步
+
+用户报告的线上影子仍记为 `f559f95`；本轮未读取或更改实际线上 HEAD，未 push、备份或部署。没有接触线上数据库/密钥。Temp 保留全部离线日志和度量，未清理旧产物；新测试的临时 SQLite 由自身 fixture 清理。最终提交只包含本轮源码、四个新增测试/负载文件及五个文档文件，无整库、秘密或无关未跟踪文件。
+
+本轮本地代码与验证完成，**纯追加网络读取和线上资源验收未完成**，原因及保守选择见 C。后续请在新任务进行独立终审；获准线上只读/持续影子验证后，再确认完整服务的 CPU/RSS、实际空页行为及升级旧库停开状态。无法取得旧日界/来源证据时继续停开，不通过人工改 marker 放行。发布、解除旧停机锁和实盘需另有明确授权。

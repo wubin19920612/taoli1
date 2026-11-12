@@ -675,3 +675,39 @@ CrossEx account_book/history_trades/history_positions 继续固定毫秒窗口�
 `finish_shutdown` 只消费本次 flatten_all 返回值。已登记外仓、程序空仓、无活动 pair/未决订单/待记账/内存待写，且新鲜原始身份核实成功时，退出 0；无须收益证明为 true。程序未平、未登记远端仓位、身份/读取失败或上述义务未清仍退出 1，外仓永不被减仓。
 
 成功和有返回状态的失败停机都会输出 `shutdown_positions`，保留 `program_flat/account_flat/external_positions/attempt_id/verified`，追加 `remaining_positions`（剩余程序或未登记远端仓位）和 `local_active_pairs`。失败仍另外输出 shutdown_residual_exposure。旧 flatten_status 不代表新的 systemctl stop 结果，必须比对 attempt_id 与 captured_at。
+
+## 第十七轮增补（2026-11-12）
+
+本节只追加。原金额阈值、资金费逐日核对、完整性、十秒快照时效、流水消失/改写检测、发送屏障、UNKNOWN 不重发、外仓永久禁单和人工管理条件均保留。本轮仅本地离线验证，不包含线上鉴权、部署或实盘许可。
+
+### 起点与检查点的分日证明来源
+
+内部 `external_equity_anchor` 和 `funding_checkpoint` 增加 `funding_daily_proof`：`version=1`、`source`、`equity_revision`、`payload_hash`。摘要绑定该起点/检查点除证明自身以外的全部内容，包括累计资金费 carry、offset、生命周期与历史索引。它是本地证明来源及内容一致性标记，不是交易所签名。
+
+source 只允许 `initial_flat`（真正新程序且无登记、无订单历史、程序空仓的首次起点）、`audited_baseline`（原显式带审计管理流程）、`daily_continuity`（完整跨区间和逐日核验成功）。创建证明与原起点/检查点、收益及审计同事务提交；写入失败不留下新证明。
+
+使用起点和检查点前必须验证版本、允许来源、当前 equity_revision 和内容摘要。缺检查点或检查点不属于当前起点/基线时，只能回退到已具有有效分日证明的起点；不自动给旧净额起点或旧无版本检查点补标记。已有适用检查点的证明损坏也停止核验。旧 r15 错误滚日、以及无来源证明的 r16 状态不能因净额为零、最新收取早于起点而自动认证。无法补足来源/日界证据时，继续以 `funding_utc_boundary_unproven` / `external_income_unverifiable` 停开，不滚日起点，不自动重基线，也不清旧损失锁。
+
+### 历史接口的明确空响应
+
+Transport 先验证 HTTP 和 Bitget 外层 `code="00000"`，之后才解析 data。只有 `/api/v3/account/financial-records` 同时包含 `list`、`cursor` 两个键且二者均明确为 null 时，接受为终止空页；首末页均适用。这是用户报告的 f559f95 影子实测形态，不能扩展为所有接口的通用缺省值。`list=null,cursor=""` 的原拒绝断言保留；缺键、非成功 code、null data、错误 list 类型、非终止 cursor 等仍失败。
+
+| 接口 | 本轮接受的空形态 | 依据和边界 |
+|---|---|---|
+| Bitget financial-records | `list=[],cursor=""`；另接受明确的 `list=null,cursor=null` | 数组/字符串是文档 Schema；null/null 另有本次影子实测证据 |
+| Bitget history-position、trade/fills | `list=[],cursor=""` | 文档定义数组/字符串，未查到专门 null 空页承诺，null/null 仍拒绝 |
+| CrossEx account_book、history_trades、history_positions | `[]` | 文档响应为数组；null、对象、缺失结构仍拒绝 |
+
+官方公开来源：[Bitget 财务流水](https://www.bitget.com/legacy-docs/uta/account/Get-Financial-Records)、[仓位历史](https://www.bitget.com/legacy-docs/uta/trade/Get-Position-History)、[成交历史](https://www.bitget.com/legacy-docs/uta/trade/Get-Order-Fills)、[CrossEx 历史接口](https://www.gate.com/docs/developers/crossex/)。数组空页处理是按 Schema 的解释，不冒称这些页面提供了 null 的专门示例。
+
+分页解析共用 `page_rows`。Bitget 成交/活动订单读取也必须消费短页非空 cursor，不能先按短页返回；缺/非法/重复 cursor、空页带 cursor、满页无 cursor 继续拒绝。CrossEx 订单成交读取同样显式验证数组。无成交明细不能冲销已确认的正成交量，原数量、费用及身份核对保留。
+
+### 增量计算缓存与资源边界
+
+单轮核算共用一份完整历史索引；下一轮只有规范 JSON 字节完全相同的已读取行可以复用摘要。不同 JSON 类型（例如 1 与 true）必须重新计算。缓存最多保留 25,000 行和 8 MiB 行内容，超限只降低缓存命中，不扩大读取预算、不减少核验。它不提供缺失的远端行、不提供已认证收益，也不替代持久化历史。已核实历史完全未变时，不重复序列化/写入其整份索引；有新增时仍在原事务中提交。
+
+脱敏器每份文档只建立一次秘密/签名集合，保留最长优先替换和敏感键过滤；按 token 长度查找，仅保存实际匹配项，长文本不分配全部候选子串。新密钥/签名在下一次脱敏生效，签名环仍为原 2,048 条，敏感键缓存最多 1,024 项。
+
+**网络读取仍完整覆盖原窗口。** 查阅的历史接口没有可用于证明旧页未变化的版本、摘要或删除游标；单纯只拉最新时间段会漏掉旧流水撤回。为满足“不降低风控”，本轮实现计算/写入缓存，未实施纯追加网络拉取或降低旧窗口复核频率。所有历史失败、缓存失效、流水消失/改写与迟到回填仍走原停开条件。若后续要求减少历史网络请求，须先获得可证明历史完整性的独立机制，不能只缩短窗口。
+
+资源数字只作为指定本地合成负载的实测，不能替代线上 f559f95 的 CPU、Linux RSS、systemd 或持续影子验收。现有 service 的 `MemoryMax=192M` 本轮不调整；测量和剩余验收边界见第十七轮交接。
