@@ -109,7 +109,8 @@ class _Handler(BaseHTTPRequestHandler):
             endpoint = ENDPOINTS.get(url.path)
             if endpoint is None:
                 return self.reply(404, {'error': 'not_found'})
-            values = parse_qs(url.query, keep_blank_values=True, strict_parsing=True, max_num_fields=4)
+            # Python 3.10 strict_parsing rejects an empty query string; treat it as no fields.
+            values = parse_qs(url.query, keep_blank_values=True, strict_parsing=True, max_num_fields=4) if url.query else {}
             if any(len(v) != 1 for v in values.values()):
                 raise ValueError('invalid_request')
             query = {k: v[0] for k, v in values.items()}
