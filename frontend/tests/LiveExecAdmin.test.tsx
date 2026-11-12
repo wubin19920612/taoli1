@@ -280,6 +280,19 @@ describe("实盘第八轮管理", () => {
     expect(screen.getByText("0.15 USD / 15.00 bp")).toBeTruthy();
   });
 
+  it("keeps successful and conflicting audits with the same version and timestamp distinct", async () => {
+    const conflict = { ...reads["config/audit"][0], old: {}, new: {}, error: "version_conflict",
+      expected_version: 1, current_version: 2 };
+    reads["config/audit"] = [reads["config/audit"][0], conflict, conflict] as typeof reads["config/audit"];
+    render(<LiveExecPage />); await flush();
+    const card = screen.getByText("参数审计记录").closest<HTMLElement>(".ant-card")!;
+    expect(within(card).getByText(/40 → 50/)).toBeTruthy();
+    expect(within(card).getAllByText("版本冲突，未更新（预期 1 / 当前 2）")).toHaveLength(2);
+    const keys = [...card.querySelectorAll("tbody tr[data-row-key]")].map(row => row.getAttribute("data-row-key"));
+    expect(keys).toHaveLength(3);
+    expect(new Set(keys).size).toBe(3);
+  });
+
   it("stops admin reads while hidden and cancels on unmount", async () => {
     const { unmount } = render(<LiveExecPage />); await flush();
     Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
