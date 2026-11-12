@@ -146,6 +146,23 @@ def test_update_preserves_every_other_field_and_logs(connected, caplog):
     assert "astro_card_update pair=BTC before=" in caplog.text
 
 
+@pytest.mark.parametrize("offset", [-0.01, 0, 0.01])
+def test_update_warns_at_executable_open_spread_without_blocking(connected, offset):
+    client, remote, _ = connected
+    preview = client.post("/api/astro/instrument/preview", json=route()).json()
+    opening = preview["source_open_spread_pct"] + offset
+    closing = opening - 0.5
+    before = dict(remote.pairs[0])
+    response = client.post("/api/astro/instrument/card/update", json={"route": route(),
+        "open_spread_pct": opening, "close_spread_pct": closing})
+    assert response.status_code == 200
+    assert response.json()["status"] == "updated"
+    warning = "当前价差已达到开仓线，修改后可能立即开仓"
+    assert response.json()["warnings"] == ([warning] if offset <= 0 else [])
+    assert remote.updated == [{**before, "openPosition": _decimal_position(opening),
+                               "closePosition": _decimal_position(closing)}]
+
+
 @pytest.mark.parametrize("field", ["expected_open_position", "expected_close_position"])
 def test_conflicting_update_is_rejected(connected, field):
     client, remote, _ = connected

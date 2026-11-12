@@ -89,9 +89,15 @@ export function PairTemplateCard({ result, onLinesChange }: {
   const [fee, setFee] = useState(readFee);
   const [profit, setProfit] = useState(0.15);
   const [selected, setSelected] = useState("balanced");
-  const [edits, setEdits] = useState<Record<string, Thresholds>>({});
   const metrics = fundingMetrics(result.current?.leg1, result.current?.leg2);
   const recommendation = useMemo(() => recommend(result.points, result.current, fee, profit, metrics.hourly), [result.points, result.current, fee, profit, metrics.hourly]);
+  const editContext = JSON.stringify([result.leg1, result.leg2, result.leg2_multiplier, result.hours,
+    result.interval_minutes, result.interval_seconds, result.first_seen_at, result.last_seen_at, recommendation.direction]);
+  const [manual, setManual] = useState<{ context: string; values: Record<string, Thresholds> }>({ context: editContext, values: {} });
+  // Discard old thresholds before committing chart lines or actions for a new context.
+  if (manual.context !== editContext) setManual({ context: editContext, values: {} });
+  const edits = manual.context === editContext ? manual.values : {};
+  const setEdits = (values: Record<string, Thresholds>) => setManual({ context: editContext, values });
   const template = recommendation.templates.find((t) => t.id === selected);
   const thresholds = template ? edits[selected] ?? template : null;
   const routeJson = JSON.stringify(templateRoute(result, recommendation.direction));
@@ -131,7 +137,7 @@ export function PairTemplateCard({ result, onLinesChange }: {
       const response = await updateInstrumentAstroCard({ route: update.route, open_spread_pct: update.after.open,
         close_spread_pct: update.after.close, expected_open_position: update.before.open_position ?? undefined,
         expected_close_position: update.before.close_position ?? undefined });
-      setNotice(response.message); setUpdate(null); refresh();
+      setNotice([response.message, ...(response.warnings ?? [])].join("；")); setUpdate(null); refresh();
     } catch (e) { setNotice(String(e)); setUpdate(null); refresh(); }
     finally { busyRef.current = false; setBusy(false); }
   };

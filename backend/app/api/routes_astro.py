@@ -810,6 +810,8 @@ async def update_astro_instrument_card(payload: AstroInstrumentCardUpdateRequest
         except AstroClientError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
         card_update_logger.info("astro_card_update pair=%s before=%s after=%s", pair["name"], before, after)
+        warnings = (["当前价差已达到开仓线，修改后可能立即开仓"]
+                    if payload.open_spread_pct <= opportunity.open_spread_pct else [])
         return AstroAlertActionResult(enabled=True, status="updated", action="update",
                                       pair_name=pair["name"], pair_type=pair["type"],
-                                      message=f"开仓/平仓阈值 {before} → {after}")
+                                      message=f"开仓/平仓阈值 {before} → {after}", warnings=warnings)

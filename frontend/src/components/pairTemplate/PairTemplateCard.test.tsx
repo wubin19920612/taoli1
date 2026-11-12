@@ -1,9 +1,11 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createInstrumentAstroCard, lookupInstrumentAstroCard, previewInstrumentAstroPair, updateInstrumentAstroCard } from "../../api/client";
-import type { AstroCardLookup, AstroPairPlan, PairSpreadCurrentSnapshot } from "../../api/types";
+import type { AstroCardLookup, AstroPairPlan, PairSpreadCurrentSnapshot, PairSpreadQueryResult } from "../../api/types";
 import { chartFixture } from "../pairChartV2/chartTestUtils";
+import { fundingMetrics } from "../pairSummary/metrics";
 import { PairTemplateCard, templateRoute } from "./PairTemplateCard";
+import { chartLines, recommend } from "./recommend";
 
 vi.mock("../../api/client", () => ({
   createInstrumentAstroCard: vi.fn(), lookupInstrumentAstroCard: vi.fn(),
@@ -86,6 +88,63 @@ describe("PairTemplateCard", () => {
     await waitFor(() => expect(updateInstrumentAstroCard).toHaveBeenCalledWith(expect.objectContaining({
       expected_open_position: "0.020000", expected_close_position: "0.001000", open_spread_pct: expect.any(Number), close_spread_pct: expect.any(Number)
     })));
+  });
+  it("shows warnings alongside the successful update message", async () => {
+    const warning = "当前价差已达到开仓线，修改后可能立即开仓";
+    vi.mocked(updateInstrumentAstroCard).mockResolvedValue({ enabled: true, status: "updated", action: "update",
+      message: "阈值修改成功", warnings: [warning, "另一条提示"], pair_name: "BTC", pair_type: "FF" });
+    render(<PairTemplateCard result={fixture()} onLinesChange={vi.fn()} />);
+    await waitFor(() => expect(button("修改卡片").hasAttribute("disabled")).toBe(false));
+    fireEvent.click(button("修改卡片"));
+    fireEvent.click(button("确认修改"));
+    await screen.findByText(`阈值修改成功；${warning}；另一条提示`);
+  });
+  it.each<{ name: string; change: (result: PairSpreadQueryResult) => PairSpreadQueryResult }>([
+    { name: "direction", change: (result) => ({ ...result, points: result.points.map((point) => ({ ...point, spread_pct: -1.5 * point.spread_pct })) }) },
+    { name: "pair", change: (result) => ({ ...result, leg2: { ...result.leg2, symbol: "ETHUSDT" } }) },
+    { name: "DEX", change: (result) => ({ ...result, leg1: { ...result.leg1, dex: "xyz" } }) },
+    { name: "hours", change: (result) => ({ ...result, hours: 24 }) },
+    { name: "sampling interval", change: (result) => ({ ...result, interval_minutes: 5, interval_seconds: 300 }) },
+    { name: "window start", change: (result) => ({ ...result, first_seen_at: "2026-11-03T00:01:00Z" }) },
+    { name: "window end", change: (result) => ({ ...result, last_seen_at: "2026-11-03T00:11:00Z" }) },
+    { name: "multiplier", change: (result) => ({ ...result, leg2_multiplier: 2 }) }
+  ])("resets all manual thresholds when the $name changes, including on return", async ({ change }) => {
+    const initial = fixture();
+    const onLinesChange = vi.fn();
+    const { rerender } = render(<PairTemplateCard result={initial} onLinesChange={onLinesChange} />);
+    await waitFor(() => expect(button("修改卡片").hasAttribute("disabled")).toBe(false));
+    fireEvent.change(screen.getByLabelText("均衡（推荐）开仓"), { target: { value: "7" } });
+    fireEvent.change(screen.getByLabelText("均衡（推荐）平仓"), { target: { value: "-3" } });
+    fireEvent.change(screen.getByLabelText("稳健开仓"), { target: { value: "8" } });
+    fireEvent.change(screen.getByLabelText("积极平仓"), { target: { value: "-4" } });
+    expect(screen.getAllByText("样本内（手调后）")).toHaveLength(3);
+    onLinesChange.mockClear();
+    for (const result of [change(initial), initial]) {
+      rerender(<PairTemplateCard result={result} onLinesChange={onLinesChange} />);
+      await waitFor(() => expect(screen.queryByText("正在查找已有卡片…")).toBeNull());
+      const recommendation = recommend(result.points, result.current, 0.16, 0.15,
+        fundingMetrics(result.current?.leg1, result.current?.leg2).hourly);
+      for (const template of recommendation.templates) {
+        expect(Number((screen.getByLabelText(`${template.label}开仓`) as HTMLInputElement).value)).toBeCloseTo(template.open);
+        expect(Number((screen.getByLabelText(`${template.label}平仓`) as HTMLInputElement).value)).toBeCloseTo(template.close);
+      }
+      expect(screen.queryByText("样本内（手调后）")).toBeNull();
+      expect(onLinesChange).toHaveBeenLastCalledWith(chartLines(recommendation.templates[1], recommendation.h, recommendation.direction));
+    }
+  });
+  it("preserves manual thresholds during refreshes within the same query and direction", async () => {
+    const result = fixture();
+    const { rerender } = render(<PairTemplateCard result={result} onLinesChange={vi.fn()} />);
+    await waitFor(() => expect(button("修改卡片").hasAttribute("disabled")).toBe(false));
+    fireEvent.change(screen.getByLabelText("均衡（推荐）开仓"), { target: { value: "7" } });
+    fireEvent.change(screen.getByLabelText("均衡（推荐）平仓"), { target: { value: "-3" } });
+    rerender(<PairTemplateCard result={{ ...result, leg1: { ...result.leg1 }, leg2: { ...result.leg2 },
+      points: result.points.map((point) => ({ ...point, spread_pct: point.spread_pct + 0.1 })),
+      current: { ...result.current!, open_spread_pct: 0.9 }, observed_at: "2026-11-03T00:10:30Z"
+    }} onLinesChange={vi.fn()} />);
+    expect(Number((screen.getByLabelText("均衡（推荐）开仓") as HTMLInputElement).value)).toBe(7);
+    expect(Number((screen.getByLabelText("均衡（推荐）平仓") as HTMLInputElement).value)).toBe(-3);
+    expect(screen.getByText("样本内（手调后）")).toBeTruthy();
   });
   it("persists fees and disables invalid manual thresholds", async () => {
     render(<PairTemplateCard result={fixture()} onLinesChange={vi.fn()} />);

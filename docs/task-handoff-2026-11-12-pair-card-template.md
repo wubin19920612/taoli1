@@ -94,3 +94,28 @@
 - 用户提供的 `docs/pair-card-template-spec-2026-11-12.md` 原先未跟踪，保持原样，不纳入本次提交。
 - 本任务生成的 `.tmp-pair-template-*` 测试目录和日志，以及前端构建产物，仅供本地诊断，不纳入提交。主要日志：`.tmp-pair-template-vitest-final.log`、`.tmp-pair-template-pytest-backend-cwd.log`、`.tmp-pair-template-build-final.log`。
 - 本任务交付后如需上线或继续其他模块，应在新任务中以本分支提交为起点，明确授权 push/部署；不能把本地提交视为已上线。
+
+## a20e9a8 后续两项修复（2026-11-12，11-13 复验）
+
+本次修复基于 `a20e9a8fcfd31a9c634ee818f5c99b391a05f548`，仍在 `codex/pair-card-template` 分支及原工作树。范围仅为手调阈值重置和改卡立即开仓提示；用户要求本地提交，提交说明为 `fix: 模板方向变化重置手调值、改卡立即开仓提示`，禁止 push 和 WSL，不部署。
+
+- `frontend/src/components/pairTemplate/PairTemplateCard.tsx`：手调阈值绑定查询两腿（含 DEX）、倍率、查询时长、采样间隔、历史起止时间和推荐方向；任一上下文变化时清空全部模板手调值，返回原上下文也不恢复旧手调。渲染提交前即使用新推荐值，防止旧阈值进入反向图线或操作。相同上下文内更新盘口、历史点或推荐值仍保留手调；手续费、最小净利和模板选择行为保持原样。
+- `backend/app/api/routes_astro.py`：改卡成功后，若请求的新开仓百分比小于或等于本次路线的当前可成交开仓价差，返回 warning `当前价差已达到开仓线，修改后可能立即开仓`；修改继续执行，原有锁、冲突检查、阈值编码、日志和其他卡片字段均沿用。
+- 前端修改成功提示同时展示响应 message 和全部 warnings，缺少 warnings 时按空数组处理。
+- `frontend/src/components/pairTemplate/PairTemplateCard.test.tsx`：增加方向反转、交易对、DEX、时长、采样间隔、窗口起止、倍率变化及返回原查询时的重置测试，同时验证全部模板输入和选中图线；增加相同查询刷新保留手调和修改成功显示 warnings 的测试。文件合计 21 项。
+- `backend/tests/test_pair_card_template.py`：增加开仓线低于、等于和高于可成交价差的三项边界测试；同时确认 warning 不阻止实际修改且其他字段原样保留。文件合计 42 项。
+
+本次验证：
+
+| 工作目录 | 命令 | 汇总 |
+| --- | --- | --- |
+| `frontend/` | `npx.cmd tsc --noEmit` | 退出码 0，无诊断 |
+| `frontend/` | `npx.cmd vitest run --no-cache` | 最终 `Test Files 38 passed (38)` / `Tests 531 passed (531)`，`Duration 201.73s`，原生退出码 0 |
+| `frontend/` | `npx.cmd vitest run --no-cache src/components/pairTemplate/PairTemplateCard.test.tsx` | `Test Files 1 passed (1)` / `Tests 21 passed (21)` |
+| `backend/` | `pytest tests/test_pair_card_template.py -q -p no:cacheprovider --basetemp ../.tmp-fix` | `42 passed in 51.12s`，退出码 0 |
+
+先补回归测试并确认原实现失败，再实现修复。首次类型检查发现可选 warnings 需要空数组回退，已修复并复验类型检查。前端首轮测试断言全通过，但 PowerShell 的 `*>` 重定向把既有 stderr 记成 `NativeCommandError`，外层退出码为 1；最终全量复验改由 Windows `cmd.exe` 重定向日志并显式保留原生退出码，不涉及 WSL。日志保留在 `.tmp-fix-vitest*.log` 和 `.tmp-fix-card-vitest.log`，不提交；既有 Ant Design/React 提示和其他测试输出未在本次修改。
+
+其中一次全量复验跨夜，日志记录 `Duration 40735.41s`，大量测试及 worker RPC 超时，汇总为 `3 failed | 33 passed` / `66 failed | 384 passed` / `51 errors`，原生退出码 1。该轮日志为 `.tmp-fix-vitest-final.log`；保留诊断，不将其视为通过。环境恢复后保持代码不变，再次执行同一全量命令，最终 38 个文件、531 项测试全部通过，原生退出码 0；日志为 `.tmp-fix-vitest-resumed.log`。
+
+线上版本和 Astro 状态均未改变，没有生产备份、部署或真实外部写入验收。开始时已有的三个 `.tmp-pair-template-backend-*` 未跟踪目录及 `docs/pair-card-template-spec-2026-11-12.md` 保持原样、不暂存；本次 `.tmp-fix` 为指定 pytest 临时目录，不纳入提交。后续其他模块或 push/部署应另开任务并明确范围。
