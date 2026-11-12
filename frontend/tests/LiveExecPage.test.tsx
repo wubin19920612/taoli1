@@ -5,15 +5,13 @@ import { LiveExecPage } from "../src/pages/LiveExecPage";
 import { chartMocks } from "../src/components/pairChartV2/chartTestUtils";
 import { liveFixtures, trade } from "./liveExecFixtures";
 
-// Keep the original dashboard polling/failure tests isolated; the admin suite
-// renders the full page and exercises management plus existing position data.
-vi.mock("../src/pages/liveExec/LiveExecAdmin", () => ({ LiveExecAdmin: () => null }));
+import { fixtures as adminFixtures } from "./liveExecAdminFixtures";
 
 let requests: URL[];
 let fetchMock: ReturnType<typeof vi.fn>;
-const flush = async () => { await act(async () => { await Promise.resolve(); }); };
+const flush = async () => { await act(async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); }); };
 const count = (path: string) => requests.filter(url => url.pathname.endsWith(`/${path}`)).length;
-const businessRequests = () => requests.filter(url => /\/(summary|positions|trades|stats)$/.test(url.pathname));
+const adminCounts = () => ["config", "universe", "mappings", "config/audit"].map(count);
 function visibility(value: "hidden" | "visible") {
   Object.defineProperty(document, "visibilityState", { configurable: true, value });
   fireEvent(document, new Event("visibilitychange"));
@@ -48,8 +46,9 @@ beforeEach(() => {
   fetchMock = vi.fn(async (input: string) => {
     const url = new URL(input);
     requests.push(url);
-    const path = url.pathname.split("/").pop() as keyof typeof liveFixtures;
-    return { ok: true, status: 200, json: async () => ({ available: true, data: liveFixtures[path] }) };
+    const path = url.pathname.replace("/api/live-exec/", "");
+    const data = adminFixtures[path as keyof typeof adminFixtures] ?? liveFixtures[path as keyof typeof liveFixtures];
+    return { ok: true, status: 200, json: async () => ({ available: true, data }) };
   });
   vi.stubGlobal("fetch", fetchMock);
 });
@@ -174,16 +173,21 @@ describe("实盘契约页面", () => {
 
   it("polls at 5/30 seconds, pauses when hidden and cleans up on unmount", async () => {
     const { unmount } = render(<LiveExecPage />); await flush();
-    expect(businessRequests()).toHaveLength(4);
+    expect(requests).toHaveLength(8);
+    expect(adminCounts()).toEqual([1, 1, 1, 1]);
     await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
     expect([count("summary"), count("positions"), count("trades"), count("stats")]).toEqual([2, 2, 1, 1]);
+    expect(adminCounts()).toEqual([1, 1, 1, 1]);
+    expect(requests).toHaveLength(10);
     await act(async () => { await vi.advanceTimersByTimeAsync(25000); });
     expect([count("summary"), count("positions"), count("trades"), count("stats")]).toEqual([7, 7, 2, 2]);
+    expect(adminCounts()).toEqual([2, 2, 2, 2]);
+    expect(requests).toHaveLength(26);
     visibility("hidden"); const hiddenCount = requests.length;
     await act(async () => { await vi.advanceTimersByTimeAsync(60000); });
     expect(requests).toHaveLength(hiddenCount);
-    const beforeResume = businessRequests().length;
-    visibility("visible"); await flush(); expect(businessRequests().length).toBe(beforeResume + 4);
+    visibility("visible"); await flush(); expect(requests.length).toBe(hiddenCount + 8);
+    expect(adminCounts()).toEqual([3, 3, 3, 3]);
     unmount(); const endCount = requests.length;
     await act(async () => { await vi.advanceTimersByTimeAsync(30000); });
     expect(requests).toHaveLength(endCount);
@@ -192,7 +196,8 @@ describe("实盘契约页面", () => {
   it("does not fetch on a hidden initial mount", async () => {
     visibility("hidden"); render(<LiveExecPage />); await flush();
     expect(requests).toHaveLength(0);
-    visibility("visible"); await flush(); expect(businessRequests()).toHaveLength(4);
+    visibility("visible"); await flush(); expect(requests).toHaveLength(8);
+    expect(adminCounts()).toEqual([1, 1, 1, 1]);
   });
 
   it("shows a disconnected empty state and clears previously displayed data", async () => {
@@ -208,7 +213,12 @@ describe("实盘契约页面", () => {
   });
 
   it("handles network errors, nullable fields and missing simulation safely", async () => {
-    fetchMock.mockRejectedValueOnce(new Error("offline"));
+    const original = fetchMock.getMockImplementation()!;
+    let failed = false;
+    fetchMock.mockImplementation((input: string, options: RequestInit) => {
+      if (input.endsWith("/summary") && !failed) { failed = true; return Promise.reject(new Error("offline")); }
+      return original(input, options);
+    });
     render(<LiveExecPage />); await flush();
     expect(screen.getByText(/实盘服务未连接/)).toBeTruthy();
     expect(screen.queryByText("offline")).toBeNull();
@@ -237,9 +247,13 @@ describe("实盘契约页面", () => {
   it("aborts hidden requests and ignores their late responses", async () => {
     let resolveOld: (value: unknown) => void = () => undefined;
     let oldSignal: AbortSignal | undefined;
-    fetchMock.mockImplementationOnce((_input: string, options: RequestInit) => {
-      oldSignal = options.signal as AbortSignal;
-      return new Promise(resolve => { resolveOld = resolve; });
+    const original = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation((input: string, options: RequestInit) => {
+      if (input.endsWith("/summary") && !oldSignal) {
+        oldSignal = options.signal as AbortSignal;
+        return new Promise(resolve => { resolveOld = resolve; });
+      }
+      return original(input, options);
     });
     render(<LiveExecPage />); await flush();
     visibility("hidden"); expect(oldSignal?.aborted).toBe(true);

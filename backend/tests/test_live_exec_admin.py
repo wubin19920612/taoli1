@@ -18,7 +18,7 @@ MACHINE_TOKEN = "a" * 64
 MAPPING = "0123456789abcdef01234567"
 READS = ("config", "config/audit", "universe", "mappings")
 WRITES = [
-    ("PUT", "config", {"order_usd_max": 30}),
+    ("PUT", "config", {"order_usd_max": 30, "expected_version": 2}),
     ("POST", "universe/SKHYNIX/exclude", {}),
     ("POST", "universe/SKHYNIX/unexclude", {}),
     ("POST", "universe/SKHYNIX/classify", {"category": "listed_equity", "underlying_market": "KRX",
@@ -45,7 +45,17 @@ BOUNDS = [
 
 
 @pytest.fixture
-def context(monkeypatch):
+def audit_capture(caplog):
+    logger = logging.getLogger("taoli1.audit.live_exec")
+    logger.addHandler(caplog.handler)
+    try:
+        yield caplog
+    finally:
+        logger.removeHandler(caplog.handler)
+
+
+@pytest.fixture
+def context(monkeypatch, audit_capture):
     app = create_app(settings=Settings(environment="test", database_url="sqlite:///:memory:",
         dashboard_password="test-password", dashboard_totp_secret=TEST_TOTP_SECRET,
         dashboard_api_token=MACHINE_TOKEN, crossex_exec_url="http://exec.test:8795/",
@@ -97,7 +107,7 @@ def test_write_requires_real_session(context, method, path, body, auth):
 def test_csrf_is_required(context, headers):
     app, _, calls, _ = context
     client = TestClient(app, base_url="https://radar.test", headers=session_headers("secret"))
-    response = client.put("/api/live-exec/config", headers=headers, json={"order_usd_max": 30})
+    response = client.put("/api/live-exec/config", headers=headers, json={"order_usd_max": 30, "expected_version": 2})
     assert response.status_code == 403
     assert "来源" in response.json()["detail"]
     assert not calls
@@ -107,17 +117,16 @@ def test_production_https_origin_behind_plain_http_proxy(context):
     app, _, calls, _ = context
     app.state.settings = replace(app.state.settings, environment="production")
     client = TestClient(app, base_url="http://radar.test", headers={**session_headers("secret"), **CSRF})
-    assert client.put("/api/live-exec/config", json={"order_usd_max": 30}).status_code == 200
+    assert client.put("/api/live-exec/config", json={"order_usd_max": 30, "expected_version": 2}).status_code == 200
     assert len(calls) == 1
-    assert client.put("/api/live-exec/config", json={"order_usd_max": 30},
+    assert client.put("/api/live-exec/config", json={"order_usd_max": 30, "expected_version": 2},
                       headers={"Origin": "http://radar.test"}).status_code == 403
 
 
 @pytest.mark.parametrize("method,path,body", WRITES)
 def test_write_passes_exact_path_body_admin_token_and_audits(context, caplog, method, path, body):
     _, client, calls, _ = context
-    with caplog.at_level(logging.INFO, logger=routes_live_exec.__name__):
-        response = client.request(method, f"/api/live-exec/{path}", json=body)
+    response = client.request(method, f"/api/live-exec/{path}", json=body)
     assert response.status_code == 200
     assert response.json()["data"]["market_key"] == "hyperliquid|future|xyz:XYZ"
     sent = calls[0]
@@ -164,7 +173,7 @@ def test_unconfigured_admin_returns_explicit_503(context, method, path, body):
 def test_bad_write_configuration_is_closed(context, field, value):
     app, client, calls, _ = context
     object.__setattr__(app.state.settings, field, value)
-    assert client.put("/api/live-exec/config", json={"order_usd_max": 30}).status_code == 503
+    assert client.put("/api/live-exec/config", json={"order_usd_max": 30, "expected_version": 2}).status_code == 503
     assert not calls
 
 
@@ -176,6 +185,7 @@ def test_bad_write_configuration_is_closed(context, field, value):
 ])
 def test_config_whitelist_and_strict_types(context, body):
     _, client, calls, _ = context
+    body = {**body, "expected_version": 2}
     assert client.put("/api/live-exec/config", json=body).status_code == 400
     assert not calls
 
@@ -184,27 +194,26 @@ def test_config_whitelist_and_strict_types(context, body):
 def test_all_parameter_bounds_are_atomic_and_unclamped(context, name, low, high):
     _, client, calls, _ = context
     for value in (low, high if high is not None else max(1000000, low * 2)):
-        response = client.put("/api/live-exec/config", json={name: value})
+        response = client.put("/api/live-exec/config", json={name: value, "expected_version": 2})
         assert response.status_code == 200
-        assert json.loads(calls[-1].content) == {name: value}
+        assert json.loads(calls[-1].content) == {name: value, "expected_version": 2}
     before = len(calls)
     for value in (low - 1, high + 1 if high is not None else False):
-        assert client.put("/api/live-exec/config", json={"order_usd_max": 30, name: value}).status_code == 400
+        assert client.put("/api/live-exec/config", json={"order_usd_max": 30, name: value, "expected_version": 2}).status_code == 400
     assert len(calls) == before
 
 
 @pytest.mark.parametrize("header,value", [("Origin", "https://radar.test"), ("X-Live-Exec-CSRF", "1")])
 def test_duplicate_csrf_headers_are_rejected(context, header, value):
     _, client, calls, _ = context
-    response = client.put("/api/live-exec/config", json={"order_usd_max": 30}, headers=[(header, value), (header, value)])
+    response = client.put("/api/live-exec/config", json={"order_usd_max": 30, "expected_version": 2}, headers=[(header, value), (header, value)])
     assert response.status_code == 403
     assert not calls
 
 
 def test_rejected_update_is_audited_without_untrusted_field_values(context, caplog):
     _, client, calls, _ = context
-    with caplog.at_level(logging.INFO, logger=routes_live_exec.__name__):
-        response = client.put("/api/live-exec/config", json={"unknown": ADMIN_TOKEN})
+    response = client.put("/api/live-exec/config", json={"unknown": ADMIN_TOKEN})
     assert response.status_code == 400
     assert "live_exec_admin" in caplog.text and "status=400" in caplog.text
     assert ADMIN_TOKEN not in caplog.text + response.text
@@ -268,8 +277,7 @@ def test_no_arbitrary_write_routes(context, path):
 def test_upstream_errors_keep_status_and_translate_without_secrets(context, caplog, status, code, chinese):
     _, client, _, install = context
     install(lambda r: httpx.Response(status, json={"error": code, "detail": ADMIN_TOKEN, "token": READ_TOKEN}))
-    with caplog.at_level(logging.INFO):
-        response = client.put("/api/live-exec/config", json={"order_usd_max": 30})
+    response = client.put("/api/live-exec/config", json={"order_usd_max": 30, "expected_version": 2})
     assert response.status_code == (status if status != 302 else 502)
     assert chinese in response.json()["detail"]
     assert ADMIN_TOKEN not in response.text + caplog.text
@@ -286,8 +294,7 @@ def test_write_transport_errors_are_safe_and_not_retried(context, caplog, kind, 
         if kind == "connect": raise httpx.ConnectError(ADMIN_TOKEN, request=request)
         return httpx.Response(200, text=ADMIN_TOKEN)
     install(fail)
-    with caplog.at_level(logging.INFO):
-        response = client.put("/api/live-exec/config", json={"order_usd_max": 30})
+    response = client.put("/api/live-exec/config", json={"order_usd_max": 30, "expected_version": 2})
     assert response.status_code == status
     assert len(requests) == 1
     assert "live_exec_admin" in caplog.text
@@ -304,3 +311,35 @@ def test_admin_token_environment_and_redacted_repr(monkeypatch):
         assert ADMIN_TOKEN not in repr(settings)
     finally:
         get_settings.cache_clear()
+
+
+@pytest.mark.parametrize("value", [None, True, "2", 2.0, [], {}, -1])
+def test_config_requires_strict_expected_version(context, value):
+    _, client, calls, _ = context
+    body = {"order_usd_max": 30, "expected_version": value}
+    assert client.put("/api/live-exec/config", json=body).status_code == 400
+    assert not calls
+
+
+def test_config_missing_precondition_cannot_write(context):
+    _, client, calls, _ = context
+    assert client.put("/api/live-exec/config", json={"order_usd_max": 30}).status_code == 400
+    assert not calls
+
+
+def test_config_conflict_is_forwarded_unchanged_without_retry(context, caplog):
+    _, client, _, install = context
+    calls = []
+    payload = b'{"error":"version_conflict","current_version":3}'
+
+    def conflict(request):
+        calls.append(request)
+        assert json.loads(request.content) == {"expected_version": 2, "order_usd_max": 30}
+        return httpx.Response(409, content=payload, headers={"content-type": "application/json"})
+
+    install(conflict)
+    response = client.put("/api/live-exec/config", json={"expected_version": 2, "order_usd_max": 30})
+    assert response.status_code == 409
+    assert response.content == payload
+    assert len(calls) == 1
+    assert "status=409" in caplog.text

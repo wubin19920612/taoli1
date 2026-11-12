@@ -3,23 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LiveExecPage } from "../src/pages/LiveExecPage";
 import { liveFixtures } from "./liveExecFixtures";
 
-const mappingId = "0123456789abcdef01234567";
-const markets = ["binance|future|SKHYNIXUSDT", "bitget|future|SKHYNIXUSDT"];
-const fixtures = {
-  config: { version: 2, fallback: false, values: { order_usd_max: 50, min_venues: 3 }, schema: {
-    order_usd_max: { default: 50, min: 5, max: 150, integer: false },
-    min_venues: { default: 3, min: 3, max: 6, integer: true },
-  } },
-  "config/audit": [{ version: 2, at: "2026-11-12T00:00:00Z", source: "admin_api", old: { order_usd_max: 40 }, new: { order_usd_max: 50 } }],
-  universe: [{ base: "SKHYNIX", category: "unconfirmed", excluded: false, underlying_market: null,
-    markets: markets.map((market_key, i) => ({ market_key, raw_symbol: "SKHYNIXUSDT", exchange: i ? "bitget" : "binance",
-      category: "listed_equity", effective_category: "listed_equity", underlying_market: null,
-      volume_usd: i ? null : 3000000, volume_basis: i ? "base_times_low24h_lower_bound" : "quote_volume",
-      at: "2026-11-12T00:00:00Z", selected: false, eligible: false, needs_classification: true })) }],
-  mappings: [{ id: mappingId, base: "PEPE", status: "pending", at: "2026-11-12T00:00:00Z", ratio: 1000,
-    legs: [{ market_key: "binance|future|1000PEPEUSDT", raw_base: "1000PEPE", quantity_multiplier: 1000 },
-      { market_key: "bitget|future|PEPEUSDT", raw_base: "PEPE", quantity_multiplier: 1 }] }],
-};
+import { fixtures, mappingId, markets } from "./liveExecAdminFixtures";
+
 let reads: typeof fixtures;
 let writes: { path: string; options: RequestInit }[];
 let writeError: string | null;
@@ -38,8 +23,11 @@ beforeEach(() => {
       writes.push({ path, options });
       if (writeError) return { ok: false, status: 503, json: async () => ({ detail: writeError }) };
       if (path === "config") {
+        if (JSON.parse(String(options.body)).expected_version !== reads.config.version)
+          return { ok: false, status: 409, json: async () => ({ error: "version_conflict", current_version: reads.config.version }) };
         reads.config.version++;
-        Object.assign(reads.config.values, JSON.parse(String(options.body)));
+        const { expected_version, ...changes } = JSON.parse(String(options.body));
+        Object.assign(reads.config.values, changes);
       }
       if (path.endsWith("/exclude")) reads.universe[0].excluded = true;
       if (path.endsWith("/unexclude")) reads.universe[0].excluded = false;
@@ -78,7 +66,7 @@ describe("实盘第八轮管理", () => {
     expect(writes).toHaveLength(1);
     expect(writes[0].path).toBe("config");
     expect(writes[0].options.method).toBe("PUT");
-    expect(JSON.parse(String(writes[0].options.body))).toEqual({ order_usd_max: 30 });
+    expect(JSON.parse(String(writes[0].options.body))).toEqual({ order_usd_max: 30, expected_version: 2 });
     expect(writes[0].options.credentials).toBe("same-origin");
     expect(writes[0].options.headers).toMatchObject({ "Content-Type": "application/json", "X-Live-Exec-CSRF": "1" });
     expect(screen.getByText(/操作成功/)).toBeTruthy();
@@ -119,8 +107,35 @@ describe("实盘第八轮管理", () => {
     reads.config.version++;
     await act(async () => { await vi.advanceTimersByTimeAsync(30000); });
     fireEvent.click(dialog().getByRole("button", { name: "确认提交" })); await flush();
-    expect(dialog().getByText(/参数版本已变化/)).toBeTruthy();
+    expect(screen.getByText("数据已被其他人修改，请刷新后重新确认")).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(writes).toHaveLength(0);
+  });
+
+  it("does not overwrite a tightened limit before the next poll; refreshes on 409 and requires a new confirmation", async () => {
+    render(<LiveExecPage />); await flush();
+    fireEvent.change(screen.getByLabelText("修改 order_usd_max"), { target: { value: "30" } });
+    await click("提交参数修改");
+    expect(dialog().getByText(/50 → 30/)).toBeTruthy();
+    reads.config.version = 3;
+    reads.config.values.order_usd_max = 5;
+    const readCount = fetchMock.mock.calls.filter(([url, options]) => url.endsWith("/config") && !options.method).length;
+    // No timer advance: the browser has not observed the other session's write.
+    fireEvent.click(dialog().getByRole("button", { name: "确认提交" })); await flush();
+    expect(JSON.parse(String(writes[0].options.body))).toEqual({ order_usd_max: 30, expected_version: 2 });
+    expect(reads.config.values.order_usd_max).toBe(5);
+    expect(screen.getByText("数据已被其他人修改，请刷新后重新确认")).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect((screen.getByLabelText("修改 order_usd_max") as HTMLInputElement).value).toBe("5");
+    expect(fetchMock.mock.calls.filter(([url, options]) => url.endsWith("/config") && !options.method)).toHaveLength(readCount + 1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(30000); });
+    expect(writes).toHaveLength(1);
+    fireEvent.change(screen.getByLabelText("修改 order_usd_max"), { target: { value: "30" } });
+    await click("提交参数修改");
+    expect(dialog().getByText(/5 → 30/)).toBeTruthy();
+    fireEvent.click(dialog().getByRole("button", { name: "确认提交" })); await flush();
+    expect(JSON.parse(String(writes[1].options.body))).toEqual({ order_usd_max: 30, expected_version: 3 });
+    expect(screen.getByText(/操作成功/)).toBeTruthy();
   });
 
   it("holds one in-flight write despite repeated confirmation clicks", async () => {
