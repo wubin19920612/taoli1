@@ -1077,3 +1077,93 @@ INVARIANTS seed=20261113 rounds=2448 random_rounds=2400 N=1 checks={'1a': 2448, 
 本轮遵循本地交付约束：未 push、SSH、WSL、amend、访问外部公开行情或鉴权接口、读取真实凭据、生产备份、部署或线上验证。测试仍使用内存交易所和 loopback 假服务，并保留外网 socket/DNS 守护。线上版本与配置未触碰；Ubuntu/Python 3.10/SQLite 3.37 实机、systemd/80M、真实账户时序与撮合仍未验收，Python 3.10 AST 检查不等同于该运行环境验收。
 
 第七轮本地验收已收尾，不再有本轮待决事项。工作区只提交上述测试文件和本交接文档，没有需要移交的额外未跟踪文件；临时日志及忽略的 Python 缓存保留。下个模块请新建任务并从本节接续；联网、实机验收或上线按后续任务的明确范围另行开展。
+
+## 第八轮交付（2026-11-12，契约红测与冲突交接，尚未实现）
+
+**第八轮未完成，按用户要求停在旧断言冲突处，等待 PM 决定。** 当前只有新增红测与文档，没有第八轮生产实现。完整回归为执行器原有 270 项通过、新增 2 项预期失败；fill-sim 158 项通过。原不变量三个种子各 2448 回合通过，但尚未加入第八轮“运行中改参数、映射币种开仓”覆盖，不能作为第八轮验收通过的证据。
+
+### 范围、基线与提交
+
+- worktree：`C:\Users\wubin\Desktop\code\codex\taoli1\.worktrees\crossex-exec-r8`；分支 `codex/crossex-exec-r8`；开始时工作区干净。
+- 基线：`698985a6b88407b8a211f7f95000203a3bbc4961`，父提交为第七轮验收 `cde65ed`。已读取 AGENTS、本交接第五至七轮、接口契约及第八轮任务书。
+- test 提交：`d8b21a68b27d81e043498fca9b567d4a7a0456da`，只新增 `tools/crossex_exec/tests/test_round8_contract.py`。
+- docs：本节及契约末尾待实现说明独立提交；hash 用 `git log -1 --format=%H -- docs/task-handoff-2026-11-11-crossex-exec.md` 获取。没有 feat 提交。
+- 新测试使用真实临时 SQLite `Store/JournalView`，保留原 socket/DNS 外网守护。未修改原测试、夹具或生产代码。对基线已跟踪的两个测试目录逐文件比较（仅归一化 CRLF/LF）：`Existing tracked test files checked: 48 changes= []`。
+
+### 必须由 PM 决定的冲突
+
+第八轮要求 summary 增加 `size_too_small / oi_missing / mapping_ratio_mismatch` 放弃次数。现有计数契约位于 `opening_skip_counts`；第七轮测试 `tests/test_round7.py::ReferenceAndAPITests.test_all_six_counters_are_zero_then_count_once_per_trigger_across_restart` 在第 462、470 行对**整个字典**作严格相等断言，本文件 `REASONS` 固定为六项。因此新增三项，即使原六项值、去重及持久化全正确，也会让旧断言失败。
+
+复现过程没有修改旧断言：
+
+1. 新增两个第八轮测试：空历史三项必须为 0；三类原因按 trigger 去重，重启后仍各为 1，事件数为 3。当前字段缺失，两项均失败。
+2. 临时诊断先运行上述原测试：`Ran 1 test in 0.041s / OK`；再仅以 `unittest.mock.patch.object(api_data, 'SKIP_REASONS', 原六项 + 新三项)` 扩展内存输出字段：`Ran 1 test in 0.021s / FAILED (failures=1)`，停在原第 462 行。这个 mock 只证明 schema 冲突，不是实现或验收通过；没有写回源码。
+
+```text
+self.assertEqual(view.get('summary',{})['opening_skip_counts'],dict.fromkeys(REASONS,0))
+AssertionError: {'boo[117 chars]s': 0, 'size_too_small': 0, 'oi_missing': 0, '[22 chars]': 0} != {'boo[117 chars]s': 0}
+```
+
+**提请批准的最小适配，尚未执行**：仅扩展这两处完整字典期望，保留六项 `REASONS` 及原循环。首处期望原六项和新三项全为 0；第二处期望原六项为 1、新三项仍为 0。原事件数等于 6 的断言不动；新增三类的持久化、去重由新测试验证。没有把“等于”改成子集比较，也不降低安全断言、非空覆盖或回合数。
+
+已发出此项 PM 决策请求，截至本次交接未收到批准。用户明确要求“如与新设计冲突，停下并在交接中说明，交由 PM 决定”，因此暂停生产实现；不得以等待时间当作批准，或按测试/调用方输出不同 schema 来隐藏冲突。后续若发现其他断言冲突仍须逐项说明，本提案不是任意改测试的授权。
+
+### 官方 OI 与目录字段核查
+
+2026-11-12 仅读取官方文档，未执行示例或请求真实行情/鉴权接口。以下区分已核实和待补证，**不是已实现的适配器清单**。
+
+| 所 | OI 字段与单位 | 目录分类与边界 |
+|---|---|---|
+| Binance | [Open Interest](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/market-data#open-interest)：`/fapi/v1/openInterest` 返回 `symbol/openInterest/time`；本次该页未取得币/张/USDT的明确单位说明，**单位待补证**。统计接口的 `sumOpenInterestValue` 也不能仅凭字段名就视为单位已核实。 | [Exchange Information](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/market-data#exchange-information) 示例有 `underlyingType=COIN/underlyingSubType`；完整枚举及 PREMARKET 定义待补证。不能用 COIN 单字段代替任务书要求的 RWA/黄金/股票/ETF/商品排除。 |
+| Bybit | [Open Interest](https://bybit-exchange.github.io/docs/v5/market/open-interest)：linear 的 `openInterest` 单位为基础币，是双边合计；`singleOpenInterest` 为单边，`timestamp` 毫秒，最短周期 `5min`。需明确选择口径，不能静默混用。 | [Instruments Info](https://bybit-exchange.github.io/docs/v5/market/instrument)：`isPreListing/symbolType`；TradFi 另有 `fullName/marketRegion/underlyingTicker`，韩国代码为 `KR`，应用要求 `KRX`，需显式转换并由用户确认原始标的。合约上市时间不等于公司 IPO 事实。 |
+| OKX | [Open Interest](https://www.okx.com/docs-v5/en/#public-data-rest-api-get-open-interest)：`/api/v5/public/open-interest` 的 `oi` 为张、`oiCcy` 为币、`oiUsd` 为 USD，`ts` 毫秒。 | [Public Instruments](https://www.okx.com/docs-v5/en/#public-data-rest-api-get-instruments)：`instCategory` 1=crypto、3=stocks、4=commodities、5=forex、6=bonds、空串=未知。`instType=SWAP` 不证明 crypto。 |
+| Gate | [Futures statistics](https://www.gate.com/docs/developers/apiv4/en/futures/)：`/futures/{settle}/contract_stats` 的 `open_interest` 为张，`open_interest_usd` 为报价币名义额，`time` 为统计时间；USDT 结算需保留原报价币。 | 同一官方页：`quanto_multiplier` 是每张合约对应的标的数量；`contract_type` 例举 stocks/metals/indices/forex/commodities。当前英文页未找到 `is_pre_market`，不能把旧印象称为本次官方已核实。 |
+| Bitget | [Classic Open Interest](https://www.bitget.com/docs/catalog/classic-contract-market/classic-contract-market#get-open-interest)：`/api/v2/mix/market/open-interest` 的 `data.openInterestList[].size` 为基础币，`data.ts` 毫秒，须匹配返回 symbol。 | [Classic Market](https://www.bitget.com/docs/catalog/classic-contract-market/classic-contract-market)：合约目录 `isRwa=YES/NO`；`symbolType=perpetual`、`symbolStatus=normal` 均不能证明 crypto 或标的公司已上市。 |
+| Aster | [官方 Futures V3](https://raw.githubusercontent.com/asterdex/api-docs/master/V3%28Recommended%29/EN/aster-finance-futures-api-v3.md)：本次全文未找到 `openInterest`，**公开 OI 接口及单位未核实**。不能根据 Binance 兼容外观推定 `/fapi/v3/openInterest`，未采用第三方社区补写作为官方证据。 | 同一官方文档目录示例含 `underlyingType/underlyingSubType/baseAsset`，示例不证明完整分类枚举；未知仍需人工判断。 |
+
+继续实现前需补齐未证实项；合法 OI 仍不可得时按任务书 `oi_missing` 停开，不能默认无限 OI、放宽五分钟时效或把张数直接当 USD。金额换算需保留原市场、价格、数量倍率和快照时间。本轮未改变既有交易范围。
+
+### 完整回归与 INVARIANTS 原文
+
+Windows / Python 3.12.10 / SQLite 3.49.1；最后一次测试文件修改后执行：
+
+```text
+python -m unittest discover -s tools/crossex_exec/tests -v
+----------------------------------------------------------------------
+Ran 272 tests in 93.233s
+
+FAILED (failures=2)
+
+python -m unittest discover -s tools/fill_sim/tests -v
+----------------------------------------------------------------------
+Ran 158 tests in 29.458s
+
+OK
+```
+
+仅失败新增 `Round8SummaryContractTests` 的两项，原 270 项全过。首次先红：`Ran 2 tests in 0.049s / FAILED (failures=2)`。33 个执行器 Python 文件通过 Python 3.10 AST 语法检查，这不是 Ubuntu/Python 3.10 实机验收。
+
+下面三行来自本次完整日志，只去除可能同行的 unittest 测试名称前缀。它们是**未修改的第七轮模拟器**结果，没有第八轮运行中参数变更或映射开仓覆盖：
+
+```text
+INVARIANTS seed=20261111 rounds=2448 random_rounds=2400 N=1 checks={'1a': 2448, '1b': 2448, '1c': 2448, '1d': 2448, '2': 2448, '3': 2448, '4': 2448, '5': 2448, '6': 2448, '7': 2448} exercised={'1a': 35, '1b': 60, '1c': 25, '1d': 84, '2': 74, '3': 95, '4': 74, '5': 600, '6': 23, '7': 345} coverage={'account_failures': 151, 'baseline_admission': 74, 'cooldown_active': 167, 'db_failures': 22, 'full_fill': 122, 'halted': 344, 'halting_retry': 1, 'intent_write_abort': 21, 'open': 74, 'opened_pairs': 37, 'partial_fill': 27, 'position_failures': 137, 'position_read': 3257, 'query': 4217, 'query_failures': 1397, 'recovery_obligation': 23, 'reduce': 95, 'restarts': 142, 'scheduled_account': 149, 'scheduled_adverse': 133, 'scheduled_database': 140, 'scheduled_detail': 148, 'scheduled_equity': 142, 'scheduled_midnight': 121, 'scheduled_none': 458, 'scheduled_partial': 164, 'scheduled_positions': 136, 'scheduled_restart': 142, 'scheduled_spread': 129, 'scheduled_stale': 150, 'scheduled_timeout_ack': 146, 'scheduled_timeout_unknown': 146, 'scheduled_zero': 144, 'skip_baseline_not_flat': 75, 'skip_book_skew': 28, 'skip_book_stale': 112, 'skip_funding_diff': 56, 'skip_not_single_venue_outlier': 109, 'skip_too_few_venues': 23, 'timeout_ack': 28, 'timeout_unknown': 21, 'zero_fill': 20}
+INVARIANTS seed=20261112 rounds=2448 random_rounds=2400 N=1 checks={'1a': 2448, '1b': 2448, '1c': 2448, '1d': 2448, '2': 2448, '3': 2448, '4': 2448, '5': 2448, '6': 2448, '7': 2448} exercised={'1a': 27, '1b': 56, '1c': 13, '1d': 77, '2': 68, '3': 83, '4': 68, '5': 600, '6': 30, '7': 355} coverage={'account_failures': 116, 'baseline_admission': 68, 'cooldown_active': 24, 'db_failures': 16, 'full_fill': 112, 'halted': 354, 'halting_retry': 1, 'intent_write_abort': 15, 'open': 68, 'opened_pairs': 34, 'partial_fill': 24, 'position_failures': 139, 'position_read': 3275, 'query': 4946, 'query_failures': 630, 'recovery_obligation': 30, 'reduce': 83, 'restarts': 142, 'scheduled_account': 116, 'scheduled_adverse': 135, 'scheduled_database': 149, 'scheduled_detail': 128, 'scheduled_equity': 138, 'scheduled_midnight': 134, 'scheduled_none': 458, 'scheduled_partial': 159, 'scheduled_positions': 138, 'scheduled_restart': 142, 'scheduled_spread': 184, 'scheduled_stale': 145, 'scheduled_timeout_ack': 139, 'scheduled_timeout_unknown': 149, 'scheduled_zero': 134, 'skip_baseline_not_flat': 65, 'skip_book_skew': 20, 'skip_book_stale': 86, 'skip_funding_diff': 91, 'skip_not_single_venue_outlier': 139, 'skip_too_few_venues': 42, 'timeout_ack': 22, 'timeout_unknown': 34, 'zero_fill': 15}
+INVARIANTS seed=20261113 rounds=2448 random_rounds=2400 N=1 checks={'1a': 2448, '1b': 2448, '1c': 2448, '1d': 2448, '2': 2448, '3': 2448, '4': 2448, '5': 2448, '6': 2448, '7': 2448} exercised={'1a': 37, '1b': 78, '1c': 27, '1d': 106, '2': 94, '3': 115, '4': 94, '5': 600, '6': 31, '7': 385} coverage={'account_failures': 134, 'baseline_admission': 94, 'cooldown_active': 158, 'db_failures': 20, 'full_fill': 162, 'halted': 384, 'halting_retry': 1, 'intent_write_abort': 20, 'open': 94, 'opened_pairs': 47, 'partial_fill': 27, 'position_failures': 141, 'position_read': 3256, 'query': 5603, 'query_failures': 635, 'recovery_obligation': 31, 'reduce': 115, 'restarts': 114, 'scheduled_account': 134, 'scheduled_adverse': 151, 'scheduled_database': 156, 'scheduled_detail': 134, 'scheduled_equity': 144, 'scheduled_midnight': 142, 'scheduled_none': 458, 'scheduled_partial': 152, 'scheduled_positions': 141, 'scheduled_restart': 114, 'scheduled_spread': 153, 'scheduled_stale': 145, 'scheduled_timeout_ack': 157, 'scheduled_timeout_unknown': 134, 'scheduled_zero': 133, 'skip_baseline_not_flat': 43, 'skip_book_skew': 28, 'skip_book_stale': 73, 'skip_funding_diff': 68, 'skip_not_single_venue_outlier': 120, 'skip_too_few_venues': 17, 'timeout_ack': 39, 'timeout_unknown': 37, 'zero_fill': 20}
+```
+
+日志在本机 `%TEMP%`，不入库，不覆盖旧轮次日志：
+
+| 文件 | SHA-256 |
+|---|---|
+| `crossex-round8-contract-red.log` | `b341d3f729b486839dfb5dc9a432e9a5ff0319a5700aa90a87f1bc6d954ea522` |
+| `crossex-round8-old-assertion-conflict.log` | `970997e916a1a3248f73b89a260b5e151dba004783f7cd434e0487eb6fdabb9b` |
+| `crossex-round8-pending-unittest.log` | `85e5f60ac1e1cf37e7615532647390d3114c11d1843127bb03dbf1cf71ba2f3a` |
+| `crossex-round8-fill-sim.log` | `8dbc09f2ed6a675eeb8e1e61fd8555cffa802548b38ac946e665a4850e6ec4ed` |
+
+### 继续入口与线上状态
+
+继续时先读本节和 PM 决定。获准后按任务书先红后绿实现；当前不是全部需求测试。参数表/审计/范围及版本复核、深度与 OI 定量、白名单候选确认、映射确认及倍数换算、股票/ETF 标的市场确认、管理令牌写接口、sizing API 字段、新模拟器覆盖全部未实现。
+
+现有入口：`engine.py::ingest/opening_review/check_pair`、`policy.py::review/send_review`、`admission.py::OpeningLimits`、`limits.py::HardLimits`、`storage.py::Store`、`market.py::MarketData`、`api.py::APIService/_Handler.dispatch`、`api_data.py::JournalView`。映射必须贯穿开仓、成交记账、实仓恢复及减仓数量，不只改开仓公式，保持第一至七轮裸露、穿零和共享放行约束。
+
+未变更生产代码；未 push、SSH、WSL、amend、调用真实鉴权接口、读取真实 env/凭据、启动服务、生产备份、部署或线上验证，线上版本未触碰。父仓库索引的首次普通写入被文件沙箱阻止，随后在用户已授权的本地提交范围内通过自动审批，没有审批拒绝；提交禁用 hooks/GPG。仅提交本任务文件，临时日志及被忽略的 Python 缓存保留，没有额外未跟踪仓库文件需要移交。仍停在 crossex-exec 第八轮，不进入前端模块。

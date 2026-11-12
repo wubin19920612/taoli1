@@ -76,3 +76,11 @@
 ```
 - `histogram` 按 `net_bps` 分桶，桶宽 25bp，区间是 [-200, 200]，超出的归入两端桶。
 - `by_spread_tier` 的档位与 fill-sim 一致：0.5–1%、1–2%、2–5%、>5%。
+
+## 第八轮扩展状态（2026-11-12，待实现）
+
+第八轮任务书提出参数、白名单候选、代码映射确认和独立管理令牌写接口；**本次尚未实现或开放这些接口**，当前实现仍是上面的第七轮契约。交接文档“第八轮交付”记录了新增 summary 字段与旧完整字典断言的冲突，按用户要求等待 PM 决定。本节只追加状态说明。
+
+待实现接口为 `GET/PUT /api/v1/config`、`GET /api/v1/config/audit`、`GET /api/v1/universe`、`POST /api/v1/universe/{base}/enable|exclude`、`GET /api/v1/mappings`、`POST /api/v1/mappings/{id}/confirm|reject`。写操作使用与只读令牌不同的 `CROSSEX_EXEC_ADMIN_TOKEN`；参数越界原子拒绝并返回 400，只读令牌调用写接口返回 403。正式实现时补齐请求/响应、版本和审计字段定义。
+
+第八轮拟在现有 `opening_skip_counts` 中追加 `size_too_small`、`oi_missing`、`mapping_ratio_mismatch`，旧六项保留，新项缺记录为 0，按触发机会去重并跨重启保留。已有六项完整字典断言尚未获准适配，因此此扩展目前只有两个先失败测试，尚未进入生产实现。
