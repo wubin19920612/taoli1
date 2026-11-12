@@ -27,6 +27,8 @@ RECOVERY_BOUND = 1
 INVARIANTS = ('1a', '1b', '1c', '1d', '2', '3', '4', '5', '6', '7')
 FAULTS = ('partial', 'zero', 'timeout_ack', 'timeout_unknown', 'detail', 'positions',
           'database', 'restart', 'midnight', 'stale', 'spread', 'adverse', 'equity', 'account')
+OPENING_FAULTS = ('baseline_not_flat', 'not_single_venue_outlier', 'too_few_venues',
+                  'book_skew', 'book_stale', 'funding_diff')
 
 
 class FakeDatabase:
@@ -141,7 +143,7 @@ class SimVenue:
                 self.realized += filled*(price-dec((100, 102)[self.leg]))*(1 if self.leg == 0 else -1)
             self.orders[order['cid']] = dict(filled=str(filled), price=str(price), at=w.now,
                                            unknown=w.fault == 'timeout_unknown', sent_step=w.step)
-            row = dict(order=copy.deepcopy(order), before=before, after=[v.quantity for v in w.venues],
+            row = dict(order=copy.deepcopy(order), before=before, after=[v.quantity for v in w.venues], filled=filled,
                        locked=bool(w.store.meta('stop_locks', {})), live=w.engine.live,
                        batch=w.send_batches.get(order['cid']), admission=w.admissions.get(order['cid']),
                        total=sum(v.quantity*w.prices[n] for n,v in enumerate(w.venues)))
@@ -175,13 +177,14 @@ class SimVenue:
 
 
 class World:
-    def __init__(self, live, coverage):
+    def __init__(self, live, coverage, opening_fault='none'):
         self.lock = threading.RLock()
         self.coverage = coverage
         self.live = live
         self.now = 1794355200.0
         self.step = 0
         self.fault = 'none'
+        self.opening_fault = opening_fault
         self.fractions = [dec(1), dec(1)]
         self.prices = [dec(100), dec(102)]
         self.sends, self.cancels = [], 0
@@ -193,10 +196,11 @@ class World:
         for i in self.instruments:
             i.spec = replace(i.spec, min_notional='0')
         self.store = FakeDatabase()
-        seed_baseline(self.store,self.now,'40')
+        # Normal history is nonzero and flat (MAD=0). The negative episode uses
+        # real 15bp samples, below the structural ceiling but above v1's 10bp.
+        seed_baseline(self.store,self.now,'15' if opening_fault == 'baseline_not_flat' else '5')
         self.market = SimpleNamespace(mapping={i.market.key:i for i in self.instruments}, books=self.books,
-            funding=lambda instruments:[dict(rate='0', interval=28800, next=self.now+10000,
-                captured_at=self.now, history_ok=True, max_abs_24h='0') for _ in instruments],
+            funding=self.funding,
             turnovers=lambda instruments:['10000000']*len(instruments))
         self.accounts = SimpleNamespace(cross=self.venues[0], bitget=self.venues[1], snapshot=self.snapshot,
             validate_startup=self.snapshot, position_snapshot=self.positions,
@@ -241,7 +245,8 @@ class World:
             # The existing shared gate admits both entry legs before either sends.
             # An already-admitted peer is not a second, newly admitted position.
             admission = dict(before=[v.quantity for v in self.venues],
-                             locked=bool(engine.stops), cids={i['cid'] for i in intents})
+                             locked=bool(engine.stops), cids={i['cid'] for i in intents},
+                             baseline=self.store.meta('baseline_status')['BTC|binance|bitget'])
             for intent in intents:
                 self.admissions[intent['cid']] = admission
             return result
@@ -262,9 +267,17 @@ class World:
             price = self.prices[leg]
             if self.fault == 'spread':
                 price = dec(100)
+            received_at = self.now-100 if self.fault == 'stale' or self.opening_fault == 'book_stale' else self.now
+            exchange_at = received_at-(.5 if self.opening_fault == 'book_skew' and leg == 1 else 0)
             result.append(Book([[str(price), '20']], [[str(price), '20']],
-                               self.now-100 if self.fault == 'stale' else self.now))
+                               received_at, exchange_at))
         return result
+
+    def funding(self, instruments):
+        # 0.6bp/h difference exceeds v1; each leg remains below 0.05%/8h.
+        return [dict(rate='.00048' if self.opening_fault == 'funding_diff' and i.market.exchange == 'binance' else '0',
+                     interval=28800, next=self.now+10000, captured_at=self.now,
+                     history_ok=True, max_abs_24h='.00048') for i in instruments]
 
     def positions(self):
         self.coverage['position_read'] += 1
@@ -296,8 +309,10 @@ class World:
         # Append independent synthetic public observations; never clear cooldowns
         # or replace the production baseline gate. Midnight gaps do not backfill.
         from tools.crossex_exec.baseline import Baseline
-        Baseline(self.store,lambda:self.now).record(
-            {'binance':{'BTC':'100'},'bitget':{'BTC':'100.4'}},('BTC',))
+        mids = {'binance':{'BTC':str(self.prices[0])}, 'bitget':{'BTC':str(self.prices[1])}}
+        if self.opening_fault != 'too_few_venues':
+            mids['bybit'] = {'BTC':'101' if self.opening_fault == 'not_single_venue_outlier' else '100'}
+        Baseline(self.store,lambda:self.now).record(mids,('BTC',))
         self.store.set_meta('mapping', dict(at=self.now))
         self.accounts.fee_snapshots = {i.market.key:FeeSnapshot('.0002',self.now) for i in self.instruments}
         try:
@@ -344,7 +359,11 @@ class InvariantSimulationTests(unittest.TestCase):
 
     def run_seed(self, seed):
         rng = random.Random(seed)
+        # Keep the original fault/fill draws and 48-round tail unchanged. Half
+        # the random episodes additionally carry bad public admission inputs.
+        opening_rng = random.Random(f'{seed}:opening')
         coverage = Counter()
+        opened_pairs = set()
         sequence = []
         checks = Counter()
         exercised = Counter()
@@ -357,7 +376,9 @@ class InvariantSimulationTests(unittest.TestCase):
                     if episode_step == 0:
                         if world:
                             world.engine.close()
-                        world = World(live=index >= RANDOM_ROUNDS or (index//24)%4 != 0, coverage=coverage)
+                        opening_fault = opening_rng.choice(('none',)*6+OPENING_FAULTS) if index < RANDOM_ROUNDS else 'none'
+                        world = World(live=index >= RANDOM_ROUNDS or (index//24)%4 != 0,
+                                      coverage=coverage, opening_fault=opening_fault)
                     w = world
                     w.step = index
                     fault = 'none' if episode_step in (1, 21, 22, 23) else rng.choice(FAULTS)
@@ -386,7 +407,7 @@ class InvariantSimulationTests(unittest.TestCase):
                     if fault == 'database':
                         w.store.fail_order = True
                     sequence.append(dict(step=index, fault=fault, fractions=list(map(str,w.fractions)),
-                                         prices=list(map(str,w.prices)), live=w.live))
+                                         prices=list(map(str,w.prices)), live=w.live, opening_fault=w.opening_fault))
                     coverage['scheduled_'+fault] += 1
                     first_send, first_cancel = len(w.sends), w.cancels
                     first_batch, first_recovery = len(w.batches), len(w.recoveries)
@@ -396,6 +417,7 @@ class InvariantSimulationTests(unittest.TestCase):
                     if fault == 'restart':
                         w.restart()
                     w.references()
+                    skips_before = Counter(w.store.meta('opening_skip_counts', {}))
                     if w.store.meta('state') != 'HALTED':
                         if episode_step >= 21:
                             w.store.set_meta('state', 'HALTING')
@@ -435,11 +457,20 @@ class InvariantSimulationTests(unittest.TestCase):
                             self.assert_reduction(sent, exercised)
                         else:
                             pair = next(p for p in w.store.pairs() if p['id']==order['pair_id'])
-                            self.assertEqual(dec(pair['baseline_at_open']),40)
+                            self.assertEqual(dec(pair['baseline_at_open']),5)
                             self.assertLessEqual(w.store.meta('pair_cooldowns',{}).get('BTC|binance|bitget',0),w.now)
                             coverage['baseline_admission'] += 1
                             self.assertFalse(sent['locked'], 'I2 opening while locked')
                             self.assertIsNotNone(sent['admission'], 'I1d missing shared admission')
+                            baseline = sent['admission']['baseline']
+                            self.assertLessEqual(abs(dec(baseline['baseline_bps'])), 10)
+                            self.assertGreaterEqual(dec(baseline['mad_bps']), 0)
+                            self.assertLessEqual(dec(baseline['mad_bps']), 10)
+                            gross = (dec(pair['fill']['sell']['vwap'])/dec(pair['fill']['buy']['vwap'])-1)*10000
+                            self.assertEqual(dec(pair['excess_at_open']), gross-5, 'nonzero baseline must be deducted')
+                            if sent['filled'] > 0 and pair['id'] not in opened_pairs:
+                                opened_pairs.add(pair['id'])
+                                coverage['opened_pairs'] += 1
                             self.assertEqual(*sent['admission']['before'], 'I1d admitting entry with exposure')
                             self.assertFalse(sent['admission']['locked'], 'I2 admission while locked')
                             self.assertLessEqual(dec(order['quantity'])*dec(order['price']), 150, 'I4 leg cap')
@@ -484,6 +515,10 @@ class InvariantSimulationTests(unittest.TestCase):
                         coverage['halted'] += 1
                         exercised['7'] += 1
                     coverage['db_failures'] += w.store.failures
+                    # Count only production-requested, trigger-deduplicated SKIPs,
+                    # never scheduled faults or repeated reads of old counters.
+                    for reason, count in (Counter(w.store.meta('opening_skip_counts', {}))-skips_before).items():
+                        coverage['skip_'+reason] += count
                     if w.store.meta('pair_cooldowns',{}).get('BTC|binance|bitget',0)>w.now:
                         coverage['cooldown_active'] += 1
                     w.store.failures = 0
@@ -496,6 +531,9 @@ class InvariantSimulationTests(unittest.TestCase):
                         'restarts','db_failures','recovery_obligation','halting_retry','halted',
                         'query_failures','position_failures','account_failures','baseline_admission','cooldown_active'):
                 self.assertGreater(coverage[key], 0, 'vacuous fault coverage: '+key)
+            self.assertGreater(coverage['opened_pairs'], 0, 'vacuous actual new-position coverage')
+            for reason in OPENING_FAULTS:
+                self.assertGreater(coverage['skip_'+reason], 0, 'vacuous opening rejection: '+reason)
             print(f'INVARIANTS seed={seed} rounds={ROUNDS} random_rounds={RANDOM_ROUNDS} N={RECOVERY_BOUND} checks={dict(checks)} '
                   f'exercised={dict(sorted(exercised.items()))} coverage={dict(sorted(coverage.items()))}', flush=True)
         except Exception as error:

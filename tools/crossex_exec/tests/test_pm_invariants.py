@@ -21,6 +21,12 @@ class PMInvariantTests(unittest.TestCase):
         world.open()
         self.assertEqual(len(world.store.pairs(active=True)), 1)
         self.assertEqual(world.venues[0].quantity, world.venues[1].quantity)
+        self.assertGreater(world.venues[0].quantity, 0)
+        pair = world.store.pairs(active=True)[0]
+        self.assertEqual(dec(pair['baseline_at_open']), 5)
+        self.assertEqual(dec(pair['excess_at_open']), 195)
+        self.assertEqual(pair['outlier_at_open']['outlier_exchange'], 'bitget')
+        self.assertIn('bybit', pair['outlier_at_open']['reference_venues'])
         return world
 
     def stranded_close(self, world):
