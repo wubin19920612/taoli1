@@ -18,13 +18,37 @@ class EmptyHistoryTests(unittest.TestCase):
             self.assertEqual(http.request.call_count, len(prefix)+1)
 
     def test_financial_null_requires_both_keys_and_exact_terminal_shape(self):
+        http = Mock(); http.request.return_value = dict(list=[], cursor=None)
+        self.assertEqual(Bitget(http).financial_records(100, 200), [])
+        self.assertEqual(http.request.call_count, 1)
         for value in (None, {}, {'cursor':None}, {'list':None},
                       dict(list=None,cursor=''), dict(list=None,cursor='more'),
                       dict(list=None,cursor=0), dict(list={},cursor=None),
-                      dict(list=[],cursor=None), dict(list=False,cursor=None)):
+                      dict(list=False,cursor=None), {'list':[]},
+                      dict(list=[],cursor=0), dict(list=[],cursor=False),
+                      dict(list=[],cursor={}), dict(list=[],cursor=[])):
             with self.subTest(value=value):
                 http = Mock(); http.request.return_value = value
                 with self.assertRaises(APIError): Bitget(http).financial_records(100, 200)
+
+        from unittest.mock import patch
+        import json
+        venue = FakeVenue('bitget'); self.addCleanup(venue.close)
+        path = '/api/v3/account/financial-records'
+        transport = Transport('bitget', Credentials('test-key','test-secret','test-pass'),
+                              base=venue.url, local_test=True)
+        venue.responses[path] = dict(list=[], cursor=None)
+        self.assertEqual(Bitget(transport).financial_records(100, 200), [])
+        def reply(handler, status, data):
+            raw = json.dumps(dict(code='40009', data=data)).encode()
+            handler.send_response(status)
+            handler.send_header('Content-Length', str(len(raw)))
+            handler.end_headers()
+            handler.wfile.write(raw)
+        with patch.object(venue.server.RequestHandlerClass, 'reply', reply):
+            with self.assertRaises(APIError) as raised:
+                Bitget(transport).financial_records(100, 200)
+        self.assertEqual(raised.exception.diagnostic['api_code'], '40009')
 
     def test_real_transport_success_required_before_null_normalization(self):
         venue = FakeVenue('bitget'); self.addCleanup(venue.close)
