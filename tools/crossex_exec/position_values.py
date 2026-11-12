@@ -23,7 +23,8 @@ def position_identity(route,symbol,row=None):
                 or any(ord(c)<32 for c in base)):
             raise ValueError('position_identity_unknown')
         result=dict(route=route,exchange_type=exchange,business='FUTURE',symbol=symbol,quote=quote,dex=dex)
-        for raw,field in (('exchange_type','exchange_type'),('business_type','business'),('tag','dex')):
+        for raw,field in (('exchange_type','exchange_type'),('business_type','business'),
+                          ('tag','dex'),('dex','dex'),('quote','quote'),('business','business'),('route','route')):
             if raw in row and row[raw]!=result[field]:
                 raise ValueError('position_identity_unknown')
         return result
@@ -37,6 +38,25 @@ def position_identity(route,symbol,row=None):
             raise ValueError('position_identity_unknown')
         return dict(route=route,exchange_type='BITGET',business=business,symbol=symbol,quote=quote,dex='')
     raise ValueError('position_identity_unknown')
+
+
+def verify_external_rows(snapshot, identities):
+    """One identity parser for registration, risk attribution and the public view.
+
+    Official position rows may omit exchange/tag: the exact raw symbol supplies
+    those fields. Any explicit field must agree with it AND the registered rule.
+    Both DUAL directions are checked; quantity normalization never nets them.
+    """
+    from .accounts import remote_positions
+    raw=snapshot['raw_positions']
+    if remote_positions(raw['crossex'],raw['bitget'])!={k:dec(v) for k,v in snapshot['positions'].items()}:
+        raise ValueError('raw_positions_disagree')
+    expected={(i['route'],i['symbol']):i for i in identities}
+    for route,rows in raw.items():
+        for row in rows:
+            target=(route,row['symbol'])
+            if target in expected and position_identity(route,row['symbol'],row)!=expected[target]:
+                raise ValueError('position_identity_unknown')
 
 
 def key_currency(key):

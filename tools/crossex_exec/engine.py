@@ -545,22 +545,28 @@ class Engine:
             if self.store.meta('state')!='HALTING':
                 raise
             self.alert('halting_startup_account_unavailable')
+            self.start_background(bases)
             self.flatten_all('startup_halt_recovery')
             return
         self.account_cache.publish(self.snapshot,started)
         if any(o['clientOid'] not in known for o in self.snapshot.get('open_orders',[])):
-            raise ValueError('foreign_bitget_unfilled_orders')
+            if self.store.meta('state')!='HALTING':
+                raise ValueError('foreign_bitget_unfilled_orders')
+            self.alert('foreign_bitget_unfilled_orders')
         self.limits.initialize(self.snapshot)
         # Rebuild from the immutable journal, including crash after terminal before pair save.
         for pair in self.store.pairs(active=True):
             self.refresh_pair(pair)
         if self.store.meta('state')=='HALTING':
+            # Refreshers are independent of the coordinator's reduction retry.
+            # Expired catalogs/accounts must recover even while openings stay locked.
+            self.start_background(bases)
             # A known equity breach must not wait for catalog/fee bootstrap.
             self.flatten_all('startup_equity_drop')
             # Residual exposure stays in-process; tick owns bounded backoff retries.
             return
         self.reconcile()
-        if self.store.meta('state') not in ('HALTING','HALTED'):
+        if self.store.meta('state')!='HALTED':
             self.start_background(bases)
 
     def totals(self,*,program=True):

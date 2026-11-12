@@ -12,6 +12,7 @@ from decimal import Decimal
 
 from tools.fill_sim.core import dec
 from .accounts import remote_positions
+from .position_values import verify_external_rows
 
 
 IDENTITY_FIELDS = frozenset(('route','exchange_type','business','symbol','quote','dex'))
@@ -114,7 +115,8 @@ class ExternalRegistry:
             if (row['exchange_type']!=identity['exchange_type'] or row['business_type']!=identity['business']
                     or row['tag']!=identity['dex'] or row['state']!='live' or row['support_cross']!='true'
                     or str(row['delist_time'])!='0'
-                    or any(dec(row[k])<=0 for k in ('lot_size','min_size','max_limit_size','tick_size'))):
+                    or any(dec(row[k])<=0 for k in ('lot_size','min_size','tick_size'))
+                    or (row['max_limit_size'] is not None and dec(row['max_limit_size'])<=0)):
                 raise ValueError('invalid_rule')
         except (ValueError,KeyError,TypeError):
             raise ExternalUnverifiable('external_identity_unverifiable') from None
@@ -148,6 +150,7 @@ class ExternalRegistry:
             normalized=remote_positions(raw['crossex'],raw['bitget'])
             if normalized!={k:dec(v) for k,v in positions.items()}:
                 raise ValueError('raw_positions_disagree')
+            verify_external_rows(snapshot,[r['identity'] for r in rows.values()])
             active={r['identity']['symbol'] for r in rows.values() if r['registered']}
             external={}
             for key,qty in positions.items():
@@ -221,6 +224,7 @@ class ExternalAdmin:
                     positions=remote_positions(raw['crossex'],raw['bitget'])
                     if positions!={k:dec(v) for k,v in snapshot['positions'].items()}:
                         raise ValueError('raw_mismatch')
+                    verify_external_rows(snapshot,[identity])
                 except (KeyError,ValueError,TypeError):
                     raise ExternalUnverifiable('external_identity_unverifiable') from None
                 if not registered and any(k.split('|')[:2]==[identity['route'],identity['symbol']] for k in positions):

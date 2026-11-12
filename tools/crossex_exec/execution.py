@@ -11,6 +11,7 @@ from .transport import APIError
 from .stops import StopLocks
 from .storage import matches_order
 from .external import ExternalRegistry
+from .rejection import zero_rejection, legacy_rejection
 
 
 NONTERMINAL = frozenset(('SENT', 'ACK', 'UNKNOWN'))
@@ -230,6 +231,7 @@ class Executor:
                     return i
                 if kind=='rejected':
                     i.update(state='REJECTED',accounting_pending=False,reason=kind)
+                    i=zero_rejection(i,'placement_rejection')
                     self.save(i,'REJECTED')
                     return i
                 i.update(state='UNKNOWN',reason=kind)
@@ -288,6 +290,17 @@ class Executor:
 
     def recover(self,*,startup=True,pair_id=None):
         self.flush()
+        for row in self.iter_orders(pair_id=pair_id,states=('REJECTED',)):
+            if row.get('fee') is not None:
+                continue
+            with self.lock, self.store.transaction():
+                if row['cid'] in self.owned or self.order(row['cid'])!=row:
+                    continue
+                repaired=legacy_rejection(self.store,row)
+                if repaired is not None:
+                    # Keep the original rejection event. Repair and audit commit
+                    # atomically and a failed commit leaves the old proof invalid.
+                    self.store.save_order(repaired,'REJECTION_ACCOUNTING_RECOVERED')
         for i in chain(self.iter_orders(pair_id=pair_id, states=(*NONTERMINAL,'INTENT')),
                        self.iter_orders(pair_id=pair_id, states=('TERMINAL',), accounting_pending=True)):
             with self.lock:

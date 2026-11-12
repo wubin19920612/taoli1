@@ -123,6 +123,10 @@ class Store(PublicStore):
         with self.lock:
             return [dict(r) for r in self.db.execute('SELECT * FROM events ORDER BY id')]
 
+    def order_events(self, cid):
+        with self.lock:
+            return [dict(r) for r in self.db.execute('SELECT * FROM events WHERE cid=? ORDER BY id',(cid,))]
+
     def order(self, cid):
         with self.lock:
             row = self.db.execute('SELECT value FROM orders WHERE cid=?',(cid,)).fetchone()

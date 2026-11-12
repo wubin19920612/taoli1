@@ -6,6 +6,7 @@ from tools.fill_sim.core import dec, day
 from .external import ExternalRegistry, plain
 from .external_accounting import anchor_value, read_snapshot, program_activity, verified_history
 from .program_risk import debt_attribution
+from .funding import funding_positions, funding_continuity
 
 
 POSITION_LOCKS = frozenset(('position_mismatch','unhedged_position','repair_stopped',
@@ -102,6 +103,10 @@ class EquityAdmin:
             raise ValueError('margin_open_limit')
         if self.program_scope:
             try:
+                funding_positions(snapshot)
+                previous=self.store.meta('external_equity_anchor')
+                if previous and 'funding_positions' in previous:
+                    funding_continuity(self.store,previous,snapshot)
                 snapshot['program_funding_at_epoch']=str(program_activity(self.store,snapshot['activity'],
                     snapshot.get('accounting_at',started)))
             except (ValueError,KeyError,TypeError,ArithmeticError):

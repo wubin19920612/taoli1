@@ -42,7 +42,7 @@ def journal_pnl(store, now):
 
 def require_program_proof(store,snapshot,now):
     value=store.meta('external_income',{})
-    if (value.get('verified') is not True or value.get('scope')!='program'
+    if (value.get('verified') is not True or value.get('scope')!='program' or value.get('funding_verified') is not True
             or value.get('snapshot_version')!=snapshot.get('snapshot_version')
             or value.get('snapshot_version')!=store.meta('account_snapshot_version')
             or store.meta('account_snapshot_error')

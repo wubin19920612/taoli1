@@ -12,6 +12,7 @@ from .external import ExternalUnverifiable, plain, route_symbol, digest
 from .external_fx import NATIVE_USD, quote_band, upper_contribution
 from .program_risk import journal_pnl, journal_fingerprint
 from .position_values import key_currency, usd_value
+from .funding import funding_positions, funding_continuity
 
 BITGET_FUNDING = frozenset(('CONTRACT_MAIN_SETTLE_FEE_USER_IN','CONTRACT_MAIN_SETTLE_FEE_USER_OUT'))
 BITGET_TRADING = frozenset(('OPEN_LONG','OPEN_SHORT','CLOSE_LONG','CLOSE_SHORT','BUY_DEAL','SELL_DEAL'))
@@ -136,6 +137,7 @@ def anchor_value(store,snapshot,projection,captured):
         external_upnl=projection['external_upnl'],positions=plain(projection['external_positions']),
         external_upnl_by_position=plain(projection['external_upnl_by_position']),
         cash_balances=cash_balances(snapshot),history_index=history_index(snapshot['activity']),
+        funding_positions=funding_positions(snapshot),
         revision=store.meta('external_attribution_revision',0),program_funding_offset='0',program_funding_carry='0')
 
 
@@ -226,7 +228,8 @@ def settlement_state(snapshot):
     """Marks may move; cash, quantities and cumulative settlements may not."""
     raw=snapshot['raw_positions']
     positions={venue:sorted([{k:r[k] for k in ('symbol','position_side','posSide','position_qty','total',
-        'position_id','entry_price','fee','funding_fee','closed_pnl','averageOpenPrice','achievedProfits') if k in r}
+        'position_id','entry_price','fee','funding_fee','funding_time','closed_pnl','averageOpenPrice',
+        'achievedProfits','totalFunding','createdTime','create_time') if k in r}
         for r in rows],key=lambda r:str(sorted(r.items()))) for venue,rows in raw.items()}
     accounts=snapshot['raw_accounts']
     assets={venue:sorted([{k:r[k] for k in ('coin','exchange_type','balance','liability','debt') if k in r}
@@ -298,6 +301,7 @@ class ExternalAccounting:
             raise ValueError('history_coverage')
         records=self.registry.records()
         cash_continuity(anchor,snapshot)
+        funding_continuity(self.store,anchor,snapshot)
         history=verified_history(self.store,activity)
         external={r['identity']['symbol']:r['identity'] for r in records.values()}
         # Keep native units through every ledger/quantity check. Never net
@@ -425,7 +429,7 @@ class ExternalAccounting:
             external_fx=fx,valuation='public_spot_upper_bound' if fx else 'native_usd')
         result.update(scope='program',program_daily=str(daily+funding-dec(baseline['upnl'])+floating),
             program_total=str(realized+total_funding+floating),program_funding_total=str(total_funding),
-            program_upnl=str(floating),program_journal=original_journal)
+            program_upnl=str(floating),program_journal=original_journal,funding_verified=True)
         if anchor['day']!=today:
             # Verify the COMPLETE carried interval first (including settlements
             # while offline), then start today's equity fallback at the same

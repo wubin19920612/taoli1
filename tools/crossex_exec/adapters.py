@@ -142,6 +142,25 @@ class CrossEx:
     def positions(self):
         return self.http.request('GET','/api/v4/crossex/positions',group='position')
 
+    def position_history(self,start_ms,end_ms):
+        if not 0<=start_ms<=end_ms:
+            raise ValueError('invalid_history_request')
+        rows,seen=[],set()
+        for page in range(1,21):
+            batch=self.http.request('GET','/api/v4/crossex/history_positions',
+                {'from':start_ms,'to':end_ms,'page':page,'limit':1000},group='account')
+            if not isinstance(batch,list) or len(batch)>1000:
+                raise APIError('invalid_response')
+            for row in batch:
+                key=(row['position_id'],row['update_time'],row['closed_type'])
+                if not all(isinstance(v,str) and v for v in key) or key in seen:
+                    raise APIError('invalid_response')
+                seen.add(key)
+            rows.extend(batch)
+            if len(batch)<1000:
+                return rows
+        raise APIError('invalid_response')
+
     def open_orders(self):
         # Documented complete current list; no symbol/venue filter may hide debt
         # or foreign orders during an administrative flat-account verification.
@@ -224,6 +243,31 @@ class Bitget:
         # Do not filter funding only: unknown cash flows must remain visible.
         return self.paged('/api/v3/account/financial-records',dict(category='USDT-FUTURES',
             startTime=str(start_ms),endTime=str(end_ms)))
+
+    def position_history(self,start_ms,end_ms):
+        if not 0<=start_ms<=end_ms or end_ms-start_ms>30*86400000:
+            raise ValueError('invalid_history_request')
+        params=dict(category='USDT-FUTURES',startTime=str(start_ms),endTime=str(end_ms),limit=100)
+        rows,ids,cursors=[],set(),set()
+        for _ in range(20):
+            data=self.http.request('GET','/api/v3/position/history-position',params,group='account')
+            batch=data['list']
+            if not isinstance(batch,list) or len(batch)>100:
+                raise APIError('invalid_response')
+            for row in batch:
+                key=row['positionId']
+                if not isinstance(key,str) or not key or key in ids:
+                    raise APIError('invalid_response')
+                ids.add(key)
+            rows.extend(batch)
+            cursor=data.get('cursor')
+            if not batch or (len(batch)<100 and not cursor):
+                return rows
+            if not isinstance(cursor,str) or not cursor or cursor in cursors:
+                raise APIError('invalid_response')
+            cursors.add(cursor)
+            params=dict(params,cursor=cursor)
+        raise APIError('invalid_response')
 
     def settings(self):
         return self.http.request('GET','/api/v3/account/settings',group='account')

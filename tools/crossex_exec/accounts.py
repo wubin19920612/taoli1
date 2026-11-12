@@ -233,7 +233,9 @@ class Accounts:
         return dict(from_ms=start_ms,to_ms=end_ms,complete=True,
             crossex_book=self.cross.history('account_book',start_ms,end_ms),
             crossex_trades=self.cross.history('history_trades',start_ms,end_ms),
-            bitget_book=self.bitget.financial_records(start_ms,end_ms))
+            bitget_book=self.bitget.financial_records(start_ms,end_ms),
+            crossex_position_history=self.cross.position_history(start_ms,end_ms),
+            bitget_position_history=self.bitget.position_history(start_ms,end_ms))
 
     def check_instruments(self,instruments):
         for i in instruments:
