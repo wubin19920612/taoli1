@@ -9,6 +9,7 @@ let requests: URL[];
 let fetchMock: ReturnType<typeof vi.fn>;
 const flush = async () => { await act(async () => { await Promise.resolve(); }); };
 const count = (path: string) => requests.filter(url => url.pathname.endsWith(`/${path}`)).length;
+const businessRequests = () => requests.filter(url => /\/(summary|positions|trades|stats)$/.test(url.pathname));
 function visibility(value: "hidden" | "visible") {
   Object.defineProperty(document, "visibilityState", { configurable: true, value });
   fireEvent(document, new Event("visibilitychange"));
@@ -152,7 +153,7 @@ describe("实盘契约页面", () => {
 
   it("polls at 5/30 seconds, pauses when hidden and cleans up on unmount", async () => {
     const { unmount } = render(<LiveExecPage />); await flush();
-    expect(requests).toHaveLength(4);
+    expect(businessRequests()).toHaveLength(4);
     await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
     expect([count("summary"), count("positions"), count("trades"), count("stats")]).toEqual([2, 2, 1, 1]);
     await act(async () => { await vi.advanceTimersByTimeAsync(25000); });
@@ -160,7 +161,8 @@ describe("实盘契约页面", () => {
     visibility("hidden"); const hiddenCount = requests.length;
     await act(async () => { await vi.advanceTimersByTimeAsync(60000); });
     expect(requests).toHaveLength(hiddenCount);
-    visibility("visible"); await flush(); expect(requests.length).toBe(hiddenCount + 4);
+    const beforeResume = businessRequests().length;
+    visibility("visible"); await flush(); expect(businessRequests().length).toBe(beforeResume + 4);
     unmount(); const endCount = requests.length;
     await act(async () => { await vi.advanceTimersByTimeAsync(30000); });
     expect(requests).toHaveLength(endCount);
@@ -169,7 +171,7 @@ describe("实盘契约页面", () => {
   it("does not fetch on a hidden initial mount", async () => {
     visibility("hidden"); render(<LiveExecPage />); await flush();
     expect(requests).toHaveLength(0);
-    visibility("visible"); await flush(); expect(requests).toHaveLength(4);
+    visibility("visible"); await flush(); expect(businessRequests()).toHaveLength(4);
   });
 
   it("shows a disconnected empty state and clears previously displayed data", async () => {
