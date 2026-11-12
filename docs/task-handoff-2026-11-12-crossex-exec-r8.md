@@ -1,5 +1,7 @@
 # crossex-exec 第八轮交接（2026-11-12，本地验收完成）
 
+> 最新交付见文末 [合并终审修复](#合并终审修复)：`codex/crossex-exec` 的 `abf8dba` 已用 `--no-ff` 合入，本地代码验收以该节为准。下方第八轮原始交付及性能测量保留作历史证据。
+
 第八轮实现、双版本两套 unittest、不变量模拟器、采样 CPU/内存实测及接口契约已完成。本节取代文末历史停点；原 WIP 已保留并接续提交。**用户明确限定本地交付：不 push、SSH、WSL、amend 或真实鉴权。本轮没有部署或实盘验收。**
 
 ## 范围、基线与本地提交
@@ -267,3 +269,143 @@ Python 3.10.20: fill-sim Ran 158 tests in 31.118s / OK
 先红日志另有 `crossex-r8-pm-api-red-20261112.log`、`crossex-r8-pm-floor-red-20261112.log`、`crossex-r8-settings-red-20261112.log`、`crossex-r8-liquidity-red-20261112.log`、`crossex-r8-universe-red-20261112.log`、`crossex-r8-engine-red-20261112.log`、`crossex-r8-market-red-20261112.log`、`crossex-r8-admin-red-20261112.log`。3.10 首次连接中断证据在 `crossex-r8-pm-boundary-py310-20261112.log`，修后两版完整日志不再有该错误。
 
 </details>
+
+## 合并终审修复
+
+2026-11-12，仅处理 crossex-exec 合并与本地验收。起始工作区干净；工作树仍为 `C:\Users\wubin\Desktop\code\codex\taoli1\.worktrees\crossex-exec-r8`，当前分支 `codex/crossex-exec-r8`。已先读来源分支旧交接“终审修复”、原始终审报告和本交接。没有 push、SSH、WSL、amend、真实鉴权、服务启动或订单；所有交易行为均为测试替身。
+
+### 基线和提交
+
+| 类型 | 提交 | 内容 |
+|---|---|---|
+| 合并第一父 | `b24f5aff42e9aac5e68eeae1345b3f3deb811ddc` | 第八轮完整交付 |
+| 合并第二父 | `abf8dbad96183a77b35fce6a52e4e7ef0dc4ef18` | 终审修复 `18e475c/f580331/dab6d98/68c69a1` 及 Python 3.10 空查询修复 |
+| merge | `3b1d056aea67b2251ca61b9e3ad432adbae5cf43` | 实际执行 `git merge --no-ff --no-commit codex/crossex-exec`，解决冲突后生成双亲合并提交 |
+| test | `eb297ef` | 新增 11 项合并交界回归；其中锁顺序测试先失败 |
+| feat | `8e95ea73635d3718739df68d9450b06352e90cef` | 共享关口统一先持有 Executor 锁、再持有 Store 锁，消除与 save/flush/recover 的锁反转 |
+| docs | 本节所在独立提交 | 原始结果、接口适配、README 和 next-task；用 `git log -1 --format=%H -- docs/task-handoff-2026-11-12-crossex-exec-r8.md` 查询 |
+
+测试和实现均已在文档提交前独立提交；没有 amend。Git 写入父仓库 worktree 索引所需的自动审批已通过，没有审批拒绝。提交关闭 hooks/GPG，不进行远端操作。
+
+### 冲突处理和保留的规则
+
+| 文件 | 合并处理 |
+|---|---|
+| `docs/task-handoff-2026-11-11-crossex-exec.md` | 保留第八轮历史与来源分支完整“终审修复”节，最新状态指向本节 |
+| `tools/crossex_exec/README.md` | 保留第八轮运行说明、独立归档/service 布局、SQL 分页及内存说明，区分各分支历史测试数量 |
+| `api.py` | 两边等价的空 query 防护合为一处；保留独立 ADMIN 令牌、写接口、有界 JSON/请求体清理和只读连接约束 |
+| `storage.py` | 同时保留 `Store(PublicStore)`、路径级共享锁、类型化采样/迁移，以及原子 `save_orders`、SQL 过滤、64/128 行 rowid 分页与索引 |
+| `limits.py` | `exposure(snapshot, intent=None)` 支持第八轮无单笔参数调用，同时使用 SQL 过滤迭代器；冻结风险配置按 `get_pair` 查询，不重新全量加载历史 |
+| `engine.py` | 流式统计与冻结风险阈值共存；新增配置/映射/定量复核接入提交后的共享 `check_release`；单仓查询使用 `get_pair` |
+| `api_data.py`（自动合并后的语义修正） | summary 已改为流式活动/关闭仓位投影，冻结风险从活动投影的 `config_at_open` 取值；不引用已经移除的全量 `pairs` 变量，不恢复全量物化 |
+| `execution.py`（自动合并后的衔接） | 同一共享锁区覆盖准入、SENT 原子提交与最终复查；管理写入不能使一对订单跨配置版本。后续独立 feat 修正该锁区的锁顺序 |
+
+成功开仓发送路径为：两腿 INTENT 与事件同事务准备 → 两个 transport 都完成限频/建连 → barrier action 持有 Executor/Store 锁 → 整对准入（保留原重拉上限）→ 两条 SENT 与事件原子 COMMIT → 两腿硬上限/权益/账户缓存复查 → `Engine.check_release` 复查参数版本、目录/映射确认、映射价格比、当前数量相对于深度/OI/剩余总名义额预算 → `can_open(ignore_cids=本批次)` → 冻结参数限制下的盘口年龄/时间差最终检查 → 同时放行。
+
+最终检查后成功路径只有内存操作；不写库、不重拉、不在各腿单独否决。`ignore_cids` 仅排除本批次造成的非终态阻挡和拒绝率样本，硬敞口仍包含两条 SENT。INTENT 原子失败回滚、owned 孤立清理、SENT/UNKNOWN 原编号保守恢复全部保留。
+
+第八轮的版本化参数、定量、实时成交额、类别/原始市场身份/映射、ADMIN 写接口、冻结持仓配置、SQLite 行采样、按行状态更新及公共字段脱敏优化全部保留。`tools/fill_sim` 源码和测试相对两边未改；没有改动前端或扩大到第九轮。
+
+service 与来源 `abf8dba` 一致：`WorkingDirectory=/home/ubuntu/wubin/crossex-exec`，模块/环境/var 布局保留，**`MemoryMax=192M`**。本交接此前“模板仍为 80M”和 256M 候选是合并前记录；当前以合入的 192M 模板为准。192M 仍须 Linux/cgroup/实际采样与并发 API 影子验收。本次没有重新测量采样 CPU/内存，不能把前面的历史测量称为合并后或生产复测。
+
+### 测试保留和必要接口适配逐项记录
+
+本次没有修改任何原测试断言、随机种子、故障序列、N=1 恢复界限、跳过设置或验收阈值。相对第一父 `b24f5af`，既有测试仅增加下面接口适配，直接继承来源分支已有改动：
+
+1. `test_engine.py::EngineTests.setUp`：测试执行器增加绑定 `check_release=self.engine.check_release`，使替换执行器也调用最终共享关口。
+2. `test_invariants.py::FakeDatabase.iter_orders`：补 pair/state/excluded state/sent_since/accounting/reduce_only 筛选接口，与真实 SQLite 查询语义一致。
+3. `test_invariants.py::FakeDatabase.save_orders`：批量准备/发送模型增加快照回滚，第二条失败时撤销本批次所有订单和事件。
+4. `test_invariants.py::FakeDatabase.get_pair`：增加按 ID 查询，支持取消全量仓位读取后的运行路径。
+5. `test_invariants.py::FakeDatabase.iter_pairs`：增加活动/排除状态迭代，保留现有内存模型和全部断言。
+
+来源新增的 `test_final_review.py`（19 项）与 `memory_probe.py` 保持原文；新增 `test_merge_final_review.py`（11 项）单独提交。新测试覆盖 SENT 真正提交后版本变化、映射确认/价格比失效、深度收缩、OI 到期、配置年龄上限及等号、管理写入序列化、恢复锁竞争、开仓路径禁全量历史、流式 summary 冻结阈值。
+
+逐函数 AST 审计：相对第一父，两套测试 30 个文件、1,649 个 `assert*/fail/skipTest` 或 `assert` 均保留；相对第二父，两套测试 22 个文件、1,517 个此类节点中，**本次合并新增删改为零**。两边既有差异按第八轮已完成记录继承，以下 6 个函数不是本次修改或新增批准：
+
+| 原有差异位置 | 第八轮已经完成的处理 |
+|---|---|
+| `test_api.py::DataTests.test_positions_use_fills_and_executable_books_not_intent_or_mark` | 精确键集合增加 config/sizing/turnovers/native 字段，原值断言保留 |
+| `test_api.py::DataTests.test_trade_contract_actual_vwap_fees_gaps_and_sim_identity` | 同上，增加第八轮字段 |
+| `test_invariants.py::InvariantSimulationTests.assert_reduction` | I3 原生步长换算为公共数量步长，原倍率 1 场景等价 |
+| `test_round3.py::Round3PolicyTests.test_r6_final_sell_limit_minimum_bumps_one_common_step` | 既有 PM 裁决：不足最小名义额拒绝，不补一步；继承 `b24f5af` 原文 |
+| `test_round3.py::Round3PolicyTests.test_r6_min_quantity_bumps_once_and_still_invalid_minimum_rejects` | 既有 PM 裁决：不足最小数量拒绝；继承 `b24f5af` 原文 |
+| `test_round7.py::ReferenceAndAPITests.test_all_six_counters_are_zero_then_count_once_per_trigger_across_restart` | 完整计数字典新增第八轮原因，原六类计数与事件数断言保留 |
+
+审计还确认原终审报告及 service 与来源分支一致、两模块共 71 个 Python 文件通过 3.10 AST 语法检查。`git diff --check b24f5af HEAD` 排除未修改的原终审报告后通过；该报告保留 32 处原 Markdown 双空格换行，未为消除 whitespace 提示而改写原始证据。
+
+### 完整验收和原始汇总
+
+最后一次实现修改为 `8e95ea7`。默认解释器 Windows **Python 3.12.10 / SQLite 3.49.1**；用户给定路径实际为 **Python 3.10.20 / SQLite 3.50.4**，不等同于 Ubuntu 生产环境。各用以下命令完整运行两套测试，未按用例筛选；三种子属于执行器完整套件，全部真实执行。
+
+```powershell
+python -m unittest discover -s tools/crossex_exec/tests -v
+python -m unittest discover -s tools/fill_sim/tests -v
+$py310 = 'C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d5-4518-98a0-6a4761963215/scratchpad/uvpy/cpython-3.10-windows-x86_64-none/python.exe'
+& $py310 -m unittest discover -s tools/crossex_exec/tests -v
+& $py310 -m unittest discover -s tools/fill_sim/tests -v
+```
+
+```text
+Python 3.12.10 / SQLite 3.49.1
+$ python -m unittest discover -s tools/crossex_exec/tests -v
+Ran 353 tests in 115.537s
+
+OK
+exit_code=0
+
+$ python -m unittest discover -s tools/fill_sim/tests -v
+Ran 158 tests in 31.218s
+
+OK
+exit_code=0
+
+Python 3.10.20 / SQLite 3.50.4
+$ python -m unittest discover -s tools/crossex_exec/tests -v
+Ran 353 tests in 123.745s
+
+OK
+exit_code=0
+
+$ python -m unittest discover -s tools/fill_sim/tests -v
+Ran 158 tests in 32.240s
+
+OK
+exit_code=0
+```
+
+每个版本三个种子 `20261111/20261112/20261113` 各 **2,568 回合 = 2,400 随机 + 168 定向**，I1a–d、I2–I7 每项 checks 均为 2,568 且 exercised 非零；运行中参数变更、映射两方向开仓、成交额不足和定量不足均实际覆盖。不同 Python 的查询轮询次数受 wall-clock 确认循环影响，下面保留各版本独立原文，不把计数改成相同。
+
+Python 3.12.10 / SQLite 3.49.1
+
+```text
+INVARIANTS seed=20261111 rounds=2568 random_rounds=2400 N=1 checks={'1a': 2568, '1b': 2568, '1c': 2568, '1d': 2568, '2': 2568, '3': 2568, '4': 2568, '5': 2568, '6': 2568, '7': 2568} exercised={'1a': 35, '1b': 68, '1c': 25, '1d': 92, '2': 82, '3': 103, '4': 82, '5': 600, '6': 23, '7': 345} coverage={'account_failures': 151, 'baseline_admission': 82, 'cooldown_active': 167, 'db_failures': 22, 'full_fill': 138, 'halted': 344, 'halting_retry': 1, 'intent_write_abort': 21, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 82, 'opened_pairs': 41, 'partial_fill': 27, 'position_failures': 137, 'position_read': 3418, 'query': 4332, 'query_failures': 1418, 'recovery_obligation': 23, 'reduce': 103, 'restarts': 142, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 149, 'scheduled_adverse': 133, 'scheduled_database': 140, 'scheduled_detail': 148, 'scheduled_equity': 142, 'scheduled_midnight': 121, 'scheduled_none': 578, 'scheduled_partial': 164, 'scheduled_positions': 136, 'scheduled_restart': 142, 'scheduled_spread': 129, 'scheduled_stale': 150, 'scheduled_timeout_ack': 146, 'scheduled_timeout_unknown': 146, 'scheduled_zero': 144, 'skip_baseline_not_flat': 75, 'skip_book_skew': 28, 'skip_book_stale': 112, 'skip_funding_diff': 56, 'skip_not_single_venue_outlier': 129, 'skip_size_too_small': 1, 'skip_too_few_venues': 26, 'skip_volume_too_low': 1, 'timeout_ack': 28, 'timeout_unknown': 21, 'zero_fill': 20}
+INVARIANTS seed=20261112 rounds=2568 random_rounds=2400 N=1 checks={'1a': 2568, '1b': 2568, '1c': 2568, '1d': 2568, '2': 2568, '3': 2568, '4': 2568, '5': 2568, '6': 2568, '7': 2568} exercised={'1a': 27, '1b': 64, '1c': 13, '1d': 85, '2': 76, '3': 91, '4': 76, '5': 600, '6': 30, '7': 370} coverage={'account_failures': 116, 'baseline_admission': 76, 'cooldown_active': 24, 'db_failures': 16, 'full_fill': 128, 'halted': 369, 'halting_retry': 1, 'intent_write_abort': 15, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 76, 'opened_pairs': 38, 'partial_fill': 24, 'position_failures': 139, 'position_read': 3432, 'query': 5040, 'query_failures': 648, 'recovery_obligation': 30, 'reduce': 91, 'restarts': 142, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 116, 'scheduled_adverse': 135, 'scheduled_database': 149, 'scheduled_detail': 128, 'scheduled_equity': 138, 'scheduled_midnight': 134, 'scheduled_none': 578, 'scheduled_partial': 159, 'scheduled_positions': 138, 'scheduled_restart': 142, 'scheduled_spread': 184, 'scheduled_stale': 145, 'scheduled_timeout_ack': 139, 'scheduled_timeout_unknown': 149, 'scheduled_zero': 134, 'skip_baseline_not_flat': 65, 'skip_book_skew': 20, 'skip_book_stale': 86, 'skip_funding_diff': 91, 'skip_not_single_venue_outlier': 153, 'skip_size_too_small': 1, 'skip_too_few_venues': 46, 'skip_volume_too_low': 1, 'timeout_ack': 22, 'timeout_unknown': 34, 'zero_fill': 15}
+INVARIANTS seed=20261113 rounds=2568 random_rounds=2400 N=1 checks={'1a': 2568, '1b': 2568, '1c': 2568, '1d': 2568, '2': 2568, '3': 2568, '4': 2568, '5': 2568, '6': 2568, '7': 2568} exercised={'1a': 37, '1b': 86, '1c': 27, '1d': 114, '2': 102, '3': 123, '4': 102, '5': 600, '6': 31, '7': 387} coverage={'account_failures': 134, 'baseline_admission': 102, 'cooldown_active': 158, 'db_failures': 20, 'full_fill': 178, 'halted': 386, 'halting_retry': 1, 'intent_write_abort': 20, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 102, 'opened_pairs': 51, 'partial_fill': 27, 'position_failures': 141, 'position_read': 3416, 'query': 5488, 'query_failures': 647, 'recovery_obligation': 31, 'reduce': 123, 'restarts': 114, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 134, 'scheduled_adverse': 151, 'scheduled_database': 156, 'scheduled_detail': 134, 'scheduled_equity': 144, 'scheduled_midnight': 142, 'scheduled_none': 578, 'scheduled_partial': 152, 'scheduled_positions': 141, 'scheduled_restart': 114, 'scheduled_spread': 153, 'scheduled_stale': 145, 'scheduled_timeout_ack': 157, 'scheduled_timeout_unknown': 134, 'scheduled_zero': 133, 'skip_baseline_not_flat': 43, 'skip_book_skew': 28, 'skip_book_stale': 73, 'skip_funding_diff': 68, 'skip_not_single_venue_outlier': 132, 'skip_size_too_small': 1, 'skip_too_few_venues': 22, 'skip_volume_too_low': 1, 'timeout_ack': 39, 'timeout_unknown': 37, 'zero_fill': 20}
+```
+
+Python 3.10.20 / SQLite 3.50.4
+
+```text
+INVARIANTS seed=20261111 rounds=2568 random_rounds=2400 N=1 checks={'1a': 2568, '1b': 2568, '1c': 2568, '1d': 2568, '2': 2568, '3': 2568, '4': 2568, '5': 2568, '6': 2568, '7': 2568} exercised={'1a': 35, '1b': 68, '1c': 25, '1d': 92, '2': 82, '3': 103, '4': 82, '5': 600, '6': 23, '7': 345} coverage={'account_failures': 151, 'baseline_admission': 82, 'cooldown_active': 167, 'db_failures': 22, 'full_fill': 138, 'halted': 344, 'halting_retry': 1, 'intent_write_abort': 21, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 82, 'opened_pairs': 41, 'partial_fill': 27, 'position_failures': 137, 'position_read': 3418, 'query': 398, 'query_failures': 76, 'recovery_obligation': 23, 'reduce': 103, 'restarts': 142, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 149, 'scheduled_adverse': 133, 'scheduled_database': 140, 'scheduled_detail': 148, 'scheduled_equity': 142, 'scheduled_midnight': 121, 'scheduled_none': 578, 'scheduled_partial': 164, 'scheduled_positions': 136, 'scheduled_restart': 142, 'scheduled_spread': 129, 'scheduled_stale': 150, 'scheduled_timeout_ack': 146, 'scheduled_timeout_unknown': 146, 'scheduled_zero': 144, 'skip_baseline_not_flat': 75, 'skip_book_skew': 28, 'skip_book_stale': 112, 'skip_funding_diff': 56, 'skip_not_single_venue_outlier': 129, 'skip_size_too_small': 1, 'skip_too_few_venues': 26, 'skip_volume_too_low': 1, 'timeout_ack': 28, 'timeout_unknown': 21, 'zero_fill': 20}
+INVARIANTS seed=20261112 rounds=2568 random_rounds=2400 N=1 checks={'1a': 2568, '1b': 2568, '1c': 2568, '1d': 2568, '2': 2568, '3': 2568, '4': 2568, '5': 2568, '6': 2568, '7': 2568} exercised={'1a': 27, '1b': 64, '1c': 13, '1d': 85, '2': 76, '3': 91, '4': 76, '5': 600, '6': 30, '7': 370} coverage={'account_failures': 116, 'baseline_admission': 76, 'cooldown_active': 24, 'db_failures': 16, 'full_fill': 128, 'halted': 369, 'halting_retry': 1, 'intent_write_abort': 15, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 76, 'opened_pairs': 38, 'partial_fill': 24, 'position_failures': 139, 'position_read': 3432, 'query': 425, 'query_failures': 31, 'recovery_obligation': 30, 'reduce': 91, 'restarts': 142, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 116, 'scheduled_adverse': 135, 'scheduled_database': 149, 'scheduled_detail': 128, 'scheduled_equity': 138, 'scheduled_midnight': 134, 'scheduled_none': 578, 'scheduled_partial': 159, 'scheduled_positions': 138, 'scheduled_restart': 142, 'scheduled_spread': 184, 'scheduled_stale': 145, 'scheduled_timeout_ack': 139, 'scheduled_timeout_unknown': 149, 'scheduled_zero': 134, 'skip_baseline_not_flat': 65, 'skip_book_skew': 20, 'skip_book_stale': 86, 'skip_funding_diff': 91, 'skip_not_single_venue_outlier': 153, 'skip_size_too_small': 1, 'skip_too_few_venues': 46, 'skip_volume_too_low': 1, 'timeout_ack': 22, 'timeout_unknown': 34, 'zero_fill': 15}
+INVARIANTS seed=20261113 rounds=2568 random_rounds=2400 N=1 checks={'1a': 2568, '1b': 2568, '1c': 2568, '1d': 2568, '2': 2568, '3': 2568, '4': 2568, '5': 2568, '6': 2568, '7': 2568} exercised={'1a': 37, '1b': 86, '1c': 27, '1d': 114, '2': 102, '3': 123, '4': 102, '5': 600, '6': 31, '7': 387} coverage={'account_failures': 134, 'baseline_admission': 102, 'cooldown_active': 158, 'db_failures': 20, 'full_fill': 178, 'halted': 386, 'halting_retry': 1, 'intent_write_abort': 20, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 102, 'opened_pairs': 51, 'partial_fill': 27, 'position_failures': 141, 'position_read': 3416, 'query': 493, 'query_failures': 32, 'recovery_obligation': 31, 'reduce': 123, 'restarts': 114, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 134, 'scheduled_adverse': 151, 'scheduled_database': 156, 'scheduled_detail': 134, 'scheduled_equity': 144, 'scheduled_midnight': 142, 'scheduled_none': 578, 'scheduled_partial': 152, 'scheduled_positions': 141, 'scheduled_restart': 114, 'scheduled_spread': 153, 'scheduled_stale': 145, 'scheduled_timeout_ack': 157, 'scheduled_timeout_unknown': 134, 'scheduled_zero': 133, 'skip_baseline_not_flat': 43, 'skip_book_skew': 28, 'skip_book_stale': 73, 'skip_funding_diff': 68, 'skip_not_single_venue_outlier': 132, 'skip_size_too_small': 1, 'skip_too_few_venues': 22, 'skip_volume_too_low': 1, 'timeout_ack': 39, 'timeout_unknown': 37, 'zero_fill': 20}
+```
+
+### 日志、线上状态与下一任务
+
+所有原始 stdout/stderr 日志以二进制捕获到本机 `%TEMP%`，以下为完整 SHA-256；既有验收日志未覆盖。首轮合并基线 342 项通过；新增专项先得到 11 项中 1 个锁反转失败，修后 11 项全过，最终完整套件再验收。
+
+| Log in `%TEMP%` | SHA-256 |
+|---|---|
+| `crossex-merge-final-crossex_exec-py312-20261112T122034.log` | `ed8a0c9efd1a61a27fbb3cd4f30b3083fd27c8ab40e6570621ddeff3709ac4e4` |
+| `crossex-merge-final-fill_sim-py312-20261112T122034.log` | `ffc9f316ca86d37781d50a16c0e64ba0d4b31c032079df0cad2ccc4c5b4c7174` |
+| `crossex-merge-final-crossex_exec-py310-20261112T122041.log` | `c11a716a636a63d09851d8d987480815b1f3a07b1482692d5c625f62ec7e017f` |
+| `crossex-merge-final-fill_sim-py310-20261112T122041.log` | `85e5967c87022bd8e9221fb7d44c5ae273f19f6f0b97af59caefe22b90919575` |
+| `crossex-merge-first-py312-20261112T121309.log` | `621f26eb896f746da707ecff74c7af059007e77f3d6e769241e82f3446d75dea` |
+| `crossex-merge-intersection-red-20261112T121905.log` | `4e270a16e0f15b870a2b0769d030dc31705d155bb1b4241d3f50c87a2804b2d3` |
+| `crossex-merge-intersection-green-20261112T121956.log` | `1024ed8b1048fa5045c819b37b3630454a19753f3a3e1d140e73e1da2423b805` |
+| `crossex-merge-audit-20261112T122201.json` | `862f98befaac0e9821644f087c584353050006da695ac18b8790aac95d68e6d7` |
+
+仅本地交付：推送未执行；线上 DB 备份、校验、部署版本和线上接口检查均未执行，线上状态未读取或修改。没有真实 API 凭据/账户调用，不把本地通过认作真钱交易验收。仓库无新增未跟踪交付文件；Temp 验收日志和忽略的 Python 缓存保留。
+
+后续请新建对应模块任务，从本节继续：另行授权 Linux/systemd/SQLite 3.37、实际目录和账户、完整 cgroup 资源预算及 24h 影子验收；页面联调仍属于 `live-exec-page`。不要继续使用两个合并父分支的旧 HEAD 作为合并完成版本，也不要根据历史的“80M/323 项/289 项”描述覆盖本节。

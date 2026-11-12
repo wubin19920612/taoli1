@@ -1,5 +1,9 @@
 # 下一任务入口
 
+2026-11-12 `codex/crossex-exec-r8` 已通过 no-ff 合并终审修复：合并 `3b1d056`，专项测试 `eb297ef`，锁顺序修复 `8e95ea7`。后续从 [合并终审修复](task-handoff-2026-11-12-crossex-exec-r8.md#合并终审修复) 的最终双版本原始汇总继续。第八轮复核已进入 SENT 原子提交后的共享屏障，SQL 分页、采样优化及 ADMIN 写接口保留；service 当前 `MemoryMax=192M` 仍待 Linux 实机验收。本次仅本地提交，不 push/SSH/WSL/amend/鉴权；部署、线上备份和页面联调另建任务。
+
+以下为合并前第八轮交付记录：
+
 2026-11-12 `codex/crossex-exec-r8` 已完成第八轮本地交付，见 [第八轮交接](task-handoff-2026-11-12-crossex-exec-r8.md)：参数、动态定量、分类与映射、SQLite 采样及 CPU 热点修复；Python 3.12/3.10 各 323+158 项全过，每个版本的三个种子各 2,568 回合且新增覆盖非空。504 合约采样稳定轮次 CPU 从 18.46s 降至 2.00s，峰值 RSS 29.1 MiB；它不是线上 CPU 复测。本次明确只做 test/feat/docs 分组本地提交，不 push、SSH、WSL、amend 或真实鉴权；没有部署、线上备份或实盘操作。第九轮及 `live-exec-page` 页面联调请另建任务，先读上述交接和接口契约，保留已有工作。
 
 以下其他模块的交接继续按各自分支和范围使用。

@@ -2,6 +2,8 @@
 
 独立的 Python 3.10+ 标准库服务，CrossEx 下单覆盖 Gate / Binance / Bybit / OKX / Aster，Bitget 使用 UTA v3。默认影子模式。此交付仅本地验证，没有部署、账户实测或实盘授权。
 
+**2026-11-12 最新状态：第八轮已合并终审修复。** `3b1d056` 为 `b24f5af` 与 `abf8dba` 的 no-ff 合并；后续 `8e95ea7` 修复共享锁顺序。SENT 两行原子提交后，在共享屏障内再次检查版本、映射、定量及年龄/硬风控；SQL 分页和第八轮采样优化共存。最新验收、原始汇总及逐项接口适配见 [合并终审修复](../../docs/task-handoff-2026-11-12-crossex-exec-r8.md#合并终审修复)。下列各轮数量为各自历史状态。
+
 2026-11-12 第八轮：已接入参数、独立管理 API、动态成交额/类别、公开 OI 定量和人工确认的代码映射。保留并继续了 f125c4d 的全部 WIP；本轮仅本地交付。验收、性能实测、提交和边界见 [本轮交接](../../docs/task-handoff-2026-11-12-crossex-exec-r8.md)，最新请求/响应见 [接口契约](../../docs/live-exec-contract-2026-11-11.md)。下面第五至七轮的测试数字为历史记录。
 
 第五轮已按 PM 决定完成本地验收：不变量 1 拆为 1a/1b/1c/1d，全部严格断言，2–7 保持原规则。三个固定种子各跑 2448 回合（2400 原随机回合加 48 覆盖回合），执行器 195 项和 fill-sim 158 项 unittest 全部通过。定义、原始汇总、各不变量计数及边界见交接文档“第五轮 PM 决定补充验收”；本地结果不代表实盘或部署验收。
@@ -202,4 +204,4 @@ sudo -u ubuntu /usr/bin/python3 -m tools.crossex_exec --help
 
 `python -m tools.crossex_exec.benchmark_sampling --output <结果路径>` 为离线实测入口，默认 84 币种×6 所=504 原生合约、24h 历史；`--bases 500 --history-hours 6` 为放大检查，不使用网络或凭据。前后比较用起始 WIP 备份的 performance-before 模块，复现与结果见交接。
 
-管理令牌 CROSSEX_EXEC_ADMIN_TOKEN 与只读令牌必须不同，默认不设置。本轮未修改真实 env、账户、系统服务或部署文件。
+管理令牌 CROSSEX_EXEC_ADMIN_TOKEN 与只读令牌必须不同，默认不设置。真实 env、账户和系统服务未修改；本次合并保留终审分支的 service 布局与 `MemoryMax=192M`，尚未安装。
