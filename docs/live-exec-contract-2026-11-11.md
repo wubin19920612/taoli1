@@ -4,7 +4,7 @@
 
 ## 传输
 - crossex-exec 只监听 `127.0.0.1:8795` 和 `172.18.0.1:8795`，taoli1 容器通过 `172.18.0.1` 访问；不对公网开放。
-- 只有 GET。请求头 `X-Api-Token` 必须等于 `CROSSEX_EXEC_API_TOKEN`，否则返回 401。
+- 原四个业务接口仍仅支持 GET；第八轮增加下文管理写接口。`X-Api-Token` 使用只读 `CROSSEX_EXEC_API_TOKEN` 或独立管理 `CROSSEX_EXEC_ADMIN_TOKEN`。无效令牌 401，只读令牌写入 403。
 - 所有时间都是 UTC ISO8601 字符串；金额单位 USD，用数字表示；bp 用数字。
 - 字段缺失或未知时给 `null`，不要省略字段。
 
@@ -77,33 +77,102 @@
 - `histogram` 按 `net_bps` 分桶，桶宽 25bp，区间是 [-200, 200]，超出的归入两端桶。
 - `by_spread_tier` 的档位与 fill-sim 一致：0.5–1%、1–2%、2–5%、>5%。
 
-## 第八轮扩展状态（2026-11-12，待实现）
+## 第八轮接口（2026-11-12，本地实现，未部署）
 
-第八轮任务书提出参数、白名单候选、代码映射确认和独立管理令牌写接口；**本次尚未实现或开放这些接口**，当前实现仍是上面的第七轮契约。交接文档“第八轮交付”记录了新增 summary 字段与旧完整字典断言的冲突，按用户要求等待 PM 决定。本节只追加状态说明。
+本节取代之前的待实现提案，原四个 GET 路由及原字段全部保留。验收见 [第八轮交接](task-handoff-2026-11-12-crossex-exec-r8.md)。taoli1 页面和转发属于 `live-exec-page` 独立任务；线上未安装本轮改动。
 
-待实现接口为 `GET/PUT /api/v1/config`、`GET /api/v1/config/audit`、`GET /api/v1/universe`、`POST /api/v1/universe/{base}/enable|exclude`、`GET /api/v1/mappings`、`POST /api/v1/mappings/{id}/confirm|reject`。写操作使用与只读令牌不同的 `CROSSEX_EXEC_ADMIN_TOKEN`；参数越界原子拒绝并返回 400，只读令牌调用写接口返回 403。正式实现时补齐请求/响应、版本和审计字段定义。
+### 配置与审计
 
-第八轮拟在现有 `opening_skip_counts` 中追加 `size_too_small`、`oi_missing`、`mapping_ratio_mismatch`，旧六项保留，新项缺记录为 0，按触发机会去重并跨重启保留。已有六项完整字典断言尚未获准适配，因此此扩展目前只有两个先失败测试，尚未进入生产实现。
+- `GET /api/v1/config` 返回 `{version, values, fallback, schema}`。version 是单调递增整数，初值 0；values 是完整当前参数；fallback=true 表示参数不可读而使用默认值，执行器另写 CONFIG_DEFAULTS_ALERT。schema 每项包含 default/min/max/integer，max=null 表示无代码上限。
+- `PUT /api/v1/config` body 为非空部分更新对象，例如 `{"order_usd_max":30,"min_quote_volume_usd":2000000}`，返回生效后的 `{version,values,fallback}`。未知参数、越界、bool、字符串数值、非有限数、整数参数的非整数、重复 JSON 键均 400。配置与审计在同一 SQLite 事务提交，不钳制、不部分生效。
+- `GET /api/v1/config/audit` 返回最近最多 500 条，从旧到新排列。每项 `{version,at,source,old,new}`，at 为 UTC ISO8601，source=admin_api；old/new 只含本次提交的参数。
 
-## 第八轮修订状态（2026-11-12，ab33e05 后续，仍待实现）
+| 参数 | 默认 | 范围 |
+|---|---:|---|
+| min_quote_volume_usd | 1000000 | ≥100000 |
+| min_venues_with_volume | 2 | 整数 ≥2；超过可用所数时不开仓 |
+| sampling_min_quote_volume_usd | 200000 | ≥0 |
+| order_usd_max | 50 | [5,150] |
+| depth_fraction | 0.20 | [0.01,0.50] |
+| oi_fraction | 0.0005 | [0.00001,0.005] |
+| max_total_open_usd | 600 | [0,600]，双腿名义额之和 |
+| max_open_pairs | 3 | 整数 [0,3] |
+| max_equity_drop_usd | 150 | [10,150]，任一账户权益回撤 |
+| daily_loss_stop_usd / total_loss_stop_usd | 20 / 100 | [1,20] / [1,100] |
+| min_excess_bps | 15 | ≥15 |
+| max_book_skew_ms | 300 | [0,300] |
+| max_book_age_seconds | 1 | [0,1] |
+| max_funding_diff_bps_h | 0.5 | [0,0.5] |
+| max_funding_rate_8h | 0.0005 | [0,0.0005]，比例 |
+| max_baseline_bps / max_baseline_mad_bps | 10 / 10 | 各 [0,10] |
+| max_normal_deviation_bps | 10 | [0,10] |
+| max_reference_age_seconds | 90 | [0,90] |
+| min_outlier_share | 0.7 | [0.7,1] |
+| min_venues | 3 | 整数 [3,6] |
 
-本节追加最新状态，不删除上面的历史记录或第一至七轮接口。`67897da` 已获准扩展第七轮完整计数字典的三个新增键，且已保留；此前的 schema 冲突不再是待决事项。当前新阻塞为第三轮“最小量不足时补一个步长”与第八轮“向下取整、不足放弃”的行为断言冲突，证据见交接文档最后的“第八轮交付”一节；等待 PM 裁决，尚无第八轮生产实现。
+每次开仓冻结完整配置与版本，发送共享关口核对同一版本。配置变化使尚未获准的新仓拒绝，两腿均不发送；已通过共享关口的批次沿用获准版本，后续修改对下一批次生效。管理写入与关口复核共用数据库路径锁，不会只影响一条腿。
 
-修订任务书取消固定白名单：开仓须检查两腿精确合约的 24h 成交额，缓存不超过五分钟；类别、映射及股票标的市场仍需按任务书确认，排除列表继续生效。`CROSSEX_BASES` 非空时仅作额外限制，空值不限制交易范围。基准按任一所成交额达到采样预筛门槛的精确代码合约每 30 秒采样，落 SQLite，仍须至少三小时预热。这些是待实现要求，不是当前服务行为。
+已有仓位保留开仓版本。账户级三项损失阈值按活动仓位冻结值取最严格值；空仓用当前配置，升级前无快照的持仓用原默认值。代码/环境硬上限继续叠加。新版本比旧仓严格且当前账户已超过新门槛时，拒绝新仓，不借修改参数重写旧仓策略。日亏停开锁、累计亏损/独立权益回撤全平停机、保证金等原规则保留；没有新增解锁接口。
 
-修订后待实现的 universe 写路由为 `POST /api/v1/universe/{base}/exclude|unexclude|classify`，代替历史待实现清单中的 `enable|exclude` 提案；此前没有已实现的 `enable` 路由可供删除。config、audit、mappings 和独立管理令牌的要求仍按任务书执行。正式实现时应补齐请求/响应 schema；前端不可根据本状态说明假定接口已开放。
+### 交易范围
 
-summary 待追加共六项：`size_too_small / oi_missing / mapping_ratio_mismatch / volume_too_low / volume_unknown / category_unconfirmed`。保留全部原键及其计数、去重、持久化语义；trades/positions 待追加参数版本、sizing 明细和开仓时两腿成交额。用户已授权仅因新增键导致的精确相等断言扩展，实施时须在交接中逐项列出；风控行为断言不在此授权内。
+`GET /api/v1/universe` 返回数组，每项：
 
-## 第八轮 PM 裁决后 WIP 状态（2026-11-12，未发布）
+```json
+{"base":"SKHYNIX","category":"listed_equity","excluded":false,"underlying_market":"KRX",
+ "markets":[{"market_key":"binance|future|SKHYNIXUSDT","raw_symbol":"SKHYNIXUSDT","exchange":"binance",
+ "category":"listed_equity","effective_category":"listed_equity","underlying_market":"KRX",
+ "volume_usd":3000000,"volume_basis":"quote_volume","at":"2026-11-12T00:00:00Z",
+ "selected":true,"eligible":true,"needs_classification":false}]}
+```
 
-最小量不足不补步长和空查询串直接 `{}` 已作为 `c1ccc0f` 本地提交。当前分支工作区另有未提交参数/动态范围/映射/管理接口实现；因新发现的旧成交额 500 万拒绝断言与任务书默认 100 万冲突，按用户要求停下等待裁决。完整证据与未完成列表见 [第八轮续跑交接](task-handoff-2026-11-12-crossex-exec-r8.md)。**以下仅记录 WIP 代码接口，未部署，不能作为前端已验收可用的承诺。**
+- market.category 是单所目录分类，effective_category 为人工判断后的类别。eligible 只代表类别与所选择允许参与，不代表全部开仓风控已通过。selected 只表示人工选择，自动 crypto 可以 eligible=true、selected=false。
+- needs_classification 表示还需人工判断。未知永不默认 crypto。股票/ETF 必须选 US 或 KRX，只选定同一标的的精确所；未选中的所也不能充当第三家乌龙指参考；不加交易时段门禁。
+- volume_usd 是该精确合约 24h USDT 报价成交额，超过 300 秒或缺失为 null。OKX 的 volume_basis=base_times_low24h_lower_bound，值为 volCcy24h×low24h 保守下界；其他为 quote_volume。
+- pre_ipo 和任务指定的 OPENAI/ANTHROPIC 不进入候选。commodity 不交易，PAXG/XAUT/XAU/XAG 不能按普通 crypto 通过。未知币可采样预热，确认类别前不开仓。
+- `POST /api/v1/universe/{base}/exclude|unexclude` body 为 `{}`，返回当前决策对象。排除原生及公共 base；取消排除不自动确认类别或映射。
+- `POST /api/v1/universe/{base}/classify` 的股票 body 示例：
 
-- `GET /api/v1/config`：`{version, values, fallback, schema}`；schema 的每个参数含 `default/min/max/integer`。`PUT` JSON 对象为部分参数更新，例如 `{"order_usd_max":30}`；越界、未知键、字符串代替数值、bool、非有限数、重复 JSON 键拒绝为 400，不部分生效。配置与旧/新值审计在同一 SQLite 事务提交。
-- `GET /api/v1/config/audit`：最近最多 500 条按时间顺序的修改记录，字段 `version/at/source/old/new`，`source=admin_api`。
-- `GET /api/v1/universe`：数组，每项 `base/category/excluded/underlying_market/markets`；各 market 保留 `market_key/raw_symbol/exchange/category/volume_usd/at/selected`。成交额过期显示 null，OKX 是基础币成交量乘 low24h 的保守下界。
-- `POST /api/v1/universe/{base}/exclude|unexclude`：JSON `{}`。`classify` 的 WIP body 为 `{"category":"listed_equity","underlying_market":"KRX","markets":["binance|future|SKHYNIXUSDT","bitget|future|SKHYNIXUSDT"]}`；股票/ETF 仅支持 US/KRX 且只能选定同一标的的精确 markets。普通币人工判定用 `category=crypto` 并列出精确 markets。人工标记 pre_ipo/commodity 的管理流程仍需补齐；目前禁止把已识别的这两类启用。
-- `GET /api/v1/mappings`：WIP 候选包含 `id/base/legs/status/at/ratio`；leg 含原始 `market_key/raw_base/quantity_multiplier`。`POST /api/v1/mappings/{id}/confirm|reject` 的 body 为 `{}`；未确认不可交易，确认后仍须开仓时价格比复核。
-- 写操作仅接受与只读令牌不同的 `CROSSEX_EXEC_ADMIN_TOKEN`，仍通过 `X-Api-Token`；只读令牌调用这些写接口为 403，错误令牌为 401。写 body 要求 `Content-Type: application/json`，上限 8192 字节；拒绝路径只作有界请求体清理。没有设置或相同管理令牌不会获得写权限。旧四个只读接口上的非 GET 仍 405。
+```json
+{"category":"listed_equity","underlying_market":"KRX",
+ "markets":["binance|future|SKHYNIXUSDT","bitget|future|SKHYNIXUSDT"]}
+```
 
-WIP summary 已增加六个新计数，缺记录为 0，去重与持久化沿用原触发 ID 规则；trades/positions 的 sizing、成交额、参数版本及映射数量投影**还未实现**。部分全局风控参数目前仅存储/校验，尚未完成“只作用于后续新仓”的接入；不能用 PUT 返回 200 作为这些风险参数已在完整执行链生效的证据。
+人工 crypto 用 `{"category":"crypto","markets":[...]}`；人工标记不交易用 pre_ipo 或 commodity。非股票类别不接受 underlying_market。markets 必须是该精确 base 已存在且无重复的目录键。不能把已识别 pre_ipo/commodity 或已识别股票改为 crypto 来启用。返回决策对象，另写 UNIVERSE_CHANGED 审计。
+
+两条腿都须达到门槛；min_venues_with_volume>2 时，只统计同类别/股票市场/已确认映射的所，一所一次。不在股票选择内、排除、未知类别、未确认映射均不凑家数。CROSSEX_BASES 非空仅为额外开仓限制，空值不限制；采样不受该兼容名单限制。
+
+### 映射
+
+- `GET /api/v1/mappings` 返回可用候选数组，每项 `{id,base,legs,status,at,ratio}`；at 为 UTC ISO8601，ratio 为发现时排序后第一腿原生中间价除以第二腿原生中间价。legs 按 market_key 排序，每项 `{market_key,raw_base,quantity_multiplier}`；倍率为数字，一个原生数量单位对应该倍数的公共基础币。
+- `POST /api/v1/mappings/{id}/confirm|reject` body 为 `{}`，返回同 schema 的映射；缺失、不可用或候选超过 300 秒为 400。状态持久化并写 MAPPING_CHANGED，只有 confirmed 能新开仓。
+- 前缀 1000/10000/100000/1000000/1M/K 与价格比例须相符，偏差 >1% 不生成候选。KO≠1000×O，KAT≠K×AT。开仓和共享发送关口使用新鲜盘口再次复核，偏差 1.01% 拒绝。
+- 公共数量=原生数量×倍率，公共价格=原生价格÷倍率。下单、实仓、流水、补平、重启、平仓和 API 全链路保留原始身份与该换算。已持仓不会因之后拒绝映射而失去减仓能力。
+
+### 定量、观测字段与计数
+
+每腿名义预算取 `min(order_usd_max, depth_fraction×较薄腿容忍带内深度, oi_fraction×有效腿最小OI, 剩余总额度分配)`，再按两腿公共步长公倍数向下取整。剩余额度按两腿最终限价分配，双腿之和不得突破总额。最终任一腿低于最小数量或最小名义额即 size_too_small，不向上补步长。
+
+OI 必须单位可核实、匹配原生市场且不超过 300 秒。PM 裁决允许只用一条有效腿；两腿都缺失才 oi_missing。Aster 无已核实来源时为缺失。该规则不跳过深度、手续费、成交额、余额或硬上限；各所字段证据见交接。
+
+summary 在原六项 opening_skip_counts 上追加 size_too_small/oi_missing/mapping_ratio_mismatch/volume_too_low/volume_unknown/category_unconfirmed，均缺省 0，触发 ID 去重，初始或共享关口失败只计一次。另加 config_version、effective_risk_limits（三项账户损失门槛）。today/total 的损失限额反映生效值；原 caps 的 max 字段继续表示硬上限。
+
+positions/trades 新增以下字段，旧记录未知为 null（turnovers_usd 为两元素 null 数组）：
+
+```json
+{"config_version":2,"config_at_open":{"order_usd_max":50},
+ "turnovers_usd":[4999999,9000000],
+ "sizing":{"quantity":0.49,"depth_usd":[1000,1020],"oi_usd":[10000000,null],
+ "constraints":{"order_usd_max":50,"depth":200,"oi":5000,"remaining_total":302.8},
+ "remaining_total_usd":600,"budget_usd":50,"limiting":"order_usd_max"}}
+```
+
+config_at_open 实际包含全部参数，示例缩写。sizing 为定量快照，limiting 取 order_usd_max/depth/oi/remaining_total；USD 与数量均为数字，深度/OI 是估算依据。turnovers_usd 按 long/short 顺序保留开仓读取值。
+
+legs 追加 raw_symbol/native_base/quantity_multiplier/mapping_id/native_qty/native_entry_price；trades 另加 native_exit_vwap。原 qty、entry_price、entry_vwap、exit_vwap 为公共基础币口径，native_* 为原生口径；未映射倍率为 1，原字段数值不变。symbol 为确认后的公共 base，实际费用和净损益不因展示换算而改变。
+
+### 管理请求边界
+
+写入仅接受独立且不同于只读令牌的 CROSSEX_EXEC_ADMIN_TOKEN。未设置则没有写权限，同令牌配置拒绝启动 API。写 body 必须 Content-Type: application/json、Content-Length 1–8192 字节；拒绝重复长度头、Transfer-Encoding、重复 JSON 键、非法 UTF-8 与非对象。非法输入 400，未认证 401，只读令牌写 403，不支持方法 405，数据库不可用/繁忙 503。
+
+GET 使用独立只读连接，2 秒与 8 MiB 读取预算保留；写操作另开连接并原子提交。旧四个业务路由继续拒绝非 GET。管理请求不调用真实账户或交易接口。taoli1 转发的会话、CSRF 和私有令牌配置由另一任务实现。

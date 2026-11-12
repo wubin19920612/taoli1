@@ -1,0 +1,320 @@
+{
+  "baseline_head": "f125c4d4377d35a1c7ee4bd7856bcdebfc7007fd",
+  "archive": "crossex-r8-resume-20261112T021055Z.zip",
+  "archive_sha256": "8d1b333cada6bc66cca8eddd6e91a0d68755154a4417ddb900c1c1c8b2d6980a",
+  "os": "Windows 11 10.0.26200",
+  "logical_cpus": 14,
+  "processor": "Intel64 Family 6 Model 197 Stepping 2, GenuineIntel",
+  "method": "Separate processes, offline synthetic mids, SQLite streamed history, process_time CPU; 3 rounds plus a separate profiled round.",
+  "steady_cpu_before_seconds": 18.4609375,
+  "steady_cpu_after_seconds": 2.0,
+  "steady_cpu_reduction_percent": 89.16631400761743,
+  "limitations": [
+    "Sampling component only; no authenticated traffic or production access.",
+    "Projected single-core utilization divides process CPU per round by 30 seconds; not an observed server CPU reading.",
+    "Windows working set/private commit are not Linux cgroup memory.current or page-cache accounting.",
+    "504 native contracts=84 bases x 6 venues (24h history); stress=500 bases x6 venues (6h history)."
+  ],
+  "runs": {
+    "before_504": {
+      "mode": "before",
+      "python": "3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]",
+      "platform": "win32",
+      "bases": 84,
+      "native_contracts": 504,
+      "venue_pairs": 1260,
+      "history_hours": 24,
+      "sample_rows": 3630060,
+      "network": false,
+      "credentials": false,
+      "initial_memory": {
+        "rss_bytes": 27840512,
+        "peak_rss_bytes": 27840512,
+        "private_commit_bytes": 18624512,
+        "peak_private_commit_bytes": 18624512
+      },
+      "rounds": [
+        {
+          "round": 1,
+          "cpu_seconds": 11.25,
+          "wall_seconds": 11.830247800098732,
+          "rss_bytes": 30269440,
+          "peak_rss_bytes": 30326784,
+          "private_commit_bytes": 21598208,
+          "peak_private_commit_bytes": 21610496
+        },
+        {
+          "round": 2,
+          "cpu_seconds": 18.4375,
+          "wall_seconds": 19.067288599908352,
+          "rss_bytes": 30924800,
+          "peak_rss_bytes": 31232000,
+          "private_commit_bytes": 21385216,
+          "peak_private_commit_bytes": 21712896
+        },
+        {
+          "round": 3,
+          "cpu_seconds": 18.484375,
+          "wall_seconds": 19.116536099929363,
+          "rss_bytes": 30105600,
+          "peak_rss_bytes": 31563776,
+          "private_commit_bytes": 20017152,
+          "peak_private_commit_bytes": 21712896
+        }
+      ],
+      "average_cpu_seconds": 16.057291666666668,
+      "projected_one_core_percent_at_30s": 53.524305555555564,
+      "final_memory": {
+        "rss_bytes": 31186944,
+        "peak_rss_bytes": 31563776,
+        "private_commit_bytes": 21307392,
+        "peak_private_commit_bytes": 21712896
+      },
+      "database_and_wal_bytes": 432559112,
+      "profile": [
+        {
+          "file": "encoder.py",
+          "line": 183,
+          "name": "encode",
+          "calls": 1262,
+          "own_seconds": 0.0063436000000000005,
+          "cumulative_seconds": 2.0429508000000003
+        },
+        {
+          "file": "security.py",
+          "line": 24,
+          "name": "clean",
+          "calls": 17479234,
+          "own_seconds": 18.5247075,
+          "cumulative_seconds": 59.571548500000006
+        },
+        {
+          "file": "before_storage.py",
+          "line": 107,
+          "name": "baseline_samples",
+          "calls": 1260,
+          "own_seconds": 0.7661772,
+          "cumulative_seconds": 1.6404099
+        },
+        {
+          "file": "before_storage.py",
+          "line": 60,
+          "name": "set_meta",
+          "calls": 1262,
+          "own_seconds": 0.0097947,
+          "cumulative_seconds": 62.703675100000005
+        },
+        {
+          "file": "before_storage.py",
+          "line": 11,
+          "name": "encode",
+          "calls": 1262,
+          "own_seconds": 0.0629706,
+          "cumulative_seconds": 61.6886553
+        },
+        {
+          "file": "before_baseline.py",
+          "line": 103,
+          "name": "record",
+          "calls": 1,
+          "own_seconds": 0.1504212,
+          "cumulative_seconds": 67.68330710000001
+        },
+        {
+          "file": "before_baseline.py",
+          "line": 141,
+          "name": "status",
+          "calls": 1260,
+          "own_seconds": 0.2787868,
+          "cumulative_seconds": 67.265777
+        }
+      ],
+      "elapsed_seconds": 200.5285563999787,
+      "source_sha256": "a069518c04d53a5cd8009264dfa3aaa3aa34358f8884fc168e6b0db53433a23c"
+    },
+    "after_504": {
+      "mode": "after",
+      "python": "3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]",
+      "platform": "win32",
+      "bases": 84,
+      "native_contracts": 504,
+      "venue_pairs": 1260,
+      "history_hours": 24,
+      "sample_rows": 3630060,
+      "network": false,
+      "credentials": false,
+      "initial_memory": {
+        "rss_bytes": 29569024,
+        "peak_rss_bytes": 29569024,
+        "private_commit_bytes": 20336640,
+        "peak_private_commit_bytes": 20336640
+      },
+      "rounds": [
+        {
+          "round": 1,
+          "cpu_seconds": 2.0625,
+          "wall_seconds": 2.119732800172642,
+          "rss_bytes": 30318592,
+          "peak_rss_bytes": 30318592,
+          "private_commit_bytes": 21385216,
+          "peak_private_commit_bytes": 21385216
+        },
+        {
+          "round": 2,
+          "cpu_seconds": 1.984375,
+          "wall_seconds": 2.031401300104335,
+          "rss_bytes": 30380032,
+          "peak_rss_bytes": 30380032,
+          "private_commit_bytes": 21454848,
+          "peak_private_commit_bytes": 21454848
+        },
+        {
+          "round": 3,
+          "cpu_seconds": 2.015625,
+          "wall_seconds": 2.062651799991727,
+          "rss_bytes": 30384128,
+          "peak_rss_bytes": 30384128,
+          "private_commit_bytes": 21454848,
+          "peak_private_commit_bytes": 21454848
+        }
+      ],
+      "average_cpu_seconds": 2.0208333333333335,
+      "projected_one_core_percent_at_30s": 6.7361111111111125,
+      "final_memory": {
+        "rss_bytes": 30523392,
+        "peak_rss_bytes": 30523392,
+        "private_commit_bytes": 21454848,
+        "peak_private_commit_bytes": 21454848
+      },
+      "database_and_wal_bytes": 432436232,
+      "profile": [
+        {
+          "file": "baseline.py",
+          "line": 138,
+          "name": "status",
+          "calls": 1260,
+          "own_seconds": 0.22835080000000002,
+          "cumulative_seconds": 2.2008946000000003
+        },
+        {
+          "file": "storage.py",
+          "line": 134,
+          "name": "baseline_samples",
+          "calls": 1260,
+          "own_seconds": 0.7038748,
+          "cumulative_seconds": 1.4590282
+        },
+        {
+          "file": "baseline.py",
+          "line": 103,
+          "name": "record",
+          "calls": 1,
+          "own_seconds": 0.0160691,
+          "cumulative_seconds": 2.4911478000000002
+        },
+        {
+          "file": "storage.py",
+          "line": 81,
+          "name": "set_meta",
+          "calls": 1,
+          "own_seconds": 1.4000000000000001e-05,
+          "cumulative_seconds": 0.0023606
+        }
+      ],
+      "elapsed_seconds": 93.10261319996789,
+      "source_sha256": "05c61ca129360e1361ffc64a1925cb5f59255d6622d9afbeec68c8e44ea3ded8"
+    },
+    "after_3000": {
+      "mode": "after",
+      "python": "3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]",
+      "platform": "win32",
+      "bases": 500,
+      "native_contracts": 3000,
+      "venue_pairs": 7500,
+      "history_hours": 6,
+      "sample_rows": 5437500,
+      "network": false,
+      "credentials": false,
+      "initial_memory": {
+        "rss_bytes": 31137792,
+        "peak_rss_bytes": 31137792,
+        "private_commit_bytes": 22507520,
+        "peak_private_commit_bytes": 22507520
+      },
+      "rounds": [
+        {
+          "round": 1,
+          "cpu_seconds": 6.6875,
+          "wall_seconds": 6.872690899996087,
+          "rss_bytes": 33792000,
+          "peak_rss_bytes": 33792000,
+          "private_commit_bytes": 24682496,
+          "peak_private_commit_bytes": 24682496
+        },
+        {
+          "round": 2,
+          "cpu_seconds": 6.703125,
+          "wall_seconds": 6.900966600049287,
+          "rss_bytes": 34459648,
+          "peak_rss_bytes": 34459648,
+          "private_commit_bytes": 24682496,
+          "peak_private_commit_bytes": 24682496
+        },
+        {
+          "round": 3,
+          "cpu_seconds": 6.703125,
+          "wall_seconds": 7.028545499779284,
+          "rss_bytes": 34459648,
+          "peak_rss_bytes": 34459648,
+          "private_commit_bytes": 24682496,
+          "peak_private_commit_bytes": 24682496
+        }
+      ],
+      "average_cpu_seconds": 6.697916666666667,
+      "projected_one_core_percent_at_30s": 22.32638888888889,
+      "final_memory": {
+        "rss_bytes": 34476032,
+        "peak_rss_bytes": 34496512,
+        "private_commit_bytes": 24576000,
+        "peak_private_commit_bytes": 24682496
+      },
+      "database_and_wal_bytes": 624473128,
+      "profile": [
+        {
+          "file": "storage.py",
+          "line": 81,
+          "name": "set_meta",
+          "calls": 1,
+          "own_seconds": 4.2900000000000006e-05,
+          "cumulative_seconds": 0.014311500000000001
+        },
+        {
+          "file": "baseline.py",
+          "line": 103,
+          "name": "record",
+          "calls": 1,
+          "own_seconds": 0.102301,
+          "cumulative_seconds": 9.9164992
+        },
+        {
+          "file": "baseline.py",
+          "line": 138,
+          "name": "status",
+          "calls": 7500,
+          "own_seconds": 1.4064944000000001,
+          "cumulative_seconds": 8.8861238
+        },
+        {
+          "file": "storage.py",
+          "line": 134,
+          "name": "baseline_samples",
+          "calls": 7500,
+          "own_seconds": 4.1881192,
+          "cumulative_seconds": 4.3374622
+        }
+      ],
+      "elapsed_seconds": 60.86458680010401,
+      "source_sha256": "bfc61fa06c0786ff47400c3866564e5ef310ca2bc754ccf086583891bdba5147"
+    }
+  }
+}
