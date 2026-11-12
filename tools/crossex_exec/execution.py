@@ -3,35 +3,63 @@ import threading
 import time
 from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+from itertools import chain
 from tools.fill_sim.core import dec
 from .adapters import validate_intent
 from .transport import APIError
 from .stops import StopLocks
+from .storage import matches_order
 
 
 NONTERMINAL = frozenset(('SENT', 'ACK', 'UNKNOWN'))
 
 
 class Executor:
-    def __init__(self, store, adapters, *, live=False, poll_interval=.2, confirm_timeout=10, can_open=lambda: True, check_order=None, check_pair=None, alert=None, clock=time.time):
+    def __init__(self, store, adapters, *, live=False, poll_interval=.2, confirm_timeout=10, can_open=lambda: True, check_order=None, check_pair=None, check_release=None, alert=None, clock=time.time):
         self.store,self.adapters,self.live=store,adapters,live
         self.poll_interval,self.confirm_timeout=poll_interval,confirm_timeout
         self.can_open=can_open
         self.check_order=check_order
         self.check_pair,self.clock=check_pair,clock
+        self.check_release=check_release
         self.alert=alert or StopLocks(store).add
         self.locks,self.lock= {},threading.RLock()
         self.pending_writes={}
+        self.owned={}
 
     def order(self,cid):
         with self.lock:
             return deepcopy(self.pending_writes[cid][0]) if cid in self.pending_writes else self.store.order(cid)
 
-    def orders(self):
+    def iter_orders(self, **filters):
         with self.lock:
-            rows={o['cid']:o for o in self.store.all_orders()}
-            rows.update({cid:deepcopy(row) for cid,(row,_) in self.pending_writes.items()})
-            return list(rows.values())
+            pending={cid:deepcopy(row) for cid,(row,_) in self.pending_writes.items()}
+        for row in self.store.iter_orders(**filters):
+            if row['cid'] not in pending:
+                yield row
+        for row in pending.values():
+            if matches_order(row, **filters):
+                yield row
+
+    def orders(self, **filters):
+        return list(self.iter_orders(**filters))
+
+    @contextmanager
+    def ownership(self, intents):
+        with self.lock:
+            for i in intents:
+                self.owned[i['cid']]=self.owned.get(i['cid'],0)+1
+        try:
+            yield
+        finally:
+            with self.lock:
+                for i in intents:
+                    cid=i['cid']
+                    self.owned[cid]-=1
+                    if not self.owned[cid]:
+                        del self.owned[cid]
+                        self.locks.pop(cid,None)
 
     def save(self,order,kind=None):
         """Retain observations before attempting I/O; retries never resend orders."""
@@ -53,9 +81,18 @@ class Executor:
         return self.adapters['bitget' if i['instrument']['market']['exchange']=='bitget' else 'crossex']
 
     def execute_pair(self, intents):
-        # Commit BOTH IDs before either worker may send.
-        for i in intents:
-            self.prepare(i)
+        with self.ownership(intents):
+            return self._execute_pair(intents)
+
+    def _execute_pair(self, intents):
+        # Validation and BOTH intent records/events are one atomic preparation.
+        with self.lock:
+            fresh=[]
+            for i in intents:
+                validate_intent(i)
+                if self.order(i['cid']) is None:
+                    fresh.append(dict(i,state='INTENT',filled='0',oid=None,accounting_pending=True))
+            self.store.save_orders(fresh,'INTENT')
         if self.live and self.check_order and all(self.order(i['cid'])['state']=='INTENT' for i in intents):
             try:
                 for i in intents:
@@ -82,6 +119,19 @@ class Executor:
                     self.check_pair(intents)
                 if not self.can_open():
                     raise APIError('rejected')
+                sent_rows=[dict(self.order(i['cid']),state='SENT',sent_ms=self.clock()*1000) for i in intents]
+                self.store.save_orders(sent_rows,'SENT')
+                # FULL commits may take longer than the entire book-age budget.
+                # No sender is released until BOTH durable writes and the final
+                # shared hard-risk/age checks succeed. No retry after this point.
+                if self.check_order:
+                    for i in intents:
+                        self.check_order(i)
+                if self.check_release:
+                    self.check_release(intents)
+                elif not self.can_open():
+                    raise APIError('rejected')
+                gate.sent_rows={row['cid']:row for row in sent_rows}
                 approved.set()
             gate=threading.Barrier(len(intents),action=authorize,timeout=max(3,self.confirm_timeout))
             gate.approved=approved
@@ -104,6 +154,10 @@ class Executor:
             return existing
 
     def execute(self,intent,*,send_gate=None,defer_confirm=False):
+        with self.ownership([intent]):
+            return self._execute(intent,send_gate=send_gate,defer_confirm=defer_confirm)
+
+    def _execute(self,intent,*,send_gate=None,defer_confirm=False):
         with self.lock:
             mutex=self.locks.setdefault(intent['cid'],threading.Lock())
         with mutex:
@@ -127,6 +181,10 @@ class Executor:
             def sent():
                 if send_gate:
                     send_gate.wait()
+                    # The barrier action already committed both records. Only
+                    # in-memory work is allowed between release and transport.
+                    i.update(send_gate.sent_rows[i['cid']])
+                    return
                 else:
                     if self.check_order:
                         self.check_order(i)
@@ -214,17 +272,23 @@ class Executor:
 
     def recover(self,*,startup=True,pair_id=None):
         self.flush()
-        for i in self.orders():
-            if pair_id is not None and i['pair_id']!=pair_id:
-                continue
+        for i in chain(self.iter_orders(pair_id=pair_id, states=(*NONTERMINAL,'INTENT')),
+                       self.iter_orders(pair_id=pair_id, states=('TERMINAL',), accounting_pending=True)):
+            with self.lock:
+                # Do not retire a legitimate INTENT waiting at transport/barrier.
+                # A durable SENT/UNKNOWN without an owner is ALWAYS reconciled.
+                if i['cid'] in self.owned:
+                    continue
+                i=self.order(i['cid'])
+                if i['state']=='INTENT':
+                    i.update(state='UNSENT',accounting_pending=False,
+                             reason='restart_before_send' if startup else 'orphan_before_send')
+                    self.save(i,'UNSENT')
+                    continue
             if i['state'] in NONTERMINAL:
                 i=self.confirm(i)
                 if i['state'] in NONTERMINAL and self.live:
                     self.cancel(i)
-            elif startup and i['state']=='INTENT':
-                # No automatic stale-entry send after process death.
-                i.update(state='UNSENT',accounting_pending=False,reason='restart_before_send')
-                self.save(i,'UNSENT')
             elif i['state']=='TERMINAL' and i.get('accounting_pending'):
                 self.account(i)
         self.flush()

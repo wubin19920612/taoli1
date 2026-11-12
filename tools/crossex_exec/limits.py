@@ -1,5 +1,6 @@
 """Non-overridable ceilings and a single admission check for every opening send."""
 import threading
+from itertools import chain
 from tools.fill_sim.core import dec
 from .stops import StopLocks
 
@@ -34,7 +35,7 @@ class HardLimits:
     def initialize(self,snapshot):
         equities=self.equities(snapshot)
         if self.store.meta('account_equity_baseline') is None:
-            if any(o['state'] not in ('SHADOW','UNSENT','INTENT') for o in self.store.all_orders()):
+            if next(self.store.iter_orders(exclude_states=('SHADOW','UNSENT','INTENT')),None) is not None:
                 raise ValueError('account_baseline_missing_with_history')
             self.store.set_meta('account_equity_baseline',equities)
         self.store.event('STARTUP_EQUITY',dict(current=equities,baseline=self.store.meta('account_equity_baseline')))
@@ -66,9 +67,9 @@ class HardLimits:
         return bool(breached)
 
     def exposure(self,snapshot,intent):
-        orders=self.store.all_orders()
-        if not any(o['cid']==intent['cid'] for o in orders):
-            orders.append(dict(intent,state='INTENT',filled='0'))
+        orders=self.store.iter_orders(exclude_states=('SHADOW','UNSENT'))
+        if self.store.order(intent['cid']) is None:
+            orders=chain(orders,[dict(intent,state='INTENT',filled='0')])
         positions,pending={},dec(0)
         for o in orders:
             if o['state'] in ('SHADOW','UNSENT'):
