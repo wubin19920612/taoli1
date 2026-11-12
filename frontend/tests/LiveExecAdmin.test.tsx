@@ -114,8 +114,9 @@ describe("实盘第八轮管理", () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(30000); });
     fireEvent.click(dialog().getByRole("button", { name: "确认提交" })); await flush();
     expect(screen.getByText("数据已被其他人修改，请刷新后重新确认")).toBeTruthy();
+    // The shared getComputedStyle stub omits display; inspect the actual hidden modal.
     await act(async () => { await vi.advanceTimersByTimeAsync(500); });
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("dialog").style.display).toBe("none");
     expect(writes).toHaveLength(0);
   });
 
@@ -132,8 +133,9 @@ describe("实盘第八轮管理", () => {
     expect(JSON.parse(String(writes[0].options.body))).toEqual({ order_usd_max: 30, expected_version: 2 });
     expect(reads.config.values.order_usd_max).toBe(5);
     expect(screen.getByText("数据已被其他人修改，请刷新后重新确认")).toBeTruthy();
+    // The shared getComputedStyle stub omits display; inspect the actual hidden modal.
     await act(async () => { await vi.advanceTimersByTimeAsync(500); });
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("dialog").style.display).toBe("none");
     expect((screen.getByLabelText("修改 order_usd_max") as HTMLInputElement).value).toBe("5");
     expect(fetchMock.mock.calls.filter(([url, options]) => url.endsWith("/config") && !options.method)).toHaveLength(readCount + 1);
     await act(async () => { await vi.advanceTimersByTimeAsync(30000); });
@@ -232,8 +234,9 @@ describe("实盘第八轮管理", () => {
     expect(screen.getByText("数据已被其他人修改，请刷新后重新确认")).toBeTruthy();
     expect(adminReads()).toBe(before + 4);
     expect(screen.queryByText(/操作成功/)).toBeNull();
+    // The shared getComputedStyle stub omits display; inspect the actual hidden modal.
     await act(async () => { await vi.advanceTimersByTimeAsync(500); });
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("dialog").style.display).toBe("none");
     await click(button);
     if (action === "classify") {
       fireEvent.change(dialog().getByLabelText("类别"), { target: { value: "listed_equity" } });

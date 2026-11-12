@@ -1,22 +1,25 @@
 """Deployment-bound regressions; no production credentials or external services."""
 import json
 import os
-from pathlib import Path
 import re
 import socket
 import subprocess
 import sys
 import time
 from dataclasses import replace
+from pathlib import Path
 
 import httpx
 import pytest
+import test_live_exec_admin as admin_tests
 from auth_helpers import session_headers
 from fastapi.testclient import TestClient
-
-from test_live_exec_admin import ADMIN_TOKEN, READ_TOKEN, audit_capture, context  # noqa: F401
+from test_live_exec_admin import ADMIN_TOKEN, READ_TOKEN
 
 ROOT = Path(__file__).resolve().parents[2]
+# Reuse the isolated session/upstream fixtures without changing global conftest.
+audit_capture = admin_tests.audit_capture
+context = admin_tests.context
 
 
 def docker_command():

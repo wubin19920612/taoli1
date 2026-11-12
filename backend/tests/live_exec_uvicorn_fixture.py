@@ -2,12 +2,12 @@
 import json
 
 import httpx
+from auth_helpers import TEST_TOTP_SECRET, IsolatedSessionLookup
 from fastapi import Depends, FastAPI
 
 from app.api import routes_live_exec
 from app.core.config import Settings
 from app.core.security import require_authentication
-from auth_helpers import IsolatedSessionLookup, TEST_TOTP_SECRET
 
 
 def create_app():
