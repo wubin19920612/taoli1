@@ -65,3 +65,51 @@ $env:PYTHONPATH='.'
 - 本地验证日志位于已忽略的 `.pytest-tmp/live-exec-full.log`、`live-exec-frontend-full.log`、`live-exec-frontend-build.log`；测试临时目录、node_modules、dist 和 tsbuildinfo 不提交。交付后没有应提交的未跟踪产物。
 - 真实上游的服务可达性、凭证配置、数据质量和运行时表现尚未联调；上游尚在另一个分支开发，本任务不以它为验收依赖。
 - 下一模块应另开任务，先核对 crossex-exec 是否已满足本契约，再安排明确授权的联调和部署；沿用现有上线备份、版本核对流程。
+
+## 2026-11-12 追加：同步第六、七轮数据契约
+
+### 范围、基线和提交
+
+- 本次仍只处理“实盘”只读页面模块；分支 `codex/live-exec-page`，起始 HEAD `49328ade5c9e27989c5094892068257d4e533cd2`，起始工作区干净。
+- 从另一个 worktree `../crossex-exec/docs/live-exec-contract-2026-11-11.md` 原样复制覆盖契约。来源提交 `1647b12f66426db7a8dbc02fc5c854e74a90826f`；来源提交、来源文件与本地文件的 Git blob 均为 `fefda566ce9474bccdb60fa6a78a0c29bc65e201`。没有改动来源 worktree。
+- 独立契约提交：`92ffb17`，提交说明注明来源 `1647b12`。
+- 先补测试提交：`2f4dbba`；实现提交：`347d658`。没有 amend。
+
+### 功能和业务语义
+
+- `frontend/src/api/liveExec.ts`：summary 的三个组合计数和 `opening_skip_counts` 可缺失或为 null，原因计数允许部分键缺失；持仓和成交共用五个可选的快照/盘口时间差字段类型。
+- `frontend/src/pages/LiveExecPage.tsx`：当前持仓及已平仓记录分别展示 `baseline_bps`（开仓基准）、`excess_bps`（开仓超额价差）、`funding_cost_bps`（预估两小时资金费成本）、`open_book_skew_ms`（开仓盘口时间差）、`close_book_skew_ms`（平仓盘口时间差）；单位为 bp 或毫秒，扩大表格横向滚动宽度。
+- 前三项是开仓复核快照，超额价差尚未扣除费用，资金费成本是两小时预估，不替代实际 `funding_usd`、净损益或成交价差；基准负值原样显示。盘口时间差不是订单发送或成交时间差，平仓值可能远超 300 毫秒；没有本地重算或历史回填。
+- summary 显示 `baseline_ready_pairs`（基准预热完成数）、`structural_spread_pairs`（结构性拉黑数）、`cooldown_pairs`（冷却数）；说明按基础币和无方向交易所组合去重，三项可重叠，不表示可立即开仓。
+- 新增“累计放弃开仓原因”区块，展示契约全部六项，每项附一句中文解释：
+
+| 字段 | 中文标签 | 解释 |
+| --- | --- | --- |
+| `book_skew` | 盘口不同步 | 两腿盘口时间差超过开仓允许范围。 |
+| `book_stale` | 盘口陈旧 | 盘口时间信息缺失、无效或已过期。 |
+| `funding_diff` | 资金费率检查未通过 | 资金费率数据无效，或归一化后的费率、费率差超限。 |
+| `baseline_not_flat` | 基准不平坦 | 历史基准偏移或波动过大，未通过平坦性检查。 |
+| `not_single_venue_outlier` | 非单一交易所异常 | 价格偏离未能归因于单一交易所，未通过异常模式检查。 |
+| `too_few_venues` | 交易所数量不足 | 有效且及时的参考交易所不足，无法判断单所异常。 |
+
+- 放弃计数为自第七轮启用后数据库内累计机会数（含 shadow），跨日及重启保留，按机会去重；不回填升级前历史，多条件失败只计首先判定的原因。页面不把它当作今日统计或成交笔数。
+- 所有新增字段缺失或 null 显示“—”；真实 0 显示为 0（bp 保留两位），不将未知冒充为零。兼容整个 `opening_skip_counts` 缺失/null，以及其中部分原因键缺失/null。
+- 已检查 `backend/app/api/routes_live_exec.py`：仅请求参数有白名单，响应通过 `json.loads` 原样透传，没有响应字段白名单，不需要修改生产后端代码；仍只有原来的四个 GET 路由，没有新增写接口。
+
+### TDD 与本地验证
+
+- 后端测试 `backend/tests/test_live_exec_routes.py` 新增 10 项：显式固定契约新增键、保留原样透传的零值/null/缺失字段；原有四个契约 JSON 示例透传测试继续适用。
+- 前端 `frontend/tests/LiveExecPage.test.tsx` 新增 5 项，配合 `liveExecFixtures.ts` 覆盖持仓/成交的独立字段映射、负基准、零成本和零时间差、平仓 2300 毫秒、六种原因与中文说明、三项计数为零、旧版缺失/null 和部分原因缺失，且不改变实际净利润或订单时间差。
+- 实现前先运行测试：前端原始汇总 `Test Files  1 failed (1)`、`Tests  5 failed | 10 passed (15)`、`Duration  26.89s`，五项失败均来自新增展示尚未实现。后端已有透传实现，定向测试原始汇总 `52 passed, 2972 deselected in 36.80s`，退出码 0。
+- 实现后前端定向原始汇总：`Test Files  1 passed (1)`、`Tests  15 passed (15)`、`Duration  21.41s`，退出码 0。
+- `npm run build`（`tsc -b && vite build`）通过，原始汇总 `✓ built in 12.34s`，退出码 0。
+- 后端全量原始汇总：`3013 passed, 11 deselected, 12 warnings in 325.94s (0:05:25)`，退出码 0。11 项 deselected 来自 pyproject.toml 原有 network/benchmark 标记过滤，没有新增跳过或排除项；12 条警告为既有 `datetime.utcnow()` 弃用警告。复现：在 backend 目录设置 `$env:PYTHONPATH='.'`，执行 `python -m pytest tests -q -p no:cacheprovider --basetemp=../.pytest-tmp/live-exec-round7-full`。
+- 前端全量通过，原始汇总：`Test Files  34 passed (34)`、`Tests  468 passed (468)`、`Duration  335.22s`，退出码 0。在 frontend 目录运行已有脚本 `npm test -- --maxWorkers=2 --minWorkers=2`，仅限制 worker 数，没有筛选或排除用例；保留既有 antd 弃用与 React act 警告，没有为此修改其他页面或全局测试配置。
+- 历史记录所列的锁定 venv 已不存在。本轮使用本机 `C:/Users/wubin/AppData/Local/Programs/Python/Python312/python.exe`（Python 3.12、pytest 8.4.2），没有安装或修改依赖。定向命令在仓库根目录执行：`PYTHONPATH=backend python -m pytest backend/tests -q -k live_exec -p no:cacheprovider --basetemp=.pytest-tmp/live-exec-round7-focused`（PowerShell 用 `$env:PYTHONPATH='backend'` 设置环境）。
+
+### 交付边界、产物和下一步
+
+- 按本次要求只做本地提交；没有 push、SSH、WSL、备份、部署或线上验证，没有修改 `.env`、compose、部署脚本、依赖清单/锁文件或其他模块。
+- 本次验证日志新增于已忽略的 `.pytest-tmp/live-exec-round7-*`，保留旧轮次日志及产物；测试临时目录、node_modules、dist 和 tsbuildinfo 不提交。
+- 交接提交前已复核 diff、契约 blob、改动范围和工作区；只有本任务的七个 live-exec 文件发生变化，没有应提交的未跟踪文件。最终交接提交号可用 `git log -1 --format=%H -- docs/task-handoff-2026-11-11-live-exec-page.md` 查询。
+- 本轮仍以离线契约和假数据验收；真实上游可达性、配置及真实数据联调尚未验证，线上版本未因本次任务改变。下一个模块请另开任务，明确授权后再安排 crossex-exec 联调与部署。
