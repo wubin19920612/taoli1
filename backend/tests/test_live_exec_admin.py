@@ -12,7 +12,6 @@ from app.api import routes_live_exec
 from app.core.config import Settings, get_settings
 from app.main import create_app
 
-
 READ_TOKEN = "synthetic-read-token"
 ADMIN_TOKEN = "synthetic-admin-token"
 MACHINE_TOKEN = "a" * 64
