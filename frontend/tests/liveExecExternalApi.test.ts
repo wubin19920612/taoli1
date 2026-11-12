@@ -24,6 +24,16 @@ describe("外仓 API", () => {
     expect(await getLiveExecAdmin("remote-positions", new AbortController().signal)).toEqual({ available: false, error: "invalid_json" });
   });
 
+  it.each([
+    { ...remoteSnapshot, snapshot_at: {} }, { ...remoteSnapshot, stale: "false" },
+    ...["exchange_type", "business", "quote", "dex", "quantity", "unrealized_pnl_native", "unrealized_pnl_usd", "valuation", "ownership"]
+      .map(field => ({ ...remoteSnapshot, positions: [{ ...remoteSnapshot.positions[0], [field]: {} }] })),
+    { ...remoteSnapshot, positions: [{ ...remoteSnapshot.positions[0], identity_verified: "true" }] },
+  ])("rejects invalid optional field types without a render crash: %j", async data => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ available: true, data }) })));
+    expect(await getLiveExecAdmin("remote-positions", new AbortController().signal)).toEqual({ available: false, error: "invalid_json" });
+  });
+
   it("accepts the round eleven object and preserves later optional fields", async () => {
     const data = { status, contracts: [], income: null, flatten_status: null, projection: null,
       future_optional_field: { amount: 0 } };

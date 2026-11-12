@@ -198,7 +198,7 @@ def test_unknown_routes_and_read_only_methods(context):
 
 @pytest.mark.parametrize("available,stale", [(False, True), (True, True), (True, False)])
 def test_remote_snapshot_availability_is_nested_and_empty_is_not_assumed(context, available, stale):
-    _, client, calls, install = context
+    _, client, _, install = context
     payload = {**PAYLOADS["remote-positions"], "available": available, "stale": stale, "positions": [],
                "future_risk_scope": None}
     install(lambda request: httpx.Response(200, json=payload, headers={"X-Upstream-Secret": TOKEN}))

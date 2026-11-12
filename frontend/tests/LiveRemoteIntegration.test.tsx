@@ -60,7 +60,6 @@ describe("第十三轮完整远端持仓接入", () => {
         position_key: "crossex|UNPARSEABLE_RAW|long", identity_verified: false, unrealized_pnl_usd: null, valuation_verified: false },
     ];
     render(<LiveExecPage />); await flush();
-    const tableRows = card().querySelectorAll(".ant-table-wrapper:first-of-type tbody tr[data-row-key]");
     // Scope to the remote table, not the registry table.
     const row = ui().getByText(remoteIdentity.symbol).closest("tr")!;
     expect(row.textContent).toContain("2.000000000000000001");
@@ -75,7 +74,6 @@ describe("第十三轮完整远端持仓接入", () => {
     expect(ui().getAllByRole("button", { name: /登记为外部持仓/ })).toHaveLength(1);
     expect(ui().queryByRole("button", { name: /取消登记/ })).toBeNull();
     expect(row.closest("tbody")!.querySelectorAll("tr[data-row-key]")).toHaveLength(5);
-    expect(tableRows.length).toBeGreaterThan(0);
   });
 
   it.each(["missing", "null", "unverified"])("shows dashes for %s optional valuation without inventing USD", async variant => {
@@ -210,6 +208,30 @@ describe("第十三轮完整远端持仓接入", () => {
     render(<LiveExecPage />); await flush(); await open(); setReason();
     await act(async () => { await vi.advanceTimersByTimeAsync(11000); });
     expect(ui().getByText(/快照已过期/)).toBeTruthy(); noEnabledActions();
+    await confirm(); expect(writes).toHaveLength(0);
+    expect(dialog().getByText(/快照.*重新确认/)).toBeTruthy();
+  });
+
+  it("retains the confirmed registry status when a later poll changes only the concurrency token", async () => {
+    render(<LiveExecPage />); await flush(); await open(); setReason();
+    const expected = registry.status;
+    registry.status = "x1:" + "c".repeat(64);
+    const nextAt = "2026-11-12T00:00:30Z";
+    remote.snapshot_at = nextAt; remote.snapshot_version = 18;
+    remote.positions = [{ ...remotePosition, snapshot_at: nextAt, snapshot_version: 18 }];
+    await act(async () => { await vi.advanceTimersByTimeAsync(30000); });
+    await confirm();
+    expect(writes).toHaveLength(1);
+    expect(writes[0].body).toEqual({ identity: remoteIdentity, expected_status: expected, reason: "核对原始身份后操作" });
+  });
+
+  it("blocks an open cancellation if the next remote snapshot finds either direction occupied", async () => {
+    remote.positions = [];
+    render(<LiveExecPage />); await flush(); await open("取消登记"); setReason();
+    const identity = registry.contracts[0].identity;
+    remote.positions = [{ ...remotePosition, ...identity, side: "short", ownership: "external_registered",
+      position_key: `crossex|${identity.symbol}|short` }];
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
     await confirm(); expect(writes).toHaveLength(0);
     expect(dialog().getByText(/快照.*重新确认/)).toBeTruthy();
   });
