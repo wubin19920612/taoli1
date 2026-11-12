@@ -21,6 +21,7 @@ from .sizing import size_plan
 from .universe import Universe, check_mapping_ratio
 from .external import ExternalRegistry, ExternalAdmin, ExternalUnverifiable, plain
 from .external_accounting import ExternalAccounting, read_snapshot
+from .external_fx import NATIVE_USD, require_fresh_fx
 
 
 ACCOUNT_RECOVERY_SNAPSHOTS = 3
@@ -373,13 +374,26 @@ class Engine:
     def read_account_snapshot(self):
         if not self.external.records():
             return self.accounts.snapshot()
-        return read_snapshot(self.accounts,self.store,self.clock)
+        snapshot=read_snapshot(self.accounts,self.store,self.clock)
+        currencies={r['identity']['quote'] for r in self.external.records().values()}-NATIVE_USD
+        snapshot['external_fx']={}
+        if currencies:
+            try:
+                snapshot['external_fx']=self.market.spot_fx(currencies)
+            except Exception:
+                # Missing public prices must not hide accounts or hard exits.
+                snapshot['external_fx_error']='external_fx_unavailable'
+        return snapshot
 
     def require_external_income(self):
         value=self.store.meta('external_income',{})
         if (value.get('verified') is not True or value.get('revision')!=self.store.meta('external_attribution_revision',0)
                 or value.get('day')!=day(self.clock()) or not 0<=self.clock()-value.get('captured_at',0)<=10):
             raise ExternalUnverifiable('external_income_unverifiable')
+        try:
+            require_fresh_fx(value.get('external_fx',{}),self.clock())
+        except (ValueError,KeyError,TypeError,ArithmeticError):
+            raise ExternalUnverifiable('external_income_unverifiable') from None
 
     def refresh_reference(self):
         now=self.clock()

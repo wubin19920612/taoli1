@@ -9,6 +9,7 @@ from functools import lru_cache
 
 from tools.fill_sim.core import dec, day
 from .external import ExternalUnverifiable, plain, route_symbol, digest
+from .external_fx import NATIVE_USD, quote_band, upper_contribution
 
 BITGET_FUNDING = frozenset(('CONTRACT_MAIN_SETTLE_FEE_USER_IN','CONTRACT_MAIN_SETTLE_FEE_USER_OUT'))
 BITGET_TRADING = frozenset(('OPEN_LONG','OPEN_SHORT','CLOSE_LONG','CLOSE_SHORT','BUY_DEAL','SELL_DEAL'))
@@ -227,19 +228,23 @@ class ExternalAccounting:
         records=self.registry.records()
         cash_continuity(anchor,snapshot)
         external={r['identity']['symbol']:r['identity'] for r in records.values()}
-        # Current and epoch floating amounts are quote units. Public CrossEx
-        # docs do not specify an authoritative historical USDC -> account-equity
-        # valuation. Keep the contract registered/banned, but refuse attribution.
-        unsupported={s for s,i in external.items() if i['quote']!='USDT'}
-        if any(k.split('|')[1] in unsupported and dec(value)
-               for amounts in (projection['external_upnl_by_position'],anchor['external_upnl_by_position'])
-               for k,value in amounts.items()):
-            raise ValueError('external_currency_unverifiable')
+        # Keep native units through every ledger/quantity check. Never net
+        # distinct settlement currencies before converting their contribution.
+        native=defaultdict(lambda:dec(0))
+        cash_by_currency=defaultdict(lambda:dec(0))
+        required=set()
+        for amounts,sign in ((projection['external_upnl_by_position'],1),
+                             (anchor['external_upnl_by_position'],-1)):
+            for key,value in amounts.items():
+                coin=external[key.split('|')[1]]['quote']
+                amount=dec(value)
+                native[coin]+=sign*amount
+                if amount and coin not in NATIVE_USD:
+                    required.add(coin)
         owned=set()
         for row in self.store.iter_orders(exclude_states=('SHADOW','UNSENT')):
             owned.add(route_symbol(row['instrument']))
         epoch=int(anchor['captured_at']*1000)
-        cash=dec(0)
         funding=dec(0)
         ledger=defaultdict(lambda:dec(0))
         trade_money=defaultdict(lambda:dec(0))
@@ -257,9 +262,11 @@ class ExternalAccounting:
                 if row['exchange_type']!=i['exchange_type'] or row['coin']!=i['quote']:
                     raise ValueError('cash_identity')
                 if row['id'] not in anchor['history_index']['crossex_book']:
-                    if symbol in unsupported and value:
-                        raise ValueError('external_currency_unverifiable')
-                    cash+=value
+                    coin=i['quote']
+                    cash_by_currency[coin]+=value
+                    native[coin]+=value
+                    if value and coin not in NATIVE_USD:
+                        required.add(coin)
                     if kind in ('TRANSACTION','TRADING_FEE'):
                         ledger[(symbol,str(row['business_id']),kind)]+=value
                     elif kind=='LIQUIDATION_FEE':
@@ -307,21 +314,32 @@ class ExternalAccounting:
         if {k:v for k,v in positions.items() if v}!={k:dec(v) for k,v in projection['external_positions'].items()}:
             raise ValueError('position_continuity')
         funding=program_activity(self.store,activity,cutoff)
-        contribution=cash+dec(projection['external_upnl'])-dec(anchor['external_upnl'])
+        fx={coin:quote_band(coin,snapshot.get('external_fx',{}).get(coin,[]),self.clock())
+            for coin in sorted(required)}
+        def converted(amounts):
+            return sum((amount if coin in NATIVE_USD else upper_contribution(amount,fx[coin])
+                        for coin,amount in amounts.items() if amount),dec(0))
+        cash,contribution=converted(cash_by_currency),converted(native)
         if anchor['day']==today:
             funding-=dec(anchor.get('program_funding_offset',0))
         result=dict(verified=True,day=today,captured_at=captured,from_ms=epoch,revision=anchor['revision'],
             external_cash=str(cash),external_contribution=str(contribution),program_funding=str(funding),
-            equity_daily=str(dec(snapshot['equity'])-dec(anchor['equity'])-contribution))
+            equity_daily=str(dec(snapshot['equity'])-dec(anchor['equity'])-contribution),
+            external_cash_by_currency={k:str(v) for k,v in cash_by_currency.items()},
+            external_contribution_by_currency={k:str(v) for k,v in native.items()},
+            external_fx=fx,valuation='public_spot_upper_bound' if fx else 'native_usd')
         if anchor['day']!=today:
             # Verify the COMPLETE carried interval first (including settlements
             # while offline), then start today's equity fallback at the same
             # observation as the original daily_equity branch. Never compare
             # a new equity epoch to an old external contribution epoch.
-            result['carried_interval']=dict(from_ms=epoch,external_contribution=str(contribution))
+            result['carried_interval']=dict(from_ms=epoch,external_contribution=str(contribution),
+                external_cash_by_currency=result['external_cash_by_currency'],
+                external_contribution_by_currency=result['external_contribution_by_currency'],external_fx=fx)
             anchor=anchor_value(self.store,snapshot,projection,captured)
             result.update(from_ms=int(anchor['captured_at']*1000),external_cash='0',
-                          external_contribution='0',equity_daily='0')
+                          external_contribution='0',equity_daily='0',
+                          external_cash_by_currency={},external_contribution_by_currency={})
         # Durable evidence and baselines change together; failure cannot publish
         # a verified projection or let a previously cached result admit a send.
         with self.store.transaction():

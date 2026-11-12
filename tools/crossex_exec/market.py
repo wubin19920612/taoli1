@@ -1,6 +1,7 @@
 """Public market data via fill-sim's bounded transport, parsers and send scheduler."""
 import time
 import threading
+from copy import deepcopy
 from urllib.parse import urlencode
 from tools.fill_sim.core import Market, dec
 from tools.fill_sim.exchanges import endpoint, parse_spec, parse_book, exact, check_response
@@ -12,6 +13,7 @@ from .baseline import BATCH_URLS, FRESH_SECONDS, parse_tickers, supported_base
 from .liquidity import VOLUME_URLS, parse_batch
 from .universe import Universe, category, alias, PRE_IPO_BASES, COMMODITY_BASES
 from .open_interest import oi_urls, parse_oi
+from .external_fx import NATIVE_USD, spot_urls, parse_spot_quote, quote_band
 
 RULES_URL='https://api.gateio.ws/api/v4/crossex/rule/symbols'
 CATALOGS={
@@ -180,6 +182,8 @@ class MarketData:
         self.catalog_errors={}
         self._pump_lock=threading.Lock()
         self._mapping_lock=threading.Lock()
+        self._fx_lock=threading.Lock()
+        self._fx_cache={}
         self.closed=False
 
     def close(self):
@@ -211,6 +215,31 @@ class MarketData:
 
     def fetch(self,ex,url,priority=1):
         return self.batch([(ex,url,None)],priority=priority)[0]
+
+    def spot_fx(self,currencies):
+        """Account worker only; same public GET queue, pool and venue quotas.
+
+        Cache at most 30s and never past the oldest exchange timestamp + 60s.
+        Failed refreshes replace cached evidence, never renew its timestamps.
+        No I/O happens at the final send barrier.
+        """
+        result={}
+        with self._fx_lock:
+            for coin in sorted(set(currencies)-NATIVE_USD):
+                cached=self._fx_cache.get(coin)
+                if cached and 0<=self.clock()-cached['at']<30:
+                    try:
+                        quote_band(coin,cached['rows'],self.clock())
+                        result[coin]=deepcopy(cached['rows'])
+                        continue
+                    except (ValueError,KeyError,TypeError,ArithmeticError):
+                        pass
+                items=[(ex,url,lambda data,ex=ex,coin=coin:parse_spot_quote(ex,coin,data,self.clock()))
+                       for ex,url in spot_urls(coin)]
+                rows=[row for row in self.batch(items,priority=0,partial=True) if row is not None]
+                self._fx_cache[coin]=dict(at=self.clock(),rows=rows)
+                result[coin]=deepcopy(rows)
+        return result
 
     def bootstrap(self,bases=()):
         try:
