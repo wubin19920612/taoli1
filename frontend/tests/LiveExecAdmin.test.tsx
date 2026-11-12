@@ -25,7 +25,7 @@ let writes: { path: string; options: RequestInit }[];
 let writeError: string | null;
 let fetchMock: ReturnType<typeof vi.fn>;
 const flush = async () => { await act(async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); }); };
-const click = async (name: string) => { fireEvent.click(screen.getByRole("button", { name, exact: true })); await flush(); };
+const click = async (name: string) => { fireEvent.click(screen.getByRole("button", { name })); await flush(); };
 const dialog = () => within(screen.getByRole("dialog"));
 
 beforeEach(() => {
@@ -71,7 +71,7 @@ describe("实盘第八轮管理", () => {
     await click("提交参数修改");
     expect(dialog().getByText(/50 → 30/)).toBeTruthy();
     expect(writes).toHaveLength(0);
-    fireEvent.click(dialog().getByRole("button", { name: "取消" })); await flush();
+    fireEvent.click(dialog().getByRole("button", { name: /取\s*消/ })); await flush();
     expect(writes).toHaveLength(0);
     await click("提交参数修改");
     fireEvent.click(dialog().getByRole("button", { name: "确认提交" })); await flush();
@@ -89,7 +89,7 @@ describe("实盘第八轮管理", () => {
     fireEvent.change(screen.getByLabelText("修改 order_usd_max"), { target: { value } });
     await click("提交参数修改");
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.getByText(/范围|有效数字/)).toBeTruthy();
+    expect(screen.getByText(/超出允许范围|请输入有效数字/)).toBeTruthy();
     expect(writes).toHaveLength(0);
   });
 
@@ -110,6 +110,35 @@ describe("实盘第八轮管理", () => {
     expect(screen.queryByText(/操作成功/)).toBeNull();
     await act(async () => { await vi.advanceTimersByTimeAsync(30000); });
     expect(writes).toHaveLength(1);
+  });
+
+  it("rejects a stale config confirmation when polling discovers a newer version", async () => {
+    render(<LiveExecPage />); await flush();
+    fireEvent.change(screen.getByLabelText("修改 order_usd_max"), { target: { value: "30" } });
+    await click("提交参数修改");
+    reads.config.version++;
+    await act(async () => { await vi.advanceTimersByTimeAsync(30000); });
+    fireEvent.click(dialog().getByRole("button", { name: "确认提交" })); await flush();
+    expect(dialog().getByText(/参数版本已变化/)).toBeTruthy();
+    expect(writes).toHaveLength(0);
+  });
+
+  it("holds one in-flight write despite repeated confirmation clicks", async () => {
+    const original = fetchMock.getMockImplementation()!;
+    let resolveWrite: (value: unknown) => void = () => undefined;
+    let sent = 0;
+    fetchMock.mockImplementation((input: string, options: RequestInit) => {
+      if (options.method === "PUT") { sent++; return new Promise(resolve => { resolveWrite = resolve; }); }
+      return original(input, options);
+    });
+    render(<LiveExecPage />); await flush();
+    fireEvent.change(screen.getByLabelText("修改 order_usd_max"), { target: { value: "30" } });
+    await click("提交参数修改");
+    const confirm = dialog().getByRole("button", { name: "确认提交" });
+    fireEvent.click(confirm); fireEvent.click(confirm); await flush();
+    expect(sent).toBe(1);
+    await act(async () => { resolveWrite({ ok: false, status: 504, json: async () => ({ detail: "请求超时，请刷新核实" }) }); });
+    expect(dialog().getByText("请求超时，请刷新核实")).toBeTruthy();
   });
 
   it("requires equity venue selection and US/KRX, then forwards exact selected keys", async () => {
@@ -166,7 +195,19 @@ describe("实盘第八轮管理", () => {
     const before = fetchMock.mock.calls.length;
     await act(async () => { await vi.advanceTimersByTimeAsync(60000); });
     expect(fetchMock.mock.calls.length).toBe(before);
+    let pendingSignal: AbortSignal | undefined;
+    const original = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation((input: string, options: RequestInit) => {
+      if (input.endsWith("/config")) {
+        pendingSignal = options.signal as AbortSignal;
+        return new Promise(() => undefined);
+      }
+      return original(input, options);
+    });
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+    fireEvent(document, new Event("visibilitychange")); await flush();
+    expect(pendingSignal?.aborted).toBe(false);
     unmount();
-    expect(fetchMock.mock.calls.every(call => call[1].signal?.aborted)).toBe(true);
+    expect(pendingSignal?.aborted).toBe(true);
   });
 });

@@ -5,12 +5,12 @@ from dataclasses import replace
 
 import httpx
 import pytest
+from auth_helpers import TEST_TOTP_SECRET, IsolatedSessionLookup, session_headers
 from fastapi.testclient import TestClient
 
 from app.api import routes_live_exec
 from app.core.config import Settings, get_settings
 from app.main import create_app
-from auth_helpers import IsolatedSessionLookup, TEST_TOTP_SECRET, session_headers
 
 
 READ_TOKEN = "synthetic-read-token"
@@ -29,6 +29,20 @@ WRITES = [
 ]
 CSRF = {"Origin": "https://radar.test", "X-Live-Exec-CSRF": "1"}
 REAL_CLIENT = httpx.AsyncClient
+# Explicit contract oracle, independent of the production validator.
+BOUNDS = [
+    ("min_quote_volume_usd", 100000, None), ("min_venues_with_volume", 2, None),
+    ("sampling_min_quote_volume_usd", 0, None), ("order_usd_max", 5, 150),
+    ("depth_fraction", .01, .5), ("oi_fraction", .00001, .005),
+    ("max_total_open_usd", 0, 600), ("max_open_pairs", 0, 3),
+    ("max_equity_drop_usd", 10, 150), ("daily_loss_stop_usd", 1, 20),
+    ("total_loss_stop_usd", 1, 100), ("min_excess_bps", 15, None),
+    ("max_book_skew_ms", 0, 300), ("max_book_age_seconds", 0, 1),
+    ("max_funding_diff_bps_h", 0, .5), ("max_funding_rate_8h", 0, .0005),
+    ("max_baseline_bps", 0, 10), ("max_baseline_mad_bps", 0, 10),
+    ("max_normal_deviation_bps", 0, 10), ("max_reference_age_seconds", 0, 90),
+    ("min_outlier_share", .7, 1), ("min_venues", 3, 6),
+]
 
 
 @pytest.fixture
@@ -164,6 +178,37 @@ def test_bad_write_configuration_is_closed(context, field, value):
 def test_config_whitelist_and_strict_types(context, body):
     _, client, calls, _ = context
     assert client.put("/api/live-exec/config", json=body).status_code == 400
+    assert not calls
+
+
+@pytest.mark.parametrize("name,low,high", BOUNDS)
+def test_all_parameter_bounds_are_atomic_and_unclamped(context, name, low, high):
+    _, client, calls, _ = context
+    for value in (low, high if high is not None else max(1000000, low * 2)):
+        response = client.put("/api/live-exec/config", json={name: value})
+        assert response.status_code == 200
+        assert json.loads(calls[-1].content) == {name: value}
+    before = len(calls)
+    for value in (low - 1, high + 1 if high is not None else False):
+        assert client.put("/api/live-exec/config", json={"order_usd_max": 30, name: value}).status_code == 400
+    assert len(calls) == before
+
+
+@pytest.mark.parametrize("header,value", [("Origin", "https://radar.test"), ("X-Live-Exec-CSRF", "1")])
+def test_duplicate_csrf_headers_are_rejected(context, header, value):
+    _, client, calls, _ = context
+    response = client.put("/api/live-exec/config", json={"order_usd_max": 30}, headers=[(header, value), (header, value)])
+    assert response.status_code == 403
+    assert not calls
+
+
+def test_rejected_update_is_audited_without_untrusted_field_values(context, caplog):
+    _, client, calls, _ = context
+    with caplog.at_level(logging.INFO, logger=routes_live_exec.__name__):
+        response = client.put("/api/live-exec/config", json={"unknown": ADMIN_TOKEN})
+    assert response.status_code == 400
+    assert "live_exec_admin" in caplog.text and "status=400" in caplog.text
+    assert ADMIN_TOKEN not in caplog.text + response.text
     assert not calls
 
 

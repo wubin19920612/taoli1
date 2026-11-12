@@ -5,6 +5,10 @@ import { LiveExecPage } from "../src/pages/LiveExecPage";
 import { chartMocks } from "../src/components/pairChartV2/chartTestUtils";
 import { liveFixtures, trade } from "./liveExecFixtures";
 
+// Keep the original dashboard polling/failure tests isolated; the admin suite
+// renders the full page and exercises management plus existing position data.
+vi.mock("../src/pages/liveExec/LiveExecAdmin", () => ({ LiveExecAdmin: () => null }));
+
 let requests: URL[];
 let fetchMock: ReturnType<typeof vi.fn>;
 const flush = async () => { await act(async () => { await Promise.resolve(); }); };
@@ -79,6 +83,23 @@ describe("实盘契约页面", () => {
     ]) expect(screen.getByText(explanation)).toBeTruthy();
     expect(screen.getByText(/三项可能重叠，不表示可立即开仓/)).toBeTruthy();
     expect(screen.getByText(/累计放弃机会数（含影子模式），跨日和重启保留/)).toBeTruthy();
+  });
+
+  it("uses effective account risk limits after admin changes and shows round eight skip counts", async () => {
+    const original = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation((input: string) => input.endsWith("/summary")
+      ? Promise.resolve({ ok: true, status: 200, json: async () => ({ available: true, data: {
+        ...liveFixtures.summary, config_version: 8, effective_risk_limits: {
+          max_equity_drop_usd: 50, daily_loss_stop_usd: 5, total_loss_stop_usd: 20,
+        }, opening_skip_counts: { size_too_small: 1, oi_missing: 2, mapping_ratio_mismatch: 3,
+          volume_too_low: 4, volume_unknown: 5, category_unconfirmed: 6 },
+      } }) }) : original(input));
+    render(<LiveExecPage />); await flush();
+    expect(screen.getByTestId("live-account-crossex").textContent).toContain("/ 50.00 USD");
+    expect(descriptionValue("当前配置版本")).toBe("8");
+    ["定量不足", "缺少有效 OI", "映射价格比不符", "成交额不足", "成交额未知", "类别未确认"].forEach((label, i) => {
+      expect(descriptionValue(label)).toBe(String(i + 1));
+    });
   });
 
   it.each(["missing", "null"])("shows dashes for %s new fields from older services", async variant => {
