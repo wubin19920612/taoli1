@@ -36,8 +36,20 @@ def plain(value):
     return value
 
 
+def _json_decimal(value):
+    if isinstance(value,Decimal):
+        return str(value)
+    raise TypeError('not_json_serializable')
+
+
+def canonical_json(value):
+    # Same representation as plain(value), without a second recursive tree.
+    return json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False,
+                      default=_json_decimal).encode()
+
+
 def digest(value):
-    return hashlib.sha256(json.dumps(plain(value),sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
+    return hashlib.sha256(canonical_json(value)).hexdigest()
 
 
 def symbol_identity(symbol):

@@ -6,7 +6,7 @@ from tools.fill_sim.core import dec, day
 from .external import ExternalRegistry, plain
 from .external_accounting import anchor_value, read_snapshot, program_activity, verified_history
 from .program_risk import debt_attribution
-from .funding import funding_positions, funding_continuity, daily_continuity
+from .funding import funding_positions, funding_continuity, daily_continuity, certify_daily
 
 
 POSITION_LOCKS = frozenset(('position_mismatch','unhedged_position','repair_stopped',
@@ -188,9 +188,13 @@ class EquityAdmin:
                     audit['external_snapshot']=plain(external_projection)
                     new['external_equity_anchor']=anchor_value(store,snapshot,external_projection,captured)
                     new['external_equity_anchor']['program_funding_offset']=snapshot['program_funding_at_epoch']
+                    new['external_equity_anchor']=certify_daily(new['external_equity_anchor'],
+                        'audited_baseline',revision+1)
                     new['funding_checkpoint']={k:new['external_equity_anchor'][k] for k in
                         ('captured_at','revision','funding_positions','history_index')}
                     new['funding_checkpoint']['equity_revision']=revision+1
+                    new['funding_checkpoint']=certify_daily(new['funding_checkpoint'],
+                        'audited_baseline',revision+1)
                     new['program_daily_upnl']=dict(day=day(self.clock()),upnl='0',positions={},captured_at=captured)
                     new['program_last_upnl']=dict(upnl='0',positions={},captured_at=captured)
                     new['daily_upnl']=dict(day=day(self.clock()),upnl=str(snapshot['upnl']),

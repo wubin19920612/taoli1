@@ -9,7 +9,37 @@ from collections import defaultdict
 from tools.fill_sim.core import dec
 from .accounts import remote_positions
 from .position_values import position_identity
-from .external import route_symbol
+from .external import route_symbol, digest
+
+
+DAILY_PROOF_VERSION = 1
+DAILY_PROOF_SOURCES = frozenset(('initial_flat', 'audited_baseline', 'daily_continuity'))
+
+
+def certify_daily(value, source, equity_revision):
+    """Called only after a new explicit epoch or a proven daily interval.
+
+    Bind all epoch contents, including carried loss and the history index. This
+    is a local provenance/integrity marker, not a signature from the exchange.
+    Never call this as a legacy database migration.
+    """
+    if source not in DAILY_PROOF_SOURCES:
+        raise ValueError('funding_proof_source_invalid')
+    value = {k:v for k,v in value.items() if k != 'funding_daily_proof'}
+    proof = dict(version=DAILY_PROOF_VERSION, source=source, equity_revision=equity_revision,
+                 payload_hash=digest(value))
+    return dict(value, funding_daily_proof=proof)
+
+
+def require_daily_proof(value, equity_revision):
+    proof = value.get('funding_daily_proof', {})
+    if (not isinstance(proof, dict) or type(proof.get('version')) is not int
+            or proof.get('version') != DAILY_PROOF_VERSION
+            or proof.get('source') not in DAILY_PROOF_SOURCES
+            or proof.get('equity_revision') != equity_revision
+            or proof.get('payload_hash') != digest({k:v for k,v in value.items()
+                                                    if k != 'funding_daily_proof'})):
+        raise ValueError('funding_utc_boundary_unproven')
 
 
 def milliseconds(value):
@@ -143,10 +173,12 @@ def daily_continuity(store,anchor,snapshot):
     """
     previous=store.meta('funding_checkpoint')
     revision=store.meta('equity_baseline_revision',0)
+    require_daily_proof(anchor, revision)
     if (not previous or previous.get('revision')!=anchor['revision']
             or previous.get('equity_revision')!=revision
             or previous['captured_at']<anchor['captured_at']):
         previous=anchor
+    require_daily_proof(previous, revision)
     epoch=int(previous['captured_at']*1000)
     activity=snapshot['activity']
     if epoch>activity['to_ms']:

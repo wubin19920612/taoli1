@@ -5,6 +5,13 @@ import stat
 import threading
 from collections import deque
 from dataclasses import dataclass, field
+from functools import lru_cache
+
+
+@lru_cache(maxsize=1024)
+def sensitive_key(key):
+    lower = key.lower()
+    return any(word in lower for word in ('secret','passphrase','signature','api_key','headers'))
 
 
 class Redactor:
@@ -22,14 +29,35 @@ class Redactor:
             self.signatures.append(value)
 
     def clean(self, value):
+        # Snapshot once per document, not once for every scalar. At steady state
+        # the signature ring contains 2048 entries; sorting it for every symbol,
+        # amount and history hash dominated account publication CPU.
+        with self.lock:
+            ordered = sorted(self.values | set(self.signatures), key=len, reverse=True)
+        groups = {}
+        for index, token in enumerate(ordered):
+            groups.setdefault(len(token), {})[token] = index
+        return self._clean(value, groups)
+
+    def _clean(self, value, groups):
         if isinstance(value, dict):
-            return {k: self.clean(v) for k, v in value.items()
-                    if not any(word in k.lower() for word in ('secret','passphrase','signature','api_key','headers'))}
+            return {k: self._clean(v, groups) for k, v in value.items()
+                    if not sensitive_key(k)}
         if isinstance(value, (tuple, list)):
-            return [self.clean(v) for v in value]
+            return [self._clean(v, groups) for v in value]
         if isinstance(value, str):
-            with self.lock:
-                for token in sorted(self.values | set(self.signatures), key=len, reverse=True):
+            for size, tokens in groups.items():
+                if size > len(value):
+                    continue
+                # Most history fields are shorter than a signature. For a hash
+                # of the same length this needs one set lookup, not 2048 scans.
+                if len(tokens) <= 8:
+                    candidates = tokens
+                else:
+                    found = {part for i in range(len(value)-size+1)
+                             if (part := value[i:i+size]) in tokens}
+                    candidates = sorted(found, key=tokens.__getitem__) if len(found)>1 else found
+                for token in candidates:
                     value = value.replace(token, '[REDACTED]')
             return value
         return value

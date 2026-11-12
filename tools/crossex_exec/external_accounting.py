@@ -8,11 +8,11 @@ from collections import defaultdict
 from functools import lru_cache
 
 from tools.fill_sim.core import dec, day
-from .external import ExternalUnverifiable, plain, route_symbol, digest
+from .external import ExternalUnverifiable, plain, route_symbol, digest, canonical_json
 from .external_fx import NATIVE_USD, quote_band, upper_contribution
 from .program_risk import journal_pnl, journal_fingerprint
 from .position_values import key_currency, usd_value
-from .funding import funding_positions, funding_continuity, daily_continuity
+from .funding import funding_positions, funding_continuity, daily_continuity, certify_daily
 
 BITGET_FUNDING = frozenset(('CONTRACT_MAIN_SETTLE_FEE_USER_IN','CONTRACT_MAIN_SETTLE_FEE_USER_OUT'))
 BITGET_TRADING = frozenset(('OPEN_LONG','OPEN_SHORT','CLOSE_LONG','CLOSE_SHORT','BUY_DEAL','SELL_DEAL'))
@@ -159,13 +159,33 @@ def cash_balances(snapshot):
 HISTORY_KEYS = dict(crossex_book='id',crossex_trades='transaction_id',bitget_book='id')
 
 
-def history_index(activity):
-    return {name:{row[key]:dict(at=at,hash=digest(row))
-                  for row,at in unique_rows(activity[name],key,activity['from_ms'],activity['to_ms'])}
-            for name,key in HISTORY_KEYS.items()}
+def history_index(activity, cache=None):
+    # Complete remote rows are still examined each time. This cache saves only
+    # hashing/normalization of byte-for-byte equal rows; it supplies NO rows to a
+    # response and cannot hide a deletion, rewrite, late row or incomplete page.
+    result = {}
+    remaining_bytes = 8*1024*1024
+    remaining_rows = 25000
+    for name,key in HISTORY_KEYS.items():
+        index = result[name] = {}
+        prior = cache.get(name,{}) if cache is not None else {}
+        pending = {}
+        for row,at in unique_rows(activity[name],key,activity['from_ms'],activity['to_ms']):
+            old = prior.get(row[key])
+            encoded = canonical_json(row)
+            fingerprint = old[1] if old is not None and old[0] == encoded else digest(row)
+            index[row[key]] = dict(at=at,hash=fingerprint)
+            # Bounded optimization; eviction never changes verification.
+            if remaining_rows and len(encoded)<=remaining_bytes:
+                pending[row[key]] = (encoded, fingerprint)
+                remaining_rows -= 1
+                remaining_bytes -= len(encoded)
+        if cache is not None:
+            cache[name] = pending
+    return result
 
 
-def verified_history(store,activity):
+def verified_history(store,activity,current=None):
     """Monotonic ID/content evidence, independent of the accounting epoch.
 
     Entries outside the requested window remain durable but need not be returned.
@@ -186,7 +206,7 @@ def verified_history(store,activity):
                     if key in previous[name] and previous[name][key]!=row:
                         raise ValueError('history_revised_or_missing')
                     previous[name][key]=row
-    current=history_index(activity)
+    current=history_index(activity) if current is None else {k:dict(v) for k,v in current.items()}
     for name in HISTORY_KEYS:
         for key,row in previous[name].items():
             if key in current[name] or row['at']>=activity['from_ms']:
@@ -196,10 +216,10 @@ def verified_history(store,activity):
     return current
 
 
-def cash_continuity(anchor,snapshot):
+def cash_continuity(anchor,snapshot,current=None):
     """Empty/short pages alone cannot prove that no funding cash was missed."""
     activity=snapshot['activity']
-    current=history_index(activity)
+    current=history_index(activity) if current is None else current
     previous=anchor['history_index']
     epoch=int(anchor['captured_at']*1000)
     for name,rows in previous.items():
@@ -285,6 +305,7 @@ def read_snapshot(accounts,store,clock):
 class ExternalAccounting:
     def __init__(self,store,registry,clock):
         self.store,self.registry,self.clock=store,registry,clock
+        self._history_hashes={}
 
     def anchor(self,snapshot,projection,captured):
         value=anchor_value(self.store,snapshot,projection,captured)
@@ -324,6 +345,7 @@ class ExternalAccounting:
             # A genuinely new, flat program may establish its first cash epoch.
             # Existing history requires the explicit audited management path.
             anchor=anchor_value(self.store,snapshot,projection,captured)
+            anchor=certify_daily(anchor,'initial_flat',equity_revision)
             initial=True
         if not anchor or anchor['revision']!=self.store.meta('external_attribution_revision',0):
             raise ValueError('external_baseline_unverifiable')
@@ -334,11 +356,13 @@ class ExternalAccounting:
                 or end!=int(cutoff*1000) or not 0<=self.clock()-captured<=10):
             raise ValueError('history_coverage')
         records=self.registry.records()
-        cash_continuity(anchor,snapshot)
+        index=history_index(activity,self._history_hashes)
+        cash_continuity(anchor,snapshot,index)
         funding_continuity(self.store,anchor,snapshot)
         checkpoint=daily_continuity(self.store,anchor,snapshot)
-        checkpoint['history_index']=history_index(activity)
-        history=verified_history(self.store,activity)
+        checkpoint['history_index']=index
+        checkpoint=certify_daily(checkpoint,'daily_continuity',equity_revision)
+        history=verified_history(self.store,activity,index)
         external={r['identity']['symbol']:r['identity'] for r in records.values()}
         # Keep native units through every ledger/quantity check. Never net
         # distinct settlement currencies before converting their contribution.
@@ -477,6 +501,7 @@ class ExternalAccounting:
                 external_contribution_by_currency=result['external_contribution_by_currency'],external_fx=fx)
             anchor=anchor_value(self.store,snapshot,projection,captured)
             anchor['program_funding_carry']=str(total_funding)
+            anchor=certify_daily(anchor,'daily_continuity',equity_revision)
             result.update(from_ms=int(anchor['captured_at']*1000),external_cash='0',
                           external_contribution='0',equity_daily='0',
                           external_cash_by_currency={},external_contribution_by_currency={})
@@ -497,7 +522,8 @@ class ExternalAccounting:
             self.store.set_meta('external_equity_anchor',anchor)
             self.store.set_meta('external_income',result)
             self.store.set_meta('external_activity',plain(activity))
-            self.store.set_meta('external_verified_history',history)
+            if history!=prior_history:
+                self.store.set_meta('external_verified_history',history)
             self.store.set_meta('funding_checkpoint',checkpoint)
             self.store.set_meta('program_daily_upnl',baseline)
             if not last or captured>=last['captured_at']:

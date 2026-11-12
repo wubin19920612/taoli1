@@ -4,7 +4,7 @@ import time
 from urllib.parse import quote
 from tools.fill_sim.core import dec
 from .transport import APIError
-from .history import history
+from .history import history, page_rows
 
 
 def identifier(value):
@@ -113,6 +113,10 @@ class CrossEx:
         for page in range(1,21):
             batch = self.http.request('GET','/api/v4/crossex/history_trades',
                 {'symbol':i['instrument']['symbol'],'from':int(i['created_at']*1000)-1000,'to':end,'page':page,'limit':1000})
+            try:
+                batch,_=page_rows(batch,'/api/v4/crossex/history_trades',cursor=False,limit=1000)
+            except ValueError:
+                raise APIError('invalid_response') from None
             rows.extend(batch)
             if len(batch) < 1000:
                 return summarize_fills(rows,i,True)
@@ -191,14 +195,14 @@ class Bitget:
         params=dict(params,limit=100)
         for _ in range(20):
             data=self.http.request('GET',path,params)
-            batch=data['list']
-            if not isinstance(batch,list):
-                raise APIError('invalid_response')
+            try:
+                batch,cursor=page_rows(data,path,cursor=True,limit=100)
+            except ValueError:
+                raise APIError('invalid_response') from None
             rows.extend(batch)
-            if len(batch)<100:
+            if not cursor:
                 return rows
-            cursor=data['cursor']
-            if not cursor or cursor in seen:
+            if cursor in seen:
                 raise APIError('invalid_response')
             seen.add(cursor)
             params['cursor']=cursor
